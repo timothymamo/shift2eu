@@ -51,6 +51,10 @@ jobs:
       # archive check runs after it (PRD #297 milestone 3, issue #147).
       - name: The site's bundle
         run: make site
+      # The two programs the release's site-programs job builds, so every pull
+      # request builds what the release builds (PRD #297 milestone 3).
+      - name: The site's programs
+        run: make site-programs
       - name: Each archive holds its own binary
         run: .github/scripts/verify-archives.sh
   browser:
@@ -245,6 +249,14 @@ jobs:
           cache: false
       - name: Smoke test the release's bundle in a headless Chromium
         run: make test-browser TEST_BROWSER_BUNDLE=bin/release-bundle
+  # The release's two site programs (PRD #297 milestone 3): the deploy program
+  # and the live check, which the deploy and the live check run and CI builds
+  # too, so a pull request builds what the release builds.
+  site-programs:
+    name: Site programs
+    steps:
+      - name: Build the site's programs
+        run: make site-programs
   verify:
     name: Verify the published image
     runs-on: ubuntu-latest
@@ -342,11 +354,14 @@ func TestDryRunMirrorsRelease(t *testing.T) {
 		// The pins: the same commit for every action the two share, and the
 		// same BuildKit image by tag and digest.
 		{name: "a drifted metadata-action pin", ci: mutate(t, ciDryRun, commit("docker/metadata-action"), driftedCommit("docker/metadata-action")), release: releaseDryRun, wantIn: "docker/metadata-action runs at"},
+		// The drifted pin's message names both commits, not the one ci.yml pins
+		// alone: a check that named one of the two could not say which side of the
+		// pair drifted (carry item 3).
 		{
 			name:    "a drifted build-push-action pin",
 			ci:      ciDryRun,
 			release: mutate(t, releaseDryRun, commit("docker/build-push-action"), driftedCommit("docker/build-push-action")),
-			wantIn:  "docker/build-push-action runs at " + ciPins.commitOf("docker/build-push-action") + " (line",
+			wantIn:  " and at " + nextCommit(t, ciPins.commitOf("docker/build-push-action")),
 		},
 		{name: "a drifted sbom-action pin", ci: mutate(t, ciDryRun, commit("anchore/sbom-action"), driftedCommit("anchore/sbom-action")), release: releaseDryRun, wantIn: "anchore/sbom-action runs at"},
 		{name: "a drifted setup-buildx-action pin", ci: ciDryRun, release: mutate(t, releaseDryRun, commit("docker/setup-buildx-action"), driftedCommit("docker/setup-buildx-action")), wantIn: "docker/setup-buildx-action runs at"},
@@ -601,7 +616,7 @@ func TestDryRunMirrorsRelease(t *testing.T) {
 		},
 		{
 			name:    "a ci.yml that builds the site's bundle after the archive check",
-			ci:      mutate(t, ciDryRun, "      - name: The site's bundle\n        run: make site\n      - name: Each archive holds its own binary\n        run: .github/scripts/verify-archives.sh\n", "      - name: Each archive holds its own binary\n        run: .github/scripts/verify-archives.sh\n      - name: The site's bundle\n        run: make site\n"),
+			ci:      mutate(t, ciDryRun, "      - name: The site's bundle\n        run: make site\n      # The two programs the release's site-programs job builds, so every pull\n      # request builds what the release builds (PRD #297 milestone 3).\n      - name: The site's programs\n        run: make site-programs\n      - name: Each archive holds its own binary\n        run: .github/scripts/verify-archives.sh\n", "      - name: Each archive holds its own binary\n        run: .github/scripts/verify-archives.sh\n      - name: The site's bundle\n        run: make site\n      # The two programs the release's site-programs job builds, so every pull\n      # request builds what the release builds (PRD #297 milestone 3).\n      - name: The site's programs\n        run: make site-programs\n"),
 			release: releaseDryRun,
 			wantIn:  "make site",
 		},
@@ -658,6 +673,25 @@ func TestDryRunMirrorsRelease(t *testing.T) {
 			ci:      ciDryRun,
 			release: mutate(t, releaseDryRun, "  site-browser:\n", "  site-browser-job:\n"),
 			wantIn:  "release.yml: no jobs: site-browser",
+		},
+
+		{
+			name:    "a ci.yml that never builds the site's programs",
+			ci:      mutate(t, ciDryRun, "      # The two programs the release's site-programs job builds, so every pull\n      # request builds what the release builds (PRD #297 milestone 3).\n      - name: The site's programs\n        run: make site-programs\n", ""),
+			release: releaseDryRun,
+			wantIn:  "make site-programs",
+		},
+		{
+			name:    "a ci.yml that builds the site's programs after the archive check",
+			ci:      mutate(t, ciDryRun, "      - name: The site's bundle\n        run: make site\n      # The two programs the release's site-programs job builds, so every pull\n      # request builds what the release builds (PRD #297 milestone 3).\n      - name: The site's programs\n        run: make site-programs\n      - name: Each archive holds its own binary\n        run: .github/scripts/verify-archives.sh\n", "      - name: Each archive holds its own binary\n        run: .github/scripts/verify-archives.sh\n      - name: The site's bundle\n        run: make site\n      # The two programs the release's site-programs job builds, so every pull\n      # request builds what the release builds (PRD #297 milestone 3).\n      - name: The site's programs\n        run: make site-programs\n"),
+			release: releaseDryRun,
+			wantIn:  "make site-programs",
+		},
+		{
+			name:    "a release.yml without a site-programs job",
+			ci:      ciDryRun,
+			release: mutate(t, releaseDryRun, "  site-programs:\n", "  site-programs-job:\n"),
+			wantIn:  "release.yml: no jobs: site-programs",
 		},
 
 		// The jobs the two documents must hold to be compared at all.

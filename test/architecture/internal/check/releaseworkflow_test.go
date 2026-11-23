@@ -40,7 +40,7 @@ concurrency:
   group: release
   cancel-in-progress: false
 
-# The steps of all twelve jobs are a closed list that test/architecture holds
+# The steps of all sixteen jobs are a closed list that test/architecture holds
 # (check.ReleaseWorkflow): add no step, run: or env: here without changing it.
 # The release ships the CLI alone: the HTTP API's image, archive and API
 # document are gone (issue #393), and the site's bundle is published beside the
@@ -49,7 +49,11 @@ concurrency:
 # highest release tag on main, so the image's latest tag and GitHub's "Latest"
 # release cannot disagree. goreleaser hands the archives on, attest-archives
 # attests them, publish alone publishes the draft release, and verify-archives
-# checks what it published (issues #156, #163, #173).
+# checks what it published (issues #156, #163, #173). site-programs builds the
+# deploy program and the live check, and site-deploy is the one job that holds
+# the site's key: it deploys the published bundle of the highest release tag
+# only while SITE_DEPLOY_ENABLED is true, and site-check checks the live site
+# after it (PRD #297 milestone 3, ADR 0042).
 jobs:
 `
 
@@ -549,6 +553,20 @@ var publishStepTemplates = []string{
 `,
 }
 
+// draftCheckBlock is the check that the release is published at all, which the
+// deploy job's check step and the live check's hold before they read anything
+// from the release's bundle: a draft's assets are not what was attested, and a
+// deploy or a check of them would read a bundle the release never published.
+const draftCheckBlock = `          if [ "$(gh release view "$TAG" --repo timothymamo/shift2eu --json isDraft --jq '.isDraft')" != false ]; then
+            echo "the release of $TAG is still a draft, so its bundle was never published" >&2
+            exit 1
+          fi
+`
+
+// deployBundleDownload is the deploy job's download of the published bundle, the
+// line the draft check must come before.
+const deployBundleDownload = `          gh release download "$TAG" --repo timothymamo/shift2eu --pattern "shift2eu-site_$TAG.tar.gz"`
+
 // publishByID is the command the publish job publishes with: the draft it just
 // checked, by the id the API listed it with, and never by its tag, which gh
 // resolves to a published release before a draft (issues #156, #163), with
@@ -806,6 +824,348 @@ var verifyArchivesStepTemplates = []string{
                 ;;
             esac
           fi
+`,
+}
+
+// siteProgramsJobHead is the site-programs job up to its steps: the release's
+// two site programs, built on a runner of its own (PRD #297 milestone 3). It
+// holds no key, no secret and no OIDC token; their digests are job outputs,
+// which the jobs that deploy and check the site bind the binaries they run to,
+// and the artifacts are kept ninety days, so a deploy's re-run still finds
+// them once the run that built them has expired.
+const siteProgramsJobHead = `  # The release's two site programs, built on a runner of its own (PRD #297
+  # milestone 3): no key, no secret and no OIDC token, so nothing in them can
+  # deploy. Their sha256 are job outputs, which the jobs that deploy and check
+  # the site bind the binaries they run to, and the artifacts are kept ninety
+  # days: the deploy and the live check are re-run by re-running this job, never
+  # the job that built the bundle.
+  site-programs:
+    name: Site programs
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read # check out the repository
+    outputs:
+      sitedeploy: ${{ steps.digests.outputs.sitedeploy }}
+      sitecheck: ${{ steps.digests.outputs.sitecheck }}
+    steps:
+`
+
+// siteProgramsStepTemplates are the site-programs job's steps: the repository
+// at the tag, Go without the Actions cache, make site-programs, the two
+// programs' digests as the job's outputs, and each program as an artifact of
+// its own, so the deploy job downloads the deploy program alone and the live
+// check the check alone (PRD #297 milestone 3).
+var siteProgramsStepTemplates = []string{
+	`      - uses: {{pin actions/checkout}}
+        with:
+          persist-credentials: false
+`,
+	`      - uses: {{pin actions/setup-go}}
+        with:
+          go-version-file: go.mod
+          cache: false
+`,
+	`      # The two programs the deploy and the live check run, built exactly as
+      # the release builds them: bin/sitedeploy and bin/sitecheck, static and
+      # without build paths. The static build's environment lives in the
+      # Makefile, never here.
+      - name: Build the site's programs
+        run: make site-programs
+`,
+	`      - name: The programs' digests
+        id: digests
+        run: |
+          set -euo pipefail
+          echo "sitedeploy=$(sha256sum bin/sitedeploy | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+          echo "sitecheck=$(sha256sum bin/sitecheck | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+`,
+	`      - uses: {{pin actions/upload-artifact}}
+        with:
+          name: sitedeploy
+          path: bin/sitedeploy
+          if-no-files-found: error
+          retention-days: 90
+`,
+	`      - uses: {{pin actions/upload-artifact}}
+        with:
+          name: sitecheck
+          path: bin/sitecheck
+          if-no-files-found: error
+          retention-days: 90
+`,
+}
+
+// siteDeployJobHead is the site-deploy job up to its steps: the one job of the
+// release that holds the site's key (PRD #297 milestone 3, ADR 0042). It runs
+// only when the tag is the highest release tag on main and the maintainer has
+// set SITE_DEPLOY_ENABLED to true, behind the site environment and in a
+// concurrency group of its own; it holds contents: read and attestations: read
+// and nothing else, and checks nothing out.
+const siteDeployJobHead = `  # The one job of the release that holds the site's key (PRD #297 milestone 3,
+  # ADR 0042). It deploys the published bundle of the highest release tag on
+  # main, and only while the maintainer has set SITE_DEPLOY_ENABLED to true:
+  # behind the site environment, whose deployment branch policy admits tags
+  # alone, and in a concurrency group of its own, so two deploys never
+  # interleave and a deploy in progress is never cancelled. contents: read and
+  # attestations: read are all it holds: it publishes nothing to the repository,
+  # mints no OIDC token, and checks nothing out.
+  site-deploy:
+    name: Deploy the site
+    needs: [latest, verify, verify-archives, attest-archives, site, site-browser, site-programs]
+    if: needs.latest.outputs.latest == 'true' && vars.SITE_DEPLOY_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: site
+    concurrency:
+      group: site-deploy
+      cancel-in-progress: false
+    permissions:
+      contents: read # download the published release's bundle
+      attestations: read # gh attestation verify reads them through the repository's API
+    steps:
+`
+
+// siteDeployStepTemplates are the site-deploy job's steps: the deploy program
+// from the site-programs job, the published release's bundle checked against
+// the site job's digest and its attestation and unpacked, the release tags on
+// main that the deploy program checks the site's version against, the manifests
+// of every higher release, and the deploy itself, the one step of the whole
+// workflow that holds the site's key (PRD #297 milestone 3, ADR 0042).
+var siteDeployStepTemplates = []string{
+	`      - uses: {{pin actions/download-artifact}}
+        with:
+          name: sitedeploy
+`,
+	`      # The bundle comes from the published release, never from the artifact of
+      # a run that may have expired: the release must be published, and the
+      # bundle is checked against the site job's digest and its attestation for
+      # this workflow, this tag and this commit on GitHub's runners before
+      # anything is unpacked. The program is checked against its own job's
+      # digest. The tag comes through env:, never pasted into the script.
+      - name: Check the site bundle and the deploy program
+        env:
+          TAG: ${{ github.ref_name }}
+          SITE_SHA256: ${{ needs.site.outputs.sha256 }}
+          SITEDEPLOY_SHA256: ${{ needs.site-programs.outputs.sitedeploy }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ "$(gh release view "$TAG" --repo timothymamo/shift2eu --json isDraft --jq '.isDraft')" != false ]; then
+            echo "the release of $TAG is still a draft, so its bundle was never published" >&2
+            exit 1
+          fi
+          gh release download "$TAG" --repo timothymamo/shift2eu --pattern "shift2eu-site_$TAG.tar.gz"
+          printf '%s  %s\n%s  %s\n' "$SITE_SHA256" "shift2eu-site_$TAG.tar.gz" "$SITEDEPLOY_SHA256" sitedeploy | sha256sum -c -
+          gh attestation verify "shift2eu-site_$TAG.tar.gz" --repo timothymamo/shift2eu \
+            --signer-workflow timothymamo/shift2eu/.github/workflows/release.yml \
+            --source-ref "refs/tags/$TAG" --source-digest "$GITHUB_SHA" --deny-self-hosted-runners
+          mkdir bundle
+          tar -xzf "shift2eu-site_$TAG.tar.gz" -C bundle
+          chmod u+x sitedeploy
+`,
+	`      # The release tags on main, in the latest job's filter and sort, so the
+      # deploy program compares the site's version with every release tag it
+      # must not be older than, and this tag's own line is checked to be one of
+      # them. The repository is read by a treeless fetch: no checkout runs. The
+      # list holds exactly vX.Y.Z lines, as the deploy program requires.
+      - name: The release tags on main
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          git init -q tags
+          git -C tags fetch -q --filter=tree:0 --no-tags https://github.com/timothymamo/shift2eu.git '+refs/heads/main:refs/remotes/origin/main' '+refs/tags/v*:refs/tags/v*'
+          git -C tags tag -l 'v*.*.*' --merged refs/remotes/origin/main | sed -nE '/^v[0-9]+\.[0-9]+\.[0-9]+$/p' | sort -V > releases.txt
+          grep -qxF "$TAG" releases.txt || { echo "$TAG is not a release tag on main" >&2; exit 1; }
+`,
+	`      # Without this the deploy program could never refuse to roll the live
+      # site back: it reads the manifest of every release higher than this tag
+      # to know which site is live. The tags come from releases.txt alone,
+      # never from a page or an API answer. A tag whose release is not published
+      # yet (its own run is queued behind this one, so it deploys after this
+      # bundle), a release that is still a draft, and a release without the
+      # bundle each give a notice and the loop moves on; any other failed read
+      # fails the step. A manifest is read only from the bundle that release
+      # attested, for that tag, on GitHub's runners.
+      - name: The higher releases' manifests
+        env:
+          TAG: ${{ github.ref_name }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          mkdir manifests higher
+          mapfile -t tags < releases.txt
+          for t in "${tags[@]}"; do
+            if [ "$t" = "$TAG" ] || [ "$(printf '%s\n%s\n' "$TAG" "$t" | sort -V | tail -n 1)" != "$t" ]; then
+              continue
+            fi
+            err="$(mktemp)"
+            if ! gh api "repos/timothymamo/shift2eu/releases/tags/$t" > "$higher/release.json" 2> "$err"; then
+              if grep -qF -e "HTTP 404" "$err"; then
+                echo "::notice::the release of $t is not published yet, so its manifest is not read"
+                rm -f "$err"
+                continue
+              fi
+              echo "the release of $t could not be read:" >&2
+              cat "$err" >&2
+              rm -f "$err"
+              exit 1
+            fi
+            rm -f "$err"
+            if [ "$(jq -r '.draft' "$higher/release.json")" != false ]; then
+              echo "::notice::the release of $t is still a draft, so its manifest is not read"
+              continue
+            fi
+            if [ "$(jq --arg name "shift2eu-site_$t.tar.gz" -r '[.assets[].name] | map(select(. == $name)) | length' "$higher/release.json")" != 1 ]; then
+              echo "::notice::the release of $t publishes no shift2eu-site_$t.tar.gz, so its manifest is not read"
+              continue
+            fi
+            gh release download "$t" --repo timothymamo/shift2eu --pattern "shift2eu-site_$t.tar.gz" --dir higher
+            gh attestation verify "higher/shift2eu-site_$t.tar.gz" --repo timothymamo/shift2eu \
+              --signer-workflow timothymamo/shift2eu/.github/workflows/release.yml \
+              --source-ref "refs/tags/$t" --deny-self-hosted-runners
+            tar -xzOf "higher/shift2eu-site_$t.tar.gz" manifest.json > "manifests/$t.json"
+          done
+`,
+	`      # The one step of the workflow that holds the site's key, and the only
+      # place either secret is named: the deploy program uploads the bundle to
+      # the bucket, with the higher releases' manifests and the release tags on
+      # main beside it. The step has no GH_TOKEN, so nothing in it can write to
+      # the repository. The bucket and the region are the site environment's
+      # variables, so no name is written into this document.
+      - name: Deploy the site
+        env:
+          SCW_ACCESS_KEY: ${{ secrets.SCW_ACCESS_KEY }}
+          SCW_SECRET_KEY: ${{ secrets.SCW_SECRET_KEY }}
+          TAG: ${{ github.ref_name }}
+          SITE_BUCKET: ${{ vars.SITE_BUCKET }}
+          SITE_REGION: ${{ vars.SITE_REGION }}
+        run: ./sitedeploy -bundle bundle -version "$TAG" -bucket "$SITE_BUCKET" -region "$SITE_REGION" -releases releases.txt -manifests manifests
+`,
+}
+
+// siteCheckJobHead is the site-check job up to its steps: the live check of the
+// site the deploy job published (PRD #297 milestone 3). No key and no
+// environment: it reads the published release, its own program and site/records
+// at the tag, and holds contents: read alone.
+const siteCheckJobHead = `  # The live check after the deploy (PRD #297 milestone 3): the published
+  # release's manifest against the site that is live. No key and no
+  # environment: contents: read alone. The bundle comes from the published
+  # release, checked against the site job's digest, and site/records at the tag
+  # gives the HSTS and preload lists the check reads at their default paths.
+  site-check:
+    name: Check the live site
+    needs: [latest, site, site-programs, site-deploy]
+    if: needs.latest.outputs.latest == 'true' && vars.SITE_DEPLOY_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read # check out the repository
+    steps:
+`
+
+// siteCheckStepTemplates are the site-check job's steps: the repository at the
+// tag, the live check program from the site-programs job, the published
+// release's bundle checked against the site job's digest and unpacked for its
+// manifest, the release tags on main as the deploy job reads them, and the
+// live check itself, at the defaults milestone 4 may change (PRD #297
+// milestone 3).
+var siteCheckStepTemplates = []string{
+	`      # site/records' HSTS and preload lists, which the check reads at their
+      # default paths, at the tag: no repository code runs, and the token is not
+      # kept.
+      - uses: {{pin actions/checkout}}
+        with:
+          persist-credentials: false
+`,
+	`      - uses: {{pin actions/download-artifact}}
+        with:
+          name: sitecheck
+          path: bin
+`,
+	`      # The bundle the release published, checked against the site job's digest
+      # before anything is read from it, and the check program against its own
+      # job's digest. No attestation is verified here: the deploy job verifies the
+      # one bundle this run deploys, and this reads the same bundle and digest.
+      - name: Check the site bundle and the live check program
+        env:
+          TAG: ${{ github.ref_name }}
+          SITE_SHA256: ${{ needs.site.outputs.sha256 }}
+          SITECHECK_SHA256: ${{ needs.site-programs.outputs.sitecheck }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ "$(gh release view "$TAG" --repo timothymamo/shift2eu --json isDraft --jq '.isDraft')" != false ]; then
+            echo "the release of $TAG is still a draft, so its bundle was never published" >&2
+            exit 1
+          fi
+          gh release download "$TAG" --repo timothymamo/shift2eu --pattern "shift2eu-site_$TAG.tar.gz" --dir bin
+          printf '%s  %s\n%s  %s\n' "$SITE_SHA256" "bin/shift2eu-site_$TAG.tar.gz" "$SITECHECK_SHA256" bin/sitecheck | sha256sum -c -
+          tar -xzOf "bin/shift2eu-site_$TAG.tar.gz" manifest.json > bin/manifest.json
+          chmod u+x bin/sitecheck
+`,
+	`      # The release tags on main, as the deploy job reads them: the check holds
+      # the live pages' footers to the releases it must not be older than.
+      - name: The release tags on main
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          git init -q tags
+          git -C tags fetch -q --filter=tree:0 --no-tags https://github.com/timothymamo/shift2eu.git '+refs/heads/main:refs/remotes/origin/main' '+refs/tags/v*:refs/tags/v*'
+          git -C tags tag -l 'v*.*.*' --merged refs/remotes/origin/main | sed -nE '/^v[0-9]+\.[0-9]+\.[0-9]+$/p' | sort -V > bin/releases.txt
+          grep -qxF "$TAG" bin/releases.txt || { echo "$TAG is not a release tag on main" >&2; exit 1; }
+`,
+	`      # The check's own defaults: the HSTS and preload lists at the paths
+      # site/records holds them at, and milestone 4's -plain-http-www to come.
+      - name: Check the live site
+        run: bin/sitecheck -manifest bin/manifest.json -tags bin/releases.txt
+`,
+}
+
+// siteSkippedJobHead is the site-skipped job up to its steps: the visible
+// notice that the deploy's conditions did not hold (PRD #297 milestone 3). It
+// is a job of its own, since a step-level condition would still run the deploy
+// job, with its environment's deployment, on every release, and it holds no
+// permission and no secret.
+const siteSkippedJobHead = `  # The notice that the deploy's conditions did not hold (PRD #297 milestone 3):
+  # a job of its own, because a step-level condition would still run the deploy
+  # job, with its environment's deployment, on every release. No permission and
+  # no key, and the variable's value is never interpolated into the text it
+  # prints, so what the maintainer set can start no workflow command.
+  site-skipped:
+    name: Site deploy skipped
+    needs: latest
+    if: needs.latest.outputs.latest != 'true' || vars.SITE_DEPLOY_ENABLED != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+`
+
+// siteSkippedStepTemplates are the site-skipped job's one step: the reason the
+// deploy did not run, as a notice and as the summary's note, and a failure when
+// the deploy's conditions do hold, so a job GitHub ran by mistake is not read as
+// a skip (PRD #297 milestone 3).
+var siteSkippedStepTemplates = []string{
+	`      - name: Say that the site deploy is skipped
+        env:
+          LATEST: ${{ needs.latest.outputs.latest }}
+          ENABLED: ${{ vars.SITE_DEPLOY_ENABLED }}
+        run: |
+          set -euo pipefail
+          if [ "$LATEST" != true ]; then
+            reason="the tag is not the highest release tag on main"
+          elif [ "$ENABLED" != true ]; then
+            reason="SITE_DEPLOY_ENABLED is not true"
+          else
+            echo "the deploy's conditions hold, so this job should not have run" >&2
+            exit 1
+          fi
+          echo "::notice title=Site deploy skipped::The site deploy and its live check are skipped: $reason"
+          printf '> [!NOTE]\n> The site deploy and its live check are skipped: %s.\n' "$reason" >> "$GITHUB_STEP_SUMMARY"
 `,
 }
 
@@ -1215,6 +1575,24 @@ func inVerifyStep(t *testing.T, part, old, new string) []string {
 	return out
 }
 
+// inStepOf returns steps with the first old replaced by new in the one step
+// whose text holds part: a case changes one step of a job alone, even when the
+// text it changes appears in another step of the same job.
+func inStepOf(t *testing.T, steps []string, part, old, new string) []string {
+	t.Helper()
+
+	out := slices.Clone(steps)
+
+	i := stepIndex(t, out, part)
+	if !strings.Contains(out[i], old) {
+		t.Fatalf("the step holding %q holds no %q", part, old)
+	}
+
+	out[i] = strings.Replace(out[i], old, new, 1)
+
+	return out
+}
+
 // releaseJob is one job of the release workflow fixture: its key in jobs:, the
 // comments and keys above its steps, and its steps in order.
 type releaseJob struct {
@@ -1261,6 +1639,10 @@ func releaseWorkflowFixtureFrom(release []byte) releaseFixture {
 			{key: "sign", head: signJobHead, steps: expandSteps(pins, signStepTemplates)},
 			{key: "verify", head: verifyJobHead, steps: expandSteps(pins, verifyStepTemplates)},
 			{key: "verify-archives", head: verifyArchivesJobHead, steps: expandSteps(pins, verifyArchivesStepTemplates)},
+			{key: "site-programs", head: siteProgramsJobHead, steps: expandSteps(pins, siteProgramsStepTemplates)},
+			{key: "site-deploy", head: siteDeployJobHead, steps: expandSteps(pins, siteDeployStepTemplates)},
+			{key: "site-check", head: siteCheckJobHead, steps: expandSteps(pins, siteCheckStepTemplates)},
+			{key: "site-skipped", head: siteSkippedJobHead, steps: expandSteps(pins, siteSkippedStepTemplates)},
 		},
 	}
 }
@@ -1280,6 +1662,11 @@ var (
 	signSteps           = expandSteps(releasePins, signStepTemplates)
 	verifySteps         = expandSteps(releasePins, verifyStepTemplates)
 	verifyArchivesSteps = expandSteps(releasePins, verifyArchivesStepTemplates)
+
+	siteProgramsSteps = expandSteps(releasePins, siteProgramsStepTemplates)
+	siteDeploySteps   = expandSteps(releasePins, siteDeployStepTemplates)
+	siteCheckSteps    = expandSteps(releasePins, siteCheckStepTemplates)
+	siteSkippedSteps  = expandSteps(releasePins, siteSkippedStepTemplates)
 )
 
 // expandSteps returns steps with every placeholder filled in from pins. A step
@@ -1484,6 +1871,32 @@ func TestReleaseWorkflow(t *testing.T) {
 	// draft, so that the check no longer runs before anything is published.
 	afterPublish := func() string {
 		return strings.Replace(in("publish", publishStaleDecisionCheck, ""), publishByID, publishByID+"\n"+publishStaleDecisionCheck, 1)
+	}
+
+	// afterDownload returns the workflow with the deploy job's draft check moved
+	// from before the release's download to after it, so a draft's bundle is
+	// downloaded before the release is known to be published.
+	afterDownload := func() string {
+		return steps("site-deploy", inStepOf(t, siteDeploySteps, "name: Check the site bundle and the deploy program",
+			draftCheckBlock+deployBundleDownload, deployBundleDownload+"\n"+strings.TrimSuffix(draftCheckBlock, "\n")))
+	}
+
+	// inDeployStep and inCheckStep change one step of the deploy job and of the
+	// live check, whose steps hold the same lines twice (the attestation flags,
+	// the release tags' pipeline).
+	inDeployStep := func(part, old, new string) string {
+		return steps("site-deploy", inStepOf(t, siteDeploySteps, part, old, new))
+	}
+	inCheckStep := func(part, old, new string) string {
+		return steps("site-check", inStepOf(t, siteCheckSteps, part, old, new))
+	}
+
+	// proxyInBuildStep adds a proxy variable to the env: of the site-programs
+	// job's build step: none of the five may be named anywhere in the document,
+	// so a step cannot point the key's upload at a proxy of its own.
+	proxyInBuildStep := func(name string) string {
+		return in("site-programs", "      - name: Build the site's programs\n        run: make site-programs\n",
+			"      - name: Build the site's programs\n        env:\n          "+name+": http://192.0.2.1:8080\n        run: make site-programs\n")
 	}
 
 	tests := []struct {
@@ -2311,6 +2724,182 @@ func TestReleaseWorkflow(t *testing.T) {
 		// A bundle that failed the smoke test is never published: the release
 		// stays a draft.
 		{name: "the publish job not needing the smoke test", workflow: in("publish", "    needs: [test, goreleaser, attest-archives, latest, site-browser]\n", "    needs: [test, goreleaser, attest-archives, latest]\n"), wantIn: "jobs: publish: needs is"},
+
+		// The release deploys the site behind a switch (PRD #297 milestone 3,
+		// ADR 0042): site-programs builds the deploy program and the live check,
+		// site-deploy is the one job that holds the site's key, site-check checks
+		// the live site after it, and site-skipped says why neither ran. Each is a
+		// closed job: its keys are the check's, its steps a list, and either
+		// secret's name appears on exactly one line of the whole document.
+		{name: "no site-programs job", workflow: release.withoutJob(t, "site-programs"), wantIn: `no "site-programs"`},
+		{name: "no site-deploy job", workflow: release.withoutJob(t, "site-deploy"), wantIn: `no "site-deploy"`},
+		{name: "no site-check job", workflow: release.withoutJob(t, "site-check"), wantIn: `no "site-check"`},
+		{name: "no site-skipped job", workflow: release.withoutJob(t, "site-skipped"), wantIn: `no "site-skipped"`},
+		{name: "no timeout on the site-programs job", workflow: in("site-programs", "    timeout-minutes: 10\n", ""), wantIn: `holds no "timeout-minutes"`},
+		{name: "no timeout on the site-deploy job", workflow: in("site-deploy", "    timeout-minutes: 15\n", ""), wantIn: `holds no "timeout-minutes"`},
+		{name: "no timeout on the site-check job", workflow: in("site-check", "    timeout-minutes: 15\n", ""), wantIn: `holds no "timeout-minutes"`},
+		{name: "no timeout on the site-skipped job", workflow: in("site-skipped", "    timeout-minutes: 5\n", ""), wantIn: `holds no "timeout-minutes"`},
+		{name: "a longer timeout on the site deploy", workflow: in("site-deploy", "    timeout-minutes: 15\n", "    timeout-minutes: 20\n"), wantIn: `timeout-minutes is "20"`},
+
+		// The deploy waits for everything that could still change what it
+		// deploys: the latest decision, the image's and the assets' verification,
+		// the attestation, the bundle and its smoke test, and its own program.
+		{
+			name:     "the deploy job not needing the image's verification",
+			workflow: in("site-deploy", "    needs: [latest, verify, verify-archives, attest-archives, site, site-browser, site-programs]\n", "    needs: [latest, verify-archives, attest-archives, site, site-browser, site-programs]\n"),
+			wantIn:   "jobs: site-deploy: needs is",
+		},
+		{
+			name:     "the deploy job not needing the latest decision",
+			workflow: in("site-deploy", "    needs: [latest, verify, verify-archives, attest-archives, site, site-browser, site-programs]\n", "    needs: [verify, verify-archives, attest-archives, site, site-browser, site-programs]\n"),
+			wantIn:   "jobs: site-deploy: needs is",
+		},
+		{
+			name:     "the deploy job needing the programs first",
+			workflow: in("site-deploy", "    needs: [latest, verify, verify-archives, attest-archives, site, site-browser, site-programs]\n", "    needs: [site-programs, latest, verify, verify-archives, attest-archives, site, site-browser]\n"),
+			wantIn:   "jobs: site-deploy: needs is",
+		},
+
+		// The deploy runs for the highest release tag on main, and only while the
+		// maintainer's switch is true: both halves, joined by &&, each value a
+		// quoted string.
+		{name: "no condition on the deploy job", workflow: in("site-deploy", "    if: needs.latest.outputs.latest == 'true' && vars.SITE_DEPLOY_ENABLED == 'true'\n", ""), wantIn: `holds no "if"`},
+		{name: "the deploy job's condition without the latest half", workflow: in("site-deploy", "    if: needs.latest.outputs.latest == 'true' && vars.SITE_DEPLOY_ENABLED == 'true'\n", "    if: vars.SITE_DEPLOY_ENABLED == 'true'\n"), wantIn: "if is"},
+		{name: "the deploy job's condition without the switch half", workflow: in("site-deploy", "    if: needs.latest.outputs.latest == 'true' && vars.SITE_DEPLOY_ENABLED == 'true'\n", "    if: needs.latest.outputs.latest == 'true'\n"), wantIn: "if is"},
+		{name: "the deploy job's condition with ||", workflow: in("site-deploy", " == 'true' && vars.SITE_DEPLOY_ENABLED", " == 'true' || vars.SITE_DEPLOY_ENABLED"), wantIn: "if is"},
+		{name: "the deploy job's condition unquoted", workflow: in("site-deploy", "vars.SITE_DEPLOY_ENABLED == 'true'", "vars.SITE_DEPLOY_ENABLED == true"), wantIn: "if is"},
+		{name: "an always() beside the deploy job's condition", workflow: in("site-deploy", "    if: needs.latest.outputs.latest", "    if: always() && needs.latest.outputs.latest"), wantIn: "if is"},
+
+		// The site environment is the deploy's alone: it admits tags only, and it
+		// is what a deployment is recorded under.
+		{name: "no environment on the deploy job", workflow: in("site-deploy", "    environment: site\n", ""), wantIn: `holds no "environment"`},
+		{name: "another environment on the deploy job", workflow: in("site-deploy", "    environment: site\n", "    environment: production\n"), wantIn: "environment is"},
+		{name: "the deploy job's environment in mapping form", workflow: in("site-deploy", "    environment: site\n", "    environment:\n      name: site\n      url: https://example.com\n"), wantIn: "environment"},
+		{name: "an environment on the site check", workflow: in("site-check", "    permissions:\n", "    environment: site\n    permissions:\n"), wantIn: `key "environment"`},
+		{name: "an environment on the programs job", workflow: in("site-programs", "    permissions:\n", "    environment: site\n    permissions:\n"), wantIn: `key "environment"`},
+
+		// One deploy at a time, and a deploy in progress is never cancelled.
+		{name: "no concurrency on the deploy job", workflow: in("site-deploy", "    concurrency:\n      group: site-deploy\n      cancel-in-progress: false\n", ""), wantIn: `holds no "concurrency"`},
+		{name: "a deploy concurrency that cancels the run in progress", workflow: in("site-deploy", "      cancel-in-progress: false\n", "      cancel-in-progress: true\n"), wantIn: "cancel-in-progress"},
+		{name: "a deploy concurrency group per tag", workflow: in("site-deploy", "      group: site-deploy\n", "      group: site-deploy-${{ github.ref }}\n"), wantIn: "group is"},
+
+		// The deploy reads the published release and attests nothing: contents:
+		// read and attestations: read alone, no OIDC token and no write.
+		{name: "id-token: write for the deploy job", workflow: in("site-deploy", "      attestations: read # gh attestation verify reads them through the repository's API\n", "      attestations: read # gh attestation verify reads them through the repository's API\n      id-token: write # sign\n"), wantIn: "id-token"},
+		{name: "no attestations: read for the deploy job", workflow: in("site-deploy", "      attestations: read # gh attestation verify reads them through the repository's API\n", ""), wantIn: "attestations"},
+		{name: "contents: write for the deploy job", workflow: in("site-deploy", "      contents: read # download the published release's bundle\n", "      contents: write # download the published release's bundle\n"), wantIn: "contents"},
+		{name: "deployments: write for the deploy job", workflow: in("site-deploy", "      attestations: read # gh attestation verify reads them through the repository's API\n", "      attestations: read # gh attestation verify reads them through the repository's API\n      deployments: write # the environment's record\n"), wantIn: "deployments"},
+
+		// The deploy's steps are a closed list, the deploy last: nothing of the
+		// repository runs in this job, and nothing runs after the deploy.
+		{name: "a checkout in the deploy job", workflow: steps("site-deploy", beforeStep(t, siteDeploySteps, "      - uses: actions/download-artifact@", "uses: {{pin actions/checkout}}\n        with:\n          persist-credentials: false")), wantIn: "holds 6 steps, want exactly 5"},
+		{name: "a setup-go after the deploy step", workflow: steps("site-deploy", slices.Concat(siteDeploySteps, []string{"      - uses: " + pin("{{pin actions/setup-go}}") + "\n        with:\n          go-version-file: go.mod\n          cache: false\n"})), wantIn: "holds 6 steps, want exactly 5"},
+		{name: "the deploy before the higher releases' manifests", workflow: steps("site-deploy", swappedSteps(t, siteDeploySteps, "name: Deploy the site", "name: The higher releases' manifests")), wantIn: "jobs: site-deploy: steps: step 4"},
+		{name: "no deploy step", workflow: steps("site-deploy", withoutStep(t, siteDeploySteps, "name: Deploy the site")), wantIn: "holds 4 steps, want exactly 5"},
+		{name: "an extra step in the programs job", workflow: steps("site-programs", beforeStep(t, siteProgramsSteps, "      - name: Build the site's programs", "run: ./scripts/prepare.sh")), wantIn: "holds 7 steps, want exactly 6"},
+		{name: "an extra step in the skip notice", workflow: steps("site-skipped", beforeStep(t, siteSkippedSteps, "      - name: Say that the site deploy is skipped", "run: ./scripts/prepare.sh")), wantIn: "holds 2 steps, want exactly 1"},
+
+		// Each of the two secrets appears on exactly one line of the whole
+		// document, both in the env: of the deploy step, which holds no other
+		// secret and no token: the one place the key is used.
+		{name: "the key in the deploy job's env", workflow: in("site-deploy", "    permissions:\n", "    env:\n      SCW_ACCESS_KEY: ${{ secrets.SCW_ACCESS_KEY }}\n    permissions:\n"), wantIn: "SCW_ACCESS_KEY"},
+		{name: "the key in the bundle check's env", workflow: in("site-deploy", "          SITEDEPLOY_SHA256: ${{ needs.site-programs.outputs.sitedeploy }}\n", "          SITEDEPLOY_SHA256: ${{ needs.site-programs.outputs.sitedeploy }}\n          SCW_ACCESS_KEY: ${{ secrets.SCW_ACCESS_KEY }}\n"), wantIn: "SCW_ACCESS_KEY"},
+		{name: "the two secrets swapped", workflow: in("site-deploy", "          SCW_ACCESS_KEY: ${{ secrets.SCW_ACCESS_KEY }}\n", "          SCW_ACCESS_KEY: ${{ secrets.SCW_SECRET_KEY }}\n"), wantIn: "env holds"},
+		{name: "a token beside the key in the deploy step", workflow: in("site-deploy", "          SITE_REGION: ${{ vars.SITE_REGION }}\n", "          SITE_REGION: ${{ vars.SITE_REGION }}\n          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}\n"), wantIn: "GH_TOKEN"},
+		{name: "the key in another job's step", workflow: in("site-check", "          SITECHECK_SHA256: ${{ needs.site-programs.outputs.sitecheck }}\n", "          SITECHECK_SHA256: ${{ needs.site-programs.outputs.sitecheck }}\n          SCW_ACCESS_KEY: ${{ secrets.SCW_ACCESS_KEY }}\n"), wantIn: "SCW_ACCESS_KEY"},
+
+		// No line may name a proxy or a certificate variable: a step that sets
+		// one would change what the deploy program's client trusts or where it
+		// connects.
+		{name: "HTTPS_PROXY in the programs' build step", workflow: proxyInBuildStep("HTTPS_PROXY"), wantIn: "HTTPS_PROXY"},
+		{name: "HTTP_PROXY in the programs' build step", workflow: proxyInBuildStep("HTTP_PROXY"), wantIn: "HTTP_PROXY"},
+		{name: "NO_PROXY in the programs' build step", workflow: proxyInBuildStep("NO_PROXY"), wantIn: "NO_PROXY"},
+		{name: "SSL_CERT_FILE in the programs' build step", workflow: proxyInBuildStep("SSL_CERT_FILE"), wantIn: "SSL_CERT_FILE"},
+		{name: "SSL_CERT_DIR in the programs' build step", workflow: proxyInBuildStep("SSL_CERT_DIR"), wantIn: "SSL_CERT_DIR"},
+		{name: "GITHUB_ENV in the deploy job", workflow: in("site-deploy", "          mkdir manifests higher\n", "          mkdir manifests higher\n          echo X=1 >> \"$GITHUB_ENV\"\n"), wantIn: "GITHUB_ENV"},
+		{name: "GITHUB_PATH in the deploy job", workflow: in("site-deploy", "          mkdir manifests higher\n", "          mkdir manifests higher\n          echo /x >> \"$GITHUB_PATH\"\n"), wantIn: "GITHUB_PATH"},
+		{name: "github.env in the deploy job", workflow: in("site-deploy", "          mkdir manifests higher\n", "          mkdir manifests higher\n          echo X=1 >> \"${{ github.env }}\"\n"), wantIn: "github.env"},
+
+		// The deploy program is asked for exactly the bundle, the tag, the site
+		// environment's bucket and region, and the two files beside it. The tag
+		// comes through env:, never pasted into the script.
+		{name: "the deploy asking for the bucket's list", workflow: in("site-deploy", "-manifests manifests\n", "-manifests manifests -list-bucket\n"), wantIn: "run is"},
+		{name: "the deploy reading another tag list", workflow: in("site-deploy", "-releases releases.txt", "-releases site-tags.txt"), wantIn: "run is"},
+		{name: "the deploy's version from another variable", workflow: in("site-deploy", `-version "$TAG"`, `-version "$SITE_VERSION"`), wantIn: "run is"},
+		{name: "the deploy's tag pasted into the script", workflow: in("site-deploy", `-version "$TAG"`, `-version "${{ github.ref_name }}"`), wantIn: "holds a ${{ }} expression"},
+		{name: "the bucket from a secret", workflow: in("site-deploy", "          SITE_BUCKET: ${{ vars.SITE_BUCKET }}\n", "          SITE_BUCKET: ${{ secrets.SITE_BUCKET }}\n"), wantIn: "vars.SITE_BUCKET"},
+
+		// The published bundle is bound to the site job's digest and to this
+		// workflow's attestation for this tag and commit, on GitHub's runners.
+		{name: "the deploy verifying the bundle without the signer workflow", workflow: inDeployStep("name: Check the site bundle and the deploy program", "            --signer-workflow timothymamo/shift2eu/.github/workflows/release.yml \\\n", ""), wantIn: "--signer-workflow"},
+		{name: "the deploy verifying the bundle from another signer workflow", workflow: inDeployStep("name: Check the site bundle and the deploy program", "            --signer-workflow timothymamo/shift2eu/.github/workflows/release.yml \\\n", "            --signer-workflow example/repo/.github/workflows/other.yml \\\n"), wantIn: "run is"},
+		{name: "the deploy verifying the bundle without the source ref", workflow: inDeployStep("name: Check the site bundle and the deploy program", `--source-ref "refs/tags/$TAG" --source-digest`, `--source-digest`), wantIn: "--source-ref"},
+		{name: "the deploy verifying the bundle without the source digest", workflow: inDeployStep("name: Check the site bundle and the deploy program", `--source-digest "$GITHUB_SHA" --deny-self-hosted-runners`, `--deny-self-hosted-runners`), wantIn: "--source-digest"},
+		{name: "the deploy not denying self-hosted runners", workflow: inDeployStep("name: Check the site bundle and the deploy program", " --deny-self-hosted-runners\n", "\n"), wantIn: "--deny-self-hosted-runners"},
+		{name: "the deploy program's digest not checked", workflow: inDeployStep("name: Check the site bundle and the deploy program", `          printf '%s  %s\n%s  %s\n' "$SITE_SHA256" "shift2eu-site_$TAG.tar.gz" "$SITEDEPLOY_SHA256" sitedeploy | sha256sum -c -`, `          printf '%s  %s\n' "$SITE_SHA256" "shift2eu-site_$TAG.tar.gz" | sha256sum -c -`), wantIn: "SITEDEPLOY_SHA256"},
+		{name: "the deploy's bundle digest from another job", workflow: in("site-deploy", "          SITE_SHA256: ${{ needs.site.outputs.sha256 }}\n", "          SITE_SHA256: ${{ needs.goreleaser.outputs.sha256 }}\n"), wantIn: "needs.site.outputs.sha256"},
+
+		// Only a published release is deployed: the draft check comes before the
+		// download, so a draft's bundle is never unpacked.
+		{name: "the deploy without the draft check", workflow: inDeployStep("name: Check the site bundle and the deploy program", draftCheckBlock, ""), wantIn: "draft"},
+		{name: "the deploy's draft check after the download", workflow: afterDownload(), wantIn: "run is"},
+
+		// The higher releases' manifests: the one reason the deploy program can
+		// refuse to roll the live site back. Each tag comes from releases.txt, and
+		// each manifest comes from the bundle that release attested.
+		{name: "the higher releases read without the signer workflow", workflow: inDeployStep("name: The higher releases' manifests", "              --signer-workflow timothymamo/shift2eu/.github/workflows/release.yml \\\n", ""), wantIn: "--signer-workflow"},
+		{name: "a higher release read under this tag's source ref", workflow: inDeployStep("name: The higher releases' manifests", `--source-ref "refs/tags/$t"`, `--source-ref "refs/tags/$TAG"`), wantIn: `refs/tags/$t`},
+		{name: "the higher releases without the draft check", workflow: inDeployStep("name: The higher releases' manifests", `            if [ "$(jq -r '.draft' "$higher/release.json")" != false ]; then`+"\n", "            if false; then\n"), wantIn: ".draft"},
+		{name: "the higher releases without the notice for an unpublished release", workflow: inDeployStep("name: The higher releases' manifests", `                echo "::notice::the release of $t is not published yet, so its manifest is not read"`+"\n", ""), wantIn: "::notice::the release of $t is not published yet"},
+		{name: "the higher releases without the check for the bundle", workflow: inDeployStep("name: The higher releases' manifests", `            if [ "$(jq --arg name "shift2eu-site_$t.tar.gz" -r '[.assets[].name] | map(select(. == $name)) | length' "$higher/release.json")" != 1 ]; then`+"\n", "            if false; then\n"), wantIn: "publishes no shift2eu-site_"},
+		{name: "the higher releases read from somewhere else than releases.txt", workflow: inDeployStep("name: The higher releases' manifests", "          mapfile -t tags < releases.txt\n", "          mapfile -t tags < <(gh release list --repo timothymamo/shift2eu --json tagName --jq '.[].tagName')\n"), wantIn: "mapfile -t tags < releases.txt"},
+
+		// The live check runs after the deploy, on the same conditions, and reads
+		// the published bundle and its own program: contents: read alone, no
+		// environment and no secret but the token.
+		{name: "no condition on the site check", workflow: in("site-check", "    if: needs.latest.outputs.latest == 'true' && vars.SITE_DEPLOY_ENABLED == 'true'\n", ""), wantIn: `holds no "if"`},
+		{name: "the site check's condition other than the deploy's", workflow: in("site-check", "    if: needs.latest.outputs.latest == 'true' && vars.SITE_DEPLOY_ENABLED == 'true'\n", "    if: needs.latest.outputs.latest == 'true'\n"), wantIn: "if is"},
+		{name: "the site check not needing the deploy", workflow: in("site-check", "    needs: [latest, site, site-programs, site-deploy]\n", "    needs: [latest, site, site-programs]\n"), wantIn: "jobs: site-check: needs is"},
+		{name: "attestations: read for the site check", workflow: in("site-check", "      contents: read # check out the repository\n", "      contents: read # check out the repository\n      attestations: read # gh attestation verify reads them\n"), wantIn: "attestations"},
+		{name: "id-token: write for the site check", workflow: in("site-check", "      contents: read # check out the repository\n", "      contents: read # check out the repository\n      id-token: write # sign\n"), wantIn: "id-token"},
+		{name: "the site check's checkout without persist-credentials", workflow: in("site-check", "          persist-credentials: false\n", ""), wantIn: `no "persist-credentials"`},
+		{name: "the site check's checkout keeping the token", workflow: in("site-check", "          persist-credentials: false\n", "          persist-credentials: true\n"), wantIn: "persist-credentials"},
+		{name: "another secret in the site check", workflow: in("site-check", "          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}\n", "          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}\n          OTHER: ${{ secrets.OTHER_TOKEN }}\n"), wantIn: "OTHER_TOKEN"},
+		{name: "the site check's program digest from another job", workflow: in("site-check", "          SITECHECK_SHA256: ${{ needs.site-programs.outputs.sitecheck }}\n", "          SITECHECK_SHA256: ${{ needs.site-programs.outputs.sitedeploy }}\n"), wantIn: "needs.site-programs.outputs.sitecheck"},
+		{name: "the site check without the draft check", workflow: inCheckStep("name: Check the site bundle and the live check program", draftCheckBlock, ""), wantIn: "draft"},
+		{name: "the site check asking for a plain HTTP www", workflow: in("site-check", "bin/sitecheck -manifest bin/manifest.json -tags bin/releases.txt\n", "bin/sitecheck -manifest bin/manifest.json -tags bin/releases.txt -plain-http-www refuse-or-close\n"), wantIn: "run is"},
+		{name: "the site check with a retry bound of its own", workflow: in("site-check", "bin/sitecheck -manifest bin/manifest.json -tags bin/releases.txt\n", "bin/sitecheck -manifest bin/manifest.json -tags bin/releases.txt -retry-bound 1s\n"), wantIn: "run is"},
+		{name: "the site check against another host", workflow: in("site-check", "bin/sitecheck -manifest bin/manifest.json -tags bin/releases.txt\n", "bin/sitecheck -manifest bin/manifest.json -tags bin/releases.txt -host example.com\n"), wantIn: "run is"},
+
+		// The release tags the deploy and the live check hand their programs are
+		// the latest job's: the release tags merged into main, in version order.
+		{name: "the deploy's release tags sorted lexically", workflow: inDeployStep("name: The release tags on main", "| sort -V > releases.txt", "| sort > releases.txt"), wantIn: "sort -V"},
+		{name: "the deploy's release tags from another branch", workflow: inDeployStep("name: The release tags on main", "--merged refs/remotes/origin/main", "--merged refs/heads/main"), wantIn: "refs/remotes/origin/main"},
+		{name: "the live check's release tags without the pre-release filter", workflow: inCheckStep("name: The release tags on main", ` | sed -nE '/^v[0-9]+\.[0-9]+\.[0-9]+$/p'`, ""), wantIn: "sed -nE"},
+
+		// The programs are built as the release builds them, kept ninety days so a
+		// deploy is re-run by re-running their job alone, and bound to the digest
+		// the job gives: nothing of the key is here.
+		{name: "the programs built with another target", workflow: in("site-programs", "        run: make site-programs\n", "        run: make site\n"), wantIn: "make site-programs"},
+		{name: "a token in the programs' build step", workflow: in("site-programs", "        run: make site-programs\n", "        env:\n          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}\n        run: make site-programs\n"), wantIn: "GH_TOKEN"},
+		{name: "contents: write for the programs job", workflow: in("site-programs", "      contents: read # check out the repository\n", "      contents: write # check out the repository\n"), wantIn: "contents"},
+		{name: "the deploy program's artifact kept a week", workflow: in("site-programs", "          path: bin/sitedeploy\n          if-no-files-found: error\n          retention-days: 90\n", "          path: bin/sitedeploy\n          if-no-files-found: error\n          retention-days: 7\n"), wantIn: "retention-days"},
+		{name: "the live check's artifact kept a week", workflow: in("site-programs", "          path: bin/sitecheck\n          if-no-files-found: error\n          retention-days: 90\n", "          path: bin/sitecheck\n          if-no-files-found: error\n          retention-days: 7\n"), wantIn: "retention-days"},
+		{name: "the live check's digest of another file", workflow: in("site-programs", `          echo "sitecheck=$(sha256sum bin/sitecheck | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"`+"\n", `          echo "sitecheck=$(sha256sum bin/sitedeploy | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"`+"\n"), wantIn: "sha256sum"},
+		{name: "another output name for the deploy program", workflow: in("site-programs", "      sitedeploy: ${{ steps.digests.outputs.sitedeploy }}\n", "      sitedeploy: ${{ steps.digest.outputs.sitedeploy }}\n"), wantIn: "sitedeploy is"},
+
+		// The skip notice is the deploy's condition negated, it holds no
+		// permission and no key, and the variable's value is never interpolated
+		// into the text it prints.
+		{name: "no condition on the skip notice", workflow: in("site-skipped", "    if: needs.latest.outputs.latest != 'true' || vars.SITE_DEPLOY_ENABLED != 'true'\n", ""), wantIn: `holds no "if"`},
+		{name: "the skip notice's condition with only the switch", workflow: in("site-skipped", "    if: needs.latest.outputs.latest != 'true' || vars.SITE_DEPLOY_ENABLED != 'true'\n", "    if: vars.SITE_DEPLOY_ENABLED != 'true'\n"), wantIn: "if is"},
+		{name: "a permission on the skip notice", workflow: in("site-skipped", "    permissions: {}\n", "    permissions:\n      contents: read\n"), wantIn: "permissions"},
+		{name: "the switch pasted into the skip notice", workflow: in("site-skipped", `          printf '> [!NOTE]\n> The site deploy and its live check are skipped: %s.\n' "$reason" >> "$GITHUB_STEP_SUMMARY"`+"\n", `          printf '> [!NOTE]\n> The site deploy and its live check are skipped: %s.\n' "${{ vars.SITE_DEPLOY_ENABLED }}" >> "$GITHUB_STEP_SUMMARY"`+"\n"), wantIn: "holds a ${{ }} expression"},
+		{name: "the switch in another job's env", workflow: in("site-programs", "        run: make site-programs\n", "        env:\n          SITE_DEPLOY_ENABLED: ${{ vars.SITE_DEPLOY_ENABLED }}\n        run: make site-programs\n"), wantIn: "SITE_DEPLOY_ENABLED"},
+
+		// Every action is pinned by commit, the deploy's and the live check's too.
+		{name: "the deploy job's download pinned by tag", workflow: in("site-deploy", "{{commit actions/download-artifact}}", "actions/download-artifact@v8"), wantIn: "download-artifact@v8"},
+		{name: "the site check's checkout pinned by tag", workflow: in("site-check", "{{commit actions/checkout}}", "actions/checkout@main"), wantIn: "checkout@main"},
 
 		{name: "an empty document", workflow: "", wantIn: "release workflow"},
 	}

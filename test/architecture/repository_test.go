@@ -1327,10 +1327,11 @@ func TestRecordedReleaseAppIdentifiersAreTheSame(t *testing.T) {
 	}
 }
 
-// TestReleaseTagSkillNamesTheReleaseJobs pins that the two job names the release-tag skill's post-release check
-// reports are release.yml's own (PRD #297 milestone 3, PR C1): the skill reports the conclusions of "Site
-// bundle" and "Site browser smoke test", and a rename in either document would leave it reporting a job that
-// no longer exists, or a release whose bundle jobs nobody read.
+// TestReleaseTagSkillNamesTheReleaseJobs pins that the job names the release-tag skill's post-release check
+// reports are release.yml's own (PRD #297 milestone 3, PR C1 and C2): the skill reports the conclusions of
+// "Site bundle", "Site browser smoke test", "Site programs", "Deploy the site", "Check the live site" and
+// "Site deploy skipped", and a rename in either document would leave it reporting a job that no longer
+// exists, or a release whose site jobs nobody read.
 func TestReleaseTagSkillNamesTheReleaseJobs(t *testing.T) {
 	t.Parallel()
 
@@ -1340,6 +1341,10 @@ func TestReleaseTagSkillNamesTheReleaseJobs(t *testing.T) {
 	for _, want := range []struct{ job, name string }{
 		{job: "site", name: "Site bundle"},
 		{job: "site-browser", name: "Site browser smoke test"},
+		{job: "site-programs", name: "Site programs"},
+		{job: "site-deploy", name: "Deploy the site"},
+		{job: "site-check", name: "Check the live site"},
+		{job: "site-skipped", name: "Site deploy skipped"},
 	} {
 		pinned := "  " + want.job + ":\n    name: " + want.name + "\n"
 		if !strings.Contains(release, pinned) {
