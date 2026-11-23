@@ -1275,6 +1275,18 @@ func TestRunPublishAndImageRefuseAConfigurationTheyCannotUse(t *testing.T) {
 			refused: []string{"https://github.example.com"},
 		},
 		{
+			// An empty token names no token at all: it is the configuration's
+			// error, never a GitHub call that fails.
+			name: "an image with an empty GH_TOKEN",
+			sub:  "image",
+			env:  func(env map[string]string) { env["GH_TOKEN"] = "" },
+		},
+		{
+			name: "a publish with an empty GH_TOKEN",
+			sub:  "publish",
+			env:  func(env map[string]string) { env["GH_TOKEN"] = "" },
+		},
+		{
 			name:    "a publish of another server",
 			sub:     "publish",
 			env:     func(env map[string]string) { env["GITHUB_SERVER_URL"] = "https://github.example.com" },
@@ -1382,6 +1394,10 @@ func TestRunPublishAndImageRefuseAConfigurationTheyCannotUse(t *testing.T) {
 
 			if !strings.Contains(result.output(), lineConfigInvalid) {
 				t.Errorf("the run printed %q, want it to name %q", result.output(), lineConfigInvalid)
+			}
+
+			if want := lineConfigInvalid + "\n"; result.stdout != want {
+				t.Errorf("the run's stdout is %q, want exactly %q: a refused configuration is the run's one line", result.stdout, want)
 			}
 
 			if calls := fake.Calls(t); len(calls) != 0 {
