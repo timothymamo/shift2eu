@@ -402,9 +402,14 @@ func TestLoadPreviousRefusesADirItCannotRead(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			previous, err := github.LoadPrevious(tc.dir(t))
+			// The directory is read once: a case's dir may build a fresh one per
+			// call, so a second call could name another directory than the one
+			// LoadPrevious was given.
+			dir := tc.dir(t)
+
+			previous, err := github.LoadPrevious(dir)
 			if !errors.Is(err, publish.ErrConfig) {
-				t.Fatalf("LoadPrevious(%q) = %+v, %v, want an error wrapping publish.ErrConfig", tc.dir(t), previous, err)
+				t.Fatalf("LoadPrevious(%q) = %+v, %v, want an error wrapping publish.ErrConfig", dir, previous, err)
 			}
 
 			if previous != nil {
