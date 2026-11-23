@@ -589,3 +589,269 @@ func browserRecipeMakefile(flags string, comments ...string) string {
 		"\t$(DOCKER) run -d --entrypoint /headless-shell/headless-shell \\\n" +
 		"\t\t$(HEADLESS_SHELL) " + flags + " >/dev/null\n"
 }
+
+// watchdogOrderIssue names what the watchdog's start-up order is pinned for: the leftover sleep the reviewer found on
+// issue #449, and the race in the test that pinned it by chance until issue #492 made the test deterministic.
+const watchdogOrderIssue = "issue #449 and #492"
+
+// watchdogStartUp matches the watchdog subshell the EXIT trap starts: from its own (stop= to the redirections and &
+// that leave it running in the background, but for the pid the trap stores in watchdog_pid. The statements between the
+// two are taken as they are: the match ends at the first closing ) that the redirections there follow, so a ) inside the
+// watchdog - a $(...), a $((...)), a case pattern - does not end it early and hide the watchdog from the check.
+var watchdogStartUp = regexp.MustCompile(`(?s)\(\s*stop=;.*?\) >/dev/null 2>&1 & watchdog_pid=`)
+
+// watchdogUSR1Trap matches the watchdog's trap for the USR1 the EXIT trap sends it - a trap with an action, not the
+// trap "" USR1 that makes a late USR1 harmless - as the recipe writes it.
+var watchdogUSR1Trap = regexp.MustCompile(`trap "(?:[^"\\]|\\.)+" USR1`)
+
+// watchdogSleep matches the sleep the watchdog bounds the removal with, the one whose pid it stores next: the recipe's
+// deadline, as the recipe writes it before make expands the two dollars.
+var watchdogSleep = regexp.MustCompile(`sleep "\$\$TEST_BROWSER_RM_DEADLINE"`)
+
+// watchdogSleepBackground matches that sleep with the & that leaves it running in the background, the sleep whose pid a
+// store after the & takes: a store before the & takes the pid of another command, or of no command of the watchdog's own.
+var watchdogSleepBackground = regexp.MustCompile(`sleep "\$\$TEST_BROWSER_RM_DEADLINE" &`)
+
+// watchdogSleepPidStore matches where the watchdog stores the pid of the sleep it started, the pid its stop check and its
+// USR1 trap end.
+var watchdogSleepPidStore = regexp.MustCompile(`sleep_pid=\$\$!`)
+
+// watchdogStopCheck matches the test of the stop flag the watchdog runs after it starts its sleep, for a USR1 that came
+// after its trap was set and before the sleep's pid was stored: the flag the trap sets. It is not the trap's inner test,
+// which tests sleep_pid in escaped quotes and so is no match. Only the message for a watchdog that runs no stop check at
+// all reads this regexp: watchdogStop reads the check together with the kill it runs.
+var watchdogStopCheck = regexp.MustCompile(`\[\s+-n\s+"\$\$stop"\s+\]`)
+
+// watchdogStop matches the check for the stop flag and the kill of the sleep it runs as one statement, as the recipe
+// writes them: the kill inside the check's then, in plain quotes, not the trap's escaped ones. A kill of the sleep in a
+// later statement is no match, because it runs whether the flag was set or not: the USR1 the check exists for comes
+// before the store, so the check must end the sleep itself.
+var watchdogStop = regexp.MustCompile(`\[\s+-n\s+"\$\$stop"\s+\];\s*then\s+kill\s+-s\s+KILL\s+"\$\$sleep_pid"`)
+
+// watchdogTrapOrderProblems returns what the recipe of make test-browser gets wrong about the order the watchdog it
+// starts begins in, one message per fault: empty when the watchdog's USR1 trap is set before its sleep starts, its stop
+// check for the flag that trap sets kills the sleep inside the check, and that check runs after the sleep's pid is
+// stored; and one message when the recipe starts no watchdog, starts a watchdog with no USR1 trap, starts a watchdog
+// that sleeps nowhere, starts the sleep before it sets the trap that ends it, stores no pid of its sleep, stores that
+// pid before it starts the sleep in the background, runs no check for the stop flag, one that kills no sleep in it, or
+// one before it stores the sleep's pid.
+//
+// The trap-before-sleep order and the stop check are both pinned here because the dynamic test can no longer reach
+// either window: its removal waits for the sleep's pid, so the USR1 always comes after the store (issue #492).
+func watchdogTrapOrderProblems(recipe string) []string {
+	watchdog := watchdogStartUp.FindString(recipe)
+	if watchdog == "" {
+		return []string{fmt.Sprintf("the recipe of make %s starts no watchdog subshell, so nothing bounds the removal its EXIT trap runs and nothing pins the order the watchdog's trap and its sleep start in (%s)",
+			testBrowserTarget, watchdogOrderIssue)}
+	}
+
+	trap := watchdogUSR1Trap.FindStringIndex(watchdog)
+	if trap == nil {
+		return []string{fmt.Sprintf("the watchdog of make %s sets no trap for the USR1 the EXIT trap sends it, so nothing ends its sleep when the removal returns and the sleep outlives the run for the rest of the deadline (%s)",
+			testBrowserTarget, watchdogOrderIssue)}
+	}
+
+	sleep := watchdogSleep.FindStringIndex(watchdog)
+	if sleep == nil {
+		return []string{fmt.Sprintf("the watchdog of make %s starts no sleep of the deadline TEST_BROWSER_RM_DEADLINE names, so it cannot bound the removal and nothing pins the order its trap and its sleep start in (%s)",
+			testBrowserTarget, watchdogOrderIssue)}
+	}
+
+	if trap[0] > sleep[0] {
+		return []string{fmt.Sprintf("the watchdog of make %s starts its sleep of the deadline TEST_BROWSER_RM_DEADLINE before it sets the USR1 trap that ends that sleep: a USR1 the EXIT trap sends while the watchdog is between the two reaches it with the sleep running and no trap to end it, so the run leaves the sleep behind for the rest of the deadline (%s, the reviewer's finding S1)",
+			testBrowserTarget, watchdogOrderIssue)}
+	}
+
+	store := watchdogSleepPidStore.FindStringIndex(watchdog)
+	if store == nil {
+		return []string{fmt.Sprintf("the watchdog of make %s stores no pid of its sleep, so neither its USR1 trap nor its stop check can end it and the sleep outlives the run for the rest of the deadline (%s)",
+			testBrowserTarget, watchdogOrderIssue)}
+	}
+
+	if background := watchdogSleepBackground.FindStringIndex(watchdog); background == nil || store[0] < background[1] {
+		return []string{fmt.Sprintf("the watchdog of make %s stores a pid of its sleep before it starts that sleep in the background, so the pid it stores is no pid of the sleep and neither its USR1 trap nor its stop check can end it, leaving the sleep to outlive the run for the rest of the deadline (%s)",
+			testBrowserTarget, watchdogOrderIssue)}
+	}
+
+	stop := watchdogStopCheck.FindStringIndex(watchdog)
+	if stop == nil {
+		return []string{fmt.Sprintf("the watchdog of make %s sets no check for the stop flag its USR1 trap sets, so a USR1 the EXIT trap sends while the watchdog runs between its trap and the store of the sleep's pid sets the flag and leaves the sleep running for the rest of the deadline (%s)",
+			testBrowserTarget, watchdogOrderIssue)}
+	}
+
+	if watchdogStop.FindString(watchdog) == "" {
+		return []string{fmt.Sprintf("the watchdog of make %s checks the stop flag its USR1 trap sets but kills no sleep of the deadline then, so a USR1 that sets it between the trap and the store of the sleep's pid leaves the sleep running for the rest of the deadline (%s)",
+			testBrowserTarget, watchdogOrderIssue)}
+	}
+
+	if stop[0] < store[0] {
+		return []string{fmt.Sprintf("the watchdog of make %s runs its check for the stop flag its USR1 trap sets before it stores the sleep's pid, so a USR1 that sets the flag between the trap and the store is read against the empty sleep_pid the watchdog starts with and leaves the sleep running for the rest of the deadline (%s)",
+			testBrowserTarget, watchdogOrderIssue)}
+	}
+
+	return nil
+}
+
+// watchdogStandIn is a stand-in for the recipe of make test-browser at the point this check reads it: an EXIT trap
+// whose body starts a watchdog subshell holding the statements the case under test gives, in the order it gives them
+// - the trap the EXIT trap's USR1 ends the watchdog's sleep by, the sleep it ends, and, where a case has them, the
+// statements around them - with the make line continuations the real recipe has, so a check reading it reads the same
+// shape.
+func watchdogStandIn(statements ...string) string {
+	return "\ttrap 'rm -rf \"$$bundle_dir\" || true; ( stop=; sleep_pid=; " + strings.Join(statements, "; ") +
+		"; exit 0 ) >/dev/null 2>&1 & watchdog_pid=$$!' EXIT; \\\n" +
+		"\tsleep 1\n"
+}
+
+// watchdogTrapStandIn and watchdogSleepStandIn are the two statements of the watchdog the check reads the order of, as
+// the real recipe writes them: the trap that ends the sleep on the USR1 the EXIT trap sends, and the sleep itself with
+// the store of its pid. watchdogStopStandIn is the check the watchdog runs once its sleep has started, for a USR1 that
+// came after the trap and before the store of the sleep's pid, and watchdogStopNoKillStandIn a check that sets nothing
+// running to end. watchdogLateKillStandIn is a kill of the sleep outside such a check; watchdogSleepAloneStandIn the
+// sleep with the & that backgrounds it and no store, and watchdogSleepPidStoreStandIn the store alone, so a case can put
+// the store before the sleep it takes the pid of. The order of the trap and the sleep, and of the store and the stop
+// check, is what the check reads.
+var (
+	watchdogTrapStandIn          = `trap "stop=1; if [ -n \"\$$sleep_pid\" ]; then kill -s KILL \"\$$sleep_pid\" 2>/dev/null || true; exit 0; fi" USR1`
+	watchdogSleepStandIn         = `sleep "$$TEST_BROWSER_RM_DEADLINE" & sleep_pid=$$!`
+	watchdogStopStandIn          = `if [ -n "$$stop" ]; then kill -s KILL "$$sleep_pid" 2>/dev/null || true; exit 0; fi`
+	watchdogStopNoKillStandIn    = `if [ -n "$$stop" ]; then exit 0; fi`
+	watchdogLateKillStandIn      = `if wait "$$sleep_pid"; then kill -s KILL "$$sleep_pid" 2>/dev/null || true; exit 0; fi`
+	watchdogSleepAloneStandIn    = `sleep "$$TEST_BROWSER_RM_DEADLINE" &`
+	watchdogSleepPidStoreStandIn = `sleep_pid=$$!`
+)
+
+// TestWatchdogTrapOrderProblems pins the check itself, over stand-in watchdog texts rather than the real Makefile: the
+// watchdog as issue #449 fixes it has no problem, the trap "" USR1 after its sleep neither, and a watchdog that starts
+// its sleep first, sets no USR1 trap, sleeps nowhere, sets no stop check, kills the sleep only outside that check, stores
+// no pid of its sleep, stores the pid before it starts the sleep, runs its check before it stores the sleep's pid, or is
+// missing altogether is reported. A check that read no watchdog, read the trap "" USR1 for the set, or accepted a kill
+// outside the check, would pass what the real recipe must never become. A watchdog that holds a $((...)) between its
+// statements is read whole, where a match ending at the first ) would find no watchdog at all.
+func TestWatchdogTrapOrderProblems(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		// statements are the statements of watchdogStandIn's subshell, in the order the case has them.
+		statements []string
+		// recipe, when set, is the whole recipe text, in place of watchdogStandIn's.
+		recipe string
+		want   []string
+	}{
+		{
+			name:       "the watchdog as issue #449 fixes it",
+			statements: []string{watchdogTrapStandIn, watchdogSleepStandIn, watchdogStopStandIn, `trap "" USR1`},
+		},
+		{
+			name:       "a watchdog that does arithmetic between its statements",
+			statements: []string{watchdogTrapStandIn, `missed=$$((missed + 1))`, watchdogSleepStandIn, watchdogStopStandIn, `trap "" USR1`},
+		},
+		{
+			name:       "a watchdog that sets no stop check",
+			statements: []string{watchdogTrapStandIn, watchdogSleepStandIn},
+			want: []string{
+				`the watchdog of make test-browser sets no check for the stop flag its USR1 trap sets, so a USR1 the EXIT trap sends while the watchdog runs between its trap and the store of the sleep's pid sets the flag and leaves the sleep running for the rest of the deadline (issue #449 and #492)`,
+			},
+		},
+		{
+			name:       "a stop check before the sleep's pid is stored",
+			statements: []string{watchdogTrapStandIn, watchdogStopStandIn, watchdogSleepStandIn},
+			want: []string{
+				`the watchdog of make test-browser runs its check for the stop flag its USR1 trap sets before it stores the sleep's pid, so a USR1 that sets the flag between the trap and the store is read against the empty sleep_pid the watchdog starts with and leaves the sleep running for the rest of the deadline (issue #449 and #492)`,
+			},
+		},
+		{
+			name:       "a stop check that kills no sleep",
+			statements: []string{watchdogTrapStandIn, watchdogSleepStandIn, watchdogStopNoKillStandIn},
+			want: []string{
+				`the watchdog of make test-browser checks the stop flag its USR1 trap sets but kills no sleep of the deadline then, so a USR1 that sets it between the trap and the store of the sleep's pid leaves the sleep running for the rest of the deadline (issue #449 and #492)`,
+			},
+		},
+		{
+			name:       "a stop check whose kill runs outside it",
+			statements: []string{watchdogTrapStandIn, watchdogSleepStandIn, watchdogStopNoKillStandIn, watchdogLateKillStandIn},
+			want: []string{
+				`the watchdog of make test-browser checks the stop flag its USR1 trap sets but kills no sleep of the deadline then, so a USR1 that sets it between the trap and the store of the sleep's pid leaves the sleep running for the rest of the deadline (issue #449 and #492)`,
+			},
+		},
+		{
+			name:       "a watchdog that stores no pid of its sleep",
+			statements: []string{watchdogTrapStandIn, watchdogSleepAloneStandIn, watchdogStopStandIn},
+			want: []string{
+				`the watchdog of make test-browser stores no pid of its sleep, so neither its USR1 trap nor its stop check can end it and the sleep outlives the run for the rest of the deadline (issue #449 and #492)`,
+			},
+		},
+		{
+			name:       "the sleep's pid stored before the sleep starts",
+			statements: []string{watchdogTrapStandIn, watchdogSleepPidStoreStandIn, watchdogSleepAloneStandIn, watchdogStopStandIn},
+			want: []string{
+				`the watchdog of make test-browser stores a pid of its sleep before it starts that sleep in the background, so the pid it stores is no pid of the sleep and neither its USR1 trap nor its stop check can end it, leaving the sleep to outlive the run for the rest of the deadline (issue #449 and #492)`,
+			},
+		},
+		{
+			name:       "the sleep started before the trap that ends it",
+			statements: []string{watchdogSleepStandIn, watchdogTrapStandIn},
+			want: []string{
+				`the watchdog of make test-browser starts its sleep of the deadline TEST_BROWSER_RM_DEADLINE before it sets the USR1 trap that ends that sleep: a USR1 the EXIT trap sends while the watchdog is between the two reaches it with the sleep running and no trap to end it, so the run leaves the sleep behind for the rest of the deadline (issue #449 and #492, the reviewer's finding S1)`,
+			},
+		},
+		{
+			name:       "a watchdog that sets no USR1 trap",
+			statements: []string{watchdogSleepStandIn, `trap "" USR1`},
+			want: []string{
+				`the watchdog of make test-browser sets no trap for the USR1 the EXIT trap sends it, so nothing ends its sleep when the removal returns and the sleep outlives the run for the rest of the deadline (issue #449 and #492)`,
+			},
+		},
+		{
+			name:       "a watchdog that sleeps nowhere",
+			statements: []string{watchdogTrapStandIn},
+			want: []string{
+				`the watchdog of make test-browser starts no sleep of the deadline TEST_BROWSER_RM_DEADLINE names, so it cannot bound the removal and nothing pins the order its trap and its sleep start in (issue #449 and #492)`,
+			},
+		},
+		{
+			name:   "no watchdog at all",
+			recipe: "\ttrap 'rm -rf \"$$bundle_dir\" || true' EXIT; \\\n\tsleep 1\n",
+			want: []string{
+				`the recipe of make test-browser starts no watchdog subshell, so nothing bounds the removal its EXIT trap runs and nothing pins the order the watchdog's trap and its sleep start in (issue #449 and #492)`,
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			recipe := tc.recipe
+			if recipe == "" {
+				recipe = watchdogStandIn(tc.statements...)
+			}
+
+			if diff := cmp.Diff(tc.want, watchdogTrapOrderProblems(recipe)); diff != "" {
+				t.Errorf("watchdogTrapOrderProblems (%s) (-want +got):\n%s\nrecipe:\n%s", tc.name, diff, recipe)
+			}
+		})
+	}
+}
+
+// TestMakeTestBrowserRecipeSetsTheWatchdogTrapBeforeItsSleep pins the order on the real Makefile (issue #492): the
+// watchdog sets its USR1 trap before it starts the sleep that trap ends, so no run can lose the signal to the
+// watchdog's own start-up and leave the sleep behind for the whole deadline. The test that reads that leftover off the
+// runs cannot see the order on its own - it waits for the sleep's pid, so the signal always comes after it - and this
+// check is what keeps the recipe from inverting the two. The reading of the real recipe is argued the other way round
+// in TestWatchdogTrapOrderProblems: there the check is the subject, here the recipe is.
+func TestMakeTestBrowserRecipeSetsTheWatchdogTrapBeforeItsSleep(t *testing.T) {
+	t.Parallel()
+
+	recipe, ok := makeRecipes(t, readRepoFile(t, makefilePath))[testBrowserTarget]
+	if !ok {
+		t.Fatalf("the Makefile declares no %s target with a recipe, so nothing pins the order the watchdog of its removal starts in (%s)",
+			testBrowserTarget, watchdogOrderIssue)
+	}
+
+	if diff := cmp.Diff([]string(nil), watchdogTrapOrderProblems(recipe)); diff != "" {
+		t.Errorf("the watchdog of make %s (%s) (-want +got):\n%s\nrecipe:\n%s",
+			testBrowserTarget, watchdogOrderIssue, diff, recipe)
+	}
+}

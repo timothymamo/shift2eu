@@ -1482,19 +1482,22 @@ wait "${job}" || true`
 			killedFile := filepath.Join(sb.root, "killed")
 			releasedFile := filepath.Join(sb.root, "released")
 			held := filepath.Join(sb.root, "held")
-			hold := filepath.Join(sb.root, "hold.fifo")
-
-			makeFifo(t, hold)
 
 			// The loop's window, replayed: its own trap, then the state a signal in the loop finds, and then a
-			// hold. The hold is a fifo no one ever writes, so the replay is still in the window when the signal
-			// arrives. stopped stands in for the script's own, which needs the mint's state and says only where the
-			// refresh stopped. release_lock records that the trap ran to its end, the step a trap that aborts on an
-			// unset variable never reaches. kill is a function here, not the builtin: a POSIX shell finds a
-			// function of a name before the builtin of that name, so the replay records every pid the trap asks to
-			// kill and a run can prove no kill went to a pid that a reused one would hit. The replay runs under
-			// `set -eu` as dev/agents-app-token.sh does, so an expansion the script survives without the option
-			// fails here as it would there.
+			// hold. The hold marks when the harness is out of the window, and then waits in foreground sleeps, so
+			// the replay is still in the window when the signal arrives: a foreground sleep is a command boundary,
+			// where a trap the shell has only marked pending runs - where a fifo nobody writes would leave the trap
+			// pending in open() for good if the signal landed between the marker and that open (issue #492) - and
+			// it sets no $!, so the window the trap reads is the one the replay put it in. The 400 polls of 0.05 s
+			// hold it about 20 s, well inside the 30 s the test waits for the replay to stop, so a trap that never
+			// ran is reported as the hold that outlasted it and not as a wait that ran out under a slow fork.
+			// stopped stands in for the script's own, which needs the mint's state and says only where the refresh
+			// stopped. release_lock records that the trap ran to its end, the step a trap that aborts on an unset
+			// variable never reaches. kill is a function here, not the builtin: a POSIX shell finds a function of a
+			// name before the builtin of that name, so the replay records every pid the trap asks to kill and a run
+			// can prove no kill went to a pid that a reused one would hit. The replay runs under `set -eu` as
+			// dev/agents-app-token.sh does, so an expansion the script survives without the option fails here as it
+			// would there.
 			harnessText := fmt.Sprintf(`#!/bin/sh
 set -eu
 stopped() { :; }
@@ -1510,7 +1513,8 @@ sleeper=none
 %s
 %s
 : > "${SHIFT2EU_TEST_HELD:?}"
-read -r go < "${SHIFT2EU_TEST_HOLD_FIFO:?}"
+i=0
+while [ "$i" -lt 400 ]; do sleep 0.05; i=$((i + 1)); done
 printf 'the signal arrived after the trap, so this run forced no window\n' >&2
 `, refreshTrap(t, script, tc.trap), tc.window)
 			writeFileMode(t, harness, []byte(harnessText), 0o700)
@@ -1521,7 +1525,6 @@ printf 'the signal arrived after the trap, so this run forced no window\n' >&2
 			env["SHIFT2EU_TEST_KILLED"] = killedFile
 			env["SHIFT2EU_TEST_RELEASED"] = releasedFile
 			env["SHIFT2EU_TEST_HELD"] = held
-			env["SHIFT2EU_TEST_HOLD_FIFO"] = hold
 
 			// The harness runs like a script the test starts: in a process group of its own, with its output in
 			// files, so the sleep the trap may leave behind cannot block the wait (issue #267). The replay runs under
@@ -1564,13 +1567,16 @@ printf 'the signal arrived after the trap, so this run forced no window\n' >&2
 				t.Fatalf("the replay of issue #289's window did not stop 30s after the %s; stderr:\n%s", tc.trap, run.errOut())
 			}
 
+			// The hold ends its 400 polls about 20 s after the window, well inside the 30 s wait above, so a replay that
+			// went on means the trap never ran and not that the wait ran out; read before the exit status, since a
+			// regressed trap leaves the replay to exit with whatever its hold's own end gives it.
+			if strings.Contains(run.errOut(), "forced no window") {
+				t.Fatalf("the replay went on after its signal, so the trap never ran and this run proved nothing about issue #289; stderr:\n%s", run.errOut())
+			}
+
 			if status := run.exitCode(t); status != tc.status {
 				t.Fatalf("the refresh's %s trap ended the script with status %d, want %d: the trap, not the signal's default action, must handle it; stderr:\n%s",
 					tc.trap, status, tc.status, run.errOut())
-			}
-
-			if strings.Contains(run.errOut(), "forced no window") {
-				t.Errorf("the replay went on after its signal, so the trap never ran and this run proved nothing about issue #289; stderr:\n%s", run.errOut())
 			}
 
 			if strings.Contains(run.errOut(), "not found") {
@@ -1588,8 +1594,9 @@ printf 'the signal arrived after the trap, so this run forced no window\n' >&2
 			// Under `set -u` the shell reports every expansion of a variable it has no value for: dash says
 			// "!: parameter not set", bash --posix "$!: unbound variable". The loop's first round, before its first
 			// `sleep ... &`, has no $! at all, so a trap that names it there writes such an error into the refresh's
-			// log on the one signal it takes. The stderr also carries the replay's interrupted fifo open, which is the
-			// hold's own doing and no behaviour of the script; only the shell's report of the unset parameter is.
+			// log on the one signal it takes. The replay's stderr carries nothing else - the hold that keeps it in the
+			// window is a foreground sleep, so no interrupted read writes there (issue #492) - and only the shell's
+			// report of the unset parameter is read here.
 			for _, report := range []string{"parameter not set", "unbound variable"} {
 				if strings.Contains(run.errOut(), report) {
 					t.Fatalf("the refresh's %s trap made the shell report %q: the trap expands $! (${sleeper:-$!}) before the loop's first `sleep ... &`, when the shell has never started a background job and $! is unset, so a signal in that window writes a shell error into the refresh's log; the trap must name no pid while no background job has run (issue #289)\nstderr:\n%s",
