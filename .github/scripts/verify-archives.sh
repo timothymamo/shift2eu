@@ -4,9 +4,9 @@
 # what it should. The release ships the CLI alone (ADR 0037, issue #393): its archives,
 # shift2eu_<version>_<os>_<arch>, hold shift2eu (shift2eu.exe on Windows), and no other archive is
 # built. Besides its binary an archive may hold only LICENSE, NOTICE, README.md and SECURITY.md at its
-# root, each of which it must hold (issues #450 and #493), Markdown pages under docs/ (no path segment may start with
-# a dot, so no ., .. or hidden file), and exactly the samples docs/guide/try-it.md runs on (issue
-# #188): examples/README.md and, for each of aws, azure and gcp, examples/<source>/README.md and
+# root, each of which it must hold (issues #450 and #493), Markdown pages under docs/ (no path segment
+# may start with a dot, so no ., .. or hidden file), and exactly the samples docs/guide/try-it.md runs on
+# (issue #188): examples/README.md and, for each of aws, azure and gcp, examples/<source>/README.md and
 # examples/<source>/inventory.json, with their directories, and exactly the jq programs
 # docs/guide/inventory.md builds an inventory with (issue #178): docs/guide/inventory/<source>.jq for
 # aws, azure and gcp. Any other entry fails the run, so a stray file under docs/ (a .jq file there
