@@ -5,7 +5,8 @@
 // It runs gh and gitleaks, each by the absolute path its caller gives and with
 // an environment it builds itself, nothing inherited. Every GitHub call goes
 // through one function, (*Client).Call, which checks the method, the endpoint
-// and the request body against a fixed table (Endpoints, Allowed) before gh
+// and the request body against a fixed table (Allowed; Endpoints returns a
+// copy of it) before gh
 // runs: the reads the run needs, the Git data endpoints of the one report
 // commit and its security-audit/* ref, the report's pull request, the audit
 // App's issues, and the repository's security advisories, whose state is only

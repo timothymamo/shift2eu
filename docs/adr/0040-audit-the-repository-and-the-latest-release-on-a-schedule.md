@@ -977,7 +977,8 @@ read); the publish step gets the App's token.
   fresh directory) and `NO_COLOR=1`. A variable an earlier step set through `$GITHUB_ENV` (`GH_HOST`,
   `GH_DEBUG`, `HTTPS_PROXY`) reaches neither.
 - Every GitHub call goes through one function, `(*Client).Call`. It marshals the request body, checks
-  the method, the endpoint and the body against a fixed table, `Endpoints` (data, below), with
+  the method, the endpoint and the body against a fixed table (data, below; unexported, and
+  `Endpoints()` returns a copy, so no caller can change it), with
   `Allowed`, and only then runs `gh api --method <M> --include -H "Accept: application/vnd.github+json"
   -H "X-GitHub-Api-Version: 2022-11-28" [--input -] <endpoint>`, the body on stdin. A refused call runs
   nothing and wraps `ErrEndpointRefused`, a programming error (outcome 1).
