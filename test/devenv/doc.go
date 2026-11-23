@@ -88,7 +88,12 @@
 // /usr/bin/make and SHIFT2EU_TEST_MAKE_VERSION=3.81; with that variable set,
 // TestTestMakeIsTheVersionNamed checks that make --version reports that release
 // and, for 3.81, that a # line inside a continued recipe ends the recipe there,
-// as on the Mac. Without it the test skips. TestTestsRunMakeThroughMakeProgram
+// as on the Mac. Without it the test skips. Every make run of runMakeIn goes
+// through runBounded (boundedrun_test.go, issue #512): after makeRunBound it
+// kills make's whole process group and fails the test naming the command, its
+// directory and what it wrote, so a blocked make cannot pass a test that
+// expects a refusal nor run into go test's package timeout, which names
+// nothing; TestRunBounded pins that runner. TestTestsRunMakeThroughMakeProgram
 // (makeprogramscan_test.go) refuses a literal make handed to exec.Command or
 // exec.CommandContext in the package's test files, a guard against a test
 // that runs make by accident: it catches the literal "make" or "gmake", not a

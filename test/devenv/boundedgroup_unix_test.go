@@ -1,0 +1,76 @@
+//go:build unix
+
+package devenv_test
+
+import (
+	"errors"
+	"fmt"
+	"os"
+	"os/exec"
+	"syscall"
+)
+
+// boundedGroup is the process group runBounded starts a command in, so a timeout can kill the command and
+// every process it started. As processGroup's (procgroup_unix_test.go), its leader is a holder of runBounded's
+// own, a cat on a pipe only runBounded writes to, not the command: until release reaps the holder its pid, and
+// so the group's id, names this group and no other, so kill can signal no process outside it even when the
+// command has been reaped already (CLAUDE.md, rule 10). It needs no *testing.T, unlike processGroup, and ends
+// the holder by closing its stdin rather than by a signal: a process the command left behind on purpose keeps
+// running unless the command timed out.
+type boundedGroup struct {
+	holder *exec.Cmd
+	stdin  *os.File // the write end of the holder's stdin
+}
+
+// startBounded starts the holder of a new process group, and cmd in that group. cmd's SysProcAttr is runBounded's
+// to set: a cmd that already has one is refused rather than silently moved to another group.
+func startBounded(cmd *exec.Cmd) (*boundedGroup, error) {
+	if cmd.SysProcAttr != nil {
+		return nil, errors.New("runBounded sets the command's SysProcAttr itself, and it is set already: " + cmd.String())
+	}
+
+	stdin, write, err := os.Pipe()
+	if err != nil {
+		return nil, fmt.Errorf("create the stdin of a process group's holder: %w", err)
+	}
+
+	holder := exec.Command("cat")
+	holder.Stdin = stdin
+	holder.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+
+	err = holder.Start()
+
+	_ = stdin.Close()
+
+	if err != nil {
+		_ = write.Close()
+
+		return nil, fmt.Errorf("start the holder of a process group: %w", err)
+	}
+
+	group := &boundedGroup{holder: holder, stdin: write}
+
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true, Pgid: holder.Process.Pid}
+
+	if err := cmd.Start(); err != nil {
+		group.kill()
+		group.release()
+
+		return nil, err
+	}
+
+	return group, nil
+}
+
+// kill sends SIGKILL to every process in the group, the holder included. It ignores the error: ESRCH means only
+// zombies are left.
+func (g *boundedGroup) kill() {
+	_ = syscall.Kill(-g.holder.Process.Pid, syscall.SIGKILL)
+}
+
+// release ends the holder, by closing its stdin unless kill ended it already, and reaps it. It ignores the
+// holder's exit status: EOF or SIGKILL.
+func (g *boundedGroup) release() {
+	_ = g.stdin.Close()
+	_ = g.holder.Wait()
+}

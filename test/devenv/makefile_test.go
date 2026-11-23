@@ -12,7 +12,6 @@
 package devenv_test
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -3713,7 +3712,9 @@ func runMake(t *testing.T, args []string, env map[string]string) (string, string
 
 // runMakeIn runs make in dir with args and env alone, never the test process's own environment: the
 // vm-gh-wrapper tests copy the Makefile and the script it runs into a temporary directory, so one recipe can
-// be run against a stand-in generator.
+// be run against a stand-in generator. It runs make through runBounded with makeRunBound, and fails the test
+// on the timeout: a test that expects a refusal, a non-zero exit, would otherwise pass on a make that was killed
+// (issue #512).
 func runMakeIn(t *testing.T, dir string, args []string, env map[string]string) (string, string, error) {
 	t.Helper()
 
@@ -3721,14 +3722,19 @@ func runMakeIn(t *testing.T, dir string, args []string, env map[string]string) (
 	cmd.Env = envList(env)
 	cmd.Dir = dir
 
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+	stdout, stderr, err := runBounded(cmd, makeRunBound)
+	if errors.Is(err, errCommandTimedOut) {
+		t.Fatalf("make %v: %v", args, err)
+	}
 
-	err := cmd.Run()
-
-	return stdout.String(), stderr.String(), err
+	return stdout, stderr, err
 }
+
+// makeRunBound is how long runMakeIn lets one make run before it kills it and fails the test. One run takes
+// about 14 ms on Linux and about 0.5 s on the 3-vCPU macOS runner of CI's make-381 job; the bound leaves room for
+// a runner that hundreds of parallel subtests keep busy, and still names the blocked make long before go test's
+// package timeout would, which names nothing (issue #512).
+const makeRunBound = 2 * time.Minute
 
 // makeEnv is the environment make runs with in a test: a PATH of the machine's own and a temporary HOME, so
 // the Makefile's $(shell git config ...) reads nothing of the maintainer's, and a WORKSPACE_REPO naming a
