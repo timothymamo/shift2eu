@@ -12,9 +12,11 @@
 // beside them, in its own environment, and the fake CLI that run reaches
 // inherits none of them.
 //
-// Only bubblewrap is a fake: the start check runs a real `bwrap`, and a default
-// test starts no sandbox. Nothing here reaches a cloud, needs a credential or
-// runs a command of the runner's: the CLI is the test's own script.
+// Bubblewrap and the Observer are the fakes: the start check runs a real `bwrap`,
+// and a default test starts no sandbox; the Observer the preflight takes starts no
+// `sudo` and dials no socket, so a default test probes nothing of the runner's
+// either. Nothing here reaches a cloud, needs a credential or runs a command of
+// the runner's: the CLI is the test's own script.
 package main
 
 import (
