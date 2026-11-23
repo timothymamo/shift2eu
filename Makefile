@@ -599,10 +599,27 @@ test-e2e: ## Build and run the binary end to end against testdata fixtures
 # and bash reap an exited background child before any wait, and its pid reused, so that USR1 lands elsewhere.
 # POSIX sh cannot close these windows; they are accepted as negligible (docs/adr/0036, issue #449). When DOCKER
 # is a wrapper (sudo docker, a script), the kill ends only the wrapper, and a child of its own may outlive it.
+#
+# TEST_BROWSER_BUNDLE (PRD #297 milestone 3) names a bundle to smoke-test instead: release.yml's site-browser job
+# sets it to the bundle its site job built, unpacked, so the release smoke-tests the very bundle it attests and
+# publishes. Empty, the default, the run builds its own as above. Set, the run builds none: it serves that
+# directory, resolved from the directory make runs in to an absolute path with every symbolic link resolved
+# (cd and pwd -P), and still makes its temporary directory, for inspect's errors, which the EXIT trap removes
+# alone: the given bundle is never removed, moved or written, an interrupted run included. It is read raw, like
+# the deadline, and reaches the recipe's shell only through the environment. The value is decided on while make
+# expands the recipe, before anything runs: a value that names no directory holding manifest.json (what
+# ci/sitebuild writes), or that holds whitespace or a character make's wildcard reads (* ? [ \ ~), is refused
+# with $(error), one line on standard error and exit status 2.
 TEST_BROWSER_RM_DEADLINE ?= 30
+TEST_BROWSER_BUNDLE ?=
+# test_browser_bundle_served is non-empty when TEST_BROWSER_BUNDLE is one word with no wildcard character and
+# names a directory holding manifest.json.
+test_browser_bundle_served = $(and $(filter 1,$(words $(TEST_BROWSER_BUNDLE))),$(if $(findstring *,$(TEST_BROWSER_BUNDLE))$(findstring ?,$(TEST_BROWSER_BUNDLE))$(findstring [,$(TEST_BROWSER_BUNDLE))$(findstring \,$(TEST_BROWSER_BUNDLE))$(findstring ~,$(TEST_BROWSER_BUNDLE)),,served),$(wildcard $(TEST_BROWSER_BUNDLE)/manifest.json))
 .PHONY: test-browser
 test-browser: export TEST_BROWSER_RM_DEADLINE := $(value TEST_BROWSER_RM_DEADLINE)
-test-browser: ## Build the site's bundle into a directory of this run's own and run its headless-browser smoke test in a pinned Chromium container (docker or nerdctl)
+test-browser: export TEST_BROWSER_BUNDLE := $(value TEST_BROWSER_BUNDLE)
+test-browser: ## Build the site's bundle into a directory of this run's own, or take TEST_BROWSER_BUNDLE=<dir> (an unpacked bundle, never built, written or removed), and run its headless-browser smoke test in a pinned Chromium container (docker or nerdctl)
+	@$(if $(TEST_BROWSER_BUNDLE),$(if $(test_browser_bundle_served),,$(error test-browser: TEST_BROWSER_BUNDLE must name a directory holding manifest.json (an unpacked bundle of ci/sitebuild) with no whitespace or * ? [ \ ~ in it; not "$(TEST_BROWSER_BUNDLE)")))
 	@set -eu; \
 	case "$$TEST_BROWSER_RM_DEADLINE" in ''|0*|*[!0-9]*|??????*) \
 		printf 'test-browser: TEST_BROWSER_RM_DEADLINE must be a whole number of seconds from 1 to 99999 with no leading zero, not "%s"\n' "$$TEST_BROWSER_RM_DEADLINE" >&2; \
@@ -616,7 +633,12 @@ test-browser: ## Build the site's bundle into a directory of this run's own and 
 	trap 'trap "" HUP INT TERM; exit 130' INT; \
 	trap 'trap "" HUP INT TERM; exit 143' TERM; \
 	bundle_dir=$$(mktemp -d "$${TMPDIR:-/tmp}/shift2eu-test-browser.XXXXXX"); \
-	go run ./ci/sitebuild -out "$$bundle_dir/site" -archive "$$bundle_dir/shift2eu-site.tar.gz" >/dev/null; \
+	if [ -n "$$TEST_BROWSER_BUNDLE" ]; then \
+		site=$$(CDPATH= cd -- "$$TEST_BROWSER_BUNDLE" && pwd -P); \
+	else \
+		site="$$bundle_dir/site"; \
+		go run ./ci/sitebuild -out "$$site" -archive "$$bundle_dir/shift2eu-site.tar.gz" >/dev/null; \
+	fi; \
 	$(DOCKER) run -d --name "$$name" --network host --entrypoint /headless-shell/headless-shell \
 		$(HEADLESS_SHELL) --no-sandbox --use-gl=angle --use-angle=swiftshader \
 		--remote-debugging-address=127.0.0.1 --remote-debugging-port=0 >/dev/null; \
@@ -650,7 +672,7 @@ test-browser: ## Build the site's bundle into a directory of this run's own and 
 		fi; \
 		sleep 1; \
 	done; \
-	SHIFT2EU_DEVTOOLS_URL="$$devtools" SHIFT2EU_SITE_BUNDLE="$$bundle_dir/site" \
+	SHIFT2EU_DEVTOOLS_URL="$$devtools" SHIFT2EU_SITE_BUNDLE="$$site" \
 		go test -count=1 -timeout 20m -tags browser ./test/browser/
 
 .PHONY: cover

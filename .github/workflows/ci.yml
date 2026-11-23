@@ -185,8 +185,14 @@ jobs:
           distribution: goreleaser
           version: "v2.20.3" # exact pin, as release.yml's; Renovate updates it (github-actions manager)
           install-only: true
+      # The site's bundle, built as release.yml's site job builds it (PRD #297 milestone 3): the snapshot
+      # below lists bin/shift2eu-site_dev.tar.gz in checksums.txt and uploads it beside the archives, as the
+      # release does, only when it is there.
+      - name: The site's bundle
+        run: make site
       # The release's archives, built by a snapshot run of its GoReleaser
-      # configuration: each holds exactly its own binary (issue #147).
+      # configuration: each holds exactly its own binary (issue #147), and checksums.txt covers the
+      # site's bundle (PRD #297 milestone 3).
       - name: Each archive holds its own binary
         run: .github/scripts/verify-archives.sh
 

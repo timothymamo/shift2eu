@@ -179,7 +179,96 @@ func DryRunMirrorsRelease(ci, release []byte) []string {
 		d.containerRun(ciJob.steps, verify.steps, img)
 	}
 
+	d.site(ci, release)
+
 	return r.messages
+}
+
+// The site's bundle in the dry run (PRD #297 milestone 3): the ci.yml jobs
+// that build it before the archive check and smoke-test it, the step of
+// the archive check, the release's smoke-test job, and the actions that job
+// shares with ci.yml's browser job.
+const (
+	ciTestJob          = "test"
+	ciBrowserJob       = "browser"
+	releaseSiteBrowser = "site-browser"
+	siteBuildRun       = "make site"
+	testBrowserRun     = "make test-browser"
+	archiveCheckRun    = ".github/scripts/verify-archives.sh"
+)
+
+// siteBrowserActions are the actions ci.yml's browser job and release.yml's
+// site-browser job share, which must run at the same commit in both.
+var siteBrowserActions = []string{"actions/checkout", "actions/setup-go"}
+
+// site checks the site's bundle in the dry run against the release: ci.yml's
+// test job runs make site before the archive check, so the snapshot's
+// checksums.txt lists the bundle as the release's does; ci.yml's browser job
+// runs exactly make test-browser, and release.yml's site-browser job that
+// very target on the bundle its site job built (TEST_BROWSER_BUNDLE), with
+// checkout and setup-go at the same commits.
+func (d dryRun) site(ci, release []byte) {
+	if test, ok := d.r.readJob(ci, "ci.yml", ciTestJob); ok {
+		build, check := runIndex(d.ciRaw, test.steps, siteBuildRun), runIndex(d.ciRaw, test.steps, archiveCheckRun)
+
+		switch {
+		case build < 0:
+			d.r.fail("ci.yml: jobs: %s holds no step that runs %s, want one before %s: the snapshot's checksums.txt lists the site's bundle, as the release's does, only when it is there (PRD #297 milestone 3)", ciTestJob, siteBuildRun, archiveCheckRun)
+		case check >= 0 && build > check:
+			d.r.fail("ci.yml: jobs: %s runs %s (line %d) after %s (line %d), want it before: the snapshot's checksums.txt lists the site's bundle only when it is there (PRD #297 milestone 3)", ciTestJob, siteBuildRun, test.steps[build].num, archiveCheckRun, test.steps[check].num)
+		}
+	}
+
+	browser, ok := d.r.readJob(ci, "ci.yml", ciBrowserJob)
+	if !ok {
+		return
+	}
+
+	siteBrowser, ok := d.r.readJob(release, "release.yml", releaseSiteBrowser)
+	if !ok {
+		return
+	}
+
+	if runIndex(d.ciRaw, browser.steps, testBrowserRun) < 0 {
+		d.r.fail("ci.yml: jobs: %s holds no step that runs exactly %s, the target release.yml's %s job runs on the release's bundle (PRD #297 milestone 3)", ciBrowserJob, testBrowserRun, releaseSiteBrowser)
+	}
+
+	if runIndex(d.releaseRaw, siteBrowser.steps, siteBrowserRun) < 0 {
+		d.r.fail("release.yml: jobs: %s holds no step that runs exactly %s: the target ci.yml's %s job runs (%s), on the bundle the site job built and the release attests, never one the recipe builds itself (PRD #297 milestone 3)", releaseSiteBrowser, siteBrowserRun, ciBrowserJob, testBrowserRun)
+	}
+
+	for _, action := range siteBrowserActions {
+		ciSteps, releaseSteps := stepsOf(browser.steps, action), stepsOf(siteBrowser.steps, action)
+		if len(ciSteps) == 0 || len(releaseSteps) == 0 {
+			d.r.fail("%s runs in %d steps of ci.yml's %s job and %d of release.yml's %s job, want both", action, len(ciSteps), ciBrowserJob, len(releaseSteps), releaseSiteBrowser)
+
+			continue
+		}
+
+		want := releaseSteps[0].commit
+
+		for _, s := range slices.Concat(ciSteps, releaseSteps) {
+			if s.commit != want {
+				d.r.fail("%s runs at %s (line %d) and at %s (line %d), want one commit in ci.yml's %s job and release.yml's %s job", action, s.commit, s.num, want, releaseSteps[0].num, ciBrowserJob, releaseSiteBrowser)
+			}
+		}
+	}
+}
+
+// runIndex returns the index of the first of steps, of the document raw,
+// whose run: is exactly command, or -1 for none.
+func runIndex(raw []string, steps []workflowStep, command string) int {
+	for i, s := range steps {
+		if !s.hasRun {
+			continue
+		}
+
+		if value, err := (&schemaReader{raw: raw}).value(s.run); err == nil && value == command {
+			return i
+		}
+	}
+
+	return -1
 }
 
 // dryRun compares the dry run with the release.
