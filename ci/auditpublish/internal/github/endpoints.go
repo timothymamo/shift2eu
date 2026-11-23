@@ -3,7 +3,9 @@ package github
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"regexp"
 	"slices"
 	"strings"
@@ -339,7 +341,7 @@ func decodeObject(data []byte) (map[string]json.RawMessage, bool) {
 		return nil, false
 	}
 
-	if _, err := dec.Token(); err == nil {
+	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
 		return nil, false
 	}
 
