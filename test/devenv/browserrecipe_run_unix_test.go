@@ -1216,8 +1216,10 @@ type recordedSleep struct {
 // returns, so without the wait the signal races the watchdog's start-up, and on a machine whose fork and exec are slow
 // it wins in most runs and leaves the test with no pid to check. With the wait the order of the two is a fact of every
 // run, on every machine, so a run that records no pid is a failure this test reports and not a window it happened to
-// miss - and the order the watchdog itself must keep, its USR1 trap set before its sleep starts, is pinned on the
-// recipe's text by TestMakeTestBrowserRecipeSetsTheWatchdogTrapBeforeItsSleep.
+// miss. The two windows that wait closes - a USR1 reaching the watchdog before its USR1 trap is set, and one landing
+// after the trap but before the watchdog stores the sleep's pid, which its stop-flag check ends that sleep for - are
+// pinned statically, on the recipe's text, by watchdogTrapOrderProblems in
+// TestMakeTestBrowserRecipeSetsTheWatchdogTrapBeforeItsSleep: this test no longer sees either of them by chance.
 func TestMakeTestBrowserRecipeLeavesNoWatchdogSleepBehind(t *testing.T) {
 	t.Parallel()
 
@@ -1274,17 +1276,16 @@ func TestMakeTestBrowserRecipeLeavesNoWatchdogSleepBehind(t *testing.T) {
 		}
 
 		recorded := readSleepPids(t, pids[at])
-		if len(recorded) > 1 {
-			t.Fatalf("run %d of %d of make test-browser asked the stand-in sleep for the deadline %s %d times, want at most 1: the EXIT trap starts one watchdog, and the watchdog one sleep of %s seconds, so this test cannot tell which sleep a leftover is (issue #449)\n%s",
-				at+1, watchdogSleepRuns, watchdogDeadlineSeconds, len(recorded), watchdogDeadlineSeconds, output)
-		}
+		if len(recorded) != 1 {
+			// A run that recorded no pid is reported with what its removal saw while it waited 30 s for the sleep; a
+			// run that recorded several has no such wait to report, only the sleeps the test cannot tell apart.
+			saw := ""
+			if len(recorded) == 0 {
+				saw = fmt.Sprintf(", and the removal reported %q", awaitTimeoutReport(t, awaitTimeouts[at]))
+			}
 
-		// The removal the trap waits on does not return before the watchdog's sleep has recorded itself, so the trap's
-		// USR1 comes after it and every run records exactly one pid: none means the sleep the watchdog starts was not
-		// there 30 seconds after the removal began, which is the removal's own report of what it waited for.
-		if len(recorded) == 0 {
-			t.Fatalf("run %d of %d of make test-browser's watchdog never started its sleep within 30 s, so this run left the test no pid to check and cannot tell whether a sleep of the watchdog outlived it: the stand-in removal does not return until the sleep records its pid in %s, and it reported %q (issue #449, the reviewer's finding S1; issue #492)\n%s",
-				at+1, watchdogSleepRuns, pids[at], awaitTimeoutReport(t, awaitTimeouts[at]), output)
+			t.Fatalf("run %d of %d of make test-browser asked the stand-in sleep for the deadline %s %d times, want exactly 1: the EXIT trap starts one watchdog, and the watchdog one sleep of %s seconds, so this test cannot tell which sleep a leftover is, and a run that recorded none leaves it no pid to check at all: the stand-in removal does not return until the sleep records its pid in %s%s (issue #449, the reviewer's finding S1; issue #492)\n%s",
+				at+1, watchdogSleepRuns, watchdogDeadlineSeconds, len(recorded), watchdogDeadlineSeconds, pids[at], saw, output)
 		}
 
 		sleeps = append(sleeps, recordedSleep{run: at + 1, pid: recorded[0], pgid: proc.pgid()})

@@ -1488,13 +1488,16 @@ wait "${job}" || true`
 			// the replay is still in the window when the signal arrives: a foreground sleep is a command boundary,
 			// where a trap the shell has only marked pending runs - where a fifo nobody writes would leave the trap
 			// pending in open() for good if the signal landed between the marker and that open (issue #492) - and
-			// it sets no $!, so the window the trap reads is the one the replay put it in. stopped stands in for the
-			// script's own, which needs the mint's state and says only where the refresh stopped. release_lock
-			// records that the trap ran to its end, the step a trap that aborts on an unset variable never reaches.
-			// kill is a function here, not the builtin: a POSIX shell finds a function of a name before the builtin
-			// of that name, so the replay records every pid the trap asks to kill and a run can prove no kill went to
-			// a pid that a reused one would hit. The replay runs under `set -eu` as dev/agents-app-token.sh does, so
-			// an expansion the script survives without the option fails here as it would there.
+			// it sets no $!, so the window the trap reads is the one the replay put it in. The 400 polls of 0.05 s
+			// hold it about 20 s, well inside the 30 s the test waits for the replay to stop, so a trap that never
+			// ran is reported as the hold that outlasted it and not as a wait that ran out under a slow fork.
+			// stopped stands in for the script's own, which needs the mint's state and says only where the refresh
+			// stopped. release_lock records that the trap ran to its end, the step a trap that aborts on an unset
+			// variable never reaches. kill is a function here, not the builtin: a POSIX shell finds a function of a
+			// name before the builtin of that name, so the replay records every pid the trap asks to kill and a run
+			// can prove no kill went to a pid that a reused one would hit. The replay runs under `set -eu` as
+			// dev/agents-app-token.sh does, so an expansion the script survives without the option fails here as it
+			// would there.
 			harnessText := fmt.Sprintf(`#!/bin/sh
 set -eu
 stopped() { :; }
@@ -1511,7 +1514,7 @@ sleeper=none
 %s
 : > "${SHIFT2EU_TEST_HELD:?}"
 i=0
-while [ "$i" -lt 600 ]; do sleep 0.05; i=$((i + 1)); done
+while [ "$i" -lt 400 ]; do sleep 0.05; i=$((i + 1)); done
 printf 'the signal arrived after the trap, so this run forced no window\n' >&2
 `, refreshTrap(t, script, tc.trap), tc.window)
 			writeFileMode(t, harness, []byte(harnessText), 0o700)
@@ -1564,13 +1567,16 @@ printf 'the signal arrived after the trap, so this run forced no window\n' >&2
 				t.Fatalf("the replay of issue #289's window did not stop 30s after the %s; stderr:\n%s", tc.trap, run.errOut())
 			}
 
+			// The hold ends its 400 polls about 20 s after the window, well inside the 30 s wait above, so a replay that
+			// went on means the trap never ran and not that the wait ran out; read before the exit status, since a
+			// regressed trap leaves the replay to exit with whatever its hold's own end gives it.
+			if strings.Contains(run.errOut(), "forced no window") {
+				t.Fatalf("the replay went on after its signal, so the trap never ran and this run proved nothing about issue #289; stderr:\n%s", run.errOut())
+			}
+
 			if status := run.exitCode(t); status != tc.status {
 				t.Fatalf("the refresh's %s trap ended the script with status %d, want %d: the trap, not the signal's default action, must handle it; stderr:\n%s",
 					tc.trap, status, tc.status, run.errOut())
-			}
-
-			if strings.Contains(run.errOut(), "forced no window") {
-				t.Errorf("the replay went on after its signal, so the trap never ran and this run proved nothing about issue #289; stderr:\n%s", run.errOut())
 			}
 
 			if strings.Contains(run.errOut(), "not found") {
