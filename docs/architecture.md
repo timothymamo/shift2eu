@@ -138,10 +138,14 @@ Arrows are imports. They point inwards only:
   (issue #277, ADR 0040): it maps a command name to a fixed absolute path, runs git only with its
   read-only subcommands and its own `-C /srv/audit/checkout`, and refuses with exit 126 every other
   name and subcommand, the options that would reach elsewhere (a caller's git `-C` in every form among
-  them), jq's module system (`import`, `include`, `-L`, `--library-path`) and program file (`-f`,
-  `--from-file`), wc's `--files0-from` and sha256sum's `-c`/`--check`, which read paths from a file, any
-  path word holding a `..` element, and any path word outside an allow list of three roots,
-  `/srv/audit/checkout`, `/srv/audit/checks` and `/srv/audit/work`. It models no tool's option
+  them), jq's module system (`import`, `include`, `modulemeta`, `get_search_list`, `-L`,
+  `--library-path`) and program file (`-f`, `--from-file`), wc's `--files0-from` and sha256sum's
+  `-c`/`--check`, which read paths from a file, and any path word outside an allow list of three roots,
+  `/srv/audit/checkout`, `/srv/audit/checks` and `/srv/audit/work`. Before any command's own rules, on
+  every word of every line, it refuses a word whose `/`-separated elements include `..` and a word
+  starting with `-` that holds `..` anywhere (`-S..`), and reads a word starting with `--` that holds a
+  `/` before any `=` as a path word whole, joined to the line's base (round L; a git range such as
+  `HEAD~3..HEAD` passes). It models no tool's option
   cluster: in every single-dash word that holds a `/`, the suffix from its first `/` is a path word and
   must be an allowed absolute path (`git blame -wS/var/x`, `git grep -n5f/tmp/x` are refused; round K). It changes into `/srv/audit/work`
   before every exec (`os.Chdir`) and replaces itself with the command through `syscall.Exec` with an

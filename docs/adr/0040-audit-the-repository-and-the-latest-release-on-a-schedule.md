@@ -4,7 +4,7 @@
   the maintainer confirmed both on 2026-11-21 at PR #444's review (see Context).
   PRD #175 milestone 2 amends this record with the workflow's implementation (below); its first
   amendment, how Claude Code runs in the model job, is dated 2026-11-22
-- Date: 2026-11-21, amended 2026-11-22
+- Date: 2026-11-21, amended 2026-11-22 to 2026-11-23
 
 ## Context
 
@@ -379,9 +379,9 @@ test of ours (Decision 3's reason).
   | Field | Meaning | Zero value |
   |---|---|---|
   | `Path` | the CLI's absolute path | refused: a relative path is an error before anything runs |
-  | `Token` | the subscription's OAuth token, passed as `CLAUDE_CODE_OAUTH_TOKEN` | refused at the CLI |
+  | `Token` | the subscription's OAuth token, passed as `CLAUDE_CODE_OAUTH_TOKEN` | refused before anything runs, with `ErrModel` naming the token, never quoting it (*amended 2026-11-23, issue #277 round L*; it was refused only by the CLI) |
   | `Model` | `--model`; letters, digits, `.` and `-` only | refused: no run asks the CLI's default model |
-  | `Timeout` | the run's own deadline | |
+  | `Timeout` | the run's own deadline | refused, as is a negative one, before anything runs, with `ErrModel` naming the timeout (*amended 2026-11-23, issue #277 round L*; a zero deadline had ended the run at once as a timeout) |
   | `Tools` | `--tools`, the built-in tools, joined with `,`; each a tool name of letters only | **no tools**: `--tools ""` |
   | `Effort` | `--effort`; one of `low`, `medium`, `high`, `xhigh`, `max` | no flag: the CLI's default |
   | `Settings` | `--settings <absolute path>` | no flag |
@@ -390,7 +390,7 @@ test of ours (Decision 3's reason).
   | `SafeModeOff` | leave `--safe-mode` out | `--safe-mode` |
   | `WorkDir` | the CLI's working directory, an absolute path that exists | a fresh empty temporary directory, removed after the run |
   | `Home` | the CLI's `HOME`, an absolute path that exists | a fresh empty temporary directory, removed after the run |
-  | `Env` | extra `NAME=VALUE` entries of the allow list; a name the launcher sets itself (`CLAUDE_CODE_OAUTH_TOKEN`, `HOME`, `PATH`, the four switches below) is refused, and so is one that names another credential, endpoint, proxy, policy or provider or loads code into the CLI's process (`ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_BASE_URL`, `CLAUDE_CODE_MANAGED_SETTINGS_PATH`, `NODE_OPTIONS`, `LD_PRELOAD`, `LD_LIBRARY_PATH`, `HTTPS_PROXY`, `HTTP_PROXY` and every `CLAUDE_CODE_USE_*`; amended 2026-11-22, issue #277 round C), and, amended 2026-11-23 (issue #277 round D), `LD_AUDIT`, `ALL_PROXY`, `NO_PROXY`, the lower-case `https_proxy`, `http_proxy`, `all_proxy`, `no_proxy` (Node and curl read them too; names are compared exactly), `NODE_TLS_REJECT_UNAUTHORIZED`, `NODE_EXTRA_CA_CERTS`, `CLAUDE_CONFIG_DIR` and `ANTHROPIC_CUSTOM_HEADERS`. *Amended 2026-11-23 (issue #277 round F):* the deny list is replaced by an **allow list**: `Env` may hold only `TMPDIR`, `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB` and `SHIFT2EU_AUDIT_CANARY`, the three the audit sets, and any other name is refused with `ErrModel` naming it, before anything runs. The deny list had missed `BASH_ENV`, `ENV`, `CLAUDE_CODE_SHELL_PREFIX`, `NODE_PATH`, `SSL_CERT_FILE` and `SSL_CERT_DIR`, and a list of refused names misses whatever its authors did not think of; every name above stays refused, the launcher's own entries are unchanged, and the reviewer, which sets no `Env`, is unaffected | none |
+  | `Env` | extra `NAME=VALUE` entries of the allow list; a name the launcher sets itself (`CLAUDE_CODE_OAUTH_TOKEN`, `HOME`, `PATH`, the four switches below) is refused, and so is one that names another credential, endpoint, proxy, policy or provider or loads code into the CLI's process (`ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_BASE_URL`, `CLAUDE_CODE_MANAGED_SETTINGS_PATH`, `NODE_OPTIONS`, `LD_PRELOAD`, `LD_LIBRARY_PATH`, `HTTPS_PROXY`, `HTTP_PROXY` and every `CLAUDE_CODE_USE_*`; amended 2026-11-22, issue #277 round C), and, amended 2026-11-23 (issue #277 round D), `LD_AUDIT`, `ALL_PROXY`, `NO_PROXY`, the lower-case `https_proxy`, `http_proxy`, `all_proxy`, `no_proxy` (Node and curl read them too; names are compared exactly), `NODE_TLS_REJECT_UNAUTHORIZED`, `NODE_EXTRA_CA_CERTS`, `CLAUDE_CONFIG_DIR` and `ANTHROPIC_CUSTOM_HEADERS`. *Amended 2026-11-23 (issue #277 round F):* the deny list is replaced by an **allow list**: `Env` may hold only `TMPDIR`, `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB` and `SHIFT2EU_AUDIT_CANARY`, the three the audit sets, and any other name is refused with `ErrModel` naming it, before anything runs. The deny list had missed `BASH_ENV`, `ENV`, `CLAUDE_CODE_SHELL_PREFIX`, `NODE_PATH`, `SSL_CERT_FILE` and `SSL_CERT_DIR`, and a list of refused names misses whatever its authors did not think of; every name above stays refused, the launcher's own entries are unchanged, and the reviewer, which sets no `Env`, is unaffected. *Amended 2026-11-23 (issue #277 round L):* a value holding a NUL or a newline is refused, naming the entry, as `SearchPath` is | none |
   | `SearchPath` | the CLI's `PATH` | `/usr/local/bin:/usr/bin:/bin` |
   | `SystemPromptDir` | the directory the system prompt's file is written into, under a fresh name, an absolute path that exists, which the caller controls (the audit's `/srv/audit/state/tmp`); the file is removed after the run | a fresh temporary directory of the launcher's own under `os.TempDir()`, removed after the run |
   | `Redact` | values, beside the token, that the launcher's error never quotes: each stands in for `[redacted]` in the excerpt of the CLI's text (the audit passes its canary) | the token alone |
@@ -447,6 +447,11 @@ test of ours (Decision 3's reason).
      installs it with `sudo install -o root -m 0555`; amended 2026-11-23, issue #277 round H).
      *Amended 2026-11-23 (issue #277 round J):* `bin/` itself has no write bit and holds `audit-exec`
      alone: a second file or a link beside the wrapper is refused.
+     *Amended 2026-11-23 (issue #277 round L):* read-only here means read-only **by mode**, and that is
+     defence in depth: the runner's user owns `checkout/` and `checks/` and could add a write bit back.
+     What holds both trees against their owner is the sandbox's write allow list, which names neither;
+     the owner check is left to PR 5's model-free step. Every refusal of this step names what it
+     refuses: the path (the wrapper's as `srv/audit/bin/audit-exec`), the entry, the key or the line.
      *Amended 2026-11-22 (issue #277 round C):* both trees are walked whole, no link followed: no entry
      anywhere in them has a write bit, and every symbolic link in them is relative and resolves, its
      whole chain followed, to a path inside its own tree. The checkout copy's `.git` is a directory, not
@@ -734,6 +739,23 @@ It `exec`s with exactly this environment, nothing inherited: `PATH=/usr/bin:/bin
     are refused. *Accepted side effect (fail closed):* an attached value that is a relative path holding
     a `/` (`-Sfoo/bar`) is refused, since its suffix `/bar` is absolute and outside the roots; the model
     passes the value as a word of its own (`-S foo/bar`).
+    *Amended 2026-11-23 (issue #277 round L, the word rules, replacing every earlier wording that `..`
+    is refused anywhere):* that wording held only for path words, and a word starting with `--` with no
+    `=` was none, so `jq -n --rawfile a --/../../../../etc/passwd '$a'` printed any file the sandbox let
+    jq read, once Write had made `/srv/audit/work/--/x`. Three rules now run **before any command's own
+    rules, on every word of every line**, and fail closed:
+    1. a word whose `/`-separated elements include `..` is refused (`..`, `x/../y`,
+       `--/../etc/passwd`);
+    2. a word starting with `-` that holds `..` anywhere is refused, since an attached value is no
+       element of its own (`-S..`, `-f..`);
+    3. a word starting with `--` that holds a `/` before any `=` is a path word **whole**, joined to the
+       line's base like any relative word (`jq --rawfile a --x/y` reads `/srv/audit/work/--x/y`, which
+       passes). A `--` word whose first `/` comes after its `=` keeps its value as its path word, as
+       before: `git log --format=%h/%s` holds the path word `%h/%s`, read from the checkout, and passes.
+
+    A git range (`HEAD~3..HEAD`, `main..origin/main`) starts with no `-` and holds no `..` element, so it
+    passes. The rules are stated here once; the bullets above and below that refuse a `..` element in a
+    path word stay true and are now a consequence of rule 1.
   - **Resolving:** an absolute word is read as it is; a relative one on a git line is joined to
     `/srv/audit/checkout`, which is what git reads it under the wrapper's `-C`, and on any other line to
     `/srv/audit/work`, the wrapper's working directory.
@@ -741,7 +763,8 @@ It `exec`s with exactly this environment, nothing inherited: `PATH=/usr/bin:/bin
     `/dev/fd/..` and every link-then-`..` form); and any word whose path, cleaned of its empty and `.`
     elements, is not `/srv/audit/checkout`, `/srv/audit/checks` or `/srv/audit/work` and lies under none
     of them. The refused word is named as before, the option's included; the option rules run first, so
-    a refused option is named even when its value lies outside the roots too.
+    a refused option is named even when its value lies outside the roots too. (Since round L the word
+    rules, above, run before both.)
   - **Fail-closed side effects, accepted:** a git ref holding a `/` (`origin/main`) resolves under the
     checkout and passes; a git grep pattern holding an absolute path outside the roots (`-e /proc/`) is
     refused; a URL-like pattern (`http://x`) cleans to a relative name and passes; `sort -t /` is
@@ -793,7 +816,10 @@ It `exec`s with exactly this environment, nothing inherited: `PATH=/usr/bin:/bin
     needs filters, no modules); and `-L` in any single-dash word (alone, attached, in a cluster) and
     `--library-path` (alone, `=value`, abbreviated). A file name holding `import` or `include` is refused
     too (fail closed). *Amended 2026-11-23 (issue #277 round I):* `-f`/`--from-file`, a program file, are
-    refused in the same forms, since a program file's own `import` is never checked (below). `jq -r
+    refused in the same forms, since a program file's own `import` is never checked (below).
+    *Amended 2026-11-23 (issue #277 round L):* the builtins `modulemeta` and `get_search_list` search
+    jq's module paths and read a module's metadata, the module system by another name: a jq word
+    holding either is refused in the same way. `jq -r
     .findings /srv/audit/work/result.json` and `jq '.[] | .id' /srv/audit/checks/a.json` pass.
   - **git's implicit no-index diff.** `git diff <a> <b>` compares two files outside git's work tree as
     `--no-index` would, without the option, when both paths lie outside the repository. `--no-index` is

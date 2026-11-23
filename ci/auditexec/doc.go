@@ -24,7 +24,8 @@
 // included (issue #277 round H; a global -C never reached git anyway, since
 // the first word after git must be a listed subcommand, so the letter rule is
 // defence in depth). jq never reaches its module system or a
-// program file: a jq word holding import or include, -L or -f in any
+// program file: a jq word holding import, include, modulemeta or
+// get_search_list (round L), -L or -f in any
 // single-dash word, and --library-path or --from-file (alone, with "=" and
 // abbreviated) are refused, so the audit's filters come on the line. No
 // command reads a list of paths from a file the path rule never sees: wc's
@@ -33,19 +34,24 @@
 // options, which
 // order and compare lines (-k and -t with their values among them), so it never
 // runs a program, reads a file it was not given or writes one; uniq takes one
-// operand at most, so its OUT never writes a file. On every command's line,
-// every path word is held to an allow list, /srv/audit/checkout,
-// /srv/audit/checks and /srv/audit/work and what lies under them (the
-// wrapper's path rule, issue #277 rounds F and G): a path word is a
-// non-option word holding "/" or that is "..", every word after "--", an
-// option's value after its "=", and in a single-dash word that holds "/" its
-// suffix from the first "/", which must be an allowed absolute path: no
-// tool's option cluster is modelled, since git reads digits inside one as
-// -NUM (git grep -n5f/tmp/x, round K; "-" alone is stdin). A relative path word is read from the
-// checkout on a git line and from the work directory on any other; a word
-// holding a ".." element is refused before anything is cleaned, so a glob
-// the CLI's deny rule could not see, or a link such as /dev/fd followed by
-// "..", is refused once the shell has expanded it. The wrapper is defence in
+// operand at most, so its OUT never writes a file. Before any command's own
+// rules, the word rules read every word of every line (round L): a word
+// whose "/"-separated elements include ".." is refused, and so is a word
+// starting with "-" that holds ".." anywhere (-S..), before anything is
+// cleaned, so a glob the CLI's deny rule could not see, or a link such as
+// /dev/fd followed by "..", is refused once the shell has expanded it; a git
+// range (HEAD~3..HEAD) holds no ".." element and passes. Then, on every
+// command's line, every path word is held to an allow list,
+// /srv/audit/checkout, /srv/audit/checks and /srv/audit/work and what lies
+// under them (the wrapper's path rule, issue #277 rounds F and G): a path
+// word is a non-option word holding "/", every word after "--", an option's
+// value after its "=" (--format=%h/%s holds %h/%s), a word starting with
+// "--" that holds a "/" before any "=", whole (round L), and in a
+// single-dash word that holds "/" its suffix from the first "/", which must
+// be an allowed absolute path: no tool's option cluster is modelled, since
+// git reads digits inside one as -NUM (git grep -n5f/tmp/x, round K; "-"
+// alone is stdin). A relative path word is read from the checkout on a git
+// line and from the work directory on any other. The wrapper is defence in
 // depth: what the shell opens itself, a redirection, it never sees, and the
 // sandbox is the boundary. Every other name, a path given as the name
 // included, every other git subcommand, every refused option and every path

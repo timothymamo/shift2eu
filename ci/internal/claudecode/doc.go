@@ -24,7 +24,9 @@
 //
 // It is no part of the product: it sits under ci/internal, so Go's internal
 // rule lets only packages under ci/ import it, and the depguard rule
-// claude-code-launcher-importers names the ones that may. It reads no
-// environment variable and no file; its callers hand it the CLI's path, the
-// token, the model and the tools.
+// claude-code-launcher-importers names the ones that may. It reads no file
+// and looks up no environment variable itself; its callers hand it the CLI's
+// path, the token, the model and the tools. The one variable read on its
+// behalf is TMPDIR: os.MkdirTemp uses it, through os.TempDir, for the
+// temporary directories of a config that names none.
 package claudecode
