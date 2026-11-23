@@ -373,9 +373,8 @@ var versionAtEnd = regexp.MustCompile(`<span class="mono" id="site-version">([^<
 // LiveVersion reads the shift2eu version a live page shows: the text of the
 // one `<span class="mono" id="site-version">...</span></p>` that ends the
 // page's footer (the `<p class="footer-links">` line of every page of
-// site/). The page is
-// untrusted: LiveVersion returns ErrNoLiveVersion when there is no such span
-// or more than one, and when the text does not match
+// site/). The page is untrusted: LiveVersion returns ErrNoLiveVersion when
+// there is no such span or more than one, and when the text does not match
 // ^v(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})$. A
 // version it returns is only a candidate: Deploy trusts it only when it is
 // also a tag of Config.Releases.

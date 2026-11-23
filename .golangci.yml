@@ -2784,6 +2784,10 @@ linters:
         # the entry point and os out of its library (site-deploy-main,
         # site-deploy-library). Scope: every file under ci/sitedeploy/,
         # _test.go files included; its exclusion rule drops it everywhere else.
+        # The library's test that builds the real bundle (livepage_test.go)
+        # runs go run ./ci/sitebuild through os/exec on purpose, with the
+        # environment from cmd.Environ(); the group still bans the os calls it
+        # names there too.
         - pattern: '^os\.(?:Getenv|ExpandEnv|Environ|StartProcess|UserHomeDir|UserConfigDir|UserCacheDir|TempDir)$'
           pkg: '^os$'
           msg: 'site-deploy-env: the site deploy program reads no environment variable but through the os.LookupEnv main.go passes to environment, locates no home, config, cache or temp directory and starts no process (PRD #297, CLAUDE.md rule 3)'
