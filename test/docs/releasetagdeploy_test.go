@@ -163,8 +163,13 @@ func TestReleaseTagSkillChecksTheSiteEnvironment(t *testing.T) {
 		},
 		{
 			step: 7,
-			text: "after the window, the recovery is a new release",
-			why:  "past the window GitHub re-runs nothing, so a re-run is no recovery and the only one is a new release",
+			text: "after the window, either restore the last good version of each page from the bucket's object versions with your own key (R12)",
+			why:  "past the window GitHub re-runs nothing, so the recovery is either R12's rollback of each page from the bucket's object versions, with the maintainer's own key, which needs no release at all",
+		},
+		{
+			step: 7,
+			text: "or cut a new release with a Release-As: footer",
+			why:  "the other recovery after the window is a new release: release-please reads the footer when there is no releasable commit to cut one from",
 		},
 	} {
 		step := skillStep(t, skill, want.step)

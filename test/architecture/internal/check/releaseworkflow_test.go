@@ -1900,6 +1900,27 @@ func TestReleaseWorkflow(t *testing.T) {
 			"      - name: Build the site's programs\n        env:\n          "+name+": http://192.0.2.1:8080\n        run: make site-programs\n")
 	}
 
+	// deployEnv and checkEnv are the env: lines a hostile secret form is added
+	// after: the deploy step's env, which holds the site's key, and another
+	// job's step, whose allowed list of names is another one. The rule names the
+	// context whichever allowed list the line's job has.
+	const (
+		deployEnv = "          SITE_REGION: ${{ vars.SITE_REGION }}\n"
+		checkEnv  = "          SITECHECK_SHA256: ${{ needs.site-programs.outputs.sitecheck }}\n"
+	)
+
+	// secretsIn places value, one hostile env: value, after the anchor line of
+	// job's step.
+	secretsIn := func(job, anchor, value string) string {
+		return in(job, anchor, anchor+"          CONTEXT: "+value+"\n")
+	}
+
+	// secretsOverLines places an expression split over lines, as a folded
+	// scalar: the first line opens the ${{ and only a later line closes it.
+	secretsOverLines := func(job, anchor string) string {
+		return in(job, anchor, anchor+"          CONTEXT: >-\n            ${{ toJSON(\n            secrets) }}\n")
+	}
+
 	tests := []struct {
 		name     string
 		workflow string
@@ -2824,6 +2845,31 @@ func TestReleaseWorkflow(t *testing.T) {
 		{name: "toJSON(secrets) in another job's step", workflow: in("site-check", "          SITECHECK_SHA256: ${{ needs.site-programs.outputs.sitecheck }}\n", "          SITECHECK_SHA256: ${{ needs.site-programs.outputs.sitecheck }}\n          CONTEXT: ${{ toJSON(secrets) }}\n"), wantIn: "names the secrets context", wantAlso: "toJSON(secrets)"},
 		{name: "a computed secret name in another job's step", workflow: in("site-check", "          SITECHECK_SHA256: ${{ needs.site-programs.outputs.sitecheck }}\n", "          SITECHECK_SHA256: ${{ needs.site-programs.outputs.sitecheck }}\n          CONTEXT: ${{ secrets[format('SCW_{0}', 'SECRET_KEY')] }}\n"), wantIn: "names the secrets context", wantAlso: "secrets[format('SCW_{0}', 'SECRET_KEY')]"},
 
+		// Three forms get past a rule that reads one raw line and stops an
+		// expression at its first }}: a }} inside a string literal, an expression
+		// split over lines, and a YAML escape that spells a character of the
+		// context. The closed schema refuses each of them too, but the rule is the
+		// backstop the day the schema is loosened: it must name the context in
+		// every form, in every job.
+		{name: "a }} inside a string literal before toJSON(secrets), in the deploy step's env", workflow: secretsIn("site-deploy", deployEnv, `${{ format('}}') || toJSON(secrets) }}`), wantIn: "names the secrets context", wantAlso: "toJSON(secrets)"},
+		{name: "a }} inside a string literal before toJSON(secrets), in another job's step", workflow: secretsIn("site-check", checkEnv, `${{ format('}}') || toJSON(secrets) }}`), wantIn: "names the secrets context", wantAlso: "toJSON(secrets)"},
+		{name: "a }} inside a format string before toJSON(secrets), in the deploy step's env", workflow: secretsIn("site-deploy", deployEnv, `${{ format('{0}}}', toJSON(secrets)) }}`), wantIn: "names the secrets context", wantAlso: "toJSON(secrets)"},
+		{name: "a }} inside a format string before toJSON(secrets), in another job's step", workflow: secretsIn("site-check", checkEnv, `${{ format('{0}}}', toJSON(secrets)) }}`), wantIn: "names the secrets context", wantAlso: "toJSON(secrets)"},
+		{name: "an expression split over lines, in the deploy step's env", workflow: secretsOverLines("site-deploy", deployEnv), wantIn: "opens a ${{ expression it does not close"},
+		{name: "an expression split over lines, in another job's step", workflow: secretsOverLines("site-check", checkEnv), wantIn: "opens a ${{ expression it does not close"},
+		{name: "a backslash-x escape spelling the context, in the deploy step's env", workflow: secretsIn("site-deploy", deployEnv, `"${{ toJSON(\x73ecrets) }}"`), wantIn: "holds an escape inside a ${{"},
+		{name: "a backslash-x escape spelling the context, in another job's step", workflow: secretsIn("site-check", checkEnv, `"${{ toJSON(\x73ecrets) }}"`), wantIn: "holds an escape inside a ${{"},
+		{name: "a backslash-u escape spelling the context, in the deploy step's env", workflow: secretsIn("site-deploy", deployEnv, `"${{ toJSON(\u0073ecrets) }}"`), wantIn: "holds an escape inside a ${{"},
+		{name: "a backslash-U escape spelling the context, in the deploy step's env", workflow: secretsIn("site-deploy", deployEnv, `"${{ toJSON(\U00000073ecrets) }}"`), wantIn: "holds an escape inside a ${{"},
+		{name: "a backslash-x escape spelling a secret's name, in the deploy step's env", workflow: secretsIn("site-deploy", deployEnv, `"${{ secrets.\x53CW_SECRET_KEY }}"`), wantIn: "holds an escape inside a ${{"},
+		{name: "a backslash-x escape spelling a secret's name, in another job's step", workflow: secretsIn("site-check", checkEnv, `"${{ secrets.\x53CW_SECRET_KEY }}"`), wantIn: "holds an escape inside a ${{"},
+
+		// The opposite direction: the word inside a string literal is not the
+		// context, and the deploy step's comment is where the closed schema lets
+		// such a line sit. It is reported by no rule, so a later edit that names
+		// the context in a literal is not refused for the wrong reason.
+		{name: "the word secrets inside a string literal", workflow: in("site-deploy", "      - name: Deploy the site\n", "      # One string literal, not the context: ${{ contains(github.ref, 'secrets') }}\n      - name: Deploy the site\n")},
+
 		// No line may name a proxy or a certificate variable: a step that sets
 		// one would change what the deploy program's client trusts or where it
 		// connects.
@@ -2970,12 +3016,15 @@ const higherReleasesStep = "The higher releases' manifests"
 
 // TestSiteHigherReleasesStepRuns runs that step, exactly as the fixture writes
 // it and so as release.yml runs it, under a PATH of fakes: a gh whose every
-// answer, 404 and other failure included, is a file the case writes, and a jq
-// and a tar that read what that gh is given. Nothing reaches GitHub, no release
-// exists, and the step's own shell is what is tested: a variable it leaves
-// unbound, a branch that stops the loop early, or a failure it should survive
-// fails here rather than in the release of a tag that is not the highest, which
-// is the only run that reads a higher release at all (PRD #297 milestone 3).
+// answer, 404 and other failure included, is a body and a stderr the case
+// writes, shaped as GitHub answers, and a tar that answers the manifest of the
+// archive whose name it is given. The step's jq filters are the real jq's,
+// found on PATH, so a mistyped filter fails here rather than skipping every
+// higher release in a release. Nothing reaches GitHub, no release exists, and
+// the step's own shell is what is tested: a variable it leaves unbound, a
+// branch that stops the loop early, or a failure it should survive fails here
+// rather than in the release of a tag that is not the highest, which is the
+// only run that reads a higher release at all (PRD #297 milestone 3).
 func TestSiteHigherReleasesStepRuns(t *testing.T) {
 	t.Parallel()
 
@@ -2989,6 +3038,13 @@ func TestSiteHigherReleasesStepRuns(t *testing.T) {
 	// ubuntu-latest's bash.
 	if out, err := exec.CommandContext(t.Context(), bash, "-c", "type -t mapfile").Output(); err != nil || strings.TrimSpace(string(out)) != "builtin" {
 		t.Skipf("%s has no mapfile builtin, so it cannot run the step's script", bash)
+	}
+
+	// The step asks its questions with jq: the release runs it on ubuntu-latest,
+	// which has jq, and a fake would answer whatever filter the step carried.
+	jq, err := exec.LookPath("jq")
+	if err != nil {
+		t.Skipf("no jq on PATH, so the step's own filters cannot run: %v", err)
 	}
 
 	script := siteDeployStepRun(t, higherReleasesStep)
@@ -3008,15 +3064,26 @@ func TestSiteHigherReleasesStepRuns(t *testing.T) {
 
 	releases := lower + "\n" + tag + "\n" + higher + "\n" + last + "\n"
 
-	// published is a release's answer in the text the fake jq reads: a release
-	// that published its bundle.
+	// published is a release's body as GitHub's get-a-release-by-tag API writes
+	// it: not a draft, and its assets, the site's bundle among them.
 	published := func(tag string) string {
-		return "draft: false\nasset: shift2eu-site_" + tag + ".tar.gz\n"
+		return `{"draft":false,"assets":[{"name":"checksums.txt"},{"name":"shift2eu-site_` + tag + `.tar.gz"}]}`
 	}
+
+	// draft is a published-in-appearance body that still says it is a draft: the
+	// step's belt-and-braces guard, since a release by tag name answers 404 for
+	// a draft (the case below).
+	draft := func(tag string) string {
+		return `{"draft":true,"assets":[{"name":"shift2eu-site_` + tag + `.tar.gz"}]}`
+	}
+
+	// notFound is the body gh writes on stdout when a release by tag name is
+	// missing, a draft included.
+	const notFound = `{"message":"Not Found","documentation_url":"https://docs.github.com/rest/releases/releases#get-a-release-by-tag-name","status":"404"}`
 
 	tests := []struct {
 		name string
-		// api is the fake gh's answer for a tag's release read; a tag named in
+		// api is the fake gh's body for a tag's release read; a tag named in
 		// readErr instead is a read that fails with that stderr.
 		api     map[string]string
 		readErr map[string]string
@@ -3040,22 +3107,36 @@ func TestSiteHigherReleasesStepRuns(t *testing.T) {
 		},
 		{
 			name:          "a release that is not published yet is skipped with a notice",
+			api:           map[string]string{higher: notFound, last: published(last)},
 			readErr:       map[string]string{higher: "gh: Not Found (HTTP 404)\n"},
-			api:           map[string]string{last: published(last)},
 			wantOut:       []string{"::notice::the release of " + higher + " is not published yet, so its manifest is not read"},
 			wantManifests: []string{last},
 			wantAPICalls:  []string{"api " + higher, "api " + last},
 		},
 		{
-			name:          "a draft release is skipped with a notice",
-			api:           map[string]string{higher: "draft: true\n", last: published(last)},
+			// A draft is answered the way GitHub answers it: get-a-release-by-tag
+			// returns published releases alone, so a draft is a 404, with its body
+			// on stdout as gh writes it, into higher/release.json. The loop must
+			// read the notice's failure as an unpublished release and move on.
+			name:          "a draft answered with a 404 and a body, as GitHub answers one, is skipped with a notice",
+			api:           map[string]string{higher: notFound, last: published(last)},
+			readErr:       map[string]string{higher: "gh: Not Found (HTTP 404)\n"},
+			wantOut:       []string{"::notice::the release of " + higher + " is not published yet, so its manifest is not read"},
+			wantManifests: []string{last},
+			wantAPICalls:  []string{"api " + higher, "api " + last},
+		},
+		{
+			// A 200 that still says draft: the belt-and-braces guard behind the
+			// 404 above, which is what GitHub answers today.
+			name:          "a draft answered with a 200 is skipped with a notice, a belt-and-braces guard",
+			api:           map[string]string{higher: draft(higher), last: published(last)},
 			wantOut:       []string{"::notice::the release of " + higher + " is still a draft, so its manifest is not read"},
 			wantManifests: []string{last},
 			wantAPICalls:  []string{"api " + higher, "api " + last},
 		},
 		{
 			name:          "a release without its bundle is skipped with a notice",
-			api:           map[string]string{higher: "draft: false\nasset: checksums.txt\n", last: published(last)},
+			api:           map[string]string{higher: `{"draft":false,"assets":[{"name":"checksums.txt"}]}`, last: published(last)},
 			wantOut:       []string{"::notice::the release of " + higher + " publishes no shift2eu-site_" + higher + ".tar.gz, so its manifest is not read"},
 			wantManifests: []string{last},
 			wantAPICalls:  []string{"api " + higher, "api " + last},
@@ -3103,7 +3184,7 @@ func TestSiteHigherReleasesStepRuns(t *testing.T) {
 			cmd := exec.CommandContext(t.Context(), bash, "-c", script)
 			cmd.Dir = work
 			cmd.Env = []string{
-				"PATH=" + bin + ":/usr/bin:/bin",
+				"PATH=" + bin + ":" + filepath.Dir(jq) + ":/usr/bin:/bin",
 				"TMPDIR=" + t.TempDir(),
 				"FAKE_STATE=" + state,
 				"TAG=" + tag,
@@ -3171,20 +3252,24 @@ func TestSiteHigherReleasesStepRuns(t *testing.T) {
 
 // fakeGH is the gh the step meets: every release read and every download is
 // answered from FAKE_STATE's files, so no connection is made. A tag's read
-// fails with the stderr of api/<tag>/err when that file exists, and its
-// attestation with attest/<tag>/err, so a case writes the failure a real gh
-// would print. `gh attestation verify <file>` puts the file third.
+// answers api/<tag>/body.json, as real gh writes the response's body on stdout
+// before it fails, and fails with the stderr of api/<tag>/err when that file
+// exists (after the body, as gh does: the 404's body reaches stdout too). Its
+// attestation fails with attest/<tag>/err, so a case writes the failure a real
+// gh would print. `gh attestation verify <file>` puts the file third.
 const fakeGH = `#!/usr/bin/env bash
 set -euo pipefail
 case "$1" in
   api)
     tag="${2##*/}"
     echo "api $tag" >> "$FAKE_STATE/calls"
+    if [ -f "$FAKE_STATE/api/$tag/body.json" ]; then
+      cat "$FAKE_STATE/api/$tag/body.json"
+    fi
     if [ -f "$FAKE_STATE/api/$tag/err" ]; then
       cat "$FAKE_STATE/api/$tag/err" >&2
       exit 1
     fi
-    cat "$FAKE_STATE/api/$tag/body.json"
     ;;
   release)
     tag="$2"
@@ -3213,20 +3298,6 @@ case "$1" in
     exit 127
     ;;
 esac
-`
-
-// fakeJQ is the jq the step meets, reading the two answers the step asks for
-// out of the text fakeGH hands it: the release's draft flag and whether it
-// published its bundle. It reads no JSON, so a case's answer is the text it
-// means.
-const fakeJQ = `#!/usr/bin/env bash
-set -euo pipefail
-file="${!#}"
-if [ "$1" = "--arg" ]; then
-  if grep -qxF "asset: $3" "$file"; then echo 1; else echo 0; fi
-  exit 0
-fi
-sed -n 's/^draft: //p' "$file"
 `
 
 // fakeTar is the tar the step meets: it extracts no archive but answers the
@@ -3270,12 +3341,13 @@ func siteDeployStepRun(t *testing.T, name string) string {
 	return strings.Join(run, "\n") + "\n"
 }
 
-// writeFakeStepTools writes the gh, jq and tar the step runs into dir, which
-// the PATH of the step's shell holds alone beside the system's own programs.
+// writeFakeStepTools writes the gh and tar the step runs into dir, which the
+// PATH of the step's shell holds before the system's own programs. jq is not a
+// fake: the step's own filters are the test (the real jq on PATH).
 func writeFakeStepTools(t *testing.T, dir string) {
 	t.Helper()
 
-	for name, script := range map[string]string{"gh": fakeGH, "jq": fakeJQ, "tar": fakeTar} {
+	for name, script := range map[string]string{"gh": fakeGH, "tar": fakeTar} {
 		path := filepath.Join(dir, name)
 
 		if err := os.WriteFile(path, []byte(script), 0o600); err != nil {
