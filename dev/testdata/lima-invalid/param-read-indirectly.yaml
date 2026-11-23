@@ -36,7 +36,7 @@ param:
   # renovate: datasource=github-releases depName=golangci/golangci-lint
   golangciLintVersion: "v2.15.0"
   # renovate: datasource=go depName=golang.org/x/vuln
-  govulncheckVersion: "v1.9.0"
+  govulncheckVersion: "v1.10.0"
   # renovate: datasource=github-releases depName=vfarcic/dot-agent-deck
   dotAgentDeckVersion: "v0.51.1"
   # renovate: datasource=node-version depName=node versioning=node
