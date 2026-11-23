@@ -27,10 +27,13 @@
 //     `^[[:space:]]*URIs:` line that is exactly an http(s)://archive.ubuntu.com/ubuntu URI, with or without its
 //     trailing slash, becomes the mirror with one trailing slash, however many such fields the line holds and
 //     whatever separates them (a tab as well as a space), in one run whatever the mirror is - an archive mirror
-//     of archive.ubuntu.com's own host included, which a second pass would match again. Every other line, a
-//     comment and a field of another name included, stays byte for byte: neither is a URI apt fetches from, and a
-//     file whose URIs lines hold no archive URI is a file the mirror cannot be set in, which fails as a ports
-//     file does.
+//     of archive.ubuntu.com's own host included, which a second pass would match again. deb822 reads a field's
+//     name in any case and continues a field on the lines after it that start with a space or a tab: `uris:` is
+//     the URIs line as `URIs:` is, and those continuation lines are the same field, so their archive URIs are
+//     rewritten too, their leading whitespace kept, and the field ends at the first line that starts with no
+//     whitespace. Every other line, a comment and a field of another name included, stays byte for byte: neither
+//     is a URI apt fetches from, and a file whose URIs lines hold no archive URI is a file the mirror cannot be
+//     set in, which fails as a ports file does.
 //   - A non-default mirror that finds no archive URI to rewrite - a ports file, a country mirror, a comment or a
 //     field of another name that names one, a file that already names the mirror is fine - stops the step with a
 //     non-zero exit and a message on standard error that names ubuntu.sources and prints the file's `URIs:` lines
@@ -39,8 +42,12 @@
 //     the step does that.
 //   - The step keeps to the portable tools the swap step keeps to: `sed -i` is GNU-only, and BSD sed - the Mac
 //     these cases can run on, and CI's job for it - takes the word after `-i` for a backup suffix, which leaves
-//     ubuntu.sources-e in the directory apt reads. The rewrite writes a temporary file and copies it back, and
-//     sources.list.d holds ubuntu.sources and nothing else after every run.
+//     ubuntu.sources-e beside the file. The rewrite writes a temporary file and copies it back, and
+//     sources.list.d holds ubuntu.sources and nothing else after a run that copies it back.
+//   - A copy-back that fails halfway truncates ubuntu.sources and leaves the temporary file its only complete
+//     copy, so that run stops with a non-zero exit and keeps ubuntu.sources.shift2eu-new, naming it on standard
+//     error: apt reads only the `*.list` and `*.sources` names of sources.list.d, so the kept file is no source,
+//     and it is what repairs the truncation. A copy that succeeds leaves no temporary file.
 //   - A default mirror (http://archive.ubuntu.com/ubuntu, with or without a trailing slash) changes nothing and
 //     exits 0, even with no ubuntu.sources at all; a non-default mirror with no ubuntu.sources fails, naming the
 //     file. An invalid mirror (not an http:// or https:// URL of letters, digits and . - / : _ ~ only) fails and
@@ -48,8 +55,9 @@
 //   - The step is idempotent, as Lima runs it at every boot: a second run on its own output exits 0 and leaves
 //     the file byte for byte equal.
 //
-// The step runs under bash with only PATH, the root and the mirror in its environment, and nothing is faked:
-// mkdir, sed, grep and awk are the machine's own, so the cases pin what the step does with them.
+// The step runs under bash with only PATH, the root and the mirror in its environment, and nothing is faked but
+// the one `cat` the copy-back case puts first on PATH: mkdir, awk, grep and cat are the machine's own, so the cases
+// pin what the step does with them.
 package devenv_test
 
 import (
@@ -73,9 +81,13 @@ const (
 	// aptMirrorNL is the mirror the cases set: the country mirror the maintainer switched to when
 	// archive.ubuntu.com trickled on 2026-11-23 (issue #498).
 	aptMirrorNL = "http://nl.archive.ubuntu.com/ubuntu"
-	// aptStepPath is what the step finds on PATH. Nothing is faked: it needs mkdir, sed and grep and nothing
-	// else, so the cases pin what it does with the machine's own tools.
+	// aptStepPath is what the step finds on PATH. Nothing is faked but the failing `cat` of
+	// "a-copy-back-that-stops-halfway": the step needs mkdir, awk, cat and grep and nothing else, so the cases
+	// pin what it does with the machine's own tools.
 	aptStepPath = "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+	// aptRewrittenTempName is the name of the temporary file the rewrite writes beside ubuntu.sources and copies
+	// back: the file a copy that stopped halfway must leave behind, with the rewritten file's content.
+	aptRewrittenTempName = "ubuntu.sources.shift2eu-new"
 
 	// The parts of a deb822 stanza of ubuntu.sources that are not its URIs line, as cloud-init writes them.
 	aptArchiveSuites  = "noble noble-updates noble-backports"
@@ -87,8 +99,14 @@ const (
 
 // aptStanza is one deb822 stanza of ubuntu.sources: the file's shape around the URIs line a case pins.
 func aptStanza(uris, suites, components, signedBy string) string {
+	return aptStanzaNamed("URIs", uris, suites, components, signedBy)
+}
+
+// aptStanzaNamed is aptStanza with the URIs field's name spelled as field: deb822 reads `uris:`, `URIs:` and
+// `uRiS:` alike, so a case pins the spelling as well as the URIs.
+func aptStanzaNamed(field, uris, suites, components, signedBy string) string {
 	return "Types: deb\n" +
-		"URIs: " + uris + "\n" +
+		field + ": " + uris + "\n" +
 		"Suites: " + suites + "\n" +
 		"Components: " + components + "\n" +
 		"Signed-By: " + signedBy + "\n"
@@ -135,6 +153,16 @@ type aptCase struct {
 	wantAbsent bool
 	// wantDropin says the run must write the drop-in of apt's timeouts and retries under the root.
 	wantDropin bool
+	// failingCat says the guest's PATH holds a `cat` first that writes nothing and exits 1: the copy-back of the
+	// rewrite stops halfway, which is the run the temporary file must survive.
+	failingCat bool
+	// wantKeptTemp says the run must keep aptRewrittenTempName beside ubuntu.sources, holding wantSources: a copy
+	// that stopped halfway truncated ubuntu.sources, and the rewritten file is that run's only complete copy.
+	wantKeptTemp bool
+	// wantSourcesUnpinned says the case pins no content of ubuntu.sources: a copy that stopped halfway leaves it
+	// as far as the copy got, which the kept file is what repairs, so the case pins the exit, the kept file and
+	// the message instead.
+	wantSourcesUnpinned bool
 }
 
 // aptCases are the runs the step must handle: the drop-in, the rewrite of the archive URIs, the files it must
@@ -221,6 +249,35 @@ var aptCases = []aptCase{
 		wantSources: aptStanza(aptMirrorNL+"/\t"+aptMirrorNL+"/", aptArchiveSuites, aptComponents, aptKeyring),
 	},
 	{
+		// deb822 reads a field's name in any case, so `uris:` is the URIs line as `URIs:` is: apt fetches from
+		// that stanza. A rewrite that matches only `URIs:` leaves it on the archive the maintainer replaced while
+		// it rewrites the stanza beside it, and the run looks like a success.
+		name:        "a-lowercase-uris-field-beside-the-archive",
+		mirror:      aptMirrorNL,
+		sources:     aptStanzaNamed("uris", "http://archive.ubuntu.com/ubuntu", aptArchiveSuites, aptComponents, aptKeyring) + "\n" + aptArchiveStanza,
+		wantSources: aptStanzaNamed("uris", aptMirrorNL+"/", aptArchiveSuites, aptComponents, aptKeyring) + "\n" + aptMirrorStanza,
+	},
+	{
+		// deb822 continues a field on the lines after it that start with a space or a tab, so a URIs field spread
+		// over two lines is one field and apt fetches from both its URIs. A rewrite that stops at the field's
+		// first line leaves the continuation on the archive the maintainer replaced, and the leading whitespace
+		// of that line is part of the continuation, not of the URI.
+		name:   "an-archive-uri-on-a-continuation-line",
+		mirror: aptMirrorNL,
+		sources: "Types: deb\n" +
+			"URIs: http://archive.ubuntu.com/ubuntu\n" +
+			" http://archive.ubuntu.com/ubuntu/\n" +
+			"Suites: " + aptArchiveSuites + "\n" +
+			"Components: " + aptComponents + "\n" +
+			"Signed-By: " + aptKeyring + "\n",
+		wantSources: "Types: deb\n" +
+			"URIs: " + aptMirrorNL + "/\n" +
+			" " + aptMirrorNL + "/\n" +
+			"Suites: " + aptArchiveSuites + "\n" +
+			"Components: " + aptComponents + "\n" +
+			"Signed-By: " + aptKeyring + "\n",
+	},
+	{
 		// The security updates stay on security.ubuntu.com: a mirror picked for speed must not take them with
 		// it. Everything else of both stanzas is what cloud-init wrote.
 		name:        "a-security-stanza-beside-the-archive",
@@ -250,6 +307,19 @@ var aptCases = []aptCase{
 		wantSources: aptMirrorStanza + "X-Note: http://archive.ubuntu.com/ubuntu\n",
 	},
 	{
+		// A continuation ends at the first line that starts with no whitespace: the field of another name after
+		// it is no part of the URIs field, and a URI in it is no URI apt fetches from. A rewrite that carries its
+		// continuation state past that line - or a guard that scans the whole file - rewrites the X-Note and exits
+		// 0, and hands over a VM still fetching from ports.ubuntu.com.
+		name:           "an-archive-uri-after-a-ports-uris-field-has-ended",
+		mirror:         aptMirrorNL,
+		sources:        "Types: deb\nURIs: http://ports.ubuntu.com/ubuntu-ports\nSuites: resolute\nComponents: " + aptComponents + "\nSigned-By: " + aptPortsKeyring + "\nX-Note: http://archive.ubuntu.com/ubuntu\n",
+		wantFailure:    true,
+		wantStderr:     "ubuntu.sources",
+		wantStderrURIs: "URIs: http://ports.ubuntu.com/ubuntu-ports",
+		wantSources:    "Types: deb\nURIs: http://ports.ubuntu.com/ubuntu-ports\nSuites: resolute\nComponents: " + aptComponents + "\nSigned-By: " + aptPortsKeyring + "\nX-Note: http://archive.ubuntu.com/ubuntu\n",
+	},
+	{
 		// A ports file has no archive URI at all, so the mirror never reaches apt. Exiting 0 after a warning
 		// leaves the VM fetching from ports.ubuntu.com at full speed whatever UBUNTU_MIRROR said.
 		name:        "a-ports-only-file",
@@ -271,6 +341,31 @@ var aptCases = []aptCase{
 		wantStderr:     "ubuntu.sources",
 		wantStderrURIs: "URIs: http://de.archive.ubuntu.com/ubuntu",
 		wantSources:    aptCountryStanza,
+	},
+	{
+		// The mirror's name in a comment is the file's own text: apt fetches nothing from a comment, so a ports
+		// file whose comment names the mirror is still a file the mirror cannot be set in. A guard that greps the
+		// whole file for the mirror exits 0 and hands over a VM on ports.ubuntu.com.
+		name:           "a-ports-file-whose-comment-names-the-mirror",
+		mirror:         aptMirrorNL,
+		sources:        "# " + aptMirrorNL + "/\n" + aptPortsStanza,
+		wantFailure:    true,
+		wantStderr:     "ubuntu.sources",
+		wantStderrURIs: "URIs: http://ports.ubuntu.com/ubuntu-ports",
+		wantSources:    "# " + aptMirrorNL + "/\n" + aptPortsStanza,
+	},
+	{
+		// The mirror's path is a prefix of this ports URI's: nl.archive.ubuntu.com/ubuntu-ports starts with
+		// nl.archive.ubuntu.com/ubuntu. A guard that matches a prefix takes the ports file for one that already
+		// names the mirror, exits 0, and hands over a VM that fetches nothing from the mirror - the same silent
+		// failure as a country mirror, with the mirror's own host on it.
+		name:           "a-ports-uri-that-only-starts-with-the-mirror",
+		mirror:         aptMirrorNL,
+		sources:        aptStanza("http://nl.archive.ubuntu.com/ubuntu-ports", aptArchiveSuites, aptComponents, aptPortsKeyring),
+		wantFailure:    true,
+		wantStderr:     "ubuntu.sources",
+		wantStderrURIs: "URIs: http://nl.archive.ubuntu.com/ubuntu-ports",
+		wantSources:    aptStanza("http://nl.archive.ubuntu.com/ubuntu-ports", aptArchiveSuites, aptComponents, aptPortsKeyring),
 	},
 	{
 		// Lima runs the step at every boot and every re-provision, so its own output is its next input.
@@ -310,6 +405,22 @@ var aptCases = []aptCase{
 		wantFailure: true,
 		wantStderr:  "ubuntu.sources",
 		wantAbsent:  true,
+	},
+	{
+		// A copy that stops halfway - here the step's `cat` writes nothing and fails - truncates ubuntu.sources,
+		// and the rewritten temporary file is then its only complete copy: deleting that file on the way out, as
+		// an EXIT trap that always removes it does, loses the file apt reads for good. The run must stop with a
+		// non-zero exit, keep the temporary file holding the rewritten file, and say where it is. apt reads only
+		// the *.list and *.sources names of sources.list.d, so the kept name is no source of its own.
+		name:                "a-copy-back-that-stops-halfway",
+		mirror:              aptMirrorNL,
+		sources:             aptArchiveStanza,
+		wantSources:         aptMirrorStanza,
+		wantSourcesUnpinned: true,
+		failingCat:          true,
+		wantKeptTemp:        true,
+		wantFailure:         true,
+		wantStderr:          aptRewrittenTempName,
 	},
 	{
 		// Not http(s), and no URL the rewrite can put into the file: refused before sed sees the value, which
@@ -394,10 +505,11 @@ type aptGuest struct {
 	scriptPath  string // the step's script, written out for bash
 	sourcesPath string // root + ubuntuSourcesPath: the file the mirror rewrites
 	dropinPath  string // root + aptTimeoutsDropin: the timeouts and retries
+	fakeBinPath string // the directory of the fake `cat` the script finds first on PATH, empty when none is faked
 }
 
-// newAPTGuest builds a guest as a case needs it: the root, and the ubuntu.sources the case starts from, unless
-// it starts with none.
+// newAPTGuest builds a guest as a case needs it: the root, the ubuntu.sources the case starts from unless it
+// starts with none, and the fake tool of a run that pins a copy-back stopping halfway.
 func newAPTGuest(t *testing.T, tc aptCase) *aptGuest {
 	t.Helper()
 
@@ -419,6 +531,13 @@ func newAPTGuest(t *testing.T, tc aptCase) *aptGuest {
 		writeFileMode(t, guest.sourcesPath, []byte(tc.sources), 0o644)
 	}
 
+	if tc.failingCat {
+		// The machine's own cat truncates the sources file and writes it back; this one truncates it and fails,
+		// writing nothing, so the copy-back stops exactly as a full disk or a killed run would leave it.
+		guest.fakeBinPath = filepath.Join(base, "fake-bin")
+		writeFileMode(t, filepath.Join(guest.fakeBinPath, "cat"), []byte("#!/bin/sh\n# The copy-back of the apt step's rewrite: fail after writing nothing.\nexit 1\n"), 0o700)
+	}
+
 	return guest
 }
 
@@ -426,10 +545,15 @@ func newAPTGuest(t *testing.T, tc aptCase) *aptGuest {
 func (g *aptGuest) run(t *testing.T, mirror string) (stdout, stderr string, err error) {
 	t.Helper()
 
+	path := aptStepPath
+	if g.fakeBinPath != "" {
+		path = g.fakeBinPath + ":" + aptStepPath
+	}
+
 	cmd := exec.Command("bash", g.scriptPath)
 	cmd.Dir = g.root
 	cmd.Env = envList(map[string]string{
-		"PATH":          aptStepPath,
+		"PATH":          path,
 		aptRootEnv:      g.root,
 		ubuntuMirrorEnv: mirror,
 	})
@@ -507,6 +631,7 @@ func runAPTCase(t *testing.T, script string, tc aptCase) {
 	}
 
 	assertAPTSources(t, guest, tc)
+	assertAPTKeptTemp(t, guest, tc)
 	assertAPTNoLeftovers(t, guest, tc)
 
 	if tc.wantDropin {
@@ -514,9 +639,15 @@ func runAPTCase(t *testing.T, script string, tc aptCase) {
 	}
 }
 
-// assertAPTSources pins ubuntu.sources after the run: the file a case expects, byte for byte, or none.
+// assertAPTSources pins ubuntu.sources after the run: the file a case expects, byte for byte, or none. A case
+// whose copy-back stopped halfway pins none of it: the failed copy left as much of the rewritten file there as it
+// wrote, and the kept temporary file is what repairs it.
 func assertAPTSources(t *testing.T, g *aptGuest, tc aptCase) {
 	t.Helper()
+
+	if tc.wantSourcesUnpinned {
+		return
+	}
 
 	body, err := os.ReadFile(g.sourcesPath)
 
@@ -543,11 +674,38 @@ func assertAPTSources(t *testing.T, g *aptGuest, tc aptCase) {
 	}
 }
 
-// assertAPTNoLeftovers pins what the step left beside ubuntu.sources: nothing. A backup file of an in-place sed,
-// or the temporary file a rewrite writes before it copies back, is no apt source, but it lies in
-// sources.list.d, the directory apt reads every file of: BSD sed's `sed -i -e` leaves ubuntu.sources-e there, and
-// a step that stopped between the write and the copy-back leaves its temporary file. An empty directory is what
-// the cases that start with no ubuntu.sources may leave, as the step writes none either.
+// assertAPTKeptTemp pins the temporary file of a copy-back that stopped halfway: it is still there, holding the
+// whole rewritten file, so a run that truncated ubuntu.sources left the maintainer a complete copy to put back.
+// apt reads only the `*.list` and `*.sources` names of sources.list.d and ignores every other name with a notice,
+// so a kept ubuntu.sources.shift2eu-new is no source of its own.
+func assertAPTKeptTemp(t *testing.T, g *aptGuest, tc aptCase) {
+	t.Helper()
+
+	if !tc.wantKeptTemp {
+		return
+	}
+
+	path := g.sourcesPath + ".shift2eu-new"
+
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("%s: read %s: %v; a copy-back that stopped halfway truncated ubuntu.sources, so this file is the run's only complete copy and the step must keep it, naming it on standard error rather than deleting it with every other exit (issue #498)",
+			tc.name, path, err)
+	}
+
+	if diff := cmp.Diff(tc.wantSources, string(body)); diff != "" {
+		t.Errorf("%s: the kept %s after the run for ubuntuMirror %q (-want +got):\n%s\nIt is the file the failed copy-back would have written into ubuntu.sources, so it must hold the whole rewrite, byte for byte: the maintainer copies it back to repair the truncation (issue #498)",
+			tc.name, path, tc.mirror, diff)
+	}
+}
+
+// assertAPTNoLeftovers pins what the step left beside ubuntu.sources: nothing, but the temporary file of the one
+// case whose copy-back stopped halfway. apt reads only the files named `*.list` and `*.sources` in sources.list.d
+// and ignores every other name there with a notice, so a backup file of an in-place sed (BSD sed takes the word
+// after -i for a suffix, and leaves ubuntu.sources-e) or the temporary file a rewrite copies back is no source of
+// its own. The pin stays anyway, on cleanliness and because a leftover that ends in `.sources` - a backup named
+// ubuntu.sources.bak.sources, say - would be read as a source. An empty directory is what the cases that start
+// with no ubuntu.sources may leave, as the step writes none either.
 func assertAPTNoLeftovers(t *testing.T, g *aptGuest, tc aptCase) {
 	t.Helper()
 
@@ -568,7 +726,12 @@ func assertAPTNoLeftovers(t *testing.T, g *aptGuest, tc aptCase) {
 			continue
 		}
 
-		t.Errorf("%s: the step left %s in %s beside ubuntu.sources, want only ubuntu.sources there: apt reads every file of that directory as sources, so a backup file of an in-place edit (BSD sed takes the word after -i for a suffix, and leaves ubuntu.sources-e) or the temporary file a rewrite copies back would be read as a source of its own (issue #498)",
+		if tc.wantKeptTemp && entry.Name() == aptRewrittenTempName {
+			// The one file a failed copy-back must keep, pinned by assertAPTKeptTemp.
+			continue
+		}
+
+		t.Errorf("%s: the step left %s in %s beside ubuntu.sources, want only ubuntu.sources there: a backup file of an in-place edit (BSD sed takes the word after -i for a suffix, and leaves ubuntu.sources-e) or the temporary file a successful rewrite copies back stays in sources.list.d, where apt reads the *.sources and *.list names and a run that left one behind could leave a file apt takes for a source of its own (issue #498)",
 			tc.name, entry.Name(), dir)
 	}
 }
@@ -605,10 +768,12 @@ func assertAPTDropin(t *testing.T, g *aptGuest, tc aptCase) {
 // step with the machine's own tools, but a Mac's sed is BSD's and CI runs this package there too
 // (.github/workflows/ci.yml, "Makefile tests under make 3.81"): BSD sed - an in-place edit's suffix takes the word
 // after -i, and GNU's -i takes no argument at all - reads `sed -i -e <expr> <file>` as a suffix "-e" and leaves
-// ubuntu.sources-e in the directory apt reads every file of, which the cases above only see on such a machine. The
-// pin is here, on the text, so the Linux test run catches it as well. It follows the portability rule the swap
-// step is held to in limaswap_test.go (no GNU-only stat -c %s, no bash 4 the Mac's bash 3.2 lacks): the rewrite
-// writes a temporary file and copies it back with tools both have.
+// ubuntu.sources-e beside the file, which the cases above only see on such a machine. The name is no apt source
+// (apt reads only the `*.list` and `*.sources` names of sources.list.d, and ignores the rest with a notice), so
+// the pin is here for cleanliness too: a leftover that ends in `.sources` would be read. The pin is on the text,
+// so the Linux test run catches the call as well. It follows the portability rule the swap step is held to in
+// limaswap_test.go (no GNU-only stat -c %s, no bash 4 the Mac's bash 3.2 lacks): the rewrite writes a temporary
+// file and copies it back with tools both have.
 func TestAPTSourcesStepKeepsToPortableTools(t *testing.T) {
 	t.Parallel()
 
@@ -620,9 +785,44 @@ func TestAPTSourcesStepKeepsToPortableTools(t *testing.T) {
 				continue
 			}
 
-			t.Errorf("%s's apt step runs sed with %s, an in-place edit, want the rewrite written to a temporary file and copied back: sed -i is GNU-only, and BSD sed (the Mac these cases can run on, and CI's job for it) takes the word after it for a backup suffix, so the step fails there and leaves ubuntu.sources-e in %s for apt to read as a source of its own (issue #498)",
+			t.Errorf("%s's apt step runs sed with %s, an in-place edit, want the rewrite written to a temporary file and copied back: sed -i is GNU-only, and BSD sed (the Mac these cases can run on, and CI's job for it) takes the word after it for a backup suffix, so the step fails there and leaves ubuntu.sources-e beside %s. apt reads only the `*.list` and `*.sources` names of that directory, so such a leftover is no source, but the step has no business leaving it there (issue #498)",
 				limaTemplateRepoPath, strings.Join(append([]string{"sed"}, command...), " "), filepath.Dir(ubuntuSourcesPath))
 		}
+	}
+}
+
+// TestAPTSedCommandsSeesEverySedCall pins the scan TestAPTSourcesStepKeepsToPortableTools reads the step's text
+// with: a call the step writes without a space after a shell operator is a call all the same, and a scan that
+// only finds a word `sed` standing on its own misses `f="$(sed -i ...)"`, `|sed -i`, `;sed -i`, `&&sed -i`. A
+// step that wrote one of those would pass the pin above unwatched, and leave ubuntu.sources-e beside the file on a
+// Mac as surely as a plain `sed -i` would.
+func TestAPTSedCommandsSeesEverySedCall(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		line string
+		want [][]string
+	}{
+		{"a-word-of-its-own", `sed -i -e 's/a/b/' "$f"`, [][]string{{"-i", "-e"}}},
+		{"a-command-substitution", `f="$(sed -i -e 's/a/b/' "$f")"`, [][]string{{"-i", "-e"}}},
+		{"a-pipe", `printf '%s' "${x}" |sed -i -e 's/a/b/' "$f"`, [][]string{{"-i", "-e"}}},
+		{"a-semicolon", `set -e;sed -i -e 's/a/b/' "$f"`, [][]string{{"-i", "-e"}}},
+		{"a-conditional-and", `[ -f "$f" ]&&sed -i -e 's/a/b/' "$f"`, [][]string{{"-i", "-e"}}},
+		{"an-xargs-call", `printf '%s\n' "$f" | xargs sed -i -e 's/a/b/'`, [][]string{{"-i", "-e"}}},
+		{"an-in-place-edit-with-a-backup-suffix", `sed -i.bak -e 's/a/b/' "$f"`, [][]string{{"-i.bak", "-e"}}},
+		{"a-call-with-no-in-place-option", `sed -e 's/a/b/' "$f"`, [][]string{{"-e"}}},
+		{"another-tool-whose-name-holds-sed", `: "$(sedx -i -e 's/a/b/')"`, nil},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			if diff := cmp.Diff(tc.want, aptSedCommands("#!/bin/bash\nset -eux -o pipefail\n"+tc.line+"\n")); diff != "" {
+				t.Errorf("aptSedCommands(%q) (-want +got):\n%s", tc.line, diff)
+			}
+		})
 	}
 }
 
@@ -633,7 +833,7 @@ func aptSedCommands(script string) [][]string {
 	var commands [][]string
 
 	for _, line := range aptStepCodeLines(script) {
-		words := strings.Fields(line)
+		words := aptShellWords(line)
 
 		for i, word := range words {
 			if word != "sed" {
@@ -657,6 +857,22 @@ func aptSedCommands(script string) [][]string {
 	}
 
 	return commands
+}
+
+// aptShellWords returns the words of one line of shell code: the fields a shell breaks on whitespace, and on the
+// operators and substitutions that start a new command - `;`, `&&`, `|`, `$(`, `(`, a backtick - so a call
+// written as `$(sed`, `|sed`, `;sed` or `&&sed` holds the word `sed` as a plain `sed` does. A `sed` inside quotes
+// is no command, but the scan only looks for a call, and the step's text is written by hand: one quoted `sed` in
+// it would be a finding of its own.
+func aptShellWords(line string) []string {
+	return strings.FieldsFunc(line, func(r rune) bool {
+		switch r {
+		case ' ', '\t', ';', '|', '&', '(', ')', '`':
+			return true
+		}
+
+		return false
+	})
 }
 
 // aptStepCodeLines returns the step's script as bash reads its commands: one line per command, the comment of each
