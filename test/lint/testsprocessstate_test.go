@@ -489,6 +489,24 @@ func main() {
 `,
 		},
 		{
+			// The exception is one call, not the whole file (issue #277, round
+			// H, finding 4): the first os.Chdir of the audit wrapper's main is
+			// the one the exec needs, and a second one is a finding, so the file
+			// cannot grow another change of the binary's directory beside it.
+			name: "a second os.Chdir in the audit wrapper's main is refused",
+			rel:  auditExecChdirFile,
+			src: `package main
+
+import "os"
+
+func main() {
+	_ = os.Chdir
+	_ = os.Chdir
+}
+`,
+			want: []string{auditExecChdirFile + ":7: " + msgProcessStateSelector},
+		},
+		{
 			// The same call one file over is no exception: the wrapper's logic
 			// takes the change as a parameter, so a test passes a fake.
 			name: "os.Chdir in the audit wrapper's logic is refused",

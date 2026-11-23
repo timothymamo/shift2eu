@@ -454,6 +454,14 @@ func TestRunRefusesTheOptionsThatWriteOrReadElsewhere(t *testing.T) {
 		{"--git-dir", "/srv/audit/checkout/.git"},
 		{"--work-tree", "/etc"},
 		{"--namespace", "other"},
+		// The options that name the repository, the work tree or a path into
+		// the objects are refused whatever their value, a value inside the
+		// roots included (issue #277, round H, finding 1): the caller's -C has
+		// its own rows below, and these are its equals.
+		{"--super-prefix", "/srv/audit/checkout/"},
+		{"--attr-source", "HEAD"},
+		{"--bare", ""},
+		{"--literal-pathspecs", ""},
 		{"--ext-diff", ""},
 		{"--textconv", ""},
 		{"--output", "/srv/audit/state/probe"},
@@ -544,6 +552,156 @@ func TestRunRefusesTheOptionsThatWriteOrReadElsewhere(t *testing.T) {
 			if !strings.Contains(stderr, "--no-ind") {
 				t.Errorf("run(%q) wrote %q to stderr, want it to name the refused option", args, stderr)
 			}
+		}
+	})
+
+	// A caller's -C is refused outright (issue #277, round H, finding 1): the
+	// wrapper's own -C /srv/audit/checkout comes first, but git applies the -C
+	// options in order, so a later one would point git wherever the caller
+	// likes - /srv/audit/work, which is an allowed root the model may write
+	// into, included. A .git/config the model planted there names
+	// core.fsmonitor or diff.external, and git runs that program. Every form
+	// is refused, git log's -C (copy detection) among them: -C is ambiguous on
+	// the line, and the check fails closed.
+	t.Run("git's caller -C", func(t *testing.T) {
+		t.Parallel()
+
+		cases := []struct {
+			name string
+			args []string
+			// wantNamed is the word the one stderr line names: the whole word,
+			// the option's value attached included.
+			wantNamed string
+		}{
+			{
+				name:      "the next word as its value, in the work area",
+				args:      []string{"git", "-C", auditWork, "diff"},
+				wantNamed: "-C",
+			},
+			{
+				name:      "its value attached, in the work area",
+				args:      []string{"git", "-C" + auditWork, "log"},
+				wantNamed: "-C" + auditWork,
+			},
+			{
+				name:      "the relative current directory",
+				args:      []string{"git", "-C", ".", "log"},
+				wantNamed: "-C",
+			},
+			{
+				// The value lies inside the roots, so round G's path rule
+				// passed it: the wrapper's own -C is the only one git reads.
+				name:      "the checkout itself",
+				args:      []string{"git", "-C", auditCheckout, "log"},
+				wantNamed: "-C",
+			},
+			{
+				// git log's own -C is copy detection, no -C of the caller's. The
+				// word is refused all the same: it is ambiguous on the line.
+				name:      "git log's copy detection",
+				args:      []string{"git", "log", "-C"},
+				wantNamed: "-C",
+			},
+			{
+				// git reads a short option one letter at a time, so the letter
+				// is refused in a cluster as at its start.
+				name:      "in a short-option cluster",
+				args:      []string{"git", "log", "-nC"},
+				wantNamed: "-nC",
+			},
+		}
+
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				t.Parallel()
+
+				code, stderr, recorder := runWrapper(t, tc.args)
+
+				if code != refusedExit {
+					t.Errorf("run(%q) = %d, want %d: a caller's -C points git away from the checkout, at a work area the model writes in (stderr %q)", tc.args, code, refusedExit, stderr)
+				}
+
+				if recorder.called {
+					t.Errorf("run(%q) exec'd %q; a refused -C runs nothing", tc.args, recorder.call.argv)
+				}
+
+				if !strings.Contains(stderr, tc.wantNamed) {
+					t.Errorf("run(%q) wrote %q to stderr, want it to name the refused word %q", tc.args, stderr, tc.wantNamed)
+				}
+			})
+		}
+	})
+
+	// jq's module system is refused (issue #277, round H, finding 2): a filter
+	// that imports or includes a module, and the -L and --library-path options
+	// that name where jq looks for one, let it read any .json file of the
+	// image - the results it writes included - so the audit takes filters, no
+	// modules. Every word holding import or include is refused, so a word that
+	// merely mentions one is too: the check fails closed.
+	t.Run("jq's module system", func(t *testing.T) {
+		t.Parallel()
+
+		cases := []struct {
+			name string
+			args []string
+			// wantNamed is the word the one stderr line names.
+			wantNamed string
+		}{
+			{
+				name:      "a filter that imports a module",
+				args:      []string{"jq", "-n", `import "x" as $d {search: "/etc"}; $d`},
+				wantNamed: "import",
+			},
+			{
+				name:      "a filter that includes a module",
+				args:      []string{"jq", "-n", `include "x"; 1`},
+				wantNamed: "include",
+			},
+			{
+				name:      "-L with its value attached",
+				args:      []string{"jq", "-Lx", "-n", "1"},
+				wantNamed: "-Lx",
+			},
+			{
+				name:      "-L with its value attached, inside the roots",
+				args:      []string{"jq", "-L" + auditWork, "-n", "1"},
+				wantNamed: "-L" + auditWork,
+			},
+			{
+				name:      "--library-path with its value as the next word",
+				args:      []string{"jq", "--library-path", auditWork, "-n", "1"},
+				wantNamed: "--library-path",
+			},
+			{
+				name:      "--library-path in its =value form",
+				args:      []string{"jq", "--library-path=" + auditWork, "-n", "1"},
+				wantNamed: "--library-path=" + auditWork,
+			},
+			{
+				name:      "a filter that imports a module after a path out of the roots' kin",
+				args:      []string{"jq", "-n", `{search: "../state/home"} | import "x" as $d; 1`},
+				wantNamed: "import",
+			},
+		}
+
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				t.Parallel()
+
+				code, stderr, recorder := runWrapper(t, tc.args)
+
+				if code != refusedExit {
+					t.Errorf("run(%q) = %d, want %d: jq reads the filters of the line, no module and no library path (stderr %q)", tc.args, code, refusedExit, stderr)
+				}
+
+				if recorder.called {
+					t.Errorf("run(%q) exec'd %q; a refused line runs nothing", tc.args, recorder.call.argv)
+				}
+
+				if !strings.Contains(stderr, tc.wantNamed) {
+					t.Errorf("run(%q) wrote %q to stderr, want it to name the refused word %q", tc.args, stderr, tc.wantNamed)
+				}
+			})
 		}
 	})
 
@@ -876,8 +1034,8 @@ func TestRunRefusesTheOptionsThatWriteOrReadElsewhere(t *testing.T) {
 //     with no "/" is a name in the working directory, and "-" alone is stdin);
 //     any word after "--", whatever its first character; an option's value
 //     after its first "="; the rest of a single-dash word after its first
-//     letter, when that rest holds a "/"; and git's own -C, attached or as the
-//     next word;
+//     letter, when that rest holds a "/". git's -C is no path word of this
+//     rule: a caller's -C is refused before the rule reads the line (round H).
 //   - an absolute path word is read as it is, a relative one on a git line is
 //     joined to /srv/audit/checkout - which is what git reads it under the
 //     wrapper's own -C - and a relative one on any other line to
@@ -1044,18 +1202,6 @@ func TestRunHoldsEveryPathWordToTheAllowList(t *testing.T) {
 				name:      "the file of jq's --rawfile",
 				args:      []string{"jq", "--rawfile", "canary", "/proc/self/environ", "."},
 				wantNamed: "/proc/self/environ",
-			},
-			{
-				// git -C with its value as the next word.
-				name:      "the argument of git's own -C",
-				args:      []string{"git", "-C", "/proc/1/environ", "log"},
-				wantNamed: "/proc/1/environ",
-			},
-			{
-				// git -C with its value attached to the letter.
-				name:      "the argument attached to git's own -C",
-				args:      []string{"git", "-C/proc/1", "log"},
-				wantNamed: "-C/proc/1",
 			},
 			{
 				// The CLI's deny rule matched this path as text; the wrapper
@@ -1307,6 +1453,13 @@ func TestRunTakesTheOptionsThatOnlyRead(t *testing.T) {
 			name:     "git for-each-ref's own sort atom",
 			args:     []string{"git", "for-each-ref", "--sort=-committerdate"},
 			wantPath: "/usr/bin/git",
+		},
+		{
+			// jq's module system is refused (issue #277, round H, finding 2), so
+			// a filter that is no module and names no library path runs as it is.
+			name:     "jq's own filter over a check's output",
+			args:     []string{"jq", ".[] | .id", "/srv/audit/checks/a.json"},
+			wantPath: "/usr/bin/jq",
 		},
 		{
 			name:     "uniq with one operand",

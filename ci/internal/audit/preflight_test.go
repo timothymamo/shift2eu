@@ -187,8 +187,8 @@ func toolResultLine(id string, answer callResult) string {
 // are an error for a reason of their own: probe 5's token-absence call, whose
 // sandboxed shell expands the unset variable to nothing, so cat names
 // /nonexistent/ and fails; and probe 5's two calls for the forms the wrapper's
-// path rule never reads, whose shell redirection and /dev/fd link the sandbox
-// refuses before the command starts.
+// path rule never reads, whose redirection of a glob and of a /dev/fd target the
+// sandbox refuses before the command starts, so bash names the target and fails.
 func passingAnswers(plan audit.Plan, nonce string) []callResult {
 	answers := make([]callResult, len(plan))
 
@@ -199,7 +199,8 @@ func passingAnswers(plan audit.Plan, nonce string) []callResult {
 		case tokenAbsenceCallOf(call):
 			answers[i] = callResult{text: "cat: /nonexistent/: No such file or directory", isError: true}
 		case bypassCallOf(call):
-			answers[i] = callResult{text: "bash: " + call.Input["command"] + ": Permission denied", isError: true}
+			_, target, _ := strings.Cut(call.Input["command"], "< ")
+			answers[i] = callResult{text: "bash: " + target + ": Permission denied", isError: true}
 		default:
 			answers[i] = callResult{text: "the tool is not allowed here", isError: true}
 		}
@@ -216,9 +217,10 @@ func tokenAbsenceCallOf(call audit.Call) bool {
 }
 
 // The two markers of probe 5's calls for the forms the wrapper's own path rule
-// never reads (issue #277, round G): a shell redirection, whose target the shell
-// resolves - glob and all - before the wrapper runs; and a /dev/fd path, which
-// the kernel resolves through /proc/self/fd before it takes the "..".
+// never reads (issue #277, rounds G and H): a shell redirection, whose target the
+// shell resolves - glob and all - before the wrapper runs; a /dev/fd target,
+// which the kernel resolves through /proc/self/fd before it takes the "..", and
+// which the call redirects as well, so the wrapper never sees it.
 const (
 	redirectMarker = "envir?n"
 	fdMarker       = "/dev/fd/"
@@ -544,14 +546,16 @@ func TestPreflightPlanFillsItsInputsFromTheTargets(t *testing.T) {
 			want:  map[string]string{"command": wrapper + " cat < /proc/" + strconv.Itoa(preflightPid) + "/envir?n"},
 		},
 		{
-			// /dev/fd is a link to /proc/self/fd, which the kernel follows before
-			// it takes the "..": the wrapper refuses the word for its "..", and
-			// the call proves the sandbox refuses it too (issue #277, round G).
+			// /dev/fd is a link to /proc/self/fd, and the kernel follows it
+			// before it takes the "..". The call redirects the word too (issue
+			// #277, round H, finding 3): the wrapper never sees the path, and
+			// the sandbox is what has to refuse it - which is what probe 5 is
+			// asking.
 			name:  "probe 5 reads an environ through /dev/fd",
 			probe: 5,
 			tool:  "Bash",
 			nth:   4,
-			want:  map[string]string{"command": wrapper + " cat /dev/fd/../../" + strconv.Itoa(preflightPid) + "/environ"},
+			want:  map[string]string{"command": wrapper + " cat < /dev/fd/../../" + strconv.Itoa(preflightPid) + "/environ"},
 		},
 		{
 			name:  "probe 6 reads the $GITHUB_ENV file",
