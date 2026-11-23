@@ -297,20 +297,25 @@ func onlyRecordsFail(report Report) bool {
 // root excluded). A chain that does not verify, a leaf not valid for host or
 // not yet valid at now, or a leaf or intermediate whose NotAfter is before
 // now+margin is an error (behaviour 7). margin below MinCertMargin is an
-// error before any dial. The dial and the handshake end with ctx and in any
-// case after DefaultRequestTimeout, so a host that accepts the connection and
-// never answers fails the check instead of hanging it; Run passes a ctx
-// bounded by Config.RequestTimeout.
+// error before any dial. The dial and the handshake end with ctx; a ctx with
+// no deadline gets one DefaultRequestTimeout from now, so a host that accepts
+// the connection and never answers fails the check instead of hanging it. A
+// deadline ctx already has is kept as it is, longer or shorter: Run passes a
+// ctx bounded by Config.RequestTimeout.
 func CheckCertificate(ctx context.Context, dial Dialer, roots *x509.CertPool, host string, now time.Time, margin time.Duration) (time.Time, error) {
 	if margin < MinCertMargin {
 		return time.Time{}, fmt.Errorf("the certificate margin %v is below %v", margin, MinCertMargin)
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, DefaultRequestTimeout)
-	defer cancel()
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+
+		ctx, cancel = context.WithTimeout(ctx, DefaultRequestTimeout)
+		defer cancel()
+	}
 
 	if dial == nil {
-		d := &net.Dialer{Timeout: DefaultRequestTimeout}
+		d := &net.Dialer{}
 		dial = d.DialContext
 	}
 

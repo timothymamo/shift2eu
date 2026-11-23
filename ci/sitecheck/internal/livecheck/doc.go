@@ -16,13 +16,18 @@
 //     (KindHTMLCache);
 //   - the redirect matrix of the apex and plain HTTP (KindRedirect); where the
 //     HSTS record allows plain HTTP on the canonical host to refuse or close,
-//     only a refused connection, or one closed or reset before any response
-//     byte, counts as that: a timeout, or bytes Go cannot parse as a response
-//     (HTTP/0.9, a malformed header block), fails;
+//     only a request from whose connection no byte was read counts as that,
+//     and only when the connection was refused, never made (a dial that timed
+//     out: a filtered port), or closed or reset: a timeout after connecting,
+//     or any byte read, even one Go cannot parse as a response (HTTP/0.9, a
+//     malformed header block) or discards as sent before the request, fails.
+//     The bytes are counted on the connection itself (each request has its
+//     own), not through httptrace, which reports no discarded byte;
 //   - the certificates of the host and the apex verify, and neither the leaf
 //     nor an intermediate of the verified chain expires within the margin, the
 //     handshake bounded by the request timeout (KindCertificate,
-//     CheckCertificate);
+//     CheckCertificate, which keeps its caller's deadline and sets
+//     DefaultRequestTimeout only when the context has none);
 //   - Strict-Transport-Security against the HSTS record (KindHSTS) and the
 //     pages' statements against both records (KindStatement), the records read
 //     with exactly their lower-case keys, none twice;

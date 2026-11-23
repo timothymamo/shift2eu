@@ -53,11 +53,14 @@ type checker struct {
 // newChecker returns the checker of cfg, which has its defaults set. Its
 // client dials through cfg.Dial, verifies certificates against cfg.Roots at
 // cfg.Now, asks for no compression of its own (so a body arrives as the edge
-// transfers it), uses no proxy and follows no redirect.
+// transfers it), uses no proxy and follows no redirect. Every request gets a
+// connection of its own (no keep-alive), so what its probe (connProbe) sees
+// on the connection belongs to that request alone.
 func newChecker(cfg Config) *checker {
 	transport := &http.Transport{
-		Proxy:       nil,
-		DialContext: cfg.Dial,
+		Proxy:             nil,
+		DialContext:       probingDial(cfg.Dial),
+		DisableKeepAlives: true,
 		TLSClientConfig: &tls.Config{
 			RootCAs:    cfg.Roots,
 			Time:       cfg.Now,
@@ -85,14 +88,63 @@ func (c *checker) close() {
 	c.transport.CloseIdleConnections()
 }
 
+// connProbe is what one request's connections showed: whether a dial returned
+// a connection, and whether any byte was read from one. It is read from the
+// connection itself, not from httptrace: Go's transport reads, and discards
+// as "unsolicited", bytes a server sends before the request is registered,
+// and never reports a first response byte for them.
+type connProbe struct {
+	connected atomic.Bool
+	read      atomic.Bool
+}
+
+// connProbeKey is the context key of a request's *connProbe.
+type connProbeKey struct{}
+
+// probingDial returns dial with every connection it makes reporting to the
+// *connProbe of the dial's context, if any. The transport dials with a
+// context that keeps the request's values.
+func probingDial(dial Dialer) Dialer {
+	return func(ctx context.Context, network, addr string) (net.Conn, error) {
+		conn, err := dial(ctx, network, addr)
+
+		probe, _ := ctx.Value(connProbeKey{}).(*connProbe)
+		if err != nil || probe == nil {
+			return conn, err
+		}
+
+		probe.connected.Store(true)
+
+		return &probedConn{Conn: conn, probe: probe}, nil
+	}
+}
+
+// probedConn is a connection that marks its probe once a Read returns a byte.
+type probedConn struct {
+	net.Conn
+
+	probe *connProbe
+}
+
+// Read reads from the connection and marks the probe when n > 0.
+func (c *probedConn) Read(b []byte) (int, error) {
+	n, err := c.Conn.Read(b)
+	if n > 0 {
+		c.probe.read.Store(true)
+	}
+
+	return n, err
+}
+
 // fetched is one request of a round and what came back.
 type fetched struct {
 	// err is set when no response came (refused, closed, timed out,
 	// unreadable).
 	err error
-	// refusedOrClosed is set with err when the connection was refused, or
-	// closed or reset before any byte of a response arrived: not a timeout,
-	// not a response Go could not parse.
+	// refusedOrClosed is set with err when no byte was read from any of the
+	// request's connections and either no connection was made (refused, or a
+	// dial that timed out) or the one made was closed or reset: not a timeout
+	// after connecting, not bytes Go could not parse or discarded.
 	refusedOrClosed bool
 	status          int
 	header          http.Header
@@ -136,17 +188,14 @@ func (r *round) fetch(ctx context.Context, url string) fetched {
 	ctx, cancel := context.WithTimeout(ctx, r.cfg.RequestTimeout)
 	defer cancel()
 
-	var (
-		remote    string
-		firstByte atomic.Bool
-	)
+	var remote string
 
+	probe := &connProbe{}
+	ctx = context.WithValue(ctx, connProbeKey{}, probe)
 	ctx = httptrace.WithClientTrace(ctx, &httptrace.ClientTrace{
 		GotConn: func(info httptrace.GotConnInfo) {
 			remote = info.Conn.RemoteAddr().String()
 		},
-		// Called on the transport's read goroutine, hence the atomic.
-		GotFirstResponseByte: func() { firstByte.Store(true) },
 	})
 
 	recorded := Response{URL: url}
@@ -168,7 +217,7 @@ func (r *round) fetch(ctx context.Context, url string) fetched {
 
 		return fetched{
 			err:             fmt.Errorf("no response: %s", Quote(err.Error())),
-			refusedOrClosed: !firstByte.Load() && !isTimeout(err) && !errors.Is(err, context.Canceled),
+			refusedOrClosed: refusedOrClosed(probe, err),
 		}
 	}
 
@@ -184,6 +233,24 @@ func (r *round) fetch(ctx context.Context, url string) fetched {
 	r.responses = append(r.responses, recorded)
 
 	return f
+}
+
+// refusedOrClosed reports whether a request that ended with err got no page
+// a browser could show: no byte was read from any of its connections, the run
+// was not cancelled, and either no connection was made (refused, or a
+// filtered port whose dial timed out) or err is no timeout (the connection
+// was closed or reset). A timeout after a connection was made is not: a
+// browser would still be waiting. A response whose bytes race a reset passes
+// only if none of them was read, which is what a browser can show too.
+func refusedOrClosed(probe *connProbe, err error) bool {
+	switch {
+	case probe.read.Load(), errors.Is(err, context.Canceled):
+		return false
+	case !probe.connected.Load():
+		return true
+	default:
+		return !isTimeout(err)
+	}
 }
 
 // isTimeout reports whether err is a timeout: the request's deadline, or a
@@ -407,11 +474,12 @@ func (r *round) redirectMatrix(ctx context.Context, record HSTSRecord) fetched {
 }
 
 // judgeRefuseOrClose returns nil when f, plain HTTP on the canonical host in
-// refuse-or-close mode, was refused, or closed or reset before any response
-// byte, or got a 301 or 308 to exactly canonical, or a 4xx or 5xx whose body
-// is no manifest file's. A timeout, or bytes Go could not parse as a response
-// (HTTP/0.9, a malformed header block), which a browser may still render,
-// fail.
+// refuse-or-close mode, was refused (a dial that timed out with no connection
+// included), or closed or reset before any byte was read from the connection,
+// or got a 301 or 308 to exactly canonical, or a 4xx or 5xx whose body is no
+// manifest file's. A timeout after connecting, or any byte read that Go could
+// not parse as a response or discarded (HTTP/0.9, a malformed header block,
+// bytes sent before the request), which a browser may still render, fail.
 func (r *round) judgeRefuseOrClose(f fetched, canonical string) error {
 	switch {
 	case f.err != nil && f.refusedOrClosed:

@@ -63,17 +63,24 @@ library `ci/sitecheck/internal/livecheck` does every fetch and judgement, and th
      `http://<apex>/<p>` goes first to `https://<apex>/<p>` (the two hops the preload list requires); in
      refuse-or-close mode `http://<host>/<p>` may instead refuse the connection or close (or reset) it
      before any byte of a response arrives, redirect to the canonical URL, or answer 4xx/5xx with a body
-     that is no manifest file's (any other 3xx and any 2xx fail). A connection that times out, or bytes
-     Go cannot parse as a response (raw HTML without a status line, HTTP/0.9, a malformed header block),
-     fail: a browser may still wait for or render them. The check tells them apart by whether the first
-     response byte arrived (`httptrace`'s `GotFirstResponseByte`) and whether the error is a timeout;
-     neither host ever answers 200 over plain HTTP;
+     that is no manifest file's (any other 3xx and any 2xx fail). A dial that times out with no
+     connection made (a filtered port) counts as refused: a browser gets no page from it either. A
+     connection that times out once made, or any byte read from the connection, even bytes Go cannot
+     parse as a response (raw HTML without a status line, HTTP/0.9, a malformed header block) or
+     discards because they came before the request ("unsolicited response"), fail: a browser may still
+     wait for or render them. The check counts the bytes on the connection itself: its dialer wraps each
+     connection in a reader that marks the request's probe on any read of a byte, and records whether a
+     dial returned a connection at all; keep-alive is off, so every request has its own connection and
+     probe. `httptrace`'s `GotFirstResponseByte` is not used: it never fires for discarded bytes. A
+     response whose bytes race a reset passes only if none of them was read, which matches what a
+     browser can show; neither host ever answers 200 over plain HTTP;
   6. the certificates of the host and the apex verify for their names against the configured roots at the
      injected time, and the leaf and every intermediate of the verified chain (not the root) stay valid
      for the margin, at least **14 days**, so a failed renewal, or an intermediate that expires first, is
      found two weeks before visitors see it; the dial and the handshake are bounded by the request
      timeout (30 s by default), so a host that accepts the connection and never answers fails the check
-     instead of hanging it;
+     instead of hanging it; `CheckCertificate` keeps the deadline its caller's context has, longer or
+     shorter, and sets the 30 s default only on a context with none;
   7. HSTS against the records: when `met`, the host's `Strict-Transport-Security` has `max-age` at least
      31536000, `includeSubDomains`, and `preload` when preload is pursued; the apex's header is held to the
      same minimum (with `preload`) only when preload is pursued, and is otherwise only recorded. When
