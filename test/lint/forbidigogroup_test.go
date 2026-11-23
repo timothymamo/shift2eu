@@ -6,9 +6,15 @@ import (
 	"testing"
 )
 
-// This file holds the check the two audit publish environment groups share. It
-// is no pin of its own: the tables live with each group's test, in
-// auditpublishmainenv_test.go and auditpublishgithubenv_test.go.
+// This file holds the per-entry checks the forbidigo environment and no-exec
+// groups share, and it is no pin of its own: the tables live with each group's
+// test. checkForbidigoGroupPatterns serves the groups whose exception entry a
+// linters.exclusions.rules rule narrows on (aireviewenv_test.go,
+// auditexecenv_test.go, auditpublishgithubenv_test.go,
+// auditpublishmainenv_test.go, auditrunenv_test.go, sitedeployenv_test.go), and
+// checkForbidigoGroupEntries the groups with no exception, naming each entry by
+// its msg and the pkg it matches (compositionrootenv_test.go,
+// compositionrootnoexec_test.go, sitecheckenv_test.go).
 
 // forbidGroupRefusal is a name a forbidigo group must refuse, with the msg that
 // must match the msg of the entry refusing it: the whole msg of the group's
@@ -122,6 +128,83 @@ func checkForbidigoGroupPatterns(t *testing.T, tag string, refused []forbidGroup
 	for _, e := range entries {
 		if !slices.ContainsFunc(refused, func(r forbidGroupRefusal) bool { return e.refuses(r.rootName) }) {
 			t.Errorf("the entry with msg %q refuses no name of the group's list; add the names it refuses", e.msg)
+		}
+	}
+}
+
+// forbidGroupEntry is one entry of a group whose linters.exclusions.rules never
+// narrow on an entry's msg, named by that msg and the package path its pkg
+// matches, with the names its pattern must refuse. The msg alone names no entry:
+// composition-root-env's entry for os.Getenv and its entry for syscall.Getenv
+// carry one msg and differ in their pkg, which is why the pkg is part of the
+// name.
+type forbidGroupEntry struct {
+	msg, pkg string
+	refuses  []rootName
+}
+
+// checkForbidigoGroupEntries checks the entries of one forbidigo group, read from
+// .golangci.yml with groupEntries, offline and without golangci-lint, entry by
+// entry: the entry named by each pin refuses every name the pin lists and no
+// other listed name of the group's table, no entry refuses a name of allowed,
+// and every entry of the group is pinned. It is the pin for a group no exclusion
+// rule narrows on (compositionRootRuleProblems), where the name sets are the
+// only place that says which entry refuses what: a name moved from one entry's
+// pattern into another's fails here, as does one an entry stops refusing. A name
+// a pin lists and an entry must not refuse is checked against the pinned names
+// alone; the allowed names are checked once, by the loop below, so an entry that
+// refuses an allowed name is reported once.
+func checkForbidigoGroupEntries(t *testing.T, tag string, pinned []forbidGroupEntry, allowed []rootName) {
+	t.Helper()
+
+	entries := groupEntries(t, moduleRoot(t), tag)
+	// refusals is every name a pin lists, without the allowed names.
+	refusals := make([]rootName, 0, len(pinned))
+	for _, p := range pinned {
+		refusals = append(refusals, p.refuses...)
+	}
+
+	for _, p := range pinned {
+		var entry *forbidEntry
+		found := 0
+		for i := range entries {
+			if entries[i].msg == p.msg && entries[i].pkg.MatchString(p.pkg) {
+				entry = &entries[i]
+				found++
+			}
+		}
+		switch found {
+		case 0:
+			t.Errorf(".golangci.yml holds no %s entry that matches pkg %q with msg %q", tag, p.pkg, p.msg)
+			continue
+		case 1:
+		default:
+			t.Errorf(".golangci.yml holds %d %s entries that match pkg %q with msg %q; the pin names no one entry", found, tag, p.pkg, p.msg)
+			continue
+		}
+
+		for _, n := range refusals {
+			refuses, must := entry.refuses(n), slices.Contains(p.refuses, n)
+			if must && !refuses {
+				t.Errorf("the entry with msg %q that matches pkg %q must refuse %s (pkg %q), and it does not", p.msg, p.pkg, n.name, n.pkg)
+			}
+			if !must && refuses {
+				t.Errorf("the entry with msg %q that matches pkg %q must refuse no other name of the group, but it refuses %s (pkg %q); a name moved into it from another entry of the group passes where that entry's pattern does not", p.msg, p.pkg, n.name, n.pkg)
+			}
+		}
+	}
+
+	for _, n := range allowed {
+		for _, e := range entries {
+			if e.refuses(n) {
+				t.Errorf("%s (pkg %q) must pass, but the entry with msg %q refuses it", n.name, n.pkg, e.msg)
+			}
+		}
+	}
+
+	for _, e := range entries {
+		if !slices.ContainsFunc(pinned, func(p forbidGroupEntry) bool { return p.msg == e.msg && e.pkg.MatchString(p.pkg) }) {
+			t.Errorf("the entry with msg %q and pkg %q is not pinned; add the names its pattern refuses to the group's table", e.msg, e.pkg)
 		}
 	}
 }
