@@ -1,7 +1,6 @@
 package architecture_test
 
 import (
-	"errors"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -187,31 +186,121 @@ func TestGapThresholdIsPinnedOnce(t *testing.T) {
 func TestAuditWorkflowHasNoScheduleTrigger(t *testing.T) {
 	t.Parallel()
 
-	root := repositoryRoot(t)
-	workflowsDir := filepath.Join(root, ".github", "workflows")
+	workflowsDir := filepath.Join(repositoryRoot(t), ".github", "workflows")
 
-	workflow, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(auditWorkflow)))
+	if err := checkAuditWorkflows(t, workflowsDir); err != nil {
+		t.Error(err)
+	}
+}
 
-	switch {
-	case err == nil:
-	case errors.Is(err, fs.ErrNotExist):
-		return
-	default:
-		t.Fatalf("read %s: %v", auditWorkflow, err)
+// TestCheckAuditWorkflows pins the wiring of the audit's workflow check: the
+// rule over the workflow the audit is published by is stated for a workflows
+// directory, and read whatever the directory holds. The named workflow's
+// absence is the "no trigger" case only for that workflow; it is no reason to
+// stop before the workflows that run the publish program, since a report
+// published by a workflow the check never reads skips the gap check (ADR 0040).
+func TestCheckAuditWorkflows(t *testing.T) {
+	t.Parallel()
+
+	const (
+		// publishing is a workflow that runs the audit's publish program, the
+		// shape the audit's own workflow has from milestone 3 on.
+		publishing = "jobs:\n  publish:\n    runs-on: ubuntu-latest\n    steps:\n      - run: go run ./ci/auditpublish\n"
+
+		// unrelated runs no part of the audit.
+		unrelated = "on:\n  push:\n    branches: [main]\njobs:\n  build:\n    steps:\n      - run: make check\n"
+	)
+
+	scheduledPublishing := "on:\n  schedule:\n    - cron: '17 4 3 * *'\n" + publishing
+
+	tests := []struct {
+		name string
+		// workflows are the directory's files, keyed by their slash-separated
+		// names.
+		workflows map[string]string
+		// wantErrContains is the base name of the workflow the error must
+		// name, empty when no error is wanted.
+		wantErrContains string
+	}{
+		{
+			name:            "another workflow runs the publish program on a schedule",
+			workflows:       map[string]string{"other.yml": scheduledPublishing},
+			wantErrContains: "other.yml",
+		},
+		{
+			// The check's existing rule, which this wiring must keep: any
+			// workflow but the audit's own that names the publish program is a
+			// failure, whether or not a schedule sits behind it.
+			name:            "another workflow runs the publish program with no schedule",
+			workflows:       map[string]string{"other.yml": "on:\n  workflow_dispatch:\n" + publishing},
+			wantErrContains: "other.yml",
+		},
+		{
+			name:            "the audit's workflow holds a schedule trigger",
+			workflows:       map[string]string{filepath.Base(auditWorkflow): scheduledPublishing},
+			wantErrContains: filepath.Base(auditWorkflow),
+		},
+		{
+			name:      "the audit's workflow holds no schedule trigger",
+			workflows: map[string]string{filepath.Base(auditWorkflow): "on:\n  workflow_dispatch:\n" + publishing},
+		},
+		{
+			name:      "no workflows at all",
+			workflows: map[string]string{},
+		},
+		{
+			name:      "an unrelated workflow alone",
+			workflows: map[string]string{"ci.yml": unrelated},
+		},
+		{
+			name: "the audit's workflow with no schedule trigger and an unrelated workflow",
+			workflows: map[string]string{
+				filepath.Base(auditWorkflow): "on:\n  workflow_dispatch:\n" + publishing,
+				"ci.yml":                     unrelated,
+			},
+		},
 	}
 
-	if hasScheduleTrigger(workflow) {
-		t.Errorf("%s holds a schedule trigger, want none while %s is the literal %d: milestone 3 adds the trigger and changes this check to the cron's longest gap plus 7 days",
-			auditWorkflow, gapThresholdName, gapThresholdDays)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := checkAuditWorkflows(t, writeWorkflows(t, tc.workflows))
+
+			switch {
+			case tc.wantErrContains == "":
+				if err != nil {
+					t.Fatalf("checkAuditWorkflows() = %v, want no error", err)
+				}
+			case err == nil:
+				t.Fatalf("checkAuditWorkflows() = nil, want an error naming %s", tc.wantErrContains)
+			case !strings.Contains(err.Error(), tc.wantErrContains):
+				t.Errorf("checkAuditWorkflows() = %v, want an error naming the offending workflow %s", err, tc.wantErrContains)
+			}
+		})
+	}
+}
+
+// writeWorkflows writes the workflows into a fresh temporary directory and
+// returns it: the keys are the files' slash-separated names.
+func writeWorkflows(t *testing.T, files map[string]string) string {
+	t.Helper()
+
+	dir := t.TempDir()
+
+	for name, content := range files {
+		path := filepath.Join(dir, filepath.FromSlash(name))
+
+		if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
+			t.Fatalf("make %s: %v", filepath.Dir(path), err)
+		}
+
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatalf("write %s: %v", path, err)
+		}
 	}
 
-	// The audit's report is published by the audit's own workflow alone: one
-	// that ran the same program with no schedule behind it would publish a
-	// report the gap check never sees (ADR 0040).
-	for _, name := range workflowsRunningThePublishProgram(t, workflowsDir) {
-		t.Errorf(".github/workflows/%s runs the audit's publish program (it names %s), want %s alone to run it: a report published with no schedule behind it skips the gap check",
-			name, auditPublishProgram, auditWorkflow)
-	}
+	return dir
 }
 
 // workflowsRunningThePublishProgram returns, in walk order, the workflow files
@@ -280,19 +369,7 @@ func TestWorkflowsRunningThePublishProgram(t *testing.T) {
 		"nested/deep.yml":              "jobs:\n  publish:\n    steps:\n      - run: go run ./ci/auditpublish\n",
 	}
 
-	dir := t.TempDir()
-
-	for name, content := range files {
-		path := filepath.Join(dir, filepath.FromSlash(name))
-
-		if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
-			t.Fatalf("make %s: %v", filepath.Dir(path), err)
-		}
-
-		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
-			t.Fatalf("write %s: %v", path, err)
-		}
-	}
+	dir := writeWorkflows(t, files)
 
 	got := workflowsRunningThePublishProgram(t, dir)
 	slices.Sort(got)
