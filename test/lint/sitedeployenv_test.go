@@ -41,10 +41,14 @@ const siteDeployEnvOSMsg = "site-deploy-env: the site deploy program reads no en
 // siteDeployEnvEntries lists every entry of the group, named by its msg and the
 // package its pkg matches, with the exact set of names its pattern must refuse:
 // the broad os entry's eight names, os.LookupEnv alone in the entry
-// ci/sitedeploy/main.go's rule narrows on, and every use of package os/exec in
+// ci/sitedeploy/main.go's rule narrows on, and the uses of package os/exec in
 // the entry livepage_test.go's rule narrows on. That entry's pattern admits the
-// whole package as ^exec\.; four of its names pin that, and a name outside
-// package os/exec may not join it.
+// whole package as ^exec\., which its six names pin in more than the four the
+// test itself uses (exec.Command, exec.CommandContext, exec.Cmd, exec.LookPath):
+// exec.ErrNotFound, exec.ExitError and exec.Error are values of the package no
+// process start needs, and exec.Cmd.Run is a method of one of its types, so a
+// pattern narrowed to those four no longer passes; a name outside package os/exec
+// may not join it.
 var siteDeployEnvEntries = []forbidGroupEntry{
 	{
 		msg: siteDeployEnvOSMsg,
@@ -75,6 +79,10 @@ var siteDeployEnvEntries = []forbidGroupEntry{
 			{"os/exec", "exec.CommandContext"},
 			{"os/exec", "exec.Cmd"},
 			{"os/exec", "exec.LookPath"},
+			{"os/exec", "exec.ErrNotFound"},
+			{"os/exec", "exec.ExitError"},
+			{"os/exec", "exec.Error"},
+			{"os/exec", "exec.Cmd.Run"},
 		},
 	},
 }

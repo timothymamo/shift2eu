@@ -134,12 +134,16 @@ func checkForbidigoGroupPatterns(t *testing.T, tag string, refused []forbidGroup
 	}
 }
 
-// forbidGroupEntry is one entry of a group whose linters.exclusions.rules never
-// narrow on an entry's msg, named by that msg and the package path its pkg
-// matches, with the names its pattern must refuse. The msg alone names no entry:
-// composition-root-env's entry for os.Getenv and its entry for syscall.Getenv
-// carry one msg and differ in their pkg, which is why the pkg is part of the
-// name.
+// forbidGroupEntry is one entry of a forbidigo group, named by its msg and the
+// package path its pkg matches, with the names its pattern must refuse. The msg
+// alone names no entry: composition-root-env's entry for os.Getenv and its entry
+// for syscall.Getenv carry one msg and differ in their pkg, which is why the pkg
+// is part of the name. A group whose linters.exclusions.rules narrow on two of
+// its entries' msgs (site-deploy-env: os.LookupEnv and package os/exec) is pinned
+// this way too, as sitedeployenv_test.go does: the rules themselves are pinned by
+// TestForbidigoExclusionsDropOneGroup, and the exact set of names each of those
+// two entries must refuse is pinned here, so a pattern narrowed to the names one
+// file's code happens to use still fails.
 type forbidGroupEntry struct {
 	msg, pkg string
 	refuses  []rootName
