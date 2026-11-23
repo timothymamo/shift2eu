@@ -1376,6 +1376,83 @@ func TestCIImageJobIsTheReleaseDryRun(t *testing.T) {
 	}
 }
 
+// apacheNotice is the NOTICE Apache-2.0 section 4(d) requires a release to ship
+// with the work: who holds the copyright, and that the product includes
+// software developed as shift2eu (issue #493).
+const apacheNotice = `shift2eu
+Copyright 2026 Timothy Mamo
+
+This product includes software developed as shift2eu
+(https://github.com/timothymamo/shift2eu).
+`
+
+// TestTheProjectIsApacheLicensed pins issue #493: the project is licensed under
+// the Apache License 2.0, and says so where the release and its image say it.
+// The root LICENSE starts with the license's own header and names MIT nowhere,
+// so the switch is no rename over the old text; the root NOTICE holds exactly
+// the attributions Apache-2.0 section 4(d) asks a work to carry, with its
+// trailing newline; and the image's org.opencontainers.image.licenses label
+// says Apache-2.0 too, so the image and the archive it ships beside tell a
+// reader the same thing.
+func TestTheProjectIsApacheLicensed(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		// file is the repository file the case reads.
+		file string
+		// exact, when set, is the whole file the case wants, its trailing
+		// newline included.
+		exact string
+		// holds are the substrings the file must hold.
+		holds []string
+		// absent are the substrings the file must not hold.
+		absent []string
+	}{
+		{
+			name:  "the root NOTICE",
+			file:  "NOTICE",
+			exact: apacheNotice,
+		},
+		{
+			name:   "the root LICENSE",
+			file:   "LICENSE",
+			holds:  []string{"Apache License", "Version 2.0, January 2004"},
+			absent: []string{"MIT License"},
+		},
+		{
+			name:  "the image's license label",
+			file:  "Dockerfile",
+			holds: []string{`org.opencontainers.image.licenses="Apache-2.0"`},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := string(readRepositoryFile(t, tc.file))
+
+			if tc.exact != "" {
+				if diff := cmp.Diff(tc.exact, got); diff != "" {
+					t.Errorf("%s mismatch (-want +got):\n%s", tc.file, diff)
+				}
+			}
+
+			for _, want := range tc.holds {
+				if !strings.Contains(got, want) {
+					t.Errorf("%s does not hold %q: want the project licensed under Apache-2.0 (issue #493)", tc.file, want)
+				}
+			}
+
+			for _, unwanted := range tc.absent {
+				if strings.Contains(got, unwanted) {
+					t.Errorf("%s holds %q: want the project licensed under Apache-2.0, not MIT (issue #493)", tc.file, unwanted)
+				}
+			}
+		})
+	}
+}
+
 // repositoryRoot returns the repository root as an absolute path, for the calls
 // that run go list in it.
 func repositoryRoot(t *testing.T) string {

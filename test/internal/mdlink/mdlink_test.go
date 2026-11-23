@@ -26,7 +26,7 @@ func TestCheck(t *testing.T) {
 					"## A `b`: c!\n\n![logo](docs/assets/logo.png)\n"),
 				"docs/guide/install.md":  file("# Install\n\n## Get the binaries\n\nBack to [the start](../../README.md#title).\n"),
 				"internal/schema/a.json": file("{}"),
-				"LICENSE":                file("MIT"),
+				"LICENSE":                file("Apache License 2.0"),
 				"docs/assets/logo.png":   file("png"),
 			},
 			check: []string{"README.md", "docs/guide/install.md"},

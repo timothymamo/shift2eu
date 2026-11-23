@@ -29,10 +29,11 @@ archives:
 // cliArchive is the archive entry of the CLI's build: its own id, the build
 // it holds (shift2eu alone), the name the CLI's archives have always had,
 // goreleaser's default template written out, tar.gz on every platform, zip on
-// Windows, and the files the archive ships beside the binary (LICENSE,
-// README.md and SECURITY.md, with the pages under docs/ that README.md links
-// to, issue #149, and the sample inventories under examples/ that
-// docs/guide/try-it.md runs the CLI on, issue #188).
+// Windows, and the files the archive ships beside the binary (LICENSE and the
+// NOTICE it carries beside the Apache-2.0 license, issue #493, README.md and
+// SECURITY.md, with the pages under docs/ that README.md links to, issue #149,
+// and the sample inventories under examples/ that docs/guide/try-it.md runs
+// the CLI on, issue #188).
 const cliArchive = `  - id: shift2eu
     ids: [shift2eu]
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
@@ -42,6 +43,7 @@ const cliArchive = `  - id: shift2eu
         formats: [zip]
     files:
       - LICENSE
+      - NOTICE
       - README.md
       - SECURITY.md
       - docs/*.md
@@ -64,6 +66,7 @@ const serverArchive = `  - id: shift2eu-server
         formats: [zip]
     files:
       - LICENSE
+      - NOTICE
       - README.md
       - SECURITY.md
       - docs/*.md
@@ -311,6 +314,17 @@ func TestGoReleaserArchives(t *testing.T) {
 				"",
 			),
 			wantIn: "LICENSE",
+		},
+		{
+			// Apache-2.0 section 4(d) requires the NOTICE to travel with
+			// the work: a user who unpacks a release reads the attributions
+			// it carries without a clone (issue #493).
+			name: "an archive that ships no NOTICE",
+			goreleaser: goreleaserArchives(
+				mutate(t, cliArchive, "      - NOTICE\n", ""),
+				"",
+			),
+			wantIn: "NOTICE",
 		},
 		{
 			name: "an archive that ships no README.md",
