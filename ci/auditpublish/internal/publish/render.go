@@ -38,6 +38,7 @@ const (
 	noPublicFindings    = "No public findings."
 	noneText            = "None."
 	firstReport         = "First report."
+	dependenciesPrefix  = "Dependencies changed since the last audit:"
 )
 
 // sectionHeadings are the report's ## sections, in the template's order.
@@ -173,9 +174,12 @@ func (r *reportWriter) scope(p plan) {
 	r.section("Scope")
 	r.line("- Commit: " + p.result.Commit)
 
+	// The digest is the model's text, however tight its pattern: it reaches
+	// the report as a code span, and the scanner reads it as a model field, so
+	// the hex rule refuses a digest that decodes to printable ASCII.
 	image := "image not pulled"
 	if p.result.ImageDigest != "" {
-		image = "image " + p.result.ImageDigest
+		image = "image " + r.model(CodeSpan(p.result.ImageDigest))
 	}
 
 	r.line("- Release: " + p.result.ReleaseTag + ", " + image)
@@ -263,9 +267,9 @@ func (r *reportWriter) changes(p plan) {
 	r.line("")
 
 	if len(p.result.Changes.Dependencies) == 0 {
-		r.line("Dependencies changed since the last audit: none.")
+		r.line(dependenciesPrefix + " none.")
 	} else {
-		r.line("Dependencies changed since the last audit:")
+		r.line(dependenciesPrefix)
 		r.line("")
 
 		for _, d := range p.result.Changes.Dependencies {

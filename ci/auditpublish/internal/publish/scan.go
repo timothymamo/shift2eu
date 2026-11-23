@@ -7,13 +7,15 @@ import (
 	"fmt"
 	"math"
 	"regexp"
+	"strings"
 )
 
 // The encoded-run refusal's thresholds (ADR 0040, "The secret and
 // encoded-token scan").
 const (
-	// EncodedRunMinLength is L: the base64 length of a 128-bit secret, longer
-	// than a fingerprint's 15 characters.
+	// EncodedRunMinLength is L: the padded standard base64 length of a
+	// 128-bit secret, longer than a fingerprint's 15 characters. Raw or URL
+	// base64 of 16 bytes is 22 characters and stays under it.
 	EncodedRunMinLength = 24
 
 	// EncodedRunMinEntropy is N, in bits per character: above hex's 4.0, so
@@ -32,8 +34,9 @@ var tokenPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`sk-ant-[A-Za-z0-9_-]{20,}`),
 	// The App's PEM key, and any other.
 	regexp.MustCompile(`-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----`),
-	// GitHub tokens.
-	regexp.MustCompile(`\bgh[pousr]_[A-Za-z0-9]{36,}`),
+	// GitHub tokens, wherever they start: no \b, so a letter before the
+	// prefix hides nothing.
+	regexp.MustCompile(`gh[pousr]_[A-Za-z0-9]{36,}`),
 	regexp.MustCompile(`github_pat_[A-Za-z0-9_]{22,}`),
 	// The model and publish keys' private halves.
 	regexp.MustCompile(`(?i)AGE-SECRET-KEY-1[0-9A-Z]{58}`),
@@ -54,7 +57,7 @@ func ScanPublic(body string, modelFields []string, key FingerprintKey) error {
 			return err
 		}
 
-		if highEntropyRun(field) {
+		if encodedRun(field) {
 			return fmt.Errorf("public text: a model field holds an encoded run: %w", ErrScanRefused)
 		}
 	}
@@ -278,20 +281,115 @@ func isHexByte(c byte) bool {
 	return c >= '0' && c <= '9' || c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F'
 }
 
-// isEncodedRunByte is a byte of the encoded-run refusal's runs: every other
-// byte, / . \ and | included, ends a run, so a path is many short runs.
-func isEncodedRunByte(c byte) bool {
+// isPlainRunByte is a byte of the plain run class, [A-Za-z0-9+=_-]: every
+// other byte, / . \ and | included, ends a run, so a path is many short runs.
+func isPlainRunByte(c byte) bool {
 	return isAlphanumeric(c) || c == '+' || c == '=' || c == '_' || c == '-'
 }
 
-// highEntropyRun reports whether a model field holds a run of at least
-// EncodedRunMinLength bytes whose Shannon entropy over its own byte
+// isSlashRunByte is a byte of the slash run class, [A-Za-z0-9+/=_-]: the plain
+// class and /, so standard base64 is one run.
+func isSlashRunByte(c byte) bool {
+	return isPlainRunByte(c) || c == '/'
+}
+
+// trailingPunctuation is what a sentence or a code span puts after a word;
+// encodedRun trims it, backticks first, before it looks for a dot.
+const trailingPunctuation = ".,;:!?)]}'\""
+
+// encodedRun reports whether a model field holds an encoded run (ADR 0040,
+// "The encoded-run refusal"):
+//
+//   - the plain class: a run of [A-Za-z0-9+=_-] of at least
+//     EncodedRunMinLength bytes and EncodedRunMinEntropy bits per character;
+//   - the slash class: the same measure of a run of [A-Za-z0-9+/=_-] inside a
+//     word, a maximal run of non-whitespace with its trailing punctuation
+//     trimmed, that holds no dot, so a path, which holds one, is measured by
+//     the plain class alone;
+//   - the hex rule: a maximal hex run of at least EncodedRunMinLength bytes
+//     that is neither 40 nor 64 bytes long, or that is and decodes to nothing
+//     but printable ASCII.
+func encodedRun(field string) bool {
+	if highEntropyRun(field, isPlainRunByte) || suspectHexRun(field) {
+		return true
+	}
+
+	for _, word := range strings.Fields(field) {
+		word = trimTrailing(word)
+
+		if !strings.Contains(word, ".") && highEntropyRun(word, isSlashRunByte) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// trimTrailing trims a word's trailing backticks and then its trailing
+// punctuation, until neither is left.
+func trimTrailing(word string) string {
+	for {
+		trimmed := strings.TrimRight(strings.TrimRight(word, "`"), trailingPunctuation)
+		if trimmed == word {
+			return word
+		}
+
+		word = trimmed
+	}
+}
+
+// highEntropyRun reports whether s holds a maximal run of bytes in accepts of
+// at least EncodedRunMinLength bytes whose Shannon entropy over its own byte
 // frequencies is at least EncodedRunMinEntropy bits per character.
-func highEntropyRun(field string) bool {
+func highEntropyRun(s string, in func(byte) bool) bool {
+	for _, run := range runsOf(s, in, EncodedRunMinLength) {
+		if entropy(run) >= EncodedRunMinEntropy {
+			return true
+		}
+	}
+
+	return false
+}
+
+// suspectHexRun reports whether s holds a maximal hex run of at least
+// EncodedRunMinLength bytes that is no 40-byte SHA and no 64-byte digest, or
+// that is one but decodes to nothing but printable ASCII, 0x20 to 0x7e: a
+// real SHA or digest essentially never does, a token body written as hex does.
+func suspectHexRun(s string) bool {
+	for _, run := range runsOf(s, isHexByte, EncodedRunMinLength) {
+		if len(run) != 40 && len(run) != 64 {
+			return true
+		}
+
+		decoded, err := hex.DecodeString(run)
+		if err == nil && printableASCII(decoded) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// printableASCII reports whether every byte of b is 0x20 to 0x7e.
+func printableASCII(b []byte) bool {
+	for _, c := range b {
+		if c < 0x20 || c > 0x7e {
+			return false
+		}
+	}
+
+	return true
+}
+
+// runsOf returns the maximal runs of s's bytes that in accepts, of at least
+// minLength bytes.
+func runsOf(s string, in func(byte) bool, minLength int) []string {
+	var out []string
+
 	start := -1
 
-	for i := 0; i <= len(field); i++ {
-		if i < len(field) && isEncodedRunByte(field[i]) {
+	for i := 0; i <= len(s); i++ {
+		if i < len(s) && in(s[i]) {
 			if start < 0 {
 				start = i
 			}
@@ -299,14 +397,14 @@ func highEntropyRun(field string) bool {
 			continue
 		}
 
-		if start >= 0 && i-start >= EncodedRunMinLength && entropy(field[start:i]) >= EncodedRunMinEntropy {
-			return true
+		if start >= 0 && i-start >= minLength {
+			out = append(out, s[start:i])
 		}
 
 		start = -1
 	}
 
-	return false
+	return out
 }
 
 // entropy is the Shannon entropy of s over its own byte frequencies, in bits

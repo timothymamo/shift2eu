@@ -26,9 +26,10 @@ const (
 	jsonObject
 )
 
-// maxJSONDepth bounds the nesting the parser follows. The schema nests three
-// levels deep (the result, a list, a finding); anything deeper is refused
-// before the recursion could grow.
+// maxJSONDepth bounds the nesting the parser follows, in levels: the top value
+// is level 1, so a value at level 8 is parsed and one at level 9 is refused.
+// The schema nests three levels deep (the result, a list, a finding); anything
+// past the bound is refused before the recursion could grow.
 const maxJSONDepth = 8
 
 // jsonValue is one parsed JSON value.
@@ -92,7 +93,7 @@ func (p *jsonParser) skipSpace() {
 }
 
 func (p *jsonParser) value(depth int) (jsonValue, error) {
-	if depth > maxJSONDepth || p.pos >= len(p.data) {
+	if depth >= maxJSONDepth || p.pos >= len(p.data) {
 		return jsonValue{}, errJSONSyntax
 	}
 

@@ -8,7 +8,8 @@
 // category alone (Place), computes its fingerprint, plain for a public finding
 // and an HMAC with the fingerprint key for a private one, derives each public
 // finding's status and drops a recorded false positive from the previous
-// merged report, derives the per-check coverage from a fixed vocabulary,
+// merged report, keeps the public row of a finding that turns private,
+// derives the per-check coverage from a fixed vocabulary,
 // escapes every model-written text into a code span or a fenced code block,
 // renders the report and the fixed branch, pull request and commit templates,
 // flags a gap in the schedule against GapThresholdDays, scans every text it

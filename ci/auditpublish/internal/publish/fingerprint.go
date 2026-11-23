@@ -54,12 +54,18 @@ func PlainFingerprint(rule, file, sink string) Fingerprint {
 }
 
 // KeyedFingerprint returns the HMAC-SHA-256 fingerprint of a private finding,
-// which nobody without the key can test a guess against.
-func KeyedFingerprint(key FingerprintKey, rule, file, sink string) Fingerprint {
+// which nobody without the key can test a guess against. A key shorter than
+// 32 bytes, the zero FingerprintKey included, is ErrConfig: an HMAC under an
+// empty key is a digest anyone can compute.
+func KeyedFingerprint(key FingerprintKey, rule, file, sink string) (Fingerprint, error) {
+	if len(key.bytes) < minKeyBytes {
+		return "", fmt.Errorf("AUDIT_FINGERPRINT_KEY: not set: %w", ErrConfig)
+	}
+
 	mac := hmac.New(sha256.New, key.bytes)
 	mac.Write(fingerprintInput(rule, file, sink))
 
-	return toFingerprint(mac.Sum(nil))
+	return toFingerprint(mac.Sum(nil)), nil
 }
 
 // fingerprintInput is the digest's input: the versioned prefix, then rule,

@@ -1841,7 +1841,6 @@ linters:
             - crypto/sha256$
             - encoding/base64$
             - encoding/hex$
-            - encoding/json$
             - errors$
             - fmt$
             - math$
@@ -2493,6 +2492,15 @@ linters:
         linters:
           - gosec
         text: "^G306:"
+      # The audit publish core's scan tests (ADR 0040) hold invented base64
+      # secrets, in constants named for what they stand for, to prove the
+      # encoded-run refusal reads them, and G101 (hard-coded credentials)
+      # reads them as secrets. They are none. G101 is dropped in this one
+      # file only.
+      - path: ^ci/auditpublish/internal/publish/scan_test\.go$
+        linters:
+          - gosec
+        text: "^G101:"
       # domain-is-pure: the forbidigo group of that name holds for production
       # files under internal/domain/ only. These two rules drop its issues in
       # every other path and in every _test.go file. text has the form the

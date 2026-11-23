@@ -3,6 +3,7 @@ package publish
 import (
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -12,6 +13,9 @@ import (
 // findings table, its needs-investigation list and its False positives, by
 // their fingerprints and their fixed vocabulary cells only.
 type Previous struct {
+	// parsed is set by ParsePreviousReport alone: RenderReport refuses a
+	// Previous without it, the zero one and one built by hand.
+	parsed         bool
 	name           string
 	date           time.Time
 	findings       []previousRow
@@ -19,12 +23,17 @@ type Previous struct {
 	falsePositives []falsePositive
 }
 
-// previousRow is one row of the previous findings table.
+// previousRow is one row of the previous findings table. A new or open row
+// also keeps its three model cells, byte for byte as escapedCell accepted
+// them, so a finding that turns private can keep its public row.
 type previousRow struct {
 	fingerprint Fingerprint
 	severity    string
 	category    string
 	status      string
+	location    string
+	scenario    string
+	fix         string
 }
 
 // reportNamePattern is the name of a report a run reads: its UTC date and its
@@ -95,12 +104,14 @@ func previousError(rule string) error {
 }
 
 // ParsePreviousReport reads the previous merged report, name being its file
-// name in docs/security/audits. It reads the report only exactly as
-// RenderReport writes one: the title, the eight sections in order, the
-// findings and needs-investigation tables, the private-findings line in the
-// summary and in its section, and the False positives table. Anything else,
-// and a report that contradicts itself, is an error wrapping
-// ErrPreviousReport.
+// name in docs/security/audits. It checks exactly these parts against what
+// RenderReport writes: the title, the eight sections in order and no other
+// heading, the findings and needs-investigation tables, the private-findings
+// line in the summary and in its section, the False positives table, and, in
+// a first report, First report. as the Changes section's only line before the
+// dependencies' line, every status new and every false positive one of its
+// own findings. It does not check the other sections' text. A part that
+// breaks its rule is an error wrapping ErrPreviousReport.
 func ParsePreviousReport(name string, data []byte) (Previous, error) {
 	m := reportNamePattern.FindStringSubmatch(name)
 	if m == nil {
@@ -144,6 +155,8 @@ func ParsePreviousReport(name string, data []byte) (Previous, error) {
 	if err := prev.consistent(sections["Changes since the last audit"]); err != nil {
 		return Previous{}, err
 	}
+
+	prev.parsed = true
 
 	return prev, nil
 }
@@ -292,6 +305,8 @@ func readFindingsTable(lines []string, empty string, allowFixed bool) ([]previou
 			if !escapedCell(cells[4]) || !escapedCell(cells[5]) || !escapedCell(cells[6]) {
 				return nil, previousError("a model cell that is no table cell")
 			}
+
+			row.location, row.scenario, row.fix = cells[4], cells[5], cells[6]
 		case statusFixed:
 			if !allowFixed || cells[4] != noCell || cells[5] != noCell || cells[6] != noCell {
 				return nil, previousError("not a fixed row")
@@ -376,17 +391,19 @@ func (p *Previous) readFalsePositives(section []string) error {
 // first report, the one whose Changes section reads First report., has no
 // previous report to carry a row from: every status in it is new, and every
 // False positives row is a finding of its own tables.
+//
+// First report. is then the section's only line before the dependencies'
+// line, as RenderReport writes it: anywhere else, or beside other lines, it is
+// refused, so a report cannot both be a first one and list changes.
 func (p *Previous) consistent(changes []string) error {
-	first := false
+	lines := nonBlank(changes)
 
-	for _, line := range changes {
-		if line == firstReport {
-			first = true
-		}
+	if !slices.Contains(lines, firstReport) {
+		return nil
 	}
 
-	if !first {
-		return nil
+	if lines[0] != firstReport || len(lines) < 2 || !strings.HasPrefix(lines[1], dependenciesPrefix) {
+		return previousError("First report. is not the Changes section's only line before the dependencies")
 	}
 
 	listed := map[Fingerprint]bool{}
