@@ -40,7 +40,7 @@ func newFixtureGitleaks(t *testing.T, fake *FakeGitleaks) *github.Gitleaks {
 }
 
 // publishRoutes returns the answers of a whole publish run: the release, the
-// issues' first page and the report's writes.
+// issues' first page, the issue one is filed as and the report's writes.
 func publishRoutes(issues ...map[string]any) []Route {
 	list := make([]any, 0, len(issues))
 	for _, issue := range issues {
@@ -50,6 +50,7 @@ func publishRoutes(issues ...map[string]any) []Route {
 	routes := []Route{
 		{Method: "GET", Endpoint: fixtureReleaseEndpoint, Status: 200, Body: map[string]string{"tag_name": fixtureTag}},
 		{Method: "GET", Endpoint: fixtureIssuesQuery + "page=1", Status: 200, Body: list},
+		{Method: "POST", Endpoint: fixtureIssuesEndpoint, Status: 201, Body: map[string]any{"number": 1}},
 	}
 
 	return append(routes, reportRoutes()...)

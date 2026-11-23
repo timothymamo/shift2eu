@@ -294,12 +294,14 @@ func fixturePrevious(t *testing.T, result publish.Result, private publish.Privat
 	return &parsed
 }
 
-// writeFixtureReport writes the rendered report under dir, as the checkout's
-// docs/security/audits holds it, and returns its path.
+// writeFixtureReport writes the rendered report into dir, which is the
+// checkout's docs/security/audits itself, under the report's own file name, as
+// the checkout holds it, and returns its path. The rendered path is relative to
+// the checkout, so only its base name places it under dir.
 func writeFixtureReport(t *testing.T, dir string, rendered publish.Rendered) string {
 	t.Helper()
 
-	path := filepath.Join(dir, filepath.FromSlash(rendered.Path))
+	path := filepath.Join(dir, filepath.Base(filepath.FromSlash(rendered.Path)))
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		t.Fatalf("make the reports directory: %v", err)
 	}

@@ -453,8 +453,11 @@ func TestPublishReportStopsAtTheFirstRefusedWrite(t *testing.T) {
 func TestPublishReportNeverRetriesAWrite(t *testing.T) {
 	t.Parallel()
 
+	// callTimeout is generous for a race-built fake gh, which is slow to start
+	// under the detector; routeDelay is well past it, so the write the call gives
+	// up on is one the fake has already recorded.
 	const (
-		callTimeout = 100 * time.Millisecond
+		callTimeout = 2 * time.Second
 		routeDelay  = 10 * time.Second
 	)
 
