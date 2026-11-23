@@ -358,12 +358,15 @@ text is taken, and the reason given.
 **The result schema.** The model writes one JSON file, `result.json` in the work area (the model job's
 task names that path, as the `security-audit-run` skill asks; the skill's "the name and the schema the
 task gives"). The core's `ParseResult(data []byte, commit string) (Result, error)` accepts it only if all
-of this holds, and otherwise returns an error wrapping `ErrResultInvalid`:
+of this holds, and otherwise returns an error wrapping `ErrResultInvalid` (a `commit` argument that is
+not 40 lowercase hex is the caller's, `ErrConfig`):
 
 - at most `MaxResultBytes` (4 MiB) in all, one JSON object and nothing after it;
-- no unknown field, no duplicate key at any level (encoding/json keeps the last of two keys silently, so
-  a second `severity` could hide behind the first; the core walks the tokens to refuse it), every field
-  present, no `null`, every value of its type;
+- no unknown field, no duplicate key at any level, every field present, no `null`, every value of its
+  type. encoding/json keeps the last of two keys silently, so a second `severity` could hide behind the
+  first, and it turns invalid UTF-8 and a lone surrogate escape into U+FFFD before anything sees them,
+  so the core reads the result with a strict JSON parser of its own that keeps every member in order and
+  marks an invalid string, and nests at most 8 levels;
 - every string valid UTF-8, its cap counted in **bytes**, and no C0 or C1 control character, DEL, U+2028,
   U+2029, bidirectional control (U+061C, U+200E, U+200F, U+202A to U+202E, U+2066 to U+2069) or
   zero-width character (U+200B to U+200D, U+2060, U+FEFF); a field marked *multi-line* below may hold LF
@@ -413,6 +416,16 @@ stop the whole run; it is never rendered (a private finding's advisory reads "un
 model summary and no private-notes field: the script writes the summary from its own counts, so a model
 paragraph cannot hint at a private finding there, and a field the public never sees is not needed.
 
+The accepted result is a `Result{Schema, Commit, ReleaseTag, ImageDigest, Tools []Tool, Checks []Check,
+Findings []Finding, Changes, Limits []string}`, with `Tool{Name, Version}`, `Check{ID, Ran, NotRun}`,
+`Changes{Dependencies []string, Narrative}` and `Finding{Check, Rule, File, Line, Sink, Severity,
+Confirmed, Category, Private, Scenario, Evidence, Fix, Dismissal}` (`Private` is the schema's
+`private`). The value rules also run in `RenderReport`, so a `Result` a caller builds by hand reaches no
+report that `ParseResult` would have refused. Two findings with the same rule, file and sink are
+accepted by `ParseResult` (the finding limit is the bound) but refused by `RenderReport`
+(`ErrResultInvalid`): one fingerprint is one finding, and two rows of one fingerprint would make the next
+run's previous report unreadable.
+
 **Escaping.** Model text reaches Markdown only inside a **code span** or a **fenced code block**, never
 as Markdown of its own. Backslash escapes would not do: GitHub links bare URLs, `www.` hosts, e-mail
 addresses, `@mentions` and `#123` references in text it has already unescaped, and a mention or a
@@ -429,10 +442,15 @@ GitHub renders no HTML, image, link, autolink, mention, reference, entity or emp
 - `CodeBlock(s string) string`, multi-line (an advisory's or an issue's body): CR LF and lone CR become
   LF; the fence is a run of backticks at least three long and one longer than the longest run of
   backticks in the text, with the info string `text`; the text follows on its own lines, ending with
-  one LF, then the fence. No line of the text can close it.
+  one LF (a text that already ends in LF gets no second one), then the fence. No line of the text can
+  close it.
 
 Every other byte of a published text is the script's own: headings, labels, the fixed vocabularies,
-dates, the run's URL, the SHA, the tag, the counts and the fingerprints. The control and invisible
+dates, the run's URL, the SHA, the tag, the image digest, the counts and the fingerprints. A finding's
+location (`file:line`) is model text although the schema narrows its bytes: a file such as
+`www.example.com/x` or `a@example.com` would be a link outside a code span, so the location is a
+`TableCell` like the scenario and the fix. A tool's version is a `CodeSpan`; its name, from the closed
+list, is the script's. The control and invisible
 characters above never reach these functions, because `ParseResult` refuses them. An issue's title and an
 advisory's summary are fixed templates with no model text (the fourth pull request builds them):
 `Security audit finding fp-…: <category> (<severity>)` for an issue, and `Audit finding fp-…
@@ -451,8 +469,9 @@ severity, confirmation, category and the model's flag alone, and the first match
 | 6 | confirmed, low or informational | `PlacementPublic`: the findings table; after the merge, one `security` issue |
 | 7 | not confirmed, low or informational | `PlacementInvestigation`: the "needs investigation" list, no issue |
 
-`Placement.Private() bool` is true for the three advisory placements. Nothing a finding holds can move it
-up this table: the model's flag is read only to make a finding private (row 5).
+`Placement.Private() bool` is true for the three advisory placements, and for any value that is none of
+the five: the zero `Placement` is none of them, so a placement nobody set fails closed. Nothing a finding
+holds can move it up this table: the model's flag is read only to make a finding private (row 5).
 
 **Fingerprints.** `Fingerprint` is `fp-` and 12 lowercase hex characters: the first 6 bytes of a digest of
 the input `"shift2eu-audit-fingerprint/v1" NUL rule NUL file NUL sink` (NUL is the byte 0x00, which none
@@ -461,27 +480,48 @@ the input start a new series on purpose). `PlainFingerprint(rule, file, sink str
 SHA-256, for a public finding and for every false-positive match. `KeyedFingerprint(key FingerprintKey,
 rule, file, sink string) Fingerprint` uses HMAC-SHA-256 with `AUDIT_FINGERPRINT_KEY`, for a private finding.
 The key is the secret's value as bytes, unchanged; `NewFingerprintKey(b []byte) (FingerprintKey, error)`
-refuses fewer than 32 bytes (`ErrConfig`), the runbook's minimum. A private finding is never given a
+refuses fewer than 32 bytes (`ErrConfig`), the runbook's minimum; a `FingerprintKey` formats as a
+placeholder, never as its bytes, and the scans refuse a key that was never set (`ErrConfig`), since an
+empty key would match every text. A private finding is never given a
 plain fingerprint anywhere public, so nobody can test a guess at its rule, file and sink against the
 committed script. A finding's line is not an input: a finding keeps its fingerprint when code above it
 moves.
 
 **Status and false positives**, derived from the **previous report**: the newest file in the checkout's
 `docs/security/audits/` whose name matches `^[0-9]{4}-[0-9]{2}-[0-9]{2}-[1-9][0-9]{0,19}\.md$`, by date
-and then run ID as a number. The checkout is `github.sha` on `main`, so every report read is one the
+and then run ID as a number: `NewestReport(names []string) (string, bool)` picks it from the directory's
+listing, comparing the dates as the name's digits (no calendar check there; `ParsePreviousReport` refuses
+a name whose date is no real date) and the run IDs as numbers, and returns false when no name matches.
+The checkout is `github.sha` on `main`, so every report read is one the
 maintainer merged. `ParsePreviousReport(name string, data []byte) (Previous, error)` reads its findings
 table, its needs-investigation list and its false positives by their fingerprint cells and their fixed
 vocabulary cells only, and returns an error wrapping `ErrPreviousReport` on anything it cannot read
-exactly as the core renders it; with no such file, the run is the first. For the kept public findings
-(placements 6 and 7):
+exactly as the core renders it; with no such file, the run is the first. Exactly means: the title of the
+name's date; the eight `##` sections in order and no other heading; each table's exact header and
+delimiter; seven cells per findings row, a fingerprint, a public severity, a public category, a status,
+and three cells that are each exactly what `TableCell` writes (or `—` three times on a `fixed` row); one
+private-findings line in the section and the same one in the Summary; two cells per False positives row,
+the reason exactly a `TableCell`, which is then carried forward byte for byte; no fingerprint twice. A
+report that contradicts itself is refused too: a first report (its Changes read "First report.") holds no
+status but `new` and no False positives row that is none of its own findings. `Previous` is opaque; a
+`*Previous` that `ParsePreviousReport` did not return is refused by `RenderReport` (`ErrPreviousReport`).
+For the kept public findings (placements 6 and 7):
 
 - not in the previous report: `new`;
 - in its findings table as `new` or `open`: `open`, and in Changes since the last audit "still open";
 - in its findings table as `fixed`: `open`, and "regressed";
+- placed public and only in the previous needs-investigation list: `open`, and "still open";
 - in the previous findings table as `new` or `open` and not found in this run: a row `fixed` in this
-  report's table (fingerprint, severity, category and status; the other cells `—`), and "fixed";
+  report's table (fingerprint, severity, category and status; the other cells `—`), and "fixed". A
+  finding this run found is no fixed one, whatever happened to it: a finding placed private this time,
+  or dropped as a false positive, gets no `fixed` row. One the previous report listed and also
+  dismissed, which this run does not find at all, does get one;
 - a needs-investigation entry is `new`, or `open` when either section of the previous report holds its
   fingerprint; it gets no `fixed` row and no Changes line.
+
+A Changes line reads `- fp-…: still open` (or `regressed`, `fixed`), sorted by fingerprint; a run with a
+previous report and no such line says "No public finding changed its status.", after the line naming
+the previous report's file.
 
 A finding is **dropped** only when its placement is `PlacementPublic` or `PlacementInvestigation` and its
 plain fingerprint equals, byte for byte, a fingerprint in the previous report's False positives section.
@@ -506,6 +546,11 @@ entry point; the core adds:
   padded and raw, dropping one trailing character when the length leaves 1 over 4; every maximal run of
   at least 16 hex characters is decoded, at both even offsets when its length is odd. The decoded bytes
   are matched against the same patterns, and searched once more the same way (a token encoded twice).
+  The core reads the two base64 alphabets' runs separately (a `-` next to a `+` would otherwise make a
+  run neither alphabet decodes), splits a run after each group of `=` (two encodings written one after
+  the other), and decodes it at each of the four alignments, so an encoding that starts inside a longer
+  run is found as well; a hex run is decoded at both offsets whatever its length. The DER start is
+  matched over bytes, not by a regular expression, which reads runes.
 - **The encoded-run refusal**, for **public text only** (the report and the pull request's and issues'
   texts) and only over **model-written fields after escaping**: the renderer returns, with each text,
   the escaped fragments it built from the result. A run is a maximal sequence of the bytes
@@ -527,8 +572,10 @@ entry point; the core adds:
   PoCs and crash inputs, which are often base64.
 - `ScanPublic(body string, modelFields []string, key FingerprintKey) error` and `ScanAdvisory(body
   string, key FingerprintKey) error` return an error wrapping `ErrScanRefused` on any hit, which names no
-  text. **On a hit nothing is published**, not the report, not an advisory, not an issue, and the summary
-  is exactly `publish refused: see runbook`.
+  text. `ScanPublic` applies the patterns and the encoded-token check to the body and to each model
+  field too, so a field is scanned even where the caller's body leaves it out. **On a hit nothing is
+  published**, not the report, not an advisory, not an issue, and the summary is exactly `publish
+  refused: see runbook`.
 - **Residual risk, encoded tokens.** The scan finds a token in the clear, in base64 or hex, or encoded
   twice that way, and refuses high-entropy runs in public text. It does not find a token split across
   fields or runs (a separator every 23 characters defeats the refusal), encoded any other way (base32,
@@ -573,26 +620,36 @@ A check reads `findings` when it ran and a kept finding with that `check` is pla
 
 A finding whose `check` did not run is refused with the result (`ErrResultInvalid`).
 
-**Rendering.** `RenderReport(in ReportInput) (Rendered, error)`, with `Rendered{Path, Body string;
-ModelFields []string}`, writes `docs/security/audits/YYYY-MM-DD-<run_id>.md` (the run's UTC date, its run
-ID). Its first line is the one title, `# Security audit report, YYYY-MM-DD`, and its sections are the
+**Rendering.** `RenderReport(in ReportInput) (Rendered, error)`, with `ReportInput{Result Result; Run
+Run; Private PrivateState; Previous *Previous}` (`Previous` nil for the first report) and
+`Rendered{Path, Body string; ModelFields []string}`, writes `docs/security/audits/YYYY-MM-DD-<run_id>.md`
+(the run's UTC date, its run ID). `ModelFields` lists every escaped fragment of model text the body holds
+(locations, scenarios, fixes, reasons, tool versions, dependencies, the narrative, limits), never a value
+the script inserts and never a finding's evidence. `RenderReport` checks the result's values and the run
+as `ParseResult` and `NewRun` do. Its first line is the one title, `# Security audit report, YYYY-MM-DD`, and its sections are the
 template's, in its order, each a `##` heading: Summary, Scope, Findings (with `### Needs
 investigation`), Private findings, Coverage, Changes since the last audit, False positives, Limits. Its
 only links are `[Security](../README.md)` in the summary and the run's URL in the scope, so
 `test/docs`' title and link checks pass on it; model text is in code spans, which those checks skip.
 
-- **Summary**, fixed text: the commit, the tag, the public total by severity and the needs-investigation
-  count, and the private-findings line.
-- **Scope**: Commit, Release (tag and image digest), Tool versions (one item per tool), Model
-  (`claude-fable-5-2`, effort high, the core's constants, not the result's), Run (URL and date).
+- **Summary**, fixed text: a sentence naming the commit and the tag, with the `[Security](../README.md)`
+  link, then the items `- Public findings: <total> (<n> <severity>, ...)` (each severity with a kept
+  finding, most severe first; no parenthesis at 0), `- Listed under needs investigation: <n>` and `- `
+  and the private-findings line. The tests pin the content, not this wording.
+- **Scope**: Commit, Release (tag and image digest, or "image not pulled"), Tool versions (one item per
+  tool: its name and its version as a `CodeSpan`), Model (`ModelName` `claude-fable-5-2`, `ModelEffort`
+  high: the core's constants, not the result's), Run (the run's URL as a link, and the date).
 - **Findings**: the table `Fingerprint | Severity | Category | Status | Location | Scenario | Recommended
-  fix`, sorted by severity then fingerprint, the location `file:line` (or `file` when the line is 0) and
-  every model cell a `TableCell`; "No public findings." when empty. **Needs investigation**: the same
-  columns, "None." when empty.
+  fix`, sorted by severity, most severe first (critical, high, medium, low, informational, the schema
+  table's order; only the last two can reach it), then by fingerprint, `fixed` rows sorted in with the
+  others; the location `file:line` (or `file` when the line is 0) and every model cell a `TableCell`;
+  "No public findings." when empty. **Needs investigation**: the same columns and order, "None." when
+  empty.
 - **Private findings**: exactly one of `private findings: handled privately`, `private findings: not
   filed` or `private findings: none`, from `PrivateState` (`PrivateNone`, `PrivateHandled`,
   `PrivateNotFiled`), which the entry point sets after filing; `PrivateNone` with any private placement,
-  or another state with none, is an error.
+  another state with none, or a value that is none of the three is an error wrapping `ErrConfig`, from
+  `RenderReport` and `RenderTemplates` alike.
 - **Coverage**: the table `Check | Coverage`, every check id in the order above.
 - **Changes since the last audit**: the per-fingerprint lines above, then the gap line when there is a
   gap, then the dependencies and the narrative as `CodeSpan`s; "First report." when there is no
@@ -600,8 +657,11 @@ only links are `[Security](../README.md)` in the summary and the run's URL in th
 - **False positives**: the table `Fingerprint | Reason`, "None." when empty. **Limits**: one item per
   limit, "None." when empty.
 
-The fixed templates, filled only with the run's UTC date, the run ID, the `main` SHA, the release tag,
-the public total, the private-findings line and the run's URL, never with model text:
+The fixed templates, `RenderTemplates(in ReportInput) (Templates, error)` with `Templates{Branch,
+PRTitle, PRBody, CommitMessage}`, derived from the same input as the report so their total is the
+report's, filled only with the run's UTC date, the run ID, the `main` SHA, the release tag, the public
+total, the private-findings line and the run's URL, never with model text (the body's items are plain
+lines, not a list, and neither the body nor the commit message ends with a newline):
 
 - branch `security-audit/YYYY-MM-DD-<run_id>`;
 - pull request title `Security audit report, YYYY-MM-DD (run <run_id>)`;
@@ -632,7 +692,14 @@ the `release-tag` and `dispatch` skills.
 **Exit codes and the summary line.** The entry point prints exactly one line, to standard output and to
 the step summary, chosen by `OutcomeOf(err error) Outcome` from the error's class, never from its text,
 and exits with `Outcome.Code()`; `Outcome.Summary()` holds no finding's text, no count of private
-findings, no API response and no error message:
+findings, no API response and no error message. `OutcomeOf(err)` cannot know a published run's counts,
+so the entry point's success path is `OutcomeOf(nil).WithCounts(total, state)`; `WithCounts` leaves any
+other outcome as it is, and a published outcome whose counts were never set, or set to a negative total
+or an unknown state, fails closed as `OutcomeFailed`. Outcomes 5, 6 and 8 come from the entry point's
+own error classes, `ErrPrivateNotFiled`, `ErrDuplicateDrafts` and `ErrGitHub`, which the core declares
+so that `OutcomeOf` selects every row by class; an error wrapping two classes gets the first in the
+order scan, result, private not filed, duplicate drafts, previous report, GitHub, configuration. The
+outcome names below are the core's internal kinds:
 
 | Outcome | Code | Summary |
 |---|---|---|
