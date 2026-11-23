@@ -22,6 +22,11 @@ import (
 // depends on the wall clock.
 var fixedTime = time.Date(2026, time.November, 20, 10, 30, 0, 0, time.UTC)
 
+// shortCache is the Cache-Control doc.go's table gives every name that is not
+// content-addressed, the pages' and the manifest's included: a release shows
+// within minutes without a cache purge.
+const shortCache = "public, max-age=300"
+
 // deployCase is one run of Deploy against a fake object store and a fake live
 // page: the two servers, the bundle, the writers Config needs, and the
 // configuration itself.
@@ -86,28 +91,36 @@ func (dc *deployCase) deploy(t *testing.T) error {
 }
 
 // wantUploadOrder returns the objects Deploy must PUT, in order: every
-// content-addressed asset, sorted, then manifest.json, then the four pages,
-// sorted (doc.go's step 4).
+// content-addressed asset, sorted, then manifest.json, then every name that is
+// not content-addressed, sorted (doc.go's step 4).
 func wantUploadOrder(b *bundle) []string {
-	var assets, pages []string
+	var assets, mutable []string
 
 	for _, name := range b.keys() {
-		if strings.HasSuffix(name, ".html") {
-			pages = append(pages, name)
+		if isMutableFile(name) {
+			mutable = append(mutable, name)
 		} else {
 			assets = append(assets, name)
 		}
 	}
 
-	return append(append(assets, deploy.ManifestName), pages...)
+	return append(append(assets, deploy.ManifestName), mutable...)
+}
+
+// isMutableFile reports whether name is uploaded after manifest.json: a page, or
+// the licence or the NOTICE attribution, whose names hold no digest and so
+// change with a release.
+func isMutableFile(name string) bool {
+	return strings.HasSuffix(name, ".html") || name == "LICENSE" || name == "NOTICE"
 }
 
 // TestDeployUploadsTheAssetsThenTheManifestThenThePages pins the upload order and
 // the requests Deploy is allowed to send (doc.go's step 4): every
-// content-addressed asset before manifest.json, manifest.json before any page,
-// each object at the path-style path /<bucket>/<name>, and no method but GET and
-// PUT ever reaching the store, so a deploy never deletes an earlier release's
-// file.
+// content-addressed asset before manifest.json, manifest.json before any name
+// that is not content-addressed (the pages, the licence and the NOTICE
+// attribution), each object at the path-style path /<bucket>/<name>, and no
+// method but GET and PUT ever reaching the store, so a deploy never deletes an
+// earlier release's file.
 func TestDeployUploadsTheAssetsThenTheManifestThenThePages(t *testing.T) {
 	t.Parallel()
 
@@ -118,7 +131,7 @@ func TestDeployUploadsTheAssetsThenTheManifestThenThePages(t *testing.T) {
 	}
 
 	if diff := cmp.Diff(wantUploadOrder(dc.bundle), dc.store.putKeys()); diff != "" {
-		t.Errorf("the objects Deploy PUT, in order (-want +got):\n%s\nwant every content-addressed asset first, then manifest.json, then the pages: a failed upload before the pages leaves every page as it was", diff)
+		t.Errorf("the objects Deploy PUT, in order (-want +got):\n%s\nwant every content-addressed asset first, then manifest.json, then the names that are not content-addressed (the licence and the NOTICE attribution included): a failed upload before them leaves every page as it was", diff)
 	}
 
 	for _, request := range dc.store.seen() {
@@ -158,6 +171,8 @@ func TestDeployStopsAtTheFirstFailedUpload(t *testing.T) {
 		{name: "the toolchain's script", key: assetName("wasm_exec", ".js", []byte(wasmExecBody))},
 		{name: "the module script", key: assetName("module", ".js", moduleBody)},
 		{name: "the manifest", key: deploy.ManifestName},
+		{name: "the licence", key: "LICENSE"},
+		{name: "the NOTICE", key: "NOTICE"},
 		{name: "a page", key: "inventory.html"},
 	}
 
@@ -195,10 +210,11 @@ func TestDeployStopsAtTheFirstFailedUpload(t *testing.T) {
 
 // TestDeploySetsTheHeadersOfEveryObject pins doc.go's header table: each file's
 // media type and charset, the cache policy of a content-addressed asset (a year
-// and immutable) against the pages' and the manifest's (300 seconds at most, so
-// a release shows within minutes), gzip on the module script alone with the
-// bundle's own bytes behind it, and on every PUT a SigV4 Authorization header
-// and the SHA-256 of the body sent.
+// and immutable) against the pages', the manifest's and the licence's (300
+// seconds at most, so a release shows within minutes, and never immutable since
+// their names hold no digest), gzip on the module script alone with the bundle's
+// own bytes behind it, and on every PUT a SigV4 Authorization header and the
+// SHA-256 of the body sent.
 func TestDeploySetsTheHeadersOfEveryObject(t *testing.T) {
 	t.Parallel()
 
@@ -253,6 +269,10 @@ func TestDeploySetsTheHeadersOfEveryObject(t *testing.T) {
 
 		cacheControl := put.Header.Get("Cache-Control")
 
+		if want.cacheControl != "" && cacheControl != want.cacheControl {
+			t.Errorf("%s is PUT with Cache-Control %q, want %q: it is not content-addressed, so it carries the pages' short cache and never the immutable one", name, cacheControl, want.cacheControl)
+		}
+
 		seconds, ok := maxAge(cacheControl)
 		if !ok {
 			t.Errorf("%s is PUT with Cache-Control %q, want a max-age", name, cacheControl)
@@ -274,6 +294,10 @@ func TestDeploySetsTheHeadersOfEveryObject(t *testing.T) {
 
 		if seconds > 300 {
 			t.Errorf("%s is PUT with Cache-Control %q (max-age %d), want a max-age of 300 or less: a release must show within minutes without a cache purge", name, cacheControl, seconds)
+		}
+
+		if strings.Contains(strings.ToLower(cacheControl), "immutable") {
+			t.Errorf("%s is PUT with Cache-Control %q, want no immutable: its name holds no digest, so a cache that keeps it for a year would serve the file of an earlier release", name, cacheControl)
 		}
 	}
 
@@ -303,6 +327,9 @@ type headerWant struct {
 	// immutable reports whether the object is content-addressed, and so cached
 	// for a year.
 	immutable bool
+	// cacheControl is the exact Cache-Control the object must carry, "" when the
+	// max-age and immutable checks are what pin it.
+	cacheControl string
 }
 
 // wantHeaders returns the headers doc.go's table gives the file name.
@@ -314,6 +341,8 @@ func wantHeaders(t *testing.T, name string) headerWant {
 		return headerWant{mediaType: "text/html", charset: "utf-8"}
 	case name == deploy.ManifestName:
 		return headerWant{mediaType: "application/json"}
+	case name == "LICENSE", name == "NOTICE":
+		return headerWant{mediaType: "text/plain", charset: "utf-8", cacheControl: shortCache}
 	case strings.HasPrefix(name, "style."):
 		return headerWant{mediaType: "text/css", charset: "utf-8", immutable: true}
 	case strings.HasPrefix(name, "module."):
@@ -778,6 +807,26 @@ func TestDeployRefusesAnInvalidConfigurationOrBundle(t *testing.T) {
 				t.Helper()
 
 				dc.bundle.files[assetName("style", ".css", []byte(secondStyleBody))] = []byte(secondStyleBody)
+				dc.bundle.manifest = manifestOf(t, dc.bundle.version, dc.bundle.files)
+				dc.useBundle(t)
+			},
+		},
+		{
+			name: "a bundle without LICENSE",
+			mutate: func(t *testing.T, dc *deployCase) {
+				t.Helper()
+
+				delete(dc.bundle.files, "LICENSE")
+				dc.bundle.manifest = manifestOf(t, dc.bundle.version, dc.bundle.files)
+				dc.useBundle(t)
+			},
+		},
+		{
+			name: "a bundle without NOTICE",
+			mutate: func(t *testing.T, dc *deployCase) {
+				t.Helper()
+
+				delete(dc.bundle.files, "NOTICE")
 				dc.bundle.manifest = manifestOf(t, dc.bundle.version, dc.bundle.files)
 				dc.useBundle(t)
 			},

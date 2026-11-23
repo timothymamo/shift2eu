@@ -34,16 +34,17 @@ const (
 )
 
 // uploadOrder returns the objects in the order Deploy uploads them: every
-// content-addressed asset, then manifest.json, then the pages, each group
-// sorted (the manifest's files are sorted already).
+// content-addressed asset, then manifest.json, then the names that hold no
+// digest (the pages, LICENSE and NOTICE), each group sorted (the manifest's
+// files are sorted already).
 func (r *run) uploadOrder() []string {
 	var assets, pages []string
 
 	for _, f := range r.manifest.Files {
-		if pageName.MatchString(f.Path) {
-			pages = append(pages, f.Path)
-		} else {
+		if _, ok := assetDigestPrefix(f.Path); ok {
 			assets = append(assets, f.Path)
+		} else {
+			pages = append(pages, f.Path)
 		}
 	}
 
@@ -59,19 +60,28 @@ func (r *run) object(name string) ([]byte, http.Header, error) {
 		return nil, nil, errors.New("no such file in the checked bundle")
 	}
 
+	_, isAsset := assetDigestPrefix(name)
+
+	// Every name of a valid bundle has a case; a name with none is refused,
+	// so no future name falls into the immutable JavaScript case.
 	switch {
 	case name == ManifestName:
 		header.Set("Content-Type", "application/json")
 		header.Set("Cache-Control", cacheShort)
-	case strings.HasSuffix(name, ".html"):
+	case pageName.MatchString(name):
 		header.Set("Content-Type", "text/html; charset=utf-8")
 		header.Set("Cache-Control", cacheShort)
-	case strings.HasSuffix(name, ".css"):
+	case isLegalText(name):
+		header.Set("Content-Type", "text/plain; charset=utf-8")
+		header.Set("Cache-Control", cacheShort)
+	case isAsset && strings.HasSuffix(name, ".css"):
 		header.Set("Content-Type", "text/css; charset=utf-8")
 		header.Set("Cache-Control", cacheImmutable)
-	default:
+	case isAsset && strings.HasSuffix(name, ".js"):
 		header.Set("Content-Type", "text/javascript; charset=utf-8")
 		header.Set("Cache-Control", cacheImmutable)
+	default:
+		return nil, nil, errors.New("no headers for a name that is no file of a bundle")
 	}
 
 	if strings.HasPrefix(name, "module.") {

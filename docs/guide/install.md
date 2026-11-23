@@ -31,7 +31,8 @@ workflow attests for it, which detects a tampered release (from the first releas
 
 Each release publishes a minimal image to `ghcr.io/timothymamo/shift2eu`: the static `shift2eu` binary on
 [distroless static](https://github.com/GoogleContainerTools/distroless) (CA certificates and a
-non-root user, no shell or package manager), for `linux/amd64` and `linux/arm64`
+non-root user, no shell or package manager), with the project's `LICENSE` and `NOTICE` under
+`/usr/share/doc/shift2eu/`, for `linux/amd64` and `linux/arm64`
 ([ADR 0013](../adr/0013-ship-shift2eu-as-a-distroless-container-image.md),
 [ADR 0015](../adr/0015-publish-the-signed-image-to-ghcr-with-docker-buildx.md)). It is tagged with
 the release tag (`vX.Y.Z`), `X.Y` and, for the highest release version that is not a pre-release,
