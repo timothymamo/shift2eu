@@ -216,7 +216,7 @@ budget; the same 10 MiB is held offline by a second assertion beside
 
 **The rollback guard.** Before any upload, `sitedeploy` reads `https://www.shift2eu.com/` (a constant)
 once, unsigned, following no redirect, and reads the version its footer shows (the one
-`<span class="mono">` that ends the `footer-links` paragraph). That text is untrusted. It **refuses**
+`<span class="mono" id="site-version">` that ends the `footer-links` paragraph). That text is untrusted. It **refuses**
 (`ErrRollback`, nothing uploaded) only when all three hold: the version matches
 `^v(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})$` and equals a tag of the repository's
 own release tags on `main` (as the `latest` job lists them, passed in with `-releases`); that tag is

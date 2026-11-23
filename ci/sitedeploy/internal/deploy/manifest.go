@@ -364,15 +364,16 @@ func quote(s string) string {
 const (
 	footerOpen = `<p class="footer-links">`
 	footerEnd  = `</p>`
-	versionTag = `<span class="mono">`
+	versionTag = `<span class="mono" id="site-version">`
 )
 
 // versionAtEnd is the version span that ends the footer's paragraph.
-var versionAtEnd = regexp.MustCompile(`<span class="mono">([^<]*)</span>$`)
+var versionAtEnd = regexp.MustCompile(`<span class="mono" id="site-version">([^<]*)</span>$`)
 
 // LiveVersion reads the shift2eu version a live page shows: the text of the
-// one `<span class="mono">...</span></p>` that ends the page's footer (the
-// `<p class="footer-links">` line of every page of site/). The page is
+// one `<span class="mono" id="site-version">...</span></p>` that ends the
+// page's footer (the `<p class="footer-links">` line of every page of
+// site/). The page is
 // untrusted: LiveVersion returns ErrNoLiveVersion when there is no such span
 // or more than one, and when the text does not match
 // ^v(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})$. A
