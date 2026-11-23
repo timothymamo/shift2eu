@@ -250,7 +250,10 @@ func checkReason(reason string) error {
 }
 
 // checkSubdomains returns nil when each of subdomains is a host name under
-// DefaultApex, in lower case, and they are sorted with none twice.
+// DefaultApex, in lower case, and they are sorted with none twice. The record
+// is tied to the production domain shift2eu.com (ADR 0042) whatever -apex a
+// run is given, so a test run with another apex refuses a listed subdomain
+// and fails safe.
 func checkSubdomains(subdomains []string) error {
 	for i, name := range subdomains {
 		if !isDNSName(name) || !strings.HasSuffix(name, "."+DefaultApex) {
