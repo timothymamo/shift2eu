@@ -1,15 +1,17 @@
 // Pins the command wrapper the audit's model runs through, audit-exec (ADR
 // 0040's milestone-2 amendment, issue #277). The wrapper maps a command name to
 // one fixed absolute path and execs it, refuses every other name, refuses git
-// outside the subcommands and options the ADR lists, and execs with the scrubbed
-// environment the ADR fixes: the caller's environment reaches the command in no
-// way.
+// outside the subcommands and options the ADR lists, changes into its own
+// working directory before every exec, and execs with the scrubbed environment
+// the ADR fixes: the caller's environment reaches the command in no way, and
+// neither does its working directory.
 //
 // The tests are white-box (package main): ci/auditexec is a main package, so
-// only its own test files reach it, and the exec seam it takes is what a test
-// hands its fake, as ci/claudecodepin's entry point does. Nothing is executed:
-// the seam records the path, the arguments and the environment the wrapper
-// would have replaced itself with.
+// only its own test files reach it, and the two seams it takes - the change of
+// directory and the exec - are what a test hands its fakes, as
+// ci/claudecodepin's entry point does. Nothing is executed: the seams record the
+// directory the wrapper changed into and the path, the arguments and the
+// environment it would have replaced itself with.
 package main
 
 import (
@@ -26,9 +28,18 @@ const (
 	// wrapper's own -C, not the caller's (an option the wrapper refuses).
 	auditCheckout = "/srv/audit/checkout"
 
+	// auditWork is the wrapper's fixed working directory: where it changes into
+	// before every exec, and where a relative name on a line is read from.
+	auditWork = "/srv/audit/work"
+
 	// refusedExit is the status the wrapper ends with for a refused command
 	// name, a refused git subcommand and a refused option alike.
 	refusedExit = 126
+
+	// failedExit is the status the wrapper ends with when it could not take the
+	// step before the command: a changed directory that failed, like an exec
+	// that did.
+	failedExit = 127
 )
 
 // scrubbedEnv is the whole environment the wrapper execs a command with, as the
@@ -75,8 +86,42 @@ func (r *execRecorder) exec(path string, argv, env []string) error {
 	return r.err
 }
 
-// runWrapper runs the wrapper's logic with args and the fake seam, and returns
-// its exit status and its stderr.
+// seamRecorder is the fake pair of seams the wrapper takes: it records every
+// call the wrapper makes in order - "chdir <dir>" and "exec <path>" - and
+// answers with its own errors, so a test can read whether the change of
+// directory came first.
+type seamRecorder struct {
+	steps    []string
+	chdirErr error
+	execErr  error
+	executed []executed
+}
+
+// chdir is the fake change of directory: the wrapper's own, before the exec.
+func (r *seamRecorder) chdir(dir string) error {
+	r.steps = append(r.steps, "chdir "+dir)
+
+	return r.chdirErr
+}
+
+// exec is the fake exec seam: it records what the wrapper would have replaced
+// itself with.
+func (r *seamRecorder) exec(path string, argv, env []string) error {
+	r.steps = append(r.steps, "exec "+path)
+	r.executed = append(r.executed, executed{path: path, argv: argv, env: env})
+
+	return r.execErr
+}
+
+// dirFailed is the failure a change of directory answers with when the
+// directory cannot be entered.
+type dirFailed struct{}
+
+// Error implements error.
+func (dirFailed) Error() string { return "no such file or directory" }
+
+// runWrapper runs the wrapper's logic with args and the fake seams, and returns
+// its exit status, its stderr and the exec fake.
 func runWrapper(t *testing.T, args []string) (int, string, *execRecorder) {
 	t.Helper()
 
@@ -84,7 +129,7 @@ func runWrapper(t *testing.T, args []string) (int, string, *execRecorder) {
 
 	var stderr bytes.Buffer
 
-	code := run(args, recorder.exec, &stderr)
+	code := run(args, func(string) error { return nil }, recorder.exec, &stderr)
 
 	return code, stderr.String(), recorder
 }
@@ -1357,6 +1402,108 @@ func TestRunNamesARefusedWordInOneEscapedLine(t *testing.T) {
 	})
 }
 
+// TestRunChangesIntoTheWorkDirectory pins the wrapper's fixed working directory
+// (issue #277, round G): before every exec the wrapper changes into
+// /srv/audit/work, so a relative name on a line is a name there whatever
+// directory the caller was in - which is where the path rule reads it from - and
+// a change that fails ends the run with 127, as a failed exec does. git keeps
+// its own -C /srv/audit/checkout, which the exec's arguments still hold.
+func TestRunChangesIntoTheWorkDirectory(t *testing.T) {
+	t.Parallel()
+
+	t.Run("every exec changes into the work directory first", func(t *testing.T) {
+		t.Parallel()
+
+		cases := []struct {
+			name     string
+			args     []string
+			wantPath string
+		}{
+			{
+				name:     "git log",
+				args:     []string{"git", "log", "-1"},
+				wantPath: "/usr/bin/git",
+			},
+			{
+				name:     "cat of the work directory's file",
+				args:     []string{"cat", "/srv/audit/work/x"},
+				wantPath: "/usr/bin/cat",
+			},
+			{
+				name:     "cat of a bare name the work directory holds",
+				args:     []string{"cat", "x"},
+				wantPath: "/usr/bin/cat",
+			},
+			{
+				name:     "sort",
+				args:     []string{"sort", "-u"},
+				wantPath: "/usr/bin/sort",
+			},
+		}
+
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				t.Parallel()
+
+				recorder := &seamRecorder{}
+
+				var stderr bytes.Buffer
+
+				if code := run(tc.args, recorder.chdir, recorder.exec, &stderr); code != 0 {
+					t.Fatalf("run(%q) = %d, want 0 (stderr %q): the line is exec'd", tc.args, code, stderr)
+				}
+
+				want := []string{"chdir " + auditWork, "exec " + tc.wantPath}
+
+				if diff := cmp.Diff(want, recorder.steps); diff != "" {
+					t.Errorf("run(%q) took these steps (-want +got):\n%s", tc.args, diff)
+				}
+			})
+		}
+	})
+
+	t.Run("a failed change into the work directory runs nothing", func(t *testing.T) {
+		t.Parallel()
+
+		recorder := &seamRecorder{chdirErr: dirFailed{}}
+
+		var stderr bytes.Buffer
+
+		if code := run([]string{"cat", "/srv/audit/work/x"}, recorder.chdir, recorder.exec, &stderr); code != failedExit {
+			t.Errorf("run([cat]) = %d, want %d: a command the wrapper could not change directory for does not run", code, failedExit)
+		}
+
+		if len(recorder.executed) != 0 {
+			t.Errorf("run([cat]) exec'd %q after the failed change: a run that could not change directory execs nothing", recorder.executed[0].path)
+		}
+
+		if got := strings.Count(stderr.String(), "\n"); got != 1 {
+			t.Errorf("run([cat]) wrote %d lines to stderr (%q), want one saying the command could not run", got, stderr.String())
+		}
+	})
+
+	t.Run("a refused line changes nothing", func(t *testing.T) {
+		t.Parallel()
+
+		for _, args := range [][]string{
+			{"sh", "-c", "true"},
+			{"cat", "/proc/1/environ"},
+		} {
+			recorder := &seamRecorder{}
+
+			var stderr bytes.Buffer
+
+			if code := run(args, recorder.chdir, recorder.exec, &stderr); code != refusedExit {
+				t.Errorf("run(%q) = %d, want %d", args, code, refusedExit)
+			}
+
+			if len(recorder.steps) != 0 {
+				t.Errorf("run(%q) took the steps %v; a refused line changes no directory and runs nothing", args, recorder.steps)
+			}
+		}
+	})
+}
+
 // TestRunReportsAFailedExec pins that a command the seam could not start is no
 // success: the wrapper does not exit 0, and says on stderr which command failed.
 func TestRunReportsAFailedExec(t *testing.T) {
@@ -1366,7 +1513,7 @@ func TestRunReportsAFailedExec(t *testing.T) {
 
 	var stderr bytes.Buffer
 
-	if code := run([]string{"cat", "/srv/audit/work/x"}, recorder.exec, &stderr); code == 0 {
+	if code := run([]string{"cat", "/srv/audit/work/x"}, func(string) error { return nil }, recorder.exec, &stderr); code == 0 {
 		t.Errorf("run([cat]) = 0, want a failure status: the exec seam could not start the command")
 	}
 
