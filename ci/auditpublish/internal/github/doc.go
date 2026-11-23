@@ -10,7 +10,14 @@
 // commit and its security-audit/* ref, the report's pull request, the audit
 // App's issues, and the repository's security advisories, whose state is only
 // ever "draft". It never publishes an advisory, requests a CVE, reviews or
-// merges a pull request, or touches a tag, a release or another branch.
+// merges a pull request, or touches a tag, a release or another branch. A
+// listing reads at most ten pages: the issue listing's row accepts pages 1 to
+// 10 only.
+//
+// Call returns every answer gh prints a status line for, a 404 or any other
+// non-2xx included, as a Response with no error: its caller decides what a
+// status means. Only a gh that fails without a status line, or whose output is
+// over the 8 MiB cap, is publish.ErrGitHub.
 //
 // It checks the run's artifacts before a job downloads them (CheckArtifacts),
 // and scans every text with gitleaks (Gitleaks) beside the core's own scans.

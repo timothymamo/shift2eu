@@ -931,11 +931,15 @@ read); the publish step gets the App's token.
   -H "X-GitHub-Api-Version: 2022-11-28" [--input -] <endpoint>`, the body on stdin. A refused call runs
   nothing and wraps `ErrEndpointRefused`, a programming error (outcome 1).
 - `--include` puts the status line and the headers before the body on stdout, so the status is read
-  from there and never from `gh`'s stderr, which is discarded unread. Output is capped; a `gh` that fails
-  without a status line, or whose output is over the cap, wraps `ErrGitHub` (outcome 8). No response,
-  status text or stderr reaches any output.
+  from there and never from `gh`'s stderr, which is discarded unread. Every answer with a status line,
+  a 404 or any other non-2xx included, is returned as its status, `Link` header and body, with no
+  error: the caller decides what a status means (a 404 on the branch lookup is "absent"; the artifact
+  check turns any non-2xx into `ErrGitHub`). Output is capped at 8 MiB; a `gh` that fails without a
+  status line, or whose output is over the cap, wraps `ErrGitHub` (outcome 8). No response, status
+  text or stderr reaches any output.
 - Pagination is explicit, `per_page=100` with a page number or the advisories' `after` cursor, and
-  bounded; a listing over the bound fails closed and is never truncated.
+  bounded at ten pages per listing; a listing over the bound fails closed and is never truncated. For
+  the issue listing the bound is the table itself: its row accepts pages 1 to 10 only.
 
 **The endpoint table.** `R` is `repos/<owner>/<name>` of `GITHUB_REPOSITORY`; the run ID, the date, the
 branch and the audited commit are this run's own:
@@ -953,7 +957,7 @@ branch and the audited commit are this run's own:
 | POST | `R/git/refs` | `refs/heads/security-audit/<date>-<run id>` of this run |
 | GET | `R/compare/<audited commit>...<40 hex>` | none |
 | POST | `R/pulls` | this run's branch into `main`, not a draft, no maintainer edits |
-| GET | `R/issues?creator=shift2eu-audit%5Bbot%5D&state=all&per_page=100&page=<n>` | none |
+| GET | `R/issues?creator=shift2eu-audit%5Bbot%5D&state=all&per_page=100&page=<n>`, `n` 1 to 10 | none |
 | POST | `R/issues` | exactly a title, a body and the label `security` |
 | GET | `R/security-advisories?per_page=100[&after=<cursor>]` | none |
 | POST | `R/security-advisories` | only a summary, a description, a severity and the vulnerabilities: no `state`, `cve_id`, credits or collaborators |
