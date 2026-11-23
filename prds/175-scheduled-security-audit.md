@@ -907,14 +907,18 @@ An agent cannot do these steps. Each one is safe to stop at; the workflow is rol
       exactly `https://github.com` included), or a secret that must not be in the step is set there;
       the program was started with a bad or unknown flag or subcommand; or `GITHUB_STEP_SUMMARY` is
       unset, not an absolute path or cannot be opened. Compare the environment's secrets and variables
-      with step 2, and the step's command line with the workflow on `main`.
+      with step 2, and the step's command line with the workflow on `main`. An exit 9 after a
+      `publish` step whose summary write or close failed after the writes (a rare case, e.g. a full
+      runner disk) may follow a published report: look for the run's `security-audit/<date>-<run_id>`
+      branch and pull request first, as on the exit-8 line.
     - `publish failed: see runbook` (exit 1): any other failure, among them two the publish program
       refuses before it makes any ref or pull request: an existing `security-audit/<date>-<run_id>`
       branch (the branch lookup answered 200; nothing was written: delete the branch as above), and a
       report commit whose compare with the audited commit is not one commit ahead of it and none
       behind, on the audited commit as its merge base, with exactly one added file, the run's report
       (the blob, tree and commit were written, but no ref and no pull request were made; the commit
-      object is unreferenced and GitHub collects it). Start the new run; if it repeats, the publish program needs a fix through a pull request.
+      object is unreferenced and GitHub collects it). Start the new run; if it repeats, the publish
+      program needs a fix through a pull request.
 
     The image subcommand (`auditpublish image`, its own step before `publish`, with the job's
     `github.token` and `attestations: read`) prints one of these lines:
