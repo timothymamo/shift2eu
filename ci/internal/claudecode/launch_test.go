@@ -38,6 +38,11 @@ const (
 	// fixes: the CLI's working directory and its HOME.
 	auditWorkDir = "/srv/audit/work"
 	auditHome    = "/srv/audit/state/home"
+
+	// subscriptionToken is an obvious fake, never a real credential (CLAUDE.md
+	// rule 3): a config a test builds to reach the CLI carries it, since a
+	// launch refuses an empty token before the CLI starts (round L).
+	subscriptionToken = "fake-subscription-value-123"
 )
 
 // TestArgsPrescribeEachConfigField pins the argument vector ADR 0040's
@@ -666,11 +671,8 @@ func TestAskRefusesTheNewFieldsAtTheirZeroShape(t *testing.T) {
 		},
 	}
 
-	// subscriptionToken is an obvious fake, never a real credential (CLAUDE.md
-	// rule 3): the config below is the one every row starts from, and the two
-	// fields a row clears are its own.
-	const subscriptionToken = "fake-subscription-value-123"
-
+	// The config below is the one every row starts from, and the two fields a
+	// row clears are its own (the token and the timeout).
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()

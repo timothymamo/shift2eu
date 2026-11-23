@@ -73,7 +73,7 @@ func TestNewKeepsItsOwnCopyOfTheTools(t *testing.T) {
 	t.Parallel()
 
 	tools := []string{"Read"}
-	cli := claudecode.New(claudecode.Config{Path: missingCLI, Model: "claude-fable-5-2", Tools: tools, Timeout: time.Minute})
+	cli := claudecode.New(claudecode.Config{Path: missingCLI, Token: subscriptionToken, Model: "claude-fable-5-2", Tools: tools, Timeout: time.Minute})
 	tools[0] = "Bash(curl:*)"
 
 	_, err := cli.Ask(t.Context(), claudecode.Prompt{System: "s", User: "u"})
@@ -98,6 +98,7 @@ func TestNewKeepsItsOwnCopyOfTheRedactValues(t *testing.T) {
 	redact := []string{canary}
 	launcher := claudecode.New(claudecode.Config{
 		Path:    cli,
+		Token:   subscriptionToken,
 		Model:   auditModel,
 		Redact:  redact,
 		Timeout: 30 * time.Second,
