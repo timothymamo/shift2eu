@@ -1175,12 +1175,13 @@ func TestRunRefusesTheOptionsThatWriteOrReadElsewhere(t *testing.T) {
 //   - a word is a path word when it is a non-option word holding a "/" (a word
 //     with no "/" is a name in the working directory, and "-" alone is stdin);
 //     any word after "--", whatever its first character; an option's value
-//     after its first "="; and, in a single-dash word, every rest of the word
-//     that starts right after one of its leading option letters (git blame
-//     -wS/var/lib/dpkg/status, round J: git gives the cluster's second letter
-//     its value, so the value starts after that letter, not after the first).
-//     git's -C is no path word of this rule: a caller's -C is refused before
-//     the rule reads the line (round H).
+//     after its first "="; and, in every single-dash word that holds a "/",
+//     the suffix from its first "/" (git blame -wS/var/lib/dpkg/status, git
+//     grep -n5f/tmp/x: round K stopped modelling each tool's cluster parser,
+//     so the value's own suffix must be an allowed absolute path whatever
+//     letter, digit or dash the value is attached after). git's -C is no path
+//     word of this rule: a caller's -C is refused before the rule reads the
+//     line (round H).
 //   - an absolute path word is read as it is, a relative one on a git line is
 //     joined to /srv/audit/checkout - which is what git reads it under the
 //     wrapper's own -C - and a relative one on any other line to
@@ -1250,9 +1251,11 @@ func TestRunHoldsEveryPathWordToTheAllowList(t *testing.T) {
 			// word, wherever in the cluster that letter sits. Round I read the
 			// rest after the word's first letter alone, so a value attached to a
 			// later letter - a path, which git reads and echoes through its
-			// error output - got past the rule. Every rest after one of the
-			// word's leading option letters is a candidate path word now, and a
-			// word with a candidate outside the roots is refused.
+			// error output - got past the rule. Round J read every rest after a
+			// leading option letter; round K reads the suffix from the word's
+			// first "/" instead (the rows below and the round K ones after
+			// them), so these rows are refused for the path their value starts
+			// with, no longer for the cluster position that value sits at.
 			{
 				name:      "the value of git blame's -S, in a cluster of two",
 				args:      []string{"git", "blame", "-wS/var/lib/dpkg/status", "HEAD"},
@@ -1281,6 +1284,41 @@ func TestRunHoldsEveryPathWordToTheAllowList(t *testing.T) {
 				name:      "the file of git grep's -f, a path in /tmp",
 				args:      []string{"git", "grep", "-nif/tmp/x", "HEAD"},
 				wantNamed: "-nif/tmp/x",
+			},
+
+			// Round K's bypass: git's parse-options reads a run of digits in a
+			// cluster as -NUM and goes on, so in git grep -n5f/tmp/x the f takes
+			// /tmp/x - a file git reads and echoes through its regex error - and
+			// the letter-run rule stopped at the digit. The rule no longer reads
+			// any tool's cluster: in every single-dash word that holds a "/",
+			// the suffix from the first "/" is the path word, and it must lie in
+			// the roots whatever letter, digit or dash comes before it.
+			{
+				name:      "the file of git grep's -f, after a -n5",
+				args:      []string{"git", "grep", "-n5f/tmp/x", "HEAD"},
+				wantNamed: "-n5f/tmp/x",
+			},
+			{
+				name:      "the file of git grep's -f, after a leading -5",
+				args:      []string{"git", "grep", "-5f/var/lib/dpkg/status", "HEAD"},
+				wantNamed: "-5f/var/lib/dpkg/status",
+			},
+			{
+				name:      "the file of git grep's -f, after a -0",
+				args:      []string{"git", "grep", "-0f/run/x", "HEAD"},
+				wantNamed: "-0f/run/x",
+			},
+			{
+				name:      "the file of git grep's -f, after -n1 and -i",
+				args:      []string{"git", "grep", "-n1if/run/x", "HEAD"},
+				wantNamed: "-n1if/run/x",
+			},
+			{
+				// Round J's reason holds here too: no letter of the word before
+				// the value is any part of the path.
+				name:      "the value of git blame's -S, one letter before it",
+				args:      []string{"git", "blame", "-wS/var/x", "HEAD"},
+				wantNamed: "-wS/var/x",
 			},
 			{
 				name:      "a path into the runner's home",
@@ -1552,6 +1590,21 @@ func TestRunHoldsEveryPathWordToTheAllowList(t *testing.T) {
 				// path is in the work area.
 				name:     "git blame's -S with its value in the work area",
 				args:     []string{"git", "blame", "-S/srv/audit/work/revs", "HEAD"},
+				wantPath: "/usr/bin/git",
+			},
+			{
+				// Round K's other side: the suffix from the word's first "/" is
+				// what the rule reads, so the -NUM form passes when its file lies
+				// in the work area.
+				name:     "git grep's -f after a -n5, with its value in the work area",
+				args:     []string{"git", "grep", "-n5f/srv/audit/work/p", "HEAD"},
+				wantPath: "/usr/bin/git",
+			},
+			{
+				// A -NUM takes no value that holds a "/", so the word is no path
+				// word at all.
+				name:     "git grep's -n5 and its pattern",
+				args:     []string{"git", "grep", "-n5", "-e", "x"},
 				wantPath: "/usr/bin/git",
 			},
 			{
