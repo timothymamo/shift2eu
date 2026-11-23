@@ -40,7 +40,9 @@ func main() {
 
 // run is the entry point's logic with the step's arguments, its environment
 // as a lookup function, the steps, the root that stands in for / (main's is
-// /, a test's a temporary directory) and where its lines go.
+// /, a test's a temporary directory) and where its lines go. It is the tests'
+// entry, runContext with a background context; main calls runContext itself,
+// with the context its interrupt signal cancels.
 func run(args []string, getenv func(string) (string, bool), steps audit.Steps, root string, stdout, stderr io.Writer) int {
 	return runContext(context.Background(), args, getenv, steps, root, stdout, stderr)
 }

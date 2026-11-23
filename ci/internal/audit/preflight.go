@@ -65,9 +65,11 @@ const (
 // path is the wrapper's own work area, as the wrapper sees it whatever the
 // root, so it lies inside the roots the wrapper holds every path word to and
 // cat runs for real (issue #277, round I): outside them, the wrapper's
-// refusal would name the path too and prove nothing. work/nonexistent cannot
-// exist when the preflight runs, since the work-area check holds the work area
-// to its tmp/ alone. {wrapper} comes from Targets.
+// refusal quotes the expanded word, so it proved absence too, but cat never
+// ran and the answer was not the one the plan describes (round J's
+// correction). work/nonexistent cannot exist when the preflight runs: the
+// work area holds tmp/ and the launcher's control file alone. {wrapper} comes
+// from Targets.
 const tokenAbsenceCommand = "{wrapper} cat /" + workDir + "/nonexistent/${CLAUDE_CODE_OAUTH_TOKEN:+tokenset}"
 
 // Probe 5's two calls for the forms the wrapper's own path rule never reads

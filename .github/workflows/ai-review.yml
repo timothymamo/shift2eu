@@ -79,7 +79,8 @@ jobs:
       # without ref checks out the base, never the pull request's head, so a pull request cannot pick the
       # CLI it is reviewed with. Giving the checkout a ref (or a repository) would hand the pull request
       # that choice in a job that then mints the reviewer's token; test/lint's
-      # TestAIReviewWorkflowHoldsTheReviewersSecurityProperties refuses both. A Renovate bump of the version must also replace the file's integrity (npm view
+      # TestAIReviewWorkflowHoldsTheReviewersSecurityProperties refuses both. A Renovate bump of the
+      # version must also replace the file's integrity (npm view
       # @anthropic-ai/claude-code-linux-x64@<version> dist.integrity): until it does, this step fails and
       # nothing unverified runs, which is the safe way round. A Renovate PR's own AI review runs main's
       # copy of the file, so it cannot catch a missed integrity; the "Claude Code pin" check

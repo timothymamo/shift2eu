@@ -445,6 +445,8 @@ test of ours (Decision 3's reason).
      `work`, `state/home` and `state/tmp` empty, `bin/audit-exec` with mode exactly 0555 (only its mode
      is checked; its owner, root, is not, and that check is left to PR 5's model-free step, which
      installs it with `sudo install -o root -m 0555`; amended 2026-11-23, issue #277 round H).
+     *Amended 2026-11-23 (issue #277 round J):* `bin/` itself has no write bit and holds `audit-exec`
+     alone: a second file or a link beside the wrapper is refused.
      *Amended 2026-11-22 (issue #277 round C):* both trees are walked whole, no link followed: no entry
      anywhere in them has a write bit, and every symbolic link in them is relative and resolves, its
      whole chain followed, to a path inside its own tree. The checkout copy's `.git` is a directory, not
@@ -520,7 +522,10 @@ test of ours (Decision 3's reason).
      into a map, so every key and every value of a duplicate key is searched: a map keeps a duplicate
      key's last value alone, and a secret under its first would never reach the search. The `Token()`
      walk inherits `encoding/json`'s nesting limit (10000 levels), so a deeper result is refused at
-     the token that exceeds it (`exceeded max depth`), as a file that is no JSON is. The check for
+     the token that exceeds it (`exceeded max depth`), as a file that is no JSON is. *Amended
+     2026-11-23 (issue #277 round J):* the limit is the audit's own, `maxResultDepth = 10000`: the walk
+     counts its depth and refuses a document nested deeper as no JSON, whatever `encoding/json`'s
+     internals do. The check for
      one value and then EOF stays. Both failures still print the audit's one constant
      line. `Audit(ctx, root, in, launch)` returns `([]byte, error)`: the bytes it read and checked,
      never the path. `Steps.Audit` carries them, and `Run.Result func(body []byte) error`, beside
@@ -642,6 +647,11 @@ and cut to 64 bytes. The commands it may `exec`:
   `--compress-program` and every abbreviation of it, `--files0-from`, `--random-source`, `-T`,
   `--temporary-directory`, `-o` and `--output` included. uniq takes one operand at most: its second is
   OUT, a file it writes.
+  *Recorded 2026-11-23 for PR 5 (issue #277 round J):* the option analysis of these commands assumes
+  **GNU coreutils**. Ubuntu 25.10 and later ship uutils coreutils by default, whose option parsing
+  differs in places, so a move of `ubuntu-latest` would change the binaries under `/usr/bin` unseen.
+  PR 5's workflow must pin the runner image (`runs-on: ubuntu-24.04`) and its model-free step must check
+  that each listed coreutil under `/usr/bin` is the GNU one (its `--version`) before the model runs.
 
 It `exec`s with exactly this environment, nothing inherited: `PATH=/usr/bin:/bin`, `HOME=/nonexistent`,
 `TMPDIR=/srv/audit/work/tmp`, `LANG=C.UTF-8`, `LC_ALL=C.UTF-8`, `TZ=UTC`, and for git
@@ -706,6 +716,18 @@ It `exec`s with exactly this environment, nothing inherited: `PATH=/usr/bin:/bin
     -L/proc/1/root`); and git's `-C` value, attached or the next word (superseded by round H, below: a
     caller's `-C` is refused in every form, so its value is no path word). `-` alone is stdin and no path
     word. A word with no `/` is a name in the working directory and passes, `..` excepted.
+    *Amended 2026-11-23 (issue #277 round J):* in a single-dash word, the value may start after **any
+    letter of the option cluster**, not only the first: git and the tools read a cluster one letter at a
+    time, so in `git blame -wS/var/lib/dpkg/status` `S` takes `/var/lib/dpkg/status`, which the old rule
+    read as the relative `S/var/...` inside the checkout, and git echoed the file through its errors
+    (`git grep -nif/run/x`, `git ls-files -oX/home/runner/x` alike). The cluster is the leading run of
+    letters after the dash, of length k; the candidates are `arg[i:]` for i from 2 to k+1 (`arg[2:]` at
+    least), each that holds a `/` a path word, joined to the line's base when relative and taken as it is
+    when absolute; any candidate outside the roots refuses the whole word. A letter inside the value
+    starts no candidate, so `git grep -if/srv/audit/work/p` and `git blame -S/srv/audit/work/revs` pass.
+    *Accepted side effect (fail closed):* an attached value that is a relative path holding a `/`
+    (`-Sfoo/bar`) is refused, since its candidate `/bar` (after the letters `S`, `f`, `o`, `o`) is
+    absolute and outside the roots; the model passes the value as a word of its own (`-S foo/bar`).
   - **Resolving:** an absolute word is read as it is; a relative one on a git line is joined to
     `/srv/audit/checkout`, which is what git reads it under the wrapper's `-C`, and on any other line to
     `/srv/audit/work`, the wrapper's working directory.
@@ -878,9 +900,16 @@ It `exec`s with exactly this environment, nothing inherited: `PATH=/usr/bin:/bin
   from `cat`'s own failure, and the call proved nothing. The token-absence call becomes `cat
   /srv/audit/work/nonexistent/${CLAUDE_CODE_OAUTH_TOKEN:+tokenset}`: the path lies in the work area,
   inside the roots, so the wrapper passes it and `cat` fails with "No such file or directory".
-  `work/nonexistent` cannot exist when the preflight runs, since the work-area check holds the work area
-  to its empty `tmp/` alone. The judgement's pass condition is unchanged: an error result naming
+  `work/nonexistent` cannot exist when the preflight runs: the layout check holds the work area to its
+  empty `tmp/` alone, and during the preflight it holds `tmp/` and the launcher's control file
+  `preflight-control.txt` only (wording amended in round J). The judgement's pass condition is unchanged: an error result naming
   `/nonexistent/` followed by the end, `:`, whitespace or a quote, and holding no `tokenset`.
+  *Corrected 2026-11-23 (issue #277 round J):* the old call did prove absence: the shell expands
+  `${CLAUDE_CODE_OAUTH_TOKEN:+tokenset}` before the wrapper starts, and the wrapper's refusal quotes the
+  expanded word, so a set token gave `refused: "/nonexistent/tokenset"` and the judgement failed it.
+  What was wrong is that `cat` never ran, so the call tested the wrapper rather than the command the
+  plan describes, and the tests' passing answers did not match the real output. Inside the roots, `cat`
+  runs and the answer is the one the plan names.
 
 - **A probe fails (good)** when every one of its calls appears in the transcript with a `tool_result` that
   is an error or a refusal, and its effect is not observed. It **succeeds** (the step fails) when an

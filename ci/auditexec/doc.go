@@ -21,7 +21,9 @@
 // its cluster: a caller's -C, separate, attached or clustered, would override
 // the wrapper's own and run git in the work area, where a planted .git/config
 // runs a program, so it is refused in every form, git log's copy detection
-// included (issue #277 round H). jq never reaches its module system or a
+// included (issue #277 round H; a global -C never reached git anyway, since
+// the first word after git must be a listed subcommand, so the letter rule is
+// defence in depth). jq never reaches its module system or a
 // program file: a jq word holding import or include, -L or -f in any
 // single-dash word, and --library-path or --from-file (alone, with "=" and
 // abbreviated) are refused, so the audit's filters come on the line. No
@@ -36,8 +38,9 @@
 // /srv/audit/checks and /srv/audit/work and what lies under them (the
 // wrapper's path rule, issue #277 rounds F and G): a path word is a
 // non-option word holding "/" or that is "..", every word after "--", an
-// option's value after its "=", the rest of a single-dash word after its
-// first letter when that rest holds "/" ("-" alone is stdin). A relative path word is read from the
+// option's value after its "=", and in a single-dash word every rest after a
+// letter of its option cluster that holds "/", since the value may start
+// after any of them (git blame -wS/var/x, round J; "-" alone is stdin). A relative path word is read from the
 // checkout on a git line and from the work directory on any other; a word
 // holding a ".." element is refused before anything is cleaned, so a glob
 // the CLI's deny rule could not see, or a link such as /dev/fd followed by
