@@ -832,14 +832,14 @@ var verifyArchivesStepTemplates = []string{
 // two site programs, built on a runner of its own (PRD #297 milestone 3). It
 // holds no key, no secret and no OIDC token; their digests are job outputs,
 // which the jobs that deploy and check the site bind the binaries they run to,
-// and the artifacts are kept ninety days, so a deploy's re-run still finds
-// them once the run that built them has expired.
+// and the artifacts are kept thirty days, GitHub's re-run window, so a deploy's
+// re-run still finds them while GitHub will still re-run the run's jobs.
 const siteProgramsJobHead = `  # The release's two site programs, built on a runner of its own (PRD #297
   # milestone 3): no key, no secret and no OIDC token, so nothing in them can
   # deploy. Their sha256 are job outputs, which the jobs that deploy and check
-  # the site bind the binaries they run to, and the artifacts are kept ninety
-  # days: the deploy and the live check are re-run by re-running this job, never
-  # the job that built the bundle.
+  # the site bind the binaries they run to, and the artifacts are kept thirty
+  # days, GitHub's re-run window: a deploy is re-run by re-running its own job,
+  # never the job that built the bundle, and only while GitHub still re-runs it.
   site-programs:
     name: Site programs
     needs: test
@@ -887,14 +887,14 @@ var siteProgramsStepTemplates = []string{
           name: sitedeploy
           path: bin/sitedeploy
           if-no-files-found: error
-          retention-days: 90
+          retention-days: 30
 `,
 	`      - uses: {{pin actions/upload-artifact}}
         with:
           name: sitecheck
           path: bin/sitecheck
           if-no-files-found: error
-          retention-days: 90
+          retention-days: 30
 `,
 }
 
@@ -1906,6 +1906,9 @@ func TestReleaseWorkflow(t *testing.T) {
 		// wantIn is a part of the message the check must return; "" means
 		// none at all.
 		wantIn string
+		// wantAlso is another part the message must hold, "" for no second
+		// part.
+		wantAlso string
 	}{
 		{name: "the accepted shape", workflow: releaseWorkflow},
 		{name: "CRLF line ends", workflow: strings.ReplaceAll(releaseWorkflow, "\n", "\r\n")},
@@ -2809,6 +2812,18 @@ func TestReleaseWorkflow(t *testing.T) {
 		{name: "a token beside the key in the deploy step", workflow: in("site-deploy", "          SITE_REGION: ${{ vars.SITE_REGION }}\n", "          SITE_REGION: ${{ vars.SITE_REGION }}\n          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}\n"), wantIn: "GH_TOKEN"},
 		{name: "the key in another job's step", workflow: in("site-check", "          SITECHECK_SHA256: ${{ needs.site-programs.outputs.sitecheck }}\n", "          SITECHECK_SHA256: ${{ needs.site-programs.outputs.sitecheck }}\n          SCW_ACCESS_KEY: ${{ secrets.SCW_ACCESS_KEY }}\n"), wantIn: "SCW_ACCESS_KEY"},
 
+		// A secret reached through the secrets context in a form that is not one
+		// of the exact secrets.NAME references: toJSON(secrets) hands the whole
+		// context out, and secrets[format(...)] builds a name at run time, so no
+		// closed list of names can tell which secret such a line reaches. The
+		// rule names the context, whichever allowed list the line's job has.
+		{name: "toJSON(secrets) in the deploy step's env", workflow: in("site-deploy", "          SITE_REGION: ${{ vars.SITE_REGION }}\n", "          SITE_REGION: ${{ vars.SITE_REGION }}\n          CONTEXT: ${{ toJSON(secrets) }}\n"), wantIn: "names the secrets context", wantAlso: "toJSON(secrets)"},
+		{name: "a computed secret name in the deploy step's env", workflow: in("site-deploy", "          SITE_REGION: ${{ vars.SITE_REGION }}\n", "          SITE_REGION: ${{ vars.SITE_REGION }}\n          CONTEXT: ${{ secrets[format('SCW_{0}', 'SECRET_KEY')] }}\n"), wantIn: "names the secrets context", wantAlso: "secrets[format('SCW_{0}', 'SECRET_KEY')]"},
+		{name: "toJSON(secrets) in the deploy job's bundle check step", workflow: in("site-deploy", "          SITEDEPLOY_SHA256: ${{ needs.site-programs.outputs.sitedeploy }}\n", "          SITEDEPLOY_SHA256: ${{ needs.site-programs.outputs.sitedeploy }}\n          CONTEXT: ${{ toJSON(secrets) }}\n"), wantIn: "names the secrets context", wantAlso: "toJSON(secrets)"},
+		{name: "a computed secret name in the deploy job's bundle check step", workflow: in("site-deploy", "          SITEDEPLOY_SHA256: ${{ needs.site-programs.outputs.sitedeploy }}\n", "          SITEDEPLOY_SHA256: ${{ needs.site-programs.outputs.sitedeploy }}\n          CONTEXT: ${{ secrets[format('SCW_{0}', 'SECRET_KEY')] }}\n"), wantIn: "names the secrets context", wantAlso: "secrets[format('SCW_{0}', 'SECRET_KEY')]"},
+		{name: "toJSON(secrets) in another job's step", workflow: in("site-check", "          SITECHECK_SHA256: ${{ needs.site-programs.outputs.sitecheck }}\n", "          SITECHECK_SHA256: ${{ needs.site-programs.outputs.sitecheck }}\n          CONTEXT: ${{ toJSON(secrets) }}\n"), wantIn: "names the secrets context", wantAlso: "toJSON(secrets)"},
+		{name: "a computed secret name in another job's step", workflow: in("site-check", "          SITECHECK_SHA256: ${{ needs.site-programs.outputs.sitecheck }}\n", "          SITECHECK_SHA256: ${{ needs.site-programs.outputs.sitecheck }}\n          CONTEXT: ${{ secrets[format('SCW_{0}', 'SECRET_KEY')] }}\n"), wantIn: "names the secrets context", wantAlso: "secrets[format('SCW_{0}', 'SECRET_KEY')]"},
+
 		// No line may name a proxy or a certificate variable: a step that sets
 		// one would change what the deploy program's client trusts or where it
 		// connects.
@@ -2878,14 +2893,15 @@ func TestReleaseWorkflow(t *testing.T) {
 		{name: "the deploy's release tags from another branch", workflow: inDeployStep("name: The release tags on main", "--merged refs/remotes/origin/main", "--merged refs/heads/main"), wantIn: "refs/remotes/origin/main"},
 		{name: "the live check's release tags without the pre-release filter", workflow: inCheckStep("name: The release tags on main", ` | sed -nE '/^v[0-9]+\.[0-9]+\.[0-9]+$/p'`, ""), wantIn: "sed -nE"},
 
-		// The programs are built as the release builds them, kept ninety days so a
-		// deploy is re-run by re-running their job alone, and bound to the digest
-		// the job gives: nothing of the key is here.
+		// The programs are built as the release builds them, kept thirty days, the
+		// window in which GitHub re-runs a run's jobs, and bound to the digest the
+		// job gives: nothing of the key is here.
 		{name: "the programs built with another target", workflow: in("site-programs", "        run: make site-programs\n", "        run: make site\n"), wantIn: "make site-programs"},
 		{name: "a token in the programs' build step", workflow: in("site-programs", "        run: make site-programs\n", "        env:\n          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}\n        run: make site-programs\n"), wantIn: "GH_TOKEN"},
 		{name: "contents: write for the programs job", workflow: in("site-programs", "      contents: read # check out the repository\n", "      contents: write # check out the repository\n"), wantIn: "contents"},
-		{name: "the deploy program's artifact kept a week", workflow: in("site-programs", "          path: bin/sitedeploy\n          if-no-files-found: error\n          retention-days: 90\n", "          path: bin/sitedeploy\n          if-no-files-found: error\n          retention-days: 7\n"), wantIn: "retention-days"},
-		{name: "the live check's artifact kept a week", workflow: in("site-programs", "          path: bin/sitecheck\n          if-no-files-found: error\n          retention-days: 90\n", "          path: bin/sitecheck\n          if-no-files-found: error\n          retention-days: 7\n"), wantIn: "retention-days"},
+		{name: "the deploy program's artifact kept a week", workflow: in("site-programs", "          path: bin/sitedeploy\n          if-no-files-found: error\n          retention-days: 30\n", "          path: bin/sitedeploy\n          if-no-files-found: error\n          retention-days: 7\n"), wantIn: "retention-days"},
+		{name: "the live check's artifact kept a week", workflow: in("site-programs", "          path: bin/sitecheck\n          if-no-files-found: error\n          retention-days: 30\n", "          path: bin/sitecheck\n          if-no-files-found: error\n          retention-days: 7\n"), wantIn: "retention-days"},
+		{name: "the deploy program's artifact kept ninety days", workflow: in("site-programs", "          path: bin/sitedeploy\n          if-no-files-found: error\n          retention-days: 30\n", "          path: bin/sitedeploy\n          if-no-files-found: error\n          retention-days: 90\n"), wantIn: "retention-days"},
 		{name: "the live check's digest of another file", workflow: in("site-programs", `          echo "sitecheck=$(sha256sum bin/sitecheck | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"`+"\n", `          echo "sitecheck=$(sha256sum bin/sitedeploy | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"`+"\n"), wantIn: "sha256sum"},
 		{name: "another output name for the deploy program", workflow: in("site-programs", "      sitedeploy: ${{ steps.digests.outputs.sitedeploy }}\n", "      sitedeploy: ${{ steps.digest.outputs.sitedeploy }}\n"), wantIn: "sitedeploy is"},
 
@@ -2921,6 +2937,10 @@ func TestReleaseWorkflow(t *testing.T) {
 
 			if !strings.Contains(strings.Join(got, "\n"), tc.wantIn) {
 				t.Errorf("ReleaseWorkflow() = %q, want a message containing %q", got, tc.wantIn)
+			}
+
+			if tc.wantAlso != "" && !strings.Contains(strings.Join(got, "\n"), tc.wantAlso) {
+				t.Errorf("ReleaseWorkflow() = %q, want its message to name %q", got, tc.wantAlso)
 			}
 		})
 	}

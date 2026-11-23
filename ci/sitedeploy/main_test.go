@@ -11,6 +11,7 @@ package main
 import (
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -158,6 +159,28 @@ func TestSettingsNeverPrintsTheKey(t *testing.T) {
 				t.Errorf("%s of the settings reads %q, want neither half of the key: the settings hold the deploy key, so every printed form of them is redacted", verb, text)
 			}
 		}
+	}
+}
+
+// TestNewHTTPClientNeverConsultsTheProxyEnvironment pins the client the deploy
+// program talks through: it must carry a transport of its own whose Proxy is
+// nil. A client without a transport uses http.DefaultTransport, whose Proxy is
+// ProxyFromEnvironment, so HTTP_PROXY or HTTPS_PROXY in the deploy step's
+// environment would send every request, and the site's key with it, through
+// another host. The live check's client is built the same way (Proxy: nil in
+// ci/sitecheck/internal/livecheck).
+func TestNewHTTPClientNeverConsultsTheProxyEnvironment(t *testing.T) {
+	t.Parallel()
+
+	client := newHTTPClient(requestTimeout)
+
+	transport, ok := client.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("the client's transport is %T, want an *http.Transport whose Proxy is nil: a nil transport is http.DefaultTransport, which reads HTTP_PROXY and HTTPS_PROXY", client.Transport)
+	}
+
+	if transport.Proxy != nil {
+		t.Errorf("the client's transport has a Proxy function, want nil: HTTP_PROXY or HTTPS_PROXY in the step's environment would send the site's key and every upload through another host")
 	}
 }
 

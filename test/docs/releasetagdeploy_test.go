@@ -146,12 +146,36 @@ func TestReleaseTagSkillChecksTheSiteEnvironment(t *testing.T) {
 			text: siteSkippedJob + " must be success",
 			why:  "the skip notice's job must have succeeded, so a run in which the notice never ran is not read as an expected skip",
 		},
+		{
+			step: 7,
+			text: "30-day re-run window",
+			why:  "GitHub re-runs a run or its jobs only within 30 days of the initial run, so the skill states that window, never the artifacts' 90-day retention: a re-run past it cannot happen",
+		},
+		{
+			step: 7,
+			text: "the 30-day re-run window, re-run " + siteDeployJob,
+			why:  "a failed deploy is recovered by re-running Deploy the site inside the window, which is the job GitHub will still re-run",
+		},
+		{
+			step: 7,
+			text: "re-runs " + siteCheckJob,
+			why:  "re-running Deploy the site re-runs Check the live site after it, so the maintainer re-runs one job and gets both",
+		},
+		{
+			step: 7,
+			text: "after the window, the recovery is a new release",
+			why:  "past the window GitHub re-runs nothing, so a re-run is no recovery and the only one is a new release",
+		},
 	} {
 		step := skillStep(t, skill, want.step)
 		if !strings.Contains(skillStepPlain(step), want.text) {
 			t.Errorf("%s's step %d does not say %q: %s (PRD #297 milestone 3)\n%s",
 				releaseTagSkill, want.step, want.text, want.why, step)
 		}
+	}
+
+	if strings.Contains(skill, "90 days") {
+		t.Errorf("%s names 90 days: the programs' artifacts are kept 30 days, GitHub's re-run window, and the skill's recovery must not promise a re-run past it (PRD #297 milestone 3)", releaseTagSkill)
 	}
 }
 
