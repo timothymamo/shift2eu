@@ -484,7 +484,7 @@ func TestRunRefusesWithAConstantText(t *testing.T) {
 				artifactArgs(jobModel, fake.Path, tempDir),
 			},
 			env: func(env map[string]string, i int) {
-				env["GITHUB_REPOSITORY"] = []string{"shift2eu-" + valueMarker, "example/" + valueMarker}[i]
+				env["GITHUB_REPOSITORY"] = []string{"shift2eu-" + valueMarker, "other-" + valueMarker}[i]
 			},
 		},
 		{
