@@ -161,15 +161,34 @@ func TestReleaseTagSkillChecksTheSiteEnvironment(t *testing.T) {
 			text: "re-runs " + siteCheckJob,
 			why:  "re-running Deploy the site re-runs Check the live site after it, so the maintainer re-runs one job and gets both",
 		},
+		// Past the window GitHub re-runs nothing, and the recovery is the
+		// maintainer's alone: the bucket's key is theirs, and no agent reads,
+		// holds or uses it (CLAUDE.md, rule 3). The skill therefore says who
+		// restores the pages, with whose key, and who cuts the other way out.
 		{
 			step: 7,
-			text: "after the window, either restore the last good version of each page from the bucket's object versions with your own key (R12)",
-			why:  "past the window GitHub re-runs nothing, so the recovery is either R12's rollback of each page from the bucket's object versions, with the maintainer's own key, which needs no release at all",
+			text: "the maintainer restores the last good version of each page",
+			why:  "past the window the recovery is the maintainer's, never the agent's: the skill names the maintainer as the one who restores the pages",
 		},
 		{
 			step: 7,
-			text: "or cut a new release with a Release-As: footer",
-			why:  "the other recovery after the window is a new release: release-please reads the footer when there is no releasable commit to cut one from",
+			text: "from the bucket's object versions",
+			why:  "the rollback is per page, from the bucket's object versions, which needs no release at all",
+		},
+		{
+			step: 7,
+			text: "with their own key",
+			why:  "the key is the maintainer's: CLAUDE.md rule 3 keeps it from every agent, so the skill must not tell the agent to restore a page with a key of its own",
+		},
+		{
+			step: 7,
+			text: "R12",
+			why:  "the per-page rollback is the runbook's R12, so the skill points the maintainer at the step that carries it out",
+		},
+		{
+			step: 7,
+			text: "cuts a new release with a Release-As: footer",
+			why:  "the other recovery after the window is a new release the maintainer cuts: release-please reads the footer when there is no releasable commit to cut one from",
 		},
 	} {
 		step := skillStep(t, skill, want.step)
@@ -177,6 +196,14 @@ func TestReleaseTagSkillChecksTheSiteEnvironment(t *testing.T) {
 			t.Errorf("%s's step %d does not say %q: %s (PRD #297 milestone 3)\n%s",
 				releaseTagSkill, want.step, want.text, want.why, step)
 		}
+	}
+
+	// The recovery after the window is never the agent's to carry out: the
+	// bucket's key is the maintainer's, and an agent that read it would break
+	// CLAUDE.md rule 3. The skill must not address the agent as the one holding
+	// a key here, which is what "with your own key" reads as.
+	if strings.Contains(skillStepPlain(skillStep(t, skill, 7)), "your own key") {
+		t.Errorf("%s's step 7 restores the page with \"your own key\": the bucket's key is the maintainer's, so the recovery names them, never the agent reading the skill (CLAUDE.md, rule 3; PRD #297 milestone 3)", releaseTagSkill)
 	}
 
 	if strings.Contains(skill, "90 days") {
