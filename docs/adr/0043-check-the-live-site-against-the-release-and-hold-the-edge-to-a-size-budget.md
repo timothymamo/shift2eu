@@ -61,8 +61,8 @@ library `ci/sitecheck/internal/livecheck` does every fetch and judgement, and th
   5. the redirect matrix on `/` and `/privacy.html`: `http://<apex>/<p>`, `https://<apex>/<p>` and
      `http://<host>/<p>` each answer 301 or 308 to exactly `https://<host>/<p>`; when preload is pursued,
      `http://<apex>/<p>` goes first to `https://<apex>/<p>` (the two hops the preload list requires); in
-     refuse-or-close mode `http://<host>/<p>` may instead refuse the connection or close (or reset) it
-     before any byte of a response arrives, redirect to the canonical URL, or answer 4xx/5xx with a body
+     refuse-or-close mode (the flag `-plain-http-www`, below) `http://<host>/<p>` may instead refuse the
+     connection or close (or reset) it before any byte of a response arrives, redirect to the canonical URL, or answer 4xx/5xx with a body
      that is no manifest file's (any other 3xx and any 2xx fail). A dial that times out with no
      connection made (a filtered port) counts as refused: a browser gets no page from it either. So
      does a TCP connect that would complete only after the request timeout: no connection made within
@@ -87,10 +87,11 @@ library `ci/sitecheck/internal/livecheck` does every fetch and judgement, and th
      instead of hanging it; `CheckCertificate` keeps the deadline its caller's context has, longer or
      shorter, and sets the 30 s default only on a context with none;
   7. HSTS against the records: when `met`, the host's `Strict-Transport-Security` has `max-age` at least
-     31536000, `includeSubDomains`, and `preload` when preload is pursued; the apex's header is held to the
-     same minimum (with `preload`) only when preload is pursued, and is otherwise only recorded. When
-     `waived`, `privacy.html` and `verify.html` must carry the `hsts-waived` statement. Whenever the preload
-     record does not say `on_preload_list: true`, `privacy.html` must carry `downgrade-risk`. A statement is
+     31536000, `includeSubDomains`, and `preload` when preload is pursued (`hsts.json`'s `preload: true`);
+     the apex's header is held to the same minimum (with `preload`) only when preload is pursued, and is
+     otherwise only recorded. When `waived`, `privacy.html` and `verify.html` must carry the `hsts-waived`
+     statement. Unless the site counts as on the preload list (below), `privacy.html` must carry
+     `downgrade-risk`. A statement is
      carried when the deployed page, the one whose digest matched the manifest, has exactly one element with
      that `id`, not `hidden`, with non-empty text, outside comments, raw-text elements and templates (ADR
      0036's markers). The header parser is strict: one header value, exactly one `max-age` of digits
@@ -100,24 +101,37 @@ library `ci/sitecheck/internal/livecheck` does every fetch and judgement, and th
   9. the module script's size and `Content-Type: text/javascript` (below).
 - **Fail-safe records.** A record that is missing, unreadable or refused fails a check of its own and
   never counts in the site's favour: an unreadable `hsts.json` fails the `hsts.json` check and the rest is
-  judged as `met` without preload and with plain HTTP redirecting; an unreadable `preload.json` fails the
-  `preload.json` check and counts as not on the preload list, so the `downgrade-risk` statement is
-  required. Both records are read strictly (exactly their fields, each key exactly in lower case and
-  present once, since `encoding/json` alone matches keys in any case and keeps the last duplicate; no
-  null, schema 1, a value of the set, at most 4 KiB) in this interim format:
-
-  ```json
-  {"schema": 1, "outcome": "met", "preload_pursued": false, "plain_http_www": "redirect"}
-  {"schema": 1, "on_preload_list": false}
-  ```
-
-  The format is owned by milestone 3's hosting ADR (0042, another pull request of this milestone); when it
-  lands, `livecheck`'s record parsers follow it, not the other way round.
+  judged as `met` without preload; an unreadable `preload.json` fails the `preload.json` check and counts
+  as not on the preload list, so the `downgrade-risk` statement is required.
+- **The records' format is ADR 0042's.** [ADR 0042](0042-host-the-site-behind-edge-services-and-deploy-it-from-the-release-with-a-bucket-scoped-key.md)
+  ("The HSTS and preload records") owns the format of `site/records/hsts.json` (`format`, `outcome`,
+  `preload`, `date`, `reason`) and `site/records/preload.json` (`format`, `listed`, `submitted`,
+  `checked`, `subdomains`); `livecheck`'s parsers follow it, never the other way round. They read both
+  strictly: exactly those fields, each key exactly in lower case and present once (`encoding/json` alone
+  matches keys in any case and keeps the last duplicate), no null, `format` 1, no trailing data, at most
+  4 KiB, every value checked against that ADR's rules (`preload` true only with `met`; dates real
+  calendar days written `YYYY-MM-DD`; `reason` at most 500 printable characters, empty when `met` and
+  required when `waived`; `listed` true only with a `submitted` date; `subdomains` lower-case host names
+  under `shift2eu.com`, sorted, each once, empty while nothing was submitted). A record that breaks any
+  rule is refused and fails safe as above.
+- **The records meet in one rule.** `preload.json`'s `listed: true` counts only when `hsts.json` was read
+  and pursues preload (`outcome` `met`, `preload` true), as ADR 0042 requires. Otherwise, a missing,
+  unreadable, met-without-preload or waived `hsts.json`, the claim fails a `hsts` check of its own at
+  `preload.json` and the site counts as not on the preload list, so `downgrade-risk` is still required:
+  the claim never removes a statement the other record does not back. Like an unreadable record, this
+  failure ends the rounds early; no later round can change it.
+- **Plain HTTP on the canonical host is a flag, `-plain-http-www`.** `redirect`, the default, requires
+  `http://<host>/<p>` to redirect like the apex; `refuse-or-close` also accepts the refused or closed
+  connection of item 5, which ADR 0042's Hosting decision 3 allows only if Edge Services cannot
+  redirect. Any other value is a configuration error (exit 2). It is a flag, not a record field, because
+  ADR 0042's records carry no such field: the answer belongs to the edge's configuration, which the
+  workflow that runs the check knows, not to the HSTS outcome. Milestone 4 passes `refuse-or-close` in
+  the workflows only if it accepts that outcome (Hosting decision 3), and records it there.
 - **The retry bound and rounds.** A deploy reaches visitors only when the HTML cached before it expires,
   so a failing round is repeated, the whole round, every `RetryInterval` (30 s in the program) until the
   bound, at least the HTML's `max-age` of **300 s** (default 600 s; less is a configuration error). A round
   that passes ends the run, and so does a round whose only failing checks are records that could not be
-  read: the records are read once, before the first round, so no later round can change them, and
+  read or a preload claim `hsts.json` does not back: the records are read once, before the first round, so no later round can change them, and
   waiting out the bound would only delay the report; the report holds the last round's checks and responses and the number of
   rounds. Every response records the URL, the remote address the connection reached and its `Age` header
   (absent and unparseable recorded as such, never failing by themselves). The clock, the sleep and the
@@ -196,8 +210,9 @@ The edge serves the bytes the deploy uploads; the live check measures them as se
   -manifest <manifest.json> -tags <file or ->`, and get a report and an exit code; the scheduled workflow
   builds `gh` argv from the matched `Tag` only.
 - The pages carry `id="site-version"` on the footer's version span; `test/site` pins it in both builds.
-- The record format is interim: when the hosting ADR (0042) fixes it, `livecheck`'s parsers and this ADR's
-  example change with it.
+- The records' format follows ADR 0042: a change to it there changes `livecheck`'s parsers and their tests
+  with it. The plain-HTTP www mode stays the program's flag, so a change of the edge's answer is a
+  change to the workflows' command line, not to a record.
 - A change to either budget is a decision: `livecheck`'s tests pin 3,145,728 and 11,534,336 bytes. Above
   either, TinyGo is reconsidered, as the PRD decides.
 - The apex's HSTS header is not judged unless preload is pursued; milestone 4 decides whether to pursue it.

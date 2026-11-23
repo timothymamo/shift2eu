@@ -304,8 +304,8 @@ func (c *checker) round(ctx context.Context) Report {
 	record, recordErr := c.cfg.Records.HSTS, c.cfg.Records.HSTSErr
 	if recordErr != nil {
 		// Fail safe: the record's own check fails, and the rest is judged as
-		// if HSTS were met, without preload and with plain HTTP redirecting.
-		record = HSTSRecord{Outcome: HSTSMet, PlainHTTPWWW: PlainHTTPRedirect}
+		// if HSTS were met, without preload.
+		record = HSTSRecord{Outcome: HSTSMet}
 	}
 
 	apexHTTPS := r.redirectMatrix(ctx, record)
@@ -435,7 +435,8 @@ func judgeRedirect(f fetched, want string) error {
 	return nil
 }
 
-// redirectMatrix runs behaviour 6's checks under record and returns the
+// redirectMatrix runs behaviour 6's checks under record (preload) and
+// Config.PlainHTTPWWW (plain HTTP on the canonical host) and returns the
 // responses of https://<apex>/, whose Strict-Transport-Security judgeHSTS
 // reads.
 func (r *round) redirectMatrix(ctx context.Context, record HSTSRecord) fetched {
@@ -459,7 +460,7 @@ func (r *round) redirectMatrix(ctx context.Context, record HSTSRecord) fetched {
 
 		var apexErr error
 
-		if record.PreloadPursued {
+		if record.Preload {
 			apexErr = judgeRedirect(apexHTTP, apexHTTPSURL)
 			if apexErr == nil && httpsErr != nil {
 				apexErr = fmt.Errorf("its second hop %s: %w", apexHTTPSURL, httpsErr)
@@ -471,7 +472,7 @@ func (r *round) redirectMatrix(ctx context.Context, record HSTSRecord) fetched {
 		r.add(KindRedirect, apexHTTPURL, apexErr)
 		r.add(KindRedirect, apexHTTPSURL, httpsErr)
 
-		if record.PlainHTTPWWW == PlainHTTPRefuseOrClose {
+		if r.cfg.PlainHTTPWWW == PlainHTTPRefuseOrClose {
 			r.add(KindRedirect, hostHTTPURL, r.judgeRefuseOrClose(hostHTTP, canonical))
 		} else {
 			r.add(KindRedirect, hostHTTPURL, judgeRedirect(hostHTTP, canonical))
@@ -514,7 +515,9 @@ func (r *round) judgeRefuseOrClose(f fetched, canonical string) error {
 }
 
 // judgeHSTS runs behaviour 8's header checks: each record that could not be
-// read fails a check of its own; when HSTS is met, the canonical host's header
+// read fails a check of its own, and so does a preload.json that claims the
+// preload list without an hsts.json pursuing preload (Records.Listed); when
+// HSTS is met, the canonical host's header
 // (from root) is held to the minimum, and the apex's (from apexRoot) too when
 // preload is pursued.
 func (r *round) judgeHSTS(root, apexRoot fetched, record HSTSRecord, recordErr error) {
@@ -526,13 +529,17 @@ func (r *round) judgeHSTS(root, apexRoot fetched, record HSTSRecord, recordErr e
 		r.add(KindHSTS, recordPreload, fmt.Errorf("the preload record could not be read (fail safe, counted as not on the preload list): %w", err))
 	}
 
+	if err := r.cfg.Records.listedWithoutPreload(); err != nil {
+		r.add(KindHSTS, recordPreload, err)
+	}
+
 	if record.Outcome != HSTSMet {
 		return
 	}
 
-	r.add(KindHSTS, r.cfg.Host, judgeHSTSHeader(root, record.PreloadPursued))
+	r.add(KindHSTS, r.cfg.Host, judgeHSTSHeader(root, record.Preload))
 
-	if record.PreloadPursued {
+	if record.Preload {
 		r.add(KindHSTS, r.cfg.Apex, judgeHSTSHeader(apexRoot, true))
 	}
 }
@@ -573,7 +580,7 @@ func (r *round) judgeStatements(files map[string]fetched, matched map[string]boo
 		carried(verifyPage, MarkerHSTSWaived)
 	}
 
-	if r.cfg.Records.PreloadErr != nil || !r.cfg.Records.Preload.OnPreloadList {
+	if !r.cfg.Records.Listed() {
 		carried(privacyPage, MarkerDowngradeRisk)
 	}
 }

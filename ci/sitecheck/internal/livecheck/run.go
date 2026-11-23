@@ -40,6 +40,20 @@ const DefaultRequestTimeout = 30 * time.Second
 // like (behaviour 6's refuse-or-close).
 type Dialer func(ctx context.Context, network, addr string) (net.Conn, error)
 
+// PlainHTTPWWW is what http://<host>/<p> must do on the canonical host
+// (behaviour 6), Config.PlainHTTPWWW.
+type PlainHTTPWWW string
+
+// The two modes of plain HTTP on the canonical host.
+const (
+	// PlainHTTPRedirect: it redirects to https://<host>/<p> like the apex.
+	PlainHTTPRedirect PlainHTTPWWW = "redirect"
+	// PlainHTTPRefuseOrClose: it refuses or closes the connection, or
+	// redirects like PlainHTTPRedirect, or refuses with a 4xx or 5xx that
+	// serves no manifest file (behaviour 6's exception).
+	PlainHTTPRefuseOrClose PlainHTTPWWW = "refuse-or-close"
+)
+
 // Config is everything Run depends on. Every field without a stated default
 // is required; Validate says which is wrong.
 type Config struct {
@@ -53,6 +67,11 @@ type Config struct {
 	Manifest Manifest
 	// Records are the HSTS and preload records, or the errors reading them.
 	Records Records
+	// PlainHTTPWWW is what plain HTTP on the canonical host must do:
+	// PlainHTTPRedirect (the program's default) or PlainHTTPRefuseOrClose.
+	// Required. It is the program's setting, not a record's: ADR 0042's
+	// records carry no field for it.
+	PlainHTTPWWW PlainHTTPWWW
 	// Tags is the repository's tag list (ReadTagList). Empty fails the
 	// KindVersion check, never the configuration.
 	Tags []string
@@ -93,7 +112,8 @@ type Config struct {
 // the first field that is not: Host or Apex empty, not a DNS name, or equal;
 // RetryBound below MinRetryBound; RetryInterval not positive or above
 // RetryBound; CertMargin below MinCertMargin; MaxBodyBytes negative or
-// non-zero below DecodedBudget+1; RequestTimeout negative; Now or Sleep nil;
+// non-zero below DecodedBudget+1; RequestTimeout negative; PlainHTTPWWW
+// neither PlainHTTPRedirect nor PlainHTTPRefuseOrClose; Now or Sleep nil;
 // a Manifest with no files, without index.html, privacy.html or verify.html,
 // or listing a path of ServiceWorkerPaths (misconfigured), or whose
 // ModuleScript fails. Records and Tags are never a configuration error: they
@@ -144,13 +164,16 @@ func (c Config) validateTiming() error {
 	return nil
 }
 
-// validateLimits checks the body cap and the request timeout.
+// validateLimits checks the body cap, the request timeout and the plain-HTTP
+// www mode.
 func (c Config) validateLimits() error {
 	switch {
 	case c.MaxBodyBytes < 0 || (c.MaxBodyBytes != 0 && c.MaxBodyBytes <= DecodedBudget):
 		return fmt.Errorf("the body cap %d is below the decoded budget plus one byte, %d", c.MaxBodyBytes, DecodedBudget+1)
 	case c.RequestTimeout < 0:
 		return fmt.Errorf("the request timeout %v is negative", c.RequestTimeout)
+	case c.PlainHTTPWWW != PlainHTTPRedirect && c.PlainHTTPWWW != PlainHTTPRefuseOrClose:
+		return fmt.Errorf("the plain-HTTP www mode %q, want %q or %q", c.PlainHTTPWWW, PlainHTTPRedirect, PlainHTTPRefuseOrClose)
 	}
 
 	return nil
@@ -278,7 +301,8 @@ func Run(ctx context.Context, cfg Config) (Report, error) {
 }
 
 // onlyRecordsFail reports whether every failing check of report is a record
-// that could not be read (KindHSTS of hsts.json or preload.json): the records
+// that could not be read or that the other record does not back (KindHSTS of
+// hsts.json or preload.json): the records
 // are read once, before the first round, so no later round can change them.
 func onlyRecordsFail(report Report) bool {
 	for _, check := range report.Checks {

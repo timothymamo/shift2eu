@@ -47,7 +47,7 @@ func main() {
 // run is the program without os.Exit, its environment passed in. args are
 // the arguments after the program's name:
 //
-//	sitecheck -manifest <manifest.json> -tags <file or -> [-hsts-record <file>] [-preload-record <file>] [-host <host>] [-apex <apex>] [-retry-bound <duration>]
+//	sitecheck -manifest <manifest.json> -tags <file or -> [-hsts-record <file>] [-preload-record <file>] [-host <host>] [-apex <apex>] [-retry-bound <duration>] [-plain-http-www redirect|refuse-or-close]
 //
 // -manifest (required) is the release's manifest.json; -tags (required) the
 // repository's tag list, one per line, "-" for stdin; -hsts-record and
@@ -55,7 +55,9 @@ func main() {
 // site/records/preload.json of the working directory; -host and -apex to
 // livecheck.DefaultHost and livecheck.DefaultApex; -retry-bound to
 // defaultRetryBound, and a value below livecheck.MinRetryBound is a
-// configuration error. run reads exactly the files its flags name, each
+// configuration error; -plain-http-www to livecheck.PlainHTTPRedirect, and a
+// value other than "redirect" or "refuse-or-close" is a configuration error
+// naming the flag. run reads exactly the files its flags name, each
 // capped (livecheck.MaxManifestBytes, MaxRecordBytes, MaxTagListBytes), and
 // no other file and no environment variable.
 //
@@ -112,6 +114,7 @@ func configure(args []string, stdin io.Reader, base livecheck.Config) (livecheck
 	host := flags.String("host", livecheck.DefaultHost, "the canonical host")
 	apex := flags.String("apex", livecheck.DefaultApex, "the apex")
 	retryBound := flags.Duration("retry-bound", defaultRetryBound, "how long failing rounds are repeated")
+	plainHTTPWWW := flags.String("plain-http-www", string(livecheck.PlainHTTPRedirect), `what plain HTTP on the canonical host must do: "redirect" or "refuse-or-close"`)
 
 	if err := flags.Parse(args); err != nil {
 		return livecheck.Config{}, err
@@ -126,6 +129,8 @@ func configure(args []string, stdin io.Reader, base livecheck.Config) (livecheck
 		return livecheck.Config{}, errors.New("-tags is required")
 	case *retryBound < livecheck.MinRetryBound:
 		return livecheck.Config{}, fmt.Errorf("-retry-bound %v is below the HTML's max-age, %v", *retryBound, livecheck.MinRetryBound)
+	case *plainHTTPWWW != string(livecheck.PlainHTTPRedirect) && *plainHTTPWWW != string(livecheck.PlainHTTPRefuseOrClose):
+		return livecheck.Config{}, fmt.Errorf("-plain-http-www %q, want %q or %q", *plainHTTPWWW, livecheck.PlainHTTPRedirect, livecheck.PlainHTTPRefuseOrClose)
 	}
 
 	manifest, err := readFile(*manifestPath, livecheck.ParseManifest)
@@ -152,6 +157,7 @@ func configure(args []string, stdin io.Reader, base livecheck.Config) (livecheck
 	cfg.Tags = tags
 	cfg.Records.HSTS, cfg.Records.HSTSErr = readFile(*hstsPath, livecheck.ParseHSTSRecord)
 	cfg.Records.Preload, cfg.Records.PreloadErr = readFile(*preloadPath, livecheck.ParsePreloadRecord)
+	cfg.PlainHTTPWWW = livecheck.PlainHTTPWWW(*plainHTTPWWW)
 	cfg.RetryBound = *retryBound
 	cfg.RetryInterval = retryInterval
 	cfg.CertMargin = livecheck.MinCertMargin

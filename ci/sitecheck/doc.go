@@ -2,7 +2,11 @@
 // #297 milestone 3, issue #346): the release's check and milestone 4's
 // scheduled workflow run it as
 //
-//	go run ./ci/sitecheck -manifest <manifest.json> -tags <file or -> [-hsts-record <file>] [-preload-record <file>] [-host <host>] [-apex <apex>] [-retry-bound <duration>]
+//	go run ./ci/sitecheck -manifest <manifest.json> -tags <file or -> [-hsts-record <file>] [-preload-record <file>] [-host <host>] [-apex <apex>] [-retry-bound <duration>] [-plain-http-www redirect|refuse-or-close]
+//
+// -plain-http-www is what plain HTTP on the canonical host must do: redirect
+// (the default) or refuse-or-close (ADR 0043); ADR 0042's records carry no
+// field for it.
 //
 // It reads the release's manifest, the HSTS and preload records of the
 // commit it runs from (site/records/hsts.json and site/records/preload.json

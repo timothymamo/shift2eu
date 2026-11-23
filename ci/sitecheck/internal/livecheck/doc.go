@@ -14,8 +14,9 @@
 //   - every HTML page's Cache-Control max-age, and s-maxage,
 //     stale-while-revalidate and stale-if-error when present, is at most 300
 //     (KindHTMLCache);
-//   - the redirect matrix of the apex and plain HTTP (KindRedirect); where the
-//     HSTS record allows plain HTTP on the canonical host to refuse or close,
+//   - the redirect matrix of the apex and plain HTTP (KindRedirect); where
+//     Config.PlainHTTPWWW (ci/sitecheck's -plain-http-www, default redirect)
+//     allows plain HTTP on the canonical host to refuse or close,
 //     only a request from whose connection no byte was read counts as that,
 //     and only when the connection was refused, never made (a dial that timed
 //     out: a filtered port), or closed or reset: a timeout after connecting,
@@ -35,8 +36,15 @@
 //     CheckCertificate, which keeps its caller's deadline and sets
 //     DefaultRequestTimeout only when the context has none);
 //   - Strict-Transport-Security against the HSTS record (KindHSTS) and the
-//     pages' statements against both records (KindStatement), the records read
-//     with exactly their lower-case keys, none twice;
+//     pages' statements against both records (KindStatement). The records'
+//     format is ADR 0042's ("The HSTS and preload records"), which owns it:
+//     ParseHSTSRecord and ParsePreloadRecord read site/records/hsts.json and
+//     site/records/preload.json with exactly their lower-case keys, none
+//     twice, and every value checked against that ADR's rules. The two meet
+//     in one rule: preload.json's listed counts only when hsts.json was read
+//     and pursues preload (met, preload true; Records.Listed); otherwise the
+//     claim fails a KindHSTS check at preload.json and the downgrade-risk
+//     statement is still required;
 //   - the live version, untrusted text read only from a root whose bytes are
 //     the manifest's index.html, in one linear scan, against the repository's
 //     tag list (KindVersion), whose match is the one way to construct a Tag,
@@ -53,8 +61,16 @@
 // Run repeats the checks until they pass or the retry bound, at least the
 // HTML's max-age of 300 seconds, is spent, and returns a Report, whose text
 // form quotes and caps every piece of text taken from a response. When the
-// only failing checks are records that could not be read, it reports after
-// that round: no later round can change them.
+// only failing checks are records that could not be read or a preload claim
+// hsts.json does not back, it reports after that round: no later round can
+// change them.
+//
+// The plain-HTTP www mode is Config.PlainHTTPWWW, not a record field: ADR
+// 0042's records carry none, and the answer belongs to the edge's
+// configuration, which the workflow running the check knows. ci/sitecheck
+// takes it from -plain-http-www, redirect by default; milestone 4 passes
+// refuse-or-close in the workflows only if it accepts that outcome (ADR 0042,
+// Hosting decision 3).
 //
 // Everything it depends on that is not a pure function is injected through
 // Config: the dialer (Dialer), the root certificates, the clock and the sleep,

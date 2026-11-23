@@ -11,8 +11,8 @@ const (
 	// MarkerHSTSWaived must be carried by privacy.html and verify.html when
 	// the HSTS record says waived.
 	MarkerHSTSWaived = "hsts-waived"
-	// MarkerDowngradeRisk must be carried by privacy.html when the preload
-	// record does not say on_preload_list: true.
+	// MarkerDowngradeRisk must be carried by privacy.html when the site does
+	// not count as on the preload list (Records.Listed).
 	MarkerDowngradeRisk = "downgrade-risk"
 )
 
