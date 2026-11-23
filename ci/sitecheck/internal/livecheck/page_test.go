@@ -230,18 +230,28 @@ func TestVersionText(t *testing.T) {
 // TestVersionTextScansARawTextHeavyBodyInLinearTime pins that reading the live
 // version out of an untrusted body stays linear in the body's length: a body of
 // many raw-text elements followed by one upper-case byte is read within a
-// generous budget, where lowering the whole remainder once per element made the
-// scan super-linear (auditor finding 2). 2 MiB, not 512 KiB, keeps the two
-// algorithms far apart even on fast hardware: the linear scan takes milliseconds
-// under -race, the former quadratic one about 16 times the work 512 KiB took. The
-// scan runs in a goroutine under a guard, so a super-linear scan fails this test
-// instead of hanging the package's run.
+// generous guard, where lowering the whole remainder once per element made the
+// scan super-linear (auditor finding 2).
+//
+// The guard catches a hang, not a slow run, and is deliberately far too wide to
+// measure the scan: the regression it pins is no near miss. The former
+// rawTextLength copied and lowered the whole remainder for every raw-text
+// element, so its work grows with the square of the body's length: about 10s at
+// 512 KiB, hence about 16 times that, well over two minutes, at the 2 MiB here,
+// and more the larger the body. The linear scan reads the same 2 MiB body in
+// well under a second off -race and -cover, and a few seconds at worst on a
+// loaded shared runner, which is two orders of magnitude below the guard. A 2s
+// budget was neither: it timed the scan against whatever else the runner was
+// doing (CI on a saturated runner took 2.03s). The scan therefore runs in a
+// goroutine that this test stops waiting for after 60s, so a regressed scan
+// fails this test instead of being held up by the package's timeout, while a
+// linear one never comes near it.
 func TestVersionTextScansARawTextHeavyBodyInLinearTime(t *testing.T) {
 	t.Parallel()
 
 	const (
-		budget = 2 * time.Second
-		size   = 2 << 20
+		guard = 60 * time.Second
+		size  = 2 << 20
 	)
 
 	pairs := strings.Repeat(`<style></style><script></script><title></title>`, size/47)
@@ -257,8 +267,8 @@ func TestVersionTextScansARawTextHeavyBodyInLinearTime(t *testing.T) {
 
 	select {
 	case <-done:
-	case <-time.After(budget):
-		t.Fatalf("VersionText did not read a %d-byte body of %d raw-text elements within %v: the scan is super-linear in the body's length", len(body), strings.Count(body, "<style></style>")*3, budget)
+	case <-time.After(guard):
+		t.Fatalf("VersionText did not read a %d-byte body of %d raw-text elements within %v: the scan is super-linear in the body's length", len(body), strings.Count(body, "<style></style>")*3, guard)
 	}
 }
 
