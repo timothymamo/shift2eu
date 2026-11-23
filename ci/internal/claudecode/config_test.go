@@ -122,7 +122,9 @@ func TestNewKeepsItsOwnCopyOfTheRedactValues(t *testing.T) {
 // TestAskRefusesAConfigOfTheWrongShape pins that a model or a tool name of
 // the wrong shape fails the run with ErrModel before the CLI starts: no run
 // asks the CLI's default model, and a permission rule or a list in one name
-// never reaches --tools, where the CLI would read it as something else.
+// never reaches --tools, where the CLI would read it as something else. The
+// config is otherwise complete, so each row fails on the field it names: a tool
+// row cannot pass on the token's own refusal (issue #277, round M, AI 5).
 func TestAskRefusesAConfigOfTheWrongShape(t *testing.T) {
 	t.Parallel()
 
@@ -130,22 +132,25 @@ func TestAskRefusesAConfigOfTheWrongShape(t *testing.T) {
 		name  string
 		model string
 		tools []string
+		// refusal is the reason the row's own field gives, which the error
+		// has to name.
+		refusal string
 	}{
-		{name: "an empty model", model: ""},
-		{name: "a model with a space", model: "claude opus"},
-		{name: "a model with a shell character", model: "claude;opus"},
-		{name: "a model over 64 bytes", model: strings.Repeat("a", 65)},
-		{name: "an empty tool name", model: "claude-fable-5-2", tools: []string{""}},
-		{name: "a permission rule as a tool", model: "claude-fable-5-2", tools: []string{"Bash(git log:*)"}},
-		{name: "a list in one tool name", model: "claude-fable-5-2", tools: []string{"Read,Bash"}},
-		{name: "a tool name with a digit", model: "claude-fable-5-2", tools: []string{"Read2"}},
+		{name: "an empty model", model: "", refusal: "is not a model name"},
+		{name: "a model with a space", model: "claude opus", refusal: "is not a model name"},
+		{name: "a model with a shell character", model: "claude;opus", refusal: "is not a model name"},
+		{name: "a model over 64 bytes", model: strings.Repeat("a", 65), refusal: "is not a model name"},
+		{name: "an empty tool name", model: "claude-fable-5-2", tools: []string{""}, refusal: "is not a tool name"},
+		{name: "a permission rule as a tool", model: "claude-fable-5-2", tools: []string{"Bash(git log:*)"}, refusal: "is not a tool name"},
+		{name: "a list in one tool name", model: "claude-fable-5-2", tools: []string{"Read,Bash"}, refusal: "is not a tool name"},
+		{name: "a tool name with a digit", model: "claude-fable-5-2", tools: []string{"Read2"}, refusal: "is not a tool name"},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			cli := claudecode.New(claudecode.Config{Path: missingCLI, Model: tc.model, Tools: tc.tools, Timeout: time.Minute})
+			cli := claudecode.New(claudecode.Config{Path: missingCLI, Token: subscriptionToken, Model: tc.model, Tools: tc.tools, Timeout: time.Minute})
 
 			text, err := cli.Ask(t.Context(), claudecode.Prompt{System: "s", User: "u"})
 			if !errors.Is(err, claudecode.ErrModel) {
@@ -154,6 +159,10 @@ func TestAskRefusesAConfigOfTheWrongShape(t *testing.T) {
 
 			if strings.Contains(err.Error(), "start the Claude Code CLI") {
 				t.Errorf("Ask = %v; the config is refused before the CLI starts, not by its failure to start", err)
+			}
+
+			if !strings.Contains(err.Error(), tc.refusal) {
+				t.Errorf("Ask = %v, want the row's own refusal, %q: the config is refused for the field the row names, not for another field's shape", err, tc.refusal)
 			}
 		})
 	}

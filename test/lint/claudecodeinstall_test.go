@@ -234,6 +234,14 @@ func TestClaudeCodeReadsThePinOnTheLineThatNamesIt(t *testing.T) {
 			want: false,
 		},
 		{
+			// Round M, audit nit 1: the path is on the line, but before the
+			// grep, where no argument of it comes, and the grep reads another
+			// file.
+			name: "an echo of the path beside a grep of another file on one line",
+			run:  `echo ` + claudeCodePinFile + `; version="$(grep -E '^version: [0-9]+\.[0-9]+\.[0-9]+$' .github/other.yaml || true)"`,
+			want: false,
+		},
+		{
 			name: "a variable assigned another file",
 			run: strings.Join([]string{
 				`pin=.github/other.yaml`,
@@ -254,12 +262,90 @@ func TestClaudeCodeReadsThePinOnTheLineThatNamesIt(t *testing.T) {
 	}
 }
 
+// TestClaudeCodeWritesEachOutputWhereItsRedirectIs pins the writer half of the
+// pin check on its own (issue #277, round M, AI 7): a step writes an output when
+// the same line it prints the output line on, or the { ...; } block that line
+// stands in, is the one that carries the redirect to $GITHUB_OUTPUT. A version
+// printed to the step's own log with only the integrity going to the output
+// writes no version, and a value that stays in a shell variable writes nothing
+// at all.
+func TestClaudeCodeWritesEachOutputWhereItsRedirectIs(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		run  string
+		// output is the name the row is about, and want whether the script
+		// writes that output where GitHub reads it.
+		output string
+		want   bool
+	}{
+		{
+			// The reviewer's own step: one block whose closing line carries
+			// both outputs' redirect.
+			name: "the reviewer's block",
+			run: strings.Join([]string{
+				`version="$(grep -E '^version: [0-9]+\.[0-9]+\.[0-9]+$' "${pin}" || true)"`,
+				`integrity="$(grep -E '^integrity: sha512-[A-Za-z0-9+/]{86}==$' "${pin}" || true)"`,
+				`{`,
+				`  printf 'version=%s\n' "${version#version: }"`,
+				`  printf 'integrity=%s\n' "${integrity#integrity: }"`,
+				`} >> "${GITHUB_OUTPUT}"`,
+			}, "\n"),
+			output: "version",
+			want:   true,
+		},
+		{
+			name:   "an output line and the redirect on one line",
+			run:    `printf 'integrity=%s\n' "${integrity}" >> "${GITHUB_OUTPUT}"`,
+			output: "integrity",
+			want:   true,
+		},
+		{
+			name:   "an output line in a comment",
+			run:    "# printf 'integrity=%s\\n' \"${integrity}\"\n" + `printf 'version=%s\n' "${version}" >> "${GITHUB_OUTPUT}"`,
+			output: "integrity",
+			want:   false,
+		},
+		{
+			// The version goes to the step's own log, and the block's
+			// redirect carries the integrity alone (round M, AI 7).
+			name: "the version printed to the log, only the integrity redirected",
+			run: strings.Join([]string{
+				`printf 'version=%s\n' "${version}"`,
+				`{`,
+				`  printf 'integrity=%s\n' "${integrity}"`,
+				`} >> "${GITHUB_OUTPUT}"`,
+			}, "\n"),
+			output: "version",
+			want:   false,
+		},
+		{
+			name:   "a value that stays in a shell variable",
+			run:    `version="$(grep -E '^version: [0-9]+\.[0-9]+\.[0-9]+$' "${pin}" || true)"`,
+			output: "version",
+			want:   false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := claudeCodeWritesOutput(tc.run, tc.output); got != tc.want {
+				t.Errorf("claudeCodeWritesOutput(%q, %q) = %t, want %t: a step writes an output where the same line, or the same block, prints it and redirects it to $GITHUB_OUTPUT (issue #277, round M, AI 7)", tc.run, tc.output, got, tc.want)
+			}
+		})
+	}
+}
+
 // TestClaudeCodeRunsInstallerSeesEveryForm pins what counts as the install step
 // (issue #277, round L, AI 6): the installer's own line, the line that reaches it
-// through bash or sh, and the line that reaches it through env and that
-// command's own options and NAME=VALUE words. A step that only names the path
-// where no command name comes - a case pattern of a diff, an echo, a comment -
-// installs nothing.
+// through bash or sh, the line that reaches it through env and that command's own
+// options and NAME=VALUE words, the same script named with a ./ before it, and
+// the command an interpreter's -c takes as one quoted argument (issue #277,
+// round M, AI 7). A step that only names the path where no command runs - a case
+// pattern of a diff, an echo, a comment - installs nothing.
 func TestClaudeCodeRunsInstallerSeesEveryForm(t *testing.T) {
 	t.Parallel()
 
@@ -291,6 +377,27 @@ func TestClaudeCodeRunsInstallerSeesEveryForm(t *testing.T) {
 		{
 			name: "through env, an option and an assignment before bash",
 			run:  `env -i TMPDIR=/tmp bash ` + claudeCodeInstallScript + ` "$dir" "pkg" "integrity"`,
+			want: true,
+		},
+		{
+			// Round M, AI 7: a command whose own word comes first still reaches
+			// the script, so the check reads every word of the line.
+			name: "through sudo",
+			run:  `sudo ` + claudeCodeInstallScript + ` "$dir" "pkg" "integrity"`,
+			want: true,
+		},
+		{
+			// Round M, AI 7: the same script, named with the ./ a shell
+			// accepts.
+			name: "with ./ before the script's path",
+			run:  "./" + claudeCodeInstallScript + ` "$dir" "pkg" "integrity"`,
+			want: true,
+		},
+		{
+			// Round M, AI 7: an interpreter's -c takes the whole command as
+			// one quoted argument, which holds the script's path all the same.
+			name: "through bash -c",
+			run:  `bash -c '` + claudeCodeInstallScript + ` "$dir" "pkg" "integrity"'`,
 			want: true,
 		},
 		{
@@ -395,16 +502,35 @@ func claudeCodeInstallSteps(t *testing.T) []claudeCodeInstallStep {
 }
 
 // claudeCodeRunsInstaller reports whether a step's run: script runs the
-// installer: one of its lines has the script's path where a command's own name
-// comes - the line's first word, the word after bash or sh, or the word after
-// env with that command's options and NAME=VALUE words skipped (issue #277,
-// round L, AI 6). An interpreter form runs the installer all the same, so the
-// check reads it rather than skip the step it installs from. A line that only
-// names the path elsewhere - in a case pattern of a diff, in an echo, in a
-// comment - installs nothing.
+// installer: one line that is no comment holds a word whose cleaned path ends in
+// the script's name (issue #277, rounds L and M, AI 6 and 7). The check fails
+// closed: the word may stand anywhere on the line, after sudo or an
+// interpreter's -c, with a ./ before it or with the shell's own quoting around
+// it. A comment installs nothing, and neither does a case pattern of a diff: the
+// patterns a case's in lists, which the shell compares and never runs, are no
+// command.
 func claudeCodeRunsInstaller(text string) bool {
-	for _, line := range strings.Split(text, "\n") {
-		if claudeCodeRunsInstallerLine(aiReviewShellWords(line)) {
+	patterns := false
+
+	for _, line := range claudeCodeNonCommentLines(text) {
+		words := aiReviewShellWords(line)
+
+		if patterns {
+			// A pattern list ends at the line whose last byte is the ) that
+			// closes it; the commands of the arm after it are read as the
+			// commands they are.
+			patterns = !strings.HasSuffix(strings.TrimSpace(line), ")")
+
+			continue
+		}
+
+		if claudeCodeOpensCasePatterns(words) {
+			patterns = true
+
+			continue
+		}
+
+		if claudeCodeRunsInstallerLine(words) {
 			return true
 		}
 	}
@@ -412,52 +538,87 @@ func claudeCodeRunsInstaller(text string) bool {
 	return false
 }
 
+// claudeCodeOpensCasePatterns reports whether words open a case's list of
+// patterns: the shell's case keyword and the in that ends the word it selects
+// on.
+func claudeCodeOpensCasePatterns(words []string) bool {
+	if len(words) < 2 || words[0] != "case" {
+		return false
+	}
+
+	return slices.Contains(words[1:], "in")
+}
+
 // claudeCodeRunsInstallerLine reports whether one line's words run the
-// installer: bash, sh and env are words a command's name follows, and an
-// option or an env NAME=VALUE before that name is no command name.
+// installer: any word whose cleaned path ends in the script's name, wherever it
+// stands on the line, so a line that reaches the script through sudo, an
+// interpreter's -c option or a ./ prefix is read rather than skipped over (issue
+// #277, round M, AI 7). The check fails closed: a word the cleaning leaves
+// ending in the script's name counts, and the cleaning takes off only what a
+// shell's own quoting adds, so a case pattern's word, which ends in ")", and an
+// echo's quoted sentence, which is no path at all, install nothing.
 func claudeCodeRunsInstallerLine(words []string) bool {
 	for _, word := range words {
-		switch {
-		case word == "env", word == "bash", word == "sh":
-			continue
-		case strings.HasPrefix(word, "-"), strings.Contains(word, "="):
-			continue
+		if claudeCodeIsInstallerWord(word) {
+			return true
 		}
-
-		return word == claudeCodeInstallScript
 	}
 
 	return false
 }
 
+// claudeCodeIsInstallerWord reports whether word names the installer's path: a
+// leading quote character the shell words keep and a leading ./ taken off, it
+// ends in the script's path.
+func claudeCodeIsInstallerWord(word string) bool {
+	word = strings.TrimLeft(word, `'"`)
+	word = strings.TrimPrefix(word, "./")
+
+	return strings.HasSuffix(word, claudeCodeInstallScript)
+}
+
 // claudeCodeReadsPin reports whether a step's run: script reads the pin file:
 // one line that is no comment runs grep -E over one of the file's anchored
-// lines and names the file on that same line, as its own path or through a
-// shell variable the same script assigns the path to (issue #277, rounds J, K
-// and L). A comment reads nothing, and neither does a line that only mentions
-// the path, in an echo or any other word: a grep of another file beside an echo
-// of the pin's path reads no pin.
+// lines and names the file among that grep's own arguments, as its own path or
+// through a shell variable the same script assigns the path to (issue #277,
+// rounds J, K, L and M). A comment reads nothing, and neither does a word
+// before the grep or one of a command that follows it: a path an echo prints
+// beside a grep of another file reads no pin.
 func claudeCodeReadsPin(text string) bool {
 	lines := claudeCodeNonCommentLines(text)
 	variables := claudeCodePinVariables(lines)
 
 	for _, line := range lines {
-		if !claudeCodePinRead.MatchString(line) {
+		match := claudeCodePinRead.FindStringIndex(line)
+		if match == nil {
 			continue
 		}
 
-		if strings.Contains(line, claudeCodePinFile) {
+		arguments := claudeCodeGrepArguments(line[match[1]:])
+
+		if strings.Contains(arguments, claudeCodePinFile) {
 			return true
 		}
 
 		for _, name := range variables {
-			if claudeCodeNamesVariable(line, name) {
+			if claudeCodeNamesVariable(arguments, name) {
 				return true
 			}
 		}
 	}
 
 	return false
+}
+
+// claudeCodeGrepArguments returns what a run: line holds of the grep -E
+// command from the end of its matched start to the separator that ends it: the
+// ;, | or && that begins the next command.
+func claudeCodeGrepArguments(rest string) string {
+	if i := strings.IndexAny(rest, ";|&"); i >= 0 {
+		return rest[:i]
+	}
+
+	return rest
 }
 
 // claudeCodeNonCommentLines returns the lines of a run: script that are no
@@ -542,30 +703,59 @@ func claudeCodeNamesVariable(line, name string) bool {
 }
 
 // claudeCodeWritesOutput reports whether a step's run: script writes name's
-// value to $GITHUB_OUTPUT: one line that is no comment writes it as a quoted
-// output line (printf 'version=%s', echo "version=..."), and one line that is
-// no comment appends to $GITHUB_OUTPUT. A comment writes nothing, and neither
-// does a script that only computes the value into a shell variable and writes
-// it nowhere: the assignment's own name= is no output line (issue #277, round
-// K).
+// value to $GITHUB_OUTPUT: one line that is no comment holds a quoted
+// name= output line (printf 'version=%s', echo "version=...") and that same
+// line, or the { ...; } block the line stands in, carries the redirect, which
+// is the block's own closing line (issue #277, rounds K and M, AI 7). A comment
+// writes nothing. A value the script prints to its own log, or keeps in a shell
+// variable, while the redirect carries another output is no output of the step:
+// the write and the redirect are one line's, or one block's, business.
 func claudeCodeWritesOutput(run, name string) bool {
-	writes, output := false, false
+	inBlock, blockWrites := false, false
 
 	for _, line := range strings.Split(run, "\n") {
-		if strings.HasPrefix(strings.TrimSpace(line), "#") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "#") {
 			continue
 		}
 
-		if strings.Contains(line, "'"+name+"=") || strings.Contains(line, "\""+name+"=") {
-			writes = true
+		switch {
+		case !inBlock && trimmed == "{":
+			inBlock, blockWrites = true, false
+
+			continue
+		case inBlock && strings.HasPrefix(trimmed, "}"):
+			if blockWrites && strings.Contains(trimmed, "GITHUB_OUTPUT") {
+				return true
+			}
+
+			inBlock, blockWrites = false, false
+
+			continue
 		}
 
-		if strings.Contains(line, "GITHUB_OUTPUT") {
-			output = true
+		if !claudeCodeNamesOutput(trimmed, name) {
+			continue
+		}
+
+		if strings.Contains(trimmed, "GITHUB_OUTPUT") {
+			return true
+		}
+
+		if inBlock {
+			blockWrites = true
 		}
 	}
 
-	return writes && output
+	return false
+}
+
+// claudeCodeNamesOutput reports whether line holds an output line for name: the
+// name and its = inside a quote, as printf and echo print one. An assignment's
+// own name= is outside any quote, so no line that only computes the value names
+// an output.
+func claudeCodeNamesOutput(line, name string) bool {
+	return strings.Contains(line, "'"+name+"=") || strings.Contains(line, "\""+name+"=")
 }
 
 // claudeCodePinStepProblems returns every reason the install step's own job

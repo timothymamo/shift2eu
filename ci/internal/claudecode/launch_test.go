@@ -692,6 +692,13 @@ func TestAskRefusesTheNewFieldsAtTheirZeroShape(t *testing.T) {
 			if !strings.Contains(err.Error(), tc.field) {
 				t.Errorf("Ask = %v, want the error to name the %s it refused", err, tc.field)
 			}
+
+			// No refusal quotes the token (issue #277, round M, audit 2): the
+			// field's own name is all the error says of it, so a config the
+			// launcher refuses puts no credential of the caller's in a log.
+			if strings.Contains(err.Error(), subscriptionToken) {
+				t.Errorf("Ask = %v, want the error to hold none of the token: the refusal names the field, never the value the CLI's environment holds (CLAUDE.md rule 3, issue #277)", err)
+			}
 		})
 	}
 }

@@ -2,9 +2,10 @@
 // milestone-2 amendment, issue #277): ci/internal/audit, the audit's library,
 // and ci/auditrun, the launcher the model step runs. Each gets a strict depguard
 // rule of named standard packages - an allow list, not $gostd, so a standard
-// package nobody thought of is refused until the list names it - and the
-// library's launcher, ci/internal/claudecode, is the one package of the module
-// they may import.
+// package nobody thought of is refused until the list names it - and each may
+// import one package of the module: audit-library the shared launcher
+// ci/internal/claudecode, and audit-main the library ci/internal/audit it runs
+// (issue #277, round M, AI 8).
 //
 // A lax rule names who may import the library: ci/auditrun, the wrapper
 // ci/auditexec and the library's own tests, and nobody else. Go's internal rule
