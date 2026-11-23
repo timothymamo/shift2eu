@@ -922,10 +922,20 @@ const (
 	fixtureRepoPrefix  = "repos/" + fixtureRepository
 	fixtureIssuesQuery = fixtureRepoPrefix + "/issues?creator=shift2eu-audit%5Bbot%5D&state=all&per_page=100&page=1"
 
+	// fixtureAdvisoriesEndpoint is the advisory listing's first page, which
+	// every publish run reads (PR 4c).
+	fixtureAdvisoriesEndpoint = fixtureRepoPrefix + "/security-advisories?per_page=100"
+
 	// lineImageAsExpected and lineAuditPublished are the two subcommands'
-	// lines of a run that passed.
+	// lines of a run that passed, and lineNotFiled the private findings' line of
+	// a run whose draft advisory GitHub refused (PR 4c).
 	lineImageAsExpected = "image digest: as expected"
 	lineAuditPublished  = "audit published: public findings 0, private findings: none"
+	lineNotFiled        = "private findings not filed: see runbook"
+
+	// codeNotFiled is the exit code of a run whose private findings were not
+	// filed (ADR 0040, runbook step 11).
+	codeNotFiled = 5
 )
 
 // usageTextOfEverySubcommand is what a command line the run cannot parse
@@ -997,6 +1007,17 @@ func publicFinding() map[string]any {
 		"fix":       "the fix of G304",
 		"dismissal": "",
 	}
+}
+
+// privateFinding returns one confirmed private finding: a high one of a private
+// category, which a run files as a draft advisory.
+func privateFinding() map[string]any {
+	f := publicFinding()
+	f["rule"] = "G302"
+	f["severity"] = "high"
+	f["category"] = "injection"
+
+	return f
 }
 
 // writeResultOf writes the result document to a fresh temporary directory and
@@ -1105,11 +1126,12 @@ func imageAnswers(t *testing.T) []fakeAnswer {
 }
 
 // publishAnswers returns the publish subcommand's answers: the release, the
-// issues' one page and the report's writes.
+// issues' one page, the advisory listing's one page and the report's writes.
 func publishAnswers() []fakeAnswer {
 	return []fakeAnswer{
 		{Method: "GET", Endpoint: fixtureRepoPrefix + "/releases/tags/" + fixtureTag, Status: 200, Body: map[string]string{"tag_name": fixtureTag}},
 		{Method: "GET", Endpoint: fixtureIssuesQuery, Status: 200, Body: []any{}},
+		{Method: "GET", Endpoint: fixtureAdvisoriesEndpoint, Status: 200, Body: []any{}},
 		{Method: "GET", Endpoint: fixtureRepoPrefix + "/git/ref/heads/" + fixtureBranch, Status: 404, Body: map[string]string{"message": "Not Found"}},
 		{
 			Method:   "GET",
@@ -1249,6 +1271,80 @@ func TestRunPublishAndImageReadTheirVariablesAndPrintTheirLine(t *testing.T) {
 				t.Errorf("the variables the run read (-want +got):\n%s", diff)
 			}
 		})
+	}
+}
+
+// TestRunPublishReportsAPrivateFindingNotFiled pins PR 4c's not-filed run: the
+// run reads the repository's advisories and files a draft for its private
+// finding, GitHub refuses the creation, and the report is published all the
+// same. The program prints the runbook's not-filed line and exits 5 - its one
+// line and no other, on stdout and in the step's summary.
+func TestRunPublishReportsAPrivateFindingNotFiled(t *testing.T) {
+	t.Parallel()
+
+	answers := append(publishAnswers(), fakeAnswer{
+		Method:   "POST",
+		Endpoint: fixtureRepoPrefix + "/security-advisories",
+		Status:   422,
+		Body:     map[string]string{"message": "the creation was refused"},
+	})
+
+	fake := newRoutedFakeGH(t, answers...)
+	summaryPath := writeSummary(t)
+	tempDir := t.TempDir()
+
+	resultPath := writeResultOf(t, resultDocumentWith(privateFinding()))
+	args := withTempDir(publishArgs(fake.Path, newFakeGitleaks(t), resultPath, t.TempDir()), tempDir)
+	result := runProgram(t, args, stepEnvironment(t, summaryPath))
+
+	if result.code != codeNotFiled {
+		t.Fatalf("the run's exit code is %d, want %d: %s\nstdout: %s\nstderr: %s",
+			result.code, codeNotFiled, lineNotFiled, result.stdout, result.stderr)
+	}
+
+	if want := lineNotFiled + "\n"; result.stdout != want {
+		t.Errorf("the run's stdout is %q, want exactly %q: the run prints one line", result.stdout, want)
+	}
+
+	if result.stderr != "" {
+		t.Errorf("the run's stderr is %q, want nothing", result.stderr)
+	}
+
+	if !strings.HasSuffix(result.summary, lineNotFiled+"\n") {
+		t.Errorf("the step summary is %q, want the run's line appended", result.summary)
+	}
+
+	// The draft is attempted before the report is published, and the report is
+	// published whatever GitHub answered the creation.
+	var sawListing, sawCreate, sawReport bool
+
+	for _, c := range fake.Calls(t) {
+		if len(c.Args) < 9 {
+			continue
+		}
+
+		method, endpoint := c.Args[2], c.Args[len(c.Args)-1]
+
+		switch {
+		case method == "GET" && endpoint == fixtureAdvisoriesEndpoint:
+			sawListing = true
+		case method == "POST" && endpoint == fixtureRepoPrefix+"/security-advisories":
+			sawCreate = true
+		case method == "POST" && endpoint == fixtureRepoPrefix+"/git/blobs":
+			sawReport = true
+		}
+	}
+
+	if !sawListing {
+		t.Errorf("the run read no advisory listing, want the one page: a private finding is filed as a draft")
+	}
+
+	if !sawCreate {
+		t.Errorf("the run attempted no draft, want the one create GitHub refuses")
+	}
+
+	if !sawReport {
+		t.Errorf("the run published no report, want the report after the refused creation")
 	}
 }
 
