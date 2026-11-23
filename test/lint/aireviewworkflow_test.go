@@ -422,24 +422,37 @@ func TestAIReviewWorkflowHoldsTheReviewersSecurityProperties(t *testing.T) {
 		// The version and the integrity live in one committed file, which
 		// Renovate bumps and both workflows' install steps read (ADR 0040's
 		// milestone-2 amendment, issue #277): the workflow holds neither, so
-		// there is no second pin that could drift from the file's.
+		// there is no second pin that could drift from the file's. The install
+		// step's env: carries the pin step's outputs, whole; a value the
+		// workflow wrote there itself is a pin of its own, and a literal under
+		// the older names is one all the same (issue #277, round J).
 		for _, line := range workflow.lines {
 			key, value, ok := strings.Cut(line.Text, ":")
 			if !ok {
 				continue
 			}
 
-			switch strings.TrimSpace(key) {
-			case "CLAUDE_CODE_VERSION", "CLAUDE_CODE_INTEGRITY":
-				t.Errorf("%s: line %d: the workflow sets %s to %q; the Claude Code pin lives in %s alone, which Renovate bumps and the pin check reads (CLAUDE.md rule 7, issue #277)", aiReviewWorkflowPath, line.Num, strings.TrimSpace(key), strings.TrimSpace(value), claudeCodePinFile)
+			name, value := strings.TrimSpace(key), strings.TrimSpace(value)
+
+			if want, ok := claudeCodePinOutputs[name]; ok {
+				if value != want {
+					t.Errorf("%s: line %d: the workflow sets %s to %q, want %q: the pin lives in %s, and the install step passes the pin step's output, not a value of the workflow's own (CLAUDE.md rule 7, issue #277)", aiReviewWorkflowPath, line.Num, name, value, want, claudeCodePinFile)
+				}
+
+				continue
+			}
+
+			if slices.Contains(claudeCodePinEnvNames, name) {
+				t.Errorf("%s: line %d: the workflow sets %s to %q; the Claude Code pin lives in %s alone, which Renovate bumps and the pin check reads (CLAUDE.md rule 7, issue #277)", aiReviewWorkflowPath, line.Num, name, value, claudeCodePinFile)
 			}
 		}
 
 		// The step that installs the CLI, or one before it in the install step's
-		// own job, reads that file: the version and the integrity reach the
-		// installer from it. The workflow has exactly one job (pinned above), so
-		// the steps of this slice are the install step's own job's (issue #277,
-		// round F finding 7).
+		// own job, reads that file with the anchored grep -E over it, and not by
+		// naming its path alone: the version and the integrity reach the
+		// installer from it (issue #277, round J). The workflow has exactly one
+		// job (pinned above), so the steps of this slice are the install step's
+		// own job's (issue #277, round F finding 7).
 		readsPin := false
 
 		for _, step := range workflow.steps[:index+1] {
@@ -448,13 +461,13 @@ func TestAIReviewWorkflowHoldsTheReviewersSecurityProperties(t *testing.T) {
 				continue
 			}
 
-			if strings.Contains(aiReviewText(stepRun), claudeCodePinFile) {
+			if claudeCodeReadsPin(aiReviewText(stepRun)) {
 				readsPin = true
 			}
 		}
 
 		if !readsPin {
-			t.Errorf("%s: no step before the CLI's install reads %s, so neither the version nor the integrity reaches the installer (ADR 0040, issue #277)", aiReviewWorkflowPath, claudeCodePinFile)
+			t.Errorf("%s: no step before the CLI's install reads %s with an anchored grep -E over it, so neither the version nor the integrity reaches the installer (ADR 0040, issue #277)", aiReviewWorkflowPath, claudeCodePinFile)
 		}
 
 		// The install step passes the linux-x64 platform package at the

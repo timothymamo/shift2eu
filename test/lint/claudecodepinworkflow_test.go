@@ -1192,9 +1192,13 @@ var claudeCodePinPinNamingFiles = []string{
 // claudeCodePinPinNamingStrings are the strings that name the Claude Code pin: a
 // second install with a pin of its own under .github/ would be read by no check
 // of this repository's, since ci/claudecodepin reads .github/claude-code.yaml
-// alone.
+// alone. The two env: names are the ones the pin reaches the install step under,
+// and the two beside them the older names a workflow could pin the CLI with
+// instead (issue #277, round J).
 var claudeCodePinPinNamingStrings = []string{
 	"CLAUDE_CODE_INTEGRITY",
+	"CLAUDE_CODE_PIN_INTEGRITY",
+	"CLAUDE_CODE_PIN_VERSION",
 	"install-claude-code.sh",
 }
 
@@ -1205,12 +1209,12 @@ var claudeCodePinSearchedDirs = []string{".github/workflows", ".github/scripts",
 
 // TestClaudeCodePinLivesOnlyInThePinFile pins that the Claude Code CLI is
 // installed from one pin, .github/claude-code.yaml: no workflow, script or
-// action of .github mentions CLAUDE_CODE_INTEGRITY or install-claude-code.sh but
-// the reviewer's workflow, the installer itself, the pin file and the check's
-// workflow. ci/claudecodepin reads the version and the integrity out of that one
-// file alone, so a second install with a pin of its own would be checked by
-// nothing, and would run whatever its pin says (issue #452, ADR 0040's
-// milestone-2 amendment, issue #277).
+// action of .github mentions one of the pin's env: names or
+// install-claude-code.sh but the reviewer's workflow, the installer itself, the
+// pin file and the check's workflow. ci/claudecodepin reads the version and the
+// integrity out of that one file alone, so a second install with a pin of its
+// own would be checked by nothing, and would run whatever its pin says (issue
+// #452, ADR 0040's milestone-2 amendment, issue #277).
 func TestClaudeCodePinLivesOnlyInThePinFile(t *testing.T) {
 	t.Parallel()
 

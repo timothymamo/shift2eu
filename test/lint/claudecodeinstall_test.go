@@ -16,6 +16,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
@@ -39,7 +40,32 @@ const (
 	// which both workflows' install steps read and ci/claudecodepin checks
 	// against the npm registry (ADR 0040's milestone-2 amendment, issue #277).
 	claudeCodePinFile = ".github/claude-code.yaml"
+
+	// claudeCodePinStepName is the id: of the one step that reads that file's
+	// two lines: the install step's env: takes what it exports, never a value of
+	// the workflow's own (issue #277, round J).
+	claudeCodePinStepName = "claude-code-pin"
 )
+
+// claudeCodePinOutputs are the values the install step's env: gives the pin: the
+// whole output of the step that read the file, one per name, so neither the
+// version nor the integrity is a value the workflow carries itself (ADR 0040's
+// milestone-2 amendment, issue #277, round J).
+var claudeCodePinOutputs = map[string]string{
+	"CLAUDE_CODE_PIN_VERSION":   "${{ steps." + claudeCodePinStepName + ".outputs.version }}",
+	"CLAUDE_CODE_PIN_INTEGRITY": "${{ steps." + claudeCodePinStepName + ".outputs.integrity }}",
+}
+
+// claudeCodePinEnvNames are the pin's old env: names, which no workflow may set:
+// the version and the integrity live in the file alone, and reach the installer
+// as the pin step's outputs under the names of claudeCodePinOutputs.
+var claudeCodePinEnvNames = []string{"CLAUDE_CODE_VERSION", "CLAUDE_CODE_INTEGRITY"}
+
+// claudeCodePinRead matches the command that reads the pin file's two lines:
+// grep -E over an anchored ^version: or ^integrity: pattern. A step that only
+// names the file's path, in a comment or an echo, reads nothing (issue #277,
+// round J).
+var claudeCodePinRead = regexp.MustCompile(`\bgrep\s+-E\s+'(\^version:|\^integrity:)`)
 
 // claudeCodeWorkflowVersionLit matches a pin a workflow wrote itself: an exact
 // X.Y.Z version, the shape the pin file's version: line holds.
@@ -62,7 +88,8 @@ type claudeCodeInstallStep struct {
 	// run is the step's run: text.
 	run string
 	// pinNames are the env: names the step sets for the CLI's pin, and the
-	// values it sets them to.
+	// values it sets them to: the pin step's outputs, or a pin of the workflow's
+	// own, which the test refuses.
 	pinNames map[string]string
 }
 
@@ -89,11 +116,19 @@ func TestEveryWorkflowThatInstallsTheCLIReadsTheOnePinFile(t *testing.T) {
 		saw[install.workflow] = true
 
 		for name, value := range install.pinNames {
-			t.Errorf("%s: line %d: the step that installs the CLI sets %s to %q; the version and the integrity live in %s alone, which Renovate bumps and ci/claudecodepin reads (CLAUDE.md rule 7, issue #277)", install.workflow, install.num, name, value, claudeCodePinFile)
+			if want, ok := claudeCodePinOutputs[name]; ok {
+				if value != want {
+					t.Errorf("%s: line %d: the step that installs the CLI sets %s to %q, want %q: the version and the integrity reach the installer as the output of the step that reads %s, never as a value of the workflow's own (CLAUDE.md rule 7, issue #277)", install.workflow, install.num, name, value, want, claudeCodePinFile)
+				}
+
+				continue
+			}
+
+			t.Errorf("%s: line %d: the step that installs the CLI sets %s to %q; the version and the integrity live in %s alone, which Renovate bumps and ci/claudecodepin reads, and reach the installer as steps.%s.outputs.* (CLAUDE.md rule 7, issue #277)", install.workflow, install.num, name, value, claudeCodePinFile, claudeCodePinStepName)
 		}
 
-		if !strings.Contains(install.run, claudeCodePinFile) && !claudeCodeStepBeforeReadsPin(t, install) {
-			t.Errorf("%s: line %d: neither the install step nor one before it in its job reads %s, so neither the version nor the integrity reaches the installer (ADR 0040, issue #277)", install.workflow, install.num, claudeCodePinFile)
+		if !claudeCodeReadsPin(install.run) && !claudeCodeStepBeforeReadsPin(t, install) {
+			t.Errorf("%s: line %d: neither the install step nor one before it in its job reads %s with an anchored grep -E over it, so neither the version nor the integrity reaches the installer (ADR 0040, issue #277)", install.workflow, install.num, claudeCodePinFile)
 		}
 
 		// No word of the install step's line is a pin written into the workflow:
@@ -174,9 +209,16 @@ func claudeCodeInstallSteps(t *testing.T) []claudeCodeInstallStep {
 							continue
 						}
 
-						switch strings.TrimSpace(key) {
-						case "CLAUDE_CODE_VERSION", "CLAUDE_CODE_INTEGRITY":
-							pinNames[strings.TrimSpace(key)] = strings.TrimSpace(value)
+						name := strings.TrimSpace(key)
+
+						if _, ok := claudeCodePinOutputs[name]; ok {
+							pinNames[name] = strings.TrimSpace(value)
+
+							continue
+						}
+
+						if slices.Contains(claudeCodePinEnvNames, name) {
+							pinNames[name] = strings.TrimSpace(value)
 						}
 					}
 				}
@@ -204,6 +246,29 @@ func claudeCodeRunsInstaller(text string) bool {
 	return false
 }
 
+// claudeCodeReadsPin reports whether a step's run: script reads the pin file: a
+// line runs grep -E over one of the file's anchored lines, and a line that is no
+// comment names the file. A comment or an echo that names the path alone reads
+// nothing, so a step that only mentions the file is no step that read it (issue
+// #277, round J).
+func claudeCodeReadsPin(text string) bool {
+	if !claudeCodePinRead.MatchString(text) {
+		return false
+	}
+
+	for _, line := range strings.Split(text, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "#") {
+			continue
+		}
+
+		if strings.Contains(line, claudeCodePinFile) {
+			return true
+		}
+	}
+
+	return false
+}
+
 // claudeCodeStepBeforeReadsPin reports whether a step of the install step's own
 // job, at or before it, reads the pin file: the one step that reads the file's
 // shape exports the version and the integrity, and the install step passes what
@@ -224,7 +289,7 @@ func claudeCodeStepBeforeReadsPin(t *testing.T, install claudeCodeInstallStep) b
 				continue
 			}
 
-			if strings.Contains(aiReviewText(run), claudeCodePinFile) {
+			if claudeCodeReadsPin(aiReviewText(run)) {
 				return true
 			}
 		}
