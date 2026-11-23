@@ -113,8 +113,8 @@ func TestCheckCommitRunsLooksUpEveryDistinctRunOnce(t *testing.T) {
 
 // TestCheckCommitRunsRefusesARunThatIsNoCommit pins the check's verdict: a run
 // that is no commit of the repository refuses the publication - a 404, and a
-// 200 whose answer names another commit than the one looked up - and the
-// refusal names no run.
+// 200 whose answer names another commit than the one looked up, names none or
+// is no commit at all - and the refusal names no run.
 func TestCheckCommitRunsRefusesARunThatIsNoCommit(t *testing.T) {
 	t.Parallel()
 
@@ -130,6 +130,24 @@ func TestCheckCommitRunsRefusesARunThatIsNoCommit(t *testing.T) {
 				Endpoint: commitRunEndpoint(fixtureOtherCommitSHA),
 				Status:   404,
 				Body:     map[string]string{"message": "Not Found"},
+			},
+		},
+		{
+			name: "an answer without a sha",
+			answer: Route{
+				Method:   "GET",
+				Endpoint: commitRunEndpoint(fixtureOtherCommitSHA),
+				Status:   200,
+				Body:     map[string]string{"message": "no sha"},
+			},
+		},
+		{
+			name: "an answer that is no commit",
+			answer: Route{
+				Method:   "GET",
+				Endpoint: commitRunEndpoint(fixtureOtherCommitSHA),
+				Status:   200,
+				Body:     "no commit",
 			},
 		},
 		{
