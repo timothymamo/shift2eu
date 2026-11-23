@@ -68,10 +68,11 @@ func ScanPublic(body string, modelFields []string, key FingerprintKey) error {
 // ScanAdvisory scans an advisory's text: the token and key patterns and the
 // encoded-token check, not the encoded-run refusal, since an advisory holds
 // PoCs and crash inputs, which are often base64. A hit is an error wrapping
-// ErrScanRefused that names no text; a key that was never set is ErrConfig.
+// ErrScanRefused that names no text; a key that was never set or is shorter
+// than 32 bytes is ErrConfig.
 func ScanAdvisory(text string, key FingerprintKey) error {
 	if len(key.bytes) < minKeyBytes {
-		return fmt.Errorf("AUDIT_FINGERPRINT_KEY: not set: %w", ErrConfig)
+		return fmt.Errorf("AUDIT_FINGERPRINT_KEY: not set or shorter than %d bytes: %w", minKeyBytes, ErrConfig)
 	}
 
 	if holdsToken([]byte(text), key) {

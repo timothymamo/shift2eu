@@ -482,7 +482,7 @@ func escapedCell(cell string) bool {
 	}
 
 	for _, r := range text {
-		if forbiddenRune(r) {
+		if !textRune(r) {
 			return false
 		}
 	}

@@ -3,7 +3,8 @@
 // it decides what the audit publishes and renders it, and does no I/O.
 //
 // It validates the model's structured result fail-closed (ParseResult: the
-// schema, its caps, unknown and duplicate fields, the finding limit), places
+// schema, its caps, printable ASCII as the only text a field holds, unknown
+// and duplicate fields, the finding limit), places
 // each finding public or private from its check, severity, confirmation and
 // category alone (Place), computes its fingerprint, plain for a public finding
 // and an HMAC with the fingerprint key for a private one, derives each public

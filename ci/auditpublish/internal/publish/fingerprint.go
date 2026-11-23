@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"regexp"
-	"strconv"
 )
 
 // Fingerprint is a finding's identity across reports: fp- and 12 lowercase hex
@@ -33,7 +32,7 @@ type FingerprintKey struct {
 // refuses fewer than 32 bytes (ErrConfig). The error names no byte of it.
 func NewFingerprintKey(b []byte) (FingerprintKey, error) {
 	if len(b) < minKeyBytes {
-		return FingerprintKey{}, fmt.Errorf("AUDIT_FINGERPRINT_KEY: shorter than %s bytes: %w", strconv.Itoa(minKeyBytes), ErrConfig)
+		return FingerprintKey{}, fmt.Errorf("AUDIT_FINGERPRINT_KEY: shorter than %d bytes: %w", minKeyBytes, ErrConfig)
 	}
 
 	return FingerprintKey{bytes: append([]byte(nil), b...)}, nil
@@ -59,7 +58,7 @@ func PlainFingerprint(rule, file, sink string) Fingerprint {
 // empty key is a digest anyone can compute.
 func KeyedFingerprint(key FingerprintKey, rule, file, sink string) (Fingerprint, error) {
 	if len(key.bytes) < minKeyBytes {
-		return "", fmt.Errorf("AUDIT_FINGERPRINT_KEY: not set or shorter than %s bytes: %w", strconv.Itoa(minKeyBytes), ErrConfig)
+		return "", fmt.Errorf("AUDIT_FINGERPRINT_KEY: not set or shorter than %d bytes: %w", minKeyBytes, ErrConfig)
 	}
 
 	mac := hmac.New(sha256.New, key.bytes)

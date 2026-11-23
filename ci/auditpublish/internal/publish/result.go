@@ -5,7 +5,6 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	"unicode"
 	"unicode/utf8"
 )
 
@@ -650,8 +649,8 @@ func validateChanges(c Changes, limits []string) error {
 }
 
 // checkText checks a string's encoding, its characters and its length in
-// bytes. A multi-line field may hold LF and TAB; no field holds a rune
-// forbiddenRune refuses.
+// bytes. A field holds printable ASCII alone, and a multi-line field also LF
+// and TAB (textRune).
 func checkText(path, s string, multiLine bool, lo, hi int) error {
 	if !utf8.ValidString(s) {
 		return invalid(path, "not valid UTF-8")
@@ -662,8 +661,8 @@ func checkText(path, s string, multiLine bool, lo, hi int) error {
 			continue
 		}
 
-		if forbiddenRune(r) {
-			return invalid(path, "a control, bidirectional or invisible character")
+		if !textRune(r) {
+			return invalid(path, "a character outside printable ASCII")
 		}
 	}
 
@@ -679,61 +678,13 @@ func checkText(path, s string, multiLine bool, lo, hi int) error {
 	return nil
 }
 
-// forbiddenRune reports whether r is a character no field may hold (ADR 0040,
-// "The invisible-character rule"): a C0 or C1 control, DEL, a line or
-// paragraph separator, every rune of category Cf (format, the bidirectional
-// controls, the zero-width characters and the tag characters among them), Co
-// (private use) or Cn (unassigned, in the Unicode version of the Go release
-// that builds the core), every noncharacter, the variation selectors, every
-// space of category Zs but U+0020, and the listed fillers, symbols and
-// invisible operators that render as nothing. Which blank a model puts
-// between two words is a channel, so U+0020 is the only one a field holds.
-func forbiddenRune(r rune) bool {
-	switch {
-	case r < 0x20, r == 0x7f, r >= 0x80 && r <= 0x9f:
-		return true
-	case r == 0x2028, r == 0x2029:
-		return true
-	case r != ' ' && unicode.Is(unicode.Zs, r):
-		return true
-	case isNoncharacter(r), invisibleRune(r):
-		return true
-	case unicode.In(r, unicode.Cf, unicode.Co):
-		return true
-	default:
-		// Cn: a rune no category of the Unicode tables holds.
-		return !unicode.In(r, unicode.L, unicode.M, unicode.N, unicode.P, unicode.S, unicode.Z, unicode.Cc, unicode.Cs)
-	}
-}
-
-// isNoncharacter reports whether r is one of Unicode's 66 noncharacters:
-// U+FDD0 to U+FDEF, and the last two code points of every plane.
-func isNoncharacter(r rune) bool {
-	return r >= 0xfdd0 && r <= 0xfdef || r&0xfffe == 0xfffe
-}
-
-// invisibleRune reports whether r is a variation selector, a tag character
-// or one of the listed characters outside Cf that render as nothing: the soft
-// hyphen, the combining grapheme joiner, the Hangul and Mongolian fillers and
-// free variation selectors, the Khitan filler, the Khmer inherent vowels, the
-// invisible operators, the braille pattern blank and the musical null
-// notehead. U+00AD, U+2061 to U+2064 and the tags are Cf too; they are listed
-// so the rule does not rest on one Unicode version.
-func invisibleRune(r rune) bool {
-	switch {
-	case r >= 0xfe00 && r <= 0xfe0f, r >= 0xe0100 && r <= 0xe01ef:
-		return true
-	case r >= 0xe0000 && r <= 0xe007f:
-		return true
-	case r == 0x00ad, r == 0x034f, r == 0x115f, r == 0x1160, r == 0x17b4, r == 0x17b5:
-		return true
-	case r >= 0x180b && r <= 0x180f, r >= 0x2061 && r <= 0x2064:
-		return true
-	case r == 0x3164, r == 0xffa0, r == 0x16fe4:
-		return true
-	case r == 0x2800, r == 0x1d159:
-		return true
-	default:
-		return false
-	}
+// textRune reports whether r is printable ASCII, U+0020 to U+007E: the
+// only characters a field holds besides a multi-line field's LF and TAB (ADR
+// 0040, "The text rule"). A lookalike letter, a mark with no glyph of its own,
+// a typographic dash or quote and a rune that renders blank all carry a token
+// past the maintainer's eye, and no list of characters to refuse is complete,
+// so the rule is an allow list. It holds no control, no bidirectional or
+// invisible character and no space but U+0020.
+func textRune(r rune) bool {
+	return r >= 0x20 && r <= 0x7e
 }
