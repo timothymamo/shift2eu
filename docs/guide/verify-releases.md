@@ -108,9 +108,10 @@ nothing. `gh attestation verify` must print `✓ Verification succeeded!` and ex
 It works the same on macOS. `gh attestation verify checksums.txt ...`, with the same flags, verifies
 `checksums.txt` itself.
 
-The release's site bundle, `shift2eu-site_<tag>.tar.gz` (for example `shift2eu-site_v0.4.0.tar.gz`), is
+The release's site bundle, `shift2eu-site_<tag>.tar.gz` (for example `shift2eu-site_vX.Y.Z.tar.gz`), is
 one more asset of the same release, listed in the same `checksums.txt` and covered by the same
-attestation: check it with the commands above, with `ARCHIVE="shift2eu-site_$TAG.tar.gz"`.
+attestation: check it with the commands above, with `ARCHIVE="shift2eu-site_$TAG.tar.gz"`. The site
+bundle starts with the first release after `v0.12.0`: `v0.12.0` and earlier have none.
 [Verify the site](#verify-the-site) uses it.
 
 On Windows, in PowerShell, for a `.zip` archive:
@@ -154,11 +155,17 @@ verification page says that HSTS is waived, the same risk covers returning visit
 every time, or run the bundle yourself (below).
 
 Every page shows the release it was built from, in its footer (and on the verification page), such as
-`v0.4.0`: that is the release to check. Check the live site against it, with `TAG` set to that version:
+`vX.Y.Z`: that is the release to check. The live site is up from the site's first deploy. Check the live
+site against that release, with `TAG` set to its version. Run the block in a new bash shell (type `bash`
+first): `set -euo pipefail` ends that shell at the first command that fails, so nothing after a failed
+step runs, and the block works in a fresh, empty directory, so no file from an earlier run can stand in
+for one this run did not fetch.
 
 ```bash
+set -euo pipefail
 TAG=vX.Y.Z
 BUNDLE="shift2eu-site_$TAG.tar.gz"
+D="$(mktemp -d)" && cd "$D"
 
 gh release download "$TAG" --repo timothymamo/shift2eu --pattern "$BUNDLE"
 
@@ -169,8 +176,15 @@ gh attestation verify "$BUNDLE" --repo timothymamo/shift2eu \
 
 mkdir site && tar -xzf "$BUNDLE" -C site
 
+# The bundle must be the release you meant: its manifest names its version.
+test "$(jq -r .version site/manifest.json)" = "$TAG"
+
 # Every file manifest.json lists, fetched from the live site over HTTPS only and compared with its digest.
-jq -r '.files[] | "\(.sha256)  \(.path)"' site/manifest.json > manifest.sha256
+# Defence in depth: the manifest is attested, but a path that could leave live/ is refused anyway.
+jq -r '.files[]
+  | if (.path | test("^[A-Za-z0-9._/-]+$") and (contains("..") | not) and (startswith("/") | not))
+    then "\(.sha256)  \(.path)" else error("unsafe path in manifest.json: \(.path)") end' \
+  site/manifest.json > manifest.sha256
 mkdir live
 while read -r _ path; do
   mkdir -p "live/$(dirname "$path")"
@@ -181,12 +195,27 @@ done < manifest.sha256
 ```
 
 `gh attestation verify` must print `✓ Verification succeeded!`, and the check must print `OK` for every
-file. `--compressed` asks for, and decodes, the compressed form the site serves its largest script in:
+file. The command leaves out `--source-digest` on purpose: the release runs only on a pushed `v*.*.*` tag,
+a ruleset guards who may create one, and `--signer-workflow`, `--source-ref "refs/tags/$TAG"` and
+`--deny-self-hosted-runners` bind the bundle to that tag's run; a commit digest read from the same GitHub
+would add nothing. With a clone you trust, you can bind it to a commit as well:
+`C="$(git rev-list -n1 "$TAG")"`, then `git merge-base --is-ancestor "$C" origin/main`, and add
+`--source-digest "$C"` to the command.
+
+`--compressed` asks for, and decodes, the compressed form the site serves its largest script in:
 the manifest's digests are of the files themselves. A `FAILED` line, or a file `curl` cannot fetch, means
 the live site does not serve that release's files; report it as the repository's
-[security policy](../../SECURITY.md) says. The address `https://www.shift2eu.com/` serves `index.html`,
-which `curl --compressed --proto '=https' https://www.shift2eu.com/ | sha256sum` compares the same way.
-Every release checks the live site the same way after it deploys it.
+[security policy](../../SECURITY.md) says. The address `https://www.shift2eu.com/` serves `index.html`:
+
+```bash
+curl --fail --silent --show-error --proto '=https' --compressed https://www.shift2eu.com/ | sha256sum
+jq -r '.files[] | select(.path == "index.html") | .sha256' site/manifest.json
+```
+
+The first line must print the digest the second prints. The release that is the highest release tag on
+`main` checks the live site after it deploys it, once the maintainer has switched the deploy on, and its
+check does more than this one: it also checks the root, the service worker's paths, the redirects, the
+certificate and HSTS.
 
 What the check shows, and what it does not:
 
@@ -202,7 +231,8 @@ What the check shows, and what it does not:
 
 **Run the bundle yourself.** The bundle runs unchanged on any origin. Serve the verified, extracted
 bundle with any static file server on your own machine and open it in your browser: you run exactly
-the attested files, and the site's host sees nothing. For example:
+the attested files, and the site's host sees nothing. For example, from the directory the check above
+worked in (`$D`):
 
 ```bash
 python3 -m http.server 8000 --bind localhost --directory site
