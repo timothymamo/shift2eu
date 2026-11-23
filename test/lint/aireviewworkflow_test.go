@@ -447,27 +447,17 @@ func TestAIReviewWorkflowHoldsTheReviewersSecurityProperties(t *testing.T) {
 			}
 		}
 
-		// The step that installs the CLI, or one before it in the install step's
-		// own job, reads that file with the anchored grep -E over it, and not by
-		// naming its path alone: the version and the integrity reach the
-		// installer from it (issue #277, round J). The workflow has exactly one
-		// job (pinned above), so the steps of this slice are the install step's
-		// own job's (issue #277, round F finding 7).
-		readsPin := false
+		// The step that reads the pin file is the one with id: claude-code-pin,
+		// in the install step's own job and before it: its run: greps the file
+		// outside a comment and writes both the version and the integrity to
+		// $GITHUB_OUTPUT, the outputs the install step's env: reads (issue #277,
+		// round K). The workflow has exactly one job (pinned above), so the
+		// steps of this slice are the install step's own job's (issue #277,
+		// round F finding 7).
+		install := claudeCodeInstallStep{workflow: aiReviewWorkflowPath, job: workflow.job.Key, num: run.Num, run: aiReviewText(run)}
 
-		for _, step := range workflow.steps[:index+1] {
-			stepRun, ok := aiReviewFind(aiReviewStepFields(t, step), "run")
-			if !ok {
-				continue
-			}
-
-			if claudeCodeReadsPin(aiReviewText(stepRun)) {
-				readsPin = true
-			}
-		}
-
-		if !readsPin {
-			t.Errorf("%s: no step before the CLI's install reads %s with an anchored grep -E over it, so neither the version nor the integrity reaches the installer (ADR 0040, issue #277)", aiReviewWorkflowPath, claudeCodePinFile)
+		for _, problem := range claudeCodePinStepProblems(t, install) {
+			t.Errorf("%s: line %d: %s (ADR 0040, issue #277, round K)", aiReviewWorkflowPath, run.Num, problem)
 		}
 
 		// The install step passes the linux-x64 platform package at the

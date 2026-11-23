@@ -13,6 +13,7 @@
 package lint_test
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -60,6 +61,11 @@ var claudeCodePinOutputs = map[string]string{
 // the version and the integrity live in the file alone, and reach the installer
 // as the pin step's outputs under the names of claudeCodePinOutputs.
 var claudeCodePinEnvNames = []string{"CLAUDE_CODE_VERSION", "CLAUDE_CODE_INTEGRITY"}
+
+// claudeCodePinStepOutputs are the names the pin step writes to $GITHUB_OUTPUT
+// for the install step's env: to read: both of the file's values, each written
+// where GitHub reads the step's outputs, never one alone (issue #277, round K).
+var claudeCodePinStepOutputs = []string{"version", "integrity"}
 
 // claudeCodePinRead matches the command that reads the pin file's two lines:
 // grep -E over an anchored ^version: or ^integrity: pattern. A step that only
@@ -127,8 +133,8 @@ func TestEveryWorkflowThatInstallsTheCLIReadsTheOnePinFile(t *testing.T) {
 			t.Errorf("%s: line %d: the step that installs the CLI sets %s to %q; the version and the integrity live in %s alone, which Renovate bumps and ci/claudecodepin reads, and reach the installer as steps.%s.outputs.* (CLAUDE.md rule 7, issue #277)", install.workflow, install.num, name, value, claudeCodePinFile, claudeCodePinStepName)
 		}
 
-		if !claudeCodeReadsPin(install.run) && !claudeCodeStepBeforeReadsPin(t, install) {
-			t.Errorf("%s: line %d: neither the install step nor one before it in its job reads %s with an anchored grep -E over it, so neither the version nor the integrity reaches the installer (ADR 0040, issue #277)", install.workflow, install.num, claudeCodePinFile)
+		for _, problem := range claudeCodePinStepProblems(t, install) {
+			t.Errorf("%s: line %d: %s (ADR 0040, issue #277, round K)", install.workflow, install.num, problem)
 		}
 
 		// No word of the install step's line is a pin written into the workflow:
@@ -246,37 +252,72 @@ func claudeCodeRunsInstaller(text string) bool {
 	return false
 }
 
-// claudeCodeReadsPin reports whether a step's run: script reads the pin file: a
-// line runs grep -E over one of the file's anchored lines, and a line that is no
-// comment names the file. A comment or an echo that names the path alone reads
-// nothing, so a step that only mentions the file is no step that read it (issue
-// #277, round J).
+// claudeCodeReadsPin reports whether a step's run: script reads the pin file:
+// one line that is no comment runs grep -E over one of the file's anchored
+// lines, and one line that is no comment names the file. A comment reads
+// nothing, and neither does a line that only mentions the path, in an echo or
+// any other word, so a step that only names the file is no step that read it
+// (issue #277, rounds J and K).
 func claudeCodeReadsPin(text string) bool {
-	if !claudeCodePinRead.MatchString(text) {
-		return false
-	}
+	grepped, named := false, false
 
 	for _, line := range strings.Split(text, "\n") {
 		if strings.HasPrefix(strings.TrimSpace(line), "#") {
 			continue
 		}
 
+		if claudeCodePinRead.MatchString(line) {
+			grepped = true
+		}
+
 		if strings.Contains(line, claudeCodePinFile) {
-			return true
+			named = true
 		}
 	}
 
-	return false
+	return grepped && named
 }
 
-// claudeCodeStepBeforeReadsPin reports whether a step of the install step's own
-// job, at or before it, reads the pin file: the one step that reads the file's
-// shape exports the version and the integrity, and the install step passes what
-// it exported. A step of another job of the same workflow is no such step: it
-// runs on another runner, and nothing it read reaches the installer (issue #277,
-// round F finding 7).
-func claudeCodeStepBeforeReadsPin(t *testing.T, install claudeCodeInstallStep) bool {
+// claudeCodeWritesOutput reports whether a step's run: script writes name's
+// value to $GITHUB_OUTPUT: one line that is no comment writes it as a quoted
+// output line (printf 'version=%s', echo "version=..."), and one line that is
+// no comment appends to $GITHUB_OUTPUT. A comment writes nothing, and neither
+// does a script that only computes the value into a shell variable and writes
+// it nowhere: the assignment's own name= is no output line (issue #277, round
+// K).
+func claudeCodeWritesOutput(run, name string) bool {
+	writes, output := false, false
+
+	for _, line := range strings.Split(run, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "#") {
+			continue
+		}
+
+		if strings.Contains(line, "'"+name+"=") || strings.Contains(line, "\""+name+"=") {
+			writes = true
+		}
+
+		if strings.Contains(line, "GITHUB_OUTPUT") {
+			output = true
+		}
+	}
+
+	return writes && output
+}
+
+// claudeCodePinStepProblems returns every reason the install step's own job
+// holds no step that reads the pin file into the outputs the install step's
+// env: names: the step with id: claude-code-pin must be in that job, before the
+// install step, and its run: must read the file with grep -E outside a comment
+// and write both the version and the integrity to $GITHUB_OUTPUT (issue #277,
+// round K). A step of another job is no such step: it runs on another runner,
+// and nothing it wrote reaches the installer. An empty list is such a step.
+func claudeCodePinStepProblems(t *testing.T, install claudeCodeInstallStep) []string {
 	t.Helper()
+
+	var problems []string
+
+	found := false
 
 	for _, job := range claudeCodeWorkflowJobs(t, install.workflow) {
 		if job.key != install.job {
@@ -284,18 +325,55 @@ func claudeCodeStepBeforeReadsPin(t *testing.T, install claudeCodeInstallStep) b
 		}
 
 		for _, step := range job.steps {
-			run, ok := aiReviewFind(aiReviewStepFields(t, step), "run")
-			if !ok || run.Num > install.num {
+			fields := aiReviewStepFields(t, step)
+
+			id, ok := aiReviewFind(fields, "id")
+			if !ok || aiReviewScalar(t, id) != claudeCodePinStepName {
 				continue
 			}
 
-			if claudeCodeReadsPin(aiReviewText(run)) {
-				return true
+			found = true
+
+			run, ok := aiReviewFind(fields, "run")
+			if !ok {
+				problems = append(problems, fmt.Sprintf("the step with id: %s has no run: that reads %s", claudeCodePinStepName, claudeCodePinFile))
+
+				continue
 			}
+
+			if run.Num > install.num {
+				problems = append(problems, fmt.Sprintf("the step with id: %s is at line %d, after the install step at line %d: the install step's env: reads what it wrote, so it must come first", claudeCodePinStepName, run.Num, install.num))
+			}
+
+			problems = append(problems, claudeCodePinRunProblems(aiReviewText(run))...)
 		}
 	}
 
-	return false
+	if !found {
+		problems = append(problems, fmt.Sprintf("no step of the install step's job has id: %s, the one step whose outputs the install step's env: reads", claudeCodePinStepName))
+	}
+
+	return problems
+}
+
+// claudeCodePinRunProblems returns every reason run is no script that reads the
+// pin file into the step's outputs: it must read the file with grep -E outside
+// a comment, and write both the version and the integrity to $GITHUB_OUTPUT
+// (issue #277, round K).
+func claudeCodePinRunProblems(run string) []string {
+	var problems []string
+
+	if !claudeCodeReadsPin(run) {
+		problems = append(problems, fmt.Sprintf("its run: script reads %s with neither an anchored grep -E outside a comment nor a line that is no comment naming it", claudeCodePinFile))
+	}
+
+	for _, output := range claudeCodePinStepOutputs {
+		if !claudeCodeWritesOutput(run, output) {
+			problems = append(problems, fmt.Sprintf("its run: script writes no %s to $GITHUB_OUTPUT", output))
+		}
+	}
+
+	return problems
 }
 
 // claudeCodeWorkflowJobs returns every job of the workflow at rel with its steps,
