@@ -241,7 +241,9 @@ jobs:
         env:
           SHIFT2EU_TEST_MAKE: /usr/bin/make
           SHIFT2EU_TEST_MAKE_VERSION: "3.81"
-        run: go test -race -count=1 ./test/devenv/...
+        # -timeout 25m, below the job's 30: passing runs on the 3-vCPU macOS runner reach 7m52, too close to go
+        # test's default 10m (issue #512).
+        run: go test -race -count=1 -timeout 25m ./test/devenv/...
 
   # The dry run of release-please.yml (issues #142 and #157, ADR 0021): its guard, tag and relabel steps'
   # own scripts, read from the workflow, run against a fake gh with canned API responses, so a change to
