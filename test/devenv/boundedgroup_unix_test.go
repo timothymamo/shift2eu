@@ -13,8 +13,8 @@ import (
 // boundedGroup is the process group runBounded starts a command in, so a timeout can kill the command and
 // every process it started. As processGroup's (procgroup_unix_test.go), its leader is a holder of runBounded's
 // own, a cat on a pipe only runBounded writes to, not the command: until release reaps the holder its pid, and
-// so the group's id, names this group and no other, so kill can signal no process outside it even when the
-// command has been reaped already (CLAUDE.md, rule 10). It needs no *testing.T, unlike processGroup, and ends
+// so the group's id, names this group and no other, so kill's group signal reaches no process outside it even
+// when the command has been reaped already (CLAUDE.md, rule 10). It needs no *testing.T, unlike processGroup, and ends
 // the holder by closing its stdin rather than by a signal: a process the command left behind on purpose keeps
 // running unless the command timed out.
 type boundedGroup struct {
@@ -66,10 +66,13 @@ func startBounded(cmd *exec.Cmd) (*boundedGroup, error) {
 }
 
 // kill sends SIGKILL to every process in the group, the holder included, and then to the command's own process
-// through Go's handle, which reaches a command that moved itself out of the group (setsid): os.Process signals
-// no pid it has reaped already (os.ErrProcessDone), so it too cannot reach a process outside the run (CLAUDE.md,
-// rule 10). It ignores the errors: ESRCH means only zombies are left in the group, and ErrProcessDone that the
-// command was reaped.
+// through Go's handle, which reaches a command that moved itself out of the group (setsid). On Linux that handle
+// is a pidfd, signalled with pidfd_send_signal, so it cannot reach another process (CLAUDE.md, rule 10).
+// Elsewhere (darwin) Go keeps the bare pid and a done flag it sets only after wait4 has reaped the command, so a
+// command that exits on its own exactly at the bound leaves an instant in which kill(2) goes to a freed pid: it
+// harms another process only if that pid is reused within the instant, which is not ruled out but practically
+// never happens. It ignores the errors: ESRCH means only zombies are left in the group, and os.ErrProcessDone
+// that the command was reaped.
 func (g *boundedGroup) kill() {
 	_ = syscall.Kill(-g.holder.Process.Pid, syscall.SIGKILL)
 
