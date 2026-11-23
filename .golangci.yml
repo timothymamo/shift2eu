@@ -2697,6 +2697,20 @@ linters:
         linters:
           - forbidigo
         text: 'because "tests-no-process-state: [^"]*"$'
+      # And the one call-level exception (issue #277 round G, ADR 0040):
+      # os.Chdir, which ci/auditexec/main.go passes to run, so the audit's
+      # command wrapper changes into its fixed work directory, /srv/audit/work,
+      # before every exec and a relative path word resolves where the wrapper's
+      # path rule checked it. text is the group's first entry's msg, so the
+      # exclusion is msg-granular: in this one file it would also drop a Setenv
+      # issue, which that entry matches too. test/lint's AST check
+      # (testsprocessstate_test.go, processStateCallException) still refuses
+      # every process-state call there but os.Chdir, and the group's second
+      # entry still holds.
+      - path: ^ci/auditexec/main\.go$
+        linters:
+          - forbidigo
+        text: 'because "tests-no-process-state: a test changes no environment variable and no working directory, which every test of the process shares; pass the value to the code under test through a fake or a parameter \(CLAUDE\.md rule 3\)"$'
       # inventoryfile-no-env: the group holds for every file under
       # internal/adapter/source/inventoryfile/, _test.go files included, and
       # nowhere else.

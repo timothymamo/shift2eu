@@ -4,12 +4,14 @@
 // the audit's model may run through Bash.
 //
 // `audit-exec <name> <args...>` maps name to a fixed absolute path, never
-// through PATH, and replaces itself with that program (syscall.Exec), with an
-// environment of exactly its own allow list: nothing of the caller's is
-// inherited. git runs as `/usr/bin/git --no-pager -C /srv/audit/checkout
-// <subcommand> ...` with one of the read-only subcommands the ADR lists, and
-// never with an option that names another configuration, git directory, work
-// tree, program or output file, nor --show-signature, nor any word that could
+// through PATH, changes into its fixed working directory /srv/audit/work
+// (os.Chdir; a change that fails exits 127, as a failed exec does) and
+// replaces itself with that program (syscall.Exec), with an environment of
+// exactly its own allow list: nothing of the caller's is inherited. git runs
+// as `/usr/bin/git --no-pager -C /srv/audit/checkout <subcommand> ...` with
+// one of the read-only subcommands the ADR lists, and never with an option
+// that names another configuration, git directory, work tree, program or
+// output file, nor --no-index, nor --show-signature, nor any word that could
 // ask for a signature's verification (%G with or without git's +, - or space
 // modifier, %(signature, and on a for-each-ref line any word holding
 // signature), wherever it sits on the line, so a grep pattern holding %G is
@@ -18,15 +20,23 @@
 // order and compare lines (-k and -t with their values among them), so it never
 // runs a program, reads a file it was not given or writes one; uniq takes one
 // operand at most, so its OUT never writes a file. On every command's line,
-// a word that names a path into /proc, /sys or /dev is refused (the wrapper's
-// path rule, issue #277 round F): a non-option word holding "/", the value of
-// an option after its "=", and git's -C value, attached or the next word,
-// each cleaned as filepath.Clean cleans it and read from "/" when relative,
-// so a glob the CLI's deny rule could not see is refused once the shell has
-// expanded it. Every
-// other name, a path given as the name included, every other git subcommand
-// and every refused option ends the run with exit 126 and one line on stderr
-// that names the refused word, quoted and cut to 64 bytes.
+// every path word is held to an allow list, /srv/audit/checkout,
+// /srv/audit/checks and /srv/audit/work and what lies under them (the
+// wrapper's path rule, issue #277 rounds F and G): a path word is a
+// non-option word holding "/" or that is "..", every word after "--", an
+// option's value after its "=", the rest of a single-dash word after its
+// first letter when that rest holds "/", and git's -C value, attached or the
+// next word ("-" alone is stdin). A relative path word is read from the
+// checkout on a git line and from the work directory on any other; a word
+// holding a ".." element is refused before anything is cleaned, so a glob
+// the CLI's deny rule could not see, or a link such as /dev/fd followed by
+// "..", is refused once the shell has expanded it. The wrapper is defence in
+// depth: what the shell opens itself, a redirection, it never sees, and the
+// sandbox is the boundary. Every other name, a path given as the name
+// included, every other git subcommand, every refused option and every path
+// word outside the roots ends the run with exit 126, having changed and run
+// nothing, and one line on stderr that names the refused word, quoted and cut
+// to 64 bytes.
 //
 // It is no part of the product: a main package, which Go refuses to import,
 // held by the strict depguard rule audit-exec to the standard packages it

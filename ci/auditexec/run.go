@@ -11,11 +11,20 @@ const (
 	// the checkout, the wrapper's own -C.
 	checkout = "/srv/audit/checkout"
 
+	// checks is the directory of the model-free step's check outputs, which
+	// the audit reads.
+	checks = "/srv/audit/checks"
+
+	// work is the wrapper's fixed working directory, which it changes into
+	// before every exec: the audit's work area, where a relative name on a
+	// line that is no git line is read from.
+	work = "/srv/audit/work"
+
 	// exitRefused is the status of a refused name, subcommand or option.
 	exitRefused = 126
 
 	// execFailedExit is the status of a listed command the wrapper could not
-	// replace itself with.
+	// change into its working directory for, or replace itself with.
 	execFailedExit = 127
 
 	// maxWord is the most of a refused word the stderr line shows, in bytes.
@@ -61,7 +70,9 @@ var gitSubcommands = map[string]bool{
 // unique prefix of a long option): each names another configuration, git
 // directory, work tree, namespace, program or output file.
 // --open-files-in-pager is git grep's, which runs a program of the caller's;
-// --show-signature verifies a commit's signature, which runs gpg.
+// --show-signature verifies a commit's signature, which runs gpg;
+// --no-index makes git diff compare two files of its own, no part of the
+// checkout.
 var gitRefusedLong = []string{
 	"--config-env",
 	"--exec-path",
@@ -73,6 +84,7 @@ var gitRefusedLong = []string{
 	"--output",
 	"--open-files-in-pager",
 	"--show-signature",
+	"--no-index",
 }
 
 // gitSignatureAtom is for-each-ref's format and sort atom that asks git to
@@ -158,13 +170,25 @@ var env = []string{
 
 // run maps args to the command it execs through exec, which replaces the
 // process and returns only when it could not: syscall.Exec, or a test's fake.
-// It returns 126 for a refused command line, after one line on stderr naming
-// the refused word, and 127 when exec failed; 0 is a fake's answer alone.
-func run(args []string, exec func(path string, argv []string, env []string) error, stderr io.Writer) int {
+// Before the exec it changes into its fixed working directory, work, through
+// chdir: os.Chdir, or a test's fake. It returns 126 for a refused command
+// line, after one line on stderr naming the refused word, having changed and
+// run nothing, and 127 when chdir or exec failed; 0 is a fake's answer alone.
+func run(
+	args []string,
+	chdir func(dir string) error,
+	exec func(path string, argv []string, env []string) error,
+	stderr io.Writer,
+) int {
 	argv, refused, ok := commandLine(args)
 	if !ok {
 		fmt.Fprintf(stderr, "audit-exec: refused: %s\n", quote(refused))
 		return exitRefused
+	}
+
+	if err := chdir(work); err != nil {
+		fmt.Fprintf(stderr, "audit-exec: cannot change into %s: %s\n", work, quote(err.Error()))
+		return execFailedExit
 	}
 
 	if err := exec(argv[0], argv, append([]string(nil), env...)); err != nil {
@@ -189,10 +213,9 @@ func commandLine(args []string) ([]string, string, bool) {
 		return nil, name, false
 	}
 
-	if refused, ok := pathLine(name, rest); !ok {
-		return nil, refused, false
-	}
-
+	// The option rules come first, so a refused option is the word named even
+	// when its value is a path outside the roots too; the path rule then holds
+	// every path word of the line, before git's subcommand is looked at.
 	switch name {
 	case "git":
 		forEachRef := len(rest) > 0 && rest[0] == "for-each-ref"
@@ -201,6 +224,10 @@ func commandLine(args []string) ([]string, string, bool) {
 			if refusedGitOption(arg) || asksForSignature(arg, forEachRef) {
 				return nil, arg, false
 			}
+		}
+
+		if refused, ok := pathLine(name, rest); !ok {
+			return nil, refused, false
 		}
 
 		if len(rest) == 0 {
@@ -222,52 +249,83 @@ func commandLine(args []string) ([]string, string, bool) {
 		}
 	}
 
+	if refused, ok := pathLine(name, rest); !ok {
+		return nil, refused, false
+	}
+
 	return append([]string{path}, rest...), "", true
 }
 
-// refusedRoots are the trees no path on a line may name: the kernel's views of
-// every process (their environments among them), of the system and of the
-// devices.
-var refusedRoots = []string{"/proc", "/sys", "/dev"}
+// allowedRoots are the trees every path word of a line must lie in: the
+// checkout, the model-free step's check outputs and the work area, the trees
+// the settings' Read allow list names for the audit (ADR 0040, issue #277
+// round G).
+var allowedRoots = []string{checkout, checks, work}
 
 // gitDirOption is git's own option that names the directory git runs in.
 const gitDirOption = "-C"
 
-// pathLine returns the first word of the line of the command name that names
-// a path into one of refusedRoots, or true when none does: the wrapper's path
-// rule (ADR 0040, amended 2026-11-23, issue #277 round F). Claude Code's deny
-// rules match the command's text, so a glob gets past them; the wrapper reads
-// the words the shell expanded. A word names a path when it is
+// endOfOptions is the word after which every word is an operand.
+const endOfOptions = "--"
+
+// parentElement is the path element that names a directory's parent.
+const parentElement = ".."
+
+// pathLine returns the first word of the line of the command name that holds
+// a path word outside allowedRoots, or true when none does: the wrapper's path
+// rule (ADR 0040, amended 2026-11-23, issue #277 rounds F and G). Claude Code's
+// deny rules match the command's text, so a glob gets past them; the wrapper
+// reads the words the shell expanded, and holds them to an allow list, since a
+// deny list of roots kept leaking. A path word is
 //
-//   - no option word (no leading "-"; "-" alone is stdin) and holds a "/": a
-//     bare word such as a grep pattern, a ref or a jq filter names no path, and
-//     a word without a "/" reaches none of the three from the work directory;
-//   - an option word holding "=": its value after the first "=";
+//   - a word that is no option (no leading "-") and holds a "/", or is "..";
+//     "-" alone is stdin and no path word;
+//   - every word after "--", whatever its first character;
+//   - an option word's value after its first "=";
+//   - the rest of a single-dash word after its first letter, when that rest
+//     holds a "/" (git grep -f/sys/x, jq -L/proc/1/root);
 //   - on a git line, the value of -C, attached (-C/proc/1) or the next word.
 //
-// The check reads every word whatever it belongs to, so it fails closed: a
-// git grep pattern that reads as such a path is refused too. The refused word
+// A relative path word is read from /srv/audit/checkout on a git line, where
+// git reads it under the wrapper's -C, and from /srv/audit/work, the
+// wrapper's working directory, on any other (allowedPath). The check reads
+// every word whatever it belongs to, so it fails closed: a git grep pattern
+// holding an absolute path outside the roots is refused too. The refused word
 // is the whole word, the option's included.
 func pathLine(name string, args []string) (string, bool) {
+	base := work
+	if name == "git" {
+		base = checkout
+	}
+
+	operands := false
+
 	for i, arg := range args {
+		var paths []string
+
+		named := arg
+
 		switch {
+		case operands:
+			paths = []string{arg}
+		case arg == endOfOptions:
+			operands = true
+		case arg == "-":
 		case name == "git" && arg == gitDirOption:
-			if i+1 < len(args) && refusedPath(args[i+1]) {
-				return args[i+1], false
+			if i+1 < len(args) {
+				paths, named = []string{args[i+1]}, args[i+1]
 			}
 		case name == "git" && strings.HasPrefix(arg, gitDirOption):
-			if refusedPath(arg[len(gitDirOption):]) {
-				return arg, false
-			}
-		case arg == "-":
-			continue
+			paths = []string{arg[len(gitDirOption):]}
 		case strings.HasPrefix(arg, "-"):
-			if _, value, ok := strings.Cut(arg, "="); ok && refusedPath(value) {
-				return arg, false
-			}
-		case strings.Contains(arg, "/"):
-			if refusedPath(arg) {
-				return arg, false
+			paths = optionPaths(arg)
+		case strings.Contains(arg, "/") || arg == parentElement:
+			paths = []string{arg}
+		}
+
+		for _, p := range paths {
+			if !allowedPath(p, base) {
+				return named, false
 			}
 		}
 	}
@@ -275,43 +333,61 @@ func pathLine(name string, args []string) (string, bool) {
 	return "", true
 }
 
-// refusedPath reports whether p, cleaned as filepath.Clean cleans it and read
-// from "/" when it is relative, is one of refusedRoots or lies under one. A
-// relative path is read from "/" so that it is refused whatever directory it
-// runs in: ../../proc/1/environ reaches /proc from the work directory.
-func refusedPath(p string) bool {
-	cleaned := cleanRooted(p)
+// optionPaths returns the path words an option word holds: its value after
+// the first "=", and, for a single-dash word, the rest after its first letter
+// when that rest holds a "/".
+func optionPaths(arg string) []string {
+	var paths []string
 
-	for _, root := range refusedRoots {
+	if _, value, ok := strings.Cut(arg, "="); ok {
+		paths = append(paths, value)
+	}
+
+	if !strings.HasPrefix(arg, endOfOptions) && len(arg) > len("-x") {
+		if rest := arg[len("-x"):]; strings.Contains(rest, "/") {
+			paths = append(paths, rest)
+		}
+	}
+
+	return paths
+}
+
+// allowedPath reports whether p, read from base when it is relative, lies in
+// one of allowedRoots: it holds no ".." element at all, which is refused
+// before anything is cleaned (the kernel follows a link such as /dev/fd before
+// it takes a "..", so a lexical clean would not show where the path leads),
+// and, cleaned of its empty and "." elements, is one of the roots or lies
+// under one. "-" alone is stdin.
+func allowedPath(p, base string) bool {
+	if p == "-" {
+		return true
+	}
+
+	if !strings.HasPrefix(p, "/") {
+		p = base + "/" + p
+	}
+
+	var kept []string
+
+	for _, element := range strings.Split(p, "/") {
+		switch element {
+		case "", ".":
+		case parentElement:
+			return false
+		default:
+			kept = append(kept, element)
+		}
+	}
+
+	cleaned := "/" + strings.Join(kept, "/")
+
+	for _, root := range allowedRoots {
 		if cleaned == root || strings.HasPrefix(cleaned, root+"/") {
 			return true
 		}
 	}
 
 	return false
-}
-
-// cleanRooted returns p read from "/" and cleaned lexically, as
-// filepath.Clean("/" + p) does on a unix system: empty and "." elements
-// dropped, each ".." removing the element before it, and a ".." at the root
-// staying at the root. The wrapper's depguard rule (audit-exec) keeps it to
-// the standard packages it imports, which path/filepath is not among.
-func cleanRooted(p string) string {
-	var kept []string
-
-	for _, element := range strings.Split(p, "/") {
-		switch element {
-		case "", ".":
-		case "..":
-			if len(kept) > 0 {
-				kept = kept[:len(kept)-1]
-			}
-		default:
-			kept = append(kept, element)
-		}
-	}
-
-	return "/" + strings.Join(kept, "/")
 }
 
 // refusedGitOption reports whether arg is one of git's refused options.

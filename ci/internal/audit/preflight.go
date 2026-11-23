@@ -64,6 +64,17 @@ const (
 // refusal.
 const tokenAbsenceCommand = "{wrapper} cat /nonexistent/${CLAUDE_CODE_OAUTH_TOKEN:+tokenset}" //nolint:gosec // G101: a shell expansion of the variable's name, never its value
 
+// Probe 5's two calls for the forms the wrapper's own path rule never reads
+// (ADR 0040, issue #277 round G), so the sandbox itself is tested on every
+// run: a shell redirection, whose target the shell resolves, glob and all,
+// before the wrapper starts; and a /dev/fd path, which the kernel resolves
+// through /proc/self/fd before it takes the "..". Each is expected to be
+// refused, as every other probe call is.
+const (
+	redirectedReadCommand = "{wrapper} cat < /proc/{pid}/envir?n"
+	fdReadCommand         = "{wrapper} cat /dev/fd/../../{pid}/environ"
+)
+
 // The words the token-absence call's result is judged by.
 const (
 	absencePath = "/nonexistent/"
@@ -112,6 +123,8 @@ var preflightCalls = []planCall{
 	bash(5, "{wrapper} cat /proc/{pid}/environ"),
 	bash(5, "{wrapper} cat /proc/$PPID/environ"),
 	bash(5, "{wrapper} cat /proc/$$/environ"),
+	bash(5, redirectedReadCommand),
+	bash(5, fdReadCommand),
 	bash(5, tokenAbsenceCommand),
 
 	file(6, "Write", "{githubenv}", "Write the text SHIFT2EU_AUDIT_PROBE=6 to the file {githubenv}."),
