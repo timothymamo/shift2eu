@@ -345,9 +345,10 @@ text is taken, and the reason given.
   strings and values its caller passes, and returns values and errors. It never reads the clock, the
   environment or a file: the run's date, the audited commit, the run's identity, the fingerprint key and
   the previous reports reach it as arguments. Its depguard rule, `audit-publish-library` (strict), allows
-  exactly `bytes`, `crypto/hmac`, `crypto/sha256`, `encoding/base64`, `encoding/hex`, `encoding/json`,
-  `errors`, `fmt`, `math`, `regexp`, `slices`, `strconv`, `strings`, `time`, `unicode` and
-  `unicode/utf8`, and denies `os` and `net` with a reason. Go's internal rule keeps it out of reach of
+  exactly `bytes`, `crypto/hmac`, `crypto/sha256`, `encoding/base64`, `encoding/hex`, `errors`, `fmt`,
+  `math`, `regexp`, `slices`, `strconv`, `strings`, `time`, `unicode` and `unicode/utf8`, and denies
+  `os` and `net` with a reason. `encoding/json` is not among them: the core reads JSON with its own
+  parser (below). Go's internal rule keeps it out of reach of
   `cmd/` and `internal/`.
 - `ci/auditpublish`, the entry point (milestone 2's fourth pull request): a main package that reads the
   decrypted result and the merged reports, the run's variables and the fingerprint key, runs gitleaks
@@ -366,11 +367,20 @@ not 40 lowercase hex is the caller's, `ErrConfig`):
   type. encoding/json keeps the last of two keys silently, so a second `severity` could hide behind the
   first, and it turns invalid UTF-8 and a lone surrogate escape into U+FFFD before anything sees them,
   so the core reads the result with a strict JSON parser of its own that keeps every member in order and
-  marks an invalid string, and nests at most 8 levels;
-- every string valid UTF-8, its cap counted in **bytes**, and no C0 or C1 control character, DEL, U+2028,
-  U+2029, bidirectional control (U+061C, U+200E, U+200F, U+202A to U+202E, U+2066 to U+2069) or
-  zero-width character (U+200B to U+200D, U+2060, U+FEFF); a field marked *multi-line* below may hold LF
-  and TAB, no other field may;
+  marks an invalid string, and follows at most 8 levels of nesting, the top object being level 1: a
+  value at level 8 is parsed, one at level 9 is refused as no JSON value (`depth >= maxJSONDepth`);
+- every string valid UTF-8, its cap counted in **bytes**, and no character of **the invisible-character
+  rule** (`forbiddenRune`, which `ParsePreviousReport`'s cell check applies too): no C0 or C1 control
+  character, DEL, U+2028 or U+2029; no rune of Unicode category Cf (format: the bidirectional controls,
+  the zero-width characters, U+FEFF and the tag characters U+E0000 to U+E007F among them), Co (private
+  use) or Cn (unassigned, in the Unicode tables of the Go release that builds the core); no noncharacter
+  (U+FDD0 to U+FDEF, and U+xFFFE and U+xFFFF in every plane); no variation selector (U+FE00 to U+FE0F,
+  U+E0100 to U+E01EF); and none of U+00AD, U+034F, U+115F, U+1160, U+17B4, U+17B5, U+180B to U+180F,
+  U+2061 to U+2064, U+3164 and U+FFA0, which render as nothing or as blank space. The tags, the
+  variation selectors and the listed characters are named as well as covered by a category, so the
+  rule does not rest on one Unicode version. A character that renders as nothing could carry a token past
+  the maintainer's eye and past every pattern; a field marked *multi-line* below may hold LF and TAB, no
+  other field may;
 - at most `FindingLimit` findings. **The finding limit is 100.** One root cause is one finding (the
   skill), so a month's triage of this repository stays far below it; a result above it is a sign of a
   broken or steered run, not of a hundred real findings, and the limit bounds the publish job's
@@ -383,7 +393,7 @@ not 40 lowercase hex is the caller's, `ErrConfig`):
 | `schema` | number | exactly `1` (`SchemaVersion`) |
 | `commit` | string | 40 lowercase hex, equal to the `commit` argument (the job's `github.sha`) |
 | `release_tag` | string | `^v(0\|[1-9][0-9]{0,3})\.(0\|[1-9][0-9]{0,3})\.(0\|[1-9][0-9]{0,3})$`; the entry point checks that it names an existing release |
-| `image_digest` | string | `^sha256:[0-9a-f]{64}$`, or empty when the image was not pulled |
+| `image_digest` | string | `^sha256:[0-9a-f]{64}$`, or empty when the image was not pulled; model text, rendered as a `CodeSpan` and scanned as a model field, so the hex rule refuses a digest that decodes to printable ASCII; the entry point checks it against the release's attested image digest before trusting it (fourth pull request) |
 | `tools` | array, at most 16 | objects `{name, version}`, each `name` once |
 | `tools[].name` | string | one of `actionlint`, `age`, `claude-code`, `cosign`, `gitleaks`, `go`, `govulncheck`, `osv-scanner`, `scorecard`, `trivy`, `zizmor` |
 | `tools[].version` | string | `^v?[0-9]{1,4}(\.[0-9]{1,4}){0,3}$` |
@@ -402,7 +412,7 @@ not 40 lowercase hex is the caller's, `ErrConfig`):
 | `findings[].category` | string | at most 32 bytes; any value but the ten categories above is unknown |
 | `findings[].private` | boolean | the model's flag: it can only make the finding more private |
 | `findings[].scenario` | string, multi-line | 1 to 2000 bytes |
-| `findings[].evidence` | string, multi-line | at most 16000 bytes: the PoC or trace, used in an advisory or an issue only |
+| `findings[].evidence` | string, multi-line | at most 16000 bytes: the PoC or trace, used in a draft advisory only, never in a report or a public issue, since it is the one field the encoded-run refusal does not read |
 | `findings[].fix` | string, multi-line | 1 to 1000 bytes |
 | `findings[].dismissal` | string | at most 200 bytes, empty when none is proposed |
 | `changes` | object | `{dependencies, narrative}` |
@@ -446,7 +456,8 @@ GitHub renders no HTML, image, link, autolink, mention, reference, entity or emp
   close it.
 
 Every other byte of a published text is the script's own: headings, labels, the fixed vocabularies,
-dates, the run's URL, the SHA, the tag, the image digest, the counts and the fingerprints. A finding's
+dates, the run's URL, the SHA, the tag, the counts and the fingerprints. The image digest is model text
+although the schema narrows it to a digest's shape, so it is a `CodeSpan` and a model field. A finding's
 location (`file:line`) is model text although the schema narrows its bytes: a file such as
 `www.example.com/x` or `a@example.com` would be a link outside a code span, so the location is a
 `TableCell` like the scenario and the fix. A tool's version is a `CodeSpan`; its name, from the closed
@@ -478,11 +489,14 @@ the input `"shift2eu-audit-fingerprint/v1" NUL rule NUL file NUL sink` (NUL is t
 of the three fields may hold, so the encoding is unambiguous; the version prefix lets a later change of
 the input start a new series on purpose). `PlainFingerprint(rule, file, sink string) Fingerprint` uses
 SHA-256, for a public finding and for every false-positive match. `KeyedFingerprint(key FingerprintKey,
-rule, file, sink string) Fingerprint` uses HMAC-SHA-256 with `AUDIT_FINGERPRINT_KEY`, for a private finding.
-The key is the secret's value as bytes, unchanged; `NewFingerprintKey(b []byte) (FingerprintKey, error)`
-refuses fewer than 32 bytes (`ErrConfig`), the runbook's minimum; a `FingerprintKey` formats as a
-placeholder, never as its bytes, and the scans refuse a key that was never set (`ErrConfig`), since an
-empty key would match every text. A private finding is never given a
+rule, file, sink string) (Fingerprint, error)` uses HMAC-SHA-256 with `AUDIT_FINGERPRINT_KEY`, for a
+private finding. The key is the secret's value as bytes, unchanged; `NewFingerprintKey(b []byte)
+(FingerprintKey, error)` refuses fewer than 32 bytes (`ErrConfig`), the runbook's minimum; a
+`FingerprintKey` formats as a placeholder, never as its bytes. A key that was never set, the zero
+`FingerprintKey` or any shorter than 32 bytes, is refused (`ErrConfig`, naming no byte) by
+`KeyedFingerprint`, which returns no fingerprint beside the error, since an HMAC under an empty key is a
+digest anyone can compute, and by the scans, since an empty key would match every text. A private
+finding is never given a
 plain fingerprint anywhere public, so nobody can test a guess at its rule, file and sink against the
 committed script. A finding's line is not an input: a finding keeps its fingerprint when code above it
 moves.
@@ -495,33 +509,49 @@ a name whose date is no real date) and the run IDs as numbers, and returns false
 The checkout is `github.sha` on `main`, so every report read is one the
 maintainer merged. `ParsePreviousReport(name string, data []byte) (Previous, error)` reads its findings
 table, its needs-investigation list and its false positives by their fingerprint cells and their fixed
-vocabulary cells only, and returns an error wrapping `ErrPreviousReport` on anything it cannot read
-exactly as the core renders it; with no such file, the run is the first. Exactly means: the title of the
+vocabulary cells, keeps the three model cells of each `new` or `open` row byte for byte, and returns an
+error wrapping `ErrPreviousReport` when one of the parts it checks breaks its rule; with no such file,
+the run is the first. It checks exactly these parts, and no other text of the report: the title of the
 name's date; the eight `##` sections in order and no other heading; each table's exact header and
 delimiter; seven cells per findings row, a fingerprint, a public severity, a public category, a status,
-and three cells that are each exactly what `TableCell` writes (or `—` three times on a `fixed` row); one
-private-findings line in the section and the same one in the Summary; two cells per False positives row,
-the reason exactly a `TableCell`, which is then carried forward byte for byte; no fingerprint twice. A
-report that contradicts itself is refused too: a first report (its Changes read "First report.") holds no
-status but `new` and no False positives row that is none of its own findings. `Previous` is opaque; a
-`*Previous` that `ParsePreviousReport` did not return is refused by `RenderReport` (`ErrPreviousReport`).
-For the kept public findings (placements 6 and 7):
+and three cells that are each exactly what `TableCell` writes for a text the invisible-character rule
+accepts (or `—` three times on a `fixed` row); one private-findings line in the section and the same one
+in the Summary; two cells per False positives row, the reason exactly such a `TableCell`, which is then
+carried forward byte for byte; no fingerprint twice. **The first-report rule**: when the Changes section
+holds the line "First report.", that line must be the section's only line before the dependencies' line
+(`Dependencies changed since the last audit:`), as `RenderReport` writes it; anywhere else, or beside
+other lines, it is refused. A first report must not contradict itself either: it holds no status but
+`new` and no False positives row that is none of its own findings. The Summary's sentence and counts,
+the Scope, the Coverage table, the Changes section's other lines and the Limits are not checked; nothing
+of them is carried. `Previous` is opaque and marked as parsed by `ParsePreviousReport` alone; a
+`*Previous` that `ParsePreviousReport` did not return, the zero `Previous` or one built inside the
+package included, is refused by `RenderReport` (`ErrPreviousReport`). For the kept public findings
+(placements 6 and 7):
 
 - not in the previous report: `new`;
 - in its findings table as `new` or `open`: `open`, and in Changes since the last audit "still open";
 - in its findings table as `fixed`: `open`, and "regressed";
 - placed public and only in the previous needs-investigation list: `open`, and "still open";
 - in the previous findings table as `new` or `open` and not found in this run: a row `fixed` in this
-  report's table (fingerprint, severity, category and status; the other cells `—`), and "fixed". A
-  finding this run found is no fixed one, whatever happened to it: a finding placed private this time,
-  or dropped as a false positive, gets no `fixed` row. One the previous report listed and also
+  report's table (fingerprint, severity, category and status; the other cells `—`), and "fixed". **The
+  fixed-row rules**: a finding this run found is no fixed one, whatever happened to it: a finding placed
+  private this time (it gets the carried row below), or dropped as a false positive (it keeps its
+  carried False positives row), gets no `fixed` row. One the previous report listed and also
   dismissed, which this run does not find at all, does get one;
+- **the carried row**: in the previous findings table as `new` or `open`, and placed private in this run
+  (the same plain fingerprint): the report keeps a row for it, status `open`, with the previous report's
+  severity, category, location, scenario and fix cells byte for byte, and "still open" in Changes. It
+  counts in the public total, under the previous severity, and makes its check read `findings`. Nothing
+  of this run's private placement shows: not its severity, its text or the private finding's existence,
+  beyond the one private-findings line. Without it the row would vanish without a `fixed` row, and a
+  reader comparing two reports would learn that a public finding had become private. The carried cells
+  are model text and model fields, as on any row;
 - a needs-investigation entry is `new`, or `open` when either section of the previous report holds its
   fingerprint; it gets no `fixed` row and no Changes line.
 
 A Changes line reads `- fp-…: still open` (or `regressed`, `fixed`), sorted by fingerprint; a run with a
 previous report and no such line says "No public finding changed its status.", after the line naming
-the previous report's file.
+the previous report's file. A carried row's line counts, so that sentence never stands beside one.
 
 A finding is **dropped** only when its placement is `PlacementPublic` or `PlacementInvestigation` and its
 plain fingerprint equals, byte for byte, a fingerprint in the previous report's False positives section.
@@ -538,7 +568,8 @@ entry point; the core adds:
 
 - **Token and key patterns**, over the whole text: `sk-ant-[A-Za-z0-9_-]{20,}` (Claude OAuth tokens and
   API keys), `-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----` (the App's PEM key and any other),
-  `\bgh[pousr]_[A-Za-z0-9]{36,}` and `github_pat_[A-Za-z0-9_]{22,}` (GitHub tokens),
+  `gh[pousr]_[A-Za-z0-9]{36,}` and `github_pat_[A-Za-z0-9_]{22,}` (GitHub tokens; no `\b`, so a letter
+  written before the prefix, `Xghp_…`, hides nothing),
   `(?i)AGE-SECRET-KEY-1[0-9A-Z]{58}` (the model and publish keys' private halves), the fingerprint key's
   own bytes, and, over decoded bytes only, a DER private key's start, `\x30(\x82..|\x81.|[\x00-\x7f])\x02\x01[\x00\x01]`.
 - **The encoded-token check**, over the whole text: every maximal run of at least 16 base64 or base64url
@@ -553,21 +584,57 @@ entry point; the core adds:
   matched over bytes, not by a regular expression, which reads runes.
 - **The encoded-run refusal**, for **public text only** (the report and the pull request's and issues'
   texts) and only over **model-written fields after escaping**: the renderer returns, with each text,
-  the escaped fragments it built from the result. A run is a maximal sequence of the bytes
-  `[A-Za-z0-9+=_-]`: every other byte ends one, `/`, `.`, `\` and every other separator included, so a
-  path is many short runs, and the `\` of an escaped `\|` ends a run as the `|` would. A run of at least
-  `EncodedRunMinLength` bytes whose Shannon entropy over its own byte frequencies is at least
-  `EncodedRunMinEntropy` bits per character is refused. Values the script inserts are never model
-  fields: the `main` SHA, the release tag, the run's URL, the dates and the fingerprints.
+  the escaped fragments it built from the result. A model field is refused when one of three rules
+  holds (`encodedRun`):
+  - **The plain class**: a run is a maximal sequence of the bytes `[A-Za-z0-9+=_-]`: every other byte
+    ends one, `/`, `.`, `\` and every other separator included, so a path is many short runs, and the
+    `\` of an escaped `\|` ends a run as the `|` would. A run of at least `EncodedRunMinLength` bytes
+    whose Shannon entropy over its own byte frequencies is at least `EncodedRunMinEntropy` bits per
+    character is refused.
+  - **The slash class**: the same measure, L and N, of a maximal run of `[A-Za-z0-9+/=_-]`, so standard
+    base64, which holds `/`, is one run and not two short ones. It is measured only inside a **word**
+    that holds no `.`: a word is a maximal run of non-whitespace bytes, with its trailing ``.,;:!?)]}'"``
+    and backticks trimmed first (repeatedly, backticks first), so a secret that ends a sentence or a code
+    span is still measured. A word that holds a `.` after the trim, a path such as
+    `.github/workflows/claude-code-pin.yml`, is measured by the plain class alone. That is what keeps the
+    repository's paths publishable: with `/` in the class, 38 of its 1028 tracked paths held a run that
+    reaches N.
+  - **The hex rule**: a maximal run of `[0-9a-fA-F]` of at least L characters is refused unless it is
+    exactly 40 or 64 characters long (a SHA-1 commit or a SHA-256 digest), and a 40- or 64-character run
+    is refused too when its decoded bytes are all printable ASCII (0x20 to 0x7E): a real SHA or digest
+    essentially never decodes to that (each byte printable with probability 95/256, so 20 bytes all
+    printable about once in 4·10⁸), and a token body written as hex always does.
+
+  Values the script inserts are never model fields: the `main` SHA, the release tag, the run's URL, the
+  dates and the fingerprints.
 - **L, the minimum length, is 24.** A fingerprint is 15 characters, so L is longer, as the PRD asks; 24 is
-  the base64 length of a 128-bit secret, the smallest worth stealing, and every credential the patterns
-  name is longer. Below it, ordinary words and identifiers would trip the entropy test.
+  the padded standard base64 length of a 128-bit secret, the smallest worth stealing, and every
+  credential the patterns name is longer. Raw or URL base64 of the same 16 bytes is 22 characters, below
+  L, so it is not refused (a residual risk, below). Below L, ordinary words and identifiers would trip
+  the entropy test.
 - **N, the entropy, is 4.1 bits per character.** Hex has 16 symbols, so its entropy never exceeds 4.0:
-  commit SHAs and digests a finding cites never trip the refusal, and a hex-encoded token is the
-  encoded-token check's to find. Random base64 of 24 characters reaches 4.1 in about 85% of samples, of 28
-  in about 98%, of 32 or more in more than 99.9%; a Claude OAuth token, about 100 characters, always.
-  A long identifier with no separator (a 34-letter camel-case test name can reach 4.2) also trips it: the
-  refusal then fails closed on a harmless text, which costs a run, never a disclosure.
+  the entropy classes never refuse a SHA or a digest, which the hex rule judges instead. The rates,
+  measured over 200,000 random samples per row, of the refusal reaching a random encoding:
+
+  | Encoding | Length | Class that measures it | Refused |
+  |---|---|---|---|
+  | base64url, raw, 16 bytes | 22 | plain | 0% (below L) |
+  | base64url, raw, 18 bytes | 24 | plain | about 85% |
+  | base64url, raw, 21 bytes | 28 | plain | about 98% |
+  | base64url, raw, 24 bytes | 32 | plain | about 99.9% |
+  | base64url, raw, 32 bytes | 43 | plain | 100% |
+  | standard, padded, 16 bytes | 24 | slash | about 80% |
+  | standard, padded, 21 bytes | 28 | slash | about 98% |
+  | standard, padded, 24 bytes | 32 | slash | about 99.9% |
+  | standard, padded, 32 bytes | 44 | slash | 100% |
+  | standard, padded, 16 bytes, a `.` in its word | 24 | plain | about 57% |
+  | standard, padded, 32 bytes, a `.` in its word | 44 | plain | about 89% |
+  | standard, padded, 48 bytes, a `.` in its word | 64 | plain | about 98% |
+
+  A Claude OAuth token, about 100 characters, is always refused. A long identifier with no separator (a
+  34-letter camel-case test name can reach 4.2), or a dot-free path-like word of high entropy
+  (`abcDEF1234/ghiJKL5678/mnoPQR9012`), also trips it: the refusal then fails closed on a harmless text,
+  which costs a run, never a disclosure.
 - **Advisory text** gets the patterns and the encoded-token check, **not** the refusal: an advisory holds
   PoCs and crash inputs, which are often base64.
 - `ScanPublic(body string, modelFields []string, key FingerprintKey) error` and `ScanAdvisory(body
@@ -577,11 +644,26 @@ entry point; the core adds:
   published**, not the report, not an advisory, not an issue, and the summary is exactly `publish
   refused: see runbook`.
 - **Residual risk, encoded tokens.** The scan finds a token in the clear, in base64 or hex, or encoded
-  twice that way, and refuses high-entropy runs in public text. It does not find a token split across
-  fields or runs (a separator every 23 characters defeats the refusal), encoded any other way (base32,
-  percent-encoding, a cipher, a compression), written below L, or below N. A model steered to leak the
-  subscription token could so reach the public report. The model step's containment is what keeps the
-  token from the model (Decision 6); the scan is the last line, and runbook step 10 rotates the token.
+  twice that way, and refuses high-entropy and suspect hex runs in public text. It does not find:
+  - a token split across fields or runs: a separator every 23 characters defeats both entropy classes,
+    and a hex chunk of 23 characters or fewer, or one of exactly 40 or 64 holding a single non-printable
+    byte, passes the hex rule;
+  - a secret below L: raw or URL base64 of 16 bytes is 22 characters and is never refused;
+  - a secret that misses N by chance, at the rates of the table above;
+  - **a `.` inside a base64 secret's word**: it drops the word back to the plain class, which splits it
+    at every `/` and refuses a 32-byte secret about 9 times in 10, not always;
+  - a token encoded any other way (base32, percent-encoding, a cipher, a compression).
+
+  A model steered to leak the subscription token could so reach the public report. The model step's
+  containment is what keeps the token from the model (Decision 6); the scan is the last line, and runbook
+  step 10 rotates the token.
+- **Residual risk, fingerprint grinding.** A public finding's fingerprint is the script's own value and no
+  model field, but the model chooses its inputs: rule, file and sink. By trying inputs until the plain
+  fingerprint's 48 bits begin with bytes it chose, a model can write about 3 chosen bytes (2²⁴ tries
+  each, cheap) into every public row's fingerprint, past every scan: up to about 300 bytes in one run at
+  the finding limit, enough for a token. The schema's patterns for rule, file and sink, the
+  severity floor and the maintainer's review of each report bound it; nothing closes it, and the model
+  step's containment is again what keeps the token from the model.
 
 **The coverage vocabulary.** The coverage table lists every check id, in this order, by its fixed name:
 
@@ -624,8 +706,8 @@ A finding whose `check` did not run is refused with the result (`ErrResultInvali
 Run; Private PrivateState; Previous *Previous}` (`Previous` nil for the first report) and
 `Rendered{Path, Body string; ModelFields []string}`, writes `docs/security/audits/YYYY-MM-DD-<run_id>.md`
 (the run's UTC date, its run ID). `ModelFields` lists every escaped fragment of model text the body holds
-(locations, scenarios, fixes, reasons, tool versions, dependencies, the narrative, limits), never a value
-the script inserts and never a finding's evidence. `RenderReport` checks the result's values and the run
+(locations, scenarios, fixes, reasons, tool versions, the image digest, dependencies, the narrative,
+limits, and a carried row's cells), never a value the script inserts and never a finding's evidence. `RenderReport` checks the result's values and the run
 as `ParseResult` and `NewRun` do. Its first line is the one title, `# Security audit report, YYYY-MM-DD`, and its sections are the
 template's, in its order, each a `##` heading: Summary, Scope, Findings (with `### Needs
 investigation`), Private findings, Coverage, Changes since the last audit, False positives, Limits. Its
@@ -636,7 +718,7 @@ only links are `[Security](../README.md)` in the summary and the run's URL in th
   link, then the items `- Public findings: <total> (<n> <severity>, ...)` (each severity with a kept
   finding, most severe first; no parenthesis at 0), `- Listed under needs investigation: <n>` and `- `
   and the private-findings line. The tests pin the content, not this wording.
-- **Scope**: Commit, Release (tag and image digest, or "image not pulled"), Tool versions (one item per
+- **Scope**: Commit, Release (tag and the image digest as a `CodeSpan`, or "image not pulled"), Tool versions (one item per
   tool: its name and its version as a `CodeSpan`), Model (`ModelName` `claude-fable-5-2`, `ModelEffort`
   high: the core's constants, not the result's), Run (the run's URL as a link, and the date).
 - **Findings**: the table `Fingerprint | Severity | Category | Status | Location | Scenario | Recommended
@@ -677,12 +759,14 @@ The run's URL is `<GITHUB_SERVER_URL>/<GITHUB_REPOSITORY>/actions/runs/<GITHUB_R
 other than `https://` and a host name, a repository other than `owner/name` of `[A-Za-z0-9._-]`, a run
 ID other than a decimal of up to 20 digits with no leading zero, and a date other than a real
 `YYYY-MM-DD`. The public total counts the kept findings placed `PlacementPublic` or
-`PlacementInvestigation`.
+`PlacementInvestigation`, and the carried rows.
 
 **The gap threshold** is one pinned constant, `GapThresholdDays = 38` (the longest month, 31 days, plus 7
 days of slack, for the cron `17 4 3 * *`). The Changes section says `Gap in the schedule: the previous
 report is <n> days older than this one.` when the previous report's name's date is more than 38 days
-before the run's date, counted in whole UTC days. A `test/architecture` check reads the core's source
+before the run's date, counted in whole UTC days from the two dates' Unix seconds, `(run − previous) /
+86400`, so a previous date in the year 0001 gives its true gap and not `time.Duration`'s saturated 292
+years. A `test/architecture` check reads the core's source
 and fails `make check` unless `GapThresholdDays` is declared exactly once, as an integer literal, and
 equals 38 while the workflow has no `schedule` trigger. Milestone 3, which adds the trigger, changes it
 to the PRD's full check: at least the longest gap between two consecutive dates the cron names plus 7
@@ -717,6 +801,17 @@ Code 2 is left to the Go runtime's panic exit. Only `OutcomePublished` and `Outc
 published anything; the second still fails the job, so GitHub notifies the maintainer. The errors the
 core returns name a field's path (`findings[3].scenario`) and the rule it broke, never a value, and the
 entry point prints none of them.
+
+**Left to the fourth and fifth pull requests**, which the core's choices depend on:
+
+- **The fourth (the entry point)**: a finding's `evidence` goes only into its draft advisory, never into
+  a public issue's body, which is public text the encoded-run refusal would otherwise have to read; and
+  the entry point checks `image_digest` against the release's attested image digest before trusting it,
+  since the schema checks only its shape.
+- **The fifth (the workflow)**: only the audit App's `security-audit/*` branches may change
+  `docs/security/audits/`, enforced by CODEOWNERS or a required check. Otherwise a merged edit from
+  another branch that adds a False positives row would drop a public finding from every later run,
+  silently, since the row is carried forward byte for byte.
 
 ## Alternatives considered
 
