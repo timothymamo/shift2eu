@@ -46,9 +46,6 @@ func checkForbidigoGroupPatterns(t *testing.T, tag string, refused []forbidGroup
 	t.Helper()
 
 	entries := groupEntries(t, moduleRoot(t), tag)
-	refuses := func(e forbidEntry, n rootName) bool {
-		return e.pkg.MatchString(n.pkg) && e.pattern.MatchString(n.name)
-	}
 	exceptionMsgs := make([]string, 0, len(exceptions))
 	for _, x := range exceptions {
 		exceptionMsgs = append(exceptionMsgs, x.msg)
@@ -57,7 +54,7 @@ func checkForbidigoGroupPatterns(t *testing.T, tag string, refused []forbidGroup
 	// exception entry with its whole msg, or any entry of the group but the
 	// exceptions.
 	mustRefuse := func(e forbidEntry, r forbidGroupRefusal) bool {
-		if !refuses(e, r.rootName) {
+		if !e.refuses(r.rootName) {
 			return false
 		}
 		if r.msg == forbidGroupAnyEntry {
@@ -98,11 +95,11 @@ func checkForbidigoGroupPatterns(t *testing.T, tag string, refused []forbidGroup
 				continue
 			}
 			found = true
-			if !refuses(e, x.name) {
+			if !e.refuses(x.name) {
 				t.Errorf("the entry with msg %q must refuse %s (pkg %q), the one name its exclusion rule is for", x.msg, x.name.name, x.name.pkg)
 			}
 			for _, n := range names {
-				if n == x.name || !refuses(e, n) {
+				if n == x.name || !e.refuses(n) {
 					continue
 				}
 				t.Errorf("the entry with msg %q must refuse %s (pkg %q) alone, but it also refuses %s (pkg %q); the exclusion rule narrows on its msg, so that name would pass in the file the rule covers", x.msg, x.name.name, x.name.pkg, n.name, n.pkg)
@@ -116,17 +113,24 @@ func checkForbidigoGroupPatterns(t *testing.T, tag string, refused []forbidGroup
 
 	for _, n := range allowed {
 		for _, e := range entries {
-			if refuses(e, n) {
+			if e.refuses(n) {
 				t.Errorf("%s (pkg %q) must pass, but the entry with msg %q refuses it", n.name, n.pkg, e.msg)
 			}
 		}
 	}
 
 	for _, e := range entries {
-		if !slices.ContainsFunc(refused, func(r forbidGroupRefusal) bool { return refuses(e, r.rootName) }) {
+		if !slices.ContainsFunc(refused, func(r forbidGroupRefusal) bool { return e.refuses(r.rootName) }) {
 			t.Errorf("the entry with msg %q refuses no name of the group's list; add the names it refuses", e.msg)
 		}
 	}
+}
+
+// refuses reports whether e matches n: both its pkg and its pattern. It is the
+// one place the package reads a group entry's match, so that the refusal a test
+// checks and the refusal it reports can never disagree.
+func (e forbidEntry) refuses(n rootName) bool {
+	return e.pkg.MatchString(n.pkg) && e.pattern.MatchString(n.name)
 }
 
 // refusedBy returns the msgs of the entries of entries that refuse n, for the
@@ -135,7 +139,7 @@ func refusedBy(entries []forbidEntry, n rootName) []string {
 	var msgs []string
 
 	for _, e := range entries {
-		if e.pkg.MatchString(n.pkg) && e.pattern.MatchString(n.name) {
+		if e.refuses(n) {
 			msgs = append(msgs, e.msg)
 		}
 	}

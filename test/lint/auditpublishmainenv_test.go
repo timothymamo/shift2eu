@@ -89,8 +89,9 @@ var auditPublishMainEnvAllowed = []rootName{
 // by the entry its refusal names, os.LookupEnv's exception entry refuses that name
 // and no other, no name it may use is refused by an entry, and every entry refuses
 // a listed name. Without it, os.Environ or os.StartProcess could be moved into the
-// os.LookupEnv entry with its msg widened and lint would stay green, while the
-// main.go rule would let either through in ci/auditpublish/main.go.
+// os.LookupEnv exception entry by widening that entry's pattern, and lint would
+// stay green, while the main.go rule, which narrows on its msg, would let either
+// through in ci/auditpublish/main.go.
 func TestAuditPublishMainEnvForbidigoPatterns(t *testing.T) {
 	t.Parallel()
 

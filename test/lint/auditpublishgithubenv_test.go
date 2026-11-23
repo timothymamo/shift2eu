@@ -82,9 +82,11 @@ var auditPublishGitHubEnvAllowed = []rootName{
 // refused by the entry its refusal names, os.Environ's exception entry refuses
 // that name and no other, no name it may use is refused by an entry, and every
 // entry refuses a listed name. It is the pin a reviewer reads when the group
-// changes: without it an entry could be dropped from .golangci.yml, or a name
-// moved into the exception entry, and lint would stay green, as nothing else
-// refuses exec.Command, which no depguard rule can see, in the library.
+// changes: without it an entry could be dropped from .golangci.yml, or an
+// exception entry's pattern widened to refuse a name it must leave alone (its pkg
+// too, for exec.Command, whose pkg is os/exec), and lint would stay green, as
+// nothing else refuses exec.Command, which no depguard rule can see, in the
+// library.
 func TestAuditPublishGitHubEnvForbidigoPatterns(t *testing.T) {
 	t.Parallel()
 
