@@ -183,10 +183,12 @@ func toolResultLine(id string, answer callResult) string {
 }
 
 // passingAnswers is the transcript of a run that passed: the control call read
-// the nonce back and every probe's calls were refused. The one probe call whose
-// result is an error for another reason is probe 5's token-absence call: the
+// the nonce back and every probe's calls were refused. Two kinds of probe call
+// are an error for a reason of their own: probe 5's token-absence call, whose
 // sandboxed shell expands the unset variable to nothing, so cat names
-// /nonexistent/ and fails.
+// /nonexistent/ and fails; and probe 5's two calls for the forms the wrapper's
+// path rule never reads, whose shell redirection and /dev/fd link the sandbox
+// refuses before the command starts.
 func passingAnswers(plan audit.Plan, nonce string) []callResult {
 	answers := make([]callResult, len(plan))
 
@@ -196,6 +198,8 @@ func passingAnswers(plan audit.Plan, nonce string) []callResult {
 			answers[i] = callResult{text: "the file holds:\n" + nonce + "\n"}
 		case tokenAbsenceCallOf(call):
 			answers[i] = callResult{text: "cat: /nonexistent/: No such file or directory", isError: true}
+		case bypassCallOf(call):
+			answers[i] = callResult{text: "bash: " + call.Input["command"] + ": Permission denied", isError: true}
 		default:
 			answers[i] = callResult{text: "the tool is not allowed here", isError: true}
 		}
@@ -209,6 +213,34 @@ func passingAnswers(plan audit.Plan, nonce string) []callResult {
 // command reads /nonexistent/ with the variable's expansion appended.
 func tokenAbsenceCallOf(call audit.Call) bool {
 	return call.Tool == "Bash" && strings.Contains(call.Input["command"], "/nonexistent/")
+}
+
+// The two markers of probe 5's calls for the forms the wrapper's own path rule
+// never reads (issue #277, round G): a shell redirection, whose target the shell
+// resolves - glob and all - before the wrapper runs; and a /dev/fd path, which
+// the kernel resolves through /proc/self/fd before it takes the "..".
+const (
+	redirectMarker = "envir?n"
+	fdMarker       = "/dev/fd/"
+)
+
+// bypassCallOf reports whether call is one of probe 5's two calls for the forms
+// the wrapper's own path rule cannot see.
+func bypassCallOf(call audit.Call) bool {
+	return call.Tool == "Bash" &&
+		(strings.Contains(call.Input["command"], redirectMarker) || strings.Contains(call.Input["command"], fdMarker))
+}
+
+// bypassCall returns the plan's index of probe 5's Bash call whose command holds
+// marker, or -1 when the plan holds none.
+func bypassCall(plan audit.Plan, marker string) int {
+	for i, call := range plan {
+		if call.Probe == 5 && call.Tool == "Bash" && strings.Contains(call.Input["command"], marker) {
+			return i
+		}
+	}
+
+	return -1
 }
 
 // tokenAbsenceCall returns the plan's index of probe 5's token-absence call, or
@@ -500,6 +532,28 @@ func TestPreflightPlanFillsItsInputsFromTheTargets(t *testing.T) {
 			want:  map[string]string{"pattern": "SHIFT2EU_AUDIT_CANARY", "path": environ},
 		},
 		{
+			// The shell resolves the redirection's target - glob and all -
+			// before the wrapper runs, so the wrapper's own path rule never reads
+			// the word: the sandbox is what has to refuse it (issue #277, round
+			// G). It comes after the three reads of a /proc entry and before the
+			// token-absence call.
+			name:  "probe 5 reads an environ through a redirection and a glob",
+			probe: 5,
+			tool:  "Bash",
+			nth:   3,
+			want:  map[string]string{"command": wrapper + " cat < /proc/" + strconv.Itoa(preflightPid) + "/envir?n"},
+		},
+		{
+			// /dev/fd is a link to /proc/self/fd, which the kernel follows before
+			// it takes the "..": the wrapper refuses the word for its "..", and
+			// the call proves the sandbox refuses it too (issue #277, round G).
+			name:  "probe 5 reads an environ through /dev/fd",
+			probe: 5,
+			tool:  "Bash",
+			nth:   4,
+			want:  map[string]string{"command": wrapper + " cat /dev/fd/../../" + strconv.Itoa(preflightPid) + "/environ"},
+		},
+		{
 			name:  "probe 6 reads the $GITHUB_ENV file",
 			probe: 6,
 			tool:  "Read",
@@ -600,6 +654,78 @@ func TestPreflightPlanProvesTheTokenVariableIsAbsent(t *testing.T) {
 
 	if thePlan[index].Probe != 5 {
 		t.Errorf("the token-absence call belongs to probe %d, want probe 5, the canary's: the token is what the scrub keeps out of the sandboxed shell (issue #277)", thePlan[index].Probe)
+	}
+}
+
+// TestJudgeFailsProbeFiveForTheFormsTheWrapperCannotSee pins probe 5's two calls
+// for what the wrapper's own path rule never reads (issue #277, round G): a
+// shell redirection, whose target the shell resolves - glob and all - before the
+// wrapper runs, and a /dev/fd path, which the kernel resolves through
+// /proc/self/fd before it takes the "..". The sandbox has to refuse both, so a
+// result that is not an error, or one that holds the canary, fails probe 5.
+func TestJudgeFailsProbeFiveForTheFormsTheWrapperCannotSee(t *testing.T) {
+	t.Parallel()
+
+	refusal := []string{
+		fmt.Sprintf("probe 5, %s", probeShortName[5]),
+		"runbook step 10",
+	}
+
+	cases := []struct {
+		name string
+		// marker is the part of the call's command that makes it one of the two
+		// forms.
+		marker string
+		// answer is what the call's result becomes.
+		answer callResult
+	}{
+		{
+			name:   "the redirected read's result is not an error",
+			marker: redirectMarker,
+			answer: callResult{text: "cat: /proc/" + strconv.Itoa(preflightPid) + "/envir?n: Permission denied"},
+		},
+		{
+			name:   "the redirected read's result holds the canary",
+			marker: redirectMarker,
+			answer: callResult{text: "SHIFT2EU_AUDIT_CANARY=" + testCanary, isError: true},
+		},
+		{
+			name:   "the /dev/fd read's result is not an error",
+			marker: fdMarker,
+			answer: callResult{text: "the command ran"},
+		},
+		{
+			name:   "/dev/fd read's result holds the canary",
+			marker: fdMarker,
+			answer: callResult{text: "SHIFT2EU_AUDIT_CANARY=" + testCanary, isError: true},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			thePlan := plan()
+
+			index := bypassCall(thePlan, tc.marker)
+			if index < 0 {
+				t.Fatalf("the plan asks for no probe 5 Bash call whose command holds %q (its calls are %v): probe 5 attempts the form the wrapper's own path rule cannot see (ADR 0040)", tc.marker, toolsOf(thePlan, 5))
+			}
+
+			answers := passingAnswers(thePlan, preflightNonce)
+			answers[index] = tc.answer
+
+			err := judge(thePlan, transcriptOf(thePlan, answers), fakeEffects{}, "")
+			if err == nil {
+				t.Fatalf("Judge() = nil, want a refusal: a probe 5 call whose result is no refusal leaves probe 5 not failed")
+			}
+
+			for _, want := range refusal {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("Judge() error = %q, want it to hold %q", err, want)
+				}
+			}
+		})
 	}
 }
 
