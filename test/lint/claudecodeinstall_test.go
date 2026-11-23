@@ -345,7 +345,10 @@ func TestClaudeCodeWritesEachOutputWhereItsRedirectIs(t *testing.T) {
 // options and NAME=VALUE words, the same script named with a ./ before it, and
 // the command an interpreter's -c takes as one quoted argument (issue #277,
 // round M, AI 7). A step that only names the path where no command runs - a case
-// pattern of a diff, an echo, a comment - installs nothing.
+// pattern of a diff, an echo, a comment - installs nothing. A case block is read
+// as the shell reads it (issue #277, round N, AI 1): an arm's pattern list ends at
+// its first ), the commands after it on the same line run, and the esac ends the
+// block, so a command after it is seen again.
 func TestClaudeCodeRunsInstallerSeesEveryForm(t *testing.T) {
 	t.Parallel()
 
@@ -405,6 +408,48 @@ func TestClaudeCodeRunsInstallerSeesEveryForm(t *testing.T) {
 			// pattern of its diff, and installs nothing.
 			name: "a case pattern of a diff",
 			run:  "case \"$path\" in\n  " + claudeCodeInstallScript + ") echo changed ;;\nesac",
+			want: false,
+		},
+		{
+			// Round N, AI 1: the arm's pattern ends at its first ), and what
+			// the arm runs comes after it. The pattern itself installs
+			// nothing, and the command beside it does.
+			name: "an install in a case arm",
+			run: strings.Join([]string{
+				`case "$path" in`,
+				"  .github/claude-code.yaml) " + claudeCodeInstallScript + ` "$dir" "pkg" "integrity" ;;`,
+				`esac`,
+			}, "\n"),
+			want: true,
+		},
+		{
+			// Round N, AI 1: the block ends at its esac, and a step's command
+			// after it is a command again. Before, one arm's pattern list
+			// swallowed every line that followed it.
+			name: "an install after a case block",
+			run: strings.Join([]string{
+				`case "$path" in`,
+				"  " + claudeCodeInstallScript + `) echo changed ;;`,
+				`esac`,
+				claudeCodeInstallScript + ` "$dir" "pkg" "integrity"`,
+			}, "\n"),
+			want: true,
+		},
+		{
+			// Round N, AI 1: claude-code-pin.yml's own pattern list runs over
+			// two lines and names the script in the first of them. The list is
+			// compared and never run, so it installs nothing, and neither the
+			// arm's body nor the step's line after the esac does.
+			name: "the pin workflow's pattern list over two lines",
+			run: strings.Join([]string{
+				`case "$path" in`,
+				`  .github/claude-code.yaml | .github/workflows/ai-review.yml | ` + claudeCodeInstallScript + ` | \`,
+				`    .github/workflows/claude-code-pin.yml | go.mod | ci/claudecodepin/*)`,
+				`    echo "This pull request changes a path of the Claude Code pin: checking the pin."`,
+				`    ;;`,
+				`esac`,
+				`echo "pin=false" >> "$GITHUB_OUTPUT"`,
+			}, "\n"),
 			want: false,
 		},
 		{
@@ -508,30 +553,51 @@ func claudeCodeInstallSteps(t *testing.T) []claudeCodeInstallStep {
 // interpreter's -c, with a ./ before it or with the shell's own quoting around
 // it. A comment installs nothing, and neither does a case pattern of a diff: the
 // patterns a case's in lists, which the shell compares and never runs, are no
-// command.
+// command. A block is read as the shell reads it (round N, AI 1): an arm's
+// pattern list ends at its first ), the commands after it on the same line run,
+// and the esac ends the block, so a line after it is no pattern any more.
 func claudeCodeRunsInstaller(text string) bool {
+	inCase := false
 	patterns := false
 
 	for _, line := range claudeCodeNonCommentLines(text) {
-		words := aiReviewShellWords(line)
+		trimmed := strings.TrimSpace(line)
+
+		// A case block ends at its esac, which closes a pattern list too: a
+		// case may hold no arm at all.
+		if trimmed == "esac" {
+			inCase, patterns = false, false
+
+			continue
+		}
 
 		if patterns {
-			// A pattern list ends at the line whose last byte is the ) that
-			// closes it; the commands of the arm after it are read as the
-			// commands they are.
-			patterns = !strings.HasSuffix(strings.TrimSpace(line), ")")
+			// An arm's pattern list ends at its first ): a line of the list
+			// before it is compared and never run, and what comes after it on
+			// the same line is the arm's command.
+			end := strings.Index(line, ")")
+			if end < 0 {
+				continue
+			}
+
+			patterns = false
+
+			line = line[end+1:]
+			trimmed = strings.TrimSpace(line)
+		} else if claudeCodeOpensCasePatterns(aiReviewShellWords(line)) {
+			inCase, patterns = true, true
 
 			continue
 		}
 
-		if claudeCodeOpensCasePatterns(words) {
-			patterns = true
-
-			continue
-		}
-
-		if claudeCodeRunsInstallerLine(words) {
+		if claudeCodeRunsInstallerLine(aiReviewShellWords(line)) {
 			return true
+		}
+
+		// An arm's body ends at its ;;, and the next arm's pattern list starts
+		// after it.
+		if inCase && strings.HasSuffix(trimmed, ";;") {
+			patterns = true
 		}
 	}
 

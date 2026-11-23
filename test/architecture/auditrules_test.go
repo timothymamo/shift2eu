@@ -220,7 +220,7 @@ func allowsPackages(allow []string) func(pkg string) bool {
 				continue
 			}
 
-			if pkg == entry || strings.HasPrefix(pkg, entry) {
+			if strings.HasPrefix(pkg, entry) {
 				return true
 			}
 		}

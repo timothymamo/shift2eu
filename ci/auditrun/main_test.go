@@ -283,15 +283,35 @@ func TestRunRefusesEveryUsageAndInputError(t *testing.T) {
 // ANTHROPIC_API_KEY is refused before the CLI runs, with exit 3, because the
 // audit draws on the subscription's OAuth token and nothing else. A key that is
 // set but empty is set: the variable's presence is what the refusal is about.
+// The key is refused before the inputs are read (issue #277, round N, AI 4): a
+// step that also lacks another input is still refused for the key, with the
+// refusal's own line, and no step runs.
 func TestRunRefusesAnAPIKey(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
 		name  string
 		value string
+		// env changes the rest of the step's environment, when set.
+		env func(env map[string]string)
 	}{
 		{name: "an API key", value: "sk-ant-invented"},
 		{name: "an API key set to nothing", value: ""},
+		{
+			name:  "an API key and no token",
+			value: "sk-ant-invented",
+			env:   func(env map[string]string) { delete(env, "CLAUDE_CODE_OAUTH_TOKEN") },
+		},
+		{
+			name:  "an API key and a canary that is no canary",
+			value: "sk-ant-invented",
+			env:   func(env map[string]string) { env["SHIFT2EU_AUDIT_CANARY"] = "not-a-canary" },
+		},
+		{
+			name:  "an API key and no $GITHUB_ENV",
+			value: "sk-ant-invented",
+			env:   func(env map[string]string) { delete(env, "GITHUB_ENV") },
+		},
 	}
 
 	for _, tc := range cases {
@@ -302,11 +322,21 @@ func TestRunRefusesAnAPIKey(t *testing.T) {
 			env := stepEnvironment(t, dir)
 			env["ANTHROPIC_API_KEY"] = tc.value
 
-			result := runAuditrun(t, stepArgs(dir), env)
+			if tc.env != nil {
+				tc.env(env)
+			}
+
+			args := stepArgs(dir)
+
+			result := runAuditrun(t, args, env)
 
 			if result.code != audit.ExitRefused {
-				t.Errorf("the run's exit code is %d, want %d (audit.ExitRefused): the step holds ANTHROPIC_API_KEY, which the audit never uses\nstdout: %s\nstderr: %s",
+				t.Errorf("the run's exit code is %d, want %d (audit.ExitRefused): the step holds ANTHROPIC_API_KEY, which the audit never uses, and the key's refusal comes before the inputs are read\nstdout: %s\nstderr: %s",
 					result.code, audit.ExitRefused, result.stdout, result.stderr)
+			}
+
+			if !strings.Contains(result.stdout, lineAPIKey) {
+				t.Errorf("the run printed %q, want the refusal's own line %q: a step that holds the key is told so", result.stdout, lineAPIKey)
 			}
 
 			if len(result.ran) != 0 {

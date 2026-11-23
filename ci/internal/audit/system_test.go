@@ -230,9 +230,9 @@ func TestPreflightRunsThePlansCallsAndRemovesTheControl(t *testing.T) {
 }
 
 // TestPreflightGivesTheConstantFailureOfAFailedRun pins what a CLI run that failed
-// leaves: no verdict - there is no transcript to judge - and one line, the
-// preflight's constant class, in which nothing of the run's own error reaches the
-// log, the token and the canary included.
+// with no observed effect leaves: no verdict - there is no transcript to judge -
+// and one line, the preflight's constant class, in which nothing of the run's own
+// error reaches the log, the token and the canary included.
 func TestPreflightGivesTheConstantFailureOfAFailedRun(t *testing.T) {
 	t.Parallel()
 
@@ -359,6 +359,98 @@ func TestPreflightJudgesTheTranscriptWithTheStepsToken(t *testing.T) {
 
 	if want := fmt.Sprintf("probe 5, %s", probeShortName[5]); !strings.Contains(err.Error(), want) {
 		t.Errorf("Preflight() = %q, want it to name %q", err, want)
+	}
+}
+
+// TestPreflightJudgesAFailedRunsEffects pins finding AI 2 of the review of
+// issue #277's launch step: a run that was cancelled or timed out still shows
+// what the launcher itself observed, and an effect it saw is the sandbox having
+// failed, whatever the model answered. The preflight therefore returns a verdict
+// naming every probe whose effect it saw and the runbook step, and keeps the
+// constant failure of a failed run only when it saw no effect at all.
+func TestPreflightJudgesAFailedRunsEffects(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		// effects is what the launcher observed after the failed run.
+		effects fakeEffects
+		// wantProbe is the probe the verdict must name, and 0 for the constant
+		// failure of a failed run that showed nothing.
+		wantProbe int
+	}{
+		{
+			name: "no effect at all",
+		},
+		{
+			name:      "a probe file written",
+			effects:   fakeEffects{probeFiles: true},
+			wantProbe: 1,
+		},
+		{
+			name:      "the listener accepted a connection",
+			effects:   fakeEffects{listener: true},
+			wantProbe: 2,
+		},
+		{
+			name:      "Docker's socket reached",
+			effects:   fakeEffects{docker: true},
+			wantProbe: 3,
+		},
+		{
+			name:      "sudo run without a password",
+			effects:   fakeEffects{sudo: true},
+			wantProbe: 4,
+		},
+		{
+			name:      "the $GITHUB_ENV file changed",
+			effects:   fakeEffects{envDigest: true},
+			wantProbe: 6,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			root, in := preflightTree(t)
+
+			observer := &observerFake{effects: tc.effects}
+			prober := &proberFake{root: root, err: context.Canceled}
+
+			err := audit.Preflight(t.Context(), root, in, prober, observer.observe, preflightPid)
+			if err == nil {
+				t.Fatal("Preflight() = nil, want a failure: the CLI's run was cancelled")
+			}
+
+			if !observer.called {
+				t.Error("the preflight did not observe its effects after a failed run")
+			}
+
+			var verdict *audit.Verdict
+
+			found := errors.As(err, &verdict)
+
+			if tc.wantProbe == 0 {
+				if found {
+					t.Fatalf("Preflight() = %v, want the preflight's own constant failure: the run failed and the launcher observed no effect, so there is nothing to name", err)
+				}
+
+				return
+			}
+
+			if !found {
+				t.Fatalf("Preflight() = %v, want a verdict naming probe %d, %s: the run failed, but its effect was observed, so the sandbox did not hold", err, tc.wantProbe, probeShortName[tc.wantProbe])
+			}
+
+			if want := fmt.Sprintf("probe %d, %s", tc.wantProbe, probeShortName[tc.wantProbe]); !strings.Contains(err.Error(), want) {
+				t.Errorf("Preflight() = %q, want it to name %q: the probe whose effect was seen is the one that did not fail", err, want)
+			}
+
+			if !strings.Contains(err.Error(), "runbook step 10") {
+				t.Errorf("Preflight() = %q, want it to name runbook step 10, as every verdict does", err)
+			}
+		})
 	}
 }
 
