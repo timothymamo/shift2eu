@@ -794,7 +794,8 @@ days of slack, for the cron `17 4 3 * *`). The Changes section says `Gap in the 
 report is <n> days older than this one.` when the previous report's name's date is more than 38 days
 before the run's date, counted in whole UTC days from the two dates' Unix seconds, `(run − previous) /
 86400`, so a previous date in the year 0001 gives its true gap and not `time.Duration`'s saturated 292
-years. A `test/architecture` check reads the core's source
+years. A previous report dated after the run is refused (outcome 7), because `NewestReport` would
+otherwise pick it on every later run and suppress the gap check. A `test/architecture` check reads the core's source
 and fails `make check` unless `GapThresholdDays` is declared exactly once, as an integer literal, and
 equals 38 while the workflow has no `schedule` trigger. Milestone 3, which adds the trigger, changes it
 to the PRD's full check: at least the longest gap between two consecutive dates the cron names plus 7
@@ -806,7 +807,8 @@ the step summary, chosen by `OutcomeOf(err error) Outcome` from the error's clas
 and exits with `Outcome.Code()`; `Outcome.Summary()` holds no finding's text, no count of private
 findings, no API response and no error message. `OutcomeOf(err)` cannot know a published run's counts,
 so the entry point's success path is `OutcomeOf(nil).WithCounts(total, state)`; `WithCounts` leaves any
-other outcome as it is, and a published outcome whose counts were never set, or set to a negative total
+other outcome as it is, a published outcome whose private findings were not filed is
+`OutcomePrivateNotFiled` (exit 5), and a published outcome whose counts were never set, or set to a negative total
 or an unknown state, fails closed as `OutcomeFailed`. Outcomes 5, 6 and 8 come from the entry point's
 own error classes, `ErrPrivateNotFiled`, `ErrDuplicateDrafts` and `ErrGitHub`, which the core declares
 so that `OutcomeOf` selects every row by class; an error wrapping two classes gets the first in the
