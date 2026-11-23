@@ -2575,11 +2575,13 @@ func appendInfraText(t *testing.T, path, text string) {
 // writeInfraText writes text to path, creating the directory above it. The write goes through an os.Root on
 // that directory, which no gosec rule takes for a sink: the text is often read from the copy (os.ReadFile), and
 // gosec's G703 followed it into an os.WriteFile only on the runs where its call graph listed such a caller
-// among the first 32 of this function's 40-odd callers it checks, so a directive for it was unused at random
-// (issue #508).
+// among the 32 of this function's callers it checks, and it has more, so a directive for it was unused at
+// random (issue #508). The path is cleaned first, so Dir and Base agree on a trailing separator: a/b/ names
+// the file b in a, never a/b/b.
 func writeInfraText(t *testing.T, path, text string) {
 	t.Helper()
 
+	path = filepath.Clean(path)
 	dir := filepath.Dir(path)
 
 	if err := os.MkdirAll(dir, 0o700); err != nil {
