@@ -34,12 +34,14 @@ const (
 
 // resultTextRules are the lines of the user prompt that state what the publish
 // core refuses in the result's text (ADR 0040, "The publish program's core":
-// the text rule and the hex rule), so a finding's wording does not refuse the
-// whole run.
+// the text rule, the hex rule and the refusal of gitleaks' inline allow
+// comment, which the lines name in words and never carry), so a finding's
+// wording does not refuse the whole run.
 var resultTextRules = []string{
 	"Write every text field of the result file in printable ASCII only: the characters U+0020 to U+007E, and in a multi-line field also LF and TAB. One character outside them, a typographic quote or dash, a non-breaking space or a non-ASCII name, refuses the whole run; write a non-ASCII text you quote in ASCII words instead.",
 	"Do not quote an MD5 or other 32-hex digest, an undashed UUID, a Rekor entry UUID, a SHA-384 or SHA-512 hex digest, or a go.sum h1: hash in any field: such a run refuses the whole run. Name the file and line that holds it instead.",
 	"A 40- or 64-hex run (a commit SHA or a SHA-256 digest) is accepted only if its bytes do not all decode to printable ASCII: a token or text written as hex is refused, and refuses the whole run.",
+	"Never write gitleaks' inline allow comment literally in any field, in any letter case: gitleaks honours it, so a text holding it refuses the whole run. Name it in words instead.",
 }
 
 // auditTools are the built-in tools the audit uses, and no other.
@@ -82,7 +84,8 @@ func LaunchConfig(root string, in Inputs) claudecode.Config {
 // Prompt returns what the audit asks the model: the skill, read from the
 // checkout copy under root, as the system prompt, and a fixed user prompt that
 // names the audit directory's areas and the result file, and states the
-// publish core's text and hex rules (resultTextRules). A missing or empty
+// publish core's text and hex rules and its refusal of gitleaks' inline allow
+// comment (resultTextRules). A missing or empty
 // skill is an error: the audit never runs with the CLI's prompt alone.
 func Prompt(root string) (claudecode.Prompt, error) {
 	skill, err := readCapped(under(root, skillFile), maxSkill)

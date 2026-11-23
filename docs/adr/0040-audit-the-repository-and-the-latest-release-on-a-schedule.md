@@ -864,7 +864,9 @@ entry point prints none of them.
   require each 40-hex run in a model field to name a commit of the repository, and the model job's
   prompt tells the model not to quote an MD5, an undashed UUID, a Rekor entry UUID, a SHA-384 or
   SHA-512 hex digest or a go.sum hash. From the text rule, the prompt also tells the model to write
-  ASCII only, since a quoted non-ASCII character refuses the run.
+  ASCII only, since a quoted non-ASCII character refuses the run. From the gitleaks refusal (below),
+  the prompt tells the model never to write gitleaks' inline allow comment literally, in any letter
+  case, and to name it in words instead; the prompt itself never carries the marker.
 - **The fifth (the workflow)**: only the audit App's `security-audit/*` branches may change
   `docs/security/audits/`, enforced by CODEOWNERS or a required check. Otherwise a merged edit from
   another branch that adds a False positives row would drop a public finding from every later run,
