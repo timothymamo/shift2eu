@@ -343,6 +343,13 @@ func TestPublishScansThePreviousReportsIssuesBeforeWriting(t *testing.T) {
 		{name: "a gitleaks hit", scenario: "a scenario holding " + fakeGitleaksHit},
 		{name: "a token", scenario: "a scenario holding " + modelToken()},
 		{
+			// A long, high-entropy run of the model's own characters: the
+			// previous report's cell holds it, so the issue rendered from that
+			// finding would carry it into the repository unscanned.
+			name:     "an encoded run",
+			scenario: "a scenario holding " + strings.Repeat("A1b2C3d4E5f6G7h8I9j0", 2),
+		},
+		{
 			name:     "a 40-hex run that is no commit",
 			scenario: "a revert of " + fixtureOtherCommitSHA,
 			extra: []Route{{
