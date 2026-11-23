@@ -436,7 +436,7 @@ func TestPreflightPlanCarriesEachCallsInput(t *testing.T) {
 		"Glob":  {"path", "pattern"},
 	}
 
-	placeholders := []string{"{work}", "{state}", "{wrapper}", "{tmp}", "{port}", "{docker}", "{pid}", "{githubenv}", "{control}"}
+	placeholders := []string{"{work}", "{state}", "{wrapper}", "{tmp}", "{port}", "{docker}", "{pid}", "{githubenv}", "{githubenvdir}", "{githubenvbase}", "{control}"}
 
 	for i, call := range plan() {
 		want, ok := toolInputKeys[call.Tool]
@@ -643,8 +643,10 @@ func TestPreflightPlanPassesThePathsItsGlobsSearch(t *testing.T) {
 // shows whether the variable survived the subprocess scrub - without the
 // transcript ever holding the token. The path lies inside the audit's roots,
 // which the wrapper holds every path word to (issue #277, round I): a path
-// outside them is refused before cat runs, and the wrapper's own refusal reads
-// as absence, so the call would prove nothing.
+// outside them is refused before cat runs, and the wrapper's refusal of the
+// unexpanded word reads as absence too, but it tests the wrapper rather than
+// cat, so the answer is not the one the plan describes. Inside the roots cat
+// itself runs, and its failure is the absent token.
 func TestPreflightPlanProvesTheTokenVariableIsAbsent(t *testing.T) {
 	t.Parallel()
 
@@ -1172,12 +1174,14 @@ func absenceCases() []judgeCase {
 		{
 			// Round I moved the call to a path inside the roots, and this row is
 			// why (issue #277): the wrapper refuses a path outside them before
-			// cat runs, and its one-line refusal - the old call's own - names
-			// /nonexistent/ with a quote after it and no expansion, which is
-			// exactly what cat's own error reads. The judgement accepts it, so the
-			// old call proved nothing; only a path the wrapper passes makes cat
-			// run and its failure an absent token.
-			name:     "the wrapper's refusal of a path outside the roots reads as an absent token",
+			// cat runs, and its one-line refusal of the unexpanded path -
+			// /nonexistent/ with a quote after it - is exactly what cat's own
+			// error reads, so the judgement accepts it. The old call showed
+			// absence too, since a refusal of the expanded word carries tokenset
+			// and is refused (round J's correction), but it tested the wrapper
+			// and not cat: only a path the wrapper passes makes cat run and its
+			// failure an absent token.
+			name:     "the wrapper's refusal of the unexpanded path outside the roots reads as an absent token",
 			answers:  theCall(callResult{text: `audit-exec: refused: "/nonexistent/"`, isError: true}),
 			wantPass: true,
 		},

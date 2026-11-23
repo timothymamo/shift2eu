@@ -177,8 +177,9 @@ func TestClaudeSettingsFileRefusesADuplicateKey(t *testing.T) {
 // decodeJSONDocument reads data as one JSON document into map[string]any,
 // []any, string, bool, json.Number and nil, and refuses a document that is no
 // JSON, that holds more than one value, or that writes a key of one object
-// twice. The duplicate is named by its path, so a failure says where to look,
-// and the first of the two values is what the document holds.
+// twice: encoding/json keeps the last of two equal keys silently, so a repeated
+// key is an error here. The duplicate is named by its path, so a failure says
+// where to look.
 func decodeJSONDocument(data []byte) (any, error) {
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.UseNumber()

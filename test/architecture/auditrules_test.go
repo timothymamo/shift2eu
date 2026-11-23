@@ -68,8 +68,8 @@ func TestAuditPackagesAreHeldByStrictRules(t *testing.T) {
 		held string
 		// wantAllowed is the package of the module the rule has to allow.
 		wantAllowed string
-		// why names what wantAllowed is to held, so a failure says which package
-		// the rule that did not allow is missing (issue #277, round J nit 7).
+		// why says what wantAllowed is, so a failure names the package the rule
+		// is missing (issue #277, round J nit 7).
 		why string
 	}{
 		{
