@@ -795,7 +795,11 @@ report is <n> days older than this one.` when the previous report's name's date 
 before the run's date, counted in whole UTC days from the two dates' Unix seconds, `(run − previous) /
 86400`, so a previous date in the year 0001 gives its true gap and not `time.Duration`'s saturated 292
 years. A previous report dated after the run is refused (outcome 7), because `NewestReport` would
-otherwise pick it on every later run and suppress the gap check. A `test/architecture` check reads the core's source
+otherwise pick it on every later run and suppress the gap check. For the fourth pull request: a previous
+report on the run's own date whose run ID is equal to or above the run's own is accepted today. Re-runs
+are skipped (`run_attempt == 1`), so it needs a hand-made or a later run's report merged first, and its
+effect lasts one run; the entry point, or a later core change, may refuse it (`ErrPreviousReport`,
+`previous report: not before the run`). A `test/architecture` check reads the core's source
 and fails `make check` unless `GapThresholdDays` is declared exactly once, as an integer literal, and
 equals 38 while the workflow has no `schedule` trigger. Milestone 3, which adds the trigger, changes it
 to the PRD's full check: at least the longest gap between two consecutive dates the cron names plus 7
@@ -821,12 +825,14 @@ outcome names below are the core's internal kinds:
 | `OutcomeFailed` (any other error) | 1 | `publish failed: see runbook` |
 | `OutcomeResultInvalid` (`ErrResultInvalid`, a result that does not decrypt included) | 3 | `result refused: see runbook` |
 | `OutcomeScanRefused` (`ErrScanRefused`) | 4 | `publish refused: see runbook` |
-| `OutcomePrivateNotFiled` | 5 | `private findings not filed: see runbook` |
+| `OutcomePrivateNotFiled` (`ErrPrivateNotFiled`, or a published run whose private findings were not filed) | 5 | `private findings not filed: see runbook` |
 | `OutcomeDuplicateDrafts` | 6 | `publish refused: duplicate draft advisories: see runbook step 11` |
-| `OutcomePreviousReport` (`ErrPreviousReport`) | 7 | `previous report unreadable: see runbook` |
+| `OutcomePreviousReport` (`ErrPreviousReport`: a previous report that is unreadable or dated after the run) | 7 | `previous report unreadable: see runbook` |
 | `OutcomeGitHub` | 8 | `GitHub call failed: see runbook` |
 | `OutcomeConfig` (`ErrConfig`) | 9 | `configuration invalid: see runbook` |
 
+Outcome 7's summary names the class, never which case broke it, so the fourth pull request's runbook
+step for outcome 7 lists both cases, the unreadable previous report and the one dated after the run.
 Code 2 is left to the Go runtime's panic exit. Only `OutcomePublished` and `OutcomePrivateNotFiled` have
 published anything; the second still fails the job, so GitHub notifies the maintainer. The errors the
 core returns name a field's path (`findings[3].scenario`) and the rule it broke, never a value, and the
