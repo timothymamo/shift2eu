@@ -173,6 +173,15 @@ Arrows are imports. They point inwards only:
   standard packages, no `os` or `net`, and no package of the product). Its entry point
   `ci/auditpublish`, which reads, runs gitleaks and calls GitHub, comes with milestone 2's fourth pull
   request.
+  `ci/sitedeploy` is the site's deploy program (PRD #297 milestone 3), which the release runs from that
+  milestone's workflow pull request on, in the deploy job, on the bundle it attested. It reads its flags,
+  the release tag list and the deploy key's two variables and wires its library
+  `ci/sitedeploy/internal/deploy`, which speaks the S3 API of Scaleway Object Storage with SigV4 signing
+  written by hand: the rollback guard on the live page, the optional listing of the bucket (off by
+  default), then PUTs of the content-addressed assets, the manifest and the pages last, never a DELETE,
+  and neither key in any output. Both are held to named standard packages (`site-deploy-main`, which runs
+  no program; `site-deploy-library`, no `os` and no package of the module), and the forbidigo group
+  `site-deploy-env` allows only the one `os.LookupEnv` its `main.go` passes on.
 - **`cmd/shift2eu`** is the CLI's composition root, the only place besides `cmd/shift2eu-web` that
   constructs adapters and injects them (and `ci/sitebuild`, which constructs the three targets only to
   read their catalogs). Its imports are a strict allow list (`composition-root`, issue #101): the
