@@ -53,7 +53,7 @@
 <li>The hosting provider, Scaleway, sees what any web server sees: your IP address, your user agent and the files you request. It sees nothing of your inventory, which never leaves your browser.</li>
 <li>Browser extensions can read any page, this one included.</li>
 <li>A released page served from a poisoned cache can stay in your browser's own cache for up to its max-age, 300 seconds, after the site is repaired. A page uploaded with a leaked deploy key sets its own caching, up to a year, and can register a service worker; both can outlast the repair in your browser, since the site cannot send Clear-Site-Data. The page script removes any service worker when a genuine page loads, which helps only visitors who load one.</li>
-<li>The live checks compare the files in the attested manifests, the site's root and a few well-known service-worker paths. A look-alike page uploaded at a new path with a leaked key is not detected by them.</li>
+<li>The site serves only the files named in a release's manifest: any other path on the host is not part of the site. The live checks compare the files in the attested manifests, the site's root and a few well-known service-worker paths. A look-alike page uploaded at a new path with a leaked key is not detected by them.</li>
 <li>If you must not trust the host at all, run the attested bundle locally with any static file server: it runs unchanged on any origin (see <a href="verify.html">Verify this site</a>).</li>
 </ul>
 
