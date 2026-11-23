@@ -68,9 +68,24 @@ func TestAuditPackagesAreHeldByStrictRules(t *testing.T) {
 		held string
 		// wantAllowed is the package of the module the rule has to allow.
 		wantAllowed string
+		// why names what wantAllowed is to held, so a failure says which package
+		// the rule that did not allow is missing (issue #277, round J nit 7).
+		why string
 	}{
-		{name: auditLibraryRule, scope: auditLibraryScope, held: auditLibraryPackage, wantAllowed: claudeCodeLauncher},
-		{name: auditMainRule, scope: auditMainScope, held: auditMainPackage, wantAllowed: auditLibraryPackage},
+		{
+			name:        auditLibraryRule,
+			scope:       auditLibraryScope,
+			held:        auditLibraryPackage,
+			wantAllowed: claudeCodeLauncher,
+			why:         "the shared launcher of the CLI the audit runs",
+		},
+		{
+			name:        auditMainRule,
+			scope:       auditMainScope,
+			held:        auditMainPackage,
+			wantAllowed: auditLibraryPackage,
+			why:         "the audit's library, whose preflight and run the launcher calls",
+		},
 	}
 
 	for _, tc := range cases {
@@ -100,7 +115,7 @@ func TestAuditPackagesAreHeldByStrictRules(t *testing.T) {
 			}
 
 			if !allows(tc.wantAllowed) {
-				t.Errorf("the depguard rule %s does not allow %s, which %s imports: the launcher of the CLI the audit runs (ADR 0040)", tc.name, tc.wantAllowed, tc.held)
+				t.Errorf("the depguard rule %s does not allow %s, %s: the rule is what keeps %s to the packages its own list names (ADR 0040)", tc.name, tc.wantAllowed, tc.why, tc.held)
 			}
 
 			// The audit's containment is what these packages hold: a raw system

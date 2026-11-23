@@ -99,7 +99,10 @@ func TestLaunchConfigIsTheADRsLaunch(t *testing.T) {
 // entries: TMPDIR in the state area, the subprocess environment scrub and the
 // step's canary, and nothing else. The launcher adds the token, HOME, PATH and
 // its four switches itself; a name it sets itself cannot be an entry, which is
-// why the config carries the rest.
+// why the config carries the rest. The list is compared whole, so a variable the
+// caller's environment carries - the ones an earlier step writes to $GITHUB_ENV
+// among them - is refused by the same comparison as any other name (issue #277,
+// round J nit 5).
 func TestLaunchConfigEnvIsTheADRsAllowListAlone(t *testing.T) {
 	t.Parallel()
 
@@ -119,54 +122,6 @@ func TestLaunchConfigEnvIsTheADRsAllowListAlone(t *testing.T) {
 
 	if diff := cmp.Diff(want, got); diff != "" {
 		t.Errorf("the audit launch's environment entries (-want +got):\n%s", diff)
-	}
-}
-
-// TestLaunchConfigHoldsNoneOfTheCallersVariables pins the allow list against
-// the variables a step's environment can carry: an earlier step writes
-// $GITHUB_ENV, which the runner then exports into every later step, and the
-// managed-settings path points the CLI at another policy file. None of them is
-// an entry of the child's environment, and no entry is the caller's to add: the
-// config is built from the step's inputs, which the launcher is handed, and the
-// launcher's own environment carries the token, HOME, PATH and its four
-// switches and nothing of the process it runs in (ci/internal/claudecode pins
-// that whole list).
-//
-// The test cannot set the process's environment to prove it - test/lint refuses
-// t.Setenv, which changes the whole test binary's environment - so it holds the
-// entries to the audit's own list and names the caller's variables one by one.
-func TestLaunchConfigHoldsNoneOfTheCallersVariables(t *testing.T) {
-	t.Parallel()
-
-	callers := []string{
-		"ANTHROPIC_API_KEY",
-		"ANTHROPIC_BASE_URL",
-		"HTTPS_PROXY",
-		"NODE_OPTIONS",
-		"LD_PRELOAD",
-		"CLAUDE_CODE_MANAGED_SETTINGS_PATH",
-		"SHIFT2EU_AUDIT_SENTINEL",
-	}
-
-	root := t.TempDir()
-	cfg := audit.LaunchConfig(root, testInputs(root))
-
-	own := map[string]bool{
-		"TMPDIR":                           true,
-		"CLAUDE_CODE_SUBPROCESS_ENV_SCRUB": true,
-		"SHIFT2EU_AUDIT_CANARY":            true,
-	}
-
-	for _, entry := range cfg.Env {
-		name, _, _ := strings.Cut(entry, "=")
-
-		if slices.Contains(callers, name) {
-			t.Errorf("the audit launch's environment holds %s, which is the caller's to set: the launcher's environment is the ADR's allow list and inherits nothing (ADR 0040)", name)
-		}
-
-		if !own[name] {
-			t.Errorf("the audit launch's environment holds %s, want one of TMPDIR, CLAUDE_CODE_SUBPROCESS_ENV_SCRUB and SHIFT2EU_AUDIT_CANARY: the rest of the allow list is the launcher's own (ADR 0040)", name)
-		}
 	}
 }
 

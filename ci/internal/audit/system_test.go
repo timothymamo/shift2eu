@@ -429,14 +429,19 @@ func workPath(root string, parts ...string) string {
 // resultFile is the result the audit's model writes.
 const resultFile = `{"findings":[]}`
 
-// pinnedResult is a result that quotes a SHA-256 pin: 64 lower-case hex
-// characters the judgement's 64-hex rule would refuse, and a finding here.
+// pinnedResult is a result whose one value quotes a SHA-256 pin: 64 lower-case
+// hex characters, the shape the judgement counts as the canary when it reads the
+// preflight's transcript, where any such run in a tool_result is a leak. In the
+// result file it is one of the audit's findings, not a leak, so the step takes it
+// whole (issue #277, round J nit 6).
 var pinnedResult = `{"pin":"` + strings.Repeat("0f", 32) + `"}`
 
-// maxJSONDepth is encoding/json's own limit on how deeply a document may nest:
-// the decoder refuses the 10001st open, before it reads to the document's end.
-// The result file's token walk holds a document nested to this limit and refuses
-// one nested further (issue #277, round E nit 1).
+// maxJSONDepth is how deeply the audit walks a result: a document nested to this
+// depth is read to its end, and one nested further is refused as not JSON rather
+// than walked. The limit is the audit's own - the constant maxResultDepth of
+// ci/internal/audit/system.go - and this test holds it from outside the package,
+// where the value 10000 is all it can see (issue #277, round E nit 1 and round J
+// item 3).
 const maxJSONDepth = 10000
 
 // nestedArrays returns a JSON document of n arrays nested in one another, every
@@ -468,9 +473,9 @@ func jsonEscaped(s string) string {
 // the document's tokens rather than a map that a later duplicate key empties
 // (issue #277, round E finding 3). A result file quoting a SHA-256 pin is a
 // finding, not a leak: the 64-hex rule the judgement applies to the preflight's
-// transcript is not applied here. A result nested deeper than JSON's own limit
-// is refused as an invalid result rather than walked to its end, and one nested
-// to the limit is accepted (issue #277, round E nit 1).
+// transcript is not applied here. A result nested deeper than the audit's own
+// limit is refused as an invalid result rather than walked to its end, and one
+// nested to the limit is accepted (issue #277, round E nit 1, round J nit 6).
 func TestAuditTakesOnlyAResultFileTheRunWrote(t *testing.T) {
 	t.Parallel()
 
@@ -537,9 +542,9 @@ func TestAuditTakesOnlyAResultFileTheRunWrote(t *testing.T) {
 			wantRefused:  true,
 		},
 		{
-			// Well-formed JSON, nested one level past what encoding/json reads:
-			// the walk refuses it rather than growing its stack with it.
-			name: "the result file is nested deeper than JSON's own limit",
+			// Well-formed JSON, nested one level past the audit's limit: the
+			// walk refuses it rather than growing its stack with it.
+			name: "the result file is nested deeper than the audit's limit",
 			write: func(root string) error {
 				return os.WriteFile(workPath(root, "result.json"), []byte(nestedArrays(maxJSONDepth+1)), 0o600)
 			},
@@ -547,7 +552,7 @@ func TestAuditTakesOnlyAResultFileTheRunWrote(t *testing.T) {
 			wantRefused:  true,
 		},
 		{
-			name: "the result file is nested to JSON's own limit",
+			name: "the result file is nested to the audit's limit",
 			write: func(root string) error {
 				return os.WriteFile(workPath(root, "result.json"), []byte(nestedArrays(maxJSONDepth)), 0o600)
 			},
