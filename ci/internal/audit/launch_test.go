@@ -30,6 +30,11 @@ import (
 // in for /: the copy in the checkout the model job made.
 const skillPath = "srv/audit/checkout/.claude/skills/security-audit-run/SKILL.md"
 
+// inlineAllowComment is gitleaks' inline allow comment, built from its two
+// halves so that no line of this repository spells it out: the audit's model
+// reads the repository, and a line it quotes refuses the whole run (ADR 0040).
+const inlineAllowComment = "gitleaks" + ":allow"
+
 // TestLaunchConfigIsTheADRsLaunch pins every field of the launcher's config the
 // ADR fixes for the audit.
 func TestLaunchConfigIsTheADRsLaunch(t *testing.T) {
@@ -238,7 +243,7 @@ func TestPromptStatesThePublishCoresTextRules(t *testing.T) {
 		{what: "user text", body: prompt.User},
 		{what: "system text", body: prompt.System},
 	} {
-		if strings.Contains(strings.ToLower(text.body), "gitleaks:allow") {
+		if strings.Contains(strings.ToLower(text.body), inlineAllowComment) {
 			t.Errorf("the prompt's %s holds gitleaks' inline allow comment literally, want it named in words instead: gitleaks honours the marker, so the run refuses its own prompt (ADR 0040)\nthe prompt: %s",
 				text.what, text.body)
 		}
