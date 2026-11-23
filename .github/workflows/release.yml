@@ -187,8 +187,8 @@ jobs:
           mkdir bin/release-bundle
           tar -xzf "bin/shift2eu-site_$TAG.tar.gz" -C bin/release-bundle
       # The bundle the release publishes, not one built again: plain make
-      # test-browser (CI's browser job) would build its own with ci/sitebuild
-      # and test something the release never attested.
+      # test-browser would build its own with ci/sitebuild and test something
+      # the release never attested.
       - name: Smoke test the release's bundle in a headless Chromium
         run: make test-browser TEST_BROWSER_BUNDLE=bin/release-bundle
 
