@@ -5,9 +5,10 @@
 // it wrote named, instead of blocking the subtest until go test's package timeout names nothing (issue #512).
 // A command that leaves a background child holding its stdout open and then blocks pins the group kill: only a
 // kill of the whole process group closes those pipes within the bound, a kill of the command alone leaves them
-// open until the wait delay mops up seconds later. Unix only: the cases run /bin/sh and the runner kills the
-// command's process group; lint type-checks the package for the windows release targets too, where no /bin/sh
-// exists.
+// open until the wait delay mops up seconds later. A bound that fires after the command exited on its own, while
+// a grandchild still holds its stdout open, pins that the bound's kill cannot pass a command's own result off as
+// a timeout. Unix only: the cases run /bin/sh and the runner kills the command's process group; lint type-checks
+// the package for the windows release targets too, where no /bin/sh exists.
 package devenv_test
 
 import (
@@ -41,8 +42,8 @@ const (
 )
 
 // TestRunBounded pins the bounded runner's contract: what it returns for a command that exits 0, one that exits
-// non-zero, one that never finishes within its bound, and one whose grandchild keeps its stdout open after the
-// command itself exited.
+// non-zero, one that never finishes within its bound, one whose grandchild keeps its stdout open after the command
+// itself exited, and one the bound cuts short although the command had already ended on its own.
 func TestRunBounded(t *testing.T) {
 	t.Parallel()
 
@@ -122,6 +123,19 @@ func TestRunBounded(t *testing.T) {
 			wantStdoutContains: "done",
 			wantErr:            errUnpinned,
 			maxElapsed:         15 * time.Second,
+		},
+		{
+			name: "the bound fires while a grandchild holds stdout open and the command has exited",
+			// The command exits 0 at once, but the grandchild holds the write end of runBounded's stdout pipe,
+			// so its Wait cannot return before boundedWaitDelay: the bound fires first, with a command that had
+			// already ended on its own. Its own status, not errCommandTimedOut, is the run's result: a command
+			// that ended on its own is never reported as a timeout, whatever order select saw its channels in
+			// (issue #512).
+			script:             `sleep 30 & printf done`,
+			timeout:            time.Second,
+			wantStdoutContains: "done",
+			wantErr:            errUnpinned,
+			maxElapsed:         3 * time.Second,
 		},
 	}
 
