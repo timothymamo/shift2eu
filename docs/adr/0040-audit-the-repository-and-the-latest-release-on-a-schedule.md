@@ -889,7 +889,7 @@ standard packages, each entry ending in `$`, pinned by `test/architecture`:
   group `audit-publish-main-env`, its exception in `main.go` alone), reads the clock for the run's UTC
   date, prints the one summary line and exits. It starts no program.
 - `ci/auditpublish/internal/github`, the **GitHub side**, a library (`audit-publish-github`: `bytes`,
-  `context`, `encoding/json`, `errors`, `fmt`, `io`, `os`, `os/exec`, `path/filepath`, `regexp`,
+  `context`, `encoding/base64` (an image attestation's DSSE payload, PR 4b), `encoding/json`, `errors`, `fmt`, `io`, `os`, `os/exec`, `path/filepath`, `regexp`,
   `slices`, `strconv`, `strings`, `time` (the deadlines below) and the core; `net` denied). It runs
   `gh` and gitleaks, reads the result and the merged reports, and reads no environment variable at all
   (the forbidigo group `audit-publish-github-env`, which holds for its tests too; its one exception is
@@ -917,11 +917,26 @@ before the endpoint table is consulted and before `gh` runs. The table is the pu
 one listing needs; a client that may only read keeps the artifact check, whose step holds the job's
 `github.token`, no wider than the subcommand needs. It prints `artifacts: as expected`,
 `artifacts: unexpected: see runbook step 11` (exit 3), or the core's GitHub and configuration lines
-(exits 8 and 9). `auditpublish publish -result <path> -reports <dir> -gh <path> -gitleaks <path> -tmp
-<dir>` is the publish job's program; its summary line and exit code are the core's `Outcome`. The job
-sets the expected names, not a caller's list: a step cannot widen them. The fourth pull request lands in
-two parts: 4a builds `artifacts` alone, and until 4b builds `publish` (with `GITHUB_SHA` and
-`AUDIT_FINGERPRINT_KEY`) that name is a usage error like an unknown subcommand.
+(exits 8 and 9). The job sets the expected names, not a caller's list: a step cannot widen them.
+
+`auditpublish image -result <path> -gh <path> -tmp <dir>` (PR 4b) checks the result's release and image
+digest before `publish` trusts them: `CheckRelease` (row 2: 200 with the tag's `tag_name`, 404 is
+`ErrResultInvalid`) and `CheckImageDigest` (row 3, below). It is a subcommand of its own, run in its own
+step with the job's `github.token` and `attestations: read`, because the audit App has no Attestations
+permission and is not widened for it (maintainer, decision 2 of PR 4's review). Its client is read-only
+by construction, `github.NewImageClient`, as the artifact check's is. It prints `image digest: as
+expected` (exit 0) or the core's `result refused` (3), GitHub (8), configuration (9) and failed (1)
+lines.
+
+`auditpublish publish -result <path> -reports <dir> -gh <path> -gitleaks <path> -tmp <dir>` (PR 4b) is
+the publish job's program, built through `github.NewPublishClient`, which refuses a scope without the
+audited commit; its summary line and exit code are the core's `Outcome`, with the report's public total
+and the private state as its counts. It runs `github.Publish`, in this order: it reads the result
+(`LoadResult`, the audited commit `GITHUB_SHA`) and the previous report (`LoadPrevious`, below) before
+any call; checks the release (row 2) and lists the App's issues (row 12); renders the report, the
+templates and the issues; scans every text; and only then writes the report and the issues. The release
+check runs again here, under the App's token, so a `publish` started without the `image` step still
+refuses a tag that names no release; the digest check is `image`'s alone.
 
 A usage error (no or an unknown subcommand, a flag it cannot parse, an extra argument, an unknown job)
 writes one constant usage text to stderr, holding no value, and is outcome 9. Every outcome, the refusals
@@ -953,20 +968,28 @@ tree, and each call's and scan's own deadline bounds the run meanwhile. The fift
 bound.
 
 A POST or PATCH whose call ended at its deadline or on a signal has an **unknown** effect, not none:
-GitHub may have applied it before the answer was lost. PRs 4b and 4c therefore never retry a mutating
-call within a run; the next run's listing (the bot's issues, the App's draft advisories) reconciles
-with what is already there before it writes, pinned by a fake-`gh` test whose POST route answers only
-after a delay past the call's deadline.
+GitHub may have applied it before the answer was lost. The program therefore never retries a mutating
+call within a run (built in PR 4b for every POST; PR 4c's PATCH goes through the same helper): every
+write goes through one helper, which makes one call and turns a non-2xx status or an ended context into
+`ErrGitHub`, and no write follows a refused one. The next run's listing (the bot's issues, the App's
+draft advisories) reconciles with what is already there before it writes. Fake-`gh` tests pin both: a
+POST route that answers only after a delay past the call's deadline is called exactly once with nothing
+after it, and each write of the report (blob, tree, commit, ref, pull request) and an issue answering
+422 stops the run there.
 
 **The environment.** The entry point reads `GH_TOKEN`, `GITHUB_SERVER_URL`, `GITHUB_REPOSITORY`,
-`GITHUB_RUN_ID`, `GITHUB_STEP_SUMMARY`, and for `publish` also `GITHUB_SHA` and `AUDIT_FINGERPRINT_KEY`,
-and no other value. It refuses to run (outcome 9) when `AUDIT_APP_PRIVATE_KEY`,
+`GITHUB_RUN_ID`, `GITHUB_STEP_SUMMARY`, for `image` also `GITHUB_SHA`, and for `publish` also
+`GITHUB_SHA` and `AUDIT_FINGERPRINT_KEY`, and no other value. `image` and `publish` refuse (outcome 9)
+a `GITHUB_SHA` that is not 40 lowercase hex, `publish` an `AUDIT_FINGERPRINT_KEY` unset or under 32
+bytes, and both a `GITHUB_SERVER_URL` other than exactly `https://github.com` (a trailing slash, another
+host, `http://` and an unset one included): the report, the commit message and the pull request name the
+run's URL on that server, and an attestation's workflow names its repository there. It refuses to run (outcome 9) when `AUDIT_APP_PRIVATE_KEY`,
 `AUDIT_MODEL_PRIVATE_KEY`, `AUDIT_PUBLISH_PRIVATE_KEY` or `CLAUDE_CODE_OAUTH_TOKEN` is set at all, reading
 only whether it is: none belongs in its step. `GH_TOKEN` is passed through to `gh` and nothing else:
 `gh` takes its token from its environment, and the library builds that environment itself, so the value
 is copied in as the `GH_TOKEN` entry, held in a type that formats as a placeholder, and never printed,
-compared or written. The artifact check's step gets the job's `github.token` (the App has no Actions
-read); the publish step gets the App's token.
+compared or written. The artifact check's and the image check's steps get the job's `github.token`
+(the App has no Actions read and no Attestations permission); the publish step gets the App's token.
 
 **The `gh` calling contract.**
 
@@ -1043,6 +1066,79 @@ There is no PUT and no DELETE, and no endpoint that merges or reviews a pull req
 publishes an advisory, comments on or edits an issue, or touches a tag, a release or another branch.
 The issues are matched by listing the App's own issues and reading each one's author and fingerprint,
 not through the search API, whose rate limit a run of up to 100 findings could reach.
+
+**The report's publication (PR 4b).** `PublishReport` makes these calls, in this order, none of them
+twice:
+
+1. `GET R/git/ref/heads/<branch>`: 404 goes on. 200, an existing `security-audit/<date>-<run id>`
+   branch, is `ErrBranchExists`, outcome 1 (`publish failed`), not 8, and nothing is written; any other
+   status is `ErrGitHub`.
+2. `GET R/git/commits/<audited commit>`: the answer's `sha` must be the audited commit, and its
+   `tree.sha` (40 hex) is the base tree.
+3. `POST R/git/blobs` with the report's body; 4. `POST R/git/trees` with that base tree and one entry,
+   the report's path and the blob's answered sha; 5. `POST R/git/commits` with the templates' message,
+   the tree's answered sha and the audited commit as the one parent.
+6. `GET R/compare/<audited commit>...<the commit's answered sha>`: the answer's files must be exactly
+   one, the run's report path, status `added`; anything else is `ErrReportDiff`, outcome 1, and no ref
+   and no pull request follow.
+7. `POST R/git/refs`, `refs/heads/<branch>` at the commit's answered sha; 8. `POST R/pulls` with the
+   templates' title and body, the branch into `main`, no draft, no maintainer edits.
+
+The object SHAs are bound from the answers, never computed or taken from the plan: the tree's
+`base_tree` is the audited commit's tree as step 2 answered it, the commit's `tree` is step 4's answer,
+and the compare and the ref name step 5's answer; an answer without its 40-hex sha is `ErrGitHub` and
+nothing follows. **The compare comes before the ref**: a commit object exists, and can be compared,
+before any ref names it, and only a ref makes a push-triggered workflow run it, so no workflow ever runs
+a commit the program has not proved to be the audited commit plus the one report. A refused compare
+leaves an unreferenced commit object, which GitHub collects. Fake-`gh` tests pin the order from the
+fake's record, each binding with distinct answer SHAs, a compare of two files (and one modified, one
+other file, none) with no ref after it, and an existing branch with no write at all.
+
+**Issues for merged reports (PR 4b).** A run files issues for the **previous** merged report's public
+findings whose status is `new` or `open`, never for its own (the report it opens is not merged yet), and
+never for needs-investigation rows or false positives. `ListAuditIssues` reads row 12, open and closed,
+page by page while the `Link` header has `rel="next"`; an eleventh page fails closed (`ErrGitHub`).
+`PlanIssues` then matches locally (decision 5: listing plus a local match, not the search API): a
+finding has its issue when an entry that is no pull request, whose `user.login` is
+`shift2eu-audit[bot]` and whose `user.type` is `Bot`, holds the fingerprint in its title, not preceded
+by a letter, a digit or `-` and not followed by a hex digit. An outsider's issue carrying the
+fingerprint matches nothing, so an outsider cannot suppress an issue; a closed bot issue matches, so a
+finding the maintainer closed is not filed again. Each unmatched finding becomes one `security` issue
+(`publish.RenderIssue`: a fixed title and body, its location, scenario and fix as code blocks, its
+report's path and the run's URL, never its evidence), filed after the report's pull request, in the
+table's order; the first refused issue stops the run with the report already published.
+
+**Every scan before the first write.** `Publish` renders every text first and scans each with the
+core's `ScanPublic` and gitleaks: the report (with its model fields), the pull request's title and body,
+the commit message, and each issue's title and body (with its model fields). Every distinct maximal run
+of exactly 40 hex digits, either case, in those model fields must be a commit of the repository
+(`CheckCommitRuns`, row 4 answering 200): a 404, and more than 20 distinct runs before any lookup, is
+`ErrScanRefused` (outcome 4), which narrows the hex-encoded-secret residual risk above. A hit at any of
+these writes nothing: the branch lookup, the first call of the writes' phase, is never made.
+
+**Private findings until PR 4c.** With no advisory side yet, a run with a private finding fails closed
+rather than filing or dropping it silently: the report is rendered with `private findings: not filed`,
+the report and the issues are published, and `Published.Private` is `PrivateNotFiled`, so the entry
+point's `OutcomeOf(nil).WithCounts` is outcome 5 and the job fails. Nothing of a private finding reaches
+a public text.
+
+**The image check (PR 4b).** `CheckImageDigest` reads row 3 and accepts a digest when at least one
+attestation's DSSE envelope has the payload type `application/vnd.in-toto+json` and its statement
+(base64, `encoding/base64`) has the predicate type `https://slsa.dev/provenance/v1`, a subject whose
+`sha256` is the digest's hex, and a workflow whose `ref` is `refs/tags/<tag>` and whose `repository` is
+`https://github.com/<owner>/<name>`; other attestations (an SBOM, an undecodable payload) are skipped.
+No match, an empty listing and a 404 are `ErrResultInvalid`. It matches the attestation's statement
+only: **it does not verify the bundle's Sigstore signature or certificate chain**. GitHub serves the
+listing over the authenticated API for this repository, and the check trusts that answer as it trusts
+every other API answer; `gh attestation verify` would verify the signature, but it is a command outside
+the `gh api` contract above (its own network calls, its own trust root download), so the program does not
+run it. A forged statement would need write access to the repository's attestations.
+
+**The previous report.** `LoadPrevious` lists `-reports` (the checkout's `docs/security/audits`), picks
+the newest name by `publish.NewestReport` and opens only it: a symbolic link, a directory or any other
+non-regular file, a file other than the one `Lstat` saw when opened, one over 8 MiB and one the core
+refuses are `ErrPreviousReport` (outcome 7); no report name at all is a first run. `LoadResult` reads
+the result the same way, capped at the core's `MaxResultBytes`.
 
 **The fakes.** The tests run the library against a fake `gh` and a fake gitleaks, both the test binary
 itself, started through a symbolic link named `gh` or `gitleaks` that `TestMain` recognises by its name

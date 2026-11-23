@@ -26,7 +26,3 @@ var (
 	// pull request follow. Its outcome is "publish failed" (1).
 	ErrReportDiff = errors.New("report commit diff refused")
 )
-
-// errNotImplemented is the stub error of PR 4b's skeleton (PRD #175
-// milestone 2): every function that returns it is declared, not built yet.
-var errNotImplemented = errors.New("not implemented")

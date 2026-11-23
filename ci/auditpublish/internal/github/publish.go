@@ -2,6 +2,7 @@ package github
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/timothymamo/shift2eu/ci/auditpublish/internal/publish"
 )
@@ -34,6 +35,13 @@ type Published struct {
 	Private publish.PrivateState
 }
 
+// scanned is one text Publish scans before the first write, and the escaped
+// fragments of model text it holds.
+type scanned struct {
+	text   string
+	fields []string
+}
+
 // Publish runs the publish subcommand, without advisories (PR 4b), in this
 // order:
 //
@@ -55,6 +63,106 @@ type Published struct {
 //
 // It returns the counts of a run whose writes all succeeded, and otherwise
 // the first error, of one of the core's classes or the library's.
-func Publish(_ context.Context, _ PublishConfig) (Published, error) {
-	return Published{}, errNotImplemented
+func Publish(ctx context.Context, cfg PublishConfig) (Published, error) {
+	c := cfg.Client
+
+	switch {
+	case c == nil || c.scope.Commit == "":
+		return Published{}, fmt.Errorf("publish: no publish client: %w", publish.ErrConfig)
+	case cfg.Gitleaks == nil:
+		return Published{}, fmt.Errorf("publish: no scanner: %w", publish.ErrConfig)
+	case cfg.Run.Repository != c.scope.Repository || cfg.Run.ID != c.scope.RunID || cfg.Run.Date != c.scope.Date:
+		return Published{}, fmt.Errorf("publish: the run is not the client's: %w", publish.ErrConfig)
+	}
+
+	result, err := LoadResult(cfg.ResultPath, c.scope.Commit)
+	if err != nil {
+		return Published{}, err
+	}
+
+	previous, err := LoadPrevious(cfg.ReportsDir)
+	if err != nil {
+		return Published{}, err
+	}
+
+	if err := CheckRelease(ctx, c, result.ReleaseTag); err != nil {
+		return Published{}, err
+	}
+
+	existing, err := ListAuditIssues(ctx, c)
+	if err != nil {
+		return Published{}, err
+	}
+
+	private := publish.PrivateNone
+
+	for _, f := range result.Findings {
+		if publish.Place(f).Private() {
+			private = publish.PrivateNotFiled
+		}
+	}
+
+	in := publish.ReportInput{Result: result, Run: cfg.Run, Private: private, Previous: previous}
+
+	report, err := publish.RenderReport(in)
+	if err != nil {
+		return Published{}, err
+	}
+
+	templates, err := publish.RenderTemplates(in)
+	if err != nil {
+		return Published{}, err
+	}
+
+	issues, err := PlanIssues(previous, existing, cfg.Run)
+	if err != nil {
+		return Published{}, err
+	}
+
+	if err := scanAll(ctx, cfg, report, templates, issues); err != nil {
+		return Published{}, err
+	}
+
+	if err := PublishReport(ctx, c, ReportPlan{Report: report, Templates: templates}); err != nil {
+		return Published{}, err
+	}
+
+	for _, issue := range issues {
+		if err := CreateIssue(ctx, c, issue); err != nil {
+			return Published{}, err
+		}
+	}
+
+	return Published{Public: report.PublicTotal, Private: private}, nil
+}
+
+// scanAll scans every text a run would publish, before the first write: the
+// core's public scan and gitleaks over each text, then the commit-run check
+// over every model field.
+func scanAll(ctx context.Context, cfg PublishConfig, report publish.Rendered, templates publish.Templates, issues []publish.IssueText) error {
+	texts := []scanned{
+		{text: report.Body, fields: report.ModelFields},
+		{text: templates.PRTitle},
+		{text: templates.PRBody},
+		{text: templates.CommitMessage},
+	}
+
+	fields := append([]string(nil), report.ModelFields...)
+
+	for _, issue := range issues {
+		texts = append(texts, scanned{text: issue.Title}, scanned{text: issue.Body, fields: issue.ModelFields})
+		fields = append(fields, issue.ModelFields...)
+	}
+
+	for _, s := range texts {
+		if err := publish.ScanPublic(s.text, s.fields, cfg.Key); err != nil {
+			return err
+		}
+
+		if err := cfg.Gitleaks.Scan(ctx, s.text); err != nil {
+			return err
+		}
+	}
+
+	return CheckCommitRuns(ctx, cfg.Client, fields)
 }

@@ -879,7 +879,9 @@ An agent cannot do these steps. Each one is safe to stop at; the workflow is rol
       rotate per step 10 (the safe default), then start the new run.
     - `private findings not filed: see runbook` (exit 5): GitHub refused advisory creation to the App;
       the report says "private findings: not filed" and the private findings were dropped. Repeat step
-      3's advisory check, then start the new run.
+      3's advisory check, then start the new run. Until the advisory side lands (PR 4c), every run with
+      a private finding ends here: the report and the issues are published, the private findings are
+      neither filed nor published, and the job fails so the run is never green.
     - `publish refused: duplicate draft advisories: see runbook step 11` (exit 6): the paragraph above.
     - `previous report unreadable: see runbook` (exit 7) has **two causes**, and the line does not say
       which: (1) the newest report in `docs/security/audits/` is unreadable as the publish script renders
@@ -890,17 +892,32 @@ An agent cannot do these steps. Each one is safe to stop at; the workflow is rol
       failed run's; for (1), diff the newest report against what the publish script wrote in its PR. Fix
       it through a pull request to `main` (for (2), rename or remove the misdated report), then start
       the new run.
-    - `GitHub call failed: see runbook` (exit 8): a GitHub call failed or answered unexpectedly; an
-      existing `security-audit/<date>-<run_id>` branch lands here too (delete it as above). Check
-      GitHub's status, then start the new run.
+    - `GitHub call failed: see runbook` (exit 8): a GitHub call failed or answered unexpectedly (a
+      write that answered anything but 2xx or ran past its deadline included: no write is retried).
+      Check GitHub's status, then start the new run.
     - `configuration invalid: see runbook` (exit 9): a variable, flag or secret of the publish step is
-      missing or malformed (the fingerprint key shorter than 32 bytes included), or a secret that must
-      not be in the step is set there; the program was started with a bad or unknown flag or
-      subcommand (`publish` included, until PR 4b adds it); or `GITHUB_STEP_SUMMARY` is unset, not an
-      absolute path or cannot be opened. Compare the environment's secrets and variables with step 2,
-      and the step's command line with the workflow on `main`.
-    - `publish failed: see runbook` (exit 1): any other failure. Start the new run; if it repeats, the
-      publish program needs a fix through a pull request.
+      missing or malformed (a `GITHUB_SHA` that is not 40 lowercase hex, an `AUDIT_FINGERPRINT_KEY`
+      unset or shorter than 32 bytes, and, for `image` and `publish`, a `GITHUB_SERVER_URL` other than
+      exactly `https://github.com` included), or a secret that must not be in the step is set there;
+      the program was started with a bad or unknown flag or subcommand; or `GITHUB_STEP_SUMMARY` is
+      unset, not an absolute path or cannot be opened. Compare the environment's secrets and variables
+      with step 2, and the step's command line with the workflow on `main`.
+    - `publish failed: see runbook` (exit 1): any other failure, among them two the publish program
+      refuses before it opens anything: an existing `security-audit/<date>-<run_id>` branch (the
+      branch lookup answered 200; nothing was written: delete the branch as above), and a report
+      commit whose compare with the audited commit is not exactly one added file, the run's report
+      (no ref and no pull request were made; the commit object is unreferenced and GitHub collects
+      it). Start the new run; if it repeats, the publish program needs a fix through a pull request.
+
+    The image subcommand (`auditpublish image`, its own step before `publish`, with the job's
+    `github.token` and `attestations: read`) prints one of these lines:
+
+    - `image digest: as expected` (exit 0): the result's tag is a release, and its image digest is
+      empty or has a provenance attestation of this repository's release workflow at `refs/tags/<tag>`.
+    - `result refused: see runbook` (exit 3): the tag names no release, or the digest has no such
+      attestation. Treat it as the `result refused` line above.
+    - `GitHub call failed: see runbook` (exit 8), `configuration invalid: see runbook` (exit 9) and
+      `publish failed: see runbook` (exit 1): as above.
 
 ## Decisions and open questions
 

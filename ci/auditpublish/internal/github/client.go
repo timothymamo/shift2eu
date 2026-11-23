@@ -172,6 +172,21 @@ func NewArtifactsClient(cfg ClientConfig) (*Client, error) {
 	return NewClient(cfg)
 }
 
+// NewPublishClient returns the publish subcommand's Client: built as
+// NewClient builds one, with the same refusals, never read-only whatever
+// cfg.ReadOnly says, and refusing (publish.ErrConfig) a scope without the
+// audited commit, which the report commit's parent and the compare check
+// need. Its writes are the endpoint table's alone.
+func NewPublishClient(cfg ClientConfig) (*Client, error) {
+	if cfg.Scope.Commit == "" {
+		return nil, fmt.Errorf("github client: a publish scope without its commit: %w", publish.ErrConfig)
+	}
+
+	cfg.ReadOnly = false
+
+	return NewClient(cfg)
+}
+
 // checkProgram refuses a program path that is not absolute and clean or does
 // not name an existing file.
 func checkProgram(path string) error {

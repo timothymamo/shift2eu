@@ -26,9 +26,26 @@
 // sets ClientConfig.ReadOnly whatever its caller passes): Call refuses every
 // method but GET with ErrEndpointRefused before the table and before gh runs,
 // so the check that holds the job's token can reach no wider than the one read
-// it needs, not the publish job's whole table.
+// it needs, not the publish job's whole table. The image subcommand's client
+// (NewImageClient) is read-only the same way: it checks the result's release
+// (CheckRelease) and its image digest's provenance attestation
+// (CheckImageDigest), matching the attestation's statement, not its Sigstore
+// signature.
 //
-// It scans every text with gitleaks (Gitleaks) beside the core's own scans.
+// It publishes (Publish): it reads the result and the previous merged report
+// (LoadResult, LoadPrevious), checks the release, lists the audit App's
+// issues (ListAuditIssues) and plans one issue per unmatched open finding of
+// the previous report (PlanIssues), scans every text before the first write,
+// then files the report through the Git data API (PublishReport: the branch
+// lookup, blob, tree, commit, the one-file compare before the ref, the ref,
+// the pull request) and the issues (CreateIssue). Every write goes through one
+// helper that turns a non-2xx status into publish.ErrGitHub and never
+// retries. The draft advisories are not built yet: a private finding makes
+// the run end not filed.
+//
+// It scans every text with gitleaks (Gitleaks) beside the core's own scans,
+// and looks up every 40-hex run of a model field as a commit
+// (CheckCommitRuns).
 // It decides nothing a model wrote: ci/auditpublish/internal/publish, the
 // core, validates, places, renders and scans; this package reads GitHub, files
 // what the core built and returns errors of the core's classes, which never

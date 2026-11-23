@@ -2,6 +2,10 @@ package github
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
+	"strconv"
+	"strings"
 
 	"github.com/timothymamo/shift2eu/ci/auditpublish/internal/publish"
 )
@@ -30,6 +34,17 @@ type Issue struct {
 	PullRequest bool
 }
 
+// issueEntry is one entry of the listing as the answer holds it. A pointer
+// field the answer lacks is an answer that is not the listing.
+type issueEntry struct {
+	Title *string `json:"title"`
+	User  *struct {
+		Login *string `json:"login"`
+		Type  *string `json:"type"`
+	} `json:"user"`
+	PullRequest json.RawMessage `json:"pull_request"`
+}
+
 // ListAuditIssues lists the audit App's issues, open and closed: GET
 // R/issues?creator=shift2eu-audit%5Bbot%5D&state=all&per_page=100&page=N
 // (row 12), from page 1 on while the answer's Link header has rel="next", at
@@ -37,8 +52,50 @@ type Issue struct {
 // answer that is not a JSON array of issues (title a string, user an object
 // with login and type strings) and a failed call wrap publish.ErrGitHub. No
 // error names an issue.
-func ListAuditIssues(_ context.Context, _ *Client) ([]Issue, error) {
-	return nil, errNotImplemented
+func ListAuditIssues(ctx context.Context, c *Client) ([]Issue, error) {
+	if c == nil {
+		return nil, fmt.Errorf("issue listing: no client: %w", publish.ErrConfig)
+	}
+
+	var out []Issue
+
+	for page := 1; ; page++ {
+		if page > MaxIssuePages {
+			return nil, fmt.Errorf("issue listing: more than %d pages: %w", MaxIssuePages, publish.ErrGitHub)
+		}
+
+		resp, err := read(ctx, c, "repos/"+c.scope.Repository+
+			"/issues?creator=shift2eu-audit%5Bbot%5D&state=all&per_page=100&page="+strconv.Itoa(page))
+		if err != nil {
+			return nil, fmt.Errorf("issue listing: %w", err)
+		}
+
+		if resp.Status/100 != 2 {
+			return nil, fmt.Errorf("issue listing: the status is not 2xx: %w", publish.ErrGitHub)
+		}
+
+		var entries []issueEntry
+		if json.Unmarshal(resp.Body, &entries) != nil || entries == nil {
+			return nil, fmt.Errorf("issue listing: the answer is not the listing: %w", publish.ErrGitHub)
+		}
+
+		for _, e := range entries {
+			if e.Title == nil || e.User == nil || e.User.Login == nil || e.User.Type == nil {
+				return nil, fmt.Errorf("issue listing: an entry that is no issue: %w", publish.ErrGitHub)
+			}
+
+			out = append(out, Issue{
+				Title:       *e.Title,
+				UserLogin:   *e.User.Login,
+				UserType:    *e.User.Type,
+				PullRequest: len(e.PullRequest) > 0 && string(e.PullRequest) != "null",
+			})
+		}
+
+		if !strings.Contains(resp.Link, `rel="next"`) {
+			return out, nil
+		}
+	}
 }
 
 // PlanIssues returns the issues a run files: one, rendered by
@@ -50,13 +107,90 @@ func ListAuditIssues(_ context.Context, _ *Client) ([]Issue, error) {
 // title holds a fingerprint when it contains it neither preceded by a letter,
 // digit or - nor followed by a hex digit. A nil prev files nothing. A finding
 // RenderIssue refuses is its error.
-func PlanIssues(_ *publish.Previous, _ []Issue, _ publish.Run) ([]publish.IssueText, error) {
-	return nil, errNotImplemented
+func PlanIssues(prev *publish.Previous, existing []Issue, run publish.Run) ([]publish.IssueText, error) {
+	var out []publish.IssueText
+
+	for _, f := range prev.PublicFindings() {
+		if f.Status != "new" && f.Status != "open" {
+			continue
+		}
+
+		if filed(existing, string(f.Fingerprint)) {
+			continue
+		}
+
+		issue, err := publish.RenderIssue(f, run)
+		if err != nil {
+			return nil, err
+		}
+
+		out = append(out, issue)
+	}
+
+	return out, nil
+}
+
+// filed reports whether one of the audit App's issues holds the fingerprint
+// in its title.
+func filed(existing []Issue, fp string) bool {
+	for _, issue := range existing {
+		if issue.PullRequest || issue.UserLogin != AuditBotLogin || issue.UserType != AuditBotType {
+			continue
+		}
+
+		if titleHolds(issue.Title, fp) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// titleHolds reports whether title contains fp neither preceded by a letter,
+// a digit or - nor followed by a hex digit.
+func titleHolds(title, fp string) bool {
+	for i := 0; ; {
+		j := strings.Index(title[i:], fp)
+		if j < 0 {
+			return false
+		}
+
+		start, end := i+j, i+j+len(fp)
+
+		before := start == 0 || !isWordByte(title[start-1])
+		after := end == len(title) || !isHex(title[end])
+
+		if before && after {
+			return true
+		}
+
+		i = start + 1
+	}
+}
+
+func isWordByte(b byte) bool {
+	return b >= 'a' && b <= 'z' || b >= 'A' && b <= 'Z' || b >= '0' && b <= '9' || b == '-'
+}
+
+func isHex(b byte) bool {
+	return b >= '0' && b <= '9' || b >= 'a' && b <= 'f'
 }
 
 // CreateIssue files one issue: POST R/issues (row 13) with exactly {title,
 // body, labels: ["security"]}, through the one write helper: a non-2xx status
 // wraps publish.ErrGitHub, and the call is never retried.
-func CreateIssue(_ context.Context, _ *Client, _ publish.IssueText) error {
-	return errNotImplemented
+func CreateIssue(ctx context.Context, c *Client, issue publish.IssueText) error {
+	if c == nil {
+		return fmt.Errorf("issue: no client: %w", publish.ErrConfig)
+	}
+
+	if _, err := write(ctx, c, "repos/"+c.scope.Repository+"/issues", map[string]any{
+		"title":  issue.Title,
+		"body":   issue.Body,
+		"labels": []string{"security"},
+	}); err != nil {
+		return fmt.Errorf("issue: %w", err)
+	}
+
+	return nil
 }

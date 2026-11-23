@@ -89,6 +89,7 @@ func RenderReport(in ReportInput) (Rendered, error) {
 		Path:        reportsDir + reportName(p.run),
 		Body:        r.b.String(),
 		ModelFields: r.fields,
+		PublicTotal: p.total,
 	}, nil
 }
 
