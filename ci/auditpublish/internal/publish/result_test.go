@@ -819,6 +819,44 @@ func TestParseResultRefuses(t *testing.T) {
 		)
 	}
 
+	// Everything outside printable ASCII, each in a single-line field and in a
+	// multi-line one: a lookalike letter, a mark with no glyph of its own, a
+	// typographic mark the eye reads as an ASCII one and a precomposed letter
+	// carry a token past the maintainer who reviews the report, so the rule is
+	// the allow list of U+0020 to U+007E, not a list of characters to refuse.
+	nonASCII := []struct {
+		name string
+		r    rune
+	}{
+		{"a Cyrillic small a, a lookalike for a", 0x0430},
+		{"a Greek small omicron, a lookalike for o", 0x03bf},
+		{"a fullwidth a", 0xff41},
+		{"a combining acute accent, a mark with no glyph of its own", 0x0301},
+		{"a Tifinagh consonant joiner", 0x2d7f},
+		{"a Khmer sign coeng", 0x17d2},
+		{"a right single quotation mark", 0x2019},
+		{"a hyphen", 0x2010},
+		{"an em dash", 0x2014},
+		{"a precomposed e acute", 0x00e9},
+	}
+
+	for _, cp := range nonASCII {
+		cases = append(cases,
+			resultCase{
+				name:  cp.name + " in a single-line field",
+				doc:   runeInDismissal(cp.r),
+				field: "findings[0].dismissal",
+				value: string(cp.r),
+			},
+			resultCase{
+				name:  cp.name + " in a multi-line field",
+				doc:   runeInEvidence(cp.r),
+				field: "findings[0].evidence",
+				value: string(cp.r),
+			},
+		)
+	}
+
 	// LF and TAB outside the multi-line fields.
 	lfOutside := func(mutate func(*docResult)) func(*testing.T) []byte {
 		return func(t *testing.T) []byte {
@@ -910,6 +948,17 @@ func checksWithNotRunDoc(id, why string) []docCheck {
 	}
 
 	return checks
+}
+
+// printableASCII returns every printable ASCII character, U+0020 to U+007E.
+func printableASCII() string {
+	chars := make([]rune, 0, 0x7f-0x20)
+
+	for r := rune(0x20); r <= 0x7e; r++ {
+		chars = append(chars, r)
+	}
+
+	return string(chars)
 }
 
 // runeInScenario returns a document whose finding's scenario holds r.
@@ -1067,6 +1116,18 @@ func TestParseResultAccepts(t *testing.T) {
 			}),
 		},
 		{
+			name: "every printable ASCII character in a single-line field",
+			spec: minimalSpec().withFinding(oneFinding()).with(func(s *docResult) {
+				s.Findings[0].Dismissal = printableASCII()
+			}),
+		},
+		{
+			name: "every printable ASCII character, LF and TAB in a multi-line field",
+			spec: minimalSpec().withFinding(oneFinding()).with(func(s *docResult) {
+				s.Findings[0].Scenario = printableASCII() + "\n\t" + printableASCII()
+			}),
+		},
+		{
 			name: "the caps measured in bytes, at their limit",
 			spec: minimalSpec().withFinding(oneFinding()).with(func(s *docResult) {
 				s.Findings[0].Rule = "G" + strings.Repeat("a", 79)
@@ -1075,9 +1136,9 @@ func TestParseResultAccepts(t *testing.T) {
 				s.Findings[0].Sink = strings.Repeat("s", 120)
 				s.Findings[0].Severity = strings.Repeat("s", 16)
 				s.Findings[0].Category = strings.Repeat("c", 32)
-				// 2000 bytes of three-byte runes: the cap counts bytes, so this
-				// is 2000 bytes and not 2000 characters.
-				s.Findings[0].Scenario = strings.Repeat("é", 1000)
+				// 2000 bytes at the cap: a field holds printable ASCII alone,
+				// so no multi-byte rune can fill it.
+				s.Findings[0].Scenario = strings.Repeat("s", 2000)
 				s.Findings[0].Evidence = strings.Repeat("e", 16000)
 				s.Findings[0].Fix = strings.Repeat("x", 1000)
 				s.Findings[0].Dismissal = strings.Repeat("d", 200)

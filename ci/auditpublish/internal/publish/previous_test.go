@@ -196,6 +196,27 @@ func TestParsePreviousReportRefuses(t *testing.T) {
 			data: tampered(body, "` a fix `", "` a\u00A0 fix `"),
 		},
 		{
+			// The cell holds a Cyrillic a: it renders as the Latin a beside it,
+			// so a model can spell a token in which alphabet it picked.
+			name: "a model cell holding a lookalike letter",
+			file: name,
+			data: tampered(body, "` a fix `", "` a\u0430 fix `"),
+		},
+		{
+			// The cell holds a combining acute accent: a mark with no glyph of
+			// its own, so the maintainer who reviews the report reads a plain a.
+			name: "a model cell holding a combining mark",
+			file: name,
+			data: tampered(body, "` a fix `", "` a\u0301 fix `"),
+		},
+		{
+			// The cell holds a right single quotation mark: it renders as the
+			// ASCII ' beside it, and the two are different bytes.
+			name: "a model cell holding a typographic apostrophe",
+			file: name,
+			data: tampered(body, "` a fix `", "` a\u2019 fix `"),
+		},
+		{
 			name: "a status cell outside the vocabulary",
 			file: name,
 			data: tampered(body, "| new |", "| gone |"),
