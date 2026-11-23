@@ -1823,6 +1823,40 @@ linters:
               desc: "the Claude Code pin check's library opens no file; ci/claudecodepin hands it readers (issue #276)"
             - pkg: net
               desc: "the Claude Code pin check's library opens no connection; ci/claudecodepin fetches the registry's document (issue #276)"
+        # The audit's publish core (PRD #175 milestone 2, ADR 0040, "The
+        # publish program's core") is no part of the product: it is under an
+        # internal directory whose parent is ci/auditpublish, so Go's internal
+        # rule keeps it out of reach of cmd/ and internal/. It does no I/O: it
+        # validates, places, fingerprints, escapes, renders and scans the bytes
+        # its entry point passes, so it is held to pure standard packages,
+        # without os, net, syscall or unsafe, and to no package of the product.
+        audit-publish-library:
+          list-mode: strict
+          files:
+            - "**/ci/auditpublish/internal/**"
+            - "!$test"
+          allow:
+            - bytes$
+            - crypto/hmac$
+            - crypto/sha256$
+            - encoding/base64$
+            - encoding/hex$
+            - encoding/json$
+            - errors$
+            - fmt$
+            - math$
+            - regexp$
+            - slices$
+            - strconv$
+            - strings$
+            - time$
+            - unicode$
+            - unicode/utf8$
+          deny:
+            - pkg: os
+              desc: "the audit's publish core opens no file and reads no environment; ci/auditpublish hands it what it read (ADR 0040)"
+            - pkg: net
+              desc: "the audit's publish core opens no connection; ci/auditpublish calls GitHub (ADR 0040)"
     exhaustive:
       default-signifies-exhaustive: true
     # forbidigo refuses calls, which an import rule cannot see. Its entries

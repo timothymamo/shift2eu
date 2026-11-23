@@ -1298,6 +1298,38 @@ var pinnedDepguardRules = []check.DepguardRule{
 		},
 		Deny: []string{"os", "net"},
 	},
+	{
+		// The audit's publish core (PRD #175 milestone 2, ADR 0040): it
+		// validates, places, fingerprints, escapes, renders and scans the bytes
+		// its entry point passes and does no I/O of its own, so it is held to
+		// pure standard packages, without os, net, syscall or unsafe. Go's
+		// internal rule keeps it out of reach of cmd/ and internal/.
+		Name:     "audit-publish-library",
+		ListMode: "strict",
+		Files: []string{
+			"**/ci/auditpublish/internal/**",
+			"!$test",
+		},
+		Allow: []string{
+			"bytes$",
+			"crypto/hmac$",
+			"crypto/sha256$",
+			"encoding/base64$",
+			"encoding/hex$",
+			"encoding/json$",
+			"errors$",
+			"fmt$",
+			"math$",
+			"regexp$",
+			"slices$",
+			"strconv$",
+			"strings$",
+			"time$",
+			"unicode$",
+			"unicode/utf8$",
+		},
+		Deny: []string{"os", "net"},
+	},
 }
 
 // TestDepguardRulesArePinned pins every depguard rule of .golangci.yml against
