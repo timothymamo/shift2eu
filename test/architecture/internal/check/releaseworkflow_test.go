@@ -2,6 +2,7 @@ package check_test
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -1002,7 +1003,7 @@ var siteDeployStepTemplates = []string{
               continue
             fi
             err="$(mktemp)"
-            if ! gh api "repos/timothymamo/shift2eu/releases/tags/$t" > "$higher/release.json" 2> "$err"; then
+            if ! gh api "repos/timothymamo/shift2eu/releases/tags/$t" > "higher/release.json" 2> "$err"; then
               if grep -qF -e "HTTP 404" "$err"; then
                 echo "::notice::the release of $t is not published yet, so its manifest is not read"
                 rm -f "$err"
@@ -1014,11 +1015,11 @@ var siteDeployStepTemplates = []string{
               exit 1
             fi
             rm -f "$err"
-            if [ "$(jq -r '.draft' "$higher/release.json")" != false ]; then
+            if [ "$(jq -r '.draft' "higher/release.json")" != false ]; then
               echo "::notice::the release of $t is still a draft, so its manifest is not read"
               continue
             fi
-            if [ "$(jq --arg name "shift2eu-site_$t.tar.gz" -r '[.assets[].name] | map(select(. == $name)) | length' "$higher/release.json")" != 1 ]; then
+            if [ "$(jq --arg name "shift2eu-site_$t.tar.gz" -r '[.assets[].name] | map(select(. == $name)) | length' "higher/release.json")" != 1 ]; then
               echo "::notice::the release of $t publishes no shift2eu-site_$t.tar.gz, so its manifest is not read"
               continue
             fi
@@ -2849,9 +2850,9 @@ func TestReleaseWorkflow(t *testing.T) {
 		// each manifest comes from the bundle that release attested.
 		{name: "the higher releases read without the signer workflow", workflow: inDeployStep("name: The higher releases' manifests", "              --signer-workflow timothymamo/shift2eu/.github/workflows/release.yml \\\n", ""), wantIn: "--signer-workflow"},
 		{name: "a higher release read under this tag's source ref", workflow: inDeployStep("name: The higher releases' manifests", `--source-ref "refs/tags/$t"`, `--source-ref "refs/tags/$TAG"`), wantIn: `refs/tags/$t`},
-		{name: "the higher releases without the draft check", workflow: inDeployStep("name: The higher releases' manifests", `            if [ "$(jq -r '.draft' "$higher/release.json")" != false ]; then`+"\n", "            if false; then\n"), wantIn: ".draft"},
+		{name: "the higher releases without the draft check", workflow: inDeployStep("name: The higher releases' manifests", `            if [ "$(jq -r '.draft' "higher/release.json")" != false ]; then`+"\n", "            if false; then\n"), wantIn: ".draft"},
 		{name: "the higher releases without the notice for an unpublished release", workflow: inDeployStep("name: The higher releases' manifests", `                echo "::notice::the release of $t is not published yet, so its manifest is not read"`+"\n", ""), wantIn: "::notice::the release of $t is not published yet"},
-		{name: "the higher releases without the check for the bundle", workflow: inDeployStep("name: The higher releases' manifests", `            if [ "$(jq --arg name "shift2eu-site_$t.tar.gz" -r '[.assets[].name] | map(select(. == $name)) | length' "$higher/release.json")" != 1 ]; then`+"\n", "            if false; then\n"), wantIn: "publishes no shift2eu-site_"},
+		{name: "the higher releases without the check for the bundle", workflow: inDeployStep("name: The higher releases' manifests", `            if [ "$(jq --arg name "shift2eu-site_$t.tar.gz" -r '[.assets[].name] | map(select(. == $name)) | length' "higher/release.json")" != 1 ]; then`+"\n", "            if false; then\n"), wantIn: "publishes no shift2eu-site_"},
 		{name: "the higher releases read from somewhere else than releases.txt", workflow: inDeployStep("name: The higher releases' manifests", "          mapfile -t tags < releases.txt\n", "          mapfile -t tags < <(gh release list --repo timothymamo/shift2eu --json tagName --jq '.[].tagName')\n"), wantIn: "mapfile -t tags < releases.txt"},
 
 		// The live check runs after the deploy, on the same conditions, and reads
@@ -2941,6 +2942,350 @@ func TestReleaseWorkflowFixtureIsTheWorkflow(t *testing.T) {
 	if diff := cmp.Diff(string(want), releaseWorkflowFixture().render()); diff != "" {
 		t.Errorf("the fixture is not .github/workflows/release.yml (-want +got):\n%s", diff)
 	}
+}
+
+// higherReleasesStep is the name of the site-deploy job's step that reads the
+// manifest of every higher release.
+const higherReleasesStep = "The higher releases' manifests"
+
+// TestSiteHigherReleasesStepRuns runs that step, exactly as the fixture writes
+// it and so as release.yml runs it, under a PATH of fakes: a gh whose every
+// answer, 404 and other failure included, is a file the case writes, and a jq
+// and a tar that read what that gh is given. Nothing reaches GitHub, no release
+// exists, and the step's own shell is what is tested: a variable it leaves
+// unbound, a branch that stops the loop early, or a failure it should survive
+// fails here rather than in the release of a tag that is not the highest, which
+// is the only run that reads a higher release at all (PRD #297 milestone 3).
+func TestSiteHigherReleasesStepRuns(t *testing.T) {
+	t.Parallel()
+
+	bash, err := exec.LookPath("bash")
+	if err != nil {
+		t.Fatalf("find bash on PATH: %v", err)
+	}
+
+	// The step reads releases.txt with mapfile, a bash 4 builtin: the Mac's
+	// /bin/bash is 3.2 and has none, while the release runs the step on
+	// ubuntu-latest's bash.
+	if out, err := exec.CommandContext(t.Context(), bash, "-c", "type -t mapfile").Output(); err != nil || strings.TrimSpace(string(out)) != "builtin" {
+		t.Skipf("%s has no mapfile builtin, so it cannot run the step's script", bash)
+	}
+
+	script := siteDeployStepRun(t, higherReleasesStep)
+
+	// The release tags the step reads: this tag, one lower that is already
+	// deployed, and the two higher ones. They are not in lexical order, so a
+	// comparison that sorts lexically instead of by version skips the higher
+	// releases. The highest, v1.11.0, is published with its bundle in every
+	// case, so a case whose v1.10.0 is skipped for a notice still proves the
+	// loop went on to the next tag.
+	const (
+		tag    = "v1.9.0"
+		lower  = "v1.8.0"
+		higher = "v1.10.0"
+		last   = "v1.11.0"
+	)
+
+	releases := lower + "\n" + tag + "\n" + higher + "\n" + last + "\n"
+
+	// published is a release's answer in the text the fake jq reads: a release
+	// that published its bundle.
+	published := func(tag string) string {
+		return "draft: false\nasset: shift2eu-site_" + tag + ".tar.gz\n"
+	}
+
+	tests := []struct {
+		name string
+		// api is the fake gh's answer for a tag's release read; a tag named in
+		// readErr instead is a read that fails with that stderr.
+		api     map[string]string
+		readErr map[string]string
+		// attestErr is the tag whose attestation fails, "" for none.
+		attestErr string
+		// wantOut are substrings the step's output must hold.
+		wantOut []string
+		// wantManifests are the tags whose manifest must be written, and no
+		// other: a tag the step skipped for a notice wrote none.
+		wantManifests []string
+		// wantAPICalls are the release reads the step must make, in order.
+		wantAPICalls []string
+		// wantFailed is whether the step must fail.
+		wantFailed bool
+	}{
+		{
+			name:          "a higher release is read, attested and its manifest written",
+			api:           map[string]string{higher: published(higher), last: published(last)},
+			wantManifests: []string{higher, last},
+			wantAPICalls:  []string{"api " + higher, "api " + last},
+		},
+		{
+			name:          "a release that is not published yet is skipped with a notice",
+			readErr:       map[string]string{higher: "gh: Not Found (HTTP 404)\n"},
+			api:           map[string]string{last: published(last)},
+			wantOut:       []string{"::notice::the release of " + higher + " is not published yet, so its manifest is not read"},
+			wantManifests: []string{last},
+			wantAPICalls:  []string{"api " + higher, "api " + last},
+		},
+		{
+			name:          "a draft release is skipped with a notice",
+			api:           map[string]string{higher: "draft: true\n", last: published(last)},
+			wantOut:       []string{"::notice::the release of " + higher + " is still a draft, so its manifest is not read"},
+			wantManifests: []string{last},
+			wantAPICalls:  []string{"api " + higher, "api " + last},
+		},
+		{
+			name:          "a release without its bundle is skipped with a notice",
+			api:           map[string]string{higher: "draft: false\nasset: checksums.txt\n", last: published(last)},
+			wantOut:       []string{"::notice::the release of " + higher + " publishes no shift2eu-site_" + higher + ".tar.gz, so its manifest is not read"},
+			wantManifests: []string{last},
+			wantAPICalls:  []string{"api " + higher, "api " + last},
+		},
+		{
+			name:         "another failed read fails the step",
+			readErr:      map[string]string{higher: "gh: Server Error (HTTP 502)\n"},
+			wantOut:      []string{"the release of " + higher + " could not be read:", "gh: Server Error (HTTP 502)"},
+			wantAPICalls: []string{"api " + higher},
+			wantFailed:   true,
+		},
+		{
+			name:         "a bundle that is not attested fails the step",
+			api:          map[string]string{higher: published(higher)},
+			attestErr:    higher,
+			wantOut:      []string{"the bundle of " + higher + " is not attested"},
+			wantAPICalls: []string{"api " + higher},
+			wantFailed:   true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			work := t.TempDir()
+			state := t.TempDir()
+			bin := t.TempDir()
+
+			writeFakeStepTools(t, bin)
+			writeFileContent(t, work, "releases.txt", releases)
+
+			for name, body := range tc.api {
+				writeFileContent(t, state, "api/"+name+"/body.json", body)
+			}
+
+			for name, stderr := range tc.readErr {
+				writeFileContent(t, state, "api/"+name+"/err", stderr)
+			}
+
+			if tc.attestErr != "" {
+				writeFileContent(t, state, "attest/"+tc.attestErr+"/err", "the bundle of "+tc.attestErr+" is not attested\n")
+			}
+
+			cmd := exec.CommandContext(t.Context(), bash, "-c", script)
+			cmd.Dir = work
+			cmd.Env = []string{
+				"PATH=" + bin + ":/usr/bin:/bin",
+				"TMPDIR=" + t.TempDir(),
+				"FAKE_STATE=" + state,
+				"TAG=" + tag,
+				"GH_TOKEN=not-used",
+			}
+
+			out, err := cmd.CombinedOutput()
+
+			if tc.wantFailed && err == nil {
+				t.Fatalf("the step succeeded, want it to fail\n%s", out)
+			}
+
+			if !tc.wantFailed && err != nil {
+				t.Fatalf("the step failed: %v\n%s", err, out)
+			}
+
+			for _, want := range tc.wantOut {
+				if !strings.Contains(string(out), want) {
+					t.Errorf("the step's output holds no %q:\n%s", want, out)
+				}
+			}
+
+			// The manifests the step wrote are exactly the tags it read.
+			entries, err := os.ReadDir(filepath.Join(work, "manifests"))
+			if err != nil {
+				t.Fatalf("read the manifests directory: %v", err)
+			}
+
+			var wrote []string
+
+			for _, entry := range entries {
+				wrote = append(wrote, entry.Name())
+			}
+
+			want := make([]string, len(tc.wantManifests))
+			for i, name := range tc.wantManifests {
+				want[i] = name + ".json"
+			}
+
+			if !slices.Equal(wrote, want) {
+				t.Errorf("the step wrote the manifests %v, want %v", wrote, want)
+			}
+
+			for _, name := range tc.wantManifests {
+				got, err := os.ReadFile(filepath.Join(work, "manifests", name+".json"))
+				if err != nil {
+					t.Errorf("read the manifest of %s: %v", name, err)
+
+					continue
+				}
+
+				if want := `{"tag": "` + name + `"}` + "\n"; string(got) != want {
+					t.Errorf("manifests/%s.json = %q, want %q", name, got, want)
+				}
+			}
+
+			// This tag and the lower ones are already deployed: only the higher
+			// releases are read, in the order of releases.txt.
+			if got := apiCalls(t, state); !slices.Equal(got, tc.wantAPICalls) {
+				t.Errorf("the step read the releases %v, want %v", got, tc.wantAPICalls)
+			}
+		})
+	}
+}
+
+// fakeGH is the gh the step meets: every release read and every download is
+// answered from FAKE_STATE's files, so no connection is made. A tag's read
+// fails with the stderr of api/<tag>/err when that file exists, and its
+// attestation with attest/<tag>/err, so a case writes the failure a real gh
+// would print. `gh attestation verify <file>` puts the file third.
+const fakeGH = `#!/usr/bin/env bash
+set -euo pipefail
+case "$1" in
+  api)
+    tag="${2##*/}"
+    echo "api $tag" >> "$FAKE_STATE/calls"
+    if [ -f "$FAKE_STATE/api/$tag/err" ]; then
+      cat "$FAKE_STATE/api/$tag/err" >&2
+      exit 1
+    fi
+    cat "$FAKE_STATE/api/$tag/body.json"
+    ;;
+  release)
+    tag="$2"
+    echo "download $tag" >> "$FAKE_STATE/calls"
+    shift 2
+    dir=""
+    while [ "$#" -gt 0 ]; do
+      case "$1" in
+        --dir) dir="$2"; shift 2 ;;
+        *) shift ;;
+      esac
+    done
+    : > "$dir/shift2eu-site_$tag.tar.gz"
+    ;;
+  attestation)
+    tag="${3##*/shift2eu-site_}"
+    tag="${tag%.tar.gz}"
+    echo "attest $tag" >> "$FAKE_STATE/calls"
+    if [ -f "$FAKE_STATE/attest/$tag/err" ]; then
+      cat "$FAKE_STATE/attest/$tag/err" >&2
+      exit 1
+    fi
+    ;;
+  *)
+    echo "fake gh: unexpected call: $*" >&2
+    exit 127
+    ;;
+esac
+`
+
+// fakeJQ is the jq the step meets, reading the two answers the step asks for
+// out of the text fakeGH hands it: the release's draft flag and whether it
+// published its bundle. It reads no JSON, so a case's answer is the text it
+// means.
+const fakeJQ = `#!/usr/bin/env bash
+set -euo pipefail
+file="${!#}"
+if [ "$1" = "--arg" ]; then
+  if grep -qxF "asset: $3" "$file"; then echo 1; else echo 0; fi
+  exit 0
+fi
+sed -n 's/^draft: //p' "$file"
+`
+
+// fakeTar is the tar the step meets: it extracts no archive but answers the
+// manifest of the tag its archive's name holds, so the step's redirection is
+// what the case reads.
+const fakeTar = `#!/usr/bin/env bash
+set -euo pipefail
+tag="${2##*/shift2eu-site_}"
+tag="${tag%.tar.gz}"
+printf '{"tag": "%s"}\n' "$tag"
+`
+
+// siteDeployStepRun returns the command of the named step of the site-deploy
+// job: the lines of its run: block, as the fixture writes them.
+func siteDeployStepRun(t *testing.T, name string) string {
+	t.Helper()
+
+	step := siteDeploySteps[stepIndex(t, siteDeploySteps, "- name: "+name+"\n")]
+
+	const marker = "        run: |\n"
+
+	_, after, ok := strings.Cut(step, marker)
+	if !ok {
+		t.Fatalf("the step %q holds no %q block:\n%s", name, strings.TrimSpace(marker), step)
+	}
+
+	var run []string
+
+	for _, line := range strings.Split(after, "\n") {
+		if !strings.HasPrefix(line, "          ") {
+			break
+		}
+
+		run = append(run, strings.TrimPrefix(line, "          "))
+	}
+
+	if len(run) == 0 {
+		t.Fatalf("the step %q holds an empty run: block", name)
+	}
+
+	return strings.Join(run, "\n") + "\n"
+}
+
+// writeFakeStepTools writes the gh, jq and tar the step runs into dir, which
+// the PATH of the step's shell holds alone beside the system's own programs.
+func writeFakeStepTools(t *testing.T, dir string) {
+	t.Helper()
+
+	for name, script := range map[string]string{"gh": fakeGH, "jq": fakeJQ, "tar": fakeTar} {
+		path := filepath.Join(dir, name)
+
+		if err := os.WriteFile(path, []byte(script), 0o600); err != nil {
+			t.Fatalf("write the fake %s: %v", name, err)
+		}
+
+		if err := os.Chmod(path, 0o700); err != nil { //nolint:gosec // a program the test's shell runs must be executable
+			t.Fatalf("make the fake %s executable: %v", name, err)
+		}
+	}
+}
+
+// apiCalls returns the release reads the fake gh recorded, in order.
+func apiCalls(t *testing.T, state string) []string {
+	t.Helper()
+
+	data, err := os.ReadFile(filepath.Join(state, "calls"))
+	if err != nil {
+		t.Fatalf("read the fake gh's calls: %v", err)
+	}
+
+	var calls []string
+
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.HasPrefix(line, "api ") {
+			calls = append(calls, line)
+		}
+	}
+
+	return calls
 }
 
 // TestStrayReleaseFiles pins the files at the repository root that change what

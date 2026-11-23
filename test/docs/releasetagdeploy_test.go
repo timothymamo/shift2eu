@@ -9,6 +9,7 @@ package docs_test
 
 import (
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -31,8 +32,9 @@ const (
 // TestReleaseTagSkillChecksTheSiteEnvironment pins what the release-tag skill must check about the site's
 // deploy (PRD #297 milestone 3, PR C2): step 2's environment checks extended to the site environment (a tag
 // branch policy, the two Scaleway keys inside it and none at repository level, the bucket and region
-// variables), the switch's read, and step 7's report of the four site jobs with a skipped deploy read as the
-// expected outcome while the switch is unset.
+// variables), what each of steps 2 and 7 says a switch that is unset means (step 2: the release skips the
+// deploy and its live check; step 7: the two jobs are `skipped`, read as the expected outcome, and the skip
+// notice's job `success`), and step 7's report of the four site jobs.
 func TestReleaseTagSkillChecksTheSiteEnvironment(t *testing.T) {
 	t.Parallel()
 
@@ -108,13 +110,75 @@ func TestReleaseTagSkillChecksTheSiteEnvironment(t *testing.T) {
 		}
 	}
 
-	// The switch is read where the skip is decided: a skill that names the
-	// variable only as a value to set could not tell a release that deploys from
-	// one that does not.
-	if at := strings.Index(skill, siteDeploySwitch); at >= 0 {
-		if !strings.Contains(skill[at:], "unset") {
-			t.Errorf("%s names %s without saying what a release does while it is unset: a release that sets it to nothing skips the deploy and its live check, which is no failure (PRD #297 milestone 3)\n%s",
-				releaseTagSkill, siteDeploySwitch, skill[at:])
+	// What a switch that is unset means is said in the two steps that act on
+	// it: step 2, which reads the switch before the tag is cut, and step 7,
+	// which reports the run's site jobs. Naming the variable is not enough, and
+	// neither is saying "unset" once: a maintainer who reads it only where the
+	// switch is read, and not where the run is reported, cannot tell an
+	// expected skip from a failure the release is held for.
+	for _, want := range []struct {
+		step int
+		text string
+		why  string
+	}{
+		{
+			step: 2,
+			text: "while " + siteDeploySwitch + " is unset",
+			why:  "step 2 decides what an unset switch means before the release: a missing site environment, secret or variable is a site not set up yet, not a gap to stop for",
+		},
+		{
+			step: 2,
+			text: "the release skips the deploy and its live check",
+			why:  "step 2 says what an unset switch does: a release that never set it skips the deploy and its live check and is still a release",
+		},
+		{
+			step: 7,
+			text: "while " + siteDeploySwitch + " is unset",
+			why:  "step 7 reports the run's site jobs, so it must say what the switch's value does to them",
+		},
+		{
+			step: 7,
+			text: siteDeployJob + " and " + siteCheckJob + " are expected skipped",
+			why:  "step 7 reads the deploy and its live check as expected skipped while the switch is unset, never as a failure the release is held for",
+		},
+		{
+			step: 7,
+			text: siteSkippedJob + " must be success",
+			why:  "the skip notice's job must have succeeded, so a run in which the notice never ran is not read as an expected skip",
+		},
+	} {
+		step := skillStep(t, skill, want.step)
+		if !strings.Contains(skillStepPlain(step), want.text) {
+			t.Errorf("%s's step %d does not say %q: %s (PRD #297 milestone 3)\n%s",
+				releaseTagSkill, want.step, want.text, want.why, step)
 		}
 	}
+}
+
+// skillStep returns step n of the release-tag skill's numbered list: the text
+// from its "n." line to the line of the step after it. Every step is a
+// top-level list item, so its marker starts a line of its own.
+func skillStep(t *testing.T, skill string, n int) string {
+	t.Helper()
+
+	start := strings.Index(skill, "\n"+strconv.Itoa(n)+". ")
+	if start < 0 {
+		t.Fatalf("%s holds no step %d", releaseTagSkill, n)
+	}
+
+	start++
+
+	next := strings.Index(skill[start:], "\n"+strconv.Itoa(n+1)+". ")
+	if next < 0 {
+		return skill[start:]
+	}
+
+	return skill[start : start+next]
+}
+
+// skillStepPlain returns a step with Markdown's backticks and emphasis removed
+// and its whitespace collapsed, so a claim is matched wherever its sentence
+// wraps and whichever emphasis the skill gives it.
+func skillStepPlain(step string) string {
+	return strings.Join(strings.Fields(strings.NewReplacer("`", "", "*", "").Replace(step)), " ")
 }
