@@ -22,7 +22,7 @@ const boundedWaitDelay = 5 * time.Second
 // exit 0, cmd.Run's error (an *exec.ExitError on a non-zero exit) otherwise, and on the timeout an error wrapping
 // errCommandTimedOut that names the bound, the command line, its directory and what it wrote until then, so a
 // blocked command fails its test with all a reader needs, instead of blocking it until go test's package timeout
-// names nothing (issue #512). A command that exited on its own before the bound fired, while a grandchild kept
+// names nothing (issue #512). A command that exited on its own before the bound's kill, while a grandchild kept
 // its stdout or stderr open, is never reported as a timeout: the kill still ends that grandchild, and the
 // command's own status is returned. stdin stays as the caller left it: nil, /dev/null.
 func runBounded(cmd *exec.Cmd, timeout time.Duration) (stdout, stderr string, err error) {
@@ -64,8 +64,8 @@ func runBounded(cmd *exec.Cmd, timeout time.Duration) (stdout, stderr string, er
 		default:
 		}
 
-		// The kill ends the command if it still runs, and whatever it started that holds its stdout or stderr
-		// open, so Wait returns.
+		// The kill ends the command if it still runs, even one that left the process group, and whatever it
+		// started in the group that holds its stdout or stderr open, so Wait returns.
 		group.kill()
 		<-done
 

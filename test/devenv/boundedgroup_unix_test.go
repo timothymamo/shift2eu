@@ -18,6 +18,7 @@ import (
 // the holder by closing its stdin rather than by a signal: a process the command left behind on purpose keeps
 // running unless the command timed out.
 type boundedGroup struct {
+	cmd    *exec.Cmd
 	holder *exec.Cmd
 	stdin  *os.File // the write end of the holder's stdin
 }
@@ -59,13 +60,22 @@ func startBounded(cmd *exec.Cmd) (*boundedGroup, error) {
 		return nil, err
 	}
 
+	group.cmd = cmd
+
 	return group, nil
 }
 
-// kill sends SIGKILL to every process in the group, the holder included. It ignores the error: ESRCH means only
-// zombies are left.
+// kill sends SIGKILL to every process in the group, the holder included, and then to the command's own process
+// through Go's handle, which reaches a command that moved itself out of the group (setsid): os.Process signals
+// no pid it has reaped already (os.ErrProcessDone), so it too cannot reach a process outside the run (CLAUDE.md,
+// rule 10). It ignores the errors: ESRCH means only zombies are left in the group, and ErrProcessDone that the
+// command was reaped.
 func (g *boundedGroup) kill() {
 	_ = syscall.Kill(-g.holder.Process.Pid, syscall.SIGKILL)
+
+	if g.cmd != nil {
+		_ = g.cmd.Process.Kill()
+	}
 }
 
 // release ends the holder, by closing its stdin unless kill ended it already, and reaps it. It ignores the
