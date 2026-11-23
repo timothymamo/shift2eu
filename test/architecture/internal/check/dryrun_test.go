@@ -230,8 +230,8 @@ jobs:
           output-file: shift2eu.spdx.json
           syft-version: {{release syft}}
   # The smoke test of the release's bundle (PRD #297 milestone 3): the same
-  # target CI's browser job runs, on the bundle the site job built, which the
-  # check compares once the target's bundle argument is set aside.
+  # step CI's browser job runs, on the bundle make site built and that job
+  # unpacked into bin/release-bundle, in that order.
   site-browser:
     name: Site browser smoke test
     runs-on: ubuntu-latest
