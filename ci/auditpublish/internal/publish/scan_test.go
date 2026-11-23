@@ -421,11 +421,18 @@ func TestScanPublicRefusesEncodedRuns(t *testing.T) {
 	})
 }
 
-// TestScanPublicRefusesHexAndSlashRuns pins the two run classes the refusal
-// adds to the one without /: a hex run of at least EncodedRunMinLength that is
-// no 40- or 64-character SHA or digest, a 40- or 64-character hex run whose
-// decoded bytes are all printable ASCII (a token body written as a digest), and
-// a run of the class that holds a /, which the class without one splits.
+// TestScanPublicRefusesHexAndSlashRuns pins the run classes the refusal adds to
+// the one without /: a hex run of at least EncodedRunMinLength that is no 40- or
+// 64-character SHA or digest, a 40- or 64-character hex run whose decoded bytes
+// are all printable ASCII (a token body written as a digest), and the class that
+// holds a /, which the class without one splits at every /.
+//
+// The class that holds / is measured inside a word that holds no dot, a word
+// being a maximal run of non-whitespace and its trailing punctuation trimmed, so
+// a secret ending a sentence is still measured. A word that holds a dot
+// elsewhere is measured by the class without / alone: that is what keeps a path
+// such as .github/workflows/claude-code-pin.yml publishable, and it is also the
+// residual risk, since a dot inside a base64 secret drops it to that class.
 func TestScanPublicRefusesHexAndSlashRuns(t *testing.T) {
 	t.Parallel()
 
@@ -435,9 +442,24 @@ func TestScanPublicRefusesHexAndSlashRuns(t *testing.T) {
 	// it knows the patterns read the prefix.
 	body := strings.Repeat("a1B2c3D4", 6)
 
+	// A standard base64 encoding of 32 invented bytes, one of its characters a /
+	// near the middle: the class that holds / measures one long run and refuses
+	// it, while the class without / measures the 23 and 20 characters on either
+	// side and publishes it.
+	const secret = "QM49sZjjIjz7lvMJPz26iZW/gKrV8xFqygiyUyrzIN8="
+
+	// A second standard base64 encoding of 32 invented bytes, its / near the
+	// start so that the class without / is left a long, high-entropy piece: a dot
+	// inside this one does not save it.
+	const longPieceSecret = "kyOt5uW/3GisfUmsuNGP0NNivM1R61BYqJ0tIwqgHJM="
+
 	tests := []struct {
-		name        string
-		field       string
+		name  string
+		field string
+		// dotless is the field with the dot this case inserts removed, so the
+		// guard can show that the dot, and not something else, changes the
+		// verdict.
+		dotless     string
 		wantRefused bool
 	}{
 		{
@@ -477,10 +499,51 @@ func TestScanPublicRefusesHexAndSlashRuns(t *testing.T) {
 		},
 		{
 			name:        "standard base64 of 32 bytes that holds a /",
-			field:       "kwGkZkLOkvQfgf7qrd7hm34OG/w5NTYgormOf9xbP3o=",
+			field:       secret,
+			wantRefused: true,
+		},
+		{
+			name:        "the same secret followed by a sentence-ending dot",
+			field:       secret + ".",
+			wantRefused: true,
+		},
+		{
+			// The dot is the whole difference: the same secret with one inside
+			// its word is the class without /'s to judge, and that class passes it.
+			name:        "the same secret with a dot inside the word, the residual risk",
+			field:       "QM49sZjjIjz7lvMJPz26iZW/.gKrV8xFqygiyUyrzIN8=",
+			dotless:     secret,
+			wantRefused: false,
+		},
+		{
+			name:        "a second secret with a dot inside the word, which the class without / still refuses",
+			field:       "kyOt5u.W/3GisfUmsuNGP0NNivM1R61BYqJ0tIwqgHJM=",
+			dotless:     longPieceSecret,
+			wantRefused: true,
+		},
+		{
+			// No dot and high entropy: the class that holds / reads the whole
+			// word and refuses it, although the class without / would publish it.
+			name:        "a dot-free path-like word is refused, the class's cost",
+			field:       "abcDEF1234/ghiJKL5678/mnoPQR9012",
 			wantRefused: true,
 		},
 	}
+
+	t.Run("the secrets are standard base64 of 32 bytes that hold a /", func(t *testing.T) {
+		t.Parallel()
+
+		for _, fixture := range []string{secret, longPieceSecret} {
+			raw, err := base64.StdEncoding.DecodeString(fixture)
+			if err != nil || len(raw) != 32 {
+				t.Fatalf("the fixture %q decodes to %d bytes with %v, want 32 bytes of standard base64", fixture, len(raw), err)
+			}
+
+			if !strings.Contains(fixture, "/") {
+				t.Fatalf("the fixture %q holds no /, so it cannot pin the class that holds one", fixture)
+			}
+		}
+	})
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -488,6 +551,10 @@ func TestScanPublicRefusesHexAndSlashRuns(t *testing.T) {
 
 			if got := encodedRunRefusal(tc.field) != ""; got != tc.wantRefused {
 				t.Fatalf("the fixture %q is refused by the rule as %t, want %t: choose another", tc.field, got, tc.wantRefused)
+			}
+
+			if tc.dotless != "" && encodedRunRefusal(tc.dotless) == "" {
+				t.Fatalf("the fixture %q, this case's field without its dot, is published, so the dot is no part of the verdict and the case pins nothing: choose another field", tc.dotless)
 			}
 
 			err := publish.ScanPublic("the report holds a fragment", []string{tc.field}, key)
@@ -503,10 +570,12 @@ func TestScanPublicRefusesHexAndSlashRuns(t *testing.T) {
 	}
 }
 
-// TestScanPublicPublishesTheRepositorysPaths pins the class that holds / against
-// the text a report really carries: real paths of this repository, written here
-// as literals and never read from the tree, are published. A real path whose run
-// reaches N is refused, which is the class's cost and the ADR's to state.
+// TestScanPublicPublishesTheRepositorysPaths pins the refusal against the text a
+// report really carries: real paths of this repository, written here as literals
+// and never read from the tree, are published. A path holds a dot, so the class
+// without / measures it and its pieces are short; the class that holds / costs a
+// run only for a long, high-entropy word that holds no dot at all, which
+// TestScanPublicRefusesHexAndSlashRuns pins.
 func TestScanPublicPublishesTheRepositorysPaths(t *testing.T) {
 	t.Parallel()
 
@@ -516,10 +585,15 @@ func TestScanPublicPublishesTheRepositorysPaths(t *testing.T) {
 		name string
 		path string
 	}{
+		{"the workflow file the workflows check reads", ".github/workflows/claude-code-pin.yml"},
+		{"the workflow that checks an audit pull request's paths", ".github/workflows/audit-paths.yml"},
+		{"a file of the publish core", "ci/auditpublish/internal/publish/result.go"},
 		{"the publish core's test helpers", "ci/auditpublish/internal/publish/helpers_test.go"},
 		{"a source probe's integration test", "test/architecture/internal/check/testdata/sourceprobe/a/source/integration/integration_test.go"},
 		{"an adapter stub's target", "test/lint/testdata/adaptersbuiltincmd/mod/internal/adapter/target/ovhcloud/ovhcloud.go"},
 		{"a lint fixture's read-only probe", "test/lint/testdata/cloudreadonly/mod/internal/adapter/source/aws/probe_integration_test.go"},
+		// A dot-free path, which the class that holds / measures and publishes
+		// too: its run is flat enough to stay under N.
 		{"a target's testdata directory", "internal/adapter/target/scaleway/testdata"},
 		{"a domain package", "internal/domain/taxonomy"},
 	}
@@ -529,26 +603,12 @@ func TestScanPublicPublishesTheRepositorysPaths(t *testing.T) {
 			t.Parallel()
 
 			if reason := encodedRunRefusal(tc.path); reason != "" {
-				t.Fatalf("the fixture %q is refused (%s), want a path whose runs stay under N", tc.path, reason)
+				t.Fatalf("the fixture %q is refused (%s), want a path whose runs stay under L or under N", tc.path, reason)
 			}
 
 			wantAllowed(t, publish.ScanPublic("a finding's location", []string{tc.path}, key))
 		})
 	}
-
-	t.Run("a path whose run reaches N is refused, the class's cost", func(t *testing.T) {
-		t.Parallel()
-
-		// A workflow file a finding may name: its run holds 4.3 bits per
-		// character, so the class refuses it and the run publishes nothing.
-		path := ".github/workflows/claude-code-pin.yml"
-
-		if reason := encodedRunRefusal(path); reason == "" {
-			t.Fatalf("the fixture %q holds no run the rule refuses, so this row cannot pin the cost", path)
-		}
-
-		wantRefused(t, publish.ScanPublic("a finding's location", []string{path}, key), path)
-	})
 }
 
 // TestScanAdvisoryPublishesCrashInputs pins the other half of the refusal: an
@@ -611,14 +671,24 @@ func TestScanErrorNamesNoText(t *testing.T) {
 
 // encodedRunRefusal returns the rule of the encoded-run refusal that refuses
 // field, or "" when no rule does: the entropy of a run of [A-Za-z0-9+/=_-] of
-// at least EncodedRunMinLength bytes, and a hex run of at least that length that
-// is neither 40 nor 64 bytes long, or that decodes to nothing but printable
-// ASCII. The tests compute it from the field alone, so a fixture can show that
-// it pins the rule it says it does.
+// at least EncodedRunMinLength bytes inside a word that holds no dot, the same
+// measure of a run of [A-Za-z0-9+=_-] inside a word that holds one, and a hex
+// run of at least that length that is neither 40 nor 64 bytes long, or that
+// decodes to nothing but printable ASCII. The tests compute it from the field
+// alone, so a fixture can show that it pins the rule it says it does.
 func encodedRunRefusal(field string) string {
-	for _, run := range runsOf(field, isSlashRunByte) {
-		if entropy(run) >= publish.EncodedRunMinEntropy {
-			return "the run " + run + " reaches N"
+	for _, word := range strings.Fields(field) {
+		measured := trimTrailingPunctuation(word)
+
+		class := isSlashRunByte
+		if strings.Contains(measured, ".") {
+			class = isPlainRunByte
+		}
+
+		for _, run := range runsOf(measured, class) {
+			if entropy(run) >= publish.EncodedRunMinEntropy {
+				return "the run " + run + " reaches N"
+			}
 		}
 	}
 
@@ -665,6 +735,27 @@ func runsOf(field string, in func(byte) bool) []string {
 func isSlashRunByte(c byte) bool {
 	return c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z' || c >= '0' && c <= '9' ||
 		c == '+' || c == '/' || c == '=' || c == '_' || c == '-'
+}
+
+// isPlainRunByte is a byte of the run class without /: the class a word that
+// holds a dot is measured with, so a path is many short runs.
+func isPlainRunByte(c byte) bool {
+	return isSlashRunByte(c) && c != '/'
+}
+
+// trimTrailingPunctuation trims the backticks and then the punctuation a
+// sentence or a code span puts after a word, so the word is measured as it was
+// written and a base64 secret that ends a sentence is still measured.
+func trimTrailingPunctuation(word string) string {
+	for {
+		trimmed := strings.TrimRight(strings.TrimRight(word, "`"), ".,;:!?)]}'\"")
+
+		if trimmed == word {
+			return trimmed
+		}
+
+		word = trimmed
+	}
 }
 
 // isHexByte is a byte of a hex run.
