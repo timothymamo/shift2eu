@@ -1450,7 +1450,7 @@ func TestRunChangesIntoTheWorkDirectory(t *testing.T) {
 				var stderr bytes.Buffer
 
 				if code := run(tc.args, recorder.chdir, recorder.exec, &stderr); code != 0 {
-					t.Fatalf("run(%q) = %d, want 0 (stderr %q): the line is exec'd", tc.args, code, stderr)
+					t.Fatalf("run(%q) = %d, want 0 (stderr %q): the line is exec'd", tc.args, code, stderr.String())
 				}
 
 				want := []string{"chdir " + auditWork, "exec " + tc.wantPath}

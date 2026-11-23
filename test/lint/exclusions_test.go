@@ -45,6 +45,14 @@ const (
 	auditExecExecMsg = "audit-exec-env: syscall.Exec is used in ci/auditexec/main.go only, passed to run (ADR 0040); a test passes a fake exec of its own"
 )
 
+// auditExecChdirMsg is the msg with which the tests-no-process-state group
+// refuses os.Chdir, the call ci/auditexec/main.go passes to run (issue #277,
+// round G, ADR 0040's amendment). That entry matches every call named Chdir,
+// whatever it is called on, so the group's fourth exclusion rule drops that entry
+// in that one file and no other file, and testsprocessstate_test.go's
+// processStateCallException keeps the drop to the one expression.
+const auditExecChdirMsg = "tests-no-process-state: a test changes no environment variable and no working directory, which every test of the process shares; pass the value to the code under test through a fake or a parameter (CLAUDE.md rule 3)"
+
 // siteBuilderEnvTag is the tag of the site builder's environment group (PRD
 // #297 milestone 2).
 const siteBuilderEnvTag = "site-builder-env"
@@ -163,6 +171,13 @@ func TestForbidigoExclusionsDropOneGroup(t *testing.T) {
 		testsNoProcessStateTag: {
 			{"path": `^test/(?:lint|architecture)/`, "text": groupText(testsNoProcessStateTag)},
 			{"path": `^ci/aireview/internal/review/claudecli_test\.go$`, "text": groupText(testsNoProcessStateTag)},
+			// The one call-level exception (the audit's command wrapper, issue
+			// #277 round G, ADR 0040's amendment): os.Chdir, which
+			// ci/auditexec/main.go passes to run to change into the audit's work
+			// directory before the exec. The group's entry matches every Chdir,
+			// so the text is that entry's msg and the path is that one file, the
+			// same shape as audit-exec-env's syscall.Exec exception.
+			{"path": `^ci/auditexec/main\.go$`, "text": narrowedTextOf(auditExecChdirMsg)},
 		},
 		// The AI reviewer (ADR 0033) and the Claude Code launcher it shares
 		// with the scheduled audit (issue #277): one rule for every path outside
