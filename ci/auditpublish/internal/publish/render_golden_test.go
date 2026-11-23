@@ -68,7 +68,7 @@ func TestRenderReportGolden(t *testing.T) {
 		return
 	}
 
-	want, err := os.ReadFile(goldenReportPath) //nolint:gosec // a test golden file, not user input
+	want, err := os.ReadFile(goldenReportPath)
 	if err != nil {
 		t.Fatalf("read %s: %v", goldenReportPath, err)
 	}
