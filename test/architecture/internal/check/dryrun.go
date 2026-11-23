@@ -184,16 +184,19 @@ func DryRunMirrorsRelease(ci, release []byte) []string {
 	return r.messages
 }
 
-// The site's bundle in the dry run (PRD #297 milestone 3): the ci.yml jobs
-// that build it before the archive check and smoke-test it, the step of
-// the archive check, the release's smoke-test job, and the actions that job
-// shares with ci.yml's browser job.
+// The site's bundle and programs in the dry run (PRD #297 milestone 3): the
+// ci.yml jobs that build them before the archive check and smoke-test the
+// bundle, the step of the archive check, the release's smoke-test and
+// programs jobs, and the actions the smoke-test job shares with ci.yml's
+// browser job.
 const (
-	ciTestJob          = "test"
-	ciBrowserJob       = "browser"
-	releaseSiteBrowser = "site-browser"
-	siteBuildRun       = "make site"
-	archiveCheckRun    = ".github/scripts/verify-archives.sh"
+	ciTestJob           = "test"
+	ciBrowserJob        = "browser"
+	releaseSiteBrowser  = "site-browser"
+	releaseSitePrograms = "site-programs"
+	siteBuildRun        = "make site"
+	siteProgramsRun     = "make site-programs"
+	archiveCheckRun     = ".github/scripts/verify-archives.sh"
 )
 
 // ciSiteUnpackRun is the script of ci.yml's browser job that unpacks the
@@ -213,7 +216,10 @@ var siteBrowserActions = []string{"actions/checkout", "actions/setup-go"}
 
 // site checks the site's bundle in the dry run against the release: ci.yml's
 // test job runs make site before the archive check, so the snapshot's
-// checksums.txt lists the bundle as the release's does; ci.yml's browser job
+// checksums.txt lists the bundle as the release's does, and make
+// site-programs before it too, the step release.yml's site-programs job must
+// run, so a pull request builds the programs the deploy and the live check
+// run; ci.yml's browser job
 // takes the release's own path to a real Chromium, in this order: make site,
 // the archive unpacked into bin/release-bundle (ciSiteUnpackRun), and make
 // test-browser TEST_BROWSER_BUNDLE=bin/release-bundle, the very step
@@ -229,6 +235,19 @@ func (d dryRun) site(ci, release []byte) {
 		case check >= 0 && build > check:
 			d.r.fail("ci.yml: jobs: %s runs %s (line %d) after %s (line %d), want it before: the snapshot's checksums.txt lists the site's bundle only when it is there (PRD #297 milestone 3)", ciTestJob, siteBuildRun, test.steps[build].num, archiveCheckRun, test.steps[check].num)
 		}
+
+		programs := runIndex(d.ciRaw, test.steps, siteProgramsRun)
+
+		switch {
+		case programs < 0:
+			d.r.fail("ci.yml: jobs: %s holds no step that runs exactly %s, want one before %s: every pull request builds the site's two programs as release.yml's %s job builds them (PRD #297 milestone 3)", ciTestJob, siteProgramsRun, archiveCheckRun, releaseSitePrograms)
+		case check >= 0 && programs > check:
+			d.r.fail("ci.yml: jobs: %s runs %s (line %d) after %s (line %d), want it before, beside make site (PRD #297 milestone 3)", ciTestJob, siteProgramsRun, test.steps[programs].num, archiveCheckRun, test.steps[check].num)
+		}
+	}
+
+	if programs, ok := d.r.readJob(release, "release.yml", releaseSitePrograms); ok && runIndex(d.releaseRaw, programs.steps, siteProgramsRun) < 0 {
+		d.r.fail("release.yml: jobs: %s holds no step that runs exactly %s, the step ci.yml's %s job runs too (PRD #297 milestone 3)", releaseSitePrograms, siteProgramsRun, ciTestJob)
 	}
 
 	browser, ok := d.r.readJob(ci, "ci.yml", ciBrowserJob)

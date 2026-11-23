@@ -190,6 +190,10 @@ jobs:
       # release does, only when it is there.
       - name: The site's bundle
         run: make site
+      # The two programs release.yml's site-programs job builds, built the same way, so every pull request
+      # builds what the release's deploy and live check run (PRD #297 milestone 3).
+      - name: The site's programs
+        run: make site-programs
       # The release's archives, built by a snapshot run of its GoReleaser
       # configuration: each holds exactly its own binary (issue #147), and checksums.txt covers the
       # site's bundle (PRD #297 milestone 3).
