@@ -15,7 +15,3 @@ var (
 	// job expects at that point.
 	ErrArtifacts = errors.New("artifacts unexpected")
 )
-
-// errNotImplemented is a skeleton's stub: the behaviour arrives with its
-// tests (PRD #175 milestone 2, PR 4).
-var errNotImplemented = errors.New("not implemented")

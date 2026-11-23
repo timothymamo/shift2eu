@@ -905,7 +905,18 @@ job), with no name twice, nothing expired and no second page; it prints `artifac
 `artifacts: unexpected: see runbook step 11` (exit 3), or the core's GitHub and configuration lines
 (exits 8 and 9). `auditpublish publish -result <path> -reports <dir> -gh <path> -gitleaks <path> -tmp
 <dir>` is the publish job's program; its summary line and exit code are the core's `Outcome`. The job
-sets the expected names, not a caller's list: a step cannot widen them.
+sets the expected names, not a caller's list: a step cannot widen them. The fourth pull request lands in
+two parts: 4a builds `artifacts` alone, and until 4b builds `publish` (with `GITHUB_SHA` and
+`AUDIT_FINGERPRINT_KEY`) that name is a usage error like an unknown subcommand.
+
+A usage error (no or an unknown subcommand, a flag it cannot parse, an extra argument, an unknown job)
+writes one constant usage text to stderr, holding no value, and is outcome 9. Every outcome, the refusals
+included, appends its one line to the step summary as well as standard output. The summary is opened
+for appending once, before any `gh` call; the runner makes the file, so the run never creates it. When
+`GITHUB_STEP_SUMMARY` is unset or not absolute, or the file cannot be opened, written or closed, the run fails
+closed: a run that would have passed prints the configuration line instead and exits 9 (the summary is
+part of the step's configuration), and a run that already failed keeps its own line and code. Either way,
+standard output holds the run's one line.
 
 **The environment.** The entry point reads `GH_TOKEN`, `GITHUB_SERVER_URL`, `GITHUB_REPOSITORY`,
 `GITHUB_RUN_ID`, `GITHUB_STEP_SUMMARY`, and for `publish` also `GITHUB_SHA` and `AUDIT_FINGERPRINT_KEY`,
