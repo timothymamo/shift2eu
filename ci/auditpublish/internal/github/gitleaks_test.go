@@ -295,22 +295,27 @@ func TestScanKeepsTheToolsOutputAndTheTextOutOfItsErrors(t *testing.T) {
 }
 
 // TestScanRefusesAnInlineAllowComment pins the refusal of gitleaks' own inline
-// allow list (audit finding 1): gitleaks honours a `gitleaks:allow` comment in
-// the text it reads, so a text that carries one, in any spelling, is refused
+// allow list (audit finding 1): gitleaks honours its inline allow comment in the
+// text it reads, so a text that carries one, in any letter case, is refused
 // before gitleaks runs and never reaches its allow list. A text without the
 // marker still runs the scan, once.
 func TestScanRefusesAnInlineAllowComment(t *testing.T) {
 	t.Parallel()
 
+	// allowComment is gitleaks' inline allow comment, built from its two halves so
+	// that no line of this repository spells it out: the scheduled audit's model
+	// reads the repository, and a line it quotes refuses the whole run (ADR 0040).
+	allowComment := "gitleaks" + ":allow"
+
 	for _, tc := range []struct {
 		name string
 		text string
 	}{
-		{name: "as the tool's own spelling", text: gitleaksTextMarker + " gitleaks:allow\n"},
-		{name: "in capitals", text: gitleaksTextMarker + " GITLEAKS:ALLOW\n"},
-		{name: "in mixed case", text: gitleaksTextMarker + " Gitleaks:Allow\n"},
-		{name: "as a comment at the end of a line", text: "a line of the report #gitleaks:allow\n"},
-		{name: "in the middle of a multi-line text", text: "the report's first line\n" + gitleaksTextMarker + " # gitleaks:allow\nthe report's last line\n"},
+		{name: "as the tool's own spelling", text: gitleaksTextMarker + " " + allowComment + "\n"},
+		{name: "in capitals", text: gitleaksTextMarker + " " + strings.ToUpper(allowComment) + "\n"},
+		{name: "in mixed case", text: gitleaksTextMarker + " " + "Gitleaks" + ":Allow\n"},
+		{name: "as a comment at the end of a line", text: "a line of the report #" + allowComment + "\n"},
+		{name: "in the middle of a multi-line text", text: "the report's first line\n" + gitleaksTextMarker + " # " + allowComment + "\nthe report's last line\n"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -327,7 +332,7 @@ func TestScanRefusesAnInlineAllowComment(t *testing.T) {
 				t.Errorf("the scan ran gitleaks %d time(s), want 0: a text with an inline allow comment is refused before gitleaks runs", len(calls))
 			}
 
-			if strings.Contains(strings.ToLower(err.Error()), "gitleaks:allow") {
+			if strings.Contains(strings.ToLower(err.Error()), allowComment) {
 				t.Errorf("the refusal is %q, want it to hold neither the scanned text nor the comment's marker", err)
 			}
 
