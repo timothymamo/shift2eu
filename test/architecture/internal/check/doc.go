@@ -79,8 +79,11 @@
 // settings for each image, tag rules, latest decision, SBOM settings, action
 // pins and BuildKit image, and to the verify job's container run of each
 // image; ci.yml's test job to running make site before the archive check, and
-// its browser job to running make test-browser, the target release.yml's
-// site-browser job runs on the release's own bundle, at the same checkout and
+// its browser job to the release's own path to a real Chromium, in order: make
+// site, the archive unpacked into bin/release-bundle as release.yml's
+// site-browser job unpacks it (without its digest check, under the untagged
+// version dev), and make test-browser TEST_BROWSER_BUNDLE=bin/release-bundle,
+// the step that job runs on the release's own bundle, at the same checkout and
 // setup-go commits (PRD #297 milestone 3).
 //
 // ReleasePleaseWorkflow and ReleasePleaseConfig hold the workflow that
