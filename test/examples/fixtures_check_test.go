@@ -54,6 +54,11 @@ type allowListEntry struct {
 // needs.
 var realDataAllowList = []allowListEntry{
 	{
+		file:  "docs/guide/verify-releases.md",
+		value: "www.shift2eu.com",
+		why:   "the project's own site (PRD #297), which the guide tells users to type",
+	},
+	{
 		file:  "test/e2e/testdata/inventory-guide/aws/eu-central-1/autoscaling-groups.json",
 		value: "00000000-0000-0000-0000-000000000001",
 		why:   "a synthetic Auto Scaling group ID in an ARN, all zero but its last digit so the two groups differ",
