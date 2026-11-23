@@ -1807,7 +1807,11 @@ linters:
             - github.com/timothymamo/shift2eu/ci/internal/claudecode$
         # Who may import the audit's library (ADR 0040's amendment): the
         # launcher ci/auditrun, the wrapper ci/auditexec and the library's own
-        # tests, so no other package of ci/ borrows the audit's checks.
+        # tests, so no other package of ci/ borrows the audit's checks. The
+        # ci/auditexec exception is reserved: audit-exec's strict allow list
+        # (below) keeps the wrapper from ever importing the library, so the
+        # exception does nothing while that list holds. test/architecture
+        # pins this rule as it stands.
         audit-library-importers:
           list-mode: lax
           files:
