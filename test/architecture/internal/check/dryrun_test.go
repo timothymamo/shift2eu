@@ -28,17 +28,45 @@ func releaseDryRunFrom(release []byte) string {
 	return pinsOf(release).expand(releaseDryRunTemplate)
 }
 
-// ciDryRunTemplate is the image job of .github/workflows/ci.yml as far as the
-// dry run checks it against release.yml: the same BuildKit, the same action
-// pins, the release's latest and tag rules run on sample tags in place of the
-// pushed one, the release's build settings written to an OCI archive, and the
-// SBOM of the built image. Its pins are placeholders (workflowPins).
+// ciDryRunTemplate is the part of .github/workflows/ci.yml the dry-run checks
+// read: the image job (the dry run of release.yml's image and sbom jobs, with
+// the release's latest and tag rules run on sample tags in place of the pushed
+// one, the release's build settings written to an OCI archive, and the SBOM of
+// the built image), the test job's build of the site's bundle and of the
+// release's archives, and the browser job's smoke test (PRD #297 milestone 3).
+// Its pins are placeholders (workflowPins).
 const ciDryRunTemplate = `name: CI
 
 on:
   pull_request:
 
 jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      # The site's bundle, built the way the release's site job builds it: the
+      # snapshot below lists it in checksums.txt only when it is there, and the
+      # archive check runs after it (PRD #297 milestone 3, issue #147).
+      - name: The site's bundle
+        run: make site
+      - name: Each archive holds its own binary
+        run: .github/scripts/verify-archives.sh
+  browser:
+    name: Browser smoke test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: {{pin actions/checkout}}
+        with:
+          persist-credentials: false
+      - uses: {{pin actions/setup-go}}
+        with:
+          go-version-file: go.mod
+          cache: false
+      # The same target release.yml's site-browser job runs, on the bundle make
+      # test-browser builds for itself (PRD #297 milestone 3).
+      - name: Smoke test the site's bundle in a headless Chromium
+        run: make test-browser
   image:
     name: Container image
     runs-on: ubuntu-latest
@@ -101,13 +129,14 @@ jobs:
           docker run --rm --read-only --network none "$IMAGE" version | tee version.txt
 `
 
-// releaseDryRunTemplate is the latest, image, sbom and verify jobs of
-// .github/workflows/release.yml as far as the dry run checks them: the latest
-// decision on the release tags on main, made once in a job of its own (issue
-// #173) that the image jobs read, the BuildKit image by exact release and index
-// digest, the pins, the tag rules on github.ref_name, the build settings, the
-// SPDX SBOM with an exact syft, and the container run of each published image.
-// Its pins are placeholders (workflowPins).
+// releaseDryRunTemplate is the latest, image, sbom, site-browser and verify
+// jobs of .github/workflows/release.yml as far as the dry run checks them: the
+// latest decision on the release tags on main, made once in a job of its own
+// (issue #173) that the image jobs read, the BuildKit image by exact release and
+// index digest, the pins, the tag rules on github.ref_name, the build settings,
+// the SPDX SBOM with an exact syft, the smoke test of the release's own bundle
+// (PRD #297 milestone 3), and the container run of each published image. Its
+// pins are placeholders (workflowPins).
 const releaseDryRunTemplate = `name: Release
 
 on:
@@ -186,6 +215,22 @@ jobs:
           format: spdx-json
           output-file: shift2eu.spdx.json
           syft-version: {{release syft}}
+  # The smoke test of the release's bundle (PRD #297 milestone 3): the same
+  # target CI's browser job runs, on the bundle the site job built, which the
+  # check compares once the target's bundle argument is set aside.
+  site-browser:
+    name: Site browser smoke test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: {{pin actions/checkout}}
+        with:
+          persist-credentials: false
+      - uses: {{pin actions/setup-go}}
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Smoke test the release's bundle in a headless Chromium
+        run: make test-browser TEST_BROWSER_BUNDLE=bin/release-bundle
   verify:
     name: Verify the published image
     runs-on: ubuntu-latest
@@ -287,7 +332,7 @@ func TestDryRunMirrorsRelease(t *testing.T) {
 			name:    "a drifted build-push-action pin",
 			ci:      ciDryRun,
 			release: mutate(t, releaseDryRun, commit("docker/build-push-action"), driftedCommit("docker/build-push-action")),
-			wantIn:  "docker/build-push-action runs at " + ciPins.commitOf("docker/build-push-action") + " (line 39) and at " + nextCommit(t, ciPins.commitOf("docker/build-push-action")),
+			wantIn:  "docker/build-push-action runs at " + ciPins.commitOf("docker/build-push-action") + " (line",
 		},
 		{name: "a drifted sbom-action pin", ci: mutate(t, ciDryRun, commit("anchore/sbom-action"), driftedCommit("anchore/sbom-action")), release: releaseDryRun, wantIn: "anchore/sbom-action runs at"},
 		{name: "a drifted setup-buildx-action pin", ci: ciDryRun, release: mutate(t, releaseDryRun, commit("docker/setup-buildx-action"), driftedCommit("docker/setup-buildx-action")), wantIn: "docker/setup-buildx-action runs at"},
@@ -463,13 +508,13 @@ func TestDryRunMirrorsRelease(t *testing.T) {
 		// included, may name a retired name either (issue #393), in any case.
 		{
 			name:    "a dry run whose image job comments on the HTTP API's binary",
-			ci:      mutate(t, ciDryRun, "jobs:\n  image:\n", "jobs:\n  image:\n    # The Shift2eu-Server image is gone (issue #393).\n"),
+			ci:      mutate(t, ciDryRun, "  image:\n    name: Container image\n", "  image:\n    # The Shift2eu-Server image is gone (issue #393).\n    name: Container image\n"),
 			release: releaseDryRun,
 			wantIn:  "names shift2eu-server",
 		},
 		{
 			name:    "a dry run whose image job comments on the bundled OpenAPI document",
-			ci:      mutate(t, ciDryRun, "jobs:\n  image:\n", "jobs:\n  image:\n    # The OpenAPI document is gone (issue #393).\n"),
+			ci:      mutate(t, ciDryRun, "  image:\n    name: Container image\n", "  image:\n    # The OpenAPI document is gone (issue #393).\n    name: Container image\n"),
 			release: releaseDryRun,
 			wantIn:  "names openapi",
 		},
@@ -528,8 +573,61 @@ func TestDryRunMirrorsRelease(t *testing.T) {
 		},
 		{name: "a release.yml without a verify job", ci: ciDryRun, release: mutate(t, releaseDryRun, "  verify:\n", "  publishing:\n"), wantIn: "release.yml: no jobs: verify"},
 
+		// The site's bundle in the dry run (PRD #297 milestone 3): CI builds it the
+		// way the release does, so the snapshot's checksums.txt lists it, and CI's
+		// browser job runs the very target the release's site-browser job runs,
+		// which tests the bundle the site job built instead of one of its own.
+		{
+			name:    "a ci.yml that never builds the site's bundle",
+			ci:      mutate(t, ciDryRun, "      - name: The site's bundle\n        run: make site\n", ""),
+			release: releaseDryRun,
+			wantIn:  "make site",
+		},
+		{
+			name:    "a ci.yml that builds the site's bundle after the archive check",
+			ci:      mutate(t, ciDryRun, "      - name: The site's bundle\n        run: make site\n      - name: Each archive holds its own binary\n        run: .github/scripts/verify-archives.sh\n", "      - name: Each archive holds its own binary\n        run: .github/scripts/verify-archives.sh\n      - name: The site's bundle\n        run: make site\n"),
+			release: releaseDryRun,
+			wantIn:  "make site",
+		},
+		{
+			name:    "a release smoke test that builds a bundle of its own",
+			ci:      ciDryRun,
+			release: mutate(t, releaseDryRun, "        run: make test-browser TEST_BROWSER_BUNDLE=bin/release-bundle\n", "        run: make test-browser\n"),
+			wantIn:  "TEST_BROWSER_BUNDLE",
+		},
+		{
+			name:    "a release smoke test running the browser test directly",
+			ci:      ciDryRun,
+			release: mutate(t, releaseDryRun, "        run: make test-browser TEST_BROWSER_BUNDLE=bin/release-bundle\n", "        run: go test -count=1 -tags browser ./test/browser/\n"),
+			wantIn:  "make test-browser",
+		},
+		{
+			name:    "a ci.yml whose browser job runs another target",
+			ci:      mutate(t, ciDryRun, "        run: make test-browser\n", "        run: make site\n"),
+			release: releaseDryRun,
+			wantIn:  "make test-browser",
+		},
+		{
+			name:    "a ci.yml browser job at another checkout pin",
+			ci:      mutate(t, ciDryRun, commit("actions/checkout"), driftedCommit("actions/checkout")),
+			release: releaseDryRun,
+			wantIn:  "actions/checkout runs at",
+		},
+		{
+			name:    "a release site-browser job at another setup-go pin",
+			ci:      ciDryRun,
+			release: mutate(t, releaseDryRun, commit("actions/setup-go"), driftedCommit("actions/setup-go")),
+			wantIn:  "actions/setup-go runs at",
+		},
+		{
+			name:    "a release.yml without a site-browser job",
+			ci:      ciDryRun,
+			release: mutate(t, releaseDryRun, "  site-browser:\n", "  site-browser-job:\n"),
+			wantIn:  "release.yml: no jobs: site-browser",
+		},
+
 		// The jobs the two documents must hold to be compared at all.
-		{name: "a ci.yml without an image job", ci: mutate(t, ciDryRun, "jobs:\n  image:\n", "jobs:\n  images:\n"), release: releaseDryRun, wantIn: "ci.yml: no jobs: image"},
+		{name: "a ci.yml without an image job", ci: mutate(t, ciDryRun, "  image:\n    name: Container image\n", "  images:\n    name: Container image\n"), release: releaseDryRun, wantIn: "ci.yml: no jobs: image"},
 		{name: "a release.yml without an sbom job", ci: ciDryRun, release: mutate(t, releaseDryRun, "  sbom:\n", "  provenance:\n"), wantIn: "release.yml: no jobs: sbom"},
 	}
 

@@ -1327,6 +1327,33 @@ func TestRecordedReleaseAppIdentifiersAreTheSame(t *testing.T) {
 	}
 }
 
+// TestReleaseTagSkillNamesTheReleaseJobs pins that the two job names the release-tag skill's post-release check
+// reports are release.yml's own (PRD #297 milestone 3, PR C1): the skill reports the conclusions of "Site
+// bundle" and "Site browser smoke test", and a rename in either document would leave it reporting a job that
+// no longer exists, or a release whose bundle jobs nobody read.
+func TestReleaseTagSkillNamesTheReleaseJobs(t *testing.T) {
+	t.Parallel()
+
+	skill := string(readRepositoryFile(t, ".claude/skills/release-tag/SKILL.md"))
+	release := string(readRepositoryFile(t, ".github/workflows/release.yml"))
+
+	for _, want := range []struct{ job, name string }{
+		{job: "site", name: "Site bundle"},
+		{job: "site-browser", name: "Site browser smoke test"},
+	} {
+		pinned := "  " + want.job + ":\n    name: " + want.name + "\n"
+		if !strings.Contains(release, pinned) {
+			t.Errorf("release.yml holds no job %q named %q (it must hold %q): the release-tag skill reports that job's conclusion, and a renamed job leaves the skill reporting nothing (PRD #297 milestone 3)",
+				want.job, want.name, pinned)
+		}
+
+		if !strings.Contains(skill, want.name) {
+			t.Errorf(".claude/skills/release-tag/SKILL.md holds no %q: its post-release check reports the conclusion of release.yml's %s job (PRD #297 milestone 3)",
+				want.name, want.job)
+		}
+	}
+}
+
 // TestWorkflowPrivilegesAreClosed pins the audit's finding of issue #72: no
 // workflow but .github/workflows/release.yml may hold a packages: write,
 // id-token: write or attestations: write permission, a write-all, or an

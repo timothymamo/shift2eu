@@ -13,7 +13,7 @@ import (
 )
 
 // The fixture below is .github/workflows/release.yml in parts: the top level,
-// then the thirteen jobs, each with the comments and keys above its steps
+// then the twelve jobs, each with the comments and keys above its steps
 // (releaseJob.head) and its steps in order. Rendering it rebuilds the file byte
 // for byte, so a case changes one part and leaves the rest exactly as the
 // release has it, comments included: the check must tolerate a full-line
@@ -40,10 +40,11 @@ concurrency:
   group: release
   cancel-in-progress: false
 
-# The steps of all ten jobs are a closed list that test/architecture holds
+# The steps of all twelve jobs are a closed list that test/architecture holds
 # (check.ReleaseWorkflow): add no step, run: or env: here without changing it.
 # The release ships the CLI alone: the HTTP API's image, archive and API
-# document are gone (issue #393). latest alone decides, once
+# document are gone (issue #393), and the site's bundle is published beside the
+# CLI's archives (PRD #297 milestone 3). latest alone decides, once
 # per run, whether the tag is the
 # highest release tag on main, so the image's latest tag and GitHub's "Latest"
 # release cannot disagree. goreleaser hands the archives on, attest-archives
@@ -56,6 +57,7 @@ jobs:
 const testJobHead = `  test:
     name: Test
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     permissions:
       contents: read
     steps:
@@ -107,6 +109,7 @@ const latestJobHead = `  # Decides, once per run, whether the tag is the highest
     name: Latest
     needs: test
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     permissions:
       contents: read # check out the repository
     outputs:
@@ -148,6 +151,130 @@ var latestStepTemplates = []string{
 `,
 }
 
+// siteJobHead is the site job up to its steps: the site's bundle, built at the
+// tag on a runner of its own (PRD #297 milestone 3). It holds no key and no
+// secret: its digest is a job output, which the jobs that smoke-test, attest
+// and publish the bundle bind it to.
+const siteJobHead = `  # The site's bundle, built at the tag on a runner of its own (PRD #297
+  # milestone 3): no key, no secret and no OIDC token, so nothing in it can
+  # publish or deploy. Its sha256 is a job output, which the smoke test, the
+  # attestation and goreleaser bind the bundle they handle to.
+  site:
+    name: Site bundle
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read # check out the repository
+    outputs:
+      sha256: ${{ steps.digest.outputs.sha256 }}
+    steps:
+`
+
+// siteStepTemplates are the site job's steps: the repository at the tag, Go
+// without the Actions cache, make site, the bundle's digest as an output, and
+// the bundle as a workflow artifact for the jobs of this run alone, kept a
+// week as the archives are (PRD #297 milestone 3).
+var siteStepTemplates = []string{
+	`      # The tag's own commit. ci/sitebuild reads no history, so a shallow
+      # checkout is enough, and the token is not kept.
+      - uses: {{pin actions/checkout}}
+        with:
+          persist-credentials: false
+`,
+	`      - uses: {{pin actions/setup-go}}
+        with:
+          go-version-file: go.mod
+          cache: false
+`,
+	`      # The bundle the release publishes, built exactly as make site builds
+      # it: bin/site and the archive bin/shift2eu-site_<tag>.tar.gz. The tag
+      # comes through env:, never pasted into the script.
+      - name: Build the site's bundle
+        env:
+          SITE_VERSION: ${{ github.ref_name }}
+        run: make site
+`,
+	`      # The digest of the one file the release publishes beside the CLI's
+      # archives: the jobs after this one check what they handle against it.
+      - name: The bundle's digest
+        id: digest
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          sha256="$(sha256sum "bin/shift2eu-site_$TAG.tar.gz" | cut -d' ' -f1)"
+          echo "sha256=$sha256" >> "$GITHUB_OUTPUT"
+`,
+	`      # The bundle for the jobs of this run alone: the published release is
+      # what the deploy and the live check read, so a week is enough.
+      - uses: {{pin actions/upload-artifact}}
+        with:
+          name: site
+          path: bin/shift2eu-site_*.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+`,
+}
+
+// siteBrowserJobHead is the site-browser job up to its steps: the smoke test
+// of the very bundle the site job built, checked against that job's digest and
+// served from a directory of its own (PRD #297 milestone 3). No secret and no
+// OIDC token.
+const siteBrowserJobHead = `  # The smoke test of that exact bundle (PRD #297 milestone 3): the artifact
+  # the site job uploaded, checked against that job's digest, unpacked, and
+  # served to test/browser in the pinned headless Chromium. No secret and no
+  # OIDC token, so nothing in it can publish or deploy.
+  site-browser:
+    name: Site browser smoke test
+    needs: site
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read # check out the repository
+    steps:
+`
+
+// siteBrowserStepTemplates are the site-browser job's steps: the repository,
+// Go without the Actions cache, the artifact the site job uploaded, the check
+// of it against that job's digest, and make test-browser on the unpacked
+// bundle, which is the bundle the release attests and publishes.
+var siteBrowserStepTemplates = []string{
+	`      - uses: {{pin actions/checkout}}
+        with:
+          persist-credentials: false
+`,
+	`      - uses: {{pin actions/setup-go}}
+        with:
+          go-version-file: go.mod
+          cache: false
+`,
+	`      - uses: {{pin actions/download-artifact}}
+        with:
+          name: site
+          path: bin
+`,
+	`      # What is smoke-tested is what the site job built: the digest the site
+      # job gave is compared before anything is unpacked. The tag comes through
+      # env:, never pasted into the script.
+      - name: Check and unpack the bundle
+        env:
+          TAG: ${{ github.ref_name }}
+          SITE_SHA256: ${{ needs.site.outputs.sha256 }}
+        run: |
+          set -euo pipefail
+          printf '%s  %s\n' "$SITE_SHA256" "bin/shift2eu-site_$TAG.tar.gz" | sha256sum -c -
+          mkdir bin/release-bundle
+          tar -xzf "bin/shift2eu-site_$TAG.tar.gz" -C bin/release-bundle
+`,
+	`      # The bundle the release publishes, not one built again: plain make
+      # test-browser (CI's browser job) would build its own with ci/sitebuild
+      # and test something the release never attested.
+      - name: Smoke test the release's bundle in a headless Chromium
+        run: make test-browser TEST_BROWSER_BUNDLE=bin/release-bundle
+`,
+}
+
 // goreleaserJobHead is the goreleaser job up to its steps:.
 const goreleaserJobHead = `  # A job of its own, on a fresh runner: no go env file and no environment or
   # PATH that the tests set reaches goreleaser. setup-go's Actions cache
@@ -155,8 +282,9 @@ const goreleaserJobHead = `  # A job of its own, on a fresh runner: no go env fi
   # CI on main, so both jobs set cache: false.
   goreleaser:
     name: GoReleaser
-    needs: test
+    needs: [test, site]
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: write # create the GitHub release and upload artifacts
     steps:
@@ -178,6 +306,23 @@ var goreleaserStepTemplates = []string{
         with:
           go-version-file: go.mod
           cache: false
+`,
+	`      # The bundle the site job built, of this run: bin/ is git-ignored, so
+      # GoReleaser's dirty-tree check does not trip on it.
+      - uses: {{pin actions/download-artifact}}
+        with:
+          name: site
+          path: bin
+`,
+	`      # The bundle GoReleaser lists in checksums.txt and uploads to the draft
+      # is the bundle the site job built and the smoke test tested: a file
+      # changed on its way through the workflow artifact fails here, before
+      # GoReleaser runs.
+      - name: Check the site bundle against the site job's digest
+        env:
+          TAG: ${{ github.ref_name }}
+          SITE_SHA256: ${{ needs.site.outputs.sha256 }}
+        run: printf '%s  %s\n' "$SITE_SHA256" "bin/shift2eu-site_$TAG.tar.gz" | sha256sum -c -
 `,
 	`      - uses: {{pin goreleaser/goreleaser-action}}
         with:
@@ -219,8 +364,9 @@ const attestArchivesJobHead = `  # Attests every archive and checksums.txt with 
   # repository's attestations to write, and read-only access to the repository.
   attest-archives:
     name: Attest the archives
-    needs: goreleaser
+    needs: [goreleaser, site]
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       id-token: write # the OIDC token the provenance is signed with
       attestations: write # store the provenance in the repository
@@ -237,22 +383,39 @@ var attestArchivesStepTemplates = []string{
         with:
           name: archives
 `,
-	`      # What is attested is what GoReleaser wrote: a file changed on the way
-      # through the workflow artifact fails here, before anything is signed.
-      - name: Check the archives against checksums.txt
-        run: sha256sum -c checksums.txt
+	`      # The site's bundle, downloaded beside the archives: the release
+      # carries it as one more asset, listed in the same checksums.txt.
+      - uses: {{pin actions/download-artifact}}
+        with:
+          name: site
 `,
-	`      # One attestation covers every archive and their checksums, so a release
-      # whose files were replaced fails verification (issue #163). The archives
-      # are subjects named by their extension: a bare shift2eu_* also matches
-      # GoReleaser's build directories, and would attest the 12 bare binaries
-      # beside the archives.
+	`      # What is attested is what GoReleaser wrote, the site's bundle included:
+      # a file changed on the way through a workflow artifact fails here,
+      # before anything is signed. checksums.txt is held to exactly one
+      # site bundle, and to the digest the site job gave it, so a GoReleaser
+      # run whose extra_files matched nothing fails here too.
+      - name: Check the archives and the site bundle against checksums.txt
+        env:
+          TAG: ${{ github.ref_name }}
+          SITE_SHA256: ${{ needs.site.outputs.sha256 }}
+        run: |
+          set -euo pipefail
+          sha256sum -c checksums.txt
+          grep -qxF "$SITE_SHA256  shift2eu-site_$TAG.tar.gz" checksums.txt
+          test "$(grep -cF '  shift2eu-site_' checksums.txt)" = 1
+`,
+	`      # One attestation covers every archive, the site's bundle and their
+      # checksums, so a release whose files were replaced fails verification
+      # (issue #163). The archives are subjects named by their extension: a
+      # bare shift2eu_* also matches GoReleaser's build directories, and would
+      # attest the 12 bare binaries beside the archives.
       - name: Attest the archives
         uses: {{pin actions/attest-build-provenance}}
         with:
           subject-path: |
             shift2eu_*.tar.gz
             shift2eu_*.zip
+            shift2eu-site_*.tar.gz
             checksums.txt
 `,
 }
@@ -270,8 +433,9 @@ const publishJobHead = `  # The release is published last (issue #156): GoReleas
   # release, as the image's latest tag follows it (issue #173).
   publish:
     name: Publish the release
-    needs: [test, goreleaser, attest-archives, latest]
+    needs: [test, goreleaser, attest-archives, latest, site-browser]
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: write # publish the draft release
     steps:
@@ -478,6 +642,7 @@ const verifyArchivesJobHead = `  # A fresh runner that verifies what the publish
     name: Verify the published archives
     needs: publish
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: read # download the release's assets
       attestations: read # gh attestation verify reads them through the repository's API
@@ -659,6 +824,7 @@ const imageJobHead = `  # Builds and pushes the container image to GHCR (ADR 001
     name: Container image
     needs: [test, goreleaser, latest]
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     permissions:
       contents: read # check out the repository
       packages: write # push the image to ghcr.io
@@ -751,6 +917,7 @@ const sbomJobHead = `  # The SBOM of the pushed index, read from the registry by
     name: SBOM
     needs: image
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       packages: read # pull the image from ghcr.io, private until made public
     steps:
@@ -795,6 +962,7 @@ const signJobHead = `  # The only job holding the signing identity (id-token: wr
     name: Sign and attest
     needs: [image, sbom]
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       packages: write # push the signatures and attestations to ghcr.io
       id-token: write # GitHub OIDC token for keyless cosign and attestation signing
@@ -864,6 +1032,7 @@ const verifyJobHead = `  # The independent check of what the release published (
     name: Verify the published image
     needs: [image, sign]
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       packages: read # the image and its signature
       attestations: read # gh attestation verify reads them through the repository's API
@@ -1082,6 +1251,8 @@ func releaseWorkflowFixtureFrom(release []byte) releaseFixture {
 		jobs: []releaseJob{
 			{key: "test", head: testJobHead, steps: expandSteps(pins, testStepTemplates)},
 			{key: "latest", head: latestJobHead, steps: expandSteps(pins, latestStepTemplates)},
+			{key: "site", head: siteJobHead, steps: expandSteps(pins, siteStepTemplates)},
+			{key: "site-browser", head: siteBrowserJobHead, steps: expandSteps(pins, siteBrowserStepTemplates)},
 			{key: "goreleaser", head: goreleaserJobHead, steps: expandSteps(pins, goreleaserStepTemplates)},
 			{key: "attest-archives", head: attestArchivesJobHead, steps: expandSteps(pins, attestArchivesStepTemplates)},
 			{key: "publish", head: publishJobHead, steps: expandSteps(pins, publishStepTemplates)},
@@ -1099,6 +1270,8 @@ func releaseWorkflowFixtureFrom(release []byte) releaseFixture {
 var (
 	testSteps           = expandSteps(releasePins, testStepTemplates)
 	latestSteps         = expandSteps(releasePins, latestStepTemplates)
+	siteSteps           = expandSteps(releasePins, siteStepTemplates)
+	siteBrowserSteps    = expandSteps(releasePins, siteBrowserStepTemplates)
 	goreleaserSteps     = expandSteps(releasePins, goreleaserStepTemplates)
 	attestArchivesSteps = expandSteps(releasePins, attestArchivesStepTemplates)
 	publishSteps        = expandSteps(releasePins, publishStepTemplates)
@@ -1253,7 +1426,7 @@ func beforeStep(t *testing.T, steps []string, head, step string) []string {
 }
 
 // TestReleaseWorkflow pins what the release workflow may say. It is read as a
-// closed schema: the top-level keys, the thirteen jobs, their keys and their steps
+// closed schema: the top-level keys, the twelve jobs, their keys and their steps
 // are fixed, so no step runs repository code, sets the go command's environment
 // or swaps the goreleaser document before goreleaser runs; only a commit on
 // main is released; the publishing privileges stay split over three jobs, so
@@ -1333,15 +1506,15 @@ func TestReleaseWorkflow(t *testing.T) {
 		},
 
 		// The probes of the review and audit, each before the goreleaser step.
-		{name: "probe: go env -w GOFLAGS", workflow: beforeGoreleaser(`run: go env -w "G""OFLAGS=-tags=sneaky"`), wantIn: "goreleaser: steps holds 5 steps, want exactly 4"},
+		{name: "probe: go env -w GOFLAGS", workflow: beforeGoreleaser(`run: go env -w "G""OFLAGS=-tags=sneaky"`), wantIn: "goreleaser: steps holds 7 steps, want exactly 6"},
 		{name: "probe: GOFLAGS to github.env", workflow: beforeGoreleaser(`run: echo "G""OFLAGS=-tags=x" >> "${{ github.env }}"`), wantIn: "github.env"},
-		{name: "probe: GITHUB_ENV spelled at run time", workflow: beforeGoreleaser(`run: n=GITHUB_E; n=${n}NV; echo X=1 >> "${!n}"`), wantIn: "goreleaser: steps holds 5 steps, want exactly 4"},
-		{name: "probe: go work init", workflow: beforeGoreleaser(`run: go work init .`), wantIn: "goreleaser: steps holds 5 steps, want exactly 4"},
-		{name: "probe: go mod vendor", workflow: beforeGoreleaser(`run: go mod vendor`), wantIn: "goreleaser: steps holds 5 steps, want exactly 4"},
-		{name: "probe: another goreleaser document copied in", workflow: beforeGoreleaser(`run: cp build/other.yaml .goreleaser.yaml`), wantIn: "goreleaser: steps holds 5 steps, want exactly 4"},
-		{name: "probe: an action that sets the environment", workflow: beforeGoreleaser(`uses: example/sets-env@0123456789abcdef0123456789abcdef01234567`), wantIn: "goreleaser: steps holds 5 steps, want exactly 4"},
-		{name: "probe: a repository script", workflow: beforeGoreleaser(`run: ./scripts/prepare.sh`), wantIn: "goreleaser: steps holds 5 steps, want exactly 4"},
-		{name: "probe: make test back in the goreleaser job", workflow: beforeGoreleaser(`run: make test`), wantIn: "goreleaser: steps holds 5 steps, want exactly 4"},
+		{name: "probe: GITHUB_ENV spelled at run time", workflow: beforeGoreleaser(`run: n=GITHUB_E; n=${n}NV; echo X=1 >> "${!n}"`), wantIn: "goreleaser: steps holds 7 steps, want exactly 6"},
+		{name: "probe: go work init", workflow: beforeGoreleaser(`run: go work init .`), wantIn: "goreleaser: steps holds 7 steps, want exactly 6"},
+		{name: "probe: go mod vendor", workflow: beforeGoreleaser(`run: go mod vendor`), wantIn: "goreleaser: steps holds 7 steps, want exactly 6"},
+		{name: "probe: another goreleaser document copied in", workflow: beforeGoreleaser(`run: cp build/other.yaml .goreleaser.yaml`), wantIn: "goreleaser: steps holds 7 steps, want exactly 6"},
+		{name: "probe: an action that sets the environment", workflow: beforeGoreleaser(`uses: example/sets-env@0123456789abcdef0123456789abcdef01234567`), wantIn: "goreleaser: steps holds 7 steps, want exactly 6"},
+		{name: "probe: a repository script", workflow: beforeGoreleaser(`run: ./scripts/prepare.sh`), wantIn: "goreleaser: steps holds 7 steps, want exactly 6"},
+		{name: "probe: make test back in the goreleaser job", workflow: beforeGoreleaser(`run: make test`), wantIn: "goreleaser: steps holds 7 steps, want exactly 6"},
 		{name: "a step added to the test job", workflow: inTestJob(`run: go env -w GOFLAGS=-x`), wantIn: "holds 5 steps, want exactly 4"},
 		{
 			name:     "a step replaced in the goreleaser job",
@@ -1409,8 +1582,8 @@ func TestReleaseWorkflow(t *testing.T) {
 		{name: "a sixth job", workflow: releaseWorkflow + "  other:\n    runs-on: ubuntu-latest\n", wantIn: `key "other"`},
 		{name: "a job-level env", workflow: in("image", "    needs: [test, goreleaser, latest]\n", "    needs: [test, goreleaser, latest]\n    env:\n      SNEAKY: x\n"), wantIn: `key "env"`},
 		{name: "a container", workflow: in("image", "    needs: [test, goreleaser, latest]\n", "    needs: [test, goreleaser, latest]\n    container: golang\n"), wantIn: `key "container"`},
-		{name: "no needs on goreleaser", workflow: in("goreleaser", "    needs: test\n", ""), wantIn: `no "needs"`},
-		{name: "goreleaser needs another job", workflow: in("goreleaser", "    needs: test\n", "    needs: image\n"), wantIn: "needs"},
+		{name: "no needs on goreleaser", workflow: in("goreleaser", "    needs: [test, site]\n", ""), wantIn: `no "needs"`},
+		{name: "goreleaser needs another job", workflow: in("goreleaser", "    needs: [test, site]\n", "    needs: [image, site]\n"), wantIn: "needs"},
 		{name: "write permission at the top", workflow: strings.Replace(releaseWorkflow, "permissions: {}", "permissions:\n  contents: write", 1), wantIn: "permissions"},
 		{name: "write-all at the top", workflow: strings.Replace(releaseWorkflow, "permissions: {}", "permissions: write-all", 1), wantIn: "permissions"},
 		{name: "write permission for the tests", workflow: in("test", "      contents: read\n", "      contents: write\n"), wantIn: "contents"},
@@ -1431,7 +1604,7 @@ func TestReleaseWorkflow(t *testing.T) {
 		{name: "a second key in the goreleaser env", workflow: in("goreleaser", "          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}\n", "          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}\n          OTHER: x\n"), wantIn: "OTHER"},
 		{name: "a GITHUB_TOKEN from somewhere else", workflow: in("goreleaser", "GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}", "GITHUB_TOKEN: ${{ vars.TOKEN }}"), wantIn: "GITHUB_TOKEN"},
 		{name: "a flow-style env", workflow: in("goreleaser", "        env:\n          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}\n", "        env: {GITHUB_TOKEN: x, A: b}\n"), wantIn: "env"},
-		{name: "a repeated key", workflow: in("goreleaser", "    needs: test\n", "    needs: test\n    needs: test\n"), wantIn: "repeated"},
+		{name: "a repeated key", workflow: in("goreleaser", "    needs: [test, site]\n", "    needs: [test, site]\n    needs: [test, site]\n"), wantIn: "repeated"},
 		{name: "a tab", workflow: in("test", "{{pin actions/checkout}}", strings.Replace(pin("{{pin actions/checkout}}"), " # ", " #\t", 1)), wantIn: "U+0009"},
 
 		// The draft-then-publish flow (issue #156): GoReleaser uploads every
@@ -1442,11 +1615,11 @@ func TestReleaseWorkflow(t *testing.T) {
 		// and no other job publishes it (ADR 0015).
 		{name: "no publish job", workflow: release.withoutJob(t, "publish"), wantIn: `no "publish"`},
 		{name: "the publish job on another runner", workflow: in("publish", "    runs-on: ubuntu-latest\n", "    runs-on: ubuntu-24.04\n"), wantIn: "runs-on"},
-		{name: "the publish job without needs", workflow: in("publish", "    needs: [test, goreleaser, attest-archives, latest]\n", ""), wantIn: `no "needs"`},
-		{name: "the publish job not needing the attestation job", workflow: in("publish", "    needs: [test, goreleaser, attest-archives, latest]\n", "    needs: [test, goreleaser, latest]\n"), wantIn: "jobs: publish: needs is"},
-		{name: "the publish job needing the attestation job first", workflow: in("publish", "    needs: [test, goreleaser, attest-archives, latest]\n", "    needs: [attest-archives, test, goreleaser, latest]\n"), wantIn: "jobs: publish: needs is"},
-		{name: "the publish job needing the attestation job only", workflow: in("publish", "    needs: [test, goreleaser, attest-archives, latest]\n", "    needs: [attest-archives]\n"), wantIn: "jobs: publish: needs is"},
-		{name: "the publish job not needing the latest job", workflow: in("publish", "    needs: [test, goreleaser, attest-archives, latest]\n", "    needs: [test, goreleaser, attest-archives]\n"), wantIn: `jobs: publish: needs is ["test" "goreleaser" "attest-archives"], want exactly ["test" "goreleaser" "attest-archives" "latest"]`},
+		{name: "the publish job without needs", workflow: in("publish", "    needs: [test, goreleaser, attest-archives, latest, site-browser]\n", ""), wantIn: `no "needs"`},
+		{name: "the publish job not needing the attestation job", workflow: in("publish", "    needs: [test, goreleaser, attest-archives, latest, site-browser]\n", "    needs: [test, goreleaser, latest, site-browser]\n"), wantIn: "jobs: publish: needs is"},
+		{name: "the publish job needing the attestation job first", workflow: in("publish", "    needs: [test, goreleaser, attest-archives, latest, site-browser]\n", "    needs: [attest-archives, test, goreleaser, latest, site-browser]\n"), wantIn: "jobs: publish: needs is"},
+		{name: "the publish job needing the attestation job only", workflow: in("publish", "    needs: [test, goreleaser, attest-archives, latest, site-browser]\n", "    needs: [attest-archives]\n"), wantIn: "jobs: publish: needs is"},
+		{name: "the publish job not needing the latest job", workflow: in("publish", "    needs: [test, goreleaser, attest-archives, latest, site-browser]\n", "    needs: [test, goreleaser, attest-archives, site-browser]\n"), wantIn: `jobs: publish: needs is ["test" "goreleaser" "attest-archives" "site-browser"], want exactly ["test" "goreleaser" "attest-archives" "latest" "site-browser"]`},
 		{name: "another permission for the publish job", workflow: in("publish", "      contents: write # publish the draft release\n", "      contents: write # publish the draft release\n      packages: write # push\n"), wantIn: "packages"},
 		{name: "no contents: write for the publish job", workflow: in("publish", "      contents: write # publish the draft release\n", ""), wantIn: "contents"},
 		// GitHub's "Latest" release follows the image's latest tag (issue
@@ -1494,7 +1667,7 @@ func TestReleaseWorkflow(t *testing.T) {
 		{name: "a separate publish step by tag", workflow: steps("publish", slices.Concat(publishSteps, []string{publishByTagStep})), wantIn: "jobs: publish: steps holds 3 steps, want exactly 2"},
 		{name: "an extra step in the publish job", workflow: steps("publish", beforeStep(t, publishSteps, "      - name: Check the draft's assets and publish it", "run: ./scripts/prepare.sh")), wantIn: "jobs: publish: steps holds 3 steps, want exactly 2"},
 		{name: "the publish job checking the repository out again", workflow: steps("publish", beforeStep(t, publishSteps, "      - uses: actions/download-artifact@", "uses: {{pin actions/checkout}}\n        with:\n          fetch-depth: 0\n          persist-credentials: false")), wantIn: "jobs: publish: steps holds 3 steps, want exactly 2"},
-		{name: "the publish step in the goreleaser job", workflow: steps("goreleaser", beforeStep(t, goreleaserSteps, "      - uses: actions/upload-artifact@", "name: Check the draft's assets and publish it\n        run: "+publishByID)), wantIn: "jobs: goreleaser: steps holds 5 steps, want exactly 4"},
+		{name: "the publish step in the goreleaser job", workflow: steps("goreleaser", beforeStep(t, goreleaserSteps, "      - uses: actions/upload-artifact@", "name: Check the draft's assets and publish it\n        run: "+publishByID)), wantIn: "jobs: goreleaser: steps holds 7 steps, want exactly 6"},
 		{name: "the publish step in the test job", workflow: inTestJob("name: Check the draft's assets and publish it\n        run: " + publishByID), wantIn: "holds 5 steps, want exactly 4"},
 
 		// A partial re-run (gh run rerun --failed) does not re-run the
@@ -1906,24 +2079,24 @@ func TestReleaseWorkflow(t *testing.T) {
 		// provenance action.
 		{name: "no attest-archives job", workflow: release.withoutJob(t, "attest-archives"), wantIn: `no "attest-archives"`},
 		{name: "the attest-archives job on another runner", workflow: in("attest-archives", "    runs-on: ubuntu-latest\n", "    runs-on: ubuntu-24.04\n"), wantIn: "runs-on"},
-		{name: "the attest-archives job without needs", workflow: in("attest-archives", "    needs: goreleaser\n", ""), wantIn: `no "needs"`},
-		{name: "the attest-archives job not needing goreleaser", workflow: in("attest-archives", "    needs: goreleaser\n", "    needs: test\n"), wantIn: "needs"},
+		{name: "the attest-archives job without needs", workflow: in("attest-archives", "    needs: [goreleaser, site]\n", ""), wantIn: `no "needs"`},
+		{name: "the attest-archives job not needing goreleaser", workflow: in("attest-archives", "    needs: [goreleaser, site]\n", "    needs: [site]\n"), wantIn: "needs"},
 		{name: "contents: write for the attest-archives job", workflow: in("attest-archives", "      contents: read # download the archives' workflow artifact\n", "      contents: write # download the archives' workflow artifact\n"), wantIn: "contents"},
 		{name: "no contents: read for the attest-archives job", workflow: in("attest-archives", "      contents: read # download the archives' workflow artifact\n", ""), wantIn: "contents"},
 		{name: "packages: read for the attest-archives job", workflow: in("attest-archives", "      id-token: write # the OIDC token the provenance is signed with\n", "      id-token: write # the OIDC token the provenance is signed with\n      packages: read # pull the images\n"), wantIn: "packages"},
 		{name: "no id-token: write for the attest-archives job", workflow: in("attest-archives", "      id-token: write # the OIDC token the provenance is signed with\n", ""), wantIn: "id-token"},
 		{name: "attestations: read for the attest-archives job", workflow: in("attest-archives", "      attestations: write # store the provenance in the repository\n", "      attestations: read # store the provenance in the repository\n"), wantIn: "attestations"},
-		{name: "an extra step in the attest-archives job", workflow: steps("attest-archives", beforeStep(t, attestArchivesSteps, "      - name: Check the archives against checksums.txt", "run: ./scripts/prepare.sh")), wantIn: "holds 4 steps, want exactly 3"},
-		{name: "a missing step in the attest-archives job", workflow: steps("attest-archives", withoutStep(t, attestArchivesSteps, "name: Check the archives against checksums.txt")), wantIn: "holds 2 steps, want exactly 3"},
-		{name: "the archives not downloaded", workflow: in("attest-archives", "{{commit actions/download-artifact}}", "{{commit actions/upload-artifact}}"), wantIn: "download-artifact"},
+		{name: "an extra step in the attest-archives job", workflow: steps("attest-archives", beforeStep(t, attestArchivesSteps, "      - name: Check the archives and the site bundle against checksums.txt", "run: ./scripts/prepare.sh")), wantIn: "holds 5 steps, want exactly 4"},
+		{name: "a missing step in the attest-archives job", workflow: steps("attest-archives", withoutStep(t, attestArchivesSteps, "name: Check the archives and the site bundle against checksums.txt")), wantIn: "holds 3 steps, want exactly 4"},
+		{name: "the archives not downloaded", workflow: in("attest-archives", "      - uses: {{pin actions/download-artifact}}\n        with:\n          name: archives\n", "      - uses: {{pin actions/upload-artifact}}\n        with:\n          name: archives\n"), wantIn: "download-artifact"},
 		{name: "the archives downloaded under another name", workflow: in("attest-archives", "          name: archives\n", "          name: dist\n"), wantIn: "name"},
-		{name: "the archives not checked against checksums.txt", workflow: in("attest-archives", "        run: sha256sum -c checksums.txt\n", "        run: sha256sum checksums.txt\n"), wantIn: "sha256sum -c checksums.txt"},
+		{name: "the archives not checked against checksums.txt", workflow: in("attest-archives", "          sha256sum -c checksums.txt\n", "          sha256sum checksums.txt\n"), wantIn: "want the check of the archives and the site bundle against checksums.txt: run is"},
 		{name: "the attest action pinned by tag", workflow: in("attest-archives", "{{commit actions/attest-build-provenance}}", "actions/attest-build-provenance@v4"), wantIn: "attest-build-provenance@v4"},
-		{name: "another action in place of the provenance attestation", workflow: steps("attest-archives", slices.Replace(slices.Clone(attestArchivesSteps), 2, 3, "      - uses: {{pin actions/attest}}\n")), wantIn: "attest-build-provenance"},
-		{name: "checksums.txt not attested", workflow: in("attest-archives", "            shift2eu_*.zip\n            checksums.txt\n", "            shift2eu_*.zip\n"), wantIn: "subject-path"},
+		{name: "another action in place of the provenance attestation", workflow: steps("attest-archives", slices.Replace(slices.Clone(attestArchivesSteps), 3, 4, "      - uses: {{pin actions/attest}}\n")), wantIn: "attest-build-provenance"},
+		{name: "checksums.txt not attested", workflow: in("attest-archives", "            shift2eu-site_*.tar.gz\n            checksums.txt\n", "            shift2eu-site_*.tar.gz\n"), wantIn: "subject-path"},
 		{name: "a bare shift2eu_* subject pattern", workflow: in("attest-archives", "            shift2eu_*.tar.gz\n", "            shift2eu_*\n"), wantIn: "subject-path"},
-		{name: "the archives attested by digest instead", workflow: in("attest-archives", "          subject-path: |\n            shift2eu_*.tar.gz\n            shift2eu_*.zip\n            checksums.txt\n", "          subject-digest: sha256:0000000000000000000000000000000000000000000000000000000000000000\n"), wantIn: `no "subject-path"`},
-		{name: "the archives not handed on by goreleaser", workflow: steps("goreleaser", withoutStep(t, goreleaserSteps, "actions/upload-artifact@")), wantIn: "holds 3 steps, want exactly 4"},
+		{name: "the archives attested by digest instead", workflow: in("attest-archives", "          subject-path: |\n            shift2eu_*.tar.gz\n            shift2eu_*.zip\n            shift2eu-site_*.tar.gz\n            checksums.txt\n", "          subject-digest: sha256:0000000000000000000000000000000000000000000000000000000000000000\n"), wantIn: `no "subject-path"`},
+		{name: "the archives not handed on by goreleaser", workflow: steps("goreleaser", withoutStep(t, goreleaserSteps, "actions/upload-artifact@")), wantIn: "holds 5 steps, want exactly 6"},
 		// What the artifact hands on and what attest-archives attests is the
 		// archives and checksums.txt. Nothing is copied into dist/ beside them:
 		// the bundled OpenAPI document the release used to publish is gone
@@ -1931,7 +2104,7 @@ func TestReleaseWorkflow(t *testing.T) {
 		{
 			name:     "the OpenAPI document put beside the archives again",
 			workflow: steps("goreleaser", beforeStep(t, goreleaserSteps, "      - uses: actions/upload-artifact@", "name: Put the OpenAPI document beside the archives\n        run: cp api/openapi.bundled.json dist/shift2eu-server_openapi.json")),
-			wantIn:   "holds 5 steps, want exactly 4",
+			wantIn:   "holds 7 steps, want exactly 6",
 		},
 		// The archives artifact is kept a week, so a failed attestation or
 		// publication is recovered by re-running the failed jobs; the SBOM
@@ -2044,6 +2217,100 @@ func TestReleaseWorkflow(t *testing.T) {
 `),
 			wantIn: "want the check of GitHub's latest release: run is",
 		},
+
+		// Every job is bounded by a timeout (ADR 0042), the site's two jobs
+		// included: a run whose step hangs is ended rather than left to GitHub's
+		// default, and every job's value is the one the ADR lists.
+		{name: "no timeout on the test job", workflow: in("test", "    timeout-minutes: 20\n", ""), wantIn: `holds no "timeout-minutes"`},
+		{name: "no timeout on the latest job", workflow: in("latest", "    timeout-minutes: 5\n", ""), wantIn: `holds no "timeout-minutes"`},
+		{name: "no timeout on the site job", workflow: in("site", "    timeout-minutes: 15\n", ""), wantIn: `jobs: site holds no "timeout-minutes"`},
+		{name: "no timeout on the site-browser job", workflow: in("site-browser", "    timeout-minutes: 30\n", ""), wantIn: `jobs: site-browser holds no "timeout-minutes"`},
+		{name: "no timeout on the goreleaser job", workflow: in("goreleaser", "    timeout-minutes: 15\n", ""), wantIn: `jobs: goreleaser holds no "timeout-minutes"`},
+		{name: "no timeout on the attest-archives job", workflow: in("attest-archives", "    timeout-minutes: 10\n", ""), wantIn: `jobs: attest-archives holds no "timeout-minutes"`},
+		{name: "no timeout on the publish job", workflow: in("publish", "    timeout-minutes: 10\n", ""), wantIn: `jobs: publish holds no "timeout-minutes"`},
+		{name: "no timeout on the verify-archives job", workflow: in("verify-archives", "    timeout-minutes: 10\n", ""), wantIn: `jobs: verify-archives holds no "timeout-minutes"`},
+		{name: "a longer timeout on the site browser", workflow: in("site-browser", "    timeout-minutes: 30\n", "    timeout-minutes: 60\n"), wantIn: `timeout-minutes is "60"`},
+		{name: "a shorter timeout on the site's bundle", workflow: in("site", "    timeout-minutes: 15\n", "    timeout-minutes: 5\n"), wantIn: `timeout-minutes is "5"`},
+		{name: "a timeout as an expression", workflow: in("publish", "    timeout-minutes: 10\n", "    timeout-minutes: ${{ vars.TIMEOUT }}\n"), wantIn: "timeout-minutes is"},
+
+		// The site's bundle is published by every release (PRD #297 milestone
+		// 3): the site job builds it at the tag and gives its digest as an
+		// output, the site-browser job smoke-tests that very bundle, goreleaser
+		// lists and uploads it beside the CLI's archives, attest-archives
+		// attests it, and publish waits for the smoke test, so a bundle that
+		// failed it is never published. Neither job holds a key, a secret or an
+		// OIDC token, and neither has a condition, an environment or a
+		// concurrency of its own.
+		{name: "no site job", workflow: release.withoutJob(t, "site"), wantIn: `no "site"`},
+		{name: "no site-browser job", workflow: release.withoutJob(t, "site-browser"), wantIn: `no "site-browser"`},
+		{name: "the site job on another runner", workflow: in("site", "    runs-on: ubuntu-latest\n", "    runs-on: ubuntu-24.04\n"), wantIn: "jobs: site: runs-on is"},
+		{name: "the site job not needing the tests", workflow: in("site", "    needs: test\n", "    needs: latest\n"), wantIn: "jobs: site: needs is"},
+		{name: "a job-level if on the site job", workflow: in("site", "    needs: test\n", "    needs: test\n    if: always()\n"), wantIn: `key "if"`},
+		{name: "an environment on the site job", workflow: in("site", "    needs: test\n", "    needs: test\n    environment: site\n"), wantIn: `key "environment"`},
+		{name: "a concurrency on the site job", workflow: in("site", "    needs: test\n", "    needs: test\n    concurrency: site-deploy\n"), wantIn: `key "concurrency"`},
+		{name: "packages: write for the site job", workflow: in("site", "      contents: read # check out the repository\n", "      contents: read # check out the repository\n      packages: write # push\n"), wantIn: `jobs: site: permissions holds the key "packages"`},
+		{name: "id-token: write for the site job", workflow: in("site", "      contents: read # check out the repository\n", "      contents: read # check out the repository\n      id-token: write # sign\n"), wantIn: `jobs: site: permissions holds the key "id-token"`},
+		{name: "no contents: read for the site job", workflow: in("site", "      contents: read # check out the repository\n", ""), wantIn: "jobs: site: permissions is empty"},
+		{name: "the site job without its digest output", workflow: in("site", "    outputs:\n      sha256: ${{ steps.digest.outputs.sha256 }}\n", ""), wantIn: `jobs: site holds no "outputs"`},
+		{name: "another site digest output", workflow: in("site", "      sha256: ${{ steps.digest.outputs.sha256 }}\n", "      sha256: ${{ steps.build.outputs.sha256 }}\n"), wantIn: "jobs: site: outputs: sha256 is"},
+		{name: "the site built with another target", workflow: in("site", "        run: make site\n", "        run: make test-browser\n"), wantIn: "make site"},
+		{name: "the site built without its version", workflow: in("site", "        env:\n          SITE_VERSION: ${{ github.ref_name }}\n", ""), wantIn: `no "env"`},
+		{name: "the site's version from an input", workflow: in("site", "          SITE_VERSION: ${{ github.ref_name }}\n", "          SITE_VERSION: ${{ inputs.version }}\n"), wantIn: "SITE_VERSION"},
+		{name: "the site artifact kept longer", workflow: in("site", "          retention-days: 7\n", "          retention-days: 90\n"), wantIn: "retention-days"},
+		{name: "the site artifact with a tolerated miss", workflow: in("site", "          if-no-files-found: error\n", "          if-no-files-found: warn\n"), wantIn: "if-no-files-found"},
+		{name: "the site artifact under another name", workflow: in("site", "          name: site\n", "          name: bundle\n"), wantIn: "name"},
+		{name: "the site artifact of a narrower pattern", workflow: in("site", "          path: bin/shift2eu-site_*.tar.gz\n", "          path: bin/site\n"), wantIn: "path"},
+		{name: "the site's digest without set -euo pipefail", workflow: in("site", "          set -euo pipefail\n", ""), wantIn: "set -euo pipefail"},
+		{name: "the site's digest of another file", workflow: in("site", `          sha256="$(sha256sum "bin/shift2eu-site_$TAG.tar.gz" | cut -d' ' -f1)"`+"\n", `          sha256="$(sha256sum "bin/site/index.html" | cut -d' ' -f1)"`+"\n"), wantIn: "sha256sum"},
+		{name: "an extra step in the site job", workflow: steps("site", beforeStep(t, siteSteps, "      - name: Build the site's bundle", "run: ./scripts/prepare.sh")), wantIn: "holds 6 steps, want exactly 5"},
+		{name: "a missing step in the site job", workflow: steps("site", withoutStep(t, siteSteps, "name: The bundle's digest")), wantIn: "holds 4 steps, want exactly 5"},
+		{name: "GITHUB_ENV in the site job", workflow: in("site", "        run: make site\n", "        run: make site && echo X=1 >> \"$GITHUB_ENV\"\n"), wantIn: "GITHUB_ENV"},
+		{name: "GOFLAGS in the site job", workflow: in("site", "        run: make site\n", "        run: make site && go env -w GOFLAGS=-x\n"), wantIn: "GOFLAGS"},
+		{name: "the site job's upload pinned by tag", workflow: in("site", "{{commit actions/upload-artifact}}", "actions/upload-artifact@v7"), wantIn: "upload-artifact@v7"},
+		{name: "the site job's checkout pinned by tag", workflow: in("site", "{{commit actions/checkout}}", "actions/checkout@v7"), wantIn: "checkout@v7"},
+
+		// The smoke test is of the very bundle the site job built: the artifact
+		// uploaded, checked against that job's digest and unpacked, and
+		// make test-browser pointed at it. No secret and no OIDC token.
+		{name: "the site-browser job on another runner", workflow: in("site-browser", "    runs-on: ubuntu-latest\n", "    runs-on: ubuntu-24.04\n"), wantIn: "jobs: site-browser: runs-on is"},
+		{name: "the site-browser job not needing the site job", workflow: in("site-browser", "    needs: site\n", "    needs: test\n"), wantIn: "jobs: site-browser: needs is"},
+		{name: "an environment on the site-browser job", workflow: in("site-browser", "    needs: site\n", "    needs: site\n    environment: site\n"), wantIn: `key "environment"`},
+		{name: "id-token: write for the site-browser job", workflow: in("site-browser", "      contents: read # check out the repository\n", "      contents: read # check out the repository\n      id-token: write # sign\n"), wantIn: `jobs: site-browser: permissions holds the key "id-token"`},
+		{name: "attestations: write for the site-browser job", workflow: in("site-browser", "      contents: read # check out the repository\n", "      contents: read # check out the repository\n      attestations: write # store it\n"), wantIn: `jobs: site-browser: permissions holds the key "attestations"`},
+		{name: "a secret in the site-browser job", workflow: in("site-browser", "        run: make test-browser TEST_BROWSER_BUNDLE=bin/release-bundle\n", "        env:\n          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}\n        run: make test-browser TEST_BROWSER_BUNDLE=bin/release-bundle\n"), wantIn: `holds the key "env"`},
+		{name: "the site-browser job testing a bundle it builds itself", workflow: in("site-browser", "        run: make test-browser TEST_BROWSER_BUNDLE=bin/release-bundle\n", "        run: make test-browser\n"), wantIn: "TEST_BROWSER_BUNDLE"},
+		{name: "the site-browser job testing the bundle make site keeps", workflow: in("site-browser", "TEST_BROWSER_BUNDLE=bin/release-bundle", "TEST_BROWSER_BUNDLE=bin/site"), wantIn: "TEST_BROWSER_BUNDLE"},
+		{name: "the site-browser job without the digest check", workflow: in("site-browser", "          printf '%s  %s\\n' \"$SITE_SHA256\" \"bin/shift2eu-site_$TAG.tar.gz\" | sha256sum -c -\n", ""), wantIn: "sha256sum -c -"},
+		{name: "the site-browser's digest from another job", workflow: in("site-browser", "          SITE_SHA256: ${{ needs.site.outputs.sha256 }}\n", "          SITE_SHA256: ${{ needs.goreleaser.outputs.sha256 }}\n"), wantIn: "needs.site.outputs.sha256"},
+		{name: "the site-browser's checkout keeping the token", workflow: in("site-browser", "          persist-credentials: false\n", "          persist-credentials: true\n"), wantIn: "persist-credentials"},
+		{name: "the bundle unpacked outside bin", workflow: in("site-browser", "          mkdir bin/release-bundle\n", "          mkdir release-bundle\n"), wantIn: "bin/release-bundle"},
+		{name: "an extra step in the site-browser job", workflow: steps("site-browser", beforeStep(t, siteBrowserSteps, "      - name: Check and unpack the bundle", "run: ./scripts/prepare.sh")), wantIn: "holds 6 steps, want exactly 5"},
+		{name: "a missing step in the site-browser job", workflow: steps("site-browser", withoutStep(t, siteBrowserSteps, "name: Check and unpack the bundle")), wantIn: "holds 4 steps, want exactly 5"},
+		{name: "a secret in the site-browser's check step", workflow: in("site-browser", "          TAG: ${{ github.ref_name }}\n", "          TAG: ${{ github.ref_name }}\n          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}\n"), wantIn: "env holds"},
+		{name: "the site-browser job's download pinned by tag", workflow: in("site-browser", "{{commit actions/download-artifact}}", "actions/download-artifact@v8"), wantIn: "download-artifact@v8"},
+
+		// goreleaser lists and uploads the bundle the site job built and the
+		// smoke test tested, bound to the site job's digest, and hands on the
+		// archives alone.
+		{name: "goreleaser not needing the site job", workflow: in("goreleaser", "    needs: [test, site]\n", "    needs: [test]\n"), wantIn: "jobs: goreleaser: needs is"},
+		{name: "the site bundle not downloaded by goreleaser", workflow: steps("goreleaser", withoutStep(t, goreleaserSteps, "name: site\n")), wantIn: "holds 5 steps, want exactly 6"},
+		{name: "the bundle's digest not checked before goreleaser", workflow: steps("goreleaser", withoutStep(t, goreleaserSteps, "name: Check the site bundle against the site job's digest")), wantIn: "holds 5 steps, want exactly 6"},
+		{name: "the site bundle downloaded after goreleaser", workflow: steps("goreleaser", swappedSteps(t, goreleaserSteps, "actions/download-artifact@", "goreleaser/goreleaser-action@")), wantIn: "jobs: goreleaser: steps: step 3"},
+		{name: "the goreleaser upload handing the bundle on", workflow: in("goreleaser", "            dist/checksums.txt\n", "            dist/checksums.txt\n            bin/shift2eu-site_*.tar.gz\n"), wantIn: "with: path"},
+		{name: "the bundle checked against another digest", workflow: in("goreleaser", "          SITE_SHA256: ${{ needs.site.outputs.sha256 }}\n", "          SITE_SHA256: ${{ needs.goreleaser.outputs.sha256 }}\n"), wantIn: "needs.site.outputs.sha256"},
+
+		// The bundle is attested beside the archives, bound to checksums.txt
+		// and to the site job's digest.
+		{name: "the attest-archives job not needing the site job", workflow: in("attest-archives", "    needs: [goreleaser, site]\n", "    needs: [goreleaser]\n"), wantIn: "jobs: attest-archives: needs is"},
+		{name: "the site bundle not downloaded by attest-archives", workflow: steps("attest-archives", withoutStep(t, attestArchivesSteps, "name: site\n")), wantIn: "holds 3 steps, want exactly 4"},
+		{name: "the bundle not held to checksums.txt", workflow: in("attest-archives", `          grep -qxF "$SITE_SHA256  shift2eu-site_$TAG.tar.gz" checksums.txt`+"\n", ""), wantIn: "grep -qxF"},
+		{name: "checksums.txt not held to one site bundle", workflow: in("attest-archives", `          test "$(grep -cF '  shift2eu-site_' checksums.txt)" = 1`+"\n", `          test "$(grep -cF '  shift2eu-site_' checksums.txt)" -ge 1`+"\n"), wantIn: "grep -cF"},
+		{name: "the site bundle's digest from another job", workflow: in("attest-archives", "          SITE_SHA256: ${{ needs.site.outputs.sha256 }}\n", "          SITE_SHA256: ${{ needs.goreleaser.outputs.sha256 }}\n"), wantIn: "needs.site.outputs.sha256"},
+		{name: "the site bundle not attested", workflow: in("attest-archives", "            shift2eu_*.zip\n            shift2eu-site_*.tar.gz\n", "            shift2eu_*.zip\n"), wantIn: "subject-path"},
+
+		// A bundle that failed the smoke test is never published: the release
+		// stays a draft.
+		{name: "the publish job not needing the smoke test", workflow: in("publish", "    needs: [test, goreleaser, attest-archives, latest, site-browser]\n", "    needs: [test, goreleaser, attest-archives, latest]\n"), wantIn: "jobs: publish: needs is"},
 
 		{name: "an empty document", workflow: "", wantIn: "release workflow"},
 	}
