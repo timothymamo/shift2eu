@@ -21,6 +21,17 @@ import (
 	"github.com/timothymamo/shift2eu/ci/auditpublish/internal/publish"
 )
 
+// recordedIssue is the body of an issue write, as the fake gh recorded it.
+type recordedIssue struct {
+	Title  string   `json:"title"`
+	Body   string   `json:"body"`
+	Labels []string `json:"labels"`
+}
+
+// modelToken returns a token the core's scan refuses, invented here: the shape
+// of a GitHub token, in a model field.
+func modelToken() string { return "ghp_" + strings.Repeat("z9Y8x7W6", 6) }
+
 // newFixtureGitleaks returns a scanner for the fake gitleaks.
 func newFixtureGitleaks(t *testing.T, fake *FakeGitleaks) *github.Gitleaks {
 	t.Helper()
@@ -145,6 +156,15 @@ func TestPublishWritesNothingWhenAScanRefuses(t *testing.T) {
 	uncommitted := fixtureResultDocument(fixtureFinding("G304", "low", "hardening"))
 	uncommitted["changes"] = map[string]any{"dependencies": []any{}, "narrative": "a revert of " + fixtureOtherCommitSHA}
 
+	tokenInNarrative := fixtureResultDocument()
+	tokenInNarrative["changes"] = map[string]any{"dependencies": []any{}, "narrative": "a narrative holding " + modelToken()}
+
+	runBurst := fixtureResultDocument()
+	runBurst["changes"] = map[string]any{
+		"dependencies": []any{},
+		"narrative":    "a revert of " + strings.Join(numberedRuns(github.MaxCommitRuns+1), ", "),
+	}
+
 	for _, tc := range []struct {
 		name string
 		// result is the model's result document, and extra the answers the scan
@@ -163,6 +183,8 @@ func TestPublishWritesNothingWhenAScanRefuses(t *testing.T) {
 				Body:     map[string]string{"message": "Not Found"},
 			}},
 		},
+		{name: "a token in a model field", result: tokenInNarrative},
+		{name: "more 40-hex runs than the cap", result: runBurst},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -303,8 +325,213 @@ func TestPublishStopsOnABrokenPreviousReport(t *testing.T) {
 	}
 }
 
+// TestPublishScansThePreviousReportsIssuesBeforeWriting pins the texts a run
+// inherits rather than renders: an issue's body holds a previous report's
+// finding, so that finding is scanned - gitleaks, the core's tokens and the
+// commit-run check - before the first write, and a hit leaves the repository
+// untouched and its branch unfetched.
+func TestPublishScansThePreviousReportsIssuesBeforeWriting(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name string
+		// scenario is the previous finding's scenario: the text an issue would
+		// carry into the repository unscanned.
+		scenario string
+		extra    []Route
+	}{
+		{name: "a gitleaks hit", scenario: "a scenario holding " + fakeGitleaksHit},
+		{name: "a token", scenario: "a scenario holding " + modelToken()},
+		{
+			name:     "a 40-hex run that is no commit",
+			scenario: "a revert of " + fixtureOtherCommitSHA,
+			extra: []Route{{
+				Method:   "GET",
+				Endpoint: commitRunEndpoint(fixtureOtherCommitSHA),
+				Status:   404,
+				Body:     map[string]string{"message": "Not Found"},
+			}},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			// The previous report holds one open public finding, which the run
+			// files an issue for, whose text is the case's.
+			finding := fixtureFinding("G301", "low", "hardening")
+			finding["scenario"] = tc.scenario
+
+			dir := fixtureReportsDir(t)
+			previous := renderFixtureReport(t, fixtureResult(t, finding), publish.PrivateNone, nil, "2026-12-01", "1")
+			writeFixtureReport(t, dir, previous)
+
+			routes := append(slices.Clone(tc.extra), publishRoutes()...)
+
+			fake := newFakeGH(t, routes...)
+			client := newFixtureClient(t, fake.Path)
+			cfg := publishConfig(t, client, newFixtureGitleaks(t, newFakeGitleaks(t)), fixtureResultFile(t), dir)
+
+			if _, err := github.Publish(t.Context(), cfg); !errors.Is(err, publish.ErrScanRefused) {
+				t.Fatalf("Publish = %v, want an error wrapping publish.ErrScanRefused", err)
+			}
+
+			calls := fake.Calls(t)
+
+			if writes := writesOf(calls); len(writes) != 0 {
+				t.Errorf("the refused run wrote %v, want nothing: every scan runs before the first write", writes)
+			}
+
+			for _, c := range calls {
+				if c.Endpoint == fixtureBranchEndpoint {
+					t.Errorf("the refused run looked up the report's branch, want the writes' phase never to start")
+				}
+			}
+		})
+	}
+}
+
+// TestPublishScansEveryTextItWouldWrite pins the set of texts the scanner reads:
+// the report's body, the pull request's title and body, the commit message and
+// each issue's title and body, and nothing else. The texts are read back from
+// the writes and from the scanner's record, so a text added to one side alone
+// fails.
+func TestPublishScansEveryTextItWouldWrite(t *testing.T) {
+	t.Parallel()
+
+	// A previous report of two public findings, neither of them filed: the run
+	// plans two issues beside the report and its pull request.
+	result := fixtureResult(t,
+		fixtureFinding("G301", "low", "hardening"),
+		fixtureFinding("G302", "informational", "hardening"),
+	)
+
+	dir := fixtureReportsDir(t)
+	writeFixtureReport(t, dir, renderFixtureReport(t, result, publish.PrivateNone, nil, "2026-12-01", "1"))
+
+	fake := newFakeGH(t, publishRoutes()...)
+	client := newFixtureClient(t, fake.Path)
+	scanner := newFakeGitleaks(t)
+	cfg := publishConfig(t, client, newFixtureGitleaks(t, scanner), fixtureResultFile(t), dir)
+
+	if _, err := github.Publish(t.Context(), cfg); err != nil {
+		t.Fatalf("Publish = %v, want no error", err)
+	}
+
+	calls := fake.Calls(t)
+
+	blobs := recordedBodies[recordedBlob](t, calls, "POST", fixtureBlobsEndpoint)
+	pulls := recordedBodies[recordedPull](t, calls, "POST", fixturePullsEndpoint)
+	commits := recordedBodies[recordedCommit](t, calls, "POST", fixtureCommitsEndpoint)
+	issues := recordedBodies[recordedIssue](t, calls, "POST", fixtureIssuesEndpoint)
+
+	if len(blobs) != 1 || len(pulls) != 1 || len(commits) != 1 || len(issues) != 2 {
+		t.Fatalf("the run wrote %d blob(s), %d pull(s), %d commit(s) and %d issue(s), want 1, 1, 1 and 2",
+			len(blobs), len(pulls), len(commits), len(issues))
+	}
+
+	want := []string{blobs[0].Content, pulls[0].Title, pulls[0].Body, commits[0].Message}
+
+	for _, issue := range issues {
+		want = append(want, issue.Title, issue.Body)
+	}
+
+	var got []string
+
+	for _, call := range scanner.Calls(t) {
+		got = append(got, call.Stdin)
+	}
+
+	slices.Sort(want)
+	slices.Sort(got)
+
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Errorf("the texts scanned (-want +got):\n%s", diff)
+	}
+}
+
+// TestPublishStopsAtTheFirstRefusedIssue pins the issue writes' place: the
+// report is published first, and an issue the API refuses is GitHub's failure
+// with no later issue filed.
+func TestPublishStopsAtTheFirstRefusedIssue(t *testing.T) {
+	t.Parallel()
+
+	result := fixtureResult(t,
+		fixtureFinding("G301", "low", "hardening"),
+		fixtureFinding("G302", "informational", "hardening"),
+	)
+
+	dir := fixtureReportsDir(t)
+	writeFixtureReport(t, dir, renderFixtureReport(t, result, publish.PrivateNone, nil, "2026-12-01", "1"))
+
+	routes := []Route{
+		{Method: "GET", Endpoint: fixtureReleaseEndpoint, Status: 200, Body: map[string]string{"tag_name": fixtureTag}},
+		{Method: "GET", Endpoint: fixtureIssuesQuery + "page=1", Status: 200, Body: []any{}},
+		{Method: "POST", Endpoint: fixtureIssuesEndpoint, Status: 422, Body: map[string]string{"message": "the issue was refused"}},
+	}
+	routes = append(routes, reportRoutes()...)
+
+	fake := newFakeGH(t, routes...)
+	client := newFixtureClient(t, fake.Path)
+	cfg := publishConfig(t, client, newFixtureGitleaks(t, newFakeGitleaks(t)), fixtureResultFile(t), dir)
+
+	if _, err := github.Publish(t.Context(), cfg); !errors.Is(err, publish.ErrGitHub) {
+		t.Fatalf("Publish with a refused issue = %v, want an error wrapping publish.ErrGitHub", err)
+	}
+
+	calls := fake.Calls(t)
+
+	var filed int
+
+	for _, c := range calls {
+		if c.Method == "POST" && c.Endpoint == fixtureIssuesEndpoint {
+			filed++
+		}
+	}
+
+	if filed != 1 {
+		t.Errorf("the run filed %d issue(s), want exactly 1: the first refused issue stops the run", filed)
+	}
+
+	if writes := writesOf(calls); !slices.Contains(writes, fixturePullsEndpoint) {
+		t.Errorf("the run's writes are %v, want the report's pull request among them: the report is published first", writes)
+	}
+}
+
+// TestPublishFilesNoIssueForItsOwnFindings pins the report being opened: its own
+// public findings are counted in the run's line and get no issue, since an issue
+// is for a report already merged on main.
+func TestPublishFilesNoIssueForItsOwnFindings(t *testing.T) {
+	t.Parallel()
+
+	fake := newFakeGH(t, publishRoutes()...)
+	client := newFixtureClient(t, fake.Path)
+	cfg := publishConfig(t, client, newFixtureGitleaks(t, newFakeGitleaks(t)),
+		fixtureResultFile(t, fixtureFinding("G304", "low", "hardening")), fixtureReportsDir(t))
+
+	published, err := github.Publish(t.Context(), cfg)
+	if err != nil {
+		t.Fatalf("Publish = %v, want no error", err)
+	}
+
+	if published.Public != 1 {
+		t.Errorf("the run's public count is %d, want 1: the report's own public total", published.Public)
+	}
+
+	outcome := publish.OutcomeOf(nil).WithCounts(published.Public, published.Private)
+	if want := "audit published: public findings 1, private findings: none"; outcome.Summary() != want {
+		t.Errorf("the run's line is %q, want %q", outcome.Summary(), want)
+	}
+
+	for _, c := range fake.Calls(t) {
+		if c.Method == "POST" && c.Endpoint == fixtureIssuesEndpoint {
+			t.Errorf("the run filed an issue for its own report's finding, want none: an issue is for a merged report")
+		}
+	}
+}
+
 // TestPublishRefusesAConfigItCannotRun pins the run's own refusals: no client,
-// no scanner, and a run that is not the client's.
+// no scanner, and a run that is not the client's in its repository, its ID or
+// its date.
 func TestPublishRefusesAConfigItCannotRun(t *testing.T) {
 	t.Parallel()
 
@@ -321,6 +548,32 @@ func TestPublishRefusesAConfigItCannotRun(t *testing.T) {
 				t.Helper()
 
 				run, err := publish.NewRun(fixtureServerURL, "example/other", fixtureRunID, fixtureDate)
+				if err != nil {
+					t.Fatalf("NewRun: %v", err)
+				}
+
+				cfg.Run = run
+			},
+		},
+		{
+			name: "another run's ID",
+			breakIt: func(t *testing.T, cfg *github.PublishConfig) {
+				t.Helper()
+
+				run, err := publish.NewRun(fixtureServerURL, fixtureRepository, "1234567891", fixtureDate)
+				if err != nil {
+					t.Fatalf("NewRun: %v", err)
+				}
+
+				cfg.Run = run
+			},
+		},
+		{
+			name: "another run's date",
+			breakIt: func(t *testing.T, cfg *github.PublishConfig) {
+				t.Helper()
+
+				run, err := publish.NewRun(fixtureServerURL, fixtureRepository, fixtureRunID, "2026-12-04")
 				if err != nil {
 					t.Fatalf("NewRun: %v", err)
 				}

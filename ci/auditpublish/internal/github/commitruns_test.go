@@ -112,26 +112,51 @@ func TestCheckCommitRunsLooksUpEveryDistinctRunOnce(t *testing.T) {
 }
 
 // TestCheckCommitRunsRefusesARunThatIsNoCommit pins the check's verdict: a run
-// that is no commit of the repository refuses the publication, and the refusal
-// names no run.
+// that is no commit of the repository refuses the publication - a 404, and a
+// 200 whose answer names another commit than the one looked up - and the
+// refusal names no run.
 func TestCheckCommitRunsRefusesARunThatIsNoCommit(t *testing.T) {
 	t.Parallel()
 
-	fake := newFakeGH(t, Route{
-		Method:   "GET",
-		Endpoint: commitRunEndpoint(fixtureOtherCommitSHA),
-		Status:   404,
-		Body:     map[string]string{"message": "Not Found"},
-	})
-	client := newFixtureClient(t, fake.Path)
+	for _, tc := range []struct {
+		name string
+		// answer is the lookup's answer: one that is no commit of the run.
+		answer Route
+	}{
+		{
+			name: "a 404",
+			answer: Route{
+				Method:   "GET",
+				Endpoint: commitRunEndpoint(fixtureOtherCommitSHA),
+				Status:   404,
+				Body:     map[string]string{"message": "Not Found"},
+			},
+		},
+		{
+			name: "another commit's answer",
+			answer: Route{
+				Method:   "GET",
+				Endpoint: commitRunEndpoint(fixtureOtherCommitSHA),
+				Status:   200,
+				Body:     map[string]string{"sha": fixtureSHA},
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 
-	err := github.CheckCommitRuns(t.Context(), client, []string{"a commit " + fixtureOtherCommitSHA})
-	if !errors.Is(err, publish.ErrScanRefused) {
-		t.Fatalf("CheckCommitRuns of a run that is no commit = %v, want an error wrapping publish.ErrScanRefused", err)
-	}
+			fake := newFakeGH(t, tc.answer)
+			client := newFixtureClient(t, fake.Path)
 
-	if strings.Contains(err.Error(), fixtureOtherCommitSHA) {
-		t.Errorf("the error names the run: %v", err)
+			err := github.CheckCommitRuns(t.Context(), client, []string{"a commit " + fixtureOtherCommitSHA})
+			if !errors.Is(err, publish.ErrScanRefused) {
+				t.Fatalf("CheckCommitRuns of a run that is no commit = %v, want an error wrapping publish.ErrScanRefused", err)
+			}
+
+			if strings.Contains(err.Error(), fixtureOtherCommitSHA) {
+				t.Errorf("the error names the run: %v", err)
+			}
+		})
 	}
 }
 

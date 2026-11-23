@@ -85,14 +85,28 @@ func auditCommitAnswer() map[string]any {
 	return map[string]any{"sha": fixtureCommit, "tree": map[string]string{"sha": fixtureBaseTreeSHA}}
 }
 
-// compareAnswer is the compare endpoint's answer for the given files.
+// compareAnswer is the compare endpoint's answer for the given files: the
+// report commit one commit ahead of the audited commit, on it, as a
+// publication requires.
 func compareAnswer(files ...map[string]string) map[string]any {
 	list := make([]any, 0, len(files))
 	for _, f := range files {
 		list = append(list, f)
 	}
 
-	return map[string]any{"files": list}
+	return map[string]any{
+		"status":            "ahead",
+		"ahead_by":          1,
+		"behind_by":         0,
+		"merge_base_commit": map[string]string{"sha": fixtureCommit},
+		"files":             list,
+	}
+}
+
+// reportCompareAnswer is the happy path's compare answer: exactly the run's
+// report added.
+func reportCompareAnswer() map[string]any {
+	return compareAnswer(map[string]string{"filename": fixtureReportPath, "status": "added"})
 }
 
 // reportRoutes returns the happy path's answers: no branch yet, the audited
@@ -109,7 +123,7 @@ func reportRoutes() []Route {
 			Method:   "GET",
 			Endpoint: fixtureRepoPrefix + "/compare/" + fixtureCommit + "..." + fixtureReportCommitSHA,
 			Status:   200,
-			Body:     compareAnswer(map[string]string{"filename": fixtureReportPath, "status": "added"}),
+			Body:     reportCompareAnswer(),
 		},
 		{
 			Method:   "POST",
@@ -414,6 +428,127 @@ func TestPublishReportRefusesACommitThatIsNotTheReport(t *testing.T) {
 	}
 }
 
+// TestPublishReportRefusesAComparisonThatIsNotTheCommitOnTop pins the compare's
+// other half: the report commit must be exactly one commit ahead of the audited
+// commit, on it, or no ref and no pull request follow. The files alone are not
+// enough: the diff is the net one from the merge base.
+func TestPublishReportRefusesAComparisonThatIsNotTheCommitOnTop(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name string
+		// answer changes the happy path's comparison so that it is no longer
+		// one commit on the audited one.
+		answer func() map[string]any
+	}{
+		{
+			name: "a status that is not ahead",
+			answer: func() map[string]any {
+				a := reportCompareAnswer()
+				a["status"] = "diverged"
+
+				return a
+			},
+		},
+		{
+			name: "two commits ahead",
+			answer: func() map[string]any {
+				a := reportCompareAnswer()
+				a["ahead_by"] = 2
+
+				return a
+			},
+		},
+		{
+			name: "one commit behind",
+			answer: func() map[string]any {
+				a := reportCompareAnswer()
+				a["behind_by"] = 1
+
+				return a
+			},
+		},
+		{
+			name: "another merge base",
+			answer: func() map[string]any {
+				a := reportCompareAnswer()
+				a["merge_base_commit"] = map[string]string{"sha": fixtureOtherCommitSHA}
+
+				return a
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			routes := reportRoutes()
+			for i, r := range routes {
+				if r.Method == "GET" && strings.Contains(r.Endpoint, "/compare/") {
+					routes[i].Body = tc.answer()
+				}
+			}
+
+			fake := newFakeGH(t, routes...)
+			client := newFixtureClient(t, fake.Path)
+
+			err := github.PublishReport(t.Context(), client, fixturePlan(t))
+			if !errors.Is(err, github.ErrReportDiff) {
+				t.Fatalf("PublishReport with a comparison of %s = %v, want an error wrapping ErrReportDiff", tc.name, err)
+			}
+
+			if code := publish.OutcomeOf(err).Code(); code != 1 {
+				t.Errorf("the outcome is %d, want 1: a refused diff is a failed publish", code)
+			}
+
+			for _, c := range fake.Calls(t) {
+				if c.Method == "POST" && (c.Endpoint == fixtureRefsEndpoint || c.Endpoint == fixturePullsEndpoint) {
+					t.Errorf("the run made %s %s, want no ref and no pull request after a refused compare", c.Method, c.Endpoint)
+				}
+			}
+		})
+	}
+}
+
+// TestPublishReportRefusesAPlanThatIsNotTheRuns pins the plan's path and
+// branch: the plan must be this run's, checked before gh runs. An empty branch
+// is no exception, since the report's branch is the run's alone.
+func TestPublishReportRefusesAPlanThatIsNotTheRuns(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name string
+		// change makes the plan one PublishReport must refuse.
+		change func(plan *github.ReportPlan)
+	}{
+		{name: "an empty branch", change: func(plan *github.ReportPlan) { plan.Templates.Branch = "" }},
+		{
+			name: "another branch",
+			change: func(plan *github.ReportPlan) {
+				plan.Templates.Branch = "security-audit/2026-12-04-" + fixtureRunID
+			},
+		},
+		{name: "another path", change: func(plan *github.ReportPlan) { plan.Report.Path = "docs/security/audits/other.md" }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			fake := newFakeGH(t)
+			client := newFixtureClient(t, fake.Path)
+
+			plan := fixturePlan(t)
+			tc.change(&plan)
+
+			if err := github.PublishReport(t.Context(), client, plan); !errors.Is(err, github.ErrEndpointRefused) {
+				t.Fatalf("PublishReport with %s = %v, want an error wrapping ErrEndpointRefused", tc.name, err)
+			}
+
+			if calls := fake.Calls(t); len(calls) != 0 {
+				t.Errorf("the refused plan made %d call(s), want none: the plan is checked before gh runs", len(calls))
+			}
+		})
+	}
+}
+
 // TestPublishReportStopsAtTheFirstRefusedWrite pins every write: a 422 through
 // the write helper is GitHub's failure, and no later write is made.
 func TestPublishReportStopsAtTheFirstRefusedWrite(t *testing.T) {
@@ -461,30 +596,44 @@ func TestPublishReportNeverRetriesAWrite(t *testing.T) {
 		routeDelay  = 10 * time.Second
 	)
 
-	routes := reportRoutes()
-	for i, r := range routes {
-		if r.Method == "POST" && r.Endpoint == fixtureBlobsEndpoint {
-			routes[i].Delay = routeDelay
-		}
-	}
+	for _, tc := range []struct {
+		name     string
+		endpoint string
+		// want are the writes made up to and including the timed-out one.
+		want []string
+	}{
+		{name: "the blob", endpoint: fixtureBlobsEndpoint, want: []string{fixtureBlobsEndpoint}},
+		{name: "the ref", endpoint: fixtureRefsEndpoint, want: reportWrites[:4]},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 
-	fake := newFakeGH(t, routes...)
-	client := newTimeoutClient(t, fake.Path, callTimeout)
+			routes := reportRoutes()
+			for i, r := range routes {
+				if r.Method == "POST" && r.Endpoint == tc.endpoint {
+					routes[i].Delay = routeDelay
+				}
+			}
 
-	err := github.PublishReport(t.Context(), client, fixturePlan(t))
-	if !errors.Is(err, publish.ErrGitHub) {
-		t.Fatalf("PublishReport with a write past its deadline = %v, want an error wrapping publish.ErrGitHub", err)
-	}
+			fake := newFakeGH(t, routes...)
+			client := newTimeoutClient(t, fake.Path, callTimeout)
 
-	want := []string{fixtureBlobsEndpoint}
-	if diff := cmp.Diff(want, writesOf(fake.Calls(t))); diff != "" {
-		t.Errorf("the writes made (-want +got):\n%s", diff)
+			err := github.PublishReport(t.Context(), client, fixturePlan(t))
+			if !errors.Is(err, publish.ErrGitHub) {
+				t.Fatalf("PublishReport with a write past its deadline = %v, want an error wrapping publish.ErrGitHub", err)
+			}
+
+			if diff := cmp.Diff(tc.want, writesOf(fake.Calls(t))); diff != "" {
+				t.Errorf("the writes made (-want +got):\n%s", diff)
+			}
+		})
 	}
 }
 
 // TestPublishReportRefusesAnAnswerWithoutItsSha pins the binding's other side:
-// an answer whose sha (or tree.sha) is missing or is no 40-hex value is
-// GitHub's failure, and the next write is never made.
+// an answer whose sha (or tree.sha) is missing, is no 40-hex value or names
+// another commit than the audited one is GitHub's failure, and the next write
+// is never made.
 func TestPublishReportRefusesAnAnswerWithoutItsSha(t *testing.T) {
 	t.Parallel()
 
@@ -499,6 +648,18 @@ func TestPublishReportRefusesAnAnswerWithoutItsSha(t *testing.T) {
 				for i, r := range routes {
 					if r.Method == "GET" && r.Endpoint == fixtureCommitEndpoint {
 						routes[i].Body = map[string]any{"sha": fixtureCommit}
+					}
+				}
+
+				return routes
+			},
+		},
+		{
+			name: "the audited commit's answer naming another commit",
+			breakIt: func(routes []Route) []Route {
+				for i, r := range routes {
+					if r.Method == "GET" && r.Endpoint == fixtureCommitEndpoint {
+						routes[i].Body = map[string]any{"sha": fixtureOtherCommitSHA, "tree": map[string]string{"sha": fixtureBaseTreeSHA}}
 					}
 				}
 

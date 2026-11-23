@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/go-cmp/cmp"
 
@@ -360,6 +361,35 @@ func TestCreateIssueFilesExactlyTitleBodyAndLabel(t *testing.T) {
 
 		if calls := fake.Calls(t); len(calls) != 1 {
 			t.Errorf("the refused issue made %d call(s), want exactly 1: a write is never retried", len(calls))
+		}
+	})
+
+	t.Run("an issue past its deadline", func(t *testing.T) {
+		t.Parallel()
+
+		// callTimeout is generous for a race-built fake gh, which is slow to start
+		// under the detector; routeDelay is well past it, so the write the call
+		// gives up on is one the fake has already recorded.
+		const (
+			callTimeout = 2 * time.Second
+			routeDelay  = 10 * time.Second
+		)
+
+		fake := newFakeGH(t, Route{
+			Method:   "POST",
+			Endpoint: fixtureIssuesEndpoint,
+			Status:   201,
+			Body:     map[string]any{"number": 1},
+			Delay:    routeDelay,
+		})
+		client := newTimeoutClient(t, fake.Path, callTimeout)
+
+		if err := github.CreateIssue(t.Context(), client, issue); !errors.Is(err, publish.ErrGitHub) {
+			t.Fatalf("CreateIssue past its deadline = %v, want an error wrapping publish.ErrGitHub", err)
+		}
+
+		if calls := fake.Calls(t); len(calls) != 1 {
+			t.Errorf("the timed-out issue made %d call(s), want exactly 1: a write is never retried", len(calls))
 		}
 	})
 }

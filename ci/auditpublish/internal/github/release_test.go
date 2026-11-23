@@ -149,6 +149,35 @@ func TestCheckImageDigest(t *testing.T) {
 	wrongPayload := attestation(t, fixtureStatement(fixtureDigestHex(), "refs/tags/"+fixtureTag, fixtureWorkflowRepository(), "https://slsa.dev/provenance/v1"))
 	wrongPayload["bundle"].(map[string]any)["dsseEnvelope"].(map[string]any)["payload"] = "***not-base64***"
 
+	// statementField returns statement with the field at the end of keys set to
+	// value: the statement a case makes the check refuse.
+	statementField := func(statement map[string]any, value any, keys ...string) map[string]any {
+		holder := statement
+
+		for _, key := range keys[:len(keys)-1] {
+			holder = holder[key].(map[string]any)
+		}
+
+		holder[keys[len(keys)-1]] = value
+
+		return statement
+	}
+
+	// anotherWorkflow is a provenance attestation of the digest and the tag,
+	// named by a workflow other than the release's.
+	anotherWorkflow := attestation(t, statementField(
+		fixtureStatement(fixtureDigestHex(), "refs/tags/"+fixtureTag, fixtureWorkflowRepository(), "https://slsa.dev/provenance/v1"),
+		".github/workflows/other.yml", "predicate", "buildDefinition", "externalParameters", "workflow", "path"))
+
+	// notV1 is a statement of another in-toto version, otherwise matching.
+	notV1 := attestation(t, statementField(
+		fixtureStatement(fixtureDigestHex(), "refs/tags/"+fixtureTag, fixtureWorkflowRepository(), "https://slsa.dev/provenance/v1"),
+		"https://in-toto.io/Statement/v0.1", "_type"))
+
+	// anotherPayloadType is a valid statement in an envelope of another type.
+	anotherPayloadType := attestation(t, fixtureStatement(fixtureDigestHex(), "refs/tags/"+fixtureTag, fixtureWorkflowRepository(), "https://slsa.dev/provenance/v1"))
+	anotherPayloadType["bundle"].(map[string]any)["dsseEnvelope"].(map[string]any)["payloadType"] = "application/vnd.in-toto+json; version=1"
+
 	for _, tc := range []struct {
 		name   string
 		digest string
@@ -201,6 +230,27 @@ func TestCheckImageDigest(t *testing.T) {
 			)}},
 			want:  publish.ErrResultInvalid,
 			calls: 1,
+		},
+		{
+			name:   "another workflow path",
+			digest: fixtureDigest,
+			routes: []Route{{Method: "GET", Endpoint: fixtureAttestationsEndpoint, Status: 200, Body: attestationListing(anotherWorkflow)}},
+			want:   publish.ErrResultInvalid,
+			calls:  1,
+		},
+		{
+			name:   "a statement that is not v1",
+			digest: fixtureDigest,
+			routes: []Route{{Method: "GET", Endpoint: fixtureAttestationsEndpoint, Status: 200, Body: attestationListing(notV1)}},
+			want:   publish.ErrResultInvalid,
+			calls:  1,
+		},
+		{
+			name:   "another DSSE payload type",
+			digest: fixtureDigest,
+			routes: []Route{{Method: "GET", Endpoint: fixtureAttestationsEndpoint, Status: 200, Body: attestationListing(anotherPayloadType)}},
+			want:   publish.ErrResultInvalid,
+			calls:  1,
 		},
 		{
 			name:   "another predicate type",

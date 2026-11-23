@@ -234,6 +234,134 @@ func TestLoadPreviousRefusesANewestReportItCannotRead(t *testing.T) {
 	}
 }
 
+// writeResultFile writes the fixture result document into dir and returns its
+// path: a result file a run may read.
+func writeResultFile(t *testing.T, dir string) string {
+	t.Helper()
+
+	path := filepath.Join(dir, "result.json")
+	if err := os.WriteFile(path, fixtureResultJSON(t), 0o600); err != nil {
+		t.Fatalf("write the result file %s: %v", path, err)
+	}
+
+	return path
+}
+
+// TestLoadResultReadsTheModelResult pins the decrypted result's reading: an
+// absolute, clean path to one regular file under the cap, parsed with the
+// audited commit; a path outside those rules is no configuration, and a file
+// outside them is no result.
+func TestLoadResultReadsTheModelResult(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name string
+		// path builds the path LoadResult reads, and want the class the error
+		// must wrap, nil for the file a run reads.
+		path func(t *testing.T) string
+		want error
+	}{
+		{
+			name: "the result file",
+			path: func(t *testing.T) string {
+				t.Helper()
+
+				return writeResultFile(t, t.TempDir())
+			},
+		},
+		{name: "no path at all", path: func(*testing.T) string { return "" }, want: publish.ErrConfig},
+		{name: "a relative path", path: func(*testing.T) string { return "result.json" }, want: publish.ErrConfig},
+		{name: "an unclean path", path: func(*testing.T) string { return "/tmp/../result.json" }, want: publish.ErrConfig},
+		{
+			name: "a symbolic link",
+			path: func(t *testing.T) string {
+				t.Helper()
+
+				dir := t.TempDir()
+				target := writeResultFile(t, dir)
+				link := filepath.Join(dir, "link.json")
+
+				if err := os.Symlink(target, link); err != nil {
+					t.Fatalf("link the result file: %v", err)
+				}
+
+				return link
+			},
+			want: publish.ErrResultInvalid,
+		},
+		{
+			name: "a directory",
+			path: func(t *testing.T) string {
+				t.Helper()
+
+				dir := t.TempDir()
+				if err := os.Mkdir(filepath.Join(dir, "result.json"), 0o700); err != nil {
+					t.Fatalf("make the directory: %v", err)
+				}
+
+				return filepath.Join(dir, "result.json")
+			},
+			want: publish.ErrResultInvalid,
+		},
+		{
+			name: "a missing file",
+			path: func(t *testing.T) string {
+				t.Helper()
+
+				return filepath.Join(t.TempDir(), "no-such-result.json")
+			},
+			want: publish.ErrResultInvalid,
+		},
+		{
+			name: "a file over the cap",
+			path: func(t *testing.T) string {
+				t.Helper()
+
+				path := filepath.Join(t.TempDir(), "result.json")
+
+				f, err := os.Create(path)
+				if err != nil {
+					t.Fatalf("create %s: %v", path, err)
+				}
+
+				if err := f.Truncate(publish.MaxResultBytes + 1); err != nil {
+					t.Fatalf("truncate %s: %v", path, err)
+				}
+
+				if err := f.Close(); err != nil {
+					t.Fatalf("close %s: %v", path, err)
+				}
+
+				return path
+			},
+			want: publish.ErrResultInvalid,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			path := tc.path(t)
+
+			result, err := github.LoadResult(path, fixtureCommit)
+			if tc.want != nil {
+				if !errors.Is(err, tc.want) {
+					t.Fatalf("LoadResult(%q) = %+v, %v, want an error wrapping %v", path, result, err, tc.want)
+				}
+
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("LoadResult(%q) = %v, want no error", path, err)
+			}
+
+			if result.Commit != fixtureCommit || result.ReleaseTag != fixtureTag {
+				t.Errorf("LoadResult(%q) read %q of %q, want %q of %q", path, result.Commit, result.ReleaseTag, fixtureCommit, fixtureTag)
+			}
+		})
+	}
+}
+
 // TestLoadPreviousRefusesADirItCannotRead pins the directory: it must be an
 // absolute, clean, existing directory, and anything else is no configuration.
 func TestLoadPreviousRefusesADirItCannotRead(t *testing.T) {

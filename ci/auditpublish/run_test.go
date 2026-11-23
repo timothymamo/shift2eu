@@ -783,6 +783,83 @@ func TestRunFailsClosedOnASummaryItCannotUse(t *testing.T) {
 	}
 }
 
+// TestRunPublishAndImageFailClosedOnASummaryTheyCannotUse pins the report
+// subcommands' half of the summary's fail-closed rule: a step summary the run
+// cannot append to refuses the run before the subcommand starts, so a run that
+// would have opened a pull request or filed an issue makes no gh call at all.
+func TestRunPublishAndImageFailClosedOnASummaryTheyCannotUse(t *testing.T) {
+	t.Parallel()
+
+	for _, summary := range []struct {
+		name string
+		// unusable changes env's GITHUB_STEP_SUMMARY to one the run cannot
+		// append a line to.
+		unusable func(t *testing.T, env map[string]string)
+	}{
+		{
+			name:     "an unset summary",
+			unusable: func(_ *testing.T, env map[string]string) { delete(env, "GITHUB_STEP_SUMMARY") },
+		},
+		{
+			name: "a summary that cannot be opened",
+			unusable: func(t *testing.T, env map[string]string) {
+				t.Helper()
+
+				env["GITHUB_STEP_SUMMARY"] = t.TempDir()
+			},
+		},
+	} {
+		for _, tc := range []struct {
+			name string
+			// args builds the command line, and answers are the fake gh's: the
+			// answers a run with a usable summary would read and write.
+			args    func(ghPath, gitleaksPath, resultPath, reportsDir string) []string
+			answers []fakeAnswer
+		}{
+			{
+				name:    "the image subcommand",
+				args:    func(ghPath, _, resultPath, _ string) []string { return imageArgs(ghPath, resultPath) },
+				answers: imageAnswers(t),
+			},
+			{name: "the publish subcommand", args: publishArgs, answers: publishAnswers()},
+		} {
+			t.Run(summary.name+" and "+tc.name, func(t *testing.T) {
+				t.Parallel()
+
+				fake := newRoutedFakeGH(t, tc.answers...)
+				env := stepEnvironment(t, writeSummary(t))
+				summary.unusable(t, env)
+
+				tempDir := t.TempDir()
+				args := withTempDir(tc.args(fake.Path, newFakeGitleaks(t), writeResult(t), t.TempDir()), tempDir)
+
+				lookup := &environ{values: env}
+
+				var stdout, stderr bytes.Buffer
+
+				code := run(t.Context(), args, lookup.lookup, fixedClock, &stdout, &stderr)
+
+				if code != codeConfigInvalid {
+					t.Errorf("the run's exit code is %d, want %d: %s\nstdout: %s\nstderr: %s",
+						code, codeConfigInvalid, lineConfigInvalid, stdout.String(), stderr.String())
+				}
+
+				if want := lineConfigInvalid + "\n"; stdout.String() != want {
+					t.Errorf("the run's stdout is %q, want exactly %q: the run prints its one line and nothing else", stdout.String(), want)
+				}
+
+				if stderr.String() != "" {
+					t.Errorf("the run's stderr is %q, want nothing: an unusable summary is no usage error", stderr.String())
+				}
+
+				if calls := fake.Calls(t); len(calls) != 0 {
+					t.Errorf("the run made %d gh call(s) before refusing its summary, want none: the subcommand never starts", len(calls))
+				}
+			})
+		}
+	}
+}
+
 // TestFakeGHServesTheIncludeOutput pins the fake group N runs against: it writes
 // --include's status line, headers, blank line and body, exits 0 on a 2xx
 // status and 1 otherwise, and records the call.
@@ -888,12 +965,46 @@ func resultDocument() map[string]any {
 	}
 }
 
-// writeResult writes the result document to a fresh temporary directory and
+// resultDocumentWith returns the result document with findings.
+func resultDocumentWith(findings ...map[string]any) map[string]any {
+	doc := resultDocument()
+
+	list := make([]any, 0, len(findings))
+	for _, f := range findings {
+		list = append(list, f)
+	}
+
+	doc["findings"] = list
+
+	return doc
+}
+
+// publicFinding returns one confirmed public finding of the tree review: a low
+// one of a public category, the shape the result schema takes.
+func publicFinding() map[string]any {
+	return map[string]any{
+		"check":     "tree-review",
+		"rule":      "G304",
+		"file":      "internal/cli/run.go",
+		"line":      12,
+		"sink":      "os.Open",
+		"severity":  "low",
+		"confirmed": true,
+		"category":  "hardening",
+		"private":   false,
+		"scenario":  "the scenario of G304",
+		"evidence":  "the evidence of G304",
+		"fix":       "the fix of G304",
+		"dismissal": "",
+	}
+}
+
+// writeResultOf writes the result document to a fresh temporary directory and
 // returns its path.
-func writeResult(t *testing.T) string {
+func writeResultOf(t *testing.T, document map[string]any) string {
 	t.Helper()
 
-	body, err := json.Marshal(resultDocument())
+	body, err := json.Marshal(document)
 	if err != nil {
 		t.Fatalf("marshal the result document: %v", err)
 	}
@@ -904,6 +1015,14 @@ func writeResult(t *testing.T) string {
 	}
 
 	return path
+}
+
+// writeResult writes the result document to a fresh temporary directory and
+// returns its path.
+func writeResult(t *testing.T) string {
+	t.Helper()
+
+	return writeResultOf(t, resultDocument())
 }
 
 // imageArgs returns the image subcommand's command line.
@@ -1005,7 +1124,13 @@ func publishAnswers() []fakeAnswer {
 			Method:   "GET",
 			Endpoint: fixtureRepoPrefix + "/compare/" + fixtureCommit + "..." + fixtureReportSHA,
 			Status:   200,
-			Body:     map[string]any{"files": []any{map[string]string{"filename": fixtureReportPath, "status": "added"}}},
+			Body: map[string]any{
+				"status":            "ahead",
+				"ahead_by":          1,
+				"behind_by":         0,
+				"merge_base_commit": map[string]string{"sha": fixtureCommit},
+				"files":             []any{map[string]string{"filename": fixtureReportPath, "status": "added"}},
+			},
 		},
 		{Method: "POST", Endpoint: fixtureRepoPrefix + "/git/refs", Status: 201, Body: map[string]any{"ref": fixtureBranchRef}},
 		{Method: "POST", Endpoint: fixtureRepoPrefix + "/pulls", Status: 201, Body: map[string]any{"number": 1}},
@@ -1047,10 +1172,11 @@ func TestRunPublishAndImageReadTheirVariablesAndPrintTheirLine(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		// args builds the command line from the run's paths, and answers are
-		// the fake gh's.
+		// the fake gh's. result writes the result file, the run's own when nil.
 		args        func(ghPath, gitleaksPath, resultPath, reportsDir string) []string
 		answers     []fakeAnswer
 		addVariable []string
+		result      func(t *testing.T) string
 		wantLine    string
 	}{
 		{
@@ -1067,6 +1193,18 @@ func TestRunPublishAndImageReadTheirVariablesAndPrintTheirLine(t *testing.T) {
 			addVariable: []string{"GITHUB_SHA", "AUDIT_FINGERPRINT_KEY"},
 			wantLine:    lineAuditPublished,
 		},
+		{
+			name:        "the publish subcommand with one public finding",
+			args:        publishArgs,
+			answers:     publishAnswers(),
+			addVariable: []string{"GITHUB_SHA", "AUDIT_FINGERPRINT_KEY"},
+			result: func(t *testing.T) string {
+				t.Helper()
+
+				return writeResultOf(t, resultDocumentWith(publicFinding()))
+			},
+			wantLine: "audit published: public findings 1, private findings: none",
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -1075,7 +1213,12 @@ func TestRunPublishAndImageReadTheirVariablesAndPrintTheirLine(t *testing.T) {
 			summaryPath := writeSummary(t)
 			tempDir := t.TempDir()
 
-			args := withTempDir(tc.args(fake.Path, newFakeGitleaks(t), writeResult(t), t.TempDir()), tempDir)
+			resultPath := writeResult(t)
+			if tc.result != nil {
+				resultPath = tc.result(t)
+			}
+
+			args := withTempDir(tc.args(fake.Path, newFakeGitleaks(t), resultPath, t.TempDir()), tempDir)
 			result := runProgram(t, args, stepEnvironment(t, summaryPath))
 
 			if result.code != codeAsExpected {
