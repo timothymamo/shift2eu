@@ -22,6 +22,11 @@ func (s Secret) IsZero() bool {
 	return s.value == ""
 }
 
+// reveal returns the key's value, for the signature and the scrubber only.
+func (s Secret) reveal() string {
+	return s.value
+}
+
 // String returns "[redacted]".
 func (s Secret) String() string {
 	return redacted

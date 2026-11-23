@@ -14,7 +14,7 @@
 // the release's latest job lists them; -manifests a directory holding
 // "<tag>.json", the manifest of each earlier release that has a site bundle;
 // -list-bucket turns on the listing of the bucket before the upload (off by
-// default, ADR of milestone 3: it needs runbook step R7's ListBucket grant).
+// default, ADR 0042: it needs runbook step R7's ListBucket grant).
 // The live page the rollback guard reads is the constant livePage.
 //
 // It reads the key from SCW_ACCESS_KEY and SCW_SECRET_KEY, the two secrets the

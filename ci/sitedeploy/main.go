@@ -153,6 +153,13 @@ type settings struct {
 	summaryPath string
 }
 
+// Format prints the settings with the key redacted, for every verb: fmt does
+// not call Secret's own Format through an unexported field, so the settings
+// print themselves.
+func (s settings) Format(f fmt.State, _ rune) {
+	_, _ = fmt.Fprintf(f, "{credentials:[redacted] summaryPath:%q}", s.summaryPath)
+}
+
 // environment reads the deploy key and the job summary's path through
 // lookup (os.LookupEnv in main, the one call site-deploy-env allows; a
 // function of its own in a test). Its errors name the variable, never a

@@ -41,21 +41,28 @@
 //     manifest (Config.Manifests). In every other case (an error or non-200
 //     answer, no or an unparseable version, a version that is no known tag, a
 //     tag with no manifest, a body that does not match it, or a version not
-//     higher than the bundle's) it overwrites and writes a visible warning to
-//     Config.Summary saying which case it was. The page's text never becomes a
-//     path, a tag or a command: the tag is taken from Config.Releases.
-//  3. Only when Config.ListBucket is true (off by default; the hosting ADR
+//     higher than the bundle's) it overwrites. It writes to Config.Summary a
+//     plain notice when the live page is a genuine release not higher than
+//     the bundle's (a known tag whose manifest's index.html the body
+//     matches), and otherwise a visible warning saying which case it was;
+//     both say it overwrites and name the live version where there is one.
+//     The guard's GET is never signed. The page's text never becomes a path,
+//     a tag or a command: the tag is taken from Config.Releases. The body is
+//     read up to 1 MiB; a longer page is untrusted.
+//  3. Only when Config.ListBucket is true (off by default; ADR 0042
 //     records that it needs runbook step R7's ListBucket grant): lists the
 //     bucket (ListObjectsV2, every page) and fails with ErrUnknownObject,
 //     before any upload, naming each key that is in no release's manifest
 //     (Config.Releases with Config.Manifests), not in this bundle's and not
-//     manifest.json.
+//     manifest.json. A listed key is only compared, never sent; a page of the
+//     answer is read up to 8 MiB, and at most 1000 pages.
 //  4. Uploads with PUT only, path-style (<Endpoint>/<Bucket>/<key>): first
 //     every content-addressed asset, then manifest.json, then the four pages
 //     last, each in sorted order. The first failed upload stops the run with
 //     an error, so a failure before the pages leaves every page as it was.
 //     Deploy never sends DELETE, nor any request but GET (live page, listing)
-//     and PUT (an object of the bundle) to the bucket.
+//     and PUT (an object of the bundle) to the bucket. It uploads the bytes it
+//     checked in step 1, held in memory, never a second read of the bundle.
 //
 // Each upload carries, per file:
 //
@@ -67,8 +74,8 @@
 //	wasm_exec.<h>.js  text/javascript; charset=utf-8  public, max-age=31536000, immutable  (none)
 //	module.<h>.js     text/javascript; charset=utf-8  public, max-age=31536000, immutable  gzip
 //
-// The module script is gzip-compressed by Deploy (Hosting decision 4) at a
-// fixed level with no name and no modification time, so the same bundle gives
+// The module script is gzip-compressed by Deploy (Hosting decision 4, ADR
+// 0042) at gzip.BestCompression with no name and no modification time, so the same bundle gives
 // the same bytes; its manifest digest is of the decoded bytes, as the live
 // check compares after content decoding. Every PUT also carries
 // X-Amz-Content-Sha256, the SHA-256 of the bytes sent, which the store checks.
@@ -81,8 +88,7 @@
 // request (method, key, status code) and at most an S3 error code that
 // matches [A-Za-z]{1,64}, never a response body or header, and every text
 // Deploy writes is also scrubbed of both keys' values, so a hostile server
-// that echoes the key back gets nothing printed.
-//
-// Until the behaviour lands (PRD #297 milestone 3, test first), every entry
-// point but Secret's redaction returns ErrNotImplemented.
+// that echoes the key back gets nothing printed. An error answer is read up
+// to 64 KiB, only for its code. The errors Deploy returns wrap only its
+// sentinels (and ctx's error), never an error whose text a server wrote.
 package deploy
