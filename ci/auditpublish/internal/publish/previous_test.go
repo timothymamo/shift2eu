@@ -105,12 +105,21 @@ func TestParsePreviousReportRoundTrips(t *testing.T) {
 				t.Errorf("ParsePreviousReport(%q) on the report the core rendered: %v", name, err)
 			}
 
-			_ = previous
-
-			// The name is one a later run reads as its newest report, so the
-			// round trip is the one the run makes.
+			// The name is one a later run reads as its newest report, and what
+			// it reads back is a previous report that run renders from.
 			if newest, ok := publish.NewestReport([]string{name, "TEMPLATE.md"}); !ok || newest != name {
 				t.Errorf("NewestReport([%q, TEMPLATE.md]) = %q, %t, want %q", name, newest, ok, name)
+			}
+
+			next := renderReport(t, publish.ReportInput{
+				Result:   fixtureResult(),
+				Run:      testRun(t, "2026-12-03", "18422000002"),
+				Private:  publish.PrivateNone,
+				Previous: &previous,
+			})
+
+			if changes := sectionText(t, next.Body, "Changes since the last audit"); strings.Contains(changes, "First report.") {
+				t.Errorf("a run that has a previous report reads First report. in Changes, want the previous report's lines:\n%s", changes)
 			}
 		})
 	}
