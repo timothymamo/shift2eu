@@ -1,11 +1,14 @@
 # The build context is an allow list: everything is left out, then only what `go build ./cmd/shift2eu`
-# needs is let back in. Later lines win, so the exclusions at the end apply inside the allowed paths too.
+# needs is let back in, and the LICENSE and NOTICE the final stage ships (Apache-2.0 section 4, #495).
+# Later lines win, so the exclusions at the end apply inside the allowed paths too.
 *
 
 !go.mod
 !go.sum
 !cmd/
 !internal/
+!LICENSE
+!NOTICE
 
 # Tests and their fixtures are not built into the binary. The catalog snapshots the targets embed
 # (internal/adapter/target/*/catalog.json) are not test data and stay in.

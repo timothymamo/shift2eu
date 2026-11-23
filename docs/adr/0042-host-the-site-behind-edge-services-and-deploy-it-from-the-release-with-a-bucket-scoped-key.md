@@ -17,9 +17,10 @@ the maintainer has not decided yet; the PR that lands each one (named there) che
 Milestone 2 ([ADR 0036](0036-hold-the-site-to-three-trust-layers-and-test-them-in-a-headless-browser.md))
 built a reproducible bundle of static files: four pages, four content-addressed assets (the stylesheet,
 the page script, `wasm_exec.js` and the module script that embeds the WebAssembly module,
-[ADR 0035](0035-run-the-assessment-in-the-browser-as-a-webassembly-driving-adapter.md)) and a
-`manifest.json` of every other file's path and SHA-256. Milestone 3 puts that bundle on
-`www.shift2eu.com` from the release, so that what users run is what the release attested.
+[ADR 0035](0035-run-the-assessment-in-the-browser-as-a-webassembly-driving-adapter.md)), the licence
+and its attribution as plain text (`LICENSE` and `NOTICE`, issue #495) and a `manifest.json` of every
+other file's path and SHA-256. Milestone 3 puts that bundle on `www.shift2eu.com` from the release, so
+that what users run is what the release attested.
 
 The forces:
 
@@ -148,29 +149,29 @@ example signatures (the GET object, the ListObjects GET and the PutObject of a p
 canonicalises the path itself, each segment URI-encoded once from the decoded path, and sends the
 listing's query exactly as it canonicalises it (a space as `%20`, a plus as `%2B`). It follows no
 redirect, sends only `GET` (the live page, the listing) and `PUT` (a file of the bundle), and never
-`DELETE`. It refuses, before any request, a configuration it cannot trust (an
-endpoint with a path, query or user info, a bucket that is no S3 bucket name, a version or a release that
-is no `vX.Y.Z` tag, a missing key, client, writer or clock) and a bundle whose manifest does not parse
-strictly, names a path that is not one of the bundle's fixed flat names (so no `/`, `..`, `\`, `%`,
-control character, absolute or empty key), that does not list exactly the four pages and one asset of
-each kind (style, page script, `wasm_exec`, module), whose asset names do not match their digests, whose files
-differ from their digests, or that holds a file the manifest does not list or one that is not a regular
-file. It uploads the bytes it checked, held in memory, never a second read of the bundle.
+`DELETE`. It refuses, before any request, a configuration it cannot trust (an endpoint with a path,
+query or user info, a bucket that is no S3 bucket name, a version or a release that is no `vX.Y.Z` tag,
+a missing key, client, writer or clock) and a bundle whose manifest does not parse strictly, names a
+path that is not one of the bundle's fixed flat names (so no `/`, `..`, `\`, `%`, control character,
+absolute or empty key), that does not list exactly the four pages, one asset of each kind (style, page
+script, `wasm_exec`, module), `LICENSE` and `NOTICE`, whose asset names do not match their digests,
+whose files differ from their digests, or that holds a file the manifest does not list or one that is
+not a regular file. It uploads the bytes it checked, held in memory, never a second read of the bundle.
 
 Everything it reads from outside is bounded: a manifest at 1 MiB, a bundle file at 32 MiB and the bundle
 at 64 MiB (memory bounds, not the site's size budgets), the live page at 1 MiB, an error answer at
 64 KiB (read only for its code), a listing page at 8 MiB and the listing at 1,000 pages.
 
-**The upload order:** every content-addressed asset first, then `manifest.json`, then the four pages,
-each group in sorted order. The first failed upload stops the run and fails the job: a failure before
-the pages leaves every page as it was, and the earlier release's assets are never deleted, so the pages
-still served keep working (no file of an earlier release is ever deleted; pruning them is a proposed
-follow-up, by hand or with another key). `manifest.json` is uploaded before the pages, so between it
-and the last page the live `manifest.json` already names the new release while some pages are still
-the old one, and a failure in that window leaves it so (the live `manifest.json` naming the new release
-over the old pages) until the redeploy (Recovery), which `verify.html` reports in the meantime; the live
-checks compare against the attested manifest, never the live one, so the window only delays a green
-check.
+**The upload order:** every content-addressed asset first, then `manifest.json`, then the four pages
+with `LICENSE` and `NOTICE` (issue #495; names without a digest, like the pages'), each group in sorted
+order. The first failed upload stops the run and fails the job: a failure before the pages leaves
+every page as it was, and the earlier release's assets are never deleted, so the pages still served
+keep working (no file of an earlier release is ever deleted; pruning them is a proposed follow-up, by
+hand or with another key). `manifest.json` is uploaded before the pages, so between it and the last
+page the live `manifest.json` already names the new release while some pages are still the old one,
+and a failure in that window leaves it so (the live `manifest.json` naming the new release over the
+old pages) until the redeploy (Recovery), which `verify.html` reports in the meantime; the live checks
+compare against the attested manifest, never the live one, so the window only delays a green check.
 
 **The cache headers and content types**, per file:
 
@@ -178,6 +179,7 @@ check.
 |---|---|---|---|
 | `*.html` (the four pages) | `text/html; charset=utf-8` | `public, max-age=300` | none |
 | `manifest.json` | `application/json` | `public, max-age=300` | none |
+| `LICENSE`, `NOTICE` (issue #495) | `text/plain; charset=utf-8` | `public, max-age=300` | none |
 | `style.<h>.css` | `text/css; charset=utf-8` | `public, max-age=31536000, immutable` | none |
 | `page.<h>.js`, `wasm_exec.<h>.js` | `text/javascript; charset=utf-8` | `public, max-age=31536000, immutable` | none |
 | `module.<h>.js` | `text/javascript; charset=utf-8` | `public, max-age=31536000, immutable` | `gzip` |
@@ -291,9 +293,9 @@ deploy step itself.
   redeploy (the re-run above), and `verify.html` reports the mismatch until then. A failure before
   `manifest.json` leaves only unreferenced new assets.
 - **Roll back to an older release:** the deploy refuses it by design while a genuine higher release is
-  live. The maintainer rolls back with their own key instead: with versioning, each of the four pages
-  and `manifest.json` copied from its earlier version (R12); the earlier release's assets are still in
-  the bucket, since nothing is ever deleted. The live checks then fail until the expected version is
+  live. The maintainer rolls back with their own key instead: with versioning, each of the four pages,
+  `LICENSE`, `NOTICE` and `manifest.json` copied from its earlier version (R12); the earlier release's
+  assets are still in the bucket, since nothing is ever deleted. The live checks then fail until the expected version is
   live again, which the alert reports; a rollback is followed by a fixing release.
 - **Either is followed by a manual Edge Services cache purge** by the maintainer, whose credentials hold
   the Edge Services permission the deploy key lacks (R12). Browsers may still keep a released page
@@ -471,7 +473,7 @@ accepted; and whether `ListBucket` was allowed, which decides `-list-bucket` abo
 - PR B's live check holds the transferred (3 MiB) and decoded (10 MiB) module script sizes, the cache
   headers, the redirects and HSTS against the records; PR C writes `release.yml`, the timeouts, the
   `site` environment's checks in `release-tag` and the artifacts' retention; PR D writes the runbook's
-  R12 rollback for all four pages and `manifest.json`, and the guide.
+  R12 rollback for all four pages, `LICENSE`, `NOTICE` and `manifest.json`, and the guide.
 - Milestone 4 amends this ADR: the origins' plain-HTTP answers, R7's result and the `-list-bucket`
   decision, the apex redirect's means, provider and certificate authority, Edge Services' headers and
   compression, the HSTS outcome or waiver, whether preload is pursued and the subdomains at submission.

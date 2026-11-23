@@ -13,7 +13,9 @@
 // module built with -trimpath, -buildvcs=false, GOOS=js, GOARCH=wasm and
 // CGO_ENABLED=0 and
 // embedded, base64-encoded, in the one fixed template
-// globalThis.__shift2euModule="<base64>"; and one newline; and manifest.json,
+// globalThis.__shift2euModule="<base64>"; and one newline; LICENSE and NOTICE,
+// the module root's files byte for byte (Apache-2.0 section 4, issue #495),
+// never those of -site; and manifest.json,
 // the version and every other file's path and SHA-256, sorted by path. <h> is
 // the first 16 hexadecimal characters of the SHA-256 of the file's bytes, so a
 // changed file gets a new name. site/records/ and every other file of -site
