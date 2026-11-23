@@ -65,7 +65,7 @@ var layoutDirs = []dirRule{
 	{path: stateTmpDir, entries: []string{}},
 	{path: stateBinDir},
 	{path: stateOutDir},
-	{path: binDir},
+	{path: binDir, readOnly: true, entries: []string{"audit-exec"}},
 }
 
 // CheckLayout checks that the audit directory under root is laid out as ADR
@@ -76,8 +76,9 @@ var layoutDirs = []dirRule{
 // directory whose config and config.worktree, each if there, hold only the
 // keys of their allow lists in lines of the forms git writes (checkGitConfig)
 // and which holds no commondir or gitdir, the work area
-// holding only its empty tmp/, the state area's home/ and tmp/ empty, and the
-// wrapper a regular file of mode 0555. It creates nothing: a missing path is
+// holding only its empty tmp/, the state area's home/ and tmp/ empty, bin/
+// without a write bit and holding the wrapper alone, and the wrapper a
+// regular file of mode 0555. It creates nothing: a missing path is
 // the model-free step that did not run. The wrapper's owner (root) is the
 // model-free step's `sudo install -o root`; this check holds its mode.
 func CheckLayout(root string) error {

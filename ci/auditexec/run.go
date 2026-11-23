@@ -116,8 +116,11 @@ var gitOwnOptions = map[string]bool{"--text": true}
 // /srv/audit/checkout comes first, and git applies its -C options in order, so
 // a caller's later -C would run git in a directory of its choosing, the work
 // area the model writes in among them, whose planted .git/config names a
-// program (core.fsmonitor, diff.external). As a subcommand option (git log's
-// copy detection) it is refused all the same: the check fails closed.
+// program (core.fsmonitor, diff.external). A global -C never reached git in any
+// case, since the first word after git must be a listed subcommand
+// (round I's correction); the letter rule refuses -C wherever it sits, as
+// defence in depth. As a subcommand option (git log's copy detection) it is
+// refused all the same: the check fails closed.
 const gitRefusedLetters = "cOC"
 
 // jqModuleWords are the words of jq's module system: a jq word that holds one
@@ -332,8 +335,9 @@ const parentElement = ".."
 //     "-" alone is stdin and no path word;
 //   - every word after "--", whatever its first character;
 //   - an option word's value after its first "=";
-//   - the rest of a single-dash word after its first letter, when that rest
-//     holds a "/" (git grep -f/sys/x, sort -k/x).
+//   - in a single-dash word, every rest that starts right after a letter of
+//     its option cluster, when that rest holds a "/" (git grep -f/sys/x,
+//     sort -k/x, git blame -wS/var/x: round J, optionPaths).
 //
 // git's -C is no path word here: a caller's -C is refused before this rule
 // reads the line (round H), so the wrapper's own -C is the only one git reads.
@@ -378,8 +382,16 @@ func pathLine(name string, args []string) (string, bool) {
 }
 
 // optionPaths returns the path words an option word holds: its value after
-// the first "=", and, for a single-dash word, the rest after its first letter
-// when that rest holds a "/".
+// the first "=", and, for a single-dash word, every rest that starts right
+// after a letter of its option cluster and holds a "/". The cluster is the
+// leading run of letters after the dash: git and the tools read a cluster one
+// letter at a time, and the value of a letter that takes one starts right
+// after it, so in -wS/var/lib/dpkg/status S takes /var/lib/dpkg/status
+// (issue #277, round J). The candidates are arg[i:] for i from 2 to k+1, k
+// the cluster's length (arg[2:] at least), so a letter inside the value
+// starts none. It fails closed: an attached relative value holding a "/"
+// (-Sfoo/bar) is refused, since its rest /bar is absolute; the value then
+// comes as a word of its own.
 func optionPaths(arg string) []string {
 	var paths []string
 
@@ -387,13 +399,30 @@ func optionPaths(arg string) []string {
 		paths = append(paths, value)
 	}
 
-	if !strings.HasPrefix(arg, endOfOptions) && len(arg) > len("-x") {
-		if rest := arg[len("-x"):]; strings.Contains(rest, "/") {
+	if strings.HasPrefix(arg, endOfOptions) || len(arg) <= len("-x") {
+		return paths
+	}
+
+	last := max(len("-x"), len("-")+clusterLength(arg[len("-"):])+1)
+
+	for i := len("-x"); i <= last && i < len(arg); i++ {
+		if rest := arg[i:]; strings.Contains(rest, "/") {
 			paths = append(paths, rest)
 		}
 	}
 
 	return paths
+}
+
+// clusterLength returns the length of s's leading run of ASCII letters.
+func clusterLength(s string) int {
+	for i, c := range s {
+		if (c < 'a' || c > 'z') && (c < 'A' || c > 'Z') {
+			return i
+		}
+	}
+
+	return len(s)
 }
 
 // allowedPath reports whether p, read from base when it is relative, lies in

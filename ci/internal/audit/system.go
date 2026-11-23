@@ -297,12 +297,18 @@ func readResult(path string) ([]byte, error) {
 	return body, nil
 }
 
+// maxResultDepth is the deepest nesting of objects and arrays the result file
+// may hold (ADR 0040): the audit's own limit.
+const maxResultDepth = 10000
+
 // jsonStrings reads body as exactly one JSON value and returns every string in
 // it, as decoded, in the order the document holds them: the objects' keys and
 // every value of a duplicate key included, since it walks the document's
 // tokens rather than decoding it into a map, which keeps a duplicate key's
 // last value alone. A secret written with JSON escapes is found in them though
-// no byte of the file spells it.
+// no byte of the file spells it. A document nested deeper than maxResultDepth
+// is refused as no JSON, by this walk itself rather than by encoding/json's
+// own limit.
 func jsonStrings(body []byte) ([]string, error) {
 	decoder := json.NewDecoder(bytes.NewReader(body))
 	decoder.UseNumber()
@@ -319,6 +325,9 @@ func jsonStrings(body []byte) ([]string, error) {
 		case json.Delim:
 			if t == '{' || t == '[' {
 				depth++
+				if depth > maxResultDepth {
+					return nil, errResultNotJSON
+				}
 			} else {
 				depth--
 			}
