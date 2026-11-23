@@ -491,7 +491,8 @@ Unset, it keeps the `ubuntuMirror` param's default in `dev/lima.yaml`, `http://a
 and `limactl start` gets the same arguments as without it. Any other value (another scheme, no host, a query
 string, a space, a quote or a shell character) fails before `limactl` runs, naming `UBUNTU_MIRROR`.
 
-The provisioning rewrites only the archive URIs on the `URIs:` lines of `ubuntu.sources` to the mirror, before its first
+The provisioning rewrites only the archive URIs in the `URIs:` field of `ubuntu.sources` (its name in any case, and
+its continuation lines) to the mirror, before its first
 `apt-get update`; the security URIs (`security.ubuntu.com`) stay, so a mirror picked for speed never carries
 the security updates. With the default nothing is rewritten. With another mirror and no `ubuntu.sources` in
 the VM, the step fails with a message naming the file rather than fetching from an archive you did not ask
@@ -504,7 +505,9 @@ It applies when the VM is created: limactl keeps the param in the instance, and 
 boot, idempotently, so the VM keeps the mirror it was created with. `make vm-up` on an existing VM warns
 that `UBUNTU_MIRROR` was ignored. To change the mirror of an existing VM, recreate it
 (`make vm-delete`, then `make vm-create UBUNTU_MIRROR=...`), or edit the `URIs:` lines of
-`/etc/apt/sources.list.d/ubuntu.sources` inside the VM by hand (`sudo`).
+`/etc/apt/sources.list.d/ubuntu.sources` inside the VM by hand (`sudo`). If copying the rewrite back fails
+halfway, the step fails, `ubuntu.sources` may be truncated, and the rewritten file stays beside it as
+`ubuntu.sources.shift2eu-new`; copy it over `ubuntu.sources` by hand.
 
 ### Troubleshooting: make vm-create hangs at "User probe"
 

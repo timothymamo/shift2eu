@@ -240,19 +240,28 @@ provision:
         exit 1
       fi
       sources="${root}/etc/apt/sources.list.d/ubuntu.sources"
-      # One awk program, POSIX awk only (the Mac's is BSD's), for the guard and the rewrite alike, so the archive
-      # match is defined once. It looks only at the URIs lines; every other line, a comment or a field of another
-      # name, is no URI apt fetches from. On a URIs line it walks the whitespace-separated fields with match(),
-      # keeping each separator as it is, and a field that is exactly an http(s)://archive.ubuntu.com/ubuntu URI,
-      # with or without its trailing slash, becomes the mirror with one: per field, in one pass, so any number of
-      # archive URIs on a line is rewritten, a mirror on archive.ubuntu.com's own host included, and a line with
-      # none comes out byte for byte. mode=rewrite prints the file; mode=find exits 0 when a URIs line holds an
-      # archive URI, mode=named when one already names the mirror.
+      # One awk program, POSIX awk only (the Mac's is BSD's), for the guard, the rewrite and the message alike, so
+      # the URIs field and the archive match are defined once. It looks only at the URIs field; every other line, a
+      # field of another name or a comment, is no URI apt fetches from. As deb822 has it, the field starts on a
+      # line that begins with its name in any case (uris:, URIs:, URIS:) and continues on the lines after it that
+      # start with a space or a tab; the first line that starts with neither (a field of another name, the blank
+      # line between stanzas) ends it. A comment starts with # in the first column: it ends nothing and is never
+      # part of the field. On each line of the field it walks the whitespace-separated fields after the name with
+      # match(), keeping each separator (a continuation's leading whitespace too) as it is, and a field that is
+      # exactly an http(s)://archive.ubuntu.com/ubuntu URI, with or without its trailing slash, becomes the mirror
+      # with one: per field, in one pass, so any number of archive URIs is rewritten, a mirror on
+      # archive.ubuntu.com's own host included, and a line with none comes out byte for byte. mode=rewrite prints
+      # the file; mode=find exits 0 when the field holds an archive URI, mode=named when it already names the
+      # mirror; mode=list prints the field's lines.
       uris_awk='
         function archive(f) { return f ~ /^https?:\/\/archive\.ubuntu\.com\/ubuntu\/?$/ }
-        !/^[ \t]*URIs:/ { if (mode == "rewrite") print; next }
+        /^#/ { if (mode == "rewrite") print; next }
+        !/^[ \t]/ { uris = ($0 ~ /^[Uu][Rr][Ii][Ss]:/) }
+        !uris { if (mode == "rewrite") print; next }
         {
+          if (mode == "list") print
           out = ""; rest = $0
+          if (match(rest, /^[Uu][Rr][Ii][Ss]:/)) { out = substr(rest, 1, RLENGTH); rest = substr(rest, RLENGTH + 1) }
           while (match(rest, /[^ \t]+/)) {
             sep = substr(rest, 1, RSTART - 1); f = substr(rest, RSTART, RLENGTH); rest = substr(rest, RSTART + RLENGTH)
             if (archive(f)) { found = 1; f = mirror "/" } else if (f == mirror || f == mirror "/") named = 1
@@ -268,14 +277,21 @@ provision:
           exit 1
         fi
         if awk -v mode=find -v mirror="${mirror}" "${uris_awk}" "${sources}"; then
-          # Written beside the file and copied back with cat, which keeps its mode and owner; the trap removes the
-          # temporary file on every exit, a failed awk or cat included, so apt never reads it as a source.
-          trap 'rm -f "${sources}.shift2eu-new"' EXIT
-          awk -v mode=rewrite -v mirror="${mirror}" "${uris_awk}" "${sources}" >"${sources}.shift2eu-new"
-          cat "${sources}.shift2eu-new" >"${sources}"
+          # Written beside the file and copied back with cat, which keeps its mode and owner. The trap removes the
+          # temporary file on every exit, a failed awk included, but not after a failed cat: that copy may have
+          # stopped halfway and truncated ubuntu.sources, so the temporary file is the only complete copy and stays,
+          # named on stderr. apt reads only the *.list and *.sources names of sources.list.d, so it is no source.
+          new="${sources}.shift2eu-new"
+          trap 'rm -f "${new}"' EXIT
+          awk -v mode=rewrite -v mirror="${mirror}" "${uris_awk}" "${sources}" >"${new}"
+          if ! cat "${new}" >"${sources}"; then
+            trap - EXIT
+            echo >&2 "ubuntuMirror ${PARAM_ubuntuMirror}: copying ${new} over ${sources} failed; ${sources} may be truncated, the rewritten file is kept at ${new} (copy it over ${sources} by hand; docs/dev-environment.md, The Ubuntu mirror)."
+            exit 1
+          fi
         elif ! awk -v mode=named -v mirror="${mirror}" "${uris_awk}" "${sources}"; then
           echo >&2 "ubuntuMirror ${PARAM_ubuntuMirror}: ${sources} has no http(s)://archive.ubuntu.com/ubuntu URI to rewrite and does not name the mirror, so the mirror cannot be set; nothing changed. Its URIs lines (docs/dev-environment.md, The Ubuntu mirror):"
-          grep -E '^[[:space:]]*URIs:' "${sources}" >&2 || true
+          awk -v mode=list -v mirror="${mirror}" "${uris_awk}" "${sources}" >&2 || true
           exit 1
         fi
       fi
