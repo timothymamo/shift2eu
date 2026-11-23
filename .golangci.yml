@@ -2886,14 +2886,22 @@ linters:
         # _test.go files included; its exclusion rule drops it everywhere else.
         # The library's test that builds the real bundle (livepage_test.go)
         # runs go run ./ci/sitebuild through os/exec on purpose, with the
-        # environment from cmd.Environ(); the group still bans the os calls it
-        # names there too.
+        # environment from cmd.Environ() and GOPROXY=off and GOTOOLCHAIN=local
+        # added, so the build stays offline; the group still bans the os calls
+        # it names there too. Package os/exec is refused everywhere else under
+        # ci/sitedeploy/, _test.go files included (issue #514): its exclusion
+        # rule narrows on that entry's msg in livepage_test.go alone.
         - pattern: '^os\.(?:Getenv|ExpandEnv|Environ|StartProcess|UserHomeDir|UserConfigDir|UserCacheDir|TempDir)$'
           pkg: '^os$'
           msg: 'site-deploy-env: the site deploy program reads no environment variable but through the os.LookupEnv main.go passes to environment, locates no home, config, cache or temp directory and starts no process (PRD #297, CLAUDE.md rule 3)'
         - pattern: '^os\.LookupEnv$'
           pkg: '^os$'
           msg: 'site-deploy-env: os.LookupEnv is used in ci/sitedeploy/main.go only, passed to environment (PRD #297); a test passes a lookup function of its own'
+        # Every use of package os/exec: a process start the deploy program
+        # needs nowhere, and its tests only to build the real bundle.
+        - pattern: '^exec\.'
+          pkg: '^os/exec$'
+          msg: 'site-deploy-env: os/exec is used in ci/sitedeploy/internal/deploy/livepage_test.go only, to build the real bundle offline (issue #514)'
     gosec:
       excludes:
         - G104 # unchecked errors are already reported by errcheck
@@ -3130,6 +3138,14 @@ linters:
         linters:
           - forbidigo
         text: 'because "site-deploy-env: os\.LookupEnv is used in ci/sitedeploy/main\.go only, passed to environment \(PRD #297\); a test passes a lookup function of its own"$'
+      # The second exception (issue #514): package os/exec, with which
+      # livepage_test.go runs go run ./ci/sitebuild offline to build the real
+      # bundle, in that file alone. text is the os/exec entry's msg, so the
+      # group's os entries still hold there.
+      - path: ^ci/sitedeploy/internal/deploy/livepage_test\.go$
+        linters:
+          - forbidigo
+        text: 'because "site-deploy-env: os/exec is used in ci/sitedeploy/internal/deploy/livepage_test\.go only, to build the real bundle offline \(issue #514\)"$'
       # audit-library-env: the group holds for every file under
       # ci/internal/audit/, _test.go files included, and nowhere else. It has
       # no exception.
