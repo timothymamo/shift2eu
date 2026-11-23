@@ -77,10 +77,13 @@ const serverArchive = `  - id: shift2eu-server
 `
 
 // goreleaserChecksum ends the document: one checksums.txt covering the
-// release's archive, and nothing beside it: the bundled OpenAPI document the
-// release used to publish is gone (issue #393).
+// release's archive and the site's bundle, and nothing beside them: the bundled
+// OpenAPI document the release used to publish is gone (issue #393), and the
+// bundle is the one extra file every release publishes (PRD #297 milestone 3).
 const goreleaserChecksum = `checksum:
   name_template: checksums.txt
+  extra_files:
+    - glob: ./bin/shift2eu-site_*.tar.gz
 `
 
 // retiredChecksum is the checksum section with the bundled OpenAPI document
@@ -132,10 +135,12 @@ func goreleaserArchives(cli, second string) string {
 //     the security policy a user of the release needs ships with it rather
 //     than only online (issue #450), and the NOTICE Apache-2.0 section 4(d)
 //     asks the archive to carry beside LICENSE ships with it (issue #493);
-//   - the checksum section holds exactly name_template: checksums.txt, so one
-//     checksums.txt covers the archive: a missing section, another name and
-//     any other key in it (split:, and extra_files:, which the release no
-//     longer publishes) are refused, worded with what it holds instead;
+//   - the checksum section holds exactly name_template: checksums.txt and
+//     extra_files: the one glob of the site's bundle, ./bin/shift2eu-site_*.tar.gz,
+//     so one checksums.txt covers the archive and the bundle (PRD #297 milestone
+//     3): a missing section, another name, a second glob, a glob that takes more
+//     than the bundle, a name_template on it and any other key are refused,
+//     worded with what it holds instead;
 //   - an archive entry holds no key beyond id, ids, name_template, formats,
 //     format_overrides and files: the section is a closed schema, so a key
 //     the check never lists cannot change what an archive is.
@@ -382,7 +387,8 @@ func TestGoReleaserArchives(t *testing.T) {
 			wantIn: "examples/**/*",
 		},
 
-		// The checksum: one file covering the archive.
+		// The checksum: one file covering the archive and the site's bundle
+		// (PRD #297 milestone 3).
 		{
 			name:       "no checksum section",
 			goreleaser: goreleaserArchivesTop + cliArchive,
@@ -401,6 +407,34 @@ func TestGoReleaserArchives(t *testing.T) {
 			goreleaser: goreleaserArchivesTop + cliArchive +
 				"checksum:\n  name_template: checksums.txt\n  split: true\n",
 			wantIn: "split",
+		},
+
+		// The site's bundle is the one extra file the release publishes beside
+		// the CLI's archives, and checksums.txt covers it (PRD #297 milestone
+		// 3): exactly that one glob, nothing else.
+		{
+			name: "a checksum section without the site bundle",
+			goreleaser: goreleaserArchivesTop + cliArchive +
+				"checksum:\n  name_template: checksums.txt\n",
+			wantIn: "extra_files",
+		},
+		{
+			name: "a second extra file in the checksum section",
+			goreleaser: goreleaserArchivesTop + cliArchive +
+				"checksum:\n  name_template: checksums.txt\n  extra_files:\n    - glob: ./bin/shift2eu-site_*.tar.gz\n    - glob: ./bin/other.tar.gz\n",
+			wantIn: "extra_files",
+		},
+		{
+			name: "a checksum extra file with a glob that takes more than the bundle",
+			goreleaser: goreleaserArchivesTop + cliArchive +
+				"checksum:\n  name_template: checksums.txt\n  extra_files:\n    - glob: ./bin/*\n",
+			wantIn: "./bin/shift2eu-site_*.tar.gz",
+		},
+		{
+			name: "a checksum extra file with a name_template",
+			goreleaser: goreleaserArchivesTop + cliArchive +
+				"checksum:\n  name_template: checksums.txt\n  extra_files:\n    - glob: ./bin/shift2eu-site_*.tar.gz\n      name_template: site.tar.gz\n",
+			wantIn: "name_template",
 		},
 
 		// The bundle the release published beside the archives (issue #139) is

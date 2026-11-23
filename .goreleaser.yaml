@@ -69,8 +69,13 @@ archives:
       - examples/*.md
       - examples/**/*
 
+# One checksums.txt covers the CLI's archives and the site's bundle, which
+# release.yml's goreleaser job downloads into bin/ from its site job (PRD #297
+# milestone 3). test/architecture (check.GoReleaserArchives) pins this section.
 checksum:
   name_template: checksums.txt
+  extra_files:
+    - glob: ./bin/shift2eu-site_*.tar.gz
 
 changelog:
   use: github
@@ -96,9 +101,12 @@ changelog:
 # of a failed goreleaser job replaces the draft the failed run left rather
 # than add a second one. A tag with a pre-release suffix (v0.1.0-rc.2) is a
 # GitHub pre-release, never the latest release, as its image gets no X.Y and
-# no latest tag (ADR 0015, issue #92). test/architecture (check.GitHubRelease)
-# pins this section.
+# no latest tag (ADR 0015, issue #92). The site's bundle is the one asset
+# uploaded beside the archives and checksums.txt (PRD #297 milestone 3).
+# test/architecture (check.GitHubRelease) pins this section.
 release:
   draft: true
   prerelease: auto
   replace_existing_draft: true
+  extra_files:
+    - glob: ./bin/shift2eu-site_*.tar.gz

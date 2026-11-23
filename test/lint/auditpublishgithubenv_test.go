@@ -92,3 +92,20 @@ func TestAuditPublishGitHubEnvForbidigoPatterns(t *testing.T) {
 
 	checkForbidigoGroupPatterns(t, auditPublishGitHubEnvTag, auditPublishGitHubEnvRefused, auditPublishGitHubEnvExceptions, auditPublishGitHubEnvAllowed)
 }
+
+// TestAuditPublishGitHubEnvForbidigoProbe runs forbidigo, with the repository's
+// .golangci.yml, on a module of the GitHub side's tree (testdata/
+// auditpublishgithubenv): a line there for every name the group refuses, each
+// refused with a msg of the group, so that forbidigo matches the names the pin
+// above reads from the patterns, os.Expand and the os/exec calls included, and
+// no other line of the tree is refused. The pin proves which entry refuses what;
+// the probe proves that forbidigo renders the names it is asked about as the pin
+// spells them.
+func TestAuditPublishGitHubEnvForbidigoProbe(t *testing.T) {
+	t.Parallel()
+
+	runForbidigoProbe(t, forbidigoProbe{
+		dir:  "auditpublishgithubenv",
+		tags: []string{auditPublishGitHubEnvTag},
+	})
+}

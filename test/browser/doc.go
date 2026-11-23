@@ -15,7 +15,10 @@
 // passes the browser's DevTools address, read back from Chromium's log, in
 // SHIFT2EU_DEVTOOLS_URL, and in SHIFT2EU_SITE_BUNDLE a bundle of the run's
 // own: ci/sitebuild builds it into a temporary directory that the run removes
-// when it ends. The run does not run `make site` and leaves bin/site alone, so
+// when it ends. `make test-browser TEST_BROWSER_BUNDLE=<dir>` serves that
+// given directory, an unpacked bundle, instead, and builds and removes
+// nothing, as the release's site-browser job and CI's browser job do (PRD #297
+// milestone 3). The run does not run `make site` and leaves bin/site alone, so
 // two runs in the same worktree never rebuild a bundle from under each other's
 // browser (issue #423). The address's browser id makes the test attach to the
 // browser its run started: a correctness guarantee, not access control, since

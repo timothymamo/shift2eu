@@ -19,16 +19,17 @@ const retiredBundle = `  extra_files:
 `
 
 // releaseSection returns the release: section of .goreleaser.yaml for the
-// given prerelease value, with draft: true and replace_existing_draft: true.
+// given prerelease value, with draft: true, replace_existing_draft: true and the
+// site's bundle as its one extra file (PRD #297 milestone 3).
 func releaseSection(prerelease string) string {
-	return "release:\n  draft: true\n  prerelease: " + prerelease + "\n  replace_existing_draft: true\n"
+	return "release:\n  draft: true\n  prerelease: " + prerelease + "\n  replace_existing_draft: true\n  extra_files:\n    - glob: ./bin/shift2eu-site_*.tar.gz\n"
 }
 
 // TestGitHubRelease pins how the GitHub release is published: release holds
 // exactly draft: true, prerelease: auto and replace_existing_draft: true, in
-// that order, and nothing beside them: the release ships the CLI's archives and
-// their checksums.txt, and no extra file (issue #393). Every asset GoReleaser
-// uploads goes to a draft release, which locks its assets when it is published
+// that order, then extra_files: the one glob of the site's bundle (PRD #297
+// milestone 3). Every asset GoReleaser uploads goes to a draft release, which
+// locks its assets when it is published
 // (issue #156, ADR 0015), so a job of release.yml publishes it last;
 // replace_existing_draft: true makes a re-run of a failed goreleaser job
 // replace the draft that job left, rather than add a second one for the tag
@@ -65,7 +66,7 @@ func TestGitHubRelease(t *testing.T) {
 		},
 		{
 			name:       "a comment after the value is accepted",
-			goreleaser: buildFlow + "\nrelease:\n  draft: true\n  prerelease: auto # rc tags\n  replace_existing_draft: true # a failed run's draft is replaced\n",
+			goreleaser: buildFlow + "\nrelease:\n  draft: true\n  prerelease: auto # rc tags\n  replace_existing_draft: true # a failed run's draft is replaced\n  extra_files:\n    - glob: ./bin/shift2eu-site_*.tar.gz # the site's bundle\n",
 		},
 		{
 			// A re-run of a failed goreleaser job leaves the draft the failed
@@ -196,9 +197,30 @@ func TestGitHubRelease(t *testing.T) {
 		},
 
 		// The extra file the release published beside the archives (issue
-		// #139) is gone (issue #393): the release ships the CLI's archives and
-		// their checksums.txt alone, so release: may hold no extra_files, and
-		// no line, a comment included, may name the bundle or shift2eu-server.
+		// #139) is gone (issue #393): the release ships the CLI's archives,
+		// their checksums.txt and the site's bundle alone, so release: may hold
+		// no extra_files but the bundle's one glob, and no line, a comment
+		// included, may name the retired bundle or shift2eu-server.
+		{
+			name:       "a release section without extra_files is refused",
+			goreleaser: buildFlow + "\nrelease:\n  draft: true\n  prerelease: auto\n  replace_existing_draft: true\n",
+			wantErr:    true,
+		},
+		{
+			name:       "a release extra file with a second glob is refused",
+			goreleaser: buildFlow + "\nrelease:\n  draft: true\n  prerelease: auto\n  replace_existing_draft: true\n  extra_files:\n    - glob: ./bin/shift2eu-site_*.tar.gz\n    - glob: ./bin/other.tar.gz\n",
+			wantErr:    true,
+		},
+		{
+			name:       "a release extra file of another glob is refused",
+			goreleaser: buildFlow + "\nrelease:\n  draft: true\n  prerelease: auto\n  replace_existing_draft: true\n  extra_files:\n    - glob: ./bin/*\n",
+			wantErr:    true,
+		},
+		{
+			name:       "a release extra file with a name_template is refused",
+			goreleaser: buildFlow + "\nrelease:\n  draft: true\n  prerelease: auto\n  replace_existing_draft: true\n  extra_files:\n    - glob: ./bin/shift2eu-site_*.tar.gz\n      name_template: site.tar.gz\n",
+			wantErr:    true,
+		},
 		{
 			name:       "a release section with the bundled OpenAPI document is refused",
 			goreleaser: buildFlow + "\n" + releaseSection("auto") + retiredBundle,
@@ -206,7 +228,7 @@ func TestGitHubRelease(t *testing.T) {
 		},
 		{
 			name:       "a release section with an empty extra_files is refused",
-			goreleaser: buildFlow + "\n" + releaseSection("auto") + "  extra_files:\n",
+			goreleaser: buildFlow + "\nrelease:\n  draft: true\n  prerelease: auto\n  replace_existing_draft: true\n  extra_files:\n",
 			wantErr:    true,
 		},
 		{

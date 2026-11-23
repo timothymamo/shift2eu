@@ -212,8 +212,8 @@ func digest(data []byte) string {
 }
 
 // page returns a page of the site showing version: the footer carries the one
-// <span class="mono"> of site/privacy.html, which LiveVersion reads and the
-// rollback guard compares with a release's manifest.
+// <span class="mono" id="site-version"> of site/privacy.html, which LiveVersion
+// reads and the rollback guard compares with a release's manifest.
 func page(version, title string) []byte {
 	return []byte(`<!DOCTYPE html>
 <html lang="en">
@@ -223,7 +223,7 @@ func page(version, title string) []byte {
 <footer>
 <div class="wrap footer-row">
 <p>No cookies, no tracking, no requests: the page cannot connect anywhere.</p>
-<p class="footer-links"><a href="privacy.html">Privacy</a> <a href="verify.html">Verify this site</a> <span class="mono">` + version + `</span></p>
+<p class="footer-links"><a href="privacy.html">Privacy</a> <a href="verify.html">Verify this site</a> <span class="mono" id="site-version">` + version + `</span></p>
 </div>
 </footer>
 </body>
