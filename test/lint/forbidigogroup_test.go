@@ -6,9 +6,15 @@ import (
 	"testing"
 )
 
-// This file holds the check the two audit publish environment groups share. It
-// is no pin of its own: the tables live with each group's test, in
-// auditpublishmainenv_test.go and auditpublishgithubenv_test.go.
+// This file holds the per-entry checks the forbidigo environment and no-exec
+// groups share, and it is no pin of its own: the tables live with each group's
+// test. checkForbidigoGroupPatterns serves the groups whose exception entry a
+// linters.exclusions.rules rule narrows on (aireviewenv_test.go,
+// auditexecenv_test.go, auditpublishgithubenv_test.go,
+// auditpublishmainenv_test.go, auditrunenv_test.go, sitedeployenv_test.go), and
+// checkForbidigoGroupEntries the groups with no exception, naming each entry by
+// its msg and the pkg it matches (compositionrootenv_test.go,
+// compositionrootnoexec_test.go, sitecheckenv_test.go).
 
 // forbidGroupRefusal is a name a forbidigo group must refuse, with the msg that
 // must match the msg of the entry refusing it: the whole msg of the group's
@@ -144,14 +150,18 @@ type forbidGroupEntry struct {
 // and every entry of the group is pinned. It is the pin for a group no exclusion
 // rule narrows on (compositionRootRuleProblems), where the name sets are the
 // only place that says which entry refuses what: a name moved from one entry's
-// pattern into another's fails here, as does one an entry stops refusing.
+// pattern into another's fails here, as does one an entry stops refusing. A name
+// a pin lists and an entry must not refuse is checked against the pinned names
+// alone; the allowed names are checked once, by the loop below, so an entry that
+// refuses an allowed name is reported once.
 func checkForbidigoGroupEntries(t *testing.T, tag string, pinned []forbidGroupEntry, allowed []rootName) {
 	t.Helper()
 
 	entries := groupEntries(t, moduleRoot(t), tag)
-	names := slices.Clone(allowed)
+	// refusals is every name a pin lists, without the allowed names.
+	refusals := make([]rootName, 0, len(pinned))
 	for _, p := range pinned {
-		names = append(names, p.refuses...)
+		refusals = append(refusals, p.refuses...)
 	}
 
 	for _, p := range pinned {
@@ -173,7 +183,7 @@ func checkForbidigoGroupEntries(t *testing.T, tag string, pinned []forbidGroupEn
 			continue
 		}
 
-		for _, n := range names {
+		for _, n := range refusals {
 			refuses, must := entry.refuses(n), slices.Contains(p.refuses, n)
 			if must && !refuses {
 				t.Errorf("the entry with msg %q that matches pkg %q must refuse %s (pkg %q), and it does not", p.msg, p.pkg, n.name, n.pkg)
