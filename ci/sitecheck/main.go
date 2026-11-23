@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -67,12 +69,114 @@ func main() {
 // report's text (Report.WriteText) to stdout and returns exitPassed when the
 // report passed, exitFailed otherwise.
 func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, base livecheck.Config) int {
-	_, _, _, _, _ = ctx, args, stdin, stdout, base
-	_, _, _, _ = exitPassed, exitFailed, retryInterval, defaultRetryBound
+	cfg, err := configure(args, stdin, base)
+	if err != nil {
+		fmt.Fprintf(stderr, "sitecheck: %v\n", err)
 
-	fmt.Fprintln(stderr, "sitecheck: not implemented")
+		return exitConfig
+	}
 
-	return exitConfig
+	report, err := livecheck.Run(ctx, cfg)
+	if err != nil && report.Rounds == 0 {
+		fmt.Fprintf(stderr, "sitecheck: %v\n", err)
+
+		return exitConfig
+	}
+
+	if writeErr := report.WriteText(stdout); writeErr != nil {
+		fmt.Fprintf(stderr, "sitecheck: write the report: %v\n", writeErr)
+
+		return exitFailed
+	}
+
+	if err != nil || !report.Passed() {
+		return exitFailed
+	}
+
+	return exitPassed
+}
+
+// configure parses args, reads the files they name and returns the Config of
+// the run: base with every other field filled in.
+func configure(args []string, stdin io.Reader, base livecheck.Config) (livecheck.Config, error) {
+	flags := flag.NewFlagSet("sitecheck", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+
+	manifestPath := flags.String("manifest", "", "the release's manifest.json (required)")
+	tagsPath := flags.String("tags", "", `the repository's tag list, one tag per line, "-" for stdin (required)`)
+	hstsPath := flags.String("hsts-record", "site/records/hsts.json", "the HSTS record")
+	preloadPath := flags.String("preload-record", "site/records/preload.json", "the preload record")
+	host := flags.String("host", livecheck.DefaultHost, "the canonical host")
+	apex := flags.String("apex", livecheck.DefaultApex, "the apex")
+	retryBound := flags.Duration("retry-bound", defaultRetryBound, "how long failing rounds are repeated")
+
+	if err := flags.Parse(args); err != nil {
+		return livecheck.Config{}, err
+	}
+
+	switch {
+	case flags.NArg() > 0:
+		return livecheck.Config{}, fmt.Errorf("unexpected argument %q", flags.Arg(0))
+	case *manifestPath == "":
+		return livecheck.Config{}, errors.New("-manifest is required")
+	case *tagsPath == "":
+		return livecheck.Config{}, errors.New("-tags is required")
+	case *retryBound < livecheck.MinRetryBound:
+		return livecheck.Config{}, fmt.Errorf("-retry-bound %v is below the HTML's max-age, %v", *retryBound, livecheck.MinRetryBound)
+	}
+
+	manifest, err := readFile(*manifestPath, livecheck.ParseManifest)
+	if err != nil {
+		return livecheck.Config{}, fmt.Errorf("-manifest %s: %w", *manifestPath, err)
+	}
+
+	var tags []string
+
+	if *tagsPath == "-" {
+		tags, err = livecheck.ReadTagList(stdin)
+	} else {
+		tags, err = readFile(*tagsPath, livecheck.ReadTagList)
+	}
+
+	if err != nil {
+		return livecheck.Config{}, fmt.Errorf("-tags %s: %w", *tagsPath, err)
+	}
+
+	cfg := base
+	cfg.Host = *host
+	cfg.Apex = *apex
+	cfg.Manifest = manifest
+	cfg.Tags = tags
+	cfg.Records.HSTS, cfg.Records.HSTSErr = readFile(*hstsPath, livecheck.ParseHSTSRecord)
+	cfg.Records.Preload, cfg.Records.PreloadErr = readFile(*preloadPath, livecheck.ParsePreloadRecord)
+	cfg.RetryBound = *retryBound
+	cfg.RetryInterval = retryInterval
+	cfg.CertMargin = livecheck.MinCertMargin
+
+	if err := cfg.Validate(); err != nil {
+		return livecheck.Config{}, err
+	}
+
+	return cfg, nil
+}
+
+// readFile opens path and hands it to parse, which caps what it reads.
+func readFile[T any](path string, parse func(io.Reader) (T, error)) (T, error) {
+	var zero T
+
+	f, err := os.Open(path) //nolint:gosec // G304: the path is the one a flag of the operator names, read capped by its parser, never a path taken from a manifest or a response
+	if err != nil {
+		return zero, err
+	}
+
+	defer func() { _ = f.Close() }()
+
+	value, err := parse(f)
+	if err != nil {
+		return zero, fmt.Errorf("%s: %w", path, err)
+	}
+
+	return value, nil
 }
 
 // sleep waits d, or returns ctx's error when ctx ends first.

@@ -1,6 +1,10 @@
 package livecheck
 
-import "io"
+import (
+	"errors"
+	"fmt"
+	"io"
+)
 
 // MaxRecordBytes caps how much of a record ParseHSTSRecord and
 // ParsePreloadRecord read: a longer input is an error.
@@ -57,14 +61,77 @@ type PreloadRecord struct {
 // equal to RecordSchema, "outcome" and "plain_http_www" one of their
 // constants, nothing after the object but white space.
 func ParseHSTSRecord(r io.Reader) (HSTSRecord, error) {
-	return HSTSRecord{}, stub(r)
+	var doc struct {
+		Schema         *int    `json:"schema"`
+		Outcome        *string `json:"outcome"`
+		PreloadPursued *bool   `json:"preload_pursued"`
+		PlainHTTPWWW   *string `json:"plain_http_www"`
+	}
+
+	if err := decodeStrict(r, MaxRecordBytes, &doc); err != nil {
+		return HSTSRecord{}, fmt.Errorf("hsts.json: %w", err)
+	}
+
+	if err := checkSchema("hsts.json", doc.Schema); err != nil {
+		return HSTSRecord{}, err
+	}
+
+	if doc.Outcome == nil || doc.PreloadPursued == nil || doc.PlainHTTPWWW == nil {
+		return HSTSRecord{}, errors.New(`hsts.json: "outcome", "preload_pursued" and "plain_http_www" are all required`)
+	}
+
+	record := HSTSRecord{
+		Outcome:        HSTSOutcome(*doc.Outcome),
+		PreloadPursued: *doc.PreloadPursued,
+		PlainHTTPWWW:   PlainHTTPWWW(*doc.PlainHTTPWWW),
+	}
+
+	if record.Outcome != HSTSMet && record.Outcome != HSTSWaived {
+		return HSTSRecord{}, fmt.Errorf("hsts.json: outcome %q, want %q or %q", *doc.Outcome, HSTSMet, HSTSWaived)
+	}
+
+	if record.PlainHTTPWWW != PlainHTTPRedirect && record.PlainHTTPWWW != PlainHTTPRefuseOrClose {
+		return HSTSRecord{}, fmt.Errorf("hsts.json: plain_http_www %q, want %q or %q", *doc.PlainHTTPWWW, PlainHTTPRedirect, PlainHTTPRefuseOrClose)
+	}
+
+	return record, nil
 }
 
 // ParsePreloadRecord reads preload.json strictly from r, under the same rules
 // as ParseHSTSRecord: exactly the fields "schema" (RecordSchema) and
 // "on_preload_list" (a boolean).
 func ParsePreloadRecord(r io.Reader) (PreloadRecord, error) {
-	return PreloadRecord{}, stub(r)
+	var doc struct {
+		Schema        *int  `json:"schema"`
+		OnPreloadList *bool `json:"on_preload_list"`
+	}
+
+	if err := decodeStrict(r, MaxRecordBytes, &doc); err != nil {
+		return PreloadRecord{}, fmt.Errorf("preload.json: %w", err)
+	}
+
+	if err := checkSchema("preload.json", doc.Schema); err != nil {
+		return PreloadRecord{}, err
+	}
+
+	if doc.OnPreloadList == nil {
+		return PreloadRecord{}, errors.New(`preload.json: "on_preload_list" is required`)
+	}
+
+	return PreloadRecord{OnPreloadList: *doc.OnPreloadList}, nil
+}
+
+// checkSchema returns nil when a record's schema is RecordSchema.
+func checkSchema(name string, schema *int) error {
+	if schema == nil {
+		return fmt.Errorf("%s: \"schema\" is required", name)
+	}
+
+	if *schema != RecordSchema {
+		return fmt.Errorf("%s: schema %d, want %d", name, *schema, RecordSchema)
+	}
+
+	return nil
 }
 
 // Records are both records as the caller read them. A record whose file is

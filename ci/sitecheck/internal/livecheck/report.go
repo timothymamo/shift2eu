@@ -1,6 +1,13 @@
 package livecheck
 
-import "io"
+import (
+	"fmt"
+	"io"
+	"strconv"
+	"strings"
+	"unicode"
+	"unicode/utf8"
+)
 
 // The kinds of check a Report holds, one Check per kind and target.
 const (
@@ -67,6 +74,10 @@ type Response struct {
 	// CacheControl is the Cache-Control values joined by ", ", recorded,
 	// judged only for HTML (KindHTMLCache); printed only through Quote.
 	CacheControl string
+	// HSTS is the Strict-Transport-Security values joined by ", ", recorded
+	// (the apex's is judged only when preload is pursued); printed only
+	// through Quote, and only when not empty.
+	HSTS string
 }
 
 // Report is the outcome of Run.
@@ -89,9 +100,17 @@ type Report struct {
 
 // Passed reports whether r has at least one check and every check passed.
 func (r Report) Passed() bool {
-	_ = stub(r)
+	if len(r.Checks) == 0 {
+		return false
+	}
 
-	return false
+	for _, check := range r.Checks {
+		if !check.Passed {
+			return false
+		}
+	}
+
+	return true
 }
 
 // WriteText writes r as a plain-text report to w (behaviour 11): one line per
@@ -104,7 +123,111 @@ func (r Report) Passed() bool {
 // piece of text taken from a response is printed only through Quote, so no
 // response can start a line, such as a workflow command ("::"), or add one.
 func (r Report) WriteText(w io.Writer) error {
-	return stub(r, w)
+	var b strings.Builder
+
+	fmt.Fprintf(&b, "hosts: host %s, apex %s\n", oneLine(r.Host), oneLine(r.Apex))
+	fmt.Fprintf(&b, "rounds: %d\n", r.Rounds)
+
+	for _, check := range r.Checks {
+		if check.Passed {
+			fmt.Fprintf(&b, "PASS %s %s\n", oneLine(check.Kind), oneLine(check.Target))
+		} else {
+			fmt.Fprintf(&b, "FAIL %s %s: %s\n", oneLine(check.Kind), oneLine(check.Target), oneLine(check.Reason))
+		}
+	}
+
+	for _, response := range r.Responses {
+		fmt.Fprintf(&b, "response %s remote %s status %s age %s cache-control %s",
+			oneLine(response.URL), orNone(oneLine(response.RemoteAddr)), status(response.Status),
+			ageText(response.Age), Quote(response.CacheControl))
+
+		if response.HSTS != "" {
+			fmt.Fprintf(&b, " hsts %s", Quote(response.HSTS))
+		}
+
+		b.WriteString("\n")
+	}
+
+	b.WriteString(moduleScriptLine(r.ModuleScript))
+
+	if r.Version.IsZero() {
+		b.WriteString("version: none matched\n")
+	} else {
+		fmt.Fprintf(&b, "version: %s\n", r.Version.String())
+	}
+
+	if r.Passed() {
+		b.WriteString("result: PASS\n")
+	} else {
+		b.WriteString("result: FAIL\n")
+	}
+
+	_, err := io.WriteString(w, b.String())
+
+	return err
+}
+
+// moduleScriptLine returns the report's line of the module script's size.
+func moduleScriptLine(s Size) string {
+	if !s.Measured {
+		return "module-script: not measured\n"
+	}
+
+	encoding := "gzip"
+	if s.Encoding != EncodingGzip {
+		encoding = "identity (the edge does not compress it)"
+	}
+
+	return fmt.Sprintf("module-script: %s, %d bytes transferred, %d bytes decoded, content-type %s\n",
+		encoding, s.Transferred, s.Decoded, Quote(s.ContentType))
+}
+
+// status returns a response's status for the report, "none" when no response
+// came.
+func status(code int) string {
+	if code == 0 {
+		return "none"
+	}
+
+	return strconv.Itoa(code)
+}
+
+// orNone returns s, or "none" when it is empty.
+func orNone(s string) string {
+	if s == "" {
+		return "none"
+	}
+
+	return s
+}
+
+// ageText returns a response's Age for the report.
+func ageText(age Age) string {
+	switch age.State {
+	case AgeParsed:
+		return strconv.FormatInt(age.Seconds, 10)
+	case AgeUnparseable:
+		return "unparseable " + Quote(age.Raw)
+	default:
+		return "absent"
+	}
+}
+
+// oneLine returns s as it is when every character of it is printable, and
+// through Quote otherwise, so no text of a check or a response (an error
+// message may carry a server's words) breaks a line of the report.
+func oneLine(s string) string {
+	if !utf8.ValidString(s) {
+		return Quote(s)
+	}
+
+	for _, r := range s {
+		if !unicode.IsPrint(r) {
+			return Quote(s)
+		}
+	}
+
+	return s
 }
 
 // Quote returns s, text taken from a response, safe to print on one line of
@@ -112,7 +235,14 @@ func (r Report) WriteText(w io.Writer) error {
 // as %q does, followed by "...(truncated)" outside the quotes when s was
 // longer. The result holds no line break and no control character.
 func Quote(s string) string {
-	_ = stub(s)
+	if len(s) <= MaxQuotedBytes {
+		return strconv.Quote(s)
+	}
 
-	return ""
+	cut := MaxQuotedBytes
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+
+	return strconv.Quote(s[:cut]) + "...(truncated)"
 }

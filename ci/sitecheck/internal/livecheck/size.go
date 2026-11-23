@@ -1,6 +1,14 @@
 package livecheck
 
-import "io"
+import (
+	"bytes"
+	"compress/gzip"
+	"errors"
+	"fmt"
+	"io"
+	"mime"
+	"strings"
+)
 
 // The module script's size budgets (behaviour 10, issue #346 item 2, ADR
 // 0043).
@@ -45,7 +53,44 @@ type Body struct {
 // error, and ReadBody reads at most maxBytes+1 bytes of r, so an endless body
 // cannot exhaust memory. maxBytes must be positive.
 func ReadBody(contentEncoding string, r io.Reader, maxBytes int64) (Body, error) {
-	return Body{}, stub(contentEncoding, r, maxBytes)
+	if maxBytes <= 0 {
+		return Body{}, fmt.Errorf("a body cap of %d bytes, want a positive one", maxBytes)
+	}
+
+	encoding := strings.ToLower(strings.Trim(contentEncoding, " \t"))
+
+	switch encoding {
+	case "", EncodingIdentity:
+		encoding = EncodingIdentity
+	case EncodingGzip:
+	default:
+		return Body{}, fmt.Errorf("the Content-Encoding %s is neither gzip nor identity", Quote(contentEncoding))
+	}
+
+	raw, err := readCapped(r, maxBytes)
+	if err != nil {
+		return Body{}, fmt.Errorf("the body as transferred: %w", err)
+	}
+
+	body := Body{Encoding: encoding, Transferred: int64(len(raw)), Data: raw}
+
+	if encoding == EncodingIdentity {
+		return body, nil
+	}
+
+	zr, err := gzip.NewReader(bytes.NewReader(raw))
+	if err != nil {
+		return Body{}, fmt.Errorf("the gzip body does not decode: %w", err)
+	}
+
+	defer func() { _ = zr.Close() }()
+
+	body.Data, err = readCapped(zr, maxBytes)
+	if err != nil {
+		return Body{}, fmt.Errorf("the gzip body decoded: %w", err)
+	}
+
+	return body, nil
 }
 
 // Size is the module script's measurement (behaviour 10).
@@ -71,5 +116,31 @@ type Size struct {
 // DecodedBudget. Otherwise its error says which budget or the type failed.
 // Served as identity, only the decoded budget applies.
 func MeasureModuleScript(contentType string, b Body) (Size, error) {
-	return Size{}, stub(contentType, b)
+	size := Size{
+		Measured:    true,
+		Encoding:    b.Encoding,
+		Transferred: b.Transferred,
+		Decoded:     int64(len(b.Data)),
+		ContentType: contentType,
+	}
+
+	var problems []string
+
+	if mediaType, _, err := mime.ParseMediaType(contentType); err != nil || mediaType != "text/javascript" {
+		problems = append(problems, fmt.Sprintf("the Content-Type %s is not text/javascript", Quote(contentType)))
+	}
+
+	if b.Encoding == EncodingGzip && size.Transferred > TransferBudget {
+		problems = append(problems, fmt.Sprintf("%d bytes transferred gzip-compressed, over the budget of %d", size.Transferred, TransferBudget))
+	}
+
+	if size.Decoded > DecodedBudget {
+		problems = append(problems, fmt.Sprintf("%d bytes decoded, over the budget of %d", size.Decoded, DecodedBudget))
+	}
+
+	if len(problems) > 0 {
+		return size, errors.New(strings.Join(problems, "; "))
+	}
+
+	return size, nil
 }

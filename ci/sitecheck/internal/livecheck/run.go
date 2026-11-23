@@ -2,8 +2,12 @@ package livecheck
 
 import (
 	"context"
+	"crypto/tls"
 	"crypto/x509"
+	"errors"
+	"fmt"
 	"net"
+	"strings"
 	"time"
 )
 
@@ -95,7 +99,139 @@ type Config struct {
 // ModuleScript fails. Records and Tags are never a configuration error: they
 // fail their checks instead.
 func (c Config) Validate() error {
-	return stub(c)
+	for _, check := range []func() error{c.validateHosts, c.validateTiming, c.validateLimits, c.validateManifest} {
+		if err := check(); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// validateHosts checks Host and Apex.
+func (c Config) validateHosts() error {
+	if !isDNSName(c.Host) {
+		return fmt.Errorf("the host %q is not a DNS name", c.Host)
+	}
+
+	if !isDNSName(c.Apex) {
+		return fmt.Errorf("the apex %q is not a DNS name", c.Apex)
+	}
+
+	if strings.EqualFold(c.Host, c.Apex) {
+		return fmt.Errorf("the host and the apex are both %q", c.Host)
+	}
+
+	return nil
+}
+
+// validateTiming checks the clock, the sleep, the retry bound and interval
+// and the certificate margin.
+func (c Config) validateTiming() error {
+	switch {
+	case c.RetryBound < MinRetryBound:
+		return fmt.Errorf("the retry bound %v is below the HTML's max-age, %v", c.RetryBound, MinRetryBound)
+	case c.RetryInterval <= 0 || c.RetryInterval > c.RetryBound:
+		return fmt.Errorf("the retry interval %v is not positive or over the retry bound %v", c.RetryInterval, c.RetryBound)
+	case c.CertMargin < MinCertMargin:
+		return fmt.Errorf("the certificate margin %v is below %v", c.CertMargin, MinCertMargin)
+	case c.Now == nil:
+		return errors.New("no clock (Now)")
+	case c.Sleep == nil:
+		return errors.New("no sleep (Sleep)")
+	}
+
+	return nil
+}
+
+// validateLimits checks the body cap and the request timeout.
+func (c Config) validateLimits() error {
+	switch {
+	case c.MaxBodyBytes < 0 || (c.MaxBodyBytes != 0 && c.MaxBodyBytes <= DecodedBudget):
+		return fmt.Errorf("the body cap %d is below the decoded budget plus one byte, %d", c.MaxBodyBytes, DecodedBudget+1)
+	case c.RequestTimeout < 0:
+		return fmt.Errorf("the request timeout %v is negative", c.RequestTimeout)
+	}
+
+	return nil
+}
+
+// validateManifest checks that the manifest is a site's: clean paths and
+// digests, the pages the checks read, no service worker and one module
+// script.
+func (c Config) validateManifest() error {
+	if len(c.Manifest.Files) == 0 {
+		return errors.New("the manifest lists no file")
+	}
+
+	for _, file := range c.Manifest.Files {
+		if err := checkManifestPath(file.Path); err != nil {
+			return fmt.Errorf("the manifest's path %q: %w", file.Path, err)
+		}
+
+		if !digestPattern.MatchString(file.SHA256) {
+			return fmt.Errorf("the manifest's path %q has the sha256 %q, not 64 lowercase hexadecimal characters", file.Path, file.SHA256)
+		}
+	}
+
+	for _, page := range []string{indexPage, privacyPage, verifyPage} {
+		if _, ok := c.Manifest.Digest(page); !ok {
+			return fmt.Errorf("the manifest lists no %s", page)
+		}
+	}
+
+	for _, path := range ServiceWorkerPaths() {
+		if _, ok := c.Manifest.Digest(strings.TrimPrefix(path, "/")); ok {
+			return fmt.Errorf("the manifest lists the service worker path %s: misconfigured", path)
+		}
+	}
+
+	if _, err := c.Manifest.ModuleScript(); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// isDNSName reports whether s is a plain DNS name: dot-separated labels of
+// 1 to 63 lowercase letters, digits and inner hyphens, at most 253 bytes.
+func isDNSName(s string) bool {
+	if s == "" || len(s) > 253 {
+		return false
+	}
+
+	for label := range strings.SplitSeq(s, ".") {
+		if label == "" || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
+			return false
+		}
+
+		for i := range len(label) {
+			c := label[i]
+			if (c < 'a' || c > 'z') && (c < '0' || c > '9') && c != '-' {
+				return false
+			}
+		}
+	}
+
+	return true
+}
+
+// withDefaults returns c with its zero optional fields set.
+func (c Config) withDefaults() Config {
+	if c.MaxBodyBytes == 0 {
+		c.MaxBodyBytes = DefaultMaxBodyBytes
+	}
+
+	if c.RequestTimeout == 0 {
+		c.RequestTimeout = DefaultRequestTimeout
+	}
+
+	if c.Dial == nil {
+		d := &net.Dialer{Timeout: c.RequestTimeout}
+		c.Dial = d.DialContext
+	}
+
+	return c
 }
 
 // Run checks the live site: it validates cfg (an invalid one is returned as
@@ -114,7 +250,29 @@ func (c Config) Validate() error {
 // the module script's Size and the matched Tag. A check failure is no error:
 // Run returns a nil error and a Report whose Passed is false.
 func Run(ctx context.Context, cfg Config) (Report, error) {
-	return Report{}, stub(ctx, cfg)
+	if err := cfg.Validate(); err != nil {
+		return Report{}, err
+	}
+
+	cfg = cfg.withDefaults()
+	c := newChecker(cfg)
+
+	defer c.close()
+
+	start := cfg.Now()
+
+	for rounds := 1; ; rounds++ {
+		report := c.round(ctx)
+		report.Rounds = rounds
+
+		if report.Passed() || cfg.Now().Sub(start)+cfg.RetryInterval > cfg.RetryBound {
+			return report, nil
+		}
+
+		if err := cfg.Sleep(ctx, cfg.RetryInterval); err != nil {
+			return report, err
+		}
+	}
 }
 
 // CheckCertificate dials host:443 through dial, does a TLS handshake with
@@ -124,5 +282,42 @@ func Run(ctx context.Context, cfg Config) (Report, error) {
 // host or not yet valid at now, or a NotAfter before now+margin is an error
 // (behaviour 7). margin below MinCertMargin is an error before any dial.
 func CheckCertificate(ctx context.Context, dial Dialer, roots *x509.CertPool, host string, now time.Time, margin time.Duration) (time.Time, error) {
-	return time.Time{}, stub(ctx, dial, roots, host, now, margin)
+	if margin < MinCertMargin {
+		return time.Time{}, fmt.Errorf("the certificate margin %v is below %v", margin, MinCertMargin)
+	}
+
+	if dial == nil {
+		d := &net.Dialer{Timeout: DefaultRequestTimeout}
+		dial = d.DialContext
+	}
+
+	conn, err := dial(ctx, "tcp", net.JoinHostPort(host, "443"))
+	if err != nil {
+		return time.Time{}, fmt.Errorf("connect to %s: %w", host, err)
+	}
+
+	tlsConn := tls.Client(conn, &tls.Config{
+		ServerName: host,
+		RootCAs:    roots,
+		Time:       func() time.Time { return now },
+		MinVersion: tls.VersionTLS12,
+	})
+
+	defer func() { _ = tlsConn.Close() }()
+
+	if err := tlsConn.HandshakeContext(ctx); err != nil {
+		return time.Time{}, fmt.Errorf("the certificate of %s does not verify: %w", host, err)
+	}
+
+	peers := tlsConn.ConnectionState().PeerCertificates
+	if len(peers) == 0 {
+		return time.Time{}, fmt.Errorf("%s served no certificate", host)
+	}
+
+	notAfter := peers[0].NotAfter
+	if notAfter.Before(now.Add(margin)) {
+		return notAfter, fmt.Errorf("the certificate of %s expires at %s, within the margin of %v", host, notAfter.UTC().Format(time.RFC3339), margin)
+	}
+
+	return notAfter, nil
 }

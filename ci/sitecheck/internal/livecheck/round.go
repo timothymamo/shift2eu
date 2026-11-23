@@ -1,0 +1,498 @@
+package livecheck
+
+import (
+	"context"
+	"crypto/sha256"
+	"crypto/tls"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptrace"
+	"slices"
+	"strings"
+)
+
+// The pages a site's manifest must list and the checks read.
+const (
+	indexPage   = "index.html"
+	privacyPage = "privacy.html"
+	verifyPage  = "verify.html"
+)
+
+// kindOrder is the order of the kinds in a Report.
+var kindOrder = []string{
+	KindManifestFile,
+	KindRoot,
+	KindServiceWorker,
+	KindHTMLCache,
+	KindRedirect,
+	KindCertificate,
+	KindHSTS,
+	KindStatement,
+	KindVersion,
+	KindModuleScriptSize,
+}
+
+// checker runs the rounds of one Run: its configuration and the HTTP client
+// every request of every round goes through.
+type checker struct {
+	cfg       Config
+	transport *http.Transport
+	client    *http.Client
+}
+
+// newChecker returns the checker of cfg, which has its defaults set. Its
+// client dials through cfg.Dial, verifies certificates against cfg.Roots at
+// cfg.Now, asks for no compression of its own (so a body arrives as the edge
+// transfers it), uses no proxy and follows no redirect.
+func newChecker(cfg Config) *checker {
+	transport := &http.Transport{
+		Proxy:       nil,
+		DialContext: cfg.Dial,
+		TLSClientConfig: &tls.Config{
+			RootCAs:    cfg.Roots,
+			Time:       cfg.Now,
+			MinVersion: tls.VersionTLS12,
+		},
+		TLSHandshakeTimeout:   cfg.RequestTimeout,
+		ResponseHeaderTimeout: cfg.RequestTimeout,
+		DisableCompression:    true,
+	}
+
+	return &checker{
+		cfg:       cfg,
+		transport: transport,
+		client: &http.Client{
+			Transport: transport,
+			CheckRedirect: func(*http.Request, []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
+		},
+	}
+}
+
+// close closes the client's idle connections.
+func (c *checker) close() {
+	c.transport.CloseIdleConnections()
+}
+
+// fetched is one request of a round and what came back.
+type fetched struct {
+	// err is set when no response came (refused, closed, timed out).
+	err    error
+	status int
+	header http.Header
+	// body is the body as read; bodyErr is set when it could not be.
+	body    Body
+	bodyErr error
+}
+
+// location returns the response's one Location, or an error.
+func (f fetched) location() (string, error) {
+	values := f.header.Values("Location")
+	if len(values) != 1 {
+		return "", fmt.Errorf("answered %d with %d Location headers, want one", f.status, len(values))
+	}
+
+	return values[0], nil
+}
+
+// round is one round of every check, with its report.
+type round struct {
+	*checker
+
+	checks    []Check
+	responses []Response
+}
+
+// add records one check.
+func (r *round) add(kind, target string, err error) {
+	check := Check{Kind: kind, Target: target, Passed: err == nil}
+	if err != nil {
+		check.Reason = err.Error()
+	}
+
+	r.checks = append(r.checks, check)
+}
+
+// fetch requests url (built by the checker, never taken from a response) with
+// Accept-Encoding: gzip, following no redirect, reads its body under the cap
+// and records the response.
+func (r *round) fetch(ctx context.Context, url string) fetched {
+	ctx, cancel := context.WithTimeout(ctx, r.cfg.RequestTimeout)
+	defer cancel()
+
+	var remote string
+
+	ctx = httptrace.WithClientTrace(ctx, &httptrace.ClientTrace{
+		GotConn: func(info httptrace.GotConnInfo) {
+			remote = info.Conn.RemoteAddr().String()
+		},
+	})
+
+	recorded := Response{URL: url}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, http.NoBody)
+	if err != nil {
+		r.responses = append(r.responses, recorded)
+
+		return fetched{err: err}
+	}
+
+	req.Header.Set("Accept-Encoding", EncodingGzip)
+
+	resp, err := r.client.Do(req)
+	recorded.RemoteAddr = remote
+
+	if err != nil {
+		r.responses = append(r.responses, recorded)
+
+		return fetched{err: fmt.Errorf("no response: %s", Quote(err.Error()))}
+	}
+
+	defer func() { _ = resp.Body.Close() }()
+
+	f := fetched{status: resp.StatusCode, header: resp.Header}
+	f.body, f.bodyErr = ReadBody(strings.Join(resp.Header.Values("Content-Encoding"), ", "), resp.Body, r.cfg.MaxBodyBytes)
+
+	recorded.Status = resp.StatusCode
+	recorded.Age = ParseAge(resp.Header.Values("Age"))
+	recorded.CacheControl = strings.Join(resp.Header.Values("Cache-Control"), ", ")
+	recorded.HSTS = strings.Join(resp.Header.Values("Strict-Transport-Security"), ", ")
+	r.responses = append(r.responses, recorded)
+
+	return f
+}
+
+// round runs every check once and returns its report.
+func (c *checker) round(ctx context.Context) Report {
+	r := &round{checker: c}
+	host := "https://" + c.cfg.Host
+
+	files := make(map[string]fetched, len(c.cfg.Manifest.Files))
+	matched := make(map[string]bool, len(c.cfg.Manifest.Files))
+
+	for _, file := range c.cfg.Manifest.Files {
+		f := r.fetch(ctx, host+"/"+file.Path)
+		files[file.Path] = f
+
+		err := judgeFile(f, file.SHA256)
+		matched[file.Path] = err == nil
+		r.add(KindManifestFile, file.Path, err)
+	}
+
+	root := r.fetch(ctx, host+"/")
+	indexDigest, _ := c.cfg.Manifest.Digest(indexPage)
+	r.add(KindRoot, "/", judgeFile(root, indexDigest))
+
+	for _, path := range ServiceWorkerPaths() {
+		r.add(KindServiceWorker, path, judgeServiceWorker(r.fetch(ctx, host+path)))
+	}
+
+	r.add(KindHTMLCache, "/", judgeCache(root))
+
+	for _, page := range c.cfg.Manifest.HTMLPages() {
+		r.add(KindHTMLCache, page, judgeCache(files[page]))
+	}
+
+	record, recordErr := c.cfg.Records.HSTS, c.cfg.Records.HSTSErr
+	if recordErr != nil {
+		// Fail safe: the record's own check fails, and the rest is judged as
+		// if HSTS were met, without preload and with plain HTTP redirecting.
+		record = HSTSRecord{Outcome: HSTSMet, PlainHTTPWWW: PlainHTTPRedirect}
+	}
+
+	apexHTTPS := r.redirectMatrix(ctx, record)
+
+	for _, name := range []string{c.cfg.Host, c.cfg.Apex} {
+		_, err := CheckCertificate(ctx, c.cfg.Dial, c.cfg.Roots, name, c.cfg.Now(), c.cfg.CertMargin)
+		if err != nil {
+			err = errors.New(Quote(err.Error()))
+		}
+
+		r.add(KindCertificate, name, err)
+	}
+
+	r.judgeHSTS(root, apexHTTPS, record, recordErr)
+	r.judgeStatements(files, matched, record, recordErr)
+
+	report := Report{Host: c.cfg.Host, Apex: c.cfg.Apex}
+
+	tag, err := c.judgeVersion(root)
+	r.add(KindVersion, "/", err)
+
+	if err == nil {
+		report.Version = tag
+	}
+
+	script, _ := c.cfg.Manifest.ModuleScript()
+	report.ModuleScript, err = judgeModuleScript(files[script])
+	r.add(KindModuleScriptSize, script, err)
+
+	slices.SortStableFunc(r.checks, func(a, b Check) int {
+		if byKind := slices.Index(kindOrder, a.Kind) - slices.Index(kindOrder, b.Kind); byKind != 0 {
+			return byKind
+		}
+
+		return strings.Compare(a.Target, b.Target)
+	})
+
+	report.Checks = r.checks
+	report.Responses = r.responses
+
+	return report
+}
+
+// judgeFile returns nil when f is a 200 whose body, after content decoding,
+// has the SHA-256 digest.
+func judgeFile(f fetched, digest string) error {
+	switch {
+	case f.err != nil:
+		return f.err
+	case f.status >= 300 && f.status < 400:
+		return fmt.Errorf("answered %d, a redirect the check does not follow (Location %s)", f.status, Quote(f.header.Get("Location")))
+	case f.status != http.StatusOK:
+		return fmt.Errorf("answered %d, want 200", f.status)
+	case f.bodyErr != nil:
+		return fmt.Errorf("the body could not be read: %w", f.bodyErr)
+	}
+
+	if got := sha256Hex(f.body.Data); got != digest {
+		return fmt.Errorf("the body's SHA-256 after decoding is %s, the manifest's %s", got, digest)
+	}
+
+	return nil
+}
+
+// sha256Hex returns the lowercase hexadecimal SHA-256 of b.
+func sha256Hex(b []byte) string {
+	sum := sha256.Sum256(b)
+
+	return hex.EncodeToString(sum[:])
+}
+
+// judgeServiceWorker returns nil when f, a service worker path, did not answer
+// 200.
+func judgeServiceWorker(f fetched) error {
+	switch {
+	case f.err != nil:
+		return f.err
+	case f.status == http.StatusOK:
+		return errors.New("answered 200: a service worker script is served")
+	}
+
+	return nil
+}
+
+// judgeCache returns nil when f, an HTML page, is cached for at most
+// MaxHTMLAge.
+func judgeCache(f fetched) error {
+	if f.err != nil {
+		return f.err
+	}
+
+	return JudgeHTMLCache(f.header.Values("Cache-Control"))
+}
+
+// judgeRedirect returns nil when f is a 301 or 308 to exactly want.
+func judgeRedirect(f fetched, want string) error {
+	if f.err != nil {
+		return f.err
+	}
+
+	if f.status != http.StatusMovedPermanently && f.status != http.StatusPermanentRedirect {
+		return fmt.Errorf("answered %d, want 301 or 308 to %s", f.status, want)
+	}
+
+	location, err := f.location()
+	if err != nil {
+		return err
+	}
+
+	if location != want {
+		return fmt.Errorf("redirects to %s, want %s", Quote(location), want)
+	}
+
+	return nil
+}
+
+// redirectMatrix runs behaviour 6's checks under record and returns the
+// responses of https://<apex>/, whose Strict-Transport-Security judgeHSTS
+// reads.
+func (r *round) redirectMatrix(ctx context.Context, record HSTSRecord) fetched {
+	var apexRoot fetched
+
+	for _, path := range RedirectPaths() {
+		canonical := "https://" + r.cfg.Host + path
+		apexHTTPSURL := "https://" + r.cfg.Apex + path
+		apexHTTPURL := "http://" + r.cfg.Apex + path
+		hostHTTPURL := "http://" + r.cfg.Host + path
+
+		apexHTTP := r.fetch(ctx, apexHTTPURL)
+		apexHTTPS := r.fetch(ctx, apexHTTPSURL)
+		hostHTTP := r.fetch(ctx, hostHTTPURL)
+
+		if path == "/" {
+			apexRoot = apexHTTPS
+		}
+
+		httpsErr := judgeRedirect(apexHTTPS, canonical)
+
+		var apexErr error
+
+		if record.PreloadPursued {
+			apexErr = judgeRedirect(apexHTTP, apexHTTPSURL)
+			if apexErr == nil && httpsErr != nil {
+				apexErr = fmt.Errorf("its second hop %s: %w", apexHTTPSURL, httpsErr)
+			}
+		} else {
+			apexErr = judgeRedirect(apexHTTP, canonical)
+		}
+
+		r.add(KindRedirect, apexHTTPURL, apexErr)
+		r.add(KindRedirect, apexHTTPSURL, httpsErr)
+
+		if record.PlainHTTPWWW == PlainHTTPRefuseOrClose {
+			r.add(KindRedirect, hostHTTPURL, r.judgeRefuseOrClose(hostHTTP, canonical))
+		} else {
+			r.add(KindRedirect, hostHTTPURL, judgeRedirect(hostHTTP, canonical))
+		}
+	}
+
+	return apexRoot
+}
+
+// judgeRefuseOrClose returns nil when f, plain HTTP on the canonical host in
+// refuse-or-close mode, got no response, a 301 or 308 to exactly canonical, or
+// a 4xx or 5xx whose body is no manifest file's.
+func (r *round) judgeRefuseOrClose(f fetched, canonical string) error {
+	switch {
+	case f.err != nil:
+		return nil
+	case f.status >= 300 && f.status < 400:
+		return judgeRedirect(f, canonical)
+	case f.status < 400:
+		return fmt.Errorf("answered %d, want a refused or closed connection, a redirect to %s or a refusal", f.status, canonical)
+	case f.bodyErr != nil:
+		return fmt.Errorf("answered %d with a body that could not be read: %w", f.status, f.bodyErr)
+	}
+
+	digest := sha256Hex(f.body.Data)
+
+	for _, file := range r.cfg.Manifest.Files {
+		if file.SHA256 == digest {
+			return fmt.Errorf("answered %d with the bytes of %s over plain HTTP", f.status, file.Path)
+		}
+	}
+
+	return nil
+}
+
+// judgeHSTS runs behaviour 8's header checks: each record that could not be
+// read fails a check of its own; when HSTS is met, the canonical host's header
+// (from root) is held to the minimum, and the apex's (from apexRoot) too when
+// preload is pursued.
+func (r *round) judgeHSTS(root, apexRoot fetched, record HSTSRecord, recordErr error) {
+	if recordErr != nil {
+		r.add(KindHSTS, "hsts.json", fmt.Errorf("the HSTS record could not be read (fail safe): %w", recordErr))
+	}
+
+	if err := r.cfg.Records.PreloadErr; err != nil {
+		r.add(KindHSTS, "preload.json", fmt.Errorf("the preload record could not be read (fail safe, counted as not on the preload list): %w", err))
+	}
+
+	if record.Outcome != HSTSMet {
+		return
+	}
+
+	r.add(KindHSTS, r.cfg.Host, judgeHSTSHeader(root, record.PreloadPursued))
+
+	if record.PreloadPursued {
+		r.add(KindHSTS, r.cfg.Apex, judgeHSTSHeader(apexRoot, true))
+	}
+}
+
+// judgeHSTSHeader returns nil when f's Strict-Transport-Security meets the
+// minimum.
+func judgeHSTSHeader(f fetched, preload bool) error {
+	if f.err != nil {
+		return f.err
+	}
+
+	hsts, err := ParseHSTS(f.header.Values("Strict-Transport-Security"))
+	if err != nil {
+		return err
+	}
+
+	return hsts.Meets(preload)
+}
+
+// judgeStatements runs behaviour 8's statement checks on the pages whose
+// digest matched the manifest.
+func (r *round) judgeStatements(files map[string]fetched, matched map[string]bool, record HSTSRecord, recordErr error) {
+	carried := func(page, marker string) {
+		var err error
+
+		switch {
+		case !matched[page]:
+			err = fmt.Errorf("the deployed %s is not the manifest's", page)
+		case !Carries(files[page].body.Data, marker):
+			err = fmt.Errorf("%s carries no visible, non-empty element with id=%q", page, marker)
+		}
+
+		r.add(KindStatement, page+"#"+marker, err)
+	}
+
+	if recordErr == nil && record.Outcome == HSTSWaived {
+		carried(privacyPage, MarkerHSTSWaived)
+		carried(verifyPage, MarkerHSTSWaived)
+	}
+
+	if r.cfg.Records.PreloadErr != nil || !r.cfg.Records.Preload.OnPreloadList {
+		carried(privacyPage, MarkerDowngradeRisk)
+	}
+}
+
+// judgeVersion reads the live version from root and returns its Tag when it
+// is a tag of the list and the manifest's version.
+func (c *checker) judgeVersion(root fetched) (Tag, error) {
+	switch {
+	case root.err != nil:
+		return Tag{}, root.err
+	case root.status != http.StatusOK:
+		return Tag{}, fmt.Errorf("the root answered %d, want 200", root.status)
+	case root.bodyErr != nil:
+		return Tag{}, fmt.Errorf("the root's body could not be read: %w", root.bodyErr)
+	}
+
+	text, err := VersionText(root.body.Data)
+	if err != nil {
+		return Tag{}, err
+	}
+
+	tag, err := MatchVersion(text, c.cfg.Tags)
+	if err != nil {
+		return Tag{}, err
+	}
+
+	if tag.String() != c.cfg.Manifest.Version {
+		return Tag{}, fmt.Errorf("the live version %s is a tag of the repository, but not the release's %s", tag.String(), Quote(c.cfg.Manifest.Version))
+	}
+
+	return tag, nil
+}
+
+// judgeModuleScript measures the module script's response.
+func judgeModuleScript(f fetched) (Size, error) {
+	switch {
+	case f.err != nil:
+		return Size{}, f.err
+	case f.status != http.StatusOK:
+		return Size{}, fmt.Errorf("answered %d, want 200", f.status)
+	case f.bodyErr != nil:
+		return Size{}, fmt.Errorf("the body could not be read: %w", f.bodyErr)
+	}
+
+	return MeasureModuleScript(strings.Join(f.header.Values("Content-Type"), ", "), f.body)
+}

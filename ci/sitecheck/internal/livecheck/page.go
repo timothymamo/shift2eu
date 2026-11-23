@@ -1,5 +1,10 @@
 package livecheck
 
+import (
+	"fmt"
+	"strings"
+)
+
 // The statement markers of ADR 0036: the ids of the elements the deployed
 // pages carry when a record asks for the statement (behaviour 8).
 const (
@@ -28,9 +33,9 @@ const MaxVersionBytes = 64
 // attribute of another name ("data-id"). Two elements with the marker's id
 // are not carried (an ambiguous page).
 func Carries(page []byte, marker string) bool {
-	_ = stub(page, marker)
+	found := findMarked(page, marker)
 
-	return false
+	return found.count == 1 && !found.hidden && strings.TrimSpace(found.text) != ""
 }
 
 // VersionText returns the text content of the one element of page whose id is
@@ -40,5 +45,18 @@ func Carries(page []byte, marker string) bool {
 // element, two, a hidden one, or a text longer than MaxVersionBytes is an
 // error.
 func VersionText(page []byte) (string, error) {
-	return "", stub(page)
+	found := findMarked(page, VersionMarker)
+
+	switch {
+	case found.count != 1:
+		return "", fmt.Errorf("the page has %d elements with id=%q, want one", found.count, VersionMarker)
+	case found.hidden:
+		return "", fmt.Errorf("the element with id=%q is hidden", VersionMarker)
+	case found.text == "":
+		return "", fmt.Errorf("the element with id=%q has no text", VersionMarker)
+	case len(found.text) > MaxVersionBytes:
+		return "", fmt.Errorf("the element with id=%q holds %d bytes, more than %d", VersionMarker, len(found.text), MaxVersionBytes)
+	}
+
+	return found.text, nil
 }

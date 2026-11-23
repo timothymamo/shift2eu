@@ -1,5 +1,5 @@
 // Package livecheck checks the live site against a release's manifest (PRD
-// #297 milestone 3, issue #346): the library of ci/sitecheck, which the
+// #297 milestone 3, issue #346, ADR 0043): the library of ci/sitecheck, which the
 // release's check and milestone 4's scheduled workflow run.
 //
 // It fetches, over HTTPS and plain HTTP, only URLs it builds itself from the
