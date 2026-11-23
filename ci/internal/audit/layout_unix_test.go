@@ -24,7 +24,8 @@ import (
 // laid down read-only, so the type is the one defect the case names.
 var unixLayoutCases = []layoutCase{
 	{
-		name: "the checkout copy holds a FIFO",
+		name:      "the checkout copy holds a FIFO",
+		wantNamed: "srv/audit/checkout/pipe",
 		mutate: mutateTree(checkout, func(t *testing.T, root string) {
 			t.Helper()
 			makeFIFO(t, pathOf(root, []string{"checkout", "pipe"}))
@@ -33,7 +34,8 @@ var unixLayoutCases = []layoutCase{
 	{
 		// A short name: the socket's path is limited to 108 bytes. A socket
 		// the checks' results hold in place of a report is the same defect.
-		name: "a socket",
+		name:      "a socket",
+		wantNamed: "srv/audit/checks/sock",
 		mutate: mutateTree(checks, func(t *testing.T, root string) {
 			t.Helper()
 			makeSocket(t, pathOf(root, []string{"checks", "sock"}))
