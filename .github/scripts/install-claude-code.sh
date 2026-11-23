@@ -82,6 +82,6 @@ fi
 
 tar -xzf "${download}/${tgz}" -C "${dest}" package/claude
 # The verified tarball stays beside the binary, byte for byte what npm packed, so the audit's launcher
-# can check it against the pin again in the step that runs it (ADR 0040's milestone-2 amendment).
+# can check it against the pin again in the step that runs it (ADR 0040's model-job amendment).
 cp -- "${download}/${tgz}" "${dest}/claude-code.tgz"
 DISABLE_AUTOUPDATER=1 "${dest}/package/claude" --version

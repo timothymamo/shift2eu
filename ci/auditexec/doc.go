@@ -1,6 +1,6 @@
 // Command auditexec is the command wrapper of the scheduled security audit,
 // installed in the model job as /srv/audit/bin/audit-exec (ADR 0040's
-// milestone-2 amendment, issue #277, PRD #175 milestone 2): the one program
+// model-job amendment, issue #277, PRD #175 milestone 2): the one program
 // the audit's model may run through Bash. Its rules, below, are the current
 // ones; how each came about is in ADR 0040.
 //

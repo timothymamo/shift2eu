@@ -17,7 +17,7 @@ import (
 
 const (
 	// defaultPin is the one pin file of the Claude Code CLI, which every
-	// workflow that installs it reads (ADR 0040's amendment), relative to the
+	// workflow that installs it reads (ADR 0040's model-job amendment), relative to the
 	// repository root CI runs from.
 	defaultPin = ".github/claude-code.yaml"
 

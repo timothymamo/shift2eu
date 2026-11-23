@@ -1,5 +1,5 @@
 // Package claudecode is the launcher of the Claude Code CLI that the CI tools
-// ask a model through (ADR 0033, ADR 0040's milestone 2 amendment, issue
+// ask a model through (ADR 0033, ADR 0040's model-job amendment, issue
 // #277): one run of `claude -p` on the maintainer's Claude subscription, with
 // the model, the built-in tools, the effort, a settings file, a permission mode
 // (dontAsk or plan only), an appended system prompt, safe mode, the working

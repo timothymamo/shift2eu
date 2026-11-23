@@ -164,6 +164,15 @@ Arrows are imports. They point inwards only:
   (`audit-library`, no `syscall`, `unsafe`, `plugin` or cgo) and the forbidigo group `audit-library-env`
   (no environment read, no home, config or cache lookup; its process starts stay allowed), and only `ci/auditrun` and `ci/auditexec` may
   import it (`audit-library-importers`).
+  `ci/auditpublish/internal/publish` is the scheduled audit's model-free publish core (PRD #175, ADR 0040,
+  "The publish program's core"): it validates the model's result fail-closed, places each finding public
+  or private, fingerprints it, escapes every model-written text, renders the report and the fixed
+  templates, scans every text it would publish for tokens, keys and encoded runs, and maps each outcome
+  to an exit code and one summary line. It does no I/O: it opens no file and no connection, reads no
+  environment variable and no clock, and starts no process (`audit-publish-library`: named pure
+  standard packages, no `os` or `net`, and no package of the product). Its entry point
+  `ci/auditpublish`, which reads, runs gitleaks and calls GitHub, comes with milestone 2's fourth pull
+  request.
 - **`cmd/shift2eu`** is the CLI's composition root, the only place besides `cmd/shift2eu-web` that
   constructs adapters and injects them (and `ci/sitebuild`, which constructs the three targets only to
   read their catalogs). Its imports are a strict allow list (`composition-root`, issue #101): the

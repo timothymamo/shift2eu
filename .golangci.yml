@@ -1720,7 +1720,7 @@ linters:
             - time$
             - github.com/timothymamo/shift2eu/ci/internal/claudecode$
         # The Claude Code CLI launcher the AI reviewer shares with the
-        # scheduled audit (issue #277, ADR 0040's amendment) reads no
+        # scheduled audit (issue #277, ADR 0040's model-job amendment) reads no
         # environment variable and no file: its callers hand it the CLI's path,
         # the token, the model, the tools and the rest of the launch. It is held
         # to named standard packages, without syscall or unsafe, and to no
@@ -1748,7 +1748,7 @@ linters:
             - os/exec$
             - strings$
             - time$
-        # Who may run the Claude Code CLI (issue #277, ADR 0040's amendment):
+        # Who may run the Claude Code CLI (issue #277, ADR 0040's model-job amendment):
         # the AI reviewer's library and the scheduled audit's library. Go's
         # internal rule lets any package under ci/ import the launcher; this
         # rule names the ones that may, and its own tests.
@@ -1762,7 +1762,7 @@ linters:
           deny:
             - pkg: github.com/timothymamo/shift2eu/ci/internal/claudecode
               desc: "only the AI reviewer's library and the audit's library run the Claude Code CLI through the shared launcher (issue #277, ADR 0040)"
-        # The scheduled audit's library (issue #277, ADR 0040's amendment) is
+        # The scheduled audit's library (issue #277, ADR 0040's model-job amendment) is
         # no part of the product: under ci/internal, so Go's internal rule
         # keeps cmd/ and internal/ from it. It is held to named standard
         # packages, each ending in $, and to the shared launcher, the one
@@ -1805,7 +1805,7 @@ linters:
             - sync/atomic$
             - time$
             - github.com/timothymamo/shift2eu/ci/internal/claudecode$
-        # Who may import the audit's library (ADR 0040's amendment): the
+        # Who may import the audit's library (ADR 0040's model-job amendment): the
         # launcher ci/auditrun, the wrapper ci/auditexec and the library's own
         # tests, so no other package of ci/ borrows the audit's checks. The
         # ci/auditexec exception is reserved: audit-exec's strict allow list
@@ -1822,7 +1822,7 @@ linters:
           deny:
             - pkg: github.com/timothymamo/shift2eu/ci/internal/audit
               desc: "only ci/auditrun and ci/auditexec import the audit's library (issue #277, ADR 0040)"
-        # The audit's launcher, ci/auditrun (issue #277, ADR 0040's amendment):
+        # The audit's launcher, ci/auditrun (issue #277, ADR 0040's model-job amendment):
         # a main package, which Go refuses to import, held to the standard
         # packages it imports, each ending in $, and the audit's library. os
         # for its one os.LookupEnv, the step summary and os.Exit; it starts no
@@ -1980,7 +1980,7 @@ linters:
             - pkg: net
               desc: "the audit's publish core opens no connection; ci/auditpublish calls GitHub (ADR 0040)"
         # The scheduled audit's command wrapper (issue #277, ADR 0040's
-        # amendment), installed as /srv/audit/bin/audit-exec, is no part of the
+        # model-job amendment), installed as /srv/audit/bin/audit-exec, is no part of the
         # product: a main package, which Go refuses to import. It is held to the
         # standard packages it imports, each ending in $: syscall for the one
         # syscall.Exec that replaces it with a listed command, with an
@@ -2572,7 +2572,7 @@ linters:
         - pattern: '^os\.(?:Getenv|LookupEnv|ExpandEnv|Environ|StartProcess|UserHomeDir|UserConfigDir|UserCacheDir|TempDir)$'
           pkg: '^os$'
           msg: 'claude-code-pin-env: the Claude Code pin check reads no environment variable, locates no home, config, cache or temp directory and starts no process; it reads the workflow and one public registry document (CLAUDE.md rule 3)'
-        # Group audit-exec-env (issue #277, ADR 0040's amendment): the audit's
+        # Group audit-exec-env (issue #277, ADR 0040's model-job amendment): the audit's
         # command wrapper reads no environment variable, hands over no
         # environment of the caller's, locates no home, config, cache or temp
         # directory, starts no process, loads no library and makes no raw
@@ -2591,7 +2591,7 @@ linters:
         - pattern: '^syscall\.Exec$'
           pkg: '^syscall$'
           msg: 'audit-exec-env: syscall.Exec is used in ci/auditexec/main.go only, passed to run (ADR 0040); a test passes a fake exec of its own'
-        # Group audit-run-env (issue #277, ADR 0040's amendment): the audit's
+        # Group audit-run-env (issue #277, ADR 0040's model-job amendment): the audit's
         # launcher reads the step's environment through one call only, the
         # os.LookupEnv ci/auditrun/main.go passes to run, which reads the
         # variables ADR 0040 names and no other. Everything else is refused:
@@ -2606,7 +2606,7 @@ linters:
         - pattern: '^os\.LookupEnv$'
           pkg: '^os$'
           msg: 'audit-run-env: os.LookupEnv is used in ci/auditrun/main.go only, passed to run (ADR 0040); a test passes a lookup function of its own'
-        # Group audit-library-env (issue #277 round F, ADR 0040's amendment):
+        # Group audit-library-env (issue #277 round F, ADR 0040's model-job amendment):
         # the audit's library reads no environment variable and locates no
         # home, config or cache directory; what it needs of the step's
         # environment reaches it as parameters from ci/auditrun. It names no

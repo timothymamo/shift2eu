@@ -335,12 +335,12 @@ the wrapper's allowed commands and its scrubbed-environment allow list; and whet
 subscription is a Team or Enterprise plan, so whether server-managed settings could reach the model
 step.
 
-Two amendments follow. The first (2026-11-22, its subsection after the second's) covers how Claude Code
-runs: the shared launcher, the audit's launcher and its environment, the audit directory, the settings
-file and its permission mode, the wrapper, the sandbox preflight, the user-namespace handling and the
-Claude Code pin. The second (2026-11-23, the next subsection) settles the publish program's core: the
+Two amendments follow. "The publish program's core" (2026-11-23) settles the publish program's core: the
 result schema and its closed category list, the publish script's false-positive matching and its
-derivation of each finding's status, the finding limit and the encoded-run thresholds. The other items of
+derivation of each finding's status, the finding limit and the encoded-run thresholds. Then "How Claude
+Code runs in the model job" (2026-11-22) covers how Claude Code runs: the shared launcher, the audit's
+launcher and its environment, the audit directory, the settings file and its permission mode, the
+wrapper, the sandbox preflight, the user-namespace handling and the Claude Code pin. The other items of
 the list above come with the pull requests of milestone 2 that build them.
 
 ### The publish program's core (milestone 2, amended 2026-11-23)

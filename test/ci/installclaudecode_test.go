@@ -21,7 +21,7 @@
 //     files of the tarball stay out, and <directory> is not where the download went - and the installer prints the
 //     version line the binary prints.
 //   - The verified tarball stays beside the binary, as <directory>/claude-code.tgz, byte for byte what npm packed: the
-//     audit's launcher, ci/auditrun, checks it against the one pin again in the model step (ADR 0040's milestone-2
+//     audit's launcher, ci/auditrun, checks it against the one pin again in the model step (ADR 0040's model-job
 //     amendment). A refused run keeps none: a tarball that did not match the integrity is gone with the download
 //     directory.
 //   - Every exit removes the mktemp -d directory the tarball was downloaded into, the successful install's and each
@@ -98,7 +98,7 @@ const (
 	claudePath = "package/claude"
 
 	// keptTarball is the verified tarball the installer keeps beside the binary, relative to the destination:
-	// ci/auditrun checks it against the one pin again in the model step (ADR 0040's milestone-2 amendment).
+	// ci/auditrun checks it against the one pin again in the model step (ADR 0040's model-job amendment).
 	keptTarball = "claude-code.tgz"
 
 	// versionLine is what the fixture's package/claude prints, as the real one prints "2.1.0 (Claude Code)".

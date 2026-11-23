@@ -1,5 +1,5 @@
 # The one pin of the Claude Code CLI that the AI reviewer and the scheduled
-# security audit install (ADR 0040's milestone-2 amendment, issue #277): the
+# security audit install (ADR 0040's model-job amendment, issue #277): the
 # linux-x64 platform package's exact version, which Renovate bumps through the
 # comment above it (CLAUDE.md rule 7), and the npm sha512 integrity of that
 # version's tarball, which Renovate cannot bump. Replace the integrity with the

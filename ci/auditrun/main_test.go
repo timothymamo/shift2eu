@@ -1,5 +1,5 @@
 // Pins ci/auditrun's entry point, the launcher the audit's model step runs
-// (ADR 0040's milestone-2 amendment, issue #277, "The audit's programs"): its
+// (ADR 0040's model-job amendment, issue #277, "The audit's programs"): its
 // two flags, the four variables it reads from the step's environment, and the
 // exit code each refusal ends with - 2 for a usage or input error, 3 for a run
 // refused before the CLI started. Its steps are fakes, so nothing here reads a

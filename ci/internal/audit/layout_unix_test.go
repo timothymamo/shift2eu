@@ -2,7 +2,7 @@
 
 // Pins the two entry types the layout's walk refuses that only a Unix host can
 // lay down - a FIFO and a unix socket - inside the checkout copy and the checks'
-// results (ADR 0040's milestone-2 amendment, issue #277, round D finding 3).
+// results (ADR 0040's model-job amendment, issue #277, round D finding 3).
 //
 // They are here, behind the unix build tag, because a FIFO is made with
 // syscall.Mkfifo, which windows and js/wasm do not have, and make lint

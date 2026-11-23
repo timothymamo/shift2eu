@@ -17,11 +17,11 @@ import (
 const missingCLI = "/nonexistent/claude-code/package/claude"
 
 // TestArgsTakeTheModelAndTheTools pins the two parameters the shared launcher
-// takes (issue #277, ADR 0040's amendment): --model is the config's model, and
+// takes (issue #277, ADR 0040's model-job amendment): --model is the config's model, and
 // --tools is its tools joined with ",", with no tools at all, --tools "", when
 // it names none. Every other argument is the reviewer's launch as ADR 0033
 // fixed it, in the same order, with the empty MCP configuration ADR 0040's
-// amendment adds for both callers: --strict-mcp-config alone reads a
+// model-job amendment adds for both callers: --strict-mcp-config alone reads a
 // configuration it is never given.
 func TestArgsTakeTheModelAndTheTools(t *testing.T) {
 	t.Parallel()

@@ -1,4 +1,4 @@
-// Pins the checksum step, the second of an audit run (ADR 0040's milestone-2
+// Pins the checksum step, the second of an audit run (ADR 0040's model-job
 // amendment, issue #277): the sha512 of the tarball the install step kept must
 // equal the npm integrity -claude-integrity names, and only then is the
 // archive's one entry, package/claude, extracted to the state area's bin/ with

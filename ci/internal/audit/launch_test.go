@@ -1,5 +1,5 @@
 // Pins the launch the audit and its preflight run the model with (ADR 0040's
-// milestone-2 amendment, issue #277, "The audit's programs" and "The settings
+// model-job amendment, issue #277, "The audit's programs" and "The settings
 // file"): the model claude-fable-5-2 at effort high, the six tools the audit
 // uses and no other, the non-interactive permission mode that refuses every
 // tool call no rule allows, the settings file read from the checkout copy, the

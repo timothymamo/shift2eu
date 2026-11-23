@@ -1,4 +1,4 @@
-// Pins the sandbox preflight's judgement (ADR 0040's milestone-2 amendment,
+// Pins the sandbox preflight's judgement (ADR 0040's model-job amendment,
 // issue #277, "The sandbox preflight"). The model judges nothing: every verdict
 // is computed from the transcript's tool_use and tool_result elements and from
 // the effects the launcher observes itself, so Judge is a pure function of the

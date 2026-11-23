@@ -1,6 +1,6 @@
 // Pins where the Claude Code CLI's version and integrity live: one committed
 // file, .github/claude-code.yaml, which every workflow that installs the CLI
-// reads and no workflow holds a copy of (ADR 0040's milestone-2 amendment, issue
+// reads and no workflow holds a copy of (ADR 0040's model-job amendment, issue
 // #277, PRD #175 milestone 2).
 //
 // Two workflows install the CLI from one pin: the AI reviewer's, and the
@@ -39,7 +39,7 @@ const (
 	// claudeCodePinFile is the one committed file the Claude Code pin lives in:
 	// the version under its # renovate: comment and the integrity beside it,
 	// which both workflows' install steps read and ci/claudecodepin checks
-	// against the npm registry (ADR 0040's milestone-2 amendment, issue #277).
+	// against the npm registry (ADR 0040's model-job amendment, issue #277).
 	claudeCodePinFile = ".github/claude-code.yaml"
 
 	// claudeCodePinStepName is the id: of the one step that reads that file's
@@ -51,7 +51,7 @@ const (
 // claudeCodePinOutputs are the values the install step's env: gives the pin: the
 // whole output of the step that read the file, one per name, so neither the
 // version nor the integrity is a value the workflow carries itself (ADR 0040's
-// milestone-2 amendment, issue #277, round J).
+// model-job amendment, issue #277, round J).
 var claudeCodePinOutputs = map[string]string{
 	"CLAUDE_CODE_PIN_VERSION":   "${{ steps." + claudeCodePinStepName + ".outputs.version }}",
 	"CLAUDE_CODE_PIN_INTEGRITY": "${{ steps." + claudeCodePinStepName + ".outputs.integrity }}",

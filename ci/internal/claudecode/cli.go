@@ -319,7 +319,7 @@ func (c *CLI) Ask(ctx context.Context, p Prompt) (string, error) {
 	switch decideRunOutcome(err, ctx.Err(), runCtx.Err()) {
 	case outcomeAnswer:
 		// An answer whose transcript is incomplete is no answer: the caller
-		// keeps the transcript to judge the run by (ADR 0040's amendment).
+		// keeps the transcript to judge the run by (ADR 0040's model-job amendment).
 		if stream != nil && stream.writeErr != nil {
 			return "", fmt.Errorf("%w: write the Claude Code CLI's transcript: %w", ErrModel, stream.writeErr)
 		}
@@ -439,7 +439,7 @@ func decideRunOutcome(answerErr, parentErr, runErr error) runOutcome {
 }
 
 // checkLaunch refuses, before anything runs, a field of the config ADR 0040's
-// amendment does not allow, naming the field: an effort outside the five, a
+// model-job amendment does not allow, naming the field: an effort outside the five, a
 // permission mode other than dontAsk or plan, a relative settings path, a
 // working directory or HOME that is not an absolute path to a directory that
 // exists, and an Env entry that is no NAME=VALUE, sets a variable outside
@@ -541,7 +541,7 @@ func contains(list []string, s string) bool {
 const emptyMCPConfig = `{"mcpServers":{}}`
 
 // args returns the CLI's arguments with the system prompt in systemFile, in
-// the order ADR 0040's amendment fixes.
+// the order ADR 0040's model-job amendment fixes.
 func (c *CLI) args(systemFile string) []string {
 	args := []string{"-p", "--model", c.cfg.Model}
 

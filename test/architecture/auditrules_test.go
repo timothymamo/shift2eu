@@ -1,5 +1,5 @@
 // Pins how the scheduled audit's two Go packages are held (ADR 0040's
-// milestone-2 amendment, issue #277): ci/internal/audit, the audit's library,
+// model-job amendment, issue #277): ci/internal/audit, the audit's library,
 // and ci/auditrun, the launcher the model step runs. Each gets a strict depguard
 // rule of named standard packages - an allow list, not $gostd, so a standard
 // package nobody thought of is refused until the list names it - and each may
@@ -25,7 +25,7 @@ import (
 	"github.com/timothymamo/shift2eu/test/architecture/internal/check"
 )
 
-// The rule names, package paths and file scopes ADR 0040's amendment gives the
+// The rule names, package paths and file scopes ADR 0040's model-job amendment gives the
 // audit's two packages.
 const (
 	auditLibraryRule    = "audit-library"

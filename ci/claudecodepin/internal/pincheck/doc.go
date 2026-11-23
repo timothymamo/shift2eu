@@ -3,7 +3,7 @@
 // registry document of exactly that version, and verifies that the document
 // publishes the pinned integrity.
 //
-// .github/claude-code.yaml (ADR 0040's milestone-2 amendment, issue #277) pins
+// .github/claude-code.yaml (ADR 0040's model-job amendment, issue #277) pins
 // the CLI's linux-x64 platform package, @anthropic-ai/claude-code-linux-x64,
 // for every workflow that installs it, by two top-level lines: version:,
 // under the # renovate: comment Renovate's generic manager reads, and

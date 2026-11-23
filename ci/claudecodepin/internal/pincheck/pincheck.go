@@ -47,7 +47,7 @@ type Pin struct {
 }
 
 // FromPinFile reads the pin from the one pin file, .github/claude-code.yaml
-// (ADR 0040's milestone-2 amendment, issue #277): exactly one top-level
+// (ADR 0040's model-job amendment, issue #277): exactly one top-level
 // version: line and exactly one integrity: line. The version must be
 // MAJOR.MINOR.PATCH and the integrity sha512- and the base64 of a SHA-512
 // digest. Each value must be a plain, unquoted YAML scalar with no trailing

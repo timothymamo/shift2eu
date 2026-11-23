@@ -1,4 +1,4 @@
-// Pins one audit run's order, exit codes and output (ADR 0040's milestone-2
+// Pins one audit run's order, exit codes and output (ADR 0040's model-job
 // amendment, issue #277). The six steps run in the ADR's order; a step that
 // fails stops the ones after it and ends the run with that step's exit code;
 // and the step prints one line - "finished", a constant class, or the ADR's

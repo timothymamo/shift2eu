@@ -333,7 +333,7 @@ func TestRunRefusesAPinFileWithoutAPin(t *testing.T) {
 
 // TestDefaultPinIsTheOneCommittedPinFile pins the file the check reads when its
 // workflow gives it no -pin: .github/claude-code.yaml, the one committed pin
-// file, which both workflows' install steps read too (ADR 0040's milestone-2
+// file, which both workflows' install steps read too (ADR 0040's model-job
 // amendment, issue #277). Renovate bumps the version there; a check that read
 // another file would hold a pin nothing installs.
 func TestDefaultPinIsTheOneCommittedPinFile(t *testing.T) {

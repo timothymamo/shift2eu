@@ -1,5 +1,5 @@
 // Pins the managed-settings refusal, the first step of an audit run (ADR
-// 0040's milestone-2 amendment, issue #277): a run under a root that holds a
+// 0040's model-job amendment, issue #277): a run under a root that holds a
 // Claude Code managed-settings path is refused before the CLI starts, because a
 // managed-settings file overrides the audit's own settings - the sandbox, the
 // permission rules and the deny list among them - and would run the model
