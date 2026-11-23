@@ -2652,12 +2652,18 @@ linters:
         # reads no environment variable, starts no process and locates no home,
         # config, cache or temp directory: it reads the files its flags name and
         # fetches the site, and holds no credential (CLAUDE.md rule 3).
-        # depguard keeps os/exec, syscall and unsafe out of it (site-check-main,
-        # site-check-library). Scope: every file under ci/sitecheck/, _test.go
-        # files included; its exclusion rule drops it everywhere else.
+        # depguard keeps os/exec and unsafe out of it, and syscall out of its
+        # library (site-check-main, site-check-library); the entry point names
+        # syscall.SIGTERM only, and the syscall entry refuses its environment
+        # reads, process starts, library loads and raw system calls. Scope:
+        # every file under ci/sitecheck/, _test.go files included; its
+        # exclusion rule drops it everywhere else.
         - pattern: '^os\.(?:Getenv|LookupEnv|ExpandEnv|Environ|StartProcess|UserHomeDir|UserConfigDir|UserCacheDir|TempDir)$'
           pkg: '^os$'
           msg: 'site-check-env: the live site check reads no environment variable, locates no home, config, cache or temp directory and starts no process; it reads the files its flags name and fetches the site (CLAUDE.md rule 3)'
+        - pattern: '^syscall\.(?:Getenv|GetEnvironmentVariable|Environ|Exec|ForkExec|StartProcess|CreateProcess|CreateProcessAsUser|GetEnvironmentStrings|LoadDLL|MustLoadDLL|NewLazyDLL|LoadLibrary|GetProcAddress|(?:(?:AllThreads|Raw)?Syscall(?:6|9|12|15|18|N)?|SYS_\w+))$'
+          pkg: '^syscall$'
+          msg: 'site-check-env: the live site check reads no environment variable, starts or replaces no process, loads no library and makes no raw system call through syscall; its entry point names only syscall.SIGTERM (CLAUDE.md rule 3)'
         # Group audit-exec-env (issue #277, ADR 0040's model-job amendment): the audit's
         # command wrapper reads no environment variable, hands over no
         # environment of the caller's, locates no home, config, cache or temp
