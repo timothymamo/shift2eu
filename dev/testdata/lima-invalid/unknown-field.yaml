@@ -222,10 +222,11 @@ provision:
       # The archive URIs cloud-init writes into ubuntu.sources become the ubuntuMirror param; the security URIs
       # (security.ubuntu.com) stay, so a mirror picked for speed never carries the security updates. The param is
       # checked again here, as limactl edit can set it without make vm-up: an http:// or https:// URL with a host,
-      # of letters, digits and . - / : _ ~ only, none of them special to sed's replacement or its ',' delimiter.
+      # of letters, digits and . - / : _ ~ only, so no backslash for awk -v to read as an escape.
       # The default is where cloud-init points the archive, so it changes nothing, even with no ubuntu.sources.
-      # Idempotent: once rewritten, the file names no http(s)://archive.ubuntu.com/ubuntu URI any more, and a
-      # country mirror, whose host only ends in that name, is no match (the host must follow ://). A file with
+      # Idempotent: once rewritten, a URIs line names the mirror, and a field that is the mirror and an archive URI
+      # at once (a mirror on archive.ubuntu.com's own host) is rewritten to itself. A country mirror, whose host
+      # only ends in that name, is no match (the host must follow ://). A file with
       # no archive URI that does not already name the mirror (a ports file, a country mirror) fails the step and
       # stays as it was: a warning would leave the VM on the archive the mirror was meant to replace. It is set
       # when the VM is created; this step keeps it at every boot (docs/dev-environment.md, The Ubuntu mirror).
@@ -239,19 +240,40 @@ provision:
         exit 1
       fi
       sources="${root}/etc/apt/sources.list.d/ubuntu.sources"
-      archive='(^|[[:space:]])https?://archive\.ubuntu\.com/ubuntu/?([[:space:]]|$)'
-      if [ "${PARAM_ubuntuMirror%/}" != "http://archive.ubuntu.com/ubuntu" ]; then
+      # One awk program, POSIX awk only (the Mac's is BSD's), for the guard and the rewrite alike, so the archive
+      # match is defined once. It looks only at the URIs lines; every other line, a comment or a field of another
+      # name, is no URI apt fetches from. On a URIs line it walks the whitespace-separated fields with match(),
+      # keeping each separator as it is, and a field that is exactly an http(s)://archive.ubuntu.com/ubuntu URI,
+      # with or without its trailing slash, becomes the mirror with one: per field, in one pass, so any number of
+      # archive URIs on a line is rewritten, a mirror on archive.ubuntu.com's own host included, and a line with
+      # none comes out byte for byte. mode=rewrite prints the file; mode=find exits 0 when a URIs line holds an
+      # archive URI, mode=named when one already names the mirror.
+      uris_awk='
+        function archive(f) { return f ~ /^https?:\/\/archive\.ubuntu\.com\/ubuntu\/?$/ }
+        !/^[ \t]*URIs:/ { if (mode == "rewrite") print; next }
+        {
+          out = ""; rest = $0
+          while (match(rest, /[^ \t]+/)) {
+            sep = substr(rest, 1, RSTART - 1); f = substr(rest, RSTART, RLENGTH); rest = substr(rest, RSTART + RLENGTH)
+            if (archive(f)) { found = 1; f = mirror "/" } else if (f == mirror || f == mirror "/") named = 1
+            out = out sep f
+          }
+          if (mode == "rewrite") print out rest
+        }
+        END { if (mode == "find") exit !found; if (mode == "named") exit !named }'
+      mirror="${PARAM_ubuntuMirror%/}"
+      if [ "${mirror}" != "http://archive.ubuntu.com/ubuntu" ]; then
         if [ ! -f "${sources}" ]; then
           echo >&2 "ubuntuMirror ${PARAM_ubuntuMirror}: ${sources} does not exist, so the mirror cannot be set (docs/dev-environment.md, The Ubuntu mirror)."
           exit 1
         fi
-        if grep -qE "${archive}" "${sources}"; then
-          # Twice: a match takes the whitespace after its URI, so of two archive URIs on one URIs line the first
-          # pass rewrites every other one and the second pass the rest. Two passes, not a loop until no change,
-          # as a mirror on archive.ubuntu.com itself (https://) still matches once rewritten.
-          sed -E -i -e "s,(^|[[:space:]])https?://archive\.ubuntu\.com/ubuntu/?([[:space:]]|\$),\1${PARAM_ubuntuMirror%/}/\2,g" \
-            -e "s,(^|[[:space:]])https?://archive\.ubuntu\.com/ubuntu/?([[:space:]]|\$),\1${PARAM_ubuntuMirror%/}/\2,g" "${sources}"
-        elif ! grep -qF "${PARAM_ubuntuMirror%/}/" "${sources}"; then
+        if awk -v mode=find -v mirror="${mirror}" "${uris_awk}" "${sources}"; then
+          # Written beside the file and copied back with cat, which keeps its mode and owner; the trap removes the
+          # temporary file on every exit, a failed awk or cat included, so apt never reads it as a source.
+          trap 'rm -f "${sources}.shift2eu-new"' EXIT
+          awk -v mode=rewrite -v mirror="${mirror}" "${uris_awk}" "${sources}" >"${sources}.shift2eu-new"
+          cat "${sources}.shift2eu-new" >"${sources}"
+        elif ! awk -v mode=named -v mirror="${mirror}" "${uris_awk}" "${sources}"; then
           echo >&2 "ubuntuMirror ${PARAM_ubuntuMirror}: ${sources} has no http(s)://archive.ubuntu.com/ubuntu URI to rewrite and does not name the mirror, so the mirror cannot be set; nothing changed. Its URIs lines (docs/dev-environment.md, The Ubuntu mirror):"
           grep -E '^[[:space:]]*URIs:' "${sources}" >&2 || true
           exit 1

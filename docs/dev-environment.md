@@ -491,7 +491,7 @@ Unset, it keeps the `ubuntuMirror` param's default in `dev/lima.yaml`, `http://a
 and `limactl start` gets the same arguments as without it. Any other value (another scheme, no host, a query
 string, a space, a quote or a shell character) fails before `limactl` runs, naming `UBUNTU_MIRROR`.
 
-The provisioning rewrites only the archive URIs of `ubuntu.sources` to the mirror, before its first
+The provisioning rewrites only the archive URIs on the `URIs:` lines of `ubuntu.sources` to the mirror, before its first
 `apt-get update`; the security URIs (`security.ubuntu.com`) stay, so a mirror picked for speed never carries
 the security updates. With the default nothing is rewritten. With another mirror and no `ubuntu.sources` in
 the VM, the step fails with a message naming the file rather than fetching from an archive you did not ask
