@@ -63,10 +63,17 @@ func OutcomeOf(err error) Outcome {
 }
 
 // WithCounts sets a published run's public total and private state, which
-// its summary line states. It leaves any other outcome as it is.
+// its summary line states. A published run whose private findings were not
+// filed is the not-filed outcome, exit code 5, exactly as if the entry point
+// had returned ErrPrivateNotFiled: the job fails, never goes green. It leaves
+// any other outcome as it is.
 func (o Outcome) WithCounts(public int, private PrivateState) Outcome {
 	if o.kind != outcomePublished {
 		return o
+	}
+
+	if private == PrivateNotFiled {
+		return Outcome{kind: outcomePrivateNotFiled}
 	}
 
 	o.counted, o.public, o.private = true, public, private

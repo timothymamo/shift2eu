@@ -126,7 +126,15 @@ func newPlan(in ReportInput) (plan, error) {
 
 		// Unix seconds, not time.Time.Sub, which saturates at about 292
 		// years: a previous report of the year 0001 gives its true gap.
-		p.gapDays = int((runDate.Unix() - p.previous.date.Unix()) / secondsPerDay)
+		gap := runDate.Unix() - p.previous.date.Unix()
+
+		// A previous report dated after the run is refused: NewestReport
+		// would pick it on every later run and suppress the gap check.
+		if gap < 0 {
+			return plan{}, fmt.Errorf("previous report: dated after the run: %w", ErrPreviousReport)
+		}
+
+		p.gapDays = int(gap / secondsPerDay)
 	}
 
 	kept, found, private, err := keep(in.Result.Findings, in.Previous)
