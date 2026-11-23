@@ -116,15 +116,22 @@ type CacheControl struct {
 	// SMaxAge is s-maxage in seconds; HasSMaxAge says whether the header had it.
 	SMaxAge    int64
 	HasSMaxAge bool
+	// StaleWhileRevalidate and StaleIfError are those directives in seconds
+	// (RFC 5861); each Has* says whether the header had it. Either lets a
+	// cache serve the page past its max-age.
+	StaleWhileRevalidate    int64
+	HasStaleWhileRevalidate bool
+	StaleIfError            int64
+	HasStaleIfError         bool
 }
 
 // ParseCacheControl parses the Cache-Control header from its values (several
 // values are joined as one comma-separated list, as RFC 9110 allows).
-// Directive names are compared without regard to case. A max-age or s-maxage
-// whose value is not decimal digits (optionally inside one pair of double
-// quotes) or overflows an int64 is an error; the same directive twice with
-// different values is an error, twice with the same value is not. Other
-// directives are ignored.
+// Directive names are compared without regard to case. A max-age, s-maxage,
+// stale-while-revalidate or stale-if-error whose value is not decimal digits
+// (optionally inside one pair of double quotes) or overflows an int64 is an
+// error; the same directive twice with different values is an error, twice
+// with the same value is not. Other directives are ignored.
 func ParseCacheControl(values []string) (CacheControl, error) {
 	joined := strings.Join(values, ",")
 
@@ -146,6 +153,10 @@ func ParseCacheControl(values []string) (CacheControl, error) {
 			value, has = &cc.MaxAge, &cc.HasMaxAge
 		case "s-maxage":
 			value, has = &cc.SMaxAge, &cc.HasSMaxAge
+		case "stale-while-revalidate":
+			value, has = &cc.StaleWhileRevalidate, &cc.HasStaleWhileRevalidate
+		case "stale-if-error":
+			value, has = &cc.StaleIfError, &cc.HasStaleIfError
 		default:
 			continue
 		}
@@ -167,9 +178,11 @@ func ParseCacheControl(values []string) (CacheControl, error) {
 
 // JudgeHTMLCache returns nil when the Cache-Control values of an HTML page
 // meet behaviour 5: the header present, ParseCacheControl accepts it, max-age
-// present and at most MaxHTMLAge, and s-maxage, when present, at most
-// MaxHTMLAge. Otherwise its error says why (no header, no max-age,
-// unparseable, conflicting, too long).
+// present and at most MaxHTMLAge, and s-maxage, stale-while-revalidate and
+// stale-if-error, when present, each at most MaxHTMLAge (the stale-*
+// directives let a cache serve the page past its max-age, which the retry
+// bound does not wait out beyond MaxHTMLAge). Otherwise its error says why
+// (no header, no max-age, unparseable, conflicting, too long).
 func JudgeHTMLCache(values []string) error {
 	if len(values) == 0 {
 		return errors.New("no Cache-Control header")
@@ -187,6 +200,10 @@ func JudgeHTMLCache(values []string) error {
 		return fmt.Errorf("Cache-Control max-age %d is over %d", cc.MaxAge, MaxHTMLAge)
 	case cc.HasSMaxAge && cc.SMaxAge > MaxHTMLAge:
 		return fmt.Errorf("Cache-Control s-maxage %d is over %d", cc.SMaxAge, MaxHTMLAge)
+	case cc.HasStaleWhileRevalidate && cc.StaleWhileRevalidate > MaxHTMLAge:
+		return fmt.Errorf("Cache-Control stale-while-revalidate %d is over %d", cc.StaleWhileRevalidate, MaxHTMLAge)
+	case cc.HasStaleIfError && cc.StaleIfError > MaxHTMLAge:
+		return fmt.Errorf("Cache-Control stale-if-error %d is over %d", cc.StaleIfError, MaxHTMLAge)
 	}
 
 	return nil

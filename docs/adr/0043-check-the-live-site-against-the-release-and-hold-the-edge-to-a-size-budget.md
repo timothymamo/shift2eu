@@ -26,8 +26,9 @@ library `ci/sitecheck/internal/livecheck` does every fetch and judgement, and th
 3 MiB transferred when gzip-encoded and to 11 MiB decoded however it is served.**
 
 - **Shape (ADR 0033's pattern).** A main package that nothing can import, held by the depguard rule
-  `site-check-main` (named standard packages, `os` to read the files its flags name, no `os/exec`, no
-  `net`), and a library held by `site-check-library` (named standard packages, no `os`, `os/exec` or
+  `site-check-main` (named standard packages, `os` to read the files its flags name, `syscall` only so
+  that a runner's SIGTERM cancels the run like an interrupt and the partial report is still printed, no
+  `os/exec`, no `net`), and a library held by `site-check-library` (named standard packages, no `os`, `os/exec` or
   `syscall`): it opens no file, reads no environment variable (forbidigo `site-check-env`, both packages,
   tests included) and starts no process. No release builds it; the release's check and the scheduled
   workflow run it with `go run`. This pull request wires no workflow.
@@ -39,25 +40,40 @@ library `ci/sitecheck/internal/livecheck` does every fetch and judgement, and th
   tag list (a file or stdin). Manifest paths are only ever URL paths on the canonical host, never opened as
   files. The program reads exactly the files its flags name, each capped.
 - **What a round checks**, every URL built from the configured hosts and the manifest's paths, every
-  request without a query string, with `Accept-Encoding: gzip`, through no proxy, following no redirect:
+  request without a query string, with `Accept-Encoding: gzip`, through no proxy, following no redirect,
+  over HTTP/1.1 only (the transport dials through the injected dialer with its own TLS configuration,
+  which turns HTTP/2 off: the dialer is what lets the tests reach local servers under the production
+  names, and the edge serves the same objects over every protocol, so headers, compression and size are
+  judged as the edge serves them over HTTP/1.1, not necessarily byte for byte as a browser sees them over
+  h2 or h3):
   1. every manifest file at `https://<host>/<path>` answers 200 and its SHA-256 after content decoding
      (gzip; any other or a listed `Content-Encoding` is a mismatch) is the manifest's; a 3xx, with or
      without `Location` (an `x-amz-website-redirect-location` included), is a mismatch;
   2. `https://<host>/` serves the bytes of the manifest's `index.html`;
-  3. `/sw.js`, `/service-worker.js`, `/serviceworker.js` and `/worker.js` do not answer 200 (a manifest
-     listing one is a configuration error);
+  3. `/sw.js`, `/service-worker.js`, `/serviceworker.js` and `/worker.js` each answer with a status
+     outside 2xx (a browser registers a script served with any 2xx); a path with no response at all fails
+     too, since it says nothing about what the path serves (a manifest listing one is a configuration
+     error);
   4. `/` and every HTML page answer with a `Cache-Control` whose `max-age` is at most 300 and whose
-     `s-maxage`, if any, is too (missing, unparseable or conflicting directives fail); assets' headers are
-     recorded only;
+     `s-maxage`, `stale-while-revalidate` and `stale-if-error`, if any, are too (the `stale-*` directives
+     let a cache serve the page past its `max-age`, which the retry bound does not wait out; missing,
+     unparseable or conflicting directives fail); assets' headers are recorded only;
   5. the redirect matrix on `/` and `/privacy.html`: `http://<apex>/<p>`, `https://<apex>/<p>` and
      `http://<host>/<p>` each answer 301 or 308 to exactly `https://<host>/<p>`; when preload is pursued,
      `http://<apex>/<p>` goes first to `https://<apex>/<p>` (the two hops the preload list requires); in
-     refuse-or-close mode `http://<host>/<p>` may instead refuse or close the connection, redirect to the
-     canonical URL, or answer 4xx/5xx with a body that is no manifest file's (any other 3xx and any 2xx
-     fail); neither host ever answers 200 over plain HTTP;
+     refuse-or-close mode `http://<host>/<p>` may instead refuse the connection or close (or reset) it
+     before any byte of a response arrives, redirect to the canonical URL, or answer 4xx/5xx with a body
+     that is no manifest file's (any other 3xx and any 2xx fail). A connection that times out, or bytes
+     Go cannot parse as a response (raw HTML without a status line, HTTP/0.9, a malformed header block),
+     fail: a browser may still wait for or render them. The check tells them apart by whether the first
+     response byte arrived (`httptrace`'s `GotFirstResponseByte`) and whether the error is a timeout;
+     neither host ever answers 200 over plain HTTP;
   6. the certificates of the host and the apex verify for their names against the configured roots at the
-     injected time and stay valid for the margin, at least **14 days**, so a failed renewal is found two
-     weeks before visitors see it;
+     injected time, and the leaf and every intermediate of the verified chain (not the root) stay valid
+     for the margin, at least **14 days**, so a failed renewal, or an intermediate that expires first, is
+     found two weeks before visitors see it; the dial and the handshake are bounded by the request
+     timeout (30 s by default), so a host that accepts the connection and never answers fails the check
+     instead of hanging it;
   7. HSTS against the records: when `met`, the host's `Strict-Transport-Security` has `max-age` at least
      31536000, `includeSubDomains`, and `preload` when preload is pursued; the apex's header is held to the
      same minimum (with `preload`) only when preload is pursued, and is otherwise only recorded. When
@@ -74,8 +90,9 @@ library `ci/sitecheck/internal/livecheck` does every fetch and judgement, and th
   never counts in the site's favour: an unreadable `hsts.json` fails the `hsts.json` check and the rest is
   judged as `met` without preload and with plain HTTP redirecting; an unreadable `preload.json` fails the
   `preload.json` check and counts as not on the preload list, so the `downgrade-risk` statement is
-  required. Both records are read strictly (exactly their fields, no null, schema 1, a value of the set,
-  at most 4 KiB) in this interim format:
+  required. Both records are read strictly (exactly their fields, each key exactly in lower case and
+  present once, since `encoding/json` alone matches keys in any case and keeps the last duplicate; no
+  null, schema 1, a value of the set, at most 4 KiB) in this interim format:
 
   ```json
   {"schema": 1, "outcome": "met", "preload_pursued": false, "plain_http_www": "redirect"}
@@ -87,12 +104,17 @@ library `ci/sitecheck/internal/livecheck` does every fetch and judgement, and th
 - **The retry bound and rounds.** A deploy reaches visitors only when the HTML cached before it expires,
   so a failing round is repeated, the whole round, every `RetryInterval` (30 s in the program) until the
   bound, at least the HTML's `max-age` of **300 s** (default 600 s; less is a configuration error). A round
-  that passes ends the run; the report holds the last round's checks and responses and the number of
+  that passes ends the run, and so does a round whose only failing checks are records that could not be
+  read: the records are read once, before the first round, so no later round can change them, and
+  waiting out the bound would only delay the report; the report holds the last round's checks and responses and the number of
   rounds. Every response records the URL, the remote address the connection reached and its `Age` header
   (absent and unparseable recorded as such, never failing by themselves). The clock, the sleep and the
   dialer are injected, so the tests run against local `httptest` servers, TLS included, and never wait.
 - **The live version is untrusted text.** It is the text of the one element `id="site-version"` (the
-  footer's version span of every page, read from the root), untrimmed, at most 64 bytes, and must match
+  footer's version span of every page, read from the root, and only when the root's bytes are the
+  manifest's `index.html`: a root that is not fails the version check without being scanned, so the scan
+  only ever reads a page the release built; the scan is one linear pass, so even a hostile page could
+  not make it super-linear), untrimmed, at most 64 bytes, and must match
   `^v[0-9]+\.[0-9]+\.[0-9]+$` exactly, equal an entry of the tag list and equal the manifest's version.
   The match returns a `Tag` that holds the tag list's own entry, never the page's text, and nothing else
   can construct a non-zero `Tag`; the commands of milestone 4 (`gh release download <tag> ...` and

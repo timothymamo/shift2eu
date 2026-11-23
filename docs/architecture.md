@@ -173,7 +173,7 @@ Arrows are imports. They point inwards only:
   standard packages, no `os` or `net`, and no package of the product). Its entry point
   `ci/auditpublish`, which reads, runs gitleaks and calls GitHub, comes with milestone 2's fourth pull
   request.
-  `ci/sitecheck` is the live site check (PRD #297 milestone 3, issue #346, ADR 0043), which the release's check and
+- **`ci/sitecheck`** is the live site check (PRD #297 milestone 3, issue #346, ADR 0043), which the release's check and
   milestone 4's scheduled workflow run: it fetches every file of a release's manifest from the canonical
   host and judges the edge's digests, redirects, certificates, caching, HSTS against `site/records/`, the
   live version against the repository's tag list and the module script's transferred and decoded size.

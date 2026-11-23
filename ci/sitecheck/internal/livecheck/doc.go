@@ -9,22 +9,41 @@
 //   - every manifest file, digest after content decoding, no redirect followed
 //     (KindManifestFile);
 //   - the root, the bytes of the manifest's index.html (KindRoot);
-//   - no service worker script answers 200 (KindServiceWorker);
-//   - every HTML page's Cache-Control max-age is at most 300 (KindHTMLCache);
-//   - the redirect matrix of the apex and plain HTTP (KindRedirect);
-//   - the certificates of the host and the apex verify and do not expire within
-//     the margin (KindCertificate, CheckCertificate);
+//   - every service worker path answers, with a status outside 2xx; no
+//     response at all fails too (KindServiceWorker);
+//   - every HTML page's Cache-Control max-age, and s-maxage,
+//     stale-while-revalidate and stale-if-error when present, is at most 300
+//     (KindHTMLCache);
+//   - the redirect matrix of the apex and plain HTTP (KindRedirect); where the
+//     HSTS record allows plain HTTP on the canonical host to refuse or close,
+//     only a refused connection, or one closed or reset before any response
+//     byte, counts as that: a timeout, or bytes Go cannot parse as a response
+//     (HTTP/0.9, a malformed header block), fails;
+//   - the certificates of the host and the apex verify, and neither the leaf
+//     nor an intermediate of the verified chain expires within the margin, the
+//     handshake bounded by the request timeout (KindCertificate,
+//     CheckCertificate);
 //   - Strict-Transport-Security against the HSTS record (KindHSTS) and the
-//     pages' statements against both records (KindStatement);
-//   - the live version, untrusted text, against the repository's tag list
-//     (KindVersion), whose match is the one way to construct a Tag, the only
-//     input of the argv builders (DownloadArgv, AttestationVerifyArgv);
+//     pages' statements against both records (KindStatement), the records read
+//     with exactly their lower-case keys, none twice;
+//   - the live version, untrusted text read only from a root whose bytes are
+//     the manifest's index.html, in one linear scan, against the repository's
+//     tag list (KindVersion), whose match is the one way to construct a Tag,
+//     the only input of the argv builders (DownloadArgv,
+//     AttestationVerifyArgv);
 //   - the module script's transferred and decoded size and its Content-Type
 //     (KindModuleScriptSize).
 //
+// Every request goes over HTTP/1.1 only: the transport dials through the
+// injected Dialer with a TLS configuration of its own, which turns HTTP/2 off,
+// so headers, compression and size are judged as the edge serves them over
+// HTTP/1.1.
+//
 // Run repeats the checks until they pass or the retry bound, at least the
 // HTML's max-age of 300 seconds, is spent, and returns a Report, whose text
-// form quotes and caps every piece of text taken from a response.
+// form quotes and caps every piece of text taken from a response. When the
+// only failing checks are records that could not be read, it reports after
+// that round: no later round can change them.
 //
 // Everything it depends on that is not a pure function is injected through
 // Config: the dialer (Dialer), the root certificates, the clock and the sleep,

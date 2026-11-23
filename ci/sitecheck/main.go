@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/timothymamo/shift2eu/ci/sitecheck/internal/livecheck"
@@ -30,7 +31,9 @@ const retryInterval = 30 * time.Second
 const defaultRetryBound = 2 * livecheck.MinRetryBound
 
 func main() {
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	// A runner ends a job with SIGTERM: it cancels the run like an
+	// interrupt, so the partial report is still printed.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 
 	code := run(ctx, os.Args[1:], os.Stdin, os.Stdout, os.Stderr, livecheck.Config{
 		Now:   time.Now,

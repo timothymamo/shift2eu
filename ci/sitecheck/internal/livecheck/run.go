@@ -242,7 +242,9 @@ func (c Config) withDefaults() Config {
 // read from cfg.Now. While a round has a failing check and the time from the
 // first round's start to Now plus RetryInterval does not exceed RetryBound,
 // Run sleeps RetryInterval through cfg.Sleep and runs another round; it never
-// sleeps after a round that passed. A Sleep error (ctx ended) ends the run:
+// sleeps after a round that passed, nor after one whose only failing checks
+// are records that could not be read, which no later round can change. A
+// Sleep error (ctx ended) ends the run:
 // the report holds the last finished round, and the error is ctx's.
 //
 // The Report holds the last round's checks, the number of rounds, every
@@ -265,7 +267,7 @@ func Run(ctx context.Context, cfg Config) (Report, error) {
 		report := c.round(ctx)
 		report.Rounds = rounds
 
-		if report.Passed() || cfg.Now().Sub(start)+cfg.RetryInterval > cfg.RetryBound {
+		if report.Passed() || onlyRecordsFail(report) || cfg.Now().Sub(start)+cfg.RetryInterval > cfg.RetryBound {
 			return report, nil
 		}
 
@@ -275,16 +277,37 @@ func Run(ctx context.Context, cfg Config) (Report, error) {
 	}
 }
 
+// onlyRecordsFail reports whether every failing check of report is a record
+// that could not be read (KindHSTS of hsts.json or preload.json): the records
+// are read once, before the first round, so no later round can change them.
+func onlyRecordsFail(report Report) bool {
+	for _, check := range report.Checks {
+		if !check.Passed && (check.Kind != KindHSTS || (check.Target != recordHSTS && check.Target != recordPreload)) {
+			return false
+		}
+	}
+
+	return true
+}
+
 // CheckCertificate dials host:443 through dial, does a TLS handshake with
 // host as the server name, verifies the served chain for host against roots
 // (nil: the system roots) at the time now, not the wall clock, and returns
-// the leaf's NotAfter. A chain that does not verify, a leaf not valid for
-// host or not yet valid at now, or a NotAfter before now+margin is an error
-// (behaviour 7). margin below MinCertMargin is an error before any dial.
+// the earliest NotAfter of the verified chain's leaf and intermediates (the
+// root excluded). A chain that does not verify, a leaf not valid for host or
+// not yet valid at now, or a leaf or intermediate whose NotAfter is before
+// now+margin is an error (behaviour 7). margin below MinCertMargin is an
+// error before any dial. The dial and the handshake end with ctx and in any
+// case after DefaultRequestTimeout, so a host that accepts the connection and
+// never answers fails the check instead of hanging it; Run passes a ctx
+// bounded by Config.RequestTimeout.
 func CheckCertificate(ctx context.Context, dial Dialer, roots *x509.CertPool, host string, now time.Time, margin time.Duration) (time.Time, error) {
 	if margin < MinCertMargin {
 		return time.Time{}, fmt.Errorf("the certificate margin %v is below %v", margin, MinCertMargin)
 	}
+
+	ctx, cancel := context.WithTimeout(ctx, DefaultRequestTimeout)
+	defer cancel()
 
 	if dial == nil {
 		d := &net.Dialer{Timeout: DefaultRequestTimeout}
@@ -309,15 +332,35 @@ func CheckCertificate(ctx context.Context, dial Dialer, roots *x509.CertPool, ho
 		return time.Time{}, fmt.Errorf("the certificate of %s does not verify: %w", host, err)
 	}
 
-	peers := tlsConn.ConnectionState().PeerCertificates
-	if len(peers) == 0 {
-		return time.Time{}, fmt.Errorf("%s served no certificate", host)
+	chains := tlsConn.ConnectionState().VerifiedChains
+	if len(chains) == 0 || len(chains[0]) == 0 {
+		return time.Time{}, fmt.Errorf("%s served no verified certificate chain", host)
 	}
 
-	notAfter := peers[0].NotAfter
+	notAfter, subject := chainExpiry(chains[0])
 	if notAfter.Before(now.Add(margin)) {
-		return notAfter, fmt.Errorf("the certificate of %s expires at %s, within the margin of %v", host, notAfter.UTC().Format(time.RFC3339), margin)
+		return notAfter, fmt.Errorf("the %s of %s expires at %s, within the margin of %v", subject, host, notAfter.UTC().Format(time.RFC3339), margin)
 	}
 
 	return notAfter, nil
+}
+
+// chainExpiry returns the earliest NotAfter of chain's leaf and intermediates
+// (a chain of more than one certificate ends in its root, which is left out)
+// and names the certificate it is the expiry of.
+func chainExpiry(chain []*x509.Certificate) (time.Time, string) {
+	held := chain
+	if len(held) > 1 {
+		held = held[:len(held)-1]
+	}
+
+	notAfter, subject := held[0].NotAfter, "certificate"
+
+	for _, cert := range held[1:] {
+		if cert.NotAfter.Before(notAfter) {
+			notAfter, subject = cert.NotAfter, "intermediate certificate"
+		}
+	}
+
+	return notAfter, subject
 }

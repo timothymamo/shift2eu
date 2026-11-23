@@ -7,10 +7,12 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptrace"
 	"slices"
 	"strings"
+	"sync/atomic"
 )
 
 // The pages a site's manifest must list and the checks read.
@@ -18,6 +20,12 @@ const (
 	indexPage   = "index.html"
 	privacyPage = "privacy.html"
 	verifyPage  = "verify.html"
+)
+
+// The targets of the KindHSTS checks of a record that could not be read.
+const (
+	recordHSTS    = "hsts.json"
+	recordPreload = "preload.json"
 )
 
 // kindOrder is the order of the kinds in a Report.
@@ -79,10 +87,15 @@ func (c *checker) close() {
 
 // fetched is one request of a round and what came back.
 type fetched struct {
-	// err is set when no response came (refused, closed, timed out).
-	err    error
-	status int
-	header http.Header
+	// err is set when no response came (refused, closed, timed out,
+	// unreadable).
+	err error
+	// refusedOrClosed is set with err when the connection was refused, or
+	// closed or reset before any byte of a response arrived: not a timeout,
+	// not a response Go could not parse.
+	refusedOrClosed bool
+	status          int
+	header          http.Header
 	// body is the body as read; bodyErr is set when it could not be.
 	body    Body
 	bodyErr error
@@ -123,12 +136,17 @@ func (r *round) fetch(ctx context.Context, url string) fetched {
 	ctx, cancel := context.WithTimeout(ctx, r.cfg.RequestTimeout)
 	defer cancel()
 
-	var remote string
+	var (
+		remote    string
+		firstByte atomic.Bool
+	)
 
 	ctx = httptrace.WithClientTrace(ctx, &httptrace.ClientTrace{
 		GotConn: func(info httptrace.GotConnInfo) {
 			remote = info.Conn.RemoteAddr().String()
 		},
+		// Called on the transport's read goroutine, hence the atomic.
+		GotFirstResponseByte: func() { firstByte.Store(true) },
 	})
 
 	recorded := Response{URL: url}
@@ -148,7 +166,10 @@ func (r *round) fetch(ctx context.Context, url string) fetched {
 	if err != nil {
 		r.responses = append(r.responses, recorded)
 
-		return fetched{err: fmt.Errorf("no response: %s", Quote(err.Error()))}
+		return fetched{
+			err:             fmt.Errorf("no response: %s", Quote(err.Error())),
+			refusedOrClosed: !firstByte.Load() && !isTimeout(err) && !errors.Is(err, context.Canceled),
+		}
 	}
 
 	defer func() { _ = resp.Body.Close() }()
@@ -163,6 +184,14 @@ func (r *round) fetch(ctx context.Context, url string) fetched {
 	r.responses = append(r.responses, recorded)
 
 	return f
+}
+
+// isTimeout reports whether err is a timeout: the request's deadline, or a
+// dial, handshake or read that timed out.
+func isTimeout(err error) bool {
+	var netErr net.Error
+
+	return errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &netErr) && netErr.Timeout())
 }
 
 // round runs every check once and returns its report.
@@ -184,7 +213,8 @@ func (c *checker) round(ctx context.Context) Report {
 
 	root := r.fetch(ctx, host+"/")
 	indexDigest, _ := c.cfg.Manifest.Digest(indexPage)
-	r.add(KindRoot, "/", judgeFile(root, indexDigest))
+	rootErr := judgeFile(root, indexDigest)
+	r.add(KindRoot, "/", rootErr)
 
 	for _, path := range ServiceWorkerPaths() {
 		r.add(KindServiceWorker, path, judgeServiceWorker(r.fetch(ctx, host+path)))
@@ -206,7 +236,7 @@ func (c *checker) round(ctx context.Context) Report {
 	apexHTTPS := r.redirectMatrix(ctx, record)
 
 	for _, name := range []string{c.cfg.Host, c.cfg.Apex} {
-		_, err := CheckCertificate(ctx, c.cfg.Dial, c.cfg.Roots, name, c.cfg.Now(), c.cfg.CertMargin)
+		err := c.checkCertificate(ctx, name)
 		if err != nil {
 			err = errors.New(Quote(err.Error()))
 		}
@@ -219,7 +249,7 @@ func (c *checker) round(ctx context.Context) Report {
 
 	report := Report{Host: c.cfg.Host, Apex: c.cfg.Apex}
 
-	tag, err := c.judgeVersion(root)
+	tag, err := c.judgeVersion(root, rootErr)
 	r.add(KindVersion, "/", err)
 
 	if err == nil {
@@ -242,6 +272,17 @@ func (c *checker) round(ctx context.Context) Report {
 	report.Responses = r.responses
 
 	return report
+}
+
+// checkCertificate runs CheckCertificate for name, its dial and handshake
+// bounded by the request timeout.
+func (c *checker) checkCertificate(ctx context.Context, name string) error {
+	ctx, cancel := context.WithTimeout(ctx, c.cfg.RequestTimeout)
+	defer cancel()
+
+	_, err := CheckCertificate(ctx, c.cfg.Dial, c.cfg.Roots, name, c.cfg.Now(), c.cfg.CertMargin)
+
+	return err
 }
 
 // judgeFile returns nil when f is a 200 whose body, after content decoding,
@@ -272,14 +313,16 @@ func sha256Hex(b []byte) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// judgeServiceWorker returns nil when f, a service worker path, did not answer
-// 200.
+// judgeServiceWorker returns nil when f, a service worker path, answered with
+// a status outside 2xx. A browser registers a service worker script served
+// with any 2xx, so each fails; so does no response at all, which says nothing
+// about what the path serves.
 func judgeServiceWorker(f fetched) error {
 	switch {
 	case f.err != nil:
 		return f.err
-	case f.status == http.StatusOK:
-		return errors.New("answered 200: a service worker script is served")
+	case f.status >= 200 && f.status < 300:
+		return fmt.Errorf("answered %d: a service worker script may be served", f.status)
 	}
 
 	return nil
@@ -364,12 +407,17 @@ func (r *round) redirectMatrix(ctx context.Context, record HSTSRecord) fetched {
 }
 
 // judgeRefuseOrClose returns nil when f, plain HTTP on the canonical host in
-// refuse-or-close mode, got no response, a 301 or 308 to exactly canonical, or
-// a 4xx or 5xx whose body is no manifest file's.
+// refuse-or-close mode, was refused, or closed or reset before any response
+// byte, or got a 301 or 308 to exactly canonical, or a 4xx or 5xx whose body
+// is no manifest file's. A timeout, or bytes Go could not parse as a response
+// (HTTP/0.9, a malformed header block), which a browser may still render,
+// fail.
 func (r *round) judgeRefuseOrClose(f fetched, canonical string) error {
 	switch {
-	case f.err != nil:
+	case f.err != nil && f.refusedOrClosed:
 		return nil
+	case f.err != nil:
+		return fmt.Errorf("%w; want a refused connection, or one closed before any response", f.err)
 	case f.status >= 300 && f.status < 400:
 		return judgeRedirect(f, canonical)
 	case f.status < 400:
@@ -395,11 +443,11 @@ func (r *round) judgeRefuseOrClose(f fetched, canonical string) error {
 // preload is pursued.
 func (r *round) judgeHSTS(root, apexRoot fetched, record HSTSRecord, recordErr error) {
 	if recordErr != nil {
-		r.add(KindHSTS, "hsts.json", fmt.Errorf("the HSTS record could not be read (fail safe): %w", recordErr))
+		r.add(KindHSTS, recordHSTS, fmt.Errorf("the HSTS record could not be read (fail safe): %w", recordErr))
 	}
 
 	if err := r.cfg.Records.PreloadErr; err != nil {
-		r.add(KindHSTS, "preload.json", fmt.Errorf("the preload record could not be read (fail safe, counted as not on the preload list): %w", err))
+		r.add(KindHSTS, recordPreload, fmt.Errorf("the preload record could not be read (fail safe, counted as not on the preload list): %w", err))
 	}
 
 	if record.Outcome != HSTSMet {
@@ -455,15 +503,12 @@ func (r *round) judgeStatements(files map[string]fetched, matched map[string]boo
 }
 
 // judgeVersion reads the live version from root and returns its Tag when it
-// is a tag of the list and the manifest's version.
-func (c *checker) judgeVersion(root fetched) (Tag, error) {
-	switch {
-	case root.err != nil:
-		return Tag{}, root.err
-	case root.status != http.StatusOK:
-		return Tag{}, fmt.Errorf("the root answered %d, want 200", root.status)
-	case root.bodyErr != nil:
-		return Tag{}, fmt.Errorf("the root's body could not be read: %w", root.bodyErr)
+// is a tag of the list and the manifest's version. rootErr is the root's own
+// check: only a root whose bytes are the manifest's index.html is read, so
+// the scan never runs over a page the release did not build.
+func (c *checker) judgeVersion(root fetched, rootErr error) (Tag, error) {
+	if rootErr != nil {
+		return Tag{}, fmt.Errorf("the root is not the manifest's %s, so its version is not read: %w", indexPage, rootErr)
 	}
 
 	text, err := VersionText(root.body.Data)

@@ -151,25 +151,25 @@ func upToGreaterThan(s string) int {
 }
 
 // rawTextLength returns the length of the raw text at the start of s, up to the
-// end tag of name, or len(s) when there is none.
+// end tag of name (lower case; matched in any case), or len(s) when there is
+// none. It reads only the bytes up to that end tag, never copying s, so the
+// scan of a whole page stays linear in its length.
 func rawTextLength(s, name string) int {
-	lower := strings.ToLower(s)
-	closing := "</" + name
-
 	for from := 0; ; {
-		at := strings.Index(lower[from:], closing)
+		at := strings.Index(s[from:], "</")
 		if at < 0 {
 			return len(s)
 		}
 
 		at += from
-		after := at + len(closing)
+		nameAt := at + len("</")
+		after := nameAt + len(name)
 
-		if after == len(s) || isTagNameEnd(s[after]) {
+		if after <= len(s) && strings.EqualFold(s[nameAt:after], name) && (after == len(s) || isTagNameEnd(s[after])) {
 			return at
 		}
 
-		from = after
+		from = nameAt
 	}
 }
 

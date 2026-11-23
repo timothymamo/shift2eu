@@ -1902,7 +1902,8 @@ linters:
         # the same, each to the standard packages it imports, ending in $. The
         # entry point reads the files its flags name and exits (os); it opens
         # no connection and starts no process, and the forbidigo group
-        # site-check-env refuses every read of the environment.
+        # site-check-env refuses every read of the environment. syscall names
+        # only SIGTERM, which cancels the run like an interrupt.
         site-check-main:
           list-mode: strict
           files:
@@ -1917,6 +1918,7 @@ linters:
             - io$
             - os$
             - os/signal$
+            - syscall$
             - time$
             - github.com/timothymamo/shift2eu/ci/sitecheck/internal/livecheck$
           deny:
@@ -1938,7 +1940,6 @@ linters:
             - "**/ci/sitecheck/internal/**"
             - "!$test"
           allow:
-            - bufio$
             - bytes$
             - compress/gzip$
             - context$
@@ -1955,11 +1956,11 @@ linters:
             - net$
             - net/http$
             - net/http/httptrace$
-            - net/url$
             - regexp$
             - slices$
             - strconv$
             - strings$
+            - sync/atomic$
             - time$
             - unicode$
             - unicode/utf8$

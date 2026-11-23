@@ -20,7 +20,23 @@ import (
 // linters.settings.forbidigo). The tags of the two composition-root groups,
 // compositionRootTags, are pinned by what their rules select instead of by the
 // text of a path regexp, in TestCompositionRootExclusions.
-var forbidigoTags = []string{"cloud-read-only", "domain-is-pure", testutilNoEnvTag, cliNoEnvOrProcessTag, inventoryFileNoEnvTag, e2eNoEnvTag, testsNoProcessStateTag, aiReviewerEnvTag, aiReviewerOneProcessTag, siteBuilderEnvTag, claudeCodePinEnvTag, siteCheckEnvTag, auditExecEnvTag, auditRunEnvTag, auditLibraryEnvTag}
+var forbidigoTags = []string{
+	"cloud-read-only",
+	"domain-is-pure",
+	testutilNoEnvTag,
+	cliNoEnvOrProcessTag,
+	inventoryFileNoEnvTag,
+	e2eNoEnvTag,
+	testsNoProcessStateTag,
+	aiReviewerEnvTag,
+	aiReviewerOneProcessTag,
+	siteBuilderEnvTag,
+	claudeCodePinEnvTag,
+	siteCheckEnvTag,
+	auditExecEnvTag,
+	auditRunEnvTag,
+	auditLibraryEnvTag,
+}
 
 // auditLibraryEnvTag is the tag of the audit library's environment group (issue
 // #277, ADR 0040's model-job amendment), which refuses the environment reads, the home,

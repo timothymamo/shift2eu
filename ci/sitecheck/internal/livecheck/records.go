@@ -57,7 +57,8 @@ type PreloadRecord struct {
 
 // ParseHSTSRecord reads hsts.json strictly from r, at most MaxRecordBytes
 // (more is an error): exactly one JSON object with exactly the four fields
-// above, each present, of its type (a JSON null is not a value), "schema"
+// above, each present once, its key exactly as written (lower case), of its
+// type (a JSON null is not a value), "schema"
 // equal to RecordSchema, "outcome" and "plain_http_www" one of their
 // constants, nothing after the object but white space.
 func ParseHSTSRecord(r io.Reader) (HSTSRecord, error) {
@@ -68,7 +69,7 @@ func ParseHSTSRecord(r io.Reader) (HSTSRecord, error) {
 		PlainHTTPWWW   *string `json:"plain_http_www"`
 	}
 
-	if err := decodeStrict(r, MaxRecordBytes, &doc); err != nil {
+	if err := decodeStrict(r, MaxRecordBytes, &doc, "schema", "outcome", "preload_pursued", "plain_http_www"); err != nil {
 		return HSTSRecord{}, fmt.Errorf("hsts.json: %w", err)
 	}
 
@@ -106,7 +107,7 @@ func ParsePreloadRecord(r io.Reader) (PreloadRecord, error) {
 		OnPreloadList *bool `json:"on_preload_list"`
 	}
 
-	if err := decodeStrict(r, MaxRecordBytes, &doc); err != nil {
+	if err := decodeStrict(r, MaxRecordBytes, &doc, "schema", "on_preload_list"); err != nil {
 		return PreloadRecord{}, fmt.Errorf("preload.json: %w", err)
 	}
 
