@@ -60,6 +60,8 @@ LABEL org.opencontainers.image.title="shift2eu" \
       org.opencontainers.image.licenses="Apache-2.0"
 
 COPY --from=build /out/shift2eu /shift2eu
+# Apache-2.0 section 4: every redistribution carries the licence and the NOTICE attribution (#495).
+COPY LICENSE NOTICE /usr/share/doc/shift2eu/
 
 # Mount the inventory here, as docs/guide/docker.md does (one command):
 #   docker run --rm --read-only --network none --user "$(id -u):$(id -g)" --mount type=bind,src="$PWD/inventory.json",dst=/work/inventory.json,readonly shift2eu assess --inventory inventory.json --target scaleway

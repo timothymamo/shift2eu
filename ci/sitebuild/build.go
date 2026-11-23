@@ -44,6 +44,10 @@ const (
 	pageSource  = "page.js"
 )
 
+// licenseFiles are the files of the module root the bundle carries under the
+// same names: the licence and the NOTICE attribution (issue #495).
+var licenseFiles = []string{"LICENSE", "NOTICE"}
+
 // hstsRecord is the HSTS record milestone 4 commits, relative to -site.
 const hstsRecord = "records/hsts.json"
 
@@ -222,6 +226,18 @@ func build(ctx context.Context, opts options) error {
 	}
 
 	files := []bundleFile{styleFile, pageFile, wasmExecFile, moduleFile}
+
+	// Apache-2.0 section 4: the bundle redistributes the work, so it carries the
+	// licence and the NOTICE attribution, the module root's files byte for byte
+	// (issue #495).
+	for _, name := range licenseFiles {
+		text, err := readIn(root, name)
+		if err != nil {
+			return fmt.Errorf("read the module root's %s: %w", name, err)
+		}
+
+		files = append(files, bundleFile{name: name, data: text})
+	}
 
 	for _, page := range pages {
 		rendered, err := renderPage(siteDir, page, data)
