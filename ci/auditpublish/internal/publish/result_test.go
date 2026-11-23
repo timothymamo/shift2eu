@@ -749,8 +749,11 @@ func TestParseResultRefuses(t *testing.T) {
 
 	// The invisible characters no field may hold: every format, private-use and
 	// unassigned code point, the noncharacters, the variation selectors, the tag
-	// characters and the named invisible ones, each in a single-line field and
-	// in a multi-line one. A report a maintainer cannot see is no gate at all.
+	// characters, every space that renders blank and the named invisible ones,
+	// each in a single-line field and in a multi-line one. A report a maintainer
+	// cannot see is no gate at all, and a rune that renders as nothing or as a
+	// blank the eye reads as U+0020 carries a token as well as a zero-width one
+	// does.
 	invisible := []struct {
 		name string
 		r    rune
@@ -775,6 +778,28 @@ func TestParseResultRefuses(t *testing.T) {
 		{"a noncharacter in the last plane", 0x10fffe},
 		{"an unassigned code point", 0x0378},
 		{"an unassigned code point past the invisibles", 0x2065},
+		// The blanks: every rune of category Zs but U+0020, and the two
+		// symbols and the one filler that render as nothing at all. Which
+		// blank a model picks between two words is a channel of its own.
+		{"a no-break space", 0x00a0},
+		{"an Ogham space mark", 0x1680},
+		{"an en quad", 0x2000},
+		{"an em quad", 0x2001},
+		{"an en space", 0x2002},
+		{"an em space", 0x2003},
+		{"a three-per-em space", 0x2004},
+		{"a four-per-em space", 0x2005},
+		{"a six-per-em space", 0x2006},
+		{"a figure space", 0x2007},
+		{"a punctuation space", 0x2008},
+		{"a thin space", 0x2009},
+		{"a hair space", 0x200a},
+		{"a narrow no-break space", 0x202f},
+		{"a medium mathematical space", 0x205f},
+		{"an ideographic space", 0x3000},
+		{"a braille pattern blank", 0x2800},
+		{"a Khitan filler", 0x16fe4},
+		{"a musical symbol null notehead", 0x1d159},
 	}
 
 	for _, cp := range invisible {

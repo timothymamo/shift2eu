@@ -189,6 +189,13 @@ func TestParsePreviousReportRefuses(t *testing.T) {
 			data: tampered(body, "` a fix `", "` a\uE0041 fix `"),
 		},
 		{
+			// The cell holds a no-break space: it renders as the space beside
+			// it, so a model can spell a token in which blank it picked.
+			name: "a model cell holding a no-break space",
+			file: name,
+			data: tampered(body, "` a fix `", "` a\u00A0 fix `"),
+		},
+		{
 			name: "a status cell outside the vocabulary",
 			file: name,
 			data: tampered(body, "| new |", "| gone |"),
