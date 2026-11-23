@@ -32,7 +32,10 @@ const (
 	// BodyIssue is exactly {title, body, labels: ["security"]}.
 	BodyIssue
 	// BodyAdvisoryCreate holds only summary, description, severity and
-	// vulnerabilities: no state, cve_id, credits or collaborators.
+	// vulnerabilities: no state, cve_id, credits or collaborators. summary and
+	// description are required non-empty strings, severity a string when
+	// present, and every vulnerabilities element an object of GitHub's four
+	// keys, its package of exactly ecosystem and name.
 	BodyAdvisoryCreate
 	// BodyAdvisoryUpdate holds only summary, description, severity and state,
 	// and state is present and exactly "draft".
@@ -239,23 +242,63 @@ var bodyRules = map[BodyRule]func(map[string]json.RawMessage, Scope) bool{
 		return json.Unmarshal(o["labels"], &labels) == nil && len(labels) == 1 && isStringValue(labels[0], "security")
 	},
 	BodyAdvisoryCreate: func(o map[string]json.RawMessage, _ Scope) bool {
-		if !onlyKeys(o, "summary", "description", "severity", "vulnerabilities") || !stringsIfPresent(o, "summary", "description", "severity") {
+		if !onlyKeys(o, "summary", "description", "severity", "vulnerabilities") ||
+			!isNonEmptyString(o["summary"]) || !isNonEmptyString(o["description"]) || !stringsIfPresent(o, "severity") {
 			return false
 		}
 
-		if v, ok := o["vulnerabilities"]; ok {
-			var list []json.RawMessage
-			if json.Unmarshal(v, &list) != nil || list == nil {
-				return false
-			}
+		v, ok := o["vulnerabilities"]
+		if !ok {
+			return true
 		}
 
-		return true
+		var list []json.RawMessage
+		if json.Unmarshal(v, &list) != nil || list == nil {
+			return false
+		}
+
+		return !slices.ContainsFunc(list, func(e json.RawMessage) bool { return !isVulnerability(e) })
 	},
 	BodyAdvisoryUpdate: func(o map[string]json.RawMessage, _ Scope) bool {
 		return onlyKeys(o, "summary", "description", "severity", "state") &&
 			stringsIfPresent(o, "summary", "description", "severity") && isStringValue(o["state"], "draft")
 	},
+}
+
+// isVulnerability reports whether v is one element of a row-15 body's
+// vulnerabilities: an object of only package, vulnerable_version_range,
+// patched_versions and vulnerable_functions, no key twice. package is
+// required, an object of exactly ecosystem and name, both strings; the range
+// and the patched versions are a string or null, the functions an array of
+// strings or null.
+func isVulnerability(v json.RawMessage) bool {
+	o, ok := decodeObject(v)
+	if !ok || !onlyKeys(o, "package", "vulnerable_version_range", "patched_versions", "vulnerable_functions") {
+		return false
+	}
+
+	pkg, ok := decodeObject(o["package"])
+	if !ok || !exactKeys(pkg, "ecosystem", "name") || !isString(pkg["ecosystem"]) || !isString(pkg["name"]) {
+		return false
+	}
+
+	for _, k := range []string{"vulnerable_version_range", "patched_versions"} {
+		if s, present := o[k]; present && !isNull(s) && !isString(s) {
+			return false
+		}
+	}
+
+	functions, present := o["vulnerable_functions"]
+	if !present || isNull(functions) {
+		return true
+	}
+
+	var names []json.RawMessage
+	if json.Unmarshal(functions, &names) != nil || names == nil {
+		return false
+	}
+
+	return !slices.ContainsFunc(names, func(n json.RawMessage) bool { return !isString(n) })
 }
 
 // decodeObject reads exactly one JSON object and refuses a key twice, so a
@@ -357,6 +400,16 @@ func isString(v json.RawMessage) bool {
 	_, ok := stringOf(v)
 
 	return ok
+}
+
+func isNonEmptyString(v json.RawMessage) bool {
+	s, ok := stringOf(v)
+
+	return ok && s != ""
+}
+
+func isNull(v json.RawMessage) bool {
+	return bytes.Equal(bytes.TrimSpace(v), []byte("null"))
 }
 
 func isStringValue(v json.RawMessage, want string) bool {

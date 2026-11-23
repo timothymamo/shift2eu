@@ -14,6 +14,10 @@ import (
 )
 
 func main() {
+	// SIGINT cancels the run's context and so every running gh call and
+	// gitleaks scan. SIGTERM would need syscall, which no audit package may
+	// import; every call and scan is bounded by its own deadline instead (ADR
+	// 0040, "Deadlines and signals").
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 
 	code := run(ctx, os.Args[1:], os.LookupEnv, time.Now, os.Stdout, os.Stderr)

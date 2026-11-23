@@ -929,8 +929,11 @@ configuration line.
 `exec.CommandContext` is given. A `gh` call whose context ended (its deadline or the run's cancellation)
 is `ErrGitHub` (outcome 8) whatever `gh` printed, a status line included: an answer read after the
 context ended is never trusted. A gitleaks scan whose context ended is a scan that did not run to its
-end, `publish.ErrScanRefused` (outcome 4), never "no leak". The entry point stops on SIGINT and SIGTERM (`signal.NotifyContext`), which cancels the
-run's context and so every running call. The fifth pull request sets `timeout-minutes` on every job of
+end, `publish.ErrScanRefused` (outcome 4), never "no leak". The entry point stops on SIGINT (`signal.NotifyContext`), which cancels the
+run's context and so every running call. It does not handle SIGTERM: naming it needs `syscall`, which
+`TestAuditPackagesAreHeldByStrictRules` denies every audit package, as for `ci/auditrun`. On a
+runner's cancel the runner kills the step's process tree, and each call's and scan's own deadline
+bounds the run meanwhile. The fifth pull request sets `timeout-minutes` on every job of
 the workflow, so a hung step cannot hold the runner beyond the job's bound.
 
 **The environment.** The entry point reads `GH_TOKEN`, `GITHUB_SERVER_URL`, `GITHUB_REPOSITORY`,

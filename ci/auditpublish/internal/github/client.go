@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/timothymamo/shift2eu/ci/auditpublish/internal/publish"
 )
@@ -58,6 +59,9 @@ type ClientConfig struct {
 	TempDir string
 	// Scope is the repository and run every call is checked against.
 	Scope Scope
+	// CallTimeout bounds each call; zero is defaultTimeout, a negative one is
+	// no configuration.
+	CallTimeout time.Duration
 }
 
 // Request is one GitHub API call.
@@ -96,17 +100,30 @@ var (
 	commitHex  = regexp.MustCompile(`^[0-9a-f]{40}$`)
 )
 
-// Client runs gh api for the calls the endpoint table allows.
+// Client runs gh api for the calls the endpoint table allows. It formats as a
+// placeholder, never with its token.
 type Client struct {
-	ghPath string
-	token  Token
-	dir    string
-	scope  Scope
+	ghPath  string
+	token   Token
+	dir     string
+	scope   Scope
+	timeout time.Duration
 }
+
+// clientPlaceholder is what a Client formats as with every verb: fmt does not
+// call Token's String on an unexported field, so the Client hides it itself.
+const clientPlaceholder = "github.Client(token redacted)"
+
+// String is the placeholder a Client formats as.
+func (Client) String() string { return clientPlaceholder }
+
+// GoString is the placeholder a Client formats as with %#v.
+func (Client) GoString() string { return clientPlaceholder }
 
 // NewClient returns a Client, and refuses (publish.ErrConfig) a gh path that is
 // not absolute, a temporary directory that is not an absolute existing
-// directory, an empty token, and a scope NewRun would refuse. It makes gh's
+// directory, an empty token, a negative call timeout, and a scope NewRun would
+// refuse. It makes gh's
 // fresh configuration directory under the temporary directory; Close removes
 // it.
 func NewClient(cfg ClientConfig) (*Client, error) {
@@ -126,12 +143,17 @@ func NewClient(cfg ClientConfig) (*Client, error) {
 		return nil, fmt.Errorf("github client: %w", err)
 	}
 
+	timeout, err := timeoutOf(cfg.CallTimeout)
+	if err != nil {
+		return nil, fmt.Errorf("github client: %w", err)
+	}
+
 	dir, err := os.MkdirTemp(cfg.TempDir, "gh-")
 	if err != nil {
 		return nil, fmt.Errorf("github client: gh's configuration directory not made: %w", publish.ErrConfig)
 	}
 
-	return &Client{ghPath: cfg.GHPath, token: cfg.Token, dir: dir, scope: cfg.Scope}, nil
+	return &Client{ghPath: cfg.GHPath, token: cfg.Token, dir: dir, scope: cfg.Scope, timeout: timeout}, nil
 }
 
 // checkProgram refuses a program path that is not absolute and clean or does
@@ -188,6 +210,11 @@ func validateScope(s Scope) error {
 // other non-2xx included: the caller decides what a status means. A refused
 // request wraps ErrEndpointRefused and runs nothing; a gh that fails without a
 // status line, or whose output is over the cap, wraps publish.ErrGitHub.
+//
+// Each call runs under the configured timeout. A call whose context ended,
+// its deadline or the caller's cancellation, wraps publish.ErrGitHub with an
+// empty Response whatever gh printed, and a context already done never runs
+// gh: only a gh that ran to its end can answer 404.
 func (c *Client) Call(ctx context.Context, req Request) (Response, error) {
 	if c == nil || c.dir == "" {
 		return Response{}, fmt.Errorf("github call: no open client: %w", publish.ErrConfig)
@@ -208,6 +235,13 @@ func (c *Client) Call(ctx context.Context, req Request) (Response, error) {
 		return Response{}, fmt.Errorf("github call: %w", err)
 	}
 
+	if ctx.Err() != nil {
+		return Response{}, fmt.Errorf("github call: the call's context ended before gh ran: %w", publish.ErrGitHub)
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
+
 	args := []string{"api", "--method", req.Method, "--include", "-H", acceptHeader, "-H", versionHeader}
 	if body != nil {
 		args = append(args, "--input", "-")
@@ -223,12 +257,17 @@ func (c *Client) Call(ctx context.Context, req Request) (Response, error) {
 	cmd.Dir = c.dir
 	cmd.Stdout = out
 	cmd.Stderr = nil
+	cmd.WaitDelay = waitDelay
 
 	if body != nil {
 		cmd.Stdin = bytes.NewReader(body)
 	}
 
 	runErr := cmd.Run()
+
+	if ctx.Err() != nil {
+		return Response{}, fmt.Errorf("github call: the call's context ended: %w", publish.ErrGitHub)
+	}
 
 	if out.over {
 		return Response{}, fmt.Errorf("github call: gh's output is over the cap: %w", publish.ErrGitHub)

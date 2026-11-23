@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/timothymamo/shift2eu/ci/auditpublish/internal/publish"
 )
@@ -20,7 +21,35 @@ type GitleaksConfig struct {
 	// TempDir is an existing absolute directory under which Gitleaks makes
 	// gitleaks' fresh HOME, removed by Close.
 	TempDir string
+	// Timeout bounds each scan; zero is defaultTimeout, a negative one is no
+	// configuration.
+	Timeout time.Duration
 }
+
+// defaultTimeout is a call's and a scan's deadline when the configuration sets
+// none (ADR 0040, "Deadlines and signals").
+const defaultTimeout = 2 * time.Minute
+
+// waitDelay bounds how long a killed gh or gitleaks may keep its output pipes
+// open after its context ended.
+const waitDelay = time.Second
+
+// timeoutOf returns a configured timeout, zero being defaultTimeout, and
+// refuses (publish.ErrConfig) a negative one.
+func timeoutOf(d time.Duration) (time.Duration, error) {
+	switch {
+	case d < 0:
+		return 0, fmt.Errorf("a negative timeout: %w", publish.ErrConfig)
+	case d == 0:
+		return defaultTimeout, nil
+	default:
+		return d, nil
+	}
+}
+
+// allowMarker is gitleaks' inline allow comment, which it honours in the text
+// it reads; a text holding it, in any case, is refused before gitleaks runs.
+const allowMarker = "gitleaks:allow"
 
 // gitleaksArgs is what every scan starts gitleaks with: its stdin mode, no
 // banner, no colour, a redacted report and exit code 10 for a leak. No
@@ -34,13 +63,14 @@ const gitleaksLeakExit = 10
 // Gitleaks scans texts with gitleaks' stdin mode before anything is
 // published.
 type Gitleaks struct {
-	path string
-	home string
+	path    string
+	home    string
+	timeout time.Duration
 }
 
 // NewGitleaks returns a Gitleaks, and refuses (publish.ErrConfig) a path that
-// is not absolute and clean and a temporary directory that is not an absolute
-// existing directory. It checks the path's shape only: a file that cannot be
+// is not absolute and clean, a temporary directory that is not an absolute
+// existing directory and a negative timeout. It checks the path's shape only: a file that cannot be
 // started is Scan's failure, a refused scan. It makes gitleaks' fresh HOME
 // under the temporary directory; Close removes it.
 func NewGitleaks(cfg GitleaksConfig) (*Gitleaks, error) {
@@ -52,23 +82,37 @@ func NewGitleaks(cfg GitleaksConfig) (*Gitleaks, error) {
 		return nil, fmt.Errorf("gitleaks: %w", err)
 	}
 
+	timeout, err := timeoutOf(cfg.Timeout)
+	if err != nil {
+		return nil, fmt.Errorf("gitleaks: %w", err)
+	}
+
 	home, err := os.MkdirTemp(cfg.TempDir, "gitleaks-")
 	if err != nil {
 		return nil, fmt.Errorf("gitleaks: its home directory not made: %w", publish.ErrConfig)
 	}
 
-	return &Gitleaks{path: cfg.Path, home: home}, nil
+	return &Gitleaks{path: cfg.Path, home: home, timeout: timeout}, nil
 }
 
 // Scan runs gitleaks stdin --no-banner --no-color --redact --exit-code 10 on
-// text, with its own environment, and discards its output unread. Exit 0 is
-// clean; exit 10, any other exit and a failure to start wrap
-// publish.ErrScanRefused: a scan that did not run fails closed. No error
-// carries the text or the tool's output.
+// text, with its own environment and under the configured timeout, and
+// discards its output unread. Exit 0 is clean; exit 10, any other exit, a
+// failure to start and a scan whose context ended wrap publish.ErrScanRefused:
+// a scan that did not run fails closed. A text holding gitleaks' inline allow
+// comment, in any case, is refused before gitleaks runs. No error carries the
+// text or the tool's output.
 func (g *Gitleaks) Scan(ctx context.Context, text string) error {
 	if g == nil || g.home == "" {
 		return fmt.Errorf("gitleaks scan: no open scanner: %w", publish.ErrScanRefused)
 	}
+
+	if strings.Contains(strings.ToLower(text), allowMarker) {
+		return fmt.Errorf("gitleaks scan: the text holds gitleaks' inline allow comment: %w", publish.ErrScanRefused)
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, g.timeout)
+	defer cancel()
 
 	//nolint:gosec // G204: gitleaks' absolute path from the config; the arguments are fixed
 	cmd := exec.CommandContext(ctx, g.path, gitleaksArgs...)
@@ -77,8 +121,14 @@ func (g *Gitleaks) Scan(ctx context.Context, text string) error {
 	cmd.Stdin = strings.NewReader(text)
 	cmd.Stdout = io.Discard
 	cmd.Stderr = io.Discard
+	cmd.WaitDelay = waitDelay
 
-	if err := cmd.Run(); err != nil {
+	err := cmd.Run()
+	if ctx.Err() != nil {
+		return fmt.Errorf("gitleaks scan: the scan's context ended: %w", publish.ErrScanRefused)
+	}
+
+	if err != nil {
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) && exitErr.ExitCode() == gitleaksLeakExit {
 			return fmt.Errorf("gitleaks scan: a leak found: %w", publish.ErrScanRefused)
