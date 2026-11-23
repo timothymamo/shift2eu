@@ -30,8 +30,9 @@ var (
 	// uploaded.
 	ErrUnknownObject = errors.New("the bucket holds an object no release names")
 	// ErrUpload is a failed upload to the bucket (a transport error or a
-	// status other than 200 to a PUT); a failed listing is ErrList. The pages are uploaded last, so a failure
-	// before them leaves every page as it was.
+	// status other than 200 to a PUT); a failed listing is ErrList. The
+	// pages are uploaded last, so a failure before them leaves every page as
+	// it was.
 	ErrUpload = errors.New("upload to the bucket failed")
 	// ErrList is a failed listing of the bucket (Config.ListBucket): a
 	// transport error, a status other than 200, an answer that does not

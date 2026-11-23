@@ -191,8 +191,9 @@ func (r *run) errorCode(answer []byte) string {
 // listBucket lists the bucket (doc.go, step 3) and fails with
 // ErrUnknownObject on a key that is in no release's manifest, not in this
 // bundle and not manifest.json. A listed key is only compared, never sent.
-// It keeps a count of the unknown keys and only the maxUnknownNamed smallest
-// of them, the ones its error names, so its memory does not grow with the
+// It keeps a count of the listed entries with an unknown key (S3 never
+// repeats a key in one listing) and only the maxUnknownNamed smallest of
+// those keys, the ones its error names, so its memory does not grow with the
 // listing.
 func (r *run) listBucket(ctx context.Context) error {
 	known := r.knownKeys()
@@ -258,8 +259,10 @@ func (r *run) listBucket(ctx context.Context) error {
 
 // keepSmallest inserts key into sorted, a sorted list of at most limit
 // distinct keys, keeping only the limit smallest. It reports false only for
-// a key sorted already holds, a repeat that must not be counted twice; a key
-// the list holds no room for is still a new key.
+// a key sorted already holds; a key the list holds no room for reports true
+// even when it repeats an earlier key that was not kept. The count its
+// caller keeps is therefore one of listed entries, not of distinct keys,
+// which is the same thing because S3 never repeats a key in one listing.
 func keepSmallest(sorted []string, key string, limit int) ([]string, bool) {
 	i, found := slices.BinarySearch(sorted, key)
 	if found {

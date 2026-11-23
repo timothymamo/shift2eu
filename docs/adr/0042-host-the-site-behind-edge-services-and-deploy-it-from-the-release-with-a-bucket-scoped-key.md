@@ -146,8 +146,9 @@ Version 4 written by hand (Hosting decision 8: the AWS CLI and `s3cmd` are unpin
 need Python, and would hold the key). The signer is pinned by the AWS documentation's three published S3
 example signatures (the GET object, the ListObjects GET and the PutObject of a path holding `$`); it
 canonicalises the path itself, each segment URI-encoded once from the decoded path, and sends the
-listing's query exactly as it canonicalises it (a space as `%20`, a plus as `%2B`). It follows no redirect, sends only `GET` (the live page, the listing) and `PUT` (a file
-of the bundle), and never `DELETE`. It refuses, before any request, a configuration it cannot trust (an
+listing's query exactly as it canonicalises it (a space as `%20`, a plus as `%2B`). It follows no
+redirect, sends only `GET` (the live page, the listing) and `PUT` (a file of the bundle), and never
+`DELETE`. It refuses, before any request, a configuration it cannot trust (an
 endpoint with a path, query or user info, a bucket that is no S3 bucket name, a version or a release that
 is no `vX.Y.Z` tag, a missing key, client, writer or clock) and a bundle whose manifest does not parse
 strictly, names a path that is not one of the bundle's fixed flat names (so no `/`, `..`, `\`, `%`,
@@ -410,10 +411,11 @@ Services pipeline. What bounds the rest:
   it loads (ADR 0036), which helps only visitors whose browser loads a genuine page.
 - **The privacy statement:** the privacy page, under "What the site cannot promise", says "The site
   is only the files named in a release's manifest: any other path on the host, even one that answers,
-  is not part of the site.", and that the live checks compare only the manifests' files, the root and the service-worker
-  paths, so a look-alike page at a new path uploaded with a leaked key is not detected by them (pinned
-  by `test/site`'s `TestPrivacyPageNamesThePathsOutsideTheManifests`). Once the listing is on, milestone
-  4 may add that the next release's deploy fails on any object outside every release's manifest.
+  is not part of the site.", and that the live checks compare only the manifests' files, the root and
+  the service-worker paths, so a look-alike page at a new path uploaded with a leaked key is not
+  detected by them (pinned by `test/site`'s `TestPrivacyPageNamesThePathsOutsideTheManifests`). Once
+  the listing is on, milestone 4 may add that the next release's deploy fails on any object outside
+  every release's manifest.
 - **ListBucket**, if R7 shows IAM grants it and the deploy then passes `-list-bucket`: a path outside
   the manifests is found at the next release, not by the daily check.
 
