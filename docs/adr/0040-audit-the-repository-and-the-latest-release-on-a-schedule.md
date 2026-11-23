@@ -390,7 +390,7 @@ test of ours (Decision 3's reason).
   | `SafeModeOff` | leave `--safe-mode` out | `--safe-mode` |
   | `WorkDir` | the CLI's working directory, an absolute path that exists | a fresh empty temporary directory, removed after the run |
   | `Home` | the CLI's `HOME`, an absolute path that exists | a fresh empty temporary directory, removed after the run |
-  | `Env` | extra `NAME=VALUE` entries of the allow list; a name the launcher sets itself (`CLAUDE_CODE_OAUTH_TOKEN`, `HOME`, `PATH`, the four switches below) is refused, and so is one that names another credential, endpoint, proxy, policy or provider or loads code into the CLI's process (`ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_BASE_URL`, `CLAUDE_CODE_MANAGED_SETTINGS_PATH`, `NODE_OPTIONS`, `LD_PRELOAD`, `LD_LIBRARY_PATH`, `HTTPS_PROXY`, `HTTP_PROXY` and every `CLAUDE_CODE_USE_*`; amended 2026-11-22, issue #277 round C), and, amended 2026-11-23 (issue #277 round D), `LD_AUDIT`, `ALL_PROXY`, `NO_PROXY`, the lower-case `https_proxy`, `http_proxy`, `all_proxy`, `no_proxy` (Node and curl read them too; names are compared exactly), `NODE_TLS_REJECT_UNAUTHORIZED`, `NODE_EXTRA_CA_CERTS`, `CLAUDE_CONFIG_DIR` and `ANTHROPIC_CUSTOM_HEADERS` | none |
+  | `Env` | extra `NAME=VALUE` entries of the allow list; a name the launcher sets itself (`CLAUDE_CODE_OAUTH_TOKEN`, `HOME`, `PATH`, the four switches below) is refused, and so is one that names another credential, endpoint, proxy, policy or provider or loads code into the CLI's process (`ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_BASE_URL`, `CLAUDE_CODE_MANAGED_SETTINGS_PATH`, `NODE_OPTIONS`, `LD_PRELOAD`, `LD_LIBRARY_PATH`, `HTTPS_PROXY`, `HTTP_PROXY` and every `CLAUDE_CODE_USE_*`; amended 2026-11-22, issue #277 round C), and, amended 2026-11-23 (issue #277 round D), `LD_AUDIT`, `ALL_PROXY`, `NO_PROXY`, the lower-case `https_proxy`, `http_proxy`, `all_proxy`, `no_proxy` (Node and curl read them too; names are compared exactly), `NODE_TLS_REJECT_UNAUTHORIZED`, `NODE_EXTRA_CA_CERTS`, `CLAUDE_CONFIG_DIR` and `ANTHROPIC_CUSTOM_HEADERS`. *Amended 2026-11-23 (issue #277 round F):* the deny list is replaced by an **allow list**: `Env` may hold only `TMPDIR`, `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB` and `SHIFT2EU_AUDIT_CANARY`, the three the audit sets, and any other name is refused with `ErrModel` naming it, before anything runs. The deny list had missed `BASH_ENV`, `ENV`, `CLAUDE_CODE_SHELL_PREFIX`, `NODE_PATH`, `SSL_CERT_FILE` and `SSL_CERT_DIR`, and a list of refused names misses whatever its authors did not think of; every name above stays refused, the launcher's own entries are unchanged, and the reviewer, which sets no `Env`, is unaffected | none |
   | `SearchPath` | the CLI's `PATH` | `/usr/local/bin:/usr/bin:/bin` |
   | `SystemPromptDir` | the directory the system prompt's file is written into, under a fresh name, an absolute path that exists, which the caller controls (the audit's `/srv/audit/state/tmp`); the file is removed after the run | a fresh temporary directory of the launcher's own under `os.TempDir()`, removed after the run |
   | `Redact` | values, beside the token, that the launcher's error never quotes: each stands in for `[redacted]` in the excerpt of the CLI's text (the audit passes its canary) | the token alone |
@@ -672,6 +672,21 @@ It `exec`s with exactly this environment, nothing inherited: `PATH=/usr/bin:/bin
   over-refuses and fails closed: a grep pattern or a `-S` value holding `%G`, or a for-each-ref pattern
   holding `signature`, is refused too, and the model has no way to pass one. `git log --format=%H%n%s`
   and `for-each-ref --sort=-committerdate` still pass.
+- *Added 2026-11-23 (issue #277 round F):* **The wrapper's path rule.** The settings file's
+  `Bash(*/proc/*/environ*)` deny rule matches the command's text, so a glob (`audit-exec cat
+  /proc/[0-9]*/envir?n`) gets past it and the wrapper then receives the real paths the shell expanded.
+  The wrapper therefore refuses, on the line of every command it runs, any word that names a path into
+  `/proc`, `/sys` or `/dev`. A word names a path when it is (a) no option word (no leading `-`; `-` alone
+  is stdin) and holds a `/`, so a bare grep pattern, ref or jq filter names none, and a word without a
+  `/` cannot reach one of the three from the work directory; (b) an option word holding `=`, whose value
+  after the first `=` is the path (`--field-separator=/proc/x`); or (c) on a git line, the value of `-C`,
+  attached (`-C/proc/1`) or the next word. A path is refused when, read from `/` if it is relative and
+  cleaned lexically as `filepath.Clean` cleans it, it is `/proc`, `/sys` or `/dev` or lies under one of
+  them, so `/proc/../proc/1/environ` and `../../proc/1/environ` are refused and
+  `/srv/audit/work/proc/x` passes. The wrapper does the cleaning itself with `strings`, since its depguard
+  rule does not take `path/filepath`. The refusal is the others': exit 126 and the line naming the whole
+  word. The rule reads every word whatever option it belongs to, so it fails closed as the signature
+  check does: a git grep pattern that reads as such a path is refused too, while `git grep -e proc` passes.
 - **The same environment for every command**, the five `GIT_*` included: PRD #175's criterion is one
   scrubbed environment, and a variable only git reads changes nothing for the others.
 - **The exec seam.** The logic is `run(args []string, exec func(path string, argv []string, env []string)
@@ -687,7 +702,13 @@ It `exec`s with exactly this environment, nothing inherited: `PATH=/usr/bin:/bin
   every process start, library load and raw system call, with one named exception: `syscall.Exec` in
   `ci/auditexec/main.go` alone. `ci/auditexec` imports no library yet; the lax rule
   `audit-library-importers` lets it import `ci/internal/audit`, which itself is held by `audit-library`
-  and no forbidigo group (it starts `bwrap` and `sudo`, which `audit-exec-env` would refuse).
+  and not by `audit-exec-env` (it starts `bwrap` and `sudo`, which `audit-exec-env` would refuse).
+  *Amended 2026-11-23 (issue #277 round F):* the library has a forbidigo group of its own,
+  `audit-library-env`, which refuses `os.Getenv`, `os.Environ`, `os.LookupEnv`, `os.UserHomeDir`,
+  `os.UserConfigDir`, `os.UserCacheDir` and `os.ExpandEnv` in every file under `ci/internal/audit/`, its
+  tests included, through one exclusion rule (`path-except: ^ci/internal/audit/`) and no exception. It
+  names no process start, so `bwrap` and `sudo` stay allowed; what the library needs of the step's
+  environment reaches it from `ci/auditrun` as parameters.
 
 #### The sandbox preflight
 
@@ -763,7 +784,9 @@ It `exec`s with exactly this environment, nothing inherited: `PATH=/usr/bin:/bin
   library to `audit-library` (named standard packages and `ci/internal/claudecode`; `os`, `os/exec` and
   `net` for its own checks) and the entry point to `audit-main` (no `os/exec` or `net`); the lax rule
   `audit-library-importers` names `ci/auditrun` and `ci/auditexec`. The forbidigo group `audit-run-env`
-  holds in `ci/auditrun`, with `os.LookupEnv` named in its `main.go` alone.
+  holds in `ci/auditrun`, with `os.LookupEnv` named in its `main.go` alone, and, amended 2026-11-23
+  (issue #277 round F), `audit-library-env` in `ci/internal/audit` (environment reads and home, config
+  and cache lookups, no process start; see the wrapper's rules above).
 - **The run's one line.** Each step's failure prints a constant class; the bubblewrap failure prints the
   sentence above; the preflight's prints its `Verdict`, whose text is built from constants alone
   (`preflight failed: probe 2, TCP connect: not refused; see runbook step 10`). A preflight error that is

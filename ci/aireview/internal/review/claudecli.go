@@ -32,8 +32,8 @@ func NewClaudeCLI(path, token string, timeout time.Duration) *ClaudeCLI {
 // does:
 //
 //	claude -p --model Model --output-format json --safe-mode --tools ""
-//	  --setting-sources "" --strict-mcp-config --disable-slash-commands
-//	  --no-session-persistence --system-prompt-file <file>
+//	  --setting-sources "" --strict-mcp-config --mcp-config '{"mcpServers":{}}'
+//	  --disable-slash-commands --no-session-persistence --system-prompt-file <file>
 //
 // p.System, the trusted instructions, reaches the CLI in that file; p.User,
 // the untrusted pull request, on stdin alone. The CLI runs in an empty

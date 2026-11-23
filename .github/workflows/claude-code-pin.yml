@@ -16,8 +16,10 @@ name: Claude Code pin
 #
 # Always run, so it can be required (issue #452): the job runs on every pull request into main, and its
 # changes step decides whether the pull request touches the pin's paths: the pin file, ai-review.yml,
-# which reads it, the install script that consumes the pin, this file, the check's code and go.mod (whose go line picks the Go that builds the
-# check). actions/checkout checks out the merge commit refs/pull/<n>/merge two commits deep; its first
+# which still installs the CLI from it (its read and install steps), the install script that consumes
+# the pin, this file, the check's code and go.mod (whose go line picks the Go that builds the check).
+# The push: paths below list the same paths, so a push to main and a pull request re-check the pin on
+# the same changes. actions/checkout checks out the merge commit refs/pull/<n>/merge two commits deep; its first
 # parent is main before the merge and its second the pull request's head, so git diff HEAD^1 HEAD is
 # exactly what merging the pull request changes on main. The step trusts neither the parent count nor
 # their order alone: it reads the head's sha from the event file (jq on GITHUB_EVENT_PATH) and requires it
@@ -38,6 +40,7 @@ on:
     branches: [main]
     paths:
       - .github/claude-code.yaml
+      - .github/workflows/ai-review.yml
       - .github/scripts/install-claude-code.sh
       - .github/workflows/claude-code-pin.yml
       - ci/claudecodepin/**

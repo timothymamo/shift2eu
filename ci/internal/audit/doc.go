@@ -46,5 +46,8 @@
 // It is no part of the product: it sits under ci/internal, so Go's internal
 // rule lets only packages under ci/ import it, and the depguard rule
 // audit-library-importers names the ones that may. The strict depguard rule
-// audit-library holds it to named standard packages and the launcher.
+// audit-library holds it to named standard packages and the launcher, and the
+// forbidigo group audit-library-env keeps it from reading the environment or
+// locating a home, config or cache directory (issue #277 round F); it names no
+// process start, since the library starts bwrap and sudo.
 package audit

@@ -12,11 +12,9 @@
 // (the audit's state area) - removed after the run, the untrusted user prompt
 // on stdin, every setting source, MCP server (an empty --mcp-config) and slash
 // command off, and an explicit environment that inherits nothing of the
-// runner's: a variable the launcher sets itself, and one that would name
-// another credential, endpoint, proxy (either case), certificate authority,
-// configuration directory, request header, managed-settings file or provider,
-// turn its TLS checks off or load code into the CLI's process, is never a
-// config's to set. A config of a shape the ADR does not
+// runner's, where a config may add only TMPDIR,
+// CLAUDE_CODE_SUBPROCESS_ENV_SCRUB and SHIFT2EU_AUDIT_CANARY (an allow list,
+// issue #277 round F): any other name is refused. A config of a shape the ADR does not
 // allow is refused, naming the field, before anything runs. Writing those
 // temporary files, checking that a directory it was given exists and starting
 // that one process are the only things it does with os and os/exec. Its errors

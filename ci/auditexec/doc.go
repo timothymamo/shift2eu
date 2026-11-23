@@ -17,7 +17,13 @@
 // cluster. sort takes only an allow list of options, which
 // order and compare lines (-k and -t with their values among them), so it never
 // runs a program, reads a file it was not given or writes one; uniq takes one
-// operand at most, so its OUT never writes a file. Every
+// operand at most, so its OUT never writes a file. On every command's line,
+// a word that names a path into /proc, /sys or /dev is refused (the wrapper's
+// path rule, issue #277 round F): a non-option word holding "/", the value of
+// an option after its "=", and git's -C value, attached or the next word,
+// each cleaned as filepath.Clean cleans it and read from "/" when relative,
+// so a glob the CLI's deny rule could not see is refused once the shell has
+// expanded it. Every
 // other name, a path given as the name included, every other git subcommand
 // and every refused option ends the run with exit 126 and one line on stderr
 // that names the refused word, quoted and cut to 64 bytes.
