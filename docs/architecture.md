@@ -141,10 +141,9 @@ Arrows are imports. They point inwards only:
   them), jq's module system (`import`, `include`, `-L`, `--library-path`) and program file (`-f`,
   `--from-file`), wc's `--files0-from` and sha256sum's `-c`/`--check`, which read paths from a file, any
   path word holding a `..` element, and any path word outside an allow list of three roots,
-  `/srv/audit/checkout`, `/srv/audit/checks` and `/srv/audit/work`. In a single-dash word, an
-  attached value may start after any letter of the option cluster (`git blame -wS/var/x`), so every rest
-  after one of the cluster's letters that holds a `/` is a path word, and any one outside the roots
-  refuses the word (round J). It changes into `/srv/audit/work`
+  `/srv/audit/checkout`, `/srv/audit/checks` and `/srv/audit/work`. It models no tool's option
+  cluster: in every single-dash word that holds a `/`, the suffix from its first `/` is a path word and
+  must be an allowed absolute path (`git blame -wS/var/x`, `git grep -n5f/tmp/x` are refused; round K). It changes into `/srv/audit/work`
   before every exec (`os.Chdir`) and replaces itself with the command through `syscall.Exec` with an
   environment of its own. It is defence in depth: the sandbox is the boundary. It is held to named standard packages (`audit-exec`, no
   `os/exec` or `net`), and the forbidigo group `audit-exec-env` refuses every read of the environment and

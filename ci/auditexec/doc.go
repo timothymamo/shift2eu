@@ -38,9 +38,10 @@
 // /srv/audit/checks and /srv/audit/work and what lies under them (the
 // wrapper's path rule, issue #277 rounds F and G): a path word is a
 // non-option word holding "/" or that is "..", every word after "--", an
-// option's value after its "=", and in a single-dash word every rest after a
-// letter of its option cluster that holds "/", since the value may start
-// after any of them (git blame -wS/var/x, round J; "-" alone is stdin). A relative path word is read from the
+// option's value after its "=", and in a single-dash word that holds "/" its
+// suffix from the first "/", which must be an allowed absolute path: no
+// tool's option cluster is modelled, since git reads digits inside one as
+// -NUM (git grep -n5f/tmp/x, round K; "-" alone is stdin). A relative path word is read from the
 // checkout on a git line and from the work directory on any other; a word
 // holding a ".." element is refused before anything is cleaned, so a glob
 // the CLI's deny rule could not see, or a link such as /dev/fd followed by

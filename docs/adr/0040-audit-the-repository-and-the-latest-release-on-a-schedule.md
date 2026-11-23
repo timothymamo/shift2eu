@@ -525,7 +525,9 @@ test of ours (Decision 3's reason).
      the token that exceeds it (`exceeded max depth`), as a file that is no JSON is. *Amended
      2026-11-23 (issue #277 round J):* the limit is the audit's own, `maxResultDepth = 10000`: the walk
      counts its depth and refuses a document nested deeper as no JSON, whatever `encoding/json`'s
-     internals do. The check for
+     internals do. *Noted 2026-11-23 (issue #277 round K):* `encoding/json`'s decoder refuses a
+     document 10001 levels deep by itself, so `maxResultDepth` is defence in depth: the rows cannot tell
+     it apart from the decoder's own limit from the outside. The check for
      one value and then EOF stays. Both failures still print the audit's one constant
      line. `Audit(ctx, root, in, launch)` returns `([]byte, error)`: the bytes it read and checked,
      never the path. `Steps.Audit` carries them, and `Run.Result func(body []byte) error`, beside
@@ -716,18 +718,22 @@ It `exec`s with exactly this environment, nothing inherited: `PATH=/usr/bin:/bin
     -L/proc/1/root`); and git's `-C` value, attached or the next word (superseded by round H, below: a
     caller's `-C` is refused in every form, so its value is no path word). `-` alone is stdin and no path
     word. A word with no `/` is a name in the working directory and passes, `..` excepted.
-    *Amended 2026-11-23 (issue #277 round J):* in a single-dash word, the value may start after **any
-    letter of the option cluster**, not only the first: git and the tools read a cluster one letter at a
-    time, so in `git blame -wS/var/lib/dpkg/status` `S` takes `/var/lib/dpkg/status`, which the old rule
-    read as the relative `S/var/...` inside the checkout, and git echoed the file through its errors
-    (`git grep -nif/run/x`, `git ls-files -oX/home/runner/x` alike). The cluster is the leading run of
-    letters after the dash, of length k; the candidates are `arg[i:]` for i from 2 to k+1 (`arg[2:]` at
-    least), each that holds a `/` a path word, joined to the line's base when relative and taken as it is
-    when absolute; any candidate outside the roots refuses the whole word. A letter inside the value
-    starts no candidate, so `git grep -if/srv/audit/work/p` and `git blame -S/srv/audit/work/revs` pass.
-    *Accepted side effect (fail closed):* an attached value that is a relative path holding a `/`
-    (`-Sfoo/bar`) is refused, since its candidate `/bar` (after the letters `S`, `f`, `o`, `o`) is
-    absolute and outside the roots; the model passes the value as a word of its own (`-S foo/bar`).
+    *Amended 2026-11-23 (issue #277 round K, replacing round J's letter-run rule):* the wrapper models
+    **no tool's option cluster**. The value of a single-dash word may start after any letter of its
+    cluster (`git blame -wS/var/lib/dpkg/status`: `S` takes `/var/lib/dpkg/status`), and git also reads
+    a run of digits inside a cluster as `-NUM` and goes on, so in `git grep -n5f/tmp/x HEAD` `f` takes
+    `/tmp/x` and git echoes the file through its regex error; round J's rule, which followed the leading
+    run of letters, stopped at the `5`. The rule is now: **in every single-dash word that holds a `/`,
+    the suffix from its first `/` (`arg[strings.Index(arg, "/"):]`) is a path word, and must be an
+    allowed absolute path**, under `/srv/audit/checkout`, `/srv/audit/checks` or `/srv/audit/work`; a
+    word holding a `..` element stays refused. Whichever letter takes the value, a value holding a `/`
+    starts at that first `/` or holds it, so its absolute part is checked. A single-dash word with no
+    `/` holds no path beyond a name relative to the base, which cannot leave it. So `git grep
+    -if/srv/audit/work/p`, `git grep -n5f/srv/audit/work/p` and `git blame -S/srv/audit/work/revs` pass,
+    and `git grep -n5f/tmp/x`, `-0f/run/x`, `git blame -wS/var/x` and `git ls-files -oX/home/runner/x`
+    are refused. *Accepted side effect (fail closed):* an attached value that is a relative path holding
+    a `/` (`-Sfoo/bar`) is refused, since its suffix `/bar` is absolute and outside the roots; the model
+    passes the value as a word of its own (`-S foo/bar`).
   - **Resolving:** an absolute word is read as it is; a relative one on a git line is joined to
     `/srv/audit/checkout`, which is what git reads it under the wrapper's `-C`, and on any other line to
     `/srv/audit/work`, the wrapper's working directory.
@@ -1056,10 +1062,19 @@ of milestone 2), and the constraints PR 5 must keep:
   token-absence call needs it: if a Bash call that exits non-zero comes back without `is_error`, the
   judgement reads that call wrongly. The first run's transcript shows which; a change to the judgement
   is a reviewed amendment here.
-- *Added 2026-11-23:* **git's cluster rule over-refuses.** Any single-dash word that holds `c` or `O` is
-  refused, so an attached value that holds either letter is refused with it: `-Scredential`, `-Gfunc`,
-  `git grep -c`. It fails closed, and the model can pass such a value as a separate word (`-S
-  credential`). Recorded only: the skill is not changed in this PR.
+- *Added 2026-11-23, amended in round K:* **git's cluster rule over-refuses.** Any single-dash word that
+  holds `c`, `O` or `C` is refused, so an attached value that holds one of these letters is refused with
+  it: `-Scredential`, `-Gfunc`, `-SConfig`, `git grep -c`. It fails closed, and the model can pass such a
+  value as a separate word (`-S credential`, `-S Config`). Recorded only: the skill is not changed in
+  this PR.
+- *Added 2026-11-23 (issue #277 round K):* **A delimiter of `/` reads as a path.** `tr /`, `tr -d /`,
+  `cut -d /`, `cut -d/` and `sort -t/` are refused: the `/` operand or attached value is a path word,
+  and `/` lies in none of the roots. It fails closed, and the model can pass a delimiter other than `/`
+  (or `tr`'s octal escape `\057`).
+- *Added 2026-11-23 (issue #277 round K):* **A SIGTERM from the runner does not cancel the CLI's
+  context.** `ci/auditrun` handles only SIGINT (adding SIGTERM needs `syscall` in the strict
+  `audit-main` rule, a design change for a minor effect). On a cancel or a timeout the runner kills the
+  step's process tree, so the step still ends; only the launcher's own clean-up on cancel is skipped.
 - *Added 2026-11-23, amended in round E:* **PR 5's checkout must not turn on sparse checkout or
   worktree config.** `.git/config`'s allow list refuses `extensions.worktreeconfig` and every
   `core.sparsecheckout*` key; `.git/config.worktree` may hold only `core.sparsecheckout`,
