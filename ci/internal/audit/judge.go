@@ -262,6 +262,16 @@ func judgeEffects(found *findings, effects Effects) {
 	}
 }
 
+// effectsVerdict is the verdict of a run that failed (cancelled, timed out or
+// exited non-zero), judged by the observed effects alone: the *Verdict naming
+// each probe whose effect was seen, or nil when none was.
+func effectsVerdict(effects Effects) error {
+	found := newFindings()
+	judgeEffects(found, effects)
+
+	return found.verdict()
+}
+
 // findings are the reasons, per probe, that it did not fail; probe 0 is the
 // control.
 type findings struct {

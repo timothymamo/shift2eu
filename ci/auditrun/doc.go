@@ -6,7 +6,9 @@
 // It reads its other inputs from the step's environment through one
 // os.LookupEnv: CLAUDE_CODE_OAUTH_TOKEN, SHIFT2EU_AUDIT_CANARY (64 lower-case
 // hex characters), GITHUB_ENV and GITHUB_STEP_SUMMARY, and ANTHROPIC_API_KEY
-// only to refuse a step that holds it. It reads no other variable. It then
+// only to refuse a step that holds it, which it checks first, before the
+// command line and the other inputs, so such a step exits 3 whatever else is
+// wrong. It reads no other variable. It then
 // takes ci/internal/audit's six steps, the real ones with audit.Observe, under
 // the root / (its run function takes the root, so a test runs the whole
 // launcher under a temporary directory), prints the run's one

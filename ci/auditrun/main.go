@@ -51,7 +51,22 @@ func run(args []string, getenv func(string) (string, bool), steps audit.Steps, r
 // the result file and keeps its bytes, but nothing publishes them yet - the
 // publication job of ADR 0040's step 19, PR 5 of PRD #175 milestone 2, sets
 // Result.
+//
+// A step that holds ANTHROPIC_API_KEY, set even to nothing, is refused first,
+// before the command line and the other inputs are read: it exits 3 with its
+// line whatever else is wrong.
 func runContext(ctx context.Context, args []string, getenv func(string) (string, bool), steps audit.Steps, root string, stdout, stderr io.Writer) int {
+	if _, set := getenv(envAPIKey); set {
+		stepSummary, _ := getenv(envStepSummary)
+
+		out, closeSummary := summaryWriter(stdout, stderr, stepSummary)
+		defer closeSummary()
+
+		_, _ = fmt.Fprintln(out, lineAPIKey)
+
+		return audit.ExitRefused
+	}
+
 	in, err := inputs(args, getenv, stderr)
 	if err != nil {
 		_, _ = fmt.Fprintln(stderr, "auditrun:", err)
@@ -61,12 +76,6 @@ func runContext(ctx context.Context, args []string, getenv func(string) (string,
 
 	out, closeSummary := summaryWriter(stdout, stderr, in.StepSummary)
 	defer closeSummary()
-
-	if _, set := getenv(envAPIKey); set {
-		_, _ = fmt.Fprintln(out, lineAPIKey)
-
-		return audit.ExitRefused
-	}
 
 	return audit.Run{Root: root, Inputs: in, Steps: steps, Out: out}.Run(ctx)
 }

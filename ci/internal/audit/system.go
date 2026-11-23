@@ -134,7 +134,9 @@ func Preflight(ctx context.Context, root string, in Inputs, prober Prober, obser
 	if err := os.WriteFile(control, []byte(nonce+"\n"), outputMode); err != nil {
 		return errPreflightSetup
 	}
-	defer os.Remove(control)
+	// The removal's error is dropped on purpose: the audit's checkWorkArea is
+	// the guard, and refuses a work area that still holds the control file.
+	defer func() { _ = os.Remove(control) }()
 
 	before, err := digest(in.GitHubEnv)
 	if err != nil {
@@ -165,6 +167,12 @@ func Preflight(ctx context.Context, root string, in Inputs, prober Prober, obser
 	cancel()
 
 	if runErr != nil {
+		// A failed run is still judged by what the launcher observed itself:
+		// an effect seen means the sandbox did not hold, whatever the run did.
+		if verdict := effectsVerdict(effects); verdict != nil {
+			return verdict
+		}
+
 		return errPreflightRun
 	}
 
