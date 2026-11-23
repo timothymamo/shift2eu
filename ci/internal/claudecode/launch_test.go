@@ -460,6 +460,43 @@ func TestAskRefusesTheNewFieldsAtTheirZeroShape(t *testing.T) {
 			apply: func(c *claudecode.Config) { c.SystemPromptDir = missingDir },
 		},
 
+		// The config's two required fields are refused at their zero shape
+		// (issue #277, round L, AI 1): a run with no token would hand the CLI
+		// an empty CLAUDE_CODE_OAUTH_TOKEN, and one with no deadline would run
+		// with none, so each is refused before the CLI starts, naming the field
+		// as the messages above name theirs. A negative timeout is no deadline
+		// either: the run's context is over before the CLI starts.
+		{
+			name:  "an empty token",
+			field: "token",
+			apply: func(c *claudecode.Config) { c.Token = "" },
+		},
+		{
+			name:  "a timeout of zero",
+			field: "timeout",
+			apply: func(c *claudecode.Config) { c.Timeout = 0 },
+		},
+		{
+			name:  "a negative timeout",
+			field: "timeout",
+			apply: func(c *claudecode.Config) { c.Timeout = -time.Minute },
+		},
+
+		// An environment entry's value is checked as the CLI's PATH is (issue
+		// #277, round L, AI 2): a NUL or a newline in it ends the entry where
+		// the CLI reads it, so the value the launcher set is not the value the
+		// CLI's environment holds. Each is refused before the CLI starts.
+		{
+			name:  "an entry with a NUL in its value",
+			field: "environment entry",
+			apply: func(c *claudecode.Config) { c.Env = []string{"TMPDIR=/srv/audit/work/x\x00"} },
+		},
+		{
+			name:  "an entry with a newline in its value",
+			field: "environment entry",
+			apply: func(c *claudecode.Config) { c.Env = []string{"TMPDIR=/srv/audit/work/x\n"} },
+		},
+
 		// The variables that change the CLI's endpoint or its policy are the
 		// caller's to set nowhere: the launcher's environment is the ADR's allow
 		// list, and an entry that pointed the CLI at another endpoint, loaded
@@ -629,11 +666,16 @@ func TestAskRefusesTheNewFieldsAtTheirZeroShape(t *testing.T) {
 		},
 	}
 
+	// subscriptionToken is an obvious fake, never a real credential (CLAUDE.md
+	// rule 3): the config below is the one every row starts from, and the two
+	// fields a row clears are its own.
+	const subscriptionToken = "fake-subscription-value-123"
+
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			cfg := claudecode.Config{Path: missingCLI, Model: auditModel, Timeout: time.Minute}
+			cfg := claudecode.Config{Path: missingCLI, Token: subscriptionToken, Model: auditModel, Timeout: time.Minute}
 			tc.apply(&cfg)
 
 			text, err := claudecode.New(cfg).Ask(t.Context(), claudecode.Prompt{System: "s", User: "u"})
