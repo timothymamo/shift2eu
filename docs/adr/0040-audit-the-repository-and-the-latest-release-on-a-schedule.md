@@ -2,8 +2,10 @@
 
 - Status: Accepted, Decision 2's presence-flag rule and the coverage rule that follows from it included:
   the maintainer confirmed both on 2026-11-21 at PR #444's review (see Context).
-  PRD #175 milestone 2 amends this record with the workflow's implementation (below)
-- Date: 2026-11-21
+  PRD #175 milestone 2 amends this record with the workflow's implementation (below); its first
+  amendment, how Claude Code runs in the model job, is dated 2026-11-22, its second, the publish
+  program's core, 2026-11-23
+- Date: 2026-11-21, amended 2026-11-22 to 2026-11-23
 
 ## Context
 
@@ -236,7 +238,7 @@ What those permissions also allow, beyond what the audit needs, and what narrows
 
 | Permission | Also allows | Narrowed by |
 |---|---|---|
-| Contents write (App permissions cannot be narrowed to a path or branch) | creating releases and tags other than `v*`, deleting and merging into unprotected branches, `repository_dispatch` | the token exists only in the publish job, which runs only `main`'s committed script and calls a fixed set of endpoints; the `security-audit/**` branch ruleset (only the App writes there; an admin only through a temporary bypass the runbook adds and removes); a required check that fails an App pull request touching anything outside `docs/security/`, in a new ruleset on `main`; a branch ruleset on `~ALL` excluding `security-audit/**` that restricts creations, updates and deletions to its bypass actors (the maintainer's admin role, the agents App, Renovate, the release-please App), never the audit App; optionally a `**` tag ruleset that lets only the release App create tags |
+| Contents write (App permissions cannot be narrowed to a path or branch) | creating releases and tags other than `v*`, deleting and merging into unprotected branches, `repository_dispatch` | the token exists only in the publish job, which runs only `main`'s committed script and calls a fixed set of endpoints; the `security-audit/**` branch ruleset (only the App writes there; an admin only through a temporary bypass the runbook adds and removes); a required check that fails an App pull request touching anything outside `docs/security/`, in a new ruleset on `main`; a branch ruleset on `~ALL` excluding the default branch (`Protect main` guards it; including it blocked every merge) and `security-audit/**` that restricts creations, updates and deletions to its bypass actors (the maintainer's admin role, the agents App, Renovate, the release-please App), never the audit App; optionally a `**` tag ruleset that lets only the release App create tags |
 | Pull requests write | submitting reviews, `APPROVE` included | `Protect main` requires the code owner's approval, so the App's never counts; the script never calls the review endpoints |
 | Repository security advisories write | publishing an advisory and requesting a CVE: disclosure | every advisory `state` the script sends is hard-coded `draft`, and it never calls the publish or CVE endpoints |
 
@@ -267,11 +269,13 @@ Residual risks of the check:
   change, a close and reopen, a human opening the pull request later) runs the check again with a
   non-App sender and passes it, with the App's commit still in the pull request. The fix is a branch
   ruleset, part of runbook step 5 by default and created before the audit-paths ruleset goes active: it
-  targets `~ALL` excluding `security-audit/**`, restricts creations, updates and deletions (`creation`,
-  `update`, `deletion`), and has as bypass actors every legitimate pusher (the maintainer's admin role (`RepositoryRole` 5), the agents
+  targets `~ALL` excluding the default branch (`~DEFAULT_BRANCH`) and `security-audit/**`, restricts
+  creations, updates and deletions (`creation`, `update`, `deletion`), and has as bypass actors every legitimate pusher (the maintainer's admin role (`RepositoryRole` 5), the agents
   App `shift2eu-agents`, Renovate, the release App `shift2eu-release`) and not the audit App, which can
-  then write only `security-audit/**` branches. The residual risk is bounded by the fence plus this
-  ruleset; without the ruleset, the sender key is only a one-shot signal.
+  then write only `security-audit/**` branches. The default branch stays out of its target: `Protect
+  main` already guards `main`, and with `main` included the `update` rule blocked every merge into it
+  (2026-11-22, PRs #460 and #461). The residual risk is bounded by the fence plus this ruleset; without
+  the ruleset, the sender key is only a one-shot signal.
 - Denial of service: the App's Pull requests write lets it edit any pull request's title or retarget its
   base, each an `edited` run with the App as sender, so that pull request's required check fails. A
   re-run does not clear it: a re-run of a `pull_request_target` run replays the original event, so the
@@ -284,8 +288,9 @@ Residual risks of the check:
 - Under `pull_request_target` the workflow file and `github.sha` come from the pull request's base
   branch, not always from `main`. Every pull request into `main`, the only ones the audit-paths ruleset
   requires the check on, runs `main`'s copy of the workflow and of the script; a pull request into another
-  branch runs that branch's copy, which could differ. The branch ruleset on `~ALL` keeps the audit App
-  from changing any other branch's copy; without it, the App's contents write could. Retargeting the pull
+  branch runs that branch's copy, which could differ. The branch ruleset on `~ALL` (excluding the default
+  branch, which `Protect main` guards, and `security-audit/**`) keeps the audit App from changing any
+  other branch's copy; without it, the App's contents write could. Retargeting the pull
   request to `main` is an `edited` event that runs `main`'s copy on the same head commit, and that newer
   run decides; until it finishes, the earlier run's result from the other base stands on the head commit.
   Code-owner approval on `main` bounds that window.
@@ -329,6 +334,14 @@ matching and its derivation of each finding's status; the closed category list i
 the wrapper's allowed commands and its scrubbed-environment allow list; and whether the Claude
 subscription is a Team or Enterprise plan, so whether server-managed settings could reach the model
 step.
+
+Two amendments follow. The first (2026-11-22, its subsection after the second's) covers how Claude Code
+runs: the shared launcher, the audit's launcher and its environment, the audit directory, the settings
+file and its permission mode, the wrapper, the sandbox preflight, the user-namespace handling and the
+Claude Code pin. The second (2026-11-23, the next subsection) settles the publish program's core: the
+result schema and its closed category list, the publish script's false-positive matching and its
+derivation of each finding's status, the finding limit and the encoded-run thresholds. The other items of
+the list above come with the pull requests of milestone 2 that build them.
 
 ### The publish program's core (milestone 2, amended 2026-11-23)
 
@@ -852,6 +865,872 @@ entry point prints none of them.
   `docs/security/audits/`, enforced by CODEOWNERS or a required check. Otherwise a merged edit from
   another branch that adds a False positives row would drop a public finding from every later run,
   silently, since the row is carried forward byte for byte.
+
+### How Claude Code runs in the model job (milestone 2, amended 2026-11-22)
+
+**Decision 3 settled:** the audit runs the **same pinned Claude Code CLI** as the AI reviewer, installed
+by the same script, started by the **same Go launcher library**, `ci/internal/claudecode`, with its own
+model, tool list, settings file, directories and environment allow list. The reviewer's launch, `claude
+-p` with every tool, setting source, MCP server and slash command off, an empty working directory and
+HOME of its own and an environment that inherits nothing, meets the PRD's requirements for a model with
+no tools. It cannot carry the audit unchanged: the audit needs tools, the sandbox, a settings file, a
+permission mode and fixed directories. So the launch becomes a library with those as parameters, the
+reviewer's values its defaults, and the audit adds a program of its own around it (`ci/auditrun`)
+for what only the audit does: the managed-settings refusal, the checksum check, the canary and the
+preflight. *Why not `anthropics/claude-code-action`:* it hides the launch behind its own inputs, so the
+`env -i` allow list, the fresh `HOME` and the absence of a managed-settings file could not be held by a
+test of ours (Decision 3's reason).
+
+#### The shared launcher, `ci/internal/claudecode`
+
+- **Path and reach.** `ci/internal/claudecode`, a library under `ci/internal/`: Go's internal rule lets
+  only packages under `ci/` import it, so neither release binary can reach it. Its importers are exactly
+  `ci/aireview/internal/review` and the audit's library `ci/internal/audit` (below), held by the lax
+  depguard rule `claude-code-launcher-importers`, which denies the package in every file but theirs
+  (`ci/internal/audit` joined its exceptions in the pull request that added it) and which
+  `test/architecture`'s depguard pin holds. The strict depguard rule `claude-code-launcher` holds the
+  package itself to named standard packages
+  (from the move: `bytes`, `context`, `encoding/json`, `errors`, `fmt`, `os`, `os/exec`, `strings`,
+  `time`; `io` joins them with `Transcript`). The
+  forbidigo groups `ai-reviewer-env` and `ai-reviewer-one-process` hold for it as for the reviewer's
+  library: it reads no environment variable and no file, locates no home or temp directory through
+  `os`, and starts its one process with `exec.CommandContext`.
+- **API.** `claudecode.New(claudecode.Config) *CLI` and `(*CLI).Ask(ctx, claudecode.Prompt) (string,
+  error)`; `Prompt` is `{System, User string}`: `System` is written to a file of a temporary directory
+  of the launcher's own and named by `--system-prompt-file` (or `--append-system-prompt-file`, below),
+  `User` reaches the CLI on stdin alone. Every error wraps `claudecode.ErrModel` ("model error"), quotes
+  at most 500 bytes of the CLI's text with the token redacted, names an error result by a constant class
+  and its subtype only, and tells a timeout, a cancellation and the run's deadline apart, exactly as the
+  reviewer's errors did (issues #274, #316, #374). `Config` holds:
+
+  | Field | Meaning | Zero value |
+  |---|---|---|
+  | `Path` | the CLI's absolute path | refused: a relative path is an error before anything runs |
+  | `Token` | the subscription's OAuth token, passed as `CLAUDE_CODE_OAUTH_TOKEN` | refused before anything runs, with `ErrModel` naming the token, never quoting it (*amended 2026-11-23, issue #277 round L*; it was refused only by the CLI) |
+  | `Model` | `--model`; letters, digits, `.` and `-` only | refused: no run asks the CLI's default model |
+  | `Timeout` | the run's own deadline | refused, as is a negative one, before anything runs, with `ErrModel` naming the timeout (*amended 2026-11-23, issue #277 round L*; a zero deadline had ended the run at once as a timeout) |
+  | `Tools` | `--tools`, the built-in tools, joined with `,`; each a tool name of letters only | **no tools**: `--tools ""` |
+  | `Effort` | `--effort`; one of `low`, `medium`, `high`, `xhigh`, `max` | no flag: the CLI's default |
+  | `Settings` | `--settings <absolute path>` | no flag |
+  | `PermissionMode` | `--permission-mode`; `dontAsk` or `plan` only, never `bypassPermissions` | no flag |
+  | `AppendSystemPrompt` | the system prompt is appended to the CLI's own (`--append-system-prompt-file`) | it replaces it (`--system-prompt-file`) |
+  | `SafeModeOff` | leave `--safe-mode` out | `--safe-mode` |
+  | `WorkDir` | the CLI's working directory, an absolute path that exists | a fresh empty temporary directory, removed after the run |
+  | `Home` | the CLI's `HOME`, an absolute path that exists | a fresh empty temporary directory, removed after the run |
+  | `Env` | extra `NAME=VALUE` entries of the allow list; a name the launcher sets itself (`CLAUDE_CODE_OAUTH_TOKEN`, `HOME`, `PATH`, the four switches below) is refused, and so is one that names another credential, endpoint, proxy, policy or provider or loads code into the CLI's process (`ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_BASE_URL`, `CLAUDE_CODE_MANAGED_SETTINGS_PATH`, `NODE_OPTIONS`, `LD_PRELOAD`, `LD_LIBRARY_PATH`, `HTTPS_PROXY`, `HTTP_PROXY` and every `CLAUDE_CODE_USE_*`; amended 2026-11-22, issue #277 round C), and, amended 2026-11-23 (issue #277 round D), `LD_AUDIT`, `ALL_PROXY`, `NO_PROXY`, the lower-case `https_proxy`, `http_proxy`, `all_proxy`, `no_proxy` (Node and curl read them too; names are compared exactly), `NODE_TLS_REJECT_UNAUTHORIZED`, `NODE_EXTRA_CA_CERTS`, `CLAUDE_CONFIG_DIR` and `ANTHROPIC_CUSTOM_HEADERS`. *Amended 2026-11-23 (issue #277 round F):* the deny list is replaced by an **allow list**: `Env` may hold only `TMPDIR`, `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB` and `SHIFT2EU_AUDIT_CANARY`, the three the audit sets, and any other name is refused with `ErrModel` naming it, before anything runs. The deny list had missed `BASH_ENV`, `ENV`, `CLAUDE_CODE_SHELL_PREFIX`, `NODE_PATH`, `SSL_CERT_FILE` and `SSL_CERT_DIR`, and a list of refused names misses whatever its authors did not think of; every name above stays refused, the launcher's own entries are unchanged, and the reviewer, which sets no `Env`, is unaffected. *Amended 2026-11-23 (issue #277 round L):* a value holding a NUL or a newline is refused, naming the entry, as `SearchPath` is | none |
+  | `SearchPath` | the CLI's `PATH` | `/usr/local/bin:/usr/bin:/bin` |
+  | `SystemPromptDir` | the directory the system prompt's file is written into, under a fresh name, an absolute path that exists, which the caller controls (the audit's `/srv/audit/state/tmp`); the file is removed after the run | a fresh temporary directory of the launcher's own under `os.TempDir()`, removed after the run |
+  | `Redact` | values, beside the token, that the launcher's error never quotes: each stands in for `[redacted]` in the excerpt of the CLI's text (the audit passes its canary) | the token alone |
+  | `Transcript` | an `io.Writer`: the run uses `--output-format stream-json --verbose`, copies every byte of stdout there, and reads the result from the last `result` element | `--output-format json`, one result, kept in memory up to 4 MiB |
+
+  The arguments are always, in this order: `-p --model <Model>` [`--effort <Effort>`] `--output-format
+  json|stream-json` [`--verbose`] [`--safe-mode`] `--tools <list>` `--setting-sources ""`
+  [`--settings <file>`] [`--permission-mode <mode>`] `--strict-mcp-config --mcp-config
+  {"mcpServers":{}}` `--disable-slash-commands --no-session-persistence --system-prompt-file|
+  --append-system-prompt-file <file>`. The environment is always exactly `CLAUDE_CODE_OAUTH_TOKEN`,
+  `HOME`, `PATH`, `DISABLE_AUTOUPDATER=1`, `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`,
+  `DISABLE_TELEMETRY=1`, `DISABLE_ERROR_REPORTING=1` and the `Env` entries: nothing is inherited.
+  `--mcp-config {"mcpServers":{}}` is new for both callers; the reviewer's launch gains it with the
+  audit's fields, in the pull request that adds them, and its test then pins it.
+- **What stays the reviewer's.** `review.Model` (`claude-opus-5-5`), `review.NewClaudeCLI(path, token,
+  timeout)`, which is `claudecode.New` with that model and every other field at its zero value (no
+  tools, safe mode, replaced system prompt, fresh directories, `json`), the `Asker` interface, the
+  prompt's text and everything after the answer. `review.ErrModel` is `claudecode.ErrModel`, so its
+  text and every `errors.Is` stay as they were. The reviewer's launch is unchanged by the move but for
+  one flag: `--mcp-config {"mcpServers":{}}` is added after `--strict-mcp-config`; otherwise the same
+  flags in the same order, same environment, same model, same errors; its tests in
+  `ci/aireview/internal/review/claudecli_test.go` stay where they are and pin it.
+
+#### The audit's programs
+
+- **`ci/auditrun`**, the launcher the model step runs, a Go main package (not a script: it shares the
+  library, and a test drives it with a fake `claude`), with its logic in the library
+  **`ci/internal/audit`**, which `ci/auditrun` and the wrapper `ci/auditexec` import and nothing else (a
+  lax depguard rule like `claude-code-launcher-importers`). Each gets a strict depguard rule of named
+  standard packages, as `ci/aireview` has, pinned by `test/architecture`.
+- **Its command line:** `auditrun -claude-tarball <path> -claude-integrity <sha512-...>`, both from the
+  install step and the one pin (below). Its inputs from the step's environment, read through one
+  `os.LookupEnv` passed to the library as the reviewer's `SettingsFromEnv` does: `CLAUDE_CODE_OAUTH_TOKEN`,
+  `SHIFT2EU_AUDIT_CANARY` (64 lower-case hex characters), `GITHUB_ENV` (its path, for probe 6) and
+  `GITHUB_STEP_SUMMARY`. It reads no other variable, and refuses to run when `ANTHROPIC_API_KEY` is set,
+  as the reviewer does.
+- **In order**, each step failing the run before the next:
+  1. **Managed settings.** It fails if any of these exists, checked with `Lstat`, so a symbolic link
+     counts: `/etc/claude-code` (the directory itself, which holds `managed-settings.json`,
+     `managed-settings.d/`, `managed-mcp.json` and the policy `CLAUDE.md`), and, though the runner is
+     Linux, `/Library/Application Support/ClaudeCode`. The library takes a root that stands in for `/`,
+     so a test puts a policy file under a temporary root; `ci/auditrun` passes `/`.
+     `CLAUDE_CODE_MANAGED_SETTINGS_PATH`, which points the CLI at another policy file, never reaches
+     the CLI (the allow list below). The install script's `/etc/claude-code` refusal stays as a first
+     check.
+  2. **Checksum.** It computes the sha512 of the tarball the install step kept, compares it, as npm's
+     `sha512-<base64>` integrity, with `-claude-integrity`, and only then extracts its one entry
+     `package/claude` itself into `/srv/audit/state/bin/claude` (mode 0500) and runs that binary by
+     absolute path. The binary is checked in the same step that runs it, against the one pin, with no
+     second checksum to keep.
+  3. **The audit directory** (below) exists as laid out: `checkout` and `checks` with no write bit,
+     `work`, `state/home` and `state/tmp` empty, `bin/audit-exec` with mode exactly 0555 (only its mode
+     is checked; its owner, root, is not, and that check is left to PR 5's model-free step, which
+     installs it with `sudo install -o root -m 0555`; amended 2026-11-23, issue #277 round H).
+     *Amended 2026-11-23 (issue #277 round J):* `bin/` itself has no write bit and holds `audit-exec`
+     alone: a second file or a link beside the wrapper is refused.
+     *Amended 2026-11-23 (issue #277 round L):* read-only here means read-only **by mode**, and that is
+     defence in depth: the runner's user owns `checkout/` and `checks/` and could add a write bit back.
+     What holds both trees against their owner is the sandbox's write allow list, which names neither;
+     the owner check is left to PR 5's model-free step. Every refusal of this step names what it
+     refuses: the path (the wrapper's as `srv/audit/bin/audit-exec`), the entry, the key or the line.
+     *Amended 2026-11-22 (issue #277 round C):* both trees are walked whole, no link followed: no entry
+     anywhere in them has a write bit, and every symbolic link in them is relative and resolves, its
+     whole chain followed, to a path inside its own tree. The checkout copy's `.git` is a directory, not
+     a file or a link.
+     *Amended 2026-11-23 (issue #277 round D):* the walk also refuses every entry that is not a
+     directory, a regular file or such a link: a FIFO, a socket, a device. The checkout copy's git
+     configuration is an **allow list**, which replaces round C's list of refused keys (a deny list
+     misses every key it does not name, `gpg.program` and `core.pager`'s neighbours among them):
+     - `.git/config`, when present, is a regular file that holds only these keys, compared without
+       regard to case on the section and the key name: `core.repositoryformatversion`, `core.filemode`,
+       `core.bare`, `core.logallrefupdates`; `remote.origin.url`, `remote.origin.fetch`; `gc.auto`;
+       `branch.<name>.remote`, `branch.<name>.merge`; `extensions.objectformat`. The subsection
+       `origin` is compared exactly, as git compares subsections; `<name>` is any. Every other key and
+       every other section is refused, an empty one included: `extensions.worktreeconfig`,
+       `[include]`, `[includeIf]`, `gpg.*`, `core.fsmonitor`, `core.pager`, `http.*` and every
+       `[filter]`, `[diff]` and `[merge]` section among them.
+     - **A strict parser.** Each line must be blank, a comment (`#` or `;`), a section header alone on
+       its line, `[section]` or `[section "subsection"]`, or `key = value` under a header. It refuses
+       any line it cannot place: a UTF-8 byte order mark; text after a header's closing `]`, a comment
+       included; two headers on one line; a quoted subsection not closed by `"]`, or one with an escape
+       other than git's `\"` and `\\`; the old dotted header (`[branch.main]`); a key before any header;
+       a key without `=` (git's bare boolean); and a value that ends in `\`, which continues on the next
+       line. Git writes none of these forms, so refusing them costs a checkout nothing. A refusal
+       names the line's number and the section or key, never a value or a subsection, which could hold a
+       credential.
+     - **Two other files** are refused by their presence, in any file type: `.git/commondir` and
+       `.git/gitdir`, the files beside `.git/config` git reads a repository out of.
+
+     The wrapper's git reads that one local config (its environment turns the system and global ones
+     off, see the wrapper below), so what that config may hold is exactly the allow list. The check
+     makes no claim about what git does with a key; it only holds that no key outside the list is there.
+     *Amended 2026-11-23 (issue #277 round E):*
+     - **`.git/config.worktree` is taken when harmless.** Every default `actions/checkout` (v7.0.1, the
+       pin) leaves it, holding `core.sparseCheckout = false`, `core.sparseCheckoutCone = false` and
+       `index.sparse = false`; round D refused it by its presence, so every real run would have failed
+       step 3. It may now be there as a regular file (`Lstat`: a link or any other type is refused)
+       that passes the same strict parser under an allow list of its own: `core.sparsecheckout`,
+       `core.sparsecheckoutcone`, `index.sparse`, compared without regard to case. Any other key or
+       section in it is refused, `core.fsmonitor` and `[include]` among them. The three keys pass
+       whatever their values: the check holds keys, not values, and `false` is only what checkout
+       writes. That is harmless because git reads the file only under `extensions.worktreeconfig`,
+       which `.git/config`'s allow list refuses, so the wrapper's git never reads it at all; the check
+       holds that it would add nothing if it did.
+     - **No lazy fetch.** `remote.origin.promisor` and `remote.origin.partialclonefilter` are off
+       `.git/config`'s allow list (round D took them): a `fetch-depth: 1` checkout writes neither, and
+       with them the wrapper's git could fetch an object the checkout lacks. A partial clone's config is
+       refused.
+  4. **Bubblewrap** starts (the user-namespace check, below).
+  5. **The preflight** (below).
+  6. **The audit**: one `Ask` with the skill's text as the appended system prompt, read from
+     `/srv/audit/checkout/.claude/skills/security-audit-run/SKILL.md`, and a fixed user prompt that names
+     the audit directory's paths and the result file `/srv/audit/work/result.json`. The transcript goes to
+     `/srv/audit/state/out/audit.jsonl` and the CLI's stderr to `/srv/audit/state/out/audit.stderr`,
+     never to the log. The step prints one line, "finished" or the failure's constant class.
+     *Amended 2026-11-22 (issue #277 round C):* before the run, the work area is checked again: it holds
+     its `tmp/` alone, a real directory, and `tmp/` is empty, so nothing the preflight's model wrote and
+     no `result.json` that existed before the run is carried into the audit. After the run,
+     `result.json` must be a regular file, read capped at 16 MiB, that holds neither the token nor the
+     canary; otherwise the run fails with exit 1 and the audit's constant line. No 64-hex rule applies
+     to it, as the preflight's judgement applies to its transcript: the audit's findings may quote
+     SHA-256 pins, which are 64 lower-case hex characters too.
+     *Amended 2026-11-23 (issue #277 round D):* the result file is read from one descriptor and never
+     through a link: its entry must be a regular file (`Lstat`, so neither a link nor a FIFO is
+     opened), and the descriptor opened must be that same file (`os.SameFile` on its `Stat`). That gives
+     `O_NOFOLLOW`'s guarantee with `os` alone: `os` has no `O_NOFOLLOW`, and `syscall` is outside
+     `audit-library`, whose packages are linted for every release target. The read is capped at
+     `audit.MaxResult` (`int64`, 16 MiB) from that descriptor; a file over it fails with a failure of
+     its own, which names the cap in decimal, not with the no-result-file one. The bytes must be one
+     JSON value and nothing after it, and the token and the canary are searched for in the raw bytes
+     and in every decoded string, the objects' keys included, so a secret written as `\uXXXX` escapes
+     is found too; a file that is no JSON is refused. *Amended 2026-11-23 (issue #277 round E):* the
+     strings are collected by walking the document's tokens (`json.Decoder.Token`), not by decoding it
+     into a map, so every key and every value of a duplicate key is searched: a map keeps a duplicate
+     key's last value alone, and a secret under its first would never reach the search. The `Token()`
+     walk inherits `encoding/json`'s nesting limit (10000 levels), so a deeper result is refused at
+     the token that exceeds it (`exceeded max depth`), as a file that is no JSON is. *Amended
+     2026-11-23 (issue #277 round J):* the limit is the audit's own, `maxResultDepth = 10000`: the walk
+     counts its depth and refuses a document nested deeper as no JSON, whatever `encoding/json`'s
+     internals do. *Noted 2026-11-23 (issue #277 round K):* `encoding/json`'s decoder refuses a
+     document 10001 levels deep by itself, so `maxResultDepth` is defence in depth: the rows cannot tell
+     it apart from the decoder's own limit from the outside. The check for
+     one value and then EOF stays. Both failures still print the audit's one constant
+     line. `Audit(ctx, root, in, launch)` returns `([]byte, error)`: the bytes it read and checked,
+     never the path. `Steps.Audit` carries them, and `Run.Result func(body []byte) error`, beside
+     `Run.Out`, is handed exactly those bytes once, after every step passed, and never for a run that
+     failed; a `Result` that fails fails the run with the audit's line. It is the seam PR 5's
+     publication works from, so nothing reads the result file again by its path; `ci/auditrun` leaves
+     it nil until then.
+- **Exit codes:** 0 the audit finished and wrote the result file; 1 the run failed (the model, a probe
+  not refused, no result file); 2 a usage or input error; 3 refused before the CLI ran (a managed
+  setting, a checksum mismatch, the audit directory not as laid out); 4 bubblewrap cannot start.
+- **The launcher's environment** (`env -i` in effect: `Config.Env` and the launcher's own entries, nothing
+  inherited), exactly:
+
+  | Variable | Value | Why |
+  |---|---|---|
+  | `CLAUDE_CODE_OAUTH_TOKEN` | the token | the subscription |
+  | `HOME` | `/srv/audit/state/home` | fresh, inside the state area, which the tools cannot read |
+  | `PATH` | `/usr/bin:/bin` | fixed; the sandbox's `bwrap` and `socat` are in `/usr/bin` |
+  | `TMPDIR` | `/srv/audit/state/tmp` | the CLI's own temporary files stay in the state area |
+  | `DISABLE_AUTOUPDATER` | `1` | no update of the pinned binary |
+  | `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` | `1` | the model API only |
+  | `DISABLE_TELEMETRY`, `DISABLE_ERROR_REPORTING` | `1` | as the reviewer |
+  | `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB` | `1` | the pinned CLI (2.1.330) strips its credentials from the environment of the commands it starts and isolates them with bubblewrap |
+  | `SHIFT2EU_AUDIT_CANARY` | the step's canary | probe 5's target |
+
+  The **canary** is 32 random bytes in hex, made by the model step's own `run:` line with `openssl rand
+  -hex 32` and passed to `ci/auditrun` in its environment beside the token, never printed. That puts it
+  in `/proc/<auditrun pid>/environ` from the moment the launcher starts, where the token is, so a probe
+  that cannot read it there cannot read the token either; `ci/auditrun` passes it on into the CLI's
+  environment, so the CLI's own environment and its children's are probed too. It is a dummy: it grants
+  nothing. *Why not made by the launcher itself:* a variable a process sets after it starts never shows
+  in its `/proc/<pid>/environ`, which is the file the probe must show unreadable.
+
+#### The audit directory
+
+Outside `/home`, made by a model-free step with `sudo install -d -o runner` before the hardening step
+removes sudo, and never under `$RUNNER_TEMP` or the workspace (both under `/home/runner`):
+
+| Path | Holds | Model's access |
+|---|---|---|
+| `/srv/audit/checkout` | a copy of the `github.sha` checkout, `.git` included, every write bit removed | Read, Grep, Glob |
+| `/srv/audit/checks` | the decrypted `checks-result`, every write bit removed | Read, Grep, Glob |
+| `/srv/audit/work` | the CLI's working directory; the result file `result.json`; `tmp/`, the commands' `TMPDIR` | Read, Grep, Glob, Write, Edit; Bash writes here only |
+| `/srv/audit/state` | `home/` (the fresh `HOME`, with Claude Code's configuration and transcripts), `tmp/` (the CLI's `TMPDIR`), `bin/claude`, `out/` (transcripts and stderr) | none: denied to every tool |
+| `/srv/audit/bin/audit-exec` | the wrapper, built from `ci/auditexec`, owned by root, mode 0555 | Bash runs it, nothing else |
+
+The working directory is `/srv/audit/work`, so no `CLAUDE.md` or `.claude/` of the checkout copy is
+found from it: they sit in a sibling directory, and the CLI looks for them only in the working directory
+and its parents (`/srv`, `/`, which hold none). The skill reaches the model only as the system prompt
+`ci/auditrun` hands it.
+
+#### The settings file
+
+**`.github/security-audit/claude-settings.json`**, read from the checkout copy
+(`/srv/audit/checkout/.github/security-audit/claude-settings.json`), the only settings the CLI loads:
+`--setting-sources ""` loads no user, project or local file, and `--settings` names this one. A later
+change to `.claude/settings.json` cannot widen the audit. A test in `test/architecture` pins the file;
+dropping or widening any entry below fails `make test`.
+
+- **The audit's launch:** `Model` `claude-fable-5-2`, `Effort` `high`, `Tools` `Read,Grep,Glob,Write,Edit,Bash`
+  (no `WebFetch`, `WebSearch`, `Task` or any other), `PermissionMode` `dontAsk`, `SafeModeOff` (the
+  settings file must apply, and `--safe-mode` turns customisations off; each thing it would turn off is
+  off by another flag or key here), `AppendSystemPrompt` (the default prompt explains the tools the
+  audit uses), `WorkDir` `/srv/audit/work`, `Home` `/srv/audit/state/home`, `Transcript` the file above,
+  `--strict-mcp-config` with the empty MCP configuration.
+- **Permission mode `dontAsk`:** the non-interactive mode in which a tool call no allow rule matches is
+  refused, not asked about. `permissions.defaultMode` is `dontAsk` as well, and
+  `permissions.disableBypassPermissionsMode` is `disable`. Never `bypassPermissions`,
+  `--dangerously-skip-permissions` or `--allow-dangerously-skip-permissions`.
+- **Allow list** (`permissions.allow`), literal absolute paths in Claude Code's rule syntax, where `//`
+  starts an absolute path (`/` alone would be relative to the settings file, and `~` is the fresh
+  `HOME`):
+  `Read(//srv/audit/checkout/**)`, `Read(//srv/audit/checks/**)`, `Read(//srv/audit/work/**)`,
+  `Edit(//srv/audit/work/**)` and `Bash(/srv/audit/bin/audit-exec:*)`. Claude Code applies a `Read` rule
+  to Read, Grep and Glob, and an `Edit` rule to Edit and Write; the file names no `Grep(...)`,
+  `Glob(...)` or `Write(...)` rule, because in `-p` mode the CLI ignores a settings file it cannot
+  validate, silently, and the preflight's Read, Grep and Glob probes show the rules hold for each tool.
+- **Deny list** (`permissions.deny`): `Read(//proc)`, `Read(//proc/**)`, `Read(//sys)`, `Read(//sys/**)`,
+  `Read(//etc)`, `Read(//etc/**)`, `Read(//home)`, `Read(//home/**)`, `Read(//home/runner/**)`,
+  `Read(//srv/audit/state)`, `Read(//srv/audit/state/**)`, `Edit(//srv/audit/state/**)`, and as defence in
+  depth `Bash(git push:*)`, `Bash(git commit:*)`, `Bash(git tag:*)`, `Bash(git remote:*)`, `Bash(gh:*)`,
+  `Bash(curl:*)`, `Bash(wget:*)`, `Bash(nc:*)`, `Bash(ssh:*)`, `Bash(docker:*)`, `Bash(sudo:*)`,
+  `Bash(env:*)`, `Bash(printenv:*)`, `Bash(set:*)` and `Bash(*/proc/*/environ*)`. A deny rule wins over an
+  allow rule. `Read(//home/runner/**)` is redundant beside `Read(//home/**)` and stays (issue #277 round
+  G): PRD #175 names `/home/runner` explicitly, and `test/architecture` pins the file entry by entry, so
+  the rule the PRD asks for is visible and held on its own.
+- **Sandbox:** `sandbox.enabled` `true`, `sandbox.failIfUnavailable` `true` (no unsandboxed fallback when
+  bubblewrap cannot start), `sandbox.autoAllowBashIfSandboxed` `false`,
+  `sandbox.allowUnsandboxedCommands` `false`, `sandbox.enableWeakerNestedSandbox` `false`, no
+  `sandbox.excludedCommands`, `sandbox.network.allowedDomains` `[]`, `sandbox.network.allowUnixSockets`
+  `[]`, `sandbox.network.allowLocalBinding` `false`. The sandbox takes its filesystem rules from the
+  permission rules and the working directory: Bash writes only under `/srv/audit/work` and reads nothing
+  the deny list names. The file sets no `sandbox.filesystem` key.
+- **No hooks, no MCP:** `disableAllHooks` `true`, no `hooks` key, `enableAllProjectMcpServers` `false`,
+  no `mcpServers`; the CLI gets `--strict-mcp-config --mcp-config {"mcpServers":{}}`. No `env`, `apiKeyHelper`,
+  `awsCredentialExport` or `otelHeadersHelper` key: nothing of the file runs a program.
+
+#### The wrapper, `ci/auditexec`
+
+Built in the model job from `main`'s checkout (`go build -trimpath`, `GOFLAGS=-mod=readonly GOPROXY=off`)
+and installed as `/srv/audit/bin/audit-exec` before sudo is removed. `audit-exec <name> <args...>` maps
+`name` to a fixed absolute path, never through `PATH`, and `exec`s it; every other name, a path given as
+the name included, is refused with exit 126 and one line on stderr that names the refused word, escaped
+and cut to 64 bytes. The commands it may `exec`:
+
+- `/usr/bin/git` with `--no-pager`, `-C <a directory under /srv/audit/checkout>` (*amended 2026-11-23,
+  issue #277 round H:* git runs only with the wrapper's own `-C /srv/audit/checkout`; a caller's `-C` is
+  refused in every form) and one of the subcommands `log`, `show`, `diff`, `grep`, `ls-files`, `ls-tree`, `cat-file`, `rev-parse`, `rev-list`,
+  `blame`, `shortlog`, `describe`, `for-each-ref`. It refuses `-c`, `--config-env`, `--exec-path`,
+  `--git-dir`, `--work-tree`, `--namespace`, `--ext-diff`, `--textconv`, `--output` and `--output=`
+  anywhere on the line.
+- `/usr/bin/jq`, `/usr/bin/sha256sum`, `/usr/bin/base64`, `/usr/bin/od`, `/usr/bin/cat`, `/usr/bin/head`,
+  `/usr/bin/tail`, `/usr/bin/wc`, `/usr/bin/sort`, `/usr/bin/uniq`, `/usr/bin/cut`, `/usr/bin/tr`: read
+  and reshape text, none writes a file of its own or opens a connection (`sort -o` and `--output` are
+  refused). *Amended 2026-11-22 (issue #277 round C):* sort takes an **allow list** of options alone,
+  `-b -d -f -g -h -i -k -M -n -r -R -s -t -u -V -z`, `--key=`, `--field-separator=` and the long forms of
+  the allowed short ones, taken whole (no abbreviation); a short cluster may combine only allowed letters,
+  and `-k` and `-t` take their value attached or as the next argument. Everything else is refused,
+  `--compress-program` and every abbreviation of it, `--files0-from`, `--random-source`, `-T`,
+  `--temporary-directory`, `-o` and `--output` included. uniq takes one operand at most: its second is
+  OUT, a file it writes.
+  *Recorded 2026-11-23 for PR 5 (issue #277 round J):* the option analysis of these commands assumes
+  **GNU coreutils**. Ubuntu 25.10 and later ship uutils coreutils by default, whose option parsing
+  differs in places, so a move of `ubuntu-latest` would change the binaries under `/usr/bin` unseen.
+  PR 5's workflow must pin the runner image (`runs-on: ubuntu-24.04`) and its model-free step must check
+  that each listed coreutil under `/usr/bin` is the GNU one (its `--version`) before the model runs.
+
+It `exec`s with exactly this environment, nothing inherited: `PATH=/usr/bin:/bin`, `HOME=/nonexistent`,
+`TMPDIR=/srv/audit/work/tmp`, `LANG=C.UTF-8`, `LC_ALL=C.UTF-8`, `TZ=UTC`, and for git
+`GIT_CONFIG_NOSYSTEM=1`, `GIT_CONFIG_GLOBAL=/dev/null`, `GIT_TERMINAL_PROMPT=0`, `GIT_PAGER=cat`,
+`GIT_OPTIONAL_LOCKS=0`.
+
+*Settled by the implementation (issue #277):*
+
+- **The git line** is `/usr/bin/git --no-pager -C /srv/audit/checkout <subcommand> ...`: the wrapper knows
+  no other repository, and the first word after `git` must be a listed subcommand, so no global option of
+  the caller's (`-C`, `-p`, `--paginate`, ...) reaches git before it.
+- **Refused options, beyond the list above:** a long option is refused alone, in its `--opt=value` form
+  and abbreviated (git's option parser takes a unique prefix of a long option, so `--outp=<file>` is
+  `--output`), `--text` excepted, which is an option of its own; a short `-c` with its value attached;
+  and, as defence in depth, git grep's `-O`/`--open-files-in-pager`, which runs a program of the
+  caller's. *Amended 2026-11-22 (issue #277 round C):* git reads a cluster of short options one letter at
+  a time, so any single-dash word that holds `c` or `O` anywhere is refused (`-iOsh` runs `sh`, `-nc`
+  takes the next word as a configuration value), not only one that starts with it; a word after `-e`
+  that happens to hold them is refused too, which fails closed. sort's options are the allow list above,
+  and uniq's second operand is refused.
+  *Amended 2026-11-23 (issue #277 round D):* git's signature verification runs gpg (`gpg.program`), so
+  it is refused in both its forms: `--show-signature`, alone, with `=value` and abbreviated (`--show-sig`)
+  as the other long options are; and a format that holds a signature placeholder, `%G` (`%G?`, `%GS`,
+  `%GK`, `%GG`, ...) or for-each-ref's `%(signature...)`, when it is the attached value of `--format=` or
+  `--pretty=` (or an abbreviation of either), a `format:` or `tformat:` value, or the next word after
+  `--format` or `--pretty`. `--format=%H%n%s` and every other format still pass.
+  *Amended 2026-11-23 (issue #277 round E):* round D's check looked only at format options, and missed
+  git's modifiers (`%+G?`, `%-GS`, `% GK`), shortlog's `--group=format:%G?`, an abbreviation such as
+  `--gr=format:%GS` and for-each-ref's sort atom. It is replaced by a check of **every** git argument
+  word, wherever it sits on the line: a word that holds `%` followed by an optional `+`, `-` or space
+  and then `G`, or that holds `%(signature`, is refused; and on a `for-each-ref` line, any word that holds
+  `signature` (`--sort=signature`, `--sort=-signature`, `--sort signature:grade`, attached, negated,
+  abbreviated or as the next word). The check reads a word whatever option it belongs to, so it
+  over-refuses and fails closed: a grep pattern or a `-S` value holding `%G`, or a for-each-ref pattern
+  holding `signature`, is refused too, and the model has no way to pass one. `git log --format=%H%n%s`
+  and `for-each-ref --sort=-committerdate` still pass.
+- *Added 2026-11-23 (issue #277 round F):* **The wrapper's path rule.** The settings file's
+  `Bash(*/proc/*/environ*)` deny rule matches the command's text, so a glob (`audit-exec cat
+  /proc/[0-9]*/envir?n`) gets past it and the wrapper then receives the real paths the shell expanded.
+  The wrapper therefore refuses, on the line of every command it runs, any word that names a path into
+  `/proc`, `/sys` or `/dev`. A word names a path when it is (a) no option word (no leading `-`; `-` alone
+  is stdin) and holds a `/`, so a bare grep pattern, ref or jq filter names none, and a word without a
+  `/` cannot reach one of the three from the work directory; (b) an option word holding `=`, whose value
+  after the first `=` is the path (`--field-separator=/proc/x`); or (c) on a git line, the value of `-C`,
+  attached (`-C/proc/1`) or the next word (superseded by round H, below: a caller's `-C` is refused
+  outright). A path is refused when, read from `/` if it is relative and
+  cleaned lexically as `filepath.Clean` cleans it, it is `/proc`, `/sys` or `/dev` or lies under one of
+  them, so `/proc/../proc/1/environ` and `../../proc/1/environ` are refused and
+  `/srv/audit/work/proc/x` passes. The wrapper does the cleaning itself with `strings`, since its depguard
+  rule does not take `path/filepath`. The refusal is the others': exit 126 and the line naming the whole
+  word. The rule reads every word whatever option it belongs to, so it fails closed as the signature
+  check does: a git grep pattern that reads as such a path is refused too, while `git grep -e proc` passes.
+  *Amended 2026-11-23 (issue #277 round G):* round F's deny list of roots leaked six ways: a `-`-led
+  operand after `--`; `/dev/fd/../../1/environ`, where the kernel follows `/dev/fd` into `/proc/self/fd`
+  before it takes the `..`, so a lexical clean does not show where the path leads; an attached
+  short-option value (`git grep -f/sys/x`); `/home`, `/etc` and `/srv/audit/state`, which it never
+  checked; `git diff --no-index` (and `git diff` of two absolute paths outside the checkout, which runs
+  no-index on its own: the path allow list below keeps both inside the allowed roots, and the explicit
+  `--no-index` refusal is for clarity; see round L's implicit no-index diff); and the caller's working
+  directory. It also refused git reads of the
+  repository's own `dev/`. The rule becomes an **allow list** matching the settings' `Read` allow list:
+  - **Path words** are every non-option word that holds a `/` or is `..`; every word after `--`,
+    whatever its first character; an option word's value after its first `=`; the rest of a single-dash
+    word after its first letter, when that rest holds a `/` (`-f/sys/x`, `-S/dev/null`, `jq
+    -L/proc/1/root`); and git's `-C` value, attached or the next word (superseded by round H, below: a
+    caller's `-C` is refused in every form, so its value is no path word). `-` alone is stdin and no path
+    word. A word with no `/` is a name in the working directory and passes, `..` excepted.
+    *Amended 2026-11-23 (issue #277 round K, replacing round J's letter-run rule):* the wrapper models
+    **no tool's option cluster**. The value of a single-dash word may start after any letter of its
+    cluster (`git blame -wS/var/lib/dpkg/status`: `S` takes `/var/lib/dpkg/status`), and git also reads
+    a run of digits inside a cluster as `-NUM` and goes on, so in `git grep -n5f/tmp/x HEAD` `f` takes
+    `/tmp/x` and git echoes the file through its regex error; round J's rule, which followed the leading
+    run of letters, stopped at the `5`. The rule is now: **in every single-dash word that holds a `/`,
+    the suffix from its first `/` (`arg[strings.Index(arg, "/"):]`) is a path word, and must be an
+    allowed absolute path**, under `/srv/audit/checkout`, `/srv/audit/checks` or `/srv/audit/work`; a
+    word holding a `..` element stays refused. Whichever letter takes the value, a value holding a `/`
+    starts at that first `/` or holds it, so its absolute part is checked. A single-dash word with no
+    `/` holds no path beyond a name relative to the base, which cannot leave it. So `git grep
+    -if/srv/audit/work/p`, `git grep -n5f/srv/audit/work/p` and `git blame -S/srv/audit/work/revs` pass,
+    and `git grep -n5f/tmp/x`, `-0f/run/x`, `git blame -wS/var/x` and `git ls-files -oX/home/runner/x`
+    are refused. *Accepted side effect (fail closed):* an attached value that is a relative path holding
+    a `/` (`-Sfoo/bar`) is refused, since its suffix `/bar` is absolute and outside the roots; the model
+    passes the value as a word of its own (`-S foo/bar`).
+    *Amended 2026-11-23 (issue #277 round L, the word rules, replacing every earlier wording that `..`
+    is refused anywhere):* that wording held only for path words, and a word starting with `--` with no
+    `=` was none, so `jq -n --rawfile a --/../../../../etc/passwd '$a'` printed any file the sandbox let
+    jq read, once Write had made `/srv/audit/work/--/x`. Three rules now run **before any command's own
+    rules, on every word of every line**, and fail closed:
+    1. a word whose `/`-separated elements include `..` is refused (`..`, `x/../y`,
+       `--/../etc/passwd`);
+    2. a word starting with `-` that holds `..` anywhere is refused, since an attached value is no
+       element of its own (`-S..`, `-f..`);
+    3. a word starting with `--` that holds a `/` before any `=` is a path word **whole**, joined to the
+       line's base like any relative word (`jq --rawfile a --x/y` reads `/srv/audit/work/--x/y`, which
+       passes). A `--` word whose first `/` comes after its `=` keeps its value as its path word, as
+       before: `git log --format=%h/%s` holds the path word `%h/%s`, read from the checkout, and passes.
+
+    A git range (`HEAD~3..HEAD`, `main..origin/main`) starts with no `-` and holds no `..` element, so it
+    passes. The rules are stated here once; the bullets above and below that refuse a `..` element in a
+    path word stay true and are now a consequence of rule 1.
+  - **Resolving:** an absolute word is read as it is; a relative one on a git line is joined to
+    `/srv/audit/checkout`, which is what git reads it under the wrapper's `-C`, and on any other line to
+    `/srv/audit/work`, the wrapper's working directory.
+  - **Refused:** any path word holding a `..` element at all, before anything is cleaned (this closes
+    `/dev/fd/..` and every link-then-`..` form); and any word whose path, cleaned of its empty and `.`
+    elements, is not `/srv/audit/checkout`, `/srv/audit/checks` or `/srv/audit/work` and lies under none
+    of them. The refused word is named as before, the option's included; the option rules run first, so
+    a refused option is named even when its value lies outside the roots too. (Since round L the word
+    rules, above, run before both.)
+  - **Fail-closed side effects, accepted:** a git ref holding a `/` (`origin/main`) resolves under the
+    checkout and passes; a git grep pattern holding an absolute path outside the roots (`-e /proc/`) is
+    refused; a URL-like pattern (`http://x`) cleans to a relative name and passes; `sort -t /` is
+    refused (the model can use another separator). `git log -- dev/tofu.sh`, `git blame dev/lima.yaml`
+    and `cat /srv/audit/checkout/dev/tofu.sh` pass.
+  - **The working directory is fixed:** before every `exec` the wrapper changes into `/srv/audit/work`
+    (`os.Chdir`), so a relative name means the same whatever directory the caller ran it in; git keeps
+    its own `-C /srv/audit/checkout`. A change that fails exits 127, as a failed exec does, and a
+    refused line changes and runs nothing.
+  - **`--no-index`** is refused on a git line, alone, with `=value` and abbreviated, as git's other
+    refused long options are: `git diff --no-index` compares two files of its own, no part of the
+    checkout. `git diff` of two absolute paths outside the checkout runs no-index on its own; the path
+    rule is what keeps both inside the allowed roots, and the explicit refusal is for clarity.
+  - **Defence in depth, not the boundary.** The wrapper sees only the words it is given: a shell
+    redirection (`audit-exec cat < /proc/<pid>/envir?n`) is opened by the shell, glob and all, before the
+    wrapper starts, and no rule of the wrapper's reads it. The sandbox is the boundary; the wrapper
+    narrows what a command run through it may name. The two forms the wrapper cannot see, or could only
+    see after the kernel resolved a link, are therefore preflight probes (probe 5, below), so the
+    sandbox itself is tested on every run.
+  - **Links in the checkout are covered already:** step 3's tree walk refuses any link in the checkout
+    or the checks tree that resolves outside its own tree, and the work area is checked to hold only
+    its empty `tmp/` before each run. The model cannot make a link: the wrapper lists no command that
+    makes one, Bash runs nothing but the wrapper, and Write and Edit write regular files. A path word
+    under one of the three roots therefore reaches only what lies under it.
+- *Added 2026-11-23 (issue #277 round H):* **A caller's `-C` and jq's module system are refused.**
+  - **git's `-C`, in every form.** The wrapper's own `-C /srv/audit/checkout` comes first, and git
+    applies its `-C` options in order, so a caller's later global `-C` would win and run git in the work
+    area, an allowed root the model may Write in, where a planted `.git/config` names `core.fsmonitor`
+    or `diff.external` and git runs that program. *Corrected in round I:* `git -C /srv/audit/work diff`
+    never reached git: the first word after `git` must be a listed subcommand, so the subcommand-first
+    check already refused a global `-C`; after the subcommand, `-C` is the subcommand's option and no
+    directory. Round G only held `-C`'s value to the allow list, which `/srv/audit/work` passes; the
+    letter rule below makes the refusal explicit wherever `-C` sits, as defence in depth. `C` joins `c` and `O` as a refused letter: any single-dash
+    word holding it is refused, separate (`-C`), attached (`-C/srv/audit/work`) or inside a short
+    cluster (`-nC`), wherever it sits on the line. As a subcommand option it is git log's and git
+    blame's copy detection, no directory, and it is refused all the same: `-C` is ambiguous on the
+    line, the check fails closed, and the audit does without copy detection (`-M` still passes). The
+    wrapper's own `-C` stays the only one git reads, so `-C`'s value is no longer a path word.
+  - **More refused long options**, alone, with `=value` and abbreviated, anywhere on the line:
+    `--super-prefix`, `--attr-source`, `--bare` and `--literal-pathspecs`, beside `--git-dir`,
+    `--work-tree`, `--namespace` and `--exec-path`. Each changes which repository, work tree or
+    attributes git reads, or how it reads a pathspec; `--literal-pathspecs` is harmless, but nothing
+    before the subcommand but what the wrapper adds reaches git, and the same word after it is refused
+    with the others.
+  - **jq's module system.** A jq filter's `import` and `include` directives read a module, and
+    `{search: ...}` and `-L`/`--library-path` name where jq looks for it, so a filter could read any
+    `.json` file of the image, outside the roots (a `search` value is no word of the line, so the path
+    rule never sees it). On a jq line every word holding `import` or `include` is refused, wherever it
+    sits, so a filter or an `--arg` value that merely mentions one is refused too (fail closed: the audit
+    needs filters, no modules); and `-L` in any single-dash word (alone, attached, in a cluster) and
+    `--library-path` (alone, `=value`, abbreviated). A file name holding `import` or `include` is refused
+    too (fail closed). *Amended 2026-11-23 (issue #277 round I):* `-f`/`--from-file`, a program file, are
+    refused in the same forms, since a program file's own `import` is never checked (below).
+    *Amended 2026-11-23 (issue #277 round L):* the builtins `modulemeta` and `get_search_list` search
+    jq's module paths and read a module's metadata, the module system by another name: a jq word
+    holding either is refused in the same way. `jq -r
+    .findings /srv/audit/work/result.json` and `jq '.[] | .id' /srv/audit/checks/a.json` pass.
+  - **git's implicit no-index diff.** `git diff <a> <b>` compares two files outside git's work tree as
+    `--no-index` would, without the option, when both paths lie outside the repository. `--no-index` is
+    refused for clarity, not because it alone keeps git in the checkout: it is the path allow list that
+    keeps both paths inside the three roots, so an implicit no-index diff reads nothing the audit may
+    not read anyway.
+  - **Fail-closed side effects, accepted** (beside round G's `sort -t /`): `cut -d/` and `tr` with a `/`
+    operand are refused: `-d/`'s attached value and `tr`'s `/` operand are path words, and `/` lies in
+    none of the roots. The model can use another delimiter, or `tr`'s octal escape `\057`. git log's `-C` and any cluster
+    holding `C` (a `-S` value with a capital C attached, `-SConfig`) are refused too; `-S Config`, the
+    value as the next word, passes. *Amended 2026-11-23 (issue #277 round I):* so is `git grep -C <n>`,
+    its context lines; the model uses `-A <n> -B <n>`. A jq filter, `--arg` value or file name that
+    holds `import` or `include` as part of another word (`.imports`, `includes.json`) is refused as well.
+- *Added 2026-11-23 (issue #277 round I):* **No command reads a program or a list of paths from a
+  file.** The path rule and the module check read the words of the line; these options make a command
+  open what a file names instead, so neither rule sees it.
+  - **jq's program file.** `-f`/`--from-file` read the jq program from a file the model may have
+    written, and that program's own `import` and `include` are never read by the module check: a
+    program file is the module system by another name. `f` joins `L` as a refused letter, in any
+    single-dash jq word (alone, `-f p.jq`; attached, `-fp.jq`; in a cluster, `-nf`), and `--from-file`
+    is refused alone, with `=value` and abbreviated (`--from-f`), as `--library-path` is. The audit
+    passes its filters on the line; `jq -r .findings /srv/audit/work/result.json` passes.
+  - **wc's `--files0-from`** reads the names of the files to count from a file: refused alone, with
+    `=value` and abbreviated (`--files0`).
+  - **sha256sum's `-c`/`--check`** reads the names of the files to check from a digests' file: `c` is
+    refused in any single-dash sha256sum word (`-c`, `-bc`) and `--check` alone, with `=value` and
+    abbreviated. `wc -l /srv/audit/work/x` and `sha256sum /srv/audit/work/x` pass.
+  - These checks read every word of the line, those after `--` too, so they fail closed. sort's
+    `--files0-from` was refused already by its allow list (round C).
+- **The same environment for every command**, the five `GIT_*` included: PRD #175's criterion is one
+  scrubbed environment, and a variable only git reads changes nothing for the others.
+- **The exec seam.** The logic is `run(args []string, exec func(path string, argv []string, env []string)
+  error, stderr io.Writer) int` in `package main` (`run.go`); `main` (`main.go`, `//go:build unix`)
+  passes `syscall.Exec`, which has that shape and replaces the wrapper, so no wrapper process outlives
+  the exec, and a test passes a fake. On a system without `syscall.Exec` (`main_other.go`, `!unix`, so
+  the package builds and is linted for every release target) `main` refuses with exit 126. A refusal is
+  exit 126 with one line, `audit-exec: refused: <word>`, the word cut to 64 bytes and quoted as a Go
+  string (so a newline, a carriage return or a control character stays one line and no line starts a
+  workflow command); an exec that fails is exit 127 with one such line. *Amended 2026-11-23 (issue #277
+  round G):* `run` takes a second seam, the change of directory, ahead of the exec:
+  `run(args, chdir func(dir string) error, exec, stderr)`; `main` passes `os.Chdir`, a test a fake.
+  In full (amended 2026-11-23, issue #277 round H): `run(args []string, chdir func(dir string) error,
+  exec func(path string, argv []string, env []string) error, stderr io.Writer) int`.
+- **Its rules:** the strict depguard rule `audit-exec` (`fmt`, `io`, `os`, `strings`, `syscall`; `os/exec`
+  and `net` denied) and the forbidigo group `audit-exec-env`, which refuses every read of the environment,
+  every process start, library load and raw system call, with one named exception: `syscall.Exec` in
+  `ci/auditexec/main.go` alone. *Amended 2026-11-23 (issue #277 round G):* the group
+  `tests-no-process-state` has one named, path-scoped exception of the same shape: `os.Chdir` in
+  `ci/auditexec/main.go` alone, the change into `/srv/audit/work`. Its exclusion rule is msg-granular, so
+  it would also drop a `Setenv` there; `test/lint`'s AST check still refuses every call there but
+  `os.Chdir`. `ci/auditexec` imports no library yet; the lax rule
+  `audit-library-importers` lets it import `ci/internal/audit`, which itself is held by `audit-library`
+  and not by `audit-exec-env` (it starts `bwrap` and `sudo`, which `audit-exec-env` would refuse).
+  *Amended 2026-11-23 (issue #277 round F):* the library has a forbidigo group of its own,
+  `audit-library-env`, which refuses `os.Getenv`, `os.Environ`, `os.LookupEnv`, `os.UserHomeDir`,
+  `os.UserConfigDir`, `os.UserCacheDir` and `os.ExpandEnv` in every file under `ci/internal/audit/`, its
+  tests included, through one exclusion rule (`path-except: ^ci/internal/audit/`) and no exception. It
+  names no process start, so `bwrap` and `sudo` stay allowed; what the library needs of the step's
+  environment reaches it from `ci/auditrun` as parameters.
+
+#### The sandbox preflight
+
+- **Where:** its logic in `ci/internal/audit` (`Preflight`), run by `ci/auditrun` in the model step,
+  before the audit, on every run: the token exists only in that step, and the probes need the model to
+  make their tool calls. It uses the same launcher, settings file, wrapper, directories and environment
+  as the audit; only its prompt differs, and its transcript goes to `/srv/audit/state/out/preflight.jsonl`.
+- **One CLI run.** Its fixed prompt asks the model to make a listed set of tool calls, in order, and
+  nothing else. The model judges nothing: every verdict is computed from the transcript's `tool_use`
+  and `tool_result` elements and from effects the launcher observes itself (`Judge`, a pure function of
+  the plan, the transcript and the effects).
+- **The control.** Before the probes, `Preflight` writes a random nonce to
+  `/srv/audit/work/preflight-control.txt`, and the first listed call reads it with Read. A transcript
+  whose result for it lacks the nonce fails the step: without it, a run whose settings did not load, or
+  whose model made no call, would pass for one that refused every probe.
+- **The six probes**, each with its tool calls and its observed effect:
+
+  | # | Tool calls | Effect `Preflight` observes itself |
+  |---|---|---|
+  | 1 | Write of `/srv/audit/state/probe-1`; Bash `/srv/audit/bin/audit-exec cat /srv/audit/work/preflight-control.txt > /srv/audit/state/probe-1` and the same into `/tmp/shift2eu-audit-probe-1` | neither file exists |
+  | 2 | Bash `/srv/audit/bin/audit-exec cat < /dev/tcp/127.0.0.1/<port>`, where `<port>` is a TCP listener `Preflight` opened on 127.0.0.1 | the listener accepted no connection |
+  | 3 | Bash `socat - UNIX-CONNECT:/var/run/docker.sock` and `/srv/audit/bin/audit-exec cat < /var/run/docker.sock` | `Preflight`'s own connect to `/var/run/docker.sock` fails (Docker is stopped) |
+  | 4 | Bash `sudo -n true` and `/srv/audit/bin/audit-exec sudo -n true` | `Preflight`'s own `sudo -n true` fails (the sudo rule is gone) |
+  | 5 | Read and Grep (pattern `SHIFT2EU_AUDIT_CANARY`) of `/proc/<auditrun pid>/environ`, Glob for the pattern `environ` in the path `/proc/<auditrun pid>`; Bash `/srv/audit/bin/audit-exec cat /proc/<auditrun pid>/environ`, `.../cat /proc/$PPID/environ`, `.../cat /proc/$$/environ`, `.../cat < /proc/<auditrun pid>/envir?n`, `.../cat < /dev/fd/../../<auditrun pid>/environ` (added 2026-11-23, issue #277 round G; a redirection since round H) and `.../cat /srv/audit/work/nonexistent/${CLAUDE_CODE_OAUTH_TOKEN:+tokenset}` (in the work area since round I) | neither the canary's value nor the token's appears in any `tool_result` or anywhere else on stdout, and the last Bash call's result is an error naming `/nonexistent/` with nothing after it |
+  | 6 | Write and Edit of the `$GITHUB_ENV` file's path; Read and Grep of it, Glob for its base name in the path of its directory; Bash `/srv/audit/bin/audit-exec cat /srv/audit/work/preflight-control.txt >> <path>` | the file's sha256 is unchanged |
+
+  *Amended 2026-11-22 (issue #277 round C):* a Glob that names no path searches the working directory,
+  which the settings allow, so its result proved nothing about the denied path: each Glob now names the
+  denied directory as its `path` and the name looked for as its `pattern`. Probe 5's last Bash call
+  shows whether the token variable reached the sandboxed shell without ever showing its value: the shell
+  expands an unset variable to nothing, so `cat` fails naming `/nonexistent/`; a set one would make it
+  name `/nonexistent/tokenset`. It is **the one call of the plan expected to be an error for a reason
+  other than a refusal**: a result that holds `tokenset`, is not an error, or does not name
+  `/nonexistent/` with nothing after it (a refusal by the settings among them) fails probe 5.
+  *Amended 2026-11-23 (issue #277 round G):* probe 5 gains two Bash calls for the forms the wrapper's
+  path rule cannot see, after `cat /proc/$$/environ` and before the token-absence call: `cat <
+  /proc/<pid>/envir?n`, a shell redirection plus a glob, which the shell opens before the wrapper runs
+  and which gets past the `Bash(*/proc/*/environ*)` rule's text; and `cat /dev/fd/../../<pid>/environ`,
+  which the kernel resolves through `/proc/self/fd`. Each is expected to be refused, as every other
+  probe call is: a result that is not an error, or that holds the canary, fails probe 5. They make the
+  sandbox itself, not only the wrapper, show on every run that the environ is out of reach.
+  *Amended 2026-11-23 (issue #277 round H):* the `/dev/fd` call is a redirection too, `cat <
+  /dev/fd/../../<pid>/environ`. As an argument, the wrapper's path rule refused it for its `..` element
+  before anything opened it, so the call tested the wrapper and not the sandbox; redirected, the shell
+  opens it before the wrapper starts, the wrapper never sees the path, and the command's text holds no
+  `/proc/` for the `Bash(*/proc/*/environ*)` rule to match. The plan's row, the prompt's line (made from
+  it) and the judgement's match all name the redirected command.
+  *Amended 2026-11-23 (issue #277 round I):* since round G the wrapper refuses `/nonexistent/...` as
+  outside its roots, so `cat` never ran, and the wrapper's refusal, `audit-exec: refused:
+  "/nonexistent/"`, also names `/nonexistent/` with nothing after it: the judgement could not tell it
+  from `cat`'s own failure, and the call proved nothing. The token-absence call becomes `cat
+  /srv/audit/work/nonexistent/${CLAUDE_CODE_OAUTH_TOKEN:+tokenset}`: the path lies in the work area,
+  inside the roots, so the wrapper passes it and `cat` fails with "No such file or directory".
+  `work/nonexistent` cannot exist when the preflight runs: the layout check holds the work area to its
+  empty `tmp/` alone, and during the preflight it holds `tmp/` and the launcher's control file
+  `preflight-control.txt` only (wording amended in round J). The judgement's pass condition is unchanged: an error result naming
+  `/nonexistent/` followed by the end, `:`, whitespace or a quote, and holding no `tokenset`.
+  *Corrected 2026-11-23 (issue #277 round J):* the old call did prove absence: the shell expands
+  `${CLAUDE_CODE_OAUTH_TOKEN:+tokenset}` before the wrapper starts, and the wrapper's refusal quotes the
+  expanded word, so a set token gave `refused: "/nonexistent/tokenset"` and the judgement failed it.
+  What was wrong is that `cat` never ran, so the call tested the wrapper rather than the command the
+  plan describes, and the tests' passing answers did not match the real output. Inside the roots, `cat`
+  runs and the answer is the one the plan names.
+
+- **A probe fails (good)** when every one of its calls appears in the transcript with a `tool_result` that
+  is an error or a refusal, and its effect is not observed. It **succeeds** (the step fails) when an
+  effect is observed or a call's result is not an error. It is **not attempted** (the step fails) when a
+  call is missing from the transcript. **"All six fail"** means the control passed and all six probes
+  failed; anything else fails the step, whose summary names each probe that did not fail by its number
+  and short name ("probe 2, TCP connect: not refused") and runbook step 10, and nothing of the
+  transcript.
+- **The fake:** `Preflight` takes two interfaces, a `Prober`, which runs the CLI with the preflight prompt
+  and returns its transcript, and `Effects`, which observes the files, the listener, the Docker socket,
+  `sudo` and the `$GITHUB_ENV` digest. The test's fake implements both and lets each probe in turn
+  succeed, once through its effect and once through a `tool_result` that is not an error, and also
+  drops each call in turn and the control's nonce; each case must fail the step. *Amended 2026-11-22
+  (issue #277 round C):* the observation is a func seam, `audit.Observer` (`func(ctx, root, gitHubEnv
+  string, before [32]byte, accepted bool) audit.Effects`), which `Preflight` calls once, after it has
+  closed the listener, under `context.WithTimeout(context.WithoutCancel(ctx), 10s)`: a run that was
+  cancelled or passed its deadline is still observed, where a done context would fail the Docker
+  connect and `sudo` for the context and read probes 3 and 4 as refused. `audit.Observe` is the real
+  one; the audit's one CLI run is the seam `audit.Launch`. Two tests of
+  `ci/auditrun` drive the real steps under a temporary root with a fake `claude` that records its
+  environment. `TestRunInheritsNoneOfTheStepsEnvironment` re-executes its own test binary as the
+  launcher with only the variables an earlier step could set through `$GITHUB_ENV`
+  (`ANTHROPIC_BASE_URL`, `HTTPS_PROXY`, `NODE_OPTIONS`, `LD_PRELOAD`) and a sentinel in its
+  environment: none of them is in the recorded environment, which holds the launcher's allow list and
+  the shell's own names (`PWD`, `SHLVL`, `_`, `OLDPWD`) alone. `TestRunStopsAtAManagedSettingsFile`
+  shows that a managed-settings directory under the test's root stops the launcher with exit 3 before
+  the fake runs.
+
+*Settled by the implementation (issue #277):*
+
+- **The packages and their rules.** `ci/internal/audit` holds the six steps (`CheckManagedSettings`,
+  `InstallClaude`, `CheckLayout`, `CheckBubblewrap`, `Preflight`, `Audit`), `Run`, which takes them in
+  order, and `SystemSteps(pid, observer)`, the real steps; every path is taken under a root standing in
+  for `/`. `ci/auditrun` is `main` and `run(args, getenv, steps, root, stdout, stderr) int`, which reads
+  the flags and the five variables, refuses an `ANTHROPIC_API_KEY` (even one set to nothing) with exit
+  3, and runs `audit.Run` with the root it is given: `main` passes `/` and `audit.Observe`, a test a
+  temporary directory. A malformed token, canary or integrity, a missing `$GITHUB_ENV` or a flag
+  error is exit 2; a missing `$GITHUB_STEP_SUMMARY` leaves the line on stdout alone. *Amended
+  2026-11-23 (issue #277 round N):* the API key is refused first, before the flags and the other
+  variables are read, so a step that holds it exits 3 with its line whatever else is missing or
+  malformed. Depguard holds the
+  library to `audit-library` (named standard packages and `ci/internal/claudecode`; `os`, `os/exec` and
+  `net` for its own checks) and the entry point to `audit-main` (no `os/exec` or `net`); the lax rule
+  `audit-library-importers` names `ci/auditrun` and `ci/auditexec`. The forbidigo group `audit-run-env`
+  holds in `ci/auditrun`, with `os.LookupEnv` named in its `main.go` alone, and, amended 2026-11-23
+  (issue #277 round F), `audit-library-env` in `ci/internal/audit` (environment reads and home, config
+  and cache lookups, no process start; see the wrapper's rules above).
+- **The run's one line.** Each step's failure prints a constant class; the bubblewrap failure prints the
+  sentence above; the preflight's prints its `Verdict`, whose text is built from constants alone
+  (`preflight failed: probe 2, TCP connect: not refused; see runbook step 10`). A preflight error that is
+  no `Verdict` (the CLI run failed, the set-up failed) prints a constant class too. *Amended 2026-11-23
+  (issue #277 round N):* a CLI run that failed (cancelled, timed out, exited non-zero) is still judged
+  by its observed effects: if any shows, the preflight returns the `Verdict` naming each such probe and
+  runbook step 10; only a failed run with no effect prints the constant class. The line goes to
+  stdout and is appended to `$GITHUB_STEP_SUMMARY`.
+- **The inputs reach the context-taking steps** through the context: `Run` puts its `Inputs` there and
+  `InputsFrom` reads them, so the real steps can be built before the inputs are read.
+- **The checksum** reads the tarball once (at most 1 GiB), compares its sha512 in constant time, then
+  checks every entry before writing anything: only regular files and directories, every name a clean
+  relative path under `package/`, `package/claude` exactly once. The binary is written to a temporary
+  file beside `bin/claude` and renamed into place, so a refused tarball leaves nothing behind.
+  *Amended 2026-11-22 (issue #277 round C):* a PAX global header (`g`), which holds records and no file,
+  is skipped before the entry check and nothing is extracted from it; `state/bin` is checked with
+  `Lstat` as a real directory before anything is written, so a link there is followed nowhere (the
+  binary is extracted before the layout check looks at `state/bin`).
+  *Amended 2026-11-23 (issue #277 round D):* the signature is `InstallClaude(root, tarball, integrity,
+  bin string) error`. `bin` must lie under `root`, and every directory of its path from `root` down to
+  `bin`'s own (`srv`, `srv/audit`, `srv/audit/state`, `srv/audit/state/bin`) is checked with `Lstat` as
+  a real directory, no link, before anything is written, so nothing is written through a link anywhere
+  in the path. The destination stays a parameter: a three-string `(root, tarball, integrity)` would have
+  the old signature's shape, and a call in the old order would compile.
+- **The layout** also wants `/srv` and `/srv/audit` to be directories, not links, and `work/tmp` empty. The
+  wrapper's owner is not checked (a check would need `syscall`, which the library is denied); the
+  model-free step's `sudo install -o root -m 0555` makes it, and the check holds its mode, exactly 0555.
+  Checking the owner is left to PR 5's model-free step (amended 2026-11-23, issue #277 round H).
+- **The bubblewrap check** runs `/usr/bin/bwrap` by absolute path, in `/`, with `PATH=/usr/bin:/bin` alone.
+- **The preflight's plan** is 24 calls (amended 2026-11-23, issue #277 round G, from 22; round C made it
+  22, from 21): the control's
+  Read, then probe 1's Write and two Bash calls, probe 2's Bash, probe 3's and probe 4's two Bash calls
+  each, probe 5's Read, Grep, Glob and six Bash calls (the redirected and the `/dev/fd` read fifth and
+  sixth, the token-absence call last), probe 6's Write,
+  Edit, Read, Grep, Glob and Bash. `PreflightPlan(audit.Targets{Root, Port, Pid, GitHubEnv})` fills
+  each call's expected input from its targets: `file_path` of Read, Write and Edit, `command` of Bash,
+  `pattern` and `path` of Grep and Glob. The prompt numbers them, names each tool and target,
+  and the appended system prompt says to make each exactly once, in order, refused or not. The nonce is
+  16 random bytes in hex, removed with the control file after the run. The preflight's run has a deadline
+  of its own, 10 minutes (the audit's is 40).
+- **The judgement** matches the transcript's `tool_use` elements to the plan by tool, input and order
+  (amended 2026-11-22, issue #277 round C, from "by tool name and order"): the transcript's `tool_use`
+  input is parsed, and a call matches a planned one when its tool is the plan's and every key the plan
+  names holds exactly the plan's value as a JSON string (keys the plan does not name, such as a Write's
+  content, are the model's). The transcript's calls must be the plan's in order with some left out. When
+  they are not, the judgement aligns them by tool alone: a call of the plan's tool in a planned call's
+  place, made with another input, is a call the plan does not list, and fails that call's probe by
+  name; a transcript that is no run of the plan's tools in order fails closed. The order check stays:
+  the ordering risk is recorded below, and matching by input is what would let it be relaxed. Where
+  repeated tools make it ambiguous which call was left out (two Bash calls side by side), every probe
+  the missing call could belong to is named. A call whose input holds `dangerouslyDisableSandbox`, the
+  field with which a call asks the CLI to run it outside the sandbox, with any value but JSON `false`
+  (`true`, a string, a number, `null`), fails the probe it belongs to, or the control, whatever its tool
+  and however harmless its command (amended 2026-11-22, issue #277 round C): the preflight shows that
+  the sandbox holds, so a call that asks to leave it fails closed. `false`, or no such key, is the
+  plan's call. A `tool_result` with `is_error` is a refusal; its text is
+  its string content or its text blocks joined. Probe 5 succeeds when the canary or the token given to
+  `Judge` (`Judgement.Canary`, `Judgement.Token`) appears anywhere in the transcript, or a run of 64
+  lower-case hex characters appears in any `tool_result` (so a canary split across text blocks counts),
+  or its token-absence call does not show the variable unset. An effect that cannot be observed counts
+  as observed: a probe file that cannot be checked, a `$GITHUB_ENV` file that cannot be read again.
+- **The CLI's stderr.** The launcher keeps it to itself and quotes at most 500 bytes of it, the token
+  and the canary redacted (`Config.Redact`, amended 2026-11-22), in its error; that error is written to
+  `/srv/audit/state/out/preflight.stderr` or `audit.stderr` and never printed. The transcripts go to
+  `preflight.jsonl` and `audit.jsonl` there. The system prompt's file is written into
+  `/srv/audit/state/tmp` (`Config.SystemPromptDir`), which no tool can read and no earlier step's
+  `TMPDIR` can move, and removed after each run.
+
+#### Risks for the first workflow run (issue #277 rounds C and D)
+
+What the tests cannot show without a real runner, to be checked on the audit workflow's first run (PR 5
+of milestone 2), and the constraints PR 5 must keep:
+
+- **A refused Glob may not return `is_error`.** The judgement wants every probe call's result to be an
+  error; if the pinned CLI answers a denied Glob with an empty, non-error result, probes 5 and 6 fail
+  the step on every run, closed. The first run shows which; the judgement is changed only by a reviewed
+  amendment here.
+- **The model may not keep the plan's order.** The judgement fails closed when it does not. Matching by
+  input now makes it possible to relax the order check if a real run needs it; that is a later,
+  reviewed change, not this one.
+- **The pinned tarball's entry types.** The checksum step refuses any entry but a regular file, a
+  directory or a PAX global header. Before PR 5, run `tar -tvvf` once on the pinned tarball to confirm it
+  holds no other type, so the first run is not refused for a packing detail.
+- **Probe 5's `cat /proc/$$/environ`** probes the sandboxed shell's own environment, where the canary is
+  present (the CLI passes it on) and the token is scrubbed: it fails only when the shell's environ is
+  readable through the wrapper's `cat`, which the `Bash(*/proc/*/environ*)` rule and the sandbox refuse.
+  The token-absence call is what shows the token itself is absent.
+- *Added 2026-11-23 (issue #277 round G):* **Anything the preflight leaves in `work/tmp` fails the
+  audit's work-area check.** The audit's run checks the work area again before it starts, and `tmp/`
+  must be empty; if the sandbox, a refused probe call or a command run through the wrapper leaves a file
+  there during the preflight, the audit fails closed on every run. The first run shows whether the
+  sandbox or a command leaves one; any change to the check is a reviewed amendment here.
+- **Bash's `cat` can read world-readable paths outside the Read allow list** (the sandbox's read rules
+  follow the deny list, not the allow list). PR 5 must therefore put no secret under `/tmp` or `/run`,
+  copy the checkout with `persist-credentials: false` (so `.git/config` holds no `extraheader`, which the
+  layout check refuses anyway), and never upload the `state/out` transcripts unencrypted.
+- *Added 2026-11-23 (issue #277 round D):* **Probe 6's Write and Edit prove nothing by their own
+  `is_error`.** Claude Code's read-before-write guard refuses a Write or an Edit of a file the run has not
+  read, before any permission rule or sandbox is consulted, so their error shows the guard, not the
+  deny rule. Probe 6 rests on the launcher's own observation, the `$GITHUB_ENV` file's digest before and
+  after the run.
+- *Added 2026-11-23:* **Whether the pinned CLI marks a non-zero Bash exit as `is_error`.** Probe 5's
+  token-absence call needs it: if a Bash call that exits non-zero comes back without `is_error`, the
+  judgement reads that call wrongly. The first run's transcript shows which; a change to the judgement
+  is a reviewed amendment here.
+- *Added 2026-11-23, amended in round K:* **git's cluster rule over-refuses.** Any single-dash word that
+  holds `c`, `O` or `C` is refused, so an attached value that holds one of these letters is refused with
+  it: `-Scredential`, `-Gfunc`, `-SConfig`, `git grep -c`. It fails closed, and the model can pass such a
+  value as a separate word (`-S credential`, `-S Config`). Recorded only: the skill is not changed in
+  this PR.
+- *Added 2026-11-23 (issue #277 round K):* **A delimiter of `/` reads as a path.** `tr /`, `tr -d /`,
+  `cut -d /`, `cut -d/` and `sort -t/` are refused: the `/` operand or attached value is a path word,
+  and `/` lies in none of the roots. It fails closed, and the model can pass a delimiter other than `/`
+  (or `tr`'s octal escape `\057`).
+- *Added 2026-11-23 (issue #277 round K):* **A SIGTERM from the runner does not cancel the CLI's
+  context.** `ci/auditrun` handles only SIGINT (adding SIGTERM needs `syscall` in the strict
+  `audit-main` rule, a design change for a minor effect). On a cancel or a timeout the runner kills the
+  step's process tree, so the step still ends; only the launcher's own clean-up on cancel is skipped.
+- *Added 2026-11-23, amended in round E:* **PR 5's checkout must not turn on sparse checkout or
+  worktree config.** `.git/config`'s allow list refuses `extensions.worktreeconfig` and every
+  `core.sparsecheckout*` key; `.git/config.worktree` may hold only `core.sparsecheckout`,
+  `core.sparsecheckoutcone` and `index.sparse` (the three a default `actions/checkout` writes, each
+  `false`, though the check holds keys and passes any value); and the layout check refuses `.git/commondir` and `.git/gitdir`. The default checkout
+  passes; one with `sparse-checkout:` set, or any other key in either file, fails step 3 on every run.
+- *Added 2026-11-23 (issue #277 round E):* **The runner's git may leave an empty section header after
+  checkout's unsets.** With `persist-credentials: false`, `actions/checkout` unsets its
+  `http.<url>.extraheader` and `includeIf` keys; a git that keeps the emptied `[http "..."]` or
+  `[includeIf "..."]` header behind leaves a section off the allow list, which is refused, empty or
+  not. It fails closed; the first run shows which the runner's git does, and any change to the allow
+  list is a reviewed amendment here.
+- *Added 2026-11-23 (issue #277 round E):* **`readResult` can block between its `Lstat` and its
+  `Open`** if something swaps a FIFO in at `result.json` in that window: the open of a FIFO waits for
+  a writer. That needs a process outliving the CLI, which `--die-with-parent` rules out for everything
+  the sandbox started. It fails closed: the step never takes a result, and should the open return, the
+  `os.SameFile` check refuses what it opened.
+- **Renovate's generic manager** lists the workflows that hold an annotated pin one by one; PR 5's audit
+  workflow must join that list, which `test/lint`'s `TestEveryAnnotatedWorkflowPinIsScanned` enforces
+  once the workflow holds a `# renovate: datasource=` comment.
+
+#### The runner's user-namespace restriction
+
+GitHub's Ubuntu 24.04 runners set `kernel.apparmor_restrict_unprivileged_userns=1`, so an unprivileged
+`bwrap` cannot set up its user namespace. A **model-free step** before the hardening step, while sudo
+still works, loads an AppArmor profile for `/usr/bin/bwrap` alone that grants it `userns`
+(`.github/security-audit/bwrap.apparmor`, `apparmor_parser -r`), rather than turning the restriction off
+for every program with the sysctl. The profile is committed and pinned by `test/architecture`.
+`bubblewrap` and `socat` come from the Ubuntu archive at a pinned version, each `.deb` checked against
+its pinned sha256 before `dpkg -i`. `ci/auditrun`'s check 4 runs `bwrap --unshare-all --die-with-parent
+--ro-bind / / /bin/true` itself; when it fails, the step fails with exit 4 and its summary says
+"bubblewrap cannot start: see runbook step 10, the user-namespace note", whatever the cause. With
+`sandbox.failIfUnavailable`, the CLI also refuses to run a command unsandboxed.
+
+#### The install script and the pin
+
+**One install script, one pin.** `.github/scripts/install-claude-code.sh` serves both workflows; it
+keeps the verified tarball beside the binary (`<directory>/claude-code.tgz`) so `ci/auditrun` can check
+it again in the model step. The version and the integrity move out of `ai-review.yml` into one committed
+file, `.github/claude-code.yaml` (`version:` under its `# renovate: datasource=npm
+depName=@anthropic-ai/claude-code-linux-x64` comment, and `integrity:`), which the install step of each
+workflow reads; Renovate's version manager and `ci/claudecodepin` read that file instead of the
+workflow, so the pin check covers every pin there is. *Why one pin:* the two workflows run the same CLI
+on the same subscription, a bump is reviewed once, and two pins could drift apart without a check that
+compares them; the audit's preflight checks each new version on its first run anyway. The pin's move
+changes the pin check's behaviour, so it comes test-first with the audit's other pieces, and the
+workflow's `Install the Claude Code CLI` step reads the file from the pull request that moves it.
+
+*Settled by the implementation (issue #277):* the pin check reads the file with `pincheck.FromPinFile`
+(top-level `version:` and `integrity:` lines, one of each, each of its exact shape) and takes its path as
+`-pin`, `.github/claude-code.yaml` the default; `-workflow` is gone. In `ai-review.yml` a step `Read the
+Claude Code pin`, before the install, reads the two lines with `grep -E` anchored to their exact shapes,
+fails unless each appears once, and writes them to its step outputs; the install step gets them as `env:`
+values (`CLAUDE_CODE_PIN_VERSION`, `CLAUDE_CODE_PIN_INTEGRITY`), never as a `${{ }}` in its `run:`, and its
+hardening and permissions are unchanged. Renovate's generic manager names the pin file and the workflows
+that hold an annotated pin one by one (`ci`, `release`, `security`, `vm-tools`), so no manager reads
+`ai-review.yml` any more. The pin check's workflow watches the pin file in its push `paths:` instead of
+`ai-review.yml`; its changes step still runs the check on a change to either. The install script copies
+the verified tarball to `<directory>/claude-code.tgz` after extracting `package/claude`, so a refused
+tarball is never kept.
+
+The launcher's empty MCP configuration is passed by both callers from this pull request: the reviewer's
+argument vector gains `--mcp-config {"mcpServers":{}}` after `--strict-mcp-config`, and
+`ci/aireview/internal/review/claudecli_test.go` pins it. The launcher refuses, naming the field, before
+anything runs: an `Effort` outside the five, a `PermissionMode` other than `dontAsk` or `plan`, a relative
+`Settings` path, a `WorkDir` or `Home` that is not an absolute path to a directory that exists, and an
+`Env` entry that is no `NAME=VALUE` or whose name is not on the `Env` allow list (`TMPDIR`,
+`CLAUDE_CODE_SUBPROCESS_ENV_SCRUB` and `SHIFT2EU_AUDIT_CANARY`, amended 2026-11-23, issue #277 round F;
+it replaced the deny list of the names the launcher sets itself and of the credential, endpoint, proxy
+and loader names above). A config's `Home` also
+stands in for the fresh HOME in the environment, and a stream whose last result line is over 4 MiB, or a
+line after it, fails the run as "printed more than" the cap; a transcript that cannot be written fails
+an otherwise successful run.
+
+#### Server-managed settings
+
+Server-managed settings reach a CLI only on a Claude Team or Enterprise plan. The maintainer states the
+plan the token belongs to before the audit workflow merges; until then this record says: *to be
+confirmed by the maintainer*. If it is a Team or Enterprise plan, the audit workflow does not merge
+until this record names how `ci/auditrun` detects and refuses server-managed settings, or the audit
+runs under a personal plan's token instead.
+
+#### Residual risks of the launch
+
+- **The CLI process itself is not sandboxed**, only the commands it runs. Its connections are held to
+  the model API by configuration (`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`, no `WebFetch` or
+  `WebSearch`), not enforced (Decision 6). A flaw in the CLI or a sandbox escape could send the token
+  elsewhere; runbook step 10 rotates it.
+- **A settings file the CLI cannot validate is ignored silently in `-p` mode.** The preflight's control
+  and probes 1 and 2 then fail the step, so a bad file stops the run rather than running it
+  unsandboxed.
+- **Bash rules are text patterns** and easy to step around; they are defence in depth. The containment
+  is the sandbox, the wrapper and the read deny list, which the probes test on every run.
 
 ## Alternatives considered
 

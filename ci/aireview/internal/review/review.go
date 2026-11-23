@@ -1,6 +1,10 @@
 package review
 
-import "errors"
+import (
+	"errors"
+
+	"github.com/timothymamo/shift2eu/ci/internal/claudecode"
+)
 
 // Model is the Anthropic model every review asks, named to the Claude Code CLI
 // with --model (ADR 0033).
@@ -41,8 +45,9 @@ var (
 	ErrGitHub = errors.New("GitHub API error")
 	// ErrModel is returned for a model call that failed or did not end its
 	// turn (a Claude Code CLI that could not start, timed out, reported an
-	// error such as a usage limit, or printed no result).
-	ErrModel = errors.New("model error")
+	// error such as a usage limit, or printed no result). It is the shared
+	// launcher's claudecode.ErrModel, so every error of a run wraps it.
+	ErrModel = claudecode.ErrModel
 	// ErrMalformedAnswer is returned for a model answer ParseAnswer refuses.
 	ErrMalformedAnswer = errors.New("malformed model answer")
 	// ErrSettings is returned by SettingsFromEnv for a missing or invalid

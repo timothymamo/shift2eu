@@ -20,7 +20,38 @@ import (
 // linters.settings.forbidigo). The tags of the two composition-root groups,
 // compositionRootTags, are pinned by what their rules select instead of by the
 // text of a path regexp, in TestCompositionRootExclusions.
-var forbidigoTags = []string{"cloud-read-only", "domain-is-pure", testutilNoEnvTag, cliNoEnvOrProcessTag, inventoryFileNoEnvTag, e2eNoEnvTag, testsNoProcessStateTag, aiReviewerEnvTag, aiReviewerOneProcessTag, siteBuilderEnvTag, claudeCodePinEnvTag}
+var forbidigoTags = []string{"cloud-read-only", "domain-is-pure", testutilNoEnvTag, cliNoEnvOrProcessTag, inventoryFileNoEnvTag, e2eNoEnvTag, testsNoProcessStateTag, aiReviewerEnvTag, aiReviewerOneProcessTag, siteBuilderEnvTag, claudeCodePinEnvTag, auditExecEnvTag, auditRunEnvTag, auditLibraryEnvTag}
+
+// auditLibraryEnvTag is the tag of the audit library's environment group (issue
+// #277, ADR 0040's amendment), which refuses the environment reads, the home,
+// config and cache lookups and os.ExpandEnv in ci/internal/audit's production
+// files. The library starts bwrap and sudo, so its entries name no process
+// start and the group needs no exception.
+const auditLibraryEnvTag = "audit-library-env"
+
+// auditRunEnvTag is the tag of the audit launcher's environment group (issue
+// #277, ADR 0040's amendment), and auditRunLookupEnvMsg the msg of its one
+// entry with an exception: the os.LookupEnv ci/auditrun/main.go passes to run.
+const (
+	auditRunEnvTag       = "audit-run-env"
+	auditRunLookupEnvMsg = "audit-run-env: os.LookupEnv is used in ci/auditrun/main.go only, passed to run (ADR 0040); a test passes a lookup function of its own"
+)
+
+// auditExecEnvTag is the tag of the audit command wrapper's environment group
+// (issue #277, ADR 0040's amendment), and auditExecExecMsg the msg of its one
+// entry with an exception: the syscall.Exec ci/auditexec/main.go passes to run.
+const (
+	auditExecEnvTag  = "audit-exec-env"
+	auditExecExecMsg = "audit-exec-env: syscall.Exec is used in ci/auditexec/main.go only, passed to run (ADR 0040); a test passes a fake exec of its own"
+)
+
+// auditExecChdirMsg is the msg with which the tests-no-process-state group
+// refuses os.Chdir, the call ci/auditexec/main.go passes to run (issue #277,
+// round G, ADR 0040's amendment). That entry matches every call named Chdir,
+// whatever it is called on, so the group's fourth exclusion rule drops that entry
+// in that one file and no other file, and testsprocessstate_test.go's
+// processStateCallException keeps the drop to the one expression.
+const auditExecChdirMsg = "tests-no-process-state: a test changes no environment variable and no working directory, which every test of the process shares; pass the value to the code under test through a fake or a parameter (CLAUDE.md rule 3)"
 
 // siteBuilderEnvTag is the tag of the site builder's environment group (PRD
 // #297 milestone 2).
@@ -140,24 +171,33 @@ func TestForbidigoExclusionsDropOneGroup(t *testing.T) {
 		testsNoProcessStateTag: {
 			{"path": `^test/(?:lint|architecture)/`, "text": groupText(testsNoProcessStateTag)},
 			{"path": `^ci/aireview/internal/review/claudecli_test\.go$`, "text": groupText(testsNoProcessStateTag)},
+			// The one call-level exception (the audit's command wrapper, issue
+			// #277 round G, ADR 0040's amendment): os.Chdir, which
+			// ci/auditexec/main.go passes to run to change into the audit's work
+			// directory before the exec. The group's entry matches every Chdir,
+			// so the text is that entry's msg and the path is that one file, the
+			// same shape as audit-exec-env's syscall.Exec exception.
+			{"path": `^ci/auditexec/main\.go$`, "text": narrowedTextOf(auditExecChdirMsg)},
 		},
-		// The AI reviewer (ADR 0033): one rule for every path outside
-		// ci/aireview/, so the group holds there and nowhere else, _test.go
-		// files included, and the one exception, the os.LookupEnv entry's msg
-		// alone, in ci/aireview/main.go alone.
+		// The AI reviewer (ADR 0033) and the Claude Code launcher it shares
+		// with the scheduled audit (issue #277): one rule for every path outside
+		// ci/aireview/ and ci/internal/claudecode/, so the group holds there and
+		// nowhere else, _test.go files included, and the one exception, the
+		// os.LookupEnv entry's msg alone, in ci/aireview/main.go alone.
 		aiReviewerEnvTag: {
-			{"path-except": `^ci/aireview/`, "text": groupText(aiReviewerEnvTag)},
+			{"path-except": `^ci/(?:aireview|internal/claudecode)/`, "text": groupText(aiReviewerEnvTag)},
 			{"path": `^ci/aireview/main\.go$`, "text": narrowedTextOf(aiReviewerLookupEnvMsg)},
 		},
-		// The AI reviewer's library (PRD #161 milestone 4, ADR 0033): it runs
-		// the one Claude Code CLI call with exec.CommandContext, writes the
-		// system prompt to a temporary file and removes the directories it made,
-		// and reads no file. Two rules scope the group to the library's
+		// The AI reviewer's library (PRD #161 milestone 4, ADR 0033) and the
+		// shared launcher it asks through (issue #277): the launcher runs the
+		// one Claude Code CLI call with exec.CommandContext, writes the system
+		// prompt to a temporary file and removes the directories it made, and
+		// neither reads a file. Two rules scope the group to the two libraries'
 		// non-test files: one drops it in their _test.go files, which read and
-		// run what they test the way a test does, and one outside the library.
+		// run what they test the way a test does, and one outside the two.
 		aiReviewerOneProcessTag: {
-			{"path": `^ci/aireview/internal/review/.*_test\.go$`, "text": groupText(aiReviewerOneProcessTag)},
-			{"path-except": `^ci/aireview/internal/review/`, "text": groupText(aiReviewerOneProcessTag)},
+			{"path": `^ci/(?:aireview/internal/review|internal/claudecode)/.*_test\.go$`, "text": groupText(aiReviewerOneProcessTag)},
+			{"path-except": `^ci/(?:aireview/internal/review|internal/claudecode)/`, "text": groupText(aiReviewerOneProcessTag)},
 		},
 		// The site's builder (PRD #297 milestone 2): one rule for every path
 		// outside ci/sitebuild/, so the group holds there and nowhere else,
@@ -170,6 +210,33 @@ func TestForbidigoExclusionsDropOneGroup(t *testing.T) {
 		// _test.go files included.
 		claudeCodePinEnvTag: {
 			{"path-except": `^ci/claudecodepin/`, "text": groupText(claudeCodePinEnvTag)},
+		},
+		// The audit's command wrapper (issue #277, ADR 0040's amendment): one
+		// rule for every path outside ci/auditexec/, so the group holds there
+		// and nowhere else, _test.go files included, and the one exception, the
+		// syscall.Exec entry's msg alone, in ci/auditexec/main.go alone.
+		auditExecEnvTag: {
+			{"path-except": `^ci/auditexec/`, "text": groupText(auditExecEnvTag)},
+			{"path": `^ci/auditexec/main\.go$`, "text": narrowedTextOf(auditExecExecMsg)},
+		},
+		// The audit's launcher (issue #277, ADR 0040's amendment): one rule for
+		// every path outside ci/auditrun/, so the group holds there and nowhere
+		// else, _test.go files included, and the one exception, the
+		// os.LookupEnv entry's msg alone, in ci/auditrun/main.go alone.
+		auditRunEnvTag: {
+			{"path-except": `^ci/auditrun/`, "text": groupText(auditRunEnvTag)},
+			{"path": `^ci/auditrun/main\.go$`, "text": narrowedTextOf(auditRunLookupEnvMsg)},
+		},
+		// The audit's library (issue #277, ADR 0040's amendment): one rule for
+		// every path outside ci/internal/audit/, so the group holds there and
+		// nowhere else, _test.go files included. The library reads no
+		// environment variable at all - the caller hands it what it read - and
+		// its entries name no process start, so the group has no exception:
+		// bwrap and sudo stay what the library starts. The one place of the
+		// audit that may read a variable is ci/auditrun/main.go, whose
+		// os.LookupEnv audit-run-env states as its own exception.
+		auditLibraryEnvTag: {
+			{"path-except": `^ci/internal/audit/`, "text": groupText(auditLibraryEnvTag)},
 		},
 	}
 	if diff := cmp.Diff(want, got); diff != "" {

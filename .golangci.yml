@@ -1694,15 +1694,12 @@ linters:
         # The reviewer's library reads no environment variable and no file:
         # ci/aireview hands it the settings, main's instructions, the HTTP
         # client and the Claude Code CLI's path, so it is held to named
-        # standard packages, without syscall or unsafe, and to no package of
-        # the product (ADR 0033). os and os/exec are the one CLI run it asks
-        # the model through: it writes the system prompt to a file of a
-        # temporary directory and starts `claude -p` in another, with an
-        # environment of its own. An import rule cannot narrow os, so forbidigo
-        # does: ai-reviewer-env refuses every read of the environment and every
-        # lookup of a home, config, cache or temp directory, and
-        # ai-reviewer-one-process refuses exec.Command and the os calls that
-        # open or read a file in the library's non-test files.
+        # standard packages, without os, os/exec, syscall or unsafe, and to no
+        # package of the product (ADR 0033). It asks the model through the
+        # shared launcher ci/internal/claudecode (issue #277), the one package
+        # of the module it imports, which writes the system prompt file and
+        # starts `claude -p`: the reviewer's library itself starts no process
+        # and opens no file.
         ai-reviewer-is-standard-library:
           list-mode: strict
           files:
@@ -1717,12 +1714,138 @@ linters:
             - io$
             - net/http$
             - net/url$
-            - os$
-            - os/exec$
             - slices$
             - strconv$
             - strings$
             - time$
+            - github.com/timothymamo/shift2eu/ci/internal/claudecode$
+        # The Claude Code CLI launcher the AI reviewer shares with the
+        # scheduled audit (issue #277, ADR 0040's amendment) reads no
+        # environment variable and no file: its callers hand it the CLI's path,
+        # the token, the model, the tools and the rest of the launch. It is held
+        # to named standard packages, without syscall or unsafe, and to no
+        # package of the module. os and os/exec are its one CLI run: it writes
+        # the system prompt to a file of a temporary directory, checks that a
+        # working directory or HOME it was given exists, and starts `claude -p`
+        # with an environment of its own; io is the Transcript writer the
+        # caller hands it. An import rule cannot narrow os, so
+        # forbidigo does: ai-reviewer-env and ai-reviewer-one-process hold here
+        # as in the reviewer's library. Go's internal rule keeps it out of
+        # reach of cmd/ and internal/.
+        claude-code-launcher:
+          list-mode: strict
+          files:
+            - "**/ci/internal/claudecode/**"
+            - "!$test"
+          allow:
+            - bytes$
+            - context$
+            - encoding/json$
+            - errors$
+            - fmt$
+            - io$
+            - os$
+            - os/exec$
+            - strings$
+            - time$
+        # Who may run the Claude Code CLI (issue #277, ADR 0040's amendment):
+        # the AI reviewer's library and the scheduled audit's library. Go's
+        # internal rule lets any package under ci/ import the launcher; this
+        # rule names the ones that may, and its own tests.
+        claude-code-launcher-importers:
+          list-mode: lax
+          files:
+            - "$all"
+            - "!**/ci/aireview/internal/review/**"
+            - "!**/ci/internal/audit/**"
+            - "!**/ci/internal/claudecode/**"
+          deny:
+            - pkg: github.com/timothymamo/shift2eu/ci/internal/claudecode
+              desc: "only the AI reviewer's library and the audit's library run the Claude Code CLI through the shared launcher (issue #277, ADR 0040)"
+        # The scheduled audit's library (issue #277, ADR 0040's amendment) is
+        # no part of the product: under ci/internal, so Go's internal rule
+        # keeps cmd/ and internal/ from it. It is held to named standard
+        # packages, each ending in $, and to the shared launcher, the one
+        # package of the module it imports; never syscall, unsafe, plugin or
+        # cgo. archive/tar, compress/gzip and the crypto packages are the
+        # checksum step; os, os/exec and net are the steps' own checks (the
+        # managed-settings paths, the layout, bwrap, the preflight's control
+        # file, listener, Docker connect, sudo and $GITHUB_ENV digest); the
+        # CLI runs through the launcher alone.
+        audit-library:
+          list-mode: strict
+          files:
+            - "**/ci/internal/audit/**"
+            - "!$test"
+          allow:
+            - archive/tar$
+            - bytes$
+            - compress/gzip$
+            - context$
+            - crypto/rand$
+            - crypto/sha256$
+            - crypto/sha512$
+            - crypto/subtle$
+            - encoding/base64$
+            - encoding/hex$
+            - encoding/json$
+            - errors$
+            - fmt$
+            - io$
+            - io/fs$
+            - net$
+            - os$
+            - os/exec$
+            - path$
+            - path/filepath$
+            - slices$
+            - strconv$
+            - strings$
+            - sync$
+            - sync/atomic$
+            - time$
+            - github.com/timothymamo/shift2eu/ci/internal/claudecode$
+        # Who may import the audit's library (ADR 0040's amendment): the
+        # launcher ci/auditrun, the wrapper ci/auditexec and the library's own
+        # tests, so no other package of ci/ borrows the audit's checks. The
+        # ci/auditexec exception is reserved: audit-exec's strict allow list
+        # (below) keeps the wrapper from ever importing the library, so the
+        # exception does nothing while that list holds. test/architecture
+        # pins this rule as it stands.
+        audit-library-importers:
+          list-mode: lax
+          files:
+            - "$all"
+            - "!**/ci/internal/audit/**"
+            - "!**/ci/auditrun/**"
+            - "!**/ci/auditexec/**"
+          deny:
+            - pkg: github.com/timothymamo/shift2eu/ci/internal/audit
+              desc: "only ci/auditrun and ci/auditexec import the audit's library (issue #277, ADR 0040)"
+        # The audit's launcher, ci/auditrun (issue #277, ADR 0040's amendment):
+        # a main package, which Go refuses to import, held to the standard
+        # packages it imports, each ending in $, and the audit's library. os
+        # for its one os.LookupEnv, the step summary and os.Exit; it starts no
+        # program itself (os/exec) and opens no connection (net): its library
+        # does both.
+        audit-main:
+          list-mode: strict
+          files:
+            - "**/ci/auditrun/**"
+            - "!$test"
+          allow:
+            - context$
+            - flag$
+            - fmt$
+            - io$
+            - os$
+            - os/signal$
+            - github.com/timothymamo/shift2eu/ci/internal/audit$
+          deny:
+            - pkg: os/exec
+              desc: "the audit's launcher starts no program itself; its library runs bwrap, sudo and the CLI's launcher (ADR 0040)"
+            - pkg: net
+              desc: "the audit's launcher opens no connection itself (ADR 0040)"
         # The site's builder (PRD #297 milestone 2) is no part of the product:
         # a main package, which Go refuses to import, run by make site, the
         # site tests and the release. It is held all the same, to the standard
@@ -1856,6 +1979,29 @@ linters:
               desc: "the audit's publish core opens no file and reads no environment; ci/auditpublish hands it what it read (ADR 0040)"
             - pkg: net
               desc: "the audit's publish core opens no connection; ci/auditpublish calls GitHub (ADR 0040)"
+        # The scheduled audit's command wrapper (issue #277, ADR 0040's
+        # amendment), installed as /srv/audit/bin/audit-exec, is no part of the
+        # product: a main package, which Go refuses to import. It is held to the
+        # standard packages it imports, each ending in $: syscall for the one
+        # syscall.Exec that replaces it with a listed command, with an
+        # environment of its own; os for its arguments, os.Exit and stderr. It
+        # starts no child process (os/exec) and opens no connection (net).
+        audit-exec:
+          list-mode: strict
+          files:
+            - "**/ci/auditexec/**"
+            - "!$test"
+          allow:
+            - fmt$
+            - io$
+            - os$
+            - strings$
+            - syscall$
+          deny:
+            - pkg: os/exec
+              desc: "the audit's command wrapper starts no child process; it replaces itself with one listed command through syscall.Exec (ADR 0040)"
+            - pkg: net
+              desc: "the audit's command wrapper opens no connection (ADR 0040)"
     exhaustive:
       default-signifies-exhaustive: true
     # forbidigo refuses calls, which an import rule cannot see. Its entries
@@ -2426,6 +2572,51 @@ linters:
         - pattern: '^os\.(?:Getenv|LookupEnv|ExpandEnv|Environ|StartProcess|UserHomeDir|UserConfigDir|UserCacheDir|TempDir)$'
           pkg: '^os$'
           msg: 'claude-code-pin-env: the Claude Code pin check reads no environment variable, locates no home, config, cache or temp directory and starts no process; it reads the workflow and one public registry document (CLAUDE.md rule 3)'
+        # Group audit-exec-env (issue #277, ADR 0040's amendment): the audit's
+        # command wrapper reads no environment variable, hands over no
+        # environment of the caller's, locates no home, config, cache or temp
+        # directory, starts no process, loads no library and makes no raw
+        # system call. Its one way out is syscall.Exec of a listed command with
+        # an environment of its own, the named exception in ci/auditexec/main.go
+        # alone, whose run hands it to the logic as a parameter; a test passes
+        # a fake. depguard keeps os/exec and net out of it (audit-exec). Scope:
+        # every file under ci/auditexec/, _test.go files included; its
+        # exclusion rule drops it everywhere else.
+        - pattern: '^os\.(?:Getenv|LookupEnv|ExpandEnv|Environ|StartProcess|UserHomeDir|UserConfigDir|UserCacheDir|TempDir)$'
+          pkg: '^os$'
+          msg: 'audit-exec-env: the audit command wrapper reads no environment variable, locates no home, config, cache or temp directory and starts no process through os; it execs a listed command with its own environment (ADR 0040, CLAUDE.md rule 3)'
+        - pattern: '^syscall\.(?:Getenv|GetEnvironmentVariable|GetEnvironmentStrings|Environ|ForkExec|StartProcess|CreateProcess|CreateProcessAsUser|LoadDLL|MustLoadDLL|NewLazyDLL|LoadLibrary|GetProcAddress|(?:(?:AllThreads|Raw)?Syscall(?:6|9|12|15|18|N)?|SYS_\w+))$'
+          pkg: '^syscall$'
+          msg: 'audit-exec-env: the audit command wrapper reads no environment variable, starts no child process, loads no library and makes no raw system call (ADR 0040, CLAUDE.md rule 3)'
+        - pattern: '^syscall\.Exec$'
+          pkg: '^syscall$'
+          msg: 'audit-exec-env: syscall.Exec is used in ci/auditexec/main.go only, passed to run (ADR 0040); a test passes a fake exec of its own'
+        # Group audit-run-env (issue #277, ADR 0040's amendment): the audit's
+        # launcher reads the step's environment through one call only, the
+        # os.LookupEnv ci/auditrun/main.go passes to run, which reads the
+        # variables ADR 0040 names and no other. Everything else is refused:
+        # another way to read a variable or the whole environment, a process
+        # start through os, and the lookups of a home, config, cache or temp
+        # directory. depguard keeps os/exec, net and syscall out of it
+        # (audit-main). Scope: every file under ci/auditrun/, _test.go files
+        # included; its exclusion rule drops it everywhere else.
+        - pattern: '^os\.(?:Getenv|ExpandEnv|Environ|StartProcess|UserHomeDir|UserConfigDir|UserCacheDir|TempDir)$'
+          pkg: '^os$'
+          msg: 'audit-run-env: the audit launcher reads no environment variable but through the os.LookupEnv main.go passes to run, locates no home, config, cache or temp directory and starts no process (ADR 0040, CLAUDE.md rule 3)'
+        - pattern: '^os\.LookupEnv$'
+          pkg: '^os$'
+          msg: 'audit-run-env: os.LookupEnv is used in ci/auditrun/main.go only, passed to run (ADR 0040); a test passes a lookup function of its own'
+        # Group audit-library-env (issue #277 round F, ADR 0040's amendment):
+        # the audit's library reads no environment variable and locates no
+        # home, config or cache directory; what it needs of the step's
+        # environment reaches it as parameters from ci/auditrun. It names no
+        # process start: the library starts bwrap and sudo, which depguard
+        # (audit-library) and ADR 0040 hold. Scope: every file under
+        # ci/internal/audit/, _test.go files included; its exclusion rule
+        # drops it everywhere else, and it has no exception.
+        - pattern: '^os\.(?:Getenv|Environ|LookupEnv|UserHomeDir|UserConfigDir|UserCacheDir|ExpandEnv)$'
+          pkg: '^os$'
+          msg: 'audit-library-env: the audit library reads no environment variable and locates no home, config or cache directory; ci/auditrun passes it what it needs (ADR 0040, CLAUDE.md rule 3)'
     gosec:
       excludes:
         - G104 # unchecked errors are already reported by errcheck
@@ -2552,6 +2743,20 @@ linters:
         linters:
           - forbidigo
         text: 'because "tests-no-process-state: [^"]*"$'
+      # And the one call-level exception (issue #277 round G, ADR 0040):
+      # os.Chdir, which ci/auditexec/main.go passes to run, so the audit's
+      # command wrapper changes into its fixed work directory, /srv/audit/work,
+      # before every exec and a relative path word resolves where the wrapper's
+      # path rule checked it. text is the group's first entry's msg, so the
+      # exclusion is msg-granular: in this one file it would also drop a Setenv
+      # issue, which that entry matches too. test/lint's AST check
+      # (testsprocessstate_test.go, processStateCallException) still refuses
+      # every process-state call there but os.Chdir, and the group's second
+      # entry still holds.
+      - path: ^ci/auditexec/main\.go$
+        linters:
+          - forbidigo
+        text: 'because "tests-no-process-state: a test changes no environment variable and no working directory, which every test of the process shares; pass the value to the code under test through a fake or a parameter \(CLAUDE\.md rule 3\)"$'
       # inventoryfile-no-env: the group holds for every file under
       # internal/adapter/source/inventoryfile/, _test.go files included, and
       # nowhere else.
@@ -2565,9 +2770,10 @@ linters:
         linters:
           - forbidigo
         text: 'because "e2e-no-env: [^"]*"$'
-      # ai-reviewer-env: the group holds for every file under ci/aireview/,
-      # _test.go files included, and nowhere else.
-      - path-except: ^ci/aireview/
+      # ai-reviewer-env: the group holds for every file under ci/aireview/ and
+      # under the shared Claude Code launcher ci/internal/claudecode/ (issue
+      # #277), _test.go files included, and nowhere else.
+      - path-except: ^ci/(?:aireview|internal/claudecode)/
         linters:
           - forbidigo
         text: 'because "ai-reviewer-env: [^"]*"$'
@@ -2579,12 +2785,13 @@ linters:
           - forbidigo
         text: 'because "ai-reviewer-env: os\.LookupEnv is used in ci/aireview/main\.go only, passed to review\.SettingsFromEnv \(ADR 0033\); a test passes a lookup function of its own"$'
       # ai-reviewer-one-process: the group holds for the non-test files of
-      # ci/aireview/internal/review/ and nowhere else.
-      - path: ^ci/aireview/internal/review/.*_test\.go$
+      # ci/aireview/internal/review/ and of the shared Claude Code launcher
+      # ci/internal/claudecode/ (issue #277), and nowhere else.
+      - path: ^ci/(?:aireview/internal/review|internal/claudecode)/.*_test\.go$
         linters:
           - forbidigo
         text: 'because "ai-reviewer-one-process: [^"]*"$'
-      - path-except: ^ci/aireview/internal/review/
+      - path-except: ^ci/(?:aireview/internal/review|internal/claudecode)/
         linters:
           - forbidigo
         text: 'because "ai-reviewer-one-process: [^"]*"$'
@@ -2600,6 +2807,39 @@ linters:
         linters:
           - forbidigo
         text: 'because "claude-code-pin-env: [^"]*"$'
+      # audit-exec-env: the group holds for every file under ci/auditexec/,
+      # _test.go files included, and nowhere else.
+      - path-except: ^ci/auditexec/
+        linters:
+          - forbidigo
+        text: 'because "audit-exec-env: [^"]*"$'
+      # The one exception (ADR 0040): syscall.Exec, which ci/auditexec/main.go
+      # passes to run, in that file alone. text is the syscall.Exec entry's
+      # msg, so the group's other entries still hold there.
+      - path: ^ci/auditexec/main\.go$
+        linters:
+          - forbidigo
+        text: 'because "audit-exec-env: syscall\.Exec is used in ci/auditexec/main\.go only, passed to run \(ADR 0040\); a test passes a fake exec of its own"$'
+      # audit-run-env: the group holds for every file under ci/auditrun/,
+      # _test.go files included, and nowhere else.
+      - path-except: ^ci/auditrun/
+        linters:
+          - forbidigo
+        text: 'because "audit-run-env: [^"]*"$'
+      # The one exception (ADR 0040): os.LookupEnv, which ci/auditrun/main.go
+      # passes to run, in that file alone. text is the os.LookupEnv entry's
+      # msg, so the group's other entry still holds there.
+      - path: ^ci/auditrun/main\.go$
+        linters:
+          - forbidigo
+        text: 'because "audit-run-env: os\.LookupEnv is used in ci/auditrun/main\.go only, passed to run \(ADR 0040\); a test passes a lookup function of its own"$'
+      # audit-library-env: the group holds for every file under
+      # ci/internal/audit/, _test.go files included, and nowhere else. It has
+      # no exception.
+      - path-except: ^ci/internal/audit/
+        linters:
+          - forbidigo
+        text: 'because "audit-library-env: [^"]*"$'
 
 formatters:
   enable:

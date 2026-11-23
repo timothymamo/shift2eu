@@ -18,15 +18,19 @@ import (
 // and the CLI takes its inputs from flags.
 //
 // The group holds for every test of the module and for every other file a test
-// could hand the change to, and is dropped in three places only, each with its own
-// linters.exclusions.rules entry: test/lint and test/architecture set the go
+// could hand the change to, and is dropped in three places, each with its own
+// linters.exclusions.rules entry, and once for one call in a fourth (below): test/lint and test/architecture set the go
 // command's own variables (GOCACHE, GOFLAGS, HOME) on purpose, in a test binary of
 // their own, to run the go command in a known environment, and the AI reviewer's
 // claudecli_test.go (PRD #161 milestone 4, ADR 0033) sets ANTHROPIC_API_KEY and a
 // variable of its own in the process's environment in the one test that proves
 // the Claude Code CLI inherits none of it, with no parallel test beside it. That
 // exception is that one file: every other file of the library, its tests
-// included, is held to the group. Before the audit's
+// included, is held to the group. The fourth exclusion is no file's blanket drop
+// but one call: ci/auditexec/main.go passes os.Chdir to run (issue #277, round G,
+// ADR 0040's amendment), which changes into the audit's fixed work directory
+// before it execs a line, so processStateCallException allows that one expression
+// in that one file and nothing else, there or anywhere else. Before the audit's
 // finding S1 the group was scoped to five areas, so an adapter's or the domain's
 // test, and every e2e test, could set a variable with lint green: the likely case
 // is a source adapter's test that sets AWS_PROFILE.
@@ -237,22 +241,33 @@ var processStateSelectorNames = []string{"Setenv", "Unsetenv", "Clearenv", "Chdi
 //
 // It reads the source, not the linted tree: a case is a string, so the pin is a
 // fixture (TestProcessStateSelectorFindings).
+//
+// One call is no finding: the expression processStateCallException names, in the
+// file it names, the audit wrapper's os.Chdir, which .golangci.yml's exclusion
+// rule drops there too, and only the first of those in that file: a second one is
+// a finding (issue #277, round H, finding 4).
 func processStateSelectorFindings(t *testing.T, files []goFile) []finding {
 	t.Helper()
 
 	var found []finding
 	for _, f := range files {
 		fset, file := parseGoFile(t, f)
+		var excepted int
 		ast.Inspect(file, func(n ast.Node) bool {
 			sel, ok := n.(*ast.SelectorExpr)
 			if !ok || !slices.Contains(processStateSelectorNames, sel.Sel.Name) {
+				return true
+			}
+			expr := exprText(sel)
+			if processStateCallException(f.rel, expr, excepted) {
+				excepted++
 				return true
 			}
 			found = append(found, finding{
 				pos: position(fset, f, sel),
 				msg: msgProcessStateSelector,
 				detail: fmt.Sprintf("%s is a call that changes the state of the whole test binary: pass the value to the code under test through a fake or a parameter, and take a directory from t.TempDir. forbidigo reads no type through an interface literal or a type parameter, so no pattern refuses this call",
-					exprText(sel)),
+					expr),
 			})
 			return true
 		})
@@ -280,12 +295,44 @@ func processStateScope(rel string) bool {
 		rel != aiReviewerEnvTestFile
 }
 
+// auditExecChdirFile, auditExecChdirExpr and auditExecChdirCalls are the group's
+// one call-level exception (issue #277, round G, ADR 0040's amendment).
+// ci/auditexec/main.go passes os.Chdir to run, which changes into the audit's
+// fixed work directory before it execs a line, so the wrapper's work happens
+// there whatever directory the caller was in. The group's Chdir entry refuses
+// every call named Chdir, so the source check holds the exclusion rule's drop to
+// this one expression: the rest of main.go's process-state calls and every other
+// file's stay refused. It is one call, not the file's leave to change its
+// directory (issue #277, round H, finding 4): the exec needs a single change into
+// the work directory, so the file holds at most auditExecChdirCalls of them, and a
+// second one is a finding.
+const (
+	auditExecChdirFile  = "ci/auditexec/main.go"
+	auditExecChdirExpr  = "os.Chdir"
+	auditExecChdirCalls = 1
+)
+
+// processStateCallException reports whether the group tests-no-process-state is
+// dropped for the call expr, as exprText renders it, in the file at rel, a
+// slash-separated path from the module root: true for the first auditExecChdirCalls
+// os.Chdir calls of ci/auditexec/main.go, and false for every further one there
+// and for every other expression anywhere else. previouslyExcepted is the number
+// of expressions of that file the check already let pass, which the caller counts
+// in source order, so the exception holds for one call however the file is
+// written. It compares the rendered expression, so a file that reaches the same
+// call under a name of its own is no exception.
+func processStateCallException(rel, expr string, previouslyExcepted int) bool {
+	return rel == auditExecChdirFile && expr == auditExecChdirExpr && previouslyExcepted < auditExecChdirCalls
+}
+
 // TestTestsChangeNoProcessStateByNoSelector fails on every selector that
 // processStateSelectorNames holds in the module, in the scope the group has,
 // which processStateSelectorFindings returns: the calls forbidigo cannot see, a
 // call through an interface literal and a call through a type parameter, are
 // refused here, and so is every call it does see, so the two checks agree on
-// what a test may not do.
+// what a test may not do. The one call the group's exclusion rule drops,
+// processStateCallException's os.Chdir in the audit wrapper's main, is no
+// finding; every other process-state call of that file is one.
 func TestTestsChangeNoProcessStateByNoSelector(t *testing.T) {
 	t.Parallel()
 
@@ -309,8 +356,11 @@ func TestTestsChangeNoProcessStateByNoSelector(t *testing.T) {
 // and one through a type parameter — which forbidigo renders nothing for — a
 // promoted method of an embedded *testing.T (which it renders on the wrapper) and
 // the calls of os and syscall are refused, while another testing method, a name
-// that only extends a refused one and a declaration are no finding. The col is
-// dropped from the position: the line and the message are the contract.
+// that only extends a refused one and a declaration are no finding. The group's
+// one call-level exception is pinned too: os.Chdir in the audit wrapper's main is
+// no finding, and the same call one file over, another process-state call in
+// main, and os.Chdir under a name of its own are. The col is dropped from the
+// position: the line and the message are the contract.
 func TestProcessStateSelectorFindings(t *testing.T) {
 	t.Parallel()
 
@@ -318,6 +368,7 @@ func TestProcessStateSelectorFindings(t *testing.T) {
 
 	tests := []struct {
 		name string
+		rel  string // the file the source stands in; rel above when empty
 		src  string
 		want []string
 	}{
@@ -434,6 +485,84 @@ func set() {
 			},
 		},
 		{
+			// The group's one call-level exception (issue #277, round G): the
+			// audit wrapper's main hands run the call that changes into the
+			// audit's work directory before the exec.
+			name: "os.Chdir in the audit wrapper's main is the exception",
+			rel:  auditExecChdirFile,
+			src: `package main
+
+import "os"
+
+func main() {
+	_ = os.Chdir
+}
+`,
+		},
+		{
+			// The exception is one call, not the whole file (issue #277, round
+			// H, finding 4): the first os.Chdir of the audit wrapper's main is
+			// the one the exec needs, and a second one is a finding, so the file
+			// cannot grow another change of the binary's directory beside it.
+			name: "a second os.Chdir in the audit wrapper's main is refused",
+			rel:  auditExecChdirFile,
+			src: `package main
+
+import "os"
+
+func main() {
+	_ = os.Chdir
+	_ = os.Chdir
+}
+`,
+			want: []string{auditExecChdirFile + ":7: " + msgProcessStateSelector},
+		},
+		{
+			// The same call one file over is no exception: the wrapper's logic
+			// takes the change as a parameter, so a test passes a fake.
+			name: "os.Chdir in the audit wrapper's logic is refused",
+			rel:  "ci/auditexec/run.go",
+			src: `package main
+
+import "os"
+
+func change(dir string) error {
+	return os.Chdir(dir)
+}
+`,
+			want: []string{"ci/auditexec/run.go:6: " + msgProcessStateSelector},
+		},
+		{
+			// The exception is the expression, not the file's right to change
+			// process state: another call of os in main is a finding.
+			name: "another call of os in the audit wrapper's main is refused",
+			rel:  auditExecChdirFile,
+			src: `package main
+
+import "os"
+
+func main() {
+	_ = os.Setenv("SHIFT2EU_TOKEN", "example")
+}
+`,
+			want: []string{auditExecChdirFile + ":6: " + msgProcessStateSelector},
+		},
+		{
+			// The exception names the expression os.Chdir, so a file that
+			// reaches the same call under a name of its own is no exception.
+			name: "os.Chdir under an alias is no exception",
+			rel:  auditExecChdirFile,
+			src: `package main
+
+import o "os"
+
+func main() {
+	_ = o.Chdir
+}
+`,
+			want: []string{auditExecChdirFile + ":6: " + msgProcessStateSelector},
+		},
+		{
 			name: "a name that only extends one is no call",
 			src: `package analysis_test
 
@@ -490,8 +619,13 @@ var _ = 1
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
+			file := tt.rel
+			if file == "" {
+				file = rel
+			}
+
 			var got []string
-			for _, f := range processStateSelectorFindings(t, []goFile{{rel: rel, src: []byte(tt.src)}}) {
+			for _, f := range processStateSelectorFindings(t, []goFile{{rel: file, src: []byte(tt.src)}}) {
 				got = append(got, f.pos[:strings.LastIndex(f.pos, ":")]+": "+f.msg)
 			}
 			if !slices.Equal(tt.want, got) {

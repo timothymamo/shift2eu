@@ -1168,17 +1168,11 @@ var pinnedDepguardRules = []check.DepguardRule{
 	},
 	{
 		// The AI reviewer's library (ADR 0033): named standard packages only, no
-		// syscall or unsafe and no package of the product. os and os/exec are the
-		// Claude Code CLI the reviewer asks: it writes the trusted instructions
-		// to a file of a temporary directory and starts `claude -p` in another,
-		// with an environment of its own. The forbidigo group ai-reviewer-env
-		// still refuses every read of the environment and every lookup of a
-		// home, config, cache or temp directory, and ai-reviewer-one-process
-		// refuses exec.Command and every os call that opens or reads a file in
-		// the library's non-test files, so os is here for the prompt file and
-		// the run's temporary directories alone. net/http reads and posts
-		// through GitHub. Go's
-		// internal rule keeps it out of reach of cmd/ and internal/.
+		// os, os/exec, syscall or unsafe and no package of the product. It asks
+		// the model through the shared Claude Code launcher (issue #277), the
+		// one package of the module it imports, so the library itself starts no
+		// process and opens no file. net/http reads and posts through GitHub.
+		// Go's internal rule keeps it out of reach of cmd/ and internal/.
 		Name:     "ai-reviewer-is-standard-library",
 		ListMode: "strict",
 		Files: []string{
@@ -1194,13 +1188,133 @@ var pinnedDepguardRules = []check.DepguardRule{
 			"io$",
 			"net/http$",
 			"net/url$",
-			"os$",
-			"os/exec$",
 			"slices$",
 			"strconv$",
 			"strings$",
 			"time$",
+			"github.com/timothymamo/shift2eu/ci/internal/claudecode$",
 		},
+	},
+	{
+		// The Claude Code CLI launcher the AI reviewer shares with the scheduled
+		// audit (issue #277, ADR 0040's amendment): named standard packages only,
+		// no syscall or unsafe and no package of the module. os and os/exec are
+		// its one CLI run: the system prompt file, the run's temporary
+		// directories and `claude -p` with an environment of its own. The
+		// forbidigo groups ai-reviewer-env and ai-reviewer-one-process hold here
+		// as in the reviewer's library. io is the Transcript writer a caller
+		// hands it (ADR 0040's amendment).
+		Name:     "claude-code-launcher",
+		ListMode: "strict",
+		Files: []string{
+			"**/ci/internal/claudecode/**",
+			"!$test",
+		},
+		Allow: []string{
+			"bytes$",
+			"context$",
+			"encoding/json$",
+			"errors$",
+			"fmt$",
+			"io$",
+			"os$",
+			"os/exec$",
+			"strings$",
+			"time$",
+		},
+	},
+	{
+		// Who may import the shared launcher (issue #277): the AI reviewer's
+		// library, the scheduled audit's library and the launcher's own tests
+		// (ADR 0040's amendment).
+		Name:     "claude-code-launcher-importers",
+		ListMode: "lax",
+		Files: []string{
+			"$all",
+			"!**/ci/aireview/internal/review/**",
+			"!**/ci/internal/audit/**",
+			"!**/ci/internal/claudecode/**",
+		},
+		Allow: nil,
+		Deny:  []string{"github.com/timothymamo/shift2eu/ci/internal/claudecode"},
+	},
+	{
+		// The scheduled audit's library (issue #277, ADR 0040's amendment):
+		// named standard packages, each exact, and the shared launcher; no
+		// syscall, unsafe, plugin or cgo. The checksum step's archive, gzip
+		// and crypto packages; os, os/exec and net for the steps' own checks.
+		Name:     "audit-library",
+		ListMode: "strict",
+		Files: []string{
+			"**/ci/internal/audit/**",
+			"!$test",
+		},
+		Allow: []string{
+			"archive/tar$",
+			"bytes$",
+			"compress/gzip$",
+			"context$",
+			"crypto/rand$",
+			"crypto/sha256$",
+			"crypto/sha512$",
+			"crypto/subtle$",
+			"encoding/base64$",
+			"encoding/hex$",
+			"encoding/json$",
+			"errors$",
+			"fmt$",
+			"io$",
+			"io/fs$",
+			"net$",
+			"os$",
+			"os/exec$",
+			"path$",
+			"path/filepath$",
+			"slices$",
+			"strconv$",
+			"strings$",
+			"sync$",
+			"sync/atomic$",
+			"time$",
+			"github.com/timothymamo/shift2eu/ci/internal/claudecode$",
+		},
+	},
+	{
+		// Who may import the audit's library (ADR 0040's amendment): the
+		// launcher ci/auditrun, the wrapper ci/auditexec and the library's own
+		// tests.
+		Name:     "audit-library-importers",
+		ListMode: "lax",
+		Files: []string{
+			"$all",
+			"!**/ci/internal/audit/**",
+			"!**/ci/auditrun/**",
+			"!**/ci/auditexec/**",
+		},
+		Allow: nil,
+		Deny:  []string{"github.com/timothymamo/shift2eu/ci/internal/audit"},
+	},
+	{
+		// The audit's launcher (issue #277, ADR 0040's amendment): a main
+		// package no root can import, held to the standard packages it
+		// imports, each exact, and the audit's library. It starts no program
+		// and opens no connection itself.
+		Name:     "audit-main",
+		ListMode: "strict",
+		Files: []string{
+			"**/ci/auditrun/**",
+			"!$test",
+		},
+		Allow: []string{
+			"context$",
+			"flag$",
+			"fmt$",
+			"io$",
+			"os$",
+			"os/signal$",
+			"github.com/timothymamo/shift2eu/ci/internal/audit$",
+		},
+		Deny: []string{"os/exec", "net"},
 	},
 	{
 		// The site's builder (PRD #297 milestone 2): a main package no root can
@@ -1328,6 +1442,27 @@ var pinnedDepguardRules = []check.DepguardRule{
 			"unicode/utf8$",
 		},
 		Deny: []string{"os", "net"},
+	},
+	{
+		// The scheduled audit's command wrapper (issue #277, ADR 0040's
+		// amendment), /srv/audit/bin/audit-exec: a main package no root can
+		// import, held to the standard packages it imports, each exact. syscall
+		// is its one syscall.Exec of a listed command; it starts no child
+		// process and opens no connection.
+		Name:     "audit-exec",
+		ListMode: "strict",
+		Files: []string{
+			"**/ci/auditexec/**",
+			"!$test",
+		},
+		Allow: []string{
+			"fmt$",
+			"io$",
+			"os$",
+			"strings$",
+			"syscall$",
+		},
+		Deny: []string{"os/exec", "net"},
 	},
 }
 

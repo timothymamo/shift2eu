@@ -70,14 +70,15 @@ func fixture(t *testing.T, name string) string {
 	return string(data)
 }
 
-// workflow writes a workflow excerpt that pins 2.1.330 with integrity, and
-// returns its path.
-func workflow(t *testing.T, integrity string) string {
+// pinFile writes the one committed pin file, .github/claude-code.yaml, pinning
+// 2.1.330 with integrity, and returns its path.
+func pinFile(t *testing.T, integrity string) string {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "ai-review.yml")
-	content := "jobs:\n  review:\n    steps:\n      - name: Install the Claude Code CLI\n        env:\n" +
-		"          CLAUDE_CODE_VERSION: 2.1.330\n" +
-		"          CLAUDE_CODE_INTEGRITY: " + integrity + "\n"
+	path := filepath.Join(t.TempDir(), "claude-code.yaml")
+	content := "# The Claude Code CLI the AI reviewer and the audit run (ADR 0040).\n" +
+		"# renovate: datasource=npm depName=@anthropic-ai/claude-code-linux-x64\n" +
+		"version: 2.1.330\n" +
+		"integrity: " + integrity + "\n"
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -100,11 +101,11 @@ func TestRun(t *testing.T) {
 		// productionClient builds the client with the check's own
 		// newRegistryClient rather than the test's no-follow client below.
 		productionClient bool
-		// workflowName is the -workflow file's name in a fresh temporary
-		// directory; empty means the fixture workflow that pins integrity.
-		// A name whose file does not exist makes run() read an error text
-		// holding the name as it was given.
-		workflowName string
+		// pinName is the -pin file's name in a fresh temporary directory; empty
+		// means the fixture pin file that pins integrity. A name whose file does
+		// not exist makes run() read an error text holding the name as it was
+		// given.
+		pinName string
 		// wantRequests is how many registry requests the check sends: none
 		// when it fails before the fetch.
 		wantRequests int
@@ -214,16 +215,16 @@ func TestRun(t *testing.T) {
 			},
 		},
 		{
-			// The -workflow path reaches the ::error message unquoted (read
+			// The -pin path reaches the ::error message unquoted (read
 			// %s), so its CR, LF and % must be escaped or a workflow command
 			// of the path would run, and the message would span lines.
-			name:         "a workflow path's CR, LF and % are escaped in the one ::error line",
+			name:         "a pin file path's CR, LF and % are escaped in the one ::error line",
 			integrity:    publishedIntegrity,
 			status:       http.StatusOK,
-			workflowName: "ai-review\n::warning::injected\r100%.yml",
+			pinName:      "claude-code\n::warning::injected\r100%.yaml",
 			wantRequests: 0,
 			wantCode:     1,
-			wantStderr:   []string{"ai-review%0A::warning::injected%0D100%25.yml"},
+			wantStderr:   []string{"claude-code%0A::warning::injected%0D100%25.yaml"},
 		},
 	}
 
@@ -249,13 +250,13 @@ func TestRun(t *testing.T) {
 				client = newRegistryClient(registry)
 			}
 
-			path := workflow(t, tc.integrity)
-			if tc.workflowName != "" {
-				path = filepath.Join(t.TempDir(), tc.workflowName)
+			path := pinFile(t, tc.integrity)
+			if tc.pinName != "" {
+				path = filepath.Join(t.TempDir(), tc.pinName)
 			}
 
 			var stdout, stderr bytes.Buffer
-			code := run(t.Context(), []string{"-workflow", path}, client, &stdout, &stderr)
+			code := run(t.Context(), []string{"-pin", path}, client, &stdout, &stderr)
 
 			if code != tc.wantCode {
 				t.Errorf("run() = %d, want %d (stderr %q)", code, tc.wantCode, stderr.String())
@@ -305,17 +306,17 @@ func TestRun(t *testing.T) {
 	}
 }
 
-func TestRunRefusesAWorkflowWithoutAPin(t *testing.T) {
+func TestRunRefusesAPinFileWithoutAPin(t *testing.T) {
 	t.Parallel()
 
-	path := filepath.Join(t.TempDir(), "ai-review.yml")
-	if err := os.WriteFile(path, []byte("jobs: {}\n"), 0o600); err != nil {
+	path := filepath.Join(t.TempDir(), "claude-code.yaml")
+	if err := os.WriteFile(path, []byte("# no pin here\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	registry := &fakeRegistry{status: http.StatusOK}
 
 	var stdout, stderr bytes.Buffer
-	if code := run(t.Context(), []string{"-workflow", path}, &http.Client{Transport: registry}, &stdout, &stderr); code != 1 {
+	if code := run(t.Context(), []string{"-pin", path}, &http.Client{Transport: registry}, &stdout, &stderr); code != 1 {
 		t.Errorf("run() = %d, want 1", code)
 	}
 	if len(registry.got) != 0 {
@@ -325,8 +326,21 @@ func TestRunRefusesAWorkflowWithoutAPin(t *testing.T) {
 	if strings.Count(out, "\n") != 1 || !strings.HasPrefix(out, "::error title=Claude Code pin::") {
 		t.Errorf("stderr = %q, want one ::error line", out)
 	}
-	if !strings.Contains(out, "CLAUDE_CODE_VERSION") {
-		t.Errorf("stderr = %q, want it to name CLAUDE_CODE_VERSION", out)
+	if !strings.Contains(out, "version") {
+		t.Errorf("stderr = %q, want it to name the version line the pin file holds", out)
+	}
+}
+
+// TestDefaultPinIsTheOneCommittedPinFile pins the file the check reads when its
+// workflow gives it no -pin: .github/claude-code.yaml, the one committed pin
+// file, which both workflows' install steps read too (ADR 0040's milestone-2
+// amendment, issue #277). Renovate bumps the version there; a check that read
+// another file would hold a pin nothing installs.
+func TestDefaultPinIsTheOneCommittedPinFile(t *testing.T) {
+	t.Parallel()
+
+	if defaultPin != ".github/claude-code.yaml" {
+		t.Errorf("defaultPin = %q, want .github/claude-code.yaml: the one committed pin file, which Renovate bumps and both workflows read", defaultPin)
 	}
 }
 

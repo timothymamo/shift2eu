@@ -1,6 +1,7 @@
 package pincheck_test
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,66 +18,69 @@ const (
 	testVersion = "2.1.330"
 
 	// packageName is the npm package the pin is for: the linux-x64 platform
-	// package, whose dist.integrity the workflow pins (ADR 0033).
+	// package, whose dist.integrity the pin file names (ADR 0040's milestone-2
+	// amendment, issue #277).
 	packageName = "@anthropic-ai/claude-code-linux-x64"
 
 	// publishedIntegrity is the integrity the 2.1.330 registry fixture
-	// publishes. It is the value .github/workflows/ai-review.yml pins: public
-	// data, no credential.
+	// publishes. It is the value .github/claude-code.yaml pins: public data, no
+	// credential.
 	publishedIntegrity = "sha512-9Gn+V7DtJ8M1nztP9CeDVl9g3RtrepI7rOFTyPRRnZe8D6zebIHKmC7OvBauucuAP0X0k85SDN/LPVZyjsGezQ=="
 
 	// staleIntegrity is the integrity of an older release: a well-formed
 	// sha512- value, the base64 of a 64-byte digest, that the 2.1.330 fixture
 	// does not publish. It is the issue #428 case, where a Renovate bump left
 	// the previous version's integrity in place, so it must pass the shape
-	// check FromWorkflow makes and fail only on the comparison.
+	// check FromPinFile makes and fail only on the comparison.
 	staleIntegrity = "sha512-b2xkLWludGVncml0eS1mcm9tLTIuMS4zMjcuLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLg=="
 
-	// realWorkflowPath is the workflow the check reads in CI, relative to this
+	// renovateComment is the comment the pin's version line sits under: the one
+	// Renovate's generic manager reads, and the reason the version lives in a
+	// file of its own rather than in a workflow (ADR 0040, CLAUDE.md rule 7).
+	renovateComment = "# renovate: datasource=npm depName=" + packageName
+
+	// realPinPath is the pin file the check reads in CI, relative to this
 	// package's directory.
-	realWorkflowPath = "../../../../.github/workflows/ai-review.yml"
+	realPinPath = "../../../../.github/claude-code.yaml"
 )
 
-// workflowEnv returns an excerpt of the AI review workflow whose env: block
-// holds lines, indented as .github/workflows/ai-review.yml indents its pin. It
-// is the input FromWorkflow reads: a YAML file, not a whole valid workflow, so
-// a case may leave a line out or write it twice.
-func workflowEnv(lines ...string) string {
+// pinFile returns the text of the one committed pin file, .github/claude-code.yaml,
+// with the lines a case gives it: the comment Renovate reads, the version under
+// it and the integrity beside it. It is the input FromPinFile reads, so a case
+// may leave a line out, write it twice or change its value.
+func pinFile(lines ...string) string {
 	var b strings.Builder
-	b.WriteString("jobs:\n")
-	b.WriteString("  review:\n")
-	b.WriteString("    steps:\n")
-	b.WriteString("      - name: Install the Claude Code CLI\n")
-	b.WriteString("        env:\n")
+	b.WriteString("# The Claude Code CLI the AI reviewer and the audit run (ADR 0040).\n")
+
 	for _, line := range lines {
-		b.WriteString("          " + line + "\n")
+		b.WriteString(line + "\n")
 	}
-	b.WriteString("        run: .github/scripts/install-claude-code.sh x\n")
+
 	return b.String()
 }
 
-// versionLine and integrityLine write one pin line as the workflow does.
+// versionLine and integrityLine write one pin line as the file does.
 func versionLine(version string) string {
-	return "CLAUDE_CODE_VERSION: " + version
+	return "version: " + version
 }
 
 func integrityLine(integrity string) string {
-	return "CLAUDE_CODE_INTEGRITY: " + integrity
+	return "integrity: " + integrity
 }
 
-func TestFromWorkflow(t *testing.T) {
+func TestFromPinFile(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
 		name     string
-		workflow string
+		contents string
 		want     pincheck.Pin
 		wantErr  bool
 	}{
 		{
-			name: "one version and one integrity line",
-			workflow: workflowEnv(
-				"# renovate: datasource=npm depName="+packageName,
+			name: "one version and one integrity line under the renovate comment",
+			contents: pinFile(
+				renovateComment,
 				versionLine(testVersion),
 				integrityLine(publishedIntegrity),
 			),
@@ -84,17 +88,18 @@ func TestFromWorkflow(t *testing.T) {
 		},
 		{
 			name:     "missing version line",
-			workflow: workflowEnv(integrityLine(publishedIntegrity)),
+			contents: pinFile(renovateComment, integrityLine(publishedIntegrity)),
 			wantErr:  true,
 		},
 		{
 			name:     "missing integrity line",
-			workflow: workflowEnv(versionLine(testVersion)),
+			contents: pinFile(renovateComment, versionLine(testVersion)),
 			wantErr:  true,
 		},
 		{
 			name: "version line twice",
-			workflow: workflowEnv(
+			contents: pinFile(
+				renovateComment,
 				versionLine(testVersion),
 				versionLine(testVersion),
 				integrityLine(publishedIntegrity),
@@ -103,7 +108,8 @@ func TestFromWorkflow(t *testing.T) {
 		},
 		{
 			name: "integrity line twice",
-			workflow: workflowEnv(
+			contents: pinFile(
+				renovateComment,
 				versionLine(testVersion),
 				integrityLine(publishedIntegrity),
 				integrityLine(publishedIntegrity),
@@ -112,37 +118,42 @@ func TestFromWorkflow(t *testing.T) {
 		},
 		{
 			name:     "version of two numbers",
-			workflow: workflowEnv(versionLine("2.1"), integrityLine(publishedIntegrity)),
+			contents: pinFile(renovateComment, versionLine("2.1"), integrityLine(publishedIntegrity)),
 			wantErr:  true,
 		},
 		{
 			name:     "version with a prerelease suffix",
-			workflow: workflowEnv(versionLine("2.1.330-beta"), integrityLine(publishedIntegrity)),
+			contents: pinFile(renovateComment, versionLine("2.1.330-beta"), integrityLine(publishedIntegrity)),
 			wantErr:  true,
 		},
 		{
 			name:     "version that leaves the registry path",
-			workflow: workflowEnv(versionLine("2.1.330/../x"), integrityLine(publishedIntegrity)),
+			contents: pinFile(renovateComment, versionLine("2.1.330/../x"), integrityLine(publishedIntegrity)),
 			wantErr:  true,
 		},
 		{
 			name:     "version that is a dist tag",
-			workflow: workflowEnv(versionLine("latest"), integrityLine(publishedIntegrity)),
+			contents: pinFile(renovateComment, versionLine("latest"), integrityLine(publishedIntegrity)),
+			wantErr:  true,
+		},
+		{
+			name:     "version with a trailing comment",
+			contents: pinFile(renovateComment, versionLine(testVersion+" # the reviewer's"), integrityLine(publishedIntegrity)),
 			wantErr:  true,
 		},
 		{
 			name:     "integrity of another algorithm",
-			workflow: workflowEnv(versionLine(testVersion), integrityLine("sha1-abc")),
+			contents: pinFile(renovateComment, versionLine(testVersion), integrityLine("sha1-abc")),
 			wantErr:  true,
 		},
 		{
 			name:     "integrity without a digest",
-			workflow: workflowEnv(versionLine(testVersion), integrityLine("sha512-")),
+			contents: pinFile(renovateComment, versionLine(testVersion), integrityLine("sha512-")),
 			wantErr:  true,
 		},
 		{
 			name:     "integrity that is not base64",
-			workflow: workflowEnv(versionLine(testVersion), integrityLine("sha512-a b")),
+			contents: pinFile(renovateComment, versionLine(testVersion), integrityLine("sha512-a b")),
 			wantErr:  true,
 		},
 	}
@@ -151,48 +162,66 @@ func TestFromWorkflow(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			got, err := pincheck.FromWorkflow(strings.NewReader(tc.workflow))
+			got, err := pincheck.FromPinFile(strings.NewReader(tc.contents))
 			if tc.wantErr {
 				if err == nil {
-					t.Fatalf("FromWorkflow() = %+v, want an error", got)
+					t.Fatalf("FromPinFile() = %+v, want an error", got)
 				}
 				return
 			}
 			if err != nil {
-				t.Fatalf("FromWorkflow() error = %v, want none", err)
+				t.Fatalf("FromPinFile() error = %v, want none", err)
 			}
 			if diff := cmp.Diff(tc.want, got); diff != "" {
-				t.Errorf("FromWorkflow() mismatch (-want +got):\n%s", diff)
+				t.Errorf("FromPinFile() mismatch (-want +got):\n%s", diff)
 			}
 		})
 	}
 }
 
-// TestFromWorkflowRealWorkflowFile reads the workflow CI runs, so the parser
-// is held to the file's real shape. It asserts only that a pin came out:
-// Renovate changes the version and the integrity, the test does not.
-func TestFromWorkflowRealWorkflowFile(t *testing.T) {
+// TestFromPinFileRealPinFile reads the pin file CI reads, so the parser is held
+// to the file's real shape and to where the version line sits: directly under
+// the # renovate: comment Renovate's generic manager reads, which is what makes
+// a bump move this file and no other. It asserts the version and the integrity
+// only as present: Renovate changes them, the test does not.
+func TestFromPinFileRealPinFile(t *testing.T) {
 	t.Parallel()
 
-	f, err := os.Open(filepath.FromSlash(realWorkflowPath))
+	src, err := os.ReadFile(filepath.FromSlash(realPinPath))
 	if err != nil {
-		t.Fatalf("open %s: %v", realWorkflowPath, err)
+		t.Fatalf("read %s: %v; ADR 0040 moves the Claude Code pin into that one file", realPinPath, err)
 	}
-	t.Cleanup(func() {
-		if err := f.Close(); err != nil {
-			t.Errorf("close %s: %v", realWorkflowPath, err)
-		}
-	})
 
-	pin, err := pincheck.FromWorkflow(f)
+	pin, err := pincheck.FromPinFile(bytes.NewReader(src))
 	if err != nil {
-		t.Fatalf("FromWorkflow(%s) error = %v, want none", realWorkflowPath, err)
+		t.Fatalf("FromPinFile(%s) error = %v, want none", realPinPath, err)
 	}
 	if pin.Version == "" {
-		t.Error("FromWorkflow() Version is empty, want the pinned version")
+		t.Error("FromPinFile() Version is empty, want the pinned version")
 	}
 	if pin.Integrity == "" {
-		t.Error("FromWorkflow() Integrity is empty, want the pinned integrity")
+		t.Error("FromPinFile() Integrity is empty, want the pinned integrity")
+	}
+
+	lines := strings.Split(string(src), "\n")
+
+	found := false
+	for i, line := range lines {
+		if strings.TrimSpace(line) != versionLine(pin.Version) {
+			continue
+		}
+
+		found = true
+
+		if i == 0 || !strings.Contains(lines[i-1], "# renovate:") {
+			t.Errorf("%s: line %d holds the version pin and the line above it is not a # renovate: comment: Renovate's generic manager reads the comment and the line under it, so a pin without one is a version nobody bumps (CLAUDE.md rule 7)", realPinPath, i+1)
+		}
+
+		break
+	}
+
+	if !found {
+		t.Errorf("%s: no line holds %q, want the pin's version line", realPinPath, versionLine(pin.Version))
 	}
 }
 
