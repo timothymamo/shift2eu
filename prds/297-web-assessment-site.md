@@ -447,7 +447,9 @@ release), *live* (checked against the live site) or *review*.
   with depguard rules of its own, like `ci/aireview` (ADR 0033).
 - [ ] The checks compare only what the manifests name, `/`, and the service-worker paths: a path added
   outside every release's manifest (such as a look-alike page at a new path, uploaded with a leaked key)
-  is not detected by them. Milestone 3's hosting ADR and the privacy page say so. Milestone 3 checks
+  is not detected by them. Milestone 3's hosting ADR
+  ([ADR 0042](../docs/adr/0042-host-the-site-behind-edge-services-and-deploy-it-from-the-release-with-a-bucket-scoped-key.md))
+  and the privacy page say so. Milestone 3 checks
   whether the deploy job's key can hold `ListBucket` on the site's bucket (*To be checked by the
   maintainer*); if it can, the deploy program lists the bucket before it uploads and fails on any key
   that is in no release's manifest, so such a path is found at the next release (the scheduled check
@@ -1057,6 +1059,7 @@ security audit (`security-audit` skill), since every one of them touches the tru
    run; the `release-tag` skill's step 2 for the `site` environment and its post-release check;
    `docs/guide/verify-releases.md`; `infra/site/`, the OpenTofu configuration of the site's Scaleway
    hosting, with its offline checks (`make infra-check`; ADR 0039, issue #422); the runbook. An ADR
+   ([ADR 0042](../docs/adr/0042-host-the-site-behind-edge-services-and-deploy-it-from-the-release-with-a-bucket-scoped-key.md))
    records the hosting, the deploy (environment, key
    scope, upload order, cache headers, the rollback guard that trusts only a genuine higher release,
    recovery by a redeploy of the last good release or a version rollback plus a manual cache purge,
@@ -1350,7 +1353,9 @@ it. Decision 4 is amended by the orchestrator's decision above.
    31536000), and `http://shift2eu.com` redirects first to `https://shift2eu.com` (same host) and only
    then to `https://www.shift2eu.com`. `includeSubDomains` binds every present and future subdomain of
    `shift2eu.com` to HTTPS, and pursuing preload is effectively irreversible (removal takes months to
-   reach shipping browsers); milestone 3's hosting ADR (as amended in milestone 4) records that and the
+   reach shipping browsers); milestone 3's hosting ADR
+   ([ADR 0042](../docs/adr/0042-host-the-site-behind-edge-services-and-deploy-it-from-the-release-with-a-bucket-scoped-key.md),
+   as amended in milestone 4) records that and the
    subdomains that exist when preload is submitted. Milestone 4 records the HSTS outcome (`met` or
    `waived`) and whether preload is pursued in `site/records/hsts.json`, which the live checks read
    (*Layer 3*).
@@ -1368,7 +1373,8 @@ it. Decision 4 is amended by the orchestrator's decision above.
    authority goes into the CAA record (decision 10) and the ADR.
 4. **Decided: the module script is uploaded pre-compressed with `Content-Encoding: gzip`** if Edge
    Services serves it with that header and `Content-Type: text/javascript`; otherwise it is served
-   uncompressed, the uncompressed size is held to a budget too (milestone 3's ADR), and TinyGo is
+   uncompressed, the uncompressed size is held to a budget too (milestone 3's ADR,
+   [ADR 0042](../docs/adr/0042-host-the-site-behind-edge-services-and-deploy-it-from-the-release-with-a-bucket-scoped-key.md)), and TinyGo is
    reconsidered only if that budget fails. *Amended 2026-11-19 by the orchestrator's decision above:*
    this decision first named the module itself, served with `Content-Type: application/wasm`; the module
    is now embedded in a script, so no file is served as `application/wasm` and nothing compiles while
@@ -1401,7 +1407,9 @@ it. Decision 4 is amended by the orchestrator's decision above.
    (which helps only visitors who load one), and the live checks fail when a well-known worker path
    answers 200 (*Layer 3*). A page uploaded at a path outside every manifest is not detected by the live
    checks; if the key can hold `ListBucket`, the deploy fails on such a key at the next release. The
-   privacy page, the verification guide and milestone 3's hosting ADR say so.
+   privacy page, the verification guide and milestone 3's hosting ADR
+   ([ADR 0042](../docs/adr/0042-host-the-site-behind-edge-services-and-deploy-it-from-the-release-with-a-bucket-scoped-key.md))
+   say so.
 6. **Decided: Chromium for the smoke test is the `chromedp/headless-shell` container image, pinned by
    digest** with a `# renovate: datasource=docker` comment, run by the CI job and in the Lima VM's
    container runtime (ADR 0017); `chromedp` connects to it on loopback. A Chromium download pinned by
@@ -1463,7 +1471,9 @@ it. Decision 4 is amended by the orchestrator's decision above.
     the pipeline serves them; otherwise `public_read = true` adds the fallback, a `*` `s3:GetObject`
     grant on the site's objects only, and the bucket website endpoint and the bucket's S3 endpoints
     serve the site's files too. R5 checks each origin over HTTPS and plain HTTP, and its result is
-    recorded in milestone 3's hosting ADR (ADR 0039, open point 8).
+    recorded in milestone 3's hosting ADR
+    ([ADR 0042](../docs/adr/0042-host-the-site-behind-edge-services-and-deploy-it-from-the-release-with-a-bucket-scoped-key.md);
+    ADR 0039, open point 8).
 
 ### To be checked by the maintainer
 

@@ -179,7 +179,7 @@ Arrows are imports. They point inwards only:
   `ci/sitedeploy/internal/deploy`, which speaks the S3 API of Scaleway Object Storage with SigV4 signing
   written by hand: the rollback guard on the live page, the optional listing of the bucket (off by
   default), then PUTs of the content-addressed assets, the manifest and the pages last, never a DELETE,
-  and neither key in any output. Both are held to named standard packages (`site-deploy-main`, which runs
+  and neither key in any output (ADR 0042). Both are held to named standard packages (`site-deploy-main`, which runs
   no program; `site-deploy-library`, no `os` and no package of the module), and the forbidigo group
   `site-deploy-env` allows only the one `os.LookupEnv` its `main.go` passes on.
 - **`cmd/shift2eu`** is the CLI's composition root, the only place besides `cmd/shift2eu-web` that
