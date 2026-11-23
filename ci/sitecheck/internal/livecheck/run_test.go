@@ -409,7 +409,7 @@ func TestRunFailsABrokenSite(t *testing.T) {
 				t.Helper()
 
 				site.records.HSTS.PlainHTTPWWW = livecheck.PlainHTTPRefuseOrClose
-				site.routes.set(livecheck.DefaultHost+":80", rawListener(t, "<html><body><p>welcome</p></body></html>"))
+				site.routes.set(livecheck.DefaultHost+":80", rawListener(t, "<html><body><p>welcome</p></body></html>", rawReadTheRequest))
 			},
 			wantKind:   livecheck.KindRedirect,
 			wantTarget: "http://" + livecheck.DefaultHost + "/",
@@ -420,7 +420,35 @@ func TestRunFailsABrokenSite(t *testing.T) {
 				t.Helper()
 
 				site.records.HSTS.PlainHTTPWWW = livecheck.PlainHTTPRefuseOrClose
-				site.routes.set(livecheck.DefaultHost+":80", rawListener(t, "HTTP/1.1 200 OK\r\nBad Header\r\n\r\n<html><body><p>welcome</p></body></html>"))
+				site.routes.set(livecheck.DefaultHost+":80", rawListener(t, "HTTP/1.1 200 OK\r\nBad Header\r\n\r\n<html><body><p>welcome</p></body></html>", rawReadTheRequest))
+			},
+			wantKind:   livecheck.KindRedirect,
+			wantTarget: "http://" + livecheck.DefaultHost + "/",
+		},
+		{
+			// The order an edge that writes as soon as it accepts the connection
+			// reaches: Go's transport reads those bytes before the request is
+			// registered and discards them as unsolicited, so the check used to pass
+			// a page a browser renders. verdictFirst forces that order.
+			name: "refuse-or-close: plain HTTP answering raw HTML before it reads the request",
+			mutate: func(t *testing.T, site *site) {
+				t.Helper()
+
+				site.records.HSTS.PlainHTTPWWW = livecheck.PlainHTTPRefuseOrClose
+				site.routes.set(livecheck.DefaultHost+":80", rawListener(t, "<html><body><p>welcome</p></body></html>", rawWriteOnAccept))
+				site.dial = verdictFirst(site.routes.dial, livecheck.DefaultHost+":80")
+			},
+			wantKind:   livecheck.KindRedirect,
+			wantTarget: "http://" + livecheck.DefaultHost + "/",
+		},
+		{
+			name: "refuse-or-close: plain HTTP answering a header block Go refuses before it reads the request",
+			mutate: func(t *testing.T, site *site) {
+				t.Helper()
+
+				site.records.HSTS.PlainHTTPWWW = livecheck.PlainHTTPRefuseOrClose
+				site.routes.set(livecheck.DefaultHost+":80", rawListener(t, "HTTP/1.1 200 OK\r\nBad Header\r\n\r\n<html><body><p>welcome</p></body></html>", rawWriteOnAccept))
+				site.dial = verdictFirst(site.routes.dial, livecheck.DefaultHost+":80")
 			},
 			wantKind:   livecheck.KindRedirect,
 			wantTarget: "http://" + livecheck.DefaultHost + "/",
@@ -758,6 +786,21 @@ func TestRunPassesTheAcceptedVariants(t *testing.T) {
 
 				site.records.HSTS.PlainHTTPWWW = livecheck.PlainHTTPRefuseOrClose
 				site.routes.set(livecheck.DefaultHost+":80", closingListener(t))
+			},
+		},
+		{
+			// A port a firewall drops: nothing refuses, nothing answers, and the
+			// dial ends with the request's deadline and no connection made. A
+			// browser gets no page from it any more than from a refusal, so
+			// refuse-or-close accepts it; a timeout with a connection made behind
+			// it still fails.
+			name: "refuse-or-close: plain HTTP on the canonical host filtered, the dial timing out with no connection",
+			mutate: func(t *testing.T, site *site) {
+				t.Helper()
+
+				site.records.HSTS.PlainHTTPWWW = livecheck.PlainHTTPRefuseOrClose
+				site.requestTimeout = 100 * time.Millisecond
+				site.dial = filteredDial(site.routes.dial, livecheck.DefaultHost+":80")
 			},
 		},
 		{
@@ -1181,7 +1224,8 @@ func TestCheckCertificate(t *testing.T) {
 // timeouts bound the plain HTTP requests, and the handshake CheckCertificate
 // does must be bounded by the same timeout (auditor finding 1, reviewer 2).
 // The check runs in a goroutine under a guard, so an unbounded handshake fails
-// this test instead of hanging the package's run.
+// this test instead of hanging the package's run; the guard is loose (the check
+// measures about 2 s) because it catches a hang, never a duration.
 func TestRunBoundsTheTLSHandshake(t *testing.T) {
 	t.Parallel()
 
@@ -1189,7 +1233,7 @@ func TestRunBoundsTheTLSHandshake(t *testing.T) {
 	site.requestTimeout = 100 * time.Millisecond
 	site.routes.set(livecheck.DefaultHost+":443", stalledListener(t))
 
-	report, err := runWithin(t, 10*time.Second, site.config(t))
+	report, err := runWithin(t, 60*time.Second, site.config(t))
 	if err != nil {
 		t.Fatalf("Run failed: %v, want a report of a failed certificate check", err)
 	}

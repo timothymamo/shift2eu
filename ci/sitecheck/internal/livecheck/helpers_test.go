@@ -1,6 +1,7 @@
 package livecheck_test
 
 import (
+	"bufio"
 	"bytes"
 	"compress/gzip"
 	"context"
@@ -13,6 +14,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"math/big"
 	"net"
 	"net/http"
@@ -548,6 +550,83 @@ func (r *routeTable) dialLog() []string {
 	return append([]string(nil), r.dials...)
 }
 
+// verdictGuard bounds the wait in verdictConn.RemoteAddr: a hang guard, never a
+// value any behaviour depends on.
+const verdictGuard = 10 * time.Second
+
+// verdictFirst returns inner's dialer with every connection to addr wrapped so
+// that its RemoteAddr waits until the transport has closed it (verdictConn).
+//
+// The transport reads the bytes already on a fresh connection in its read loop,
+// before the request is registered, and a byte it reads there makes it discard
+// the response as unsolicited and close the connection
+// (net/http/transport.go, readLoop's Peek and readLoopPeekFailLocked). That is
+// the order an edge that writes as soon as it accepts the connection reaches
+// only by chance, which made the refuse-or-close check pass the bytes it must
+// fail; the wait in RemoteAddr, on the trace's GotConn, which runs before the
+// request is registered, makes that order the only one.
+func verdictFirst(inner livecheck.Dialer, addr string) livecheck.Dialer {
+	return func(ctx context.Context, network, target string) (net.Conn, error) {
+		conn, err := inner(ctx, network, target)
+		if err != nil {
+			return nil, err
+		}
+
+		if target != addr {
+			return conn, nil
+		}
+
+		return &verdictConn{Conn: conn, closed: make(chan struct{})}, nil
+	}
+}
+
+// verdictConn is a connection whose RemoteAddr waits for the transport's verdict
+// on the bytes already on it: it returns once the transport has closed the
+// connection, which it does when its read loop discarded those bytes instead of
+// answering the request with them (verdictFirst). The wait never depends on the
+// wall clock: it ends with the connection or, should the transport stop closing
+// it, with verdictGuard, so a hang fails this test instead of hanging the
+// package's run.
+type verdictConn struct {
+	net.Conn
+	closed chan struct{}
+	once   sync.Once
+}
+
+// Close marks the connection closed, releasing RemoteAddr, and closes it.
+func (c *verdictConn) Close() error {
+	c.once.Do(func() { close(c.closed) })
+
+	return c.Conn.Close()
+}
+
+// RemoteAddr returns the connection's remote address once the transport has
+// closed the connection.
+func (c *verdictConn) RemoteAddr() net.Addr {
+	select {
+	case <-c.closed:
+	case <-time.After(verdictGuard):
+	}
+
+	return c.Conn.RemoteAddr()
+}
+
+// filteredDial returns inner's dialer with addr filtered: a connection to addr
+// makes no connection at all and returns the dial's error when its context ends,
+// as a port a firewall drops does (no refusal, no answer, until the client gives
+// up).
+func filteredDial(inner livecheck.Dialer, addr string) livecheck.Dialer {
+	return func(ctx context.Context, network, target string) (net.Conn, error) {
+		if target != addr {
+			return inner(ctx, network, target)
+		}
+
+		<-ctx.Done()
+
+		return nil, ctx.Err()
+	}
+}
+
 // leafBuilder signs one host's certificate with the fixture's CA.
 type leafBuilder func(t *testing.T, ca *testCA) tls.Certificate
 
@@ -638,6 +717,8 @@ type site struct {
 	apexHTTP *content
 
 	routes *routeTable
+	// dial is what Config.Dial carries: routes.dial, unless a test wraps it.
+	dial livecheck.Dialer
 
 	manifestVersion string
 	manifestPaths   []string
@@ -688,6 +769,8 @@ func newSite(t *testing.T, opts ...siteOption) *site {
 		retryInterval: livecheck.MinRetryBound,
 		roots:         ca.pool,
 	}
+
+	s.dial = s.routes.dial
 
 	if options.roots != nil {
 		s.roots = options.roots
@@ -806,7 +889,7 @@ func (s *site) config(t *testing.T) livecheck.Config {
 		Manifest:       manifest,
 		Records:        s.records,
 		Tags:           s.tags,
-		Dial:           s.routes.dial,
+		Dial:           s.dial,
 		Roots:          s.roots,
 		Now:            s.clock,
 		Sleep:          s.sleep,
@@ -1014,17 +1097,40 @@ func stalledListener(t *testing.T) string {
 	return ln.Addr().String()
 }
 
+// rawAnswerOrder is the order a raw edge answers a connection in.
+type rawAnswerOrder int
+
+const (
+	// rawWriteOnAccept writes the response as soon as the connection is accepted
+	// and reads nothing of the request: the edge whose bytes Go's transport can
+	// discard as unsolicited, and a browser renders.
+	rawWriteOnAccept rawAnswerOrder = iota
+	// rawReadTheRequest reads the request's header up to its empty line, then
+	// writes the response, then half-closes, so the client reads the bytes with
+	// its request registered, as an ordinary edge's answer arrives.
+	rawReadTheRequest
+)
+
+// rawListenerGuard bounds a raw listener's read of the request and its drain, so a
+// connection that goes silent fails the test instead of holding the listener.
+const rawListenerGuard = 10 * time.Second
+
 // rawListener starts a listener that answers every connection with exactly
-// response and then closes it, as an edge answering plain HTTP with something
-// that is no HTTP/1.x response does (raw HTML without a status line, a header
-// block Go's parser refuses). It returns its address.
-func rawListener(t *testing.T, response string) string {
+// response, in the order order names, as an edge answering plain HTTP with
+// something that is no HTTP/1.x response does (raw HTML without a status line, a
+// header block Go's parser refuses). It returns its address.
+func rawListener(t *testing.T, response string, order rawAnswerOrder) string {
 	t.Helper()
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("listen for the raw listener: %v", err)
 	}
+
+	var (
+		mu    sync.Mutex
+		conns []net.Conn
+	)
 
 	done := make(chan struct{})
 
@@ -1037,19 +1143,72 @@ func rawListener(t *testing.T, response string) string {
 				return
 			}
 
-			go func() {
-				_, _ = conn.Write([]byte(response))
-				_ = conn.Close()
-			}()
+			mu.Lock()
+			conns = append(conns, conn)
+			mu.Unlock()
+
+			go answerRaw(conn, []byte(response), order)
 		}
 	}()
 
 	t.Cleanup(func() {
 		_ = ln.Close()
 		<-done
+
+		mu.Lock()
+		defer mu.Unlock()
+
+		for _, conn := range conns {
+			_ = conn.Close()
+		}
 	})
 
 	return ln.Addr().String()
+}
+
+// answerRaw answers one connection in the order order names.
+func answerRaw(conn net.Conn, response []byte, order rawAnswerOrder) {
+	if order == rawWriteOnAccept {
+		// The edge writes before it reads anything and then leaves the connection
+		// open (the test's cleanup closes it): a close here would let the kernel
+		// answer the request with a reset that can throw the bytes away before the
+		// client reads them, which is not the order this case is about. The bytes
+		// wait in the client's socket for the transport's read loop to discard
+		// them.
+		_, _ = conn.Write(response)
+
+		return
+	}
+
+	_ = conn.SetReadDeadline(time.Now().Add(rawListenerGuard))
+	readRequestHeader(conn)
+	_ = conn.SetReadDeadline(time.Time{})
+
+	_, _ = conn.Write(response)
+
+	// A half close, not a close: the client sees a graceful end of the bytes
+	// instead of a reset. Then drain what the client still sends, so closing with
+	// it unread does not reset the connection either.
+	if tcp, ok := conn.(*net.TCPConn); ok {
+		_ = tcp.CloseWrite()
+	}
+
+	_ = conn.SetReadDeadline(time.Now().Add(rawListenerGuard))
+	_, _ = io.Copy(io.Discard, conn)
+	_ = conn.Close()
+}
+
+// readRequestHeader reads conn up to and including the empty line that ends the
+// request's header.
+func readRequestHeader(conn net.Conn) {
+	reader := bufio.NewReader(conn)
+
+	for {
+		line, err := reader.ReadString('\n')
+		if err != nil || line == "\r\n" || line == "\n" {
+			return
+		}
+	}
 }
 
 // closingListener starts a listener that accepts every connection and closes it

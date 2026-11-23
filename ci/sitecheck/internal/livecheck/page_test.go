@@ -231,15 +231,17 @@ func TestVersionText(t *testing.T) {
 // version out of an untrusted body stays linear in the body's length: a body of
 // many raw-text elements followed by one upper-case byte is read within a
 // generous budget, where lowering the whole remainder once per element made the
-// scan super-linear (auditor finding 2). The scan runs in a goroutine under a
-// guard, so a super-linear scan fails this test instead of hanging the
-// package's run.
+// scan super-linear (auditor finding 2). 2 MiB, not 512 KiB, keeps the two
+// algorithms far apart even on fast hardware: the linear scan takes milliseconds
+// under -race, the former quadratic one about 16 times the work 512 KiB took. The
+// scan runs in a goroutine under a guard, so a super-linear scan fails this test
+// instead of hanging the package's run.
 func TestVersionTextScansARawTextHeavyBodyInLinearTime(t *testing.T) {
 	t.Parallel()
 
 	const (
 		budget = 2 * time.Second
-		size   = 512 << 10
+		size   = 2 << 20
 	)
 
 	pairs := strings.Repeat(`<style></style><script></script><title></title>`, size/47)
