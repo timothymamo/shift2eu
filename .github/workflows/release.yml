@@ -940,9 +940,9 @@ jobs:
   # The release's two site programs, built on a runner of its own (PRD #297
   # milestone 3): no key, no secret and no OIDC token, so nothing in them can
   # deploy. Their sha256 are job outputs, which the jobs that deploy and check
-  # the site bind the binaries they run to, and the artifacts are kept ninety
-  # days: the deploy and the live check are re-run by re-running this job, never
-  # the job that built the bundle.
+  # the site bind the binaries they run to, and the artifacts are kept thirty
+  # days, GitHub's re-run window: a deploy is re-run by re-running its own job,
+  # never the job that built the bundle, and only while GitHub still re-runs it.
   site-programs:
     name: Site programs
     needs: test
@@ -978,13 +978,13 @@ jobs:
           name: sitedeploy
           path: bin/sitedeploy
           if-no-files-found: error
-          retention-days: 90
+          retention-days: 30
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: sitecheck
           path: bin/sitecheck
           if-no-files-found: error
-          retention-days: 90
+          retention-days: 30
 
   # The one job of the release that holds the site's key (PRD #297 milestone 3,
   # ADR 0042). It deploys the published bundle of the highest release tag on
@@ -1073,7 +1073,7 @@ jobs:
               continue
             fi
             err="$(mktemp)"
-            if ! gh api "repos/timothymamo/shift2eu/releases/tags/$t" > "$higher/release.json" 2> "$err"; then
+            if ! gh api "repos/timothymamo/shift2eu/releases/tags/$t" > "higher/release.json" 2> "$err"; then
               if grep -qF -e "HTTP 404" "$err"; then
                 echo "::notice::the release of $t is not published yet, so its manifest is not read"
                 rm -f "$err"
@@ -1085,11 +1085,11 @@ jobs:
               exit 1
             fi
             rm -f "$err"
-            if [ "$(jq -r '.draft' "$higher/release.json")" != false ]; then
+            if [ "$(jq -r '.draft' "higher/release.json")" != false ]; then
               echo "::notice::the release of $t is still a draft, so its manifest is not read"
               continue
             fi
-            if [ "$(jq --arg name "shift2eu-site_$t.tar.gz" -r '[.assets[].name] | map(select(. == $name)) | length' "$higher/release.json")" != 1 ]; then
+            if [ "$(jq --arg name "shift2eu-site_$t.tar.gz" -r '[.assets[].name] | map(select(. == $name)) | length' "higher/release.json")" != 1 ]; then
               echo "::notice::the release of $t publishes no shift2eu-site_$t.tar.gz, so its manifest is not read"
               continue
             fi

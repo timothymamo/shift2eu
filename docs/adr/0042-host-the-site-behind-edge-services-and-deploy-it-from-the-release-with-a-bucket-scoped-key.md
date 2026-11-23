@@ -144,7 +144,11 @@ commit is not known there.
   `protected_branches` `false`; type `tag`, so a branch named like a tag is not allowed). The `v*` tag
   rulesets ([ADR 0021](0021-propose-releases-with-release-please-and-tag-with-a-github-app.md)) let only
   the release-tag App and the maintainer create such a tag. The `release-tag` skill's step 2 checks all
-  of it (PR C).
+  of it (PR C). The environment admits any `v*.*.*` tag, and the workflow that runs is the tagged
+  commit's, so those tag rulesets are the one control on the deploy key; the key is bucket-scoped, so
+  what a misused tag could reach is the site's content. A required reviewer or a wait timer on the
+  `site` environment would add defence in depth; it stays the maintainer's option, not taken here,
+  because it would add a second human gate to every release (PRD #161).
 - **The job does not build.** A job without secrets builds `ci/sitedeploy` with the pinned toolchain;
   the deploy job downloads it, and the bundle from the published release, checks the digests and the
   attestation (above), and runs
@@ -158,7 +162,7 @@ commit is not known there.
 - **As built (PR C2):** four jobs, which `check.ReleaseWorkflow` pins as a closed schema.
   - `site-programs` ("Site programs", needs `test`, `contents: read`, no secret) builds `ci/sitedeploy`
     and `ci/sitecheck` with `make site-programs` (static, `-trimpath`), gives their SHA-256 as outputs and
-    hands each on as an artifact of its own, kept 90 days.
+    hands each on as an artifact of its own, kept 30 days, GitHub's re-run window.
   - `site-deploy` ("Deploy the site") needs `latest`, `verify`, `verify-archives`, `attest-archives`,
     `site`, `site-browser` and `site-programs`, runs on exactly `needs.latest.outputs.latest == 'true' &&
     vars.SITE_DEPLOY_ENABLED == 'true'`, and has five steps, the deploy last: the program's artifact; the
@@ -347,12 +351,15 @@ the key gets nothing printed.
 A step that could set them could route the signed requests through a proxy of its choosing or make it
 trust another certificate authority. So the deploy job's steps before the deploy run no third-party
 code and write nothing to `GITHUB_ENV` (or `GITHUB_PATH`), and the key is set only in the `env:` of the
-deploy step itself.
+deploy step itself. As built (PR C2), the deploy's client has a transport of its own whose `Proxy` is
+nil (`newHTTPClient` in `ci/sitedeploy`), so the proxy variables are never consulted, and
+`check.ReleaseWorkflow` refuses any line of `release.yml` that names them or the certificate variables.
 
 ### Recovery
 
 - **Redeploy the last good release:** re-run the deploy job of the `release.yml` run of the highest
-  release tag on `main` (R12). The guard overwrites any live page that is not a genuine higher release,
+  release tag on `main` (R12), within GitHub's 30-day re-run window (below); after it, a new release.
+  The guard overwrites any live page that is not a genuine higher release,
   with a warning, so a page a leaked key wrote is replaced whatever version it claims. Redeploying the
   same release is the same re-run: the guard sees an equal version and overwrites, with a notice.
 - **A deploy that failed part-way:** `manifest.json` is uploaded before the pages, so a failure
@@ -376,11 +383,12 @@ deploy step itself.
   re-run after publication**: a GitHub re-run of a job also re-runs every job that needs it, so a re-run
   of `site` would re-run `goreleaser` (which would upload to a published, immutable release),
   `attest-archives` and `publish` (which refuses a tag that already holds a published release). This
-  replaces the earlier plan of re-running the bundle job once its artifact had expired. Only the deploy
-  program is rebuilt after its artifact expires, by re-running the secretless job that builds it (PR
-  C2), which re-runs only the deploy and the live check. As built: within 90 days, re-run `Deploy the
-  site` (which re-runs `Check the live site`); after that, re-run `Site programs`, never `Site bundle`.
-  The programs' artifacts are kept 90 days, the bundle's 7 (*proposed*, measured on the first release).
+  replaces the earlier plan of re-running the bundle job once its artifact had expired. As built (PR
+  C2): GitHub re-runs a run's jobs only within 30 days of the initial run, so the programs' artifacts
+  are kept exactly 30 days; within that window, re-run `Deploy the site` (which re-runs `Check the live
+  site`); after it nothing of the run can be re-run, and the recovery is a new release. `Site bundle` is
+  never re-run after publication. The programs' artifacts are kept 30 days, the bundle's 7 (*proposed*,
+  measured on the first release).
 
 ### `timeout-minutes` (values for PR C)
 

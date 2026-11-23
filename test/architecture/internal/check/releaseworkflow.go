@@ -1020,9 +1020,10 @@ const (
 // the tag's commit, Go without the Actions cache, make site-programs (whose
 // static build's environment lives in the Makefile, so no GO or CGO variable is
 // named here), the two programs' sha256 as the job's outputs (id: digests),
-// and each program as a workflow artifact of its own, kept ninety days, so the
-// deploy downloads the deploy program alone and a deploy is re-run by
-// re-running this job, never the site job.
+// and each program as a workflow artifact of its own, kept thirty days,
+// GitHub's re-run window, so the deploy downloads the deploy program alone and
+// a deploy is re-run by re-running its own job, never the site job, while
+// GitHub still re-runs the run's jobs.
 var siteProgramsSteps = []releaseStep{
 	shallowCheckoutStep,
 	setupGoStep,
@@ -1040,7 +1041,9 @@ var siteProgramsSteps = []releaseStep{
 }
 
 // siteProgramUploadStep is the upload of one of the site's programs from bin/
-// as a workflow artifact of its own name, kept ninety days.
+// as a workflow artifact of its own name, kept thirty days: GitHub re-runs a
+// run's jobs only within 30 days of the initial run, so a longer retention
+// would serve no re-run.
 func siteProgramUploadStep(program string) releaseStep {
 	return releaseStep{
 		what: "actions/upload-artifact (" + program + ")", uses: uploadArtifactAction,
@@ -1048,7 +1051,7 @@ func siteProgramUploadStep(program string) releaseStep {
 			"name":              exactly(program),
 			"path":              exactly("bin/" + program),
 			"if-no-files-found": exactly("error"),
-			"retention-days":    exactly("90"),
+			"retention-days":    exactly("30"),
 		},
 	}
 }
@@ -1132,7 +1135,7 @@ var siteDeploySteps = []releaseStep{
 			`    continue`,
 			`  fi`,
 			`  err="$(mktemp)"`,
-			`  if ! gh api "repos/` + releaseRepo + `/releases/tags/$t" > "$higher/release.json" 2> "$err"; then`,
+			`  if ! gh api "repos/` + releaseRepo + `/releases/tags/$t" > "higher/release.json" 2> "$err"; then`,
 			`    if grep -qF -e "HTTP 404" "$err"; then`,
 			`      echo "::notice::the release of $t is not published yet, so its manifest is not read"`,
 			`      rm -f "$err"`,
@@ -1144,11 +1147,11 @@ var siteDeploySteps = []releaseStep{
 			`    exit 1`,
 			`  fi`,
 			`  rm -f "$err"`,
-			`  if [ "$(jq -r '.draft' "$higher/release.json")" != false ]; then`,
+			`  if [ "$(jq -r '.draft' "higher/release.json")" != false ]; then`,
 			`    echo "::notice::the release of $t is still a draft, so its manifest is not read"`,
 			`    continue`,
 			`  fi`,
-			`  if [ "$(jq --arg name "shift2eu-site_$t.tar.gz" -r '[.assets[].name] | map(select(. == $name)) | length' "$higher/release.json")" != 1 ]; then`,
+			`  if [ "$(jq --arg name "shift2eu-site_$t.tar.gz" -r '[.assets[].name] | map(select(. == $name)) | length' "higher/release.json")" != 1 ]; then`,
 			`    echo "::notice::the release of $t publishes no shift2eu-site_$t.tar.gz, so its manifest is not read"`,
 			`    continue`,
 			`  fi`,
@@ -1464,7 +1467,7 @@ const siteDeployJob = "site-deploy"
 //     static build's environment is the Makefile's), the two programs' sha256
 //     written to GITHUB_OUTPUT (id: digests), and actions/upload-artifact of
 //     bin/sitedeploy as sitedeploy and of bin/sitecheck as sitecheck, each
-//     kept ninety days;
+//     kept thirty days, GitHub's re-run window;
 //   - the site-deploy job's steps are exactly, with no checkout and the
 //     deploy last: actions/download-artifact of sitedeploy; one step under set
 //     -euo pipefail that refuses a release still a draft (isDraft not false)
@@ -1607,7 +1610,10 @@ const siteDeployJob = "site-deploy"
 // shift2eu-server or openapi, in any case, since the release publishes the CLI
 // alone (issue #393); and no line may name HTTPS_PROXY, HTTP_PROXY, NO_PROXY,
 // SSL_CERT_FILE or SSL_CERT_DIR, in any case, which would change where the
-// site deploy's client connects or what it trusts. The site's names are
+// site deploy's client connects or what it trusts. No ${{ }} expression, in
+// any job or comment, may use the secrets context in a form other than an
+// exact secrets.NAME or secrets['NAME'] (toJSON(secrets), a name built with
+// format(...)), whatever secrets the line's job may name. The site's names are
 // confined, comments included, in any case and in both expression forms
 // (ctx.NAME, ctx['NAME']): secrets.SCW_ACCESS_KEY and secrets.SCW_SECRET_KEY
 // each on exactly one line, its env: line in site-deploy's last step;
@@ -1623,6 +1629,7 @@ func ReleaseWorkflow(src []byte) []string {
 		messages = append(messages, forbiddenNames(strings.TrimSpace(raw[i]))...)
 		messages = append(messages, retiredNameMessages(strings.TrimSpace(raw[i]))...)
 		messages = append(messages, proxyNames(strings.TrimSpace(raw[i]))...)
+		messages = append(messages, secretsContextForms(i+1, raw[i])...)
 	}
 
 	messages = append(messages, confinedNames(raw)...)
@@ -1685,6 +1692,57 @@ func releaseSchema(raw []string, lines []yamlread.Line) []string {
 // secretRef matches a reference to a secret in an expression, in either form
 // GitHub reads: secrets.NAME and secrets['NAME'] (or "NAME"), any case.
 var secretRef = regexp.MustCompile(`(?i)secrets\s*(?:\.\s*([A-Za-z_][A-Za-z0-9_-]*)|\[\s*['"]([^'"]*)['"]\s*\])`)
+
+// expression matches one ${{ }} expression of a line; its group is the text
+// between the braces.
+var expression = regexp.MustCompile(`\$\{\{(.*?)\}\}`)
+
+// secretsWord matches the secrets context's name, any case; secretsContextForms
+// skips a match that is part of a longer name.
+var secretsWord = regexp.MustCompile(`(?i)secrets`)
+
+// secretsContextForms returns a message for every ${{ }} expression of line,
+// the num-th, that uses the secrets context in any form but an exact
+// secrets.NAME or secrets['NAME'] reference (any case): toJSON(secrets) hands
+// out the whole context and secrets[format(...)] builds a name at run time, so
+// no closed list of names could tell which secret such a line reaches.
+func secretsContextForms(num int, line string) []string {
+	var messages []string
+
+	for _, e := range expression.FindAllStringSubmatch(line, -1) {
+		text := e[1]
+		for _, m := range secretsWord.FindAllStringIndex(text, -1) {
+			if partOfName(text, m[0]-1, ".") || partOfName(text, m[1], "") {
+				continue
+			}
+
+			if ref := secretRef.FindStringIndex(text[m[0]:]); ref != nil && ref[0] == 0 {
+				continue
+			}
+
+			messages = append(messages, fmt.Sprintf(
+				"line %d: %s names the secrets context in a form other than an exact secrets.NAME or secrets['NAME'], so no list of names can tell which secret it reaches",
+				num, strings.TrimSpace(text)))
+
+			break
+		}
+	}
+
+	return messages
+}
+
+// partOfName reports whether text's byte at i, if there is one, is a character
+// of an expression name or one of also, so that a match beside it is part of a
+// longer name or a property of another object.
+func partOfName(text string, i int, also string) bool {
+	if i < 0 || i >= len(text) {
+		return false
+	}
+
+	c := text[i]
+
+	return c == '_' || c == '-' || c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || strings.IndexByte(also, c) >= 0
+}
 
 // jobSecrets refuses every line of the job e, comments included, that names a
 // secret other than allowed (any case); nil allowed checks nothing.

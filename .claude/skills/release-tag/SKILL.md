@@ -335,11 +335,12 @@ moves or deletes a tag.
      look at.
    Any other conclusion is a failed deploy: report it with the failed step's log
    (`gh run view <id> --log-failed`). The release itself is published; give the maintainer the
-   recovery, which only they start (never re-run anything yourself): re-run `Deploy the site`
-   (`gh run rerun <id> --job <its job id>`), which re-runs `Check the live site` after it; once the
-   programs' artifacts have expired (90 days), re-run `Site programs` instead, which re-runs only those
-   two. The bundle comes from the published release, so neither re-run needs `Site bundle`, which must
-   never be re-run after publication (above).
+   recovery, which only they start (never re-run anything yourself). GitHub re-runs a run's jobs only
+   within 30 days of the initial run, and the programs' artifacts are kept exactly that long: within
+   the 30-day re-run window, re-run `Deploy the site` (`gh run rerun <id> --job <its job id>`), which
+   re-runs `Check the live site` after it; after the window, the recovery is a new release. The bundle
+   comes from the published release, so the re-run never needs `Site bundle`, which must never be
+   re-run after publication (above).
 8. Check the published image yourself; do not hand this to the user. The Lima VM has cosign, a `gh`
    with `gh attestation`, `crane` and rootless `nerdctl` (ADR 0017); this is "Verify the image" in
    `docs/guide/verify-releases.md`, in its VM form, for the new tag. Run it from the repository root,
