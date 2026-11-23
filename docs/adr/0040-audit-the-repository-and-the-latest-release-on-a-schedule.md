@@ -929,12 +929,21 @@ configuration line.
 `exec.CommandContext` is given. A `gh` call whose context ended (its deadline or the run's cancellation)
 is `ErrGitHub` (outcome 8) whatever `gh` printed, a status line included: an answer read after the
 context ended is never trusted. A gitleaks scan whose context ended is a scan that did not run to its
-end, `publish.ErrScanRefused` (outcome 4), never "no leak". The entry point stops on SIGINT (`signal.NotifyContext`), which cancels the
-run's context and so every running call. It does not handle SIGTERM: naming it needs `syscall`, which
-`TestAuditPackagesAreHeldByStrictRules` denies every audit package, as for `ci/auditrun`. On a
-runner's cancel the runner kills the step's process tree, and each call's and scan's own deadline
-bounds the run meanwhile. The fifth pull request sets `timeout-minutes` on every job of
-the workflow, so a hung step cannot hold the runner beyond the job's bound.
+end, `publish.ErrScanRefused` (outcome 4), never "no leak". The entry point stops on SIGINT
+(`signal.NotifyContext`), which cancels the run's context and so every running call. SIGINT alone is
+enough: the Actions runner cancels a step with SIGINT first, then SIGTERM after a grace period, then a
+kill, so SIGINT is the signal that reaches the program while it can still act. It does not handle
+SIGTERM: naming it needs `syscall`, which `TestAuditPackagesAreHeldByStrictRules` denies every audit
+package, as for `ci/auditrun`. If the step outlives the grace period, the runner kills its process
+tree, and each call's and scan's own deadline bounds the run meanwhile. The fifth pull request sets
+`timeout-minutes` on every job of the workflow, so a hung step cannot hold the runner beyond the job's
+bound.
+
+A POST or PATCH whose call ended at its deadline or on a signal has an **unknown** effect, not none:
+GitHub may have applied it before the answer was lost. PRs 4b and 4c therefore never retry a mutating
+call within a run; the next run's listing (the bot's issues, the App's draft advisories) reconciles
+with what is already there before it writes, pinned by a fake-`gh` test whose POST route answers only
+after a delay past the call's deadline.
 
 **The environment.** The entry point reads `GH_TOKEN`, `GITHUB_SERVER_URL`, `GITHUB_REPOSITORY`,
 `GITHUB_RUN_ID`, `GITHUB_STEP_SUMMARY`, and for `publish` also `GITHUB_SHA` and `AUDIT_FINGERPRINT_KEY`,

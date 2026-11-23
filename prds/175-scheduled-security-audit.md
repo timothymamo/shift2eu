@@ -867,9 +867,16 @@ An agent cannot do these steps. Each one is safe to stop at; the workflow is rol
     - `result refused: see runbook` (exit 3): the model's result did not decrypt or broke the schema, or
       the release tag or image digest it named did not check out against GitHub. Start the new run; if
       it repeats, read the model job's preflight line and the skill before changing anything.
-    - `publish refused: see runbook` (exit 4): a scan found a token, a key or an encoded run in a text
-      about to be published. Nothing was published. Treat it as a possible leak: rotate per step 10, then
-      start the new run.
+    - `publish refused: see runbook` (exit 4): a text about to be published did not pass the scans.
+      Nothing was published. The line does not say which of three causes it was: (1) a scan found a
+      token, a key or an encoded run; (2) the text held gitleaks' inline allow comment, which the
+      program refuses before gitleaks runs, in any letter case; (3) gitleaks did not start or did not
+      finish within its deadline (2 minutes when unset). Look for (3) first, then (2): a publish step
+      that ran for about a scan deadline or longer, or a gitleaks binary missing at the path its flag
+      names on the runner, points to (3); fix that and start the new run. For (2), start the new run
+      once: the model writes the texts afresh, and a refusal that repeats with no sign of (3) is
+      treated as (1). A real hit (1), or a refusal neither (2) nor (3) explains, is a possible leak:
+      rotate per step 10 (the safe default), then start the new run.
     - `private findings not filed: see runbook` (exit 5): GitHub refused advisory creation to the App;
       the report says "private findings: not filed" and the private findings were dropped. Repeat step
       3's advisory check, then start the new run.
