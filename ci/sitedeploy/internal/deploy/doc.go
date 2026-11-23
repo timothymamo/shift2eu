@@ -30,10 +30,11 @@
 // names above (so no "/", "..", "\", "%", control character, absolute or
 // empty path can become an object key), the manifest does not list exactly
 // the four pages, one asset of each kind (style, page script, wasm_exec,
-// module), LICENSE and NOTICE, an asset's <h> is not its digest's prefix, a listed file is
-// missing or its SHA-256 differs, or the bundle holds a file the manifest
-// does not list. The earlier releases' manifests (Config.Manifests) are not
-// held to the complete set: the guard and the listing only read them.
+// module), LICENSE and NOTICE, an asset's <h> is not its digest's prefix, a
+// listed file is missing or its SHA-256 differs, or the bundle holds a file
+// the manifest does not list. The earlier releases' manifests
+// (Config.Manifests) are not held to the complete set: the guard and the
+// listing only read them.
 //
 // # What Deploy does, in order
 //

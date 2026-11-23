@@ -19,10 +19,10 @@ const (
 // readBundle reads and checks the bundle against its manifest (doc.go, "The
 // bundle it consumes"): the manifest parses and names version, every listed
 // file is present, a regular file, of its digest and, for an asset, named
-// after it, the manifest lists exactly the four pages and one asset of each
-// kind (checkComplete), and the bundle holds no file the manifest does not
-// list. The
-// files it returns are every listed file and manifest.json, by name.
+// after it, the manifest lists exactly the four pages, one asset of each
+// kind, LICENSE and NOTICE (checkComplete), and the bundle holds no file the
+// manifest does not list. The files it returns are every listed file and
+// manifest.json, by name.
 func readBundle(bundle fs.FS, version string) (Manifest, map[string][]byte, error) {
 	data, err := readBounded(bundle, ManifestName, maxManifestBytes)
 	if err != nil {

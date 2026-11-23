@@ -68,7 +68,7 @@ LABEL org.opencontainers.image.title="shift2eu" \
 
 COPY --from=build /out/shift2eu /shift2eu
 # Apache-2.0 section 4: every redistribution carries the licence and the NOTICE attribution (#495).
-# The directory first, from the build stage with mode 0755, then the files read-only for every builder.
+# The directory first, from the doc stage with mode 0755, then the files read-only for every builder.
 COPY --from=doc /doc/ /usr/share/doc/shift2eu/
 COPY --chmod=0444 LICENSE NOTICE /usr/share/doc/shift2eu/
 
