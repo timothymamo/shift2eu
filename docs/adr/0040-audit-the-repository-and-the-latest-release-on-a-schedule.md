@@ -601,7 +601,9 @@ dropping or widening any entry below fails `make test`.
   depth `Bash(git push:*)`, `Bash(git commit:*)`, `Bash(git tag:*)`, `Bash(git remote:*)`, `Bash(gh:*)`,
   `Bash(curl:*)`, `Bash(wget:*)`, `Bash(nc:*)`, `Bash(ssh:*)`, `Bash(docker:*)`, `Bash(sudo:*)`,
   `Bash(env:*)`, `Bash(printenv:*)`, `Bash(set:*)` and `Bash(*/proc/*/environ*)`. A deny rule wins over an
-  allow rule.
+  allow rule. `Read(//home/runner/**)` is redundant beside `Read(//home/**)` and stays (issue #277 round
+  G): PRD #175 names `/home/runner` explicitly, and `test/architecture` pins the file entry by entry, so
+  the rule the PRD asks for is visible and held on its own.
 - **Sandbox:** `sandbox.enabled` `true`, `sandbox.failIfUnavailable` `true` (no unsandboxed fallback when
   bubblewrap cannot start), `sandbox.autoAllowBashIfSandboxed` `false`,
   `sandbox.allowUnsandboxedCommands` `false`, `sandbox.enableWeakerNestedSandbox` `false`, no
@@ -687,6 +689,48 @@ It `exec`s with exactly this environment, nothing inherited: `PATH=/usr/bin:/bin
   rule does not take `path/filepath`. The refusal is the others': exit 126 and the line naming the whole
   word. The rule reads every word whatever option it belongs to, so it fails closed as the signature
   check does: a git grep pattern that reads as such a path is refused too, while `git grep -e proc` passes.
+  *Amended 2026-11-23 (issue #277 round G):* round F's deny list of roots leaked six ways: a `-`-led
+  operand after `--`; `/dev/fd/../../1/environ`, where the kernel follows `/dev/fd` into `/proc/self/fd`
+  before it takes the `..`, so a lexical clean does not show where the path leads; an attached
+  short-option value (`git grep -f/sys/x`); `/home`, `/etc` and `/srv/audit/state`, which it never
+  checked; `git diff --no-index`; and the caller's working directory. It also refused git reads of the
+  repository's own `dev/`. The rule becomes an **allow list** matching the settings' `Read` allow list:
+  - **Path words** are every non-option word that holds a `/` or is `..`; every word after `--`,
+    whatever its first character; an option word's value after its first `=`; the rest of a single-dash
+    word after its first letter, when that rest holds a `/` (`-f/sys/x`, `-S/dev/null`, `jq
+    -L/proc/1/root`); and git's `-C` value, attached or the next word. `-` alone is stdin and no path
+    word. A word with no `/` is a name in the working directory and passes, `..` excepted.
+  - **Resolving:** an absolute word is read as it is; a relative one on a git line is joined to
+    `/srv/audit/checkout`, which is what git reads it under the wrapper's `-C`, and on any other line to
+    `/srv/audit/work`, the wrapper's working directory.
+  - **Refused:** any path word holding a `..` element at all, before anything is cleaned (this closes
+    `/dev/fd/..` and every link-then-`..` form); and any word whose path, cleaned of its empty and `.`
+    elements, is not `/srv/audit/checkout`, `/srv/audit/checks` or `/srv/audit/work` and lies under none
+    of them. The refused word is named as before, the option's included; the option rules run first, so
+    a refused option is named even when its value lies outside the roots too.
+  - **Fail-closed side effects, accepted:** a git ref holding a `/` (`origin/main`) resolves under the
+    checkout and passes; a git grep pattern holding an absolute path outside the roots (`-e /proc/`) is
+    refused; a URL-like pattern (`http://x`) cleans to a relative name and passes; `sort -t /` is
+    refused (the model can use another separator). `git log -- dev/tofu.sh`, `git blame dev/lima.yaml`
+    and `cat /srv/audit/checkout/dev/tofu.sh` pass.
+  - **The working directory is fixed:** before every `exec` the wrapper changes into `/srv/audit/work`
+    (`os.Chdir`), so a relative name means the same whatever directory the caller ran it in; git keeps
+    its own `-C /srv/audit/checkout`. A change that fails exits 127, as a failed exec does, and a
+    refused line changes and runs nothing.
+  - **`--no-index`** is refused on a git line, alone, with `=value` and abbreviated, as git's other
+    refused long options are: `git diff --no-index` compares two files of its own, no part of the
+    checkout.
+  - **Defence in depth, not the boundary.** The wrapper sees only the words it is given: a shell
+    redirection (`audit-exec cat < /proc/<pid>/envir?n`) is opened by the shell, glob and all, before the
+    wrapper starts, and no rule of the wrapper's reads it. The sandbox is the boundary; the wrapper
+    narrows what a command run through it may name. The two forms the wrapper cannot see, or could only
+    see after the kernel resolved a link, are therefore preflight probes (probe 5, below), so the
+    sandbox itself is tested on every run.
+  - **Links in the checkout are covered already:** step 3's tree walk refuses any link in the checkout
+    or the checks tree that resolves outside its own tree, and the work area is checked to hold only
+    its empty `tmp/` before each run. The model cannot make a link: the wrapper lists no command that
+    makes one, Bash runs nothing but the wrapper, and Write and Edit write regular files. A path word
+    under one of the three roots therefore reaches only what lies under it.
 - **The same environment for every command**, the five `GIT_*` included: PRD #175's criterion is one
   scrubbed environment, and a variable only git reads changes nothing for the others.
 - **The exec seam.** The logic is `run(args []string, exec func(path string, argv []string, env []string)
@@ -696,11 +740,17 @@ It `exec`s with exactly this environment, nothing inherited: `PATH=/usr/bin:/bin
   the package builds and is linted for every release target) `main` refuses with exit 126. A refusal is
   exit 126 with one line, `audit-exec: refused: <word>`, the word cut to 64 bytes and quoted as a Go
   string (so a newline, a carriage return or a control character stays one line and no line starts a
-  workflow command); an exec that fails is exit 127 with one such line.
+  workflow command); an exec that fails is exit 127 with one such line. *Amended 2026-11-23 (issue #277
+  round G):* `run` takes a second seam, the change of directory, ahead of the exec:
+  `run(args, chdir func(dir string) error, exec, stderr)`; `main` passes `os.Chdir`, a test a fake.
 - **Its rules:** the strict depguard rule `audit-exec` (`fmt`, `io`, `os`, `strings`, `syscall`; `os/exec`
   and `net` denied) and the forbidigo group `audit-exec-env`, which refuses every read of the environment,
   every process start, library load and raw system call, with one named exception: `syscall.Exec` in
-  `ci/auditexec/main.go` alone. `ci/auditexec` imports no library yet; the lax rule
+  `ci/auditexec/main.go` alone. *Amended 2026-11-23 (issue #277 round G):* the group
+  `tests-no-process-state` has one named, path-scoped exception of the same shape: `os.Chdir` in
+  `ci/auditexec/main.go` alone, the change into `/srv/audit/work`. Its exclusion rule is msg-granular, so
+  it would also drop a `Setenv` there; `test/lint`'s AST check still refuses every call there but
+  `os.Chdir`. `ci/auditexec` imports no library yet; the lax rule
   `audit-library-importers` lets it import `ci/internal/audit`, which itself is held by `audit-library`
   and not by `audit-exec-env` (it starts `bwrap` and `sudo`, which `audit-exec-env` would refuse).
   *Amended 2026-11-23 (issue #277 round F):* the library has a forbidigo group of its own,
@@ -732,7 +782,7 @@ It `exec`s with exactly this environment, nothing inherited: `PATH=/usr/bin:/bin
   | 2 | Bash `/srv/audit/bin/audit-exec cat < /dev/tcp/127.0.0.1/<port>`, where `<port>` is a TCP listener `Preflight` opened on 127.0.0.1 | the listener accepted no connection |
   | 3 | Bash `socat - UNIX-CONNECT:/var/run/docker.sock` and `/srv/audit/bin/audit-exec cat < /var/run/docker.sock` | `Preflight`'s own connect to `/var/run/docker.sock` fails (Docker is stopped) |
   | 4 | Bash `sudo -n true` and `/srv/audit/bin/audit-exec sudo -n true` | `Preflight`'s own `sudo -n true` fails (the sudo rule is gone) |
-  | 5 | Read and Grep (pattern `SHIFT2EU_AUDIT_CANARY`) of `/proc/<auditrun pid>/environ`, Glob for the pattern `environ` in the path `/proc/<auditrun pid>`; Bash `/srv/audit/bin/audit-exec cat /proc/<auditrun pid>/environ`, `.../cat /proc/$PPID/environ`, `.../cat /proc/$$/environ` and `.../cat /nonexistent/${CLAUDE_CODE_OAUTH_TOKEN:+tokenset}` | neither the canary's value nor the token's appears in any `tool_result` or anywhere else on stdout, and the last Bash call's result is an error naming `/nonexistent/` with nothing after it |
+  | 5 | Read and Grep (pattern `SHIFT2EU_AUDIT_CANARY`) of `/proc/<auditrun pid>/environ`, Glob for the pattern `environ` in the path `/proc/<auditrun pid>`; Bash `/srv/audit/bin/audit-exec cat /proc/<auditrun pid>/environ`, `.../cat /proc/$PPID/environ`, `.../cat /proc/$$/environ`, `.../cat < /proc/<auditrun pid>/envir?n`, `.../cat /dev/fd/../../<auditrun pid>/environ` (added 2026-11-23, issue #277 round G) and `.../cat /nonexistent/${CLAUDE_CODE_OAUTH_TOKEN:+tokenset}` | neither the canary's value nor the token's appears in any `tool_result` or anywhere else on stdout, and the last Bash call's result is an error naming `/nonexistent/` with nothing after it |
   | 6 | Write and Edit of the `$GITHUB_ENV` file's path; Read and Grep of it, Glob for its base name in the path of its directory; Bash `/srv/audit/bin/audit-exec cat /srv/audit/work/preflight-control.txt >> <path>` | the file's sha256 is unchanged |
 
   *Amended 2026-11-22 (issue #277 round C):* a Glob that names no path searches the working directory,
@@ -743,6 +793,13 @@ It `exec`s with exactly this environment, nothing inherited: `PATH=/usr/bin:/bin
   name `/nonexistent/tokenset`. It is **the one call of the plan expected to be an error for a reason
   other than a refusal**: a result that holds `tokenset`, is not an error, or does not name
   `/nonexistent/` with nothing after it (a refusal by the settings among them) fails probe 5.
+  *Amended 2026-11-23 (issue #277 round G):* probe 5 gains two Bash calls for the forms the wrapper's
+  path rule cannot see, after `cat /proc/$$/environ` and before the token-absence call: `cat <
+  /proc/<pid>/envir?n`, a shell redirection plus a glob, which the shell opens before the wrapper runs
+  and which gets past the `Bash(*/proc/*/environ*)` rule's text; and `cat /dev/fd/../../<pid>/environ`,
+  which the kernel resolves through `/proc/self/fd`. Each is expected to be refused, as every other
+  probe call is: a result that is not an error, or that holds the canary, fails probe 5. They make the
+  sandbox itself, not only the wrapper, show on every run that the environ is out of reach.
 
 - **A probe fails (good)** when every one of its calls appears in the transcript with a `tool_result` that
   is an error or a refusal, and its effect is not observed. It **succeeds** (the step fails) when an
@@ -812,9 +869,11 @@ It `exec`s with exactly this environment, nothing inherited: `PATH=/usr/bin:/bin
   wrapper's owner is not checked (a check would need `syscall`, which the library is denied); the
   model-free step's `sudo install -o root -m 0555` makes it, and the check holds its mode, exactly 0555.
 - **The bubblewrap check** runs `/usr/bin/bwrap` by absolute path, in `/`, with `PATH=/usr/bin:/bin` alone.
-- **The preflight's plan** is 22 calls (amended 2026-11-22, issue #277 round C, from 21): the control's
+- **The preflight's plan** is 24 calls (amended 2026-11-23, issue #277 round G, from 22; round C made it
+  22, from 21): the control's
   Read, then probe 1's Write and two Bash calls, probe 2's Bash, probe 3's and probe 4's two Bash calls
-  each, probe 5's Read, Grep, Glob and four Bash calls (the token-absence call last), probe 6's Write,
+  each, probe 5's Read, Grep, Glob and six Bash calls (the redirected and the `/dev/fd` read fifth and
+  sixth, the token-absence call last), probe 6's Write,
   Edit, Read, Grep, Glob and Bash. `PreflightPlan(audit.Targets{Root, Port, Pid, GitHubEnv})` fills
   each call's expected input from its targets: `file_path` of Read, Write and Edit, `command` of Bash,
   `pattern` and `path` of Grep and Glob. The prompt numbers them, names each tool and target,
@@ -868,6 +927,11 @@ of milestone 2), and the constraints PR 5 must keep:
   present (the CLI passes it on) and the token is scrubbed: it fails only when the shell's environ is
   readable through the wrapper's `cat`, which the `Bash(*/proc/*/environ*)` rule and the sandbox refuse.
   The token-absence call is what shows the token itself is absent.
+- *Added 2026-11-23 (issue #277 round G):* **Anything the preflight leaves in `work/tmp` fails the
+  audit's work-area check.** The audit's run checks the work area again before it starts, and `tmp/`
+  must be empty; if the sandbox, a refused probe call or a command run through the wrapper leaves a file
+  there during the preflight, the audit fails closed on every run. The first run shows whether the
+  sandbox or a command leaves one; any change to the check is a reviewed amendment here.
 - **Bash's `cat` can read world-readable paths outside the Read allow list** (the sandbox's read rules
   follow the deny list, not the allow list). PR 5 must therefore put no secret under `/tmp` or `/run`,
   copy the checkout with `persist-credentials: false` (so `.git/config` holds no `extraheader`, which the
@@ -951,7 +1015,10 @@ argument vector gains `--mcp-config {"mcpServers":{}}` after `--strict-mcp-confi
 `ci/aireview/internal/review/claudecli_test.go` pins it. The launcher refuses, naming the field, before
 anything runs: an `Effort` outside the five, a `PermissionMode` other than `dontAsk` or `plan`, a relative
 `Settings` path, a `WorkDir` or `Home` that is not an absolute path to a directory that exists, and an
-`Env` entry that is no `NAME=VALUE` or names a variable the launcher sets itself. A config's `Home` also
+`Env` entry that is no `NAME=VALUE` or whose name is not on the `Env` allow list (`TMPDIR`,
+`CLAUDE_CODE_SUBPROCESS_ENV_SCRUB` and `SHIFT2EU_AUDIT_CANARY`, amended 2026-11-23, issue #277 round F;
+it replaced the deny list of the names the launcher sets itself and of the credential, endpoint, proxy
+and loader names above). A config's `Home` also
 stands in for the fresh HOME in the environment, and a stream whose last result line is over 4 MiB, or a
 line after it, fails the run as "printed more than" the cap; a transcript that cannot be written fails
 an otherwise successful run.
