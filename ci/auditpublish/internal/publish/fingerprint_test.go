@@ -142,7 +142,11 @@ func TestKeyedFingerprintIsHMAC(t *testing.T) {
 
 	want := publish.Fingerprint("fp-" + hex.EncodeToString(mac.Sum(nil)[:6]))
 
-	got := publish.KeyedFingerprint(key, rule, file, sink)
+	got, err := publish.KeyedFingerprint(key, rule, file, sink)
+	if err != nil {
+		t.Fatalf("KeyedFingerprint(key, %q, %q, %q): %v", rule, file, sink, err)
+	}
+
 	if got != want {
 		t.Errorf("KeyedFingerprint(key, %q, %q, %q) = %q, want %q: fp- and the first six bytes of HMAC-SHA-256 with the key",
 			rule, file, sink, got, want)
@@ -153,7 +157,12 @@ func TestKeyedFingerprintIsHMAC(t *testing.T) {
 			rule, file, sink, got)
 	}
 
-	if again := publish.KeyedFingerprint(key, rule, file, sink); again != got {
+	again, err := publish.KeyedFingerprint(key, rule, file, sink)
+	if err != nil {
+		t.Fatalf("KeyedFingerprint(key, %q, %q, %q) a second time: %v", rule, file, sink, err)
+	}
+
+	if again != got {
 		t.Errorf("KeyedFingerprint with one key gave %q and then %q, want one fingerprint", got, again)
 	}
 
@@ -162,8 +171,38 @@ func TestKeyedFingerprintIsHMAC(t *testing.T) {
 		t.Fatalf("NewFingerprintKey over %d bytes: %v", len(testKeyBytes+"-and-more"), err)
 	}
 
-	if extended := publish.KeyedFingerprint(longer, rule, file, sink); extended == got {
+	extended, err := publish.KeyedFingerprint(longer, rule, file, sink)
+	if err != nil {
+		t.Fatalf("KeyedFingerprint with the longer key: %v", err)
+	}
+
+	if extended == got {
 		t.Errorf("a key with extra bytes on the end gives the same fingerprint %q, want another: the whole key is the HMAC's key", extended)
+	}
+}
+
+// TestKeyedFingerprintRefusesAKeyThatWasNeverSet pins that the keyed
+// fingerprint fails closed: the zero FingerprintKey is an HMAC under an empty
+// key, a fingerprint anyone can compute for a guessed rule, file and sink, so it
+// is refused as a configuration error and no fingerprint comes back.
+func TestKeyedFingerprintRefusesAKeyThatWasNeverSet(t *testing.T) {
+	t.Parallel()
+
+	got, err := publish.KeyedFingerprint(publish.FingerprintKey{}, "G304", "internal/cli/run.go", "os.Open")
+	if err == nil {
+		t.Fatalf("KeyedFingerprint with a key that was never set returned %q, want an error wrapping ErrConfig", got)
+	}
+
+	if !errors.Is(err, publish.ErrConfig) {
+		t.Errorf("KeyedFingerprint with a key that was never set: error %v does not wrap ErrConfig", err)
+	}
+
+	if got != "" {
+		t.Errorf("KeyedFingerprint with a key that was never set returned the fingerprint %q beside its error, want none", got)
+	}
+
+	if msg := err.Error(); msg == "" || strings.Contains(msg, testKeyBytes) {
+		t.Errorf("KeyedFingerprint with a key that was never set: error %q names a key's bytes, want a field and a rule only", msg)
 	}
 }
 
@@ -210,7 +249,9 @@ func TestNewFingerprintKey(t *testing.T) {
 				mac.Write(fingerprintInput("r", "f", "s"))
 				want := publish.Fingerprint("fp-" + hex.EncodeToString(mac.Sum(nil)[:6]))
 
-				if got := publish.KeyedFingerprint(key, "r", "f", "s"); got != want {
+				if got, err := publish.KeyedFingerprint(key, "r", "f", "s"); err != nil {
+					t.Errorf("KeyedFingerprint over a %d-byte secret: %v", tc.length, err)
+				} else if got != want {
 					t.Errorf("KeyedFingerprint over a %d-byte secret = %q, want %q: the key is the secret's bytes unchanged", tc.length, got, want)
 				}
 
