@@ -857,8 +857,11 @@ An agent cannot do these steps. Each one is safe to stop at; the workflow is rol
     and the summary line"). What to do for each, before the new run:
 
     - `artifacts: unexpected: see runbook step 11` (the artifact check of the model or the publish job):
-      the run held an artifact other than the job expects, or one name twice. Read the run's artifact
-      list (`gh api repos/<owner>/<repo>/actions/runs/<run_id>/artifacts --jq '[.artifacts[].name]'`);
+      exit 3 of the artifact check, not the core's outcome 3 (`result refused`, below). The check
+      refuses five things: an artifact the job does not expect, a name twice, an expected artifact
+      missing, an expired one, and a total above the listed count (a second page: more than 100
+      artifacts). Read the run's artifact list
+      (`gh api repos/<owner>/<repo>/actions/runs/<run_id>/artifacts --jq '[.artifacts[] | [.name, .expired]]'`);
       do not download an unexpected one. Check: the new run's list is exactly `checks-result` and
       `model-result`.
     - `result refused: see runbook` (exit 3): the model's result did not decrypt or broke the schema, or

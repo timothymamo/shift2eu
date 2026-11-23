@@ -887,8 +887,8 @@ standard packages, each entry ending in `$`, pinned by `test/architecture`:
   group `audit-publish-main-env`, its exception in `main.go` alone), reads the clock for the run's UTC
   date, prints the one summary line and exits. It starts no program.
 - `ci/auditpublish/internal/github`, the **GitHub side**, a library (`audit-publish-github`: `bytes`,
-  `context`, `encoding/json`, `errors`, `fmt`, `io`, `io/fs`, `net/url`, `os`, `os/exec`, `path`,
-  `path/filepath`, `regexp`, `slices`, `strconv`, `strings`, `time` and the core; `net` denied). It runs
+  `context`, `encoding/json`, `errors`, `fmt`, `io`, `os`, `os/exec`, `path/filepath`, `regexp`,
+  `slices`, `strconv`, `strings`, `time` (the deadlines below) and the core; `net` denied). It runs
   `gh` and gitleaks, reads the result and the merged reports, and reads no environment variable at all
   (the forbidigo group `audit-publish-github-env`, which holds for its tests too; its one exception is
   `os.Environ` in `fake_test.go`, where the fakes record the environment the library gave them). The
@@ -901,7 +901,8 @@ standard packages, each entry ending in `$`, pinned by `test/architecture`:
 **The subcommands.** `auditpublish artifacts -job model|publish -gh <path> -tmp <dir>` is the artifact
 check both downloading jobs run before they download: one listing of the run's artifacts, refused unless
 it is exactly `checks-result` (the model job) or exactly `checks-result` and `model-result` (the publish
-job), with no name twice, nothing expired and no second page; it prints `artifacts: as expected`,
+job): an artifact the job does not expect, a name twice, an expected artifact missing, an expired one or
+a `total_count` above the listed count (a second page) is refused; it prints `artifacts: as expected`,
 `artifacts: unexpected: see runbook step 11` (exit 3), or the core's GitHub and configuration lines
 (exits 8 and 9). `auditpublish publish -result <path> -reports <dir> -gh <path> -gitleaks <path> -tmp
 <dir>` is the publish job's program; its summary line and exit code are the core's `Outcome`. The job
@@ -916,7 +917,21 @@ for appending once, before any `gh` call; the runner makes the file, so the run 
 `GITHUB_STEP_SUMMARY` is unset or not absolute, or the file cannot be opened, written or closed, the run fails
 closed: a run that would have passed prints the configuration line instead and exits 9 (the summary is
 part of the step's configuration), and a run that already failed keeps its own line and code. Either way,
-standard output holds the run's one line.
+standard output holds the run's one line. One case is not exact: when the line was written but closing
+the file fails, a would-be pass exits 9 and prints the configuration line, while the summary may already
+hold the pass line (the write may have reached the file before the close reported the error). The code
+stays fail-closed on purpose: the exit code is what the workflow acts on, and the job fails; a reader of
+the summary who sees a pass line on a failed step reads the step's standard output, which holds the
+configuration line.
+
+**Deadlines and signals.** Each `gh` call and each gitleaks scan runs under a deadline of its own,
+`ClientConfig.CallTimeout` and `GitleaksConfig.Timeout`, 2 minutes when unset, through the context
+`exec.CommandContext` is given. A `gh` call whose context ended (its deadline or the run's cancellation)
+is `ErrGitHub` (outcome 8) whatever `gh` printed, a status line included: an answer read after the
+context ended is never trusted. A gitleaks scan whose context ended is a scan that did not run to its
+end, `publish.ErrScanRefused` (outcome 4), never "no leak". The entry point stops on SIGINT and SIGTERM (`signal.NotifyContext`), which cancels the
+run's context and so every running call. The fifth pull request sets `timeout-minutes` on every job of
+the workflow, so a hung step cannot hold the runner beyond the job's bound.
 
 **The environment.** The entry point reads `GH_TOKEN`, `GITHUB_SERVER_URL`, `GITHUB_REPOSITORY`,
 `GITHUB_RUN_ID`, `GITHUB_STEP_SUMMARY`, and for `publish` also `GITHUB_SHA` and `AUDIT_FINGERPRINT_KEY`,
@@ -950,7 +965,16 @@ read); the publish step gets the App's token.
   text or stderr reaches any output.
 - Pagination is explicit, `per_page=100` with a page number or the advisories' `after` cursor, and
   bounded at ten pages per listing; a listing over the bound fails closed and is never truncated. For
-  the issue listing the bound is the table itself: its row accepts pages 1 to 10 only.
+  the issue listing the bound is the table itself: its row accepts pages 1 to 10 only. The advisory
+  listing (row 14) pages by an opaque `after` cursor, which the table cannot count, so its row holds no
+  page bound: the ten-page bound lives in its caller (PR 4c), which stops and fails closed when the
+  tenth page's answer still carries a `Link` to a next one, pinned by a fake-`gh` test that answers an
+  eleventh `Link`.
+- Gitleaks honours inline allow comments: a line holding `gitleaks:allow` is skipped, so a model that
+  wrote that marker beside a token into a finding's text would hide it from the scan. The program
+  therefore refuses any text it is about to scan that contains `gitleaks:allow` in any letter case,
+  before gitleaks runs, as a scan that found a leak (`publish.ErrScanRefused`, outcome 4); nothing is
+  published. The core's own token patterns do not depend on gitleaks and still run.
 
 **The endpoint table.** `R` is `repos/<owner>/<name>` of `GITHUB_REPOSITORY`; the run ID, the date, the
 branch and the audited commit are this run's own:
@@ -973,6 +997,17 @@ branch and the audited commit are this run's own:
 | GET | `R/security-advisories?per_page=100[&after=<cursor>]` | none |
 | POST | `R/security-advisories` | only a summary, a description, a severity and the vulnerabilities: no `state`, `cve_id`, credits or collaborators |
 | PATCH | `R/security-advisories/<GHSA id>` | only a summary, a description, a severity and `state`, which is exactly `draft` |
+
+The advisory-create body (row 15) is checked element by element: every element of `vulnerabilities`
+holds only `package` (itself exactly `ecosystem` and `name`), `vulnerable_version_range`,
+`patched_versions` and `vulnerable_functions`, and `summary` and `description` are required, not only
+allowed.
+
+The table cannot bind the PATCH row (16) to the App's own drafts: a GHSA ID matches its pattern whoever
+wrote the advisory and whatever its state. The caller (PR 4c) holds that bound: it PATCHes only a GHSA
+that the same run's advisory listing showed with `state == draft` and authored by the audit App, never an
+ID from the model's result or a report, pinned by a fake-`gh` test in which the listing holds a published
+advisory and another author's draft and no PATCH reaches either.
 
 There is no PUT and no DELETE, and no endpoint that merges or reviews a pull request, requests a CVE,
 publishes an advisory, comments on or edits an issue, or touches a tag, a release or another branch.

@@ -1983,8 +1983,9 @@ linters:
         # "The publish program's GitHub side"), under the same internal
         # directory as the core. It runs gh and gitleaks by absolute path
         # (os/exec), each with an environment of its own, reads the result and
-        # the merged reports (os, io/fs, path/filepath) and reads GitHub's JSON
-        # (encoding/json); it opens no connection itself (net): gh does. The
+        # the merged reports (os, io, path/filepath) and reads GitHub's JSON
+        # (encoding/json); each gh call and gitleaks scan runs under a deadline
+        # (time); it opens no connection itself (net): gh does. The
         # forbidigo group audit-publish-github-env refuses every read of the
         # environment: its caller hands it what it needs.
         audit-publish-github:
@@ -1999,11 +2000,8 @@ linters:
             - errors$
             - fmt$
             - io$
-            - io/fs$
-            - net/url$
             - os$
             - os/exec$
-            - path$
             - path/filepath$
             - regexp$
             - slices$
