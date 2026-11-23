@@ -173,6 +173,15 @@ Arrows are imports. They point inwards only:
   standard packages, no `os` or `net`, and no package of the product). Its entry point
   `ci/auditpublish`, which reads, runs gitleaks and calls GitHub, comes with milestone 2's fourth pull
   request.
+  `ci/sitedeploy` is the site's deploy program (PRD #297 milestone 3), which the release runs from that
+  milestone's workflow pull request on, in the deploy job, on the bundle it attested. It reads its flags,
+  the release tag list and the deploy key's two variables and wires its library
+  `ci/sitedeploy/internal/deploy`, which speaks the S3 API of Scaleway Object Storage with SigV4 signing
+  written by hand: the rollback guard on the live page, the optional listing of the bucket (off by
+  default), then PUTs of the content-addressed assets, the manifest and the pages last, never a DELETE,
+  and neither key in any output (ADR 0042). Both are held to named standard packages (`site-deploy-main`, which runs
+  no program; `site-deploy-library`, no `os` and no package of the module), and the forbidigo group
+  `site-deploy-env` allows only the one `os.LookupEnv` its `main.go` passes on.
 - **`ci/sitecheck`** is the live site check (PRD #297 milestone 3, issue #346, ADR 0043), which the release's check and
   milestone 4's scheduled workflow run: it fetches every file of a release's manifest from the canonical
   host and judges the edge's digests, redirects, certificates, caching, HSTS against `site/records/`, the

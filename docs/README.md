@@ -84,6 +84,7 @@ supersedes it.
 - [0039. Create the site's Scaleway hosting with OpenTofu, its state in a locked bucket outside the site's project](adr/0039-create-the-sites-scaleway-hosting-with-opentofu.md)
 - [0040. Audit the repository and the latest release on a schedule, with a model that triages and a script that publishes](adr/0040-audit-the-repository-and-the-latest-release-on-a-schedule.md)
 - [0041. License the project under Apache-2.0 with a root NOTICE](adr/0041-license-the-project-under-apache-2-0-with-a-root-notice.md)
+- [0042. Host the site behind Edge Services and deploy it from the release with a bucket-scoped key](adr/0042-host-the-site-behind-edge-services-and-deploy-it-from-the-release-with-a-bucket-scoped-key.md)
 - [0043. Check the live site against the release's manifest, and hold the edge to a size budget](adr/0043-check-the-live-site-against-the-release-and-hold-the-edge-to-a-size-budget.md)
 
 ## Writing a page
