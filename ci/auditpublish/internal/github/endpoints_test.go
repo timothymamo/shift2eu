@@ -470,6 +470,64 @@ func TestAllowedChecksTheAdvisoryCreateBody(t *testing.T) {
 	}
 }
 
+// TestAllowedRefusesDataAfterTheBody pins decodeObject's stated guarantee on
+// raw bytes: a body is exactly one JSON object, so anything after its closing
+// brace is refused with ErrEndpointRefused even when the object itself is
+// inside the row's rule (raw bytes, because the other tables marshal a
+// document and so cannot carry a trailing token). A body that is the object
+// alone stays accepted.
+func TestAllowedRefusesDataAfterTheBody(t *testing.T) {
+	t.Parallel()
+
+	b := fixtureBodies()
+
+	for _, tc := range []struct {
+		name     string
+		method   string
+		endpoint string
+		body     []byte
+		accepted bool
+	}{
+		{
+			name: "the blob's body alone", method: "POST", endpoint: fixtureRepoPrefix + "/git/blobs",
+			body: []byte(b["blob"]), accepted: true,
+		},
+		{
+			name: "a word after the blob's body", method: "POST", endpoint: fixtureRepoPrefix + "/git/blobs",
+			body: []byte(b["blob"] + " junk"),
+		},
+		{
+			name: "a second closing brace after the blob's body", method: "POST", endpoint: fixtureRepoPrefix + "/git/blobs",
+			body: []byte(b["blob"] + "}"),
+		},
+		{
+			name: "a second value after the blob's body", method: "POST", endpoint: fixtureRepoPrefix + "/git/blobs",
+			body: []byte(b["blob"] + `{}`),
+		},
+		{
+			name: "the advisory update's body alone", method: "PATCH", endpoint: fixtureRepoPrefix + "/security-advisories/" + fixtureGHSA,
+			body: []byte(b["advisoryUpdate"]), accepted: true,
+		},
+		{
+			name: "a word after the advisory update's body", method: "PATCH", endpoint: fixtureRepoPrefix + "/security-advisories/" + fixtureGHSA,
+			body: []byte(b["advisoryUpdate"] + " junk"),
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := github.Allowed(testScope(), tc.method, tc.endpoint, tc.body)
+
+			switch {
+			case tc.accepted && err != nil:
+				t.Fatalf("Allowed(%s %s) = %v, want no error: the body is the object alone", tc.method, tc.endpoint, err)
+			case !tc.accepted && !errors.Is(err, github.ErrEndpointRefused):
+				t.Fatalf("Allowed(%s %s) = %v, want an error wrapping ErrEndpointRefused: the body holds more than one JSON object", tc.method, tc.endpoint, err)
+			}
+		})
+	}
+}
+
 // takeCases returns the named cases of cases, so that a table shared with
 // another test can lend it a few of its rows.
 func takeCases(cases []endpointCase, names ...string) []endpointCase {
