@@ -94,17 +94,19 @@ func readBundle(bundle fs.FS, version string) (Manifest, map[string][]byte, erro
 }
 
 // bundleKinds is what a complete bundle's manifest lists besides
-// manifest.json: each of the four pages and one asset of each kind.
+// manifest.json: each of the four pages, one asset of each kind and each of
+// the two legal texts.
 var bundleKinds = []string{
 	"index.html", "inventory.html", "privacy.html", "verify.html",
 	"style", "page", "wasm_exec", "module",
+	licenseName, noticeName,
 }
 
 // checkComplete holds the manifest of the bundle to deploy to exactly the
-// four pages and one asset of each kind (style, page script, wasm_exec,
-// module), so a subset of a bundle, or one with two of a kind, is never
-// deployed. The release manifests the guard and the listing read are not
-// held to it.
+// four pages, one asset of each kind (style, page script, wasm_exec, module),
+// LICENSE and NOTICE, so a subset of a bundle, or one with two of a kind, is
+// never deployed. The release manifests the guard and the listing read are
+// not held to it.
 func checkComplete(m Manifest) error {
 	counts := make(map[string]int, len(bundleKinds))
 
@@ -123,8 +125,8 @@ func checkComplete(m Manifest) error {
 		}
 	}
 
-	// ParseManifest admits no other name (isBundleFile), so the eight counts
-	// of one are the whole manifest.
+	// ParseManifest admits no other name (isBundleFile), so the counts of one
+	// for every kind of bundleKinds are the whole manifest.
 	return nil
 }
 

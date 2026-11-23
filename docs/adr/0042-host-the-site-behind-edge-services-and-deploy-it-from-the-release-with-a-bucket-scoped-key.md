@@ -161,8 +161,9 @@ Everything it reads from outside is bounded: a manifest at 1 MiB, a bundle file 
 at 64 MiB (memory bounds, not the site's size budgets), the live page at 1 MiB, an error answer at
 64 KiB (read only for its code), a listing page at 8 MiB and the listing at 1,000 pages.
 
-**The upload order:** every content-addressed asset first, then `manifest.json`, then the four pages,
-each group in sorted order. The first failed upload stops the run and fails the job: a failure before
+**The upload order:** every content-addressed asset first, then `manifest.json`, then the four pages
+with `LICENSE` and `NOTICE` (issue #495; names without a digest, like the pages'), each group in sorted
+order. The first failed upload stops the run and fails the job: a failure before
 the pages leaves every page as it was, and the earlier release's assets are never deleted, so the pages
 still served keep working (no file of an earlier release is ever deleted; pruning them is a proposed
 follow-up, by hand or with another key). `manifest.json` is uploaded before the pages, so between it
@@ -178,6 +179,7 @@ check.
 |---|---|---|---|
 | `*.html` (the four pages) | `text/html; charset=utf-8` | `public, max-age=300` | none |
 | `manifest.json` | `application/json` | `public, max-age=300` | none |
+| `LICENSE`, `NOTICE` (issue #495) | `text/plain; charset=utf-8` | `public, max-age=300` | none |
 | `style.<h>.css` | `text/css; charset=utf-8` | `public, max-age=31536000, immutable` | none |
 | `page.<h>.js`, `wasm_exec.<h>.js` | `text/javascript; charset=utf-8` | `public, max-age=31536000, immutable` | none |
 | `module.<h>.js` | `text/javascript; charset=utf-8` | `public, max-age=31536000, immutable` | `gzip` |

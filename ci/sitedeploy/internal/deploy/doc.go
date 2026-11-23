@@ -19,6 +19,8 @@
 //   - style.<h>.css, page.<h>.js, wasm_exec.<h>.js, module.<h>.js: the
 //     content-addressed assets, <h> the first 16 lowercase hexadecimal
 //     characters of the SHA-256 of the file's bytes;
+//   - LICENSE, NOTICE: the licence and the NOTICE attribution (issue #495),
+//     plain text under exactly these names, at the root;
 //   - manifest.json: {"version": "<v>", "files": [{"path": "<name>",
 //     "sha256": "<64 lowercase hex>"}, ...]}, every other file once, sorted by
 //     path (ParseManifest).
@@ -27,8 +29,8 @@
 // parse, its version is not Config.Version, a manifest path is not one of the
 // names above (so no "/", "..", "\", "%", control character, absolute or
 // empty path can become an object key), the manifest does not list exactly
-// the four pages and one asset of each kind (style, page script, wasm_exec,
-// module), an asset's <h> is not its digest's prefix, a listed file is
+// the four pages, one asset of each kind (style, page script, wasm_exec,
+// module), LICENSE and NOTICE, an asset's <h> is not its digest's prefix, a listed file is
 // missing or its SHA-256 differs, or the bundle holds a file the manifest
 // does not list. The earlier releases' manifests (Config.Manifests) are not
 // held to the complete set: the guard and the listing only read them.
@@ -65,8 +67,9 @@
 //     answer that does not parse, a listing out of these bounds) fails with
 //     ErrList, never ErrUpload: nothing was uploaded.
 //  4. Uploads with PUT only, path-style (<Endpoint>/<Bucket>/<key>): first
-//     every content-addressed asset, then manifest.json, then the four pages
-//     last, each in sorted order. The first failed upload stops the run with
+//     every content-addressed asset, then manifest.json, then the names
+//     that hold no digest last (LICENSE, NOTICE and the four pages), each
+//     group in sorted order. The first failed upload stops the run with
 //     an error, so a failure before the pages leaves every page as it was.
 //     Deploy never sends DELETE, nor any request but GET (live page, listing)
 //     and PUT (an object of the bundle) to the bucket. It uploads the bytes it
@@ -77,6 +80,7 @@
 //	file              Content-Type                    Cache-Control                        Content-Encoding
 //	*.html            text/html; charset=utf-8        public, max-age=300                  (none)
 //	manifest.json     application/json                public, max-age=300                  (none)
+//	LICENSE, NOTICE   text/plain; charset=utf-8       public, max-age=300                  (none)
 //	style.<h>.css     text/css; charset=utf-8         public, max-age=31536000, immutable  (none)
 //	page.<h>.js,
 //	wasm_exec.<h>.js  text/javascript; charset=utf-8  public, max-age=31536000, immutable  (none)

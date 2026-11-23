@@ -45,6 +45,13 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     -ldflags "-s -w -X github.com/timothymamo/shift2eu/internal/version.version=${VERSION} -X github.com/timothymamo/shift2eu/internal/version.commit=${COMMIT} -X github.com/timothymamo/shift2eu/internal/version.date=${DATE}" \
     -o /out/shift2eu ./cmd/shift2eu
 
+# The directory the final stage copies LICENSE and NOTICE into, created with mode 0755: BuildKit gives a
+# COPY's --chmod to the directories it creates as well, and a directory of mode 0444 cannot be entered by
+# the image's nonroot user (#495). A stage of its own, so the final stage copies only the binary from the
+# build stage.
+FROM build AS doc
+RUN mkdir -m 0755 /doc
+
 # distroless static: CA certificates (for the live sources' TLS calls), tzdata, /etc/passwd with the
 # nonroot user (65532), and no shell, package manager or Go toolchain.
 FROM gcr.io/distroless/static-debian13:nonroot@sha256:8ce6dd87e9823c5b48dcfb2c8604714ccb351ce59607327bcc4957448da279b5
@@ -61,7 +68,9 @@ LABEL org.opencontainers.image.title="shift2eu" \
 
 COPY --from=build /out/shift2eu /shift2eu
 # Apache-2.0 section 4: every redistribution carries the licence and the NOTICE attribution (#495).
-COPY LICENSE NOTICE /usr/share/doc/shift2eu/
+# The directory first, from the build stage with mode 0755, then the files read-only for every builder.
+COPY --from=doc /doc/ /usr/share/doc/shift2eu/
+COPY --chmod=0444 LICENSE NOTICE /usr/share/doc/shift2eu/
 
 # Mount the inventory here, as docs/guide/docker.md does (one command):
 #   docker run --rm --read-only --network none --user "$(id -u):$(id -g)" --mount type=bind,src="$PWD/inventory.json",dst=/work/inventory.json,readonly shift2eu assess --inventory inventory.json --target scaleway

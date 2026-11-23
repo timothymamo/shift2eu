@@ -21,9 +21,9 @@ docker run --rm --read-only --network none --user "$(id -u):$(id -g)" \
 ```
 
 The image holds the binary and, under `/usr/share/doc/shift2eu/`, the project's `LICENSE` and `NOTICE`,
-not the sample inventories: to try it without an inventory of your
-own, mount one of the samples under `examples/`, from a release archive
-([Install](install.md#the-release-archives)) or a clone of the repository, as [Try it](try-it.md) does.
+not the sample inventories: to try it without an inventory of your own, mount one of the samples under
+`examples/`, from a release archive ([Install](install.md#the-release-archives)) or a clone of the
+repository, as [Try it](try-it.md) does.
 
 ## Mounts, users and reports
 

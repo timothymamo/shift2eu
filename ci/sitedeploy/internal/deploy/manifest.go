@@ -18,12 +18,24 @@ const ManifestName = "manifest.json"
 const maxManifestBytes = 1 << 20
 
 // The names a bundle may hold besides manifest.json (doc.go, "The bundle it
-// consumes"): the four pages and the four content-addressed assets. Nothing
-// else can become an object key.
+// consumes"): the four pages, the four content-addressed assets and the two
+// legal texts. Nothing else can become an object key.
 var (
 	pageName  = regexp.MustCompile(`^(?:index|inventory|privacy|verify)\.html$`)
 	assetName = regexp.MustCompile(`^(?:style\.([0-9a-f]{16})\.css|(?:page|wasm_exec|module)\.([0-9a-f]{16})\.js)$`)
 )
+
+// The legal texts at the bundle's root: the licence and the NOTICE
+// attribution, plain text under fixed names (issue #495).
+const (
+	licenseName = "LICENSE"
+	noticeName  = "NOTICE"
+)
+
+// isLegalText reports whether name is exactly one of the two legal texts.
+func isLegalText(name string) bool {
+	return name == licenseName || name == noticeName
+}
 
 // tagPattern is a release tag, vMAJOR.MINOR.PATCH, each part at most nine
 // digits with no leading zero, so it always fits an int.
@@ -314,11 +326,11 @@ func checkVersionText(v string) error {
 // isBundleFile reports whether name is one of the names a bundle may hold
 // besides manifest.json.
 func isBundleFile(name string) bool {
-	return pageName.MatchString(name) || assetName.MatchString(name)
+	return pageName.MatchString(name) || assetName.MatchString(name) || isLegalText(name)
 }
 
 // assetDigestPrefix returns the <h> of a content-addressed asset's name, and
-// false for a page.
+// false for a page or a legal text.
 func assetDigestPrefix(name string) (string, bool) {
 	m := assetName.FindStringSubmatch(name)
 	if m == nil {
