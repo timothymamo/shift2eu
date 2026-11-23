@@ -125,6 +125,25 @@ func newReadOnlyClient(t *testing.T, ghPath string, scope github.Scope) *github.
 	})
 }
 
+// newTestArtifactsClient returns the client cfg describes, built through
+// NewArtifactsClient, and closes it at the end of the test.
+func newTestArtifactsClient(t *testing.T, cfg github.ClientConfig) *github.Client {
+	t.Helper()
+
+	c, err := github.NewArtifactsClient(cfg)
+	if err != nil {
+		t.Fatalf("NewArtifactsClient(%+v): %v", cfg, err)
+	}
+
+	t.Cleanup(func() {
+		if err := c.Close(); err != nil {
+			t.Errorf("Close(): %v", err)
+		}
+	})
+
+	return c
+}
+
 // newArtifactClient returns a client for ghPath with the artifact check's
 // scope, a fresh token and a fresh temporary directory.
 func newArtifactClient(t *testing.T, ghPath string) *github.Client {

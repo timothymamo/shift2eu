@@ -414,6 +414,100 @@ func TestReadOnlyClientStillReadsAndItsWritesReachGHAgainWithoutTheFlag(t *testi
 	})
 }
 
+// TestNewArtifactsClientIsReadOnlyByConstruction pins the artifacts
+// subcommand's constructor (audit finding 2): NewArtifactsClient builds a
+// client that writes nothing even when its config says ReadOnly false, so the
+// read-only client is no longer the caller's one-line promise. Each write row
+// of the table is one case, on a body the table accepts for a publish scope, so
+// the refusal is the constructor's alone: the table allows the very request.
+func TestNewArtifactsClientIsReadOnlyByConstruction(t *testing.T) {
+	t.Parallel()
+
+	t.Run("every write row of the table is refused", func(t *testing.T) {
+		t.Parallel()
+
+		for _, tc := range writeEndpoints() {
+			t.Run(tc.name, func(t *testing.T) {
+				t.Parallel()
+
+				if err := github.Allowed(testScope(), tc.method, tc.endpoint, bodyBytes(tc.body)); err != nil {
+					t.Fatalf("Allowed(%s %s) = %v, want no error: the case's request is one the table accepts", tc.method, tc.endpoint, err)
+				}
+
+				fake := newFakeGH(t)
+				client := newTestArtifactsClient(t, github.ClientConfig{
+					GHPath:  fake.Path,
+					Token:   github.NewToken(fixtureToken(t)),
+					TempDir: t.TempDir(),
+					Scope:   testScope(),
+					// The flag the constructor must not depend on.
+					ReadOnly: false,
+				})
+
+				_, err := client.Call(t.Context(), github.Request{Method: tc.method, Endpoint: tc.endpoint, Body: requestBody(t, tc.body)})
+				if !errors.Is(err, github.ErrEndpointRefused) {
+					t.Fatalf("Call(%s %s) on a NewArtifactsClient client = %v, want an error wrapping ErrEndpointRefused", tc.method, tc.endpoint, err)
+				}
+
+				if calls := fake.Calls(t); len(calls) != 0 {
+					t.Errorf("the refused call ran gh %d time(s), want 0: %+v", len(calls), calls)
+				}
+			})
+		}
+	})
+
+	t.Run("the run's artifact listing still runs", func(t *testing.T) {
+		t.Parallel()
+
+		fake := newFakeGH(t, artifactsRoute(1, artifactEntry{name: github.ArtifactChecksResult}))
+		client := newTestArtifactsClient(t, github.ClientConfig{
+			GHPath:   fake.Path,
+			Token:    github.NewToken(fixtureToken(t)),
+			TempDir:  t.TempDir(),
+			Scope:    artifactScope(),
+			ReadOnly: false,
+		})
+
+		if err := github.CheckArtifacts(t.Context(), client, github.JobModel); err != nil {
+			t.Fatalf("CheckArtifacts on a NewArtifactsClient client = %v, want no error", err)
+		}
+
+		if calls := fake.Calls(t); len(calls) != 1 || calls[0].Endpoint != fixtureArtifactsEndpoint {
+			t.Errorf("the check made %+v, want one call to %s", calls, fixtureArtifactsEndpoint)
+		}
+	})
+
+	t.Run("it refuses the configs NewClient refuses", func(t *testing.T) {
+		t.Parallel()
+
+		for _, tc := range []struct {
+			name string
+			// refuse breaks one value of a config that is otherwise valid.
+			refuse func(*github.ClientConfig)
+		}{
+			{name: "an empty token", refuse: func(c *github.ClientConfig) { c.Token = github.NewToken("") }},
+			{name: "a relative gh path", refuse: func(c *github.ClientConfig) { c.GHPath = "bin/gh" }},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				t.Parallel()
+
+				fake := newFakeGH(t)
+				cfg := github.ClientConfig{
+					GHPath:  fake.Path,
+					Token:   github.NewToken(fixtureToken(t)),
+					TempDir: t.TempDir(),
+					Scope:   artifactScope(),
+				}
+				tc.refuse(&cfg)
+
+				if _, err := github.NewArtifactsClient(cfg); !errors.Is(err, publish.ErrConfig) {
+					t.Errorf("NewArtifactsClient with %s = %v, want an error wrapping publish.ErrConfig", tc.name, err)
+				}
+			})
+		}
+	})
+}
+
 // TestCloseRemovesTheTemporaryDirectory pins that a client leaves nothing
 // behind: NewClient makes its fresh directory under TempDir, and Close removes
 // it.
