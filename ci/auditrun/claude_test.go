@@ -184,8 +184,8 @@ func packClaude(t *testing.T, dir, script string) (string, string) {
 
 // writeAuditTree lays the audit directory out under root as the model-free step
 // leaves it: every directory of the ADR's table, the wrapper at bin/audit-exec,
-// and a checkout copy and checks' results with every write bit removed, their own
-// git configuration included.
+// and a checkout copy, checks' results and bin/ with every write bit removed,
+// the checkout's own git configuration included.
 func writeAuditTree(t *testing.T, root string) {
 	t.Helper()
 
@@ -211,9 +211,12 @@ func writeAuditTree(t *testing.T, root string) {
 	// The checkout copy and the checks' results are read-only to the model,
 	// their contents too: the model-free step removes every write bit, the
 	// checkout's own .git included, and CheckLayout holds the whole tree to it.
+	// bin/ is read-only as well, and holds the wrapper alone: the wrapper is
+	// written above, before the write bit goes.
 	for _, tree := range []string{
 		filepath.Join(root, "srv", "audit", "checkout"),
 		filepath.Join(root, "srv", "audit", "checks"),
+		filepath.Join(root, "srv", "audit", "bin"),
 	} {
 		makeReadOnly(t, tree)
 	}
