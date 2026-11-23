@@ -20,7 +20,16 @@ import (
 // linters.settings.forbidigo). The tags of the two composition-root groups,
 // compositionRootTags, are pinned by what their rules select instead of by the
 // text of a path regexp, in TestCompositionRootExclusions.
-var forbidigoTags = []string{"cloud-read-only", "domain-is-pure", testutilNoEnvTag, cliNoEnvOrProcessTag, inventoryFileNoEnvTag, e2eNoEnvTag, testsNoProcessStateTag, aiReviewerEnvTag, aiReviewerOneProcessTag, siteBuilderEnvTag, claudeCodePinEnvTag, auditExecEnvTag, auditRunEnvTag, auditLibraryEnvTag}
+var forbidigoTags = []string{"cloud-read-only", "domain-is-pure", testutilNoEnvTag, cliNoEnvOrProcessTag, inventoryFileNoEnvTag, e2eNoEnvTag, testsNoProcessStateTag, aiReviewerEnvTag, aiReviewerOneProcessTag, siteBuilderEnvTag, claudeCodePinEnvTag, auditExecEnvTag, auditRunEnvTag, auditLibraryEnvTag, siteDeployEnvTag}
+
+// siteDeployEnvTag is the tag of the site deploy program's environment group
+// (PRD #297 milestone 3), and siteDeployLookupEnvMsg the msg of its one entry
+// with an exception: the os.LookupEnv ci/sitedeploy/main.go passes to
+// environment.
+const (
+	siteDeployEnvTag       = "site-deploy-env"
+	siteDeployLookupEnvMsg = "site-deploy-env: os.LookupEnv is used in ci/sitedeploy/main.go only, passed to environment (PRD #297); a test passes a lookup function of its own"
+)
 
 // auditLibraryEnvTag is the tag of the audit library's environment group (issue
 // #277, ADR 0040's model-job amendment), which refuses the environment reads, the home,
@@ -226,6 +235,14 @@ func TestForbidigoExclusionsDropOneGroup(t *testing.T) {
 		auditRunEnvTag: {
 			{"path-except": `^ci/auditrun/`, "text": groupText(auditRunEnvTag)},
 			{"path": `^ci/auditrun/main\.go$`, "text": narrowedTextOf(auditRunLookupEnvMsg)},
+		},
+		// The site deploy program (PRD #297 milestone 3): one rule for every
+		// path outside ci/sitedeploy/, so the group holds there and nowhere
+		// else, _test.go files included, and the one exception, the
+		// os.LookupEnv entry's msg alone, in ci/sitedeploy/main.go alone.
+		siteDeployEnvTag: {
+			{"path-except": `^ci/sitedeploy/`, "text": groupText(siteDeployEnvTag)},
+			{"path": `^ci/sitedeploy/main\.go$`, "text": narrowedTextOf(siteDeployLookupEnvMsg)},
 		},
 		// The audit's library (issue #277, ADR 0040's model-job amendment): one rule for
 		// every path outside ci/internal/audit/, so the group holds there and

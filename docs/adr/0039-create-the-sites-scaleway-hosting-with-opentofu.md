@@ -5,7 +5,8 @@
 
 Part of [PRD #297](../../prds/297-web-assessment-site.md) milestone 3, issue #422. It records how the
 hosting is created; the deploy job, the attestation and the live check get milestone 3's hosting ADR
-(amended in milestone 4), which this one does not replace.
+([ADR 0042](0042-host-the-site-behind-edge-services-and-deploy-it-from-the-release-with-a-bucket-scoped-key.md),
+amended in milestone 4), which this one does not replace.
 
 ## Context
 
@@ -177,7 +178,7 @@ only through the pipeline; anything else sets `public_read = true` in `terraform
 again, decision 11's fallback. The default is `false`, not `true`, so that the least exposure is what an
 apply gets unless the maintainer has seen it fail, and a missing line in `terraform.tfvars` fails
 visibly (the site does not load) rather than silently public. The backend uses website mode, so `/`
-answers `index.html`. R5's answer is recorded in milestone 3's hosting ADR (open point 8).
+answers `index.html`. R5's answer is recorded in milestone 3's hosting ADR, ADR 0042 (open point 8).
 
 **Edge Services lives in the site's project.** The deploy key's policy is scoped to that project, but its
 two permission sets hold no Edge Services permission, so the pipeline being there gives it nothing; one
@@ -254,7 +255,7 @@ With `public_read` only, also by:
   `s3.<region>.scw.cloud/<bucket>/<key>`), object by object, without the index document.
 
 R5 asks every one of them, over HTTPS and plain HTTP, and the answers are recorded in milestone 3's
-hosting ADR: under the private rule the last two must refuse the probe object.
+hosting ADR, ADR 0042: under the private rule the last two must refuse the probe object.
 
 ### How the PRD's *Runbook* changes
 
@@ -311,7 +312,7 @@ CNAME first, then `tofu destroy`, which keeps the bucket while it holds objects 
    against `scw <command> --help` of the installed version on first use.
 8. **`public_read`:** off by default (above). If R5's probe through the pipeline answers 200, keep it off;
    otherwise set it true and apply again. Record the answer, and whether the bucket's own endpoints
-   refuse the probe while it is off, in milestone 3's hosting ADR. Recommended: off if R5 allows it.
+   refuse the probe while it is off, in milestone 3's hosting ADR, ADR 0042. Recommended: off if R5 allows it.
 9. **AWS CLI checksums:** R0 sets `AWS_REQUEST_CHECKSUM_CALCULATION` and
    `AWS_RESPONSE_CHECKSUM_VALIDATION` to `when_required`, so AWS CLI v2 sends and checks a checksum only
    where the S3 API requires one, as before its 2.23 release
