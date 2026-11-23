@@ -66,7 +66,7 @@ func TestGitHubRelease(t *testing.T) {
 		},
 		{
 			name:       "a comment after the value is accepted",
-			goreleaser: buildFlow + "\nrelease:\n  draft: true\n  prerelease: auto # rc tags\n  replace_existing_draft: true # a failed run's draft is replaced\n",
+			goreleaser: buildFlow + "\nrelease:\n  draft: true\n  prerelease: auto # rc tags\n  replace_existing_draft: true # a failed run's draft is replaced\n  extra_files:\n    - glob: ./bin/shift2eu-site_*.tar.gz # the site's bundle\n",
 		},
 		{
 			// A re-run of a failed goreleaser job leaves the draft the failed
