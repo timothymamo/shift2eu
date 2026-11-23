@@ -1197,13 +1197,13 @@ var pinnedDepguardRules = []check.DepguardRule{
 	},
 	{
 		// The Claude Code CLI launcher the AI reviewer shares with the scheduled
-		// audit (issue #277, ADR 0040's amendment): named standard packages only,
+		// audit (issue #277, ADR 0040's model-job amendment): named standard packages only,
 		// no syscall or unsafe and no package of the module. os and os/exec are
 		// its one CLI run: the system prompt file, the run's temporary
 		// directories and `claude -p` with an environment of its own. The
 		// forbidigo groups ai-reviewer-env and ai-reviewer-one-process hold here
 		// as in the reviewer's library. io is the Transcript writer a caller
-		// hands it (ADR 0040's amendment).
+		// hands it (ADR 0040's model-job amendment).
 		Name:     "claude-code-launcher",
 		ListMode: "strict",
 		Files: []string{
@@ -1226,7 +1226,7 @@ var pinnedDepguardRules = []check.DepguardRule{
 	{
 		// Who may import the shared launcher (issue #277): the AI reviewer's
 		// library, the scheduled audit's library and the launcher's own tests
-		// (ADR 0040's amendment).
+		// (ADR 0040's model-job amendment).
 		Name:     "claude-code-launcher-importers",
 		ListMode: "lax",
 		Files: []string{
@@ -1239,7 +1239,7 @@ var pinnedDepguardRules = []check.DepguardRule{
 		Deny:  []string{"github.com/timothymamo/shift2eu/ci/internal/claudecode"},
 	},
 	{
-		// The scheduled audit's library (issue #277, ADR 0040's amendment):
+		// The scheduled audit's library (issue #277, ADR 0040's model-job amendment):
 		// named standard packages, each exact, and the shared launcher; no
 		// syscall, unsafe, plugin or cgo. The checksum step's archive, gzip
 		// and crypto packages; os, os/exec and net for the steps' own checks.
@@ -1280,7 +1280,7 @@ var pinnedDepguardRules = []check.DepguardRule{
 		},
 	},
 	{
-		// Who may import the audit's library (ADR 0040's amendment): the
+		// Who may import the audit's library (ADR 0040's model-job amendment): the
 		// launcher ci/auditrun, the wrapper ci/auditexec and the library's own
 		// tests.
 		Name:     "audit-library-importers",
@@ -1295,7 +1295,7 @@ var pinnedDepguardRules = []check.DepguardRule{
 		Deny:  []string{"github.com/timothymamo/shift2eu/ci/internal/audit"},
 	},
 	{
-		// The audit's launcher (issue #277, ADR 0040's amendment): a main
+		// The audit's launcher (issue #277, ADR 0040's model-job amendment): a main
 		// package no root can import, held to the standard packages it
 		// imports, each exact, and the audit's library. It starts no program
 		// and opens no connection itself.
@@ -1413,8 +1413,39 @@ var pinnedDepguardRules = []check.DepguardRule{
 		Deny: []string{"os", "net"},
 	},
 	{
+		// The audit's publish core (PRD #175 milestone 2, ADR 0040): it
+		// validates, places, fingerprints, escapes, renders and scans the bytes
+		// its entry point passes and does no I/O of its own, so it is held to
+		// pure standard packages, without os, net, syscall or unsafe. Go's
+		// internal rule keeps it out of reach of cmd/ and internal/.
+		Name:     "audit-publish-library",
+		ListMode: "strict",
+		Files: []string{
+			"**/ci/auditpublish/internal/**",
+			"!$test",
+		},
+		Allow: []string{
+			"bytes$",
+			"crypto/hmac$",
+			"crypto/sha256$",
+			"encoding/base64$",
+			"encoding/hex$",
+			"errors$",
+			"fmt$",
+			"math$",
+			"regexp$",
+			"slices$",
+			"strconv$",
+			"strings$",
+			"time$",
+			"unicode$",
+			"unicode/utf8$",
+		},
+		Deny: []string{"os", "net"},
+	},
+	{
 		// The scheduled audit's command wrapper (issue #277, ADR 0040's
-		// amendment), /srv/audit/bin/audit-exec: a main package no root can
+		// model-job amendment), /srv/audit/bin/audit-exec: a main package no root can
 		// import, held to the standard packages it imports, each exact. syscall
 		// is its one syscall.Exec of a listed command; it starts no child
 		// process and opens no connection.

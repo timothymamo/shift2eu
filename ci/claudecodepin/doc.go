@@ -5,7 +5,7 @@
 //	go run ./ci/claudecodepin [-pin .github/claude-code.yaml]
 //
 // .github/claude-code.yaml is the one pin of the CLI, which every workflow
-// that installs it reads (ADR 0040's milestone-2 amendment, issue #277).
+// that installs it reads (ADR 0040's model-job amendment, issue #277).
 // Renovate bumps its version: line but cannot bump its integrity: line, and a
 // bump's own AI review runs main's copy of the workflow, so a stale integrity
 // would show only after the merge. The workflow

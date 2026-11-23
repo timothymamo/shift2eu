@@ -1,4 +1,4 @@
-// Pins the two steps that run the model (ADR 0040's milestone-2 amendment,
+// Pins the two steps that run the model (ADR 0040's model-job amendment,
 // issue #277, "The sandbox preflight" and "The audit's programs"): the preflight,
 // which writes the control's nonce, opens the listener, has the CLI make the
 // plan's calls, observes the effects itself and judges the transcript, and the

@@ -73,7 +73,7 @@ jobs:
       # runner image ships /etc/claude-code, whose managed policy the CLI would apply under every flag.
       # The meta package @anthropic-ai/claude-code only picks this package in a postinstall script, so
       # it is skipped. The version and the integrity live in one committed file, .github/claude-code.yaml
-      # (ADR 0040's milestone-2 amendment, issue #277), which every workflow that installs the CLI reads
+      # (ADR 0040's model-job amendment, issue #277), which every workflow that installs the CLI reads
       # and where Renovate's generic manager reads the version under its renovate comment. Here it is
       # main's copy only because this job's checkout names no ref: under pull_request_target, a checkout
       # without ref checks out the base, never the pull request's head, so a pull request cannot pick the

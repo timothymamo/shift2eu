@@ -33,7 +33,7 @@ const claudeCodePinCancel = "${{ github.event_name == 'pull_request' }}"
 // workflow, the check's code and go.mod, whose go line names the toolchain the
 // check is built with. A push to main filters on them; a pull request runs the
 // job on every change, and the changes step decides whether the pin's paths are
-// among them (issue #452, ADR 0040's milestone-2 amendment, issue #277).
+// among them (issue #452, ADR 0040's model-job amendment, issue #277).
 var claudeCodePinPaths = []string{
 	claudeCodePinFile,
 	aiReviewWorkflowPath,
@@ -1171,7 +1171,7 @@ func claudeCodePinNoSameNamedJob(t *testing.T, root, path string) {
 //
 //   - .github/claude-code.yaml, the one pin file, where the version under its #
 //     renovate: comment and the integrity beside it live (ADR 0040's
-//     milestone-2 amendment, issue #277).
+//     model-job amendment, issue #277).
 //   - .github/workflows/ai-review.yml, the reviewer's workflow, which installs
 //     the CLI from that file: it names the installer, never a pin of its own.
 //   - .github/scripts/install-claude-code.sh, the installer itself: its header
@@ -1214,7 +1214,7 @@ var claudeCodePinSearchedDirs = []string{".github/workflows", ".github/scripts",
 // pin file and the check's workflow. ci/claudecodepin reads the version and the
 // integrity out of that one file alone, so a second install with a pin of its
 // own would be checked by nothing, and would run whatever its pin says (issue
-// #452, ADR 0040's milestone-2 amendment, issue #277).
+// #452, ADR 0040's model-job amendment, issue #277).
 func TestClaudeCodePinLivesOnlyInThePinFile(t *testing.T) {
 	t.Parallel()
 

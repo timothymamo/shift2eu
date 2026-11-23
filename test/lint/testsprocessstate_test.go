@@ -28,7 +28,7 @@ import (
 // exception is that one file: every other file of the library, its tests
 // included, is held to the group. The fourth exclusion is no file's blanket drop
 // but one call: ci/auditexec/main.go passes os.Chdir to run (issue #277, round G,
-// ADR 0040's amendment), which changes into the audit's fixed work directory
+// ADR 0040's model-job amendment), which changes into the audit's fixed work directory
 // before it execs a line, so processStateCallException allows that one expression
 // in that one file and nothing else, there or anywhere else. Before the audit's
 // finding S1 the group was scoped to five areas, so an adapter's or the domain's
@@ -296,7 +296,7 @@ func processStateScope(rel string) bool {
 }
 
 // auditExecChdirFile, auditExecChdirExpr and auditExecChdirCalls are the group's
-// one call-level exception (issue #277, round G, ADR 0040's amendment).
+// one call-level exception (issue #277, round G, ADR 0040's model-job amendment).
 // ci/auditexec/main.go passes os.Chdir to run, which changes into the audit's
 // fixed work directory before it execs a line, so the wrapper's work happens
 // there whatever directory the caller was in. The group's Chdir entry refuses

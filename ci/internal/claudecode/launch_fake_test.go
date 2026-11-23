@@ -1,5 +1,5 @@
 // Pins what the launcher does with a config beyond its arguments and its
-// environment (ADR 0040's milestone-2 amendment, issue #277): the CLI runs in
+// environment (ADR 0040's model-job amendment, issue #277): the CLI runs in
 // the working directory and with the HOME the config names, the system prompt
 // reaches it in the file the flag names, and a transcript gets every byte the
 // CLI printed on stdout while the answer is read from the last result element.

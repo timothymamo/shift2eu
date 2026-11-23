@@ -1,6 +1,6 @@
 // Shared fixtures of the audit library's tests: the invented secrets a run
 // must never print, the inputs one run is given, and a file writer. ADR 0040's
-// milestone-2 amendment (issue #277) is what the tests beside the audit library
+// model-job amendment (issue #277) is what the tests beside the audit library
 // pin; nothing here runs a model, a sandbox or a command.
 package audit_test
 

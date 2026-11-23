@@ -1,5 +1,5 @@
 // The shared Claude Code launcher's stand-in for TestAIReviewerOneProcessProbe
-// (issue #277, ADR 0040's amendment). The launcher the AI reviewer asks
+// (issue #277, ADR 0040's model-job amendment). The launcher the AI reviewer asks
 // through starts the Claude Code CLI once, with a context, writes the system
 // prompt to a file of a temporary directory it makes and removes, and reads no
 // file: its callers hand it the CLI's path, the token, the model and the tools.

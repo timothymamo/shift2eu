@@ -421,7 +421,7 @@ func TestAIReviewWorkflowHoldsTheReviewersSecurityProperties(t *testing.T) {
 
 		// The version and the integrity live in one committed file, which
 		// Renovate bumps and both workflows' install steps read (ADR 0040's
-		// milestone-2 amendment, issue #277): the workflow holds neither, so
+		// model-job amendment, issue #277): the workflow holds neither, so
 		// there is no second pin that could drift from the file's. The install
 		// step's env: carries the pin step's outputs, whole; a value the
 		// workflow wrote there itself is a pin of its own, and a literal under

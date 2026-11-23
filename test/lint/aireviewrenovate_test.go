@@ -39,7 +39,7 @@ var claudeCodePinVersion = regexp.MustCompile(`(?m)^version:\s*(\d+\.\d+\.\d+)\s
 // pins. No other customManager reads the pin file, and no manager reads the AI
 // reviewer's workflow any more: the version and the integrity moved out of it,
 // so a bump moves one file and both workflows' install steps read that file
-// (ADR 0040's milestone-2 amendment, issue #277).
+// (ADR 0040's model-job amendment, issue #277).
 func TestClaudeCodePinIsFoundOnce(t *testing.T) {
 	t.Parallel()
 

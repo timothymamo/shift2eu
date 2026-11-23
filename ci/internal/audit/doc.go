@@ -1,5 +1,5 @@
 // Package audit is the logic of the scheduled security audit's model step
-// (ADR 0040's milestone-2 amendment, issue #277, PRD #175 milestone 2): the six
+// (ADR 0040's model-job amendment, issue #277, PRD #175 milestone 2): the six
 // steps ci/auditrun takes, in order, each failing the run before the next.
 //
 //  1. CheckManagedSettings refuses a root holding a Claude Code managed-settings

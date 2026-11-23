@@ -1,5 +1,5 @@
 // Command auditrun is the launcher the scheduled security audit's model step
-// runs (ADR 0040's milestone-2 amendment, issue #277, PRD #175 milestone 2):
+// runs (ADR 0040's model-job amendment, issue #277, PRD #175 milestone 2):
 //
 //	auditrun -claude-tarball <path> -claude-integrity <sha512-...>
 //

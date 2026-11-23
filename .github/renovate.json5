@@ -200,7 +200,7 @@
       description: 'Versions annotated with "# renovate: datasource=... depName=..." on the line above',
       customType: 'regex',
       // The workflows are named one by one: ai-review.yml holds no pin of its own since the Claude
-      // Code CLI's version and integrity moved to .github/claude-code.yaml (ADR 0040's milestone-2
+      // Code CLI's version and integrity moved to .github/claude-code.yaml (ADR 0040's model-job
       // amendment, issue #277), which this manager reads instead, so no bump moves a second text. A new
       // workflow with an annotated pin joins this list.
       managerFilePatterns: [

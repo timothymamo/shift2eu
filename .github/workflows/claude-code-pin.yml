@@ -1,7 +1,7 @@
 name: Claude Code pin
 
 # claude-code-pin (issue #276, ADR 0033): .github/claude-code.yaml, the one pin file every workflow that
-# installs the Claude Code CLI reads (ADR 0040's milestone-2 amendment, issue #277), pins it by its
+# installs the Claude Code CLI reads (ADR 0040's model-job amendment, issue #277), pins it by its
 # version: line, which Renovate bumps, and its integrity: line, the npm integrity of that version's
 # tarball, which Renovate cannot bump. A bump's own AI review runs main's copy of that file
 # (pull_request_target), so a stale integrity would show only after the merge, as every review failing at

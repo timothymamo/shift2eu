@@ -1,5 +1,5 @@
 // Pins the launch the shared launcher gives the Claude Code CLI for the fields
-// ADR 0040's milestone-2 amendment adds beside the model and the tools (issue
+// ADR 0040's model-job amendment adds beside the model and the tools (issue
 // #277): the effort, the settings file, the permission mode, the appended
 // system prompt, safe mode left out, the working directory, HOME, the extra
 // environment entries, the CLI's PATH and the streaming transcript. The
@@ -22,15 +22,15 @@ import (
 )
 
 const (
-	// auditModel is the model ADR 0040's amendment gives the audit's launch: a
+	// auditModel is the model ADR 0040's model-job amendment gives the audit's launch: a
 	// model name the launcher accepts, and none of the reviewer's.
 	auditModel = "claude-fable-5-2"
 
-	// auditTools are the built-in tools ADR 0040's amendment gives the audit:
+	// auditTools are the built-in tools ADR 0040's model-job amendment gives the audit:
 	// no WebFetch, WebSearch, Task or any other.
 	auditTools = "Read,Grep,Glob,Write,Edit,Bash"
 
-	// auditSettings is the settings file ADR 0040's amendment names: the one
+	// auditSettings is the settings file ADR 0040's model-job amendment names: the one
 	// the audit's checkout copy holds, the only settings file the CLI loads.
 	auditSettings = "/srv/audit/checkout/.github/security-audit/claude-settings.json"
 
@@ -46,7 +46,7 @@ const (
 )
 
 // TestArgsPrescribeEachConfigField pins the argument vector ADR 0040's
-// amendment fixes for every field the launcher gained, in the order it fixes:
+// model-job amendment fixes for every field the launcher gained, in the order it fixes:
 // `-p --model <Model>` [`--effort`] `--output-format json|stream-json`
 // [`--verbose`] [`--safe-mode`] `--tools <list>` `--setting-sources ""`
 // [`--settings`] [`--permission-mode`] `--strict-mcp-config --mcp-config
@@ -248,7 +248,7 @@ func TestArgsPrescribeEachConfigField(t *testing.T) {
 }
 
 // TestEnvIsTheAllowListAlone pins the CLI's whole environment (ADR 0040's
-// amendment): the token, HOME, PATH, the four switches and the config's own
+// model-job amendment): the token, HOME, PATH, the four switches and the config's own
 // entries, each a name and a value, and nothing else. The slice is the whole of
 // cmd.Env, so a variable of the caller's reaching the CLI would have to be here;
 // and HOME, PATH and the switches are the launcher's, which a config cannot
@@ -348,7 +348,7 @@ func TestEnvIsTheAllowListAlone(t *testing.T) {
 }
 
 // TestAskRefusesTheNewFieldsAtTheirZeroShape pins what a config of a shape ADR
-// 0040's amendment does not allow fails with: ErrModel, before the CLI starts,
+// 0040's model-job amendment does not allow fails with: ErrModel, before the CLI starts,
 // like a relative path or a model name of the wrong shape. A permission mode
 // other than dontAsk or plan is the one that matters most: bypassPermissions,
 // the CLI's own name for running a call no rule matches, is never passed on.
@@ -631,7 +631,7 @@ func TestAskRefusesTheNewFieldsAtTheirZeroShape(t *testing.T) {
 		// The config's environment is an allow list, not a deny list of the
 		// names someone thought of (issue #277, round F finding 1): a config
 		// may add TMPDIR, CLAUDE_CODE_SUBPROCESS_ENV_SCRUB and
-		// SHIFT2EU_AUDIT_CANARY, the three ADR 0040's amendment gives the
+		// SHIFT2EU_AUDIT_CANARY, the three ADR 0040's model-job amendment gives the
 		// audit, and no other name at all. The six below got past the deny
 		// list, and each changes what the CLI or its children run or trust.
 		{

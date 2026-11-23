@@ -18,7 +18,7 @@ const (
 	testVersion = "2.1.330"
 
 	// packageName is the npm package the pin is for: the linux-x64 platform
-	// package, whose dist.integrity the pin file names (ADR 0040's milestone-2
+	// package, whose dist.integrity the pin file names (ADR 0040's model-job
 	// amendment, issue #277).
 	packageName = "@anthropic-ai/claude-code-linux-x64"
 

@@ -1,5 +1,5 @@
 // Pins the whole launcher, from ci/auditrun's entry point to the real Claude Code
-// launch, under a temporary root (ADR 0040's milestone-2 amendment, issue #277,
+// launch, under a temporary root (ADR 0040's model-job amendment, issue #277,
 // "The audit's programs"): the run's six steps are the real ones, so the tarball's
 // integrity is checked, the binary is extracted, the audit directory is checked
 // and the preflight starts the CLI - a fake `claude` this test packs, which records

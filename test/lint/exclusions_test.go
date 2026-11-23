@@ -23,14 +23,14 @@ import (
 var forbidigoTags = []string{"cloud-read-only", "domain-is-pure", testutilNoEnvTag, cliNoEnvOrProcessTag, inventoryFileNoEnvTag, e2eNoEnvTag, testsNoProcessStateTag, aiReviewerEnvTag, aiReviewerOneProcessTag, siteBuilderEnvTag, claudeCodePinEnvTag, auditExecEnvTag, auditRunEnvTag, auditLibraryEnvTag}
 
 // auditLibraryEnvTag is the tag of the audit library's environment group (issue
-// #277, ADR 0040's amendment), which refuses the environment reads, the home,
+// #277, ADR 0040's model-job amendment), which refuses the environment reads, the home,
 // config and cache lookups and os.ExpandEnv in ci/internal/audit's production
 // files. The library starts bwrap and sudo, so its entries name no process
 // start and the group needs no exception.
 const auditLibraryEnvTag = "audit-library-env"
 
 // auditRunEnvTag is the tag of the audit launcher's environment group (issue
-// #277, ADR 0040's amendment), and auditRunLookupEnvMsg the msg of its one
+// #277, ADR 0040's model-job amendment), and auditRunLookupEnvMsg the msg of its one
 // entry with an exception: the os.LookupEnv ci/auditrun/main.go passes to run.
 const (
 	auditRunEnvTag       = "audit-run-env"
@@ -38,7 +38,7 @@ const (
 )
 
 // auditExecEnvTag is the tag of the audit command wrapper's environment group
-// (issue #277, ADR 0040's amendment), and auditExecExecMsg the msg of its one
+// (issue #277, ADR 0040's model-job amendment), and auditExecExecMsg the msg of its one
 // entry with an exception: the syscall.Exec ci/auditexec/main.go passes to run.
 const (
 	auditExecEnvTag  = "audit-exec-env"
@@ -47,7 +47,7 @@ const (
 
 // auditExecChdirMsg is the msg with which the tests-no-process-state group
 // refuses os.Chdir, the call ci/auditexec/main.go passes to run (issue #277,
-// round G, ADR 0040's amendment). That entry matches every call named Chdir,
+// round G, ADR 0040's model-job amendment). That entry matches every call named Chdir,
 // whatever it is called on, so the group's fourth exclusion rule drops that entry
 // in that one file and no other file, and testsprocessstate_test.go's
 // processStateCallException keeps the drop to the one expression.
@@ -172,7 +172,7 @@ func TestForbidigoExclusionsDropOneGroup(t *testing.T) {
 			{"path": `^test/(?:lint|architecture)/`, "text": groupText(testsNoProcessStateTag)},
 			{"path": `^ci/aireview/internal/review/claudecli_test\.go$`, "text": groupText(testsNoProcessStateTag)},
 			// The one call-level exception (the audit's command wrapper, issue
-			// #277 round G, ADR 0040's amendment): os.Chdir, which
+			// #277 round G, ADR 0040's model-job amendment): os.Chdir, which
 			// ci/auditexec/main.go passes to run to change into the audit's work
 			// directory before the exec. The group's entry matches every Chdir,
 			// so the text is that entry's msg and the path is that one file, the
@@ -211,7 +211,7 @@ func TestForbidigoExclusionsDropOneGroup(t *testing.T) {
 		claudeCodePinEnvTag: {
 			{"path-except": `^ci/claudecodepin/`, "text": groupText(claudeCodePinEnvTag)},
 		},
-		// The audit's command wrapper (issue #277, ADR 0040's amendment): one
+		// The audit's command wrapper (issue #277, ADR 0040's model-job amendment): one
 		// rule for every path outside ci/auditexec/, so the group holds there
 		// and nowhere else, _test.go files included, and the one exception, the
 		// syscall.Exec entry's msg alone, in ci/auditexec/main.go alone.
@@ -219,7 +219,7 @@ func TestForbidigoExclusionsDropOneGroup(t *testing.T) {
 			{"path-except": `^ci/auditexec/`, "text": groupText(auditExecEnvTag)},
 			{"path": `^ci/auditexec/main\.go$`, "text": narrowedTextOf(auditExecExecMsg)},
 		},
-		// The audit's launcher (issue #277, ADR 0040's amendment): one rule for
+		// The audit's launcher (issue #277, ADR 0040's model-job amendment): one rule for
 		// every path outside ci/auditrun/, so the group holds there and nowhere
 		// else, _test.go files included, and the one exception, the
 		// os.LookupEnv entry's msg alone, in ci/auditrun/main.go alone.
@@ -227,7 +227,7 @@ func TestForbidigoExclusionsDropOneGroup(t *testing.T) {
 			{"path-except": `^ci/auditrun/`, "text": groupText(auditRunEnvTag)},
 			{"path": `^ci/auditrun/main\.go$`, "text": narrowedTextOf(auditRunLookupEnvMsg)},
 		},
-		// The audit's library (issue #277, ADR 0040's amendment): one rule for
+		// The audit's library (issue #277, ADR 0040's model-job amendment): one rule for
 		// every path outside ci/internal/audit/, so the group holds there and
 		// nowhere else, _test.go files included. The library reads no
 		// environment variable at all - the caller hands it what it read - and

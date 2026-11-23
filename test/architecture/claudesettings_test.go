@@ -1,5 +1,5 @@
 // Pins .github/security-audit/claude-settings.json, the only settings file the
-// audit's Claude Code CLI loads (ADR 0040's milestone-2 amendment, issue #277,
+// audit's Claude Code CLI loads (ADR 0040's model-job amendment, issue #277,
 // PRD #175 milestone 2). The ADR names this test: dropping or widening any
 // entry below fails make test.
 //
@@ -27,7 +27,7 @@ import (
 // /srv/audit/checkout/.github/security-audit/claude-settings.json.
 const claudeSettingsPath = ".github/security-audit/claude-settings.json"
 
-// claudeSettings is the document ADR 0040's amendment fixes, key for key and
+// claudeSettings is the document ADR 0040's model-job amendment fixes, key for key and
 // value for value, in the order the ADR writes them. Every object here is
 // compared whole, so an entry the ADR does not list fails the test as surely as
 // a missing one.

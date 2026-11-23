@@ -1,5 +1,5 @@
 // Pins the audit directory's layout, the third step of an audit run (ADR
-// 0040's milestone-2 amendment, issue #277, "The audit directory"): the
+// 0040's model-job amendment, issue #277, "The audit directory"): the
 // directory exists where the model-free step made it, with the checkout copy
 // and the checks' results holding no write bit, an empty work area with its
 // tmp/, an empty state home/ and tmp/, the state area's bin/ and out/, and the

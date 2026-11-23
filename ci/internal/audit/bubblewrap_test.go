@@ -1,4 +1,4 @@
-// Pins the sandbox's start check (ADR 0040's milestone-2 amendment, issue
+// Pins the sandbox's start check (ADR 0040's model-job amendment, issue
 // #277, "The runner's user-namespace restriction"): before the model runs, the
 // launcher starts bubblewrap once with the invocation the ADR gives, and a
 // bubblewrap that cannot start ends the run with exit 4 and one line naming

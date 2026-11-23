@@ -1,5 +1,5 @@
 // Pins the command wrapper the audit's model runs through, audit-exec (ADR
-// 0040's milestone-2 amendment, issue #277). The wrapper maps a command name to
+// 0040's model-job amendment, issue #277). The wrapper maps a command name to
 // one fixed absolute path and execs it, refuses every other name, refuses git
 // outside the subcommands and options the ADR lists, changes into its own
 // working directory before every exec, and execs with the scrubbed environment
