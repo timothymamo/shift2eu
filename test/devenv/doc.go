@@ -35,6 +35,19 @@
 // a fake guest root (SHIFT2EU_SWAP_ROOT) with fakes of fallocate, chmod,
 // mkswap, swapon, swapoff, sysctl and df first on PATH, unprivileged.
 //
+// The apt tests (limaapt_test.go, issue #498) read the template's provisioning
+// and pin that one system step writes the apt drop-in of timeouts and retries
+// before every apt-get call, and that the ubuntuMirror param is read by one
+// step that rewrites only the archive URIs of ubuntu.sources before the first
+// apt-get update; with the vm-up tests, that make vm-up and make vm-create pass
+// UBUNTU_MIRROR to limactl as that param, read raw and validated before
+// limactl runs. TestAPTSourcesStep (limaaptstep_test.go) runs that same step
+// under bash against a fake guest root (SHIFT2EU_APT_ROOT) with no root and
+// nothing faked, and pins the drop-in it writes and every rewrite of
+// ubuntu.sources: one URI or several on a URIs line, the security stanzas and
+// country mirrors it leaves alone, a mirror that finds no archive URI to
+// rewrite as a failure, the default mirror as no change, and a second run.
+//
 // TestLimaProbeNeverRunsTheGHWrapper (limaprobe_test.go, issue #479) reads the
 // template's readiness probe and pins that no command of it runs the gh
 // wrapper, which refuses without the agents App's token that exists only after

@@ -402,6 +402,10 @@ var publicVendorHosts = []string{
 	// Other public projects a page or the dev VM links to.
 	"kubernetes.io",
 	"nodejs.org",
+	// Ubuntu's primary archive and security hosts, which the dev VM's
+	// provisioning names to rewrite the one and leave the other (issue #498).
+	"archive.ubuntu.com",
+	"security.ubuntu.com",
 	"spdx.dev",
 	"json-schema.org",
 	"claude.ai",
