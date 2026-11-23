@@ -263,6 +263,15 @@
 // so files git ignores are never read. savedPageProblems is the checker, and
 // TestSavedPageProblems pins it.
 //
+// TestNoTrackedFileSpellsTheInlineAllowComment (inlineallow_test.go, PRD #175
+// milestone 2, ADR 0040) refuses every file git tracks that holds gitleaks'
+// inline allow comment, the tool's name followed by a colon and the word
+// allow, in any letter case. gitleaks skips a line holding it, so the
+// scheduled audit's publish program refuses a run whose report holds it; the
+// model reads this repository, and a tracked line it quoted would refuse the
+// audit's own run. A test that feeds a scanner the marker builds it in code
+// from its two parts, as the rule itself does.
+//
 // TestLintLoadsEveryGoFile and TestLintVisitsEveryImportedPackage keep every
 // Go file within lint's reach. Lint loads, for the host and every release
 // target of .goreleaser.yaml, what builds with the tags e2e and integration,

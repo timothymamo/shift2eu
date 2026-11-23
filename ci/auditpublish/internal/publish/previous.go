@@ -18,6 +18,7 @@ type Previous struct {
 	parsed         bool
 	name           string
 	date           time.Time
+	runID          string
 	findings       []previousRow
 	investigation  map[Fingerprint]bool
 	falsePositives []falsePositive
@@ -138,7 +139,7 @@ func ParsePreviousReport(name string, data []byte) (Previous, error) {
 		return Previous{}, err
 	}
 
-	prev := Previous{name: name, date: date, investigation: map[Fingerprint]bool{}}
+	prev := Previous{name: name, date: date, runID: m[2], investigation: map[Fingerprint]bool{}}
 
 	if err := prev.readFindings(sections[headingFindings]); err != nil {
 		return Previous{}, err

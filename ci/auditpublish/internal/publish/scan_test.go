@@ -146,6 +146,15 @@ func TestScanRefusesEncodedTokens(t *testing.T) {
 			{name: "in the clear", text: token.token},
 			{name: "base64, padded", text: padded},
 			{name: "base64, raw", text: base64.RawStdEncoding.EncodeToString(raw)},
+			// Only the two base64url forms set binary: scan.go reads a run's bytes
+			// through the standard alphabet (isBase64Byte) and through the URL one
+			// (isBase64URLByte), and a text holding - or _ breaks the standard run
+			// where the URL run holds it whole (decodeBase64Run switches encoding
+			// on those two bytes). A base64url text is therefore not the token's
+			// own characters whatever it holds, and what the scan matched in it is
+			// the token's bytes: the assertion that the error names nothing is
+			// made on the token. None of these fixtures' encodings holds + or /,
+			// so their URL form and their standard form are the same bytes.
 			{name: "base64url, padded", text: base64.URLEncoding.EncodeToString(raw), binary: true},
 			{name: "base64url, raw", text: base64.RawURLEncoding.EncodeToString(raw), binary: true},
 			{name: "base64 one character over four", text: padded + "A"},
@@ -267,8 +276,9 @@ func TestScanRefusesTheDERKeyStart(t *testing.T) {
 }
 
 // TestScanRefusesTheFingerprintKeysBytes pins that the key the scan is given is
-// what it looks for, in the clear and encoded, and that another key's bytes are
-// no hit.
+// what it looks for, in the clear and encoded, in both the texts a run sends
+// (an advisory's and a public one's) and in a public text's model fields, and
+// that another key's bytes are no hit.
 func TestScanRefusesTheFingerprintKeysBytes(t *testing.T) {
 	t.Parallel()
 
@@ -277,24 +287,40 @@ func TestScanRefusesTheFingerprintKeysBytes(t *testing.T) {
 
 	encoded := base64.StdEncoding.EncodeToString([]byte(testKeyBytes))
 
-	refused := []struct {
+	appearances := []struct {
 		name string
 		text string
 	}{
-		{"in advisory text", "the key is " + testKeyBytes + " here"},
-		{"in public text", "the key is " + testKeyBytes + " here"},
-		{"base64 encoded", "the key is " + encoded + " here"},
-		{"hex encoded", "the key is " + hex.EncodeToString([]byte(testKeyBytes)) + " here"},
+		{"in the clear", testKeyBytes},
+		{"base64 encoded", encoded},
+		{"hex encoded", hex.EncodeToString([]byte(testKeyBytes))},
 	}
 
-	for _, tc := range refused {
+	for _, tc := range appearances {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			wantRefused(t, publish.ScanAdvisory(tc.text, key), testKeyBytes)
-			wantRefused(t, publish.ScanPublic(tc.text, nil, key), testKeyBytes)
+			// Both scans read the text's own bytes: the advisory's, which an
+			// advisory's description is, and the public one's, which the
+			// report's or an issue's is.
+			text := "the key is " + tc.text + " here"
+
+			wantRefused(t, publish.ScanAdvisory(text, key), testKeyBytes)
+			wantRefused(t, publish.ScanPublic(text, nil, key), testKeyBytes)
 		})
 	}
+
+	t.Run("in a public text's model field", func(t *testing.T) {
+		t.Parallel()
+
+		// A public text is scanned twice: as a text, and as the escaped model
+		// fragments the renderer built it from. The model field holds the
+		// key's bytes in a code span, and ScanAdvisory never sees them there.
+		field := publish.CodeSpan("the key is " + testKeyBytes + " here")
+
+		wantAllowed(t, publish.ScanAdvisory("the report's body", key))
+		wantRefused(t, publish.ScanPublic("the report's body", []string{field}, key), testKeyBytes)
+	})
 
 	t.Run("another key's bytes are no hit", func(t *testing.T) {
 		t.Parallel()

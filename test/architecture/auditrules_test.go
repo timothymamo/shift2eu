@@ -7,6 +7,11 @@
 // ci/internal/claudecode, and audit-main the library ci/internal/audit it runs
 // (issue #277, round M, AI 8).
 //
+// The publish program's entry point ci/auditpublish and its GitHub side
+// ci/auditpublish/internal/github are held the same way (PRD #175 milestone
+// 2, ADR 0040, "The publish program's GitHub side"): audit-publish-main may
+// import the GitHub side, and audit-publish-github the publish core.
+//
 // A lax rule names who may import the library: ci/auditrun, the wrapper
 // ci/auditexec and the library's own tests, and nobody else. Go's internal rule
 // already keeps ci/internal/ out of the product's reach.
@@ -44,6 +49,19 @@ const (
 	notTheLibraryScope = "!**/ci/internal/audit/**"
 	notTheMainScope    = "!**/ci/auditrun/**"
 	notTheWrapperScope = "!**/ci/auditexec/**"
+)
+
+// The rule names, package paths and file scopes of the publish program's
+// entry point and GitHub side (PRD #175 milestone 2, ADR 0040, "The publish
+// program's GitHub side").
+const (
+	auditPublishGitHubRule    = "audit-publish-github"
+	auditPublishMainRule      = "audit-publish-main"
+	auditPublishGitHubPackage = "github.com/timothymamo/shift2eu/ci/auditpublish/internal/github"
+	auditPublishMainPackage   = "github.com/timothymamo/shift2eu/ci/auditpublish"
+	auditPublishCorePackage   = "github.com/timothymamo/shift2eu/ci/auditpublish/internal/publish"
+	auditPublishGitHubScope   = "**/ci/auditpublish/internal/github/**"
+	auditPublishMainScope     = "**/ci/auditpublish/**"
 )
 
 // TestAuditPackagesAreHeldByStrictRules pins the two strict rules: each names
@@ -86,6 +104,20 @@ func TestAuditPackagesAreHeldByStrictRules(t *testing.T) {
 			held:        auditMainPackage,
 			wantAllowed: auditLibraryPackage,
 			why:         "the audit's library, whose preflight and run the launcher calls",
+		},
+		{
+			name:        auditPublishGitHubRule,
+			scope:       auditPublishGitHubScope,
+			held:        auditPublishGitHubPackage,
+			wantAllowed: auditPublishCorePackage,
+			why:         "the publish core, whose texts the GitHub side files",
+		},
+		{
+			name:        auditPublishMainRule,
+			scope:       auditPublishMainScope,
+			held:        auditPublishMainPackage,
+			wantAllowed: auditPublishGitHubPackage,
+			why:         "the publish program's GitHub side, which the entry point runs",
 		},
 	}
 
@@ -179,7 +211,7 @@ func auditRuleNamed(t *testing.T, rules []check.DepguardRule, name string) check
 		}
 	}
 
-	t.Fatalf(".golangci.yml holds no depguard rule %s, which ADR 0040's amendment gives the audit's packages", name)
+	t.Fatalf(".golangci.yml holds no depguard rule %s, which ADR 0040 gives the audit's packages (\"How Claude Code runs in the model job\", \"The publish program's GitHub side\")", name)
 
 	return check.DepguardRule{}
 }
