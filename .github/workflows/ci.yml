@@ -38,7 +38,7 @@ jobs:
           persist-credentials: false
       # cache: false, as the cache key names only the runner OS and go.sum: an entry would save a cache
       # shared with the Test job that lacks the -race build output Test restores it for.
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
           cache: false
@@ -91,7 +91,7 @@ jobs:
         with:
           persist-credentials: false
       # cache: false, as lint-target's: an entry saved here would be the one the Test job restores.
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
           cache: false
@@ -159,7 +159,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
       - name: go.mod is tidy
@@ -183,7 +183,7 @@ jobs:
       - uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
         with:
           distribution: goreleaser
-          version: "v2.20.1" # exact pin, as release.yml's; Renovate updates it (github-actions manager)
+          version: "v2.20.3" # exact pin, as release.yml's; Renovate updates it (github-actions manager)
           install-only: true
       # The release's archives, built by a snapshot run of its GoReleaser
       # configuration: each holds exactly its own binary (issue #147).
@@ -206,7 +206,7 @@ jobs:
         with:
           persist-credentials: false
       # cache: false, as lint-target's: an entry saved here would be the one the Test job restores.
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
           cache: false
@@ -233,7 +233,7 @@ jobs:
         with:
           persist-credentials: false
       # cache: false, as lint-target's: a macOS entry would only take up the repository's cache quota.
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
           cache: false
