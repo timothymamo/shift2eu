@@ -65,12 +65,6 @@ func advisoryFinding() publish.Finding {
 	}
 }
 
-// advisoryPrivateFinding returns the fixture finding with the invented
-// fingerprint.
-func advisoryPrivateFinding() publish.PrivateFinding {
-	return publish.PrivateFinding{Finding: advisoryFinding(), Fingerprint: advisoryFingerprint}
-}
-
 // historySecretFinding returns a private finding of gitleaks on the history: its
 // file is the commit, and every other model value holds a marker the advisory
 // must not hold.
