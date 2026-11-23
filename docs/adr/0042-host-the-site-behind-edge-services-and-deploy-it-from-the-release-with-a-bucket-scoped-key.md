@@ -143,13 +143,16 @@ limits are probed after each creation and every change to the IAM rule or the bu
 the S3 API path-style to `https://s3.<region>.scw.cloud`, a fixed template (no flag can send the key to
 another host; the region is held to `^[a-z]{2}-[a-z]{3}$`), signing each request with AWS Signature
 Version 4 written by hand (Hosting decision 8: the AWS CLI and `s3cmd` are unpinned on the runners or
-need Python, and would hold the key). The signer is pinned by the AWS documentation's published S3
-example signature. It follows no redirect, sends only `GET` (the live page, the listing) and `PUT` (a file
+need Python, and would hold the key). The signer is pinned by the AWS documentation's three published S3
+example signatures (the GET object, the ListObjects GET and the PutObject of a path holding `$`); it
+canonicalises the path itself, each segment URI-encoded once from the decoded path, and sends the
+listing's query exactly as it canonicalises it (a space as `%20`, a plus as `%2B`). It follows no redirect, sends only `GET` (the live page, the listing) and `PUT` (a file
 of the bundle), and never `DELETE`. It refuses, before any request, a configuration it cannot trust (an
 endpoint with a path, query or user info, a bucket that is no S3 bucket name, a version or a release that
 is no `vX.Y.Z` tag, a missing key, client, writer or clock) and a bundle whose manifest does not parse
 strictly, names a path that is not one of the bundle's fixed flat names (so no `/`, `..`, `\`, `%`,
-control character, absolute or empty key), whose asset names do not match their digests, whose files
+control character, absolute or empty key), that does not list exactly the four pages and one asset of
+each kind (style, page script, `wasm_exec`, module), whose asset names do not match their digests, whose files
 differ from their digests, or that holds a file the manifest does not list or one that is not a regular
 file. It uploads the bytes it checked, held in memory, never a second read of the bundle.
 
@@ -161,9 +164,12 @@ at 64 MiB (memory bounds, not the site's size budgets), the live page at 1 MiB, 
 each group in sorted order. The first failed upload stops the run and fails the job: a failure before
 the pages leaves every page as it was, and the earlier release's assets are never deleted, so the pages
 still served keep working (no file of an earlier release is ever deleted; pruning them is a proposed
-follow-up, by hand or with another key). Between `manifest.json` and the last page the live
-`manifest.json` already names the new release while some pages are still the old one; the live checks
-compare against the attested manifest, never the live one, so the window only delays a green check.
+follow-up, by hand or with another key). `manifest.json` is uploaded before the pages, so between it
+and the last page the live `manifest.json` already names the new release while some pages are still
+the old one, and a failure in that window leaves it so (the live `manifest.json` naming the new release
+over the old pages) until the redeploy (Recovery), which `verify.html` reports in the meantime; the live
+checks compare against the attested manifest, never the live one, so the window only delays a green
+check.
 
 **The cache headers and content types**, per file:
 
@@ -213,8 +219,11 @@ once, unsigned, following no redirect, and reads the version its footer shows (t
 own release tags on `main` (as the `latest` job lists them, passed in with `-releases`); that tag is
 higher than the bundle's; and the SHA-256 of the live body equals the `index.html` entry of that tag's
 manifest (passed in with `-manifests`, a file `<tag>.json` per release with a site bundle, opened by a
-name built from the tag list, never from the page, and parsed as strictly as the bundle's own). In every
-other case it overwrites, and says so in the run's summary:
+name built from the tag list, never from the page, and parsed as strictly as the bundle's own).
+`-releases` must hold only `vX.Y.Z` tags, one per line (blank lines and CRLF ends are ignored): any other
+line refuses the whole deploy before a request. The strictness is deliberate, so PR C's release workflow
+must write exactly the `latest` job's tags there and nothing else. In every other case it overwrites,
+and says so in the run's summary:
 
 - with a plain **notice** (`> [!NOTE]`) when the live page is a genuine release not higher than the
   bundle's (the normal upgrade, and the redeploy of the same release): its version is a known tag and
@@ -237,7 +246,13 @@ deploy finds no site (an error page or 404) and overwrites with the warning.
 every `<tag>.json` of `-manifests` for a tag of `-releases`), not in this bundle and not `manifest.json`:
 a page a leaked key planted at a new path is then found at the next release. A listed key is only
 compared, never sent, so a hostile key (`../x`, `/etc/passwd`, `a%2Fb`) cannot become a write; it is
-named in the error escaped and cut to 64 bytes, at most 20 of them. It is off by default because it
+scrubbed of the key, then named in the error escaped and cut to 64 bytes, at most 20 of them (the
+smallest; only those and a count are kept, whatever the listing's length). A listing that fails (a
+transport error, a status other than 200, an answer that does not parse, a listing over its bounds)
+fails with `ErrList`, never `ErrUpload`: nothing was uploaded, and the repair is the listing's grant,
+not the upload's. Once `-list-bucket` is on, PR C must pass in `-manifests` the manifest of every
+release ever deployed, not only the recent ones: a release whose manifest is missing has its
+still-present assets counted as unknown keys, which fails the deploy. It is off by default because it
 depends on runbook step R7 showing that IAM lets the application list with only its two object
 permission sets (ADR 0039, open point 3): the bucket policy grants `s3:ListBucket`, but whether IAM does
 is known only from R7's probe. PR C passes the flag only once R7 recorded "ListBucket allowed" here
@@ -250,9 +265,19 @@ with their own key, which is intended. The scheduled live check holds no secret 
 (and the entry point's settings print themselves redacted, since `fmt` does not reach a field's own
 `Format` through an unexported field), never in an error, a log line or the summary. Errors name the
 request (method, key, status) and at most an S3 error code of `[A-Za-z]{1,64}` that holds neither value,
-never a response body or header; they wrap only the program's sentinel errors (and the context's), never
-an error whose text a server wrote; and every text written is also scrubbed of both values, so a server
-that echoes the key gets nothing printed.
+never a response body or header. A transport error is written as a fixed classification (`timed out`,
+`cancelled` or `transport error`), never the HTTP client's message, which can quote what a server sent
+(a malformed status line); this holds for the uploads, the listing and the guard's read of the live
+page alike. Errors wrap only the program's sentinel errors (and the context's), never an error whose
+text a server wrote; and every text written is also scrubbed of both values, so a server that echoes
+the key gets nothing printed.
+
+**The transport, for PR C.** `sitedeploy` sends through Go's default transport, which honours
+`HTTPS_PROXY` (and `HTTP_PROXY`, `NO_PROXY`) and `SSL_CERT_FILE` / `SSL_CERT_DIR` from the environment.
+A step that could set them could route the signed requests through a proxy of its choosing or make it
+trust another certificate authority. So the deploy job's steps before the deploy run no third-party
+code and write nothing to `GITHUB_ENV` (or `GITHUB_PATH`), and the key is set only in the `env:` of the
+deploy step itself.
 
 ### Recovery
 
@@ -260,6 +285,10 @@ that echoes the key gets nothing printed.
   release tag on `main` (R12). The guard overwrites any live page that is not a genuine higher release,
   with a warning, so a page a leaked key wrote is replaced whatever version it claims. Redeploying the
   same release is the same re-run: the guard sees an equal version and overwrites, with a notice.
+- **A deploy that failed part-way:** `manifest.json` is uploaded before the pages, so a failure
+  between the two leaves the live `manifest.json` naming the new release over the old pages until the
+  redeploy (the re-run above), and `verify.html` reports the mismatch until then. A failure before
+  `manifest.json` leaves only unreferenced new assets.
 - **Roll back to an older release:** the deploy refuses it by design while a genuine higher release is
   live. The maintainer rolls back with their own key instead: with versioning, each of the four pages
   and `manifest.json` copied from its earlier version (R12); the earlier release's assets are still in
@@ -380,8 +409,8 @@ Services pipeline. What bounds the rest:
 - **The service worker:** the genuine page script unregisters every service worker for the origin when
   it loads (ADR 0036), which helps only visitors whose browser loads a genuine page.
 - **The privacy statement:** the privacy page, under "What the site cannot promise", says "The site
-  serves only the files named in a release's manifest: any other path on the host is not part of the
-  site.", and that the live checks compare only the manifests' files, the root and the service-worker
+  is only the files named in a release's manifest: any other path on the host, even one that answers,
+  is not part of the site.", and that the live checks compare only the manifests' files, the root and the service-worker
   paths, so a look-alike page at a new path uploaded with a leaked key is not detected by them (pinned
   by `test/site`'s `TestPrivacyPageNamesThePathsOutsideTheManifests`). Once the listing is on, milestone
   4 may add that the next release's deploy fails on any object outside every release's manifest.
