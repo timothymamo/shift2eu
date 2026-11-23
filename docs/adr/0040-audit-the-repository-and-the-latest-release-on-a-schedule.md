@@ -458,8 +458,8 @@ up this table: the model's flag is read only to make a finding private (row 5).
 the input `"shift2eu-audit-fingerprint/v1" NUL rule NUL file NUL sink` (NUL is the byte 0x00, which none
 of the three fields may hold, so the encoding is unambiguous; the version prefix lets a later change of
 the input start a new series on purpose). `PlainFingerprint(rule, file, sink string) Fingerprint` uses
-SHA-256, for a public finding and for every false-positive match. `KeyedFingerprint(key []byte, rule,
-file, sink string) Fingerprint` uses HMAC-SHA-256 with `AUDIT_FINGERPRINT_KEY`, for a private finding.
+SHA-256, for a public finding and for every false-positive match. `KeyedFingerprint(key FingerprintKey,
+rule, file, sink string) Fingerprint` uses HMAC-SHA-256 with `AUDIT_FINGERPRINT_KEY`, for a private finding.
 The key is the secret's value as bytes, unchanged; `NewFingerprintKey(b []byte) (FingerprintKey, error)`
 refuses fewer than 32 bytes (`ErrConfig`), the runbook's minimum. A private finding is never given a
 plain fingerprint anywhere public, so nobody can test a guess at its rule, file and sink against the
