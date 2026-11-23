@@ -475,7 +475,8 @@ func TestAllowedChecksTheAdvisoryCreateBody(t *testing.T) {
 // brace is refused with ErrEndpointRefused even when the object itself is
 // inside the row's rule (raw bytes, because the other tables marshal a
 // document and so cannot carry a trailing token). A body that is the object
-// alone stays accepted.
+// alone, or the object followed by nothing but JSON whitespace, stays
+// accepted.
 func TestAllowedRefusesDataAfterTheBody(t *testing.T) {
 	t.Parallel()
 
@@ -491,6 +492,14 @@ func TestAllowedRefusesDataAfterTheBody(t *testing.T) {
 		{
 			name: "the blob's body alone", method: "POST", endpoint: fixtureRepoPrefix + "/git/blobs",
 			body: []byte(b["blob"]), accepted: true,
+		},
+		{
+			name: "the blob's body and a newline", method: "POST", endpoint: fixtureRepoPrefix + "/git/blobs",
+			body: []byte(b["blob"] + "\n"), accepted: true,
+		},
+		{
+			name: "the blob's body and every kind of JSON whitespace", method: "POST", endpoint: fixtureRepoPrefix + "/git/blobs",
+			body: []byte(b["blob"] + " \t\r\n"), accepted: true,
 		},
 		{
 			name: "a word after the blob's body", method: "POST", endpoint: fixtureRepoPrefix + "/git/blobs",
@@ -520,7 +529,7 @@ func TestAllowedRefusesDataAfterTheBody(t *testing.T) {
 
 			switch {
 			case tc.accepted && err != nil:
-				t.Fatalf("Allowed(%s %s) = %v, want no error: the body is the object alone", tc.method, tc.endpoint, err)
+				t.Fatalf("Allowed(%s %s) = %v, want no error: the body is the object, with nothing after it but JSON whitespace", tc.method, tc.endpoint, err)
 			case !tc.accepted && !errors.Is(err, github.ErrEndpointRefused):
 				t.Fatalf("Allowed(%s %s) = %v, want an error wrapping ErrEndpointRefused: the body holds more than one JSON object", tc.method, tc.endpoint, err)
 			}
