@@ -59,7 +59,7 @@ func PlainFingerprint(rule, file, sink string) Fingerprint {
 // empty key is a digest anyone can compute.
 func KeyedFingerprint(key FingerprintKey, rule, file, sink string) (Fingerprint, error) {
 	if len(key.bytes) < minKeyBytes {
-		return "", fmt.Errorf("AUDIT_FINGERPRINT_KEY: not set: %w", ErrConfig)
+		return "", fmt.Errorf("AUDIT_FINGERPRINT_KEY: not set or shorter than %s bytes: %w", strconv.Itoa(minKeyBytes), ErrConfig)
 	}
 
 	mac := hmac.New(sha256.New, key.bytes)

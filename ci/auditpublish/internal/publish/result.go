@@ -684,13 +684,17 @@ func checkText(path, s string, multiLine bool, lo, hi int) error {
 // paragraph separator, every rune of category Cf (format, the bidirectional
 // controls, the zero-width characters and the tag characters among them), Co
 // (private use) or Cn (unassigned, in the Unicode version of the Go release
-// that builds the core), every noncharacter, the variation selectors, and the
-// listed fillers and invisible operators that render as nothing.
+// that builds the core), every noncharacter, the variation selectors, every
+// space of category Zs but U+0020, and the listed fillers, symbols and
+// invisible operators that render as nothing. Which blank a model puts
+// between two words is a channel, so U+0020 is the only one a field holds.
 func forbiddenRune(r rune) bool {
 	switch {
 	case r < 0x20, r == 0x7f, r >= 0x80 && r <= 0x9f:
 		return true
 	case r == 0x2028, r == 0x2029:
+		return true
+	case r != ' ' && unicode.Is(unicode.Zs, r):
 		return true
 	case isNoncharacter(r), invisibleRune(r):
 		return true
@@ -711,8 +715,9 @@ func isNoncharacter(r rune) bool {
 // invisibleRune reports whether r is a variation selector, a tag character
 // or one of the listed characters outside Cf that render as nothing: the soft
 // hyphen, the combining grapheme joiner, the Hangul and Mongolian fillers and
-// free variation selectors, the Khmer inherent vowels and the invisible
-// operators. U+00AD, U+2061 to U+2064 and the tags are Cf too; they are listed
+// free variation selectors, the Khitan filler, the Khmer inherent vowels, the
+// invisible operators, the braille pattern blank and the musical null
+// notehead. U+00AD, U+2061 to U+2064 and the tags are Cf too; they are listed
 // so the rule does not rest on one Unicode version.
 func invisibleRune(r rune) bool {
 	switch {
@@ -724,7 +729,9 @@ func invisibleRune(r rune) bool {
 		return true
 	case r >= 0x180b && r <= 0x180f, r >= 0x2061 && r <= 0x2064:
 		return true
-	case r == 0x3164, r == 0xffa0:
+	case r == 0x3164, r == 0xffa0, r == 0x16fe4:
+		return true
+	case r == 0x2800, r == 0x1d159:
 		return true
 	default:
 		return false
