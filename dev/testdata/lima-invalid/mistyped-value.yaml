@@ -206,14 +206,18 @@ provision:
     script: |
       #!/bin/bash
       set -eux -o pipefail
+      # SHIFT2EU_APT_ROOT is empty in the guest; only the tests (test/devenv/limaaptstep_test.go) set it, to a
+      # fake root, as SHIFT2EU_SWAP_ROOT does for the swap step. Kept to bash 3.2, which the tests may run.
+      root="${SHIFT2EU_APT_ROOT:-}"
       # One drop-in covers every apt-get call of every step, update, install and remove alike: a connection that
-      # trickles or stops for 30 seconds fails, and each fetch is retried 5 times, so a mirror that stays down
-      # fails provisioning with apt's own error in /var/log/cloud-init-output.log instead of hanging. The name
-      # holds no period: apt.conf.d ignores a file whose name has one.
-      mkdir -p /etc/apt/apt.conf.d
+      # stalls (no data for 30 seconds) fails, and each fetch is retried 5 times, so a mirror that stays down
+      # fails provisioning with apt's own error in /var/log/cloud-init-output.log instead of hanging. A slow but
+      # moving mirror never trips the timeout: that is what the ubuntuMirror param is for. The name holds no
+      # period: apt.conf.d ignores a file whose name has one.
+      mkdir -p "${root}/etc/apt/apt.conf.d"
       printf '%s\n' '// dev/lima.yaml, issue 498: a stalled mirror fails and is retried instead of hanging.' \
         'Acquire::http::Timeout "30";' 'Acquire::https::Timeout "30";' 'Acquire::Retries "5";' \
-        >/etc/apt/apt.conf.d/80shift2eu-timeouts
+        >"${root}/etc/apt/apt.conf.d/80shift2eu-timeouts"
 
       # The archive URIs cloud-init writes into ubuntu.sources become the ubuntuMirror param; the security URIs
       # (security.ubuntu.com) stay, so a mirror picked for speed never carries the security updates. The param is
@@ -221,8 +225,10 @@ provision:
       # of letters, digits and . - / : _ ~ only, none of them special to sed's replacement or its ',' delimiter.
       # The default is where cloud-init points the archive, so it changes nothing, even with no ubuntu.sources.
       # Idempotent: once rewritten, the file names no http(s)://archive.ubuntu.com/ubuntu URI any more, and a
-      # country mirror, whose host only ends in that name, is no match (the host must follow ://). It is set when the VM
-      # is created; this step keeps it at every boot (docs/dev-environment.md, The Ubuntu mirror).
+      # country mirror, whose host only ends in that name, is no match (the host must follow ://). A file with
+      # no archive URI that does not already name the mirror (a ports file, a country mirror) fails the step and
+      # stays as it was: a warning would leave the VM on the archive the mirror was meant to replace. It is set
+      # when the VM is created; this step keeps it at every boot (docs/dev-environment.md, The Ubuntu mirror).
       case "${PARAM_ubuntuMirror:?Lima passes the ubuntuMirror param of dev/lima.yaml}" in
         *[!A-Za-z0-9./:_~-]*) mirror_ok=0 ;;
         http://[A-Za-z0-9]* | https://[A-Za-z0-9]*) mirror_ok=1 ;;
@@ -232,15 +238,23 @@ provision:
         echo >&2 "ubuntuMirror ${PARAM_ubuntuMirror} is not an http:// or https:// URL with a host, of letters, digits and . - / : _ ~ only. Nothing rewritten."
         exit 1
       fi
-      sources=/etc/apt/sources.list.d/ubuntu.sources
+      sources="${root}/etc/apt/sources.list.d/ubuntu.sources"
+      archive='(^|[[:space:]])https?://archive\.ubuntu\.com/ubuntu/?([[:space:]]|$)'
       if [ "${PARAM_ubuntuMirror%/}" != "http://archive.ubuntu.com/ubuntu" ]; then
         if [ ! -f "${sources}" ]; then
           echo >&2 "ubuntuMirror ${PARAM_ubuntuMirror}: ${sources} does not exist, so the mirror cannot be set (docs/dev-environment.md, The Ubuntu mirror)."
           exit 1
         fi
-        sed -E -i "s,(^|[[:space:]])https?://archive\.ubuntu\.com/ubuntu/?([[:space:]]|\$),\1${PARAM_ubuntuMirror%/}/\2,g" "${sources}"
-        if ! grep -qF "${PARAM_ubuntuMirror%/}/" "${sources}"; then
-          echo >&2 "ubuntuMirror ${PARAM_ubuntuMirror}: ${sources} has no archive URI to rewrite; apt fetches from the URIs it names."
+        if grep -qE "${archive}" "${sources}"; then
+          # Twice: a match takes the whitespace after its URI, so of two archive URIs on one URIs line the first
+          # pass rewrites every other one and the second pass the rest. Two passes, not a loop until no change,
+          # as a mirror on archive.ubuntu.com itself (https://) still matches once rewritten.
+          sed -E -i -e "s,(^|[[:space:]])https?://archive\.ubuntu\.com/ubuntu/?([[:space:]]|\$),\1${PARAM_ubuntuMirror%/}/\2,g" \
+            -e "s,(^|[[:space:]])https?://archive\.ubuntu\.com/ubuntu/?([[:space:]]|\$),\1${PARAM_ubuntuMirror%/}/\2,g" "${sources}"
+        elif ! grep -qF "${PARAM_ubuntuMirror%/}/" "${sources}"; then
+          echo >&2 "ubuntuMirror ${PARAM_ubuntuMirror}: ${sources} has no http(s)://archive.ubuntu.com/ubuntu URI to rewrite and does not name the mirror, so the mirror cannot be set; nothing changed. Its URIs lines (docs/dev-environment.md, The Ubuntu mirror):"
+          grep -E '^[[:space:]]*URIs:' "${sources}" >&2 || true
+          exit 1
         fi
       fi
 

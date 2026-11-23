@@ -465,10 +465,13 @@ without swap.
 
 ### The Ubuntu mirror
 
-Every `apt-get` call of the provisioning runs with a transfer timeout of 30 seconds and 5 retries, from the
+Every `apt-get` call of the provisioning runs with a timeout of 30 seconds and 5 retries, from the
 apt drop-in `/etc/apt/apt.conf.d/80shift2eu-timeouts` that the provisioning writes before its first `apt-get`
-call (issue #498). A mirror that trickles or stops then fails provisioning within minutes, with apt's own
-error in `/var/log/cloud-init-output.log`, instead of hanging until Lima gives up.
+call (issue #498). A connection that stalls (no data for 30 seconds) then fails provisioning within minutes,
+with apt's own error in `/var/log/cloud-init-output.log`, instead of hanging until Lima gives up. A slow but
+moving mirror never trips the timeout: that is what `UBUNTU_MIRROR` is for. The drop-in stays in
+`/etc/apt/apt.conf.d`, so it applies to every apt use in the VM (your own `sudo apt`, unattended-upgrades),
+not only to the provisioning.
 
 The VM fetches Ubuntu's packages from `http://archive.ubuntu.com/ubuntu`, where cloud-init points the
 archive URIs of `/etc/apt/sources.list.d/ubuntu.sources`. When that archive is slow or unreachable from the
@@ -492,7 +495,10 @@ The provisioning rewrites only the archive URIs of `ubuntu.sources` to the mirro
 `apt-get update`; the security URIs (`security.ubuntu.com`) stay, so a mirror picked for speed never carries
 the security updates. With the default nothing is rewritten. With another mirror and no `ubuntu.sources` in
 the VM, the step fails with a message naming the file rather than fetching from an archive you did not ask
-for.
+for. It rewrites only `archive.ubuntu.com` URIs: if `ubuntu.sources` names something else (on arm64 it can
+be `ports.ubuntu.com/ubuntu-ports`), another mirror fails the provisioning with a message that prints the
+file's `URIs:` lines, and leaves the file unchanged. Then pick a mirror for what the file names, or edit the
+file by hand.
 
 It applies when the VM is created: limactl keeps the param in the instance, and the step runs again at every
 boot, idempotently, so the VM keeps the mirror it was created with. `make vm-up` on an existing VM warns
