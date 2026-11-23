@@ -151,9 +151,11 @@ func ranThen(id, value string) []string {
 	return out
 }
 
-// TestCoverageVocabularyIsComplete pins that the coverage table names every
-// check id the ADR lists and no other: a check the core renders without a name,
-// or a name without a row, would leave the table short.
+// TestCoverageVocabularyIsComplete pins the rendered Coverage table against the
+// checks the ADR lists: exactly fifteen rows, one per check, in the ADR's
+// order, each with a coverage value. A check the core renders without a name,
+// or a name without a row, would leave the table short, out of order, or with
+// a row the report does not have.
 func TestCoverageVocabularyIsComplete(t *testing.T) {
 	t.Parallel()
 
@@ -161,13 +163,25 @@ func TestCoverageVocabularyIsComplete(t *testing.T) {
 		t.Fatalf("the test's check ids number %d, want the ADR's fifteen", len(checkIDs))
 	}
 
-	for id, name := range coverageNames {
-		if name == "" {
-			t.Errorf("the check %s has no rendered name", id)
-		}
+	body := renderReport(t, publish.ReportInput{
+		Result:  fixtureResult(),
+		Run:     testRun(t, testDate, testRunID),
+		Private: publish.PrivateNone,
+	}).Body
+
+	rows := tableOf(t, body, "Coverage")
+
+	if len(rows) != len(checkIDs)+1 {
+		t.Fatalf("the Coverage table holds %d rows besides its header, want the ADR's %d checks, one row each:\n%v", len(rows)-1, len(checkIDs), rows)
 	}
 
-	if len(coverageNames) != len(checkIDs) {
-		t.Errorf("the tests name %d checks and list %d ids, want one name per id", len(coverageNames), len(checkIDs))
+	want := make([][]string, 0, len(checkIDs))
+	for _, id := range checkIDs {
+		want = append(want, []string{coverageNames[id], "run"})
+	}
+
+	// Every check ran in the fixture, so each row's coverage reading is run.
+	if diff := cmp.Diff(want, rows[1:]); diff != "" {
+		t.Errorf("the Coverage table's checks mismatch (-want +got):\n%s", diff)
 	}
 }

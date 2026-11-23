@@ -88,7 +88,7 @@ func TestTableCell(t *testing.T) {
 		{"a pipe inside a backtick run", "a`|`b", "`` a`\\|`b ``"},
 		{"no pipe, no change", "a\\b", "` a\\b `"},
 		{"a CR LF is a space, and a pipe escapes", "a\r\nb|c", "` a b\\|c `"},
-		{"an HTML table is inert and its pipes escaped", "<table><tr><td>x", "` <table><tr><td>x `"},
+		{"an HTML table is inert and its pipes escaped", "<table><tr><td>a|b</td></tr></table>", "` <table><tr><td>a\\|b</td></tr></table> `"},
 	}
 
 	for _, tc := range tests {
@@ -128,6 +128,13 @@ func TestCodeBlock(t *testing.T) {
 			name: "HTML is inert in the block",
 			in:   "<img src=x onerror=alert(1)>",
 			want: "```text\n<img src=x onerror=alert(1)>\n```",
+		},
+		{
+			// A code block escapes nothing: a pipe stays one, where a table
+			// cell writes it \\|.
+			name: "a pipe is kept in the block",
+			in:   "<table><tr><td>a|b</td></tr></table>",
+			want: "```text\n<table><tr><td>a|b</td></tr></table>\n```",
 		},
 		{
 			name: "a link and a mention are inert in the block",

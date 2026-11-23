@@ -98,7 +98,9 @@ func checksWithNotRun(why map[string]string) []publish.Check {
 }
 
 // fixtureResult returns a result every check ran in, with findings, the run's
-// fixed values and one entry in each of the sections the model writes.
+// fixed values and one entry in each of the sections the model writes. The
+// dependencies, the narrative and the limit hold a pipe, so a test that
+// expects a code span and a test that expects a table cell cannot both pass.
 func fixtureResult(findings ...publish.Finding) publish.Result {
 	return publish.Result{
 		Schema:      publish.SchemaVersion,
@@ -112,10 +114,10 @@ func fixtureResult(findings ...publish.Finding) publish.Result {
 		Checks:   ranChecks(),
 		Findings: findings,
 		Changes: publish.Changes{
-			Dependencies: []string{"github.com/google/go-cmp v0.7.0 to v0.8.0"},
-			Narrative:    "No dependency changed maintainer.",
+			Dependencies: []string{"github.com/google/go-cmp v0.7.0 to v0.8.0 | go.sum updated"},
+			Narrative:    "No dependency changed maintainer. | The lock file is unchanged.",
 		},
-		Limits: []string{"scorecard's admin checks need a read the job does not hold."},
+		Limits: []string{"scorecard's admin checks need a read the job does not hold. | The test fixture is one."},
 	}
 }
 

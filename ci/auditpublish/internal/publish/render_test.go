@@ -41,15 +41,17 @@ func wantFindingRow(f publish.Finding, status string) []string {
 
 // richFindings are the findings most of the rendering tests read: two public low
 // findings, one public informational one, one suspected finding and one private
-// medium finding, with a pipe, a backtick and Markdown in the model's text.
+// medium finding, with a pipe, a backtick and Markdown in the model's text. The
+// first finding's scenario, fix and dismissal each hold a pipe, so the table
+// cells it renders as cannot be mistaken for a code span.
 func richFindings() []publish.Finding {
 	first := finding("G304", sevLow, true, catHardening)
 	first.File = "internal/cli/run.go"
 	first.Line = 12
 	first.Scenario = "a path | is read `without` a check"
 	first.Evidence = "the trace holds the marker evidence-marker"
-	first.Fix = "check the path"
-	first.Dismissal = "the path is a test fixture"
+	first.Fix = "check the path | reject it"
+	first.Dismissal = "the path is a test fixture | by design"
 
 	second := finding("G305", sevLow, true, catConfiguration)
 	second.File = "internal/cli/open.go"
@@ -555,14 +557,23 @@ func TestRenderReportModelFields(t *testing.T) {
 
 	want = append(want, publish.CodeSpan(in.Result.ImageDigest))
 
-	want = append(want, publish.TableCell(in.Result.Changes.Narrative))
+	// A tool's version is model text too, in a code span; its name is the
+	// script's, from the closed list.
+	for _, tool := range in.Result.Tools {
+		want = append(want, publish.CodeSpan(tool.Version))
+	}
+
+	// The narrative, the dependencies and the limits are list items and
+	// paragraphs, not table cells: render.go writes each as a code span, so a
+	// pipe stays a pipe.
+	want = append(want, publish.CodeSpan(in.Result.Changes.Narrative))
 
 	for _, dependency := range in.Result.Changes.Dependencies {
-		want = append(want, publish.TableCell(dependency))
+		want = append(want, publish.CodeSpan(dependency))
 	}
 
 	for _, limit := range in.Result.Limits {
-		want = append(want, publish.TableCell(limit))
+		want = append(want, publish.CodeSpan(limit))
 	}
 
 	for _, fragment := range want {
