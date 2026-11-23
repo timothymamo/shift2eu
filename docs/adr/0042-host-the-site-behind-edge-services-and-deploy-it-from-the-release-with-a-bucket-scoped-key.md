@@ -564,8 +564,10 @@ accepted; and whether `ListBucket` was allowed, which decides `-list-bucket` abo
 - A release from PR C's merge on builds, attests and publishes the bundle, and deploys it only once the
   maintainer sets `SITE_DEPLOY_ENABLED` (milestone 4); until then the deploy and its live check are
   skipped visibly, by the `site-skipped` job's notice.
-- The maintainer sets the `site` environment's variables `SITE_BUCKET` and `SITE_REGION` (from `tofu
-  output`) before the switch; the `release-tag` skill reports them missing as "not set up yet" while the
+- The maintainer sets the `site` environment's variables `SITE_BUCKET` (`tofu output`'s
+  `bucket_name`) and `SITE_REGION` (R0's region: `infra/site`'s `terraform.tfvars`, or
+  `variables.tf`'s default; `tofu output` has no region) before the switch
+  ([R9](../site-runbook.md#r9-the-github-site-environment)); the `release-tag` skill reports them missing as "not set up yet" while the
   switch is unset, and stops the release once it is `true`.
 - The deploy key is in scope for one step, on a program and a bundle this run built and attested; a
   failed deploy fails the release run and leaves the previous release serving.

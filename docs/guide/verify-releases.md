@@ -2,8 +2,9 @@
 
 Every published image is signed and carries build provenance and an SBOM, and every release archive
 carries build provenance. This page shows how to check all three for an image before you run it, inside
-the project's Lima VM too, how to check a release archive against its checksums and its provenance, and
-how to verify the releases published before the project's rename.
+the project's Lima VM too, how to check a release archive against its checksums and its provenance, how
+to check the live site, https://www.shift2eu.com, against its release's site bundle, and how to verify
+the releases published before the project's rename.
 
 ## Verify the image
 
@@ -107,6 +108,11 @@ nothing. `gh attestation verify` must print `✓ Verification succeeded!` and ex
 It works the same on macOS. `gh attestation verify checksums.txt ...`, with the same flags, verifies
 `checksums.txt` itself.
 
+The release's site bundle, `shift2eu-site_<tag>.tar.gz` (for example `shift2eu-site_v0.4.0.tar.gz`), is
+one more asset of the same release, listed in the same `checksums.txt` and covered by the same
+attestation: check it with the commands above, with `ARCHIVE="shift2eu-site_$TAG.tar.gz"`.
+[Verify the site](#verify-the-site) uses it.
+
 On Windows, in PowerShell, for a `.zip` archive:
 
 ```powershell
@@ -131,6 +137,77 @@ Each archive holds only the `shift2eu` binary (`shift2eu.exe` on Windows), with 
 attestations start with the first release after `v0.3.0`: for `v0.3.0` and earlier, only the digest
 check applies, and `checksums.txt` comes from the same release as the archive, so it cannot tell a
 compromised release from a sound one; run the signed image instead where that matters.
+
+## Verify the site
+
+The site, https://www.shift2eu.com, runs the assessment in your browser from the files of one release's
+site bundle. Every release builds that bundle, `shift2eu-site_<tag>.tar.gz`, publishes it as a release
+asset and attests it with GitHub build provenance (above), and the bundle's `manifest.json` lists every
+other file in it with its SHA-256. The site's [verification page](https://www.shift2eu.com/verify.html)
+summarises this section.
+
+**Type the address yourself.** Type https://www.shift2eu.com into the address bar rather than following
+an `http://` link: on a first visit, before your browser has seen the site's HSTS header, a network
+attacker can strip HTTPS from an `http://` link and serve a look-alike page. This guide is served by
+GitHub over HTTPS, so it carries the advice where that attacker cannot replace it. If the site's
+verification page says that HSTS is waived, the same risk covers returning visits too: type the address
+every time, or run the bundle yourself (below).
+
+Every page shows the release it was built from, in its footer (and on the verification page), such as
+`v0.4.0`: that is the release to check. Check the live site against it, with `TAG` set to that version:
+
+```bash
+TAG=vX.Y.Z
+BUNDLE="shift2eu-site_$TAG.tar.gz"
+
+gh release download "$TAG" --repo timothymamo/shift2eu --pattern "$BUNDLE"
+
+# The build provenance (SLSA): from release.yml, for this tag, on GitHub's runners.
+gh attestation verify "$BUNDLE" --repo timothymamo/shift2eu \
+  --signer-workflow timothymamo/shift2eu/.github/workflows/release.yml \
+  --source-ref "refs/tags/$TAG" --deny-self-hosted-runners
+
+mkdir site && tar -xzf "$BUNDLE" -C site
+
+# Every file manifest.json lists, fetched from the live site over HTTPS only and compared with its digest.
+jq -r '.files[] | "\(.sha256)  \(.path)"' site/manifest.json > manifest.sha256
+mkdir live
+while read -r _ path; do
+  mkdir -p "live/$(dirname "$path")"
+  curl --fail --silent --show-error --proto '=https' --compressed \
+    --output "live/$path" "https://www.shift2eu.com/$path"
+done < manifest.sha256
+(cd live && sha256sum --check ../manifest.sha256)   # macOS: shasum -a 256 --check ../manifest.sha256
+```
+
+`gh attestation verify` must print `✓ Verification succeeded!`, and the check must print `OK` for every
+file. `--compressed` asks for, and decodes, the compressed form the site serves its largest script in:
+the manifest's digests are of the files themselves. A `FAILED` line, or a file `curl` cannot fetch, means
+the live site does not serve that release's files; report it as the repository's
+[security policy](../../SECURITY.md) says. The address `https://www.shift2eu.com/` serves `index.html`,
+which `curl --compressed --proto '=https' https://www.shift2eu.com/ | sha256sum` compares the same way.
+Every release checks the live site the same way after it deploys it.
+
+What the check shows, and what it does not:
+
+- It is one point in time from one vantage point. The HTML is the root of trust and nothing pins it: a
+  page served to someone else, at another time or through another network, may differ from the one you
+  checked.
+- A released page from a poisoned cache can stay in a browser's cache for up to its `max-age`
+  (300 seconds) after the site is repaired. A page uploaded with a leaked key sets its own caching (up
+  to a year) and can register a service worker, both of which can outlast the repair in a visitor's
+  browser.
+- It compares only the files the manifest names: a path outside the manifests, such as a look-alike page
+  at a new path, is not checked.
+
+**Run the bundle yourself.** The bundle runs unchanged on any origin. Serve the verified, extracted
+bundle with any static file server on your own machine and open it in your browser: you run exactly
+the attested files, and the site's host sees nothing. For example:
+
+```bash
+python3 -m http.server 8000 --bind localhost --directory site
+# then open http://localhost:8000/
+```
 
 ## Releases before the rename: v0.1.0 and v0.1.0-rc.1
 

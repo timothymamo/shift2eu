@@ -357,7 +357,7 @@ release), *live* (checked against the live site) or *review*.
 
 ### Layer 3: users can check what they run
 
-- [ ] *Release:* every release publishes the site bundle as the release asset
+- [x] *Release:* every release publishes the site bundle as the release asset
   `shift2eu-site_<version>.tar.gz`, listed in the release's checksums file and carrying build provenance
   attested by `release.yml` like the archives (ADR 0015), with a manifest (`manifest.json` in the bundle)
   of every file's path and SHA-256.
@@ -365,7 +365,7 @@ release), *live* (checked against the live site) or *review*.
   gives byte-identical files and archive (a test builds it twice and compares). The build uses
   `-trimpath`, a fixed or no VCS stamp, sorted archive entries with fixed times, owners and modes, and
   compressed files with zero mtime and a fixed level.
-- [ ] *Release:* after the deploy, `release.yml` fetches every file of the manifest from the canonical
+- [x] *Release:* after the deploy, `release.yml` fetches every file of the manifest from the canonical
   host (`https://www.shift2eu.com`), with no query string, and fails when one does not match its SHA-256
   after content decoding. The live check runs only when the deploy ran: whenever the deploy is skipped
   (`SITE_DEPLOY_ENABLED` unset or not `true`, or the tag not `latest`), the live check is skipped too,
@@ -454,7 +454,7 @@ release), *live* (checked against the live site) or *review*.
   maintainer*); if it can, the deploy program lists the bucket before it uploads and fails on any key
   that is in no release's manifest, so such a path is found at the next release (the scheduled check
   holds no secret and does not list).
-- [ ] The release verification guide (`docs/guide/verify-releases.md`) documents the same check as
+- [x] The release verification guide (`docs/guide/verify-releases.md`) documents the same check as
   commands a user can run (`gh attestation verify` on the bundle with `--signer-workflow`,
   `--source-ref refs/tags/<tag>` and `--deny-self-hosted-runners`, then fetching each file of its manifest
   from the live site and comparing digests); that the page shows its version so the user knows which
@@ -474,25 +474,25 @@ release), *live* (checked against the live site) or *review*.
 
 ### Deploy
 
-- [ ] *Release:* `release.yml` gains a site deploy job that runs after the release's `verify` and
+- [x] *Release:* `release.yml` gains a site deploy job that runs after the release's `verify` and
   `verify-archives` jobs have passed, and only when the `latest` job says this tag is the highest release
   tag on `main` (as the images' `latest` tag), so a re-run or an older line's patch release never rolls
   the site back. `check.ReleaseWorkflow` pins both conditions.
-- [ ] The deploy job runs only when the repository variable `SITE_DEPLOY_ENABLED` is `true`; otherwise it
+- [x] The deploy job runs only when the repository variable `SITE_DEPLOY_ENABLED` is `true`; otherwise it
   is skipped with a visible notice in the run's summary. The maintainer sets it at the end of the runbook
   (milestone 4), so releases between milestones 3 and 4 do not fail, and only once both the HSTS record
   and the preload record are merged to `main` and included in a release tag (the release's live check
   reads them at the tag it runs from, and fails safe without them). `check.ReleaseWorkflow` pins the
   condition, and the `release-tag` skill's post-release check reports the skip as expected while the
   variable is unset.
-- [ ] The deploy job does not build. A job without secrets builds the deploy program; the deploy job takes
+- [x] The deploy job does not build. A job without secrets builds the deploy program; the deploy job takes
   it and the bundle of this run as artifacts, checks both digests against those this run produced, and
   verifies the bundle's provenance with `gh attestation verify` naming `release.yml` as the signer
   workflow, the run's tag as the source ref and `--deny-self-hosted-runners`. It runs no third-party
   action after the key is in scope; it checks out nothing, or with `persist-credentials: false`; its
   permissions are `contents: read` and `attestations: read`; and the key's two secrets are the `env:` of
   the one step that uploads, never of the job.
-- [ ] The deploy program's rollback guard trusts the live page's version only when it is a real release:
+- [x] The deploy program's rollback guard trusts the live page's version only when it is a real release:
   before the upload it reads the live page once and refuses to deploy only when the embedded version is
   a release tag on `main` (from the repository's own tag list, as the `latest` job reads it) higher
   than the bundle's and the live HTML matches that tag's manifest. Otherwise it overwrites, with a
@@ -510,16 +510,16 @@ release), *live* (checked against the live site) or *review*.
   (runbook and Hosting decision 5). The bucket policy allows that application only the object writes and
   reads the deploy needs. The key has an expiry date, and the runbook has a rotation step. *Review:* the
   runbook's policies are checked against Scaleway's permission sets.
-- [ ] The `release-tag` skill's step 2 checks the `site` environment: `custom_branch_policies` `true` and
+- [x] The `release-tag` skill's step 2 checks the `site` environment: `custom_branch_policies` `true` and
   `protected_branches` `false`; `deployment-branch-policies` lists exactly `tag v*.*.*` (type `tag`, so a
   branch named like a tag is not allowed); its secrets are `SCW_ACCESS_KEY` and `SCW_SECRET_KEY`; and
   neither name is listed at repository level. A docs test pins that the skill names the environment, the
   policy and both secrets.
-- [ ] A failed deploy fails the release run visibly and leaves the previous release's site serving:
+- [x] A failed deploy fails the release run visibly and leaves the previous release's site serving:
   content-addressed assets are uploaded first, the HTML pages last, and no earlier release's file is
   deleted. A test of the deploy program against a fake object store (`httptest`) pins the order, that a
   failure before the HTML upload changes no page, and that the program never logs the key.
-- [ ] The deploy program is CI tooling under `ci/` (beside the AI reviewer, ADR 0033), standard library
+- [x] The deploy program is CI tooling under `ci/` (beside the AI reviewer, ADR 0033), standard library
   only, held by strict depguard rules of its own added to the pin. CLAUDE.md's CI tooling row and
   `docs/architecture.md` name it and say that the release runs it. Every new tool or action is pinned,
   with a `# renovate:` comment where Renovate does not find it (CLAUDE.md rule 7).
@@ -629,12 +629,12 @@ release), *live* (checked against the live site) or *review*.
 - [x] `chromedp` and its dependencies are confined by depguard to the smoke test's package, and a test
   pins that no product binary's dependency tree (`cmd/shift2eu`, `cmd/shift2eu-server`,
   `cmd/shift2eu-web`) reaches `chromedp` or any package only it brings in.
-- [ ] CI runs the smoke test as its own job on every pull request and on `main`, with `contents: read`
+- [x] CI runs the smoke test as its own job on every pull request and on `main`, with `contents: read`
   only. The release runs it on the bundle it attests, before the deploy, in a job that holds neither the
   attestation's `id-token` nor the Scaleway key.
   - [x] Milestone 2: CI's `browser` job (`Browser smoke test` in `ci.yml`), on every pull request and push
     to `main`, with `contents: read` only.
-  - [ ] Milestone 3: the release's run on the bundle it attests, before the deploy.
+  - [x] Milestone 3: the release's run on the bundle it attests, before the deploy.
 
 ### Runbook
 
