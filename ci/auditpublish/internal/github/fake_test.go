@@ -24,6 +24,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 const (
@@ -38,6 +39,7 @@ const (
 	ghCallsFile       = "gh.calls.jsonl"
 	gitleaksCallsFile = "gitleaks.calls.jsonl"
 	gitleaksExitFile  = "gitleaks.exit"
+	gitleaksSleepFile = "gitleaks.sleep"
 
 	// fakeGitleaksHit is the text the fake gitleaks reports as a leak (exit
 	// 10) when its stdin holds it.
@@ -73,6 +75,9 @@ type Route struct {
 	Body any
 	// Link is the answer's Link header, none when empty.
 	Link string
+	// Delay is how long the fake waits before answering, none when zero: a
+	// route that outlives the caller's deadline.
+	Delay time.Duration
 }
 
 // routeRecord is a Route as gh.routes.json holds it.
@@ -82,6 +87,7 @@ type routeRecord struct {
 	Status   int             `json:"status"`
 	Body     json.RawMessage `json:"body"`
 	Link     string          `json:"link,omitempty"`
+	DelayMS  int64           `json:"delay_ms,omitempty"`
 }
 
 // Call is one invocation of the fake gh as it recorded it.
@@ -128,7 +134,14 @@ func newFakeGH(t *testing.T, routes ...Route) *FakeGH {
 			t.Fatalf("newFakeGH: the body of %s %s: %v", r.Method, r.Endpoint, err)
 		}
 
-		records = append(records, routeRecord{Method: r.Method, Endpoint: r.Endpoint, Status: r.Status, Body: body, Link: r.Link})
+		records = append(records, routeRecord{
+			Method:   r.Method,
+			Endpoint: r.Endpoint,
+			Status:   r.Status,
+			Body:     body,
+			Link:     r.Link,
+			DelayMS:  r.Delay.Milliseconds(),
+		})
 	}
 
 	writeJSON(t, filepath.Join(dir, ghRoutesFile), records)
@@ -216,6 +229,18 @@ func newFakeGitleaksExit(t *testing.T, code int) *FakeGitleaks {
 
 	f := newFakeGitleaks(t)
 	writeJSON(t, filepath.Join(f.dir, gitleaksExitFile), code)
+
+	return f
+}
+
+// newFakeGitleaksSleep makes a fake gitleaks that waits delay before answering,
+// as a route's Delay does for the fake gh: a scan that outlives the caller's
+// deadline.
+func newFakeGitleaksSleep(t *testing.T, delay time.Duration) *FakeGitleaks {
+	t.Helper()
+
+	f := newFakeGitleaks(t)
+	writeJSON(t, filepath.Join(f.dir, gitleaksSleepFile), delay.Milliseconds())
 
 	return f
 }
@@ -414,6 +439,7 @@ func fakeGHMain() int {
 	}
 
 	status, body, link := fakeGuardStatus, json.RawMessage(`{"message":"refused by the fake gh"}`), ""
+	var delay time.Duration
 
 	if call.Violation == "" {
 		route, ok, err := nextRoute(dir, method, endpoint)
@@ -424,6 +450,7 @@ func fakeGHMain() int {
 			return 1
 		case ok:
 			status, body, link = route.Status, route.Body, route.Link
+			delay = time.Duration(route.DelayMS) * time.Millisecond
 		default:
 			call.Unmatched = true
 			status, body = 404, json.RawMessage(`{"message":"no route"}`)
@@ -435,6 +462,10 @@ func fakeGHMain() int {
 
 		return 1
 	}
+
+	// The call is recorded before the wait, so a caller that gives up on it
+	// leaves the record of the answer it never read.
+	time.Sleep(delay)
 
 	var out strings.Builder
 
@@ -542,6 +573,15 @@ func fakeGitleaksMain() int {
 	call := GitleaksCall{Args: append([]string{}, os.Args[1:]...), Env: os.Environ(), Stdin: string(stdin)}
 	if err := appendJSONLine(filepath.Join(dir, gitleaksCallsFile), call); err != nil {
 		return 1
+	}
+
+	if data, err := os.ReadFile(filepath.Join(dir, gitleaksSleepFile)); err == nil { //nolint:gosec // G703: the fake's own file, next to its link in the test's temporary directory
+		var milliseconds int64
+		if err := json.Unmarshal(data, &milliseconds); err != nil {
+			return 1
+		}
+
+		time.Sleep(time.Duration(milliseconds) * time.Millisecond)
 	}
 
 	_, _ = fmt.Fprintln(os.Stdout, fakeOutputMarker)

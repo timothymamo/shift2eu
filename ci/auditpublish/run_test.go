@@ -21,6 +21,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -669,6 +670,107 @@ func TestRunKeepsTheRunsValuesOutOfItsOutput(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestRunFailsClosedOnASummaryItCannotUse pins the step summary's fail-closed
+// rule (review finding 1, ADR 0040): a run whose one line cannot reach the
+// step's summary never passes. A run that would have passed prints the
+// configuration's line and exits 9; a run that already failed keeps its own
+// line and code, so a failed run's verdict is never lost. Either way the line
+// goes to stdout alone, exactly once, and nothing reaches stderr.
+func TestRunFailsClosedOnASummaryItCannotUse(t *testing.T) {
+	t.Parallel()
+
+	for _, summary := range []struct {
+		name string
+		// unusable changes env's GITHUB_STEP_SUMMARY to one the run cannot
+		// append a line to: the runner's variable where it is set, none where
+		// it is not.
+		unusable func(t *testing.T, env map[string]string)
+	}{
+		{
+			name:     "an unset summary",
+			unusable: func(_ *testing.T, env map[string]string) { delete(env, "GITHUB_STEP_SUMMARY") },
+		},
+		{
+			name:     "a relative summary",
+			unusable: func(_ *testing.T, env map[string]string) { env["GITHUB_STEP_SUMMARY"] = "summary.md" },
+		},
+		{
+			name: "a summary that does not exist",
+			unusable: func(t *testing.T, env map[string]string) {
+				t.Helper()
+
+				env["GITHUB_STEP_SUMMARY"] = filepath.Join(t.TempDir(), "no-such-summary.md")
+			},
+		},
+		{
+			name: "a summary that is a directory",
+			unusable: func(t *testing.T, env map[string]string) {
+				t.Helper()
+
+				env["GITHUB_STEP_SUMMARY"] = t.TempDir()
+			},
+		},
+		{
+			name: "a summary whose writes fail",
+			unusable: func(t *testing.T, env map[string]string) {
+				t.Helper()
+
+				if runtime.GOOS != "linux" {
+					t.Skip("the device whose writes fail (/dev/full) exists on Linux alone")
+				}
+
+				env["GITHUB_STEP_SUMMARY"] = "/dev/full"
+			},
+		},
+	} {
+		for _, outcome := range []struct {
+			name   string
+			answer fakeAnswer
+			want   string
+			code   int
+		}{
+			{
+				name:   "a passing listing",
+				answer: fakeAnswer{Status: 200, Body: artifactListing(1, artifactChecksName)},
+				want:   lineConfigInvalid,
+				code:   codeConfigInvalid,
+			},
+			{
+				name:   "an extra-artifact listing",
+				answer: fakeAnswer{Status: 200, Body: artifactListing(2, artifactChecksName, "unexpected-"+valueMarker)},
+				want:   lineUnexpected,
+				code:   codeUnexpected,
+			},
+		} {
+			t.Run(summary.name+" and "+outcome.name, func(t *testing.T) {
+				t.Parallel()
+
+				fake := newFakeGH(t, outcome.answer)
+				env := stepEnvironment(t, writeSummary(t))
+				summary.unusable(t, env)
+
+				lookup := &environ{values: env}
+
+				var stdout, stderr bytes.Buffer
+
+				code := run(t.Context(), artifactArgs(jobModel, fake.Path, t.TempDir()), lookup.lookup, fixedClock, &stdout, &stderr)
+
+				if code != outcome.code {
+					t.Errorf("the run's exit code is %d, want %d: %s", code, outcome.code, outcome.want)
+				}
+
+				if want := outcome.want + "\n"; stdout.String() != want {
+					t.Errorf("the run's stdout is %q, want exactly %q: the run prints its one line and nothing else", stdout.String(), want)
+				}
+
+				if stderr.String() != "" {
+					t.Errorf("the run's stderr is %q, want nothing: an unusable summary is no usage error", stderr.String())
+				}
+			})
+		}
 	}
 }
 

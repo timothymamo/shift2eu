@@ -378,6 +378,59 @@ func TestCloseRemovesTheTemporaryDirectory(t *testing.T) {
 	}
 }
 
+// TestClientFormatsWithoutItsToken pins that the values a program logs are
+// safe: a Client holding the token, its dereferenced value, and a Gitleaks
+// holding the text it scanned print neither the token nor the text, whatever
+// the verb (audit finding 6).
+func TestClientFormatsWithoutItsToken(t *testing.T) {
+	t.Parallel()
+
+	token := fixtureToken(t)
+	client := newTestClient(t, github.ClientConfig{
+		GHPath:  newFakeGH(t).Path,
+		Token:   github.NewToken(token),
+		TempDir: t.TempDir(),
+		Scope:   testScope(),
+	})
+
+	scanner := newTestGitleaks(t, newFakeGitleaks(t).Path)
+	if err := scanner.Scan(t.Context(), gitleaksTextHit); !errors.Is(err, publish.ErrScanRefused) {
+		t.Fatalf("Scan of the text the fake gitleaks reports as a leak = %v, want an error wrapping publish.ErrScanRefused", err)
+	}
+
+	formatted := []struct {
+		what  string
+		value any
+	}{
+		{what: "a *Client", value: client},
+		{what: "a Client", value: *client},
+		{what: "a *Gitleaks", value: scanner},
+		{what: "a Gitleaks", value: *scanner},
+	}
+
+	for _, format := range []string{"%v", "%+v", "%#v", "%s"} {
+		for _, f := range formatted {
+			got := fmt.Sprintf(format, f.value)
+
+			if strings.Contains(got, token) {
+				t.Errorf("%s with %s prints the token: %q", f.what, format, got)
+			}
+		}
+	}
+
+	// A Gitleaks keeps no text it scanned either: the scanner is not a place a
+	// secret lives, and printing one cannot leak what was scanned.
+	for _, format := range []string{"%v", "%+v", "%#v", "%s"} {
+		got := fmt.Sprintf(format, scanner)
+
+		for _, forbidden := range []string{gitleaksTextMarker, fakeGitleaksHit} {
+			if strings.Contains(got, forbidden) {
+				t.Errorf("a *Gitleaks with %s prints %q, want it to hold none of the text it scanned", format, got)
+			}
+		}
+	}
+}
+
 // TestTokenFormatsAsAPlaceholder pins that the token can be formatted and
 // logged without its value: Token's own verbs and a ClientConfig holding one
 // both print a placeholder.

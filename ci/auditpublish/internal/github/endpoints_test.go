@@ -37,8 +37,18 @@ func fixtureBodies() map[string]string {
 		"pull":           `{"title":"t","body":"b","head":"` + fixtureBranch + `","base":"main","maintainer_can_modify":false,"draft":false}`,
 		"issue":          `{"title":"t","body":"b","labels":["security"]}`,
 		"advisoryCreate": `{"summary":"s","description":"d","severity":"high","vulnerabilities":[]}`,
+		"advisoryCreateVulnerability": `{"summary":"s","description":"d","severity":"high",` +
+			`"vulnerabilities":[` + fixtureVulnerability() + `]}`,
 		"advisoryUpdate": `{"summary":"s","description":"d","severity":"high","state":"draft"}`,
 	}
+}
+
+// fixtureVulnerability is a vulnerabilities element of the row-15 body with
+// every key GitHub's advisory create takes, filled for one invented module.
+func fixtureVulnerability() string {
+	return `{"package":{"ecosystem":"go","name":"example.com/module"},` +
+		`"vulnerable_version_range":"< 1.2.0","patched_versions":"1.2.0",` +
+		`"vulnerable_functions":["parse"]}`
 }
 
 // acceptedEndpoints is every row of the design's table 3.1 with a call the
@@ -66,6 +76,7 @@ func acceptedEndpoints() []endpointCase {
 		{name: "row 14: the advisories", method: "GET", endpoint: fixtureAdvisoriesEndpoint},
 		{name: "row 14: the advisories' next page", method: "GET", endpoint: fixtureAdvisoriesEndpoint + "&after=Y3Vyc29yOnYyOpK5MjAyNi0xMi0wMw=="},
 		{name: "row 15: a draft advisory", method: "POST", endpoint: fixtureRepoPrefix + "/security-advisories", body: b["advisoryCreate"]},
+		{name: "row 15: a draft advisory naming a vulnerability", method: "POST", endpoint: fixtureRepoPrefix + "/security-advisories", body: b["advisoryCreateVulnerability"]},
 		{name: "row 16: a draft advisory updated", method: "PATCH", endpoint: fixtureRepoPrefix + "/security-advisories/" + fixtureGHSA, body: b["advisoryUpdate"]},
 	}
 }
@@ -216,6 +227,27 @@ func refusedEndpoints() []endpointCase {
 			name: "an unknown body key in a commit", method: "POST", endpoint: fixtureRepoPrefix + "/git/commits",
 			body: `{"message":"m","tree":"` + fixtureSHA + `","parents":["` + fixtureCommit + `"],"author":{}}`,
 		},
+		{
+			name: "a PATCH body with a duplicate state", method: "PATCH", endpoint: fixtureRepoPrefix + "/security-advisories/" + fixtureGHSA,
+			body: `{"summary":"s","state":"published","state":"draft"}`,
+		},
+		{
+			name: "a blob with a duplicate encoding", method: "POST", endpoint: fixtureRepoPrefix + "/git/blobs",
+			body: `{"content":"aGVsbG8=","encoding":"utf-8","encoding":"utf-8"}`,
+		},
+		{
+			name: "a tree whose entry holds a duplicate key", method: "POST", endpoint: fixtureRepoPrefix + "/git/trees",
+			body: `{"base_tree":"` + fixtureCommit + `","tree":[{"path":"` + fixtureReportPath + `","mode":"100644","type":"blob",` +
+				`"sha":"` + fixtureSHA + `","sha":"` + fixtureSHA + `"}]}`,
+		},
+		{name: "a lowercase method", method: "get", endpoint: fixtureReleaseEndpoint},
+		{name: "an encoded branch separator", method: "GET", endpoint: fixtureRepoPrefix + "/git/ref/heads/security-audit%2F" + fixtureDate + "-" + fixtureRunID},
+		{name: "an encoded parent directory", method: "GET", endpoint: fixtureRepoPrefix + "/%2e%2e/other/pulls"},
+		{name: "a zero-padded page", method: "GET", endpoint: fixtureIssuesQuery + "page=01"},
+		{name: "an endpoint with a fragment", method: "GET", endpoint: fixtureAdvisoriesEndpoint + "#frag"},
+		{name: "an endpoint with a space", method: "GET", endpoint: "repos/example/shift2eu /git/ref/heads/main"},
+		{name: "an endpoint with gh's owner placeholder", method: "GET", endpoint: "repos/{owner}/{repo}/git/ref/heads/main"},
+		{name: "an endpoint with gh's repo placeholder", method: "GET", endpoint: "{repo}/git/ref/heads/main"},
 		{name: "a body on a GET", method: "GET", endpoint: fixtureArtifactsEndpoint, body: b["issue"]},
 		{name: "a PUT of a ref", method: "PUT", endpoint: fixtureRepoPrefix + "/git/refs", body: b["ref"]},
 		{name: "a DELETE of the report branch", method: "DELETE", endpoint: fixtureRepoPrefix + "/git/refs/heads/" + fixtureBranch},
@@ -326,6 +358,97 @@ func TestCallRefusesBeforeGHRuns(t *testing.T) {
 
 			if calls := fake.Calls(t); len(calls) != 0 {
 				t.Errorf("the refused call ran gh %d time(s), want 0: %+v", len(calls), calls)
+			}
+		})
+	}
+}
+
+// TestAllowedChecksTheAdvisoryCreateBody pins row 15's body rule (audit finding
+// 3, review finding 9): summary and description are both required and both
+// non-empty, and every element of vulnerabilities is an object of GitHub's
+// four keys, its package an object of its two. A body outside the rule is
+// refused with ErrEndpointRefused, so a model's finding cannot widen the
+// advisory's shape (ADR 0040).
+func TestAllowedChecksTheAdvisoryCreateBody(t *testing.T) {
+	t.Parallel()
+
+	const endpoint = fixtureRepoPrefix + "/security-advisories"
+
+	const (
+		bothFields = `"summary":"s","description":"d"`
+		vulnerable = `{"package":{"ecosystem":"go","name":"example.com/module"}}`
+	)
+
+	for _, tc := range []struct {
+		name     string
+		body     string
+		accepted bool
+	}{
+		{name: "the row-15 body", body: `{` + bothFields + `,"severity":"high","vulnerabilities":[]}`, accepted: true},
+		{name: "a vulnerability with every key", body: `{` + bothFields + `,"severity":"high","vulnerabilities":[` + fixtureVulnerability() + `]}`, accepted: true},
+		{
+			name: "a vulnerability whose range and versions are null", accepted: true,
+			body: `{` + bothFields + `,"vulnerabilities":[{"package":{"ecosystem":"go","name":"example.com/module"},` +
+				`"vulnerable_version_range":null,"patched_versions":null,"vulnerable_functions":null}]}`,
+		},
+		{name: "a body with neither severity nor vulnerabilities", body: `{` + bothFields + `}`, accepted: true},
+
+		{name: "no summary", body: `{"description":"d"}`},
+		{name: "no description", body: `{"summary":"s"}`},
+		{name: "an empty summary", body: `{"summary":"","description":"d"}`},
+		{name: "an empty description", body: `{"summary":"s","description":""}`},
+		{name: "a summary that is no string", body: `{"summary":[1],"description":"d"}`},
+		{name: "a description that is null", body: `{"summary":"s","description":null}`},
+		{name: "vulnerabilities null", body: `{` + bothFields + `,"vulnerabilities":null}`},
+		{name: "vulnerabilities that are no array", body: `{` + bothFields + `,"vulnerabilities":` + vulnerable + `}`},
+		{name: "a vulnerability that is no object", body: `{` + bothFields + `,"vulnerabilities":["< 1.2.0"]}`},
+		{
+			name: "an unknown key in a vulnerability",
+			body: `{` + bothFields + `,"vulnerabilities":[{"package":{"ecosystem":"go","name":"example.com/module"},"notes":"n"}]}`,
+		},
+		{
+			name: "a duplicate key in a vulnerability",
+			body: `{` + bothFields + `,"vulnerabilities":[{"package":{"ecosystem":"go","name":"example.com/module"},` +
+				`"vulnerable_version_range":"< 1.2.0","vulnerable_version_range":"< 1.3.0"}]}`,
+		},
+		{name: "a vulnerability without a package", body: `{` + bothFields + `,"vulnerabilities":[{"patched_versions":"1.2.0"}]}`},
+		{
+			name: "an unknown key in a vulnerability's package",
+			body: `{` + bothFields + `,"vulnerabilities":[{"package":{"ecosystem":"go","name":"example.com/module","purl":"pkg:go/module"}}]}`,
+		},
+		{
+			name: "a package without an ecosystem",
+			body: `{` + bothFields + `,"vulnerabilities":[{"package":{"name":"example.com/module"}}]}`,
+		},
+		{name: "a package that is no object", body: `{` + bothFields + `,"vulnerabilities":[{"package":"example.com/module"}]}`},
+		{name: "a package name that is no string", body: `{` + bothFields + `,"vulnerabilities":[{"package":{"ecosystem":"go","name":1}}]}`},
+		{
+			name: "a version range that is no string",
+			body: `{` + bothFields + `,"vulnerabilities":[{"package":{"ecosystem":"go","name":"example.com/module"},"vulnerable_version_range":12}]}`,
+		},
+		{
+			name: "patched versions that are no string",
+			body: `{` + bothFields + `,"vulnerabilities":[{"package":{"ecosystem":"go","name":"example.com/module"},"patched_versions":["1.2.0"]}]}`,
+		},
+		{
+			name: "vulnerable functions that are no array",
+			body: `{` + bothFields + `,"vulnerabilities":[{"package":{"ecosystem":"go","name":"example.com/module"},"vulnerable_functions":"parse"}]}`,
+		},
+		{
+			name: "vulnerable functions holding a value that is no string",
+			body: `{` + bothFields + `,"vulnerabilities":[{"package":{"ecosystem":"go","name":"example.com/module"},"vulnerable_functions":[1]}]}`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := github.Allowed(testScope(), "POST", endpoint, bodyBytes(tc.body))
+
+			switch {
+			case tc.accepted && err != nil:
+				t.Fatalf("Allowed(POST %s) = %v, want no error: the body is inside row 15's rule", endpoint, err)
+			case !tc.accepted && !errors.Is(err, github.ErrEndpointRefused):
+				t.Fatalf("Allowed(POST %s) = %v, want an error wrapping ErrEndpointRefused: the body is outside row 15's rule", endpoint, err)
 			}
 		})
 	}

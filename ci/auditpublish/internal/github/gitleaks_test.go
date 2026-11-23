@@ -294,6 +294,65 @@ func TestScanKeepsTheToolsOutputAndTheTextOutOfItsErrors(t *testing.T) {
 	}
 }
 
+// TestScanRefusesAnInlineAllowComment pins the refusal of gitleaks' own inline
+// allow list (audit finding 1): gitleaks honours a `gitleaks:allow` comment in
+// the text it reads, so a text that carries one, in any spelling, is refused
+// before gitleaks runs and never reaches its allow list. A text without the
+// marker still runs the scan, once.
+func TestScanRefusesAnInlineAllowComment(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name string
+		text string
+	}{
+		{name: "as the tool's own spelling", text: gitleaksTextMarker + " gitleaks:allow\n"},
+		{name: "in capitals", text: gitleaksTextMarker + " GITLEAKS:ALLOW\n"},
+		{name: "in mixed case", text: gitleaksTextMarker + " Gitleaks:Allow\n"},
+		{name: "as a comment at the end of a line", text: "a line of the report #gitleaks:allow\n"},
+		{name: "in the middle of a multi-line text", text: "the report's first line\n" + gitleaksTextMarker + " # gitleaks:allow\nthe report's last line\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			fake := newFakeGitleaks(t)
+			g := newTestGitleaks(t, fake.Path)
+
+			err := g.Scan(t.Context(), tc.text)
+			if !errors.Is(err, publish.ErrScanRefused) {
+				t.Fatalf("Scan of a text with gitleaks' inline allow comment = %v, want an error wrapping publish.ErrScanRefused: the comment could carry a secret past the scan", err)
+			}
+
+			if calls := fake.Calls(t); len(calls) != 0 {
+				t.Errorf("the scan ran gitleaks %d time(s), want 0: a text with an inline allow comment is refused before gitleaks runs", len(calls))
+			}
+
+			if strings.Contains(strings.ToLower(err.Error()), "gitleaks:allow") {
+				t.Errorf("the refusal is %q, want it to hold neither the scanned text nor the comment's marker", err)
+			}
+
+			if strings.Contains(err.Error(), gitleaksTextMarker) {
+				t.Errorf("the refusal is %q, want it not to hold the scanned text", err)
+			}
+		})
+	}
+
+	t.Run("a text without the marker still runs gitleaks once", func(t *testing.T) {
+		t.Parallel()
+
+		fake := newFakeGitleaks(t)
+		g := newTestGitleaks(t, fake.Path)
+
+		if err := g.Scan(t.Context(), gitleaksTextClean); err != nil {
+			t.Fatalf("Scan of a clean text without the marker: %v, want no error", err)
+		}
+
+		if calls := fake.Calls(t); len(calls) != 1 {
+			t.Errorf("the scan ran gitleaks %d time(s), want 1", len(calls))
+		}
+	})
+}
+
 // TestCloseRemovesGitleaksHomeAndNothingElse pins that a scan leaves nothing
 // behind: NewGitleaks makes gitleaks' fresh HOME under the temporary directory,
 // and Close removes it, leaving the temporary directory itself, which the
