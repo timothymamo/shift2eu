@@ -185,6 +185,10 @@
 // GoReleaser release.yml runs, building those archives with it and checking
 // each holds exactly its own binary (check.DryRunVerifiesArchives), issue #147.
 //
+// TestTheProjectIsApacheLicensed holds the project to the Apache License 2.0
+// (issue #493, ADR 0041): the root NOTICE word for word, LICENSE's Apache
+// header with no MIT text left, and the image's licenses label.
+//
 // TestCompositionRootRulesAreHeldToTheirRuleForEveryReleaseTarget also holds
 // cmd/shift2eu, on every release target, cgo mode and
 // tag set and on the same go list -deps listing as its main-module check, to

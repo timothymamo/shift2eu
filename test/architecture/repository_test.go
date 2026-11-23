@@ -1,6 +1,8 @@
 package architecture_test
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"maps"
 	"os"
@@ -1242,7 +1244,8 @@ func TestReleaseWorkflowIsClosed(t *testing.T) {
 // ci.yml's test job, the dry run that runs on every pull request, installs the
 // GoReleaser that release.yml runs and builds that archive with it, failing
 // unless it holds exactly its own binary (check.DryRunVerifiesArchives). The
-// files the archive ships are LICENSE, README.md, SECURITY.md (issue #450),
+// files the archive ships are LICENSE, NOTICE (issue #493), README.md,
+// SECURITY.md (issue #450),
 // the pages under docs/ (issue #149) and the sample inventories under
 // examples/ the walkthrough runs (issue #188). No second archive, the HTTP
 // API's, is published any more, and neither is the bundled OpenAPI document
@@ -1373,6 +1376,98 @@ func TestCIImageJobIsTheReleaseDryRun(t *testing.T) {
 
 	for _, message := range check.DryRunMirrorsRelease(ci, release) {
 		t.Error(message)
+	}
+}
+
+// apacheNotice is the NOTICE Apache-2.0 section 4(d) requires a release to ship
+// with the work: who holds the copyright, and that the product includes
+// software developed as shift2eu (issue #493).
+const apacheNotice = `shift2eu
+Copyright 2026 Timothy Mamo
+
+This product includes software developed as shift2eu
+(https://github.com/timothymamo/shift2eu).
+`
+
+// apacheLicenseSHA256 is the SHA-256 of the Apache License 2.0's official text,
+// https://www.apache.org/licenses/LICENSE-2.0.txt, as apache.org publishes it.
+// GitHub detects a repository's license from the unmodified text, so the root
+// LICENSE must hash to it (issue #493).
+const apacheLicenseSHA256 = "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+
+// TestTheProjectIsApacheLicensed pins issue #493: the project is licensed under
+// the Apache License 2.0, and says so where the release and its image say it.
+// The root LICENSE hashes to the official text's SHA-256, so it is the license
+// unmodified and GitHub detects Apache-2.0 rather than a paraphrase of it; the
+// root NOTICE holds exactly the attributions Apache-2.0 section 4(d) asks a
+// work to carry, with its trailing newline; and the image's
+// org.opencontainers.image.licenses label says Apache-2.0 too, so the image and
+// the archive it ships beside tell a reader the same thing.
+func TestTheProjectIsApacheLicensed(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		// file is the repository file the case reads.
+		file string
+		// exact, when set, is the whole file the case wants, its trailing
+		// newline included.
+		exact string
+		// holds are the substrings the file must hold.
+		holds []string
+		// absent are the substrings the file must not hold.
+		absent []string
+		// sha256Hex, when set, is the SHA-256 the whole file must hash to.
+		sha256Hex string
+	}{
+		{
+			name:  "the root NOTICE",
+			file:  "NOTICE",
+			exact: apacheNotice,
+		},
+		{
+			name:      "the root LICENSE",
+			file:      "LICENSE",
+			sha256Hex: apacheLicenseSHA256,
+		},
+		{
+			name:  "the image's license label",
+			file:  "Dockerfile",
+			holds: []string{`org.opencontainers.image.licenses="Apache-2.0"`},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			contents := readRepositoryFile(t, tc.file)
+			got := string(contents)
+
+			if tc.sha256Hex != "" {
+				sum := sha256.Sum256(contents)
+				if h := hex.EncodeToString(sum[:]); h != tc.sha256Hex {
+					t.Errorf("%s must be the unmodified text of apache.org's LICENSE-2.0.txt (issue #493), so GitHub detects Apache-2.0: sha256 %s, want %s", tc.file, h, tc.sha256Hex)
+				}
+			}
+
+			if tc.exact != "" {
+				if diff := cmp.Diff(tc.exact, got); diff != "" {
+					t.Errorf("%s mismatch (-want +got):\n%s", tc.file, diff)
+				}
+			}
+
+			for _, want := range tc.holds {
+				if !strings.Contains(got, want) {
+					t.Errorf("%s does not hold %q: want the project licensed under Apache-2.0 (issue #493)", tc.file, want)
+				}
+			}
+
+			for _, unwanted := range tc.absent {
+				if strings.Contains(got, unwanted) {
+					t.Errorf("%s holds %q: want the project licensed under Apache-2.0, not MIT (issue #493)", tc.file, unwanted)
+				}
+			}
+		})
 	}
 }
 

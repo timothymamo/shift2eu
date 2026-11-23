@@ -102,7 +102,10 @@ green: [Development](docs/contributing/development.md#contributing) has the step
 
 ## License
 
-`shift2eu` is licensed under the [MIT License](LICENSE).
+`shift2eu` is licensed under the [Apache License 2.0](LICENSE) (ADR 0041); releases published before
+the switch stay under the licence they shipped with. The root `NOTICE` file holds the project's
+attribution, which every redistribution of `shift2eu` or of a work based on it must carry (Apache-2.0,
+section 4(d)).
 
 The sources cited in `internal/adapter/target/*/SOURCES.md` keep their own licences, which each
 `SOURCES.md` states. The embedded catalog snapshots hold only facts taken from them (names, taxonomy

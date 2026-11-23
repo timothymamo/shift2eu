@@ -57,7 +57,7 @@ LABEL org.opencontainers.image.title="shift2eu" \
       org.opencontainers.image.source="https://github.com/timothymamo/shift2eu" \
       org.opencontainers.image.version="${VERSION}" \
       org.opencontainers.image.revision="${COMMIT}" \
-      org.opencontainers.image.licenses="MIT"
+      org.opencontainers.image.licenses="Apache-2.0"
 
 COPY --from=build /out/shift2eu /shift2eu
 

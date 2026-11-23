@@ -41,7 +41,9 @@ builds:
 # docs/'s subdirectories, so docs/*.md takes those directly in it. Each
 # archive ships the security policy, SECURITY.md, beside LICENSE and README.md
 # too, so a user of a release can read how to report a vulnerability without
-# a clone (issue #450).
+# a clone (issue #450). Each archive ships NOTICE beside LICENSE: Apache-2.0
+# section 4(d) asks every redistribution to carry its attribution (issue #493,
+# ADR 0041).
 #
 # docs/guide/try-it.md runs the CLI on the sample inventories under
 # examples/, so each archive ships examples/ beside docs/ too, and the
@@ -59,6 +61,7 @@ archives:
         formats: [zip]
     files:
       - LICENSE
+      - NOTICE
       - README.md
       - SECURITY.md
       - docs/*.md
