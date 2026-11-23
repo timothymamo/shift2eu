@@ -340,8 +340,11 @@ result schema and its closed category list, the publish script's false-positive 
 derivation of each finding's status, the finding limit and the encoded-run thresholds. Then "How Claude
 Code runs in the model job" (2026-11-22) covers how Claude Code runs: the shared launcher, the audit's
 launcher and its environment, the audit directory, the settings file and its permission mode, the
-wrapper, the sandbox preflight, the user-namespace handling and the Claude Code pin. The other items of
-the list above come with the pull requests of milestone 2 that build them.
+wrapper, the sandbox preflight, the user-namespace handling and the Claude Code pin. A third, "The
+publish program's GitHub side" (2026-11-23), settles the publish program's entry point and its GitHub
+side: the package split, the `gh` calling contract and its endpoint table, the fake `gh` its tests run
+against, and the subcommands. The other items of the list above come with the pull requests of
+milestone 2 that build them.
 
 ### The publish program's core (milestone 2, amended 2026-11-23)
 
@@ -865,6 +868,111 @@ entry point prints none of them.
   `docs/security/audits/`, enforced by CODEOWNERS or a required check. Otherwise a merged edit from
   another branch that adds a False positives row would drop a public finding from every later run,
   silently, since the row is carried forward byte for byte.
+
+### The publish program's GitHub side (milestone 2, amended 2026-11-23)
+
+This subsection settles the fourth pull request's frame: the entry point, its GitHub side, how it calls
+GitHub and how that is tested. The workflow that runs it, `.github/workflows/scheduled-security-audit.yml`,
+its jobs, `age` and the schedule are the fifth pull request's; the behaviours below the frame (the
+report's Git data, the issues, the advisories' tracking) are built test-first on it, and this record
+gains each one's details with the change that builds it.
+
+**Packages.** The publish program is three packages, each held by a strict depguard rule of named
+standard packages, each entry ending in `$`, pinned by `test/architecture`:
+
+- `ci/auditpublish`, the **entry point**, a main package (`audit-publish-main`: `context`, `errors`,
+  `flag`, `fmt`, `io`, `os`, `os/signal`, `time`, the GitHub side and the core; `os/exec` and `net`
+  denied). It reads the step's environment through one `os.LookupEnv` passed to `run` (the forbidigo
+  group `audit-publish-main-env`, its exception in `main.go` alone), reads the clock for the run's UTC
+  date, prints the one summary line and exits. It starts no program.
+- `ci/auditpublish/internal/github`, the **GitHub side**, a library (`audit-publish-github`: `bytes`,
+  `context`, `encoding/json`, `errors`, `fmt`, `io`, `io/fs`, `net/url`, `os`, `os/exec`, `path`,
+  `path/filepath`, `regexp`, `slices`, `strconv`, `strings`, `time` and the core; `net` denied). It runs
+  `gh` and gitleaks, reads the result and the merged reports, and reads no environment variable at all
+  (the forbidigo group `audit-publish-github-env`, which holds for its tests too; its one exception is
+  `os.Environ` in `fake_test.go`, where the fakes record the environment the library gave them). The
+  process starts sit in the library, not in the entry point, so that the endpoint check and the `gh`
+  run are one function the tests drive against the fake.
+- `ci/auditpublish/internal/publish`, the **core**, unchanged; its rule `audit-publish-library` now
+  names `ci/auditpublish/internal/publish/**` instead of the whole `internal/` tree, which the GitHub
+  side shares.
+
+**The subcommands.** `auditpublish artifacts -job model|publish -gh <path> -tmp <dir>` is the artifact
+check both downloading jobs run before they download: one listing of the run's artifacts, refused unless
+it is exactly `checks-result` (the model job) or exactly `checks-result` and `model-result` (the publish
+job), with no name twice, nothing expired and no second page; it prints `artifacts: as expected`,
+`artifacts: unexpected: see runbook step 11` (exit 3), or the core's GitHub and configuration lines
+(exits 8 and 9). `auditpublish publish -result <path> -reports <dir> -gh <path> -gitleaks <path> -tmp
+<dir>` is the publish job's program; its summary line and exit code are the core's `Outcome`. The job
+sets the expected names, not a caller's list: a step cannot widen them.
+
+**The environment.** The entry point reads `GH_TOKEN`, `GITHUB_SERVER_URL`, `GITHUB_REPOSITORY`,
+`GITHUB_RUN_ID`, `GITHUB_STEP_SUMMARY`, and for `publish` also `GITHUB_SHA` and `AUDIT_FINGERPRINT_KEY`,
+and no other value. It refuses to run (outcome 9) when `AUDIT_APP_PRIVATE_KEY`,
+`AUDIT_MODEL_PRIVATE_KEY`, `AUDIT_PUBLISH_PRIVATE_KEY` or `CLAUDE_CODE_OAUTH_TOKEN` is set at all, reading
+only whether it is: none belongs in its step. `GH_TOKEN` is passed through to `gh` and nothing else:
+`gh` takes its token from its environment, and the library builds that environment itself, so the value
+is copied in as the `GH_TOKEN` entry, held in a type that formats as a placeholder, and never printed,
+compared or written. The artifact check's step gets the job's `github.token` (the App has no Actions
+read); the publish step gets the App's token.
+
+**The `gh` calling contract.**
+
+- `gh` and gitleaks run by the absolute path of their flags, never looked up on `PATH`, through
+  `exec.CommandContext`, with an environment of the library's own and nothing inherited: for `gh`,
+  `GH_TOKEN`, `GH_CONFIG_DIR` and `HOME` (one fresh directory under `-tmp`, removed after the run),
+  `GH_NO_UPDATE_NOTIFIER=1`, `GH_PROMPT_DISABLED=1` and `NO_COLOR=1`; for gitleaks, `HOME` (its own
+  fresh directory) and `NO_COLOR=1`. A variable an earlier step set through `$GITHUB_ENV` (`GH_HOST`,
+  `GH_DEBUG`, `HTTPS_PROXY`) reaches neither.
+- Every GitHub call goes through one function, `(*Client).Call`. It marshals the request body, checks
+  the method, the endpoint and the body against a fixed table, `Endpoints` (data, below), with
+  `Allowed`, and only then runs `gh api --method <M> --include -H "Accept: application/vnd.github+json"
+  -H "X-GitHub-Api-Version: 2022-11-28" [--input -] <endpoint>`, the body on stdin. A refused call runs
+  nothing and wraps `ErrEndpointRefused`, a programming error (outcome 1).
+- `--include` puts the status line and the headers before the body on stdout, so the status is read
+  from there and never from `gh`'s stderr, which is discarded unread. Output is capped; a `gh` that fails
+  without a status line, or whose output is over the cap, wraps `ErrGitHub` (outcome 8). No response,
+  status text or stderr reaches any output.
+- Pagination is explicit, `per_page=100` with a page number or the advisories' `after` cursor, and
+  bounded; a listing over the bound fails closed and is never truncated.
+
+**The endpoint table.** `R` is `repos/<owner>/<name>` of `GITHUB_REPOSITORY`; the run ID, the date, the
+branch and the audited commit are this run's own:
+
+| Method | Endpoint | Body |
+|---|---|---|
+| GET | `R/actions/runs/<run id>/artifacts?per_page=100` | none |
+| GET | `R/releases/tags/<tag>` | none |
+| GET | `R/attestations/sha256:<64 hex>?per_page=100` | none |
+| GET | `R/git/commits/<40 hex>` | none |
+| GET | `R/git/ref/heads/security-audit/<date>-<run id>` | none |
+| POST | `R/git/blobs` | exactly `content` and `encoding: utf-8` |
+| POST | `R/git/trees` | a base tree and one entry: this run's report path, mode `100644`, a blob |
+| POST | `R/git/commits` | a message, a tree, and the audited commit as the one parent |
+| POST | `R/git/refs` | `refs/heads/security-audit/<date>-<run id>` of this run |
+| GET | `R/compare/<audited commit>...<40 hex>` | none |
+| POST | `R/pulls` | this run's branch into `main`, not a draft, no maintainer edits |
+| GET | `R/issues?creator=shift2eu-audit%5Bbot%5D&state=all&per_page=100&page=<n>` | none |
+| POST | `R/issues` | exactly a title, a body and the label `security` |
+| GET | `R/security-advisories?per_page=100[&after=<cursor>]` | none |
+| POST | `R/security-advisories` | only a summary, a description, a severity and the vulnerabilities: no `state`, `cve_id`, credits or collaborators |
+| PATCH | `R/security-advisories/<GHSA id>` | only a summary, a description, a severity and `state`, which is exactly `draft` |
+
+There is no PUT and no DELETE, and no endpoint that merges or reviews a pull request, requests a CVE,
+publishes an advisory, comments on or edits an issue, or touches a tag, a release or another branch.
+The issues are matched by listing the App's own issues and reading each one's author and fingerprint,
+not through the search API, whose rate limit a run of up to 100 findings could reach.
+
+**The fakes.** The tests run the library against a fake `gh` and a fake gitleaks, both the test binary
+itself, started through a symbolic link named `gh` or `gitleaks` that `TestMain` recognises by its name
+(an environment variable could not mark it: the library gives both an environment of its own). The fake
+`gh` answers from canned routes (method, endpoint, status, body, `Link`), writes `--include`'s output,
+exits 1 on a non-2xx status as `gh` does, records each call's arguments, environment and body, and holds
+a guard of its own written from the PRD's list rather than from `Endpoints`: a call outside the PRD's
+fixed set, an advisory created with a `state` or updated to any `state` but `draft`, a ref outside
+`refs/heads/security-audit/` or a pull request into another branch than `main` is answered 418 and fails
+the test. The fake gitleaks reports a leak (exit 10) on a fixed marker and records its stdin. Both write a
+marker to their stdout and stderr, so a test can show that none of it reaches the program's output.
 
 ### How Claude Code runs in the model job (milestone 2, amended 2026-11-22)
 

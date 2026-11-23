@@ -20,7 +20,26 @@ import (
 // linters.settings.forbidigo). The tags of the two composition-root groups,
 // compositionRootTags, are pinned by what their rules select instead of by the
 // text of a path regexp, in TestCompositionRootExclusions.
-var forbidigoTags = []string{"cloud-read-only", "domain-is-pure", testutilNoEnvTag, cliNoEnvOrProcessTag, inventoryFileNoEnvTag, e2eNoEnvTag, testsNoProcessStateTag, aiReviewerEnvTag, aiReviewerOneProcessTag, siteBuilderEnvTag, claudeCodePinEnvTag, auditExecEnvTag, auditRunEnvTag, auditLibraryEnvTag}
+var forbidigoTags = []string{"cloud-read-only", "domain-is-pure", testutilNoEnvTag, cliNoEnvOrProcessTag, inventoryFileNoEnvTag, e2eNoEnvTag, testsNoProcessStateTag, aiReviewerEnvTag, aiReviewerOneProcessTag, siteBuilderEnvTag, claudeCodePinEnvTag, auditExecEnvTag, auditRunEnvTag, auditLibraryEnvTag, auditPublishMainEnvTag, auditPublishGitHubEnvTag}
+
+// auditPublishMainEnvTag is the tag of the audit publish entry point's
+// environment group (PRD #175 milestone 2, ADR 0040), and
+// auditPublishLookupEnvMsg the msg of its one entry with an exception: the
+// os.LookupEnv ci/auditpublish/main.go passes to run.
+const (
+	auditPublishMainEnvTag   = "audit-publish-main-env"
+	auditPublishLookupEnvMsg = "audit-publish-main-env: os.LookupEnv is used in ci/auditpublish/main.go only, passed to run (ADR 0040); a test passes a lookup function of its own"
+)
+
+// auditPublishGitHubEnvTag is the tag of the audit publish library's
+// environment group (PRD #175 milestone 2, ADR 0040), and
+// auditPublishEnvironMsg the msg of its one entry with an exception: the
+// os.Environ with which the fakes in fake_test.go record the environment the
+// library gave them.
+const (
+	auditPublishGitHubEnvTag = "audit-publish-github-env"
+	auditPublishEnvironMsg   = "audit-publish-github-env: os.Environ is used in fake_test.go only, where the fake gh and gitleaks record the environment the library gave them (ADR 0040)"
+)
 
 // auditLibraryEnvTag is the tag of the audit library's environment group (issue
 // #277, ADR 0040's model-job amendment), which refuses the environment reads, the home,
@@ -237,6 +256,23 @@ func TestForbidigoExclusionsDropOneGroup(t *testing.T) {
 		// os.LookupEnv audit-run-env states as its own exception.
 		auditLibraryEnvTag: {
 			{"path-except": `^ci/internal/audit/`, "text": groupText(auditLibraryEnvTag)},
+		},
+		// The audit's publish entry point (PRD #175 milestone 2, ADR 0040): the
+		// files of ci/auditpublish/ outside its internal/ tree, _test.go files
+		// included, and the one exception, the os.LookupEnv entry's msg alone,
+		// in ci/auditpublish/main.go alone.
+		auditPublishMainEnvTag: {
+			{"path-except": `^ci/auditpublish/`, "text": groupText(auditPublishMainEnvTag)},
+			{"path": `^ci/auditpublish/internal/`, "text": groupText(auditPublishMainEnvTag)},
+			{"path": `^ci/auditpublish/main\.go$`, "text": narrowedTextOf(auditPublishLookupEnvMsg)},
+		},
+		// The audit's publish library (PRD #175 milestone 2, ADR 0040): every
+		// file under ci/auditpublish/internal/github/, _test.go files included,
+		// and the one exception, the os.Environ entry's msg alone, in
+		// fake_test.go alone.
+		auditPublishGitHubEnvTag: {
+			{"path-except": `^ci/auditpublish/internal/github/`, "text": groupText(auditPublishGitHubEnvTag)},
+			{"path": `^ci/auditpublish/internal/github/fake_test\.go$`, "text": narrowedTextOf(auditPublishEnvironMsg)},
 		},
 	}
 	if diff := cmp.Diff(want, got); diff != "" {

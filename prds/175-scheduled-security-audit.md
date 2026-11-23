@@ -853,6 +853,42 @@ An agent cannot do these steps. Each one is safe to stop at; the workflow is rol
     older one), then start the new run. The closed duplicate does not count as a dismissal: the kept draft
     takes precedence over it while the draft is open. Check: the new run opens the report PR.
 
+    The publish job's summary line names the class of a failure, never its detail (ADR 0040, "Exit codes
+    and the summary line"). What to do for each, before the new run:
+
+    - `artifacts: unexpected: see runbook step 11` (the artifact check of the model or the publish job):
+      the run held an artifact other than the job expects, or one name twice. Read the run's artifact
+      list (`gh api repos/<owner>/<repo>/actions/runs/<run_id>/artifacts --jq '[.artifacts[].name]'`);
+      do not download an unexpected one. Check: the new run's list is exactly `checks-result` and
+      `model-result`.
+    - `result refused: see runbook` (exit 3): the model's result did not decrypt or broke the schema, or
+      the release tag or image digest it named did not check out against GitHub. Start the new run; if
+      it repeats, read the model job's preflight line and the skill before changing anything.
+    - `publish refused: see runbook` (exit 4): a scan found a token, a key or an encoded run in a text
+      about to be published. Nothing was published. Treat it as a possible leak: rotate per step 10, then
+      start the new run.
+    - `private findings not filed: see runbook` (exit 5): GitHub refused advisory creation to the App;
+      the report says "private findings: not filed" and the private findings were dropped. Repeat step
+      3's advisory check, then start the new run.
+    - `publish refused: duplicate draft advisories: see runbook step 11` (exit 6): the paragraph above.
+    - `previous report unreadable: see runbook` (exit 7) has **two causes**, and the line does not say
+      which: (1) the newest report in `docs/security/audits/` is unreadable as the publish script renders
+      one (a hand edit, a merge that changed a table, a cell outside printable ASCII); (2) the newest
+      report is dated **after the run**, or on the run's own date with a run ID **not below the run's
+      own** (a hand-made report, or a later run's report merged first). Check: list the directory
+      (`ls docs/security/audits/` on `main`) and compare the newest name's date and run ID with the
+      failed run's; for (1), diff the newest report against what the publish script wrote in its PR. Fix
+      it through a pull request to `main` (for (2), rename or remove the misdated report), then start
+      the new run.
+    - `GitHub call failed: see runbook` (exit 8): a GitHub call failed or answered unexpectedly; an
+      existing `security-audit/<date>-<run_id>` branch lands here too (delete it as above). Check
+      GitHub's status, then start the new run.
+    - `configuration invalid: see runbook` (exit 9): a variable, flag or secret of the publish step is
+      missing or malformed (the fingerprint key shorter than 32 bytes included), or a secret that must
+      not be in the step is set there. Compare the environment's secrets and variables with step 2.
+    - `publish failed: see runbook` (exit 1): any other failure. Start the new run; if it repeats, the
+      publish program needs a fix through a pull request.
+
 ## Decisions and open questions
 
 Every question is decided. The last one, Decision 2's rule that the public report says only whether

@@ -1421,7 +1421,7 @@ var pinnedDepguardRules = []check.DepguardRule{
 		Name:     "audit-publish-library",
 		ListMode: "strict",
 		Files: []string{
-			"**/ci/auditpublish/internal/**",
+			"**/ci/auditpublish/internal/publish/**",
 			"!$test",
 		},
 		Allow: []string{
@@ -1442,6 +1442,66 @@ var pinnedDepguardRules = []check.DepguardRule{
 			"unicode/utf8$",
 		},
 		Deny: []string{"os", "net"},
+	},
+	{
+		// The publish program's GitHub side (PRD #175 milestone 2, ADR 0040):
+		// it runs gh and gitleaks by absolute path, each with an environment of
+		// its own, reads the result and the merged reports, and opens no
+		// connection itself. The forbidigo group audit-publish-github-env
+		// refuses every read of the environment.
+		Name:     "audit-publish-github",
+		ListMode: "strict",
+		Files: []string{
+			"**/ci/auditpublish/internal/github/**",
+			"!$test",
+		},
+		Allow: []string{
+			"bytes$",
+			"context$",
+			"encoding/json$",
+			"errors$",
+			"fmt$",
+			"io$",
+			"io/fs$",
+			"net/url$",
+			"os$",
+			"os/exec$",
+			"path$",
+			"path/filepath$",
+			"regexp$",
+			"slices$",
+			"strconv$",
+			"strings$",
+			"time$",
+			"github.com/timothymamo/shift2eu/ci/auditpublish/internal/publish$",
+		},
+		Deny: []string{"net"},
+	},
+	{
+		// The publish program's entry point (PRD #175 milestone 2, ADR 0040): a
+		// main package no root can import, held to the standard packages it
+		// imports, each exact, the GitHub side and the core. It starts no
+		// program and opens no connection itself.
+		Name:     "audit-publish-main",
+		ListMode: "strict",
+		Files: []string{
+			"**/ci/auditpublish/**",
+			"!**/ci/auditpublish/internal/**",
+			"!$test",
+		},
+		Allow: []string{
+			"context$",
+			"errors$",
+			"flag$",
+			"fmt$",
+			"io$",
+			"os$",
+			"os/signal$",
+			"time$",
+			"github.com/timothymamo/shift2eu/ci/auditpublish/internal/github$",
+			"github.com/timothymamo/shift2eu/ci/auditpublish/internal/publish$",
+		},
+		Deny: []string{"os/exec", "net"},
 	},
 	{
 		// The scheduled audit's command wrapper (issue #277, ADR 0040's

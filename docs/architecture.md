@@ -171,8 +171,17 @@ Arrows are imports. They point inwards only:
   to an exit code and one summary line. It does no I/O: it opens no file and no connection, reads no
   environment variable and no clock, and starts no process (`audit-publish-library`: named pure
   standard packages, no `os` or `net`, and no package of the product). Its entry point
-  `ci/auditpublish`, which reads, runs gitleaks and calls GitHub, comes with milestone 2's fourth pull
-  request.
+  `ci/auditpublish` (ADR 0040, "The publish program's GitHub side") reads its inputs through one
+  `os.LookupEnv` and prints one line; its subcommands are `artifacts`, the run's artifact check, and
+  `publish`. Its GitHub side, the library `ci/auditpublish/internal/github`, runs `gh` and gitleaks by
+  absolute path with environments of its own, and sends every GitHub call through one function that
+  checks it against a fixed table of endpoints and request bodies before `gh` runs (every advisory
+  `state` `draft`; no merge, review, CVE, tag, release or other branch). The entry point is held to named
+  standard packages, the library and the core (`audit-publish-main`, no `os/exec` or `net`) and the
+  forbidigo group `audit-publish-main-env`, with `os.LookupEnv` named in its `main.go` alone; the library
+  to named standard packages and the core (`audit-publish-github`, no `net`) and the forbidigo group
+  `audit-publish-github-env` (no environment read at all; `os.Environ` only where its tests' fakes record
+  what they were given). Its tests run against a fake `gh` and a fake gitleaks.
 - **`cmd/shift2eu`** is the CLI's composition root, the only place besides `cmd/shift2eu-web` that
   constructs adapters and injects them (and `ci/sitebuild`, which constructs the three targets only to
   read their catalogs). Its imports are a strict allow list (`composition-root`, issue #101): the

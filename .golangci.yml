@@ -1956,7 +1956,7 @@ linters:
         audit-publish-library:
           list-mode: strict
           files:
-            - "**/ci/auditpublish/internal/**"
+            - "**/ci/auditpublish/internal/publish/**"
             - "!$test"
           allow:
             - bytes$
@@ -1979,6 +1979,70 @@ linters:
               desc: "the audit's publish core opens no file and reads no environment; ci/auditpublish hands it what it read (ADR 0040)"
             - pkg: net
               desc: "the audit's publish core opens no connection; ci/auditpublish calls GitHub (ADR 0040)"
+        # The publish program's GitHub side (PRD #175 milestone 2, ADR 0040,
+        # "The publish program's GitHub side"), under the same internal
+        # directory as the core. It runs gh and gitleaks by absolute path
+        # (os/exec), each with an environment of its own, reads the result and
+        # the merged reports (os, io/fs, path/filepath) and reads GitHub's JSON
+        # (encoding/json); it opens no connection itself (net): gh does. The
+        # forbidigo group audit-publish-github-env refuses every read of the
+        # environment: its caller hands it what it needs.
+        audit-publish-github:
+          list-mode: strict
+          files:
+            - "**/ci/auditpublish/internal/github/**"
+            - "!$test"
+          allow:
+            - bytes$
+            - context$
+            - encoding/json$
+            - errors$
+            - fmt$
+            - io$
+            - io/fs$
+            - net/url$
+            - os$
+            - os/exec$
+            - path$
+            - path/filepath$
+            - regexp$
+            - slices$
+            - strconv$
+            - strings$
+            - time$
+            - github.com/timothymamo/shift2eu/ci/auditpublish/internal/publish$
+          deny:
+            - pkg: net
+              desc: "the audit's publish library opens no connection; it runs gh (ADR 0040)"
+        # The publish program's entry point, ci/auditpublish (PRD #175
+        # milestone 2, ADR 0040): a main package, which Go refuses to import,
+        # held to the standard packages it imports, each ending in $, the
+        # GitHub side and the core. os for its one os.LookupEnv, the step
+        # summary and os.Exit; time for the run's UTC date. It starts no
+        # program itself (os/exec) and opens no connection (net): its library
+        # runs gh and gitleaks.
+        audit-publish-main:
+          list-mode: strict
+          files:
+            - "**/ci/auditpublish/**"
+            - "!**/ci/auditpublish/internal/**"
+            - "!$test"
+          allow:
+            - context$
+            - errors$
+            - flag$
+            - fmt$
+            - io$
+            - os$
+            - os/signal$
+            - time$
+            - github.com/timothymamo/shift2eu/ci/auditpublish/internal/github$
+            - github.com/timothymamo/shift2eu/ci/auditpublish/internal/publish$
+          deny:
+            - pkg: os/exec
+              desc: "the audit's publish entry point starts no program itself; its library runs gh and gitleaks (ADR 0040)"
+            - pkg: net
+              desc: "the audit's publish entry point opens no connection itself (ADR 0040)"
         # The scheduled audit's command wrapper (issue #277, ADR 0040's
         # model-job amendment), installed as /srv/audit/bin/audit-exec, is no part of the
         # product: a main package, which Go refuses to import. It is held to the
@@ -2617,6 +2681,37 @@ linters:
         - pattern: '^os\.(?:Getenv|Environ|LookupEnv|UserHomeDir|UserConfigDir|UserCacheDir|ExpandEnv)$'
           pkg: '^os$'
           msg: 'audit-library-env: the audit library reads no environment variable and locates no home, config or cache directory; ci/auditrun passes it what it needs (ADR 0040, CLAUDE.md rule 3)'
+        # Group audit-publish-main-env (PRD #175 milestone 2, ADR 0040, "The
+        # publish program's GitHub side"): the publish entry point reads the
+        # step's environment through one call only, the os.LookupEnv
+        # ci/auditpublish/main.go passes to run, which reads the variables ADR
+        # 0040 names and no other. Everything else is refused: another way to
+        # read a variable or the whole environment, a process start through
+        # os, and the lookups of a home, config, cache or temp directory.
+        # depguard keeps os/exec, net and syscall out of it
+        # (audit-publish-main). Scope: the files of ci/auditpublish/ outside
+        # its internal/ tree, _test.go files included; its exclusion rules
+        # drop it everywhere else.
+        - pattern: '^os\.(?:Getenv|ExpandEnv|Environ|StartProcess|UserHomeDir|UserConfigDir|UserCacheDir|TempDir)$'
+          pkg: '^os$'
+          msg: 'audit-publish-main-env: the audit publish entry point reads no environment variable but through the os.LookupEnv main.go passes to run, locates no home, config, cache or temp directory and starts no process (ADR 0040, CLAUDE.md rule 3)'
+        - pattern: '^os\.LookupEnv$'
+          pkg: '^os$'
+          msg: 'audit-publish-main-env: os.LookupEnv is used in ci/auditpublish/main.go only, passed to run (ADR 0040); a test passes a lookup function of its own'
+        # Group audit-publish-github-env (PRD #175 milestone 2, ADR 0040): the
+        # publish program's GitHub side reads no environment variable and
+        # locates no home, config, cache or temp directory: gh's token and the
+        # run's values reach it in its Config, and it builds gh's and
+        # gitleaks' environments itself. os.Environ has an entry of its own,
+        # because the fakes of its tests record the environment they were
+        # started with, in fake_test.go alone. Scope: every file under
+        # ci/auditpublish/internal/github/, _test.go files included.
+        - pattern: '^os\.(?:Getenv|LookupEnv|ExpandEnv|Expand|UserHomeDir|UserConfigDir|UserCacheDir|TempDir|StartProcess)$'
+          pkg: '^os$'
+          msg: 'audit-publish-github-env: the audit publish library reads no environment variable, locates no home, config, cache or temp directory and starts no process through os; ci/auditpublish passes it what it needs (ADR 0040, CLAUDE.md rule 3)'
+        - pattern: '^os\.Environ$'
+          pkg: '^os$'
+          msg: 'audit-publish-github-env: os.Environ is used in fake_test.go only, where the fake gh and gitleaks record the environment the library gave them (ADR 0040)'
     gosec:
       excludes:
         - G104 # unchecked errors are already reported by errcheck
@@ -2840,6 +2935,36 @@ linters:
         linters:
           - forbidigo
         text: 'because "audit-library-env: [^"]*"$'
+      # audit-publish-main-env: the group holds for the files of
+      # ci/auditpublish/ outside its internal/ tree, _test.go files included,
+      # and nowhere else: one rule drops it outside ci/auditpublish/, one in
+      # its internal/ tree.
+      - path-except: ^ci/auditpublish/
+        linters:
+          - forbidigo
+        text: 'because "audit-publish-main-env: [^"]*"$'
+      - path: ^ci/auditpublish/internal/
+        linters:
+          - forbidigo
+        text: 'because "audit-publish-main-env: [^"]*"$'
+      # The one exception (ADR 0040): os.LookupEnv, which
+      # ci/auditpublish/main.go passes to run, in that file alone.
+      - path: ^ci/auditpublish/main\.go$
+        linters:
+          - forbidigo
+        text: 'because "audit-publish-main-env: os\.LookupEnv is used in ci/auditpublish/main\.go only, passed to run \(ADR 0040\); a test passes a lookup function of its own"$'
+      # audit-publish-github-env: the group holds for every file under
+      # ci/auditpublish/internal/github/, _test.go files included, and
+      # nowhere else, with one exception: os.Environ in fake_test.go, where
+      # the fakes record the environment the library gave them.
+      - path-except: ^ci/auditpublish/internal/github/
+        linters:
+          - forbidigo
+        text: 'because "audit-publish-github-env: [^"]*"$'
+      - path: ^ci/auditpublish/internal/github/fake_test\.go$
+        linters:
+          - forbidigo
+        text: 'because "audit-publish-github-env: os\.Environ is used in fake_test\.go only, where the fake gh and gitleaks record the environment the library gave them \(ADR 0040\)"$'
 
 formatters:
   enable:
