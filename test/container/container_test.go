@@ -728,6 +728,13 @@ const imageDocDir = "/usr/share/doc/shift2eu"
 // of the image.
 const licenseFileMode = "0444"
 
+// imageDocDirMode is the mode the final stage must create imageDocDir with,
+// before it copies the files into it. BuildKit gives a COPY's --chmod to the
+// directories that COPY creates as well, so a directory the 0444 COPY makes has
+// no search bit and the image's nonroot user cannot enter it to read either
+// file (issue #495).
+const imageDocDirMode = "0755"
+
 // shippedLicenseFiles are the files the image ships from the repository root,
 // each at the path in the image, read-only.
 var shippedLicenseFiles = []struct{ name, path string }{
@@ -749,6 +756,13 @@ var shippedLicenseFiles = []struct{ name, path string }{
 // somewhere else, a file it copies with no --chmod=0444, a context that leaves
 // it out, and a GoReleaser docker entry that names one file alone. A check that
 // cannot tell those apart would pass on an image that ships neither.
+//
+// It also holds the directory the files land in: BuildKit gives a COPY's
+// --chmod to the directories that COPY creates as well, so a stage that lets the
+// 0444 COPY create imageDocDir leaves a directory without a search bit, which
+// the image's nonroot user cannot enter to read either file. Fixtures that drop
+// the directory COPY, move it after the licence COPY, or make the directory with
+// another mode must each be reported.
 func TestTheImageShipsLicenseAndNotice(t *testing.T) {
 	t.Parallel()
 
@@ -756,12 +770,24 @@ func TestTheImageShipsLicenseAndNotice(t *testing.T) {
 	const fixture = `FROM golang:1.27.4-alpine AS build
 RUN go build -o /out/shift2eu ./cmd/shift2eu
 
+FROM build AS doc
+RUN mkdir -m 0755 /doc
+
 FROM gcr.io/distroless/static-debian13:nonroot
 COPY --from=build /out/shift2eu /shift2eu
+COPY --from=doc /doc/ /usr/share/doc/shift2eu/
 COPY --chmod=0444 LICENSE NOTICE /usr/share/doc/shift2eu/
 `
 
-	const bothFiles = "COPY --chmod=0444 LICENSE NOTICE /usr/share/doc/shift2eu/\n"
+	const (
+		bothFiles = "COPY --chmod=0444 LICENSE NOTICE /usr/share/doc/shift2eu/\n"
+		// The stage that makes imageDocDir 0755, and the COPY that carries it
+		// into the image before the licence COPY. BuildKit gives a COPY's
+		// --chmod to the directories it creates too, so the 0444 COPY must find
+		// the directory already there (issue #495).
+		docStage = "FROM build AS doc\nRUN mkdir -m 0755 /doc\n\n"
+		docCopy  = "COPY --from=doc /doc/ /usr/share/doc/shift2eu/\n"
+	)
 
 	tests := []struct {
 		name string
@@ -820,6 +846,24 @@ COPY --chmod=0444 LICENSE NOTICE /usr/share/doc/shift2eu/
 			want:         []string{"copies LICENSE without --chmod=0444", "copies NOTICE without --chmod=0444"},
 		},
 		{
+			name:         "a Dockerfile whose licence COPY creates the doc directory",
+			dockerfile:   strings.Replace(strings.Replace(fixture, docStage, "", 1), docCopy, "", 1),
+			dockerignore: "*\n!LICENSE\n!NOTICE\n",
+			want:         []string{"create " + imageDocDir + " with mode " + licenseFileMode},
+		},
+		{
+			name:         "a Dockerfile that creates the doc directory after the licence COPY",
+			dockerfile:   strings.Replace(fixture, docCopy+bothFiles, bothFiles+docCopy, 1),
+			dockerignore: "*\n!LICENSE\n!NOTICE\n",
+			want:         []string{"create " + imageDocDir + " with mode " + licenseFileMode},
+		},
+		{
+			name:         "a Dockerfile whose doc stage makes the directory with another mode",
+			dockerfile:   strings.Replace(fixture, "RUN mkdir -m 0755 /doc", "RUN mkdir /doc", 1),
+			dockerignore: "*\n!LICENSE\n!NOTICE\n",
+			want:         []string{"does not make /doc with mode 0755"},
+		},
+		{
 			name:         "a build context that leaves both files out",
 			dockerfile:   fixture,
 			dockerignore: "*\n!go.mod\n!cmd/\n!internal/\n",
@@ -860,14 +904,16 @@ COPY --chmod=0444 LICENSE NOTICE /usr/share/doc/shift2eu/
 // LICENSE and NOTICE: a file the final stage does not copy from the build
 // context into imageDocDir, a file it copies with a mode other than 0444, a file
 // .dockerignore keeps out of that context, and a file a GoReleaser docker
-// section does not put into the context it sends to the daemon. An empty
-// dockerignore or goreleaser skips that half of the check.
+// section does not put into the context it sends to the daemon, or a directory
+// its --chmod=0444 COPY is left to create. An empty dockerignore or goreleaser
+// skips that half of the check.
 func licenseFileFindings(t *testing.T, name, dockerfile, dockerignore, goreleaser string) []string {
 	t.Helper()
 
 	var findings []string
 
-	destinations := contextCopyDestinations(finalStage(t, dockerfileInstructions(t, dockerfile)))
+	instructions := dockerfileInstructions(t, dockerfile)
+	destinations := contextCopyDestinations(finalStage(t, instructions))
 
 	for _, file := range shippedLicenseFiles {
 		landing, copied := destinations[file.name]
@@ -884,6 +930,8 @@ func licenseFileFindings(t *testing.T, name, dockerfile, dockerignore, gorelease
 				name, file.name, licenseFileMode, licenseFileMode, file.name, file.path))
 		}
 	}
+
+	findings = append(findings, licenseDirFindings(t, name, instructions)...)
 
 	if dockerignore != "" {
 		patterns := dockerignorePatterns(t, dockerignore)
@@ -908,6 +956,231 @@ func licenseFileFindings(t *testing.T, name, dockerfile, dockerignore, gorelease
 	return findings
 }
 
+// licenseDirFindings returns what name, one Dockerfile, leaves of issue #495's
+// other half: imageDocDir must be created with imageDocDirMode before the final
+// stage copies LICENSE and NOTICE into it with --chmod=0444. BuildKit gives that
+// COPY's mode to the directories the COPY creates as well, and a directory
+// without a search bit cannot be entered, so an image whose licence directory
+// the 0444 COPY creates carries two files its nonroot user cannot open.
+//
+// The directory counts as created when the stage copies it from another stage
+// that runs `RUN mkdir -m 0755 <dir>`: the mode is explicit, so the directory
+// does not depend on the umask of whoever builds the image, and it is the mode
+// the COPY of the directory keeps. A Dockerfile with no such COPY before the
+// licence COPY, or whose stage makes the directory another way, is reported.
+func licenseDirFindings(t *testing.T, name string, instructions []instruction) []string {
+	t.Helper()
+
+	stageCopies := copies(finalStage(t, instructions))
+
+	licence := -1
+
+	for i, c := range stageCopies {
+		if c.from == "" && c.chmod == licenseFileMode && c.copiesFilesInto(imageDocDir) {
+			licence = i
+
+			break
+		}
+	}
+
+	if licence < 0 {
+		return nil
+	}
+
+	for _, c := range stageCopies[:licence] {
+		source, ok := c.directoryAt(imageDocDir)
+		if !ok {
+			continue
+		}
+
+		if from, declared := stageNamed(instructions, c.from); declared && makesDirectory(from, source, imageDocDirMode) {
+			return nil
+		}
+
+		return []string{fmt.Sprintf("%s:%d: the final stage copies %s from the stage %q, which does not make %s with mode %s: want `RUN mkdir -m %s %s` in that stage, so the directory the final stage copies keeps the search bit the image's nonroot user needs to enter it (issue #495)",
+			name, c.line, imageDocDir, c.from, source, imageDocDirMode, imageDocDirMode, source)}
+	}
+
+	return []string{fmt.Sprintf("%s:%d: the final stage lets its `COPY --chmod=%s ... %s/` create %s with mode %s: BuildKit gives a COPY's --chmod to the directories that COPY creates as well, and a directory with no search bit cannot be entered, so the image's nonroot user reads neither LICENSE nor NOTICE; copy the directory in first, from a stage that runs `RUN mkdir -m %s <dir>` (issue #495)",
+		name, stageCopies[licence].line, licenseFileMode, imageDocDir, imageDocDir, licenseFileMode, imageDocDirMode)}
+}
+
+// copy is one COPY instruction of a stage, parsed as Docker reads it.
+type copy struct {
+	// line is the line of the Dockerfile the instruction starts at.
+	line int
+	// from is the stage a --from names, "" for a copy of the build context.
+	from string
+	// chmod is the --chmod value, "" when the instruction carries none.
+	chmod string
+	// paths are the sources and the destination, in order.
+	paths []string
+}
+
+// copies returns the COPY instructions of a stage, in file order. A --chmod
+// written as its own argument is read too, since Docker accepts that form.
+func copies(stage []instruction) []copy {
+	var parsed []copy
+
+	for _, in := range stage {
+		if in.keyword() != "COPY" {
+			continue
+		}
+
+		parsedCopy := copy{line: in.line}
+
+		fields := strings.Fields(in.arguments())
+
+		for i := 0; i < len(fields); i++ {
+			field := fields[i]
+
+			switch {
+			case strings.HasPrefix(field, "--from="):
+				parsedCopy.from = strings.TrimPrefix(field, "--from=")
+			case strings.HasPrefix(field, "--chmod="):
+				parsedCopy.chmod = strings.TrimPrefix(field, "--chmod=")
+			case field == "--chmod" && i+1 < len(fields):
+				i++
+				parsedCopy.chmod = fields[i]
+			case strings.HasPrefix(field, "--"):
+			default:
+				parsedCopy.paths = append(parsedCopy.paths, field)
+			}
+		}
+
+		parsed = append(parsed, parsedCopy)
+	}
+
+	return parsed
+}
+
+// destination returns where the copy puts source: a destination written as a
+// directory, which Docker joins to the source's base name, or the destination
+// itself for a copy of one file, and "" when the paths do not say.
+func (c copy) destination(source string) string {
+	if len(c.paths) < 2 {
+		return ""
+	}
+
+	destination := c.paths[len(c.paths)-1]
+
+	switch {
+	case strings.HasSuffix(destination, "/"):
+		return path.Join(destination, path.Base(source))
+	case len(c.paths) == 2:
+		return destination
+	default:
+		return ""
+	}
+}
+
+// copiesFilesInto reports whether the copy puts a file of the build context
+// into dir: a destination written as dir itself or as a path inside it.
+func (c copy) copiesFilesInto(dir string) bool {
+	if len(c.paths) < 2 {
+		return false
+	}
+
+	for _, source := range c.paths[:len(c.paths)-1] {
+		if destination := c.destination(source); destination != "" && path.Dir(destination) == path.Clean(dir) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// directoryAt reports the directory a copy of another stage puts at dir, and
+// whether this copy is one: one source and one destination that name the same
+// directory, written with or without a trailing slash.
+func (c copy) directoryAt(dir string) (string, bool) {
+	if c.from == "" || len(c.paths) != 2 {
+		return "", false
+	}
+
+	if path.Clean(c.paths[1]) != path.Clean(dir) {
+		return "", false
+	}
+
+	return path.Clean(c.paths[0]), true
+}
+
+// stageNamed returns the whole of the stage a COPY's --from names, its FROM
+// included, and false when the Dockerfile declares no stage of that name, as for
+// a copy from another image. It reports nothing it cannot find, unlike stageFor:
+// a copy the check cannot resolve is not a directory the check can vouch for.
+func stageNamed(instructions []instruction, name string) ([]instruction, bool) {
+	for i, in := range instructions {
+		if in.keyword() != "FROM" {
+			continue
+		}
+
+		fields := fromFields(in)
+		if len(fields) >= 3 && strings.EqualFold(fields[1], "AS") && strings.EqualFold(fields[2], name) {
+			return stageLines(instructions, i), true
+		}
+	}
+
+	return nil, false
+}
+
+// makesDirectory reports whether a stage runs the mkdir that makes dir with
+// mode, such as `RUN mkdir -m 0755 /doc`. A mkdir that leaves the mode to the
+// builder's umask does not count: the directory's mode must not depend on who
+// builds the image.
+func makesDirectory(stage []instruction, dir, mode string) bool {
+	for _, in := range stage {
+		if in.keyword() == "RUN" && mkdirWithMode(in.arguments(), dir, mode) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// mkdirWithMode reports whether a RUN command runs mkdir to make dir with mode.
+// The mode is read from -m or --mode, and mkdir's other flags, such as -p and
+// --parents, are skipped, so a command written in any of those forms counts.
+func mkdirWithMode(command, dir, mode string) bool {
+	fields := strings.Fields(command)
+
+	for i, field := range fields {
+		if path.Base(unquote(field)) != "mkdir" {
+			continue
+		}
+
+		var (
+			gotMode string
+			targets []string
+		)
+
+		for j := i + 1; j < len(fields); j++ {
+			field := unquote(fields[j])
+
+			switch {
+			case field == "-m" || field == "--mode":
+				if j+1 < len(fields) {
+					j++
+					gotMode = unquote(fields[j])
+				}
+			case strings.HasPrefix(field, "--mode="):
+				gotMode = strings.TrimPrefix(field, "--mode=")
+			case strings.HasPrefix(field, "-"):
+			default:
+				targets = append(targets, field)
+			}
+		}
+
+		for _, target := range targets {
+			if gotMode == mode && path.Clean(target) == path.Clean(dir) {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
 // contextCopy is where one stage copies a file of the build context, and the
 // mode it gives it.
 type contextCopy struct {
@@ -922,54 +1195,18 @@ type contextCopy struct {
 // lands at, a destination written as a directory joined to the source's base
 // name. A COPY from another stage is not a copy of the context and is skipped,
 // and a stage that copies one file twice keeps the last destination, as Docker
-// does. A --chmod written as its own argument is read too, since Docker accepts
-// that form.
+// does.
 func contextCopyDestinations(stage []instruction) map[string]contextCopy {
 	destinations := make(map[string]contextCopy)
 
-	for _, in := range stage {
-		if in.keyword() != "COPY" {
+	for _, c := range copies(stage) {
+		if c.from != "" || len(c.paths) < 2 {
 			continue
 		}
 
-		var (
-			fromStage bool
-			chmod     string
-			paths     []string
-		)
-
-		fields := strings.Fields(in.arguments())
-
-		for i := 0; i < len(fields); i++ {
-			field := fields[i]
-
-			switch {
-			case strings.HasPrefix(field, "--from="):
-				fromStage = true
-			case strings.HasPrefix(field, "--chmod="):
-				chmod = strings.TrimPrefix(field, "--chmod=")
-			case field == "--chmod" && i+1 < len(fields):
-				i++
-				chmod = fields[i]
-			case strings.HasPrefix(field, "--"):
-			default:
-				paths = append(paths, field)
-			}
-		}
-
-		if fromStage || len(paths) < 2 {
-			continue
-		}
-
-		destination := paths[len(paths)-1]
-		for _, source := range paths[:len(paths)-1] {
-			base := path.Base(source)
-
-			switch {
-			case strings.HasSuffix(destination, "/"):
-				destinations[base] = contextCopy{destination: path.Join(destination, base), chmod: chmod}
-			case len(paths) == 2:
-				destinations[base] = contextCopy{destination: destination, chmod: chmod}
+		for _, source := range c.paths[:len(c.paths)-1] {
+			if destination := c.destination(source); destination != "" {
+				destinations[path.Base(source)] = contextCopy{destination: destination, chmod: c.chmod}
 			}
 		}
 	}
