@@ -16,9 +16,10 @@ import (
 )
 
 const (
-	// defaultWorkflow is the workflow that pins the Claude Code CLI, relative
-	// to the repository root CI runs from.
-	defaultWorkflow = ".github/workflows/ai-review.yml"
+	// defaultPin is the one pin file of the Claude Code CLI, which every
+	// workflow that installs it reads (ADR 0040's amendment), relative to the
+	// repository root CI runs from.
+	defaultPin = ".github/claude-code.yaml"
 
 	// fetchTimeout bounds the whole registry request, body included.
 	fetchTimeout = 30 * time.Second
@@ -49,7 +50,7 @@ func newRegistryClient(transport http.RoundTripper) *http.Client {
 	}
 }
 
-// run checks the pin of the workflow args names (or defaultWorkflow) against
+// run checks the pin of the pin file args names (or defaultPin) against
 // the registry client reaches, and returns the exit code: 0 on a pass, 1 on
 // every failure, after one ::error line on stderr.
 func run(ctx context.Context, args []string, client *http.Client, stdout, stderr io.Writer) int {
@@ -63,21 +64,21 @@ func run(ctx context.Context, args []string, client *http.Client, stdout, stderr
 func check(ctx context.Context, args []string, client *http.Client, stdout io.Writer) error {
 	flags := flag.NewFlagSet("claudecodepin", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
-	workflow := flags.String("workflow", defaultWorkflow, "the workflow that pins the Claude Code CLI")
+	pinPath := flags.String("pin", defaultPin, "the pin file that pins the Claude Code CLI")
 	if err := flags.Parse(args); err != nil {
-		return fmt.Errorf("usage: claudecodepin [-workflow <file>]: %w", err)
+		return fmt.Errorf("usage: claudecodepin [-pin <file>]: %w", err)
 	}
 	if flags.NArg() != 0 {
-		return errors.New("usage: claudecodepin [-workflow <file>]: no positional argument")
+		return errors.New("usage: claudecodepin [-pin <file>]: no positional argument")
 	}
 
-	data, err := os.ReadFile(*workflow)
+	data, err := os.ReadFile(*pinPath)
 	if err != nil {
-		return fmt.Errorf("read %s: %w", *workflow, err)
+		return fmt.Errorf("read %s: %w", *pinPath, err)
 	}
-	pin, err := pincheck.FromWorkflow(bytes.NewReader(data))
+	pin, err := pincheck.FromPinFile(bytes.NewReader(data))
 	if err != nil {
-		return fmt.Errorf("%s: %w", *workflow, err)
+		return fmt.Errorf("%s: %w", *pinPath, err)
 	}
 
 	doc, err := fetch(ctx, client, pin.RegistryURL())
@@ -85,11 +86,11 @@ func check(ctx context.Context, args []string, client *http.Client, stdout io.Wr
 		return fmt.Errorf("%s@%s: %w", pincheck.PackageName, pin.Version, err)
 	}
 	if err := pincheck.Verify(pin, bytes.NewReader(doc)); err != nil {
-		return fmt.Errorf("%s: %w", *workflow, err)
+		return fmt.Errorf("%s: %w", *pinPath, err)
 	}
 
 	fmt.Fprintf(stdout, "Claude Code pin: %s pins %s@%s with the integrity the npm registry publishes, %s\n",
-		*workflow, pincheck.PackageName, pin.Version, pin.Integrity)
+		*pinPath, pincheck.PackageName, pin.Version, pin.Integrity)
 	return nil
 }
 

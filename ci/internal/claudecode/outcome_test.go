@@ -1,4 +1,4 @@
-package review_test
+package claudecode_test
 
 import (
 	"context"
@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/timothymamo/shift2eu/ci/aireview/internal/review"
+	"github.com/timothymamo/shift2eu/ci/internal/claudecode"
 )
 
 // TestRunOutcomeZeroValueFailsClosed pins that a RunOutcome nobody decided is a
@@ -18,13 +18,13 @@ import (
 func TestRunOutcomeZeroValueFailsClosed(t *testing.T) {
 	t.Parallel()
 
-	var zero review.RunOutcome
+	var zero claudecode.RunOutcome
 
-	if zero != review.OutcomeFailed {
-		t.Errorf("the zero RunOutcome = %v, want OutcomeFailed (%v)", zero, review.OutcomeFailed)
+	if zero != claudecode.OutcomeFailed {
+		t.Errorf("the zero RunOutcome = %v, want OutcomeFailed (%v)", zero, claudecode.OutcomeFailed)
 	}
 
-	if zero == review.OutcomeAnswer {
+	if zero == claudecode.OutcomeAnswer {
 		t.Errorf("the zero RunOutcome reads as OutcomeAnswer (%v), want it to fail closed", zero)
 	}
 }
@@ -46,59 +46,59 @@ func TestDecideRunOutcomePinsWhichOutcomeWins(t *testing.T) {
 		answerErr error
 		parentErr error
 		runErr    error
-		want      review.RunOutcome
+		want      claudecode.RunOutcome
 	}{
 		{
 			name: "a result before the deadline is the answer",
-			want: review.OutcomeAnswer,
+			want: claudecode.OutcomeAnswer,
 		},
 		{
 			name:   "a result exactly at the deadline is the answer, not a timeout",
 			runErr: context.DeadlineExceeded,
-			want:   review.OutcomeAnswer,
+			want:   claudecode.OutcomeAnswer,
 		},
 		{
 			name:      "a result after the caller cancelled is the answer",
 			parentErr: context.Canceled,
 			runErr:    context.Canceled,
-			want:      review.OutcomeAnswer,
+			want:      claudecode.OutcomeAnswer,
 		},
 		{
 			name:      "the deadline first is a timeout",
 			answerErr: noResult,
 			runErr:    context.DeadlineExceeded,
-			want:      review.OutcomeTimedOut,
+			want:      claudecode.OutcomeTimedOut,
 		},
 		{
 			name:      "a wrapped deadline is a timeout too",
 			answerErr: noResult,
 			runErr:    fmt.Errorf("wait for the Claude Code CLI: %w", context.DeadlineExceeded),
-			want:      review.OutcomeTimedOut,
+			want:      claudecode.OutcomeTimedOut,
 		},
 		{
 			name:      "a cancelled caller is a cancellation",
 			answerErr: noResult,
 			parentErr: context.Canceled,
 			runErr:    context.Canceled,
-			want:      review.OutcomeCancelled,
+			want:      claudecode.OutcomeCancelled,
 		},
 		{
 			name:      "a cancellation wins over the run's deadline",
 			answerErr: noResult,
 			parentErr: context.Canceled,
 			runErr:    context.DeadlineExceeded,
-			want:      review.OutcomeCancelled,
+			want:      claudecode.OutcomeCancelled,
 		},
 		{
 			name:      "a plain failure is the run's own error",
 			answerErr: noResult,
-			want:      review.OutcomeFailed,
+			want:      claudecode.OutcomeFailed,
 		},
 		{
 			name:      "a run that failed on its own error is not a timeout",
 			answerErr: noResult,
 			runErr:    errors.New("exit status 1"),
-			want:      review.OutcomeFailed,
+			want:      claudecode.OutcomeFailed,
 		},
 	}
 
@@ -106,7 +106,7 @@ func TestDecideRunOutcomePinsWhichOutcomeWins(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			if got := review.DecideRunOutcome(tc.answerErr, tc.parentErr, tc.runErr); got != tc.want {
+			if got := claudecode.DecideRunOutcome(tc.answerErr, tc.parentErr, tc.runErr); got != tc.want {
 				t.Errorf("DecideRunOutcome(%v, %v, %v) = %v, want %v", tc.answerErr, tc.parentErr, tc.runErr, got, tc.want)
 			}
 		})

@@ -2047,8 +2047,9 @@ review saying so.
 
 It asks the model through the **Claude Code CLI on your Claude subscription**, not with an API key: the
 workflow installs the CLI at a pinned version and checks the download against a pinned checksum before
-any secret is in a step (both are the install step's `CLAUDE_CODE_VERSION` and `CLAUDE_CODE_INTEGRITY`;
-a Renovate bump of the version must replace the integrity in the same pull request), and the program
+any secret is in a step (both are the `version:` and `integrity:` lines of `.github/claude-code.yaml`, the
+one pin file every workflow that installs the CLI reads, issue #277; a Renovate bump of the version must
+replace the integrity in the same pull request), and the program
 runs `claude -p` with every tool off, in an empty directory with an empty `HOME`, the pull request on
 stdin and an environment of its own (ADR 0033). `--safe-mode`, with the empty directory and `HOME`, keeps
 `CLAUDE.md`, skills, plugins, hooks and MCP servers off; `--setting-sources ""` skips the user, project
@@ -2058,13 +2059,13 @@ install step fails if `/etc/claude-code` exists. **Never set `ANTHROPIC_API_KEY`
 or anywhere else: Claude Code prefers an API key over the subscription and bills the API instead, so the
 program refuses to run when one is set.
 
-**The Claude Code pin check** (issue #276). Renovate bumps `CLAUDE_CODE_VERSION` but cannot bump
-`CLAUDE_CODE_INTEGRITY`, and a bump's own AI review runs `main`'s copy of the workflow, so it cannot see a
-stale integrity. The **Claude Code pin** check (`.github/workflows/claude-code-pin.yml`, which runs
+**The Claude Code pin check** (issue #276). Renovate bumps the `version:` of `.github/claude-code.yaml`
+but cannot bump its `integrity:`, and a bump's own AI review runs `main`'s copy of the workflow and the pin
+file, so it cannot see a stale integrity. The **Claude Code pin** check (`.github/workflows/claude-code-pin.yml`, which runs
 `go run ./ci/claudecodepin`) does. It runs on every pull request into `main` (issue #452): a first step
 diffs the pull request's merge commit against its first parent (`git diff --no-renames --name-only -z
-HEAD^1 HEAD`, from a checkout two commits deep) and, when none of `ai-review.yml`,
-`.github/scripts/install-claude-code.sh`, the check, its workflow or `go.mod` (whose go line picks the Go
+HEAD^1 HEAD`, from a checkout two commits deep) and, when none of `.github/claude-code.yaml`,
+`ai-review.yml`, `.github/scripts/install-claude-code.sh`, the check, its workflow or `go.mod` (whose go line picks the Go
 that builds the check) changed, passes without contacting the registry, printing that the pin's paths are
 unchanged. It fails closed: any other case (another event, no merge commit, a failing `git diff`) runs the
 check or fails the job, and so does a merge commit whose second parent is not the pull request's head as

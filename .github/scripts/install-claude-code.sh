@@ -1,18 +1,20 @@
 #!/usr/bin/env bash
-# Installs the Claude Code CLI the AI reviewer asks its model through (PRD #161 milestone 4, ADR 0033),
-# run by .github/workflows/ai-review.yml before any secret is in a step's environment:
+# Installs the Claude Code CLI the AI reviewer asks its model through (PRD #161 milestone 4, ADR 0033)
+# and the scheduled audit runs (ADR 0040), run by each workflow's install step before any secret is in a
+# step's environment:
 #
 #   install-claude-code.sh <directory> <platform package>@<X.Y.Z> <sha512-... npm integrity>
 #
 # It downloads the platform package's tarball with npm pack, which runs no install script, compares it
 # with the pinned npm integrity, and only then extracts its one binary, package/claude, into
-# <directory>, where the reviewer runs it as <directory>/package/claude. A tarball that does not match
-# fails the run and nothing of it is extracted. The tarball is downloaded into a directory of its own
-# from mktemp -d, which an EXIT trap removes on every exit once its path is assigned, a failed exit
-# included (issue #451); <directory> stays. The meta package @anthropic-ai/claude-code only picks a platform package in a
-# postinstall script, so it is never installed. The workflow pins the version (CLAUDE_CODE_VERSION,
-# under a # renovate: comment) and the integrity (CLAUDE_CODE_INTEGRITY) in the install step's env: and
-# passes both here: a Renovate bump of the version must replace the integrity too (npm view
+# <directory>, where the caller runs it as <directory>/package/claude, and keeps the verified tarball
+# beside it as <directory>/claude-code.tgz. A tarball that does not match fails the run, and nothing of
+# it is extracted or kept. The tarball is downloaded into a directory of its own from mktemp -d, which an
+# EXIT trap removes on every exit once its path is assigned, a failed exit included (issue #451);
+# <directory> stays. The meta package @anthropic-ai/claude-code only picks a platform package in a
+# postinstall script, so it is never installed. The version and the integrity live in one pin file,
+# .github/claude-code.yaml (the version under its renovate comment); the install step reads both from it
+# and passes them here: a Renovate bump of the version must replace the integrity too (npm view
 # <package>@<version> dist.integrity).
 #
 # It fails when /etc/claude-code exists: the CLI applies an admin-managed policy from there
@@ -79,4 +81,7 @@ if [ "${actual}" != "${integrity}" ]; then
 fi
 
 tar -xzf "${download}/${tgz}" -C "${dest}" package/claude
+# The verified tarball stays beside the binary, byte for byte what npm packed, so the audit's launcher
+# can check it against the pin again in the step that runs it (ADR 0040's milestone-2 amendment).
+cp -- "${download}/${tgz}" "${dest}/claude-code.tgz"
 DISABLE_AUTOUPDATER=1 "${dest}/package/claude" --version

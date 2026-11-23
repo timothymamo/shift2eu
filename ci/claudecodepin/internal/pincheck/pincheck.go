@@ -11,7 +11,7 @@ import (
 	"strings"
 )
 
-// PackageName is the npm package the workflow pins: the Claude Code CLI's
+// PackageName is the npm package the pin file pins: the Claude Code CLI's
 // linux-x64 platform package (ADR 0033).
 const PackageName = "@anthropic-ai/claude-code-linux-x64"
 
@@ -19,10 +19,10 @@ const PackageName = "@anthropic-ai/claude-code-linux-x64"
 const registryBase = "https://registry.npmjs.org/"
 
 const (
-	versionKey   = "CLAUDE_CODE_VERSION"
-	integrityKey = "CLAUDE_CODE_INTEGRITY"
+	versionKey   = "version"
+	integrityKey = "integrity"
 
-	// integrityPrefix is the algorithm the workflow pins the tarball by.
+	// integrityPrefix is the algorithm the pin file pins the tarball by.
 	integrityPrefix = "sha512-"
 
 	// sha512Size is the length of a SHA-512 digest in bytes.
@@ -30,30 +30,32 @@ const (
 )
 
 var (
-	// pinLine matches one pin line of an env: block, indented or not, and
+	// pinLine matches one top-level pin line of the pin file, unindented, and
 	// captures its key and its value.
-	pinLine = regexp.MustCompile(`^\s*(` + versionKey + `|` + integrityKey + `):(.*)$`)
+	pinLine = regexp.MustCompile(`^(` + versionKey + `|` + integrityKey + `):(.*)$`)
 
 	// exactVersion is the only version shape the check accepts: no dist tag,
 	// range, prerelease or path, so the registry URL names one release.
 	exactVersion = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+$`)
 )
 
-// Pin is the Claude Code CLI's pin in the AI review workflow: the exact
+// Pin is the Claude Code CLI's pin in .github/claude-code.yaml: the exact
 // version of PackageName and the npm integrity of its tarball.
 type Pin struct {
 	Version   string
 	Integrity string
 }
 
-// FromWorkflow reads the pin from the AI review workflow: exactly one
-// CLAUDE_CODE_VERSION: line and exactly one CLAUDE_CODE_INTEGRITY: line. The
-// version must be MAJOR.MINOR.PATCH and the integrity sha512- and the base64
-// of a SHA-512 digest. Each value must be a plain, unquoted YAML scalar with
-// no trailing comment: a quoted value or a trailing # comment fails closed,
-// as a value that is not an exact version or not base64. A missing, repeated
-// or malformed line is an error.
-func FromWorkflow(r io.Reader) (Pin, error) {
+// FromPinFile reads the pin from the one pin file, .github/claude-code.yaml
+// (ADR 0040's milestone-2 amendment, issue #277): exactly one top-level
+// version: line and exactly one integrity: line. The version must be
+// MAJOR.MINOR.PATCH and the integrity sha512- and the base64 of a SHA-512
+// digest. Each value must be a plain, unquoted YAML scalar with no trailing
+// comment: a quoted value or a trailing # comment fails closed, as a value
+// that is not an exact version or not base64. A missing, repeated or
+// malformed line is an error. The # renovate: comment above the version line
+// is Renovate's and test/lint's to hold; FromPinFile reads the values alone.
+func FromPinFile(r io.Reader) (Pin, error) {
 	values := map[string][]string{}
 
 	scanner := bufio.NewScanner(r)
@@ -65,7 +67,7 @@ func FromWorkflow(r io.Reader) (Pin, error) {
 		values[m[1]] = append(values[m[1]], strings.TrimSpace(m[2]))
 	}
 	if err := scanner.Err(); err != nil {
-		return Pin{}, fmt.Errorf("read the workflow: %w", err)
+		return Pin{}, fmt.Errorf("read the pin file: %w", err)
 	}
 
 	version, err := onlyValue(values, versionKey)
@@ -87,16 +89,16 @@ func FromWorkflow(r io.Reader) (Pin, error) {
 	return Pin{Version: version, Integrity: integrity}, nil
 }
 
-// onlyValue returns the one value of key, or an error when the workflow holds
+// onlyValue returns the one value of key, or an error when the pin file holds
 // none or more than one line of it.
 func onlyValue(values map[string][]string, key string) (string, error) {
 	switch got := values[key]; len(got) {
 	case 1:
 		return got[0], nil
 	case 0:
-		return "", fmt.Errorf("the workflow holds no %s: line", key)
+		return "", fmt.Errorf("the pin file holds no %s: line", key)
 	default:
-		return "", fmt.Errorf("the workflow holds %d %s: lines, want exactly one", len(got), key)
+		return "", fmt.Errorf("the pin file holds %d %s: lines, want exactly one", len(got), key)
 	}
 }
 
@@ -160,7 +162,7 @@ func Verify(p Pin, doc io.Reader) error {
 
 	if published != p.Integrity {
 		return fmt.Errorf(
-			"%s pins %s for %s@%s, but the registry publishes %s: replace it with the output of `npm view %s@%s dist.integrity`",
+			"the pin file's %s: pins %s for %s@%s, but the registry publishes %s: replace it with the output of `npm view %s@%s dist.integrity`",
 			integrityKey, p.Integrity, PackageName, p.Version, published, PackageName, p.Version)
 	}
 

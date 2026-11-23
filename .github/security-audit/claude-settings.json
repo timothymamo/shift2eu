@@ -1,0 +1,56 @@
+{
+  "permissions": {
+    "defaultMode": "dontAsk",
+    "disableBypassPermissionsMode": "disable",
+    "allow": [
+      "Read(//srv/audit/checkout/**)",
+      "Read(//srv/audit/checks/**)",
+      "Read(//srv/audit/work/**)",
+      "Edit(//srv/audit/work/**)",
+      "Bash(/srv/audit/bin/audit-exec:*)"
+    ],
+    "deny": [
+      "Read(//proc)",
+      "Read(//proc/**)",
+      "Read(//sys)",
+      "Read(//sys/**)",
+      "Read(//etc)",
+      "Read(//etc/**)",
+      "Read(//home)",
+      "Read(//home/**)",
+      "Read(//home/runner/**)",
+      "Read(//srv/audit/state)",
+      "Read(//srv/audit/state/**)",
+      "Edit(//srv/audit/state/**)",
+      "Bash(git push:*)",
+      "Bash(git commit:*)",
+      "Bash(git tag:*)",
+      "Bash(git remote:*)",
+      "Bash(gh:*)",
+      "Bash(curl:*)",
+      "Bash(wget:*)",
+      "Bash(nc:*)",
+      "Bash(ssh:*)",
+      "Bash(docker:*)",
+      "Bash(sudo:*)",
+      "Bash(env:*)",
+      "Bash(printenv:*)",
+      "Bash(set:*)",
+      "Bash(*/proc/*/environ*)"
+    ]
+  },
+  "sandbox": {
+    "enabled": true,
+    "failIfUnavailable": true,
+    "autoAllowBashIfSandboxed": false,
+    "allowUnsandboxedCommands": false,
+    "enableWeakerNestedSandbox": false,
+    "network": {
+      "allowedDomains": [],
+      "allowUnixSockets": [],
+      "allowLocalBinding": false
+    }
+  },
+  "disableAllHooks": true,
+  "enableAllProjectMcpServers": false
+}

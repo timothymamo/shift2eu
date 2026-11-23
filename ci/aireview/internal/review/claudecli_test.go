@@ -223,6 +223,10 @@ func TestClaudeCLIAskPresentsThePromptAsTheCLIReadsIt(t *testing.T) {
 			"--output-format":   "json",
 			"--tools":           "",
 			"--setting-sources": "",
+			// --strict-mcp-config reads a configuration it is never given unless
+			// --mcp-config names one: the empty one is ADR 0040's amendment, which
+			// adds it for the audit and the reviewer alike (issue #277).
+			"--mcp-config": `{"mcpServers":{}}`,
 		}
 
 		recorded := map[string]string{}

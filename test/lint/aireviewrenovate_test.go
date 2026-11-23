@@ -22,50 +22,44 @@ const renovateConfigPath = ".github/renovate.json5"
 // find the Claude Code CLI's pin in the AI reviewer's workflow.
 const aiReviewGenericManager = "Versions annotated with"
 
-// aiReviewCLIPackage is the npm package the AI reviewer's workflow installs the
-// Claude Code CLI from: the linux-x64 platform package, whose one binary
+// aiReviewCLIPackage is the npm package both workflows install the Claude Code
+// CLI from: the linux-x64 platform package, whose one binary
 // .github/scripts/install-claude-code.sh extracts (ADR 0033).
 const aiReviewCLIPackage = "@anthropic-ai/claude-code-linux-x64"
 
-// aiReviewEnvVersion captures the version the AI reviewer's workflow pins in the
-// install step's env:, as the version literal CLAUDE_CODE_VERSION holds.
-var aiReviewEnvVersion = regexp.MustCompile(`(?m)^\s+CLAUDE_CODE_VERSION:\s*(\d+\.\d+\.\d+)\s*$`)
+// claudeCodePinVersion captures the version the pin file blocks, as the version
+// literal its version: line holds.
+var claudeCodePinVersion = regexp.MustCompile(`(?m)^version:\s*(\d+\.\d+\.\d+)\s*$`)
 
-// TestAIReviewWorkflowPinIsFoundOnce pins how Renovate finds the Claude Code CLI's
-// pin in .github/workflows/ai-review.yml (CLAUDE.md rule 7), read from
-// .github/renovate.json5 as Renovate reads it: the generic manager that reads a
-// `# renovate:` comment and the `KEY: value` line below it matches the workflow
-// exactly once, and that one match names the CLI's npm package and the version
-// literal the install step's env: pins. No other customManager reads the workflow
-// at all.
-//
-// The workflow pinned the version and the integrity in its run: script's one-line
-// `@package@X.Y.Z` form before, which the npm-specific manager read. The generic
-// manager matched that line too, and took .github/scripts/install-claude-code.sh,
-// the first word after `run:`, for the version, so a bump would have moved the
-// wrong text. The version therefore lives in the install step's env:, on a line of
-// its own below the comment, and the npm-specific manager is gone: one manager
-// reads the workflow, and it reads one pin.
-func TestAIReviewWorkflowPinIsFoundOnce(t *testing.T) {
+// TestClaudeCodePinIsFoundOnce pins how Renovate finds the Claude Code CLI's pin
+// (CLAUDE.md rule 7), read from .github/renovate.json5 as Renovate reads it: the
+// pin is one committed file, .github/claude-code.yaml, and the generic manager
+// that reads a `# renovate:` comment and the `KEY: value` line below it matches
+// that file exactly once, naming the CLI's npm package and the version the file
+// pins. No other customManager reads the pin file, and no manager reads the AI
+// reviewer's workflow any more: the version and the integrity moved out of it,
+// so a bump moves one file and both workflows' install steps read that file
+// (ADR 0040's milestone-2 amendment, issue #277).
+func TestClaudeCodePinIsFoundOnce(t *testing.T) {
 	t.Parallel()
 
 	root := moduleRoot(t)
 
-	src, err := os.ReadFile(filepath.Join(root, aiReviewWorkflowPath))
+	src, err := os.ReadFile(filepath.Join(root, claudeCodePinFile))
 	if err != nil {
-		t.Fatalf("read %s: %v", aiReviewWorkflowPath, err)
+		t.Fatalf("read %s: %v; ADR 0040 moves the Claude Code pin into that one file, which Renovate bumps and both workflows read", claudeCodePinFile, err)
 	}
 
-	version := aiReviewPinnedVersion(t, src)
+	version := claudeCodePinnedVersion(t, src)
 
 	managers := renovateCustomManagers(t, root)
 
 	generic, others := aiReviewGenericManagerIndex(t, managers)
 
 	// The manager only finds the pin in a file its managerFilePatterns select.
-	if !renovateManagerScans(t, managers[generic], aiReviewWorkflowPath) {
+	if !renovateManagerScans(t, managers[generic], claudeCodePinFile) {
 		t.Fatalf("%s: the manager described %q scans %v, not %s, so it never reads the CLI's pin (CLAUDE.md rule 7)",
-			renovateConfigPath, managers[generic].description, managers[generic].filePatterns, aiReviewWorkflowPath)
+			renovateConfigPath, managers[generic].description, managers[generic].filePatterns, claudeCodePinFile)
 	}
 
 	type pin struct {
@@ -88,23 +82,23 @@ func TestAIReviewWorkflowPinIsFoundOnce(t *testing.T) {
 
 	if len(pins) != 1 {
 		t.Fatalf("%s: the manager described %q matches %s %d times (%v), want exactly the one pin of the Claude Code CLI: a second match moves a version nothing pins (CLAUDE.md rule 7)",
-			renovateConfigPath, managers[generic].description, aiReviewWorkflowPath, len(pins), pins)
+			renovateConfigPath, managers[generic].description, claudeCodePinFile, len(pins), pins)
 	}
 
 	if pins[0].depName != aiReviewCLIPackage {
-		t.Errorf("%s: the manager described %q reads the workflow's pin as depName %q, want %q: the package the install step extracts (CLAUDE.md rule 7)",
+		t.Errorf("%s: the manager described %q reads the pin file as depName %q, want %q: the package the install step extracts (CLAUDE.md rule 7)",
 			renovateConfigPath, pins[0].manager, pins[0].depName, aiReviewCLIPackage)
 	}
 
 	if pins[0].currentValue != version {
-		t.Errorf("%s: the manager described %q reads the workflow's pin as currentValue %q, want the version literal CLAUDE_CODE_VERSION pins, %q: anything else is a version Renovate bumps in the wrong place (CLAUDE.md rule 7)",
+		t.Errorf("%s: the manager described %q reads the pin file as currentValue %q, want the version literal its version: line holds, %q: anything else is a version Renovate bumps in the wrong place (CLAUDE.md rule 7)",
 			renovateConfigPath, pins[0].manager, pins[0].currentValue, version)
 	}
 
 	for _, other := range others {
-		if renovateManagerScans(t, managers[other], aiReviewWorkflowPath) {
-			t.Errorf("%s: the customManager described %q also reads %s; the generic manager reads its one annotated pin, and the npm-specific manager that read the old one-line package@version form is gone (CLAUDE.md rule 7)",
-				renovateConfigPath, managers[other].description, aiReviewWorkflowPath)
+		if renovateManagerScans(t, managers[other], claudeCodePinFile) {
+			t.Errorf("%s: the customManager described %q also reads %s; the generic manager reads its one annotated pin, and no second manager bumps the same version (CLAUDE.md rule 7)",
+				renovateConfigPath, managers[other].description, claudeCodePinFile)
 		}
 
 		for _, expr := range managers[other].matchStrings {
@@ -112,21 +106,30 @@ func TestAIReviewWorkflowPinIsFoundOnce(t *testing.T) {
 
 			if m := re.FindStringSubmatch(string(src)); m != nil {
 				t.Errorf("%s: the customManager described %q also matches %s (%q), which the generic manager reads; one pin is read by one manager, or a bump moves two texts (CLAUDE.md rule 7)",
-					renovateConfigPath, managers[other].description, aiReviewWorkflowPath, m[0])
+					renovateConfigPath, managers[other].description, claudeCodePinFile, m[0])
 			}
+		}
+	}
+
+	// The pin lives in the one file: a workflow that still carried the
+	// annotated version and the integrity would be a second pin, which Renovate
+	// and the pin check do not read (ADR 0040, issue #277).
+	for _, manager := range managers {
+		if renovateManagerScans(t, manager, aiReviewWorkflowPath) {
+			t.Errorf("%s: the customManager described %q reads %s; the version and the integrity moved to %s, so no manager reads a pin out of the workflow (CLAUDE.md rule 7, issue #277)",
+				renovateConfigPath, manager.description, aiReviewWorkflowPath, claudeCodePinFile)
 		}
 	}
 }
 
-// aiReviewPinnedVersion returns the version literal the AI reviewer's workflow
-// pins in the install step's env:, and fails when the workflow pins none or more
-// than one.
-func aiReviewPinnedVersion(t *testing.T, workflow []byte) string {
+// claudeCodePinnedVersion returns the version literal the pin file's version:
+// line holds, and fails when the file holds none or more than one.
+func claudeCodePinnedVersion(t *testing.T, pinFile []byte) string {
 	t.Helper()
 
-	matches := aiReviewEnvVersion.FindAllStringSubmatch(string(workflow), -1)
+	matches := claudeCodePinVersion.FindAllStringSubmatch(string(pinFile), -1)
 	if len(matches) != 1 {
-		t.Fatalf("%s: CLAUDE_CODE_VERSION is an exact version X.Y.Z on %d lines, want one: the install step's env: pins the Claude Code CLI once (CLAUDE.md rule 7)", aiReviewWorkflowPath, len(matches))
+		t.Fatalf("%s: version: is an exact version X.Y.Z on %d lines, want one: the one pin file pins the Claude Code CLI once (CLAUDE.md rule 7)", claudeCodePinFile, len(matches))
 	}
 
 	return matches[0][1]

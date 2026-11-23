@@ -5,12 +5,14 @@
 // dismisses its own earlier change requests once nothing blocking remains.
 //
 // The model call is one run of the Claude Code CLI, `claude -p`, on the
-// maintainer's Claude subscription (ClaudeCLI): every tool, setting source,
-// MCP server and slash command off, the trusted instructions in a file of a
-// temporary directory, the untrusted pull request on stdin, an empty working
-// directory and an empty HOME of its own, and an explicit environment that
-// inherits nothing of the runner's. Writing those temporary files and starting
-// that one process are the only things it does with os and os/exec.
+// maintainer's Claude subscription (ClaudeCLI), through the launcher the
+// reviewer shares with the scheduled audit, ci/internal/claudecode (issue
+// #277): Model, no tools, every setting source, MCP server and slash command
+// off, the trusted instructions in a file of a temporary directory, the
+// untrusted pull request on stdin, an empty working directory and an empty
+// HOME of its own, and an explicit environment that inherits nothing of the
+// runner's. The launcher writes those temporary files and starts that one
+// process; this package imports neither os nor os/exec.
 //
 // It is no part of the product: only ci/aireview imports it (Go's internal
 // rule), and neither release binary can reach it. It reads no environment

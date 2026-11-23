@@ -72,20 +72,43 @@ jobs:
       # integrity pinned here and only then extracts its one binary, package/claude. It fails when the
       # runner image ships /etc/claude-code, whose managed policy the CLI would apply under every flag.
       # The meta package @anthropic-ai/claude-code only picks this package in a postinstall script, so
-      # it is skipped. The version and the integrity are this step's env:, where Renovate's generic
-      # manager reads the version under its # renovate: comment. A Renovate bump of the version must
-      # also replace CLAUDE_CODE_INTEGRITY (npm view @anthropic-ai/claude-code-linux-x64@<version>
-      # dist.integrity): until it does, this step fails and nothing unverified runs, which is the safe
-      # way round. A Renovate PR's own AI review runs main's copy of this file, so it cannot catch a missed
-      # integrity; the "Claude Code pin" check (.github/workflows/claude-code-pin.yml, ci/claudecodepin,
-      # issue #276) does, on every pull request that changes this file: it fails unless the npm registry
-      # publishes exactly this integrity for exactly this version.
+      # it is skipped. The version and the integrity live in one committed file, .github/claude-code.yaml
+      # (ADR 0040's milestone-2 amendment, issue #277), which every workflow that installs the CLI reads
+      # and where Renovate's generic manager reads the version under its renovate comment. Here it is
+      # main's copy only because this job's checkout names no ref: under pull_request_target, a checkout
+      # without ref checks out the base, never the pull request's head, so a pull request cannot pick the
+      # CLI it is reviewed with. Giving the checkout a ref (or a repository) would hand the pull request
+      # that choice in a job that then mints the reviewer's token; test/lint's
+      # TestAIReviewWorkflowHoldsTheReviewersSecurityProperties refuses both. A Renovate bump of the
+      # version must also replace the file's integrity (npm view
+      # @anthropic-ai/claude-code-linux-x64@<version> dist.integrity): until it does, this step fails and
+      # nothing unverified runs, which is the safe way round. A Renovate PR's own AI review runs main's
+      # copy of the file, so it cannot catch a missed integrity; the "Claude Code pin" check
+      # (.github/workflows/claude-code-pin.yml, ci/claudecodepin, issue #276) does, on every pull request
+      # that changes the file: it fails unless the npm registry publishes exactly this integrity for
+      # exactly this version. The step below reads the two lines, each held to its exact shape (one line
+      # each, an exact MAJOR.MINOR.PATCH version, a sha512 integrity), and hands them to the install step
+      # as step outputs, which reach its script through env: only, never through an expression.
+      - name: Read the Claude Code pin
+        id: claude-code-pin
+        run: |
+          pin=.github/claude-code.yaml
+          version="$(grep -E '^version: [0-9]+\.[0-9]+\.[0-9]+$' "${pin}" || true)"
+          integrity="$(grep -E '^integrity: sha512-[A-Za-z0-9+/]{86}==$' "${pin}" || true)"
+          if [ "$(grep -c '^version:' "${pin}")" != 1 ] || [ "$(grep -c '^integrity:' "${pin}")" != 1 ] ||
+            [ -z "${version}" ] || [ -z "${integrity}" ]; then
+            echo "::error title=Claude Code pin::${pin} holds no single exact version: line and sha512 integrity: line"
+            exit 1
+          fi
+          {
+            printf 'version=%s\n' "${version#version: }"
+            printf 'integrity=%s\n' "${integrity#integrity: }"
+          } >> "${GITHUB_OUTPUT}"
       - name: Install the Claude Code CLI
         env:
-          # renovate: datasource=npm depName=@anthropic-ai/claude-code-linux-x64
-          CLAUDE_CODE_VERSION: 2.1.330
-          CLAUDE_CODE_INTEGRITY: sha512-9Gn+V7DtJ8M1nztP9CeDVl9g3RtrepI7rOFTyPRRnZe8D6zebIHKmC7OvBauucuAP0X0k85SDN/LPVZyjsGezQ==
-        run: .github/scripts/install-claude-code.sh "${RUNNER_TEMP}/claude-code" "@anthropic-ai/claude-code-linux-x64@${CLAUDE_CODE_VERSION}" "${CLAUDE_CODE_INTEGRITY}"
+          CLAUDE_CODE_PIN_VERSION: ${{ steps.claude-code-pin.outputs.version }}
+          CLAUDE_CODE_PIN_INTEGRITY: ${{ steps.claude-code-pin.outputs.integrity }}
+        run: .github/scripts/install-claude-code.sh "${RUNNER_TEMP}/claude-code" "@anthropic-ai/claude-code-linux-x64@${CLAUDE_CODE_PIN_VERSION}" "${CLAUDE_CODE_PIN_INTEGRITY}"
       # A token of the reviewer App, revoked when the job ends, with exactly Pull requests write (to post
       # and dismiss its reviews) and Contents read. client-id, never the deprecated app-id (ADR 0021).
       - name: Mint the reviewer App's token

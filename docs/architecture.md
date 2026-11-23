@@ -115,14 +115,55 @@ Arrows are imports. They point inwards only:
   to import, with their libraries under `internal/` directories that Go's internal rule keeps out of reach
   of `cmd/` and `internal/`, each held to named standard packages by strict rules of its own. `ci/aireview`
   is the AI reviewer's workflow program (`ai-reviewer-main`, `ai-reviewer-is-standard-library`, ADR 0033).
+  It asks the model through `ci/internal/claudecode`, the Claude Code CLI launcher it shares with the
+  scheduled audit (issue #277, ADR 0040): one `claude -p` run with the model, the built-in tools and the
+  audit's launch (effort, settings file, permission mode `dontAsk` or `plan`, appended system prompt,
+  safe mode, directories, extra environment entries of an allow list of three names, PATH, streamed
+  transcript) as parameters, the
+  reviewer's launch every one's zero value, and an environment that inherits nothing. The launcher is held to
+  named standard packages (`claude-code-launcher`), only the reviewer's library and the audit's library
+  `ci/internal/audit` may import it (`claude-code-launcher-importers`), and the forbidigo groups `ai-reviewer-env` and
+  `ai-reviewer-one-process` hold in it as in the reviewer's library, which itself no longer imports `os`
+  or `os/exec`.
   `ci/claudecodepin` is the Claude Code pin check (issue #276, ADR 0033):
   `.github/workflows/claude-code-pin.yml` runs its job on every pull request and the check when the pin's
-  paths change (issue #452), and it fails unless the npm registry publishes the pinned
-  `CLAUDE_CODE_INTEGRITY` for exactly the pinned `CLAUDE_CODE_VERSION`. Its entry point reads the workflow
+  paths change (issue #452), and it fails unless the npm registry publishes the pinned integrity for
+  exactly the pinned version of the one pin file, `.github/claude-code.yaml`, which every workflow that
+  installs the CLI reads (issue #277, ADR 0040). Its entry point reads the pin file (`-pin`)
   and fetches the one public registry document (`claude-code-pin-main`, no `os/exec`); its library
   `ci/claudecodepin/internal/pincheck` parses the readers it is given and does no I/O
   (`claude-code-pin-library`, no `os` or `net`); the forbidigo group `claude-code-pin-env` refuses every
   read of the environment in both.
+  `ci/auditexec` is the scheduled audit's command wrapper, installed as `/srv/audit/bin/audit-exec`
+  (issue #277, ADR 0040): it maps a command name to a fixed absolute path, runs git only with its
+  read-only subcommands and its own `-C /srv/audit/checkout`, and refuses with exit 126 every other
+  name and subcommand, the options that would reach elsewhere (a caller's git `-C` in every form among
+  them), jq's module system (`import`, `include`, `modulemeta`, `get_search_list`, `-L`,
+  `--library-path`) and program file (`-f`, `--from-file`), wc's `--files0-from` and sha256sum's
+  `-c`/`--check`, which read paths from a file, and any path word outside an allow list of three roots,
+  `/srv/audit/checkout`, `/srv/audit/checks` and `/srv/audit/work`. Before any command's own rules, on
+  every word of every line, it refuses a word whose `/`-separated elements include `..` and a word
+  starting with `-` that holds `..` anywhere (`-S..`), and reads a word starting with `--` that holds a
+  `/` before any `=` as a path word whole, joined to the line's base (round L; a git range such as
+  `HEAD~3..HEAD` passes). It models no tool's option
+  cluster: in every single-dash word that holds a `/`, the suffix from its first `/` is a path word and
+  must be an allowed absolute path (`git blame -wS/var/x`, `git grep -n5f/tmp/x` are refused; round K). It changes into `/srv/audit/work`
+  before every exec (`os.Chdir`) and replaces itself with the command through `syscall.Exec` with an
+  environment of its own. It is defence in depth: the sandbox is the boundary. It is held to named standard packages (`audit-exec`, no
+  `os/exec` or `net`), and the forbidigo group `audit-exec-env` refuses every read of the environment and
+  every other process start, with `syscall.Exec` named in its `main.go` alone.
+  `ci/auditrun` is the launcher the scheduled audit's model step runs (issue #277, ADR 0040), with its
+  logic in the library `ci/internal/audit`: it reads its inputs through one `os.LookupEnv`, refuses an
+  `ANTHROPIC_API_KEY`, and takes six steps in order, each failing the run before the next: the
+  managed-settings refusal, the tarball's checksum and the extraction of the CLI, the audit directory's
+  layout, the bubblewrap start check, the sandbox preflight (a control and six probes, judged from the
+  transcript and the effects the launcher observes itself) and the audit, one run through
+  `ci/internal/claudecode`. It prints one line, never a step's error text. The entry point is held to named
+  standard packages (`audit-main`, no `os/exec` or `net`) and the forbidigo group `audit-run-env`, with
+  `os.LookupEnv` named in its `main.go` alone; the library to named standard packages and the launcher
+  (`audit-library`, no `syscall`, `unsafe`, `plugin` or cgo) and the forbidigo group `audit-library-env`
+  (no environment read, no home, config or cache lookup; its process starts stay allowed), and only `ci/auditrun` and `ci/auditexec` may
+  import it (`audit-library-importers`).
 - **`cmd/shift2eu`** is the CLI's composition root, the only place besides `cmd/shift2eu-web` that
   constructs adapters and injects them (and `ci/sitebuild`, which constructs the three targets only to
   read their catalogs). Its imports are a strict allow list (`composition-root`, issue #101): the

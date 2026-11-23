@@ -1,0 +1,282 @@
+// Pins .github/security-audit/claude-settings.json, the only settings file the
+// audit's Claude Code CLI loads (ADR 0040's milestone-2 amendment, issue #277,
+// PRD #175 milestone 2). The ADR names this test: dropping or widening any
+// entry below fails make test.
+//
+// The file is the audit's permission model: --setting-sources "" loads no user,
+// project or local settings file, and --settings names this one, so a later
+// change to .claude/settings.json cannot widen the audit. It is read here as a
+// closed document: every key and every value it holds is one the ADR lists, a
+// key it lists is present, and no key is written twice, which JSON would let a
+// later one override silently.
+package architecture_test
+
+import (
+	"bytes"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"testing"
+
+	"github.com/google/go-cmp/cmp"
+)
+
+// claudeSettingsPath is the audit's settings file, relative to the module root:
+// it is read from the checkout copy at
+// /srv/audit/checkout/.github/security-audit/claude-settings.json.
+const claudeSettingsPath = ".github/security-audit/claude-settings.json"
+
+// claudeSettings is the document ADR 0040's amendment fixes, key for key and
+// value for value, in the order the ADR writes them. Every object here is
+// compared whole, so an entry the ADR does not list fails the test as surely as
+// a missing one.
+//
+// The allow list's paths are Claude Code's rule syntax, where // starts an
+// absolute path: / alone would be relative to the settings file and ~ is the
+// launcher's fresh HOME. A Read rule covers Read, Grep and Glob, an Edit rule
+// covers Edit and Write, and no Grep, Glob or Write rule is written because a
+// settings file the CLI cannot validate is ignored silently in -p mode; the
+// preflight's probes hold the rules to each tool on every run.
+var claudeSettings = map[string]any{
+	"permissions": map[string]any{
+		"defaultMode":                  "dontAsk",
+		"disableBypassPermissionsMode": "disable",
+		"allow": []any{
+			"Read(//srv/audit/checkout/**)",
+			"Read(//srv/audit/checks/**)",
+			"Read(//srv/audit/work/**)",
+			"Edit(//srv/audit/work/**)",
+			"Bash(/srv/audit/bin/audit-exec:*)",
+		},
+		"deny": []any{
+			"Read(//proc)",
+			"Read(//proc/**)",
+			"Read(//sys)",
+			"Read(//sys/**)",
+			"Read(//etc)",
+			"Read(//etc/**)",
+			"Read(//home)",
+			"Read(//home/**)",
+			"Read(//home/runner/**)",
+			"Read(//srv/audit/state)",
+			"Read(//srv/audit/state/**)",
+			"Edit(//srv/audit/state/**)",
+			"Bash(git push:*)",
+			"Bash(git commit:*)",
+			"Bash(git tag:*)",
+			"Bash(git remote:*)",
+			"Bash(gh:*)",
+			"Bash(curl:*)",
+			"Bash(wget:*)",
+			"Bash(nc:*)",
+			"Bash(ssh:*)",
+			"Bash(docker:*)",
+			"Bash(sudo:*)",
+			"Bash(env:*)",
+			"Bash(printenv:*)",
+			"Bash(set:*)",
+			"Bash(*/proc/*/environ*)",
+		},
+	},
+	"sandbox": map[string]any{
+		"enabled":                   true,
+		"failIfUnavailable":         true,
+		"autoAllowBashIfSandboxed":  false,
+		"allowUnsandboxedCommands":  false,
+		"enableWeakerNestedSandbox": false,
+		"network": map[string]any{
+			"allowedDomains":    []any{},
+			"allowUnixSockets":  []any{},
+			"allowLocalBinding": false,
+		},
+	},
+	"disableAllHooks":            true,
+	"enableAllProjectMcpServers": false,
+}
+
+// TestClaudeSettingsFileIsTheADRsOnly pins the audit's settings file whole: it
+// is JSON, it holds no key twice, and its document is exactly the one the ADR
+// fixes. A key the ADR does not list (hooks, mcpServers, env, apiKeyHelper,
+// awsCredentialExport, otelHeadersHelper, sandbox.filesystem,
+// sandbox.excludedCommands, a second permission mode) is a widening this test
+// exists to refuse, as is a key of the ADR's that went missing.
+func TestClaudeSettingsFileIsTheADRsOnly(t *testing.T) {
+	t.Parallel()
+
+	data := readRepositoryFile(t, claudeSettingsPath)
+
+	got, err := decodeJSONDocument(data)
+	if err != nil {
+		t.Fatalf("%s: %v", claudeSettingsPath, err)
+	}
+
+	if diff := cmp.Diff(claudeSettings, got); diff != "" {
+		t.Errorf("%s: the settings differ from the ones ADR 0040's amendment fixes (-want +got):\n%s", claudeSettingsPath, diff)
+	}
+}
+
+// TestClaudeSettingsFileRefusesADuplicateKey pins the reader the test above
+// reads the file with: encoding/json keeps the last of two equal keys silently,
+// so a file could hold a second permissions object or a second allow list that
+// a reader of it never sees but a later one does.
+func TestClaudeSettingsFileRefusesADuplicateKey(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		doc  string
+		want string
+	}{
+		{
+			name: "a key twice at the top level",
+			doc:  `{"disableAllHooks":true,"disableAllHooks":false}`,
+			want: "disableAllHooks",
+		},
+		{
+			name: "a key twice in a nested object",
+			doc:  `{"sandbox":{"enabled":true,"enabled":false}}`,
+			want: "sandbox.enabled",
+		},
+		{
+			name: "a key twice in an object inside an array",
+			doc:  `{"permissions":[{"defaultMode":"dontAsk","defaultMode":"bypassPermissions"}]}`,
+			want: "permissions[0].defaultMode",
+		},
+		{
+			name: "the same key in two objects is no duplicate",
+			doc:  `{"a":{"x":1},"b":{"x":2}}`,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := decodeJSONDocument([]byte(tc.doc))
+
+			if tc.want == "" {
+				if err != nil {
+					t.Fatalf("decodeJSONDocument(%s) error = %v, want none", tc.doc, err)
+				}
+
+				return
+			}
+
+			if err == nil {
+				t.Fatalf("decodeJSONDocument(%s) = nil, want an error naming the repeated key %s", tc.doc, tc.want)
+			}
+
+			if want := tc.want; !bytes.Contains([]byte(err.Error()), []byte(want)) {
+				t.Errorf("decodeJSONDocument(%s) error = %q, want it to name %q", tc.doc, err, want)
+			}
+		})
+	}
+}
+
+// decodeJSONDocument reads data as one JSON document into map[string]any,
+// []any, string, bool, json.Number and nil, and refuses a document that is no
+// JSON, that holds more than one value, or that writes a key of one object
+// twice: encoding/json keeps the last of two equal keys silently, so a repeated
+// key is an error here. The duplicate is named by its path, so a failure says
+// where to look.
+func decodeJSONDocument(data []byte) (any, error) {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.UseNumber()
+
+	value, err := decodeJSONValue(dec, "")
+	if err != nil {
+		return nil, err
+	}
+
+	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
+		return nil, errors.New("the document holds more than one value")
+	}
+
+	return value, nil
+}
+
+// decodeJSONValue reads the value the decoder is at, path being the object
+// path it sits under for a duplicate key's message.
+func decodeJSONValue(dec *json.Decoder, path string) (any, error) {
+	token, err := dec.Token()
+	if err != nil {
+		return nil, fmt.Errorf("read the document: %w", err)
+	}
+
+	delim, ok := token.(json.Delim)
+	if !ok {
+		return token, nil
+	}
+
+	switch delim {
+	case '{':
+		object := map[string]any{}
+
+		for dec.More() {
+			keyToken, err := dec.Token()
+			if err != nil {
+				return nil, fmt.Errorf("read a key of %s: %w", jsonPath(path), err)
+			}
+
+			key, ok := keyToken.(string)
+			if !ok {
+				return nil, fmt.Errorf("%s: a key is no string", jsonPath(path))
+			}
+
+			if _, twice := object[key]; twice {
+				return nil, fmt.Errorf("%s: the key is written twice", jsonPath(path+"."+key))
+			}
+
+			value, err := decodeJSONValue(dec, path+"."+key)
+			if err != nil {
+				return nil, err
+			}
+
+			object[key] = value
+		}
+
+		if _, err := dec.Token(); err != nil {
+			return nil, fmt.Errorf("close %s: %w", jsonPath(path), err)
+		}
+
+		return object, nil
+	case '[':
+		// An empty JSON array decodes to an empty slice, not a nil one: the
+		// wanted document writes its empty lists as []any{}, and cmp.Diff tells
+		// nil from empty.
+		array := []any{}
+
+		for dec.More() {
+			index := len(array)
+
+			value, err := decodeJSONValue(dec, fmt.Sprintf("%s[%d]", path, index))
+			if err != nil {
+				return nil, err
+			}
+
+			array = append(array, value)
+		}
+
+		if _, err := dec.Token(); err != nil {
+			return nil, fmt.Errorf("close %s: %w", jsonPath(path), err)
+		}
+
+		return array, nil
+	default:
+		return nil, fmt.Errorf("%s: the document holds an unexpected %q", jsonPath(path), delim)
+	}
+}
+
+// jsonPath names path for an error, the document itself being "$".
+func jsonPath(path string) string {
+	if path == "" {
+		return "$"
+	}
+
+	if path[0] == '.' {
+		return "$" + path
+	}
+
+	return path
+}

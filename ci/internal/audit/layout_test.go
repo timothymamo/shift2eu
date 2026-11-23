@@ -1,0 +1,842 @@
+// Pins the audit directory's layout, the third step of an audit run (ADR
+// 0040's milestone-2 amendment, issue #277, "The audit directory"): the
+// directory exists where the model-free step made it, with the checkout copy
+// and the checks' results holding no write bit, an empty work area with its
+// tmp/, an empty state home/ and tmp/, the state area's bin/ and out/, and the
+// wrapper at bin/audit-exec with mode 0555.
+//
+// Every path the layout puts something of its own at is checked as an entry: a
+// symbolic link there - the state area's home/ in particular, which holds the
+// CLI's configuration and transcripts - is a layout the model could read from
+// elsewhere, so it is refused rather than followed. So is an entry of a type a
+// checkout copy and the checks' results never hold, a FIFO or a socket among
+// them: those two cases are in layout_unix_test.go, behind the unix build tag,
+// because only a Unix host can lay them down. The library takes a root standing
+// in for /, so a test lays the tree out under a temporary root.
+//
+// The checkout copy's git configuration is an allow list (issue #277, round D
+// finding 1): the keys and sections a clone carries pass, whatever case they are
+// written in: section and key name are compared without regard to case, the
+// subsection exactly. Every other key, every key a line the parser cannot place
+// yields, and the two files git reads a common directory or a repository out of
+// beside .git/config are refused. The worktree config actions/checkout leaves
+// beside .git/config is read under an allow list of its own - the three keys a
+// sparse-checkout aware git writes with every one of them off - so a regular
+// file holding those passes and anything else in it, or the file in another
+// type, is refused (issue #277, round E finding 1).
+package audit_test
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/timothymamo/shift2eu/ci/internal/audit"
+)
+
+// auditPath is the audit directory's path under a root that stands in for /.
+const auditPath = "srv/audit"
+
+// writeBitsOfEveryone are the permission bits that let anyone write a file.
+const writeBitsOfEveryone os.FileMode = 0o222
+
+// gitConfig is the checkout copy's own git configuration, the one local config
+// every git command the wrapper runs reads (issue #277, review R14).
+var gitConfig = []string{"checkout", ".git", "config"}
+
+// gitDir is the checkout copy's own git directory, which holds that
+// configuration and the other files git reads a repository out of.
+var gitDir = []string{"checkout", ".git"}
+
+// benignGitConfig is the configuration a clone leaves: nothing the layout
+// refuses.
+const benignGitConfig = `[core]
+	repositoryformatversion = 0
+	filemode = true
+	bare = false
+	logallrefupdates = true
+`
+
+// checkoutGitConfig is the configuration actions/checkout writes for the clone
+// it makes with persist-credentials: false (issue #277, round D finding 1):
+// the keys of a fresh clone, and no credential, no program and no include.
+const checkoutGitConfig = `[core]
+	repositoryformatversion = 0
+	filemode = true
+	bare = false
+	logallrefupdates = true
+[remote "origin"]
+	url = https://github.com/example/repo
+	fetch = +refs/heads/*:refs/remotes/origin/*
+[gc]
+	auto = 0
+[branch "main"]
+	remote = origin
+	merge = refs/heads/main
+`
+
+// mixedCaseGitConfig is that configuration in another case, which the allow list
+// reads as the same one: the section and the key name are compared without
+// regard to case, while a subsection such as origin is compared exactly.
+const mixedCaseGitConfig = `[CORE]
+	RepositoryFormatVersion = 0
+	Filemode = true
+	Bare = false
+	LogAllRefUpdates = true
+[Remote "origin"]
+	Url = https://github.com/example/repo
+	Fetch = +refs/heads/*:refs/remotes/origin/*
+[GC]
+	Auto = 0
+[BRANCH "main"]
+	Remote = origin
+	Merge = refs/heads/main
+`
+
+// commentedGitConfig is the configuration with the two forms of comment git
+// reads and the blank lines a config may hold between its sections.
+const commentedGitConfig = `# the checkout's own configuration
+; the same comment in the other form
+
+[core]
+	repositoryformatversion = 0
+
+	filemode = true
+`
+
+// partialCloneGitConfig is the configuration of a partial clone: the two keys
+// git writes beside url and fetch, and the object format extensions names. No
+// checkout the audit takes is one - a fetch-depth: 1 clone writes neither key -
+// so the two are off the allow list and this configuration is refused (issue
+// #277, round E finding 4).
+const partialCloneGitConfig = `[core]
+	repositoryformatversion = 1
+	filemode = true
+	bare = false
+	logallrefupdates = true
+[extensions]
+	objectformat = sha1
+[remote "origin"]
+	url = https://github.com/example/repo
+	fetch = +refs/heads/*:refs/remotes/origin/*
+	promisor = true
+	partialclonefilter = blob:none
+`
+
+// worktreeGitConfig is the worktree config actions/checkout leaves beside the
+// checkout's .git/config (issue #277, round E finding 1): the keys a
+// sparse-checkout aware git writes with every one of them off, which the
+// worktree config's own allow list takes.
+const worktreeGitConfig = `[core]
+	sparseCheckout = false
+	sparseCheckoutCone = false
+[index]
+	sparse = false
+`
+
+// The audit directory's paths under a root, each a part of the layout.
+var (
+	checkout  = []string{"checkout"}
+	checks    = []string{"checks"}
+	work      = []string{"work"}
+	workTmp   = []string{"work", "tmp"}
+	state     = []string{"state"}
+	home      = []string{"state", "home"}
+	stateTmp  = []string{"state", "tmp"}
+	stateBin  = []string{"state", "bin"}
+	stateOut  = []string{"state", "out"}
+	wrapper   = []string{"bin", "audit-exec"}
+	claudeBin = []string{"state", "bin", "claude"}
+	binDir    = []string{"bin"}
+)
+
+// TestCheckLayoutTakesTheADRsDirectory pins the layout that passes. Nothing is
+// created by the check itself: the model-free step lays the directory out, so a
+// check that made a missing directory would hide the step that did not run.
+func TestCheckLayoutTakesTheADRsDirectory(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writeAuditTree(t, root)
+
+	if err := audit.CheckLayout(root); err != nil {
+		t.Fatalf("CheckLayout(%q) error = %v, want none: the tree is the one ADR 0040 lays out", root, err)
+	}
+}
+
+// TestCheckLayoutTakesTheCheckoutsGitConfig pins the other half of the git
+// config check (issue #277, round D finding 1): the configuration a checkout
+// carries is an allow list of keys and sections, and the configuration
+// actions/checkout writes with persist-credentials: false passes whole, in
+// whatever case it is written, with the comments and blank lines a config may
+// hold, with no config at all, and with the worktree config a default checkout
+// leaves beside it, whose three keys are the worktree config's own allow list
+// (issue #277, round E finding 1).
+func TestCheckLayoutTakesTheCheckoutsGitConfig(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		// mutate lays the configuration the case is about in the checkout copy.
+		mutate func(t *testing.T, root string)
+	}{
+		{name: "the config actions/checkout writes", mutate: gitConfigWith(checkoutGitConfig)},
+		{name: "the same config in another case", mutate: gitConfigWith(mixedCaseGitConfig)},
+		{name: "the config with comments and blank lines", mutate: gitConfigWith(commentedGitConfig)},
+		{name: "the worktree config a default checkout leaves", mutate: gitFileIn("config.worktree", worktreeGitConfig)},
+		{
+			name: "no config at all",
+			mutate: mutateTree(checkout, func(t *testing.T, root string) {
+				t.Helper()
+				removeAll(t, pathOf(root, gitConfig))
+			}),
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			root := t.TempDir()
+			writeAuditTree(t, root)
+			tc.mutate(t, root)
+
+			if err := audit.CheckLayout(root); err != nil {
+				t.Errorf("CheckLayout(%q) = %v, want none: %s is a configuration a checkout carries", root, err, tc.name)
+			}
+		})
+	}
+}
+
+// layoutCase is one way the tree can differ from the ADR's: the case's name,
+// the refused path, key or line the error that refuses it must name, and the
+// mutation that breaks the part of the tree it is about. It is a named type so
+// that the cases only a Unix host can lay down, kept in layout_unix_test.go
+// behind the unix build tag, can be appended to the table.
+type layoutCase struct {
+	name string
+	// wantNamed is the path, key or line the refusal must name, so that a
+	// reader of the error knows which part of the tree is not as laid out
+	// (issue #277, round L, AI 4). A path is written as the layout writes it,
+	// slash-separated under the audit directory, and is matched in the
+	// error's own separators (filepath.ToSlash).
+	wantNamed string
+	// mutate breaks the tree the case is about.
+	mutate func(t *testing.T, root string)
+}
+
+// TestCheckLayoutRefusesAnythingElse pins every way the tree can differ from
+// the ADR's: a directory or the wrapper missing, a write bit on the checkout
+// copy or the checks' results, an empty area holding something, a wrapper of
+// another mode, and a symbolic link wherever the layout puts something of its
+// own. Each refusal must name the path, key or line it refuses, not only
+// refuse: an error of "not as laid out" alone tells a reader nothing of what
+// to fix (issue #277, round L, AI 4).
+func TestCheckLayoutRefusesAnythingElse(t *testing.T) {
+	t.Parallel()
+
+	cases := []layoutCase{
+		{name: "the checkout copy is missing", wantNamed: "srv/audit/checkout", mutate: gone(checkout)},
+		{name: "the checks' results are missing", wantNamed: "srv/audit/checks", mutate: gone(checks)},
+		{name: "the work area is missing", wantNamed: "srv/audit/work", mutate: gone(work)},
+		{name: "the work area's tmp is missing", wantNamed: "srv/audit/work/tmp", mutate: gone(workTmp)},
+		{name: "the state area is missing", wantNamed: "srv/audit/state", mutate: gone(state)},
+		{name: "the state area's home is missing", wantNamed: "srv/audit/state/home", mutate: gone(home)},
+		{name: "the state area's tmp is missing", wantNamed: "srv/audit/state/tmp", mutate: gone(stateTmp)},
+		{name: "the state area's bin is missing", wantNamed: "srv/audit/state/bin", mutate: gone(stateBin)},
+		{name: "the state area's out is missing", wantNamed: "srv/audit/state/out", mutate: gone(stateOut)},
+		// bin/ is read-only, so a case that removes or replaces the wrapper puts
+		// the write bit back first and takes it away again (mutateTree).
+		{name: "the wrapper is missing", wantNamed: "srv/audit/bin/audit-exec", mutate: mutateTree(binDir, gone(wrapper))},
+
+		// 0700 keeps the write bit the ADR's layout must not have, without
+		// handing it to group or other. A wrapper of another mode is refused for
+		// that mode, and the error names the wrapper's own path: "the wrapper"
+		// alone leaves a reader to guess which file of the tree it is.
+		{name: "the checkout copy keeps a write bit", wantNamed: "srv/audit/checkout", mutate: chmodPath(0o700, checkout)},
+		{name: "the checks' results keep a write bit", wantNamed: "srv/audit/checks", mutate: chmodPath(0o700, checks)},
+		{name: "the wrapper is writable", wantNamed: "srv/audit/bin/audit-exec", mutate: chmodPath(0o700, wrapper)},
+		{name: "the wrapper is read-only", wantNamed: "srv/audit/bin/audit-exec", mutate: chmodPath(0o500, wrapper)},
+
+		{
+			name:      "the work area holds an entry of its own",
+			wantNamed: "result.json",
+			mutate: func(t *testing.T, root string) {
+				t.Helper()
+				writeFile(t, filepath.Join(pathOf(root, work), "result.json"), "{}", 0o600)
+			},
+		},
+		{
+			name:      "the state area's home is not empty",
+			wantNamed: ".claude.json",
+			mutate: func(t *testing.T, root string) {
+				t.Helper()
+				writeFile(t, filepath.Join(pathOf(root, home), ".claude.json"), "{}", 0o600)
+			},
+		},
+		{
+			name:      "the state area's tmp is not empty",
+			wantNamed: "leftover",
+			mutate: func(t *testing.T, root string) {
+				t.Helper()
+				writeFile(t, filepath.Join(pathOf(root, stateTmp), "leftover"), "x", 0o600)
+			},
+		},
+
+		{name: "the wrapper is a symbolic link", wantNamed: "srv/audit/bin/audit-exec", mutate: mutateTree(binDir, linkElsewhere(wrapper))},
+
+		// bin/ holds the wrapper alone, and no one writes it (issue #277,
+		// round J): a second entry there is a program in place of the one the
+		// audit runs, and a write bit there is what would put it there.
+		{
+			name:      "the bin directory holds a second file",
+			wantNamed: "claude",
+			mutate: mutateTree(binDir, func(t *testing.T, root string) {
+				t.Helper()
+				writeFile(t, filepath.Join(pathOf(root, binDir), "claude"), claudeScript, 0o555)
+			}),
+		},
+		{
+			name:      "the bin directory holds a symbolic link",
+			wantNamed: "claude",
+			mutate: mutateTree(binDir, func(t *testing.T, root string) {
+				t.Helper()
+				makeSymlink(t, "../state/bin/claude", filepath.Join(pathOf(root, binDir), "claude"))
+			}),
+		},
+		// 0700 keeps the write bit the ADR's layout must not have, without
+		// handing it to group or other.
+		{name: "the bin directory keeps a write bit", wantNamed: "srv/audit/bin", mutate: chmodPath(0o700, binDir)},
+		{name: "the checkout copy is a symbolic link", wantNamed: "srv/audit/checkout", mutate: linkElsewhere(checkout)},
+		{name: "the checks' results are a symbolic link", wantNamed: "srv/audit/checks", mutate: linkElsewhere(checks)},
+		{name: "the work area is a symbolic link", wantNamed: "srv/audit/work", mutate: linkElsewhere(work)},
+		{name: "the work area's tmp is a symbolic link", wantNamed: "srv/audit/work/tmp", mutate: linkElsewhere(workTmp)},
+		{name: "the state area is a symbolic link", wantNamed: "srv/audit/state", mutate: linkElsewhere(state)},
+		{name: "the state area's home is a symbolic link", wantNamed: "srv/audit/state/home", mutate: linkElsewhere(home)},
+		{name: "the state area's tmp is a symbolic link", wantNamed: "srv/audit/state/tmp", mutate: linkElsewhere(stateTmp)},
+		{name: "the state area's out is a symbolic link", wantNamed: "srv/audit/state/out", mutate: linkElsewhere(stateOut)},
+
+		// The write bit is not only the top directory's: every write bit under
+		// the checkout copy and the checks' results is refused, a file's and a
+		// subdirectory's alike (issue #277, review R10 and audit A7).
+		{name: "the checkout copy holds a writable file", wantNamed: "srv/audit/checkout/.git/config", mutate: chmodPath(0o644, gitConfig)},
+		{
+			name:      "the checkout copy holds a writable subdirectory",
+			wantNamed: "srv/audit/checkout/lib",
+			mutate:    writableDir([]string{"checkout", "lib"}, checkout),
+		},
+		{
+			name:      "the checks' results hold a writable file",
+			wantNamed: "srv/audit/checks/report.json",
+			mutate:    writableFile([]string{"checks", "report.json"}, checks),
+		},
+
+		// A link out of the tree is how a read of the checkout copy reaches a
+		// path the settings deny (issue #277, review R10 and audit A7).
+		{
+			name:      "the checkout copy holds a link to another tree",
+			wantNamed: "srv/audit/checkout/escape",
+			mutate: mutateTree(checkout, func(t *testing.T, root string) {
+				t.Helper()
+				makeSymlink(t, "../state", pathOf(root, []string{"checkout", "escape"}))
+			}),
+		},
+		{
+			name:      "the checks' results hold an absolute link",
+			wantNamed: "srv/audit/checks/elsewhere",
+			mutate: mutateTree(checks, func(t *testing.T, root string) {
+				t.Helper()
+				makeSymlink(t, t.TempDir(), pathOf(root, []string{"checks", "elsewhere"}))
+			}),
+		},
+		{
+			name:      "the checkout copy holds a link that climbs out of the root",
+			wantNamed: "srv/audit/checkout/etc",
+			mutate: mutateTree(checkout, func(t *testing.T, root string) {
+				t.Helper()
+				makeSymlink(t, "../../../../../../etc", pathOf(root, []string{"checkout", "etc"}))
+			}),
+		},
+
+		// The checkout copy's .git/config is the one local git configuration
+		// the wrapper's git reads: a key or a section that names another
+		// program, another file or a credential gives the containment away
+		// (issue #277, review R14).
+		{
+			name:      "the git config sets an extraheader",
+			wantNamed: "section [http]",
+			mutate: gitConfigWith(`[core]
+	repositoryformatversion = 0
+[http]
+	extraheader = AUTHORIZATION: basic c2VjcmV0
+`),
+		},
+		{
+			name:      "the git config sets a case-insensitive extraheader",
+			wantNamed: "section [http]",
+			mutate: gitConfigWith(`[CORE]
+	repositoryformatversion = 0
+[HTTP]
+	ExtraHeader = AUTHORIZATION: basic c2VjcmV0
+`),
+		},
+		{
+			name:      "the git config sets fsmonitor",
+			wantNamed: "key core.fsmonitor",
+			mutate:    gitConfigWith("[core]\n\tfsmonitor = /srv/audit/work/fsmonitor\n"),
+		},
+		{
+			name:      "the git config sets fsmonitor in another case",
+			wantNamed: "key core.fsmonitor",
+			mutate:    gitConfigWith("[core]\n\tFSMonitor = /srv/audit/work/fsmonitor\n"),
+		},
+		{
+			name:      "the git config sets sshCommand",
+			wantNamed: "key core.sshcommand",
+			mutate:    gitConfigWith("[core]\n\tsshCommand = /srv/audit/work/ssh\n"),
+		},
+		{
+			name:      "the git config sets hooksPath",
+			wantNamed: "key core.hookspath",
+			mutate:    gitConfigWith("[core]\n\thooksPath = /srv/audit/work/hooks\n"),
+		},
+		{
+			name:      "the git config holds a filter driver",
+			wantNamed: "section [filter]",
+			mutate:    gitConfigWith("[filter \"lfs\"]\n\tclean = /srv/audit/work/filter\n"),
+		},
+		{
+			name:      "the git config holds a diff driver",
+			wantNamed: "section [diff]",
+			mutate:    gitConfigWith("[diff \"words\"]\n\ttextconv = /srv/audit/work/textconv\n"),
+		},
+
+		// The check is an allow list, not a list of the keys a report named: the
+		// keys and sections a checkout's config holds are the whole rule, so
+		// every other key is refused whatever its name says (issue #277, round D
+		// finding 1).
+		{
+			name:      "the git config sets include.path",
+			wantNamed: "section [include]",
+			mutate:    gitConfigWith("[include]\n\tpath = /srv/audit/work/extra\n"),
+		},
+		{
+			name:      "the git config sets an includeIf",
+			wantNamed: "section [includeif]",
+			mutate:    gitConfigWith("[includeIf \"gitdir:/srv/audit/work/\"]\n\tpath = /srv/audit/work/extra\n"),
+		},
+		{
+			name:      "the git config sets gpg.program",
+			wantNamed: "section [gpg]",
+			mutate:    gitConfigWith("[gpg]\n\tprogram = /srv/audit/work/gpg\n"),
+		},
+		{
+			name:      "the git config sets gpg.ssh.program",
+			wantNamed: "section [gpg]",
+			mutate:    gitConfigWith("[gpg \"ssh\"]\n\tprogram = /srv/audit/work/gpg-ssh\n"),
+		},
+		{
+			name:      "the git config sets extensions.worktreeConfig",
+			wantNamed: "key extensions.worktreeconfig",
+			mutate:    gitConfigWith("[extensions]\n\tworktreeConfig = true\n"),
+		},
+		{
+			name:      "the git config sets an http section's extraheader",
+			wantNamed: "section [http]",
+			mutate:    gitConfigWith("[http \"https://example.com\"]\n\textraHeader = AUTHORIZATION: basic c2VjcmV0\n"),
+		},
+		{
+			name:      "the git config holds a merge driver",
+			wantNamed: "section [merge]",
+			mutate:    gitConfigWith("[merge \"theirs\"]\n\tdriver = /srv/audit/work/merge\n"),
+		},
+		{
+			name:      "the git config sets core.pager",
+			wantNamed: "key core.pager",
+			mutate:    gitConfigWith("[core]\n\tpager = /srv/audit/work/pager\n"),
+		},
+		{
+			name:      "the git config sets a key no report named",
+			wantNamed: "section [user]",
+			mutate:    gitConfigWith("[user]\n\tname = the audit's model\n"),
+		},
+
+		// No checkout the audit takes is a partial clone (issue #277, round E
+		// finding 4): a fetch-depth: 1 clone writes neither promisor key, so the
+		// two are off the allow list and a config holding them is refused - the
+		// wrapper's git never fetches an object the checkout lacks.
+		{name: "the git config holds a partial clone's promisor keys", wantNamed: "key remote.promisor", mutate: gitConfigWith(partialCloneGitConfig)},
+
+		// The parser places every line of a form git writes and refuses the
+		// rest, rather than guessing what a line it cannot place means (issue
+		// #277, round D finding 1).
+		{
+			name:      "the git config begins with a UTF-8 BOM",
+			wantNamed: "byte order mark",
+			mutate:    gitConfigWith("\ufeff[core]\n\trepositoryformatversion = 0\n"),
+		},
+		{
+			name:      "the git config puts a key on the header's line",
+			wantNamed: "git config: line 1",
+			mutate:    gitConfigWith("[core] filemode = true\n"),
+		},
+		{
+			name:      "the git config puts two headers on one line",
+			wantNamed: "git config: line 1",
+			mutate:    gitConfigWith("[core][gc]\n\tauto = 0\n"),
+		},
+		{
+			name:      "the git config holds a subsection with a ] and a key after it",
+			wantNamed: "git config: line 1",
+			mutate:    gitConfigWith("[branch \"a]b\"] remote = origin\n"),
+		},
+		{
+			name:      "the git config leaves a subsection's quote open",
+			wantNamed: "git config: line 1",
+			mutate:    gitConfigWith("[branch \"main]\n\tremote = origin\n"),
+		},
+		{
+			name:      "the git config continues a value on the next line",
+			wantNamed: "git config: line 2",
+			mutate:    gitConfigWith("[core]\n\texcludesfile = /srv/audit/work/ignore\\\n"),
+		},
+		{
+			name:      "the git config holds a bare word",
+			wantNamed: "git config: line 1",
+			mutate:    gitConfigWith("filemode true\n"),
+		},
+
+		// The .git directory holds one config file and the worktree config beside
+		// it: a common-dir pointer and a gitdir pointer are the other files git
+		// reads a repository out of, and each is refused by its presence, in any
+		// file type (issue #277, round D finding 1). The worktree config may be a
+		// regular file holding the three keys of its own allow list and nothing
+		// else; a key off that list, or the file in another type, is refused
+		// (issue #277, round E finding 1).
+		{name: "the checkout copy's worktree config holds a key off its allow list", wantNamed: "key core.bare", mutate: gitFileIn("config.worktree", "[core]\n\tbare = false\n")},
+		{name: "the checkout copy's worktree config sets fsmonitor", wantNamed: "key core.fsmonitor", mutate: gitFileIn("config.worktree", "[core]\n\tfsmonitor = /srv/audit/work/fsmonitor\n")},
+		{name: "the checkout copy's worktree config sets include.path", wantNamed: "section [include]", mutate: gitFileIn("config.worktree", "[include]\n\tpath = /srv/audit/work/extra\n")},
+		{name: "the checkout copy's .git holds a config.worktree as a link", wantNamed: "srv/audit/checkout/.git/config.worktree", mutate: gitLinkIn("config.worktree", "../state/elsewhere")},
+		{name: "the checkout copy's .git holds a commondir", wantNamed: "commondir", mutate: gitFileIn("commondir", "../state\n")},
+		{name: "the checkout copy's .git holds a gitdir", wantNamed: "gitdir", mutate: gitFileIn("gitdir", "/srv/audit/state/elsewhere\n")},
+		{name: "the checkout copy's .git holds a commondir as a link", wantNamed: "commondir", mutate: gitLinkIn("commondir", "../.claude")},
+
+		{
+			name:      "the checkout copy's .git is a file",
+			wantNamed: ".git",
+			mutate: mutateTree(checkout, func(t *testing.T, root string) {
+				t.Helper()
+				removeAll(t, pathOf(root, []string{"checkout", ".git"}))
+				writeFile(t, pathOf(root, []string{"checkout", ".git"}), "gitdir: /srv/audit/state/elsewhere\n", 0o444)
+			}),
+		},
+		{
+			name:      "the checkout copy's .git is a symbolic link",
+			wantNamed: ".git",
+			mutate: mutateTree(checkout, func(t *testing.T, root string) {
+				t.Helper()
+				removeAll(t, pathOf(root, []string{"checkout", ".git"}))
+				makeSymlink(t, t.TempDir(), pathOf(root, []string{"checkout", ".git"}))
+			}),
+		},
+	}
+
+	// The entry types a checkout copy and the checks' results never hold, which
+	// only a Unix host lays down: a FIFO and a unix socket (issue #277, round D
+	// finding 3).
+	cases = append(cases, unixLayoutCases...)
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			if tc.wantNamed == "" {
+				t.Fatalf("%s: the case names no refused path, key or line, so its refusal's message goes unchecked", tc.name)
+			}
+
+			root := t.TempDir()
+			writeAuditTree(t, root)
+			tc.mutate(t, root)
+
+			err := audit.CheckLayout(root)
+			if err == nil {
+				t.Fatalf("CheckLayout(%q) = nil, want a refusal: %s is no layout ADR 0040 gives", root, tc.name)
+			}
+
+			if !strings.Contains(filepath.ToSlash(err.Error()), tc.wantNamed) {
+				t.Errorf("CheckLayout(%q) = %v, want an error naming the refused path, key or line %q: %s is no layout ADR 0040 gives, and a refusal names what it refuses", root, err, tc.wantNamed, tc.name)
+			}
+		})
+	}
+}
+
+// TestCheckLayoutTakesALinkThatStaysInItsTree pins the other half of the walk
+// over the checkout copy and the checks' results: a relative link that resolves
+// inside its own tree is no way out of it, so it is not refused.
+func TestCheckLayoutTakesALinkThatStaysInItsTree(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writeAuditTree(t, root)
+
+	mutateTree(checks, func(t *testing.T, root string) {
+		t.Helper()
+		writeFile(t, pathOf(root, []string{"checks", "report.json"}), "{}", 0o444)
+		makeSymlink(t, "report.json", pathOf(root, []string{"checks", "latest.json"}))
+	})(t, root)
+
+	if err := audit.CheckLayout(root); err != nil {
+		t.Fatalf("CheckLayout(%q) = %v, want none: a relative link to a file of its own tree stays inside that tree", root, err)
+	}
+}
+
+// pathOf returns the path of parts under root's audit directory.
+func pathOf(root string, parts []string) string {
+	return filepath.Join(append([]string{root, auditPath}, parts...)...)
+}
+
+// gone returns a mutation that deletes the entry parts names.
+func gone(parts []string) func(t *testing.T, root string) {
+	return func(t *testing.T, root string) {
+		t.Helper()
+		removeAll(t, pathOf(root, parts))
+	}
+}
+
+// chmodPath returns a mutation that gives the entry parts names mode.
+func chmodPath(mode os.FileMode, parts []string) func(t *testing.T, root string) {
+	return func(t *testing.T, root string) {
+		t.Helper()
+
+		if err := os.Chmod(pathOf(root, parts), mode); err != nil {
+			t.Fatalf("chmod %v to %#o: %v", parts, mode, err)
+		}
+	}
+}
+
+// linkElsewhere returns a mutation that replaces the entry parts names with a
+// symbolic link to a directory of its own, so a check that followed it would
+// read a tree that is not the audit directory's.
+func linkElsewhere(parts []string) func(t *testing.T, root string) {
+	return func(t *testing.T, root string) {
+		t.Helper()
+
+		removeAll(t, pathOf(root, parts))
+
+		target := filepath.Join(t.TempDir(), "elsewhere")
+		makeDir(t, target)
+		makeSymlink(t, target, pathOf(root, parts))
+	}
+}
+
+// gitConfigWith returns a mutation that replaces the checkout copy's .git/config
+// with body, mode 0444, so the tree holds the git configuration the case is
+// about.
+func gitConfigWith(body string) func(t *testing.T, root string) {
+	return mutateTree(checkout, func(t *testing.T, root string) {
+		t.Helper()
+
+		removeAll(t, pathOf(root, gitConfig))
+		writeFile(t, pathOf(root, gitConfig), body, 0o444)
+	})
+}
+
+// gitFileIn returns a mutation that writes body to name inside the checkout
+// copy's .git directory, mode 0444: one of the files git reads a configuration,
+// a common directory or a repository out of, which the layout refuses beside
+// .git/config.
+func gitFileIn(name, body string) func(t *testing.T, root string) {
+	return mutateTree(checkout, func(t *testing.T, root string) {
+		t.Helper()
+		writeFile(t, filepath.Join(pathOf(root, gitDir), name), body, 0o444)
+	})
+}
+
+// gitLinkIn returns a mutation that makes name inside the checkout copy's .git
+// directory a symbolic link to target: the same file in another form, which the
+// layout refuses too.
+func gitLinkIn(name, target string) func(t *testing.T, root string) {
+	return mutateTree(checkout, func(t *testing.T, root string) {
+		t.Helper()
+		makeSymlink(t, target, filepath.Join(pathOf(root, gitDir), name))
+	})
+}
+
+// unlock returns a mutation that makes the tree at parts writable, applies mutate
+// and returns: the case decides which write bits the tree keeps.
+func unlock(parts []string, mutate func(t *testing.T, root string)) func(t *testing.T, root string) {
+	return func(t *testing.T, root string) {
+		t.Helper()
+
+		makeWritable(t, pathOf(root, parts))
+		mutate(t, root)
+	}
+}
+
+// makeWritable gives every entry of the tree at path a write bit, a symbolic link
+// followed nowhere: a mutation replaces entries deep in a read-only tree, and a
+// 0555 directory cannot be emptied.
+func makeWritable(t *testing.T, path string) {
+	t.Helper()
+
+	err := filepath.WalkDir(path, func(entry string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+
+		if d.Type()&os.ModeSymlink != 0 {
+			return nil
+		}
+
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+
+		return os.Chmod(entry, info.Mode().Perm()|0o200) //nolint:gosec // G302: the owner's write bit, put back so a test can change the tree and remove it
+	})
+	if err != nil {
+		t.Fatalf("make the tree under %s writable: %v", path, err)
+	}
+}
+
+// mutateTree is unlock followed by makeReadOnly: every write bit the mutation
+// added is gone again, so the defect a case names is its one entry, link or
+// configuration and not a mode it left behind.
+func mutateTree(parts []string, mutate func(t *testing.T, root string)) func(t *testing.T, root string) {
+	apply := unlock(parts, mutate)
+
+	return func(t *testing.T, root string) {
+		t.Helper()
+
+		apply(t, root)
+		makeReadOnly(t, pathOf(root, parts))
+	}
+}
+
+// writableFile returns a mutation that makes the file at parts mode 0644 and its
+// tree read-only but for it: the one write bit the case is about is the file's.
+func writableFile(parts []string, tree []string) func(t *testing.T, root string) {
+	return func(t *testing.T, root string) {
+		t.Helper()
+
+		mutateTree(tree, func(t *testing.T, root string) {
+			t.Helper()
+			writeFile(t, pathOf(root, parts), "{}", 0o444)
+		})(t, root)
+
+		if err := os.Chmod(pathOf(root, parts), 0o644); err != nil { //nolint:gosec // G302: the file's own write bit is the one defect this case names
+			t.Fatalf("chmod %v: %v", parts, err)
+		}
+	}
+}
+
+// writableDir returns a mutation that makes the directory at parts mode 0750 and
+// its tree read-only but for it: the one write bit the case is about is the
+// directory's.
+func writableDir(parts []string, tree []string) func(t *testing.T, root string) {
+	return func(t *testing.T, root string) {
+		t.Helper()
+
+		mutateTree(tree, func(t *testing.T, root string) {
+			t.Helper()
+			makeDir(t, pathOf(root, parts))
+		})(t, root)
+
+		if err := os.Chmod(pathOf(root, parts), 0o750); err != nil { //nolint:gosec // G302: the write bit this case is about
+			t.Fatalf("chmod %v: %v", parts, err)
+		}
+	}
+}
+
+// makeReadOnly removes every write bit from the tree at path, a symbolic link
+// followed nowhere: the mode the model-free step leaves the checkout copy and
+// the checks' results in.
+func makeReadOnly(t *testing.T, path string) {
+	t.Helper()
+
+	err := filepath.WalkDir(path, func(entry string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+
+		if d.Type()&os.ModeSymlink != 0 {
+			return nil
+		}
+
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+
+		return os.Chmod(entry, info.Mode().Perm()&^writeBitsOfEveryone) //nolint:gosec // G122: the tree is this test's own temporary directory, walked so that every entry loses its write bits as the model-free step leaves it
+	})
+	if err != nil {
+		t.Fatalf("remove the write bits under %s: %v", path, err)
+	}
+}
+
+// writeAuditTree lays the audit directory out under root as the model-free step
+// leaves it before the launcher runs: every path the ADR's table names, the
+// binary the checksum step extracted into the state area's bin/, and the
+// wrapper the model job built there.
+func writeAuditTree(t *testing.T, root string) {
+	t.Helper()
+
+	for _, parts := range [][]string{
+		checkout,
+		checks,
+		work,
+		workTmp,
+		state,
+		home,
+		stateTmp,
+		stateBin,
+		stateOut,
+		binDir,
+	} {
+		makeDir(t, pathOf(root, parts))
+	}
+
+	writeFile(t, pathOf(root, wrapper), "#!/bin/sh\nexit 126\n", 0o555)
+	writeFile(t, pathOf(root, claudeBin), claudeScript, 0o500)
+
+	// bin/ holds the wrapper alone and is read-only, as the model-free step
+	// leaves it: the wrapper's directory is what a later write would replace
+	// the wrapper in (ADR 0040, issue #277, round J).
+	makeReadOnly(t, pathOf(root, binDir))
+
+	// The checkout copy is a clone, so it carries its own git configuration: a
+	// benign one, which the layout takes.
+	writeFile(t, pathOf(root, gitConfig), benignGitConfig, 0o444)
+
+	// The audit's skill is the checkout copy's, and its system prompt is what
+	// the audit's prompt reads.
+	writeFile(t, pathOf(root, []string{"checkout", ".claude", "skills", "security-audit-run", "SKILL.md"}), "# The scheduled security audit\n\nRead the checkout, the checks and the work area.\n", 0o444)
+
+	// The checkout copy and the checks' results are read-only to the model,
+	// their contents too: the model-free step removes every write bit, and the
+	// check holds the whole tree to it.
+	for _, parts := range [][]string{checkout, checks} {
+		makeReadOnly(t, pathOf(root, parts))
+	}
+
+	// The tree is laid out read-only, as the model-free step leaves it, and a
+	// 0555 directory cannot be emptied: the test puts the write bits back before
+	// the temporary directory is removed.
+	t.Cleanup(func() { makeWritable(t, root) })
+}
+
+// removeAll deletes path and everything under it, a read-only tree included.
+func removeAll(t *testing.T, path string) {
+	t.Helper()
+
+	if info, err := os.Lstat(path); err == nil && info.IsDir() {
+		makeWritable(t, path)
+	}
+
+	if err := os.RemoveAll(path); err != nil {
+		t.Fatalf("remove %s: %v", path, err)
+	}
+}
