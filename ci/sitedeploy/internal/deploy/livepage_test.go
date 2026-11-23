@@ -1,6 +1,7 @@
 package deploy_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
@@ -44,11 +45,11 @@ func TestLiveVersionOnTheBuiltPages(t *testing.T) {
 
 			got, err := deploy.LiveVersion(page)
 			if err != nil {
-				t.Fatalf("LiveVersion(%s) = %v, want %q", name, err, builtVersion)
+				t.Fatalf("LiveVersion(%s) = %v, want %q; the page's footer was %q", name, err, builtVersion, footerOf(page))
 			}
 
 			if got != builtVersion {
-				t.Errorf("LiveVersion(%s) = %q, want %q", name, got, builtVersion)
+				t.Errorf("LiveVersion(%s) = %q, want %q; the page's footer was %q", name, got, builtVersion, footerOf(page))
 			}
 		})
 	}
@@ -73,6 +74,38 @@ func TestLiveVersionRefusesADevelopmentBuild(t *testing.T) {
 	if got != "" {
 		t.Errorf("LiveVersion = %q with its error, want no version at all", got)
 	}
+}
+
+// footerLimit bounds what footerOf prints, so a page that has lost its </p>
+// cannot put a whole page into a failure message.
+const footerLimit = 300
+
+// footerOf returns the page's footer paragraph, from <p class="footer-links"> to
+// the next </p>: the markup LiveVersion had to read, so a failure says what the
+// page actually showed instead of only that the version was not there. A page
+// without the opening paragraph says so. A paragraph longer than footerLimit
+// bytes is cut in the middle rather than at the end, because the version's span
+// is the paragraph's last element, past what a head alone would show.
+func footerOf(page []byte) string {
+	const open = `<p class="footer-links">`
+
+	start := bytes.Index(page, []byte(open))
+	if start < 0 {
+		return "no " + open + " in the page"
+	}
+
+	footer := page[start:]
+	if end := bytes.Index(footer, []byte("</p>")); end >= 0 {
+		footer = footer[:end+len("</p>")]
+	}
+
+	if len(footer) > footerLimit {
+		half := footerLimit / 2
+
+		return string(footer[:half]) + " ... " + string(footer[len(footer)-half:])
+	}
+
+	return string(footer)
 }
 
 // buildSite runs ci/sitebuild and returns the directory of the bundle it wrote.
