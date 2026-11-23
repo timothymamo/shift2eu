@@ -42,7 +42,7 @@ param:
   # renovate: datasource=node-version depName=node versioning=node
   nodeVersion: "26.13.1"
   # renovate: datasource=npm depName=@earendil-works/pi-coding-agent
-  piVersion: "1.6.0"
+  piVersion: "1.5.2"
   # gh from its release, not Ubuntu's package: `gh attestation verify` needs gh 2.49 or later.
   # renovate: datasource=github-releases depName=cli/cli
   ghVersion: "v2.105.0"
