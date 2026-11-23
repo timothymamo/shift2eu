@@ -193,6 +193,7 @@ type CLI struct {
 func New(cfg Config) *CLI {
 	cfg.Tools = append([]string(nil), cfg.Tools...)
 	cfg.Env = append([]string(nil), cfg.Env...)
+	cfg.Redact = append([]string(nil), cfg.Redact...)
 
 	return &CLI{cfg: cfg}
 }

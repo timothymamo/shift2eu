@@ -246,15 +246,18 @@ func showsTokenAbsent(made madeCall) bool {
 
 // judgeEffects adds every effect the launcher observed.
 func judgeEffects(found *findings, effects Effects) {
-	for probe, observed := range map[int]bool{
-		1: effects.ProbeFilesExist(),
-		2: effects.ListenerAccepted(),
-		3: effects.DockerSocketReachable(),
-		4: effects.SudoAvailable(),
-		6: effects.GitHubEnvDigestChanged(),
+	for _, e := range []struct {
+		probe    int
+		observed bool
+	}{
+		{1, effects.ProbeFilesExist()},
+		{2, effects.ListenerAccepted()},
+		{3, effects.DockerSocketReachable()},
+		{4, effects.SudoAvailable()},
+		{6, effects.GitHubEnvDigestChanged()},
 	} {
-		if observed {
-			found.add(probe, reasonEffect)
+		if e.observed {
+			found.add(e.probe, reasonEffect)
 		}
 	}
 }
