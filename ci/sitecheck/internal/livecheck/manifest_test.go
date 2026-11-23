@@ -58,12 +58,12 @@ func TestParseManifestReadsAReleaseManifest(t *testing.T) {
 }
 
 // TestParseManifestRefusesWhatItCannotUse pins the strictness of
-// ParseManifest: one object, exactly its fields, a path that is a clean
-// relative URL path (no "..", no leading slash, no query, no backslash, no
-// space or control character), a digest of 64 lowercase hexadecimal
-// characters, no duplicate path, and nothing over the cap. The paths are only
-// ever URL paths, so a path that could be a local one is refused before
-// anything opens it.
+// ParseManifest: one object, exactly its fields with their keys taken exactly
+// (case included) and each of them once, a path that is a clean relative URL
+// path (no "..", no leading slash, no query, no backslash, no space or control
+// character), a digest of 64 lowercase hexadecimal characters, no duplicate
+// path, and nothing over the cap. The paths are only ever URL paths, so a path
+// that could be a local one is refused before anything opens it.
 func TestParseManifestRefusesWhatItCannotUse(t *testing.T) {
 	t.Parallel()
 
@@ -109,6 +109,19 @@ func TestParseManifestRefusesWhatItCannotUse(t *testing.T) {
 			wantInErr: `"index\x00.html"`,
 		},
 		{name: "a path twice", manifest: manifestJSON("v1.2.3", "index.html", "index.html"), wantInErr: `"index.html"`},
+
+		// A key is taken exactly as the manifest writes it, case included, and
+		// only once: encoding/json alone matches a key without regard to case and
+		// keeps the last of a duplicated one, so every other part of these cases is
+		// valid and the key is the only reason for the refusal.
+		{name: "a version key in another case", manifest: `{"Version":"v1.2.3","files":[]}`},
+		{name: "a files key in another case", manifest: `{"version":"v1.2.3","FILES":[]}`},
+		{name: "a path key in another case", manifest: `{"version":"v1.2.3","files":[{"Path":"index.html","sha256":"` + manifestDigest + `"}]}`},
+		{name: "a digest key in another case", manifest: `{"version":"v1.2.3","files":[{"path":"index.html","SHA256":"` + manifestDigest + `"}]}`},
+		{name: "a version key twice", manifest: `{"version":"v1.2.3","version":"v1.2.3","files":[]}`},
+		{name: "a files key twice", manifest: `{"version":"v1.2.3","files":[],"files":[]}`},
+		{name: "a path key twice", manifest: `{"version":"v1.2.3","files":[{"path":"index.html","path":"index.html","sha256":"` + manifestDigest + `"}]}`},
+		{name: "a digest key twice", manifest: `{"version":"v1.2.3","files":[{"path":"index.html","sha256":"` + manifestDigest + `","sha256":"` + manifestDigest + `"}]}`},
 		{name: "a digest in upper case", manifest: `{"version":"v1.2.3","files":[{"path":"index.html","sha256":"` + strings.ToUpper(manifestDigest) + `"}]}`},
 		{name: "a digest a character short", manifest: `{"version":"v1.2.3","files":[{"path":"index.html","sha256":"` + manifestDigest[:63] + `"}]}`},
 		{name: "a digest with a character that is not hexadecimal", manifest: `{"version":"v1.2.3","files":[{"path":"index.html","sha256":"` + manifestDigest[:63] + `z"}]}`},
