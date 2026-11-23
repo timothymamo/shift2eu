@@ -20,15 +20,33 @@
 # exactly the archives and checksums.txt, which must also be exactly what GoReleaser would upload to the
 # release (artifacts.json), or release.yml's publish job would refuse the draft. check.GoReleaserArchives
 # pins the configuration itself, and check.GitHubRelease its draft release.
+# The release publishes the site's bundle beside the archives (PRD #297 milestone 3), and the snapshot runs
+# with the one bundle make site wrote, bin/shift2eu-site_<version>.tar.gz (ci.yml runs make site first):
+# checksums.txt must list exactly one shift2eu-site_ file, with the digest of that bundle; the subjects
+# attest-archives attests, with the bundle beside the archives as it downloads it, must include it; and so
+# must what GoReleaser would upload, which is artifacts.json plus release.extra_files, the bundle.
 #
 # GoReleaser writes into a temporary directory, removed on exit, so the caller's dist/ is left alone.
 #
-# Usage: .github/scripts/verify-archives.sh   (from the repository root, with goreleaser and jq on PATH)
+# Usage: .github/scripts/verify-archives.sh   (from the repository root after make site, with goreleaser and
+# jq on PATH)
 set -euo pipefail
 
 for tool in goreleaser jq; do
   command -v "${tool}" >/dev/null || { echo "${tool} is not on PATH" >&2; exit 1; }
 done
+
+# The site's bundle .goreleaser.yaml's checksum and release extra_files take (./bin/shift2eu-site_*.tar.gz):
+# exactly one, or checksums.txt would list another bundle, or none, than the one checked below.
+shopt -s nullglob
+site_bundles=(bin/shift2eu-site_*.tar.gz)
+shopt -u nullglob
+if [ "${#site_bundles[@]}" != 1 ]; then
+  echo "bin/ holds ${#site_bundles[@]} site bundles (shift2eu-site_*.tar.gz), want exactly 1: run make site first, and remove any older one" >&2
+  exit 1
+fi
+site_bundle="${site_bundles[0]}"
+site_name="$(basename "${site_bundle}")"
 
 # goreleaser release takes no --dist flag: it builds from a copy of .goreleaser.yaml whose dist: names a
 # fresh temporary directory (the original sets no dist:, so its default, dist/, is never touched). Should
@@ -169,8 +187,17 @@ for archive in "${cli[@]}"; do
   grep -qE "  $(basename "${archive}" | sed 's/\./\\./g')$" "${dist}/checksums.txt" ||
     problem "checksums.txt does not list $(basename "${archive}")"
 done
-(cd "${dist}" && sha256sum --quiet -c checksums.txt) ||
+(cd "${dist}" && sift -vF '  shift2eu-site_' checksums.txt | sha256sum --quiet -c -) ||
   problem "checksums.txt does not match the archives in dist/"
+
+# checksums.txt lists the site's bundle once, with the digest of the bundle in bin/, as release.yml's
+# attest-archives job holds it to the site job's digest.
+site_lines="$(sift -cF '  shift2eu-site_' "${dist}/checksums.txt")"
+[ "${site_lines}" = 1 ] ||
+  problem "checksums.txt lists ${site_lines} site bundles (shift2eu-site_), want exactly 1"
+site_line="$(sha256sum "${site_bundle}" | cut -d' ' -f1)  ${site_name}"
+grep -qxF "${site_line}" "${dist}/checksums.txt" ||
+  problem "checksums.txt does not list ${site_name} with the digest of ${site_bundle}: want the line ${site_line}"
 
 # The release's hand-over of the archives (issues #156 and #163), on this snapshot: release.yml's
 # goreleaser job uploads the files its patterns match, dist/shift2eu_*.tar.gz, dist/shift2eu_*.zip and
@@ -180,14 +207,16 @@ done
 # actions/attest-build-provenance both expand them. A bare dist/shift2eu_* would also match
 # GoReleaser's build directories (dist/shift2eu_linux_amd64_v1/ ...) and hand on their binaries.
 # The artifact must pass sha256sum -c, so checksums.txt may list nothing the patterns leave out, and the
-# subjects must be exactly the files checksums.txt lists (the archives) and checksums.txt itself: a file
+# subjects must be exactly the files checksums.txt lists (the archives and the site's bundle, which
+# attest-archives downloads beside them from the site job's artifact) and checksums.txt itself: a file
 # left unattested, or one attested that the release never ships, fails here and not in a release.
 artifact="${work}/artifact"
 mkdir "${artifact}"
 (cd "${dist}" && cp -R shift2eu_*.tar.gz shift2eu_*.zip checksums.txt "${artifact}/")
+cp "${site_bundle}" "${artifact}/"
 (cd "${artifact}" && sha256sum --quiet -c checksums.txt) ||
-  problem "checksums.txt does not pass sha256sum -c in the archives artifact release.yml hands to attest-archives"
-subjects="$(cd "${artifact}" && find shift2eu_*.tar.gz shift2eu_*.zip checksums.txt -type f | LC_ALL=C sort)"
+  problem "checksums.txt does not pass sha256sum -c in the archives artifact release.yml hands to attest-archives, with the site's bundle beside it"
+subjects="$(cd "${artifact}" && find shift2eu_*.tar.gz shift2eu_*.zip shift2eu-site_*.tar.gz checksums.txt -type f | LC_ALL=C sort)"
 want="$({ echo checksums.txt; awk '{ print $2 }' "${dist}/checksums.txt"; } | LC_ALL=C sort)"
 if [ "${subjects}" != "${want}" ]; then
   problem "attest-archives would attest these files:"$'\n'"${subjects}"$'\n'"want exactly checksums.txt and the files it lists:"$'\n'"${want}"
@@ -197,15 +226,20 @@ fi
 # artifact but its run metadata and the bare binaries its builds wrote (named by the binary and its
 # extension), which it never uploads. That must be exactly the attested subjects too: the publish job
 # refuses a draft holding anything checksums.txt does not list (issue #163), so a new asset registered
-# by a pipe a snapshot runs (an SBOM, a signature, a source archive, checksum.extra_files) fails here,
-# before a release is left a draft. release.extra_files does not: GoReleaser adds those only in the
-# release pipe's publish step, which --snapshot skips, so artifacts.json never lists them; release: is a
-# closed section that check.GitHubRelease lets hold none. It fails closed: an artifact type this does
-# not know counts as uploaded.
-uploads="$(jq -r '.[]
+# by a pipe a snapshot runs (an SBOM, a signature, a source archive) fails here, before a release is left
+# a draft. checksum.extra_files only adds lines to checksums.txt, registering no artifact. release.extra_files
+# are not in artifacts.json either: GoReleaser adds those only in the release pipe's publish step, which
+# --snapshot skips. release: is a closed section that check.GitHubRelease lets hold one, the site's bundle,
+# so that one is added here by hand, and artifacts.json must not list it already, or it would be uploaded
+# twice. It fails closed: an artifact type this does not know counts as uploaded.
+registered="$(jq -r '.[]
     | select(.type != "Metadata")
     | select((.type == "Binary" and .name == (.extra.Binary + .extra.Ext)) | not)
-    | .name' "${dist}/artifacts.json" | LC_ALL=C sort)"
+    | .name' "${dist}/artifacts.json")"
+if grep -qxF "${site_name}" <<<"${registered}"; then
+  problem "artifacts.json already lists ${site_name}, which release.extra_files uploads too"
+fi
+uploads="$({ printf '%s\n' "${registered}"; echo "${site_name}"; } | LC_ALL=C sort)"
 if [ "${uploads}" != "${want}" ]; then
   problem "GoReleaser would upload these files to the release:"$'\n'"${uploads}"$'\n'"want exactly checksums.txt and the files it lists, what attest-archives attests:"$'\n'"${want}"
 fi
@@ -213,4 +247,4 @@ fi
 if [ "${fail}" != 0 ]; then
   exit 1
 fi
-echo "${#cli[@]} CLI archives, one per built platform, each holding exactly its binary, LICENSE, NOTICE, README.md, SECURITY.md, docs/**/*.md, the inventory guide's jq programs and exactly the samples under examples/, all in checksums.txt"
+echo "${#cli[@]} CLI archives, one per built platform, each holding exactly its binary, LICENSE, NOTICE, README.md, SECURITY.md, docs/**/*.md, the inventory guide's jq programs and exactly the samples under examples/, all in checksums.txt with the site's bundle ${site_name}"

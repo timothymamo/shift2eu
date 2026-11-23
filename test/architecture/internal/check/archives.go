@@ -111,8 +111,10 @@ var archiveFiles = []string{"LICENSE", "NOTICE", "README.md", "SECURITY.md", "do
 //   - an entry holds no key beyond id, ids, name_template, formats,
 //     format_overrides and files;
 //   - checksum: holds exactly name_template: checksums.txt, one file covering
-//     the archive, and no extra_files: nothing is published beside the
-//     archives (issue #393).
+//     the archive, and extra_files of exactly one glob,
+//     ./bin/shift2eu-site_*.tar.gz, so it covers the site's bundle too (PRD
+//     #297 milestone 3): nothing else is published beside the archives (issue
+//     #393).
 func GoReleaserArchives(goreleaser []byte) []string {
 	r := &schemaReader{}
 
@@ -469,8 +471,10 @@ func (r *schemaReader) archiveFiles(entries []yamlread.Entry, path string) {
 }
 
 // checksum checks that the checksum section holds exactly
-// name_template: checksums.txt, one file covering the archive, and nothing
-// else: the release publishes no extra file beside the archives (issue #393).
+// name_template: checksums.txt, one file covering the archive, and
+// extra_files of exactly the site's bundle, which checksums.txt covers too
+// (PRD #297 milestone 3), and nothing else: the release publishes no other
+// file beside the archives (issue #393).
 func (r *schemaReader) checksum(top []yamlread.Entry) {
 	section, ok := child(top, "checksum")
 	if !ok {
@@ -492,9 +496,15 @@ func (r *schemaReader) checksum(top []yamlread.Entry) {
 	}
 
 	for _, e := range entries {
-		if e.Key != "name_template" {
-			r.fail("line %d: checksum holds the key %s, want only name_template: %s, one file covering the archive: the release publishes no extra file beside the archives (issue #393)", e.Num, e.Key, checksumsFile)
+		if e.Key != "name_template" && e.Key != "extra_files" {
+			r.fail("line %d: checksum holds the key %s, want only name_template: %s, one file covering the archive, and extra_files: glob: %s, the site's bundle: the release publishes no other file beside the archives (issue #393)", e.Num, e.Key, checksumsFile, siteBundleGlob)
 		}
+	}
+
+	if extra, ok := child(entries, "extra_files"); !ok {
+		r.fail("line %d: checksum holds no extra_files, want extra_files: glob: %s, so checksums.txt covers the site's bundle the release publishes (PRD #297 milestone 3)", section.Num, siteBundleGlob)
+	} else if err := siteExtraFiles(extra, "checksum: extra_files"); err != nil {
+		r.fail("%v", err)
 	}
 
 	e, ok := child(entries, "name_template")

@@ -17,10 +17,11 @@ concurrency:
   group: release
   cancel-in-progress: false
 
-# The steps of all ten jobs are a closed list that test/architecture holds
+# The steps of all twelve jobs are a closed list that test/architecture holds
 # (check.ReleaseWorkflow): add no step, run: or env: here without changing it.
 # The release ships the CLI alone: the HTTP API's image, archive and API
-# document are gone (issue #393). latest alone decides, once
+# document are gone (issue #393), and the site's bundle is published beside the
+# CLI's archives (PRD #297 milestone 3). latest alone decides, once
 # per run, whether the tag is the
 # highest release tag on main, so the image's latest tag and GitHub's "Latest"
 # release cannot disagree. goreleaser hands the archives on, attest-archives
@@ -30,6 +31,7 @@ jobs:
   test:
     name: Test
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     permissions:
       contents: read
     steps:
@@ -67,6 +69,7 @@ jobs:
     name: Latest
     needs: test
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     permissions:
       contents: read # check out the repository
     outputs:
@@ -99,14 +102,105 @@ jobs:
           if [ "$TAG" = "$highest" ]; then latest=true; fi
           echo "latest=$latest" >> "$GITHUB_OUTPUT"
 
+  # The site's bundle, built at the tag on a runner of its own (PRD #297
+  # milestone 3): no key, no secret and no OIDC token, so nothing in it can
+  # publish or deploy. Its sha256 is a job output, which the smoke test, the
+  # attestation and goreleaser bind the bundle they handle to.
+  site:
+    name: Site bundle
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read # check out the repository
+    outputs:
+      sha256: ${{ steps.digest.outputs.sha256 }}
+    steps:
+      # The tag's own commit. ci/sitebuild reads no history, so a shallow
+      # checkout is enough, and the token is not kept.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      # The bundle the release publishes, built exactly as make site builds
+      # it: bin/site and the archive bin/shift2eu-site_<tag>.tar.gz. The tag
+      # comes through env:, never pasted into the script.
+      - name: Build the site's bundle
+        env:
+          SITE_VERSION: ${{ github.ref_name }}
+        run: make site
+      # The digest of the one file the release publishes beside the CLI's
+      # archives: the jobs after this one check what they handle against it.
+      - name: The bundle's digest
+        id: digest
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          sha256="$(sha256sum "bin/shift2eu-site_$TAG.tar.gz" | cut -d' ' -f1)"
+          echo "sha256=$sha256" >> "$GITHUB_OUTPUT"
+      # The bundle for the jobs of this run alone: the published release is
+      # what the deploy and the live check read, so a week is enough.
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: site
+          path: bin/shift2eu-site_*.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+
+  # The smoke test of that exact bundle (PRD #297 milestone 3): the artifact
+  # the site job uploaded, checked against that job's digest, unpacked, and
+  # served to test/browser in the pinned headless Chromium. No secret and no
+  # OIDC token, so nothing in it can publish or deploy.
+  site-browser:
+    name: Site browser smoke test
+    needs: site
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read # check out the repository
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: site
+          path: bin
+      # What is smoke-tested is what the site job built: the digest the site
+      # job gave is compared before anything is unpacked. The tag comes through
+      # env:, never pasted into the script.
+      - name: Check and unpack the bundle
+        env:
+          TAG: ${{ github.ref_name }}
+          SITE_SHA256: ${{ needs.site.outputs.sha256 }}
+        run: |
+          set -euo pipefail
+          printf '%s  %s\n' "$SITE_SHA256" "bin/shift2eu-site_$TAG.tar.gz" | sha256sum -c -
+          mkdir bin/release-bundle
+          tar -xzf "bin/shift2eu-site_$TAG.tar.gz" -C bin/release-bundle
+      # The bundle the release publishes, not one built again: plain make
+      # test-browser would build its own with ci/sitebuild and test something
+      # the release never attested.
+      - name: Smoke test the release's bundle in a headless Chromium
+        run: make test-browser TEST_BROWSER_BUNDLE=bin/release-bundle
+
   # A job of its own, on a fresh runner: no go env file and no environment or
   # PATH that the tests set reaches goreleaser. setup-go's Actions cache
   # (module and build cache) would carry state over from the test job or from
   # CI on main, so both jobs set cache: false.
   goreleaser:
     name: GoReleaser
-    needs: test
+    needs: [test, site]
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: write # create the GitHub release and upload artifacts
     steps:
@@ -118,6 +212,21 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
+      # The bundle the site job built, of this run: bin/ is git-ignored, so
+      # GoReleaser's dirty-tree check does not trip on it.
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: site
+          path: bin
+      # The bundle GoReleaser lists in checksums.txt and uploads to the draft
+      # is the bundle the site job built and the smoke test tested: a file
+      # changed on its way through the workflow artifact fails here, before
+      # GoReleaser runs.
+      - name: Check the site bundle against the site job's digest
+        env:
+          TAG: ${{ github.ref_name }}
+          SITE_SHA256: ${{ needs.site.outputs.sha256 }}
+        run: printf '%s  %s\n' "$SITE_SHA256" "bin/shift2eu-site_$TAG.tar.gz" | sha256sum -c -
       - uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
         with:
           distribution: goreleaser
@@ -150,8 +259,9 @@ jobs:
   # repository's attestations to write, and read-only access to the repository.
   attest-archives:
     name: Attest the archives
-    needs: goreleaser
+    needs: [goreleaser, site]
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       id-token: write # the OIDC token the provenance is signed with
       attestations: write # store the provenance in the repository
@@ -160,21 +270,37 @@ jobs:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: archives
-      # What is attested is what GoReleaser wrote: a file changed on the way
-      # through the workflow artifact fails here, before anything is signed.
-      - name: Check the archives against checksums.txt
-        run: sha256sum -c checksums.txt
-      # One attestation covers every archive and their checksums, so a release
-      # whose files were replaced fails verification (issue #163). The archives
-      # are subjects named by their extension: a bare shift2eu_* also matches
-      # GoReleaser's build directories, and would attest the 12 bare binaries
-      # beside the archives.
+      # The site's bundle, downloaded beside the archives: the release
+      # carries it as one more asset, listed in the same checksums.txt.
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: site
+      # What is attested is what GoReleaser wrote, the site's bundle included:
+      # a file changed on the way through a workflow artifact fails here,
+      # before anything is signed. checksums.txt is held to exactly one
+      # site bundle, and to the digest the site job gave it, so a GoReleaser
+      # run whose extra_files matched nothing fails here too.
+      - name: Check the archives and the site bundle against checksums.txt
+        env:
+          TAG: ${{ github.ref_name }}
+          SITE_SHA256: ${{ needs.site.outputs.sha256 }}
+        run: |
+          set -euo pipefail
+          sha256sum -c checksums.txt
+          grep -qxF "$SITE_SHA256  shift2eu-site_$TAG.tar.gz" checksums.txt
+          test "$(grep -cF '  shift2eu-site_' checksums.txt)" = 1
+      # One attestation covers every archive, the site's bundle and their
+      # checksums, so a release whose files were replaced fails verification
+      # (issue #163). The archives are subjects named by their extension: a
+      # bare shift2eu_* also matches GoReleaser's build directories, and would
+      # attest the 12 bare binaries beside the archives.
       - name: Attest the archives
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: |
             shift2eu_*.tar.gz
             shift2eu_*.zip
+            shift2eu-site_*.tar.gz
             checksums.txt
 
   # The release is published last (issue #156): GoReleaser uploads every asset
@@ -187,8 +313,9 @@ jobs:
   # release, as the image's latest tag follows it (issue #173).
   publish:
     name: Publish the release
-    needs: [test, goreleaser, attest-archives, latest]
+    needs: [test, goreleaser, attest-archives, latest, site-browser]
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: write # publish the draft release
     steps:
@@ -324,6 +451,7 @@ jobs:
     name: Container image
     needs: [test, goreleaser, latest]
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     permissions:
       contents: read # check out the repository
       packages: write # push the image to ghcr.io
@@ -401,6 +529,7 @@ jobs:
     name: SBOM
     needs: image
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       packages: read # pull the image from ghcr.io, private until made public
     steps:
@@ -432,6 +561,7 @@ jobs:
     name: Sign and attest
     needs: [image, sbom]
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       packages: write # push the signatures and attestations to ghcr.io
       id-token: write # GitHub OIDC token for keyless cosign and attestation signing
@@ -484,6 +614,7 @@ jobs:
     name: Verify the published image
     needs: [image, sign]
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       packages: read # the image and its signature
       attestations: read # gh attestation verify reads them through the repository's API
@@ -648,6 +779,7 @@ jobs:
     name: Verify the published archives
     needs: publish
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: read # download the release's assets
       attestations: read # gh attestation verify reads them through the repository's API

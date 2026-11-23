@@ -497,6 +497,11 @@ run)
 	if [ -n "$archive" ]; then
 		printf 'archive\n' > "$archive" || exit 1
 	fi
+	# A test that gives the recipe a bundle of its own reads whether a builder ran all the same: the smoke test's
+	# line alone cannot tell a bundle the recipe served from one it built and did not serve (PRD #297 milestone 3).
+	if [ -n "${SHIFT2EU_TEST_BUILD_LOG:-}" ]; then
+		printf 'run=%s\n' "$out" >> "$SHIFT2EU_TEST_BUILD_LOG"
+	fi
 	;;
 test)
 	bundle="${SHIFT2EU_SITE_BUNDLE:-}"

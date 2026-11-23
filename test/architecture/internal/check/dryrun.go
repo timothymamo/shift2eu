@@ -179,7 +179,148 @@ func DryRunMirrorsRelease(ci, release []byte) []string {
 		d.containerRun(ciJob.steps, verify.steps, img)
 	}
 
+	d.site(ci, release)
+
 	return r.messages
+}
+
+// The site's bundle in the dry run (PRD #297 milestone 3): the ci.yml jobs
+// that build it before the archive check and smoke-test it, the step of
+// the archive check, the release's smoke-test job, and the actions that job
+// shares with ci.yml's browser job.
+const (
+	ciTestJob          = "test"
+	ciBrowserJob       = "browser"
+	releaseSiteBrowser = "site-browser"
+	siteBuildRun       = "make site"
+	archiveCheckRun    = ".github/scripts/verify-archives.sh"
+)
+
+// ciSiteUnpackRun is the script of ci.yml's browser job that unpacks the
+// bundle make site built: release.yml's site-browser check and unpack without
+// its digest check, which reads the site job's output, a job CI does not have,
+// and with the archive under the untagged build's version, dev, the one make
+// site alone gives it.
+var ciSiteUnpackRun = strings.Join([]string{
+	strictShell,
+	"mkdir " + siteUnpackedDir,
+	`tar -xzf "bin/shift2eu-site_dev.tar.gz" -C ` + siteUnpackedDir,
+}, "\n")
+
+// siteBrowserActions are the actions ci.yml's browser job and release.yml's
+// site-browser job share, which must run at the same commit in both.
+var siteBrowserActions = []string{"actions/checkout", "actions/setup-go"}
+
+// site checks the site's bundle in the dry run against the release: ci.yml's
+// test job runs make site before the archive check, so the snapshot's
+// checksums.txt lists the bundle as the release's does; ci.yml's browser job
+// takes the release's own path to a real Chromium, in this order: make site,
+// the archive unpacked into bin/release-bundle (ciSiteUnpackRun), and make
+// test-browser TEST_BROWSER_BUNDLE=bin/release-bundle, the very step
+// release.yml's site-browser job runs on the bundle its site job built, with
+// checkout and setup-go at the same commits.
+func (d dryRun) site(ci, release []byte) {
+	if test, ok := d.r.readJob(ci, "ci.yml", ciTestJob); ok {
+		build, check := runIndex(d.ciRaw, test.steps, siteBuildRun), runIndex(d.ciRaw, test.steps, archiveCheckRun)
+
+		switch {
+		case build < 0:
+			d.r.fail("ci.yml: jobs: %s holds no step that runs %s, want one before %s: the snapshot's checksums.txt lists the site's bundle, as the release's does, only when it is there (PRD #297 milestone 3)", ciTestJob, siteBuildRun, archiveCheckRun)
+		case check >= 0 && build > check:
+			d.r.fail("ci.yml: jobs: %s runs %s (line %d) after %s (line %d), want it before: the snapshot's checksums.txt lists the site's bundle only when it is there (PRD #297 milestone 3)", ciTestJob, siteBuildRun, test.steps[build].num, archiveCheckRun, test.steps[check].num)
+		}
+	}
+
+	browser, ok := d.r.readJob(ci, "ci.yml", ciBrowserJob)
+	if !ok {
+		return
+	}
+
+	siteBrowser, ok := d.r.readJob(release, "release.yml", releaseSiteBrowser)
+	if !ok {
+		return
+	}
+
+	d.browserPath(browser)
+
+	if runIndex(d.releaseRaw, siteBrowser.steps, siteBrowserRun) < 0 {
+		d.r.fail("release.yml: jobs: %s holds no step that runs exactly %s: the step ci.yml's %s job runs too, on the bundle the site job built and the release attests, never one the recipe builds itself (PRD #297 milestone 3)", releaseSiteBrowser, siteBrowserRun, ciBrowserJob)
+	}
+
+	for _, action := range siteBrowserActions {
+		ciSteps, releaseSteps := stepsOf(browser.steps, action), stepsOf(siteBrowser.steps, action)
+		if len(ciSteps) == 0 || len(releaseSteps) == 0 {
+			d.r.fail("%s runs in %d steps of ci.yml's %s job and %d of release.yml's %s job, want both", action, len(ciSteps), ciBrowserJob, len(releaseSteps), releaseSiteBrowser)
+
+			continue
+		}
+
+		want := releaseSteps[0].commit
+
+		for _, s := range slices.Concat(ciSteps, releaseSteps) {
+			if s.commit != want {
+				d.r.fail("%s runs at %s (line %d) and at %s (line %d), want one commit in ci.yml's %s job and release.yml's %s job", action, s.commit, s.num, want, releaseSteps[0].num, ciBrowserJob, releaseSiteBrowser)
+			}
+		}
+	}
+}
+
+// browserPath checks that ci.yml's browser job runs make site, then unpacks
+// its archive into bin/release-bundle exactly as ciSiteUnpackRun does, then
+// runs the release's smoke test on that directory, so the path the release
+// takes to a real Chromium at a tag is one a pull request has already run.
+func (d dryRun) browserPath(browser workflowJob) {
+	build := runIndex(d.ciRaw, browser.steps, siteBuildRun)
+	unpack := d.scriptIndex(d.ciRaw, browser.steps, ciSiteUnpackRun)
+	smoke := runIndex(d.ciRaw, browser.steps, siteBrowserRun)
+
+	if build < 0 {
+		d.r.fail("ci.yml: jobs: %s holds no step that runs %s, want one before the unpack of its archive into %s: the release's site-browser job smoke-tests the bundle make site built (PRD #297 milestone 3)", ciBrowserJob, siteBuildRun, siteUnpackedDir)
+	}
+
+	if unpack < 0 {
+		d.r.fail("ci.yml: jobs: %s holds no step whose script is exactly %q, the unpack of make site's archive into %s that release.yml's %s job runs, without its digest check and under the untagged version dev (PRD #297 milestone 3)", ciBrowserJob, ciSiteUnpackRun, siteUnpackedDir, releaseSiteBrowser)
+	}
+
+	if smoke < 0 {
+		d.r.fail("ci.yml: jobs: %s holds no step that runs exactly %s, the step release.yml's %s job runs on the release's bundle: plain make test-browser smoke-tests a bundle the recipe builds itself (PRD #297 milestone 3)", ciBrowserJob, siteBrowserRun, releaseSiteBrowser)
+	}
+
+	if build >= 0 && unpack >= 0 && build > unpack {
+		d.r.fail("ci.yml: jobs: %s runs %s (line %d) after the unpack of its archive (line %d), want it before (PRD #297 milestone 3)", ciBrowserJob, siteBuildRun, browser.steps[build].num, browser.steps[unpack].num)
+	}
+
+	if unpack >= 0 && smoke >= 0 && unpack > smoke {
+		d.r.fail("ci.yml: jobs: %s runs %s (line %d) before the unpack of the bundle into %s (line %d), want it after (PRD #297 milestone 3)", ciBrowserJob, siteBrowserRun, browser.steps[smoke].num, siteUnpackedDir, browser.steps[unpack].num)
+	}
+}
+
+// scriptIndex returns the index of the first of steps, of the document raw,
+// whose run: script (script) is exactly script, or -1 for none.
+func (d dryRun) scriptIndex(raw []string, steps []workflowStep, script string) int {
+	for i, s := range steps {
+		if s.hasRun && strings.TrimRight(d.script(raw, s), "\n") == script {
+			return i
+		}
+	}
+
+	return -1
+}
+
+// runIndex returns the index of the first of steps, of the document raw,
+// whose run: is exactly command, or -1 for none.
+func runIndex(raw []string, steps []workflowStep, command string) int {
+	for i, s := range steps {
+		if !s.hasRun {
+			continue
+		}
+
+		if value, err := (&schemaReader{raw: raw}).value(s.run); err == nil && value == command {
+			return i
+		}
+	}
+
+	return -1
 }
 
 // dryRun compares the dry run with the release.
