@@ -187,6 +187,8 @@ the maintainer's, with their own credentials.
 
 ### What stays by hand (PRD #297 *Runbook*)
 
+The steps are in [the site runbook](../site-runbook.md), R0 to R13.
+
 | Item | Why |
 |---|---|
 | The state bucket | It must exist before `init`; a bootstrap configuration would need a local state of its own (below) |

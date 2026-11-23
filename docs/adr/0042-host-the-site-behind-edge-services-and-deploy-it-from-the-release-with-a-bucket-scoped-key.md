@@ -358,7 +358,8 @@ nil (`newHTTPClient` in `ci/sitedeploy`), so the proxy variables are never consu
 ### Recovery
 
 - **Redeploy the last good release:** re-run the deploy job of the `release.yml` run of the highest
-  release tag on `main` (R12), within GitHub's 30-day re-run window (below); after the window, either
+  release tag on `main` ([the site runbook](../site-runbook.md#r12-recovery), R12), within GitHub's
+  30-day re-run window (below); after the window, either
   the maintainer restores the last good version of each page from the bucket's object versions with
   their own key (R12), or cuts a new release with a `Release-As:` footer.
   The guard overwrites any live page that is not a genuine higher release,

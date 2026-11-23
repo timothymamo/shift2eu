@@ -32,6 +32,9 @@ index does not.
 3. [Working with agents](contributing/agents.md): the agents' roles and how to start them.
 4. [Development environment](dev-environment.md): the Lima VM the agents run in, its credentials,
    tools and isolation.
+5. [The site runbook](site-runbook.md): the maintainer's steps for the site's Scaleway hosting, the
+   deploy key, the Namecheap records, the GitHub `site` environment, the deploy switch, recovery and
+   teardown.
 
 ## Architecture
 
