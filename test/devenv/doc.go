@@ -41,7 +41,12 @@
 // step that rewrites only the archive URIs of ubuntu.sources before the first
 // apt-get update; with the vm-up tests, that make vm-up and make vm-create pass
 // UBUNTU_MIRROR to limactl as that param, read raw and validated before
-// limactl runs.
+// limactl runs. TestAPTSourcesStep (limaaptstep_test.go) runs that same step
+// under bash against a fake guest root (SHIFT2EU_APT_ROOT) with no root and
+// nothing faked, and pins the drop-in it writes and every rewrite of
+// ubuntu.sources: one URI or several on a URIs line, the security stanzas and
+// country mirrors it leaves alone, a mirror that finds no archive URI to
+// rewrite as a failure, the default mirror as no change, and a second run.
 //
 // TestLimaProbeNeverRunsTheGHWrapper (limaprobe_test.go, issue #479) reads the
 // template's readiness probe and pins that no command of it runs the gh

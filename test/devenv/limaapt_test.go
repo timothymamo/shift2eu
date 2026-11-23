@@ -12,10 +12,9 @@
 //     security.ubuntu.com stays, so a mirror the maintainer picks for speed never takes the security updates
 //     with it. make vm-up passes it to limactl from UBUNTU_MIRROR, validated like the VM_* values of issue #228.
 //
-// The rewrite itself is pinned at the template level only. Running it would mean writing
-// /etc/apt/sources.list.d/ubuntu.sources as root: unlike the swap step of issue #294, which the tests run against
-// a fake guest through SHIFT2EU_SWAP_ROOT, the fixed design of issue #498 adds no root prefix for the apt
-// sources, and inventing a seam in a test is not this file's to do.
+// The rewrite's behaviour is pinned by running the step in limaaptstep_test.go, which needs the step to prefix the
+// files it writes with SHIFT2EU_APT_ROOT, as the swap step of issue #294 does with SHIFT2EU_SWAP_ROOT: this file
+// reads the template, that one runs the step against a fake guest and pins what it writes there.
 package devenv_test
 
 import (
