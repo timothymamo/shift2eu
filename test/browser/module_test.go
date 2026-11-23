@@ -143,8 +143,8 @@ func TestGoVersionIsShown(t *testing.T) {
 	version := manifestOf(t).Version
 	footer := eval[string](t, ctx, `document.querySelector("footer").textContent.replace(/\s+/g, " ")`)
 
-	if !strings.Contains(footer, "shift2eu "+version) {
-		t.Errorf("the page's footer %q does not show the version manifest.json names, %q: every page shows the version that built it", footer, version)
+	if !strings.Contains(footer, version) {
+		t.Errorf("the page's footer %q does not show the version manifest.json names, %q: every page shows the version that built it (issue #373, item 09)", footer, version)
 	}
 }
 

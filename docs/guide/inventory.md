@@ -262,11 +262,13 @@ aws ec2 describe-instances --output json --query '{Reservations: Reservations[].
   BlockDeviceMappings: BlockDeviceMappings[].{Ebs: {VolumeId: Ebs.VolumeId}},
   NetworkInterfaces: NetworkInterfaces[].{Ipv6AddressCount: length(Ipv6Addresses || `[]`)},
   Tags: Tags[].{Key: Key}}}}' > "$out/ec2-instances.json"
+
 # The vCPU and memory of the instance types in use.
 jq -r '[.Reservations[].Instances[].InstanceType] | unique[]' "$out/ec2-instances.json" |
   xargs -r -n 100 aws ec2 describe-instance-types --output json --query '{InstanceTypes: InstanceTypes[].{
     InstanceType: InstanceType, VCpuInfo: {DefaultVCpus: VCpuInfo.DefaultVCpus},
     MemoryInfo: {SizeInMiB: MemoryInfo.SizeInMiB}}}' --instance-types > "$out/ec2-instance-types.json"
+
 aws ec2 describe-volumes --output json --query '{Volumes: Volumes[].{
   VolumeId: VolumeId, AvailabilityZone: AvailabilityZone, Encrypted: Encrypted, Size: Size,
   Attachments: Attachments[].{InstanceId: InstanceId, DeleteOnTermination: DeleteOnTermination}}}' \
@@ -469,6 +471,7 @@ gcloud asset search-all-resources --scope="projects/$project" \
   --format='json(name,assetType,location,labels)' |
   jq '[.[] | if .labels then .labels |= with_entries(select(.key == "goog-gke-node" or .key == "goog-managed-by")) else . end]' \
   > "$out/assets.json"
+
 gcloud compute instances list --project="$project" \
   --format='json(kind,selfLink,machineType,metadata.items[].key,disks[].source,disks[].boot,disks[].autoDelete,networkInterfaces[].stackType,networkInterfaces[].ipv6AccessConfigs[].type)' \
   > "$out/compute-instances.json"
@@ -481,6 +484,7 @@ if [ -n "$types" ]; then
 else
   echo '[]' > "$out/compute-machine-types.json"
 fi
+
 gcloud compute disks list --project="$project" \
   --format='json(kind,name,zone,region,sizeGb)' > "$out/compute-disks.json"
 gcloud compute instance-groups managed list --project="$project" \

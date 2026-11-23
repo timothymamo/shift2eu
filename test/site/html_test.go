@@ -42,6 +42,31 @@ type element struct {
 	// and its first child element, and between its child elements, as the
 	// source spells it.
 	text string
+	// texts are those runs, each with the child it comes before: they are what
+	// keeps the element's text content in document order.
+	texts []textRun
+}
+
+// textRun is one run of an element's own text, and the child element it comes
+// before: at is the index in the element's children of the child the run
+// precedes, and the length of children for the run after the last one.
+type textRun struct {
+	at   int
+	text string
+}
+
+// addText appends a run of the element's own text: a run that directly follows
+// the previous one joins it, so a text interrupted by no child stays one run.
+func (e *element) addText(text string) {
+	e.text += text
+
+	if n := len(e.texts); n > 0 && e.texts[n-1].at == len(e.children) {
+		e.texts[n-1].text += text
+
+		return
+	}
+
+	e.texts = append(e.texts, textRun{at: len(e.children), text: text})
 }
 
 // voidElements are the elements with no content and no end tag.
@@ -76,7 +101,7 @@ func parseHTML(t *testing.T, name string, src []byte) *document {
 				end = len(src) - i
 			}
 
-			stack[len(stack)-1].text += string(src[i : i+end])
+			stack[len(stack)-1].addText(string(src[i : i+end]))
 
 			i += end
 
@@ -137,7 +162,7 @@ func parseHTML(t *testing.T, name string, src []byte) *document {
 			if rawTextElements[el.tag] {
 				text, length := readRawText(t, name, el.tag, src[i:])
 
-				el.text = text
+				el.addText(text)
 
 				i += length
 				// Consume the element's own end tag.
@@ -391,12 +416,22 @@ func (e *element) textContent() string {
 	return htmlUnescape(b.String())
 }
 
-// collectText appends the text of el and its descendants to b, raw.
+// collectText appends the text of el and its descendants to b, raw, in the
+// order the document holds it: the element's own runs of text in among the text
+// of its children, as a browser's textContent reads it.
 func collectText(el *element, b *strings.Builder) {
-	b.WriteString(el.text)
+	next := 0
 
-	for _, child := range el.children {
+	for i, child := range el.children {
+		for ; next < len(el.texts) && el.texts[next].at <= i; next++ {
+			b.WriteString(el.texts[next].text)
+		}
+
 		collectText(child, b)
+	}
+
+	for ; next < len(el.texts); next++ {
+		b.WriteString(el.texts[next].text)
 	}
 }
 

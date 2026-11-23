@@ -16,10 +16,9 @@ import (
 const dateLayout = "2006-01-02"
 
 // The heading levels of a report: the title, its sections, the sections inside
-// them (a comparison's own sections, a target's sections in a comparison, the
-// workloads of a single-target report) and the workloads of a target in a
-// comparison. The page holds the fragment under its own h1, so the title is an
-// h2.
+// them (a target's sections in a comparison, the workloads of a single-target
+// report) and the workloads of a target in a comparison. The page holds the
+// fragment under its own h1, so the title is an h2.
 const (
 	titleLevel   = 2
 	sectionLevel = 3
@@ -63,7 +62,9 @@ func (*Reporter) Report(ctx context.Context, w io.Writer, a assessment.Assessmen
 }
 
 // ReportComparison writes the HTML fragment of the comparison c and meta to w,
-// laid out as the package documentation describes.
+// laid out as the package documentation describes: the header naming every
+// target, then each target's own sections, and no combined block (issue
+// #373, item 05).
 //
 // The output depends on c and meta only. ReportComparison builds the whole
 // fragment before writing it to w in one call; a write error is returned,
@@ -88,14 +89,12 @@ func (*Reporter) ReportComparison(ctx context.Context, w io.Writer, c assessment
 	var f fragment
 
 	writeComparisonHeader(&f, c.Targets, meta)
-	f.heading(sectionLevel, text("Comparison"))
-	writeComparisonSummary(&f, c.Targets)
-	writeComparisonResources(&f, c.Targets)
-	writeSharedBlockers(&f, c)
 
 	for _, t := range c.Targets {
-		f.heading(sectionLevel, code(t.Assessment.Target))
-		writeBody(&f, t.Assessment, sectionLevel+1)
+		f.part(partTarget, func() {
+			f.heading(sectionLevel, code(t.Assessment.Target))
+			writeBody(&f, t.Assessment, sectionLevel+1)
+		})
 	}
 
 	return write(w, &f, "html comparison report")
@@ -117,73 +116,138 @@ func write(w io.Writer, f *fragment, what string) error {
 	return nil
 }
 
-// writeHeader writes the title and the list that says what was assessed
-// against what. The inventory file item is left out when the inventory has no
-// file name.
+// headerSeparator is the dot between the header line's items, which a reader
+// sees and a screen reader, reading the items of a list, does not need.
+const headerSeparator = "·"
+
+// writeHeader writes the title and the one line that says what was assessed
+// against what (issue #373, item 10-1): the source, the inventory file (left
+// out when the inventory has no file name), the catalog's retrieval date as a
+// link to the catalog's own page, and the region, when there is one, as a
+// list whose items the stylesheet sets on one line.
 func writeHeader(f *fragment, a assessment.Assessment, meta analysis.ReportMeta) {
-	f.heading(titleLevel, text("Migration assessment: ").code(a.Target))
+	f.heading(titleLevel, title().code(a.Target))
 
-	var items []item
-
-	if meta.InventoryName != "" {
-		items = append(items, item{Text: text("Inventory file: ").code(meta.InventoryName)})
-	}
-
-	items = append(items,
-		item{Text: text("Source: ").code(a.Source)},
-		item{Text: catalogLine(code(a.Target), a)},
-	)
+	items := headerStart(a.Source, meta)
+	items = append(items, headerItem(catalogLink(a)))
 
 	if region := renderRegion(a); region != nil {
-		items = append(items, item{Text: text("Region: ").then(region)})
+		items = append(items, headerItem(text("region ").then(region)))
 	}
 
-	f.list(items)
+	f.markerlessList(items)
 }
 
-// catalogLine is the header's catalog item for the target named name.
-func catalogLine(name rich, a assessment.Assessment) rich {
-	return text("Catalog: ").then(name).words(" snapshot from ").code(a.Snapshot.SourceURL).
-		words(", retrieved " + a.Snapshot.RetrievedOn.UTC().Format(dateLayout))
+// title is the start of the title, the words the stylesheet sets above the
+// target's name.
+func title() rich {
+	return rich{}.span("Migration assessment").words(" ")
 }
 
-// writeBody writes the sections of the report of a, each headed at level:
-// its summary, resources, required changes and blockers, then the workloads
-// when a.ShowWorkloads and the cost estimate when a has estimates.
+// headerStart returns the header line's first items: the source, and the
+// inventory file when it has a name.
+func headerStart(source string, meta analysis.ReportMeta) []item {
+	items := []item{{Text: text("source ").code(source)}}
+
+	if meta.InventoryName != "" {
+		items = append(items, headerItem(code(meta.InventoryName)))
+	}
+
+	return items
+}
+
+// headerItem is an item of the header line after its first: r, after the
+// separator.
+func headerItem(r rich) item {
+	return item{Text: rich{}.separator(headerSeparator).words(" ").then(r)}
+}
+
+// catalogLink is "catalog retrieved <date>", linking the catalog's own page.
+func catalogLink(a assessment.Assessment) rich {
+	return rich{}.link("catalog retrieved "+a.Snapshot.RetrievedOn.UTC().Format(dateLayout), a.Snapshot.SourceURL)
+}
+
+// writeBody writes the sections of the report of a, each headed at level and
+// each in its part section: its summary, resources, required changes and
+// blockers, the last two in one box so the stylesheet sets them side by side
+// (issue #373, item 12), then the workloads when a.ShowWorkloads and the cost
+// estimate when a has estimates.
 func writeBody(f *fragment, a assessment.Assessment, level int) {
-	writeSummary(f, a.Summary, level)
-	writeResources(f, a, level)
-	writeRequiredChanges(f, a.Verdicts, level)
-	writeBlockers(f, a.Blockers, a.Verdicts, level)
+	f.part(partSummary, func() { writeSummary(f, a, level) })
+	f.part(partResources, func() { writeResources(f, a, level) })
+	f.box(func() {
+		f.part(partChanges, func() { writeRequiredChanges(f, a.Verdicts, level) })
+		f.part(partBlockers, func() { writeBlockers(f, a.Blockers, a.Verdicts, level) })
+	})
 
 	if a.ShowWorkloads() {
-		writeWorkloads(f, a, level)
+		f.part(partWorkloads, func() { writeWorkloads(f, a, level) })
 	}
 
 	if hasEstimates(a) {
-		writeCostEstimate(f, a, level)
+		f.part(partCost, func() { writeCostEstimate(f, a, level) })
 	}
 }
 
-// writeSummary writes the number of resources per fit, and in total.
-func writeSummary(f *fragment, s assessment.Summary, level int) {
+// writeSummary writes the summary as boxes (issue #373, item 10-2): one per
+// fit, its badge, the number of resources of that fit and its caption, then,
+// when a has estimates, one with the monthly estimate. The direct box's
+// caption is the total its count is of; the partial and none boxes say what
+// that fit means for the move (item 03-2).
+func writeSummary(f *fragment, a assessment.Assessment, level int) {
+	s := a.Summary
+
 	f.heading(level, text("Summary"))
-	f.table([]rich{text("Fit"), text("Resources")}, [][]rich{
-		{text(string(mapping.Direct)), text(strconv.Itoa(s.Direct))},
-		{text(string(mapping.Partial)), text(strconv.Itoa(s.Partial))},
-		{text(string(mapping.None)), text(strconv.Itoa(s.None))},
-		{text("total"), text(strconv.Itoa(s.Total))},
-	})
+
+	for _, fit := range []struct {
+		fit     mapping.Fit
+		count   int
+		caption string
+	}{
+		{fit: mapping.Direct, count: s.Direct, caption: "of " + strconv.Itoa(s.Total) + resourcesNoun(s.Total)},
+		{fit: mapping.Partial, count: s.Partial, caption: "needs changes"},
+		{fit: mapping.None, count: s.None, caption: "blocked"},
+	} {
+		f.paragraph(rich{}.badge(fitClass(fit.fit), string(fit.fit)).words(" ").
+			figure(classNone, strconv.Itoa(fit.count)).words(" ").span(fit.caption))
+	}
+
+	if hasEstimates(a) {
+		f.paragraph(summaryEstimate(*a.Total))
+	}
+}
+
+// fitClass is the badge class of fit, chosen from the mapping's closed set of
+// fits by an exhaustive switch. A fit the report does not know gets the badge
+// class alone, never a class made from its text.
+func fitClass(fit mapping.Fit) class {
+	switch fit {
+	case mapping.Direct:
+		return classFitDirect
+	case mapping.Partial:
+		return classFitPartial
+	case mapping.None:
+		return classFitNone
+	default:
+		return classFit
+	}
+}
+
+// fitCell is the Fit cell of a verdict whose fit is fit: the fit's word in a
+// span the stylesheet draws as a badge, with the badge class of that fit.
+func fitCell(fit mapping.Fit) cell {
+	return cell{Text: rich{}.span(string(fit)), Class: fitClass(fit)}
 }
 
 // writeResources writes one table row per verdict of a, in its order, with
-// the columns of the Markdown report: Plan and Monthly estimate only when a
-// has estimates, Relations only when some resource has a relation.
+// the columns of the Markdown report but the region (issue #373, item 04):
+// Plan and Monthly estimate only when a has estimates, Relations only when
+// some resource has a relation.
 func writeResources(f *fragment, a assessment.Assessment, level int) {
 	estimates := hasEstimates(a)
 	relations := hasRelations(a.Verdicts)
 
-	header := []rich{text("ID"), text("Raw type"), text("Category"), text("Region"), text("Fit"), text("Best offering")}
+	header := []rich{text("ID"), text("Raw type"), text("Category"), text("Fit"), text("Best offering")}
 	if estimates {
 		header = append(header, text("Plan"), text("Monthly estimate"))
 	}
@@ -194,32 +258,27 @@ func writeResources(f *fragment, a assessment.Assessment, level int) {
 
 	header = append(header, text("Reasons"))
 
-	rows := make([][]rich, 0, len(a.Verdicts))
+	rows := make([]row, 0, len(a.Verdicts))
 
 	for _, v := range a.Verdicts {
-		row := []rich{
-			code(v.Resource.ID),
-			code(v.Resource.RawType),
-			code(string(v.Resource.Category)),
-			code(v.Resource.Region),
-			text(string(v.Fit)),
-			renderBestOffering(v),
-		}
+		r := cells(code(v.Resource.ID), code(v.Resource.RawType), code(string(v.Resource.Category)))
+		r = append(r, fitCell(v.Fit))
+		r = append(r, cells(renderBestOffering(v))...)
 
 		if estimates {
-			row = append(row, renderPlan(v.Estimate), renderEstimate(v.Estimate))
+			r = append(r, cells(renderPlan(v.Estimate), renderEstimate(v.Estimate))...)
 		}
 
 		if relations {
-			row = append(row, renderRelations(v))
+			r = append(r, cells(renderRelations(v))...)
 		}
 
-		row = append(row, renderReasons(v.Reasons))
-		rows = append(rows, row)
+		r = append(r, cells(renderReasons(v.Reasons))...)
+		rows = append(rows, row{Cells: r})
 	}
 
 	f.heading(level, text("Resources"))
-	f.table(header, rows)
+	f.table(tableResources, header, rows)
 }
 
 // writeRequiredChanges writes one list item per partial verdict that has
@@ -274,7 +333,7 @@ func writeBlockers(f *fragment, blockers []assessment.Blocker, verdicts []assess
 		}
 	}
 
-	f.list(items)
+	f.markerlessList(items)
 }
 
 // blockerItems returns one list item per blocker, "ID: reason".
@@ -338,150 +397,29 @@ func renderReason(r mapping.Reason) rich {
 	return out
 }
 
-// writeComparisonHeader writes the title naming every target, the inventory
-// file item (left out when the inventory has no file name), the source, taken
-// from the first target, one catalog item per target and one region item per
-// target that has a region.
+// writeComparisonHeader writes the title naming every target and the header
+// line: the source, taken from the first target, the inventory file (left out
+// when the inventory has no file name), then one item per target naming it,
+// its catalog's retrieval date as a link to the catalog's own page, and its
+// region when it has one.
 func writeComparisonHeader(f *fragment, targets []assessment.TargetAssessment, meta analysis.ReportMeta) {
 	names := make([]rich, 0, len(targets))
 	for _, t := range targets {
 		names = append(names, code(t.Assessment.Target))
 	}
 
-	f.heading(titleLevel, text("Migration assessment: ").join(names, nameSeparator))
+	f.heading(titleLevel, title().join(names, nameSeparator))
 
-	var items []item
-
-	if meta.InventoryName != "" {
-		items = append(items, item{Text: text("Inventory file: ").code(meta.InventoryName)})
-	}
-
-	items = append(items, item{Text: text("Source: ").code(targets[0].Assessment.Source)})
+	items := headerStart(targets[0].Assessment.Source, meta)
 
 	for i, t := range targets {
-		items = append(items, item{Text: catalogLine(names[i], t.Assessment)})
-	}
-
-	for i, t := range targets {
+		line := names[i].words(" ").then(catalogLink(t.Assessment))
 		if region := renderRegion(t.Assessment); region != nil {
-			items = append(items, item{Text: text("Region: ").then(names[i]).words(": ").then(region)})
-		}
-	}
-
-	f.list(items)
-}
-
-// writeComparisonSummary writes one row per fit, and a total, with one column
-// per target holding that target's count, then one estimate row per target
-// with estimates, holding that target's total in its own column, and the basis
-// the totals are given on. It ranks no target.
-func writeComparisonSummary(f *fragment, targets []assessment.TargetAssessment) {
-	header := []rich{text("Fit")}
-	direct := []rich{text(string(mapping.Direct))}
-	partial := []rich{text(string(mapping.Partial))}
-	none := []rich{text(string(mapping.None))}
-	total := []rich{text("total")}
-
-	for _, t := range targets {
-		s := t.Assessment.Summary
-		header = append(header, code(t.Assessment.Target))
-		direct = append(direct, text(strconv.Itoa(s.Direct)))
-		partial = append(partial, text(strconv.Itoa(s.Partial)))
-		none = append(none, text(strconv.Itoa(s.None)))
-		total = append(total, text(strconv.Itoa(s.Total)))
-	}
-
-	rows := [][]rich{direct, partial, none, total}
-	estimated := false
-
-	for i, t := range targets {
-		if !hasEstimates(t.Assessment) {
-			continue
+			line = line.words(", region ").then(region)
 		}
 
-		estimated = true
-		row := make([]rich, len(targets)+1)
-		row[0] = code(t.Assessment.Target).words(" estimate")
-		row[i+1] = renderTotal(*t.Assessment.Total, estimatesOf(t.Assessment.Verdicts))
-		rows = append(rows, row)
+		items = append(items, headerItem(line))
 	}
 
-	f.heading(sectionLevel+1, text("Summary"))
-	f.table(header, rows)
-
-	if estimated {
-		f.paragraph(text("Estimates are list prices on each catalog's retrieval date, " + excludedNote +
-			"; each target's own section gives its basis."))
-	}
-}
-
-// writeComparisonResources writes one row per resource, in the first target's
-// verdict order: the ID, the category, and each target's fit and best
-// offering, without the tie note, and its monthly estimate when that target
-// has estimates.
-func writeComparisonResources(f *fragment, targets []assessment.TargetAssessment) {
-	header := []rich{text("ID"), text("Category"), text("Region")}
-
-	for _, t := range targets {
-		name := code(t.Assessment.Target)
-		header = append(header, name.words(" fit"), name.words(" best offering"))
-
-		if hasEstimates(t.Assessment) {
-			header = append(header, name.words(" monthly estimate"))
-		}
-	}
-
-	rows := make([][]rich, 0, len(targets[0].Assessment.Verdicts))
-
-	for i, first := range targets[0].Assessment.Verdicts {
-		row := []rich{code(first.Resource.ID), code(string(first.Resource.Category)), code(first.Resource.Region)}
-
-		for _, t := range targets {
-			v := t.Assessment.Verdicts[i]
-			row = append(row, text(string(v.Fit)), code(v.BestOffering))
-
-			if hasEstimates(t.Assessment) {
-				row = append(row, renderEstimate(v.Estimate))
-			}
-		}
-
-		rows = append(rows, row)
-	}
-
-	f.heading(sectionLevel+1, text("Resources"))
-	f.table(header, rows)
-}
-
-// writeSharedBlockers writes one list item per resource blocked on every
-// target, with a nested item per target giving that target's reasons, or
-// "None." when there is none. A target is named by its display name, never
-// its key.
-func writeSharedBlockers(f *fragment, c assessment.Comparison) {
-	f.heading(sectionLevel+1, text("Blockers on every target"))
-
-	if len(c.SharedBlockers) == 0 {
-		f.paragraph(text("None."))
-
-		return
-	}
-
-	// assessment.Comparison.Validate has checked that every key a shared
-	// blocker names is here.
-	names := make(map[string]string, len(c.Targets))
-	for _, t := range c.Targets {
-		names[t.Key] = t.Assessment.Target
-	}
-
-	items := make([]item, 0, len(c.SharedBlockers))
-
-	for _, blocker := range c.SharedBlockers {
-		children := make([]rich, 0, len(blocker.Targets))
-		for _, t := range blocker.Targets {
-			children = append(children, code(names[t.Key]).words(": ").then(renderReasons(t.Reasons)))
-		}
-
-		items = append(items, item{Text: code(blocker.ResourceID), Children: children})
-	}
-
-	f.list(items)
+	f.markerlessList(items)
 }

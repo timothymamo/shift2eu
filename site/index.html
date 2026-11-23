@@ -13,81 +13,121 @@
 <script {{.PageAttrs}} defer></script>
 </head>
 <body data-page="assessment">
+<a class="skip-link" href="#main">Skip to content</a>
 <header class="site-header">
-<p class="brand"><a href="index.html">shift2eu</a></p>
+<div class="wrap masthead">
+<p class="brand"><a href="index.html"><svg class="mark" viewBox="0 0 32 32" aria-hidden="true" focusable="false"><defs><path id="mark-star" d="M16 1.5l.4 1.15 1.22.02-.97.74.35 1.17-1-.7-1 .7.35-1.17-.97-.74 1.22-.02z"/></defs><g class="mark-stars" fill="currentColor"><use href="#mark-star"/><use href="#mark-star" transform="rotate(30 16 16)"/><use href="#mark-star" transform="rotate(60 16 16)"/><use href="#mark-star" transform="rotate(90 16 16)"/><use href="#mark-star" transform="rotate(120 16 16)"/><use href="#mark-star" transform="rotate(150 16 16)"/><use href="#mark-star" transform="rotate(180 16 16)"/><use href="#mark-star" transform="rotate(210 16 16)"/><use href="#mark-star" transform="rotate(240 16 16)"/><use href="#mark-star" transform="rotate(270 16 16)"/><use href="#mark-star" transform="rotate(300 16 16)"/><use href="#mark-star" transform="rotate(330 16 16)"/></g><g class="mark-arrow" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.5 16h12M17 11.5l4.5 4.5-4.5 4.5"/></g></svg>shift2eu</a></p>
 <nav aria-label="Site">
-<ul class="nav">
+<ul class="nav" role="list">
 <li><a href="index.html" aria-current="page">Assessment</a></li>
+<li><a href="inventory.html">Inventory guide</a></li>
 <li><a href="privacy.html">Privacy</a></li>
 <li><a href="verify.html">Verify this site</a></li>
-<li><a href="https://github.com/timothymamo/shift2eu">Repository</a></li>
+<li><a href="https://github.com/timothymamo/shift2eu" target="_blank" rel="noopener noreferrer">Repository<span class="visually-hidden"> (opens in a new tab)</span></a></li>
 </ul>
 </nav>
-</header>
-<main>
-<h1>Assess a move to an EU cloud</h1>
-<p class="lead">Paste an inventory of your AWS, Azure or GCP resources, choose one or more EU cloud providers, and see what moves directly, what moves with changes and what blocks the move. The assessment runs in this browser: the page sends nothing anywhere. <a href="privacy.html">How the site keeps that promise</a>.</p>
-<noscript>
-<p class="notice">This assessment needs JavaScript and WebAssembly, and they are off or missing in this browser. Run the same assessment with the shift2eu CLI instead: see the <a href="https://github.com/timothymamo/shift2eu">repository</a>.</p>
-</noscript>
-<p id="loading-notice" class="notice" role="status">Loading the assessment module. It is part of this page and runs in this browser; nothing is sent while it loads.</p>
-
-<fieldset>
-<legend>Inventory</legend>
-<div class="field">
-<label for="inventory">Paste an inventory document (JSON, schema version 1 or 2)</label>
-<textarea id="inventory" rows="12" spellcheck="false" autocomplete="off"></textarea>
 </div>
+</header>
+<main id="main" class="wrap page">
+<div class="hero">
+<p class="eyebrow">AWS · Azure · GCP → OVHcloud · Scaleway · UpCloud</p>
+<h1>Assess a move to an EU cloud</h1>
+<p class="lead">Paste an inventory of your AWS, Azure or GCP resources, choose one or more EU cloud providers, and see what moves directly, what moves with changes and what blocks the move. The assessment runs in this browser: <a href="privacy.html">the page sends nothing anywhere</a>.</p>
+<ul class="chips" role="list">
+<li><span class="chip"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect x="4.5" y="10.5" width="15" height="10" rx="2"/><path d="M8 10.5V7.5a4 4 0 0 1 8 0v3"/></svg>Runs in this browser</span></li>
+<li><span class="chip"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 3l7.5 3v5.5c0 4.6-3.2 7.9-7.5 9.5-4.3-1.6-7.5-4.9-7.5-9.5V6z"/><path d="M8.5 8.5l7 7M15.5 8.5l-7 7"/></svg>Connections blocked by CSP</span></li>
+<li><a class="chip" href="verify.html"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="12" cy="9.5" r="6"/><path d="M9 14.5V21l3-1.8 3 1.8v-6.5"/><path d="M9.5 9.5l1.8 1.8 3.2-3.3"/></svg>Verifiable release</a></li>
+</ul>
+<p class="notice with-icon"><svg class="notice-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="8.5"/><path d="M6 6l12 12"/></svg>No cookies, no local storage, no analytics, nothing loaded from a third party.</p>
+<noscript>
+<p class="notice">This assessment needs JavaScript and WebAssembly, and they are off or missing in this browser. Run the same assessment with the shift2eu CLI instead: see the <a href="https://github.com/timothymamo/shift2eu" target="_blank" rel="noopener noreferrer">repository<span class="visually-hidden"> (opens in a new tab)</span></a>.</p>
+</noscript>
+<p id="loading-notice" class="notice" role="status">The assessment engine is loading. It is part of this page: nothing is downloaded from elsewhere.</p>
+</div>
+
+<fieldset class="card">
+<legend><span class="step" aria-hidden="true">01</span> Inventory</legend>
 <div class="field">
-<label for="inventory-file">Or read one from a file</label>
-<input type="file" id="inventory-file" accept=".json,application/json">
+<label for="inventory">Paste Inventory JSON</label>
+<textarea id="inventory" rows="7" spellcheck="false" autocomplete="off"></textarea>
+</div>
+<div class="field-row">
+<div class="field">
+<label for="inventory-file">Or upload a file</label>
+<input type="file" id="inventory-file" class="file-input" accept=".json,application/json">
+<label for="inventory-file" class="button secondary file-button">Choose a file</label>
 </div>
 <div class="field">
 <label for="example">Or start from an example</label>
-<select id="example">
+<span class="select-wrap"><select id="example">
 {{- range .Examples}}
 <option value="{{.Key}}">{{.Name}} example</option>
 {{- end}}
-</select>
-<button type="button" id="load-example">Load the example</button>
+</select></span>
+<button type="button" id="load-example" class="secondary">Load the example</button>
 </div>
-<p class="muted">The <a href="https://github.com/timothymamo/shift2eu/blob/{{.Ref}}/docs/guide/inventory.md">inventory guide</a> shows how to make an inventory from read-only CLI output.</p>
+</div>
+<p class="muted small"><span>No inventory yet? The </span><a href="inventory.html">inventory guide</a><span> turns read-only CLI output into one.</span></p>
 </fieldset>
 
-<fieldset>
-<legend>Targets</legend>
-<p class="muted">Choose one target for an assessment, or several for a comparison. Each target's estimates use the list prices of its catalog snapshot, dated below; they are list prices on that date, not a quote.</p>
+<fieldset class="card">
+<legend><span class="step" aria-hidden="true">02</span> EU targets</legend>
+<div class="targets">
 {{- range .Targets}}
 <div class="target">
-<label><input type="checkbox" class="target-choice" id="target-{{.Key}}" value="{{.Key}}" checked> {{.Name}}</label>
-<label for="region-{{.Key}}">Region for {{.Name}}</label>
-<select id="region-{{.Key}}">
+<label class="target-name"><input type="checkbox" class="target-choice" id="target-{{.Key}}" value="{{.Key}}" checked> {{.Name}} <span class="target-country">({{.Country}})</span></label>
+<p class="target-region"><label for="region-{{.Key}}">Region<span class="visually-hidden"> for {{.Name}}</span></label>
+<span class="select-wrap"><select id="region-{{.Key}}">
 <option value="">Any region</option>
 {{- range .Regions}}
 <option value="{{.}}">{{.}}</option>
 {{- end}}
-</select>
-<span class="muted">Catalog snapshot of {{.Snapshot}}</span>
+</select></span></p>
+<p class="target-snapshot">Catalog retrieved <span class="mono">{{.Snapshot}}</span></p>
 </div>
 {{- end}}
+</div>
+<p class="muted small">Estimates are list prices on each catalog's retrieval date, excluding VAT and discounts.</p>
 </fieldset>
 
-<fieldset>
-<legend>Options</legend>
-<label><input type="checkbox" id="estimate" checked> Estimate monthly list prices</label>
+<fieldset class="card options">
+<legend><span class="step" aria-hidden="true">03</span> Options</legend>
+<label class="check"><input type="checkbox" id="estimate" checked> Estimate monthly list prices</label>
 </fieldset>
 
 <div class="actions">
 <button type="button" id="run" disabled>Run the assessment</button>
-<button type="button" id="download-markdown" disabled>Download the Markdown report</button>
-<button type="button" id="download-json" disabled>Download the JSON report</button>
+<button type="button" id="download-markdown" class="secondary" disabled>Download the Markdown report</button>
+<button type="button" id="download-json" class="secondary" disabled>Download the JSON report</button>
 </div>
 <div id="status" class="alert" role="alert"></div>
 <section id="report" tabindex="-1" aria-label="Report"></section>
+<aside class="next-steps" aria-label="Next steps">
+<svg class="next-steps-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M4 5h16v11H9l-5 4z"/><path d="M8 9.5h8M8 12.5h5"/></svg>
+<div class="next-steps-text">
+<p><strong>Next steps.</strong> Want help reading this report, or to talk through how to move these workloads to an EU cloud? Email us at info@shift2eu.com.</p>
+<p class="muted">Your inventory and report stay in this browser. Attach a downloaded report only if you choose to.</p>
+</div>
+<a class="button secondary" href="mailto:info@shift2eu.com">Contact us</a>
+</aside>
+
+<section class="contact-band" aria-labelledby="contact-heading">
+<div>
+<p class="eyebrow">Planning a migration?</p>
+<h2 id="contact-heading">Questions about your results, or how to move forward?</h2>
+</div>
+<div>
+<p>We're happy to help you read an assessment, weigh the EU options, or plan the move itself. Email info@shift2eu.com.</p>
+<a class="button gold" href="mailto:info@shift2eu.com">Email info@shift2eu.com</a>
+</div>
+</section>
 </main>
 <footer>
-<p>shift2eu {{.Version}}, its assessment module built with Go <span id="go-version">{{.GoVersion}}</span>.</p>
-<p><a href="privacy.html">Privacy</a> · <a href="verify.html">Verify this site</a> · <a href="https://github.com/timothymamo/shift2eu">Repository</a> · <a href="https://github.com/timothymamo/shift2eu/blob/{{.Ref}}/docs/guide/inventory.md">Inventory guide</a></p>
+<div class="wrap footer-row">
+<p>No cookies, no tracking, no requests: the page cannot connect anywhere.</p>
+<p class="footer-links"><a href="privacy.html">Privacy</a> <a href="verify.html">Verify this site</a> <a href="inventory.html">Inventory guide</a> <a href="https://github.com/timothymamo/shift2eu/blob/{{.Ref}}/docs/guide/inventory.md" target="_blank" rel="noopener noreferrer">Guide on GitHub<span class="visually-hidden"> (opens in a new tab)</span></a> <span class="mono">{{.Version}}</span></p>
+</div>
+<p class="wrap footer-build">The assessment engine is built with Go <span id="go-version">{{.GoVersion}}</span>.</p>
 </footer>
 {{- range .Examples}}
 <template id="example-{{.Key}}">{{.Text}}</template>

@@ -43,7 +43,16 @@
 //     link.href = url and link.click(); in unregisterServiceWorkers,
 //     navigator.serviceWorker.getRegistrations(); in insertReport, one
 //     target.innerHTML = ... whose value names only html, the policy and
-//     createHTML. A second declaration of one of these functions is refused;
+//     createHTML; in copyCommand, the inventory page's copy function (issue
+//     #373), one navigator.clipboard.writeText(...) called in place, and no
+//     other use of clipboard or writeText anywhere. A second declaration of
+//     one of these functions is refused, and so is every use of navigator
+//     but a member base that is no member name itself (navigator. or
+//     navigator?., never o.navigator.) and the right operand of in whose
+//     next token is ) (("x" in navigator), never in navigator = x,
+//     in navigator => x, in navigator++ or in navigator ? a : b), since any other could bind
+//     a stand-in for the browser's navigator these rules key on; the
+//     clipboard and service worker forms take only that navigator;
 //   - Trusted Types: exactly one trustedTypes.createPolicy("shift2eu-report",
 //     ...), its binding never assigned again, and createHTML called only by
 //     insertReport;
