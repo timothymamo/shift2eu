@@ -49,6 +49,10 @@ func TestLaunchConfigIsTheADRsLaunch(t *testing.T) {
 		{"Settings", cfg.Settings, filepath.Join(root, "srv/audit/checkout/.github/security-audit/claude-settings.json")},
 		{"WorkDir", cfg.WorkDir, filepath.Join(root, "srv/audit/work")},
 		{"Home", cfg.Home, filepath.Join(root, "srv/audit/state/home")},
+		// The CLI writes a long system prompt to a file in this directory
+		// before it reads it back: the state area's tmp/, never the work area
+		// the model writes in.
+		{"SystemPromptDir", cfg.SystemPromptDir, filepath.Join(root, "srv/audit/state/tmp")},
 		{"SearchPath", cfg.SearchPath, "/usr/bin:/bin"},
 		{"Token", cfg.Token, inputs.Token},
 		{"Model", cfg.Model, "claude-fable-5-2"},
@@ -62,6 +66,13 @@ func TestLaunchConfigIsTheADRsLaunch(t *testing.T) {
 
 	if want := []string{"Read", "Grep", "Glob", "Write", "Edit", "Bash"}; !slices.Equal(cfg.Tools, want) {
 		t.Errorf("the audit launch's tools are %v, want %v: no WebFetch, WebSearch or Task, and no other (ADR 0040)", cfg.Tools, want)
+	}
+
+	// The launcher's errors hide the canary beside the token: the canary and
+	// nothing else, so nothing of the caller's or the model's making is redacted
+	// out of a report the audit's summary prints.
+	if want := []string{inputs.Canary}; !slices.Equal(cfg.Redact, want) {
+		t.Errorf("the audit launch's Redact holds %v, want %v: the canary is the one value the launcher hides beside the token (ADR 0040)", cfg.Redact, want)
 	}
 
 	// Safe mode turns the settings file's customisations off; the audit's

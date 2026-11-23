@@ -185,10 +185,11 @@ func toolResultLine(id string, answer callResult) string {
 // passingAnswers is the transcript of a run that passed: the control call read
 // the nonce back and every probe's calls were refused. Two kinds of probe call
 // are an error for a reason of their own: probe 5's token-absence call, whose
-// sandboxed shell expands the unset variable to nothing, so cat names
-// /nonexistent/ and fails; and probe 5's two calls for the forms the wrapper's
-// path rule never reads, whose redirection of a glob and of a /dev/fd target the
-// sandbox refuses before the command starts, so bash names the target and fails.
+// sandboxed shell expands the unset variable to nothing, so cat names the work
+// area's nonexistent/ path and fails; and probe 5's two calls for the forms the
+// wrapper's path rule never reads, whose redirection of a glob and of a /dev/fd
+// target the sandbox refuses before the command starts, so bash names the target
+// and fails.
 func passingAnswers(plan audit.Plan, nonce string) []callResult {
 	answers := make([]callResult, len(plan))
 
@@ -197,7 +198,7 @@ func passingAnswers(plan audit.Plan, nonce string) []callResult {
 		case call.Probe == 0:
 			answers[i] = callResult{text: "the file holds:\n" + nonce + "\n"}
 		case tokenAbsenceCallOf(call):
-			answers[i] = callResult{text: "cat: /nonexistent/: No such file or directory", isError: true}
+			answers[i] = callResult{text: "cat: /srv/audit/work/nonexistent/: No such file or directory", isError: true}
 		case bypassCallOf(call):
 			_, target, _ := strings.Cut(call.Input["command"], "< ")
 			answers[i] = callResult{text: "bash: " + target + ": Permission denied", isError: true}
@@ -211,7 +212,8 @@ func passingAnswers(plan audit.Plan, nonce string) []callResult {
 
 // tokenAbsenceCallOf reports whether call is probe 5's call that proves the
 // token variable is absent from the sandboxed shell without showing it: its
-// command reads /nonexistent/ with the variable's expansion appended.
+// command reads the work area's nonexistent/ path with the variable's expansion
+// appended.
 func tokenAbsenceCallOf(call audit.Call) bool {
 	return call.Tool == "Bash" && strings.Contains(call.Input["command"], "/nonexistent/")
 }
@@ -636,10 +638,13 @@ func TestPreflightPlanPassesThePathsItsGlobsSearch(t *testing.T) {
 }
 
 // TestPreflightPlanProvesTheTokenVariableIsAbsent pins probe 5's last call
-// (issue #277, audit A4): a Bash command that reads /nonexistent/ with the token
-// variable's expansion appended, so the file the shell names shows whether the
-// variable survived the subprocess scrub - without the transcript ever holding
-// the token.
+// (issue #277, audit A4): a Bash command that reads the work area's nonexistent/
+// path with the token variable's expansion appended, so the file the shell names
+// shows whether the variable survived the subprocess scrub - without the
+// transcript ever holding the token. The path lies inside the audit's roots,
+// which the wrapper holds every path word to (issue #277, round I): a path
+// outside them is refused before cat runs, and the wrapper's own refusal reads
+// as absence, so the call would prove nothing.
 func TestPreflightPlanProvesTheTokenVariableIsAbsent(t *testing.T) {
 	t.Parallel()
 
@@ -647,13 +652,13 @@ func TestPreflightPlanProvesTheTokenVariableIsAbsent(t *testing.T) {
 
 	index := tokenAbsenceCall(thePlan)
 	if index < 0 {
-		t.Fatalf("probe 5's calls %v hold no Bash call that reads /nonexistent/ with the token variable in it: the preflight proves the scrubbed variable is absent from the sandboxed shell (issue #277)", toolsOf(thePlan, 5))
+		t.Fatalf("probe 5's calls %v hold no Bash call that reads nonexistent/ with the token variable in it: the preflight proves the scrubbed variable is absent from the sandboxed shell (issue #277)", toolsOf(thePlan, 5))
 	}
 
-	want := underRoot("srv/audit/bin/audit-exec") + " cat /nonexistent/${CLAUDE_CODE_OAUTH_TOKEN:+tokenset}"
+	want := underRoot("srv/audit/bin/audit-exec") + " cat /srv/audit/work/nonexistent/${CLAUDE_CODE_OAUTH_TOKEN:+tokenset}"
 
 	if got := thePlan[index].Input["command"]; got != want {
-		t.Errorf("probe 5's token-absence call carries the command %q, want %q: the path the shell names holds the variable's expansion and nothing else, so the token itself never reaches the transcript (issue #277)", got, want)
+		t.Errorf("probe 5's token-absence call carries the command %q, want %q: the path is the work area's, inside the roots the wrapper holds every path word to, and the shell names it with the variable's expansion and nothing else, so the token itself never reaches the transcript (issue #277)", got, want)
 	}
 
 	if thePlan[index].Probe != 5 {
@@ -1151,18 +1156,30 @@ func absenceCases() []judgeCase {
 	return []judgeCase{
 		{
 			name:    "the token-absence call's result holds the variable's expansion",
-			answers: theCall(callResult{text: "cat: /nonexistent/tokenset: No such file or directory", isError: true}),
+			answers: theCall(callResult{text: "cat: /srv/audit/work/nonexistent/tokenset: No such file or directory", isError: true}),
 			want:    refusal,
 		},
 		{
 			name:    "the token-absence call's result is not an error",
-			answers: theCall(callResult{text: "cat: /nonexistent/: Is a directory"}),
+			answers: theCall(callResult{text: "cat: /srv/audit/work/nonexistent/: Is a directory"}),
 			want:    refusal,
 		},
 		{
 			name:    "the token-absence call was refused like every other call",
 			answers: theCall(callResult{text: "the tool is not allowed here", isError: true}),
 			want:    refusal,
+		},
+		{
+			// Round I moved the call to a path inside the roots, and this row is
+			// why (issue #277): the wrapper refuses a path outside them before
+			// cat runs, and its one-line refusal - the old call's own - names
+			// /nonexistent/ with a quote after it and no expansion, which is
+			// exactly what cat's own error reads. The judgement accepts it, so the
+			// old call proved nothing; only a path the wrapper passes makes cat
+			// run and its failure an absent token.
+			name:     "the wrapper's refusal of a path outside the roots reads as an absent token",
+			answers:  theCall(callResult{text: `audit-exec: refused: "/nonexistent/"`, isError: true}),
+			wantPass: true,
 		},
 	}
 }

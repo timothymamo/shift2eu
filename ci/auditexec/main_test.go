@@ -705,6 +705,148 @@ func TestRunRefusesTheOptionsThatWriteOrReadElsewhere(t *testing.T) {
 		}
 	})
 
+	// jq reads no program file (issue #277, round I): -f and --from-file name a
+	// file holding a jq program, and a program's own import and include are
+	// never read by the module check above, which sees the line alone - so a
+	// program file is the module system by another name. f is refused in any
+	// single-dash word - alone, with the file attached (-fp.jq), in a cluster
+	// (-nf) - and --from-file alone, in its =value form and abbreviated. The
+	// audit's filters come on the line.
+	t.Run("jq's program file", func(t *testing.T) {
+		t.Parallel()
+
+		cases := []struct {
+			name string
+			args []string
+			// wantNamed is the word the one stderr line names.
+			wantNamed string
+		}{
+			{
+				name:      "-f in a cluster of allowed letters",
+				args:      []string{"jq", "-nf", "p.jq"},
+				wantNamed: "-nf",
+			},
+			{
+				name:      "-f alone",
+				args:      []string{"jq", "-n", "-f", "p.jq"},
+				wantNamed: "-f",
+			},
+			{
+				name:      "-f with the file attached",
+				args:      []string{"jq", "-fp.jq", "-n"},
+				wantNamed: "-fp.jq",
+			},
+			{
+				name:      "-f with a file inside the roots",
+				args:      []string{"jq", "-f", "/srv/audit/work/p.jq", "-n"},
+				wantNamed: "-f",
+			},
+			{
+				name:      "--from-file in its =value form",
+				args:      []string{"jq", "--from-file=p.jq", "-n"},
+				wantNamed: "--from-file=p.jq",
+			},
+			{
+				name:      "--from-file with the file as the next word",
+				args:      []string{"jq", "--from-file", "p.jq"},
+				wantNamed: "--from-file",
+			},
+			{
+				name:      "--from-f, an abbreviation of --from-file",
+				args:      []string{"jq", "--from-f", "p.jq"},
+				wantNamed: "--from-f",
+			},
+		}
+
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				t.Parallel()
+
+				code, stderr, recorder := runWrapper(t, tc.args)
+
+				if code != refusedExit {
+					t.Errorf("run(%q) = %d, want %d: jq reads the filters of the line, no program file (stderr %q)", tc.args, code, refusedExit, stderr)
+				}
+
+				if recorder.called {
+					t.Errorf("run(%q) exec'd %q; a refused line runs nothing", tc.args, recorder.call.argv)
+				}
+
+				if !strings.Contains(stderr, tc.wantNamed) {
+					t.Errorf("run(%q) wrote %q to stderr, want it to name the refused word %q", tc.args, stderr, tc.wantNamed)
+				}
+			})
+		}
+	})
+
+	// No command reads a list of paths from a file (issue #277, round I): the
+	// path rule reads the words of the line, and these options make a command
+	// open the paths a file names instead, so the rule never sees them. wc's
+	// --files0-from is refused alone, with its value as the next word and
+	// abbreviated; sha256sum's -c and --check, which read the digests' file
+	// names, alone and inside a cluster.
+	t.Run("a command that reads its paths from a file", func(t *testing.T) {
+		t.Parallel()
+
+		cases := []struct {
+			name string
+			args []string
+			// wantNamed is the word the one stderr line names.
+			wantNamed string
+		}{
+			{
+				name:      "wc --files0-from in its =value form",
+				args:      []string{"wc", "--files0-from=list"},
+				wantNamed: "--files0-from",
+			},
+			{
+				name:      "wc --files0-from with its value as the next word",
+				args:      []string{"wc", "--files0-from", "list"},
+				wantNamed: "--files0-from",
+			},
+			{
+				name:      "wc --files0, an abbreviation of --files0-from",
+				args:      []string{"wc", "--files0", "list"},
+				wantNamed: "--files0",
+			},
+			{
+				name:      "sha256sum -c",
+				args:      []string{"sha256sum", "-c", "sums"},
+				wantNamed: "-c",
+			},
+			{
+				name:      "sha256sum --check",
+				args:      []string{"sha256sum", "--check", "sums"},
+				wantNamed: "--check",
+			},
+			{
+				name:      "sha256sum -c in a cluster",
+				args:      []string{"sha256sum", "-bc", "sums"},
+				wantNamed: "-bc",
+			},
+		}
+
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				t.Parallel()
+
+				code, stderr, recorder := runWrapper(t, tc.args)
+
+				if code != refusedExit {
+					t.Errorf("run(%q) = %d, want %d: the command reads its paths from the line alone (stderr %q)", tc.args, code, refusedExit, stderr)
+				}
+
+				if recorder.called {
+					t.Errorf("run(%q) exec'd %q; a refused line runs nothing", tc.args, recorder.call.argv)
+				}
+
+				if !strings.Contains(stderr, tc.wantNamed) {
+					t.Errorf("run(%q) wrote %q to stderr, want it to name the refused word %q", tc.args, stderr, tc.wantNamed)
+				}
+			})
+		}
+	})
+
 	t.Run("sort -o", func(t *testing.T) {
 		t.Parallel()
 
@@ -1460,6 +1602,25 @@ func TestRunTakesTheOptionsThatOnlyRead(t *testing.T) {
 			name:     "jq's own filter over a check's output",
 			args:     []string{"jq", ".[] | .id", "/srv/audit/checks/a.json"},
 			wantPath: "/usr/bin/jq",
+		},
+		{
+			// jq's program file is refused (issue #277, round I), so a filter
+			// on the line over the result file runs as it is.
+			name:     "jq's filter over the result file, no program file",
+			args:     []string{"jq", "-r", ".findings", "/srv/audit/work/result.json"},
+			wantPath: "/usr/bin/jq",
+		},
+		{
+			// wc and sha256sum read their paths from the line: no
+			// --files0-from, no --check (issue #277, round I).
+			name:     "wc of a file in the work area",
+			args:     []string{"wc", "-l", "/srv/audit/work/x"},
+			wantPath: "/usr/bin/wc",
+		},
+		{
+			name:     "sha256sum of a file in the work area",
+			args:     []string{"sha256sum", "/srv/audit/work/x"},
+			wantPath: "/usr/bin/sha256sum",
 		},
 		{
 			name:     "uniq with one operand",

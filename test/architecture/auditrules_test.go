@@ -31,6 +31,7 @@ const (
 	auditMainRule       = "audit-main"
 	auditImportersRule  = "audit-library-importers"
 	auditLibraryPackage = "github.com/timothymamo/shift2eu/ci/internal/audit"
+	auditMainPackage    = "github.com/timothymamo/shift2eu/ci/auditrun"
 	claudeCodeLauncher  = "github.com/timothymamo/shift2eu/ci/internal/claudecode"
 	auditLibraryScope   = "**/ci/internal/audit/**"
 	auditMainScope      = "**/ci/auditrun/**"
@@ -46,8 +47,10 @@ const (
 
 // TestAuditPackagesAreHeldByStrictRules pins the two strict rules: each names
 // the packages of the audit's own imports one by one, admits no $gostd, denies
-// the packages that run a program outside the launcher, and lets the audit reach
-// the shared Claude Code launcher.
+// what would put the audit's decisions in code nobody reviewed, and lets each
+// package reach what it runs with - the library the shared Claude Code launcher,
+// the launcher the library. The library imports os/exec on purpose, to run the
+// wrapper and the CLI, so it is no package of the refused list.
 func TestAuditPackagesAreHeldByStrictRules(t *testing.T) {
 	t.Parallel()
 
@@ -60,11 +63,14 @@ func TestAuditPackagesAreHeldByStrictRules(t *testing.T) {
 		name string
 		// scope is the packages pattern the rule holds.
 		scope string
+		// held is the package that pattern holds: the one the rule is about, and
+		// the one a failure names.
+		held string
 		// wantAllowed is the package of the module the rule has to allow.
 		wantAllowed string
 	}{
-		{name: auditLibraryRule, scope: auditLibraryScope, wantAllowed: claudeCodeLauncher},
-		{name: auditMainRule, scope: auditMainScope, wantAllowed: auditLibraryPackage},
+		{name: auditLibraryRule, scope: auditLibraryScope, held: auditLibraryPackage, wantAllowed: claudeCodeLauncher},
+		{name: auditMainRule, scope: auditMainScope, held: auditMainPackage, wantAllowed: auditLibraryPackage},
 	}
 
 	for _, tc := range cases {
@@ -74,17 +80,17 @@ func TestAuditPackagesAreHeldByStrictRules(t *testing.T) {
 			rule := auditRuleNamed(t, rules, tc.name)
 
 			if rule.ListMode != "strict" {
-				t.Errorf("the depguard rule %s has list-mode %q, want strict: an allow list says what the audit's packages may import, so a package added to the standard library later is refused until the list names it", tc.name, rule.ListMode)
+				t.Errorf("the depguard rule %s has list-mode %q, want strict: an allow list says what %s may import, so a package added to the standard library later is refused until the list names it", tc.name, rule.ListMode, tc.held)
 			}
 
 			if !slices.Contains(rule.Files, tc.scope) {
-				t.Errorf("the depguard rule %s holds %v, want it to hold %q: the rule is what keeps that package to its own list", tc.name, rule.Files, tc.scope)
+				t.Errorf("the depguard rule %s holds %v, want it to hold %q: the rule is what keeps %s to its own list", tc.name, rule.Files, tc.scope, tc.held)
 			}
 
 			allows := allowsPackages(rule.Allow)
 
 			if slices.Contains(rule.Allow, gostdPackage) {
-				t.Errorf("the depguard rule %s allows $gostd, which admits every standard package; name the packages the package imports today, each ending in $", tc.name)
+				t.Errorf("the depguard rule %s allows $gostd, which admits every standard package; name the packages %s imports today, each ending in $", tc.name, tc.held)
 			}
 
 			for _, entry := range rule.Allow {
@@ -94,7 +100,7 @@ func TestAuditPackagesAreHeldByStrictRules(t *testing.T) {
 			}
 
 			if !allows(tc.wantAllowed) {
-				t.Errorf("the depguard rule %s does not allow %s, which the audit's code imports: the launcher of the CLI the audit runs (ADR 0040)", tc.name, tc.wantAllowed)
+				t.Errorf("the depguard rule %s does not allow %s, which %s imports: the launcher of the CLI the audit runs (ADR 0040)", tc.name, tc.wantAllowed, tc.held)
 			}
 
 			// The audit's containment is what these packages hold: a raw system
@@ -102,7 +108,7 @@ func TestAuditPackagesAreHeldByStrictRules(t *testing.T) {
 			// would put the audit's decisions in code nobody reviewed.
 			for _, denied := range []string{"syscall", "unsafe", "plugin", "runtime/cgo"} {
 				if allows(denied) {
-					t.Errorf("the depguard rule %s allows %s, which the audit's packages may not import", tc.name, denied)
+					t.Errorf("the depguard rule %s allows %s, which %s may not import", tc.name, denied, tc.held)
 				}
 			}
 		})
