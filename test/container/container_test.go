@@ -719,6 +719,269 @@ func TestFinalStageIsMinimalAndNonRoot(t *testing.T) {
 	assertMinimalNonRootStage(t, final, "the final stage", cliBinaryPath)
 }
 
+// imageDocDir is where the image keeps the licence and the NOTICE attribution
+// Apache-2.0 section 4 asks a redistribution to carry (issue #495).
+const imageDocDir = "/usr/share/doc/shift2eu"
+
+// shippedLicenseFiles are the files the image ships from the repository root,
+// each at the path in the image.
+var shippedLicenseFiles = []struct{ name, path string }{
+	{name: "LICENSE", path: imageDocDir + "/LICENSE"},
+	{name: "NOTICE", path: imageDocDir + "/NOTICE"},
+}
+
+// TestTheImageShipsLicenseAndNotice pins issue #495: the image is a
+// redistribution of the project, so Apache-2.0 section 4 asks it to carry the
+// licence and the NOTICE attribution beside the binary it publishes. The final
+// stage copies both from the build context into imageDocDir, .dockerignore
+// leaves them in the context, so the COPY finds them, and a GoReleaser docker
+// section, were the release to build the image, puts them into the context it
+// sends to the daemon.
+//
+// The check runs over the repository's build files and over fixtures that
+// carry one fault each: a file the stage does not copy, a file it copies
+// somewhere else, a context that leaves it out, and a GoReleaser docker entry
+// that names one file alone. A check that cannot tell those apart would pass on
+// an image that ships neither.
+func TestTheImageShipsLicenseAndNotice(t *testing.T) {
+	t.Parallel()
+
+	// A build that carries both files, which the faults below are made from.
+	const fixture = `FROM golang:1.27.4-alpine AS build
+RUN go build -o /out/shift2eu ./cmd/shift2eu
+
+FROM gcr.io/distroless/static-debian13:nonroot
+COPY --from=build /out/shift2eu /shift2eu
+COPY LICENSE NOTICE /usr/share/doc/shift2eu/
+`
+
+	const bothFiles = "COPY LICENSE NOTICE /usr/share/doc/shift2eu/\n"
+
+	tests := []struct {
+		name string
+		// dockerfile is the Dockerfile the check reads.
+		dockerfile string
+		// dockerignore is the .dockerignore the check reads, and "" skips
+		// that half of the check.
+		dockerignore string
+		// goreleaser is the .goreleaser.yaml the check reads for a docker
+		// section, and "" skips that half of the check.
+		goreleaser string
+		// want holds parts of the findings the check must return; none means
+		// the image ships both files.
+		want []string
+	}{
+		{
+			name:         "the repository's build files",
+			dockerfile:   readRepoFile(t, dockerfileName),
+			dockerignore: readRepoFile(t, dockerignoreName),
+			goreleaser:   readRepoFile(t, goreleaserName),
+		},
+		{
+			name:         "a fixture that ships both files",
+			dockerfile:   fixture,
+			dockerignore: "*\n!LICENSE\n!NOTICE\n",
+			goreleaser:   "builds:\n  - id: shift2eu\n",
+		},
+		{
+			name:         "a Dockerfile that copies neither file",
+			dockerfile:   strings.Replace(fixture, bothFiles, "", 1),
+			dockerignore: "*\n!LICENSE\n!NOTICE\n",
+			want:         []string{"copies no LICENSE", "copies no NOTICE"},
+		},
+		{
+			name:         "a Dockerfile that copies NOTICE alone",
+			dockerfile:   strings.Replace(fixture, bothFiles, "COPY NOTICE /usr/share/doc/shift2eu/\n", 1),
+			dockerignore: "*\n!LICENSE\n!NOTICE\n",
+			want:         []string{"copies no LICENSE"},
+		},
+		{
+			name:         "a Dockerfile that copies both files elsewhere",
+			dockerfile:   strings.Replace(fixture, bothFiles, "COPY LICENSE NOTICE /licenses/\n", 1),
+			dockerignore: "*\n!LICENSE\n!NOTICE\n",
+			want:         []string{`LICENSE to "/licenses/LICENSE"`, `NOTICE to "/licenses/NOTICE"`},
+		},
+		{
+			name:         "a build context that leaves both files out",
+			dockerfile:   fixture,
+			dockerignore: "*\n!go.mod\n!cmd/\n!internal/\n",
+			want:         []string{"leaves LICENSE out", "leaves NOTICE out"},
+		},
+		{
+			name:         "a GoReleaser docker entry that names LICENSE alone",
+			dockerfile:   fixture,
+			dockerignore: "*\n!LICENSE\n!NOTICE\n",
+			goreleaser:   "dockers_v2:\n  - id: shift2eu\n    dockerfile: Dockerfile\n    extra_files:\n      - LICENSE\n",
+			want:         []string{"names no NOTICE"},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			findings := licenseFileFindings(t, tc.name, tc.dockerfile, tc.dockerignore, tc.goreleaser)
+
+			for _, finding := range findings {
+				if !slices.ContainsFunc(tc.want, func(want string) bool { return strings.Contains(finding, want) }) {
+					t.Errorf("unexpected finding: %s", finding)
+				}
+			}
+
+			for _, want := range tc.want {
+				if !slices.ContainsFunc(findings, func(finding string) bool { return strings.Contains(finding, want) }) {
+					t.Errorf("no finding mentions %q, got %q", want, findings)
+				}
+			}
+		})
+	}
+}
+
+// licenseFileFindings returns what name, one build's Dockerfile, .dockerignore
+// and .goreleaser.yaml, leaves of issue #495's promise that the image ships
+// LICENSE and NOTICE: a file the final stage does not copy from the build
+// context into imageDocDir, a file .dockerignore keeps out of that context, and
+// a file a GoReleaser docker section does not put into the context it sends to
+// the daemon. An empty dockerignore or goreleaser skips that half of the check.
+func licenseFileFindings(t *testing.T, name, dockerfile, dockerignore, goreleaser string) []string {
+	t.Helper()
+
+	var findings []string
+
+	destinations := contextCopyDestinations(finalStage(t, dockerfileInstructions(t, dockerfile)))
+
+	for _, file := range shippedLicenseFiles {
+		destination, copied := destinations[file.name]
+
+		switch {
+		case !copied:
+			findings = append(findings, fmt.Sprintf("%s: the final stage copies no %s from the build context: want `COPY %s %s`, so the image carries the licence Apache-2.0 section 4 asks every redistribution to keep (issue #495)",
+				name, file.name, file.name, file.path))
+		case destination != file.path:
+			findings = append(findings, fmt.Sprintf("%s: the final stage copies %s to %q, want %q: the image keeps the licence and the NOTICE attribution under %s, where a reader of the image finds them (issue #495)",
+				name, file.name, destination, file.path, imageDocDir))
+		}
+	}
+
+	if dockerignore != "" {
+		patterns := dockerignorePatterns(t, dockerignore)
+
+		for _, file := range shippedLicenseFiles {
+			if excluded, rule := dockerignoreExcludes(patterns, file.name); excluded {
+				findings = append(findings, fmt.Sprintf("%s:%d: the pattern %q leaves %s out of the build context, so the final stage's COPY fails with \"not found\": %s must reach the daemon for the image to ship it (issue #495)",
+					dockerignoreName, rule.line, rule.raw, file.name, file.name))
+			}
+		}
+	}
+
+	for _, section := range imageBuildSections(goreleaser) {
+		for _, file := range shippedLicenseFiles {
+			if !strings.Contains(section, file.name) {
+				findings = append(findings, fmt.Sprintf("%s: the docker section of the release names no %s: GoReleaser sends the daemon only what the section's extra_files names, so the image it builds ships no %s whatever the Dockerfile copies; add %s beside the Dockerfile in extra_files (issue #495)",
+					goreleaserName, file.name, file.name, file.name))
+			}
+		}
+	}
+
+	return findings
+}
+
+// contextCopyDestinations returns where one stage copies each file of the build
+// context: the base name of every source, and the path it lands at, a
+// destination written as a directory joined to the source's base name. A COPY
+// from another stage is not a copy of the context and is skipped, and a stage
+// that copies one file twice keeps the last destination, as Docker does.
+func contextCopyDestinations(stage []instruction) map[string]string {
+	destinations := make(map[string]string)
+
+	for _, in := range stage {
+		if in.keyword() != "COPY" {
+			continue
+		}
+
+		fromStage := false
+
+		var paths []string
+
+		for _, field := range strings.Fields(in.arguments()) {
+			switch {
+			case strings.HasPrefix(field, "--from="):
+				fromStage = true
+			case strings.HasPrefix(field, "--"):
+			default:
+				paths = append(paths, field)
+			}
+		}
+
+		if fromStage || len(paths) < 2 {
+			continue
+		}
+
+		destination := paths[len(paths)-1]
+		for _, source := range paths[:len(paths)-1] {
+			base := path.Base(source)
+
+			switch {
+			case strings.HasSuffix(destination, "/"):
+				destinations[base] = path.Join(destination, base)
+			case len(paths) == 2:
+				destinations[base] = destination
+			}
+		}
+	}
+
+	return destinations
+}
+
+// imageBuildSections returns the body of every top-level docker, dockers or
+// dockers_v2 section of .goreleaser.yaml, the sections that build the image with
+// GoReleaser, comment and blank lines dropped. A release that builds the image
+// with docker build or make image has none, and returns nothing.
+func imageBuildSections(goreleaser string) []string {
+	imageKeys := map[string]bool{"docker": true, "dockers": true, "dockers_v2": true}
+
+	var (
+		sections []string
+		current  []string
+		inImage  bool
+	)
+
+	closeSection := func() {
+		if inImage {
+			sections = append(sections, strings.Join(current, "\n"))
+		}
+
+		current, inImage = nil, false
+	}
+
+	for _, raw := range strings.Split(goreleaser, "\n") {
+		line := strings.TrimRight(raw, "\r")
+		trimmed := strings.TrimSpace(line)
+
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+
+		// A top level key is one that starts in the first column.
+		if !strings.HasPrefix(line, " ") && !strings.HasPrefix(line, "\t") {
+			closeSection()
+
+			key, _, ok := strings.Cut(trimmed, ":")
+			inImage = ok && imageKeys[key]
+
+			continue
+		}
+
+		if inImage {
+			current = append(current, trimmed)
+		}
+	}
+
+	closeSection()
+
+	return sections
+}
+
 // TestTheDockerfileHasNoServerStage pins what issue #393 leaves of PRD #103's
 // milestone 4: the Dockerfile builds the CLI's image alone. A stage named
 // server, the HTTP API's binary, its --listen CMD and its published port are

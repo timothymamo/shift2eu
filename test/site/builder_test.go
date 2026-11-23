@@ -36,6 +36,12 @@ import (
 // every per-page rule the other pages carry.
 var pageNames = []string{"index.html", "inventory.html", "privacy.html", "verify.html"}
 
+// licenseFiles are the files the project redistributes beside its work: the
+// Apache License 2.0 and the NOTICE attribution Apache-2.0 section 4 asks every
+// redistribution to carry (issue #495). They sit at the bundle's root, as at
+// the repository's.
+var licenseFiles = []string{"LICENSE", "NOTICE"}
+
 // assetKinds are the bundle's content-addressed assets: a prefix, the suffix of
 // its file name, and the cache lifetime reason it is addressed by content.
 var assetKinds = []struct{ prefix, suffix string }{
@@ -45,17 +51,15 @@ var assetKinds = []struct{ prefix, suffix string }{
 	{"module", ".js"},
 }
 
-// TestBundleHoldsTheContractFiles pins the bundle's file set: the three pages,
-// the manifest and one content-addressed file of each kind, and nothing else.
-// The site ships no favicon, site/records/ is never bundled (milestone 4 fills
-// it), and a stray file would be deployed without a manifest entry.
-func TestBundleHoldsTheContractFiles(t *testing.T) {
-	t.Parallel()
-
-	bundle := theBundle(t)
+// wantedFileNames returns the bundle's contract set: the pages, the manifest,
+// the one content-addressed file of each kind, and the licence and the NOTICE
+// attribution Apache-2.0 section 4 asks a redistribution to carry (issue #495).
+func wantedFileNames(t *testing.T, bundle *bundle) []string {
+	t.Helper()
 
 	want := slices.Clone(pageNames)
 	want = append(want, "manifest.json")
+	want = append(want, licenseFiles...)
 
 	for _, kind := range assetKinds {
 		name, _ := bundle.asset(t, kind.prefix, kind.suffix)
@@ -64,7 +68,20 @@ func TestBundleHoldsTheContractFiles(t *testing.T) {
 
 	slices.Sort(want)
 
-	if diff := cmp.Diff(want, bundle.files); diff != "" {
+	return want
+}
+
+// TestBundleHoldsTheContractFiles pins the bundle's file set: the three pages,
+// the manifest, the licence and the NOTICE attribution, and one
+// content-addressed file of each kind, and nothing else. The site ships no
+// favicon, site/records/ is never bundled (milestone 4 fills it), and a stray
+// file would be deployed without a manifest entry.
+func TestBundleHoldsTheContractFiles(t *testing.T) {
+	t.Parallel()
+
+	bundle := theBundle(t)
+
+	if diff := cmp.Diff(wantedFileNames(t, bundle), bundle.files); diff != "" {
 		t.Errorf("the bundle's files differ from the contract set (-want +got):\n%s", diff)
 	}
 }
@@ -190,6 +207,69 @@ func TestManifestListsEveryFile(t *testing.T) {
 	if diff := cmp.Diff(want, manifest.Files); diff != "" {
 		t.Errorf("manifest.json's files differ from the bundle's (-want +got):\n%s", diff)
 	}
+}
+
+// TestBundleShipsLicenseAndNotice pins issue #495: the site bundle is a
+// redistribution of the project, so Apache-2.0 section 4 asks it to carry the
+// licence and the NOTICE attribution beside the pages it publishes. The bundle
+// holds both at its root, byte for byte as the repository root holds them, and
+// manifest.json lists each with its SHA-256 like every other file.
+//
+// The archive and the reproducibility criterion cover them too, without a
+// check of their own: TestArchiveHoldsTheBundleWithFixedTimes holds the
+// archive's entries to bundle.files and each entry to the bundle's bytes, and
+// TestTheBundleIsReproducible compares every file and both archives of two
+// builds. A file missing from either half makes those checks fail.
+func TestBundleShipsLicenseAndNotice(t *testing.T) {
+	t.Parallel()
+
+	bundle := theBundle(t)
+	root := theRepositoryRoot(t)
+	manifest := bundle.manifest(t)
+
+	for _, name := range licenseFiles {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			if !slices.Contains(bundle.files, name) {
+				t.Fatalf("the bundle holds no %s: Apache-2.0 section 4 asks every redistribution to carry the licence and the NOTICE attribution, and the site bundle is one (issue #495); the bundle's files are %v",
+					name, bundle.files)
+			}
+
+			want, err := os.ReadFile(filepath.Join(root, name))
+			if err != nil {
+				t.Fatalf("read the repository's %s: %v", name, err)
+			}
+
+			if got := bundle.read(t, name); !bytes.Equal(got, want) {
+				t.Errorf("the bundle's %s holds %d bytes, the repository's %d: the bundle ships the root %s byte for byte, so the copy the site deploys cannot drift from the one the archive and the image carry",
+					name, len(got), len(want), name)
+			}
+
+			entry, listed := manifestEntry(manifest, name)
+
+			switch {
+			case !listed:
+				t.Errorf("manifest.json lists no %s: every file of the bundle has an entry with its SHA-256, so the host serves and caches the file the build wrote (issue #495); manifest.json's files are %v",
+					name, manifest.Files)
+			case entry.SHA256 != sha256Hex(want):
+				t.Errorf("manifest.json lists %s with the SHA-256 %q, want %q, the hash of the file the repository root holds: the manifest is the bundle's own index",
+					name, entry.SHA256, sha256Hex(want))
+			}
+		})
+	}
+}
+
+// manifestEntry returns the manifest's entry for the bundle file name, and
+// whether it lists one.
+func manifestEntry(m manifest, name string) (manifestFile, bool) {
+	for _, entry := range m.Files {
+		if entry.Path == name {
+			return entry, true
+		}
+	}
+
+	return manifestFile{}, false
 }
 
 // TestPagesShowTheVersionAndTheSnapshotDates pins what every page must say about
