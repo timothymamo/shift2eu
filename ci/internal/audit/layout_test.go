@@ -236,7 +236,9 @@ func TestCheckLayoutRefusesAnythingElse(t *testing.T) {
 		{name: "the state area's tmp is missing", mutate: gone(stateTmp)},
 		{name: "the state area's bin is missing", mutate: gone(stateBin)},
 		{name: "the state area's out is missing", mutate: gone(stateOut)},
-		{name: "the wrapper is missing", mutate: gone(wrapper)},
+		// bin/ is read-only, so a case that removes or replaces the wrapper puts
+		// the write bit back first and takes it away again (mutateTree).
+		{name: "the wrapper is missing", mutate: mutateTree(binDir, gone(wrapper))},
 
 		// 0700 keeps the write bit the ADR's layout must not have, without
 		// handing it to group or other.
@@ -267,7 +269,28 @@ func TestCheckLayoutRefusesAnythingElse(t *testing.T) {
 			},
 		},
 
-		{name: "the wrapper is a symbolic link", mutate: linkElsewhere(wrapper)},
+		{name: "the wrapper is a symbolic link", mutate: mutateTree(binDir, linkElsewhere(wrapper))},
+
+		// bin/ holds the wrapper alone, and no one writes it (issue #277,
+		// round J): a second entry there is a program in place of the one the
+		// audit runs, and a write bit there is what would put it there.
+		{
+			name: "the bin directory holds a second file",
+			mutate: mutateTree(binDir, func(t *testing.T, root string) {
+				t.Helper()
+				writeFile(t, filepath.Join(pathOf(root, binDir), "claude"), claudeScript, 0o555)
+			}),
+		},
+		{
+			name: "the bin directory holds a symbolic link",
+			mutate: mutateTree(binDir, func(t *testing.T, root string) {
+				t.Helper()
+				makeSymlink(t, "../state/bin/claude", filepath.Join(pathOf(root, binDir), "claude"))
+			}),
+		},
+		// 0700 keeps the write bit the ADR's layout must not have, without
+		// handing it to group or other.
+		{name: "the bin directory keeps a write bit", mutate: chmodPath(0o700, binDir)},
 		{name: "the checkout copy is a symbolic link", mutate: linkElsewhere(checkout)},
 		{name: "the checks' results are a symbolic link", mutate: linkElsewhere(checks)},
 		{name: "the work area is a symbolic link", mutate: linkElsewhere(work)},
@@ -721,6 +744,11 @@ func writeAuditTree(t *testing.T, root string) {
 
 	writeFile(t, pathOf(root, wrapper), "#!/bin/sh\nexit 126\n", 0o555)
 	writeFile(t, pathOf(root, claudeBin), claudeScript, 0o500)
+
+	// bin/ holds the wrapper alone and is read-only, as the model-free step
+	// leaves it: the wrapper's directory is what a later write would replace
+	// the wrapper in (ADR 0040, issue #277, round J).
+	makeReadOnly(t, pathOf(root, binDir))
 
 	// The checkout copy is a clone, so it carries its own git configuration: a
 	// benign one, which the layout takes.

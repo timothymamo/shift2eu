@@ -1175,9 +1175,12 @@ func TestRunRefusesTheOptionsThatWriteOrReadElsewhere(t *testing.T) {
 //   - a word is a path word when it is a non-option word holding a "/" (a word
 //     with no "/" is a name in the working directory, and "-" alone is stdin);
 //     any word after "--", whatever its first character; an option's value
-//     after its first "="; the rest of a single-dash word after its first
-//     letter, when that rest holds a "/". git's -C is no path word of this
-//     rule: a caller's -C is refused before the rule reads the line (round H).
+//     after its first "="; and, in a single-dash word, every rest of the word
+//     that starts right after one of its leading option letters (git blame
+//     -wS/var/lib/dpkg/status, round J: git gives the cluster's second letter
+//     its value, so the value starts after that letter, not after the first).
+//     git's -C is no path word of this rule: a caller's -C is refused before
+//     the rule reads the line (round H).
 //   - an absolute path word is read as it is, a relative one on a git line is
 //     joined to /srv/audit/checkout - which is what git reads it under the
 //     wrapper's own -C - and a relative one on any other line to
@@ -1240,6 +1243,44 @@ func TestRunHoldsEveryPathWordToTheAllowList(t *testing.T) {
 				name:      "the directory of jq's -L, attached",
 				args:      []string{"jq", "-L/proc/1/root", "x"},
 				wantNamed: "-L/proc/1/root",
+			},
+
+			// Round J's bypass: git reads a cluster of short options one letter
+			// at a time and gives the letter that takes a value the rest of the
+			// word, wherever in the cluster that letter sits. Round I read the
+			// rest after the word's first letter alone, so a value attached to a
+			// later letter - a path, which git reads and echoes through its
+			// error output - got past the rule. Every rest after one of the
+			// word's leading option letters is a candidate path word now, and a
+			// word with a candidate outside the roots is refused.
+			{
+				name:      "the value of git blame's -S, in a cluster of two",
+				args:      []string{"git", "blame", "-wS/var/lib/dpkg/status", "HEAD"},
+				wantNamed: "-wS/var/lib/dpkg/status",
+			},
+			{
+				name:      "the file of git grep's -f, in a cluster of three",
+				args:      []string{"git", "grep", "-nif/run/x", "HEAD"},
+				wantNamed: "-nif/run/x",
+			},
+			{
+				// git ls-files' -X is --exclude-from, another file of the
+				// caller's, attached to the cluster's last letter.
+				name:      "the file of git ls-files' -X, in a cluster of two",
+				args:      []string{"git", "ls-files", "-oX/home/runner/x"},
+				wantNamed: "-oX/home/runner/x",
+			},
+			{
+				// The state area is outside the three roots, and the value is
+				// read as the absolute path it is.
+				name:      "the value of git blame's -S, a path in the state area",
+				args:      []string{"git", "blame", "-wS/srv/audit/state/x", "HEAD"},
+				wantNamed: "-wS/srv/audit/state/x",
+			},
+			{
+				name:      "the file of git grep's -f, a path in /tmp",
+				args:      []string{"git", "grep", "-nif/tmp/x", "HEAD"},
+				wantNamed: "-nif/tmp/x",
 			},
 			{
 				name:      "a path into the runner's home",
@@ -1497,6 +1538,28 @@ func TestRunHoldsEveryPathWordToTheAllowList(t *testing.T) {
 				name:     "a relative path inside the work directory",
 				args:     []string{"cat", "./x"},
 				wantPath: "/usr/bin/cat",
+			},
+			{
+				// Round J's other side: only the word's leading option letters
+				// start a value, so the letters inside a value are no option
+				// letters, and this word's one value lies in the work area.
+				name:     "git grep's -f with its value in the work area",
+				args:     []string{"git", "grep", "-if/srv/audit/work/p", "HEAD"},
+				wantPath: "/usr/bin/git",
+			},
+			{
+				// git blame's -S takes the absolute path its value is, and that
+				// path is in the work area.
+				name:     "git blame's -S with its value in the work area",
+				args:     []string{"git", "blame", "-S/srv/audit/work/revs", "HEAD"},
+				wantPath: "/usr/bin/git",
+			},
+			{
+				// A pattern and an option hold no path word, so a line whose
+				// one non-option word is a pattern reads only.
+				name:     "git grep with a pattern and no path",
+				args:     []string{"git", "grep", "-n", "-e", "x"},
+				wantPath: "/usr/bin/git",
 			},
 		}
 
