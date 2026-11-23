@@ -10,14 +10,18 @@
 package deploy_test
 
 import (
+	"bufio"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // seenRequest is what a fake server saw of one request: everything a test
@@ -27,8 +31,12 @@ type seenRequest struct {
 	Method string
 	// Path is the request's path, without the query.
 	Path string
-	// Query is the request's query.
+	// Query is the request's query, decoded.
 	Query url.Values
+	// RawQuery is the request's query as it was sent, before decoding, so a
+	// test can see how a value is encoded on the wire rather than what it
+	// decodes to.
+	RawQuery string
 	// Header is the request's headers.
 	Header http.Header
 	// Body is the bytes of the request's body.
@@ -75,11 +83,12 @@ func (s *fakeServer) serve(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(r.Body)
 
 	received := seenRequest{
-		Method: r.Method,
-		Path:   r.URL.Path,
-		Query:  r.URL.Query(),
-		Header: r.Header.Clone(),
-		Body:   body,
+		Method:   r.Method,
+		Path:     r.URL.Path,
+		Query:    r.URL.Query(),
+		RawQuery: r.URL.RawQuery,
+		Header:   r.Header.Clone(),
+		Body:     body,
 	}
 
 	s.mu.Lock()
@@ -205,6 +214,102 @@ func listResponder(t *testing.T, pages ...[]byte) func(seenRequest) seenResponse
 
 		return seenResponse{Status: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/xml"}}, Body: page}
 	}
+}
+
+// rawServer is a fake host that is a bare net.Listener, not a net/http server:
+// it answers every request it accepts with the same bytes and closes the
+// connection. A test uses it to hand Deploy an answer net/http cannot parse, so
+// the transport error's text is text the server wrote.
+type rawServer struct {
+	// Answer is what every connection is answered with.
+	Answer string
+
+	listener net.Listener
+}
+
+// newRawServer returns a raw host answering every request with answer, and
+// closed when the test ends.
+func newRawServer(t *testing.T, answer string) *rawServer {
+	t.Helper()
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen for the fake host: %v", err)
+	}
+
+	server := &rawServer{Answer: answer, listener: listener}
+
+	accepted := make(chan struct{})
+
+	go func() {
+		defer close(accepted)
+
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+
+			server.serve(conn)
+		}
+	}()
+
+	t.Cleanup(func() {
+		_ = listener.Close()
+		<-accepted
+	})
+
+	return server
+}
+
+// URL returns the base URL of the raw host.
+func (s *rawServer) URL() string {
+	return "http://" + s.listener.Addr().String()
+}
+
+// serve reads one request's head and body, so the client has finished writing
+// before the answer, then writes the answer and closes the connection.
+func (s *rawServer) serve(conn net.Conn) {
+	defer func() { _ = conn.Close() }()
+
+	if err := conn.SetDeadline(time.Now().Add(10 * time.Second)); err != nil {
+		return
+	}
+
+	reader := bufio.NewReader(conn)
+
+	var length int
+
+	for {
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			return
+		}
+
+		if line == "\r\n" {
+			break
+		}
+
+		name, value, ok := strings.Cut(line, ":")
+		if !ok || !strings.EqualFold(strings.TrimSpace(name), "Content-Length") {
+			continue
+		}
+
+		n, err := strconv.Atoi(strings.TrimSpace(value))
+		if err != nil {
+			return
+		}
+
+		length = n
+	}
+
+	if length > 0 {
+		if _, err := io.CopyN(io.Discard, reader, int64(length)); err != nil {
+			return
+		}
+	}
+
+	_, _ = io.WriteString(conn, s.Answer)
 }
 
 // listRequests returns the requests a store received that are bucket listings.

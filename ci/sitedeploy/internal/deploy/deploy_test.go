@@ -143,9 +143,9 @@ func TestDeployUploadsTheAssetsThenTheManifestThenThePages(t *testing.T) {
 }
 
 // TestDeployStopsAtTheFirstFailedUpload pins doc.go's step 4 for every object
-// uploaded before the pages: an upload that fails stops the run with an error
-// wrapping ErrUpload, and no manifest.json and no page is PUT at all, so the
-// site keeps serving the previous release.
+// uploaded before the pages and for a page: an upload that fails stops the run
+// with an error wrapping ErrUpload, and no object after the failing one is PUT
+// at all, so the site keeps serving the previous release.
 func TestDeployStopsAtTheFirstFailedUpload(t *testing.T) {
 	t.Parallel()
 
@@ -158,6 +158,7 @@ func TestDeployStopsAtTheFirstFailedUpload(t *testing.T) {
 		{name: "the toolchain's script", key: assetName("wasm_exec", ".js", []byte(wasmExecBody))},
 		{name: "the module script", key: assetName("module", ".js", moduleBody)},
 		{name: "the manifest", key: deploy.ManifestName},
+		{name: "a page", key: "inventory.html"},
 	}
 
 	for _, tc := range tests {
@@ -178,20 +179,15 @@ func TestDeployStopsAtTheFirstFailedUpload(t *testing.T) {
 				t.Fatalf("Deploy with %s failing = %v, want an error wrapping ErrUpload", tc.name, err)
 			}
 
-			keys := dc.store.putKeys()
+			order := wantUploadOrder(dc.bundle)
 
-			if !slices.Contains(keys, tc.key) {
-				t.Errorf("the store was never sent a PUT of %q, want the failing upload attempted: the objects PUT were %q", tc.key, keys)
+			failed := slices.Index(order, tc.key)
+			if failed < 0 {
+				t.Fatalf("the test's failing key %q is no object of the upload order %q", tc.key, order)
 			}
 
-			for _, key := range keys {
-				if strings.HasSuffix(key, ".html") {
-					t.Errorf("the page %q was PUT although %s had failed, want the run stopped at the first failed upload: the site would serve new pages over a partially uploaded bundle", key, tc.name)
-				}
-			}
-
-			if tc.key != deploy.ManifestName && slices.Contains(keys, deploy.ManifestName) {
-				t.Errorf("manifest.json was PUT although %s had failed, want the run stopped before it: the objects PUT were %q", tc.name, keys)
+			if diff := cmp.Diff(order[:failed+1], dc.store.putKeys()); diff != "" {
+				t.Errorf("the objects Deploy PUT, in order (-want +got):\n%s\nwant the run stopped at the first failed upload, so nothing after %q is PUT: a page uploaded after a failure would serve a page of a bundle that is not there", diff, tc.key)
 			}
 		})
 	}
@@ -366,6 +362,175 @@ func TestDeployNeverPrintsTheKey(t *testing.T) {
 			if strings.Contains(text, key) {
 				t.Errorf("%s holds %q, want neither half of the key: a hostile server response echoing the key back must not be copied into anything the job prints (%s)", where, key, text)
 			}
+		}
+	}
+
+	// The assertions above are only worth something if the run did print the
+	// failed request and the guard's warning: an empty log and an empty summary
+	// hold no key for the wrong reason.
+	var failedPut bool
+
+	for _, line := range logLines(dc.log.String()) {
+		if strings.HasPrefix(line, "PUT ") && strings.Contains(line, " 403") {
+			failedPut = true
+		}
+	}
+
+	if !failedPut {
+		t.Errorf("the log reads %q, want a PUT line holding the status 403: the run logs every request, the failed ones included (doc.go, Config.Log)", dc.log.String())
+	}
+
+	summary := dc.summary.String()
+
+	if strings.TrimSpace(summary) == "" {
+		t.Fatalf("the summary is empty, want the rollback guard's notice or warning: a failed upload must not swallow what the run already wrote, so the key's redaction is pinned against a summary a maintainer reads")
+	}
+
+	if !strings.Contains(summary, "> [!NOTE]") && !strings.Contains(summary, "> [!WARNING]") {
+		t.Errorf("the summary reads %q, want the rollback guard's notice or warning: the guard's verdict is what the summary opens with", summary)
+	}
+}
+
+// TestDeployNeverPrintsWhatAServerWrote pins doc.go's "The key" against a
+// server's own bytes: a transport error's text is whatever net/http makes of the
+// answer, and net/http quotes the server's status line back. None of it may
+// reach the error, the log or the summary, whatever the server wrote.
+func TestDeployNeverPrintsWhatAServerWrote(t *testing.T) {
+	t.Parallel()
+
+	// The one token net/http reads as the response's status code holds the
+	// marker and both halves of the key, so its parse error quotes them today:
+	// HTTP/1.1 MARKER-<access key>-<secret key> 2OO.
+	statusLine := "HTTP/1.1 MARKER-" + testAccessKey + "-" + testSecretKey + " 2OO\r\n\r\n"
+
+	tests := []struct {
+		name string
+		// store reports whether the raw host answers the object store instead of
+		// the live page.
+		store bool
+		// listBucket turns the listing on, so the store's first request is the
+		// listing rather than a PUT.
+		listBucket bool
+		// wantErr reports whether Deploy must fail: the live page's failure is
+		// only a warning, so that run overwrites.
+		wantErr bool
+	}{
+		{name: "the live page", store: false},
+		{name: "a PUT", store: true, wantErr: true},
+		{name: "the listing", store: true, listBucket: true, wantErr: true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			dc := newDeployCase(t)
+			raw := newRawServer(t, statusLine)
+			dc.config.ListBucket = tc.listBucket
+
+			if tc.store {
+				dc.config.Endpoint = raw.URL()
+			} else {
+				dc.config.LivePage = raw.URL() + "/"
+			}
+
+			err := dc.deploy(t)
+
+			if tc.wantErr && err == nil {
+				t.Fatalf("Deploy against a raw host answering an unparseable status line = nil, want an error: a transport error to the store fails the run")
+			}
+
+			if !tc.wantErr && err != nil {
+				t.Fatalf("Deploy with an unreadable live page = %v, want nil: the guard overwrites and warns when it cannot read the page", err)
+			}
+
+			errorText := ""
+			if err != nil {
+				errorText = err.Error()
+			}
+
+			written := map[string]string{
+				"the error":   errorText,
+				"the log":     dc.log.String(),
+				"the summary": dc.summary.String(),
+			}
+
+			for where, text := range written {
+				for _, secret := range []string{"MARKER", testAccessKey, testSecretKey} {
+					if strings.Contains(text, secret) {
+						t.Errorf("%s holds %q, which only the raw host wrote, want a fixed classification of the transport error (\"timed out\", \"cancelled\", \"transport error\"): net/http's own message quotes the server's status line, so formatting the transport error with %%v puts a server's bytes into what the job prints (%s)",
+							where, secret, text)
+					}
+				}
+			}
+		})
+	}
+}
+
+// TestDeploySignsNoRequestToTheLivePage pins doc.go's step 2, "The guard's GET
+// is never signed": the live page is no S3 host and reads nothing of the key, so
+// the guard's request carries no Authorization header, no X-Amz-Date, no
+// X-Amz-Content-Sha256 and no header holding either half of the key.
+func TestDeploySignsNoRequestToTheLivePage(t *testing.T) {
+	t.Parallel()
+
+	dc := newDeployCase(t)
+
+	if err := dc.deploy(t); err != nil {
+		t.Fatalf("Deploy = %v, want nil for a valid configuration and bundle", err)
+	}
+
+	requests := dc.live.seen()
+	if len(requests) != 1 {
+		t.Fatalf("the live page received %d requests, want one GET: the rollback guard reads it once", len(requests))
+	}
+
+	for _, name := range []string{"Authorization", "X-Amz-Date", "X-Amz-Content-Sha256"} {
+		if got := requests[0].Header.Get(name); got != "" {
+			t.Errorf("the live page's request carries %s %q, want no signing header: the key must never reach the live page's host, which is no S3 store", name, got)
+		}
+	}
+
+	for name, values := range requests[0].Header {
+		for _, value := range values {
+			for _, key := range []string{testAccessKey, testSecretKey} {
+				if strings.Contains(value, key) {
+					t.Errorf("the live page's request carries the header %s: %q, which holds the key %q, want no request to the live page to hold either half of the key", name, value, key)
+				}
+			}
+		}
+	}
+}
+
+// TestDeployFollowsNoStoreRedirect pins the other half of Config.Client's copied
+// policy: a store that answers a PUT with a 307 and a Location follows no
+// redirect, so the signed request is never sent to the second host, and the run
+// stops at that PUT with ErrUpload.
+func TestDeployFollowsNoStoreRedirect(t *testing.T) {
+	t.Parallel()
+
+	dc := newDeployCase(t)
+	elsewhere := newFakeServer(t, nil)
+
+	dc.store.setRespond(func(seenRequest) seenResponse {
+		return seenResponse{
+			Status: http.StatusTemporaryRedirect,
+			Header: http.Header{"Location": []string{elsewhere.Server.URL + "/x"}},
+		}
+	})
+
+	err := dc.deploy(t)
+	if !errors.Is(err, deploy.ErrUpload) {
+		t.Fatalf("Deploy against a store answering a PUT with a 307 = %v, want an error wrapping ErrUpload: a redirect is no successful upload", err)
+	}
+
+	if requests := elsewhere.seen(); len(requests) != 0 {
+		t.Errorf("the redirect's target received %d requests (%q), want none: a followed redirect would carry a signed request to another host", len(requests), elsewhere.paths())
+	}
+
+	for _, key := range dc.store.putKeys() {
+		if strings.HasSuffix(key, ".html") {
+			t.Errorf("the page %q was PUT although the first PUT was redirected, want the run stopped at the first failed upload: a page uploaded after a failure serves a page of a bundle that is not there", key)
 		}
 	}
 }
@@ -584,6 +749,36 @@ func TestDeployRefusesAnInvalidConfigurationOrBundle(t *testing.T) {
 
 				dc.bundle.manifest = manifestOf(t, dc.bundle.version, dc.bundle.files)
 				delete(dc.bundle.files, assetName("page", ".js", []byte(pageBody)))
+				dc.useBundle(t)
+			},
+		},
+		{
+			name: "a manifest with no files",
+			mutate: func(t *testing.T, dc *deployCase) {
+				t.Helper()
+
+				dc.bundle.files = map[string][]byte{}
+				dc.bundle.manifest = []byte(`{"version":"` + dc.bundle.version + `","files":[]}`)
+				dc.useBundle(t)
+			},
+		},
+		{
+			name: "a bundle without index.html",
+			mutate: func(t *testing.T, dc *deployCase) {
+				t.Helper()
+
+				delete(dc.bundle.files, "index.html")
+				dc.bundle.manifest = manifestOf(t, dc.bundle.version, dc.bundle.files)
+				dc.useBundle(t)
+			},
+		},
+		{
+			name: "a bundle with two stylesheets",
+			mutate: func(t *testing.T, dc *deployCase) {
+				t.Helper()
+
+				dc.bundle.files[assetName("style", ".css", []byte(secondStyleBody))] = []byte(secondStyleBody)
+				dc.bundle.manifest = manifestOf(t, dc.bundle.version, dc.bundle.files)
 				dc.useBundle(t)
 			},
 		},

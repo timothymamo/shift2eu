@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -150,42 +151,145 @@ func TestListBucket(t *testing.T) {
 	t.Run("hostile keys never become a write or a delete", func(t *testing.T) {
 		t.Parallel()
 
-		dc := newDeployCase(t)
-		dc.config.ListBucket = true
+		// longKey holds the access key straddling byte 64 of the object name, so a
+		// cut to 64 bytes before scrubbing would print a prefix of the key; the
+		// other keys are dangerous if they became requests of their own, and one
+		// starts with a line break and a workflow command.
+		longKey := strings.Repeat("k", 55) + testAccessKey + strings.Repeat("z", 10) + ".html"
 
-		dc.store.setRespond(listResponder(t, listPage(testBucket, []string{
+		hostile := []string{
 			"../x",
 			"/etc/passwd",
 			"index%2F..%2Findex.html",
 			"a%2Fb",
-		}, "")))
-
-		err := dc.deploy(t)
-		if err != nil && !errors.Is(err, deploy.ErrUnknownObject) {
-			t.Fatalf("Deploy with hostile keys in the bucket = %v, want nil or an error wrapping ErrUnknownObject: either the listing refuses or the deploy proceeds, never a write of a hostile key", err)
+			"\n::error::x",
+			longKey,
 		}
 
-		allowed := dc.bundle.keys()
+		dc := newDeployCase(t)
+		dc.config.ListBucket = true
 
-		for _, request := range dc.store.seen() {
-			switch request.Method {
-			case http.MethodGet, http.MethodPut:
-			default:
-				t.Errorf("the object store received a %s of %q, want GET (a listing) or PUT (an object of the bundle) only", request.Method, request.Path)
-			}
+		dc.store.setRespond(listResponder(t, listPage(testBucket, hostile, "")))
 
-			if request.Method != http.MethodPut {
+		err := dc.deploy(t)
+		if !errors.Is(err, deploy.ErrUnknownObject) {
+			t.Fatalf("Deploy with hostile keys in the bucket = %v, want an error wrapping ErrUnknownObject: a listed key that is in no manifest refuses the deploy before any upload, and a hostile key is no reason to let it through", err)
+		}
+
+		if puts := dc.store.puts(); len(puts) != 0 {
+			t.Errorf("the object store was sent %d PUTs (%q), want none: the listing refuses before any upload", len(puts), dc.store.putKeys())
+		}
+
+		if listings := listRequests(dc.store.seen()); len(listings) != 1 {
+			t.Errorf("the object store received %d listing requests, want one: the first page's keys are enough to refuse, and the store must not be asked again", len(listings))
+		}
+
+		for _, key := range hostile {
+			// A key the error cuts is named by its quoted beginning: the error must
+			// not hold a 64-byte cut of a key it has not scrubbed.
+			if len(key) > 64 {
+				if !strings.Contains(err.Error(), `"`+key[:16]) {
+					t.Errorf("the error reads %q, want it to quote the beginning of the hostile key %q", err, key[:16]+"...")
+				}
+
 				continue
 			}
 
-			key := objectKey(request.Path)
-			if key != deploy.ManifestName && !slices.Contains(allowed, key) {
-				t.Errorf("an object was PUT to %q (the key %q), want a name of the bundle only: a hostile listing key must not become an object key", request.Path, key)
+			if want := strconv.Quote(key); !strings.Contains(err.Error(), want) {
+				t.Errorf("the error reads %q, want it to name the hostile key %s: quoting escapes a line break and a quote, so neither can start another workflow command", err, want)
 			}
+		}
 
-			if strings.Contains(key, "..") || strings.Contains(key, "%2F") || strings.HasPrefix(key, "/") {
-				t.Errorf("an object was PUT to %q, want no path traversal, no absolute key and no encoded separator", request.Path)
+		written := map[string]string{
+			"the error":   err.Error(),
+			"the log":     dc.log.String(),
+			"the summary": dc.summary.String(),
+		}
+
+		for where, text := range written {
+			for n := 8; n <= len(testAccessKey); n++ {
+				if strings.Contains(text, testAccessKey[:n]) {
+					t.Errorf("%s holds %q, the first %d characters of the access key: a key must be scrubbed before it is quoted and cut, or a long object name prints a prefix of it (%s)", where, testAccessKey[:n], n, text)
+
+					break
+				}
 			}
+		}
+	})
+
+	t.Run("a continuation token is encoded as Sign canonicalises it", func(t *testing.T) {
+		t.Parallel()
+
+		dc := newDeployCase(t)
+		dc.config.ListBucket = true
+
+		known := append(dc.bundle.keys(), deploy.ManifestName)
+		slices.Sort(known)
+
+		// The first page's token holds a space and a plus sign: the canonical query
+		// sends them as %20 and %2B, so the request must send the same, or the
+		// signature the store checks is of a query the store never received.
+		dc.store.setRespond(listResponder(t,
+			listPage(testBucket, known, "a b+c"),
+			listPage(testBucket, nil, ""),
+		))
+
+		if err := dc.deploy(t); err != nil {
+			t.Fatalf("Deploy = %v, want nil: every listed key is a key of the bundle", err)
+		}
+
+		listings := listRequests(dc.store.seen())
+		if len(listings) != 2 {
+			t.Fatalf("the object store received %d listing requests, want two: the first page is truncated", len(listings))
+		}
+
+		if got, want := listings[1].Query.Get("continuation-token"), "a b+c"; got != want {
+			t.Errorf("the second listing carries the continuation token %q, want %q from the first page", got, want)
+		}
+
+		if got := listings[1].RawQuery; !strings.Contains(got, "continuation-token=a%20b%2Bc") {
+			t.Errorf("the second listing's query reads %q, want the token encoded as continuation-token=a%%20b%%2Bc: SigV4 canonicalises a space as %%20 and a plus as %%2B, so the request must send the same", got)
+		}
+	})
+
+	t.Run("a listing that fails is no upload failure", func(t *testing.T) {
+		t.Parallel()
+
+		tests := []struct {
+			name   string
+			answer seenResponse
+		}{
+			{
+				name:   "the store refuses the listing",
+				answer: seenResponse{Status: http.StatusForbidden, Header: http.Header{"Content-Type": []string{"application/xml"}}, Body: []byte(`<Error><Code>AccessDenied</Code></Error>`)},
+			},
+			{
+				name:   "the answer is not a listing",
+				answer: seenResponse{Status: http.StatusOK, Header: http.Header{"Content-Type": []string{"text/plain"}}, Body: []byte("this is not a listing\n")},
+			},
+		}
+
+		for _, tc := range tests {
+			t.Run(tc.name, func(t *testing.T) {
+				t.Parallel()
+
+				dc := newDeployCase(t)
+				dc.config.ListBucket = true
+				dc.store.setRespond(func(seenRequest) seenResponse { return tc.answer })
+
+				err := dc.deploy(t)
+				if !errors.Is(err, deploy.ErrList) {
+					t.Fatalf("Deploy with %s = %v, want an error wrapping ErrList: the listing failed before any upload, so the run is no failed upload", tc.name, err)
+				}
+
+				if errors.Is(err, deploy.ErrUpload) {
+					t.Errorf("%v also wraps ErrUpload, want ErrList alone: a failed listing uploaded nothing, and the two failures name different repairs", err)
+				}
+
+				if puts := dc.store.puts(); len(puts) != 0 {
+					t.Errorf("the object store was sent %d PUTs, want none: the listing refuses before any upload", len(puts))
+				}
+			})
 		}
 	})
 }

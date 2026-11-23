@@ -38,6 +38,10 @@ func TestRollbackGuard(t *testing.T) {
 		noLivePage bool
 		// wantRefuse reports whether the guard must refuse the deploy.
 		wantRefuse bool
+		// wantNote reports whether the summary must carry the guard's plain note
+		// and no warning: the live page is a genuine release not higher than the
+		// bundle's. Every other case must carry the warning and no note.
+		wantNote bool
 		// wantNamed is the version the warning must name, "" when the guard has
 		// no version to name.
 		wantNamed string
@@ -75,6 +79,7 @@ func TestRollbackGuard(t *testing.T) {
 			releases:  []string{testedVersion},
 			manifests: map[string][]byte{testedVersion: page(testedVersion, "Privacy")},
 			live:      seenResponse{Status: http.StatusOK, Body: page(testedVersion, "Privacy")},
+			wantNote:  true,
 			wantNamed: testedVersion,
 		},
 		{
@@ -82,6 +87,7 @@ func TestRollbackGuard(t *testing.T) {
 			releases:  []string{earlierVersion, testedVersion},
 			manifests: map[string][]byte{earlierVersion: page(earlierVersion, "Privacy")},
 			live:      seenResponse{Status: http.StatusOK, Body: page(earlierVersion, "Privacy")},
+			wantNote:  true,
 			wantNamed: earlierVersion,
 		},
 		{
@@ -156,6 +162,32 @@ func TestRollbackGuard(t *testing.T) {
 
 			if tc.wantNamed != "" && !strings.Contains(summary, tc.wantNamed) {
 				t.Errorf("the summary reads %q, want the live page's version %q named, so the maintainer can see what was overwritten", summary, tc.wantNamed)
+			}
+
+			// A genuine release not higher than the bundle's is only a notice;
+			// every page the guard does not trust is a warning, since a leaked key
+			// could have written it.
+			hasNote := strings.Contains(summary, "> [!NOTE]")
+			hasWarning := strings.Contains(summary, "> [!WARNING]")
+
+			if tc.wantNote {
+				if !hasNote {
+					t.Errorf("the summary reads %q, want the guard's plain note (> [!NOTE]): the live page is a genuine release not higher than the bundle's, so there is nothing to distrust", summary)
+				}
+
+				if hasWarning {
+					t.Errorf("the summary reads %q, want no warning (> [!WARNING]) besides the note: the live page matches its release's manifest", summary)
+				}
+
+				return
+			}
+
+			if !hasWarning {
+				t.Errorf("the summary reads %q, want a visible warning (> [!WARNING]): the live page is not trusted, so the maintainer must see which case it was", summary)
+			}
+
+			if hasNote {
+				t.Errorf("the summary reads %q, want no note (> [!NOTE]): a page the guard does not trust must not be presented as a release's own", summary)
 			}
 		})
 	}

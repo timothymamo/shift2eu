@@ -24,6 +24,13 @@ const (
 	// body and of "hello".
 	emptySHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 	helloSHA256 = "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
+
+	// The other two examples of the AWS documentation's page: the ListObjects
+	// GET's signature and the PutObject's, with the digest the page publishes for
+	// the body "Welcome to Amazon S3." ("Examples: Signature Calculations").
+	awsListSignature  = "34b48302e7b5fa45bde8084f4b7868a86f0a534bc59db6670ed5711ef69dc6f7"
+	awsPutSignature   = "98ad721746da40c64f1a55b78f14c238d841ea1380cd77a1b5971af0ece108bd"
+	awsPutPayloadHash = "44ce7dd67c959e0d3524ffac1771dfbba87d2b6b4b4e99e42034a8b803f8b072"
 )
 
 // TestHashPayload pins HashPayload against the published digests, the empty body
@@ -99,6 +106,109 @@ func TestSignerSignsThePublishedS3Example(t *testing.T) {
 
 	if got := request.Header.Get("Authorization"); got != want {
 		t.Errorf("Sign set Authorization\n%q\nwant the documentation's published signature\n%q", got, want)
+	}
+}
+
+// TestSignerSignsTheOtherPublishedS3Examples pins Sign against the AWS
+// documentation's other two published examples, which the existing GET example
+// comes from: the ListObjects GET, whose query a bucket listing sends, and the
+// PutObject of /test$file.text, whose path holds a byte SigV4 canonicalises as
+// %24. Every input is the page's (the key, the bucket, the date, the headers,
+// the body and the payload hash), so the signatures the page publishes pin the
+// canonical request's path, query, headers and scope.
+func TestSignerSignsTheOtherPublishedS3Examples(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		method string
+		url    string
+		header http.Header
+		// body is the request's payload, nil for a GET.
+		body []byte
+		// wantPayloadHash is the X-Amz-Content-Sha256 the page publishes for the
+		// body, "" when the page publishes none.
+		wantPayloadHash string
+		// wantSignedHeaders is the SignedHeaders the page publishes.
+		wantSignedHeaders string
+		// wantSignature is the signature the page publishes.
+		wantSignature string
+	}{
+		{
+			name:              "the ListObjects GET",
+			method:            http.MethodGet,
+			url:               "https://examplebucket.s3.amazonaws.com/?max-keys=2&prefix=J",
+			wantSignedHeaders: "host;x-amz-content-sha256;x-amz-date",
+			wantSignature:     awsListSignature,
+		},
+		{
+			name:   "the PutObject of a path with a dollar sign",
+			method: http.MethodPut,
+			url:    "https://examplebucket.s3.amazonaws.com/test$file.text",
+			header: http.Header{
+				"Date":                []string{"Fri, 24 May 2013 00:00:00 GMT"},
+				"X-Amz-Storage-Class": []string{"REDUCED_REDUNDANCY"},
+			},
+			body:              []byte("Welcome to Amazon S3."),
+			wantPayloadHash:   awsPutPayloadHash,
+			wantSignedHeaders: "date;host;x-amz-content-sha256;x-amz-date;x-amz-storage-class",
+			wantSignature:     awsPutSignature,
+		},
+	}
+
+	at := time.Date(2013, time.May, 24, 0, 0, 0, 0, time.UTC)
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			request, err := http.NewRequestWithContext(t.Context(), tc.method, tc.url, http.NoBody)
+			if err != nil {
+				t.Fatalf("http.NewRequest: %v", err)
+			}
+
+			request.Header = tc.header.Clone()
+			if request.Header == nil {
+				request.Header = http.Header{}
+			}
+
+			payloadHash := deploy.HashPayload(tc.body)
+
+			if tc.wantPayloadHash != "" && payloadHash != tc.wantPayloadHash {
+				t.Errorf("HashPayload of the page's body = %q, want the page's %q: the example's X-Amz-Content-Sha256 is the digest of the body it sends", payloadHash, tc.wantPayloadHash)
+			}
+
+			signer := deploy.Signer{
+				Credentials: deploy.Credentials{
+					AccessKey: deploy.NewSecret(awsExampleAccessKey),
+					SecretKey: deploy.NewSecret(awsExampleSecretKey),
+				},
+				Region:  "us-east-1",
+				Service: deploy.ServiceS3,
+			}
+
+			if err := signer.Sign(request, payloadHash, at); err != nil {
+				t.Fatalf("Sign of the documentation's example = %v, want nil", err)
+			}
+
+			if got, want := request.Header.Get("X-Amz-Date"), "20130524T000000Z"; got != want {
+				t.Errorf("Sign set X-Amz-Date %q, want %q: the date is the clock in UTC as 20060102T150405Z", got, want)
+			}
+
+			if got := request.Header.Get("X-Amz-Content-Sha256"); got != payloadHash {
+				t.Errorf("Sign set X-Amz-Content-Sha256 %q, want the payload hash %q it was given", got, payloadHash)
+			}
+
+			want := "AWS4-HMAC-SHA256 " +
+				"Credential=" + awsExampleAccessKey + "/20130524/us-east-1/s3/aws4_request, " +
+				"SignedHeaders=" + tc.wantSignedHeaders + ", " +
+				"Signature=" + tc.wantSignature
+
+			if got := request.Header.Get("Authorization"); got != want {
+				t.Errorf("Sign set Authorization\n%q\nwant the documentation's published signature\n%q\nthe request's path is canonicalised byte by byte (the PutObject's $ as %%24) and its query as SigV4 defines it, or the signature is of a request the store never receives",
+					got, want)
+			}
+		})
 	}
 }
 

@@ -39,6 +39,10 @@ const (
 	pageBody     = "// shift2eu: the site's page script\n"
 	wasmExecBody = "// shift2eu: the Go toolchain's wasm_exec.js\n"
 
+	// secondStyleBody is another stylesheet's body: a bundle holds exactly one
+	// stylesheet, so a bundle with two is refused.
+	secondStyleBody = "/* shift2eu: a second stylesheet, which no bundle holds */\n"
+
 	moduleBodyPrefix = "globalThis.__shift2euModule=\"AAAA//8=\";\n"
 )
 
