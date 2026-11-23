@@ -2569,6 +2569,17 @@ linters:
         - pattern: '^os\.LookupEnv$'
           pkg: '^os$'
           msg: 'audit-run-env: os.LookupEnv is used in ci/auditrun/main.go only, passed to run (ADR 0040); a test passes a lookup function of its own'
+        # Group audit-library-env (issue #277 round F, ADR 0040's amendment):
+        # the audit's library reads no environment variable and locates no
+        # home, config or cache directory; what it needs of the step's
+        # environment reaches it as parameters from ci/auditrun. It names no
+        # process start: the library starts bwrap and sudo, which depguard
+        # (audit-library) and ADR 0040 hold. Scope: every file under
+        # ci/internal/audit/, _test.go files included; its exclusion rule
+        # drops it everywhere else, and it has no exception.
+        - pattern: '^os\.(?:Getenv|Environ|LookupEnv|UserHomeDir|UserConfigDir|UserCacheDir|ExpandEnv)$'
+          pkg: '^os$'
+          msg: 'audit-library-env: the audit library reads no environment variable and locates no home, config or cache directory; ci/auditrun passes it what it needs (ADR 0040, CLAUDE.md rule 3)'
     gosec:
       excludes:
         - G104 # unchecked errors are already reported by errcheck
@@ -2762,6 +2773,13 @@ linters:
         linters:
           - forbidigo
         text: 'because "audit-run-env: os\.LookupEnv is used in ci/auditrun/main\.go only, passed to run \(ADR 0040\); a test passes a lookup function of its own"$'
+      # audit-library-env: the group holds for every file under
+      # ci/internal/audit/, _test.go files included, and nowhere else. It has
+      # no exception.
+      - path-except: ^ci/internal/audit/
+        linters:
+          - forbidigo
+        text: 'because "audit-library-env: [^"]*"$'
 
 formatters:
   enable:

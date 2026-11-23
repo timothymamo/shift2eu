@@ -189,6 +189,10 @@ func commandLine(args []string) ([]string, string, bool) {
 		return nil, name, false
 	}
 
+	if refused, ok := pathLine(name, rest); !ok {
+		return nil, refused, false
+	}
+
 	switch name {
 	case "git":
 		forEachRef := len(rest) > 0 && rest[0] == "for-each-ref"
@@ -219,6 +223,95 @@ func commandLine(args []string) ([]string, string, bool) {
 	}
 
 	return append([]string{path}, rest...), "", true
+}
+
+// refusedRoots are the trees no path on a line may name: the kernel's views of
+// every process (their environments among them), of the system and of the
+// devices.
+var refusedRoots = []string{"/proc", "/sys", "/dev"}
+
+// gitDirOption is git's own option that names the directory git runs in.
+const gitDirOption = "-C"
+
+// pathLine returns the first word of the line of the command name that names
+// a path into one of refusedRoots, or true when none does: the wrapper's path
+// rule (ADR 0040, amended 2026-11-23, issue #277 round F). Claude Code's deny
+// rules match the command's text, so a glob gets past them; the wrapper reads
+// the words the shell expanded. A word names a path when it is
+//
+//   - no option word (no leading "-"; "-" alone is stdin) and holds a "/": a
+//     bare word such as a grep pattern, a ref or a jq filter names no path, and
+//     a word without a "/" reaches none of the three from the work directory;
+//   - an option word holding "=": its value after the first "=";
+//   - on a git line, the value of -C, attached (-C/proc/1) or the next word.
+//
+// The check reads every word whatever it belongs to, so it fails closed: a
+// git grep pattern that reads as such a path is refused too. The refused word
+// is the whole word, the option's included.
+func pathLine(name string, args []string) (string, bool) {
+	for i, arg := range args {
+		switch {
+		case name == "git" && arg == gitDirOption:
+			if i+1 < len(args) && refusedPath(args[i+1]) {
+				return args[i+1], false
+			}
+		case name == "git" && strings.HasPrefix(arg, gitDirOption):
+			if refusedPath(arg[len(gitDirOption):]) {
+				return arg, false
+			}
+		case arg == "-":
+			continue
+		case strings.HasPrefix(arg, "-"):
+			if _, value, ok := strings.Cut(arg, "="); ok && refusedPath(value) {
+				return arg, false
+			}
+		case strings.Contains(arg, "/"):
+			if refusedPath(arg) {
+				return arg, false
+			}
+		}
+	}
+
+	return "", true
+}
+
+// refusedPath reports whether p, cleaned as filepath.Clean cleans it and read
+// from "/" when it is relative, is one of refusedRoots or lies under one. A
+// relative path is read from "/" so that it is refused whatever directory it
+// runs in: ../../proc/1/environ reaches /proc from the work directory.
+func refusedPath(p string) bool {
+	cleaned := cleanRooted(p)
+
+	for _, root := range refusedRoots {
+		if cleaned == root || strings.HasPrefix(cleaned, root+"/") {
+			return true
+		}
+	}
+
+	return false
+}
+
+// cleanRooted returns p read from "/" and cleaned lexically, as
+// filepath.Clean("/" + p) does on a unix system: empty and "." elements
+// dropped, each ".." removing the element before it, and a ".." at the root
+// staying at the root. The wrapper's depguard rule (audit-exec) keeps it to
+// the standard packages it imports, which path/filepath is not among.
+func cleanRooted(p string) string {
+	var kept []string
+
+	for _, element := range strings.Split(p, "/") {
+		switch element {
+		case "", ".":
+		case "..":
+			if len(kept) > 0 {
+				kept = kept[:len(kept)-1]
+			}
+		default:
+			kept = append(kept, element)
+		}
+	}
+
+	return "/" + strings.Join(kept, "/")
 }
 
 // refusedGitOption reports whether arg is one of git's refused options.

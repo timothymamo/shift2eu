@@ -134,8 +134,8 @@ type Config struct {
 	Home string
 
 	// Env are extra NAME=VALUE entries of the CLI's environment, after the
-	// launcher's own. A name the launcher sets itself (reservedEnv) is
-	// refused.
+	// launcher's own. Only the names of allowedEnv are accepted: TMPDIR,
+	// CLAUDE_CODE_SUBPROCESS_ENV_SCRUB and SHIFT2EU_AUDIT_CANARY.
 	Env []string
 
 	// SearchPath is the CLI's PATH. Empty is cliPath.
@@ -168,46 +168,18 @@ var efforts = []string{"low", "medium", "high", "xhigh", "max"}
 // acceptEdits and every other mode are refused.
 var permissionModes = []string{"dontAsk", "plan"}
 
-// reservedEnv are the variables a config's Env never sets: the ones the
-// launcher sets itself (the token, HOME, PATH and the four switches), and the
-// ones that would point the CLI at another credential, endpoint, proxy (in
-// either case: Node and curl read the lower-case names too), certificate
-// authority, configuration directory, request header or managed-settings
-// file, turn its TLS checks off, or load code into its process.
-var reservedEnv = []string{
-	"CLAUDE_CODE_OAUTH_TOKEN",
-	"HOME",
-	"PATH",
-	"DISABLE_AUTOUPDATER",
-	"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC",
-	"DISABLE_TELEMETRY",
-	"DISABLE_ERROR_REPORTING",
-	"ANTHROPIC_API_KEY",
-	"ANTHROPIC_AUTH_TOKEN",
-	"ANTHROPIC_BASE_URL",
-	"CLAUDE_CODE_MANAGED_SETTINGS_PATH",
-	"NODE_OPTIONS",
-	"LD_PRELOAD",
-	"LD_LIBRARY_PATH",
-	"LD_AUDIT",
-	"HTTPS_PROXY",
-	"HTTP_PROXY",
-	"ALL_PROXY",
-	"NO_PROXY",
-	"https_proxy",
-	"http_proxy",
-	"all_proxy",
-	"no_proxy",
-	"NODE_TLS_REJECT_UNAUTHORIZED",
-	"NODE_EXTRA_CA_CERTS",
-	"CLAUDE_CONFIG_DIR",
-	"ANTHROPIC_CUSTOM_HEADERS",
+// allowedEnv are the only variables a config's Env may set (ADR 0040,
+// amended 2026-11-23, issue #277 round F): the audit's TMPDIR, the switch
+// that scrubs the CLI's subprocesses' environment, and the audit's canary.
+// Every other name is refused, whatever it would do: an allow list, not a
+// deny list of the names someone thought of, so a variable that points the
+// CLI at another credential, endpoint, proxy or certificate, or makes it or
+// its shells load or run other code, never reaches it.
+var allowedEnv = []string{
+	"TMPDIR",
+	"CLAUDE_CODE_SUBPROCESS_ENV_SCRUB",
+	"SHIFT2EU_AUDIT_CANARY",
 }
-
-// reservedEnvPrefix starts the names of the switches that move the CLI to
-// another provider (CLAUDE_CODE_USE_BEDROCK, CLAUDE_CODE_USE_VERTEX, ...),
-// which a config's Env never sets either.
-const reservedEnvPrefix = "CLAUDE_CODE_USE_"
 
 // CLI asks a model through one run of the Claude Code CLI per Ask, `claude
 // -p`, on the maintainer's Claude subscription (ADR 0033). It never puts the
@@ -469,8 +441,8 @@ func decideRunOutcome(answerErr, parentErr, runErr error) runOutcome {
 // amendment does not allow, naming the field: an effort outside the five, a
 // permission mode other than dontAsk or plan, a relative settings path, a
 // working directory or HOME that is not an absolute path to a directory that
-// exists, and an Env entry that is no NAME=VALUE or sets a variable the
-// launcher sets itself.
+// exists, and an Env entry that is no NAME=VALUE or sets a variable outside
+// allowedEnv.
 func (c *CLI) checkLaunch() error {
 	if c.cfg.Effort != "" && !contains(efforts, c.cfg.Effort) {
 		return fmt.Errorf("%w: the effort is not one of %s", ErrModel, strings.Join(efforts, ", "))
@@ -513,8 +485,8 @@ func (c *CLI) checkLaunch() error {
 			return fmt.Errorf("%w: an environment entry of the CLI is not NAME=VALUE", ErrModel)
 		}
 
-		if contains(reservedEnv, name) || strings.HasPrefix(name, reservedEnvPrefix) {
-			return fmt.Errorf("%w: the environment entry %s is one the launcher reserves", ErrModel, name)
+		if !contains(allowedEnv, name) {
+			return fmt.Errorf("%w: the environment entry %s is not one of %s", ErrModel, name, strings.Join(allowedEnv, ", "))
 		}
 	}
 
