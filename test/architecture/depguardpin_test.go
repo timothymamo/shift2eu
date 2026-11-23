@@ -1500,6 +1500,68 @@ var pinnedDepguardRules = []check.DepguardRule{
 		Deny: []string{"os/exec", "net"},
 	},
 	{
+		// The site's deploy program (PRD #297 milestone 3): a main package no
+		// root can import, held to the standard packages it imports, each
+		// exact, and its library. It runs no program.
+		Name:     "site-deploy-main",
+		ListMode: "strict",
+		Files: []string{
+			"**/ci/sitedeploy/**",
+			"!**/ci/sitedeploy/internal/**",
+			"!$test",
+		},
+		Allow: []string{
+			"context$",
+			"errors$",
+			"flag$",
+			"fmt$",
+			"io$",
+			"net/http$",
+			"os$",
+			"os/signal$",
+			"regexp$",
+			"strings$",
+			"time$",
+			"github.com/timothymamo/shift2eu/ci/sitedeploy/internal/deploy$",
+		},
+		Deny: []string{"os/exec"},
+	},
+	{
+		// The deploy program's library (PRD #297 milestone 3): the S3 API with
+		// SigV4 written by hand, on named standard packages only, without os,
+		// syscall or unsafe and no package of the module. Go's internal rule
+		// keeps it out of reach of cmd/ and internal/.
+		Name:     "site-deploy-library",
+		ListMode: "strict",
+		Files: []string{
+			"**/ci/sitedeploy/internal/**",
+			"!$test",
+		},
+		Allow: []string{
+			"bytes$",
+			"compress/gzip$",
+			"context$",
+			"crypto/hmac$",
+			"crypto/sha256$",
+			"encoding/hex$",
+			"encoding/json$",
+			"encoding/xml$",
+			"errors$",
+			"fmt$",
+			"io$",
+			"io/fs$",
+			"net/http$",
+			"net/url$",
+			"regexp$",
+			"slices$",
+			"strconv$",
+			"strings$",
+			"time$",
+			"unicode/utf8$",
+		},
+		Deny: []string{"os"},
+	},
+	{
 		// The scheduled audit's command wrapper (issue #277, ADR 0040's
 		// model-job amendment), /srv/audit/bin/audit-exec: a main package no root can
 		// import, held to the standard packages it imports, each exact. syscall
