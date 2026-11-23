@@ -1,15 +1,12 @@
 package lint_test
 
-import (
-	"slices"
-	"strings"
-	"testing"
-)
+import "testing"
 
-// The group auditPublishGitHubEnvTag, pinned by TestForbidigoExclusionsDropOneGroup
-// with the rules that scope it, is forbidigo's group for the calls the publish
-// program's GitHub side, ci/auditpublish/internal/github, may not make (PRD #175
-// milestone 2, ADR 0040, "The publish program's GitHub side"). depguard's
+// The group audit-publish-github-env (auditPublishGitHubEnvTag in
+// exclusions_test.go), pinned by TestForbidigoExclusionsDropOneGroup with the
+// rules that scope it, is forbidigo's group for the calls the publish program's
+// GitHub side, ci/auditpublish/internal/github, may not make (PRD #175 milestone
+// 2, ADR 0040, "The publish program's GitHub side"). depguard's
 // audit-publish-github allows os and os/exec, which the library reads gh's output
 // and the merged reports with and starts gh and gitleaks with, each by its
 // absolute path. os also reads and hands over the environment, where credentials
@@ -28,24 +25,34 @@ import (
 // included, as the two linters.exclusions.rules rules of the group say and
 // TestForbidigoExclusionsDropOneGroup checks.
 
-// auditPublishGitHubEnvRefused lists every name an entry of the group must
-// refuse, as forbidigo's analyze-types matching renders it: a package, the type
-// the call is made on, and the function. A name is refused when an entry of the
-// group matches its pkg and its rendered name; the wording of a msg is not pinned
-// here, the tag is.
-var auditPublishGitHubEnvRefused = []rootName{
-	{"os", "os.Getenv"},
-	{"os", "os.LookupEnv"},
-	{"os", "os.ExpandEnv"},
-	{"os", "os.Expand"},
-	{"os", "os.Environ"},
-	{"os", "os.UserHomeDir"},
-	{"os", "os.UserConfigDir"},
-	{"os", "os.UserCacheDir"},
-	{"os", "os.TempDir"},
-	{"os", "os.StartProcess"},
-	{"os/exec", "exec.Command"},
-	{"os/exec", "exec.LookPath"},
+// auditPublishGitHubEnvRefused lists every name the group must refuse, as
+// forbidigo's analyze-types matching renders it: a package, the type the call is
+// made on, and the function. A name is refused when an entry of the group matches
+// its pkg and its rendered name. The refusal names the entry that must refuse it:
+// auditPublishEnvironMsg for os.Environ, the exception entry the fake_test.go
+// rule narrows on, and forbidGroupAnyEntry for the rest, which none of the
+// group's exceptions may refuse.
+var auditPublishGitHubEnvRefused = []forbidGroupRefusal{
+	{rootName{"os", "os.Getenv"}, forbidGroupAnyEntry},
+	{rootName{"os", "os.LookupEnv"}, forbidGroupAnyEntry},
+	{rootName{"os", "os.ExpandEnv"}, forbidGroupAnyEntry},
+	{rootName{"os", "os.Expand"}, forbidGroupAnyEntry},
+	{rootName{"os", "os.Environ"}, auditPublishEnvironMsg},
+	{rootName{"os", "os.UserHomeDir"}, forbidGroupAnyEntry},
+	{rootName{"os", "os.UserConfigDir"}, forbidGroupAnyEntry},
+	{rootName{"os", "os.UserCacheDir"}, forbidGroupAnyEntry},
+	{rootName{"os", "os.TempDir"}, forbidGroupAnyEntry},
+	{rootName{"os", "os.StartProcess"}, forbidGroupAnyEntry},
+	{rootName{"os/exec", "exec.Command"}, forbidGroupAnyEntry},
+	{rootName{"os/exec", "exec.LookPath"}, forbidGroupAnyEntry},
+}
+
+// auditPublishGitHubEnvExceptions lists the group's exception entries: the one
+// whose msg the fake_test.go rule quotes, and the one name it may refuse. It may
+// refuse os.Environ and no other, because that rule drops its whole msg in that
+// file, and a name it refused as well would pass there.
+var auditPublishGitHubEnvExceptions = []forbidGroupException{
+	{auditPublishEnvironMsg, rootName{"os", "os.Environ"}},
 }
 
 // auditPublishGitHubEnvAllowed are names no entry of the group may refuse: the
@@ -71,46 +78,15 @@ var auditPublishGitHubEnvAllowed = []rootName{
 }
 
 // TestAuditPublishGitHubEnvForbidigoPatterns checks the entries of the
-// audit-publish-github-env group, read from .golangci.yml, offline and without
-// golangci-lint: every name the GitHub side may not use is refused by an entry of
-// the group, no name it may use is refused by one, and every entry refuses a
-// listed name. It is the pin a reviewer reads when the group changes: without it
-// an entry could be dropped from .golangci.yml and lint would stay green, as
-// nothing else refuses exec.Command, which no depguard rule can see, in the
-// library.
+// audit-publish-github-env group: every name the GitHub side may not use is
+// refused by the entry its refusal names, os.Environ's exception entry refuses
+// that name and no other, no name it may use is refused by an entry, and every
+// entry refuses a listed name. It is the pin a reviewer reads when the group
+// changes: without it an entry could be dropped from .golangci.yml, or a name
+// moved into the exception entry, and lint would stay green, as nothing else
+// refuses exec.Command, which no depguard rule can see, in the library.
 func TestAuditPublishGitHubEnvForbidigoPatterns(t *testing.T) {
 	t.Parallel()
 
-	entries := groupEntries(t, moduleRoot(t), auditPublishGitHubEnvTag)
-	refuses := func(e forbidEntry, n rootName) bool {
-		return e.pkg.MatchString(n.pkg) && e.pattern.MatchString(n.name)
-	}
-
-	for _, r := range auditPublishGitHubEnvRefused {
-		var msgs []string
-
-		for _, e := range entries {
-			if refuses(e, r) {
-				msgs = append(msgs, e.msg)
-			}
-		}
-
-		if !slices.ContainsFunc(msgs, func(m string) bool { return strings.HasPrefix(m, auditPublishGitHubEnvTag+": ") }) {
-			t.Errorf("%s (pkg %q) must be refused by an entry of group %s; refused by %q", r.name, r.pkg, auditPublishGitHubEnvTag, msgs)
-		}
-	}
-
-	for _, n := range auditPublishGitHubEnvAllowed {
-		for _, e := range entries {
-			if refuses(e, n) {
-				t.Errorf("%s (pkg %q) must pass the publish program's GitHub side, but the entry with msg %q refuses it", n.name, n.pkg, e.msg)
-			}
-		}
-	}
-
-	for _, e := range entries {
-		if !slices.ContainsFunc(auditPublishGitHubEnvRefused, func(r rootName) bool { return refuses(e, r) }) {
-			t.Errorf("the entry with msg %q refuses no name of the group's list; add the names it refuses", e.msg)
-		}
-	}
+	checkForbidigoGroupPatterns(t, auditPublishGitHubEnvTag, auditPublishGitHubEnvRefused, auditPublishGitHubEnvExceptions, auditPublishGitHubEnvAllowed)
 }
