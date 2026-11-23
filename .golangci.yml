@@ -1979,6 +1979,71 @@ linters:
               desc: "the audit's publish core opens no file and reads no environment; ci/auditpublish hands it what it read (ADR 0040)"
             - pkg: net
               desc: "the audit's publish core opens no connection; ci/auditpublish calls GitHub (ADR 0040)"
+        # The site's deploy program (PRD #297 milestone 3) is no part of the
+        # product: ci/sitedeploy is a main package, which Go refuses to
+        # import, and its library ci/sitedeploy/internal/deploy is under an
+        # internal directory whose parent is ci/sitedeploy, so Go's internal
+        # rule keeps it out of reach of cmd/ and internal/. Both are held to
+        # named standard packages, each ending in $. The entry point reads
+        # its flags, the release tag list, the key's two variables and the job
+        # summary's path (os), builds the HTTP client (net/http) and exits; it
+        # runs no program (os/exec).
+        site-deploy-main:
+          list-mode: strict
+          files:
+            - "**/ci/sitedeploy/**"
+            - "!**/ci/sitedeploy/internal/**"
+            - "!$test"
+          allow:
+            - context$
+            - errors$
+            - flag$
+            - fmt$
+            - io$
+            - net/http$
+            - os$
+            - os/signal$
+            - regexp$
+            - strings$
+            - time$
+            - github.com/timothymamo/shift2eu/ci/sitedeploy/internal/deploy$
+          deny:
+            - pkg: os/exec
+              desc: "the site deploy program runs no program; it signs and sends its own S3 requests (PRD #297)"
+        # The deploy program's library speaks the S3 API with SigV4 signing
+        # written by hand: it reads the bundle and the manifests through the
+        # fs.FS trees and the key through the values ci/sitedeploy hands it, so
+        # it is held to named standard packages without os, syscall or unsafe,
+        # and to no package of the module (PRD #297 milestone 3).
+        site-deploy-library:
+          list-mode: strict
+          files:
+            - "**/ci/sitedeploy/internal/**"
+            - "!$test"
+          allow:
+            - bytes$
+            - compress/gzip$
+            - context$
+            - crypto/hmac$
+            - crypto/sha256$
+            - encoding/hex$
+            - encoding/json$
+            - encoding/xml$
+            - errors$
+            - fmt$
+            - io$
+            - io/fs$
+            - net/http$
+            - net/url$
+            - regexp$
+            - slices$
+            - strconv$
+            - strings$
+            - time$
+            - unicode/utf8$
+          deny:
+            - pkg: os
+              desc: "the site deploy library opens no file and reads no environment; ci/sitedeploy hands it fs.FS trees and the key (PRD #297)"
         # The scheduled audit's command wrapper (issue #277, ADR 0040's
         # model-job amendment), installed as /srv/audit/bin/audit-exec, is no part of the
         # product: a main package, which Go refuses to import. It is held to the
@@ -2617,6 +2682,22 @@ linters:
         - pattern: '^os\.(?:Getenv|Environ|LookupEnv|UserHomeDir|UserConfigDir|UserCacheDir|ExpandEnv)$'
           pkg: '^os$'
           msg: 'audit-library-env: the audit library reads no environment variable and locates no home, config or cache directory; ci/auditrun passes it what it needs (ADR 0040, CLAUDE.md rule 3)'
+        # Group site-deploy-env (PRD #297 milestone 3): the site's deploy
+        # program reads the step's environment through one call only, the
+        # os.LookupEnv ci/sitedeploy/main.go passes to environment, which reads
+        # the deploy key's two variables and GITHUB_STEP_SUMMARY and no other.
+        # Everything else is refused: another way to read a variable or the
+        # whole environment, a process start through os, and the lookups of a
+        # home, config, cache or temp directory. depguard keeps os/exec out of
+        # the entry point and os out of its library (site-deploy-main,
+        # site-deploy-library). Scope: every file under ci/sitedeploy/,
+        # _test.go files included; its exclusion rule drops it everywhere else.
+        - pattern: '^os\.(?:Getenv|ExpandEnv|Environ|StartProcess|UserHomeDir|UserConfigDir|UserCacheDir|TempDir)$'
+          pkg: '^os$'
+          msg: 'site-deploy-env: the site deploy program reads no environment variable but through the os.LookupEnv main.go passes to environment, locates no home, config, cache or temp directory and starts no process (PRD #297, CLAUDE.md rule 3)'
+        - pattern: '^os\.LookupEnv$'
+          pkg: '^os$'
+          msg: 'site-deploy-env: os.LookupEnv is used in ci/sitedeploy/main.go only, passed to environment (PRD #297); a test passes a lookup function of its own'
     gosec:
       excludes:
         - G104 # unchecked errors are already reported by errcheck
@@ -2833,6 +2914,20 @@ linters:
         linters:
           - forbidigo
         text: 'because "audit-run-env: os\.LookupEnv is used in ci/auditrun/main\.go only, passed to run \(ADR 0040\); a test passes a lookup function of its own"$'
+      # site-deploy-env: the group holds for every file under ci/sitedeploy/,
+      # _test.go files included, and nowhere else.
+      - path-except: ^ci/sitedeploy/
+        linters:
+          - forbidigo
+        text: 'because "site-deploy-env: [^"]*"$'
+      # The one exception (PRD #297): os.LookupEnv, which
+      # ci/sitedeploy/main.go passes to environment, in that file alone. text
+      # is the os.LookupEnv entry's msg, so the group's other entry still
+      # holds there.
+      - path: ^ci/sitedeploy/main\.go$
+        linters:
+          - forbidigo
+        text: 'because "site-deploy-env: os\.LookupEnv is used in ci/sitedeploy/main\.go only, passed to environment \(PRD #297\); a test passes a lookup function of its own"$'
       # audit-library-env: the group holds for every file under
       # ci/internal/audit/, _test.go files included, and nowhere else. It has
       # no exception.
