@@ -172,8 +172,8 @@ Arrows are imports. They point inwards only:
   environment variable and no clock, and starts no process (`audit-publish-library`: named pure
   standard packages, no `os` or `net`, and no package of the product). Its entry point
   `ci/auditpublish` (ADR 0040, "The publish program's GitHub side") reads its inputs through one
-  `os.LookupEnv` and prints one line; its subcommands are `artifacts`, the run's artifact check, and
-  `publish`. Its GitHub side, the library `ci/auditpublish/internal/github`, runs `gh` and gitleaks by
+  `os.LookupEnv` and prints one line; its one subcommand is `artifacts`, the run's artifact check;
+  `publish` comes in PRD #175 milestone 2's PR 4b. Its GitHub side, the library `ci/auditpublish/internal/github`, runs `gh` and gitleaks by
   absolute path with environments of its own, and sends every GitHub call through one function that
   checks it against a fixed table of endpoints and request bodies before `gh` runs (every advisory
   `state` `draft`; no merge, review, CVE, tag, release or other branch). The entry point is held to named

@@ -49,7 +49,10 @@ func timeoutOf(d time.Duration) (time.Duration, error) {
 
 // allowMarker is gitleaks' inline allow comment, which it honours in the text
 // it reads; a text holding it, in any case, is refused before gitleaks runs.
-const allowMarker = "gitleaks:allow"
+// It is built from two parts so that no line of this repository spells the
+// marker out: a model reading the source would otherwise quote that line, and
+// the publish program would then refuse its whole run.
+const allowMarker = "gitleaks" + ":allow"
 
 // gitleaksArgs is what every scan starts gitleaks with: its stdin mode, no
 // banner, no colour, a redacted report and exit code 10 for a leak. No

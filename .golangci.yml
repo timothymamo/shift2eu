@@ -2029,7 +2029,6 @@ linters:
             - context$
             - errors$
             - flag$
-            - fmt$
             - io$
             - os$
             - os/signal$
@@ -2702,14 +2701,22 @@ linters:
         # run's values reach it in its Config, and it builds gh's and
         # gitleaks' environments itself. os.Environ has an entry of its own,
         # because the fakes of its tests record the environment they were
-        # started with, in fake_test.go alone. Scope: every file under
-        # ci/auditpublish/internal/github/, _test.go files included.
+        # started with, in fake_test.go alone. It starts gh and gitleaks by
+        # absolute path through exec.CommandContext only. Scope: every file
+        # under ci/auditpublish/internal/github/, _test.go files included.
         - pattern: '^os\.(?:Getenv|LookupEnv|ExpandEnv|Expand|UserHomeDir|UserConfigDir|UserCacheDir|TempDir|StartProcess)$'
           pkg: '^os$'
           msg: 'audit-publish-github-env: the audit publish library reads no environment variable, locates no home, config, cache or temp directory and starts no process through os; ci/auditpublish passes it what it needs (ADR 0040, CLAUDE.md rule 3)'
         - pattern: '^os\.Environ$'
           pkg: '^os$'
           msg: 'audit-publish-github-env: os.Environ is used in fake_test.go only, where the fake gh and gitleaks record the environment the library gave them (ADR 0040)'
+        # exec.Command takes no context, so a deadline or a cancellation
+        # would not reach gh or gitleaks, and exec.LookPath finds a program
+        # through PATH: the library starts each by its absolute path, with
+        # exec.CommandContext alone.
+        - pattern: '^exec\.(?:Command|LookPath)$'
+          pkg: '^os/exec$'
+          msg: 'audit-publish-github-env: the audit publish library starts gh and gitleaks by absolute path with exec.CommandContext, so a deadline or a cancellation reaches them, and looks up no program through PATH (ADR 0040)'
     gosec:
       excludes:
         - G104 # unchecked errors are already reported by errcheck

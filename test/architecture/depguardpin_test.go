@@ -1490,7 +1490,6 @@ var pinnedDepguardRules = []check.DepguardRule{
 			"context$",
 			"errors$",
 			"flag$",
-			"fmt$",
 			"io$",
 			"os$",
 			"os/signal$",

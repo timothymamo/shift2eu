@@ -862,8 +862,8 @@ An agent cannot do these steps. Each one is safe to stop at; the workflow is rol
       missing, an expired one, and a total above the listed count (a second page: more than 100
       artifacts). Read the run's artifact list
       (`gh api repos/<owner>/<repo>/actions/runs/<run_id>/artifacts --jq '[.artifacts[] | [.name, .expired]]'`);
-      do not download an unexpected one. Check: the new run's list is exactly `checks-result` and
-      `model-result`.
+      do not download an unexpected one. Check: the new run's list is exactly `checks-result` at the
+      model job's check, and `checks-result` and `model-result` at the publish job's.
     - `result refused: see runbook` (exit 3): the model's result did not decrypt or broke the schema, or
       the release tag or image digest it named did not check out against GitHub. Start the new run; if
       it repeats, read the model job's preflight line and the skill before changing anything.
@@ -895,7 +895,10 @@ An agent cannot do these steps. Each one is safe to stop at; the workflow is rol
       GitHub's status, then start the new run.
     - `configuration invalid: see runbook` (exit 9): a variable, flag or secret of the publish step is
       missing or malformed (the fingerprint key shorter than 32 bytes included), or a secret that must
-      not be in the step is set there. Compare the environment's secrets and variables with step 2.
+      not be in the step is set there; the program was started with a bad or unknown flag or
+      subcommand (`publish` included, until PR 4b adds it); or `GITHUB_STEP_SUMMARY` is unset, not an
+      absolute path or cannot be opened. Compare the environment's secrets and variables with step 2,
+      and the step's command line with the workflow on `main`.
     - `publish failed: see runbook` (exit 1): any other failure. Start the new run; if it repeats, the
       publish program needs a fix through a pull request.
 

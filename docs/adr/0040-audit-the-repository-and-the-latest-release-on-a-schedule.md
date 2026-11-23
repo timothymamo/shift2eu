@@ -884,7 +884,7 @@ gains each one's details with the change that builds it.
 standard packages, each entry ending in `$`, pinned by `test/architecture`:
 
 - `ci/auditpublish`, the **entry point**, a main package (`audit-publish-main`: `context`, `errors`,
-  `flag`, `fmt`, `io`, `os`, `os/signal`, `time`, the GitHub side and the core; `os/exec` and `net`
+  `flag`, `io`, `os`, `os/signal`, `time`, the GitHub side and the core; `os/exec` and `net`
   denied). It reads the step's environment through one `os.LookupEnv` passed to `run` (the forbidigo
   group `audit-publish-main-env`, its exception in `main.go` alone), reads the clock for the run's UTC
   date, prints the one summary line and exits. It starts no program.
@@ -893,7 +893,9 @@ standard packages, each entry ending in `$`, pinned by `test/architecture`:
   `slices`, `strconv`, `strings`, `time` (the deadlines below) and the core; `net` denied). It runs
   `gh` and gitleaks, reads the result and the merged reports, and reads no environment variable at all
   (the forbidigo group `audit-publish-github-env`, which holds for its tests too; its one exception is
-  `os.Environ` in `fake_test.go`, where the fakes record the environment the library gave them). The
+  `os.Environ` in `fake_test.go`, where the fakes record the environment the library gave them; it also
+  refuses `exec.Command` and `exec.LookPath`, so every program starts by absolute path through
+  `exec.CommandContext`). The
   process starts sit in the library, not in the entry point, so that the endpoint check and the `gh`
   run are one function the tests drive against the fake.
 - `ci/auditpublish/internal/publish`, the **core**, unchanged; its rule `audit-publish-library` now
@@ -984,9 +986,10 @@ read); the publish step gets the App's token.
   page bound: the ten-page bound lives in its caller (PR 4c), which stops and fails closed when the
   tenth page's answer still carries a `Link` to a next one, pinned by a fake-`gh` test that answers an
   eleventh `Link`.
-- Gitleaks honours inline allow comments: a line holding `gitleaks:allow` is skipped, so a model that
-  wrote that marker beside a token into a finding's text would hide it from the scan. The program
-  therefore refuses any text it is about to scan that contains `gitleaks:allow` in any letter case,
+- Gitleaks honours inline allow comments: a line holding gitleaks' inline allow comment (its name, a
+  colon, then the word allow) is skipped, so a model that wrote that marker beside a token into a
+  finding's text would hide it from the scan. The program therefore refuses any text it is about to
+  scan that contains the marker in any letter case,
   before gitleaks runs, as a scan that found a leak (`publish.ErrScanRefused`, outcome 4); nothing is
   published. The core's own token patterns do not depend on gitleaks and still run.
 
@@ -1036,8 +1039,10 @@ exits 1 on a non-2xx status as `gh` does, records each call's arguments, environ
 a guard of its own written from the PRD's list rather than from `Endpoints`: a call outside the PRD's
 fixed set, an advisory created with a `state` or updated to any `state` but `draft`, a ref outside
 `refs/heads/security-audit/` or a pull request into another branch than `main` is answered 418 and fails
-the test. The fake gitleaks reports a leak (exit 10) on a fixed marker and records its stdin. Both write a
-marker to their stdout and stderr, so a test can show that none of it reaches the program's output.
+the test. The fake gitleaks reports a leak (exit 10) on a fixed marker and records its stdin. Each writes
+an output marker, so a test can show that none of it reaches the program's output: the fake `gh` only to
+its stderr, and only on a non-2xx answer (its stdout carries the answer itself), the fake gitleaks to both
+its stdout and its stderr on every scan.
 
 ### How Claude Code runs in the model job (milestone 2, amended 2026-11-22)
 
