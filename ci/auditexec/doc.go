@@ -10,13 +10,20 @@
 // exactly its own allow list: nothing of the caller's is inherited. git runs
 // as `/usr/bin/git --no-pager -C /srv/audit/checkout <subcommand> ...` with
 // one of the read-only subcommands the ADR lists, and never with an option
-// that names another configuration, git directory, work tree, program or
-// output file, nor --no-index, nor --show-signature, nor any word that could
+// that names another configuration, git directory, work tree, namespace,
+// attribute source, program or output file (--super-prefix, --attr-source,
+// --bare and --literal-pathspecs among them), nor --no-index, nor
+// --show-signature, nor any word that could
 // ask for a signature's verification (%G with or without git's +, - or space
 // modifier, %(signature, and on a for-each-ref line any word holding
 // signature), wherever it sits on the line, so a grep pattern holding %G is
-// refused too, nor with a single-dash word that holds -c or -O anywhere in its
-// cluster. sort takes only an allow list of options, which
+// refused too, nor with a single-dash word that holds -c, -O or -C anywhere in
+// its cluster: a caller's -C, separate, attached or clustered, would override
+// the wrapper's own and run git in the work area, where a planted .git/config
+// runs a program, so it is refused in every form, git log's copy detection
+// included (issue #277 round H). jq never reaches its module system: a jq word
+// holding import or include, -L in any single-dash word and --library-path
+// are refused. sort takes only an allow list of options, which
 // order and compare lines (-k and -t with their values among them), so it never
 // runs a program, reads a file it was not given or writes one; uniq takes one
 // operand at most, so its OUT never writes a file. On every command's line,
@@ -25,8 +32,7 @@
 // wrapper's path rule, issue #277 rounds F and G): a path word is a
 // non-option word holding "/" or that is "..", every word after "--", an
 // option's value after its "=", the rest of a single-dash word after its
-// first letter when that rest holds "/", and git's -C value, attached or the
-// next word ("-" alone is stdin). A relative path word is read from the
+// first letter when that rest holds "/" ("-" alone is stdin). A relative path word is read from the
 // checkout on a git line and from the work directory on any other; a word
 // holding a ".." element is refused before anything is cleaned, so a glob
 // the CLI's deny rule could not see, or a link such as /dev/fd followed by
