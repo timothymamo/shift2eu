@@ -198,6 +198,16 @@ var exitStatusWord = regexp.MustCompile(`(^|[^0-9])3([^0-9]|$)`)
 // container for this one, bundle for the stand-in rm - so the test can hand the run the second signal of the same
 // kind there (issue #423, commit 93b859d). The hold is a pair of files, never a pause: see hold_for_the_second_signal.
 //
+// SHIFT2EU_TEST_RM_AWAITS_SLEEP_PID names the file the sandbox's stand-in sleep records the watchdog's sleep in, and
+// makes the rm call wait for that file to hold a pid before it returns: the EXIT trap sends the watchdog its USR1 as
+// soon as the rm returns, so a removal that answers at once otherwise races the watchdog's own start-up, and on a
+// machine whose fork and exec are slow (macOS, bash 3.2 as /bin/sh) the signal wins in most runs and the sleep then
+// records nothing (issue #492). The wait is a poll of a condition with a deadline, never a pause that orders the two:
+// 600 polls of 0.05 s, 30 seconds, inside the 37 seconds the test's deadline gives the watchdog. A poll that runs out
+// writes what it waited for into SHIFT2EU_TEST_RM_AWAIT_TIMEOUT - the trap discards this call's standard error -
+// and exits 64, as hold_for_the_second_signal does. Unset in every other mode and test, where the removal answers at
+// once as a working runtime does.
+//
 // In the trouble mode SHIFT2EU_TEST_DOCKER_INSPECT_PLAN holds one character per inspect call - f fails the call the
 // way the container command fails for a container it cannot find, printing SHIFT2EU_TEST_DOCKER_INSPECT_ERROR on
 // standard error and exiting 1, o answers with the container's state - and its last character holds for the calls
@@ -330,6 +340,22 @@ rm)
 	if [ "${SHIFT2EU_TEST_CLEANUP_RENDEZVOUS:-}" = container ]; then
 		hold_for_the_second_signal
 	fi
+	if [ -n "${SHIFT2EU_TEST_RM_AWAITS_SLEEP_PID:-}" ]; then
+		# The watchdog's sleep is there before the trap's USR1 is: the trap waits on this call, so a removal that
+		# returns only once the sleep has recorded its pid makes the order of the two a fact on every machine, where
+		# a signal racing the watchdog's start-up left the test without a pid to check in most runs (issue #492).
+		awaited=0
+		while [ ! -s "$SHIFT2EU_TEST_RM_AWAITS_SLEEP_PID" ]; do
+			awaited=$((awaited + 1))
+			# 600 polls of 0.05 s: 30 seconds, inside the 37 seconds the test's deadline gives the watchdog.
+			if [ "$awaited" -gt 600 ]; then
+				printf 'fake docker: the watchdog never started the sleep it should record %s in\n' "$SHIFT2EU_TEST_RM_AWAITS_SLEEP_PID" \
+					> "${SHIFT2EU_TEST_RM_AWAIT_TIMEOUT:?set SHIFT2EU_TEST_RM_AWAIT_TIMEOUT}" || true
+				exit 64
+			fi
+			sleep 0.05
+		done
+	fi
 	if [ "$mode" = rm-wedged ]; then
 		# The removal that never comes back, the call this whole mode exists for: the recipe has to bound it, and a
 		# run that does not is one the test's guard timeout stops. The call itself is in the log already, above; the
@@ -387,6 +413,15 @@ exec /bin/rm "$@"
 const (
 	sleepSecondsVariable = "SHIFT2EU_TEST_SLEEP_SECONDS"
 	sleepPidFileVariable = "SHIFT2EU_TEST_SLEEP_PID_FILE"
+)
+
+// The stand-in container command's two knobs for the race issue #492 fixed: rmAwaitsSleepPidVariable names the file the
+// stand-in sleep records the watchdog's sleep in, which the removal the EXIT trap waits on waits for in turn, and
+// rmAwaitTimeoutVariable names the file a removal whose poll runs out writes what it waited for into, since the trap
+// discards that call's standard error.
+const (
+	rmAwaitsSleepPidVariable = "SHIFT2EU_TEST_RM_AWAITS_SLEEP_PID"
+	rmAwaitTimeoutVariable   = "SHIFT2EU_TEST_RM_AWAIT_TIMEOUT"
 )
 
 // fakeSleepCommand stands in for sleep in a sandbox a test asks for it in, so a test can read back the pid of the sleep
@@ -553,6 +588,12 @@ func newBrowserRecipeSandbox(t *testing.T, mode string) *browserRecipeSandbox {
 		// the second signal names the removal it waits in, and writes the stand-in rm when that one is the bundle's
 		// (issue #423).
 		"SHIFT2EU_TEST_CLEANUP_RENDEZVOUS": "",
+
+		// The removal that waits for the watchdog's sleep to record its pid, quiet by default: a test that reads that
+		// pid back sets the file per run, and reads what a poll that ran out wrote into the marker the way a run that
+		// left its sleep behind is read (issue #492).
+		"SHIFT2EU_TEST_RM_AWAITS_SLEEP_PID": "",
+		"SHIFT2EU_TEST_RM_AWAIT_TIMEOUT":    filepath.Join(root, "rm-await.timeout"),
 	}
 
 	return sb
@@ -1145,13 +1186,11 @@ func (sb *browserRecipeSandbox) endWedgedRemove(t *testing.T, pgid int) {
 // (fakeSleepCommand, issue #449).
 const watchdogDeadlineSeconds = "37"
 
-// watchdogSleepRuns is how many runs of make test-browser that test starts at once: whether a run leaves its watchdog's
-// sleep behind turns on where the USR1 the EXIT trap sends lands in the watchdog's start-up - before the watchdog sets
-// its trap, or after it sets it but before its sleep's pid is known - and only a busy machine puts the signal in those
-// windows, so the runs go at once, as several agents' runs of one worktree and the package's other tests load the
-// machine anyway, and a recipe whose watchdog exits on the USR1 without ending its sleep must show up on nearly every
-// one of them (issue #449, the reviewer's finding S1). Ten runs keep the test to a few seconds: a passing run is its
-// stand-ins' work alone.
+// watchdogSleepRuns is how many runs of make test-browser that test starts at once: ten runs at once keep ten
+// independent witnesses of the same one property, that a run whose removal returned at once leaves no sleep of its
+// watchdog behind, and the machine carries them together as several agents' runs of one worktree and the package's
+// other tests load it anyway (issue #449, the reviewer's finding S1). Ten runs keep the test to a few seconds: a
+// passing run is its stand-ins' work alone (issue #492).
 const watchdogSleepRuns = 10
 
 // recordedSleep is one pid the stand-in sleep recorded of itself: the run of make test-browser that started it, the
@@ -1167,15 +1206,18 @@ type recordedSleep struct {
 // EXIT trap starts to bound the container's removal sleeps out the deadline in a sleep of its own, and the USR1 the
 // trap sends once the removal returned must end that sleep. A watchdog that starts its sleep before it sets the trap
 // that ends it, and exits on a USR1 that reaches it in between, leaves its sleep running for the rest of the deadline:
-// the removal stays bounded, but the run leaves a process behind, which the reviewer measured on nearly every run of a
-// runtime that answers the removal at once. So a healthy run - its removal returns at once, so its watchdog needs no
-// deadline at all - must leave no sleep of its own behind, wherever the signal lands in the watchdog's start-up.
+// the removal stays bounded, but the run leaves a process behind. So a healthy run - its removal returns at once, so
+// its watchdog needs no deadline at all - must leave no sleep of its own behind.
 //
 // The pids are the sandbox's stand-in sleep's own, recorded by the stand-in itself and checked with waitForGoneAll's
-// polls, as the wedged rm's is: a pid a test found by name could belong to anything (CLAUDE.md, rule 10). The runs go
-// at once, because only a machine carrying several of them puts the signal in the windows above: a run alone on an
-// idle machine may have its watchdog trap set and its sleep's pid known before the signal is sent, and one busy machine
-// is what makes a recipe that exits on the signal there leave the sleep behind on nearly every run.
+// polls, as the wedged rm's is: a pid a test found by name could belong to anything (CLAUDE.md, rule 10). Every run
+// has one, because the stand-in removal it waits on does not return until the watchdog's sleep has recorded itself
+// (SHIFT2EU_TEST_RM_AWAITS_SLEEP_PID, issue #492): the trap sends the watchdog its USR1 as soon as that removal
+// returns, so without the wait the signal races the watchdog's start-up, and on a machine whose fork and exec are slow
+// it wins in most runs and leaves the test with no pid to check. With the wait the order of the two is a fact of every
+// run, on every machine, so a run that records no pid is a failure this test reports and not a window it happened to
+// miss - and the order the watchdog itself must keep, its USR1 trap set before its sleep starts, is pinned on the
+// recipe's text by TestMakeTestBrowserRecipeSetsTheWatchdogTrapBeforeItsSleep.
 func TestMakeTestBrowserRecipeLeavesNoWatchdogSleepBehind(t *testing.T) {
 	t.Parallel()
 
@@ -1189,22 +1231,31 @@ func TestMakeTestBrowserRecipeLeavesNoWatchdogSleepBehind(t *testing.T) {
 	// they are still in the group of the run that recorded them (CLAUDE.md, rule 10; issue #449).
 	t.Cleanup(func() { sb.endWatchdogSleeps(t, sleeps) })
 
-	// The runs go at once: the race this test is about is lost only by a machine that carries several runs, and the
-	// reviewer measured the leftover on nearly every run of a busy one (issue #449, the reviewer's finding S1).
+	// The runs go at once: ten runs of the same recipe on one machine, each of them a witness of its own.
 	pids := make([]string, watchdogSleepRuns)
 	procs := make([]*browserRecipeProcess, watchdogSleepRuns)
+
+	// awaitTimeouts is where run N's stand-in removal says that it waited 30 s for the watchdog's sleep and the sleep
+	// never came, so a run that recorded no pid is reported with what the removal saw (issue #492).
+	awaitTimeouts := make([]string, watchdogSleepRuns)
 
 	// Every run is started before any is waited for, so the machine carries all of them at once.
 	for at := range procs {
 		pids[at] = filepath.Join(sb.root, fmt.Sprintf("sleep-%d.pids", at+1))
+		awaitTimeouts[at] = filepath.Join(sb.root, fmt.Sprintf("rm-await-%d.timeout", at+1))
 
-		env := make(map[string]string, len(sb.env)+2)
+		env := make(map[string]string, len(sb.env)+4)
 		for name, value := range sb.env {
 			env[name] = value
 		}
 
 		env[sleepSecondsVariable] = watchdogDeadlineSeconds
 		env[sleepPidFileVariable] = pids[at]
+
+		// The removal the EXIT trap waits on returns only once the watchdog's sleep is recorded, so the USR1 the trap
+		// sends after it cannot reach the watchdog before its sleep exists (issue #492).
+		env[rmAwaitsSleepPidVariable] = pids[at]
+		env[rmAwaitTimeoutVariable] = awaitTimeouts[at]
 
 		procs[at] = startBrowserMake(t, sb.clone, []string{testBrowserTarget, removalDeadlineVariable + "=" + watchdogDeadlineSeconds}, env)
 	}
@@ -1228,11 +1279,12 @@ func TestMakeTestBrowserRecipeLeavesNoWatchdogSleepBehind(t *testing.T) {
 				at+1, watchdogSleepRuns, watchdogDeadlineSeconds, len(recorded), watchdogDeadlineSeconds, output)
 		}
 
-		// No pid at all is no leftover either: a USR1 that reaches the watchdog before its trap is set, or before its
-		// sleep's pid is known, leaves no sleep running - the first ends the watchdog by the default action, the second
-		// by the watchdog's own flag - so there is nothing to check.
+		// The removal the trap waits on does not return before the watchdog's sleep has recorded itself, so the trap's
+		// USR1 comes after it and every run records exactly one pid: none means the sleep the watchdog starts was not
+		// there 30 seconds after the removal began, which is the removal's own report of what it waited for.
 		if len(recorded) == 0 {
-			continue
+			t.Fatalf("run %d of %d of make test-browser's watchdog never started its sleep within 30 s, so this run left the test no pid to check and cannot tell whether a sleep of the watchdog outlived it: the stand-in removal does not return until the sleep records its pid in %s, and it reported %q (issue #449, the reviewer's finding S1; issue #492)\n%s",
+				at+1, watchdogSleepRuns, pids[at], awaitTimeoutReport(t, awaitTimeouts[at]), output)
 		}
 
 		sleeps = append(sleeps, recordedSleep{run: at + 1, pid: recorded[0], pgid: proc.pgid()})
@@ -1241,11 +1293,6 @@ func TestMakeTestBrowserRecipeLeavesNoWatchdogSleepBehind(t *testing.T) {
 	all := make([]int, 0, len(sleeps))
 	for _, sleep := range sleeps {
 		all = append(all, sleep.pid)
-	}
-
-	if len(all) == 0 {
-		t.Fatalf("none of %d runs of make test-browser started the sleep its EXIT trap's watchdog bounds the removal with, so this test cannot tell whether a run leaves one behind: the stand-in sleep records every call with the deadline %s as its argument, and a run whose removal returns at once leaves the watchdog a deadline to sleep out, however soon the trap ends it (issue #449, the reviewer's finding S1)",
-			watchdogSleepRuns, watchdogDeadlineSeconds)
 	}
 
 	left := waitForGoneAll(all)
@@ -1264,6 +1311,24 @@ func TestMakeTestBrowserRecipeLeavesNoWatchdogSleepBehind(t *testing.T) {
 
 	t.Errorf("%d of the %d runs of make test-browser that started the watchdog's sleep left it behind, %s: a watchdog that exits on the USR1 the trap sends once the removal returned, without ending its sleep, leaves it running for the whole deadline after the run has ended, one process left behind on a healthy run (issue #449, the reviewer's finding S1)",
 		len(left), len(sleeps), strings.Join(runs, ", "))
+}
+
+// awaitTimeoutReport is what the stand-in removal of one run wrote when it waited 30 s for the watchdog's sleep and the
+// sleep never came, and a note that the removal reported no timeout at all: a run that recorded no pid is then reported
+// with what the removal saw, since the trap discards that call's standard error (issue #492).
+func awaitTimeoutReport(t *testing.T, file string) string {
+	t.Helper()
+
+	body, err := os.ReadFile(file)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "no timeout: the stand-in removal returned without writing one"
+		}
+
+		t.Fatalf("read what the stand-in removal reported in %s: %v", file, err)
+	}
+
+	return strings.TrimSpace(string(body))
 }
 
 // readSleepPids reads back the pids the stand-in sleep recorded in file, in the order it appended them, and nothing
