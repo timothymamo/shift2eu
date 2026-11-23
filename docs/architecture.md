@@ -182,6 +182,14 @@ Arrows are imports. They point inwards only:
   and neither key in any output (ADR 0042). Both are held to named standard packages (`site-deploy-main`, which runs
   no program; `site-deploy-library`, no `os` and no package of the module), and the forbidigo group
   `site-deploy-env` allows only the one `os.LookupEnv` its `main.go` passes on.
+- **`ci/sitecheck`** is the live site check (PRD #297 milestone 3, issue #346, ADR 0043), which the release's check and
+  milestone 4's scheduled workflow run: it fetches every file of a release's manifest from the canonical
+  host and judges the edge's digests, redirects, certificates, caching, HSTS against `site/records/`, the
+  live version against the repository's tag list and the module script's transferred and decoded size.
+  Its entry point reads the files its flags name (`site-check-main`, no `os/exec` or `net`); its library
+  `ci/sitecheck/internal/livecheck` fetches through an injected dialer, clock and sleep, reads no file
+  and builds the `gh` commands of milestone 4 as argv without running them (`site-check-library`, no `os`
+  or `syscall`); the forbidigo group `site-check-env` refuses every read of the environment in both.
 - **`cmd/shift2eu`** is the CLI's composition root, the only place besides `cmd/shift2eu-web` that
   constructs adapters and injects them (and `ci/sitebuild`, which constructs the three targets only to
   read their catalogs). Its imports are a strict allow list (`composition-root`, issue #101): the

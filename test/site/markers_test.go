@@ -671,7 +671,11 @@ func TestEveryPageCarriesTheFooterStatement(t *testing.T) {
 // TestFootersLinkTheSiteAndShowTheVersion pins the rest of the footer (issue
 // #373, item 09): the privacy and verification links the other pages already
 // carry, and the version the build was given, never a hard-coded one. Both builds
-// are read, so the check tells the untagged version from the tagged one.
+// are read, so the check tells the untagged version from the tagged one. The
+// version sits in the one element whose id is site-version (PRD #297 milestone 3,
+// issue #346): the live site check reads the deployed version from it and matches
+// it against the repository's tag list, so the text is the version alone, as the
+// page renders it.
 func TestFootersLinkTheSiteAndShowTheVersion(t *testing.T) {
 	t.Parallel()
 
@@ -692,7 +696,8 @@ func TestFootersLinkTheSiteAndShowTheVersion(t *testing.T) {
 				t.Run(page, func(t *testing.T) {
 					t.Parallel()
 
-					footer := footerOf(t, tc.bundle.html(t, page))
+					doc := tc.bundle.html(t, page)
+					footer := footerOf(t, doc)
 
 					links := make(map[string]string, 4)
 
@@ -706,6 +711,33 @@ func TestFootersLinkTheSiteAndShowTheVersion(t *testing.T) {
 							t.Errorf("%s's footer links %q with the text %q, want a link to %s reading %q (issue #373, item 09)",
 								page, href, got, href, want)
 						}
+					}
+
+					versionSpans := 0
+
+					var versionElement *element
+
+					for _, candidate := range doc.all() {
+						if id, _ := candidate.attr("id"); id != "site-version" {
+							continue
+						}
+
+						versionSpans++
+						versionElement = candidate
+					}
+
+					if versionSpans != 1 {
+						t.Fatalf("%s holds %d elements with id=\"site-version\", want exactly one: the live site check reads the deployed version from that element (PRD #297 milestone 3, issue #346)",
+							page, versionSpans)
+					}
+
+					if !isDescendant(versionElement, footer) {
+						t.Errorf("%s's element with id=\"site-version\" is not in the page's footer, want the footer's version span: every page shows the version there (issue #373, item 09; issue #346)", page)
+					}
+
+					if got := collapseSpace(versionElement.textContent()); got != tc.version {
+						t.Errorf("%s's element with id=\"site-version\" reads %q, want %q: its text is the version alone, which the live site check matches against the tag list (issue #346)",
+							page, got, tc.version)
 					}
 
 					text := collapseSpace(footer.textContent())
