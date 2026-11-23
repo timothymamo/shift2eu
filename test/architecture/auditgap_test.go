@@ -1,6 +1,8 @@
 package architecture_test
 
 import (
+	"errors"
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -279,6 +281,46 @@ func TestCheckAuditWorkflows(t *testing.T) {
 			}
 		})
 	}
+}
+
+// checkAuditWorkflows checks a workflows directory against the rule over the
+// workflow the audit is published by, and returns every breach joined, nil
+// when there is none: the audit's own workflow holds no schedule trigger while
+// GapThresholdDays is the literal, and no other workflow names the publish
+// program, whether or not a schedule sits behind it. A missing audit workflow
+// is the "no trigger" case for that file alone: the other workflows are read
+// all the same, since a report published by a workflow the check never reads
+// skips the gap check (ADR 0040).
+func checkAuditWorkflows(t *testing.T, dir string) error {
+	t.Helper()
+
+	auditName := filepath.Base(auditWorkflow)
+
+	var breaches []error
+
+	workflow, err := os.ReadFile(filepath.Join(dir, auditName))
+
+	switch {
+	case err == nil:
+		if hasScheduleTrigger(workflow) {
+			breaches = append(breaches, fmt.Errorf("%s holds a schedule trigger, want none while %s is the literal %d: milestone 3 adds the trigger and changes this check to the cron's longest gap plus 7 days",
+				auditName, gapThresholdName, gapThresholdDays))
+		}
+	case errors.Is(err, fs.ErrNotExist):
+		// No audit workflow yet: no trigger, and the scan below still runs.
+	default:
+		t.Fatalf("read %s: %v", auditName, err)
+	}
+
+	// The audit's report is published by the audit's own workflow alone: one
+	// that ran the same program with no schedule behind it would publish a
+	// report the gap check never sees (ADR 0040).
+	for _, name := range workflowsRunningThePublishProgram(t, dir) {
+		breaches = append(breaches, fmt.Errorf("%s runs the audit's publish program (it names %s), want %s alone to run it: a report published with no schedule behind it skips the gap check",
+			name, auditPublishProgram, auditName))
+	}
+
+	return errors.Join(breaches...)
 }
 
 // writeWorkflows writes the workflows into a fresh temporary directory and

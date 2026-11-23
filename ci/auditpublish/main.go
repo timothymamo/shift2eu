@@ -125,6 +125,8 @@ func artifacts(ctx context.Context, args []string, lookup func(string) (string, 
 		Token:   github.NewToken(token),
 		TempDir: *tempDir,
 		Scope:   github.Scope{Repository: repository, RunID: runID, Date: date},
+		// The artifact check reads one listing: its client writes nothing.
+		ReadOnly: true,
 	})
 	if err != nil {
 		return err

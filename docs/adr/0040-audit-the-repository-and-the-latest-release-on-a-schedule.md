@@ -906,7 +906,12 @@ standard packages, each entry ending in `$`, pinned by `test/architecture`:
 check both downloading jobs run before they download: one listing of the run's artifacts, refused unless
 it is exactly `checks-result` (the model job) or exactly `checks-result` and `model-result` (the publish
 job): an artifact the job does not expect, a name twice, an expected artifact missing, an expired one or
-a `total_count` above the listed count (a second page) is refused; it prints `artifacts: as expected`,
+a `total_count` above the listed count (a second page) is refused, and so is an answer with any data
+after the one listing (`ErrGitHub`, outcome 8: whitespace alone may follow it). Its client is
+**read-only** (`ClientConfig.ReadOnly`): every method but `GET` is refused with `ErrEndpointRefused`
+before the endpoint table is consulted and before `gh` runs. The table is the publish job's, wider than
+one listing needs; a client that may only read keeps the artifact check, whose step holds the job's
+`github.token`, no wider than the subcommand needs. It prints `artifacts: as expected`,
 `artifacts: unexpected: see runbook step 11` (exit 3), or the core's GitHub and configuration lines
 (exits 8 and 9). `auditpublish publish -result <path> -reports <dir> -gh <path> -gitleaks <path> -tmp
 <dir>` is the publish job's program; its summary line and exit code are the core's `Outcome`. The job
@@ -991,7 +996,10 @@ read); the publish step gets the App's token.
   finding's text would hide it from the scan. The program therefore refuses any text it is about to
   scan that contains the marker in any letter case,
   before gitleaks runs, as a scan that found a leak (`publish.ErrScanRefused`, outcome 4); nothing is
-  published. The core's own token patterns do not depend on gitleaks and still run.
+  published. The core's own token patterns do not depend on gitleaks and still run. Since the model
+  reads this repository, no tracked file may spell the marker out either, in any letter case
+  (`test/lint`'s `TestNoTrackedFileSpellsTheInlineAllowComment`): a line the model quoted would refuse
+  the audit's own run. Tests that feed a scanner the marker build it in code from its two parts.
 
 **The endpoint table.** `R` is `repos/<owner>/<name>` of `GITHUB_REPOSITORY`; the run ID, the date, the
 branch and the audited commit are this run's own:

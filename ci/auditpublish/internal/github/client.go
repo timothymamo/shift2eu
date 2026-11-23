@@ -62,6 +62,10 @@ type ClientConfig struct {
 	// CallTimeout bounds each call; zero is defaultTimeout, a negative one is
 	// no configuration.
 	CallTimeout time.Duration
+	// ReadOnly refuses every method but GET before the endpoint table and
+	// before gh runs: the artifacts subcommand's client, which reads the run's
+	// artifacts and needs no wider table than that.
+	ReadOnly bool
 }
 
 // Request is one GitHub API call.
@@ -103,11 +107,12 @@ var (
 // Client runs gh api for the calls the endpoint table allows. It formats as a
 // placeholder, never with its token.
 type Client struct {
-	ghPath  string
-	token   Token
-	dir     string
-	scope   Scope
-	timeout time.Duration
+	ghPath   string
+	token    Token
+	dir      string
+	scope    Scope
+	timeout  time.Duration
+	readOnly bool
 }
 
 // clientPlaceholder is what a Client formats as with every verb: fmt does not
@@ -153,7 +158,7 @@ func NewClient(cfg ClientConfig) (*Client, error) {
 		return nil, fmt.Errorf("github client: gh's configuration directory not made: %w", publish.ErrConfig)
 	}
 
-	return &Client{ghPath: cfg.GHPath, token: cfg.Token, dir: dir, scope: cfg.Scope, timeout: timeout}, nil
+	return &Client{ghPath: cfg.GHPath, token: cfg.Token, dir: dir, scope: cfg.Scope, timeout: timeout, readOnly: cfg.ReadOnly}, nil
 }
 
 // checkProgram refuses a program path that is not absolute and clean or does
@@ -201,7 +206,8 @@ func validateScope(s Scope) error {
 	return nil
 }
 
-// Call checks the request against the endpoint table (Allowed) and only then
+// Call refuses any method but GET on a read-only client, checks the request
+// against the endpoint table (Allowed) and only then
 // runs gh api --method <M> --include with the two fixed headers, the body on
 // stdin (--input - only when there is one), and gh's own environment. gh's
 // stderr is discarded unread.
@@ -218,6 +224,10 @@ func validateScope(s Scope) error {
 func (c *Client) Call(ctx context.Context, req Request) (Response, error) {
 	if c == nil || c.dir == "" {
 		return Response{}, fmt.Errorf("github call: no open client: %w", publish.ErrConfig)
+	}
+
+	if c.readOnly && req.Method != "GET" {
+		return Response{}, fmt.Errorf("github call: a method other than GET on a read-only client: %w", ErrEndpointRefused)
 	}
 
 	var body []byte

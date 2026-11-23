@@ -20,7 +20,11 @@
 // over the 8 MiB cap, is publish.ErrGitHub.
 //
 // It checks the run's artifacts before a job downloads them (CheckArtifacts),
-// and scans every text with gitleaks (Gitleaks) beside the core's own scans.
+// refusing an answer with anything after the one listing. The artifacts
+// subcommand's client is read-only (ClientConfig.ReadOnly): Call refuses every
+// method but GET with ErrEndpointRefused before the table and before gh runs,
+// so the check that holds the job's token can reach no wider than the one read
+// it needs, not the publish job's whole table. It scans every text with gitleaks (Gitleaks) beside the core's own scans.
 // It decides nothing a model wrote: ci/auditpublish/internal/publish, the
 // core, validates, places, renders and scans; this package reads GitHub, files
 // what the core built and returns errors of the core's classes, which never

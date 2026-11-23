@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 
 	"github.com/timothymamo/shift2eu/ci/auditpublish/internal/publish"
 )
@@ -83,6 +84,11 @@ func CheckArtifacts(ctx context.Context, c *Client, job Job) error {
 	dec := json.NewDecoder(bytes.NewReader(resp.Body))
 	if err := dec.Decode(&listing); err != nil || listing.TotalCount == nil || listing.Artifacts == nil {
 		return fmt.Errorf("artifact check: the answer is not the artifact listing: %w", publish.ErrGitHub)
+	}
+
+	// One listing and nothing after it: trailing data is no listing either.
+	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
+		return fmt.Errorf("artifact check: data after the artifact listing: %w", publish.ErrGitHub)
 	}
 
 	artifacts := *listing.Artifacts
