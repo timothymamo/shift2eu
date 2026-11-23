@@ -1,6 +1,7 @@
 package livecheck
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -45,6 +46,17 @@ type manifestFileJSON struct {
 	SHA256 *string `json:"sha256"`
 }
 
+// manifestFileFields is manifestFileJSON without its UnmarshalJSON method, so
+// decoding into it does not call that method again.
+type manifestFileFields manifestFileJSON
+
+// UnmarshalJSON decodes one file of the manifest as strictly as decodeStrict
+// decodes the manifest itself: an object with only the keys "path" and
+// "sha256", exactly, each at most once, no unknown field.
+func (f *manifestFileJSON) UnmarshalJSON(data []byte) error {
+	return decodeStrict(bytes.NewReader(data), int64(len(data)), (*manifestFileFields)(f), "path", "sha256")
+}
+
 // digestPattern is a SHA-256 as the manifest holds it.
 var digestPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
@@ -55,7 +67,8 @@ var moduleScriptPattern = regexp.MustCompile(`^module\.[0-9a-f]{16}\.js$`)
 // MaxManifestBytes (more is an error): exactly one JSON object with exactly
 // the fields "version" (a string) and "files" (an array of objects with
 // exactly the fields "path" and "sha256"), nothing after the object but
-// white space, no unknown or missing field. It refuses a path that is empty,
+// white space, no unknown or missing field, every key exactly as written here,
+// case included, and none twice in its object. It refuses a path that is empty,
 // starts with "/", holds a "." or ".." element, an empty element ("a//b"), a
 // backslash, "?", "#", "%", a control character, a space or any other
 // character outside printable ASCII, and a sha256 that is not 64 lowercase
@@ -65,7 +78,7 @@ var moduleScriptPattern = regexp.MustCompile(`^module\.[0-9a-f]{16}\.js$`)
 func ParseManifest(r io.Reader) (Manifest, error) {
 	var doc manifestJSON
 
-	if err := decodeStrict(r, MaxManifestBytes, &doc); err != nil {
+	if err := decodeStrict(r, MaxManifestBytes, &doc, "version", "files"); err != nil {
 		return Manifest{}, fmt.Errorf("manifest: %w", err)
 	}
 
