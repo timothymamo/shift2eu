@@ -21,9 +21,14 @@
 // its cluster: a caller's -C, separate, attached or clustered, would override
 // the wrapper's own and run git in the work area, where a planted .git/config
 // runs a program, so it is refused in every form, git log's copy detection
-// included (issue #277 round H). jq never reaches its module system: a jq word
-// holding import or include, -L in any single-dash word and --library-path
-// are refused. sort takes only an allow list of options, which
+// included (issue #277 round H). jq never reaches its module system or a
+// program file: a jq word holding import or include, -L or -f in any
+// single-dash word, and --library-path or --from-file (alone, with "=" and
+// abbreviated) are refused, so the audit's filters come on the line. No
+// command reads a list of paths from a file the path rule never sees: wc's
+// --files0-from and sha256sum's -c and --check are refused in every form, a
+// cluster included (issue #277 round I). sort takes only an allow list of
+// options, which
 // order and compare lines (-k and -t with their values among them), so it never
 // runs a program, reads a file it was not given or writes one; uniq takes one
 // operand at most, so its OUT never writes a file. On every command's line,

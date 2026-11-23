@@ -15,7 +15,8 @@ const (
 	// result file.
 	ExitFailed = 1
 	// ExitUsage is a usage or input error: a flag, the token, the canary or
-	// $GITHUB_ENV.
+	// $GITHUB_ENV. Run never returns it: ci/auditrun returns it when it
+	// cannot read its inputs, before any step runs.
 	ExitUsage = 2
 	// ExitRefused is a run refused before the CLI ran: an API key, a managed
 	// setting, a checksum mismatch, the audit directory not as laid out.

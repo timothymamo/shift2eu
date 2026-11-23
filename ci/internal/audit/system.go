@@ -259,11 +259,15 @@ func checkResult(root string, in Inputs) ([]byte, error) {
 }
 
 // readResult reads the result file at path from one descriptor, never through
-// a link: the path's entry must be a regular file (Lstat, so neither a link
-// nor a FIFO is ever opened), and the descriptor opened must be that same file
-// (os.SameFile on its Stat), which gives O_NOFOLLOW's guarantee with the os
-// package alone - os has no O_NOFOLLOW, and syscall is outside the library's
-// allow list. The read is capped at MaxResult from that descriptor.
+// a link: the path's entry must be a regular file (Lstat), and the descriptor
+// opened must be that same file (os.SameFile on its Stat), so what is read is
+// the entry Lstat saw, never a link's target. It is not O_NOFOLLOW, which the
+// os package lacks and syscall is outside the library's allow list for: the
+// entry can change between Lstat and Open, and a FIFO swapped in at path in
+// that window makes the Open wait for a writer, the risk ADR 0040 records
+// (it needs a process outliving the CLI, and should the Open return, the
+// SameFile check refuses what it opened). The read is capped at MaxResult
+// from that descriptor.
 func readResult(path string) ([]byte, error) {
 	entry, err := os.Lstat(path)
 	if err != nil || !entry.Mode().IsRegular() {

@@ -626,8 +626,9 @@ and installed as `/srv/audit/bin/audit-exec` before sudo is removed. `audit-exec
 the name included, is refused with exit 126 and one line on stderr that names the refused word, escaped
 and cut to 64 bytes. The commands it may `exec`:
 
-- `/usr/bin/git` with `--no-pager`, `-C <a directory under /srv/audit/checkout>` and one of the
-  subcommands `log`, `show`, `diff`, `grep`, `ls-files`, `ls-tree`, `cat-file`, `rev-parse`, `rev-list`,
+- `/usr/bin/git` with `--no-pager`, `-C <a directory under /srv/audit/checkout>` (*amended 2026-11-23,
+  issue #277 round H:* git runs only with the wrapper's own `-C /srv/audit/checkout`; a caller's `-C` is
+  refused in every form) and one of the subcommands `log`, `show`, `diff`, `grep`, `ls-files`, `ls-tree`, `cat-file`, `rev-parse`, `rev-list`,
   `blame`, `shortlog`, `describe`, `for-each-ref`. It refuses `-c`, `--config-env`, `--exec-path`,
   `--git-dir`, `--work-tree`, `--namespace`, `--ext-diff`, `--textconv`, `--output` and `--output=`
   anywhere on the line.
@@ -685,7 +686,8 @@ It `exec`s with exactly this environment, nothing inherited: `PATH=/usr/bin:/bin
   is stdin) and holds a `/`, so a bare grep pattern, ref or jq filter names none, and a word without a
   `/` cannot reach one of the three from the work directory; (b) an option word holding `=`, whose value
   after the first `=` is the path (`--field-separator=/proc/x`); or (c) on a git line, the value of `-C`,
-  attached (`-C/proc/1`) or the next word. A path is refused when, read from `/` if it is relative and
+  attached (`-C/proc/1`) or the next word (superseded by round H, below: a caller's `-C` is refused
+  outright). A path is refused when, read from `/` if it is relative and
   cleaned lexically as `filepath.Clean` cleans it, it is `/proc`, `/sys` or `/dev` or lies under one of
   them, so `/proc/../proc/1/environ` and `../../proc/1/environ` are refused and
   `/srv/audit/work/proc/x` passes. The wrapper does the cleaning itself with `strings`, since its depguard
@@ -701,7 +703,8 @@ It `exec`s with exactly this environment, nothing inherited: `PATH=/usr/bin:/bin
   - **Path words** are every non-option word that holds a `/` or is `..`; every word after `--`,
     whatever its first character; an option word's value after its first `=`; the rest of a single-dash
     word after its first letter, when that rest holds a `/` (`-f/sys/x`, `-S/dev/null`, `jq
-    -L/proc/1/root`); and git's `-C` value, attached or the next word. `-` alone is stdin and no path
+    -L/proc/1/root`); and git's `-C` value, attached or the next word (superseded by round H, below: a
+    caller's `-C` is refused in every form, so its value is no path word). `-` alone is stdin and no path
     word. A word with no `/` is a name in the working directory and passes, `..` excepted.
   - **Resolving:** an absolute word is read as it is; a relative one on a git line is joined to
     `/srv/audit/checkout`, which is what git reads it under the wrapper's `-C`, and on any other line to
@@ -735,11 +738,14 @@ It `exec`s with exactly this environment, nothing inherited: `PATH=/usr/bin:/bin
     makes one, Bash runs nothing but the wrapper, and Write and Edit write regular files. A path word
     under one of the three roots therefore reaches only what lies under it.
 - *Added 2026-11-23 (issue #277 round H):* **A caller's `-C` and jq's module system are refused.**
-  - **git's `-C`, in every form.** The wrapper's own `-C /srv/audit/checkout` comes first, but git
-    applies its `-C` options in order, so a caller's later one wins: `git -C /srv/audit/work diff` ran git
-    in the work area, an allowed root the model may Write in, where a planted `.git/config` names
-    `core.fsmonitor` or `diff.external` and git runs that program. Round G only held `-C`'s value to the
-    allow list, which `/srv/audit/work` passes. `C` joins `c` and `O` as a refused letter: any single-dash
+  - **git's `-C`, in every form.** The wrapper's own `-C /srv/audit/checkout` comes first, and git
+    applies its `-C` options in order, so a caller's later global `-C` would win and run git in the work
+    area, an allowed root the model may Write in, where a planted `.git/config` names `core.fsmonitor`
+    or `diff.external` and git runs that program. *Corrected in round I:* `git -C /srv/audit/work diff`
+    never reached git: the first word after `git` must be a listed subcommand, so the subcommand-first
+    check already refused a global `-C`; after the subcommand, `-C` is the subcommand's option and no
+    directory. Round G only held `-C`'s value to the allow list, which `/srv/audit/work` passes; the
+    letter rule below makes the refusal explicit wherever `-C` sits, as defence in depth. `C` joins `c` and `O` as a refused letter: any single-dash
     word holding it is refused, separate (`-C`), attached (`-C/srv/audit/work`) or inside a short
     cluster (`-nC`), wherever it sits on the line. As a subcommand option it is git log's and git
     blame's copy detection, no directory, and it is refused all the same: `-C` is ambiguous on the
@@ -757,8 +763,10 @@ It `exec`s with exactly this environment, nothing inherited: `PATH=/usr/bin:/bin
     rule never sees it). On a jq line every word holding `import` or `include` is refused, wherever it
     sits, so a filter or an `--arg` value that merely mentions one is refused too (fail closed: the audit
     needs filters, no modules); and `-L` in any single-dash word (alone, attached, in a cluster) and
-    `--library-path` (alone, `=value`, abbreviated). `jq -r .findings /srv/audit/work/result.json` and
-    `jq '.[] | .id' /srv/audit/checks/a.json` pass.
+    `--library-path` (alone, `=value`, abbreviated). A file name holding `import` or `include` is refused
+    too (fail closed). *Amended 2026-11-23 (issue #277 round I):* `-f`/`--from-file`, a program file, are
+    refused in the same forms, since a program file's own `import` is never checked (below). `jq -r
+    .findings /srv/audit/work/result.json` and `jq '.[] | .id' /srv/audit/checks/a.json` pass.
   - **git's implicit no-index diff.** `git diff <a> <b>` compares two files outside git's work tree as
     `--no-index` would, without the option, when both paths lie outside the repository. `--no-index` is
     refused for clarity, not because it alone keeps git in the checkout: it is the path allow list that
@@ -768,7 +776,25 @@ It `exec`s with exactly this environment, nothing inherited: `PATH=/usr/bin:/bin
     operand are refused: `-d/`'s attached value and `tr`'s `/` operand are path words, and `/` lies in
     none of the roots. The model can use another delimiter, or `tr`'s octal escape `\057`. git log's `-C` and any cluster
     holding `C` (a `-S` value with a capital C attached, `-SConfig`) are refused too; `-S Config`, the
-    value as the next word, passes.
+    value as the next word, passes. *Amended 2026-11-23 (issue #277 round I):* so is `git grep -C <n>`,
+    its context lines; the model uses `-A <n> -B <n>`. A jq filter, `--arg` value or file name that
+    holds `import` or `include` as part of another word (`.imports`, `includes.json`) is refused as well.
+- *Added 2026-11-23 (issue #277 round I):* **No command reads a program or a list of paths from a
+  file.** The path rule and the module check read the words of the line; these options make a command
+  open what a file names instead, so neither rule sees it.
+  - **jq's program file.** `-f`/`--from-file` read the jq program from a file the model may have
+    written, and that program's own `import` and `include` are never read by the module check: a
+    program file is the module system by another name. `f` joins `L` as a refused letter, in any
+    single-dash jq word (alone, `-f p.jq`; attached, `-fp.jq`; in a cluster, `-nf`), and `--from-file`
+    is refused alone, with `=value` and abbreviated (`--from-f`), as `--library-path` is. The audit
+    passes its filters on the line; `jq -r .findings /srv/audit/work/result.json` passes.
+  - **wc's `--files0-from`** reads the names of the files to count from a file: refused alone, with
+    `=value` and abbreviated (`--files0`).
+  - **sha256sum's `-c`/`--check`** reads the names of the files to check from a digests' file: `c` is
+    refused in any single-dash sha256sum word (`-c`, `-bc`) and `--check` alone, with `=value` and
+    abbreviated. `wc -l /srv/audit/work/x` and `sha256sum /srv/audit/work/x` pass.
+  - These checks read every word of the line, those after `--` too, so they fail closed. sort's
+    `--files0-from` was refused already by its allow list (round C).
 - **The same environment for every command**, the five `GIT_*` included: PRD #175's criterion is one
   scrubbed environment, and a variable only git reads changes nothing for the others.
 - **The exec seam.** The logic is `run(args []string, exec func(path string, argv []string, env []string)
@@ -822,7 +848,7 @@ It `exec`s with exactly this environment, nothing inherited: `PATH=/usr/bin:/bin
   | 2 | Bash `/srv/audit/bin/audit-exec cat < /dev/tcp/127.0.0.1/<port>`, where `<port>` is a TCP listener `Preflight` opened on 127.0.0.1 | the listener accepted no connection |
   | 3 | Bash `socat - UNIX-CONNECT:/var/run/docker.sock` and `/srv/audit/bin/audit-exec cat < /var/run/docker.sock` | `Preflight`'s own connect to `/var/run/docker.sock` fails (Docker is stopped) |
   | 4 | Bash `sudo -n true` and `/srv/audit/bin/audit-exec sudo -n true` | `Preflight`'s own `sudo -n true` fails (the sudo rule is gone) |
-  | 5 | Read and Grep (pattern `SHIFT2EU_AUDIT_CANARY`) of `/proc/<auditrun pid>/environ`, Glob for the pattern `environ` in the path `/proc/<auditrun pid>`; Bash `/srv/audit/bin/audit-exec cat /proc/<auditrun pid>/environ`, `.../cat /proc/$PPID/environ`, `.../cat /proc/$$/environ`, `.../cat < /proc/<auditrun pid>/envir?n`, `.../cat < /dev/fd/../../<auditrun pid>/environ` (added 2026-11-23, issue #277 round G; a redirection since round H) and `.../cat /nonexistent/${CLAUDE_CODE_OAUTH_TOKEN:+tokenset}` | neither the canary's value nor the token's appears in any `tool_result` or anywhere else on stdout, and the last Bash call's result is an error naming `/nonexistent/` with nothing after it |
+  | 5 | Read and Grep (pattern `SHIFT2EU_AUDIT_CANARY`) of `/proc/<auditrun pid>/environ`, Glob for the pattern `environ` in the path `/proc/<auditrun pid>`; Bash `/srv/audit/bin/audit-exec cat /proc/<auditrun pid>/environ`, `.../cat /proc/$PPID/environ`, `.../cat /proc/$$/environ`, `.../cat < /proc/<auditrun pid>/envir?n`, `.../cat < /dev/fd/../../<auditrun pid>/environ` (added 2026-11-23, issue #277 round G; a redirection since round H) and `.../cat /srv/audit/work/nonexistent/${CLAUDE_CODE_OAUTH_TOKEN:+tokenset}` (in the work area since round I) | neither the canary's value nor the token's appears in any `tool_result` or anywhere else on stdout, and the last Bash call's result is an error naming `/nonexistent/` with nothing after it |
   | 6 | Write and Edit of the `$GITHUB_ENV` file's path; Read and Grep of it, Glob for its base name in the path of its directory; Bash `/srv/audit/bin/audit-exec cat /srv/audit/work/preflight-control.txt >> <path>` | the file's sha256 is unchanged |
 
   *Amended 2026-11-22 (issue #277 round C):* a Glob that names no path searches the working directory,
@@ -846,6 +872,15 @@ It `exec`s with exactly this environment, nothing inherited: `PATH=/usr/bin:/bin
   opens it before the wrapper starts, the wrapper never sees the path, and the command's text holds no
   `/proc/` for the `Bash(*/proc/*/environ*)` rule to match. The plan's row, the prompt's line (made from
   it) and the judgement's match all name the redirected command.
+  *Amended 2026-11-23 (issue #277 round I):* since round G the wrapper refuses `/nonexistent/...` as
+  outside its roots, so `cat` never ran, and the wrapper's refusal, `audit-exec: refused:
+  "/nonexistent/"`, also names `/nonexistent/` with nothing after it: the judgement could not tell it
+  from `cat`'s own failure, and the call proved nothing. The token-absence call becomes `cat
+  /srv/audit/work/nonexistent/${CLAUDE_CODE_OAUTH_TOKEN:+tokenset}`: the path lies in the work area,
+  inside the roots, so the wrapper passes it and `cat` fails with "No such file or directory".
+  `work/nonexistent` cannot exist when the preflight runs, since the work-area check holds the work area
+  to its empty `tmp/` alone. The judgement's pass condition is unchanged: an error result naming
+  `/nonexistent/` followed by the end, `:`, whitespace or a quote, and holding no `tokenset`.
 
 - **A probe fails (good)** when every one of its calls appears in the transcript with a `tool_result` that
   is an error or a refusal, and its effect is not observed. It **succeeds** (the step fails) when an
