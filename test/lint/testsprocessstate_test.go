@@ -244,20 +244,23 @@ var processStateSelectorNames = []string{"Setenv", "Unsetenv", "Clearenv", "Chdi
 //
 // One call is no finding: the expression processStateCallException names, in the
 // file it names, the audit wrapper's os.Chdir, which .golangci.yml's exclusion
-// rule drops there too.
+// rule drops there too, and only the first of those in that file: a second one is
+// a finding (issue #277, round H, finding 4).
 func processStateSelectorFindings(t *testing.T, files []goFile) []finding {
 	t.Helper()
 
 	var found []finding
 	for _, f := range files {
 		fset, file := parseGoFile(t, f)
+		var excepted int
 		ast.Inspect(file, func(n ast.Node) bool {
 			sel, ok := n.(*ast.SelectorExpr)
 			if !ok || !slices.Contains(processStateSelectorNames, sel.Sel.Name) {
 				return true
 			}
 			expr := exprText(sel)
-			if processStateCallException(f.rel, expr) {
+			if processStateCallException(f.rel, expr, excepted) {
+				excepted++
 				return true
 			}
 			found = append(found, finding{
@@ -292,26 +295,34 @@ func processStateScope(rel string) bool {
 		rel != aiReviewerEnvTestFile
 }
 
-// auditExecChdirFile and auditExecChdirExpr are the group's one call-level
-// exception (issue #277, round G, ADR 0040's amendment). ci/auditexec/main.go
-// passes os.Chdir to run, which changes into the audit's fixed work directory
-// before it execs a line, so the wrapper's work happens there whatever directory
-// the caller was in. The group's Chdir entry refuses every call named Chdir, so
-// the source check holds the exclusion rule's drop to this one expression: the
-// rest of main.go's process-state calls and every other file's stay refused.
+// auditExecChdirFile, auditExecChdirExpr and auditExecChdirCalls are the group's
+// one call-level exception (issue #277, round G, ADR 0040's amendment).
+// ci/auditexec/main.go passes os.Chdir to run, which changes into the audit's
+// fixed work directory before it execs a line, so the wrapper's work happens
+// there whatever directory the caller was in. The group's Chdir entry refuses
+// every call named Chdir, so the source check holds the exclusion rule's drop to
+// this one expression: the rest of main.go's process-state calls and every other
+// file's stay refused. It is one call, not the file's leave to change its
+// directory (issue #277, round H, finding 4): the exec needs a single change into
+// the work directory, so the file holds at most auditExecChdirCalls of them, and a
+// second one is a finding.
 const (
-	auditExecChdirFile = "ci/auditexec/main.go"
-	auditExecChdirExpr = "os.Chdir"
+	auditExecChdirFile  = "ci/auditexec/main.go"
+	auditExecChdirExpr  = "os.Chdir"
+	auditExecChdirCalls = 1
 )
 
 // processStateCallException reports whether the group tests-no-process-state is
 // dropped for the call expr, as exprText renders it, in the file at rel, a
-// slash-separated path from the module root: true for os.Chdir in
-// ci/auditexec/main.go alone, and false for every other expression, there and
-// anywhere else. It compares the rendered expression, so a file that reaches the
-// same call under a name of its own is no exception.
-func processStateCallException(rel, expr string) bool {
-	return rel == auditExecChdirFile && expr == auditExecChdirExpr
+// slash-separated path from the module root: true for the first auditExecChdirCalls
+// os.Chdir calls of ci/auditexec/main.go, and false for every further one there
+// and for every other expression anywhere else. previouslyExcepted is the number
+// of expressions of that file the check already let pass, which the caller counts
+// in source order, so the exception holds for one call however the file is
+// written. It compares the rendered expression, so a file that reaches the same
+// call under a name of its own is no exception.
+func processStateCallException(rel, expr string, previouslyExcepted int) bool {
+	return rel == auditExecChdirFile && expr == auditExecChdirExpr && previouslyExcepted < auditExecChdirCalls
 }
 
 // TestTestsChangeNoProcessStateByNoSelector fails on every selector that
