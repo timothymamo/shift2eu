@@ -33,8 +33,9 @@ func releaseDryRunFrom(release []byte) string {
 // the release's latest and tag rules run on sample tags in place of the pushed
 // one, the release's build settings written to an OCI archive, and the SBOM of
 // the built image), the test job's build of the site's bundle and of the
-// release's archives, and the browser job's smoke test (PRD #297 milestone 3).
-// Its pins are placeholders (workflowPins).
+// release's archives, and the browser job's build, unpack and smoke test of the
+// site's bundle, the release's own path to a real Chromium (PRD #297 milestone
+// 3). Its pins are placeholders (workflowPins).
 const ciDryRunTemplate = `name: CI
 
 on:
@@ -63,10 +64,23 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
-      # The same target release.yml's site-browser job runs, on the bundle make
-      # test-browser builds for itself (PRD #297 milestone 3).
+      # The release's path to a real Chromium, on the bundle make site builds
+      # here (PRD #297 milestone 3): release.yml's site-browser job builds the
+      # bundle, unpacks its archive into bin/release-bundle and smoke-tests that
+      # directory, so a pull request runs the release's own path rather than one
+      # the recipe builds for itself.
+      - name: Build the site's bundle
+        run: make site
+      # Release.yml's step without its digest check, which reads the site job's
+      # output, a job CI does not have, and with the archive under the untagged
+      # build's version: make site alone names it dev.
+      - name: Unpack the site's bundle
+        run: |
+          set -euo pipefail
+          mkdir bin/release-bundle
+          tar -xzf "bin/shift2eu-site_dev.tar.gz" -C bin/release-bundle
       - name: Smoke test the site's bundle in a headless Chromium
-        run: make test-browser
+        run: make test-browser TEST_BROWSER_BUNDLE=bin/release-bundle
   image:
     name: Container image
     runs-on: ubuntu-latest
@@ -575,8 +589,10 @@ func TestDryRunMirrorsRelease(t *testing.T) {
 
 		// The site's bundle in the dry run (PRD #297 milestone 3): CI builds it the
 		// way the release does, so the snapshot's checksums.txt lists it, and CI's
-		// browser job runs the very target the release's site-browser job runs,
-		// which tests the bundle the site job built instead of one of its own.
+		// browser job takes the release's own path to a real Chromium - make site,
+		// the archive unpacked into bin/release-bundle, then the release's smoke test
+		// on that directory - so the path the release takes at a tag is one a pull
+		// request has already run.
 		{
 			name:    "a ci.yml that never builds the site's bundle",
 			ci:      mutate(t, ciDryRun, "      - name: The site's bundle\n        run: make site\n", ""),
@@ -602,10 +618,28 @@ func TestDryRunMirrorsRelease(t *testing.T) {
 			wantIn:  "make test-browser",
 		},
 		{
-			name:    "a ci.yml whose browser job runs another target",
-			ci:      mutate(t, ciDryRun, "        run: make test-browser\n", "        run: make site\n"),
+			name:    "a ci.yml whose browser job smoke-tests a bundle of its own",
+			ci:      mutate(t, ciDryRun, "        run: make test-browser TEST_BROWSER_BUNDLE=bin/release-bundle\n", "        run: make test-browser\n"),
 			release: releaseDryRun,
-			wantIn:  "make test-browser",
+			wantIn:  "TEST_BROWSER_BUNDLE=bin/release-bundle",
+		},
+		{
+			name:    "a ci.yml whose browser job never builds the site's bundle",
+			ci:      mutate(t, ciDryRun, "      - name: Build the site's bundle\n        run: make site\n", ""),
+			release: releaseDryRun,
+			wantIn:  "make site",
+		},
+		{
+			name:    "a ci.yml whose browser job unpacks the bundle into another directory",
+			ci:      mutate(t, ciDryRun, "          mkdir bin/release-bundle\n          tar -xzf \"bin/shift2eu-site_dev.tar.gz\" -C bin/release-bundle\n", "          mkdir bin/other-bundle\n          tar -xzf \"bin/shift2eu-site_dev.tar.gz\" -C bin/other-bundle\n"),
+			release: releaseDryRun,
+			wantIn:  "unpack",
+		},
+		{
+			name:    "a ci.yml whose browser job smoke-tests before it unpacks",
+			ci:      mutate(t, ciDryRun, "      - name: Unpack the site's bundle\n        run: |\n          set -euo pipefail\n          mkdir bin/release-bundle\n          tar -xzf \"bin/shift2eu-site_dev.tar.gz\" -C bin/release-bundle\n      - name: Smoke test the site's bundle in a headless Chromium\n        run: make test-browser TEST_BROWSER_BUNDLE=bin/release-bundle\n", "      - name: Smoke test the site's bundle in a headless Chromium\n        run: make test-browser TEST_BROWSER_BUNDLE=bin/release-bundle\n      - name: Unpack the site's bundle\n        run: |\n          set -euo pipefail\n          mkdir bin/release-bundle\n          tar -xzf \"bin/shift2eu-site_dev.tar.gz\" -C bin/release-bundle\n"),
+			release: releaseDryRun,
+			wantIn:  "unpack",
 		},
 		{
 			name:    "a ci.yml browser job at another checkout pin",

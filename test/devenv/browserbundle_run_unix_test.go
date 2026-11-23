@@ -288,6 +288,98 @@ func TestMakeTestBrowserRecipeRefusesAGivenBundleItCannotServe(t *testing.T) {
 	}
 }
 
+// expansionMarker is the text a value holding a make function would print were make, or its shell, to run what the
+// value holds: no run may print it, since the recipe reads the value raw.
+const expansionMarker = "EXPANDED-BY-MAKE"
+
+// TestMakeTestBrowserRecipeReadsACommandLineGivenBundleRaw pins that the value is read raw whichever way it reaches
+// make (PRD #297 milestone 3): a value given on make's command line is a recursive variable in its origin, so make
+// expands it - runs what it holds - wherever the recipe names it plainly, as the environment's copy once did. The
+// recipe takes it with $(value ...), as it takes the deadline and SITE_VERSION, and refuses a value holding a make
+// function before it starts anything: a call in it is never expanded, by make or by its shell, and the raw value is
+// what the one line on standard error names, with exit status 2.
+func TestMakeTestBrowserRecipeReadsACommandLineGivenBundleRaw(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		// value is what make's command line holds: a make function call, which make runs as it expands the
+		// variable, and one whose own shell would run if the value reached a shell unrefused.
+		value string
+	}{
+		{name: "a value holding an info function", value: "$(info " + expansionMarker + ")"},
+		{name: "a value holding a shell function", value: "$(shell echo " + expansionMarker + " >&2)x"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			sb := newBrowserRecipeSandbox(t, dockerModePassing)
+
+			buildLog := filepath.Join(sb.root, "build.log")
+			sb.env["SHIFT2EU_TEST_BUILD_LOG"] = buildLog
+
+			// The value comes as make's own command-line argument, as the release's workflow and a maintainer write
+			// it: make's recursive variable, which it expands.
+			args := []string{testBrowserTarget, givenBundleVariable + "=" + tc.value}
+
+			run := runBrowserMake(makeProgram(t), sb.clone, args, sb.env, failFastTimeout)
+			output := run.output()
+
+			if run.timedOut {
+				t.Fatalf("make test-browser was still running after %s and the test stopped it, with %s given as %q on its command line: the recipe must decide on the value before it starts anything\n%s",
+					failFastTimeout, givenBundleVariable, tc.value, output)
+			}
+
+			// Make prints what a function it expanded returned on standard output, and its shell's own output on
+			// standard error: neither may hold the marker, whatever else the refusal says.
+			if strings.Contains(run.stdout, expansionMarker) {
+				t.Errorf("make test-browser printed %q on standard output, so make expanded the %s it was given as %q on its command line and ran the function it holds: the value is read raw, as SITE_VERSION's is, and a value holding one is refused unexpanded (PRD #297 milestone 3)\n%s",
+					expansionMarker, givenBundleVariable, tc.value, output)
+			}
+
+			status := -1
+
+			var exitErr *exec.ExitError
+			if errors.As(run.err, &exitErr) {
+				status = exitErr.ExitCode()
+			}
+
+			if status != 2 {
+				t.Errorf("make test-browser exited with status %d, want 2, with %s given as %q on its command line: a value holding a make function is refused before the run starts, with the status that tells a refusal from a failed run (PRD #297 milestone 3)\n%s",
+					status, givenBundleVariable, tc.value, output)
+			}
+
+			// The refusal is one line: the expansion's own output is not beside it, and the raw value is named.
+			if lines := strings.Split(strings.TrimSuffix(strings.TrimSpace(run.stderr), "\n"), "\n"); len(lines) != 1 {
+				t.Errorf("the refusal printed %d lines on standard error, want 1: %q: the value is refused unexpanded, so no output of a function it holds stands beside the refusal (PRD #297 milestone 3)",
+					len(lines), run.stderr)
+			}
+
+			if !refusedValueLine(run.stderr, givenBundleVariable, tc.value) {
+				t.Errorf("the run's standard error holds no line naming %s and the %q it refused, so a maintainer who mistyped the bundle reads what was refused, not what make made of it (PRD #297 milestone 3)\n%s",
+					givenBundleVariable, tc.value, output)
+			}
+
+			if got := sb.callsTo(t, "run"); got != 0 {
+				t.Errorf("make test-browser started a container %d times although it refused %s=%q: the value is decided on before anything runs (PRD #297 milestone 3)\n%s",
+					got, givenBundleVariable, tc.value, sb.dockerLogText(t))
+			}
+
+			if records := sb.goTestRecords(t); len(records) != 0 {
+				t.Errorf("make test-browser ran the smoke test %d times although it refused %s=%q (PRD #297 milestone 3)\n%s",
+					len(records), givenBundleVariable, tc.value, sb.goLogText(t))
+			}
+
+			if builds := buildRecords(t, buildLog); len(builds) != 0 {
+				t.Errorf("make test-browser built a bundle although it refused %s=%q: %v (PRD #297 milestone 3)",
+					givenBundleVariable, tc.value, builds)
+			}
+		})
+	}
+}
+
 // TestMakeTestBrowserRecipeKeepsTheGivenBundleOnASignal pins that an interrupted run leaves the bundle it was
 // given exactly as it found it: the EXIT trap removes the run's own temporary directory alone.
 func TestMakeTestBrowserRecipeKeepsTheGivenBundleOnASignal(t *testing.T) {
