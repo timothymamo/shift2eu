@@ -752,35 +752,171 @@ func TestRunPlainHTTPWWWMode(t *testing.T) {
 }
 
 // TestRunFailsSafeOnARecordItCannotRead pins the fail-safe of behaviour 8 and
-// D3: a record file that is missing is no configuration error and no crash. The
-// run fails (exit 1) with a report that names both records, and the report says
-// so.
+// D3: a record file that is missing or that its parser refuses is no
+// configuration error and no crash. Every case but the control runs against the
+// same site as TestRunPassesAPassingSiteFromItsFiles and changes only the
+// records, so the record is the only reason a case fails: the run then exits 1
+// with a report that names the offending record and still passes the site's own
+// checks. The control row pins that the very same setup exits 0 with valid
+// records, so this test cannot pass for an unrelated reason.
 func TestRunFailsSafeOnARecordItCannotRead(t *testing.T) {
 	t.Parallel()
 
-	dir := t.TempDir()
+	recordValid := func(name, content string) func(t *testing.T, dir string) string {
+		return func(t *testing.T, dir string) string {
+			t.Helper()
 
-	base, _ := mainRefusingBase()
-
-	code, stdout, stderr := mainRun(t, []string{
-		"-manifest", mainWrite(t, dir, "manifest.json", []byte(mainManifest(t, mainPages(t)))),
-		"-tags", "-",
-		"-hsts-record", filepath.Join(dir, "absent-hsts.json"),
-		"-preload-record", filepath.Join(dir, "absent-preload.json"),
-	}, mainVersion+"\n", base)
-
-	if code != exitFailed {
-		t.Fatalf("exit code %d, want %d for a run whose records cannot be read: stderr %q\n%s", code, exitFailed, stderr, stdout)
-	}
-
-	if stderr != "" {
-		t.Errorf("stderr is %q, want nothing: a record that cannot be read is a check failure, not a usage error", stderr)
-	}
-
-	for _, want := range []string{"hsts.json", "preload.json", "result: FAIL"} {
-		if !strings.Contains(stdout, want) {
-			t.Errorf("the report does not hold %q, want a failing check naming the record:\n%s", want, stdout)
+			return mainWrite(t, dir, name, []byte(content))
 		}
+	}
+
+	recordAbsent := func(name string) func(t *testing.T, dir string) string {
+		return func(t *testing.T, dir string) string {
+			t.Helper()
+
+			return filepath.Join(dir, "absent-"+name)
+		}
+	}
+
+	validHSTS := recordValid("hsts.json", mainHSTSRecord)
+	validPreload := recordValid("preload.json", mainPreloadRecord)
+
+	// A record its parser refuses: no "outcome", so no value to judge the
+	// site's header against.
+	malformedHSTS := recordValid("hsts.json", `{"format":1}`)
+	malformedPreload := recordValid("preload.json", `{"format":1}`)
+
+	failing := func(want ...string) []string {
+		lines := make([]string, len(want))
+		for i, record := range want {
+			lines[i] = "FAIL " + livecheck.KindHSTS + " " + record
+		}
+
+		return lines
+	}
+
+	tests := []struct {
+		name string
+		// hsts and preload return the path the flag names.
+		hsts    func(t *testing.T, dir string) string
+		preload func(t *testing.T, dir string) string
+		// wantCode is the exit code the run ends with.
+		wantCode int
+		// wantInStdout are lines the report must hold: the record checks that
+		// must fail, and result: FAIL; empty means a passing run.
+		wantInStdout []string
+		// wantNoRecord is the record the report must not fail on.
+		wantNoRecord string
+	}{
+		{
+			name:     "a passing site whose records are both valid",
+			hsts:     validHSTS,
+			preload:  validPreload,
+			wantCode: exitPassed,
+		},
+		{
+			name:         "the HSTS record missing",
+			hsts:         recordAbsent("hsts.json"),
+			preload:      validPreload,
+			wantCode:     exitFailed,
+			wantInStdout: failing("hsts.json"),
+			wantNoRecord: "preload.json",
+		},
+		{
+			name:         "the preload record missing",
+			hsts:         validHSTS,
+			preload:      recordAbsent("preload.json"),
+			wantCode:     exitFailed,
+			wantInStdout: failing("preload.json"),
+			wantNoRecord: "hsts.json",
+		},
+		{
+			name:         "both records missing",
+			hsts:         recordAbsent("hsts.json"),
+			preload:      recordAbsent("preload.json"),
+			wantCode:     exitFailed,
+			wantInStdout: failing("hsts.json", "preload.json"),
+		},
+		{
+			name:         "the HSTS record malformed",
+			hsts:         malformedHSTS,
+			preload:      validPreload,
+			wantCode:     exitFailed,
+			wantInStdout: failing("hsts.json"),
+			wantNoRecord: "preload.json",
+		},
+		{
+			name:         "the preload record malformed",
+			hsts:         validHSTS,
+			preload:      malformedPreload,
+			wantCode:     exitFailed,
+			wantInStdout: failing("preload.json"),
+			wantNoRecord: "hsts.json",
+		},
+		{
+			name:         "both records malformed",
+			hsts:         malformedHSTS,
+			preload:      malformedPreload,
+			wantCode:     exitFailed,
+			wantInStdout: failing("hsts.json", "preload.json"),
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			dir := t.TempDir()
+			fixture := mainNewFixture(t, dir)
+
+			code, stdout, stderr := mainRun(t, []string{
+				"-manifest", fixture.manifest,
+				"-tags", "-",
+				"-hsts-record", tc.hsts(t, dir),
+				"-preload-record", tc.preload(t, dir),
+			}, mainVersion+"\n", fixture.base)
+
+			if code != tc.wantCode {
+				t.Fatalf("exit code %d, want %d: stderr %q\n%s", code, tc.wantCode, stderr, stdout)
+			}
+
+			if stderr != "" {
+				t.Errorf("stderr is %q, want nothing: a record that cannot be read is a check failure, not a usage error", stderr)
+			}
+
+			// The site itself passed whatever the records said: the run reached
+			// it and no check of it failed, so only the records can explain the
+			// exit code.
+			for _, want := range []string{"PASS root /", "PASS manifest-file index.html"} {
+				if !strings.Contains(stdout, want) {
+					t.Errorf("the report does not hold %q, want the site's own checks to pass whatever the records say:\n%s", want, stdout)
+				}
+			}
+
+			if dialCount := fixture.dialer.dialCount(); dialCount == 0 {
+				t.Errorf("the run dialled no host, want it to have checked the passing site")
+			}
+
+			if len(tc.wantInStdout) == 0 {
+				if !strings.Contains(stdout, "result: PASS") {
+					t.Errorf("the report does not end in %q, want the control run to pass:\n%s", "result: PASS", stdout)
+				}
+
+				return
+			}
+
+			for _, want := range append(tc.wantInStdout, "result: FAIL") {
+				if !strings.Contains(stdout, want) {
+					t.Errorf("the report does not hold %q, want a failing check naming the record:\n%s", want, stdout)
+				}
+			}
+
+			if tc.wantNoRecord != "" {
+				if unwanted := "FAIL " + livecheck.KindHSTS + " " + tc.wantNoRecord; strings.Contains(stdout, unwanted) {
+					t.Errorf("the report holds %q, want only the record that could not be read to fail:\n%s", unwanted, stdout)
+				}
+			}
+		})
 	}
 }
 
