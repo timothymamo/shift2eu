@@ -90,11 +90,11 @@ func CheckLayout(root string) error {
 
 	info, err := os.Lstat(under(root, wrapperPath))
 	if err != nil {
-		return fmt.Errorf("the audit directory: the wrapper: %w", err)
+		return fmt.Errorf("the audit directory: the wrapper %s: %w", wrapperPath, err)
 	}
 
 	if !info.Mode().IsRegular() || info.Mode().Perm() != wrapperMode {
-		return fmt.Errorf("the audit directory: the wrapper is %s, want a regular file of mode %s", info.Mode(), wrapperMode)
+		return fmt.Errorf("the audit directory: the wrapper %s is %s, want a regular file of mode %s", wrapperPath, info.Mode(), wrapperMode)
 	}
 
 	for _, tree := range []string{checkoutDir, checksDir} {

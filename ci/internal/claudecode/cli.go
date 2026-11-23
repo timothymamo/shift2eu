@@ -442,9 +442,19 @@ func decideRunOutcome(answerErr, parentErr, runErr error) runOutcome {
 // amendment does not allow, naming the field: an effort outside the five, a
 // permission mode other than dontAsk or plan, a relative settings path, a
 // working directory or HOME that is not an absolute path to a directory that
-// exists, and an Env entry that is no NAME=VALUE or sets a variable outside
-// allowedEnv.
+// exists, and an Env entry that is no NAME=VALUE, sets a variable outside
+// allowedEnv or holds a NUL or a newline in its value; and an empty token or a
+// timeout that is not positive, the two required fields at their zero shape
+// (issue #277, round L). The token itself is never put in the error.
 func (c *CLI) checkLaunch() error {
+	if c.cfg.Token == "" {
+		return fmt.Errorf("%w: the token is empty", ErrModel)
+	}
+
+	if c.cfg.Timeout <= 0 {
+		return fmt.Errorf("%w: the timeout %s is not positive", ErrModel, c.cfg.Timeout)
+	}
+
 	if c.cfg.Effort != "" && !contains(efforts, c.cfg.Effort) {
 		return fmt.Errorf("%w: the effort is not one of %s", ErrModel, strings.Join(efforts, ", "))
 	}
@@ -481,13 +491,17 @@ func (c *CLI) checkLaunch() error {
 	}
 
 	for _, entry := range c.cfg.Env {
-		name, _, ok := strings.Cut(entry, "=")
+		name, value, ok := strings.Cut(entry, "=")
 		if !ok || !validEnvName(name) {
 			return fmt.Errorf("%w: an environment entry of the CLI is not NAME=VALUE", ErrModel)
 		}
 
 		if !contains(allowedEnv, name) {
 			return fmt.Errorf("%w: the environment entry %s is not one of %s", ErrModel, name, strings.Join(allowedEnv, ", "))
+		}
+
+		if strings.ContainsAny(value, "\x00\n") {
+			return fmt.Errorf("%w: the environment entry %s holds a NUL or a newline in its value", ErrModel, name)
 		}
 	}
 

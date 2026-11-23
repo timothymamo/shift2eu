@@ -125,9 +125,11 @@ const gitRefusedLetters = "cOC"
 
 // jqModuleWords are the words of jq's module system: a jq word that holds one
 // is refused, wherever it sits, since a module directive reads any .json file
-// it names (issue #277, round H). The audit needs filters alone, so a word
-// that merely mentions one is refused too.
-var jqModuleWords = []string{"import", "include"}
+// it names (issue #277, round H), and the builtins modulemeta and
+// get_search_list search jq's module paths and read a module's metadata
+// (round L). The audit needs filters alone, so a word that merely mentions one
+// is refused too.
+var jqModuleWords = []string{"import", "include", "modulemeta", "get_search_list"}
 
 // jqRefusedLetters are jq's short options refused in any single-dash word that
 // holds them: -L, the library path, and -f, a program file, whose own import
@@ -257,7 +259,13 @@ func commandLine(args []string) ([]string, string, bool) {
 		return nil, name, false
 	}
 
-	// The option rules come first, so a refused option is the word named even
+	// The word rules come before any command's own: they hold every word of
+	// every line, whatever it belongs to.
+	if refused, ok := wordLine(rest); !ok {
+		return nil, refused, false
+	}
+
+	// The option rules come next, so a refused option is the word named even
 	// when its value is a path outside the roots too; the path rule then holds
 	// every path word of the line, before git's subcommand is looked at.
 	switch name {
@@ -324,17 +332,50 @@ const endOfOptions = "--"
 // parentElement is the path element that names a directory's parent.
 const parentElement = ".."
 
+// wordLine returns the first word of args that the word rules refuse, or true
+// when none does (ADR 0040, issue #277 round L). They read every word of every
+// line, before any command's own rules, whatever the word belongs to, so they
+// fail closed:
+//
+//   - a word whose "/"-separated elements include ".." is refused, wherever it
+//     sits ("..", x/../y, --/../etc/passwd);
+//   - a word starting with "-" that holds ".." anywhere is refused, since an
+//     option's attached value is no element of its own (-S.., -f..).
+//
+// A git range (HEAD~3..HEAD, main..origin/main) starts with no "-" and holds
+// no ".." element, so it passes.
+func wordLine(args []string) (string, bool) {
+	for _, arg := range args {
+		if strings.HasPrefix(arg, "-") && strings.Contains(arg, parentElement) {
+			return arg, false
+		}
+
+		for _, element := range strings.Split(arg, "/") {
+			if element == parentElement {
+				return arg, false
+			}
+		}
+	}
+
+	return "", true
+}
+
 // pathLine returns the first word of the line of the command name that holds
 // a path word outside allowedRoots, or true when none does: the wrapper's path
-// rule (ADR 0040, amended 2026-11-23, issue #277 rounds F and G). Claude Code's
-// deny rules match the command's text, so a glob gets past them; the wrapper
-// reads the words the shell expanded, and holds them to an allow list, since a
-// deny list of roots kept leaking. A path word is
+// rule (ADR 0040, amended 2026-11-22 to 2026-11-23, issue #277 rounds F, G, K
+// and L). Claude Code's deny rules match the command's text, so a glob gets
+// past them; the wrapper reads the words the shell expanded, and holds them to
+// an allow list, since a deny list of roots kept leaking. It runs after the
+// word rules (wordLine), which have refused every ".." already. A path word is
 //
-//   - a word that is no option (no leading "-") and holds a "/", or is "..";
+//   - a word that is no option (no leading "-") and holds a "/";
 //     "-" alone is stdin and no path word;
 //   - every word after "--", whatever its first character;
-//   - an option word's value after its first "=";
+//   - an option word's value after its first "=" (--format=%h/%s holds the
+//     path word %h/%s, read from the base);
+//   - a word starting with "--" that holds a "/" before any "=": the whole
+//     word, joined to the line's base (--x/y is /srv/audit/work/--x/y on a
+//     jq line: round L, optionPaths);
 //   - in a single-dash word that holds a "/", its suffix from the first "/",
 //     whatever tool's option cluster comes before it (git grep -f/sys/x,
 //     git grep -n5f/tmp/x, git blame -wS/var/x: round K, optionPaths).
@@ -367,7 +408,7 @@ func pathLine(name string, args []string) (string, bool) {
 		case arg == "-":
 		case strings.HasPrefix(arg, "-"):
 			paths = optionPaths(arg)
-		case strings.Contains(arg, "/") || arg == parentElement:
+		case strings.Contains(arg, "/"):
 			paths = []string{arg}
 		}
 
@@ -382,15 +423,19 @@ func pathLine(name string, args []string) (string, bool) {
 }
 
 // optionPaths returns the path words an option word holds: its value after
-// the first "=", and, for a single-dash word that holds a "/", its suffix
-// from that first "/" (issue #277, round K). The wrapper models no tool's
+// the first "="; for a word starting with "--" that holds a "/" before any
+// "=", the whole word, which a tool may take as an option's separate value
+// (jq --rawfile a --x/y reads the file --x/y: issue #277, round L); and, for a
+// single-dash word that holds a "/", its suffix from that first "/" (round
+// K). The wrapper models no tool's
 // option cluster: git reads a run of digits inside one as -NUM and goes on,
 // so in git grep -n5f/tmp/x f takes /tmp/x, and a rule that followed the
 // letters stopped at the 5. Whichever letter takes the value, a value holding
 // a "/" either starts at the word's first "/" or holds it, so the suffix from
 // there must be an allowed absolute path; a single-dash word with no "/" holds
-// no path beyond a name relative to the base, which cannot leave it. A ".."
-// element anywhere in the suffix is refused (allowedPath). It fails closed: an
+// no path beyond a name relative to the base, which cannot leave it, since the
+// word rules refused any ".." in it. A ".." element anywhere in the suffix is
+// refused (allowedPath). It fails closed: an
 // attached relative value holding a "/" (-Sfoo/bar) is refused, since its
 // suffix /bar is absolute; the value then comes as a word of its own.
 func optionPaths(arg string) []string {
@@ -400,12 +445,18 @@ func optionPaths(arg string) []string {
 		paths = append(paths, value)
 	}
 
+	slash := strings.Index(arg, "/")
+
 	if strings.HasPrefix(arg, endOfOptions) {
+		if equals := strings.Index(arg, "="); slash >= 0 && (equals < 0 || slash < equals) {
+			paths = append(paths, arg)
+		}
+
 		return paths
 	}
 
-	if i := strings.Index(arg, "/"); i >= 0 {
-		paths = append(paths, arg[i:])
+	if slash >= 0 {
+		paths = append(paths, arg[slash:])
 	}
 
 	return paths
