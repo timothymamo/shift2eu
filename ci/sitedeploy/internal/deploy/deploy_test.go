@@ -56,12 +56,19 @@ func newDeployCase(t *testing.T) *deployCase {
 		return seenResponse{Status: http.StatusOK, Body: page(earlierVersion, "Privacy")}
 	})
 
+	// Each case gets a transport of its own: a client with no transport shares
+	// http.DefaultTransport, and every fake server's Close closes that
+	// transport's idle connections, which breaks the keep-alive connection a
+	// parallel test is about to reuse for a PUT net/http does not retry.
+	transport := &http.Transport{}
+	t.Cleanup(transport.CloseIdleConnections)
+
 	dc.config = deploy.Config{
 		Endpoint:    dc.store.Server.URL,
 		Bucket:      testBucket,
 		Region:      testRegion,
 		Credentials: testCredentials,
-		Client:      &http.Client{},
+		Client:      &http.Client{Transport: transport},
 		Version:     dc.bundle.version,
 		LivePage:    dc.live.Server.URL + "/",
 		Releases:    []string{earlierVersion, testedVersion},
