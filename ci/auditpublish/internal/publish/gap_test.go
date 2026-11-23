@@ -1,6 +1,7 @@
 package publish_test
 
 import (
+	"errors"
 	"strconv"
 	"strings"
 	"testing"
@@ -50,6 +51,12 @@ func TestGapLine(t *testing.T) {
 		// no line at all.
 		wantDays string
 	}{
+		{
+			// A second run on the run's own date: the gap is 0, so the
+			// Changes section says nothing about it.
+			name:     "the previous report is from the run's own date",
+			previous: testDate,
+		},
 		{
 			name:     "the previous report is a week old",
 			previous: "2026-11-16",
@@ -108,6 +115,56 @@ func TestGapLine(t *testing.T) {
 			want := "Gap in the schedule: the previous report is " + tc.wantDays + " days older than this one."
 			if !strings.Contains(changes, want) {
 				t.Errorf("the Changes section does not hold %q:\n%s", want, changes)
+			}
+		})
+	}
+}
+
+// TestRenderReportRefusesAPreviousReportAfterTheRun pins that a previous
+// report dated after the run is refused: a gap in seconds, not the schedule's
+// gap in days, wraps ErrPreviousReport, and the error's text names neither
+// date (ADR 0040, the core's errors name a rule, never a value).
+func TestRenderReportRefusesAPreviousReportAfterTheRun(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		previous string
+	}{
+		{
+			name:     "the previous report is dated one day after the run",
+			previous: "2026-11-24",
+		},
+		{
+			name:     "the previous report is dated a month after the run",
+			previous: "2026-12-23",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			previous := previousReport(t, fixtureResult(), publish.PrivateNone, tc.previous, "1")
+
+			rendered, err := publish.RenderReport(publish.ReportInput{
+				Result:   fixtureResult(),
+				Run:      testRun(t, testDate, testRunID),
+				Private:  publish.PrivateNone,
+				Previous: previous,
+			})
+			if err == nil {
+				t.Fatalf("RenderReport with a previous report dated %s returned the report %q, want an error wrapping ErrPreviousReport", tc.previous, rendered.Body)
+			}
+
+			if !errors.Is(err, publish.ErrPreviousReport) {
+				t.Errorf("RenderReport with a previous report dated %s: error %v does not wrap ErrPreviousReport", tc.previous, err)
+			}
+
+			for _, date := range []string{tc.previous, testDate} {
+				if strings.Contains(err.Error(), date) {
+					t.Errorf("the error %q names the date %s, want no value", err, date)
+				}
 			}
 		})
 	}

@@ -85,6 +85,25 @@ func TestOutcomeOf(t *testing.T) {
 			summary: "private findings not filed: see runbook",
 		},
 		{
+			// The entry point's state, not its error: a run whose private
+			// findings could not be filed must fail the job, whatever the
+			// error it classifies.
+			name:    "published, with no private finding filed and no public one",
+			counts:  true,
+			public:  0,
+			private: "private findings: not filed",
+			code:    5,
+			summary: "private findings not filed: see runbook",
+		},
+		{
+			name:    "published, with no private finding filed and three public ones",
+			counts:  true,
+			public:  3,
+			private: "private findings: not filed",
+			code:    5,
+			summary: "private findings not filed: see runbook",
+		},
+		{
 			name:    "two draft advisories with one fingerprint",
 			err:     publish.ErrDuplicateDrafts,
 			code:    6,
@@ -175,20 +194,25 @@ func TestOutcomeSummaryNamesNoText(t *testing.T) {
 	}
 }
 
-// TestOutcomePublishedKeepsNoCountOfPrivateFindings pins that the published
-// summary says that private findings exist and never how many: the three
-// private-findings lines hold one bit each.
+// TestOutcomePublishedKeepsNoCountOfPrivateFindings pins that a published
+// summary says that private findings exist and never how many: the
+// private-findings line holds one bit. Only the two states that publish, with
+// code 0, reach such a summary: the not-filed state is outcome 5, which
+// TestOutcomeOf pins.
 func TestOutcomePublishedKeepsNoCountOfPrivateFindings(t *testing.T) {
 	t.Parallel()
 
 	lines := []string{
 		"private findings: none",
 		"private findings: handled privately",
-		"private findings: not filed",
 	}
 
 	for _, line := range lines {
 		outcome := publish.OutcomeOf(nil).WithCounts(0, privateStateOf(t, line))
+
+		if got := outcome.Code(); got != 0 {
+			t.Errorf("the published outcome with %q exits %d, want 0", line, got)
+		}
 
 		if got := outcome.Summary(); !strings.Contains(got, line) {
 			t.Errorf("the published summary %q does not hold %q", got, line)
