@@ -121,16 +121,28 @@ func TestEveryWorkflowThatInstallsTheCLIReadsTheOnePinFile(t *testing.T) {
 	for _, install := range installs {
 		saw[install.workflow] = true
 
-		for name, value := range install.pinNames {
-			if want, ok := claudeCodePinOutputs[name]; ok {
-				if value != want {
-					t.Errorf("%s: line %d: the step that installs the CLI sets %s to %q, want %q: the version and the integrity reach the installer as the output of the step that reads %s, never as a value of the workflow's own (CLAUDE.md rule 7, issue #277)", install.workflow, install.num, name, value, want, claudeCodePinFile)
-				}
+		// The install step's env: names both values the step that read the pin
+		// file wrote, each exactly as that step's output (issue #277, round L,
+		// AI 5): a step that set one alone would hand the installer an empty
+		// version or an empty integrity, and the CLI would install unverified
+		// or not at all.
+		for name, want := range claudeCodePinOutputs {
+			value, ok := install.pinNames[name]
+			if !ok {
+				t.Errorf("%s: line %d: the step that installs the CLI sets no %s; its env: must name both of the values the step that reads %s wrote, %q, or the installer runs with an empty version or an empty integrity (CLAUDE.md rule 7, issue #277)", install.workflow, install.num, name, claudeCodePinFile, want)
 
 				continue
 			}
 
-			t.Errorf("%s: line %d: the step that installs the CLI sets %s to %q; the version and the integrity live in %s alone, which Renovate bumps and ci/claudecodepin reads, and reach the installer as steps.%s.outputs.* (CLAUDE.md rule 7, issue #277)", install.workflow, install.num, name, value, claudeCodePinFile, claudeCodePinStepName)
+			if value != want {
+				t.Errorf("%s: line %d: the step that installs the CLI sets %s to %q, want %q: the version and the integrity reach the installer as the output of the step that reads %s, never as a value of the workflow's own (CLAUDE.md rule 7, issue #277)", install.workflow, install.num, name, value, want, claudeCodePinFile)
+			}
+		}
+
+		for _, name := range claudeCodePinEnvNames {
+			if value, ok := install.pinNames[name]; ok {
+				t.Errorf("%s: line %d: the step that installs the CLI sets %s to %q; the version and the integrity live in %s alone, which Renovate bumps and ci/claudecodepin reads, and reach the installer as steps.%s.outputs.* (CLAUDE.md rule 7, issue #277)", install.workflow, install.num, name, value, claudeCodePinFile, claudeCodePinStepName)
+			}
 		}
 
 		for _, problem := range claudeCodePinStepProblems(t, install) {
@@ -163,6 +175,151 @@ func TestEveryWorkflowThatInstallsTheCLIReadsTheOnePinFile(t *testing.T) {
 
 	if !saw[claudeCodeAuditWorkflowPath] {
 		t.Errorf("no step of %s runs %s, so the audit installs no CLI: its model job runs the same pinned CLI as the reviewer (ADR 0040)", claudeCodeAuditWorkflowPath, claudeCodeInstallScript)
+	}
+}
+
+// TestClaudeCodeReadsThePinOnTheLineThatNamesIt pins the reader half of the pin
+// check on its own (issue #277, round L, AI 6): a step reads the pin file when
+// one line that is no comment greps one of the file's anchored lines and names
+// the file on that same line, as its own path or through a variable the same
+// script assigns the path to. A step that echoes the path and greps another file
+// reads no pin, so the grep and the path are one line's business.
+func TestClaudeCodeReadsThePinOnTheLineThatNamesIt(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		run  string
+		want bool
+	}{
+		{
+			// The reviewer's own step: the pin's path is a variable the step
+			// assigns, and each grep reads the file through it.
+			name: "the reviewer's step",
+			run: strings.Join([]string{
+				`pin=` + claudeCodePinFile,
+				`version="$(grep -E '^version: [0-9]+\.[0-9]+\.[0-9]+$' "${pin}" || true)"`,
+				`integrity="$(grep -E '^integrity: sha512-[A-Za-z0-9+/]{86}==$' "${pin}" || true)"`,
+			}, "\n"),
+			want: true,
+		},
+		{
+			name: "the pin file's path on the grep's own line",
+			run:  `version="$(grep -E '^version: [0-9]+\.[0-9]+\.[0-9]+$' ` + claudeCodePinFile + `)"`,
+			want: true,
+		},
+		{
+			// Round J's bypass in its round L form: the path is named, but by
+			// another line, and the grep reads another file.
+			name: "an echo of the path beside a grep of another file",
+			run: strings.Join([]string{
+				`echo "reading ` + claudeCodePinFile + `"`,
+				`version="$(grep -E '^version: [0-9]+\.[0-9]+\.[0-9]+$' .github/other.yaml || true)"`,
+			}, "\n"),
+			want: false,
+		},
+		{
+			name: "a comment naming the path beside a grep of another file",
+			run: strings.Join([]string{
+				`# ` + claudeCodePinFile + ` holds the version`,
+				`version="$(grep -E '^version: [0-9]+\.[0-9]+\.[0-9]+$' .github/other.yaml || true)"`,
+			}, "\n"),
+			want: false,
+		},
+		{
+			// The variable is another step's, or a name no line of this step
+			// assigns: nothing of this step names the file.
+			name: "a grep of a variable the step never assigns",
+			run:  `version="$(grep -E '^version: [0-9]+\.[0-9]+\.[0-9]+$' "${pin}" || true)"`,
+			want: false,
+		},
+		{
+			name: "a variable assigned another file",
+			run: strings.Join([]string{
+				`pin=.github/other.yaml`,
+				`version="$(grep -E '^version: [0-9]+\.[0-9]+\.[0-9]+$' "${pin}" || true)"`,
+			}, "\n"),
+			want: false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := claudeCodeReadsPin(tc.run); got != tc.want {
+				t.Errorf("claudeCodeReadsPin(%q) = %t, want %t: a step reads %s when one line greps it and names it on that same line (ADR 0040's milestone-2 amendment, issue #277)", tc.run, got, tc.want, claudeCodePinFile)
+			}
+		})
+	}
+}
+
+// TestClaudeCodeRunsInstallerSeesEveryForm pins what counts as the install step
+// (issue #277, round L, AI 6): the installer's own line, the line that reaches it
+// through bash or sh, and the line that reaches it through env and that
+// command's own options and NAME=VALUE words. A step that only names the path
+// where no command name comes - a case pattern of a diff, an echo, a comment -
+// installs nothing.
+func TestClaudeCodeRunsInstallerSeesEveryForm(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		run  string
+		want bool
+	}{
+		{
+			name: "the reviewer's own line",
+			run:  claudeCodeInstallScript + ` "${RUNNER_TEMP}/claude-code" "@anthropic-ai/claude-code-linux-x64@${CLAUDE_CODE_PIN_VERSION}" "${CLAUDE_CODE_PIN_INTEGRITY}"`,
+			want: true,
+		},
+		{
+			name: "through bash",
+			run:  `bash ` + claudeCodeInstallScript + ` "$dir" "pkg" "integrity"`,
+			want: true,
+		},
+		{
+			name: "through sh",
+			run:  `sh ` + claudeCodeInstallScript + ` "$dir" "pkg" "integrity"`,
+			want: true,
+		},
+		{
+			name: "through env",
+			run:  `env ` + claudeCodeInstallScript + ` "$dir" "pkg" "integrity"`,
+			want: true,
+		},
+		{
+			name: "through env, an option and an assignment before bash",
+			run:  `env -i TMPDIR=/tmp bash ` + claudeCodeInstallScript + ` "$dir" "pkg" "integrity"`,
+			want: true,
+		},
+		{
+			// claude-code-pin.yml's changes step names the script in a case
+			// pattern of its diff, and installs nothing.
+			name: "a case pattern of a diff",
+			run:  "case \"$path\" in\n  " + claudeCodeInstallScript + ") echo changed ;;\nesac",
+			want: false,
+		},
+		{
+			name: "an echo of the path",
+			run:  `echo "run ` + claudeCodeInstallScript + ` yourself"`,
+			want: false,
+		},
+		{
+			name: "a comment naming the path",
+			run:  `# ` + claudeCodeInstallScript + ` installs the CLI`,
+			want: false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := claudeCodeRunsInstaller(tc.run); got != tc.want {
+				t.Errorf("claudeCodeRunsInstaller(%q) = %t, want %t: a step runs "+claudeCodeInstallScript+" where a command's own name comes (ADR 0040's milestone-2 amendment, issue #277)", tc.run, got, tc.want)
+			}
+		})
 	}
 }
 
@@ -238,13 +395,16 @@ func claudeCodeInstallSteps(t *testing.T) []claudeCodeInstallStep {
 }
 
 // claudeCodeRunsInstaller reports whether a step's run: script runs the
-// installer: one of its lines starts with the script's path. A step that only
-// names the path, in a case pattern of a diff or in a comment, installs nothing.
+// installer: one of its lines has the script's path where a command's own name
+// comes - the line's first word, the word after bash or sh, or the word after
+// env with that command's options and NAME=VALUE words skipped (issue #277,
+// round L, AI 6). An interpreter form runs the installer all the same, so the
+// check reads it rather than skip the step it installs from. A line that only
+// names the path elsewhere - in a case pattern of a diff, in an echo, in a
+// comment - installs nothing.
 func claudeCodeRunsInstaller(text string) bool {
 	for _, line := range strings.Split(text, "\n") {
-		words := aiReviewShellWords(line)
-
-		if len(words) > 0 && words[0] == claudeCodeInstallScript {
+		if claudeCodeRunsInstallerLine(aiReviewShellWords(line)) {
 			return true
 		}
 	}
@@ -252,30 +412,133 @@ func claudeCodeRunsInstaller(text string) bool {
 	return false
 }
 
+// claudeCodeRunsInstallerLine reports whether one line's words run the
+// installer: bash, sh and env are words a command's name follows, and an
+// option or an env NAME=VALUE before that name is no command name.
+func claudeCodeRunsInstallerLine(words []string) bool {
+	for _, word := range words {
+		switch {
+		case word == "env", word == "bash", word == "sh":
+			continue
+		case strings.HasPrefix(word, "-"), strings.Contains(word, "="):
+			continue
+		}
+
+		return word == claudeCodeInstallScript
+	}
+
+	return false
+}
+
 // claudeCodeReadsPin reports whether a step's run: script reads the pin file:
 // one line that is no comment runs grep -E over one of the file's anchored
-// lines, and one line that is no comment names the file. A comment reads
-// nothing, and neither does a line that only mentions the path, in an echo or
-// any other word, so a step that only names the file is no step that read it
-// (issue #277, rounds J and K).
+// lines and names the file on that same line, as its own path or through a
+// shell variable the same script assigns the path to (issue #277, rounds J, K
+// and L). A comment reads nothing, and neither does a line that only mentions
+// the path, in an echo or any other word: a grep of another file beside an echo
+// of the pin's path reads no pin.
 func claudeCodeReadsPin(text string) bool {
-	grepped, named := false, false
+	lines := claudeCodeNonCommentLines(text)
+	variables := claudeCodePinVariables(lines)
+
+	for _, line := range lines {
+		if !claudeCodePinRead.MatchString(line) {
+			continue
+		}
+
+		if strings.Contains(line, claudeCodePinFile) {
+			return true
+		}
+
+		for _, name := range variables {
+			if claudeCodeNamesVariable(line, name) {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+// claudeCodeNonCommentLines returns the lines of a run: script that are no
+// comment, a comment being a line whose first non-blank byte is #.
+func claudeCodeNonCommentLines(text string) []string {
+	var lines []string
 
 	for _, line := range strings.Split(text, "\n") {
 		if strings.HasPrefix(strings.TrimSpace(line), "#") {
 			continue
 		}
 
-		if claudeCodePinRead.MatchString(line) {
-			grepped = true
+		lines = append(lines, line)
+	}
+
+	return lines
+}
+
+// claudeCodePinVariables returns the names a run: script assigns the pin file's
+// path to, in the form name=<the file>, an export before it taken as the
+// assignment's own keyword: the variables of that script a grep line may name
+// the file through.
+func claudeCodePinVariables(lines []string) []string {
+	var names []string
+
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		line = strings.TrimSpace(strings.TrimPrefix(line, "export "))
+
+		name, value, ok := strings.Cut(line, "=")
+		if !ok || !claudeCodeIsShellName(name) || !strings.Contains(value, claudeCodePinFile) {
+			continue
 		}
 
-		if strings.Contains(line, claudeCodePinFile) {
-			named = true
+		names = append(names, name)
+	}
+
+	return names
+}
+
+// claudeCodeIsShellName reports whether name reads as a shell variable's name:
+// 1 to 64 bytes of ASCII letters, digits and '_', not starting with a digit.
+func claudeCodeIsShellName(name string) bool {
+	if name == "" || len(name) > 64 || (name[0] >= '0' && name[0] <= '9') {
+		return false
+	}
+
+	for i := range len(name) {
+		if !claudeCodeIsShellNameByte(name[i]) {
+			return false
 		}
 	}
 
-	return grepped && named
+	return true
+}
+
+// claudeCodeIsShellNameByte reports whether b may be part of a shell variable's
+// name.
+func claudeCodeIsShellNameByte(b byte) bool {
+	return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9') || b == '_'
+}
+
+// claudeCodeNamesVariable reports whether line reads the variable name, as $name
+// or ${name}, with a byte after it that is no part of a name: $pin is no read of
+// a variable named pinpath.
+func claudeCodeNamesVariable(line, name string) bool {
+	for _, form := range []string{"${" + name + "}", "$" + name} {
+		for rest := line; ; {
+			i := strings.Index(rest, form)
+			if i < 0 {
+				break
+			}
+
+			rest = rest[i+len(form):]
+			if rest == "" || !claudeCodeIsShellNameByte(rest[0]) {
+				return true
+			}
+		}
+	}
+
+	return false
 }
 
 // claudeCodeWritesOutput reports whether a step's run: script writes name's
@@ -357,14 +620,15 @@ func claudeCodePinStepProblems(t *testing.T, install claudeCodeInstallStep) []st
 }
 
 // claudeCodePinRunProblems returns every reason run is no script that reads the
-// pin file into the step's outputs: it must read the file with grep -E outside
-// a comment, and write both the version and the integrity to $GITHUB_OUTPUT
-// (issue #277, round K).
+// pin file into the step's outputs: one line that is no comment must grep one of
+// the file's anchored lines and name the file there, as its own path or through
+// a variable the step assigns the path to, and both the version and the
+// integrity must be written to $GITHUB_OUTPUT (issue #277, rounds K and L).
 func claudeCodePinRunProblems(run string) []string {
 	var problems []string
 
 	if !claudeCodeReadsPin(run) {
-		problems = append(problems, fmt.Sprintf("its run: script reads %s with neither an anchored grep -E outside a comment nor a line that is no comment naming it", claudeCodePinFile))
+		problems = append(problems, fmt.Sprintf("its run: script reads %s with no line that is no comment grepping one of its anchored lines and naming the file on that same line, as its own path or through a variable the step assigns the path to", claudeCodePinFile))
 	}
 
 	for _, output := range claudeCodePinStepOutputs {
