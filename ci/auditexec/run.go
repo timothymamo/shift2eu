@@ -68,8 +68,10 @@ var gitSubcommands = map[string]bool{
 // gitRefusedLong are the long git options refused anywhere on the line, alone,
 // in their --opt=value form and abbreviated (git's option parser takes a
 // unique prefix of a long option): each names another configuration, git
-// directory, work tree, namespace, program or output file.
-// --open-files-in-pager is git grep's, which runs a program of the caller's;
+// directory, work tree, namespace, program or output file, or changes how git
+// reads the repository or its work tree (--super-prefix, --attr-source,
+// --bare, --literal-pathspecs: nothing but what the wrapper adds comes before
+// the subcommand, issue #277 round H). --open-files-in-pager is git grep's, which runs a program of the caller's;
 // --show-signature verifies a commit's signature, which runs gpg;
 // --no-index makes git diff compare two files of its own, no part of the
 // checkout.
@@ -85,6 +87,10 @@ var gitRefusedLong = []string{
 	"--open-files-in-pager",
 	"--show-signature",
 	"--no-index",
+	"--super-prefix",
+	"--attr-source",
+	"--bare",
+	"--literal-pathspecs",
 }
 
 // gitSignatureAtom is for-each-ref's format and sort atom that asks git to
@@ -105,8 +111,28 @@ var gitOwnOptions = map[string]bool{"--text": true}
 // any single-dash word that holds them: git reads a cluster of short options
 // one letter at a time, so -c (a configuration value) and -O (git grep's
 // --open-files-in-pager) act in the middle or at the end of a cluster as at
-// its start (-iOsh runs sh).
-const gitRefusedLetters = "cO"
+// its start (-iOsh runs sh). -C is refused in every form, separate, attached
+// or in a cluster (issue #277, round H): the wrapper's own -C
+// /srv/audit/checkout comes first, and git applies its -C options in order, so
+// a caller's later -C would run git in a directory of its choosing, the work
+// area the model writes in among them, whose planted .git/config names a
+// program (core.fsmonitor, diff.external). As a subcommand option (git log's
+// copy detection) it is refused all the same: the check fails closed.
+const gitRefusedLetters = "cOC"
+
+// jqModuleWords are the words of jq's module system: a jq word that holds one
+// is refused, wherever it sits, since a module directive reads any .json file
+// it names (issue #277, round H). The audit needs filters alone, so a word
+// that merely mentions one is refused too.
+var jqModuleWords = []string{"import", "include"}
+
+// jqLibraryLetter is jq's short -L, the library path, refused in any
+// single-dash word that holds it.
+const jqLibraryLetter = "L"
+
+// jqLibraryLong is jq's long --library-path, refused alone, with its value
+// attached after "=" and abbreviated.
+const jqLibraryLong = "--library-path"
 
 // sortShortAllowed are the short sort options that only change how sort
 // orders and compares its lines.
@@ -247,6 +273,10 @@ func commandLine(args []string) ([]string, string, bool) {
 		if refused, ok := uniqLine(rest); !ok {
 			return nil, refused, false
 		}
+	case "jq":
+		if refused, ok := jqLine(rest); !ok {
+			return nil, refused, false
+		}
 	}
 
 	if refused, ok := pathLine(name, rest); !ok {
@@ -261,9 +291,6 @@ func commandLine(args []string) ([]string, string, bool) {
 // the settings' Read allow list names for the audit (ADR 0040, issue #277
 // round G).
 var allowedRoots = []string{checkout, checks, work}
-
-// gitDirOption is git's own option that names the directory git runs in.
-const gitDirOption = "-C"
 
 // endOfOptions is the word after which every word is an operand.
 const endOfOptions = "--"
@@ -283,8 +310,10 @@ const parentElement = ".."
 //   - every word after "--", whatever its first character;
 //   - an option word's value after its first "=";
 //   - the rest of a single-dash word after its first letter, when that rest
-//     holds a "/" (git grep -f/sys/x, jq -L/proc/1/root);
-//   - on a git line, the value of -C, attached (-C/proc/1) or the next word.
+//     holds a "/" (git grep -f/sys/x, sort -k/x).
+//
+// git's -C is no path word here: a caller's -C is refused before this rule
+// reads the line (round H), so the wrapper's own -C is the only one git reads.
 //
 // A relative path word is read from /srv/audit/checkout on a git line, where
 // git reads it under the wrapper's -C, and from /srv/audit/work, the
@@ -300,10 +329,8 @@ func pathLine(name string, args []string) (string, bool) {
 
 	operands := false
 
-	for i, arg := range args {
+	for _, arg := range args {
 		var paths []string
-
-		named := arg
 
 		switch {
 		case operands:
@@ -311,12 +338,6 @@ func pathLine(name string, args []string) (string, bool) {
 		case arg == endOfOptions:
 			operands = true
 		case arg == "-":
-		case name == "git" && arg == gitDirOption:
-			if i+1 < len(args) {
-				paths, named = []string{args[i+1]}, args[i+1]
-			}
-		case name == "git" && strings.HasPrefix(arg, gitDirOption):
-			paths = []string{arg[len(gitDirOption):]}
 		case strings.HasPrefix(arg, "-"):
 			paths = optionPaths(arg)
 		case strings.Contains(arg, "/") || arg == parentElement:
@@ -325,7 +346,7 @@ func pathLine(name string, args []string) (string, bool) {
 
 		for _, p := range paths {
 			if !allowedPath(p, base) {
-				return named, false
+				return arg, false
 			}
 		}
 	}
@@ -515,6 +536,37 @@ func uniqLine(args []string) (string, bool) {
 			if takesNext, _ := shortCluster(arg[1:], "", uniqShortValued); takesNext {
 				i++
 			}
+		}
+	}
+
+	return "", true
+}
+
+// jqLine returns the first word of jq's arguments that reaches its module
+// system, or true when none does: a word holding import or include, wherever
+// it sits (a filter, an --arg value, a file name: the check fails closed); a
+// single-dash word holding -L, alone, attached or in a cluster; and
+// --library-path, alone, in its =value form or abbreviated. The path rule
+// still holds every other word.
+func jqLine(args []string) (string, bool) {
+	for _, arg := range args {
+		for _, word := range jqModuleWords {
+			if strings.Contains(arg, word) {
+				return arg, false
+			}
+		}
+
+		if !strings.HasPrefix(arg, "--") {
+			if strings.HasPrefix(arg, "-") && strings.Contains(arg[1:], jqLibraryLetter) {
+				return arg, false
+			}
+
+			continue
+		}
+
+		name, _, _ := strings.Cut(arg, "=")
+		if len(name) > len("--") && strings.HasPrefix(jqLibraryLong, name) {
+			return arg, false
 		}
 	}
 

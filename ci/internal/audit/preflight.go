@@ -67,12 +67,14 @@ const tokenAbsenceCommand = "{wrapper} cat /nonexistent/${CLAUDE_CODE_OAUTH_TOKE
 // Probe 5's two calls for the forms the wrapper's own path rule never reads
 // (ADR 0040, issue #277 round G), so the sandbox itself is tested on every
 // run: a shell redirection, whose target the shell resolves, glob and all,
-// before the wrapper starts; and a /dev/fd path, which the kernel resolves
-// through /proc/self/fd before it takes the "..". Each is expected to be
-// refused, as every other probe call is.
+// before the wrapper starts; and a redirection of a /dev/fd path, which the
+// kernel resolves through /proc/self/fd before it takes the "..", and whose
+// text holds no /proc/ (issue #277 round H: as an argument, the wrapper's own
+// path rule would refuse it for its ".." and the sandbox would go untested).
+// Each is expected to be refused, as every other probe call is.
 const (
 	redirectedReadCommand = "{wrapper} cat < /proc/{pid}/envir?n"
-	fdReadCommand         = "{wrapper} cat /dev/fd/../../{pid}/environ"
+	fdReadCommand         = "{wrapper} cat < /dev/fd/../../{pid}/environ"
 )
 
 // The words the token-absence call's result is judged by.
