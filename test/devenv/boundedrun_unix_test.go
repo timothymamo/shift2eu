@@ -7,8 +7,10 @@
 // kill of the whole process group closes those pipes within the bound, a kill of the command alone leaves them
 // open until the wait delay mops up seconds later. A bound that fires after the command exited on its own, while
 // a grandchild still holds its stdout open, pins that the bound's kill cannot pass a command's own result off as
-// a timeout. Unix only: the cases run /bin/sh and the runner kills the command's process group; lint type-checks
-// the package for the windows release targets too, where no /bin/sh exists.
+// a timeout, and that the run returns nil for a command that exited 0. A command that never starts, and one that
+// moves itself out of the process group, pin that a run which produced no verdict of its own fails the test
+// instead of hanging it. Unix only: the cases run /bin/sh and the runner kills the command's process group; lint
+// type-checks the package for the windows release targets too, where no /bin/sh exists.
 package devenv_test
 
 import (
@@ -39,11 +41,16 @@ const (
 	// errUnpinned: a case whose error the contract leaves open, because a grandchild may leave nil or wrap
 	// exec.ErrWaitDelay.
 	errUnpinned
+	// errNotStarted: an error that is neither errCommandTimedOut nor an *exec.ExitError, since the command never
+	// ran: the run itself failed, so makeRunFailure fails the test rather than take the error for make's verdict
+	// on the recipe.
+	errNotStarted
 )
 
 // TestRunBounded pins the bounded runner's contract: what it returns for a command that exits 0, one that exits
 // non-zero, one that never finishes within its bound, one whose grandchild keeps its stdout open after the command
-// itself exited, and one the bound cuts short although the command had already ended on its own.
+// itself exited, one the bound cuts short although the command had already ended on its own, one that never
+// starts.
 func TestRunBounded(t *testing.T) {
 	t.Parallel()
 
@@ -51,6 +58,9 @@ func TestRunBounded(t *testing.T) {
 		name string
 		// script is the shell script the case runs under /bin/sh -c.
 		script string
+		// path, when not empty, is the program the case runs instead of /bin/sh, with no script: a program that
+		// cannot start pins what runBounded returns for a command that never ran.
+		path string
 		// timeout is the bound runBounded gets.
 		timeout time.Duration
 		// wantStdout and wantStderr, when not empty, are exactly what the command wrote.
@@ -130,12 +140,36 @@ func TestRunBounded(t *testing.T) {
 			// so its Wait cannot return before boundedWaitDelay: the bound fires first, with a command that had
 			// already ended on its own. Its own status, not errCommandTimedOut, is the run's result: a command
 			// that ended on its own is never reported as a timeout, whatever order select saw its channels in
-			// (issue #512).
+			// (issue #512). The status is nil, not exec.ErrWaitDelay: the group kill ends the grandchild and
+			// closes the pipes long before the wait delay, and a kill that no longer reached the grandchild would
+			// let the wait delay pass this case off as a warning about the pipes instead of a broken kill.
 			script:             `sleep 30 & printf done`,
 			timeout:            time.Second,
 			wantStdoutContains: "done",
-			wantErr:            errUnpinned,
+			wantErr:            errNone,
 			maxElapsed:         3 * time.Second,
+		},
+		{
+			name: "the bound fires after the command exited 4 on its own",
+			// As above, the grandchild holds the stdout pipe when the bound fires, but the command had exited
+			// non-zero: its own status must be the run's result, an *exec.ExitError carrying 4, so that a
+			// command that ended on its own is never reported as a timeout and never as a success (issue #512).
+			script:             `sleep 30 & printf done; exit 4`,
+			timeout:            time.Second,
+			wantStdoutContains: "done",
+			wantErr:            errExit,
+			wantExitCode:       4,
+			maxElapsed:         3 * time.Second,
+		},
+		{
+			name: "it cannot start",
+			// The program does not exist, so the run fails with the start's own error at once: neither a
+			// timeout nor an *exec.ExitError, so makeRunFailure fails the test instead of reading the error as
+			// make's verdict on the recipe (issue #512).
+			path:       "/nonexistent/bounded",
+			timeout:    30 * time.Second,
+			wantErr:    errNotStarted,
+			maxElapsed: 10 * time.Second,
 		},
 	}
 
@@ -143,7 +177,12 @@ func TestRunBounded(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			cmd := exec.Command("/bin/sh", "-c", tc.script)
+			argv := []string{"/bin/sh", "-c", tc.script}
+			if tc.path != "" {
+				argv = []string{tc.path}
+			}
+
+			cmd := exec.Command(argv[0], argv[1:]...)
 			cmd.Dir = t.TempDir()
 			cmd.Env = []string{"PATH=/usr/bin:/bin"}
 
@@ -230,6 +269,24 @@ func TestRunBounded(t *testing.T) {
 						t.Errorf("runBounded's timeout error for %q does not name %q, so the blocked command cannot be told apart from another and what it wrote is lost:\n%s",
 							tc.script, want, err.Error())
 					}
+				}
+			case errNotStarted:
+				var exit *exec.ExitError
+
+				switch {
+				case err == nil:
+					t.Fatalf("runBounded returned no error for %q, which cannot start, want the start's own error: a run that never ran has no result to report", tc.path)
+				case errors.Is(err, errCommandTimedOut):
+					t.Errorf("runBounded's error for %q, which cannot start, wraps errCommandTimedOut: a command that never ran did not time out", tc.path)
+				}
+
+				if errors.As(err, &exit) {
+					t.Errorf("runBounded's error for %q, which cannot start, errors.As-matches *exec.ExitError (%v): a run that never ran has no exit status, and makeRunFailure would take it for make's verdict on the recipe",
+						tc.path, exit)
+				}
+
+				if !strings.Contains(err.Error(), tc.path) {
+					t.Errorf("runBounded's error for %q does not name it:\n%s", tc.path, err.Error())
 				}
 			case errUnpinned:
 				var exit *exec.ExitError
