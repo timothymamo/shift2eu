@@ -340,8 +340,10 @@ release), *live* (checked against the live site) or *review*.
   safe on a missing record (*Layer 3*).
   - [x] Milestone 2: the static test (`test/site`'s `TestHSTSStatementFollowsTheRecord`) and the browser
     test (`test/browser`'s `TestPrivacyAndVerificationPages`), a missing record read as not waived.
-  - [ ] Milestones 3 and 4: the live check that enforces the marker on the deployed pages and fails safe
-    on a missing record, and the record itself.
+  - [x] Milestone 3: the release's live check (`ci/sitecheck/internal/livecheck`, `KindStatement`)
+    enforces `hsts-waived` on both deployed pages when the record says waived and `downgrade-risk` on the
+    privacy page unless the site counts as preloaded, and fails safe on a missing or unreadable record.
+  - [ ] Milestone 4: the scheduled live check doing the same, and the record itself.
 - [ ] The privacy page names the apex redirect's provider (chosen in milestone 4), says what it sees of a
   visitor who enters through `shift2eu.com` (IP address, user agent, the requested path and the
   `Referer`), and that it only serves the redirect and never the site or the inventory. *Review* at
@@ -673,6 +675,8 @@ release), *live* (checked against the live site) or *review*.
 
   The runbook is in [docs/site-runbook.md](../docs/site-runbook.md): steps R0 to R13, each a command
   block with its `PASS` and `FAIL` lines.
+  - [x] Milestone 3: written ([docs/site-runbook.md](../docs/site-runbook.md)).
+  - [ ] Milestone 4: followed.
 - [ ] The runbook has a step (R7, [docs/site-runbook.md](../docs/site-runbook.md)), run once the key exists, that verifies the key's limits rather than only
   reviewing them. With the deploy key, against a canary object under a prefix the site never serves,
   every write action in Scaleway's bucket-policy action list
@@ -719,6 +723,8 @@ release), *live* (checked against the live site) or *review*.
   the canary object and the canary bucket with their own credentials afterwards. Milestone 3 writes the
   step; the maintainer runs it in milestone 4 and again after every key rotation and every change to the IAM or bucket policy, and its result is
   recorded in milestone 3's hosting ADR (amended in milestone 4).
+  - [x] Milestone 3: the step written (R7).
+  - [ ] Milestone 4: run, its result in ADR 0042.
 
 ## Milestones
 

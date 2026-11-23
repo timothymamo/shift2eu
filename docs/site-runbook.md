@@ -278,8 +278,12 @@ gh variable list --env site -R <owner>/shift2eu  # PASS: exactly SITE_BUCKET and
 for id in $(gh api repos/<owner>/shift2eu/rulesets --jq '.[] | select(.target == "tag") | .id'); do
   gh api "repos/<owner>/shift2eu/rulesets/$id" --jq '"\(.name): \(.enforcement) include=\(.conditions.ref_name.include | join(",")) rules=\([.rules[].type] | join(",")) bypass=\([.bypass_actors[]? | "\(.actor_type):\(.actor_id)"] | join(","))"'
 done
-# PASS: a line with "active", include refs/tags/v* (or ~ALL), rules with "creation", and bypass only Integration:<release-please App's ID> and your own admin role (RepositoryRole:5)
-# FAIL no such line, or another bypass actor: anyone who may push could create a v* tag that the site environment deploys; record it and decide on the ruleset before R10
+# The release-tag skill's step 2 rule, over the "active" lines whose include covers v* tags (refs/tags/v*, refs/tags/v*.*.* or ~ALL) and that exclude none:
+# PASS: together their rules hold "creation", "update" and "deletion"
+# PASS: the creation-only ruleset ("Release tag creation") bypass is exactly Integration:<release-tag App's ID, release-tag step 2's table> and RepositoryRole:5
+# PASS: every ruleset holding "update" or "deletion" ("Release tags": update, deletion, non_fast_forward) has bypass RepositoryRole:5 alone (or OrganizationAdmin)
+# FAIL the release-please App among the tag bypass actors (Integration:5729776), another App or actor, an App beside update or deletion, or a missing rule:
+# anyone so allowed could create or move a v* tag that the site environment deploys, and the release-tag skill's step 2 stops every release; record it and fix the rulesets before R10
 # The next release, SITE_DEPLOY_ENABLED still unset: the release-tag skill's step 7 reports the deploy skipped
 gh run view <that release's release.yml run ID> -R <owner>/shift2eu --json jobs --jq '.jobs[] | select(.name == "Site programs" or .name == "Deploy the site" or .name == "Check the live site" or .name == "Site deploy skipped") | .name + " " + .conclusion'
 # PASS: "Site programs success", "Deploy the site skipped", "Check the live site skipped", "Site deploy skipped success"
@@ -316,7 +320,9 @@ scw iam api-key list bearer-id="$A"   # PASS: one key, the new one
 ## R12. Recovery
 
 PRD #297 Hosting decision 5, ADR 0042 (Recovery). Either redeploy the last good release, within GitHub's
-30-day re-run window, or roll the objects back with your own key; then, in either case, purge the cache.
+30-day re-run window, or roll the objects back with your own key; when the bad write did not come from a
+release run (a leaked key), also rotate the key and clean the bucket against every release's manifest;
+then, in every case, purge the cache.
 
 ```bash
 # Either redeploy the last good release: the release.yml run of the highest release tag on main
@@ -342,7 +348,8 @@ gh release download "$GOOD" -R <owner>/shift2eu --pattern "shift2eu-site_$GOOD.t
 jq -r .version "$W/good-manifest.json"   # PASS: the value of $GOOD
 # Each key's newest version written before $T, copied over the current one
 for k in index.html inventory.html privacy.html verify.html LICENSE NOTICE manifest.json; do
-  v="$(aws s3api list-object-versions --bucket "$B" --prefix "$k" --output json | jq -r --arg k "$k" --arg t "$T" '[.Versions[]? | select(.Key == $k and .LastModified < $t)] | max_by(.LastModified) | .VersionId // empty')"
+  # LastModified prints as +00:00 or Z, with or without milliseconds: both sides compared as epoch seconds
+  v="$(aws s3api list-object-versions --bucket "$B" --prefix "$k" --output json | jq -r --arg k "$k" --arg t "$T" 'def s: sub("\\.[0-9]+"; "") | sub("\\+00:00$"; "Z") | fromdateiso8601; [.Versions[]? | select(.Key == $k and (.LastModified | s) < ($t | s))] | max_by(.LastModified | s) | .VersionId // empty')"
   if [ -n "$v" ] && aws s3api copy-object --bucket "$B" --key "$k" --copy-source "$B/$k?versionId=$v" --query VersionId --output text; then echo "PASS $k restored from $v"; else echo "FAIL $k: no version before $T, or the copy failed"; fi
 done   # PASS: seven "PASS ... restored" lines, each after a new version ID
 # Each restored object against the good release's manifest
@@ -360,7 +367,48 @@ scw iam api-key update "$SCW_ACCESS_KEY" default-project-id="$ADMIN_PROJECT"   #
 ```
 
 ```bash
-# Then, in either case, purge the cache
+# Also when the bad write did not come from a release run (no release.yml run wrote it: a leaked deploy key).
+# The two blocks above restore only the seven fixed keys: an overwritten content-addressed asset and objects at new paths
+# (a look-alike page, an sw.js) would stay served. First R11: rotate the deploy key, and its old key deleted
+scw iam api-key list bearer-id="$A"   # PASS: one key, the new one (R11)
+scw iam api-key update "$SCW_ACCESS_KEY" default-project-id="$P"   # own key, its default project the site's (R5)
+GOOD='<the last good release, vX.Y.Z>'; W="$(mktemp -d)"   # scratch files outside the checkout
+# Every release's manifest, from the GitHub releases: the keys a release has ever written
+for r in $(gh release list -R <owner>/shift2eu -L 1000 --json tagName --jq '.[].tagName'); do
+  gh release download "$r" -R <owner>/shift2eu --pattern "shift2eu-site_$r.tar.gz" --dir "$W" 2>/dev/null || continue   # a release before the site bundle has none
+  tar -xzOf "$W/shift2eu-site_$r.tar.gz" manifest.json > "$W/manifest-$r.json" && echo "PASS $r's manifest"
+done   # PASS: a line for every release with a site bundle, $GOOD among them
+cp "$W/manifest-$GOOD.json" "$W/good-manifest.json" && jq -r .version "$W/good-manifest.json"   # PASS: the value of $GOOD
+{ echo manifest.json; jq -r '.files[].path' "$W"/manifest-v*.json; } | sort -u > "$W/known-keys.txt"
+# The bucket's current keys, with your own key
+aws s3api list-objects-v2 --bucket "$B" --query 'Contents[].Key' --output json | jq -r '.[]?' | sort -u > "$W/live-keys.txt"
+comm -13 "$W/known-keys.txt" "$W/live-keys.txt" > "$W/unknown-keys.txt"; cat "$W/unknown-keys.txt"   # record them: the leaked key's new paths
+# Delete every key that is in no release's manifest (versioning on: a delete marker, the written version kept for the record)
+while read -r k; do
+  aws s3api delete-object --bucket "$B" --key "$k" >/dev/null && echo "PASS deleted $k" || echo "FAIL $k not deleted"
+done < "$W/unknown-keys.txt"   # PASS: a "PASS deleted" line for each key listed above
+aws s3api list-objects-v2 --bucket "$B" --query 'Contents[].Key' --output json | jq -r '.[]?' | sort -u | comm -13 "$W/known-keys.txt" -   # PASS: no output
+# Every file of the good release's manifest against the bucket, the assets included; a differing one restored from its versions
+jq -r '.files[] | "\(.sha256) \(.path)"' "$W/good-manifest.json" | while read -r want k; do
+  got="$(aws s3 cp "s3://$B/$k" - 2>/dev/null | shasum -a 256 | cut -d' ' -f1)"
+  if [ "$got" = "$want" ]; then echo "PASS $k is $GOOD's"; continue; fi
+  v=""
+  for c in $(aws s3api list-object-versions --bucket "$B" --prefix "$k" --output json | jq -r --arg k "$k" '.Versions[]? | select(.Key == $k) | .VersionId'); do
+    aws s3api get-object --bucket "$B" --key "$k" --version-id "$c" "$W/candidate" >/dev/null 2>&1 || continue
+    [ "$(shasum -a 256 < "$W/candidate" | cut -d' ' -f1)" = "$want" ] && { v="$c"; break; }
+  done
+  if [ -n "$v" ] && aws s3api copy-object --bucket "$B" --key "$k" --copy-source "$B/$k?versionId=$v" >/dev/null; then echo "PASS $k restored from $v"; else echo "FAIL $k: no version with $GOOD's digest, or the copy failed"; fi
+done   # PASS: one "PASS" line per manifest file, none "FAIL"
+aws s3 cp "s3://$B/manifest.json" - | cmp -s - "$W/good-manifest.json" && echo "PASS manifest.json is $GOOD's" || echo "FAIL manifest.json is not $GOOD's: the version rollback above"
+# FAIL a file with no matching version: redeploy $GOOD (the first block, within 30 days), or cut a fixing release
+rm -r "$W"
+scw iam api-key update "$SCW_ACCESS_KEY" default-project-id="$ADMIN_PROJECT"   # back to the admin project
+# Then the purge below, and last the guide's live check against $GOOD: docs/guide/verify-releases.md, "Verify the site", with TAG="$GOOD"
+# PASS: "Verification succeeded" and "OK" for every file; FAIL a "FAILED" line: this block again
+```
+
+```bash
+# Then, in every case, purge the cache
 scw edge-services purge-request create pipeline-id="$PL" all=true   # PASS: a purge request
 # FAIL "unknown command": purge in the console, the pipeline's Cache tab
 # Browsers may keep a page from a poisoned cache for up to its max-age (300 seconds) after the purge
@@ -379,6 +427,10 @@ gh variable set SITE_DEPLOY_ENABLED --body false -R <owner>/shift2eu
 scw iam api-key delete <deploy access key>
 # Own key, default project the site's (R5): delete every object version and delete marker in "$B" (R7, step 8), then back to the admin project
 scw iam api-key update "$SCW_ACCESS_KEY" default-project-id="$ADMIN_PROJECT"
+# The site environment's secrets and variables
+gh secret delete SCW_ACCESS_KEY --env site -R <owner>/shift2eu && gh secret delete SCW_SECRET_KEY --env site -R <owner>/shift2eu
+gh variable delete SITE_BUCKET --env site -R <owner>/shift2eu && gh variable delete SITE_REGION --env site -R <owner>/shift2eu
+gh secret list --env site -R <owner>/shift2eu; gh variable list --env site -R <owner>/shift2eu   # PASS: no output
 dev/tofu.sh -chdir=infra/site destroy        # PASS: "Destroy complete"
 # FAIL "BucketNotEmpty": delete the remaining versions first
 ```
