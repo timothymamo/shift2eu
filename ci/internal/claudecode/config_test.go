@@ -82,6 +82,42 @@ func TestNewKeepsItsOwnCopyOfTheTools(t *testing.T) {
 	}
 }
 
+// TestNewKeepsItsOwnCopyOfTheRedactValues pins that a caller changing its slice
+// after New cannot change what a launcher it already built redacts, as it
+// cannot change its tools or its environment (issue #277, round K): the
+// launcher is built with the canary, the caller's slice then holds another
+// value, and Ask's error still hides the canary the launcher was built with.
+func TestNewKeepsItsOwnCopyOfTheRedactValues(t *testing.T) {
+	t.Parallel()
+
+	// canary is an obvious fake, never a real value (CLAUDE.md rule 3).
+	const canary = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+
+	cli, _ := newFakeClaudeCLI(t, claudeFake{stdout: "", stderr: "the shell holds " + canary + "\n", exit: 1})
+
+	redact := []string{canary}
+	launcher := claudecode.New(claudecode.Config{
+		Path:    cli,
+		Model:   auditModel,
+		Redact:  redact,
+		Timeout: 30 * time.Second,
+	})
+	redact[0] = "replaced-after-New"
+
+	_, err := launcher.Ask(t.Context(), claudecode.Prompt{System: "s", User: "u"})
+	if err == nil {
+		t.Fatal("Ask = nil, want an error: the CLI printed no result and exited non-zero")
+	}
+
+	if strings.Contains(err.Error(), canary) {
+		t.Errorf("Ask's error holds %q, want it redacted: the launcher kept the value it was built with, not the one the caller's slice holds now", canary)
+	}
+
+	if !strings.Contains(err.Error(), "[redacted]") {
+		t.Errorf("Ask's error holds no [redacted], want the excerpt to stand the canary in for: the launcher redacts every value it was given")
+	}
+}
+
 // TestAskRefusesAConfigOfTheWrongShape pins that a model or a tool name of
 // the wrong shape fails the run with ErrModel before the CLI starts: no run
 // asks the CLI's default model, and a permission rule or a list in one name
