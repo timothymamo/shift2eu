@@ -95,12 +95,19 @@ func TestParseManifestRefusesWhatItCannotUse(t *testing.T) {
 		{name: "a path that is the current directory", manifest: manifestJSON("v1.2.3", "."), wantInErr: `"."`},
 		{name: "a path with a parent element inside", manifest: manifestJSON("v1.2.3", "assets/../../etc/passwd"), wantInErr: `"assets/../../etc/passwd"`},
 		{name: "a path with an empty element", manifest: manifestJSON("v1.2.3", "a//b"), wantInErr: `"a//b"`},
-		{name: "a path with a backslash", manifest: manifestJSON("v1.2.3", `a\b`), wantInErr: `"a\\b"`},
+		{name: "a path with a backslash", manifest: manifestJSON("v1.2.3", `a\\b`), wantInErr: `"a\\b"`},
 		{name: "a path with a query", manifest: manifestJSON("v1.2.3", "index.html?v=2"), wantInErr: `"index.html?v=2"`},
 		{name: "a path with a fragment", manifest: manifestJSON("v1.2.3", "index.html#top"), wantInErr: `"index.html#top"`},
 		{name: "a path with a percent escape", manifest: manifestJSON("v1.2.3", "index%2Ehtml"), wantInErr: `"index%2Ehtml"`},
 		{name: "a path with a space", manifest: manifestJSON("v1.2.3", "index .html"), wantInErr: `"index .html"`},
-		{name: "a path with a control character", manifest: manifestJSON("v1.2.3", "index\u0000.html")},
+		{
+			// The path holds a U+0000 the JSON decoder produced from its escape,
+			// so this pins the path check, not the decoder's refusal of a raw
+			// control byte in the document.
+			name:      "a path with a control character",
+			manifest:  manifestJSON("v1.2.3", `index\u0000.html`),
+			wantInErr: `"index\x00.html"`,
+		},
 		{name: "a path twice", manifest: manifestJSON("v1.2.3", "index.html", "index.html"), wantInErr: `"index.html"`},
 		{name: "a digest in upper case", manifest: `{"version":"v1.2.3","files":[{"path":"index.html","sha256":"` + strings.ToUpper(manifestDigest) + `"}]}`},
 		{name: "a digest a character short", manifest: `{"version":"v1.2.3","files":[{"path":"index.html","sha256":"` + manifestDigest[:63] + `"}]}`},

@@ -259,10 +259,23 @@ func TestReportWriteText(t *testing.T) {
 				t.Errorf("the report holds a raw hostile value on a line of its own:\n%s", text)
 			}
 
-			for _, hostile := range []string{hostileCacheControl, hostileAge} {
-				if !strings.Contains(text, strconv.Quote(hostile)) {
-					t.Errorf("the report does not hold %q quoted as %q: response text reaches the report only through Quote:\n%s",
-						hostile, strconv.Quote(hostile), text)
+			// The escaping and the response lines are pinned per case, from the
+			// responses that case's report holds: the passing report is not asked
+			// for another case's hostile text or another case's response.
+			for _, response := range tc.report.Responses {
+				if !hasLineWith(lines, response.URL, response.RemoteAddr) {
+					t.Errorf("the report holds no line with the response's URL %q and remote address %q:\n%s",
+						response.URL, response.RemoteAddr, text)
+				}
+
+				if !strings.Contains(text, strconv.Quote(response.CacheControl)) {
+					t.Errorf("the report does not hold the cache-control %q quoted as %q: response text reaches the report only through Quote:\n%s",
+						response.CacheControl, strconv.Quote(response.CacheControl), text)
+				}
+
+				if response.Age.State == livecheck.AgeUnparseable && !strings.Contains(text, strconv.Quote(response.Age.Raw)) {
+					t.Errorf("the report does not hold the Age %q quoted as %q: response text reaches the report only through Quote:\n%s",
+						response.Age.Raw, strconv.Quote(response.Age.Raw), text)
 				}
 			}
 
@@ -285,10 +298,6 @@ func TestReportWriteText(t *testing.T) {
 				if !strings.Contains(text, size) {
 					t.Errorf("the report does not hold the module script's size %s:\n%s", size, text)
 				}
-			}
-
-			if !hasLineWith(lines, "https://"+livecheck.DefaultHost+"/index.html", "127.0.0.1:40405") {
-				t.Errorf("the report holds no line with a response's URL and remote address:\n%s", text)
 			}
 		})
 	}
