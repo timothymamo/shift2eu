@@ -67,14 +67,15 @@ var moduleScriptPattern = regexp.MustCompile(`^module\.[0-9a-f]{16}\.js$`)
 // MaxManifestBytes (more is an error): exactly one JSON object with exactly
 // the fields "version" (a string) and "files" (an array of objects with
 // exactly the fields "path" and "sha256"), nothing after the object but
-// white space, no unknown or missing field, every key exactly as written here,
-// case included, and none twice in its object. It refuses a path that is empty,
-// starts with "/", holds a "." or ".." element, an empty element ("a//b"), a
-// backslash, "?", "#", "%", a control character, a space or any other
-// character outside printable ASCII, and a sha256 that is not 64 lowercase
-// hexadecimal characters, and a path listed twice. The error names the
-// offending path quoted (%q). The paths are only ever used as URL paths on
-// the canonical host, never opened as files.
+// white space, no unknown or missing field (a null counts as missing), every
+// key exactly as written here, case included, and none twice in its object.
+// It refuses a file entry that is not a JSON object, null included, a path
+// that is empty, starts with "/", holds a "." or ".." element, an empty
+// element ("a//b"), a backslash, "?", "#", "%", a control character, a space
+// or any other character outside printable ASCII, a sha256 that is not 64
+// lowercase hexadecimal characters, and a path listed twice. The error names
+// the offending path or key, when there is one, quoted (%q). The paths are
+// only ever used as URL paths on the canonical host, never opened as files.
 func ParseManifest(r io.Reader) (Manifest, error) {
 	var doc manifestJSON
 
