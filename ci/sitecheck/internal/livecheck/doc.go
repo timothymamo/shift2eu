@@ -22,7 +22,13 @@
 //     or any byte read, even one Go cannot parse as a response (HTTP/0.9, a
 //     malformed header block) or discards as sent before the request, fails.
 //     The bytes are counted on the connection itself (each request has its
-//     own), not through httptrace, which reports no discarded byte;
+//     own), not through httptrace, which reports no discarded byte. No
+//     connection made within the request timeout counts as refused, even a
+//     connect that would complete later, from which a browser that waits
+//     longer could get a page: accepted, as it takes a deliberately slow edge
+//     and the other HTTPS checks on the same host still run. A deadline on
+//     the whole run's context is not expected (ci/sitecheck passes none); one
+//     that expired during a dial would count as refused too;
 //   - the certificates of the host and the apex verify, and neither the leaf
 //     nor an intermediate of the verified chain expires within the margin, the
 //     handshake bounded by the request timeout (KindCertificate,

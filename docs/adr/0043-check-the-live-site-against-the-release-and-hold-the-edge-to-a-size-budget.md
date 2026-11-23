@@ -64,8 +64,13 @@ library `ci/sitecheck/internal/livecheck` does every fetch and judgement, and th
      refuse-or-close mode `http://<host>/<p>` may instead refuse the connection or close (or reset) it
      before any byte of a response arrives, redirect to the canonical URL, or answer 4xx/5xx with a body
      that is no manifest file's (any other 3xx and any 2xx fail). A dial that times out with no
-     connection made (a filtered port) counts as refused: a browser gets no page from it either. A
-     connection that times out once made, or any byte read from the connection, even bytes Go cannot
+     connection made (a filtered port) counts as refused: a browser gets no page from it either. So
+     does a TCP connect that would complete only after the request timeout: no connection made within
+     the timeout counts as refused, though a browser that waits longer could get a page from such an
+     edge. This is accepted: it takes a deliberately slow edge, and the release's and the scheduled
+     check's other HTTPS checks on the same host still run. A deadline on the whole run's context is
+     not expected (the program passes none); if one expired during a dial, the request would count as
+     refused too. A connection that times out once made, or any byte read from the connection, even bytes Go cannot
      parse as a response (raw HTML without a status line, HTTP/0.9, a malformed header block) or
      discards because they came before the request ("unsolicited response"), fail: a browser may still
      wait for or render them. The check counts the bytes on the connection itself: its dialer wraps each

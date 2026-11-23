@@ -194,6 +194,8 @@ func (r *round) fetch(ctx context.Context, url string) fetched {
 	ctx = context.WithValue(ctx, connProbeKey{}, probe)
 	ctx = httptrace.WithClientTrace(ctx, &httptrace.ClientTrace{
 		GotConn: func(info httptrace.GotConnInfo) {
+			// The "before it reads the request" tests rely on this call to
+			// force the write-on-accept order (verdictConn asserts it).
 			remote = info.Conn.RemoteAddr().String()
 		},
 	})
@@ -242,6 +244,12 @@ func (r *round) fetch(ctx context.Context, url string) fetched {
 // was closed or reset). A timeout after a connection was made is not: a
 // browser would still be waiting. A response whose bytes race a reset passes
 // only if none of them was read, which is what a browser can show too.
+//
+// No connection within the request timeout counts as refused, even a connect
+// that would complete later, which a browser that waits longer could get a
+// page from (accepted: it takes a deliberately slow edge, ADR 0043). A
+// deadline on the whole run's ctx is not expected (ci/sitecheck passes none);
+// if one expired during a dial, the request would count as refused too.
 func refusedOrClosed(probe *connProbe, err error) bool {
 	switch {
 	case probe.read.Load(), errors.Is(err, context.Canceled):
