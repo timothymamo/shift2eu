@@ -260,9 +260,12 @@ func TestLiveVersion(t *testing.T) {
 
 // TestLiveVersionRefusesAnUntrustedPage pins LiveVersion's refusals: no footer
 // span, more than one, a span that does not end the footer's paragraph, an
-// id="site-version" on an element that is no mono span, and any text that is
-// not a version. Each is ErrNoLiveVersion, so the guard treats the page as
-// untrusted rather than reading a version out of it.
+// id="site-version" on an element that is no mono span, the bare
+// <span class="mono"> every page carried before #503, and any text that is not a
+// version. Each is ErrNoLiveVersion, so the guard treats the page as untrusted
+// rather than reading a version out of it. The bare span is a case of its own:
+// versionAtEnd (or versionTag too) shortened back to it would read a version
+// out of every page of an old bundle while each positive test still passed.
 func TestLiveVersionRefusesAnUntrustedPage(t *testing.T) {
 	t.Parallel()
 
@@ -283,6 +286,7 @@ func TestLiveVersionRefusesAnUntrustedPage(t *testing.T) {
 		{name: "a paragraph of another class", page: []byte(`<p class="footer"><span class="mono" id="site-version">v0.13.0</span></p>`)},
 		{name: "a span of another class", page: footer(`<span class="version" id="site-version">v0.13.0</span>`)},
 		{name: "the version id on an element that is no mono span", page: footer(`<span id="site-version">v0.13.0</span>`)},
+		{name: "the footer span before the version id", page: footer(`<span class="mono">v0.13.0</span>`)},
 		{name: "two version spans", page: footer(`<span class="mono" id="site-version">v0.13.0</span> <span class="mono" id="site-version">v0.14.0</span>`)},
 		{name: "a span that does not end the paragraph", page: footer(`<span class="mono" id="site-version">v0.13.0</span> <a href="verify.html">Verify</a>`)},
 		{name: "no version at all", page: footer(`<span class="mono" id="site-version"></span>`)},
