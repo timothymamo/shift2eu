@@ -168,6 +168,15 @@ var aptCases = []aptCase{
 		wantSources: aptStanza(aptMirrorNL+"/ "+aptMirrorNL+"/", aptArchiveSuites, aptComponents, aptKeyring),
 	},
 	{
+		// More than two on one line: a match takes the whitespace after its URI, so the step's second
+		// substitution rewrites the URIs the first one skipped (every other one), and a count beyond two must
+		// not leave the rest on the archive the maintainer replaced.
+		name:        "four-archive-uris-on-one-line",
+		mirror:      aptMirrorNL,
+		sources:     aptStanza("http://archive.ubuntu.com/ubuntu http://archive.ubuntu.com/ubuntu/ https://archive.ubuntu.com/ubuntu http://archive.ubuntu.com/ubuntu/", aptArchiveSuites, aptComponents, aptKeyring),
+		wantSources: aptStanza(aptMirrorNL+"/ "+aptMirrorNL+"/ "+aptMirrorNL+"/ "+aptMirrorNL+"/", aptArchiveSuites, aptComponents, aptKeyring),
+	},
+	{
 		// The security updates stay on security.ubuntu.com: a mirror picked for speed must not take them with
 		// it. Everything else of both stanzas is what cloud-init wrote.
 		name:        "a-security-stanza-beside-the-archive",
