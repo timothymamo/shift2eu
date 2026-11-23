@@ -83,6 +83,7 @@ supersedes it.
 - [0038. Start the Lima VM at boot with a LaunchDaemon of our own, never limactl autostart](adr/0038-start-the-lima-vm-at-boot-with-a-launchdaemon-of-our-own.md)
 - [0039. Create the site's Scaleway hosting with OpenTofu, its state in a locked bucket outside the site's project](adr/0039-create-the-sites-scaleway-hosting-with-opentofu.md)
 - [0040. Audit the repository and the latest release on a schedule, with a model that triages and a script that publishes](adr/0040-audit-the-repository-and-the-latest-release-on-a-schedule.md)
+- [0041. License the project under Apache-2.0 with a root NOTICE](adr/0041-license-the-project-under-apache-2-0-with-a-root-notice.md)
 
 ## Writing a page
 
