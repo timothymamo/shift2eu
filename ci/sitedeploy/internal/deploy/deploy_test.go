@@ -240,11 +240,18 @@ func TestDeploySetsTheHeadersOfEveryObject(t *testing.T) {
 			t.Errorf("%s is PUT with Content-Encoding %q, want %q: only the module script is sent gzip-compressed", name, got, want.encoding)
 		}
 
+		// The expected body is the bundle's own bytes: files holds every file but
+		// manifest.json, whose bytes the bundle builds from them.
+		wantBody := dc.bundle.files[name]
+		if name == deploy.ManifestName {
+			wantBody = dc.bundle.manifestBytes(t)
+		}
+
 		if want.encoding == "gzip" {
-			if diff := cmp.Diff(dc.bundle.files[name], gunzip(t, name, put.Body)); diff != "" {
+			if diff := cmp.Diff(wantBody, gunzip(t, name, put.Body)); diff != "" {
 				t.Errorf("the decoded body of %s (-want +got):\n%s\nwant the bundle's own bytes: the manifest's digest is of the decoded file, as the live check compares after content decoding", name, diff)
 			}
-		} else if diff := cmp.Diff(dc.bundle.files[name], put.Body); diff != "" {
+		} else if diff := cmp.Diff(wantBody, put.Body); diff != "" {
 			t.Errorf("the body of %s (-want +got):\n%s\nwant the bundle's own bytes", name, diff)
 		}
 
