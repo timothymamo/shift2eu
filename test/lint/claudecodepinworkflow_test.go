@@ -28,6 +28,7 @@ const (
 const claudeCodePinCancel = "${{ github.event_name == 'pull_request' }}"
 
 // claudeCodePinPaths are the paths the pin check watches: the one pin file, the
+// reviewer's workflow, which still installs the CLI from that file, the
 // installer that consumes the pin, the workflow that runs it, the check's own
 // workflow, the check's code and go.mod, whose go line names the toolchain the
 // check is built with. A push to main filters on them; a pull request runs the
@@ -35,6 +36,7 @@ const claudeCodePinCancel = "${{ github.event_name == 'pull_request' }}"
 // among them (issue #452, ADR 0040's milestone-2 amendment, issue #277).
 var claudeCodePinPaths = []string{
 	claudeCodePinFile,
+	aiReviewWorkflowPath,
 	".github/scripts/install-claude-code.sh",
 	claudeCodePinWorkflowPath,
 	"ci/claudecodepin/**",

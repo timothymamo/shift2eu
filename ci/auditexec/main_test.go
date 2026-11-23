@@ -883,12 +883,36 @@ func TestRunRefusesThePathsIntoProcSysAndDev(t *testing.T) {
 				wantNamed: "-C/proc/1",
 			},
 			{
-				// The work directory is /srv/audit/work, so this path is
-				// /proc/1/environ and the wrapper refuses what the CLI's deny
-				// rule matched as text.
+				// The work directory is /srv/audit/work, so three elements up is /
+				// and this path is /proc/1/environ: the wrapper refuses what the
+				// CLI's deny rule matched as text.
 				name:      "a path built out of the work directory",
-				args:      []string{"sha256sum", "/srv/audit/work/../../proc/1/environ"},
-				wantNamed: "/srv/audit/work/../../proc/1/environ",
+				args:      []string{"sha256sum", "/srv/audit/work/../../../proc/1/environ"},
+				wantNamed: "/srv/audit/work/../../../proc/1/environ",
+			},
+			{
+				// The wrapper cleans lexically with strings, since depguard keeps
+				// path/filepath from it: the rows below pin that its clean agrees
+				// with filepath.Clean on the edges, a repeated or trailing slash,
+				// a ./ element and a .. above the root, which stays at the root.
+				name:      "a path with a doubled leading slash",
+				args:      []string{"cat", "//proc/1/environ"},
+				wantNamed: "//proc/1/environ",
+			},
+			{
+				name:      "a path with a ./ element",
+				args:      []string{"cat", "/./proc/1/environ"},
+				wantNamed: "/./proc/1/environ",
+			},
+			{
+				name:      "a path with a trailing slash",
+				args:      []string{"cat", "/proc/1/"},
+				wantNamed: "/proc/1/",
+			},
+			{
+				name:      "a path whose .. run above the root",
+				args:      []string{"cat", "/srv/audit/work/../../../../proc/1/environ"},
+				wantNamed: "/srv/audit/work/../../../../proc/1/environ",
 			},
 			{
 				// The rule fails closed: a git grep pattern that reads as one
@@ -966,6 +990,13 @@ func TestRunRefusesThePathsIntoProcSysAndDev(t *testing.T) {
 			{
 				name:     "a relative path inside the work directory",
 				args:     []string{"cat", "./x"},
+				wantPath: "/usr/bin/cat",
+			},
+			{
+				// The .. stop short of the root, so this path is
+				// /srv/proc/1/environ, no path into /proc.
+				name:     "a path whose .. stop short of the root",
+				args:     []string{"cat", "/srv/audit/work/../../proc/1/environ"},
 				wantPath: "/usr/bin/cat",
 			},
 		}
