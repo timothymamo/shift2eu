@@ -233,7 +233,7 @@ func tableRows(t *testing.T, lines []string) [][]string {
 			continue
 		}
 
-		cells := strings.Split(strings.Trim(line, "|"), "|")
+		cells := splitTableRow(strings.TrimSuffix(strings.TrimPrefix(line, "|"), "|"))
 		for i := range cells {
 			cells[i] = strings.TrimSpace(cells[i])
 		}
@@ -256,6 +256,30 @@ func tableRows(t *testing.T, lines []string) [][]string {
 	}
 
 	return rows
+}
+
+// splitTableRow splits a table row's inner text into its cells at every | that
+// is not written \|, as GFM's table parser does: an escaped pipe is part of the
+// cell, never a cell boundary.
+func splitTableRow(inner string) []string {
+	cells := make([]string, 0, strings.Count(inner, "|")+1)
+
+	var cell strings.Builder
+
+	for i := 0; i < len(inner); i++ {
+		switch {
+		case inner[i] == '\\' && i+1 < len(inner) && inner[i+1] == '|':
+			cell.WriteString(`\|`)
+			i++
+		case inner[i] == '|':
+			cells = append(cells, cell.String())
+			cell.Reset()
+		default:
+			cell.WriteByte(inner[i])
+		}
+	}
+
+	return append(cells, cell.String())
 }
 
 // tableOf returns the rows of the one table in a named section, and fails the

@@ -52,7 +52,7 @@ func TestCoverage(t *testing.T) {
 			name:     "every check ran, one produced a public finding",
 			checks:   ranChecks(),
 			findings: []publish.Finding{public},
-			coverage: ranThen("workflows", "findings"),
+			coverage: ranThen("tree-review", "findings"),
 		},
 		{
 			// The PRD's named case: one private finding from the CLI's hostile
@@ -68,7 +68,7 @@ func TestCoverage(t *testing.T) {
 			checks:   ranChecks(),
 			findings: []publish.Finding{public, private},
 			private:  publish.PrivateHandled,
-			coverage: ranThen("workflows", "findings"),
+			coverage: ranThen("tree-review", "findings"),
 		},
 		{
 			name: "every why id is rendered",

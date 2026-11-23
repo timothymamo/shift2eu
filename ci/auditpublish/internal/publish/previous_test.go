@@ -167,9 +167,19 @@ func TestParsePreviousReportRefuses(t *testing.T) {
 			data: func(*testing.T) []byte { return []byte(body) },
 		},
 		{
-			name: "a fingerprint cell that is not a fingerprint",
+			// fp-0123456789ab is a well-formed fingerprint, so this row is
+			// refused by the first report's own consistency rule: a
+			// fingerprint that is none of the report's findings.
+			name: "a fingerprint swapped for another",
 			file: name,
 			data: tampered(body, fingerprintOf(fix), "fp-0123456789ab"),
+		},
+		{
+			// The suspected finding's cell is refused by the shape rule
+			// alone: its row is in no other table of the report.
+			name: "a fingerprint cell that is not a fingerprint",
+			file: name,
+			data: tampered(body, fingerprintOf(suspected), "fp-0123456789zz"),
 		},
 		{
 			name: "a status cell outside the vocabulary",

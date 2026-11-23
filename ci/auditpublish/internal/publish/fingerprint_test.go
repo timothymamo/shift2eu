@@ -221,7 +221,9 @@ func TestNewFingerprintKey(t *testing.T) {
 				t.Errorf("NewFingerprintKey over %d bytes: error %v does not wrap ErrConfig", tc.length, err)
 			}
 
-			if msg := err.Error(); msg == "" || strings.Contains(msg, string(secret[:8])) {
+			// A secret of fewer than eight bytes has no eight-byte run to look
+			// for: the needle itself is made of the error's own letters.
+			if msg := err.Error(); msg == "" || (len(secret) >= 8 && strings.Contains(msg, string(secret[:8]))) {
 				t.Errorf("NewFingerprintKey over %d bytes: error %q names the secret's bytes, want a field and a rule only", tc.length, msg)
 			}
 		})

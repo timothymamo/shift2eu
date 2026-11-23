@@ -18,8 +18,9 @@ import (
 const severityOrder = "critical, high, medium, low, informational"
 
 // wantFindingRow returns the findings table row a kept finding must get: its
-// fingerprint, severity, category, status, location and its two model cells,
-// escaped as table cells.
+// fingerprint, severity, category, status, location and its three model cells,
+// each escaped as a table cell. The location is model text too, so it is a
+// TableCell like the scenario and the fix.
 func wantFindingRow(f publish.Finding, status string) []string {
 	location := f.File
 	if f.Line > 0 {
@@ -31,7 +32,7 @@ func wantFindingRow(f publish.Finding, status string) []string {
 		f.Severity,
 		f.Category,
 		status,
-		location,
+		publish.TableCell(location),
 		publish.TableCell(f.Scenario),
 		publish.TableCell(f.Fix),
 	}
@@ -168,8 +169,11 @@ func TestRenderReportSections(t *testing.T) {
 func TestRenderReportEmptySections(t *testing.T) {
 	t.Parallel()
 
+	empty := fixtureResult()
+	empty.Limits = nil
+
 	body := renderReport(t, publish.ReportInput{
-		Result:  fixtureResult(),
+		Result:  empty,
 		Run:     testRun(t, testDate, testRunID),
 		Private: publish.PrivateNone,
 	}).Body
