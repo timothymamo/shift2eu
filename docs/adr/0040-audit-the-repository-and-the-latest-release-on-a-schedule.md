@@ -2136,7 +2136,8 @@ line, a trailing `\` included, so a guard hidden after it still matches every pa
 never runs it, and a `--source-ref "refs/tags/${tag}" # \` cuts the continuation so that
 `gh attestation verify`'s failure is ignored (only the last command's status counts in
 `if ! A; B; then`). A word starts after a blank and right after an operator character too
-(review round 4, M1): `(^|[\s;&|()<>])#`, so `;#`, `&&#` and `|#` are trailing comments as well. A `#`
+(review round 4, M1), and right after a backtick (review round 5), which opens a command substitution:
+``(^|[\s;&|()<>`])#``, so `;#`, `&&#`, `|#` and `` `# `` are trailing comments as well. A `#`
 inside a word (`${digest#sha256:}`, `${GITLEAKS_VERSION#v}`) stays code; one after a blank or an
 operator character inside quotes is refused too, which fails closed. A whole comment line right after a
 line ending in `\` is refused as well: the continuation joins it to the command as a trailing comment,
@@ -2147,9 +2148,25 @@ one contiguous pattern, from `gh attestation verify "oci://${image}@${digest}"` 
 ending its line, alone or as `if ! ... > /dev/null; then`, so a `;` after a flag or a dropped `\`
 (either leaves `--deny-self-hosted-runners` to run as a command of its own, whose status alone counts)
 matches no more; and the zip's `echo "${digest#sha256:}  ...zip" | sha256sum --check --strict -` must be
-a whole line, so it cannot ride at the end of another command's line. The verification is the
-workflow's only command continued over lines. An order broken is reported for every pair out of order, the command that
+a whole line, so it cannot ride at the end of another command's line. A guard's refusing branch is
+held whole too (review round 5, L1): the tag's and the digest's shape checks and the verification in its
+`if !` form each match only with their branch, an `echo "::error ..."` line, an `exit 1` line and a `fi`
+line, so a branch whose `exit 1` is dropped or turned into `exit 0` is a guard missing; the bare
+verification stays accepted, `set -e` failing the step. In today's workflow the verification is the only
+command continued over lines; the check does not require that, it only matches the verification as one
+contiguous command. An order broken is reported for every pair out of order, the command that
 must come first named first.
+
+**The workflow check's residual risk (accepted, review round 5).** The check is a structural tripwire
+over the workflow's text, not a shell parser. It refuses the edits that make a guard look present and
+whole while the shell never runs it, or runs it cut: a guard commented out, hidden after a trailing
+comment (a `#` at the start of a word, after an operator character or a backtick), a continuation cut
+by a `;`, a dropped `\` or a comment line, a branch without its `exit 1`. A guard can still be
+neutralised by an edit that leaves it visibly in place: `|| true`, `|| :` or `|| exit 0` on a guard's
+line, a `||` ending the line before a bare command, the guard inside `if false`, in a function nobody
+calls or in a heredoc. Each such edit is explicit in the diff, and reaches `main` only through a pull
+request the maintainer reviews (CODEOWNERS and `Protect main`'s required code-owner review); the check
+does not try to read shell semantics to refuse them.
 
 **Job permissions** (`GITHUB_TOKEN`, each read): the checks job `contents` alone (no row PR 5b runs reads
 an attestation: PR 5c adds `attestations` with its release-integrity rows, and scorecard and row 15 may
