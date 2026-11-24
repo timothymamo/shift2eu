@@ -7,7 +7,8 @@
 // block of an allowed type only, a run or mock_provider label that is an identifier (so no label's / can shift
 // the blocks beneath it out of the rule that judges them), a block label whose %, / or : never decides what
 // the rules see, a provider block setting only organization_id and
-// region, a lock file holding only the line shapes tofu init writes, and so on (the script lists them). With
+// region, a lock file holding only the line shapes tofu init writes, the site's TLS stage recreating itself before
+// it destroys (so a replacement repoints the DNS stage first, issue #541), and so on (the script lists them). With
 // every rule holding it prints nothing and exits 0; a usage error exits 2.
 //
 // The real infra/ must hold every rule, and each case below is one copy of infra/ with exactly one breakage,
@@ -70,6 +71,7 @@ type infraRuleCase struct {
 var infraRuleCases = slices.Concat(
 	infraFileFunctionCases(),
 	namedInfraRuleCases,
+	tlsStageLifecycleCases,
 	infraTestNestedBlockCases,
 	infraTestLabelCases,
 	infraLabelPathCases,
@@ -1550,6 +1552,127 @@ locals {
 			writeInfraText(t, filepath.Join(site, "main.tf~"), "resource {\n")
 		},
 	},
+}
+
+// tlsStageLifecycleCases pin [tls-stage-lifecycle] (issue #541). Scaleway issues the Edge Services TLS stage's
+// managed certificate once, when the stage is created, and only once the www CNAME resolves to the pipeline:
+// a stage created before R8's CNAME never gets one, and replacing it is the only way to ask again. OpenTofu's
+// default replacement plans the destroy first, and Scaleway refuses to delete a TLS stage the DNS stage still
+// references, so the apply fails with a 500. The stage must therefore carry
+// lifecycle { create_before_destroy = true }: the new stage is created and the DNS stage repointed before the
+// old one is deleted. tofu test cannot see lifecycle meta-arguments, so dev/infra-rules.awk reads the file.
+//
+// Every case starts from the real configuration and rewrites only the TLS stage's lifecycle block, so a copy
+// holds whatever infra/site/main.tf holds today and the case still names one breakage: no block at all, a
+// block that says false, and the one shape the rule allows.
+var tlsStageLifecycleCases = []infraRuleCase{
+	{
+		name:   "tls-stage-without-a-lifecycle-block",
+		why:    "the site's TLS stage without a lifecycle block, whose replacement plans the destroy before its create",
+		want:   "tls-stage-lifecycle",
+		wantIn: map[string]string{"tls-stage-lifecycle": "{site}/main.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			tlsStageLifecycle(t, site, nil)
+		},
+	},
+	{
+		name:   "tls-stage-create-before-destroy-false",
+		why:    "create_before_destroy = false in the site's TLS stage lifecycle block, which restores the destroy-first replacement",
+		want:   "tls-stage-lifecycle",
+		wantIn: map[string]string{"tls-stage-lifecycle": "{site}/main.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			tlsStageLifecycle(t, site, []string{"    create_before_destroy = false"})
+		},
+	},
+	{
+		name: "tls-stage-create-before-destroy-true",
+		why:  "create_before_destroy = true in the site's TLS stage lifecycle block, the one shape the rule allows",
+		want: "",
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			tlsStageLifecycle(t, site, []string{"    create_before_destroy = true"})
+		},
+	},
+}
+
+// tlsStageLifecycle rewrites the lifecycle block of scaleway_edge_services_tls_stage.site in a copied
+// infra/site: body becomes the block's lines, and an empty body leaves the stage without a lifecycle block.
+// An existing block, whatever it holds (the real configuration's comment, blank lines, another revision's
+// setting), is dropped first, so each case names one breakage and none depends on what main.tf holds today.
+// Only the TLS stage is edited: a lifecycle block on the DNS stage beside it stays as the copy found it.
+func tlsStageLifecycle(t *testing.T, site string, body []string) {
+	t.Helper()
+
+	path := filepath.Join(site, "main.tf")
+
+	text, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+
+	lines := strings.Split(string(text), "\n")
+
+	const header = `resource "scaleway_edge_services_tls_stage" "site" {`
+
+	start := -1
+
+	for i, line := range lines {
+		if strings.TrimSpace(line) == header {
+			start = i
+
+			break
+		}
+	}
+
+	if start < 0 {
+		t.Fatalf("%s holds no line %q: the case names the TLS stage the rule judges", path, header)
+	}
+
+	end := -1
+
+	for i := start + 1; i < len(lines); i++ {
+		if strings.TrimSpace(lines[i]) == "}" {
+			end = i
+
+			break
+		}
+	}
+
+	if end < 0 {
+		t.Fatalf("%s: the TLS stage that line %d opens does not close at a line holding \"}\": the case cannot rewrite its lifecycle block", path, start+1)
+	}
+
+	kept := make([]string, 0, end-start)
+
+	for i := start + 1; i < end; i++ {
+		if strings.TrimSpace(lines[i]) == "lifecycle {" {
+			for ; i < end && strings.TrimSpace(lines[i]) != "}"; i++ {
+			}
+
+			continue
+		}
+
+		kept = append(kept, lines[i])
+	}
+
+	for len(kept) > 0 && strings.TrimSpace(kept[len(kept)-1]) == "" {
+		kept = kept[:len(kept)-1]
+	}
+
+	out := append([]string{}, lines[:start+1]...)
+	out = append(out, kept...)
+
+	if len(body) > 0 {
+		out = append(out, "  lifecycle {")
+		out = append(out, body...)
+		out = append(out, "  }")
+	}
+
+	out = append(out, lines[end:]...)
+
+	writeInfraText(t, path, strings.Join(out, "\n"))
 }
 
 // infraTestNestedBlockCases pin the allow list of the blocks nested directly in a test file's run and
