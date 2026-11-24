@@ -3,7 +3,8 @@
 // App, or one whose head branch is under security-audit/ - that touches anything outside docs/security/,
 // and passes trivially for every other pull request.
 //
-// The check is required through a ruleset of its own on main (the PRD's runbook step 5), never through
+// The check is required through a ruleset of its own on main (docs/dev-environment.md, The scheduled
+// security audit, step 5), never through
 // Protect main, and the maintainer names the job in that ruleset, so the job's name is part of the
 // interface: "Audit report paths". A required check that never reports blocks the pull request it is
 // required on, so the workflow runs on every pull request, into any branch, on pull_request_target alone
@@ -54,8 +55,8 @@ const (
 	auditPathsWorkflowPath = ".github/workflows/audit-paths.yml"
 
 	// auditPathsWorkflowName is the workflow's name, auditPathsJobID the id of its one job and
-	// auditPathsJobName that job's name: the name the maintainer puts in the audit-paths ruleset (the
-	// PRD's runbook step 5).
+	// auditPathsJobName that job's name: the name the maintainer puts in the audit-paths ruleset
+	// (docs/dev-environment.md, The scheduled security audit, step 5).
 	auditPathsWorkflowName = "Audit paths"
 	auditPathsJobID        = "audit-paths"
 	auditPathsJobName      = "Audit report paths"

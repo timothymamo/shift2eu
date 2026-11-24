@@ -7,7 +7,8 @@ name: Audit paths
 # a path with a component starting with a dot, or adds there anything but a regular, non-executable file.
 # It passes trivially for every other pull request. .github/scripts/audit-paths.sh is the fence; this
 # workflow only hands it the author, the sender, the two branches and the two commits. The audit-paths
-# ruleset on main requires the job by its name (the PRD's runbook step 5); Protect main stays unchanged.
+# ruleset on main requires the job by its name (docs/dev-environment.md, The scheduled security audit,
+# step 5); Protect main stays unchanged.
 #
 # pull_request_target with types: alone, and no branches:, paths:, paths-ignore: or branches-ignore:
 # filter: a required check that never reports blocks its pull request for good, so the job reports on

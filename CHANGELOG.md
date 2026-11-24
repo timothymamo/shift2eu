@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.13.0](https://github.com/timothymamo/shift2eu/compare/v0.12.0...v0.13.0) (2026-11-24)
+
+
+### Features
+
+* **audit:** the audit publish program's gh contract and artifact check (PRD [#175](https://github.com/timothymamo/shift2eu/issues/175) M2, PR 4a) ([#502](https://github.com/timothymamo/shift2eu/issues/502)) ([5ffdc57](https://github.com/timothymamo/shift2eu/commit/5ffdc57ce2e069d4c122fe4cfe2d036676fab0d8))
+* **audit:** the audit publish program's report side (PRD [#175](https://github.com/timothymamo/shift2eu/issues/175) M2, PR 4b) ([#518](https://github.com/timothymamo/shift2eu/issues/518)) ([72e2883](https://github.com/timothymamo/shift2eu/commit/72e28834c2c18b8dfba2e642df13976a2da790c7))
+* **audit:** the publish program's draft advisories (PRD [#175](https://github.com/timothymamo/shift2eu/issues/175) M2, PR 4c) ([#529](https://github.com/timothymamo/shift2eu/issues/529)) ([6571da5](https://github.com/timothymamo/shift2eu/commit/6571da5473be27b504d5ad56a5a63ca1ea225892))
+* **audit:** the scheduled audit's preliminaries (PRD [#175](https://github.com/timothymamo/shift2eu/issues/175) M2, PR 5a) ([#539](https://github.com/timothymamo/shift2eu/issues/539)) ([13b05b6](https://github.com/timothymamo/shift2eu/commit/13b05b639200f9437ff45e1b55366305a20daaa3))
+* **ci:** add the live site check and the edge size budget ([#503](https://github.com/timothymamo/shift2eu/issues/503)) ([e994a58](https://github.com/timothymamo/shift2eu/commit/e994a58077431378a5fcf06d555923d36e0af9ca))
+* **ci:** deploy the site to object storage (PRD [#297](https://github.com/timothymamo/shift2eu/issues/297) milestone 3, PR A) ([#501](https://github.com/timothymamo/shift2eu/issues/501)) ([b64f651](https://github.com/timothymamo/shift2eu/commit/b64f651c9dec656bab8279d430344df8aebae639))
+* **release:** build, smoke-test, attest and publish the site bundle (PRD [#297](https://github.com/timothymamo/shift2eu/issues/297) milestone 3, PR C1) ([#510](https://github.com/timothymamo/shift2eu/issues/510)) ([32d610e](https://github.com/timothymamo/shift2eu/commit/32d610e24cd237274fd99c6b928538da813d2ab9))
+* **release:** deploy the site and check it live behind SITE_DEPLOY_ENABLED (PRD [#297](https://github.com/timothymamo/shift2eu/issues/297) milestone 3, PR C2) ([#521](https://github.com/timothymamo/shift2eu/issues/521)) ([3cedda0](https://github.com/timothymamo/shift2eu/commit/3cedda057fe82de77ee8817101d459bddebbd667))
+* **site:** an intro on the Assessment page and an About page (issue [#528](https://github.com/timothymamo/shift2eu/issues/528)) ([#531](https://github.com/timothymamo/shift2eu/issues/531)) ([1707062](https://github.com/timothymamo/shift2eu/commit/1707062dd193429e0d68ca654e101de3f5218ed0))
+
+
+### Bug Fixes
+
+* **ci:** read the deploy guard's version from the real site footer ([#509](https://github.com/timothymamo/shift2eu/issues/509)) ([e848040](https://github.com/timothymamo/shift2eu/commit/e8480405c0454ecee60bb639e715518996ea5dbc))
+* **devenv:** apt timeouts and retries and a configurable Ubuntu mirror ([#498](https://github.com/timothymamo/shift2eu/issues/498)) ([#499](https://github.com/timothymamo/shift2eu/issues/499)) ([8f271fb](https://github.com/timothymamo/shift2eu/commit/8f271fb8a20d2ad08911c5a31158893108800059))
+* **devenv:** bound the test/devenv make runs so a hang fails fast ([#512](https://github.com/timothymamo/shift2eu/issues/512)) ([#523](https://github.com/timothymamo/shift2eu/issues/523)) ([b99e0d0](https://github.com/timothymamo/shift2eu/commit/b99e0d04303f23dfdc027858b5a89f5132b8f337))
+* **sitecheck:** refuse case-folded and duplicate manifest keys ([#507](https://github.com/timothymamo/shift2eu/issues/507)) ([62168d9](https://github.com/timothymamo/shift2eu/commit/62168d9d2ac1f794cbf03d79b6e75ceb183562cf))
+
 ## [0.12.0](https://github.com/timothymamo/shift2eu/compare/v0.11.0...v0.12.0) (2026-11-23)
 
 
