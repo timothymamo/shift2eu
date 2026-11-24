@@ -2127,8 +2127,8 @@ runs under a personal plan's token instead.
   accidental drops, since the model supplies its inputs), and the model step's network
   is held to the model API by configuration only.
 - The maintainer must create the App, the environment and its keys, the rulesets and the `security`
-  label, and check that no other App holds Actions write, before milestone 2 merges (the PRD's runbook,
-  which milestone 2 moves into `docs/dev-environment.md`; moved 2026-11-24 by PR 5a to
-  [The scheduled security audit](../dev-environment.md#the-scheduled-security-audit), its step numbers
+  label, and check that no other App holds Actions write, before milestone 2 merges
+  ([The scheduled security audit](../dev-environment.md#the-scheduled-security-audit) in
+  `docs/dev-environment.md`, the runbook PR 5a moved there from the PRD on 2026-11-24, its step numbers
   kept).
 - Milestone 2 amends this record; milestone 3 enables the schedule after the first report is merged.

@@ -2374,11 +2374,12 @@ gh api repos/timothymamo/shift2eu/environments/security-audit --jq '.protection_
 # PASS: no required_reviewers entry
 gh api repos/timothymamo/shift2eu/environments/security-audit/secrets --jq '[.secrets[].name] | sort | tojson'
 # PASS: ["AUDIT_APP_PRIVATE_KEY","AUDIT_FINGERPRINT_KEY","AUDIT_MODEL_PRIVATE_KEY","AUDIT_PUBLISH_PRIVATE_KEY","CLAUDE_CODE_OAUTH_TOKEN"]
-gh api repos/timothymamo/shift2eu/environments/security-audit/variables --jq '.variables[].name'
-# PASS: the App's client ID and the two public halves, nothing else
-gh api repos/timothymamo/shift2eu/actions/secrets --jq '.secrets[].name'
-gh api repos/timothymamo/shift2eu/actions/variables --jq '.variables[].name'
-# PASS: none of the names above (repository level holds none of them)
+gh api repos/timothymamo/shift2eu/environments/security-audit/variables --jq '[.variables[].name] | sort | tojson'
+# PASS: ["AUDIT_APP_CLIENT_ID","AUDIT_MODEL_PUBLIC_KEY","AUDIT_PUBLISH_PUBLIC_KEY"]
+gh api --paginate repos/timothymamo/shift2eu/actions/secrets --jq '.secrets[].name' | grep -E '^AUDIT_|^CLAUDE_CODE_OAUTH_TOKEN$'
+gh api --paginate repos/timothymamo/shift2eu/actions/variables --jq '.variables[].name' | grep -E '^AUDIT_|^CLAUDE_CODE_OAUTH_TOKEN$'
+# PASS: no output (repository level holds none of the five secrets and three variables)
+# FAIL: a name listed, or an error line from gh (a failed fetch prints its error, never a name)
 ls <the model key's private file> <the publish key's private file>
 # PASS: No such file or directory (both)
 ```
@@ -2396,8 +2397,8 @@ blocked until this check passes (Decision 2).
 # Mac (admin), as yourself
 gh label list --repo timothymamo/shift2eu --search security --json name --jq '.[].name'
 # PASS: security
-gh api 'repos/timothymamo/shift2eu/security-advisories?state=closed' --jq '.[] | [.ghsa_id, .state, .updated_at, .summary] | @tsv'
-# PASS: the test draft, closed, updated after it was created
+gh api 'repos/timothymamo/shift2eu/security-advisories?state=closed' --jq '.[] | [.ghsa_id, .state, .created_at, .updated_at, .summary] | @tsv'
+# PASS: the test draft, closed, its updated_at later than its created_at
 ls <the App's private key file>
 # PASS: No such file or directory
 
@@ -2530,9 +2531,11 @@ gh api repos/timothymamo/shift2eu/rulesets/<audit branches id> --jq '[.bypass_ac
 # PASS: [["Integration",5875190,"always"]], the audit App only
 # FAIL: any other actor, the admin role included, or another mode
 
-# Then make the audit-paths ruleset active (enforcement: active)
+# Then make the audit-paths ruleset active (enforcement: active), and check Protect main is unchanged
 gh api repos/timothymamo/shift2eu/rulesets/<id> --jq .enforcement
 # PASS: active
+gh api repos/timothymamo/shift2eu/rulesets/<Protect main id> --jq '.rules[] | select(.type == "pull_request") | .parameters.require_code_owner_review'
+# PASS: true (step 6's Protect main read; nothing of this step touched Protect main)
 ```
 
 **6. Check the other rulesets and the Apps.** *Done 2026-11-22.* The audit App is in no bypass list of
@@ -2566,8 +2569,12 @@ gh pr list --repo timothymamo/shift2eu --state merged --head feat/175-m2-audit-c
 # PASS: one row, PR 5c, merged
 gh api repos/timothymamo/shift2eu/actions/workflows/scheduled-security-audit.yml --jq .state
 # PASS: active
-gh api repos/timothymamo/shift2eu/contents/.github/workflows/scheduled-security-audit.yml --jq .content | base64 -d | grep -n 'schedule:'
+gh api repos/timothymamo/shift2eu/contents/.github/workflows/scheduled-security-audit.yml --jq .content > <a scratch file> && echo fetched
+# PASS: fetched; FAIL: an API error, and no "fetched" line (stop: the check below would read nothing)
+base64 -d < <a scratch file> | grep -nw schedule
 # PASS: no output (milestone 2 runs on workflow_dispatch only; milestone 3 adds the schedule)
+# FAIL: a line, in block or flow style (on: { schedule: ... } included); a comment that only names
+#   the word is no trigger, but read every line it prints
 ```
 
 **8. Start the first run** (`workflow_dispatch` on `main`). Read its report PR and advisories. Then merge
@@ -2611,10 +2618,15 @@ state and runs; if GitHub disabled the schedule after 60 days without repository
 and start one `workflow_dispatch` run.
 
 ```bash
-# Mac (admin), as yourself
+# Mac (admin), as yourself: the action, only when the check below shows the workflow disabled
 gh workflow enable scheduled-security-audit.yml --repo timothymamo/shift2eu
+# PASS: no error
+```
+
+```bash
+# Mac (admin), as yourself: the check, read-only
 gh api repos/timothymamo/shift2eu/actions/workflows/scheduled-security-audit.yml --jq .state
-# PASS: active
+# PASS: active; FAIL: disabled_inactivity or disabled_manually (run the action above)
 # PASS, later: the next scheduled run appears at the next date the cron names (ADR 0040 records it)
 ```
 
@@ -2642,10 +2654,33 @@ step 10, the user-namespace note`), read ADR 0040's note on the runner's user-na
 before changing anything.
 
 ```bash
-# Mac (admin), as yourself, after any renewal or rotation
+# Mac (admin), as yourself: the action, one line per rotated secret. A value is read from the hidden
+# prompt or from the file on stdin, never echoed and never on the command line
+# The Claude token: paste it at the prompt
 gh secret set CLAUDE_CODE_OAUTH_TOKEN --env security-audit --repo timothymamo/shift2eu
+# The App's key: the new key file on stdin
+gh secret set AUDIT_APP_PRIVATE_KEY --env security-audit --repo timothymamo/shift2eu < <the App's new key file>
+# The model key pair: both halves together
+gh secret set AUDIT_MODEL_PRIVATE_KEY --env security-audit --repo timothymamo/shift2eu < <the model key's new private file>
+gh variable set AUDIT_MODEL_PUBLIC_KEY --env security-audit --repo timothymamo/shift2eu < <the model key's new public file>
+# The publish key pair: both halves together
+gh secret set AUDIT_PUBLISH_PRIVATE_KEY --env security-audit --repo timothymamo/shift2eu < <the publish key's new private file>
+gh variable set AUDIT_PUBLISH_PUBLIC_KEY --env security-audit --repo timothymamo/shift2eu < <the publish key's new public file>
+# PASS: each line reports the secret or variable set; FAIL: an error
+ls <the App's new key file> <the model key's new private file> <the publish key's new private file>
+# PASS: No such file or directory (each one you stored, once you have deleted it)
+```
+
+```bash
+# Mac (admin), as yourself: the check, after any renewal or rotation
+gh api repos/timothymamo/shift2eu/environments/security-audit/secrets --jq '[.secrets[].name] | sort | tojson'
+# PASS: ["AUDIT_APP_PRIVATE_KEY","AUDIT_FINGERPRINT_KEY","AUDIT_MODEL_PRIVATE_KEY","AUDIT_PUBLISH_PRIVATE_KEY","CLAUDE_CODE_OAUTH_TOKEN"]
+gh api repos/timothymamo/shift2eu/environments/security-audit/variables --jq '[.variables[].name] | sort | tojson'
+# PASS: ["AUDIT_APP_CLIENT_ID","AUDIT_MODEL_PUBLIC_KEY","AUDIT_PUBLISH_PUBLIC_KEY"]
 gh workflow run scheduled-security-audit.yml --repo timothymamo/shift2eu --ref main
-# PASS: the run succeeds (step 8's checks); FAIL: an authentication error in the model job: the token is wrong or revoked
+gh run list --repo timothymamo/shift2eu --workflow scheduled-security-audit.yml --limit 1 --json conclusion --jq '.[].conclusion'
+# PASS, once it finishes: success (step 8's checks)
+# FAIL: an authentication error in the model job: the token is wrong or revoked; a decryption error: a key pair's halves do not match
 ```
 
 **11. Recover a failed run.** Start a **new `workflow_dispatch` run** on `main`. The workflow enforces
