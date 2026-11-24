@@ -968,7 +968,7 @@ func TestParseErrors(t *testing.T) {
 		{
 			// A plan's vcpus key is optional for an offering matched on memory
 			// alone, but a present 0 is refused by the reader, so "not given" has
-			// exactly one spelling: the key left out (ADR 0045). The reader refuses
+			// exactly one spelling: the key left out (ADR 0046). The reader refuses
 			// it, not the domain, which cannot tell 0 from "not given" in a plan.
 			name: "vcpus 0 on a cache plan",
 			data: docIn(t, pricedDocument,
@@ -1708,7 +1708,7 @@ func TestParsePlansAndPrices(t *testing.T) {
 }
 
 // TestParsePlanWithoutVCPUs pins the one change format version 2 gains (ADR
-// 0045): a plan's vcpus key is optional, and absent the plan's VCPUs is 0, which
+// 0046): a plan's vcpus key is optional, and absent the plan's VCPUs is 0, which
 // the domain reads as "the target gives no count" on an offering matched on
 // memory alone. A document that leaves the key out on any other offering is
 // still refused, by the domain this time, because a compute or database plan
@@ -1944,7 +1944,7 @@ func TestParsePlanBillingCapHours(t *testing.T) {
 // key that a document forgot would otherwise read as a value the document never
 // stated (ADR 0007, ADR 0024). A plan's vcpus is the one exception to the first
 // of those: version 2 lets a document leave it out, and the plan it reads is the
-// domain's to refuse (ADR 0045, TestParsePlanWithoutVCPUs); its other four cases
+// domain's to refuse (ADR 0046, TestParsePlanWithoutVCPUs); its other four cases
 // hold as for every other key.
 func TestParseRequiresEveryVersion2Key(t *testing.T) {
 	t.Parallel()
@@ -1966,7 +1966,7 @@ func TestParseRequiresEveryVersion2Key(t *testing.T) {
 		misspelt [2]string
 		repeated [2]string
 		// optional is whether version 2 lets a document leave the key out, in
-		// which case this reader does not refuse its absence (ADR 0045).
+		// which case this reader does not refuse its absence (ADR 0046).
 		optional bool
 	}{
 		{
@@ -2019,7 +2019,7 @@ func TestParseRequiresEveryVersion2Key(t *testing.T) {
 			wrong:    `"2"`,
 			misspelt: [2]string{`"vcpus": 2,`, `"Vcpus": 2,`},
 			repeated: [2]string{`"vcpus": 2,`, `"vcpus": 2, "vcpus": 2,`},
-			// ADR 0045 makes the key optional: a plan without it reads with no
+			// ADR 0046 makes the key optional: a plan without it reads with no
 			// count, which the domain refuses, not this layer.
 			optional: true,
 		},
@@ -2165,7 +2165,7 @@ func TestParseRequiresEveryVersion2Key(t *testing.T) {
 
 			// A key version 2 lets a document leave out is not refused here when
 			// it is missing: what its absence reads as is the domain's to refuse
-			// (ADR 0045). The key is still refused null, of the wrong type,
+			// (ADR 0046). The key is still refused null, of the wrong type,
 			// repeated and spelt inexactly, as the cases below pin.
 			if tc.optional {
 				cases = slices.DeleteFunc(cases, func(c keyCase) bool { return c.requiredOnly })

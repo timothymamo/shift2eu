@@ -83,10 +83,10 @@ protocol), `cache.redis` (a Redis or Valkey cache), `network.loadbalancer`, `ser
 `serverless.container` (a container image run and scaled with requests), `registry.container` (a
 private OCI image registry), `messaging.queue` and `messaging.topic` (a publish-subscribe topic, every
 subscription getting its own copy of each message;
-[ADR 0045](../adr/0045-add-seven-taxonomy-categories-and-match-cache-plans-on-memory.md)). A
+[ADR 0046](../adr/0046-add-seven-taxonomy-categories-and-match-cache-plans-on-memory.md)). A
 resource that fits none of these categories is `unclassified` and keeps its `rawType`: it then shows
 up in the report as a blocker on every target, instead of disappearing from the assessment. The
-programs below do not classify into the seven categories ADR 0045 adds yet (they list those resources
+programs below do not classify into the seven categories ADR 0046 adds yet (they list those resources
 as `unclassified`, or not at all): until they do, set such a resource's category by hand.
 
 The **capabilities** are features a resource depends on:

@@ -246,7 +246,7 @@ func TestCapabilityValues(t *testing.T) {
 		{name: "encryption at rest", got: taxonomy.EncryptionAtRest, want: "encryption-at-rest"},
 		{name: "snapshots", got: taxonomy.Snapshots, want: "snapshots"},
 		{name: "dead letter queue", got: taxonomy.DeadLetterQueue, want: "dead-letter-queue"},
-		// The two capabilities PRD #552 adds (ADR 0045).
+		// The two capabilities PRD #552 adds (ADR 0046).
 		{name: "sharding", got: taxonomy.Sharding, want: "sharding"},
 		{name: "udp", got: taxonomy.UDP, want: "udp"},
 	}

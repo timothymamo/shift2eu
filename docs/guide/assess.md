@@ -170,7 +170,7 @@ priced.
   its best offering whose vCPU and memory are each at least the resource's; ties go to fewer vCPU, then
   less memory, then the name. A `cache.redis` resource is matched on its memory alone, and a cache plan
   whose target gives no vCPU count is shown by its memory, "8 GiB"
-  ([ADR 0045](../adr/0045-add-seven-taxonomy-categories-and-match-cache-plans-on-memory.md)). A size no
+  ([ADR 0046](../adr/0046-add-seven-taxonomy-categories-and-match-cache-plans-on-memory.md)). A size no
   plan covers shows "no plan large enough" with the largest plan's size. The size never changes the
   fit.
 - **Monthly estimate** = plan price × `count` × `hoursPerMonth` / 730, plus storage above what the plan

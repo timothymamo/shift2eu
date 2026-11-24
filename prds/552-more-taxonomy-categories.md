@@ -2,7 +2,7 @@
 
 **Status:** In progress, milestone 1 done. The maintainer decided all eleven questions under *Decisions and
 decided questions* on 2026-11-24, as recommended. Milestone 1's ADR is
-[0045](../docs/adr/0045-add-seven-taxonomy-categories-and-match-cache-plans-on-memory.md).
+[0046](../docs/adr/0046-add-seven-taxonomy-categories-and-match-cache-plans-on-memory.md).
 **Issue:** #552
 
 ## Problem
@@ -429,7 +429,7 @@ fit `none` with "no offering in the <target> catalog", which is already more pre
    the ADR decides the plan format for `cache.redis` (for example a plan whose vCPU count is optional for
    a memory-matched category), since `catalog.Plan` requires at least 1 vCPU today; no milestone invents
    a vCPU count. Checked on 2026-11-24 (*To be checked*): Scaleway's pages were not reachable, so
-   [ADR 0045](../docs/adr/0045-add-seven-taxonomy-categories-and-match-cache-plans-on-memory.md) makes a
+   [ADR 0046](../docs/adr/0046-add-seven-taxonomy-categories-and-match-cache-plans-on-memory.md) makes a
    plan's `vcpus` optional on a `cache.redis`-only offering and names the new reason
    `estimate.NeverPriced`.
 2. [ ] **AWS classification in the guide.** New read-only calls for ElastiCache (replication groups,
@@ -555,7 +555,7 @@ fit `none` with "no offering in the <target> catalog", which is already more pre
   domain validates (ADR 0007); cache plans carry vCPU and memory like database plans, and a plan's price
   is per node (*Estimates*); unpriced offerings have no plans, as Scaleway Queues has today.
   `catalog.Plan` requires at least 1 vCPU; if a target's cache page gives memory only, milestone 1's ADR
-  decides the format for such a plan before any catalog milestone (milestone 1). Decided in ADR 0045:
+  decides the format for such a plan before any catalog milestone (milestone 1). Decided in ADR 0046:
   Scaleway's cache pages could not be read for vCPUs, so a plan's `vcpus` is optional on an offering
   whose every category is `cache.redis` (absent means not given; a present value is at least 1), and the
   snapshot format stays at version 2.
@@ -635,7 +635,7 @@ text as the decision)
   - UpCloud Managed Valkey: given, a "CPU cores" column per plan (`1x1xCPU-1GB`: 1 GiB, 1 core;
     `2x4xCPU-28GB`: 28 GiB, 4 cores), <https://upcloud.com/docs/products/managed-valkey/configurations/>.
   - So the plan format of
-    [ADR 0045](../docs/adr/0045-add-seven-taxonomy-categories-and-match-cache-plans-on-memory.md) applies:
+    [ADR 0046](../docs/adr/0046-add-seven-taxonomy-categories-and-match-cache-plans-on-memory.md) applies:
     `vcpus` optional on a `cache.redis`-only offering; milestone 6 checks the Scaleway node types again.
 - Milestone 2: that every DocumentDB instance in `rds describe-db-instances` (engine `docdb`) carries a
   `DBClusterIdentifier` and the `BackupRetentionPeriod` and `StorageEncrypted` of its cluster, and

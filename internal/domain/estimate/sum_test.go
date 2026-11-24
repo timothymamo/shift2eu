@@ -51,7 +51,7 @@ func TestSum(t *testing.T) {
 			want: estimate.Total{Estimated: 0, Resources: 2},
 		},
 		{
-			// A category that is never priced (ADR 0045) is not counted as 0: it
+			// A category that is never priced (ADR 0046) is not counted as 0: it
 			// joins the estimates that are not estimated, whatever its reason.
 			name: "a resource that is never priced is not counted as 0",
 			estimates: []estimate.Estimate{

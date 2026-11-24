@@ -123,7 +123,7 @@ func TestPricingOf(t *testing.T) {
 		{name: "messaging.queue", category: taxonomy.MessagingQueue, want: estimate.ByUsage},
 		// PRD #552: caches and MongoDB databases are priced by plan, file shares
 		// by GiB, topics and serverless containers by usage, and load balancers
-		// and registries are never priced (ADR 0045).
+		// and registries are never priced (ADR 0046).
 		{name: "cache.redis", category: taxonomy.CacheRedis, want: estimate.ByPlan},
 		{name: "database.mongodb", category: taxonomy.DatabaseMongoDB, want: estimate.ByPlan},
 		{name: "storage.file", category: taxonomy.StorageFile, want: estimate.ByStorage},
@@ -1533,7 +1533,7 @@ func TestFor(t *testing.T) {
 			wantPlanExact: "0",
 		},
 
-		// PRD #552's categories (ADR 0045). A cache is matched on memory alone,
+		// PRD #552's categories (ADR 0046). A cache is matched on memory alone,
 		// a MongoDB database as a PostgreSQL one, a file share by the GiB, and
 		// the rest is not priced or priced by usage.
 		{
@@ -1709,7 +1709,7 @@ func TestFor(t *testing.T) {
 		{
 			// No covering plan is priced in the region: the plan named is the first
 			// in the plan order, by less memory, plan name and offering name, and
-			// its vCPUs take no part (ADR 0045).
+			// its vCPUs take no part (ADR 0046).
 			name:     "cache.redis: no price names the covering plan with less memory",
 			resource: cacheResource(&inventory.Size{MemoryGiB: f(8)}, nil),
 			offerings: []catalog.Offering{{
@@ -1786,7 +1786,7 @@ func TestFor(t *testing.T) {
 		{
 			// A load balancer is billed a flat fee per size, and the size is chosen
 			// by bandwidth or connections, which no inventory field records: it is
-			// not priced, not usage-priced (ADR 0045).
+			// not priced, not usage-priced (ADR 0046).
 			name:      "not-priced: a network.loadbalancer with a fit",
 			resource:  loadBalancerResource(),
 			offerings: []catalog.Offering{loadBalancerOffering()},
@@ -2377,7 +2377,7 @@ func queueResource() inventory.Resource {
 
 // cachePlan is one plan of a cache offering: its memory in GiB and its monthly
 // price per node, with the vCPU count the target's page gives, or 0 when it gives
-// none (ADR 0045).
+// none (ADR 0046).
 func cachePlan(name string, vcpus, memoryGiB int64, amount catalog.Amount) catalog.Plan {
 	return plan(name, vcpus, memoryGiB*1000, 0, amount)
 }
@@ -2534,7 +2534,7 @@ func registryResource() inventory.Resource {
 }
 
 // TestNeverPriced pins the reason a category that is never priced gets (ADR
-// 0045): its String value is "not-priced", the same text as the Method
+// 0046): its String value is "not-priced", the same text as the Method
 // estimate.NotPriced, which is a value of another type and keeps its own name. A
 // load balancer with a fit is not "usage-priced": that reason would claim a
 // target bills it per use.

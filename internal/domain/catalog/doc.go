@@ -27,7 +27,7 @@
 // euro, and a plan's memory an exact count of thousandths of a GiB. New refuses
 // a plan without a usable name, with sizes out of range or without a price (a
 // plan's vCPUs may be 0, "not given", only on an offering whose every category
-// is matched on memory alone, MatchesOnMemory, ADR 0045), a
+// is matched on memory alone, MatchesOnMemory, ADR 0046), a
 // duplicate plan name, a price that is negative, above MaxAmount, not in EUR or
 // in a region the offering is not in, and two prices of one list that apply to
 // the same region (a price with no region applies to every one). An offering's

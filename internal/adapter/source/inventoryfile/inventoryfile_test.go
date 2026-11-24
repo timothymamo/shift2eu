@@ -1673,7 +1673,7 @@ func TestInventoryReadsSchemaVersion2(t *testing.T) {
 
 // TestInventoryReadsEveryTaxonomyCategory pins that a file of schema version 1
 // or 2 may hold a resource of every category of the taxonomy, the seven PRD #552
-// adds included (ADR 0045), and that a version 2 file gives each of them the size
+// adds included (ADR 0046), and that a version 2 file gives each of them the size
 // fields the format allows it. A value the taxonomy does not know is still
 // refused: cache.memcached, the mistake a Redis cache invites, since Memcached is
 // not the Redis protocol and no target serves it.

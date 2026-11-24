@@ -1219,7 +1219,7 @@ func TestSchemaV3StorageBreakdownDescription(t *testing.T) {
 }
 
 // TestSchemaV3NamesTheNeverPricedReasonAndTheOptionalVCPUs pins the two
-// descriptions PRD #552 changes in a schema (ADR 0045): the reason set lists
+// descriptions PRD #552 changes in a schema (ADR 0046): the reason set lists
 // not-priced, and vcpus says 0 means the target gives no count, for a plan
 // matched on memory alone. Only the version 3 files change: version 1 and 2 are
 // frozen by digest (issue #293, TestFrozenSchemaFilesAreUnchanged), so their

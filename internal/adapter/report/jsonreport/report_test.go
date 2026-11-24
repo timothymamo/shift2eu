@@ -1832,7 +1832,7 @@ func checkDocumentAgainstSchema(t *testing.T, document []byte, file string) {
 }
 
 // TestReportWithCachePlansAndNeverPricedResources pins what a document says
-// about the two things PRD #552 adds to an estimate (ADR 0045): a plan the
+// about the two things PRD #552 adds to an estimate (ADR 0046): a plan the
 // target gives no vCPU count for is written with "vcpus": 0, and a category that
 // is never priced gets the reason code "not-priced", which is not
 // "usage-priced". Such a resource is not counted as 0 in the total.
@@ -1900,7 +1900,7 @@ func TestReportWithCachePlansAndNeverPricedResources(t *testing.T) {
 		}{
 			{name: "the name", path: extend(plan, "name"), want: "CACHE-8"},
 			// 0 is the document's one spelling of "the target gives no count":
-			// every schema allows it and requires the key (ADR 0045).
+			// every schema allows it and requires the key (ADR 0046).
 			{name: "the vCPU count", path: extend(plan, "vcpus"), want: float64(0)},
 			{name: "the memory", path: extend(plan, "memoryGiB"), want: "8"},
 			{name: "the price", path: extend(plan, "price"), want: "20.00"},

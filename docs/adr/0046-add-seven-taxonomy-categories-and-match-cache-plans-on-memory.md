@@ -1,4 +1,4 @@
-# 0045. Add seven taxonomy categories, match cache plans on memory alone, and keep every format version
+# 0046. Add seven taxonomy categories, match cache plans on memory alone, and keep every format version
 
 - Status: Accepted; amends [0025](0025-json-inventory-file-format-v2.md) (the size-field table) and
   [0027](0027-match-plans-and-estimate-monthly-prices-in-a-domain-package.md) (memory-only plan matching

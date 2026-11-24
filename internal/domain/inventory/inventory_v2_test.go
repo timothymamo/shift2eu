@@ -450,7 +450,7 @@ func TestNewAcceptsVersion2FieldsPerCategory(t *testing.T) {
 			name:     "messaging.queue without a size",
 			resource: withCategory(vm("queue-example"), taxonomy.MessagingQueue),
 		},
-		// The seven categories PRD #552 adds take the fields of ADR 0045: a cache
+		// The seven categories PRD #552 adds take the fields of ADR 0046: a cache
 		// by memory and nodes, a MongoDB database exactly what PostgreSQL takes, a
 		// file share by provisioned GiB, and the rest none at all.
 		{
@@ -967,7 +967,7 @@ func TestNewRejectsVersion2FieldsPerCategory(t *testing.T) {
 			wantPath: "resources[1].size.vcpus",
 		},
 		// A cache is sized by memory and nodes only: its vCPUs are rarely known
-		// and are never matched on (ADR 0045), and its storage is the provider's.
+		// and are never matched on (ADR 0046), and its storage is the provider's.
 		{
 			name: "vcpus on cache.redis",
 			resources: second(sized("aa-cache", taxonomy.CacheRedis,

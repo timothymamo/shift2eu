@@ -11,7 +11,7 @@
 // ADR 0029), plus the storage above what the plan includes × the offering's
 // per-GiB price, plus the offering's fixed fee once per resource ×
 // hoursPerMonth / 730, never capped (ADR 0026). A cache.redis resource is
-// matched on memory alone (catalog.MatchesOnMemory, ADR 0045): the cheapest
+// matched on memory alone (catalog.MatchesOnMemory, ADR 0046): the cheapest
 // plan whose memory covers it, ties broken by less memory, plan name and
 // offering name, its per-node price × count, and no storage. Storage
 // categories (storage.block, storage.object, storage.file) have no plan: their

@@ -66,7 +66,7 @@ type Plan struct {
 	// VCPUs is the number of virtual (or, for bare metal, physical) CPU threads:
 	// at least 1, at most MaxPlanVCPUs. On an offering whose every category is
 	// matched on memory alone (MatchesOnMemory), 0 means the target gives no
-	// count (ADR 0045).
+	// count (ADR 0046).
 	VCPUs int64
 	// MemoryMilliGiB is the memory in thousandths of a GiB: at least 1, at most
 	// MaxPlanMemoryMilliGiB.
@@ -124,11 +124,11 @@ func newRegionSet(regions []string) regionSet {
 }
 
 // memoryMatched lists the categories whose resources are matched to a plan on
-// memory alone (ADR 0045). It is read-only.
+// memory alone (ADR 0046). It is read-only.
 var memoryMatched = []taxonomy.Category{taxonomy.CacheRedis}
 
 // MatchesOnMemory reports whether a resource of category c is matched to a plan
-// on its memory alone, the plan's vCPUs taking no part (ADR 0045). Every other
+// on its memory alone, the plan's vCPUs taking no part (ADR 0046). Every other
 // plan-priced category is matched on vCPUs and memory.
 func MatchesOnMemory(c taxonomy.Category) bool {
 	return slices.Contains(memoryMatched, c)

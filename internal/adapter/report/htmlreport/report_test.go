@@ -432,7 +432,7 @@ func TestReport(t *testing.T) {
 }
 
 // TestReportWithNeverPricedEstimates pins what the fragment says about a resource
-// the target never prices (ADR 0045): its Monthly estimate cell says it is not
+// the target never prices (ADR 0046): its Monthly estimate cell says it is not
 // estimated, and, when nothing could be estimated, the Cost estimate names the
 // reason in plain words as "not priced". A category that is never priced is not
 // usage-priced: a load balancer is billed a flat fee per size, not per use.

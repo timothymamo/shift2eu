@@ -54,7 +54,7 @@ const (
 
 // pricedSize says which size fields the estimate prices a category by (PRD
 // #190): vcpus and memoryGiB for a category priced by plan, memoryGiB alone for
-// cache.redis, matched on memory alone (ADR 0045), storageGiB for one priced by
+// cache.redis, matched on memory alone (ADR 0046), storageGiB for one priced by
 // stored GiB. A category that is not in pricedSizes is not priced at all:
 // messaging.queue, messaging.topic, serverless.function and
 // serverless.container are priced by usage, and network.loadbalancer,

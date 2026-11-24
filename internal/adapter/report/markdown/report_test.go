@@ -1573,7 +1573,7 @@ func TestReportWithBillingCapHours(t *testing.T) {
 }
 
 // TestReportWithCachePlansAndNeverPricedResources pins what the report says
-// about the two things PRD #552 adds to an estimate (ADR 0045): a plan the target
+// about the two things PRD #552 adds to an estimate (ADR 0046): a plan the target
 // gives no vCPU count for is shown by its memory alone, and a category that is
 // never priced is "not priced", never counted as 0 EUR.
 //

@@ -48,7 +48,7 @@ func integer(w *jsondoc.Walker) (int64, error) {
 
 // givenVCPUs reads the next value, a plan's vcpus, as integer does, and also
 // refuses 0 with ErrDecode: a plan whose target gives no vCPU count leaves the
-// key out, so "not given" has exactly one spelling (ADR 0045). Whether a plan
+// key out, so "not given" has exactly one spelling (ADR 0046). Whether a plan
 // may lack the count, and a negative count, are catalog.New's rules.
 func givenVCPUs(w *jsondoc.Walker) (int64, error) {
 	path, at := w.Path(), w.Position()

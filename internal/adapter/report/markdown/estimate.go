@@ -78,7 +78,7 @@ func renderPlan(e *estimate.Estimate) string {
 
 // planSize renders a plan's vCPUs and memory: "1 vCPU, 2 GiB", or its memory
 // alone, "8 GiB", for a plan whose target gives no vCPU count (VCPUs 0, a plan
-// matched on memory alone, ADR 0045).
+// matched on memory alone, ADR 0046).
 func planSize(p estimate.Plan) string {
 	if p.VCPUs == 0 {
 		return milliGiB(p.MemoryMilliGiB) + " GiB"

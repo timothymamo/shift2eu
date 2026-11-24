@@ -142,7 +142,7 @@ const (
 const sized = fieldVCPUs | fieldMemory | fieldStorage | fieldCount | fieldHours
 
 // allowedFields says which size and usage fields each category takes (ADR
-// 0025, amended by ADR 0045). A category that is not listed takes none, as
+// 0025, amended by ADR 0046). A category that is not listed takes none, as
 // network.loadbalancer, messaging.topic, serverless.container and
 // registry.container do.
 var allowedFields = map[taxonomy.Category]int{

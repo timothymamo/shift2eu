@@ -12,7 +12,7 @@
 // plans and storage prices, and optionally fixed fees and a plan billing cap. A
 // plan has a name, vcpus, memoryGiB, storageGiB and prices; a price an amount,
 // a currency and regions. Every field is required, at every level, and a list
-// may be empty, with three exceptions. A plan's vcpus (ADR 0045) may be left
+// may be empty, with three exceptions. A plan's vcpus (ADR 0046) may be left
 // out when the target gives no vCPU count, which reads as VCPUs 0 and which
 // catalog.New accepts only on an offering matched on memory alone (cache.redis);
 // when present it is an integer of at least 1, and 0 is refused, so "not given"

@@ -23,7 +23,7 @@ const (
 	// ByPlan is a category priced by plan: compute.vm, compute.baremetal,
 	// kubernetes.managed (its nodes), database.postgresql, database.mysql and
 	// database.mongodb, matched on vCPUs and memory, and cache.redis (its
-	// nodes), matched on memory alone (catalog.MatchesOnMemory, ADR 0045).
+	// nodes), matched on memory alone (catalog.MatchesOnMemory, ADR 0046).
 	ByPlan Method = "plan"
 	// ByStorage is a category priced by stored GiB: storage.block,
 	// storage.object and storage.file (its provisioned GiB).
@@ -33,7 +33,7 @@ const (
 	// messaging.queue and messaging.topic.
 	ByUsage Method = "usage"
 	// NotPriced is a category that is never priced: network.loadbalancer and
-	// registry.container (ADR 0045), taxonomy.Unclassified, and any category
+	// registry.container (ADR 0046), taxonomy.Unclassified, and any category
 	// this package does not know.
 	NotPriced Method = "not-priced"
 )
@@ -69,7 +69,7 @@ const (
 	UsagePriced Reason = "usage-priced"
 	// NeverPriced is the reason for a resource with a fit whose category is
 	// never priced (NotPriced), such as a load balancer, which a target bills
-	// per size but not per use (ADR 0045). It sits where UsagePriced sits in
+	// per size but not per use (ADR 0046). It sits where UsagePriced sits in
 	// the order. Its value is that of the Method NotPriced, a different type.
 	NeverPriced Reason = "not-priced"
 	// NoSize is the reason for a resource that does not give the size its
@@ -297,7 +297,7 @@ type offeredPlan struct {
 }
 
 // byPlan estimates a resource priced by plan. A resource of a category matched
-// on memory alone (catalog.MatchesOnMemory, ADR 0045) needs only memoryGiB,
+// on memory alone (catalog.MatchesOnMemory, ADR 0046) needs only memoryGiB,
 // is covered by memory alone, orders plans without their vCPUs and never adds
 // storage.
 func byPlan(r inventory.Resource, offerings []catalog.Offering, region string) Estimate {
@@ -557,7 +557,7 @@ func (m matcher) cheapest(covering []offeredPlan, region string) (offeredPlan, b
 }
 
 // matcher holds how a resource's category is matched to plans: on vCPUs and
-// memory, or, when memoryOnly, on memory alone (ADR 0045), in which case the
+// memory, or, when memoryOnly, on memory alone (ADR 0046), in which case the
 // plans' vCPUs take no part in the plan order either.
 type matcher struct {
 	memoryOnly bool

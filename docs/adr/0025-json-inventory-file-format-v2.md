@@ -1,7 +1,7 @@
 # 0025. Add inventory file format version 2 for sizing, usage, workloads, relations and cost
 
 - Status: Accepted; amends [0006](0006-json-inventory-file-format-v1.md), whose rules version 2 keeps;
-  amended by [0045](0045-add-seven-taxonomy-categories-and-match-cache-plans-on-memory.md): the size-field
+  amended by [0046](0046-add-seven-taxonomy-categories-and-match-cache-plans-on-memory.md): the size-field
   rows of seven new categories
 - Date: 2026-11-13
 

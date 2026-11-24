@@ -1916,7 +1916,7 @@ func TestNewPlanAndPriceErrors(t *testing.T) {
 	}
 }
 
-// TestNewAcceptsPlansWithoutVCPUsOnACacheOffering pins ADR 0045: a plan's vCPU
+// TestNewAcceptsPlansWithoutVCPUsOnACacheOffering pins ADR 0046: a plan's vCPU
 // count may be 0 only on an offering whose every category is matched on memory
 // alone, which cache.redis is. There 0 means the target's page gives no count,
 // and the count is shown but never matched on. Every other offering refuses it,
@@ -1955,7 +1955,7 @@ func TestNewAcceptsPlansWithoutVCPUsOnACacheOffering(t *testing.T) {
 	}{
 		{
 			// Scaleway's Redis™ price page gives no vCPU count per plan, so its
-			// plans are written without one (ADR 0045).
+			// plans are written without one (ADR 0046).
 			name: "cache plan without vcpus",
 			offering: cacheOffering([]taxonomy.Category{taxonomy.CacheRedis},
 				catalog.Plan{VCPUs: 0, MemoryMilliGiB: 1000}),

@@ -7,7 +7,7 @@
   [#243](https://github.com/timothymamo/shift2eu/issues/243) and
   [#246](https://github.com/timothymamo/shift2eu/issues/246): the reason `not-offered`, and a total that
   estimates nothing gives no amount in the Markdown report; amended by
-  [0045](0045-add-seven-taxonomy-categories-and-match-cache-plans-on-memory.md): `cache.redis` is matched on
+  [0046](0046-add-seven-taxonomy-categories-and-match-cache-plans-on-memory.md): `cache.redis` is matched on
   memory alone, and a never-priced category with a fit gets the reason `not-priced`
 - Date: 2026-11-14
 
