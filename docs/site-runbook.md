@@ -267,13 +267,14 @@ dig +short DS shift2eu.com            # PASS: a DS record (DNSSEC on)
 n=0; until echo | openssl s_client -connect www.shift2eu.com:443 -servername www.shift2eu.com 2>/dev/null | openssl x509 -noout -issuer 2>/dev/null | grep -q Encrypt || [ "$n" -ge 30 ]; do sleep 30; n=$((n + 1)); done
 echo | openssl s_client -connect www.shift2eu.com:443 -servername www.shift2eu.com 2>/dev/null | openssl x509 -noout -issuer -enddate   # PASS: a Let's Encrypt issuer
 # FAIL "unable to load certificate": check the CAA record, then the TLS stage
+PL="$(dev/tofu.sh -chdir=infra/site output -raw pipeline_id)"; echo "$PL"   # PASS: the pipeline ID, not empty
 scw edge-services tls-stage list pipeline-id="$PL" -o json | jq '.[] | {status, certificate_expires_at}'   # PASS: a date in certificate_expires_at
 # FAIL certificate_expires_at: null after the wait: no certificate was issued (R4 created the stage before the CNAME existed, and Scaleway asks only once); recreate the TLS stage below and re-run the checks
 dev/tofu.sh -chdir=infra/site plan -replace=scaleway_edge_services_tls_stage.site -out=tls.tfplan   # PASS: "Plan: 1 to add, 1 to change, 1 to destroy."
 dev/tofu.sh -chdir=infra/site show tls.tfplan | less      # PASS: the TLS stage "must be replaced" ("create replacement and then destroy") and the DNS stage's tls_stage_id changes in place, nothing else
 # FAIL the plan replaces, destroys or changes any other resource: stop, apply nothing, rm infra/site/tls.tfplan, and find out why (R4's no-changes check) before the recreate
 dev/tofu.sh -chdir=infra/site apply tls.tfplan            # PASS: "Apply complete! Resources: 1 added, 1 changed, 1 destroyed."
-# FAIL the apply stopped part-way (an error after the new stage was created): fix the error it printed, then run the plan line above again (a new tls.tfplan, which may now hold only what is left) and apply that plan; never re-apply the old tls.tfplan
+# FAIL the apply stopped part-way (an error after the new stage was created): fix the error it printed, rm infra/site/tls.tfplan, then re-plan with no replace target, as the new stage is already in the state: dev/tofu.sh -chdir=infra/site plan -out=tls.tfplan (only what is left: the deposed old stage's destroy and/or the DNS stage's tls_stage_id update), review it with the show line, apply it and rm it; never re-apply the old tls.tfplan
 rm infra/site/tls.tfplan
 # Then the wait loop, the certificate check and the TLS stage check again
 curl -s -o /dev/null -w '%{http_code} %{redirect_url}\n' http://www.shift2eu.com/   # record it: 301/308 to https://www.shift2eu.com/, refused, or 200 (a no-go, Hosting decision 3)

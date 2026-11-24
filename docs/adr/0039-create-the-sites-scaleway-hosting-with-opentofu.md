@@ -147,7 +147,10 @@ DNS stage references, so the default destroy-then-create replacement fails. The 
 `create_before_destroy = true` (held by `dev/infra-rules.sh`'s `[tls-stage-lifecycle]`): the new stage
 is created and the DNS stage repointed before the old one is deleted. The DNS and head stages need no
 lifecycle block: OpenTofu applies the ordering to the stage's dependencies itself, and the DNS stage, a
-dependent, is repointed before the old stage is destroyed. The Runbook's Namecheap step recreates the stage when no certificate came.
+dependent, is repointed before the old stage is destroyed. With `create_before_destroy` the DNS stage
+points at the new stage before its certificate is issued, so a replacement leaves www failing the TLS
+handshake (never serving plaintext) until issuance. The Runbook's Namecheap step therefore recreates the
+stage only when no certificate came: R8 replaces only a stage whose `certificate_expires_at` is null.
 
 **The bucket policy** allows, and nothing else:
 
