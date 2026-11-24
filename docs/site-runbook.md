@@ -9,6 +9,11 @@ recovery and the teardown ([PRD #297](../prds/297-web-assessment-site.md), *Runb
 the hosting ADR the steps record their results in). Written in milestone 3, followed in milestone 4, on
 mac-mini-home, the admin machine ([Development environment](dev-environment.md)). Agents never run it.
 
+*Note (2026-11-24):* the front changes to a Serverless Container serving `www` and the apex
+([ADR 0045](adr/0045-front-the-site-with-a-serverless-container-running-a-pinned-caddy.md)). Until the
+infra unit rewrites R4, R5 and R8 for it, the steps below describe the pipeline alone; R8's `www` CNAME
+to the pipeline is then replaced by a CNAME and an apex ALIAS to the container.
+
 Placeholders in `<...>` are the maintainer's: `<state-bucket>` the state bucket, `<owner>` the
 repository's owner; `$REGION`, `$ADMIN_PROJECT` (your key's default project, where the state is) and
 `$ME` (your key's owner, as a bucket-policy principal) come from R0; `$P`, `$A`, `$B`, `$E` and `$PL`

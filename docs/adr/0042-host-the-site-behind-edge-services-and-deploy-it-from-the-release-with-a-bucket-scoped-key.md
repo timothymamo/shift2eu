@@ -65,6 +65,11 @@ by a means milestone 4 chooses, and this ADR is amended with that means, its pro
 the IP address, user agent, path and `Referer` of every visitor entering through the apex) and, if it
 issues its own certificate, its certificate authority (for the CAA record).
 
+*Amended 2026-11-24 (Edge Services answers plain HTTP with a 302 and sets no headers, ticket
+#1639626):* a Serverless Container now serves both names in front of the pipeline; see the amendment
+*A Serverless Container in front of Edge Services* below and
+[ADR 0045](0045-front-the-site-with-a-serverless-container-running-a-pinned-caddy.md).
+
 ### The origins
 
 Only `https://www.shift2eu.com` is attested and checked (Hosting decision 11). The bundle runs the same
@@ -83,6 +88,9 @@ Milestone 4 replaces each *to be checked* cell with R5's and R8's recorded answe
 target, per URL) and `public_read`'s value. A plain-HTTP 200 on an origin other than `shift2eu.com` and
 `www.shift2eu.com` is recorded, not a no-go: no link leads there, and a user who types such a URL is
 outside what the site attests.
+
+*Amended 2026-11-24:* the amendment *A Serverless Container in front of Edge Services* below replaces
+the first two rows and adds one for the container's own endpoint.
 
 ### The bundle's attestation
 
@@ -394,6 +402,8 @@ nil (`newHTTPClient` in `ci/sitedeploy`), so the proxy variables are never consu
   (R12), or a new release cut with a `Release-As:` footer. `Site bundle` is
   never re-run after publication. The programs' artifacts are kept 30 days, the bundle's 7 (*proposed*,
   measured on the first release).
+- *Amended 2026-11-24:* the front (the container, its image and its configuration) has a recovery of
+  its own; see the amendment *A Serverless Container in front of Edge Services* below.
 
 ### `timeout-minutes` (values for PR C)
 
@@ -604,3 +614,56 @@ unchanged; where it says "four pages", read the five pages from that issue on.
   with that release's footer version and links, beside the older pages. The maintainer removes it by hand
   (their own key, then an Edge Services cache purge, R12) when it should not stay; the fixing release that
   follows a rollback uploads it again.
+
+## Amendment: a Serverless Container in front of Edge Services (PRD #297 milestone 4)
+
+2026-11-24. Scaleway support (ticket #1639626) answered that Edge Services always answers plain HTTP
+with a 302, cannot turn plain HTTP off and cannot set response headers, so `http://www.shift2eu.com`
+could meet neither Hosting decision 3 nor the HSTS go/no-go. The maintainer chose a Scaleway Serverless
+Container running Caddy in front of the pipeline (Hosting decisions 1 to 3 as amended that day, after
+the maintainer's test C3), recorded in
+[ADR 0045](0045-front-the-site-with-a-serverless-container-running-a-pinned-caddy.md). The bucket, its
+read rule, the deploy, the key's scope, R7, the attestation, the records and the residuals above are
+unchanged; only *Hosting*, *The origins* and *Recovery* change, as follows.
+
+- **Hosting.** One public Serverless Container serves both `www.shift2eu.com` and `shift2eu.com` as
+  custom domains (`www` by a Namecheap CNAME, the apex by a Namecheap ALIAS, DNSSEC kept, Let's Encrypt
+  certificates issued by Scaleway, CAA unchanged), with plain HTTP `enabled`. Its server, Caddy (the
+  official image pinned by digest, ADR 0045), writes the redirects and the headers from its
+  configuration in `infra/site`: `http://www.shift2eu.com`, `http://shift2eu.com` and
+  `https://shift2eu.com` answer 308 to `https://www.shift2eu.com` with the same path in one hop, by
+  `X-Forwarded-Proto` and `Host`; `https://www.shift2eu.com` is reverse-proxied to the pipeline endpoint
+  and carries `Strict-Transport-Security` (`max-age=31536000; includeSubDomains`, `preload` only once
+  pursued), the `<meta>` policy as a `Content-Security-Policy` header with `frame-ancestors 'none'`,
+  `X-Content-Type-Options`, `Referrer-Policy` and `Permissions-Policy`. The apex sends no HSTS while
+  preload is not pursued. The pipeline stays the bucket's only reader, its cache and its backend
+  unchanged; its own `www.shift2eu.com` custom domain goes. The apex redirect's provider is therefore
+  Scaleway, already named on the privacy page, with Let's Encrypt as its certificate authority. Context's
+  force "the site sends no response headers of its own" holds for the bucket and the pipeline only: the
+  headers now come from the container.
+- **The origins.** The table above reads, from this amendment on:
+
+  | Origin | Serves the site | Plain HTTP |
+  |---|---|---|
+  | `https://www.shift2eu.com` | Yes: the container, proxying the pipeline. The only origin attested and checked | `http://www.shift2eu.com` answers the server's own 308 to `https://www.shift2eu.com` + same path, never a 200 (C3 on a test container; R8, rewritten by the infra unit, records the live answer) |
+  | `https://shift2eu.com` | No: the server's 308 to `https://www.shift2eu.com` + same path (the preload chain, if pursued, first to `https://shift2eu.com`) | `http://shift2eu.com` answers 308 the same way, never a 200 (C3) |
+  | The container's endpoint `https://<namespace>-<name>.functions.fnc.<region>.scw.cloud` | No: every request gets the server's 308 to `https://www.shift2eu.com` + same path | The server's own 308, never a 200 (C3: the platform passes the container's 308 unchanged over plain HTTP) |
+  | The pipeline's endpoint, the bucket website endpoint and the bucket's S3 endpoints | As in the table above | As in the table above (R5) |
+
+  The pipeline's endpoint is now the container's upstream as well as an origin of its own; it serves the
+  site without the container's headers, which the `<meta>` policy and the framing guard cover as on any
+  other origin (Hosting decision 11).
+- **Recovery.** The front is part of what is recovered. The bucket's recovery above (the redeploy, the
+  version rollback, the Edge Services cache purge) is unchanged; Caddy caches nothing, so no second
+  purge. A broken or changed container, or a configuration or image that is not the committed one, is
+  repaired by the maintainer re-applying `infra/site` at `main` with `dev/tofu.sh` (the pinned digest and
+  the committed configuration), then the runbook's redirect and header checks. A bad image (a Renovate
+  digest bump that fails) is rolled back by reverting that PR and applying again. The deploy key cannot
+  change the container: it holds no Serverless Containers or Container Registry permission.
+- **What the live check now meets.** The platform adds `server: envoy` and
+  `x-envoy-upstream-service-time` to every response (C3); a later unit makes `ci/sitecheck` allow them
+  (ADR 0043's note). Its `-plain-http-www` stays `redirect`.
+- **Consequences and the residuals.** Milestone 4 still amends this ADR with the live answers (R5, R8),
+  R7's result, the HSTS outcome and whether preload is pursued. Once the header CSP is live, it also binds
+  a page or script a leaked key uploads at any path (`connect-src 'none'`, `worker-src 'none'`), which
+  narrows the residuals above; that amendment says so with the live result.

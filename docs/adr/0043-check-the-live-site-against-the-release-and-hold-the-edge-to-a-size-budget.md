@@ -223,3 +223,21 @@ The edge serves the bytes the deploy uploads; the live check measures them as se
 - The check is only as good as its trust in the edge's TLS: it verifies against the system roots in
   production, and its own transport, not `http.DefaultTransport`, so no proxy or environment setting
   changes where it connects.
+
+## Amendment: the container in front of Edge Services (PRD #297 milestone 4)
+
+2026-11-24. The decision above is unchanged; the hosting it checks changed
+([ADR 0045](0045-front-the-site-with-a-serverless-container-running-a-pinned-caddy.md), ADR 0042's
+amendment of that day). Read the Context's "the hosting cannot set response headers" and "the apex is
+served by a redirect of another provider" as Edge Services alone: a Scaleway Serverless Container
+running Caddy now serves `www` and the apex, writes the redirects and sends HSTS and the four other
+headers, and proxies the pipeline.
+
+- **The platform's headers.** Serverless Containers adds `server: envoy` and
+  `x-envoy-upstream-service-time` to every response (the maintainer's test C3). A later unit makes the
+  check allow them wherever it holds the response's headers; this amendment changes no code.
+- **`-plain-http-www`** stays at `redirect`: the server redirects `http://www.shift2eu.com` itself, so
+  the `refuse-or-close` mode is not needed by this hosting. Whether to keep or remove it is that later
+  unit's.
+- **The size budget** still measures what the deploy uploaded: the server proxies the pipeline's bytes
+  and `Content-Encoding` unchanged and compresses nothing (ADR 0045).
