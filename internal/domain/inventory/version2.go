@@ -142,16 +142,21 @@ const (
 const sized = fieldVCPUs | fieldMemory | fieldStorage | fieldCount | fieldHours
 
 // allowedFields says which size and usage fields each category takes (ADR
-// 0025). A category that is not listed takes none.
+// 0025, amended by ADR 0045). A category that is not listed takes none, as
+// network.loadbalancer, messaging.topic, serverless.container and
+// registry.container do.
 var allowedFields = map[taxonomy.Category]int{
 	taxonomy.ComputeVM:          sized,
 	taxonomy.ComputeBareMetal:   sized,
 	taxonomy.KubernetesManaged:  sized,
 	taxonomy.DatabasePostgreSQL: sized,
 	taxonomy.DatabaseMySQL:      sized,
+	taxonomy.DatabaseMongoDB:    sized,
 	taxonomy.StorageBlock:       fieldStorage | fieldCount,
 	taxonomy.StorageObject:      fieldStorage,
+	taxonomy.StorageFile:        fieldStorage,
 	taxonomy.ServerlessFunction: fieldMemory,
+	taxonomy.CacheRedis:         fieldMemory | fieldCount | fieldHours,
 }
 
 // The bounds of the version 2 numbers.
