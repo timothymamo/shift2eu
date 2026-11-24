@@ -154,9 +154,11 @@ import (
 //     step whose loop carries a `${SECONDS}` budget holds that budget plus the
 //     `timeout <N>` values outside the loop below its timeout-minutes; any
 //     other step holds the sum of its `timeout <N>` values outside loops below
-//     it. Row 7's 20-minute budget and its 26 minutes outside the loop fit its
-//     50, row 8's 17 fit its 20, and the checks job's steps add up to 350, with
-//     the job's 5 minutes of set-up and post steps inside its 355.
+//     it. Row 7's 20-minute budget and its 29 minutes of timeouts outside the
+//     loop (the two cosign verify-attestation runs counted) add up to 49 of
+//     its 50, row 8's three timeouts to 14 of its 15, and the checks job's
+//     steps add up to 345, with the job's 5 minutes of set-up and post steps
+//     inside its 355.
 //   - Every step that can fail with a cause the box lists ends with an
 //     `::error title=Audit <job>::<kind>: see runbook step <N>` line on that
 //     failure, naming no secret and no finding's detail: the hardening step's
@@ -253,8 +255,9 @@ const (
 	// name in a checks-job env: use.
 	auditModelKeyVar = "          AUDIT_MODEL_PUBLIC_KEY: ${{ vars.AUDIT_MODEL_PUBLIC_KEY }}\n"
 	// auditActionlint is the one later Go command, with the flags every Go
-	// command after the module download must carry.
-	auditActionlint = "GOFLAGS=-mod=readonly GOPROXY=off go -C tools run github.com/rhysd/actionlint/cmd/actionlint ../.github/workflows\n"
+	// command after the module download must carry, under row 5's own timeout and
+	// with its exit recorded.
+	auditActionlint = "GOFLAGS=-mod=readonly GOPROXY=off timeout 5m go -C tools run github.com/rhysd/actionlint/cmd/actionlint ../.github/workflows > \"${out}/actionlint.json\" 2> \"${out}/actionlint.stderr\" || rc=$?\n"
 	// auditWrapperBuild is the model job's own Go command, the wrapper's build.
 	auditWrapperBuild = "GOFLAGS=-mod=readonly GOPROXY=off go build -trimpath -o \"${RUNNER_TEMP}/audit-exec\" ./ci/auditexec\n"
 	// auditHardeningStep is the model-free step that hardens the runner: it must
@@ -479,7 +482,8 @@ const (
 		auditGitleaksStdin
 	// auditZizmorStep and auditActionlintStep are the checks job's two lint
 	// steps: only zizmor's online audits read GitHub's API, so only it holds the
-	// job's token.
+	// job's token, and each run is under a timeout of its own that records the
+	// check "not run" (rows 3 to 5).
 	auditZizmorStep = "      - name: zizmor\n" +
 		"        timeout-minutes: 10\n" +
 		"        env:\n" +
@@ -487,12 +491,34 @@ const (
 		"          GH_TOKEN: ${{ github.token }}\n" +
 		"        run: |\n" +
 		"          set -euo pipefail\n" +
-		"          zizmor .github/workflows\n"
+		"          results=\"${RUNNER_TEMP}/results\"\n" +
+		"          out=\"${results}/workflows\"\n" +
+		"          mkdir -p \"${out}\"\n" +
+		"          rc=0\n" +
+		"          timeout 4m zizmor --format json .github/workflows > \"${out}/zizmor.json\" 2> \"${out}/zizmor.stderr\" || rc=$?\n" +
+		"          echo \"${rc}\" > \"${out}/zizmor.exit\"\n" +
+		"          if [ \"${rc}\" -eq 124 ]; then\n" +
+		"            echo \"workflows timed-out\" >> \"${results}/not-run.txt\"\n" +
+		"            echo \"workflows: the zizmor run timed out after 4 minutes\" >> \"${results}/limits.txt\"\n" +
+		"          elif [ \"${rc}\" -ne 0 ] && [ \"${rc}\" -ne 1 ]; then\n" +
+		"            echo \"workflows tool-failed\" >> \"${results}/not-run.txt\"\n" +
+		"          fi\n"
 	auditActionlintStep = "      - name: actionlint\n" +
 		"        timeout-minutes: 10\n" +
 		"        run: |\n" +
 		"          set -euo pipefail\n" +
-		"          " + auditActionlint
+		"          results=\"${RUNNER_TEMP}/results\"\n" +
+		"          out=\"${results}/workflows\"\n" +
+		"          mkdir -p \"${out}\"\n" +
+		"          rc=0\n" +
+		"          " + auditActionlint +
+		"          echo \"${rc}\" > \"${out}/actionlint.exit\"\n" +
+		"          if [ \"${rc}\" -eq 124 ]; then\n" +
+		"            echo \"workflows timed-out\" >> \"${results}/not-run.txt\"\n" +
+		"            echo \"workflows: the actionlint run timed out after 5 minutes\" >> \"${results}/limits.txt\"\n" +
+		"          elif [ \"${rc}\" -ne 0 ] && [ \"${rc}\" -ne 1 ]; then\n" +
+		"            echo \"workflows tool-failed\" >> \"${results}/not-run.txt\"\n" +
+		"          fi\n"
 	// auditZizmorActionlintStep is the single step the two above replace: the
 	// shape a case puts back to show that the split is held.
 	auditZizmorActionlintStep = "      - name: zizmor and actionlint\n" +
@@ -740,6 +766,43 @@ var (
 	auditModelArtifactError   = "            echo \"::error title=Audit model::the run's artifacts are unexpected: see runbook step 11\"\n"
 	auditPublishArtifactError = "            echo \"::error title=Audit publish::the run's artifacts are unexpected: see runbook step 11\"\n"
 	auditPublishError         = "            echo \"::error title=Audit publish::the publish was refused: see runbook step 11\"\n"
+)
+
+// Round F's anchors (PRD #175, the box's last two causes): rows 3 to 5's tool
+// runs, each of them under a timeout of its own, and the model job's install
+// step's guard around the install script it shares with the AI reviewer. Each
+// is exactly as the fixture writes it, so a case that mistypes one fails in
+// mutate.
+const (
+	// auditGovulncheckRun, auditOSVScanRun, auditGitleaksRun and auditZizmorRun
+	// are one run of each of rows 3 to 5's tools, whole lines: the tool under its
+	// timeout with its exit recorded, so that a tool that hangs is the check that
+	// timed out and the check that failed is recorded as not run. A case takes the
+	// timeout out of one of them.
+	auditGovulncheckRun = "          GOFLAGS=-mod=readonly GOPROXY=off timeout 8m govulncheck -format json ./... > \"${out}/module.json\" 2> \"${out}/module.stderr\" || rc=$?\n"
+	auditOSVScanRun     = "          timeout 8m osv-scanner scan source --recursive . > \"${out}/repository.json\" 2> \"${out}/repository.stderr\" || rc=$?\n"
+	auditGitleaksRun    = "          timeout 15m gitleaks git --ignore-gitleaks-allow --redact --no-banner --log-level error --report-format json --report-path \"${out}/history.json\" . 2> \"${out}/history.stderr\" || rc=$?\n"
+	auditZizmorRun      = "          timeout 4m zizmor --format json .github/workflows > \"${out}/zizmor.json\" 2> \"${out}/zizmor.stderr\" || rc=$?\n"
+
+	// auditInstallCall is the model job's install step's call of the shared
+	// install script, exactly as it ran before round F.
+	auditInstallCall = "          .github/scripts/install-claude-code.sh \"${RUNNER_TEMP}/claude-code\" \"@anthropic-ai/claude-code-linux-x64@${CLAUDE_CODE_PIN_VERSION}\" \"${CLAUDE_CODE_PIN_INTEGRITY}\"\n"
+)
+
+var (
+	// auditInstallError is the install guard's ::error line: the script itself,
+	// shared with the AI reviewer, names no runbook step in either of its two
+	// lines, so the workflow names the step that recovers both (a pin the pin
+	// check holds, or a managed policy on the runner image).
+	auditInstallError = "            echo \"::error title=Audit model::the Claude Code CLI did not install: see runbook step 11\"\n"
+	// auditInstallGuard is the call under the whole-branch guard round F wraps it
+	// in: the refusalBranch shape, the echo and the exit 1 each on a line of its
+	// own. A case removes the branch, drops the exit 1 or runs the branch together
+	// onto the echo's line.
+	auditInstallGuard = "          if ! " + strings.TrimSuffix(strings.TrimPrefix(auditInstallCall, "          "), "\n") + "; then\n" +
+		auditInstallError +
+		"            exit 1\n" +
+		"          fi\n"
 )
 
 // auditVerificationBranch returns one of row 7's verifications' outcome branch,
@@ -1317,7 +1380,7 @@ func TestAuditWorkflow(t *testing.T) {
 		},
 		{
 			name: "an Actions cache",
-			workflow: withStep("      - name: Download the pinned tools and verify their checksums\n        timeout-minutes: 15\n",
+			workflow: withStep("      - name: Download the pinned tools and verify their checksums\n        timeout-minutes: 25\n",
 				"      - name: Cache the tools\n"+
 					"        timeout-minutes: 5\n"+
 					"        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0\n"+
@@ -2364,7 +2427,7 @@ func TestAuditWorkflow(t *testing.T) {
 			wantIn:   "hostile-inventories",
 		},
 		{
-			// The checks job's steps add up to 335 minutes: with the job's 5 minutes
+			// The checks job's steps add up to 345 minutes: with the job's 5 minutes
 			// of set-up and post steps they stay within its 355, and a step raised by
 			// 20 puts them past it.
 			name:     "a checks step adding up past the job's timeout",
@@ -2596,10 +2659,25 @@ func TestAuditWorkflow(t *testing.T) {
 			workflow: mutate(t, acceptedWorkflow, auditSBOMOutcome, strings.Replace(auditSBOMOutcome, "-eq 124", "-eq 200", 1)),
 			wantIn:   "timed-out",
 		},
+		{
+			name: "row 7's refused image signature without its verification-failed record",
+			workflow: mutate(t, acceptedWorkflow, auditSignatureOutcome,
+				strings.Replace(auditSignatureOutcome, "            elif [ \"${rc}\" -eq 1 ]; then\n"+
+					"              echo \"release-integrity verification-failed\" >> \"${results}/verification-failed.txt\"\n", "", 1)),
+			wantIn: "verification-failed",
+		},
+		{
+			name: "row 7's refused attestation signature without its verification-failed record",
+			workflow: mutate(t, acceptedWorkflow, auditAttestedSigOutcome,
+				strings.Replace(auditAttestedSigOutcome, "              elif [ \"${rc}\" -eq 1 ]; then\n"+
+					"                echo \"release-integrity verification-failed\" >> \"${results}/verification-failed.txt\"\n", "", 1)),
+			wantIn: "verification-failed",
+		},
 
 		// Round E's second part: no step's own timeouts reach its
-		// timeout-minutes. Row 7's 20-minute budget and the 26 minutes outside its
-		// loop add up to 46 of its 50, and row 8's three timeouts to 14 of its 15.
+		// timeout-minutes. Row 7's 20-minute budget and the 29 minutes of timeouts
+		// outside its loop add up to 49 of its 50, and row 8's three timeouts to 14
+		// of its 15.
 		{
 			name:     "row 7's download timeout raised past its step's time-outs",
 			workflow: mutate(t, acceptedWorkflow, "timeout 5m gh release download", "timeout 30m gh release download"),
@@ -2647,6 +2725,58 @@ func TestAuditWorkflow(t *testing.T) {
 			name:     "no error line on a refused publish",
 			workflow: mutate(t, acceptedWorkflow, auditPublishError, ""),
 			wantIn:   "Audit publish::the publish was refused",
+		},
+
+		// Round F's first part: every tool run of the checks job is under a
+		// timeout of its own, with its exit recorded. Rows 6 to 15 already were,
+		// and rows 3 to 5 - govulncheck, osv-scanner, gitleaks, zizmor and
+		// actionlint - now are too: a tool that hangs is the check that timed out,
+		// recorded "not run" in the results, never the end of the step and of the
+		// run's report. A case takes the timeout out of one run of one row.
+		{
+			name:     "row 3's govulncheck without its timeout",
+			workflow: mutate(t, acceptedWorkflow, auditGovulncheckRun, strings.Replace(auditGovulncheckRun, "timeout 8m ", "", 1)),
+			wantIn:   "govulncheck",
+		},
+		{
+			name:     "row 4's osv-scanner without its timeout",
+			workflow: mutate(t, acceptedWorkflow, auditOSVScanRun, strings.Replace(auditOSVScanRun, "timeout 8m ", "", 1)),
+			wantIn:   "osv-scanner",
+		},
+		{
+			name:     "row 5's gitleaks without its timeout",
+			workflow: mutate(t, acceptedWorkflow, auditGitleaksRun, strings.Replace(auditGitleaksRun, "timeout 15m ", "", 1)),
+			wantIn:   "gitleaks",
+		},
+		{
+			name:     "row 5's zizmor without its timeout",
+			workflow: mutate(t, acceptedWorkflow, auditZizmorRun, strings.Replace(auditZizmorRun, "timeout 4m ", "", 1)),
+			wantIn:   "zizmor",
+		},
+		{
+			name:     "row 5's actionlint without its timeout",
+			workflow: mutate(t, acceptedWorkflow, auditActionlint, strings.Replace(auditActionlint, "timeout 5m ", "", 1)),
+			wantIn:   "actionlint",
+		},
+
+		// Round F's second part: the model job's install step names the runbook
+		// step a CLI that does not install is recovered by. The shared script's own
+		// two ::error lines name none, so the workflow holds the branch whole: the
+		// echo, the exit 1 and the fi, each on a line of its own.
+		{
+			name:     "the CLI install without its guard",
+			workflow: mutate(t, acceptedWorkflow, auditInstallGuard, auditInstallCall),
+			wantIn:   "the Claude Code CLI did not install",
+		},
+		{
+			name:     "the CLI install guard without its exit 1",
+			workflow: mutate(t, acceptedWorkflow, auditInstallGuard, strings.Replace(auditInstallGuard, "            exit 1\n", "", 1)),
+			wantIn:   "the Claude Code CLI did not install",
+		},
+		{
+			name:     "the CLI install guard's branch run together onto the echo's line",
+			workflow: mutate(t, acceptedWorkflow, auditInstallGuard, joinedBranch(auditInstallGuard)),
+			wantIn:   "the Claude Code CLI did not install",
 		},
 
 		// A document the reader cannot follow tells the check nothing, so it is
