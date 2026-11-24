@@ -1842,17 +1842,20 @@ var containerCostPinCases = []infraRuleCase{
 	},
 	// The pins judge every scaleway_container under the root, not the one container.tf holds: a second
 	// container, in a file of its own, sets no pin at all, so each pin is missing and each is reported against
-	// that file.
+	// that file. It is also a repeat whatever its pins: the count is a rule of its own, judged on its own
+	// grounds, and one refusal never hides another - a maintainer who only read the pins would come back to a
+	// second container still refused after pinning it.
 	{
 		name:     "container-second-without-pins",
 		why:      "a second scaleway_container in site/second_container.tf without max_scale, cpu_limit, memory_limit_bytes or min_scale",
 		want:     "container-max-scale",
-		wantMore: []string{"container-cpu", "container-memory", "container-min-scale"},
+		wantMore: []string{"container-cpu", "container-memory", "container-min-scale", "container-repeat"},
 		wantIn: map[string]string{
 			"container-max-scale": "{site}/second_container.tf",
 			"container-cpu":       "{site}/second_container.tf",
 			"container-memory":    "{site}/second_container.tf",
 			"container-min-scale": "{site}/second_container.tf",
+			"container-repeat":    "{root}",
 		},
 		breakage: func(t *testing.T, site string) {
 			t.Helper()
