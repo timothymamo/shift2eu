@@ -1036,7 +1036,7 @@ func licenseFileFindings(t *testing.T, name, dockerfile, dockerignore, gorelease
 func licenseDirFindings(t *testing.T, name string, instructions []instruction) []string {
 	t.Helper()
 
-	stageCopies := copies(finalStage(t, instructions))
+	stageCopies := copyInstructions(finalStage(t, instructions))
 
 	licence := -1
 
@@ -1070,8 +1070,8 @@ func licenseDirFindings(t *testing.T, name string, instructions []instruction) [
 		name, stageCopies[licence].line, licenseFileMode, imageDocDir, imageDocDir, licenseFileMode, imageDocDirMode)}
 }
 
-// copy is one COPY instruction of a stage, parsed as Docker reads it.
-type copy struct {
+// copyInstruction is one COPY instruction of a stage, parsed as Docker reads it.
+type copyInstruction struct {
 	// line is the line of the Dockerfile the instruction starts at.
 	line int
 	// from is the stage a --from names, "" for a copy of the build context.
@@ -1082,17 +1082,18 @@ type copy struct {
 	paths []string
 }
 
-// copies returns the COPY instructions of a stage, in file order. A --chmod
-// written as its own argument is read too, since Docker accepts that form.
-func copies(stage []instruction) []copy {
-	var parsed []copy
+// copyInstructions returns the COPY instructions of a stage, in file order. A
+// --chmod written as its own argument is read too, since Docker accepts that
+// form.
+func copyInstructions(stage []instruction) []copyInstruction {
+	var parsed []copyInstruction
 
 	for _, in := range stage {
 		if in.keyword() != "COPY" {
 			continue
 		}
 
-		parsedCopy := copy{line: in.line}
+		parsedCopy := copyInstruction{line: in.line}
 
 		fields := strings.Fields(in.arguments())
 
@@ -1122,7 +1123,7 @@ func copies(stage []instruction) []copy {
 // destination returns where the copy puts source: a destination written as a
 // directory, which Docker joins to the source's base name, or the destination
 // itself for a copy of one file, and "" when the paths do not say.
-func (c copy) destination(source string) string {
+func (c copyInstruction) destination(source string) string {
 	if len(c.paths) < 2 {
 		return ""
 	}
@@ -1141,7 +1142,7 @@ func (c copy) destination(source string) string {
 
 // copiesFilesInto reports whether the copy puts a file of the build context
 // into dir: a destination written as dir itself or as a path inside it.
-func (c copy) copiesFilesInto(dir string) bool {
+func (c copyInstruction) copiesFilesInto(dir string) bool {
 	if len(c.paths) < 2 {
 		return false
 	}
@@ -1158,7 +1159,7 @@ func (c copy) copiesFilesInto(dir string) bool {
 // directoryAt reports the directory a copy of another stage puts at dir, and
 // whether this copy is one: one source and one destination that name the same
 // directory, written with or without a trailing slash.
-func (c copy) directoryAt(dir string) (string, bool) {
+func (c copyInstruction) directoryAt(dir string) (string, bool) {
 	if c.from == "" || len(c.paths) != 2 {
 		return "", false
 	}
@@ -1264,7 +1265,7 @@ type contextCopy struct {
 func contextCopyDestinations(stage []instruction) map[string]contextCopy {
 	destinations := make(map[string]contextCopy)
 
-	for _, c := range copies(stage) {
+	for _, c := range copyInstructions(stage) {
 		if c.from != "" || len(c.paths) < 2 {
 			continue
 		}
