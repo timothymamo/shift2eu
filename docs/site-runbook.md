@@ -100,11 +100,11 @@ dev/tofu.sh -chdir=infra/site show site.tfplan | less      # PASS: the bucket po
 dev/tofu.sh -chdir=infra/site apply site.tfplan            # PASS: "Apply complete"
 # FAIL "Error acquiring the state lock": another tofu holds it; wait, or after a crash dev/tofu.sh -chdir=infra/site force-unlock <lock ID>
 # Scaleway assigns the DNS stage's default_fqdn after creating it: edge_endpoint is empty right after apply, so refresh the state (no resource change) until it is set, 20 tries 30 s apart
-n=0; until [ -n "$(dev/tofu.sh -chdir=infra/site output -raw edge_endpoint 2>/dev/null)" ] || [ "$n" -ge 20 ]; do sleep 30; dev/tofu.sh -chdir=infra/site apply -refresh-only -auto-approve > /dev/null; n=$((n + 1)); done
+n=0; until [ -n "$(dev/tofu.sh -chdir=infra/site output -raw edge_endpoint 2>/dev/null)" ] || [ "$n" -ge 20 ]; do sleep 30; dev/tofu.sh -chdir=infra/site apply -refresh-only -auto-approve || break; n=$((n + 1)); done
 [ -n "$(dev/tofu.sh -chdir=infra/site output -raw edge_endpoint 2>/dev/null)" ] && echo "PASS edge_endpoint is set" || echo "FAIL edge_endpoint still empty after 10 minutes"
-# FAIL: check the pipeline's DNS stage in the console (Edge Services) for its default FQDN, then run the two lines above again
+# FAIL: first an error printed above (a state lock: as the apply line's FAIL says; a key error: R0), else check the pipeline's DNS stage in the console (Edge Services) for its default FQDN; then run the wait loop and its check again
 dev/tofu.sh -chdir=infra/site plan -detailed-exitcode      # PASS: exit 0, "No changes."
-# FAIL exit 2: read the diff; the provider or someone changed a resource
+# FAIL exit 2: read the diff; the provider or someone changed a resource; one "to add" after the refresh was deleted outside OpenTofu: import it, do not re-create it blindly
 dev/tofu.sh -chdir=infra/site output                       # PASS: project_id, deploy_application_id, bucket_name, bucket_website_endpoint, pipeline_id, edge_endpoint
 aws s3api list-objects-v2 --bucket <state-bucket> --query 'Contents[].Key'   # PASS: "site/terraform.tfstate" and no .tflock left over
 rm infra/site/site.tfplan
