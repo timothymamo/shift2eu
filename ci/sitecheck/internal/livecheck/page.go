@@ -41,7 +41,13 @@ const MaxVersionBytes = 64
 // pages hide nothing the other ways: they carry no inline style attribute (their
 // Content Security Policy's style-src 'self' would not apply one), and they set
 // aria-hidden only on decorative icons and step numbers, never on a marked
-// element.
+// element. The stylesheet, which style-src 'self' does apply, hides elements
+// through selectors (.visually-hidden, which page.js adds only to index.html's
+// loading notice; #report:empty + .next-steps; the print rules), but no rule
+// reaches a marked element (the "notice warn with-icon" paragraphs
+// #downgrade-risk and #hsts-waived of privacy.html and verify.html), and it is
+// ours as well: style.<h>.css and page.<h>.js are manifest files, digest-checked
+// like the pages.
 func Carries(page []byte, marker string) bool {
 	found := findMarked(page, marker)
 
