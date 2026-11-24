@@ -129,8 +129,13 @@ var (
 	// another command's line it would be part of that command's conditions.
 	zipDigest = command(`(?m)^[ \t]*echo "\$\{digest#sha256:\}  \$\{RUNNER_TEMP\}/[a-z-]+\.zip" \| sha256sum --check --strict -$`,
 		`sha256sum --check --strict of the zip against the checked digest, on a line of its own`)
-	zipUnpack  = command(`unzip -q "\$\{RUNNER_TEMP\}/[a-z-]+\.zip" -d `, "unzip -q of the checked zip")
-	zipOneFile = command(`if \[ "\$\(ls -A "\$\{RUNNER_TEMP\}/[a-z-]+"\)" != [a-z-]+\.age \]; then`, "the single-file check (ls -A) of the unzipped ciphertext")
+	zipUnpack = command(`unzip -q "\$\{RUNNER_TEMP\}/[a-z-]+\.zip" -d `, "unzip -q of the checked zip")
+	// artifactShape refuses an ID or a digest of the wrong shape before either
+	// reaches a URL or sha256sum (review round 6): its branch is held whole.
+	artifactShape = command(`(?m)^[ \t]*if \[\[ ! "\$\{id\}" =~ \^\[0-9\]\+\$ \]\] \|\| \[\[ ! "\$\{digest\}" =~ \^sha256:\[0-9a-f\]\{64\}\$ \]\]`+refusalBranch,
+		`the shape guard of the artifact's ID and digest: if [[ ! "${id}" =~ ^[0-9]+$ ]] || [[ ! "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then, echo "::error ...", exit 1 and fi, each on a line of its own`)
+	zipOneFile = command(`(?m)^[ \t]*if \[ "\$\(ls -A "\$\{RUNNER_TEMP\}/[a-z-]+"\)" != [a-z-]+\.age \]`+refusalBranch,
+		`the single-file check (ls -A) of the unzipped ciphertext: if [ "$(ls -A ...)" != <name>.age ]; then, echo "::error ...", exit 1 and fi, each on a line of its own`)
 	// secondListing is a download step that lists the run's artifacts again,
 	// so that what it downloads is no longer what the check accepted.
 	secondListing = command(`actions/runs/`, "a second listing of the run's artifacts (actions/runs/...), want the ID and digest from ${RUNNER_TEMP}/artifact.json, the checked listing's")
@@ -140,11 +145,13 @@ var (
 	// earlier step's read, review round 2, G3), the tag's shape whatever the
 	// digest, then an empty digest skipped with a fixed notice (the run pulled
 	// no image), then the digest's shape, and only then the verification.
-	digestRead = command(`if ! digest="\$\(jq -er '\.image_digest \| select\(type == "string"\) \| select\(\. == "" or test\("\^sha256:\[0-9a-f\]\{64\}\\\\z"\)\)' "\$\{RUNNER_TEMP\}/result\.json"\)"; then\s+echo "::error [^"\n]*"\s+exit 1\s+fi`,
-		`string-and-shape read of the digest: if ! digest="$(jq -er '.image_digest | select(type == "string") | select(. == "" or test("^sha256:[0-9a-f]{64}\\z"))' ...)"; then ... exit 1`)
+	digestRead = command(`(?m)^[ \t]*if ! digest="\$\(jq -er '\.image_digest \| select\(type == "string"\) \| select\(\. == "" or test\("\^sha256:\[0-9a-f\]\{64\}\\\\z"\)\)' "\$\{RUNNER_TEMP\}/result\.json"\)"`+refusalBranch,
+		`string-and-shape read of the digest: if ! digest="$(jq -er '.image_digest | select(type == "string") | select(. == "" or test("^sha256:[0-9a-f]{64}\\z"))' ...)"; then, `+
+			`echo "::error ...", exit 1 and fi, each on a line of its own`)
 	tagShape = command(`(?m)^[ \t]*if \[\[ ! "\$\{tag\}" =~ \^v\[0-9\]\+\\\.\[0-9\]\+\\\.\[0-9\]\+\$ \]\]`+refusalBranch,
 		`the tag's shape check: if [[ ! "${tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then, echo "::error ...", exit 1 and fi, each on a line of its own`)
-	emptyDigest = command(`if \[ -z "\$\{digest\}" \]; then\s+echo "image not pulled[^"\n]*"\s+exit 0\s+fi`, `the empty digest's branch: echo "image not pulled: ..." and exit 0`)
+	emptyDigest = command(`(?m)^[ \t]*if \[ -z "\$\{digest\}" \]; then\n[ \t]+echo "image not pulled[^"\n]*"\n[ \t]+exit 0\n[ \t]*fi$`,
+		`the empty digest's branch: if [ -z "${digest}" ]; then, echo "image not pulled: ...", exit 0 and fi, each on a line of its own`)
 	digestShape = command(`(?m)^[ \t]*if \[\[ ! "\$\{digest\}" =~ \^sha256:\[0-9a-f\]\{64\}\$ \]\]`+refusalBranch,
 		`the digest's shape check: if [[ ! "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then, echo "::error ...", exit 1 and fi, each on a line of its own`)
 	verify = command(verifyPattern(), `gh attestation verify "oci://${image}@${digest}" as one command, each line but the last ending in \: --repo "${GITHUB_REPOSITORY}", `+
@@ -249,9 +256,9 @@ var auditJobs = []auditJob{
 			},
 			{
 				name: "List the run's artifacts and download the checks' ciphertext", githubToken: true,
-				runs:    []auditCommand{artifactsModel, artifactFile, artifactID, artifactDigest, artifactZip, zipDigest, zipUnpack, zipOneFile},
+				runs:    []auditCommand{artifactsModel, artifactFile, artifactID, artifactDigest, artifactShape, artifactZip, zipDigest, zipUnpack, zipOneFile},
 				refuses: []auditCommand{secondListing},
-				order:   []auditCommand{artifactsModel, artifactFile, artifactZip, zipDigest, zipUnpack, zipOneFile},
+				order:   []auditCommand{artifactsModel, artifactFile, artifactDigest, artifactShape, artifactZip, zipDigest, zipUnpack, zipOneFile},
 			},
 			{
 				name: "Decrypt the checks' results into the audit directory",
@@ -307,9 +314,9 @@ var auditJobs = []auditJob{
 			{name: "Download the pinned tools and verify their checksums", runs: []auditCommand{checksumCheck}},
 			{
 				name: "List the run's artifacts and download the model's ciphertext", githubToken: true,
-				runs:    []auditCommand{artifactsPublic, artifactFile, artifactID, artifactDigest, artifactZip, zipDigest, zipUnpack, zipOneFile},
+				runs:    []auditCommand{artifactsPublic, artifactFile, artifactID, artifactDigest, artifactShape, artifactZip, zipDigest, zipUnpack, zipOneFile},
 				refuses: []auditCommand{secondListing},
-				order:   []auditCommand{artifactsPublic, artifactFile, artifactZip, zipDigest, zipUnpack, zipOneFile},
+				order:   []auditCommand{artifactsPublic, artifactFile, artifactDigest, artifactShape, artifactZip, zipDigest, zipUnpack, zipOneFile},
 			},
 			{
 				name: "Decrypt the model's result",
