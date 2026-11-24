@@ -966,6 +966,20 @@ func TestParseErrors(t *testing.T) {
 			wantContains: []string{"the number"},
 		},
 		{
+			// A plan's vcpus key is optional for an offering matched on memory
+			// alone, but a present 0 is refused by the reader, so "not given" has
+			// exactly one spelling: the key left out (ADR 0045). The reader refuses
+			// it, not the domain, which cannot tell 0 from "not given" in a plan.
+			name: "vcpus 0 on a cache plan",
+			data: docIn(t, pricedDocument,
+				`"categories": ["compute.vm"],`, `"categories": ["cache.redis"],`,
+				`"vcpus": 2,`, `"vcpus": 0,`),
+			wantErr:      []error{snapshot.ErrDecode},
+			wantNotErr:   []error{catalog.ErrInvalidPlan},
+			wantQuoted:   []string{"offerings[0].plans[0].vcpus"},
+			wantContains: []string{"leave the key out"},
+		},
+		{
 			name:         "included storage written as -0",
 			data:         docIn(t, pricedDocument, `"storageGiB": 20,`, `"storageGiB": -0,`),
 			wantErr:      []error{snapshot.ErrDecode},
@@ -1689,6 +1703,76 @@ func TestParsePlansAndPrices(t *testing.T) {
 
 		if got, want := plans[1].Prices[1].Amount, catalog.Amount(123456); got != want {
 			t.Errorf("stored amount = %d, want %d for 12.3456 EUR", got, want)
+		}
+	})
+}
+
+// TestParsePlanWithoutVCPUs pins the one change format version 2 gains (ADR
+// 0045): a plan's vcpus key is optional, and absent the plan's VCPUs is 0, which
+// the domain reads as "the target gives no count" on an offering matched on
+// memory alone. A document that leaves the key out on any other offering is
+// still refused, by the domain this time, because a compute or database plan
+// without vCPUs could never cover a resource.
+func TestParsePlanWithoutVCPUs(t *testing.T) {
+	t.Parallel()
+
+	cacheDocument := docIn(t, pricedDocument,
+		`"categories": ["compute.vm"],`, `"categories": ["cache.redis"],`)
+
+	t.Run("a cache plan without vcpus reads as no count", func(t *testing.T) {
+		t.Parallel()
+
+		withoutVCPUs := withoutNested(t, cacheDocument, planPath, "vcpus")
+
+		document, err := snapshot.Parse([]byte(withoutVCPUs))
+		if err != nil {
+			t.Fatalf("Parse() of a cache plan without vcpus returned unexpected error: %v", err)
+		}
+
+		plans := document.Catalog.Offerings()[0].Plans
+		if len(plans) != 2 {
+			t.Fatalf("Parse() kept %d plans, want the document's 2", len(plans))
+		}
+
+		var plan *catalog.Plan
+
+		for i, p := range plans {
+			if p.Name == "EC-2-4" {
+				plan = &plans[i]
+			}
+		}
+
+		if plan == nil {
+			t.Fatalf("Parse() dropped the plan EC-2-4: %v", plans)
+		}
+
+		if plan.VCPUs != 0 {
+			t.Errorf("the plan's VCPUs = %d, want 0 for a plan the document gives no count for", plan.VCPUs)
+		}
+
+		// Every other key is read as before: only vcpus became optional.
+		if plan.MemoryMilliGiB != 4000 || plan.IncludedStorageGiB != 20 {
+			t.Errorf("the plan's memory and included storage = %d and %d, want 4000 and 20",
+				plan.MemoryMilliGiB, plan.IncludedStorageGiB)
+		}
+
+		if !slices.ContainsFunc(plans, func(p catalog.Plan) bool { return p.VCPUs == 1 }) {
+			t.Errorf("Parse() lost the second plan's given vcpus: %v", plans)
+		}
+	})
+
+	t.Run("a compute plan without vcpus is refused by the domain", func(t *testing.T) {
+		t.Parallel()
+
+		withoutVCPUs := withoutNested(t, pricedDocument, planPath, "vcpus")
+
+		_, err := snapshot.Parse([]byte(withoutVCPUs))
+		if !errors.Is(err, catalog.ErrInvalidPlan) {
+			t.Fatalf("Parse() error = %v, want one wrapping %v", err, catalog.ErrInvalidPlan)
+		}
+
+		if msg := err.Error(); !strings.Contains(msg, "vcpus") {
+			t.Errorf("Parse() error = %q, want it to name vcpus", msg)
 		}
 	})
 }

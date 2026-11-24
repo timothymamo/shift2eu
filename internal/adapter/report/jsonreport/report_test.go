@@ -1831,6 +1831,137 @@ func checkDocumentAgainstSchema(t *testing.T, document []byte, file string) {
 	}
 }
 
+// TestReportWithCachePlansAndNeverPricedResources pins what a document says
+// about the two things PRD #552 adds to an estimate (ADR 0045): a plan the
+// target gives no vCPU count for is written with "vcpus": 0, and a category that
+// is never priced gets the reason code "not-priced", which is not
+// "usage-priced". Such a resource is not counted as 0 in the total.
+//
+// The catalog and the amounts are invented, so a test states them exactly.
+func TestReportWithCachePlansAndNeverPricedResources(t *testing.T) {
+	t.Parallel()
+
+	cat, err := catalog.New(scalewayTarget, testutil.ScalewaySnapshot(), []catalog.Offering{
+		{
+			Name:       "Example Cache",
+			Categories: []taxonomy.Category{taxonomy.CacheRedis},
+			Regions:    []string{"fr-par"},
+			Plans: []catalog.Plan{
+				{
+					Name:           "CACHE-8",
+					VCPUs:          0,
+					MemoryMilliGiB: 8000,
+					Prices:         []catalog.Price{{Amount: 200000, Currency: catalog.EUR}},
+				},
+			},
+		},
+		{
+			Name:       "Example Load Balancer",
+			Categories: []taxonomy.Category{taxonomy.NetworkLoadBalancer},
+			Regions:    []string{"fr-par"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("catalog.New() returned unexpected error: %v", err)
+	}
+
+	resources := []inventory.Resource{
+		{
+			ID:       "cache-example",
+			RawType:  "AWS::ElastiCache::ReplicationGroup",
+			Category: taxonomy.CacheRedis,
+			Region:   "eu-west-1",
+			Size:     &inventory.Size{MemoryGiB: sized(8), Count: counted(2)},
+		},
+		{
+			ID:       "lb-example",
+			RawType:  "AWS::ElasticLoadBalancingV2::LoadBalancer",
+			Category: taxonomy.NetworkLoadBalancer,
+			Region:   "eu-west-1",
+		},
+	}
+
+	a := assessment.AssessWith(newInventory(t, sourceName, resources), cat, assessment.Options{Estimate: true})
+	got := render(t, a, analysis.ReportMeta{InventoryName: inventoryFileName})
+
+	checkDocument(t, got)
+
+	document := decodeJSON(t, got)
+
+	t.Run("a plan without vCPUs is written as vcpus 0", func(t *testing.T) {
+		t.Parallel()
+
+		plan := extend(resourceIndex(t, document, "cache-example"), "plan")
+
+		tests := []struct {
+			name string
+			path []any
+			want any
+		}{
+			{name: "the name", path: extend(plan, "name"), want: "CACHE-8"},
+			// 0 is the document's one spelling of "the target gives no count":
+			// every schema allows it and requires the key (ADR 0045).
+			{name: "the vCPU count", path: extend(plan, "vcpus"), want: float64(0)},
+			{name: "the memory", path: extend(plan, "memoryGiB"), want: "8"},
+			{name: "the price", path: extend(plan, "price"), want: "20.00"},
+		}
+
+		for _, test := range tests {
+			t.Run(test.name, func(t *testing.T) {
+				t.Parallel()
+
+				if diff := cmp.Diff(test.want, valueAt(t, document, test.path...)); diff != "" {
+					t.Errorf("%v mismatch (-want +got):\n%s", test.path, diff)
+				}
+			})
+		}
+
+		// The cache is priced per node: two nodes, 730 hours assumed.
+		if diff := cmp.Diff("40.00", valueAt(t, document,
+			extend(resourceIndex(t, document, "cache-example"), "estimate", "amount")...)); diff != "" {
+			t.Errorf("cache-example estimate.amount mismatch (-want +got):\n%s", diff)
+		}
+	})
+
+	t.Run("a resource that is never priced says why", func(t *testing.T) {
+		t.Parallel()
+
+		at := resourceIndex(t, document, "lb-example")
+
+		if diff := cmp.Diff([]string{"estimated", "reason"}, objectKeysAt(t, document, extend(at, "estimate")...)); diff != "" {
+			t.Errorf("lb-example estimate keys mismatch (-want +got), a resource that is not estimated "+
+				"has no amount and no breakdown:\n%s", diff)
+		}
+
+		if diff := cmp.Diff("not-priced", valueAt(t, document, extend(at, "estimate", "reason")...)); diff != "" {
+			t.Errorf("lb-example estimate.reason mismatch (-want +got):\n%s", diff)
+		}
+
+		if diff := cmp.Diff(false, valueAt(t, document, extend(at, "estimate", "estimated")...)); diff != "" {
+			t.Errorf("lb-example estimate.estimated mismatch (-want +got):\n%s", diff)
+		}
+	})
+
+	t.Run("a resource that is never priced is not counted as 0", func(t *testing.T) {
+		t.Parallel()
+
+		tests := []struct {
+			path []any
+			want any
+		}{
+			{path: []any{"estimate", "total", "amount"}, want: "40.00"},
+			{path: []any{"estimate", "total", "estimated"}, want: float64(1)},
+			{path: []any{"estimate", "total", "resources"}, want: float64(2)},
+		}
+
+		for _, test := range tests {
+			if diff := cmp.Diff(test.want, valueAt(t, document, test.path...)); diff != "" {
+				t.Errorf("%v mismatch (-want +got):\n%s", test.path, diff)
+			}
+		}
+	})
+}
+
 // TestReportNotOfferedReason pins the reason code of a resource whose offering is
 // not offered in the estimate region (issue #243): the document says
 // "not-offered", not "no-price", and says nothing else about its estimate. It

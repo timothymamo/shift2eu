@@ -1671,6 +1671,127 @@ func TestInventoryReadsSchemaVersion2(t *testing.T) {
 	}
 }
 
+// TestInventoryReadsEveryTaxonomyCategory pins that a file of schema version 1
+// or 2 may hold a resource of every category of the taxonomy, the seven PRD #552
+// adds included (ADR 0045), and that a version 2 file gives each of them the size
+// fields the format allows it. A value the taxonomy does not know is still
+// refused: cache.memcached, the mistake a Redis cache invites, since Memcached is
+// not the Redis protocol and no target serves it.
+func TestInventoryReadsEveryTaxonomyCategory(t *testing.T) {
+	t.Parallel()
+
+	categories := []struct {
+		name     string
+		category taxonomy.Category
+		rawType  string
+		// size is the body of the version 2 size object, "" for a category that
+		// takes no size.
+		size string
+		// wantSize is the size a version 2 file with that body produces.
+		wantSize *inventory.Size
+	}{
+		{
+			name:     "cache.redis",
+			category: taxonomy.CacheRedis,
+			rawType:  "AWS::ElastiCache::ReplicationGroup",
+			size:     `"memoryGiB": 8, "count": 2`,
+			wantSize: &inventory.Size{MemoryGiB: ptr(8.0), Count: ptr(2)},
+		},
+		{
+			name:     "database.mongodb",
+			category: taxonomy.DatabaseMongoDB,
+			rawType:  "AWS::DocDB::DBCluster",
+			size:     `"vcpus": 2, "memoryGiB": 8, "storageGiB": 100, "count": 3`,
+			wantSize: &inventory.Size{VCPUs: ptr(2.0), MemoryGiB: ptr(8.0), StorageGiB: ptr(100.0), Count: ptr(3)},
+		},
+		{
+			name:     "network.loadbalancer",
+			category: taxonomy.NetworkLoadBalancer,
+			rawType:  "AWS::ElasticLoadBalancingV2::LoadBalancer",
+		},
+		{
+			name:     "messaging.topic",
+			category: taxonomy.MessagingTopic,
+			rawType:  "AWS::SNS::Topic",
+		},
+		{
+			name:     "serverless.container",
+			category: taxonomy.ServerlessContainer,
+			rawType:  "AWS::AppRunner::Service",
+		},
+		{
+			name:     "registry.container",
+			category: taxonomy.RegistryContainer,
+			rawType:  "AWS::ECR::Repository",
+		},
+		{
+			name:     "storage.file",
+			category: taxonomy.StorageFile,
+			rawType:  "AWS::EFS::FileSystem",
+			size:     `"storageGiB": 500`,
+			wantSize: &inventory.Size{StorageGiB: ptr(500.0)},
+		},
+	}
+
+	for _, tc := range categories {
+		for _, version := range []int{1, 2} {
+			t.Run(tc.name+", version "+strconv.Itoa(version), func(t *testing.T) {
+				t.Parallel()
+
+				document := `{"schemaVersion":` + strconv.Itoa(version) +
+					`,"source":"aws","resources":[{"id":"example-resource",` +
+					`"rawType":"` + tc.rawType + `","category":"` + string(tc.category) + `",` +
+					`"region":"eu-west-1"`
+
+				if version == 2 && tc.size != "" {
+					document += `,"size":{` + tc.size + `}`
+				}
+
+				document += `}]}`
+
+				inv := inventoryOf(t, writeFile(t, t.TempDir(), document))
+
+				resources := inv.Resources()
+				if len(resources) != 1 {
+					t.Fatalf("Inventory() read %d resources, want 1", len(resources))
+				}
+
+				if got := resources[0].Category; got != tc.category {
+					t.Errorf("Category = %q, want %q", got, tc.category)
+				}
+
+				// Version 1 has no size at all, and version 2 keeps exactly the size
+				// its field table allows.
+				wantSize := tc.wantSize
+				if version == 1 {
+					wantSize = nil
+				}
+
+				if diff := cmp.Diff(wantSize, resources[0].Size); diff != "" {
+					t.Errorf("Size mismatch (-want +got):\n%s", diff)
+				}
+			})
+		}
+	}
+
+	t.Run("cache.memcached is still refused", func(t *testing.T) {
+		t.Parallel()
+
+		document := `{"schemaVersion":2,"source":"aws","resources":[` +
+			`{"id":"cache-example","rawType":"AWS::ElastiCache::CacheCluster",` +
+			`"category":"cache.memcached","region":"eu-west-1"}]}`
+
+		_, err := inventoryfile.New(writeFile(t, t.TempDir(), document)).Inventory(t.Context())
+		if !errors.Is(err, taxonomy.ErrUnknownCategory) {
+			t.Fatalf("Inventory() error = %v, want an error wrapping %v", err, taxonomy.ErrUnknownCategory)
+		}
+
+		if msg := err.Error(); !strings.Contains(msg, "cache.memcached") {
+			t.Errorf("Inventory() error = %q, want it to name cache.memcached", msg)
+		}
+	})
+}
+
 // TestInventoryReadsVersion1And2TwinsAlike pins that the version is a fact about
 // the file, not about the resources: a version 1 file and the same bytes with
 // only the version changed describe the same inventory.

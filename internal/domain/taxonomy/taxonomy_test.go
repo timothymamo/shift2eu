@@ -31,6 +31,14 @@ func TestCategoryValues(t *testing.T) {
 		{name: "mysql", got: taxonomy.DatabaseMySQL, want: "database.mysql"},
 		{name: "serverless function", got: taxonomy.ServerlessFunction, want: "serverless.function"},
 		{name: "messaging queue", got: taxonomy.MessagingQueue, want: "messaging.queue"},
+		// The seven categories PRD #552 adds.
+		{name: "cache redis", got: taxonomy.CacheRedis, want: "cache.redis"},
+		{name: "mongodb", got: taxonomy.DatabaseMongoDB, want: "database.mongodb"},
+		{name: "network load balancer", got: taxonomy.NetworkLoadBalancer, want: "network.loadbalancer"},
+		{name: "messaging topic", got: taxonomy.MessagingTopic, want: "messaging.topic"},
+		{name: "serverless container", got: taxonomy.ServerlessContainer, want: "serverless.container"},
+		{name: "registry container", got: taxonomy.RegistryContainer, want: "registry.container"},
+		{name: "storage file", got: taxonomy.StorageFile, want: "storage.file"},
 		{name: "unclassified", got: taxonomy.Unclassified, want: "unclassified"},
 	}
 
@@ -62,6 +70,13 @@ func TestParseCategory(t *testing.T) {
 		{name: "mysql", in: "database.mysql", want: taxonomy.DatabaseMySQL},
 		{name: "serverless function", in: "serverless.function", want: taxonomy.ServerlessFunction},
 		{name: "messaging queue", in: "messaging.queue", want: taxonomy.MessagingQueue},
+		{name: "cache redis", in: "cache.redis", want: taxonomy.CacheRedis},
+		{name: "mongodb", in: "database.mongodb", want: taxonomy.DatabaseMongoDB},
+		{name: "network load balancer", in: "network.loadbalancer", want: taxonomy.NetworkLoadBalancer},
+		{name: "messaging topic", in: "messaging.topic", want: taxonomy.MessagingTopic},
+		{name: "serverless container", in: "serverless.container", want: taxonomy.ServerlessContainer},
+		{name: "registry container", in: "registry.container", want: taxonomy.RegistryContainer},
+		{name: "storage file", in: "storage.file", want: taxonomy.StorageFile},
 		{name: "unclassified", in: "unclassified", want: taxonomy.Unclassified},
 	}
 
@@ -96,6 +111,12 @@ func TestParseCategoryRejectsUnknown(t *testing.T) {
 		{name: "leading space", in: " compute.vm"},
 		{name: "trailing space", in: "compute.vm "},
 		{name: "prefix only", in: "compute"},
+		// Memcached is not the Redis protocol and no target serves it, so it stays
+		// unclassified: a category for it would map it direct to a cache that
+		// cannot serve it (PRD #552, decided question 3).
+		{name: "memcached", in: "cache.memcached"},
+		{name: "cache without a kind", in: "cache"},
+		{name: "load balancer under the compute family", in: "compute.loadbalancer"},
 	}
 
 	for _, tc := range tests {
@@ -171,15 +192,24 @@ func TestParseErrorsAreBounded(t *testing.T) {
 func TestCategories(t *testing.T) {
 	t.Parallel()
 
+	// The whole vocabulary, sorted by value: the ten categories of ADR 0011 and 0023
+	// and the seven PRD #552 adds. Unclassified is one of them.
 	want := []taxonomy.Category{
+		taxonomy.CacheRedis,
 		taxonomy.ComputeBareMetal,
 		taxonomy.ComputeVM,
+		taxonomy.DatabaseMongoDB,
 		taxonomy.DatabaseMySQL,
 		taxonomy.DatabasePostgreSQL,
 		taxonomy.KubernetesManaged,
 		taxonomy.MessagingQueue,
+		taxonomy.MessagingTopic,
+		taxonomy.NetworkLoadBalancer,
+		taxonomy.RegistryContainer,
+		taxonomy.ServerlessContainer,
 		taxonomy.ServerlessFunction,
 		taxonomy.StorageBlock,
+		taxonomy.StorageFile,
 		taxonomy.StorageObject,
 		taxonomy.Unclassified,
 	}
@@ -216,6 +246,9 @@ func TestCapabilityValues(t *testing.T) {
 		{name: "encryption at rest", got: taxonomy.EncryptionAtRest, want: "encryption-at-rest"},
 		{name: "snapshots", got: taxonomy.Snapshots, want: "snapshots"},
 		{name: "dead letter queue", got: taxonomy.DeadLetterQueue, want: "dead-letter-queue"},
+		// The two capabilities PRD #552 adds (ADR 0045).
+		{name: "sharding", got: taxonomy.Sharding, want: "sharding"},
+		{name: "udp", got: taxonomy.UDP, want: "udp"},
 	}
 
 	for _, tc := range tests {
@@ -247,6 +280,8 @@ func TestParseCapability(t *testing.T) {
 		{name: "encryption at rest", in: "encryption-at-rest", want: taxonomy.EncryptionAtRest},
 		{name: "snapshots", in: "snapshots", want: taxonomy.Snapshots},
 		{name: "dead letter queue", in: "dead-letter-queue", want: taxonomy.DeadLetterQueue},
+		{name: "sharding", in: "sharding", want: taxonomy.Sharding},
+		{name: "udp", in: "udp", want: taxonomy.UDP},
 	}
 
 	for _, tc := range tests {
@@ -409,6 +444,8 @@ func TestCapabilityImplicationInvariants(t *testing.T) {
 func TestCapabilities(t *testing.T) {
 	t.Parallel()
 
+	// The whole vocabulary, sorted by value: the ten capabilities of ADR 0011 and
+	// the two PRD #552 adds.
 	want := []taxonomy.Capability{
 		taxonomy.Autoscaling,
 		taxonomy.DeadLetterQueue,
@@ -418,7 +455,9 @@ func TestCapabilities(t *testing.T) {
 		taxonomy.ObjectVersioning,
 		taxonomy.PointInTimeRestore,
 		taxonomy.ReadReplicas,
+		taxonomy.Sharding,
 		taxonomy.Snapshots,
+		taxonomy.UDP,
 		taxonomy.ZoneHighAvailability,
 	}
 
