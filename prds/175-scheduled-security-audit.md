@@ -139,8 +139,9 @@ finding reaches a workflow log or a readable artifact, which anyone can read in 
 
 Triggers, jobs and permissions:
 
-- [x] `.github/workflows/scheduled-security-audit.yml` triggers on `schedule` and `workflow_dispatch`
-  **only** (milestone 2: `workflow_dispatch` alone; the `schedule` trigger is milestone 3's), and its `workflow_dispatch` takes no `inputs:`. It has no `pull_request`,
+- [x] `.github/workflows/scheduled-security-audit.yml` triggers on `workflow_dispatch` **only** in
+  milestone 2 (the `schedule` trigger is milestone 3's box, The first run and the schedule), and its
+  `workflow_dispatch` takes no `inputs:`. It has no `pull_request`,
   `pull_request_target`, `push`, `workflow_run` or `issue_comment` trigger. The workflow has **one guard
   condition**, used verbatim by every job's `if:` and inside the concurrency group below:
 
@@ -454,10 +455,13 @@ The required path check:
 
 Time and failures:
 
-- [x] Each step has a `timeout-minutes`, and each of the three jobs one below GitHub's 6-hour job limit.
+- [ ] Each step has a `timeout-minutes`, and each of the three jobs one below GitHub's 6-hour job limit.
   The ADR gives the budget (for example checks 180 minutes, with 10 per fuzz target and 60 for dynamic
   testing; model 120; publish 30). A check that times out is recorded in the report's limits, and the run
-  still publishes what it has.
+  still publishes what it has. *(Unticked in PR 5c's review round D: the timeouts and the checks job's
+  340-minute budget are in place, and no release content ends a step any more, but row 7's inner
+  timeouts can still add up past its step's 30 minutes, and a step's own timeout fails the job before
+  the encryption, so the run then publishes nothing; ADR 0040, The checks job's rows 6 to 15.)*
 - [ ] A failed run is visible: a run that fails (an expired or revoked subscription token, the
   subscription's usage limit, a tool download whose checksum differs, a failed sandbox preflight, a
   managed-settings file, an unexpected artifact, a refused publish) fails the workflow, which GitHub
@@ -479,6 +483,11 @@ Time and failures:
   (no earlier report is merged yet). The PR body records the run's URL.
 - [ ] The report states the `main` SHA, the release tag, the tool versions and the model. It lists every
   check with "run", "findings" or "not run (why)", as the publish script derives them (milestone 2).
+- [ ] `.github/workflows/scheduled-security-audit.yml` triggers on `schedule` and `workflow_dispatch`
+  **only**: milestone 3 adds the `schedule` trigger (the box below says when) beside milestone 2's
+  `workflow_dispatch`, which still takes no `inputs:`, and no other trigger; the guard condition, the
+  environment and the checkouts stay as milestone 2's trigger box sets them, and the `test/architecture`
+  check then holds both triggers.
 - [ ] After the maintainer has reviewed and merged that report, the `schedule` trigger is enabled: monthly,
   with the cron `17 4 3 * *` (04:17 UTC on the 3rd of each month; GitHub evaluates cron in UTC), which
   the ADR records. The cron is the only place the schedule is set, and no name carries the cadence: no
