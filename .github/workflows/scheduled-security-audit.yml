@@ -1,0 +1,590 @@
+name: Scheduled security audit
+
+# The scheduled security audit of PRD #175 and ADR 0040. The checks job runs the repository's checks on
+# a fresh runner and hands their raw results, encrypted to the model key, to the model job, which runs
+# the audit in Claude Code's sandbox and hands its result, encrypted to the publish key, to the publish
+# job, whose committed, model-free program alone holds the audit App's token and files the report.
+# Nothing else crosses between the jobs: no job output, no cache, no other artifact.
+#
+# Only the maintainer starts a run, by hand, on main, on a run's first attempt: the guard condition in
+# every job's if: and in the concurrency group. The schedule is milestone 3's: this file has none
+# (test/architecture/auditgap_test.go holds that), and test/architecture's TestScheduledSecurityAuditWorkflow
+# holds the rest of it to check.AuditWorkflow, step by step. Do not start it before PR 5c merges (runbook
+# step 7 in docs/dev-environment.md): until then the checks job runs rows 1 to 5 and 16 of ADR 0040's
+# table, and its result names rows 6 to 11 and 13 to 15 as not run.
+on:
+  # No inputs: a dispatch is the maintainer's, with nothing to fill in.
+  workflow_dispatch:
+
+# Nothing through GITHUB_TOKEN writes: the audit App's token files the report.
+permissions: {}
+
+# One audit at a time, and never a cancellation. A run whose jobs will be skipped takes a group of its
+# own, so it neither queues behind nor cancels a real run: GitHub keeps one pending run per group and
+# cancels the older pending one.
+concurrency:
+  group: ${{ github.ref == 'refs/heads/main' && github.run_attempt == 1 && (github.event_name == 'schedule' || github.triggering_actor == github.repository_owner) && 'scheduled-security-audit' || format('skipped-{0}', github.run_id) }}
+  cancel-in-progress: false
+
+jobs:
+  checks:
+    name: Checks
+    # ubuntu-24.04, never ubuntu-latest: the runner image's GNU coreutils and bubblewrap are what ADR 0040
+    # recorded, and a newer image would change them unseen.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    if: ${{ github.ref == 'refs/heads/main' && github.run_attempt == 1 && (github.event_name == 'schedule' || github.triggering_actor == github.repository_owner) }}
+    # Every job runs in the environment whose deployment branch policy is main alone, which holds the
+    # key pairs' public halves.
+    environment: security-audit
+    # GITHUB_TOKEN reads only: contents for the checkout and the release tag, attestations for the
+    # release-integrity rows (PR 5c). The image is public, so no
+    # packages scope, and nothing here writes.
+    permissions:
+      contents: read
+      attestations: read
+    steps:
+      - name: Check out the audited commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The main commit the run started on, never a pull request's code.
+          ref: ${{ github.sha }}
+          # No credential is left in .git/config.
+          persist-credentials: false
+          # gitleaks scans the whole history.
+          fetch-depth: 0
+        timeout-minutes: 5
+      # Row 1. The raw results of every row go to the results directory under this job's own temporary
+      # directory, never to the log: the log shows the commit and the tag alone.
+      - name: Record the audited commit and the latest release tag
+        timeout-minutes: 5
+        env:
+          # The job's token, in the step-level env: of a step that reads GitHub's API, and of no step
+          # that runs release code.
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          results="${RUNNER_TEMP}/results"
+          mkdir -p "${results}"
+          tag="$(gh api "repos/${GH_REPO}/releases/latest" --jq .tag_name)"
+          if [[ ! "${tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error title=Audit checks::the latest release's tag is no vMAJOR.MINOR.PATCH: see runbook step 11"
+            exit 1
+          fi
+          printf 'commit=%s\nrelease_tag=%s\n' "${GITHUB_SHA}" "${tag}" > "${results}/target.txt"
+          # The rows PR 5c adds: the result names each as not run, never as clean.
+          printf '%s\n' 6 7 8 9 10 11 13 14 15 > "${results}/not-run.txt"
+          echo "Audited commit ${GITHUB_SHA}, latest release ${tag}"
+      # Row 2. Every tool is pinned by version and SHA-256 (CLAUDE.md rule 7: Renovate bumps a version and
+      # its digest in one PR) and checked before it is unpacked. govulncheck is a Go module, verified by
+      # the checksum database, so it has no SHA-256 line. This step's go command fetches the Go of go.mod's
+      # go line (GOTOOLCHAIN, checksum-verified): no actions/setup-go, which would restore an Actions cache.
+      - name: Download the pinned tools and verify their checksums
+        timeout-minutes: 15
+        env:
+          # renovate: datasource=github-releases depName=gitleaks/gitleaks
+          GITLEAKS_VERSION: v8.30.1
+          # renovate: datasource=github-release-attachments depName=gitleaks/gitleaks digestVersion=v8.30.1
+          GITLEAKS_SHA256: "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb"
+          # renovate: datasource=github-releases depName=google/osv-scanner
+          OSV_SCANNER_VERSION: v2.7.1
+          # renovate: datasource=github-release-attachments depName=google/osv-scanner digestVersion=v2.7.1
+          OSV_SCANNER_SHA256: "fb7dab19a8bd9bbe5c3189f09d4b7ee1820c9553a23bac202648a56efd2f6ee8"
+          # renovate: datasource=github-releases depName=zizmorcore/zizmor
+          ZIZMOR_VERSION: v1.33.1
+          # renovate: datasource=github-release-attachments depName=zizmorcore/zizmor digestVersion=v1.33.1
+          ZIZMOR_SHA256: "3e6a301c7a820a2501915f5a9de8c0486da82bdec7965f068477538a98743d43"
+          # renovate: datasource=github-releases depName=FiloSottile/age
+          AGE_VERSION: v1.3.2
+          # renovate: datasource=github-release-attachments depName=FiloSottile/age digestVersion=v1.3.2
+          AGE_SHA256: "cbe24006683f8eb669266162894b9a522a1af52f2665fbc63a4bb032ed26ac10"
+          # Same version as security.yml's pin and govulncheckVersion in dev/lima.yaml.
+          # renovate: datasource=go depName=golang.org/x/vuln
+          GOVULNCHECK_VERSION: v1.10.0
+        run: |
+          set -euo pipefail
+          bin="${RUNNER_TEMP}/bin"
+          dl="${RUNNER_TEMP}/downloads"
+          mkdir -p "${bin}" "${dl}"
+          curl -fsSLo "${dl}/gitleaks.tar.gz" "https://github.com/gitleaks/gitleaks/releases/download/${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION#v}_linux_x64.tar.gz"
+          echo "${GITLEAKS_SHA256}  ${dl}/gitleaks.tar.gz" | sha256sum --check --strict -
+          tar -C "${bin}" -xzf "${dl}/gitleaks.tar.gz" gitleaks
+          curl -fsSLo "${dl}/osv-scanner" "https://github.com/google/osv-scanner/releases/download/${OSV_SCANNER_VERSION}/osv-scanner_linux_amd64"
+          echo "${OSV_SCANNER_SHA256}  ${dl}/osv-scanner" | sha256sum --check --strict -
+          install -m 0755 "${dl}/osv-scanner" "${bin}/osv-scanner"
+          curl -fsSLo "${dl}/zizmor.tar.gz" "https://github.com/zizmorcore/zizmor/releases/download/${ZIZMOR_VERSION}/zizmor-x86_64-unknown-linux-gnu.tar.gz"
+          echo "${ZIZMOR_SHA256}  ${dl}/zizmor.tar.gz" | sha256sum --check --strict -
+          tar -C "${bin}" -xzf "${dl}/zizmor.tar.gz" zizmor
+          curl -fsSLo "${dl}/age.tar.gz" "https://github.com/FiloSottile/age/releases/download/${AGE_VERSION}/age-${AGE_VERSION}-linux-amd64.tar.gz"
+          echo "${AGE_SHA256}  ${dl}/age.tar.gz" | sha256sum --check --strict -
+          tar -C "${dl}" -xzf "${dl}/age.tar.gz" age/age
+          install -m 0755 "${dl}/age/age" "${bin}/age"
+          GOBIN="${bin}" go install "golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}"
+          echo "${bin}" >> "${GITHUB_PATH}"
+      - name: Download the Go modules
+        timeout-minutes: 10
+        run: |
+          set -euo pipefail
+          go mod download
+          go -C tools mod download
+          # govulncheck reports standard-library vulnerabilities for the Go it runs with: go.mod's.
+          want="go$(go list -m -f '{{.GoVersion}}')"
+          if [ "$(go env GOVERSION)" != "${want}" ]; then
+            echo "::error title=Audit checks::the go command is not go.mod's ${want}: see runbook step 11"
+            exit 1
+          fi
+      # Rows 3 to 5. A finding is data for the model, not a failure of the job: each tool's output and
+      # exit code go to the results directory, and the model triages both.
+      - name: govulncheck
+        timeout-minutes: 20
+        run: |
+          set -euo pipefail
+          out="${RUNNER_TEMP}/results/govulncheck"
+          mkdir -p "${out}"
+          rc=0
+          GOFLAGS=-mod=readonly GOPROXY=off govulncheck -format json ./... > "${out}/module.json" 2> "${out}/module.stderr" || rc=$?
+          echo "${rc}" > "${out}/module.exit"
+          rc=0
+          GOFLAGS=-mod=readonly GOPROXY=off govulncheck -C tools -format json github.com/rhysd/actionlint/cmd/actionlint > "${out}/tools.json" 2> "${out}/tools.stderr" || rc=$?
+          echo "${rc}" > "${out}/tools.exit"
+      - name: osv-scanner
+        timeout-minutes: 20
+        run: |
+          set -euo pipefail
+          out="${RUNNER_TEMP}/results/osv-scanner"
+          mkdir -p "${out}"
+          rc=0
+          osv-scanner scan source --format json --lockfile go.mod --lockfile tools/go.mod > "${out}/scan.json" 2> "${out}/scan.stderr" || rc=$?
+          echo "${rc}" > "${out}/scan.exit"
+      - name: gitleaks on the history
+        timeout-minutes: 20
+        run: |
+          set -euo pipefail
+          out="${RUNNER_TEMP}/results/gitleaks"
+          mkdir -p "${out}"
+          rc=0
+          gitleaks git --redact --no-banner --log-level error --report-format json --report-path "${out}/history.json" . 2> "${out}/history.stderr" || rc=$?
+          echo "${rc}" > "${out}/history.exit"
+      - name: zizmor and actionlint
+        timeout-minutes: 15
+        env:
+          # zizmor's online audits read GitHub's API: the one read this row makes of it.
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          out="${RUNNER_TEMP}/results/workflows"
+          mkdir -p "${out}"
+          rc=0
+          zizmor --format json .github/workflows > "${out}/zizmor.json" 2> "${out}/zizmor.stderr" || rc=$?
+          echo "${rc}" > "${out}/zizmor.exit"
+          rc=0
+          # As dev/actionlint.sh runs it: tools/go.mod's actionlint, which finds .github/workflows itself.
+          GOFLAGS=-mod=readonly GOPROXY=off go tool -modfile=tools/go.mod actionlint -format '{{json .}}' > "${out}/actionlint.json" 2> "${out}/actionlint.stderr" || rc=$?
+          echo "${rc}" > "${out}/actionlint.exit"
+      # Row 16. Ciphertext alone leaves the job: anything in this job could forge one with the public
+      # half, so the model job treats what it decrypts as untrusted input.
+      - name: Encrypt the checks' results to the model key
+        timeout-minutes: 5
+        env:
+          AUDIT_MODEL_PUBLIC_KEY: ${{ vars.AUDIT_MODEL_PUBLIC_KEY }}
+        run: |
+          set -euo pipefail
+          tar -C "${RUNNER_TEMP}" -cf "${RUNNER_TEMP}/checks.tar" results
+          age --encrypt --recipient "${AUDIT_MODEL_PUBLIC_KEY}" --output "${RUNNER_TEMP}/checks-result.age" "${RUNNER_TEMP}/checks.tar"
+          echo "finished"
+      - name: Upload the checks' ciphertext
+        timeout-minutes: 5
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: checks-result
+          path: ${{ runner.temp }}/checks-result.age
+          retention-days: 1
+          if-no-files-found: error
+
+  model:
+    name: Model
+    needs: checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    if: ${{ github.ref == 'refs/heads/main' && github.run_attempt == 1 && (github.event_name == 'schedule' || github.triggering_actor == github.repository_owner) }}
+    environment: security-audit
+    # GITHUB_TOKEN reads only: contents for the checkout, actions for the artifact listing and the
+    # download. No secret is in a job's env:, and no check, container or release code runs here.
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Check out the audited commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          # The audit's copy holds the history its findings quote.
+          fetch-depth: 0
+        timeout-minutes: 5
+      # Fetches go.mod's Go (GOTOOLCHAIN, checksum-verified) and the modules: every Go command after this
+      # step runs offline.
+      - name: Download the Go modules
+        timeout-minutes: 10
+        run: |
+          set -euo pipefail
+          go mod download
+      # The CLI's version and integrity live in the one pin file, which Renovate bumps and
+      # ci/claudecodepin holds to the registry (ADR 0040); they reach the install step and the model step
+      # as this step's outputs, through env: only.
+      - name: Read the Claude Code pin
+        id: claude-code-pin
+        timeout-minutes: 5
+        run: |
+          set -euo pipefail
+          pin=.github/claude-code.yaml
+          version="$(grep -E '^version: [0-9]+\.[0-9]+\.[0-9]+$' "${pin}" || true)"
+          integrity="$(grep -E '^integrity: sha512-[A-Za-z0-9+/]{86}==$' "${pin}" || true)"
+          if [ "$(grep -c '^version:' "${pin}")" != 1 ] || [ "$(grep -c '^integrity:' "${pin}")" != 1 ] ||
+            [ -z "${version}" ] || [ -z "${integrity}" ]; then
+            echo "::error title=Claude Code pin::${pin} holds no single exact version: line and sha512 integrity: line"
+            exit 1
+          fi
+          {
+            printf 'version=%s\n' "${version#version: }"
+            printf 'integrity=%s\n' "${integrity#integrity: }"
+          } >> "${GITHUB_OUTPUT}"
+      # bubblewrap and socat, the sandbox's two programs, from the Ubuntu archive at a pinned version, each
+      # .deb checked against the SHA-256 of noble-updates' signed Packages index before dpkg -i. Renovate
+      # bumps the version (its deb datasource, .github/renovate.json5); the digest is replaced by hand in
+      # the same PR from that index. age decrypts the checks' results and encrypts the result.
+      - name: Install the pinned tools
+        timeout-minutes: 20
+        env:
+          # renovate: datasource=deb depName=bubblewrap
+          BUBBLEWRAP_VERSION: 0.9.0-1ubuntu0.3
+          # SHA-256 of bubblewrap_<version>_amd64.deb in noble-updates' Packages index.
+          BUBBLEWRAP_DEB_SHA256: "2461f1beee9cb04c8942739fe1a2b37e7b7c2a3d518f0779dc75f9245baa3094"
+          # renovate: datasource=deb depName=socat
+          SOCAT_VERSION: 1.8.0.0-4ubuntu0.1
+          # SHA-256 of socat_<version>_amd64.deb in noble-updates' Packages index.
+          SOCAT_DEB_SHA256: "46e854289b6b1c97e28be5d9293bea61e8633d00d6a65d9513f019c7232696fe"
+          # renovate: datasource=github-releases depName=FiloSottile/age
+          AGE_VERSION: v1.3.2
+          # renovate: datasource=github-release-attachments depName=FiloSottile/age digestVersion=v1.3.2
+          AGE_SHA256: "cbe24006683f8eb669266162894b9a522a1af52f2665fbc63a4bb032ed26ac10"
+          CLAUDE_CODE_PIN_VERSION: ${{ steps.claude-code-pin.outputs.version }}
+          CLAUDE_CODE_PIN_INTEGRITY: ${{ steps.claude-code-pin.outputs.integrity }}
+        run: |
+          set -euo pipefail
+          bin="${RUNNER_TEMP}/bin"
+          dl="${RUNNER_TEMP}/downloads"
+          mkdir -p "${bin}" "${dl}"
+          curl -fsSLo "${dl}/bubblewrap.deb" "https://archive.ubuntu.com/ubuntu/pool/main/b/bubblewrap/bubblewrap_${BUBBLEWRAP_VERSION}_amd64.deb"
+          echo "${BUBBLEWRAP_DEB_SHA256}  ${dl}/bubblewrap.deb" | sha256sum --check --strict -
+          curl -fsSLo "${dl}/socat.deb" "https://archive.ubuntu.com/ubuntu/pool/main/s/socat/socat_${SOCAT_VERSION}_amd64.deb"
+          echo "${SOCAT_DEB_SHA256}  ${dl}/socat.deb" | sha256sum --check --strict -
+          sudo dpkg -i "${dl}/bubblewrap.deb" "${dl}/socat.deb"
+          test -x /usr/bin/bwrap && test -x /usr/bin/socat
+          curl -fsSLo "${dl}/age.tar.gz" "https://github.com/FiloSottile/age/releases/download/${AGE_VERSION}/age-${AGE_VERSION}-linux-amd64.tar.gz"
+          echo "${AGE_SHA256}  ${dl}/age.tar.gz" | sha256sum --check --strict -
+          tar -C "${dl}" -xzf "${dl}/age.tar.gz" age/age
+          install -m 0755 "${dl}/age/age" "${bin}/age"
+          echo "${bin}" >> "${GITHUB_PATH}"
+          .github/scripts/install-claude-code.sh "${RUNNER_TEMP}/claude-code" "@anthropic-ai/claude-code-linux-x64@${CLAUDE_CODE_PIN_VERSION}" "${CLAUDE_CODE_PIN_INTEGRITY}"
+      # The runner sets kernel.apparmor_restrict_unprivileged_userns=1: this profile grants userns to
+      # /usr/bin/bwrap alone (ADR 0040, The runner's user-namespace restriction), while sudo still works.
+      - name: Load the AppArmor profile for bubblewrap
+        timeout-minutes: 5
+        run: |
+          set -euo pipefail
+          sudo apparmor_parser -r .github/security-audit/bwrap.apparmor
+      # The wrapper's option analysis assumes GNU coreutils (ADR 0040, round J): every coreutil it runs
+      # must be the GNU one.
+      - name: Check the GNU coreutils
+        timeout-minutes: 5
+        run: |
+          set -euo pipefail
+          for tool in base64 cat cut head od sha256sum sort tail tr uniq wc; do
+            version="$("/usr/bin/${tool}" --version)"
+            case "${version%%$'\n'*}" in
+              *"(GNU coreutils)"*) ;;
+              *)
+                echo "::error title=Audit model::/usr/bin/${tool} is not GNU coreutils' (ADR 0040, round J): see runbook step 11"
+                exit 1
+                ;;
+            esac
+          done
+      # main's programs, built offline from the checkout: the wrapper, installed root-owned with mode
+      # 0555 (rounds H and L), the launcher and the artifact check. The audit directory is made here,
+      # outside /home, while sudo still works: /srv and /srv/audit and bin/ root-owned, the work and state
+      # areas the runner's, as the launcher writes them.
+      - name: Build and install the audit's command wrapper
+        timeout-minutes: 10
+        run: |
+          set -euo pipefail
+          GOFLAGS=-mod=readonly GOPROXY=off go build -trimpath -o "${RUNNER_TEMP}/audit-exec" ./ci/auditexec
+          GOFLAGS=-mod=readonly GOPROXY=off go build -trimpath -o "${RUNNER_TEMP}/bin/auditrun" ./ci/auditrun
+          GOFLAGS=-mod=readonly GOPROXY=off go build -trimpath -o "${RUNNER_TEMP}/bin/auditpublish" ./ci/auditpublish
+          sudo install -d -o root -g root -m 0755 /srv /srv/audit
+          sudo install -d -o root -g root -m 0755 /srv/audit/bin
+          sudo install -o root -g root -m 0555 "${RUNNER_TEMP}/audit-exec" /srv/audit/bin/audit-exec
+          sudo chmod 0555 /srv/audit/bin
+          sudo install -d -o "$(id -u)" -g "$(id -g)" -m 0755 /srv/audit/work /srv/audit/work/tmp /srv/audit/state
+          sudo install -d -o "$(id -u)" -g "$(id -g)" -m 0700 /srv/audit/state/home /srv/audit/state/tmp /srv/audit/state/bin /srv/audit/state/out
+      # The artifact check fails closed on an extra, a duplicate, a missing or an expired artifact; the
+      # download is then bound to the listed artifact's ID and SHA-256 digest.
+      - name: List the run's artifacts and download the checks' ciphertext
+        timeout-minutes: 5
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          "${RUNNER_TEMP}/bin/auditpublish" artifacts -job model -gh /usr/bin/gh -tmp "${RUNNER_TEMP}"
+          listing="${RUNNER_TEMP}/artifacts.json"
+          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts?per_page=100" > "${listing}"
+          id="$(jq -er '[.artifacts[] | select(.name == "checks-result")] | if length == 1 then .[0].id else error("not one") end' "${listing}")"
+          digest="$(jq -er '[.artifacts[] | select(.name == "checks-result")] | .[0].digest' "${listing}")"
+          if [[ ! "${id}" =~ ^[0-9]+$ ]] || [[ ! "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error title=Audit model::checks-result has no artifact ID and SHA-256 digest: see runbook step 11"
+            exit 1
+          fi
+          gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${id}/zip" > "${RUNNER_TEMP}/checks-result.zip"
+          echo "${digest#sha256:}  ${RUNNER_TEMP}/checks-result.zip" | sha256sum --check --strict -
+          mkdir "${RUNNER_TEMP}/checks-result"
+          unzip -q "${RUNNER_TEMP}/checks-result.zip" -d "${RUNNER_TEMP}/checks-result"
+          if [ "$(ls -A "${RUNNER_TEMP}/checks-result")" != checks-result.age ]; then
+            echo "::error title=Audit model::checks-result holds more than its ciphertext: see runbook step 11"
+            exit 1
+          fi
+      # The model key's private half reaches age on stdin, never a file. The archive is untrusted: it
+      # may hold only directories and regular files under results/, none with a .. element, and it is
+      # unpacked into a root-owned directory with every write bit removed.
+      - name: Decrypt the checks' results into the audit directory
+        timeout-minutes: 5
+        env:
+          AUDIT_MODEL_PRIVATE_KEY: ${{ secrets.AUDIT_MODEL_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          printf '%s\n' "${AUDIT_MODEL_PRIVATE_KEY}" | age --decrypt --identity - --output "${RUNNER_TEMP}/checks.tar" "${RUNNER_TEMP}/checks-result/checks-result.age"
+          # Listed into files first: a grep -q that stops reading early would end tar with SIGPIPE, which
+          # pipefail would read as no match.
+          tar -tvf "${RUNNER_TEMP}/checks.tar" > "${RUNNER_TEMP}/checks.types"
+          tar -tf "${RUNNER_TEMP}/checks.tar" > "${RUNNER_TEMP}/checks.names"
+          if cut -c1 "${RUNNER_TEMP}/checks.types" | grep -v '^[-d]$' > /dev/null ||
+            grep -v '^results/' "${RUNNER_TEMP}/checks.names" > /dev/null ||
+            grep -E '(^|/)\.\.(/|$)' "${RUNNER_TEMP}/checks.names" > /dev/null; then
+            echo "::error title=Audit model::the checks' results hold an entry outside results/ or one that is no file or directory: see runbook step 11"
+            exit 1
+          fi
+          sudo install -d -o root -g root -m 0755 /srv/audit/checks
+          sudo tar -C /srv/audit/checks --no-same-owner --no-same-permissions -xf "${RUNNER_TEMP}/checks.tar"
+          sudo chmod -R a-w,a+rX /srv/audit/checks
+          echo "finished"
+      # The checkout, .git included, copied whole: the runner's user keeps it, since git refuses a
+      # repository another user owns, and the sandbox's write allow list, which names neither tree, is
+      # what holds it against its owner (round L).
+      - name: Copy the checkout into the audit directory
+        timeout-minutes: 10
+        run: |
+          set -euo pipefail
+          sudo install -d -o "$(id -u)" -g "$(id -g)" -m 0755 /srv/audit/checkout
+          cp -a "${GITHUB_WORKSPACE}/." /srv/audit/checkout/
+          chmod -R a-w /srv/audit/checkout
+      # Model-free, while sudo still works and before the sandbox preflight: no Docker socket, no sudo
+      # rule for the runner's user, and the owners the launcher cannot check itself (rounds H and L).
+      - name: Stop Docker and remove the runner user's sudo rule
+        timeout-minutes: 5
+        run: |
+          set -euo pipefail
+          sudo systemctl stop docker.service docker.socket
+          sudo systemctl disable docker.service docker.socket
+          owners="$(stat -c '%U:%G %a %n' /srv /srv/audit /srv/audit/bin /srv/audit/bin/audit-exec /srv/audit/checks)"
+          want="$(printf '%s\n' 'root:root 755 /srv' 'root:root 755 /srv/audit' 'root:root 555 /srv/audit/bin' 'root:root 555 /srv/audit/bin/audit-exec' 'root:root 555 /srv/audit/checks')"
+          if [ "${owners}" != "${want}" ]; then
+            echo "::error title=Sandbox::the audit directory's owners or modes are not as laid out: see runbook step 10"
+            exit 1
+          fi
+          sudo rm -f /etc/sudoers.d/runner
+          if sudo -n true 2> /dev/null; then
+            echo "::error title=Sandbox::sudo still works: see runbook step 10"
+            exit 1
+          fi
+          if [ -e /var/run/docker.sock ]; then
+            echo "::error title=Sandbox::the Docker socket is still there: see runbook step 10"
+            exit 1
+          fi
+      # The launcher refuses managed settings, checks the CLI's tarball against the one pin, checks the
+      # audit directory, starts bubblewrap, runs the sandbox preflight and then the audit, whose
+      # transcript and stderr stay in /srv/audit/state/out, never in the log. It prints one line. The
+      # canary is made here, for this run alone: one in the workflow's text would be in the checkout the
+      # model reads.
+      - name: Run the audit in Claude Code's sandbox
+        timeout-minutes: 90
+        env:
+          # The subscription token, in this step alone: the launcher hands the CLI an environment of its
+          # own, and the preflight proves no tool call can read it.
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          CLAUDE_CODE_PIN_INTEGRITY: ${{ steps.claude-code-pin.outputs.integrity }}
+        run: |
+          set -euo pipefail
+          SHIFT2EU_AUDIT_CANARY="$(od -An -N32 -tx1 /dev/urandom | tr -d ' \n')"
+          export SHIFT2EU_AUDIT_CANARY
+          "${RUNNER_TEMP}/bin/auditrun" -claude-tarball "${RUNNER_TEMP}/claude-code/claude-code.tgz" -claude-integrity "${CLAUDE_CODE_PIN_INTEGRITY}"
+      - name: Encrypt the audit's result to the publish key
+        timeout-minutes: 5
+        env:
+          AUDIT_PUBLISH_PUBLIC_KEY: ${{ vars.AUDIT_PUBLISH_PUBLIC_KEY }}
+        run: |
+          set -euo pipefail
+          age --encrypt --recipient "${AUDIT_PUBLISH_PUBLIC_KEY}" --output "${RUNNER_TEMP}/model-result.age" /srv/audit/work/result.json
+          echo "finished"
+      - name: Upload the model's ciphertext
+        timeout-minutes: 5
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: model-result
+          path: ${{ runner.temp }}/model-result.age
+          retention-days: 1
+          if-no-files-found: error
+
+  publish:
+    name: Publish
+    needs: model
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    if: ${{ github.ref == 'refs/heads/main' && github.run_attempt == 1 && (github.event_name == 'schedule' || github.triggering_actor == github.repository_owner) }}
+    environment: security-audit
+    # GITHUB_TOKEN reads only: contents for the checkout, actions for the
+    # artifacts, attestations for the image check. The audit App's token writes.
+    permissions:
+      contents: read
+      actions: read
+      attestations: read
+    steps:
+      - name: Check out the audited commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+        timeout-minutes: 5
+      # gitleaks for the publish job's own scan, age, and main's publish program, built offline once this
+      # step's go mod download has fetched go.mod's Go.
+      - name: Download the pinned tools and verify their checksums
+        timeout-minutes: 10
+        env:
+          # renovate: datasource=github-releases depName=gitleaks/gitleaks
+          GITLEAKS_VERSION: v8.30.1
+          # renovate: datasource=github-release-attachments depName=gitleaks/gitleaks digestVersion=v8.30.1
+          GITLEAKS_SHA256: "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb"
+          # renovate: datasource=github-releases depName=FiloSottile/age
+          AGE_VERSION: v1.3.2
+          # renovate: datasource=github-release-attachments depName=FiloSottile/age digestVersion=v1.3.2
+          AGE_SHA256: "cbe24006683f8eb669266162894b9a522a1af52f2665fbc63a4bb032ed26ac10"
+        run: |
+          set -euo pipefail
+          bin="${RUNNER_TEMP}/bin"
+          dl="${RUNNER_TEMP}/downloads"
+          mkdir -p "${bin}" "${dl}"
+          curl -fsSLo "${dl}/gitleaks.tar.gz" "https://github.com/gitleaks/gitleaks/releases/download/${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION#v}_linux_x64.tar.gz"
+          echo "${GITLEAKS_SHA256}  ${dl}/gitleaks.tar.gz" | sha256sum --check --strict -
+          tar -C "${bin}" -xzf "${dl}/gitleaks.tar.gz" gitleaks
+          curl -fsSLo "${dl}/age.tar.gz" "https://github.com/FiloSottile/age/releases/download/${AGE_VERSION}/age-${AGE_VERSION}-linux-amd64.tar.gz"
+          echo "${AGE_SHA256}  ${dl}/age.tar.gz" | sha256sum --check --strict -
+          tar -C "${dl}" -xzf "${dl}/age.tar.gz" age/age
+          install -m 0755 "${dl}/age/age" "${bin}/age"
+          go mod download
+          GOFLAGS=-mod=readonly GOPROXY=off go build -trimpath -o "${bin}/auditpublish" ./ci/auditpublish
+          echo "${bin}" >> "${GITHUB_PATH}"
+      - name: List the run's artifacts and download the model's ciphertext
+        timeout-minutes: 5
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          "${RUNNER_TEMP}/bin/auditpublish" artifacts -job publish -gh /usr/bin/gh -tmp "${RUNNER_TEMP}"
+          listing="${RUNNER_TEMP}/artifacts.json"
+          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts?per_page=100" > "${listing}"
+          id="$(jq -er '[.artifacts[] | select(.name == "model-result")] | if length == 1 then .[0].id else error("not one") end' "${listing}")"
+          digest="$(jq -er '[.artifacts[] | select(.name == "model-result")] | .[0].digest' "${listing}")"
+          if [[ ! "${id}" =~ ^[0-9]+$ ]] || [[ ! "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error title=Audit publish::model-result has no artifact ID and SHA-256 digest: see runbook step 11"
+            exit 1
+          fi
+          gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${id}/zip" > "${RUNNER_TEMP}/model-result.zip"
+          echo "${digest#sha256:}  ${RUNNER_TEMP}/model-result.zip" | sha256sum --check --strict -
+          mkdir "${RUNNER_TEMP}/model-result"
+          unzip -q "${RUNNER_TEMP}/model-result.zip" -d "${RUNNER_TEMP}/model-result"
+          if [ "$(ls -A "${RUNNER_TEMP}/model-result")" != model-result.age ]; then
+            echo "::error title=Audit publish::model-result holds more than its ciphertext: see runbook step 11"
+            exit 1
+          fi
+      # The publish key's private half reaches age on stdin, never a file. A ciphertext that does not
+      # decrypt fails the run here, with nothing written.
+      - name: Decrypt the model's result
+        timeout-minutes: 5
+        env:
+          AUDIT_PUBLISH_PRIVATE_KEY: ${{ secrets.AUDIT_PUBLISH_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          printf '%s\n' "${AUDIT_PUBLISH_PRIVATE_KEY}" | age --decrypt --identity - --output "${RUNNER_TEMP}/result.json" "${RUNNER_TEMP}/model-result/model-result.age"
+          echo "finished"
+      - name: Check the image digest and its release
+        timeout-minutes: 10
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          "${RUNNER_TEMP}/bin/auditpublish" image -result "${RUNNER_TEMP}/result.json" -gh /usr/bin/gh -tmp "${RUNNER_TEMP}"
+      # The image digest is trusted only once gh attestation verify accepts the release workflow's
+      # provenance for exactly that digest and tag, its Sigstore signature included (ADR 0040, The image
+      # check's residual risk). The result is the model's: its tag and digest are held to their shapes
+      # before they reach a command line.
+      - name: Verify the image's provenance attestation
+        timeout-minutes: 10
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          image="ghcr.io/${GITHUB_REPOSITORY,,}"
+          digest="$(jq -er '.image_digest' "${RUNNER_TEMP}/result.json")"
+          tag="$(jq -er '.release_tag' "${RUNNER_TEMP}/result.json")"
+          if [[ ! "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]] || [[ ! "${tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error title=Audit publish::the result's image digest or release tag is malformed: see runbook step 11"
+            exit 1
+          fi
+          if ! gh attestation verify "oci://${image}@${digest}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --signer-workflow "${GITHUB_REPOSITORY}/.github/workflows/release.yml" \
+            --source-ref "refs/tags/${tag}" \
+            --deny-self-hosted-runners > /dev/null; then
+            echo "::error title=Audit publish::the image has no provenance attestation from the release workflow at that tag: see runbook step 11"
+            exit 1
+          fi
+          echo "image provenance: as expected"
+      # The audit App's token, minted here alone and narrowed to Decision 1's four permissions.
+      - name: Mint the audit App's token
+        timeout-minutes: 5
+        id: app
+        uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3.4.0
+        with:
+          client-id: ${{ vars.AUDIT_APP_CLIENT_ID }}
+          private-key: ${{ secrets.AUDIT_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+          permission-issues: write
+          permission-security-events: write
+      # gitleaks over the text about to be sent, on stdin, ignoring any allow comment in it; the publish
+      # program scans every text it renders again before its first write.
+      - name: Scan the text it is about to publish
+        timeout-minutes: 10
+        run: |
+          set -euo pipefail
+          if ! gitleaks stdin --ignore-gitleaks-allow --redact --no-banner --log-level error < "${RUNNER_TEMP}/result.json" > /dev/null 2>&1; then
+            echo "::error title=Audit publish::gitleaks refused the result: see runbook step 11"
+            exit 1
+          fi
+      - name: Publish the report
+        timeout-minutes: 20
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          AUDIT_FINGERPRINT_KEY: ${{ secrets.AUDIT_FINGERPRINT_KEY }}
+        run: |
+          set -euo pipefail
+          "${RUNNER_TEMP}/bin/auditpublish" publish -result "${RUNNER_TEMP}/result.json" -reports docs/security/audits -gh /usr/bin/gh -gitleaks "${RUNNER_TEMP}/bin/gitleaks" -tmp "${RUNNER_TEMP}"

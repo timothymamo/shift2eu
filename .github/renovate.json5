@@ -149,6 +149,18 @@
       ],
     },
     {
+      // The scheduled audit's model job installs bubblewrap and socat from the Ubuntu 24.04 archive at a
+      // pinned version, each .deb checked against a SHA-256 Renovate cannot update (PRD #175, ADR 0040).
+      // The deb datasource reads noble-updates' index, the suite the pins come from.
+      description: 'Scheduled audit: bubblewrap and socat from Ubuntu noble-updates, with the .deb SHA-256 updated by hand in the same PR',
+      matchDatasources: ['deb'],
+      matchDepNames: ['bubblewrap', 'socat'],
+      registryUrls: ['https://archive.ubuntu.com/ubuntu?suite=noble-updates&components=main&binaryArch=amd64'],
+      prBodyNotes: [
+        '**Before merging:** replace the `*_DEB_SHA256` beside the bumped version in `.github/workflows/scheduled-security-audit.yml` with the `SHA256:` of the same `Filename:` in `https://archive.ubuntu.com/ubuntu/dists/noble-updates/main/binary-amd64/Packages.gz`, after checking that index against the `InRelease` file and its signature (`gpgv --keyring /usr/share/keyrings/ubuntu-archive-keyring.gpg InRelease`). The audit\'s model job fails until the digest matches the .deb it downloads.',
+      ],
+    },
+    {
       // A digest update keeps the tag: the release asset behind an existing gh or cosign tag was replaced.
       // That is how a compromised release looks, so it gets a PR of its own that is never automerged.
       // Defence in depth only: the github-release-attachments datasource (Renovate 44) keeps the pinned
@@ -186,6 +198,8 @@
         '/^\\.github/workflows/vm-tools\\.yml$/',
         // ci.yml's lint-shell job pins the shellcheck release the VM does.
         '/^\\.github/workflows/ci\\.yml$/',
+        // The scheduled audit's tools: gitleaks, osv-scanner, zizmor and age (PRD #175, ADR 0040).
+        '/^\\.github/workflows/scheduled-security-audit\\.yml$/',
         // The OpenTofu release dev/tofu.sh runs, by a SHA-256 per platform (issue #422).
         '/^infra/tofu\\.yaml$/',
       ],
@@ -206,7 +220,7 @@
       managerFilePatterns: [
         '/^dev/lima\\.yaml$/',
         '/^dev/testdata/lima-invalid/[^/]+\\.yaml$/',
-        '/^\\.github/workflows/(?:ci|release|security|vm-tools)\\.ya?ml$/',
+        '/^\\.github/workflows/(?:ci|release|scheduled-security-audit|security|vm-tools)\\.ya?ml$/',
         '/^\\.github/claude-code\\.yaml$/',
         '/^infra/tofu\\.yaml$/',
       ],

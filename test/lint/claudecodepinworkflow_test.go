@@ -1179,6 +1179,10 @@ func claudeCodePinNoSameNamedJob(t *testing.T, root, path string) {
 //   - .github/workflows/claude-code-pin.yml, the check's workflow, which names
 //     the pin file and the installer in its paths:, in the case of its changes
 //     step and in the comment that explains them.
+//   - .github/workflows/scheduled-security-audit.yml, the audit's workflow,
+//     whose model job installs the same CLI from the same file (PRD #175
+//     milestone 2, ADR 0040): TestEveryWorkflowThatInstallsTheCLIReadsTheOnePinFile
+//     holds it to the pin file as it holds the reviewer's.
 //
 // Nothing else under .github/workflows, .github/scripts and .github/actions may
 // hold them.
@@ -1187,6 +1191,7 @@ var claudeCodePinPinNamingFiles = []string{
 	aiReviewWorkflowPath,
 	aiReviewInstallScript,
 	claudeCodePinWorkflowPath,
+	claudeCodeAuditWorkflowPath,
 }
 
 // claudeCodePinPinNamingStrings are the strings that name the Claude Code pin: a
