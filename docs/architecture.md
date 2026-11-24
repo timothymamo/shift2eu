@@ -110,7 +110,13 @@ Arrows are imports. They point inwards only:
   the reproducible, attested bundle. `test/browser`, behind `browser && !js`, drives the built bundle in a
   headless Chromium with `chromedp`, which depguard confines to it (`chromedp-only-in-the-browser-test`,
   `browser-smoke-test`); `make test-browser` runs it against a container pinned by digest, with DevTools on
-  127.0.0.1 only, on a port the kernel picks per run, and CI runs it as its own job.
+  127.0.0.1 only, on a port the kernel picks per run, and CI runs it as its own job. `test/sitefront`
+  tests the site's front (PRD #297 milestone 4, ADR 0045): its static test, under `make test`, pins
+  `infra/site/Caddyfile`, and its behaviour test, behind `sitefront && !js`, runs the Caddy image
+  `infra/site/container.tf` pins against a local HTTPS upstream; `make test-sitefront` runs it, outside
+  `make check` (host network, port 8080, one run at a time). Its test files are held to named standard
+  packages and no package of the module (`sitefront-behaviour-test`); its one production file, `doc.go`,
+  imports nothing (`sitefront-test-doc`, as `browser-smoke-test-doc` holds `test/browser`'s).
 - **The other CI tooling** is no part of the product either: main packages under `ci/`, which Go refuses
   to import, with their libraries under `internal/` directories that Go's internal rule keeps out of reach
   of `cmd/` and `internal/`, each held to named standard packages by strict rules of its own. `ci/aireview`
