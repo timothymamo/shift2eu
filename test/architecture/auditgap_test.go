@@ -791,6 +791,16 @@ func TestHasScheduleTrigger(t *testing.T) {
 			want:     true,
 		},
 		{
+			// YAML lets a block sequence sit at its key's own indent, so the
+			// triggers mapping may be written as an on: key and a - line below
+			// it at the same column. GitHub reads the sequence as the on: value,
+			// and its schedule item as a trigger: a reader that took the - line
+			// for the next top-level key saw no schedule at all.
+			name:     "a block sequence at the on key's own indent",
+			workflow: "on:\n- schedule\n",
+			want:     true,
+		},
+		{
 			name:     "a schedule key with a trailing comment",
 			workflow: "on:\n  schedule: # the monthly cron, milestone 3\n    - cron: '17 4 3 * *'\n",
 			want:     true,
