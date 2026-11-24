@@ -1602,6 +1602,51 @@ func TestFor(t *testing.T) {
 			wantMonthly: "20.00",
 		},
 		{
+			// A tie of equal price is broken by memory alone, not by vCPUs: the
+			// plan with less memory wins though it has more vCPUs, and though the
+			// other has fewer.
+			name:     "cache.redis: a price tie ignores vCPUs and goes to the plan with less memory",
+			resource: cacheResource(&inventory.Size{MemoryGiB: f(8)}, nil),
+			offerings: []catalog.Offering{cacheOffering("Example Cache",
+				cachePlan("CACHE-16", 1, 16, 200000),
+				cachePlan("CACHE-8", 4, 8, 200000))},
+			region: testutil.PricedDefaultRegion,
+			want: estimate.Estimate{
+				Region:       testutil.PricedDefaultRegion,
+				Estimated:    true,
+				Offering:     "Example Cache",
+				Plan:         pricedPlan("CACHE-8", 4, 8000, 0, 200000),
+				Monthly:      estimate.FromAmount(200000),
+				Breakdown:    estimate.Breakdown{Plan: estimate.FromAmount(200000)},
+				CountAssumed: true,
+				HoursAssumed: true,
+			},
+			wantMonthly: "20.00",
+		},
+		{
+			// Hours scale a cache's plan price as they scale any plan price: half
+			// a month of 730 hours costs half the per-node monthly price of each
+			// of the two nodes.
+			name: "cache.redis: usage hoursPerMonth scale the per-node plan price",
+			resource: cacheResource(&inventory.Size{MemoryGiB: f(8), Count: n(2)},
+				&inventory.Usage{HoursPerMonth: f(365)}),
+			offerings: []catalog.Offering{cacheOffering("Example Cache",
+				cachePlan("CACHE-8", 0, 8, 200000))},
+			region: testutil.PricedDefaultRegion,
+			want: estimate.Estimate{
+				Region:    testutil.PricedDefaultRegion,
+				Estimated: true,
+				Offering:  "Example Cache",
+				Plan:      pricedPlan("CACHE-8", 0, 8000, 0, 200000),
+				// 20.00 × 365/730 × 2 nodes = 20.00.
+				Monthly:   estimate.FromAmount(200000),
+				Breakdown: estimate.Breakdown{Plan: estimate.FromAmount(200000)},
+			},
+			wantMonthly:   "20.00",
+			wantExact:     "20",
+			wantPlanExact: "20",
+		},
+		{
 			// With memory and price equal, the plan name decides before the
 			// offering name: plan AAA of the offering that sorts last wins.
 			name:     "cache.redis: a tie of memory and price goes to the plan name",
@@ -1643,6 +1688,45 @@ func TestFor(t *testing.T) {
 				Reason:   estimate.NoPlanLargeEnough,
 				Offering: "Example Cache",
 				Largest:  pricedPlan("CACHE-8", 0, 8000, 0, 200000),
+			},
+		},
+		{
+			// The plan named as the largest is the one with most memory, not the
+			// one with most vCPUs: a cache is matched and ordered on memory alone.
+			name:     "cache.redis: no plan large enough names the plan with most memory, not most vCPUs",
+			resource: cacheResource(&inventory.Size{MemoryGiB: f(32)}, nil),
+			offerings: []catalog.Offering{cacheOffering("Example Cache",
+				cachePlan("A", 8, 4, 300000),
+				cachePlan("B", 1, 8, 200000))},
+			region: testutil.PricedDefaultRegion,
+			want: estimate.Estimate{
+				Region:   testutil.PricedDefaultRegion,
+				Reason:   estimate.NoPlanLargeEnough,
+				Offering: "Example Cache",
+				Largest:  pricedPlan("B", 1, 8000, 0, 200000),
+			},
+		},
+		{
+			// No covering plan is priced in the region: the plan named is the first
+			// in the plan order, by less memory, plan name and offering name, and
+			// its vCPUs take no part (ADR 0045).
+			name:     "cache.redis: no price names the covering plan with less memory",
+			resource: cacheResource(&inventory.Size{MemoryGiB: f(8)}, nil),
+			offerings: []catalog.Offering{{
+				Name:       "Example Cache",
+				Categories: []taxonomy.Category{taxonomy.CacheRedis},
+				Regions:    []string{testutil.PricedDefaultRegion, testutil.ReportSecondRegion},
+				Plans: []catalog.Plan{
+					plan("CACHE-8", 4, 8000, 0, 200000, testutil.ReportSecondRegion),
+					plan("CACHE-16", 1, 16000, 0, 300000, testutil.ReportSecondRegion),
+				},
+			}},
+			region: testutil.PricedDefaultRegion,
+			want: estimate.Estimate{
+				Region:   testutil.PricedDefaultRegion,
+				Reason:   estimate.NoPrice,
+				Offering: "Example Cache",
+				Plan:     unpricedPlan("CACHE-8", 4, 8000, 0),
 			},
 		},
 		{
