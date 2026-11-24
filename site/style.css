@@ -334,6 +334,32 @@ summary:focus-visible,
   font-size: 1.125rem;
 }
 
+/* The About page's title sits beside the maintainer's avatar, an inline SVG
+   portrait sized here because the policy allows no style attribute (issue
+   #528); on a phone they wrap under each other. */
+.about-hero {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 1rem 1.5rem;
+}
+
+.about-hero h1 {
+  margin-bottom: 0.25rem;
+}
+
+.about-hero .lead {
+  margin: 0;
+}
+
+.avatar {
+  flex: none;
+  width: 7.5rem;
+  height: 7.5rem;
+  border-radius: 50%;
+  box-shadow: var(--shadow-1);
+}
+
 .muted {
   color: var(--muted);
 }
