@@ -171,7 +171,7 @@ resource "scaleway_edge_services_tls_stage" "site" {
     # A replacement (R8's recreate) must create the new stage and repoint the DNS stage before deleting
     # the old one: Scaleway refuses to delete a TLS stage the DNS stage references (issue #541).
     create_before_destroy = true
-  } # lifecycle (issue #541)
+  }
 }
 
 # Edge Services serves only a subdomain (Hosting decision 1): www, never the apex.
