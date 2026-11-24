@@ -154,9 +154,43 @@ func TestCITestJobNode(t *testing.T) {
 		// wantIn is a part of a message the check has to return; "" means no
 		// message at all.
 		wantIn string
+		// wantAlso is another part the messages together must hold, "" for no
+		// second part.
+		wantAlso string
 	}{
 		{name: "ci.yml as it is"},
 		{name: "CRLF line ends", workflow: strings.ReplaceAll(doc, "\n", "\r\n")},
+
+		// The workflow's top level: ci.yml sets no default shell and no
+		// environment there, and either one reaches the Test job's steps
+		// whatever the job itself declares (issue #554).
+		{
+			name:     "a top-level defaults that makes every run step a no-op",
+			workflow: in("jobs:\n", "defaults:\n  run:\n    shell: \"true {0}\"\njobs:\n"),
+			wantIn:   "ci.yml's top level",
+			wantAlso: "defaults:",
+		},
+		{
+			name:     "a top-level defaults in flow form",
+			workflow: in("jobs:\n", "defaults: {run: {shell: \"true {0}\"}}\njobs:\n"),
+			wantIn:   "ci.yml's top level",
+			wantAlso: "defaults:",
+		},
+		{
+			// BASH_ENV names a script the shell sources before every run step,
+			// so a top-level one would run in the Test job's steps whatever they
+			// hold.
+			name:     "a top-level env with BASH_ENV",
+			workflow: in("jobs:\n", "env:\n  BASH_ENV: .github/scripts/noop.sh\njobs:\n"),
+			wantIn:   "ci.yml's top level",
+			wantAlso: "env:",
+		},
+		{
+			name:     "a top-level env with ENV",
+			workflow: in("jobs:\n", "env:\n  ENV: .github/scripts/noop.sh\njobs:\n"),
+			wantIn:   "ci.yml's top level",
+			wantAlso: "env:",
+		},
 
 		// The job itself: a missing job, a missing steps: list, and the two keys
 		// that decide whether it runs and whether its failure fails the run.
@@ -194,6 +228,37 @@ func TestCITestJobNode(t *testing.T) {
 			name:     "a test job that quotes continue-on-error",
 			workflow: jobLines(`"continue-on-error": true`),
 			wantIn:   "ci.yml's test job holds continue-on-error:",
+		},
+
+		// The job's key set is closed to the keys ci.yml's test job holds
+		// today: any key beyond them can make its steps no-ops, or skip the job,
+		// while CI stays green (issue #554).
+		{
+			name:     "a test job with a default shell that no-ops its run steps",
+			workflow: jobKey("defaults", `{run: {shell: "true {0}"}}`),
+			wantIn:   "ci.yml's test job holds defaults:",
+		},
+		{
+			name:     "a test job whose default shell sits in a block",
+			workflow: jobLines("defaults:", "  run:", "    shell: true {0}"),
+			wantIn:   "ci.yml's test job holds defaults:",
+		},
+		{
+			name:     "a test job whose env: points at a script",
+			workflow: jobLines("env:", "  BASH_ENV: .github/scripts/noop.sh"),
+			wantIn:   "ci.yml's test job holds env:",
+		},
+		{
+			name:     "a test job that needs another job",
+			workflow: jobKey("needs", "lint-target"),
+			wantIn:   "ci.yml's test job holds needs:",
+		},
+		{
+			// A key the check never lists is refused too: the keys the job may
+			// hold are closed, not a list of the ones an edit could abuse.
+			name:     "a test job with a key the check never lists",
+			workflow: jobKey("build-script", ".github/scripts/verify-archives.sh"),
+			wantIn:   "ci.yml's test job holds build-script:",
 		},
 
 		// The step that reads dev/lima.yaml's nodeVersion: the pin of the Node,
@@ -427,6 +492,10 @@ func TestCITestJobNode(t *testing.T) {
 
 			if !slices.ContainsFunc(messages, func(message string) bool { return strings.Contains(message, tc.wantIn) }) {
 				t.Errorf("CITestJobNode(the %s copy of ci.yml) = %q, want a message holding %q: this is the break the case makes, so a check that does not name it does not see it (issue #554)", tc.name, messages, tc.wantIn)
+			}
+
+			if joined := strings.Join(messages, "\n"); tc.wantAlso != "" && !strings.Contains(joined, tc.wantAlso) {
+				t.Errorf("CITestJobNode(the %s copy of ci.yml) = %q, want its messages to name %q too (issue #554)", tc.name, messages, tc.wantAlso)
 			}
 		})
 	}
