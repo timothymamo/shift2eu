@@ -2,7 +2,8 @@
 // rule 3, issue #540).
 //
 // The tester runs pi with --approve, so nothing asks it for permission: the
-// only layer between it and an API key in its pane is the refusal pinned here.
+// refusal pinned here is the second layer, after the words of CLAUDE.md rule 3,
+// between it and an API key in its pane, not a boundary (ADR 0044).
 // On 2026-11-24 a tester ran `env | grep` while looking for its scratchpad
 // directory and printed DEEPSEEK_API_KEY, which then had to be rotated.
 //
