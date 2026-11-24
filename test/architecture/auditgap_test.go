@@ -40,44 +40,64 @@ const (
 	gapThresholdDays = 38
 )
 
-// scheduleWord matches the schedule trigger's name as a whole word inside an
-// inline on: value, so a flow mapping, a flow sequence and a scalar are read,
-// and a name that merely starts with schedule is not.
+// scheduleWord matches the schedule trigger's name as a whole word inside a
+// line of the on: value, so a block key, a flow mapping, a flow sequence and a
+// scalar are read, and a name that merely starts with schedule is not.
 var scheduleWord = regexp.MustCompile(`(^|[^A-Za-z0-9_-])schedule([^A-Za-z0-9_-]|$)`)
 
-// hasScheduleTrigger reports whether a workflow holds a schedule trigger under
-// its top-level on: key, in the block or the flow style GitHub accepts; the
-// key and the trigger may be bare, double-quoted or single-quoted, and the
-// trigger may carry a trailing comment. It reads no YAML: the check needs one
-// key of the document and the module has no YAML package. A line inside a
-// comment or a run: block of the block style is never a trigger, since only a
-// nested line of a top-level on: mapping is read.
+// hasScheduleTrigger reports whether a workflow may hold a schedule trigger
+// under its top-level on: key. It reads no YAML (the check needs one key of
+// the document and the module has no YAML package) and fails closed by
+// construction: it never decides what form the on: value takes, it matches
+// the schedule word against every line of that value, so no form of the key
+// or the value GitHub accepts can hide a schedule.
 //
-// A flow mapping or sequence may span several lines, and it is read fail
-// closed by construction: once a top-level on: opens a `{` or a `[`, every
-// line up to the next top-level key (indent 0, not starting with `}` or `]`)
-// or the end of the file is matched against the schedule word, whatever its
-// brackets, quotes and comments, so that no misread quote or bracket can hide
-// a schedule inside the value. The bracket depth is counted only to tell an
-// unclosed value: a quote opens a quoted scalar only where a scalar starts
-// (the value's start, or after a `{`, a `[`, a `,` or a `:` and blanks), so an
-// apostrophe inside a plain scalar such as what's is text, and a # after a
-// blank outside a quoted scalar starts a comment.
+// A leading byte order mark is dropped. The root key column is the indent of
+// the document's first content line (no blank, no comment), read afresh after
+// each document marker (--- or ... at column 0), so a root mapping indented as
+// a whole is read like one at column 0. The top-level on key is a line at the
+// root column that reads on, "on" or 'on', after an optional explicit-key
+// `? ` and before optional blanks and a colon (the colon may be missing only
+// after `? `). Its value is every line from the key's line up to the next line
+// at or left of the root column, the next top-level key, or the end of the
+// document; a line there that starts with `:` (an explicit key's value), `}`
+// or `]`, and a comment, ends nothing. On the key's line the value after the
+// colon is matched, its comment removed; below it every line that is no
+// comment is matched, whatever the value starts with: a block mapping, an
+// anchor or a tag, a scalar, or a flow mapping or sequence on the key's line
+// or the next. Lines under jobs: are never read, since jobs: is the next
+// top-level key, so a run: script naming schedule is no trigger, and neither
+// is a comment that names it.
 //
-// It reports a schedule as well for a flow value that is malformed: one never
-// closed before the next top-level key or the end of the file, and one closed
-// with a further non-comment line before the next top-level key, since nothing
-// can tell what triggers such a document holds and no unbalanced bracket may
-// make the gap check pass.
+// A flow mapping or sequence (the value, after its anchor or tag, starts with
+// `{` or `[`) is read stricter still: the key's whole line is matched, its
+// comment included, and so is every line of the value, comments included.
+// Its bracket depth is counted only to tell a malformed value: a quote opens
+// a quoted scalar only where a scalar starts (the value's start, or after a
+// `{`, a `[`, a `,` or a `:` and blanks), so an apostrophe inside a plain
+// scalar such as what's is text, and a # after a blank outside a quoted scalar
+// starts a comment. A flow value never closed before the next top-level key or
+// the end of the document, or closed with a further non-comment line before
+// it, is reported as a schedule, since nothing can tell what triggers such a
+// document holds and no unbalanced bracket may make the gap check pass.
 func hasScheduleTrigger(workflow []byte) bool {
-	onBlock := false
+	// The byte order mark U+FEFF, in UTF-8.
+	text := strings.TrimPrefix(string(workflow), "\xef\xbb\xbf")
 
-	// flow is the flow value of the top-level on: key while its lines are
-	// read, nil outside it: its bracket depth, quote state and whether it
-	// closed.
+	// rootColumn is the indent of the document's top-level keys, -1 until
+	// its first content line.
+	rootColumn := -1
+
+	// inOn is set while the lines of the top-level on: key's value are read;
+	// valueStarted once the value's first content is read, so that a flow
+	// value is told apart from a block one.
+	inOn, valueStarted := false, false
+
+	// flow is the on: key's flow value while its lines are read, nil
+	// otherwise: its bracket depth, quote state and whether it closed.
 	var flow *flowValue
 
-	for _, line := range strings.Split(string(workflow), "\n") {
+	for _, line := range strings.Split(text, "\n") {
 		line = strings.TrimRight(line, " \t\r")
 
 		trimmed := strings.TrimSpace(line)
@@ -85,23 +105,42 @@ func hasScheduleTrigger(workflow []byte) bool {
 			continue
 		}
 
-		indented := len(line) - len(strings.TrimLeft(line, " "))
+		indent := len(line) - len(strings.TrimLeft(line, " "))
+		comment := strings.HasPrefix(trimmed, "#")
 
-		if flow != nil {
-			if indented == 0 && !strings.HasPrefix(trimmed, "}") && !strings.HasPrefix(trimmed, "]") {
-				// The next top-level key ends the on: value: an unclosed
-				// one is malformed.
-				if !flow.closed {
-					return true
-				}
+		if indent == 0 && isDocumentMarker(trimmed) {
+			// The document ends, and the on: value with it.
+			if flow != nil && !flow.closed {
+				return true
+			}
 
-				flow = nil
-			} else {
+			rootColumn, inOn, valueStarted, flow = -1, false, false, nil
+
+			continue
+		}
+
+		if rootColumn < 0 {
+			if comment {
+				continue
+			}
+
+			rootColumn = indent
+		}
+
+		if inOn && endsTheOnValue(trimmed, indent, rootColumn) {
+			// The next top-level key: an unclosed flow value is malformed.
+			if flow != nil && !flow.closed {
+				return true
+			}
+
+			inOn, flow = false, nil
+		}
+
+		if inOn {
+			if flow != nil {
 				if scheduleWord.MatchString(trimmed) {
 					return true
 				}
-
-				comment := strings.HasPrefix(trimmed, "#")
 
 				switch {
 				case flow.closed && !comment:
@@ -115,58 +154,117 @@ func hasScheduleTrigger(workflow []byte) bool {
 
 				continue
 			}
-		}
 
-		if strings.HasPrefix(trimmed, "#") {
-			continue
-		}
+			if comment {
+				continue
+			}
 
-		if onBlock && indented > 0 {
-			if isScheduleKey(trimmed) {
+			if scheduleWord.MatchString(trimmed) {
 				return true
+			}
+
+			if !valueStarted {
+				// The value's first content below the key: an explicit
+				// key's `:`, an anchor and a tag are no part of it.
+				rest := stripProperties(inlineValue(strings.TrimPrefix(trimmed, ":")))
+				if rest == "" {
+					continue
+				}
+
+				valueStarted = true
+
+				if startsAFlowValue(rest) {
+					flow = &flowValue{}
+					flow.closed = flow.add(rest)
+				}
 			}
 
 			continue
 		}
 
-		// A line at the top level ends the on: mapping, if one is open.
-		onBlock = false
-
-		if indented != 0 {
+		if comment || indent != rootColumn {
 			continue
 		}
 
-		value, ok := topLevelOn(line)
+		value, ok := topLevelOn(trimmed)
 		if !ok {
 			continue
 		}
 
-		if value == "" {
-			onBlock = true
+		inOn, valueStarted = true, false
 
-			continue
-		}
+		value = stripProperties(value)
 
-		if strings.HasPrefix(value, "{") || strings.HasPrefix(value, "[") {
+		switch {
+		case value == "":
+		case startsAFlowValue(value):
 			// The whole on: line is matched, its comment included: fail
 			// closed.
 			if scheduleWord.MatchString(line) {
 				return true
 			}
 
+			valueStarted = true
 			flow = &flowValue{}
 			flow.closed = flow.add(value)
+		default:
+			if scheduleWord.MatchString(value) {
+				return true
+			}
 
-			continue
-		}
-
-		if scheduleWord.MatchString(value) {
-			return true
+			valueStarted = true
 		}
 	}
 
 	// The file ended inside the on: key's flow value: fail closed.
 	return flow != nil && !flow.closed
+}
+
+// isDocumentMarker reports whether a trimmed line at column 0 starts or ends
+// a YAML document: ---, or ..., alone or before a blank.
+func isDocumentMarker(trimmed string) bool {
+	for _, marker := range []string{"---", "..."} {
+		if trimmed == marker || strings.HasPrefix(trimmed, marker+" ") || strings.HasPrefix(trimmed, marker+"\t") {
+			return true
+		}
+	}
+
+	return false
+}
+
+// endsTheOnValue reports whether a line ends the top-level on: key's value:
+// a line at or left of the root column that is no comment and does not start
+// with `:` (an explicit key's value), `}` or `]` (a flow value's close).
+func endsTheOnValue(trimmed string, indent, rootColumn int) bool {
+	if indent > rootColumn || strings.HasPrefix(trimmed, "#") {
+		return false
+	}
+
+	return !strings.HasPrefix(trimmed, ":") && !strings.HasPrefix(trimmed, "}") && !strings.HasPrefix(trimmed, "]")
+}
+
+// startsAFlowValue reports whether a value, its anchor and tag removed, is a
+// flow mapping or sequence.
+func startsAFlowValue(value string) bool {
+	return strings.HasPrefix(value, "{") || strings.HasPrefix(value, "[")
+}
+
+// stripProperties returns a value with the anchors (&name) and tags (!tag,
+// !!map) before it removed: each runs up to the next blank, and a value that
+// is properties only is empty.
+func stripProperties(value string) string {
+	value = strings.TrimSpace(value)
+
+	for strings.HasPrefix(value, "&") || strings.HasPrefix(value, "!") {
+		i := strings.IndexAny(value, " \t")
+		if i < 0 {
+			return ""
+		}
+
+		value = strings.TrimSpace(value[i:])
+	}
+
+	return value
 }
 
 // flowValue is a top-level on: key's flow mapping or sequence read line by
@@ -252,29 +350,21 @@ func startsAScalar(last byte) bool {
 	return false
 }
 
-// topLevelOn returns the value after a line's top-level on: key, and whether
-// the line opens one: the key is on:, "on": or 'on':, a trailing comment
-// removed.
-func topLevelOn(line string) (string, bool) {
-	for _, key := range []string{"on:", `"on":`, `'on':`} {
-		if value, ok := strings.CutPrefix(line, key); ok {
-			return inlineValue(value), true
-		}
+// onKey matches a trimmed line that opens the top-level on key, its trailing
+// comment removed: an optional explicit-key `? `, the key bare or quoted,
+// optional blanks, and a colon with the value after it. The colon may be
+// missing only after `? `, whose value follows on a `:` line.
+var onKey = regexp.MustCompile(`^(\?[ \t]+)?(?:on|"on"|'on')[ \t]*(:(.*))?$`)
+
+// topLevelOn returns the value after a trimmed line's on key, its trailing
+// comment removed and its blanks trimmed, and whether the line opens one.
+func topLevelOn(trimmed string) (string, bool) {
+	m := onKey.FindStringSubmatch(inlineValue(trimmed))
+	if m == nil || (m[1] == "" && m[2] == "") {
+		return "", false
 	}
 
-	return "", false
-}
-
-// isScheduleKey reports whether a trimmed line is a schedule key, bare or
-// quoted: schedule: with a value, a comment or nothing after it.
-func isScheduleKey(line string) bool {
-	for _, key := range []string{"schedule:", `"schedule":`, `'schedule':`} {
-		if strings.HasPrefix(line, key) {
-			return true
-		}
-	}
-
-	return false
+	return strings.TrimSpace(m[3]), true
 }
 
 // inlineValue returns an inline YAML value with its trailing comment removed

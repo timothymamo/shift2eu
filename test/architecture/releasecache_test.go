@@ -10,10 +10,12 @@ import (
 	"github.com/google/go-cmp/cmp/cmpopts"
 )
 
-// TestReleaseWorkflowDisablesTheGoCache pins that every step of the release workflow that would read or
-// write the repository's Actions cache turns it off: setup-go with cache: false, which turns its module
-// and build cache off, and golangci-lint-action with skip-cache: true, the only input that action has for
-// it. release.yml says why on its goreleaser job: the Go cache would carry state over from the test job or
+// TestReleaseWorkflowDisablesTheGoCache pins that every step of the release workflow that uses one of
+// the two actions it knows, actions/setup-go and golangci/golangci-lint-action, turns the repository's
+// Actions cache off: setup-go with cache: false, which turns its module and build cache off, and
+// golangci-lint-action with skip-cache: true, the only input that action has for it. It checks those two
+// actions only: a step of any other action that reads or writes the cache, such as actions/cache, is not
+// checked. release.yml says why on its goreleaser job: the Go cache would carry state over from the test job or
 // from CI on main into a job that builds what the release publishes, so every step that sets Go up there
 // turns it off. A step added later that forgets it would bring that state back unseen, and a
 // golangci-lint step writes the same cache, so both are held to the rule.
@@ -448,10 +450,17 @@ func goCacheGaps(workflow []byte) []goCacheGap {
 // goSetupSteps returns, in the order they run, every step of the workflow that uses actions/setup-go,
 // whatever its cache setting: the steps the cache check reads, counted against the workflow's text.
 func goSetupSteps(workflow []byte) []workflowStep {
+	return stepsUsing(workflow, goSetupAction)
+}
+
+// stepsUsing returns, in document order, every step of the workflow whose action, the repository it
+// uses without its pin, equals action, whatever its inputs: the steps of that action the cache check
+// reads, counted against the workflow's text.
+func stepsUsing(workflow []byte, action string) []workflowStep {
 	var steps []workflowStep
 
 	for _, s := range workflowSteps(workflow) {
-		if s.action == goSetupAction {
+		if s.action == action {
 			steps = append(steps, s)
 		}
 	}
