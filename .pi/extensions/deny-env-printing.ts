@@ -5,11 +5,13 @@
  * This project-local extension, which pi loads because --approve trusts the project, hooks `tool_call`,
  * the event that sees a tool call before it runs, and blocks:
  *
+ * - a bash call whose command is longer than 32 KB, unread (the patterns are quadratic on one long line);
  * - a bash call whose command matches any pattern of ../deny-env-printing.json;
  * - a file-tool call (read, grep, find, ls, edit, write) whose path, normalised as pi normalises it (a
  *   leading `@`, a `file://` URL, Unicode spaces, `~`, `..`) and resolved against the working directory,
  *   is /proc or ~/.config/dot-agent-deck or lies under either, or whose path, glob or pattern names the
- *   deck's file of keys, daemon.env, or its directory.
+ *   deck's file of keys, daemon.env, or its directory;
+ * - a grep or find call whose path is an ancestor of either directory (`~`, `/`), which its walk reaches.
  *
  * The patterns are data, pinned by test/architecture/pienvdeny_test.go, and are written to the syntax Go's
  * RE2 and JavaScript share (no lookaround, no backreference, no inline flag).
@@ -35,6 +37,18 @@ const deckKeyFile = "daemon.env";
 
 // The file tools whose path, glob or pattern a call is refused for.
 const fileTools = new Set(["read", "grep", "find", "ls", "edit", "write"]);
+
+// The file tools that read the contents of a whole directory tree (pi runs grep as `rg --hidden`): a call
+// of one is refused also when its path is an ancestor of a refused directory (`~`, `/`), since the walk
+// reaches it.
+const recursiveTools = new Set(["grep", "find"]);
+
+// The longest bash command matched against the patterns. The prefix patterns cost time quadratic in the
+// length of one line full of separators (100 KB of minified JSON in an `echo '...'` took 35 s in Node), so
+// a longer command is refused unread rather than stalling the call.
+const maxCommandLength = 32 * 1024;
+
+const longCommandReason = `Refused: bash commands over ${maxCommandLength} characters (32 KB) are refused unread (CLAUDE.md, rule 3, ADR 0044); write the content with the write tool and pass the file to a shorter command.`;
 
 type DenyList = { reason: string; patterns: RegExp[] };
 
@@ -141,6 +155,10 @@ export default function (pi: ExtensionAPI) {
 				}
 
 				const command = String(input.command ?? "");
+				if (command.length > maxCommandLength) {
+					return { block: true, reason: longCommandReason };
+				}
+
 				if (loaded.list.patterns.some((re) => re.test(command))) {
 					return { block: true, reason: loaded.list.reason };
 				}
@@ -171,6 +189,17 @@ export default function (pi: ExtensionAPI) {
 
 						if (under(absolute, "/proc")) {
 							return { block: true, reason: procReason };
+						}
+
+						// A grep or find rooted at an ancestor walks into the refused directory.
+						if (recursiveTools.has(event.toolName)) {
+							if (under(keyDirectory, absolute)) {
+								return { block: true, reason: keyFileReason };
+							}
+
+							if (under("/proc", absolute)) {
+								return { block: true, reason: procReason };
+							}
 						}
 					} else if (value.includes("/proc")) {
 						return { block: true, reason: procReason };

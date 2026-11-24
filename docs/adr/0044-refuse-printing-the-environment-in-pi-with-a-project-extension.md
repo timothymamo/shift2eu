@@ -36,7 +36,12 @@ Hold rule 3 with a second layer in both agents, beside the words in CLAUDE.md:
   URL that does not convert throws, and the handler refuses the call rather than resolving the raw value
   as a relative path), the Unicode spaces pi maps (`U+00A0`, `U+2000`-`U+200A`, `U+202F`, `U+205F`,
   `U+3000`) become plain spaces, then `~` is the home directory and the result is resolved against the
-  working directory, `..` included. It tests `event.toolName` itself, imports only `node:` built-ins and
+  working directory, `..` included. grep and find, the two file tools that walk a directory tree (pi runs
+  grep as `rg --hidden`), are refused also when their resolved path is an ancestor of either directory
+  (`~`, `~/.config`, `/`): a grep rooted at `~` for `API_KEY` would print `daemon.env`'s lines, one rooted
+  at `/` walks `/proc`. A read, ls or edit of such an ancestor prints no key and stays allowed. A bash
+  command over 32 KB (32768 characters) is refused unread, before the patterns, with a reason that points
+  at the write tool (see the bound below). It tests `event.toolName` itself, imports only `node:` built-ins and
   pi's package for types alone (`import type`), so the guard does not depend at run time on the module it
   guards.
   - **What fails closed, and what does not.** pi reports an extension that fails to load and carries on
@@ -80,7 +85,10 @@ Hold rule 3 with a second layer in both agents, beside the words in CLAUDE.md:
     `${..._TOKEN}`, `$..._SECRET`, `$..._PASSWORD`, and `${!` indirection), the interpreter one-liners that
     read the environment themselves (`ENVIRON`, `os.environ`, `os.getenv`, `process.env`, `%ENV`, `$ENV{`,
     `getenv(`, Ruby's bare `ENV` word, `ruby -e 'p ENV'`, Python's bare `environ` word), `gh`'s own token
-    printers (`gh auth token`, and `gh auth status` with `-t` or `--show-token`), and `jq`'s environment
+    printers (`gh auth token`, and `gh auth status` with `-t` or `--show-token`), the credential helpers,
+    which print the token they fill in whatever feeds them (`git ... credential fill`, `gh auth
+    git-credential`; `git config --global credential.helper` and `git push` stay allowed, and git runs
+    the helper `dev/lima.yaml` configures itself, not through an agent's bash), and `jq`'s environment
     (its `env` builtin after `jq`, `jq -n env`, and `$ENV` anywhere, `jq -n '$ENV'`).
   - **The bound on every repeat.** pi matches with JavaScript's backtracking engine. An unbounded group
     repeat around a part that is itself optional (a wrapper's option with its optional plain value) costs
@@ -92,8 +100,13 @@ Hold rule 3 with a second layer in both agents, beside the words in CLAUDE.md:
     before `-p` `{0,8}?`. `TestPiEnvDenyListPatternsCannotBacktrackWithoutBound` guards the structure. In
     Node every pattern took under 21 ms on the adversarial inputs (`"sudo -u "` 40 and 200 times and a
     `-`, `"nice -n "` and `"timeout -s "` 40 times, a `git commit -m` holding `time -x` 40 times, 5000
-    characters of `-a `, `> `, `2>` or `if `, `sudo a=b ` 2500 times); the worst were the `gh` and `jq`
-    patterns, which scan the rest of the command and are quadratic, not exponential.
+    characters of `-a `, `> `, `2>` or `if `, `sudo a=b ` 2500 times). Bounded is not linear: the
+    prefix patterns start an attempt at every separator, and each attempt walks on from there, so a long
+    one-line command full of separators costs time quadratic in its length, and so do the `gh`, `git` and
+    `jq` patterns, which scan the rest of the command; 100 KB of minified JSON inside an `echo '...'`
+    took 35 s across all patterns, a call the agent waits out. A bash command over 32 KB is therefore
+    refused unread, before any pattern, and the agent writes such content with the write tool and passes
+    the file.
   - **What they leave alone.** `env` followed by a command word runs that command and prints nothing:
     `env GOTOOLCHAIN=local make check`, `env -u FOO make test`, `env -C dir make`,
     `/usr/bin/env bash dev/x.sh` are allowed in pi, unless the command word is itself a printer
@@ -115,7 +128,10 @@ Hold rule 3 with a second layer in both agents, beside the words in CLAUDE.md:
   (`*.config/dot-agent-deck*`), and a command holding a `$` before `API_KEY` or
   `TOKEN` (`*$*API_KEY*`, `*$*TOKEN*`), `gh auth token*`, `gh auth status*-t*` and
   `gh auth status*--show-token*` (bare `gh auth status` names the account, not the token, and stays
-  allowed; no skill, make recipe, dev script or workflow types a refused form); and reading `/proc` whole (`Read(//proc)`, `Read(//proc/**)`,
+  allowed; no skill, make recipe, dev script or workflow types a refused form), the credential helpers
+  wherever they stand (`*git credential fill*`, `*gh auth git-credential*`; the only uses in the tree,
+  `dev/lima.yaml` and `dev/vm-gh-wrapper.sh`, configure the helper for git at provisioning and are no
+  command a role types); and reading `/proc` whole (`Read(//proc)`, `Read(//proc/**)`,
   `Read(//proc/**/environ)`) and the deck's directory (`Read(~/.config/dot-agent-deck/**)`). `//` is
   Claude Code's absolute path: a single leading `/` is relative to the project, so the earlier
   `Read(/proc/*/environ)` matched nothing and is gone. No rule is written for `make` with `-p` after
@@ -156,9 +172,14 @@ Claude Code rules, which ADR 0003 does not cover.
   or a tool that is not bash still reaches the environment; the Lima VM stays the boundary (ADR 0003).
   Known forms the patterns do not refuse: a printer run by `find -exec env` (or `-execdir`), and a
   wrapper the list does not name; a Go test (or any program) written with the edit tool that logs
-  `os.Environ()` and is run with `go test -v`, because the file tools do not scan what they write; and a
-  grep or find rooted at an ancestor of the deck's key directory (`~`, `~/.config`) whose glob does not
-  name `.config/dot-agent-deck`. Also: the deck's directory reached from its parent
+  `os.Environ()` and is run with `go test -v`, because the file tools do not scan what they write;
+  `script -q -c env /dev/null`; BSD `ps` with `e` after another option word (`ps -e e`, `ps -o args e`);
+  `deno eval` or `bun -e` reading `Deno.env` or `Bun.env` (neither is installed); a no-break space inside
+  a word, which JavaScript's `\s` reads as a space and bash does not; and `readonly -p` and `local -p`.
+  The hook checks only bash and the named file tools: another tool (pi's `powershell`, the `codemode`
+  extension, an MCP tool) would bypass it. None is active today (pi's defaults are read, bash, edit and
+  write plus grep, find and ls; the tester passes no `--tools`, and no `pwsh` is installed); enabling one
+  is a reason to revisit this decision. Also: the deck's directory reached from its parent
   (`cd ~/.config && cat dot-agent-deck/x`) or through a symlink to an ancestor; a command word split by
   quotes (`e''nv`); a wrapper whose command follows a positional argument or a combined option
   (`su x -c env`, `flock /tmp/l -c env`, `script -qc env /dev/null`); a wrapper the list does not name,
@@ -187,7 +208,8 @@ Claude Code rules, which ADR 0003 does not cover.
   here, since the Makefile has no flags variable the agents pass. The bare word `environ` is refused
   wherever it stands (`git grep environ`, `cat x/environ.go`), and so is the bare word `ENV`
   (`grep ENV Dockerfile`, `echo ENV`, a Dockerfile's `ENV` line in a heredoc or a quoted argument):
-  `\bENV\b` is what refuses `ruby -e 'p ENV'`; `VM_ENV` and `ENVIRONMENT` are not refused by it. `$ENV`
+  A `git` command that holds `credential fill` in an argument (`git commit -m "drop credential fill"`)
+  is refused as the helper. `\bENV\b` is what refuses `ruby -e 'p ENV'`; `VM_ENV` and `ENVIRONMENT` are not refused by it. `$ENV`
   is refused anywhere, and so is a command that names `jq` and then a word `env` before the next
   separator (`jq -r .name f.json env.json` is; `jq -r .env f` is not).
 - Rollout: the extension and the tester's `.scratch/` line reach only tester panes started from a dispatch

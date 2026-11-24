@@ -66,6 +66,8 @@
       "Bash(gh auth token*)",
       "Bash(gh auth status*-t*)",
       "Bash(gh auth status*--show-token*)",
+      "Bash(*git credential fill*)",
+      "Bash(*gh auth git-credential*)",
       "Read(//proc)",
       "Read(//proc/**)",
       "Read(//proc/**/environ)",

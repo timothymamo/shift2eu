@@ -14,6 +14,7 @@
     "daemon\\.env",
     "\\.config[/.]*/dot-agent",
     "\\bgh[ \\t]+auth[ \\t]+(token|status[^\\n;&|]*[ \\t](-[A-Za-z]*t\\b|--show-token))",
+    "\\bgit\\b[^\\n;&|]*[ \\t]credential[ \\t]+fill\\b|\\bgh[ \\t]+auth[ \\t]+git-credential\\b",
     "\\bjq\\b[^\\n;&|]*[ \\t'\"(]env\\b|\\$ENV\\b",
     "\\$\\{?[A-Za-z0-9_]*(KEY|TOKEN|SECRET|PASSWORD)",
     "\\$\\{!",
