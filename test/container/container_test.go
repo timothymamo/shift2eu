@@ -1014,10 +1014,66 @@ COPY --chmod=0444 LICENSE NOTICE /usr/share/doc/shift2eu/
 			want:         []string{"names no NOTICE"},
 		},
 		{
+			// YAML reads the quoted entry as the one file whose name holds the
+			// commas, so the list ships no LICENSE and no NOTICE: the names
+			// inside a quoted scalar are not entries of their own.
+			name:         "a GoReleaser dockers_v2 section whose single-quoted flow entry holds commas",
+			dockerfile:   fixture,
+			dockerignore: "*\n!LICENSE\n!NOTICE\n",
+			goreleaser:   "dockers_v2:\n  - id: a\n    extra_files: ['x, LICENSE, NOTICE']\n",
+			want:         []string{"names no LICENSE", "names no NOTICE"},
+		},
+		{
+			name:         "a GoReleaser dockers_v2 section whose double-quoted flow entry holds commas",
+			dockerfile:   fixture,
+			dockerignore: "*\n!LICENSE\n!NOTICE\n",
+			goreleaser:   "dockers_v2:\n  - id: a\n    extra_files: [\"x, LICENSE, NOTICE\"]\n",
+			want:         []string{"names no LICENSE", "names no NOTICE"},
+		},
+		{
+			// The quoted entry is one file of its own and the real entries
+			// beside it are read as they stand, so both files ship.
+			name:         "a GoReleaser docker section whose flow list quotes an entry holding a comma",
+			dockerfile:   fixture,
+			dockerignore: "*\n!LICENSE\n!NOTICE\n",
+			goreleaser:   "docker:\n  id: shift2eu\n  dockerfile: Dockerfile\n  extra_files: [Dockerfile, 'a, b', LICENSE, NOTICE]\n",
+		},
+		{
 			name:         "a GoReleaser dockers_v2 section whose key opens a list item",
 			dockerfile:   fixture,
 			dockerignore: "*\n!LICENSE\n!NOTICE\n",
 			goreleaser:   "dockers_v2:\n  - extra_files:\n      - LICENSE\n      - NOTICE\n    id: a\n",
+		},
+		{
+			// YAML allows blanks between a key and its colon.
+			name:         "a GoReleaser dockers_v2 section whose key has a blank before the colon",
+			dockerfile:   fixture,
+			dockerignore: "*\n!LICENSE\n!NOTICE\n",
+			goreleaser:   "dockers_v2 :\n  - id: a\n    dockerfile: Dockerfile\n",
+			want:         []string{"names no LICENSE", "names no NOTICE"},
+		},
+		{
+			// YAML reads a quoted key as the plain key it spells.
+			name:         "a GoReleaser dockers_v2 section whose key is double-quoted",
+			dockerfile:   fixture,
+			dockerignore: "*\n!LICENSE\n!NOTICE\n",
+			goreleaser:   "\"dockers_v2\":\n  - id: a\n    dockerfile: Dockerfile\n",
+			want:         []string{"names no LICENSE", "names no NOTICE"},
+		},
+		{
+			name:         "a GoReleaser docker section whose key is single-quoted",
+			dockerfile:   fixture,
+			dockerignore: "*\n!LICENSE\n!NOTICE\n",
+			goreleaser:   "'docker':\n  id: a\n  dockerfile: Dockerfile\n",
+			want:         []string{"names no LICENSE", "names no NOTICE"},
+		},
+		{
+			// YAML lets a list item hold its mapping on the lines below the
+			// bare dash, so the extra_files list is the image's own.
+			name:         "a GoReleaser dockers_v2 section whose list item holds a bare dash",
+			dockerfile:   fixture,
+			dockerignore: "*\n!LICENSE\n!NOTICE\n",
+			goreleaser:   "dockers_v2:\n  -\n    id: a\n    extra_files:\n      - Dockerfile\n      - LICENSE\n      - NOTICE\n",
 		},
 		{
 			name:         "a GoReleaser dockers_v2 section whose two images both ship both files",
