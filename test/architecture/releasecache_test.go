@@ -1,6 +1,8 @@
 package architecture_test
 
 import (
+	"maps"
+	"slices"
 	"strings"
 	"testing"
 
@@ -31,8 +33,17 @@ func TestReleaseWorkflowDisablesTheGoCache(t *testing.T) {
 		t.Fatalf("%s names actions/setup-go@ %d times, want at least 5: the release tests, lints, builds and releases in jobs of its own and sets Go up in each", workflow, named)
 	}
 
-	if read := len(goSetupSteps(src)); read != named {
-		t.Errorf("%s names actions/setup-go@ %d times, but the reader recognised %d setup-go steps of it, want the same number: a step the reader does not recognise is a step no cache check reads", workflow, named, read)
+	// Every action the cache guard knows is held to that backstop, setup-go and the lint action alike: a
+	// golangci-lint step added to the workflow later writes the same cache, and a step of either action
+	// the reader does not recognise is a step no cache check reads. The lint action has no step in the
+	// workflow today, so its count is 0 and a step of it added later is one the reader must hand the
+	// check from the day it lands.
+	for _, action := range slices.Sorted(maps.Keys(cacheOffInputs)) {
+		named := strings.Count(string(src), action+"@")
+
+		if read := len(stepsUsing(src, action)); read != named {
+			t.Errorf("%s names %s@ %d times, but the reader recognised %d steps of it, want the same number: a step the reader does not recognise is a step no cache check reads", workflow, action, named, read)
+		}
 	}
 
 	for _, gap := range goCacheGaps(src) {
@@ -292,6 +303,96 @@ func TestGoSetupSteps(t *testing.T) {
 
 			if got := len(goSetupSteps([]byte(tc.workflow))); got != tc.want {
 				t.Errorf("goSetupSteps() read %d setup-go steps, want %d:\n%q", got, tc.want, tc.workflow)
+			}
+		})
+	}
+}
+
+// TestWorkflowStepsUsing pins the reader the workflow's count is checked with for every action the cache
+// guard knows: the steps that use the action asked for, in document order, and no other action's step. A
+// step it fails to recognise is a step no gap check reads, so the flow style and a quoted key, which
+// GitHub reads as the same step, are read as one, and a line of a run: block is text, not a step.
+func TestWorkflowStepsUsing(t *testing.T) {
+	t.Parallel()
+
+	const (
+		// pin is an action's pin alone: a trailing comment, which the block form carries, would end a flow
+		// mapping at the # and leave the step unclosed.
+		pin = "@0123456789abcdef0123456789abcdef01234567"
+		// lint is the action whose steps the cache guard reads besides the Go setup's.
+		lint = "golangci/golangci-lint-action"
+	)
+
+	tests := []struct {
+		name     string
+		workflow string
+		action   string
+		want     int
+	}{
+		{
+			name:     "a block-style lint step",
+			workflow: "jobs:\n  lint:\n    steps:\n      - uses: " + lint + pin + "\n",
+			action:   lint,
+			want:     1,
+		},
+		{
+			name:     "a flow-style lint step",
+			workflow: "jobs:\n  lint:\n    steps:\n      - {uses: " + lint + pin + ", with: {version: v0.0.0}}\n",
+			action:   lint,
+			want:     1,
+		},
+		{
+			name:     "a double-quoted uses key naming the lint action",
+			workflow: "jobs:\n  lint:\n    steps:\n      - \"uses\": " + lint + pin + "\n",
+			action:   lint,
+			want:     1,
+		},
+		{
+			name:     "a single-quoted uses key naming the lint action",
+			workflow: "jobs:\n  lint:\n    steps:\n      - 'uses': " + lint + pin + "\n",
+			action:   lint,
+			want:     1,
+		},
+		{
+			// The count is per action: a setup-go step is no lint step, and a step of the action asked
+			// for alone is counted.
+			name:     "a setup-go step when the lint action is asked for",
+			workflow: "jobs:\n  test:\n    steps:\n      - uses: " + goSetupAction + pin + "\n",
+			action:   lint,
+			want:     0,
+		},
+		{
+			name:     "a lint step when setup-go is asked for",
+			workflow: "jobs:\n  lint:\n    steps:\n      - uses: " + lint + pin + "\n",
+			action:   goSetupAction,
+			want:     0,
+		},
+		{
+			// Two lint steps in two jobs, in the two styles: every one counts, or the count backstop is
+			// that many steps short.
+			name: "two lint steps, one in each style",
+			workflow: "jobs:\n  lint:\n    steps:\n      - uses: " + lint + pin + "\n" +
+				"  lint-site:\n    steps:\n      - {uses: " + lint + pin + "}\n",
+			action: lint,
+			want:   2,
+		},
+		{
+			// A run: block is a script, not a mapping: a line of it that reads like a lint step is no
+			// step, and must not reach the count.
+			name: "a run block that holds a lint step",
+			workflow: "jobs:\n  lint:\n    steps:\n      - name: Echo a step\n        run: |\n" +
+				"          - uses: " + lint + pin + "\n",
+			action: lint,
+			want:   0,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := len(stepsUsing([]byte(tc.workflow), tc.action)); got != tc.want {
+				t.Errorf("stepsUsing() read %d %s steps, want %d:\n%q", got, tc.action, tc.want, tc.workflow)
 			}
 		})
 	}

@@ -792,6 +792,97 @@ jobs:
 			workflow: "on:\n  workflow_dispatch:\njobs:\n  schedule-x:\n    runs-on: ubuntu-latest\n",
 			want:     false,
 		},
+		{
+			// The value of the on: key may carry an anchor before the block
+			// mapping it holds, which is what GitHub reads: the trigger is the
+			// mapping the anchor names, and the schedule sits in it.
+			name:     "an anchored on key",
+			workflow: "on: &triggers\n  schedule:\n    - cron: '17 4 3 * *'\n",
+			want:     true,
+		},
+		{
+			// A tag on the value is no trigger of its own either: the mapping
+			// tagged as one is the mapping the on: key holds.
+			name:     "a tagged on key",
+			workflow: "on: !!map\n  schedule:\n    - cron: '17 4 3 * *'\n",
+			want:     true,
+		},
+		{
+			// YAML lets blanks sit between a block mapping's key and its colon,
+			// and GitHub reads the key the same: schedule : is schedule:.
+			name:     "a blank before the nested schedule key's colon",
+			workflow: "on:\n  schedule :\n    - cron: '17 4 3 * *'\n",
+			want:     true,
+		},
+		{
+			name:     "a blank before the top-level on key's colon",
+			workflow: "on :\n  schedule:\n    - cron: '17 4 3 * *'\n",
+			want:     true,
+		},
+		{
+			// An explicit key, ? schedule, is the same key as schedule:, and the
+			// value after it may open on its own line.
+			name:     "an explicit nested schedule key",
+			workflow: "on:\n  ? schedule\n  : - cron: '17 4 3 * *'\n",
+			want:     true,
+		},
+		{
+			name:     "an explicit top-level on key",
+			workflow: "? on\n:\n  schedule:\n    - cron: '17 4 3 * *'\n",
+			want:     true,
+		},
+		{
+			// A byte order mark is no part of the first key: YAML strips it
+			// before the document is read, and a reader that keeps it sees no
+			// on: key at all.
+			name:     "a byte order mark before the on key",
+			workflow: "\ufeffon:\n  schedule:\n    - cron: '17 4 3 * *'\n",
+			want:     true,
+		},
+		{
+			// A flow mapping may be the value of a bare on: key and start on
+			// the line after it, indented: the nested line is the value, not a
+			// nested key of a block mapping.
+			name:     "a flow mapping on the line after a bare on key",
+			workflow: "on:\n  {schedule: [{cron: '0 3 * * 1'}]}\n",
+			want:     true,
+		},
+		{
+			name:     "a flow sequence on the line after a bare on key",
+			workflow: "on:\n  [schedule, push]\n",
+			want:     true,
+		},
+		{
+			// A document may be indented as a whole: the top-level keys sit at
+			// column 2 and the on: mapping under them, which is the same document
+			// as one written at column 0.
+			name:     "a root mapping indented as a whole",
+			workflow: "  on:\n    schedule:\n      - cron: '17 4 3 * *'\n",
+			want:     true,
+		},
+		{
+			// A document start marker may be followed by an indented document,
+			// whose first content line is then no top-level key at column 0.
+			name:     "an indented document after the document start marker",
+			workflow: "---\n  on:\n    schedule:\n      - cron: '17 4 3 * *'\n",
+			want:     true,
+		},
+		{
+			// The words a schedule would be found by sit in the job's script, not
+			// in a trigger: reading the file for them would pass a workflow no
+			// schedule runs, so the block's other triggers and the script under
+			// jobs: stay no schedule.
+			name:     "other triggers and a schedule word in a step's run text",
+			workflow: "on:\n  push:\n    branches: [main]\n  workflow_dispatch:\njobs:\n  audit:\n    steps:\n      - run: |\n          echo schedule\n",
+			want:     false,
+		},
+		{
+			// The word in a comment on the on: key or in its block is no
+			// trigger: a comment is no key of the mapping, whatever it names.
+			name:     "a comment that names a schedule on the on key",
+			workflow: "on: # no schedule here\n  # no schedule here either\n  workflow_dispatch:\njobs:\n  audit:\n    runs-on: ubuntu-latest\n",
+			want:     false,
+		},
 	}
 
 	for _, tc := range tests {
