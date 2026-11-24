@@ -140,6 +140,12 @@ moves or deletes a tag.
    **The scheduled audit's secrets** (PRD #175, ADR 0040) are checked the same way. The `security-audit`
    environment holds the audit App's key and client ID, the model and publish steps' age key pairs, the
    fingerprint key and the Claude Code token the model step runs on:
+   - `gh api repos/{owner}/{repo}/environments/security-audit` must show
+     `deployment_branch_policy.custom_branch_policies` `true` and `protected_branches` `false`, and
+     `protection_rules` with no `required_reviewers`, since the audit runs unattended;
+   - `gh api repos/{owner}/{repo}/environments/security-audit/deployment-branch-policies --jq '.branch_policies[] | .type + " " + .name'`
+     must print exactly `branch main`, since a wider branch policy would let any branch's workflow read
+     the audit's keys;
    - `gh api repos/{owner}/{repo}/environments/security-audit/secrets --jq '.secrets[].name'` must list
      `AUDIT_APP_PRIVATE_KEY`, `AUDIT_MODEL_PRIVATE_KEY`, `AUDIT_PUBLISH_PRIVATE_KEY`,
      `AUDIT_FINGERPRINT_KEY` and `CLAUDE_CODE_OAUTH_TOKEN`;
