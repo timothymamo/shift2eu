@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/timothymamo/shift2eu/internal/domain/taxonomy"
 	"github.com/timothymamo/shift2eu/internal/domain/text"
 )
 
@@ -63,7 +64,9 @@ type Plan struct {
 	// compared with every run of white space treated as a single space.
 	Name string
 	// VCPUs is the number of virtual (or, for bare metal, physical) CPU threads:
-	// at least 1, at most MaxPlanVCPUs.
+	// at least 1, at most MaxPlanVCPUs. On an offering whose every category is
+	// matched on memory alone (MatchesOnMemory), 0 means the target gives no
+	// count (ADR 0045).
 	VCPUs int64
 	// MemoryMilliGiB is the memory in thousandths of a GiB: at least 1, at most
 	// MaxPlanMemoryMilliGiB.
@@ -120,9 +123,33 @@ func newRegionSet(regions []string) regionSet {
 	return set
 }
 
+// memoryMatched lists the categories whose resources are matched to a plan on
+// memory alone (ADR 0045). It is read-only.
+var memoryMatched = []taxonomy.Category{taxonomy.CacheRedis}
+
+// MatchesOnMemory reports whether a resource of category c is matched to a plan
+// on its memory alone, the plan's vCPUs taking no part (ADR 0045). Every other
+// plan-priced category is matched on vCPUs and memory.
+func MatchesOnMemory(c taxonomy.Category) bool {
+	return slices.Contains(memoryMatched, c)
+}
+
+// allMatchOnMemory reports whether every category of cats is matched on memory
+// alone, so a plan of an offering serving them may give no vCPU count.
+func allMatchOnMemory(cats []taxonomy.Category) bool {
+	for _, c := range cats {
+		if !MatchesOnMemory(c) {
+			return false
+		}
+	}
+
+	return len(cats) > 0
+}
+
 // normalisePlans checks the plans of an offering available in regions, in input
-// order, and returns a copy of them sorted by name, nil when empty.
-func normalisePlans(plans []Plan, regions regionSet) ([]Plan, error) {
+// order, and returns a copy of them sorted by name, nil when empty. A plan's
+// VCPUs may be 0 only when optionalVCPUs is set.
+func normalisePlans(plans []Plan, regions regionSet, optionalVCPUs bool) ([]Plan, error) {
 	seen := make(map[string]struct{}, len(plans))
 	out := make([]Plan, 0, len(plans))
 
@@ -142,7 +169,7 @@ func normalisePlans(plans []Plan, regions regionSet) ([]Plan, error) {
 
 		seen[key] = struct{}{}
 
-		n, err := normalisePlan(p, regions)
+		n, err := normalisePlan(p, regions, optionalVCPUs)
 		if err != nil {
 			return nil, fmt.Errorf("plan %s: %w", text.Quote(p.Name), err)
 		}
@@ -160,10 +187,14 @@ func normalisePlans(plans []Plan, regions regionSet) ([]Plan, error) {
 }
 
 // normalisePlan checks the numbers and prices of a plan with a valid name and
-// returns a copy of it with its prices normalised.
-func normalisePlan(p Plan, regions regionSet) (Plan, error) {
+// returns a copy of it with its prices normalised. VCPUs 0 is accepted only
+// when optionalVCPUs is set.
+func normalisePlan(p Plan, regions regionSet, optionalVCPUs bool) (Plan, error) {
+	// A memory-matched plan whose target gives no vCPU count has 0.
+	noVCPUs := p.VCPUs == 0 && optionalVCPUs
+
 	switch {
-	case p.VCPUs < 1:
+	case p.VCPUs < 1 && !noVCPUs:
 		return Plan{}, fmt.Errorf("%w: vcpus %d, want at least 1", ErrInvalidPlan, p.VCPUs)
 	case p.VCPUs > MaxPlanVCPUs:
 		return Plan{}, fmt.Errorf("%w: vcpus %d, want at most %d", ErrInvalidPlan, p.VCPUs, MaxPlanVCPUs)
