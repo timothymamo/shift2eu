@@ -253,11 +253,25 @@ func ciTestJobMessages(doc []byte) []string {
 }
 
 // jobKeys refuses the job-level keys that decide whether the test job runs and
-// whether its failure fails the run.
+// whether its failure fails the run. It reads the job's own keys through ciKeys,
+// as the step checks read theirs, so a value on the line below the key and a
+// quoted key are refused too: ciScalar matches only `key: value` on one line and
+// would let either of them past.
 func (c *ciTestJobCheck) jobKeys(job []ciLine) {
-	for _, k := range ciTestJobKeys {
-		if num, _, ok := ciScalar(job, k.key); ok {
-			c.fail("ci.yml's test job holds %s: (line %d), want none: %s (issue #548)", k.key, num, k.why)
+	keys, err := ciKeys(job)
+	if err != nil {
+		c.fail("ci.yml's test job: %v (issue #548)", err)
+
+		return
+	}
+
+	for _, key := range keys {
+		name := strings.Trim(key.name, `"'`)
+
+		for _, k := range ciTestJobKeys {
+			if name == k.key {
+				c.fail("ci.yml's test job holds %s: (line %d), want none: %s (issue #548)", k.key, key.num, k.why)
+			}
 		}
 	}
 }
