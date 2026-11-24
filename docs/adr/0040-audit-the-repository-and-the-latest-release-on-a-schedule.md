@@ -1129,7 +1129,9 @@ matchable advisory is the App's (`shift2eu-audit[bot]`, type `Bot`), `draft` or 
 and no collaborator, and its summary holds a fingerprint. A listing entry whose `credits`,
 `credits_detailed`, `collaborating_users` or `collaborating_teams` is missing or `null` is no empty list:
 counted as none it would fail open on an advisory a person is on, so it fails the listing closed
-(`ErrGitHub`, outcome 8), as a missing `ghsa_id`, `summary` or `state` does. A draft with a finding's
+(`ErrGitHub`, outcome 8), as a missing `ghsa_id`, `summary` or `state` does. GitHub's schema declares
+those four nullable, so PRD #175's runbook step 3 checks, before milestone 2 goes live, that GitHub
+answers arrays for them. A draft with a finding's
 fingerprint is updated `open` (a draft marked `not reproduced` that recurs is `open` again); with no
 draft, the most recently closed one (by `closed_at`, a tie the listing's first) marked `not reproduced`
 makes a new draft `regressed`, any other closed one is dismissed with no write, and no advisory at all a

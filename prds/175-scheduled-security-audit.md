@@ -659,6 +659,14 @@ An agent cannot do these steps. Each one is safe to stop at; the workflow is rol
    private key file from the machine (it lives only in the environment secret); the installation token
    expires within an hour. Check: the advisory existed as a draft, was updated, and is closed; the key
    file is gone. Milestone 2 is blocked until this check passes (Decision 2).
+   **Check the listing's array fields** on the admin machine, with the test draft present (open or closed,
+   it stays listed), before milestone 2 goes live: GitHub's REST schema declares `credits`,
+   `credits_detailed`, `collaborating_users` and `collaborating_teams` as nullable arrays, and the publish
+   program's advisory listing fails closed (exit 8) on a null or missing one, so a `null` for "none" would
+   stop every run with exit 8 once any advisory exists. Run
+   `gh api 'repos/<owner>/<repo>/security-advisories' --jq '.[] | [.credits, .credits_detailed, .collaborating_users, .collaborating_teams] | map(type)'`.
+   Check: it prints only `"array"` entries. If it prints `"null"`, stop and file an issue before the
+   schedule runs; whether the decoder changes is the maintainer's decision.
 4. **Create the `security-audit/**` branch ruleset**: only the audit App, as its one bypass actor, may
    create, update or delete those branches; admins get no implicit bypass. An admin who must write there
    (trial PR 2 in step 5, a failed run's branch in step 11) first adds the **Repository admin** role
