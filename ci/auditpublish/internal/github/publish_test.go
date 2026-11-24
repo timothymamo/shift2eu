@@ -1,11 +1,12 @@
 package github_test
 
-// Group L of PR 4b: the publish run (PRD #175 milestone 2, "Report and
-// triage"; ADR 0040). Every text is rendered and scanned before the first
-// write: a scan that refuses means no write at all, and the run's writes are
-// the report's then the issues'. A private finding is never filed and never
-// dropped silently: the report states that it was not, and the run ends with
-// outcome 5.
+// Group L of PR 4b, extended by 4c: the publish run (PRD #175 milestone 2,
+// "Report and triage"; ADR 0040). Every text is rendered and scanned before the
+// first write: a scan that refuses means no write at all, and the run's writes
+// are the advisories', then the report's, then the issues'. A private finding is
+// filed as a draft advisory (4c's P1) and never dropped silently: a create
+// GitHub refuses is the not-filed path, whose report states it and whose run
+// ends with outcome 5 (P2, in publish_advisories_test.go).
 
 import (
 	"errors"
@@ -51,8 +52,16 @@ func newFixtureGitleaks(t *testing.T, fake *FakeGitleaks) *github.Gitleaks {
 }
 
 // publishRoutes returns the answers of a whole publish run: the release, the
-// issues' first page, the issue one is filed as and the report's writes.
+// issues' first page, the issue one is filed as, the advisory listing and the
+// report's writes.
 func publishRoutes(issues ...map[string]any) []Route {
+	return publishRoutesOverListing([]Route{advisoryListingRoute(nil, "")}, issues...)
+}
+
+// publishRoutesOverListing returns a whole publish run's answers with the
+// advisory listing's routes the caller gives, so a test can give the run the
+// advisories it reads (or a listing it refuses).
+func publishRoutesOverListing(listing []Route, issues ...map[string]any) []Route {
 	list := make([]any, 0, len(issues))
 	for _, issue := range issues {
 		list = append(list, issue)
@@ -63,6 +72,8 @@ func publishRoutes(issues ...map[string]any) []Route {
 		{Method: "GET", Endpoint: fixtureIssuesQuery + "page=1", Status: 200, Body: list},
 		{Method: "POST", Endpoint: fixtureIssuesEndpoint, Status: 201, Body: map[string]any{"number": 1}},
 	}
+
+	routes = append(routes, listing...)
 
 	return append(routes, reportRoutes()...)
 }
@@ -107,6 +118,7 @@ func TestPublishReadsScansThenWrites(t *testing.T) {
 	want := []string{
 		"GET " + fixtureReleaseEndpoint,
 		"GET " + fixtureIssuesQuery + "page=1",
+		"GET " + fixtureAdvisoriesEndpoint,
 		"GET " + fixtureBranchEndpoint,
 		"GET " + fixtureCommitEndpoint,
 		"POST " + fixtureBlobsEndpoint,
@@ -120,10 +132,6 @@ func TestPublishReadsScansThenWrites(t *testing.T) {
 	var got []string
 	for _, c := range calls {
 		got = append(got, endpointOf(c))
-
-		if strings.Contains(c.Endpoint, "security-advisories") {
-			t.Errorf("the run called %s, want no advisory endpoint: the advisories are PR 4c's", c.Endpoint)
-		}
 	}
 
 	if diff := cmp.Diff(want, got); diff != "" {
@@ -216,11 +224,13 @@ func TestPublishWritesNothingWhenAScanRefuses(t *testing.T) {
 	}
 }
 
-// TestPublishFilesAPrivateFindingNowhere pins a run with a private finding: no
-// advisory side exists yet, so the report says the private findings were not
-// filed, the report and its issues are published all the same, and the run ends
-// with outcome 5.
-func TestPublishFilesAPrivateFindingNowhere(t *testing.T) {
+// TestPublishFilesAPrivateFindingAsADraft pins 4c's P1, a run with a private
+// finding: the run lists the repository's advisories and files one draft for
+// the finding, then publishes the report saying the private findings were
+// handled privately and the issues. Every advisory call runs before the
+// report's first write, and the draft is the finding's own text. A create
+// GitHub refuses is P2's not-filed path, pinned in publish_advisories_test.go.
+func TestPublishFilesAPrivateFindingAsADraft(t *testing.T) {
 	t.Parallel()
 
 	// The previous report holds one public finding the run files an issue for.
@@ -232,34 +242,72 @@ func TestPublishFilesAPrivateFindingNowhere(t *testing.T) {
 
 	// The run's own finding is private: a confirmed high one of a private
 	// category.
-	fake := newFakeGH(t, publishRoutes()...)
+	finding := fixtureFinding("G302", "high", "injection")
+	fp := fixtureFingerprint(t, finding)
+
+	fake := newFakeGH(t, publishRoutesWithAdvisories(nil, []Route{advisoryCreateRoute(201)})...)
 	client := newFixtureClient(t, fake.Path)
-	cfg := publishConfig(t, client, newFixtureGitleaks(t, newFakeGitleaks(t)),
-		fixtureResultFile(t, fixtureFinding("G302", "high", "injection")), dir)
+	cfg := publishConfig(t, client, newFixtureGitleaks(t, newFakeGitleaks(t)), fixtureResultFile(t, finding), dir)
 
 	published, err := github.Publish(t.Context(), cfg)
 	if err != nil {
-		t.Fatalf("Publish = %v, want no error: the report is published whatever the private findings", err)
+		t.Fatalf("Publish = %v, want no error: the draft is filed", err)
 	}
 
-	if published.Private != publish.PrivateNotFiled {
-		t.Errorf("the run's private state is %v, want PrivateNotFiled", published.Private)
+	if diff := cmp.Diff(github.Published{Public: 0, Private: publish.PrivateHandled}, published); diff != "" {
+		t.Errorf("the run's counts (-want +got):\n%s", diff)
 	}
 
 	outcome := publish.OutcomeOf(nil).WithCounts(published.Public, published.Private)
-	if outcome.Code() != 5 {
-		t.Errorf("the run's outcome is %q, %d, want the not-filed outcome, exit 5", outcome.Summary(), outcome.Code())
+	if want := "audit published: public findings 0, private findings: handled privately"; outcome.Summary() != want || outcome.Code() != 0 {
+		t.Errorf("the run's outcome is %q, %d, want %q, 0", outcome.Summary(), outcome.Code(), want)
 	}
 
 	calls := fake.Calls(t)
+
+	// The listing, then the draft's create, then the report's first write.
+	listing, created, branch := -1, -1, len(calls)
+
+	for i, c := range calls {
+		switch {
+		case c.Method == "GET" && c.Endpoint == fixtureAdvisoriesEndpoint:
+			listing = i
+		case c.Method == "POST" && c.Endpoint == fixtureRepoPrefix+"/security-advisories":
+			created = i
+		case c.Endpoint == fixtureBranchEndpoint && i < branch:
+			branch = i
+		}
+	}
+
+	switch {
+	case listing < 0:
+		t.Errorf("the run read no advisory listing, want the one page: %v", calls)
+	case created < 0:
+		t.Errorf("the run created no draft, want one: %v", calls)
+	case listing >= created || created >= branch:
+		t.Errorf("the advisory calls are at %d and %d, the report's first write at %d, want the listing, the draft and then the report", listing, created, branch)
+	}
+
+	drafts := recordedBodies[map[string]any](t, calls, "POST", fixtureRepoPrefix+"/security-advisories")
+	if len(drafts) != 1 {
+		t.Fatalf("the run created %d draft(s), want 1", len(drafts))
+	}
+
+	if summary, _ := drafts[0]["summary"].(string); summary != advisorySummary(fp) {
+		t.Errorf("the draft's summary is %q, want %q", summary, advisorySummary(fp))
+	}
+
+	if description, _ := drafts[0]["description"].(string); !strings.Contains(description, "Audit status: new\nRun: "+fixtureRun(t).URL()) {
+		t.Errorf("the draft's description does not end with the new status and the run's URL:\n%s", description)
+	}
 
 	blobs := recordedBodies[recordedBlob](t, calls, "POST", fixtureBlobsEndpoint)
 	if len(blobs) != 1 {
 		t.Fatalf("the run made %d blob(s), want 1: the report is published", len(blobs))
 	}
 
-	if !strings.Contains(blobs[0].Content, "private findings: not filed") {
-		t.Errorf("the report holds no not-filed line: a private finding is never dropped silently")
+	if !strings.Contains(blobs[0].Content, "private findings: handled privately") {
+		t.Errorf("the report holds no handled-privately line:\n%s", blobs[0].Content)
 	}
 
 	var filed int
@@ -272,12 +320,6 @@ func TestPublishFilesAPrivateFindingNowhere(t *testing.T) {
 
 	if filed != 1 {
 		t.Errorf("the run filed %d issue(s), want 1: the previous report's public finding is still filed", filed)
-	}
-
-	for _, c := range calls {
-		if strings.Contains(c.Endpoint, "security-advisories") {
-			t.Errorf("the run called %s, want no advisory endpoint: the advisories are PR 4c's", c.Endpoint)
-		}
 	}
 }
 
@@ -342,6 +384,13 @@ func TestPublishScansThePreviousReportsIssuesBeforeWriting(t *testing.T) {
 	}{
 		{name: "a gitleaks hit", scenario: "a scenario holding " + fakeGitleaksHit},
 		{name: "a token", scenario: "a scenario holding " + modelToken()},
+		{
+			// A long, high-entropy run of the model's own characters: the
+			// previous report's cell holds it, so the issue rendered from that
+			// finding would carry it into the repository unscanned.
+			name:     "an encoded run",
+			scenario: "a scenario holding " + strings.Repeat("A1b2C3d4E5f6G7h8I9j0", 2),
+		},
 		{
 			name:     "a 40-hex run that is no commit",
 			scenario: "a revert of " + fixtureOtherCommitSHA,
@@ -467,6 +516,7 @@ func TestPublishStopsAtTheFirstRefusedIssue(t *testing.T) {
 		{Method: "GET", Endpoint: fixtureReleaseEndpoint, Status: 200, Body: map[string]string{"tag_name": fixtureTag}},
 		{Method: "GET", Endpoint: fixtureIssuesQuery + "page=1", Status: 200, Body: []any{}},
 		{Method: "POST", Endpoint: fixtureIssuesEndpoint, Status: 422, Body: map[string]string{"message": "the issue was refused"}},
+		advisoryListingRoute(nil, ""),
 	}
 	routes = append(routes, reportRoutes()...)
 
@@ -494,6 +544,72 @@ func TestPublishStopsAtTheFirstRefusedIssue(t *testing.T) {
 
 	if writes := writesOf(calls); !slices.Contains(writes, fixturePullsEndpoint) {
 		t.Errorf("the run's writes are %v, want the report's pull request among them: the report is published first", writes)
+	}
+}
+
+// TestPublishFilesAnIssueOnlyForAFingerprintNoIssueCarries pins the listing's
+// match on a whole run: an issue of the audit App's holding the fingerprint - in
+// state open or closed - means no issue is filed for it, and a fingerprint no
+// issue carries still gets its issue. The listing is read with state=all, so a
+// closed issue of the App's is one filed already, not one to file anew.
+func TestPublishFilesAnIssueOnlyForAFingerprintNoIssueCarries(t *testing.T) {
+	t.Parallel()
+
+	// The previous report holds two open public findings: the run files an issue
+	// for each unless the listing carries the fingerprint.
+	matched := fixtureFinding("G301", "low", "hardening")
+	unmatched := fixtureFinding("G302", "low", "hardening")
+
+	fp := func(f map[string]any) publish.Fingerprint {
+		return publish.PlainFingerprint(f["rule"].(string), f["file"].(string), f["sink"].(string))
+	}
+
+	matchedTitle, unmatchedTitle := issueTitleOf(fp(matched)), issueTitleOf(fp(unmatched))
+
+	dir := fixtureReportsDir(t)
+	writeFixtureReport(t, dir, renderFixtureReport(t,
+		fixtureResult(t, matched, unmatched), publish.PrivateNone, nil, "2026-12-01", "1"))
+
+	for _, tc := range []struct {
+		name string
+		// issues is the audit App's listing the run reads.
+		issues []map[string]any
+		// want are the titles of the issues the run files, in its plan's order.
+		want []string
+	}{
+		{name: "no issue at all", want: []string{matchedTitle, unmatchedTitle}},
+		{
+			name:   "the bot's open issue of the matched fingerprint",
+			issues: []map[string]any{botEntryInState(matchedTitle, "open")},
+			want:   []string{unmatchedTitle},
+		},
+		{
+			name:   "the bot's closed issue of the matched fingerprint",
+			issues: []map[string]any{botEntryInState(matchedTitle, "closed")},
+			want:   []string{unmatchedTitle},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			fake := newFakeGH(t, publishRoutes(tc.issues...)...)
+			client := newFixtureClient(t, fake.Path)
+			cfg := publishConfig(t, client, newFixtureGitleaks(t, newFakeGitleaks(t)), fixtureResultFile(t), dir)
+
+			if _, err := github.Publish(t.Context(), cfg); err != nil {
+				t.Fatalf("Publish = %v, want no error", err)
+			}
+
+			var got []string
+
+			for _, issue := range recordedBodies[recordedIssue](t, fake.Calls(t), "POST", fixtureIssuesEndpoint) {
+				got = append(got, issue.Title)
+			}
+
+			if diff := cmp.Diff(tc.want, got); diff != "" {
+				t.Errorf("the issues the run filed (-want +got):\n%s", diff)
+			}
+		})
 	}
 }
 

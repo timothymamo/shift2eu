@@ -138,6 +138,11 @@ var realDataAllowList = []allowListEntry{
 		value: "C.int",
 		why:   "cgo's C.int type in a Go-source probe, a selector that names no domain although int is a TLD",
 	},
+	{
+		file:  "ci/auditpublish/internal/publish/testdata/report.golden.md",
+		value: "github.com/example",
+		why:   "the run URL of the audit fixtures' documented dummy repository, example/shift2eu, in the report the publish core renders; no account is named example, so it names no one's repository",
+	},
 }
 
 // checkedFiles returns every file the real-data check reads, sorted by path:

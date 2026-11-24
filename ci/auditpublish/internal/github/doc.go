@@ -35,13 +35,24 @@
 // It publishes (Publish): it reads the result and the previous merged report
 // (LoadResult, LoadPrevious), checks the release, lists the audit App's
 // issues (ListAuditIssues) and plans one issue per unmatched open finding of
-// the previous report (PlanIssues), scans every text before the first write,
-// then files the report through the Git data API (PublishReport: the branch
-// lookup, blob, tree, commit, the one-file compare before the ref, the ref,
-// the pull request) and the issues (CreateIssue). Every write goes through one
-// helper that turns a non-2xx status into publish.ErrGitHub and never
-// retries. The draft advisories are not built yet: a private finding makes
-// the run end not filed.
+// the previous report (PlanIssues), lists the repository's security
+// advisories (ListAuditAdvisories, at most ten pages by the Link header's
+// after cursor) and plans each private finding's draft advisory against the
+// audit App's own drafts and closed advisories (PlanAdvisories: update,
+// create, regressed, dismissed, not reproduced, and two drafts of one
+// fingerprint refused before any write), scans every text before the first
+// write, then files the draft advisories (FileAdvisories), the report through
+// the Git data API (PublishReport: the branch lookup, blob, tree, commit, the
+// one-file compare before the ref, the ref, the pull request) and the issues
+// (CreateIssue). A PATCH names only a GHSA that the same run's listing showed
+// as one of the App's drafts. Every write goes through one helper that turns
+// a non-2xx status into publish.ErrGitHub and never retries. A creation
+// GitHub refuses (403, 404, 422) as the run's first advisory write makes the
+// run publish its report as "private findings: not filed" and write the
+// private findings nowhere; the same refusal after an earlier advisory write
+// of the run is publish.ErrGitHub, and the earlier drafts stand. A listing
+// entry whose credit or collaborator list is missing or null fails the
+// listing closed (publish.ErrGitHub).
 //
 // It scans every text with gitleaks (Gitleaks) beside the core's own scans,
 // and looks up every 40-hex run of a model field as a commit
