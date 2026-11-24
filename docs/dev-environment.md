@@ -2601,8 +2601,9 @@ gh run list --repo timothymamo/shift2eu --workflow scheduled-security-audit.yml 
 # FAIL: the <previous id> or no output: the run is not listed yet; wait a few seconds and list again
 gh run watch <run_id> --repo timothymamo/shift2eu --exit-status > /dev/null && echo succeeded
 # PASS, once it finishes: succeeded; FAIL: no "succeeded" line (the run failed: step 11)
-gh pr list --repo timothymamo/shift2eu --author app/shift2eu-audit --json number,headRefName --jq '.[] | [.number, .headRefName] | @tsv'
-# PASS: one PR, head branch security-audit/<date>-<run_id>
+gh pr list --repo timothymamo/shift2eu --author app/shift2eu-audit --json number,headRefName --jq '.[] | select(.headRefName | endswith("-<run_id>")) | [.number, .headRefName] | @tsv'
+# PASS: one row, head branch security-audit/<date>-<run_id> (other runs' report PRs may be open too)
+# FAIL: no row (the run opened no report PR)
 gh api repos/timothymamo/shift2eu/actions/runs/<run_id>/artifacts --jq '[.artifacts[].name] | sort | tojson'
 # PASS: ["checks-result","model-result"]
 # GitHub, the run's page: by hand
@@ -2673,7 +2674,8 @@ gh run watch <run_id> --repo timothymamo/shift2eu --exit-status > /dev/null && e
 **10. Renew and rotate.** Renew the Claude token before it expires (PRD #175, The subscription token):
 run `claude setup-token` again on your own machine, replace the environment secret, revoke the old token
 where the Claude account allows it, update the dates above. Rotate the App's key, the model key or the
-publish key if any may have leaked, and rotate any secret a private finding says is in the git history,
+publish key if any may have leaked (the App's key: generate a new one on the App's page, set the secret,
+then delete every older key there), and rotate any secret a private finding says is in the git history,
 once you have checked that it is real. Rotate the token at once if it may have leaked. If the sandbox
 preflight fails (`the preflight failed: see runbook step 10`, or `bubblewrap cannot start: see runbook
 step 10, the user-namespace note`), read ADR 0040's note on the runner's user-namespace restriction
@@ -2684,7 +2686,7 @@ before changing anything.
 # prompt or from the file on stdin, never echoed and never on the command line
 # The Claude token: paste it at the prompt
 gh secret set CLAUDE_CODE_OAUTH_TOKEN --env security-audit --repo timothymamo/shift2eu
-# The App's key: the new key file on stdin
+# The App's key: generate a new one on the App's page (shift2eu-audit), Private keys; the new key file on stdin
 gh secret set AUDIT_APP_PRIVATE_KEY --env security-audit --repo timothymamo/shift2eu < <the App's new key file>
 # The model key pair: both halves together
 gh secret set AUDIT_MODEL_PRIVATE_KEY --env security-audit --repo timothymamo/shift2eu < <the model key's new private file>
@@ -2693,6 +2695,9 @@ gh variable set AUDIT_MODEL_PUBLIC_KEY --env security-audit --repo timothymamo/s
 gh secret set AUDIT_PUBLISH_PRIVATE_KEY --env security-audit --repo timothymamo/shift2eu < <the publish key's new private file>
 gh variable set AUDIT_PUBLISH_PUBLIC_KEY --env security-audit --repo timothymamo/shift2eu < <the publish key's new public file>
 # PASS: each line reports the secret or variable set; FAIL: an error
+# The App's key, once its secret is set: delete every older key on the App's page; a leaked one keeps minting tokens
+# GitHub, the App's page (shift2eu-audit), Private keys: by hand
+# PASS: one key, the new one; FAIL: an older key still listed
 ls <the App's new key file> <the model key's new private file> <the publish key's new private file>
 # PASS: No such file or directory (each one you stored, once you have deleted it)
 
