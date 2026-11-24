@@ -12,6 +12,10 @@ type Rendered struct {
 	Path        string
 	Body        string
 	ModelFields []string
+	// PublicTotal is the summary's public total: the kept findings placed
+	// public or needing investigation, the count the run's summary line
+	// states (Outcome.WithCounts).
+	PublicTotal int
 }
 
 // Templates are the run's fixed texts besides the report: the branch, the pull
@@ -85,6 +89,7 @@ func RenderReport(in ReportInput) (Rendered, error) {
 		Path:        reportsDir + reportName(p.run),
 		Body:        r.b.String(),
 		ModelFields: r.fields,
+		PublicTotal: p.total,
 	}, nil
 }
 

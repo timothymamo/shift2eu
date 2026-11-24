@@ -65,11 +65,16 @@ type Endpoint struct {
 	Body    BodyRule
 }
 
-// Endpoints is every call the publish program and the artifact check may
-// make, and nothing else: no PUT, no DELETE, no merge or review of a pull
-// request, no CVE request, no tag, release or other branch. The issue listing
-// accepts pages 1 to 10 only: a listing longer than ten pages fails closed.
-var Endpoints = []Endpoint{
+// Endpoints returns a copy of the endpoint table: every call the publish
+// program and the artifact check may make, and nothing else: no PUT, no
+// DELETE, no merge or review of a pull request, no CVE request, no tag,
+// release or other branch. The issue listing accepts pages 1 to 10 only: a
+// listing longer than ten pages fails closed. The table itself is
+// unexported, so no caller can change what Allowed checks.
+func Endpoints() []Endpoint { return slices.Clone(endpoints) }
+
+// endpoints is the endpoint table Allowed checks every call against.
+var endpoints = []Endpoint{
 	{Method: "GET", Pattern: `{repo}/actions/runs/{run}/artifacts\?per_page=100`, Body: BodyNone},
 	{Method: "GET", Pattern: `{repo}/releases/tags/{tag}`, Body: BodyNone},
 	{Method: "GET", Pattern: `{repo}/attestations/{digest}\?per_page=100`, Body: BodyNone},
@@ -126,7 +131,7 @@ func Allowed(scope Scope, method, endpoint string, body []byte) error {
 		return fmt.Errorf("endpoint check: an endpoint gh could read as a flag, a URL or another path: %w", ErrEndpointRefused)
 	}
 
-	for _, row := range Endpoints {
+	for _, row := range endpoints {
 		if row.Method != method {
 			continue
 		}

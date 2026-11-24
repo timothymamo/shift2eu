@@ -757,6 +757,29 @@ var shippedLicenseFiles = []struct{ name, path string }{
 // it out, and a GoReleaser docker entry that names one file alone. A check that
 // cannot tell those apart would pass on an image that ships neither.
 //
+// A GoReleaser docker section ships a file only when an entry of its extra_files
+// list is exactly that file's name: a section that names it in a comment, in
+// another key's value, or as part of a longer entry such as LICENSE.txt or
+// third_party/NOTICE sends the daemon no LICENSE and no NOTICE, so each of those
+// fixtures must be reported too. A path entry does not count, because GoReleaser
+// keeps the subpath it names and the final stage's `COPY LICENSE NOTICE` reads
+// the context's root. The entry must also belong to the image it is read for: a
+// section that builds two images sends each its own context, so the first
+// image's extra_files ships the second nothing, and a fixture whose second image
+// names neither file must be reported. Only an entry of the extra_files list
+// itself counts, at the list's own indentation and as a key of the image entry:
+// a list nested inside one of those entries, and an extra_files written under
+// another of the entry's keys, ship neither file. YAML reads a comment from the
+// first `#` after a blank that no quote opened, so an apostrophe inside an
+// unquoted scalar such as `it's` opens none and the names after it are text.
+// Inside a quoted scalar a quote is escaped: two single quotes in a
+// single-quoted one, and a backslash and the quote in a double-quoted one,
+// neither of which closes it, so the commas and the `#` between the escape and
+// the scalar's close are text. A fixture pins each escape, in a section's key,
+// in a flow list's entry and in that entry's comment.
+// A block sequence may start in the first column, level with the key it belongs
+// to, without becoming a top-level key.
+//
 // It also holds the directory the files land in: BuildKit gives a COPY's
 // --chmod to the directories that COPY creates as well, so a stage that lets the
 // 0444 COPY create imageDocDir leaves a directory without a search bit, which
@@ -876,6 +899,246 @@ COPY --chmod=0444 LICENSE NOTICE /usr/share/doc/shift2eu/
 			goreleaser:   "dockers_v2:\n  - id: shift2eu\n    dockerfile: Dockerfile\n    extra_files:\n      - LICENSE\n",
 			want:         []string{"names no NOTICE"},
 		},
+		{
+			name:         "a GoReleaser dockers_v2 entry that ships both files in extra_files",
+			dockerfile:   fixture,
+			dockerignore: "*\n!LICENSE\n!NOTICE\n",
+			goreleaser:   "dockers_v2:\n  - id: shift2eu\n    dockerfile: Dockerfile\n    extra_files:\n      - Dockerfile\n      - LICENSE\n      - NOTICE\n",
+		},
+		{
+			name:         "a GoReleaser docker entry that ships both files in extra_files",
+			dockerfile:   fixture,
+			dockerignore: "*\n!LICENSE\n!NOTICE\n",
+			goreleaser:   "docker:\n  id: shift2eu\n  dockerfile: Dockerfile\n  extra_files:\n    - Dockerfile\n    - LICENSE\n    - NOTICE\n",
+		},
+		{
+			name:         "a GoReleaser dockers entry that ships both files in extra_files",
+			dockerfile:   fixture,
+			dockerignore: "*\n!LICENSE\n!NOTICE\n",
+			goreleaser:   "dockers:\n  - id: shift2eu\n    dockerfile: Dockerfile\n    extra_files:\n      - Dockerfile\n      - LICENSE\n      - NOTICE\n",
+		},
+		{
+			name:         "a GoReleaser docker section with no extra_files",
+			dockerfile:   fixture,
+			dockerignore: "*\n!LICENSE\n!NOTICE\n",
+			goreleaser:   "dockers_v2:\n  - id: shift2eu\n    dockerfile: Dockerfile\n",
+			want:         []string{"names no LICENSE", "names no NOTICE"},
+		},
+		{
+			// An own-line comment never reaches the section's body, and a
+			// commented-out entry is not an entry.
+			name:         "a GoReleaser docker section whose own-line comments name both files",
+			dockerfile:   fixture,
+			dockerignore: "*\n!LICENSE\n!NOTICE\n",
+			goreleaser:   "dockers_v2:\n  - id: shift2eu\n    dockerfile: Dockerfile\n    extra_files:\n      - Dockerfile\n      # - LICENSE\n      # - NOTICE\n",
+			want:         []string{"names no LICENSE", "names no NOTICE"},
+		},
+		{
+			name:         "a GoReleaser docker section whose inline comments name both files",
+			dockerfile:   fixture,
+			dockerignore: "*\n!LICENSE\n!NOTICE\n",
+			goreleaser:   "dockers_v2:\n  - id: shift2eu\n    dockerfile: Dockerfile\n    extra_files:\n      - Dockerfile # LICENSE\n      - Dockerfile # NOTICE\n",
+			want:         []string{"names no LICENSE", "names no NOTICE"},
+		},
+		{
+			name:         "a GoReleaser docker section whose other keys name both files",
+			dockerfile:   fixture,
+			dockerignore: "*\n!LICENSE\n!NOTICE\n",
+			goreleaser:   "dockers_v2:\n  - id: NOTICE-image\n    dockerfile: Dockerfile\n    description: ships LICENSE\n    extra_files:\n      - Dockerfile\n",
+			want:         []string{"names no LICENSE", "names no NOTICE"},
+		},
+		{
+			name:         "a GoReleaser docker section whose entries only contain both file names",
+			dockerfile:   fixture,
+			dockerignore: "*\n!LICENSE\n!NOTICE\n",
+			goreleaser:   "dockers_v2:\n  - id: shift2eu\n    dockerfile: Dockerfile\n    extra_files:\n      - Dockerfile\n      - LICENSE.txt\n      - third_party/NOTICE\n",
+			want:         []string{"names no LICENSE", "names no NOTICE"},
+		},
+		{
+			// Each image the section builds gets its own build context, so
+			// the first image's extra_files ships nothing to the second.
+			name:         "a GoReleaser dockers_v2 section whose second image ships neither file",
+			dockerfile:   fixture,
+			dockerignore: "*\n!LICENSE\n!NOTICE\n",
+			goreleaser:   "dockers_v2:\n  - id: a\n    dockerfile: Dockerfile\n    extra_files:\n      - LICENSE\n      - NOTICE\n  - id: b\n    dockerfile: Dockerfile\n",
+			want:         []string{"names no LICENSE", "names no NOTICE"},
+		},
+		{
+			name:         "a GoReleaser dockers section whose second image ships neither file",
+			dockerfile:   fixture,
+			dockerignore: "*\n!LICENSE\n!NOTICE\n",
+			goreleaser:   "dockers:\n  - id: a\n    dockerfile: Dockerfile\n    extra_files:\n      - LICENSE\n      - NOTICE\n  - id: b\n    dockerfile: Dockerfile\n",
+			want:         []string{"names no LICENSE", "names no NOTICE"},
+		},
+		{
+			// GoReleaser reads extra_files as a key of the image entry, not as
+			// one nested under another of the entry's keys.
+			name:         "a GoReleaser docker section whose extra_files sits under another key",
+			dockerfile:   fixture,
+			dockerignore: "*\n!LICENSE\n!NOTICE\n",
+			goreleaser:   "dockers_v2:\n  - id: a\n    dockerfile: Dockerfile\n    labels:\n      extra_files: [LICENSE, NOTICE]\n",
+			want:         []string{"names no LICENSE", "names no NOTICE"},
+		},
+		{
+			// Only the items at the extra_files list's own indentation are its
+			// entries; the list one of its entries carries is not.
+			name:         "a GoReleaser docker section whose extra_files holds a nested list",
+			dockerfile:   fixture,
+			dockerignore: "*\n!LICENSE\n!NOTICE\n",
+			goreleaser:   "dockers_v2:\n  - id: a\n    dockerfile: Dockerfile\n    extra_files:\n      - glob: x\n        name_template:\n          - LICENSE\n          - NOTICE\n",
+			want:         []string{"names no LICENSE", "names no NOTICE"},
+		},
+		{
+			// The apostrophe in it's does not open a quoted scalar, so the #
+			// after the list starts a comment and the names in it are text.
+			name:         "a GoReleaser docker section whose comment follows an apostrophe",
+			dockerfile:   fixture,
+			dockerignore: "*\n!LICENSE\n!NOTICE\n",
+			goreleaser:   "dockers_v2:\n  - id: a\n    dockerfile: Dockerfile\n    extra_files: [Dockerfile, it's] # LICENSE, NOTICE\n",
+			want:         []string{"names no LICENSE", "names no NOTICE"},
+		},
+		{
+			// YAML lets a block sequence under a key start in the first column,
+			// at the key's own indentation.
+			name:         "a GoReleaser dockers_v2 section whose sequence is not indented",
+			dockerfile:   fixture,
+			dockerignore: "*\n!LICENSE\n!NOTICE\n",
+			goreleaser:   "dockers_v2:\n- id: a\n  extra_files:\n  - Dockerfile\n  - LICENSE\n  - NOTICE\n",
+		},
+		{
+			name:         "a GoReleaser docker section whose extra_files is a flow list",
+			dockerfile:   fixture,
+			dockerignore: "*\n!LICENSE\n!NOTICE\n",
+			goreleaser:   "docker:\n  id: shift2eu\n  dockerfile: Dockerfile\n  extra_files: [Dockerfile, \"LICENSE\", 'NOTICE']\n",
+		},
+		{
+			name:         "a GoReleaser docker section whose flow list leaves NOTICE out",
+			dockerfile:   fixture,
+			dockerignore: "*\n!LICENSE\n!NOTICE\n",
+			goreleaser:   "docker:\n  id: shift2eu\n  dockerfile: Dockerfile\n  extra_files: [Dockerfile, \"LICENSE\"]\n",
+			want:         []string{"names no NOTICE"},
+		},
+		{
+			// YAML reads the quoted entry as the one file whose name holds the
+			// commas, so the list ships no LICENSE and no NOTICE: the names
+			// inside a quoted scalar are not entries of their own.
+			name:         "a GoReleaser dockers_v2 section whose single-quoted flow entry holds commas",
+			dockerfile:   fixture,
+			dockerignore: "*\n!LICENSE\n!NOTICE\n",
+			goreleaser:   "dockers_v2:\n  - id: a\n    extra_files: ['x, LICENSE, NOTICE']\n",
+			want:         []string{"names no LICENSE", "names no NOTICE"},
+		},
+		{
+			name:         "a GoReleaser dockers_v2 section whose double-quoted flow entry holds commas",
+			dockerfile:   fixture,
+			dockerignore: "*\n!LICENSE\n!NOTICE\n",
+			goreleaser:   "dockers_v2:\n  - id: a\n    extra_files: [\"x, LICENSE, NOTICE\"]\n",
+			want:         []string{"names no LICENSE", "names no NOTICE"},
+		},
+		{
+			// The quoted entry is one file of its own and the real entries
+			// beside it are read as they stand, so both files ship.
+			name:         "a GoReleaser docker section whose flow list quotes an entry holding a comma",
+			dockerfile:   fixture,
+			dockerignore: "*\n!LICENSE\n!NOTICE\n",
+			goreleaser:   "docker:\n  id: shift2eu\n  dockerfile: Dockerfile\n  extra_files: [Dockerfile, 'a, b', LICENSE, NOTICE]\n",
+		},
+		{
+			// Two single quotes in a row inside a single-quoted scalar are an
+			// escaped quote, not its close, so the commas after them stay
+			// inside the one entry and the names in it are not entries.
+			name:         "a GoReleaser dockers_v2 section whose single-quoted flow entry holds an escaped quote",
+			dockerfile:   fixture,
+			dockerignore: "*\n!LICENSE\n!NOTICE\n",
+			goreleaser:   "dockers_v2:\n  - id: a\n    extra_files: ['a'', LICENSE, NOTICE']\n",
+			want:         []string{"names no LICENSE", "names no NOTICE"},
+		},
+		{
+			// A backslash escapes the double quote after it, so that quote does
+			// not close the scalar and the commas after it stay inside the one
+			// entry.
+			name:         "a GoReleaser dockers_v2 section whose double-quoted flow entry holds an escaped quote",
+			dockerfile:   fixture,
+			dockerignore: "*\n!LICENSE\n!NOTICE\n",
+			goreleaser:   "dockers_v2:\n  - id: a\n    extra_files: [\"a\\\", LICENSE, NOTICE\"]\n",
+			want:         []string{"names no LICENSE", "names no NOTICE"},
+		},
+		{
+			// A # inside a quoted scalar is text, and the escaped quote before
+			// it keeps the scalar open over it, so the entries beside it ship
+			// both files.
+			name:         "a GoReleaser docker section whose flow list holds a # after an escaped single quote",
+			dockerfile:   fixture,
+			dockerignore: "*\n!LICENSE\n!NOTICE\n",
+			goreleaser:   "docker:\n  id: shift2eu\n  dockerfile: Dockerfile\n  extra_files: ['a''b # c', LICENSE, NOTICE]\n",
+		},
+		{
+			name:         "a GoReleaser docker section whose flow list holds a # after an escaped double quote",
+			dockerfile:   fixture,
+			dockerignore: "*\n!LICENSE\n!NOTICE\n",
+			goreleaser:   "docker:\n  id: shift2eu\n  dockerfile: Dockerfile\n  extra_files: [\"a\\\" # c\", LICENSE, NOTICE]\n",
+		},
+		{
+			// Neither the file names inside the quoted entries nor the # in
+			// them are an entry or a comment of the list, so neither file ships.
+			name:         "a GoReleaser docker section whose quoted flow entries hold comment-looking text",
+			dockerfile:   fixture,
+			dockerignore: "*\n!LICENSE\n!NOTICE\n",
+			goreleaser:   "docker:\n  id: shift2eu\n  dockerfile: Dockerfile\n  extra_files: ['it''s # LICENSE', 'x\" # NOTICE']\n",
+			want:         []string{"names no LICENSE", "names no NOTICE"},
+		},
+		{
+			// The escaped quote keeps the scalar open to its close, so the #
+			// after it starts a comment that names neither file.
+			name:         "a GoReleaser docker section whose comment follows an entry holding an escaped quote",
+			dockerfile:   fixture,
+			dockerignore: "*\n!LICENSE\n!NOTICE\n",
+			goreleaser:   "docker:\n  id: shift2eu\n  dockerfile: Dockerfile\n  extra_files: ['a''b'] # LICENSE, NOTICE\n",
+			want:         []string{"names no LICENSE", "names no NOTICE"},
+		},
+		{
+			name:         "a GoReleaser dockers_v2 section whose key opens a list item",
+			dockerfile:   fixture,
+			dockerignore: "*\n!LICENSE\n!NOTICE\n",
+			goreleaser:   "dockers_v2:\n  - extra_files:\n      - LICENSE\n      - NOTICE\n    id: a\n",
+		},
+		{
+			// YAML allows blanks between a key and its colon.
+			name:         "a GoReleaser dockers_v2 section whose key has a blank before the colon",
+			dockerfile:   fixture,
+			dockerignore: "*\n!LICENSE\n!NOTICE\n",
+			goreleaser:   "dockers_v2 :\n  - id: a\n    dockerfile: Dockerfile\n",
+			want:         []string{"names no LICENSE", "names no NOTICE"},
+		},
+		{
+			// YAML reads a quoted key as the plain key it spells.
+			name:         "a GoReleaser dockers_v2 section whose key is double-quoted",
+			dockerfile:   fixture,
+			dockerignore: "*\n!LICENSE\n!NOTICE\n",
+			goreleaser:   "\"dockers_v2\":\n  - id: a\n    dockerfile: Dockerfile\n",
+			want:         []string{"names no LICENSE", "names no NOTICE"},
+		},
+		{
+			name:         "a GoReleaser docker section whose key is single-quoted",
+			dockerfile:   fixture,
+			dockerignore: "*\n!LICENSE\n!NOTICE\n",
+			goreleaser:   "'docker':\n  id: a\n  dockerfile: Dockerfile\n",
+			want:         []string{"names no LICENSE", "names no NOTICE"},
+		},
+		{
+			// YAML lets a list item hold its mapping on the lines below the
+			// bare dash, so the extra_files list is the image's own.
+			name:         "a GoReleaser dockers_v2 section whose list item holds a bare dash",
+			dockerfile:   fixture,
+			dockerignore: "*\n!LICENSE\n!NOTICE\n",
+			goreleaser:   "dockers_v2:\n  -\n    id: a\n    extra_files:\n      - Dockerfile\n      - LICENSE\n      - NOTICE\n",
+		},
+		{
+			name:         "a GoReleaser dockers_v2 section whose two images both ship both files",
+			dockerfile:   fixture,
+			dockerignore: "*\n!LICENSE\n!NOTICE\n",
+			goreleaser:   "dockers_v2:\n  - id: a\n    dockerfile: Dockerfile\n    extra_files:\n      - Dockerfile\n      - LICENSE\n      - NOTICE\n  - id: b\n    dockerfile: Dockerfile\n    extra_files:\n      - LICENSE\n      - NOTICE\n",
+		},
 	}
 
 	for _, tc := range tests {
@@ -945,10 +1208,14 @@ func licenseFileFindings(t *testing.T, name, dockerfile, dockerignore, gorelease
 	}
 
 	for _, section := range imageBuildSections(goreleaser) {
-		for _, file := range shippedLicenseFiles {
-			if !strings.Contains(section, file.name) {
-				findings = append(findings, fmt.Sprintf("%s: the docker section of the release names no %s: GoReleaser sends the daemon only what the section's extra_files names, so the image it builds ships no %s whatever the Dockerfile copies; add %s beside the Dockerfile in extra_files (issue #495)",
-					goreleaserName, file.name, file.name, file.name))
+		for _, image := range sectionImages(section) {
+			shipped := extraFiles(image.body)
+
+			for _, file := range shippedLicenseFiles {
+				if !slices.Contains(shipped, file.name) {
+					findings = append(findings, fmt.Sprintf("%s: %s names no %s: GoReleaser sends the daemon only what the image's own extra_files names, so the image it builds ships no %s whatever the Dockerfile copies; add %s beside the Dockerfile in that image's extra_files (issue #495)",
+						goreleaserName, image.label, file.name, file.name, file.name))
+				}
 			}
 		}
 	}
@@ -971,7 +1238,7 @@ func licenseFileFindings(t *testing.T, name, dockerfile, dockerignore, gorelease
 func licenseDirFindings(t *testing.T, name string, instructions []instruction) []string {
 	t.Helper()
 
-	stageCopies := copies(finalStage(t, instructions))
+	stageCopies := copyInstructions(finalStage(t, instructions))
 
 	licence := -1
 
@@ -1005,8 +1272,8 @@ func licenseDirFindings(t *testing.T, name string, instructions []instruction) [
 		name, stageCopies[licence].line, licenseFileMode, imageDocDir, imageDocDir, licenseFileMode, imageDocDirMode)}
 }
 
-// copy is one COPY instruction of a stage, parsed as Docker reads it.
-type copy struct {
+// copyInstruction is one COPY instruction of a stage, parsed as Docker reads it.
+type copyInstruction struct {
 	// line is the line of the Dockerfile the instruction starts at.
 	line int
 	// from is the stage a --from names, "" for a copy of the build context.
@@ -1017,17 +1284,18 @@ type copy struct {
 	paths []string
 }
 
-// copies returns the COPY instructions of a stage, in file order. A --chmod
-// written as its own argument is read too, since Docker accepts that form.
-func copies(stage []instruction) []copy {
-	var parsed []copy
+// copyInstructions returns the COPY instructions of a stage, in file order. A
+// --chmod written as its own argument is read too, since Docker accepts that
+// form.
+func copyInstructions(stage []instruction) []copyInstruction {
+	var parsed []copyInstruction
 
 	for _, in := range stage {
 		if in.keyword() != "COPY" {
 			continue
 		}
 
-		parsedCopy := copy{line: in.line}
+		parsedCopy := copyInstruction{line: in.line}
 
 		fields := strings.Fields(in.arguments())
 
@@ -1057,7 +1325,7 @@ func copies(stage []instruction) []copy {
 // destination returns where the copy puts source: a destination written as a
 // directory, which Docker joins to the source's base name, or the destination
 // itself for a copy of one file, and "" when the paths do not say.
-func (c copy) destination(source string) string {
+func (c copyInstruction) destination(source string) string {
 	if len(c.paths) < 2 {
 		return ""
 	}
@@ -1076,7 +1344,7 @@ func (c copy) destination(source string) string {
 
 // copiesFilesInto reports whether the copy puts a file of the build context
 // into dir: a destination written as dir itself or as a path inside it.
-func (c copy) copiesFilesInto(dir string) bool {
+func (c copyInstruction) copiesFilesInto(dir string) bool {
 	if len(c.paths) < 2 {
 		return false
 	}
@@ -1093,7 +1361,7 @@ func (c copy) copiesFilesInto(dir string) bool {
 // directoryAt reports the directory a copy of another stage puts at dir, and
 // whether this copy is one: one source and one destination that name the same
 // directory, written with or without a trailing slash.
-func (c copy) directoryAt(dir string) (string, bool) {
+func (c copyInstruction) directoryAt(dir string) (string, bool) {
 	if c.from == "" || len(c.paths) != 2 {
 		return "", false
 	}
@@ -1199,7 +1467,7 @@ type contextCopy struct {
 func contextCopyDestinations(stage []instruction) map[string]contextCopy {
 	destinations := make(map[string]contextCopy)
 
-	for _, c := range copies(stage) {
+	for _, c := range copyInstructions(stage) {
 		if c.from != "" || len(c.paths) < 2 {
 			continue
 		}
@@ -1214,30 +1482,32 @@ func contextCopyDestinations(stage []instruction) map[string]contextCopy {
 	return destinations
 }
 
-// imageBuildSections returns the body of every top-level docker, dockers or
-// dockers_v2 section of .goreleaser.yaml, the sections that build the image with
-// GoReleaser, comment and blank lines dropped. A release that builds the image
-// with docker build or make image has none, and returns nothing. The
-// dockers_v2 half stays although GoReleaser builds no image today — the release
-// builds it with docker/build-push-action and `context: .` — because it guards a
-// future GoReleaser docker section, which would otherwise send the daemon a
-// context holding neither file.
-func imageBuildSections(goreleaser string) []string {
+// imageBuildSection is one top-level docker, dockers or dockers_v2 section of
+// .goreleaser.yaml: its key and its body, the lines below the key.
+type imageBuildSection struct {
+	key  string
+	body []string
+}
+
+// imageBuildSections returns every top-level docker, dockers or dockers_v2
+// section of .goreleaser.yaml, the sections that build the image with
+// GoReleaser, for sectionImages to split into images. A body keeps each line's
+// indentation and drops comment and blank lines. A line in the first column ends
+// the section, unless it is a block list item (`- id: a`): YAML lets a key's
+// sequence start at the key's own indentation, so that line is the body's.
+//
+// A release that builds the image with docker build or make image has no such
+// section, and returns nothing. The check stays although GoReleaser builds no
+// image today (the release builds it with docker/build-push-action and
+// `context: .`) because it guards a future GoReleaser docker section, which
+// would otherwise send the daemon a context holding neither file.
+func imageBuildSections(goreleaser string) []imageBuildSection {
 	imageKeys := map[string]bool{"docker": true, "dockers": true, "dockers_v2": true}
 
 	var (
-		sections []string
-		current  []string
-		inImage  bool
+		sections []imageBuildSection
+		current  *imageBuildSection
 	)
-
-	closeSection := func() {
-		if inImage {
-			sections = append(sections, strings.Join(current, "\n"))
-		}
-
-		current, inImage = nil, false
-	}
 
 	for _, raw := range strings.Split(goreleaser, "\n") {
 		line := strings.TrimRight(raw, "\r")
@@ -1247,24 +1517,361 @@ func imageBuildSections(goreleaser string) []string {
 			continue
 		}
 
-		// A top level key is one that starts in the first column.
-		if !strings.HasPrefix(line, " ") && !strings.HasPrefix(line, "\t") {
-			closeSection()
+		_, isItem := yamlListItem(trimmed)
+		indented := strings.HasPrefix(line, " ") || strings.HasPrefix(line, "\t")
 
-			key, _, ok := strings.Cut(trimmed, ":")
-			inImage = ok && imageKeys[key]
+		if indented || isItem {
+			if current != nil {
+				current.body = append(current.body, line)
+			}
 
 			continue
 		}
 
-		if inImage {
-			current = append(current, trimmed)
+		// A top-level key, which closes the section before it.
+		if current != nil {
+			sections = append(sections, *current)
+			current = nil
+		}
+
+		if key, ok := yamlMappingKey(trimmed); ok && imageKeys[key] {
+			current = &imageBuildSection{key: key}
 		}
 	}
 
-	closeSection()
+	if current != nil {
+		sections = append(sections, *current)
+	}
 
 	return sections
+}
+
+// yamlMappingKey returns the key a top-level mapping line, its indentation
+// trimmed, opens, as YAML reads it: blanks between the key and its colon are
+// dropped and a quoted key is read as the plain key it spells, so `docker :`,
+// `"docker":` and `'docker':` all open the docker section. A quoted key ends at
+// its closing quote, so a colon inside it does not end it. It reports false
+// when line opens no key.
+func yamlMappingKey(line string) (string, bool) {
+	if line != "" && (line[0] == '"' || line[0] == '\'') {
+		end := yamlQuotedScalarEnd(line)
+		if end < 0 {
+			return "", false
+		}
+
+		rest := strings.TrimLeft(line[end:], " \t")
+		if !strings.HasPrefix(rest, ":") {
+			return "", false
+		}
+
+		return unquote(line[:end]), true
+	}
+
+	key, _, ok := strings.Cut(line, ":")
+
+	return strings.TrimSpace(key), ok
+}
+
+// yamlQuotedScalarEnd returns the index just past the quote that closes the
+// quoted scalar line opens with, or -1 when it does not close on the line. The
+// scalar closes as yamlQuoteStep reads it.
+func yamlQuotedScalarEnd(line string) int {
+	quote := line[0]
+
+	for i := 1; i < len(line); i++ {
+		if i, quote = yamlQuoteStep(line, i, quote); quote == 0 {
+			return i + 1
+		}
+	}
+
+	return -1
+}
+
+// yamlQuoteStep reads the byte at i of s inside a scalar quoted with quote, as
+// YAML reads it, and returns the index of the last byte it read and the quote
+// still open, 0 once the scalar closes. Two single quotes in a row inside a
+// single-quoted scalar, and a backslash and the byte after it inside a
+// double-quoted one, are read together and do not close it. It is the one
+// quote scanner yamlQuotedScalarEnd, yamlFlowEntries and withoutYAMLComment
+// share, so they cannot read a quoted scalar apart.
+func yamlQuoteStep(s string, i int, quote byte) (last int, stillQuoted byte) {
+	switch c := s[i]; {
+	case quote == '\'' && c == '\'' && i+1 < len(s) && s[i+1] == '\'':
+		return i + 1, quote
+	case quote == '"' && c == '\\':
+		return i + 1, quote
+	case c == quote:
+		return i, 0
+	}
+
+	return i, quote
+}
+
+// sectionImage is one image a GoReleaser docker section builds: a label for the
+// findings and the image's own lines, for extraFiles to read.
+type sectionImage struct {
+	label string
+	body  []string
+}
+
+// sectionImages returns the images section builds, each with its own lines.
+// GoReleaser gives every image its own build context, so each image's
+// extra_files is read on its own. A docker section is one image, its whole
+// body. A dockers or dockers_v2 section is a list of images: its body splits at
+// each block list item in the column of its first line, the list's own items,
+// and the dash and blanks that open an item turn into spaces, so an image's
+// keys all start in one column whether or not a key opens the item
+// (`- extra_files:`). An item whose dash stands alone starts its image at the
+// line below, its mapping's first key. A list section whose body holds no such
+// item, an empty or a flow list, is taken as one image, so it is checked and,
+// naming nothing, reported: the check fails closed.
+func sectionImages(section imageBuildSection) []sectionImage {
+	whole := []sectionImage{{label: "the " + section.key + " section", body: section.body}}
+
+	if section.key == "docker" || len(section.body) == 0 {
+		return whole
+	}
+
+	first := section.body[0]
+	itemColumn := len(first) - len(strings.TrimLeft(first, " \t"))
+
+	var images []sectionImage
+
+	for _, line := range section.body {
+		trimmed := strings.TrimLeft(line, " \t")
+		indent := len(line) - len(trimmed)
+
+		if item, isItem := yamlListItem(trimmed); isItem && indent == itemColumn {
+			images = append(images, sectionImage{})
+
+			if strings.TrimSpace(withoutYAMLComment(item)) == "" {
+				// A bare dash: the item's mapping starts on the line below,
+				// which gives the image its key column.
+				continue
+			}
+
+			line = strings.Repeat(" ", len(line)-len(item)) + item
+		}
+
+		if len(images) == 0 {
+			return whole
+		}
+
+		image := &images[len(images)-1]
+		image.body = append(image.body, line)
+	}
+
+	for i := range images {
+		images[i].label = fmt.Sprintf("image %d of the %s section", i+1, section.key)
+
+		if id := imageID(images[i].body); id != "" {
+			images[i].label += fmt.Sprintf(" (id %s)", id)
+		}
+	}
+
+	return images
+}
+
+// imageID returns the value of the id key at image's own key column, the
+// column of its first line, or "" when the image names none.
+func imageID(image []string) string {
+	if len(image) == 0 {
+		return ""
+	}
+
+	keyColumn := len(image[0]) - len(strings.TrimLeft(image[0], " \t"))
+
+	for _, raw := range image {
+		content := strings.TrimRight(withoutYAMLComment(raw), " \t")
+		trimmed := strings.TrimLeft(content, " \t")
+
+		if len(content)-len(trimmed) != keyColumn {
+			continue
+		}
+
+		if name, value, ok := strings.Cut(trimmed, ":"); ok && strings.TrimSpace(name) == "id" {
+			return unquote(strings.TrimSpace(value))
+		}
+	}
+
+	return ""
+}
+
+// extraFiles returns the entries of image's extra_files list, one image
+// sectionImages returns, unquoted and in file order: the files GoReleaser
+// copies into the context it sends the daemon, each at the path the entry
+// names. It reads the key only at the image's own key column, the column of its
+// first line, so an extra_files nested under another key is not the image's. It
+// reads a block list, its entries indented under the key or level with it, and
+// only the items in the column of its first item: a list one of its entries
+// carries is not the extra_files list. It reads a flow list such as
+// `extra_files: [LICENSE, NOTICE]` only when it closes on the key's line, split
+// only at a comma outside a quoted entry (yamlFlowEntries): a flow list spread
+// over several lines is not read, so its files are reported missing, a limit
+// that fails closed. Comments, own-line and inline, and every other key's value
+// are dropped, so only an entry counts.
+func extraFiles(image []string) []string {
+	if len(image) == 0 {
+		return nil
+	}
+
+	keyColumn := len(image[0]) - len(strings.TrimLeft(image[0], " \t"))
+
+	var (
+		entries []string
+		inList  bool
+	)
+
+	itemColumn := -1
+
+	for _, raw := range image {
+		content := strings.TrimRight(withoutYAMLComment(raw), " \t")
+		trimmed := strings.TrimLeft(content, " \t")
+
+		if trimmed == "" {
+			continue
+		}
+
+		indent := len(content) - len(trimmed)
+
+		if inList {
+			item, isItem := yamlListItem(trimmed)
+
+			switch {
+			case isItem && itemColumn < 0 && indent >= keyColumn:
+				itemColumn = indent
+				entries = append(entries, unquote(item))
+
+				continue
+			case isItem && indent == itemColumn:
+				entries = append(entries, unquote(item))
+
+				continue
+			case itemColumn >= 0 && indent > itemColumn:
+				// A continuation of the entry above, or a list it carries.
+				continue
+			}
+
+			inList = false
+		}
+
+		if indent != keyColumn {
+			continue
+		}
+
+		name, value, ok := strings.Cut(trimmed, ":")
+		if !ok || strings.TrimSpace(name) != "extra_files" {
+			continue
+		}
+
+		value = strings.TrimSpace(value)
+
+		if value == "" {
+			inList, itemColumn = true, -1
+
+			continue
+		}
+
+		if inner, isFlow := strings.CutPrefix(value, "["); isFlow {
+			inner, closed := strings.CutSuffix(inner, "]")
+			if !closed {
+				continue
+			}
+
+			for _, entry := range yamlFlowEntries(inner) {
+				if entry = strings.TrimSpace(entry); entry != "" {
+					entries = append(entries, unquote(entry))
+				}
+			}
+		}
+	}
+
+	return entries
+}
+
+// yamlFlowEntries splits inner, a flow list without its brackets, at each comma
+// outside a quoted scalar, as YAML reads it, so a quoted entry that holds commas
+// stays one entry. A quote opens a scalar only where opensYAMLScalar allows, and
+// the scalar closes as yamlQuoteStep reads it. The entries keep their
+// quotes and blanks.
+func yamlFlowEntries(inner string) []string {
+	var (
+		entries []string
+		quote   byte
+	)
+
+	start := 0
+
+	for i := 0; i < len(inner); i++ {
+		c := inner[i]
+
+		switch {
+		case quote != 0:
+			i, quote = yamlQuoteStep(inner, i, quote)
+		case (c == '"' || c == '\'') && opensYAMLScalar(inner[:i]):
+			quote = c
+		case c == ',':
+			entries = append(entries, inner[start:i])
+			start = i + 1
+		}
+	}
+
+	return append(entries, inner[start:])
+}
+
+// yamlListItem reports whether line, its indentation trimmed, is a YAML block
+// list item, and returns what follows its dash.
+func yamlListItem(line string) (string, bool) {
+	rest, ok := strings.CutPrefix(line, "-")
+	if !ok || (rest != "" && rest[0] != ' ' && rest[0] != '\t') {
+		return "", false
+	}
+
+	return strings.TrimLeft(rest, " \t"), true
+}
+
+// withoutYAMLComment returns line up to its comment: a # at the start of the
+// line or after a blank, outside a quoted scalar, as YAML reads it. A quote
+// opens a scalar only where a scalar starts: at the start of the line, or after
+// `[`, `,`, `- ` or `: `, blanks allowed between, so the apostrophe in it's is
+// text. The scalar closes as yamlQuoteStep reads it.
+func withoutYAMLComment(line string) string {
+	var quote byte
+
+	for i := 0; i < len(line); i++ {
+		c := line[i]
+
+		switch {
+		case quote != 0:
+			i, quote = yamlQuoteStep(line, i, quote)
+		case (c == '"' || c == '\'') && opensYAMLScalar(line[:i]):
+			quote = c
+		case c == '#' && (i == 0 || line[i-1] == ' ' || line[i-1] == '\t'):
+			return line[:i]
+		}
+	}
+
+	return line
+}
+
+// opensYAMLScalar reports whether a scalar may start right after before, the
+// part of a line ahead of a quote: before holds only blanks, or ends in `[` or
+// `,`, or in `-` or `:` followed by at least one blank, blanks allowed after
+// each.
+func opensYAMLScalar(before string) bool {
+	trimmed := strings.TrimRight(before, " \t")
+	if trimmed == "" {
+		return true
+	}
+
+	switch trimmed[len(trimmed)-1] {
+	case '[', ',':
+		return true
+	case '-', ':':
+		return len(trimmed) < len(before)
+	}
+
+	return false
 }
 
 // TestTheDockerfileHasNoServerStage pins what issue #393 leaves of PRD #103's

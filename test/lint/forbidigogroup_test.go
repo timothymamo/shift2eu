@@ -11,10 +11,12 @@ import (
 // test. checkForbidigoGroupPatterns serves the groups whose exception entry a
 // linters.exclusions.rules rule narrows on (aireviewenv_test.go,
 // auditexecenv_test.go, auditpublishgithubenv_test.go,
-// auditpublishmainenv_test.go, auditrunenv_test.go, sitedeployenv_test.go), and
-// checkForbidigoGroupEntries the groups with no exception, naming each entry by
-// its msg and the pkg it matches (compositionrootenv_test.go,
-// compositionrootnoexec_test.go, sitecheckenv_test.go).
+// auditpublishmainenv_test.go, auditrunenv_test.go), and
+// checkForbidigoGroupEntries the groups whose name sets pin each entry by hand
+// (compositionrootenv_test.go, compositionrootnoexec_test.go,
+// sitecheckenv_test.go, sitedeployenv_test.go), naming each entry by its msg and
+// the pkg it matches; sitedeployenv_test.go also has two entries a rule narrows
+// on, which it pins that way too.
 
 // forbidGroupRefusal is a name a forbidigo group must refuse, with the msg that
 // must match the msg of the entry refusing it: the whole msg of the group's
@@ -132,12 +134,16 @@ func checkForbidigoGroupPatterns(t *testing.T, tag string, refused []forbidGroup
 	}
 }
 
-// forbidGroupEntry is one entry of a group whose linters.exclusions.rules never
-// narrow on an entry's msg, named by that msg and the package path its pkg
-// matches, with the names its pattern must refuse. The msg alone names no entry:
-// composition-root-env's entry for os.Getenv and its entry for syscall.Getenv
-// carry one msg and differ in their pkg, which is why the pkg is part of the
-// name.
+// forbidGroupEntry is one entry of a forbidigo group, named by its msg and the
+// package path its pkg matches, with the names its pattern must refuse. The msg
+// alone names no entry: composition-root-env's entry for os.Getenv and its entry
+// for syscall.Getenv carry one msg and differ in their pkg, which is why the pkg
+// is part of the name. A group whose linters.exclusions.rules narrow on two of
+// its entries' msgs (site-deploy-env: os.LookupEnv and package os/exec) is pinned
+// this way too, as sitedeployenv_test.go does: the rules themselves are pinned by
+// TestForbidigoExclusionsDropOneGroup, and the exact set of names each of those
+// two entries must refuse is pinned here, so a pattern narrowed to the names one
+// file's code happens to use still fails.
 type forbidGroupEntry struct {
 	msg, pkg string
 	refuses  []rootName
@@ -147,9 +153,9 @@ type forbidGroupEntry struct {
 // .golangci.yml with groupEntries, offline and without golangci-lint, entry by
 // entry: the entry named by each pin refuses every name the pin lists and no
 // other listed name of the group's table, no entry refuses a name of allowed,
-// and every entry of the group is pinned. It is the pin for a group no exclusion
-// rule narrows on (compositionRootRuleProblems), where the name sets are the
-// only place that says which entry refuses what: a name moved from one entry's
+// and every entry of the group is pinned. It is the pin for the groups whose
+// exclusion rules, if they have any, are pinned elsewhere, so that the name sets
+// are the place that says which entry refuses what: a name moved from one entry's
 // pattern into another's fails here, as does one an entry stops refusing. A name
 // a pin lists and an entry must not refuse is checked against the pinned names
 // alone; the allowed names are checked once, by the loop below, so an entry that

@@ -17,7 +17,9 @@ package main
 import (
 	"bytes"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -68,10 +70,12 @@ var refusedVariables = []string{
 	"CLAUDE_CODE_OAUTH_TOKEN",
 }
 
-// readVariables are the variables the artifacts subcommand reads from the
-// step's environment (ADR 0040): the token, the server, the repository, this
-// run's ID and the step summary. GITHUB_SHA and AUDIT_FINGERPRINT_KEY belong to
-// the publish subcommand, which is PR 4b's; PR 4a reads neither.
+// readVariables are the variables every subcommand reads from the step's
+// environment (ADR 0040): the token, the server, the repository, this run's ID
+// and the step summary. The artifacts subcommand reads no other but the four
+// names it is asked for presence alone; the image subcommand also reads
+// GITHUB_SHA, and the publish subcommand GITHUB_SHA and
+// AUDIT_FINGERPRINT_KEY.
 var readVariables = []string{
 	"GH_TOKEN",
 	"GITHUB_SERVER_URL",
@@ -159,16 +163,21 @@ func runToken(t *testing.T) string {
 }
 
 // stepEnvironment returns a whole environment of one run whose step summary is
-// at summaryPath.
+// at summaryPath. It carries the variables of every subcommand, the artifacts
+// subcommand's GITHUB_SHA and AUDIT_FINGERPRINT_KEY among them, so that a
+// subcommand that reads a variable it should not fails the same comparison as
+// any other.
 func stepEnvironment(t *testing.T, summaryPath string) map[string]string {
 	t.Helper()
 
 	return map[string]string{
-		"GH_TOKEN":            runToken(t),
-		"GITHUB_SERVER_URL":   fixtureServerURL,
-		"GITHUB_REPOSITORY":   fixtureRepository,
-		"GITHUB_RUN_ID":       fixtureRunID,
-		"GITHUB_STEP_SUMMARY": summaryPath,
+		"GH_TOKEN":              runToken(t),
+		"GITHUB_SERVER_URL":     fixtureServerURL,
+		"GITHUB_REPOSITORY":     fixtureRepository,
+		"GITHUB_RUN_ID":         fixtureRunID,
+		"GITHUB_STEP_SUMMARY":   summaryPath,
+		"GITHUB_SHA":            fixtureCommit,
+		"AUDIT_FINGERPRINT_KEY": fixtureFingerprintKey,
 	}
 }
 
@@ -774,6 +783,83 @@ func TestRunFailsClosedOnASummaryItCannotUse(t *testing.T) {
 	}
 }
 
+// TestRunPublishAndImageFailClosedOnASummaryTheyCannotUse pins the report
+// subcommands' half of the summary's fail-closed rule: a step summary the run
+// cannot append to refuses the run before the subcommand starts, so a run that
+// would have opened a pull request or filed an issue makes no gh call at all.
+func TestRunPublishAndImageFailClosedOnASummaryTheyCannotUse(t *testing.T) {
+	t.Parallel()
+
+	for _, summary := range []struct {
+		name string
+		// unusable changes env's GITHUB_STEP_SUMMARY to one the run cannot
+		// append a line to.
+		unusable func(t *testing.T, env map[string]string)
+	}{
+		{
+			name:     "an unset summary",
+			unusable: func(_ *testing.T, env map[string]string) { delete(env, "GITHUB_STEP_SUMMARY") },
+		},
+		{
+			name: "a summary that cannot be opened",
+			unusable: func(t *testing.T, env map[string]string) {
+				t.Helper()
+
+				env["GITHUB_STEP_SUMMARY"] = t.TempDir()
+			},
+		},
+	} {
+		for _, tc := range []struct {
+			name string
+			// args builds the command line, and answers are the fake gh's: the
+			// answers a run with a usable summary would read and write.
+			args    func(ghPath, gitleaksPath, resultPath, reportsDir string) []string
+			answers []fakeAnswer
+		}{
+			{
+				name:    "the image subcommand",
+				args:    func(ghPath, _, resultPath, _ string) []string { return imageArgs(ghPath, resultPath) },
+				answers: imageAnswers(t),
+			},
+			{name: "the publish subcommand", args: publishArgs, answers: publishAnswers()},
+		} {
+			t.Run(summary.name+" and "+tc.name, func(t *testing.T) {
+				t.Parallel()
+
+				fake := newRoutedFakeGH(t, tc.answers...)
+				env := stepEnvironment(t, writeSummary(t))
+				summary.unusable(t, env)
+
+				tempDir := t.TempDir()
+				args := withTempDir(tc.args(fake.Path, newFakeGitleaks(t), writeResult(t), t.TempDir()), tempDir)
+
+				lookup := &environ{values: env}
+
+				var stdout, stderr bytes.Buffer
+
+				code := run(t.Context(), args, lookup.lookup, fixedClock, &stdout, &stderr)
+
+				if code != codeConfigInvalid {
+					t.Errorf("the run's exit code is %d, want %d: %s\nstdout: %s\nstderr: %s",
+						code, codeConfigInvalid, lineConfigInvalid, stdout.String(), stderr.String())
+				}
+
+				if want := lineConfigInvalid + "\n"; stdout.String() != want {
+					t.Errorf("the run's stdout is %q, want exactly %q: the run prints its one line and nothing else", stdout.String(), want)
+				}
+
+				if stderr.String() != "" {
+					t.Errorf("the run's stderr is %q, want nothing: an unusable summary is no usage error", stderr.String())
+				}
+
+				if calls := fake.Calls(t); len(calls) != 0 {
+					t.Errorf("the run made %d gh call(s) before refusing its summary, want none: the subcommand never starts", len(calls))
+				}
+			})
+		}
+	}
+}
+
 // TestFakeGHServesTheIncludeOutput pins the fake group N runs against: it writes
 // --include's status line, headers, blank line and body, exits 0 on a 2xx
 // status and 1 otherwise, and records the call.
@@ -795,5 +881,518 @@ func TestFakeGHServesTheIncludeOutput(t *testing.T) {
 
 	if want := "repos/" + fixtureRepository + "/actions/runs/" + fixtureRunID + "/artifacts?per_page=100"; !slices.Contains(calls[0].Args, want) {
 		t.Errorf("the fake was called with %v, want it to hold the artifact listing's endpoint %q", calls[0].Args, want)
+	}
+}
+
+// Group G of PR 4b: the entry point's other two subcommands, image and
+// publish (PRD #175 milestone 2, ADR 0040). image reads the result and the
+// digest's attestation with the job's read-only token and prints "image
+// digest: as expected"; publish reads the result, the previous report, the run,
+// the fingerprint key and the scanner, and prints the run's counts. Both read
+// GITHUB_SHA and refuse a server URL that is not exactly https://github.com,
+// whose URL the report, the commit and the pull request name; publish reads
+// AUDIT_FINGERPRINT_KEY too.
+const (
+	// fixtureDate is the run's UTC date, which fixedClock gives.
+	fixtureDate = "2026-12-03"
+
+	// fixtureCommit is GITHUB_SHA and the result's commit.
+	fixtureCommit = "0123456789abcdef0123456789abcdef01234567"
+
+	// The SHAs the Git data API answers a report publication with: each one
+	// distinct, as the library's own tests pin them.
+	fixtureBaseTreeSHA = "a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0"
+	fixtureBlobSHA     = "b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0"
+	fixtureTreeSHA     = "c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0"
+	fixtureReportSHA   = "d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0"
+
+	// fixtureTag and fixtureDigest are the result's release and image.
+	fixtureTag    = "v0.12.0"
+	fixtureDigest = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+
+	// fixtureFingerprintKey is an invented AUDIT_FINGERPRINT_KEY of the
+	// shortest length the core takes.
+	fixtureFingerprintKey = "invented-fingerprint-key-32-bytes"
+
+	// fixtureBranch, fixtureBranchRef and fixtureReportPath are the branch and
+	// the file the run's report is published as.
+	fixtureBranch      = "security-audit/" + fixtureDate + "-" + fixtureRunID
+	fixtureBranchRef   = "refs/heads/" + fixtureBranch
+	fixtureReportPath  = "docs/security/audits/" + fixtureDate + "-" + fixtureRunID + ".md"
+	fixtureRepoPrefix  = "repos/" + fixtureRepository
+	fixtureIssuesQuery = fixtureRepoPrefix + "/issues?creator=shift2eu-audit%5Bbot%5D&state=all&per_page=100&page=1"
+
+	// lineImageAsExpected and lineAuditPublished are the two subcommands'
+	// lines of a run that passed.
+	lineImageAsExpected = "image digest: as expected"
+	lineAuditPublished  = "audit published: public findings 0, private findings: none"
+)
+
+// usageTextOfEverySubcommand is what a command line the run cannot parse
+// writes to stderr: one line per subcommand, its flags, and no value.
+const usageTextOfEverySubcommand = "usage: auditpublish artifacts -job model|publish -gh <path> -tmp <dir>\n" +
+	"       auditpublish image -result <path> -gh <path> -tmp <dir>\n" +
+	"       auditpublish publish -result <path> -reports <dir> -gh <path> -gitleaks <path> -tmp <dir>\n"
+
+// resultCheckIDs are the fifteen check ids of the result schema, in the
+// coverage table's order.
+var resultCheckIDs = []string{
+	"dependencies", "history-secrets", "workflows", "scorecard", "scorecard-admin",
+	"release-integrity", "image-pull", "binary-vulnerabilities", "image-scan", "image-runtime",
+	"hostile-inventories", "fuzzing", "supply-chain", "tree-review", "agent-surface",
+}
+
+// resultDocument returns the model's result as the publish and image
+// subcommands read it: the fixture commit, tag and digest, every check ran and
+// no finding.
+func resultDocument() map[string]any {
+	checks := make([]any, 0, len(resultCheckIDs))
+
+	for _, id := range resultCheckIDs {
+		checks = append(checks, map[string]any{"id": id, "ran": true, "not_run": ""})
+	}
+
+	return map[string]any{
+		"schema":       1,
+		"commit":       fixtureCommit,
+		"release_tag":  fixtureTag,
+		"image_digest": fixtureDigest,
+		"tools":        []any{},
+		"checks":       checks,
+		"findings":     []any{},
+		"changes":      map[string]any{"dependencies": []any{}, "narrative": "No dependency changed."},
+		"limits":       []any{},
+	}
+}
+
+// resultDocumentWith returns the result document with findings.
+func resultDocumentWith(findings ...map[string]any) map[string]any {
+	doc := resultDocument()
+
+	list := make([]any, 0, len(findings))
+	for _, f := range findings {
+		list = append(list, f)
+	}
+
+	doc["findings"] = list
+
+	return doc
+}
+
+// publicFinding returns one confirmed public finding of the tree review: a low
+// one of a public category, the shape the result schema takes.
+func publicFinding() map[string]any {
+	return map[string]any{
+		"check":     "tree-review",
+		"rule":      "G304",
+		"file":      "internal/cli/run.go",
+		"line":      12,
+		"sink":      "os.Open",
+		"severity":  "low",
+		"confirmed": true,
+		"category":  "hardening",
+		"private":   false,
+		"scenario":  "the scenario of G304",
+		"evidence":  "the evidence of G304",
+		"fix":       "the fix of G304",
+		"dismissal": "",
+	}
+}
+
+// writeResultOf writes the result document to a fresh temporary directory and
+// returns its path.
+func writeResultOf(t *testing.T, document map[string]any) string {
+	t.Helper()
+
+	body, err := json.Marshal(document)
+	if err != nil {
+		t.Fatalf("marshal the result document: %v", err)
+	}
+
+	path := filepath.Join(t.TempDir(), "result.json")
+	if err := os.WriteFile(path, body, 0o600); err != nil {
+		t.Fatalf("write the result %s: %v", path, err)
+	}
+
+	return path
+}
+
+// writeResult writes the result document to a fresh temporary directory and
+// returns its path.
+func writeResult(t *testing.T) string {
+	t.Helper()
+
+	return writeResultOf(t, resultDocument())
+}
+
+// imageArgs returns the image subcommand's command line.
+func imageArgs(ghPath, resultPath string) []string {
+	return []string{"image", "-result", resultPath, "-gh", ghPath, "-tmp", "TMP"}
+}
+
+// publishArgs returns the publish subcommand's command line.
+func publishArgs(ghPath, gitleaksPath, resultPath, reportsDir string) []string {
+	return []string{
+		"publish", "-result", resultPath, "-reports", reportsDir,
+		"-gh", ghPath, "-gitleaks", gitleaksPath, "-tmp", "TMP",
+	}
+}
+
+// withTempDir returns args whose placeholder TMP is tempDir: the tests build
+// the command line before they have the run's temporary directory.
+func withTempDir(args []string, tempDir string) []string {
+	out := slices.Clone(args)
+
+	for i, arg := range out {
+		if arg == "TMP" {
+			out[i] = tempDir
+		}
+	}
+
+	return out
+}
+
+// imageAnswers returns the image subcommand's answers: the release and the
+// digest's provenance attestation.
+func imageAnswers(t *testing.T) []fakeAnswer {
+	t.Helper()
+
+	statement := map[string]any{
+		"_type": "https://in-toto.io/Statement/v1",
+		"subject": []any{map[string]any{
+			"name":   "ghcr.io/" + fixtureRepository,
+			"digest": map[string]any{"sha256": strings.TrimPrefix(fixtureDigest, "sha256:")},
+		}},
+		"predicateType": "https://slsa.dev/provenance/v1",
+		"predicate": map[string]any{"buildDefinition": map[string]any{"externalParameters": map[string]any{
+			"workflow": map[string]any{
+				"ref":        "refs/tags/" + fixtureTag,
+				"repository": fixtureServerURL + "/" + fixtureRepository,
+				"path":       ".github/workflows/release.yml",
+			},
+		}}},
+	}
+
+	payload, err := json.Marshal(statement)
+	if err != nil {
+		t.Fatalf("marshal the attestation's statement: %v", err)
+	}
+
+	return []fakeAnswer{
+		{
+			Method:   "GET",
+			Endpoint: fixtureRepoPrefix + "/releases/tags/" + fixtureTag,
+			Status:   200,
+			Body:     map[string]string{"tag_name": fixtureTag},
+		},
+		{
+			Method:   "GET",
+			Endpoint: fixtureRepoPrefix + "/attestations/" + fixtureDigest + "?per_page=100",
+			Status:   200,
+			Body: map[string]any{"attestations": []any{map[string]any{
+				"repository_id": 1,
+				"bundle": map[string]any{
+					"mediaType": "application/vnd.dev.sigstore.bundle.v0.3+json",
+					"dsseEnvelope": map[string]any{
+						"payloadType": "application/vnd.in-toto+json",
+						"payload":     base64.StdEncoding.EncodeToString(payload),
+						"signatures":  []any{map[string]string{"sig": "AAAA"}},
+					},
+				},
+			}}},
+		},
+	}
+}
+
+// publishAnswers returns the publish subcommand's answers: the release, the
+// issues' one page and the report's writes.
+func publishAnswers() []fakeAnswer {
+	return []fakeAnswer{
+		{Method: "GET", Endpoint: fixtureRepoPrefix + "/releases/tags/" + fixtureTag, Status: 200, Body: map[string]string{"tag_name": fixtureTag}},
+		{Method: "GET", Endpoint: fixtureIssuesQuery, Status: 200, Body: []any{}},
+		{Method: "GET", Endpoint: fixtureRepoPrefix + "/git/ref/heads/" + fixtureBranch, Status: 404, Body: map[string]string{"message": "Not Found"}},
+		{
+			Method:   "GET",
+			Endpoint: fixtureRepoPrefix + "/git/commits/" + fixtureCommit,
+			Status:   200,
+			Body:     map[string]any{"sha": fixtureCommit, "tree": map[string]string{"sha": fixtureBaseTreeSHA}},
+		},
+		{Method: "POST", Endpoint: fixtureRepoPrefix + "/git/blobs", Status: 201, Body: map[string]string{"sha": fixtureBlobSHA}},
+		{Method: "POST", Endpoint: fixtureRepoPrefix + "/git/trees", Status: 201, Body: map[string]string{"sha": fixtureTreeSHA}},
+		{Method: "POST", Endpoint: fixtureRepoPrefix + "/git/commits", Status: 201, Body: map[string]string{"sha": fixtureReportSHA}},
+		{
+			Method:   "GET",
+			Endpoint: fixtureRepoPrefix + "/compare/" + fixtureCommit + "..." + fixtureReportSHA,
+			Status:   200,
+			Body: map[string]any{
+				"status":            "ahead",
+				"ahead_by":          1,
+				"behind_by":         0,
+				"merge_base_commit": map[string]string{"sha": fixtureCommit},
+				"files":             []any{map[string]string{"filename": fixtureReportPath, "status": "added"}},
+			},
+		},
+		{Method: "POST", Endpoint: fixtureRepoPrefix + "/git/refs", Status: 201, Body: map[string]any{"ref": fixtureBranchRef}},
+		{Method: "POST", Endpoint: fixtureRepoPrefix + "/pulls", Status: 201, Body: map[string]any{"number": 1}},
+	}
+}
+
+// TestUsageTextNamesEverySubcommand pins the usage text: one line per
+// subcommand with its flags, a constant that holds no value of a command line
+// or an environment.
+func TestUsageTextNamesEverySubcommand(t *testing.T) {
+	t.Parallel()
+
+	if diff := cmp.Diff(usageTextOfEverySubcommand, usageText); diff != "" {
+		t.Errorf("the usage text (-want +got):\n%s", diff)
+	}
+
+	fake := newFakeGH(t, fakeAnswer{Status: 200, Body: artifactListing(1, artifactChecksName)})
+	result := runProgram(t, nil, stepEnvironment(t, writeSummary(t)))
+
+	if result.code != codeConfigInvalid {
+		t.Errorf("a run with no subcommand exits %d, want %d", result.code, codeConfigInvalid)
+	}
+
+	if result.stderr != usageTextOfEverySubcommand {
+		t.Errorf("a usage error writes %q to stderr, want the usage text", result.stderr)
+	}
+
+	if calls := fake.Calls(t); len(calls) != 0 {
+		t.Errorf("a usage error made %d gh call(s), want none", len(calls))
+	}
+}
+
+// TestRunPublishAndImageReadTheirVariablesAndPrintTheirLine pins each report
+// subcommand's whole run: its flags, the variables it reads and no other, its
+// exit 0 and its one line, on stdout and in the step's summary.
+func TestRunPublishAndImageReadTheirVariablesAndPrintTheirLine(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name string
+		// args builds the command line from the run's paths, and answers are
+		// the fake gh's. result writes the result file, the run's own when nil.
+		args        func(ghPath, gitleaksPath, resultPath, reportsDir string) []string
+		answers     []fakeAnswer
+		addVariable []string
+		result      func(t *testing.T) string
+		wantLine    string
+	}{
+		{
+			name:        "the image subcommand",
+			args:        func(ghPath, _, resultPath, _ string) []string { return imageArgs(ghPath, resultPath) },
+			answers:     imageAnswers(t),
+			addVariable: []string{"GITHUB_SHA"},
+			wantLine:    lineImageAsExpected,
+		},
+		{
+			name:        "the publish subcommand",
+			args:        publishArgs,
+			answers:     publishAnswers(),
+			addVariable: []string{"GITHUB_SHA", "AUDIT_FINGERPRINT_KEY"},
+			wantLine:    lineAuditPublished,
+		},
+		{
+			name:        "the publish subcommand with one public finding",
+			args:        publishArgs,
+			answers:     publishAnswers(),
+			addVariable: []string{"GITHUB_SHA", "AUDIT_FINGERPRINT_KEY"},
+			result: func(t *testing.T) string {
+				t.Helper()
+
+				return writeResultOf(t, resultDocumentWith(publicFinding()))
+			},
+			wantLine: "audit published: public findings 1, private findings: none",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			fake := newRoutedFakeGH(t, tc.answers...)
+			summaryPath := writeSummary(t)
+			tempDir := t.TempDir()
+
+			resultPath := writeResult(t)
+			if tc.result != nil {
+				resultPath = tc.result(t)
+			}
+
+			args := withTempDir(tc.args(fake.Path, newFakeGitleaks(t), resultPath, t.TempDir()), tempDir)
+			result := runProgram(t, args, stepEnvironment(t, summaryPath))
+
+			if result.code != codeAsExpected {
+				t.Fatalf("the run's exit code is %d, want %d: %s\nstdout: %s\nstderr: %s",
+					result.code, codeAsExpected, tc.wantLine, result.stdout, result.stderr)
+			}
+
+			if want := tc.wantLine + "\n"; result.stdout != want {
+				t.Errorf("the run's stdout is %q, want exactly %q: the run prints one line", result.stdout, want)
+			}
+
+			if result.stderr != "" {
+				t.Errorf("the run's stderr is %q, want nothing", result.stderr)
+			}
+
+			if !strings.HasSuffix(result.summary, tc.wantLine+"\n") {
+				t.Errorf("the step summary is %q, want the run's line appended", result.summary)
+			}
+
+			want := append(append(slices.Clone(readVariables), tc.addVariable...), refusedVariables...)
+			slices.Sort(want)
+
+			got := slices.Clone(result.asked)
+			slices.Sort(got)
+			got = slices.Compact(got)
+
+			if diff := cmp.Diff(want, got); diff != "" {
+				t.Errorf("the variables the run read (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+// TestRunPublishAndImageRefuseAConfigurationTheyCannotUse pins the two report
+// subcommands' refusals: a server URL other than exactly https://github.com, a
+// GITHUB_SHA that is no 40 lowercase hex, a publish without its fingerprint key
+// or with a short one, and a missing flag. Each is the configuration's line,
+// exit 9, and no gh call.
+func TestRunPublishAndImageRefuseAConfigurationTheyCannotUse(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name string
+		sub  string
+		// env changes the run's environment, and args its command line.
+		env     func(env map[string]string)
+		args    func(ghPath, gitleaksPath, resultPath, reportsDir string) []string
+		refused []string
+	}{
+		{
+			name:    "an image of another server",
+			sub:     "image",
+			env:     func(env map[string]string) { env["GITHUB_SERVER_URL"] = "https://github.example.com" },
+			refused: []string{"https://github.example.com"},
+		},
+		{
+			name:    "a publish of another server",
+			sub:     "publish",
+			env:     func(env map[string]string) { env["GITHUB_SERVER_URL"] = "https://github.example.com" },
+			refused: []string{"https://github.example.com"},
+		},
+		{
+			name:    "an image of a plain http server",
+			sub:     "image",
+			env:     func(env map[string]string) { env["GITHUB_SERVER_URL"] = "http://github.com" },
+			refused: []string{"http://github.com"},
+		},
+		{
+			name:    "a publish of a server URL with a trailing slash",
+			sub:     "publish",
+			env:     func(env map[string]string) { env["GITHUB_SERVER_URL"] = "https://github.com/" },
+			refused: []string{"https://github.com/"},
+		},
+		{
+			name: "an image without GITHUB_SERVER_URL",
+			sub:  "image",
+			env:  func(env map[string]string) { delete(env, "GITHUB_SERVER_URL") },
+		},
+		{
+			name: "a publish without GITHUB_SERVER_URL",
+			sub:  "publish",
+			env:  func(env map[string]string) { delete(env, "GITHUB_SERVER_URL") },
+		},
+		{
+			name:    "an image with a short GITHUB_SHA",
+			sub:     "image",
+			env:     func(env map[string]string) { env["GITHUB_SHA"] = "0123456" },
+			refused: []string{"0123456"},
+		},
+		{
+			name:    "a publish with an upper-case GITHUB_SHA",
+			sub:     "publish",
+			env:     func(env map[string]string) { env["GITHUB_SHA"] = strings.ToUpper(fixtureCommit) },
+			refused: []string{strings.ToUpper(fixtureCommit)},
+		},
+		{
+			name: "a publish without GITHUB_SHA",
+			sub:  "publish",
+			env:  func(env map[string]string) { delete(env, "GITHUB_SHA") },
+		},
+		{
+			name: "a publish without AUDIT_FINGERPRINT_KEY",
+			sub:  "publish",
+			env:  func(env map[string]string) { delete(env, "AUDIT_FINGERPRINT_KEY") },
+		},
+		{
+			name:    "a publish with a short AUDIT_FINGERPRINT_KEY",
+			sub:     "publish",
+			env:     func(env map[string]string) { env["AUDIT_FINGERPRINT_KEY"] = "short-key" },
+			refused: []string{"short-key"},
+		},
+		{
+			name: "an image without its result flag",
+			sub:  "image",
+			args: func(ghPath, _, _, _ string) []string { return []string{"image", "-gh", ghPath, "-tmp", "TMP"} },
+		},
+		{
+			name: "a publish without its reports flag",
+			sub:  "publish",
+			args: func(ghPath, gitleaksPath, resultPath, _ string) []string {
+				return []string{"publish", "-result", resultPath, "-gh", ghPath, "-gitleaks", gitleaksPath, "-tmp", "TMP"}
+			},
+		},
+		{
+			name: "a publish without its gitleaks flag",
+			sub:  "publish",
+			args: func(ghPath, _, resultPath, reportsDir string) []string {
+				return []string{"publish", "-result", resultPath, "-reports", reportsDir, "-gh", ghPath, "-tmp", "TMP"}
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			fake := newRoutedFakeGH(t, fakeAnswer{Status: 500, Body: map[string]string{"message": valueMarker}})
+			tempDir := t.TempDir()
+			env := stepEnvironment(t, writeSummary(t))
+
+			if tc.env != nil {
+				tc.env(env)
+			}
+
+			build := tc.args
+			if build == nil {
+				build = func(ghPath, gitleaksPath, resultPath, reportsDir string) []string {
+					if tc.sub == "image" {
+						return imageArgs(ghPath, resultPath)
+					}
+
+					return publishArgs(ghPath, gitleaksPath, resultPath, reportsDir)
+				}
+			}
+
+			args := withTempDir(build(fake.Path, newFakeGitleaks(t), writeResult(t), t.TempDir()), tempDir)
+			result := runProgram(t, args, env)
+
+			if result.code != codeConfigInvalid {
+				t.Errorf("the run's exit code is %d, want %d: %s\nstdout: %s\nstderr: %s",
+					result.code, codeConfigInvalid, lineConfigInvalid, result.stdout, result.stderr)
+			}
+
+			if !strings.Contains(result.output(), lineConfigInvalid) {
+				t.Errorf("the run printed %q, want it to name %q", result.output(), lineConfigInvalid)
+			}
+
+			if calls := fake.Calls(t); len(calls) != 0 {
+				t.Errorf("the run made %d gh call(s), want none: a refused run starts nothing", len(calls))
+			}
+
+			for _, refused := range tc.refused {
+				if strings.Contains(result.output(), refused) {
+					t.Errorf("the run printed %q, want it to hold no value (%q)", result.output(), refused)
+				}
+			}
+		})
 	}
 }

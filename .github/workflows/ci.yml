@@ -258,7 +258,10 @@ jobs:
         env:
           SHIFT2EU_TEST_MAKE: /usr/bin/make
           SHIFT2EU_TEST_MAKE_VERSION: "3.81"
-        run: go test -race -count=1 ./test/devenv/...
+        # -timeout 25m, below the job's 30: each make run is bounded at 2 min, so a real hang fails fast, and
+        # the package timeout only has to cover a slow but healthy run, up to 7m52 on the 3-vCPU macOS runner,
+        # too close to go test's default 10m (issue #512).
+        run: go test -race -count=1 -timeout 25m ./test/devenv/...
 
   # The dry run of release-please.yml (issues #142 and #157, ADR 0021): its guard, tag and relabel steps'
   # own scripts, read from the workflow, run against a fake gh with canned API responses, so a change to
@@ -397,7 +400,7 @@ jobs:
             COMMIT=${{ steps.meta.outputs.commit }}
             DATE=${{ steps.meta.outputs.date }}
       - name: SBOM of the built image
-        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+        uses: anchore/sbom-action@dfcb83b97731532d72be422cbc51ee64adb6fd56 # v0.24.4
         with:
           image: oci-archive:${{ runner.temp }}/shift2eu.oci.tar
           format: spdx-json
