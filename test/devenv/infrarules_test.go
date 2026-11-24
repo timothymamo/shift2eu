@@ -8,7 +8,8 @@
 // the blocks beneath it out of the rule that judges them), a block label whose %, / or : never decides what
 // the rules see, a provider block setting only organization_id and
 // region, a lock file holding only the line shapes tofu init writes, the site's TLS stage recreating itself before
-// it destroys (so a replacement repoints the DNS stage first, issue #541), and so on (the script lists them). With
+// it destroys (so a replacement repoints the DNS stage first, issue #541), the site container's cost pins (one
+// instance, 140 mvCPU and 0.25 GB of memory at most, ADR 0045), and so on (the script lists them). With
 // every rule holding it prints nothing and exits 0; a usage error exits 2.
 //
 // The real infra/ must hold every rule, and each case below is one copy of infra/ with exactly one breakage,
@@ -72,6 +73,7 @@ var infraRuleCases = slices.Concat(
 	infraFileFunctionCases(),
 	namedInfraRuleCases,
 	tlsStageLifecycleCases,
+	containerCostPinCases,
 	infraTestNestedBlockCases,
 	infraTestLabelCases,
 	infraLabelPathCases,
@@ -1620,6 +1622,133 @@ var tlsStageLifecycleCases = []infraRuleCase{
 	},
 }
 
+// containerCostPinCases pin the site container's cost pins (PRD #297 milestone 4, ADR 0045, *The container*,
+// and its Consequences): one instance of at most 140 mvCPU and 0.25 GB of memory bounds the worst case to about
+// EUR 2.12 a month, and min_scale 0 or 1 bounds how many instances the site keeps. dev/infra-rules.awk judges
+// every scaleway_container in infra/: max_scale, cpu_limit and memory_limit_bytes must each be set once, as the
+// pinned literal - a missing pin leaves the provider's default, and an expression such as var.max_scale is a
+// value the maintainer's own tfvars could set - memory_limit and http_option, the deprecated spellings beside
+// memory_limit_bytes and https_connections_only, must not be set at all, and min_scale must be 0 or 1. The tags
+// are [container-max-scale], [container-cpu], [container-memory], [container-deprecated-attribute] and
+// [container-min-scale], and an attribute gets the one tag that names it: a deprecated memory_limit is no
+// [container-memory] beside it, and a deprecated http_option no [container-cpu] or [container-memory], since a
+// breakage is reported once, under the rule that refuses it.
+//
+// Every case edits site/container.tf, the file the pins live in, by the attribute's name, so the cases do not
+// depend on how the configuration aligns its = signs; a copy whose container.tf sets the attribute no line of,
+// or two, fails here as a test failure, never as a silent pass.
+var containerCostPinCases = []infraRuleCase{
+	{
+		name:   "container-max-scale-two",
+		why:    "max_scale = 2 on the site's container, a second instance in the worst case",
+		want:   "container-max-scale",
+		wantIn: map[string]string{"container-max-scale": "{site}/container.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			setContainerAttribute(t, site, "max_scale", "  max_scale = 2")
+		},
+	},
+	{
+		name:   "container-max-scale-missing",
+		why:    "the site's container without max_scale, so the provider's own default decides how many instances run",
+		want:   "container-max-scale",
+		wantIn: map[string]string{"container-max-scale": "{site}/container.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			setContainerAttribute(t, site, "max_scale", "")
+		},
+	},
+	{
+		name:   "container-max-scale-as-an-expression",
+		why:    "max_scale = var.max_scale on the site's container, a value the maintainer's own tfvars could raise",
+		want:   "container-max-scale",
+		wantIn: map[string]string{"container-max-scale": "{site}/container.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			setContainerAttribute(t, site, "max_scale", "  max_scale = var.max_scale")
+		},
+	},
+	{
+		name:   "container-cpu-limit-too-large",
+		why:    "cpu_limit = 280 on the site's container, a second vCPU in the worst case",
+		want:   "container-cpu",
+		wantIn: map[string]string{"container-cpu": "{site}/container.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			setContainerAttribute(t, site, "cpu_limit", "  cpu_limit = 280")
+		},
+	},
+	{
+		name:   "container-cpu-limit-missing",
+		why:    "the site's container without cpu_limit, so the provider's own default decides how many mvCPU it gets",
+		want:   "container-cpu",
+		wantIn: map[string]string{"container-cpu": "{site}/container.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			setContainerAttribute(t, site, "cpu_limit", "")
+		},
+	},
+	{
+		name:   "container-memory-limit-bytes-too-large",
+		why:    "memory_limit_bytes = 536870912 (0.5 GB) on the site's container, twice the pinned memory",
+		want:   "container-memory",
+		wantIn: map[string]string{"container-memory": "{site}/container.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			setContainerAttribute(t, site, "memory_limit_bytes", "  memory_limit_bytes = 536870912")
+		},
+	},
+	{
+		name:   "container-memory-limit-bytes-missing",
+		why:    "the site's container without memory_limit_bytes, so the provider's own default decides how much memory it gets",
+		want:   "container-memory",
+		wantIn: map[string]string{"container-memory": "{site}/container.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			setContainerAttribute(t, site, "memory_limit_bytes", "")
+		},
+	},
+	{
+		name:   "container-deprecated-memory-limit",
+		why:    `memory_limit = 256 added to the site's container, the deprecated spelling in megabytes beside memory_limit_bytes`,
+		want:   "container-deprecated-attribute",
+		wantIn: map[string]string{"container-deprecated-attribute": "{site}/container.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			addContainerAttribute(t, site, "  memory_limit = 256")
+		},
+	},
+	{
+		name:   "container-deprecated-http-option",
+		why:    `http_option = "enabled" added to the site's container, the older spelling of https_connections_only`,
+		want:   "container-deprecated-attribute",
+		wantIn: map[string]string{"container-deprecated-attribute": "{site}/container.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			addContainerAttribute(t, site, `  http_option = "enabled"`)
+		},
+	},
+	{
+		name:   "container-min-scale-two",
+		why:    "min_scale = 2 on the site's container, two instances kept warm",
+		want:   "container-min-scale",
+		wantIn: map[string]string{"container-min-scale": "{site}/container.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			setContainerAttribute(t, site, "min_scale", "  min_scale = 2")
+		},
+	},
+	{
+		name: "container-min-scale-one",
+		why:  "min_scale = 1 on the site's container, the one warm instance ADR 0045 allows",
+		want: "",
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			setContainerAttribute(t, site, "min_scale", "  min_scale = 1")
+		},
+	},
+}
+
 // tlsStageSecondRoot writes a second applied root beside a copy's site/, holding what a root needs - a copy of
 // the site's versions.tf, so the pinned release and provider live in one place, with a state key of its own -
 // and the TLS stage without a lifecycle block. Its resource and labels are the site's stage's, so a rule that
@@ -1652,6 +1781,11 @@ func tlsStageSecondRoot(t *testing.T, site string) {
 // The resource and its lifecycle block end where their braces close, so a block written the standard way
 // (its settings indented, its "}" on its own line) and one closed with a trailing comment are both read.
 // Only the TLS stage is edited: a lifecycle block on the DNS stage beside it stays as the copy found it.
+//
+// The configuration may hold no such stage at all: PRD #297 milestone 4 removes the pipeline's www domain and
+// its TLS stage (ADR 0045, *The upstream*), so the chain becomes DNS -> cache -> backend. The case then writes
+// the stage into main.tf, so [tls-stage-lifecycle] keeps a stage to judge, wherever the site's own
+// configuration goes.
 func tlsStageLifecycle(t *testing.T, site string, body []string) {
 	t.Helper()
 
@@ -1677,7 +1811,20 @@ func tlsStageLifecycle(t *testing.T, site string, body []string) {
 	}
 
 	if start < 0 {
-		t.Fatalf("%s holds no line %q: the case names the TLS stage the rule judges", path, header)
+		out := append([]string{}, lines...)
+		out = append(out, header)
+
+		if len(body) > 0 {
+			out = append(out, "  lifecycle {")
+			out = append(out, body...)
+			out = append(out, "  }")
+		}
+
+		out = append(out, "}")
+
+		writeInfraText(t, path, strings.Join(out, "\n"))
+
+		return
 	}
 
 	// The resource's end is the line whose closing brace takes the depth back to zero, never the first
@@ -1784,6 +1931,98 @@ func infraOpensBlock(line, name string) bool {
 	fields := strings.Fields(line)
 
 	return len(fields) >= 2 && fields[0] == name && strings.HasPrefix(fields[1], "{")
+}
+
+// containerFileName is the file of the site's front in a copy of infra/site (PRD #297 milestone 4, ADR 0045):
+// the Serverless Containers namespace, the container with its cost pins and the two gated custom domains.
+const containerFileName = "container.tf"
+
+// containerResourceHeader is the one line of that file that opens the container resource: the namespace's own
+// header reads scaleway_container_namespace, so this prefix names the container alone.
+const containerResourceHeader = `resource "scaleway_container" "`
+
+// setContainerAttribute replaces the one line of a copy's site/container.tf that sets the attribute name with
+// line, or removes that line when line is empty. The line is found by the attribute's name and not by the
+// spacing around its =, so a case survives however the configuration aligns its attributes; a file that sets
+// the attribute on no line, or on two, fails the case loudly instead of passing without breaking anything.
+func setContainerAttribute(t *testing.T, site, name, line string) {
+	t.Helper()
+
+	path := filepath.Join(site, containerFileName)
+
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v: the container's cost pins live there (ADR 0045), and this case breaks one of them", path, err)
+	}
+
+	lines := strings.Split(string(body), "\n")
+
+	found := -1
+
+	for i, text := range lines {
+		fields := strings.Fields(text)
+		if len(fields) < 2 || fields[0] != name || !strings.HasPrefix(fields[1], "=") {
+			continue
+		}
+
+		if found >= 0 {
+			t.Fatalf("%s:%d and %s:%d both set %s, want exactly one line: the case does not name one breakage", path, found+1, path, i+1, name)
+		}
+
+		found = i
+	}
+
+	if found < 0 {
+		t.Fatalf("%s sets %s on no line, want exactly one: the case does not name one breakage", path, name)
+	}
+
+	if line == "" {
+		lines = append(lines[:found:found], lines[found+1:]...)
+	} else {
+		lines[found] = line
+	}
+
+	writeInfraText(t, path, strings.Join(lines, "\n"))
+}
+
+// addContainerAttribute adds line as the first attribute of the container resource in a copy's
+// site/container.tf, so a case can set an attribute the configuration must not: inside the resource block, where
+// the provider reads it, and in a file the configuration already holds.
+func addContainerAttribute(t *testing.T, site, line string) {
+	t.Helper()
+
+	path := filepath.Join(site, containerFileName)
+
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v: the container's cost pins live there (ADR 0045), and this case breaks one of them", path, err)
+	}
+
+	lines := strings.Split(string(body), "\n")
+
+	found := -1
+
+	for i, text := range lines {
+		if !strings.HasPrefix(strings.TrimSpace(text), containerResourceHeader) {
+			continue
+		}
+
+		if found >= 0 {
+			t.Fatalf("%s:%d and %s:%d both open a container resource, want exactly one: the case does not name one breakage", path, found+1, path, i+1)
+		}
+
+		found = i
+	}
+
+	if found < 0 {
+		t.Fatalf("%s holds no line opening %q, want one: the case does not name one breakage", path, containerResourceHeader)
+	}
+
+	out := append([]string{}, lines[:found+1]...)
+	out = append(out, line)
+	out = append(out, lines[found+1:]...)
+
+	writeInfraText(t, path, strings.Join(out, "\n"))
 }
 
 // infraTestNestedBlockCases pin the allow list of the blocks nested directly in a test file's run and
