@@ -8,10 +8,10 @@
 //     the job's token, checks that the result's tag is a release and that its
 //     image digest has the release workflow's provenance attestation.
 //   - publish -result <path> -reports <dir> -gh <path> -gitleaks <path> -tmp
-//     <dir>: files the report's pull request and the issues of the previous
-//     report's open public findings, every text scanned before the first
-//     write. The draft advisories come with PR 4c; until then a private
-//     finding is not filed, and the run ends with outcome 5.
+//     <dir>: files each private finding's draft advisory, the report's pull
+//     request and the issues of the previous report's open public findings,
+//     every text scanned before the first write. A creation GitHub refuses
+//     publishes the report as not filed and ends with outcome 5.
 //
 // It reads the step's environment through one os.LookupEnv, passed to run:
 // GH_TOKEN, which it hands to gh unread, GITHUB_SERVER_URL,

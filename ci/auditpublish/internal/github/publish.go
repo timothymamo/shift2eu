@@ -2,6 +2,7 @@ package github
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/timothymamo/shift2eu/ci/auditpublish/internal/publish"
@@ -42,24 +43,39 @@ type scanned struct {
 	fields []string
 }
 
-// Publish runs the publish subcommand, without advisories (PR 4b), in this
-// order:
+// rendering is the report and the templates of one private state.
+type rendering struct {
+	report    publish.Rendered
+	templates publish.Templates
+}
+
+// Publish runs the publish subcommand in this order:
 //
 //  1. LoadResult (the client's audited commit) and LoadPrevious.
-//  2. CheckRelease of the result's tag, and ListAuditIssues.
-//  3. The private state: publish.PrivateNone when no finding is placed
-//     private, otherwise publish.PrivateNotFiled, since no advisory side
-//     exists yet: a private finding is never filed and never dropped, and the
-//     run ends with outcome 5.
-//  4. Render every text: publish.RenderReport and publish.RenderTemplates
-//     under that state, PlanIssues.
-//  5. Scan every text before the first write: publish.ScanPublic over the
-//     report (with its model fields), the pull request's title and body, the
-//     commit message and each issue (with its model fields); gitleaks over
-//     each of those texts; CheckCommitRuns over the report's and the issues'
-//     model fields. A hit is publish.ErrScanRefused and no write is made.
-//  6. Write: PublishReport, then CreateIssue for each planned issue, in the
-//     plan's order; the first failure stops the run.
+//  2. CheckRelease of the result's tag, ListAuditIssues and
+//     ListAuditAdvisories.
+//  3. publish.PrivateFindings and PlanAdvisories over the same run's
+//     listing: two of the App's drafts with one fingerprint are
+//     publish.ErrDuplicateDrafts here, before anything is rendered or
+//     written (outcome 6).
+//  4. The private state: publish.PrivateHandled when the plan reproduced a
+//     private finding, otherwise publish.PrivateNone. Render
+//     publish.RenderReport and publish.RenderTemplates under it, and, when it
+//     is PrivateHandled, under publish.PrivateNotFiled too: the fallback a
+//     refused creation publishes. PlanIssues.
+//  5. Scan every text before the first write: publish.ScanPublic over each
+//     variant's report (with its model fields), pull request title and body
+//     and commit message and over each issue (with its model fields);
+//     publish.ScanAdvisory over every advisory write's summary and
+//     description; gitleaks over each of those texts; CheckCommitRuns over
+//     the report's and the issues' model fields. A hit is
+//     publish.ErrScanRefused and no write is made.
+//  6. Write: FileAdvisories, then PublishReport, then CreateIssue for each
+//     planned issue, in the plan's order; the first failure stops the run.
+//     A creation GitHub refuses (publish.ErrPrivateNotFiled) makes no further
+//     advisory call: the run publishes the PrivateNotFiled report and
+//     templates and the issues, drops the private findings, which no other
+//     write holds, and returns nil with that state (outcome 5).
 //
 // It returns the counts of a run whose writes all succeeded, and otherwise
 // the first error, of one of the core's classes or the library's.
@@ -94,24 +110,44 @@ func Publish(ctx context.Context, cfg PublishConfig) (Published, error) {
 		return Published{}, err
 	}
 
-	private := publish.PrivateNone
+	advisories, err := ListAuditAdvisories(ctx, c)
+	if err != nil {
+		return Published{}, err
+	}
 
-	for _, f := range result.Findings {
-		if publish.Place(f).Private() {
-			private = publish.PrivateNotFiled
+	private, err := publish.PrivateFindings(result, cfg.Key)
+	if err != nil {
+		return Published{}, err
+	}
+
+	plan, err := PlanAdvisories(private, advisories, cfg.Run)
+	if err != nil {
+		return Published{}, err
+	}
+
+	state := publish.PrivateNone
+	if plan.Reproduced() {
+		state = publish.PrivateHandled
+	}
+
+	in := publish.ReportInput{Result: result, Run: cfg.Run, Private: state, Previous: previous}
+
+	primary, err := render(in)
+	if err != nil {
+		return Published{}, err
+	}
+
+	variants := []rendering{primary}
+	fallback := primary
+
+	if state == publish.PrivateHandled {
+		in.Private = publish.PrivateNotFiled
+
+		if fallback, err = render(in); err != nil {
+			return Published{}, err
 		}
-	}
 
-	in := publish.ReportInput{Result: result, Run: cfg.Run, Private: private, Previous: previous}
-
-	report, err := publish.RenderReport(in)
-	if err != nil {
-		return Published{}, err
-	}
-
-	templates, err := publish.RenderTemplates(in)
-	if err != nil {
-		return Published{}, err
+		variants = append(variants, fallback)
 	}
 
 	issues, err := PlanIssues(previous, existing, cfg.Run)
@@ -119,11 +155,21 @@ func Publish(ctx context.Context, cfg PublishConfig) (Published, error) {
 		return Published{}, err
 	}
 
-	if err := scanAll(ctx, cfg, report, templates, issues); err != nil {
+	if err := scanAll(ctx, cfg, variants, issues, plan); err != nil {
 		return Published{}, err
 	}
 
-	if err := PublishReport(ctx, c, ReportPlan{Report: report, Templates: templates}); err != nil {
+	chosen := primary
+
+	if err := FileAdvisories(ctx, c, plan); err != nil {
+		if !errors.Is(err, publish.ErrPrivateNotFiled) {
+			return Published{}, err
+		}
+
+		chosen, state = fallback, publish.PrivateNotFiled
+	}
+
+	if err := PublishReport(ctx, c, ReportPlan{Report: chosen.report, Templates: chosen.templates}); err != nil {
 		return Published{}, err
 	}
 
@@ -133,21 +179,43 @@ func Publish(ctx context.Context, cfg PublishConfig) (Published, error) {
 		}
 	}
 
-	return Published{Public: report.PublicTotal, Private: private}, nil
+	return Published{Public: chosen.report.PublicTotal, Private: state}, nil
+}
+
+// render renders the report and the templates of one private state.
+func render(in publish.ReportInput) (rendering, error) {
+	report, err := publish.RenderReport(in)
+	if err != nil {
+		return rendering{}, err
+	}
+
+	templates, err := publish.RenderTemplates(in)
+	if err != nil {
+		return rendering{}, err
+	}
+
+	return rendering{report: report, templates: templates}, nil
 }
 
 // scanAll scans every text a run would publish, before the first write: the
-// core's public scan and gitleaks over each text, then the commit-run check
-// over every model field.
-func scanAll(ctx context.Context, cfg PublishConfig, report publish.Rendered, templates publish.Templates, issues []publish.IssueText) error {
-	texts := []scanned{
-		{text: report.Body, fields: report.ModelFields},
-		{text: templates.PRTitle},
-		{text: templates.PRBody},
-		{text: templates.CommitMessage},
+// core's public scan and gitleaks over each public text of every variant,
+// the advisory scan and gitleaks over each advisory text, then the
+// commit-run check over every public model field. An advisory text gets no
+// encoded-run refusal and no commit-run check: it legitimately holds PoCs,
+// crash inputs and hex.
+func scanAll(ctx context.Context, cfg PublishConfig, variants []rendering, issues []publish.IssueText, plan AdvisoryPlan) error {
+	var texts []scanned
+
+	for _, v := range variants {
+		texts = append(texts,
+			scanned{text: v.report.Body, fields: v.report.ModelFields},
+			scanned{text: v.templates.PRTitle},
+			scanned{text: v.templates.PRBody},
+			scanned{text: v.templates.CommitMessage},
+		)
 	}
 
-	fields := append([]string(nil), report.ModelFields...)
+	fields := append([]string(nil), variants[0].report.ModelFields...)
 
 	for _, issue := range issues {
 		texts = append(texts, scanned{text: issue.Title}, scanned{text: issue.Body, fields: issue.ModelFields})
@@ -161,6 +229,18 @@ func scanAll(ctx context.Context, cfg PublishConfig, report publish.Rendered, te
 
 		if err := cfg.Gitleaks.Scan(ctx, s.text); err != nil {
 			return err
+		}
+	}
+
+	for _, w := range plan.writes {
+		for _, text := range []string{w.Text.Summary, w.Text.Description} {
+			if err := publish.ScanAdvisory(text, cfg.Key); err != nil {
+				return err
+			}
+
+			if err := cfg.Gitleaks.Scan(ctx, text); err != nil {
+				return err
+			}
 		}
 	}
 

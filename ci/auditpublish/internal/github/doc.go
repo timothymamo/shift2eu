@@ -35,13 +35,20 @@
 // It publishes (Publish): it reads the result and the previous merged report
 // (LoadResult, LoadPrevious), checks the release, lists the audit App's
 // issues (ListAuditIssues) and plans one issue per unmatched open finding of
-// the previous report (PlanIssues), scans every text before the first write,
-// then files the report through the Git data API (PublishReport: the branch
-// lookup, blob, tree, commit, the one-file compare before the ref, the ref,
-// the pull request) and the issues (CreateIssue). Every write goes through one
-// helper that turns a non-2xx status into publish.ErrGitHub and never
-// retries. The draft advisories are not built yet: a private finding makes
-// the run end not filed.
+// the previous report (PlanIssues), lists the repository's security
+// advisories (ListAuditAdvisories, at most ten pages by the Link header's
+// after cursor) and plans each private finding's draft advisory against the
+// audit App's own drafts and closed advisories (PlanAdvisories: update,
+// create, regressed, dismissed, not reproduced, and two drafts of one
+// fingerprint refused before any write), scans every text before the first
+// write, then files the draft advisories (FileAdvisories), the report through
+// the Git data API (PublishReport: the branch lookup, blob, tree, commit, the
+// one-file compare before the ref, the ref, the pull request) and the issues
+// (CreateIssue). A PATCH names only a GHSA that the same run's listing showed
+// as one of the App's drafts. Every write goes through one helper that turns
+// a non-2xx status into publish.ErrGitHub and never retries. A creation
+// GitHub refuses (403, 404, 422) makes the run publish its report as "private
+// findings: not filed" and drop the private findings.
 //
 // It scans every text with gitleaks (Gitleaks) beside the core's own scans,
 // and looks up every 40-hex run of a model field as a commit

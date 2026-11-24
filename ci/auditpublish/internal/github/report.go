@@ -113,18 +113,28 @@ func PublishReport(ctx context.Context, c *Client, plan ReportPlan) error {
 	return nil
 }
 
-// write is the one helper every write goes through: one POST, never
-// repeated, whose non-2xx status, a timed-out call included, wraps
-// publish.ErrGitHub. It returns the answer's body. No error carries the
-// answer.
-func write(ctx context.Context, c *Client, endpoint string, body any) ([]byte, error) {
-	resp, err := c.Call(ctx, Request{Method: "POST", Endpoint: endpoint, Body: body})
+// send is the one helper every write goes through: one call of the method,
+// never repeated, whose non-2xx status, a timed-out call included, wraps
+// publish.ErrGitHub. It returns the answer, so a caller can tell one refusal
+// from another by its status. No error carries the answer.
+func send(ctx context.Context, c *Client, method, endpoint string, body any) (Response, error) {
+	resp, err := c.Call(ctx, Request{Method: method, Endpoint: endpoint, Body: body})
 	if err != nil {
-		return nil, fmt.Errorf("write: %w", err)
+		return Response{}, fmt.Errorf("write: %w", err)
 	}
 
 	if resp.Status/100 != 2 {
-		return nil, fmt.Errorf("write: the status is not 2xx: %w", publish.ErrGitHub)
+		return resp, fmt.Errorf("write: the status is not 2xx: %w", publish.ErrGitHub)
+	}
+
+	return resp, nil
+}
+
+// write is send with POST: it returns the answer's body.
+func write(ctx context.Context, c *Client, endpoint string, body any) ([]byte, error) {
+	resp, err := send(ctx, c, "POST", endpoint, body)
+	if err != nil {
+		return nil, err
 	}
 
 	return resp.Body, nil

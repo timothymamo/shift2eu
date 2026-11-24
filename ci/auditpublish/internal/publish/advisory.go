@@ -1,10 +1,11 @@
 package publish
 
-import "errors"
-
-// errNotImplemented is the PR 4c skeleton's: every advisory function returns
-// it until its behaviour is built test-first.
-var errNotImplemented = errors.New("not implemented")
+import (
+	"fmt"
+	"regexp"
+	"strconv"
+	"strings"
+)
 
 // AdvisoryStatus is a draft advisory's tracking state, which the fixed line
 // "Audit status: <status>" of its description holds: the only place a
@@ -27,6 +28,30 @@ const (
 	// closed advisory an earlier run had marked not reproduced: a new draft.
 	AdvisoryRegressed
 )
+
+// statusPrefix starts the description's status line.
+const statusPrefix = "Audit status: "
+
+// statusWords is each status's word on the status line.
+var statusWords = map[AdvisoryStatus]string{
+	AdvisoryNew:           "new",
+	AdvisoryOpen:          "open",
+	AdvisoryNotReproduced: "not reproduced",
+	AdvisoryRegressed:     "regressed",
+}
+
+// advisorySeverities is GitHub's advisory severity of each known severity:
+// informational has none of its own, so it is low.
+var advisorySeverities = map[string]string{
+	"critical":      "critical",
+	"high":          "high",
+	"medium":        "medium",
+	"low":           "low",
+	"informational": "low",
+}
+
+// summaryFingerprint reads the fingerprint of ADR 0040's summary template.
+var summaryFingerprint = regexp.MustCompile(`^Audit finding (fp-[0-9a-f]{12}) \(`)
 
 // PrivateFinding is one finding of the run that Place puts in a draft
 // advisory, with its keyed fingerprint.
@@ -59,8 +84,31 @@ type AdvisoryText struct {
 // advisory, in the result's order, each with its keyed fingerprint. A key
 // KeyedFingerprint refuses is its ErrConfig; two private findings with one
 // fingerprint are ErrResultInvalid.
-func PrivateFindings(_ Result, _ FingerprintKey) ([]PrivateFinding, error) {
-	return nil, errNotImplemented
+func PrivateFindings(r Result, key FingerprintKey) ([]PrivateFinding, error) {
+	var private []PrivateFinding
+
+	seen := make(map[Fingerprint]bool)
+
+	for _, f := range r.Findings {
+		if !Place(f).Private() {
+			continue
+		}
+
+		fp, err := KeyedFingerprint(key, f.Rule, f.File, f.Sink)
+		if err != nil {
+			return nil, err
+		}
+
+		if seen[fp] {
+			return nil, fmt.Errorf("findings: two private findings with one fingerprint: %w", ErrResultInvalid)
+		}
+
+		seen[fp] = true
+
+		private = append(private, PrivateFinding{Finding: f, Fingerprint: fp})
+	}
+
+	return private, nil
 }
 
 // RenderAdvisory renders the draft advisory of a private finding under the
@@ -80,15 +128,160 @@ func PrivateFindings(_ Result, _ FingerprintKey) ([]PrivateFinding, error) {
 // put in an advisory, a fingerprint that is no fingerprint, and the status
 // AdvisoryNotReproduced or one that is none of the four (SetAdvisoryStatus
 // marks a draft not reproduced).
-func RenderAdvisory(_ PrivateFinding, _ AdvisoryStatus, _ Run) (AdvisoryText, error) {
-	return AdvisoryText{}, errNotImplemented
+func RenderAdvisory(f PrivateFinding, status AdvisoryStatus, run Run) (AdvisoryText, error) {
+	if err := run.validate(); err != nil {
+		return AdvisoryText{}, err
+	}
+
+	placement := Place(f.Finding)
+	if placement != PlacementAdvisory && placement != PlacementAdvisoryUnconfirmed && placement != PlacementAdvisoryHistorySecret {
+		return AdvisoryText{}, fmt.Errorf("advisory: the finding is not private: %w", ErrConfig)
+	}
+
+	if !fingerprintPattern.MatchString(string(f.Fingerprint)) {
+		return AdvisoryText{}, fmt.Errorf("advisory: the fingerprint is no fingerprint: %w", ErrConfig)
+	}
+
+	word, ok := statusWords[status]
+	if !ok || status == AdvisoryNotReproduced {
+		return AdvisoryText{}, fmt.Errorf("advisory: the status is not new, open or regressed: %w", ErrConfig)
+	}
+
+	severity := vocabularyWord(f.Finding.Severity, severityRank)
+	category := vocabularyWord(f.Finding.Category, categories)
+
+	var b strings.Builder
+
+	b.WriteString("Security audit finding " + string(f.Fingerprint) + ", found by the scheduled security audit.\n\n")
+
+	if placement == PlacementAdvisoryHistorySecret {
+		writeHistorySecret(&b, f.Finding)
+	} else {
+		writeFindingFields(&b, f.Finding, severity, category)
+	}
+
+	b.WriteString("\n" + statusPrefix + word + "\n")
+	b.WriteString("Run: " + run.URL() + "\n")
+
+	return AdvisoryText{
+		Fingerprint: f.Fingerprint,
+		Summary:     "Audit finding " + string(f.Fingerprint) + " (" + severity + ", " + category + ")",
+		Description: b.String(),
+		Severity:    advisorySeverities[f.Finding.Severity],
+	}, nil
+}
+
+// vocabularyWord returns v when the vocabulary holds it, and unknown
+// otherwise: the only words of a finding's severity or category an advisory
+// writes outside a code span.
+func vocabularyWord[V any](v string, vocabulary map[string]V) string {
+	if _, ok := vocabulary[v]; ok {
+		return v
+	}
+
+	return "unknown"
+}
+
+// writeHistorySecret writes a history secret's fields: the commit and the
+// rule only, since the sink, the scenario, the evidence and the fix may hold
+// the secret.
+func writeHistorySecret(b *strings.Builder, f Finding) {
+	b.WriteString("A secret in the repository's history: unconfirmed: maintainer to check.\n")
+	b.WriteString("It was not tried against its service.\n\n")
+	b.WriteString("Commit: " + CodeSpan(f.File) + "\n")
+	b.WriteString("Rule: " + CodeSpan(f.Rule) + "\n")
+}
+
+// writeFindingFields writes any other private finding's fields, each model
+// value in a code span or a fenced code block.
+func writeFindingFields(b *strings.Builder, f Finding, severity, category string) {
+	confirmed := "no: unconfirmed"
+	if f.Confirmed {
+		confirmed = "yes"
+	}
+
+	check := f.Check
+	if !isCheckID(check) {
+		check = CodeSpan(check)
+	}
+
+	location := CodeSpan(f.File)
+	if f.Line > 0 {
+		location += ":" + strconv.Itoa(f.Line)
+	}
+
+	b.WriteString("Severity: " + severity + "\n")
+	b.WriteString("Category: " + category + "\n")
+	b.WriteString("Confirmed: " + confirmed + "\n")
+	b.WriteString("Check: " + check + "\n")
+	b.WriteString("Rule: " + CodeSpan(f.Rule) + "\n")
+	b.WriteString("Location: " + location + "\n")
+
+	for _, block := range []struct{ heading, text string }{
+		{"Sink", f.Sink},
+		{"Scenario", f.Scenario},
+		{"Evidence", f.Evidence},
+		{"Recommended fix", f.Fix},
+	} {
+		b.WriteString("\n" + block.heading + ":\n\n" + CodeBlock(block.text) + "\n")
+	}
+}
+
+// lastStatusLine returns the byte range of the description's last status line,
+// without its line ending (LF, or CR LF read as LF), and the status it holds.
+func lastStatusLine(description string) (start, end int, status AdvisoryStatus, ok bool) {
+	for lineStart := 0; lineStart <= len(description); {
+		lineEnd := strings.IndexByte(description[lineStart:], '\n')
+
+		var next int
+
+		if lineEnd < 0 {
+			lineEnd = len(description)
+			next = len(description) + 1
+		} else {
+			lineEnd += lineStart
+			next = lineEnd + 1
+		}
+
+		contentEnd := lineEnd
+		if contentEnd > lineStart && description[contentEnd-1] == '\r' {
+			contentEnd--
+		}
+
+		if s, found := statusOfLine(description[lineStart:contentEnd]); found {
+			start, end, status, ok = lineStart, contentEnd, s, true
+		}
+
+		lineStart = next
+	}
+
+	return start, end, status, ok
+}
+
+// statusOfLine reads a line that is exactly "Audit status: " and one of the
+// four words.
+func statusOfLine(line string) (AdvisoryStatus, bool) {
+	word, found := strings.CutPrefix(line, statusPrefix)
+	if !found {
+		return 0, false
+	}
+
+	for status, w := range statusWords {
+		if w == word {
+			return status, true
+		}
+	}
+
+	return 0, false
 }
 
 // ParseAdvisoryStatus reads a description's status: its last line that is
 // exactly "Audit status: " and one of new, open, not reproduced or regressed.
 // It reports false for a description with no such line.
-func ParseAdvisoryStatus(_ string) (AdvisoryStatus, bool) {
-	return 0, false
+func ParseAdvisoryStatus(description string) (AdvisoryStatus, bool) {
+	_, _, status, ok := lastStatusLine(description)
+
+	return status, ok
 }
 
 // SetAdvisoryStatus returns description with its last status line replaced by
@@ -96,14 +289,29 @@ func ParseAdvisoryStatus(_ string) (AdvisoryStatus, bool) {
 // reproduce, which the run has no finding to render afresh from. It refuses
 // (ErrConfig) a status that is none of the four, and a description with no
 // status line (ParseAdvisoryStatus reports false).
-func SetAdvisoryStatus(_ string, _ AdvisoryStatus) (string, error) {
-	return "", errNotImplemented
+func SetAdvisoryStatus(description string, status AdvisoryStatus) (string, error) {
+	word, known := statusWords[status]
+	if !known {
+		return "", fmt.Errorf("advisory: the status is none of the four: %w", ErrConfig)
+	}
+
+	start, end, _, ok := lastStatusLine(description)
+	if !ok {
+		return "", fmt.Errorf("advisory: the description holds no status line: %w", ErrConfig)
+	}
+
+	return description[:start] + statusPrefix + word + description[end:], nil
 }
 
 // AdvisoryFingerprint reads the fingerprint of an advisory's summary: a
 // summary that starts with "Audit finding ", a fingerprint (fp- and 12
 // lowercase hex) and " (". It reports false for any other summary, a
 // maintainer's rewording included: that advisory then matches no finding.
-func AdvisoryFingerprint(_ string) (Fingerprint, bool) {
-	return "", false
+func AdvisoryFingerprint(summary string) (Fingerprint, bool) {
+	m := summaryFingerprint.FindStringSubmatch(summary)
+	if m == nil {
+		return "", false
+	}
+
+	return Fingerprint(m[1]), true
 }
