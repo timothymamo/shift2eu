@@ -72,10 +72,14 @@ type rendering struct {
 //     publish.ErrScanRefused and no write is made.
 //  6. Write: FileAdvisories, then PublishReport, then CreateIssue for each
 //     planned issue, in the plan's order; the first failure stops the run.
-//     A creation GitHub refuses (publish.ErrPrivateNotFiled) makes no further
-//     advisory call: the run publishes the PrivateNotFiled report and
-//     templates and the issues, drops the private findings, which no other
-//     write holds, and returns nil with that state (outcome 5).
+//     A creation GitHub refuses as the run's first advisory write
+//     (publish.ErrPrivateNotFiled) makes no further advisory call: nothing
+//     was filed, so the run publishes the PrivateNotFiled report and
+//     templates and the issues, writes the private findings nowhere, and
+//     returns nil with that state (outcome 5). A refusal after an earlier
+//     advisory write of the run is publish.ErrGitHub (outcome 8) and stops
+//     the run before the report: the earlier drafts stand, and the next
+//     run's listing reconciles them.
 //
 // It returns the counts of a run whose writes all succeeded, and otherwise
 // the first error, of one of the core's classes or the library's.
@@ -215,6 +219,8 @@ func scanAll(ctx context.Context, cfg PublishConfig, variants []rendering, issue
 		)
 	}
 
+	// Both variants render the same model fields, so the first one's stand
+	// for every variant's.
 	fields := append([]string(nil), variants[0].report.ModelFields...)
 
 	for _, issue := range issues {

@@ -65,7 +65,9 @@ type Advisory struct {
 
 // advisoryEntry is one entry of the listing as the answer holds it. A pointer
 // field the answer lacks, or a field of another JSON type, is an answer that
-// is not the listing; a null list is an empty one.
+// is not the listing. A credit or collaborator list that is missing or null
+// is no empty list: counted as none it would fail open on an advisory a
+// person is on, so it is an entry that is no advisory.
 type advisoryEntry struct {
 	GHSAID      *string `json:"ghsa_id"`
 	Summary     *string `json:"summary"`
@@ -75,11 +77,11 @@ type advisoryEntry struct {
 		Login *string `json:"login"`
 		Type  *string `json:"type"`
 	} `json:"author"`
-	ClosedAt           *string           `json:"closed_at"`
-	Credits            []json.RawMessage `json:"credits"`
-	CreditsDetailed    []json.RawMessage `json:"credits_detailed"`
-	CollaboratingUsers []json.RawMessage `json:"collaborating_users"`
-	CollaboratingTeams []json.RawMessage `json:"collaborating_teams"`
+	ClosedAt           *string            `json:"closed_at"`
+	Credits            *[]json.RawMessage `json:"credits"`
+	CreditsDetailed    *[]json.RawMessage `json:"credits_detailed"`
+	CollaboratingUsers *[]json.RawMessage `json:"collaborating_users"`
+	CollaboratingTeams *[]json.RawMessage `json:"collaborating_teams"`
 }
 
 // ListAuditAdvisories lists the repository's security advisories: GET
@@ -160,7 +162,8 @@ func decodeAdvisories(body []byte) ([]Advisory, error) {
 
 // advisory maps one entry, and reports false for one that is no advisory.
 func (e advisoryEntry) advisory() (Advisory, bool) {
-	if e.GHSAID == nil || e.Summary == nil || e.State == nil {
+	if e.GHSAID == nil || e.Summary == nil || e.State == nil ||
+		e.Credits == nil || e.CreditsDetailed == nil || e.CollaboratingUsers == nil || e.CollaboratingTeams == nil {
 		return Advisory{}, false
 	}
 
@@ -168,8 +171,8 @@ func (e advisoryEntry) advisory() (Advisory, bool) {
 		GHSAID:        *e.GHSAID,
 		Summary:       *e.Summary,
 		State:         *e.State,
-		Credits:       len(e.Credits) + len(e.CreditsDetailed),
-		Collaborators: len(e.CollaboratingUsers) + len(e.CollaboratingTeams),
+		Credits:       len(*e.Credits) + len(*e.CreditsDetailed),
+		Collaborators: len(*e.CollaboratingUsers) + len(*e.CollaboratingTeams),
 	}
 
 	if e.Description != nil {
@@ -432,9 +435,12 @@ func planFinding(f publish.PrivateFinding, drafts map[publish.Fingerprint]Adviso
 // FileAdvisories makes the plan's writes in order, each through the one write
 // helper: one call, never retried, a non-2xx status or an ended context
 // publish.ErrGitHub, and nothing after a failed write. A create answered 403,
-// 404 or 422 is GitHub refusing advisory creation to the App: it returns an
-// error wrapping publish.ErrPrivateNotFiled, and no further advisory call is
-// made. An answer's body is never read.
+// 404 or 422 as the run's first advisory write is GitHub refusing advisory
+// creation to the App: it returns an error wrapping publish.ErrPrivateNotFiled,
+// and no further advisory call is made. The same refusal after an earlier
+// create or update of the run went through is publish.ErrGitHub: the run has
+// filed part of its findings, so they are not "not filed". An answer's body
+// is never read.
 func FileAdvisories(ctx context.Context, c *Client, plan AdvisoryPlan) error {
 	if c == nil {
 		return fmt.Errorf("advisories: no client: %w", publish.ErrConfig)
@@ -442,12 +448,12 @@ func FileAdvisories(ctx context.Context, c *Client, plan AdvisoryPlan) error {
 
 	endpoint := "repos/" + c.scope.Repository + "/security-advisories"
 
-	for _, w := range plan.writes {
+	for i, w := range plan.writes {
 		switch w.Action {
 		case AdvisoryCreate:
 			resp, err := send(ctx, c, "POST", endpoint, createBody(w.Text))
 			if err != nil {
-				if errors.Is(err, publish.ErrGitHub) && refusedCreation(resp.Status) {
+				if i == 0 && errors.Is(err, publish.ErrGitHub) && refusedCreation(resp.Status) {
 					return fmt.Errorf("advisories: GitHub refused the creation: %w", publish.ErrPrivateNotFiled)
 				}
 

@@ -47,8 +47,12 @@
 // (CreateIssue). A PATCH names only a GHSA that the same run's listing showed
 // as one of the App's drafts. Every write goes through one helper that turns
 // a non-2xx status into publish.ErrGitHub and never retries. A creation
-// GitHub refuses (403, 404, 422) makes the run publish its report as "private
-// findings: not filed" and drop the private findings.
+// GitHub refuses (403, 404, 422) as the run's first advisory write makes the
+// run publish its report as "private findings: not filed" and write the
+// private findings nowhere; the same refusal after an earlier advisory write
+// of the run is publish.ErrGitHub, and the earlier drafts stand. A listing
+// entry whose credit or collaborator list is missing or null fails the
+// listing closed (publish.ErrGitHub).
 //
 // It scans every text with gitleaks (Gitleaks) beside the core's own scans,
 // and looks up every 40-hex run of a model field as a commit

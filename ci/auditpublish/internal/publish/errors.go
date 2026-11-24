@@ -21,8 +21,9 @@ var (
 	// fingerprint key, the run's identity, the commit argument.
 	ErrConfig = errors.New("configuration invalid")
 
-	// ErrPrivateNotFiled is the entry point's: the report was published, but a
-	// private finding's draft advisory could not be filed (outcome 5).
+	// ErrPrivateNotFiled is the entry point's: the report was published, but
+	// GitHub refused the run's first advisory write, a creation, so no draft
+	// advisory was filed (outcome 5).
 	ErrPrivateNotFiled = errors.New("private findings not filed")
 
 	// ErrDuplicateDrafts is the entry point's: two of the audit App's draft

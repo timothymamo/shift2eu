@@ -11,7 +11,9 @@
 //     <dir>: files each private finding's draft advisory, the report's pull
 //     request and the issues of the previous report's open public findings,
 //     every text scanned before the first write. A creation GitHub refuses
-//     publishes the report as not filed and ends with outcome 5.
+//     as the run's first advisory write publishes the report as not filed
+//     and ends with outcome 5; one refused after an earlier advisory write
+//     ends with outcome 8, before the report.
 //
 // It reads the step's environment through one os.LookupEnv, passed to run:
 // GH_TOKEN, which it hands to gh unread, GITHUB_SERVER_URL,
