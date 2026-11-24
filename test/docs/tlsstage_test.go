@@ -53,6 +53,18 @@ const (
 	// tlsStageCertificateField is the field that tells an issued certificate from none: null means the stage
 	// never got one.
 	tlsStageCertificateField = "certificate_expires_at"
+
+	// tlsStageRecoveryPlanEnd is how R8's recovery from an apply that failed part-way must re-plan: a plain
+	// plan that writes what is left to tls.tfplan. After a part-way apply the state's current TLS stage is
+	// already the new one, so re-planning with the replace target would replace it a third time.
+	tlsStageRecoveryPlanEnd = "plan -out=tls.tfplan"
+
+	// tlsStageReplaceFlag is the plan argument R8's recovery must not carry, for the reason above.
+	tlsStageReplaceFlag = "-replace"
+
+	// tlsStagePipelineIDPrefix sets the pipeline ID R8's read-only TLS stage line reads. R8 must set it
+	// itself: a fresh shell holds no $PL from the earlier steps, and the list line reads "$PL".
+	tlsStagePipelineIDPrefix = "PL=\"$(dev/tofu.sh -chdir=infra/site output -raw pipeline_id)\""
 )
 
 // TestTLSStageRecreateInR8 pins R8's recreate step and its check (issue #541): a plan that writes the TLS
@@ -122,6 +134,49 @@ func TestTLSStageRecreateInR8(t *testing.T) {
 
 		t.Errorf("%s's R8 has no %q comment that says to re-run an apply which failed part-way: the replacement creates the new stage and deletes the old one in two steps, and an apply that stopped between them leaves the plan still to finish, so re-running it is the recovery (issue #541). R8's FAIL comments were:\n%s",
 			siteRunbookPath, "# FAIL", strings.Join(failLines, "\n"))
+	})
+
+	t.Run("R8 re-plans a part-way apply without -replace", func(t *testing.T) {
+		t.Parallel()
+
+		partway := tlsRunbookPartwayFailLines(r8)
+		if len(partway) == 0 {
+			t.Fatalf("%s's R8 has no %q comment about an apply that failed part-way, so this check pins nothing: the replacement creates the new stage and deletes the old one in two steps, and an apply that stopped between them needs the recovery this comment gives (issue #541). R8's FAIL comments were:\n%s",
+				siteRunbookPath, "# FAIL", strings.Join(tlsRunbookFailLines(r8), "\n"))
+		}
+
+		for _, line := range partway {
+			if !strings.Contains(line, tlsStageRecoveryPlanEnd) {
+				t.Errorf("%s's R8 recovery from a part-way apply does not name %q: after the apply that stopped part-way the state's current TLS stage is already the new one, so the recovery is a plain plan that writes what is left to tls.tfplan, and \"the plan line above\" would replace the stage a third time (issue #541):\n\t%s",
+					siteRunbookPath, tlsStageRecoveryPlanEnd, line)
+			}
+
+			if strings.Contains(line, tlsStageReplaceFlag) {
+				t.Errorf("%s's R8 recovery from a part-way apply carries %q: the create that completed already left the new TLS stage in the state, so a plan that replaces it again would replace it a third time, and the recovery must plan without it (issue #541):\n\t%s",
+					siteRunbookPath, tlsStageReplaceFlag, line)
+			}
+		}
+	})
+
+	t.Run("R8 sets the pipeline ID it lists", func(t *testing.T) {
+		t.Parallel()
+
+		listAt, listLine, ok := runbookLineStartingWith(r8, tlsStageListPrefix)
+		if !ok {
+			t.Fatalf("%s's R8 holds no line starting %q: the step that reads the stage's certificate needs it (issue #541). R8 was:\n%s",
+				siteRunbookPath, tlsStageListPrefix, strings.Join(r8, "\n"))
+		}
+
+		if tlsRunbookLineSetsPipelineIDBefore(listLine, tlsStageListPrefix) {
+			return
+		}
+
+		if _, _, sets := runbookLineStartingWith(r8[:listAt-1], tlsStagePipelineIDPrefix); sets {
+			return
+		}
+
+		t.Errorf("%s's R8 lists the TLS stage with %q but sets no pipeline ID before it: neither that line nor any line of R8 before it starts %q, so the command reads an empty $PL in a fresh shell (issue #541):\n\t%s",
+			siteRunbookPath, tlsStageListPrefix, tlsStagePipelineIDPrefix, strings.TrimSpace(listLine))
 	})
 
 	t.Run("R8 shows the TLS stage's certificate", func(t *testing.T) {
@@ -256,6 +311,32 @@ func tlsRunbookFailLines(section []string) []string {
 	}
 
 	return failLines
+}
+
+// tlsRunbookPartwayFailLines returns a section's FAIL comments about an apply that failed part-way, as the
+// runbook writes them, trimmed: the comment whose recovery must re-plan without the replace target.
+func tlsRunbookPartwayFailLines(section []string) []string {
+	var partway []string
+
+	for _, line := range tlsRunbookFailLines(section) {
+		lower := strings.ToLower(line)
+		if strings.Contains(lower, "part-way") || strings.Contains(lower, "partway") {
+			partway = append(partway, line)
+		}
+	}
+
+	return partway
+}
+
+// tlsRunbookLineSetsPipelineIDBefore reports whether line holds the pipeline ID assignment ahead of the
+// command prefix it feeds on the same line, the other shape R8 may take.
+func tlsRunbookLineSetsPipelineIDBefore(line, prefix string) bool {
+	at := strings.Index(line, prefix)
+	if at < 0 {
+		return false
+	}
+
+	return strings.Contains(line[:at], tlsStagePipelineIDPrefix)
 }
 
 // tlsRunbookPreamble returns the lines above the first `## ` heading: the order note that tells the
