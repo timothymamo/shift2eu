@@ -180,10 +180,52 @@ const (
 	// auditModelCanary is the model step's env:, whose canary line the cases that
 	// widen it append to.
 	auditModelCanary = "          SHIFT2EU_AUDIT_CANARY: \"8f14e45fceea167a5a36dedd4bea2543f0e1a2b3c4d5e6f708192a3b4c5d6e7f\"\n"
-	// auditAttestationStep is the publish job's model-free attestation check: the
-	// tag's shape is held first, an empty digest skips the verification with a
-	// fixed notice (the run pulled no image), and a digest that is not sha256 is
-	// refused before gh runs.
+	// auditDigestComment is the note above auditDigestRefusal in the accepted
+	// shape's attestation step.
+	auditDigestComment = "          # The digest is read as a string alone, and refused unless it is exactly the empty value (the run\n" +
+		"          # pulled no image) or one sha256 digest: any other value, a newline in it included, would reach\n" +
+		"          # the empty branch below as a not-pulled image otherwise. The step stands alone: it trusts no\n" +
+		"          # earlier step to have read the digest.\n"
+	// auditDigestRefusal is the attestation step's read of the digest as a string
+	// alone, and its refusal of every value that is neither exactly the empty
+	// value nor one sha256 digest, before the empty branch can take such a value
+	// for a not-pulled image (review round 2, G3). The message a check owes for
+	// the step that drops it names the jq that holds it, and so holds
+	// select(type == "string").
+	auditDigestRefusal = "          if ! digest=\"$(jq -er '.image_digest | select(type == \"string\") | select(. == \"\" or test(\"^sha256:[0-9a-f]{64}\\\\z\"))' \"${RUNNER_TEMP}/result.json\")\"; then\n" +
+		"            echo \"::error title=Audit publish::the image digest is no string, no empty value and no sha256 digest: see runbook step 11\"\n" +
+		"            exit 1\n" +
+		"          fi\n"
+	// auditDigestRead is the unchecked read the attestation step held before
+	// review round 2's G3, and the step the case that removes the refusal puts
+	// in its place: any value, a newline in it included, becomes the digest then.
+	auditDigestRead = "          digest=\"$(jq -er '.image_digest' \"${RUNNER_TEMP}/result.json\")\"\n"
+	// auditTagShapeCheck is the attestation step's tag-shape check, and
+	// auditTagShapeCommented a copy of it under comment lines, which no shell
+	// runs: the case that moves the check below the verification leaves the
+	// copy where the check stood.
+	auditTagShapeCheck = "          if [[ ! \"${tag}\" =~ ^v[0-9]+\\.[0-9]+\\.[0-9]+$ ]]; then\n" +
+		"            echo \"::error title=Audit publish::the tag's shape is no vMAJOR.MINOR.PATCH: see runbook step 11\"\n" +
+		"            exit 1\n" +
+		"          fi\n"
+	auditTagShapeCommented = "          # if [[ ! \"${tag}\" =~ ^v[0-9]+\\.[0-9]+\\.[0-9]+$ ]]; then\n" +
+		"          #   echo \"::error title=Audit publish::the tag's shape is no vMAJOR.MINOR.PATCH: see runbook step 11\"\n" +
+		"          #   exit 1\n" +
+		"          # fi\n"
+	// auditZipDigestLine is the model job's download step's check of the zip
+	// against the digest of artifact.json, the step the case that comments it out
+	// reads no longer.
+	auditZipDigestLine = "          echo \"${digest#sha256:}  ${RUNNER_TEMP}/checks-result.zip\" | sha256sum --check --strict -\n"
+	// auditVerifyFlagLine is the last line of the attestation step's gh
+	// verification, whose --deny-self-hosted-runners the case that comments it
+	// out leaves in a comment alone.
+	auditVerifyFlagLine = "            --deny-self-hosted-runners\n"
+	// auditAttestationStep is the publish job's model-free attestation check: it
+	// stands alone, reading the digest as a string alone and refusing anything
+	// but exactly the empty value or one sha256 digest before the empty branch
+	// (review round 2, G3), the tag's shape is held first, an empty digest skips
+	// the verification with a fixed notice (the run pulled no image), and a
+	// digest that is not sha256 is refused before gh runs.
 	auditAttestationStep = "      - name: Verify the image's provenance attestation\n" +
 		"        timeout-minutes: 10\n" +
 		"        env:\n" +
@@ -191,7 +233,8 @@ const (
 		"        run: |\n" +
 		"          set -euo pipefail\n" +
 		"          image=\"ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/shift2eu\"\n" +
-		"          digest=\"$(jq -er '.image_digest' \"${RUNNER_TEMP}/result.json\")\"\n" +
+		auditDigestComment +
+		auditDigestRefusal +
 		"          tag=\"$(jq -er '.release_tag' \"${RUNNER_TEMP}/result.json\")\"\n" +
 		"          if [[ ! \"${tag}\" =~ ^v[0-9]+\\.[0-9]+\\.[0-9]+$ ]]; then\n" +
 		"            echo \"::error title=Audit publish::the tag's shape is no vMAJOR.MINOR.PATCH: see runbook step 11\"\n" +
@@ -1056,6 +1099,48 @@ func TestAuditWorkflow(t *testing.T) {
 			name:     "the copies of the gitleaks pin differ",
 			workflow: mutate(t, acceptedWorkflow, auditPublishGitleaks, strings.ReplaceAll(auditPublishGitleaks, "aaaa", "ffff")),
 			wantIn:   "copy",
+		},
+
+		// Review round 2, G1: a command the script only mentions in a comment is
+		// no command. Every case below leaves the command's text in the step under
+		// a # that no shell runs, so a check that reads the comments for its runs
+		// (and its order) accepts a step that does nothing.
+		{
+			name: "a commented-out sha256sum of the zip",
+			workflow: mutate(t, acceptedWorkflow, auditZipDigestLine,
+				"          # "+strings.TrimPrefix(auditZipDigestLine, "          ")),
+			wantIn: "of the zip against the checked digest",
+		},
+		{
+			name: "a commented-out --deny-self-hosted-runners",
+			workflow: mutate(t, acceptedWorkflow, "            --source-ref \"refs/tags/${tag}\" \\\n"+auditVerifyFlagLine,
+				"            --source-ref \"refs/tags/${tag}\"\n"+
+					"          # --deny-self-hosted-runners: a self-hosted runner's provenance is no provenance\n"),
+			wantIn: "--deny-self-hosted-runners",
+		},
+		{
+			name:     "a commented-out auditrun",
+			workflow: mutate(t, acceptedWorkflow, auditRunCommand, "          # "+strings.TrimPrefix(auditRunCommand, "          ")),
+			wantIn:   "-result-out",
+		},
+		{
+			// The order too is the code's: a commented copy of the tag's shape,
+			// standing where the check was, must not satisfy it for a real check
+			// that was moved below the verification it must precede.
+			name: "a commented copy of the tag's shape standing in for the check moved below the verification",
+			workflow: mutate(t, mutate(t, acceptedWorkflow, auditTagShapeCheck, auditTagShapeCommented),
+				auditVerifyFlagLine, auditVerifyFlagLine+auditTagShapeCheck),
+			wantIn: "after gh attestation verify",
+		},
+		{
+			// Review round 2, G3: the attestation step stands alone. The case puts
+			// back the unchecked read it held, so any value but a sha256 digest - a
+			// newline in it included - reaches the empty branch and is taken for a
+			// not-pulled image. The message the check owes names the refusal's jq,
+			// so it holds select(type == "string").
+			name:     "the digest read without the string-and-shape refusal",
+			workflow: mutate(t, acceptedWorkflow, auditDigestRefusal, auditDigestRead),
+			wantIn:   "select(type == \"string\")",
 		},
 
 		// A document the reader cannot follow tells the check nothing, so it is

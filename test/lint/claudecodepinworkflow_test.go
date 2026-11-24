@@ -1380,6 +1380,18 @@ func TestClaudeCodeAuditWorkflowPinsOnlyWhereItReadsThem(t *testing.T) {
 			wantIn: "sha512-",
 		},
 		{
+			// The exemption is the line that greps the pin file's integrity,
+			// never the step it stands in: a sha512- literal on another line of
+			// the step that reads the pin is a pin written into the workflow
+			// like any other (review round 2, G2).
+			name: "an integrity on another line of the step that reads the pin",
+			rel:  claudeCodeAuditWorkflowPath,
+			src: rewrite(`          version="$(grep -E '^version: [0-9]+\.[0-9]+\.[0-9]+$' "${pin}" || true)"`,
+				`          version="$(grep -E '^version: [0-9]+\.[0-9]+\.[0-9]+$' "${pin}" || true)"`+"\n"+
+					`          integrity="integrity: `+integrity+`"`, 1),
+			wantIn: "sha512-",
+		},
+		{
 			// The model step's integrity is exactly the pin step's output: a
 			// literal there runs a CLI the pin file does not name.
 			name: "a literal -claude-integrity",
