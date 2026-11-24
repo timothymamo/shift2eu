@@ -131,13 +131,23 @@ key, a `$${` or `%%{` escape in a block label, a block header of anything but id
 | `scaleway_edge_services_pipeline.site` | one pipeline |
 | `scaleway_edge_services_backend_stage.site` | `s3_backend_config`: the site bucket, its region, `is_website = true` |
 | `scaleway_edge_services_cache_stage.site` | after the backend; `fallback_ttl = 300` (only for a response without `Cache-Control`), `include_cookies = false` |
-| `scaleway_edge_services_tls_stage.site` | after the cache; `managed_certificate = true` (Let's Encrypt, decision 10's CAA) |
+| `scaleway_edge_services_tls_stage.site` | after the cache; `managed_certificate = true` (Let's Encrypt, decision 10's CAA); `lifecycle { create_before_destroy = true }` (below) |
 | `scaleway_edge_services_dns_stage.site` | after TLS; `fqdns = ["www.shift2eu.com"]` |
 | `scaleway_edge_services_head_stage.site` | the DNS stage is the pipeline's head |
 
 No WAF and no route stage: one backend serves every path. Every child of the bucket and every Edge
 Services resource names `project_id` itself, as the provider requires outside the default project; the
 provider has no default project.
+
+The TLS stage requests its managed certificate once, when it is created, and Scaleway can issue it only
+once the www CNAME resolves to the pipeline; it does not try again. On the first real setup (2026-11-24)
+the apply created the stage before the Runbook's Namecheap step, and it never got a certificate (issue
+#541). Replacing the stage is the only way to ask again, and Scaleway refuses to delete a TLS stage the
+DNS stage references, so the default destroy-then-create replacement fails. The stage therefore sets
+`create_before_destroy = true` (held by `dev/infra-rules.sh`'s `[tls-stage-lifecycle]`): the new stage
+is created and the DNS stage repointed before the old one is deleted. The DNS and head stages need no
+lifecycle block: OpenTofu applies the ordering to the stage's dependencies itself, and the DNS stage, a
+dependent, is repointed before the old stage is destroyed. The Runbook's Namecheap step recreates the stage when no certificate came.
 
 **The bucket policy** allows, and nothing else:
 

@@ -94,6 +94,9 @@ open 'https://www.scaleway.com/en/pricing/network/#edge-services'   # PASS: Star
 
 And after every change to `infra/site/` merged to `main`.
 
+The apply creates the TLS stage, which requests its managed certificate only then, before R8's CNAME
+exists: on a first setup, R8's recreate step is expected (issue #541).
+
 ```bash
 dev/tofu.sh -chdir=infra/site init -backend-config=backend.hcl -lockfile=readonly   # PASS: "OpenTofu has been successfully initialized"
 dev/tofu.sh -chdir=infra/site plan -out=site.tfplan        # PASS (first time): "Plan: 13 to add, 0 to change, 0 to destroy."
@@ -255,8 +258,14 @@ Domain List, `shift2eu.com`, Advanced DNS; the apex redirect is milestone 4's.
 dig +short CNAME www.shift2eu.com     # PASS: "$E." (the edge_endpoint output)
 dig +short CAA shift2eu.com           # PASS: exactly 0 issue "letsencrypt.org" and 0 issuewild ";"
 dig +short DS shift2eu.com            # PASS: a DS record (DNSSEC on)
+# The certificate, once the CNAME resolves: wait up to 15 minutes, 30 tries 30 s apart
+n=0; until echo | openssl s_client -connect www.shift2eu.com:443 -servername www.shift2eu.com 2>/dev/null | openssl x509 -noout -issuer 2>/dev/null | grep -q Encrypt || [ "$n" -ge 30 ]; do sleep 30; n=$((n + 1)); done
 echo | openssl s_client -connect www.shift2eu.com:443 -servername www.shift2eu.com 2>/dev/null | openssl x509 -noout -issuer -enddate   # PASS: a Let's Encrypt issuer
-# FAIL "unable to load certificate": wait for issuance, then check the CAA record
+# FAIL "unable to load certificate": check the CAA record, then the TLS stage
+scw edge-services tls-stage list pipeline-id="$PL" -o json | jq '.[] | {status, certificate_expires_at}'   # PASS: a date in certificate_expires_at
+# FAIL certificate_expires_at: null after the wait: no certificate was issued (R4 created the stage before the CNAME existed, and Scaleway asks only once); recreate the TLS stage below and re-run the checks
+dev/tofu.sh -chdir=infra/site apply -replace=scaleway_edge_services_tls_stage.site   # PASS: the plan replaces the TLS stage ("create replacement and then destroy") and repoints the DNS stage's tls_stage_id, nothing else; answer yes; "Apply complete"
+# Then the wait loop, the certificate check and the TLS stage check again
 curl -s -o /dev/null -w '%{http_code} %{redirect_url}\n' http://www.shift2eu.com/   # record it: 301/308 to https://www.shift2eu.com/, refused, or 200 (a no-go, Hosting decision 3)
 # The release-tag skill's and the live check's DNS, certificate and redirect checks verify this afterwards
 ```
