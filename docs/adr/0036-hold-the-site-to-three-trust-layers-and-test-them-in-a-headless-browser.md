@@ -355,7 +355,7 @@ that build an inventory, each with its own copy button (PR #379, item 15).
 2026-11-24. The maintainer asked for a short intro on the Assessment page saying what the site does and
 who provides it, and for a page about the maintainer.
 
-- **The page is `site/about.html`**, a fifth page of the bundle (`data-page="about"`). It carries the
+- **The page is `site/about.html`**, a fifth page of the bundle. It carries the
   same Content Security Policy, loads only the page script, is linked from every other page's footer and
   from the Assessment page's intro, and is held by every per-page check of `test/site` and by
   `test/browser`. `ci/sitebuild` builds it, `ci/sitedeploy`'s bundle check requires it among exactly the

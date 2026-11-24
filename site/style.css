@@ -334,6 +334,26 @@ summary:focus-visible,
   font-size: 1.125rem;
 }
 
+/* The Assessment page's intro says what the site does and who provides it
+   (issue #528): the lead's size, in the page's ink rather than muted, so it
+   reads as the first line under the title and the lead as its follow-up. */
+.intro {
+  margin: 0 0 0.75rem;
+  color: var(--ink);
+  font-size: 1.125rem;
+}
+
+/* The About page's links keep their markers, one per line, set apart from the
+   paragraphs above them (issue #528). */
+.about-links {
+  margin: 1.5rem 0 0;
+  padding-left: 1.25rem;
+}
+
+.about-links li + li {
+  margin-top: 0.4rem;
+}
+
 /* The About page's title sits beside the maintainer's avatar, an inline SVG
    portrait sized here because the policy allows no style attribute (issue
    #528); on a phone they wrap under each other. */
