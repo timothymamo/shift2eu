@@ -35,6 +35,24 @@ const (
 	runDeadline    = 10 * time.Minute
 )
 
+// newHTTPClient returns the client the deploy talks to the bucket through:
+// each request bounded by timeout, over a clone of http.DefaultTransport whose
+// Proxy is set to nil. http.DefaultTransport itself has Proxy
+// http.ProxyFromEnvironment, so an HTTP_PROXY or HTTPS_PROXY in the step's
+// environment would send every request, signed with the site's key, through
+// another host. Everything else is the clone's: the default transport's dialer
+// (its connect timeout and keep-alive), TLS with the system roots, HTTP/2 and
+// its idle and handshake timeouts, as the Go release in use sets them.
+func newHTTPClient(timeout time.Duration) *http.Client {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.Proxy = nil
+
+	return &http.Client{
+		Timeout:   timeout,
+		Transport: transport,
+	}
+}
+
 // regionPattern is a Scaleway region (fr-par, nl-ams, pl-waw): the endpoint
 // is built from it, so it is held to this shape before it reaches a URL.
 var regionPattern = regexp.MustCompile(`^[a-z]{2}-[a-z]{3}$`)
@@ -94,7 +112,7 @@ func run() int {
 		Bucket:      opts.bucket,
 		Region:      opts.region,
 		Credentials: env.credentials,
-		Client:      &http.Client{Timeout: requestTimeout},
+		Client:      newHTTPClient(requestTimeout),
 		Bundle:      os.DirFS(opts.bundle),
 		Version:     opts.version,
 		LivePage:    livePage,

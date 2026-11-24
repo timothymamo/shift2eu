@@ -23,7 +23,9 @@
 // main passes to environment (the forbidigo group site-deploy-env refuses
 // every other read of the environment).
 // It wires the library deploy (ci/sitedeploy/internal/deploy), which does the
-// work, to os.DirFS of both directories and an HTTP client with a timeout, and
+// work, to os.DirFS of both directories and an HTTP client with a timeout
+// whose transport uses no proxy (newHTTPClient: HTTP_PROXY and HTTPS_PROXY are
+// never consulted), and
 // runs deploy.Deploy under a deadline (runDeadline) inside the job's
 // timeout-minutes. It exits 0 once every file is uploaded and 1 on any
 // failure, with one ::error annotation whose text is escaped; it prints

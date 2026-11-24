@@ -116,10 +116,19 @@ published release asset, which never expires, and the deploy program's binary as
 run, checks both SHA-256 digests against the outputs of the jobs that produced them (the bundle's against
 the `site` job's), and runs `gh attestation verify <archive> --repo <owner>/shift2eu
 --signer-workflow <owner>/shift2eu/.github/workflows/release.yml --source-ref refs/tags/<tag>
---deny-self-hosted-runners` with the job's `GITHUB_TOKEN`. Only then does the one step that holds the
+--source-digest <commit> --deny-self-hosted-runners` with the job's `GITHUB_TOKEN`. Only then does the one step that holds the
 key run. The guide (`docs/guide/verify-releases.md`, PR D) and the live checks (PR B) use the same flags.
 The release's live check (PR C2) takes the bundle from the published release asset too, checked against
 the `site` job's digest, whose attestation the deploy job verified in the same run.
+
+As built (PR C2): both jobs first refuse a release that is still a draft (`gh release view <tag> --json
+isDraft` must be `false`), then download `shift2eu-site_<tag>.tar.gz` from it, and check the bundle and
+their program in one `sha256sum -c` against `needs.site.outputs.sha256` and the `site-programs` job's
+output for that program. The deploy's `gh attestation verify` adds `--source-digest "$GITHUB_SHA"` to the
+flags above, binding the bundle to this run's commit as `verify-archives` binds the archives; it is
+stricter than the list this ADR first gave. The manifests of the higher releases (below) are verified
+with the same flags but their own `--source-ref`, and without `--source-digest`, since that release's
+commit is not known there.
 
 ### The deploy job (PR C)
 
@@ -135,7 +144,11 @@ the `site` job's digest, whose attestation the deploy job verified in the same r
   `protected_branches` `false`; type `tag`, so a branch named like a tag is not allowed). The `v*` tag
   rulesets ([ADR 0021](0021-propose-releases-with-release-please-and-tag-with-a-github-app.md)) let only
   the release-tag App and the maintainer create such a tag. The `release-tag` skill's step 2 checks all
-  of it (PR C).
+  of it (PR C). The environment admits any `v*.*.*` tag, and the workflow that runs is the tagged
+  commit's, so those tag rulesets are the one control on the deploy key; the key is bucket-scoped, so
+  what a misused tag could reach is the site's content. A required reviewer or a wait timer on the
+  `site` environment would add defence in depth; it stays the maintainer's option, not taken here,
+  because it would add a second human gate to every release (PRD #161).
 - **The job does not build.** A job without secrets builds `ci/sitedeploy` with the pinned toolchain;
   the deploy job downloads it, and the bundle from the published release, checks the digests and the
   attestation (above), and runs
@@ -146,6 +159,42 @@ the `site` job's digest, whose attestation the deploy job verified in the same r
   `concurrency: {group: site-deploy, cancel-in-progress: false}`, so a re-run and a new release's
   deploy cannot interleave their uploads.
 - **`release.yml` lands in PR C**, with every job given a `timeout-minutes` (below).
+- **As built (PR C2):** four jobs, which `check.ReleaseWorkflow` pins as a closed schema.
+  - `site-programs` ("Site programs", needs `test`, `contents: read`, no secret) builds `ci/sitedeploy`
+    and `ci/sitecheck` with `make site-programs` (static, `-trimpath`), gives their SHA-256 as outputs and
+    hands each on as an artifact of its own, kept 30 days, GitHub's re-run window.
+  - `site-deploy` ("Deploy the site") needs `latest`, `verify`, `verify-archives`, `attest-archives`,
+    `site`, `site-browser` and `site-programs`, runs on exactly `needs.latest.outputs.latest == 'true' &&
+    vars.SITE_DEPLOY_ENABLED == 'true'`, and has five steps, the deploy last: the program's artifact; the
+    bundle's draft, digest and attestation checks (above); the release tags on `main`, by the `latest`
+    job's filter and sort, read at deploy time from a treeless fetch, so a higher release published since
+    `latest` decided is in the list; the higher releases' manifests; and `sitedeploy -bundle bundle
+    -version "$TAG" -bucket "$SITE_BUCKET" -region "$SITE_REGION" -releases releases.txt -manifests
+    manifests`.
+  - **The bucket and region** are the variables `SITE_BUCKET` and `SITE_REGION` of the `site`
+    environment, not secrets, set by the maintainer from `tofu output` in milestone 4 and checked by the
+    `release-tag` skill's step 2; no bucket name is written into `release.yml`. The deploy step's `env:`
+    is exactly the two keys, the tag and those two variables: no `GH_TOKEN`. `check.ReleaseWorkflow`
+    holds each key's secret to that one line of the whole document, the variables to it, the switch to
+    the three `if:` lines and `site-skipped`'s `env:`, and refuses any line that names `HTTPS_PROXY`,
+    `HTTP_PROXY`, `NO_PROXY`, `SSL_CERT_FILE` or `SSL_CERT_DIR`.
+  - **The higher releases' manifests.** Without them the guard could never refuse a rollback. For each
+    tag of the list above `TAG` (by `sort -V`), the step reads that release: an HTTP 404 (not published
+    yet: its run is queued behind this one and deploys after it), a release still a draft, and a release
+    without `shift2eu-site_<tag>.tar.gz` each give a `::notice::` and are skipped; any other failed read
+    fails the step. Otherwise it downloads that bundle, verifies its attestation and extracts its
+    `manifest.json` into `manifests/<tag>.json`. The tags come from the list alone, never from a page or
+    an API answer. Normally the tag is the highest and the directory stays empty.
+  - `-list-bucket` stays off: R7 has not recorded "ListBucket allowed" (milestone 4).
+  - `site-check` ("Check the live site") needs `latest`, `site`, `site-programs` and `site-deploy`, on
+    the deploy's exact condition, with `contents: read` alone and no environment; it checks out the tag
+    for `site/records/`, checks the published bundle and its program against their digests, and runs
+    `sitecheck -manifest bin/manifest.json -tags bin/releases.txt` at its defaults (`-plain-http-www`
+    stays at `redirect` until milestone 4).
+  - `site-skipped` ("Site deploy skipped", needs `latest`, `permissions: {}`) runs on the exact negation
+    of that condition and says why in a `::notice::` and the run's summary, never printing the
+    variable's value. It is a job of its own, because a step-level condition would still start the `site`
+    environment's job, with a deployment, on every release.
 
 ### The key's scope
 
@@ -302,12 +351,17 @@ the key gets nothing printed.
 A step that could set them could route the signed requests through a proxy of its choosing or make it
 trust another certificate authority. So the deploy job's steps before the deploy run no third-party
 code and write nothing to `GITHUB_ENV` (or `GITHUB_PATH`), and the key is set only in the `env:` of the
-deploy step itself.
+deploy step itself. As built (PR C2), the deploy's client has a transport of its own whose `Proxy` is
+nil (`newHTTPClient` in `ci/sitedeploy`), so the proxy variables are never consulted, and
+`check.ReleaseWorkflow` refuses any line of `release.yml` that names them or the certificate variables.
 
 ### Recovery
 
 - **Redeploy the last good release:** re-run the deploy job of the `release.yml` run of the highest
-  release tag on `main` (R12). The guard overwrites any live page that is not a genuine higher release,
+  release tag on `main` (R12), within GitHub's 30-day re-run window (below); after the window, either
+  the maintainer restores the last good version of each page from the bucket's object versions with
+  their own key (R12), or cuts a new release with a `Release-As:` footer.
+  The guard overwrites any live page that is not a genuine higher release,
   with a warning, so a page a leaked key wrote is replaced whatever version it claims. Redeploying the
   same release is the same re-run: the guard sees an equal version and overwrites, with a notice.
 - **A deploy that failed part-way:** `manifest.json` is uploaded before the pages, so a failure
@@ -331,9 +385,14 @@ deploy step itself.
   re-run after publication**: a GitHub re-run of a job also re-runs every job that needs it, so a re-run
   of `site` would re-run `goreleaser` (which would upload to a published, immutable release),
   `attest-archives` and `publish` (which refuses a tag that already holds a published release). This
-  replaces the earlier plan of re-running the bundle job once its artifact had expired. Only the deploy
-  program is rebuilt after its artifact expires, by re-running the secretless job that builds it (PR
-  C2), which re-runs only the deploy and the live check.
+  replaces the earlier plan of re-running the bundle job once its artifact had expired. As built (PR
+  C2): GitHub re-runs a run's jobs only within 30 days of the initial run, so the programs' artifacts
+  are kept exactly 30 days; within that window, re-run `Deploy the site` (which re-runs `Check the live
+  site`); after it nothing of the run can be re-run, and the recovery is either the maintainer's
+  restore of the last good version of each page from the bucket's object versions with their own key
+  (R12), or a new release cut with a `Release-As:` footer. `Site bundle` is
+  never re-run after publication. The programs' artifacts are kept 30 days, the bundle's 7 (*proposed*,
+  measured on the first release).
 
 ### `timeout-minutes` (values for PR C)
 
@@ -349,25 +408,27 @@ longest job (Test) 3 minutes.
 | `goreleaser` | 15 | `sign` | 10 |
 | `attest-archives` | 10 | `verify` | 10 |
 | `publish` | 10 | `verify-archives` | 10 |
-| `site` (the bundle's build) | 15 | the deploy program's build | 10 |
-| `site-browser` (the bundle's smoke test) | 30 | | |
-| the deploy | 15 (`sitedeploy`'s own deadline is 10, each request 2) | the live check | 15 (its retry bound at least the pages' 300 seconds) |
+| `site` (the bundle's build) | 15 | `site-programs` (the programs' build) | 10 |
+| `site-browser` (the bundle's smoke test) | 30 | `site-skipped` (the skip notice) | 5 |
+| `site-deploy` (the deploy) | 15 (`sitedeploy`'s own deadline is 10, each request 2) | `site-check` (the live check) | 15 (its retry bound at least the pages' 300 seconds) |
 
 PR C1 sets the first twelve (`release.yml` from `test` to `verify-archives`, with `site` and
-`site-browser`), and `check.ReleaseWorkflow` pins them. The bundle's build and smoke test, first proposed
+`site-browser`), PR C2 the last four (`site-programs`, `site-deploy`, `site-check` and `site-skipped`),
+and `check.ReleaseWorkflow` pins all sixteen. The bundle's build and smoke test, first proposed
 as one job of 20 minutes, are two jobs: `site` 15, and `site-browser` 30, as ci.yml's `browser` job
 (the headless Chromium's image pull and the smoke test's own 20-minute `go test` timeout).
 
 `goreleaser` now needs `site`, and `publish` needs `site-browser`, so the longest chain to the end of the
 live check (PR C2) is `test`, `site`, `site-browser`, `publish`, `verify-archives`, the deploy, the live
-check: 115 minutes (the earlier chain through the image and `verify` was 100). With release-please's
+check: 115 minutes with PR C2's jobs (the earlier chain through the image and `verify` was 100). With release-please's
 `release-please` and `tag` jobs (15 + 15) and the pages' `max-age` (5), the version window's floor is
 150 minutes (it was 135). The real durations are measured on the first release that runs the site jobs;
 milestone 4 adds the margin for queueing and pins the number.
 
 ### The HSTS and preload records (milestone 4 creates them)
 
-*The formats are proposed, for the maintainer to confirm* (PR B reads them, milestone 4 writes them).
+**The formats are confirmed by the maintainer (2026-11-23)** (PR B reads them, milestone 4 writes them).
+Milestone 4 still decides the outcome, whether preload is pursued and the subdomains.
 Both live under `site/records/`, which `ci/sitebuild` never bundles. Both are one JSON object of exactly
 the fields below, read strictly: no unknown, missing or duplicate field, field names matched exactly
 (case-sensitive), no trailing data, at most 4 KiB. A missing or unreadable record makes the live checks
@@ -501,7 +562,10 @@ accepted; and whether `ListBucket` was allowed, which decides `-list-bucket` abo
 
 - A release from PR C's merge on builds, attests and publishes the bundle, and deploys it only once the
   maintainer sets `SITE_DEPLOY_ENABLED` (milestone 4); until then the deploy and its live check are
-  skipped visibly.
+  skipped visibly, by the `site-skipped` job's notice.
+- The maintainer sets the `site` environment's variables `SITE_BUCKET` and `SITE_REGION` (from `tofu
+  output`) before the switch; the `release-tag` skill reports them missing as "not set up yet" while the
+  switch is unset, and stops the release once it is `true`.
 - The deploy key is in scope for one step, on a program and a bundle this run built and attested; a
   failed deploy fails the release run and leaves the previous release serving.
 - The bucket grows by one bundle per release (a few MiB), never pruned by the deploy.

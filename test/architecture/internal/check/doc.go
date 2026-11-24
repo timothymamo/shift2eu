@@ -44,7 +44,7 @@
 // StrayReleaseFiles and ReleaseWorkflow pin that the release builds what the
 // check lists: no other goreleaser document, go.work or vendor at the root that
 // git could commit, and a release workflow read as a closed schema of one
-// release at a time and twelve jobs, each with its own timeout-minutes: the
+// release at a time and sixteen jobs, each with its own timeout-minutes: the
 // tests, behind the guard that the tagged commit is on main; a latest job,
 // read-only, that decides once per run whether the tag is the highest release
 // tag on main, the one decision the image's latest tag and GitHub's "Latest"
@@ -70,7 +70,22 @@
 // (issue #99), and a verify-archives job beside it, as read-only, that
 // verifies the published assets' digests and attestations (issue #163) and,
 // reading the highest release tag again on its own, that GitHub's "Latest"
-// release follows it and is never a pre-release (issue #173).
+// release follows it and is never a pre-release (issue #173); and the site's
+// deploy (PRD #297 milestone 3, ADR 0042): a site-programs job, read-only and
+// secretless, that builds ci/sitedeploy and ci/sitecheck with make
+// site-programs and gives their SHA-256 as outputs; a site-deploy job, the one
+// job that holds the site's key, run only for the highest release tag on main
+// while vars.SITE_DEPLOY_ENABLED is 'true', behind the site environment and a
+// concurrency group of its own, contents: read and attestations: read alone,
+// that deploys the published, non-draft release's bundle once it matches the
+// site job's digest and its attestation for this tag and commit, with the
+// higher releases' manifests beside it; a site-check job on the same
+// condition, contents: read alone, that checks the live site against that
+// bundle's manifest; and a site-skipped job, with no permission, that says why
+// the deploy did not run. The two Scaleway secrets are named on one line each,
+// the deploy step's env:, the switch only in the three conditions and the skip
+// notice's env:, the bucket and region only in the deploy step's env:, and no
+// line names a proxy or certificate variable.
 // WorkflowPrivileges keeps every other
 // workflow from publishing: no packages, id-token or attestations write, no
 // write-all, no trigger a tag runs (push of tags, create, release,
@@ -78,7 +93,9 @@
 // holds ci.yml's image job, the release's dry run, to the release's build
 // settings for each image, tag rules, latest decision, SBOM settings, action
 // pins and BuildKit image, and to the verify job's container run of each
-// image; ci.yml's test job to running make site before the archive check, and
+// image; ci.yml's test job to running make site and make site-programs before
+// the archive check, release.yml's site-programs job to running make
+// site-programs, and
 // its browser job to the release's own path to a real Chromium, in order: make
 // site, the archive unpacked into bin/release-bundle as release.yml's
 // site-browser job unpacks it (without its digest check, under the untagged

@@ -30,8 +30,11 @@ library `ci/sitecheck/internal/livecheck` does every fetch and judgement, and th
   that a runner's SIGTERM cancels the run like an interrupt and the partial report is still printed, no
   `os/exec`, no `net`), and a library held by `site-check-library` (named standard packages, no `os`, `os/exec` or
   `syscall`): it opens no file, reads no environment variable (forbidigo `site-check-env`, both packages,
-  tests included) and starts no process. No release builds it; the release's check and the scheduled
-  workflow run it with `go run`. This pull request wires no workflow.
+  tests included) and starts no process. ~~No release builds it; the release's check and the scheduled
+  workflow run it with `go run`.~~ *Amended (PRD #297 milestone 3, PR C2):* the release builds it in its
+  `site-programs` job (`make site-programs`, static, `-trimpath`), and its `site-check` job runs that
+  binary, checked against the job's SHA-256 output, so the check needs no Go toolchain or module fetch;
+  the scheduled workflow (milestone 4) may still `go run` it. This pull request wires no workflow.
 - **Inputs, all explicit.** The canonical host and the apex (defaults `www.shift2eu.com` and
   `shift2eu.com`); the release's `manifest.json`, read strictly (exactly its fields, a clean relative URL
   path per file in printable ASCII with no `..`, `.`, empty element, leading `/`, `\`, `?`, `#`, `%` or
@@ -206,8 +209,9 @@ The edge serves the bytes the deploy uploads; the live check measures them as se
 
 ## Consequences
 
-- The release's check (PR C of milestone 3) and milestone 4's scheduled workflow run `go run ./ci/sitecheck
-  -manifest <manifest.json> -tags <file or ->`, and get a report and an exit code; the scheduled workflow
+- The release's check (PR C of milestone 3) runs the `site-programs` job's `bin/sitecheck -manifest
+  <manifest.json> -tags <file>` (amended in PR C2, see Shape), and milestone 4's scheduled workflow runs
+  `go run ./ci/sitecheck -manifest <manifest.json> -tags <file or ->`; both get a report and an exit code; the scheduled workflow
   builds `gh` argv from the matched `Tag` only.
 - The pages carry `id="site-version"` on the footer's version span; `test/site` pins it in both builds.
 - The records' format follows ADR 0042: a change to it there changes `livecheck`'s parsers and their tests

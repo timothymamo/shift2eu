@@ -455,6 +455,15 @@ site: ## Build the site's bundle into bin/site and its archive into bin/shift2eu
 	rm -rf bin/site
 	go run ./ci/sitebuild -out bin/site -archive "bin/shift2eu-site_$${SITE_VERSION:-dev}.tar.gz" $${SITE_VERSION:+-version "$$SITE_VERSION"}
 
+# The site's two programs (PRD #297 milestone 3): the deploy program and the live check that release.yml's
+# site-deploy and site-check jobs run, built here as its site-programs job builds them, static (cgo off) and
+# without build paths. The static build's environment lives in this recipe, never in a workflow line, which
+# check.ReleaseWorkflow refuses to name a variable of the go command or of cgo.
+.PHONY: site-programs
+site-programs: ## Build ci/sitedeploy and ci/sitecheck into bin/ as the release does (static, -trimpath)
+	CGO_ENABLED=0 go build -trimpath -o bin/sitedeploy ./ci/sitedeploy
+	CGO_ENABLED=0 go build -trimpath -o bin/sitecheck ./ci/sitecheck
+
 .PHONY: image
 image: ## Build the local container image shift2eu:<version>, shift2eu:dev and shift2eu:latest from git, as make build (docker or nerdctl; PLATFORMS=linux/amd64,linux/arm64 for both; tags are local, nothing is pushed)
 	$(DOCKER) build \
