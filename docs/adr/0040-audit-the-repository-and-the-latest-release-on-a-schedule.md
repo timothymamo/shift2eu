@@ -158,7 +158,7 @@ subscription usage of a weekly one, and a run by hand covers a release or an adv
 | 11 | The image runs as non-root, with a read-only root filesystem and no shell where none is expected | checks, containers | no |
 | 12 | Dropped: the server is no longer released (ADR 0037) | none | no |
 | 13 | The CLI on hostile inventory files | checks, container, `--network none` | no |
-| 14 | Time-boxed `go test -fuzz` of the committed `Fuzz*` targets (none yet: Decision 5) | checks, container, `--network none`, `GOPROXY=off` | no |
+| 14 | Time-boxed `go test -fuzz` of the committed `Fuzz*` targets (`internal/adapter/report/htmlreport`'s `FuzzReportEscaping` today, Decision 5) | checks, container, `--network none`, `GOPROXY=off` | no |
 | 15 | Supply-chain reads: action pins and workflow `permissions`, rulesets and environments as the `release-tag` skill reads them, Renovate's state, dependencies changed since the last report | checks, workflow step | GitHub reads |
 | 16 | Encrypt the raw results to the model key, upload `checks-result` | checks, workflow step | artifact upload |
 | 17 | Check the artifacts, download and decrypt `checks-result` into the audit directory, copy the checkout; stop Docker and remove the runner user's sudo rule; the sandbox preflight | model, workflow steps | tools, artifact download |
@@ -168,7 +168,9 @@ subscription usage of a weekly one, and a run by hand covers a release or an adv
 
 Scorecard's checks that need admin read are reported "not run (needs admin read)"; crash inputs and PoCs
 go only into the encrypted results or an advisory, never into `testdata/`. Fuzzing is "not run (no
-`Fuzz*` targets)" until a separate issue adds committed fuzz targets that CI runs too (Decision 5).
+`Fuzz*` targets)" only when the tree holds no committed fuzz target that CI runs too (Decision 5); it
+holds `internal/adapter/report/htmlreport`'s `FuzzReportEscaping`, so the first run fuzzes it for 10
+minutes.
 
 ### The disclosure rules the publish script enforces
 
@@ -2416,7 +2418,8 @@ which the container is killed and removed.
   test -fuzz` writes: a crash input into the package's `testdata/fuzz/`, so the tree is copied there
   first, the build cache (`GOCACHE`) and the test binaries it builds and runs (`GOTMPDIR`, hence `exec`).
   The crash inputs leave on stdout as a tar stream, the log on stderr. *Decision 5 said no target exists
-  yet; `internal/adapter/report/htmlreport`'s `FuzzReportEscaping` does, so the first run fuzzes it.*
+  yet; `internal/adapter/report/htmlreport`'s `FuzzReportEscaping` does, so the first run fuzzes it for
+  10 minutes.*
 
 **To be checked on the first run** (runbook step 8), besides 5b's list: that cosign v3's
 `verify-attestation` reads the attestations `actions/attest` pushed as OCI referrers (`gh attestation
