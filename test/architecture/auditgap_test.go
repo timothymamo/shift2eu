@@ -973,6 +973,93 @@ jobs:
 			workflow: "on: # no schedule here\n  # no schedule here either\n  workflow_dispatch:\njobs:\n  audit:\n    runs-on: ubuntu-latest\n",
 			want:     false,
 		},
+		{
+			// YAML lets a double-quoted key write any character as a hex
+			// escape, and GitHub reads the key the escapes spell: this key is
+			// schedule, and the trigger is the mapping it names. Matching the
+			// key's text rather than decoding it would pass a workflow that
+			// runs on a schedule.
+			name: "a hex escape in the nested schedule key",
+			workflow: `on:
+  "\x73chedule":
+    - cron: '0 3 * * 1'
+`,
+			want: true,
+		},
+		{
+			// The same escape in the top-level key: \x6e is n, so the root key
+			// is on and its mapping holds the schedule.
+			name: "a hex escape in the top-level on key",
+			workflow: `"o\x6e":
+  schedule:
+    - cron: '0 3 * * 1'
+`,
+			want: true,
+		},
+		{
+			// A document may be one flow mapping from its first byte: the
+			// top-level on key sits inside the root braces, with the jobs key
+			// beside it, and no line of the file opens with on: at all.
+			name: "a root flow mapping",
+			workflow: `{on: {schedule: [{cron: '0 3 * * 1'}]}, jobs: {a: {runs-on: ubuntu-latest}}}
+`,
+			want: true,
+		},
+		{
+			// A JSON document is a YAML document: its on key is quoted and its
+			// braces are flow mappings and sequences, which is a schedule
+			// trigger like any other.
+			name: "a JSON document",
+			workflow: `{"on": {"schedule": [{"cron": "0 3 * * 1"}]}}
+`,
+			want: true,
+		},
+		{
+			// A document start marker may be followed by a flow node on its
+			// own line: the root mapping is that flow mapping, and the on key
+			// is one of its keys.
+			name: "a flow mapping on the document marker's line",
+			workflow: `--- {on: {schedule: [{cron: '0 3 * * 1'}]}}
+`,
+			want: true,
+		},
+		{
+			// An explicit key may put the key alone on the line after the ?
+			// indicator and the value alone on the line after the colon: the
+			// key is on, the same key as on:, and the schedule is its value.
+			name: "an explicit key with the key on the next line",
+			workflow: `?
+  on
+:
+  schedule:
+    - cron: '0 3 * * 1'
+`,
+			want: true,
+		},
+		{
+			// An alias names the anchored mapping that holds the schedule, and
+			// the on key's value is that mapping: the trigger is there, however
+			// the alias is spelled.
+			name: "an alias to an anchored mapping",
+			workflow: `x-t: &t
+  schedule:
+    - cron: '0 3 * * 1'
+on: *t
+`,
+			want: true,
+		},
+		{
+			// A merge key merges the anchored mapping into the on key's own,
+			// so the schedule the anchor holds is a trigger of this workflow.
+			name: "a merge key of an anchored mapping",
+			workflow: `x-t: &t
+  schedule:
+    - cron: '0 3 * * 1'
+on:
+  <<: *t
+`,
+			want: true,
+		},
 	}
 
 	for _, tc := range tests {
