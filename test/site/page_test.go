@@ -469,9 +469,10 @@ func TestScriptsPerPage(t *testing.T) {
 
 // TestAssessmentPageIsMarked pins the fixed attribute the page script reads to
 // know whether to decode the module: the assessment page's <body> carries
-// data-page="assessment", the about page's carries data-page="about" (issue
-// #528), and the other pages, the inventory page included, carry no other value,
-// so they load no module (PRD #297, Layer 2).
+// data-page="assessment", and every other page, the about and inventory pages
+// included, carries no data-page at all, so it loads no module (PRD #297, Layer
+// 2). Nothing else reads the attribute: site/page.js compares it with
+// "assessment" and nothing else (reviewer of issue #528).
 func TestAssessmentPageIsMarked(t *testing.T) {
 	t.Parallel()
 
@@ -482,7 +483,7 @@ func TestAssessmentPageIsMarked(t *testing.T) {
 		want string
 	}{
 		{page: "index.html", want: "assessment"},
-		{page: "about.html", want: "about"},
+		{page: "about.html"},
 		{page: "inventory.html"},
 		{page: "privacy.html"},
 		{page: "verify.html"},
@@ -503,7 +504,7 @@ func TestAssessmentPageIsMarked(t *testing.T) {
 			}
 
 			if got != tc.want {
-				t.Errorf("%s's <body> carries data-page=%q, want %q: the page script reads the module only on the page whose body names the assessment, and the framing guard on the page whose body names the about page (issue #528)", tc.page, got, tc.want)
+				t.Errorf("%s's <body> carries data-page=%q, want %q: the page script reads the module only on the page whose body names the assessment (PRD #297, Layer 2)", tc.page, got, tc.want)
 			}
 		})
 	}
