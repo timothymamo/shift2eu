@@ -128,16 +128,50 @@ const (
 	ciTestsRun  = "make cover"
 )
 
-// ciTestJobKeys are the two keys ci.yml's test job itself must not hold:
-// either one decides whether the job runs and whether its failure fails the
-// run.
-var ciTestJobKeys = []struct {
-	key string
-	// why says what the key would hide.
-	why string
-}{
-	{"if", "a condition on the job can turn it off, and CI passes with TestPiEnvDenyExtensionLoads never run"},
-	{"continue-on-error", "a Test job that fails without failing the run leaves CI green with the tests broken"},
+// ciKeys is a closed key set of ci.yml: the keys a mapping may hold, and why
+// the ones an edit is most likely to add are refused by name.
+type ciKeys struct {
+	// where names the mapping in a message: "test job" or "top level".
+	where string
+	// allowed are the only keys the mapping may hold, in the order a message
+	// lists them.
+	allowed []string
+	// why says, for a refused key, what it would hide; a key not in why is
+	// refused with otherWhy.
+	why      map[string]string
+	otherWhy string
+}
+
+// ciTestJobKeys closes ci.yml's test job to the keys it holds: name, runs-on
+// and steps (issue #554). Any other key decides whether the job runs, whether
+// its failure fails the run, or what its run: steps run in: if: and needs: can
+// skip it, continue-on-error: lets it fail unseen, and defaults: (a shell such
+// as true {0}) or env: (BASH_ENV, ENV) can make every run: step a no-op while
+// CI stays green.
+var ciTestJobKeys = ciKeys{
+	where:   "test job",
+	allowed: []string{"name", "runs-on", "steps"},
+	why: map[string]string{
+		"if":                "a condition on the job can turn it off, and CI passes with TestPiEnvDenyExtensionLoads never run",
+		"continue-on-error": "a Test job that fails without failing the run leaves CI green with the tests broken",
+		"needs":             "a job it needs can be skipped or fail, and the Test job is skipped with it while CI stays green",
+		"defaults":          "a default shell such as true {0} makes every run: step a no-op while CI stays green",
+		"env":               "BASH_ENV or ENV name a script the shell sources before every run: step, which can make the steps no-ops",
+	},
+	otherWhy: "a key beyond these can skip the job or change what its run: steps run in, and this check does not read it",
+}
+
+// ciTopLevelKeys closes ci.yml's top level to the keys it holds (issue
+// #554): a defaults: or an env: there reaches the Test job's steps whatever
+// the job itself declares.
+var ciTopLevelKeys = ciKeys{
+	where:   "top level",
+	allowed: []string{"name", "on", "permissions", "concurrency", "jobs"},
+	why: map[string]string{
+		"defaults": "a default shell such as true {0} reaches every job's run: steps, the Test job's among them, and makes them no-ops while CI stays green",
+		"env":      "BASH_ENV or ENV there name a script the shell sources before every run: step of every job, the Test job's among them",
+	},
+	otherWhy: "a key beyond these can change how every job runs, and this check does not read it",
 }
 
 // ciStep is one step of ci.yml's test job, as CITestJobNode reads it.
@@ -205,10 +239,13 @@ func (s ciStep) runLines() []string {
 // and its output; setup-node's pin by commit, its version from the read's
 // output and its cache off; the check's exit 1 inside its if and its
 // NODE_VERSION from the read's output; and SHIFT2EU_REQUIRE_NODE: "1" on the
-// tests. The job itself holds neither if: nor continue-on-error:, its keys
-// read with their quotes stripped and whether their value sits on the key's
-// line or below it. Unlike release.yml's, ci.yml's job is not a closed schema:
-// it holds the other steps every pull request runs.
+// tests. The job itself holds only name, runs-on and steps, and the workflow's
+// top level only name, on, permissions, concurrency and jobs, so no if:,
+// needs:, continue-on-error:, defaults: or env: decides whether the job runs
+// or turns its run: steps into no-ops; both key sets are read with quotes
+// stripped and whatever form the value takes (issue #554). Unlike
+// release.yml's, ci.yml's steps are not a closed schema: the job holds the
+// other steps every pull request runs.
 func CITestJobNode(src []byte) []string {
 	r := &schemaReader{raw: rawLines(src)}
 
@@ -216,6 +253,8 @@ func CITestJobNode(src []byte) []string {
 	if err != nil {
 		return []string{fmt.Sprintf("%s: %v", ciFile, err)}
 	}
+
+	r.ciClosedKeys(lines, ciTopLevelKeys)
 
 	jobsBlock, err := yamlread.Walk(lines, "jobs")
 	if err != nil {
@@ -234,7 +273,7 @@ func CITestJobNode(src []byte) []string {
 
 	job := jobs[i]
 
-	r.ciJobKeys(job.Block)
+	r.ciClosedKeys(job.Block, ciTestJobKeys)
 
 	entries, err := yamlread.Mapping(job.Block)
 	if err != nil {
@@ -260,19 +299,22 @@ func CITestJobNode(src []byte) []string {
 	return r.messages
 }
 
-// ciJobKeys refuses the job-level keys that decide whether ci.yml's test job
-// runs and whether its failure fails the run. It reads every line at the
-// indentation of the job's own keys, a quoted key with its quotes stripped:
-// the mapping reader refuses a quoted key as one it does not understand, and
-// would not name the key it hides.
-func (r *schemaReader) ciJobKeys(job []yamlread.Line) {
-	if len(job) == 0 {
+// ciClosedKeys refuses every key of the mapping lines that keys does not
+// allow. It reads every line at the indentation of the mapping's own keys, a
+// quoted key with its quotes stripped and a key in whatever form its value
+// takes, on its line, in flow form or in a block below: the mapping reader
+// refuses a quoted key as one it does not understand, and would not name the
+// key it hides. A line at that indentation it cannot read as a key is refused
+// whole, so what it does not understand fails rather than passes.
+func (r *schemaReader) ciClosedKeys(lines []yamlread.Line, keys ciKeys) {
+	if len(lines) == 0 {
 		return
 	}
 
-	indent := job[0].Indent
+	indent := lines[0].Indent
+	allowed := strings.Join(keys.allowed, ", ")
 
-	for _, l := range job {
+	for _, l := range lines {
 		if l.Indent != indent {
 			continue
 		}
@@ -286,11 +328,16 @@ func (r *schemaReader) ciJobKeys(job []yamlread.Line) {
 			name, _, _ = strings.Cut(name, ":")
 		}
 
-		for _, k := range ciTestJobKeys {
-			if name == k.key {
-				r.fail("ci.yml's test job holds %s: (line %d), want none: %s (issue #548)", k.key, l.Num, k.why)
-			}
+		if slices.Contains(keys.allowed, name) {
+			continue
 		}
+
+		why, ok := keys.why[name]
+		if !ok {
+			why = keys.otherWhy
+		}
+
+		r.fail("ci.yml's %s holds %s: (line %d), want only %s: %s (issues #548, #554)", keys.where, name, l.Num, allowed, why)
 	}
 }
 
