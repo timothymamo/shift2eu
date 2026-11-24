@@ -5,8 +5,10 @@
 //
 // It is no part of the product: only ci/sitedeploy imports it (Go's internal
 // rule), and it is held by the strict depguard rule site-deploy-library to
-// named standard packages, without os, os/exec, syscall or unsafe, and to no
-// package of the module. It reads no environment variable and opens no file:
+// named standard packages, without os, os/exec, syscall or unsafe (its tests
+// aside; forbidigo's site-deploy-env holds os/exec to livepage_test.go,
+// which builds the real bundle offline, issue #514), and to no package of
+// the module. It reads no environment variable and opens no file:
 // ci/sitedeploy hands it the key, the bundle and the release manifests as
 // values and fs.FS trees, and the HTTP client it talks through.
 //

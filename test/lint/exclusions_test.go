@@ -61,12 +61,15 @@ const (
 )
 
 // siteDeployEnvTag is the tag of the site deploy program's environment group
-// (PRD #297 milestone 3), and siteDeployLookupEnvMsg the msg of its one entry
-// with an exception: the os.LookupEnv ci/sitedeploy/main.go passes to
-// environment.
+// (PRD #297 milestone 3), and siteDeployLookupEnvMsg and siteDeployExecMsg the
+// msgs of its two entries with an exception: the os.LookupEnv ci/sitedeploy/
+// main.go passes to environment, and package os/exec, with which
+// ci/sitedeploy/internal/deploy/livepage_test.go builds the real site bundle
+// offline (issue #514), in that file alone.
 const (
 	siteDeployEnvTag       = "site-deploy-env"
 	siteDeployLookupEnvMsg = "site-deploy-env: os.LookupEnv is used in ci/sitedeploy/main.go only, passed to environment (PRD #297); a test passes a lookup function of its own"
+	siteDeployExecMsg      = "site-deploy-env: os/exec is used in ci/sitedeploy/internal/deploy/livepage_test.go only, to build the real bundle offline (issue #514)"
 )
 
 // auditLibraryEnvTag is the tag of the audit library's environment group (issue
@@ -286,11 +289,15 @@ func TestForbidigoExclusionsDropOneGroup(t *testing.T) {
 		},
 		// The site deploy program (PRD #297 milestone 3): one rule for every
 		// path outside ci/sitedeploy/, so the group holds there and nowhere
-		// else, _test.go files included, and the one exception, the
-		// os.LookupEnv entry's msg alone, in ci/sitedeploy/main.go alone.
+		// else, _test.go files included, and two exceptions, each the msg of
+		// one entry alone: os.LookupEnv, which ci/sitedeploy/main.go passes to
+		// environment, in that file alone, and package os/exec, with which
+		// ci/sitedeploy/internal/deploy/livepage_test.go builds the real site
+		// bundle (issue #514), in that file alone.
 		siteDeployEnvTag: {
 			{"path-except": `^ci/sitedeploy/`, "text": groupText(siteDeployEnvTag)},
 			{"path": `^ci/sitedeploy/main\.go$`, "text": narrowedTextOf(siteDeployLookupEnvMsg)},
+			{"path": `^ci/sitedeploy/internal/deploy/livepage_test\.go$`, "text": narrowedTextOf(siteDeployExecMsg)},
 		},
 		// The audit's library (issue #277, ADR 0040's model-job amendment): one rule for
 		// every path outside ci/internal/audit/, so the group holds there and
