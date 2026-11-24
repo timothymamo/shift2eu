@@ -37,12 +37,11 @@ jobs:
     # Every job runs in the environment whose deployment branch policy is main alone, which holds the
     # key pairs' public halves.
     environment: security-audit
-    # GITHUB_TOKEN reads only: contents for the checkout and the release tag, attestations for the
-    # release-integrity rows (PR 5c). The image is public, so no
+    # GITHUB_TOKEN reads only: contents for the checkout and the release tag. No row PR 5b runs reads an
+    # attestation: PR 5c adds that scope with the release-integrity rows. The image is public, so no
     # packages scope, and nothing here writes.
     permissions:
       contents: read
-      attestations: read
     steps:
       - name: Check out the audited commit
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -78,8 +77,8 @@ jobs:
           echo "Audited commit ${GITHUB_SHA}, latest release ${tag}"
       # Row 2. Every tool is pinned by version and SHA-256 (CLAUDE.md rule 7: Renovate bumps a version and
       # its digest in one PR) and checked before it is unpacked. govulncheck is a Go module, verified by
-      # the checksum database, so it has no SHA-256 line. This step's go command fetches the Go of go.mod's
-      # go line (GOTOOLCHAIN, checksum-verified): no actions/setup-go, which would restore an Actions cache.
+      # the checksum database, so it has no SHA-256 line; go install pkg@version picks its toolchain from
+      # that module's own go line, not from go.mod's.
       - name: Download the pinned tools and verify their checksums
         timeout-minutes: 15
         env:
@@ -122,6 +121,8 @@ jobs:
           install -m 0755 "${dl}/age/age" "${bin}/age"
           GOBIN="${bin}" go install "golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}"
           echo "${bin}" >> "${GITHUB_PATH}"
+      # This step's go mod download, run in the checkout, is the one that fetches the Go of go.mod's go
+      # line (GOTOOLCHAIN, checksum-verified): no actions/setup-go, which would restore an Actions cache.
       - name: Download the Go modules
         timeout-minutes: 10
         run: |
@@ -164,12 +165,14 @@ jobs:
           out="${RUNNER_TEMP}/results/gitleaks"
           mkdir -p "${out}"
           rc=0
-          gitleaks git --redact --no-banner --log-level error --report-format json --report-path "${out}/history.json" . 2> "${out}/history.stderr" || rc=$?
+          gitleaks git --ignore-gitleaks-allow --redact --no-banner --log-level error --report-format json --report-path "${out}/history.json" . 2> "${out}/history.stderr" || rc=$?
           echo "${rc}" > "${out}/history.exit"
-      - name: zizmor and actionlint
-        timeout-minutes: 15
+      # Row 5, in two steps: only zizmor's online audits read GitHub's API, so only its step holds the
+      # job's token.
+      - name: zizmor
+        timeout-minutes: 10
         env:
-          # zizmor's online audits read GitHub's API: the one read this row makes of it.
+          # The one read this row makes of GitHub's API.
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
@@ -178,6 +181,12 @@ jobs:
           rc=0
           zizmor --format json .github/workflows > "${out}/zizmor.json" 2> "${out}/zizmor.stderr" || rc=$?
           echo "${rc}" > "${out}/zizmor.exit"
+      - name: actionlint
+        timeout-minutes: 10
+        run: |
+          set -euo pipefail
+          out="${RUNNER_TEMP}/results/workflows"
+          mkdir -p "${out}"
           rc=0
           # As dev/actionlint.sh runs it: tools/go.mod's actionlint, which finds .github/workflows itself.
           GOFLAGS=-mod=readonly GOPROXY=off go tool -modfile=tools/go.mod actionlint -format '{{json .}}' > "${out}/actionlint.json" 2> "${out}/actionlint.stderr" || rc=$?
@@ -328,8 +337,9 @@ jobs:
           sudo chmod 0555 /srv/audit/bin
           sudo install -d -o "$(id -u)" -g "$(id -g)" -m 0755 /srv/audit/work /srv/audit/work/tmp /srv/audit/state
           sudo install -d -o "$(id -u)" -g "$(id -g)" -m 0700 /srv/audit/state/home /srv/audit/state/tmp /srv/audit/state/bin /srv/audit/state/out
-      # The artifact check fails closed on an extra, a duplicate, a missing or an expired artifact; the
-      # download is then bound to the listed artifact's ID and SHA-256 digest.
+      # The artifact check fails closed on an extra, a duplicate, a missing or an expired artifact, and
+      # writes the checked artifact's ID and SHA-256 digest to artifact.json: the download is bound to
+      # exactly those, and nothing lists the run's artifacts a second time.
       - name: List the run's artifacts and download the checks' ciphertext
         timeout-minutes: 5
         env:
@@ -337,10 +347,9 @@ jobs:
         run: |
           set -euo pipefail
           "${RUNNER_TEMP}/bin/auditpublish" artifacts -job model -gh /usr/bin/gh -tmp "${RUNNER_TEMP}"
-          listing="${RUNNER_TEMP}/artifacts.json"
-          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts?per_page=100" > "${listing}"
-          id="$(jq -er '[.artifacts[] | select(.name == "checks-result")] | if length == 1 then .[0].id else error("not one") end' "${listing}")"
-          digest="$(jq -er '[.artifacts[] | select(.name == "checks-result")] | .[0].digest' "${listing}")"
+          artifact="${RUNNER_TEMP}/artifact.json"
+          id="$(jq -er '.id' "${artifact}")"
+          digest="$(jq -er '.digest' "${artifact}")"
           if [[ ! "${id}" =~ ^[0-9]+$ ]] || [[ ! "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
             echo "::error title=Audit model::checks-result has no artifact ID and SHA-256 digest: see runbook step 11"
             exit 1
@@ -376,6 +385,8 @@ jobs:
           sudo install -d -o root -g root -m 0755 /srv/audit/checks
           sudo tar -C /srv/audit/checks --no-same-owner --no-same-permissions -xf "${RUNNER_TEMP}/checks.tar"
           sudo chmod -R a-w,a+rX /srv/audit/checks
+          # The decrypted archive and its listings live in the audit directory alone.
+          rm -f "${RUNNER_TEMP}/checks.tar" "${RUNNER_TEMP}/checks.types" "${RUNNER_TEMP}/checks.names"
           echo "finished"
       # The checkout, .git included, copied whole: the runner's user keeps it, since git refuses a
       # repository another user owns, and the sandbox's write allow list, which names neither tree, is
@@ -414,7 +425,9 @@ jobs:
       # audit directory, starts bubblewrap, runs the sandbox preflight and then the audit, whose
       # transcript and stderr stay in /srv/audit/state/out, never in the log. It prints one line. The
       # canary is made here, for this run alone: one in the workflow's text would be in the checkout the
-      # model reads.
+      # model reads. The result bytes the launcher read and checked, exactly those, it writes to a new
+      # file under this job's $RUNNER_TEMP, out of the sandbox's reach (-result-out): the encrypt step
+      # reads that file, and nothing reads the work area's result again by its path.
       - name: Run the audit in Claude Code's sandbox
         timeout-minutes: 90
         env:
@@ -426,14 +439,14 @@ jobs:
           set -euo pipefail
           SHIFT2EU_AUDIT_CANARY="$(od -An -N32 -tx1 /dev/urandom | tr -d ' \n')"
           export SHIFT2EU_AUDIT_CANARY
-          "${RUNNER_TEMP}/bin/auditrun" -claude-tarball "${RUNNER_TEMP}/claude-code/claude-code.tgz" -claude-integrity "${CLAUDE_CODE_PIN_INTEGRITY}"
+          "${RUNNER_TEMP}/bin/auditrun" -claude-tarball "${RUNNER_TEMP}/claude-code/claude-code.tgz" -claude-integrity "${CLAUDE_CODE_PIN_INTEGRITY}" -result-out "${RUNNER_TEMP}/result.json"
       - name: Encrypt the audit's result to the publish key
         timeout-minutes: 5
         env:
           AUDIT_PUBLISH_PUBLIC_KEY: ${{ vars.AUDIT_PUBLISH_PUBLIC_KEY }}
         run: |
           set -euo pipefail
-          age --encrypt --recipient "${AUDIT_PUBLISH_PUBLIC_KEY}" --output "${RUNNER_TEMP}/model-result.age" /srv/audit/work/result.json
+          age --encrypt --recipient "${AUDIT_PUBLISH_PUBLIC_KEY}" --output "${RUNNER_TEMP}/model-result.age" "${RUNNER_TEMP}/result.json"
           echo "finished"
       - name: Upload the model's ciphertext
         timeout-minutes: 5
@@ -492,6 +505,7 @@ jobs:
           go mod download
           GOFLAGS=-mod=readonly GOPROXY=off go build -trimpath -o "${bin}/auditpublish" ./ci/auditpublish
           echo "${bin}" >> "${GITHUB_PATH}"
+      # As the model job's download: bound to the ID and digest the artifact check wrote.
       - name: List the run's artifacts and download the model's ciphertext
         timeout-minutes: 5
         env:
@@ -499,10 +513,9 @@ jobs:
         run: |
           set -euo pipefail
           "${RUNNER_TEMP}/bin/auditpublish" artifacts -job publish -gh /usr/bin/gh -tmp "${RUNNER_TEMP}"
-          listing="${RUNNER_TEMP}/artifacts.json"
-          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts?per_page=100" > "${listing}"
-          id="$(jq -er '[.artifacts[] | select(.name == "model-result")] | if length == 1 then .[0].id else error("not one") end' "${listing}")"
-          digest="$(jq -er '[.artifacts[] | select(.name == "model-result")] | .[0].digest' "${listing}")"
+          artifact="${RUNNER_TEMP}/artifact.json"
+          id="$(jq -er '.id' "${artifact}")"
+          digest="$(jq -er '.digest' "${artifact}")"
           if [[ ! "${id}" =~ ^[0-9]+$ ]] || [[ ! "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
             echo "::error title=Audit publish::model-result has no artifact ID and SHA-256 digest: see runbook step 11"
             exit 1
@@ -535,7 +548,8 @@ jobs:
       # The image digest is trusted only once gh attestation verify accepts the release workflow's
       # provenance for exactly that digest and tag, its Sigstore signature included (ADR 0040, The image
       # check's residual risk). The result is the model's: its tag and digest are held to their shapes
-      # before they reach a command line.
+      # before they reach a command line, the tag's first whatever the digest is. An empty digest is the
+      # result's "image not pulled", which the image step already accepted: nothing to verify.
       - name: Verify the image's provenance attestation
         timeout-minutes: 10
         env:
@@ -545,8 +559,16 @@ jobs:
           image="ghcr.io/${GITHUB_REPOSITORY,,}"
           digest="$(jq -er '.image_digest' "${RUNNER_TEMP}/result.json")"
           tag="$(jq -er '.release_tag' "${RUNNER_TEMP}/result.json")"
-          if [[ ! "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]] || [[ ! "${tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "::error title=Audit publish::the result's image digest or release tag is malformed: see runbook step 11"
+          if [[ ! "${tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error title=Audit publish::the tag's shape is no vMAJOR.MINOR.PATCH: see runbook step 11"
+            exit 1
+          fi
+          if [ -z "${digest}" ]; then
+            echo "image not pulled: no provenance attestation to verify"
+            exit 0
+          fi
+          if [[ ! "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error title=Audit publish::the image digest is no sha256 digest: see runbook step 11"
             exit 1
           fi
           if ! gh attestation verify "oci://${image}@${digest}" \
@@ -558,6 +580,17 @@ jobs:
             exit 1
           fi
           echo "image provenance: as expected"
+      # gitleaks over the text about to be sent, on stdin, ignoring any allow comment in it, before the
+      # App's token is minted: a result it refuses has no write token minted for it. The publish program
+      # scans every text it renders again before its first write.
+      - name: Scan the text it is about to publish
+        timeout-minutes: 10
+        run: |
+          set -euo pipefail
+          if ! gitleaks stdin --ignore-gitleaks-allow --redact --no-banner --log-level error < "${RUNNER_TEMP}/result.json" > /dev/null 2>&1; then
+            echo "::error title=Audit publish::gitleaks refused the result: see runbook step 11"
+            exit 1
+          fi
       # The audit App's token, minted here alone and narrowed to Decision 1's four permissions.
       - name: Mint the audit App's token
         timeout-minutes: 5
@@ -570,16 +603,6 @@ jobs:
           permission-pull-requests: write
           permission-issues: write
           permission-security-events: write
-      # gitleaks over the text about to be sent, on stdin, ignoring any allow comment in it; the publish
-      # program scans every text it renders again before its first write.
-      - name: Scan the text it is about to publish
-        timeout-minutes: 10
-        run: |
-          set -euo pipefail
-          if ! gitleaks stdin --ignore-gitleaks-allow --redact --no-banner --log-level error < "${RUNNER_TEMP}/result.json" > /dev/null 2>&1; then
-            echo "::error title=Audit publish::gitleaks refused the result: see runbook step 11"
-            exit 1
-          fi
       - name: Publish the report
         timeout-minutes: 20
         env:

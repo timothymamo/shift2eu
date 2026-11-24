@@ -1481,10 +1481,12 @@ func claudeCodePinAuditWorkflowProblems(src []byte) []string {
 		return []string{fmt.Sprintf("read the workflow: %v", err)}
 	}
 
-	allowed, problems := claudeCodePinAuditWorkflowPinLines(lines)
+	allowed, pinStep, problems := claudeCodePinAuditWorkflowPinLines(lines)
 
 	for i, text := range strings.Split(string(src), "\n") {
 		num := i + 1
+
+		problems = append(problems, claudeCodePinAuditWorkflowArguments(num, text, pinStep[num])...)
 
 		for _, marker := range claudeCodePinPinNamingStrings {
 			if !strings.Contains(text, marker) {
@@ -1505,39 +1507,96 @@ func claudeCodePinAuditWorkflowProblems(src []byte) []string {
 	return problems
 }
 
+// The exact arguments the audit's workflow hands the pin's values on (review
+// round 1 of PR 5b, finding R4): the installer's two last arguments, and the
+// model step's -claude-integrity.
+const (
+	claudeCodePinInstaller          = ".github/scripts/install-claude-code.sh"
+	claudeCodePinInstallerArguments = ` "@anthropic-ai/claude-code-linux-x64@${CLAUDE_CODE_PIN_VERSION}" "${CLAUDE_CODE_PIN_INTEGRITY}"`
+	claudeCodePinIntegrityFlag      = "-claude-integrity"
+	claudeCodePinIntegrityArgument  = `-claude-integrity "${CLAUDE_CODE_PIN_INTEGRITY}"`
+)
+
+// claudeCodePinAuditWorkflowArguments returns the problems one line of the
+// audit's workflow draws for the pin's arguments, num being its number and
+// inPinStep whether it is a line of the step that reads the pin file: a line
+// that runs the installer ends in exactly the pin's two arguments, every
+// -claude-integrity is exactly the pin step's integrity, and no sha512-
+// literal stands outside the pin step, whatever name it sits under (an alias
+// such as i="sha512-..." is still a pin written into the workflow). Comment
+// lines are held only by the last rule: a pin in a comment is a pin in the
+// checkout.
+func claudeCodePinAuditWorkflowArguments(num int, text string, inPinStep bool) []string {
+	var problems []string
+
+	if strings.Contains(text, "sha512-") && !inPinStep {
+		problems = append(problems, fmt.Sprintf("line %d holds a sha512- literal outside the step that reads %s: the integrity reaches a step as that step's output alone, under no other name (PRD #175 milestone 2, ADR 0040)", num, claudeCodePinFile))
+	}
+
+	trimmed := strings.TrimSpace(text)
+	if strings.HasPrefix(trimmed, "#") {
+		return problems
+	}
+
+	if strings.Contains(text, claudeCodePinInstaller) && !strings.HasSuffix(trimmed, claudeCodePinInstallerArguments) {
+		problems = append(problems, fmt.Sprintf("line %d runs %s without the pin's two arguments,%s, as its last: the installer takes exactly the pin step's version and integrity (PRD #175 milestone 2, ADR 0040)", num, claudeCodePinInstaller, claudeCodePinInstallerArguments))
+	}
+
+	for rest := text; ; {
+		i := strings.Index(rest, claudeCodePinIntegrityFlag)
+		if i < 0 {
+			break
+		}
+
+		rest = rest[i:]
+		after := strings.TrimPrefix(rest, claudeCodePinIntegrityArgument)
+
+		if after == rest || (after != "" && after[0] != ' ') {
+			problems = append(problems, fmt.Sprintf("line %d passes %s other than exactly %s: the launcher checks the CLI's tarball against the pin step's integrity alone (PRD #175 milestone 2, ADR 0040)", num, claudeCodePinIntegrityFlag, claudeCodePinIntegrityArgument))
+
+			break
+		}
+
+		rest = after
+	}
+
+	return problems
+}
+
 // claudeCodePinAuditWorkflowPinLines returns the source lines of the audit's
 // workflow that may name the pin - those of the step that reads the pin file
-// and of every step that takes a pin name from that step's outputs - and the
-// problems the workflow's env: bindings draw. A step reads the outputs of the
+// and of every step that takes a pin name from that step's outputs - the lines
+// of the step that reads the pin file alone, and the problems the workflow's
+// env: bindings draw. A step reads the outputs of the
 // pin step when it sets one of the names of claudeCodePinOutputs to the value
 // that step wrote: anything else is a pin of the workflow's own. The workflow's
 // steps are read here rather than through claudeCodeWorkflowJobs, whose reader
 // fails the test on a document it cannot follow; a workflow this reader cannot
 // follow is a workflow that must draw a message.
-func claudeCodePinAuditWorkflowPinLines(lines []yamlread.Line) (map[int]bool, []string) {
-	allowed := map[int]bool{}
+func claudeCodePinAuditWorkflowPinLines(lines []yamlread.Line) (map[int]bool, map[int]bool, []string) {
+	allowed, pinStep := map[int]bool{}, map[int]bool{}
 
-	mark := func(step yamlread.Item) {
-		allowed[step.Num] = true
+	mark := func(into map[int]bool, step yamlread.Item) {
+		into[step.Num] = true
 
 		for _, line := range step.Lines {
-			allowed[line.Num] = true
+			into[line.Num] = true
 		}
 	}
 
 	top, err := yamlread.Mapping(lines)
 	if err != nil {
-		return allowed, []string{fmt.Sprintf("read the workflow's keys: %v", err)}
+		return allowed, pinStep, []string{fmt.Sprintf("read the workflow's keys: %v", err)}
 	}
 
 	jobs, ok := claudeCodePinField(top, "jobs")
 	if !ok || len(jobs.Block) == 0 {
-		return allowed, []string{"the workflow has no jobs: block, want the audit's model, publish and checks jobs"}
+		return allowed, pinStep, []string{"the workflow has no jobs: block, want the audit's model, publish and checks jobs"}
 	}
 
 	definitions, err := yamlread.Mapping(jobs.Block)
 	if err != nil {
-		return allowed, []string{fmt.Sprintf("read the workflow's jobs: %v", err)}
+		return allowed, pinStep, []string{fmt.Sprintf("read the workflow's jobs: %v", err)}
 	}
 
 	var problems []string
@@ -1574,12 +1633,34 @@ func claudeCodePinAuditWorkflowPinLines(lines []yamlread.Line) (map[int]bool, []
 			problems = append(problems, stepProblems...)
 
 			if reads {
-				mark(step)
+				mark(allowed, step)
+			}
+
+			if claudeCodePinIsPinStep(step) {
+				mark(pinStep, step)
 			}
 		}
 	}
 
-	return allowed, problems
+	return allowed, pinStep, problems
+}
+
+// claudeCodePinIsPinStep reports whether step is the step that reads the pin
+// file: its id is claudeCodePinStepName.
+func claudeCodePinIsPinStep(step yamlread.Item) bool {
+	fields, err := yamlread.Mapping(step.Lines)
+	if err != nil {
+		return false
+	}
+
+	id, ok := claudeCodePinField(fields, "id")
+	if !ok {
+		return false
+	}
+
+	value, err := yamlread.Single(id)
+
+	return err == nil && value == claudeCodePinStepName
 }
 
 // claudeCodePinAuditWorkflowStep returns the problems one step of the audit's

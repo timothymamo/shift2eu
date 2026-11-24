@@ -67,6 +67,10 @@ type auditStep struct {
 	envNames []string
 	// runs are the commands its script must hold.
 	runs []auditCommand
+	// refuses are the commands its script must not hold, comments aside.
+	refuses []auditCommand
+	// order are commands of runs its script must hold in this order.
+	order []auditCommand
 }
 
 // auditRead is one env: or with: key and the one expression it reads.
@@ -112,15 +116,40 @@ var (
 	stdinIdentity   = command(`age --decrypt --identity - `, "age --decrypt --identity - (the private key on stdin)")
 	artifactsModel  = command(`auditpublish"? artifacts -job model `, "auditpublish artifacts -job model")
 	artifactsPublic = command(`auditpublish"? artifacts -job publish `, "auditpublish artifacts -job publish")
+
+	// The download's binding to the checked artifact (review round 1 of PR
+	// 5b, findings A4 and R3): the ID and digest the artifacts subcommand
+	// wrote to artifact.json, the zip of exactly that ID, its digest checked
+	// before unzip reads it, and one file in it.
+	artifactFile   = command(`artifact="\$\{RUNNER_TEMP\}/artifact\.json"`, `artifact="${RUNNER_TEMP}/artifact.json", the file the artifacts subcommand wrote`)
+	artifactID     = command(`id="\$\(jq -er '\.id' "\$\{artifact\}"\)"`, `id="$(jq -er '.id' "${artifact}")", the ID from artifact.json`)
+	artifactDigest = command(`digest="\$\(jq -er '\.digest' "\$\{artifact\}"\)"`, `digest="$(jq -er '.digest' "${artifact}")", the digest from artifact.json`)
+	artifactZip    = command(`gh api "repos/\$\{GITHUB_REPOSITORY\}/actions/artifacts/\$\{id\}/zip" > `, `gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${id}/zip", the checked artifact's zip`)
+	zipDigest      = command(`echo "\$\{digest#sha256:\}  \$\{RUNNER_TEMP\}/[a-z-]+\.zip" \| sha256sum --check --strict -`, `sha256sum --check --strict of the zip against the checked digest`)
+	zipUnpack      = command(`unzip -q "\$\{RUNNER_TEMP\}/[a-z-]+\.zip" -d `, "unzip -q of the checked zip")
+	zipOneFile     = command(`if \[ "\$\(ls -A "\$\{RUNNER_TEMP\}/[a-z-]+"\)" != [a-z-]+\.age \]; then`, "the single-file check (ls -A) of the unzipped ciphertext")
+	// secondListing is a download step that lists the run's artifacts again,
+	// so that what it downloads is no longer what the check accepted.
+	secondListing = command(`actions/runs/`, "a second listing of the run's artifacts (actions/runs/...), want the ID and digest from ${RUNNER_TEMP}/artifact.json, the checked listing's")
+
+	// The attestation step's order: the tag's shape whatever the digest, then
+	// an empty digest skipped with a fixed notice (the run pulled no image),
+	// then the digest's shape, and only then the verification.
+	tagShape    = command(`\[\[ ! "\$\{tag\}" =~ \^v\[0-9\]\+\\\.\[0-9\]\+\\\.\[0-9\]\+\$ \]\]`, `the tag's shape check [[ ! "${tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]`)
+	emptyDigest = command(`if \[ -z "\$\{digest\}" \]; then\s+echo "image not pulled[^"\n]*"\s+exit 0\s+fi`, `the empty digest's branch: echo "image not pulled: ..." and exit 0`)
+	digestShape = command(`\[\[ ! "\$\{digest\}" =~ \^sha256:\[0-9a-f\]\{64\}\$ \]\]`, `the digest's shape check [[ ! "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]]`)
+	verify      = command(`gh attestation verify "oci://`, `gh attestation verify "oci://<image>@<digest>"`)
 )
 
 // auditJobs are the workflow's three jobs, in order, with their steps in
 // order: the closed list a step is recognised by, by name.
 var auditJobs = []auditJob{
 	{
-		key:              "checks",
-		name:             "Checks",
-		permissions:      []string{"contents", "attestations"},
+		key:  "checks",
+		name: "Checks",
+		// No attestations scope: no row of the checks job PR 5b runs reads
+		// one; PR 5c adds it with the release-integrity rows.
+		permissions:      []string{"contents"},
 		downloadsModules: "Download the Go modules",
 		steps: []auditStep{
 			{name: "Check out the audited commit", uses: auditCheckout},
@@ -135,11 +164,17 @@ var auditJobs = []auditJob{
 			},
 			{name: "govulncheck", runs: []auditCommand{command(`govulncheck .*\./\.\.\.`, "govulncheck ./...")}},
 			{name: "osv-scanner", runs: []auditCommand{command(`osv-scanner scan source `, "osv-scanner scan source")}},
-			{name: "gitleaks on the history", runs: []auditCommand{command(`gitleaks git .*--redact`, "gitleaks git --redact")}},
 			{
-				name: "zizmor and actionlint", githubToken: true,
-				runs: []auditCommand{command(`zizmor `, "zizmor"), command(`actionlint`, "actionlint")},
+				name: "gitleaks on the history",
+				runs: []auditCommand{
+					command(`gitleaks git .*--redact`, "gitleaks git --redact"),
+					command(`gitleaks git .*--ignore-gitleaks-allow`, "gitleaks git --ignore-gitleaks-allow (no allow comment in the history hides a secret)"),
+				},
 			},
+			// Two steps: only zizmor's online audits read GitHub's API, so only
+			// its step holds the job's token.
+			{name: "zizmor", githubToken: true, runs: []auditCommand{command(`zizmor `, "zizmor")}},
+			{name: "actionlint", runs: []auditCommand{command(`actionlint`, "actionlint")}},
 			{
 				name: "Encrypt the checks' results to the model key",
 				env:  []auditRead{{key: "AUDIT_MODEL_PUBLIC_KEY", value: varValue("AUDIT_MODEL_PUBLIC_KEY")}},
@@ -176,11 +211,22 @@ var auditJobs = []auditJob{
 					command(`install -o root -g root -m 0555 .*/srv/audit/bin/audit-exec`, "install -o root -g root -m 0555 ... /srv/audit/bin/audit-exec"),
 				},
 			},
-			{name: "List the run's artifacts and download the checks' ciphertext", githubToken: true, runs: []auditCommand{artifactsModel}},
+			{
+				name: "List the run's artifacts and download the checks' ciphertext", githubToken: true,
+				runs:    []auditCommand{artifactsModel, artifactFile, artifactID, artifactDigest, artifactZip, zipDigest, zipUnpack, zipOneFile},
+				refuses: []auditCommand{secondListing},
+				order:   []auditCommand{artifactsModel, artifactFile, artifactZip, zipDigest, zipUnpack, zipOneFile},
+			},
 			{
 				name: "Decrypt the checks' results into the audit directory",
 				env:  []auditRead{{key: "AUDIT_MODEL_PRIVATE_KEY", value: secretValue("AUDIT_MODEL_PRIVATE_KEY")}},
-				runs: []auditCommand{stdinIdentity, command(`/srv/audit/checks`, "/srv/audit/checks")},
+				runs: []auditCommand{
+					stdinIdentity,
+					command(`tar -tvf "\$\{RUNNER_TEMP\}/checks\.tar"`, "tar -tvf of the archive, whose entries' types are checked before it is unpacked"),
+					command(`tar -C /srv/audit/checks --no-same-owner --no-same-permissions -xf `, "tar -C /srv/audit/checks --no-same-owner --no-same-permissions -xf: never the archive's owners or modes"),
+					command(`rm -f "\$\{RUNNER_TEMP\}/checks\.tar" "\$\{RUNNER_TEMP\}/checks\.types" "\$\{RUNNER_TEMP\}/checks\.names"`,
+						`rm -f of the step's temporary files "${RUNNER_TEMP}/checks.tar", checks.types and checks.names`),
+				},
 			},
 			{name: "Copy the checkout into the audit directory", runs: []auditCommand{command(`/srv/audit/checkout`, "/srv/audit/checkout")}},
 			{
@@ -195,15 +241,22 @@ var auditJobs = []auditJob{
 				name:     "Run the audit in Claude Code's sandbox",
 				env:      []auditRead{{key: "CLAUDE_CODE_OAUTH_TOKEN", value: secretValue("CLAUDE_CODE_OAUTH_TOKEN")}},
 				envNames: []string{"CLAUDE_CODE_OAUTH_TOKEN", "SHIFT2EU_AUDIT_CANARY", "CLAUDE_CODE_PIN_INTEGRITY"},
-				runs:     []auditCommand{command(`auditrun"? -claude-tarball \S+ -claude-integrity \S+`, "auditrun -claude-tarball <path> -claude-integrity <integrity>")},
+				runs: []auditCommand{
+					command(`auditrun"? -claude-tarball \S+ -claude-integrity \S+`, "auditrun -claude-tarball <path> -claude-integrity <integrity>"),
+					// The launcher writes the result bytes it checked, and only
+					// those, out of the sandbox's reach (review round 1, R1).
+					command(`auditrun"? .* -result-out "\$\{RUNNER_TEMP\}/result\.json"`, `auditrun ... -result-out "${RUNNER_TEMP}/result.json", the checked result's bytes`),
+				},
 			},
 			{
 				name: "Encrypt the audit's result to the publish key",
 				env:  []auditRead{{key: "AUDIT_PUBLISH_PUBLIC_KEY", value: varValue("AUDIT_PUBLISH_PUBLIC_KEY")}},
 				runs: []auditCommand{
-					command(`age --encrypt --recipient "\$\{AUDIT_PUBLISH_PUBLIC_KEY\}"`, `age --encrypt --recipient "${AUDIT_PUBLISH_PUBLIC_KEY}"`),
-					command(`/srv/audit/work/result\.json`, "/srv/audit/work/result.json"),
+					command(`age --encrypt --recipient "\$\{AUDIT_PUBLISH_PUBLIC_KEY\}" --output "\$\{RUNNER_TEMP\}/model-result\.age" "\$\{RUNNER_TEMP\}/result\.json"`,
+						`age --encrypt --recipient "${AUDIT_PUBLISH_PUBLIC_KEY}" --output "${RUNNER_TEMP}/model-result.age" "${RUNNER_TEMP}/result.json", the launcher's checked bytes`),
 				},
+				refuses: []auditCommand{command(`/srv/audit/work/result\.json`,
+					"/srv/audit/work/result.json, the work area's result read again by its path, want ${RUNNER_TEMP}/result.json, the bytes the launcher checked (-result-out)")},
 			},
 			{name: "Upload the model's ciphertext", uses: auditUpload, artifact: auditModelArtifact},
 		},
@@ -216,7 +269,12 @@ var auditJobs = []auditJob{
 		steps: []auditStep{
 			{name: "Check out the audited commit", uses: auditCheckout},
 			{name: "Download the pinned tools and verify their checksums", runs: []auditCommand{checksumCheck}},
-			{name: "List the run's artifacts and download the model's ciphertext", githubToken: true, runs: []auditCommand{artifactsPublic}},
+			{
+				name: "List the run's artifacts and download the model's ciphertext", githubToken: true,
+				runs:    []auditCommand{artifactsPublic, artifactFile, artifactID, artifactDigest, artifactZip, zipDigest, zipUnpack, zipOneFile},
+				refuses: []auditCommand{secondListing},
+				order:   []auditCommand{artifactsPublic, artifactFile, artifactZip, zipDigest, zipUnpack, zipOneFile},
+			},
 			{
 				name: "Decrypt the model's result",
 				env:  []auditRead{{key: "AUDIT_PUBLISH_PRIVATE_KEY", value: secretValue("AUDIT_PUBLISH_PRIVATE_KEY")}},
@@ -226,10 +284,22 @@ var auditJobs = []auditJob{
 			{
 				name: "Verify the image's provenance attestation", githubToken: true,
 				runs: []auditCommand{
-					command(`gh attestation verify "oci://`, `gh attestation verify "oci://<image>@<digest>"`),
+					tagShape, emptyDigest, digestShape, verify,
 					command(`--repo "\$\{GITHUB_REPOSITORY\}"`, `--repo "${GITHUB_REPOSITORY}"`),
 					command(`--signer-workflow "\$\{GITHUB_REPOSITORY\}/\.github/workflows/release\.yml"`, `--signer-workflow "${GITHUB_REPOSITORY}/.github/workflows/release.yml"`),
 					command(`--source-ref "refs/tags/`, `--source-ref "refs/tags/<tag>"`),
+					command(`--deny-self-hosted-runners`, "--deny-self-hosted-runners: no provenance a self-hosted runner signed"),
+				},
+				order: []auditCommand{tagShape, emptyDigest, digestShape, verify},
+			},
+			// The scan runs before the App's token is minted: a result gitleaks
+			// refuses has no write token minted for it (review round 1, A6).
+			{
+				name: "Scan the text it is about to publish",
+				runs: []auditCommand{
+					command(`gitleaks stdin `, "gitleaks stdin"),
+					command(`gitleaks stdin .*--ignore-gitleaks-allow`, "gitleaks stdin --ignore-gitleaks-allow"),
+					command(`gitleaks stdin .*--redact`, "gitleaks stdin --redact"),
 				},
 			},
 			{
@@ -238,13 +308,6 @@ var auditJobs = []auditJob{
 				with: []auditRead{
 					{key: "client-id", value: varValue("AUDIT_APP_CLIENT_ID")},
 					{key: "private-key", value: secretValue("AUDIT_APP_PRIVATE_KEY")},
-				},
-			},
-			{
-				name: "Scan the text it is about to publish",
-				runs: []auditCommand{
-					command(`gitleaks stdin `, "gitleaks stdin"),
-					command(`gitleaks stdin .*--ignore-gitleaks-allow`, "gitleaks stdin --ignore-gitleaks-allow"),
 				},
 			},
 			{
@@ -1127,6 +1190,50 @@ func (a *auditReader) run(e yamlread.Entry, path string, want *auditStep, env []
 			a.r.fail("%s runs no %s", path, c.want)
 		}
 	}
+
+	code := withoutComments(lines)
+
+	for _, c := range want.refuses {
+		if c.re.MatchString(code) {
+			a.r.fail("%s runs %s", path, c.want)
+		}
+	}
+
+	a.order(text, path, want.order)
+}
+
+// withoutComments returns the script's lines that are no comment, joined.
+func withoutComments(lines []string) string {
+	kept := make([]string, 0, len(lines))
+
+	for _, line := range lines {
+		if !strings.HasPrefix(strings.TrimSpace(line), "#") {
+			kept = append(kept, line)
+		}
+	}
+
+	return strings.Join(kept, "\n")
+}
+
+// order checks that the script holds the commands of order in that order. A
+// command the script lacks is left to runs, which reports it.
+func (a *auditReader) order(text, path string, order []auditCommand) {
+	last, lastWant := -1, ""
+
+	for _, c := range order {
+		loc := c.re.FindStringIndex(text)
+		if loc == nil {
+			continue
+		}
+
+		if loc[0] < last {
+			a.r.fail("%s runs %s after %s, want it before", path, c.want, lastWant)
+
+			continue
+		}
+
+		last, lastWant = loc[0], c.want
+	}
 }
 
 // hasVar reports whether env sets name to value.
@@ -1163,6 +1270,44 @@ func (a *auditReader) pins() {
 		}
 
 		a.digest(i, len(m[1]), tool, version)
+	}
+
+	a.pinCopies()
+}
+
+// auditPinCopy matches a version or SHA-256 pin of any env: block.
+var auditPinCopy = regexp.MustCompile(`^\s+([A-Z0-9_]+_(?:VERSION|SHA256)):\s*(\S.*)$`)
+
+// pinCopies holds every copy of a version or SHA-256 pin to the first one's
+// value: Renovate moves every copy together, so copies that differ are a hand
+// edit that moved one alone (review round 1 of PR 5b, R8). A value read from
+// an expression is no pin.
+func (a *auditReader) pinCopies() {
+	type first struct {
+		value string
+		num   int
+	}
+
+	seen := map[string]first{}
+
+	for i, line := range a.r.raw {
+		m := auditPinCopy.FindStringSubmatch(line)
+		if m == nil || strings.HasPrefix(m[2], "${{") {
+			continue
+		}
+
+		name, value := m[1], strings.TrimSpace(m[2])
+
+		f, ok := seen[name]
+		if !ok {
+			seen[name] = first{value: value, num: i + 1}
+
+			continue
+		}
+
+		if f.value != value {
+			a.r.fail("line %d: %s is %s, but its copy on line %d is %s: every copy of a pin holds the same value", i+1, name, value, f.num, f.value)
+		}
 	}
 }
 
