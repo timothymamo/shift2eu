@@ -2015,6 +2015,32 @@ func TestReleaseWorkflow(t *testing.T) {
 			wantIn:   "want the read of dev/lima.yaml's nodeVersion: run is",
 			wantAlso: `if [ -z \"${version}\" ]; then`,
 		},
+		{
+			// The version source of the read: the sed line that makes the Node
+			// one release dev/lima.yaml pins, and not a file or a literal the
+			// release names itself.
+			name:     "the nodeVersion read from another file",
+			workflow: in("test", "' dev/lima.yaml)\"", "' dev/other.yaml)\""),
+			wantIn:   "want the read of dev/lima.yaml's nodeVersion: run is",
+		},
+		{
+			name:     "the nodeVersion read with a hard-coded version",
+			workflow: in("test", "version=\"$(sed -nE 's/^  nodeVersion: \"([^\"]*)\"$/\\1/p' dev/lima.yaml)\"", `version="1.2.3"`),
+			wantIn:   "want the read of dev/lima.yaml's nodeVersion: run is",
+		},
+
+		// The four Node steps and the job itself hold no key that turns a step
+		// or the job off, or lets it fail unseen: each of them is the way the
+		// load check skips again without the pin saying so (issue #548).
+		{name: "an if on the read of dev/lima.yaml's nodeVersion", workflow: in("test", "      - name: The Node release dev/lima.yaml pins\n", "      - name: The Node release dev/lima.yaml pins\n        if: always()\n"), wantIn: `want the read of dev/lima.yaml's nodeVersion holds the key "if"`},
+		{name: "a continue-on-error on the read of dev/lima.yaml's nodeVersion", workflow: in("test", "      - name: The Node release dev/lima.yaml pins\n", "      - name: The Node release dev/lima.yaml pins\n        continue-on-error: true\n"), wantIn: `want the read of dev/lima.yaml's nodeVersion holds the key "continue-on-error"`},
+		{name: "an if on setup-node", workflow: in("test", "      - uses: {{pin actions/setup-node}}\n", "      - uses: {{pin actions/setup-node}}\n        if: always()\n"), wantIn: `want actions/setup-node holds the key "if"`},
+		{name: "a continue-on-error on setup-node", workflow: in("test", "      - uses: {{pin actions/setup-node}}\n", "      - uses: {{pin actions/setup-node}}\n        continue-on-error: true\n"), wantIn: `want actions/setup-node holds the key "continue-on-error"`},
+		{name: "an if on the check of the node on the PATH", workflow: in("test", "      - name: The node on the PATH is the pinned one\n", "      - name: The node on the PATH is the pinned one\n        if: always()\n"), wantIn: `want the check that node on the PATH is the pinned one holds the key "if"`},
+		{name: "a continue-on-error on the check of the node on the PATH", workflow: in("test", "      - name: The node on the PATH is the pinned one\n", "      - name: The node on the PATH is the pinned one\n        continue-on-error: true\n"), wantIn: `want the check that node on the PATH is the pinned one holds the key "continue-on-error"`},
+		{name: "a continue-on-error on make test", workflow: in("test", "        run: make test\n", "        run: make test\n        continue-on-error: true\n"), wantIn: `want make test holds the key "continue-on-error"`},
+		{name: "a test job with a condition", workflow: in("test", "    name: Test\n", "    name: Test\n    if: false\n"), wantIn: `jobs: test holds the key "if"`},
+		{name: "a test job whose failure the run ignores", workflow: in("test", "    name: Test\n", "    name: Test\n    continue-on-error: true\n"), wantIn: `jobs: test holds the key "continue-on-error"`},
 		{name: "the guard after setup-go", workflow: steps("test", swappedSteps(t, testSteps, "name: The tagged commit is on main", "actions/setup-go@")), wantIn: `want the guard that the tagged commit is on main holds the key "uses"`},
 		{
 			name:     "the guard without the ancestry check",
