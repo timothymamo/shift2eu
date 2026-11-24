@@ -44,9 +44,12 @@ Hold rule 3 with a second layer in both agents, beside the words in CLAUDE.md:
     that run their argument (`sudo`, `command`, `builtin`, `exec`, `nohup`, `time`, `xargs`, `timeout`,
     `nice`, `ionice`, `stdbuf`, `doas`, `busybox`, `eval`, `env`, `bash`/`sh`/`zsh`/`dash`/`ksh`, each with
     options, numeric or duration words and assignments: `timeout 5 env`, `bash -c 'env'`), then an
-    optional quote. After that prefix they refuse: `env` followed only by options and assignments, then the
-    end or a separator (`env`, `env -0`, `env FOO=bar | grep`); `printenv`; bare `set`; bare `export` and
-    `export -p`; `declare`/`typeset` bare or with `-p`/`-x`; `compgen -v`/`-e`/`-A`; `ps` whose first
+    optional quote or backslash (a backslash-escaped command word, `\env`, `\printenv`, runs the same
+    command). After that prefix they refuse: `env` followed only by options and assignments, then the end,
+    a separator or a redirect, numbered or not (`env`, `env -0`, `env FOO=bar | grep`, `env > out`,
+    `env 2>&1`, `env 1>out.txt`); `printenv`; bare `set`; bare `export` and `export -p`;
+    `declare`/`typeset` bare or with `-p`/`-x`, where bare `set`, `export`, `declare` and `typeset` also
+    count when a redirect, numbered or not, follows (`set 2>&1 | grep KEY`, `typeset 2>&1`); `compgen -v`/`-e`/`-A`; `ps` whose first
     argument is a BSD option word with `e` (`ps e`, `ps eww`, `ps auxeww`); `make` with an option holding
     `p` or `--print-data-base` (`make -p`, `make -pn`). Anywhere in a command they refuse a `/proc` path
     (`ls /proc/1`, `cat /proc/self/env*`), `daemon.env`, the expansion of a key by name (`$..._KEY`,
@@ -63,7 +66,8 @@ Hold rule 3 with a second layer in both agents, beside the words in CLAUDE.md:
     no inline flag), so the Go test that holds them to the refused and allowed tables
     (`test/architecture/pienvdeny_test.go`) tests what pi runs.
 - **Claude Code:** `.claude/settings.json`'s `permissions.deny` refuses `env` and `env *`, `/usr/bin/env*`,
-  `printenv` and `printenv *`, bare `set` and `export`, `export -p*`, `declare` and `typeset` bare and with
+  `printenv` and `printenv *`, bare `set` and `export` and each followed by a redirect (`set >*`,
+  `set [0-9]>*`, `export >*`, `export [0-9]>*`: `set 2>&1`, `export > out`), `export -p*`, `declare` and `typeset` bare and with
   `-p*`/`-x*`, `compgen -v*`/`-e*`/`-A*`/`*-A*`, `*/proc/*/environ*`, `make -p*` and
   `make --print-data-base*`, `ps e*`, `*daemon.env*`, and a command holding a `$` before `API_KEY` or
   `TOKEN` (`*$*API_KEY*`, `*$*TOKEN*`); and reading `/proc` whole (`Read(//proc)`, `Read(//proc/**)`,
@@ -118,6 +122,9 @@ Claude Code rules, which ADR 0003 does not cover.
   (`git commit -F`, `--body-file`), a search through the file tools, which refuse only `/proc` paths and
   `daemon.env`. A quote is a separator to the patterns (it is what refuses `bash -c 'env'`), so
   `git commit -m "x; env"` and `git commit -m "env"` are refused too; `git commit -m "fix env bug"` is not.
+  `make` with a quoted variable value that holds `-p` (`make test GOFLAGS='-run TestX -p 1'`) is refused
+  as `make -p`: the pattern's argument class allows quotes, so it sees `-p` inside the value. That is rare
+  here, since the Makefile has no flags variable the agents pass.
 - Rollout: the extension and the tester's `.scratch/` line reach only tester panes started from a dispatch
   worktree created after the merge; a pane started before it runs without them until it is restarted, and
   a branch cut before the merge does not ignore `.scratch/` (its `.gitignore` predates the line).
