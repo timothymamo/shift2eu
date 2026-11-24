@@ -529,6 +529,11 @@ func TestWorkflowsRunningThePublishProgram(t *testing.T) {
 // makes the gap check pass a workflow whose triggers nothing can read. The
 // workflow check's own regexp was a two-space block-style line, so a flow-style
 // or a four-space trigger would have passed unseen.
+//
+// A quote opens a quoted scalar only where a scalar starts: an apostrophe in the
+// middle of a plain scalar, as in `what's run`, opens nothing, and a comment is
+// no scalar of the flow mapping at all, so neither its apostrophe nor its braces
+// may be read as one.
 func TestHasScheduleTrigger(t *testing.T) {
 	t.Parallel()
 
@@ -589,6 +594,64 @@ func TestHasScheduleTrigger(t *testing.T) {
 			name:     "a quoted on key with a flow mapping over several lines",
 			workflow: "\"on\": {\n  workflow_dispatch: {},\n  'schedule': [{cron: '0 3 * * 1'}]\n}\n",
 			want:     true,
+		},
+		{
+			// An apostrophe in the middle of a plain scalar is no quote: YAML opens
+			// a quoted scalar where a scalar starts, after a `{`, a `[`, a `,` or a
+			// `:` and blanks, and leaves an apostrophe inside a plain scalar alone.
+			// Reading `what's` as an opening quote swallowed the brackets after it,
+			// the flow mapping ended at the wrong brace, and the schedule on the
+			// line below was never read: the workflow passed as one with no trigger
+			// while GitHub runs it on a schedule.
+			name: "a flow mapping over several lines with apostrophes in plain scalars",
+			workflow: `on: {
+  workflow_dispatch: {inputs: {mode: {description: what's run, type: choice, options: [full, what's new]}}},
+  schedule: [{cron: '0 3 * * 1'}]
+}
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+`,
+			want: true,
+		},
+		{
+			// The same reading of a plain scalar, with the bracket of a later flow
+			// sequence behind its apostrophe: the quote the apostrophe opened took
+			// the sequence for quoted text, so the depth it closes was never counted.
+			name: "a flow mapping over several lines with an apostrophe and a later bracket",
+			workflow: `on: {
+  workflow_dispatch: {inputs: {mode: {description: what's new, options: [full, fast]}}},
+  schedule: [{cron: '0 3 * * 1'}]
+}
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+`,
+			want: true,
+		},
+		{
+			// A comment is no scalar, so the apostrophe and the closing braces in
+			// it are neither a quote nor brackets of the flow mapping, and the
+			// schedule behind the comment is still a trigger.
+			name: "a comment with an apostrophe and braces inside a flow mapping",
+			workflow: `on: {
+  workflow_dispatch: {} # it's done }}}
+  schedule: [{cron: '0 3 * * 1'}]
+}
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+`,
+			want: true,
+		},
+		{
+			// A plain scalar's apostrophe is no reason to report a schedule: the
+			// mapping holds none, and reading every flow value that holds an
+			// apostrophe as one would pass a workflow nothing triggers on a
+			// schedule.
+			name:     "a flow mapping over several lines with an apostrophe and no schedule",
+			workflow: "on: {\n  workflow_dispatch: {inputs: {mode: {description: what's run}}}\n}\njobs:\n  audit:\n    runs-on: ubuntu-latest\n",
+			want:     false,
 		},
 		{
 			// The same form with no schedule: the trigger is read from the keys

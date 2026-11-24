@@ -10,11 +10,12 @@ import (
 )
 
 // TestReleaseWorkflowDisablesTheGoCache pins that every step of the release workflow that would read or
-// write the repository's Actions cache turns it off with cache: false. release.yml says why on its
-// goreleaser job: setup-go's cache, module and build cache alike, would carry state over from the test
-// job or from CI on main into a job that builds what the release publishes, so every step that sets Go
-// up there sets cache: false. A step added later that forgets it would bring that state back unseen, and
-// a golangci-lint step would write the same cache, so both are held to the rule.
+// write the repository's Actions cache turns it off: setup-go with cache: false, which turns its module
+// and build cache off, and golangci-lint-action with skip-cache: true, the only input that action has for
+// it. release.yml says why on its goreleaser job: the Go cache would carry state over from the test job or
+// from CI on main into a job that builds what the release publishes, so every step that sets Go up there
+// turns it off. A step added later that forgets it would bring that state back unseen, and a
+// golangci-lint step writes the same cache, so both are held to the rule.
 func TestReleaseWorkflowDisablesTheGoCache(t *testing.T) {
 	t.Parallel()
 
@@ -22,29 +23,41 @@ func TestReleaseWorkflowDisablesTheGoCache(t *testing.T) {
 
 	src := readRepositoryFile(t, workflow)
 
-	// A check over a workflow with no Go setup at all would pass and hold nothing: today the workflow
-	// sets Go up in every job that builds or lints.
-	if n := strings.Count(string(src), "uses: actions/setup-go@"); n == 0 {
-		t.Fatalf("%s holds no actions/setup-go step, so this check would hold nothing; the release builds the CLI and the site's programs and sets Go up for them", workflow)
+	// A check over the steps its reader never recognises would pass and hold nothing: today the workflow
+	// sets Go up in every job that tests, builds the site's programs, lints or releases. The count is
+	// quote-insensitive, so a uses: value an editor put in quotes names a step just the same, and every
+	// setup-go step the file names must be a step the reader hands the check.
+	named := strings.Count(string(src), "actions/setup-go@")
+	if named < 5 {
+		t.Fatalf("%s names actions/setup-go@ %d times, want at least 5: the release tests, lints, builds and releases in jobs of its own and sets Go up in each", workflow, named)
+	}
+
+	if read := len(goSetupSteps(src)); read != named {
+		t.Errorf("%s names actions/setup-go@ %d times, but the reader recognised %d setup-go steps of it, want the same number: a step the reader does not recognise is a step no cache check reads", workflow, named, read)
 	}
 
 	for _, gap := range goCacheGaps(src) {
-		t.Errorf("%s:%d: the %s step sets no cache: false, want one: setup-go's cache would carry state over from the test job or from CI on main into the job that builds the release (the comment on the goreleaser job)",
+		t.Errorf("%s:%d: the %s step turns no cache off, want one: setup-go's cache would carry state over from the test job or from CI on main into the job that builds the release (the comment on the goreleaser job), and the Actions cache of a lint step is the same cache",
 			workflow, gap.line, gap.action)
 	}
 }
 
 // TestGoCacheGaps pins the read the check above is stated in: a step that uses actions/setup-go or
-// golangci/golangci-lint-action and does not set cache: false is reported at the line of its dash, a step
-// that sets it is not, and neither is another action's step or a step whose run: block happens to hold a
-// line that looks like one.
+// golangci/golangci-lint-action and does not turn the Actions cache off is reported at the line of its
+// dash, and a step that does turn it off is not: setup-go's input for it is cache: false, the lint
+// action's is skip-cache: true, and neither step's cache is turned off by the other's word, by a cache:
+// key outside the step's with:, or by nothing at all. Neither is another action's step, or a step whose
+// run: block happens to hold a line that looks like one.
 func TestGoCacheGaps(t *testing.T) {
 	t.Parallel()
 
 	const (
+		// pin is the action's repository pin alone, for the uses: value an editor quoted: the release
+		// the action is then sits after the closing quote.
+		pin = "@0123456789abcdef0123456789abcdef01234567"
 		// pinned is the form every action in the workflow has: a repository, a commit and the release
 		// it is, as a trailing comment.
-		pinned = "@0123456789abcdef0123456789abcdef01234567 # v0.0.0"
+		pinned = pin + " # v0.0.0"
 	)
 
 	tests := []struct {
@@ -87,9 +100,60 @@ func TestGoCacheGaps(t *testing.T) {
 			want: []goCacheGap{{line: 5, action: "golangci/golangci-lint-action"}},
 		},
 		{
-			name: "a golangci-lint step with cache: false",
+			// The uses: value of a step is a scalar like any other, and a quoted one names the same
+			// action: a reader that only knows the bare form would pass a setup-go step whose cache is
+			// on, which is the step this check exists for.
+			name: "a double-quoted uses with no cache",
+			workflow: "jobs:\n  test:\n    steps:\n      - uses: \"actions/setup-go" + pin + "\" # v0.0.0\n" +
+				"        with:\n          go-version-file: go.mod\n",
+			want: []goCacheGap{{line: 4, action: "actions/setup-go"}},
+		},
+		{
+			name: "a single-quoted uses with no cache",
+			workflow: "jobs:\n  test:\n    steps:\n      - uses: 'actions/setup-go" + pin + "' # v0.0.0\n" +
+				"        with:\n          go-version-file: go.mod\n",
+			want: []goCacheGap{{line: 4, action: "actions/setup-go"}},
+		},
+		{
+			// skip-cache is the lint action's input, not setup-go's: a step that sets only that has the
+			// Go cache on and is a gap.
+			name: "a setup-go step with skip-cache: true only",
+			workflow: "jobs:\n  test:\n    steps:\n      - uses: actions/setup-go" + pinned + "\n" +
+				"        with:\n          go-version-file: go.mod\n          skip-cache: true\n",
+			want: []goCacheGap{{line: 4, action: "actions/setup-go"}},
+		},
+		{
+			// A step's env: holds its environment, not its inputs: a cache: key there is a variable
+			// the step's script may read, and turns nothing off.
+			name: "a setup-go step with cache: false under env:",
+			workflow: "jobs:\n  test:\n    steps:\n      - uses: actions/setup-go" + pinned + "\n" +
+				"        env:\n          cache: false\n",
+			want: []goCacheGap{{line: 4, action: "actions/setup-go"}},
+		},
+		{
+			name: "a setup-go step with cache: false in a flow env:",
+			workflow: "jobs:\n  test:\n    steps:\n      - uses: actions/setup-go" + pinned + "\n" +
+				"        env: {cache: false}\n",
+			want: []goCacheGap{{line: 4, action: "actions/setup-go"}},
+		},
+		{
+			// The lint action has no cache input: cache: false is a word its inputs do not know, and
+			// the Action's cache stays on. skip-cache: true is the input that turns it off.
+			name: "a golangci-lint step with cache: false only",
 			workflow: "jobs:\n  lint:\n    steps:\n      - uses: golangci/golangci-lint-action" + pinned + "\n" +
 				"        with:\n          version: v0.0.0\n          cache: false\n",
+			want: []goCacheGap{{line: 4, action: "golangci/golangci-lint-action"}},
+		},
+		{
+			name: "a golangci-lint step with skip-cache: true",
+			workflow: "jobs:\n  lint:\n    steps:\n      - uses: golangci/golangci-lint-action" + pinned + "\n" +
+				"        with:\n          version: v0.0.0\n          skip-cache: true\n",
+		},
+		{
+			name: "a golangci-lint step with skip-cache: false",
+			workflow: "jobs:\n  lint:\n    steps:\n      - uses: golangci/golangci-lint-action" + pinned + "\n" +
+				"        with:\n          version: v0.0.0\n          skip-cache: false\n",
+			want: []goCacheGap{{line: 4, action: "golangci/golangci-lint-action"}},
 		},
 		{
 			name: "another action's step with no cache",
