@@ -2125,6 +2125,14 @@ run (comments aside) and commands it must run in a given order, and every copy o
 `*_SHA256` pin in the file must hold the first copy's value, since Renovate moves them together and a
 copy that differs is a hand edit that moved one alone.
 
+Review round 2 (2026-11-24): **a comment is no command.** The commands a step must run, must not run and
+must run in order are all matched against its script with every whole comment line (a line whose first
+non-blank character is `#`) taken out, so a guard commented out (`# --deny-self-hosted-runners`, the
+zip's `sha256sum --check --strict`, `-result-out`) is a guard missing, and a commented copy of a command
+above the real one cannot satisfy the order. Only whole lines go: a `#` inside a code line
+(`${digest#sha256:}`) is code. An order broken is reported for every pair out of order, the command that
+must come first named first.
+
 **Job permissions** (`GITHUB_TOKEN`, each read): the checks job `contents` alone (no row PR 5b runs reads
 an attestation: PR 5c adds `attestations` with its release-integrity rows, and scorecard and row 15 may
 add `actions` or `issues` after the first run); the
@@ -2191,8 +2199,9 @@ the owners and modes above (`stat`), removes `/etc/sudoers.d/runner`, and fails 
 fails and the Docker socket is gone. The model step runs `auditrun -claude-tarball
 $RUNNER_TEMP/claude-code/claude-code.tgz -claude-integrity "${CLAUDE_CODE_PIN_INTEGRITY}" -result-out
 $RUNNER_TEMP/result.json`, the integrity from the pin step's output (`test/lint` holds that argument, and
-the installer's two last arguments, exactly, and refuses a `sha512-` literal anywhere outside the pin
-step). **The result reaches the encrypt step through the launcher alone** (PR 5b review round 1): the
+the installer's two last arguments, exactly, and refuses a `sha512-` literal on every line but the pin
+step's anchored `grep -E '^integrity: sha512-...'` of the pin file, other lines of the pin step included:
+review round 2). **The result reaches the encrypt step through the launcher alone** (PR 5b review round 1): the
 launcher's `Run.Result` writes the bytes its result check read and accepted (a regular file and no link,
 within the cap, one JSON value, neither the token nor the canary) to `-result-out`, a new file (`O_EXCL`,
 0600) under the step's `$RUNNER_TEMP`, out of the sandbox's reach, and the encrypt step encrypts that
@@ -2206,13 +2215,20 @@ reads, and a result that quoted it would be refused.
 <owner>/<name> --signer-workflow <owner>/<name>/.github/workflows/release.yml --source-ref
 refs/tags/<tag> --deny-self-hosted-runners` as a model-free step with the job's `github.token` and
 `attestations: read`, the digest and tag read from the result and held to their shapes first, the tag's
-whatever the digest is; a refusal fails the run. An empty `image_digest` is the result's documented
-"image not pulled", which `publish.Result` and `CheckImageDigest` accept: the step then prints the fixed
-notice `image not pulled: no provenance attestation to verify` and verifies nothing, rather than failing
-every such run (PR 5b review round 1). That closes the image check's residual risk above: the
+whatever the digest is; a refusal fails the run. **The step stands alone** (PR 5b review round 2): it
+trusts no earlier step to have read the digest, and reads it with `jq -er '.image_digest | select(type ==
+"string") | select(. == "" or test("^sha256:[0-9a-f]{64}\\z"))'`, refusing anything but a string that is
+exactly empty or one sha256 digest (`\z`, not `$`, which also matches before a final newline) before the
+empty branch; the check requires that read, before that branch. An empty `image_digest` is the result's
+documented "image not pulled", which `publish.Result` and `CheckImageDigest` accept: the step then prints
+the fixed notice `image not pulled: no provenance attestation to verify` and verifies nothing, rather than
+failing every such run (PR 5b review round 1). That closes the image check's residual risk above: the
 attestation's Sigstore signature and certificate are verified before a digest is trusted. The `image`
 step's `CheckRelease` also holds the result's tag to the repository's latest release, so a result that
-names an older release is refused before anything is written. gitleaks runs `stdin
+names an older release is refused before anything is written. That includes a release published or
+marked latest while the run is under way: the checks job read the tag before it, so the result names the
+older one and the run fails closed (`ErrResultInvalid`), publishing nothing; the maintainer starts a new
+run, which audits the new release (runbook step 11). gitleaks runs `stdin
 --ignore-gitleaks-allow --redact` over the decrypted result **before** the App token is minted, so a
 result it refuses has no write token minted for it; the App token step has exactly the four
 `permission-*` inputs of Decision 1 (`contents`, `pull-requests`, `issues`, `security-events`, each
@@ -2235,7 +2251,10 @@ the report's limits while the run still publishes (today a step timeout fails th
 summaries that name the runbook step for every cause (today the programs' one lines and the workflow's
 own errors do; a tool download whose checksum differs fails with sha256sum's line alone, the hardening
 step's commands that fail under `set -e` before its own checks, such as `systemctl stop`, fail with their
-own lines, and the errors that point at runbook step 11 name none of their causes there yet). **To be checked
+own lines, the errors that point at runbook step 11 name none of their causes there yet, and the hardening
+step's three own errors, wrong owners or modes of the audit directory, `sudo -n true` still succeeding
+and the Docker socket still there, point at runbook step 10, which names only preflight and bubblewrap
+failures). **To be checked
 on the first run** (runbook step 8): that `socat`'s and `bubblewrap`'s `.deb`s install with the image's
 libraries (`dpkg -i` does not fetch a missing dependency) and that the pinned versions are still in the
 archive's pool; that the runner's sudo rule is `/etc/sudoers.d/runner`; that the runner's preinstalled

@@ -2803,7 +2803,10 @@ the summary line"). What to do for each, before the new run:
   job's check, and `checks-result` and `model-result` at the publish job's.
 - `result refused: see runbook` (exit 3): the model's result did not decrypt or broke the schema, or the
   release tag or image digest it named did not check out against GitHub. Start the new run; if it
-  repeats, read the model job's preflight line and the skill before changing anything.
+  repeats, read the model job's preflight line and the skill before changing anything. A release
+  published or marked latest while the run was under way fails it this way too (the result names the
+  release the checks job read, no longer the latest; ADR 0040, The workflow): the new run audits the new
+  release.
 - `publish refused: see runbook` (exit 4): a text about to be published did not pass the scans. Nothing
   was published. The line does not say which of three causes it was: (1) a scan found a token, a key or
   an encoded run; (2) the text held gitleaks' inline allow comment, which the program refuses before
