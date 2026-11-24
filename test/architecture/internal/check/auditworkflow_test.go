@@ -500,7 +500,7 @@ const (
 		"          if [ \"${rc}\" -eq 124 ]; then\n" +
 		"            echo \"workflows timed-out\" >> \"${results}/not-run.txt\"\n" +
 		"            echo \"workflows: the zizmor run timed out after 4 minutes\" >> \"${results}/limits.txt\"\n" +
-		"          elif [ \"${rc}\" -ne 0 ] && [ \"${rc}\" -ne 1 ]; then\n" +
+		"          elif [ \"${rc}\" -ne 0 ] && { [ \"${rc}\" -lt 11 ] || [ \"${rc}\" -gt 14 ]; }; then\n" +
 		"            echo \"workflows tool-failed\" >> \"${results}/not-run.txt\"\n" +
 		"          fi\n"
 	auditActionlintStep = "      - name: actionlint\n" +
@@ -781,8 +781,20 @@ const (
 	// timeout out of one of them.
 	auditGovulncheckRun = "          GOFLAGS=-mod=readonly GOPROXY=off timeout 8m govulncheck -format json ./... > \"${out}/module.json\" 2> \"${out}/module.stderr\" || rc=$?\n"
 	auditOSVScanRun     = "          timeout 8m osv-scanner scan source --recursive . > \"${out}/repository.json\" 2> \"${out}/repository.stderr\" || rc=$?\n"
-	auditGitleaksRun    = "          timeout 15m gitleaks git --ignore-gitleaks-allow --redact --no-banner --log-level error --report-format json --report-path \"${out}/history.json\" . 2> \"${out}/history.stderr\" || rc=$?\n"
+	auditGitleaksRun    = "          timeout 15m gitleaks git --ignore-gitleaks-allow --redact --no-banner --log-level error --exit-code 2 --report-format json --report-path \"${out}/history.json\" . 2> \"${out}/history.stderr\" || rc=$?\n"
 	auditZizmorRun      = "          timeout 4m zizmor --format json .github/workflows > \"${out}/zizmor.json\" 2> \"${out}/zizmor.stderr\" || rc=$?\n"
+
+	// auditGovulncheckOutcome, auditGitleaksOutcome and auditZizmorOutcome are
+	// rows 3 and 5's tool-failed branches, with the line above each that makes it
+	// that row's alone (the module run's limits line, and gitleaks's and zizmor's
+	// own labels): the branch that decides which exit codes are the tool's
+	// findings and which are the check that failed (round G of PR 5c).
+	auditGovulncheckOutcome = "            echo \"dependencies: the module scan timed out after 8 minutes\" >> \"${results}/limits.txt\"\n" +
+		"          elif [ \"${rc}\" -ne 0 ]; then\n"
+	auditGitleaksOutcome = "            echo \"history-secrets: the history scan timed out after 15 minutes\" >> \"${results}/limits.txt\"\n" +
+		"          elif [ \"${rc}\" -ne 0 ] && [ \"${rc}\" -ne 2 ]; then\n"
+	auditZizmorOutcome = "            echo \"workflows: the zizmor run timed out after 4 minutes\" >> \"${results}/limits.txt\"\n" +
+		"          elif [ \"${rc}\" -ne 0 ] && { [ \"${rc}\" -lt 11 ] || [ \"${rc}\" -gt 14 ]; }; then\n"
 
 	// auditInstallCall is the model job's install step's call of the shared
 	// install script, exactly as it ran before round F.
@@ -2757,6 +2769,36 @@ func TestAuditWorkflow(t *testing.T) {
 			name:     "row 5's actionlint without its timeout",
 			workflow: mutate(t, acceptedWorkflow, auditActionlint, strings.Replace(auditActionlint, "timeout 5m ", "", 1)),
 			wantIn:   "actionlint",
+		},
+
+		// Round G: rows 3 to 5's exit codes, read as the pinned tools' sources
+		// write them. A branch that reads a tool's error as a finding records a
+		// check that ran when none did, and one that reads a finding as an error
+		// loses what the tool found. gitleaks is told --exit-code 2 because its
+		// own default, 1, is an error's exit too: without the flag an error that
+		// wrote no report reads as clean. zizmor exits by the highest finding's
+		// severity, 11 to 14, and 1 on an error. govulncheck exits 0 with
+		// -format json whatever it finds (only its text handler exits 3), so
+		// every non-zero exit of it is the tool that failed.
+		{
+			name:     "row 5's gitleaks without --exit-code 2",
+			workflow: mutate(t, acceptedWorkflow, auditGitleaksRun, strings.Replace(auditGitleaksRun, " --exit-code 2", "", 1)),
+			wantIn:   "gitleaks",
+		},
+		{
+			name:     "row 5's gitleaks reading an error as a leak",
+			workflow: mutate(t, acceptedWorkflow, auditGitleaksOutcome, strings.Replace(auditGitleaksOutcome, `[ "${rc}" -ne 2 ]`, `[ "${rc}" -ne 1 ]`, 1)),
+			wantIn:   "gitleaks",
+		},
+		{
+			name:     "row 5's zizmor reading an error as a finding",
+			workflow: mutate(t, acceptedWorkflow, auditZizmorOutcome, strings.Replace(auditZizmorOutcome, `{ [ "${rc}" -lt 11 ] || [ "${rc}" -gt 14 ]; }`, `[ "${rc}" -ne 1 ]`, 1)),
+			wantIn:   "zizmor",
+		},
+		{
+			name:     "row 3's govulncheck excusing exit 3",
+			workflow: mutate(t, acceptedWorkflow, auditGovulncheckOutcome, strings.Replace(auditGovulncheckOutcome, `elif [ "${rc}" -ne 0 ]; then`, `elif [ "${rc}" -ne 0 ] && [ "${rc}" -ne 3 ]; then`, 1)),
+			wantIn:   "govulncheck",
 		},
 
 		// Round F's second part: the model job's install step names the runbook
