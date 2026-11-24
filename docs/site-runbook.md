@@ -104,7 +104,7 @@ n=0; until [ -n "$(dev/tofu.sh -chdir=infra/site output -raw edge_endpoint 2>/de
 [ -n "$(dev/tofu.sh -chdir=infra/site output -raw edge_endpoint 2>/dev/null)" ] && echo "PASS edge_endpoint is set" || echo "FAIL edge_endpoint still empty after 10 minutes"
 # FAIL: first an error printed above (a state lock: as the apply line's FAIL says; a key error: R0), else check the pipeline's DNS stage in the console (Edge Services) for its default FQDN; then run the wait loop and its check again
 dev/tofu.sh -chdir=infra/site plan -detailed-exitcode      # PASS: exit 0, "No changes."
-# FAIL exit 2: read the diff; the provider or someone changed a resource; one "to add" after the refresh was deleted outside OpenTofu: import it, do not re-create it blindly
+# FAIL exit 2: read the diff; the provider or someone changed a resource; one "to add" after the refresh was dropped from the state by the refresh: check in the console whether it still exists; if it does, import it; if it is really gone, find out why before re-creating it
 dev/tofu.sh -chdir=infra/site output                       # PASS: project_id, deploy_application_id, bucket_name, bucket_website_endpoint, pipeline_id, edge_endpoint
 aws s3api list-objects-v2 --bucket <state-bucket> --query 'Contents[].Key'   # PASS: "site/terraform.tfstate" and no .tflock left over
 rm infra/site/site.tfplan
