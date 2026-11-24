@@ -14,6 +14,26 @@ import (
 	"testing"
 )
 
+// TestTheAuditWorkflowIsScanned pins that the generic manager scans the audit's
+// workflow too: .github/workflows/scheduled-security-audit.yml is PR 5b of PRD
+// #175's milestone 2 and holds the sandbox's own release pins (age, bubblewrap,
+// socat and the checks' tools), so a pin there that the manager's file patterns
+// do not reach is a pin nothing bumps. The fixtures under testdata are no part of
+// this: Renovate reads the repository, not a test's documents.
+func TestTheAuditWorkflowIsScanned(t *testing.T) {
+	t.Parallel()
+
+	const auditWorkflowFile = ".github/workflows/scheduled-security-audit.yml"
+
+	managers := renovateCustomManagers(t, moduleRoot(t))
+	generic, _ := aiReviewGenericManagerIndex(t, managers)
+
+	if !renovateManagerScans(t, managers[generic], auditWorkflowFile) {
+		t.Errorf("%s: the file patterns of the manager described %q are %v, which do not scan %s: the audit workflow's annotated pins would never be bumped, and nothing says so (CLAUDE.md rule 7, PRD #175 milestone 2)",
+			renovateConfigPath, managers[generic].description, managers[generic].filePatterns, auditWorkflowFile)
+	}
+}
+
 // renovateAnnotation starts the comment Renovate's generic manager reads a version
 // pin from, and the one this test finds in the workflows.
 const renovateAnnotation = "# renovate: datasource="

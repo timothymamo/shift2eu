@@ -64,6 +64,7 @@ func acceptedEndpoints() []endpointCase {
 	return []endpointCase{
 		{name: "row 1: the run's artifacts", method: "GET", endpoint: fixtureArtifactsEndpoint},
 		{name: "row 2: a release tag", method: "GET", endpoint: fixtureReleaseEndpoint},
+		{name: "row 2: the latest release", method: "GET", endpoint: fixtureLatestReleaseEndpoint},
 		{name: "row 3: an image digest's attestations", method: "GET", endpoint: fixtureRepoPrefix + "/attestations/" + fixtureDigest + "?per_page=100"},
 		{name: "row 4: a commit", method: "GET", endpoint: fixtureRepoPrefix + "/git/commits/" + fixtureCommit},
 		{name: "row 5: the report branch", method: "GET", endpoint: fixtureRepoPrefix + "/git/ref/heads/" + fixtureBranch},
@@ -117,6 +118,8 @@ func refusedEndpoints() []endpointCase {
 		{name: "another run's artifacts", method: "GET", endpoint: fixtureRepoPrefix + "/actions/runs/1234567891/artifacts?per_page=100"},
 		{name: "an extra query parameter", method: "GET", endpoint: fixtureArtifactsEndpoint + "&page=2"},
 		{name: "another release tag", method: "GET", endpoint: fixtureRepoPrefix + "/releases/tags/latest"},
+		{name: "the latest release with a query", method: "GET", endpoint: fixtureLatestReleaseEndpoint + "?per_page=1"},
+		{name: "the latest release's tag", method: "GET", endpoint: fixtureLatestReleaseEndpoint + "/" + fixtureTag},
 		{name: "a tag that is no semver", method: "GET", endpoint: fixtureRepoPrefix + "/releases/tags/v0.12"},
 		{name: "a 64-hex commit", method: "GET", endpoint: fixtureRepoPrefix + "/git/commits/" + strings.Repeat("a", 64)},
 		{name: "an uppercase commit", method: "GET", endpoint: fixtureRepoPrefix + "/git/commits/" + strings.ToUpper(fixtureCommit)},

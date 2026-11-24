@@ -1,6 +1,7 @@
 package lint_test
 
 import (
+	"fmt"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -1181,7 +1182,11 @@ func claudeCodePinNoSameNamedJob(t *testing.T, root, path string) {
 //     step and in the comment that explains them.
 //
 // Nothing else under .github/workflows, .github/scripts and .github/actions may
-// hold them.
+// hold them. .github/workflows/scheduled-security-audit.yml, the audit's
+// workflow, whose model job installs the same CLI from the same file (PRD #175
+// milestone 2, ADR 0040), is no entry of this list: it may name the pin only
+// where a value of it reaches it from the step that reads the pin file, which
+// claudeCodePinAuditWorkflowProblems reads line by line.
 var claudeCodePinPinNamingFiles = []string{
 	claudeCodePinFile,
 	aiReviewWorkflowPath,
@@ -1214,7 +1219,10 @@ var claudeCodePinSearchedDirs = []string{".github/workflows", ".github/scripts",
 // pin file and the check's workflow. ci/claudecodepin reads the version and the
 // integrity out of that one file alone, so a second install with a pin of its
 // own would be checked by nothing, and would run whatever its pin says (issue
-// #452, ADR 0040's model-job amendment, issue #277).
+// #452, ADR 0040's model-job amendment, issue #277). The audit's workflow names
+// the pin too, and is read line by line instead: it may name it only where a
+// value of the pin reaches it from the step that reads the pin file
+// (claudeCodePinAuditWorkflowProblems).
 func TestClaudeCodePinLivesOnlyInThePinFile(t *testing.T) {
 	t.Parallel()
 
@@ -1261,26 +1269,500 @@ func TestClaudeCodePinLivesOnlyInThePinFile(t *testing.T) {
 	}
 }
 
+// TestClaudeCodeAuditWorkflowPinsOnlyWhereItReadsThem pins the narrowed
+// exemption of the scheduled audit's workflow (PRD #175 milestone 2, ADR 0040):
+// the workflow may name the installer and the pin's env: names where a value of
+// .github/claude-code.yaml reaches it from the step that reads the file, and a
+// pin written into another step of it is refused, the case a whole-file
+// exemption let through.
+func TestClaudeCodeAuditWorkflowPinsOnlyWhereItReadsThem(t *testing.T) {
+	t.Parallel()
+
+	root := moduleRoot(t)
+
+	src, err := os.ReadFile(filepath.Join(root, claudeCodeAuditWorkflowPath))
+	if err != nil {
+		t.Fatalf("read %s: %v; the audit's workflow installs the CLI from %s", claudeCodeAuditWorkflowPath, err, claudeCodePinFile)
+	}
+
+	accepted := string(src)
+
+	// rewrite returns the workflow with old replaced by new, and fails when old
+	// does not stand in it the times the case expects.
+	rewrite := func(old, new string, want int) []byte {
+		t.Helper()
+
+		if got := strings.Count(accepted, old); got != want {
+			t.Fatalf("%s: %q stands in it %d times, want %d: the case rewrites the accepted workflow", claudeCodeAuditWorkflowPath, old, got, want)
+		}
+
+		return []byte(strings.ReplaceAll(accepted, old, new))
+	}
+
+	// integrity is an npm integrity of the pin file's shape, a pin a workflow
+	// would install a CLI from that no check of this repository's reads.
+	integrity := "sha512-" + strings.Repeat("A", 86) + "=="
+
+	// copyStep is the step the cases anchor on: the copy of the checkout into the
+	// audit directory, which reads no pin and installs no CLI.
+	const copyStep = "      - name: Copy the checkout into the audit directory\n"
+
+	tests := []struct {
+		name string
+		rel  string
+		src  []byte
+		// wantIn is a part of a problem the case must draw, and the accepted
+		// workflow does not; "" means none at all.
+		wantIn string
+	}{
+		{name: "the accepted workflow", rel: claudeCodeAuditWorkflowPath, src: []byte(accepted)},
+		{
+			name: "an integrity written into a step of its own",
+			rel:  claudeCodeAuditWorkflowPath,
+			src: rewrite(copyStep, "      - name: Pin the CLI from an integrity of its own\n"+
+				"        env:\n"+
+				"          CLAUDE_CODE_PIN_INTEGRITY: "+integrity+"\n"+
+				copyStep, 1),
+			wantIn: "outside the step that reads",
+		},
+		{
+			name: "the pin's old env: name in a step of its own",
+			rel:  claudeCodeAuditWorkflowPath,
+			src: rewrite(copyStep, "      - name: Pin the CLI the old way\n"+
+				"        env:\n"+
+				"          CLAUDE_CODE_INTEGRITY: "+integrity+"\n"+
+				copyStep, 1),
+			wantIn: "an env: name a workflow pins the CLI under",
+		},
+		{
+			name: "the installer in a step that reads no pin",
+			rel:  claudeCodeAuditWorkflowPath,
+			src: rewrite(copyStep, "      - name: Install the CLI\n"+
+				"        run: |\n"+
+				"          "+claudeCodeInstallScript+" \"$dir\" \"pkg\" \"\"\n"+
+				copyStep, 1),
+			wantIn: "outside the step that reads",
+		},
+		{
+			// The step that installs the CLI and the model step bind the
+			// integrity to the pin step's output: neither may take another
+			// value, or the workflow installs and runs a CLI the pin file does
+			// not name.
+			name: "a pin name bound to another value",
+			rel:  claudeCodeAuditWorkflowPath,
+			src: rewrite("CLAUDE_CODE_PIN_INTEGRITY: ${{ steps.claude-code-pin.outputs.integrity }}",
+				"CLAUDE_CODE_PIN_INTEGRITY: ${{ secrets.AUDIT_MODEL_PRIVATE_KEY }}", 2),
+			wantIn: "sets CLAUDE_CODE_PIN_INTEGRITY to",
+		},
+		{
+			name: "a pin literal on the line that installs the CLI",
+			rel:  claudeCodeAuditWorkflowPath,
+			src: rewrite(`"@anthropic-ai/claude-code-linux-x64@${CLAUDE_CODE_PIN_VERSION}"`,
+				`"@anthropic-ai/claude-code-linux-x64@1.2.3"`, 1),
+			wantIn: "beside a pin written into the workflow",
+		},
+		{
+			// The installer takes exactly the pin step's version and integrity
+			// as its two last arguments: a line that drops one installs a CLI
+			// the pin file does not describe (review round 1, finding R4).
+			name: "the installer without the pin's two arguments",
+			rel:  claudeCodeAuditWorkflowPath,
+			src: rewrite(`"@anthropic-ai/claude-code-linux-x64@${CLAUDE_CODE_PIN_VERSION}" "${CLAUDE_CODE_PIN_INTEGRITY}"`,
+				`"@anthropic-ai/claude-code-linux-x64@${CLAUDE_CODE_PIN_VERSION}"`, 1),
+			wantIn: "install-claude-code.sh",
+		},
+		{
+			// The alias trick: a literal under another name on a line of its
+			// own is still a pin written into the workflow.
+			name:   "an integrity behind an alias",
+			rel:    claudeCodeAuditWorkflowPath,
+			src:    rewrite(`          .github/scripts/install-claude-code.sh`, "          i=\""+integrity+"\"\n          .github/scripts/install-claude-code.sh", 1),
+			wantIn: "sha512-",
+		},
+		{
+			// The exemption is the line that greps the pin file's integrity,
+			// never the step it stands in: a sha512- literal on another line of
+			// the step that reads the pin is a pin written into the workflow
+			// like any other (review round 2, G2).
+			name: "an integrity on another line of the step that reads the pin",
+			rel:  claudeCodeAuditWorkflowPath,
+			src: rewrite(`          version="$(grep -E '^version: [0-9]+\.[0-9]+\.[0-9]+$' "${pin}" || true)"`,
+				`          version="$(grep -E '^version: [0-9]+\.[0-9]+\.[0-9]+$' "${pin}" || true)"`+"\n"+
+					`          integrity="integrity: `+integrity+`"`, 1),
+			wantIn: "sha512-",
+		},
+		{
+			// The model step's integrity is exactly the pin step's output: a
+			// literal there runs a CLI the pin file does not name.
+			name: "a literal -claude-integrity",
+			rel:  claudeCodeAuditWorkflowPath,
+			src: rewrite(`-claude-integrity "${CLAUDE_CODE_PIN_INTEGRITY}"`,
+				`-claude-integrity "`+integrity+`"`, 1),
+			wantIn: "-claude-integrity",
+		},
+		{
+			// Every other workflow keeps the whole-file rule: it may name none
+			// of the pin's strings at all.
+			name:   "a workflow that may not name the pin at all",
+			rel:    ".github/workflows/another.yml",
+			src:    []byte("jobs:\n  pin:\n    steps:\n      - name: Pin\n        env:\n          CLAUDE_CODE_INTEGRITY: " + integrity + "\n"),
+			wantIn: `names "CLAUDE_CODE_INTEGRITY"`,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			problems := claudeCodePinProblems(tc.rel, tc.src)
+
+			if tc.wantIn == "" {
+				if len(problems) != 0 {
+					t.Fatalf("claudeCodePinProblems(%s) = %q, want no problem: the workflow installs the CLI from %s, in the steps that take its values from the step that reads it", tc.rel, problems, claudeCodePinFile)
+				}
+
+				return
+			}
+
+			for _, problem := range problems {
+				if strings.Contains(problem, tc.wantIn) {
+					return
+				}
+			}
+
+			t.Errorf("claudeCodePinProblems(%s) = %q, want a problem that holds %q: a pin written into the workflow is checked by nothing (PRD #175 milestone 2, ADR 0040)", tc.rel, problems, tc.wantIn)
+		})
+	}
+}
+
 // claudeCodePinScannedFile fails when the file at path holds a string that names
 // the pin and is not one of the files that may, rel being its module-relative
 // path for the failure message.
 func claudeCodePinScannedFile(t *testing.T, rel, path string) {
 	t.Helper()
 
-	if slices.Contains(claudeCodePinPinNamingFiles, rel) {
-		return
-	}
-
 	src, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("read %s: %v", rel, err)
 	}
 
+	for _, problem := range claudeCodePinProblems(rel, src) {
+		t.Errorf("%s: %s", rel, problem)
+	}
+}
+
+// claudeCodePinProblems returns the reasons the file at rel, read from src, may
+// not hold what it does: the pin-naming strings a file that is not one of
+// claudeCodePinPinNamingFiles names. The audit's workflow names the pin too, so
+// it is read line by line (claudeCodePinAuditWorkflowProblems) rather than
+// exempted whole: a pin written into any other step of it would be seen by no
+// test at all (PRD #175 milestone 2, ADR 0040).
+func claudeCodePinProblems(rel string, src []byte) []string {
+	if slices.Contains(claudeCodePinPinNamingFiles, rel) {
+		return nil
+	}
+
+	if rel == claudeCodeAuditWorkflowPath {
+		return claudeCodePinAuditWorkflowProblems(src)
+	}
+
+	var problems []string
+
 	for _, marker := range claudeCodePinPinNamingStrings {
 		if strings.Contains(string(src), marker) {
-			t.Errorf("%s names %q: the Claude Code pin lives in %s alone, and ci/claudecodepin reads it there, so a second install with its own pin would be checked by nothing (issue #452, issue #277)", rel, marker, claudeCodePinFile)
+			problems = append(problems, fmt.Sprintf("names %q: the Claude Code pin lives in %s alone, and ci/claudecodepin reads it there, so a second install with its own pin would be checked by nothing (issue #452, issue #277)", marker, claudeCodePinFile))
 		}
 	}
+
+	return problems
+}
+
+// claudeCodePinAuditWorkflowProblems returns the reasons the scheduled audit's
+// workflow, read from src, may not hold what it does (PRD #175 milestone 2, ADR
+// 0040). It installs the CLI from the one pin, so it may name the installer and
+// the pin's env: names in the step that reads the pin file and in the steps
+// that take a value of the pin from that step's outputs, and nowhere else: a
+// step that carries a pin of its own is read by no check of this repository's,
+// since ci/claudecodepin reads .github/claude-code.yaml alone. The comments are
+// read with the steps: a pin in one of them is a pin in the checkout. A
+// workflow this reader cannot follow draws the reason it cannot, never no
+// message at all.
+func claudeCodePinAuditWorkflowProblems(src []byte) []string {
+	lines, err := yamlread.SplitLines(src)
+	if err != nil {
+		return []string{fmt.Sprintf("read the workflow: %v", err)}
+	}
+
+	allowed, pinRead, problems := claudeCodePinAuditWorkflowPinLines(lines)
+
+	for i, text := range strings.Split(string(src), "\n") {
+		num := i + 1
+
+		problems = append(problems, claudeCodePinAuditWorkflowArguments(num, text, pinRead[num])...)
+
+		for _, marker := range claudeCodePinPinNamingStrings {
+			if !strings.Contains(text, marker) {
+				continue
+			}
+
+			switch {
+			case slices.Contains(claudeCodePinEnvNames, marker):
+				problems = append(problems, fmt.Sprintf("line %d names %q, an env: name a workflow pins the CLI under; the version and the integrity live in %s alone and reach a step as the pin step's outputs (CLAUDE.md rule 7, issue #277, round J)", num, marker, claudeCodePinFile))
+			case !allowed[num]:
+				problems = append(problems, fmt.Sprintf("line %d names %q outside the step that reads %s and the steps that take its values from that step's outputs: a pin written into another step of the audit's workflow is checked by nothing (PRD #175 milestone 2, ADR 0040)", num, marker, claudeCodePinFile))
+			case claudeCodeWorkflowIntegrityLit.MatchString(text) || claudeCodeWorkflowVersionLit.MatchString(text):
+				problems = append(problems, fmt.Sprintf("line %d names %q beside a pin written into the workflow; the version and the integrity reach it from %s, so Renovate's bump stays in the one file (CLAUDE.md rule 7, issue #277)", num, marker, claudeCodePinFile))
+			}
+		}
+	}
+
+	return problems
+}
+
+// The exact arguments the audit's workflow hands the pin's values on (review
+// round 1 of PR 5b, finding R4): the installer's two last arguments, and the
+// model step's -claude-integrity.
+const (
+	claudeCodePinInstaller          = ".github/scripts/install-claude-code.sh"
+	claudeCodePinInstallerArguments = ` "@anthropic-ai/claude-code-linux-x64@${CLAUDE_CODE_PIN_VERSION}" "${CLAUDE_CODE_PIN_INTEGRITY}"`
+	claudeCodePinIntegrityFlag      = "-claude-integrity"
+	claudeCodePinIntegrityArgument  = `-claude-integrity "${CLAUDE_CODE_PIN_INTEGRITY}"`
+)
+
+// claudeCodePinAuditWorkflowArguments returns the problems one line of the
+// audit's workflow draws for the pin's arguments, num being its number and
+// readsIntegrity whether it is the pin step's line that greps the pin file's
+// integrity (claudeCodePinIntegrityReads): a line that runs the installer ends
+// in exactly the pin's two arguments, every -claude-integrity is exactly the
+// pin step's integrity, and no sha512- literal stands on any other line, of the
+// pin step or another, whatever name it sits under (an alias such as
+// i="sha512-..." is still a pin written into the workflow; review round 2 of
+// PR 5b, G2). Comment lines are held only by the last rule: a pin in a comment
+// is a pin in the checkout.
+func claudeCodePinAuditWorkflowArguments(num int, text string, readsIntegrity bool) []string {
+	var problems []string
+
+	if strings.Contains(text, "sha512-") && !readsIntegrity {
+		problems = append(problems, fmt.Sprintf("line %d holds a sha512- literal outside the pin step's grep of the integrity in %s: the integrity reaches a step as that step's output alone, under no other name (PRD #175 milestone 2, ADR 0040)", num, claudeCodePinFile))
+	}
+
+	trimmed := strings.TrimSpace(text)
+	if strings.HasPrefix(trimmed, "#") {
+		return problems
+	}
+
+	if strings.Contains(text, claudeCodePinInstaller) && !strings.HasSuffix(trimmed, claudeCodePinInstallerArguments) {
+		problems = append(problems, fmt.Sprintf("line %d runs %s without the pin's two arguments,%s, as its last: the installer takes exactly the pin step's version and integrity (PRD #175 milestone 2, ADR 0040)", num, claudeCodePinInstaller, claudeCodePinInstallerArguments))
+	}
+
+	for rest := text; ; {
+		i := strings.Index(rest, claudeCodePinIntegrityFlag)
+		if i < 0 {
+			break
+		}
+
+		rest = rest[i:]
+		after := strings.TrimPrefix(rest, claudeCodePinIntegrityArgument)
+
+		if after == rest || (after != "" && after[0] != ' ') {
+			problems = append(problems, fmt.Sprintf("line %d passes %s other than exactly %s: the launcher checks the CLI's tarball against the pin step's integrity alone (PRD #175 milestone 2, ADR 0040)", num, claudeCodePinIntegrityFlag, claudeCodePinIntegrityArgument))
+
+			break
+		}
+
+		rest = after
+	}
+
+	return problems
+}
+
+// claudeCodePinAuditWorkflowPinLines returns the source lines of the audit's
+// workflow that may name the pin - those of the step that reads the pin file
+// and of every step that takes a pin name from that step's outputs - the lines
+// of the pin step that grep the pin file's integrity alone, and the problems the workflow's
+// env: bindings draw. A step reads the outputs of the
+// pin step when it sets one of the names of claudeCodePinOutputs to the value
+// that step wrote: anything else is a pin of the workflow's own. The workflow's
+// steps are read here rather than through claudeCodeWorkflowJobs, whose reader
+// fails the test on a document it cannot follow; a workflow this reader cannot
+// follow is a workflow that must draw a message.
+func claudeCodePinAuditWorkflowPinLines(lines []yamlread.Line) (map[int]bool, map[int]bool, []string) {
+	allowed, pinRead := map[int]bool{}, map[int]bool{}
+
+	mark := func(into map[int]bool, step yamlread.Item) {
+		into[step.Num] = true
+
+		for _, line := range step.Lines {
+			into[line.Num] = true
+		}
+	}
+
+	top, err := yamlread.Mapping(lines)
+	if err != nil {
+		return allowed, pinRead, []string{fmt.Sprintf("read the workflow's keys: %v", err)}
+	}
+
+	jobs, ok := claudeCodePinField(top, "jobs")
+	if !ok || len(jobs.Block) == 0 {
+		return allowed, pinRead, []string{"the workflow has no jobs: block, want the audit's model, publish and checks jobs"}
+	}
+
+	definitions, err := yamlread.Mapping(jobs.Block)
+	if err != nil {
+		return allowed, pinRead, []string{fmt.Sprintf("read the workflow's jobs: %v", err)}
+	}
+
+	var problems []string
+
+	for _, job := range definitions {
+		if len(job.Block) == 0 {
+			continue
+		}
+
+		fields, err := yamlread.Mapping(job.Block)
+		if err != nil {
+			problems = append(problems, fmt.Sprintf("read the keys of the job %s: %v", job.Key, err))
+
+			continue
+		}
+
+		stepsEntry, ok := claudeCodePinField(fields, "steps")
+		if !ok || len(stepsEntry.Block) == 0 {
+			problems = append(problems, fmt.Sprintf("the job %s has no steps: block, so it reads no pin and installs no CLI", job.Key))
+
+			continue
+		}
+
+		steps, err := yamlread.Sequence(stepsEntry.Block)
+		if err != nil {
+			problems = append(problems, fmt.Sprintf("read the steps of the job %s: %v", job.Key, err))
+
+			continue
+		}
+
+		for _, step := range steps {
+			stepProblems, reads := claudeCodePinAuditWorkflowStep(job.Key, step)
+
+			problems = append(problems, stepProblems...)
+
+			if reads {
+				mark(allowed, step)
+			}
+
+			if claudeCodePinIsPinStep(step) {
+				for _, num := range claudeCodePinIntegrityReads(step) {
+					pinRead[num] = true
+				}
+			}
+		}
+	}
+
+	return allowed, pinRead, problems
+}
+
+// claudeCodePinIntegrityRead matches the one sha512- a line that greps the pin
+// file's integrity may hold: the start of its anchored pattern.
+var claudeCodePinIntegrityRead = regexp.MustCompile(`\bgrep\s+-E\s+'\^integrity: sha512-`)
+
+// claudeCodePinIntegrityReads returns the numbers of the pin step's lines that
+// read the pin file's integrity: no comment, one sha512- alone, at the start of
+// an anchored grep -E '^integrity: sha512-... pattern, and a grep that reads
+// the pin file as claudeCodeReadsPin holds it (its own path, or a variable the
+// step assigns it to). Any other line of the step that holds sha512- writes a
+// pin into the workflow (review round 2 of PR 5b, G2).
+func claudeCodePinIntegrityReads(step yamlread.Item) []int {
+	var others []string
+
+	for _, line := range step.Lines {
+		if !claudeCodePinRead.MatchString(line.Text) {
+			others = append(others, line.Text)
+		}
+	}
+
+	context := strings.Join(others, "\n")
+
+	var nums []int
+
+	for _, line := range step.Lines {
+		text := line.Text
+		if strings.HasPrefix(strings.TrimSpace(text), "#") || strings.Count(text, "sha512-") != 1 || !claudeCodePinIntegrityRead.MatchString(text) {
+			continue
+		}
+
+		if claudeCodeReadsPin(context + "\n" + text) {
+			nums = append(nums, line.Num)
+		}
+	}
+
+	return nums
+}
+
+// claudeCodePinIsPinStep reports whether step is the step that reads the pin
+// file: its id is claudeCodePinStepName.
+func claudeCodePinIsPinStep(step yamlread.Item) bool {
+	fields, err := yamlread.Mapping(step.Lines)
+	if err != nil {
+		return false
+	}
+
+	id, ok := claudeCodePinField(fields, "id")
+	if !ok {
+		return false
+	}
+
+	value, err := yamlread.Single(id)
+
+	return err == nil && value == claudeCodePinStepName
+}
+
+// claudeCodePinAuditWorkflowStep returns the problems one step of the audit's
+// workflow draws, and whether it takes a value of the pin from the step that
+// reads the pin file: it is that step itself, or a step whose env: sets one of
+// claudeCodePinOutputs to the value it wrote.
+func claudeCodePinAuditWorkflowStep(job string, step yamlread.Item) ([]string, bool) {
+	fields, err := yamlread.Mapping(step.Lines)
+	if err != nil {
+		return []string{fmt.Sprintf("line %d: read the keys of a step of the job %s: %v", step.Num, job, err)}, false
+	}
+
+	reads := false
+
+	if id, ok := claudeCodePinField(fields, "id"); ok {
+		if value, err := yamlread.Single(id); err == nil && value == claudeCodePinStepName {
+			reads = true
+		}
+	}
+
+	env, ok := claudeCodePinField(fields, "env")
+	if !ok {
+		return nil, reads
+	}
+
+	var problems []string
+
+	for _, line := range env.Block {
+		name, value, ok := strings.Cut(line.Text, ":")
+		if !ok {
+			continue
+		}
+
+		name = strings.TrimSpace(name)
+
+		want, ok := claudeCodePinOutputs[name]
+		if !ok {
+			continue
+		}
+
+		if got := strings.TrimSpace(value); got != want {
+			problems = append(problems, fmt.Sprintf("line %d sets %s to %q, want %q, what the step that reads %s wrote; a value of the workflow's own is a pin no check holds (CLAUDE.md rule 7, issue #277, round L)", line.Num, name, got, want, claudeCodePinFile))
+
+			continue
+		}
+
+		reads = true
+	}
+
+	return problems, reads
 }
 
 // claudeCodePinField returns the entry of fields for key, and false when

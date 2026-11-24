@@ -76,7 +76,9 @@ func Endpoints() []Endpoint { return slices.Clone(endpoints) }
 // endpoints is the endpoint table Allowed checks every call against.
 var endpoints = []Endpoint{
 	{Method: "GET", Pattern: `{repo}/actions/runs/{run}/artifacts\?per_page=100`, Body: BodyNone},
-	{Method: "GET", Pattern: `{repo}/releases/tags/{tag}`, Body: BodyNone},
+	// Row 2: the tag's release, and the latest release, whose tag the result's
+	// must be.
+	{Method: "GET", Pattern: `{repo}/releases/(?:tags/{tag}|latest)`, Body: BodyNone},
 	{Method: "GET", Pattern: `{repo}/attestations/{digest}\?per_page=100`, Body: BodyNone},
 	{Method: "GET", Pattern: `{repo}/git/commits/{sha}`, Body: BodyNone},
 	{Method: "GET", Pattern: `{repo}/git/ref/heads/{branch}`, Body: BodyNone},

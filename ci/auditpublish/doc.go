@@ -3,10 +3,15 @@
 // by the audit workflow's model and publish jobs. It has three subcommands:
 //
 //   - artifacts -job model|publish -gh <path> -tmp <dir>: lists the run's
-//     artifacts and fails unless they are exactly the ones the job expects.
+//     artifacts and fails unless they are exactly the ones the job expects;
+//     then writes the artifact the job downloads, its name, ID and digest, to
+//     <dir>/artifact.json (O_EXCL, mode 0600; a path that exists is outcome
+//     9), which the workflow's download step binds to. A refusal writes
+//     nothing.
 //   - image -result <path> -gh <path> -tmp <dir>: on a read-only client with
-//     the job's token, checks that the result's tag is a release and that its
-//     image digest has the release workflow's provenance attestation.
+//     the job's token, checks that the result's tag is the repository's latest
+//     release and that its image digest has the release workflow's provenance
+//     attestation.
 //   - publish -result <path> -reports <dir> -gh <path> -gitleaks <path> -tmp
 //     <dir>: files each private finding's draft advisory, the report's pull
 //     request and the issues of the previous report's open public findings,

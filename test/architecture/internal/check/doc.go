@@ -103,6 +103,26 @@
 // the step that job runs on the release's own bundle, at the same checkout and
 // setup-go commits (PRD #297 milestone 3).
 //
+// AuditWorkflow holds the scheduled security audit's workflow,
+// .github/workflows/scheduled-security-audit.yml, to PRD #175 milestone 2 and
+// ADR 0040: workflow_dispatch with no inputs as its only trigger, the one guard
+// condition verbatim in every job's if: and in the concurrency group (which
+// falls through to a group of the run's own and never cancels), permissions:
+// {} at the top and exactly each job's read scopes, the security-audit
+// environment, ubuntu-24.04 and a timeout below 360 on every job and a timeout
+// on every step. Each job's steps are a closed list, recognised by name and held
+// in order, with the commands each must run, none missing. Only
+// checkout, upload-artifact and the App token action run, each pinned by commit
+// with a version comment; no Actions cache, job output, set -x, ${{ }} in a
+// script, path under /tmp or /run, secrets[, toJSON(secrets) or secrets:
+// inherit. Every secret, variable, github.token and App token output is read on
+// the one line its step's spec allows, every Go command after the module
+// download runs with GOFLAGS=-mod=readonly GOPROXY=off, every tool version has
+// a Renovate comment and every downloaded one a SHA-256. Two ciphertexts
+// cross, by exact name with a one-day retention. The raw lines also hold the
+// model job free of every check and container, so a document the YAML reader
+// refuses still draws the message that names them.
+//
 // ReleasePleaseWorkflow and ReleasePleaseConfig hold the workflow that
 // proposes the next release, .github/workflows/release-please.yml, and the
 // document it reads, release-please-config.json, to issues #142, #157 and
