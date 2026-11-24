@@ -1,7 +1,15 @@
 // Command auditrun is the launcher the scheduled security audit's model step
 // runs (ADR 0040's model-job amendment, issue #277, PRD #175 milestone 2):
 //
-//	auditrun -claude-tarball <path> -claude-integrity <sha512-...>
+//	auditrun -claude-tarball <path> -claude-integrity <sha512-...> -result-out <path>
+//
+// Once every step passed, it writes the result bytes the audit step read and
+// checked, exactly those, to a new file at the -result-out path (O_EXCL, mode
+// 0600; the workflow names $RUNNER_TEMP/result.json, out of the sandbox's
+// reach), which the workflow's encrypt step reads: nothing reads the result
+// file in the work area again by its path. A path that already exists fails
+// the run with the audit's line and is left as it was; a failed run writes no
+// file.
 //
 // It reads its other inputs from the step's environment through one
 // os.LookupEnv: CLAUDE_CODE_OAUTH_TOKEN, SHIFT2EU_AUDIT_CANARY (64 lower-case
