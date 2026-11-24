@@ -17,6 +17,7 @@ import (
 
 // The pages a site's manifest must list and the checks read.
 const (
+	aboutPage   = "about.html"
 	indexPage   = "index.html"
 	privacyPage = "privacy.html"
 	verifyPage  = "verify.html"

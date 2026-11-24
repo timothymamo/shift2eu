@@ -6,7 +6,7 @@
 //	go run ./ci/sitebuild -out <dir> -archive <file.tar.gz> [-version <vX.Y.Z>] [-site <dir>]
 //
 // It writes exactly these files into -out, which must be missing or empty:
-// index.html, inventory.html, privacy.html and verify.html, rendered from the pages of -site
+// about.html, index.html, inventory.html, privacy.html and verify.html, rendered from the pages of -site
 // (site/ of the module by default); style.<h>.css and page.<h>.js, site/style.css
 // and site/page.js byte for byte; wasm_exec.<h>.js, the building toolchain's
 // $(go env GOROOT)/lib/wasm/wasm_exec.js byte for byte; module.<h>.js, the

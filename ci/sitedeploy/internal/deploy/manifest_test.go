@@ -44,6 +44,13 @@ func TestParseManifest(t *testing.T) {
 			want: deploy.Manifest{Version: earlierVersion, Files: []deploy.ManifestFile{{Path: "index.html", SHA256: emptySHA256}}},
 		},
 		{
+			name: "a manifest naming the about page",
+			data: manifestNaming(t, earlierVersion, []manifestFileDoc{
+				{Path: "about.html", SHA256: emptySHA256},
+			}),
+			want: deploy.Manifest{Version: earlierVersion, Files: []deploy.ManifestFile{{Path: "about.html", SHA256: emptySHA256}}},
+		},
+		{
 			name: "a manifest that names no file",
 			data: []byte(`{"version": "v1.0.0", "files": []}`),
 			want: deploy.Manifest{Version: "v1.0.0"},
@@ -147,6 +154,13 @@ func TestParseManifestRefusesHostileData(t *testing.T) {
 		{
 			name:      "a path that is no file of a bundle",
 			data:      []byte(valid(file("index.css", emptySHA256))),
+			wantField: "path",
+		},
+		{
+			// Issue #528: the bundle's pages are its known set, so a page that
+			// the site does not hold is no bundle file either.
+			name:      "a page the bundle does not hold",
+			data:      []byte(valid(file("elsewhere.html", emptySHA256))),
 			wantField: "path",
 		},
 		{

@@ -341,7 +341,8 @@ gh run view <run ID> -R <owner>/shift2eu --json jobs --jq '.jobs[] | select(.nam
 
 ```bash
 # Or roll back with your own key (versioning on; also after the 30-day window): every object a deploy writes but
-# the content-addressed assets, which keep their names and are never deleted: the four pages, LICENSE, NOTICE and manifest.json
+# the content-addressed assets, which keep their names and are never deleted: the pages $GOOD's manifest lists (five from
+# issue #528 on, the four without about.html before it; ADR 0042, amendment for issue #528), LICENSE, NOTICE and manifest.json
 scw iam api-key update "$SCW_ACCESS_KEY" default-project-id="$P"   # its default project the site's (R5)
 GOOD='<the last good release, vX.Y.Z>'; T='<a UTC time after its deploy and before the bad write, such as 2026-12-01T10:00:00Z>'
 W="$(mktemp -d)"   # scratch files outside the checkout
@@ -354,18 +355,22 @@ gh attestation verify "$W/shift2eu-site_$GOOD.tar.gz" --repo <owner>/shift2eu \
 jq -r .version "$W/good-manifest.json"   # PASS: the value of $GOOD
 # Each key's newest version written before $T, copied over the current one, only after a verified manifest
 test -s "$W/good-manifest.json" || echo "FAIL no verified manifest of $GOOD: the copy is skipped"
-test -s "$W/good-manifest.json" && for k in index.html inventory.html privacy.html verify.html LICENSE NOTICE manifest.json; do
+pages="$(jq -r '.files[].path | select(test("^(about|index|inventory|privacy|verify)\\.html$"))' "$W/good-manifest.json")"; echo $pages   # PASS: about.html index.html inventory.html privacy.html verify.html (the four without about.html before issue #528)
+test -s "$W/good-manifest.json" && for k in $pages LICENSE NOTICE manifest.json; do
   # LastModified prints as +00:00 or Z, with or without milliseconds: both sides compared as epoch seconds
   v="$(aws s3api list-object-versions --bucket "$B" --prefix "$k" --output json | jq -r --arg k "$k" --arg t "$T" 'def s: sub("\\.[0-9]+"; "") | sub("\\+00:00$"; "Z") | fromdateiso8601; [.Versions[]? | select(.Key == $k and (.LastModified | s) < ($t | s))] | max_by(.LastModified | s) | .VersionId // empty')"
   if [ -n "$v" ] && aws s3api copy-object --bucket "$B" --key "$k" --copy-source "$B/$k?versionId=$v" --query VersionId --output text; then echo "PASS $k restored from $v"; else echo "FAIL $k: no version before $T, or the copy failed"; fi
-done   # PASS: seven "PASS ... restored" lines, each after a new version ID
+done   # PASS: eight "PASS ... restored" lines (seven before issue #528), each after a new version ID
 # Each restored object against the good release's manifest
-for k in index.html inventory.html privacy.html verify.html LICENSE NOTICE; do
+for k in $pages LICENSE NOTICE; do
   want="$(jq -r --arg k "$k" '.files[] | select(.path == $k) | .sha256' "$W/good-manifest.json")"
   got="$(aws s3 cp "s3://$B/$k" - | shasum -a 256 | cut -d' ' -f1)"
   [ -n "$want" ] && [ "$got" = "$want" ] && echo "PASS $k is $GOOD's" || echo "FAIL $k: $got, $GOOD's manifest says $want"
-done   # PASS: six "PASS ... is <GOOD>'s" lines
+done   # PASS: seven "PASS ... is <GOOD>'s" lines (six before issue #528)
 aws s3 cp "s3://$B/manifest.json" - | cmp -s - "$W/good-manifest.json" && echo "PASS manifest.json is $GOOD's" || echo "FAIL manifest.json is not $GOOD's"
+# $GOOD before issue #528: the newer release's about.html has no earlier version and is still served (ADR 0042, amendment
+# for issue #528). Only when it should not stay until the fixing release, remove it (a delete marker), then purge the cache
+test -s "$W/good-manifest.json" && { printf '%s\n' $pages | grep -qxF about.html || echo "about.html stays served: aws s3api delete-object --bucket $B --key about.html to remove it"; }
 # FAIL a line: set another $T and run this whole block again (the lines below have removed $W)
 rm -r "$W"
 scw iam api-key update "$SCW_ACCESS_KEY" default-project-id="$ADMIN_PROJECT"   # back to the admin project
@@ -375,7 +380,7 @@ scw iam api-key update "$SCW_ACCESS_KEY" default-project-id="$ADMIN_PROJECT"   #
 
 ```bash
 # Also when the bad write did not come from a release run (no release.yml run wrote it: a leaked deploy key).
-# The two blocks above restore only the seven fixed keys: an overwritten content-addressed asset and objects at new paths
+# The two blocks above restore only the fixed keys (the pages, LICENSE, NOTICE and manifest.json): an overwritten content-addressed asset and objects at new paths
 # (a look-alike page, an sw.js) would stay served. First R11: rotate the deploy key, and its old key deleted
 scw iam api-key list bearer-id="$A"   # PASS: one key, the new one (R11)
 scw iam api-key update "$SCW_ACCESS_KEY" default-project-id="$P"   # own key, its default project the site's (R5)
@@ -450,7 +455,7 @@ aws s3api list-objects-v2 --bucket "$B" --output json | jq -c --slurpfile known 
 # A version that cannot be downloaded: the key a FAIL, neither restored nor deleted
 H='def want: "public, max-age=300" as $s | "public, max-age=31536000, immutable" as $i
   | if . == "manifest.json" then ["application/json", $s, null]
-    elif test("^(index|inventory|privacy|verify)\\.html$") then ["text/html; charset=utf-8", $s, null]
+    elif test("^(about|index|inventory|privacy|verify)\\.html$") then ["text/html; charset=utf-8", $s, null]
     elif . == "LICENSE" or . == "NOTICE" then ["text/plain; charset=utf-8", $s, null]
     elif test("^style\\.[0-9a-f]{16}\\.css$") then ["text/css; charset=utf-8", $i, null]
     elif test("^(page|wasm_exec)\\.[0-9a-f]{16}\\.js$") then ["text/javascript; charset=utf-8", $i, null]

@@ -580,3 +580,27 @@ accepted; and whether `ListBucket` was allowed, which decides `-list-bucket` abo
 - Milestone 4 amends this ADR: the origins' plain-HTTP answers, R7's result and the `-list-bucket`
   decision, the apex redirect's means, provider and certificate authority, Edge Services' headers and
   compression, the HSTS outcome or waiver, whether preload is pursued and the subdomains at submission.
+
+## Amendment: a fifth page, about.html (issue #528)
+
+2026-11-24. Issue #528 adds an About page (ADR 0036, amendment for issue #528). The decision above is
+unchanged; where it says "four pages", read the five pages from that issue on.
+
+- **The bundle has five pages:** `about.html`, `index.html`, `inventory.html`, `privacy.html` and
+  `verify.html`. `ci/sitedeploy`'s bundle check requires exactly those five, with one asset of each kind
+  and the two legal texts, and uploads them last as before, with the `*.html` headers of the table above.
+  `ci/sitecheck` refuses a release manifest that lists no `about.html`, as it refuses one without
+  `index.html`, `privacy.html` or `verify.html`.
+- **Rolling back across issue #528:** a rollback stays the maintainer's R12 restore with their own key,
+  as Recovery (above) says; the deploy refuses it by design. To a release before issue #528, the restore
+  copies the four pages that existed then, with `LICENSE`, `NOTICE` and `manifest.json`, from their
+  earlier versions; `about.html` has no earlier version to copy. R12 takes the pages to restore and
+  check from the good release's manifest, and its headers check knows `about.html`, so the same block
+  serves a rollback to either side of issue #528. The `ci/sitecheck` of a release at or
+  after issue #528 refuses the restored manifest, which lists no `about.html`, so the live check fails
+  until a fixing release ships, as Recovery expects.
+- **The newer About page outlives such a rollback:** the deploy never deletes, and an earlier release has
+  no `about.html` to restore, so the newer release's `about.html` stays in the bucket and is still served,
+  with that release's footer version and links, beside the older pages. The maintainer removes it by hand
+  (their own key, then an Edge Services cache purge, R12) when it should not stay; the fixing release that
+  follows a rollback uploads it again.

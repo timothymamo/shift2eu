@@ -670,9 +670,10 @@ func TestEveryPageCarriesTheFooterStatement(t *testing.T) {
 
 // TestFootersLinkTheSiteAndShowTheVersion pins the rest of the footer (issue
 // #373, item 09): the privacy and verification links the other pages already
-// carry, and the version the build was given, never a hard-coded one. Both builds
-// are read, so the check tells the untagged version from the tagged one. The
-// version sits in the one element whose id is site-version (PRD #297 milestone 3,
+// carry, and the about link every other page carries it as it carries those two
+// (issue #528), and the version the build was given, never a hard-coded one. Both
+// builds are read, so the check tells the untagged version from the tagged one.
+// The version sits in the one element whose id is site-version (PRD #297 milestone 3,
 // issue #346): the live site check reads the deployed version from it and matches
 // it against the repository's tag list, so the text is the version alone, as the
 // page renders it.
@@ -710,6 +711,16 @@ func TestFootersLinkTheSiteAndShowTheVersion(t *testing.T) {
 						if got, ok := links[href]; !ok || got != want {
 							t.Errorf("%s's footer links %q with the text %q, want a link to %s reading %q (issue #373, item 09)",
 								page, href, got, href, want)
+						}
+					}
+
+					// Every other page's footer links the about page, as it links the
+					// privacy and verification pages (issue #528). The about page's own
+					// footer needs no link to itself.
+					if page != aboutPageName {
+						if _, ok := links[aboutPageName]; !ok {
+							t.Errorf("%s's footer holds no link to %s, want the about page in every other page's footer, as the privacy and verification pages are (issue #528)",
+								page, aboutPageName)
 						}
 					}
 

@@ -160,6 +160,21 @@ func verifyPage(withHSTSWaived bool) []byte {
 	return []byte(body)
 }
 
+// aboutPage is about.html (issue #528): the About page, the site's fifth page,
+// which a release's manifest lists and the host serves with the others. It
+// carries no statement the checks read, so its bytes only have to be the
+// manifest's.
+func aboutPage() []byte {
+	return []byte(`<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><title>About</title></head>
+<body>
+<main><h1>About the maintainer</h1></main>
+</body>
+</html>
+`)
+}
+
 // sha256Hex returns the lowercase hexadecimal SHA-256 of b, as a manifest holds
 // it.
 func sha256Hex(b []byte) string {
@@ -860,7 +875,7 @@ func newSite(t *testing.T, opts ...siteOption) *site {
 		apexHTTP:        newContent(),
 		routes:          newRouteTable(),
 		manifestVersion: testVersion,
-		manifestPaths:   []string{"index.html", "privacy.html", "verify.html", "style.css", testModuleScript},
+		manifestPaths:   []string{"about.html", "index.html", "privacy.html", "verify.html", "style.css", testModuleScript},
 		digests:         make(map[string]string),
 		records: livecheck.Records{
 			HSTS:    parsedHSTSRecord(t, hstsRecordMet),
@@ -928,6 +943,11 @@ func (s *site) serveDefaultContent(t *testing.T) {
 		status: http.StatusOK,
 		header: http.Header{"Cache-Control": {"public, max-age=300"}},
 		body:   privacyPage(true, false),
+	})
+	s.hostTLS.set("/about.html", served{
+		status: http.StatusOK,
+		header: http.Header{"Cache-Control": {"public, max-age=300"}},
+		body:   aboutPage(),
 	})
 	s.hostTLS.set("/verify.html", served{
 		status: http.StatusOK,

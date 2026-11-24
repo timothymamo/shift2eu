@@ -18,10 +18,10 @@ const ManifestName = "manifest.json"
 const maxManifestBytes = 1 << 20
 
 // The names a bundle may hold besides manifest.json (doc.go, "The bundle it
-// consumes"): the four pages, the four content-addressed assets and the two
+// consumes"): the five pages, the four content-addressed assets and the two
 // legal texts. Nothing else can become an object key.
 var (
-	pageName  = regexp.MustCompile(`^(?:index|inventory|privacy|verify)\.html$`)
+	pageName  = regexp.MustCompile(`^(?:about|index|inventory|privacy|verify)\.html$`)
 	assetName = regexp.MustCompile(`^(?:style\.([0-9a-f]{16})\.css|(?:page|wasm_exec|module)\.([0-9a-f]{16})\.js)$`)
 )
 
