@@ -136,8 +136,12 @@ const claudeProjectSettingsPath = ".claude/settings.json"
 // `cat /proc/*/environ` reach it, so the directory is refused whole. `ps e*` is
 // `ps` with the environment column, `make -p`/`--print-data-base` print the
 // environment of every target, `Bash(*daemon.env*)` the deck's own file of keys,
-// and a `$NAME` that expands a key (`*$*API_KEY*`, `*$*TOKEN*`) is refused with
-// it. The Read rules start with `//`: a single leading `/` would be relative to
+// `Bash(*.config/dot-agent-deck*)` the directory that holds it and everything
+// else the deck keeps there, and a `$NAME` that expands a key (`*$*API_KEY*`,
+// `*$*TOKEN*`) is refused with it; `&>` redirects both streams and `[0-9]>`
+// redirects one of them by number, and Claude Code may not strip either before
+// matching the exact rule, so each printer names those forms too.
+// The Read rules start with `//`: a single leading `/` would be relative to
 // the settings file's project root and never match the real path.
 var claudeProjectEnvDeny = []string{
 	"Bash(env)",
@@ -151,14 +155,22 @@ var claudeProjectEnvDeny = []string{
 	// numbered and unnumbered forms are named here too.
 	"Bash(set >*)",
 	"Bash(set [0-9]>*)",
+	"Bash(set &>*)",
 	"Bash(export)",
 	"Bash(export >*)",
 	"Bash(export [0-9]>*)",
+	"Bash(export &>*)",
 	"Bash(export -p*)",
 	"Bash(declare)",
+	"Bash(declare >*)",
+	"Bash(declare [0-9]>*)",
+	"Bash(declare &>*)",
 	"Bash(declare -p*)",
 	"Bash(declare -x*)",
 	"Bash(typeset)",
+	"Bash(typeset >*)",
+	"Bash(typeset [0-9]>*)",
+	"Bash(typeset &>*)",
 	"Bash(typeset -p*)",
 	"Bash(typeset -x*)",
 	"Bash(compgen -v*)",
@@ -170,6 +182,9 @@ var claudeProjectEnvDeny = []string{
 	"Bash(make --print-data-base*)",
 	"Bash(ps e*)",
 	"Bash(*daemon.env*)",
+	// The deck's whole key directory, not only the one file this project knows the
+	// name of: `grep -r .` over it prints every value in it.
+	"Bash(*.config/dot-agent-deck*)",
 	"Bash(*$*API_KEY*)",
 	"Bash(*$*TOKEN*)",
 	"Read(//proc)",

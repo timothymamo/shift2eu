@@ -68,6 +68,21 @@ func TestTesterPromptRepeatsRule3(t *testing.T) {
 	t.Errorf("%s: the %s role's prompt holds no line with both %q and %q, so the rule that a tester broke is not repeated in the text it starts from (CLAUDE.md, rule 3; issue #540)", deckConfig, testerRole, "printenv", "rule 3")
 }
 
+// TestTesterPromptSearchesWithTheGrepTool pins the other half of the refusal: a
+// tester that searches with a quoted word in bash (`grep -rn 'env' .`) has its
+// command refused, because a quoted printer is still a printer, and the refused
+// call halts the unit. The prompt therefore names the grep tool, which searches
+// the files without a shell command to refuse.
+func TestTesterPromptSearchesWithTheGrepTool(t *testing.T) {
+	t.Parallel()
+
+	prompt := testerPrompt(t)
+
+	if !strings.Contains(prompt, "grep tool") {
+		t.Errorf("%s: the %s role's prompt never names the %q, so a tester searching for a word in the code writes a `grep` command in bash, and the refusal of a quoted printer halts the unit (CLAUDE.md, rule 3; issue #540)", deckConfig, testerRole, "grep tool")
+	}
+}
+
 // TestGitignoreIgnoresTheTesterScratchDirectory pins the other half of naming
 // the directory: a scratch file must not show in git status, or a tester could
 // commit one, and nothing under it belongs in git.

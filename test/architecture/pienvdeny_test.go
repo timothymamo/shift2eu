@@ -82,6 +82,45 @@ func TestPiEnvDenyListIsARefusalDocument(t *testing.T) {
 	}
 }
 
+// TestPiEnvDenyListPatternsUseTheNarrowestSyntax keeps every pattern to the
+// syntax Go's RE2 and JavaScript read the same way. The extension compiles the
+// patterns with JavaScript's `new RegExp`, and a construct the two engines read
+// differently (a group extension, a Unicode property, a POSIX character class)
+// refuses nothing in pi while the tables below still pass: the tables see what
+// Go reads, not what pi does. A pattern a later change writes for Go alone is a
+// hole no other test here can see.
+func TestPiEnvDenyListPatternsUseTheNarrowestSyntax(t *testing.T) {
+	t.Parallel()
+
+	data := readRepositoryFile(t, piEnvDenyListPath)
+
+	var list piEnvDenyList
+	if err := json.Unmarshal(data, &list); err != nil {
+		t.Fatalf("%s: %v", piEnvDenyListPath, err)
+	}
+
+	forbidden := []struct {
+		name      string
+		construct string
+	}{
+		{name: "a group extension, an inline flag or a named group, which RE2's own syntax does not have", construct: "(?"},
+		{name: "a Unicode property escape, which RE2 and JavaScript do not spell the same way", construct: `\p`},
+		{name: "a negated Unicode property escape, which RE2 and JavaScript do not spell the same way", construct: `\P`},
+		{name: "a literal-quote escape, which RE2 does not have", construct: `\Q`},
+		{name: "a start-or-end anchor, which RE2 and JavaScript do not spell the same way", construct: `\z`},
+		{name: "a start-of-text anchor, which RE2 and JavaScript do not spell the same way", construct: `\A`},
+		{name: "a POSIX character class, which JavaScript does not have", construct: "[[:"},
+	}
+
+	for i, pattern := range list.Patterns {
+		for _, bad := range forbidden {
+			if strings.Contains(pattern, bad.construct) {
+				t.Errorf("%s: patterns[%d] = %q holds %s (%q): pi matches with JavaScript's regular expressions, which read that construct differently from Go's RE2 or not at all, so the pattern refuses nothing while the tables below still pass (issue #540)", piEnvDenyListPath, i, pattern, bad.name, bad.construct)
+			}
+		}
+	}
+}
+
 // TestPiEnvDenyExtensionHooksTheToolCall pins the extension's wiring: it reads
 // the pattern list by name and it hooks pi's `tool_call` event, the one that
 // sees a bash command before the command runs. An extension that hooks no event
@@ -111,6 +150,7 @@ func TestPiEnvDenyExtensionHooksTheToolCall(t *testing.T) {
 		{name: "the fail-closed reason", text: "could not be loaded"},
 		{name: "the /proc path", text: "/proc"},
 		{name: "the deck's environment file", text: "daemon.env"},
+		{name: "the deck's key directory", text: ".config/dot-agent-deck"},
 	} {
 		if !strings.Contains(text, want.text) {
 			t.Errorf("%s: the extension does not name %s (%q), so it refuses no command (issue #540)", piEnvDenyExtension, want.name, want.text)
@@ -302,6 +342,54 @@ func TestPiEnvDenyListRefusesPrintingTheEnvironment(t *testing.T) {
 		`\env`,
 		`\printenv`,
 		`\env | grep KEY`,
+		// A redirect in front of the command word changes nothing: bash runs the
+		// printer and writes, or pipes on, what it printed.
+		"2>&1 env",
+		"</dev/null env",
+		">out env",
+		"> out env | grep K",
+		">x set",
+		"2>x export",
+		"2>&1 declare -p",
+		"2>/dev/null printenv",
+		// `env` with an option that takes a value of its own: the value is the
+		// option's argument, not a command, so bare `env` prints.
+		"env -u FOO",
+		"env -u FOO | grep K",
+		"env -C /tmp",
+		"env --unset FOO",
+		// A wrapper the list does not name yet, and a wrapper's option with a
+		// value: each runs `env` as the command it was given.
+		"setsid env",
+		"flock x env",
+		"strace env",
+		"watch env",
+		"script -c env",
+		"unbuffer env",
+		"chroot / env",
+		"su -c env",
+		"runuser env",
+		"fish -c env",
+		"sudo -u x env",
+		"timeout -s KILL 5 env",
+		"xargs -a f env",
+		"stdbuf -o L env",
+		"exec -a x env",
+		// The deck's key directory, read through bash instead of by a file tool:
+		// every file in it is a key, or a file that leads to one.
+		"grep -r . ~/.config/dot-agent-deck",
+		"cat ~/.config/dot-agent-deck/*",
+		"cat ~/.config/dot-agent-deck/daemon.e*",
+		// A /proc path that is relative, chdir-relative or globbed reaches the same
+		// file as the absolute one.
+		"cat ../../../../proc/self/environ",
+		"cd / && cat proc/self/environ",
+		"cat /pro?/self/environ",
+		// The environment as an interpreter spells it, in the cheap form an agent
+		// would type when the shell's own printers are refused.
+		"ruby -e 'puts ENV.to_a'",
+		`ruby -e 'p ENV["X"]'`,
+		"python3 -c 'from os import environ as e; print(e)'",
 	}
 
 	for _, command := range cases {
@@ -368,6 +456,25 @@ func TestPiEnvDenyListAllowsTheWork(t *testing.T) {
 		"env GOTOOLCHAIN=local make check 2>&1",
 		"make check 2>&1",
 		"go test ./... 2>&1 | tail",
+		// A redirect in front of a command that prints nothing, in the forms the
+		// agents write them: rule 10's backgrounded run verbatim, and the bare
+		// redirects on `make`, on `go`'s own env and on a file.
+		"cd /x && { make check < /dev/null > /tmp/log 2>&1 & echo $!; ps -o lstart= -p $!; }",
+		"</dev/null make check",
+		">log 2>&1 make check",
+		"2>/dev/null go env GOPATH",
+		"echo x > env",
+		"cat < set",
+		"sort <env.txt",
+		"diff a b > set.txt",
+		// A wrapper with an argument of its own in front of a command that prints
+		// nothing, and the wrapper's own option with a value.
+		"timeout 600 make check",
+		"nice -n 10 make check",
+		// The repository's own deck files: its configuration and the directory the
+		// deck writes a task and a report into.
+		"cat .dot-agent-deck.toml",
+		"ls .dot-agent-deck/",
 	}
 
 	for _, command := range cases {
