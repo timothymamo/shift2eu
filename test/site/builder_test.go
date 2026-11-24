@@ -32,9 +32,10 @@ import (
 // byte-identical.
 
 // pageNames are the bundle's HTML pages. inventory.html is the page that shows
-// how to build an inventory for each source (issue #373, item 15), so it carries
-// every per-page rule the other pages carry.
-var pageNames = []string{"index.html", "inventory.html", "privacy.html", "verify.html"}
+// how to build an inventory for each source (issue #373, item 15), and
+// about.html is the maintainer's About page (issue #528), so each carries every
+// per-page rule the other pages carry.
+var pageNames = []string{"about.html", "index.html", "inventory.html", "privacy.html", "verify.html"}
 
 // licenseFiles are the files the project redistributes beside its work: the
 // Apache License 2.0 and the NOTICE attribution Apache-2.0 section 4 asks every
@@ -71,8 +72,8 @@ func wantedFileNames(t *testing.T, bundle *bundle) []string {
 	return want
 }
 
-// TestBundleHoldsTheContractFiles pins the bundle's file set: the three pages,
-// the manifest, the licence and the NOTICE attribution, and one
+// TestBundleHoldsTheContractFiles pins the bundle's file set: the site's pages
+// (pageNames), the manifest, the licence and the NOTICE attribution, and one
 // content-addressed file of each kind, and nothing else. The site ships no
 // favicon, site/records/ is never bundled (milestone 4 fills it), and a stray
 // file would be deployed without a manifest entry.

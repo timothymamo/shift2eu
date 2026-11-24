@@ -17,7 +17,8 @@
 // Config.Bundle is the root of the bundle ci/sitebuild writes (ADR 0036),
 // exactly these flat files, no directory:
 //
-//   - index.html, inventory.html, privacy.html, verify.html: the pages;
+//   - about.html, index.html, inventory.html, privacy.html, verify.html: the
+//     pages;
 //   - style.<h>.css, page.<h>.js, wasm_exec.<h>.js, module.<h>.js: the
 //     content-addressed assets, <h> the first 16 lowercase hexadecimal
 //     characters of the SHA-256 of the file's bytes;
@@ -31,7 +32,7 @@
 // parse, its version is not Config.Version, a manifest path is not one of the
 // names above (so no "/", "..", "\", "%", control character, absolute or
 // empty path can become an object key), the manifest does not list exactly
-// the four pages, one asset of each kind (style, page script, wasm_exec,
+// the five pages, one asset of each kind (style, page script, wasm_exec,
 // module), LICENSE and NOTICE, an asset's <h> is not its digest's prefix, a
 // listed file is missing or its SHA-256 differs, or the bundle holds a file
 // the manifest does not list. The earlier releases' manifests
@@ -71,7 +72,7 @@
 //     ErrList, never ErrUpload: nothing was uploaded.
 //  4. Uploads with PUT only, path-style (<Endpoint>/<Bucket>/<key>): first
 //     every content-addressed asset, then manifest.json, then the names
-//     that hold no digest last (LICENSE, NOTICE and the four pages), each
+//     that hold no digest last (LICENSE, NOTICE and the five pages), each
 //     group in sorted order. The first failed upload stops the run with
 //     an error, so a failure before the pages leaves every page as it was.
 //     Deploy never sends DELETE, nor any request but GET (live page, listing)

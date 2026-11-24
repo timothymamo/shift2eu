@@ -19,7 +19,7 @@ const (
 // readBundle reads and checks the bundle against its manifest (doc.go, "The
 // bundle it consumes"): the manifest parses and names version, every listed
 // file is present, a regular file, of its digest and, for an asset, named
-// after it, the manifest lists exactly the four pages, one asset of each
+// after it, the manifest lists exactly the five pages, one asset of each
 // kind, LICENSE and NOTICE (checkComplete), and the bundle holds no file the
 // manifest does not list. The files it returns are every listed file and
 // manifest.json, by name.
@@ -94,16 +94,16 @@ func readBundle(bundle fs.FS, version string) (Manifest, map[string][]byte, erro
 }
 
 // bundleKinds is what a complete bundle's manifest lists besides
-// manifest.json: each of the four pages, one asset of each kind and each of
+// manifest.json: each of the five pages, one asset of each kind and each of
 // the two legal texts.
 var bundleKinds = []string{
-	"index.html", "inventory.html", "privacy.html", "verify.html",
+	"about.html", "index.html", "inventory.html", "privacy.html", "verify.html",
 	"style", "page", "wasm_exec", "module",
 	licenseName, noticeName,
 }
 
 // checkComplete holds the manifest of the bundle to deploy to exactly the
-// four pages, one asset of each kind (style, page script, wasm_exec, module),
+// five pages, one asset of each kind (style, page script, wasm_exec, module),
 // LICENSE and NOTICE, so a subset of a bundle, or one with two of a kind, is
 // never deployed. The release manifests the guard and the listing read are
 // not held to it.

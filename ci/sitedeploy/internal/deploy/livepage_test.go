@@ -22,9 +22,9 @@ const builtVersion = "v0.13.0"
 // whole package.
 const buildTimeout = 5 * time.Minute
 
-// builtPages are the four pages ci/sitebuild writes (ADR 0036), each with the
-// footer LiveVersion reads.
-var builtPages = []string{"index.html", "inventory.html", "privacy.html", "verify.html"}
+// builtPages are the five pages ci/sitebuild writes (ADR 0036, issue #528),
+// each with the footer LiveVersion reads.
+var builtPages = []string{"about.html", "index.html", "inventory.html", "privacy.html", "verify.html"}
 
 // TestLiveVersionOnTheBuiltPages pins LiveVersion against the real build rather
 // than a fixture: every page ci/sitebuild writes ends its footer's paragraph
@@ -157,7 +157,7 @@ func buildSite(t *testing.T, version string) string {
 	return out
 }
 
-// trackTemplates opens the four page templates the builder reads from site/, so
+// trackTemplates opens every page template the builder reads from site/, so
 // go test's result cache records them and a footer edit invalidates a cached
 // PASS: the builder is a child process, whose reads the cache cannot see.
 func trackTemplates(t *testing.T, root string) {
