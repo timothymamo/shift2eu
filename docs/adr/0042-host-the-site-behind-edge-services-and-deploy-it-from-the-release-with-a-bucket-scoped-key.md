@@ -588,11 +588,12 @@ unchanged; where it says "four pages", read the five pages from that issue on.
   and the two legal texts, and uploads them last as before, with the `*.html` headers of the table above.
   `ci/sitecheck` refuses a release manifest that lists no `about.html`, as it refuses one without
   `index.html`, `privacy.html` or `verify.html`.
-- **Rolling back across issue #528:** the `ci/sitedeploy` and `ci/sitecheck` of a release at or after
-  issue #528 refuse the manifest of an earlier release, which has no `about.html`. A rollback to such a
-  release (Recovery, above) therefore runs that release's own programs, as its own `release.yml` run built
-  them (re-running that run's deploy job), or the maintainer's R12 restore with their own key; never the
-  newer programs on the older bundle.
+- **Rolling back across issue #528:** a rollback stays the maintainer's R12 restore with their own key,
+  as Recovery (above) says; the deploy refuses it by design. To a release before issue #528, the restore
+  copies the four pages that existed then, with `LICENSE`, `NOTICE` and `manifest.json`, from their
+  earlier versions; `about.html` has no earlier version to copy. The `ci/sitecheck` of a release at or
+  after issue #528 refuses the restored manifest, which lists no `about.html`, so the live check fails
+  until a fixing release ships, as Recovery expects.
 - **The newer About page outlives such a rollback:** the deploy never deletes, and an earlier release has
   no `about.html` to restore, so the newer release's `about.html` stays in the bucket and is still served,
   with that release's footer version and links, beside the older pages. The maintainer removes it by hand
