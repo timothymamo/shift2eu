@@ -2589,16 +2589,16 @@ base64 -d < <a scratch file> | grep -nw schedule
 the report, then milestone 3's schedule.
 
 ```bash
-# Mac (admin), as yourself: the dispatch time, the <dispatch time>, then the dispatch
-date -u +%Y-%m-%dT%H:%M:%SZ
+# Mac (admin), as yourself: the newest dispatched run before the dispatch, the <previous id>, then the dispatch
+gh run list --repo timothymamo/shift2eu --workflow scheduled-security-audit.yml --event workflow_dispatch --limit 1 --json databaseId --jq '.[].databaseId'
+# PASS: one ID, the <previous id>, or no output (no dispatched run yet); FAIL: an error
 gh workflow run scheduled-security-audit.yml --repo timothymamo/shift2eu --ref main
 # PASS: the workflow_dispatch event created; FAIL: an error
 
 # The run: the dispatch is asynchronous, so the newest run may still be the previous one
-gh run list --repo timothymamo/shift2eu --workflow scheduled-security-audit.yml --event workflow_dispatch --limit 1 \
-  --json databaseId,createdAt,status,conclusion --jq '.[] | [.databaseId, .createdAt, .status, .conclusion] | @tsv'
-# PASS: createdAt later than the <dispatch time>; its databaseId is the <run_id>
-# FAIL: createdAt earlier: the previous run; wait a few seconds and list again
+gh run list --repo timothymamo/shift2eu --workflow scheduled-security-audit.yml --event workflow_dispatch --limit 1 --json databaseId --jq '.[].databaseId'
+# PASS: an ID other than the <previous id>: the <run_id>
+# FAIL: the <previous id> or no output: the run is not listed yet; wait a few seconds and list again
 gh run watch <run_id> --repo timothymamo/shift2eu --exit-status > /dev/null && echo succeeded
 # PASS, once it finishes: succeeded; FAIL: no "succeeded" line (the run failed: step 11)
 gh pr list --repo timothymamo/shift2eu --author app/shift2eu-audit --json number,headRefName --jq '.[] | [.number, .headRefName] | @tsv'
@@ -2655,8 +2655,18 @@ of yours there cannot be approved (`require_last_push_approval`) and breaks the 
 check.
 
 ```bash
-# Mac (admin), as yourself
+# Mac (admin), as yourself: the newest dispatched run before the dispatch, the <previous id>, then the dispatch
+gh run list --repo timothymamo/shift2eu --workflow scheduled-security-audit.yml --event workflow_dispatch --limit 1 --json databaseId --jq '.[].databaseId'
+# PASS: one ID, the <previous id>, or no output (no dispatched run yet); FAIL: an error
 gh workflow run scheduled-security-audit.yml --repo timothymamo/shift2eu --ref main
+# PASS: the workflow_dispatch event created; FAIL: an error
+
+# The run: the dispatch is asynchronous, so the newest run may still be the previous one
+gh run list --repo timothymamo/shift2eu --workflow scheduled-security-audit.yml --event workflow_dispatch --limit 1 --json databaseId --jq '.[].databaseId'
+# PASS: an ID other than the <previous id>: the <run_id>
+# FAIL: the <previous id> or no output: the run is not listed yet; wait a few seconds and list again
+gh run watch <run_id> --repo timothymamo/shift2eu --exit-status > /dev/null && echo succeeded
+# PASS, once it finishes: succeeded; FAIL: no "succeeded" line (the run failed: step 11)
 # PASS: its report PR opens like a scheduled run's (step 8's PR and artifact checks)
 ```
 
@@ -2686,8 +2696,9 @@ gh variable set AUDIT_PUBLISH_PUBLIC_KEY --env security-audit --repo timothymamo
 ls <the App's new key file> <the model key's new private file> <the publish key's new private file>
 # PASS: No such file or directory (each one you stored, once you have deleted it)
 
-# A test run of the new secrets: the dispatch time, the <dispatch time>, then the dispatch
-date -u +%Y-%m-%dT%H:%M:%SZ
+# A test run of the new secrets: the newest dispatched run before the dispatch, the <previous id>, then the dispatch
+gh run list --repo timothymamo/shift2eu --workflow scheduled-security-audit.yml --event workflow_dispatch --limit 1 --json databaseId --jq '.[].databaseId'
+# PASS: one ID, the <previous id>, or no output (no dispatched run yet); FAIL: an error
 gh workflow run scheduled-security-audit.yml --repo timothymamo/shift2eu --ref main
 # PASS: the workflow_dispatch event created; FAIL: an error
 ```
@@ -2698,10 +2709,9 @@ gh api repos/timothymamo/shift2eu/environments/security-audit/secrets --jq '[.se
 # PASS: ["AUDIT_APP_PRIVATE_KEY","AUDIT_FINGERPRINT_KEY","AUDIT_MODEL_PRIVATE_KEY","AUDIT_PUBLISH_PRIVATE_KEY","CLAUDE_CODE_OAUTH_TOKEN"]
 gh api repos/timothymamo/shift2eu/environments/security-audit/variables --jq '[.variables[].name] | sort | tojson'
 # PASS: ["AUDIT_APP_CLIENT_ID","AUDIT_MODEL_PUBLIC_KEY","AUDIT_PUBLISH_PUBLIC_KEY"]
-gh run list --repo timothymamo/shift2eu --workflow scheduled-security-audit.yml --event workflow_dispatch --limit 1 \
-  --json databaseId,createdAt,status,conclusion --jq '.[] | [.databaseId, .createdAt, .status, .conclusion] | @tsv'
-# PASS: createdAt later than the action's <dispatch time>; its databaseId is the <run_id>
-# FAIL: createdAt earlier: the previous run (the dispatch is asynchronous); wait a few seconds and list again
+gh run list --repo timothymamo/shift2eu --workflow scheduled-security-audit.yml --event workflow_dispatch --limit 1 --json databaseId --jq '.[].databaseId'
+# PASS: an ID other than the action's <previous id>: the <run_id>
+# FAIL: the <previous id> or no output: the run is not listed yet (the dispatch is asynchronous); wait a few seconds and list again
 gh run watch <run_id> --repo timothymamo/shift2eu --exit-status > /dev/null && echo succeeded
 # PASS, once it finishes: succeeded (then step 8's checks)
 # FAIL: no "succeeded" line; an authentication error in the model job: the token is wrong or revoked;
@@ -2746,16 +2756,17 @@ run. The closed duplicate does not count as a dismissal: the kept draft takes pr
 the draft is open.
 
 ```bash
-# Mac (admin), as yourself: the new run. The dispatch time, the <dispatch time>, then the dispatch
-date -u +%Y-%m-%dT%H:%M:%SZ
+# Mac (admin), as yourself: the new run. The newest dispatched run before the dispatch, the <previous id>,
+# then the dispatch
+gh run list --repo timothymamo/shift2eu --workflow scheduled-security-audit.yml --event workflow_dispatch --limit 1 --json databaseId --jq '.[].databaseId'
+# PASS: one ID, the <previous id>, or no output (no dispatched run yet); FAIL: an error
 gh workflow run scheduled-security-audit.yml --repo timothymamo/shift2eu --ref main
 # PASS: the workflow_dispatch event created; FAIL: an error
 
 # The new run: the dispatch is asynchronous, so the newest run may still be the failed one
-gh run list --repo timothymamo/shift2eu --workflow scheduled-security-audit.yml --event workflow_dispatch --limit 1 \
-  --json databaseId,createdAt,status,conclusion --jq '.[] | [.databaseId, .createdAt, .status, .conclusion] | @tsv'
-# PASS: createdAt later than the <dispatch time>; its databaseId is the new <run_id>
-# FAIL: createdAt earlier: the failed run; wait a few seconds and list again
+gh run list --repo timothymamo/shift2eu --workflow scheduled-security-audit.yml --event workflow_dispatch --limit 1 --json databaseId --jq '.[].databaseId'
+# PASS: an ID other than the <previous id>: the new <run_id>
+# FAIL: the <previous id> or no output: the new run is not listed yet; wait a few seconds and list again
 gh run watch <run_id> --repo timothymamo/shift2eu --exit-status > /dev/null && echo succeeded
 # PASS, once it finishes: succeeded, and the new run opens the report PR (step 8's checks)
 # FAIL: no "succeeded" line: read the publish job's summary line (below)
