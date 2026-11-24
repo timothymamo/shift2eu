@@ -122,14 +122,23 @@ const claudeProjectSettingsPath = ".claude/settings.json"
 
 // claudeProjectEnvDeny are the rules the project's settings file must refuse.
 // They are matched by presence, not as a whole set: the file has other rules,
-// and a rule may be written again beside them. `Bash(env)` is bare `env` alone,
-// `Bash(env *)` its pipeline and separator forms but not `env VAR=value cmd`,
-// which the rule cannot tell the two apart from; `Bash(set)` is bare `set`,
-// and the options that print the shell's variables and exports are refused by
-// their own rules. `/proc/*/environ` is refused as a command's argument and as
-// a file a tool reads, because either prints every value in the process. The
-// Read rule starts with `//`: a single leading `/` would be relative to the
-// settings file's project root and never match the real /proc.
+// and a rule may be written again beside them. `Bash(env)` is bare `env` alone;
+// `Bash(env *)` matches every `env` with an argument, `env VAR=value cmd`
+// included, because Claude Code's prefix rules cannot see an argument as
+// harmless: the roles refuse `env` with arguments altogether (ADR 0044).
+// `Bash(set)`, `Bash(declare)` and `Bash(typeset)` are the bare builtins, and the
+// options that list variables and exports are refused by their own rules
+// (`export -p*`, `declare -p*`/`-x*`, `typeset -p*`/`-x*`, `compgen -v*`/`-e*`),
+// as is `compgen -A` whatever list it names: `variable` and `export` print the
+// environment, and a rule that enumerates them one by one would miss one.
+// `/proc/*/environ` is refused as a command's argument and as a file a tool
+// reads, because either prints every value in the process; `ls /proc` and
+// `cat /proc/*/environ` reach it, so the directory is refused whole. `ps e*` is
+// `ps` with the environment column, `make -p`/`--print-data-base` print the
+// environment of every target, `Bash(*daemon.env*)` the deck's own file of keys,
+// and a `$NAME` that expands a key (`*$*API_KEY*`, `*$*TOKEN*`) is refused with
+// it. The Read rules start with `//`: a single leading `/` would be relative to
+// the settings file's project root and never match the real path.
 var claudeProjectEnvDeny = []string{
 	"Bash(env)",
 	"Bash(env *)",
@@ -139,19 +148,40 @@ var claudeProjectEnvDeny = []string{
 	"Bash(set)",
 	"Bash(export)",
 	"Bash(export -p*)",
+	"Bash(declare)",
 	"Bash(declare -p*)",
 	"Bash(declare -x*)",
+	"Bash(typeset)",
 	"Bash(typeset -p*)",
+	"Bash(typeset -x*)",
 	"Bash(compgen -v*)",
 	"Bash(compgen -e*)",
+	"Bash(compgen -A*)",
+	"Bash(compgen *-A*)",
 	"Bash(*/proc/*/environ*)",
+	"Bash(make -p*)",
+	"Bash(make --print-data-base*)",
+	"Bash(ps e*)",
+	"Bash(*daemon.env*)",
+	"Bash(*$*API_KEY*)",
+	"Bash(*$*TOKEN*)",
+	"Read(//proc)",
+	"Read(//proc/**)",
 	"Read(//proc/**/environ)",
+	"Read(~/.config/dot-agent-deck/**)",
 }
+
+// claudeProjectEnvDenyDead is the rule the settings file must not hold: a path
+// that starts with a single `/` is relative to the settings file's project root
+// in Claude Code, so `Read(/proc/*/environ)` never matches the real /proc and
+// reads as a refusal it is not. The `//` rule beside it is the one that holds.
+const claudeProjectEnvDenyDead = "Read(/proc/*/environ)"
 
 // TestProjectClaudeSettingsDenyPrintingTheEnvironment pins the second layer
 // under CLAUDE.md rule 3 for the Claude Code roles (issue #540): each rule above
-// is in .claude/settings.json's permissions.deny, and none of them is also in
-// permissions.allow, where a later reader would take the command for allowed.
+// is in .claude/settings.json's permissions.deny, none of them is also in
+// permissions.allow, where a later reader would take the command for allowed,
+// and the project-relative `/proc` rule, which refuses nothing, is gone.
 // The file is read as a closed document first, so a key written twice cannot
 // hide a second, wider allow list from this test.
 func TestProjectClaudeSettingsDenyPrintingTheEnvironment(t *testing.T) {
@@ -174,6 +204,10 @@ func TestProjectClaudeSettingsDenyPrintingTheEnvironment(t *testing.T) {
 		if _, ok := allow[rule]; ok {
 			t.Errorf("%s: permissions.allow holds %q, which permissions.deny refuses and must not be handed back (issue #540)", claudeProjectSettingsPath, rule)
 		}
+	}
+
+	if _, ok := deny[claudeProjectEnvDenyDead]; ok {
+		t.Errorf("%s: permissions.deny holds %q, whose single leading `/` makes it project-relative: it matches no real /proc and is dead (issue #540); write the rule with `//`", claudeProjectSettingsPath, claudeProjectEnvDenyDead)
 	}
 }
 

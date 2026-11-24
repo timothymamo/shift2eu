@@ -85,7 +85,15 @@ func TestPiEnvDenyListIsARefusalDocument(t *testing.T) {
 // TestPiEnvDenyExtensionHooksTheToolCall pins the extension's wiring: it reads
 // the pattern list by name and it hooks pi's `tool_call` event, the one that
 // sees a bash command before the command runs. An extension that hooks no event
-// (or another one) is loaded and refuses nothing.
+// (or another one) is loaded and refuses nothing. It also pins what a refusal is
+// made of (a block with a reason), the file tools it holds beside bash, the
+// `/proc` and `daemon.env` paths a file tool must not read, and the reason the
+// fail-closed branch gives; and it keeps the extension off pi's package at run
+// time, which it must not import: it is loaded before the tool call it guards,
+// so a value import would make the guard depend on the very module whose version
+// is the reason it exists (`import type` is erased and names the package alone).
+// A `console.` call is refused too: the command it would log is the command that
+// holds the key.
 func TestPiEnvDenyExtensionHooksTheToolCall(t *testing.T) {
 	t.Parallel()
 
@@ -97,11 +105,84 @@ func TestPiEnvDenyExtensionHooksTheToolCall(t *testing.T) {
 	}{
 		{name: "the pattern list", text: "deny-env-printing.json"},
 		{name: "the tool_call event", text: "tool_call"},
+		{name: "the block", text: "block: true"},
+		{name: "the read tool", text: `"read"`},
+		{name: "the grep tool", text: `"grep"`},
+		{name: "the fail-closed reason", text: "could not be loaded"},
+		{name: "the /proc path", text: "/proc"},
+		{name: "the deck's environment file", text: "daemon.env"},
 	} {
 		if !strings.Contains(text, want.text) {
 			t.Errorf("%s: the extension does not name %s (%q), so it refuses no command (issue #540)", piEnvDenyExtension, want.name, want.text)
 		}
 	}
+
+	for _, statement := range piImportStatements(text) {
+		if !strings.Contains(statement, piPackage) {
+			continue
+		}
+
+		if !strings.HasPrefix(statement, "import type") {
+			t.Errorf("%s: the statement %q imports %s for a value at run time, so the guard depends on the package it guards (issue #540); write `import type` instead", piEnvDenyExtension, statement, piPackage)
+		}
+	}
+
+	if strings.Contains(text, "console.") {
+		t.Errorf("%s: the extension calls console., and a command it logs is a command that may hold the key (issue #540)", piEnvDenyExtension)
+	}
+}
+
+// piPackage is the package a pi extension may name only in a type-only import.
+const piPackage = "@earendil-works/pi-coding-agent"
+
+// piImportStatements returns the extension's import and require statements, each
+// joined onto one line, so that a statement written over several lines is read
+// whole: the package a multi-line import names sits on its closing line, where a
+// line-at-a-time reader would not see the `import type` that makes it safe.
+func piImportStatements(text string) []string {
+	var statements []string
+
+	var current strings.Builder
+
+	joining := false
+
+	for _, raw := range strings.Split(text, "\n") {
+		line := strings.TrimSpace(raw)
+
+		if !joining {
+			if !strings.HasPrefix(line, "import") && !strings.Contains(line, "require(") {
+				continue
+			}
+
+			// A statement that names its module on this line is whole.
+			if !strings.HasPrefix(line, "import") || strings.Contains(line, " from ") || strings.HasSuffix(line, ";") {
+				statements = append(statements, line)
+
+				continue
+			}
+
+			joining = true
+			current.Reset()
+			current.WriteString(line)
+
+			continue
+		}
+
+		current.WriteString(" ")
+		current.WriteString(line)
+
+		if strings.Contains(line, " from ") || strings.HasSuffix(line, ";") {
+			statements = append(statements, current.String())
+
+			joining = false
+		}
+	}
+
+	if joining {
+		statements = append(statements, current.String())
+	}
+
+	return statements
 }
 
 // TestPiEnvDenyListRefusesPrintingTheEnvironment pins what the patterns refuse:
@@ -142,6 +223,69 @@ func TestPiEnvDenyListRefusesPrintingTheEnvironment(t *testing.T) {
 		"tr '\\0' '\\n' < /proc/1/environ",
 		"strings /proc/$$/environ",
 		"xargs -0 < /proc/self/environ",
+		// `env` with an assignment and no command prints instead of running a
+		// command, and so does a leading assignment in front of a printer.
+		"env FOO=bar",
+		"env FOO=bar | grep KEY",
+		"env A=1 printenv",
+		"env X=1 env",
+		"FOO=1 env",
+		"FOO=1 printenv | grep KEY",
+		"LC_ALL=C set",
+		// A shell keyword around the printer: pi runs the command as it is given,
+		// and bash runs the printer inside the keyword.
+		"if true; then env; fi",
+		"for i in 1; do printenv; done",
+		"true && ! env",
+		"{ env; }",
+		// Wrappers that run another command as their argument or through exec.
+		"timeout 5 env",
+		"nice env",
+		"stdbuf -oL env",
+		"xargs -0 env",
+		"sudo -E env",
+		"command -p env",
+		"time env",
+		// Quoting and nesting: the printer is still the command bash runs.
+		"bash -c env",
+		"bash -c 'env'",
+		`sh -c "printenv"`,
+		"eval env",
+		"echo `env`",
+		// A newline separates commands as surely as `;` does.
+		"make check\nenv",
+		// The shell's other printers: the variables and exports by name, and
+		// `export` itself, whose pipeline form prints them too.
+		"compgen -A variable",
+		"compgen -A export",
+		"declare",
+		"typeset",
+		"export | grep KEY",
+		"/bin/printenv",
+		// ps prints a process's environment, and make prints the environment of
+		// its targets.
+		"ps eww $$",
+		"ps auxeww",
+		"ps e",
+		"make -p",
+		"make -pn",
+		"make --print-data-base",
+		// /proc holds the environment of every process, listed or read.
+		"cd /proc/self && cat environ",
+		"cat /proc/self/env*",
+		"ls /proc/1",
+		// The file the deck keeps the agents' keys in.
+		"cat ~/.config/dot-agent-deck/daemon.env",
+		"grep KEY /home/u/.config/dot-agent-deck/daemon.env",
+		// A single key, expanded by name.
+		"echo $DEEPSEEK_API_KEY",
+		`printf %s "$GH_TOKEN"`,
+		"echo ${AWS_SECRET_ACCESS_KEY}",
+		// An interpreter that reads the environment itself, in the cheap form an
+		// agent would type when the shell's printers are refused.
+		`awk 'BEGIN{for(k in ENVIRON) print k}'`,
+		`python3 -c 'import os; print(os.environ)'`,
+		`node -e 'console.log(process.env)'`,
 	}
 
 	for _, command := range cases {
@@ -183,6 +327,26 @@ func TestPiEnvDenyListAllowsTheWork(t *testing.T) {
 		"make vm-env VM_ENV=X",
 		"go test -run TestEnv ./...",
 		"cd /x && make check",
+		// `env` that runs a command: no argument holds an assignment, so it prints
+		// nothing, and its options drop or set a variable for that command alone.
+		"/usr/bin/env bash dev/x.sh",
+		"env -u FOO make test",
+		"env -C dir make",
+		// ps for a process's start time and arguments, and its bare forms.
+		"ps -o lstart= -p 123",
+		"ps -o lstart=,args= -p 123",
+		"ps -ef",
+		"ps aux",
+		// The commands whose message and body live in a scratch file.
+		"git commit -F .scratch/msg.txt",
+		"gh pr create --body-file .scratch/body.md",
+		"dot-agent-deck work-done --task-file '.dot-agent-deck/x.md'",
+		// make's options that print nothing.
+		"make worktree BRANCH=chore/1-x",
+		"make -C dir check",
+		"make -j4 check",
+		"GOTOOLCHAIN=local make check",
+		"set -e; make check",
 	}
 
 	for _, command := range cases {
