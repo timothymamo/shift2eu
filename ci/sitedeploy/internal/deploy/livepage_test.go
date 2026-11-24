@@ -157,7 +157,7 @@ func buildSite(t *testing.T, version string) string {
 	return out
 }
 
-// trackTemplates opens the four page templates the builder reads from site/, so
+// trackTemplates opens every page template the builder reads from site/, so
 // go test's result cache records them and a footer edit invalidates a cached
 // PASS: the builder is a child process, whose reads the cache cannot see.
 func trackTemplates(t *testing.T, root string) {

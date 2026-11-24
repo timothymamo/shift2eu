@@ -72,8 +72,8 @@ func wantedFileNames(t *testing.T, bundle *bundle) []string {
 	return want
 }
 
-// TestBundleHoldsTheContractFiles pins the bundle's file set: the three pages,
-// the manifest, the licence and the NOTICE attribution, and one
+// TestBundleHoldsTheContractFiles pins the bundle's file set: the site's pages
+// (pageNames), the manifest, the licence and the NOTICE attribution, and one
 // content-addressed file of each kind, and nothing else. The site ships no
 // favicon, site/records/ is never bundled (milestone 4 fills it), and a stray
 // file would be deployed without a manifest entry.
