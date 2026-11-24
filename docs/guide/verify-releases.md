@@ -92,7 +92,7 @@ ARCHIVE="shift2eu_${VERSION}_linux_amd64.tar.gz"
 
 gh release download "$TAG" --repo timothymamo/shift2eu --pattern "$ARCHIVE" --pattern checksums.txt
 awk -v a="$ARCHIVE" '$2 == a' checksums.txt > "$ARCHIVE.sha256"
-sha256sum --check "$ARCHIVE.sha256"   # macOS: shasum -a 256 --check "$ARCHIVE.sha256"
+sha256sum --check "$ARCHIVE.sha256"
 
 # The build provenance (SLSA): from release.yml, for this tag, on GitHub's runners.
 gh attestation verify "$ARCHIVE" --repo timothymamo/shift2eu \
@@ -102,7 +102,7 @@ tar -xzf "$ARCHIVE"
 ```
 
 `awk` copies the line of `checksums.txt` whose name is exactly the archive's, and the check must print
-`<archive>: OK`. A wrong digest prints `FAILED` and exits non-zero; a name missing from `checksums.txt`
+`<archive>: OK`; on macOS, run `shasum -a 256 --check "$ARCHIVE.sha256"` instead of `sha256sum`. A wrong digest prints `FAILED` and exits non-zero; a name missing from `checksums.txt`
 leaves the copied file empty, which fails the check too (non-zero exit, no `OK`) instead of checking
 nothing. `gh attestation verify` must print `✓ Verification succeeded!` and exits non-zero otherwise.
 It works the same on macOS. `gh attestation verify checksums.txt ...`, with the same flags, verifies
@@ -216,7 +216,7 @@ the live site does not serve that release's files; report it as the repository's
 Check it in the same shell, where `$D` is still set: the commands read the bundle's manifest from `$D`.
 
 ```bash
-cd "$D"
+cd "${D:?run the site check first}"
 curl --fail --silent --show-error --proto '=https' --compressed https://www.shift2eu.com/ | sha256sum
 jq -r '.files[] | select(.path == "index.html") | .sha256' site/manifest.json
 ```
@@ -241,11 +241,10 @@ What the check shows, and what it does not:
 **Run the bundle yourself.** The bundle runs unchanged on any origin. Serve the verified, extracted
 bundle with any static file server on your own machine and open it in your browser: you run exactly
 the attested files, and the site's host sees nothing. For example, in the same shell, from the directory
-the check above worked in (`$D`):
+the check above worked in (`$D`), then open `http://localhost:8000/`:
 
 ```bash
 python3 -m http.server 8000 --bind localhost --directory "$D/site"
-# then open http://localhost:8000/
 ```
 
 ## Releases before the rename: v0.1.0 and v0.1.0-rc.1
