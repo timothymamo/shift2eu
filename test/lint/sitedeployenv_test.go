@@ -45,10 +45,13 @@ const siteDeployEnvOSMsg = "site-deploy-env: the site deploy program reads no en
 // the broad os entry's nine names, os.LookupEnv alone in the entry
 // ci/sitedeploy/main.go's rule narrows on, and the uses of package os/exec in
 // the entry livepage_test.go's rule narrows on. That entry's pattern admits the
-// whole package as ^exec\., which its six names pin in more than the four the
+// whole package as ^exec\., which its nine names pin in more than the four the
 // test itself uses (exec.Command, exec.CommandContext, exec.Cmd, exec.LookPath):
 // exec.ErrNotFound, exec.ExitError and exec.Error are values of the package no
-// process start needs, and exec.Cmd.Run is a method of one of its types, so a
+// process start needs, and exec.Cmd.Run and exec.Cmd.Environ are methods of one of
+// its types, the latter the one call that hands a child the whole environment of
+// the test process (issue #185; the .golangci.yml comment says the entry refuses
+// it with the rest of the package, unlike in the audit publish groups), so a
 // pattern narrowed to those four no longer passes; a name outside package os/exec
 // may not join it.
 var siteDeployEnvEntries = []forbidGroupEntry{
@@ -86,6 +89,7 @@ var siteDeployEnvEntries = []forbidGroupEntry{
 			{"os/exec", "exec.ExitError"},
 			{"os/exec", "exec.Error"},
 			{"os/exec", "exec.Cmd.Run"},
+			{"os/exec", "exec.Cmd.Environ"},
 		},
 	},
 }
