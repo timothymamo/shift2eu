@@ -5,7 +5,8 @@ The OpenTofu configuration of the site's Scaleway hosting (PRD #297 milestone 3,
 only the site's bucket, the bucket (versioned, website mode, its bucket policy), the deploy IAM
 application and its policy, and the Edge Services Starter plan and pipeline serving `www.shift2eu.com`.
 The deploy API key, the state bucket, the Namecheap records and the GitHub `site` environment are made by
-hand, in the PRD's *Runbook* section (R0 to R13), which the maintainer follows.
+hand, in [the site runbook](../../docs/site-runbook.md) (R0 to R13, PRD #297's *Runbook*), which the
+maintainer follows.
 
 - `versions.tf`: OpenTofu and the `scaleway/scaleway` provider, pinned exactly; the `s3` backend on
   Scaleway's endpoint with state locking (`use_lockfile`), partially configured (`backend.hcl.example`).

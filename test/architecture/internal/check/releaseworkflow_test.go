@@ -3106,6 +3106,8 @@ func TestSiteHigherReleasesStepRuns(t *testing.T) {
 			wantAPICalls:  []string{"api " + higher, "api " + last},
 		},
 		{
+			// gh writes the 404's body on stdout into higher/release.json before
+			// it fails, which is the shape this case pins.
 			name:          "a release that is not published yet is skipped with a notice",
 			api:           map[string]string{higher: notFound, last: published(last)},
 			readErr:       map[string]string{higher: "gh: Not Found (HTTP 404)\n"},
@@ -3115,11 +3117,13 @@ func TestSiteHigherReleasesStepRuns(t *testing.T) {
 		},
 		{
 			// A draft is answered the way GitHub answers it: get-a-release-by-tag
-			// returns published releases alone, so a draft is a 404, with its body
-			// on stdout as gh writes it, into higher/release.json. The loop must
-			// read the notice's failure as an unpublished release and move on.
-			name:          "a draft answered with a 404 and a body, as GitHub answers one, is skipped with a notice",
-			api:           map[string]string{higher: notFound, last: published(last)},
+			// returns published releases alone, so a draft is a 404. gh normally
+			// writes the 404's body on stdout, as the case above does; this one
+			// writes none, the other shape a 404 arrives in, so the pair pins the
+			// step's reading of the notice with and without a body. The loop must
+			// read the failure as an unpublished release and move on either way.
+			name:          "a draft answered with a 404 and no body is skipped with a notice",
+			api:           map[string]string{last: published(last)},
 			readErr:       map[string]string{higher: "gh: Not Found (HTTP 404)\n"},
 			wantOut:       []string{"::notice::the release of " + higher + " is not published yet, so its manifest is not read"},
 			wantManifests: []string{last},
