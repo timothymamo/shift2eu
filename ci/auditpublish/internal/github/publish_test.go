@@ -69,6 +69,7 @@ func publishRoutesOverListing(listing []Route, issues ...map[string]any) []Route
 
 	routes := []Route{
 		{Method: "GET", Endpoint: fixtureReleaseEndpoint, Status: 200, Body: map[string]string{"tag_name": fixtureTag}},
+		{Method: "GET", Endpoint: fixtureLatestReleaseEndpoint, Status: 200, Body: map[string]string{"tag_name": fixtureTag}},
 		{Method: "GET", Endpoint: fixtureIssuesQuery + "page=1", Status: 200, Body: list},
 		{Method: "POST", Endpoint: fixtureIssuesEndpoint, Status: 201, Body: map[string]any{"number": 1}},
 	}
@@ -514,6 +515,7 @@ func TestPublishStopsAtTheFirstRefusedIssue(t *testing.T) {
 
 	routes := []Route{
 		{Method: "GET", Endpoint: fixtureReleaseEndpoint, Status: 200, Body: map[string]string{"tag_name": fixtureTag}},
+		{Method: "GET", Endpoint: fixtureLatestReleaseEndpoint, Status: 200, Body: map[string]string{"tag_name": fixtureTag}},
 		{Method: "GET", Endpoint: fixtureIssuesQuery + "page=1", Status: 200, Body: []any{}},
 		{Method: "POST", Endpoint: fixtureIssuesEndpoint, Status: 422, Body: map[string]string{"message": "the issue was refused"}},
 		advisoryListingRoute(nil, ""),

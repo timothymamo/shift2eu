@@ -58,6 +58,10 @@ const (
 	// fixtureReleaseEndpoint is the release lookup's endpoint.
 	fixtureReleaseEndpoint = fixtureRepoPrefix + "/releases/tags/" + fixtureTag
 
+	// fixtureLatestReleaseEndpoint is the endpoint the release check reads
+	// second: the repository's latest release, whose tag must be the result's.
+	fixtureLatestReleaseEndpoint = fixtureRepoPrefix + "/releases/latest"
+
 	// fixtureArtifactsEndpoint is the artifact check's one call.
 	fixtureArtifactsEndpoint = fixtureRepoPrefix + "/actions/runs/" + fixtureRunID + "/artifacts?per_page=100"
 

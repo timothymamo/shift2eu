@@ -117,11 +117,12 @@ const (
 	auditModelIf          = "    timeout-minutes: 120\n    if: ${{ " + auditGuard + " }}\n"
 	auditPublishIf        = "    timeout-minutes: 30\n    if: ${{ " + auditGuard + " }}\n"
 	// auditChecksPermissions is the checks job's permissions block, whose comment
-	// no other job shares.
-	auditChecksPermissions = "    # packages scope, and nothing here writes.\n" +
+	// no other job shares. No attestations scope: no checks-job row reads one in
+	// 5b.
+	auditChecksPermissions = "    # GITHUB_TOKEN reads only: contents for the checkout and the release tag.\n" +
+		"    # The image is public, so no packages scope, and nothing here writes.\n" +
 		"    permissions:\n" +
-		"      contents: read\n" +
-		"      attestations: read\n"
+		"      contents: read\n"
 	// auditPublishPermissions is the publish job's permissions block, whose
 	// comment no other job shares.
 	auditPublishPermissions = "    # artifacts, attestations for the image check. The audit App's token writes.\n" +
@@ -140,17 +141,20 @@ const (
 	// that need a script anchor on.
 	auditRecordStep = "      - name: Record the audited commit and the latest release tag\n" +
 		"        timeout-minutes: 5\n"
-	// The tools step's gitleaks pin, with its two Renovate comments, and the
-	// publish job's own copy of it, whose digests differ so that a case names
-	// one of them.
-	auditChecksGitleaks = "          # renovate: datasource=github-releases depName=gitleaks/gitleaks\n" +
+	// The tools step's gitleaks pin, with its Renovate comment and the human
+	// comment above it, and the publish job's copy of the same pin: every copy
+	// of a version and digest is equal, so the constants differ only in the
+	// context that makes each unique.
+	auditChecksGitleaks = "          # Renovate bumps a version and its digest in one PR (CLAUDE.md rule 7).\n" +
+		"          # renovate: datasource=github-releases depName=gitleaks/gitleaks\n" +
 		"          GITLEAKS_VERSION: v8.30.0\n" +
 		"          # renovate: datasource=github-release-attachments depName=gitleaks/gitleaks digestVersion=v8.30.0\n" +
 		"          GITLEAKS_SHA256: \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"\n"
 	auditPublishGitleaks = "          # renovate: datasource=github-releases depName=gitleaks/gitleaks\n" +
 		"          GITLEAKS_VERSION: v8.30.0\n" +
 		"          # renovate: datasource=github-release-attachments depName=gitleaks/gitleaks digestVersion=v8.30.0\n" +
-		"          GITLEAKS_SHA256: \"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\"\n"
+		"          GITLEAKS_SHA256: \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"\n" +
+		"        run: |\n"
 	// auditModelKeyVar is the checks job's encryption step, the one place the
 	// model key's public half is read, and the anchor the cases that put another
 	// name in a checks-job env: use.
@@ -176,7 +180,10 @@ const (
 	// auditModelCanary is the model step's env:, whose canary line the cases that
 	// widen it append to.
 	auditModelCanary = "          SHIFT2EU_AUDIT_CANARY: \"8f14e45fceea167a5a36dedd4bea2543f0e1a2b3c4d5e6f708192a3b4c5d6e7f\"\n"
-	// auditAttestationStep is the publish job's model-free attestation check.
+	// auditAttestationStep is the publish job's model-free attestation check: the
+	// tag's shape is held first, an empty digest skips the verification with a
+	// fixed notice (the run pulled no image), and a digest that is not sha256 is
+	// refused before gh runs.
 	auditAttestationStep = "      - name: Verify the image's provenance attestation\n" +
 		"        timeout-minutes: 10\n" +
 		"        env:\n" +
@@ -184,12 +191,25 @@ const (
 		"        run: |\n" +
 		"          set -euo pipefail\n" +
 		"          image=\"ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/shift2eu\"\n" +
-		"          digest=\"$(jq -er '.image.digest' \"${RUNNER_TEMP}/result.json\")\"\n" +
-		"          tag=\"$(jq -er '.release.tag' \"${RUNNER_TEMP}/result.json\")\"\n" +
+		"          digest=\"$(jq -er '.image_digest' \"${RUNNER_TEMP}/result.json\")\"\n" +
+		"          tag=\"$(jq -er '.release_tag' \"${RUNNER_TEMP}/result.json\")\"\n" +
+		"          if [[ ! \"${tag}\" =~ ^v[0-9]+\\.[0-9]+\\.[0-9]+$ ]]; then\n" +
+		"            echo \"::error title=Audit publish::the tag's shape is no vMAJOR.MINOR.PATCH: see runbook step 11\"\n" +
+		"            exit 1\n" +
+		"          fi\n" +
+		"          if [ -z \"${digest}\" ]; then\n" +
+		"            echo \"image not pulled: no provenance attestation to verify\"\n" +
+		"            exit 0\n" +
+		"          fi\n" +
+		"          if [[ ! \"${digest}\" =~ ^sha256:[0-9a-f]{64}$ ]]; then\n" +
+		"            echo \"::error title=Audit publish::the image digest is no sha256 digest: see runbook step 11\"\n" +
+		"            exit 1\n" +
+		"          fi\n" +
 		"          gh attestation verify \"oci://${image}@${digest}\" \\\n" +
 		"            --repo \"${GITHUB_REPOSITORY}\" \\\n" +
 		"            --signer-workflow \"${GITHUB_REPOSITORY}/.github/workflows/release.yml\" \\\n" +
-		"            --source-ref \"refs/tags/${tag}\"\n"
+		"            --source-ref \"refs/tags/${tag}\" \\\n" +
+		"            --deny-self-hosted-runners\n"
 	// auditAppTokenStep is the publish job's App token step.
 	auditAppTokenStep = "      - name: Mint the audit App's token\n" +
 		"        timeout-minutes: 5\n" +
@@ -207,6 +227,46 @@ const (
 	// auditGitleaksStdin is the publish job's second guard: gitleaks over the text
 	// it is about to send, through the stdin subcommand.
 	auditGitleaksStdin = "          gitleaks stdin --ignore-gitleaks-allow --redact --no-banner < \"${RUNNER_TEMP}/result.json\"\n"
+	// auditGitleaksScanStep is that guard's whole step, which runs before the App
+	// token is minted: a refused result has no write token minted for it.
+	auditGitleaksScanStep = "      - name: Scan the text it is about to publish\n" +
+		"        timeout-minutes: 10\n" +
+		"        run: |\n" +
+		"          set -euo pipefail\n" +
+		auditGitleaksStdin
+	// auditZizmorStep and auditActionlintStep are the checks job's two lint
+	// steps: only zizmor's online audits read GitHub's API, so only it holds the
+	// job's token.
+	auditZizmorStep = "      - name: zizmor\n" +
+		"        timeout-minutes: 10\n" +
+		"        env:\n" +
+		"          # The one read this row makes of GitHub's API.\n" +
+		"          GH_TOKEN: ${{ github.token }}\n" +
+		"        run: |\n" +
+		"          set -euo pipefail\n" +
+		"          zizmor .github/workflows\n"
+	auditActionlintStep = "      - name: actionlint\n" +
+		"        timeout-minutes: 10\n" +
+		"        run: |\n" +
+		"          set -euo pipefail\n" +
+		"          " + auditActionlint
+	// auditZizmorActionlintStep is the single step the two above replace: the
+	// shape a case puts back to show that the split is held.
+	auditZizmorActionlintStep = "      - name: zizmor and actionlint\n" +
+		"        timeout-minutes: 15\n" +
+		"        env:\n" +
+		"          # The one read this row makes of GitHub's API.\n" +
+		"          GH_TOKEN: ${{ github.token }}\n" +
+		"        run: |\n" +
+		"          set -euo pipefail\n" +
+		"          zizmor .github/workflows\n" +
+		"          " + auditActionlint
+	// auditRunCommand is the model step's own command, the one that writes the
+	// checked result under $RUNNER_TEMP.
+	auditRunCommand = "          ci/auditrun -claude-tarball \"${RUNNER_TEMP}/claude-code/claude-code.tgz\" -claude-integrity \"${CLAUDE_CODE_PIN_INTEGRITY}\" -result-out \"${RUNNER_TEMP}/result.json\"\n"
+	// auditEncryptResultCommand is the encrypt step's age command: it reads the
+	// file the launcher wrote, never the result's path under /srv/audit.
+	auditEncryptResultCommand = "          age --encrypt --recipient \"${AUDIT_PUBLISH_PUBLIC_KEY}\" --output \"${RUNNER_TEMP}/model-result.age\" \"${RUNNER_TEMP}/result.json\"\n"
 	// auditModelResultHead is the model job's encryption step, the step that
 	// runs right after the model step: the head the case that moves the hardening
 	// step past the model step inserts it at.
@@ -775,7 +835,7 @@ func TestAuditWorkflow(t *testing.T) {
 		},
 		{
 			name:     "an attestation check without --source-ref",
-			workflow: mutate(t, acceptedWorkflow, "            --source-ref \"refs/tags/${tag}\"\n", ""),
+			workflow: mutate(t, acceptedWorkflow, "            --source-ref \"refs/tags/${tag}\" \\\n"+"            --deny-self-hosted-runners\n", "            --deny-self-hosted-runners\n"),
 			wantIn:   "source-ref",
 		},
 		{
@@ -823,8 +883,179 @@ func TestAuditWorkflow(t *testing.T) {
 		},
 		{
 			name:     "a downloaded tool without a SHA-256",
-			workflow: mutate(t, acceptedWorkflow, auditPublishGitleaks, "          # renovate: datasource=github-releases depName=gitleaks/gitleaks\n          GITLEAKS_VERSION: v8.30.0\n"),
+			workflow: mutate(t, acceptedWorkflow, auditPublishGitleaks, "          # renovate: datasource=github-releases depName=gitleaks/gitleaks\n          GITLEAKS_VERSION: v8.30.0\n        run: |\n"),
 			wantIn:   "SHA-256",
+		},
+
+		// Review round 1, findings F1, F2 and F4 to F12: the checks the reviewer and
+		// the auditor accepted. Each case changes one part of the accepted shape and
+		// must draw a message that names it.
+		{
+			// F6: no 5b row of the checks job reads an attestation.
+			name:     "an attestations scope in the checks job",
+			workflow: mutate(t, acceptedWorkflow, auditChecksPermissions, auditChecksPermissions+"      attestations: read\n"),
+			wantIn:   "attestations",
+		},
+		{
+			// F5: the split is held, so a step that hands actionlint zizmor's
+			// token is refused.
+			name:     "zizmor and actionlint in one step",
+			workflow: mutate(t, acceptedWorkflow, auditZizmorStep+auditActionlintStep, auditZizmorActionlintStep),
+			wantIn:   "zizmor and actionlint",
+		},
+		{
+			name: "the job's token in the actionlint step",
+			workflow: mutate(t, acceptedWorkflow, auditActionlintStep, "      - name: actionlint\n"+
+				"        timeout-minutes: 10\n"+
+				"        env:\n"+
+				"          GH_TOKEN: ${{ github.token }}\n"+
+				"        run: |\n"+
+				"          set -euo pipefail\n"+
+				"          "+auditActionlint),
+			wantIn: "github.token",
+		},
+		{
+			// F1: the launcher writes the checked bytes under $RUNNER_TEMP, and
+			// nothing reads /srv/audit/work/result.json again by its path.
+			name: "the encrypt step reading the result under /srv/audit",
+			workflow: mutate(t, acceptedWorkflow, auditEncryptResultCommand,
+				"          age --encrypt --recipient \"${AUDIT_PUBLISH_PUBLIC_KEY}\" --output \"${RUNNER_TEMP}/model-result.age\" /srv/audit/work/result.json\n"),
+			wantIn: "RUNNER_TEMP",
+		},
+		{
+			name: "no -result-out on the model step",
+			workflow: mutate(t, acceptedWorkflow, auditRunCommand,
+				strings.Replace(auditRunCommand, " -result-out \"${RUNNER_TEMP}/result.json\"", "", 1)),
+			wantIn: "-result-out",
+		},
+		{
+			// F2: an empty digest is the documented "image was not pulled"
+			// case, skipped with a fixed notice, never a failed run.
+			name: "no empty-digest branch",
+			workflow: mutate(t, acceptedWorkflow, "          if [ -z \"${digest}\" ]; then\n"+
+				"            echo \"image not pulled: no provenance attestation to verify\"\n"+
+				"            exit 0\n"+
+				"          fi\n", ""),
+			wantIn: "image not pulled",
+		},
+		{
+			// The tag's shape is held whatever the digest is: moving it past
+			// the empty branch lets an empty digest skip it.
+			name: "the tag's shape checked after the empty-digest branch",
+			workflow: mutate(t, mutate(t, acceptedWorkflow, "          if [[ ! \"${tag}\" =~ ^v[0-9]+\\.[0-9]+\\.[0-9]+$ ]]; then\n"+
+				"            echo \"::error title=Audit publish::the tag's shape is no vMAJOR.MINOR.PATCH: see runbook step 11\"\n"+
+				"            exit 1\n"+
+				"          fi\n", ""),
+				"          if [ -z \"${digest}\" ]; then\n"+
+					"            echo \"image not pulled: no provenance attestation to verify\"\n"+
+					"            exit 0\n"+
+					"          fi\n",
+				"          if [ -z \"${digest}\" ]; then\n"+
+					"            echo \"image not pulled: no provenance attestation to verify\"\n"+
+					"            exit 0\n"+
+					"          fi\n"+
+					"          if [[ ! \"${tag}\" =~ ^v[0-9]+\\.[0-9]+\\.[0-9]+$ ]]; then\n"+
+					"            echo \"::error title=Audit publish::the tag's shape is no vMAJOR.MINOR.PATCH: see runbook step 11\"\n"+
+					"            exit 1\n"+
+					"          fi\n"),
+			wantIn: "tag's shape",
+		},
+		{
+			// F7: a refused result has no write token minted for it.
+			name:     "the scan of the text after the App's token",
+			workflow: moveStep(auditPublishCommand, auditGitleaksScanStep),
+			wantIn:   "Scan the text it is about to publish",
+		},
+		{
+			// F8: the decrypted archive and its listings live in one place
+			// only, the audit directory.
+			name:     "no rm -f of the decrypt step's temporary files",
+			workflow: mutate(t, acceptedWorkflow, "          rm -f \"${RUNNER_TEMP}/checks.tar\" \"${RUNNER_TEMP}/checks.types\" \"${RUNNER_TEMP}/checks.names\"\n", ""),
+			wantIn:   "rm -f",
+		},
+		{
+			// F10: the archive is untrusted, so its entry types are checked.
+			name:     "the decrypt step without the tar type check",
+			workflow: mutate(t, acceptedWorkflow, "          tar -tvf \"${RUNNER_TEMP}/checks.tar\" > \"${RUNNER_TEMP}/checks.types\"\n", ""),
+			wantIn:   "tar -tvf",
+		},
+		{
+			// F10: the archive is unpacked as root, so owners and modes are
+			// never the archive's.
+			name: "the extract without --no-same-owner",
+			workflow: mutate(t, acceptedWorkflow, "          sudo tar -C /srv/audit/checks --no-same-owner --no-same-permissions -xf \"${RUNNER_TEMP}/checks.tar\"\n",
+				"          sudo tar -C /srv/audit/checks -xf \"${RUNNER_TEMP}/checks.tar\"\n"),
+			wantIn: "--no-same-owner",
+		},
+		{
+			// F4: the download is bound to the artifact the check accepted,
+			// through the file it wrote, never a second listing.
+			name: "a second listing in the download step",
+			workflow: mutate(t, acceptedWorkflow, "          id=\"$(jq -er '.id' \"${artifact}\")\"\n"+
+				"          digest=\"$(jq -er '.digest' \"${artifact}\")\"\n"+
+				"          gh api \"repos/${GITHUB_REPOSITORY}/actions/artifacts/${id}/zip\" > \"${RUNNER_TEMP}/checks-result.zip\"\n",
+				"          id=\"$(gh api \"repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts\" --jq '.artifacts[] | select(.name == \"checks-result\") | .id')\"\n"+
+					"          digest=\"$(gh api \"repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts\" --jq '.artifacts[] | select(.name == \"checks-result\") | .digest')\"\n"+
+					"          gh api \"repos/${GITHUB_REPOSITORY}/actions/artifacts/${id}/zip\" > \"${RUNNER_TEMP}/checks-result.zip\"\n"),
+			wantIn: "artifact.json",
+		},
+		{
+			name: "the checked artifact's file under another name",
+			workflow: mutate(t, acceptedWorkflow, "          ci/auditpublish artifacts -job model -gh \"$(command -v gh)\" -tmp \"${RUNNER_TEMP}\"\n"+
+				"          artifact=\"${RUNNER_TEMP}/artifact.json\"\n",
+				"          ci/auditpublish artifacts -job model -gh \"$(command -v gh)\" -tmp \"${RUNNER_TEMP}\"\n"+
+					"          artifact=\"${RUNNER_TEMP}/upload.json\"\n"),
+			wantIn: "artifact.json",
+		},
+		{
+			// F10: the zip is the listed artifact's, and its digest is checked
+			// before unzip reads a byte of it.
+			name:     "the download without the artifact's zip endpoint",
+			workflow: mutate(t, acceptedWorkflow, "          gh api \"repos/${GITHUB_REPOSITORY}/actions/artifacts/${id}/zip\" > \"${RUNNER_TEMP}/checks-result.zip\"\n", ""),
+			wantIn:   "${id}/zip",
+		},
+		{
+			name:     "the download without the digest's sha256sum",
+			workflow: mutate(t, acceptedWorkflow, "          echo \"${digest#sha256:}  ${RUNNER_TEMP}/checks-result.zip\" | sha256sum --check --strict -\n", ""),
+			wantIn:   "sha256sum",
+		},
+		{
+			name:     "the download without unzip",
+			workflow: mutate(t, acceptedWorkflow, "          unzip -q \"${RUNNER_TEMP}/checks-result.zip\" -d \"${RUNNER_TEMP}/checks-result\"\n", ""),
+			wantIn:   "unzip",
+		},
+		{
+			name: "the download without the single-file check",
+			workflow: mutate(t, acceptedWorkflow, "          if [ \"$(ls -A \"${RUNNER_TEMP}/checks-result\")\" != checks-result.age ]; then\n"+
+				"            echo \"::error title=Audit model::checks-result holds more than its ciphertext: see runbook step 11\"\n"+
+				"            exit 1\n"+
+				"          fi\n", ""),
+			wantIn: "ls -A",
+		},
+		{
+			// F11: the history scan ignores no allow comment, and the
+			// attestation check refuses a self-hosted runner's provenance.
+			name:     "gitleaks on the history honouring the allow file",
+			workflow: mutate(t, acceptedWorkflow, "gitleaks git --ignore-gitleaks-allow --redact", "gitleaks git --redact"),
+			wantIn:   "--ignore-gitleaks-allow",
+		},
+		{
+			name:     "gitleaks stdin without --redact",
+			workflow: mutate(t, acceptedWorkflow, "gitleaks stdin --ignore-gitleaks-allow --redact", "gitleaks stdin --ignore-gitleaks-allow"),
+			wantIn:   "--redact",
+		},
+		{
+			name: "no --deny-self-hosted-runners on the attestation check",
+			workflow: mutate(t, acceptedWorkflow, "            --source-ref \"refs/tags/${tag}\" \\\n"+
+				"            --deny-self-hosted-runners\n", "            --source-ref \"refs/tags/${tag}\"\n"),
+			wantIn: "--deny-self-hosted-runners",
+		},
+		{
+			// F12: Renovate moves every copy of a pin together; a hand edit
+			// that moves one alone is refused.
+			name:     "the copies of the gitleaks pin differ",
+			workflow: mutate(t, acceptedWorkflow, auditPublishGitleaks, strings.ReplaceAll(auditPublishGitleaks, "aaaa", "ffff")),
+			wantIn:   "copy",
 		},
 
 		// A document the reader cannot follow tells the check nothing, so it is

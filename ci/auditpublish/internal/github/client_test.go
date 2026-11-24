@@ -382,7 +382,7 @@ func TestReadOnlyClientStillReadsAndItsWritesReachGHAgainWithoutTheFlag(t *testi
 		fake := newFakeGH(t, artifactsRoute(1, artifactEntry{name: github.ArtifactChecksResult}))
 		client := newReadOnlyClient(t, fake.Path, artifactScope())
 
-		if err := github.CheckArtifacts(t.Context(), client, github.JobModel); err != nil {
+		if _, err := github.CheckArtifacts(t.Context(), client, github.JobModel); err != nil {
 			t.Fatalf("CheckArtifacts on a read-only client = %v, want no error", err)
 		}
 
@@ -468,7 +468,7 @@ func TestNewArtifactsClientIsReadOnlyByConstruction(t *testing.T) {
 			ReadOnly: false,
 		})
 
-		if err := github.CheckArtifacts(t.Context(), client, github.JobModel); err != nil {
+		if _, err := github.CheckArtifacts(t.Context(), client, github.JobModel); err != nil {
 			t.Fatalf("CheckArtifacts on a NewArtifactsClient client = %v, want no error", err)
 		}
 

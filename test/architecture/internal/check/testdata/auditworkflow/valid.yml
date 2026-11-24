@@ -35,12 +35,10 @@ jobs:
     # Every job runs in the environment whose deployment branch policy is main
     # alone, which holds the two key pairs' public halves.
     environment: security-audit
-    # GITHUB_TOKEN reads only: contents for the checkout and the release tag,
-    # attestations for the release-integrity rows. The image is public, so no
-    # packages scope, and nothing here writes.
+    # GITHUB_TOKEN reads only: contents for the checkout and the release tag.
+    # The image is public, so no packages scope, and nothing here writes.
     permissions:
       contents: read
-      attestations: read
     steps:
       - name: Check out the audited commit
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -129,15 +127,19 @@ jobs:
         timeout-minutes: 20
         run: |
           set -euo pipefail
-          gitleaks git --redact --no-banner .
-      - name: zizmor and actionlint
-        timeout-minutes: 15
+          gitleaks git --ignore-gitleaks-allow --redact --no-banner .
+      - name: zizmor
+        timeout-minutes: 10
         env:
           # The one read this row makes of GitHub's API.
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           zizmor .github/workflows
+      - name: actionlint
+        timeout-minutes: 10
+        run: |
+          set -euo pipefail
           GOFLAGS=-mod=readonly GOPROXY=off go -C tools run github.com/rhysd/actionlint/cmd/actionlint ../.github/workflows
       - name: Encrypt the checks' results to the model key
         timeout-minutes: 5
@@ -216,7 +218,7 @@ jobs:
           # renovate: datasource=github-releases depName=FiloSottile/age
           AGE_VERSION: v1.3.1
           # renovate: datasource=github-release-attachments depName=FiloSottile/age digestVersion=v1.3.1
-          AGE_SHA256: "3333333333333333333333333333333333333333333333333333333333333333"
+          AGE_SHA256: "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
           # The CLI's version and integrity come from the one pin file, read into
           # the outputs of the step above, never written here (ADR 0040).
           CLAUDE_CODE_PIN_VERSION: ${{ steps.claude-code-pin.outputs.version }}
@@ -265,9 +267,17 @@ jobs:
         run: |
           set -euo pipefail
           ci/auditpublish artifacts -job model -gh "$(command -v gh)" -tmp "${RUNNER_TEMP}"
-          artifact_id="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts" --jq '.artifacts[] | select(.name == "checks-result") | .id')"
-          gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${artifact_id}/zip" > "${RUNNER_TEMP}/checks-result.zip"
+          artifact="${RUNNER_TEMP}/artifact.json"
+          id="$(jq -er '.id' "${artifact}")"
+          digest="$(jq -er '.digest' "${artifact}")"
+          gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${id}/zip" > "${RUNNER_TEMP}/checks-result.zip"
+          echo "${digest#sha256:}  ${RUNNER_TEMP}/checks-result.zip" | sha256sum --check --strict -
+          mkdir "${RUNNER_TEMP}/checks-result"
           unzip -q "${RUNNER_TEMP}/checks-result.zip" -d "${RUNNER_TEMP}/checks-result"
+          if [ "$(ls -A "${RUNNER_TEMP}/checks-result")" != checks-result.age ]; then
+            echo "::error title=Audit model::checks-result holds more than its ciphertext: see runbook step 11"
+            exit 1
+          fi
       - name: Decrypt the checks' results into the audit directory
         timeout-minutes: 5
         env:
@@ -279,8 +289,17 @@ jobs:
           set -euo pipefail
           sudo install -d -o root -g root -m 0755 /srv/audit/checks
           printf '%s\n' "${AUDIT_MODEL_PRIVATE_KEY}" | age --decrypt --identity - --output "${RUNNER_TEMP}/checks.tar" "${RUNNER_TEMP}/checks-result/checks-result.age"
-          sudo tar -C /srv/audit/checks -xf "${RUNNER_TEMP}/checks.tar"
+          tar -tvf "${RUNNER_TEMP}/checks.tar" > "${RUNNER_TEMP}/checks.types"
+          tar -tf "${RUNNER_TEMP}/checks.tar" > "${RUNNER_TEMP}/checks.names"
+          if cut -c1 "${RUNNER_TEMP}/checks.types" | grep -v '^[-d]$' > /dev/null ||
+            grep -v '^results/' "${RUNNER_TEMP}/checks.names" > /dev/null ||
+            grep -E '(^|/)\.\.(/|$)' "${RUNNER_TEMP}/checks.names" > /dev/null; then
+            echo "::error title=Audit model::the checks' results hold an entry outside results/ or one that is no file or directory: see runbook step 11"
+            exit 1
+          fi
+          sudo tar -C /srv/audit/checks --no-same-owner --no-same-permissions -xf "${RUNNER_TEMP}/checks.tar"
           sudo chmod -R a-w /srv/audit/checks
+          rm -f "${RUNNER_TEMP}/checks.tar" "${RUNNER_TEMP}/checks.types" "${RUNNER_TEMP}/checks.names"
       - name: Copy the checkout into the audit directory
         timeout-minutes: 10
         run: |
@@ -308,17 +327,18 @@ jobs:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           # A dummy canary, which the preflight's probe 5 looks for: never a secret.
           SHIFT2EU_AUDIT_CANARY: "8f14e45fceea167a5a36dedd4bea2543f0e1a2b3c4d5e6f708192a3b4c5d6e7f"
+          # The integrity the pin step read, never a value of the workflow's own.
+          CLAUDE_CODE_PIN_INTEGRITY: ${{ steps.claude-code-pin.outputs.integrity }}
         run: |
           set -euo pipefail
-          integrity="$(sed -n 's/^integrity: //p' .github/claude-code.yaml)"
-          ci/auditrun -claude-tarball "${RUNNER_TEMP}/claude-code/claude-code.tgz" -claude-integrity "${integrity}"
+          ci/auditrun -claude-tarball "${RUNNER_TEMP}/claude-code/claude-code.tgz" -claude-integrity "${CLAUDE_CODE_PIN_INTEGRITY}" -result-out "${RUNNER_TEMP}/result.json"
       - name: Encrypt the audit's result to the publish key
         timeout-minutes: 5
         env:
           AUDIT_PUBLISH_PUBLIC_KEY: ${{ vars.AUDIT_PUBLISH_PUBLIC_KEY }}
         run: |
           set -euo pipefail
-          age --encrypt --recipient "${AUDIT_PUBLISH_PUBLIC_KEY}" --output "${RUNNER_TEMP}/model-result.age" /srv/audit/work/result.json
+          age --encrypt --recipient "${AUDIT_PUBLISH_PUBLIC_KEY}" --output "${RUNNER_TEMP}/model-result.age" "${RUNNER_TEMP}/result.json"
       - name: Upload the model's ciphertext
         timeout-minutes: 5
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -354,7 +374,7 @@ jobs:
           # renovate: datasource=github-releases depName=gitleaks/gitleaks
           GITLEAKS_VERSION: v8.30.0
           # renovate: datasource=github-release-attachments depName=gitleaks/gitleaks digestVersion=v8.30.0
-          GITLEAKS_SHA256: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+          GITLEAKS_SHA256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         run: |
           set -euo pipefail
           bin="${RUNNER_TEMP}/bin"
@@ -370,9 +390,17 @@ jobs:
         run: |
           set -euo pipefail
           ci/auditpublish artifacts -job publish -gh "$(command -v gh)" -tmp "${RUNNER_TEMP}"
-          artifact_id="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts" --jq '.artifacts[] | select(.name == "model-result") | .id')"
-          gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${artifact_id}/zip" > "${RUNNER_TEMP}/model-result.zip"
+          artifact="${RUNNER_TEMP}/artifact.json"
+          id="$(jq -er '.id' "${artifact}")"
+          digest="$(jq -er '.digest' "${artifact}")"
+          gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${id}/zip" > "${RUNNER_TEMP}/model-result.zip"
+          echo "${digest#sha256:}  ${RUNNER_TEMP}/model-result.zip" | sha256sum --check --strict -
+          mkdir "${RUNNER_TEMP}/model-result"
           unzip -q "${RUNNER_TEMP}/model-result.zip" -d "${RUNNER_TEMP}/model-result"
+          if [ "$(ls -A "${RUNNER_TEMP}/model-result")" != model-result.age ]; then
+            echo "::error title=Audit publish::model-result holds more than its ciphertext: see runbook step 11"
+            exit 1
+          fi
       - name: Decrypt the model's result
         timeout-minutes: 5
         env:
@@ -396,12 +424,30 @@ jobs:
         run: |
           set -euo pipefail
           image="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/shift2eu"
-          digest="$(jq -er '.image.digest' "${RUNNER_TEMP}/result.json")"
-          tag="$(jq -er '.release.tag' "${RUNNER_TEMP}/result.json")"
+          digest="$(jq -er '.image_digest' "${RUNNER_TEMP}/result.json")"
+          tag="$(jq -er '.release_tag' "${RUNNER_TEMP}/result.json")"
+          if [[ ! "${tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error title=Audit publish::the tag's shape is no vMAJOR.MINOR.PATCH: see runbook step 11"
+            exit 1
+          fi
+          if [ -z "${digest}" ]; then
+            echo "image not pulled: no provenance attestation to verify"
+            exit 0
+          fi
+          if [[ ! "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error title=Audit publish::the image digest is no sha256 digest: see runbook step 11"
+            exit 1
+          fi
           gh attestation verify "oci://${image}@${digest}" \
             --repo "${GITHUB_REPOSITORY}" \
             --signer-workflow "${GITHUB_REPOSITORY}/.github/workflows/release.yml" \
-            --source-ref "refs/tags/${tag}"
+            --source-ref "refs/tags/${tag}" \
+            --deny-self-hosted-runners
+      - name: Scan the text it is about to publish
+        timeout-minutes: 10
+        run: |
+          set -euo pipefail
+          gitleaks stdin --ignore-gitleaks-allow --redact --no-banner < "${RUNNER_TEMP}/result.json"
       - name: Mint the audit App's token
         timeout-minutes: 5
         id: app
@@ -415,11 +461,6 @@ jobs:
           permission-pull-requests: write
           permission-issues: write
           permission-security-events: write
-      - name: Scan the text it is about to publish
-        timeout-minutes: 10
-        run: |
-          set -euo pipefail
-          gitleaks stdin --ignore-gitleaks-allow --redact --no-banner < "${RUNNER_TEMP}/result.json"
       - name: Publish the report
         timeout-minutes: 20
         env:

@@ -15,6 +15,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/go-cmp/cmp"
+
 	"github.com/timothymamo/shift2eu/ci/auditpublish/internal/github"
 	"github.com/timothymamo/shift2eu/ci/auditpublish/internal/publish"
 )
@@ -46,26 +48,35 @@ func newImageClient(t *testing.T, ghPath string) *github.Client {
 	return c
 }
 
-// TestCheckRelease pins the release lookup: one call to the tag's release,
-// accepted only by a release of exactly that tag, and a tag the endpoint table
-// refuses refused before gh runs.
+// TestCheckRelease pins the release lookup: the tag's release, accepted only by
+// a release of exactly that tag, then the repository's latest release, accepted
+// only by the result's tag, and a tag the endpoint table refuses refused before
+// gh runs. A release the first lookup refuses ends the check before the second
+// read, and an answer of the second that is no release, or another tag, fails
+// closed: a result that names a release other than the latest one has audited a
+// scope the run did not record (review round 1, finding A3).
 func TestCheckRelease(t *testing.T) {
 	t.Parallel()
+
+	// releaseRoute is the tag's release answer.
+	releaseRoute := Route{Method: "GET", Endpoint: fixtureReleaseEndpoint, Status: 200, Body: map[string]string{"tag_name": fixtureTag}}
+	// latestRoute is the latest release answer: the result's tag.
+	latestRoute := Route{Method: "GET", Endpoint: fixtureLatestReleaseEndpoint, Status: 200, Body: map[string]string{"tag_name": fixtureTag}}
 
 	for _, tc := range []struct {
 		name string
 		tag  string
-		// routes answer the lookup; none means the case's tag never reaches gh.
+		// routes answer the lookups; none means the case's tag never reaches gh.
 		routes []Route
 		want   error
 		calls  int
 	}{
 		{
-			name:   "the tag's release",
+			name:   "the tag's release is the latest release",
 			tag:    fixtureTag,
-			routes: []Route{{Method: "GET", Endpoint: fixtureReleaseEndpoint, Status: 200, Body: map[string]string{"tag_name": fixtureTag}}},
+			routes: []Route{releaseRoute, latestRoute},
 			want:   nil,
-			calls:  1,
+			calls:  2,
 		},
 		{
 			name:   "no release of that tag",
@@ -102,6 +113,34 @@ func TestCheckRelease(t *testing.T) {
 			want:   publish.ErrResultInvalid,
 			calls:  0,
 		},
+		{
+			name:   "the latest release is another tag",
+			tag:    fixtureTag,
+			routes: []Route{releaseRoute, {Method: "GET", Endpoint: fixtureLatestReleaseEndpoint, Status: 200, Body: map[string]string{"tag_name": "v0.11.0"}}},
+			want:   publish.ErrResultInvalid,
+			calls:  2,
+		},
+		{
+			name:   "no latest release",
+			tag:    fixtureTag,
+			routes: []Route{releaseRoute, {Method: "GET", Endpoint: fixtureLatestReleaseEndpoint, Status: 404, Body: map[string]string{"message": releaseMarker}}},
+			want:   publish.ErrResultInvalid,
+			calls:  2,
+		},
+		{
+			name:   "a latest release answer that is no release",
+			tag:    fixtureTag,
+			routes: []Route{releaseRoute, {Method: "GET", Endpoint: fixtureLatestReleaseEndpoint, Status: 200, Body: []string{releaseMarker}}},
+			want:   publish.ErrGitHub,
+			calls:  2,
+		},
+		{
+			name:   "a failed latest release call",
+			tag:    fixtureTag,
+			routes: []Route{releaseRoute, {Method: "GET", Endpoint: fixtureLatestReleaseEndpoint, Status: 500, Body: map[string]string{"message": releaseMarker}}},
+			want:   publish.ErrGitHub,
+			calls:  2,
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -130,6 +169,28 @@ func TestCheckRelease(t *testing.T) {
 
 			if calls := fake.Calls(t); len(calls) != tc.calls {
 				t.Errorf("the check made %d call(s), want %d: %+v", len(calls), tc.calls, calls)
+			}
+
+			// The tag's release is read first, the latest release second, and
+			// neither is written: the two reads are the whole check.
+			for _, call := range fake.Calls(t) {
+				if call.Method != "GET" {
+					t.Errorf("the check made a %s call to %s, want reads alone", call.Method, call.Endpoint)
+				}
+			}
+
+			if tc.calls == 2 {
+				want := []string{fixtureReleaseEndpoint, fixtureLatestReleaseEndpoint}
+
+				var got []string
+
+				for _, call := range fake.Calls(t) {
+					got = append(got, call.Endpoint)
+				}
+
+				if diff := cmp.Diff(want, got); diff != "" {
+					t.Errorf("the check's reads (-want +got):\n%s", diff)
+				}
 			}
 		})
 	}

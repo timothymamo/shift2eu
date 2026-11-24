@@ -1362,6 +1362,33 @@ func TestClaudeCodeAuditWorkflowPinsOnlyWhereItReadsThem(t *testing.T) {
 			wantIn: "beside a pin written into the workflow",
 		},
 		{
+			// The installer takes exactly the pin step's version and integrity
+			// as its two last arguments: a line that drops one installs a CLI
+			// the pin file does not describe (review round 1, finding R4).
+			name: "the installer without the pin's two arguments",
+			rel:  claudeCodeAuditWorkflowPath,
+			src: rewrite(`"@anthropic-ai/claude-code-linux-x64@${CLAUDE_CODE_PIN_VERSION}" "${CLAUDE_CODE_PIN_INTEGRITY}"`,
+				`"@anthropic-ai/claude-code-linux-x64@${CLAUDE_CODE_PIN_VERSION}"`, 1),
+			wantIn: "install-claude-code.sh",
+		},
+		{
+			// The alias trick: a literal under another name on a line of its
+			// own is still a pin written into the workflow.
+			name:   "an integrity behind an alias",
+			rel:    claudeCodeAuditWorkflowPath,
+			src:    rewrite(`          .github/scripts/install-claude-code.sh`, "          i=\""+integrity+"\"\n          .github/scripts/install-claude-code.sh", 1),
+			wantIn: "sha512-",
+		},
+		{
+			// The model step's integrity is exactly the pin step's output: a
+			// literal there runs a CLI the pin file does not name.
+			name: "a literal -claude-integrity",
+			rel:  claudeCodeAuditWorkflowPath,
+			src: rewrite(`-claude-integrity "${CLAUDE_CODE_PIN_INTEGRITY}"`,
+				`-claude-integrity "`+integrity+`"`, 1),
+			wantIn: "-claude-integrity",
+		},
+		{
 			// Every other workflow keeps the whole-file rule: it may name none
 			// of the pin's strings at all.
 			name:   "a workflow that may not name the pin at all",
