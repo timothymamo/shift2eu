@@ -115,16 +115,28 @@ jobs:
           mkdir -p "${bin}"
           echo "${bin}" >> "${GITHUB_PATH}"
           curl -fsSLo "${RUNNER_TEMP}/gitleaks.tar.gz" "https://github.com/gitleaks/gitleaks/releases/download/${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION#v}_linux_x64.tar.gz"
-          echo "${GITLEAKS_SHA256}  ${RUNNER_TEMP}/gitleaks.tar.gz" | sha256sum --check --strict -
+          if ! echo "${GITLEAKS_SHA256}  ${RUNNER_TEMP}/gitleaks.tar.gz" | sha256sum --check --strict -; then
+            echo "::error title=Audit checks::gitleaks's checksum differs from its pin: see runbook step 11"
+            exit 1
+          fi
           tar -C "${bin}" -xzf "${RUNNER_TEMP}/gitleaks.tar.gz" gitleaks
           curl -fsSLo "${RUNNER_TEMP}/osv-scanner" "https://github.com/google/osv-scanner/releases/download/${OSV_SCANNER_VERSION}/osv-scanner_linux_amd64"
-          echo "${OSV_SCANNER_SHA256}  ${RUNNER_TEMP}/osv-scanner" | sha256sum --check --strict -
+          if ! echo "${OSV_SCANNER_SHA256}  ${RUNNER_TEMP}/osv-scanner" | sha256sum --check --strict -; then
+            echo "::error title=Audit checks::osv-scanner's checksum differs from its pin: see runbook step 11"
+            exit 1
+          fi
           install -m 0755 "${RUNNER_TEMP}/osv-scanner" "${bin}/osv-scanner"
           curl -fsSLo "${RUNNER_TEMP}/zizmor.tar.gz" "https://github.com/zizmorcore/zizmor/releases/download/${ZIZMOR_VERSION}/zizmor-x86_64-unknown-linux-gnu.tar.gz"
-          echo "${ZIZMOR_SHA256}  ${RUNNER_TEMP}/zizmor.tar.gz" | sha256sum --check --strict -
+          if ! echo "${ZIZMOR_SHA256}  ${RUNNER_TEMP}/zizmor.tar.gz" | sha256sum --check --strict -; then
+            echo "::error title=Audit checks::zizmor's checksum differs from its pin: see runbook step 11"
+            exit 1
+          fi
           tar -C "${bin}" -xzf "${RUNNER_TEMP}/zizmor.tar.gz" zizmor
           curl -fsSLo "${RUNNER_TEMP}/age.tar.gz" "https://github.com/FiloSottile/age/releases/download/${AGE_VERSION}/age-${AGE_VERSION#v}-linux-amd64.tar.gz"
-          echo "${AGE_SHA256}  ${RUNNER_TEMP}/age.tar.gz" | sha256sum --check --strict -
+          if ! echo "${AGE_SHA256}  ${RUNNER_TEMP}/age.tar.gz" | sha256sum --check --strict -; then
+            echo "::error title=Audit checks::age's checksum differs from its pin: see runbook step 11"
+            exit 1
+          fi
           tar -C "${RUNNER_TEMP}" -xzf "${RUNNER_TEMP}/age.tar.gz"
           install -m 0755 "${RUNNER_TEMP}/age/age" "${bin}/age"
           go install "golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}"
@@ -773,13 +785,22 @@ jobs:
           mkdir -p "${bin}"
           echo "${bin}" >> "${GITHUB_PATH}"
           curl -fsSLo "${RUNNER_TEMP}/bubblewrap.deb" "http://archive.ubuntu.com/ubuntu/pool/main/b/bubblewrap/bubblewrap_${BUBBLEWRAP_VERSION}_amd64.deb"
-          echo "${BUBBLEWRAP_DEB_SHA256}  ${RUNNER_TEMP}/bubblewrap.deb" | sha256sum --check --strict -
+          if ! echo "${BUBBLEWRAP_DEB_SHA256}  ${RUNNER_TEMP}/bubblewrap.deb" | sha256sum --check --strict -; then
+            echo "::error title=Audit model::bubblewrap's checksum differs from its pin: see runbook step 11"
+            exit 1
+          fi
           sudo dpkg -i "${RUNNER_TEMP}/bubblewrap.deb"
           curl -fsSLo "${RUNNER_TEMP}/socat.deb" "http://archive.ubuntu.com/ubuntu/pool/main/s/socat/socat_${SOCAT_VERSION}_amd64.deb"
-          echo "${SOCAT_DEB_SHA256}  ${RUNNER_TEMP}/socat.deb" | sha256sum --check --strict -
+          if ! echo "${SOCAT_DEB_SHA256}  ${RUNNER_TEMP}/socat.deb" | sha256sum --check --strict -; then
+            echo "::error title=Audit model::socat's checksum differs from its pin: see runbook step 11"
+            exit 1
+          fi
           sudo dpkg -i "${RUNNER_TEMP}/socat.deb"
           curl -fsSLo "${RUNNER_TEMP}/age.tar.gz" "https://github.com/FiloSottile/age/releases/download/${AGE_VERSION}/age-${AGE_VERSION#v}-linux-amd64.tar.gz"
-          echo "${AGE_SHA256}  ${RUNNER_TEMP}/age.tar.gz" | sha256sum --check --strict -
+          if ! echo "${AGE_SHA256}  ${RUNNER_TEMP}/age.tar.gz" | sha256sum --check --strict -; then
+            echo "::error title=Audit model::age's checksum differs from its pin: see runbook step 11"
+            exit 1
+          fi
           tar -C "${RUNNER_TEMP}" -xzf "${RUNNER_TEMP}/age.tar.gz"
           install -m 0755 "${RUNNER_TEMP}/age/age" "${bin}/age"
           # The CLI's version and integrity are read from the one pin file, never
@@ -929,7 +950,10 @@ jobs:
           mkdir -p "${bin}"
           echo "${bin}" >> "${GITHUB_PATH}"
           curl -fsSLo "${RUNNER_TEMP}/gitleaks.tar.gz" "https://github.com/gitleaks/gitleaks/releases/download/${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION#v}_linux_x64.tar.gz"
-          echo "${GITLEAKS_SHA256}  ${RUNNER_TEMP}/gitleaks.tar.gz" | sha256sum --check --strict -
+          if ! echo "${GITLEAKS_SHA256}  ${RUNNER_TEMP}/gitleaks.tar.gz" | sha256sum --check --strict -; then
+            echo "::error title=Audit publish::gitleaks's checksum differs from its pin: see runbook step 11"
+            exit 1
+          fi
           tar -C "${bin}" -xzf "${RUNNER_TEMP}/gitleaks.tar.gz" gitleaks
       - name: List the run's artifacts and download the model's ciphertext
         timeout-minutes: 5

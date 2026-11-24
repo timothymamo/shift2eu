@@ -121,6 +121,21 @@ import (
 //     the fuzz container of row 14 is handed GOFLAGS and GOPROXY by its
 //     docker create.
 //
+// The two causes left unnamed after PR 5c, which PRD #175's "A failed run is
+// visible" wants named:
+//
+//   - Every tool download's checksum check is held whole: the pin is compared
+//     with sha256sum under an if !, the branch's echo names the tool, its job
+//     and the runbook step that puts it right, and the exit 1 fails the step.
+//     Bare, the step fails with sha256sum's own line alone, which names no
+//     cause. The three download steps, the checks job's, the model job's and
+//     the publish job's, hold one guard per download, none left bare: the two
+//     artifacts' zips are no tool pin, and their digest check is held
+//     separately.
+//   - docker start is called on a run container alone, the one docker create
+//     made with the four flags: the staging container that receives the inputs
+//     by docker cp and becomes the image by docker commit is never started.
+//
 // The check recognises each job's steps by name, and the accepted fixture's
 // names are the closed list: a step the check's list does not hold is reported
 // with its name, as is a step that is missing or out of order. Every message
@@ -580,7 +595,118 @@ const (
 		"            echo \"finished\"\n            exit 0\n          fi\n"
 	auditHostileNotPulledBranch = "            echo \"hostile-inventories image-not-pulled\" >> \"${results}/not-run.txt\"\n" +
 		"            echo \"finished\"\n            exit 0\n          fi\n"
+	// auditHostileStaging and auditFuzzStaging are rows 13 and 14's staging
+	// containers, each created with no flag and no command: docker cp copies the
+	// inputs into it and docker commit turns it into the image the row's runs
+	// start from, so it is never started itself. A case that starts one hangs a
+	// docker start on its create.
+	auditHostileStaging = "          staging=\"$(docker create \"${image}@${digest}\")\"\n"
+	auditFuzzStaging    = "          staging=\"$(docker create \"${image}\")\"\n"
 )
+
+// auditChecksum is one tool download of a download step: the job it runs in,
+// the name its error gives it, the env: variable that holds its pin and the file
+// the step writes the download to, which is the file it checksums.
+type auditChecksum struct {
+	job, tool, variable, file string
+}
+
+// auditChecksums are the accepted fixture's tool downloads, in the order the
+// steps run them: the checks job's four, the model job's three and the publish
+// job's one. Each download is one guard of its own, so a case per download is
+// what holds every one of them: a step whose guard is required once would still
+// accept a download left bare. The two artifacts' zips are no tool pin: their
+// digest comes from artifact.json, the check's own output, and zipDigest holds
+// that check.
+var auditChecksums = []auditChecksum{
+	{"checks", "gitleaks", "GITLEAKS_SHA256", "gitleaks.tar.gz"},
+	{"checks", "osv-scanner", "OSV_SCANNER_SHA256", "osv-scanner"},
+	{"checks", "zizmor", "ZIZMOR_SHA256", "zizmor.tar.gz"},
+	{"checks", "age", "AGE_SHA256", "age.tar.gz"},
+	{"model", "bubblewrap", "BUBBLEWRAP_DEB_SHA256", "bubblewrap.deb"},
+	{"model", "socat", "SOCAT_DEB_SHA256", "socat.deb"},
+	{"model", "age", "AGE_SHA256", "age.tar.gz"},
+	{"publish", "gitleaks", "GITLEAKS_SHA256", "gitleaks.tar.gz"},
+}
+
+// auditChecksumGuard returns download d's checksum check as the accepted fixture
+// writes it: sha256sum under an if !, an error naming the tool, its job and the
+// runbook step that fixes a pin the download no longer matches, and the exit 1
+// that fails the step, each on a line of its own.
+func auditChecksumGuard(d auditChecksum) string {
+	return "          if ! " + auditChecksumCheck(d) + "; then\n" +
+		"            echo \"::error title=Audit " + d.job + "::" + d.tool + "'s checksum differs from its pin: see runbook step 11\"\n" +
+		"            exit 1\n" +
+		"          fi\n"
+}
+
+// auditChecksumBare returns download d's checksum check as the fixture wrote it
+// before the guard, and as a case that breaks one puts it back: sha256sum
+// alone, whose failure is its own line and names no cause.
+func auditChecksumBare(d auditChecksum) string {
+	return "          " + auditChecksumCheck(d) + "\n"
+}
+
+// auditChecksumCheck is the comparison both forms are built from: the pin the
+// step's env: holds, the file the step downloaded, and sha256sum --check.
+func auditChecksumCheck(d auditChecksum) string {
+	return "echo \"${" + d.variable + "}  ${RUNNER_TEMP}/" + d.file + "\" | sha256sum --check --strict -"
+}
+
+// checksumsOf returns the downloads of the job's steps, in the order the steps
+// run them: the ones a case that breaks a whole download step's guards changes
+// together, so that a step is held to guard each check it makes whole and not a
+// shape one of them keeps.
+func checksumsOf(job string) []auditChecksum {
+	var out []auditChecksum
+
+	for _, d := range auditChecksums {
+		if d.job == job {
+			out = append(out, d)
+		}
+	}
+
+	return out
+}
+
+// breakChecksums returns doc with every download of downloads replaced by what
+// change returns for it.
+func breakChecksums(t *testing.T, doc string, downloads []auditChecksum, change func(d auditChecksum) string) string {
+	t.Helper()
+
+	for _, d := range downloads {
+		doc = mutate(t, doc, auditChecksumGuard(d), change(d))
+	}
+
+	return doc
+}
+
+// auditChecksumBreakages are the three ways every guard of one download step
+// stops refusing a download that differs from its pin: put back to the bare
+// sha256sum line, left without its exit 1, and run together onto the echo's
+// line, whose echo, exit and fi are then words of one command that carries on.
+var auditChecksumBreakages = []struct {
+	name string
+	of   func(d auditChecksum) string
+}{
+	{"put back to the bare sha256sum line", auditChecksumBare},
+	{"left without their exit 1", func(d auditChecksum) string {
+		return strings.Replace(auditChecksumGuard(d), "            exit 1\n", "", 1)
+	}},
+	{"run together onto the echo's line", func(d auditChecksum) string {
+		return joinedBranch(auditChecksumGuard(d))
+	}},
+}
+
+// auditWorkflowCase is one case of TestAuditWorkflow: a mutation of the accepted
+// shape, and the part of a message it must draw.
+type auditWorkflowCase struct {
+	name     string
+	workflow string
+	// wantIn is a part of a message the check must return for the case, and
+	// the accepted shape does not draw; "" means no message at all.
+	wantIn string
+}
 
 // TestAuditWorkflowAcceptsTheAcceptedShape pins that the accepted fixture draws
 // no message: every case of TestAuditWorkflow is a mutation of it, and a check
@@ -659,13 +785,7 @@ func TestAuditWorkflow(t *testing.T) {
 	// model job anchor on.
 	const auditModelUpload = "      - name: Upload the model's ciphertext\n"
 
-	tests := []struct {
-		name     string
-		workflow string
-		// wantIn is a part of a message the check must return for the case, and
-		// the accepted shape does not draw; "" means no message at all.
-		wantIn string
-	}{
+	tests := []auditWorkflowCase{
 		// The accepted shape, and the reading that must not depend on the line
 		// ends.
 		{name: "the accepted shape", workflow: acceptedWorkflow},
@@ -1816,6 +1936,21 @@ func TestAuditWorkflow(t *testing.T) {
 			workflow: mutate(t, acceptedWorkflow, auditImagePull, "          docker login ghcr.io -u nobody --password-stdin <<< \"$(command -v true)\"\n"+auditImagePull),
 			wantIn:   "docker login",
 		},
+		// Rows 13 and 14 bring the inputs into the image through a staging
+		// container: created with no flag and no command, copied into, committed
+		// and removed. Only the row's run container, the one docker create made
+		// with the four flags, is ever started: docker start of the staging
+		// container runs a container nothing hardened.
+		{
+			name:     "a docker start of row 13's staging container",
+			workflow: mutate(t, acceptedWorkflow, auditHostileStaging, auditHostileStaging+"          timeout 60 docker start --attach \"${staging}\" > /dev/null 2>&1 || true\n"),
+			wantIn:   "staging",
+		},
+		{
+			name:     "a docker start of row 14's staging container",
+			workflow: mutate(t, acceptedWorkflow, auditFuzzStaging, auditFuzzStaging+"          timeout 60 docker start --attach \"${staging}\" > /dev/null 2>&1 || true\n"),
+			wantIn:   "staging",
+		},
 		{
 			name:     "the fuzz image pinned by tag alone",
 			workflow: mutate(t, acceptedWorkflow, auditGoImage, "          GO_IMAGE: \"1.27.4-alpine\"\n"),
@@ -1942,6 +2077,30 @@ func TestAuditWorkflow(t *testing.T) {
 		// refused rather than passed.
 		{name: "an empty document", workflow: "", wantIn: "empty"},
 		{name: "a document that is no YAML", workflow: "\ton:\n", wantIn: "read"},
+	}
+
+	// Every tool download's checksum check, step by step and download by
+	// download: a whole download step's guards put back to the bare sha256sum
+	// lines, left without their exit 1 or run together onto the echo's line, and
+	// then each step's downloads one by one, so that no download is left
+	// reporting sha256sum's own line alone (PRD #175, "A failed run is
+	// visible").
+	for _, job := range []string{"checks", "model", "publish"} {
+		for _, breakage := range auditChecksumBreakages {
+			tests = append(tests, auditWorkflowCase{
+				name:     "every checksum guard of the " + job + " job " + breakage.name,
+				workflow: breakChecksums(t, acceptedWorkflow, checksumsOf(job), breakage.of),
+				wantIn:   "sha256sum",
+			})
+		}
+	}
+
+	for _, download := range auditChecksums {
+		tests = append(tests, auditWorkflowCase{
+			name:     "the " + download.job + " job's " + download.tool + " download without its checksum guard",
+			workflow: breakChecksums(t, acceptedWorkflow, []auditChecksum{download}, auditChecksumBare),
+			wantIn:   "sha256sum",
+		})
 	}
 
 	for _, tc := range tests {
