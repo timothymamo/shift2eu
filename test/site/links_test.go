@@ -106,7 +106,9 @@ const siteHost = "shift2eu.com"
 // the reference names no host or names the site's own host, shift2eu.com or its
 // www: the bundle must run unchanged on any origin, so a page that means its own
 // index spells it as the relative index.html, and the live site's root is no
-// more allowed than its /index.html. Another site's root is that site's own
+// more allowed than its /index.html. A host written as a fully qualified domain
+// name, with a trailing dot (shift2eu.com.), names the same host, so it is read
+// the same way. Another site's root is that site's own
 // index, which is no file of this bundle (the maintainer's bio links to
 // https://fika.works/ and https://timothymamo.com, issue #528).
 func siteFileProblem(bundle *bundle, ref string) string {
@@ -125,7 +127,7 @@ func siteFileProblem(bundle *bundle, ref string) string {
 
 	path := strings.TrimPrefix(parsed.Path, "/")
 	if path == "" {
-		if host := strings.ToLower(parsed.Hostname()); host != "" && host != siteHost && host != "www."+siteHost {
+		if host := strings.TrimSuffix(strings.ToLower(parsed.Hostname()), "."); host != "" && host != siteHost && host != "www."+siteHost {
 			return ""
 		}
 
@@ -541,7 +543,8 @@ func TestNoAbsoluteURLToASiteFile(t *testing.T) {
 // //host are read as the paths they spell, so a later file:///index.html or
 // ftp://host/style.css is caught rather than skipped. A reference whose path is
 // the root names the bundle's own index.html when it names no host or the site's
-// own host, shift2eu.com or its www, and another site's index when it names
+// own host, shift2eu.com or its www, plainly or as a fully qualified domain name
+// with a trailing dot, and another site's index when it names
 // another host, which is no file of this bundle. Each case names the bundle file
 // the check must refuse, or none when the reference names no site file.
 func TestSiteFileAtAnAbsoluteURLIsRefused(t *testing.T) {
@@ -565,6 +568,8 @@ func TestSiteFileAtAnAbsoluteURLIsRefused(t *testing.T) {
 		{name: "the site's own root without www or a trailing slash", ref: "https://" + siteHost, wantFile: "index.html"},
 		{name: "a protocol-relative URL of the site's own root", ref: "//" + siteHost, wantFile: "index.html"},
 		{name: "an uppercase URL of the site's own root", ref: "HTTPS://WWW.SHIFT2EU.COM/", wantFile: "index.html"},
+		{name: "the site's own root at a fully qualified host", ref: "https://" + siteHost + "./", wantFile: "index.html"},
+		{name: "the site's own www root at a fully qualified host", ref: "https://www." + siteHost + "./", wantFile: "index.html"},
 		{name: "the contact address", ref: contactHref, wantFile: ""},
 		{name: "an address with a subject", ref: contactHref + "?subject=Assessment", wantFile: ""},
 		{name: "the repository", ref: repositoryURL, wantFile: ""},
