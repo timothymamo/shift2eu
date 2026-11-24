@@ -317,8 +317,8 @@ deploy step itself.
 - **Roll back to an older release:** the deploy refuses it by design while a genuine higher release is
   live. The maintainer rolls back with their own key instead: with versioning, each of the four pages,
   `LICENSE`, `NOTICE` and `manifest.json` copied from its earlier version (R12); the earlier release's
-  assets are still in the bucket, since nothing is ever deleted. The live checks then fail until the expected version is
-  live again, which the alert reports; a rollback is followed by a fixing release.
+  assets are still in the bucket, since nothing is ever deleted. The live checks then fail until the
+  expected version is live again, which the alert reports; a rollback is followed by a fixing release.
 - **Either is followed by a manual Edge Services cache purge** by the maintainer, whose credentials hold
   the Edge Services permission the deploy key lacks (R12). Browsers may still keep a released page
   served from a poisoned cache for up to its `max-age` (300 seconds).
