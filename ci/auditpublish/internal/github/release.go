@@ -43,11 +43,17 @@ func NewImageClient(cfg ClientConfig) (*Client, error) {
 }
 
 // CheckRelease refuses a result whose release tag names no release of the
-// repository: one call, GET R/releases/tags/<tag> (endpoint row 2). 200 is a
-// release; 404 wraps publish.ErrResultInvalid; a tag the endpoint table
-// refuses (not v<major>.<minor>.<patch>) also wraps publish.ErrResultInvalid,
-// before gh runs; any other status, an answer whose tag_name is not the tag,
-// and a failed call wrap publish.ErrGitHub.
+// repository, or a release other than the latest: two reads, both endpoint
+// row 2. First GET R/releases/tags/<tag>: 200 is a release; 404 wraps
+// publish.ErrResultInvalid; a tag the endpoint table refuses (not
+// v<major>.<minor>.<patch>) also wraps publish.ErrResultInvalid, before gh
+// runs; any other status, an answer whose tag_name is not the tag, and a
+// failed call wrap publish.ErrGitHub. Only then GET R/releases/latest: its
+// tag_name must be the result's tag, since the run audits the latest release
+// and a result naming another has audited a scope the run did not record
+// (review round 1 of PR 5b, finding A3). Another tag and a 404 (no latest
+// release) wrap publish.ErrResultInvalid; any other status, an answer that is
+// no release and a failed call wrap publish.ErrGitHub.
 func CheckRelease(ctx context.Context, c *Client, tag string) error {
 	if c == nil {
 		return fmt.Errorf("release check: no client: %w", publish.ErrConfig)
@@ -57,27 +63,53 @@ func CheckRelease(ctx context.Context, c *Client, tag string) error {
 		return fmt.Errorf("release check: the tag is no release tag: %w", publish.ErrResultInvalid)
 	}
 
-	resp, err := c.Call(ctx, Request{Method: "GET", Endpoint: "repos/" + c.scope.Repository + "/releases/tags/" + tag})
+	got, err := releaseTagAt(ctx, c, "releases/tags/"+tag)
 	if err != nil {
-		return fmt.Errorf("release check: %w", err)
+		return fmt.Errorf("release check: the tag's release: %w", err)
+	}
+
+	if got != tag {
+		return fmt.Errorf("release check: the answer is not the tag's release: %w", publish.ErrGitHub)
+	}
+
+	latest, err := releaseTagAt(ctx, c, "releases/latest")
+	if err != nil {
+		return fmt.Errorf("release check: the latest release: %w", err)
+	}
+
+	if latest != tag {
+		return fmt.Errorf("release check: the tag is not the latest release's: %w", publish.ErrResultInvalid)
+	}
+
+	return nil
+}
+
+// releaseTagAt reads one release, R/<path>, and returns its tag_name. A 404
+// wraps publish.ErrResultInvalid; any other non-2xx status, an answer without
+// a tag_name string and a failed call wrap publish.ErrGitHub. No error holds
+// any of the answer.
+func releaseTagAt(ctx context.Context, c *Client, path string) (string, error) {
+	resp, err := c.Call(ctx, Request{Method: "GET", Endpoint: "repos/" + c.scope.Repository + "/" + path})
+	if err != nil {
+		return "", err
 	}
 
 	switch {
 	case resp.Status == 404:
-		return fmt.Errorf("release check: the tag names no release: %w", publish.ErrResultInvalid)
+		return "", fmt.Errorf("no such release: %w", publish.ErrResultInvalid)
 	case resp.Status/100 != 2:
-		return fmt.Errorf("release check: the lookup's status is not 2xx: %w", publish.ErrGitHub)
+		return "", fmt.Errorf("the lookup's status is not 2xx: %w", publish.ErrGitHub)
 	}
 
 	var release struct {
 		TagName *string `json:"tag_name"`
 	}
 
-	if json.Unmarshal(resp.Body, &release) != nil || release.TagName == nil || *release.TagName != tag {
-		return fmt.Errorf("release check: the answer is not the tag's release: %w", publish.ErrGitHub)
+	if json.Unmarshal(resp.Body, &release) != nil || release.TagName == nil {
+		return "", fmt.Errorf("the answer is no release: %w", publish.ErrGitHub)
 	}
 
-	return nil
+	return *release.TagName, nil
 }
 
 // attestationListing is the part of the attestation listing the check reads.

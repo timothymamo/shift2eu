@@ -154,7 +154,7 @@ Triggers, jobs and permissions:
   deployment branch policy is `main` only, so a `workflow_dispatch` on another ref never receives a
   secret or variable. Every checkout is of `github.sha` (the `main` commit the run started on), never a
   pull request's code or another ref, with `persist-credentials: false`.
-- [ ] The workflow sets a top-level `concurrency` with `cancel-in-progress: false` and a group that
+- [x] The workflow sets a top-level `concurrency` with `cancel-in-progress: false` and a group that
   applies only to runs whose jobs will run, so a run that would be skipped never queues behind or
   cancels a real one. The group embeds the guard condition verbatim:
   `group: ${{ <guard condition> && 'scheduled-security-audit' || format('skipped-{0}', github.run_id) }}`.
@@ -175,7 +175,7 @@ Triggers, jobs and permissions:
   model and publish jobs have exactly `contents: read` (plus `actions: read` where the ADR shows the
   artifact listing below needs it). No job ever holds a write scope. The release's image is public, so
   it is pulled anonymously and no job holds `packages: read`.
-- [ ] The audit App's token is minted with `actions/create-github-app-token` (pinned by SHA) **only in the
+- [x] The audit App's token is minted with `actions/create-github-app-token` (pinned by SHA) **only in the
   publish job**, narrowed with exactly the `permission-*` inputs the ADR lists. The App's client ID is a
   variable and its private key a secret of the `security-audit` environment only, referenced only in the
   publish job. No repository-level secret or variable holds either. The `release-tag` skill's secrets
@@ -183,30 +183,30 @@ Triggers, jobs and permissions:
 
 What crosses between the jobs:
 
-- [ ] Two key pairs of the encryption tool (`age`, or an equivalent the ADR names, pinned like the other
+- [x] Two key pairs of the encryption tool (`age`, or an equivalent the ADR names, pinned like the other
   tools): the **model key** and the **publish key**. Each public half is a variable, each private half a
   secret, of the `security-audit` environment. The model key's private half is referenced only in the
   model job's decrypt step, the publish key's only in the publish job's decrypt step. Each decrypt step
   passes the private half to the tool on stdin, or writes it to a file only under that job's
   `$RUNNER_TEMP` (read-denied to the model) and deletes the file in the same step.
-- [ ] The checks job writes its raw results under its own `$RUNNER_TEMP`, and a last step encrypts them to
+- [x] The checks job writes its raw results under its own `$RUNNER_TEMP`, and a last step encrypts them to
   the model key's public half and uploads **only that ciphertext**, as the artifact `checks-result`. The
   model job writes one structured result (a JSON file with a schema the publish script owns), and a
   model-free step after the model step encrypts it to the publish key's public half and uploads only that
   ciphertext, as the artifact `model-result`. Both have a one-day retention.
-- [ ] Each job that downloads an artifact downloads it **by exact name**, and first lists the run's
+- [x] Each job that downloads an artifact downloads it **by exact name**, and first lists the run's
   artifacts: it fails closed if any artifact other than those expected at that point exists, or if a name
   appears twice. Each job treats what it decrypts as untrusted input. A test against the fake `gh`
   (below) covers an extra artifact and a duplicate name for both jobs.
-- [ ] Nothing else crosses: no job output, no cache, no other artifact. `github.sha` is the same in every
+- [x] Nothing else crosses: no job output, no cache, no other artifact. `github.sha` is the same in every
   job; the release tag travels inside the encrypted results, and the publish script checks that it names
   an existing release.
-- [ ] Before the result's image digest is trusted, a model-free workflow step (PR 5) runs
+- [x] Before the result's image digest is trusted, a model-free workflow step (PR 5) runs
   `gh attestation verify oci://<image>@<digest> --repo <owner>/<name> --signer-workflow
   <owner>/<name>/.github/workflows/release.yml --source-ref refs/tags/<tag>`, outside the publish
   program's `gh api` contract, and fails the run on any refusal: it verifies the attestation's Sigstore
   signature, which the program's image check does not (ADR 0040, the image check's residual risk).
-- [ ] This is chosen over job outputs because a public repository's artifacts are downloadable by anyone
+- [x] This is chosen over job outputs because a public repository's artifacts are downloadable by anyone
   and a job output is plaintext one `echo`, `set -x` or debug-logged re-run away from the public log;
   ciphertext stays harmless wherever it ends up. Anything in the checks job could forge a ciphertext with
   the public half, which is why the model job reads it as data. The cost is two key pairs and one pinned
@@ -231,17 +231,17 @@ The checks job:
 
 The model job and where the subscription token is:
 
-- [ ] The model job checks out `github.sha`, downloads and checksum-verifies its pinned tools, downloads
+- [x] The model job checks out `github.sha`, downloads and checksum-verifies its pinned tools, downloads
   `checks-result`, and decrypts it into the **audit directory**: a fresh directory the ADR names, outside
   `/home`, the runner's `$HOME` (`/home/runner`) and the runner's own directories (on hosted runners
   `$RUNNER_TEMP` lies under `/home/runner`, so it cannot be there without weakening the read deny list
   below). A model-free step copies the checkout into the audit directory, read-only.
-- [ ] The model step authenticates with the Claude Code OAuth token from the `security-audit`
+- [x] The model step authenticates with the Claude Code OAuth token from the `security-audit`
   environment's secret alone, never an API key, and runs `claude-fable-5-2` at effort high.
   `secrets.CLAUDE_CODE_OAUTH_TOKEN` appears only in that step's step-level `env:`: never in job or
   workflow `env:`, a `with:` input, or a `run:` script body. The step's environment holds no other secret
   and no `GITHUB_TOKEN`.
-- [ ] The model step runs a committed launcher that starts the Claude Code binary by absolute path,
+- [x] The model step runs a committed launcher that starts the Claude Code binary by absolute path,
   verified against its pinned checksum in the same step, through `env -i` with an explicit allow list: a
   fresh `HOME` inside the audit directory's own state area, a fixed `PATH`, the token,
   `DISABLE_AUTOUPDATER=1`, `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`, and only what the ADR shows the
@@ -253,21 +253,21 @@ The model job and where the subscription token is:
 
 How the model is contained:
 
-- [ ] Claude Code runs with **only the audit's own settings file** (`--settings`): its setting sources
+- [x] Claude Code runs with **only the audit's own settings file** (`--settings`): its setting sources
   load no user, project or local settings, and it runs from a working directory inside the audit
   directory, so no `.claude/` or `CLAUDE.md` loads. It uses a strict, empty MCP configuration and has no
   hooks. A later change to `.claude/settings.json` cannot widen the audit.
-- [ ] The skill's text, read from the `github.sha` checkout, is passed to the model **explicitly** (as
+- [x] The skill's text, read from the `github.sha` checkout, is passed to the model **explicitly** (as
   the prompt or a system-prompt file, the ADR says which); the files it links to are read as data from
   the audit directory's copy of the checkout.
-- [ ] It runs inside **Claude Code's sandbox** with `sandbox.enabled: true`,
+- [x] It runs inside **Claude Code's sandbox** with `sandbox.enabled: true`,
   `autoAllowBashIfSandboxed: false`, `allowUnsandboxedCommands: false`, no `excludedCommands`, and an
   **empty** network allow list: Bash has no network at all. Bash writes only under the audit directory's
   work area. The Claude Code process itself makes no connection but to the model API **by its
   configuration** (the two variables above, no `WebFetch` or `WebSearch`). That is not enforced: the
   sandbox wraps Bash only, and the unsandboxed CLI process could open any connection. It is a residual
   risk (Decision 6), and no test claims otherwise.
-- [ ] Its permissions are an **allow list in a non-interactive mode that refuses every tool not on it**
+- [x] Its permissions are an **allow list in a non-interactive mode that refuses every tool not on it**
   (the ADR names the mode): `Read`, `Grep` and `Glob` only of the audit directory's checkout copy, the
   checks' results and the work area, `Write` and `Edit` only under the work area, and, if the skill needs
   a command at all, `Bash` only through the scrubbed-environment wrapper below. It never runs with
@@ -278,7 +278,7 @@ How the model is contained:
   `Glob` of the audit directory's state area (the fresh `HOME`, with Claude Code's own configuration and
   transcripts). It keeps the Bash patterns (`git push|commit|tag|remote`, `gh`, `curl`, `wget`, `nc`,
   `ssh`, `docker`, `sudo`, `env`, `printenv`, `set`, `/proc/*/environ`) as defence in depth.
-- [ ] Any command the model runs goes through a committed wrapper that names the commands it may `exec`
+- [x] Any command the model runs goes through a committed wrapper that names the commands it may `exec`
   (the ADR lists them), refuses every other, and `exec`s with a scrubbed environment (`env -i` plus an
   allow list of harmless variables).
 - [x] A test pins the settings file: the setting sources, the sandbox keys above, the empty network
@@ -286,10 +286,10 @@ How the model is contained:
   the work area), the deny list with its literal paths (`/proc`, `/sys`, `/etc`, `/home`, `/home/runner`
   and the audit directory's state area), the mode, the absence of `WebFetch`, `WebSearch` and both bypass
   forms. Dropping or widening any of them fails `make test`.
-- [ ] Before the model step, a **model-free hardening step** stops the Docker service and removes the
+- [x] Before the model step, a **model-free hardening step** stops the Docker service and removes the
   runner user's sudo rule (the model job runs no container). The `test/architecture` check pins that step
   and its place before the preflight.
-- [ ] On **every run**, before the model starts, a **sandbox preflight** runs six probes through the same
+- [x] On **every run**, before the model starts, a **sandbox preflight** runs six probes through the same
   launcher, settings and wrapper the model uses, and fails the step unless **all six fail**: (1) a write
   outside the work area, (2) a TCP connect, (3) a connect to `/var/run/docker.sock`, (4) `sudo -n true`,
   (5) a read of a canary variable from `/proc/<launcher pid>/environ`, where the launcher sets a dummy
@@ -325,7 +325,7 @@ Pins, checks and logs:
   `GOFLAGS=-mod=readonly GOPROXY=off`, the container flags, the commit-pinned actions, the time-outs, and
   Claude Code's launch (the launcher, its settings file, setting sources, strict MCP configuration, the
   system-prompt or prompt file, no bypass). Changing any of them fails `make check`.
-- [ ] **The Actions cache.** Anything in the checks job runs as the runner user and could read the
+- [x] **The Actions cache.** Anything in the checks job runs as the runner user and could read the
   Actions runtime token and save cache entries scoped to `main`, which other workflows on `main` restore.
   The ADR records this residual risk and the rule that no release-relevant workflow restores an Actions
   cache. The same `test/architecture` check pins `cache: false` (or `skip-cache: true`) on every
@@ -342,7 +342,7 @@ Pins, checks and logs:
 
 The publish script:
 
-- [ ] The publish script has no model in it and is tested against a fake `gh` with canned API responses
+- [x] The publish script has no model in it and is tested against a fake `gh` with canned API responses
   (as CI's `Release please dry run` job tests the release scripts). It fails closed (publishes nothing
   public) on a result that does not decrypt, does not match the schema, has a field over its length cap,
   has an unknown field, or exceeds the finding limit the ADR sets. Every model-written text is
@@ -386,7 +386,7 @@ The publish script:
   never conflict. Because the names carry the run ID, a second run on one UTC day, or a run started by
   hand on the day of a scheduled one, adds its own report. A report it renders from a fixture result
   passes `test/docs`' title and link checks.
-- [ ] Each finding carries a **fingerprint** the script computes from rule, file and sink, written as
+- [x] Each finding carries a **fingerprint** the script computes from rule, file and sink, written as
   `fp-` and 12 lowercase hex characters in each issue and advisory it files, and in the report's findings
   table for public findings, so later runs can read it back. A **public** fingerprint is a plain hash: the
   finding is published anyway. A **private** fingerprint is a keyed hash (HMAC) with the
@@ -441,7 +441,7 @@ The publish script:
   example "needs admin read", "no `Fuzz*` targets", "timed out"), never the model's text. A fixture test
   renders a result with one private finding from the CLI's hostile inventories (row 13) and shows that row
   exactly as a check with no findings ("run") (Decision 2).
-- [ ] Values from the run reach the shell only through `env:` and files, never through a `${{ }}`
+- [x] Values from the run reach the shell only through `env:` and files, never through a `${{ }}`
   expression.
 
 The required path check:

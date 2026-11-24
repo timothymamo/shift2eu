@@ -21,6 +21,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -215,16 +216,30 @@ func readSummary(path string) (string, error) {
 	return string(body), nil
 }
 
-// artifactListing is the run's artifact listing GitHub answers with.
+// artifactListing is the run's artifact listing GitHub answers with. Each entry
+// carries an ID and a sha256 digest, one per position, so the check has the
+// values the download is bound to.
 func artifactListing(total int, names ...string) map[string]any {
 	artifacts := make([]map[string]any, 0, len(names))
 
-	for _, name := range names {
-		artifacts = append(artifacts, map[string]any{"name": name, "expired": false})
+	for i, name := range names {
+		artifacts = append(artifacts, map[string]any{
+			"name":    name,
+			"expired": false,
+			"id":      artifactListingID(i),
+			"digest":  artifactListingDigest(i),
+		})
 	}
 
 	return map[string]any{"total_count": total, "artifacts": artifacts}
 }
+
+// artifactListingID and artifactListingDigest are the ID and digest of the
+// listing's entry at index i: invented, and different per position so that the
+// tests can tell the entries apart.
+func artifactListingID(i int) int64 { return int64(1000 + i) }
+
+func artifactListingDigest(i int) string { return fmt.Sprintf("sha256:%064x", 1000+i) }
 
 // TestRunArtifactsReadsTheListedVariablesAndNoOther pins the variables the
 // artifacts subcommand reads: GH_TOKEN, GITHUB_SERVER_URL, GITHUB_REPOSITORY,
@@ -529,6 +544,113 @@ func TestRunRefusesWithAConstantText(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestRunArtifactsWritesTheCheckedArtifact pins the hand-off review round 1's
+// finding A4 accepted: the artifacts subcommand writes the artifact the check
+// accepted, with its ID and digest, to the fixed artifact.json under -tmp, and
+// the workflow's download step reads them from there instead of listing the
+// run's artifacts again. A refusal writes nothing. The file is opened O_EXCL:
+// a path that already exists is refused rather than overwritten.
+func TestRunArtifactsWritesTheCheckedArtifact(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name     string
+		job      string
+		names    []string
+		download string
+		index    int
+	}{
+		{name: "the model job", job: jobModel, names: []string{artifactChecksName}, download: artifactChecksName, index: 0},
+		{name: "the publish job", job: jobPublish, names: []string{artifactChecksName, artifactModelName}, download: artifactModelName, index: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			fake := newFakeGH(t, fakeAnswer{Status: 200, Body: artifactListing(len(tc.names), tc.names...)})
+			tempDir := t.TempDir()
+
+			result := runProgram(t, artifactArgs(tc.job, fake.Path, tempDir), stepEnvironment(t, writeSummary(t)))
+
+			if result.code != codeAsExpected {
+				t.Fatalf("the run's exit code is %d, want %d\nstdout: %s\nstderr: %s", result.code, codeAsExpected, result.stdout, result.stderr)
+			}
+
+			path := filepath.Join(tempDir, "artifact.json")
+
+			info, err := os.Stat(path)
+			if err != nil {
+				t.Fatalf("the run wrote no artifact file at %s: %v; the download is bound to the artifact the check accepted", path, err)
+			}
+
+			if mode := info.Mode().Perm(); mode != 0o600 {
+				t.Errorf("the artifact file's mode is %04o, want 0600", mode)
+			}
+
+			body, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatalf("read the artifact file %s: %v", path, err)
+			}
+
+			want := fmt.Sprintf("{\"name\":%q,\"id\":%d,\"digest\":%q}\n", tc.download, artifactListingID(tc.index), artifactListingDigest(tc.index))
+			if string(body) != want {
+				t.Errorf("the artifact file holds %q, want exactly %q: the checked artifact's name, ID and digest", body, want)
+			}
+		})
+	}
+}
+
+// TestRunArtifactsWritesNothingWhenTheCheckRefusesOrThePathExists pins the two
+// edges of that file: a listing the check refuses leaves no file behind, and a
+// path that already exists is refused (O_EXCL) with its content untouched.
+func TestRunArtifactsWritesNothingWhenTheCheckRefusesOrThePathExists(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a listing the check refuses", func(t *testing.T) {
+		t.Parallel()
+
+		fake := newFakeGH(t, fakeAnswer{Status: 200, Body: artifactListing(2, artifactChecksName, "unexpected-"+valueMarker)})
+		tempDir := t.TempDir()
+
+		result := runProgram(t, artifactArgs(jobModel, fake.Path, tempDir), stepEnvironment(t, writeSummary(t)))
+
+		if result.code != codeUnexpected {
+			t.Fatalf("the run's exit code is %d, want %d\nstdout: %s\nstderr: %s", result.code, codeUnexpected, result.stdout, result.stderr)
+		}
+
+		if _, err := os.Stat(filepath.Join(tempDir, "artifact.json")); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("the refused run wrote an artifact file (stat: %v), want nothing: only a checked listing is written", err)
+		}
+	})
+
+	t.Run("a path that already exists", func(t *testing.T) {
+		t.Parallel()
+
+		fake := newFakeGH(t, fakeAnswer{Status: 200, Body: artifactListing(1, artifactChecksName)})
+		tempDir := t.TempDir()
+		path := filepath.Join(tempDir, "artifact.json")
+
+		if err := os.WriteFile(path, []byte("the file the step already had\n"), 0o600); err != nil {
+			t.Fatalf("write %s: %v", path, err)
+		}
+
+		result := runProgram(t, artifactArgs(jobModel, fake.Path, tempDir), stepEnvironment(t, writeSummary(t)))
+
+		if result.code != codeConfigInvalid {
+			t.Errorf("the run's exit code is %d, want %d (%q): the artifact file is opened O_EXCL\nstdout: %s\nstderr: %s",
+				result.code, codeConfigInvalid, lineConfigInvalid, result.stdout, result.stderr)
+		}
+
+		body, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read the file the run found: %v", err)
+		}
+
+		if string(body) != "the file the step already had\n" {
+			t.Errorf("the existing file holds %q, want its content untouched: the run refuses the path, it does not overwrite it", body)
+		}
+	})
 }
 
 // TestRunArtifactsPrintsOneLineAndTheSummary pins a whole run: exit 0, exactly
@@ -1108,6 +1230,12 @@ func imageAnswers(t *testing.T) []fakeAnswer {
 		},
 		{
 			Method:   "GET",
+			Endpoint: fixtureRepoPrefix + "/releases/latest",
+			Status:   200,
+			Body:     map[string]string{"tag_name": fixtureTag},
+		},
+		{
+			Method:   "GET",
 			Endpoint: fixtureRepoPrefix + "/attestations/" + fixtureDigest + "?per_page=100",
 			Status:   200,
 			Body: map[string]any{"attestations": []any{map[string]any{
@@ -1130,6 +1258,7 @@ func imageAnswers(t *testing.T) []fakeAnswer {
 func publishAnswers() []fakeAnswer {
 	return []fakeAnswer{
 		{Method: "GET", Endpoint: fixtureRepoPrefix + "/releases/tags/" + fixtureTag, Status: 200, Body: map[string]string{"tag_name": fixtureTag}},
+		{Method: "GET", Endpoint: fixtureRepoPrefix + "/releases/latest", Status: 200, Body: map[string]string{"tag_name": fixtureTag}},
 		{Method: "GET", Endpoint: fixtureIssuesQuery, Status: 200, Body: []any{}},
 		{Method: "GET", Endpoint: fixtureAdvisoriesEndpoint, Status: 200, Body: []any{}},
 		{Method: "GET", Endpoint: fixtureRepoPrefix + "/git/ref/heads/" + fixtureBranch, Status: 404, Body: map[string]string{"message": "Not Found"}},

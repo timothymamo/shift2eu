@@ -247,73 +247,12 @@ func TestGoCacheGaps(t *testing.T) {
 	}
 }
 
-// TestGoSetupSteps pins the reader the release workflow's count is checked with: every step that uses
-// actions/setup-go is a step it hands the cache check, whichever style the step is written in. A step it
-// fails to recognise is a step no gap check reads, so the flow style and a quoted key, which GitHub reads
-// as the same step, are read as one.
-func TestGoSetupSteps(t *testing.T) {
-	t.Parallel()
-
-	// pin is the action's pin alone: a trailing comment, which the block form carries, would end a flow
-	// mapping at the # and leave the step unclosed.
-	const pin = "@0123456789abcdef0123456789abcdef01234567"
-
-	tests := []struct {
-		name     string
-		workflow string
-		want     int
-	}{
-		{
-			name:     "a block-style step",
-			workflow: "jobs:\n  test:\n    steps:\n      - uses: actions/setup-go" + pin + "\n",
-			want:     1,
-		},
-		{
-			name:     "a flow-style step",
-			workflow: "jobs:\n  test:\n    steps:\n      - {uses: actions/setup-go" + pin + ", with: {go-version-file: go.mod}}\n",
-			want:     1,
-		},
-		{
-			name:     "a double-quoted uses key",
-			workflow: "jobs:\n  test:\n    steps:\n      - \"uses\": actions/setup-go" + pin + "\n",
-			want:     1,
-		},
-		{
-			name:     "a single-quoted uses key",
-			workflow: "jobs:\n  test:\n    steps:\n      - 'uses': actions/setup-go" + pin + "\n",
-			want:     1,
-		},
-		{
-			// The step in every job counts once, whichever style it is written in: the count is what
-			// the release workflow's setup-go steps are held to, so one dropped step is one gap check
-			// short.
-			name: "two steps, one in each style",
-			workflow: "jobs:\n  test:\n    steps:\n      - uses: actions/setup-go" + pin + "\n" +
-				"  build:\n    steps:\n      - {uses: actions/setup-go" + pin + "}\n",
-			want: 2,
-		},
-		{
-			name:     "another action in the flow style",
-			workflow: "jobs:\n  test:\n    steps:\n      - {uses: actions/checkout" + pin + "}\n",
-			want:     0,
-		},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-
-			if got := len(goSetupSteps([]byte(tc.workflow))); got != tc.want {
-				t.Errorf("goSetupSteps() read %d setup-go steps, want %d:\n%q", got, tc.want, tc.workflow)
-			}
-		})
-	}
-}
-
 // TestWorkflowStepsUsing pins the reader the workflow's count is checked with for every action the cache
 // guard knows: the steps that use the action asked for, in document order, and no other action's step. A
 // step it fails to recognise is a step no gap check reads, so the flow style and a quoted key, which
-// GitHub reads as the same step, are read as one, and a line of a run: block is text, not a step.
+// GitHub reads as the same step, are read as one, and a line of a run: block is text, not a step. Both
+// actions the guard knows are read by the one function (test/architecture/releasecache_test.go's
+// stepsUsing): setup-go's steps and the lint action's.
 func TestWorkflowStepsUsing(t *testing.T) {
 	t.Parallel()
 
@@ -387,6 +326,49 @@ func TestWorkflowStepsUsing(t *testing.T) {
 			action: lint,
 			want:   0,
 		},
+
+		// The same reader, held to the Go setup's steps: every step that uses actions/setup-go is a step
+		// it hands the cache check, whichever style the step is written in, and one it fails to recognise
+		// is a step no gap check reads.
+		{
+			name:     "a block-style setup-go step",
+			workflow: "jobs:\n  test:\n    steps:\n      - uses: " + goSetupAction + pin + "\n",
+			action:   goSetupAction,
+			want:     1,
+		},
+		{
+			name:     "a flow-style setup-go step",
+			workflow: "jobs:\n  test:\n    steps:\n      - {uses: " + goSetupAction + pin + ", with: {go-version-file: go.mod}}\n",
+			action:   goSetupAction,
+			want:     1,
+		},
+		{
+			name:     "a double-quoted uses key naming setup-go",
+			workflow: "jobs:\n  test:\n    steps:\n      - \"uses\": " + goSetupAction + pin + "\n",
+			action:   goSetupAction,
+			want:     1,
+		},
+		{
+			name:     "a single-quoted uses key naming setup-go",
+			workflow: "jobs:\n  test:\n    steps:\n      - 'uses': " + goSetupAction + pin + "\n",
+			action:   goSetupAction,
+			want:     1,
+		},
+		{
+			// The setup-guard's count is what the release workflow's setup-go steps are held to, so one
+			// dropped step is one gap check short, whichever job it is in and whichever style writes it.
+			name: "two setup-go steps, one in each style",
+			workflow: "jobs:\n  test:\n    steps:\n      - uses: " + goSetupAction + pin + "\n" +
+				"  build:\n    steps:\n      - {uses: " + goSetupAction + pin + "}\n",
+			action: goSetupAction,
+			want:   2,
+		},
+		{
+			name:     "another action in the flow style, when setup-go is asked for",
+			workflow: "jobs:\n  test:\n    steps:\n      - {uses: actions/checkout" + pin + "}\n",
+			action:   goSetupAction,
+			want:     0,
+		},
 	}
 
 	for _, tc := range tests {
@@ -445,12 +427,6 @@ func goCacheGaps(workflow []byte) []goCacheGap {
 	}
 
 	return gaps
-}
-
-// goSetupSteps returns, in the order they run, every step of the workflow that uses actions/setup-go,
-// whatever its cache setting: the steps the cache check reads, counted against the workflow's text.
-func goSetupSteps(workflow []byte) []workflowStep {
-	return stepsUsing(workflow, goSetupAction)
 }
 
 // stepsUsing returns, in document order, every step of the workflow whose action, the repository it

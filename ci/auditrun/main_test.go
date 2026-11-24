@@ -14,6 +14,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -33,6 +34,10 @@ const (
 	// auditIntegrity is an integrity of the shape -claude-integrity takes: npm's
 	// sha512 of the tarball, in base64.
 	auditIntegrity = "sha512-" + "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="
+
+	// auditResult is the result the fake audit step reads and checks: the bytes
+	// -result-out writes, exactly.
+	auditResult = "{\"schema\":1,\"release_tag\":\"v0.12.0\",\"image_digest\":\"\"}\n"
 )
 
 // allowedVariables are the variables the run may read: the two secrets, the
@@ -60,12 +65,15 @@ func (e *environ) lookup(name string) (string, bool) {
 	return value, ok
 }
 
-// stepRecorder is the fake Steps: each step records that it ran.
+// stepRecorder is the fake Steps: each step records that it ran, and the audit
+// step answers with the result body and error the test gives it.
 type stepRecorder struct {
-	ran []string
+	ran      []string
+	result   []byte
+	auditErr error
 }
 
-// steps is the recorder as the run's six steps, which all pass.
+// steps is the recorder as the run's six steps.
 func (r *stepRecorder) steps() audit.Steps {
 	record := func(step string) error {
 		r.ran = append(r.ran, step)
@@ -79,7 +87,15 @@ func (r *stepRecorder) steps() audit.Steps {
 		Layout:          func(string) error { return record("audit directory") },
 		Bubblewrap:      func(context.Context) error { return record("bubblewrap") },
 		Preflight:       func(context.Context, string) error { return record("preflight") },
-		Audit:           func(context.Context, string) ([]byte, error) { return nil, record("audit") },
+		Audit: func(context.Context, string) ([]byte, error) {
+			r.ran = append(r.ran, "audit")
+
+			if r.auditErr != nil {
+				return nil, r.auditErr
+			}
+
+			return r.result, nil
+		},
 	}
 }
 
@@ -94,12 +110,19 @@ type runResult struct {
 }
 
 // runAuditrun runs the entry point with args and the environment env answers,
-// its steps being a fake recorder, and reads back everything it wrote.
+// its steps being a fake recorder that answers with auditResult, and reads back
+// everything it wrote.
 func runAuditrun(t *testing.T, args []string, env map[string]string) runResult {
 	t.Helper()
 
+	return runAuditrunWith(t, args, env, &stepRecorder{result: []byte(auditResult)})
+}
+
+// runAuditrunWith is runAuditrun with the recorder the test gives it.
+func runAuditrunWith(t *testing.T, args []string, env map[string]string, recorder *stepRecorder) runResult {
+	t.Helper()
+
 	lookup := &environ{values: env}
-	recorder := &stepRecorder{}
 
 	var stdout, stderr bytes.Buffer
 
@@ -153,6 +176,8 @@ func TestRunTakesTheStepsInputs(t *testing.T) {
 		t.Errorf("the steps that ran are %v, want %v: the run's steps come in the ADR's order", result.ran, want)
 	}
 
+	assertResultFile(t, resultOutPath(dir), auditResult)
+
 	assertOnlyTheListedVariables(t, result.asked)
 }
 
@@ -178,6 +203,10 @@ func TestRunRefusesEveryUsageAndInputError(t *testing.T) {
 		{
 			name: "an integrity flag left out",
 			args: func(_ string, args []string) []string { return args[:2] },
+		},
+		{
+			name: "a result-out flag left out",
+			args: func(_ string, args []string) []string { return args[:4] },
 		},
 		{
 			name: "a flag with no value",
@@ -348,6 +377,65 @@ func TestRunRefusesAnAPIKey(t *testing.T) {
 	}
 }
 
+// TestRunRefusesAnExistingResultPathOrARefusedResult pins the result file's two
+// edges: a path that already exists is refused rather than overwritten (O_EXCL),
+// its content left as it was, and a result the audit step refused writes no file
+// at all. Both end the run with the audit's line.
+func TestRunRefusesAnExistingResultPathOrARefusedResult(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a result path that already exists", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		path := resultOutPath(dir)
+		writeEnvFile(t, path, "the file the step already had\n")
+
+		result := runAuditrun(t, stepArgs(dir), stepEnvironment(t, dir))
+
+		if result.code != audit.ExitFailed {
+			t.Errorf("the run's exit code is %d, want %d (audit.ExitFailed): -result-out is opened O_EXCL and never overwrites a file\nstdout: %s\nstderr: %s",
+				result.code, audit.ExitFailed, result.stdout, result.stderr)
+		}
+
+		if !strings.Contains(result.stdout, "the audit failed") {
+			t.Errorf("the run printed %q, want the audit's line: the result cannot be written", result.stdout)
+		}
+
+		body, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read the file the run found: %v", err)
+		}
+
+		if string(body) != "the file the step already had\n" {
+			t.Errorf("the existing file holds %q, want its content untouched: the run refuses the path, it does not overwrite it", body)
+		}
+
+		assertNoSecret(t, result)
+	})
+
+	t.Run("a result the audit step refused", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		path := resultOutPath(dir)
+
+		recorder := &stepRecorder{auditErr: errors.New("the result file is no single JSON value")}
+		result := runAuditrunWith(t, stepArgs(dir), stepEnvironment(t, dir), recorder)
+
+		if result.code != audit.ExitFailed {
+			t.Errorf("the run's exit code is %d, want %d (audit.ExitFailed): the result check refused the audit's bytes\nstdout: %s\nstderr: %s",
+				result.code, audit.ExitFailed, result.stdout, result.stderr)
+		}
+
+		if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("the run wrote a result at %s (stat: %v), want nothing: a result the check refused is never written", path, err)
+		}
+
+		assertNoSecret(t, result)
+	})
+}
+
 // TestRunPrintsNoSecret pins the rule every case above leans on: neither the
 // token nor the canary is on stdout, on stderr or in the step's summary, on a
 // run that finishes and on one that is refused.
@@ -381,11 +469,43 @@ func stepEnvironment(t *testing.T, dir string) map[string]string {
 }
 
 // stepArgs is the command line the install step and the pin hand the run: the
-// tarball it kept and the integrity it checked.
+// tarball it kept, the integrity it checked, and where the checked result is
+// written.
 func stepArgs(dir string) []string {
 	return []string{
 		"-claude-tarball", filepath.Join(dir, "claude-code.tgz"),
 		"-claude-integrity", auditIntegrity,
+		"-result-out", resultOutPath(dir),
+	}
+}
+
+// resultOutPath is where stepArgs has the run write the checked result: under
+// the model step's $RUNNER_TEMP, which the sandbox can neither read nor write.
+func resultOutPath(dir string) string {
+	return filepath.Join(dir, "result.json")
+}
+
+// assertResultFile fails unless path holds exactly want, as a regular file with
+// mode 0600.
+func assertResultFile(t *testing.T, path, want string) {
+	t.Helper()
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("the run wrote no result at %s: %v; -result-out takes the bytes the audit step checked, exactly", path, err)
+	}
+
+	if mode := info.Mode().Perm(); mode != 0o600 {
+		t.Errorf("the result file's mode is %04o, want 0600: the result stays the step's own", mode)
+	}
+
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read the result file %s: %v", path, err)
+	}
+
+	if string(body) != want {
+		t.Errorf("the result file holds %q, want exactly the audit step's checked bytes %q", body, want)
 	}
 }
 

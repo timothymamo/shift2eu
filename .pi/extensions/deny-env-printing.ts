@@ -94,8 +94,8 @@ const deckDirectorySpelling = /\.config[/.]*\/dot-agent/;
 
 // The Unicode spaces pi maps to a plain space before it reads a path: U+00A0, U+2000 to U+200A, U+202F,
 // U+205F and U+3000. The class is built from their code points so that this file holds only ASCII.
-// The code points are constants: the top level does nothing that can throw, since a load failure fails
-// open and pi runs without this refusal (ADR 0044).
+// The code points are constants, so the top level does nothing that can throw: a load failure fails open
+// and pi runs without this refusal (ADR 0044), and TestPiEnvDenyExtensionLoads fails if it throws.
 const unicodeSpaces = new RegExp(
 	"[" +
 		String.fromCodePoint(0x00a0, 0x2000) +

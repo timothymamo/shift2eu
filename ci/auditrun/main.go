@@ -26,6 +26,9 @@ const canaryLength = 64
 // summaryMode is the mode a step summary the run creates gets.
 const summaryMode os.FileMode = 0o600
 
+// resultMode is the mode of the result file -result-out names.
+const resultMode os.FileMode = 0o600
+
 // lineAPIKey is the line of a step that holds an API key.
 const lineAPIKey = "refused: ANTHROPIC_API_KEY is set; the audit runs on the subscription's OAuth token alone" //nolint:gosec // G101: a sentence naming the variable, not a credential
 
@@ -47,10 +50,10 @@ func run(args []string, getenv func(string) (string, bool), steps audit.Steps, r
 	return runContext(context.Background(), args, getenv, steps, root, stdout, stderr)
 }
 
-// runContext is run under ctx. It leaves the run's Result nil: the run checks
-// the result file and keeps its bytes, but nothing publishes them yet - the
-// publication job of ADR 0040's step 19, PR 5 of PRD #175 milestone 2, sets
-// Result.
+// runContext is run under ctx. The run's Result writes the bytes the audit
+// step read and checked to the -result-out file, the one the workflow's
+// encrypt step reads: nothing reads the result file in the work area again by
+// its path (ADR 0040).
 //
 // A step that holds ANTHROPIC_API_KEY, set even to nothing, is refused first,
 // before the command line and the other inputs are read: it exits 3 with its
@@ -67,7 +70,7 @@ func runContext(ctx context.Context, args []string, getenv func(string) (string,
 		return audit.ExitRefused
 	}
 
-	in, err := inputs(args, getenv, stderr)
+	in, resultOut, err := inputs(args, getenv, stderr)
 	if err != nil {
 		_, _ = fmt.Fprintln(stderr, "auditrun:", err)
 
@@ -77,32 +80,65 @@ func runContext(ctx context.Context, args []string, getenv func(string) (string,
 	out, closeSummary := summaryWriter(stdout, stderr, in.StepSummary)
 	defer closeSummary()
 
-	return audit.Run{Root: root, Inputs: in, Steps: steps, Out: out}.Run(ctx)
+	return audit.Run{Root: root, Inputs: in, Steps: steps, Out: out, Result: resultWriter(resultOut)}.Run(ctx)
 }
 
-// inputs reads the command line and the step's environment. Its errors name
-// what is wrong, never a value of the environment's.
-func inputs(args []string, getenv func(string) (string, bool), stderr io.Writer) (audit.Inputs, error) {
+// resultWriter is the run's Result: it writes the bytes the audit step read
+// and checked, exactly those, to a new file at path, mode 0600. A path that
+// already exists is refused, never overwritten (O_EXCL), so the file holds the
+// checked bytes and nothing an earlier writer left; the run then fails with
+// the audit's line. The path is taken as given, not under the run's root: it
+// is the model step's own $RUNNER_TEMP, out of the sandbox's reach.
+func resultWriter(path string) func([]byte) error {
+	return func(body []byte) error {
+		file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, resultMode) //nolint:gosec // G304: the step's own -result-out path under $RUNNER_TEMP
+		if err != nil {
+			return fmt.Errorf("open the result file: %w", err)
+		}
+
+		if _, err := file.Write(body); err != nil {
+			_ = file.Close()
+
+			return fmt.Errorf("write the result file: %w", err)
+		}
+
+		if err := file.Close(); err != nil {
+			return fmt.Errorf("close the result file: %w", err)
+		}
+
+		return nil
+	}
+}
+
+// inputs reads the command line and the step's environment, and returns the
+// run's inputs and the -result-out path. Its errors name what is wrong, never
+// a value of the environment's.
+func inputs(args []string, getenv func(string) (string, bool), stderr io.Writer) (audit.Inputs, string, error) {
 	flags := flag.NewFlagSet("auditrun", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 
 	tarball := flags.String("claude-tarball", "", "the Claude Code tarball the install step kept")
 	integrity := flags.String("claude-integrity", "", "the tarball's npm integrity, sha512-<base64>, from the one pin")
+	resultOut := flags.String("result-out", "", "where the checked result is written, a new file under the step's $RUNNER_TEMP")
 
 	if err := flags.Parse(args); err != nil {
-		return audit.Inputs{}, fmt.Errorf("usage: %w", err)
+		return audit.Inputs{}, "", fmt.Errorf("usage: %w", err)
 	}
 
 	if flags.NArg() != 0 {
-		return audit.Inputs{}, fmt.Errorf("usage: auditrun takes no arguments, got %d", flags.NArg())
+		return audit.Inputs{}, "", fmt.Errorf("usage: auditrun takes no arguments, got %d", flags.NArg())
 	}
 
 	if *tarball == "" {
-		return audit.Inputs{}, fmt.Errorf("usage: -claude-tarball is required")
+		return audit.Inputs{}, "", fmt.Errorf("usage: -claude-tarball is required")
 	}
 
 	if _, err := audit.ParseIntegrity(*integrity); err != nil {
-		return audit.Inputs{}, fmt.Errorf("usage: -claude-integrity: %w", err)
+		return audit.Inputs{}, "", fmt.Errorf("usage: -claude-integrity: %w", err)
+	}
+
+	if *resultOut == "" {
+		return audit.Inputs{}, "", fmt.Errorf("usage: -result-out is required")
 	}
 
 	token, _ := getenv(envToken)
@@ -112,11 +148,11 @@ func inputs(args []string, getenv func(string) (string, bool), stderr io.Writer)
 
 	switch {
 	case token == "":
-		return audit.Inputs{}, fmt.Errorf("%s is not set", envToken)
+		return audit.Inputs{}, "", fmt.Errorf("%s is not set", envToken)
 	case !isCanary(canary):
-		return audit.Inputs{}, fmt.Errorf("%s is not %d lower-case hex characters", envCanary, canaryLength)
+		return audit.Inputs{}, "", fmt.Errorf("%s is not %d lower-case hex characters", envCanary, canaryLength)
 	case gitHubEnv == "":
-		return audit.Inputs{}, fmt.Errorf("%s is not set", envGitHubEnv)
+		return audit.Inputs{}, "", fmt.Errorf("%s is not set", envGitHubEnv)
 	}
 
 	return audit.Inputs{
@@ -126,7 +162,7 @@ func inputs(args []string, getenv func(string) (string, bool), stderr io.Writer)
 		StepSummary: stepSummary,
 		Tarball:     *tarball,
 		Integrity:   *integrity,
-	}, nil
+	}, *resultOut, nil
 }
 
 // isCanary reports whether s is 64 lower-case hex characters.
