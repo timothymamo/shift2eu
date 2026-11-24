@@ -31,7 +31,7 @@ jobs:
     # unseen.
     runs-on: ubuntu-24.04
     # GitHub ends a job at 360 minutes. The job's own timeout is the ceiling the run's steps stay under:
-    # their timeout-minutes add up to 350, and with the job's 5 minutes of set-up and post steps they stay
+    # their timeout-minutes add up to 335, and with the job's 5 minutes of set-up and post steps they stay
     # within its 355, so a step's own timeout always fires before the job's. A step's timeout firing ends
     # the job, and every later step of it is skipped; that is why no step lets its own timeouts reach its
     # own timeout-minutes.
@@ -379,7 +379,7 @@ jobs:
       # no docker login, so a pull that needs a credential fails as it would for any user. It is saved
       # as an archive for trivy (row 10). No token: nothing here reads GitHub's API.
       - name: Pull the image anonymously by digest
-        timeout-minutes: 20
+        timeout-minutes: 15
         run: |
           set -euo pipefail
           results="${RUNNER_TEMP}/results"
@@ -399,11 +399,11 @@ jobs:
             exit 1
           fi
           rc=0
-          timeout 10m docker pull --platform linux/amd64 "${image}@${digest}" > "${out}/pull.stdout" 2> "${out}/pull.stderr" || rc=$?
+          timeout 8m docker pull --platform linux/amd64 "${image}@${digest}" > "${out}/pull.stdout" 2> "${out}/pull.stderr" || rc=$?
           echo "${rc}" > "${out}/pull.exit"
           if [ "${rc}" -eq 124 ]; then
             echo "image-pull timed-out" >> "${results}/not-run.txt"
-            echo "image-pull timed out after 10 minutes" >> "${results}/limits.txt"
+            echo "image-pull timed out after 8 minutes" >> "${results}/limits.txt"
           fi
           if [ "${rc}" -eq 0 ]; then
             mkdir -p "${RUNNER_TEMP}/image"
@@ -417,11 +417,11 @@ jobs:
               echo "image-pull tool-failed" >> "${results}/not-run.txt"
             fi
             rc=0
-            timeout 5m docker save --output "${RUNNER_TEMP}/image/image.tar" "${image}@${digest}" 2> "${out}/save.stderr" || rc=$?
+            timeout 4m docker save --output "${RUNNER_TEMP}/image/image.tar" "${image}@${digest}" 2> "${out}/save.stderr" || rc=$?
             echo "${rc}" > "${out}/save.exit"
             if [ "${rc}" -eq 124 ]; then
               echo "image-pull timed-out" >> "${results}/not-run.txt"
-              echo "image-pull: the image save timed out after 5 minutes" >> "${results}/limits.txt"
+              echo "image-pull: the image save timed out after 4 minutes" >> "${results}/limits.txt"
             elif [ "${rc}" -ne 0 ]; then
               echo "image-pull tool-failed" >> "${results}/not-run.txt"
             fi
@@ -522,9 +522,9 @@ jobs:
       # a shell in it: its user, a start with a read-only root filesystem, no network and no capability,
       # and the shells and setuid files its filesystem holds. docker create starts nothing, and docker
       # export copies the created container's filesystem out as an archive that tar only lists. Its own
-      # timeouts add up to 11 minutes, under the step's 15.
+      # timeouts add up to 9 minutes, under the step's 10.
       - name: Check the image's runtime settings
-        timeout-minutes: 15
+        timeout-minutes: 10
         run: |
           set -euo pipefail
           results="${RUNNER_TEMP}/results"
@@ -550,11 +550,11 @@ jobs:
             exit 0
           fi
           rc=0
-          timeout 2m docker image inspect --format '{{json .Config}}' "${image}@${digest}" > "${out}/config.json" 2> "${out}/config.stderr" || rc=$?
+          timeout 1m docker image inspect --format '{{json .Config}}' "${image}@${digest}" > "${out}/config.json" 2> "${out}/config.stderr" || rc=$?
           echo "${rc}" > "${out}/config.exit"
           if [ "${rc}" -eq 124 ]; then
             echo "image-runtime timed-out" >> "${results}/not-run.txt"
-            echo "image-runtime: the config read timed out after 2 minutes" >> "${results}/limits.txt"
+            echo "image-runtime: the config read timed out after 1 minute" >> "${results}/limits.txt"
           elif [ "${rc}" -ne 0 ]; then
             echo "image-runtime tool-failed" >> "${results}/not-run.txt"
           fi
@@ -572,11 +572,11 @@ jobs:
             exit 0
           fi
           rc=0
-          timeout 5m docker export "${cid}" 2> "${out}/export.stderr" | tar -tvf - > "${out}/filesystem.txt" 2> "${out}/filesystem.stderr" || rc=$?
+          timeout 4m docker export "${cid}" 2> "${out}/export.stderr" | tar -tvf - > "${out}/filesystem.txt" 2> "${out}/filesystem.stderr" || rc=$?
           echo "${rc}" > "${out}/filesystem.exit"
           if [ "${rc}" -eq 124 ]; then
             echo "image-runtime timed-out" >> "${results}/not-run.txt"
-            echo "image-runtime: the filesystem listing timed out after 5 minutes" >> "${results}/limits.txt"
+            echo "image-runtime: the filesystem listing timed out after 4 minutes" >> "${results}/limits.txt"
           elif [ "${rc}" -ne 0 ]; then
             echo "image-runtime tool-failed" >> "${results}/not-run.txt"
           fi
@@ -601,7 +601,7 @@ jobs:
       # privileges, no tmpfs (the CLI writes nothing but its stdout and stderr), no mount and no socket,
       # and its output leaves only on its stdout and stderr.
       - name: Run the CLI on hostile inventory files
-        timeout-minutes: 25
+        timeout-minutes: 20
         run: |
           set -euo pipefail
           results="${RUNNER_TEMP}/results"
@@ -675,11 +675,11 @@ jobs:
             exit 0
           fi
           rc=0
-          timeout 2m docker cp "${stage}" "${staging}:/work/" 2> "${out}/staging-cp.stderr" || rc=$?
+          timeout 1m docker cp "${stage}" "${staging}:/work/" 2> "${out}/staging-cp.stderr" || rc=$?
           echo "${rc}" > "${out}/staging-cp.exit"
           if [ "${rc}" -eq 124 ]; then
             echo "hostile-inventories timed-out" >> "${results}/not-run.txt"
-            echo "hostile-inventories: the inputs' copy timed out after 2 minutes" >> "${results}/limits.txt"
+            echo "hostile-inventories: the inputs' copy timed out after 1 minute" >> "${results}/limits.txt"
           elif [ "${rc}" -ne 0 ]; then
             echo "hostile-inventories tool-failed" >> "${results}/not-run.txt"
           fi
@@ -688,11 +688,11 @@ jobs:
             exit 0
           fi
           rc=0
-          timeout 2m docker commit "${staging}" "audit-hostile:${GITHUB_RUN_ID}" > "${out}/staging-commit.stdout" 2> "${out}/staging-commit.stderr" || rc=$?
+          timeout 1m docker commit "${staging}" "audit-hostile:${GITHUB_RUN_ID}" > "${out}/staging-commit.stdout" 2> "${out}/staging-commit.stderr" || rc=$?
           echo "${rc}" > "${out}/staging-commit.exit"
           if [ "${rc}" -eq 124 ]; then
             echo "hostile-inventories timed-out" >> "${results}/not-run.txt"
-            echo "hostile-inventories: the commit timed out after 2 minutes" >> "${results}/limits.txt"
+            echo "hostile-inventories: the commit timed out after 1 minute" >> "${results}/limits.txt"
           elif [ "${rc}" -ne 0 ]; then
             echo "hostile-inventories tool-failed" >> "${results}/not-run.txt"
           fi

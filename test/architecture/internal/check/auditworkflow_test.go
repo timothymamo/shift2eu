@@ -591,7 +591,7 @@ const (
 	auditGoImage = "          GO_IMAGE: \"1.27.4-alpine@sha256:70bd7ddea8b6cbe5d6943cde279d6b67feb10cc924fb9100d1d8757c1575b280\"\n"
 	// auditImagePull is row 8's pull, the line the case that logs in to the
 	// registry hangs its docker login on.
-	auditImagePull = "          timeout 10m docker pull --platform linux/amd64 \"${image}@${digest}\" > \"${out}/pull.stdout\" 2> \"${out}/pull.stderr\" || rc=$?\n"
+	auditImagePull = "          timeout 8m docker pull --platform linux/amd64 \"${image}@${digest}\" > \"${out}/pull.stdout\" 2> \"${out}/pull.stderr\" || rc=$?\n"
 	// auditBinaryGovulncheck is row 9's binary-mode govulncheck, the one Go tool
 	// the workflow runs that is no go command, so its offline flags are the
 	// step's own.
@@ -668,12 +668,12 @@ const (
 	auditBinaryUnpack = "              *.tar.gz) timeout 2m tar -xOzf \"${archive}\" shift2eu 2> \"${out}/${name}.unpack.stderr\" | head -c 134217728 > \"${dir}/shift2eu\" || rc=$? ;;\n"
 	// auditRuntimeExport is row 11's export and listing: under a timeout, with
 	// the image's own tar's stderr out of the log.
-	auditRuntimeExport = "          timeout 5m docker export \"${cid}\" 2> \"${out}/export.stderr\" | tar -tvf - > \"${out}/filesystem.txt\" 2> \"${out}/filesystem.stderr\" || rc=$?\n"
+	auditRuntimeExport = "          timeout 4m docker export \"${cid}\" 2> \"${out}/export.stderr\" | tar -tvf - > \"${out}/filesystem.txt\" 2> \"${out}/filesystem.stderr\" || rc=$?\n"
 	// auditRuntimeInspect is row 11's read of the image's configuration.
-	auditRuntimeInspect = "          timeout 2m docker image inspect --format '{{json .Config}}' \"${image}@${digest}\" > \"${out}/config.json\" 2> \"${out}/config.stderr\" || rc=$?\n"
+	auditRuntimeInspect = "          timeout 1m docker image inspect --format '{{json .Config}}' \"${image}@${digest}\" > \"${out}/config.json\" 2> \"${out}/config.stderr\" || rc=$?\n"
 	// auditImageSave is row 8's archive of the pulled image, and
 	// auditBinaryUnpackZip row 9's zip member.
-	auditImageSave       = "          timeout 5m docker save --output \"${RUNNER_TEMP}/image/image.tar\" \"${image}@${digest}\" 2> \"${out}/save.stderr\" || rc=$?\n"
+	auditImageSave       = "          timeout 4m docker save --output \"${RUNNER_TEMP}/image/image.tar\" \"${image}@${digest}\" 2> \"${out}/save.stderr\" || rc=$?\n"
 	auditBinaryUnpackZip = "              *.zip) timeout 2m unzip -p \"${archive}\" shift2eu.exe 2> \"${out}/${name}.unpack.stderr\" | head -c 134217728 > \"${dir}/shift2eu.exe\" || rc=$? ;;\n"
 	// auditProvenanceVerify and auditCosignVerify are row 7's reads of the
 	// release's attestations and its signature.
@@ -681,8 +681,8 @@ const (
 	auditCosignVerify     = "            timeout 3m cosign verify \"${ref}\" \\\n"
 	// auditHostileCopy and auditHostileCommit are row 13's staging copy and
 	// commit, each under a timeout of its own.
-	auditHostileCopy   = "          timeout 2m docker cp \"${stage}\" \"${staging}:/work/\" 2> \"${out}/staging-cp.stderr\" || rc=$?\n"
-	auditHostileCommit = "          timeout 2m docker commit \"${staging}\" \"audit-hostile:${GITHUB_RUN_ID}\" > \"${out}/staging-commit.stdout\" 2> \"${out}/staging-commit.stderr\" || rc=$?\n"
+	auditHostileCopy   = "          timeout 1m docker cp \"${stage}\" \"${staging}:/work/\" 2> \"${out}/staging-cp.stderr\" || rc=$?\n"
+	auditHostileCommit = "          timeout 1m docker commit \"${staging}\" \"audit-hostile:${GITHUB_RUN_ID}\" > \"${out}/staging-commit.stdout\" 2> \"${out}/staging-commit.stderr\" || rc=$?\n"
 	// auditCorpusCopy is row 13's copy of the committed corpus: -P, so a link an
 	// entry of it is never followed on the runner.
 	auditCorpusCopy = "          cp -P .github/security-audit/testdata/hostile-inventories/*.json \"${stage}/\"\n"
@@ -1993,12 +1993,12 @@ func TestAuditWorkflow(t *testing.T) {
 		},
 		{
 			name:     "the job's token on the image pull",
-			workflow: mutate(t, acceptedWorkflow, "      - name: Pull the image anonymously by digest\n        timeout-minutes: 20\n        run: |\n", "      - name: Pull the image anonymously by digest\n        timeout-minutes: 20\n        env:\n          GH_TOKEN: ${{ github.token }}\n        run: |\n"),
+			workflow: mutate(t, acceptedWorkflow, "      - name: Pull the image anonymously by digest\n        timeout-minutes: 15\n        run: |\n", "      - name: Pull the image anonymously by digest\n        timeout-minutes: 15\n        env:\n          GH_TOKEN: ${{ github.token }}\n        run: |\n"),
 			wantIn:   "github.token",
 		},
 		{
 			name:     "the job's token on the hostile inventories",
-			workflow: mutate(t, acceptedWorkflow, "      - name: Run the CLI on hostile inventory files\n        timeout-minutes: 25\n        run: |\n", "      - name: Run the CLI on hostile inventory files\n        timeout-minutes: 25\n        env:\n          GH_TOKEN: ${{ github.token }}\n        run: |\n"),
+			workflow: mutate(t, acceptedWorkflow, "      - name: Run the CLI on hostile inventory files\n        timeout-minutes: 20\n        run: |\n", "      - name: Run the CLI on hostile inventory files\n        timeout-minutes: 20\n        env:\n          GH_TOKEN: ${{ github.token }}\n        run: |\n"),
 			wantIn:   "github.token",
 		},
 		{
@@ -2275,7 +2275,7 @@ func TestAuditWorkflow(t *testing.T) {
 		},
 		{
 			name:     "row 8's image save without its timeout",
-			workflow: mutate(t, acceptedWorkflow, auditImageSave, strings.Replace(auditImageSave, "timeout 5m docker save", "docker save", 1)),
+			workflow: mutate(t, acceptedWorkflow, auditImageSave, strings.Replace(auditImageSave, "timeout 4m docker save", "docker save", 1)),
 			wantIn:   "docker save",
 		},
 		{
@@ -2285,7 +2285,7 @@ func TestAuditWorkflow(t *testing.T) {
 		},
 		{
 			name:     "row 11's config read without its timeout",
-			workflow: mutate(t, acceptedWorkflow, auditRuntimeInspect, strings.Replace(auditRuntimeInspect, "timeout 2m docker image inspect", "docker image inspect", 1)),
+			workflow: mutate(t, acceptedWorkflow, auditRuntimeInspect, strings.Replace(auditRuntimeInspect, "timeout 1m docker image inspect", "docker image inspect", 1)),
 			wantIn:   "docker image inspect",
 		},
 		{
@@ -2330,7 +2330,7 @@ func TestAuditWorkflow(t *testing.T) {
 		},
 		{
 			name:     "row 11's docker export without its timeout",
-			workflow: mutate(t, acceptedWorkflow, auditRuntimeExport, strings.Replace(auditRuntimeExport, "timeout 5m docker export", "docker export", 1)),
+			workflow: mutate(t, acceptedWorkflow, auditRuntimeExport, strings.Replace(auditRuntimeExport, "timeout 4m docker export", "docker export", 1)),
 			wantIn:   "docker export",
 		},
 		{
@@ -2345,12 +2345,12 @@ func TestAuditWorkflow(t *testing.T) {
 		},
 		{
 			name:     "row 13's docker cp without its timeout",
-			workflow: mutate(t, acceptedWorkflow, auditHostileCopy, strings.Replace(auditHostileCopy, "timeout 2m docker cp", "docker cp", 1)),
+			workflow: mutate(t, acceptedWorkflow, auditHostileCopy, strings.Replace(auditHostileCopy, "timeout 1m docker cp", "docker cp", 1)),
 			wantIn:   "docker cp",
 		},
 		{
 			name:     "row 13's docker commit without its timeout",
-			workflow: mutate(t, acceptedWorkflow, auditHostileCommit, strings.Replace(auditHostileCommit, "timeout 2m docker commit", "docker commit", 1)),
+			workflow: mutate(t, acceptedWorkflow, auditHostileCommit, strings.Replace(auditHostileCommit, "timeout 1m docker commit", "docker commit", 1)),
 			wantIn:   "docker commit",
 		},
 		{
@@ -2364,11 +2364,11 @@ func TestAuditWorkflow(t *testing.T) {
 			wantIn:   "hostile-inventories",
 		},
 		{
-			// The checks job's steps add up to 350 minutes: with the job's 5 minutes
+			// The checks job's steps add up to 335 minutes: with the job's 5 minutes
 			// of set-up and post steps they stay within its 355, and a step raised by
-			// 5 puts them past it.
+			// 20 puts them past it.
 			name:     "a checks step adding up past the job's timeout",
-			workflow: mutate(t, acceptedWorkflow, "      - name: Check the image's runtime settings\n        timeout-minutes: 15\n", "      - name: Check the image's runtime settings\n        timeout-minutes: 20\n"),
+			workflow: mutate(t, acceptedWorkflow, "      - name: Check the image's runtime settings\n        timeout-minutes: 10\n", "      - name: Check the image's runtime settings\n        timeout-minutes: 30\n"),
 			wantIn:   "timeout-minutes",
 		},
 
@@ -2428,22 +2428,22 @@ func TestAuditWorkflow(t *testing.T) {
 		},
 		{
 			name:     "a container started by docker container run",
-			workflow: mutate(t, acceptedWorkflow, "          timeout 5m docker export", "          docker container run --rm \"${image}@${digest}\" version\n          timeout 5m docker export"),
+			workflow: mutate(t, acceptedWorkflow, "          timeout 4m docker export", "          docker container run --rm \"${image}@${digest}\" version\n          timeout 4m docker export"),
 			wantIn:   "container run",
 		},
 		{
 			name:     "a container started by docker --context run",
-			workflow: mutate(t, acceptedWorkflow, "          timeout 5m docker export", "          docker --context example run --rm \"${image}@${digest}\" version\n          timeout 5m docker export"),
+			workflow: mutate(t, acceptedWorkflow, "          timeout 4m docker export", "          docker --context example run --rm \"${image}@${digest}\" version\n          timeout 4m docker export"),
 			wantIn:   "--context",
 		},
 		{
 			name:     "a shell in a container by docker exec",
-			workflow: mutate(t, acceptedWorkflow, "          timeout 5m docker export", "          timeout 60 docker exec \"${cid}\" sh -c true || rc=$?\n          timeout 5m docker export"),
+			workflow: mutate(t, acceptedWorkflow, "          timeout 4m docker export", "          timeout 60 docker exec \"${cid}\" sh -c true || rc=$?\n          timeout 4m docker export"),
 			wantIn:   "docker exec",
 		},
 		{
 			name:     "a shell in a container by docker container exec",
-			workflow: mutate(t, acceptedWorkflow, "          timeout 5m docker export", "          timeout 60 docker container exec \"${cid}\" sh -c true || rc=$?\n          timeout 5m docker export"),
+			workflow: mutate(t, acceptedWorkflow, "          timeout 4m docker export", "          timeout 60 docker container exec \"${cid}\" sh -c true || rc=$?\n          timeout 4m docker export"),
 			wantIn:   "container exec",
 		},
 		{
@@ -2599,7 +2599,7 @@ func TestAuditWorkflow(t *testing.T) {
 
 		// Round E's second part: no step's own timeouts reach its
 		// timeout-minutes. Row 7's 20-minute budget and the 26 minutes outside its
-		// loop add up to 46 of its 50, and row 8's three timeouts to 17 of its 20.
+		// loop add up to 46 of its 50, and row 8's three timeouts to 14 of its 15.
 		{
 			name:     "row 7's download timeout raised past its step's time-outs",
 			workflow: mutate(t, acceptedWorkflow, "timeout 5m gh release download", "timeout 30m gh release download"),
@@ -2613,7 +2613,7 @@ func TestAuditWorkflow(t *testing.T) {
 		},
 		{
 			name:     "row 8's time-out lowered below its timeouts",
-			workflow: mutate(t, acceptedWorkflow, "      - name: Pull the image anonymously by digest\n        timeout-minutes: 20\n", "      - name: Pull the image anonymously by digest\n        timeout-minutes: 15\n"),
+			workflow: mutate(t, acceptedWorkflow, "      - name: Pull the image anonymously by digest\n        timeout-minutes: 15\n", "      - name: Pull the image anonymously by digest\n        timeout-minutes: 13\n"),
 			wantIn:   "past its timeout-minutes",
 		},
 
