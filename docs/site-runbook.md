@@ -42,8 +42,9 @@ echo "$REGION"                                    # PASS: fr-par, nl-ams or pl-w
 export AWS_DEFAULT_REGION="$REGION" AWS_ENDPOINT_URL="https://s3.$REGION.scw.cloud"
 # AWS CLI v2 sends and checks checksums only where the S3 API requires one (ADR 0039, open point 9)
 export AWS_REQUEST_CHECKSUM_CALCULATION=when_required AWS_RESPONSE_CHECKSUM_VALIDATION=when_required
-ADMIN_PROJECT="$(scw iam api-key get "$SCW_ACCESS_KEY" -o json | jq -r .default_project_id)"
-ME="$(scw iam api-key get "$SCW_ACCESS_KEY" -o json | jq -r 'if ((.user_id // "") | length) > 0 then "user_id:" + .user_id else "application_id:" + .application_id end')"
+# (.APIKey // .): a current scw wraps the key in "APIKey", an older one prints it unwrapped
+ADMIN_PROJECT="$(scw iam api-key get "$SCW_ACCESS_KEY" -o json | jq -r '(.APIKey // .) | .default_project_id')"
+ME="$(scw iam api-key get "$SCW_ACCESS_KEY" -o json | jq -r '(.APIKey // .) | if ((.user_id // "") | length) > 0 then "user_id:" + .user_id else "application_id:" + .application_id end')"
 echo "$ADMIN_PROJECT $ME"                         # PASS: your admin project's ID (never the site's) and "user_id:<your user ID>"
 # FAIL the site's project ID (an R5, R7 or R12 left unfinished): scw iam api-key update "$SCW_ACCESS_KEY" default-project-id=<admin project ID>, then R0 again
 # FAIL an empty value, "null" or "user_id:" alone: the scw call failed (a wrong key, no network); fix it, then R0 again
