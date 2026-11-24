@@ -60,6 +60,9 @@ type auditStep struct {
 	// env and with are the credentials and variables the step reads, each one
 	// key whose value is exactly one expression.
 	env, with []auditRead
+	// envMatch are env: variables whose value a pattern holds, not one
+	// expression: a pin Renovate moves, such as an image's digest.
+	envMatch []auditEnvMatch
 	// githubToken is a step that reads GitHub's API with the job's token, as
 	// GH_TOKEN in its step-level env:.
 	githubToken bool
@@ -76,6 +79,14 @@ type auditStep struct {
 // auditRead is one env: or with: key and the one expression it reads.
 type auditRead struct {
 	key, value string
+}
+
+// auditEnvMatch is one env: variable whose value re must match; want names
+// the value in a message.
+type auditEnvMatch struct {
+	key  string
+	re   *regexp.Regexp
+	want string
 }
 
 // auditCommand is a command a step's script must hold: re matches it, want
@@ -190,15 +201,107 @@ func verifyPattern() string {
 	return `(?m)^[ \t]*(?:if ! ` + body + ` > /dev/null` + refusalBranch + `|` + body + `$)`
 }
 
+// guard returns the pattern of a whole-line guard: the if whose condition is
+// cond, verbatim, and its refusalBranch.
+func guard(cond string) string {
+	return `(?m)^[ \t]*` + regexp.QuoteMeta("if "+cond) + refusalBranch
+}
+
+// wholeLine returns the pattern of text, verbatim, as a line of its own.
+func wholeLine(text string) string {
+	return `(?m)^[ \t]*` + regexp.QuoteMeta(text) + `$`
+}
+
+// auditContainerFlags are the flags every container the checks job starts is
+// created with (PR 5c): a read-only root filesystem, no network, no
+// capability and no new privilege.
+const auditContainerFlags = "docker create --read-only --network none --cap-drop ALL --security-opt no-new-privileges"
+
+// auditFuzzTmpfs is the one tmpfs of the workflow, row 14's: the size, mode
+// and flags its go test needs, and nothing else writable in its container.
+const auditFuzzTmpfs = "--tmpfs /scratch:rw,exec,nosuid,size=4g,mode=1777"
+
+// The checks job's rows 6 to 15 (PR 5c): the commands their steps must hold.
+var (
+	// Row 6: scorecard's report goes to the results directory alone, and the
+	// CLI publishes nothing.
+	scorecardOut = command(wholeLine(`out="${results}/scorecard"`), `out="${results}/scorecard", scorecard's folder of the results directory`)
+	scorecardRun = command(`(?m)^[ \t]*timeout 15m scorecard --repo "github\.com/\$\{GH_REPO\}" [^\n]*> "\$\{out\}/scorecard\.json" 2> "\$\{out\}/scorecard\.stderr"`,
+		`timeout 15m scorecard --repo "github.com/${GH_REPO}" ... > "${out}/scorecard.json" 2> "${out}/scorecard.stderr": its report in the results directory, never on the public log`)
+	scorecardPublish = command(`(?:^|[\s;&|(])scorecard\s[^\n]*--publish`, "scorecard --publish, which sends the result where the run keeps nothing: the report stays in the results directory")
+
+	// Row 7: the recorded tag, read and its shape refused before it reaches a
+	// command line.
+	tagRead = command(wholeLine(`tag="$(sed -n 's/^release_tag=//p' "${results}/target.txt")"`),
+		`tag="$(sed -n 's/^release_tag=//p' "${results}/target.txt")", the tag row 1 recorded`)
+
+	// Rows 8, 11 and 13: the image digest row 7 recorded, its shape refused
+	// before it reaches a docker command.
+	recordedDigest = command(wholeLine(`digest="$(cat "${results}/release-integrity/image-digest.txt")"`),
+		`digest="$(cat "${results}/release-integrity/image-digest.txt")", the image digest the release's verification recorded`)
+	imageDigestShape = command(guard(`[[ ! "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]]`),
+		`the recorded image digest's shape guard: if [[ ! "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then, echo "::error ...", exit 1 and fi, each on a line of its own`)
+	anonymousConfig = command(wholeLine(`export DOCKER_CONFIG="${RUNNER_TEMP}/docker-anonymous"`),
+		`export DOCKER_CONFIG="${RUNNER_TEMP}/docker-anonymous", an empty Docker configuration: the image is pulled anonymously`)
+	imagePull    = command(regexp.QuoteMeta(`docker pull --platform linux/amd64 "${image}@${digest}"`), `docker pull --platform linux/amd64 "${image}@${digest}", the image by its recorded digest`)
+	imageInspect = command(regexp.QuoteMeta(`docker image inspect "${image}@${digest}"`), `docker image inspect "${image}@${digest}", the pulled image by its recorded digest`)
+
+	// Row 9: govulncheck is no go command, so its offline settings are its own.
+	binaryGovulncheck = command(regexp.QuoteMeta(`GOFLAGS=-mod=readonly GOPROXY=off timeout 5m govulncheck -mode=binary `),
+		"GOFLAGS=-mod=readonly GOPROXY=off timeout 5m govulncheck -mode=binary: the binary scan runs offline")
+
+	// Row 11: the version command, in a container with the four flags.
+	runtimeCreate = command(regexp.QuoteMeta(`cid="$(`+auditContainerFlags+` "${image}@${digest}" version)"`),
+		`cid="$(`+auditContainerFlags+` "${image}@${digest}" version)": the image's container read-only, with no network, no capability and no new privilege`)
+
+	// Row 13: the inputs reach the image by docker cp into a staging container
+	// that is never started, which docker commit turns into the image each
+	// run's container starts from (ADR 0040); each run's container has the
+	// four flags and its limits.
+	hostileCopy   = command(regexp.QuoteMeta(`docker cp "${stage}" "${staging}:/work/"`), `docker cp "${stage}" "${staging}:/work/", the inputs copied into the staging container`)
+	hostileCommit = command(regexp.QuoteMeta(`docker commit "${staging}" "audit-hostile:${GITHUB_RUN_ID}"`), `docker commit "${staging}" "audit-hostile:${GITHUB_RUN_ID}", the image the runs start from`)
+	hostileCreate = command(regexp.QuoteMeta(`cid="$(`+auditContainerFlags+` --memory 512m --pids-limit 64 "audit-hostile:${GITHUB_RUN_ID}" assess `),
+		`cid="$(`+auditContainerFlags+` --memory 512m --pids-limit 64 "audit-hostile:${GITHUB_RUN_ID}" assess ...: each run read-only, with no network, no capability, no new privilege and its limits`)
+
+	// Row 14: the Go image by digest, each target's shape refused before it
+	// reaches the container, and the container with the four flags, its one
+	// tmpfs and the step's offline settings.
+	goImage   = command(wholeLine(`image="golang:${GO_IMAGE}"`), `image="golang:${GO_IMAGE}", the Go image the step's env: pins by digest`)
+	fuzzShape = command(guard(`[[ ! "${name}" =~ ^Fuzz[A-Za-z0-9_]*$ ]] || [[ ! "${pkg}" =~ ^[A-Za-z0-9_][A-Za-z0-9_./-]*$ ]] || [[ "${pkg}" == *..* ]]`),
+		`the fuzz target's shape guard: if [[ ! "${name}" =~ ^Fuzz[A-Za-z0-9_]*$ ]] || [[ ! "${pkg}" =~ ^[A-Za-z0-9_][A-Za-z0-9_./-]*$ ]] || [[ "${pkg}" == *..* ]]; then, `+
+			`echo "::error ...", exit 1 and fi, each on a line of its own`)
+	fuzzCreate = command(`(?m)`+regexp.QuoteMeta(`cid="$(`+auditContainerFlags+` --user 65534:65534 \`)+`$`,
+		`cid="$(`+auditContainerFlags+` --user 65534:65534 \: the fuzz container read-only, with no network, no capability and no new privilege, as nobody`)
+	fuzzTmpfs = command(`(?m)`+regexp.QuoteMeta(`--user 65534:65534 \`)+`\n[ \t]+`+regexp.QuoteMeta(auditFuzzTmpfs+` \`)+`$`,
+		auditFuzzTmpfs+` \, exactly, on the line after --user 65534:65534 \: the fuzz container's one writable path`)
+	fuzzEnv = command(`(?m)`+regexp.QuoteMeta(auditFuzzTmpfs+` \`)+`\n[ \t]+`+regexp.QuoteMeta(`--env GOFLAGS --env GOPROXY `),
+		"--env GOFLAGS --env GOPROXY on the line after the tmpfs: the step's GOFLAGS=-mod=readonly and GOPROXY=off handed to go test in the container")
+	fuzzTime = command(`-fuzztime 10m `, "-fuzztime 10m, each target's fuzzing budget")
+
+	// Row 15: each ruleset ID's shape refused before it reaches a URL.
+	rulesetShape = command(guard(`[[ ! "${id}" =~ ^[0-9]+$ ]]`),
+		`the ruleset ID's shape guard: if [[ ! "${id}" =~ ^[0-9]+$ ]]; then, echo "::error ...", exit 1 and fi, each on a line of its own`)
+	rulesetRead = command(regexp.QuoteMeta(`read_api "ruleset-${id}" "repos/${GH_REPO}/rulesets/${id}"`), `read_api "ruleset-${id}" "repos/${GH_REPO}/rulesets/${id}", the ruleset's read`)
+
+	// anyTmpfs is a tmpfs in a container that needs none.
+	anyTmpfs = command(`--tmpfs`, "--tmpfs, a writable path in a container that needs none: row 14's is the workflow's one tmpfs")
+
+	// goImageDigest is row 14's Go image pin: a tag and its @sha256: digest.
+	goImageDigest = regexp.MustCompile(`^[0-9A-Za-z][0-9A-Za-z._-]*@sha256:[0-9a-f]{64}$`)
+)
+
 // auditJobs are the workflow's three jobs, in order, with their steps in
 // order: the closed list a step is recognised by, by name.
 var auditJobs = []auditJob{
 	{
 		key:  "checks",
 		name: "Checks",
-		// No attestations scope: no row of the checks job PR 5b runs reads
-		// one; PR 5c adds it with the release-integrity rows.
-		permissions:      []string{"contents"},
+		// The four scopes its rows read with (PR 5c): contents for the
+		// checkout and the release, attestations for row 7's verification,
+		// actions for scorecard's reads of the workflows' runs, issues for
+		// Renovate's Dependency Dashboard. No packages scope (the image is
+		// pulled anonymously) and no id-token (scorecard runs as the CLI).
+		permissions:      []string{"contents", "attestations", "actions", "issues"},
 		downloadsModules: "Download the Go modules",
 		steps: []auditStep{
 			{name: "Check out the audited commit", uses: auditCheckout},
@@ -227,6 +330,54 @@ var auditJobs = []auditJob{
 			// its step holds the job's token.
 			{name: "zizmor", githubToken: true, runs: []auditCommand{command(`zizmor `, "zizmor")}},
 			{name: "actionlint", runs: []auditCommand{command(`actionlint`, "actionlint")}},
+			// Rows 6 to 15 (PR 5c). The job's token only on the steps that read
+			// GitHub's API: scorecard, the release's verification and the
+			// supply-chain reads; no container step holds it.
+			{
+				name: "OpenSSF scorecard", githubToken: true,
+				runs:    []auditCommand{scorecardOut, scorecardRun},
+				refuses: []auditCommand{scorecardPublish},
+				order:   []auditCommand{scorecardOut, scorecardRun},
+			},
+			{
+				name: "Verify the release's files, signature and attestations", githubToken: true,
+				runs:  []auditCommand{tagRead, tagShape},
+				order: []auditCommand{tagRead, tagShape},
+			},
+			{
+				name:  "Pull the image anonymously by digest",
+				runs:  []auditCommand{anonymousConfig, recordedDigest, imageDigestShape, imagePull},
+				order: []auditCommand{anonymousConfig, recordedDigest, imageDigestShape, imagePull},
+			},
+			{name: "govulncheck on the release binaries", runs: []auditCommand{binaryGovulncheck}},
+			{name: "trivy on the image and its SBOM"},
+			{
+				name:    "Check the image's runtime settings",
+				runs:    []auditCommand{recordedDigest, imageDigestShape, imageInspect, runtimeCreate},
+				refuses: []auditCommand{anyTmpfs},
+				order:   []auditCommand{recordedDigest, imageDigestShape, imageInspect, runtimeCreate},
+			},
+			{
+				name:    "Run the CLI on hostile inventory files",
+				runs:    []auditCommand{recordedDigest, imageDigestShape, imageInspect, hostileCopy, hostileCommit, hostileCreate},
+				refuses: []auditCommand{anyTmpfs},
+				order:   []auditCommand{recordedDigest, imageDigestShape, imageInspect, hostileCopy, hostileCommit, hostileCreate},
+			},
+			{
+				name: "Fuzz the committed Fuzz targets",
+				env:  []auditRead{{key: "GOFLAGS", value: "-mod=readonly"}, {key: "GOPROXY", value: "off"}},
+				envMatch: []auditEnvMatch{{
+					key: "GO_IMAGE", re: goImageDigest,
+					want: `a tag and its @sha256:<64 hex> digest, so the image is the one Renovate pinned`,
+				}},
+				runs:  []auditCommand{goImage, fuzzShape, fuzzCreate, fuzzTmpfs, fuzzEnv, fuzzTime},
+				order: []auditCommand{goImage, fuzzShape, fuzzCreate, fuzzTmpfs, fuzzEnv},
+			},
+			{
+				name: "Supply-chain reads", githubToken: true,
+				runs:  []auditCommand{rulesetShape, rulesetRead},
+				order: []auditCommand{rulesetShape, rulesetRead},
+			},
 			{
 				name: "Encrypt the checks' results to the model key",
 				env:  []auditRead{{key: "AUDIT_MODEL_PUBLIC_KEY", value: varValue("AUDIT_MODEL_PUBLIC_KEY")}},
@@ -447,8 +598,10 @@ var auditPin = regexp.MustCompile(`^([A-Za-z0-9_.-]+/[A-Za-z0-9_./-]+)@([0-9a-f]
 // out): a workflow_dispatch with no inputs as its only trigger, the one guard
 // condition in every job and in the concurrency group, read-only scopes, three
 // jobs whose steps are a closed list in order, two ciphertexts and no other
-// hand-off, and every secret and variable read in exactly one place. A
-// document it cannot read, or an empty one, is refused.
+// hand-off, every secret and variable read in exactly one place, and every
+// container of the checks job read-only, networkless, capability-less and
+// unprivileged, with no mount, no socket, no registry login and no tmpfs but
+// row 14's (PR 5c). A document it cannot read, or an empty one, is refused.
 func AuditWorkflow(src []byte) []string {
 	if strings.TrimSpace(string(src)) == "" {
 		return []string{"the audit workflow is empty, so this check cannot tell what it runs"}
@@ -489,10 +642,12 @@ type auditReader struct {
 }
 
 // lineRules checks every line on its own: the secrets context in a form no
-// list of names can follow, secrets: inherit, a traced shell, and in the model
-// job's lines a check or a container.
+// list of names can follow, secrets: inherit, a traced shell, in the model
+// job's lines a check or a container, and in every other job's lines what no
+// container is given (containerRules).
 func (a *auditReader) lineRules() {
 	model := a.jobLines("model")
+	inDocker := false
 
 	for i, line := range a.r.raw {
 		num := i + 1
@@ -516,8 +671,74 @@ func (a *auditReader) lineRules() {
 			if m := auditModelTools.FindStringSubmatch(line); m != nil {
 				a.r.fail("line %d: the model job runs %s (%q): it runs no check, no container and no release code, which are the checks job's (ADR 0040)", num, m[1], trimmed)
 			}
+
+			// The model job runs no container at all; its own rule refuses one.
+			inDocker = false
+
+			continue
+		}
+
+		inDocker = a.containerRules(num, line, inDocker)
+	}
+}
+
+// auditDockerWord matches a docker command on a line.
+var auditDockerWord = regexp.MustCompile("(?:^|[\\s;&|(`\"'])docker\\s")
+
+// auditDockerRefused matches the docker commands the workflow never runs: a
+// registry login (the image is pulled anonymously) and docker run, which
+// starts a container in one step with whatever flags it is given.
+var auditDockerRefused = regexp.MustCompile("(?:^|[\\s;&|(`\"'])docker\\s+(login|run)(?:$|\\s)")
+
+// auditContainerRisk matches what no container of the workflow is given, on
+// any line: a volume or a mount, privileges, a host namespace, a capability or
+// a device. auditShortVolume is -v, read on a docker command's lines alone,
+// where it is a volume and not some other program's flag.
+var (
+	auditContainerRisk = regexp.MustCompile(`(?:^|[\s;&|("'])(--volume|--volumes-from|--mount|--privileged|--(?:network|net|pid|ipc|userns|uts)[ =]host|--cap-add|--device)(?:$|[\s=;&|)"'])`)
+	auditShortVolume   = regexp.MustCompile(`(?:^|\s)(-v)(?:$|\s)`)
+	auditTmpfsValue    = regexp.MustCompile(`(?:^|\s)--tmpfs[ =](\S+)`)
+)
+
+// containerRules refuses, on a line outside the model job, what no container
+// of the workflow is given (PR 5c, ADR 0040): its inputs reach it by docker cp
+// into a staging container, so it needs no mount, no volume and no socket, and
+// it gets no privilege, no host network and no tmpfs but row 14's. inDocker
+// says the line before was a docker command continued with \; it returns
+// whether this line is one.
+func (a *auditReader) containerRules(num int, line string, inDocker bool) bool {
+	trimmed := strings.TrimSpace(line)
+	docker := inDocker || auditDockerWord.MatchString(line)
+
+	if strings.Contains(line, "docker.sock") {
+		a.r.fail("line %d: %q names the Docker socket (docker.sock): no step hands a container, or anything else, the Docker daemon (ADR 0040)", num, trimmed)
+	}
+
+	if m := auditDockerRefused.FindStringSubmatch(line); m != nil {
+		if m[1] == "login" {
+			a.r.fail("line %d: %q runs docker login: the image is pulled anonymously, with no registry credential (ADR 0040)", num, trimmed)
+		} else {
+			a.r.fail("line %d: %q runs docker run, want docker create with --read-only --network none --cap-drop ALL --security-opt no-new-privileges and docker start (ADR 0040)", num, trimmed)
 		}
 	}
+
+	if m := auditContainerRisk.FindStringSubmatch(line); m != nil {
+		a.r.fail("line %d: %q gives a container %s: no container gets a mount, a volume, privileges, a host namespace, a capability or a device; its inputs reach it by docker cp (ADR 0040)", num, trimmed, m[1])
+	}
+
+	if docker {
+		if auditShortVolume.MatchString(line) {
+			a.r.fail("line %d: %q gives a container a volume (-v): no container gets a mount or a volume; its inputs reach it by docker cp (ADR 0040)", num, trimmed)
+		}
+	}
+
+	for _, m := range auditTmpfsValue.FindAllStringSubmatch(line, -1) {
+		if "--tmpfs "+m[1] != auditFuzzTmpfs {
+			a.r.fail("line %d: %q mounts the tmpfs %s, want only row 14's %s", num, trimmed, m[1], auditFuzzTmpfs)
+		}
+	}
+
+	return docker && strings.HasSuffix(line, `\`)
 }
 
 // auditSection is one job of the workflow as its raw lines hold it: its key
@@ -999,6 +1220,23 @@ func (a *auditReader) reads(path string, want *auditStep, env []auditVar) {
 		}
 	}
 
+	if want.githubToken && !hasVar(env, "GH_TOKEN", "${{ "+auditGitHubToken+" }}") {
+		a.r.fail("%s has no GH_TOKEN: ${{ %s }} in its step-level env:, want it: the step reads GitHub's API with the job's token", path, auditGitHubToken)
+	}
+
+	for _, m := range want.envMatch {
+		i := slices.IndexFunc(env, func(v auditVar) bool { return v.name == m.key })
+		if i < 0 {
+			a.r.fail("%s has no %s in its step-level env:, want %s", path, m.key, m.want)
+
+			continue
+		}
+
+		if !m.re.MatchString(env[i].value) {
+			a.r.fail("line %d: %s: env: %s is %q, want %s", env[i].num, path, m.key, env[i].value, m.want)
+		}
+	}
+
 	for _, v := range env {
 		if want.githubToken && v.name == "GH_TOKEN" && v.value == "${{ "+auditGitHubToken+" }}" {
 			a.allow(v.num, v.value)
@@ -1268,12 +1506,25 @@ func (a *auditReader) run(e yamlread.Entry, path string, want *auditStep, env []
 	}
 
 	for _, c := range want.refuses {
-		if c.re.MatchString(code) {
-			a.r.fail("%s runs %s", path, c.want)
+		if loc := c.re.FindStringIndex(code); loc != nil {
+			a.r.fail("%s runs %s (%q)", path, c.want, lineAt(code, loc[0]))
 		}
 	}
 
 	a.order(code, path, want.order)
+}
+
+// lineAt returns the line of text that holds the byte at, trimmed: the text a
+// refusal quotes.
+func lineAt(text string, at int) string {
+	start := strings.LastIndexByte(text[:at], '\n') + 1
+
+	end := strings.IndexByte(text[at:], '\n')
+	if end < 0 {
+		return strings.TrimSpace(text[start:])
+	}
+
+	return strings.TrimSpace(text[start : at+end])
 }
 
 // withoutComments returns the script's lines that are no comment, joined. Only

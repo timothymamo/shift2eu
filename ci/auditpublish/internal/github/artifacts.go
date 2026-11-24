@@ -193,7 +193,14 @@ func WriteArtifact(dir string, a Artifact) error {
 		return fmt.Errorf("artifact file: cannot create it: %w", publish.ErrConfig)
 	}
 
-	_, writeErr := file.Write(append(body, '\n'))
+	return writeArtifact(path, file, append(body, '\n'))
+}
+
+// writeArtifact writes body to file, the artifact file just created at path,
+// and closes it. A write or a close that fails removes path, so a failed run
+// leaves no partial artifact.json, and wraps publish.ErrConfig.
+func writeArtifact(path string, file io.WriteCloser, body []byte) error {
+	_, writeErr := file.Write(body)
 	closeErr := file.Close()
 
 	if writeErr != nil || closeErr != nil {
