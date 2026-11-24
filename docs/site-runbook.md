@@ -344,7 +344,11 @@ gh run view <run ID> -R <owner>/shift2eu --json jobs --jq '.jobs[] | select(.nam
 scw iam api-key update "$SCW_ACCESS_KEY" default-project-id="$P"   # its default project the site's (R5)
 GOOD='<the last good release, vX.Y.Z>'; T='<a UTC time after its deploy and before the bad write, such as 2026-12-01T10:00:00Z>'
 W="$(mktemp -d)"   # scratch files outside the checkout
-gh release download "$GOOD" -R <owner>/shift2eu --pattern "shift2eu-site_$GOOD.tar.gz" --dir "$W" && tar -xzOf "$W/shift2eu-site_$GOOD.tar.gz" manifest.json > "$W/good-manifest.json"
+gh release download "$GOOD" -R <owner>/shift2eu --pattern "shift2eu-site_$GOOD.tar.gz" --dir "$W"
+gh attestation verify "$W/shift2eu-site_$GOOD.tar.gz" --repo <owner>/shift2eu \
+  --signer-workflow <owner>/shift2eu/.github/workflows/release.yml \
+  --source-ref "refs/tags/$GOOD" --deny-self-hosted-runners   # PASS: "Verification succeeded"; FAIL: stop, its manifest is not to be trusted
+tar -xzOf "$W/shift2eu-site_$GOOD.tar.gz" manifest.json > "$W/good-manifest.json"
 jq -r .version "$W/good-manifest.json"   # PASS: the value of $GOOD
 # Each key's newest version written before $T, copied over the current one
 for k in index.html inventory.html privacy.html verify.html LICENSE NOTICE manifest.json; do
@@ -372,39 +376,123 @@ scw iam api-key update "$SCW_ACCESS_KEY" default-project-id="$ADMIN_PROJECT"   #
 # (a look-alike page, an sw.js) would stay served. First R11: rotate the deploy key, and its old key deleted
 scw iam api-key list bearer-id="$A"   # PASS: one key, the new one (R11)
 scw iam api-key update "$SCW_ACCESS_KEY" default-project-id="$P"   # own key, its default project the site's (R5)
-GOOD='<the last good release, vX.Y.Z>'; W="$(mktemp -d)"   # scratch files outside the checkout
-# Every release's manifest, from the GitHub releases: the keys a release has ever written
-for r in $(gh release list -R <owner>/shift2eu -L 1000 --json tagName --jq '.[].tagName'); do
-  gh release download "$r" -R <owner>/shift2eu --pattern "shift2eu-site_$r.tar.gz" --dir "$W" 2>/dev/null || continue   # a release before the site bundle has none
-  tar -xzOf "$W/shift2eu-site_$r.tar.gz" manifest.json > "$W/manifest-$r.json" && echo "PASS $r's manifest"
-done   # PASS: a line for every release with a site bundle, $GOOD among them
-cp "$W/manifest-$GOOD.json" "$W/good-manifest.json" && jq -r .version "$W/good-manifest.json"   # PASS: the value of $GOOD
-{ echo manifest.json; jq -r '.files[].path' "$W"/manifest-v*.json; } | sort -u > "$W/known-keys.txt"
-# The bucket's current keys, with your own key
-aws s3api list-objects-v2 --bucket "$B" --query 'Contents[].Key' --output json | jq -r '.[]?' | sort -u > "$W/live-keys.txt"
-comm -13 "$W/known-keys.txt" "$W/live-keys.txt" > "$W/unknown-keys.txt"; cat "$W/unknown-keys.txt"   # record them: the leaked key's new paths
-# Delete every key that is in no release's manifest (versioning on: a delete marker, the written version kept for the record)
-while read -r k; do
-  aws s3api delete-object --bucket "$B" --key "$k" >/dev/null && echo "PASS deleted $k" || echo "FAIL $k not deleted"
-done < "$W/unknown-keys.txt"   # PASS: a "PASS deleted" line for each key listed above
-aws s3api list-objects-v2 --bucket "$B" --query 'Contents[].Key' --output json | jq -r '.[]?' | sort -u | comm -13 "$W/known-keys.txt" -   # PASS: no output
-# Every file of the good release's manifest against the bucket, the assets included; a differing one restored from its versions
-jq -r '.files[] | "\(.sha256) \(.path)"' "$W/good-manifest.json" | while read -r want k; do
-  got="$(aws s3 cp "s3://$B/$k" - 2>/dev/null | shasum -a 256 | cut -d' ' -f1)"
-  if [ "$got" = "$want" ]; then echo "PASS $k is $GOOD's"; continue; fi
+# Five blocks, in order: run each only after the one before it printed its last PASS line. Only the third and the fourth write to the bucket
+GOOD='<the last good release, vX.Y.Z>'; W="$(mktemp -d)"; echo "$W"   # scratch files outside the checkout
+# Every release's site bundle, attested, and its manifest: the keys a release has ever written.
+# A release with no bundle asset is skipped; a bundle that cannot be listed, downloaded, verified or read is a FAIL, never skipped:
+# its keys would drop out of the known keys, and the third block would delete them
+gh release list -R <owner>/shift2eu -L 1000 --json tagName --jq '.[].tagName' > "$W/releases.txt" && wc -l < "$W/releases.txt"   # PASS: the number of releases, under 1000
+: > "$W/failed.txt"
+for r in $(cat "$W/releases.txt"); do
+  if ! gh release view "$r" -R <owner>/shift2eu --json assets --jq '.assets[].name' > "$W/assets.txt"; then
+    echo "FAIL $r: its assets could not be listed"; echo "$r" >> "$W/failed.txt"; continue
+  fi
+  grep -qxF "shift2eu-site_$r.tar.gz" "$W/assets.txt" || { echo "SKIP $r: no site bundle asset (a release before the bundle)"; continue; }
+  if gh release download "$r" -R <owner>/shift2eu --pattern "shift2eu-site_$r.tar.gz" --dir "$W" \
+    && gh attestation verify "$W/shift2eu-site_$r.tar.gz" --repo <owner>/shift2eu \
+      --signer-workflow <owner>/shift2eu/.github/workflows/release.yml \
+      --source-ref "refs/tags/$r" --deny-self-hosted-runners \
+    && tar -xzOf "$W/shift2eu-site_$r.tar.gz" manifest.json > "$W/manifest.tmp" \
+    && test "$(jq -r .version "$W/manifest.tmp")" = "$r" \
+    && mv "$W/manifest.tmp" "$W/manifest-$r.json"; then
+    echo "PASS $r's manifest, its bundle attested"
+  else
+    echo "FAIL $r: it has a bundle asset that could not be downloaded, verified or read"; echo "$r" >> "$W/failed.txt"
+  fi
+done   # each "PASS" after gh's "Verification succeeded"
+test ! -s "$W/failed.txt" && test -s "$W/manifest-$GOOD.json" && echo "PASS every site bundle attested, $GOOD's among them" || echo "FAIL: stop here, and run this block again"
+```
+
+```bash
+# Second: the keys every release has written, and the bucket's current keys, with your own key. Kept as JSON: a key may hold any byte, a newline too
+jq -s '[.[].files[].path] + ["manifest.json"] | unique' "$W"/manifest-v*.json > "$W/known-keys.json" && jq length "$W/known-keys.json"   # PASS: a count
+aws s3api list-objects-v2 --bucket "$B" --output json > "$W/live.json" && jq '[.Contents[]?.Key] | length' "$W/live.json"   # PASS: a count
+jq --slurpfile known "$W/known-keys.json" '[.Contents[]?.Key] | unique - $known[0]' "$W/live.json" > "$W/unknown-keys.json" && jq . "$W/unknown-keys.json" && echo PASS   # record them: the leaked key's new paths
+```
+
+```bash
+# Third, the deletion: every key that is in no release's manifest (versioning on: a delete marker, the written version kept for the record).
+# Guarded: it deletes nothing unless the first block passed and the known keys hold $GOOD's fixed ones
+if ! { test ! -s "$W/failed.txt" && test -s "$W/manifest-$GOOD.json" && jq -e 'index("manifest.json") and index("index.html")' "$W/known-keys.json" >/dev/null; }; then
+  echo "FAIL: the first block did not pass; nothing deleted"
+elif jq -e 'length == 0' "$W/unknown-keys.json" >/dev/null; then
+  echo "PASS: no key to delete"
+elif jq -e 'length > 1000' "$W/unknown-keys.json" >/dev/null; then
+  echo "FAIL: more than 1000 keys, more than one delete-objects call takes; nothing deleted"
+else
+  jq '{Objects: [.[] | {Key: .}], Quiet: false}' "$W/unknown-keys.json" > "$W/delete.json"
+  if aws s3api delete-objects --bucket "$B" --delete "file://$W/delete.json" --output json > "$W/deleted.json" \
+    && jq -e '(.Errors // []) | length == 0' "$W/deleted.json" >/dev/null; then
+    echo "PASS deleted $(jq '.Deleted | length' "$W/deleted.json") keys"
+  else
+    echo "FAIL: some keys not deleted"; jq '.Errors' "$W/deleted.json"
+  fi
+fi   # PASS: as many keys deleted as the second block listed
+aws s3api list-objects-v2 --bucket "$B" --output json | jq -c --slurpfile known "$W/known-keys.json" '[.Contents[]?.Key] | unique - $known[0]'   # PASS: []
+# FAIL keys listed: the second and third blocks again
+```
+
+```bash
+# Fourth: every key a release has written, against the digests its releases' manifests list and the headers the deploy sets
+# (ci/sitedeploy/internal/deploy/bucket.go). $GOOD's keys must be $GOOD's; a key only older releases list may be any of theirs.
+# module.* objects are stored gzip-compressed, with Content-Encoding: gzip: such a version is hashed through gunzip -c.
+# A version that matches is current: PASS; else copied over the current one (copy-object keeps its headers).
+# No version matches: $GOOD's key a FAIL, an older release's key deleted (a delete marker)
+H='def want: "public, max-age=300" as $s | "public, max-age=31536000, immutable" as $i
+  | if . == "manifest.json" then ["application/json", $s, null]
+    elif test("^(index|inventory|privacy|verify)\\.html$") then ["text/html; charset=utf-8", $s, null]
+    elif . == "LICENSE" or . == "NOTICE" then ["text/plain; charset=utf-8", $s, null]
+    elif test("^style\\.[0-9a-f]{16}\\.css$") then ["text/css; charset=utf-8", $i, null]
+    elif test("^(page|wasm_exec)\\.[0-9a-f]{16}\\.js$") then ["text/javascript; charset=utf-8", $i, null]
+    elif test("^module\\.[0-9a-f]{16}\\.js$") then ["text/javascript; charset=utf-8", $i, "gzip"]
+    else null end;
+  ($k | want) as $w | $w != null and .ContentType == $w[0] and .CacheControl == $w[1] and .ContentEncoding == $w[2]
+  and .WebsiteRedirectLocation == null and .ContentDisposition == null and .ContentLanguage == null and .Expires == null
+  and ((.Metadata // {}) | length) == 0'
+: > "$W/failed-keys.txt"; ok=no   # guarded as the third block: no key is checked, restored or deleted unless the first block passed
+test ! -s "$W/failed.txt" && test -s "$W/manifest-$GOOD.json" && jq -e 'index("manifest.json") and index("index.html")' "$W/known-keys.json" >/dev/null && ok=yes
+for k in $([ "$ok" = yes ] && jq -r '.[]' "$W/known-keys.json"); do
+  ours=yes
+  if [ "$k" = manifest.json ]; then want="$(shasum -a 256 < "$W/manifest-$GOOD.json" | cut -d' ' -f1)"
+  else want="$(jq -r --arg k "$k" '.files[] | select(.path == $k) | .sha256' "$W/manifest-$GOOD.json")"; fi
+  [ -n "$want" ] || { ours=no; want="$(jq -r --arg k "$k" '.files[] | select(.path == $k) | .sha256' "$W"/manifest-v*.json | sort -u)"; }
+  if ! aws s3api list-object-versions --bucket "$B" --prefix "$k" --output json > "$W/versions.json"; then
+    echo "FAIL $k: its versions could not be listed"; echo "$k" >> "$W/failed-keys.txt"; continue
+  fi
+  cur="$(jq -r --arg k "$k" '.Versions[]? | select(.Key == $k and .IsLatest) | .VersionId' "$W/versions.json")"
   v=""
-  for c in $(aws s3api list-object-versions --bucket "$B" --prefix "$k" --output json | jq -r --arg k "$k" '.Versions[]? | select(.Key == $k) | .VersionId'); do
-    aws s3api get-object --bucket "$B" --key "$k" --version-id "$c" "$W/candidate" >/dev/null 2>&1 || continue
-    [ "$(shasum -a 256 < "$W/candidate" | cut -d' ' -f1)" = "$want" ] && { v="$c"; break; }
+  for c in $(jq -r --arg k "$k" '.Versions[]? | select(.Key == $k) | .VersionId' "$W/versions.json"); do
+    aws s3api get-object --bucket "$B" --key "$k" --version-id "$c" "$W/candidate" --output json > "$W/head.json" || continue
+    jq -e --arg k "$k" "$H" "$W/head.json" >/dev/null || continue
+    if [ "$(jq -r '.ContentEncoding // ""' "$W/head.json")" = gzip ]; then got="$(gunzip -c < "$W/candidate" | shasum -a 256 | cut -d' ' -f1)"
+    else got="$(shasum -a 256 < "$W/candidate" | cut -d' ' -f1)"; fi
+    printf '%s\n' "$want" | grep -qxF "$got" && { v="$c"; break; }
   done
-  if [ -n "$v" ] && aws s3api copy-object --bucket "$B" --key "$k" --copy-source "$B/$k?versionId=$v" >/dev/null; then echo "PASS $k restored from $v"; else echo "FAIL $k: no version with $GOOD's digest, or the copy failed"; fi
-done   # PASS: one "PASS" line per manifest file, none "FAIL"
-aws s3 cp "s3://$B/manifest.json" - | cmp -s - "$W/good-manifest.json" && echo "PASS manifest.json is $GOOD's" || echo "FAIL manifest.json is not $GOOD's: the version rollback above"
-# FAIL a file with no matching version: redeploy $GOOD (the first block, within 30 days), or cut a fixing release
+  if [ -n "$v" ] && [ "$v" = "$cur" ]; then echo "PASS $k is current and a release's"
+  elif [ -n "$v" ]; then
+    aws s3api copy-object --bucket "$B" --key "$k" --copy-source "$B/$k?versionId=$v" --query VersionId --output text \
+      && echo "PASS $k restored from $v" || { echo "FAIL $k: the copy of $v failed"; echo "$k" >> "$W/failed-keys.txt"; }
+  elif [ "$ours" = yes ]; then echo "FAIL $k: no version with $GOOD's digest and the deploy's headers"; echo "$k" >> "$W/failed-keys.txt"
+  elif [ -z "$cur" ]; then echo "PASS $k: an older release's key, not served"
+  else
+    aws s3api delete-object --bucket "$B" --key "$k" >/dev/null \
+      && echo "PASS $k deleted: no version of an older release's" || { echo "FAIL $k not deleted"; echo "$k" >> "$W/failed-keys.txt"; }
+  fi
+done
+if [ "$ok" != yes ]; then echo "FAIL: the first block did not pass; nothing checked"
+elif [ -s "$W/failed-keys.txt" ]; then echo "FAIL these keys:"; cat "$W/failed-keys.txt"
+else echo "PASS every key a release's"; fi
+# FAIL a key of $GOOD's with no matching version: redeploy $GOOD (the first block of R12, within 30 days), or cut a fixing release
+```
+
+```bash
+# Fifth: the fourth block again must change nothing, then the manifest, and clean up
+# PASS: the fourth block again prints only "is current" and "not served" lines, and its last PASS line
+aws s3 cp "s3://$B/manifest.json" - | cmp -s - "$W/manifest-$GOOD.json" && echo "PASS manifest.json is $GOOD's" || echo "FAIL manifest.json is not $GOOD's: the version rollback above"
 rm -r "$W"
 scw iam api-key update "$SCW_ACCESS_KEY" default-project-id="$ADMIN_PROJECT"   # back to the admin project
 # Then the purge below, and last the guide's live check against $GOOD: docs/guide/verify-releases.md, "Verify the site", with TAG="$GOOD"
-# PASS: "Verification succeeded" and "OK" for every file; FAIL a "FAILED" line: this block again
+# PASS: "Verification succeeded", "OK" for every file and "PASS: every file matches"; FAIL a "FAILED" line: these five blocks again, from the first
 ```
 
 ```bash

@@ -156,46 +156,53 @@ every time, or run the bundle yourself (below).
 
 Every page shows the release it was built from, in its footer (and on the verification page), such as
 `vX.Y.Z`: that is the release to check. The live site is up from the site's first deploy. Check the live
-site against that release, with `TAG` set to its version. Run the block in a new bash shell (type `bash`
-first): `set -euo pipefail` ends that shell at the first command that fails, so nothing after a failed
-step runs, and the block works in a fresh, empty directory, so no file from an earlier run can stand in
-for one this run did not fetch.
+site against that release, with `TAG` set to its version.
+
+Paste the block into your shell as it is, bash or zsh. Its first two lines set `TAG` and `D`, a new, empty
+directory, in your shell. The check itself is one command, a subshell from `(` to `)`, which your shell
+reads whole before it runs any of it: `set -euo pipefail` stops the subshell at the first command that
+fails, so nothing after a failed step runs, and its options and its `cd` end with it, so your shell keeps
+its own. The check works only in `$D`, so no file from an earlier run can stand in for one this run did
+not fetch. In order, it downloads the release's bundle; verifies its build provenance (SLSA: from
+`release.yml`, for this tag, on GitHub's runners); unpacks it; checks that its manifest names `$TAG`, so
+the bundle is the release you meant; turns the manifest into a list of digests, refusing a path that could
+leave `live/` (defence in depth: the manifest is attested); fetches every file it lists from the live site,
+over HTTPS only; and compares each file with its digest. The block holds no comment lines, since an
+interactive zsh runs a line starting with `#` as a command. On a Mac without `sha256sum`, write
+`shasum -a 256` in its place.
 
 ```bash
-set -euo pipefail
 TAG=vX.Y.Z
-BUNDLE="shift2eu-site_$TAG.tar.gz"
-D="$(mktemp -d)" && cd "$D"
-
-gh release download "$TAG" --repo timothymamo/shift2eu --pattern "$BUNDLE"
-
-# The build provenance (SLSA): from release.yml, for this tag, on GitHub's runners.
-gh attestation verify "$BUNDLE" --repo timothymamo/shift2eu \
-  --signer-workflow timothymamo/shift2eu/.github/workflows/release.yml \
-  --source-ref "refs/tags/$TAG" --deny-self-hosted-runners
-
-mkdir site && tar -xzf "$BUNDLE" -C site
-
-# The bundle must be the release you meant: its manifest names its version.
-test "$(jq -r .version site/manifest.json)" = "$TAG"
-
-# Every file manifest.json lists, fetched from the live site over HTTPS only and compared with its digest.
-# Defence in depth: the manifest is attested, but a path that could leave live/ is refused anyway.
-jq -r '.files[]
-  | if (.path | test("^[A-Za-z0-9._/-]+$") and (contains("..") | not) and (startswith("/") | not))
-    then "\(.sha256)  \(.path)" else error("unsafe path in manifest.json: \(.path)") end' \
-  site/manifest.json > manifest.sha256
-mkdir live
-while read -r _ path; do
-  mkdir -p "live/$(dirname "$path")"
-  curl --fail --silent --show-error --proto '=https' --compressed \
-    --output "live/$path" "https://www.shift2eu.com/$path"
-done < manifest.sha256
-(cd live && sha256sum --check ../manifest.sha256)   # macOS: shasum -a 256 --check ../manifest.sha256
+D="$(mktemp -d)"; echo "$D"
+( set -euo pipefail
+  cd "$D"
+  BUNDLE="shift2eu-site_$TAG.tar.gz"
+  gh release download "$TAG" --repo timothymamo/shift2eu --pattern "$BUNDLE"
+  gh attestation verify "$BUNDLE" --repo timothymamo/shift2eu \
+    --signer-workflow timothymamo/shift2eu/.github/workflows/release.yml \
+    --source-ref "refs/tags/$TAG" --deny-self-hosted-runners
+  mkdir site
+  tar -xzf "$BUNDLE" -C site
+  test "$(jq -r .version site/manifest.json)" = "$TAG" || { echo "FAIL: the bundle's manifest is not $TAG's" >&2; false; }
+  jq -r '.files[]
+    | if (.path | test("^[A-Za-z0-9._/-]+$") and (contains("..") | not) and (startswith("/") | not))
+      then "\(.sha256)  \(.path)" else error("unsafe path in manifest.json: \(.path)") end' \
+    site/manifest.json > manifest.sha256
+  mkdir live
+  while read -r sum f; do
+    mkdir -p "live/$(dirname "$f")"
+    curl --fail --silent --show-error --proto '=https' --compressed \
+      --output "live/$f" "https://www.shift2eu.com/$f"
+  done < manifest.sha256
+  cd live
+  sha256sum --check ../manifest.sha256
+); [ "$?" -eq 0 ] && echo "PASS: every file matches $TAG's manifest" || echo "FAIL: stopped at the first failed step"
 ```
 
-`gh attestation verify` must print `✓ Verification succeeded!`, and the check must print `OK` for every
-file. The command leaves out `--source-digest` on purpose: the release runs only on a pushed `v*.*.*` tag,
+`gh attestation verify` must print `✓ Verification succeeded!`, the check must print `OK` for every
+file, and the block's last line `PASS`. The subshell's status is read after it, not by an `&&` on the
+subshell itself: a shell ignores `set -e` inside a command whose status an `&&` or `||` tests, so the
+check would not stop at a failed step. The command leaves out `--source-digest` on purpose: the release runs only on a pushed `v*.*.*` tag,
 a ruleset guards who may create one, and `--signer-workflow`, `--source-ref "refs/tags/$TAG"` and
 `--deny-self-hosted-runners` bind the bundle to that tag's run; a commit digest read from the same GitHub
 would add nothing. With a clone you trust, you can bind it to a commit as well:
@@ -205,9 +212,11 @@ would add nothing. With a clone you trust, you can bind it to a commit as well:
 `--compressed` asks for, and decodes, the compressed form the site serves its largest script in:
 the manifest's digests are of the files themselves. A `FAILED` line, or a file `curl` cannot fetch, means
 the live site does not serve that release's files; report it as the repository's
-[security policy](../../SECURITY.md) says. The address `https://www.shift2eu.com/` serves `index.html`:
+[security policy](../../SECURITY.md) says. The address `https://www.shift2eu.com/` serves `index.html`.
+Check it in the same shell, where `$D` is still set: the commands read the bundle's manifest from `$D`.
 
 ```bash
+cd "$D"
 curl --fail --silent --show-error --proto '=https' --compressed https://www.shift2eu.com/ | sha256sum
 jq -r '.files[] | select(.path == "index.html") | .sha256' site/manifest.json
 ```
@@ -231,11 +240,11 @@ What the check shows, and what it does not:
 
 **Run the bundle yourself.** The bundle runs unchanged on any origin. Serve the verified, extracted
 bundle with any static file server on your own machine and open it in your browser: you run exactly
-the attested files, and the site's host sees nothing. For example, from the directory the check above
-worked in (`$D`):
+the attested files, and the site's host sees nothing. For example, in the same shell, from the directory
+the check above worked in (`$D`):
 
 ```bash
-python3 -m http.server 8000 --bind localhost --directory site
+python3 -m http.server 8000 --bind localhost --directory "$D/site"
 # then open http://localhost:8000/
 ```
 
