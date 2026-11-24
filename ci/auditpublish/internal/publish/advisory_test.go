@@ -527,6 +527,107 @@ func TestRenderAdvisoryHoldsTheEvidenceOnly(t *testing.T) {
 	}
 }
 
+// GitHub's two limits on a draft advisory's text, in bytes: a longer
+// description or summary is answered 422, which the run reads as "not filed"
+// (ADR 0040, "Residual risks").
+const (
+	githubAdvisoryDescriptionLimit = 65535
+	githubAdvisorySummaryLimit     = 1024
+)
+
+// The caps of the result schema's finding fields, in bytes, that reach an
+// advisory (ADR 0040, the finding schema).
+const (
+	capRuleBytes     = 80
+	capFileBytes     = 200
+	capSinkBytes     = 120
+	capScenarioBytes = 2000
+	capEvidenceBytes = 16000
+	capFixBytes      = 1000
+	capDismissal     = 200
+)
+
+// worstCaseFinding returns a private finding every free-text field of which is
+// at its cap, filled with the character that makes the rendering grow most: a
+// code span's or a fence's delimiter is one byte longer than the longest run of
+// backticks in the text (CodeSpan, CodeBlock), so a field of n backticks
+// renders as 3n bytes, more than any other text of that length. The words the
+// description writes outside a code span are the longest of their vocabulary,
+// and the finding is unconfirmed, since "no: unconfirmed" is longer than
+// "yes". The line is the schema's maximum, and the check is the longest check
+// id, which the description writes as it is. Every value is one validateResult
+// accepts.
+func worstCaseFinding() publish.Finding {
+	return publish.Finding{
+		Check:     "binary-vulnerabilities",
+		Rule:      strings.Repeat("a", capRuleBytes),
+		File:      strings.Repeat("a", capFileBytes),
+		Line:      9999999,
+		Sink:      strings.Repeat("a", capSinkBytes),
+		Severity:  sevCritical,
+		Confirmed: false,
+		Category:  catDependency,
+		Private:   true,
+		Scenario:  strings.Repeat("`", capScenarioBytes),
+		Evidence:  strings.Repeat("`", capEvidenceBytes),
+		Fix:       strings.Repeat("`", capFixBytes),
+		Dismissal: strings.Repeat("`", capDismissal),
+	}
+}
+
+// TestRenderAdvisoryFitsGitHubsLimits pins the worst-case draft advisory under
+// GitHub's two limits: a finding with every free-text field at its cap renders
+// a description of fewer than 65535 bytes and a summary of fewer than 1024, for
+// each status a run renders. GitHub answers an over-long body with 422, which
+// the run reads as "not filed", so a cap raised past this test's finding would
+// turn a valid finding into that path.
+func TestRenderAdvisoryFitsGitHubsLimits(t *testing.T) {
+	t.Parallel()
+
+	run := testRun(t, testDate, testRunID)
+	worst := worstCaseFinding()
+
+	// The finding is one the result's own validation accepts: RenderReport runs
+	// validateResult over every finding it renders.
+	if _, err := publish.RenderReport(publish.ReportInput{
+		Result:  fixtureResult(worst),
+		Run:     run,
+		Private: publish.PrivateHandled,
+	}); err != nil {
+		t.Fatalf("RenderReport of the worst-case finding = %v, want no error: the finding must be one the schema accepts", err)
+	}
+
+	for _, tc := range []struct {
+		name   string
+		status publish.AdvisoryStatus
+	}{
+		{name: "a new draft", status: publish.AdvisoryNew},
+		{name: "an open draft", status: publish.AdvisoryOpen},
+		{name: "a regressed draft", status: publish.AdvisoryRegressed},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			text, err := publish.RenderAdvisory(publish.PrivateFinding{Finding: worst, Fingerprint: advisoryFingerprint}, tc.status, run)
+			if err != nil {
+				t.Fatalf("RenderAdvisory = %v, want no error", err)
+			}
+
+			t.Logf("the worst-case description is %d bytes and its summary %d", len(text.Description), len(text.Summary))
+
+			if len(text.Description) >= githubAdvisoryDescriptionLimit {
+				t.Errorf("the worst-case description is %d bytes, want fewer than %d: GitHub answers an over-long body with 422, which the run reads as not filed",
+					len(text.Description), githubAdvisoryDescriptionLimit)
+			}
+
+			if len(text.Summary) >= githubAdvisorySummaryLimit {
+				t.Errorf("the worst-case summary is %d bytes, want fewer than %d: GitHub answers an over-long summary with 422",
+					len(text.Summary), githubAdvisorySummaryLimit)
+			}
+		})
+	}
+}
+
 // TestParseAdvisoryStatus pins the line the description's status lives in: the
 // last line that is exactly "Audit status: " and one of the four words, so a
 // model-written line inside a code block is never the status - and no line
