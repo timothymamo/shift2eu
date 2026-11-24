@@ -2345,7 +2345,7 @@ in the limits, and the 5-minute pull), the supply-chain reads 15 (2 per read). T
 minutes for the job's set-up and post steps stays within its 355 (`test/architecture` holds that sum),
 and GitHub's own limit is 360.
 
-**Pins.** scorecard v5.6.0 (`scorecard_<version>_linux_amd64.tar.gz`), cosign v3.1.4
+**Pins.** scorecard v5.6.0 (`scorecard_<version>_linux_amd64.tar.gz`), cosign v3.1.5
 (`cosign-linux-amd64`, the version and digest `release.yml` and `dev/lima.yaml` pin, so Renovate's
 cosign group moves them together) and trivy v0.76.2 (`trivy_<version>_Linux-64bit.tar.gz`), each by
 version and SHA-256 with its `# renovate:` comments, downloaded and checked in row 2 as 5b's tools are;
