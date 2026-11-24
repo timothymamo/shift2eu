@@ -354,7 +354,7 @@ gh attestation verify "$W/shift2eu-site_$GOOD.tar.gz" --repo <owner>/shift2eu \
 jq -r .version "$W/good-manifest.json"   # PASS: the value of $GOOD
 # Each key's newest version written before $T, copied over the current one, only after a verified manifest
 test -s "$W/good-manifest.json" || echo "FAIL no verified manifest of $GOOD: the copy is skipped"
-pages="$(jq -r '.files[].path | select(test("^(about|index|inventory|privacy|verify)\\.html$"))' "$W/good-manifest.json")"; echo $pages   # PASS: five pages, or four without about.html before issue #528
+pages="$(jq -r '.files[].path | select(test("^(about|index|inventory|privacy|verify)\\.html$"))' "$W/good-manifest.json")"; echo $pages   # PASS: about.html index.html inventory.html privacy.html verify.html (the four without about.html before issue #528)
 test -s "$W/good-manifest.json" && for k in $pages LICENSE NOTICE manifest.json; do
   # LastModified prints as +00:00 or Z, with or without milliseconds: both sides compared as epoch seconds
   v="$(aws s3api list-object-versions --bucket "$B" --prefix "$k" --output json | jq -r --arg k "$k" --arg t "$T" 'def s: sub("\\.[0-9]+"; "") | sub("\\+00:00$"; "Z") | fromdateiso8601; [.Versions[]? | select(.Key == $k and (.LastModified | s) < ($t | s))] | max_by(.LastModified | s) | .VersionId // empty')"
@@ -369,7 +369,7 @@ done   # PASS: seven "PASS ... is <GOOD>'s" lines (six before issue #528)
 aws s3 cp "s3://$B/manifest.json" - | cmp -s - "$W/good-manifest.json" && echo "PASS manifest.json is $GOOD's" || echo "FAIL manifest.json is not $GOOD's"
 # $GOOD before issue #528: the newer release's about.html has no earlier version and is still served (ADR 0042, amendment
 # for issue #528). Only when it should not stay until the fixing release, remove it (a delete marker), then purge the cache
-printf '%s\n' $pages | grep -qxF about.html || echo "about.html stays served: aws s3api delete-object --bucket $B --key about.html to remove it"
+test -s "$W/good-manifest.json" && { printf '%s\n' $pages | grep -qxF about.html || echo "about.html stays served: aws s3api delete-object --bucket $B --key about.html to remove it"; }
 # FAIL a line: set another $T and run this whole block again (the lines below have removed $W)
 rm -r "$W"
 scw iam api-key update "$SCW_ACCESS_KEY" default-project-id="$ADMIN_PROJECT"   # back to the admin project
