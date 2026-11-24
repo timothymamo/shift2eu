@@ -148,10 +148,14 @@ A plan whose target page gives no vCPU count is written without one; no mileston
   the domain rule above decides. Present, it must be an integer of at least 1: a present `0` (or `-0`)
   is refused by the snapshot reader, naming `offerings[i].plans[j].vcpus`, so "not given" has exactly
   one spelling. Every other key and rule of the format stays as it is.
-- **Reports.** The Markdown and HTML reports write a plan without vCPUs by its memory alone, "8 GiB"
-  (with vCPUs, "2 vCPU, 8 GiB" as today). The JSON report writes `"vcpus": 0` for it, which every schema
-  already allows (`minimum` 0, required); the schema files' descriptions of `vcpus` say that 0 means the
-  target gives no vCPU count, for a plan matched on memory alone.
+- **Reports.** The Markdown report writes a plan without vCPUs by its memory alone, "8 GiB" (with
+  vCPUs, "2 vCPU, 8 GiB" as today). The HTML report shows a plan by its name alone since
+  [issue #373](https://github.com/timothymamo/shift2eu/issues/373) (`htmlreport` `renderPlan`), with
+  no size for any plan, so it needs no text for a plan without vCPUs. The JSON report writes
+  `"vcpus": 0` for it, which every schema that has a plan (versions 2 and 3) already allows
+  (`minimum` 0, required); the version 3 schema files' descriptions of `vcpus` say that 0 means the
+  target gives no vCPU count, for a plan matched on memory alone (the version 1 and 2 files are frozen,
+  see *No format version changes*).
 
 This is how OVHcloud and UpCloud cache plans can carry their documented vCPUs, and Scaleway's can carry
 none until a page that states them is read (milestone 6).
@@ -167,7 +171,8 @@ A category with a fit that is never priced (`estimate.NotPriced`: `network.loadb
 - JSON report: code `not-priced`. Markdown and HTML: "not priced" ("not estimated: not priced").
 - It sits where `usage-priced` sits in ADR 0027's order: after `no-fit`, before `no-size`. `ByUsage`
   categories keep `usage-priced`. `unclassified` still always gets `no-fit`, its fit being `none`.
-- The JSON schemas' descriptions of the reason set list `not-priced`; none is counted as 0 in a total.
+- The version 3 JSON schemas' descriptions of the reason set list `not-priced` (the version 1 and 2
+  files are frozen, see *No format version changes*); none is counted as 0 in a total.
 
 ### No format version changes
 
@@ -186,6 +191,19 @@ A category with a fit that is never priced (`estimate.NotPriced`: `network.loadb
   reason it does not know"), and [ADR 0018](0018-version-the-json-report-format-for-the-cli-and-the-api.md)
   keeps the version for a new value of an open set, with the schema files' descriptions updated in the
   same change. `"vcpus": 0` is within the schemas' range. No key is added, removed or retyped.
+- **Only the version 3 schema files change, and only in two descriptions.** `assessment-v3.schema.json`
+  and `comparison-v3.schema.json` list `not-priced` in `$defs/resourceEstimate.reason` and say in
+  `$defs/plan.vcpus` that 0 means the target gives no vCPU count. The version 1 and 2 files are frozen
+  by digest (`TestFrozenSchemaFilesAreUnchanged`, [issue #293](https://github.com/timothymamo/shift2eu/issues/293)),
+  and stay byte for byte as they shipped. That is consistent with ADR 0018: its rule to update the
+  schema files with a new open-set value predates its 2026-11-19 amendment, which froze versions 1 and
+  2 so a reader of an old document finds the schema it was published with, and put new wording in
+  version 3 only, as [issue #285](https://github.com/timothymamo/shift2eu/issues/285) did for
+  `breakdown.storage`. A version 2 document (`--schema-version 2`) can now carry reason `not-priced` and
+  `"vcpus": 0`; both validate against the frozen version 2 files (`reason` is a string without `enum`,
+  `vcpus` an integer of `minimum` 0), and their consumers get the open-set rule those files already
+  state, "A consumer must accept a reason it does not know". Version 1 documents carry no estimate, so
+  neither value reaches them.
 
 ## Alternatives considered
 
@@ -209,11 +227,15 @@ A category with a fit that is never priced (`estimate.NotPriced`: `network.loadb
 
 ## Consequences
 
-- `internal/domain/taxonomy` lists sixteen categories and twelve capabilities; `internal/domain/inventory`
+- `internal/domain/taxonomy` lists seventeen categories (the sixteen an offering can serve, the nine
+  existing and the seven new, and `unclassified`; `taxonomy.Categories()` returns all seventeen) and
+  twelve capabilities; `internal/domain/inventory`
   holds the new field rows; `internal/domain/estimate` gains memory-only matching, `storage.file` per GiB,
   `database.mongodb` by plan and `NeverPriced`; `internal/domain/catalog` accepts a plan without vCPUs on
-  a `cache.redis`-only offering; the snapshot reader accepts an absent `vcpus`; the three reports render
-  `not-priced` and a plan without vCPUs.
+  a `cache.redis`-only offering (the memory-matched categories are one list behind
+  `catalog.MatchesOnMemory`, which the estimate reads too); the snapshot reader accepts an absent
+  `vcpus`; the three reports render `not-priced`, and the Markdown and JSON reports a plan without
+  vCPUs.
 - Plan matching now has two rules in the domain; a later memory-matched category joins `cache.redis`'s
   rule by being added to one list in the domain.
 - Until a target's catalog milestone lands, its report shows the new categories as fit `none` with "no
