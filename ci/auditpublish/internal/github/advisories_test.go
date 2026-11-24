@@ -437,8 +437,10 @@ func TestListAuditAdvisoriesRefusesWhatIsNoListing(t *testing.T) {
 			route: Route{Method: "GET", Endpoint: fixtureAdvisoriesEndpoint, Status: 500, Body: map[string]string{"message": "the listing failed"}},
 		},
 		{
-			name:  "a body that is no array",
-			route: advisoryListingRoute(nil, ""),
+			name: "a body that is no array",
+			// An object: an empty array is the listing with no advisory, which
+			// a run with no advisory at all must accept.
+			route: Route{Method: "GET", Endpoint: fixtureAdvisoriesEndpoint, Status: 200, Body: map[string]string{"message": "not a listing"}},
 		},
 		{
 			name:  "an entry without ghsa_id",
@@ -706,6 +708,10 @@ func TestPlanAdvisoriesCreatesANewDraft(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
 		existing []github.Advisory
+		// after are the writes the plan makes after the finding's create: the
+		// other fingerprint's draft is never this finding's draft, so it is
+		// only marked not reproduced.
+		after []github.AdvisoryWrite
 	}{
 		{name: "no advisory at all"},
 		{
@@ -713,6 +719,12 @@ func TestPlanAdvisoriesCreatesANewDraft(t *testing.T) {
 			existing: []github.Advisory{
 				matchableAdvisory(fixtureGHSA2, github.AdvisoryStateDraft, libraryFingerprint, draftDescription("open")),
 			},
+			after: []github.AdvisoryWrite{{
+				Action: github.AdvisoryUpdate,
+				GHSAID: fixtureGHSA2,
+				Status: publish.AdvisoryNotReproduced,
+				Text:   publish.AdvisoryText{Description: draftDescription("not reproduced")},
+			}},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -723,11 +735,11 @@ func TestPlanAdvisoriesCreatesANewDraft(t *testing.T) {
 				t.Fatalf("PlanAdvisories = %v, want no error", err)
 			}
 
-			want := []github.AdvisoryWrite{{
+			want := append([]github.AdvisoryWrite{{
 				Action: github.AdvisoryCreate,
 				Status: publish.AdvisoryNew,
 				Text:   wantAdvisoryText(t, finding, publish.AdvisoryNew),
-			}}
+			}}, tc.after...)
 
 			if diff := cmp.Diff(want, plan.Writes()); diff != "" {
 				t.Errorf("the plan's writes (-want +got):\n%s", diff)

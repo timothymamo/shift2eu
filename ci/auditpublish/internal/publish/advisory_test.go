@@ -478,7 +478,11 @@ func TestRenderAdvisoryHoldsTheEvidenceOnly(t *testing.T) {
 	private := advisoryFinding()
 	private.Evidence = privateMarker
 
+	// Another rule: the core refuses two findings with one rule, file and sink
+	// (one fingerprint is one finding), and no advisory is rendered for the
+	// public one here, so its values never reach an advisory body.
 	public := advisoryFinding()
+	public.Rule = "G101"
 	public.Severity, public.Category, public.Private = sevLow, catHardening, false
 	public.Evidence = publicMarker
 

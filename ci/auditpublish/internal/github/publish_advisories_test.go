@@ -122,6 +122,24 @@ func recordedBodiesText(calls []Call) string {
 	return b.String()
 }
 
+// publicBodiesText returns every recorded call's body but the advisory writes'
+// as one text: an advisory's description renders the finding's scenario and
+// evidence by design, so only the run's other writes show what stays public.
+func publicBodiesText(calls []Call) string {
+	var b strings.Builder
+
+	for _, c := range calls {
+		if strings.Contains(c.Endpoint, "security-advisories") {
+			continue
+		}
+
+		b.Write(c.Body)
+		b.WriteString("\n")
+	}
+
+	return b.String()
+}
+
 // crashBytes are an invented crash input's bytes: binary, none of them the
 // 0x30 that starts a DER private key, and none printable, so the base64 text
 // the scan reads decodes to no token.
@@ -208,8 +226,13 @@ func TestPublishReportsAPrivateFindingNotFiled(t *testing.T) {
 				t.Errorf("the run filed %d issue(s), want 1: the issues are published after a refused creation", filed)
 			}
 
-			if bodies := recordedBodiesText(calls); strings.Contains(bodies, privateScenarioMarker) {
-				t.Errorf("a write holds %q, want the private findings dropped: a refused creation files them nowhere",
+			if bodies := recordedBodiesText(calls); !strings.Contains(bodies, privateScenarioMarker) {
+				t.Errorf("the refused create holds no %q, want the advisory's description to render it: only the other writes may not",
+					privateScenarioMarker)
+			}
+
+			if bodies := publicBodiesText(calls); strings.Contains(bodies, privateScenarioMarker) {
+				t.Errorf("a write other than the refused create holds %q, want the private findings dropped: a refused creation files them nowhere",
 					privateScenarioMarker)
 			}
 		})
