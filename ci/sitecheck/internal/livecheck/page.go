@@ -32,6 +32,16 @@ const MaxVersionBytes = 64
 // a <script>, a <style> or a <template> does not count, nor does an id
 // attribute of another name ("data-id"). Two elements with the marker's id
 // are not carried (an ambiguous page).
+//
+// Only the hidden attribute is refused, not an inline display:none or
+// visibility:hidden, nor aria-hidden, and that is enough: Run checks
+// statements only on pages whose digest matched the release's manifest, so
+// their markup is the project's own (site/*.html), not an attacker's. The
+// hidden check guards against one of our own pages hiding a statement, and the
+// pages hide nothing the other ways: they carry no inline style attribute (their
+// Content Security Policy's style-src 'self' would not apply one), and they set
+// aria-hidden only on decorative icons and step numbers, never on a marked
+// element.
 func Carries(page []byte, marker string) bool {
 	found := findMarked(page, marker)
 
