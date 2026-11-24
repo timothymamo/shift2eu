@@ -15,10 +15,11 @@ import (
 // with a comment on the entry saying why it is no saved page.
 var allowedSavedPages = map[string]bool{
 	// The site's pages are the templates ci/sitebuild renders into the
-	// bundle (PRD #297, milestones 2 and the redesign's inventory page): the
-	// project writes them, they load nothing from a third party and they are
-	// no saved web page; the builder and the site's static checks read them
-	// from git.
+	// bundle (PRD #297, milestones 2 and the redesign's inventory page, and the
+	// About page of issue #528): the project writes them, they load nothing from
+	// a third party and they are no saved web page; the builder and the site's
+	// static checks read them from git.
+	"site/about.html":     true,
 	"site/index.html":     true,
 	"site/inventory.html": true,
 	"site/privacy.html":   true,

@@ -95,10 +95,13 @@ func absoluteReferenceProblem(ref string) string {
 // scheme is exempt, because it names an address rather than a path of the site,
 // and so is every opaque reference, such as javascript:alert(1) or
 // tel:+31201234567, which names no path at all: absoluteReferenceProblem decides
-// those, and reading an empty path as index.html would report such a reference
-// as the bundle's own index. Every other scheme's path is read as one, so an
-// uppercase HTTPS:// and a protocol-relative //host are checked exactly like a
-// file:///index.html a later page might spell.
+// those. Every other scheme's path is read as one, so an uppercase HTTPS:// and
+// a protocol-relative //host are checked exactly like a file:///index.html a
+// later page might spell. An empty path names the bundle's own index.html only
+// when the reference names no host: a URL's root at a host is that site's own
+// index, which is no file of this bundle (the maintainer's bio links to
+// https://fika.works/ and https://timothymamo.com, issue #528), and a page that
+// means its own index spells it as the relative index.html.
 func siteFileProblem(bundle *bundle, ref string) string {
 	parsed, err := url.Parse(ref)
 	if err != nil {
@@ -115,6 +118,10 @@ func siteFileProblem(bundle *bundle, ref string) string {
 
 	path := strings.TrimPrefix(parsed.Path, "/")
 	if path == "" {
+		if parsed.Host != "" {
+			return ""
+		}
+
 		path = "index.html"
 	}
 
@@ -494,11 +501,12 @@ func TestLinkChecksAcceptAMailtoLink(t *testing.T) {
 // TestNoAbsoluteURLToASiteFile pins that no page addresses a file of its own
 // bundle at an absolute URL: the bundle runs unchanged on any origin, a local
 // static file server included (PRD #297, Layer 2 and Layer 3). A link to another
-// site is no site file and stays allowed, and so does a `mailto:` reference,
-// which names an address rather than a path; an opaque reference such as
-// javascript:alert(1) names no path either and is left to the scheme check below.
-// No other scheme is exempt, so a file:, ftp:, ws: or blob: reference is read as
-// a path too (see TestSiteFileAtAnAbsoluteURLIsRefused).
+// site is no site file and stays allowed, its root included (the maintainer's
+// bio links to https://fika.works/ and https://timothymamo.com, issue #528), and
+// so does a `mailto:` reference, which names an address rather than a path; an
+// opaque reference such as javascript:alert(1) names no path either and is left
+// to the scheme check below. No other scheme is exempt, so a file:, ftp:, ws: or
+// blob: reference is read as a path too (see TestSiteFileAtAnAbsoluteURLIsRefused).
 func TestNoAbsoluteURLToASiteFile(t *testing.T) {
 	t.Parallel()
 
@@ -522,8 +530,11 @@ func TestNoAbsoluteURLToASiteFile(t *testing.T) {
 // opaque reference such as javascript:alert(1) or tel:+31201234567 another,
 // since it names no path at all; an uppercase HTTPS:// and a protocol-relative
 // //host are read as the paths they spell, so a later file:///index.html or
-// ftp://host/style.css is caught rather than skipped. Each case names the bundle
-// file the check must refuse, or none when the reference names no site file.
+// ftp://host/style.css is caught rather than skipped. A reference whose path is
+// the root names the bundle's own index.html when it names no host, and another
+// site's index when it does, which is no file of this bundle. Each case names
+// the bundle file the check must refuse, or none when the reference names no
+// site file.
 func TestSiteFileAtAnAbsoluteURLIsRefused(t *testing.T) {
 	t.Parallel()
 
@@ -540,9 +551,12 @@ func TestSiteFileAtAnAbsoluteURLIsRefused(t *testing.T) {
 		{name: "a protocol-relative URL to a site file", ref: "//example.com/index.html", wantFile: "index.html"},
 		{name: "a file URL to a site file", ref: "file:///index.html", wantFile: "index.html"},
 		{name: "an ftp URL to a site file", ref: "ftp://example.com/privacy.html", wantFile: "privacy.html"},
+		{name: "a host-less URL of the bundle's root", ref: "file:///", wantFile: "index.html"},
 		{name: "the contact address", ref: contactHref, wantFile: ""},
 		{name: "an address with a subject", ref: contactHref + "?subject=Assessment", wantFile: ""},
 		{name: "the repository", ref: repositoryURL, wantFile: ""},
+		{name: "an external site's root", ref: "https://fika.works/", wantFile: ""},
+		{name: "an external site's root without a trailing slash", ref: "https://timothymamo.com", wantFile: ""},
 		{name: "a javascript URL", ref: "javascript:alert(1)", wantFile: ""},
 		{name: "a telephone address", ref: "tel:+31201234567", wantFile: ""},
 	}

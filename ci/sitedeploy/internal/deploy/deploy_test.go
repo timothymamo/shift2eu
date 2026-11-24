@@ -889,12 +889,10 @@ func TestDeployRefusesAnInvalidConfigurationOrBundle(t *testing.T) {
 // (issue #528; PR #509's review finding 2): the About page is one of the site's
 // pages, so the bundle check accepts a bundle with it and refuses one without
 // it, and a page the site does not hold is still refused rather than deployed.
+// newBundle holds every page of the site, the About page included, so a case
+// that wants a bundle without one removes it from the fixture.
 func TestDeployHoldsTheBundleToTheSitesPages(t *testing.T) {
 	t.Parallel()
-
-	withAbout := func(b *bundle) {
-		b.files[aboutPage] = page(b.version, "About")
-	}
 
 	tests := []struct {
 		name    string
@@ -922,7 +920,6 @@ func TestDeployHoldsTheBundleToTheSitesPages(t *testing.T) {
 			t.Parallel()
 
 			dc := newDeployCase(t)
-			withAbout(dc.bundle)
 			tc.prepare(dc.bundle)
 			dc.useBundle(t)
 

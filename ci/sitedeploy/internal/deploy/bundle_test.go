@@ -73,7 +73,7 @@ var testCredentials = deploy.Credentials{
 var moduleBody = []byte(moduleBodyPrefix + strings.Repeat("the module's base64 ", 256))
 
 // bundle is a site bundle in memory, following the format of doc.go's "The
-// bundle it consumes": the four pages, the four content-addressed assets, the
+// bundle it consumes": the five pages, the four content-addressed assets, the
 // licence and the NOTICE attribution, and manifest.json.
 type bundle struct {
 	// version is the release tag the manifest names.
@@ -93,6 +93,7 @@ func newBundle(t *testing.T, version string) *bundle {
 	t.Helper()
 
 	return &bundle{version: version, files: map[string][]byte{
+		aboutPage:        page(version, "About"),
 		"index.html":     page(version, "Assessment"),
 		"inventory.html": page(version, "Inventory guide"),
 		"privacy.html":   page(version, "Privacy"),
