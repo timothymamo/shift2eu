@@ -143,10 +143,11 @@ var (
 	// testSteps are the test job's steps: the whole history, the guard that
 	// the tagged commit is on main (ADR 0015) before anything runs repository
 	// code, Go, the Node release dev/lima.yaml pins for
-	// TestPiEnvDenyExtensionLoads (issue #548), set up and checked as ci.yml's
-	// Test job does, and the tests, on a runner of their own, with
+	// TestPiEnvDenyExtensionLoads (issue #548), set up and checked by the same
+	// steps as ci.yml's Test job (nodeSteps), and the tests, on a runner of
+	// their own, with
 	// SHIFT2EU_REQUIRE_NODE=1 so that check fails rather than skips.
-	testSteps = []releaseStep{
+	testSteps = append([]releaseStep{
 		fullCheckoutStep,
 		{
 			what: "the guard that the tagged commit is on main", name: "The tagged commit is on main",
@@ -162,38 +163,9 @@ var (
 			}, "\n"),
 		},
 		setupGoStep,
-		{
-			what: "the read of dev/lima.yaml's nodeVersion", name: "The Node release dev/lima.yaml pins", id: "node",
-			run: strings.Join([]string{
-				`set -euo pipefail`,
-				`version="$(sed -nE 's/^  nodeVersion: "([^"]*)"$/\1/p' dev/lima.yaml)"`,
-				`if ! [[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then`,
-				`  echo "::error file=dev/lima.yaml::nodeVersion is not one release like 1.2.3: '${version}'"`,
-				`  exit 1`,
-				`fi`,
-				`echo "version=${version}" >> "${GITHUB_OUTPUT}"`,
-			}, "\n"),
-		},
-		{
-			what: "actions/setup-node", uses: setupNodeAction,
-			with: map[string]*regexp.Regexp{
-				"node-version":          exactly("${{ steps.node.outputs.version }}"),
-				"package-manager-cache": exactly("false"),
-			},
-		},
-		{
-			what: "the check that node on the PATH is the pinned one", name: "The node on the PATH is the pinned one",
-			env: []string{"NODE_VERSION: ${{ steps.node.outputs.version }}"},
-			run: strings.Join([]string{
-				`set -euo pipefail`,
-				`if [ "$(node --version)" != "v${NODE_VERSION}" ]; then`,
-				`  echo "::error file=.github/workflows/release.yml::node on the PATH is $(node --version), want v${NODE_VERSION}"`,
-				`  exit 1`,
-				`fi`,
-			}, "\n"),
-		},
-		{what: "make test", name: "Test", env: []string{`SHIFT2EU_REQUIRE_NODE: "1"`}, run: "make test"},
-	}
+		// The four Node steps, declared once for this job and ci.yml's
+		// (nodeSteps, citestnode.go, issue #554).
+	}, nodeSteps(".github/workflows/release.yml", "Test", "make test")...)
 
 	// goreleaserSteps are the goreleaser job's steps: no repository code runs
 	// before goreleaser, which is asked for exactly release --clean; the site
@@ -2075,23 +2047,7 @@ func (r *schemaReader) exactMapping(e yamlread.Entry, path string, want map[stri
 func (r *schemaReader) step(it yamlread.Item, path string, want releaseStep) {
 	path = fmt.Sprintf("%s (line %d), want %s", path, it.Num, want.what)
 
-	var keys []string
-
-	for _, k := range []struct {
-		key string
-		set bool
-	}{
-		{"name", want.name != ""},
-		{"id", want.id != ""},
-		{"uses", want.uses != nil},
-		{"with", want.with != nil},
-		{"env", want.env != nil},
-		{"run", want.run != ""},
-	} {
-		if k.set {
-			keys = append(keys, k.key)
-		}
-	}
+	keys := want.keys()
 
 	if want.noToken {
 		for _, l := range it.Lines {
