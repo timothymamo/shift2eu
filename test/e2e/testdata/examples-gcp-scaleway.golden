@@ -11,8 +11,8 @@
 |---|---|
 | direct | 9 |
 | partial | 3 |
-| none | 2 |
-| total | 14 |
+| none | 4 |
+| total | 16 |
 
 ## Resources
 
@@ -21,6 +21,7 @@
 | `shop-assets` | `storage.googleapis.com/Bucket` | `storage.object` | direct | `Object Storage` |  | €8.05 |  | `Object Storage` offers every capability the resource uses |
 | `shop-catalog-mysql` | `sqladmin.googleapis.com/Instance` | `database.mysql` | partial | `Managed Database for PostgreSQL and MySQL` (tie: `Managed Database for PostgreSQL and MySQL High Availability`) | `DB-PRO2-XXS` (2 vCPU, 8 GiB) | €71.36 (count assumed 1) (730 hours assumed) |  | `Managed Database for PostgreSQL and MySQL` does not offer `point-in-time-restore` |
 | `shop-cdn-backend` | `compute.googleapis.com/BackendBucket` | `unclassified` | none |  |  | not estimated: no fit | depends-on `shop-assets` | not classified |
+| `shop-checkout` | `run.googleapis.com/Service` | `serverless.container` | none |  |  | not estimated: no fit | depends-on `shop-orders` | no offering in the `Scaleway` catalog for `serverless.container` |
 | `shop-db` | `sqladmin.googleapis.com/Instance` | `database.postgresql` | partial | `Managed Database for PostgreSQL and MySQL` (tie: `Managed Database for PostgreSQL and MySQL High Availability`) | `DB-PRO2-XS` (4 vCPU, 16 GiB) | €172.51 (count assumed 1) (730 hours assumed) |  | `Managed Database for PostgreSQL and MySQL` does not offer `point-in-time-restore`; `Managed Database for PostgreSQL and MySQL` does not offer `zone-high-availability` |
 | `shop-db-replica` | `sqladmin.googleapis.com/Instance` | `database.postgresql` | direct | `Managed Database for PostgreSQL and MySQL` (tie: `Managed Database for PostgreSQL and MySQL High Availability`) | `DB-PRO2-XS` (4 vCPU, 16 GiB) | €172.51 (count assumed 1) (730 hours assumed) | replica-of `shop-db` | `Managed Database for PostgreSQL and MySQL` offers every capability the resource uses |
 | `shop-gke` | `container.googleapis.com/Cluster` | `kubernetes.managed` | direct | `Kubernetes Kapsule` (tie: `Kubernetes Kapsule Dedicated`) | `PRO2-XS` (4 vCPU, 16 GiB) | €245.72 (730 hours assumed) (boot volume not included) | depends-on `shop-catalog-mysql`, depends-on `shop-db` | `Kubernetes Kapsule` offers every capability the resource uses |
@@ -28,6 +29,7 @@
 | `shop-orders-dlq` | `pubsub.googleapis.com/Topic` | `messaging.queue` | direct | `Queues` |  | not estimated: usage-priced | dead-letter-queue-of `shop-orders` | `Queues` offers every capability the resource uses |
 | `shop-resize-images` | `cloudfunctions.googleapis.com/Function` | `serverless.function` | direct | `Serverless Functions` |  | not estimated: usage-priced | depends-on `shop-assets` | `Serverless Functions` offers every capability the resource uses |
 | `shop-search-bms` | `baremetalsolution.googleapis.com/Instance` | `compute.baremetal` | direct | `Elastic Metal` | `EM-B220E-NVMe` (16 vCPU, 64 GiB) | €166.50 (count assumed 1) |  | `Elastic Metal` offers every capability the resource uses |
+| `shop-uploads` | `file.googleapis.com/Instance` | `storage.file` | none |  |  | not estimated: no fit |  | no offering in the `Scaleway` catalog for `storage.file` |
 | `shop-web-1` | `compute.googleapis.com/Instance` | `compute.vm` | direct | `Instances` | `PLAY2-MICRO` (4 vCPU, 8 GiB) | €40.21 (count assumed 1) (730 hours assumed) (boot volume not included) | depends-on `shop-orders` | `Instances` offers every capability the resource uses |
 | `shop-web-1-data` | `compute.googleapis.com/Disk` | `storage.block` | direct | `Block Storage` |  | €9.49 (count assumed 1) | attached-to `shop-web-1` | `Block Storage` offers every capability the resource uses |
 | `shop-web-mig` | `compute.googleapis.com/InstanceGroupManager` | `compute.vm` | partial | `Instances` | `PLAY2-MICRO` (4 vCPU, 8 GiB) | €80.42 (730 hours assumed) (boot volume not included) |  | `Instances` does not offer `autoscaling`; `Instances` does not offer `zone-high-availability` |
@@ -42,6 +44,8 @@
 ## Blockers
 
 - `shop-cdn-backend`: not classified
+- `shop-checkout`: no offering in the `Scaleway` catalog for `serverless.container`
+- `shop-uploads`: no offering in the `Scaleway` catalog for `storage.file`
 - `shop-zone`: not classified
 
 ## Workloads
@@ -55,17 +59,19 @@
 
 ### `shop`
 
-- Fit: 8 direct, 2 partial, 2 none
-- Monthly estimate: €728.90 per month for 7 of 12 resources (storage not included in 3 estimates), list prices on 2026-11-13, excluding VAT and discounts
-- Source cost: `USD` $477.31 for 3 of 12 resources
+- Fit: 8 direct, 2 partial, 4 none
+- Monthly estimate: €728.90 per month for 7 of 14 resources (storage not included in 3 estimates), list prices on 2026-11-13, excluding VAT and discounts
+- Source cost: `USD` $477.31 for 3 of 14 resources
 - Blockers:
   - `shop-cdn-backend`: not classified
+  - `shop-checkout`: no offering in the `Scaleway` catalog for `serverless.container`
+  - `shop-uploads`: no offering in the `Scaleway` catalog for `storage.file`
   - `shop-zone`: not classified
 
 ## Cost estimate
 
-- Total: €966.76 per month for 9 of 14 resources (storage not included in 3 estimates)
+- Total: €966.76 per month for 9 of 16 resources (storage not included in 3 estimates)
 - Estimate: list prices on 2026-11-13, excluding VAT and discounts; a fixed fee is the offering's listed fee
 - Prices in `fr-par`
 - Hours: plan price × count × hours / 730, 730 hours for a resource that gives none
-- Source cost: `USD` $477.31 for 3 of 14 resources
+- Source cost: `USD` $477.31 for 3 of 16 resources
