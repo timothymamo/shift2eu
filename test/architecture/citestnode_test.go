@@ -53,6 +53,28 @@ const (
 // package manager runs in the job.
 var ciSetupNodeWith = []string{"node-version", "package-manager-cache"}
 
+// The whole key set of each of the four steps, as ci.yml writes it. A key
+// outside one of these - if: and continue-on-error: above all - turns the step
+// off or lets it fail without the checks below reading either, so the set is
+// closed rather than merely read key by key.
+var (
+	ciReadStepKeys      = []string{"name", "id", "run"}
+	ciSetupNodeStepKeys = []string{"uses", "with"}
+	ciNodeCheckStepKeys = []string{"name", "env", "run"}
+	ciTestsStepKeys     = []string{"name", "env", "run"}
+)
+
+// ciTestJobKeys are the two keys the test job itself must not hold: either one
+// decides whether the job runs and whether its failure fails the run.
+var ciTestJobKeys = []struct {
+	key string
+	// why says what the key would hide.
+	why string
+}{
+	{"if", "a condition on the job can turn it off, and CI passes with TestPiEnvDenyExtensionLoads never run"},
+	{"continue-on-error", "a Test job that fails without failing the run leaves CI green with the tests broken"},
+}
+
 // ciSetupNodePin matches the reference actions/setup-node is pinned to: a commit
 // and nothing else, so a moved tag or range cannot decide what CI runs.
 var ciSetupNodePin = regexp.MustCompile(`^actions/setup-node@[0-9a-f]{40}$`)
@@ -67,7 +89,7 @@ type ciCITestStep struct {
 	// version comment beside it, "" for a run: step.
 	uses string
 	// run is the step's command: its run: value when that is one line, or the
-	// lines of its literal block joined by newlines; "" for a step without one.
+	// lines of its block scalar joined by newlines; "" for a step without one.
 	run string
 	// lines are the step's own content lines.
 	lines []ciLine
@@ -114,7 +136,10 @@ func (c *ciTestJobCheck) one(what string, keep func(ciCITestStep) bool) int {
 // output; actions/setup-node, pinned by a commit, installing exactly that output
 // with its package-manager cache off and nothing else; a step that checks the
 // node on the PATH against it; and, in that order and not after the tests, the
-// step that runs make cover with SHIFT2EU_REQUIRE_NODE: "1" in its env.
+// step that runs make cover with SHIFT2EU_REQUIRE_NODE: "1" in its env. Each of
+// those steps' key sets is closed and the job holds neither if: nor
+// continue-on-error:, so a key outside them fails here rather than turning a
+// step off.
 func ciTestJobMessages(doc []byte) []string {
 	jobs, err := workflowJobs(string(doc))
 	if err != nil {
@@ -152,6 +177,8 @@ func ciTestJobMessages(doc []byte) []string {
 
 	c := &ciTestJobCheck{steps: steps}
 
+	c.jobKeys(job)
+
 	read := c.one("whose run reads dev/lima.yaml's nodeVersion, the one pin of the Node the VM installs for pi",
 		func(s ciCITestStep) bool { return strings.Contains(s.run, ciNodeVersionSed) })
 
@@ -163,6 +190,8 @@ func ciTestJobMessages(doc []byte) []string {
 
 	if read >= 0 {
 		step := steps[read]
+
+		c.stepKeys("step that reads dev/lima.yaml's nodeVersion", step, ciReadStepKeys...)
 
 		if step.id == "" {
 			c.fail("the step that reads dev/lima.yaml's nodeVersion (line %d) holds no id:, so actions/setup-node cannot take the version from its output (issue #548)", step.num)
@@ -223,10 +252,47 @@ func ciTestJobMessages(doc []byte) []string {
 	return c.messages
 }
 
+// jobKeys refuses the job-level keys that decide whether the test job runs and
+// whether its failure fails the run.
+func (c *ciTestJobCheck) jobKeys(job []ciLine) {
+	for _, k := range ciTestJobKeys {
+		if num, _, ok := ciScalar(job, k.key); ok {
+			c.fail("ci.yml's test job holds %s: (line %d), want none: %s (issue #548)", k.key, num, k.why)
+		}
+	}
+}
+
+// stepKeys closes the key set of one step: it records a message for every key
+// the step holds that is not in want, and for every wanted key it lacks. A step
+// whose keys are read one by one passes an if: or a continue-on-error: it never
+// looks at.
+func (c *ciTestJobCheck) stepKeys(what string, step ciCITestStep, want ...string) {
+	keys, err := ciKeys(step.lines)
+	if err != nil {
+		c.fail("ci.yml's test job's %s (line %d): %v", what, step.num, err)
+
+		return
+	}
+
+	for _, key := range keys {
+		if !slices.Contains(want, key.name) {
+			c.fail("ci.yml's test job's %s (line %d) holds the key %q, want exactly %s: a key beyond these, if: and continue-on-error: above all, turns the step off or lets it fail unseen (issue #548)", what, step.num, key.name, strings.Join(want, ", "))
+		}
+	}
+
+	for _, name := range want {
+		if !slices.ContainsFunc(keys, func(key ciKey) bool { return key.name == name }) {
+			c.fail("ci.yml's test job's %s (line %d) holds no %s, want exactly %s (issue #548)", what, step.num, name, strings.Join(want, ", "))
+		}
+	}
+}
+
 // setupNode checks the actions/setup-node step: pinned by a commit, its with:
 // mapping exactly ciSetupNodeWith, the version taken from versionExpr, and its
 // package-manager cache off.
 func (c *ciTestJobCheck) setupNode(versionExpr string, step ciCITestStep) {
+	c.stepKeys("actions/setup-node step", step, ciSetupNodeStepKeys...)
+
 	if !ciSetupNodePin.MatchString(step.uses) {
 		c.fail("actions/setup-node (line %d) uses %q, want actions/setup-node@<40 hex digits>, the commit it is pinned to: a tag or a range can be moved under CI (issue #548)", step.num, step.uses)
 	}
@@ -267,12 +333,26 @@ func (c *ciTestJobCheck) setupNode(versionExpr string, step ciCITestStep) {
 // nodeCheck checks the step that compares node --version with the version
 // setup-node installed, in versionExpr, and fails when they differ.
 func (c *ciTestJobCheck) nodeCheck(versionExpr string, step ciCITestStep) {
+	c.stepKeys("step that checks node", step, ciNodeCheckStepKeys...)
+
 	if !strings.Contains(step.run, ciNodeCheckLine) {
 		c.fail("the step that checks node (line %d) holds no line %s, want it to compare node --version with the version actions/setup-node installed, not with a literal and not with nothing (issue #548)", step.num, ciNodeCheckLine)
 	}
 
-	if !strings.Contains(step.run, "exit 1") {
-		c.fail("the step that checks node (line %d) never fails: it holds no exit 1, so a node that is not the pinned one passes the check that was meant to catch it (issue #548)", step.num)
+	// After the compare, the branch has to fail: the exact line exit 1, and the
+	// fi that closes the if straight after it, as release.yml's schema holds it.
+	// A substring match would take an exit 10 and an exit 1 outside the branch.
+	rest := strings.Split(step.run, "\n")
+
+	if i := slices.Index(rest, ciNodeCheckLine); i >= 0 {
+		rest = rest[i+1:]
+	}
+
+	switch exit := slices.Index(rest, "exit 1"); {
+	case exit < 0:
+		c.fail("the step that checks node (line %d) never fails: it holds no line exit 1 after its compare line, so a node that is not the pinned one passes the check that was meant to catch it (issue #548)", step.num)
+	case exit+1 >= len(rest) || rest[exit+1] != "fi":
+		c.fail("the step that checks node (line %d) holds its exit 1 where the fi that closes the if does not follow it, so the exit runs outside the branch that watches node --version (issue #548)", step.num)
 	}
 
 	env, ok := ciBlock(step.lines, "env")
@@ -292,10 +372,13 @@ func (c *ciTestJobCheck) nodeCheck(versionExpr string, step ciCITestStep) {
 }
 
 // requiredNode checks that the step the tests run in sets
-// SHIFT2EU_REQUIRE_NODE: "1" exactly, quoted: TestPiEnvDenyExtensionLoads fails
-// rather than skips on 1, and an unquoted 1 is a YAML number rather than the
-// string the test reads.
+// SHIFT2EU_REQUIRE_NODE: "1" exactly, as release.yml writes it:
+// TestPiEnvDenyExtensionLoads fails rather than skips on 1, and the quoted form
+// is the style the schema holds, a bare 1 being turned into the same string by
+// GitHub Actions.
 func (c *ciTestJobCheck) requiredNode(step ciCITestStep) {
+	c.stepKeys("step that runs make cover", step, ciTestsStepKeys...)
+
 	env, ok := ciBlock(step.lines, "env")
 	if !ok {
 		c.fail("the step that runs make cover (line %d) holds no env:, want SHIFT2EU_REQUIRE_NODE: \"1\" exactly: without it TestPiEnvDenyExtensionLoads skips, and CI passes with the extension never loaded (issue #548)", step.num)
@@ -307,7 +390,7 @@ func (c *ciTestJobCheck) requiredNode(step ciCITestStep) {
 	case !ok:
 		c.fail("the step that runs make cover (line %d) sets no SHIFT2EU_REQUIRE_NODE in its env:, want \"1\" exactly: without it TestPiEnvDenyExtensionLoads skips, and CI passes with the extension never loaded (issue #548)", step.num)
 	case got != `"1"`:
-		c.fail("the step that runs make cover (line %d) sets SHIFT2EU_REQUIRE_NODE to %s, want \"1\" exactly, quoted: the load check fails rather than skips only on 1, and an unquoted 1 is a YAML number rather than the string it reads (issue #548)", num, got)
+		c.fail("the step that runs make cover (line %d) sets SHIFT2EU_REQUIRE_NODE to %s, want \"1\" exactly, as release.yml writes it (issue #548)", num, got)
 	}
 }
 
@@ -338,6 +421,28 @@ func TestCITestJobPinsTheNodeTheExtensionLoadRuns(t *testing.T) {
 	// withoutStep returns ci with the step holding marker removed.
 	withoutStep := func(marker string) string {
 		return withoutCIStep(t, ci, marker)
+	}
+
+	// inStep returns ci with `key: value` added to the step holding marker, at
+	// the indentation of the step's own keys: the case of an edit that gives the
+	// step one more key.
+	inStep := func(marker, key, value string) string {
+		t.Helper()
+
+		lines := strings.Split(ci, "\n")
+
+		start, _ := ciStepRange(t, lines, marker)
+		keyLine := strings.Repeat(" ", ciLineIndent(lines[start])+2) + key + ": " + value
+
+		return strings.Join(slices.Concat(lines[:start+1], []string{keyLine}, lines[start+1:]), "\n")
+	}
+
+	// jobKey returns ci with `key: value` added to the test job, at the
+	// indentation of the job's own keys.
+	jobKey := func(key, value string) string {
+		t.Helper()
+
+		return in("  test:\n", "  test:\n    "+key+": "+value+"\n")
 	}
 
 	// movedAfter returns ci with the step holding marker moved after the step
@@ -412,6 +517,17 @@ func TestCITestJobPinsTheNodeTheExtensionLoadRuns(t *testing.T) {
 			workflow: in(ciNodeVersionOutput, `echo "${version}"`),
 			wantIn:   "does not write the version to its step output",
 		},
+		{
+			// A block scalar's indicator may carry a chomping or an indentation
+			// flag: the step is still the one whose run reads the nodeVersion.
+			name:     "the read whose script strips its line ends",
+			workflow: in("        id: node\n        run: |\n", "        id: node\n        run: |-\n"),
+		},
+		{
+			name:     "the read with a key the pin does not read",
+			workflow: inStep(ciNodeVersionSed, "timeout-minutes", "5"),
+			wantIn:   `holds the key "timeout-minutes", want exactly name, id, run`,
+		},
 
 		// actions/setup-node: the pinned Node installed, from the read's output,
 		// with no cache.
@@ -445,6 +561,11 @@ func TestCITestJobPinsTheNodeTheExtensionLoadRuns(t *testing.T) {
 			workflow: in("          package-manager-cache: false\n", ""),
 			wantIn:   "with: holds no package-manager-cache",
 		},
+		{
+			name:     "actions/setup-node the job skips",
+			workflow: inStep("actions/setup-node@", "if", "false"),
+			wantIn:   `holds the key "if", want exactly uses, with`,
+		},
 
 		// The check that the node on the PATH is the pinned one.
 		{
@@ -462,7 +583,24 @@ func TestCITestJobPinsTheNodeTheExtensionLoadRuns(t *testing.T) {
 			workflow: in(
 				"            echo \"::error file=.github/workflows/ci.yml::node on the PATH is $(node --version), want v${NODE_VERSION}\"\n            exit 1\n",
 				"            echo \"::error file=.github/workflows/ci.yml::node on the PATH is $(node --version), want v${NODE_VERSION}\"\n            true\n"),
-			wantIn: "never fails: it holds no exit 1",
+			wantIn: "never fails: it holds no line exit 1",
+		},
+		{
+			name: "the check whose exit is a 10",
+			workflow: in(
+				"            echo \"::error file=.github/workflows/ci.yml::node on the PATH is $(node --version), want v${NODE_VERSION}\"\n            exit 1\n",
+				"            echo \"::error file=.github/workflows/ci.yml::node on the PATH is $(node --version), want v${NODE_VERSION}\"\n            exit 10\n"),
+			wantIn: "never fails: it holds no line exit 1",
+		},
+		{
+			name:     "the check whose exit sits outside the if",
+			workflow: in("            exit 1\n          fi\n      # SHIFT2EU_REQUIRE_NODE=1", "          fi\n          exit 1\n      # SHIFT2EU_REQUIRE_NODE=1"),
+			wantIn:   "so the exit runs outside the branch",
+		},
+		{
+			name:     "the check tolerating a failure",
+			workflow: inStep(ciNodeCheckPrefix, "continue-on-error", "true"),
+			wantIn:   `holds the key "continue-on-error", want exactly name, env, run`,
 		},
 
 		// The step the tests run in: SHIFT2EU_REQUIRE_NODE=1, so the load check
@@ -485,7 +623,22 @@ func TestCITestJobPinsTheNodeTheExtensionLoadRuns(t *testing.T) {
 		{
 			name:     "the step the tests run in with SHIFT2EU_REQUIRE_NODE unquoted",
 			workflow: in("SHIFT2EU_REQUIRE_NODE: \"1\"\n        run: make cover\n", "SHIFT2EU_REQUIRE_NODE: 1\n        run: make cover\n"),
-			wantIn:   `sets SHIFT2EU_REQUIRE_NODE to 1, want "1" exactly`,
+			wantIn:   `sets SHIFT2EU_REQUIRE_NODE to 1, want "1" exactly, as release.yml writes it`,
+		},
+		{
+			name:     "the step the tests run in that never runs",
+			workflow: inStep("run: make cover", "if", "false"),
+			wantIn:   `holds the key "if", want exactly name, env, run`,
+		},
+		{
+			name:     "a tests job with a condition",
+			workflow: jobKey("if", "false"),
+			wantIn:   "ci.yml's test job holds if:",
+		},
+		{
+			name:     "a tests job whose failure the run ignores",
+			workflow: jobKey("continue-on-error", "true"),
+			wantIn:   "ci.yml's test job holds continue-on-error:",
 		},
 		{
 			name:     "no step running make cover",
@@ -538,10 +691,11 @@ func TestCITestJobPinsTheNodeTheExtensionLoadRuns(t *testing.T) {
 }
 
 // ciStepRun returns the command of a step: its run: value when that is one line,
-// or the lines of its literal block joined by newlines; "" for a step that runs
-// none.
+// or the lines of its block scalar joined by newlines; "" for a step that runs
+// none. Any value starting with | or > opens a block scalar, |-, |+, >- and >+
+// as much as | and >.
 func ciStepRun(lines []ciLine) string {
-	if _, value, ok := ciScalar(lines, "run"); ok && value != "|" && value != ">" {
+	if _, value, ok := ciScalar(lines, "run"); ok && !strings.HasPrefix(value, "|") && !strings.HasPrefix(value, ">") {
 		return value
 	}
 
@@ -565,7 +719,7 @@ func ciLineIndent(line string) int {
 }
 
 // ciStepRange returns the first and the last+1 line of the step holding marker
-// in lines: from the item's own line, the nearest lane above that starts an item
+// in lines: from the item's own line, the nearest line above that starts an item
 // at the marker's indentation or less, to the next item or the first line
 // shallower than the item. It fails the test when no line holds marker.
 func ciStepRange(t *testing.T, lines []string, marker string) (start, end int) {
