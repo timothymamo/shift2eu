@@ -9,6 +9,12 @@
 // The tests are white-box, package main, as ci/claudecodepin's are: Go refuses
 // an import of a main package, so only its own test files reach run. Nothing the
 // run prints may hold the token or the canary, which the test invents.
+//
+// The result file's writer is pinned at its own seam too: resultWriter opens
+// the -result-out path and hands the opened file to writeResult, which takes
+// the file as an io.WriteCloser this file's fake answers, so that a test can
+// fail the write after part of the body or the close and see that the file is
+// gone (doc.go: a failed run writes no file).
 package main
 
 import (
@@ -434,6 +440,97 @@ func TestRunRefusesAnExistingResultPathOrARefusedResult(t *testing.T) {
 
 		assertNoSecret(t, result)
 	})
+}
+
+// TestResultWriteLeavesNoFileWhenTheWriteOrCloseFails pins doc.go's "a failed
+// run writes no file": the result file the run created is removed when the
+// write or the close fails, so what stays behind is neither a partial result
+// nor a file an encrypt step would read. The file the writer is handed is this
+// file's fake, which writes part of the body and then fails, or fails to
+// close it, exactly as a full disk or a failing close would.
+func TestResultWriteLeavesNoFileWhenTheWriteOrCloseFails(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name string
+		// after is how many bytes of the body the write takes before it fails:
+		// the whole body for a close that fails.
+		after    int
+		closeErr error
+		// want is the error the writer's error must wrap.
+		want error
+	}{
+		{name: "a write that fails after part of the body", after: 7, want: errTestWrite},
+		{name: "a close that fails", after: len(auditResult), closeErr: errTestClose, want: errTestClose},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			dir := t.TempDir()
+			path := resultOutPath(dir)
+
+			file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600) //nolint:gosec // G304: the step's own -result-out path, which the test made
+			if err != nil {
+				t.Fatalf("open the result file %s: %v", path, err)
+			}
+
+			err = writeResult(path, &failingFile{file: file, after: tc.after, closeErr: tc.closeErr}, []byte(auditResult))
+			if !errors.Is(err, tc.want) {
+				t.Errorf("writeResult(%s) = %v, want an error wrapping %v: a write or a close that fails fails the run", path, err, tc.want)
+			}
+
+			if _, statErr := os.Stat(path); !errors.Is(statErr, os.ErrNotExist) {
+				t.Errorf("the result file at %s is still there (stat: %v), want it removed: a write or a close that fails leaves no file, so no encrypt step reads a partial result (doc.go)", path, statErr)
+			}
+		})
+	}
+}
+
+// errTestWrite and errTestClose are the failures the fake result file answers:
+// a write that stops after part of the body, and a close that fails.
+var (
+	errTestWrite = errors.New("the write failed after part of the body")
+	errTestClose = errors.New("the close failed")
+)
+
+// failingFile is the open result file writeResult is handed, as a failing disk
+// answers one: Write writes at most after bytes of the body and then fails, and
+// Close fails when closeErr is set. It stands in for the *os.File resultWriter
+// opens, so a test can fail the write or the close where no file system would
+// fail on demand.
+type failingFile struct {
+	file     *os.File
+	after    int
+	closeErr error
+}
+
+// Write writes the first after bytes of body to the file and fails unless that
+// is the whole body.
+func (f *failingFile) Write(body []byte) (int, error) {
+	n := min(f.after, len(body))
+
+	if n > 0 {
+		if _, err := f.file.Write(body[:n]); err != nil {
+			return 0, err
+		}
+	}
+
+	if n < len(body) {
+		return n, errTestWrite
+	}
+
+	return n, nil
+}
+
+// Close closes the file, and fails when closeErr is set.
+func (f *failingFile) Close() error {
+	if f.closeErr != nil {
+		_ = f.file.Close()
+
+		return f.closeErr
+	}
+
+	return f.file.Close()
 }
 
 // TestRunPrintsNoSecret pins the rule every case above leans on: neither the
