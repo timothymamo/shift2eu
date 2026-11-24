@@ -246,9 +246,16 @@ aws s3api delete-bucket --bucket "$CB"
 # FAIL "BucketNotEmpty": delete its versions as above first
 rm -r "$W"
 scw iam api-key update "$SCW_ACCESS_KEY" default-project-id="$ADMIN_PROJECT"   # back to the admin project, where the state is
+# The switch takes a moment to apply at Scaleway: wait until your own key lists the state bucket again before any tofu touches its lock
+for i in $(seq 1 12); do aws s3api list-objects-v2 --bucket <state-bucket> --max-items 1 >/dev/null 2>&1 && break; sleep 10; done
+aws s3api list-objects-v2 --bucket <state-bucket> --query 'Contents[].Key'   # PASS: "site/terraform.tfstate" and no "site/terraform.tfstate.tflock"
+# FAIL "AccessDenied" or "NoSuchBucket": the switch has not applied yet; wait a minute and list again
+# FAIL "site/terraform.tfstate.tflock" listed and no tofu runs (a plan run before the switch applied left it): the plan below stops at "Error acquiring the state lock"; its FAIL line clears the lock
 # If the state bucket's put-object probe was allowed: aws s3api delete-object --bucket <state-bucket> --key canary/probe.txt
 dev/tofu.sh -chdir=infra/site plan -detailed-exitcode   # PASS: exit 0 (website, versioning and policy unchanged)
 # FAIL exit 2: dev/tofu.sh -chdir=infra/site apply
+# FAIL "Error acquiring the state lock": unlock only when its "Who" is this machine's user@host, its "Created" the time of the earlier run, and no other dev/tofu.sh runs on this machine; then, with its "ID" and without -force (tofu asks to confirm): dev/tofu.sh -chdir=infra/site force-unlock <lock ID>   # PASS: "OpenTofu state has been successfully unlocked!", the listing above shows no .tflock, then plan again
+# FAIL "Error releasing the state lock": the listing and force-unlock above, then plan again
 ```
 
 ## R8. Namecheap
@@ -540,6 +547,11 @@ gh variable set SITE_DEPLOY_ENABLED --body false -R <owner>/shift2eu
 scw iam api-key delete <deploy access key>
 # Own key, default project the site's (R5): delete every object version and delete marker in "$B" (R7, step 8), then back to the admin project
 scw iam api-key update "$SCW_ACCESS_KEY" default-project-id="$ADMIN_PROJECT"
+# The switch takes a moment to apply at Scaleway: wait until your own key lists the state bucket again before the destroy touches its lock
+for i in $(seq 1 12); do aws s3api list-objects-v2 --bucket <state-bucket> --max-items 1 >/dev/null 2>&1 && break; sleep 10; done
+aws s3api list-objects-v2 --bucket <state-bucket> --query 'Contents[].Key'   # PASS: "site/terraform.tfstate" and no "site/terraform.tfstate.tflock"
+# FAIL "AccessDenied" or "NoSuchBucket": the switch has not applied yet; wait a minute and list again
+# FAIL "site/terraform.tfstate.tflock" listed and no tofu runs: R7 step 8's recovery (the plan's "Error acquiring the state lock" FAIL line), then list again
 # The site environment's secrets and variables
 gh secret delete SCW_ACCESS_KEY --env site -R <owner>/shift2eu && gh secret delete SCW_SECRET_KEY --env site -R <owner>/shift2eu
 gh variable delete SITE_BUCKET --env site -R <owner>/shift2eu && gh variable delete SITE_REGION --env site -R <owner>/shift2eu
