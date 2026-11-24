@@ -1581,24 +1581,38 @@ func yamlMappingKey(line string) (string, bool) {
 }
 
 // yamlQuotedScalarEnd returns the index just past the quote that closes the
-// quoted scalar line opens with, or -1 when it does not close on the line. Two
-// single quotes in a row inside a single-quoted scalar, and a backslash and the
-// character after it inside a double-quoted one, do not close it.
+// quoted scalar line opens with, or -1 when it does not close on the line. The
+// scalar closes as yamlQuoteStep reads it.
 func yamlQuotedScalarEnd(line string) int {
 	quote := line[0]
 
 	for i := 1; i < len(line); i++ {
-		switch c := line[i]; {
-		case quote == '\'' && c == '\'' && i+1 < len(line) && line[i+1] == '\'':
-			i++
-		case quote == '"' && c == '\\':
-			i++
-		case c == quote:
+		if i, quote = yamlQuoteStep(line, i, quote); quote == 0 {
 			return i + 1
 		}
 	}
 
 	return -1
+}
+
+// yamlQuoteStep reads the byte at i of s inside a scalar quoted with quote, as
+// YAML reads it, and returns the index of the last byte it read and the quote
+// still open, 0 once the scalar closes. Two single quotes in a row inside a
+// single-quoted scalar, and a backslash and the byte after it inside a
+// double-quoted one, are read together and do not close it. It is the one
+// quote scanner yamlQuotedScalarEnd, yamlFlowEntries and withoutYAMLComment
+// share, so they cannot read a quoted scalar apart.
+func yamlQuoteStep(s string, i int, quote byte) (last int, stillQuoted byte) {
+	switch c := s[i]; {
+	case quote == '\'' && c == '\'' && i+1 < len(s) && s[i+1] == '\'':
+		return i + 1, quote
+	case quote == '"' && c == '\\':
+		return i + 1, quote
+	case c == quote:
+		return i, 0
+	}
+
+	return i, quote
 }
 
 // sectionImage is one image a GoReleaser docker section builds: a label for the
@@ -1616,9 +1630,9 @@ type sectionImage struct {
 // and the dash and blanks that open an item turn into spaces, so an image's
 // keys all start in one column whether or not a key opens the item
 // (`- extra_files:`). An item whose dash stands alone starts its image at the
-// line below, its mapping's first key. A list section whose body holds no such item, an empty or
-// a flow list, is taken as one image, so it is checked and, naming nothing,
-// reported: the check fails closed.
+// line below, its mapping's first key. A list section whose body holds no such
+// item, an empty or a flow list, is taken as one image, so it is checked and,
+// naming nothing, reported: the check fails closed.
 func sectionImages(section imageBuildSection) []sectionImage {
 	whole := []sectionImage{{label: "the " + section.key + " section", body: section.body}}
 
@@ -1693,17 +1707,17 @@ func imageID(image []string) string {
 
 // extraFiles returns the entries of image's extra_files list, one image
 // sectionImages returns, unquoted and in file order: the files GoReleaser
-// copies into the context it sends the daemon, each at the path the entry names.
-// It reads the key only at the image's own key column, the column of its first
-// line, so an extra_files nested under another key is not the image's. It reads
-// a block list, its entries indented under the key or level with it, and only
-// the items in the column of its first item: a list one of its entries carries
-// is not the extra_files list. It reads a flow list such as
+// copies into the context it sends the daemon, each at the path the entry
+// names. It reads the key only at the image's own key column, the column of its
+// first line, so an extra_files nested under another key is not the image's. It
+// reads a block list, its entries indented under the key or level with it, and
+// only the items in the column of its first item: a list one of its entries
+// carries is not the extra_files list. It reads a flow list such as
 // `extra_files: [LICENSE, NOTICE]` only when it closes on the key's line, split
-// only at a comma outside a quoted entry (yamlFlowEntries): a flow
-// list spread over several lines is not read, so its files are reported missing,
-// a limit that fails closed. Comments, own-line and inline, and every other key's
-// value are dropped, so only an entry counts.
+// only at a comma outside a quoted entry (yamlFlowEntries): a flow list spread
+// over several lines is not read, so its files are reported missing, a limit
+// that fails closed. Comments, own-line and inline, and every other key's value
+// are dropped, so only an entry counts.
 func extraFiles(image []string) []string {
 	if len(image) == 0 {
 		return nil
@@ -1786,7 +1800,7 @@ func extraFiles(image []string) []string {
 // yamlFlowEntries splits inner, a flow list without its brackets, at each comma
 // outside a quoted scalar, as YAML reads it, so a quoted entry that holds commas
 // stays one entry. A quote opens a scalar only where opensYAMLScalar allows, and
-// the scalar closes as withoutYAMLComment reads it. The entries keep their
+// the scalar closes as yamlQuoteStep reads it. The entries keep their
 // quotes and blanks.
 func yamlFlowEntries(inner string) []string {
 	var (
@@ -1800,14 +1814,8 @@ func yamlFlowEntries(inner string) []string {
 		c := inner[i]
 
 		switch {
-		case quote == '\'' && c == '\'' && i+1 < len(inner) && inner[i+1] == '\'':
-			i++
-		case quote == '"' && c == '\\':
-			i++
 		case quote != 0:
-			if c == quote {
-				quote = 0
-			}
+			i, quote = yamlQuoteStep(inner, i, quote)
 		case (c == '"' || c == '\'') && opensYAMLScalar(inner[:i]):
 			quote = c
 		case c == ',':
@@ -1834,9 +1842,7 @@ func yamlListItem(line string) (string, bool) {
 // line or after a blank, outside a quoted scalar, as YAML reads it. A quote
 // opens a scalar only where a scalar starts: at the start of the line, or after
 // `[`, `,`, `- ` or `: `, blanks allowed between, so the apostrophe in it's is
-// text. Inside a single-quoted scalar two single quotes in a row are an escaped
-// quote and inside a double-quoted one a backslash and a double quote are,
-// neither closing it.
+// text. The scalar closes as yamlQuoteStep reads it.
 func withoutYAMLComment(line string) string {
 	var quote byte
 
@@ -1844,14 +1850,8 @@ func withoutYAMLComment(line string) string {
 		c := line[i]
 
 		switch {
-		case quote == '\'' && c == '\'' && i+1 < len(line) && line[i+1] == '\'':
-			i++
-		case quote == '"' && c == '\\':
-			i++
 		case quote != 0:
-			if c == quote {
-				quote = 0
-			}
+			i, quote = yamlQuoteStep(line, i, quote)
 		case (c == '"' || c == '\'') && opensYAMLScalar(line[:i]):
 			quote = c
 		case c == '#' && (i == 0 || line[i-1] == ' ' || line[i-1] == '\t'):
