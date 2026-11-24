@@ -1,0 +1,88 @@
+# The site's front (PRD #297 milestone 4, ADR 0045): the configuration the Serverless Container in
+# container.tf runs, byte for byte, in the pinned official Caddy image. The platform ends TLS and hands
+# every request to this server on plain HTTP; this file writes every redirect and every security header.
+#
+#   joined X-Forwarded-Proto not exactly https, any name  -> 308 to https://www.shift2eu.com + the URI
+#   https, Host exactly www.shift2eu.com                   -> the site, from the Edge Services pipeline
+#   https, any other Host (the apex, the container's own
+#   endpoint, www with a port, a trailing dot or capitals) -> 308 to https://www.shift2eu.com + the URI
+#
+# "The URI" is {http.request.uri}, Go's URL.RequestURI(): the escaped path (URL.EscapedPath(), so %3F,
+# %23 and %0A stay encoded) and ?raw query when there is one. Caddy 2.11.9 has no placeholder for the
+# escaped path alone (uri.path_escaped is the query escaper). For a target that is not a path - an
+# absolute-form request's scheme and host are dropped by RequestURI, but an opaque target (GET http:foo)
+# or * is no path - the redirect goes to https://www.shift2eu.com/ instead: hence the @rooted guard.
+# OPTIONS * never reaches these routes: Go's server answers it (an empty 200), the accepted exception of
+# ADR 0045.
+#
+# UPSTREAM is the pipeline's default endpoint (<pipeline id>.svc.edge.scw.cloud), an environment variable
+# of the container, read when Caddy parses this file. No log, no encode, no cache, no tls.
+{
+	auto_https off
+	admin off
+}
+
+:8080 {
+	# The scheme: the raw header, its repeated fields joined with "," by Caddy's placeholder, equal to
+	# https exactly. A missing header, http, two fields or "https, https" all miss.
+	@https {
+		expression {http.request.header.X-Forwarded-Proto} == "https"
+	}
+
+	# www: the request's raw Host, port and case as received, equal to www.shift2eu.com exactly.
+	@www {
+		expression {http.request.hostport} == "www.shift2eu.com"
+	}
+
+	# A request target that is a path, the only one the URI placeholder may be appended for.
+	@rooted expression {http.request.uri.path}.startsWith("/")
+
+	handle @https {
+		handle @www {
+			header Strict-Transport-Security "max-age=31536000; includeSubDomains"
+			header Content-Security-Policy "default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; img-src 'none'; connect-src 'none'; form-action 'none'; base-uri 'none'; object-src 'none'; worker-src 'none'; child-src 'none'; frame-src 'none'; manifest-src 'none'; require-trusted-types-for 'script'; trusted-types shift2eu-report; frame-ancestors 'none'"
+			header X-Content-Type-Options nosniff
+			header Referrer-Policy no-referrer
+			# Every feature the site does not use, off. clipboard-write is left to the browser's default
+			# (self): the page's copy buttons write the command to the clipboard on a click.
+			header Permissions-Policy "accelerometer=(), ambient-light-sensor=(), autoplay=(), bluetooth=(), browsing-topics=(), camera=(), compute-pressure=(), display-capture=(), encrypted-media=(), fullscreen=(), gamepad=(), geolocation=(), gyroscope=(), hid=(), identity-credentials-get=(), idle-detection=(), local-fonts=(), magnetometer=(), microphone=(), midi=(), otp-credentials=(), payment=(), picture-in-picture=(), publickey-credentials-create=(), publickey-credentials-get=(), screen-wake-lock=(), serial=(), storage-access=(), usb=(), web-share=(), window-management=(), xr-spatial-tracking=()"
+
+			reverse_proxy https://{$UPSTREAM} {
+				# Edge Services selects the pipeline by the name it is asked for; the certificate is
+				# verified and the SNI is that name (Caddy's defaults for an https:// upstream).
+				header_up Host {upstream_hostport}
+				# Nothing of the visitor, the platform or a client's forwarding headers goes upstream,
+				# Caddy's own X-Forwarded-* included.
+				header_up -X-Forwarded-For
+				header_up -X-Forwarded-Proto
+				header_up -X-Forwarded-Host
+				header_up -X-Forwarded-Port
+				header_up -Forwarded
+				header_up -X-Real-IP
+				header_up -X-Envoy-*
+				header_up -X-Request-Id
+				header_up -Via
+				header_up -Cookie
+				header_up -Authorization
+				# The upstream's own copies of the headers set above never reach the client beside them.
+				header_down -Strict-Transport-Security
+				header_down -Content-Security-Policy
+				header_down -X-Content-Type-Options
+				header_down -Referrer-Policy
+				header_down -Permissions-Policy
+			}
+		}
+		handle @rooted {
+			redir https://www.shift2eu.com{http.request.uri} 308
+		}
+		handle {
+			redir https://www.shift2eu.com/ 308
+		}
+	}
+	handle @rooted {
+		redir https://www.shift2eu.com{http.request.uri} 308
+	}
+	handle {
+		redir https://www.shift2eu.com/ 308
+	}
+}

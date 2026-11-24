@@ -226,5 +226,19 @@
         '# renovate: datasource=(?<datasource>docker) depName=(?<depName>\\S+)\\s+[A-Z_]+\\s*:=\\s*[^\\s:]+:(?<currentValue>[^\\s@]+)@(?<currentDigest>sha256:[a-f0-9]{64})',
       ],
     },
+    {
+      // The site container's Caddy image (PRD #297 milestone 4, ADR 0045): "# renovate: datasource=docker
+      // depName=caddy" above the HCL assignment 'caddy_image = "docker.io/library/caddy:<tag>@sha256:<digest>"'
+      // in infra/site/container.tf. Renovate updates the tag and the index digest together. Docker
+      // versioning reads 2.11.9-alpine as version 2.11.9 with the suffix -alpine, so it proposes only
+      // -alpine tags. test/lint's TestCaddyImagePinIsFoundOnce pins that this manager reads the pin once.
+      description: 'The Caddy image pinned by tag and digest in infra/site/container.tf',
+      customType: 'regex',
+      managerFilePatterns: ['/^infra/site/container\\.tf$/'],
+      matchStrings: [
+        '# renovate: datasource=(?<datasource>docker) depName=(?<depName>\\S+)\\s+[a-z_]+\\s*=\\s*"[^\\s:"]+:(?<currentValue>[^\\s@"]+)@(?<currentDigest>sha256:[a-f0-9]{64})"',
+      ],
+      versioningTemplate: 'docker',
+    },
   ],
 }

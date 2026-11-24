@@ -1,6 +1,7 @@
 # The site's Scaleway hosting (PRD #297 milestone 3, issue #422, ADR 0039): one project, its bucket, the
-# deploy application and Edge Services' pipeline for www.shift2eu.com. The deploy API key, the DNS records
-# and the GitHub `site` environment are made by hand (the PRD's Runbook): no secret reaches the state.
+# deploy application and Edge Services' pipeline in front of the bucket; the container that serves
+# www.shift2eu.com and the apex in front of the pipeline is container.tf's (milestone 4, ADR 0045). The
+# deploy API key, the DNS records and the GitHub `site` environment are made by hand (the PRD's Runbook): no secret reaches the state.
 #
 # Object Storage's API is scoped by project, so every child of the bucket, and every Edge Services
 # resource, names the site's project itself; the provider's default project is never used.
@@ -119,9 +120,8 @@ resource "scaleway_iam_policy" "deploy" {
 
 # --- Edge Services ----------------------------------------------------------------------------------------
 
-# The Starter plan (Hosting decision 9): one pipeline, 100 GB of cache egress a month, managed
-# certificates. Subscribed in the site's project, which holds the pipeline. The deploy key's permission
-# sets hold no Edge Services permission, so the pipeline being in its project gives it nothing.
+# The Starter plan (Hosting decision 9): one pipeline, 100 GB of cache egress a month. Subscribed in the
+# site's project, which holds the pipeline. The deploy key's permission sets hold no Edge Services permission, so the pipeline being in its project gives it nothing.
 resource "scaleway_edge_services_plan" "site" {
   name       = "starter"
   project_id = scaleway_account_project.site.id
@@ -135,8 +135,8 @@ resource "scaleway_edge_services_pipeline" "site" {
   depends_on = [scaleway_edge_services_plan.site]
 }
 
-# The chain a request follows: DNS (www.shift2eu.com) -> TLS (managed Let's Encrypt certificate) -> cache
-# -> backend (the site bucket in website mode). No WAF or route stage: one backend serves every path.
+# The chain a request follows: DNS (the pipeline's default endpoint) -> cache -> backend (the site bucket in
+# website mode). No WAF or route stage: one backend serves every path.
 resource "scaleway_edge_services_backend_stage" "site" {
   pipeline_id = scaleway_edge_services_pipeline.site.id
   project_id  = scaleway_account_project.site.id
@@ -161,25 +161,17 @@ resource "scaleway_edge_services_cache_stage" "site" {
   include_cookies  = false
 }
 
-resource "scaleway_edge_services_tls_stage" "site" {
-  pipeline_id         = scaleway_edge_services_pipeline.site.id
-  project_id          = scaleway_account_project.site.id
-  cache_stage_id      = scaleway_edge_services_cache_stage.site.id
-  managed_certificate = true
-
-  lifecycle {
-    # A replacement (R8's recreate) must create the new stage and repoint the DNS stage before deleting
-    # the old one: Scaleway refuses to delete a TLS stage the DNS stage references (issue #541).
-    create_before_destroy = true
-  }
-}
-
-# Edge Services serves only a subdomain (Hosting decision 1): www, never the apex.
+# No custom domain and no TLS stage (ADR 0045, The upstream): www.shift2eu.com and shift2eu.com are the
+# container's (container.tf), and the pipeline answers only its own default endpoint,
+# <pipeline id>.svc.edge.scw.cloud, which the container reverse-proxies. So the DNS stage hands every
+# request to the cache stage itself. fqdns is optional and computed, so it is written empty: left out, the
+# provider would keep the www name the pipeline served before. A pipeline created before ADR 0045 loses its
+# www domain and its TLS stage in R4's first apply after this change (R4, R8).
 resource "scaleway_edge_services_dns_stage" "site" {
-  pipeline_id  = scaleway_edge_services_pipeline.site.id
-  project_id   = scaleway_account_project.site.id
-  tls_stage_id = scaleway_edge_services_tls_stage.site.id
-  fqdns        = ["www.shift2eu.com"]
+  pipeline_id    = scaleway_edge_services_pipeline.site.id
+  project_id     = scaleway_account_project.site.id
+  cache_stage_id = scaleway_edge_services_cache_stage.site.id
+  fqdns          = []
 }
 
 # The DNS stage is where the pipeline's traffic enters.

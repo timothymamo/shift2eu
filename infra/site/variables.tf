@@ -42,6 +42,13 @@ variable "public_read" {
   default     = false
 }
 
+variable "front_domains" {
+  description = "Whether the site's container serves its two custom domains, www.shift2eu.com and shift2eu.com (ADR 0045). Off by default: Scaleway checks each name's DNS record before it issues the certificate, so the Runbook sets this true in terraform.tfvars only after R8's www CNAME and apex ALIAS point at the container's endpoint."
+  type        = bool
+  nullable    = false
+  default     = false
+}
+
 variable "bucket_name" {
   description = "The site bucket's name. Bucket names are global across Scaleway: if this one is taken, choose another in terraform.tfvars."
   type        = string

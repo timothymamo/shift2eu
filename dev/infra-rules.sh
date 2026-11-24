@@ -40,10 +40,11 @@
 #                    templatefile, templatestring, filemd5, filesha1, filesha256, filesha512, pathexpand or
 #                    abspath in a configuration or test file, a template's ${...} too: the plan would read
 #                    the machine that runs it. A name in a comment or in a string without a template is no
-#                    call
+#                    call. One call is allowed, written exactly file("${path.module}/Caddyfile") in a
+#                    configuration file: the site container's committed Caddyfile beside it (ADR 0045)
 #   [import-block]   a top-level import block in a configuration file: every resource is created fresh,
 #                    never adopted (a test file's import block gets [block-type] alone)
-#   [resource-type]  a scaleway_* resource type infra/site/main.tf does not use, or any scaleway_* data or
+#   [resource-type]  a scaleway_* resource type infra/site does not use, or any scaleway_* data or
 #                    ephemeral type, that no rule above or below names: an allow list in
 #                    dev/infra-rules.awk, extended in the same PR as the new resource. A type a specific
 #                    rule names ([api-key], [object], [bucket-acl], [iam-other], [provider-type]) gets
@@ -58,7 +59,18 @@
 #   [tls-stage-lifecycle] the resource scaleway_edge_services_tls_stage "site" without a lifecycle block
 #                    that sets create_before_destroy = true (issue #541): Scaleway issues its managed
 #                    certificate only at its creation, so R8 replaces it, and Scaleway refuses to delete
-#                    a TLS stage the DNS stage references, so the replacement must create first
+#                    a TLS stage the DNS stage references, so the replacement must create first. The
+#                    pipeline holds no TLS stage since ADR 0045; the rule stays for R8's rollback, which
+#                    re-adds it
+#   [container-max-scale], [container-cpu], [container-memory]
+#                    a scaleway_container that does not set max_scale = 1, cpu_limit = 140 or
+#                    memory_limit_bytes = 268435456 exactly once, as that literal (ADR 0045's cost pins:
+#                    one instance of 140 mvCPU and 0.25 GB at most): missing, another number or an
+#                    expression such as var.max_scale is refused
+#   [container-deprecated-attribute]
+#                    memory_limit or http_option on a scaleway_container, the deprecated spellings of
+#                    memory_limit_bytes and https_connections_only (that attribute gets this tag alone)
+#   [container-min-scale] a scaleway_container whose min_scale is missing or not the literal 0 or 1
 #   [provider-type]  a resource, data source or provider block of any provider but scaleway
 #   [provider-source] a required_providers entry whose source is not exactly "scaleway/scaleway"
 #   [lock-file]      a .terraform.lock.hcl with a line of a shape tofu init does not write: only blank and

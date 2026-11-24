@@ -40,6 +40,27 @@ BEGIN { # explicit character sets, the same in every awk and locale (no [A-Z] ra
   for (i in ff) {
     fileFunc[ff[i]] = 1
   }
+  # The one file function call a configuration may make, character for character: file() of the Caddyfile
+  # in the configuration's own directory, which the site container runs (ADR 0045).
+  CADDYFILE_READ = "(\"${path.module}/Caddyfile\")"
+  # The site container's cost pins (ADR 0045, The container): each set once, as exactly this literal.
+  npins = split("max_scale=1 cpu_limit=140 memory_limit_bytes=268435456", cp, " ")
+  for (i = 1; i <= npins; i++) {
+    split(cp[i], kv, "=")
+    containerPinName[i] = kv[1]
+    containerPin[kv[1]] = kv[2]
+  }
+  containerPinTag["max_scale"] = "container-max-scale"
+  containerPinTag["cpu_limit"] = "container-cpu"
+  containerPinTag["memory_limit_bytes"] = "container-memory"
+  containerPinWhy["max_scale"] = "one instance at most, the worst case ADR 0045 prices at about EUR 2.12 a month"
+  containerPinWhy["cpu_limit"] = "140 mvCPU, the size ADR 0045 prices"
+  containerPinWhy["memory_limit_bytes"] = "0.25 GB, the size ADR 0045 prices"
+  # The deprecated spellings beside the pinned ones: memory_limit (MB) beside memory_limit_bytes, and
+  # http_option beside https_connections_only. Either could set what the pin does not see.
+  ndeprecated = split("memory_limit http_option", containerDeprecatedName, " ")
+  containerDeprecated["memory_limit"] = "memory_limit_bytes"
+  containerDeprecated["http_option"] = "https_connections_only"
   # The settings a top-level terraform block may hold, each judged by its own rule. Anything else
   # (encryption, provider_meta, experiments, ...) changes how tofu runs on the admin machine.
   TERRAFORM_SETTINGS_TEXT = "required_version, required_providers, backend and cloud"
@@ -83,11 +104,13 @@ BEGIN { # explicit character sets, the same in every awk and locale (no [A-Z] ra
   for (i in ps) {
     providerSetting[ps[i]] = 1
   }
-  # The resource types the configuration may hold: exactly the ones infra/site/main.tf uses. No data or
-  # ephemeral type is allowed. A new resource extends this list in the same PR that adds it, so the
-  # review of that PR sees both. A type a specific rule names (api-key, object, bucket-acl, iam-other,
-  # provider-type) is reported by that rule alone.
-  split("scaleway_account_project scaleway_edge_services_backend_stage scaleway_edge_services_cache_stage scaleway_edge_services_dns_stage scaleway_edge_services_head_stage scaleway_edge_services_tls_stage scaleway_edge_services_pipeline scaleway_edge_services_plan scaleway_iam_application scaleway_iam_policy scaleway_object_bucket scaleway_object_bucket_policy scaleway_object_bucket_website_configuration", rt, " ")
+  # The resource types the configuration may hold: exactly the ones infra/site uses (main.tf and the
+  # front's container.tf). No data or ephemeral type is allowed. A new resource extends this list in the
+  # same PR that adds it, so the review of that PR sees both. A type a specific rule names (api-key,
+  # object, bucket-acl, iam-other, provider-type) is reported by that rule alone. The TLS stage left
+  # the list with the pipeline's www domain (ADR 0045): only scaleway_edge_services_tls_stage "site",
+  # which [tls-stage-lifecycle] judges, may come back, as R8's rollback re-adds it.
+  split("scaleway_account_project scaleway_container scaleway_container_domain scaleway_container_namespace scaleway_edge_services_backend_stage scaleway_edge_services_cache_stage scaleway_edge_services_dns_stage scaleway_edge_services_head_stage scaleway_edge_services_pipeline scaleway_edge_services_plan scaleway_iam_application scaleway_iam_policy scaleway_object_bucket scaleway_object_bucket_policy scaleway_object_bucket_website_configuration", rt, " ")
   for (i in rt) {
     resourceType[rt[i]] = 1
   }
@@ -297,10 +320,22 @@ function tok(t, v, lit, esc,   i, ok, n) {
       attr(pa, "E", "")
     }
     pstate = 0
+  } else if (pstate == 4) { # an attribute whose value began with a whole number: that one, or more?
+    if (t == "N" || (t == "P" && (v == "," || v == "}"))) {
+      attr(pa, "D", pval)
+    } else {
+      attr(pa, "E", "")
+    }
+    pstate = 0
   } else if (pstate == 1) { # the first token of an attribute's value
     pstate = 0
     if (t == "S" && lit) {
       pstate = 2
+      pval = v
+      return
+    }
+    if (t == "X" && v ~ /^[0-9]+$/) { # a lone whole number, such as 140, is kept as kind "D"
+      pstate = 4
       pval = v
       return
     }
@@ -465,7 +500,10 @@ FNR == 1 {
       continue
     }
     if (ffpend != "" && c != " " && c != "\t" && c != "\r") { # a file function's name: is it called?
-      if (c == "(") {
+      # The one read allowed: the site container's Caddyfile, a committed file beside the configuration
+      # that reads it (ADR 0045), named exactly so, in a configuration file. A test file, another function,
+      # another path or an argument built any other way is still a call.
+      if (c == "(" && !(ffpend == "file" && !isTest[FILENAME] && substr(line, i, length(CADDYFILE_READ)) == CADDYFILE_READ)) {
         nff++
         ffFile[nff] = FILENAME
         ffLine[nff] = FNR
@@ -664,6 +702,9 @@ END {
       continue
     }
     configDir[dirof(f)] = 1
+    if (m == 1 && typ == "resource" && lab[2] == "scaleway_container") {
+      containerBlock[b] = 1 # its cost pins are judged after the attributes, below
+    }
     if (typ == "resource" || typ == "data" || typ == "ephemeral") {
       if (lab[2] !~ /^scaleway_/) {
         problem("provider-type", f, bline[b], typ " " quoted(unescaped(lab[2])) " belongs to no scaleway provider: infra/ uses scaleway/scaleway alone")
@@ -683,7 +724,7 @@ END {
       } else if (typ == "resource" && lab[2] ~ /^scaleway_iam_/) {
         problem("iam-other", f, bline[b], "a resource " quoted(unescaped(lab[2])) ": infra/ creates exactly one IAM application and its one policy, nothing else in IAM")
       } else if (lab[2] ~ /^scaleway_/ && !(typ == "resource" && (lab[2] in resourceType))) {
-        problem("resource-type", f, bline[b], typ " " quoted(unescaped(lab[2])) " is no resource type infra/site/main.tf uses (and no data or ephemeral type is allowed): a new type extends the allow list in dev/infra-rules.awk in the same PR, so its review sees both")
+        problem("resource-type", f, bline[b], typ " " quoted(unescaped(lab[2])) " is no resource type infra/site uses (and no data or ephemeral type is allowed): a new type extends the allow list in dev/infra-rules.awk in the same PR, so its review sees both")
       }
     }
     if (m == 2 && el[1] == "terraform" && !(typ in terraformSetting)) {
@@ -785,6 +826,14 @@ END {
     if (n == "create_before_destroy" && akind[a] == "I" && aval[a] == "true" && p == bpath[ablk[a]]) {
       createFirst[dirof(f) "/" p] = 1
     }
+    # The site container's own attributes (not those of its nested blocks), for its cost pins.
+    if ((ablk[a] in containerBlock) && p == bpath[ablk[a]]) {
+      ck = ablk[a] SUBSEP n
+      containerSet[ck]++
+      containerKind[ck] = akind[a]
+      containerVal[ck] = aval[a]
+      containerAt[ck] = aline[a]
+    }
     if (p ~ "^resource:scaleway_iam_(policy|application):[^/]+$" && (n == "count" || n == "for_each")) {
       problem("iam-repeat", f, aline[a], n " on " shownpath(p) ": infra/ creates exactly one IAM application and one policy")
     }
@@ -798,6 +847,34 @@ END {
     # Scaleway refuses to delete a TLS stage the DNS stage references (issue #541).
     if ((b in tlsStage) && !(tlsStage[b] in createFirst)) {
       problem("tls-stage-lifecycle", bfile[b], bline[b], "resource scaleway_edge_services_tls_stage \"site\" has no lifecycle block with create_before_destroy = true: a replacement would delete the stage first, which Scaleway refuses while the DNS stage references it")
+    }
+    # The site container's cost pins (ADR 0045, The container): one instance of 140 mvCPU and 0.25 GB at
+    # most, each a literal in the file, never a provider default or a value a tfvars file could raise; no
+    # deprecated spelling beside them; and at most one instance kept warm.
+    if (b in containerBlock) {
+      shownres = shownpath(bpath[b])
+      for (j = 1; j <= npins; j++) {
+        n = containerPinName[j]
+        ck = b SUBSEP n
+        if (!(ck in containerSet)) {
+          problem(containerPinTag[n], bfile[b], bline[b], shownres " sets no " n ": it must set " n " = " containerPin[n] " (" containerPinWhy[n] "), not leave it to the provider's default")
+        } else if (containerSet[ck] != 1 || containerKind[ck] != "D" || containerVal[ck] != containerPin[n]) {
+          problem(containerPinTag[n], bfile[b], containerAt[ck], shownres " sets " n " to something other than the literal " containerPin[n] " (" containerPinWhy[n] "): another value, or an expression a tfvars file could set, is a cost nobody decided")
+        }
+      }
+      for (j = 1; j <= ndeprecated; j++) {
+        n = containerDeprecatedName[j]
+        ck = b SUBSEP n
+        if (ck in containerSet) {
+          problem("container-deprecated-attribute", bfile[b], containerAt[ck], shownres " sets " n ", the deprecated spelling of " containerDeprecated[n] ": the pins judge " containerDeprecated[n] " alone, so " n " could set what they do not see")
+        }
+      }
+      ck = b SUBSEP "min_scale"
+      if (!(ck in containerSet)) {
+        problem("container-min-scale", bfile[b], bline[b], shownres " sets no min_scale: it must set min_scale = 0 or 1, the instances ADR 0045 allows to be kept warm")
+      } else if (containerSet[ck] != 1 || containerKind[ck] != "D" || (containerVal[ck] != "0" && containerVal[ck] != "1")) {
+        problem("container-min-scale", bfile[b], containerAt[ck], shownres " sets min_scale to something other than the literal 0 or 1: more instances kept warm are a cost nobody decided")
+      }
     }
   }
 
