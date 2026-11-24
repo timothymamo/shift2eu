@@ -118,7 +118,7 @@ cache plans by memory, and a cache's vCPU count is rarely known; matching on vCP
 almost every cache "size unknown". For a `cache.redis` resource, and only for it:
 
 - the resource needs `memoryGiB`; without it, or with it NaN, infinite or negative, it is "not
-  estimated: no size" (`no-size`). `vcpus` cannot be given (the field table).
+  estimated: size unknown" (`no-size`). `vcpus` cannot be given (the field table).
 - a plan **covers** the resource when `plan.MemoryMilliGiB ≥ memoryGiB × 1000`, exactly as a rational.
   The plan's vCPUs are ignored, whether given or not.
 - among the covering plans with a price in the estimate region, the chosen one is the cheapest, ties
@@ -208,7 +208,7 @@ A category with a fit that is never priced (`estimate.NotPriced`: `network.loadb
 ## Alternatives considered
 
 - **Match caches on vCPUs and memory, as every other plan.** One rule, but sources give a cache's memory
-  and almost never its vCPUs: nearly every cache would be "not estimated: no size".
+  and almost never its vCPUs: nearly every cache would be "not estimated: size unknown".
 - **Require a vCPU count on every plan, and leave Scaleway's cache unpriced until a page gives one.**
   Keeps `catalog.Plan` as it is, but blocks a priced offering on a figure the matching never uses.
 - **Write `"vcpus": 0` in the snapshot for "not given".** No reader change, but a `0` reads as a fact

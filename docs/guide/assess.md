@@ -174,7 +174,7 @@ priced.
   plan covers shows "no plan large enough" with the largest plan's size. The size never changes the
   fit.
 - **Monthly estimate** = plan price × `count` × `hoursPerMonth` / 730, plus storage above what the plan
-  includes × the offering's per-GiB price. Block and object storage are priced per GiB alone. A
+  includes × the offering's per-GiB price. Block, object and file storage are priced per GiB alone. A
   `count` that is not given is taken as 1, and an `hoursPerMonth` that is not given as 730; the cell
   says "(count assumed 1)" or "(730 hours assumed)". Amounts are rounded to the cent only when shown.
 - **Storage not included.** Some plans include no disk: their storage is sold per GiB apart from the

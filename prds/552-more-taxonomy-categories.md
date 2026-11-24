@@ -1,6 +1,6 @@
 # PRD #552: More taxonomy categories
 
-**Status:** In progress, milestone 1. The maintainer decided all eleven questions under *Decisions and
+**Status:** In progress, milestone 1 done. The maintainer decided all eleven questions under *Decisions and
 decided questions* on 2026-11-24, as recommended. Milestone 1's ADR is
 [0045](../docs/adr/0045-add-seven-taxonomy-categories-and-match-cache-plans-on-memory.md).
 **Issue:** #552
@@ -300,11 +300,11 @@ All criteria are pinned by tests that run offline under `make test` or `make tes
 
 **Taxonomy and inventory**
 
-- [ ] An inventory (schema version 1 or 2) with a resource of category `cache.redis`,
+- [x] An inventory (schema version 1 or 2) with a resource of category `cache.redis`,
   `database.mongodb`, `network.loadbalancer`, `messaging.topic`, `serverless.container`,
   `registry.container` or `storage.file` is read, and `shift2eu assess` exits 0. An unknown value such
   as `cache.memcached` is still refused with exit 1 and "unknown taxonomy category".
-- [ ] A version 2 resource of a new category takes exactly the size fields under *Estimates*. Any other
+- [x] A version 2 resource of a new category takes exactly the size fields under *Estimates*. Any other
   size or usage field (`vcpus` on `cache.redis`, `storageGiB` on `network.loadbalancer`, any size on
   `messaging.topic`) is refused with exit 1 and a message naming the field by its path.
 - [ ] Given a resource that lists `sharding` or `udp`, the inventory is read; an offering that does not
@@ -320,7 +320,7 @@ All criteria are pinned by tests that run offline under `make test` or `make tes
   the page now shows differently to its current value, rather than keep a dated price the page no longer
   shows, and says so in its PR and in the target's `SOURCES.md`; no other existing offering, plan, price
   or default region changes.
-- [ ] The sample inventories under `examples/` together use every taxonomy category, the new ones
+- [x] The sample inventories under `examples/` together use every taxonomy category, the new ones
   included (the existing check in `test/examples`).
 
 **Mapping and report**
@@ -334,19 +334,19 @@ All criteria are pinned by tests that run offline under `make test` or `make tes
   `partial` naming each missing capability otherwise. A test per target pins the best offering for a
   resource with no capability and for one with each capability a tier variant exists for (for example
   `zone-high-availability` on a `cache.redis` resource points at an OVHcloud 3-AZ Valkey variant).
-- [ ] The JSON report carries the new category values in `category` and keeps `schemaVersion` 1, 2
+- [x] The JSON report carries the new category values in `category` and keeps `schemaVersion` 1, 2
   and 3 as today; every golden document validates against its schema.
 
 **Estimates**
 
-- [ ] A `cache.redis` resource with `memoryGiB` and `count` is priced at the per-node price of the
+- [x] A `cache.redis` resource with `memoryGiB` and `count` is priced at the per-node price of the
   cheapest plan of the best offering whose memory covers it, × `count`, scaled by `hoursPerMonth` as
   other plan-priced categories are; without `count` it is priced as one node with "(count assumed 1)";
   without `memoryGiB` it is "not estimated: size unknown".
-- [ ] A `database.mongodb` resource is priced as a `database.postgresql` resource is, plan plus
+- [x] A `database.mongodb` resource is priced as a `database.postgresql` resource is, plan plus
   storage above what the plan includes.
-- [ ] A `storage.file` resource with `storageGiB` is priced per GiB from the offering's storage price.
-- [ ] A `messaging.topic` or `serverless.container` resource with a fit says "not estimated:
+- [x] A `storage.file` resource with `storageGiB` is priced per GiB from the offering's storage price.
+- [x] A `messaging.topic` or `serverless.container` resource with a fit says "not estimated:
   usage-priced"; a `network.loadbalancer` or `registry.container` resource with a fit is not estimated
   with reason "not priced" in the Markdown and HTML reports and `not-priced` in the JSON report. None is
   counted as 0 in a total.
@@ -410,7 +410,7 @@ no shared list. Until a target's catalog milestone lands, its report shows the n
 fit `none` with "no offering in the <target> catalog", which is already more precise than
 `unclassified`.
 
-1. [ ] **Taxonomy, inventory and estimates.** The seven categories in `internal/domain/taxonomy`, with
+1. [x] **Taxonomy, inventory and estimates.** The seven categories in `internal/domain/taxonomy`, with
    their definitions; the `sharding` and `udp` capabilities and the widened `snapshots` definition
    (decided question 4); the size-field table for the new categories (`internal/domain/inventory`); memory-only
    plan matching for `cache.redis`, plan pricing for `database.mongodb`, GiB pricing for
