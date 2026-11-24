@@ -125,9 +125,12 @@ var (
 	artifactID     = command(`id="\$\(jq -er '\.id' "\$\{artifact\}"\)"`, `id="$(jq -er '.id' "${artifact}")", the ID from artifact.json`)
 	artifactDigest = command(`digest="\$\(jq -er '\.digest' "\$\{artifact\}"\)"`, `digest="$(jq -er '.digest' "${artifact}")", the digest from artifact.json`)
 	artifactZip    = command(`gh api "repos/\$\{GITHUB_REPOSITORY\}/actions/artifacts/\$\{id\}/zip" > `, `gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${id}/zip", the checked artifact's zip`)
-	zipDigest      = command(`echo "\$\{digest#sha256:\}  \$\{RUNNER_TEMP\}/[a-z-]+\.zip" \| sha256sum --check --strict -`, `sha256sum --check --strict of the zip against the checked digest`)
-	zipUnpack      = command(`unzip -q "\$\{RUNNER_TEMP\}/[a-z-]+\.zip" -d `, "unzip -q of the checked zip")
-	zipOneFile     = command(`if \[ "\$\(ls -A "\$\{RUNNER_TEMP\}/[a-z-]+"\)" != [a-z-]+\.age \]; then`, "the single-file check (ls -A) of the unzipped ciphertext")
+	// zipDigest is a whole line of its own (review round 4, M1): at the end of
+	// another command's line it would be part of that command's conditions.
+	zipDigest = command(`(?m)^[ \t]*echo "\$\{digest#sha256:\}  \$\{RUNNER_TEMP\}/[a-z-]+\.zip" \| sha256sum --check --strict -$`,
+		`sha256sum --check --strict of the zip against the checked digest, on a line of its own`)
+	zipUnpack  = command(`unzip -q "\$\{RUNNER_TEMP\}/[a-z-]+\.zip" -d `, "unzip -q of the checked zip")
+	zipOneFile = command(`if \[ "\$\(ls -A "\$\{RUNNER_TEMP\}/[a-z-]+"\)" != [a-z-]+\.age \]; then`, "the single-file check (ls -A) of the unzipped ciphertext")
 	// secondListing is a download step that lists the run's artifacts again,
 	// so that what it downloads is no longer what the check accepted.
 	secondListing = command(`actions/runs/`, "a second listing of the run's artifacts (actions/runs/...), want the ID and digest from ${RUNNER_TEMP}/artifact.json, the checked listing's")
@@ -142,8 +145,28 @@ var (
 	tagShape    = command(`\[\[ ! "\$\{tag\}" =~ \^v\[0-9\]\+\\\.\[0-9\]\+\\\.\[0-9\]\+\$ \]\]`, `the tag's shape check [[ ! "${tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]`)
 	emptyDigest = command(`if \[ -z "\$\{digest\}" \]; then\s+echo "image not pulled[^"\n]*"\s+exit 0\s+fi`, `the empty digest's branch: echo "image not pulled: ..." and exit 0`)
 	digestShape = command(`\[\[ ! "\$\{digest\}" =~ \^sha256:\[0-9a-f\]\{64\}\$ \]\]`, `the digest's shape check [[ ! "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]]`)
-	verify      = command(`gh attestation verify "oci://`, `gh attestation verify "oci://<image>@<digest>"`)
+	verify      = command(verifyPattern(), `gh attestation verify "oci://${image}@${digest}" as one command, each line but the last ending in \: --repo "${GITHUB_REPOSITORY}", `+
+		`--signer-workflow "${GITHUB_REPOSITORY}/.github/workflows/release.yml", --source-ref "refs/tags/${tag}" and --deny-self-hosted-runners last, `+
+		`alone or as if ! ... --deny-self-hosted-runners > /dev/null; then`)
 )
+
+// verifyPattern matches the attestation step's verification as one contiguous
+// command (review round 4, M1): its first line through every flag's line, each
+// ending in a \ continuation, to --deny-self-hosted-runners, which ends its
+// line, either as the command alone (set -e fails the step) or as the
+// condition of an if ! ... > /dev/null; then. A flag cut off by a ;, a dropped
+// \ or a comment is then no part of it, and the command matches no more.
+func verifyPattern() string {
+	const next = ` \\\n[ \t]+`
+
+	body := `gh attestation verify "oci://\$\{image\}@\$\{digest\}"` +
+		next + `--repo "\$\{GITHUB_REPOSITORY\}"` +
+		next + `--signer-workflow "\$\{GITHUB_REPOSITORY\}/\.github/workflows/release\.yml"` +
+		next + `--source-ref "refs/tags/\$\{tag\}"` +
+		next + `--deny-self-hosted-runners`
+
+	return `(?m)^[ \t]*(?:if ! ` + body + ` > /dev/null; then|` + body + `)$`
+}
 
 // auditJobs are the workflow's three jobs, in order, with their steps in
 // order: the closed list a step is recognised by, by name.
@@ -288,11 +311,9 @@ var auditJobs = []auditJob{
 			{
 				name: "Verify the image's provenance attestation", githubToken: true,
 				runs: []auditCommand{
+					// verify holds every flag: one contiguous command, so no flag
+					// needs a pattern of its own.
 					digestRead, tagShape, emptyDigest, digestShape, verify,
-					command(`--repo "\$\{GITHUB_REPOSITORY\}"`, `--repo "${GITHUB_REPOSITORY}"`),
-					command(`--signer-workflow "\$\{GITHUB_REPOSITORY\}/\.github/workflows/release\.yml"`, `--signer-workflow "${GITHUB_REPOSITORY}/.github/workflows/release.yml"`),
-					command(`--source-ref "refs/tags/`, `--source-ref "refs/tags/<tag>"`),
-					command(`--deny-self-hosted-runners`, "--deny-self-hosted-runners: no provenance a self-hosted runner signed"),
 				},
 				order: []auditCommand{digestRead, tagShape, emptyDigest, digestShape, verify},
 			},
@@ -367,10 +388,12 @@ var auditGoCommand = regexp.MustCompile(`(?:^|[\s;&|(])go\s+\S`)
 
 // auditTrailingComment matches a # at the start of a word, which the shell
 // reads as a comment to the end of the line: on a code line it can hide a
-// guard or cut a \ continuation (review round 3, H1). A # inside a word
-// (${digest#sha256:}) is code; one after whitespace inside quotes is refused
-// too, which fails closed.
-var auditTrailingComment = regexp.MustCompile(`(?:^|\s)#`)
+// guard or cut a \ continuation (review round 3, H1). A word starts after
+// whitespace and right after an operator character, ; & | ( ) < > (review
+// round 4, M1: ;#, &&# and |# begin a comment too). A # inside a word
+// (${digest#sha256:}, ${GITLEAKS_VERSION#v}) is code; one after whitespace or
+// an operator character inside quotes is refused too, which fails closed.
+var auditTrailingComment = regexp.MustCompile(`(?:^|[\s;&|()<>])#`)
 
 // auditTempPath matches a path under /tmp or /run, which the sandbox's Bash
 // can read: the deny list does not name them.
@@ -1174,6 +1197,13 @@ func (a *auditReader) run(e yamlread.Entry, path string, want *auditStep, env []
 
 		trimmed := strings.TrimSpace(line)
 		if strings.HasPrefix(trimmed, "#") {
+			// A comment line a \ continues joins the command before it as a
+			// trailing comment, which cuts the continuation; withoutComments drops
+			// it, so the command would look contiguous to the patterns.
+			if i > 0 && strings.HasSuffix(lines[i-1], `\`) {
+				a.r.fail("line %d: %s's script continues a \\ line with a comment (%q): the comment cuts the command it continues, so the lines after it are no part of it; put a comment before the command", num, path, trimmed)
+			}
+
 			continue
 		}
 

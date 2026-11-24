@@ -2131,12 +2131,24 @@ non-blank character is `#`) taken out, so a guard commented out (`# --deny-self-
 zip's `sha256sum --check --strict`, `-result-out`) is a guard missing, and a commented copy of a command
 above the real one cannot satisfy the order. Only whole lines go: a `#` inside a code line
 (`${digest#sha256:}`) is code. A trailing comment is refused outright (review round 3, H1): a code line
-holding a `#` at the start of a word (`(^|\s)#`) is a problem, because the shell drops the rest of the
+holding a `#` at the start of a word (round 3's `(^|\s)#`, widened below) is a problem, because the shell drops the rest of the
 line, a trailing `\` included, so a guard hidden after it still matches every pattern while the shell
 never runs it, and a `--source-ref "refs/tags/${tag}" # \` cuts the continuation so that
 `gh attestation verify`'s failure is ignored (only the last command's status counts in
-`if ! A; B; then`). A `#` inside a word stays code; one after a blank inside quotes is refused too, which
-fails closed. An order broken is reported for every pair out of order, the command that
+`if ! A; B; then`). A word starts after a blank and right after an operator character too
+(review round 4, M1): `(^|[\s;&|()<>])#`, so `;#`, `&&#` and `|#` are trailing comments as well. A `#`
+inside a word (`${digest#sha256:}`, `${GITLEAKS_VERSION#v}`) stays code; one after a blank or an
+operator character inside quotes is refused too, which fails closed. A whole comment line right after a
+line ending in `\` is refused as well: the continuation joins it to the command as a trailing comment,
+and since whole comment lines are taken out before matching, the command would otherwise look whole.
+A guard cut with no `#` at all is held by matching it whole (review round 4, M1): the verification is
+one contiguous pattern, from `gh attestation verify "oci://${image}@${digest}"` through `--repo`,
+`--signer-workflow` and `--source-ref`, each on a line ending in ` \`, to `--deny-self-hosted-runners`
+ending its line, alone or as `if ! ... > /dev/null; then`, so a `;` after a flag or a dropped `\`
+(either leaves `--deny-self-hosted-runners` to run as a command of its own, whose status alone counts)
+matches no more; and the zip's `echo "${digest#sha256:}  ...zip" | sha256sum --check --strict -` must be
+a whole line, so it cannot ride at the end of another command's line. The verification is the
+workflow's only command continued over lines. An order broken is reported for every pair out of order, the command that
 must come first named first.
 
 **Job permissions** (`GITHUB_TOKEN`, each read): the checks job `contents` alone (no row PR 5b runs reads
