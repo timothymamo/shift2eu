@@ -27,8 +27,9 @@
 // storage, its offering prices storage per GiB in the estimate region, and the
 // resource gives no storage size: the boot volume for compute.vm,
 // compute.baremetal and kubernetes.managed, the data storage for
-// database.postgresql, database.mysql and database.mongodb. The note adds a statement, not a
-// price: the amount is unchanged, and Sum counts the estimates that carry it.
+// database.postgresql, database.mysql and database.mongodb. The note adds a
+// statement, not a price: the amount is unchanged, and Sum counts the
+// estimates that carry it.
 //
 // A resource that cannot be priced is never priced at 0: its Estimate says it
 // is not estimated, and why (Reason). Sum totals only the estimated resources

@@ -136,10 +136,11 @@ type Breakdown struct {
 	// Storage is the storage the estimate prices × the per-GiB price, never
 	// scaled by hours: for compute.vm, compute.baremetal and kubernetes.managed
 	// the GiB above what the plan includes per instance or node, × count; for
-	// database.postgresql, database.mysql and database.mongodb the GiB of the service's data above
-	// what the plan includes, once (not × count: the snapshots' database storage
-	// prices and included storage are for the whole service); for storage.block
-	// the volume's GiB × count; for storage.object the stored GiB.
+	// database.postgresql, database.mysql and database.mongodb the GiB of the
+	// service's data above what the plan includes, once (not × count: the
+	// snapshots' database storage prices and included storage are for the whole
+	// service); for storage.block the volume's GiB × count; for storage.object
+	// the stored GiB; for storage.file the provisioned GiB.
 	Storage Money
 	// FixedFee is the offering's fixed fee in the estimate region × hoursPerMonth
 	// / 730, never capped by PlanBillingCapHours, once per resource and never ×
@@ -440,9 +441,9 @@ func byPlan(r inventory.Resource, offerings []catalog.Offering, region string) E
 // (ADR 0032): none unless the resource gives no storage size, the chosen plan
 // includes no storage and its offering prices storage in region; then the
 // boot volume for compute.vm, compute.baremetal and kubernetes.managed, the
-// data storage for database.postgresql, database.mysql and database.mongodb, and none for any
-// other category. A count of 0 is estimated at 0 and leaves nothing out, so
-// it gets none.
+// data storage for database.postgresql, database.mysql and database.mongodb,
+// and none for any other category. A count of 0 is estimated at 0 and leaves
+// nothing out, so it gets none.
 func storageNotIncluded(c taxonomy.Category, count, stored *big.Rat, chosen offeredPlan, region string) StorageNotIncluded {
 	if count.Sign() == 0 || stored != nil || chosen.plan.IncludedStorageGiB != 0 {
 		return ""
