@@ -345,8 +345,9 @@ publish program's GitHub side" (2026-11-23), settles the publish program's entry
 side: the package split, the `gh` calling contract and its endpoint table, the fake `gh` its tests run
 against, and the subcommands. A fourth, "The workflow" (2026-11-24, PR 5b), settles the encryption tool
 and the artifact handling, the jobs' read scopes, the App token's `permission-*` inputs, the time budget
-and the Actions-cache residual risk. The other items of the list above (the container flags, the checks
-job's final scopes) come with PR 5c.
+and the Actions-cache residual risk. A fifth, "The checks job's rows 6 to 15" (2026-11-24, PR 5c),
+settles the other items of the list above: the container flags, the one tmpfs, the hostile corpus, the
+checks job's read scopes and the checks that are not run.
 
 ### The publish program's core (milestone 2, amended 2026-11-23)
 
@@ -2173,10 +2174,8 @@ calls or in a heredoc. Each such edit is explicit in the diff, and reaches `main
 request the maintainer reviews (CODEOWNERS and `Protect main`'s required code-owner review); the check
 does not try to read shell semantics to refuse them.
 
-**Job permissions** (`GITHUB_TOKEN`, each read): the checks job `contents` alone (no row PR 5b runs reads
-an attestation: PR 5c adds `attestations` with its release-integrity rows, and scorecard and row 15 may
-add `actions` or `issues` after the first run); the
-model job `contents` and `actions`, the artifact listing and download; the publish job `contents`,
+**Job permissions** (`GITHUB_TOKEN`, each read): the checks job `contents`, `attestations`, `actions`
+and `issues` (PR 5c: The checks job's rows 6 to 15, below, says which row needs which); the model job `contents` and `actions`, the artifact listing and download; the publish job `contents`,
 `actions` and `attestations`, the listing, the download and the image check. No `packages`: the image is
 public.
 
@@ -2285,9 +2284,10 @@ Actions cache**: `release.yml`'s setup-go steps set `cache: false`, which `test/
 none (no `actions/cache`, no setup-go; the check refuses the first). CI workflows on `main` that do
 restore a cache could read a poisoned entry; their results are checks, not releases, and that is accepted.
 
-**Left to PR 5c:** rows 6 to 11 and 13 to 15 and their containers and flags; the trivy, cosign and
-scorecard pins; the checks job's final read scopes after the first run; a check that times out recorded in
-the report's limits while the run still publishes (today a step timeout fails the job); and failure
+**Left to PR 5c**, and settled in The checks job's rows 6 to 15 below: rows 6 to 11 and 13 to 15 and
+their containers and flags; the trivy, cosign and scorecard pins; the checks job's read scopes (to be
+confirmed on the first run); and a check that times out recorded in the report's limits while the run
+still publishes. **Still open after PR 5c:** failure
 summaries that name the runbook step for every cause (today the programs' one lines and the workflow's
 own errors do; a tool download whose checksum differs fails with sha256sum's line alone, the hardening
 step's commands that fail under `set -e` before its own checks, such as `systemctl stop`, fail with their
@@ -2300,6 +2300,130 @@ libraries (`dpkg -i` does not fetch a missing dependency) and that the pinned ve
 archive's pool; that the runner's sudo rule is `/etc/sudoers.d/runner`; that the runner's preinstalled
 Go switches to go.mod's toolchain; that govulncheck runs offline on what `go mod download` fetched; and
 the round E note on an empty section header in the checkout copy's `.git/config`.
+
+### The checks job's rows 6 to 15 (milestone 2, PR 5c, amended 2026-11-24)
+
+PR 5c completes the checks job: one step per row, between actionlint and the encryption, each with its
+own `timeout-minutes`. Every row writes its raw output, stderr and exit codes under
+`$RUNNER_TEMP/results/<check id>/` (the coverage vocabulary's ids), never to the log, which shows only
+the commit, the tag and that a step finished. A finding is data for the model, not a failure of the job.
+
+**Not run and limits.** Row 1 now creates two empty files instead of naming rows 6 to 15 as not run:
+`results/not-run.txt`, one line `<check id> <why id>` (the why vocabulary above) per check that did not
+run, and `results/limits.txt`, one line per check, or part of one, that timed out or ran in part. Each row
+appends its own: `scorecard-admin needs-admin-read` on every run; `image-pull`, `image-runtime`,
+`hostile-inventories` and `image-scan` `image-not-pulled` when row 7 resolved no digest or row 8 pulled
+none; `image-scan tool-failed` when row 2's database download failed; `binary-vulnerabilities
+results-missing` when no archive gave up a binary; `fuzzing no-fuzz-targets` or `fuzzing tool-failed`;
+and `<check id> timed-out` for a whole check its inner deadline stopped. **A check that times out is
+recorded, and the run still publishes**: each tool runs under its own `timeout` (coreutils), shorter
+than its step's `timeout-minutes`, so the step records the timeout and goes on; the step's time-out is
+the backstop, and a step it stops fails the job as before.
+
+**Time budget** (within the checks job's 180 minutes): row 2's download 25 minutes (trivy's database
+included), scorecard 20 (its run 15), the release's verification 30, the pull 15, the binaries'
+govulncheck 20 (5 per binary), trivy 15, the runtime check 10, the hostile inventories 20 (60 seconds
+per run, 15 minutes of runs), fuzzing 50 (10 minutes of fuzzing and 12 in all per target, at most three
+targets, the others recorded in the limits), the supply-chain reads 15 (2 per read). The dynamic tests,
+rows 13 and 14, take at most 70 of their steps' minutes: the 60 of the budget, plus set-up.
+
+**Pins.** scorecard v5.6.0 (`scorecard_<version>_linux_amd64.tar.gz`), cosign v3.1.4
+(`cosign-linux-amd64`, the version and digest `release.yml` and `dev/lima.yaml` pin, so Renovate's
+cosign group moves them together) and trivy v0.76.2 (`trivy_<version>_Linux-64bit.tar.gz`), each by
+version and SHA-256 with its `# renovate:` comments, downloaded and checked in row 2 as 5b's tools are;
+each digest was checked against its release's checksum file, and trivy's also against its Sigstore
+bundle, when the pin was taken. trivy's database moves every few hours, so it has no pin: row 2
+downloads it (`--download-db-only`) and trivy checks the OCI manifest's digest as it pulls. The fuzzing
+image is the Dockerfile's builder, `golang:1.27.4-alpine@sha256:...`, annotated for Renovate's docker
+datasource, whose Go toolchain group moves it with go.mod's go line.
+
+**Read scopes**, each `read`, the token only in the step-level `env:` of rows 1, 5 (zizmor), 6, 7 and
+15, and never in a step that runs release code or a container: `contents` (the checkout, the latest
+release's tag, the release download), `attestations` (`gh attestation verify`, row 7), `actions`
+(scorecard's reads of the workflows' runs, row 6) and `issues` (Renovate's Dependency Dashboard, row 15).
+No `packages` scope: the image is public, and rows 7 and 8 read the registry anonymously, with
+`DOCKER_CONFIG` an empty directory of the job's own. No read needs admin: scorecard's `Branch-Protection`
+and `Webhooks` checks are left out of its run (`scorecard-admin`, "not run (needs admin read)"), and row
+15's reads the token is refused (the secret and variable name listings at least, which need admin, and
+whatever the first run shows) are listed in `supply-chain/read-refused.txt` and the limits, "not run
+(read refused)". The scopes are confirmed on the first run (runbook step 8): a read refused that a
+scope above should allow is a finding, and a scope no read used is dropped.
+
+**The rows.**
+
+- **Row 6**: the scorecard CLI, not its action, so nothing is published and no `id-token` is asked for;
+  its checks but the two admin ones, `--format json --show-details`, with the job's token as `GH_TOKEN`.
+- **Row 7**: `gh release download` of the recorded tag; `sha256sum --check --strict` of `checksums.txt`
+  and a comparison of the files it lists with the release's (a file outside the list is data too);
+  `gh attestation verify` of every release file, `checksums.txt` included, bound to `release.yml` at
+  `refs/tags/<tag>` with `--deny-self-hosted-runners`; the tag's and `latest`'s digests from the registry
+  (`docker buildx imagetools inspect`), a digest of any other shape recorded as none; `cosign verify` of
+  the image by digest and `cosign verify-attestation` of its SLSA provenance (`slsaprovenance1`) and its
+  SPDX SBOM (`https://spdx.dev/Document/v2.3`), keyless, with `--certificate-identity
+  https://github.com/<owner>/<name>/.github/workflows/release.yml@refs/tags/<tag>`, GitHub's OIDC issuer
+  and the `push` trigger; the SBOM itself as the predicate `gh attestation verify --format json`
+  returns, for row 10; and the latest release's tag beside both digests.
+- **Row 8**: `docker pull --platform linux/amd64` by digest, anonymous, then `docker save` for trivy.
+- **Row 9**: each archive's `shift2eu` binary unpacked alone (`tar --no-same-owner
+  --no-same-permissions`, `unzip -j`), only a regular file read, never a link, and `govulncheck
+  -mode=binary`: read, never run.
+- **Row 10**: `trivy image --input` on the saved image and `trivy sbom` on the attested SBOM, offline at
+  scan time (`--skip-db-update --skip-java-db-update --skip-check-update --offline-scan
+  --skip-version-check --disable-telemetry`).
+- **Row 11**: from `docker image inspect` (the user, the configuration) and `docker export` of a created
+  container, listed by `tar -tvf` (the shells and setuid files the filesystem holds), never by a shell in
+  it; and one start of `version` with row 13's flags, which shows the image runs with a read-only root
+  filesystem.
+- **Row 13**: below.
+- **Row 14**: below.
+- **Row 15**: the workflows' `uses:` lines, those not pinned to a 40-hex commit and their `permissions:`
+  blocks from the checkout, as text; the rulesets and each ruleset by ID (a number, or the step fails),
+  each environment's settings, branch policies and secret and variable names (names only: the API never
+  returns a value), the repository's secret and variable names, as the `release-tag` skill's step 2
+  reads them; Renovate's Dependency Dashboard and its open pull requests; and `git diff` of the
+  dependency files (`go.mod`, `go.sum`, `tools/`, `Dockerfile`, the workflows, the Claude Code pin,
+  `dev/lima.yaml`, `infra/tofu.yaml`) from the commit of the last report under `docs/security/audits/`.
+
+**The containers.** No release binary and no fuzz target runs outside a container. Every container that
+runs one has `--read-only --network none --cap-drop ALL --security-opt no-new-privileges`, no bind mount,
+no volume and no Docker socket. **Inputs reach a container one way**: `docker cp` into a container that is
+created and never started (a staging container), which `docker commit` turns into the image the run's
+container is created from. Docker refuses a `docker cp` into a container whose root filesystem is
+read-only, unless the path is a volume, and a volume is a mount, so the copy cannot go into the run's
+container itself; the staging container never runs, so nothing in it can change what was copied. **Results
+leave one way**: on the run's stdout and stderr, from `docker start --attach`, under a `timeout` after
+which the container is killed and removed.
+
+- **Row 13, the CLI on hostile inventory files.** The corpus is committed under
+  **`.github/security-audit/testdata/hostile-inventories/`**: a `testdata` directory, so `test/examples`'
+  sanitisation check holds it to CLAUDE.md rule 2. Its files are terminal escape sequences, path-like and
+  shell-like names, markup injection, Unicode tricks, a relations graph with cycles and a duplicate ID,
+  extreme and overflowing numbers, and one schema confusion each (duplicate and escaped keys, a string and
+  a fractional version, a version 2 key in version 1, wrong types, nulls, prototype keys, a trailing
+  document, lone surrogates, unknown values). The step generates what no committed text file holds: a
+  file one byte over the 10 MiB cap, one resource over the 50 000 cap, arrays nested 100 000 deep, a
+  1 MiB ID, malformed UTF-8, a byte order mark, a NUL byte, an empty file, a directory, and links to
+  `/proc/self/environ`, `/dev/zero`, `/dev/urandom`, a missing file and themselves. Each file runs as
+  `assess --inventory <file> --target all`, as Markdown and as JSON, in a container of its own from the
+  release image (by the digest row 7 resolved) with `--memory 512m --pids-limit 64` too. **No tmpfs**:
+  the CLI writes nothing but its stdout and stderr.
+- **Row 14, fuzzing.** The targets are found by reading the tracked `*_test.go` files outside `testdata`
+  as text (`^func Fuzz...(`): nothing is built or run to list them. Each target runs `go test -run '^$'
+  -fuzz '^<name>$' -fuzztime 10m` in a container of its own from the pinned Go image, with
+  `GOFLAGS=-mod=readonly`, `GOPROXY=off` and `GOTOOLCHAIN=local`, as user 65534, the tree at the audited
+  commit (`git archive`) and the module cache row 2's download filled copied in through the staging
+  container. **Its one tmpfs**, `/scratch` (`rw,exec,nosuid,size=4g,mode=1777`), is needed because `go
+  test -fuzz` writes: a crash input into the package's `testdata/fuzz/`, so the tree is copied there
+  first, the build cache (`GOCACHE`) and the test binaries it builds and runs (`GOTMPDIR`, hence `exec`).
+  The crash inputs leave on stdout as a tar stream, the log on stderr. *Decision 5 said no target exists
+  yet; `internal/adapter/report/htmlreport`'s `FuzzReportEscaping` does, so the first run fuzzes it.*
+
+**To be checked on the first run** (runbook step 8), besides 5b's list: that cosign v3's
+`verify-attestation` reads the attestations `actions/attest` pushed as OCI referrers (`gh attestation
+verify` reads them, as `release.yml`'s `verify` job shows); that scorecard reads with these scopes and
+which row 15 reads are refused; that trivy runs offline with these flags; that `docker commit` keeps the
+release image's user, working directory and entry point; and that `go test -fuzz` builds offline from
+the copied module cache without writing to it.
 
 ## Alternatives considered
 

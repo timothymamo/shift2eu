@@ -2597,7 +2597,10 @@ grep -nwE 'schedule|cron' <a scratch file>
 ```
 
 **8. Start the first run** (`workflow_dispatch` on `main`). Read its report PR and advisories. Then merge
-the report, then milestone 3's schedule.
+the report, then milestone 3's schedule. On the first run, read the report's Coverage and Limits against
+ADR 0040's two "To be checked on the first run" lists (PRs 5b and 5c): every check but `scorecard-admin`
+should read "run" or "findings", and a read the checks job's token was refused (Limits, "read refused")
+that one of its four read scopes should allow is a finding to fix before the schedule.
 
 ```bash
 # Mac (admin), as yourself: the newest dispatched run before the dispatch, the <previous id>, then the dispatch
