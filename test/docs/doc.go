@@ -32,7 +32,10 @@
 //     "Signal only what you started (CLAUDE.md rule N)", with the number N the
 //     rules list gives that rule, so a renumbered rule cannot leave a pointer
 //     behind (issue #465: a unit's coder SIGTERMed the process group of a
-//     `make` it found by name, possibly another unit's run).
+//     `make` it found by name, possibly another unit's run);
+//   - docs/site-runbook.md's R5 stops on both forms of the bucket's
+//     AccessDenied, the S3 API's XML body and the website endpoint's HTML page,
+//     and its outcome items name which read rule a 200 means (issue #535).
 //
 // make test, and so make check, run it. The link checker is
 // test/internal/mdlink.

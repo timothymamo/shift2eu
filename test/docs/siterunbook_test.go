@@ -1,10 +1,11 @@
 // Pins issue #535: on the maintainer's first R5 run the bucket answered its AccessDenied in the HTML form a bucket's
-// website endpoint returns ("Code: AccessDenied"), and docs/site-runbook.md knew only the S3 API's XML form
+// website endpoint returns ("<li>Code: AccessDenied</li>"), and docs/site-runbook.md knew only the S3 API's XML form
 // ("<Code>AccessDenied</Code>"), so it took a definite answer for "still provisioning" and would have retried for
 // thirty minutes. The section is checked as text, from its heading up to the next top-level heading: the retry loop
-// stops on either form, a comment names both, the line that prints an attempt does not use head (with two files head
-// prints "==> file <==" headers into the output), and the PASS comments say which read rule a 200 means - public_read
-// false, and the recorded fallback under public_read true.
+// stops on either form, matched on the markup each form answers with, the lines that print an attempt and the body
+// cut unprintable bytes (a redirect's or a binary body's would otherwise reach the terminal and the report) and never
+// use head (with two files head prints "==> file <==" headers into the output), and each outcome item says which read
+// rule a 200 means - public_read false, and the recorded fallback under public_read true.
 package docs_test
 
 import (
@@ -21,12 +22,12 @@ const (
 	readRuleHeading = "## R5. The read rule and the origins"
 )
 
-// runbookCheck is one pin on the section's text: the items the check reads (a line, or a comment block whose
-// consecutive comment lines are joined), the substrings at least one of them must carry, and the substrings none of
-// them may carry.
+// runbookCheck is one pin on the section's text: the items the check reads (a line, a comment block whose
+// consecutive comment lines are joined, or an outcome item), the substrings at least one of them must carry, and the
+// substrings none of them may carry.
 type runbookCheck struct {
 	name     string                  // the subtest's name
-	reads    func([]string) []string // the lines or comment blocks the check reads of the section
+	reads    func([]string) []string // the lines, comment blocks or outcome items the check reads of the section
 	want     []string                // substrings one read item must carry
 	absent   []string                // substrings no read item may carry
 	expected string                  // what the section must say, for the failure message
@@ -34,7 +35,7 @@ type runbookCheck struct {
 
 // TestSiteRunbookReadRuleStopsOnBothAccessDeniedForms pins issue #535 on docs/site-runbook.md's R5: the bucket's
 // AccessDenied counts as the answer in both the S3 API's XML form and the HTML form its website endpoint returns, so
-// the retry loop breaks on the first try that gets one, and the outcome comments say which read rule a 200 means.
+// the retry loop breaks on the first try that gets one, and each outcome item says which read rule a 200 means.
 func TestSiteRunbookReadRuleStopsOnBothAccessDeniedForms(t *testing.T) {
 	t.Parallel()
 
@@ -44,8 +45,8 @@ func TestSiteRunbookReadRuleStopsOnBothAccessDeniedForms(t *testing.T) {
 		{
 			name:     "the loop's break line matches both AccessDenied forms",
 			reads:    func(section []string) []string { return runbookLinesStartingWith(section, `[ "$C" = 403 ]`) },
-			want:     []string{"-e '<Code>AccessDenied</Code>'", "-e 'Code: AccessDenied'"},
-			expected: "the retry loop's break line must grep for both forms, `grep -q -e '<Code>AccessDenied</Code>' -e 'Code: AccessDenied'`: the S3 API answers an XML body, the website endpoint the bucket's HTML page (issue #535)",
+			want:     []string{`-e '<Code>AccessDenied</Code>'`, `-e '<li>Code: AccessDenied</li>'`},
+			expected: "the retry loop's break line must grep for both forms, `grep -q -e '<Code>AccessDenied</Code>' -e '<li>Code: AccessDenied</li>'`: the S3 API answers an XML body, the website endpoint the bucket's HTML page, whose markup carries the code in a list item (issue #535)",
 		},
 		{
 			name:     "a comment names the website endpoint's HTML form",
@@ -54,22 +55,29 @@ func TestSiteRunbookReadRuleStopsOnBothAccessDeniedForms(t *testing.T) {
 			expected: "a comment of the section must name the second form, `Code: AccessDenied`, and say that it is the bucket's website endpoint that returns it (issue #535)",
 		},
 		{
-			name:     "the try line prints the error and the body without head's file headers",
+			name:     "the try line prints only printable bytes, one line, without head's file headers",
 			reads:    func(section []string) []string { return runbookLinesContaining(section, `echo "try $i:`) },
+			want:     []string{`LC_ALL=C tr -c '[:print:]' ' '`, "cut -c1-200"},
 			absent:   []string{"head "},
-			expected: "the line that prints an attempt must not use head: with the error and the body as its two files, head prints `==> <file> <==` headers into the output, so print them another way (issue #535)",
+			expected: "the line that prints an attempt must print only printable bytes, truncated, and must not use head: with the error and the body as its two files, head prints `==> <file> <==` headers into the output, so `LC_ALL=C tr -c '[:print:]' ' ' | cut -c1-200` them (issue #535)",
 		},
 		{
-			name:     "the PASS 200 comment keeps public_read false",
-			reads:    func(section []string) []string { return runbookCommentBlocksContaining(section, "PASS 200") },
-			want:     []string{"public_read false"},
-			expected: "the comment for a 200 must say it means Edge Services reads the private objects, so keep public_read false (issue #535)",
+			name:     "the body line prints only printable bytes",
+			reads:    func(section []string) []string { return runbookLinesContaining(section, `echo "status $C"`) },
+			want:     []string{`LC_ALL=C tr -c '[:print:]\n' ' '`},
+			expected: "the line after the loop that prints status, headers and body must cut unprintable bytes with `LC_ALL=C tr -c '[:print:]\\n' ' '`, keeping a redirect's or a binary body's bytes out of the terminal and the report (issue #535)",
 		},
 		{
-			name:     "a comment names the 200 under public_read true as the recorded fallback",
-			reads:    func(section []string) []string { return runbookCommentBlocksContaining(section, "public_read true") },
-			want:     []string{"fallback"},
-			expected: "a comment must say that a 200 under public_read true is the recorded fallback, so a maintainer who set public_read = true knows which read rule they are passing (issue #535)",
+			name:     "the PASS 200 outcome item keeps public_read false",
+			reads:    runbookOutcomeItems,
+			want:     []string{"PASS 200 with public_read false", "keep public_read false"},
+			expected: "the outcome item for a 200 with public_read false must say it means Edge Services reads the private objects, so keep public_read false (issue #535)",
+		},
+		{
+			name:     "a PASS 200 outcome item names the 200 under public_read true as the recorded fallback",
+			reads:    runbookOutcomeItems,
+			want:     []string{"PASS 200 with public_read true", "fallback"},
+			expected: "the outcome item for a 200 with public_read true must say it is the recorded fallback, so a maintainer who set public_read = true knows which read rule they are passing (issue #535)",
 		},
 	}
 
@@ -213,9 +221,62 @@ func runbookCommentBlocks(section []string) []string {
 	return blocks
 }
 
-// runbookCommentBlocksContaining returns the section's comment blocks that contain substring.
-func runbookCommentBlocksContaining(section []string, substring string) []string {
-	return slices.DeleteFunc(runbookCommentBlocks(section), func(block string) bool {
-		return !strings.Contains(block, substring)
-	})
+// runbookOutcomeItems returns the section's outcome items: each comment line that opens an outcome (# PASS, # FAIL or
+// # 403) joined by a space with the indented comment lines that continue it. A runbook's outcome block states one
+// outcome per item, so a rule an item states is read there, not in the comments around it.
+func runbookOutcomeItems(section []string) []string {
+	var (
+		items []string
+		item  []string
+	)
+
+	flush := func() {
+		if len(item) > 0 {
+			items = append(items, strings.Join(item, " "))
+			item = nil
+		}
+	}
+
+	for _, line := range section {
+		trimmed := strings.TrimSpace(line)
+
+		switch {
+		case runbookOpensOutcome(trimmed):
+			flush()
+
+			item = append(item, trimmed)
+		case len(item) > 0 && runbookContinuesOutcome(line):
+			item = append(item, trimmed)
+		default:
+			flush()
+		}
+	}
+
+	flush()
+
+	return items
+}
+
+// runbookOpensOutcome reports whether the trimmed comment line starts an outcome item.
+func runbookOpensOutcome(trimmed string) bool {
+	for _, prefix := range []string{"# PASS", "# FAIL", "# 403"} {
+		if strings.HasPrefix(trimmed, prefix) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// runbookContinuesOutcome reports whether line continues the outcome item above it: a comment line whose marker is
+// followed by more than one space (`#   ...`).
+func runbookContinuesOutcome(line string) bool {
+	trimmed := strings.TrimLeft(line, " \t")
+	if !strings.HasPrefix(trimmed, "#") {
+		return false
+	}
+
+	rest := strings.TrimPrefix(trimmed, "#")
+
+	return strings.HasPrefix(rest, "  ") && strings.TrimSpace(rest) != ""
 }
