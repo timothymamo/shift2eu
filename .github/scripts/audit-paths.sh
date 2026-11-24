@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # The required path check of PRD #175 milestone 2 (ADR 0040), run by .github/workflows/audit-paths.yml as
-# the job "Audit report paths", which the audit-paths ruleset on main requires (the PRD's runbook step 5).
+# the job "Audit report paths", which the audit-paths ruleset on main requires (docs/dev-environment.md,
+# The scheduled security audit, step 5).
 #
 # The audit App, shift2eu-audit[bot], opens docs-only pull requests that add
 # docs/security/audits/YYYY-MM-DD-<run_id>.md. Its token holds contents write, which cannot be narrowed to
