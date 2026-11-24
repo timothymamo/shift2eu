@@ -166,7 +166,45 @@ jobs:
         run: |
           go mod tidy -diff
           go -C tools mod tidy -diff
+      # Node for TestPiEnvDenyExtensionLoads (issue #548, ADR 0044), which loads pi's deny extension with
+      # Node's own type stripping, a stricter stand-in for pi's jiti loader: a top level that throws fails
+      # both. It is the one release the VM installs for pi, read from dev/lima.yaml's nodeVersion, so the
+      # Renovate comment there stays its only pin; release.yml's Test job reads it the same way, and
+      # pienvdenyload_test.go's piNodeVersionPin parses the same line (the strict X.Y.Z check below fails
+      # if the line's form ever drifts from the sed's two spaces and double quotes). setup-node installs
+      # that exact version, checked only by TLS to its download host, unlike the VM's SHASUMS256 check:
+      # accepted for a binary that only runs a test, in a job whose token is contents: read. Its cache
+      # stays off, as no package manager runs here. test/architecture/citestnode_test.go
+      # (TestCITestJobPinsTheNodeTheExtensionLoadRuns) holds these steps exactly and refuses an edit that
+      # drops or loosens them, as test/architecture/internal/check/releaseworkflow.go holds release.yml's.
+      - name: The Node release dev/lima.yaml pins
+        id: node
+        run: |
+          set -euo pipefail
+          version="$(sed -nE 's/^  nodeVersion: "([^"]*)"$/\1/p' dev/lima.yaml)"
+          if ! [[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error file=dev/lima.yaml::nodeVersion is not one release like 1.2.3: '${version}'"
+            exit 1
+          fi
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ steps.node.outputs.version }}
+          package-manager-cache: false
+      - name: The node on the PATH is the pinned one
+        env:
+          NODE_VERSION: ${{ steps.node.outputs.version }}
+        run: |
+          set -euo pipefail
+          if [ "$(node --version)" != "v${NODE_VERSION}" ]; then
+            echo "::error file=.github/workflows/ci.yml::node on the PATH is $(node --version), want v${NODE_VERSION}"
+            exit 1
+          fi
+      # SHIFT2EU_REQUIRE_NODE=1: TestPiEnvDenyExtensionLoads fails rather than skips when node is missing
+      # or cannot strip types.
       - name: Unit and contract tests
+        env:
+          SHIFT2EU_REQUIRE_NODE: "1"
         run: make cover
       - name: Build
         run: make build

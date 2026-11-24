@@ -60,7 +60,36 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false # see the comment on the goreleaser job
+      # Node for TestPiEnvDenyExtensionLoads (issue #548, ADR 0044), as ci.yml's Test job sets it up and
+      # says why: dev/lima.yaml's nodeVersion, exactly, checked only by TLS, no cache.
+      - name: The Node release dev/lima.yaml pins
+        id: node
+        run: |
+          set -euo pipefail
+          version="$(sed -nE 's/^  nodeVersion: "([^"]*)"$/\1/p' dev/lima.yaml)"
+          if ! [[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error file=dev/lima.yaml::nodeVersion is not one release like 1.2.3: '${version}'"
+            exit 1
+          fi
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ steps.node.outputs.version }}
+          package-manager-cache: false
+      - name: The node on the PATH is the pinned one
+        env:
+          NODE_VERSION: ${{ steps.node.outputs.version }}
+        run: |
+          set -euo pipefail
+          if [ "$(node --version)" != "v${NODE_VERSION}" ]; then
+            echo "::error file=.github/workflows/release.yml::node on the PATH is $(node --version), want v${NODE_VERSION}"
+            exit 1
+          fi
+      # SHIFT2EU_REQUIRE_NODE=1: TestPiEnvDenyExtensionLoads fails rather than skips when node is missing
+      # or cannot strip types.
       - name: Test
+        env:
+          SHIFT2EU_REQUIRE_NODE: "1"
         run: make test
 
   # Decides, once per run, whether the tag is the highest release tag on main:
