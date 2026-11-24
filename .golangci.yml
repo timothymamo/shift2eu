@@ -2723,9 +2723,12 @@ linters:
         # ai-reviewer-is-standard-library); the library's one process is the
         # Claude Code CLI, started with an explicit environment through
         # os/exec. The writes are tests-no-process-state's,
-        # which holds here too. Scope: every file under ci/aireview/, _test.go
-        # files included; its exclusion rule drops it everywhere else.
-        - pattern: '^os\.(?:Getenv|ExpandEnv|Environ|StartProcess|UserHomeDir|UserConfigDir|UserCacheDir|TempDir)$'
+        # which holds here too. os.Expand reads no variable by itself, but a
+        # mapping of os.Getenv makes it os.ExpandEnv, so every env group that
+        # names it refuses it alike (issue #516). Scope: every file under
+        # ci/aireview/, _test.go files included; its exclusion rule drops it
+        # everywhere else.
+        - pattern: '^os\.(?:Getenv|ExpandEnv|Expand|Environ|StartProcess|UserHomeDir|UserConfigDir|UserCacheDir|TempDir)$'
           pkg: '^os$'
           msg: 'ai-reviewer-env: the AI reviewer reads no environment variable but through the os.LookupEnv main.go passes to review.SettingsFromEnv, locates no home, config, cache or temp directory and starts no process (ADR 0033, CLAUDE.md rule 3)'
         - pattern: '^os\.LookupEnv$'
@@ -2815,10 +2818,12 @@ linters:
         # variables ADR 0040 names and no other. Everything else is refused:
         # another way to read a variable or the whole environment, a process
         # start through os, and the lookups of a home, config, cache or temp
-        # directory. depguard keeps os/exec, net and syscall out of it
-        # (audit-main). Scope: every file under ci/auditrun/, _test.go files
-        # included; its exclusion rule drops it everywhere else.
-        - pattern: '^os\.(?:Getenv|ExpandEnv|Environ|StartProcess|UserHomeDir|UserConfigDir|UserCacheDir|TempDir)$'
+        # directory. os.Expand is refused with them, as in every env group
+        # that names it (issue #516). depguard keeps os/exec, net and syscall
+        # out of it (audit-main). Scope: every file under ci/auditrun/,
+        # _test.go files included; its exclusion rule drops it everywhere
+        # else.
+        - pattern: '^os\.(?:Getenv|ExpandEnv|Expand|Environ|StartProcess|UserHomeDir|UserConfigDir|UserCacheDir|TempDir)$'
           pkg: '^os$'
           msg: 'audit-run-env: the audit launcher reads no environment variable but through the os.LookupEnv main.go passes to run, locates no home, config, cache or temp directory and starts no process (ADR 0040, CLAUDE.md rule 3)'
         - pattern: '^os\.LookupEnv$'
@@ -2840,15 +2845,21 @@ linters:
         # step's environment through one call only, the os.LookupEnv
         # ci/auditpublish/main.go passes to run, which reads the variables ADR
         # 0040 names and no other. Everything else is refused: another way to
-        # read a variable or the whole environment, a process start through
-        # os, and the lookups of a home, config, cache or temp directory.
-        # depguard keeps os/exec, net and syscall out of it
-        # (audit-publish-main). Scope: the files of ci/auditpublish/ outside
-        # its internal/ tree, _test.go files included; its exclusion rules
-        # drop it everywhere else.
-        - pattern: '^os\.(?:Getenv|ExpandEnv|Environ|StartProcess|UserHomeDir|UserConfigDir|UserCacheDir|TempDir)$'
+        # read a variable or the whole environment (os.Expand with them, as
+        # in every env group that names it), a process start through os, the
+        # lookups of a home, config, cache or temp directory, and a temp file
+        # made in TMPDIR through os.CreateTemp (issue #516). depguard keeps
+        # os/exec, net and syscall out of it (audit-publish-main); its own
+        # entry refuses exec.Cmd.Environ besides, the one call of a command
+        # that reads the whole environment. Scope: the files of
+        # ci/auditpublish/ outside its internal/ tree, _test.go files
+        # included; its exclusion rules drop it everywhere else.
+        - pattern: '^os\.(?:Getenv|ExpandEnv|Expand|Environ|StartProcess|UserHomeDir|UserConfigDir|UserCacheDir|TempDir|CreateTemp)$'
           pkg: '^os$'
-          msg: 'audit-publish-main-env: the audit publish entry point reads no environment variable but through the os.LookupEnv main.go passes to run, locates no home, config, cache or temp directory and starts no process (ADR 0040, CLAUDE.md rule 3)'
+          msg: 'audit-publish-main-env: the audit publish entry point reads no environment variable but through the os.LookupEnv main.go passes to run, locates no home, config, cache or temp directory, makes no temp file in TMPDIR and starts no process (ADR 0040, CLAUDE.md rule 3)'
+        - pattern: '^exec\.Cmd\.Environ$'
+          pkg: '^os/exec$'
+          msg: 'audit-publish-main-env: the audit publish entry point hands no child the whole environment of its process, where the token lives (ADR 0040, CLAUDE.md rule 3)'
         - pattern: '^os\.LookupEnv$'
           pkg: '^os$'
           msg: 'audit-publish-main-env: os.LookupEnv is used in ci/auditpublish/main.go only, passed to run (ADR 0040); a test passes a lookup function of its own'
@@ -2858,12 +2869,15 @@ linters:
         # run's values reach it in its Config, and it builds gh's and
         # gitleaks' environments itself. os.Environ has an entry of its own,
         # because the fakes of its tests record the environment they were
-        # started with, in fake_test.go alone. It starts gh and gitleaks by
-        # absolute path through exec.CommandContext only. Scope: every file
-        # under ci/auditpublish/internal/github/, _test.go files included.
-        - pattern: '^os\.(?:Getenv|LookupEnv|ExpandEnv|Expand|UserHomeDir|UserConfigDir|UserCacheDir|TempDir|StartProcess)$'
+        # started with, in fake_test.go alone. Its temp files are made in the
+        # directory its Config names, which checkTempDir checks first, never
+        # through os.CreateTemp, which defaults to TMPDIR (issue #516). It
+        # starts gh and gitleaks by absolute path through exec.CommandContext
+        # only, each with an explicit cmd.Env. Scope: every file under
+        # ci/auditpublish/internal/github/, _test.go files included.
+        - pattern: '^os\.(?:Getenv|LookupEnv|ExpandEnv|Expand|UserHomeDir|UserConfigDir|UserCacheDir|TempDir|CreateTemp|StartProcess)$'
           pkg: '^os$'
-          msg: 'audit-publish-github-env: the audit publish library reads no environment variable, locates no home, config, cache or temp directory and starts no process through os; ci/auditpublish passes it what it needs (ADR 0040, CLAUDE.md rule 3)'
+          msg: 'audit-publish-github-env: the audit publish library reads no environment variable, locates no home, config, cache or temp directory, makes no temp file in TMPDIR and starts no process through os; ci/auditpublish passes it what it needs (ADR 0040, CLAUDE.md rule 3)'
         - pattern: '^os\.Environ$'
           pkg: '^os$'
           msg: 'audit-publish-github-env: os.Environ is used in fake_test.go only, where the fake gh and gitleaks record the environment the library gave them (ADR 0040)'
@@ -2874,6 +2888,13 @@ linters:
         - pattern: '^exec\.(?:Command|LookPath)$'
           pkg: '^os/exec$'
           msg: 'audit-publish-github-env: the audit publish library starts gh and gitleaks by absolute path with exec.CommandContext, so a deadline or a cancellation reaches them, and looks up no program through PATH (ADR 0040)'
+        # exec.Cmd.Environ reads the whole environment of the process, the
+        # one thing an explicit cmd.Env keeps from gh and gitleaks. Its entry
+        # is not the os.Environ exception's, so fake_test.go may not call it
+        # either.
+        - pattern: '^exec\.Cmd\.Environ$'
+          pkg: '^os/exec$'
+          msg: 'audit-publish-github-env: the audit publish library hands gh and gitleaks the environment it builds in cmd.Env, never the whole environment of its process (ADR 0040, CLAUDE.md rule 3)'
         # Group site-deploy-env (PRD #297 milestone 3): the site's deploy
         # program reads the step's environment through one call only, the
         # os.LookupEnv ci/sitedeploy/main.go passes to environment, which reads
@@ -2886,9 +2907,11 @@ linters:
         # _test.go files included; its exclusion rule drops it everywhere else.
         # The library's test that builds the real bundle (livepage_test.go)
         # runs go run ./ci/sitebuild through os/exec on purpose, with the
-        # environment from cmd.Environ(); the group still bans the os calls it
-        # names there too.
-        - pattern: '^os\.(?:Getenv|ExpandEnv|Environ|StartProcess|UserHomeDir|UserConfigDir|UserCacheDir|TempDir)$'
+        # environment from cmd.Environ(), so this group, unlike the audit
+        # publish groups, does not refuse exec.Cmd.Environ; it still bans the
+        # os calls it names there too. os.Expand is refused with them, as in
+        # every env group that names it (issue #516).
+        - pattern: '^os\.(?:Getenv|ExpandEnv|Expand|Environ|StartProcess|UserHomeDir|UserConfigDir|UserCacheDir|TempDir)$'
           pkg: '^os$'
           msg: 'site-deploy-env: the site deploy program reads no environment variable but through the os.LookupEnv main.go passes to environment, locates no home, config, cache or temp directory and starts no process (PRD #297, CLAUDE.md rule 3)'
         - pattern: '^os\.LookupEnv$'

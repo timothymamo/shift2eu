@@ -46,15 +46,10 @@ func TestNoTrackedFileSpellsTheInlineAllowComment(t *testing.T) {
 
 		scanned = append(scanned, rel)
 
-		lower := strings.ToLower(string(src))
-
-		i := strings.Index(lower, marker)
-		if i < 0 {
-			continue
+		for _, line := range inlineAllowLines(string(src), marker) {
+			t.Errorf("%s:%d holds gitleaks' inline allow comment; build the marker in code (\"gitleaks\" + \":allow\") instead, so that a model reading this repository cannot quote the line and refuse the audit's own run (PRD #175, ADR 0040)",
+				rel, line)
 		}
-
-		t.Errorf("%s:%d holds gitleaks' inline allow comment; build the marker in code (\"gitleaks\" + \":allow\") instead, so that a model reading this repository cannot quote the line and refuse the audit's own run (PRD #175, ADR 0040)",
-			rel, strings.Count(lower[:i], "\n")+1)
 	}
 
 	// Guard the walk itself: a scan of nothing, or one that stopped reading the
@@ -141,14 +136,26 @@ func TestInlineAllowLines(t *testing.T) {
 // inlineAllowLines returns the 1-based line number of every occurrence of marker
 // in src, in order and one entry per occurrence, ignoring letter case: src is
 // lower-cased before the search and marker is given lower case.
-//
-// STUB, for the coder to replace (issue #516): the walk of
-// TestNoTrackedFileSpellsTheInlineAllowComment reports through this function, so
-// it lives here, beside the table that pins it, and returns nothing yet so that
-// the rest of test/lint compiles and TestInlineAllowLines fails for the right
-// reason.
+// The walk of TestNoTrackedFileSpellsTheInlineAllowComment reports through it
+// (issue #516). Lower-casing keeps every newline, so a line number counted in the
+// lower-cased text is the line of the original.
 func inlineAllowLines(src, marker string) []int {
-	_, _ = src, marker
+	lower := strings.ToLower(src)
 
-	return nil
+	var lines []int
+
+	line, offset := 1, 0
+
+	for {
+		i := strings.Index(lower[offset:], marker)
+		if i < 0 {
+			return lines
+		}
+
+		// The marker holds no newline, so the line one occurrence ends on is
+		// the line it starts on, and the count goes on from there.
+		line += strings.Count(lower[offset:offset+i], "\n")
+		lines = append(lines, line)
+		offset += i + len(marker)
+	}
 }
