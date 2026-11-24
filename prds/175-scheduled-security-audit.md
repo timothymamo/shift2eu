@@ -664,7 +664,7 @@ An agent cannot do these steps. Each one is safe to stop at; the workflow is rol
    `credits_detailed`, `collaborating_users` and `collaborating_teams` as nullable arrays, and the publish
    program's advisory listing fails closed (exit 8) on a null or missing one, so a `null` for "none" would
    stop every run with exit 8 once any advisory exists. Run
-   `gh api 'repos/<owner>/<repo>/security-advisories' --jq '.[] | [.credits, .credits_detailed, .collaborating_users, .collaborating_teams] | map(type)'`.
+   `gh api --paginate 'repos/<owner>/<repo>/security-advisories' --jq '.[] | [.credits, .credits_detailed, .collaborating_users, .collaborating_teams] | map(type)'`.
    Check: it prints only `"array"` entries. If it prints `"null"`, stop and file an issue before the
    schedule runs; whether the decoder changes is the maintainer's decision.
 4. **Create the `security-audit/**` branch ruleset**: only the audit App, as its one bypass actor, may
