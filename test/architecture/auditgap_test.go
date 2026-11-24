@@ -1234,6 +1234,16 @@ on:
 			workflow: "on: # c\u2029  workflow_dispatch:\u2029  schedule:\u2029    - cron: '0 1 1 1 1'\njobs: {}\n",
 			want:     true,
 		},
+		{
+			name:     "a paragraph separator line break in a comment below the on key",
+			workflow: "on:\n  workflow_dispatch:\n  # c\u2029  schedule:\u2029    - cron: '0 1 1 1 1'\njobs: {}\n",
+			want:     true,
+		},
+		{
+			name:     "a paragraph separator line break in a root comment",
+			workflow: "# c\u2029on:\u2029  schedule:\u2029    - cron: '0 1 1 1 1'\n",
+			want:     true,
+		},
 	}
 
 	for _, tc := range tests {
