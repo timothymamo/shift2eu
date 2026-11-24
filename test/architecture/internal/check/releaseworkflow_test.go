@@ -70,7 +70,8 @@ const testJobHead = `  test:
 
 // testStepTemplates are the test job's steps: the whole history with every branch, the
 // guard that the tagged commit is on main (ADR 0015), setup-go without the
-// Actions cache, and make test.
+// Actions cache, the Node release dev/lima.yaml pins, set up and checked
+// (issue #548), and make test with SHIFT2EU_REQUIRE_NODE=1.
 var testStepTemplates = []string{
 	`      # The whole history, with every branch: the guard below needs origin/main.
       - uses: {{pin actions/checkout}}
@@ -96,7 +97,39 @@ var testStepTemplates = []string{
           go-version-file: go.mod
           cache: false # see the comment on the goreleaser job
 `,
-	`      - name: Test
+	`      # Node for TestPiEnvDenyExtensionLoads (issue #548, ADR 0044), as ci.yml's Test job sets it up and
+      # says why: dev/lima.yaml's nodeVersion, exactly, checked only by TLS, no cache.
+      - name: The Node release dev/lima.yaml pins
+        id: node
+        run: |
+          set -euo pipefail
+          version="$(sed -nE 's/^  nodeVersion: "([^"]*)"$/\1/p' dev/lima.yaml)"
+          if ! [[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error file=dev/lima.yaml::nodeVersion is not one release like 1.2.3: '${version}'"
+            exit 1
+          fi
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+`,
+	`      - uses: {{pin actions/setup-node}}
+        with:
+          node-version: ${{ steps.node.outputs.version }}
+          package-manager-cache: false
+`,
+	`      - name: The node on the PATH is the pinned one
+        env:
+          NODE_VERSION: ${{ steps.node.outputs.version }}
+        run: |
+          set -euo pipefail
+          if [ "$(node --version)" != "v${NODE_VERSION}" ]; then
+            echo "::error file=.github/workflows/release.yml::node on the PATH is $(node --version), want v${NODE_VERSION}"
+            exit 1
+          fi
+`,
+	`      # SHIFT2EU_REQUIRE_NODE=1: TestPiEnvDenyExtensionLoads fails rather than skips when node is missing
+      # or cannot strip types.
+      - name: Test
+        env:
+          SHIFT2EU_REQUIRE_NODE: "1"
         run: make test
 `,
 }
@@ -1953,7 +1986,7 @@ func TestReleaseWorkflow(t *testing.T) {
 		{name: "probe: an action that sets the environment", workflow: beforeGoreleaser(`uses: example/sets-env@0123456789abcdef0123456789abcdef01234567`), wantIn: "goreleaser: steps holds 7 steps, want exactly 6"},
 		{name: "probe: a repository script", workflow: beforeGoreleaser(`run: ./scripts/prepare.sh`), wantIn: "goreleaser: steps holds 7 steps, want exactly 6"},
 		{name: "probe: make test back in the goreleaser job", workflow: beforeGoreleaser(`run: make test`), wantIn: "goreleaser: steps holds 7 steps, want exactly 6"},
-		{name: "a step added to the test job", workflow: inTestJob(`run: go env -w GOFLAGS=-x`), wantIn: "holds 5 steps, want exactly 4"},
+		{name: "a step added to the test job", workflow: inTestJob(`run: go env -w GOFLAGS=-x`), wantIn: "holds 8 steps, want exactly 7"},
 		{
 			name:     "a step replaced in the goreleaser job",
 			workflow: in("goreleaser", "      - uses: {{pin actions/setup-go}}\n        with:\n          go-version-file: go.mod\n          cache: false\n", "      - run: ./scripts/prepare.sh\n"),
@@ -1969,7 +2002,19 @@ func TestReleaseWorkflow(t *testing.T) {
 		// (ADR 0015): the second step of the test job, before anything runs
 		// repository code, and exact.
 		{name: "the test checkout without the full history", workflow: in("test", "          fetch-depth: 0\n", ""), wantIn: "fetch-depth"},
-		{name: "no guard step", workflow: steps("test", withoutStep(t, testSteps, "name: The tagged commit is on main")), wantIn: "holds 3 steps, want exactly 4"},
+		{name: "no guard step", workflow: steps("test", withoutStep(t, testSteps, "name: The tagged commit is on main")), wantIn: "holds 6 steps, want exactly 7"},
+		{name: "the tests without SHIFT2EU_REQUIRE_NODE", workflow: in("test", "        env:\n          SHIFT2EU_REQUIRE_NODE: \"1\"\n", ""), wantIn: `want make test holds no "env", want exactly name, env, run`},
+		{name: "the tests with SHIFT2EU_REQUIRE_NODE off", workflow: in("test", `SHIFT2EU_REQUIRE_NODE: "1"`, `SHIFT2EU_REQUIRE_NODE: "0"`), wantIn: `want make test: env holds ["SHIFT2EU_REQUIRE_NODE: \"0\""]`},
+		{name: "setup-node with its cache on", workflow: in("test", "          package-manager-cache: false\n", "          package-manager-cache: true\n"), wantIn: `want actions/setup-node: with: package-manager-cache is "true"`},
+		{name: "setup-node on another version", workflow: in("test", "          node-version: ${{ steps.node.outputs.version }}\n", "          node-version: lts/*\n"), wantIn: `want actions/setup-node: with: node-version is "lts/*"`},
+		{name: "setup-node pinned by tag", workflow: in("test", "{{commit actions/setup-node}}", "actions/setup-node@v7"), wantIn: `want actions/setup-node: uses is "actions/setup-node@v7"`},
+		{name: "no check of the node on the PATH", workflow: steps("test", withoutStep(t, testSteps, "name: The node on the PATH is the pinned one")), wantIn: "jobs: test: steps holds 6 steps, want exactly 7: actions/checkout, the guard that the tagged commit is on main, actions/setup-go, the read of dev/lima.yaml's nodeVersion, actions/setup-node, the check that node on the PATH is the pinned one, make test"},
+		{
+			name:     "the nodeVersion read without its X.Y.Z check",
+			workflow: in("test", `if ! [[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then`, `if [ -z "${version}" ]; then`),
+			wantIn:   "want the read of dev/lima.yaml's nodeVersion: run is",
+			wantAlso: `if [ -z \"${version}\" ]; then`,
+		},
 		{name: "the guard after setup-go", workflow: steps("test", swappedSteps(t, testSteps, "name: The tagged commit is on main", "actions/setup-go@")), wantIn: `want the guard that the tagged commit is on main holds the key "uses"`},
 		{
 			name:     "the guard without the ancestry check",
@@ -2106,7 +2151,7 @@ func TestReleaseWorkflow(t *testing.T) {
 		{name: "an extra step in the publish job", workflow: steps("publish", beforeStep(t, publishSteps, "      - name: Check the draft's assets and publish it", "run: ./scripts/prepare.sh")), wantIn: "jobs: publish: steps holds 3 steps, want exactly 2"},
 		{name: "the publish job checking the repository out again", workflow: steps("publish", beforeStep(t, publishSteps, "      - uses: actions/download-artifact@", "uses: {{pin actions/checkout}}\n        with:\n          fetch-depth: 0\n          persist-credentials: false")), wantIn: "jobs: publish: steps holds 3 steps, want exactly 2"},
 		{name: "the publish step in the goreleaser job", workflow: steps("goreleaser", beforeStep(t, goreleaserSteps, "      - uses: actions/upload-artifact@", "name: Check the draft's assets and publish it\n        run: "+publishByID)), wantIn: "jobs: goreleaser: steps holds 7 steps, want exactly 6"},
-		{name: "the publish step in the test job", workflow: inTestJob("name: Check the draft's assets and publish it\n        run: " + publishByID), wantIn: "holds 5 steps, want exactly 4"},
+		{name: "the publish step in the test job", workflow: inTestJob("name: Check the draft's assets and publish it\n        run: " + publishByID), wantIn: "holds 8 steps, want exactly 7"},
 
 		// A partial re-run (gh run rerun --failed) does not re-run the
 		// successful latest job, so a decision its first attempt made can reach
