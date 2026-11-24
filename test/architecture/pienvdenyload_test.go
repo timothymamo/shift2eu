@@ -131,15 +131,15 @@ func TestPiEnvDenyExtensionLoads(t *testing.T) {
 		t.Fatal(reason)
 	}
 
-	real := readRepositoryFile(t, piEnvDenyExtension)
+	extension := readRepositoryFile(t, piEnvDenyExtension)
 
 	// The third case loads a copy whose default export is renamed, and so has
 	// none: a replacement that no longer matches would leave that copy exporting
 	// the function and pin nothing.
 	const defaultExport = "export default function (pi: ExtensionAPI)"
 
-	noDefaultExport := bytes.Replace(real, []byte(defaultExport), []byte("function piExtension(pi: ExtensionAPI)"), 1)
-	if bytes.Equal(noDefaultExport, real) {
+	noDefaultExport := bytes.Replace(extension, []byte(defaultExport), []byte("function piExtension(pi: ExtensionAPI)"), 1)
+	if bytes.Equal(noDefaultExport, extension) {
 		t.Fatalf("%s no longer holds %q, so the case that loads a copy without a default export pins nothing: give it the extension's default export as the file writes it (issue #548)", piEnvDenyExtension, defaultExport)
 	}
 
@@ -168,7 +168,7 @@ func TestPiEnvDenyExtensionLoads(t *testing.T) {
 			// extension builds a class from code points and reads the list with
 			// `new RegExp` in the factory, so this is the shape an edit takes when
 			// it gets one of them wrong.
-			source: []byte(string(real) + "\nnew RegExp(\"(\");\n"),
+			source: []byte(string(extension) + "\nnew RegExp(\"(\");\n"),
 			want:   "Invalid regular expression",
 		},
 		{
@@ -207,7 +207,7 @@ func TestPiEnvDenyExtensionLoads(t *testing.T) {
 			}
 
 			if err == nil {
-				t.Fatalf("node loaded %s, want the load to fail: this is the copy that no longer refuses anything, so a check that loads it is a check that cannot see the extension break (issue #548)\n%s", tc.name, out)
+				t.Fatalf("%s: node loaded %s, want the load to fail: this is the copy that no longer refuses anything, so a check that loads it is a check that cannot see the extension break (issue #548)\n%s", tc.name, path, out)
 			}
 
 			if !strings.Contains(string(out), tc.want) {
