@@ -427,7 +427,8 @@ TLS stage*.
   exactly one row of the table.
 - **Headers.** The immediate `header` directive (one line per header), and `header_down` deleting the
   upstream's `Strict-Transport-Security`, `Content-Security-Policy`, `Permissions-Policy`,
-  `X-Content-Type-Options` and `Referrer-Policy`. The local run with no upstream answered Caddy's 502
+  `X-Content-Type-Options` and `Referrer-Policy`, and its `Set-Cookie` and `X-Amz-*` (the amendment
+  below). The local run with no upstream answered Caddy's 502
   with every header. `Permissions-Policy` turns off by name `accelerometer`, `ambient-light-sensor`,
   `autoplay`, `bluetooth`, `browsing-topics`, `camera`, `compute-pressure`, `display-capture`,
   `encrypted-media`, `fullscreen`, `gamepad`, `geolocation`, `gyroscope`, `hid`,
@@ -452,7 +453,7 @@ TLS stage*.
   HTTPS), the spoofed and repeated `X-Forwarded-Proto` requests, `OPTIONS *`, the digest pull (a
   container given a wrong digest must fail to start; if it starts, the registry mirror above is
   recorded here before it is taken), HTTPS on the pipeline's default endpoint with no TLS stage, and
-  that the Containers API accepts the Caddyfile (about 4.6 KiB) as `args[2]` (the provider caps an
+  that the Containers API accepts the Caddyfile (about 5.2 KiB) as `args[2]` (the provider caps an
   environment variable, not an argument; checked by R4's check 2, `front ready`). R8 records each answer
   here.
 - **Residual: the pipeline's default endpoint is a second public origin.**
@@ -470,25 +471,43 @@ TLS stage*.
 ## Amendment: the front writes nothing about a visitor to its output (PRD #297 milestone 4)
 
 2026-11-24. "No `log` directive" turns no access log on, but it does not keep Caddy quiet about visitors.
-Caddy's default logger still writes two request loggers to the container's output:
-`http.log.error`, for every request a handler fails (the 502 with no upstream, or an upstream whose
-certificate does not verify), and `http.handlers.reverse_proxy`, for a failed round trip. Each line
-holds the request's `remote_ip` and `client_ip`, its URI and its headers, `User-Agent`,
+Caddy's default logger still writes request loggers to the container's output: `http.log.error`, for
+every request a handler fails (the 502 with no upstream, or an upstream whose certificate does not
+verify), `http.handlers.reverse_proxy`, for a failed round trip, and `http.stdlib`, Go's standard
+library server log, whose `http: panic serving <remote addr>` names the client's address. The first two
+lines hold the request's `remote_ip` and `client_ip`, its URI and its headers, `User-Agent`,
 `X-Forwarded-For` and `X-Real-IP` included, and the platform ships the container's output to Cockpit.
-The review's finding, confirmed by the behaviour test on the pinned image.
+The review's finding; the `http.log.error` leak is confirmed by the behaviour test on the pinned image.
 
 - **The decision.** The Caddyfile's global options hold exactly one `log` block,
-  `log { exclude http.log.error http.handlers.reverse_proxy }`, which removes both loggers from the
-  default log. No `log` stands anywhere else (a site block's `log` turns an access log on).
+  `log { exclude http.log.error http.handlers.reverse_proxy http.stdlib }`, which removes the three
+  loggers from the default log. No `log` stands anywhere else (a site block's `log` turns an access log
+  on).
+- **Why `http.stdlib` too.** Behind the platform the remote address Go names is the platform's, not the
+  visitor's, so the line holds no visitor today; it is excluded anyway, since nothing decides that the
+  platform always stands in front, and a panic line is no startup or configuration error that R4 reads.
 - **Why the exclusion and not `log { output discard }`.** The exclusion keeps the default logger's
   other lines, Caddy's startup and its configuration errors, which hold nothing of a visitor and are
-  what a failed start in R4 is read from. `discard` would hide those too. The behaviour test
-  (`TestSiteFront/the_log_holds_no_marker`) sends a proxied 200 and a 308 carrying a marker path, a
-  marker `User-Agent` and marker `X-Forwarded-For` and `X-Real-IP` addresses, then a 502 with no
-  upstream and a 502 against an upstream whose certificate an untrusted CA signs, and reads the
-  container's whole output: no marker appears with the exclusion, so no other logger writes one and
-  `discard` is not needed. Should a later Caddy release log a request under another logger name, that
+  what a failed start in R4 is read from. `discard` would hide those too.
+- **What the behaviour test proves, and what it does not.** `TestSiteFront/the_log_holds_no_marker`
+  sends a proxied 200 and a 308 carrying a marker path, a marker `User-Agent` and marker
+  `X-Forwarded-For` and `X-Real-IP` addresses, then a 502 with no upstream and a 502 against an upstream
+  whose certificate an untrusted CA signs, and reads the container's whole output. It proves the
+  `http.log.error` leak and its fix: without that exclusion the markers appear, with it none does. Its
+  positive control is Caddy's startup line `serving initial configuration`, which must be in the log
+  read, so an empty or partial log cannot pass. The `http.handlers.reverse_proxy` and `http.stdlib`
+  exclusions are defence in depth that the test cannot prove (for these two failures neither writes a
+  marker, so a Caddyfile excluding `http.log.error` alone still passes it); they are pinned statically,
+  name by name. Should a later Caddy release log a request under another logger name, the behaviour
   test fails, and the exclusion grows or the form becomes `discard`.
 - **What holds it.** `test/sitefront`'s static test refuses a `log` outside the global options and wants
-  exactly one global `log` of one of those two shapes (`TestCaddyfileRefusedDirectives`,
-  `TestCheckGlobalLogForms`); the behaviour test proves it on the pinned image.
+  exactly one global `log` of one of two shapes, the three-name exclusion in any order or `output
+  discard` (`TestCaddyfileRefusedDirectives`, `TestCheckGlobalLogForms`); the behaviour test proves the
+  `http.log.error` fix on the pinned image.
+- **The upstream's cookie and S3 headers.** The same review pass adds `header_down -Set-Cookie` and
+  `header_down -X-Amz-*` to `reverse_proxy`: a cookie Edge Services or the bucket sets, and the store's
+  `X-Amz-Request-Id`, `X-Amz-Id-2` and `X-Amz-Meta-*`, are the platform's and the bucket's, not the
+  site's. The front sets no cookie, so no cookie reaches the visitor. The static proxy check
+  (`TestCaddyfileReverseProxy`) and the behaviour test
+  (`TestSiteFront/the_headers_against_the_upstream's_own/an_upstream_whose_headers_are_not_the_site's`)
+  hold both.

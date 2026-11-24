@@ -21,10 +21,11 @@
 	auto_https off
 	admin off
 	# The front writes nothing about a visitor to its output, which the platform ships to Cockpit: the
-	# default logger's two request loggers (a failed upstream's error, each with the client's address,
-	# the URI and the headers) are excluded; startup and configuration errors stay visible (ADR 0045).
+	# default logger's three request loggers (a failed handler's error, a failed round trip and Go's
+	# http: panic serving <remote addr>, each with the client's address) are excluded; startup and
+	# configuration errors stay visible (ADR 0045).
 	log {
-		exclude http.log.error http.handlers.reverse_proxy
+		exclude http.log.error http.handlers.reverse_proxy http.stdlib
 	}
 }
 
@@ -76,6 +77,10 @@
 				header_down -X-Content-Type-Options
 				header_down -Referrer-Policy
 				header_down -Permissions-Policy
+				# The platform's and the bucket's own headers are not the site's: no cookie reaches the
+				# visitor, nor the store's S3 headers.
+				header_down -Set-Cookie
+				header_down -X-Amz-*
 			}
 		}
 		handle @rooted {

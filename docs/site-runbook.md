@@ -153,6 +153,7 @@ curl -sS -o /dev/null -w '%{http_code} verify=%{ssl_verify_result}\n' "https://$
 # 2. The container: ready, and running the image by its digest
 scw container container list namespace-id="$NS" region="$REGION" -o json | jq -r '.[] | "\(.name) \(.status) \(.registry_image)"'   # PASS: exactly "front ready docker.io/library/caddy:<tag>@sha256:<the digest in infra/site/container.tf>"
 # FAIL "error" with an error_message, or a reference without @sha256: record it; ADR 0045's registry mirror is then the way, recorded there before it is taken
+# A failed start is read from the container's startup log (Cockpit, the container's logs; nothing of a visitor is in it, ADR 0045). Expected there, and no failure: Caddy's warning "Unnecessary header_up Host ...": the Caddyfile writes Caddy's default for an https:// upstream out on purpose
 # 3. Warm it (min_scale 0): one request, its answer discarded, its time recorded against the live check's 30 s
 curl -s -o /dev/null -w '%{http_code} %{time_total}s\n' --max-time 60 "http://$CE/"   # PASS: "308" and a time; record the time in ADR 0045's amendment
 # FAIL over 30 s: the cold start would fail the live check's first request; record it, and R8 warms the container right before every live check
