@@ -89,6 +89,10 @@ type auditStep struct {
 	// guard that names the tool and fails the step (PRD #175, "A failed run
 	// is visible").
 	guardsChecksums bool
+	// verifies is row 7's step (round E of PR 5c): each of its verifications
+	// records its outcome in one branch, a failed verification as the finding
+	// "<check> verification-failed", never as a check that did not run.
+	verifies bool
 }
 
 // auditRead is one env: or with: key and the one expression it reads.
@@ -270,11 +274,13 @@ var (
 
 	// Row 7 (review round D of PR 5c): checksums.txt is the release's, so
 	// only its well-formed lines reach sha256sum.
-	checksumFilter = command(wholeLine(`timeout 1m grep -E '^[0-9a-f]{64}  [A-Za-z0-9._+-]+$' "${rel}/checksums.txt" > "${rel}/checksums.filtered" 2> "${out}/checksums-filter.stderr" || rc=$?`),
-		`timeout 1m grep -E '^[0-9a-f]{64}  [A-Za-z0-9._+-]+$' "${rel}/checksums.txt" > "${rel}/checksums.filtered" ... || rc=$?, on a line of its own: `+
-			`only checksums.txt's well-formed lines reach sha256sum, never a /dev/zero it lists`)
-	checksumFiltered = command(regexp.QuoteMeta(`timeout 10m sha256sum --check --strict checksums.filtered)`),
-		`timeout 10m sha256sum --check --strict checksums.filtered: the release's files against checksums.txt's filtered lines alone`)
+	// The filtered list is the results directory's (round E), so neither the
+	// release's own listing nor its attestation loop ever sees it.
+	checksumFilter = command(wholeLine(`timeout 1m grep -E '^[0-9a-f]{64}  [A-Za-z0-9._+-]+$' "${rel}/checksums.txt" > "${out}/checksums.filtered" 2> "${out}/checksums-filter.stderr" || rc=$?`),
+		`timeout 1m grep -E '^[0-9a-f]{64}  [A-Za-z0-9._+-]+$' "${rel}/checksums.txt" > "${out}/checksums.filtered" ... || rc=$?, on a line of its own: `+
+			`only checksums.txt's well-formed lines reach sha256sum, never a /dev/zero it lists, and the filtered list is the results directory's, never the release's`)
+	checksumFiltered = command(regexp.QuoteMeta(`timeout 5m sha256sum --check --strict "${out}/checksums.filtered")`),
+		`timeout 5m sha256sum --check --strict "${out}/checksums.filtered": the release's files against checksums.txt's filtered lines alone`)
 
 	// Row 9: each archive's member streamed through a size cap.
 	unpackTar = command(wholeLine(`*.tar.gz) timeout 2m tar -xOzf "${archive}" shift2eu 2> "${out}/${name}.unpack.stderr" | head -c 134217728 > "${dir}/shift2eu" || rc=$? ;;`),
@@ -359,6 +365,41 @@ var (
 	// goImageDigest is row 14's Go image pin: a tag and its @sha256: digest.
 	goImageDigest = regexp.MustCompile(`^[0-9A-Za-z][0-9A-Za-z._-]*@sha256:[0-9a-f]{64}$`)
 )
+
+// The ::error lines of PRD #175's "A failed run is visible" (round E of PR
+// 5c): each step that can fail with one of the box's causes names the cause's
+// kind and the runbook step that recovers from it, and no secret and no
+// finding's detail.
+var (
+	// The hardening step's three commands record their own failure, so its
+	// branch, not set -e's own line, ends the step.
+	hardeningCommands = []auditCommand{
+		command(wholeLine(`sudo systemctl stop docker.service docker.socket || rc=$?`), `sudo systemctl stop docker.service docker.socket || rc=$?, on a line of its own`),
+		command(wholeLine(`sudo systemctl disable docker.service docker.socket || rc=$?`), `sudo systemctl disable docker.service docker.socket || rc=$?, on a line of its own`),
+		command(wholeLine(`sudo rm -f /etc/sudoers.d/runner || rc=$?`), `sudo rm -f /etc/sudoers.d/runner || rc=$?, on a line of its own`),
+	}
+	hardeningError = failureBranch(`(?m)^[ \t]*if \[ "\$\{rc\}" -ne 0 \]`, `if [ "${rc}" -ne 0 ]`,
+		"::error title=Audit model::the runner could not be hardened: see runbook step 10")
+	// The launcher prints one constant class, so an expired or revoked token,
+	// the usage limit, a failed preflight and a managed-settings path read
+	// alike here: the step's line names what the maintainer recovers from.
+	runError = failureBranch(`(?m)^[ \t]*if ! (?:ci/|"\$\{RUNNER_TEMP\}/bin/)auditrun"? -claude-tarball [^\n]*`, `if ! <auditrun> -claude-tarball ...`,
+		"::error title=Audit model::the audit did not run: see runbook step 10")
+	modelArtifactError = failureBranch(`(?m)^[ \t]*if ! (?:ci/|"\$\{RUNNER_TEMP\}/bin/)auditpublish"? artifacts -job model [^\n]*`, `if ! <auditpublish> artifacts -job model ...`,
+		"::error title=Audit model::the run's artifacts are unexpected: see runbook step 11")
+	publishArtifactError = failureBranch(`(?m)^[ \t]*if ! (?:ci/|"\$\{RUNNER_TEMP\}/bin/)auditpublish"? artifacts -job publish [^\n]*`, `if ! <auditpublish> artifacts -job publish ...`,
+		"::error title=Audit publish::the run's artifacts are unexpected: see runbook step 11")
+	publishError = failureBranch(`(?m)^[ \t]*if ! (?:ci/|"\$\{RUNNER_TEMP\}/bin/)auditpublish"? publish [^\n]*`, `if ! <auditpublish> publish ...`,
+		"::error title=Audit publish::the publish was refused: see runbook step 11")
+)
+
+// failureBranch returns the command of a step's failure branch: the if whose
+// condition cond matches, up to its ; then, an echo of exactly the ::error
+// line msg, exit 1 and fi, each on a line of its own.
+func failureBranch(cond, condText, msg string) auditCommand {
+	return command(cond+`; then\n[ \t]+`+regexp.QuoteMeta(`echo "`+msg+`"`)+`\n[ \t]+exit 1\n[ \t]*fi$`,
+		condText+`; then, echo "`+msg+`", exit 1 and fi, each on a line of its own: a failed run names the cause's kind and the runbook step that recovers from it (PRD #175, a failed run is visible)`)
+}
 
 // namesRead returns the command of one of row 15's names reads, whole on a
 // line of its own: the jq filter at its end keeps the names alone.
@@ -456,7 +497,7 @@ var auditJobs = []auditJob{
 			},
 			{
 				name: "Verify the release's files, signature and attestations", githubToken: true,
-				check: "release-integrity", budget: true,
+				check: "release-integrity", budget: true, verifies: true,
 				runs:  []auditCommand{tagRead, tagShape, checksumFilter, checksumFiltered},
 				order: []auditCommand{tagRead, tagShape, checksumFilter, checksumFiltered},
 			},
@@ -541,7 +582,7 @@ var auditJobs = []auditJob{
 			},
 			{
 				name: "List the run's artifacts and download the checks' ciphertext", githubToken: true,
-				runs:    []auditCommand{artifactsModel, artifactFile, artifactID, artifactDigest, artifactShape, artifactZip, zipDigest, zipUnpack, zipOneFile},
+				runs:    []auditCommand{artifactsModel, modelArtifactError, artifactFile, artifactID, artifactDigest, artifactShape, artifactZip, zipDigest, zipUnpack, zipOneFile},
 				refuses: []auditCommand{secondListing},
 				order:   []auditCommand{artifactsModel, artifactFile, artifactID, artifactDigest, artifactShape, artifactZip, zipDigest, zipUnpack, zipOneFile},
 			},
@@ -559,11 +600,15 @@ var auditJobs = []auditJob{
 			{name: "Copy the checkout into the audit directory", runs: []auditCommand{command(`/srv/audit/checkout`, "/srv/audit/checkout")}},
 			{
 				name: "Stop Docker and remove the runner user's sudo rule",
-				runs: []auditCommand{
+				runs: append([]auditCommand{
 					command(`systemctl stop docker`, "systemctl stop docker"),
 					command(`rm -f /etc/sudoers\.d/runner`, "rm -f /etc/sudoers.d/runner"),
 					command(`sudo -n true`, "a check that sudo -n true fails"),
-				},
+					hardeningError,
+				}, hardeningCommands...),
+				// The branch reads the three commands' recorded failure, so it
+				// comes after them.
+				order: append(append([]auditCommand{}, hardeningCommands...), hardeningError),
 			},
 			{
 				name:     "Run the audit in Claude Code's sandbox",
@@ -574,6 +619,7 @@ var auditJobs = []auditJob{
 					// The launcher writes the result bytes it checked, and only
 					// those, out of the sandbox's reach (review round 1, R1).
 					command(`auditrun"? .* -result-out "\$\{RUNNER_TEMP\}/result\.json"`, `auditrun ... -result-out "${RUNNER_TEMP}/result.json", the checked result's bytes`),
+					runError,
 				},
 			},
 			{
@@ -599,7 +645,7 @@ var auditJobs = []auditJob{
 			{name: "Download the pinned tools and verify their checksums", runs: []auditCommand{checksumCheck}, guardsChecksums: true},
 			{
 				name: "List the run's artifacts and download the model's ciphertext", githubToken: true,
-				runs:    []auditCommand{artifactsPublic, artifactFile, artifactID, artifactDigest, artifactShape, artifactZip, zipDigest, zipUnpack, zipOneFile},
+				runs:    []auditCommand{artifactsPublic, publishArtifactError, artifactFile, artifactID, artifactDigest, artifactShape, artifactZip, zipDigest, zipUnpack, zipOneFile},
 				refuses: []auditCommand{secondListing},
 				order:   []auditCommand{artifactsPublic, artifactFile, artifactID, artifactDigest, artifactShape, artifactZip, zipDigest, zipUnpack, zipOneFile},
 			},
@@ -642,7 +688,7 @@ var auditJobs = []auditJob{
 					{key: "GH_TOKEN", value: "${{ " + auditAppTokenOutput + " }}"},
 					{key: "AUDIT_FINGERPRINT_KEY", value: secretValue("AUDIT_FINGERPRINT_KEY")},
 				},
-				runs: []auditCommand{command(`auditpublish"? publish `, "auditpublish publish")},
+				runs: []auditCommand{command(`auditpublish"? publish `, "auditpublish publish"), publishError},
 			},
 		},
 	},
@@ -732,8 +778,11 @@ var auditPin = regexp.MustCompile(`^([A-Za-z0-9_.-]+/[A-Za-z0-9_./-]+)@([0-9a-f]
 // checks job's steps within its timeout), that no container is loosened past
 // its pinned flags, run, entered, or started unless created with the four
 // flags, that row 15 keeps names alone, and that every tool download's
-// checksum check is a guard that names its tool. A document it cannot read, or
-// an empty one, is refused.
+// checksum check is a guard that names its tool. Since round E it also holds
+// that row 7 records a failed verification as the finding verification-failed,
+// that every checks step's own timeouts fit its timeout-minutes, and that the
+// model and publish jobs' failures name their kind and runbook step. A document
+// it cannot read, or an empty one, is refused.
 func AuditWorkflow(src []byte) []string {
 	if strings.TrimSpace(string(src)) == "" {
 		return []string{"the audit workflow is empty, so this check cannot tell what it runs"}
@@ -1410,13 +1459,39 @@ func (a *auditReader) steps(e yamlread.Entry, path string, spec auditJob) []audi
 
 		// A script the reader cannot follow was reported by step already.
 		if run, ok := s.keys["run"]; ok {
-			if text, err := yamlread.LiteralBlock(a.r.raw, run); err == nil && modDownload.re.MatchString(text) {
+			text, err := yamlread.LiteralBlock(a.r.raw, run)
+			if err == nil && modDownload.re.MatchString(text) {
 				downloaded = true
+			}
+
+			if err == nil && spec.stepsWithinJob {
+				a.fit(withoutComments(strings.Split(text, "\n")), fmt.Sprintf("%s: step %q (line %d)", path, s.name, s.num), stepMinutes(s))
 			}
 		}
 	}
 
 	return parsed
+}
+
+// stepMinutes returns a step's timeout-minutes, 0 when it has none the reader
+// can follow (step reports that).
+func stepMinutes(s auditParsedStep) int {
+	t, ok := s.keys["timeout-minutes"]
+	if !ok {
+		return 0
+	}
+
+	v, err := yamlread.Single(t)
+	if err != nil {
+		return 0
+	}
+
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		return 0
+	}
+
+	return n
 }
 
 // stepOrder holds the job's steps to the closed list: every name on it, in its
@@ -1868,6 +1943,160 @@ func (a *auditReader) run(e yamlread.Entry, path string, want *auditStep, env []
 
 	if want.guardsChecksums {
 		a.checksumGuards(code, path)
+	}
+
+	if want.verifies {
+		a.verifications(code, path, want.check)
+	}
+}
+
+// auditVerification matches the first line of one of row 7's verifications,
+// under its timeout: the checksum check, gh attestation verify, cosign verify
+// and cosign verify-attestation.
+var auditVerification = regexp.MustCompile(`^[ \t]*(?:\(cd "\$\{rel\}" && )?timeout \S+ (sha256sum --check|gh attestation verify|cosign verify-attestation|cosign verify)\s`)
+
+// auditVerificationKinds are row 7's five verifications, each by its first
+// line: every one of them must be there, each with its outcome branch.
+var auditVerificationKinds = []auditCommand{
+	command(`sha256sum --check --strict "\$\{out\}/checksums\.filtered"`, `the checksum check (sha256sum --check --strict "${out}/checksums.filtered")`),
+	command(`gh attestation verify "\$\{file\}"`, `each release file's attestation (gh attestation verify "${file}")`),
+	command(`cosign verify "\$\{ref\}"`, `the image's signature (cosign verify "${ref}")`),
+	command(`cosign verify-attestation "\$\{ref\}"`, `the image's attestations' signatures (cosign verify-attestation "${ref}")`),
+	command(`gh attestation verify "oci://\$\{ref\}"`, `the SBOM's attestation (gh attestation verify "oci://${ref}")`),
+}
+
+// verificationOutcome returns the pattern of a verification's outcome, from
+// the line after its command to its fi: its exit recorded, then rc 124 as the
+// check timed out with its limits line, rc 1 as the finding verification-failed,
+// any other failure as the check's tool-failed, each on a line of its own.
+func verificationOutcome(check string) *regexp.Regexp {
+	q := regexp.QuoteMeta(check)
+
+	return regexp.MustCompile(`\A[ \t]*echo "\$\{rc\}" > "\$\{out\}/[^"\n]+\.exit"\n` +
+		`[ \t]*if \[ "\$\{rc\}" -eq 124 \]; then\n` +
+		`[ \t]+echo "` + q + ` timed-out" >> "\$\{results\}/not-run\.txt"\n` +
+		`[ \t]+echo "` + q + `: [^"\n]+" >> "\$\{results\}/limits\.txt"\n` +
+		`[ \t]*elif \[ "\$\{rc\}" -eq 1 \]; then\n` +
+		`[ \t]+echo "` + q + ` verification-failed" >> "\$\{results\}/verification-failed\.txt"\n` +
+		`[ \t]*elif \[ "\$\{rc\}" -ne 0 \]; then\n` +
+		`[ \t]+echo "` + q + ` tool-failed" >> "\$\{results\}/not-run\.txt"\n` +
+		`[ \t]*fi(?:\n|\z)`)
+}
+
+// verifications holds row 7's verifications to one outcome each (round E of
+// PR 5c): a checksum mismatch, a refused attestation or a refused signature
+// (rc 1) is a finding about the release, recorded as verification-failed in
+// the results, never as a check that did not run, and a timeout (rc 124) is
+// the check timed out, never a tool that failed.
+func (a *auditReader) verifications(code, path, check string) {
+	outcome := verificationOutcome(check)
+	lines := strings.Split(code, "\n")
+
+	for _, k := range auditVerificationKinds {
+		if !k.re.MatchString(code) {
+			a.r.fail("%s runs no %s: each of the release's five verifications runs, and records its outcome", path, k.want)
+		}
+	}
+
+	for i := 0; i < len(lines); i++ {
+		if !auditVerification.MatchString(lines[i]) {
+			continue
+		}
+
+		first := strings.TrimSpace(lines[i])
+
+		end := i
+		for end < len(lines)-1 && strings.HasSuffix(lines[end], `\`) {
+			end++
+		}
+
+		if !outcome.MatchString(strings.Join(lines[end+1:], "\n")) {
+			a.r.fail(`%s runs %q without its outcome branch, want right after it, each on a line of its own: echo "${rc}" > "${out}/<name>.exit", `+
+				`if [ "${rc}" -eq 124 ]; then, echo "%s timed-out" >> "${results}/not-run.txt", echo "%s: ..." >> "${results}/limits.txt", `+
+				`elif [ "${rc}" -eq 1 ]; then, echo "%s verification-failed" >> "${results}/verification-failed.txt", `+
+				`elif [ "${rc}" -ne 0 ]; then, echo "%s tool-failed" >> "${results}/not-run.txt" and fi: `+
+				`a mismatch or a refusal is a finding about the release (verification-failed), a timeout is timed-out, and neither is a tool that failed`,
+				path, first, check, check, check, check)
+		}
+
+		i = end
+	}
+}
+
+// auditStepTimeout matches one timeout <duration> of a script: whole
+// minutes (m), seconds (s) or a bare number of seconds.
+var auditStepTimeout = regexp.MustCompile(`(?:^|[\s;&|(])timeout (?:-\S+ )*([0-9]+)([sm]?)(?:\s|$)`)
+
+// auditLoopStart and auditLoopEnd are a while, until or for loop's first and
+// last lines.
+var (
+	auditLoopStart = regexp.MustCompile(`^[ \t]*(?:while|until|for)\s.*(?:;|\s)do$`)
+	auditLoopEnd   = regexp.MustCompile(`^[ \t]*done(?:\s|;|$)`)
+)
+
+// fit holds a step of a job whose steps stay within its timeout to its own
+// timeout-minutes (round E of PR 5c): the timeouts outside its loops, and its
+// loop budget, add up to less, because a step's timeout firing ends the job
+// and every later step of it, the encrypt step included, is skipped. A loop's
+// own timeouts are bounded by its budget, which counts in their place.
+func (a *auditReader) fit(code, path string, minutes int) {
+	if minutes <= 0 {
+		return
+	}
+
+	depth, seconds := 0, 0
+
+	var parts []string
+
+	for _, line := range logicalLines(code) {
+		if auditLoopEnd.MatchString(line) && depth > 0 {
+			depth--
+
+			continue
+		}
+
+		if auditLoopStart.MatchString(line) {
+			depth++
+
+			continue
+		}
+
+		if depth > 0 {
+			continue
+		}
+
+		for _, m := range auditStepTimeout.FindAllStringSubmatch(line, -1) {
+			n, err := strconv.Atoi(m[1])
+			if err != nil {
+				continue
+			}
+
+			if m[2] == "m" {
+				n *= 60
+			}
+
+			seconds += n
+			parts = append(parts, "timeout "+m[1]+m[2])
+		}
+	}
+
+	budget := 0
+
+	for _, m := range auditBudget.FindAllStringSubmatch(code, -1) {
+		if n, err := strconv.Atoi(m[1]); err == nil && n > budget {
+			budget = n
+		}
+	}
+
+	if budget > 0 {
+		seconds += budget
+		parts = append(parts, fmt.Sprintf(`the loop budget of %d seconds (if [ "${SECONDS}" -ge %d ])`, budget, budget))
+	}
+
+	if seconds >= minutes*60 {
+		a.r.fail("%s's own timeouts outside its loops and its loop budget add up to %d seconds (%s), not below and so past its timeout-minutes of %d, %d seconds: "+
+			"a step's timeout firing ends the job and skips every later step, the encrypt step included, so each of its own timeouts fires first (ADR 0040)",
+			path, seconds, strings.Join(parts, ", "), minutes, minutes*60)
 	}
 }
 

@@ -34,10 +34,12 @@ jobs:
     # recorded, and a newer image would change them unseen.
     runs-on: ubuntu-24.04
     # GitHub ends a job at 360 minutes. The job's own timeout is the ceiling the run's steps stay under:
-    # they add up to at most 340 (test/architecture holds the sum), so the job's timeout never fires
-    # before a step's own, and every step a check could hang runs that check under a timeout of its own
-    # that records it "not run" instead of failing the step.
-    timeout-minutes: 340
+    # their timeout-minutes add up to 345, and with the job's 5 minutes of set-up and post steps they stay
+    # within its 355 (test/architecture holds the sum), so a step's own timeout always fires before the
+    # job's. A step's timeout firing ends the job, and every later step of it is skipped, the encrypt
+    # step included: that is why every step a check could hang runs that check under a timeout of its
+    # own that records it "not run", and why no step lets its own timeouts reach its own timeout-minutes.
+    timeout-minutes: 355
     if: ${{ github.ref == 'refs/heads/main' && github.run_attempt == 1 && (github.event_name == 'schedule' || github.triggering_actor == github.repository_owner) }}
     # Every job runs in the environment whose deployment branch policy is main alone, which holds the
     # key pairs' public halves.
@@ -284,10 +286,15 @@ jobs:
       # checksums.txt and its own build provenance, the image's cosign signature and its provenance and
       # SBOM attestations, keyless, bound to this repository's release.yml at refs/tags/<tag>, and whether
       # GitHub's latest release and the image's latest tag agree. A refusal is data for the model, not a
-      # failure of the job. The step reads GitHub's API with the job's token and runs no release code;
-      # the registry is read anonymously.
+      # failure of the job, and a verification that fails is a finding about the release: a checksum
+      # mismatch and a refused attestation or signature are recorded as release-integrity
+      # verification-failed in the results' verification-failed.txt, never as a check that did not run.
+      # The step reads GitHub's API with the job's token and runs no release code; the registry is read
+      # anonymously. Its own timeouts stay below its own timeout-minutes: the loop's 20-minute budget and
+      # the 29 minutes of timeouts outside it (the two cosign verify-attestation runs counted) add up to
+      # 49, under the step's 50.
       - name: Verify the release's files, signature and attestations
-        timeout-minutes: 30
+        timeout-minutes: 50
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
@@ -310,40 +317,44 @@ jobs:
           export DOCKER_CONFIG="${RUNNER_TEMP}/docker-anonymous"
           mkdir -p "${DOCKER_CONFIG}"
           rc=0
-          timeout 10m gh release download "${tag}" --repo "${GH_REPO}" --dir "${rel}" > "${out}/download.stdout" 2> "${out}/download.stderr" || rc=$?
+          timeout 5m gh release download "${tag}" --repo "${GH_REPO}" --dir "${rel}" > "${out}/download.stdout" 2> "${out}/download.stderr" || rc=$?
           echo "${rc}" > "${out}/download.exit"
           if [ "${rc}" -eq 124 ]; then
             echo "release-integrity timed-out" >> "${results}/not-run.txt"
-            echo "release-integrity: the release download timed out after 10 minutes" >> "${results}/limits.txt"
+            echo "release-integrity: the release download timed out after 5 minutes" >> "${results}/limits.txt"
           elif [ "${rc}" -ne 0 ]; then
             echo "release-integrity tool-failed" >> "${results}/not-run.txt"
           fi
           # checksums.txt is the release's: only its well-formed lines reach sha256sum, each one a
           # "<64 lower-case hex>  <name>" pair, and a line of any other shape - a /dev/zero it lists -
-          # is data for the model, never an argument. checksums.filtered is this step's own file, so the
-          # release's listing and its attestations below leave it out.
+          # is data for the model, never an argument. The filtered list is the results directory's, not the
+          # release's, so neither the release's own listing below nor its attestations ever see it.
           rc=0
-          timeout 1m grep -E '^[0-9a-f]{64}  [A-Za-z0-9._+-]+$' "${rel}/checksums.txt" > "${rel}/checksums.filtered" 2> "${out}/checksums-filter.stderr" || rc=$?
+          timeout 1m grep -E '^[0-9a-f]{64}  [A-Za-z0-9._+-]+$' "${rel}/checksums.txt" > "${out}/checksums.filtered" 2> "${out}/checksums-filter.stderr" || rc=$?
           echo "${rc}" > "${out}/checksums-filter.exit"
           # Every file against checksums.txt's well-formed lines, and checksums.txt against the release's
           # files: a file it does not list, or one it lists that the release lacks, is data for the model
-          # too, and a sha256sum a hostile line makes wait ends in its own timeout.
+          # too, and a sha256sum a hostile line makes wait ends in the check's own timeout. A mismatch
+          # (rc 1) is a finding about the release, not a check that did not run.
           rc=0
-          (cd "${rel}" && timeout 10m sha256sum --check --strict checksums.filtered) > "${out}/checksums.stdout" 2> "${out}/checksums.stderr" || rc=$?
+          (cd "${rel}" && timeout 5m sha256sum --check --strict "${out}/checksums.filtered") > "${out}/checksums.stdout" 2> "${out}/checksums.stderr" || rc=$?
           echo "${rc}" > "${out}/checksums.exit"
           if [ "${rc}" -eq 124 ]; then
             echo "release-integrity timed-out" >> "${results}/not-run.txt"
-            echo "release-integrity: the checksum check timed out after 10 minutes" >> "${results}/limits.txt"
+            echo "release-integrity: the checksum check timed out after 5 minutes" >> "${results}/limits.txt"
+          elif [ "${rc}" -eq 1 ]; then
+            echo "release-integrity verification-failed" >> "${results}/verification-failed.txt"
           elif [ "${rc}" -ne 0 ]; then
             echo "release-integrity tool-failed" >> "${results}/not-run.txt"
           fi
-          find "${rel}" -maxdepth 1 -type f ! -name checksums.txt ! -name checksums.filtered -printf '%f\n' | LC_ALL=C sort > "${out}/assets.txt"
+          find "${rel}" -maxdepth 1 -type f ! -name checksums.txt -printf '%f\n' | LC_ALL=C sort > "${out}/assets.txt"
           { awk '{ print $2 }' "${rel}/checksums.txt" 2> /dev/null || true; } | LC_ALL=C sort > "${out}/listed.txt"
           rc=0
           diff "${out}/listed.txt" "${out}/assets.txt" > "${out}/listing.diff" || rc=$?
           echo "${rc}" > "${out}/listing.exit"
           # Every release file's build provenance, checksums.txt's included, within the loop's budget of
-          # 20 minutes from the step's start: a loop that runs out records the files it did not reach.
+          # 20 minutes from the step's start: the budget and the step's own timeouts outside the loop stay
+          # under the step's 50, and a loop that runs out records the files it did not reach.
           while IFS= read -r -d '' file; do
             if [ "${SECONDS}" -ge 1200 ]; then
               echo "release-integrity: the budget of 20 minutes ran out before $(basename "${file}")" >> "${results}/limits.txt"
@@ -360,10 +371,12 @@ jobs:
             if [ "${rc}" -eq 124 ]; then
               echo "release-integrity timed-out" >> "${results}/not-run.txt"
               echo "release-integrity: the attestation of ${name} timed out after 2 minutes" >> "${results}/limits.txt"
+            elif [ "${rc}" -eq 1 ]; then
+              echo "release-integrity verification-failed" >> "${results}/verification-failed.txt"
             elif [ "${rc}" -ne 0 ]; then
               echo "release-integrity tool-failed" >> "${results}/not-run.txt"
             fi
-          done < <(find "${rel}" -maxdepth 1 -type f ! -name checksums.filtered -print0)
+          done < <(find "${rel}" -maxdepth 1 -type f -print0)
           # The tag's digest, which every later row reads by, and the latest tag's: a digest the registry
           # answers in any other shape is recorded as no digest, so the image is then not pulled.
           rc=0
@@ -383,25 +396,41 @@ jobs:
           if [ -n "${tag_digest}" ]; then
             ref="${image}@${tag_digest}"
             rc=0
-            timeout 5m cosign verify "${ref}" \
+            timeout 3m cosign verify "${ref}" \
               --certificate-identity "${identity}" \
               --certificate-oidc-issuer "${issuer}" \
               --certificate-github-workflow-trigger push > "${out}/cosign-signature.json" 2> "${out}/cosign-signature.stderr" || rc=$?
             echo "${rc}" > "${out}/cosign-signature.exit"
+            if [ "${rc}" -eq 124 ]; then
+              echo "release-integrity timed-out" >> "${results}/not-run.txt"
+              echo "release-integrity: the image's signature timed out after 3 minutes" >> "${results}/limits.txt"
+            elif [ "${rc}" -eq 1 ]; then
+              echo "release-integrity verification-failed" >> "${results}/verification-failed.txt"
+            elif [ "${rc}" -ne 0 ]; then
+              echo "release-integrity tool-failed" >> "${results}/not-run.txt"
+            fi
             for pair in provenance:slsaprovenance1 sbom:https://spdx.dev/Document/v2.3; do
               kind="${pair%%:*}"
               type="${pair#*:}"
               rc=0
-              timeout 5m cosign verify-attestation "${ref}" \
+              timeout 3m cosign verify-attestation "${ref}" \
                 --type "${type}" \
                 --certificate-identity "${identity}" \
                 --certificate-oidc-issuer "${issuer}" \
                 --certificate-github-workflow-trigger push > "${out}/cosign-${kind}.json" 2> "${out}/cosign-${kind}.stderr" || rc=$?
               echo "${rc}" > "${out}/cosign-${kind}.exit"
+              if [ "${rc}" -eq 124 ]; then
+                echo "release-integrity timed-out" >> "${results}/not-run.txt"
+                echo "release-integrity: the ${kind} attestation's signature timed out after 3 minutes" >> "${results}/limits.txt"
+              elif [ "${rc}" -eq 1 ]; then
+                echo "release-integrity verification-failed" >> "${results}/verification-failed.txt"
+              elif [ "${rc}" -ne 0 ]; then
+                echo "release-integrity tool-failed" >> "${results}/not-run.txt"
+              fi
             done
             # The SBOM itself, for row 10: the predicate of the attestation gh verifies.
             rc=0
-            timeout 5m gh attestation verify "oci://${ref}" \
+            timeout 3m gh attestation verify "oci://${ref}" \
               --repo "${GH_REPO}" \
               --signer-workflow "${signer}" \
               --source-ref "refs/tags/${tag}" \
@@ -409,6 +438,14 @@ jobs:
               --predicate-type https://spdx.dev/Document/v2.3 \
               --format json > "${out}/sbom-attestation.json" 2> "${out}/sbom-attestation.stderr" || rc=$?
             echo "${rc}" > "${out}/sbom-attestation.exit"
+            if [ "${rc}" -eq 124 ]; then
+              echo "release-integrity timed-out" >> "${results}/not-run.txt"
+              echo "release-integrity: the SBOM's attestation timed out after 3 minutes" >> "${results}/limits.txt"
+            elif [ "${rc}" -eq 1 ]; then
+              echo "release-integrity verification-failed" >> "${results}/verification-failed.txt"
+            elif [ "${rc}" -ne 0 ]; then
+              echo "release-integrity tool-failed" >> "${results}/not-run.txt"
+            fi
             rc=0
             jq -e '.[0].verificationResult.statement.predicate' "${out}/sbom-attestation.json" > "${out}/sbom.spdx.json" 2> /dev/null || rc=$?
             echo "${rc}" > "${out}/sbom-extract.exit"
@@ -438,11 +475,11 @@ jobs:
             exit 1
           fi
           rc=0
-          timeout 10m docker pull --platform linux/amd64 "${image}@${digest}" > "${out}/pull.stdout" 2> "${out}/pull.stderr" || rc=$?
+          timeout 8m docker pull --platform linux/amd64 "${image}@${digest}" > "${out}/pull.stdout" 2> "${out}/pull.stderr" || rc=$?
           echo "${rc}" > "${out}/pull.exit"
           if [ "${rc}" -eq 124 ]; then
             echo "image-pull timed-out" >> "${results}/not-run.txt"
-            echo "image-pull timed out after 10 minutes" >> "${results}/limits.txt"
+            echo "image-pull timed out after 8 minutes" >> "${results}/limits.txt"
           fi
           if [ "${rc}" -eq 0 ]; then
             mkdir -p "${RUNNER_TEMP}/image"
@@ -456,11 +493,11 @@ jobs:
               echo "image-pull tool-failed" >> "${results}/not-run.txt"
             fi
             rc=0
-            timeout 5m docker save --output "${RUNNER_TEMP}/image/image.tar" "${image}@${digest}" 2> "${out}/save.stderr" || rc=$?
+            timeout 4m docker save --output "${RUNNER_TEMP}/image/image.tar" "${image}@${digest}" 2> "${out}/save.stderr" || rc=$?
             echo "${rc}" > "${out}/save.exit"
             if [ "${rc}" -eq 124 ]; then
               echo "image-pull timed-out" >> "${results}/not-run.txt"
-              echo "image-pull: the image save timed out after 5 minutes" >> "${results}/limits.txt"
+              echo "image-pull: the image save timed out after 4 minutes" >> "${results}/limits.txt"
             elif [ "${rc}" -ne 0 ]; then
               echo "image-pull tool-failed" >> "${results}/not-run.txt"
             fi
@@ -532,10 +569,10 @@ jobs:
           scanned=0
           if [ -f "${RUNNER_TEMP}/image/image.tar" ]; then
             rc=0
-            timeout 10m trivy image "${offline[@]}" --input "${RUNNER_TEMP}/image/image.tar" --output "${out}/image.json" 2> "${out}/image.stderr" || rc=$?
+            timeout 8m trivy image "${offline[@]}" --input "${RUNNER_TEMP}/image/image.tar" --output "${out}/image.json" 2> "${out}/image.stderr" || rc=$?
             echo "${rc}" > "${out}/image.exit"
             if [ "${rc}" -eq 124 ]; then
-              echo "image-scan: the image scan timed out after 10 minutes" >> "${results}/limits.txt"
+              echo "image-scan: the image scan timed out after 8 minutes" >> "${results}/limits.txt"
             fi
             scanned=$((scanned + 1))
           else
@@ -544,10 +581,10 @@ jobs:
           sbom="${results}/release-integrity/sbom.spdx.json"
           if [ -s "${sbom}" ]; then
             rc=0
-            timeout 5m trivy sbom "${offline[@]}" --output "${out}/sbom.json" "${sbom}" 2> "${out}/sbom.stderr" || rc=$?
+            timeout 4m trivy sbom "${offline[@]}" --output "${out}/sbom.json" "${sbom}" 2> "${out}/sbom.stderr" || rc=$?
             echo "${rc}" > "${out}/sbom.exit"
             if [ "${rc}" -eq 124 ]; then
-              echo "image-scan: the SBOM scan timed out after 5 minutes" >> "${results}/limits.txt"
+              echo "image-scan: the SBOM scan timed out after 4 minutes" >> "${results}/limits.txt"
             fi
             scanned=$((scanned + 1))
           else
@@ -560,7 +597,8 @@ jobs:
       # Row 11. The image's runtime settings, read from its configuration and its filesystem, never by
       # a shell in it: its user, a start with a read-only root filesystem, no network and no capability,
       # and the shells and setuid files its filesystem holds. docker create starts nothing, and docker
-      # export copies the created container's filesystem out as an archive that tar only lists.
+      # export copies the created container's filesystem out as an archive that tar only lists. Its own
+      # timeouts add up to 9 minutes, under the step's 10.
       - name: Check the image's runtime settings
         timeout-minutes: 10
         run: |
@@ -590,11 +628,11 @@ jobs:
           # Each command that reads the image runs under a timeout of its own and records a failure as the
           # check not run: the image is the release's, and nothing it holds ends the step.
           rc=0
-          timeout 2m docker image inspect --format '{{json .Config}}' "${image}@${digest}" > "${out}/config.json" 2> "${out}/config.stderr" || rc=$?
+          timeout 1m docker image inspect --format '{{json .Config}}' "${image}@${digest}" > "${out}/config.json" 2> "${out}/config.stderr" || rc=$?
           echo "${rc}" > "${out}/config.exit"
           if [ "${rc}" -eq 124 ]; then
             echo "image-runtime timed-out" >> "${results}/not-run.txt"
-            echo "image-runtime: the config read timed out after 2 minutes" >> "${results}/limits.txt"
+            echo "image-runtime: the config read timed out after 1 minute" >> "${results}/limits.txt"
           elif [ "${rc}" -ne 0 ]; then
             echo "image-runtime tool-failed" >> "${results}/not-run.txt"
           fi
@@ -613,11 +651,11 @@ jobs:
           fi
           # tar's own warnings name the image's entries, so they go to the results directory too.
           rc=0
-          timeout 5m docker export "${cid}" 2> "${out}/export.stderr" | tar -tvf - > "${out}/filesystem.txt" 2> "${out}/filesystem.stderr" || rc=$?
+          timeout 4m docker export "${cid}" 2> "${out}/export.stderr" | tar -tvf - > "${out}/filesystem.txt" 2> "${out}/filesystem.stderr" || rc=$?
           echo "${rc}" > "${out}/filesystem.exit"
           if [ "${rc}" -eq 124 ]; then
             echo "image-runtime timed-out" >> "${results}/not-run.txt"
-            echo "image-runtime: the filesystem listing timed out after 5 minutes" >> "${results}/limits.txt"
+            echo "image-runtime: the filesystem listing timed out after 4 minutes" >> "${results}/limits.txt"
           elif [ "${rc}" -ne 0 ]; then
             echo "image-runtime tool-failed" >> "${results}/not-run.txt"
           fi
@@ -717,11 +755,11 @@ jobs:
             exit 0
           fi
           rc=0
-          timeout 2m docker cp "${stage}" "${staging}:/work/" 2> "${out}/staging-cp.stderr" || rc=$?
+          timeout 1m docker cp "${stage}" "${staging}:/work/" 2> "${out}/staging-cp.stderr" || rc=$?
           echo "${rc}" > "${out}/staging-cp.exit"
           if [ "${rc}" -eq 124 ]; then
             echo "hostile-inventories timed-out" >> "${results}/not-run.txt"
-            echo "hostile-inventories: the inputs' copy timed out after 2 minutes" >> "${results}/limits.txt"
+            echo "hostile-inventories: the inputs' copy timed out after 1 minute" >> "${results}/limits.txt"
           elif [ "${rc}" -ne 0 ]; then
             echo "hostile-inventories tool-failed" >> "${results}/not-run.txt"
           fi
@@ -730,11 +768,11 @@ jobs:
             exit 0
           fi
           rc=0
-          timeout 2m docker commit "${staging}" "audit-hostile:${GITHUB_RUN_ID}" > "${out}/staging-commit.stdout" 2> "${out}/staging-commit.stderr" || rc=$?
+          timeout 1m docker commit "${staging}" "audit-hostile:${GITHUB_RUN_ID}" > "${out}/staging-commit.stdout" 2> "${out}/staging-commit.stderr" || rc=$?
           echo "${rc}" > "${out}/staging-commit.exit"
           if [ "${rc}" -eq 124 ]; then
             echo "hostile-inventories timed-out" >> "${results}/not-run.txt"
-            echo "hostile-inventories: the commit timed out after 2 minutes" >> "${results}/limits.txt"
+            echo "hostile-inventories: the commit timed out after 1 minute" >> "${results}/limits.txt"
           elif [ "${rc}" -ne 0 ]; then
             echo "hostile-inventories tool-failed" >> "${results}/not-run.txt"
           fi
@@ -785,10 +823,10 @@ jobs:
       # tree at the audited commit and the module cache, reach the image as row 13's do; its one tmpfs,
       # /scratch, holds the copy of the tree go test writes crash inputs into, the build cache and the
       # binaries go test builds and runs, so it is mounted exec. The crash inputs leave on stdout as a tar
-      # stream, and the log on stderr. At most three targets run, within the step's 50 minutes; any other
+      # stream, and the log on stderr. At most three targets run, within the step's 45 minutes; any other
       # target is recorded in the limits.
       - name: Fuzz the committed Fuzz targets
-        timeout-minutes: 50
+        timeout-minutes: 45
         env:
           GOFLAGS: -mod=readonly
           GOPROXY: "off"
@@ -1089,7 +1127,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          "${RUNNER_TEMP}/bin/auditpublish" artifacts -job model -gh /usr/bin/gh -tmp "${RUNNER_TEMP}"
+          # The artifact check refuses an artifact the job does not expect, a name twice, one missing, one
+          # expired or a second page: the step names that kind and no artifact's name or content.
+          if ! "${RUNNER_TEMP}/bin/auditpublish" artifacts -job model -gh /usr/bin/gh -tmp "${RUNNER_TEMP}"; then
+            echo "::error title=Audit model::the run's artifacts are unexpected: see runbook step 11"
+            exit 1
+          fi
           artifact="${RUNNER_TEMP}/artifact.json"
           id="$(jq -er '.id' "${artifact}")"
           digest="$(jq -er '.digest' "${artifact}")"
@@ -1142,26 +1185,33 @@ jobs:
           cp -a "${GITHUB_WORKSPACE}/." /srv/audit/checkout/
           chmod -R a-w /srv/audit/checkout
       # Model-free, while sudo still works and before the sandbox preflight: no Docker socket, no sudo
-      # rule for the runner's user, and the owners the launcher cannot check itself (rounds H and L).
+      # rule for the runner's user, and the owners the launcher cannot check itself (rounds H and L). The
+      # three hardening commands record their own failure, so the step names the cause instead of ending
+      # on set -e's own line.
       - name: Stop Docker and remove the runner user's sudo rule
         timeout-minutes: 5
         run: |
           set -euo pipefail
-          sudo systemctl stop docker.service docker.socket
-          sudo systemctl disable docker.service docker.socket
+          rc=0
+          sudo systemctl stop docker.service docker.socket || rc=$?
+          sudo systemctl disable docker.service docker.socket || rc=$?
           owners="$(stat -c '%U:%G %a %n' /srv /srv/audit /srv/audit/bin /srv/audit/bin/audit-exec /srv/audit/checks)"
           want="$(printf '%s\n' 'root:root 755 /srv' 'root:root 755 /srv/audit' 'root:root 555 /srv/audit/bin' 'root:root 555 /srv/audit/bin/audit-exec' 'root:root 555 /srv/audit/checks')"
           if [ "${owners}" != "${want}" ]; then
-            echo "::error title=Sandbox::the audit directory's owners or modes are not as laid out: see runbook step 10"
+            echo "::error title=Audit model::the audit directory's owners or modes are not as laid out: see runbook step 10"
             exit 1
           fi
-          sudo rm -f /etc/sudoers.d/runner
+          sudo rm -f /etc/sudoers.d/runner || rc=$?
+          if [ "${rc}" -ne 0 ]; then
+            echo "::error title=Audit model::the runner could not be hardened: see runbook step 10"
+            exit 1
+          fi
           if sudo -n true 2> /dev/null; then
-            echo "::error title=Sandbox::sudo still works: see runbook step 10"
+            echo "::error title=Audit model::sudo still works: see runbook step 10"
             exit 1
           fi
           if [ -e /var/run/docker.sock ]; then
-            echo "::error title=Sandbox::the Docker socket is still there: see runbook step 10"
+            echo "::error title=Audit model::the Docker socket is still there: see runbook step 10"
             exit 1
           fi
       # The launcher refuses managed settings, checks the CLI's tarball against the one pin, checks the
@@ -1182,7 +1232,13 @@ jobs:
           set -euo pipefail
           SHIFT2EU_AUDIT_CANARY="$(od -An -N32 -tx1 /dev/urandom | tr -d ' \n')"
           export SHIFT2EU_AUDIT_CANARY
-          "${RUNNER_TEMP}/bin/auditrun" -claude-tarball "${RUNNER_TEMP}/claude-code/claude-code.tgz" -claude-integrity "${CLAUDE_CODE_PIN_INTEGRITY}" -result-out "${RUNNER_TEMP}/result.json"
+          # The launcher prints one line, a constant class: an expired or revoked token, the subscription's
+          # usage limit, a failed preflight or a managed-settings path read alike here, so the step names
+          # what the maintainer recovers from and names no secret and no finding.
+          if ! "${RUNNER_TEMP}/bin/auditrun" -claude-tarball "${RUNNER_TEMP}/claude-code/claude-code.tgz" -claude-integrity "${CLAUDE_CODE_PIN_INTEGRITY}" -result-out "${RUNNER_TEMP}/result.json"; then
+            echo "::error title=Audit model::the audit did not run: see runbook step 10"
+            exit 1
+          fi
       - name: Encrypt the audit's result to the publish key
         timeout-minutes: 5
         env:
@@ -1263,7 +1319,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          "${RUNNER_TEMP}/bin/auditpublish" artifacts -job publish -gh /usr/bin/gh -tmp "${RUNNER_TEMP}"
+          # The artifact check refuses an artifact the job does not expect, a name twice, one missing, one
+          # expired or a second page: the step names that kind and no artifact's name or content.
+          if ! "${RUNNER_TEMP}/bin/auditpublish" artifacts -job publish -gh /usr/bin/gh -tmp "${RUNNER_TEMP}"; then
+            echo "::error title=Audit publish::the run's artifacts are unexpected: see runbook step 11"
+            exit 1
+          fi
           artifact="${RUNNER_TEMP}/artifact.json"
           id="$(jq -er '.id' "${artifact}")"
           digest="$(jq -er '.digest' "${artifact}")"
@@ -1368,4 +1429,9 @@ jobs:
           AUDIT_FINGERPRINT_KEY: ${{ secrets.AUDIT_FINGERPRINT_KEY }}
         run: |
           set -euo pipefail
-          "${RUNNER_TEMP}/bin/auditpublish" publish -result "${RUNNER_TEMP}/result.json" -reports docs/security/audits -gh /usr/bin/gh -gitleaks "${RUNNER_TEMP}/bin/gitleaks" -tmp "${RUNNER_TEMP}"
+          # A refused publish names the class the runbook lists and no finding's detail: the report's
+          # public and private finds are the report's own, not the annotation's.
+          if ! "${RUNNER_TEMP}/bin/auditpublish" publish -result "${RUNNER_TEMP}/result.json" -reports docs/security/audits -gh /usr/bin/gh -gitleaks "${RUNNER_TEMP}/bin/gitleaks" -tmp "${RUNNER_TEMP}"; then
+            echo "::error title=Audit publish::the publish was refused: see runbook step 11"
+            exit 1
+          fi
