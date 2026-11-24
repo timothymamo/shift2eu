@@ -857,7 +857,6 @@ END {
     # most, each a literal in the file, never a provider default or a value a tfvars file could raise; no
     # deprecated spelling beside them; and at most one instance kept warm.
     if (b in containerBlock) {
-      pinsBefore = problems
       shownres = shownpath(bpath[b])
       for (j = 1; j <= npins; j++) {
         n = containerPinName[j]
@@ -880,9 +879,6 @@ END {
         problem("container-min-scale", bfile[b], bline[b], shownres " sets no min_scale: it must set min_scale = 0 or 1, the instances ADR 0045 allows to be kept warm")
       } else if (containerSet[ck] != 1 || containerKind[ck] != "D" || (containerVal[ck] != "0" && containerVal[ck] != "1")) {
         problem("container-min-scale", bfile[b], containerAt[ck], shownres " sets min_scale to something other than the literal 0 or 1: more instances kept warm are a cost nobody decided")
-      }
-      if (problems > pinsBefore) {
-        containerPinsBroken++
       }
     }
   }
@@ -936,9 +932,8 @@ END {
   if (iamPolicies != 1) {
     problem("iam-policy-count", root, "", iamPolicies + 0 " scaleway_iam_policy resources, want exactly one: the deploy application's")
   }
-  # A second container whose pins are already refused gets those lines alone: the run fails either way,
-  # and the pin lines name its file. The count speaks for a second container the pins let through.
-  if (containers > 1 && containerPinsBroken == 0) {
+  # The count speaks even when a second container's pins are refused too: one refusal never hides another.
+  if (containers > 1) {
     problem("container-repeat", root, "", containers " scaleway_container resources, want at most one: the site's front (ADR 0045), whose cost pins bound one container's instances")
   }
   if (iamApplications != 1) {

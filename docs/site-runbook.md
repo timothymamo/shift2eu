@@ -431,7 +431,7 @@ echo | openssl s_client -connect www.shift2eu.com:443 -servername www.shift2eu.c
 PL="$(dev/tofu.sh -chdir=infra/site output -raw pipeline_id)"; echo "$PL"   # PASS: the pipeline ID, not empty
 scw edge-services tls-stage list pipeline-id="$PL" -o json | jq '.[] | {status, certificate_expires_at}'   # PASS: a date in certificate_expires_at
 # FAIL certificate_expires_at: null after the wait: no certificate was issued (R4 re-created the stage before the CNAME pointed back, and Scaleway asks only once); recreate the TLS stage below and re-run the checks
-dev/tofu.sh -chdir=infra/site plan -replace=scaleway_edge_services_tls_stage.site -out=tls.tfplan   # PASS: "Plan: 1 to add, 1 to change, 1 to destroy."
+dev/tofu.sh -chdir=infra/site plan -replace='scaleway_edge_services_tls_stage.site[0]' -out=tls.tfplan   # PASS: "Plan: 1 to add, 1 to change, 1 to destroy."
 dev/tofu.sh -chdir=infra/site show tls.tfplan | less      # PASS: the TLS stage "must be replaced" ("create replacement and then destroy") and the DNS stage's tls_stage_id changes in place, nothing else
 # FAIL the plan replaces, destroys or changes any other resource: stop, apply nothing, rm infra/site/tls.tfplan, and find out why (R4's no-changes check) before the recreate
 dev/tofu.sh -chdir=infra/site apply tls.tfplan            # PASS: "Apply complete! Resources: 1 added, 1 changed, 1 destroyed."

@@ -445,7 +445,7 @@ CNAME's target.
   stage stays off `[resource-type]`'s allow list: only `scaleway_edge_services_tls_stage "site"`, which
   that rule judges, may stand. The three container types join the allow list, and
   `[container-repeat]` refuses `count` or `for_each` on the container or its namespace and a second
-  `scaleway_container` (a second container whose cost pins already fail gets those lines alone).
+  `scaleway_container`, even when that container's cost pins fail too: one refusal never hides another.
 - **Unverified until R4:** whether the pipeline's default endpoint serves HTTPS with no TLS stage. R4
   checks it right after the apply that removes the stage; the rollback is `pipeline_www = true` and R4
   again (Runbook, R8).
