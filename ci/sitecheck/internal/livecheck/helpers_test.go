@@ -33,6 +33,17 @@ import (
 // an injected dialer, a fake clock and sleep, and a fixture site that passes
 // every check until a test breaks one thing about it. Nothing here opens a
 // connection to a host of its own, reads the wall clock or sleeps in real time.
+//
+// Its wall-clock guards are this package's one exception to the rule that tests
+// never depend on time (CLAUDE.md, Testing). Such a guard - runWithin's bound,
+// verdictGuard, rawListenerGuard, and the guard inside
+// TestVersionTextScansARawTextHeavyBodyInLinearTime in page_test.go - bounds a
+// wait, so that a hang (a fixture that never answers, a transport that stops
+// closing a connection, a scan gone super-linear in the body's length) fails
+// that one test with its own message instead of holding up the package until go
+// test's timeout kills the whole run. No assertion depends on the time a case
+// takes: every guard sits orders of magnitude above the work it bounds, and a
+// case that passes returns long before one is reached.
 
 // testNow is the clock every fixture reads: a fixed instant, so no test depends
 // on when it runs.
@@ -89,7 +100,7 @@ func indexPage(version string) []byte {
 <head><meta charset="utf-8"><title>shift2eu</title></head>
 <body>
 <main><h1>shift2eu</h1></main>
-<footer><p class="mono"><span id="site-version">` + version + `</span></p></footer>
+<footer><p class="footer-links"><span class="mono" id="site-version">` + version + `</span></p></footer>
 </body>
 </html>
 `)

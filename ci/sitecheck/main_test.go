@@ -82,7 +82,7 @@ func mainPages(t *testing.T) map[string][]byte {
 
 // mainIndex returns the root page, whose footer carries the live version.
 func mainIndex(version string) []byte {
-	return []byte(`<!DOCTYPE html><html lang="en"><body><footer><p class="mono"><span id="site-version">` + version + `</span></p></footer></body></html>`)
+	return []byte(`<!DOCTYPE html><html lang="en"><body><footer><p class="footer-links"><span class="mono" id="site-version">` + version + `</span></p></footer></body></html>`)
 }
 
 // mainScript returns the module script's decoded content.
@@ -125,8 +125,10 @@ type mainServer struct {
 	requests []string
 }
 
-// mainNewServer returns a server that serves pages, none hidden and no HSTS
-// header.
+// mainNewServer returns a server that answers each of pages' paths with its
+// response and any other path with 404, sending hsts as
+// Strict-Transport-Security on every answer whose own header does not set that
+// header (nothing when hsts is empty).
 func mainNewServer(pages map[string]mainResponse, hsts string) *mainServer {
 	return &mainServer{pages: pages, hsts: hsts}
 }
@@ -751,8 +753,8 @@ func TestRunPlainHTTPWWWMode(t *testing.T) {
 	}
 }
 
-// TestRunFailsSafeOnARecordItCannotRead pins the fail-safe of behaviour 8 and
-// D3: a record file that is missing or that its parser refuses is no
+// TestRunFailsSafeOnARecordItCannotRead pins behaviour 8's fail-safe on the two
+// records: a record file that is missing or that its parser refuses is no
 // configuration error and no crash. Every case but the control runs against the
 // same site as TestRunPassesAPassingSiteFromItsFiles and changes only the
 // records, so the record is the only reason a case fails: the run then exits 1
