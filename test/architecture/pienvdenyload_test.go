@@ -28,8 +28,8 @@
 // no Node, a runner that has not set one up) or where it is too old to strip
 // types by default, it skips with a message naming the Node dev/lima.yaml pins,
 // and fails instead when SHIFT2EU_REQUIRE_NODE=1 is set, which is how CI refuses
-// a silent skip everywhere (ci.yml's Test job installs the pinned Node and sets
-// it).
+// a silent skip everywhere (ci.yml's and release.yml's Test jobs install the
+// pinned Node and set it).
 package architecture_test
 
 import (
@@ -226,7 +226,7 @@ func TestPiEnvDenyExtensionLoads(t *testing.T) {
 func TestPiNodeDecisionSkipsOrFailsWhatItCannotLoad(t *testing.T) {
 	t.Parallel()
 
-	const pinned = "v26.13.1"
+	const pinned = "26.13.1"
 
 	cases := []struct {
 		name  string
@@ -437,12 +437,12 @@ func piNodeDecision(state piNodeState) (piNodeVerdict, string) {
 var piNodeEnvNames = []string{"PATH", "HOME", "TMPDIR", "SYSTEMROOT"}
 
 // piNodeEnv returns node's environment from the allow list above, read by name
-// from the process's. The inherited environment is never passed whole, and
-// NODE_OPTIONS in particular is not on the list: in a pane it would hold the
-// agents' API keys (CLAUDE.md, rule 3), and a loader or flag it names could
-// decide whether the extension's types are stripped and so whether it loads at
-// all. The check pins what the extension and the pinned Node do, not what a
-// variable on one machine made them do.
+// from the process's. The inherited environment is never passed whole, since in
+// a pane it holds the agents' API keys (CLAUDE.md, rule 3); NODE_OPTIONS in
+// particular is not on the list, because a loader or flag it names could decide
+// whether the extension's types are stripped and so whether it loads at all. The
+// check pins what the extension and the pinned Node do, not what a variable on
+// one machine made them do.
 func piNodeEnv() []string {
 	return piNodeEnvFrom(os.LookupEnv)
 }
@@ -463,8 +463,10 @@ func piNodeEnvFrom(lookup func(name string) (string, bool)) []string {
 }
 
 // piNodeVersionPin matches dev/lima.yaml's nodeVersion param, the Node the VM
-// installs for pi and the one ci.yml's Test job installs for this check.
-var piNodeVersionPin = regexp.MustCompile(`(?m)^\s*nodeVersion:\s*"([^"]+)"\s*$`)
+// installs for pi and the one ci.yml's and release.yml's Test jobs install for
+// this check. It reads the line as those jobs' sed does, two spaces and
+// `nodeVersion: "X"`, never any other indentation or spacing.
+var piNodeVersionPin = regexp.MustCompile(`(?m)^  nodeVersion: "([^"]+)"$`)
 
 // piPinnedNodeVersion returns the Node version dev/lima.yaml pins, which a skip
 // or a failure names as the one to install.
