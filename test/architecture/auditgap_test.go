@@ -61,7 +61,8 @@ var scheduleWord = regexp.MustCompile(`(^|[^A-Za-z0-9_-])schedule([^A-Za-z0-9_-]
 // after `? `). Its value is every line from the key's line up to the next line
 // at or left of the root column, the next top-level key, or the end of the
 // document; a line there that starts with `:` (an explicit key's value), `}`
-// or `]`, and a comment, ends nothing. On the key's line the value after the
+// or `]`, or `- ` (a sequence item at its key's indent), and a comment, ends
+// nothing. On the key's line the value after the
 // colon is matched, its comment removed; below it every line that is no
 // comment is matched, whatever the value starts with: a block mapping, an
 // anchor or a tag, a scalar, or a flow mapping or sequence on the key's line
@@ -80,6 +81,18 @@ var scheduleWord = regexp.MustCompile(`(^|[^A-Za-z0-9_-])schedule([^A-Za-z0-9_-]
 // the end of the document, or closed with a further non-comment line before
 // it, is reported as a schedule, since nothing can tell what triggers such a
 // document holds and no unbalanced bracket may make the gap check pass.
+//
+// The schedule word is matched against the text, never a decoded key, so every
+// form whose text need not spell the key fails closed, reported as a schedule:
+// a line of the on: value, the key's own line included and comments too, that
+// holds a backslash (a double-quoted escape such as \x73 for s), an alias
+// (*name where a node starts) or a merge key (<<); a root-column line whose key
+// this reader cannot tell from on (see rootKeyUnread: an explicit ? key on a
+// later line or as a block scalar, an anchored, tagged or aliased key, a merge
+// key, a root flow mapping or sequence such as a JSON document, a
+// double-quoted key with an escape); a node on a document marker's own line; a
+// document with content but no recognised top-level on key; and a file with no
+// recognised on key at all.
 func hasScheduleTrigger(workflow []byte) bool {
 	// The byte order mark U+FEFF, in UTF-8.
 	text := strings.TrimPrefix(string(workflow), "\xef\xbb\xbf")
@@ -96,6 +109,12 @@ func hasScheduleTrigger(workflow []byte) bool {
 	// flow is the on: key's flow value while its lines are read, nil
 	// otherwise: its bracket depth, quote state and whether it closed.
 	var flow *flowValue
+
+	// docContent is set once the current document holds a line that is no
+	// comment, docOn once a top-level on key of it is recognised, anyOn once
+	// one of any document is: a document with content but no recognised on
+	// key, and a file with none at all, are read as holding a schedule.
+	docContent, docOn, anyOn := false, false, false
 
 	for _, line := range strings.Split(text, "\n") {
 		line = strings.TrimRight(line, " \t\r")
@@ -114,7 +133,18 @@ func hasScheduleTrigger(workflow []byte) bool {
 				return true
 			}
 
+			if docContent && !docOn {
+				return true
+			}
+
+			// A node on the marker's own line, such as a root flow mapping,
+			// is a root this reader does not read: fail closed.
+			if rest := strings.TrimSpace(trimmed[3:]); rest != "" && !strings.HasPrefix(rest, "#") {
+				return true
+			}
+
 			rootColumn, inOn, valueStarted, flow = -1, false, false, nil
+			docContent, docOn = false, false
 
 			continue
 		}
@@ -125,6 +155,10 @@ func hasScheduleTrigger(workflow []byte) bool {
 			}
 
 			rootColumn = indent
+		}
+
+		if !comment {
+			docContent = true
 		}
 
 		if inOn && endsTheOnValue(trimmed, indent, rootColumn) {
@@ -138,7 +172,7 @@ func hasScheduleTrigger(workflow []byte) bool {
 
 		if inOn {
 			if flow != nil {
-				if scheduleWord.MatchString(trimmed) {
+				if scheduleWord.MatchString(trimmed) || hidesAKey(trimmed) {
 					return true
 				}
 
@@ -159,7 +193,7 @@ func hasScheduleTrigger(workflow []byte) bool {
 				continue
 			}
 
-			if scheduleWord.MatchString(trimmed) {
+			if scheduleWord.MatchString(trimmed) || hidesAKey(trimmed) {
 				return true
 			}
 
@@ -186,12 +220,23 @@ func hasScheduleTrigger(workflow []byte) bool {
 			continue
 		}
 
+		if rootKeyUnread(trimmed) {
+			return true
+		}
+
 		value, ok := topLevelOn(trimmed)
 		if !ok {
 			continue
 		}
 
 		inOn, valueStarted = true, false
+		docOn, anyOn = true, true
+
+		// The whole on: line is read for an escape, an alias or a merge key,
+		// its comment included: fail closed.
+		if hidesAKey(line) {
+			return true
+		}
 
 		value = stripProperties(value)
 
@@ -216,8 +261,50 @@ func hasScheduleTrigger(workflow []byte) bool {
 		}
 	}
 
-	// The file ended inside the on: key's flow value: fail closed.
-	return flow != nil && !flow.closed
+	// The file ended inside the on: key's flow value, or with a document no
+	// recognised on key opens, or with none at all: fail closed.
+	return (flow != nil && !flow.closed) || (docContent && !docOn) || !anyOn
+}
+
+// aliasNode matches an alias (*name) where a node starts: at the line's start
+// or after a blank, a flow indicator, an explicit key's ? or a colon. A * inside
+// a plain or quoted scalar, as in a branch glob such as v*.* or ci/**, follows
+// another byte and is no alias.
+var aliasNode = regexp.MustCompile(`(^|[ \t\[{,?:])\*`)
+
+// hidesAKey reports whether a line of the on: value may spell a key, or bring
+// one in, that the schedule word cannot be matched against: a backslash (a
+// double-quoted scalar's escape, such as \x73 for s), an alias, or a merge key
+// (<<). The line is read whole, its comment included, so a comment that holds
+// one fails closed too.
+func hidesAKey(line string) bool {
+	return strings.Contains(line, `\`) || strings.Contains(line, "<<") || aliasNode.MatchString(line)
+}
+
+// rootKeyUnread reports whether a trimmed line at the root column opens a key
+// this reader cannot tell from on: an explicit key ? with the key on a later
+// line or as a block scalar (| or >), a key with an anchor, a tag or an alias
+// before it, a merge key (<<), a flow mapping or sequence as the root or the key
+// (the document is then one flow node, as a JSON document is), and a
+// double-quoted key that holds an escape.
+func rootKeyUnread(trimmed string) bool {
+	key := inlineValue(trimmed)
+
+	if strings.HasPrefix(key, "?") {
+		key = strings.TrimSpace(key[1:])
+
+		if key == "" || strings.HasPrefix(key, "|") || strings.HasPrefix(key, ">") {
+			return true
+		}
+	}
+
+	for _, prefix := range []string{"&", "!", "*", "<<", "{", "["} {
+		if strings.HasPrefix(key, prefix) {
+			return true
+		}
+	}
+
+	return strings.HasPrefix(key, `"`) && strings.Contains(key, `\`)
 }
 
 // isDocumentMarker reports whether a trimmed line at column 0 starts or ends
@@ -234,9 +321,15 @@ func isDocumentMarker(trimmed string) bool {
 
 // endsTheOnValue reports whether a line ends the top-level on: key's value:
 // a line at or left of the root column that is no comment and does not start
-// with `:` (an explicit key's value), `}` or `]` (a flow value's close).
+// with `:` (an explicit key's value), `}` or `]` (a flow value's close), or a
+// `-` alone or before a blank (an item of a block sequence YAML lets sit at
+// its key's own indent, as in on: and a - schedule line below it).
 func endsTheOnValue(trimmed string, indent, rootColumn int) bool {
 	if indent > rootColumn || strings.HasPrefix(trimmed, "#") {
+		return false
+	}
+
+	if trimmed == "-" || strings.HasPrefix(trimmed, "- ") || strings.HasPrefix(trimmed, "-\t") {
 		return false
 	}
 
