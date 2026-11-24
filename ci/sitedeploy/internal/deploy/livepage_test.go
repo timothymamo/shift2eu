@@ -22,9 +22,9 @@ const builtVersion = "v0.13.0"
 // whole package.
 const buildTimeout = 5 * time.Minute
 
-// builtPages are the four pages ci/sitebuild writes (ADR 0036), each with the
-// footer LiveVersion reads.
-var builtPages = []string{"index.html", "inventory.html", "privacy.html", "verify.html"}
+// builtPages are the five pages ci/sitebuild writes (ADR 0036, issue #528),
+// each with the footer LiveVersion reads.
+var builtPages = []string{"about.html", "index.html", "inventory.html", "privacy.html", "verify.html"}
 
 // TestLiveVersionOnTheBuiltPages pins LiveVersion against the real build rather
 // than a fixture: every page ci/sitebuild writes ends its footer's paragraph

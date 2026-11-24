@@ -885,6 +885,72 @@ func TestDeployRefusesAnInvalidConfigurationOrBundle(t *testing.T) {
 	}
 }
 
+// TestDeployHoldsTheBundleToTheSitesPages pins the page set a bundle must hold
+// (issue #528; PR #509's review finding 2): the About page is one of the site's
+// pages, so the bundle check accepts a bundle with it and refuses one without
+// it, and a page the site does not hold is still refused rather than deployed.
+func TestDeployHoldsTheBundleToTheSitesPages(t *testing.T) {
+	t.Parallel()
+
+	withAbout := func(b *bundle) {
+		b.files[aboutPage] = page(b.version, "About")
+	}
+
+	tests := []struct {
+		name    string
+		prepare func(b *bundle)
+		refused bool
+	}{
+		{
+			name:    "a bundle with the about page",
+			prepare: func(*bundle) {},
+		},
+		{
+			name:    "a bundle without the about page",
+			prepare: func(b *bundle) { delete(b.files, aboutPage) },
+			refused: true,
+		},
+		{
+			name:    "a bundle with a page the site does not hold",
+			prepare: func(b *bundle) { b.files["elsewhere.html"] = page(b.version, "Elsewhere") },
+			refused: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			dc := newDeployCase(t)
+			withAbout(dc.bundle)
+			tc.prepare(dc.bundle)
+			dc.useBundle(t)
+
+			err := dc.deploy(t)
+
+			if !tc.refused {
+				if err != nil {
+					t.Fatalf("Deploy = %v for %s, want nil: the About page is one of the site's pages (issue #528)", err, tc.name)
+				}
+
+				return
+			}
+
+			if !errors.Is(err, deploy.ErrInvalidBundle) {
+				t.Fatalf("Deploy = %v for %s, want an error wrapping ErrInvalidBundle: a bundle must hold every page of the site and no other (issue #528)", err, tc.name)
+			}
+
+			if requests := dc.store.seen(); len(requests) != 0 {
+				t.Errorf("the object store received %d requests for %s, want none: the bundle is refused before any request", len(requests), tc.name)
+			}
+
+			if requests := dc.live.seen(); len(requests) != 0 {
+				t.Errorf("the live page received %d requests for %s, want none: the bundle is refused before any request", len(requests), tc.name)
+			}
+		})
+	}
+}
+
 // withManifestPath hands Deploy a manifest naming one path of the test's
 // choosing, and nothing else.
 func withManifestPath(t *testing.T, dc *deployCase, path string) {

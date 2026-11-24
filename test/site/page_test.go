@@ -419,6 +419,7 @@ func TestScriptsPerPage(t *testing.T) {
 		want []string
 	}{
 		{page: "index.html", want: []string{wasmExec, module, page}},
+		{page: "about.html", want: []string{page}},
 		{page: "inventory.html", want: []string{page}},
 		{page: "privacy.html", want: []string{page}},
 		{page: "verify.html", want: []string{page}},
@@ -468,23 +469,41 @@ func TestScriptsPerPage(t *testing.T) {
 
 // TestAssessmentPageIsMarked pins the fixed attribute the page script reads to
 // know whether to decode the module: the assessment page's <body> carries
-// data-page="assessment", and the other pages, the inventory page included,
-// carry no other value, so they load no module (PRD #297, Layer 2).
+// data-page="assessment", the about page's carries data-page="about" (issue
+// #528), and the other pages, the inventory page included, carry no other value,
+// so they load no module (PRD #297, Layer 2).
 func TestAssessmentPageIsMarked(t *testing.T) {
 	t.Parallel()
 
 	bundle := theBundle(t)
 
-	if got, _ := bundle.html(t, "index.html").body(t).attr("data-page"); got != "assessment" {
-		t.Errorf("index.html's <body> carries data-page=%q, want %q: the page script reads the module only on the page whose body names the assessment", got, "assessment")
+	tests := []struct {
+		page string
+		want string
+	}{
+		{page: "index.html", want: "assessment"},
+		{page: "about.html", want: "about"},
+		{page: "inventory.html"},
+		{page: "privacy.html"},
+		{page: "verify.html"},
 	}
 
-	for _, page := range []string{"inventory.html", "privacy.html", "verify.html"} {
-		t.Run(page, func(t *testing.T) {
+	for _, tc := range tests {
+		t.Run(tc.page, func(t *testing.T) {
 			t.Parallel()
 
-			if got, ok := bundle.html(t, page).body(t).attr("data-page"); ok {
-				t.Errorf("%s's <body> carries data-page=%q, want none: the page loads neither wasm_exec.js nor the module script and reads no module", page, got)
+			got, ok := bundle.html(t, tc.page).body(t).attr("data-page")
+
+			if tc.want == "" {
+				if ok {
+					t.Errorf("%s's <body> carries data-page=%q, want none: the page loads neither wasm_exec.js nor the module script and reads no module", tc.page, got)
+				}
+
+				return
+			}
+
+			if got != tc.want {
+				t.Errorf("%s's <body> carries data-page=%q, want %q: the page script reads the module only on the page whose body names the assessment, and the framing guard on the page whose body names the about page (issue #528)", tc.page, got, tc.want)
 			}
 		})
 	}

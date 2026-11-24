@@ -54,6 +54,10 @@ const (
 	licenseName = "LICENSE"
 	noticeName  = "NOTICE"
 
+	// aboutPage is the About page (issue #528): the bundle's fifth page, which
+	// the site holds beside the other four.
+	aboutPage = "about.html"
+
 	licenseBody = "Apache License\nVersion 2.0, January 2004\n"
 	noticeBody  = "shift2eu\nCopyright 2026 the shift2eu authors\n"
 )

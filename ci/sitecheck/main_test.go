@@ -73,6 +73,7 @@ func mainPages(t *testing.T) map[string][]byte {
 	return map[string][]byte{
 		"/":                    mainIndex(mainVersion),
 		"/index.html":          mainIndex(mainVersion),
+		"/about.html":          []byte(`<!DOCTYPE html><html lang="en"><body><p>about</p></body></html>`),
 		"/privacy.html":        []byte(`<!DOCTYPE html><html lang="en"><body><p id="downgrade-risk">The first visit is exposed to a downgrade.</p></body></html>`),
 		"/verify.html":         []byte(`<!DOCTYPE html><html lang="en"><body><p>verify</p></body></html>`),
 		"/style.css":           []byte("body { color: #111111; }\n"),
@@ -445,7 +446,7 @@ func mainManifest(t *testing.T, pages map[string][]byte) string {
 
 	files := make([]string, 0, len(pages))
 
-	for _, path := range []string{"/index.html", "/privacy.html", "/verify.html", "/style.css", "/" + mainModuleScript} {
+	for _, path := range []string{"/index.html", "/about.html", "/privacy.html", "/verify.html", "/style.css", "/" + mainModuleScript} {
 		body, ok := pages[path]
 		if !ok {
 			t.Fatalf("the fixture serves no %s", path)

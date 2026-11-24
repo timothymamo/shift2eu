@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/chromedp"
 )
 
@@ -272,4 +273,60 @@ func assertLoadsOnlyThePageScript(t *testing.T, ctx context.Context, s *site, pa
 			t.Errorf("%s's origin never answered a request for %q", page, asset)
 		}
 	}
+}
+
+// TestAboutPage pins the About page in the browser (issue #528): it loads under
+// the unchanged policy with no violation the browser reports, it loads the page
+// script alone, and the maintainer's avatar is there as inline SVG: one element
+// with role="img", an accessible name and a box a visitor can see.
+func TestAboutPage(t *testing.T) {
+	t.Parallel()
+
+	s := newSite(t)
+	ctx := newTab(t)
+
+	// The listener is installed before the page's own scripts run, so a refusal
+	// the browser reports while about.html loads is recorded: one added after the
+	// load would miss it.
+	if _, err := chromedp.Call(ctx, page.AddScriptToEvaluateOnNewDocument, page.AddScriptToEvaluateOnNewDocumentParams{
+		Source: collectViolations,
+	}); err != nil {
+		t.Fatalf("install the page's securitypolicyviolation listener: %v", err)
+	}
+
+	do(t, ctx, chromedp.Navigate(s.url("about.html")))
+	waitFor(t, ctx, "the about page to load", `document.readyState === "complete"`)
+
+	for _, got := range eval[[]violation](t, ctx, `globalThis.__violations || []`) {
+		t.Errorf("loading about.html was refused under the policy: the directive %q refused %q (blocked %q, %s): the page loads only its own files and draws its avatar inline",
+			got.Directive, got.Violated, got.Blocked, got.Disposition)
+	}
+
+	avatar := eval[struct {
+		Count  int     `json:"count"`
+		Label  string  `json:"label"`
+		Width  float64 `json:"width"`
+		Height float64 `json:"height"`
+	}](t, ctx, `(() => {
+		const avatars = Array.from(document.querySelectorAll('svg[role="img"]'));
+		const first = avatars.length === 1 ? avatars[0] : null;
+		const box = first === null ? null : first.getBoundingClientRect();
+		return {
+			count: avatars.length,
+			label: first === null ? "" : (first.getAttribute("aria-label") || ""),
+			width: box === null ? 0 : box.width,
+			height: box === null ? 0 : box.height,
+		};
+	})()`)
+
+	switch {
+	case avatar.Count != 1:
+		t.Errorf("about.html holds %d <svg role=\"img\"> elements, want exactly one: the maintainer's avatar (issue #528)", avatar.Count)
+	case strings.TrimSpace(avatar.Label) == "":
+		t.Errorf("about.html's avatar carries no accessible name, want an aria-label a screen reader reads: an <svg role=\"img\"> without one is announced as nothing (issue #528)")
+	case avatar.Width == 0 || avatar.Height == 0:
+		t.Errorf("about.html's avatar has a box of %vx%v, want a non-zero width and height: the avatar is shown (issue #528)", avatar.Width, avatar.Height)
+	}
+
+	assertLoadsOnlyThePageScript(t, ctx, s, "about.html")
 }

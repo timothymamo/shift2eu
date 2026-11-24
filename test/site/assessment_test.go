@@ -446,3 +446,89 @@ func textBeforeChild(t *testing.T, el, child *element) string {
 
 	return htmlUnescape(b.String())
 }
+
+// introText is the Assessment page's intro paragraph, word for word (issue
+// #528): what the site does, why it was built, and who provides it, in the
+// sentence the maintainer wrote. It is one constant so a rewording in review is
+// one edit.
+const introText = "shift2eu compares an AWS, Azure or GCP inventory with what OVHcloud, Scaleway and UpCloud offer, so you can see how far a move to an EU cloud would go before you plan it. It runs entirely in your browser, and nothing you paste leaves it. shift2eu is provided free to use by Timothy Mamo."
+
+// TestAssessmentPageIntro pins the intro paragraph the Assessment page carries
+// between its title and its lead paragraph (issue #528): it says what the site
+// does and who provides it free to use, and its last words, the maintainer's
+// name, link the About page of the site, in the same tab, as the inventory guide
+// link does.
+func TestAssessmentPageIntro(t *testing.T) {
+	t.Parallel()
+
+	doc := theBundle(t).html(t, "index.html")
+
+	headings := doc.find("h1")
+	if len(headings) != 1 {
+		t.Fatalf("index.html holds %d <h1> elements, want exactly one: the page's title, which the intro follows (issue #528)", len(headings))
+	}
+
+	leads := 0
+
+	var lead *element
+
+	for _, paragraph := range doc.find("p") {
+		if !hasClass(paragraph, "lead") {
+			continue
+		}
+
+		leads++
+		lead = paragraph
+	}
+
+	if leads != 1 {
+		t.Fatalf("index.html holds %d elements with the class %q, want exactly one: the lead paragraph the intro precedes (issue #528)", leads, "lead")
+	}
+
+	intro := 0
+
+	var paragraph *element
+
+	for _, candidate := range doc.find("p") {
+		if collapseSpace(candidate.textContent()) != introText {
+			continue
+		}
+
+		intro++
+		paragraph = candidate
+	}
+
+	if intro != 1 {
+		t.Fatalf("index.html holds %d <p> elements reading the intro %q, want exactly one: a paragraph between the title and the lead that says what the site does, why, and who provides it free to use (issue #528)",
+			intro, introText)
+	}
+
+	order := documentOrder(doc)
+
+	if order[paragraph] < order[headings[0]] {
+		t.Errorf("the intro paragraph comes before the page's <h1>, want it after the title %q (issue #528)", collapseSpace(headings[0].textContent()))
+	}
+
+	if order[paragraph] > order[lead] {
+		t.Errorf("the intro paragraph comes after the lead paragraph %q, want it between the title and the lead (issue #528)", excerptText(collapseSpace(lead.textContent()), 120))
+	}
+
+	links := paragraph.find("a")
+	if len(links) != 1 {
+		t.Fatalf("the intro paragraph holds %d links, want exactly one: the maintainer's name, linking the about page (issue #528)", len(links))
+	}
+
+	link := links[0]
+
+	if got, want := collapseSpace(link.textContent()), aboutHeading; got != want {
+		t.Errorf("the intro's link reads %q, want %q: the paragraph ends \"provided free to use by\" and the name links the about page (issue #528)", got, want)
+	}
+
+	if href, _ := link.attr("href"); href != aboutPageName {
+		t.Errorf("the intro's link to the maintainer opens %q, want %q: it is a page of the site (issue #528)", href, aboutPageName)
+	}
+
+	if target, ok := link.attr("target"); ok && strings.TrimSpace(target) != "" {
+		t.Errorf("the intro's link carries target=%q, want none: the about page is one of the site's own, so it opens in the same tab (issue #528)", target)
+	}
+}
