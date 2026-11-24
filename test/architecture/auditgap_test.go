@@ -424,9 +424,13 @@ func TestWorkflowsRunningThePublishProgram(t *testing.T) {
 }
 
 // TestHasScheduleTrigger pins the matcher the workflow check reads: every form
-// GitHub accepts for a schedule trigger, and none of the texts that merely
-// name it. The workflow check's own regexp was a two-space block-style line,
-// so a flow-style or a four-space trigger would have passed unseen.
+// GitHub accepts for a schedule trigger, flow mappings and sequences broken over
+// several lines among them, and none of the texts that merely name it. A `{` or a
+// `[` the document never closes is malformed YAML, and the matcher fails closed
+// on it, reading the file as one that holds a schedule: no unbalanced bracket
+// makes the gap check pass a workflow whose triggers nothing can read. The
+// workflow check's own regexp was a two-space block-style line, so a flow-style
+// or a four-space trigger would have passed unseen.
 func TestHasScheduleTrigger(t *testing.T) {
 	t.Parallel()
 
@@ -473,6 +477,63 @@ func TestHasScheduleTrigger(t *testing.T) {
 		{
 			name:     "a flow sequence",
 			workflow: "on: [schedule, workflow_dispatch]\n",
+			want:     true,
+		},
+		{
+			// A flow mapping may be broken over lines, as a workflow reformatted
+			// by hand or by a tool is: the schedule sits on a line of its own,
+			// indented inside the braces, and is no less a trigger for it.
+			name:     "a flow mapping over several lines",
+			workflow: "on: {\n  workflow_dispatch: {},\n  schedule: [{cron: '0 3 * * 1'}]\n}\njobs:\n  audit:\n    runs-on: ubuntu-latest\n",
+			want:     true,
+		},
+		{
+			name:     "a quoted on key with a flow mapping over several lines",
+			workflow: "\"on\": {\n  workflow_dispatch: {},\n  'schedule': [{cron: '0 3 * * 1'}]\n}\n",
+			want:     true,
+		},
+		{
+			// The same form with no schedule: the trigger is read from the keys
+			// the flow mapping holds, not from its braces.
+			name:     "a flow mapping over several lines without a schedule",
+			workflow: "on: {\n  push: {branches: [main]},\n  workflow_dispatch: {}\n}\njobs:\n  audit:\n    runs-on: ubuntu-latest\n",
+			want:     false,
+		},
+		{
+			// A `{` or a `[` that the document never closes is malformed YAML, so
+			// nothing can tell what triggers it holds: the check fails closed and
+			// reads the file as one that has a schedule, which the workflow check
+			// reports rather than passes. A gap check bypassed by one unbalanced
+			// bracket would be no check at all.
+			name:     "an unclosed flow mapping",
+			workflow: "on: {\n  workflow_dispatch: {}\n",
+			want:     true,
+		},
+		{
+			name:     "an unclosed flow mapping ended by the file",
+			workflow: "on: {workflow_dispatch: {}",
+			want:     true,
+		},
+		{
+			// The next top-level key ends the on: value while a brace is still
+			// open: malformed just the same, and read just as failing closed.
+			name:     "an unclosed flow mapping ended by the next top-level key",
+			workflow: "on: {\n  workflow_dispatch: {}\njobs:\n  audit:\n    runs-on: ubuntu-latest\n",
+			want:     true,
+		},
+		{
+			name:     "an unclosed flow sequence",
+			workflow: "on: [workflow_dispatch\n",
+			want:     true,
+		},
+		{
+			name:     "an unclosed flow sequence ended by the next top-level key",
+			workflow: "on: [workflow_dispatch\njobs:\n  audit:\n    runs-on: ubuntu-latest\n",
+			want:     true,
+		},
+		{
+			name:     "an unclosed flow mapping that holds a schedule anyway",
+			workflow: "on: {\n  schedule: [{cron: '0 3 * * 1'}]\n",
 			want:     true,
 		},
 		{
