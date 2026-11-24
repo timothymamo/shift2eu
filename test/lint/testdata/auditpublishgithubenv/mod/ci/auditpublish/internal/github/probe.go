@@ -4,8 +4,9 @@
 // comment holds a call one of the group's entries refuses. There is a line for
 // every name the group refuses: the environment reads and the four lookups of a
 // home, config, cache or temp directory, os.StartProcess, the whole environment,
-// and the two os/exec calls with no context and no absolute path. The comment
-// names the group's tag, which starts the msg of every entry in it.
+// a temp file made in TMPDIR, the two os/exec calls with no context and no
+// absolute path, and the one exec.Cmd method that reads the process environment.
+// The comment names the group's tag, which starts the msg of every entry in it.
 package github
 
 import (
@@ -26,6 +27,7 @@ func environment() {
 	_, _ = os.UserConfigDir()                                     // want "audit-publish-github-env: "
 	_, _ = os.UserCacheDir()                                      // want "audit-publish-github-env: "
 	_ = os.TempDir()                                              // want "audit-publish-github-env: "
+	_, _ = os.CreateTemp("", "probe")                             // want "audit-publish-github-env: "
 	_, _ = os.StartProcess("/bin/true", nil, nil)                 // want "audit-publish-github-env: "
 }
 
@@ -35,4 +37,11 @@ func environment() {
 func programs() {
 	_ = exec.Command("gh")     // want "audit-publish-github-env: "
 	_, _ = exec.LookPath("gh") // want "audit-publish-github-env: "
+}
+
+// wholeEnvironment reads the whole environment of the process through the method
+// of its command type, which the group's last entry refuses: a child gets the
+// variables of the cmd.Env the library builds and no other.
+func wholeEnvironment(cmd *exec.Cmd) {
+	_ = cmd.Environ() // want "audit-publish-github-env: "
 }

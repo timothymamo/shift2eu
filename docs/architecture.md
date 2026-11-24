@@ -183,8 +183,8 @@ Arrows are imports. They point inwards only:
   to named standard packages and the core (`audit-publish-github`, no `net`) and the forbidigo group
   `audit-publish-github-env` (no environment read at all; `os.Environ` only where its tests' fakes record
   what they were given). Its tests run against a fake `gh` and a fake gitleaks.
-  `ci/sitedeploy` is the site's deploy program (PRD #297 milestone 3), which the release runs from that
-  milestone's workflow pull request on, in the deploy job, on the bundle it attested. It reads its flags,
+  `ci/sitedeploy` is the site's deploy program (PRD #297 milestone 3), which the release builds in its
+  `site-programs` job and runs in its `site-deploy` job, on the published bundle it attested. It reads its flags,
   the release tag list and the deploy key's two variables and wires its library
   `ci/sitedeploy/internal/deploy`, which speaks the S3 API of Scaleway Object Storage with SigV4 signing
   written by hand: the rollback guard on the live page, the optional listing of the bucket (off by
@@ -193,8 +193,8 @@ Arrows are imports. They point inwards only:
   no program; `site-deploy-library`, no `os` and no package of the module), and the forbidigo group
   `site-deploy-env` allows only the one `os.LookupEnv` its `main.go` passes on and package `os/exec` in
   `ci/sitedeploy/internal/deploy/livepage_test.go` alone, which builds the real bundle offline (issue #514).
-- **`ci/sitecheck`** is the live site check (PRD #297 milestone 3, issue #346, ADR 0043), which the release's check and
-  milestone 4's scheduled workflow run: it fetches every file of a release's manifest from the canonical
+- **`ci/sitecheck`** is the live site check (PRD #297 milestone 3, issue #346, ADR 0043), which the release's `site-check` job runs, built by its `site-programs` job, and
+  milestone 4's scheduled workflow will run: it fetches every file of a release's manifest from the canonical
   host and judges the edge's digests, redirects, certificates, caching, HSTS against `site/records/`, the
   live version against the repository's tag list and the module script's transferred and decoded size.
   Its entry point reads the files its flags name (`site-check-main`, no `os/exec` or `net`); its library
@@ -737,7 +737,8 @@ Known gaps, which these rules do not close:
   config or credential path, and `t.TempDir` goes through the same read, so refusing them would leave
   a test no way to get a temporary directory. They are accepted; `os.TempDir` named directly stays
   refused where `testutil-no-env`, `cli-no-env-or-process`,
-  `inventoryfile-no-env` and, since issue #152, `composition-root-env` refuse it. That refusal is no confidentiality control: `filepath.Dir` of any temporary path
+  `inventoryfile-no-env` and, since issue #152, `composition-root-env` refuse it, and `audit-publish-main-env` and `audit-publish-github-env`
+  refuse `os.CreateTemp` itself, whatever its directory (issue #516). That refusal is no confidentiality control: `filepath.Dir` of any temporary path
   recovers `$TMPDIR`. It is acceptable because `$TMPDIR` holds no secret; the refusal keeps a helper
   from building paths off the temporary directory by habit, nothing more.
 - **`os.Getwd` reads `$PWD`.** It returns the working directory only, a path the user chose, and

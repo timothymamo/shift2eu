@@ -113,6 +113,30 @@ moves or deletes a tag.
    of these reads is a maintainer check you could not make: say so in the report and go on. The
    `ai-review` environment not existing at all (404) means the reviewer is not set up yet: say so and go
    on; it gates no release.
+   **The site's deploy** (PRD #297 milestone 3, ADR 0042). `release.yml`'s `site-deploy` job, "Deploy the
+   site", runs behind the `site` environment, which holds the site's Scaleway key; it and the live check
+   run only while the repository variable `SITE_DEPLOY_ENABLED` is `true`. First read the switch:
+   `gh api repos/{owner}/{repo}/actions/variables/SITE_DEPLOY_ENABLED --jq .value`; a 404 means it is
+   unset. Then check the environment:
+   - `gh api repos/{owner}/{repo}/environments/site` must show
+     `deployment_branch_policy.custom_branch_policies` `true` and `protected_branches` `false`;
+   - `gh api repos/{owner}/{repo}/environments/site/deployment-branch-policies --jq '.branch_policies[] | .type + " " + .name'`
+     must list exactly one policy, `tag v*.*.*` (type `tag`, so a branch named like a tag is not admitted);
+   - `gh api repos/{owner}/{repo}/environments/site/secrets --jq '.secrets[].name'` must list
+     `SCW_ACCESS_KEY` and `SCW_SECRET_KEY`;
+   - `gh api repos/{owner}/{repo}/environments/site/variables --jq '.variables[].name'` must list
+     `SITE_BUCKET` and `SITE_REGION`, the bucket and region the deploy writes to (not secrets);
+   - the repository-level listings above (`actions/secrets` and `actions/variables`) must list neither
+     `SCW_ACCESS_KEY` nor `SCW_SECRET_KEY`: a key at repository level would reach every workflow.
+   Act on what you found:
+   - **while `SITE_DEPLOY_ENABLED` is unset or not `true`**: a missing `site` environment (404), or a
+     missing secret or variable, only means the site is not set up yet (milestone 4): say so in the
+     report and go on, since the release skips the deploy and its live check;
+   - **once it is `true`**: any gap stops the release: report it, that a maintainer must fix it (an agent
+     must not), and stop;
+   - **whatever its value**: a policy other than exactly `tag v*.*.*`, a `protected_branches` policy, or
+     either key at repository level stops the release: report it and stop.
+   A 403 on any of these reads is a maintainer check you could not make: say so in the report and go on.
    **The rulesets' bypass lists after the switch.** The agents App's token cannot read `bypass_actors`
    (it needs Administration write, which the App never gets: ADR 0031, d): GitHub leaves the field out,
    or returns it empty. The checks above that hold a ruleset's `bypass_actors` are then a maintainer
@@ -296,6 +320,29 @@ moves or deletes a tag.
    a failed release handled as above. Once the release is published, never re-run `Site bundle`, nor
    ask the maintainer to: a re-run of it cascades into `goreleaser` and `publish`, which then try to
    upload to and publish a release that is already published and immutable.
+   Then report the site's deploy (PRD #297 milestone 3, ADR 0042), its four jobs by name:
+   `gh run view <id> --json jobs --jq '.jobs[] | select(.name == "Site programs" or .name == "Deploy the site" or .name == "Check the live site" or .name == "Site deploy skipped") | .name + " " + .conclusion'`.
+   `Site programs` (it builds the deploy program and the live check) must be `success`. Which of the
+   other three run depends on the switch read in step 2 and on the run's `latest` decision:
+   - **while `SITE_DEPLOY_ENABLED` is unset or not `true`, or the tag is not the highest release tag on
+     `main` (a pre-release included)**: `Deploy the site` and `Check the live site` are expected
+     `skipped`, and `Site deploy skipped` must be `success`. Read its notice from its annotations, as for
+     `verify` below (its job id by the name "Site deploy skipped"); it says why the deploy was skipped.
+     Report the skip as expected: it is no failure, and the release is not held for it;
+   - **when both hold**: `Deploy the site` and `Check the live site` must be `success`, and `Site deploy
+     skipped` `skipped`. Report the deploy step's summary note or warning (`> [!NOTE]` or
+     `> [!WARNING]`, in the run's summary); report a WARNING to the maintainer verbatim, as something to
+     look at.
+   Any other conclusion is a failed deploy: report it with the failed step's log
+   (`gh run view <id> --log-failed`). The release itself is published; give the maintainer the
+   recovery, which only they start (never re-run anything yourself). GitHub re-runs a run's jobs only
+   within 30 days of the initial run, and the programs' artifacts are kept exactly that long: within
+   the 30-day re-run window, re-run `Deploy the site` (`gh run rerun <id> --job <its job id>`), which
+   re-runs `Check the live site` after it; after the window, either restore the last good version of
+   each page from the bucket's object versions with your own key (R12), or cut a new release with a
+   `Release-As:` footer. The bundle
+   comes from the published release, so the re-run never needs `Site bundle`, which must never be
+   re-run after publication (above).
 8. Check the published image yourself; do not hand this to the user. The Lima VM has cosign, a `gh`
    with `gh attestation`, `crane` and rootless `nerdctl` (ADR 0017); this is "Verify the image" in
    `docs/guide/verify-releases.md`, in its VM form, for the new tag. Run it from the repository root,

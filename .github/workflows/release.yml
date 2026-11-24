@@ -17,7 +17,7 @@ concurrency:
   group: release
   cancel-in-progress: false
 
-# The steps of all twelve jobs are a closed list that test/architecture holds
+# The steps of all sixteen jobs are a closed list that test/architecture holds
 # (check.ReleaseWorkflow): add no step, run: or env: here without changing it.
 # The release ships the CLI alone: the HTTP API's image, archive and API
 # document are gone (issue #393), and the site's bundle is published beside the
@@ -26,7 +26,11 @@ concurrency:
 # highest release tag on main, so the image's latest tag and GitHub's "Latest"
 # release cannot disagree. goreleaser hands the archives on, attest-archives
 # attests them, publish alone publishes the draft release, and verify-archives
-# checks what it published (issues #156, #163, #173).
+# checks what it published (issues #156, #163, #173). site-programs builds the
+# deploy program and the live check, and site-deploy is the one job that holds
+# the site's key: it deploys the published bundle of the highest release tag
+# only while SITE_DEPLOY_ENABLED is true, and site-check checks the live site
+# after it (PRD #297 milestone 3, ADR 0042).
 jobs:
   test:
     name: Test
@@ -932,3 +936,270 @@ jobs:
                 ;;
             esac
           fi
+
+  # The release's two site programs, built on a runner of its own (PRD #297
+  # milestone 3): no key, no secret and no OIDC token, so nothing in them can
+  # deploy. Their sha256 are job outputs, which the jobs that deploy and check
+  # the site bind the binaries they run to, and the artifacts are kept thirty
+  # days, GitHub's re-run window: a deploy is re-run by re-running its own job,
+  # never the job that built the bundle, and only while GitHub still re-runs it.
+  site-programs:
+    name: Site programs
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read # check out the repository
+    outputs:
+      sitedeploy: ${{ steps.digests.outputs.sitedeploy }}
+      sitecheck: ${{ steps.digests.outputs.sitecheck }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      # The two programs the deploy and the live check run, built exactly as
+      # the release builds them: bin/sitedeploy and bin/sitecheck, static and
+      # without build paths. The static build's environment lives in the
+      # Makefile, never here.
+      - name: Build the site's programs
+        run: make site-programs
+      - name: The programs' digests
+        id: digests
+        run: |
+          set -euo pipefail
+          echo "sitedeploy=$(sha256sum bin/sitedeploy | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+          echo "sitecheck=$(sha256sum bin/sitecheck | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: sitedeploy
+          path: bin/sitedeploy
+          if-no-files-found: error
+          retention-days: 30
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: sitecheck
+          path: bin/sitecheck
+          if-no-files-found: error
+          retention-days: 30
+
+  # The one job of the release that holds the site's key (PRD #297 milestone 3,
+  # ADR 0042). It deploys the published bundle of the highest release tag on
+  # main, and only while the maintainer has set SITE_DEPLOY_ENABLED to true:
+  # behind the site environment, whose deployment branch policy admits tags
+  # alone, and in a concurrency group of its own, so two deploys never
+  # interleave and a deploy in progress is never cancelled. contents: read and
+  # attestations: read are all it holds: it publishes nothing to the repository,
+  # mints no OIDC token, and checks nothing out.
+  site-deploy:
+    name: Deploy the site
+    needs: [latest, verify, verify-archives, attest-archives, site, site-browser, site-programs]
+    if: needs.latest.outputs.latest == 'true' && vars.SITE_DEPLOY_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: site
+    concurrency:
+      group: site-deploy
+      cancel-in-progress: false
+    permissions:
+      contents: read # download the published release's bundle
+      attestations: read # gh attestation verify reads them through the repository's API
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: sitedeploy
+      # The bundle comes from the published release, never from the artifact of
+      # a run that may have expired: the release must be published, and the
+      # bundle is checked against the site job's digest and its attestation for
+      # this workflow, this tag and this commit on GitHub's runners before
+      # anything is unpacked. The program is checked against its own job's
+      # digest. The tag comes through env:, never pasted into the script.
+      - name: Check the site bundle and the deploy program
+        env:
+          TAG: ${{ github.ref_name }}
+          SITE_SHA256: ${{ needs.site.outputs.sha256 }}
+          SITEDEPLOY_SHA256: ${{ needs.site-programs.outputs.sitedeploy }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ "$(gh release view "$TAG" --repo timothymamo/shift2eu --json isDraft --jq '.isDraft')" != false ]; then
+            echo "the release of $TAG is still a draft, so its bundle was never published" >&2
+            exit 1
+          fi
+          gh release download "$TAG" --repo timothymamo/shift2eu --pattern "shift2eu-site_$TAG.tar.gz"
+          printf '%s  %s\n%s  %s\n' "$SITE_SHA256" "shift2eu-site_$TAG.tar.gz" "$SITEDEPLOY_SHA256" sitedeploy | sha256sum -c -
+          gh attestation verify "shift2eu-site_$TAG.tar.gz" --repo timothymamo/shift2eu \
+            --signer-workflow timothymamo/shift2eu/.github/workflows/release.yml \
+            --source-ref "refs/tags/$TAG" --source-digest "$GITHUB_SHA" --deny-self-hosted-runners
+          mkdir bundle
+          tar -xzf "shift2eu-site_$TAG.tar.gz" -C bundle
+          chmod u+x sitedeploy
+      # The release tags on main, in the latest job's filter and sort, so the
+      # deploy program compares the site's version with every release tag it
+      # must not be older than, and this tag's own line is checked to be one of
+      # them. The repository is read by a treeless fetch: no checkout runs. The
+      # list holds exactly vX.Y.Z lines, as the deploy program requires.
+      - name: The release tags on main
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          git init -q tags
+          git -C tags fetch -q --filter=tree:0 --no-tags https://github.com/timothymamo/shift2eu.git '+refs/heads/main:refs/remotes/origin/main' '+refs/tags/v*:refs/tags/v*'
+          git -C tags tag -l 'v*.*.*' --merged refs/remotes/origin/main | sed -nE '/^v[0-9]+\.[0-9]+\.[0-9]+$/p' | sort -V > releases.txt
+          grep -qxF "$TAG" releases.txt || { echo "$TAG is not a release tag on main" >&2; exit 1; }
+      # Without this the deploy program could never refuse to roll the live
+      # site back: it reads the manifest of every release higher than this tag
+      # to know which site is live. The tags come from releases.txt alone,
+      # never from a page or an API answer. A tag whose release is not published
+      # yet (its own run is queued behind this one, so it deploys after this
+      # bundle), a release that is still a draft, and a release without the
+      # bundle each give a notice and the loop moves on; any other failed read
+      # fails the step. A manifest is read only from the bundle that release
+      # attested, for that tag, on GitHub's runners.
+      - name: The higher releases' manifests
+        env:
+          TAG: ${{ github.ref_name }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          mkdir manifests higher
+          mapfile -t tags < releases.txt
+          for t in "${tags[@]}"; do
+            if [ "$t" = "$TAG" ] || [ "$(printf '%s\n%s\n' "$TAG" "$t" | sort -V | tail -n 1)" != "$t" ]; then
+              continue
+            fi
+            err="$(mktemp)"
+            if ! gh api "repos/timothymamo/shift2eu/releases/tags/$t" > "higher/release.json" 2> "$err"; then
+              if grep -qF -e "HTTP 404" "$err"; then
+                echo "::notice::the release of $t is not published yet, so its manifest is not read"
+                rm -f "$err"
+                continue
+              fi
+              echo "the release of $t could not be read:" >&2
+              cat "$err" >&2
+              rm -f "$err"
+              exit 1
+            fi
+            rm -f "$err"
+            if [ "$(jq -r '.draft' "higher/release.json")" != false ]; then
+              echo "::notice::the release of $t is still a draft, so its manifest is not read"
+              continue
+            fi
+            if [ "$(jq --arg name "shift2eu-site_$t.tar.gz" -r '[.assets[].name] | map(select(. == $name)) | length' "higher/release.json")" != 1 ]; then
+              echo "::notice::the release of $t publishes no shift2eu-site_$t.tar.gz, so its manifest is not read"
+              continue
+            fi
+            gh release download "$t" --repo timothymamo/shift2eu --pattern "shift2eu-site_$t.tar.gz" --dir higher
+            gh attestation verify "higher/shift2eu-site_$t.tar.gz" --repo timothymamo/shift2eu \
+              --signer-workflow timothymamo/shift2eu/.github/workflows/release.yml \
+              --source-ref "refs/tags/$t" --deny-self-hosted-runners
+            tar -xzOf "higher/shift2eu-site_$t.tar.gz" manifest.json > "manifests/$t.json"
+          done
+      # The one step of the workflow that holds the site's key, and the only
+      # place either secret is named: the deploy program uploads the bundle to
+      # the bucket, with the higher releases' manifests and the release tags on
+      # main beside it. The step has no GH_TOKEN, so nothing in it can write to
+      # the repository. The bucket and the region are the site environment's
+      # variables, so no name is written into this document.
+      - name: Deploy the site
+        env:
+          SCW_ACCESS_KEY: ${{ secrets.SCW_ACCESS_KEY }}
+          SCW_SECRET_KEY: ${{ secrets.SCW_SECRET_KEY }}
+          TAG: ${{ github.ref_name }}
+          SITE_BUCKET: ${{ vars.SITE_BUCKET }}
+          SITE_REGION: ${{ vars.SITE_REGION }}
+        run: ./sitedeploy -bundle bundle -version "$TAG" -bucket "$SITE_BUCKET" -region "$SITE_REGION" -releases releases.txt -manifests manifests
+
+  # The live check after the deploy (PRD #297 milestone 3): the published
+  # release's manifest against the site that is live. No key and no
+  # environment: contents: read alone. The bundle comes from the published
+  # release, checked against the site job's digest, and site/records at the tag
+  # gives the HSTS and preload lists the check reads at their default paths.
+  site-check:
+    name: Check the live site
+    needs: [latest, site, site-programs, site-deploy]
+    if: needs.latest.outputs.latest == 'true' && vars.SITE_DEPLOY_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read # check out the repository
+    steps:
+      # site/records' HSTS and preload lists, which the check reads at their
+      # default paths, at the tag: no repository code runs, and the token is not
+      # kept.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: sitecheck
+          path: bin
+      # The bundle the release published, checked against the site job's digest
+      # before anything is read from it, and the check program against its own
+      # job's digest. No attestation is verified here: the deploy job verifies the
+      # one bundle this run deploys, and this reads the same bundle and digest.
+      - name: Check the site bundle and the live check program
+        env:
+          TAG: ${{ github.ref_name }}
+          SITE_SHA256: ${{ needs.site.outputs.sha256 }}
+          SITECHECK_SHA256: ${{ needs.site-programs.outputs.sitecheck }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ "$(gh release view "$TAG" --repo timothymamo/shift2eu --json isDraft --jq '.isDraft')" != false ]; then
+            echo "the release of $TAG is still a draft, so its bundle was never published" >&2
+            exit 1
+          fi
+          gh release download "$TAG" --repo timothymamo/shift2eu --pattern "shift2eu-site_$TAG.tar.gz" --dir bin
+          printf '%s  %s\n%s  %s\n' "$SITE_SHA256" "bin/shift2eu-site_$TAG.tar.gz" "$SITECHECK_SHA256" bin/sitecheck | sha256sum -c -
+          tar -xzOf "bin/shift2eu-site_$TAG.tar.gz" manifest.json > bin/manifest.json
+          chmod u+x bin/sitecheck
+      # The release tags on main, as the deploy job reads them: the check holds
+      # the live pages' footers to the releases it must not be older than.
+      - name: The release tags on main
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          git init -q tags
+          git -C tags fetch -q --filter=tree:0 --no-tags https://github.com/timothymamo/shift2eu.git '+refs/heads/main:refs/remotes/origin/main' '+refs/tags/v*:refs/tags/v*'
+          git -C tags tag -l 'v*.*.*' --merged refs/remotes/origin/main | sed -nE '/^v[0-9]+\.[0-9]+\.[0-9]+$/p' | sort -V > bin/releases.txt
+          grep -qxF "$TAG" bin/releases.txt || { echo "$TAG is not a release tag on main" >&2; exit 1; }
+      # The check's own defaults: the HSTS and preload lists at the paths
+      # site/records holds them at, and milestone 4's -plain-http-www to come.
+      - name: Check the live site
+        run: bin/sitecheck -manifest bin/manifest.json -tags bin/releases.txt
+
+  # The notice that the deploy's conditions did not hold (PRD #297 milestone 3):
+  # a job of its own, because a step-level condition would still run the deploy
+  # job, with its environment's deployment, on every release. No permission and
+  # no key, and the variable's value is never interpolated into the text it
+  # prints, so what the maintainer set can start no workflow command.
+  site-skipped:
+    name: Site deploy skipped
+    needs: latest
+    if: needs.latest.outputs.latest != 'true' || vars.SITE_DEPLOY_ENABLED != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Say that the site deploy is skipped
+        env:
+          LATEST: ${{ needs.latest.outputs.latest }}
+          ENABLED: ${{ vars.SITE_DEPLOY_ENABLED }}
+        run: |
+          set -euo pipefail
+          if [ "$LATEST" != true ]; then
+            reason="the tag is not the highest release tag on main"
+          elif [ "$ENABLED" != true ]; then
+            reason="SITE_DEPLOY_ENABLED is not true"
+          else
+            echo "the deploy's conditions hold, so this job should not have run" >&2
+            exit 1
+          fi
+          echo "::notice title=Site deploy skipped::The site deploy and its live check are skipped: $reason"
+          printf '> [!NOTE]\n> The site deploy and its live check are skipped: %s.\n' "$reason" >> "$GITHUB_STEP_SUMMARY"

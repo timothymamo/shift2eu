@@ -11,10 +11,12 @@ package main
 import (
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/go-cmp/cmp"
 
@@ -158,6 +160,48 @@ func TestSettingsNeverPrintsTheKey(t *testing.T) {
 				t.Errorf("%s of the settings reads %q, want neither half of the key: the settings hold the deploy key, so every printed form of them is redacted", verb, text)
 			}
 		}
+	}
+}
+
+// TestNewHTTPClientNeverConsultsTheProxyEnvironment pins the client the deploy
+// program talks through: it must carry a transport of its own whose Proxy is
+// nil, it must keep http.DefaultTransport's dial (a connect timeout of its own,
+// not only the client's whole-request one), it must not weaken TLS, and the
+// timeout it is given must be the client's. A client without a transport uses
+// http.DefaultTransport, whose Proxy is ProxyFromEnvironment, so HTTP_PROXY or
+// HTTPS_PROXY in the deploy step's environment would send every request, and
+// the site's key with it, through another host. The live check's client is
+// built the same way (Proxy: nil in ci/sitecheck/internal/livecheck).
+func TestNewHTTPClientNeverConsultsTheProxyEnvironment(t *testing.T) {
+	t.Parallel()
+
+	const timeout = 17 * time.Second
+
+	client := newHTTPClient(timeout)
+
+	transport, ok := client.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("the client's transport is %T, want an *http.Transport whose Proxy is nil: a nil transport is http.DefaultTransport, which reads HTTP_PROXY and HTTPS_PROXY", client.Transport)
+	}
+
+	if transport.Proxy != nil {
+		t.Errorf("the client's transport has a Proxy function, want nil: HTTP_PROXY or HTTPS_PROXY in the step's environment would send the site's key and every upload through another host")
+	}
+
+	// http.DefaultTransport dials through a net.Dialer with a 30-second
+	// connect timeout and keep-alive. A transport built by hand without it
+	// leaves the dial bounded only by the client's whole-request timeout, and a
+	// hand-copied set of defaults drifts as Go changes its own.
+	if transport.DialContext == nil {
+		t.Errorf("the client's transport has no DialContext, want http.DefaultTransport's net.Dialer, whose 30-second connect timeout and keep-alive the client otherwise loses")
+	}
+
+	if transport.TLSClientConfig != nil && transport.TLSClientConfig.InsecureSkipVerify {
+		t.Errorf("the client's transport skips TLS verification, want the system roots: the upload carries the site's key")
+	}
+
+	if client.Timeout != timeout {
+		t.Errorf("the client's timeout is %v, want the %v it is given, so one request cannot hang past it", client.Timeout, timeout)
 	}
 }
 
