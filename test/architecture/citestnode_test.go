@@ -437,12 +437,27 @@ func TestCITestJobPinsTheNodeTheExtensionLoadRuns(t *testing.T) {
 		return strings.Join(slices.Concat(lines[:start+1], []string{keyLine}, lines[start+1:]), "\n")
 	}
 
+	// jobLines returns ci with lines added to the test job, each at the
+	// indentation of the job's own keys, in the order given: the case of an
+	// edit that gives the job keys ciScalar cannot read on one line, such as a
+	// quoted key or a key whose value sits on the line below.
+	jobLines := func(lines ...string) string {
+		t.Helper()
+
+		added := make([]string, 0, len(lines))
+		for _, line := range lines {
+			added = append(added, "    "+line)
+		}
+
+		return in("  test:\n", "  test:\n"+strings.Join(added, "\n")+"\n")
+	}
+
 	// jobKey returns ci with `key: value` added to the test job, at the
 	// indentation of the job's own keys.
 	jobKey := func(key, value string) string {
 		t.Helper()
 
-		return in("  test:\n", "  test:\n    "+key+": "+value+"\n")
+		return jobLines(key + ": " + value)
 	}
 
 	// movedAfter returns ci with the step holding marker moved after the step
@@ -638,6 +653,21 @@ func TestCITestJobPinsTheNodeTheExtensionLoadRuns(t *testing.T) {
 		{
 			name:     "a tests job whose failure the run ignores",
 			workflow: jobKey("continue-on-error", "true"),
+			wantIn:   "ci.yml's test job holds continue-on-error:",
+		},
+		{
+			// YAML lets a key's value sit on the line below it: the key is the
+			// same one, and a job turned off this way must be refused just the
+			// same.
+			name:     "a tests job whose condition sits on the next line",
+			workflow: jobLines("if:", "  false"),
+			wantIn:   "ci.yml's test job holds if:",
+		},
+		{
+			// A quoted key is the same key to YAML, and a key ciScalar does not
+			// match: the pin reads the name with the quotes stripped.
+			name:     "a tests job that quotes continue-on-error",
+			workflow: jobLines(`"continue-on-error": true`),
 			wantIn:   "ci.yml's test job holds continue-on-error:",
 		},
 		{

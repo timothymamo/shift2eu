@@ -237,8 +237,10 @@ func TestPiNodeDecisionSkipsOrFailsWhatItCannotLoad(t *testing.T) {
 		says []string
 	}{
 		{
+			// version is what piProbeNode reports, and process.version carries a
+			// leading v; pinned is what piPinnedNodeVersion returns, without one.
 			name:  "the pinned node, which strips types",
-			state: piNodeState{found: true, version: pinned, strips: true, pinned: pinned, required: true},
+			state: piNodeState{found: true, version: "v" + pinned, strips: true, pinned: pinned, required: true},
 			want:  piNodeRun,
 		},
 		{
