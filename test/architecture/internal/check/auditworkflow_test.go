@@ -64,6 +64,9 @@ import (
 //     scorecard, and none pulls or runs a docker image. The model-free step that
 //     stops Docker and removes the runner user's sudo rule runs before the step
 //     that starts ci/auditrun, which runs the sandbox preflight and the audit.
+//     The model job reads the Claude Code pin file into the outputs its install
+//     step's env: names, and that step is required (test/lint's install check,
+//     issue #277).
 //   - Every Go command after the step that runs go mod download carries
 //     GOFLAGS=-mod=readonly GOPROXY=off.
 //   - The generate GitHub App token step is in the publish job alone, pinned to
@@ -204,6 +207,31 @@ const (
 	// auditGitleaksStdin is the publish job's second guard: gitleaks over the text
 	// it is about to send, through the stdin subcommand.
 	auditGitleaksStdin = "          gitleaks stdin --ignore-gitleaks-allow --redact --no-banner < \"${RUNNER_TEMP}/result.json\"\n"
+	// auditModelResultHead is the model job's encryption step, the step that
+	// runs right after the model step: the head the case that moves the hardening
+	// step past the model step inserts it at.
+	auditModelResultHead = "      - name: Encrypt the audit's result to the publish key\n"
+	// auditClaudeCodePinStep is the model job's step that reads the Claude Code
+	// pin file into the outputs the install step's env: reads: test/lint's
+	// install check requires it wherever the CLI is installed (issue #277,
+	// round J), so the audit's workflow holds it too.
+	auditClaudeCodePinStep = "      - name: Read the Claude Code pin\n" +
+		"        id: claude-code-pin\n" +
+		"        timeout-minutes: 5\n" +
+		"        run: |\n" +
+		"          set -euo pipefail\n" +
+		"          pin=.github/claude-code.yaml\n" +
+		"          version=\"$(grep -E '^version: [0-9]+\\.[0-9]+\\.[0-9]+$' \"${pin}\" || true)\"\n" +
+		"          integrity=\"$(grep -E '^integrity: sha512-[A-Za-z0-9+/]{86}==$' \"${pin}\" || true)\"\n" +
+		"          if [ \"$(grep -c '^version:' \"${pin}\")\" != 1 ] || [ \"$(grep -c '^integrity:' \"${pin}\")\" != 1 ] ||\n" +
+		"            [ -z \"${version}\" ] || [ -z \"${integrity}\" ]; then\n" +
+		"            echo \"::error title=Claude Code pin::${pin} holds no single exact version: line and sha512 integrity: line\"\n" +
+		"            exit 1\n" +
+		"          fi\n" +
+		"          {\n" +
+		"            printf 'version=%s\\n' \"${version#version: }\"\n" +
+		"            printf 'integrity=%s\\n' \"${integrity#integrity: }\"\n" +
+		"          } >> \"${GITHUB_OUTPUT}\"\n"
 	// auditPublishStep is the publish job's last step: the only step that trusts
 	// the decrypted result's image digest.
 	auditPublishStepHead = "      - name: Publish the report\n"
@@ -260,6 +288,14 @@ func TestAuditWorkflow(t *testing.T) {
 	// withoutStep returns the accepted workflow with step removed.
 	withoutStep := func(step string) string {
 		return mutate(t, acceptedWorkflow, step, "")
+	}
+
+	// moveStep returns the accepted workflow with step taken out of its place and
+	// put back before head: withStep(head, withoutStep(step)) is no move, since
+	// withStep always mutates the accepted workflow and so pastes a second copy of
+	// the whole document in place of head.
+	moveStep := func(head, step string) string {
+		return mutate(t, withoutStep(step), head, step+head)
 	}
 
 	// The model job's upload step, whose head the cases that add a step to the
@@ -608,7 +644,7 @@ func TestAuditWorkflow(t *testing.T) {
 		},
 		{
 			name:     "the App token step in the model job",
-			workflow: withStep(auditModelUpload, withoutStep(auditAppTokenStep)),
+			workflow: moveStep(auditModelUpload, auditAppTokenStep),
 			wantIn:   "audit App's token",
 		},
 
@@ -671,13 +707,22 @@ func TestAuditWorkflow(t *testing.T) {
 		// the model step.
 		{
 			name:     "the hardening step after the model step",
-			workflow: withStep(auditPublishStepHead, withoutStep(auditHardeningStep)),
+			workflow: moveStep(auditModelResultHead, auditHardeningStep),
 			wantIn:   "sudo rule",
 		},
 		{
 			name:     "no hardening step",
 			workflow: withoutStep(auditHardeningStep),
 			wantIn:   "sudo rule",
+		},
+		// The step that reads the Claude Code pin file into the outputs the
+		// install step's env: names is required: without it the installer takes a
+		// version and an integrity from nowhere, or from a pin of its own that
+		// ci/claudecodepin never reads (test/lint's install check, issue #277).
+		{
+			name:     "no Claude Code pin step",
+			workflow: withoutStep(auditClaudeCodePinStep),
+			wantIn:   "Read the Claude Code pin",
 		},
 		{
 			name:     "a container in the model job",

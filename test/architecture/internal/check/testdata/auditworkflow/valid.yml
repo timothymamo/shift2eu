@@ -185,6 +185,23 @@ jobs:
         run: |
           set -euo pipefail
           go mod download
+      - name: Read the Claude Code pin
+        id: claude-code-pin
+        timeout-minutes: 5
+        run: |
+          set -euo pipefail
+          pin=.github/claude-code.yaml
+          version="$(grep -E '^version: [0-9]+\.[0-9]+\.[0-9]+$' "${pin}" || true)"
+          integrity="$(grep -E '^integrity: sha512-[A-Za-z0-9+/]{86}==$' "${pin}" || true)"
+          if [ "$(grep -c '^version:' "${pin}")" != 1 ] || [ "$(grep -c '^integrity:' "${pin}")" != 1 ] ||
+            [ -z "${version}" ] || [ -z "${integrity}" ]; then
+            echo "::error title=Claude Code pin::${pin} holds no single exact version: line and sha512 integrity: line"
+            exit 1
+          fi
+          {
+            printf 'version=%s\n' "${version#version: }"
+            printf 'integrity=%s\n' "${integrity#integrity: }"
+          } >> "${GITHUB_OUTPUT}"
       - name: Install the pinned tools
         timeout-minutes: 20
         env:
@@ -200,6 +217,10 @@ jobs:
           AGE_VERSION: v1.3.1
           # renovate: datasource=github-release-attachments depName=FiloSottile/age digestVersion=v1.3.1
           AGE_SHA256: "3333333333333333333333333333333333333333333333333333333333333333"
+          # The CLI's version and integrity come from the one pin file, read into
+          # the outputs of the step above, never written here (ADR 0040).
+          CLAUDE_CODE_PIN_VERSION: ${{ steps.claude-code-pin.outputs.version }}
+          CLAUDE_CODE_PIN_INTEGRITY: ${{ steps.claude-code-pin.outputs.integrity }}
         run: |
           set -euo pipefail
           bin="${RUNNER_TEMP}/bin"
@@ -218,10 +239,7 @@ jobs:
           # The CLI's version and integrity are read from the one pin file, never
           # written here (ADR 0040): a bump moves that file, which the pin check
           # holds to the registry's integrity, and this step fails until it does.
-          version="$(grep -E '^version: [0-9]+\.[0-9]+\.[0-9]+$' .github/claude-code.yaml)"
-          integrity="$(grep -E '^integrity: sha512-[A-Za-z0-9+/]{86}==$' .github/claude-code.yaml)"
-          test -n "${version}" && test -n "${integrity}"
-          .github/scripts/install-claude-code.sh "${RUNNER_TEMP}/claude-code" "@anthropic-ai/claude-code-linux-x64@${version#version: }" "${integrity#integrity: }"
+          .github/scripts/install-claude-code.sh "${RUNNER_TEMP}/claude-code" "@anthropic-ai/claude-code-linux-x64@${CLAUDE_CODE_PIN_VERSION}" "${CLAUDE_CODE_PIN_INTEGRITY}"
       - name: Load the AppArmor profile for bubblewrap
         timeout-minutes: 5
         run: |
