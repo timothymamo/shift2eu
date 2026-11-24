@@ -2457,7 +2457,11 @@ for s in shift2eu-agents renovate shift2eu-release shift2eu-audit; do echo "$s $
 
 gh api repos/timothymamo/shift2eu/rulesets --jq '.[] | [.id, .name, .target, .enforcement] | @tsv'
 # the branch ruleset is the <branch id>, the audit-paths ruleset the <id>,
-# the Audit report branches ruleset of step 4 the <audit branches id>
+# the Audit report branches ruleset of step 4 the <audit branches id>, Protect main the <Protect main id>
+
+# Protect main before this step changes anything: keep the line, the <Protect main record>
+gh api repos/timothymamo/shift2eu/rulesets/<Protect main id> --jq '[.updated_at, (.rules | tojson)] | @tsv'
+# PASS: one line, a timestamp and the rules; FAIL: an API error
 
 # Branch ruleset: conditions, rules, bypass actors
 gh api repos/timothymamo/shift2eu/rulesets/<branch id> --jq '(.conditions.ref_name.include | tojson), (.conditions.ref_name.exclude | sort | tojson)'
@@ -2534,8 +2538,12 @@ gh api repos/timothymamo/shift2eu/rulesets/<audit branches id> --jq '[.bypass_ac
 # Then make the audit-paths ruleset active (enforcement: active), and check Protect main is unchanged
 gh api repos/timothymamo/shift2eu/rulesets/<id> --jq .enforcement
 # PASS: active
+gh api repos/timothymamo/shift2eu/rulesets/<Protect main id> --jq '[.updated_at, (.rules | tojson)] | @tsv'
+# PASS: the same line as the <Protect main record> at this step's start, updated_at and every rule
+#   (nothing of this step touched Protect main)
+# FAIL: any difference: read Protect main's rules in Settings, Rules, Rulesets before going on
 gh api repos/timothymamo/shift2eu/rulesets/<Protect main id> --jq '.rules[] | select(.type == "pull_request") | .parameters.require_code_owner_review'
-# PASS: true (step 6's Protect main read; nothing of this step touched Protect main)
+# PASS: true (step 6's Protect main read)
 ```
 
 **6. Check the other rulesets and the Apps.** *Done 2026-11-22.* The audit App is in no bypass list of
@@ -2581,10 +2589,18 @@ base64 -d < <a scratch file> | grep -nw schedule
 the report, then milestone 3's schedule.
 
 ```bash
-# Mac (admin), as yourself
+# Mac (admin), as yourself: the dispatch time, the <dispatch time>, then the dispatch
+date -u +%Y-%m-%dT%H:%M:%SZ
 gh workflow run scheduled-security-audit.yml --repo timothymamo/shift2eu --ref main
-gh run list --repo timothymamo/shift2eu --workflow scheduled-security-audit.yml --limit 1 --json databaseId,status,conclusion
-# the <run_id>; PASS, once it finishes: conclusion success
+# PASS: the workflow_dispatch event created; FAIL: an error
+
+# The run: the dispatch is asynchronous, so the newest run may still be the previous one
+gh run list --repo timothymamo/shift2eu --workflow scheduled-security-audit.yml --event workflow_dispatch --limit 1 \
+  --json databaseId,createdAt,status,conclusion --jq '.[] | [.databaseId, .createdAt, .status, .conclusion] | @tsv'
+# PASS: createdAt later than the <dispatch time>; its databaseId is the <run_id>
+# FAIL: createdAt earlier: the previous run; wait a few seconds and list again
+gh run watch <run_id> --repo timothymamo/shift2eu --exit-status > /dev/null && echo succeeded
+# PASS, once it finishes: succeeded; FAIL: no "succeeded" line (the run failed: step 11)
 gh pr list --repo timothymamo/shift2eu --author app/shift2eu-audit --json number,headRefName --jq '.[] | [.number, .headRefName] | @tsv'
 # PASS: one PR, head branch security-audit/<date>-<run_id>
 gh api repos/timothymamo/shift2eu/actions/runs/<run_id>/artifacts --jq '[.artifacts[].name] | sort | tojson'
@@ -2669,18 +2685,27 @@ gh variable set AUDIT_PUBLISH_PUBLIC_KEY --env security-audit --repo timothymamo
 # PASS: each line reports the secret or variable set; FAIL: an error
 ls <the App's new key file> <the model key's new private file> <the publish key's new private file>
 # PASS: No such file or directory (each one you stored, once you have deleted it)
+
+# A test run of the new secrets: the dispatch time, the <dispatch time>, then the dispatch
+date -u +%Y-%m-%dT%H:%M:%SZ
+gh workflow run scheduled-security-audit.yml --repo timothymamo/shift2eu --ref main
+# PASS: the workflow_dispatch event created; FAIL: an error
 ```
 
 ```bash
-# Mac (admin), as yourself: the check, after any renewal or rotation
+# Mac (admin), as yourself: the check, read-only, after any renewal or rotation and its test run
 gh api repos/timothymamo/shift2eu/environments/security-audit/secrets --jq '[.secrets[].name] | sort | tojson'
 # PASS: ["AUDIT_APP_PRIVATE_KEY","AUDIT_FINGERPRINT_KEY","AUDIT_MODEL_PRIVATE_KEY","AUDIT_PUBLISH_PRIVATE_KEY","CLAUDE_CODE_OAUTH_TOKEN"]
 gh api repos/timothymamo/shift2eu/environments/security-audit/variables --jq '[.variables[].name] | sort | tojson'
 # PASS: ["AUDIT_APP_CLIENT_ID","AUDIT_MODEL_PUBLIC_KEY","AUDIT_PUBLISH_PUBLIC_KEY"]
-gh workflow run scheduled-security-audit.yml --repo timothymamo/shift2eu --ref main
-gh run list --repo timothymamo/shift2eu --workflow scheduled-security-audit.yml --limit 1 --json conclusion --jq '.[].conclusion'
-# PASS, once it finishes: success (step 8's checks)
-# FAIL: an authentication error in the model job: the token is wrong or revoked; a decryption error: a key pair's halves do not match
+gh run list --repo timothymamo/shift2eu --workflow scheduled-security-audit.yml --event workflow_dispatch --limit 1 \
+  --json databaseId,createdAt,status,conclusion --jq '.[] | [.databaseId, .createdAt, .status, .conclusion] | @tsv'
+# PASS: createdAt later than the action's <dispatch time>; its databaseId is the <run_id>
+# FAIL: createdAt earlier: the previous run (the dispatch is asynchronous); wait a few seconds and list again
+gh run watch <run_id> --repo timothymamo/shift2eu --exit-status > /dev/null && echo succeeded
+# PASS, once it finishes: succeeded (then step 8's checks)
+# FAIL: no "succeeded" line; an authentication error in the model job: the token is wrong or revoked;
+#   a decryption error: a key pair's halves do not match
 ```
 
 **11. Recover a failed run.** Start a **new `workflow_dispatch` run** on `main`. The workflow enforces
@@ -2721,9 +2746,19 @@ run. The closed duplicate does not count as a dismissal: the kept draft takes pr
 the draft is open.
 
 ```bash
-# Mac (admin), as yourself, after the new run
-gh run list --repo timothymamo/shift2eu --workflow scheduled-security-audit.yml --limit 1 --json conclusion --jq '.[].conclusion'
-# PASS: success, and the new run opens the report PR (step 8's checks)
+# Mac (admin), as yourself: the new run. The dispatch time, the <dispatch time>, then the dispatch
+date -u +%Y-%m-%dT%H:%M:%SZ
+gh workflow run scheduled-security-audit.yml --repo timothymamo/shift2eu --ref main
+# PASS: the workflow_dispatch event created; FAIL: an error
+
+# The new run: the dispatch is asynchronous, so the newest run may still be the failed one
+gh run list --repo timothymamo/shift2eu --workflow scheduled-security-audit.yml --event workflow_dispatch --limit 1 \
+  --json databaseId,createdAt,status,conclusion --jq '.[] | [.databaseId, .createdAt, .status, .conclusion] | @tsv'
+# PASS: createdAt later than the <dispatch time>; its databaseId is the new <run_id>
+# FAIL: createdAt earlier: the failed run; wait a few seconds and list again
+gh run watch <run_id> --repo timothymamo/shift2eu --exit-status > /dev/null && echo succeeded
+# PASS, once it finishes: succeeded, and the new run opens the report PR (step 8's checks)
+# FAIL: no "succeeded" line: read the publish job's summary line (below)
 ```
 
 The publish job's summary line names the class of a failure, never its detail (ADR 0040, "Exit codes and
