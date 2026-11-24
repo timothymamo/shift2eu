@@ -38,10 +38,14 @@ Hold rule 3 with a second layer in both agents, beside the words in CLAUDE.md:
   `U+3000`) become plain spaces, then `~` is the home directory and the result is resolved against the
   working directory, `..` included. grep and find, the two file tools that walk a directory tree (pi runs
   grep as `rg --hidden`), are refused also when their resolved path is an ancestor of either directory
-  (`~`, `~/.config`, `/`): a grep rooted at `~` for `API_KEY` would print `daemon.env`'s lines, one rooted
-  at `/` walks `/proc`. A read, ls or edit of such an ancestor prints no key and stays allowed. A bash
-  command over 32 KB (32768 characters) is refused unread, before the patterns, with a reason that points
-  at the write tool (see the bound below). It tests `event.toolName` itself, imports only `node:` built-ins and
+  (`~`, `~/.config`, `/`, and every spelling that resolves to one: `//`, `/.`, `/..`, enough `../`): a
+  grep rooted at `~` for `API_KEY` would print `daemon.env`'s lines, one rooted at `/` walks `/proc`. The
+  root is compared as itself, since appending `/` to `/` would ask for a `//` prefix no resolved path
+  has. A grep or find with no path runs in the working directory (pi's default), so the guard checks an
+  absent path as `.`: from a working directory of `~` it is refused. A read, ls or edit of such an
+  ancestor prints no key and stays allowed. A bash command over 32 KB (32768 characters) is refused
+  unread, before the patterns, with a reason that points at the write tool (see the bound below); when
+  the list failed to load, the reason of every bash refusal, a long command's too, is the load failure. It tests `event.toolName` itself, imports only `node:` built-ins and
   pi's package for types alone (`import type`), so the guard does not depend at run time on the module it
   guards.
   - **What fails closed, and what does not.** pi reports an extension that fails to load and carries on
@@ -208,10 +212,14 @@ Claude Code rules, which ADR 0003 does not cover.
   here, since the Makefile has no flags variable the agents pass. The bare word `environ` is refused
   wherever it stands (`git grep environ`, `cat x/environ.go`), and so is the bare word `ENV`
   (`grep ENV Dockerfile`, `echo ENV`, a Dockerfile's `ENV` line in a heredoc or a quoted argument):
-  A `git` command that holds `credential fill` in an argument (`git commit -m "drop credential fill"`)
-  is refused as the helper. `\bENV\b` is what refuses `ruby -e 'p ENV'`; `VM_ENV` and `ENVIRONMENT` are not refused by it. `$ENV`
+  `\bENV\b` is what refuses `ruby -e 'p ENV'`; `VM_ENV` and `ENVIRONMENT` are not refused by it. `$ENV`
   is refused anywhere, and so is a command that names `jq` and then a word `env` before the next
-  separator (`jq -r .name f.json env.json` is; `jq -r .env f` is not).
+  separator (`jq -r .name f.json env.json` is; `jq -r .env f` is not). A `git` command that holds
+  `credential fill` in an argument (`git commit -m "drop credential fill"`) is refused as the helper, and
+  a command that names `gh auth git-credential` in an argument
+  (`gh pr create --body "... gh auth git-credential ..."`) as that helper.
+- Known limit of the Claude Code rules: `*git credential fill*` does not match a `git` with an option
+  between the word and the subcommand (`git -c x credential fill`); pi's patterns refuse it.
 - Rollout: the extension and the tester's `.scratch/` line reach only tester panes started from a dispatch
   worktree created after the merge; a pane started before it runs without them until it is restarted, and
   a branch cut before the merge does not ignore `.scratch/` (its `.gitignore` predates the line).

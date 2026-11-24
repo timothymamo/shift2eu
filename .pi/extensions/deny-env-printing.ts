@@ -11,7 +11,9 @@
  *   leading `@`, a `file://` URL, Unicode spaces, `~`, `..`) and resolved against the working directory,
  *   is /proc or ~/.config/dot-agent-deck or lies under either, or whose path, glob or pattern names the
  *   deck's file of keys, daemon.env, or its directory;
- * - a grep or find call whose path is an ancestor of either directory (`~`, `/`), which its walk reaches.
+ * - a grep or find call whose path is an ancestor of either directory (`~`, `/`, and every spelling that
+ *   resolves to one, such as `//`, `/.`, `/..` or enough `../`), which its walk reaches; a call with no
+ *   path is checked as the working directory, where pi runs it.
  *
  * The patterns are data, pinned by test/architecture/pienvdeny_test.go, and are written to the syntax Go's
  * RE2 and JavaScript share (no lookaround, no backreference, no inline flag).
@@ -39,8 +41,9 @@ const deckKeyFile = "daemon.env";
 const fileTools = new Set(["read", "grep", "find", "ls", "edit", "write"]);
 
 // The file tools that read the contents of a whole directory tree (pi runs grep as `rg --hidden`): a call
-// of one is refused also when its path is an ancestor of a refused directory (`~`, `/`), since the walk
-// reaches it.
+// of one is refused also when its resolved path is an ancestor of a refused directory (`~`, `/`, or `..`
+// up to either), since the walk reaches it; a call with no path walks the working directory, so it is
+// checked as `.`.
 const recursiveTools = new Set(["grep", "find"]);
 
 // The longest bash command matched against the patterns. The prefix patterns cost time quadratic in the
@@ -111,9 +114,11 @@ function resolvePath(path: string, cwd: string): string {
 	return resolve(cwd, expanded);
 }
 
-// under tells whether absolute is directory or below it.
+// under tells whether absolute is directory or below it. A directory that already ends in `/` (the root,
+// `/`) is its own prefix: appending another `/` would ask for `//`, which no resolved path starts with.
 function under(absolute: string, directory: string): boolean {
-	return absolute === directory || absolute.startsWith(`${directory}/`);
+	const prefix = directory.endsWith("/") ? directory : `${directory}/`;
+	return absolute === directory || absolute.startsWith(prefix);
 }
 
 const procReason =
@@ -171,7 +176,8 @@ export default function (pi: ExtensionAPI) {
 				const keyDirectory = join(homedir(), deckKeyDirectory);
 
 				for (const field of ["path", "glob", "pattern"]) {
-					const value = input[field];
+					// pi runs a file tool with no path in the working directory, so an absent path is checked as `.`.
+					const value = field === "path" ? (input.path ?? ".") : input[field];
 					if (typeof value !== "string") {
 						continue;
 					}
