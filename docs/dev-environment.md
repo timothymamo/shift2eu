@@ -2894,7 +2894,7 @@ Everything below exists to keep the agents from waiting on you (#68). Three plac
   the check, and a deny rule refuses the action. The deny rules (`--no-verify`, force pushes,
   `git branch -D` and `--delete`, see CLAUDE.md rule 8; the commands that print the environment, `env`,
   `printenv`, bare `set` and `export`, `export -p`, `declare`/`typeset -p`/`-x`, `compgen -v`/`-e`/`-A`,
-  `ps e*`, `make -p`/`--print-data-base`, any command naming `daemon.env` or expanding a `$..._API_KEY` or
+  `ps e*`, `make -p`/`--print-data-base`, any command naming `daemon.env` or `.config/dot-agent-deck` or expanding a `$..._API_KEY` or
   `$..._TOKEN`, and reading `/proc` or `~/.config/dot-agent-deck/`, see CLAUDE.md rule 3 and
   [ADR 0044](adr/0044-refuse-printing-the-environment-in-pi-with-a-project-extension.md)) and the allow rules that name no path (the fixed `make` targets, `go test/build/vet`,
   `golangci-lint run`, `dot-agent-deck work-done`, web search and the provider documentation sites)
@@ -2937,7 +2937,7 @@ asking. Its `--approve` flag trusts the project for that process without a trust
 project's `.pi/settings.json` (and with it the skills) and its extension
 `.pi/extensions/deny-env-printing.ts`, which refuses a bash command that prints the environment (the
 patterns in `.pi/deny-env-printing.json`, `env VAR=value cmd` allowed) and a file tool call on a path
-under `/proc` or naming `daemon.env`
+under `/proc` or `~/.config/dot-agent-deck`, or naming `daemon.env` or that directory
 ([ADR 0044](adr/0044-refuse-printing-the-environment-in-pi-with-a-project-extension.md)). That refusal
 is a second layer beside CLAUDE.md rule 3, not a boundary: for the tester the VM is the only boundary, so
 never start the deck outside it. An extension that fails to load is logged and skipped, so the refusal

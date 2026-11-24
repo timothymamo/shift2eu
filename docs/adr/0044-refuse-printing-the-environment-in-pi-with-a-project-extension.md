@@ -27,8 +27,8 @@ Hold rule 3 with a second layer in both agents, beside the words in CLAUDE.md:
 - **pi:** `.pi/extensions/deny-env-printing.ts` hooks `tool_call`. It refuses a bash command that matches
   any pattern of `.pi/deny-env-printing.json` (`{"reason": ..., "patterns": [...]}`, read relative to the
   extension file), with the list's reason, and a read, grep, find, ls, edit or write call whose path
-  resolves to `/proc` or below it (after `~` and `..`, against the working directory) or whose path, glob
-  or pattern names `daemon.env`. It tests `event.toolName` itself and imports pi's package for types
+  resolves to `/proc` or `~/.config/dot-agent-deck`, or below either (after `~` and `..`, against the
+  working directory), or whose path, glob or pattern names `daemon.env` or `.config/dot-agent-deck`. It tests `event.toolName` itself and imports pi's package for types
   alone (`import type`), so the guard does not depend at run time on the module it guards.
   - **What fails closed, and what does not.** pi reports an extension that fails to load and carries on
     without it: a load failure fails open. So the extension's top level does nothing that can throw (the
@@ -39,37 +39,51 @@ Hold rule 3 with a second layer in both agents, beside the words in CLAUDE.md:
     "env-printing refusal loaded" (or that the list failed) when the pane has a UI (`ctx.hasUI`), and
     nothing otherwise.
   - **What the patterns refuse.** Every pattern for a command word shares one prefix: a separator
-    (start, newline, `;`, `&`, `|`, `(`, a backtick, `{`, a quote), then any number of assignments
-    (`FOO=1 env`), shell keywords (`then`, `do`, `else`, `elif`, `if`, `while`, `until`, `!`) and wrappers
-    that run their argument (`sudo`, `command`, `builtin`, `exec`, `nohup`, `time`, `xargs`, `timeout`,
-    `nice`, `ionice`, `stdbuf`, `doas`, `busybox`, `eval`, `env`, `bash`/`sh`/`zsh`/`dash`/`ksh`, each with
-    options, numeric or duration words and assignments: `timeout 5 env`, `bash -c 'env'`), then an
-    optional quote or backslash (a backslash-escaped command word, `\env`, `\printenv`, runs the same
-    command). After that prefix they refuse: `env` followed only by options and assignments, then the end,
-    a separator or a redirect, numbered or not (`env`, `env -0`, `env FOO=bar | grep`, `env > out`,
-    `env 2>&1`, `env 1>out.txt`); `printenv`; bare `set`; bare `export` and `export -p`;
+    (start, newline, `;`, `&`, `|`, `(`, a backtick, `{`, a quote), then any number of redirects in front
+    of the command word (`2>&1 env`, `</dev/null env`, `> out env`, `2>x export`: bash runs the printer
+    all the same), assignments (`FOO=1 env`), shell keywords (`then`, `do`, `else`, `elif`, `if`,
+    `while`, `until`, `!`) and wrappers that run their argument (`sudo`, `command`, `builtin`, `exec`,
+    `nohup`, `time`, `xargs`, `timeout`, `nice`, `ionice`, `stdbuf`, `doas`, `busybox`, `eval`, `env`,
+    `bash`/`sh`/`zsh`/`dash`/`ksh`/`fish`, `setsid`, `strace`, `ltrace`, `watch`, `script`, `unbuffer`,
+    `su`, `runuser`, `coproc`, each with options, an option's one plain value, numeric or duration words
+    and assignments: `timeout -s KILL 5 env`, `sudo -u x env`, `xargs -a f env`, `bash -c 'env'`; and
+    `flock` and `chroot`, which take one plain word before the command: `flock x env`, `chroot / env`),
+    then an optional quote or backslash (a backslash-escaped command word, `\env`, `\printenv`, runs the
+    same command). After that prefix they refuse: `env` followed only by options (also `-u`/`-C`/`--unset`/
+    `--chdir` with their value: `env -u FOO`, `env -C /tmp`) and assignments, then the end, a separator or
+    a redirect, numbered or not (`env`, `env -0`, `env FOO=bar | grep`, `env > out`, `env 2>&1`,
+    `env 1>out.txt`); `printenv`; bare `set`; bare `export` and `export -p`;
     `declare`/`typeset` bare or with `-p`/`-x`, where bare `set`, `export`, `declare` and `typeset` also
     count when a redirect, numbered or not, follows (`set 2>&1 | grep KEY`, `typeset 2>&1`); `compgen -v`/`-e`/`-A`; `ps` whose first
     argument is a BSD option word with `e` (`ps e`, `ps eww`, `ps auxeww`); `make` with an option holding
-    `p` or `--print-data-base` (`make -p`, `make -pn`). Anywhere in a command they refuse a `/proc` path
-    (`ls /proc/1`, `cat /proc/self/env*`), `daemon.env`, the expansion of a key by name (`$..._KEY`,
-    `${..._TOKEN}`, `$..._SECRET`, `$..._PASSWORD`, and `${!` indirection), and the interpreter one-liners
-    that read the environment themselves (`ENVIRON`, `os.environ`, `os.getenv`, `process.env`, `%ENV`,
-    `$ENV{`, `getenv(`).
+    `p` or `--print-data-base` (`make -p`, `make -pn`). Anywhere in a command they refuse a `/proc` path,
+    absolute or relative (`ls /proc/1`, `cat /proc/self/env*`, `cat ../../proc/self/environ`), a
+    `pro...` path, relative or globbed, that leads to an `environ` (`cat proc/self/environ` after `cd /`,
+    `cat /pro?/self/environ`), `daemon.env`, the deck's key directory (`.config/dot-agent-deck`: `grep -r .
+    ~/.config/dot-agent-deck`; the repository's `.dot-agent-deck.toml` and `.dot-agent-deck/` are not
+    it), the expansion of a key by name (`$..._KEY`, `${..._TOKEN}`, `$..._SECRET`, `$..._PASSWORD`, and
+    `${!` indirection), and the interpreter one-liners that read the environment themselves (`ENVIRON`,
+    `os.environ`, `os.getenv`, `process.env`, `%ENV`, `$ENV{`, `getenv(`, Ruby's `ENV.` and `ENV[`,
+    Python's bare `environ` word).
   - **What they leave alone.** `env` followed by a command word runs that command and prints nothing:
     `env GOTOOLCHAIN=local make check`, `env -u FOO make test`, `env -C dir make`,
     `/usr/bin/env bash dev/x.sh` are allowed in pi, unless the command word is itself a printer
     (`env A=1 printenv`, `env X=1 env`), which the shared prefix catches. So are `set -e`, `export FOO=bar`,
     `go env GOPATH`, `ps -o lstart=,args= -p <pid>` (rule 10), `ps -ef`, `ps aux`, `make -C dir check` and
-    `make -j4 check`.
+    `make -j4 check`, a redirect in front of a command that prints nothing (rule 10's backgrounded run,
+    `</dev/null make check`, `>log 2>&1 make check`), a redirect to or from a file named like a printer
+    (`echo x > env`, `cat < set`), and `timeout 600 make check`, `nice -n 10 make check`.
   - The patterns are written in the syntax Go's RE2 and JavaScript share (no lookaround, no backreference,
-    no inline flag), so the Go test that holds them to the refused and allowed tables
-    (`test/architecture/pienvdeny_test.go`) tests what pi runs.
+    no group extension or inline flag, no Unicode property, no `\Q`, `\z`, `\A` or POSIX class), so the Go
+    test that holds them to the refused and allowed tables (`test/architecture/pienvdeny_test.go`) tests
+    what pi runs; `TestPiEnvDenyListPatternsUseTheNarrowestSyntax` guards that syntax.
 - **Claude Code:** `.claude/settings.json`'s `permissions.deny` refuses `env` and `env *`, `/usr/bin/env*`,
-  `printenv` and `printenv *`, bare `set` and `export` and each followed by a redirect (`set >*`,
-  `set [0-9]>*`, `export >*`, `export [0-9]>*`: `set 2>&1`, `export > out`), `export -p*`, `declare` and `typeset` bare and with
-  `-p*`/`-x*`, `compgen -v*`/`-e*`/`-A*`/`*-A*`, `*/proc/*/environ*`, `make -p*` and
-  `make --print-data-base*`, `ps e*`, `*daemon.env*`, and a command holding a `$` before `API_KEY` or
+  `printenv` and `printenv *`, bare `set`, `export`, `declare` and `typeset` and each followed by a
+  redirect, plain, numbered or of both streams (`set >*`, `set [0-9]>*`, `set &>*`, and the same three for
+  `export`, `declare` and `typeset`: `set 2>&1`, `export > out`, `declare &>x`), `export -p*`, `declare`
+  and `typeset` with `-p*`/`-x*`, `compgen -v*`/`-e*`/`-A*`/`*-A*`, `*/proc/*/environ*`, `make -p*` and
+  `make --print-data-base*`, `ps e*`, `*daemon.env*`, the deck's whole key directory
+  (`*.config/dot-agent-deck*`), and a command holding a `$` before `API_KEY` or
   `TOKEN` (`*$*API_KEY*`, `*$*TOKEN*`); and reading `/proc` whole (`Read(//proc)`, `Read(//proc/**)`,
   `Read(//proc/**/environ)`) and the deck's directory (`Read(~/.config/dot-agent-deck/**)`). `//` is
   Claude Code's absolute path: a single leading `/` is relative to the project, so the earlier
@@ -109,6 +123,14 @@ Claude Code rules, which ADR 0003 does not cover.
 - It is a second layer, not a boundary. Patterns cannot parse a shell: a script file the agent writes and
   runs, a variable that holds the command word, an interpreter reached in a form the list does not name,
   or a tool that is not bash still reaches the environment; the Lima VM stays the boundary (ADR 0003).
+  Known forms the patterns do not refuse: a printer run by `find -exec env` (or `-execdir`), and a
+  wrapper the list does not name; a Go test (or any program) written with the edit tool that logs
+  `os.Environ()` and is run with `go test -v`, because the file tools do not scan what they write; and a
+  grep or find rooted at an ancestor of the deck's key directory (`~`, `~/.config`) whose glob does not
+  name `.config/dot-agent-deck`.
+- Whether Claude Code's matcher refuses a redirect in front of the command word (`2>&1 env`) cannot be
+  checked offline: its rules are prefix rules on the command it parses, and no rule names that form. pi's
+  patterns refuse it.
 - A load failure of the extension (a syntax error, a module that cannot be resolved) fails open: pi logs
   it and runs the tester without the refusal. Only the paths after load fail closed. The `session_start`
   notice shows a TUI pane whether the refusal loaded.
@@ -119,8 +141,8 @@ Claude Code rules, which ADR 0003 does not cover.
   quoted argument (`git commit -m "env"`, a multi-line `--body` with a line that is only `set`); and a
   command that only names `daemon.env`, `process.env`, `os.environ`, `ENVIRON` or a `/proc/...` path, such
   as a `grep` for them in the tree. Write such a command differently: a message through a file
-  (`git commit -F`, `--body-file`), a search through the file tools, which refuse only `/proc` paths and
-  `daemon.env`. A quote is a separator to the patterns (it is what refuses `bash -c 'env'`), so
+  (`git commit -F`, `--body-file`), a search through the file tools, which refuse only `/proc` paths,
+  `daemon.env` and the deck's key directory. A quote is a separator to the patterns (it is what refuses `bash -c 'env'`), so
   `git commit -m "x; env"` and `git commit -m "env"` are refused too; `git commit -m "fix env bug"` is not.
   `make` with a quoted variable value that holds `-p` (`make test GOFLAGS='-run TestX -p 1'`) is refused
   as `make -p`: the pattern's argument class allows quotes, so it sees `-p` inside the value. That is rare

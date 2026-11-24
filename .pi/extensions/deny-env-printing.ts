@@ -7,8 +7,8 @@
  *
  * - a bash call whose command matches any pattern of ../deny-env-printing.json;
  * - a file-tool call (read, grep, find, ls, edit, write) whose path, after `~` and `..` are resolved
- *   against the working directory, is /proc or lies under it, or whose path, glob or pattern names the
- *   deck's file of keys, daemon.env.
+ *   against the working directory, is /proc or ~/.config/dot-agent-deck or lies under either, or whose
+ *   path, glob or pattern names the deck's file of keys, daemon.env, or its directory.
  *
  * The patterns are data, pinned by test/architecture/pienvdeny_test.go, and are written to the syntax Go's
  * RE2 and JavaScript share (no lookaround, no backreference, no inline flag).
@@ -65,23 +65,30 @@ function loadDenyList(): Loaded {
 	}
 }
 
-// underProc tells whether a file tool's path, resolved as pi resolves it (a leading `~` is the home
-// directory, a relative path is under the working directory, `..` is normalised), is /proc or below it.
-function underProc(path: string, cwd: string): boolean {
+// The deck's directory under the home directory, which holds the file of keys and whatever else the deck
+// keeps there: refused whole, by resolved path and by name in a glob or pattern.
+const deckKeyDirectory = ".config/dot-agent-deck";
+
+// resolvePath resolves a file tool's path as pi resolves it: a leading `~` is the home directory, a
+// relative path is under the working directory, `..` is normalised.
+function resolvePath(path: string, cwd: string): string {
 	let expanded = path;
 	if (expanded === "~" || expanded.startsWith("~/")) {
 		expanded = homedir() + expanded.slice(1);
 	}
 
-	const absolute = resolve(cwd, expanded);
+	return resolve(cwd, expanded);
+}
 
-	return absolute === "/proc" || absolute.startsWith("/proc/");
+// under tells whether absolute is directory or below it.
+function under(absolute: string, directory: string): boolean {
+	return absolute === directory || absolute.startsWith(`${directory}/`);
 }
 
 const procReason =
 	"Refused: /proc holds the environment of every process, which holds the agents' API keys (CLAUDE.md, rule 3).";
 
-const keyFileReason = `Refused: ${deckKeyFile} holds the agents' API keys; never read it (CLAUDE.md, rule 3).`;
+const keyFileReason = `Refused: ${deckKeyFile} and ~/${deckKeyDirectory} hold the agents' API keys; never read them (CLAUDE.md, rule 3).`;
 
 const handlerFailureReason =
 	"Refused: the env-printing refusal could not check this call, so it is refused (CLAUDE.md, rule 3). Report this through dot-agent-deck work-done and stop.";
@@ -126,6 +133,7 @@ export default function (pi: ExtensionAPI) {
 
 			if (fileTools.has(event.toolName)) {
 				const cwd = typeof ctx?.cwd === "string" ? ctx.cwd : process.cwd();
+				const keyDirectory = join(homedir(), deckKeyDirectory);
 
 				for (const field of ["path", "glob", "pattern"]) {
 					const value = input[field];
@@ -133,11 +141,21 @@ export default function (pi: ExtensionAPI) {
 						continue;
 					}
 
-					if (value.includes(deckKeyFile)) {
+					if (value.includes(deckKeyFile) || value.includes(deckKeyDirectory)) {
 						return { block: true, reason: keyFileReason };
 					}
 
-					if (field === "path" ? underProc(value, cwd) : value.includes("/proc")) {
+					if (field === "path") {
+						const absolute = resolvePath(value, cwd);
+
+						if (under(absolute, keyDirectory)) {
+							return { block: true, reason: keyFileReason };
+						}
+
+						if (under(absolute, "/proc")) {
+							return { block: true, reason: procReason };
+						}
+					} else if (value.includes("/proc")) {
 						return { block: true, reason: procReason };
 					}
 				}
