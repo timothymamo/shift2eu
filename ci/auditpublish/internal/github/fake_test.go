@@ -330,7 +330,7 @@ func readJSONLines[T any](t *testing.T, path string) []T {
 // endpoint table.
 var (
 	fakeEndpointFamily = regexp.MustCompile(`^repos/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+/` +
-		`(actions/runs/[0-9]+/artifacts\?|releases/tags/v|attestations/sha256:|git/commits/[0-9a-f]{40}$|` +
+		`(actions/runs/[0-9]+/artifacts\?|releases/tags/v|releases/latest$|attestations/sha256:|git/commits/[0-9a-f]{40}$|` +
 		`git/ref/heads/security-audit/|git/blobs$|git/trees$|git/commits$|git/refs$|compare/|pulls$|` +
 		`issues\?|issues$|security-advisories\?|security-advisories$|security-advisories/GHSA-)`)
 	fakeForbiddenSegment = regexp.MustCompile(`(?i)/(cve|merge|reviews|comments|publish|tags/[^v]|releases$)(/|\?|$)`)

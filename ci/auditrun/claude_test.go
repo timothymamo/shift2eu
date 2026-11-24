@@ -294,9 +294,30 @@ func runTree(t *testing.T, script string) (root string, env map[string]string, a
 
 	step := t.TempDir()
 	env = stepEnvironment(t, step)
-	args = []string{"-claude-tarball", tarball, "-claude-integrity", integrity}
+	args = []string{
+		"-claude-tarball", tarball,
+		"-claude-integrity", integrity,
+		"-result-out", resultOutPath(step),
+	}
 
 	return root, env, args
+}
+
+// flagArgument returns the value the run's arguments give the named flag, and
+// fails the test when they hold none: the run refuses a command line that lacks
+// one of its inputs.
+func flagArgument(t *testing.T, args []string, name string) string {
+	t.Helper()
+
+	for i := 0; i+1 < len(args); i++ {
+		if args[i] == name {
+			return args[i+1]
+		}
+	}
+
+	t.Fatalf("the run's arguments %v hold no %s flag: the workflow's model step passes it (ADR 0040)", args, name)
+
+	return ""
 }
 
 // runStepsAt runs the entry point under root with the real steps, bubblewrap
@@ -436,6 +457,8 @@ func TestRunStopsAtAManagedSettingsFile(t *testing.T) {
 		t.Fatalf("make %s: %v", managedSettings, err)
 	}
 
+	resultPath := flagArgument(t, args, "-result-out")
+
 	result := runStepsAt(t, root, args, env)
 
 	if result.code != audit.ExitRefused {
@@ -445,6 +468,12 @@ func TestRunStopsAtAManagedSettingsFile(t *testing.T) {
 
 	if _, err := os.Lstat(filepath.Join(record, "env")); !os.IsNotExist(err) {
 		t.Errorf("the fake CLI ran (%v), want it never to start: the managed settings refuse the run before the CLI does", err)
+	}
+
+	// The workflow's encrypt step reads the -result-out file: a run that stops at
+	// the managed settings leaves none, and the step fails closed on a missing one.
+	if _, err := os.Lstat(resultPath); !os.IsNotExist(err) {
+		t.Errorf("the run wrote a result at %s (lstat: %v), want nothing: it stopped before the audit's bytes existed", resultPath, err)
 	}
 
 	assertNoSecret(t, result)
@@ -470,6 +499,7 @@ func TestRunInheritsNoneOfTheStepsEnvironment(t *testing.T) {
 		Root:      root,
 		Tarball:   tarball,
 		Integrity: integrity,
+		ResultOut: resultOutPath(dir),
 		Step:      stepEnvironment(t, dir),
 	})
 
@@ -515,12 +545,13 @@ func TestRunInheritsNoneOfTheStepsEnvironment(t *testing.T) {
 }
 
 // launcherParams is what the test above hands the re-executed test binary: the
-// temporary root the real steps run under, the tarball and its integrity, and the
-// step's own four inputs.
+// temporary root the real steps run under, the tarball and its integrity, where
+// the checked result is written, and the step's own four inputs.
 type launcherParams struct {
 	Root      string            `json:"root"`
 	Tarball   string            `json:"tarball"`
 	Integrity string            `json:"integrity"`
+	ResultOut string            `json:"resultOut"`
 	Step      map[string]string `json:"step"`
 }
 
@@ -573,7 +604,11 @@ func TestLauncherSubprocessEntryPoint(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 
 	code := runContext(t.Context(),
-		[]string{"-claude-tarball", params.Tarball, "-claude-integrity", params.Integrity},
+		[]string{
+			"-claude-tarball", params.Tarball,
+			"-claude-integrity", params.Integrity,
+			"-result-out", params.ResultOut,
+		},
 		(&environ{values: params.Step}).lookup, steps, params.Root, &stdout, &stderr)
 
 	// The fake prints no transcript, so the preflight's CLI run fails: reaching

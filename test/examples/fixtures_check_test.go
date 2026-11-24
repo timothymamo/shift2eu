@@ -54,6 +54,11 @@ type allowListEntry struct {
 // needs.
 var realDataAllowList = []allowListEntry{
 	{
+		file:  "test/architecture/internal/check/testdata/auditworkflow/valid.yml",
+		value: "1.8.0.0",
+		why:   "socat's Debian package version (1.8.0.0-4) in the audit workflow's accepted shape, no address",
+	},
+	{
 		file:  "docs/guide/verify-releases.md",
 		value: "www.shift2eu.com",
 		why:   "the project's own site (PRD #297), which the guide tells users to type",
@@ -578,6 +583,10 @@ var publicOpenSourceOwners = []string{
 	"cli",
 	// golangci-lint's organisation, whose install script is fetched raw.
 	"golangci",
+	// The scheduled audit's pinned tools (PRD #175, ADR 0040), whose releases
+	// the audit workflow's accepted shape downloads: gitleaks, zizmor, age
+	// (FiloSottile) and actionlint (rhysd).
+	"gitleaks", "zizmorcore", "FiloSottile", "rhysd",
 }
 
 // vendorPathProblems returns a problem for every owner a path names after a

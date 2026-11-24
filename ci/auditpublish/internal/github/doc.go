@@ -21,14 +21,18 @@
 // over the 8 MiB cap, is publish.ErrGitHub.
 //
 // It checks the run's artifacts before a job downloads them (CheckArtifacts),
-// refusing an answer with anything after the one listing. The artifacts
+// refusing an answer with anything after the one listing, and returns the
+// artifact the job downloads with the listing's ID and digest, which
+// WriteArtifact writes to artifact.json under the subcommand's -tmp (O_EXCL,
+// 0600) for the workflow's download step to bind to. The artifacts
 // subcommand's client is read-only by construction (NewArtifactsClient, which
 // sets ClientConfig.ReadOnly whatever its caller passes): Call refuses every
 // method but GET with ErrEndpointRefused before the table and before gh runs,
 // so the check that holds the job's token can reach no wider than the one read
 // it needs, not the publish job's whole table. The image subcommand's client
-// (NewImageClient) is read-only the same way: it checks the result's release
-// (CheckRelease) and its image digest's provenance attestation
+// (NewImageClient) is read-only the same way: it checks the result's release,
+// which must be the repository's latest (CheckRelease), and its image digest's
+// provenance attestation
 // (CheckImageDigest), matching the attestation's statement, not its Sigstore
 // signature.
 //

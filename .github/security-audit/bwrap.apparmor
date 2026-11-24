@@ -1,0 +1,14 @@
+# The AppArmor profile the scheduled security audit's model job loads (ADR 0040, The runner's
+# user-namespace restriction): GitHub's Ubuntu 24.04 runners set
+# kernel.apparmor_restrict_unprivileged_userns=1, so an unprivileged bwrap cannot set up its user
+# namespace. This profile grants userns to /usr/bin/bwrap alone, rather than turning the restriction off
+# for every program with the sysctl, and confines nothing else, as Ubuntu's own profiles of that kind do.
+# test/architecture's TestBwrapAppArmorProfile pins it line for line.
+
+abi <abi/4.0>,
+
+include <tunables/global>
+
+profile shift2eu-audit-bwrap /usr/bin/bwrap flags=(unconfined) {
+  userns,
+}

@@ -48,7 +48,7 @@ var scheduleWord = regexp.MustCompile(`(^|[^A-Za-z0-9_-])schedule([^A-Za-z0-9_-]
 // otherLineBreaks are the line breaks YAML may read besides LF and CRLF: a
 // bare CR, and YAML 1.1's next line (NEL, U+0085), line separator (LS,
 // U+2028) and paragraph separator (PS, U+2029).
-const otherLineBreaks = "\r\u0085  "
+const otherLineBreaks = "\r\u0085\u2028\u2029"
 
 // hasScheduleTrigger reports whether a workflow may hold a schedule trigger
 // under its top-level on: key. It reads no YAML (the check needs one key of

@@ -204,9 +204,14 @@ func artifacts(ctx context.Context, args []string, lookup func(string) (string, 
 		return err
 	}
 
-	checkErr := github.CheckArtifacts(ctx, client, job)
+	artifact, checkErr := github.CheckArtifacts(ctx, client, job)
+	if err := errors.Join(checkErr, client.Close()); err != nil {
+		return err
+	}
 
-	return errors.Join(checkErr, client.Close())
+	// Only a checked listing is handed on: the download step reads the
+	// artifact's ID and digest from this file and lists nothing again.
+	return github.WriteArtifact(*tempDir, artifact)
 }
 
 // reportEnv is what the image and publish subcommands read of the step's
