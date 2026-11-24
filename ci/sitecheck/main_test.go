@@ -126,9 +126,9 @@ type mainServer struct {
 }
 
 // mainNewServer returns a server that answers each of pages' paths with its
-// response and any other path with 404, sending hsts as
-// Strict-Transport-Security on every answer whose own header does not set that
-// header (nothing when hsts is empty).
+// response, any other path with 404 (without HSTS), and Strict-Transport-Security
+// set to hsts on every page answer whose own header does not set it (nothing
+// when hsts is empty).
 func mainNewServer(pages map[string]mainResponse, hsts string) *mainServer {
 	return &mainServer{pages: pages, hsts: hsts}
 }
