@@ -14,20 +14,24 @@
 |---|---|---|---|
 | direct | 7 | 6 | 6 |
 | partial | 1 | 5 | 2 |
-| none | 5 | 2 | 5 |
-| total | 13 | 13 | 13 |
+| none | 9 | 6 | 9 |
+| total | 17 | 17 | 17 |
 
 ### Resources
 
 | ID | Category | `OVHcloud` fit | `OVHcloud` best offering | `Scaleway` fit | `Scaleway` best offering | `UpCloud` fit | `UpCloud` best offering |
 |---|---|---|---|---|---|---|---|
 | `shop-assets` | `storage.object` | direct | `Object Storage` | direct | `Object Storage` | direct | `Managed Object Storage` |
+| `shop-catalog-docs` | `database.mongodb` | none |  | none |  | none |  |
 | `shop-cdn` | `unclassified` | none |  | none |  | none |  |
 | `shop-db` | `database.postgresql` | direct | `Managed PostgreSQL Multi-node Advanced` | partial | `Managed Database for PostgreSQL and MySQL High Availability` | direct | `Managed PostgreSQL Multi-node` |
 | `shop-eks` | `kubernetes.managed` | direct | `Managed Kubernetes Service` | direct | `Kubernetes Kapsule` | partial | `Managed Kubernetes` |
+| `shop-images` | `registry.container` | none |  | none |  | none |  |
 | `shop-legacy-mysql` | `database.mysql` | direct | `Managed MySQL Multi-node` | partial | `Managed Database for PostgreSQL and MySQL High Availability` | direct | `Managed MySQL Multi-node` |
+| `shop-order-events` | `messaging.topic` | none |  | none |  | none |  |
 | `shop-orders` | `messaging.queue` | none |  | partial | `Queues` | none |  |
 | `shop-orders-dlq` | `messaging.queue` | none |  | partial | `Queues` | none |  |
+| `shop-sessions` | `cache.redis` | none |  | none |  | none |  |
 | `shop-thumbnailer` | `serverless.function` | none |  | direct | `Serverless Functions` | none |  |
 | `shop-web-1` | `compute.vm` | direct | `Instances` | direct | `Instances` | direct | `Cloud Servers` |
 | `shop-web-1-data` | `storage.block` | direct | `Block Storage` | direct | `Block Storage` | direct | `Block Storage` |
@@ -37,10 +41,26 @@
 
 ### Blockers on every target
 
+- `shop-catalog-docs`
+  - `OVHcloud`: no offering in the `OVHcloud` catalog for `database.mongodb`
+  - `Scaleway`: no offering in the `Scaleway` catalog for `database.mongodb`
+  - `UpCloud`: no offering in the `UpCloud` catalog for `database.mongodb`
 - `shop-cdn`
   - `OVHcloud`: not classified
   - `Scaleway`: not classified
   - `UpCloud`: not classified
+- `shop-images`
+  - `OVHcloud`: no offering in the `OVHcloud` catalog for `registry.container`
+  - `Scaleway`: no offering in the `Scaleway` catalog for `registry.container`
+  - `UpCloud`: no offering in the `UpCloud` catalog for `registry.container`
+- `shop-order-events`
+  - `OVHcloud`: no offering in the `OVHcloud` catalog for `messaging.topic`
+  - `Scaleway`: no offering in the `Scaleway` catalog for `messaging.topic`
+  - `UpCloud`: no offering in the `UpCloud` catalog for `messaging.topic`
+- `shop-sessions`
+  - `OVHcloud`: no offering in the `OVHcloud` catalog for `cache.redis`
+  - `Scaleway`: no offering in the `Scaleway` catalog for `cache.redis`
+  - `UpCloud`: no offering in the `UpCloud` catalog for `cache.redis`
 - `shop.example.com`
   - `OVHcloud`: not classified
   - `Scaleway`: not classified
@@ -54,20 +74,24 @@
 |---|---|
 | direct | 7 |
 | partial | 1 |
-| none | 5 |
-| total | 13 |
+| none | 9 |
+| total | 17 |
 
 ### Resources
 
 | ID | Raw type | Category | Fit | Best offering | Relations | Reasons |
 |---|---|---|---|---|---|---|
 | `shop-assets` | `AWS::S3::Bucket` | `storage.object` | direct | `Object Storage` (tie: `Object Storage 3-AZ`) |  | `Object Storage` offers every capability the resource uses |
+| `shop-catalog-docs` | `AWS::DocDB::DBCluster` | `database.mongodb` | none |  |  | no offering in the `OVHcloud` catalog for `database.mongodb` |
 | `shop-cdn` | `AWS::CloudFront::Distribution` | `unclassified` | none |  | depends-on `shop-assets` | not classified |
 | `shop-db` | `AWS::RDS::DBInstance` | `database.postgresql` | direct | `Managed PostgreSQL Multi-node Advanced` (tie: `Managed PostgreSQL Multi-node Advanced 3-AZ`) |  | `Managed PostgreSQL Multi-node Advanced` offers every capability the resource uses |
 | `shop-eks` | `AWS::EKS::Cluster` | `kubernetes.managed` | direct | `Managed Kubernetes Service` (tie: `Managed Kubernetes Service 3-AZ`) | depends-on `shop-db` | `Managed Kubernetes Service` offers every capability the resource uses |
+| `shop-images` | `AWS::ECR::Repository` | `registry.container` | none |  |  | no offering in the `OVHcloud` catalog for `registry.container` |
 | `shop-legacy-mysql` | `AWS::RDS::DBInstance` | `database.mysql` | direct | `Managed MySQL Multi-node` (tie: `Managed MySQL Multi-node 3-AZ`, `Managed MySQL Multi-node Advanced`, `Managed MySQL Multi-node Advanced 3-AZ`) |  | `Managed MySQL Multi-node` offers every capability the resource uses |
+| `shop-order-events` | `AWS::SNS::Topic` | `messaging.topic` | none |  | depends-on `shop-orders` | no offering in the `OVHcloud` catalog for `messaging.topic` |
 | `shop-orders` | `AWS::SQS::Queue` | `messaging.queue` | none |  |  | no offering in the `OVHcloud` catalog for `messaging.queue` |
 | `shop-orders-dlq` | `AWS::SQS::Queue` | `messaging.queue` | none |  | dead-letter-queue-of `shop-orders` | no offering in the `OVHcloud` catalog for `messaging.queue` |
+| `shop-sessions` | `AWS::ElastiCache::ReplicationGroup` | `cache.redis` | none |  |  | no offering in the `OVHcloud` catalog for `cache.redis` |
 | `shop-thumbnailer` | `AWS::Lambda::Function` | `serverless.function` | none |  | depends-on `shop-assets` | no offering in the `OVHcloud` catalog for `serverless.function` |
 | `shop-web-1` | `AWS::EC2::Instance` | `compute.vm` | direct | `Instances` | depends-on `shop-orders` | `Instances` offers every capability the resource uses |
 | `shop-web-1-data` | `AWS::EC2::Volume` | `storage.block` | direct | `Block Storage` (tie: `Block Storage LUKS`) | attached-to `shop-web-1` | `Block Storage` offers every capability the resource uses |
@@ -81,11 +105,16 @@
 
 ### Blockers
 
+- `shop-catalog-docs`: no offering in the `OVHcloud` catalog for `database.mongodb`
 - `shop-cdn`: not classified
+- `shop-images`: no offering in the `OVHcloud` catalog for `registry.container`
+- `shop-order-events`: no offering in the `OVHcloud` catalog for `messaging.topic`
 - `shop-orders`: no offering in the `OVHcloud` catalog for `messaging.queue`
 - `shop-orders-dlq`: no offering in the `OVHcloud` catalog for `messaging.queue`
+- `shop-sessions`: no offering in the `OVHcloud` catalog for `cache.redis`
 - `shop-thumbnailer`: no offering in the `OVHcloud` catalog for `serverless.function`
 - `shop.example.com`: not classified
+- `shop-order-events`: affected by a blocker on `shop-orders`
 - `shop-web-1`: affected by a blocker on `shop-orders`
 
 ### Workloads
@@ -99,10 +128,14 @@
 
 #### `shop`
 
-- Fit: 5 direct, 1 partial, 3 none
+- Fit: 5 direct, 1 partial, 7 none
 - Blockers:
+  - `shop-catalog-docs`: no offering in the `OVHcloud` catalog for `database.mongodb`
+  - `shop-images`: no offering in the `OVHcloud` catalog for `registry.container`
+  - `shop-order-events`: no offering in the `OVHcloud` catalog for `messaging.topic`
   - `shop-orders`: no offering in the `OVHcloud` catalog for `messaging.queue`
   - `shop-orders-dlq`: no offering in the `OVHcloud` catalog for `messaging.queue`
+  - `shop-sessions`: no offering in the `OVHcloud` catalog for `cache.redis`
   - `shop.example.com`: not classified
 
 #### No workload
@@ -118,20 +151,24 @@
 |---|---|
 | direct | 6 |
 | partial | 5 |
-| none | 2 |
-| total | 13 |
+| none | 6 |
+| total | 17 |
 
 ### Resources
 
 | ID | Raw type | Category | Fit | Best offering | Relations | Reasons |
 |---|---|---|---|---|---|---|
 | `shop-assets` | `AWS::S3::Bucket` | `storage.object` | direct | `Object Storage` |  | `Object Storage` offers every capability the resource uses |
+| `shop-catalog-docs` | `AWS::DocDB::DBCluster` | `database.mongodb` | none |  |  | no offering in the `Scaleway` catalog for `database.mongodb` |
 | `shop-cdn` | `AWS::CloudFront::Distribution` | `unclassified` | none |  | depends-on `shop-assets` | not classified |
 | `shop-db` | `AWS::RDS::DBInstance` | `database.postgresql` | partial | `Managed Database for PostgreSQL and MySQL High Availability` |  | `Managed Database for PostgreSQL and MySQL High Availability` does not offer `point-in-time-restore` |
 | `shop-eks` | `AWS::EKS::Cluster` | `kubernetes.managed` | direct | `Kubernetes Kapsule` (tie: `Kubernetes Kapsule Dedicated`) | depends-on `shop-db` | `Kubernetes Kapsule` offers every capability the resource uses |
+| `shop-images` | `AWS::ECR::Repository` | `registry.container` | none |  |  | no offering in the `Scaleway` catalog for `registry.container` |
 | `shop-legacy-mysql` | `AWS::RDS::DBInstance` | `database.mysql` | partial | `Managed Database for PostgreSQL and MySQL High Availability` |  | `Managed Database for PostgreSQL and MySQL High Availability` does not offer `point-in-time-restore` |
+| `shop-order-events` | `AWS::SNS::Topic` | `messaging.topic` | none |  | depends-on `shop-orders` | no offering in the `Scaleway` catalog for `messaging.topic` |
 | `shop-orders` | `AWS::SQS::Queue` | `messaging.queue` | partial | `Queues` |  | `Queues` does not offer `encryption-at-rest` |
 | `shop-orders-dlq` | `AWS::SQS::Queue` | `messaging.queue` | partial | `Queues` | dead-letter-queue-of `shop-orders` | `Queues` does not offer `encryption-at-rest` |
+| `shop-sessions` | `AWS::ElastiCache::ReplicationGroup` | `cache.redis` | none |  |  | no offering in the `Scaleway` catalog for `cache.redis` |
 | `shop-thumbnailer` | `AWS::Lambda::Function` | `serverless.function` | direct | `Serverless Functions` | depends-on `shop-assets` | `Serverless Functions` offers every capability the resource uses |
 | `shop-web-1` | `AWS::EC2::Instance` | `compute.vm` | direct | `Instances` | depends-on `shop-orders` | `Instances` offers every capability the resource uses |
 | `shop-web-1-data` | `AWS::EC2::Volume` | `storage.block` | direct | `Block Storage` | attached-to `shop-web-1` | `Block Storage` offers every capability the resource uses |
@@ -149,7 +186,11 @@
 
 ### Blockers
 
+- `shop-catalog-docs`: no offering in the `Scaleway` catalog for `database.mongodb`
 - `shop-cdn`: not classified
+- `shop-images`: no offering in the `Scaleway` catalog for `registry.container`
+- `shop-order-events`: no offering in the `Scaleway` catalog for `messaging.topic`
+- `shop-sessions`: no offering in the `Scaleway` catalog for `cache.redis`
 - `shop.example.com`: not classified
 
 ### Workloads
@@ -162,8 +203,12 @@
 
 #### `shop`
 
-- Fit: 4 direct, 4 partial, 1 none
+- Fit: 4 direct, 4 partial, 5 none
 - Blockers:
+  - `shop-catalog-docs`: no offering in the `Scaleway` catalog for `database.mongodb`
+  - `shop-images`: no offering in the `Scaleway` catalog for `registry.container`
+  - `shop-order-events`: no offering in the `Scaleway` catalog for `messaging.topic`
+  - `shop-sessions`: no offering in the `Scaleway` catalog for `cache.redis`
   - `shop.example.com`: not classified
 
 #### No workload
@@ -179,20 +224,24 @@
 |---|---|
 | direct | 6 |
 | partial | 2 |
-| none | 5 |
-| total | 13 |
+| none | 9 |
+| total | 17 |
 
 ### Resources
 
 | ID | Raw type | Category | Fit | Best offering | Relations | Reasons |
 |---|---|---|---|---|---|---|
 | `shop-assets` | `AWS::S3::Bucket` | `storage.object` | direct | `Managed Object Storage` |  | `Managed Object Storage` offers every capability the resource uses |
+| `shop-catalog-docs` | `AWS::DocDB::DBCluster` | `database.mongodb` | none |  |  | no offering in the `UpCloud` catalog for `database.mongodb` |
 | `shop-cdn` | `AWS::CloudFront::Distribution` | `unclassified` | none |  | depends-on `shop-assets` | not classified |
 | `shop-db` | `AWS::RDS::DBInstance` | `database.postgresql` | direct | `Managed PostgreSQL Multi-node` |  | `Managed PostgreSQL Multi-node` offers every capability the resource uses |
 | `shop-eks` | `AWS::EKS::Cluster` | `kubernetes.managed` | partial | `Managed Kubernetes` (tie: `Managed Kubernetes Production`) | depends-on `shop-db` | `Managed Kubernetes` does not offer `autoscaling` |
+| `shop-images` | `AWS::ECR::Repository` | `registry.container` | none |  |  | no offering in the `UpCloud` catalog for `registry.container` |
 | `shop-legacy-mysql` | `AWS::RDS::DBInstance` | `database.mysql` | direct | `Managed MySQL Multi-node` |  | `Managed MySQL Multi-node` offers every capability the resource uses |
+| `shop-order-events` | `AWS::SNS::Topic` | `messaging.topic` | none |  | depends-on `shop-orders` | no offering in the `UpCloud` catalog for `messaging.topic` |
 | `shop-orders` | `AWS::SQS::Queue` | `messaging.queue` | none |  |  | no offering in the `UpCloud` catalog for `messaging.queue` |
 | `shop-orders-dlq` | `AWS::SQS::Queue` | `messaging.queue` | none |  | dead-letter-queue-of `shop-orders` | no offering in the `UpCloud` catalog for `messaging.queue` |
+| `shop-sessions` | `AWS::ElastiCache::ReplicationGroup` | `cache.redis` | none |  |  | no offering in the `UpCloud` catalog for `cache.redis` |
 | `shop-thumbnailer` | `AWS::Lambda::Function` | `serverless.function` | none |  | depends-on `shop-assets` | no offering in the `UpCloud` catalog for `serverless.function` |
 | `shop-web-1` | `AWS::EC2::Instance` | `compute.vm` | direct | `Cloud Servers` | depends-on `shop-orders` | `Cloud Servers` offers every capability the resource uses |
 | `shop-web-1-data` | `AWS::EC2::Volume` | `storage.block` | direct | `Block Storage` (tie: `Block Storage Encrypted`) | attached-to `shop-web-1` | `Block Storage` offers every capability the resource uses |
@@ -207,11 +256,16 @@
 
 ### Blockers
 
+- `shop-catalog-docs`: no offering in the `UpCloud` catalog for `database.mongodb`
 - `shop-cdn`: not classified
+- `shop-images`: no offering in the `UpCloud` catalog for `registry.container`
+- `shop-order-events`: no offering in the `UpCloud` catalog for `messaging.topic`
 - `shop-orders`: no offering in the `UpCloud` catalog for `messaging.queue`
 - `shop-orders-dlq`: no offering in the `UpCloud` catalog for `messaging.queue`
+- `shop-sessions`: no offering in the `UpCloud` catalog for `cache.redis`
 - `shop-thumbnailer`: no offering in the `UpCloud` catalog for `serverless.function`
 - `shop.example.com`: not classified
+- `shop-order-events`: affected by a blocker on `shop-orders`
 - `shop-web-1`: affected by a blocker on `shop-orders`
 
 ### Workloads
@@ -225,10 +279,14 @@
 
 #### `shop`
 
-- Fit: 4 direct, 2 partial, 3 none
+- Fit: 4 direct, 2 partial, 7 none
 - Blockers:
+  - `shop-catalog-docs`: no offering in the `UpCloud` catalog for `database.mongodb`
+  - `shop-images`: no offering in the `UpCloud` catalog for `registry.container`
+  - `shop-order-events`: no offering in the `UpCloud` catalog for `messaging.topic`
   - `shop-orders`: no offering in the `UpCloud` catalog for `messaging.queue`
   - `shop-orders-dlq`: no offering in the `UpCloud` catalog for `messaging.queue`
+  - `shop-sessions`: no offering in the `UpCloud` catalog for `cache.redis`
   - `shop.example.com`: not classified
 
 #### No workload

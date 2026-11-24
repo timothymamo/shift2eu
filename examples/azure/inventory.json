@@ -91,6 +91,14 @@
       "workload": "shop"
     },
     {
+      "id": "lb-shop-web",
+      "rawType": "Microsoft.Network/loadBalancers",
+      "category": "network.loadbalancer",
+      "region": "westeurope",
+      "capabilities": ["zone-high-availability", "udp"],
+      "workload": "shop"
+    },
+    {
       "id": "cdn-shop",
       "rawType": "Microsoft.Cdn/profiles",
       "category": "unclassified",

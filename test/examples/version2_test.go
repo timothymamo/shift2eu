@@ -53,10 +53,12 @@ const (
 )
 
 // pricedSize says which size fields the estimate prices a category by (PRD
-// #190): vcpus and memoryGiB for a category priced by plan, storageGiB for one
-// priced by stored GiB. A category that is not in pricedSizes is not priced at
-// all: messaging.queue and serverless.function are priced by usage, and
-// unclassified never is.
+// #190): vcpus and memoryGiB for a category priced by plan, memoryGiB alone for
+// cache.redis, matched on memory alone (ADR 0045), storageGiB for one priced by
+// stored GiB. A category that is not in pricedSizes is not priced at all:
+// messaging.queue, messaging.topic, serverless.function and
+// serverless.container are priced by usage, and network.loadbalancer,
+// registry.container and unclassified never are.
 //
 // They are not the only fields a category may give: docs/adr/0025 lets every
 // compute, Kubernetes and database resource give every size field, so a sample
@@ -78,8 +80,11 @@ var pricedSizes = map[taxonomy.Category]pricedSize{
 	taxonomy.KubernetesManaged:  {vcpus: true, memory: true},
 	taxonomy.DatabasePostgreSQL: {vcpus: true, memory: true},
 	taxonomy.DatabaseMySQL:      {vcpus: true, memory: true},
+	taxonomy.DatabaseMongoDB:    {vcpus: true, memory: true},
+	taxonomy.CacheRedis:         {memory: true},
 	taxonomy.StorageBlock:       {storage: true},
 	taxonomy.StorageObject:      {storage: true},
+	taxonomy.StorageFile:        {storage: true},
 }
 
 // relationVocabulary is the closed vocabulary of a relation's type, in the order
@@ -523,6 +528,7 @@ func TestSampleMonthlyCostsArePartial(t *testing.T) {
 type sampleReportResource struct {
 	ID       string `json:"id"`
 	Category string `json:"category"`
+	Fit      string `json:"fit"`
 	Estimate *struct {
 		Estimated bool   `json:"estimated"`
 		Amount    string `json:"amount"`
@@ -744,15 +750,18 @@ func checkSampleReportDocument(t *testing.T, report []byte, wantVersion int) {
 			continue
 		}
 
+		// Only a category the target serves can be estimated: a resource of fit
+		// none (a category the snapshot has no offering for yet, such as the
+		// ones PRD #552 adds before their catalog milestones) is "no fit".
 		if !slices.ContainsFunc(doc.Resources, func(r sampleReportResource) bool {
-			return r.Category == string(category)
+			return r.Category == string(category) && r.Fit != string(mapping.None)
 		}) {
 			continue
 		}
 
 		if !estimated[string(category)] {
-			t.Errorf("no %s resource is estimated, though the sample holds one: give it a size a plan "+
-				"covers", category)
+			t.Errorf("no %s resource is estimated, though the sample holds one with a fit: give it a size "+
+				"a plan covers", category)
 		}
 	}
 

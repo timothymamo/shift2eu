@@ -107,6 +107,41 @@
       "relations": [{ "type": "dead-letter-queue-of", "target": "shop-orders" }]
     },
     {
+      "id": "shop-sessions",
+      "rawType": "AWS::ElastiCache::ReplicationGroup",
+      "category": "cache.redis",
+      "region": "eu-central-1",
+      "capabilities": ["node-high-availability", "sharding", "encryption-at-rest"],
+      "size": { "memoryGiB": 13, "count": 4 },
+      "workload": "shop"
+    },
+    {
+      "id": "shop-catalog-docs",
+      "rawType": "AWS::DocDB::DBCluster",
+      "category": "database.mongodb",
+      "region": "eu-central-1",
+      "capabilities": ["point-in-time-restore", "read-replicas", "node-high-availability", "encryption-at-rest"],
+      "size": { "vcpus": 2, "memoryGiB": 16, "count": 3 },
+      "workload": "shop"
+    },
+    {
+      "id": "shop-order-events",
+      "rawType": "AWS::SNS::Topic",
+      "category": "messaging.topic",
+      "region": "eu-central-1",
+      "capabilities": ["encryption-at-rest"],
+      "workload": "shop",
+      "relations": [{ "type": "depends-on", "target": "shop-orders" }]
+    },
+    {
+      "id": "shop-images",
+      "rawType": "AWS::ECR::Repository",
+      "category": "registry.container",
+      "region": "eu-central-1",
+      "capabilities": ["encryption-at-rest"],
+      "workload": "shop"
+    },
+    {
       "id": "shop-cdn",
       "rawType": "AWS::CloudFront::Distribution",
       "category": "unclassified",
