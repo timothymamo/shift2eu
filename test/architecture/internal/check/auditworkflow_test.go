@@ -1240,6 +1240,20 @@ func TestAuditWorkflow(t *testing.T) {
 			wantIn: "gh attestation verify",
 		},
 
+		// Bash joins a whole comment line to the command a trailing \ continues,
+		// and the comment then cuts the command there: the flag below it is no part
+		// of the verification any more. The comment lines are dropped before the
+		// patterns match, so the cut verification would otherwise look contiguous
+		// - this case differs from the accepted shape by that comment line alone,
+		// and without the refusal of it the check reads the accepted
+		// verification and draws no message at all.
+		{
+			name: "a whole comment line right after the --source-ref continuation",
+			workflow: mutate(t, acceptedWorkflow, "            --source-ref \"refs/tags/${tag}\" \\\n"+auditVerifyFlagLine,
+				"            --source-ref \"refs/tags/${tag}\" \\\n          # x\n"+auditVerifyFlagLine),
+			wantIn: "continues a",
+		},
+
 		// The zip's digest check stands on a line of its own: run at the end of
 		// another command's line, it still runs, but as part of that command's
 		// conditions, so the case that appends it without a # must draw the
