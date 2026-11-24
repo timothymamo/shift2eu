@@ -13,6 +13,8 @@
 // derives the per-check coverage from a fixed vocabulary,
 // escapes every model-written text into a code span or a fenced code block,
 // renders the report and the fixed branch, pull request and commit templates,
+// reads the previous report's findings table back (PublicFindings) and renders
+// the security issue of a merged public finding (RenderIssue),
 // flags a gap in the schedule against GapThresholdDays, scans every text it
 // would publish for tokens, keys and encoded runs, and maps each outcome to an
 // exit code and one summary line that holds no finding's text.

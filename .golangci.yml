@@ -2060,8 +2060,9 @@ linters:
         # directory as the core. It runs gh and gitleaks by absolute path
         # (os/exec), each with an environment of its own, reads the result and
         # the merged reports (os, io, path/filepath) and reads GitHub's JSON
-        # (encoding/json); each gh call and gitleaks scan runs under a deadline
-        # (time); it opens no connection itself (net): gh does. The
+        # (encoding/json) and an image attestation's DSSE payload
+        # (encoding/base64); each gh call and gitleaks scan runs under a
+        # deadline (time); it opens no connection itself (net): gh does. The
         # forbidigo group audit-publish-github-env refuses every read of the
         # environment: its caller hands it what it needs.
         audit-publish-github:
@@ -2072,6 +2073,7 @@ linters:
           allow:
             - bytes$
             - context$
+            - encoding/base64$
             - encoding/json$
             - errors$
             - fmt$

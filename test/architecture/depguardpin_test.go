@@ -1517,7 +1517,8 @@ var pinnedDepguardRules = []check.DepguardRule{
 		// it runs gh and gitleaks by absolute path, each with an environment of
 		// its own, reads the result and the merged reports, and opens no
 		// connection itself. The forbidigo group audit-publish-github-env
-		// refuses every read of the environment.
+		// refuses every read of the environment. encoding/base64 decodes an
+		// image attestation's DSSE payload.
 		Name:     "audit-publish-github",
 		ListMode: "strict",
 		Files: []string{
@@ -1527,6 +1528,7 @@ var pinnedDepguardRules = []check.DepguardRule{
 		Allow: []string{
 			"bytes$",
 			"context$",
+			"encoding/base64$",
 			"encoding/json$",
 			"errors$",
 			"fmt$",
