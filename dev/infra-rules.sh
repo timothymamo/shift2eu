@@ -55,6 +55,10 @@
 #                    not exactly one scaleway_iam_policy, or scaleway_iam_application, under the root
 #   [iam-repeat]     count or for_each on either of them
 #   [iam-other]      any other scaleway_iam_* resource
+#   [tls-stage-lifecycle] the resource scaleway_edge_services_tls_stage "site" without a lifecycle block
+#                    that sets create_before_destroy = true (issue #541): Scaleway issues its managed
+#                    certificate only at its creation, so R8 replaces it, and Scaleway refuses to delete
+#                    a TLS stage the DNS stage references, so the replacement must create first
 #   [provider-type]  a resource, data source or provider block of any provider but scaleway
 #   [provider-source] a required_providers entry whose source is not exactly "scaleway/scaleway"
 #   [lock-file]      a .terraform.lock.hcl with a line of a shape tofu init does not write: only blank and
