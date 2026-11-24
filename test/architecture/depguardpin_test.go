@@ -969,7 +969,7 @@ var pinnedDepguardRules = []check.DepguardRule{
 		// behind the sitefront tag and run by make test-sitefront: it starts the
 		// pinned container and a local TLS upstream, so it takes exactly what it
 		// imports, each exact, and no package of the module. Its doc.go is held by
-		// test-docs-are-pure with the other test trees'.
+		// sitefront-test-doc, as test/browser's is by browser-smoke-test-doc.
 		Name:     "sitefront-behaviour-test",
 		ListMode: "strict",
 		Files: []string{
@@ -1010,6 +1010,23 @@ var pinnedDepguardRules = []check.DepguardRule{
 		Deny: []string{
 			"github.com/timothymamo/shift2eu/",
 		},
+	},
+	{
+		// test/sitefront's one production file, doc.go, which carries no build
+		// tag so that go test ./... accepts the package: it imports nothing, so
+		// the rule allows nothing (allow: [] and the one deny entry, os, as
+		// config-is-pure). It is a rule of its own rather than an entry of
+		// test-docs-are-pure, which the package check skips, because
+		// sitefront-behaviour-test holds the test files alone and the package
+		// check must read a rule that holds the package's own imports.
+		Name:     "sitefront-test-doc",
+		ListMode: "strict",
+		Files: []string{
+			"**/test/sitefront/**",
+			"!$test",
+		},
+		Allow: []string{},
+		Deny:  []string{"os"},
 	},
 	{
 		Name:     "e2e-is-black-box",
@@ -1143,8 +1160,7 @@ var pinnedDepguardRules = []check.DepguardRule{
 	{
 		// The test trees' own documentation packages (issue #152, the auditor's finding
 		// H-1): test/architecture, test/container, test/devenv, test/docs, test/e2e,
-		// test/examples (issue #179), test/lint, test/site (PRD #297 milestone 2),
-		// test/sitefront (PRD #297 milestone 4, docs/adr/0045) and
+		// test/examples (issue #179), test/lint, test/site (PRD #297 milestone 2) and
 		// test/ci (issue #275). Each has a doc.go that imports nothing as its one
 		// production file (test/e2e, test/site and test/ci: below), and each is a
 		// production package a composition root can import, because the roots' allow
@@ -1184,7 +1200,6 @@ var pinnedDepguardRules = []check.DepguardRule{
 			"**/test/lint/**",
 			"**/test/site/**",
 			"!**/test/site/internal/**",
-			"**/test/sitefront/**",
 			"**/test/ci/**",
 			"!$test",
 		},
