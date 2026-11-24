@@ -9,9 +9,11 @@
 // Every command the page shows is a command the section spells out, and the
 // flags the page shows for the command that verifies the bundle sit in the
 // section's own `gh attestation verify` command, the one whose arguments name
-// the bundle. Every step phrase of the page is a phrase of the section, and both
-// carry the site's exact URL and the first-visit advice against an attacker who
-// strips HTTPS from an http:// link.
+// the bundle. Every step phrase of the page is a phrase of the section and every
+// step phrase of the section's is one of the page's, and both carry the site's
+// exact URL and the first-visit advice against an attacker who strips HTTPS from
+// an http:// link: a phrase either document lost fails the check, so neither is
+// read and left unasserted.
 //
 // The one exception is the page's links to documents of this repository, which
 // are checked against the guide as a whole: the page's other repository links
@@ -130,25 +132,26 @@ func TestVerificationGuideAgreesWithThePage(t *testing.T) {
 	// for it: the page is a summary, and a step the section lost - which release
 	// to check, how a file's digest is compared, how the bundle is served - is a
 	// step that reads as checked only while some other part of the guide
-	// carries the words. The phrases are matched without case, so a sentence may
-	// open with one.
-	t.Run("the section carries the page's steps", func(t *testing.T) {
+	// carries the words. The page's own phrase is checked too, so a step the
+	// page dropped is a problem and not only a stale error message. The page is
+	// templated, so a phrase a template action interrupts - the version it shows,
+	// the archive's name - is pinned up to the interruption. The phrases are
+	// matched without case, so a sentence may open with one.
+	t.Run("the section and the page carry the steps", func(t *testing.T) {
 		t.Parallel()
 
-		sectionLower := strings.ToLower(collapsed(section))
-
-		for _, want := range []struct {
+		steps := []struct {
 			page  string
 			guide string
 			why   string
 		}{
 			{
-				page:  "Note the version this page shows, and download that release's site bundle",
+				page:  "Note the version this page shows",
 				guide: "that is the release to check",
 				why:   "the page shows the version it was built from, and the section says that this version is the release to check",
 			},
 			{
-				page:  "download that release's site bundle from the repository's releases",
+				page:  "download that release's site bundle",
 				guide: "gh release download",
 				why:   "the section's first step downloads that release's bundle, the command the page's first step summarises",
 			},
@@ -202,12 +205,53 @@ func TestVerificationGuideAgreesWithThePage(t *testing.T) {
 				guide: "python3 -m http.server",
 				why:   "the section's runnable example of a static file server, so the page's advice is a command a reader can run",
 			},
-		} {
-			if !strings.Contains(sectionLower, strings.ToLower(want.guide)) {
-				t.Errorf("%s's %q section carries no %q, though %s says %q there: %s (PRD #297 milestone 3)",
-					verifyGuidePath, verifyGuideSection, want.guide, verifyPagePath, want.page, want.why)
-			}
 		}
+
+		// stepProblems returns what the page and the section fail to carry of the
+		// steps: a phrase the page no longer carries, and a phrase the section no
+		// longer carries. Both documents are checked, so a step either lost is
+		// reported, and not only a section that lost the words the page shows.
+		problems := func(page, section string) []string {
+			pageLower := strings.ToLower(collapsed(page))
+			sectionLower := strings.ToLower(collapsed(section))
+
+			var found []string
+
+			for _, want := range steps {
+				if !strings.Contains(pageLower, strings.ToLower(want.page)) {
+					found = append(found, fmt.Sprintf("%s no longer carries %q, which the guide's %q section summarises: the page's step and the section's are the same step, so the page keeps the words this check holds it to (PRD #297 milestone 3)",
+						verifyPagePath, want.page, verifyGuideSection))
+				}
+
+				if !strings.Contains(sectionLower, strings.ToLower(want.guide)) {
+					found = append(found, fmt.Sprintf("%s's %q section carries no %q, though %s says %q there: %s (PRD #297 milestone 3)",
+						verifyGuidePath, verifyGuideSection, want.guide, verifyPagePath, want.page, want.why))
+				}
+			}
+
+			return found
+		}
+
+		for _, problem := range problems(page, section) {
+			t.Error(problem)
+		}
+
+		// The check reads the page as well as the section, so it is worth its
+		// claims only while a page that lost a step is a problem: this copy is
+		// the page with its run-yourself step reworded, and the check must name
+		// the step it lost.
+		t.Run("a page that lost a step is a problem", func(t *testing.T) {
+			t.Parallel()
+
+			const step = "Run the bundle yourself"
+
+			got := strings.Join(problems(strings.ReplaceAll(page, step, "Run it"), section), "\n")
+
+			if !strings.Contains(got, step) {
+				t.Errorf("%s reports no problem with %q, though %s no longer carries it: the check reads the page, so a page that dropped a step must fail it, not only a section that did (PRD #297 milestone 3)\nproblems: %s",
+					verifyPagePath, step, verifyPagePath, got)
+			}
+		})
 	})
 
 	t.Run("every repository document the page links is linked by the guide", func(t *testing.T) {
@@ -239,21 +283,16 @@ func TestVerificationGuideAgreesWithThePage(t *testing.T) {
 		}
 	})
 
-	t.Run("the section carries the site's URL and the first-visit advice", func(t *testing.T) {
+	t.Run("the page and the section carry the site's URL and the first-visit advice", func(t *testing.T) {
 		t.Parallel()
-
-		if !strings.Contains(section, siteURL) {
-			t.Errorf("%s's %q section does not carry the exact URL %s: the first-visit advice is to type that URL, so the guide spells it out as the page does (PRD #297 milestone 3)", verifyGuidePath, verifyGuideSection, siteURL)
-		}
 
 		// The page's notice: type https://www.shift2eu.com yourself rather than
 		// following an http:// link, because on a first visit a network attacker
-		// can strip HTTPS. The guide may word the advice in its own style, so
-		// only these two phrases are pinned: the occasion, and the attack. They
-		// are matched without case, so the advice may open a sentence.
-		sectionLower := strings.ToLower(section)
-
-		for _, want := range []struct {
+		// can strip HTTPS. The page and the guide may word the advice in their own
+		// style, so only these two phrases are pinned besides the URL: the
+		// occasion, and the attack. They are matched without case, so the advice
+		// may open a sentence.
+		phrases := []struct {
 			phrase string
 			why    string
 		}{
@@ -265,11 +304,59 @@ func TestVerificationGuideAgreesWithThePage(t *testing.T) {
 				phrase: "strip https",
 				why:    "the attack the advice names: an http:// link lets a network attacker strip HTTPS and serve a look-alike page",
 			},
+		}
+
+		// noticeProblems returns what a document fails to carry of the notice: the
+		// site's exact URL, and the two phrases of the advice. The page carries
+		// the advice and so does the section that repeats it, and both documents
+		// are checked: a page that lost the advice fails as the section that lost
+		// it does, and neither is read and left unasserted.
+		noticeProblems := func(docPath, doc string) []string {
+			text := collapsed(doc)
+
+			var found []string
+
+			if !strings.Contains(text, siteURL) {
+				found = append(found, fmt.Sprintf("%s does not carry the exact URL %s: the first-visit advice is to type that URL, so %s spells it out (PRD #297 milestone 3)",
+					docPath, siteURL, docPath))
+			}
+
+			lower := strings.ToLower(text)
+
+			for _, want := range phrases {
+				if !strings.Contains(lower, want.phrase) {
+					found = append(found, fmt.Sprintf("%s does not carry the first-visit advice: it says no %q, though the page and the guide's %q section carry the advice (PRD #297 milestone 3): %s",
+						docPath, want.phrase, verifyGuideSection, want.why))
+				}
+			}
+
+			return found
+		}
+
+		for _, doc := range []struct {
+			docPath string
+			text    string
+		}{
+			{docPath: verifyPagePath, text: page},
+			{docPath: verifyGuidePath, text: section},
 		} {
-			if !strings.Contains(sectionLower, want.phrase) {
-				t.Errorf("%s's %q section does not carry the first-visit advice: it says no %q, though %s carries the advice (PRD #297 milestone 3)", verifyGuidePath, verifyGuideSection, want.phrase, verifyPagePath)
+			for _, problem := range noticeProblems(doc.docPath, doc.text) {
+				t.Error(problem)
 			}
 		}
+
+		// The page's side is worth its claims only while a page that lost the
+		// advice is a problem: this copy is the page without the site's URL.
+		t.Run("a page without the site's URL is a problem", func(t *testing.T) {
+			t.Parallel()
+
+			got := strings.Join(noticeProblems(verifyPagePath, strings.ReplaceAll(page, siteURL, "the site")), "\n")
+
+			if !strings.Contains(got, siteURL) {
+				t.Errorf("%s reports no problem with %s, though the page no longer carries it: the check reads the page, so a page without the URL must fail it (PRD #297 milestone 3)\nproblems: %s",
+					verifyPagePath, siteURL, got)
+			}
+		})
 	})
 }
 
