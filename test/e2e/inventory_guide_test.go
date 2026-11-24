@@ -287,22 +287,54 @@ func inventoryGuides() []inventoryGuideCase {
 	}
 }
 
-// taxonomyCategories are the taxonomy categories the recorded fixtures cover.
-// They are written out because this package is black box and imports no domain
+// taxonomyCategories returns the taxonomy categories the recorded fixtures of
+// source cover, unclassified aside, and nil for a source it does not know. Each
+// source has a list of its own, so a change to one source's guide adds only
+// that source's entries (PRD #552: GCP, for one, has no database.mongodb). They
+// are written out because this package is black box and imports no domain
 // package (the e2e-is-black-box depguard rule), and because a -update that
 // dropped a mapping must not be able to hide itself: the inventory is checked
 // against this list, not against the golden file it was written from.
-func taxonomyCategories() []string {
-	return []string{
-		"compute.baremetal",
-		"compute.vm",
-		"storage.block",
-		"storage.object",
-		"database.postgresql",
-		"database.mysql",
-		"kubernetes.managed",
-		"serverless.function",
-		"messaging.queue",
+func taxonomyCategories(source string) []string {
+	switch source {
+	case "aws":
+		return []string{
+			"compute.baremetal",
+			"compute.vm",
+			"storage.block",
+			"storage.object",
+			"database.postgresql",
+			"database.mysql",
+			"kubernetes.managed",
+			"serverless.function",
+			"messaging.queue",
+		}
+	case "gcp":
+		return []string{
+			"compute.baremetal",
+			"compute.vm",
+			"storage.block",
+			"storage.object",
+			"database.postgresql",
+			"database.mysql",
+			"kubernetes.managed",
+			"serverless.function",
+			"messaging.queue",
+		}
+	case "azure":
+		return []string{
+			"compute.baremetal",
+			"compute.vm",
+			"storage.block",
+			"storage.object",
+			"database.postgresql",
+			"database.mysql",
+			"kubernetes.managed",
+			"serverless.function",
+			"messaging.queue",
+		}
+	default:
+		return nil
 	}
 }
 
@@ -478,11 +510,17 @@ func decodeInventory(t *testing.T, document []byte) inventoryDoc {
 	return doc
 }
 
-// assertCategories fails unless every taxonomy category the fixtures cover
-// appears in the inventory. A category that no longer appears is a mapping the
-// program lost, or a fixture it no longer reads.
+// assertCategories fails unless the inventory's categories are exactly the ones
+// the source's fixtures cover (taxonomyCategories) and unclassified. A category
+// that no longer appears is a mapping the program lost, or a fixture it no
+// longer reads.
 func assertCategories(t *testing.T, source string, doc inventoryDoc) {
 	t.Helper()
+
+	categories := taxonomyCategories(source)
+	if categories == nil {
+		t.Fatalf("%s: no category list for this source in taxonomyCategories", source)
+	}
 
 	got := make([]string, 0, len(doc.Resources))
 	for _, resource := range doc.Resources {
@@ -492,7 +530,7 @@ func assertCategories(t *testing.T, source string, doc inventoryDoc) {
 	slices.Sort(got)
 	got = slices.Compact(got)
 
-	want := append(taxonomyCategories(), "unclassified")
+	want := append(categories, "unclassified")
 	slices.Sort(want)
 	want = slices.Compact(want)
 
