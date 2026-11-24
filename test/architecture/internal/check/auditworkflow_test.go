@@ -1,0 +1,820 @@
+package check_test
+
+import (
+	"os"
+	"strings"
+	"testing"
+
+	"github.com/timothymamo/shift2eu/test/architecture/internal/check"
+)
+
+// The scheduled security audit's workflow (PRD #175 milestone 2, ADR 0040), and
+// what check.AuditWorkflow reads it for.
+//
+// The accepted shape is testdata/auditworkflow/valid.yml, the workflow PR 5b
+// adds as .github/workflows/scheduled-security-audit.yml: three jobs, two
+// ciphertexts, and no secret where it does not belong. AuditWorkflow returns
+// one message per problem and none for that shape. It reads the document with
+// the strict line reader (test/internal/yamlread), as check.ReleasePleaseWorkflow
+// and check.ReleaseWorkflow do, and refuses what it does not follow rather than
+// guess at it. What it must hold:
+//
+//   - on: is a plain block whose only trigger is workflow_dispatch:, with no
+//     inputs:. No schedule (milestone 3 adds it), no push, pull_request,
+//     pull_request_target, workflow_run or issue_comment.
+//   - The one guard condition, textually identical in every job's if: and in
+//     the concurrency group:
+//     github.ref == 'refs/heads/main' && github.run_attempt == 1 &&
+//     (github.event_name == 'schedule' || github.triggering_actor ==
+//     github.repository_owner). The group falls through to
+//     format('skipped-{0}', github.run_id) for a run whose jobs will be
+//     skipped, and cancel-in-progress is false.
+//   - permissions: {} at the top level. Each job's scopes are exactly the ones
+//     the accepted shape declares, never a write scope and never packages:.
+//   - Each job runs in the security-audit environment on ubuntu-24.04, with a
+//     timeout-minutes below 360 and every step's timeout-minutes set. The model
+//     job needs checks, the publish job needs model.
+//   - Every checkout is of ${{ github.sha }} with persist-credentials: false and
+//     no sparse-checkout.
+//   - Every action is pinned to a 40-hex commit with a version comment, except
+//     the App token step's action, which is pinned the same way.
+//   - No job declares outputs:, no step uses actions/cache, no script runs
+//     set -x, and no document holds secrets[, toJSON(secrets) or
+//     secrets: inherit.
+//   - No ${{ }} reaches a run: body: values reach the shell through env: and
+//     files alone.
+//   - Each secret is read in exactly one place: CLAUDE_CODE_OAUTH_TOKEN in the
+//     model step's step-level env:, AUDIT_MODEL_PRIVATE_KEY in the model job's
+//     decrypt step's, AUDIT_PUBLISH_PRIVATE_KEY in the publish job's decrypt
+//     step's, AUDIT_APP_PRIVATE_KEY in the publish job's App token step's
+//     with:, and AUDIT_FINGERPRINT_KEY in the publish job's step-level env:.
+//     The variables AUDIT_MODEL_PUBLIC_KEY, AUDIT_PUBLISH_PUBLIC_KEY and
+//     AUDIT_APP_CLIENT_ID are read where the accepted shape reads them. The
+//     checks job reads no secret at all, and github.token only in the
+//     step-level env: of a step that reads GitHub's API, never in the model
+//     job. The model step's env: holds no other secret and no GITHUB_TOKEN.
+//   - The artifact hand-offs: the checks job's last steps encrypt its results
+//     to vars.AUDIT_MODEL_PUBLIC_KEY and upload checks-result; the model job's
+//     last steps encrypt its result to vars.AUDIT_PUBLISH_PUBLIC_KEY and upload
+//     model-result. Both carry retention-days: 1, and nothing else is uploaded.
+//     Each downloading job runs ci/auditpublish artifacts before it downloads,
+//     and fails closed on a name it does not expect or one that appears twice.
+//   - The model job holds no check and runs no container: no step runs
+//     gitleaks, govulncheck, osv-scanner, zizmor, actionlint, cosign, trivy or
+//     scorecard, and none pulls or runs a docker image. The model-free step that
+//     stops Docker and removes the runner user's sudo rule runs before the step
+//     that starts ci/auditrun, which runs the sandbox preflight and the audit.
+//   - Every Go command after the step that runs go mod download carries
+//     GOFLAGS=-mod=readonly GOPROXY=off.
+//   - The generate GitHub App token step is in the publish job alone, pinned to
+//     a commit, with exactly the four permission-* inputs the accepted shape
+//     holds. It runs after the checks job and before the publish step.
+//   - The publish job verifies the image's provenance attestation with
+//     gh attestation verify, its --signer-workflow release.yml and its
+//     --source-ref refs/tags/<tag>, before the step that trusts the digest.
+//     gitleaks runs the stdin subcommand with --ignore-gitleaks-allow.
+//   - No private key is written under /tmp or /run.
+//   - Every tool version line has a # renovate: comment above it, and every
+//     downloaded tool's SHA-256 line is 64 lower-case hex with a
+//     digestVersion= comment of its own.
+//   - A document the reader cannot follow, or an empty one, is refused.
+//
+// The check recognises each job's steps by name, and the accepted fixture's
+// names are the closed list: a step the check's list does not hold is reported
+// with its name, as is a step that is missing or out of order. Every message
+// names the key, value, step, secret or artifact it is about: the cases below
+// assert a part of that name.
+//
+// TestAuditWorkflow holds that none of that can change unseen: every case is a
+// mutation of the accepted shape, and each must draw a message the accepted
+// shape does not.
+
+// auditWorkflowFixture is the accepted shape of the scheduled security audit's
+// workflow, the file the repository test holds .github/workflows/
+// scheduled-security-audit.yml to.
+const auditWorkflowFixture = "testdata/auditworkflow/valid.yml"
+
+// auditGuard is the one guard condition: main only, a run's first attempt only,
+// the schedule or the owner.
+const auditGuard = "github.ref == 'refs/heads/main' && github.run_attempt == 1 && (github.event_name == 'schedule' || github.triggering_actor == github.repository_owner)"
+
+// The texts the cases below replace, each exactly as the accepted fixture
+// writes it: a case that mistypes one fails in mutate, not as a case that
+// passes for the wrong reason.
+const (
+	auditConcurrencyGroup = "  group: ${{ " + auditGuard + " && 'scheduled-security-audit' || format('skipped-{0}', github.run_id) }}\n"
+	auditCancelProgress   = "  cancel-in-progress: false\n"
+	auditDispatchTrigger  = "  workflow_dispatch:\n"
+	auditCheckoutPin      = "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1"
+	auditCheckoutUses     = "        uses: " + auditCheckoutPin + "\n"
+	auditCheckoutRef      = "          ref: ${{ github.sha }}\n"
+	auditNoCredentials    = "          persist-credentials: false\n"
+	auditArtifactUpload   = "actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2"
+	auditChecksIf         = "    timeout-minutes: 180\n    if: ${{ " + auditGuard + " }}\n"
+	auditModelIf          = "    timeout-minutes: 120\n    if: ${{ " + auditGuard + " }}\n"
+	auditPublishIf        = "    timeout-minutes: 30\n    if: ${{ " + auditGuard + " }}\n"
+	// auditChecksPermissions is the checks job's permissions block, whose comment
+	// no other job shares.
+	auditChecksPermissions = "    # packages scope, and nothing here writes.\n" +
+		"    permissions:\n" +
+		"      contents: read\n" +
+		"      attestations: read\n"
+	// auditPublishPermissions is the publish job's permissions block, whose
+	// comment no other job shares.
+	auditPublishPermissions = "    # artifacts, attestations for the image check. The audit App's token writes.\n" +
+		"    permissions:\n" +
+		"      contents: read\n" +
+		"      actions: read\n" +
+		"      attestations: read\n"
+	// auditModelPermissions is the model job's permissions block: what it reads
+	// is exactly the checkout and the artifact listing.
+	auditModelPermissions = "    # GITHUB_TOKEN reads only: contents for the checkout, actions for the\n" +
+		"    # artifact listing and the download. No secret is in a job's env:.\n" +
+		"    permissions:\n" +
+		"      contents: read\n" +
+		"      actions: read\n"
+	// auditRecordStep is the checks job's first Go and API step, which the cases
+	// that need a script anchor on.
+	auditRecordStep = "      - name: Record the audited commit and the latest release tag\n" +
+		"        timeout-minutes: 5\n"
+	// The tools step's gitleaks pin, with its two Renovate comments, and the
+	// publish job's own copy of it, whose digests differ so that a case names
+	// one of them.
+	auditChecksGitleaks = "          # renovate: datasource=github-releases depName=gitleaks/gitleaks\n" +
+		"          GITLEAKS_VERSION: v8.30.0\n" +
+		"          # renovate: datasource=github-release-attachments depName=gitleaks/gitleaks digestVersion=v8.30.0\n" +
+		"          GITLEAKS_SHA256: \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"\n"
+	auditPublishGitleaks = "          # renovate: datasource=github-releases depName=gitleaks/gitleaks\n" +
+		"          GITLEAKS_VERSION: v8.30.0\n" +
+		"          # renovate: datasource=github-release-attachments depName=gitleaks/gitleaks digestVersion=v8.30.0\n" +
+		"          GITLEAKS_SHA256: \"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\"\n"
+	// auditModelKeyVar is the checks job's encryption step, the one place the
+	// model key's public half is read, and the anchor the cases that put another
+	// name in a checks-job env: use.
+	auditModelKeyVar = "          AUDIT_MODEL_PUBLIC_KEY: ${{ vars.AUDIT_MODEL_PUBLIC_KEY }}\n"
+	// auditActionlint is the one later Go command, with the flags every Go
+	// command after the module download must carry.
+	auditActionlint = "GOFLAGS=-mod=readonly GOPROXY=off go -C tools run github.com/rhysd/actionlint/cmd/actionlint ../.github/workflows\n"
+	// auditWrapperBuild is the model job's own Go command, the wrapper's build.
+	auditWrapperBuild = "GOFLAGS=-mod=readonly GOPROXY=off go build -trimpath -o \"${RUNNER_TEMP}/audit-exec\" ./ci/auditexec\n"
+	// auditHardeningStep is the model-free step that hardens the runner: it must
+	// run before the sandbox preflight, which is inside the model step.
+	auditHardeningStep = "      - name: Stop Docker and remove the runner user's sudo rule\n" +
+		"        timeout-minutes: 5\n" +
+		"        run: |\n" +
+		"          set -euo pipefail\n" +
+		"          sudo systemctl stop docker.service docker.socket\n" +
+		"          sudo systemctl disable docker.service docker.socket\n" +
+		"          sudo rm -f /etc/sudoers.d/runner\n" +
+		"          if sudo -n true 2> /dev/null; then\n" +
+		"            echo \"::error title=Sandbox::sudo still works: see runbook step 10\"\n" +
+		"            exit 1\n" +
+		"          fi\n"
+	// auditModelCanary is the model step's env:, whose canary line the cases that
+	// widen it append to.
+	auditModelCanary = "          SHIFT2EU_AUDIT_CANARY: \"8f14e45fceea167a5a36dedd4bea2543f0e1a2b3c4d5e6f708192a3b4c5d6e7f\"\n"
+	// auditAttestationStep is the publish job's model-free attestation check.
+	auditAttestationStep = "      - name: Verify the image's provenance attestation\n" +
+		"        timeout-minutes: 10\n" +
+		"        env:\n" +
+		"          GH_TOKEN: ${{ github.token }}\n" +
+		"        run: |\n" +
+		"          set -euo pipefail\n" +
+		"          image=\"ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/shift2eu\"\n" +
+		"          digest=\"$(jq -er '.image.digest' \"${RUNNER_TEMP}/result.json\")\"\n" +
+		"          tag=\"$(jq -er '.release.tag' \"${RUNNER_TEMP}/result.json\")\"\n" +
+		"          gh attestation verify \"oci://${image}@${digest}\" \\\n" +
+		"            --repo \"${GITHUB_REPOSITORY}\" \\\n" +
+		"            --signer-workflow \"${GITHUB_REPOSITORY}/.github/workflows/release.yml\" \\\n" +
+		"            --source-ref \"refs/tags/${tag}\"\n"
+	// auditAppTokenStep is the publish job's App token step.
+	auditAppTokenStep = "      - name: Mint the audit App's token\n" +
+		"        timeout-minutes: 5\n" +
+		"        id: app\n" +
+		"        uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3.4.0\n" +
+		"        with:\n" +
+		"          client-id: ${{ vars.AUDIT_APP_CLIENT_ID }}\n" +
+		"          # The App's key, read from the environment alone, and narrowed here to\n" +
+		"          # what ADR 0040's Decision 1 lists.\n" +
+		"          private-key: ${{ secrets.AUDIT_APP_PRIVATE_KEY }}\n" +
+		"          permission-contents: write\n" +
+		"          permission-pull-requests: write\n" +
+		"          permission-issues: write\n" +
+		"          permission-security-events: write\n"
+	// auditGitleaksStdin is the publish job's second guard: gitleaks over the text
+	// it is about to send, through the stdin subcommand.
+	auditGitleaksStdin = "          gitleaks stdin --ignore-gitleaks-allow --redact --no-banner < \"${RUNNER_TEMP}/result.json\"\n"
+	// auditPublishStep is the publish job's last step: the only step that trusts
+	// the decrypted result's image digest.
+	auditPublishStepHead = "      - name: Publish the report\n"
+	// auditPublishCommand is the publish step's one line, the end of the job the
+	// case that moves the attestation check past it appends to.
+	auditPublishCommand = "          ci/auditpublish publish -result \"${RUNNER_TEMP}/result.json\" -reports docs/security/audits -gh \"$(command -v gh)\" -gitleaks \"$(command -v gitleaks)\" -tmp \"${RUNNER_TEMP}\"\n"
+)
+
+// TestAuditWorkflowAcceptsTheAcceptedShape pins that the accepted fixture draws
+// no message: every case of TestAuditWorkflow is a mutation of it, and a check
+// that refuses it would refuse the workflow itself.
+func TestAuditWorkflowAcceptsTheAcceptedShape(t *testing.T) {
+	t.Parallel()
+
+	if got := check.AuditWorkflow(auditWorkflowFixtureBytes(t)); len(got) != 0 {
+		t.Errorf("AuditWorkflow(%s) = %q, want no message: the fixture is the accepted shape of the scheduled audit's workflow", auditWorkflowFixture, got)
+	}
+}
+
+// auditWorkflowFixtureBytes returns the accepted shape's bytes.
+func auditWorkflowFixtureBytes(t *testing.T) []byte {
+	t.Helper()
+
+	src, err := os.ReadFile(auditWorkflowFixture)
+	if err != nil {
+		t.Fatalf("read %s: %v; the accepted shape of the audit workflow is the file every case mutates", auditWorkflowFixture, err)
+	}
+
+	return src
+}
+
+// TestAuditWorkflow holds the scheduled security audit's workflow to
+// check.AuditWorkflow: the frame, the two ciphertexts and the reach of every
+// secret. Each case changes one part of the accepted shape and must draw a
+// message the accepted shape does not, whose text names the part the case
+// changes (wantIn). A case that draws no new message, or one that does not name
+// what it broke, fails.
+func TestAuditWorkflow(t *testing.T) {
+	t.Parallel()
+
+	acceptedWorkflow := string(auditWorkflowFixtureBytes(t))
+	accepted := check.AuditWorkflow([]byte(acceptedWorkflow))
+
+	if len(accepted) != 0 {
+		t.Fatalf("AuditWorkflow(%s) = %q, want no message: the fixture is the accepted shape", auditWorkflowFixture, accepted)
+	}
+
+	// withStep returns the accepted workflow with step inserted at the head of
+	// the job's steps, named head.
+	withStep := func(head, step string) string {
+		return mutate(t, acceptedWorkflow, head, step+head)
+	}
+
+	// withoutStep returns the accepted workflow with step removed.
+	withoutStep := func(step string) string {
+		return mutate(t, acceptedWorkflow, step, "")
+	}
+
+	// The model job's upload step, whose head the cases that add a step to the
+	// model job anchor on.
+	const auditModelUpload = "      - name: Upload the model's ciphertext\n"
+
+	tests := []struct {
+		name     string
+		workflow string
+		// wantIn is a part of a message the check must return for the case, and
+		// the accepted shape does not draw; "" means no message at all.
+		wantIn string
+	}{
+		// The accepted shape, and the reading that must not depend on the line
+		// ends.
+		{name: "the accepted shape", workflow: acceptedWorkflow},
+		{name: "CRLF line ends", workflow: strings.ReplaceAll(acceptedWorkflow, "\n", "\r\n")},
+
+		// The triggers: a workflow_dispatch with nothing to fill in, and no other
+		// event. Any other trigger lets a run start where no audit belongs, and an
+		// input is a value a caller chooses.
+		{
+			name:     "a push trigger",
+			workflow: mutate(t, acceptedWorkflow, auditDispatchTrigger, auditDispatchTrigger+"  push:\n"),
+			wantIn:   "push",
+		},
+		{
+			name:     "a pull_request trigger",
+			workflow: mutate(t, acceptedWorkflow, auditDispatchTrigger, auditDispatchTrigger+"  pull_request:\n"),
+			wantIn:   "pull_request",
+		},
+		{
+			name:     "a pull_request_target trigger",
+			workflow: mutate(t, acceptedWorkflow, auditDispatchTrigger, auditDispatchTrigger+"  pull_request_target:\n"),
+			wantIn:   "pull_request_target",
+		},
+		{
+			name:     "a workflow_run trigger",
+			workflow: mutate(t, acceptedWorkflow, auditDispatchTrigger, auditDispatchTrigger+"  workflow_run:\n"),
+			wantIn:   "workflow_run",
+		},
+		{
+			name:     "an issue_comment trigger",
+			workflow: mutate(t, acceptedWorkflow, auditDispatchTrigger, auditDispatchTrigger+"  issue_comment:\n"),
+			wantIn:   "issue_comment",
+		},
+		{
+			// The schedule is milestone 3's: until then a cron trigger runs the
+			// audit before the checks job is complete, and nothing reports that.
+			name:     "a schedule trigger",
+			workflow: mutate(t, acceptedWorkflow, auditDispatchTrigger, auditDispatchTrigger+"  schedule:\n    - cron: \"0 3 * * 1\"\n"),
+			wantIn:   "schedule",
+		},
+		{
+			name: "inputs on the dispatch",
+			workflow: mutate(t, acceptedWorkflow, auditDispatchTrigger,
+				auditDispatchTrigger+"    inputs:\n      force:\n        description: Accept whatever is there\n"),
+			wantIn: "inputs",
+		},
+
+		// One guard condition, textually identical in every job's if: and in the
+		// concurrency group: main only, a run's first attempt only, the schedule or
+		// the owner. A weaker guard in one place opens exactly that path.
+		{
+			name:     "another guard in the checks job",
+			workflow: mutate(t, acceptedWorkflow, auditChecksIf, "    timeout-minutes: 180\n    if: ${{ always() }}\n"),
+			wantIn:   "guard",
+		},
+		{
+			name:     "another guard in the model job",
+			workflow: mutate(t, acceptedWorkflow, auditModelIf, "    timeout-minutes: 120\n    if: ${{ github.ref == 'refs/heads/main' }}\n"),
+			wantIn:   "guard",
+		},
+		{
+			name:     "another guard in the publish job",
+			workflow: mutate(t, acceptedWorkflow, auditPublishIf, "    timeout-minutes: 30\n    if: ${{ github.ref == 'refs/heads/main' && github.run_attempt == 1 }}\n"),
+			wantIn:   "guard",
+		},
+		{
+			name:     "no guard in the publish job",
+			workflow: mutate(t, acceptedWorkflow, auditPublishIf, "    timeout-minutes: 30\n"),
+			wantIn:   "guard",
+		},
+		{
+			name:     "another guard in the concurrency group",
+			workflow: mutate(t, acceptedWorkflow, auditConcurrencyGroup, "  group: ${{ github.ref == 'refs/heads/main' && 'scheduled-security-audit' || format('skipped-{0}', github.run_id) }}\n"),
+			wantIn:   "group",
+		},
+		{
+			// A run the guard skips must neither queue behind nor cancel a real
+			// one, so its group is its own run's.
+			name:     "a group with no skipped fallthrough",
+			workflow: mutate(t, acceptedWorkflow, "format('skipped-{0}', github.run_id)", "github.run_id"),
+			wantIn:   "skipped-",
+		},
+		{
+			name:     "a concurrency that cancels the run in progress",
+			workflow: mutate(t, acceptedWorkflow, auditCancelProgress, "  cancel-in-progress: true\n"),
+			wantIn:   "cancel-in-progress",
+		},
+		{
+			name:     "no cancel-in-progress",
+			workflow: mutate(t, acceptedWorkflow, auditCancelProgress, ""),
+			wantIn:   "cancel-in-progress",
+		},
+
+		// GITHUB_TOKEN: nothing at the top level, and only read scopes in a job.
+		// The image is public, so no job needs packages.
+		{
+			name:     "a top-level permissions with a scope",
+			workflow: mutate(t, acceptedWorkflow, "permissions: {}\n", "permissions:\n  contents: read\n"),
+			wantIn:   "permissions",
+		},
+		{
+			name:     "contents: write in every job",
+			workflow: mutateEvery(t, acceptedWorkflow, "      contents: read\n", "      contents: write\n"),
+			wantIn:   "write",
+		},
+		{
+			name:     "an extra scope in the checks job",
+			workflow: mutate(t, acceptedWorkflow, auditChecksPermissions, auditChecksPermissions+"      packages: read\n"),
+			wantIn:   "packages",
+		},
+		{
+			name:     "an extra scope in the model job",
+			workflow: mutate(t, acceptedWorkflow, auditModelPermissions, auditModelPermissions+"      issues: read\n"),
+			wantIn:   "issues",
+		},
+		{
+			name:     "an extra scope in the publish job",
+			workflow: mutate(t, acceptedWorkflow, auditPublishPermissions, auditPublishPermissions+"      security-events: read\n"),
+			wantIn:   "security-events",
+		},
+
+		// The environment and the runner are the ones ADR 0040 recorded, for every
+		// job: a secret is only limited to main by the environment, and a newer
+		// image would change the coreutils and bubblewrap under the audit.
+		{
+			name:     "no environment on the model job",
+			workflow: mutate(t, acceptedWorkflow, "    environment: security-audit\n"+auditModelPermissions, auditModelPermissions),
+			wantIn:   "environment",
+		},
+		{
+			name:     "another environment on the publish job",
+			workflow: mutate(t, acceptedWorkflow, "    environment: security-audit\n    # GITHUB_TOKEN reads only: contents for the checkout, actions for the\n"+auditPublishPermissions, "    environment: production\n    # GITHUB_TOKEN reads only: contents for the checkout, actions for the\n"+auditPublishPermissions),
+			wantIn:   "security-audit",
+		},
+		{
+			name:     "a moving runner image",
+			workflow: mutateEvery(t, acceptedWorkflow, "    runs-on: ubuntu-24.04\n", "    runs-on: ubuntu-latest\n"),
+			wantIn:   "ubuntu-24.04",
+		},
+
+		// The jobs run in order: the model job reads the checks' results, the
+		// publish job the model's.
+		{
+			name:     "no needs on the model job",
+			workflow: mutate(t, acceptedWorkflow, "    needs: checks\n", ""),
+			wantIn:   "needs",
+		},
+		{
+			name:     "no needs on the publish job",
+			workflow: mutate(t, acceptedWorkflow, "    needs: model\n", ""),
+			wantIn:   "needs",
+		},
+
+		// Every checkout is of the main commit the run started on, with no
+		// credential kept and no sparse checkout: the audit's copy must be the
+		// whole tree its findings quote.
+		{
+			name:     "a checkout without ref",
+			workflow: mutateEvery(t, acceptedWorkflow, auditCheckoutRef, ""),
+			wantIn:   "${{ github.sha }}",
+		},
+		{
+			name:     "a checkout keeping the credential",
+			workflow: mutateEvery(t, acceptedWorkflow, auditNoCredentials, "          persist-credentials: true\n"),
+			wantIn:   "persist-credentials",
+		},
+		{
+			name:     "a checkout without persist-credentials",
+			workflow: mutateEvery(t, acceptedWorkflow, auditNoCredentials, ""),
+			wantIn:   "persist-credentials",
+		},
+		{
+			name:     "a sparse checkout",
+			workflow: mutateEvery(t, acceptedWorkflow, auditNoCredentials, auditNoCredentials+"          sparse-checkout: internal\n"),
+			wantIn:   "sparse-checkout",
+		},
+
+		// Every step and every job has a timeout, and no job's reaches GitHub's
+		// six-hour limit: a hung check or model run ends on the workflow's own
+		// terms.
+		{
+			name:     "a step without a timeout",
+			workflow: mutate(t, acceptedWorkflow, auditRecordStep, "      - name: Record the audited commit and the latest release tag\n"),
+			wantIn:   "timeout-minutes",
+		},
+		{
+			name:     "a job without a timeout",
+			workflow: mutate(t, acceptedWorkflow, "    timeout-minutes: 180\n", ""),
+			wantIn:   "timeout-minutes",
+		},
+		{
+			name:     "a job timeout at GitHub's limit",
+			workflow: mutate(t, acceptedWorkflow, "    timeout-minutes: 180\n", "    timeout-minutes: 360\n"),
+			wantIn:   "timeout-minutes",
+		},
+
+		// Every action is pinned to a commit, and says which release that commit
+		// is: a tag moves, a commit does not.
+		{
+			name:     "an action pinned by tag",
+			workflow: mutateEvery(t, acceptedWorkflow, auditCheckoutUses, "        uses: actions/checkout@v7.0.1\n"),
+			wantIn:   "checkout@v7.0.1",
+		},
+		{
+			name:     "an action pinned without a version comment",
+			workflow: mutateEvery(t, acceptedWorkflow, auditCheckoutPin, "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"),
+			wantIn:   "version comment",
+		},
+
+		// No expression reaches a script: a value from the run reaches the shell
+		// through env: and files alone, so no text of it can become a command.
+		{
+			name: "an expression in a run body",
+			workflow: mutate(t, acceptedWorkflow, "          tag=\"$(gh api \"repos/${GH_REPO}/releases/latest\" --jq .tag_name)\"\n",
+				"          echo \"${{ github.event_name }}\n          tag=\"$(gh api \"repos/${GH_REPO}/releases/latest\" --jq .tag_name)\"\n"),
+			wantIn: "${{",
+		},
+
+		// Every environment secret at once is one expression away, and none of the
+		// three forms may appear anywhere.
+		{
+			name:     "a secrets lookup in the bracket form",
+			workflow: mutate(t, acceptedWorkflow, auditModelKeyVar, auditModelKeyVar+"          ALL_SECRETS: ${{ secrets[format('{0}', 'AUDIT_APP_PRIVATE_KEY')] }}\n"),
+			wantIn:   "secrets[",
+		},
+		{
+			name:     "toJSON(secrets)",
+			workflow: mutate(t, acceptedWorkflow, auditModelKeyVar, auditModelKeyVar+"          ALL_SECRETS: ${{ toJSON(secrets) }}\n"),
+			wantIn:   "toJSON(secrets)",
+		},
+		{
+			name:     "secrets: inherit",
+			workflow: mutate(t, acceptedWorkflow, "    needs: checks\n", "    needs: checks\n    secrets: inherit\n"),
+			wantIn:   "inherit",
+		},
+
+		// Each secret is read in exactly one place, and each job reads only the
+		// one its work needs.
+		{
+			name:     "the subscription token in the model job's env",
+			workflow: mutate(t, acceptedWorkflow, "    needs: checks\n", "    needs: checks\n    env:\n      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}\n"),
+			wantIn:   "CLAUDE_CODE_OAUTH_TOKEN",
+		},
+		{
+			name:     "the subscription token at the workflow level",
+			workflow: mutate(t, acceptedWorkflow, "jobs:\n", "env:\n  CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}\n\njobs:\n"),
+			wantIn:   "CLAUDE_CODE_OAUTH_TOKEN",
+		},
+		{
+			name:     "the subscription token in a with: input",
+			workflow: mutate(t, acceptedWorkflow, "          name: model-result\n", "          name: model-result\n          token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}\n"),
+			wantIn:   "CLAUDE_CODE_OAUTH_TOKEN",
+		},
+		{
+			name: "the subscription token in a run body",
+			workflow: mutate(t, acceptedWorkflow, "          sudo chmod -R a-w /srv/audit/checkout\n",
+				"          echo \"${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}\" > /dev/null\n          sudo chmod -R a-w /srv/audit/checkout\n"),
+			wantIn: "CLAUDE_CODE_OAUTH_TOKEN",
+		},
+		{
+			name: "the subscription token in a second step",
+			workflow: withStep(auditModelUpload, "      - name: Print the token\n"+
+				"        timeout-minutes: 5\n"+
+				"        env:\n"+
+				"          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}\n"+
+				"        run: |\n"+
+				"          set -euo pipefail\n"+
+				"          echo ok\n"),
+			wantIn: "CLAUDE_CODE_OAUTH_TOKEN",
+		},
+		{
+			name:     "the model key's private half outside its decrypt step",
+			workflow: mutate(t, acceptedWorkflow, "      - name: Copy the checkout into the audit directory\n        timeout-minutes: 10\n", "      - name: Copy the checkout into the audit directory\n        timeout-minutes: 10\n        env:\n          AUDIT_MODEL_PRIVATE_KEY: ${{ secrets.AUDIT_MODEL_PRIVATE_KEY }}\n"),
+			wantIn:   "AUDIT_MODEL_PRIVATE_KEY",
+		},
+		{
+			name:     "the publish key's private half outside the publish job",
+			workflow: mutate(t, acceptedWorkflow, "          AUDIT_PUBLISH_PUBLIC_KEY: ${{ vars.AUDIT_PUBLISH_PUBLIC_KEY }}\n", "          AUDIT_PUBLISH_PUBLIC_KEY: ${{ vars.AUDIT_PUBLISH_PUBLIC_KEY }}\n          AUDIT_PUBLISH_PRIVATE_KEY: ${{ secrets.AUDIT_PUBLISH_PRIVATE_KEY }}\n"),
+			wantIn:   "AUDIT_PUBLISH_PRIVATE_KEY",
+		},
+		{
+			name:     "the App's key outside the publish job",
+			workflow: mutate(t, acceptedWorkflow, auditModelKeyVar, auditModelKeyVar+"          AUDIT_APP_PRIVATE_KEY: ${{ secrets.AUDIT_APP_PRIVATE_KEY }}\n"),
+			wantIn:   "AUDIT_APP_PRIVATE_KEY",
+		},
+		{
+			name:     "the fingerprint key in the checks job",
+			workflow: mutate(t, acceptedWorkflow, auditModelKeyVar, auditModelKeyVar+"          AUDIT_FINGERPRINT_KEY: ${{ secrets.AUDIT_FINGERPRINT_KEY }}\n"),
+			wantIn:   "AUDIT_FINGERPRINT_KEY",
+		},
+		{
+			name:     "the fingerprint key in the publish job's env",
+			workflow: mutate(t, acceptedWorkflow, "    needs: model\n", "    needs: model\n    env:\n      AUDIT_FINGERPRINT_KEY: ${{ secrets.AUDIT_FINGERPRINT_KEY }}\n"),
+			wantIn:   "AUDIT_FINGERPRINT_KEY",
+		},
+		{
+			name:     "a secret in the checks job",
+			workflow: mutate(t, acceptedWorkflow, auditModelKeyVar, auditModelKeyVar+"          AUDIT_PUBLISH_PRIVATE_KEY: ${{ secrets.AUDIT_PUBLISH_PRIVATE_KEY }}\n"),
+			wantIn:   "AUDIT_PUBLISH_PRIVATE_KEY",
+		},
+		{
+			name:     "github.token in the checks job's env",
+			workflow: mutate(t, acceptedWorkflow, "    timeout-minutes: 180\n", "    timeout-minutes: 180\n    env:\n      GH_TOKEN: ${{ github.token }}\n"),
+			wantIn:   "github.token",
+		},
+		{
+			name:     "GITHUB_TOKEN in the model step's env",
+			workflow: mutate(t, acceptedWorkflow, auditModelCanary, auditModelCanary+"          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}\n"),
+			wantIn:   "GITHUB_TOKEN",
+		},
+
+		// The App's token is minted in the publish job alone, from its own client
+		// ID and key, narrowed to exactly the four permissions the ADR lists.
+		{
+			name:     "no App token step",
+			workflow: withoutStep(auditAppTokenStep),
+			wantIn:   "audit App's token",
+		},
+		{
+			name:     "an App token action pinned by tag",
+			workflow: mutate(t, acceptedWorkflow, "actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3.4.0", "actions/create-github-app-token@v3.4.0"),
+			wantIn:   "create-github-app-token@v3.4.0",
+		},
+		{
+			name:     "an extra permission input on the App token",
+			workflow: mutate(t, acceptedWorkflow, "          permission-security-events: write\n", "          permission-security-events: write\n          permission-metadata: read\n"),
+			wantIn:   "permission-metadata",
+		},
+		{
+			name:     "a missing permission input on the App token",
+			workflow: mutate(t, acceptedWorkflow, "          permission-issues: write\n", ""),
+			wantIn:   "permission-issues",
+		},
+		{
+			name:     "the App token step in the model job",
+			workflow: withStep(auditModelUpload, withoutStep(auditAppTokenStep)),
+			wantIn:   "audit App's token",
+		},
+
+		// Two ciphertexts cross, by exact name, with a one-day retention, and
+		// nothing else crosses.
+		{
+			name:     "another name on the checks' artifact",
+			workflow: mutate(t, acceptedWorkflow, "          name: checks-result\n", "          name: checks\n"),
+			wantIn:   "checks-result",
+		},
+		{
+			name:     "another name on the model's artifact",
+			workflow: mutate(t, acceptedWorkflow, "          name: model-result\n", "          name: audit-result\n"),
+			wantIn:   "model-result",
+		},
+		{
+			name:     "another retention",
+			workflow: mutateEvery(t, acceptedWorkflow, "          retention-days: 1\n", "          retention-days: 7\n"),
+			wantIn:   "retention-days",
+		},
+		{
+			name: "an extra upload in the checks job",
+			workflow: mutate(t, acceptedWorkflow, "          if-no-files-found: error\n\n  model:\n",
+				"          if-no-files-found: error\n"+
+					"      - name: Upload the transcripts\n"+
+					"        timeout-minutes: 5\n"+
+					"        uses: "+auditArtifactUpload+"\n"+
+					"        with:\n"+
+					"          name: transcripts\n"+
+					"          path: /srv/audit/state/out\n"+
+					"          retention-days: 1\n"+
+					"\n  model:\n"),
+			wantIn: "Upload the transcripts",
+		},
+		{
+			name:     "a job output",
+			workflow: mutate(t, acceptedWorkflow, "    timeout-minutes: 180\n", "    timeout-minutes: 180\n    outputs:\n      tag: ${{ steps.record.outputs.tag }}\n"),
+			wantIn:   "outputs",
+		},
+		{
+			name: "an Actions cache",
+			workflow: withStep("      - name: Download the pinned tools and verify their checksums\n        timeout-minutes: 15\n",
+				"      - name: Cache the tools\n"+
+					"        timeout-minutes: 5\n"+
+					"        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0\n"+
+					"        with:\n"+
+					"          path: ${{ runner.temp }}/bin\n"+
+					"          key: tools\n"),
+			wantIn: "actions/cache",
+		},
+		{
+			name:     "a script tracing its commands",
+			workflow: mutate(t, acceptedWorkflow, "          set -euo pipefail\n          tag=\"$(gh api", "          set -euo pipefail\n          set -x\n          tag=\"$(gh api"),
+			wantIn:   "set -x",
+		},
+
+		// The model job runs no check, no container and no release code: what it
+		// downloads is its checksum-pinned tools, and the model-free hardening
+		// step runs while sudo still works, before the sandbox preflight inside
+		// the model step.
+		{
+			name:     "the hardening step after the model step",
+			workflow: withStep(auditPublishStepHead, withoutStep(auditHardeningStep)),
+			wantIn:   "sudo rule",
+		},
+		{
+			name:     "no hardening step",
+			workflow: withoutStep(auditHardeningStep),
+			wantIn:   "sudo rule",
+		},
+		{
+			name:     "a container in the model job",
+			workflow: withStep(auditWrapperBuild, "      - name: Inspect the image\n        timeout-minutes: 5\n        run: |\n          set -euo pipefail\n          docker pull ghcr.io/timothymamo/shift2eu:latest\n"),
+			wantIn:   "docker",
+		},
+		{
+			name:     "gitleaks in the model job",
+			workflow: withStep(auditWrapperBuild, "      - name: Scan the history\n        timeout-minutes: 5\n        run: |\n          set -euo pipefail\n          gitleaks git --redact .\n"),
+			wantIn:   "gitleaks",
+		},
+		{
+			name:     "govulncheck in the model job",
+			workflow: withStep(auditWrapperBuild, "      - name: Check the modules\n        timeout-minutes: 5\n        run: |\n          set -euo pipefail\n          govulncheck ./...\n"),
+			wantIn:   "govulncheck",
+		},
+		{
+			name:     "osv-scanner in the model job",
+			workflow: withStep(auditWrapperBuild, "      - name: Check the modules\n        timeout-minutes: 5\n        run: |\n          set -euo pipefail\n          osv-scanner scan source .\n"),
+			wantIn:   "osv-scanner",
+		},
+		{
+			name:     "zizmor in the model job",
+			workflow: withStep(auditWrapperBuild, "      - name: Lint the workflows\n        timeout-minutes: 5\n        run: |\n          set -euo pipefail\n          zizmor .github/workflows\n"),
+			wantIn:   "zizmor",
+		},
+
+		// Modules are fetched once, and every later Go command runs offline
+		// against what it fetched: a later command that downloads its own module
+		// is one no checksum in the workflow pins.
+		{
+			name:     "a later Go command without GOFLAGS",
+			workflow: mutate(t, acceptedWorkflow, auditActionlint, "GOPROXY=off go -C tools run github.com/rhysd/actionlint/cmd/actionlint ../.github/workflows\n"),
+			wantIn:   "GOFLAGS",
+		},
+		{
+			name:     "a later Go command without GOPROXY",
+			workflow: mutate(t, acceptedWorkflow, auditActionlint, "GOFLAGS=-mod=readonly go -C tools run github.com/rhysd/actionlint/cmd/actionlint ../.github/workflows\n"),
+			wantIn:   "GOPROXY",
+		},
+
+		// The image digest is trusted only after gh attestation verify accepted
+		// the release workflow's provenance for exactly that digest and tag.
+		{
+			name:     "no attestation check",
+			workflow: withoutStep(auditAttestationStep),
+			wantIn:   "attestation",
+		},
+		{
+			name:     "an attestation check without --signer-workflow",
+			workflow: mutate(t, acceptedWorkflow, "            --signer-workflow \"${GITHUB_REPOSITORY}/.github/workflows/release.yml\" \\\n", ""),
+			wantIn:   "signer-workflow",
+		},
+		{
+			name:     "an attestation check without --source-ref",
+			workflow: mutate(t, acceptedWorkflow, "            --source-ref \"refs/tags/${tag}\"\n", ""),
+			wantIn:   "source-ref",
+		},
+		{
+			name: "the attestation check after the publish step",
+			workflow: mutate(t, withoutStep(auditAttestationStep), auditPublishCommand,
+				auditPublishCommand+auditAttestationStep),
+			wantIn: "attestation",
+		},
+
+		// No private key is written where the sandboxed tools can read it:
+		// Bash's cat reads any world-readable path, and neither /tmp nor /run is
+		// denied to it.
+		{
+			name: "the model key under /tmp",
+			workflow: mutate(t, acceptedWorkflow, "          printf '%s\\n' \"${AUDIT_MODEL_PRIVATE_KEY}\" | age --decrypt",
+				"          printf '%s\\n' \"${AUDIT_MODEL_PRIVATE_KEY}\" > /tmp/age.key\n          printf '%s\\n' \"${AUDIT_MODEL_PRIVATE_KEY}\" | age --decrypt"),
+			wantIn: "/tmp",
+		},
+		{
+			name: "the publish key under /run",
+			workflow: mutate(t, acceptedWorkflow, "          printf '%s\\n' \"${AUDIT_PUBLISH_PRIVATE_KEY}\" | age --decrypt",
+				"          printf '%s\\n' \"${AUDIT_PUBLISH_PRIVATE_KEY}\" > /run/age.key\n          printf '%s\\n' \"${AUDIT_PUBLISH_PRIVATE_KEY}\" | age --decrypt"),
+			wantIn: "/run",
+		},
+
+		// The publish job's own scanner is gitleaks over the text it is about to
+		// send, on stdin, and it ignores a .gitleaksignore the repository holds.
+		{
+			name:     "gitleaks not reading stdin",
+			workflow: mutate(t, acceptedWorkflow, auditGitleaksStdin, "          gitleaks git --ignore-gitleaks-allow --redact --no-banner .\n"),
+			wantIn:   "stdin",
+		},
+		{
+			name:     "gitleaks honouring the allow file",
+			workflow: mutate(t, acceptedWorkflow, "gitleaks stdin --ignore-gitleaks-allow --redact", "gitleaks stdin --redact"),
+			wantIn:   "ignore-gitleaks-allow",
+		},
+
+		// Every tool is pinned by version and checksum, and Renovate moves a
+		// version and its digest together (CLAUDE.md rule 7).
+		{
+			name:     "a tool version without a Renovate comment",
+			workflow: mutate(t, acceptedWorkflow, auditChecksGitleaks, "          GITLEAKS_VERSION: v8.30.0\n          # renovate: datasource=github-release-attachments depName=gitleaks/gitleaks digestVersion=v8.30.0\n          GITLEAKS_SHA256: \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"\n"),
+			wantIn:   "renovate",
+		},
+		{
+			name:     "a downloaded tool without a SHA-256",
+			workflow: mutate(t, acceptedWorkflow, auditPublishGitleaks, "          # renovate: datasource=github-releases depName=gitleaks/gitleaks\n          GITLEAKS_VERSION: v8.30.0\n"),
+			wantIn:   "SHA-256",
+		},
+
+		// A document the reader cannot follow tells the check nothing, so it is
+		// refused rather than passed.
+		{name: "an empty document", workflow: "", wantIn: "empty"},
+		{name: "a document that is no YAML", workflow: "\ton:\n", wantIn: "read"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := check.AuditWorkflow([]byte(tc.workflow))
+
+			if tc.wantIn == "" {
+				if len(got) != 0 {
+					t.Errorf("AuditWorkflow() = %q, want no message", got)
+				}
+
+				return
+			}
+
+			fresh := added(accepted, got)
+			if len(fresh) == 0 {
+				t.Errorf("AuditWorkflow() draws no message for the case, want one naming %q: the accepted shape's messages were %q", tc.wantIn, got)
+
+				return
+			}
+
+			if joined := strings.Join(fresh, "\n"); !strings.Contains(joined, tc.wantIn) {
+				t.Errorf("AuditWorkflow() = %q, want a message containing %q", fresh, tc.wantIn)
+			}
+		})
+	}
+}
