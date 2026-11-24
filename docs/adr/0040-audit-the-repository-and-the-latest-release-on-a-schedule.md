@@ -2106,15 +2106,15 @@ checkout of `github.sha` with `persist-credentials: false` and no sparse checkou
 
 **The check.** Each job's steps are a closed list, recognised by name and held in order, with the
 commands each step's script must run: a step that is missing, out of order or not on the list is
-reported by name. One step is optional: the model job's `Read the Claude Code pin`, the step
-`test/lint`'s install check wants before the install step (`id: claude-code-pin`). Only
+reported by name; the hardening step's place before the model step and the App token step's in the
+publish job alone are held this way. Every step is required, the model job's `Read the Claude Code pin`
+too, the step `test/lint`'s install check wants before the install step (`id: claude-code-pin`). Only
 `actions/checkout`, `actions/upload-artifact` and `actions/create-github-app-token` run, each pinned by
 commit with a version comment. Every reference to a secret, a variable, `github.token` or the App token's
 output is refused on any line but the one its step's spec allows, comments included; `secrets[`,
 `toJSON(secrets)`, `secrets: inherit`, `set -x`, a `${{ }}` in a script, a path under `/tmp` or `/run`, a
-job output and `actions/cache` are refused anywhere. The raw lines hold three things again, so a document
-the YAML reader refuses still draws the message that names them: no check or container command in the
-model job, the hardening step before the model step, and the App token step in the publish job alone.
+job output and `actions/cache` are refused anywhere. The raw lines also hold the model job free of every
+check and container command, so a document the YAML reader refuses still draws the message that names it.
 
 **Job permissions** (`GITHUB_TOKEN`, each read): the checks job `contents` and `attestations` (PR 5c's
 release-integrity rows; scorecard and row 15 may add `actions` or `issues` after the first run); the

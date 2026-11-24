@@ -111,8 +111,7 @@
 // {} at the top and exactly each job's read scopes, the security-audit
 // environment, ubuntu-24.04 and a timeout below 360 on every job and a timeout
 // on every step. Each job's steps are a closed list, recognised by name and held
-// in order, with the commands each must run; one optional step, the model job's
-// Read the Claude Code pin, is the step test/lint's install check wants. Only
+// in order, with the commands each must run, none missing. Only
 // checkout, upload-artifact and the App token action run, each pinned by commit
 // with a version comment; no Actions cache, job output, set -x, ${{ }} in a
 // script, path under /tmp or /run, secrets[, toJSON(secrets) or secrets:
@@ -121,9 +120,8 @@
 // download runs with GOFLAGS=-mod=readonly GOPROXY=off, every tool version has
 // a Renovate comment and every downloaded one a SHA-256. Two ciphertexts
 // cross, by exact name with a one-day retention. The raw lines also hold the
-// model job free of every check and container, its hardening step before the
-// model step, and the App's token minted in the publish job alone, so a
-// document the YAML reader refuses still draws the message that names them.
+// model job free of every check and container, so a document the YAML reader
+// refuses still draws the message that names them.
 //
 // ReleasePleaseWorkflow and ReleasePleaseConfig hold the workflow that
 // proposes the next release, .github/workflows/release-please.yml, and the

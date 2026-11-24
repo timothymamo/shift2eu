@@ -53,8 +53,6 @@ const (
 // hold.
 type auditStep struct {
 	name string
-	// optional is a step the workflow may leave out.
-	optional bool
 	// uses is the action the step runs, without its commit; "" for a run: step.
 	uses string
 	// artifact is the name the step uploads, for an upload step.
@@ -161,7 +159,7 @@ var auditJobs = []auditJob{
 			{name: "Download the Go modules", runs: []auditCommand{modDownload}},
 			// The step that reads the Claude Code pin file into its outputs, for
 			// the install step's env: (test/lint, issue #277 round J).
-			{name: "Read the Claude Code pin", optional: true, runs: []auditCommand{command(`\.github/claude-code\.yaml`, ".github/claude-code.yaml")}},
+			{name: "Read the Claude Code pin", runs: []auditCommand{command(`\.github/claude-code\.yaml`, ".github/claude-code.yaml")}},
 			{
 				name: "Install the pinned tools",
 				runs: []auditCommand{checksumCheck, command(`dpkg -i `, "dpkg -i"), command(`\.github/scripts/install-claude-code\.sh `, ".github/scripts/install-claude-code.sh")},
@@ -336,7 +334,6 @@ func AuditWorkflow(src []byte) []string {
 	a := &auditReader{r: r, allowed: map[int][]string{}}
 
 	a.lineRules()
-	a.sectionRules()
 
 	lines, err := yamlread.SplitLines(src)
 	if err != nil {
@@ -453,61 +450,6 @@ func (a *auditReader) jobLines(key string) map[int]bool {
 	}
 
 	return lines
-}
-
-// The names of the two steps whose place the raw lines hold as well: the
-// model-free hardening before the model step, the App token in the publish job
-// alone.
-const (
-	auditHardeningName = "Stop Docker and remove the runner user's sudo rule"
-	auditModelStepName = "Run the audit in Claude Code's sandbox"
-	auditAppTokenName  = "Mint the audit App's token" //nolint:gosec // a step's name, no credential
-)
-
-// sectionRules holds the two steps whose place matters most by the raw lines
-// too, so a document the YAML reader refuses still draws the message that
-// names them: in every section of the model job, the hardening step comes
-// before the model step, and every section of the publish job mints the App's
-// token once, which no other job does.
-func (a *auditReader) sectionRules() {
-	for _, s := range a.sections() {
-		hardening, model, app := -1, -1, 0
-
-		for i := s.start; i < s.end; i++ {
-			name, ok := strings.CutPrefix(strings.TrimSpace(a.r.raw[i]), "- name: ")
-			if !ok {
-				continue
-			}
-
-			switch name {
-			case auditHardeningName:
-				if hardening < 0 {
-					hardening = i
-				}
-			case auditModelStepName:
-				if model < 0 {
-					model = i
-				}
-			case auditAppTokenName:
-				app++
-			}
-		}
-
-		switch s.key {
-		case "model":
-			if model >= 0 && (hardening < 0 || hardening > model) {
-				a.r.fail("line %d: the model job runs %q with no %q before it: Docker and the runner's sudo rule must be gone before the sandbox preflight (ADR 0040)", model+1, auditModelStepName, auditHardeningName)
-			}
-		case "publish":
-			if app != 1 {
-				a.r.fail("line %d: the publish job holds %d steps %q, want exactly one: the audit App's token is minted there alone", s.start+1, app, auditAppTokenName)
-			}
-		}
-
-		if s.key != "publish" && app != 0 {
-			a.r.fail("line %d: the %s job holds the step %q: the audit App's token is minted in the publish job alone", s.start+1, s.key, auditAppTokenName)
-		}
-	}
 }
 
 // keys reads lines as a block mapping and reports every key outside want and
@@ -795,7 +737,7 @@ func (a *auditReader) steps(e yamlread.Entry, path string, spec auditJob) {
 }
 
 // stepOrder holds the job's steps to the closed list: every name on it, in its
-// order, none twice, none missing unless it is optional.
+// order, none twice, none missing.
 func (a *auditReader) stepOrder(path string, got []auditParsedStep, spec auditJob) {
 	index := map[string]int{}
 	for i, s := range spec.steps {
@@ -831,7 +773,7 @@ func (a *auditReader) stepOrder(path string, got []auditParsedStep, spec auditJo
 	}
 
 	for _, s := range spec.steps {
-		if !seen[s.name] && !s.optional {
+		if !seen[s.name] {
 			a.r.fail("%s holds no step %q", path, s.name)
 		}
 	}
