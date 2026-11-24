@@ -757,6 +757,14 @@ var shippedLicenseFiles = []struct{ name, path string }{
 // it out, and a GoReleaser docker entry that names one file alone. A check that
 // cannot tell those apart would pass on an image that ships neither.
 //
+// A GoReleaser docker section ships a file only when an entry of its extra_files
+// list is exactly that file's name: a section that names it in a comment, in
+// another key's value, or as part of a longer entry such as LICENSE.txt or
+// third_party/NOTICE sends the daemon no LICENSE and no NOTICE, so each of those
+// fixtures must be reported too. A path entry does not count, because GoReleaser
+// keeps the subpath it names and the final stage's `COPY LICENSE NOTICE` reads
+// the context's root.
+//
 // It also holds the directory the files land in: BuildKit gives a COPY's
 // --chmod to the directories that COPY creates as well, so a stage that lets the
 // 0444 COPY create imageDocDir leaves a directory without a search bit, which
@@ -875,6 +883,61 @@ COPY --chmod=0444 LICENSE NOTICE /usr/share/doc/shift2eu/
 			dockerignore: "*\n!LICENSE\n!NOTICE\n",
 			goreleaser:   "dockers_v2:\n  - id: shift2eu\n    dockerfile: Dockerfile\n    extra_files:\n      - LICENSE\n",
 			want:         []string{"names no NOTICE"},
+		},
+		{
+			name:         "a GoReleaser dockers_v2 entry that ships both files in extra_files",
+			dockerfile:   fixture,
+			dockerignore: "*\n!LICENSE\n!NOTICE\n",
+			goreleaser:   "dockers_v2:\n  - id: shift2eu\n    dockerfile: Dockerfile\n    extra_files:\n      - Dockerfile\n      - LICENSE\n      - NOTICE\n",
+		},
+		{
+			name:         "a GoReleaser docker entry that ships both files in extra_files",
+			dockerfile:   fixture,
+			dockerignore: "*\n!LICENSE\n!NOTICE\n",
+			goreleaser:   "docker:\n  id: shift2eu\n  dockerfile: Dockerfile\n  extra_files:\n    - Dockerfile\n    - LICENSE\n    - NOTICE\n",
+		},
+		{
+			name:         "a GoReleaser dockers entry that ships both files in extra_files",
+			dockerfile:   fixture,
+			dockerignore: "*\n!LICENSE\n!NOTICE\n",
+			goreleaser:   "dockers:\n  - id: shift2eu\n    dockerfile: Dockerfile\n    extra_files:\n      - Dockerfile\n      - LICENSE\n      - NOTICE\n",
+		},
+		{
+			name:         "a GoReleaser docker section with no extra_files",
+			dockerfile:   fixture,
+			dockerignore: "*\n!LICENSE\n!NOTICE\n",
+			goreleaser:   "dockers_v2:\n  - id: shift2eu\n    dockerfile: Dockerfile\n",
+			want:         []string{"names no LICENSE", "names no NOTICE"},
+		},
+		{
+			// An own-line comment never reaches the section's body, and a
+			// commented-out entry is not an entry.
+			name:         "a GoReleaser docker section whose own-line comments name both files",
+			dockerfile:   fixture,
+			dockerignore: "*\n!LICENSE\n!NOTICE\n",
+			goreleaser:   "dockers_v2:\n  - id: shift2eu\n    dockerfile: Dockerfile\n    extra_files:\n      - Dockerfile\n      # - LICENSE\n      # - NOTICE\n",
+			want:         []string{"names no LICENSE", "names no NOTICE"},
+		},
+		{
+			name:         "a GoReleaser docker section whose inline comments name both files",
+			dockerfile:   fixture,
+			dockerignore: "*\n!LICENSE\n!NOTICE\n",
+			goreleaser:   "dockers_v2:\n  - id: shift2eu\n    dockerfile: Dockerfile\n    extra_files:\n      - Dockerfile # LICENSE\n      - Dockerfile # NOTICE\n",
+			want:         []string{"names no LICENSE", "names no NOTICE"},
+		},
+		{
+			name:         "a GoReleaser docker section whose other keys name both files",
+			dockerfile:   fixture,
+			dockerignore: "*\n!LICENSE\n!NOTICE\n",
+			goreleaser:   "dockers_v2:\n  - id: NOTICE-image\n    dockerfile: Dockerfile\n    description: ships LICENSE\n    extra_files:\n      - Dockerfile\n",
+			want:         []string{"names no LICENSE", "names no NOTICE"},
+		},
+		{
+			name:         "a GoReleaser docker section whose entries only contain both file names",
+			dockerfile:   fixture,
+			dockerignore: "*\n!LICENSE\n!NOTICE\n",
+			goreleaser:   "dockers_v2:\n  - id: shift2eu\n    dockerfile: Dockerfile\n    extra_files:\n      - Dockerfile\n      - LICENSE.txt\n      - third_party/NOTICE\n",
+			want:         []string{"names no LICENSE", "names no NOTICE"},
 		},
 	}
 
