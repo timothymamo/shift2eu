@@ -2572,16 +2572,36 @@ func appendInfraText(t *testing.T, path, text string) {
 	writeInfraText(t, path, string(body)+text)
 }
 
-// writeInfraText writes text to path, creating the directory above it.
+// writeInfraText writes text to path, creating the directory above it. The write goes through an os.Root on
+// that directory, which no gosec rule takes for a sink: the text is often read from the copy (os.ReadFile), and
+// gosec's G703 followed it into an os.WriteFile only on the runs where its call graph listed such a caller
+// among the 32 of this function's callers it checks, and it has more, so a directive for it was unused at
+// random (issue #508). The path is cleaned first, so Dir and Base agree on a trailing separator: a/b/ names
+// the file b in a, never a/b/b.
 func writeInfraText(t *testing.T, path, text string) {
 	t.Helper()
 
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		t.Fatalf("create %s: %v", filepath.Dir(path), err)
+	path = filepath.Clean(path)
+	dir := filepath.Dir(path)
+
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatalf("create %s: %v", dir, err)
 	}
 
-	if err := os.WriteFile(path, []byte(text), 0o600); err != nil { //nolint:gosec // G703: path is under the test's own temporary directory
-		t.Fatalf("write %s: %v", path, err)
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		t.Fatalf("open %s: %v", dir, err)
+	}
+
+	writeErr := root.WriteFile(filepath.Base(path), []byte(text), 0o600)
+	closeErr := root.Close()
+
+	if writeErr != nil {
+		t.Fatalf("write %s: %v", path, writeErr)
+	}
+
+	if closeErr != nil {
+		t.Fatalf("close %s: %v", dir, closeErr)
 	}
 }
 

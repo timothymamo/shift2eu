@@ -214,8 +214,8 @@ func TestParsePreloadRecord(t *testing.T) {
 
 		{name: "subdomains out of order", record: `{"format":1,"listed":true,"submitted":"2026-12-01","checked":"2026-12-01","subdomains":["www.shift2eu.com","a.shift2eu.com"]}`, wantErr: true},
 		{name: "a subdomain twice", record: `{"format":1,"listed":true,"submitted":"2026-12-01","checked":"2026-12-01","subdomains":["www.shift2eu.com","www.shift2eu.com"]}`, wantErr: true},
-		{name: "a subdomain of another domain", record: `{"format":1,"listed":true,"submitted":"2026-12-01","checked":"2026-12-01","subdomains":["evil.com"]}`, wantErr: true},
-		{name: "another domain ending in shift2eu.com", record: `{"format":1,"listed":true,"submitted":"2026-12-01","checked":"2026-12-01","subdomains":["shift2eu.com.evil.com"]}`, wantErr: true},
+		{name: "a subdomain of another domain", record: `{"format":1,"listed":true,"submitted":"2026-12-01","checked":"2026-12-01","subdomains":["evil.example"]}`, wantErr: true},
+		{name: "another domain ending in shift2eu.com", record: `{"format":1,"listed":true,"submitted":"2026-12-01","checked":"2026-12-01","subdomains":["shift2eu.com.evil.example"]}`, wantErr: true},
 		{name: "a domain only ending in shift2eu.com", record: `{"format":1,"listed":true,"submitted":"2026-12-01","checked":"2026-12-01","subdomains":["xshift2eu.com"]}`, wantErr: true},
 		{name: "the apex without a subdomain", record: `{"format":1,"listed":true,"submitted":"2026-12-01","checked":"2026-12-01","subdomains":["shift2eu.com"]}`, wantErr: true},
 		{name: "a subdomain in upper case", record: `{"format":1,"listed":true,"submitted":"2026-12-01","checked":"2026-12-01","subdomains":["WWW.shift2eu.com"]}`, wantErr: true},
