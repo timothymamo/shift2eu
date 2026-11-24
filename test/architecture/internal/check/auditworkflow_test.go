@@ -167,7 +167,7 @@ const (
 	auditCheckoutRef      = "          ref: ${{ github.sha }}\n"
 	auditNoCredentials    = "          persist-credentials: false\n"
 	auditArtifactUpload   = "actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2"
-	auditChecksIf         = "    timeout-minutes: 180\n    if: ${{ " + auditGuard + " }}\n"
+	auditChecksIf         = "    timeout-minutes: 340\n    if: ${{ " + auditGuard + " }}\n"
 	auditModelIf          = "    timeout-minutes: 120\n    if: ${{ " + auditGuard + " }}\n"
 	auditPublishIf        = "    timeout-minutes: 30\n    if: ${{ " + auditGuard + " }}\n"
 	// auditChecksPermissions is the checks job's permissions block, whose comment
@@ -535,13 +535,13 @@ const (
 	// row 14's own docker create lines, each unique to its row: the anchors of
 	// the cases that take a flag out of one row alone, since the four flags are
 	// the same text in all three.
-	auditRow11Create = "cid=\"$(docker create --read-only --network none --cap-drop ALL --security-opt no-new-privileges \"${image}@${digest}\" version)\""
-	auditRow13Create = " --security-opt no-new-privileges --memory 512m --pids-limit 64 "
-	auditRow14Create = " --network none --cap-drop ALL --security-opt no-new-privileges --user 65534:65534"
-	// auditHostileCreateFlags is row 13's container's own limits, which no other
-	// docker create holds: the anchor the cases that put a flag, a mount or a
-	// tmpfs into a container use.
-	auditHostileCreateFlags = " --memory 512m --pids-limit 64 "
+	auditRow11Create = "cid=\"$(timeout 2m docker create --read-only --network none --cap-drop ALL --security-opt no-new-privileges --memory 512m --pids-limit 64 \"${image}@${digest}\" version)\" || rc=$?"
+	auditRow13Create = " --security-opt no-new-privileges --memory 512m --pids-limit 64 \"audit-hostile:${GITHUB_RUN_ID}\" assess "
+	auditRow14Create = " --network none --cap-drop ALL --security-opt no-new-privileges --memory 10g --pids-limit 512 --user 65534:65534"
+	// auditHostileCreateFlags is row 13's container's own limits and the image it
+	// runs, which no other docker create holds: the anchor the cases that put a
+	// flag, a mount or a tmpfs into a container use.
+	auditHostileCreateFlags = " --memory 512m --pids-limit 64 \"audit-hostile:${GITHUB_RUN_ID}\" assess "
 	// auditFuzzTmpfs is row 14's one tmpfs, exactly the size, mode and flags its
 	// go test needs: the only tmpfs any container of the workflow has.
 	auditFuzzTmpfs = "--tmpfs /scratch:rw,exec,nosuid,size=4g,mode=1777"
@@ -578,9 +578,9 @@ const (
 		"            echo \"::error title=Audit checks::the recorded image digest is no sha256 digest: see runbook step 11\"\n" +
 		"            exit 1\n" +
 		"          fi\n"
-	auditFuzzShapeGuard = "            if [[ ! \"${name}\" =~ ^Fuzz[A-Za-z0-9_]*$ ]] || [[ ! \"${pkg}\" =~ ^[A-Za-z0-9_][A-Za-z0-9_./-]*$ ]] || [[ \"${pkg}\" == *..* ]]; then\n" +
-		"              echo \"::error title=Audit checks::a fuzz target's package or name has an unexpected shape: see runbook step 11\"\n" +
-		"              exit 1\n" +
+	auditFuzzShapeGuard = "            if [[ ! \"${name}\" =~ ^Fuzz[A-Z0-9_][A-Za-z0-9_]*$ ]] || [[ ! \"${pkg}\" =~ ^[A-Za-z0-9_][A-Za-z0-9_./-]*$ ]] || [[ \"${pkg}\" == *..* ]]; then\n" +
+		"              echo \"fuzzing unexpected-target\" >> \"${results}/not-run.txt\"\n" +
+		"              continue\n" +
 		"            fi\n"
 	auditRulesetGuard = "            if [[ ! \"${id}\" =~ ^[0-9]+$ ]]; then\n" +
 		"              echo \"::error title=Audit checks::a ruleset ID is no number: see runbook step 11\"\n" +
@@ -600,8 +600,75 @@ const (
 	// inputs into it and docker commit turns it into the image the row's runs
 	// start from, so it is never started itself. A case that starts one hangs a
 	// docker start on its create.
-	auditHostileStaging = "          staging=\"$(docker create \"${image}@${digest}\")\"\n"
+	auditHostileStaging = "          staging=\"$(timeout 1m docker create \"${image}@${digest}\")\" || rc=$?\n"
 	auditFuzzStaging    = "          staging=\"$(docker create \"${image}\")\"\n"
+	// auditHostileStagingCreate is the head of row 13's staging create: the one
+	// docker create of the checks job whose flags the check does not pin
+	// verbatim, so a case that hangs a flag on it is caught by the rule about
+	// what no container is given alone.
+	auditHostileStagingCreate = "          staging=\"$(timeout 1m docker create "
+
+	// Round D's anchors (the review's and the audit's findings of PR 5c): the
+	// lines and blocks of the accepted shape a case changes to show that the
+	// check holds them. Each is a line of its own, exactly as the fixture writes
+	// it, so a case that mistypes one fails in mutate.
+	//
+	// A release file, an archive or the image is the untrusted party: every
+	// command that reads one runs under a timeout and records a failure of its
+	// own, never as a step that aborts the run's report.
+	auditChecksumFilter  = "          timeout 1m grep -E '^[0-9a-f]{64}  [A-Za-z0-9._+-]+$' \"${rel}/checksums.txt\" > \"${rel}/checksums.filtered\" 2> \"${out}/checksums-filter.stderr\" || rc=$?\n"
+	auditReleaseChecksum = "          (cd \"${rel}\" && timeout 10m sha256sum --check --strict checksums.filtered) > \"${out}/checksums.stdout\" 2> \"${out}/checksums.stderr\" || rc=$?\n"
+	// auditReleaseLoopBudget is row 7's attestation loop's overall budget, in
+	// seconds of the step, which its timeout-minutes (30) has to be above.
+	auditReleaseLoopBudget = "            if [ \"${SECONDS}\" -ge 1200 ]; then\n"
+	// auditBinaryUnpack is row 9's unpack: the one member, to stdout, through a
+	// size cap, under a timeout.
+	auditBinaryUnpack = "              *.tar.gz) timeout 2m tar -xOzf \"${archive}\" shift2eu 2> \"${out}/${name}.unpack.stderr\" | head -c 134217728 > \"${dir}/shift2eu\" || rc=$? ;;\n"
+	// auditRuntimeExport is row 11's export and listing: under a timeout, with
+	// the image's own tar's stderr out of the log.
+	auditRuntimeExport = "          timeout 5m docker export \"${cid}\" 2> \"${out}/export.stderr\" | tar -tvf - > \"${out}/filesystem.txt\" 2> \"${out}/filesystem.stderr\" || rc=$?\n"
+	// auditRuntimeInspect is row 11's read of the image's configuration.
+	auditRuntimeInspect = "          timeout 2m docker image inspect --format '{{json .Config}}' \"${image}@${digest}\" > \"${out}/config.json\" 2> \"${out}/config.stderr\" || rc=$?\n"
+	// auditImageSave is row 8's archive of the pulled image, and
+	// auditBinaryUnpackZip row 9's zip member.
+	auditImageSave       = "          timeout 5m docker save --output \"${RUNNER_TEMP}/image/image.tar\" \"${image}@${digest}\" 2> \"${out}/save.stderr\" || rc=$?\n"
+	auditBinaryUnpackZip = "              *.zip) timeout 2m unzip -p \"${archive}\" shift2eu.exe 2> \"${out}/${name}.unpack.stderr\" | head -c 134217728 > \"${dir}/shift2eu.exe\" || rc=$? ;;\n"
+	// auditProvenanceVerify and auditCosignVerify are row 7's reads of the
+	// release's attestations and its signature.
+	auditProvenanceVerify = "            timeout 2m gh attestation verify \"${file}\" \\\n"
+	auditCosignVerify     = "            timeout 5m cosign verify \"${ref}\" \\\n"
+	// auditHostileCopy and auditHostileCommit are row 13's staging copy and
+	// commit, each under a timeout of its own.
+	auditHostileCopy   = "          timeout 2m docker cp \"${stage}\" \"${staging}:/work/\" 2> \"${out}/staging-cp.stderr\" || rc=$?\n"
+	auditHostileCommit = "          timeout 2m docker commit \"${staging}\" \"audit-hostile:${GITHUB_RUN_ID}\" > \"${out}/staging-commit.stdout\" 2> \"${out}/staging-commit.stderr\" || rc=$?\n"
+	// auditCorpusCopy is row 13's copy of the committed corpus: -P, so a link an
+	// entry of it is never followed on the runner.
+	auditCorpusCopy = "          cp -P .github/security-audit/testdata/hostile-inventories/*.json \"${stage}/\"\n"
+	// auditFuzzDiscovery is row 14's reading of the tracked files: the signature
+	// alone, so Fuzzy( and FuzzHelper( are no targets.
+	auditFuzzDiscovery = "            { grep -oE '^func Fuzz[A-Z0-9_][A-Za-z0-9_]*\\(f \\*testing\\.F\\)' \"${file}\" || true; } | sed -e 's/^func //' -e 's/(f \\*testing\\.F)$//' | while IFS= read -r name; do\n"
+	// auditTrivyOffline is row 10's offline flag set, which both scans use.
+	auditTrivyOffline = "          offline=(--cache-dir \"${RUNNER_TEMP}/trivy-cache\" --skip-db-update --skip-java-db-update --skip-check-update --offline-scan --skip-version-check --disable-telemetry --no-progress --scanners vuln --format json)\n"
+	// auditReadAPI and auditReadAPIFilter are row 15's one read: its endpoint's
+	// answer through the jq filter its caller names, and the filter's default.
+	auditReadAPI       = "            timeout 2m gh api \"${endpoint}\" --jq \"${filter}\" > \"${out}/api/${name}.json\" 2> \"${out}/api/${name}.stderr\" || rc=$?\n"
+	auditReadAPIFilter = "            local name=\"$1\" endpoint=\"$2\" filter=\"${3:-.}\" rc=0\n"
+	// The four reads that keep names alone: the two variables endpoints and the
+	// two secrets endpoints return each entry's value or nothing, so each call
+	// passes the filter that keeps the names.
+	auditRepositoryVariableNames  = "          read_api repository-variable-names \"repos/${GH_REPO}/actions/variables\" '[.variables[].name]'\n"
+	auditEnvironmentVariableNames = "            read_api \"environment-${env}-variable-names\" \"repos/${GH_REPO}/environments/${env}/variables\" '[.variables[].name]'\n"
+	auditRepositorySecretNames    = "          read_api repository-secret-names \"repos/${GH_REPO}/actions/secrets\" '[.secrets[].name]'\n"
+	auditEnvironmentSecretNames   = "            read_api \"environment-${env}-secret-names\" \"repos/${GH_REPO}/environments/${env}/secrets\" '[.secrets[].name]'\n"
+
+	// The five checks job's rows that read release bytes record a failure of
+	// theirs as a check that did not run, not as a step that stops the job.
+	auditReleaseTimedOut   = "echo \"release-integrity timed-out\" >> \"${results}/not-run.txt\""
+	auditReleaseToolFailed = "echo \"release-integrity tool-failed\" >> \"${results}/not-run.txt\""
+	auditPullToolFailed    = "echo \"image-pull tool-failed\" >> \"${results}/not-run.txt\""
+	auditBinaryToolFailed  = "echo \"binary-vulnerabilities tool-failed\" >> \"${results}/not-run.txt\""
+	auditRuntimeTimedOut   = "echo \"image-runtime timed-out\" >> \"${results}/not-run.txt\""
+	auditHostileTimedOut   = "echo \"hostile-inventories timed-out\" >> \"${results}/not-run.txt\""
 )
 
 // auditChecksum is one tool download of a download step: the job it runs in,
@@ -838,7 +905,7 @@ func TestAuditWorkflow(t *testing.T) {
 		// the owner. A weaker guard in one place opens exactly that path.
 		{
 			name:     "another guard in the checks job",
-			workflow: mutate(t, acceptedWorkflow, auditChecksIf, "    timeout-minutes: 180\n    if: ${{ always() }}\n"),
+			workflow: mutate(t, acceptedWorkflow, auditChecksIf, "    timeout-minutes: 340\n    if: ${{ always() }}\n"),
 			wantIn:   "guard",
 		},
 		{
@@ -973,12 +1040,12 @@ func TestAuditWorkflow(t *testing.T) {
 		},
 		{
 			name:     "a job without a timeout",
-			workflow: mutate(t, acceptedWorkflow, "    timeout-minutes: 180\n", ""),
+			workflow: mutate(t, acceptedWorkflow, "    timeout-minutes: 340\n", ""),
 			wantIn:   "timeout-minutes",
 		},
 		{
 			name:     "a job timeout at GitHub's limit",
-			workflow: mutate(t, acceptedWorkflow, "    timeout-minutes: 180\n", "    timeout-minutes: 360\n"),
+			workflow: mutate(t, acceptedWorkflow, "    timeout-minutes: 340\n", "    timeout-minutes: 360\n"),
 			wantIn:   "timeout-minutes",
 		},
 
@@ -1088,7 +1155,7 @@ func TestAuditWorkflow(t *testing.T) {
 		},
 		{
 			name:     "github.token in the checks job's env",
-			workflow: mutate(t, acceptedWorkflow, "    timeout-minutes: 180\n", "    timeout-minutes: 180\n    env:\n      GH_TOKEN: ${{ github.token }}\n"),
+			workflow: mutate(t, acceptedWorkflow, "    timeout-minutes: 340\n", "    timeout-minutes: 340\n    env:\n      GH_TOKEN: ${{ github.token }}\n"),
 			wantIn:   "github.token",
 		},
 		{
@@ -1158,7 +1225,7 @@ func TestAuditWorkflow(t *testing.T) {
 		},
 		{
 			name:     "a job output",
-			workflow: mutate(t, acceptedWorkflow, "    timeout-minutes: 180\n", "    timeout-minutes: 180\n    outputs:\n      tag: ${{ steps.record.outputs.tag }}\n"),
+			workflow: mutate(t, acceptedWorkflow, "    timeout-minutes: 340\n", "    timeout-minutes: 340\n    outputs:\n      tag: ${{ steps.record.outputs.tag }}\n"),
 			wantIn:   "outputs",
 		},
 		{
@@ -2005,8 +2072,8 @@ func TestAuditWorkflow(t *testing.T) {
 			wantIn:   "fuzz target",
 		},
 		{
-			name:     "the fuzz target's shape guard without its exit 1",
-			workflow: mutate(t, acceptedWorkflow, auditFuzzShapeGuard, strings.Replace(auditFuzzShapeGuard, "              exit 1\n", "", 1)),
+			name:     "the fuzz target's shape guard without its continue",
+			workflow: mutate(t, acceptedWorkflow, auditFuzzShapeGuard, strings.Replace(auditFuzzShapeGuard, "              continue\n", "", 1)),
 			wantIn:   "fuzz target",
 		},
 		{
@@ -2071,6 +2138,345 @@ func TestAuditWorkflow(t *testing.T) {
 			name:     "the fuzz step without its GOPROXY env",
 			workflow: mutate(t, acceptedWorkflow, "          GOPROXY: \"off\"\n", ""),
 			wantIn:   "GOPROXY",
+		},
+
+		// Round D: the review's and the audit's findings on PR 5c, each case
+		// changing one of them back. A release file, an archive and the image are
+		// the untrusted party, so a command that reads one runs under a timeout of
+		// its own, records a failure as a check that did not run, and never aborts
+		// the run's report.
+		{
+			name:     "row 7's checksum filter without its timeout",
+			workflow: mutate(t, acceptedWorkflow, auditChecksumFilter, strings.Replace(auditChecksumFilter, "timeout 1m grep", "grep", 1)),
+			wantIn:   "checksums.filtered",
+		},
+		{
+			name:     "row 7's checksum filter keeping lines of any shape",
+			workflow: mutate(t, acceptedWorkflow, auditChecksumFilter, strings.Replace(auditChecksumFilter, "'^[0-9a-f]{64}  [A-Za-z0-9._+-]+$'", "'[0-9a-f]{64}'", 1)),
+			wantIn:   "checksums.filtered",
+		},
+		{
+			name:     "row 7's sha256sum without its timeout",
+			workflow: mutate(t, acceptedWorkflow, auditReleaseChecksum, strings.Replace(auditReleaseChecksum, "timeout 10m sha256sum", "sha256sum", 1)),
+			wantIn:   "sha256sum",
+		},
+		{
+			name:     "row 7's sha256sum without its exit code check",
+			workflow: mutate(t, acceptedWorkflow, auditReleaseChecksum, strings.Replace(auditReleaseChecksum, " || rc=$?", "", 1)),
+			wantIn:   "rc=$?",
+		},
+		{
+			name:     "row 7's attestation loop without its budget",
+			workflow: mutate(t, acceptedWorkflow, auditReleaseLoopBudget, ""),
+			wantIn:   "SECONDS",
+		},
+		{
+			name:     "row 7's provenance verification without its timeout",
+			workflow: mutate(t, acceptedWorkflow, auditProvenanceVerify, strings.Replace(auditProvenanceVerify, "timeout 2m gh attestation verify", "gh attestation verify", 1)),
+			wantIn:   "gh attestation verify",
+		},
+		{
+			name:     "row 7's signature check without its timeout",
+			workflow: mutate(t, acceptedWorkflow, auditCosignVerify, strings.Replace(auditCosignVerify, "timeout 5m cosign verify", "cosign verify", 1)),
+			wantIn:   "cosign",
+		},
+		{
+			name:     "row 8's image save without its timeout",
+			workflow: mutate(t, acceptedWorkflow, auditImageSave, strings.Replace(auditImageSave, "timeout 5m docker save", "docker save", 1)),
+			wantIn:   "docker save",
+		},
+		{
+			name:     "row 9's unzip without its timeout",
+			workflow: mutate(t, acceptedWorkflow, auditBinaryUnpackZip, strings.Replace(auditBinaryUnpackZip, "timeout 2m unzip", "unzip", 1)),
+			wantIn:   "unzip",
+		},
+		{
+			name:     "row 11's config read without its timeout",
+			workflow: mutate(t, acceptedWorkflow, auditRuntimeInspect, strings.Replace(auditRuntimeInspect, "timeout 2m docker image inspect", "docker image inspect", 1)),
+			wantIn:   "docker image inspect",
+		},
+		{
+			name:     "row 11's container create without its timeout",
+			workflow: mutate(t, acceptedWorkflow, auditRow11Create, strings.Replace(auditRow11Create, "timeout 2m docker create", "docker create", 1)),
+			wantIn:   "docker create",
+		},
+		{
+			name:     "row 7's attestation loop with a budget past its step's timeout",
+			workflow: mutate(t, acceptedWorkflow, auditReleaseLoopBudget, strings.Replace(auditReleaseLoopBudget, "1200", "2400", 1)),
+			wantIn:   "budget",
+		},
+		{
+			name:     "row 7's timed-out download recorded nowhere",
+			workflow: mutateEvery(t, acceptedWorkflow, auditReleaseTimedOut, ""),
+			wantIn:   "release-integrity",
+		},
+		{
+			name:     "row 7's failed command recorded nowhere",
+			workflow: mutateEvery(t, acceptedWorkflow, auditReleaseToolFailed, ""),
+			wantIn:   "release-integrity",
+		},
+		{
+			name:     "row 8's failed image save recorded nowhere",
+			workflow: mutateEvery(t, acceptedWorkflow, auditPullToolFailed, ""),
+			wantIn:   "image-pull",
+		},
+		{
+			name:     "row 9's tar without its timeout",
+			workflow: mutate(t, acceptedWorkflow, auditBinaryUnpack, strings.Replace(auditBinaryUnpack, "timeout 2m tar", "tar", 1)),
+			wantIn:   "tar",
+		},
+		{
+			name:     "row 9's tar without its size cap",
+			workflow: mutate(t, acceptedWorkflow, auditBinaryUnpack, strings.Replace(auditBinaryUnpack, " | head -c 134217728", "", 1)),
+			wantIn:   "head -c",
+		},
+		{
+			name:     "row 9's failed unpack recorded nowhere",
+			workflow: mutateEvery(t, acceptedWorkflow, auditBinaryToolFailed, ""),
+			wantIn:   "binary-vulnerabilities",
+		},
+		{
+			name:     "row 11's docker export without its timeout",
+			workflow: mutate(t, acceptedWorkflow, auditRuntimeExport, strings.Replace(auditRuntimeExport, "timeout 5m docker export", "docker export", 1)),
+			wantIn:   "docker export",
+		},
+		{
+			name:     "row 11's docker export without its exit code check",
+			workflow: mutate(t, acceptedWorkflow, auditRuntimeExport, strings.Replace(auditRuntimeExport, " || rc=$?", "", 1)),
+			wantIn:   "rc=$?",
+		},
+		{
+			name:     "row 11's timed-out start recorded nowhere",
+			workflow: mutateEvery(t, acceptedWorkflow, auditRuntimeTimedOut, ""),
+			wantIn:   "image-runtime",
+		},
+		{
+			name:     "row 13's docker cp without its timeout",
+			workflow: mutate(t, acceptedWorkflow, auditHostileCopy, strings.Replace(auditHostileCopy, "timeout 2m docker cp", "docker cp", 1)),
+			wantIn:   "docker cp",
+		},
+		{
+			name:     "row 13's docker commit without its timeout",
+			workflow: mutate(t, acceptedWorkflow, auditHostileCommit, strings.Replace(auditHostileCommit, "timeout 2m docker commit", "docker commit", 1)),
+			wantIn:   "docker commit",
+		},
+		{
+			name:     "row 13's docker commit without its exit code check",
+			workflow: mutate(t, acceptedWorkflow, auditHostileCommit, strings.Replace(auditHostileCommit, " || rc=$?", "", 1)),
+			wantIn:   "docker commit",
+		},
+		{
+			name:     "row 13's timed-out create recorded nowhere",
+			workflow: mutateEvery(t, acceptedWorkflow, auditHostileTimedOut, ""),
+			wantIn:   "hostile-inventories",
+		},
+		{
+			// The checks job's steps add up to 340 minutes: the job's own timeout is
+			// their ceiling, so a step's timeout is what fires first.
+			name:     "a checks step adding up past the job's timeout",
+			workflow: mutate(t, acceptedWorkflow, "      - name: Check the image's runtime settings\n        timeout-minutes: 10\n", "      - name: Check the image's runtime settings\n        timeout-minutes: 30\n"),
+			wantIn:   "timeout-minutes",
+		},
+
+		// B. A container cannot be loosened after the prefix the check pins: the
+		// fuzz create is held whole through its last line, and no line outside the
+		// model job gives a container an unconfined security option, an env file,
+		// a cgroup namespace, a network but none, a sysctl or another user.
+		{
+			name:     "a flag added to the fuzz container's create past its pinned prefix",
+			workflow: mutate(t, acceptedWorkflow, "--env GOTMPDIR=/scratch --env TMPDIR=/scratch --env HOME=/scratch --env FUZZ_PKG=\"${pkg}\" --env FUZZ_NAME=\"${name}\" \\\n", "--env GOTMPDIR=/scratch --env TMPDIR=/scratch --env HOME=/scratch --env FUZZ_PKG=\"${pkg}\" --env FUZZ_NAME=\"${name}\" --init \\\n"),
+			wantIn:   "audit-fuzz",
+		},
+		{
+			name:     "the staging container with an unconfined seccomp profile",
+			workflow: mutate(t, acceptedWorkflow, auditHostileStagingCreate, auditHostileStagingCreate+"--security-opt seccomp=unconfined "),
+			wantIn:   "--security-opt",
+		},
+		{
+			name:     "the staging container with an unconfined AppArmor profile",
+			workflow: mutate(t, acceptedWorkflow, auditHostileStagingCreate, auditHostileStagingCreate+"--security-opt apparmor=unconfined "),
+			wantIn:   "--security-opt",
+		},
+		{
+			name:     "the staging container with SELinux labels disabled",
+			workflow: mutate(t, acceptedWorkflow, auditHostileStagingCreate, auditHostileStagingCreate+"--security-opt label=disable "),
+			wantIn:   "--security-opt",
+		},
+		{
+			name:     "the staging container with unmasked system paths",
+			workflow: mutate(t, acceptedWorkflow, auditHostileStagingCreate, auditHostileStagingCreate+"--security-opt systempaths=unconfined "),
+			wantIn:   "--security-opt",
+		},
+		{
+			name:     "the staging container with an environment file",
+			workflow: mutate(t, acceptedWorkflow, auditHostileStagingCreate, auditHostileStagingCreate+"--env-file \"${RUNNER_TEMP}/audit.env\" "),
+			wantIn:   "--env-file",
+		},
+		{
+			name:     "the staging container in the host's cgroup namespace",
+			workflow: mutate(t, acceptedWorkflow, auditHostileStagingCreate, auditHostileStagingCreate+"--cgroupns host "),
+			wantIn:   "--cgroupns",
+		},
+		{
+			name:     "the staging container on another container's network",
+			workflow: mutate(t, acceptedWorkflow, auditHostileStagingCreate, auditHostileStagingCreate+"--network container:0123456789ab "),
+			wantIn:   "--network",
+		},
+		{
+			name:     "the staging container with a sysctl",
+			workflow: mutate(t, acceptedWorkflow, auditHostileStagingCreate, auditHostileStagingCreate+"--sysctl net.ipv4.ip_forward=1 "),
+			wantIn:   "--sysctl",
+		},
+		{
+			name:     "the staging container as root",
+			workflow: mutate(t, acceptedWorkflow, auditHostileStagingCreate, auditHostileStagingCreate+"--user 0:0 "),
+			wantIn:   "--user",
+		},
+		{
+			name:     "a container started by docker container run",
+			workflow: mutate(t, acceptedWorkflow, "          timeout 5m docker export", "          docker container run --rm \"${image}@${digest}\" version\n          timeout 5m docker export"),
+			wantIn:   "container run",
+		},
+		{
+			name:     "a container started by docker --context run",
+			workflow: mutate(t, acceptedWorkflow, "          timeout 5m docker export", "          docker --context example run --rm \"${image}@${digest}\" version\n          timeout 5m docker export"),
+			wantIn:   "--context",
+		},
+		{
+			name:     "a shell in a container by docker exec",
+			workflow: mutate(t, acceptedWorkflow, "          timeout 5m docker export", "          timeout 60 docker exec \"${cid}\" sh -c true || rc=$?\n          timeout 5m docker export"),
+			wantIn:   "docker exec",
+		},
+		{
+			name:     "a shell in a container by docker container exec",
+			workflow: mutate(t, acceptedWorkflow, "          timeout 5m docker export", "          timeout 60 docker container exec \"${cid}\" sh -c true || rc=$?\n          timeout 5m docker export"),
+			wantIn:   "container exec",
+		},
+		{
+			// A create of its own, flagless, whose container is then started: only
+			// the container a docker create made with the four flags is ever run.
+			name:     "a flagless container created and then started",
+			workflow: mutate(t, acceptedWorkflow, auditHostileStaging, auditHostileStaging+"          other=\"$(timeout 1m docker create \"${image}@${digest}\" version)\" || rc=$?\n          timeout 60 docker start --attach \"${other}\" > /dev/null 2>&1 || true\n"),
+			wantIn:   "docker start",
+		},
+
+		// C. The hostile corpus holds regular files alone, and row 13 copies it
+		// without following a link. test/architecture's
+		// TestAuditHostileCorpusIsRegularFiles holds the corpus itself.
+		{
+			name:     "the hostile corpus copied without -P",
+			workflow: mutate(t, acceptedWorkflow, auditCorpusCopy, strings.Replace(auditCorpusCopy, "cp -P ", "cp ", 1)),
+			wantIn:   "cp -P",
+		},
+
+		// D. Row 15 keeps variable and secret names alone: every read that returns
+		// values passes the jq filter that keeps the names.
+		{
+			name:     "the repository's variable names read without the filter",
+			workflow: mutate(t, acceptedWorkflow, auditRepositoryVariableNames, strings.Replace(auditRepositoryVariableNames, " '[.variables[].name]'", "", 1)),
+			wantIn:   "[.variables[].name]",
+		},
+		{
+			name:     "an environment's variable names read without the filter",
+			workflow: mutate(t, acceptedWorkflow, auditEnvironmentVariableNames, strings.Replace(auditEnvironmentVariableNames, " '[.variables[].name]'", "", 1)),
+			wantIn:   "[.variables[].name]",
+		},
+		{
+			name:     "the repository's secret names read without the filter",
+			workflow: mutate(t, acceptedWorkflow, auditRepositorySecretNames, strings.Replace(auditRepositorySecretNames, " '[.secrets[].name]'", "", 1)),
+			wantIn:   "[.secrets[].name]",
+		},
+		{
+			name:     "an environment's secret names read without the filter",
+			workflow: mutate(t, acceptedWorkflow, auditEnvironmentSecretNames, strings.Replace(auditEnvironmentSecretNames, " '[.secrets[].name]'", "", 1)),
+			wantIn:   "[.secrets[].name]",
+		},
+		{
+			name:     "read_api without its jq filter",
+			workflow: mutate(t, acceptedWorkflow, auditReadAPI, strings.Replace(auditReadAPI, " --jq \"${filter}\"", "", 1)),
+			wantIn:   "--jq",
+		},
+		{
+			name:     "read_api without its filter's default",
+			workflow: mutate(t, acceptedWorkflow, auditReadAPIFilter, strings.Replace(auditReadAPIFilter, " filter=\"${3:-.}\"", "", 1)),
+			wantIn:   "filter",
+		},
+
+		// E. The containers that read release bytes have resource limits of their
+		// own, as row 13's do.
+		{
+			name:     "row 11's container without its memory limit",
+			workflow: mutate(t, acceptedWorkflow, auditRow11Create, strings.Replace(auditRow11Create, " --memory 512m", "", 1)),
+			wantIn:   "--memory",
+		},
+		{
+			name:     "row 11's container without its pid limit",
+			workflow: mutate(t, acceptedWorkflow, auditRow11Create, strings.Replace(auditRow11Create, " --pids-limit 64", "", 1)),
+			wantIn:   "--pids-limit",
+		},
+		{
+			name:     "the fuzz container without its memory limit",
+			workflow: mutate(t, acceptedWorkflow, auditRow14Create, strings.Replace(auditRow14Create, " --memory 10g", "", 1)),
+			wantIn:   "--memory",
+		},
+		{
+			name:     "the fuzz container without its pid limit",
+			workflow: mutate(t, acceptedWorkflow, auditRow14Create, strings.Replace(auditRow14Create, " --pids-limit 512", "", 1)),
+			wantIn:   "--pids-limit",
+		},
+
+		// F. No text of the image's reaches the public log: the tar that lists its
+		// filesystem writes its own warnings to the results directory.
+		{
+			name:     "row 11's filesystem listing with the image's tar on the log",
+			workflow: mutate(t, acceptedWorkflow, auditRuntimeExport, strings.Replace(auditRuntimeExport, " 2> \"${out}/filesystem.stderr\"", "", 1)),
+			wantIn:   "filesystem.stderr",
+		},
+
+		// G. Fuzz discovery reads the Fuzz signature alone, and a target of an
+		// unexpected shape is recorded, not a reason to end the step.
+		{
+			name:     "row 14's fuzz discovery matching a helper named Fuzzy too",
+			workflow: mutate(t, acceptedWorkflow, auditFuzzDiscovery, "            { grep -oE '^func Fuzz[A-Za-z0-9_]*\\(' \"${file}\" || true; } | sed -e 's/^func //' -e 's/($//' | while IFS= read -r name; do\n"),
+			wantIn:   "Fuzz[A-Z0-9_]",
+		},
+		{
+			name:     "the fuzz target's shape guard ending the step",
+			workflow: mutate(t, acceptedWorkflow, auditFuzzShapeGuard, strings.Replace(auditFuzzShapeGuard, "              continue\n", "              exit 1\n", 1)),
+			wantIn:   "unexpected-target",
+		},
+		{
+			name:     "the fuzz target's shape guard without what it records",
+			workflow: mutate(t, acceptedWorkflow, auditFuzzShapeGuard, strings.Replace(auditFuzzShapeGuard, "              echo \"fuzzing unexpected-target\" >> \"${results}/not-run.txt\"\n", "", 1)),
+			wantIn:   "unexpected-target",
+		},
+
+		// H. trivy scans offline: no database, Java database, check bundle or
+		// version download, and no telemetry, on both of its scans.
+		{
+			name:     "trivy without --skip-db-update",
+			workflow: mutate(t, acceptedWorkflow, auditTrivyOffline, strings.Replace(auditTrivyOffline, " --skip-db-update", "", 1)),
+			wantIn:   "--skip-db-update",
+		},
+		{
+			name:     "trivy without --skip-java-db-update",
+			workflow: mutate(t, acceptedWorkflow, auditTrivyOffline, strings.Replace(auditTrivyOffline, " --skip-java-db-update", "", 1)),
+			wantIn:   "--skip-java-db-update",
+		},
+		{
+			name:     "trivy without --skip-check-update",
+			workflow: mutate(t, acceptedWorkflow, auditTrivyOffline, strings.Replace(auditTrivyOffline, " --skip-check-update", "", 1)),
+			wantIn:   "--skip-check-update",
+		},
+		{
+			name:     "trivy without --offline-scan",
+			workflow: mutate(t, acceptedWorkflow, auditTrivyOffline, strings.Replace(auditTrivyOffline, " --offline-scan", "", 1)),
+			wantIn:   "--offline-scan",
+		},
+		{
+			name:     "trivy without --disable-telemetry",
+			workflow: mutate(t, acceptedWorkflow, auditTrivyOffline, strings.Replace(auditTrivyOffline, " --disable-telemetry", "", 1)),
+			wantIn:   "--disable-telemetry",
 		},
 
 		// A document the reader cannot follow tells the check nothing, so it is

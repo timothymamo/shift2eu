@@ -30,7 +30,10 @@ jobs:
     # bubblewrap are what ADR 0040 recorded, and a newer image would change them
     # unseen.
     runs-on: ubuntu-24.04
-    timeout-minutes: 180
+    # GitHub ends a job at 360 minutes. The job's own timeout is the ceiling the run's steps stay under:
+    # they add up to 340, so it is a step's own timeout that always fires first and the encrypt step, and
+    # the two jobs after it, still run.
+    timeout-minutes: 340
     if: ${{ github.ref == 'refs/heads/main' && github.run_attempt == 1 && (github.event_name == 'schedule' || github.triggering_actor == github.repository_owner) }}
     # Every job runs in the environment whose deployment branch policy is main
     # alone, which holds the two key pairs' public halves.
@@ -235,20 +238,42 @@ jobs:
           timeout 10m gh release download "${tag}" --repo "${GH_REPO}" --dir "${rel}" > "${out}/download.stdout" 2> "${out}/download.stderr" || rc=$?
           echo "${rc}" > "${out}/download.exit"
           if [ "${rc}" -eq 124 ]; then
+            echo "release-integrity timed-out" >> "${results}/not-run.txt"
             echo "release-integrity: the release download timed out after 10 minutes" >> "${results}/limits.txt"
+          elif [ "${rc}" -ne 0 ]; then
+            echo "release-integrity tool-failed" >> "${results}/not-run.txt"
           fi
-          # Every file against checksums.txt, and checksums.txt against the release's files: a file it
-          # does not list, or one it lists that the release lacks, is data for the model too.
+          # checksums.txt is the release's: only its well-formed lines reach sha256sum, each one a
+          # "<64 lower-case hex>  <name>" pair, and a line of any other shape - a /dev/zero it lists -
+          # is data for the model, never an argument.
           rc=0
-          (cd "${rel}" && sha256sum --check --strict checksums.txt) > "${out}/checksums.stdout" 2> "${out}/checksums.stderr" || rc=$?
+          timeout 1m grep -E '^[0-9a-f]{64}  [A-Za-z0-9._+-]+$' "${rel}/checksums.txt" > "${rel}/checksums.filtered" 2> "${out}/checksums-filter.stderr" || rc=$?
+          echo "${rc}" > "${out}/checksums-filter.exit"
+          # Every file against checksums.txt's well-formed lines, and checksums.txt against the release's
+          # files: a file it does not list, or one it lists that the release lacks, is data for the model
+          # too, and a sha256sum a hostile line makes read forever ends in the step's own timeout.
+          rc=0
+          (cd "${rel}" && timeout 10m sha256sum --check --strict checksums.filtered) > "${out}/checksums.stdout" 2> "${out}/checksums.stderr" || rc=$?
           echo "${rc}" > "${out}/checksums.exit"
+          if [ "${rc}" -eq 124 ]; then
+            echo "release-integrity timed-out" >> "${results}/not-run.txt"
+            echo "release-integrity: the checksum check timed out after 10 minutes" >> "${results}/limits.txt"
+          elif [ "${rc}" -ne 0 ]; then
+            echo "release-integrity tool-failed" >> "${results}/not-run.txt"
+          fi
           find "${rel}" -maxdepth 1 -type f ! -name checksums.txt -printf '%f\n' | LC_ALL=C sort > "${out}/assets.txt"
           { awk '{ print $2 }' "${rel}/checksums.txt" 2> /dev/null || true; } | LC_ALL=C sort > "${out}/listed.txt"
           rc=0
           diff "${out}/listed.txt" "${out}/assets.txt" > "${out}/listing.diff" || rc=$?
           echo "${rc}" > "${out}/listing.exit"
-          # Every release file's build provenance, checksums.txt's included.
+          # Every release file's build provenance, checksums.txt's included, within the loop's budget of
+          # 20 minutes: the step's 30 leave room for the download, the checksum check and the registry
+          # reads, and a loop that runs out records the files it did not reach.
           while IFS= read -r -d '' file; do
+            if [ "${SECONDS}" -ge 1200 ]; then
+              echo "release-integrity: the budget of 20 minutes ran out before $(basename "${file}")" >> "${results}/limits.txt"
+              continue
+            fi
             name="$(basename "${file}")"
             rc=0
             timeout 2m gh attestation verify "${file}" \
@@ -257,6 +282,12 @@ jobs:
               --source-ref "refs/tags/${tag}" \
               --deny-self-hosted-runners > "${out}/attestations/${name}.stdout" 2> "${out}/attestations/${name}.stderr" || rc=$?
             echo "${rc}" > "${out}/attestations/${name}.exit"
+            if [ "${rc}" -eq 124 ]; then
+              echo "release-integrity timed-out" >> "${results}/not-run.txt"
+              echo "release-integrity: the attestation of ${name} timed out after 2 minutes" >> "${results}/limits.txt"
+            elif [ "${rc}" -ne 0 ]; then
+              echo "release-integrity tool-failed" >> "${results}/not-run.txt"
+            fi
           done < <(find "${rel}" -maxdepth 1 -type f -print0)
           # The tag's digest, which every later row reads by, and the latest tag's: a digest the registry
           # answers in any other shape is recorded as no digest, so the image is then not pulled.
@@ -340,13 +371,29 @@ jobs:
           fi
           if [ "${rc}" -eq 0 ]; then
             mkdir -p "${RUNNER_TEMP}/image"
-            docker image inspect "${image}@${digest}" > "${out}/inspect.json"
-            docker save --output "${RUNNER_TEMP}/image/image.tar" "${image}@${digest}"
+            rc=0
+            timeout 2m docker image inspect "${image}@${digest}" > "${out}/inspect.json" 2> "${out}/inspect.stderr" || rc=$?
+            echo "${rc}" > "${out}/inspect.exit"
+            if [ "${rc}" -eq 124 ]; then
+              echo "image-pull timed-out" >> "${results}/not-run.txt"
+              echo "image-pull: the image inspect timed out after 2 minutes" >> "${results}/limits.txt"
+            elif [ "${rc}" -ne 0 ]; then
+              echo "image-pull tool-failed" >> "${results}/not-run.txt"
+            fi
+            rc=0
+            timeout 5m docker save --output "${RUNNER_TEMP}/image/image.tar" "${image}@${digest}" 2> "${out}/save.stderr" || rc=$?
+            echo "${rc}" > "${out}/save.exit"
+            if [ "${rc}" -eq 124 ]; then
+              echo "image-pull timed-out" >> "${results}/not-run.txt"
+              echo "image-pull: the image save timed out after 5 minutes" >> "${results}/limits.txt"
+            elif [ "${rc}" -ne 0 ]; then
+              echo "image-pull tool-failed" >> "${results}/not-run.txt"
+            fi
           fi
           echo "finished"
       # Row 9. govulncheck in binary mode on every release binary: read, never run. Each archive gives up
-      # its shift2eu binary alone, unpacked with no owner or mode of the archive's, and only a regular
-      # file is read: a link the archive holds is never followed.
+      # its shift2eu binary alone, streamed to stdout through the step's size cap under a timeout, so an
+      # archive's owner, mode and extra members are no part of what is read.
       - name: govulncheck on the release binaries
         timeout-minutes: 20
         run: |
@@ -361,12 +408,17 @@ jobs:
             name="$(basename "${archive}")"
             dir="${bins}/${name}"
             mkdir -p "${dir}"
+            # The member alone, through a size cap: an archive whose member decompresses to gigabytes
+            # stops at 128 MiB instead of filling the runner's disk.
             rc=0
             case "${name}" in
-              *.tar.gz) tar -C "${dir}" --no-same-owner --no-same-permissions -xzf "${archive}" shift2eu 2> "${out}/${name}.unpack.stderr" || rc=$? ;;
-              *.zip) unzip -q -j "${archive}" shift2eu.exe -d "${dir}" 2> "${out}/${name}.unpack.stderr" || rc=$? ;;
+              *.tar.gz) timeout 2m tar -xOzf "${archive}" shift2eu 2> "${out}/${name}.unpack.stderr" | head -c 134217728 > "${dir}/shift2eu" || rc=$? ;;
+              *.zip) timeout 2m unzip -p "${archive}" shift2eu.exe 2> "${out}/${name}.unpack.stderr" | head -c 134217728 > "${dir}/shift2eu.exe" || rc=$? ;;
             esac
             echo "${rc}" > "${out}/${name}.unpack.exit"
+            if [ "${rc}" -ne 0 ]; then
+              echo "binary-vulnerabilities tool-failed" >> "${results}/not-run.txt"
+            fi
             bin="$(find "${dir}" -maxdepth 1 -type f \( -name shift2eu -o -name shift2eu.exe \) -print -quit)"
             if [ -z "${bin}" ]; then
               continue
@@ -376,7 +428,10 @@ jobs:
             GOFLAGS=-mod=readonly GOPROXY=off timeout 5m govulncheck -mode=binary -format json "${bin}" > "${out}/${name}.json" 2> "${out}/${name}.stderr" || rc=$?
             echo "${rc}" > "${out}/${name}.exit"
             if [ "${rc}" -eq 124 ]; then
+              echo "binary-vulnerabilities timed-out" >> "${results}/not-run.txt"
               echo "binary-vulnerabilities: ${name} timed out after 5 minutes" >> "${results}/limits.txt"
+            elif [ "${rc}" -ne 0 ]; then
+              echo "binary-vulnerabilities tool-failed" >> "${results}/not-run.txt"
             fi
           done < <(find "${rel}" -maxdepth 1 -type f \( -name 'shift2eu_*.tar.gz' -o -name 'shift2eu_*.zip' \) -print0)
           if [ "${found}" -eq 0 ]; then
@@ -449,19 +504,51 @@ jobs:
             echo "::error title=Audit checks::the recorded image digest is no sha256 digest: see runbook step 11"
             exit 1
           fi
-          if ! docker image inspect "${image}@${digest}" > /dev/null 2>&1; then
+          rc=0
+          timeout 1m docker image inspect "${image}@${digest}" > /dev/null 2> "${out}/inspect-presence.stderr" || rc=$?
+          echo "${rc}" > "${out}/inspect-presence.exit"
+          if [ "${rc}" -ne 0 ]; then
             echo "image-runtime image-not-pulled" >> "${results}/not-run.txt"
             echo "finished"
             exit 0
           fi
-          docker image inspect --format '{{json .Config}}' "${image}@${digest}" > "${out}/config.json"
-          cid="$(docker create --read-only --network none --cap-drop ALL --security-opt no-new-privileges "${image}@${digest}" version)"
-          docker export "${cid}" | tar -tvf - > "${out}/filesystem.txt"
+          rc=0
+          timeout 2m docker image inspect --format '{{json .Config}}' "${image}@${digest}" > "${out}/config.json" 2> "${out}/config.stderr" || rc=$?
+          echo "${rc}" > "${out}/config.exit"
+          if [ "${rc}" -eq 124 ]; then
+            echo "image-runtime timed-out" >> "${results}/not-run.txt"
+            echo "image-runtime: the config read timed out after 2 minutes" >> "${results}/limits.txt"
+          elif [ "${rc}" -ne 0 ]; then
+            echo "image-runtime tool-failed" >> "${results}/not-run.txt"
+          fi
+          rc=0
+          cid="$(timeout 2m docker create --read-only --network none --cap-drop ALL --security-opt no-new-privileges --memory 512m --pids-limit 64 "${image}@${digest}" version)" || rc=$?
+          echo "${rc}" > "${out}/create.exit"
+          if [ "${rc}" -eq 124 ]; then
+            echo "image-runtime timed-out" >> "${results}/not-run.txt"
+            echo "image-runtime: the container create timed out after 2 minutes" >> "${results}/limits.txt"
+          elif [ "${rc}" -ne 0 ]; then
+            echo "image-runtime tool-failed" >> "${results}/not-run.txt"
+          fi
+          if [ "${rc}" -ne 0 ]; then
+            echo "finished"
+            exit 0
+          fi
+          rc=0
+          timeout 5m docker export "${cid}" 2> "${out}/export.stderr" | tar -tvf - > "${out}/filesystem.txt" 2> "${out}/filesystem.stderr" || rc=$?
+          echo "${rc}" > "${out}/filesystem.exit"
+          if [ "${rc}" -eq 124 ]; then
+            echo "image-runtime timed-out" >> "${results}/not-run.txt"
+            echo "image-runtime: the filesystem listing timed out after 5 minutes" >> "${results}/limits.txt"
+          elif [ "${rc}" -ne 0 ]; then
+            echo "image-runtime tool-failed" >> "${results}/not-run.txt"
+          fi
           rc=0
           timeout 60 docker start --attach "${cid}" > "${out}/version.stdout" 2> "${out}/version.stderr" < /dev/null || rc=$?
           echo "${rc}" > "${out}/version.exit"
           if [ "${rc}" -eq 124 ]; then
             docker kill "${cid}" > /dev/null 2>&1 || true
+            echo "image-runtime timed-out" >> "${results}/not-run.txt"
             echo "image-runtime: the read-only start timed out after 60 seconds" >> "${results}/limits.txt"
           fi
           docker inspect --format '{{.State.ExitCode}} {{.State.OOMKilled}}' "${cid}" > "${out}/version.state"
@@ -494,14 +581,18 @@ jobs:
             echo "::error title=Audit checks::the recorded image digest is no sha256 digest: see runbook step 11"
             exit 1
           fi
-          if ! docker image inspect "${image}@${digest}" > /dev/null 2>&1; then
+          rc=0
+          timeout 1m docker image inspect "${image}@${digest}" > /dev/null 2> "${out}/inspect-presence.stderr" || rc=$?
+          echo "${rc}" > "${out}/inspect-presence.exit"
+          if [ "${rc}" -ne 0 ]; then
             echo "hostile-inventories image-not-pulled" >> "${results}/not-run.txt"
             echo "finished"
             exit 0
           fi
           stage="${RUNNER_TEMP}/hostile/hostile"
           mkdir -p "${stage}/a-directory"
-          cp .github/security-audit/testdata/hostile-inventories/*.json "${stage}/"
+          # -P: a link the corpus holds is copied as a link, never followed on the runner.
+          cp -P .github/security-audit/testdata/hostile-inventories/*.json "${stage}/"
           prefix='{"schemaVersion": 2, "source": "aws", "resources": ['
           # One byte past the 10 MiB cap: a valid opening, then spaces.
           { printf '%s' "${prefix}"; head -c 10485761 /dev/zero | tr '\0' ' '; printf ']}\n'; } > "${stage}/oversized.json"
@@ -530,9 +621,48 @@ jobs:
           ln -s link-loop.json "${stage}/link-loop.json"
           chmod 0755 "${stage}" "${stage}/a-directory"
           find "${stage}" -type f -exec chmod 0644 {} +
-          staging="$(docker create "${image}@${digest}")"
-          docker cp "${stage}" "${staging}:/work/"
-          docker commit "${staging}" "audit-hostile:${GITHUB_RUN_ID}" > /dev/null
+          # The inputs reach a container that is created, copied into and committed, each command under a
+          # timeout of its own: the image is the release's, and a command it makes wait ends here, with
+          # the check's id in not-run.txt or limits.txt, not as a failed step with no report at all.
+          rc=0
+          staging="$(timeout 1m docker create "${image}@${digest}")" || rc=$?
+          echo "${rc}" > "${out}/staging-create.exit"
+          if [ "${rc}" -eq 124 ]; then
+            echo "hostile-inventories timed-out" >> "${results}/not-run.txt"
+            echo "hostile-inventories: the staging container's create timed out after 1 minute" >> "${results}/limits.txt"
+          elif [ "${rc}" -ne 0 ]; then
+            echo "hostile-inventories tool-failed" >> "${results}/not-run.txt"
+          fi
+          if [ "${rc}" -ne 0 ]; then
+            echo "finished"
+            exit 0
+          fi
+          rc=0
+          timeout 2m docker cp "${stage}" "${staging}:/work/" 2> "${out}/staging-cp.stderr" || rc=$?
+          echo "${rc}" > "${out}/staging-cp.exit"
+          if [ "${rc}" -eq 124 ]; then
+            echo "hostile-inventories timed-out" >> "${results}/not-run.txt"
+            echo "hostile-inventories: the inputs' copy timed out after 2 minutes" >> "${results}/limits.txt"
+          elif [ "${rc}" -ne 0 ]; then
+            echo "hostile-inventories tool-failed" >> "${results}/not-run.txt"
+          fi
+          if [ "${rc}" -ne 0 ]; then
+            echo "finished"
+            exit 0
+          fi
+          rc=0
+          timeout 2m docker commit "${staging}" "audit-hostile:${GITHUB_RUN_ID}" > "${out}/staging-commit.stdout" 2> "${out}/staging-commit.stderr" || rc=$?
+          echo "${rc}" > "${out}/staging-commit.exit"
+          if [ "${rc}" -eq 124 ]; then
+            echo "hostile-inventories timed-out" >> "${results}/not-run.txt"
+            echo "hostile-inventories: the commit timed out after 2 minutes" >> "${results}/limits.txt"
+          elif [ "${rc}" -ne 0 ]; then
+            echo "hostile-inventories tool-failed" >> "${results}/not-run.txt"
+          fi
+          if [ "${rc}" -ne 0 ]; then
+            echo "finished"
+            exit 0
+          fi
           docker rm "${staging}" > /dev/null
           for path in "${stage}"/*; do
             name="$(basename "${path}")"
@@ -543,12 +673,24 @@ jobs:
                 continue
               fi
               run="${name}.${format}"
-              cid="$(docker create --read-only --network none --cap-drop ALL --security-opt no-new-privileges --memory 512m --pids-limit 64 "audit-hostile:${GITHUB_RUN_ID}" assess --inventory "hostile/${name}" --target all --format "${format}")"
+              rc=0
+              cid="$(timeout 2m docker create --read-only --network none --cap-drop ALL --security-opt no-new-privileges --memory 512m --pids-limit 64 "audit-hostile:${GITHUB_RUN_ID}" assess --inventory "hostile/${name}" --target all --format "${format}")" || rc=$?
+              echo "${rc}" > "${out}/${run}.create.exit"
+              if [ "${rc}" -eq 124 ]; then
+                echo "hostile-inventories timed-out" >> "${results}/not-run.txt"
+                echo "hostile-inventories: the create for ${run} timed out after 2 minutes" >> "${results}/limits.txt"
+              elif [ "${rc}" -ne 0 ]; then
+                echo "hostile-inventories tool-failed" >> "${results}/not-run.txt"
+              fi
+              if [ "${rc}" -ne 0 ]; then
+                continue
+              fi
               rc=0
               timeout 60 docker start --attach "${cid}" > "${out}/${run}.stdout" 2> "${out}/${run}.stderr" < /dev/null || rc=$?
               echo "${rc}" > "${out}/${run}.exit"
               if [ "${rc}" -eq 124 ]; then
                 docker kill "${cid}" > /dev/null 2>&1 || true
+                echo "hostile-inventories timed-out" >> "${results}/not-run.txt"
                 echo "hostile-inventories: ${run} timed out after 60 seconds" >> "${results}/limits.txt"
               fi
               docker inspect --format '{{.State.ExitCode}} {{.State.OOMKilled}}' "${cid}" > "${out}/${run}.state"
@@ -584,7 +726,7 @@ jobs:
             case "/${file}" in
               */testdata/*) continue ;;
             esac
-            { grep -oE '^func Fuzz[A-Za-z0-9_]*\(' "${file}" || true; } | sed -e 's/^func //' -e 's/($//' | while IFS= read -r name; do
+            { grep -oE '^func Fuzz[A-Z0-9_][A-Za-z0-9_]*\(f \*testing\.F\)' "${file}" || true; } | sed -e 's/^func //' -e 's/(f \*testing\.F)$//' | while IFS= read -r name; do
               printf '%s %s\n' "$(dirname "${file}")" "${name}"
             done
           done | LC_ALL=C sort -u > "${out}/targets.txt"
@@ -613,16 +755,16 @@ jobs:
           docker rm "${staging}" > /dev/null
           n=0
           while read -r pkg name; do
-            if [[ ! "${name}" =~ ^Fuzz[A-Za-z0-9_]*$ ]] || [[ ! "${pkg}" =~ ^[A-Za-z0-9_][A-Za-z0-9_./-]*$ ]] || [[ "${pkg}" == *..* ]]; then
-              echo "::error title=Audit checks::a fuzz target's package or name has an unexpected shape: see runbook step 11"
-              exit 1
+            if [[ ! "${name}" =~ ^Fuzz[A-Z0-9_][A-Za-z0-9_]*$ ]] || [[ ! "${pkg}" =~ ^[A-Za-z0-9_][A-Za-z0-9_./-]*$ ]] || [[ "${pkg}" == *..* ]]; then
+              echo "fuzzing unexpected-target" >> "${results}/not-run.txt"
+              continue
             fi
             n=$((n + 1))
             if [ "${n}" -gt 3 ]; then
               echo "fuzzing: ${pkg} ${name} not run, over the budget of three targets" >> "${results}/limits.txt"
               continue
             fi
-            cid="$(docker create --read-only --network none --cap-drop ALL --security-opt no-new-privileges --user 65534:65534 \
+            cid="$(docker create --read-only --network none --cap-drop ALL --security-opt no-new-privileges --memory 10g --pids-limit 512 --user 65534:65534 \
               --tmpfs /scratch:rw,exec,nosuid,size=4g,mode=1777 \
               --env GOFLAGS --env GOPROXY --env GOTOOLCHAIN=local --env GOMODCACHE=/modcache --env GOCACHE=/scratch/go-build \
               --env GOTMPDIR=/scratch --env TMPDIR=/scratch --env HOME=/scratch --env FUZZ_PKG="${pkg}" --env FUZZ_NAME="${name}" \
@@ -659,9 +801,12 @@ jobs:
           { grep -rnE '^[[:space:]]*(-[[:space:]]+)?uses:' .github/workflows || true; } | { grep -vE '@[0-9a-f]{40}([[:space:]]|$)' || true; } > "${out}/uses-not-pinned.txt"
           grep -rn -A12 -E '^[[:space:]]*permissions:' .github/workflows > "${out}/permissions.txt" || true
           touch "${out}/read-refused.txt"
+          # read_api reads one endpoint into the results directory, never the log, and keeps its third
+          # argument as the jq filter: the reads that return values pass a filter that keeps the names
+          # alone, so no variable's value reaches the model.
           read_api() {
-            local name="$1" endpoint="$2" rc=0
-            timeout 2m gh api "${endpoint}" > "${out}/api/${name}.json" 2> "${out}/api/${name}.stderr" || rc=$?
+            local name="$1" endpoint="$2" filter="${3:-.}" rc=0
+            timeout 2m gh api "${endpoint}" --jq "${filter}" > "${out}/api/${name}.json" 2> "${out}/api/${name}.stderr" || rc=$?
             echo "${rc}" > "${out}/api/${name}.exit"
             if [ "${rc}" -ne 0 ]; then
               echo "${name}" >> "${out}/read-refused.txt"
@@ -678,11 +823,11 @@ jobs:
           for env in release-please release-tag ai-review site security-audit; do
             read_api "environment-${env}" "repos/${GH_REPO}/environments/${env}"
             read_api "environment-${env}-branch-policies" "repos/${GH_REPO}/environments/${env}/deployment-branch-policies"
-            read_api "environment-${env}-secret-names" "repos/${GH_REPO}/environments/${env}/secrets"
-            read_api "environment-${env}-variable-names" "repos/${GH_REPO}/environments/${env}/variables"
+            read_api "environment-${env}-secret-names" "repos/${GH_REPO}/environments/${env}/secrets" '[.secrets[].name]'
+            read_api "environment-${env}-variable-names" "repos/${GH_REPO}/environments/${env}/variables" '[.variables[].name]'
           done
-          read_api repository-secret-names "repos/${GH_REPO}/actions/secrets"
-          read_api repository-variable-names "repos/${GH_REPO}/actions/variables"
+          read_api repository-secret-names "repos/${GH_REPO}/actions/secrets" '[.secrets[].name]'
+          read_api repository-variable-names "repos/${GH_REPO}/actions/variables" '[.variables[].name]'
           read_api renovate-dashboard "repos/${GH_REPO}/issues?state=all&creator=renovate%5Bbot%5D&per_page=100"
           read_api renovate-pull-requests "search/issues?q=repo:${GH_REPO}+is:pr+is:open+author:app/renovate&per_page=100"
           last="$(git ls-files 'docs/security/audits/[0-9]*.md' | LC_ALL=C sort | tail -n 1)"
