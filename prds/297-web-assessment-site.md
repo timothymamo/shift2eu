@@ -1023,9 +1023,9 @@ security audit (`security-audit` skill), since every one of them touches the tru
   so the worker's `fetch` would escape `connect-src 'none'`. (*Amended 2026-11-24:* once the container's
   front is live, `www` sends the policy as a header, so a same-origin worker's script there gets it;
   the reasoning holds on the other origins, and `worker-src 'none'` stays, ADR 0045.) `child-src`,
-  `frame-src` and `manifest-src` already fall back to `default-src 'none'`, but are pinned so a later directive cannot
-  widen them by fallback; the static test fails when any of the four is missing or other than exactly
-  `'none'` (*Layer 2*). It does not conflict with the unregister function: `getRegistrations()` and
+  `frame-src` and `manifest-src` already fall back to `default-src 'none'`, but are pinned so a later
+  directive cannot widen them by fallback; the static test fails when any of the four is missing or
+  other than exactly `'none'` (*Layer 2*). It does not conflict with the unregister function: `getRegistrations()` and
   `unregister()` fetch no script, and `worker-src` governs only the fetch of a worker's script. The
   smoke test shows a dedicated worker (same-origin and `blob:`), a shared worker and a service-worker
   registration each blocked as a `worker-src` violation. Since `require-trusted-types-for 'script'`

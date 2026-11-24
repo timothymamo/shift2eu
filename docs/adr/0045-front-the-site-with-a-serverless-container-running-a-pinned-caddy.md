@@ -110,17 +110,30 @@ admin endpoint in the container), both pinned by the configuration test.
   matcher either, which on plain `:8080` always see `http` and would answer every request with a 308,
   a loop for `www`; no `trusted_proxies`.
 - **`www` is an exact comparison on the raw host:** `expression {http.request.hostport} ==
-  "www.shift2eu.com"` (or `header Host www.shift2eu.com`). Not Caddy's `host` matcher: it drops the
-  port and ignores case, so `host www.shift2eu.com` would proxy `www.shift2eu.com:443` and
-  `WWW.shift2eu.com`, contrary to the table.
+  "www.shift2eu.com"`, the one expression the rule and the static test name. Not Caddy's `host`
+  matcher: it drops the port and ignores case, so `host www.shift2eu.com` would proxy
+  `www.shift2eu.com:443` and `WWW.shift2eu.com`, contrary to the table. Not `header Host` either: its
+  value is a pattern (`*` a wildcard), not an exact comparison.
 - **The redirect target is built from the path and the query, never from `{uri}`:**
-  `https://www.shift2eu.com{http.request.uri.path}`, plus `?{http.request.uri.query}` only when the
-  query is not empty. Caddy's `{uri}` is the raw request target, so an absolute-form target (`GET
+  `https://www.shift2eu.com` + the escaped path, plus `?{http.request.uri.query}` only when the query
+  is not empty. Caddy's `{uri}` is the raw request target, so an absolute-form target (`GET
   http://evil.example/ HTTP/1.1`) would give `https://www.shift2eu.comhttp://evil.example/` and
-  `OPTIONS *` would give `https://www.shift2eu.com*`. A path that does not begin with `/` (`OPTIONS *`)
-  is redirected to `https://www.shift2eu.com/`. Whether the escaped or the decoded path is used (Caddy's
-  placeholder for the escaped form, if the pinned release has one) is *for the infra unit*, which
-  records it here. "The URI" below means that path and query.
+  `OPTIONS *` would give `https://www.shift2eu.com*`. A path that does not begin with `/` is
+  redirected to `https://www.shift2eu.com/`. "The URI" below means that path and query.
+- **The escaped path is the preferred choice, not the decoded one.** The decoded
+  `{http.request.uri.path}` turns `%3F` and `%23` into a literal `?` and `#` in `Location`, which a
+  browser then reads as a query or a fragment, and `%20` or `%0A` into a raw space or line break in a
+  header value. The escaped form (Go's `URL.EscapedPath()`) keeps them encoded, so the target's path,
+  decoded, is the request's path. The infra unit confirms the pinned release's placeholder for it and
+  records its name here; only if the release has none is the decoded path taken, recorded here with
+  the behaviour test's answers for those cases.
+- **`OPTIONS *` may never reach the routes.** Go's `net/http` server, which Caddy runs on, answers
+  `OPTIONS *` itself (200, `Content-Length: 0`, no body) unless the server sets
+  `DisableGeneralOptionsHandler`, which Caddy is not known to do. Its outcome is *for the infra unit*,
+  recorded here: either the 308 to `https://www.shift2eu.com/` above or Go's empty-bodied 200. If the
+  200, it is the one accepted exception to "never a 200 over plain HTTP": it carries no content, no
+  page and no header of the site, and no browser sends it. The live probe records whether the
+  platform's Envoy forwards `OPTIONS *` to the container at all.
 
 | Request | Answer |
 |---|---|
@@ -154,6 +167,13 @@ plain HTTP and over HTTPS, and sends over plain HTTP a request carrying `X-Forwa
 header as two fields in both orders (`https` + `http`, `http` + `https`), two `https` fields, and
 `https, https` in one field, each of which must still get the 308. The infra unit records the answers
 here; a 200 is the maintainer's to accept or not, on the record, since it changes no browser's visit.
+
+**The host as the container receives it** is undocumented too. Before the rule is taken, the same live
+probe records `{http.request.hostport}` as the container receives it on `www`, on the apex and on the
+container's endpoint, over plain HTTP and over HTTPS. If the platform adds a port, changes the case or
+moves the original host to `X-Forwarded-Host`, the exact comparison with `www.shift2eu.com` never
+matches, and `www` answers with a 308 to itself, a loop: it fails closed but takes the site down. The
+infra unit records the values here, and the rule follows what the probe shows before it goes live.
 
 ### The headers
 
@@ -240,9 +260,10 @@ page already names Scaleway.
   `header X-Forwarded-Proto` or `host` matcher), the `Location` built from the path and the query
   (no `{uri}`), and the `Host` variants pinned to the "any other host" 308; `auto_https off` and
   `admin off`; the HSTS header against `site/records/hsts.json` (with `met`, the header with the
-  record's value; with `waived`, no header; `preload` exactly when it is pursued); and the `Content-Security-Policy` header against the
-  built pages' `<meta>` policy plus `frame-ancestors 'none'`, so a change of the policy in `site/` fails
-  until the configuration follows. A behaviour test runs the pinned image on the configuration in a
+  record's value; with `waived`, no header; `preload` exactly when it is pursued); and the
+  `Content-Security-Policy` header against the built pages' `<meta>` policy plus
+  `frame-ancestors 'none'`, so a change of the policy in `site/` fails until the configuration
+  follows. A behaviour test runs the pinned image on the configuration in a
   local container, outside `make test` like the browser smoke test (ADR 0036), against a local
   upstream, and drives:
   - every row of the table with `Host` and `X-Forwarded-Proto`, the headers, and a gzip-encoded object
@@ -253,11 +274,12 @@ page already names Scaleway.
   - an upstream that sends its own `Content-Security-Policy`, `Strict-Transport-Security` and
     `Permissions-Policy` with other values (the client sees only Caddy's), an upstream 404, and no
     upstream at all (Caddy's own 502 still carries every header);
-  - redirects of `//evil.example/x`, `/%2F%2Fevil.example`, a path with a query string, an
-    absolute-form request target (`GET http://evil.example/ HTTP/1.1`), `OPTIONS *`, and a `Host` with
-    a port, a trailing dot or in upper case: every `Location` parses as a URL, with scheme `https` and
-    host exactly `www.shift2eu.com` (not a prefix test), and an unknown host gets the 308, never the
-    proxy;
+  - redirects of `//evil.example/x`, `/%2F%2Fevil.example`, `/a%3Fb`, `/a%23b`, `/a%0Ab`, a path
+    with a query string, an absolute-form request target (`GET http://evil.example/ HTTP/1.1`),
+    `OPTIONS *` (its answer recorded, above), and a `Host` with a port, a trailing dot or in upper
+    case: every `Location` parses as a URL, with scheme `https` and host exactly `www.shift2eu.com`
+    (not a prefix test), its path, decoded, equal to the request's decoded path, and an unknown host
+    gets the 308, never the proxy;
   - the upstream request: the local upstream asserts it receives none of the removed headers (*The
     upstream*).
 

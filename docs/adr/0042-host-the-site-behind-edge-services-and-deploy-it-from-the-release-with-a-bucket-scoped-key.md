@@ -656,9 +656,8 @@ unchanged; only *Hosting*, *The origins* and *Recovery* change, as follows.
   "Never a 200" over plain HTTP is a property of ADR 0045's rule (the joined value of the raw
   `X-Forwarded-Proto` header compared exactly with `https`, so two fields or a comma list fail closed,
   else the 308; not Caddy's `header` matcher, which accepts any one field) and of its tests, not a
-  result of C3: C3's
-  redirect container answered 308 unconditionally, and showed only that the platform passes the
-  container's 308 and headers unchanged over plain HTTP and HTTPS.
+  result of C3: C3's redirect container answered 308 unconditionally, and showed only that the
+  platform passes the container's 308 and headers unchanged over plain HTTP and HTTPS.
 
   The pipeline's endpoint is now the container's upstream as well as an origin of its own; it serves the
   site without the container's headers, which the `<meta>` policy and the framing guard cover as on any
