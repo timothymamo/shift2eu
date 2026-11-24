@@ -201,38 +201,73 @@ jobs:
             echo "::error title=Audit checks::the go command is not go.mod's ${want}: see runbook step 11"
             exit 1
           fi
-      # Rows 3 to 5. A finding is data for the model, not a failure of the job: each tool's output and
-      # exit code go to the results directory, and the model triages both.
+      # Rows 3 to 5. A finding is data for the model, not a failure of the job: each tool's output, its
+      # stderr and its exit code go to the results directory, and the model triages them. Every tool run is
+      # under a timeout of its own that records the check "not run", so that a tool that hangs is the check
+      # that timed out, not the end of the step and of the run's report (test/architecture holds both).
+      # Only a non-zero exit that is no finding is recorded as tool-failed, by each tool's pinned source:
+      # govulncheck exits 0 with -format json whatever it finds (only its text mode exits 3), so every
+      # non-zero exit of it is tool-failed; osv-scanner and actionlint exit 1 when they find something;
+      # zizmor exits 11 to 14 by the highest finding's severity and 1 on an error; gitleaks exits 1 on an
+      # error and, told so with --exit-code 2, 2 when it finds a leak, so that an error is never read as a
+      # finding.
       - name: govulncheck
         timeout-minutes: 20
         run: |
           set -euo pipefail
-          out="${RUNNER_TEMP}/results/govulncheck"
+          results="${RUNNER_TEMP}/results"
+          out="${results}/govulncheck"
           mkdir -p "${out}"
           rc=0
-          GOFLAGS=-mod=readonly GOPROXY=off govulncheck -format json ./... > "${out}/module.json" 2> "${out}/module.stderr" || rc=$?
+          GOFLAGS=-mod=readonly GOPROXY=off timeout 8m govulncheck -format json ./... > "${out}/module.json" 2> "${out}/module.stderr" || rc=$?
           echo "${rc}" > "${out}/module.exit"
+          if [ "${rc}" -eq 124 ]; then
+            echo "dependencies timed-out" >> "${results}/not-run.txt"
+            echo "dependencies: the module scan timed out after 8 minutes" >> "${results}/limits.txt"
+          elif [ "${rc}" -ne 0 ]; then
+            echo "dependencies tool-failed" >> "${results}/not-run.txt"
+          fi
           rc=0
-          GOFLAGS=-mod=readonly GOPROXY=off govulncheck -C tools -format json github.com/rhysd/actionlint/cmd/actionlint > "${out}/tools.json" 2> "${out}/tools.stderr" || rc=$?
+          GOFLAGS=-mod=readonly GOPROXY=off timeout 8m govulncheck -C tools -format json github.com/rhysd/actionlint/cmd/actionlint > "${out}/tools.json" 2> "${out}/tools.stderr" || rc=$?
           echo "${rc}" > "${out}/tools.exit"
+          if [ "${rc}" -eq 124 ]; then
+            echo "dependencies timed-out" >> "${results}/not-run.txt"
+            echo "dependencies: the tools module scan timed out after 8 minutes" >> "${results}/limits.txt"
+          elif [ "${rc}" -ne 0 ]; then
+            echo "dependencies tool-failed" >> "${results}/not-run.txt"
+          fi
       - name: osv-scanner
         timeout-minutes: 20
         run: |
           set -euo pipefail
-          out="${RUNNER_TEMP}/results/osv-scanner"
+          results="${RUNNER_TEMP}/results"
+          out="${results}/osv-scanner"
           mkdir -p "${out}"
           rc=0
-          osv-scanner scan source --format json --lockfile go.mod --lockfile tools/go.mod > "${out}/scan.json" 2> "${out}/scan.stderr" || rc=$?
+          timeout 8m osv-scanner scan source --format json --lockfile go.mod --lockfile tools/go.mod > "${out}/scan.json" 2> "${out}/scan.stderr" || rc=$?
           echo "${rc}" > "${out}/scan.exit"
+          if [ "${rc}" -eq 124 ]; then
+            echo "dependencies timed-out" >> "${results}/not-run.txt"
+            echo "dependencies: the osv-scanner scan timed out after 8 minutes" >> "${results}/limits.txt"
+          elif [ "${rc}" -ne 0 ] && [ "${rc}" -ne 1 ]; then
+            echo "dependencies tool-failed" >> "${results}/not-run.txt"
+          fi
       - name: gitleaks on the history
         timeout-minutes: 20
         run: |
           set -euo pipefail
-          out="${RUNNER_TEMP}/results/gitleaks"
+          results="${RUNNER_TEMP}/results"
+          out="${results}/gitleaks"
           mkdir -p "${out}"
           rc=0
-          gitleaks git --ignore-gitleaks-allow --redact --no-banner --log-level error --report-format json --report-path "${out}/history.json" . 2> "${out}/history.stderr" || rc=$?
+          timeout 15m gitleaks git --ignore-gitleaks-allow --redact --no-banner --log-level error --exit-code 2 --report-format json --report-path "${out}/history.json" . 2> "${out}/history.stderr" || rc=$?
           echo "${rc}" > "${out}/history.exit"
+          if [ "${rc}" -eq 124 ]; then
+            echo "history-secrets timed-out" >> "${results}/not-run.txt"
+            echo "history-secrets: the history scan timed out after 15 minutes" >> "${results}/limits.txt"
+          elif [ "${rc}" -ne 0 ] && [ "${rc}" -ne 2 ]; then
+            echo "history-secrets tool-failed" >> "${results}/not-run.txt"
+          fi
       # Row 5, in two steps: only zizmor's online audits read GitHub's API, so only its step holds the
       # job's token.
       - name: zizmor
@@ -242,21 +277,35 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          out="${RUNNER_TEMP}/results/workflows"
+          results="${RUNNER_TEMP}/results"
+          out="${results}/workflows"
           mkdir -p "${out}"
           rc=0
-          zizmor --format json .github/workflows > "${out}/zizmor.json" 2> "${out}/zizmor.stderr" || rc=$?
+          timeout 4m zizmor --format json .github/workflows > "${out}/zizmor.json" 2> "${out}/zizmor.stderr" || rc=$?
           echo "${rc}" > "${out}/zizmor.exit"
+          if [ "${rc}" -eq 124 ]; then
+            echo "workflows timed-out" >> "${results}/not-run.txt"
+            echo "workflows: the zizmor run timed out after 4 minutes" >> "${results}/limits.txt"
+          elif [ "${rc}" -ne 0 ] && { [ "${rc}" -lt 11 ] || [ "${rc}" -gt 14 ]; }; then
+            echo "workflows tool-failed" >> "${results}/not-run.txt"
+          fi
       - name: actionlint
         timeout-minutes: 10
         run: |
           set -euo pipefail
-          out="${RUNNER_TEMP}/results/workflows"
+          results="${RUNNER_TEMP}/results"
+          out="${results}/workflows"
           mkdir -p "${out}"
           rc=0
           # As dev/actionlint.sh runs it: tools/go.mod's actionlint, which finds .github/workflows itself.
-          GOFLAGS=-mod=readonly GOPROXY=off go tool -modfile=tools/go.mod actionlint -format '{{json .}}' > "${out}/actionlint.json" 2> "${out}/actionlint.stderr" || rc=$?
+          GOFLAGS=-mod=readonly GOPROXY=off timeout 5m go tool -modfile=tools/go.mod actionlint -format '{{json .}}' > "${out}/actionlint.json" 2> "${out}/actionlint.stderr" || rc=$?
           echo "${rc}" > "${out}/actionlint.exit"
+          if [ "${rc}" -eq 124 ]; then
+            echo "workflows timed-out" >> "${results}/not-run.txt"
+            echo "workflows: the actionlint run timed out after 5 minutes" >> "${results}/limits.txt"
+          elif [ "${rc}" -ne 0 ] && [ "${rc}" -ne 1 ]; then
+            echo "workflows tool-failed" >> "${results}/not-run.txt"
+          fi
       # Row 6. OpenSSF scorecard, read-only: the CLI, not the action, so nothing is published and no
       # id-token is asked for. It reads GitHub's API with the job's token, which scorecard takes from
       # GH_TOKEN. The checks that need admin read, Branch-Protection and Webhooks, are left out and
@@ -1077,7 +1126,13 @@ jobs:
           tar -C "${dl}" -xzf "${dl}/age.tar.gz" age/age
           install -m 0755 "${dl}/age/age" "${bin}/age"
           echo "${bin}" >> "${GITHUB_PATH}"
-          .github/scripts/install-claude-code.sh "${RUNNER_TEMP}/claude-code" "@anthropic-ai/claude-code-linux-x64@${CLAUDE_CODE_PIN_VERSION}" "${CLAUDE_CODE_PIN_INTEGRITY}"
+          # The script is shared with the AI reviewer and its own errors name no runbook step, so the
+          # workflow wraps it: a CLI that does not install is a pin the pin check holds to the registry's
+          # integrity, or a managed policy on the runner image (runbook step 11, the CLI's two lines).
+          if ! .github/scripts/install-claude-code.sh "${RUNNER_TEMP}/claude-code" "@anthropic-ai/claude-code-linux-x64@${CLAUDE_CODE_PIN_VERSION}" "${CLAUDE_CODE_PIN_INTEGRITY}"; then
+            echo "::error title=Audit model::the Claude Code CLI did not install: see runbook step 11"
+            exit 1
+          fi
       # The runner sets kernel.apparmor_restrict_unprivileged_userns=1: this profile grants userns to
       # /usr/bin/bwrap alone (ADR 0040, The runner's user-namespace restriction), while sudo still works.
       - name: Load the AppArmor profile for bubblewrap

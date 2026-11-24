@@ -2290,12 +2290,12 @@ restore a cache could read a poisoned entry; their results are checks, not relea
 their containers and flags; the trivy, cosign and scorecard pins; the checks job's read scopes (to be
 confirmed on the first run); and a check that times out recorded in the report's limits while the run
 still publishes. **Still open after PR 5c:** failure
-summaries that name the runbook step for every cause. Since review round E of PR 5c (below) the
-hardening step, the model step, both artifact steps and the publish step end their failure with an
-`::error` that names the kind and runbook step 10 or 11, and the runbook names each of them; what is
-left is `.github/scripts/install-claude-code.sh`'s own `::error title=Claude Code CLI::...` lines (a
-tarball that does not match its pin, a managed policy on the runner), which name no runbook step: the
-runbook's step 11 names them, but the summary does not point there. **To be checked
+summaries that tell an expired or revoked subscription token from the subscription's usage limit. Since
+review round E of PR 5c (below) the hardening step, the model step, both artifact steps and the publish
+step end their failure with an `::error` that names the kind and runbook step 10 or 11, and since round F
+the install step does too, around `.github/scripts/install-claude-code.sh`'s own lines; but the launcher
+prints one constant class for a failed model run, so the model step's one line covers both causes, and
+runbook step 10 says what each means. **To be checked
 on the first run** (runbook step 8): that `socat`'s and `bubblewrap`'s `.deb`s install with the image's
 libraries (`dpkg -i` does not fetch a missing dependency) and that the pinned versions are still in the
 archive's pool; that the runner's sudo rule is `/etc/sudoers.d/runner`; that the runner's preinstalled
@@ -2323,9 +2323,9 @@ still publishes**: each tool runs under its own `timeout` (coreutils), shorter t
 a step it stops fails the job, which then skips the encryption and publishes nothing. Review round D
 keeps the release's content from reaching that backstop (below), and round E holds every checks step's
 own timeouts outside its loops, plus its loop budget, below its `timeout-minutes`, so in rows 6 to 15 a
-read that hangs to its limit is recorded before the step's backstop fires. Rows 3 to 5 (govulncheck,
-osv-scanner, gitleaks, zizmor, actionlint) run with no inner timeout: a hang there still reaches the
-backstop, which is why PRD #175's time-out box stays open. **A verification that fails is a finding**
+read that hangs to its limit is recorded before the step's backstop fires. Since round F rows 3 to 5
+(govulncheck, osv-scanner, gitleaks, zizmor, actionlint) run under timeouts of their own too, so no
+check of the job reaches the backstop (Review round F of PR 5c, below). **A verification that fails is a finding**
 (round E): row 7 writes a third file at the results' root, `results/verification-failed.txt`, one line
 `release-integrity verification-failed` per checksum mismatch, refused attestation or refused
 signature, which the model reads as a finding against the release (the run's skill, row 7), never as
@@ -2551,7 +2551,56 @@ checks job's own time budget, each held by `check.AuditWorkflow` and a case of i
   says what each means. *Residual:* `.github/scripts/install-claude-code.sh`'s own `::error title=Claude
   Code CLI::...` lines (the tarball against its pin, a managed policy on the runner) name no runbook
   step; the runbook's step 11 names them. The script is shared with the AI reviewer's workflow, so
-  naming the audit's runbook step there is a change of its own.
+  naming the audit's runbook step there is a change of its own. *Settled in round F, below.*
+
+**Review round F of PR 5c (2026-11-25).** Round E's two residuals, each held by `check.AuditWorkflow`
+and cases of its test:
+
+- **Every tool run of the checks job is under a timeout of its own.** Rows 3 to 5 now run as rows 6 to
+  15 do: each run of govulncheck (8 minutes, the module and `tools/` each), osv-scanner (8), gitleaks (15),
+  zizmor (4) and actionlint (5) is `timeout <N>m <tool> ... || rc=$?`, records its exit in
+  `<name>.exit` beside its JSON output and stderr, and then records rc 124 as `<check> timed-out` in
+  `not-run.txt` with its `limits.txt` line, and any other non-zero exit that is no finding as `<check>
+  tool-failed`. The check ids are `dependencies` (rows 3 and 4), `history-secrets` (gitleaks) and
+  `workflows` (zizmor and actionlint). The check holds every run of govulncheck, osv-scanner, gitleaks,
+  zizmor, actionlint, scorecard, trivy, cosign, `gh attestation verify` and `go test` in every checks
+  step but the tool download: `timeout <N>m` or `<N>s` before the tool and `|| rc=$?` after it on its
+  logical line. A tool the go command runs (`go -C tools run .../actionlint`, `go tool ... actionlint`) is
+  matched by its last path element; row 14's `go test`, inside its container's `sh -c`, is bounded by the
+  `timeout 12m docker start ... || rc=$?` line of a step that must hold one; a line that only echoes a
+  quoted text runs no tool. The steps' `timeout-minutes` are unchanged: each row's own timeouts fit its
+  step's 20 or 10 (the fit rule), and the job's steps still add up to 345 of its 355.
+- **The exit codes that are findings**, read from each tool's pinned source: govulncheck v1.10.0 exits 0
+  with `-format json` whatever it finds (`cmd/govulncheck/doc.go`, Exit codes; only the text handler
+  returns the exit-3 error), and 2 on bad usage, so every non-zero exit of it is tool-failed; osv-scanner v2.7.1
+  exits 1 when it finds a vulnerability and 127 to 130 on a failure (`cmd/osv-scanner/internal/cmd/run.go`);
+  actionlint v1.7.12 exits 1 on a problem found, 2 on a bad option and 3 on a fatal error
+  (`command.go`); zizmor v1.33.1 exits 11 to 14 by the highest finding's severity and 1, 2 or 3 on an
+  error, bad arguments or no inputs (`docs/usage.md`, Exit codes; only SARIF, `--no-exit-codes` and
+  `--fix` drop the finding codes); gitleaks v8.30.1 exits `--exit-code` (default 1) when it finds a leak
+  and 1 on every error (`cmd/root.go`, its fatal log), so the workflow passes `--exit-code 2` and a leak is
+  2, an error 1. Without that, a gitleaks that failed before writing its report would read as a finding
+  with no report, and so as clean. *Residual:* a hang inside a tool's own subprocess that ignores
+  `SIGTERM` outlives `timeout`'s signal; coreutils' `timeout` sends no `SIGKILL` unless asked
+  (`--kill-after`), so such a run still reaches the step's backstop. None of the five tools is known to
+  ignore it.
+- **The install step names its runbook step.** The model job's call of the shared install script is
+  `if ! .github/scripts/install-claude-code.sh "..." "..." "..."; then`, `echo "::error title=Audit
+  model::the Claude Code CLI did not install: see runbook step 11"`, `exit 1` and `fi`, each on a line of
+  its own; the script's own two lines stay above it in the summary and the script is unchanged, so the AI
+  reviewer's workflow is not touched. The check holds the branch whole: removed, without its `exit 1`, or
+  run together onto the echo's line, it is refused.
+- **What stays open.** An expired or revoked subscription token and the usage limit still share the model
+  step's one line (round E): the launcher prints one constant class, so PRD #175's "A failed run is
+  visible" box stays open on that alone.
+
+**Review round H of PR 5c (2026-11-25).** `check.AuditWorkflow` holds rows 3 and 5's exit codes as
+round F reads them from the pinned sources: gitleaks's `gitleaks git` run carries `--exit-code 2` and its
+tool-failed branch is `elif [ "${rc}" -ne 0 ] && [ "${rc}" -ne 2 ]; then`; zizmor's is `elif [ "${rc}"
+-ne 0 ] && { [ "${rc}" -lt 11 ] || [ "${rc}" -gt 14 ]; }; then`; govulncheck's two are `elif [ "${rc}"
+-ne 0 ]; then`, and any govulncheck branch that excuses a further exit (`-ne 0 ] && ...`, such as text
+mode's 3) is refused, so neither of its two runs can read an error as a finding. Each branch is a whole
+line, and each message names its tool.
 
 ## Alternatives considered
 

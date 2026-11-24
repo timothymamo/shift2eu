@@ -2828,11 +2828,16 @@ If the pin matches the release's checksum file, the release asset changed under 
 supply-chain finding, not a run to repeat; report it and do not raise the pin by hand. If the pin does not
 match, the pin is wrong: fix it through a pull request to `main` (Renovate moves a version and its digest
 in one PR, CLAUDE.md rule 7), then start the new run. The model job's install step checks the Claude
-Code CLI's tarball itself (`.github/scripts/install-claude-code.sh`): its error is titled `Claude Code
-CLI` and names no runbook step. `the downloaded tarball does not match the pinned sha512 integrity` is
-this paragraph, for the pin in `.github/claude-code.yaml` (`ci/claudecodepin` checks it against the
-registry); `... exists on this runner; its managed policy would apply ...` is a managed-settings file on
-the runner image, as step 10's `refused: a Claude Code managed-settings path exists`.
+Code CLI's tarball itself (`.github/scripts/install-claude-code.sh`, shared with the AI reviewer): its own
+error is titled `Claude Code CLI` and names no runbook step, so the workflow adds the line `the Claude
+Code CLI did not install: see runbook step 11` (titled `Audit model`) below it. Read the script's line
+above it: `the downloaded tarball does not match the pinned sha512 integrity` is this paragraph, for the
+pin in `.github/claude-code.yaml` (`ci/claudecodepin` checks it against the registry); `... exists on
+this runner; its managed policy would apply ...` is a managed-settings file on the runner image, as step
+10's `refused: a Claude Code managed-settings path exists`. With neither line above it, read the step's
+log: an `install-claude-code: ... is not ...` line is a malformed value in `.github/claude-code.yaml`, to
+fix through a pull request; an error of `npm pack` is the download itself (no network, no answer from the
+registry): start the new run.
 
 Two more errors point here, each naming its job: `the run's artifacts are unexpected: see runbook step
 11` (`Audit model` or `Audit publish`) is the artifact check's refusal, the first item below; `the publish

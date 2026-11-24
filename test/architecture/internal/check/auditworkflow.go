@@ -134,6 +134,10 @@ type auditJob struct {
 	// stepsWithinJob is a job whose steps' timeout-minutes add up to no more
 	// than its own.
 	stepsWithinJob bool
+	// boundsTools is a job each of whose tool runs (auditToolRun) is under a
+	// timeout of its own with its exit recorded, in every step but the ones
+	// that download and verify the tools (round F of PR 5c).
+	boundsTools bool
 }
 
 // secretValue is the expression that reads the secret name.
@@ -242,6 +246,29 @@ const auditContainerFlags = "docker create --read-only --network none --cap-drop
 // auditFuzzTmpfs is the one tmpfs of the workflow, row 14's: the size, mode
 // and flags its go test needs, and nothing else writable in its container.
 const auditFuzzTmpfs = "--tmpfs /scratch:rw,exec,nosuid,size=4g,mode=1777"
+
+// Rows 3 and 5's exit codes (round G of PR 5c), as the pinned tools' sources
+// write them: a branch that reads a tool's error as a finding records a check
+// that ran when none did, and one that reads a finding as an error loses what
+// the tool found.
+var (
+	// govulncheck exits 0 with -format json whatever it finds (only its text
+	// mode exits 3), so each of its branches reads every non-zero exit as the
+	// tool that failed, and no branch excuses another exit.
+	govulncheckFailed = command(wholeLine(`elif [ "${rc}" -ne 0 ]; then`),
+		`elif [ "${rc}" -ne 0 ]; then, on a line of its own: govulncheck -format json exits 0 whatever it finds, so every non-zero exit is the tool that failed (PRD #175 milestone 2, ADR 0040)`)
+	govulncheckExcuse = command(`(?m)^[ \t]*elif \[ "\$\{rc\}" -ne 0 \] &&`,
+		`a govulncheck branch that excuses a non-zero exit: govulncheck -format json exits 0 whatever it finds (3 is its text mode's), so no exit but 0 is a finding (PRD #175 milestone 2, ADR 0040)`)
+	// gitleaks exits 1 both on a leak and on an error unless told otherwise, so
+	// its run is told --exit-code 2 and only 2 is a finding.
+	gitleaksExitCode = command(`(?m)^[ \t]*timeout \S+ gitleaks git [^\n]* --exit-code 2 [^\n]*$`,
+		`gitleaks git ... --exit-code 2: its default leak exit, 1, is its error exit too, so an error that wrote no report would read as clean (PRD #175 milestone 2, ADR 0040)`)
+	gitleaksFailed = command(wholeLine(`elif [ "${rc}" -ne 0 ] && [ "${rc}" -ne 2 ]; then`),
+		`elif [ "${rc}" -ne 0 ] && [ "${rc}" -ne 2 ]; then, on a line of its own: run with --exit-code 2, gitleaks exits 2 on a leak and every other non-zero exit is the tool that failed (PRD #175 milestone 2, ADR 0040)`)
+	// zizmor exits 11 to 14 by the highest finding's severity and 1 on an error.
+	zizmorFailed = command(wholeLine(`elif [ "${rc}" -ne 0 ] && { [ "${rc}" -lt 11 ] || [ "${rc}" -gt 14 ]; }; then`),
+		`elif [ "${rc}" -ne 0 ] && { [ "${rc}" -lt 11 ] || [ "${rc}" -gt 14 ]; }; then, on a line of its own: zizmor exits 11 to 14 by its highest finding's severity and 1 on an error, which is the tool that failed (PRD #175 milestone 2, ADR 0040)`)
+)
 
 // The checks job's rows 6 to 15 (PR 5c): the commands their steps must hold.
 var (
@@ -391,6 +418,13 @@ var (
 		"::error title=Audit publish::the run's artifacts are unexpected: see runbook step 11")
 	publishError = failureBranch(`(?m)^[ \t]*if ! (?:ci/|"\$\{RUNNER_TEMP\}/bin/)auditpublish"? publish [^\n]*`, `if ! <auditpublish> publish ...`,
 		"::error title=Audit publish::the publish was refused: see runbook step 11")
+	// The install script is shared with the AI reviewer and its own two ::error
+	// lines name no runbook step (round F of PR 5c), so the model job's call of it
+	// is held whole under a guard that names the step: a pin the pin check holds to
+	// the registry's integrity, or a managed policy on the runner image.
+	installError = failureBranch(`(?m)^[ \t]*if ! \.github/scripts/install-claude-code\.sh "[^"\n]+" "[^"\n]+" "[^"\n]+"`,
+		`if ! .github/scripts/install-claude-code.sh "<dir>" "<package>" "<integrity>"`,
+		"::error title=Audit model::the Claude Code CLI did not install: see runbook step 11")
 )
 
 // failureBranch returns the command of a step's failure branch: the if whose
@@ -459,6 +493,7 @@ var auditJobs = []auditJob{
 		permissions:      []string{"contents", "attestations", "actions", "issues"},
 		downloadsModules: "Download the Go modules",
 		stepsWithinJob:   true,
+		boundsTools:      true,
 		steps: []auditStep{
 			{name: "Check out the audited commit", uses: auditCheckout},
 			{
@@ -473,18 +508,23 @@ var auditJobs = []auditJob{
 				name: "Download the Go modules",
 				runs: []auditCommand{modDownload, command(`go -C tools mod download`, "go -C tools mod download")},
 			},
-			{name: "govulncheck", runs: []auditCommand{command(`govulncheck .*\./\.\.\.`, "govulncheck ./...")}},
+			{
+				name:    "govulncheck",
+				runs:    []auditCommand{command(`govulncheck .*\./\.\.\.`, "govulncheck ./..."), govulncheckFailed},
+				refuses: []auditCommand{govulncheckExcuse},
+			},
 			{name: "osv-scanner", runs: []auditCommand{command(`osv-scanner scan source `, "osv-scanner scan source")}},
 			{
 				name: "gitleaks on the history",
 				runs: []auditCommand{
 					command(`gitleaks git .*--redact`, "gitleaks git --redact"),
 					command(`gitleaks git .*--ignore-gitleaks-allow`, "gitleaks git --ignore-gitleaks-allow (no allow comment in the history hides a secret)"),
+					gitleaksExitCode, gitleaksFailed,
 				},
 			},
 			// Two steps: only zizmor's online audits read GitHub's API, so only
 			// its step holds the job's token.
-			{name: "zizmor", githubToken: true, runs: []auditCommand{command(`zizmor `, "zizmor")}},
+			{name: "zizmor", githubToken: true, runs: []auditCommand{command(`zizmor `, "zizmor"), zizmorFailed}},
 			{name: "actionlint", runs: []auditCommand{command(`actionlint`, "actionlint")}},
 			// Rows 6 to 15 (PR 5c). The job's token only on the steps that read
 			// GitHub's API: scorecard, the release's verification and the
@@ -565,7 +605,7 @@ var auditJobs = []auditJob{
 			{name: "Read the Claude Code pin", runs: []auditCommand{command(`\.github/claude-code\.yaml`, ".github/claude-code.yaml")}},
 			{
 				name:            "Install the pinned tools",
-				runs:            []auditCommand{checksumCheck, command(`dpkg -i `, "dpkg -i"), command(`\.github/scripts/install-claude-code\.sh `, ".github/scripts/install-claude-code.sh")},
+				runs:            []auditCommand{checksumCheck, command(`dpkg -i `, "dpkg -i"), installError},
 				guardsChecksums: true,
 			},
 			{
@@ -781,8 +821,11 @@ var auditPin = regexp.MustCompile(`^([A-Za-z0-9_.-]+/[A-Za-z0-9_./-]+)@([0-9a-f]
 // checksum check is a guard that names its tool. Since round E it also holds
 // that row 7 records a failed verification as the finding verification-failed,
 // that every checks step's own timeouts fit its timeout-minutes, and that the
-// model and publish jobs' failures name their kind and runbook step. A document
-// it cannot read, or an empty one, is refused.
+// model and publish jobs' failures name their kind and runbook step. Since round
+// F it also holds every tool run of the checks job under a timeout of its own
+// with its exit recorded, and the model job's install of the Claude Code CLI to
+// a guard that names its runbook step. A document it cannot read, or an empty
+// one, is refused.
 func AuditWorkflow(src []byte) []string {
 	if strings.TrimSpace(string(src)) == "" {
 		return []string{"the audit workflow is empty, so this check cannot tell what it runs"}
@@ -1467,6 +1510,12 @@ func (a *auditReader) steps(e yamlread.Entry, path string, spec auditJob) []audi
 			if err == nil && spec.stepsWithinJob {
 				a.fit(withoutComments(strings.Split(text, "\n")), fmt.Sprintf("%s: step %q (line %d)", path, s.name, s.num), stepMinutes(s))
 			}
+
+			// The download step installs the tools and runs none of them on the
+			// repository; its one run, trivy's database download, has a timeout.
+			if err == nil && spec.boundsTools && (want == nil || !want.guardsChecksums) {
+				a.toolRuns(withoutComments(strings.Split(text, "\n")), fmt.Sprintf("%s: step %q (line %d)", path, s.name, s.num))
+			}
 		}
 	}
 
@@ -2132,6 +2181,79 @@ func (a *auditReader) bounded(code, path, check string) {
 		if !strings.Contains(code, record) {
 			a.r.fail("%s records no %s %s (%s): a command of the check that fails or times out names the check as not run, never as clean", path, check, why, record)
 		}
+	}
+}
+
+// auditToolRun matches a run of one of the checks job's tools, by its command
+// word; auditGoToolRun matches one the go command runs (go run <path>/<tool>,
+// go tool <tool>), by the tool's last path element (round F of PR 5c).
+var (
+	auditToolRun   = regexp.MustCompile(`(?:^|[\s;&|(])(govulncheck|osv-scanner|gitleaks|zizmor|actionlint|scorecard|trivy|cosign|gh attestation verify|go test)(?:\s|$)`)
+	auditGoToolRun = regexp.MustCompile(`(?:^|[\s;&|(])go\s+(?:-C\s+\S+\s+)?(?:run|tool)\s+(?:-\S+\s+)*(?:\S*/)?(govulncheck|osv-scanner|gitleaks|zizmor|actionlint|scorecard|trivy|cosign)(?:\s|$)`)
+	// auditToolTimeout is the timeout a tool run is under: whole minutes or
+	// seconds.
+	auditToolTimeout = regexp.MustCompile(`(?:^|[\s;&|(])timeout [0-9]+[ms] `)
+	// auditMessageLine is a line that only echoes a quoted text, to the log or
+	// to a quoted file: a tool it names is no run of it.
+	auditMessageLine = regexp.MustCompile(`^[ \t]*echo "[^"\n]*"(?: >>? "[^"\n]*")?$`)
+	// auditContainerTest is the go test a container's sh -c runs (row 14), and
+	// auditBoundedStart the docker start that bounds it: timeout and rc=$? are
+	// that line's, not the container's script's.
+	auditContainerTest = regexp.MustCompile(`docker create [^\n]*\ssh -c '[^'\n]*$`)
+	auditBoundedStart  = regexp.MustCompile(`(?m)^[ \t]*timeout [0-9]+[ms] docker start [^\n]* \|\| rc=\$\?$`)
+)
+
+// toolRuns holds every tool run of a checks step to a timeout of its own and
+// its exit recorded (round F of PR 5c): timeout <N>m or <N>s before the tool,
+// || rc=$? after it, on its line. A tool that hangs is then the check that timed
+// out, recorded not run, never the end of the step and of every later one, the
+// encrypt step included; a tool that fails is recorded, never the end of the
+// step under set -e. The go test a container runs is bounded by the docker start
+// that runs the container.
+func (a *auditReader) toolRuns(code, path string) {
+	for _, line := range logicalLines(code) {
+		if auditMessageLine.MatchString(line) {
+			continue
+		}
+
+		seen := map[int]bool{}
+
+		for _, re := range []*regexp.Regexp{auditGoToolRun, auditToolRun} {
+			for _, m := range re.FindAllStringSubmatchIndex(line, -1) {
+				if seen[m[2]] {
+					continue
+				}
+
+				seen[m[2]] = true
+				a.toolRun(code, path, line, line[m[2]:m[3]], m[2])
+			}
+		}
+	}
+}
+
+// toolRun holds one tool run, tool at pos of line, to its timeout and its
+// recorded exit.
+func (a *auditReader) toolRun(code, path, line, tool string, pos int) {
+	quoted := strings.TrimSpace(line)
+
+	if tool == "go test" && auditContainerTest.MatchString(line[:pos]) {
+		if !auditBoundedStart.MatchString(code) {
+			a.r.fail("%s runs go test in a container (%q) with no timeout <N>m docker start ... || rc=$? on a line of its own: the container's run is under a timeout of its own, "+
+				"so that a target that hangs is recorded, not the end of the step", path, quoted)
+		}
+
+		return
+	}
+
+	if !auditToolTimeout.MatchString(line[:pos]) {
+		a.r.fail("%s runs %s without its timeout (%q): every tool run of the checks job is under timeout <N>m or <N>s of its own, "+
+			"so that a tool that hangs is recorded as the check that timed out, not the end of the step and of every later one, the encrypt step included (ADR 0040)",
+			path, tool, quoted)
+	}
+
+	if !strings.Contains(line[pos:], " || rc=$?") {
+		a.r.fail("%s runs %s without || rc=$? (%q): its exit is recorded, so that a failure is the check's tool-failed or its finding, not the end of the step under set -e",
+			path, tool, quoted)
 	}
 }
 
