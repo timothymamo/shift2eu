@@ -332,6 +332,12 @@ func TestChecksRefuseBrokenConfigurations(t *testing.T) {
 			want:  "X-Amz-Request-Id",
 		},
 		{
+			name:  "the bucket's X-Amz-* headers named one by one instead of the prefix",
+			src:   strings.Replace(designedCaddyfile, "\t\t\theader_down -X-Amz-*\n", "\t\t\theader_down -X-Amz-Request-Id\n\t\t\theader_down -X-Amz-Id-2\n\t\t\theader_down -X-Amz-Meta-Foo\n", 1),
+			check: checkReverseProxy,
+			want:  "open set",
+		},
+		{
 			name:  "no auto_https off",
 			src:   strings.Replace(designedCaddyfile, "\tauto_https off\n", "", 1),
 			check: checkGlobalOptions,
@@ -426,10 +432,11 @@ func TestCheckHeadersRefuses(t *testing.T) {
 }
 
 // TestCheckGlobalLogForms pins the two shapes of the front's one global log, and the ones it refuses
-// (docs/adr/0045, *The log*): Caddy's default logger writes http.log.error,
-// http.handlers.reverse_proxy and http.stdlib with the request's remote_ip and client_ip, its uri and its
-// headers, which the platform ships to Cockpit, so the global options hold a log that excludes all three
-// loggers or one whose output is discarded. Both accepted shapes are pinned, since either is the coder's to
+// (docs/adr/0045, *The log*): Caddy's default logger still writes http.log.error and
+// http.handlers.reverse_proxy, each with the request's remote_ip and client_ip, its uri and its headers,
+// and http.stdlib, Go's server error log, whose panic line names the remote address; the platform ships the
+// container's output to Cockpit, so the global options hold a log that excludes all three loggers or one
+// whose output is discarded. Both accepted shapes are pinned, since either is the coder's to
 // choose, and neither may be written any other way: the two-name exclusion leaves http.stdlib writing, so it
 // is refused with the rest. A log in a site block stays refused, as the table above pins.
 func TestCheckGlobalLogForms(t *testing.T) {
@@ -803,8 +810,10 @@ func checkReverseProxy(f *caddyfile) []string {
 		problems = append(problems, "the proxy does not remove Set-Cookie from the upstream response (header_down -Set-Cookie): a cookie Edge Services or the bucket sets is the platform's, not the site's, and the front sets none (docs/adr/0045)")
 	}
 
-	if !deletesPrefix(deletedDown, "X-Amz-", "X-Amz-Request-Id", "X-Amz-Id-2", "X-Amz-Meta-Foo") {
-		problems = append(problems, "the proxy does not remove every X-Amz-* header from the upstream response: header_down -X-Amz-* removes the whole prefix, and the bucket's X-Amz-Request-Id, X-Amz-Id-2 and X-Amz-Meta-* are Edge Services' and the store's, not the site's (docs/adr/0045)")
+	// Only the prefix delete covers the bucket's headers: its X-Amz-Meta-* names are an open set, so no list
+	// of named deletes, however long, stands for header_down -X-Amz-*.
+	if !deletedDown["x-amz-*"] {
+		problems = append(problems, "the proxy does not remove every X-Amz-* header from the upstream response: the bucket's X-Amz-Meta-* names are an open set no list of named deletes covers, so only header_down -X-Amz-* removes them all, and its X-Amz-Request-Id, X-Amz-Id-2 and X-Amz-Meta-* are Edge Services' and the store's, not the site's (docs/adr/0045)")
 	}
 
 	return problems
@@ -812,7 +821,8 @@ func checkReverseProxy(f *caddyfile) []string {
 
 // deletesPrefix reports whether deleted holds the prefix deletion prefix*, or, instead, every one of the
 // headers examples names: a header_down of the whole prefix and one of each header it covers remove the same
-// headers, and the check accepts either.
+// headers, and the check accepts either. Only a prefix whose names are a closed set may fall back to the
+// examples: X-Envoy's are, the bucket's X-Amz-Meta-* are not, and its check wants the prefix alone.
 func deletesPrefix(deleted map[string]bool, prefix string, examples ...string) bool {
 	if deleted[strings.ToLower(prefix)+"*"] {
 		return true
@@ -828,11 +838,11 @@ func deletesPrefix(deleted map[string]bool, prefix string, examples ...string) b
 }
 
 // refusedLoggers are the three loggers the front's global log must silence when it keeps writing: Caddy's
-// http.log.error writes every failed request with the request's remote_ip and client_ip, its uri and its
-// headers, http.handlers.reverse_proxy writes the proxy's own failures the same way, and http.stdlib, the
-// standard library's error log Caddy's default logger wraps, writes a failed request's error and the
-// request line it came from. The platform ships the container's output to Cockpit, where such a line is a
-// third party's record of a visitor (docs/adr/0045, *The log*).
+// http.log.error writes every request a handler fails with the request's remote_ip and client_ip, its uri
+// and its headers, http.handlers.reverse_proxy writes the proxy's own failed round trip the same way, and
+// http.stdlib is Go's server error log, whose panic line names the remote address. The platform ships the
+// container's output to Cockpit, where such a line is a third party's record of a visitor (docs/adr/0045,
+// *The log*).
 var refusedLoggers = []string{"http.log.error", "http.handlers.reverse_proxy", "http.stdlib"}
 
 // checkRefusedDirectives refuses the directives the design turns off, and holds the global log: no site

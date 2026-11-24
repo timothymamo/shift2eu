@@ -423,7 +423,7 @@ func testHeaders(t *testing.T, front *harness) {
 			t.Fatalf("GET %s answers %d, want the upstream's 200", platformHeadersPath, resp.status)
 		}
 
-		for _, name := range []string{"Set-Cookie", "X-Amz-Request-Id", "X-Amz-Id-2", "X-Amz-Meta-Foo"} {
+		for _, name := range []string{"Set-Cookie", "X-Amz-Request-Id", "X-Amz-Id-2", "X-Amz-Meta-Foo", "X-Amz-Version-Id"} {
 			if got := resp.header.Values(name); len(got) > 0 {
 				t.Errorf("the client receives %s %q from the upstream, want none: a cookie and the bucket's X-Amz-* headers are the platform's, not the site's, and the client sees Caddy's headers alone (docs/adr/0045)", name, got)
 			}
@@ -1123,11 +1123,13 @@ func (u *upstream) handle(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, "upstream's own headers")
 	case platformHeadersPath:
 		// The headers the store and the platform answer with, which are nobody's but theirs: a cookie and
-		// three of the bucket's S3 headers. Caddy's one site sets none of them.
+		// four of the bucket's S3 headers, one of them a name no static example lists, since the bucket's
+		// names are an open set. Caddy's one site sets none of them.
 		w.Header().Set("Set-Cookie", "s=1")
 		w.Header().Set("X-Amz-Request-Id", "x")
 		w.Header().Set("X-Amz-Id-2", "y")
 		w.Header().Set("X-Amz-Meta-Foo", "z")
+		w.Header().Set("X-Amz-Version-Id", "v")
 		fmt.Fprint(w, "the platform's own headers")
 	case missingPath:
 		http.Error(w, "not found upstream", http.StatusNotFound)
