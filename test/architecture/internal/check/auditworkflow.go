@@ -148,6 +148,12 @@ var (
 	digestRead = command(`(?m)^[ \t]*if ! digest="\$\(jq -er '\.image_digest \| select\(type == "string"\) \| select\(\. == "" or test\("\^sha256:\[0-9a-f\]\{64\}\\\\z"\)\)' "\$\{RUNNER_TEMP\}/result\.json"\)"`+refusalBranch,
 		`string-and-shape read of the digest: if ! digest="$(jq -er '.image_digest | select(type == "string") | select(. == "" or test("^sha256:[0-9a-f]{64}\\z"))' ...)"; then, `+
 			`echo "::error ...", exit 1 and fi, each on a line of its own`)
+	// latestTag is the checks job's lookup of the latest release's tag.
+	latestTag = command(`releases/latest`, "the latest release's tag (releases/latest)")
+	// imageLine names the image the attestation step verifies: this
+	// repository's own, on a line of its own.
+	imageLine = command(`(?m)^[ \t]*image="ghcr\.io/\$\{GITHUB_REPOSITORY,,\}"$`,
+		`image="ghcr.io/${GITHUB_REPOSITORY,,}", this repository's image, on a line of its own`)
 	tagShape = command(`(?m)^[ \t]*if \[\[ ! "\$\{tag\}" =~ \^v\[0-9\]\+\\\.\[0-9\]\+\\\.\[0-9\]\+\$ \]\]`+refusalBranch,
 		`the tag's shape check: if [[ ! "${tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then, echo "::error ...", exit 1 and fi, each on a line of its own`)
 	emptyDigest = command(`(?m)^[ \t]*if \[ -z "\$\{digest\}" \]; then\n[ \t]+echo "image not pulled[^"\n]*"\n[ \t]+exit 0\n[ \t]*fi$`,
@@ -198,7 +204,10 @@ var auditJobs = []auditJob{
 			{name: "Check out the audited commit", uses: auditCheckout},
 			{
 				name: "Record the audited commit and the latest release tag", githubToken: true,
-				runs: []auditCommand{command(`releases/latest`, "the latest release's tag (releases/latest)")},
+				// The tag's shape is checked right after the lookup, before the
+				// tag reaches any command line.
+				runs:  []auditCommand{latestTag, tagShape},
+				order: []auditCommand{latestTag, tagShape},
 			},
 			{name: "Download the pinned tools and verify their checksums", runs: []auditCommand{checksumCheck}},
 			{
@@ -258,7 +267,7 @@ var auditJobs = []auditJob{
 				name: "List the run's artifacts and download the checks' ciphertext", githubToken: true,
 				runs:    []auditCommand{artifactsModel, artifactFile, artifactID, artifactDigest, artifactShape, artifactZip, zipDigest, zipUnpack, zipOneFile},
 				refuses: []auditCommand{secondListing},
-				order:   []auditCommand{artifactsModel, artifactFile, artifactDigest, artifactShape, artifactZip, zipDigest, zipUnpack, zipOneFile},
+				order:   []auditCommand{artifactsModel, artifactFile, artifactID, artifactDigest, artifactShape, artifactZip, zipDigest, zipUnpack, zipOneFile},
 			},
 			{
 				name: "Decrypt the checks' results into the audit directory",
@@ -316,7 +325,7 @@ var auditJobs = []auditJob{
 				name: "List the run's artifacts and download the model's ciphertext", githubToken: true,
 				runs:    []auditCommand{artifactsPublic, artifactFile, artifactID, artifactDigest, artifactShape, artifactZip, zipDigest, zipUnpack, zipOneFile},
 				refuses: []auditCommand{secondListing},
-				order:   []auditCommand{artifactsPublic, artifactFile, artifactDigest, artifactShape, artifactZip, zipDigest, zipUnpack, zipOneFile},
+				order:   []auditCommand{artifactsPublic, artifactFile, artifactID, artifactDigest, artifactShape, artifactZip, zipDigest, zipUnpack, zipOneFile},
 			},
 			{
 				name: "Decrypt the model's result",
@@ -329,9 +338,9 @@ var auditJobs = []auditJob{
 				runs: []auditCommand{
 					// verify holds every flag: one contiguous command, so no flag
 					// needs a pattern of its own.
-					digestRead, tagShape, emptyDigest, digestShape, verify,
+					imageLine, digestRead, tagShape, emptyDigest, digestShape, verify,
 				},
-				order: []auditCommand{digestRead, tagShape, emptyDigest, digestShape, verify},
+				order: []auditCommand{imageLine, digestRead, tagShape, emptyDigest, digestShape, verify},
 			},
 			// The scan runs before the App's token is minted: a result gitleaks
 			// refuses has no write token minted for it (review round 1, A6).
