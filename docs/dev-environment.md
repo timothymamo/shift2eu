@@ -2370,8 +2370,8 @@ key (replacing it only makes the next run file existing private findings as new 
 # Mac (admin), as yourself
 gh api repos/timothymamo/shift2eu/environments/security-audit/deployment-branch-policies --jq '.branch_policies[] | .type + " " + .name'
 # PASS: only branch main
-gh api repos/timothymamo/shift2eu/environments/security-audit --jq '.deployment_branch_policy | tojson'
-# PASS: {"custom_branch_policies":true,"protected_branches":false}; FAIL: null or anything else
+gh api repos/timothymamo/shift2eu/environments/security-audit --jq '.deployment_branch_policy | [.custom_branch_policies, .protected_branches] | tojson'
+# PASS: [true,false]; FAIL: anything else ([null,null]: no policy, so any branch may deploy)
 gh api repos/timothymamo/shift2eu/environments/security-audit --jq '.protection_rules | map(.type) | tojson'
 # PASS: no required_reviewers entry
 gh api repos/timothymamo/shift2eu/environments/security-audit/secrets --jq '[.secrets[].name] | sort | tojson'
@@ -2582,10 +2582,13 @@ gh api repos/timothymamo/shift2eu/actions/workflows/scheduled-security-audit.yml
 # The gate is the merge-time make check (TestAuditWorkflowHasNoScheduleTrigger); this is a second look
 gh api -H 'Accept: application/vnd.github.raw+json' repos/timothymamo/shift2eu/contents/.github/workflows/scheduled-security-audit.yml > <a scratch file> && echo fetched
 # PASS: fetched; FAIL: an API error, and no "fetched" line (stop: the check below would read nothing)
-grep -nE 'schedule|\\|\*|<<' <a scratch file>
-# PASS: no line (milestone 2 runs on workflow_dispatch only; milestone 3 adds the schedule)
-# any line: read it; FAIL: a schedule trigger, in block or flow style (on: { schedule: ... } included),
-#   or an escape, an alias or a merge key under on: that could spell one
+sed -n '/^on:/,/^[^ #]/p' <a scratch file>
+# PASS: the on: line, workflow_dispatch: with nothing under it (no inputs:), then the next top-level key
+#   (milestone 2 runs on workflow_dispatch only; milestone 3 adds the schedule, PRD #175, ADR 0040)
+# FAIL: any other key (inputs: included), a flow { } or [ ] value, a \ escape, a * alias or a << merge key
+#   in those lines, or no on: line at all (read the file)
+grep -nwE 'schedule|cron' <a scratch file>
+# PASS: no line; FAIL: a line (a comment that only names the word is no trigger, but read it)
 ```
 
 **8. Start the first run** (`workflow_dispatch` on `main`). Read its report PR and advisories. Then merge
@@ -2702,6 +2705,7 @@ gh variable set AUDIT_PUBLISH_PUBLIC_KEY --env security-audit --repo timothymamo
 # The App's key, once its secret is set: delete every older key on the App's page; a leaked one keeps minting tokens
 # GitHub, the App's page (shift2eu-audit), Private keys: by hand
 # PASS: one key, the new one; FAIL: an older key still listed
+# If the test run below fails on the App token, generate another key; never restore the deleted one
 ls <the App's new key file> <the model key's new private file> <the publish key's new private file>
 # PASS: No such file or directory (each one you stored, once you have deleted it)
 
