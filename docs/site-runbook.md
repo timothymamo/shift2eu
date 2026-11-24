@@ -9,15 +9,19 @@ recovery and the teardown ([PRD #297](../prds/297-web-assessment-site.md), *Runb
 the hosting ADR the steps record their results in). Written in milestone 3, followed in milestone 4, on
 mac-mini-home, the admin machine ([Development environment](dev-environment.md)). Agents never run it.
 
-*Note (2026-11-24):* the front changes to a Serverless Container serving `www` and the apex
-([ADR 0045](adr/0045-front-the-site-with-a-serverless-container-running-a-pinned-caddy.md)). Until the
-infra unit rewrites R4, R5 and R8 for it, the steps below describe the pipeline alone; R8's `www` CNAME
-to the pipeline is then replaced by a CNAME and an apex ALIAS to the container.
+*The front (milestone 4):* a Serverless Container running the pinned Caddy image serves `www` and the
+apex in front of the Edge Services pipeline
+([ADR 0045](adr/0045-front-the-site-with-a-serverless-container-running-a-pinned-caddy.md)). Its custom
+domains need their DNS records first, so it comes up in stages: R4's apply creates the container (and,
+on a pipeline created before it, removes the pipeline's `www` domain and TLS stage), R8 points the `www`
+CNAME and the apex ALIAS at the container, applies again with `front_domains = true`, waits for both
+domains to be *ready* and runs the live probes ADR 0045 requires before the site goes live. R8 ends
+with the rollback.
 
 Placeholders in `<...>` are the maintainer's: `<state-bucket>` the state bucket, `<owner>` the
 repository's owner; `$REGION`, `$ADMIN_PROJECT` (your key's default project, where the state is) and
-`$ME` (your key's owner, as a bucket-policy principal) come from R0; `$P`, `$A`, `$B`, `$E` and `$PL`
-are `apply`'s outputs (R4): a later shell runs R0, `init` and R4's output lines first. Every block runs
+`$ME` (your key's owner, as a bucket-policy principal) come from R0; `$P`, `$A`, `$B`, `$E`, `$PL`,
+`$NS` and `$CE` are `apply`'s outputs (R4): a later shell runs R0, `init` and R4's output lines first. Every block runs
 in bash, which R0's first line starts: macOS's login shell is zsh, whose `read` takes other options.
 Secrets come from the password manager into the shell with `read -s`, never into a file or the shell
 history. Scratch files go in a `mktemp -d` directory, never in the checkout. The `scw` and `aws`
@@ -99,31 +103,74 @@ open 'https://www.scaleway.com/en/pricing/network/#edge-services'   # PASS: Star
 
 And after every change to `infra/site/` merged to `main`.
 
-The apply creates the TLS stage, which requests its managed certificate only then, before R8's CNAME
-exists: on a first setup, R8's recreate step is expected (issue #541).
+The pipeline holds no TLS stage and no custom domain (ADR 0045): the container in front of it holds
+`www` and the apex, created with `front_domains` off here and on in R8. Only R8's rollback re-adds the
+TLS stage, which requests its managed certificate once, at its creation:
+after that rollback, R8's recreate step is expected (issue #541).
 
 ```bash
 dev/tofu.sh -chdir=infra/site init -backend-config=backend.hcl -lockfile=readonly   # PASS: "OpenTofu has been successfully initialized"
-dev/tofu.sh -chdir=infra/site plan -out=site.tfplan        # PASS (first time): "Plan: 13 to add, 0 to change, 0 to destroy."
-dev/tofu.sh -chdir=infra/site show site.tfplan | less      # PASS: the bucket policy's three statements, four with public_read (ADR 0039), the IAM rule's two permission sets in one project
+grep -c '^front_domains *= *true' infra/site/terraform.tfvars   # PASS: 0 before R8's second apply, 1 after it
+dev/tofu.sh -chdir=infra/site plan -out=site.tfplan        # PASS (first time): "Plan: 14 to add, 0 to change, 0 to destroy."
+# PASS (the first apply after ADR 0045, on milestone 3's hosting): "Plan: 2 to add, 1 to change, 1 to destroy." (the namespace and the container added, the DNS stage updated in place, the TLS stage destroyed)
+# FAIL the DNS stage "must be replaced": its default_fqdn, the container's UPSTREAM, changes with it; nothing serves visitors before R10, so apply it and record it in ADR 0039's container amendment
+# FAIL any other resource replaced or destroyed: stop, apply nothing, rm infra/site/site.tfplan, and find out why
+dev/tofu.sh -chdir=infra/site show site.tfplan | less      # PASS: the bucket policy's three statements, four with public_read (ADR 0039), the IAM rule's two permission sets in one project; the container's image "docker.io/library/caddy:<tag>@sha256:...", max_scale 1, cpu_limit 140, memory_limit_bytes 268435456, min_scale 0, its UPSTREAM the DNS stage's default_fqdn
 dev/tofu.sh -chdir=infra/site apply site.tfplan            # PASS: "Apply complete"
+# FAIL "Resource postcondition failed" on scaleway_container.site: the platform kept a redirect or a warm instance the provider did not send; set plain HTTP "enabled" and min scale 0 in the console (Serverless Containers, the namespace shift2eu-site, front, Settings), then plan again: PASS "No changes."
 # FAIL "Error acquiring the state lock": another tofu holds it; wait, or after a crash dev/tofu.sh -chdir=infra/site force-unlock <lock ID>
 # Scaleway assigns the DNS stage's default_fqdn after creating it: edge_endpoint is empty right after apply, so refresh the state (no resource change) until it is set, 20 tries 30 s apart
 n=0; until [ -n "$(dev/tofu.sh -chdir=infra/site output -raw edge_endpoint 2>/dev/null)" ] || [ "$n" -ge 20 ]; do sleep 30; dev/tofu.sh -chdir=infra/site apply -refresh-only -auto-approve || break; n=$((n + 1)); done
 [ -n "$(dev/tofu.sh -chdir=infra/site output -raw edge_endpoint 2>/dev/null)" ] && echo "PASS edge_endpoint is set" || echo "FAIL edge_endpoint still empty after 10 minutes"
 # FAIL: first an error printed above (a state lock: as the apply line's FAIL says; a key error: R0), else check the pipeline's DNS stage in the console (Edge Services) for its default FQDN; then run the wait loop and its check again
+# A first setup: the container was created while edge_endpoint was still empty, so its UPSTREAM is "": plan and apply that one in-place update first (PASS "Plan: 0 to add, 1 to change, 0 to destroy.", the container's UPSTREAM set to $E), then the plan below
 dev/tofu.sh -chdir=infra/site plan -detailed-exitcode      # PASS: exit 0, "No changes."
 # FAIL exit 2: read the diff; the provider or someone changed a resource; one "to add" after the refresh was dropped from the state by the refresh: check in the console whether it still exists; if it does, import it; if it is really gone, find out why before re-creating it
-dev/tofu.sh -chdir=infra/site output                       # PASS: project_id, deploy_application_id, bucket_name, bucket_website_endpoint, pipeline_id, edge_endpoint
+dev/tofu.sh -chdir=infra/site output                       # PASS: project_id, deploy_application_id, bucket_name, bucket_website_endpoint, pipeline_id, edge_endpoint, container_namespace_id, container_endpoint, front_domains ([] before R8's second apply)
 aws s3api list-objects-v2 --bucket <state-bucket> --query 'Contents[].Key'   # PASS: "site/terraform.tfstate" and no .tflock left over
 rm infra/site/site.tfplan
 # The outputs the later steps use, read now while your key's default project is the state's
 P="$(dev/tofu.sh -chdir=infra/site output -raw project_id)"; A="$(dev/tofu.sh -chdir=infra/site output -raw deploy_application_id)"
 B="$(dev/tofu.sh -chdir=infra/site output -raw bucket_name)"; E="$(dev/tofu.sh -chdir=infra/site output -raw edge_endpoint)"
 PL="$(dev/tofu.sh -chdir=infra/site output -raw pipeline_id)"; echo "$P $A $B $E $PL"   # PASS: five values, none empty
+NS="$(dev/tofu.sh -chdir=infra/site output -raw container_namespace_id)"; CE="$(dev/tofu.sh -chdir=infra/site output -raw container_endpoint)"; CE="${CE#https://}"; CE="${CE%/}"
+echo "$NS $CE"                                             # PASS: the namespace ID and "shift2eu-site-<...>-front.functions.fnc.$REGION.scw.cloud" (or the like), none empty
 [ -n "$P" ] && [ "$P" != "$ADMIN_PROJECT" ] && echo "PASS the site's project is not the admin project" || echo "FAIL the site's project is the admin project"
 # FAIL: R0's ADMIN_PROJECT line ran while your key's default project was the site's; fix it as R0 says, then R0 again
 # After a change to the IAM or the bucket policy: R7 again
+```
+
+The checks after every apply (the scratch directory first):
+
+```bash
+W="$(mktemp -d)"
+# 1. The pipeline's default endpoint over HTTPS with no TLS stage (unverified before the first apply after ADR 0045)
+curl -sS -o /dev/null -w '%{http_code} verify=%{ssl_verify_result}\n' "https://$E/"   # PASS: "verify=0" and a status (200, 403 or 404 from the bucket); record it in ADR 0045's amendment
+# FAIL a TLS or connection error: the pipeline serves no HTTPS without a TLS stage; the container cannot fetch the site: R8's rollback, then record it in ADR 0045
+# 2. The container: ready, and running the image by its digest
+scw container container list namespace-id="$NS" region="$REGION" -o json | jq -r '.[] | "\(.name) \(.status) \(.registry_image)"'   # PASS: exactly "front ready docker.io/library/caddy:<tag>@sha256:<the digest in infra/site/container.tf>"
+# FAIL "error" with an error_message, or a reference without @sha256: record it; ADR 0045's registry mirror is then the way, recorded there before it is taken
+# 3. Warm it (min_scale 0): one request, its answer discarded, its time recorded against the live check's 30 s
+curl -s -o /dev/null -w '%{http_code} %{time_total}s\n' --max-time 60 "http://$CE/"   # PASS: "308" and a time; record the time in ADR 0045's amendment
+# FAIL over 30 s: the cold start would fail the live check's first request; record it, and R8 warms the container right before every live check
+curl -s -o /dev/null -w '%{http_code} %{redirect_url}\n' "http://$CE/a?b=1"      # PASS: "308 https://www.shift2eu.com/a?b=1"
+curl -s -o /dev/null -w '%{http_code} %{redirect_url}\n' "https://$CE/a?b=1"     # PASS: "308 https://www.shift2eu.com/a?b=1" (HTTPS, but the endpoint is not www)
+rm -r "$W"
+```
+
+**The digest pull go/no-go**, once, after the first apply that creates the container (ADR 0045): a throwaway
+container in the same namespace, given the pinned tag with a wrong digest, must fail to start. Check the
+flags against `scw container container create --help` first (ADR 0039, open point 7).
+
+```bash
+BAD="docker.io/library/caddy:2.11.9-alpine@sha256:$(printf '0%.0s' $(seq 1 64))"; echo "$BAD"   # PASS: the tag, then 64 zeros
+PR="$(scw container container create namespace-id="$NS" region="$REGION" name=digest-probe registry-image="$BAD" min-scale=0 max-scale=1 cpu-limit=140 memory-limit-bytes=268435456 -o json | jq -r '.id')"; echo "$PR"   # PASS: an ID
+scw container container deploy "$PR" region="$REGION" >/dev/null   # PASS: no error (a create that deploys by itself may answer that it is already deploying: fine)
+n=0; until scw container container list namespace-id="$NS" region="$REGION" name=digest-probe -o json | jq -e '.[0].status | IN("error","ready")' >/dev/null || [ "$n" -ge 30 ]; do sleep 20; n=$((n + 1)); done
+scw container container list namespace-id="$NS" region="$REGION" name=digest-probe -o json | jq -r '.[0] | "\(.status) \(.error_message)"'   # PASS: "error" with a pull or manifest error: the platform pulls by digest; record it in ADR 0045
+# FAIL "ready": the platform ignored the digest; record it, and take ADR 0045's registry mirror (recorded there first) before R8
+scw container container delete "$PR" region="$REGION"   # PASS: no error
+scw container container list namespace-id="$NS" region="$REGION" -o json | jq -r '.[].name'   # PASS: "front" alone
 ```
 
 ## R5. The read rule and the origins
@@ -167,6 +214,9 @@ for u in "https://$E" "http://$E" "https://$B.s3-website.$REGION.scw.cloud" "htt
 done   # PASS: every line recorded in the hosting ADR, with public_read's value
 # public_read false: the four bucket lines answer 403; public_read true: all serve it; per http:// line: 200, a redirect, or refused
 # FAIL public_read false and a bucket line answers 200: the bucket is public some other way; stop, and check the bucket policy and ACL
+# The container's own endpoint is an origin too (ADR 0045): it never serves the site, only Caddy's 308 to www
+for u in "https://$CE" "http://$CE"; do printf '%s ' "$u"; curl -s -o /dev/null -w '%{http_code} %{redirect_url}\n' "$u/$K"; done   # PASS: both "308 https://www.shift2eu.com/$K"
+# FAIL a 200: the container proxies a name other than www; stop, and check infra/site/Caddyfile's @www against main
 aws s3api delete-object --bucket "$B" --key "$K" && rm -r "$W"
 ```
 
@@ -268,20 +318,107 @@ dev/tofu.sh -chdir=infra/site plan -detailed-exitcode   # PASS: exit 0 (website,
 
 ## R8. Namecheap
 
-Domain List, `shift2eu.com`, Advanced DNS; the apex redirect is milestone 4's.
+Domain List, `shift2eu.com`, Advanced DNS. Both names point at the container ([ADR 0045](adr/0045-front-the-site-with-a-serverless-container-running-a-pinned-caddy.md));
+the pipeline keeps no name of its own. Five blocks, in order; each needs R4's output lines in the shell
+(`$CE`, `$E`, `$NS`, `$PL`).
+
+**1. The records**, before any custom domain exists (Scaleway checks them when the domain is created).
 
 ```bash
-# CNAME www -> the edge_endpoint output; CAA @ 0 issue "letsencrypt.org"; CAA @ 0 issuewild ";"; DNSSEC on
-dig +short CNAME www.shift2eu.com     # PASS: "$E." (the edge_endpoint output)
+# CNAME www -> $CE (the container_endpoint output, replacing a www CNAME to the pipeline); ALIAS @ -> $CE; CAA @ 0 issue "letsencrypt.org"; CAA @ 0 issuewild ";"; DNSSEC on; no URL redirect record for @
+dig +short CNAME www.shift2eu.com     # PASS: "$CE." (the container_endpoint output)
+diff <(dig +short A shift2eu.com | sort) <(dig +short A "$CE" | sort) && echo "PASS the apex resolves to the container"   # PASS: that line
+# FAIL a difference: the ALIAS is not saved yet, or a lookup made before it is cached (the zone's negative TTL is 3601 s): wait, then again
 dig +short CAA shift2eu.com           # PASS: exactly 0 issue "letsencrypt.org" and 0 issuewild ";"
 dig +short DS shift2eu.com            # PASS: a DS record (DNSSEC on)
-# The certificate, once the CNAME resolves: wait up to 15 minutes, 30 tries 30 s apart
+dig +dnssec A shift2eu.com @1.1.1.1 | grep -E 'flags:.* ad|RRSIG'   # PASS: a flags line with "ad" and an RRSIG line: the apex stays signed and validated behind the ALIAS
+```
+
+**2. The second apply: the custom domains.** Set `front_domains = true` in `infra/site/terraform.tfvars`,
+then:
+
+```bash
+grep -c '^front_domains *= *true' infra/site/terraform.tfvars   # PASS: 1
+dev/tofu.sh -chdir=infra/site plan -out=domains.tfplan      # PASS: "Plan: 2 to add, 0 to change, 0 to destroy." (www.shift2eu.com and shift2eu.com on the container)
+# FAIL any change or destroy: stop, apply nothing, rm infra/site/domains.tfplan, and find out why (R4's no-changes check)
+dev/tofu.sh -chdir=infra/site apply domains.tfplan          # PASS: "Apply complete! Resources: 2 added, 0 changed, 0 destroyed."
+# FAIL an error after about 3 minutes naming the DNS record: block 1's checks again, wait out a cached lookup (up to an hour), rm infra/site/domains.tfplan and plan and apply again (only what is left is added)
+rm infra/site/domains.tfplan
+dev/tofu.sh -chdir=infra/site output -json front_domains    # PASS: ["shift2eu.com","www.shift2eu.com"]
+# Both domains ready, with their certificates: wait up to 30 minutes, 60 tries 30 s apart
+n=0; until [ "$(scw container domain list region="$REGION" -o json | jq '[.[] | select(.hostname == "www.shift2eu.com" or .hostname == "shift2eu.com") | select(.status == "ready")] | length')" = 2 ] || [ "$n" -ge 60 ]; do sleep 30; n=$((n + 1)); done
+scw container domain list region="$REGION" -o json | jq -r '.[] | "\(.hostname) \(.status) \(.error_message // "")"'   # PASS: "www.shift2eu.com ready" and "shift2eu.com ready"
+# FAIL "error": its error_message names the record or the CAA; fix it at Namecheap, then delete that domain in the console and run block 2 again from the plan
+for h in www.shift2eu.com shift2eu.com; do echo | openssl s_client -connect "$h:443" -servername "$h" 2>/dev/null | openssl x509 -noout -subject -issuer -enddate; done   # PASS: each name's own subject, a Let's Encrypt issuer
+# FAIL "unable to load certificate": the domain is not ready yet, or the CAA record refuses the issuer
+```
+
+**3. The front's answers** (ADR 0045's table), after warming the container: the first request after an
+idle period starts it (`min_scale` 0).
+
+```bash
+curl -s -o /dev/null -w 'warm %{http_code} %{time_total}s\n' --max-time 60 "https://www.shift2eu.com/"   # PASS: a status and a time; record the time (the live check allows 30 s)
+for u in http://www.shift2eu.com/ http://shift2eu.com/ https://shift2eu.com/ "http://$CE/" "https://$CE/" "https://shift2eu.com/a?b=1"; do printf '%s ' "$u"; curl -s -o /dev/null -w '%{http_code} %{redirect_url}\n' "$u"; done
+# PASS: every line "308 https://www.shift2eu.com/" (the last "308 https://www.shift2eu.com/a?b=1"); never a 200, never a 301 or 302
+curl -sS -D - -o /dev/null https://www.shift2eu.com/ | grep -i -E '^(HTTP|strict-transport-security|content-security-policy|x-content-type-options|referrer-policy|permissions-policy|server|x-envoy)'
+# PASS: "HTTP/2 200" (or 1.1), exactly one of each of the five headers with infra/site/Caddyfile's values, "server: envoy" and x-envoy-upstream-service-time from the platform, nothing else of theirs
+curl -sS -D - -o /dev/null https://shift2eu.com/ | grep -ic '^strict-transport-security'   # PASS: 0 (the apex's 308 carries no HSTS while preload is not pursued)
+```
+
+**4. The live probes ADR 0045 requires before the site goes live.** Record every answer in ADR 0045's
+amendment, *Still to be settled live*.
+
+```bash
+# The spoofed and repeated X-Forwarded-Proto over plain HTTP: each must get the 308, never the site
+curl -s -o /dev/null -w 'one https: %{http_code}\n' -H 'X-Forwarded-Proto: https' http://www.shift2eu.com/
+curl -s -o /dev/null -w 'https+http: %{http_code}\n' -H 'X-Forwarded-Proto: https' -H 'X-Forwarded-Proto: http' http://www.shift2eu.com/
+curl -s -o /dev/null -w 'http+https: %{http_code}\n' -H 'X-Forwarded-Proto: http' -H 'X-Forwarded-Proto: https' http://www.shift2eu.com/
+curl -s -o /dev/null -w 'https+https: %{http_code}\n' -H 'X-Forwarded-Proto: https' -H 'X-Forwarded-Proto: https' http://www.shift2eu.com/
+curl -s -o /dev/null -w 'https, https: %{http_code}\n' -H 'X-Forwarded-Proto: https, https' http://www.shift2eu.com/
+# PASS: every line 308. "one https" 200: the platform passes a client's own header through; record it, the maintainer's to accept or not (ADR 0045)
+# FAIL any other line 200: the rule does not fail closed; stop, roll back (block 5) and record it
+# OPTIONS * through the platform
+printf 'OPTIONS * HTTP/1.1\r\nHost: www.shift2eu.com\r\nConnection: close\r\n\r\n' | openssl s_client -quiet -connect www.shift2eu.com:443 -servername www.shift2eu.com 2>/dev/null | head -5
+# PASS, record which: Go's empty 200 (Content-Length: 0, no header of the site's), or the platform's own answer (it does not forward OPTIONS *)
+# FAIL a body or a header of the site's: stop and record it
+```
+
+The headers and the host as the container receives them, from a throwaway probe container in the same
+namespace that echoes them (its own endpoint; the custom domains stay on `front`). `www`'s and the apex's
+values follow from block 3: `www` over HTTPS is served only when the joined `X-Forwarded-Proto` is
+exactly `https` and the host exactly `www.shift2eu.com`, and plain HTTP gets the 308 only when it is not.
+Check the flags against `scw container container create --help` first.
+
+```bash
+IMG="$(sed -n 's/^ *caddy_image *= *"\(.*\)"$/\1/p' infra/site/container.tf)"; echo "$IMG"   # PASS: the pinned image, by digest
+ECHO=':8080 {
+	respond "xfp=[{http.request.header.X-Forwarded-Proto}] host=[{http.request.hostport}] xfh=[{http.request.header.X-Forwarded-Host}] fwd=[{http.request.header.Forwarded}]" 200
+}'
+PR="$(scw container container create namespace-id="$NS" region="$REGION" name=header-probe registry-image="$IMG" port=8080 privacy=public min-scale=0 max-scale=1 cpu-limit=140 memory-limit-bytes=268435456 https-connections-only=false command.0=/bin/sh command.1=-c args.0='printf "%s" "$1" > /tmp/Caddyfile && exec caddy run --adapter caddyfile --config /tmp/Caddyfile' args.1=caddy args.2="$ECHO" -o json | jq -r '.id')"; echo "$PR"   # PASS: an ID
+scw container container deploy "$PR" region="$REGION" >/dev/null; n=0; until scw container container get "$PR" region="$REGION" -o json | jq -e '.status == "ready"' >/dev/null || [ "$n" -ge 30 ]; do sleep 20; n=$((n + 1)); done
+PE="$(scw container container get "$PR" region="$REGION" -o json | jq -r '.domain_name // .public_endpoint' | sed 's,^https://,,')"; echo "$PE"   # PASS: the probe's endpoint
+for u in "http://$PE/" "https://$PE/"; do printf '%s ' "$u"; curl -s "$u"; echo; done
+curl -s -H 'X-Forwarded-Proto: https' -H 'X-Forwarded-Host: evil.example' "http://$PE/"; echo
+curl -s -H 'X-Forwarded-Proto: https' -H 'X-Forwarded-Proto: http' "http://$PE/"; echo
+# PASS, record each: xfp=[http] over plain HTTP and xfp=[https] over HTTPS (or what the platform sends, and whether a client's value survives); host=[<the endpoint>] with no port and in lower case; xfh and fwd
+# FAIL host with a port, another case or empty, or the original host only in xfh: www's exact comparison would never match (a loop); stop before R10 and record it, the Caddyfile follows the probe
+scw container container delete "$PR" region="$REGION"; scw container container list namespace-id="$NS" region="$REGION" -o json | jq -r '.[].name'   # PASS: "front" alone
+```
+
+**5. Rollback**, if block 2, 3 or 4 fails and the cause cannot be fixed before R10: the site goes back to
+the pipeline's own `www` as milestone 3 had it.
+
+```bash
+# Namecheap: the www CNAME back to $E (the edge_endpoint output); delete the ALIAS at @
+# A pull request that reverts container.tf's custom domains (front_domains = false in terraform.tfvars) and restores main.tf's TLS stage and fqdns = ["www.shift2eu.com"] (tls_stage_id, the stage's lifecycle block) from before ADR 0045; merged, then R4
+dig +short CNAME www.shift2eu.com     # PASS: "$E."
+# The re-added TLS stage asks for its certificate once, at its creation; if that came before the CNAME resolved, recreate it as below
 n=0; until echo | openssl s_client -connect www.shift2eu.com:443 -servername www.shift2eu.com 2>/dev/null | openssl x509 -noout -issuer 2>/dev/null | grep -q Encrypt || [ "$n" -ge 30 ]; do sleep 30; n=$((n + 1)); done
 echo | openssl s_client -connect www.shift2eu.com:443 -servername www.shift2eu.com 2>/dev/null | openssl x509 -noout -issuer -enddate   # PASS: a Let's Encrypt issuer
 # FAIL "unable to load certificate": check the CAA record, then the TLS stage
 PL="$(dev/tofu.sh -chdir=infra/site output -raw pipeline_id)"; echo "$PL"   # PASS: the pipeline ID, not empty
 scw edge-services tls-stage list pipeline-id="$PL" -o json | jq '.[] | {status, certificate_expires_at}'   # PASS: a date in certificate_expires_at
-# FAIL certificate_expires_at: null after the wait: no certificate was issued (R4 created the stage before the CNAME existed, and Scaleway asks only once); recreate the TLS stage below and re-run the checks
+# FAIL certificate_expires_at: null after the wait: no certificate was issued (R4 re-created the stage before the CNAME pointed back, and Scaleway asks only once); recreate the TLS stage below and re-run the checks
 dev/tofu.sh -chdir=infra/site plan -replace=scaleway_edge_services_tls_stage.site -out=tls.tfplan   # PASS: "Plan: 1 to add, 1 to change, 1 to destroy."
 dev/tofu.sh -chdir=infra/site show tls.tfplan | less      # PASS: the TLS stage "must be replaced" ("create replacement and then destroy") and the DNS stage's tls_stage_id changes in place, nothing else
 # FAIL the plan replaces, destroys or changes any other resource: stop, apply nothing, rm infra/site/tls.tfplan, and find out why (R4's no-changes check) before the recreate
@@ -290,9 +427,12 @@ dev/tofu.sh -chdir=infra/site apply tls.tfplan            # PASS: "Apply complet
 # FAIL the apply failed before the new stage was created (it reports 0 added, and scw edge-services tls-stage list still shows one stage): nothing changed, and a plain plan shows no changes, so the stage would never be recreated: fix the error it printed, rm infra/site/tls.tfplan, run the replace plan line above again, review it with the show line (same PASS as above), then apply it
 rm infra/site/tls.tfplan
 # Then the wait loop, the certificate check and the TLS stage check again
-curl -s -o /dev/null -w '%{http_code} %{redirect_url}\n' http://www.shift2eu.com/   # record it: 301/308 to https://www.shift2eu.com/, refused, or 200 (a no-go, Hosting decision 3)
-# The release-tag skill's and the live check's DNS, certificate and redirect checks verify this afterwards
+curl -s -o /dev/null -w '%{http_code} %{redirect_url}\n' http://www.shift2eu.com/   # record it: the pipeline's 302 (ADR 0045's Context): a no-go for R10 until the front is back
+# After a rollback, R10 waits: the pipeline alone meets neither the redirect nor the HSTS go/no-go (ADR 0045)
 ```
+
+The release-tag skill's and the live check's DNS, certificate, redirect and header checks verify blocks
+1 to 3 afterwards.
 
 ## R9. The GitHub site environment
 
@@ -560,11 +700,12 @@ gh workflow enable <the scheduled live check's workflow> -R <owner>/shift2eu && 
 
 ## R13. Remove the site
 
-The DNS record first, so no dangling CNAME can be taken over.
+The DNS records first, so no dangling CNAME or ALIAS can be taken over.
 
 ```bash
-# Namecheap: delete the www CNAME
+# Namecheap: delete the www CNAME and the ALIAS at @
 dig +short CNAME www.shift2eu.com            # PASS: no output
+dig +short A shift2eu.com                    # PASS: no output (a cached answer can last up to the record's TTL)
 gh variable set SITE_DEPLOY_ENABLED --body false -R <owner>/shift2eu
 scw iam api-key delete <deploy access key>
 # Own key, default project the site's (R5): delete every object version and delete marker in "$B" (R7, step 8), then back to the admin project

@@ -359,3 +359,80 @@ found.
 - Recovery gains a step: if the container or its configuration is broken or changed, the maintainer
   re-applies `infra/site` at `main` (the pinned digest and the committed configuration), then runs the
   redirect and header checks (ADR 0042, *Recovery*, as amended).
+
+## Amendment: what the infra unit chose (PRD #297 milestone 4)
+
+2026-11-24. The passages *for the infra unit* above, settled from Caddy v2.11.9's source,
+terraform-provider-scaleway v2.93.0 (the lock file's version) and a local run of the pinned image on
+`infra/site/Caddyfile`. How the resources are created is ADR 0039's amendment *The container front, and no
+TLS stage*.
+
+- **The image** is `docker.io/library/caddy:2.11.9-alpine@sha256:003a97808e781aa9f7e75cc2f43d34d461099031faf5e20faefb9f61126836f0`,
+  the digest of the `-alpine` tag's multi-arch index: `caddy:2.11.9` holds the same linux/amd64 image,
+  but its index also lists Windows images, which this Linux platform never runs. The image has busybox's
+  `/bin/sh`. The pin is one `locals` value in `infra/site/container.tf`, under
+  `# renovate: datasource=docker depName=caddy`; a custom manager of `.github/renovate.json5` reads that
+  HCL line (Docker versioning, so `2.11.9-alpine` moves to the next `-alpine` tag, its digest with it),
+  pinned by `test/lint`'s `TestCaddyImagePinIsFoundOnce`.
+- **The configuration** reaches the upstream image at start, with no image build and no registry key:
+  `command = ["/bin/sh", "-c"]`, and `args` whose first writes its `$1`, the Caddyfile's bytes
+  (`file("${path.module}/Caddyfile")`), to `/tmp/Caddyfile` with `printf '%s'` and execs
+  `caddy run --adapter caddyfile --config /tmp/Caddyfile` (the provider caps an environment variable at
+  1000 characters, too few for the file). The upstream's name is the environment variable `UPSTREAM`,
+  the DNS stage's `default_fqdn`, read as `{$UPSTREAM}` when Caddy parses the file, so the file names no
+  ID. The registry mirror is not taken unless the digest pull fails (below).
+- **`min_scale = 0`**: the site stays in the free tier. The first request after an idle period starts an
+  instance; R8 warms the container (one request, its answer discarded) before the live checks, and
+  records how long that first request took against the live check's 30 s.
+- **Postconditions.** The provider does not send `false` or `0` on create (`GetOk`), so the container's
+  `lifecycle` asserts `self.https_connections_only == false` and `self.min_scale == 0` after the apply.
+- **The escaped path.** Caddy v2.11.9 has no placeholder for Go's `URL.EscapedPath()` alone:
+  `{http.request.uri.path_escaped}` is `url.QueryEscape` of the path, which escapes every `/`.
+  `{http.request.uri}` is Go's `URL.RequestURI()`, the escaped path plus `?` and the raw query when there
+  is one, and for an absolute-form target it drops the scheme and the host (`GET http://evil.example/x?q=1`
+  gives `/x?q=1`). This amends the ban on `{uri}` above: the `Location` is
+  `https://www.shift2eu.com{http.request.uri}` **only behind the guard**
+  `@rooted expression {http.request.uri.path}.startsWith("/")`; a target whose path is empty or does not
+  start with `/` (an opaque `GET http:foo`, `*`) is redirected to `https://www.shift2eu.com/`. Caddy's
+  own `{uri}` stays unused. The local run gave `/a%3Fb?x=1`, `/a%0Ab` and `//evil.example/x` kept
+  escaped behind `https://www.shift2eu.com`, and `/` for `GET http:foo`.
+- **Repeated `X-Forwarded-Proto`.** Caddy's `{http.request.header.*}` placeholder joins a field's values
+  with `,` (its replacer), so `https` + `http` is `https,http`, which the expression misses: the local run
+  answered that request with the 308. `{http.request.hostport}` is the request's raw `Host`, port and
+  case as received.
+- **`OPTIONS *`: Go's empty 200.** Caddy v2.11.9 never sets `DisableGeneralOptionsHandler`, so Go's server
+  answers `OPTIONS *` itself (200, `Content-Length: 0`, no body, no header of the site's) before any
+  route; the local run confirmed it. It is the accepted exception above. The behaviour test pins that
+  answer, and R4's live probe records whether the platform's Envoy forwards it at all.
+- **Routes.** Matchers in their block form, so each expression is a line of its own: `@https` (the scheme
+  expression), `@www` (the hostport expression) and `@rooted` (the guard). `handle @https { handle @www
+  { headers; reverse_proxy } handle @rooted { 308 with the URI } handle { 308 to / } }`, then the same two
+  redirects for every other request. Nested `handle` blocks are mutually exclusive, so a request matches
+  exactly one row of the table.
+- **Headers.** The immediate `header` directive (one line per header), and `header_down` deleting the
+  upstream's `Strict-Transport-Security`, `Content-Security-Policy`, `Permissions-Policy`,
+  `X-Content-Type-Options` and `Referrer-Policy`. The local run with no upstream answered Caddy's 502
+  with every header. `Permissions-Policy` turns off by name `accelerometer`, `ambient-light-sensor`,
+  `autoplay`, `bluetooth`, `browsing-topics`, `camera`, `compute-pressure`, `display-capture`,
+  `encrypted-media`, `fullscreen`, `gamepad`, `geolocation`, `gyroscope`, `hid`,
+  `identity-credentials-get`, `idle-detection`, `local-fonts`, `magnetometer`, `microphone`, `midi`,
+  `otp-credentials`, `payment`, `picture-in-picture`, `publickey-credentials-create`,
+  `publickey-credentials-get`, `screen-wake-lock`, `serial`, `storage-access`, `usb`, `web-share`,
+  `window-management` and `xr-spatial-tracking`. **`clipboard-write` is left out**, at the browser's
+  default (`self`): the pages' copy buttons write a command to the clipboard on a click
+  (`site/page.js`, `copyCommand`), so turning it off would break them.
+- **Request headers removed upstream:** `X-Forwarded-For`, `X-Forwarded-Proto`, `X-Forwarded-Host`,
+  `X-Forwarded-Port`, `Forwarded`, `X-Real-IP`, `X-Envoy-*` (Caddy's header deletion takes a trailing
+  `*` as a prefix), `X-Request-Id`, `Via`, `Cookie` and `Authorization`; `Host` is set to
+  `{upstream_hostport}` (Caddy's default for an `https://` upstream, written out so the file says it).
+- **The staged apply.** A custom domain needs its record first, so `var.front_domains` (default
+  `false`) gates both: R4's apply creates the namespace and the container (and removes the pipeline's
+  `www` and TLS stage on a pipeline created before this change), R8 points `www` (CNAME) and the apex
+  (ALIAS) at the container's endpoint, then an apply with `front_domains = true` creates the domains, and
+  R8 waits until both are *ready* before its live checks.
+- **Still to be settled live, before the deploy is turned on (R8):** the headers as the container
+  receives them (`X-Forwarded-Proto` and `Host` on `www`, the apex and the endpoint, over plain HTTP and
+  HTTPS), the spoofed and repeated `X-Forwarded-Proto` requests, `OPTIONS *`, the digest pull (a
+  container given a wrong digest must fail to start; if it starts, the registry mirror above is
+  recorded here before it is taken), and HTTPS on the pipeline's default endpoint with no TLS stage. R8
+  records each answer here.

@@ -391,3 +391,56 @@ of it keeps every plan from writing to Scaleway's source in a way the maintainer
 A hand step changes nothing on its own and is checked by a read-only line. It is redone after a change
 that puts a product of the site in a new region (R14 says so). If a later provider version can set a
 managed source's retention without adopting it, this is revisited.
+
+## Amendment: the container front, and no TLS stage (PRD #297 milestone 4)
+
+2026-11-24. [ADR 0045](0045-front-the-site-with-a-serverless-container-running-a-pinned-caddy.md) puts a
+Serverless Container running a pinned Caddy in front of the pipeline; this amendment records how
+`infra/site` creates it. It changes the table of *What OpenTofu creates* above as follows; the rest of the
+decision stands.
+
+| Resource | Key arguments |
+|---|---|
+| `scaleway_container_namespace.site` (new, `container.tf`) | `shift2eu-site`, `project_id` the site's project, `region` `var.region` |
+| `scaleway_container.site` (new) | `front` in that namespace, `region` `var.region`; the image `docker.io/library/caddy:<tag>-alpine@sha256:<index digest>` from a `locals` value under a `# renovate:` comment; `command = ["/bin/sh", "-c"]` and `args` that write the Caddyfile (`file("${path.module}/Caddyfile")`, the shell's `$1`) to `/tmp/Caddyfile` and exec Caddy on it; `environment_variables = { UPSTREAM = <the DNS stage's default_fqdn> }`; `port = 8080`, `privacy = "public"`, `https_connections_only = false`, `enable_default_public_endpoint = true`; the cost pins `min_scale = 0`, `max_scale = 1`, `cpu_limit = 140`, `memory_limit_bytes = 268435456`; two `postcondition`s (below) |
+| `scaleway_container_domain.front` (new) | `www.shift2eu.com` and `shift2eu.com` on that container, only with `var.front_domains` (default `false`, below) |
+| `scaleway_edge_services_tls_stage.site` | **removed**, with the pipeline's `www.shift2eu.com` domain |
+| `scaleway_edge_services_dns_stage.site` | `cache_stage_id` the cache stage, `fqdns = []`: the pipeline answers only its default endpoint, which the container proxies |
+
+Outputs gain `container_endpoint` (the container's `public_endpoint`, the target of R8's records) and
+`front_domains` (the custom domains created); `edge_endpoint` is now the container's upstream, no
+CNAME's target.
+
+- **The configuration reaches the image at start**, so no image is built and no registry key exists. The
+  provider caps an environment variable at 1000 characters, too small for the Caddyfile, so it is an
+  argument. `dev/infra-rules.sh`'s `[file-function]` allows exactly one call for it, written
+  `file("${path.module}/Caddyfile")` in a configuration file: a committed, reviewed file beside the
+  configuration, never a test file, another path or another function.
+- **The cost pins are rules, not only values.** `[container-max-scale]`, `[container-cpu]` and
+  `[container-memory]` refuse a `scaleway_container` that does not set `max_scale = 1`, `cpu_limit = 140`
+  and `memory_limit_bytes = 268435456` as literals (a missing pin leaves the provider's default; an
+  expression is a value a tfvars file could raise); `[container-deprecated-attribute]` refuses
+  `memory_limit` and `http_option`, the deprecated spellings beside them; `[container-min-scale]` wants
+  `min_scale` 0 or 1. The rules' tokenizer now keeps a lone whole number as a literal of its own, which
+  these rules compare.
+- **Postconditions for what the provider leaves out.** The provider reads `https_connections_only` and
+  `min_scale` with `GetOk`, so `false` and `0` are not sent on create and the platform's default would
+  decide them. A `lifecycle { postcondition }` checks `self.https_connections_only == false` and
+  `self.min_scale == 0` after the apply, so a platform default of a redirect or a warm instance fails the
+  apply instead of passing silently.
+- **The custom domains come in an apply of their own.** Scaleway checks a custom domain's CNAME or ALIAS,
+  then issues its certificate, and fails the apply after three minutes when the record is missing. So
+  `front_domains` (default `false`) gates both: the first apply creates the namespace and the container,
+  R8 points the records at `container_endpoint`, and a second apply with `front_domains = true` creates
+  the domains (the Runbook's R4 and R8).
+- **The TLS stage goes, ungated.** A pipeline created before this change loses its `www` domain and its
+  TLS stage in the first apply after it. Nothing serves visitors before R10 turns the deploy on, so the
+  gap between that apply and R8's records is accepted rather than gated by another variable; the
+  removal's ordering is the one `create_before_destroy` recorded in the state gives (the DNS stage is
+  updated before the stage it referenced is destroyed). `[tls-stage-lifecycle]` stays for R8's rollback,
+  which re-adds the stage, and the TLS stage leaves `[resource-type]`'s allow list: only
+  `scaleway_edge_services_tls_stage "site"`, which that rule judges, may come back. The three container
+  types join the allow list.
+- **Unverified until R4:** whether the pipeline's default endpoint serves HTTPS with no TLS stage. R4
+  checks it right after the apply that removes the stage, and says how to roll back (re-add the stage
+  and the `www` name).
