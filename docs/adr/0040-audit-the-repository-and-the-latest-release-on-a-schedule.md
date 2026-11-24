@@ -2275,7 +2275,7 @@ result it refuses has no write token minted for it; the App token step has exact
 `permission-*` inputs of Decision 1 (`contents`, `pull-requests`, `issues`, `security-events`, each
 `write`); the publish step alone holds the App's token and `AUDIT_FINGERPRINT_KEY`.
 
-**Time budget:** checks 180 minutes (340 since review round D of PR 5c, below), model 120 (its model step 90, around the preflight's 10-minute and
+**Time budget:** checks 180 minutes (340 since review round D of PR 5c, 355 since round E, below), model 120 (its model step 90, around the preflight's 10-minute and
 the audit's 40-minute deadlines), publish 30; every step has its own `timeout-minutes`.
 
 **The Actions cache (residual risk).** Anything in the checks job runs as the runner's user and could read
@@ -2290,13 +2290,12 @@ restore a cache could read a poisoned entry; their results are checks, not relea
 their containers and flags; the trivy, cosign and scorecard pins; the checks job's read scopes (to be
 confirmed on the first run); and a check that times out recorded in the report's limits while the run
 still publishes. **Still open after PR 5c:** failure
-summaries that name the runbook step for every cause (today the programs' one lines, the workflow's
-own errors and, since review round D of PR 5c, every tool download whose checksum differs do; the hardening
-step's commands that fail under `set -e` before its own checks, such as `systemctl stop`, fail with their
-own lines, the errors that point at runbook step 11 name none of their causes there yet, and the hardening
-step's three own errors, wrong owners or modes of the audit directory, `sudo -n true` still succeeding
-and the Docker socket still there, point at runbook step 10, which names only preflight and bubblewrap
-failures). **To be checked
+summaries that name the runbook step for every cause. Since review round E of PR 5c (below) the
+hardening step, the model step, both artifact steps and the publish step end their failure with an
+`::error` that names the kind and runbook step 10 or 11, and the runbook names each of them; what is
+left is `.github/scripts/install-claude-code.sh`'s own `::error title=Claude Code CLI::...` lines (a
+tarball that does not match its pin, a managed policy on the runner), which name no runbook step: the
+runbook's step 11 names them, but the summary does not point there. **To be checked
 on the first run** (runbook step 8): that `socat`'s and `bubblewrap`'s `.deb`s install with the image's
 libraries (`dpkg -i` does not fetch a missing dependency) and that the pinned versions are still in the
 archive's pool; that the runner's sudo rule is `/etc/sudoers.d/runner`; that the runner's preinstalled
@@ -2322,19 +2321,29 @@ one whose command failed (review round D, below). **A check that times out is re
 still publishes**: each tool runs under its own `timeout` (coreutils), shorter than its step's
 `timeout-minutes`, so the step records the timeout and goes on; the step's time-out is the backstop, and
 a step it stops fails the job, which then skips the encryption and publishes nothing. Review round D
-keeps the release's content from reaching that backstop (below); the inner timeouts of row 7 can still
-add up past its step's 30 minutes when every one of its registry and Sigstore reads hangs to its limit,
-which is accepted for now and listed under To be checked on the first run.
+keeps the release's content from reaching that backstop (below), and round E holds every checks step's
+own timeouts outside its loops, plus its loop budget, below its `timeout-minutes`, so in rows 6 to 15 a
+read that hangs to its limit is recorded before the step's backstop fires. Rows 3 to 5 (govulncheck,
+osv-scanner, gitleaks, zizmor, actionlint) run with no inner timeout: a hang there still reaches the
+backstop, which is why PRD #175's time-out box stays open. **A verification that fails is a finding**
+(round E): row 7 writes a third file at the results' root, `results/verification-failed.txt`, one line
+`release-integrity verification-failed` per checksum mismatch, refused attestation or refused
+signature, which the model reads as a finding against the release (the run's skill, row 7), never as
+"not run".
 
-**Time budget** (within the checks job's 340 minutes, amended in review round D from 180): row 2's
-download 25 minutes (trivy's database
-included), scorecard 20 (its run 15), the release's verification 30, the pull 15, the binaries'
-govulncheck 20 (5 per binary), trivy 15, the runtime check 10, the hostile inventories 20 (60 seconds
-per run, 15 minutes of runs), fuzzing 50 (10 minutes of fuzzing and 12 in all per target, at most three
-targets, the others recorded in the limits), the supply-chain reads 15 (2 per read). The dynamic tests,
-rows 13 and 14, take at most 70 of their steps' minutes: the 60 of the budget, plus set-up. The job's
-steps add up to 330 minutes, which with 5 minutes for the job's set-up and post steps stays within its
-340 (`test/architecture` holds that sum), and GitHub's own limit is 360.
+**Time budget** (within the checks job's 355 minutes, amended in review round D from 180 to 340 and in
+round E to 355): row 2's download 25 minutes (trivy's database included), scorecard 20 (its run 15), the
+release's verification 50 (its loop's 20-minute budget and 29 minutes of timeouts outside it: the
+download 5, the filter 1, the checksum check 5, three registry and API reads of 2, `cosign verify` 3,
+the two `cosign verify-attestation` runs 3 each and the SBOM's attestation 3), the pull 15 (the pull 8,
+the inspect 2, the save 4), the binaries' govulncheck 20 (5 per binary), trivy 15 (the image 8, the SBOM
+4), the runtime check 10 (its timeouts 9: 1 + 1 + 2 + 4 minutes and the 60-second start), the hostile
+inventories 20 (1 + 1 + 1 + 1 minutes of staging and the 15 minutes of runs, 60 seconds per run),
+fuzzing 45 (10 minutes of fuzzing and 12 in all per target, at most three targets, the others recorded
+in the limits, and the 5-minute pull), the supply-chain reads 15 (2 per read). The dynamic tests, rows
+13 and 14, take at most 65 of their steps' minutes. The job's steps add up to 345 minutes, which with 5
+minutes for the job's set-up and post steps stays within its 355 (`test/architecture` holds that sum),
+and GitHub's own limit is 360.
 
 **Pins.** scorecard v5.6.0 (`scorecard_<version>_linux_amd64.tar.gz`), cosign v3.1.4
 (`cosign-linux-amd64`, the version and digest `release.yml` and `dev/lima.yaml` pin, so Renovate's
@@ -2439,8 +2448,9 @@ which the container is killed and removed.
 verify` reads them, as `release.yml`'s `verify` job shows); that scorecard reads with these scopes and
 which row 15 reads are refused; that trivy runs offline with these flags; that `docker commit` keeps the
 release image's user, working directory and entry point; that `go test -fuzz` builds offline from
-the copied module cache without writing to it; and that row 7's inner timeouts stay within its step's
-30 minutes on a slow Sigstore or registry (above), else its step's timeout is raised within the job's.
+the copied module cache without writing to it; and that `cosign` and `gh attestation verify` exit 1
+for a refused verification and another code for a network failure (round E, below), else the model
+tells them apart by the command's stderr alone.
 
 **Review round D of PR 5c (2026-11-24).** The review's and the audit's findings, each held by
 `check.AuditWorkflow` and a case of its test:
@@ -2496,6 +2506,52 @@ the copied module cache without writing to it; and that row 7's inner timeouts s
 - **The checksum guards** (round C). Every tool download's checksum check, in all three jobs, is `if !
   echo "${<TOOL>_SHA256}  <file>" | sha256sum --check --strict -; then`, an `::error` naming the tool,
   its job and runbook step 11, and `exit 1`: a failed run names its cause.
+
+**Review round E of PR 5c (2026-11-24).** The rest of PRD #175's "A failed run is visible" and the
+checks job's own time budget, each held by `check.AuditWorkflow` and a case of its test:
+
+- **A failed verification is a finding.** Row 7's five verifications, the checksum check, each release
+  file's `gh attestation verify`, `cosign verify`, the two `cosign verify-attestation` runs and the
+  SBOM's `gh attestation verify`, each end in one branch: rc 124 is `release-integrity timed-out` in
+  `not-run.txt` with its `limits.txt` line, rc 1 (a mismatch, a refused attestation, a refused signature)
+  is `release-integrity verification-failed` in `results/verification-failed.txt`, any other failure is
+  `release-integrity tool-failed`. Before, a mismatch was recorded as `tool-failed`, so a tampered
+  release read as a check that did not run. `results/` is what the encrypt step archives, so the file
+  reaches the model, whose skill (row 7) reads it as a finding. *Residual:* rc 1 is also the exit of a
+  `cosign` or `gh` that could not reach Sigstore or GitHub, and of a `sha256sum` that could not read a
+  listed file, so a `verification-failed` line can be a tool failure; the skill has the model confirm
+  each from the command's stderr in the check's folder and report a tool failure as a limit. A false
+  finding is the safe side of that ambiguity.
+- **The filtered checksum list is the results'.** `checksums.filtered` is written to
+  `results/release-integrity/`, not into the release's directory, and `sha256sum` reads it from there
+  while it resolves the listed names in the release's directory: the release's listing and the
+  attestation loop never see it, so they no longer leave a file of that name out (`! -name
+  checksums.filtered` is gone), and a release asset of that name is checked like any other.
+- **Each step's inner timeouts fit its own.** A step's timeout firing ends the job and skips every later
+  step, the encrypt step included, so the run publishes nothing. For every step of the checks job the
+  check adds the `timeout <N>m`, `<N>s` and bare `<N>` (seconds) values outside its `while`, `until` and
+  `for` loops, and its `${SECONDS}` loop budget, which bounds the loop's own timeouts; the sum must be
+  below the step's `timeout-minutes`. To fit, row 7 rises from 30 to 50 minutes and its inner timeouts
+  fall (the download and the checksum check 10 to 5, the three Sigstore reads 5 to 3), and rows 8, 10,
+  11 and 13 lower theirs (Time budget, above) instead of raising their step's.
+- **The job's time budget is 355.** The steps' sum rises by row 7's 20 and falls by fuzzing's 5 (50 to
+  45: three targets of 12 and the 5-minute pull fit), from 330 to 345, which with the 5 minutes of set-up
+  and post steps is past round D's 340: the job's timeout is now 355, the highest value that keeps 5
+  minutes below GitHub's 360.
+- **Which failures are named.** Each step that can fail with one of the box's causes ends its failure
+  branch with `::error title=Audit <job>::<kind>: see runbook step <N>`, no secret and no finding's detail:
+  the hardening step's three commands record their failure (`|| rc=$?`) and end in `the runner could not
+  be hardened: see runbook step 10`, and its three own errors are retitled from `Sandbox` to `Audit
+  model`; both artifact steps end in `the run's artifacts are unexpected: see runbook step 11`; the
+  publish step in `the publish was refused: see runbook step 11`. The model step's line is one generic
+  `the audit did not run: see runbook step 10`, because the launcher prints one constant class per run:
+  an expired or revoked token and the subscription's usage limit both read `the audit failed: the
+  model's run or its result file`, so the step cannot tell them, a failed preflight or a managed-settings
+  path apart; the launcher's own line above it in the summary names what it can, and runbook step 10
+  says what each means. *Residual:* `.github/scripts/install-claude-code.sh`'s own `::error title=Claude
+  Code CLI::...` lines (the tarball against its pin, a managed policy on the runner) name no runbook
+  step; the runbook's step 11 names them. The script is shared with the AI reviewer's workflow, so
+  naming the audit's runbook step there is a change of its own.
 
 ## Alternatives considered
 

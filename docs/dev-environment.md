@@ -2696,6 +2696,24 @@ preflight fails (`the preflight failed: see runbook step 10`, or `bubblewrap can
 step 10, the user-namespace note`), read ADR 0040's note on the runner's user-namespace restriction
 before changing anything.
 
+The model job's errors that point here are titled `Audit model`. What each means, before the new run
+(step 11):
+
+- `the audit did not run: see runbook step 10`: the launcher failed. Its one line, just above in the
+  step summary, names the class: `the audit failed: the model's run or its result file` is an expired
+  or revoked token (renew it, above) or the subscription's usage limit (wait until it resets; nothing
+  to rotate); `refused: a Claude Code managed-settings path exists` means the runner image holds an
+  admin policy, which the audit never runs under (read ADR 0040's managed-settings refusal, report it,
+  do not remove the file in the workflow); `the preflight failed` and `bubblewrap cannot start` are the
+  paragraph above; `refused: the Claude Code tarball does not match its pin` is step 11's checksum
+  paragraph, for the CLI's pin in `.github/claude-code.yaml`. The line cannot tell a token from the
+  usage limit: if the limit has not been reached, renew the token.
+- `the runner could not be hardened: see runbook step 10`: stopping or disabling Docker, or removing
+  `/etc/sudoers.d/runner`, failed; `sudo still works`, `the Docker socket is still there` and `the audit
+  directory's owners or modes are not as laid out` name what is still as it was. The runner image
+  changed under `ubuntu-24.04`: compare it with what ADR 0040 records for this step before changing
+  it, and start the new run only once the step matches the image.
+
 ```bash
 # Mac (admin), as yourself: the action, one line per rotated secret. A value is read from the hidden
 # prompt or from the file on stdin, never echoed and never on the command line
@@ -2809,7 +2827,17 @@ grep -n -A3 'GITLEAKS_VERSION:' .github/workflows/scheduled-security-audit.yml
 If the pin matches the release's checksum file, the release asset changed under the same version: a
 supply-chain finding, not a run to repeat; report it and do not raise the pin by hand. If the pin does not
 match, the pin is wrong: fix it through a pull request to `main` (Renovate moves a version and its digest
-in one PR, CLAUDE.md rule 7), then start the new run.
+in one PR, CLAUDE.md rule 7), then start the new run. The model job's install step checks the Claude
+Code CLI's tarball itself (`.github/scripts/install-claude-code.sh`): its error is titled `Claude Code
+CLI` and names no runbook step. `the downloaded tarball does not match the pinned sha512 integrity` is
+this paragraph, for the pin in `.github/claude-code.yaml` (`ci/claudecodepin` checks it against the
+registry); `... exists on this runner; its managed policy would apply ...` is a managed-settings file on
+the runner image, as step 10's `refused: a Claude Code managed-settings path exists`.
+
+Two more errors point here, each naming its job: `the run's artifacts are unexpected: see runbook step
+11` (`Audit model` or `Audit publish`) is the artifact check's refusal, the first item below; `the publish
+was refused: see runbook step 11` (`Audit publish`) means the publish program failed, and its own summary
+line, just above, is one of the items below.
 
 The publish job's summary line names the class of a failure, never its detail (ADR 0040, "Exit codes and
 the summary line"). What to do for each, before the new run:

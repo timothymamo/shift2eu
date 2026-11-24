@@ -458,17 +458,24 @@ Time and failures:
 - [ ] Each step has a `timeout-minutes`, and each of the three jobs one below GitHub's 6-hour job limit.
   The ADR gives the budget (for example checks 180 minutes, with 10 per fuzz target and 60 for dynamic
   testing; model 120; publish 30). A check that times out is recorded in the report's limits, and the run
-  still publishes what it has. *(Unticked in PR 5c's review round D: the timeouts and the checks job's
-  340-minute budget are in place, and no release content ends a step any more, but row 7's inner
-  timeouts can still add up past its step's 30 minutes, and a step's own timeout fails the job before
-  the encryption, so the run then publishes nothing; ADR 0040, The checks job's rows 6 to 15.)*
+  still publishes what it has. *(Unticked in PR 5c's review round D, and still open after round E: the
+  checks job's budget is now 355 minutes (its steps add up to 345, plus 5 of set-up), and in rows 6 to
+  15 every step's own timeouts and loop budget stay below its `timeout-minutes`, which the check holds,
+  but rows 3 to 5 (govulncheck, osv-scanner, gitleaks, zizmor, actionlint) run with no inner timeout, so
+  a hang there still reaches its step's timeout, which fails the job before the encryption and the run
+  publishes nothing; ADR 0040, The checks job's rows 6 to 15.)*
 - [ ] A failed run is visible: a run that fails (an expired or revoked subscription token, the
   subscription's usage limit, a tool download whose checksum differs, a failed sandbox preflight, a
   managed-settings file, an unexpected artifact, a refused publish) fails the workflow, which GitHub
   notifies the maintainer of. Its step summary names the cause's kind and the runbook step that fixes it,
   without a secret or finding detail. Recovery is a **new `workflow_dispatch` run**, and the workflow
   enforces it: the guard condition's `github.run_attempt == 1` skips every job of a re-run of any run,
-  so the artifact check never sees an earlier attempt's artifact.
+  so the artifact check never sees an earlier attempt's artifact. *(Still open after PR 5c's review
+  round E: every workflow step that can fail with one of these causes now ends with an `::error` naming
+  the kind and runbook step 10 or 11, but the Claude Code CLI's own install script,
+  `.github/scripts/install-claude-code.sh`, reports a tarball that does not match its pin and a managed
+  policy on the runner with lines that name no runbook step, and an expired token and the usage limit
+  share one line; ADR 0040, Review round E of PR 5c.)*
 - [x] The maintainer's runbook (below) is in `docs/dev-environment.md`, with a check after each step. It
   names no cadence and links to `docs/security/README.md` where it refers to it.
 
