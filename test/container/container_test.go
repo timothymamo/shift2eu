@@ -1094,12 +1094,14 @@ func licenseFileFindings(t *testing.T, name, dockerfile, dockerignore, gorelease
 	}
 
 	for _, section := range imageBuildSections(goreleaser) {
-		shipped := extraFiles(section)
+		for _, image := range sectionImages(section) {
+			shipped := extraFiles(image.body)
 
-		for _, file := range shippedLicenseFiles {
-			if !slices.Contains(shipped, file.name) {
-				findings = append(findings, fmt.Sprintf("%s: the docker section of the release names no %s: GoReleaser sends the daemon only what the section's extra_files names, so the image it builds ships no %s whatever the Dockerfile copies; add %s beside the Dockerfile in extra_files (issue #495)",
-					goreleaserName, file.name, file.name, file.name))
+			for _, file := range shippedLicenseFiles {
+				if !slices.Contains(shipped, file.name) {
+					findings = append(findings, fmt.Sprintf("%s: %s names no %s: GoReleaser sends the daemon only what the image's own extra_files names, so the image it builds ships no %s whatever the Dockerfile copies; add %s beside the Dockerfile in that image's extra_files (issue #495)",
+						goreleaserName, image.label, file.name, file.name, file.name))
+				}
 			}
 		}
 	}
@@ -1366,31 +1368,32 @@ func contextCopyDestinations(stage []instruction) map[string]contextCopy {
 	return destinations
 }
 
-// imageBuildSections returns the body of every top-level docker, dockers or
-// dockers_v2 section of .goreleaser.yaml, the sections that build the image with
-// GoReleaser, comment and blank lines dropped and each line's indentation kept,
-// for extraFiles to read. A release that builds the image
-// with docker build or make image has none, and returns nothing. The
-// dockers_v2 half stays although GoReleaser builds no image today — the release
-// builds it with docker/build-push-action and `context: .` — because it guards a
-// future GoReleaser docker section, which would otherwise send the daemon a
-// context holding neither file.
-func imageBuildSections(goreleaser string) []string {
+// imageBuildSection is one top-level docker, dockers or dockers_v2 section of
+// .goreleaser.yaml: its key and its body, the lines below the key.
+type imageBuildSection struct {
+	key  string
+	body []string
+}
+
+// imageBuildSections returns every top-level docker, dockers or dockers_v2
+// section of .goreleaser.yaml, the sections that build the image with
+// GoReleaser, for sectionImages to split into images. A body keeps each line's
+// indentation and drops comment and blank lines. A line in the first column ends
+// the section, unless it is a block list item (`- id: a`): YAML lets a key's
+// sequence start at the key's own indentation, so that line is the body's.
+//
+// A release that builds the image with docker build or make image has no such
+// section, and returns nothing. The check stays although GoReleaser builds no
+// image today (the release builds it with docker/build-push-action and
+// `context: .`) because it guards a future GoReleaser docker section, which
+// would otherwise send the daemon a context holding neither file.
+func imageBuildSections(goreleaser string) []imageBuildSection {
 	imageKeys := map[string]bool{"docker": true, "dockers": true, "dockers_v2": true}
 
 	var (
-		sections []string
-		current  []string
-		inImage  bool
+		sections []imageBuildSection
+		current  *imageBuildSection
 	)
-
-	closeSection := func() {
-		if inImage {
-			sections = append(sections, strings.Join(current, "\n"))
-		}
-
-		current, inImage = nil, false
-	}
 
 	for _, raw := range strings.Split(goreleaser, "\n") {
 		line := strings.TrimRight(raw, "\r")
@@ -1400,39 +1403,140 @@ func imageBuildSections(goreleaser string) []string {
 			continue
 		}
 
-		// A top level key is one that starts in the first column.
-		if !strings.HasPrefix(line, " ") && !strings.HasPrefix(line, "\t") {
-			closeSection()
+		_, isItem := yamlListItem(trimmed)
+		indented := strings.HasPrefix(line, " ") || strings.HasPrefix(line, "\t")
 
-			key, _, ok := strings.Cut(trimmed, ":")
-			inImage = ok && imageKeys[key]
+		if indented || isItem {
+			if current != nil {
+				current.body = append(current.body, line)
+			}
 
 			continue
 		}
 
-		if inImage {
-			current = append(current, line)
+		// A top-level key, which closes the section before it.
+		if current != nil {
+			sections = append(sections, *current)
+			current = nil
+		}
+
+		if key, _, ok := strings.Cut(trimmed, ":"); ok && imageKeys[key] {
+			current = &imageBuildSection{key: key}
 		}
 	}
 
-	closeSection()
+	if current != nil {
+		sections = append(sections, *current)
+	}
 
 	return sections
 }
 
-// extraFiles returns the entries of every extra_files list in section, one body
-// imageBuildSections returns, unquoted and in file order: the files GoReleaser
+// sectionImage is one image a GoReleaser docker section builds: a label for the
+// findings and the image's own lines, for extraFiles to read.
+type sectionImage struct {
+	label string
+	body  []string
+}
+
+// sectionImages returns the images section builds, each with its own lines.
+// GoReleaser gives every image its own build context, so each image's
+// extra_files is read on its own. A docker section is one image, its whole
+// body. A dockers or dockers_v2 section is a list of images: its body splits at
+// each block list item in the column of its first line, the list's own items,
+// and the dash and blanks that open an item turn into spaces, so an image's
+// keys all start in one column whether or not a key opens the item
+// (`- extra_files:`). A list section whose body holds no such item, an empty or
+// a flow list, is taken as one image, so it is checked and, naming nothing,
+// reported: the check fails closed.
+func sectionImages(section imageBuildSection) []sectionImage {
+	whole := []sectionImage{{label: "the " + section.key + " section", body: section.body}}
+
+	if section.key == "docker" || len(section.body) == 0 {
+		return whole
+	}
+
+	first := section.body[0]
+	itemColumn := len(first) - len(strings.TrimLeft(first, " \t"))
+
+	var images []sectionImage
+
+	for _, line := range section.body {
+		trimmed := strings.TrimLeft(line, " \t")
+		indent := len(line) - len(trimmed)
+
+		if item, isItem := yamlListItem(trimmed); isItem && indent == itemColumn {
+			images = append(images, sectionImage{})
+			line = strings.Repeat(" ", len(line)-len(item)) + item
+		}
+
+		if len(images) == 0 {
+			return whole
+		}
+
+		image := &images[len(images)-1]
+		image.body = append(image.body, line)
+	}
+
+	for i := range images {
+		images[i].label = fmt.Sprintf("image %d of the %s section", i+1, section.key)
+
+		if id := imageID(images[i].body); id != "" {
+			images[i].label += fmt.Sprintf(" (id %s)", id)
+		}
+	}
+
+	return images
+}
+
+// imageID returns the value of the id key at image's own key column, the
+// column of its first line, or "" when the image names none.
+func imageID(image []string) string {
+	keyColumn := len(image[0]) - len(strings.TrimLeft(image[0], " \t"))
+
+	for _, raw := range image {
+		content := strings.TrimRight(withoutYAMLComment(raw), " \t")
+		trimmed := strings.TrimLeft(content, " \t")
+
+		if len(content)-len(trimmed) != keyColumn {
+			continue
+		}
+
+		if name, value, ok := strings.Cut(trimmed, ":"); ok && strings.TrimSpace(name) == "id" {
+			return unquote(strings.TrimSpace(value))
+		}
+	}
+
+	return ""
+}
+
+// extraFiles returns the entries of image's extra_files list, one image
+// sectionImages returns, unquoted and in file order: the files GoReleaser
 // copies into the context it sends the daemon, each at the path the entry names.
-// It reads a block list, its entries indented under the key or level with it,
-// and a flow list such as `extra_files: [LICENSE, NOTICE]`, whether the key
-// stands alone or opens a list item (`- extra_files:`). Comments, own-line and
-// inline, and every other key's value are dropped, so only an entry counts.
-func extraFiles(section string) []string {
-	var entries []string
+// It reads the key only at the image's own key column, the column of its first
+// line, so an extra_files nested under another key is not the image's. It reads
+// a block list, its entries indented under the key or level with it, and only
+// the items in the column of its first item: a list one of its entries carries
+// is not the extra_files list. It reads a flow list such as
+// `extra_files: [LICENSE, NOTICE]` only when it closes on the key's line: a flow
+// list spread over several lines is not read, so its files are reported missing,
+// a limit that fails closed. Comments, own-line and inline, and every other key's
+// value are dropped, so only an entry counts.
+func extraFiles(image []string) []string {
+	if len(image) == 0 {
+		return nil
+	}
 
-	keyColumn := -1
+	keyColumn := len(image[0]) - len(strings.TrimLeft(image[0], " \t"))
 
-	for _, raw := range strings.Split(section, "\n") {
+	var (
+		entries []string
+		inList  bool
+	)
+
+	itemColumn := -1
+
+	for _, raw := range image {
 		content := strings.TrimRight(withoutYAMLComment(raw), " \t")
 		trimmed := strings.TrimLeft(content, " \t")
 
@@ -1442,37 +1546,32 @@ func extraFiles(section string) []string {
 
 		indent := len(content) - len(trimmed)
 
-		if keyColumn >= 0 {
+		if inList {
 			item, isItem := yamlListItem(trimmed)
 
 			switch {
-			case isItem && indent >= keyColumn:
+			case isItem && itemColumn < 0 && indent >= keyColumn:
+				itemColumn = indent
 				entries = append(entries, unquote(item))
 
 				continue
-			case indent > keyColumn:
-				// A continuation of the entry above, not an entry of its own.
+			case isItem && indent == itemColumn:
+				entries = append(entries, unquote(item))
+
+				continue
+			case itemColumn >= 0 && indent > itemColumn:
+				// A continuation of the entry above, or a list it carries.
 				continue
 			}
 
-			keyColumn = -1
+			inList = false
 		}
 
-		// A key may open a list item, as in `- extra_files:`: its column is the
-		// one after the dashes.
-		key, column := trimmed, indent
-
-		for {
-			item, isItem := yamlListItem(key)
-			if !isItem {
-				break
-			}
-
-			column += len(key) - len(item)
-			key = item
+		if indent != keyColumn {
+			continue
 		}
 
-		name, value, ok := strings.Cut(key, ":")
+		name, value, ok := strings.Cut(trimmed, ":")
 		if !ok || strings.TrimSpace(name) != "extra_files" {
 			continue
 		}
@@ -1480,13 +1579,16 @@ func extraFiles(section string) []string {
 		value = strings.TrimSpace(value)
 
 		if value == "" {
-			keyColumn = column
+			inList, itemColumn = true, -1
 
 			continue
 		}
 
 		if inner, isFlow := strings.CutPrefix(value, "["); isFlow {
-			inner, _ = strings.CutSuffix(inner, "]")
+			inner, closed := strings.CutSuffix(inner, "]")
+			if !closed {
+				continue
+			}
 
 			for _, entry := range strings.Split(inner, ",") {
 				if entry = strings.TrimSpace(entry); entry != "" {
@@ -1511,24 +1613,54 @@ func yamlListItem(line string) (string, bool) {
 }
 
 // withoutYAMLComment returns line up to its comment: a # at the start of the
-// line or after a blank, outside single and double quotes, as YAML reads it.
+// line or after a blank, outside a quoted scalar, as YAML reads it. A quote
+// opens a scalar only where a scalar starts: at the start of the line, or after
+// `[`, `,`, `- ` or `: `, blanks allowed between, so the apostrophe in it's is
+// text. Inside a single-quoted scalar `”` is an escaped quote and inside a
+// double-quoted one `\"` is, neither closing it.
 func withoutYAMLComment(line string) string {
-	var quote rune
+	var quote byte
 
-	for i, r := range line {
+	for i := 0; i < len(line); i++ {
+		c := line[i]
+
 		switch {
+		case quote == '\'' && c == '\'' && i+1 < len(line) && line[i+1] == '\'':
+			i++
+		case quote == '"' && c == '\\':
+			i++
 		case quote != 0:
-			if r == quote {
+			if c == quote {
 				quote = 0
 			}
-		case r == '"' || r == '\'':
-			quote = r
-		case r == '#' && (i == 0 || line[i-1] == ' ' || line[i-1] == '\t'):
+		case (c == '"' || c == '\'') && opensYAMLScalar(line[:i]):
+			quote = c
+		case c == '#' && (i == 0 || line[i-1] == ' ' || line[i-1] == '\t'):
 			return line[:i]
 		}
 	}
 
 	return line
+}
+
+// opensYAMLScalar reports whether a scalar may start right after before, the
+// part of a line ahead of a quote: before holds only blanks, or ends in `[` or
+// `,`, or in `-` or `:` followed by at least one blank, blanks allowed after
+// each.
+func opensYAMLScalar(before string) bool {
+	trimmed := strings.TrimRight(before, " \t")
+	if trimmed == "" {
+		return true
+	}
+
+	switch trimmed[len(trimmed)-1] {
+	case '[', ',':
+		return true
+	case '-', ':':
+		return len(trimmed) < len(before)
+	}
+
+	return false
 }
 
 // TestTheDockerfileHasNoServerStage pins what issue #393 leaves of PRD #103's
