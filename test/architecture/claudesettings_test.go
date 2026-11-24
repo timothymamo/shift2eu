@@ -116,6 +116,185 @@ func TestClaudeSettingsFileIsTheADRsOnly(t *testing.T) {
 	}
 }
 
+// claudeProjectSettingsPath is the project's own settings file, the layer every
+// Claude Code role loads beside the rule in CLAUDE.md (issue #540).
+const claudeProjectSettingsPath = ".claude/settings.json"
+
+// claudeProjectEnvDeny are the rules the project's settings file must refuse.
+// They are matched by presence, not as a whole set: the file has other rules,
+// and a rule may be written again beside them. `Bash(env)` is bare `env` alone;
+// `Bash(env *)` matches every `env` with an argument, `env VAR=value cmd`
+// included, because Claude Code's prefix rules cannot see an argument as
+// harmless: the roles refuse `env` with arguments altogether (ADR 0044).
+// `Bash(set)`, `Bash(declare)` and `Bash(typeset)` are the bare builtins, and the
+// options that list variables and exports are refused by their own rules
+// (`export -p*`, `declare -p*`/`-x*`, `typeset -p*`/`-x*`, `compgen -v*`/`-e*`),
+// as is `compgen -A` whatever list it names: `variable` and `export` print the
+// environment, and a rule that enumerates them one by one would miss one.
+// `/proc/*/environ` is refused as a command's argument and as a file a tool
+// reads, because either prints every value in the process; `ls /proc` and
+// `cat /proc/*/environ` reach it, so the directory is refused whole. `ps e*` is
+// `ps` with the environment column, `make -p`/`--print-data-base` print the
+// environment of every target, `Bash(*daemon.env*)` the deck's own file of keys,
+// `Bash(*.config/dot-agent-deck*)` the directory that holds it and everything
+// else the deck keeps there, and a `$NAME` that expands a key (`*$*API_KEY*`,
+// `*$*TOKEN*`) is refused with it; `&>` redirects both streams and `[0-9]>`
+// redirects one of them by number, and Claude Code may not strip either before
+// matching the exact rule, so each printer names those forms too.
+// The Read rules start with `//`: a single leading `/` would be relative to
+// the settings file's project root and never match the real path.
+var claudeProjectEnvDeny = []string{
+	"Bash(env)",
+	"Bash(env *)",
+	"Bash(/usr/bin/env*)",
+	"Bash(printenv)",
+	"Bash(printenv *)",
+	"Bash(set)",
+	// A redirect on a bare printer: Claude Code may not strip the redirect
+	// before matching the exact `Bash(set)` and `Bash(export)` rules, so the
+	// numbered and unnumbered forms are named here too.
+	"Bash(set >*)",
+	"Bash(set [0-9]>*)",
+	"Bash(set &>*)",
+	"Bash(export)",
+	"Bash(export >*)",
+	"Bash(export [0-9]>*)",
+	"Bash(export &>*)",
+	"Bash(export -p*)",
+	"Bash(declare)",
+	"Bash(declare >*)",
+	"Bash(declare [0-9]>*)",
+	"Bash(declare &>*)",
+	"Bash(declare -p*)",
+	"Bash(declare -x*)",
+	"Bash(typeset)",
+	"Bash(typeset >*)",
+	"Bash(typeset [0-9]>*)",
+	"Bash(typeset &>*)",
+	"Bash(typeset -p*)",
+	"Bash(typeset -x*)",
+	"Bash(compgen -v*)",
+	"Bash(compgen -e*)",
+	"Bash(compgen -A*)",
+	"Bash(compgen *-A*)",
+	"Bash(*/proc/*/environ*)",
+	"Bash(make -p*)",
+	"Bash(make --print-data-base*)",
+	"Bash(ps e*)",
+	"Bash(*daemon.env*)",
+	// The deck's whole key directory, not only the one file this project knows the
+	// name of: `grep -r .` over it prints every value in it.
+	"Bash(*.config/dot-agent-deck*)",
+	"Bash(*$*API_KEY*)",
+	"Bash(*$*TOKEN*)",
+	// `gh` prints its own token, and it is a tool the agents install and would
+	// reach for when the shell's printers are refused. `gh auth status` alone is
+	// allowed (it names the account, not the token), so its `-t` and
+	// `--show-token` forms are refused on their own.
+	"Bash(gh auth token*)",
+	"Bash(gh auth status*-t*)",
+	"Bash(gh auth status*--show-token*)",
+	// A credential helper prints the token it fills in, as surely as `gh auth
+	// token` does: `git credential fill` writes the password to stdout, and `gh`
+	// answers the same protocol itself. The wildcards cover the helper whatever
+	// feeds it (a pipeline, a redirect, a plain invocation), while the git
+	// commands that only read configuration or push a branch stay allowed.
+	"Bash(*git credential fill*)",
+	"Bash(*gh auth git-credential*)",
+	"Read(//proc)",
+	"Read(//proc/**)",
+	"Read(//proc/**/environ)",
+	"Read(~/.config/dot-agent-deck/**)",
+}
+
+// claudeProjectEnvDenyDead is the rule the settings file must not hold: a path
+// that starts with a single `/` is relative to the settings file's project root
+// in Claude Code, so `Read(/proc/*/environ)` never matches the real /proc and
+// reads as a refusal it is not. The `//` rule beside it is the one that holds.
+const claudeProjectEnvDenyDead = "Read(/proc/*/environ)"
+
+// TestProjectClaudeSettingsDenyPrintingTheEnvironment pins the second layer
+// under CLAUDE.md rule 3 for the Claude Code roles (issue #540): each rule above
+// is in .claude/settings.json's permissions.deny, none of them is also in
+// permissions.allow, where a later reader would take the command for allowed,
+// and the project-relative `/proc` rule, which refuses nothing, is gone.
+// The file is read as a closed document first, so a key written twice cannot
+// hide a second, wider allow list from this test.
+func TestProjectClaudeSettingsDenyPrintingTheEnvironment(t *testing.T) {
+	t.Parallel()
+
+	data := readRepositoryFile(t, claudeProjectSettingsPath)
+
+	doc, err := decodeJSONDocument(data)
+	if err != nil {
+		t.Fatalf("%s: %v", claudeProjectSettingsPath, err)
+	}
+
+	allow, deny := projectPermissionRules(t, doc)
+
+	for _, rule := range claudeProjectEnvDeny {
+		if _, ok := deny[rule]; !ok {
+			t.Errorf("%s: permissions.deny does not hold %q, so the role runs the command CLAUDE.md rule 3 forbids (issue #540)", claudeProjectSettingsPath, rule)
+		}
+
+		if _, ok := allow[rule]; ok {
+			t.Errorf("%s: permissions.allow holds %q, which permissions.deny refuses and must not be handed back (issue #540)", claudeProjectSettingsPath, rule)
+		}
+	}
+
+	if _, ok := deny[claudeProjectEnvDenyDead]; ok {
+		t.Errorf("%s: permissions.deny holds %q, whose single leading `/` makes it project-relative: it matches no real /proc and is dead (issue #540); write the rule with `//`", claudeProjectSettingsPath, claudeProjectEnvDenyDead)
+	}
+}
+
+// projectPermissionRules returns the rule strings of the document's
+// permissions.allow and permissions.deny lists as sets, and fails the test when
+// the document holds no permissions object or one of the two lists is missing or
+// no list of strings: a settings file Claude Code cannot read refuses nothing.
+func projectPermissionRules(t *testing.T, doc any) (allow, deny map[string]struct{}) {
+	t.Helper()
+
+	root, ok := doc.(map[string]any)
+	if !ok {
+		t.Fatalf("%s: the document is no JSON object", claudeProjectSettingsPath)
+	}
+
+	permissions, ok := root["permissions"].(map[string]any)
+	if !ok {
+		t.Fatalf("%s: no permissions object", claudeProjectSettingsPath)
+	}
+
+	return projectRules(t, permissions, "allow"), projectRules(t, permissions, "deny")
+}
+
+// projectRules returns permissions[key] as a set of rule strings.
+func projectRules(t *testing.T, permissions map[string]any, key string) map[string]struct{} {
+	t.Helper()
+
+	value, ok := permissions[key]
+	if !ok {
+		t.Fatalf("%s: permissions holds no %s list", claudeProjectSettingsPath, key)
+	}
+
+	list, ok := value.([]any)
+	if !ok {
+		t.Fatalf("%s: permissions.%s is no list", claudeProjectSettingsPath, key)
+	}
+
+	rules := make(map[string]struct{}, len(list))
+
+	for _, entry := range list {
+		rule, ok := entry.(string)
+		if !ok {
+			t.Fatalf("%s: permissions.%s holds a value that is no rule: %v", claudeProjectSettingsPath, key, entry)
+		}
+
+		rules[rule] = struct{}{}
+	}
+
+	return rules
+}
+
 // TestClaudeSettingsFileRefusesADuplicateKey pins the reader the test above
 // reads the file with: encoding/json keeps the last of two equal keys silently,
 // so a file could hold a second permissions object or a second allow list that

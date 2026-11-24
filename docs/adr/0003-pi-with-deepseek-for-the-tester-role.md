@@ -1,6 +1,7 @@
 # 0003. Run the tester role with pi on DeepSeek V4.1 Flash
 
-- Status: Accepted
+- Status: Accepted; [ADR 0044](0044-refuse-printing-the-environment-in-pi-with-a-project-extension.md)
+  adds a project extension that refuses the commands printing the environment (issue #540)
 - Date: 2026-11-09
 
 ## Context
