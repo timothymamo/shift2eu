@@ -1601,6 +1601,8 @@ var tlsStageLifecycleCases = []infraRuleCase{
 // infra/site: body becomes the block's lines, and an empty body leaves the stage without a lifecycle block.
 // An existing block, whatever it holds (the real configuration's comment, blank lines, another revision's
 // setting), is dropped first, so each case names one breakage and none depends on what main.tf holds today.
+// The resource and its lifecycle block end where their braces close, so a block written the standard way
+// (its settings indented, its "}" on its own line) and one closed with a trailing comment are both read.
 // Only the TLS stage is edited: a lifecycle block on the DNS stage beside it stays as the copy found it.
 func tlsStageLifecycle(t *testing.T, site string, body []string) {
 	t.Helper()
@@ -1630,26 +1632,16 @@ func tlsStageLifecycle(t *testing.T, site string, body []string) {
 		t.Fatalf("%s holds no line %q: the case names the TLS stage the rule judges", path, header)
 	}
 
-	end := -1
-
-	for i := start + 1; i < len(lines); i++ {
-		if strings.TrimSpace(lines[i]) == "}" {
-			end = i
-
-			break
-		}
-	}
-
-	if end < 0 {
-		t.Fatalf("%s: the TLS stage that line %d opens does not close at a line holding \"}\": the case cannot rewrite its lifecycle block", path, start+1)
-	}
+	// The resource's end is the line whose closing brace takes the depth back to zero, never the first
+	// line that holds a "}": a nested block closes that way too (a lifecycle block written the standard
+	// way does), so counting is what finds the resource.
+	end := infraBlockEnd(t, path, lines, start)
 
 	kept := make([]string, 0, end-start)
 
 	for i := start + 1; i < end; i++ {
-		if strings.TrimSpace(lines[i]) == "lifecycle {" {
-			for ; i < end && strings.TrimSpace(lines[i]) != "}"; i++ {
-			}
+		if infraOpensBlock(lines[i], "lifecycle") {
+			i = infraBlockEnd(t, path, lines, i)
 
 			continue
 		}
@@ -1673,6 +1665,77 @@ func tlsStageLifecycle(t *testing.T, site string, body []string) {
 	out = append(out, lines[end:]...)
 
 	writeInfraText(t, path, strings.Join(out, "\n"))
+}
+
+// infraBlockEnd returns the index of the line that closes the block line from opens and closes, counting
+// braces and ignoring the ones a quoted string or a comment holds. from's own line may hold the whole block
+// (a one-line "foo {}") and is then its end. It fails the test when the file never closes the block, or
+// holds a /* */ comment, whose braces these cases do not count across.
+func infraBlockEnd(t *testing.T, path string, lines []string, from int) int {
+	t.Helper()
+
+	depth := 0
+
+	for i := from; i < len(lines); i++ {
+		depth += infraBraces(t, path, i+1, lines[i])
+
+		if depth < 0 {
+			t.Fatalf("%s:%d holds a closing brace with no opening one above it: the cases cannot read the blocks of that file", path, i+1)
+		}
+
+		if depth == 0 {
+			return i
+		}
+	}
+
+	t.Fatalf("%s:%d opens a block that never closes: the cases cannot find its end", path, from+1)
+
+	return 0
+}
+
+// infraBraces is the change to the brace depth that one line of HCL makes: the braces it opens minus the
+// ones it closes, ignoring those inside a quoted string (an escaped quote included) and after a # or //
+// comment.
+func infraBraces(t *testing.T, path string, line int, text string) int {
+	t.Helper()
+
+	depth := 0
+	quoted := false
+
+	for i := 0; i < len(text); i++ {
+		c := text[i]
+
+		switch {
+		case quoted:
+			switch c {
+			case '\\':
+				i++ // the escaped character, a quote included, is no delimiter
+			case '"':
+				quoted = false
+			}
+		case c == '"':
+			quoted = true
+		case c == '#', c == '/' && i+1 < len(text) && text[i+1] == '/':
+			return depth
+		case c == '/' && i+1 < len(text) && text[i+1] == '*':
+			t.Fatalf("%s:%d holds /*: the cases do not count braces across a block comment, so they cannot read that block's end", path, line)
+		case c == '{':
+			depth++
+		case c == '}':
+			depth--
+		}
+	}
+
+	return depth
+}
+
+// infraOpensBlock reports whether a line opens the named block, as in "  lifecycle {" or
+// "  lifecycle { # why": the first word is the name and a brace follows it, so a line that only mentions the
+// name (a comment, an assignment) is no opening.
+func infraOpensBlock(line, name string) bool {
+	fields := strings.Fields(line)
+
+	return len(fields) >= 2 && fields[0] == name && strings.HasPrefix(fields[1], "{")
 }
 
 // infraTestNestedBlockCases pin the allow list of the blocks nested directly in a test file's run and
