@@ -1126,7 +1126,11 @@ read), takes the private findings with their keyed fingerprints (`publish.Privat
 the advisory writes (`PlanAdvisories`) before anything is rendered: two matchable drafts with one
 fingerprint are `ErrDuplicateDrafts` (outcome 6) whatever the findings, and no write follows. A
 matchable advisory is the App's (`shift2eu-audit[bot]`, type `Bot`), `draft` or `closed`, with no credit
-and no collaborator, and its summary holds a fingerprint. A draft with a finding's fingerprint is
+and no collaborator, and its summary holds a fingerprint. A listing entry whose `credits`,
+`credits_detailed`, `collaborating_users` or `collaborating_teams` is missing or `null` is no empty list:
+counted as none it would fail open on an advisory a person is on, so it fails the listing closed
+(`ErrGitHub`, outcome 8), as a missing `ghsa_id`, `summary` or `state` does. This supersedes the design's
+"a null list is an empty one". A draft with a finding's fingerprint is
 updated `open` (a draft marked `not reproduced` that recurs is `open` again); with no draft, the most
 recently closed one (by `closed_at`, a tie the listing's first) marked `not reproduced` makes a new draft
 `regressed`, any other closed one is dismissed with no write, and no advisory at all a new draft `new`.
@@ -1136,13 +1140,36 @@ A draft no finding holds is marked `not reproduced` by replacing only its last s
 package with the other three keys null; an update sends `state: "draft"` and never a severity, so the
 maintainer's severity or CVSS on the draft stands. Every advisory summary and description is scanned
 with `ScanAdvisory` and gitleaks before the first write. The writes go first: the advisories, then the
-report, then the issues. A create answered 403, 404 or 422 is `ErrPrivateNotFiled`: no further advisory
-call, the report and templates rendered beforehand under `private findings: not filed` are published
-with the issues, and `Published.Private` is `PrivateNotFiled`, so `OutcomeOf(nil).WithCounts` is
-outcome 5. A refused listing (any non-2xx) is `ErrGitHub` (outcome 8), as is any other failed advisory
-write, after which no report and no issue are written. The report states `handled privately` when the
-run reproduced a private finding, a dismissed one included, and `none` otherwise. Nothing of a private
-finding reaches a public text: the evidence goes into its advisory only.
+report, then the issues. A create answered 403, 404 or 422 as the run's first advisory write is
+`ErrPrivateNotFiled`: nothing was filed, no further advisory call follows, the report and templates
+rendered beforehand under `private findings: not filed` are published with the issues, and
+`Published.Private` is `PrivateNotFiled`, so `OutcomeOf(nil).WithCounts` is outcome 5. The same refusal
+after an earlier create or update of the run went through is `ErrGitHub` (outcome 8): the run did file
+part of its findings, so a "not filed" report would be false. That run's earlier drafts stand, and the
+next run's listing reconciles them. A refused listing (any non-2xx) is `ErrGitHub` (outcome 8), as is
+any other failed advisory write, after which no report and no issue are written. The report states
+`handled privately` when the run reproduced a private finding, a dismissed one included, and `none`
+otherwise. Nothing of a private finding reaches a public text: the evidence goes into its advisory only.
+
+A 422 means an invalid body as well as a refused App, and the program cannot tell them apart without
+reading the answer's body, which it never does. The residual risk: GitHub might reject a valid finding's
+body, for example as too long, and the run then reports its private findings as not filed (or, after an
+earlier write, fails with outcome 8). Today's caps keep the worst-case description at about 57 KB, under
+GitHub's 65535; raising a cap must keep it under.
+
+**The reopen race.** The listing and the PATCHes are separate calls. If the maintainer closes one of the
+App's drafts between this run's listing and its PATCH (a window of seconds), the PATCH with
+`state: draft` reopens it. The REST API has no conditional PATCH, so this is accepted: the runbook tells
+the maintainer to close an advisory between scheduled runs, never during one.
+
+**The maintainer's edits.** A reproduced draft's summary and description are rewritten on every run, so
+the maintainer's edits to them are overwritten: notes go in the advisory's comments, or in its credits once
+the advisory is no longer the App's to update (a credit makes it unmatchable). A reworded summary no longer
+holds the fingerprint, so the next run that reproduces the finding creates a new draft. A maintainer's
+text in a draft's description that hits the advisory scan or gitleaks (a pasted example token, say) makes
+every later run that re-sends that description (the not-reproduced mark, which keeps the listing's text)
+fail with outcome 4 (`ErrScanRefused`) before any write, until the text is removed. The not-reproduced mark replaces only the status line, so the `Run:` line still names
+the run that last reproduced the finding: that is intended, since it is the run to look at.
 
 **The image check (PR 4b).** `CheckImageDigest` reads row 3 and accepts a digest when at least one
 attestation's DSSE envelope has the payload type `application/vnd.in-toto+json` and its statement

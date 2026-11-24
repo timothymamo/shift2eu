@@ -432,8 +432,9 @@ The publish script:
 - [x] If GitHub refuses advisory creation to the App, the run fails closed: it publishes only the public
   count, the private-findings flag and the coverage, with the report saying "private findings: not filed"
   instead of "handled privately" (still one bit: the flag is set either way), and the summary says
-  "private findings not filed: see runbook". The private findings are dropped, never written anywhere
-  else (Decision 2).
+  "private findings not filed: see runbook". That is a refusal of the run's first advisory write, so
+  nothing was filed and the private findings are written nowhere; a refusal after an earlier advisory
+  write is exit 8 before the report, and the earlier drafts stand (Decision 2).
 - [x] The report's per-check coverage is derived by the publish script, not the model: "findings" only
   when the check produced a **public** finding, "run" otherwise (including when its only findings are
   private), or "not run (why)", where the why is one of a fixed vocabulary in the publish script (for
@@ -802,6 +803,16 @@ An agent cannot do these steps. Each one is safe to stop at; the workflow is rol
    job and "finished" in the others, that the run's two artifacts are ciphertext, and that the sandbox
    preflight's step reports all six probes refused (it runs on every run; this step only reads its
    result). Then merge the report, then milestone 3's schedule.
+   **Handling the App's draft advisories** (every run): close an advisory between scheduled runs, never
+   while a run is in progress: a close between the run's listing and its update is reopened by the
+   update's `state: draft` (the REST API has no conditional update). A reproduced draft's summary and
+   description are rewritten on every run, so your edits to them are overwritten: put notes in the
+   advisory's comments, or in its credits once it is no longer the App's to update (any credit makes the
+   App leave it alone). A reworded summary no longer matches, so the next run creates a new draft. Text of
+   yours in a draft's description that the token scan hits (a pasted example token, say) makes every
+   later run that marks it not reproduced fail with `publish refused: see runbook` (exit 4) until you
+   remove it. A draft marked not reproduced keeps its `Run:` line, which names the run that last
+   reproduced the finding: that is intended.
 9. **Keep the schedule alive.** If the staleness check fails, look at the workflow's state and runs; if
    GitHub disabled the schedule after 60 days without repository activity, re-enable it
    (`gh workflow enable scheduled-security-audit.yml`) and start one `workflow_dispatch` run. Check: the
@@ -882,10 +893,14 @@ An agent cannot do these steps. Each one is safe to stop at; the workflow is rol
       once: the model writes the texts afresh, and a refusal that repeats with no sign of (3) is
       treated as (1). A real hit (1), or a refusal neither (2) nor (3) explains, is a possible leak:
       rotate per step 10 (the safe default), then start the new run.
-    - `private findings not filed: see runbook` (exit 5): GitHub refused advisory creation to the App;
-      the report says "private findings: not filed" and the private findings were dropped. Repeat step
-      3's advisory check, then start the new run. The report and the issues were published, no
-      advisory call followed the refused creation, and the job fails so the run is never green.
+    - `private findings not filed: see runbook` (exit 5): GitHub refused the run's first advisory write,
+      a creation, so nothing was filed; the report says "private findings: not filed" and the private
+      findings were written nowhere. Repeat step 3's advisory check, then start the new run. The report
+      and the issues were published, no advisory call followed the refused creation, and the job fails
+      so the run is never green. A 422 can also mean GitHub found a valid finding's body invalid (too
+      long, say): if step 3's check passes, that is the residual risk the ADR names. A creation refused
+      after an earlier advisory write of the run is `GitHub call failed` (exit 8) instead, before the
+      report: that run's earlier drafts stand, and the next run's listing reconciles them.
     - `publish refused: duplicate draft advisories: see runbook step 11` (exit 6): the paragraph above.
     - `previous report unreadable: see runbook` (exit 7) has **two causes**, and the line does not say
       which: (1) the newest report in `docs/security/audits/` is unreadable as the publish script renders
@@ -1071,8 +1086,9 @@ options that were weighed and the reason given, so the decision can be revisited
    - **Fallback:** if GitHub refuses advisory creation to the App's installation token, the run fails
      closed: it publishes only the public count, the private-findings flag and the coverage, the report
      says "private findings: not filed" instead of "handled privately" (still one bit), and the summary
-     says "private findings not filed: see runbook". The private findings are dropped, never written
-     anywhere else. Milestone 2 is blocked until runbook step 3 confirms creation and update work, so the
+     says "private findings not filed: see runbook". The private findings are written nowhere else.
+     (Amended in PR 4c: this holds when the refusal is the run's first advisory write; a refusal after
+     an earlier write is exit 8 before the report, and that run's earlier drafts stand.) Milestone 2 is blocked until runbook step 3 confirms creation and update work, so the
      fallback is a guard, not the plan.
 
 3. **How Claude Code runs in Actions.** Options: `anthropics/claude-code-action` pinned by SHA, or the
