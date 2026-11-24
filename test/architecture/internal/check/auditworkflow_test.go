@@ -232,9 +232,6 @@ const (
 		"            printf 'version=%s\\n' \"${version#version: }\"\n" +
 		"            printf 'integrity=%s\\n' \"${integrity#integrity: }\"\n" +
 		"          } >> \"${GITHUB_OUTPUT}\"\n"
-	// auditPublishStep is the publish job's last step: the only step that trusts
-	// the decrypted result's image digest.
-	auditPublishStepHead = "      - name: Publish the report\n"
 	// auditPublishCommand is the publish step's one line, the end of the job the
 	// case that moves the attestation check past it appends to.
 	auditPublishCommand = "          ci/auditpublish publish -result \"${RUNNER_TEMP}/result.json\" -reports docs/security/audits -gh \"$(command -v gh)\" -gitleaks \"$(command -v gitleaks)\" -tmp \"${RUNNER_TEMP}\"\n"
