@@ -448,6 +448,72 @@ func TestPiEnvDenyExtensionHooksTheToolCall(t *testing.T) {
 	}
 }
 
+// TestPiEnvDenyExtensionAncestorCheckHoldsAtTheRoot pins the two fail-opens the
+// sixth review found in the ancestor check, both of which let the walk through.
+//
+// The first is `under`, which told whether a path is a directory or below it by
+// asking whether the path starts with `${directory}/`: a refused directory of
+// `/` then builds the prefix `//`, which no absolute path starts with, so
+// `under("/proc", "/")` and `under(keyDirectory, "/")` are both false and a
+// grep or find rooted at `/` is allowed. pi runs grep as `rg --hidden`, so that
+// walk reads /proc/*/environ and ~/.config/dot-agent-deck/daemon.env and prints
+// the keys. A directory that already ends in `/` must be handled as itself.
+//
+// The second is a grep or find with no `path` at all: pi defaults it to the
+// working directory, so from a working directory of `~` the call reads the
+// deck's key directory, while the extension skipped every call that named no
+// path and refused nothing. The path therefore has to be resolved to `.` (the
+// working directory) before the recursive check asks whether the refused
+// directories lie under it.
+func TestPiEnvDenyExtensionAncestorCheckHoldsAtTheRoot(t *testing.T) {
+	t.Parallel()
+
+	text := string(readRepositoryFile(t, piEnvDenyExtension))
+
+	// The extension asks `under` in both directions, and a root-safe answer is
+	// the one that treats a directory ending in `/` as that directory: the
+	// extension may normalise the trailing slash or compare the root directory
+	// itself, and either way the comparison stays a prefix test.
+	underBody := piFunctionBody(text, "function under(")
+	if underBody == "" {
+		t.Fatalf("%s: the extension has no function under, so no file tool's path is compared with a refused directory (issue #540)", piEnvDenyExtension)
+	}
+
+	if !strings.Contains(underBody, "startsWith(") {
+		t.Errorf("%s: under no longer tests whether the path is below the directory with `startsWith(`, so nothing here can tell whether the ancestor check still asks the question (issue #540)", piEnvDenyExtension)
+	}
+
+	if !piHoldsAny(underBody, `endsWith("/")`, `endsWith('/')`, `=== "/"`, `== "/"`) {
+		t.Errorf("%s: under handles no directory that ends in `/` (it names none of %q, %q, %q, %q), so `under(\"/proc\", \"/\")` and `under(keyDirectory, \"/\")` ask whether the path starts with `//`, which no absolute path does: a grep or find rooted at `/`, `//`, `/.` or `/..` is allowed, and pi runs grep as `rg --hidden`, so the walk reads /proc/*/environ and ~/%s/%s and prints the keys (issue #540)", piEnvDenyExtension, `endsWith("/")`, `endsWith('/')`, `=== "/"`, `== "/"`, ".config/dot-agent-deck", "daemon.env")
+	}
+
+	// pi defaults a file tool's path to the working directory, which is where a
+	// grep or find with no path walks: from a working directory of `~` that walk
+	// reaches the deck's key directory, so the path has to be given that default
+	// before the recursive check sees it.
+	pathDefaultAt := -1
+
+	for _, literal := range []string{`?? "."`, `?? '.'`, `|| "."`, `|| '.'`} {
+		at := strings.Index(text, literal)
+		if at >= 0 && (pathDefaultAt < 0 || at < pathDefaultAt) {
+			pathDefaultAt = at
+		}
+	}
+
+	if pathDefaultAt < 0 {
+		t.Errorf("%s: the extension gives a file tool's absent path no default (it names none of %q, %q, %q, %q), so a grep or find with no `path` is skipped and refused nowhere, while pi runs it from the working directory: with a working directory of `~` that walk reads ~/%s/%s and prints the keys (issue #540)", piEnvDenyExtension, `?? "."`, `?? '.'`, `|| "."`, `|| '.'`, ".config/dot-agent-deck", "daemon.env")
+	}
+
+	recursiveAt := strings.Index(text, "recursiveTools.has(")
+
+	switch {
+	case recursiveAt < 0:
+		t.Errorf("%s: the extension no longer names the recursive tools' check (`recursiveTools.has(`), so nothing here can tell whether an absent path is given its default before it (issue #540)", piEnvDenyExtension)
+	case pathDefaultAt > recursiveAt:
+		t.Errorf("%s: the extension gives a file tool's absent path its default after the recursive check reads the path, so the check sees no path and allows the call (issue #540)", piEnvDenyExtension)
+	}
+}
+
 // piPackage is the package a pi extension may name only in a type-only import.
 const piPackage = "@earendil-works/pi-coding-agent"
 
