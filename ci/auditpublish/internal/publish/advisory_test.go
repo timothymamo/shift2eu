@@ -536,7 +536,9 @@ const (
 )
 
 // The caps of the result schema's finding fields, in bytes, that reach an
-// advisory (ADR 0040, the finding schema).
+// advisory (ADR 0040, the finding schema). worstCaseFinding fills each of them
+// at its cap, and TestRenderAdvisoryFitsGitHubsLimits holds the schema to them
+// by requiring a refusal one byte over.
 const (
 	capRuleBytes     = 80
 	capFileBytes     = 200
@@ -552,11 +554,14 @@ const (
 // code span's or a fence's delimiter is one byte longer than the longest run of
 // backticks in the text (CodeSpan, CodeBlock), so a field of n backticks
 // renders as 3n bytes, more than any other text of that length. The words the
-// description writes outside a code span are the longest of their vocabulary,
-// and the finding is unconfirmed, since "no: unconfirmed" is longer than
-// "yes". The line is the schema's maximum, and the check is the longest check
-// id, which the description writes as it is. Every value is one validateResult
-// accepts.
+// description writes outside a code span are the longest of their vocabulary:
+// the severity "informational" - the longest of the five, which only the
+// finding's private flag keeps in an advisory, since the severity alone does
+// not - and the category "dependency vulnerability". The finding is
+// unconfirmed, since "no: unconfirmed" is longer than "yes". The line is the
+// schema's maximum, and the check is the longest check id, which the
+// description writes as it is. Every value is one validateResult accepts, and
+// every free-text value one byte longer is one it refuses.
 func worstCaseFinding() publish.Finding {
 	return publish.Finding{
 		Check:     "binary-vulnerabilities",
@@ -564,7 +569,7 @@ func worstCaseFinding() publish.Finding {
 		File:      strings.Repeat("a", capFileBytes),
 		Line:      9999999,
 		Sink:      strings.Repeat("a", capSinkBytes),
-		Severity:  sevCritical,
+		Severity:  sevInformational,
 		Confirmed: false,
 		Category:  catDependency,
 		Private:   true,
@@ -578,32 +583,72 @@ func worstCaseFinding() publish.Finding {
 // TestRenderAdvisoryFitsGitHubsLimits pins the worst-case draft advisory under
 // GitHub's two limits: a finding with every free-text field at its cap renders
 // a description of fewer than 65535 bytes and a summary of fewer than 1024, for
-// each status a run renders. GitHub answers an over-long body with 422, which
-// the run reads as "not filed", so a cap raised past this test's finding would
-// turn a valid finding into that path.
+// each status a run renders and for the not-reproduced text the run updates a
+// draft with. GitHub answers an over-long body with 422, which the run reads as
+// "not filed", so a cap raised past this test's finding would turn a valid
+// finding into that path: the same finding one byte over each cap must be one
+// RenderReport refuses.
 func TestRenderAdvisoryFitsGitHubsLimits(t *testing.T) {
 	t.Parallel()
 
 	run := testRun(t, testDate, testRunID)
 	worst := worstCaseFinding()
 
+	renderWorst := func(finding publish.Finding) error {
+		_, err := publish.RenderReport(publish.ReportInput{
+			Result:  fixtureResult(finding),
+			Run:     run,
+			Private: publish.PrivateHandled,
+		})
+
+		return err
+	}
+
 	// The finding is one the result's own validation accepts: RenderReport runs
 	// validateResult over every finding it renders.
-	if _, err := publish.RenderReport(publish.ReportInput{
-		Result:  fixtureResult(worst),
-		Run:     run,
-		Private: publish.PrivateHandled,
-	}); err != nil {
+	if err := renderWorst(worst); err != nil {
 		t.Fatalf("RenderReport of the worst-case finding = %v, want no error: the finding must be one the schema accepts", err)
 	}
 
+	// Each field the fixture fills at its cap, one byte over, is one the schema
+	// refuses. Without this a cap raised in the schema would leave the fixture
+	// rendering a finding no result may hold, and this test would still pass.
 	for _, tc := range []struct {
-		name   string
-		status publish.AdvisoryStatus
+		name string
+		over func(*publish.Finding)
+	}{
+		{name: "a rule over its cap", over: func(f *publish.Finding) { f.Rule = strings.Repeat("a", capRuleBytes+1) }},
+		{name: "a file over its cap", over: func(f *publish.Finding) { f.File = strings.Repeat("a", capFileBytes+1) }},
+		{name: "a sink over its cap", over: func(f *publish.Finding) { f.Sink = strings.Repeat("a", capSinkBytes+1) }},
+		{name: "a scenario over its cap", over: func(f *publish.Finding) { f.Scenario = strings.Repeat("`", capScenarioBytes+1) }},
+		{name: "evidence over its cap", over: func(f *publish.Finding) { f.Evidence = strings.Repeat("`", capEvidenceBytes+1) }},
+		{name: "a fix over its cap", over: func(f *publish.Finding) { f.Fix = strings.Repeat("`", capFixBytes+1) }},
+		{name: "a dismissal over its cap", over: func(f *publish.Finding) { f.Dismissal = strings.Repeat("`", capDismissal+1) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			finding := worst
+			tc.over(&finding)
+
+			if err := renderWorst(finding); err == nil {
+				t.Errorf("RenderReport of the worst-case finding with %s = no error, want a refusal: the fixtured cap is not the schema's, so this test no longer pins the rendering of a finding a result may hold", tc.name)
+			}
+		})
+	}
+
+	for _, tc := range []struct {
+		name string
+		// status is the status the run renders the draft under, and
+		// notReproduced marks the draft one this run did not reproduce, whose
+		// text the run updates with the status line alone.
+		status        publish.AdvisoryStatus
+		notReproduced bool
 	}{
 		{name: "a new draft", status: publish.AdvisoryNew},
 		{name: "an open draft", status: publish.AdvisoryOpen},
 		{name: "a regressed draft", status: publish.AdvisoryRegressed},
+		{name: "an open draft marked not reproduced", status: publish.AdvisoryOpen, notReproduced: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -613,11 +658,20 @@ func TestRenderAdvisoryFitsGitHubsLimits(t *testing.T) {
 				t.Fatalf("RenderAdvisory = %v, want no error", err)
 			}
 
-			t.Logf("the worst-case description is %d bytes and its summary %d", len(text.Description), len(text.Summary))
+			description := text.Description
 
-			if len(text.Description) >= githubAdvisoryDescriptionLimit {
+			if tc.notReproduced {
+				description, err = publish.SetAdvisoryStatus(description, publish.AdvisoryNotReproduced)
+				if err != nil {
+					t.Fatalf("SetAdvisoryStatus = %v, want no error", err)
+				}
+			}
+
+			t.Logf("the worst-case description is %d bytes and its summary %d", len(description), len(text.Summary))
+
+			if len(description) >= githubAdvisoryDescriptionLimit {
 				t.Errorf("the worst-case description is %d bytes, want fewer than %d: GitHub answers an over-long body with 422, which the run reads as not filed",
-					len(text.Description), githubAdvisoryDescriptionLimit)
+					len(description), githubAdvisoryDescriptionLimit)
 			}
 
 			if len(text.Summary) >= githubAdvisorySummaryLimit {
