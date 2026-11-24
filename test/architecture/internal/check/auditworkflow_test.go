@@ -136,6 +136,38 @@ import (
 //     made with the four flags: the staging container that receives the inputs
 //     by docker cp and becomes the image by docker commit is never started.
 //
+// Round E closes the rest of PRD #175's "A failed run is visible" and the
+// workflow's own time budget:
+//
+//   - A verification that fails is a finding about the release, not a check
+//     that did not run. Row 7's five verifications - the checksum check, the
+//     attestation of each release file, the image's signature, its provenance
+//     and SBOM attestations' signatures, and the SBOM's own attestation -
+//     record one branch: rc 124 as release-integrity timed-out, rc 1 (a
+//     mismatch, a refused attestation, a refused signature) as
+//     release-integrity verification-failed in the results, and any other
+//     failure as release-integrity tool-failed. Both records in not-run.txt
+//     stay what they are, so the model reads a mismatch as the release's
+//     finding and not as a check that never ran.
+//   - No step's own timeouts can reach its timeout-minutes, because a step's
+//     timeout firing skips every later step, the encrypt step included. A
+//     step whose loop carries a `${SECONDS}` budget holds that budget plus the
+//     `timeout <N>` values outside the loop below its timeout-minutes; any
+//     other step holds the sum of its `timeout <N>` values outside loops below
+//     it. Row 7's 20-minute budget and its 26 minutes outside the loop fit its
+//     50, row 8's 17 fit its 20, and the checks job's steps add up to 350, with
+//     the job's 5 minutes of set-up and post steps inside its 355.
+//   - Every step that can fail with a cause the box lists ends with an
+//     `::error title=Audit <job>::<kind>: see runbook step <N>` line on that
+//     failure, naming no secret and no finding's detail: the hardening step's
+//     own commands, the model step that runs the launcher (an expired or
+//     revoked token, the subscription's usage limit, a failed preflight and a
+//     managed-settings path all read alike from its one constant line, so that
+//     step names the class and only a real run tells them apart), the two
+//     artifact steps (an unexpected artifact) and the publish step (a refused
+//     publish). The three download steps' checksums, round D's guards, are the
+//     box's tool-checksum cause and stay as they are.
+//
 // The check recognises each job's steps by name, and the accepted fixture's
 // names are the closed list: a step the check's list does not hold is reported
 // with its name, as is a step that is missing or out of order. Every message
@@ -167,7 +199,7 @@ const (
 	auditCheckoutRef      = "          ref: ${{ github.sha }}\n"
 	auditNoCredentials    = "          persist-credentials: false\n"
 	auditArtifactUpload   = "actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2"
-	auditChecksIf         = "    timeout-minutes: 340\n    if: ${{ " + auditGuard + " }}\n"
+	auditChecksIf         = "    timeout-minutes: 355\n    if: ${{ " + auditGuard + " }}\n"
 	auditModelIf          = "    timeout-minutes: 120\n    if: ${{ " + auditGuard + " }}\n"
 	auditPublishIf        = "    timeout-minutes: 30\n    if: ${{ " + auditGuard + " }}\n"
 	// auditChecksPermissions is the checks job's permissions block, whose comment
@@ -226,16 +258,23 @@ const (
 	// auditWrapperBuild is the model job's own Go command, the wrapper's build.
 	auditWrapperBuild = "GOFLAGS=-mod=readonly GOPROXY=off go build -trimpath -o \"${RUNNER_TEMP}/audit-exec\" ./ci/auditexec\n"
 	// auditHardeningStep is the model-free step that hardens the runner: it must
-	// run before the sandbox preflight, which is inside the model step.
+	// run before the sandbox preflight, which is inside the model step, and it
+	// records each of its own commands' failure, so that a run fails with an
+	// ::error naming the runbook step instead of with set -e's own line.
 	auditHardeningStep = "      - name: Stop Docker and remove the runner user's sudo rule\n" +
 		"        timeout-minutes: 5\n" +
 		"        run: |\n" +
 		"          set -euo pipefail\n" +
-		"          sudo systemctl stop docker.service docker.socket\n" +
-		"          sudo systemctl disable docker.service docker.socket\n" +
-		"          sudo rm -f /etc/sudoers.d/runner\n" +
+		"          rc=0\n" +
+		"          sudo systemctl stop docker.service docker.socket || rc=$?\n" +
+		"          sudo systemctl disable docker.service docker.socket || rc=$?\n" +
+		"          sudo rm -f /etc/sudoers.d/runner || rc=$?\n" +
+		"          if [ \"${rc}\" -ne 0 ]; then\n" +
+		"            echo \"::error title=Audit model::the runner could not be hardened: see runbook step 10\"\n" +
+		"            exit 1\n" +
+		"          fi\n" +
 		"          if sudo -n true 2> /dev/null; then\n" +
-		"            echo \"::error title=Sandbox::sudo still works: see runbook step 10\"\n" +
+		"            echo \"::error title=Audit model::sudo still works: see runbook step 10\"\n" +
 		"            exit 1\n" +
 		"          fi\n"
 	// auditModelCanary is the model step's env:, whose canary line the cases that
@@ -466,8 +505,10 @@ const (
 		"          zizmor .github/workflows\n" +
 		"          " + auditActionlint
 	// auditRunCommand is the model step's own command, the one that writes the
-	// checked result under $RUNNER_TEMP.
-	auditRunCommand = "          ci/auditrun -claude-tarball \"${RUNNER_TEMP}/claude-code/claude-code.tgz\" -claude-integrity \"${CLAUDE_CODE_PIN_INTEGRITY}\" -result-out \"${RUNNER_TEMP}/result.json\"\n"
+	// checked result under $RUNNER_TEMP. Round E wraps it in the guard that
+	// names the runbook step a failed run is recovered by, so the case that
+	// reads the line is the guard's condition, which holds the command.
+	auditRunCommand = "          if ! ci/auditrun -claude-tarball \"${RUNNER_TEMP}/claude-code/claude-code.tgz\" -claude-integrity \"${CLAUDE_CODE_PIN_INTEGRITY}\" -result-out \"${RUNNER_TEMP}/result.json\"; then\n"
 	// auditEncryptResultCommand is the encrypt step's age command: it reads the
 	// file the launcher wrote, never the result's path under /srv/audit.
 	auditEncryptResultCommand = "          age --encrypt --recipient \"${AUDIT_PUBLISH_PUBLIC_KEY}\" --output \"${RUNNER_TEMP}/model-result.age\" \"${RUNNER_TEMP}/result.json\"\n"
@@ -496,9 +537,10 @@ const (
 		"            printf 'version=%s\\n' \"${version#version: }\"\n" +
 		"            printf 'integrity=%s\\n' \"${integrity#integrity: }\"\n" +
 		"          } >> \"${GITHUB_OUTPUT}\"\n"
-	// auditPublishCommand is the publish step's one line, the end of the job the
-	// case that moves the attestation check past it appends to.
-	auditPublishCommand = "          ci/auditpublish publish -result \"${RUNNER_TEMP}/result.json\" -reports docs/security/audits -gh \"$(command -v gh)\" -gitleaks \"$(command -v gitleaks)\" -tmp \"${RUNNER_TEMP}\"\n"
+	// auditPublishCommand is the publish step's own command line, the line the
+	// step that must come before it is inserted at, wrapped in round E's guard
+	// that names the runbook step a refused publish is recovered by.
+	auditPublishCommand = "          if ! ci/auditpublish publish -result \"${RUNNER_TEMP}/result.json\" -reports docs/security/audits -gh \"$(command -v gh)\" -gitleaks \"$(command -v gitleaks)\" -tmp \"${RUNNER_TEMP}\"; then\n"
 	// auditScorecardStep is the checks job's row 6 step, the shortest of the nine
 	// PR 5c adds and the one the cases that remove, rename and reorder a step
 	// anchor on.
@@ -616,10 +658,10 @@ const (
 	// A release file, an archive or the image is the untrusted party: every
 	// command that reads one runs under a timeout and records a failure of its
 	// own, never as a step that aborts the run's report.
-	auditChecksumFilter  = "          timeout 1m grep -E '^[0-9a-f]{64}  [A-Za-z0-9._+-]+$' \"${rel}/checksums.txt\" > \"${rel}/checksums.filtered\" 2> \"${out}/checksums-filter.stderr\" || rc=$?\n"
-	auditReleaseChecksum = "          (cd \"${rel}\" && timeout 10m sha256sum --check --strict checksums.filtered) > \"${out}/checksums.stdout\" 2> \"${out}/checksums.stderr\" || rc=$?\n"
+	auditChecksumFilter  = "          timeout 1m grep -E '^[0-9a-f]{64}  [A-Za-z0-9._+-]+$' \"${rel}/checksums.txt\" > \"${out}/checksums.filtered\" 2> \"${out}/checksums-filter.stderr\" || rc=$?\n"
+	auditReleaseChecksum = "          (cd \"${rel}\" && timeout 5m sha256sum --check --strict \"${out}/checksums.filtered\") > \"${out}/checksums.stdout\" 2> \"${out}/checksums.stderr\" || rc=$?\n"
 	// auditReleaseLoopBudget is row 7's attestation loop's overall budget, in
-	// seconds of the step, which its timeout-minutes (30) has to be above.
+	// seconds of the step, which its timeout-minutes (50) has to be above.
 	auditReleaseLoopBudget = "            if [ \"${SECONDS}\" -ge 1200 ]; then\n"
 	// auditBinaryUnpack is row 9's unpack: the one member, to stdout, through a
 	// size cap, under a timeout.
@@ -636,7 +678,7 @@ const (
 	// auditProvenanceVerify and auditCosignVerify are row 7's reads of the
 	// release's attestations and its signature.
 	auditProvenanceVerify = "            timeout 2m gh attestation verify \"${file}\" \\\n"
-	auditCosignVerify     = "            timeout 5m cosign verify \"${ref}\" \\\n"
+	auditCosignVerify     = "            timeout 3m cosign verify \"${ref}\" \\\n"
 	// auditHostileCopy and auditHostileCommit are row 13's staging copy and
 	// commit, each under a timeout of its own.
 	auditHostileCopy   = "          timeout 2m docker cp \"${stage}\" \"${staging}:/work/\" 2> \"${out}/staging-cp.stderr\" || rc=$?\n"
@@ -670,6 +712,51 @@ const (
 	auditRuntimeTimedOut   = "echo \"image-runtime timed-out\" >> \"${results}/not-run.txt\""
 	auditHostileTimedOut   = "echo \"hostile-inventories timed-out\" >> \"${results}/not-run.txt\""
 )
+
+// Round E's anchors (PRD #175, "A failed run is visible", and the workflow's own
+// time budget): the accepted shape's own verification outcome branches, and the
+// ::error lines it adds to every step that can fail with one of the box's
+// causes. Each is exactly as the fixture writes it, so a case that mistypes one
+// fails in mutate.
+var (
+	// Row 7's five verifications record one shape of outcome: rc 124 as the
+	// check that timed out, rc 1 - a checksum mismatch, a refused attestation
+	// or a refused signature - as the finding verification-failed in the
+	// results, and any other failure as a check that did not run.
+	auditChecksumOutcome    = auditVerificationBranch("          ", "the checksum check timed out after 5 minutes")
+	auditReleaseFileOutcome = auditVerificationBranch("            ", "the attestation of ${name} timed out after 2 minutes")
+	auditSignatureOutcome   = auditVerificationBranch("            ", "the image's signature timed out after 3 minutes")
+	auditAttestedSigOutcome = auditVerificationBranch("              ", "the ${kind} attestation's signature timed out after 3 minutes")
+	auditSBOMOutcome        = auditVerificationBranch("            ", "the SBOM's attestation timed out after 3 minutes")
+
+	// The five ::error lines round E adds, one per step that can fail with a
+	// cause PRD #175's box lists: the hardening step's own commands, the model
+	// step that runs the launcher (an expired or revoked token, the usage
+	// limit, a failed preflight and a managed-settings path cannot be told
+	// apart from its one line), the two artifact steps (an unexpected artifact)
+	// and the publish step (a refused publish).
+	auditHardeningError       = "            echo \"::error title=Audit model::the runner could not be hardened: see runbook step 10\"\n"
+	auditRunError             = "            echo \"::error title=Audit model::the audit did not run: see runbook step 10\"\n"
+	auditModelArtifactError   = "            echo \"::error title=Audit model::the run's artifacts are unexpected: see runbook step 11\"\n"
+	auditPublishArtifactError = "            echo \"::error title=Audit publish::the run's artifacts are unexpected: see runbook step 11\"\n"
+	auditPublishError         = "            echo \"::error title=Audit publish::the publish was refused: see runbook step 11\"\n"
+)
+
+// auditVerificationBranch returns one of row 7's verifications' outcome branch,
+// exactly as the accepted fixture writes it: the check that timed out recorded as
+// not run, with its limits line, a failure of the verification itself recorded as
+// the finding verification-failed in the results, and any other failure recorded
+// as a check that did not run.
+func auditVerificationBranch(indent, limits string) string {
+	return indent + "if [ \"${rc}\" -eq 124 ]; then\n" +
+		indent + "  echo \"release-integrity timed-out\" >> \"${results}/not-run.txt\"\n" +
+		indent + "  echo \"release-integrity: " + limits + "\" >> \"${results}/limits.txt\"\n" +
+		indent + "elif [ \"${rc}\" -eq 1 ]; then\n" +
+		indent + "  echo \"release-integrity verification-failed\" >> \"${results}/verification-failed.txt\"\n" +
+		indent + "elif [ \"${rc}\" -ne 0 ]; then\n" +
+		indent + "  echo \"release-integrity tool-failed\" >> \"${results}/not-run.txt\"\n" +
+		indent + "fi\n"
+}
 
 // auditChecksum is one tool download of a download step: the job it runs in,
 // the name its error gives it, the env: variable that holds its pin and the file
@@ -905,7 +992,7 @@ func TestAuditWorkflow(t *testing.T) {
 		// the owner. A weaker guard in one place opens exactly that path.
 		{
 			name:     "another guard in the checks job",
-			workflow: mutate(t, acceptedWorkflow, auditChecksIf, "    timeout-minutes: 340\n    if: ${{ always() }}\n"),
+			workflow: mutate(t, acceptedWorkflow, auditChecksIf, "    timeout-minutes: 355\n    if: ${{ always() }}\n"),
 			wantIn:   "guard",
 		},
 		{
@@ -1040,12 +1127,12 @@ func TestAuditWorkflow(t *testing.T) {
 		},
 		{
 			name:     "a job without a timeout",
-			workflow: mutate(t, acceptedWorkflow, "    timeout-minutes: 340\n", ""),
+			workflow: mutate(t, acceptedWorkflow, "    timeout-minutes: 355\n", ""),
 			wantIn:   "timeout-minutes",
 		},
 		{
 			name:     "a job timeout at GitHub's limit",
-			workflow: mutate(t, acceptedWorkflow, "    timeout-minutes: 340\n", "    timeout-minutes: 360\n"),
+			workflow: mutate(t, acceptedWorkflow, "    timeout-minutes: 355\n", "    timeout-minutes: 360\n"),
 			wantIn:   "timeout-minutes",
 		},
 
@@ -1155,7 +1242,7 @@ func TestAuditWorkflow(t *testing.T) {
 		},
 		{
 			name:     "github.token in the checks job's env",
-			workflow: mutate(t, acceptedWorkflow, "    timeout-minutes: 340\n", "    timeout-minutes: 340\n    env:\n      GH_TOKEN: ${{ github.token }}\n"),
+			workflow: mutate(t, acceptedWorkflow, "    timeout-minutes: 355\n", "    timeout-minutes: 355\n    env:\n      GH_TOKEN: ${{ github.token }}\n"),
 			wantIn:   "github.token",
 		},
 		{
@@ -1225,7 +1312,7 @@ func TestAuditWorkflow(t *testing.T) {
 		},
 		{
 			name:     "a job output",
-			workflow: mutate(t, acceptedWorkflow, "    timeout-minutes: 340\n", "    timeout-minutes: 340\n    outputs:\n      tag: ${{ steps.record.outputs.tag }}\n"),
+			workflow: mutate(t, acceptedWorkflow, "    timeout-minutes: 355\n", "    timeout-minutes: 355\n    outputs:\n      tag: ${{ steps.record.outputs.tag }}\n"),
 			wantIn:   "outputs",
 		},
 		{
@@ -1503,9 +1590,15 @@ func TestAuditWorkflow(t *testing.T) {
 		},
 		{
 			name: "the checked artifact's file under another name",
-			workflow: mutate(t, acceptedWorkflow, "          ci/auditpublish artifacts -job model -gh \"$(command -v gh)\" -tmp \"${RUNNER_TEMP}\"\n"+
+			workflow: mutate(t, acceptedWorkflow, "          if ! ci/auditpublish artifacts -job model -gh \"$(command -v gh)\" -tmp \"${RUNNER_TEMP}\"; then\n"+
+				auditModelArtifactError+
+				"            exit 1\n"+
+				"          fi\n"+
 				"          artifact=\"${RUNNER_TEMP}/artifact.json\"\n",
-				"          ci/auditpublish artifacts -job model -gh \"$(command -v gh)\" -tmp \"${RUNNER_TEMP}\"\n"+
+				"          if ! ci/auditpublish artifacts -job model -gh \"$(command -v gh)\" -tmp \"${RUNNER_TEMP}\"; then\n"+
+					auditModelArtifactError+
+					"            exit 1\n"+
+					"          fi\n"+
 					"          artifact=\"${RUNNER_TEMP}/upload.json\"\n"),
 			wantIn: "artifact.json",
 		},
@@ -1900,12 +1993,12 @@ func TestAuditWorkflow(t *testing.T) {
 		},
 		{
 			name:     "the job's token on the image pull",
-			workflow: mutate(t, acceptedWorkflow, "      - name: Pull the image anonymously by digest\n        timeout-minutes: 15\n        run: |\n", "      - name: Pull the image anonymously by digest\n        timeout-minutes: 15\n        env:\n          GH_TOKEN: ${{ github.token }}\n        run: |\n"),
+			workflow: mutate(t, acceptedWorkflow, "      - name: Pull the image anonymously by digest\n        timeout-minutes: 20\n        run: |\n", "      - name: Pull the image anonymously by digest\n        timeout-minutes: 20\n        env:\n          GH_TOKEN: ${{ github.token }}\n        run: |\n"),
 			wantIn:   "github.token",
 		},
 		{
 			name:     "the job's token on the hostile inventories",
-			workflow: mutate(t, acceptedWorkflow, "      - name: Run the CLI on hostile inventory files\n        timeout-minutes: 20\n        run: |\n", "      - name: Run the CLI on hostile inventory files\n        timeout-minutes: 20\n        env:\n          GH_TOKEN: ${{ github.token }}\n        run: |\n"),
+			workflow: mutate(t, acceptedWorkflow, "      - name: Run the CLI on hostile inventory files\n        timeout-minutes: 25\n        run: |\n", "      - name: Run the CLI on hostile inventory files\n        timeout-minutes: 25\n        env:\n          GH_TOKEN: ${{ github.token }}\n        run: |\n"),
 			wantIn:   "github.token",
 		},
 		{
@@ -2157,7 +2250,7 @@ func TestAuditWorkflow(t *testing.T) {
 		},
 		{
 			name:     "row 7's sha256sum without its timeout",
-			workflow: mutate(t, acceptedWorkflow, auditReleaseChecksum, strings.Replace(auditReleaseChecksum, "timeout 10m sha256sum", "sha256sum", 1)),
+			workflow: mutate(t, acceptedWorkflow, auditReleaseChecksum, strings.Replace(auditReleaseChecksum, "timeout 5m sha256sum", "sha256sum", 1)),
 			wantIn:   "sha256sum",
 		},
 		{
@@ -2177,7 +2270,7 @@ func TestAuditWorkflow(t *testing.T) {
 		},
 		{
 			name:     "row 7's signature check without its timeout",
-			workflow: mutate(t, acceptedWorkflow, auditCosignVerify, strings.Replace(auditCosignVerify, "timeout 5m cosign verify", "cosign verify", 1)),
+			workflow: mutate(t, acceptedWorkflow, auditCosignVerify, strings.Replace(auditCosignVerify, "timeout 3m cosign verify", "cosign verify", 1)),
 			wantIn:   "cosign",
 		},
 		{
@@ -2202,7 +2295,7 @@ func TestAuditWorkflow(t *testing.T) {
 		},
 		{
 			name:     "row 7's attestation loop with a budget past its step's timeout",
-			workflow: mutate(t, acceptedWorkflow, auditReleaseLoopBudget, strings.Replace(auditReleaseLoopBudget, "1200", "2400", 1)),
+			workflow: mutate(t, acceptedWorkflow, auditReleaseLoopBudget, strings.Replace(auditReleaseLoopBudget, "1200", "3600", 1)),
 			wantIn:   "budget",
 		},
 		{
@@ -2271,10 +2364,11 @@ func TestAuditWorkflow(t *testing.T) {
 			wantIn:   "hostile-inventories",
 		},
 		{
-			// The checks job's steps add up to 340 minutes: the job's own timeout is
-			// their ceiling, so a step's timeout is what fires first.
+			// The checks job's steps add up to 350 minutes: with the job's 5 minutes
+			// of set-up and post steps they stay within its 355, and a step raised by
+			// 5 puts them past it.
 			name:     "a checks step adding up past the job's timeout",
-			workflow: mutate(t, acceptedWorkflow, "      - name: Check the image's runtime settings\n        timeout-minutes: 10\n", "      - name: Check the image's runtime settings\n        timeout-minutes: 30\n"),
+			workflow: mutate(t, acceptedWorkflow, "      - name: Check the image's runtime settings\n        timeout-minutes: 15\n", "      - name: Check the image's runtime settings\n        timeout-minutes: 20\n"),
 			wantIn:   "timeout-minutes",
 		},
 
@@ -2477,6 +2571,82 @@ func TestAuditWorkflow(t *testing.T) {
 			name:     "trivy without --disable-telemetry",
 			workflow: mutate(t, acceptedWorkflow, auditTrivyOffline, strings.Replace(auditTrivyOffline, " --disable-telemetry", "", 1)),
 			wantIn:   "--disable-telemetry",
+		},
+
+		// Round E's first part: a verification that fails is a finding about the
+		// release, not a check that did not run. Row 7's five verifications record
+		// rc 1 as release-integrity verification-failed in the results, and keep rc
+		// 124 and any other failure as "not run".
+		{
+			name: "row 7's checksum mismatch recorded as tool-failed",
+			workflow: mutate(t, acceptedWorkflow, auditChecksumOutcome,
+				strings.Replace(auditChecksumOutcome, "          elif [ \"${rc}\" -eq 1 ]; then\n"+
+					"            echo \"release-integrity verification-failed\" >> \"${results}/verification-failed.txt\"\n", "", 1)),
+			wantIn: "verification-failed",
+		},
+		{
+			name: "row 7's refused release-file attestation without its verification-failed record",
+			workflow: mutate(t, acceptedWorkflow, auditReleaseFileOutcome,
+				strings.Replace(auditReleaseFileOutcome,
+					"              echo \"release-integrity verification-failed\" >> \"${results}/verification-failed.txt\"\n", "", 1)),
+			wantIn: "verification-failed",
+		},
+		{
+			name:     "row 7's SBOM attestation timing out recorded as tool-failed",
+			workflow: mutate(t, acceptedWorkflow, auditSBOMOutcome, strings.Replace(auditSBOMOutcome, "-eq 124", "-eq 200", 1)),
+			wantIn:   "timed-out",
+		},
+
+		// Round E's second part: no step's own timeouts reach its
+		// timeout-minutes. Row 7's 20-minute budget and the 26 minutes outside its
+		// loop add up to 46 of its 50, and row 8's three timeouts to 17 of its 20.
+		{
+			name:     "row 7's download timeout raised past its step's time-outs",
+			workflow: mutate(t, acceptedWorkflow, "timeout 5m gh release download", "timeout 30m gh release download"),
+			wantIn:   "past its timeout-minutes",
+		},
+		{
+			name: "row 8's image inspect timeout raised past its step's time-outs",
+			workflow: mutate(t, acceptedWorkflow, "            timeout 2m docker image inspect \"${image}@${digest}\" > \"${out}/inspect.json\"",
+				"            timeout 6m docker image inspect \"${image}@${digest}\" > \"${out}/inspect.json\""),
+			wantIn: "past its timeout-minutes",
+		},
+		{
+			name:     "row 8's time-out lowered below its timeouts",
+			workflow: mutate(t, acceptedWorkflow, "      - name: Pull the image anonymously by digest\n        timeout-minutes: 20\n", "      - name: Pull the image anonymously by digest\n        timeout-minutes: 15\n"),
+			wantIn:   "past its timeout-minutes",
+		},
+
+		// Round E's third part: every step that can fail with one of PRD #175's
+		// causes ends with an ::error naming the cause's kind and the runbook step
+		// that fixes it, and no secret and no finding's detail.
+		{
+			name:     "no error line when the runner could not be hardened",
+			workflow: mutate(t, acceptedWorkflow, auditHardeningError, ""),
+			wantIn:   "Audit model::the runner could not be hardened",
+		},
+		{
+			// An expired or revoked token, the usage limit, a failed preflight and
+			// a managed-settings path read alike here: the launcher's line is a
+			// constant class, so only a real run tells them apart.
+			name:     "no error line when the audit did not run",
+			workflow: mutate(t, acceptedWorkflow, auditRunError, ""),
+			wantIn:   "Audit model::the audit did not run",
+		},
+		{
+			name:     "no error line on the model job's unexpected artifact",
+			workflow: mutate(t, acceptedWorkflow, auditModelArtifactError, ""),
+			wantIn:   "Audit model::the run's artifacts are unexpected",
+		},
+		{
+			name:     "no error line on the publish job's unexpected artifact",
+			workflow: mutate(t, acceptedWorkflow, auditPublishArtifactError, ""),
+			wantIn:   "Audit publish::the run's artifacts are unexpected",
+		},
+		{
+			name:     "no error line on a refused publish",
+			workflow: mutate(t, acceptedWorkflow, auditPublishError, ""),
+			wantIn:   "Audit publish::the publish was refused",
 		},
 
 		// A document the reader cannot follow tells the check nothing, so it is
