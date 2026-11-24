@@ -461,9 +461,11 @@ func TestReportWithNeverPricedEstimates(t *testing.T) {
 
 	checkFragment(t, []byte(got))
 
+	// The sentence is markup: the total sits in a strong element, so only its
+	// text content carries the words.
 	want := "none of 1 resource could be estimated (not priced)"
-	if !strings.Contains(got, want) {
-		t.Errorf("the fragment does not say %q:\n%s", want, got)
+	if text := textOf(got); !strings.Contains(text, want) {
+		t.Errorf("the fragment does not say %q, its text content is:\n%s", want, text)
 	}
 }
 

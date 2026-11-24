@@ -1942,7 +1942,10 @@ func TestParsePlanBillingCapHours(t *testing.T) {
 // storagePrices, every plan key and every price key is refused with ErrDecode
 // when it is missing, null, of the wrong type, repeated or spelt inexactly. A
 // key that a document forgot would otherwise read as a value the document never
-// stated (ADR 0007, ADR 0024).
+// stated (ADR 0007, ADR 0024). A plan's vcpus is the one exception to the first
+// of those: version 2 lets a document leave it out, and the plan it reads is the
+// domain's to refuse (ADR 0045, TestParsePlanWithoutVCPUs); its other four cases
+// hold as for every other key.
 func TestParseRequiresEveryVersion2Key(t *testing.T) {
 	t.Parallel()
 
@@ -1962,6 +1965,9 @@ func TestParseRequiresEveryVersion2Key(t *testing.T) {
 		// the key differently or writes it a second time.
 		misspelt [2]string
 		repeated [2]string
+		// optional is whether version 2 lets a document leave the key out, in
+		// which case this reader does not refuse its absence (ADR 0045).
+		optional bool
 	}{
 		{
 			name:     "defaultRegion",
@@ -2013,6 +2019,9 @@ func TestParseRequiresEveryVersion2Key(t *testing.T) {
 			wrong:    `"2"`,
 			misspelt: [2]string{`"vcpus": 2,`, `"Vcpus": 2,`},
 			repeated: [2]string{`"vcpus": 2,`, `"vcpus": 2, "vcpus": 2,`},
+			// ADR 0045 makes the key optional: a plan without it reads with no
+			// count, which the domain refuses, not this layer.
+			optional: true,
 		},
 		{
 			name:     "plan memoryGiB",
@@ -2109,19 +2118,25 @@ func TestParseRequiresEveryVersion2Key(t *testing.T) {
 				return withoutNested(t, tc.base, tc.path, tc.key)
 			}
 
-			cases := []struct {
+			type keyCase struct {
 				name   string
 				data   string
 				quoted []string
 				// want contains the substrings the message must hold besides the
 				// key's own name, which every case requires.
 				want []string
-			}{
+				// requiredOnly is whether the case reads the key's absence, which
+				// a key a document may leave out does not have.
+				requiredOnly bool
+			}
+
+			cases := []keyCase{
 				{
-					name:   "missing",
-					data:   remove(t),
-					quoted: []string{tc.key},
-					want:   []string{"required key", "is missing"},
+					name:         "missing",
+					data:         remove(t),
+					quoted:       []string{tc.key},
+					want:         []string{"required key", "is missing"},
+					requiredOnly: true,
 				},
 				{
 					name:   "null",
@@ -2146,6 +2161,14 @@ func TestParseRequiresEveryVersion2Key(t *testing.T) {
 					quoted: []string{tc.key},
 					want:   []string{"unknown key", "keys are exact"},
 				},
+			}
+
+			// A key version 2 lets a document leave out is not refused here when
+			// it is missing: what its absence reads as is the domain's to refuse
+			// (ADR 0045). The key is still refused null, of the wrong type,
+			// repeated and spelt inexactly, as the cases below pin.
+			if tc.optional {
+				cases = slices.DeleteFunc(cases, func(c keyCase) bool { return c.requiredOnly })
 			}
 
 			for _, tt := range cases {
