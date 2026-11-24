@@ -208,8 +208,8 @@ func (m Manifest) ModuleScript() (string, error) {
 	}
 }
 
-// ServiceWorkerPaths returns the URL paths that must not answer 200 on the
-// canonical host (behaviour 4): /sw.js, /service-worker.js,
+// ServiceWorkerPaths returns the URL paths that must not answer with any 2xx
+// status on the canonical host (behaviour 4): /sw.js, /service-worker.js,
 // /serviceworker.js and /worker.js, in that order. A manifest that lists one
 // of them (without its leading slash) is a configuration error of Run.
 func ServiceWorkerPaths() []string {

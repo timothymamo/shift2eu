@@ -17,8 +17,8 @@ const (
 	// KindRoot: https://<host>/ serves index.html's bytes (behaviour 3);
 	// Target is "/".
 	KindRoot = "root"
-	// KindServiceWorker: one path of ServiceWorkerPaths does not answer 200
-	// (behaviour 4); Target is the path ("/sw.js").
+	// KindServiceWorker: one path of ServiceWorkerPaths answers no 2xx
+	// status (behaviour 4); Target is the path ("/sw.js").
 	KindServiceWorker = "service-worker"
 	// KindHTMLCache: one HTML page's Cache-Control (behaviour 5); Target is
 	// "/" or the page's path ("privacy.html").
