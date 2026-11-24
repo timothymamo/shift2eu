@@ -134,8 +134,16 @@ func buildSite(t *testing.T, version string) string {
 	cmd.Dir = root
 	// The builder builds cmd/shift2eu-web for js/wasm itself, so an inherited
 	// GOOS or GOARCH of another target must not reach it; the later entries of
-	// the environment win.
-	cmd.Env = append(cmd.Environ(), "GOOS=", "GOARCH=", "GOFLAGS=-mod=readonly", "GOWORK=off")
+	// the environment win. The child stays offline (issue #514): GOPROXY=off
+	// keeps a module from being fetched, GOTOOLCHAIN=local a toolchain from
+	// being fetched, GOSUMDB=off the checksum database from being contacted,
+	// and -mod=readonly makes a go.sum miss fail. GOSUMDB=off is needed on its
+	// own because the go command falls back to a direct sumdb lookup for a
+	// module's checksum even with GOPROXY=off and GOTOOLCHAIN=local. The test
+	// reads an inventory and a catalog snapshot and needs no module, toolchain
+	// or checksum it does not have, so a missing one fails here instead of
+	// reaching the network.
+	cmd.Env = append(cmd.Environ(), "GOOS=", "GOARCH=", "GOFLAGS=-mod=readonly", "GOWORK=off", "GOPROXY=off", "GOTOOLCHAIN=local", "GOSUMDB=off")
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {
