@@ -2157,10 +2157,10 @@ attestation step's `if ! digest="$(jq -er ...)"` read, and in both download step
 artifact's ID and digest (`if [[ ! "${id}" =~ ^[0-9]+$ ]] || [[ ! "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]]`,
 between the digest's read and the zip's download) and the single-file `ls -A` check, each with that
 branch; the empty digest's branch is held whole as `then`, `echo "image not pulled: ..."`, `exit 0` and
-`fi`, each a line of its own, so none of them can be run together onto one line. In today's workflow the verification is the only
-command continued over lines; the check does not require that, it only matches the verification as one
-contiguous command. An order broken is reported for every pair out of order, the command that
-must come first named first.
+`fi`, each a line of its own, so none of them can be run together onto one line. In today's workflow
+the verification is the only command continued over lines; the check does not require that, it only
+matches the verification as one contiguous command. An order broken is reported for every pair out of
+order, the command that must come first named first.
 
 **The workflow check's residual risk (accepted, review round 5).** The check is a structural tripwire
 over the workflow's text, not a shell parser. It refuses the edits that make a guard look present and
