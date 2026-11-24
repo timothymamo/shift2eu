@@ -965,6 +965,53 @@ var pinnedDepguardRules = []check.DepguardRule{
 		Deny:  []string{"os"},
 	},
 	{
+		// The front's behaviour test (PRD #297 milestone 4, docs/adr/0045),
+		// behind the sitefront tag and run by make test-sitefront: it starts the
+		// pinned container and a local TLS upstream, so it takes exactly what it
+		// imports, each exact, and no package of the module. Its doc.go is held by
+		// test-docs-are-pure with the other test trees'.
+		Name:     "sitefront-behaviour-test",
+		ListMode: "strict",
+		Files: []string{
+			"**/test/sitefront/**/*_test.go",
+			"**/test/sitefront/*_test.go",
+		},
+		Allow: []string{
+			"bufio$",
+			"bytes$",
+			"compress/gzip$",
+			"context$",
+			"crypto/ecdsa$",
+			"crypto/elliptic$",
+			"crypto/rand$",
+			"crypto/tls$",
+			"crypto/x509$",
+			"crypto/x509/pkix$",
+			"encoding/json$",
+			"encoding/pem$",
+			"errors$",
+			"fmt$",
+			"io$",
+			"math/big$",
+			"net$",
+			"net/http$",
+			"net/http/httptest$",
+			"net/url$",
+			"os$",
+			"os/exec$",
+			"path/filepath$",
+			"slices$",
+			"strconv$",
+			"strings$",
+			"sync$",
+			"testing$",
+			"time$",
+		},
+		Deny: []string{
+			"github.com/timothymamo/shift2eu/",
+		},
+	},
+	{
 		Name:     "e2e-is-black-box",
 		ListMode: "strict",
 		Files: []string{
@@ -1096,7 +1143,8 @@ var pinnedDepguardRules = []check.DepguardRule{
 	{
 		// The test trees' own documentation packages (issue #152, the auditor's finding
 		// H-1): test/architecture, test/container, test/devenv, test/docs, test/e2e,
-		// test/examples (issue #179), test/lint, test/site (PRD #297 milestone 2) and
+		// test/examples (issue #179), test/lint, test/site (PRD #297 milestone 2),
+		// test/sitefront (PRD #297 milestone 4, docs/adr/0045) and
 		// test/ci (issue #275). Each has a doc.go that imports nothing as its one
 		// production file (test/e2e, test/site and test/ci: below), and each is a
 		// production package a composition root can import, because the roots' allow
@@ -1136,6 +1184,7 @@ var pinnedDepguardRules = []check.DepguardRule{
 			"**/test/lint/**",
 			"**/test/site/**",
 			"!**/test/site/internal/**",
+			"**/test/sitefront/**",
 			"**/test/ci/**",
 			"!$test",
 		},
