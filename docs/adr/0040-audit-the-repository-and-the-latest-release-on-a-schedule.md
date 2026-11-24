@@ -343,8 +343,10 @@ launcher and its environment, the audit directory, the settings file and its per
 wrapper, the sandbox preflight, the user-namespace handling and the Claude Code pin. A third, "The
 publish program's GitHub side" (2026-11-23), settles the publish program's entry point and its GitHub
 side: the package split, the `gh` calling contract and its endpoint table, the fake `gh` its tests run
-against, and the subcommands. The other items of the list above come with the pull requests of
-milestone 2 that build them.
+against, and the subcommands. A fourth, "The workflow" (2026-11-24, PR 5b), settles the encryption tool
+and the artifact handling, the jobs' read scopes, the App token's `permission-*` inputs, the time budget
+and the Actions-cache residual risk. The other items of the list above (the container flags, the checks
+job's final scopes) come with PR 5c.
 
 ### The publish program's core (milestone 2, amended 2026-11-23)
 
@@ -1198,7 +1200,8 @@ image, and nothing is written on it (the image check's client is read-only, and 
 digest only as text of the report). PR 5 closes the gap with `gh attestation verify
 oci://<image>@<digest> --repo <owner>/<name> --signer-workflow <owner>/<name>/.github/workflows/release.yml
 --source-ref refs/tags/<tag>` as its own workflow step, outside the program's `gh api` contract, as
-`vm-tools.yml` already verifies Lima's attestations.
+`vm-tools.yml` already verifies Lima's attestations. *Added 2026-11-24 (PR 5b):* done, the publish job's
+`Verify the image's provenance attestation` step (The workflow, below).
 
 **The previous report.** `LoadPrevious` lists `-reports` (the checkout's `docs/security/audits`), picks
 the newest name by `publish.NewestReport` and opens only it: a symbolic link, a directory or any other
@@ -2016,7 +2019,8 @@ of milestone 2), and the constraints PR 5 must keep:
   `os.SameFile` check refuses what it opened.
 - **Renovate's generic manager** lists the workflows that hold an annotated pin one by one; PR 5's audit
   workflow must join that list, which `test/lint`'s `TestEveryAnnotatedWorkflowPinIsScanned` enforces
-  once the workflow holds a `# renovate: datasource=` comment.
+  once the workflow holds a `# renovate: datasource=` comment. *Added 2026-11-24 (PR 5b):* it has joined
+  both managers' lists, the versions' and the release assets' digests'.
 
 #### The runner's user-namespace restriction
 
@@ -2090,6 +2094,120 @@ runs under a personal plan's token instead.
   unsandboxed.
 - **Bash rules are text patterns** and easy to step around; they are defence in depth. The containment
   is the sandbox, the wrapper and the read deny list, which the probes test on every run.
+
+### The workflow (milestone 2, PR 5b, amended 2026-11-24)
+
+PR 5b adds `.github/workflows/scheduled-security-audit.yml` and `check.AuditWorkflow`, which
+`test/architecture`'s `TestScheduledSecurityAuditWorkflow` holds it to; PR 5c completes the checks job.
+The frame is the one Decision's sections above give: `workflow_dispatch` with no inputs as the only
+trigger until milestone 3, the guard condition verbatim in every job's `if:` and in the concurrency
+group, `permissions: {}` at the top, the `security-audit` environment, `runs-on: ubuntu-24.04` and every
+checkout of `github.sha` with `persist-credentials: false` and no sparse checkout.
+
+**The check.** Each job's steps are a closed list, recognised by name and held in order, with the
+commands each step's script must run: a step that is missing, out of order or not on the list is
+reported by name. One step is optional: the model job's `Read the Claude Code pin`, the step
+`test/lint`'s install check wants before the install step (`id: claude-code-pin`). Only
+`actions/checkout`, `actions/upload-artifact` and `actions/create-github-app-token` run, each pinned by
+commit with a version comment. Every reference to a secret, a variable, `github.token` or the App token's
+output is refused on any line but the one its step's spec allows, comments included; `secrets[`,
+`toJSON(secrets)`, `secrets: inherit`, `set -x`, a `${{ }}` in a script, a path under `/tmp` or `/run`, a
+job output and `actions/cache` are refused anywhere. The raw lines hold three things again, so a document
+the YAML reader refuses still draws the message that names them: no check or container command in the
+model job, the hardening step before the model step, and the App token step in the publish job alone.
+
+**Job permissions** (`GITHUB_TOKEN`, each read): the checks job `contents` and `attestations` (PR 5c's
+release-integrity rows; scorecard and row 15 may add `actions` or `issues` after the first run); the
+model job `contents` and `actions`, the artifact listing and download; the publish job `contents`,
+`actions` and `attestations`, the listing, the download and the image check. No `packages`: the image is
+public.
+
+**Go without `actions/setup-go`.** No job runs setup-go, whose default restores an Actions cache. The
+first `go` command of each job runs in the module and fetches go.mod's toolchain (`GOTOOLCHAIN`, checked
+against the checksum database) with the modules (`go mod download`, and `go -C tools mod download` in the
+checks job); every later Go command, the builds of `ci/auditexec`, `ci/auditrun` and `ci/auditpublish`
+included, runs with `GOFLAGS=-mod=readonly GOPROXY=off`, and govulncheck with the same. The checks job
+then checks that `go env GOVERSION` is go.mod's.
+
+**The encryption tool is `age`** (v1.3.2, pinned by version and the SHA-256 of
+`age-<version>-linux-amd64.tar.gz` in each job). The public halves are the variables
+`AUDIT_MODEL_PUBLIC_KEY` and `AUDIT_PUBLISH_PUBLIC_KEY`, read only in the step that encrypts to them. Each
+private half reaches `age --decrypt --identity -` on stdin, from that one step's `env:`, and is never
+written to a file. A ciphertext that does not decrypt fails the step, and `age` writes no output.
+
+**The artifact hand-off.** Each downloading job first runs `auditpublish artifacts -job model|publish`,
+which fails closed on an extra, a duplicate, a missing or an expired artifact. The same step then lists
+the run's artifacts again, takes the one artifact of the expected name (refusing none or two), its numeric
+ID and its `digest`, the SHA-256 that `upload-artifact` computes of the zip it stores, downloads exactly
+that ID through `gh api .../actions/artifacts/<id>/zip`, checks the zip against the digest, and refuses a
+zip that holds anything but the one `.age` file. The two listings are two calls; between them only the run
+itself could add an artifact, and its earlier jobs are finished (the guard skips every re-run), so that
+window is accepted. The model job checks the decrypted archive before unpacking it: only directories and
+regular files under `results/`, none with a `..` element, unpacked as root into `/srv/audit/checks` with
+the archive's owners and modes ignored, then every write bit removed.
+
+**The checks job (5b)** runs rows 1 to 5 and 16: the commit and the latest release's tag, the pinned
+tools (gitleaks v8.30.1, osv-scanner v2.7.1, zizmor v1.33.1, age, each by SHA-256; govulncheck v1.10.0 as
+`security.yml` pins it, and actionlint from `tools/go.mod`), govulncheck and osv-scanner on the module and
+`tools/`, gitleaks on the whole history with `--redact`, zizmor and actionlint on the workflows. Each
+tool's output, its stderr and its exit code go to `$RUNNER_TEMP/results`, never to the log: a finding is
+data for the model, not a failure of the job. `results/not-run.txt` names rows 6 to 11 and 13 to 15, so
+the result reports them "not run", never "clean". `github.token` reaches only the row 1 step and the
+zizmor step's `env:` (zizmor's online audits).
+
+**The model job** installs `bubblewrap` (0.9.0-1ubuntu0.3) and `socat` (1.8.0.0-4ubuntu0.1) from the
+Ubuntu archive, each `.deb` checked against the SHA-256 of `noble-updates`' Packages index (whose
+`InRelease` signature was checked against the Ubuntu archive key when the pin was taken) before
+`dpkg -i`; Renovate's `deb` datasource reads that suite (a package rule in `.github/renovate.json5`) and
+the digest is replaced by hand in the same PR. It loads `.github/security-audit/bwrap.apparmor`
+(`TestBwrapAppArmorProfile` pins its rules line for line), checks that `base64`, `cat`, `cut`, `head`,
+`od`, `sha256sum`, `sort`, `tail`, `tr`, `uniq` and `wc` under `/usr/bin` are GNU coreutils', and builds
+the wrapper, the launcher and the artifact check. The audit directory is made then, while sudo works:
+`/srv`, `/srv/audit`, `bin/` and `bin/audit-exec` are root's (`bin/` and the wrapper mode 0555); `checks/`
+is root's, every write bit removed; `work/` and `state/` are the runner's, as the launcher writes them.
+**`checkout/` stays the runner's** (round L's owner question): git refuses a repository another user
+owns, and the wrapper's git reads no global or system configuration where a `safe.directory` could be
+set. What holds that tree against its owner is the sandbox's write allow list, which names neither tree,
+and the layout check's mode walk. The model-free hardening step then stops and disables Docker, checks
+the owners and modes above (`stat`), removes `/etc/sudoers.d/runner`, and fails unless `sudo -n true`
+fails and the Docker socket is gone. The model step runs `auditrun -claude-tarball
+$RUNNER_TEMP/claude-code/claude-code.tgz -claude-integrity <the pin's integrity>`, the integrity from the
+pin step's output. **The canary is made in the model step for each run** (32 bytes of `/dev/urandom` as
+hex, exported to the launcher alone): a constant in the workflow would be in the checkout copy the model
+reads, and a result that quoted it would be refused.
+
+**The publish job** downloads gitleaks and age and builds `ci/auditpublish` offline. After the
+`image` subcommand it runs `gh attestation verify oci://ghcr.io/<owner>/<name>@<digest> --repo
+<owner>/<name> --signer-workflow <owner>/<name>/.github/workflows/release.yml --source-ref
+refs/tags/<tag> --deny-self-hosted-runners` as a model-free step with the job's `github.token` and
+`attestations: read`, the digest and tag read from the result and held to their shapes first; a refusal
+fails the run. That closes the image check's residual risk above: the attestation's Sigstore signature
+and certificate are verified before the digest is trusted. The App token step has exactly the four
+`permission-*` inputs of Decision 1 (`contents`, `pull-requests`, `issues`, `security-events`, each
+`write`); gitleaks runs `stdin --ignore-gitleaks-allow --redact` over the decrypted result; the publish
+step alone holds the App's token and `AUDIT_FINGERPRINT_KEY`.
+
+**Time budget:** checks 180 minutes, model 120 (its model step 90, around the preflight's 10-minute and
+the audit's 40-minute deadlines), publish 30; every step has its own `timeout-minutes`.
+
+**The Actions cache (residual risk).** Anything in the checks job runs as the runner's user and could read
+the Actions runtime token and save cache entries scoped to `main`, which every other workflow on `main`
+restores by key. The audit cannot stop that; the rule is that **no release-relevant workflow restores an
+Actions cache**: `release.yml`'s setup-go steps set `cache: false`, which `test/architecture`'s
+`TestReleaseWorkflowDisablesTheGoCache` and `TestGoCacheGaps` pin, and the audit workflow itself restores
+none (no `actions/cache`, no setup-go; the check refuses the first). CI workflows on `main` that do
+restore a cache could read a poisoned entry; their results are checks, not releases, and that is accepted.
+
+**Left to PR 5c:** rows 6 to 11 and 13 to 15 and their containers and flags; the trivy, cosign and
+scorecard pins; the checks job's final read scopes after the first run; a check that times out recorded in
+the report's limits while the run still publishes (today a step timeout fails the job); and failure
+summaries that name the runbook step for every cause (today the programs' one lines and the workflow's
+own errors do; a tool download whose checksum differs fails with sha256sum's line alone). **To be checked
+on the first run** (runbook step 8): that `socat`'s and `bubblewrap`'s `.deb`s install with the image's
+libraries (`dpkg -i` does not fetch a missing dependency) and that the pinned versions are still in the
+archive's pool; that the runner's sudo rule is `/etc/sudoers.d/runner`; that the runner's preinstalled
+Go switches to go.mod's toolchain; that govulncheck runs offline on what `go mod download` fetched; and
+the round E note on an empty section header in the checkout copy's `.git/config`.
 
 ## Alternatives considered
 

@@ -2364,7 +2364,10 @@ bytes (for example `openssl rand -hex 32`). Add the variables (the App's client 
 and the secrets (`AUDIT_APP_PRIVATE_KEY`, `AUDIT_MODEL_PRIVATE_KEY`, `AUDIT_PUBLISH_PRIVATE_KEY`,
 `AUDIT_FINGERPRINT_KEY`, and `CLAUDE_CODE_OAUTH_TOKEN` from `claude setup-token`). Record the token's dates
 above. Delete the two private key files from the machine once stored, and keep no copy of the fingerprint
-key (replacing it only makes the next run file existing private findings as new drafts).
+key (replacing it only makes the next run file existing private findings as new drafts). The encryption
+tool is `age` (ADR 0040, The workflow): each private half is the `AGE-SECRET-KEY-1...` identity that
+`age-keygen` writes, each public half its `age1...` recipient. Pairs made with another tool before PR 5b
+are made again with `age-keygen` and stored as step 10 rotates them.
 
 ```bash
 # Mac (admin), as yourself
@@ -2571,7 +2574,9 @@ gh api repos/timothymamo/shift2eu/rulesets/<Protect main id> --jq '.rules[] | se
 
 **7. Merge milestone 2**: the merge of PR 5c (branch `feat/175-m2-audit-checks-job`), the last pull
 request of milestone 2's PR 5 split (5a preliminaries, 5b the workflow frame and its jobs, 5c the rest of
-the checks job). Steps 1 to 6 come before it; the audit is live once it merges.
+the checks job). Steps 1 to 6 come before it; the audit is live once it merges. The workflow is on `main`
+from PR 5b on, but its checks job runs only rows 1 to 5 until 5c merges: do not start it (step 8) before
+then.
 
 ```bash
 # Mac (admin), as yourself
