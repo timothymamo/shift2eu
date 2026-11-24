@@ -2275,7 +2275,7 @@ result it refuses has no write token minted for it; the App token step has exact
 `permission-*` inputs of Decision 1 (`contents`, `pull-requests`, `issues`, `security-events`, each
 `write`); the publish step alone holds the App's token and `AUDIT_FINGERPRINT_KEY`.
 
-**Time budget:** checks 180 minutes, model 120 (its model step 90, around the preflight's 10-minute and
+**Time budget:** checks 180 minutes (340 since review round D of PR 5c, below), model 120 (its model step 90, around the preflight's 10-minute and
 the audit's 40-minute deadlines), publish 30; every step has its own `timeout-minutes`.
 
 **The Actions cache (residual risk).** Anything in the checks job runs as the runner's user and could read
@@ -2290,8 +2290,8 @@ restore a cache could read a poisoned entry; their results are checks, not relea
 their containers and flags; the trivy, cosign and scorecard pins; the checks job's read scopes (to be
 confirmed on the first run); and a check that times out recorded in the report's limits while the run
 still publishes. **Still open after PR 5c:** failure
-summaries that name the runbook step for every cause (today the programs' one lines and the workflow's
-own errors do; a tool download whose checksum differs fails with sha256sum's line alone, the hardening
+summaries that name the runbook step for every cause (today the programs' one lines, the workflow's
+own errors and, since review round D of PR 5c, every tool download whose checksum differs do; the hardening
 step's commands that fail under `set -e` before its own checks, such as `systemctl stop`, fail with their
 own lines, the errors that point at runbook step 11 name none of their causes there yet, and the hardening
 step's three own errors, wrong owners or modes of the audit directory, `sudo -n true` still succeeding
@@ -2317,17 +2317,24 @@ appends its own: `scorecard-admin needs-admin-read` on every run; `image-pull`, 
 `hostile-inventories` and `image-scan` `image-not-pulled` when row 7 resolved no digest or row 8 pulled
 none; `image-scan tool-failed` when row 2's database download failed; `binary-vulnerabilities
 results-missing` when no archive gave up a binary; `fuzzing no-fuzz-targets` or `fuzzing tool-failed`;
-and `<check id> timed-out` for a whole check its inner deadline stopped. **A check that times out is
-recorded, and the run still publishes**: each tool runs under its own `timeout` (coreutils), shorter
-than its step's `timeout-minutes`, so the step records the timeout and goes on; the step's time-out is
-the backstop, and a step it stops fails the job as before.
+and `<check id> timed-out` for a whole check its inner deadline stopped, or `<check id> tool-failed` for
+one whose command failed (review round D, below). **A check that times out is recorded, and the run
+still publishes**: each tool runs under its own `timeout` (coreutils), shorter than its step's
+`timeout-minutes`, so the step records the timeout and goes on; the step's time-out is the backstop, and
+a step it stops fails the job, which then skips the encryption and publishes nothing. Review round D
+keeps the release's content from reaching that backstop (below); the inner timeouts of row 7 can still
+add up past its step's 30 minutes when every one of its registry and Sigstore reads hangs to its limit,
+which is accepted for now and listed under To be checked on the first run.
 
-**Time budget** (within the checks job's 180 minutes): row 2's download 25 minutes (trivy's database
+**Time budget** (within the checks job's 340 minutes, amended in review round D from 180): row 2's
+download 25 minutes (trivy's database
 included), scorecard 20 (its run 15), the release's verification 30, the pull 15, the binaries'
 govulncheck 20 (5 per binary), trivy 15, the runtime check 10, the hostile inventories 20 (60 seconds
 per run, 15 minutes of runs), fuzzing 50 (10 minutes of fuzzing and 12 in all per target, at most three
 targets, the others recorded in the limits), the supply-chain reads 15 (2 per read). The dynamic tests,
-rows 13 and 14, take at most 70 of their steps' minutes: the 60 of the budget, plus set-up.
+rows 13 and 14, take at most 70 of their steps' minutes: the 60 of the budget, plus set-up. The job's
+steps add up to 330 minutes, which with 5 minutes for the job's set-up and post steps stays within its
+340 (`test/architecture` holds that sum), and GitHub's own limit is 360.
 
 **Pins.** scorecard v5.6.0 (`scorecard_<version>_linux_amd64.tar.gz`), cosign v3.1.4
 (`cosign-linux-amd64`, the version and digest `release.yml` and `dev/lima.yaml` pin, so Renovate's
@@ -2355,10 +2362,11 @@ scope above should allow is a finding, and a scope no read used is dropped.
 
 - **Row 6**: the scorecard CLI, not its action, so nothing is published and no `id-token` is asked for;
   its checks but the two admin ones, `--format json --show-details`, with the job's token as `GH_TOKEN`.
-- **Row 7**: `gh release download` of the recorded tag; `sha256sum --check --strict` of `checksums.txt`
-  and a comparison of the files it lists with the release's (a file outside the list is data too);
-  `gh attestation verify` of every release file, `checksums.txt` included, bound to `release.yml` at
-  `refs/tags/<tag>` with `--deny-self-hosted-runners`; the tag's and `latest`'s digests from the registry
+- **Row 7**: `gh release download` of the recorded tag; `sha256sum --check --strict` of `checksums.txt`'s
+  well-formed lines alone (`checksums.filtered`, below) and a comparison of the files it lists with the
+  release's (a file outside the list is data too); `gh attestation verify` of every release file,
+  `checksums.txt` included, bound to `release.yml` at `refs/tags/<tag>` with `--deny-self-hosted-runners`,
+  within a 20-minute budget; the tag's and `latest`'s digests from the registry
   (`docker buildx imagetools inspect`), a digest of any other shape recorded as none; `cosign verify` of
   the image by digest and `cosign verify-attestation` of its SLSA provenance (`slsaprovenance1`) and its
   SPDX SBOM (`https://spdx.dev/Document/v2.3`), keyless, with `--certificate-identity
@@ -2366,23 +2374,24 @@ scope above should allow is a finding, and a scope no read used is dropped.
   and the `push` trigger; the SBOM itself as the predicate `gh attestation verify --format json`
   returns, for row 10; and the latest release's tag beside both digests.
 - **Row 8**: `docker pull --platform linux/amd64` by digest, anonymous, then `docker save` for trivy.
-- **Row 9**: each archive's `shift2eu` binary unpacked alone (`tar --no-same-owner
-  --no-same-permissions`, `unzip -j`), only a regular file read, never a link, and `govulncheck
+- **Row 9**: each archive's `shift2eu` binary streamed out alone (`tar -xOzf`, `unzip -p`) through a
+  128 MiB size cap (`head -c`), so no owner, mode or link of the archive's is written, and `govulncheck
   -mode=binary`: read, never run.
 - **Row 10**: `trivy image --input` on the saved image and `trivy sbom` on the attested SBOM, offline at
   scan time (`--skip-db-update --skip-java-db-update --skip-check-update --offline-scan
   --skip-version-check --disable-telemetry`).
 - **Row 11**: from `docker image inspect` (the user, the configuration) and `docker export` of a created
   container, listed by `tar -tvf` (the shells and setuid files the filesystem holds), never by a shell in
-  it; and one start of `version` with row 13's flags, which shows the image runs with a read-only root
-  filesystem.
+  it, tar's own warnings in `filesystem.stderr`; and one start of `version` with row 13's flags and
+  limits, which shows the image runs with a read-only root filesystem.
 - **Row 13**: below.
 - **Row 14**: below.
 - **Row 15**: the workflows' `uses:` lines, those not pinned to a 40-hex commit and their `permissions:`
   blocks from the checkout, as text; the rulesets and each ruleset by ID (a number, or the step fails),
-  each environment's settings, branch policies and secret and variable names (names only: the API never
-  returns a value), the repository's secret and variable names, as the `release-tag` skill's step 2
-  reads them; Renovate's Dependency Dashboard and its open pull requests; and `git diff` of the
+  each environment's settings, branch policies and secret and variable names, the repository's secret
+  and variable names, as the `release-tag` skill's step 2 reads them, names only: the secrets endpoints
+  return no value, but the variables endpoints return each variable's value, so every names read keeps
+  the names alone through `gh api --jq` (`[.variables[].name]`, `[.secrets[].name]`, review round D); Renovate's Dependency Dashboard and its open pull requests; and `git diff` of the
   dependency files (`go.mod`, `go.sum`, `tools/`, `Dockerfile`, the workflows, the Claude Code pin,
   `dev/lima.yaml`, `infra/tofu.yaml`) from the commit of the last report under `docs/security/audits/`.
 
@@ -2410,9 +2419,13 @@ which the container is killed and removed.
   release image (by the digest row 7 resolved) with `--memory 512m --pids-limit 64` too. **No tmpfs**:
   the CLI writes nothing but its stdout and stderr.
 - **Row 14, fuzzing.** The targets are found by reading the tracked `*_test.go` files outside `testdata`
-  as text (`^func Fuzz...(`): nothing is built or run to list them. Each target runs `go test -run '^$'
+  as text, by their signature alone (`^func Fuzz[A-Z0-9_][A-Za-z0-9_]*\(f \*testing\.F\)`, so a helper
+  such as `Fuzzy` is none): nothing is built or run to list them. A target whose package or name has
+  another shape is recorded as `fuzzing unexpected-target` and skipped, never a reason to end the step.
+  Each target runs `go test -run '^$'
   -fuzz '^<name>$' -fuzztime 10m` in a container of its own from the pinned Go image, with
-  `GOFLAGS=-mod=readonly`, `GOPROXY=off` and `GOTOOLCHAIN=local`, as user 65534, the tree at the audited
+  `GOFLAGS=-mod=readonly`, `GOPROXY=off` and `GOTOOLCHAIN=local`, as user 65534, with
+  `--memory 10g --pids-limit 512`, the tree at the audited
   commit (`git archive`) and the module cache row 2's download filled copied in through the staging
   container. **Its one tmpfs**, `/scratch` (`rw,exec,nosuid,size=4g,mode=1777`), is needed because `go
   test -fuzz` writes: a crash input into the package's `testdata/fuzz/`, so the tree is copied there
@@ -2425,8 +2438,64 @@ which the container is killed and removed.
 `verify-attestation` reads the attestations `actions/attest` pushed as OCI referrers (`gh attestation
 verify` reads them, as `release.yml`'s `verify` job shows); that scorecard reads with these scopes and
 which row 15 reads are refused; that trivy runs offline with these flags; that `docker commit` keeps the
-release image's user, working directory and entry point; and that `go test -fuzz` builds offline from
-the copied module cache without writing to it.
+release image's user, working directory and entry point; that `go test -fuzz` builds offline from
+the copied module cache without writing to it; and that row 7's inner timeouts stay within its step's
+30 minutes on a slow Sigstore or registry (above), else its step's timeout is raised within the job's.
+
+**Review round D of PR 5c (2026-11-24).** The review's and the audit's findings, each held by
+`check.AuditWorkflow` and a case of its test:
+
+- **Release content never stops the report.** The release's files, archives and image are the untrusted
+  party: a `checksums.txt` that lists `/dev/zero`, an archive whose member decompresses to gigabytes, an
+  image layer GNU tar refuses or a `docker cp` the image makes fail ended rows 7 to 13 under `set -e`,
+  or ran into the step's timeout, and the run then published nothing. In rows 7, 8, 9, 11 and 13 every
+  `sha256sum`, `tar`, `unzip`, `docker export|create|cp|commit|image inspect|save`, `cosign` and `gh
+  attestation verify` now runs under a `timeout` of its own with `|| rc=$?`, its exit recorded, and each
+  of those steps records a failure as `<check> tool-failed` and a timeout as `<check> timed-out` in
+  `not-run.txt` (`release-integrity`, `image-pull`, `binary-vulnerabilities`, `image-runtime`,
+  `hostile-inventories`). A command whose container or image the rest of the step needs, row 11's and
+  row 13's creates, copy and commit, ends the step with `finished` and exit 0 once it is recorded.
+- **The checksums filter.** Only `checksums.txt`'s lines of the shape `^[0-9a-f]{64}  [A-Za-z0-9._+-]+$`
+  reach `sha256sum` (`checksums.filtered`, under `timeout 1m grep -E`): a name with a `/`, such as
+  `/dev/zero`, is never an argument, and the release's whole `checksums.txt` stays data for the model.
+  `checksums.filtered` is the step's own file, so the release's listing and the attestation loop leave
+  it out.
+- **The size cap.** Row 9 streams the archive's one member to stdout (`tar -xOzf`, `unzip -p`) through
+  `head -c 134217728`: at most 128 MiB is written, and no owner, mode or link of the archive's.
+- **The time budget sums.** Row 7's attestation loop stops at 20 minutes from the step's start (`if [
+  "${SECONDS}" -ge 1200 ]`), recording the files it did not reach, as row 13's runs stop at 15; the check
+  holds every such budget below its step's `timeout-minutes`. The checks job's timeout rises from 180 to
+  340 minutes, because its steps' own timeouts added up to 330: the check holds the steps' sum plus 5
+  minutes for the job's set-up and post steps within the job's timeout, so a step's timeout, not the
+  job's, is what fires.
+- **The docker refusals.** The check reads a docker command's subcommand after its global flags and its
+  `container` or `image` word, and refuses `run`, `exec` and `login` in every spelling (`docker
+  container run`, `docker --context x run`, `docker exec`, `docker container exec`). On every line
+  outside the model job it refuses `--security-opt` with any value but `no-new-privileges` (so no
+  `seccomp=unconfined`, `apparmor=unconfined`, `label=disable` or `systempaths=unconfined`), `--network`
+  with any value but `none` (`container:<id>` included), `--user` or a docker line's `-u` with any value
+  but `65534:65534`, `--env-file`, `--cgroupns` and `--sysctl`. Every `docker start` names a container a
+  `docker create` made with the four flags first; a staging container is never started. Row 14's create
+  is held whole, from its first line to its `sh -c` command, so no flag can follow the pinned ones.
+- **The resource limits.** Row 11's container has row 13's `--memory 512m --pids-limit 64`, and row 14's
+  `--memory 10g --pids-limit 512`, room for its 4 GiB tmpfs and the fuzzer's workers within a hosted
+  runner's memory, so a hungry target meets its own limit before the runner's out-of-memory killer.
+- **The corpus regular-file rule.** Row 13 copies the corpus with `cp -P`, so a committed link is copied
+  as a link and never followed on the runner, and `test/architecture`'s
+  `TestAuditHostileCorpusIsRegularFiles` holds every corpus entry to a regular file (mode 100644).
+- **Names only.** The variables endpoints return values; `read_api` takes a jq filter as its third
+  argument (`.` by default) and passes it to `gh api --jq`, and the four names reads pass
+  `[.variables[].name]` and `[.secrets[].name]`. Row 11's `tar -tvf` writes its warnings, which name the
+  image's entries, to `filesystem.stderr`, never to the public log.
+- **Fuzz discovery and an unexpected target.** Discovery matches the `Fuzz` signature alone, so
+  `func Fuzzy(` and helpers are no target; a target of another shape is recorded `fuzzing
+  unexpected-target` ("not run") and skipped, where it ended the job with no report before.
+- **trivy offline.** The check holds row 10's `offline=(...)` flags `--skip-db-update
+  --skip-java-db-update --skip-check-update --offline-scan --disable-telemetry`, which both scans use:
+  without them trivy would send the image's package identifiers to third-party services.
+- **The checksum guards** (round C). Every tool download's checksum check, in all three jobs, is `if !
+  echo "${<TOOL>_SHA256}  <file>" | sha256sum --check --strict -; then`, an `::error` naming the tool,
+  its job and runbook step 11, and `exit 1`: a failed run names its cause.
 
 ## Alternatives considered
 

@@ -2793,6 +2793,24 @@ gh run watch <run_id> --repo timothymamo/shift2eu --exit-status > /dev/null && e
 # FAIL: no "succeeded" line: read the publish job's summary line (below)
 ```
 
+A download step's error `<tool>'s checksum differs from its pin: see runbook step 11` (titled `Audit
+checks`, `Audit model` or `Audit publish`, after the job whose download step it is) means the file
+downloaded is not the one the workflow's `<TOOL>_SHA256` pin names: the step stopped before unpacking or
+installing it, and no later step ran. Do not start the new run at once. Compare the pin with the
+checksum file the tool's release publishes for the pinned version:
+
+```bash
+# Mac (admin): the workflow's pin for the tool the error names, e.g. GITLEAKS
+grep -n -A3 'GITLEAKS_VERSION:' .github/workflows/scheduled-security-audit.yml
+# PASS: the version line, its digestVersion= comment naming the same version, and a 64-hex SHA-256
+# FAIL: a digestVersion= other than the version (a hand edit or a half-applied bump): fix it through a pull request
+```
+
+If the pin matches the release's checksum file, the release asset changed under the same version: a
+supply-chain finding, not a run to repeat; report it and do not raise the pin by hand. If the pin does not
+match, the pin is wrong: fix it through a pull request to `main` (Renovate moves a version and its digest
+in one PR, CLAUDE.md rule 7), then start the new run.
+
 The publish job's summary line names the class of a failure, never its detail (ADR 0040, "Exit codes and
 the summary line"). What to do for each, before the new run:
 
