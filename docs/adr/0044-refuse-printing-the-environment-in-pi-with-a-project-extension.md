@@ -196,7 +196,10 @@ Claude Code rules, which ADR 0003 does not cover.
   patterns refuse it.
 - A load failure of the extension (a syntax error, a module that cannot be resolved) fails open: pi logs
   it and runs the tester without the refusal. Only the paths after load fail closed. The `session_start`
-  notice shows a TUI pane whether the refusal loaded.
+  notice shows a TUI pane whether the refusal loaded. Since issue #548, `TestPiEnvDenyExtensionLoads`
+  loads the extension with node, as pi does, and fails when its top level throws or its default export is
+  no function; it skips where `node` is missing, except in CI's required Test job, which installs the Node
+  release `dev/lima.yaml` pins (`nodeVersion`) and sets `SHIFT2EU_REQUIRE_NODE=1`.
 - A pattern Go accepts but JavaScript does not would refuse nothing in pi and pass every Go test; a
   reviewer holds the patterns to the common syntax.
 - Known false positives in pi, each refused although it prints nothing: `declare -x FOO=bar` (it sets and

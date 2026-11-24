@@ -96,6 +96,7 @@ const deckDirectorySpelling = /\.config[/.]*\/dot-agent/;
 // U+205F and U+3000. The class is built from their code points so that this file holds only ASCII.
 // The code points are constants: the top level does nothing that can throw, since a load failure fails
 // open and pi runs without this refusal (ADR 0044).
+// The top level must never throw: TestPiEnvDenyExtensionLoads loads this file with node and fails if it does.
 const unicodeSpaces = new RegExp(
 	"[" +
 		String.fromCodePoint(0x00a0, 0x2000) +
