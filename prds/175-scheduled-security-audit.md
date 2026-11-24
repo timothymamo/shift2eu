@@ -139,8 +139,8 @@ finding reaches a workflow log or a readable artifact, which anyone can read in 
 
 Triggers, jobs and permissions:
 
-- [ ] `.github/workflows/scheduled-security-audit.yml` triggers on `schedule` and `workflow_dispatch`
-  **only**, and its `workflow_dispatch` takes no `inputs:`. It has no `pull_request`,
+- [x] `.github/workflows/scheduled-security-audit.yml` triggers on `schedule` and `workflow_dispatch`
+  **only** (milestone 2: `workflow_dispatch` alone; the `schedule` trigger is milestone 3's), and its `workflow_dispatch` takes no `inputs:`. It has no `pull_request`,
   `pull_request_target`, `push`, `workflow_run` or `issue_comment` trigger. The workflow has **one guard
   condition**, used verbatim by every job's `if:` and inside the concurrency group below:
 
@@ -161,14 +161,14 @@ Triggers, jobs and permissions:
   A run started while another is in progress waits for it instead of racing its publish job: neither of
   two runs is cancelled; with three, GitHub keeps one pending and cancels the older pending run, which
   the maintainer then starts again.
-- [ ] It has three jobs, each on its own fresh runner:
+- [x] It has three jobs, each on its own fresh runner:
   - the **checks job** runs every networked or untrusted-code check (What a run does) and references no
     secret other than `GITHUB_TOKEN` (as `github.token`), and that only in step-level `env:`;
   - the **model job** has `needs: checks`, runs no check, no release code, no container and nothing it
     downloads but its checksum-pinned tools, and runs the model;
   - the **publish job** has `needs: model`, runs only its committed script, and runs no model, no audit
     check and nothing from the release; its only scanner is gitleaks over the text it is about to publish.
-- [ ] `GITHUB_TOKEN` holds `permissions: {}` at the top level. The checks job has exactly the read
+- [x] `GITHUB_TOKEN` holds `permissions: {}` at the top level. The checks job has exactly the read
   scopes the ADR lists after the first run: at least `contents: read` and `attestations: read`, and
   `actions: read` and `issues: read` if scorecard or the supply-chain reads (row 15) need them, never a
   write scope. A read the token is refused is reported "not run", as scorecard's admin checks are. The
@@ -214,17 +214,17 @@ What crosses between the jobs:
 
 The checks job:
 
-- [ ] Every networked or untrusted-code check runs in the checks job (What a run does, the table): the
+- [x] Every networked or untrusted-code check runs in the checks job (What a run does, the table): the
   release-integrity checks with cosign and Sigstore, the GHCR image pulls, trivy's database download,
   osv-scanner, scorecard, gitleaks, the dynamic tests and fuzzing. Modules are fetched with
   `go mod download` in one step; every later Go command runs with `GOFLAGS=-mod=readonly GOPROXY=off`.
   `GITHUB_TOKEN` is passed, through step-level `env:`, only to the steps that read GitHub's API, and to no
   step that runs release code.
-- [ ] No release binary and no fuzz target is executed outside a container. Every such container runs
+- [x] No release binary and no fuzz target is executed outside a container. Every such container runs
   with `--read-only --cap-drop ALL --security-opt no-new-privileges`, and a `--tmpfs` only where the ADR
   shows one is needed. The CLI container runs with `--network none`. Fuzzing runs in a container from a Go image pinned by digest, with
   `--network none` and the module cache copied in.
-- [ ] Inputs reach a container one way, and results leave one way: the committed hostile inventories are
+- [x] Inputs reach a container one way, and results leave one way: the committed hostile inventories are
   copied with `docker cp` into a created, not yet started container; results
   come out on stdout or with `docker cp` from the stopped container. No container has a bind mount of the
   runner's filesystem or the Docker socket.
@@ -304,13 +304,13 @@ How the model is contained:
 
 Pins, checks and logs:
 
-- [ ] Every action is pinned by full commit SHA with a version comment. Every tool binary (gitleaks,
+- [x] Every action is pinned by full commit SHA with a version comment. Every tool binary (gitleaks,
   osv-scanner, trivy, zizmor, OpenSSF scorecard, cosign, the encryption tool, the Claude Code CLI, and
   what the sandbox needs if the runner lacks it) is pinned by version **and** checksum, with a
   `# renovate:` comment where Renovate can track it (CLAUDE.md rule 7). actionlint and govulncheck reuse
   the pins `tools/go.mod` and `security.yml` already have. No tool is installed from a mutable tag,
   `@latest` or a `curl | sh`.
-- [ ] A check in `test/architecture` (like `check.ReleasePleaseWorkflow`) pins the workflow: its
+- [x] A check in `test/architecture` (like `check.ReleasePleaseWorkflow`) pins the workflow: its
   triggers, a `workflow_dispatch` with no `inputs:`, the guard condition above, **textually identical**
   in every job's `if:` and in the workflow-level `concurrency` group expression (which falls through to
   a per-run group) with `cancel-in-progress: false`, the three jobs' permissions and environment,
@@ -331,7 +331,7 @@ Pins, checks and logs:
   cache. The same `test/architecture` check pins `cache: false` (or `skip-cache: true`) on every
   `actions/setup-go` step in `release.yml` (both set `cache: false` today) and on any golangci-lint step
   added there, so a change that turns a cache on there fails `make check`.
-- [ ] Nothing private reaches a log or a readable artifact. Raw tool output, crash inputs, PoCs, Claude
+- [x] Nothing private reaches a log or a readable artifact. Raw tool output, crash inputs, PoCs, Claude
   Code's transcript and its final output stay under the job's temporary or audit directory, never
   printed, never uploaded but encrypted. Claude Code's output is redirected to a file, not streamed to the
   log. The checks and model jobs' summaries and logs show only the audited commit and tag, tool versions,
@@ -454,7 +454,7 @@ The required path check:
 
 Time and failures:
 
-- [ ] Each step has a `timeout-minutes`, and each of the three jobs one below GitHub's 6-hour job limit.
+- [x] Each step has a `timeout-minutes`, and each of the three jobs one below GitHub's 6-hour job limit.
   The ADR gives the budget (for example checks 180 minutes, with 10 per fuzz target and 60 for dynamic
   testing; model 120; publish 30). A check that times out is recorded in the report's limits, and the run
   still publishes what it has.
@@ -538,7 +538,7 @@ tag (`gh release view --json tagName`) are recorded first, and every later step 
 | 11 | The image runs as non-root, with a read-only root filesystem and no shell where none is expected | checks, containers | no |
 | 12 | Dropped: the server is no longer released (ADR 0037) | none | no |
 | 13 | The CLI on hostile inventory files | checks, container, `--network none` | no |
-| 14 | Time-boxed `go test -fuzz` of the committed `Fuzz*` targets (none yet: Decision 5) | checks, container, `--network none`, `GOPROXY=off` | no |
+| 14 | Time-boxed `go test -fuzz` of the committed `Fuzz*` targets (`internal/adapter/report/htmlreport`'s `FuzzReportEscaping` today, Decision 5) | checks, container, `--network none`, `GOPROXY=off` | no |
 | 15 | Supply-chain reads: action pins and workflow `permissions`, rulesets and environments read the way the `release-tag` skill's step 2 reads them, Renovate's state, dependencies changed since the last report | checks, workflow step | yes: GitHub reads |
 | 16 | Encrypt the raw results to the model key, upload `checks-result` | checks, workflow step | yes: artifact upload |
 | 17 | Check the run's artifacts, download `checks-result`, decrypt into the audit directory, copy the checkout; stop Docker and remove the runner user's sudo rule; the sandbox preflight's six probes | model, workflow steps | yes: tools, artifact download |
