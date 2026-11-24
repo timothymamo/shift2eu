@@ -2152,7 +2152,12 @@ a whole line, so it cannot ride at the end of another command's line. A guard's 
 held whole too (review round 5, L1): the tag's and the digest's shape checks and the verification in its
 `if !` form each match only with their branch, an `echo "::error ..."` line, an `exit 1` line and a `fi`
 line, so a branch whose `exit 1` is dropped or turned into `exit 0` is a guard missing; the bare
-verification stays accepted, `set -e` failing the step. In today's workflow the verification is the only
+verification stays accepted, `set -e` failing the step. Review round 6 holds the rest the same way: the
+attestation step's `if ! digest="$(jq -er ...)"` read, and in both download steps the shape guard of the
+artifact's ID and digest (`if [[ ! "${id}" =~ ^[0-9]+$ ]] || [[ ! "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]]`,
+between the digest's read and the zip's download) and the single-file `ls -A` check, each with that
+branch; the empty digest's branch is held whole as `then`, `echo "image not pulled: ..."`, `exit 0` and
+`fi`, each a line of its own, so none of them can be run together onto one line. In today's workflow the verification is the only
 command continued over lines; the check does not require that, it only matches the verification as one
 contiguous command. An order broken is reported for every pair out of order, the command that
 must come first named first.
