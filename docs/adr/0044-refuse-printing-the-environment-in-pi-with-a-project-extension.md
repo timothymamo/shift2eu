@@ -45,9 +45,9 @@ Hold rule 3 with a second layer in both agents, beside the words in CLAUDE.md:
   absent path as `.`: from a working directory of `~` it is refused. A read, ls or edit of such an
   ancestor prints no key and stays allowed. A bash command over 32 KB (32768 characters) is refused
   unread, before the patterns, with a reason that points at the write tool (see the bound below); when
-  the list failed to load, the reason of every bash refusal, a long command's too, is the load failure. It tests `event.toolName` itself, imports only `node:` built-ins and
-  pi's package for types alone (`import type`), so the guard does not depend at run time on the module it
-  guards.
+  the list failed to load, the reason of every bash refusal, a long command's too, is the load failure. It
+  tests `event.toolName` itself, imports only `node:` built-ins and pi's package for types alone (`import
+  type`), so the guard does not depend at run time on the module it guards.
   - **What fails closed, and what does not.** pi reports an extension that fails to load and carries on
     without it: a load failure fails open. So the extension's top level does nothing that can throw (the
     list's path is computed inside the loader's `try`), and the factory never throws. After load it fails
