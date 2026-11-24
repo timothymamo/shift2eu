@@ -127,7 +127,9 @@ const claudeProjectSettingsPath = ".claude/settings.json"
 // which the rule cannot tell the two apart from; `Bash(set)` is bare `set`,
 // and the options that print the shell's variables and exports are refused by
 // their own rules. `/proc/*/environ` is refused as a command's argument and as
-// a file a tool reads, because either prints every value in the process.
+// a file a tool reads, because either prints every value in the process. The
+// Read rule starts with `//`: a single leading `/` would be relative to the
+// settings file's project root and never match the real /proc.
 var claudeProjectEnvDeny = []string{
 	"Bash(env)",
 	"Bash(env *)",
@@ -143,7 +145,7 @@ var claudeProjectEnvDeny = []string{
 	"Bash(compgen -v*)",
 	"Bash(compgen -e*)",
 	"Bash(*/proc/*/environ*)",
-	"Read(/proc/*/environ)",
+	"Read(//proc/**/environ)",
 }
 
 // TestProjectClaudeSettingsDenyPrintingTheEnvironment pins the second layer
