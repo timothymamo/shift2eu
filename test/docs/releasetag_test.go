@@ -96,6 +96,13 @@ const (
 	// they are matched with its whitespace collapsed.
 	auditHiddenListing    = "gh api repos/{owner}/{repo}/environments/security-audit/secrets --jq '.secrets[].name'"
 	auditVariablesListing = "gh api repos/{owner}/{repo}/environments/security-audit/variables --jq '.variables[].name'"
+
+	// auditPolicyRead and auditPolicyListing are the reads of the environment itself and of its branch
+	// policy, the way the AI reviewer's block reads ai-review's: the environment for the policy it applies,
+	// and the one policy it lists. The read of the environment is followed by the words "must show", so it
+	// is no prefix of the secrets and variables listings beside it.
+	auditPolicyRead    = "gh api repos/{owner}/{repo}/environments/security-audit must show"
+	auditPolicyListing = "gh api repos/{owner}/{repo}/environments/security-audit/deployment-branch-policies --jq '.branch_policies[] | .type + \" \" + .name'"
 )
 
 // auditHiddenNames and auditVariableNames are the names the environment must hold: the audit App's key
@@ -143,10 +150,11 @@ var auditConfigurationNames = []string{
 
 // TestReleaseTagSkillChecksTheSecurityAuditEnvironment pins what the release-tag skill's secrets check must
 // say about the scheduled audit's environment (PRD #175 milestone 2, ADR 0040): the two reads it makes, the
-// names the environment holds, and the rule that neither the audit App's key nor any other of the audit's
-// secrets sits at repository level, where every workflow could read it. The names are exactly the
-// environment's: a variable listed as a secret, a renamed name or a stray one would leave what the audit
-// needs, or what it may not have beside another workflow, unchecked.
+// names the environment holds, the branch policy that keeps a workflow on another ref away from the audit's
+// keys and the protection rules that keep its runs unattended, and the rule that neither the audit App's key
+// nor any other of the audit's secrets sits at repository level, where every workflow could read it. The
+// names are exactly the environment's: a variable listed as a secret, a renamed name or a stray one would
+// leave what the audit needs, or what it may not have beside another workflow, unchecked.
 func TestReleaseTagSkillChecksTheSecurityAuditEnvironment(t *testing.T) {
 	t.Parallel()
 
@@ -172,6 +180,34 @@ func TestReleaseTagSkillChecksTheSecurityAuditEnvironment(t *testing.T) {
 		{
 			text: "repository level",
 			why:  "the check says where the audit's secrets may not sit, as the checks of the release Apps' and of the site's keys do",
+		},
+		{
+			text: auditPolicyRead,
+			why:  "the environment is read for its branch policy, as ai-review's is: anything but a custom policy on main lets a workflow on another ref read the audit's keys",
+		},
+		{
+			text: "deployment_branch_policy.custom_branch_policies",
+			why:  "the policy must be the custom one, whose list is read next: a protected-branches policy admits every branch and tag that GitHub protects, not main alone",
+		},
+		{
+			text: "protected_branches",
+			why:  "the check names the other policy by name, so a reader can tell which of the two it read, as the AI reviewer's block does",
+		},
+		{
+			text: auditPolicyListing,
+			why:  "the environment's branch policies are listed by the command ai-review's block uses, so a misspelt path cannot pass for a check",
+		},
+		{
+			text: "branch main",
+			why:  "the one policy the environment admits is main: a policy of a branch that may run the audit is a key a workflow on another branch can reach",
+		},
+		{
+			text: "protection_rules",
+			why:  "the environment's protection rules are read too: a required reviewer would hold every scheduled run until a human approves it, and the audit is unattended",
+		},
+		{
+			text: "no required_reviewers",
+			why:  "the rules must hold no reviewer at all, which is the claim the check makes of them",
 		},
 	} {
 		if !strings.Contains(block, want.text) {
