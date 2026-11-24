@@ -48,48 +48,76 @@ var scheduleWord = regexp.MustCompile(`(^|[^A-Za-z0-9_-])schedule([^A-Za-z0-9_-]
 // hasScheduleTrigger reports whether a workflow holds a schedule trigger under
 // its top-level on: key, in the block or the flow style GitHub accepts; the
 // key and the trigger may be bare, double-quoted or single-quoted, and the
-// trigger may carry a trailing comment. A flow mapping or sequence may span
-// several lines, and its schedule is read from every line up to the bracket
-// that closes it. It reads no YAML: the check needs one key of the document and
-// the module has no YAML package. A line inside a comment or a run: block is
-// never a trigger, since only a nested line of a top-level on: mapping is read.
+// trigger may carry a trailing comment. It reads no YAML: the check needs one
+// key of the document and the module has no YAML package. A line inside a
+// comment or a run: block of the block style is never a trigger, since only a
+// nested line of a top-level on: mapping is read.
 //
-// It fails closed: a top-level on: value that opens a `{` or a `[` never closed
-// before the end of the file or the next top-level key is malformed YAML whose
-// triggers nothing can read, and it reports a schedule for it, so that no
-// unbalanced bracket makes the gap check pass.
+// A flow mapping or sequence may span several lines, and it is read fail
+// closed by construction: once a top-level on: opens a `{` or a `[`, every
+// line up to the next top-level key (indent 0, not starting with `}` or `]`)
+// or the end of the file is matched against the schedule word, whatever its
+// brackets, quotes and comments, so that no misread quote or bracket can hide
+// a schedule inside the value. The bracket depth is counted only to tell an
+// unclosed value: a quote opens a quoted scalar only where a scalar starts
+// (the value's start, or after a `{`, a `[`, a `,` or a `:` and blanks), so an
+// apostrophe inside a plain scalar such as what's is text, and a # after a
+// blank outside a quoted scalar starts a comment.
+//
+// It reports a schedule as well for a flow value that is malformed: one never
+// closed before the next top-level key or the end of the file, and one closed
+// with a further non-comment line before the next top-level key, since nothing
+// can tell what triggers such a document holds and no unbalanced bracket may
+// make the gap check pass.
 func hasScheduleTrigger(workflow []byte) bool {
 	onBlock := false
 
-	// flow is the open flow value of the top-level on: key, nil when none is
-	// open: its text so far and its bracket depth.
+	// flow is the flow value of the top-level on: key while its lines are
+	// read, nil outside it: its bracket depth, quote state and whether it
+	// closed.
 	var flow *flowValue
 
 	for _, line := range strings.Split(string(workflow), "\n") {
 		line = strings.TrimRight(line, " \t\r")
 
 		trimmed := strings.TrimSpace(line)
-		if trimmed == "" || (strings.HasPrefix(trimmed, "#") && (flow == nil || !flow.inQuote())) {
+		if trimmed == "" {
 			continue
 		}
 
 		indented := len(line) - len(strings.TrimLeft(line, " "))
 
 		if flow != nil {
-			// A top-level line that closes no bracket is the next key: the
-			// flow value ended unclosed.
-			if indented == 0 && !strings.HasPrefix(trimmed, "}") && !strings.HasPrefix(trimmed, "]") && !flow.inQuote() {
-				return true
-			}
-
-			if flow.add(line) {
-				if scheduleWord.MatchString(flow.text.String()) {
+			if indented == 0 && !strings.HasPrefix(trimmed, "}") && !strings.HasPrefix(trimmed, "]") {
+				// The next top-level key ends the on: value: an unclosed
+				// one is malformed.
+				if !flow.closed {
 					return true
 				}
 
 				flow = nil
-			}
+			} else {
+				if scheduleWord.MatchString(trimmed) {
+					return true
+				}
 
+				comment := strings.HasPrefix(trimmed, "#")
+
+				switch {
+				case flow.closed && !comment:
+					// A line after the closed value that is no top-level
+					// key: malformed.
+					return true
+				case flow.closed || (comment && !flow.inQuote()):
+				default:
+					flow.closed = flow.add(line)
+				}
+
+				continue
+			}
+		}
+
+		if strings.HasPrefix(trimmed, "#") {
 			continue
 		}
 
@@ -120,12 +148,16 @@ func hasScheduleTrigger(workflow []byte) bool {
 		}
 
 		if strings.HasPrefix(value, "{") || strings.HasPrefix(value, "[") {
-			flow = &flowValue{}
-			if !flow.add(value) {
-				continue
+			// The whole on: line is matched, its comment included: fail
+			// closed.
+			if scheduleWord.MatchString(line) {
+				return true
 			}
 
-			flow = nil
+			flow = &flowValue{}
+			flow.closed = flow.add(value)
+
+			continue
 		}
 
 		if scheduleWord.MatchString(value) {
@@ -134,50 +166,63 @@ func hasScheduleTrigger(workflow []byte) bool {
 	}
 
 	// The file ended inside the on: key's flow value: fail closed.
-	return flow != nil
+	return flow != nil && !flow.closed
 }
 
 // flowValue is a top-level on: key's flow mapping or sequence read line by
-// line: the text read so far, its comments removed, and the depth of the
-// brackets it holds open. A bracket inside a quoted string counts for nothing.
+// line: the depth of the brackets it holds open, the quoted scalar it is
+// inside and whether it closed. A bracket inside a quoted scalar or a comment
+// counts for nothing.
 type flowValue struct {
-	text  strings.Builder
 	depth int
-	// quote is the quote character of the string the text ends inside, 0 when
-	// it ends outside one.
+	// quote is the quote character of the scalar the text read so far ends
+	// inside, 0 when it ends outside one.
 	quote byte
+	// last is the last byte read outside a quoted scalar that is no blank, 0
+	// before the first: a quote opens a scalar only after a byte that starts
+	// one.
+	last byte
+	// closed is set once every bracket the value opened is closed.
+	closed bool
 }
 
-// inQuote reports whether the text read so far ends inside a quoted string.
+// inQuote reports whether the text read so far ends inside a quoted scalar.
 func (f *flowValue) inQuote() bool { return f.quote != 0 }
 
 // add reads one more line of the value and reports whether the value is
-// closed: every bracket it opened is closed, outside a quoted string. A # that
-// starts the line or follows a space outside a quoted string starts a comment,
-// which ends the line.
+// closed: every bracket it opened is closed, outside a quoted scalar. A quote
+// opens a quoted scalar only where a scalar starts, after nothing yet or after
+// a `{`, a `[`, a `,` or a `:` and blanks; elsewhere, as in what's, it is a
+// byte of a plain scalar. A # that starts the line or follows a blank outside a
+// quoted scalar starts a comment, which ends the line.
 func (f *flowValue) add(line string) bool {
 	for i := 0; i < len(line); i++ {
 		c := line[i]
 
 		switch {
 		case f.quote == '"' && c == '\\':
-			f.text.WriteByte(c)
-
 			i++
-			if i < len(line) {
-				f.text.WriteByte(line[i])
-			}
+
+			continue
+		case f.quote == '\'' && c == '\'' && i+1 < len(line) && line[i+1] == '\'':
+			// '' is an escaped quote inside a single-quoted scalar.
+			i++
 
 			continue
 		case f.quote != 0:
 			if c == f.quote {
 				f.quote = 0
+				f.last = c
 			}
-		case c == '"' || c == '\'':
-			f.quote = c
-		case c == '#' && (i == 0 || line[i-1] == ' ' || line[i-1] == '\t'):
-			f.text.WriteByte('\n')
 
+			continue
+		case c == ' ' || c == '\t':
+			continue
+		case (c == '"' || c == '\'') && startsAScalar(f.last):
+			f.quote = c
+
+			continue
+		case c == '#' && (i == 0 || line[i-1] == ' ' || line[i-1] == '\t'):
 			return f.depth == 0
 		case c == '{' || c == '[':
 			f.depth++
@@ -185,16 +230,26 @@ func (f *flowValue) add(line string) bool {
 			f.depth--
 		}
 
-		f.text.WriteByte(c)
+		f.last = c
 
-		if f.depth == 0 && f.quote == 0 {
+		if f.depth == 0 {
 			return true
 		}
 	}
 
-	f.text.WriteByte('\n')
-
 	return f.depth == 0 && f.quote == 0
+}
+
+// startsAScalar reports whether a scalar may start after the byte last, the
+// last one read outside a quoted scalar that is no blank: at the start of the
+// value, or after a flow indicator or a key's colon.
+func startsAScalar(last byte) bool {
+	switch last {
+	case 0, '{', '[', ',', ':':
+		return true
+	}
+
+	return false
 }
 
 // topLevelOn returns the value after a line's top-level on: key, and whether

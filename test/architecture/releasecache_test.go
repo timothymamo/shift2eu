@@ -1,7 +1,6 @@
 package architecture_test
 
 import (
-	"slices"
 	"strings"
 	"testing"
 
@@ -298,9 +297,22 @@ func TestGoSetupSteps(t *testing.T) {
 	}
 }
 
-// cacheOffActions are the actions whose steps must turn the Actions cache off: the Go setup's module and
-// build cache, and the lint action's, which read and write the same cache.
-var cacheOffActions = []string{"actions/setup-go", "golangci/golangci-lint-action"}
+// goSetupAction is the action that sets Go up, the step the release workflow's count is checked on.
+const goSetupAction = "actions/setup-go"
+
+// cacheOffInput is the input and the value that turn an action's Actions cache off.
+type cacheOffInput struct {
+	key   string
+	value string
+}
+
+// cacheOffInputs are the actions whose steps must turn the Actions cache off, each with the one input
+// that does: the Go setup's module and build cache goes off with cache: false, and the lint action, which
+// reads and writes the same cache and has no cache input, turns its own off with skip-cache: true.
+var cacheOffInputs = map[string]cacheOffInput{
+	goSetupAction:                   {key: "cache", value: "false"},
+	"golangci/golangci-lint-action": {key: "skip-cache", value: "true"},
+}
 
 // goCacheGap is one step of a workflow that would use the Actions cache and does not turn it off.
 type goCacheGap struct {
@@ -310,34 +322,73 @@ type goCacheGap struct {
 	action string
 }
 
-// goCacheGaps returns, in the order they run, the steps of the workflow that use one of cacheOffActions
-// and hold no cache: false. It reads the document by indentation, one step at a time: a step starts at a
-// dash at or left of the open step's key column, holds the lines indented past it, and owns a cache: key
-// at any depth inside it; the lines of a literal block (run: |) are a script, not a mapping, so a line of
-// one that reads like a step or a cache key sets nothing. A cache: other than false, true and a missing
-// one alike, leaves the step in the result: only so many words turn the cache off.
+// goCacheGaps returns, in the order they run, the steps of the workflow that use one of cacheOffInputs'
+// actions and do not set that action's cache-off input to its value directly under the step's with:. A
+// value other than the one that turns the cache off, the other action's input, a key under env: or
+// nested deeper, and a missing with: alike leave the step in the result: only one word per action turns
+// its cache off.
 func goCacheGaps(workflow []byte) []goCacheGap {
-	type step struct {
-		line   int
-		action string
-		cache  bool
-		// block is the indent of a key whose value is a literal block, -1 for none.
-		block int
-	}
+	var gaps []goCacheGap
 
-	var (
-		gaps    []goCacheGap
-		current *step
-		keyCol  int
-	)
-
-	flush := func() {
-		if current != nil && current.action != "" && !current.cache {
-			gaps = append(gaps, goCacheGap{line: current.line, action: current.action})
+	for _, s := range workflowSteps(workflow) {
+		input, ok := cacheOffInputs[s.action]
+		if !ok {
+			continue
 		}
 
-		current = nil
+		if value, set := s.with[input.key]; !set || value != input.value {
+			gaps = append(gaps, goCacheGap{line: s.line, action: s.action})
+		}
 	}
+
+	return gaps
+}
+
+// goSetupSteps returns, in the order they run, every step of the workflow that uses actions/setup-go,
+// whatever its cache setting: the steps the cache check reads, counted against the workflow's text.
+func goSetupSteps(workflow []byte) []workflowStep {
+	var steps []workflowStep
+
+	for _, s := range workflowSteps(workflow) {
+		if s.action == goSetupAction {
+			steps = append(steps, s)
+		}
+	}
+
+	return steps
+}
+
+// workflowStep is one step of a workflow as the cache check reads it.
+type workflowStep struct {
+	// line is the line the step's dash is on, counted from 1.
+	line int
+	// action is the repository of the action the step uses, without its pin, empty for none.
+	action string
+	// with holds the step's inputs, the keys directly under its with:, their values unquoted.
+	with map[string]string
+}
+
+// workflowSteps reads every block sequence entry of a workflow as a step, in document order. It reads no
+// YAML, by indentation: a step starts at a dash at or left of the open step's key column and holds the
+// lines indented past it; its uses: and with: are the keys at its key column, bare or quoted, and its
+// inputs the keys at the first indent under with: or the entries of a flow mapping after it. A step
+// written in the flow style, - {uses: ..., with: {...}}, is read from its line, up to the brace that
+// closes it or a # that starts a comment. The lines of a literal or folded block (run: |) are text, not
+// a mapping, so a line of one that reads like a step or an input sets nothing.
+func workflowSteps(workflow []byte) []workflowStep {
+	var (
+		steps []workflowStep
+		// open is whether the last step still takes lines.
+		open bool
+		// keyCol is the open step's key column.
+		keyCol int
+		// section is the open step's key the deeper lines belong to.
+		section string
+		// withCol is the indent of the inputs under with:, -1 before the first.
+		withCol = -1
+		// block is the indent of a key whose value is a literal block, -1 for none.
+		block = -1
+	)
 
 	for i, raw := range strings.Split(string(workflow), "\n") {
 		line := strings.TrimRight(raw, " \t\r")
@@ -348,64 +399,180 @@ func goCacheGaps(workflow []byte) []goCacheGap {
 			continue
 		}
 
-		if current != nil && current.block >= 0 {
-			if indent > current.block {
+		if block >= 0 {
+			if indent > block {
 				continue
 			}
 
-			current.block = -1
+			block = -1
 		}
 
-		if startsAStep(text) && (current == nil || indent < keyCol) {
-			flush()
-
+		if startsAStep(text) && (!open || indent < keyCol) {
+			steps = append(steps, workflowStep{line: i + 1, with: map[string]string{}})
+			open = true
 			keyCol = indent + 2
-			current = &step{line: i + 1, block: -1}
+			section = ""
+			withCol = -1
 			text = strings.TrimSpace(strings.TrimPrefix(text, "-"))
 			indent = keyCol
 
 			if text == "" {
 				continue
 			}
+
+			if strings.HasPrefix(text, "{") {
+				readFlowStep(&steps[len(steps)-1], text)
+
+				open = false
+
+				continue
+			}
 		}
 
-		if current == nil {
+		if !open {
 			continue
 		}
 
 		if indent < keyCol {
-			flush()
+			open = false
 
 			continue
 		}
 
-		key, value, ok := stepKey(text)
+		key, value, ok := mappingLine(text)
 		if !ok {
 			continue
 		}
 
 		if strings.HasPrefix(value, "|") || strings.HasPrefix(value, ">") {
-			current.block = indent
+			block = indent
 		}
 
-		if indent > keyCol {
-			if key == "cache" && inlineValue(value) == "false" {
-				current.cache = true
+		step := &steps[len(steps)-1]
+
+		if indent == keyCol {
+			section = key
+			withCol = -1
+
+			switch key {
+			case "uses":
+				step.action = actionName(unquoteScalar(inlineValue(value)))
+			case "with":
+				if strings.HasPrefix(value, "{") {
+					for k, v := range flowMapping(value) {
+						step.with[k] = v
+					}
+				}
 			}
 
 			continue
 		}
 
-		if key == "uses" {
-			if action, ok := cacheOffAction(inlineValue(value)); ok {
-				current.action = action
-			}
+		if section != "with" {
+			continue
+		}
+
+		if withCol < 0 {
+			withCol = indent
+		}
+
+		if indent == withCol {
+			step.with[key] = unquoteScalar(inlineValue(value))
 		}
 	}
 
-	flush()
+	return steps
+}
 
-	return gaps
+// readFlowStep reads a step written as a flow mapping into step: its uses: and the entries of its with:.
+func readFlowStep(step *workflowStep, text string) {
+	entries := flowMapping(text)
+
+	step.action = actionName(entries["uses"])
+
+	if with := entries["with"]; strings.HasPrefix(with, "{") {
+		for k, v := range flowMapping(with) {
+			step.with[k] = v
+		}
+	}
+}
+
+// flowMapping returns the entries of the flow mapping text starts with, its keys and scalar values
+// unquoted and a nested collection's value as its text: the mapping ends at the brace that closes it, at a
+// # that follows a blank outside a quoted scalar, or at the end of the text, and an entry cut short keeps
+// what it read. A quote opens a quoted scalar only where a scalar starts, as hasScheduleTrigger reads it,
+// and a colon separates a key only when a blank, a comma or a brace follows it.
+func flowMapping(text string) map[string]string {
+	entries := map[string]string{}
+
+	if !strings.HasPrefix(text, "{") {
+		return entries
+	}
+
+	var (
+		depth int
+		quote byte
+		last  byte
+		start = 1
+		colon = -1
+	)
+
+	entry := func(end int) {
+		if colon < 0 {
+			return
+		}
+
+		entries[unquoteScalar(text[start:colon])] = unquoteScalar(text[colon+1 : end])
+	}
+
+	for i := 0; i < len(text); i++ {
+		c := text[i]
+
+		switch {
+		case quote == '"' && c == '\\':
+			i++
+
+			continue
+		case quote != 0:
+			if c == quote {
+				quote = 0
+				last = c
+			}
+
+			continue
+		case c == ' ' || c == '\t':
+			continue
+		case (c == '"' || c == '\'') && startsAScalar(last):
+			quote = c
+
+			continue
+		case c == '#' && (text[i-1] == ' ' || text[i-1] == '\t'):
+			entry(i)
+
+			return entries
+		case c == '{' || c == '[':
+			depth++
+		case c == '}' || c == ']':
+			depth--
+			if depth == 0 {
+				entry(i)
+
+				return entries
+			}
+		case c == ',' && depth == 1:
+			entry(i)
+
+			start, colon = i+1, -1
+		case c == ':' && depth == 1 && colon < 0 && (i+1 == len(text) || strings.IndexByte(" \t,}", text[i+1]) >= 0):
+			colon = i
+		}
+
+		last = c
+	}
+
+	entry(len(text))
+
+	return entries
 }
 
 // startsAStep reports whether text starts a block sequence entry: a dash alone or followed by a space.
@@ -413,30 +580,52 @@ func startsAStep(text string) bool {
 	return text == "-" || strings.HasPrefix(text, "- ")
 }
 
-// stepKey splits a line of a step into its plain key and the value after it, a value that is only a
-// comment returned as empty, and reports whether the line is a mapping line at all.
-func stepKey(text string) (key, value string, ok bool) {
-	i := strings.Index(text, ":")
-	if i <= 0 {
+// mappingLine splits a line of a step into its key, unquoted when it is quoted, and the value after it,
+// trimmed, and reports whether the line is a mapping line at all.
+func mappingLine(text string) (key, value string, ok bool) {
+	var rest string
+
+	if q := text[0]; q == '"' || q == '\'' {
+		end := strings.IndexByte(text[1:], q)
+		if end < 0 {
+			return "", "", false
+		}
+
+		key = text[1 : end+1]
+		rest, ok = strings.CutPrefix(text[end+2:], ":")
+
+		if !ok {
+			return "", "", false
+		}
+	} else {
+		key, rest, ok = strings.Cut(text, ":")
+		if !ok || key == "" {
+			return "", "", false
+		}
+	}
+
+	if rest != "" && !strings.HasPrefix(rest, " ") && !strings.HasPrefix(rest, "\t") {
 		return "", "", false
 	}
 
-	rest := text[i+1:]
-	if rest != "" && !strings.HasPrefix(rest, " ") {
-		return "", "", false
-	}
-
-	return text[:i], strings.TrimSpace(rest), true
+	return key, strings.TrimSpace(rest), true
 }
 
-// cacheOffAction returns the action one of cacheOffActions names a uses: value with, and whether it names
-// one: the value is the action's repository, its pin, and the release it is as a comment.
-func cacheOffAction(uses string) (string, bool) {
-	name, _, _ := strings.Cut(uses, "@")
+// unquoteScalar returns a scalar with its blanks trimmed and, when it is double- or single-quoted,
+// without its quotes.
+func unquoteScalar(scalar string) string {
+	scalar = strings.TrimSpace(scalar)
 
-	if slices.Contains(cacheOffActions, name) {
-		return name, true
+	if len(scalar) >= 2 && (scalar[0] == '"' || scalar[0] == '\'') && scalar[len(scalar)-1] == scalar[0] {
+		return scalar[1 : len(scalar)-1]
 	}
 
-	return "", false
+	return scalar
+}
+
+// actionName returns the repository a uses: value names, its @ pin removed.
+func actionName(uses string) string {
+	name, _, _ := strings.Cut(uses, "@")
+
+	return name
 }
