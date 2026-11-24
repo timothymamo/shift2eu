@@ -94,10 +94,12 @@ func TestAboutPageWords(t *testing.T) {
 
 // TestAboutPageLinks pins the About page's list of external links (issue #528):
 // the maintainer's LinkedIn profile, FikaWorks, the blog and the repository, each
-// exactly once, in one list, each opening in a new tab with rel="noopener
+// exactly once inside one list, each opening in a new tab with rel="noopener
 // noreferrer" as the site's other links to another site do, and each telling a
 // visitor who cannot see the new tab that it opens one, with the site's
-// visually-hidden span.
+// visually-hidden span. The nav links the repository too, so only the list counts
+// towards the four: the page is a list of the maintainer's places on the web, and
+// its nav is the site's (reviewer of issue #528).
 func TestAboutPageLinks(t *testing.T) {
 	t.Parallel()
 
@@ -112,34 +114,56 @@ func TestAboutPageLinks(t *testing.T) {
 		"https://github.com/timothymamo/shift2eu",
 	}
 
+	// The one list holding the four links is the ancestor list of the first
+	// wanted link that sits in one: the nav's Repository item is no part of it,
+	// so the nav may link the repository without the page linking it twice.
+	var list *element
+
+	for _, href := range want {
+		for _, anchor := range doc.find("a") {
+			if got, _ := anchor.attr("href"); got != href {
+				continue
+			}
+
+			if ancestor := ancestorList(anchor); ancestor != nil {
+				list = ancestor
+
+				break
+			}
+		}
+
+		if list != nil {
+			break
+		}
+	}
+
+	if list == nil {
+		t.Fatalf("%s holds none of the four links the About page lists in a <ul> or <ol>, so the check read nothing (issue #528)", aboutPageName)
+	}
+
 	links := make(map[string][]*element, len(want))
 
 	for _, anchor := range doc.find("a") {
+		if !isDescendant(anchor, list) {
+			continue
+		}
+
 		href, _ := anchor.attr("href")
 
 		links[href] = append(links[href], anchor)
 	}
 
-	var list *element
-
-	listSet := false
-
 	for _, href := range want {
 		found := links[href]
 
 		if len(found) != 1 {
-			t.Errorf("%s links %q %d times, want exactly once: the page is a list of the maintainer's places on the web (issue #528)",
+			t.Errorf("%s's list of links holds %q %d times, want exactly once: the page is a list of the maintainer's places on the web (issue #528)",
 				aboutPageName, href, len(found))
 
 			continue
 		}
 
 		anchor := found[0]
-
-		if !listSet {
-			list = ancestorList(anchor)
-			listSet = true
-		}
 
 		if target, _ := anchor.attr("target"); target != "_blank" {
 			t.Errorf("%s's link to %s carries target=%q, want \"_blank\": it opens another site in a new tab (issue #528)", aboutPageName, href, target)
@@ -164,28 +188,6 @@ func TestAboutPageLinks(t *testing.T) {
 		if hidden != 1 {
 			t.Errorf("%s's link to %s holds %d visually-hidden spans reading %q, want exactly one: the site tells a visitor who cannot see the new tab that the link opens one (issue #528)",
 				aboutPageName, href, hidden, opensInANewTab)
-		}
-	}
-
-	if !listSet {
-		t.Fatalf("%s holds none of the four links the About page lists, so the check read nothing (issue #528)", aboutPageName)
-	}
-
-	if list == nil {
-		t.Errorf("%s's four external links sit in no <ul> or <ol>, want them in one list: the issue asks for a list of them (issue #528)", aboutPageName)
-
-		return
-	}
-
-	if list.tag != "ul" && list.tag != "ol" {
-		t.Errorf("the page's external links sit in %s, want a <ul> or <ol>: the issue asks for a list of them (issue #528)", describeElement(list))
-	}
-
-	for _, href := range want {
-		for _, anchor := range links[href] {
-			if !isDescendant(anchor, list) {
-				t.Errorf("%s's link to %s is outside the list the other links sit in, want all four in one list (issue #528)", aboutPageName, href)
-			}
 		}
 	}
 }
