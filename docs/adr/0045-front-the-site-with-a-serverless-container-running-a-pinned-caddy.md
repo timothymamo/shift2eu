@@ -398,12 +398,25 @@ TLS stage*.
   escaped behind `https://www.shift2eu.com`, and `/` for `GET http:foo`.
 - **Repeated `X-Forwarded-Proto`.** Caddy's `{http.request.header.*}` placeholder joins a field's values
   with `,` (its replacer), so `https` + `http` is `https,http`, which the expression misses: the local run
-  answered that request with the 308. `{http.request.hostport}` is the request's raw `Host`, port and
-  case as received.
+  answered that request with the 308. The behaviour test pins all four spoofing cases on the pinned
+  image: `https` then `http`, `http` then `https`, two `https` fields, and the one field `https, https`
+  each arrive as a joined value that is not exactly `https`, and each gets the 308 to
+  `https://www.shift2eu.com` + the URI, with no request reaching the upstream.
+  `{http.request.hostport}` is the request's raw `Host`, port and case as received.
 - **`OPTIONS *`: Go's empty 200.** Caddy v2.11.9 never sets `DisableGeneralOptionsHandler`, so Go's server
   answers `OPTIONS *` itself (200, `Content-Length: 0`, no body, no header of the site's) before any
-  route; the local run confirmed it. It is the accepted exception above. The behaviour test pins that
-  answer, and R4's live probe records whether the platform's Envoy forwards it at all.
+  route; the local run confirmed it, and so does the behaviour test on the pinned image, which pins
+  that answer (no Caddy header, none of the site's five). It is the accepted exception above. R4's live
+  probe records whether the platform's Envoy forwards it at all.
+- **The behaviour test** (`test/sitefront`, `sitefront && !js`) runs the image and the command line
+  `infra/site/container.tf` gives, with the Caddyfile's bytes, on the host's network (the fixed `:8080`),
+  against a local Go HTTPS upstream named by `UPSTREAM`. Caddy trusts that upstream's test CA through
+  `SSL_CERT_FILE`, the CA file mounted read-only: a test-only setting, so the Caddyfile and the
+  production container stay as they are and Caddy verifies the upstream's certificate as it does live.
+  `make test-sitefront` runs it (docker or nerdctl, through `SHIFT2EU_SITEFRONT_RUNTIME`), outside
+  `make test` and `make check`, one run at a time on a machine because of the fixed port; the first run
+  pulls the pinned image from Docker Hub. The static Caddyfile test in the same package runs under
+  `make test`.
 - **Routes.** Matchers in their block form, so each expression is a line of its own: `@https` (the scheme
   expression), `@www` (the hostport expression) and `@rooted` (the guard). `handle @https { handle @www
   { headers; reverse_proxy } handle @rooted { 308 with the URI } handle { 308 to / } }`, then the same two
