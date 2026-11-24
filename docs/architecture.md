@@ -737,7 +737,8 @@ Known gaps, which these rules do not close:
   config or credential path, and `t.TempDir` goes through the same read, so refusing them would leave
   a test no way to get a temporary directory. They are accepted; `os.TempDir` named directly stays
   refused where `testutil-no-env`, `cli-no-env-or-process`,
-  `inventoryfile-no-env` and, since issue #152, `composition-root-env` refuse it. That refusal is no confidentiality control: `filepath.Dir` of any temporary path
+  `inventoryfile-no-env` and, since issue #152, `composition-root-env` refuse it, and `audit-publish-main-env` and `audit-publish-github-env`
+  refuse `os.CreateTemp` itself, whatever its directory (issue #516). That refusal is no confidentiality control: `filepath.Dir` of any temporary path
   recovers `$TMPDIR`. It is acceptable because `$TMPDIR` holds no secret; the refusal keeps a helper
   from building paths off the temporary directory by habit, nothing more.
 - **`os.Getwd` reads `$PWD`.** It returns the working directory only, a path the user chose, and

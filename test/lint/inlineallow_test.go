@@ -21,7 +21,9 @@ import (
 
 // TestNoTrackedFileSpellsTheInlineAllowComment walks every path git tracks and
 // fails on each file holding gitleaks' inline allow comment - its name, a colon
-// and allow - in any letter case.
+// and allow - in any letter case. It reports every occurrence, through
+// inlineAllowLines, so a file holding the comment twice is reported twice
+// (issue #516).
 func TestNoTrackedFileSpellsTheInlineAllowComment(t *testing.T) {
 	t.Parallel()
 
@@ -44,15 +46,10 @@ func TestNoTrackedFileSpellsTheInlineAllowComment(t *testing.T) {
 
 		scanned = append(scanned, rel)
 
-		lower := strings.ToLower(string(src))
-
-		i := strings.Index(lower, marker)
-		if i < 0 {
-			continue
+		for _, line := range inlineAllowLines(string(src), marker) {
+			t.Errorf("%s:%d holds gitleaks' inline allow comment; build the marker in code (\"gitleaks\" + \":allow\") instead, so that a model reading this repository cannot quote the line and refuse the audit's own run (PRD #175, ADR 0040)",
+				rel, line)
 		}
-
-		t.Errorf("%s:%d holds gitleaks' inline allow comment; build the marker in code (\"gitleaks\" + \":allow\") instead, so that a model reading this repository cannot quote the line and refuse the audit's own run (PRD #175, ADR 0040)",
-			rel, strings.Count(lower[:i], "\n")+1)
 	}
 
 	// Guard the walk itself: a scan of nothing, or one that stopped reading the
@@ -68,4 +65,97 @@ func TestNoTrackedFileSpellsTheInlineAllowComment(t *testing.T) {
 	}
 
 	t.Logf("scanned %d tracked files", len(scanned))
+}
+
+// TestInlineAllowLines pins the scan TestNoTrackedFileSpellsTheInlineAllowComment
+// reports an occurrence with: inlineAllowLines returns the line number of every
+// occurrence of the marker, in any letter case, in order and one entry per
+// occurrence, so that two occurrences on one line report that line twice and a
+// file holding the comment twice is reported twice rather than once (issue
+// #516). No line of this table spells the marker out, in any letter case: each
+// one is built from its two parts, as the walk builds it.
+func TestInlineAllowLines(t *testing.T) {
+	t.Parallel()
+
+	// The marker the walk searches for, and two other letter cases of it, each
+	// built from its two parts so that this file holds no line a model could
+	// quote to refuse the audit's own run.
+	marker := "gitleaks" + ":allow"
+	camel := "GitLeaks" + ":Allow"
+	mixed := "gItLeAkS" + ":aLlOw"
+
+	tests := []struct {
+		name string
+		src  string
+		want []int
+	}{
+		{
+			name: "no occurrence",
+			src:  "// a comment\nvar nothing int\n",
+			want: nil,
+		},
+		{
+			name: "one occurrence",
+			src:  "var a int\n// " + marker + "\nvar b int\n",
+			want: []int{2},
+		},
+		{
+			name: "two on different lines",
+			src:  "var a int\n// " + marker + "\nvar b int\n// " + marker + "\n",
+			want: []int{2, 4},
+		},
+		{
+			name: "two on one line",
+			src:  "// " + camel + " and " + marker + "\nvar a int\n",
+			want: []int{1, 1},
+		},
+		{
+			name: "mixed letter case",
+			src:  "x := 1 // " + mixed + "\n",
+			want: []int{1},
+		},
+		{
+			name: "first and last line, no trailing newline",
+			src:  "// " + marker + "\nvar a int\n// " + camel,
+			want: []int{1, 3},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := inlineAllowLines(tc.src, marker)
+			if !slices.Equal(got, tc.want) {
+				t.Errorf("inlineAllowLines(%q, marker) = %v, want %v; report every occurrence, by the line it starts on, in order, one entry per occurrence", tc.src, got, tc.want)
+			}
+		})
+	}
+}
+
+// inlineAllowLines returns the 1-based line number of every occurrence of marker
+// in src, in order and one entry per occurrence, ignoring letter case: src is
+// lower-cased before the search and marker is given lower case.
+// The walk of TestNoTrackedFileSpellsTheInlineAllowComment reports through it
+// (issue #516). Lower-casing keeps every newline, so a line number counted in the
+// lower-cased text is the line of the original.
+func inlineAllowLines(src, marker string) []int {
+	lower := strings.ToLower(src)
+
+	var lines []int
+
+	line, offset := 1, 0
+
+	for {
+		i := strings.Index(lower[offset:], marker)
+		if i < 0 {
+			return lines
+		}
+
+		// The marker holds no newline, so the line one occurrence ends on is
+		// the line it starts on, and the count goes on from there.
+		line += strings.Count(lower[offset:offset+i], "\n")
+		lines = append(lines, line)
+		offset += i + len(marker)
+	}
 }
