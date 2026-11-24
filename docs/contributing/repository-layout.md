@@ -44,4 +44,6 @@ dev/worktree.sh               Creates the worktree for a branch (make worktree)
 .dot-agent-deck.toml          Multi-agent orchestration
 .claude/skills/               Skills used by the agents (Claude Code and pi)
 .pi/settings.json             Points pi at .claude/skills
+.pi/extensions/               pi's project extension refusing env-printing commands (ADR 0044)
+.pi/deny-env-printing.json    The patterns that extension refuses
 ```

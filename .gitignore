@@ -61,6 +61,8 @@ crash.*.log
 /.worktrees/
 # dot-agent-deck runtime state (task/work-done handoff files, logs).
 .dot-agent-deck/
+# The tester's scratch directory, named in its prompt in .dot-agent-deck.toml (issue #540).
+/.scratch/
 # Personal Claude Code overrides; the shared .claude/settings.json is committed.
 .claude/settings.local.json
 CLAUDE.local.md

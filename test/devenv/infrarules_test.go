@@ -7,7 +7,8 @@
 // block of an allowed type only, a run or mock_provider label that is an identifier (so no label's / can shift
 // the blocks beneath it out of the rule that judges them), a block label whose %, / or : never decides what
 // the rules see, a provider block setting only organization_id and
-// region, a lock file holding only the line shapes tofu init writes, and so on (the script lists them). With
+// region, a lock file holding only the line shapes tofu init writes, the site's TLS stage recreating itself before
+// it destroys (so a replacement repoints the DNS stage first, issue #541), and so on (the script lists them). With
 // every rule holding it prints nothing and exits 0; a usage error exits 2.
 //
 // The real infra/ must hold every rule, and each case below is one copy of infra/ with exactly one breakage,
@@ -70,6 +71,7 @@ type infraRuleCase struct {
 var infraRuleCases = slices.Concat(
 	infraFileFunctionCases(),
 	namedInfraRuleCases,
+	tlsStageLifecycleCases,
 	infraTestNestedBlockCases,
 	infraTestLabelCases,
 	infraLabelPathCases,
@@ -1550,6 +1552,238 @@ locals {
 			writeInfraText(t, filepath.Join(site, "main.tf~"), "resource {\n")
 		},
 	},
+}
+
+// tlsStageLifecycleCases pin [tls-stage-lifecycle] (issue #541). Scaleway issues the Edge Services TLS stage's
+// managed certificate once, when the stage is created, and only once the www CNAME resolves to the pipeline:
+// a stage created before R8's CNAME never gets one, and replacing it is the only way to ask again. OpenTofu's
+// default replacement plans the destroy first, and Scaleway refuses to delete a TLS stage the DNS stage still
+// references, so the apply fails with a 500. The stage must therefore carry
+// lifecycle { create_before_destroy = true }: the new stage is created and the DNS stage repointed before the
+// old one is deleted. tofu test cannot see lifecycle meta-arguments, so dev/infra-rules.awk reads the file.
+//
+// Every case starts from the real configuration and rewrites only the TLS stage's lifecycle block, so a copy
+// holds whatever infra/site/main.tf holds today and the case still names one breakage: no block at all, a
+// block that says false, and the one shape the rule allows.
+var tlsStageLifecycleCases = []infraRuleCase{
+	{
+		name:   "tls-stage-without-a-lifecycle-block",
+		why:    "the site's TLS stage without a lifecycle block, whose replacement plans the destroy before its create",
+		want:   "tls-stage-lifecycle",
+		wantIn: map[string]string{"tls-stage-lifecycle": "{site}/main.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			tlsStageLifecycle(t, site, nil)
+		},
+	},
+	{
+		name:   "tls-stage-create-before-destroy-false",
+		why:    "create_before_destroy = false in the site's TLS stage lifecycle block, which restores the destroy-first replacement",
+		want:   "tls-stage-lifecycle",
+		wantIn: map[string]string{"tls-stage-lifecycle": "{site}/main.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			tlsStageLifecycle(t, site, []string{"    create_before_destroy = false"})
+		},
+	},
+	{
+		name: "tls-stage-create-before-destroy-true",
+		why:  "create_before_destroy = true in the site's TLS stage lifecycle block, the one shape the rule allows",
+		want: "",
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			tlsStageLifecycle(t, site, []string{"    create_before_destroy = true"})
+		},
+	},
+	{
+		name:   "tls-stage-without-a-lifecycle-block-beside-a-dns-stage-with-one",
+		why:    "the site's TLS stage without a lifecycle block while the DNS stage beside it carries create_before_destroy = true, a setting that is the DNS stage's and never the TLS stage's",
+		want:   "tls-stage-lifecycle",
+		wantIn: map[string]string{"tls-stage-lifecycle": "{site}/main.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			tlsStageLifecycle(t, site, nil)
+			editInfraFile(t, filepath.Join(site, "main.tf"),
+				`resource "scaleway_edge_services_dns_stage" "site" {`,
+				"resource \"scaleway_edge_services_dns_stage\" \"site\" {\n  lifecycle {\n    create_before_destroy = true\n  }\n")
+		},
+	},
+	{
+		name:   "tls-stage-without-a-lifecycle-block-in-a-second-root",
+		why:    "a second applied root beside the site's whose TLS stage has no lifecycle block, while the site's TLS stage keeps create_before_destroy = true",
+		want:   "tls-stage-lifecycle",
+		wantIn: map[string]string{"tls-stage-lifecycle": "{root}/other/main.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			tlsStageSecondRoot(t, site)
+		},
+	},
+}
+
+// tlsStageSecondRoot writes a second applied root beside a copy's site/, holding what a root needs - a copy of
+// the site's versions.tf, so the pinned release and provider live in one place, with a state key of its own -
+// and the TLS stage without a lifecycle block. Its resource and labels are the site's stage's, so a rule that
+// keys the stage by its block path alone reads the site's lifecycle block as this root's and lets the
+// destroy-first replacement through (issue #541).
+func tlsStageSecondRoot(t *testing.T, site string) {
+	t.Helper()
+
+	versions := filepath.Join(site, "versions.tf")
+	body, err := os.ReadFile(versions)
+	if err != nil {
+		t.Fatalf("read %s: %v", versions, err)
+	}
+
+	other := filepath.Join(filepath.Dir(site), "other")
+	otherVersions := filepath.Join(other, "versions.tf")
+
+	writeInfraText(t, otherVersions, string(body))
+	editInfraFile(t, otherVersions, `key = "site/terraform.tfstate"`, `key = "other/terraform.tfstate"`)
+
+	writeInfraText(t, filepath.Join(other, "main.tf"), `resource "scaleway_edge_services_tls_stage" "site" {
+}
+`)
+}
+
+// tlsStageLifecycle rewrites the lifecycle block of scaleway_edge_services_tls_stage.site in a copied
+// infra/site: body becomes the block's lines, and an empty body leaves the stage without a lifecycle block.
+// An existing block, whatever it holds (the real configuration's comment, blank lines, another revision's
+// setting), is dropped first, so each case names one breakage and none depends on what main.tf holds today.
+// The resource and its lifecycle block end where their braces close, so a block written the standard way
+// (its settings indented, its "}" on its own line) and one closed with a trailing comment are both read.
+// Only the TLS stage is edited: a lifecycle block on the DNS stage beside it stays as the copy found it.
+func tlsStageLifecycle(t *testing.T, site string, body []string) {
+	t.Helper()
+
+	path := filepath.Join(site, "main.tf")
+
+	text, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+
+	lines := strings.Split(string(text), "\n")
+
+	const header = `resource "scaleway_edge_services_tls_stage" "site" {`
+
+	start := -1
+
+	for i, line := range lines {
+		if strings.TrimSpace(line) == header {
+			start = i
+
+			break
+		}
+	}
+
+	if start < 0 {
+		t.Fatalf("%s holds no line %q: the case names the TLS stage the rule judges", path, header)
+	}
+
+	// The resource's end is the line whose closing brace takes the depth back to zero, never the first
+	// line that holds a "}": a nested block closes that way too (a lifecycle block written the standard
+	// way does), so counting is what finds the resource.
+	end := infraBlockEnd(t, path, lines, start)
+
+	kept := make([]string, 0, end-start)
+
+	for i := start + 1; i < end; i++ {
+		if infraOpensBlock(lines[i], "lifecycle") {
+			i = infraBlockEnd(t, path, lines, i)
+
+			continue
+		}
+
+		kept = append(kept, lines[i])
+	}
+
+	for len(kept) > 0 && strings.TrimSpace(kept[len(kept)-1]) == "" {
+		kept = kept[:len(kept)-1]
+	}
+
+	out := append([]string{}, lines[:start+1]...)
+	out = append(out, kept...)
+
+	if len(body) > 0 {
+		out = append(out, "  lifecycle {")
+		out = append(out, body...)
+		out = append(out, "  }")
+	}
+
+	out = append(out, lines[end:]...)
+
+	writeInfraText(t, path, strings.Join(out, "\n"))
+}
+
+// infraBlockEnd returns the index of the line that closes the block line from opens and closes, counting
+// braces and ignoring the ones a quoted string or a comment holds. from's own line may hold the whole block
+// (a one-line "foo {}") and is then its end. It fails the test when the file never closes the block, or
+// holds a /* */ comment, whose braces these cases do not count across.
+func infraBlockEnd(t *testing.T, path string, lines []string, from int) int {
+	t.Helper()
+
+	depth := 0
+
+	for i := from; i < len(lines); i++ {
+		depth += infraBraces(t, path, i+1, lines[i])
+
+		if depth < 0 {
+			t.Fatalf("%s:%d holds a closing brace with no opening one above it: the cases cannot read the blocks of that file", path, i+1)
+		}
+
+		if depth == 0 {
+			return i
+		}
+	}
+
+	t.Fatalf("%s:%d opens a block that never closes: the cases cannot find its end", path, from+1)
+
+	return 0
+}
+
+// infraBraces is the change to the brace depth that one line of HCL makes: the braces it opens minus the
+// ones it closes, ignoring those inside a quoted string (an escaped quote included) and after a # or //
+// comment.
+func infraBraces(t *testing.T, path string, line int, text string) int {
+	t.Helper()
+
+	depth := 0
+	quoted := false
+
+	for i := 0; i < len(text); i++ {
+		c := text[i]
+
+		switch {
+		case quoted:
+			switch c {
+			case '\\':
+				i++ // the escaped character, a quote included, is no delimiter
+			case '"':
+				quoted = false
+			}
+		case c == '"':
+			quoted = true
+		case c == '#', c == '/' && i+1 < len(text) && text[i+1] == '/':
+			return depth
+		case c == '/' && i+1 < len(text) && text[i+1] == '*':
+			t.Fatalf("%s:%d holds /*: the cases do not count braces across a block comment, so they cannot read that block's end", path, line)
+		case c == '{':
+			depth++
+		case c == '}':
+			depth--
+		}
+	}
+
+	return depth
+}
+
+// infraOpensBlock reports whether a line opens the named block, as in "  lifecycle {" or
+// "  lifecycle { # why": the first word is the name and a brace follows it, so a line that only mentions the
+// name (a comment, an assignment) is no opening.
+func infraOpensBlock(line, name string) bool {
+	fields := strings.Fields(line)
+
+	return len(fields) >= 2 && fields[0] == name && strings.HasPrefix(fields[1], "{")
 }
 
 // infraTestNestedBlockCases pin the allow list of the blocks nested directly in a test file's run and

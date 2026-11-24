@@ -8,7 +8,8 @@
 # The tokenizer knows HCL's strings (with ${...} and %{...} templates, which may nest strings), comments
 # (#, // and /* */), identifiers, numbers and punctuation. The parser above it tracks only what the rules
 # need: blocks with their type and labels, and attributes with their name and whether their value is one
-# literal string ("L", its value kept), an object ("O") or any other expression ("E"). Anything it does
+# literal string ("L", its value kept), one identifier such as true ("I", its name kept), an object ("O")
+# or any other expression ("E"). Anything it does
 # not read is a [parse] failure: a heredoc; an unbalanced string, brace or comment; a backslash in a block
 # label or a quoted object key (HCL decodes escapes such as _, so the raw text is not the name tofu
 # reads); a $${ or %%{ in a block label (read as ${ and %{); and a { after a block header whose labels
@@ -289,10 +290,22 @@ function tok(t, v, lit, esc,   i, ok, n) {
       attr(pa, "E", "")
     }
     pstate = 0
+  } else if (pstate == 3) { # an attribute whose value began with an identifier: that one, or more?
+    if (t == "N" || (t == "P" && (v == "," || v == "}"))) {
+      attr(pa, "I", pval)
+    } else {
+      attr(pa, "E", "")
+    }
+    pstate = 0
   } else if (pstate == 1) { # the first token of an attribute's value
     pstate = 0
     if (t == "S" && lit) {
       pstate = 2
+      pval = v
+      return
+    }
+    if (t == "I") { # a lone identifier, such as true, is kept as kind "I"
+      pstate = 3
       pval = v
       return
     }
@@ -659,6 +672,8 @@ END {
         problem("api-key", f, bline[b], "a " typ " scaleway_iam_api_key: the deploy API key is created by hand, so no secret reaches the state")
       } else if (typ == "resource" && lab[2] == "scaleway_object") {
         objects[b] = 1 # reported after the attributes, below
+      } else if (m == 1 && typ == "resource" && k == 3 && lab[2] == "scaleway_edge_services_tls_stage" && lab[3] == "site") {
+        tlsStage[b] = dirof(f) "/" p "/lifecycle" # judged after the attributes, below; keyed by directory, since every root may hold its own stage
       } else if (typ == "resource" && lab[2] == "scaleway_object_bucket_acl") {
         problem("bucket-acl", f, bline[b], "a scaleway_object_bucket_acl: the bucket policy alone decides who reads the site (ADR 0039), and an ACL could make every object, or the bucket, public")
       } else if (typ == "resource" && lab[2] == "scaleway_iam_policy") {
@@ -767,6 +782,9 @@ END {
     if (n == "source" && (ablk[a] in isModule) && p == bpath[ablk[a]]) {
       modSource[ablk[a]] = (akind[a] == "L") ? aval[a] : "<an expression>"
     }
+    if (n == "create_before_destroy" && akind[a] == "I" && aval[a] == "true" && p == bpath[ablk[a]]) {
+      createFirst[dirof(f) "/" p] = 1
+    }
     if (p ~ "^resource:scaleway_iam_(policy|application):[^/]+$" && (n == "count" || n == "for_each")) {
       problem("iam-repeat", f, aline[a], n " on " shownpath(p) ": infra/ creates exactly one IAM application and one policy")
     }
@@ -775,6 +793,11 @@ END {
   for (b = 1; b <= nblk; b++) {
     if (b in objects) {
       problem("object", bfile[b], bline[b], "a scaleway_object resource: tofu never uploads an object, the release deploys them (ADR 0039)")
+    }
+    # The TLS stage's managed certificate is requested only at its creation, so R8 may replace it, and
+    # Scaleway refuses to delete a TLS stage the DNS stage references (issue #541).
+    if ((b in tlsStage) && !(tlsStage[b] in createFirst)) {
+      problem("tls-stage-lifecycle", bfile[b], bline[b], "resource scaleway_edge_services_tls_stage \"site\" has no lifecycle block with create_before_destroy = true: a replacement would delete the stage first, which Scaleway refuses while the DNS stage references it")
     }
   }
 

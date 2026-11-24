@@ -94,6 +94,9 @@ open 'https://www.scaleway.com/en/pricing/network/#edge-services'   # PASS: Star
 
 And after every change to `infra/site/` merged to `main`.
 
+The apply creates the TLS stage, which requests its managed certificate only then, before R8's CNAME
+exists: on a first setup, R8's recreate step is expected (issue #541).
+
 ```bash
 dev/tofu.sh -chdir=infra/site init -backend-config=backend.hcl -lockfile=readonly   # PASS: "OpenTofu has been successfully initialized"
 dev/tofu.sh -chdir=infra/site plan -out=site.tfplan        # PASS (first time): "Plan: 13 to add, 0 to change, 0 to destroy."
@@ -246,9 +249,16 @@ aws s3api delete-bucket --bucket "$CB"
 # FAIL "BucketNotEmpty": delete its versions as above first
 rm -r "$W"
 scw iam api-key update "$SCW_ACCESS_KEY" default-project-id="$ADMIN_PROJECT"   # back to the admin project, where the state is
+# The switch takes a moment to apply at Scaleway: wait until your own key lists the state bucket again before any tofu touches its lock
+for i in $(seq 1 12); do aws s3api list-objects-v2 --bucket <state-bucket> --max-items 1 >/dev/null 2>&1 && break; sleep 10; done
+aws s3api list-objects-v2 --bucket <state-bucket> --query 'Contents[].Key'   # PASS: "site/terraform.tfstate" and no "site/terraform.tfstate.tflock"
+# FAIL "AccessDenied" or "NoSuchBucket": the switch has not applied yet; wait a minute and list again
+# FAIL "site/terraform.tfstate.tflock" listed and no tofu runs (a plan run before the switch applied left it): the plan below stops at "Error acquiring the state lock"; its FAIL line clears the lock
 # If the state bucket's put-object probe was allowed: aws s3api delete-object --bucket <state-bucket> --key canary/probe.txt
 dev/tofu.sh -chdir=infra/site plan -detailed-exitcode   # PASS: exit 0 (website, versioning and policy unchanged)
 # FAIL exit 2: dev/tofu.sh -chdir=infra/site apply
+# FAIL "Error acquiring the state lock": unlock only when its "Who" is this machine's user@host, its "Created" the time of the earlier run, and no other dev/tofu.sh runs on this machine; then, with its "ID" and without -force (tofu asks to confirm): dev/tofu.sh -chdir=infra/site force-unlock <lock ID>   # PASS: "OpenTofu state has been successfully unlocked!", the listing above shows no .tflock, then plan again
+# FAIL "Error releasing the state lock": the listing and force-unlock above, then plan again
 ```
 
 ## R8. Namecheap
@@ -260,8 +270,21 @@ Domain List, `shift2eu.com`, Advanced DNS; the apex redirect is milestone 4's.
 dig +short CNAME www.shift2eu.com     # PASS: "$E." (the edge_endpoint output)
 dig +short CAA shift2eu.com           # PASS: exactly 0 issue "letsencrypt.org" and 0 issuewild ";"
 dig +short DS shift2eu.com            # PASS: a DS record (DNSSEC on)
+# The certificate, once the CNAME resolves: wait up to 15 minutes, 30 tries 30 s apart
+n=0; until echo | openssl s_client -connect www.shift2eu.com:443 -servername www.shift2eu.com 2>/dev/null | openssl x509 -noout -issuer 2>/dev/null | grep -q Encrypt || [ "$n" -ge 30 ]; do sleep 30; n=$((n + 1)); done
 echo | openssl s_client -connect www.shift2eu.com:443 -servername www.shift2eu.com 2>/dev/null | openssl x509 -noout -issuer -enddate   # PASS: a Let's Encrypt issuer
-# FAIL "unable to load certificate": wait for issuance, then check the CAA record
+# FAIL "unable to load certificate": check the CAA record, then the TLS stage
+PL="$(dev/tofu.sh -chdir=infra/site output -raw pipeline_id)"; echo "$PL"   # PASS: the pipeline ID, not empty
+scw edge-services tls-stage list pipeline-id="$PL" -o json | jq '.[] | {status, certificate_expires_at}'   # PASS: a date in certificate_expires_at
+# FAIL certificate_expires_at: null after the wait: no certificate was issued (R4 created the stage before the CNAME existed, and Scaleway asks only once); recreate the TLS stage below and re-run the checks
+dev/tofu.sh -chdir=infra/site plan -replace=scaleway_edge_services_tls_stage.site -out=tls.tfplan   # PASS: "Plan: 1 to add, 1 to change, 1 to destroy."
+dev/tofu.sh -chdir=infra/site show tls.tfplan | less      # PASS: the TLS stage "must be replaced" ("create replacement and then destroy") and the DNS stage's tls_stage_id changes in place, nothing else
+# FAIL the plan replaces, destroys or changes any other resource: stop, apply nothing, rm infra/site/tls.tfplan, and find out why (R4's no-changes check) before the recreate
+dev/tofu.sh -chdir=infra/site apply tls.tfplan            # PASS: "Apply complete! Resources: 1 added, 1 changed, 1 destroyed."
+# FAIL the apply stopped part-way (an error after the new stage was created): fix the error it printed, rm infra/site/tls.tfplan, then re-plan with no replace target, as the new stage is already in the state: dev/tofu.sh -chdir=infra/site plan -out=tls.tfplan (only what is left: the deposed old stage's destroy and/or the DNS stage's tls_stage_id update), review it with the show line (PASS here: 0 to add, at most 1 to change and 1 to destroy: only the deposed old stage and the DNS stage's tls_stage_id, nothing else), apply it, then continue with the rm line below; never re-apply the old tls.tfplan
+# FAIL the apply failed before the new stage was created (it reports 0 added, and scw edge-services tls-stage list still shows one stage): nothing changed, and a plain plan shows no changes, so the stage would never be recreated: fix the error it printed, rm infra/site/tls.tfplan, run the replace plan line above again, review it with the show line (same PASS as above), then apply it
+rm infra/site/tls.tfplan
+# Then the wait loop, the certificate check and the TLS stage check again
 curl -s -o /dev/null -w '%{http_code} %{redirect_url}\n' http://www.shift2eu.com/   # record it: 301/308 to https://www.shift2eu.com/, refused, or 200 (a no-go, Hosting decision 3)
 # The release-tag skill's and the live check's DNS, certificate and redirect checks verify this afterwards
 ```
@@ -540,6 +563,11 @@ gh variable set SITE_DEPLOY_ENABLED --body false -R <owner>/shift2eu
 scw iam api-key delete <deploy access key>
 # Own key, default project the site's (R5): delete every object version and delete marker in "$B" (R7, step 8), then back to the admin project
 scw iam api-key update "$SCW_ACCESS_KEY" default-project-id="$ADMIN_PROJECT"
+# The switch takes a moment to apply at Scaleway: wait until your own key lists the state bucket again before the destroy touches its lock
+for i in $(seq 1 12); do aws s3api list-objects-v2 --bucket <state-bucket> --max-items 1 >/dev/null 2>&1 && break; sleep 10; done
+aws s3api list-objects-v2 --bucket <state-bucket> --query 'Contents[].Key'   # PASS: "site/terraform.tfstate" and no "site/terraform.tfstate.tflock"
+# FAIL "AccessDenied" or "NoSuchBucket": the switch has not applied yet; wait a minute and list again
+# FAIL "site/terraform.tfstate.tflock" listed and no tofu runs: R7 step 8's recovery (the plan's "Error acquiring the state lock" FAIL line), then list again
 # The site environment's secrets and variables
 gh secret delete SCW_ACCESS_KEY --env site -R <owner>/shift2eu && gh secret delete SCW_SECRET_KEY --env site -R <owner>/shift2eu
 gh variable delete SITE_BUCKET --env site -R <owner>/shift2eu && gh variable delete SITE_REGION --env site -R <owner>/shift2eu
