@@ -286,6 +286,22 @@ func TestPiEnvDenyListRefusesPrintingTheEnvironment(t *testing.T) {
 		`awk 'BEGIN{for(k in ENVIRON) print k}'`,
 		`python3 -c 'import os; print(os.environ)'`,
 		`node -e 'console.log(process.env)'`,
+		// A redirect after a bare printer, numbered or not: the printer writes its
+		// values to the redirect's target, or to the pipeline that follows it, so
+		// the redirect changes nothing about what the printer prints.
+		"env 2>&1 | grep KEY",
+		"env 2>/dev/null | grep DEEP",
+		"env 1>out.txt",
+		"env -0 2>&1",
+		"set 2>&1 | grep KEY",
+		"export 2>&1",
+		"declare 2>&1 | grep KEY",
+		"typeset 2>&1",
+		"export -p 2>&1",
+		// A backslash escapes nothing in the command word: bash still runs `env`.
+		`\env`,
+		`\printenv`,
+		`\env | grep KEY`,
 	}
 
 	for _, command := range cases {
@@ -347,6 +363,11 @@ func TestPiEnvDenyListAllowsTheWork(t *testing.T) {
 		"make -j4 check",
 		"GOTOOLCHAIN=local make check",
 		"set -e; make check",
+		// The redirects the agents wrap around their own commands, on a printer
+		// that runs a command or on a command that prints nothing.
+		"env GOTOOLCHAIN=local make check 2>&1",
+		"make check 2>&1",
+		"go test ./... 2>&1 | tail",
 	}
 
 	for _, command := range cases {

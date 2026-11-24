@@ -146,7 +146,14 @@ var claudeProjectEnvDeny = []string{
 	"Bash(printenv)",
 	"Bash(printenv *)",
 	"Bash(set)",
+	// A redirect on a bare printer: Claude Code may not strip the redirect
+	// before matching the exact `Bash(set)` and `Bash(export)` rules, so the
+	// numbered and unnumbered forms are named here too.
+	"Bash(set >*)",
+	"Bash(set [0-9]>*)",
 	"Bash(export)",
+	"Bash(export >*)",
+	"Bash(export [0-9]>*)",
 	"Bash(export -p*)",
 	"Bash(declare)",
 	"Bash(declare -p*)",
