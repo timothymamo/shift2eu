@@ -772,6 +772,11 @@ var shippedLicenseFiles = []struct{ name, path string }{
 // another of the entry's keys, ship neither file. YAML reads a comment from the
 // first `#` after a blank that no quote opened, so an apostrophe inside an
 // unquoted scalar such as `it's` opens none and the names after it are text.
+// Inside a quoted scalar a quote is escaped: two single quotes in a
+// single-quoted one, and a backslash and the quote in a double-quoted one,
+// neither of which closes it, so the commas and the `#` between the escape and
+// the scalar's close are text. A fixture pins each escape, in a section's key,
+// in a flow list's entry and in that entry's comment.
 // A block sequence may start in the first column, level with the key it belongs
 // to, without becoming a top-level key.
 //
@@ -1037,6 +1042,67 @@ COPY --chmod=0444 LICENSE NOTICE /usr/share/doc/shift2eu/
 			dockerfile:   fixture,
 			dockerignore: "*\n!LICENSE\n!NOTICE\n",
 			goreleaser:   "docker:\n  id: shift2eu\n  dockerfile: Dockerfile\n  extra_files: [Dockerfile, 'a, b', LICENSE, NOTICE]\n",
+		},
+		{
+			// Two single quotes in a row inside a single-quoted scalar are an
+			// escaped quote, not its close, so the commas after them stay
+			// inside the one entry and the names in it are not entries.
+			name:         "a GoReleaser dockers_v2 section whose single-quoted flow entry holds an escaped quote",
+			dockerfile:   fixture,
+			dockerignore: "*\n!LICENSE\n!NOTICE\n",
+			goreleaser:   "dockers_v2:\n  - id: a\n    extra_files: ['a'', LICENSE, NOTICE']\n",
+			want:         []string{"names no LICENSE", "names no NOTICE"},
+		},
+		{
+			// A backslash escapes the double quote after it, so that quote does
+			// not close the scalar and the commas after it stay inside the one
+			// entry.
+			name:         "a GoReleaser dockers_v2 section whose double-quoted flow entry holds an escaped quote",
+			dockerfile:   fixture,
+			dockerignore: "*\n!LICENSE\n!NOTICE\n",
+			goreleaser:   "dockers_v2:\n  - id: a\n    extra_files: [\"a\\\", LICENSE, NOTICE\"]\n",
+			want:         []string{"names no LICENSE", "names no NOTICE"},
+		},
+		{
+			// A # inside a quoted scalar is text, and the escaped quote before
+			// it keeps the scalar open over it, so the entries beside it ship
+			// both files.
+			name:         "a GoReleaser docker section whose flow list holds a # after an escaped single quote",
+			dockerfile:   fixture,
+			dockerignore: "*\n!LICENSE\n!NOTICE\n",
+			goreleaser:   "docker:\n  id: shift2eu\n  dockerfile: Dockerfile\n  extra_files: ['a''b # c', LICENSE, NOTICE]\n",
+		},
+		{
+			name:         "a GoReleaser docker section whose flow list holds a # after an escaped double quote",
+			dockerfile:   fixture,
+			dockerignore: "*\n!LICENSE\n!NOTICE\n",
+			goreleaser:   "docker:\n  id: shift2eu\n  dockerfile: Dockerfile\n  extra_files: [\"a\\\" # c\", LICENSE, NOTICE]\n",
+		},
+		{
+			// Neither the file names inside the quoted entries nor the # in
+			// them are an entry or a comment of the list, so neither file ships.
+			name:         "a GoReleaser docker section whose quoted flow entries hold comment-looking text",
+			dockerfile:   fixture,
+			dockerignore: "*\n!LICENSE\n!NOTICE\n",
+			goreleaser:   "docker:\n  id: shift2eu\n  dockerfile: Dockerfile\n  extra_files: ['it''s # LICENSE', 'x\" # NOTICE']\n",
+			want:         []string{"names no LICENSE", "names no NOTICE"},
+		},
+		{
+			// The escaped quote keeps the scalar open to its close, so the #
+			// after it starts a comment that names neither file.
+			name:         "a GoReleaser docker section whose comment follows an entry holding an escaped quote",
+			dockerfile:   fixture,
+			dockerignore: "*\n!LICENSE\n!NOTICE\n",
+			goreleaser:   "docker:\n  id: shift2eu\n  dockerfile: Dockerfile\n  extra_files: ['a''b'] # LICENSE, NOTICE\n",
+			want:         []string{"names no LICENSE", "names no NOTICE"},
+		},
+		{
+			// A quoted top-level key that reads as no docker key opens no
+			// section, so the extra_files under it is never read.
+			name:         "a GoReleaser section whose quoted key holds an escaped quote",
+			dockerfile:   fixture,
+			dockerignore: "*\n!LICENSE\n!NOTICE\n",
+			goreleaser:   "'dock''er':\n  id: a\n  dockerfile: Dockerfile\n",
 		},
 		{
 			name:         "a GoReleaser dockers_v2 section whose key opens a list item",
