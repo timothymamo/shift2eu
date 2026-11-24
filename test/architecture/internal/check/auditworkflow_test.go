@@ -1175,6 +1175,83 @@ func TestAuditWorkflow(t *testing.T) {
 			wantIn: "comment",
 		},
 
+		// Review round 4 (the reviewer's blocker, the auditor's M1): a # starts a
+		// word not only after whitespace but right after a control operator, so
+		// `;#`, `&&#` and `|#` begin a comment too, and the cases above passed
+		// them. The same finding makes the attestation step's guards separate
+		// substring patterns: the verification can be cut with no # at all, by
+		// ending the gh command early (`;`) or by dropping the trailing \, which
+		// leaves --deny-self-hosted-runners to run alone, and in `if ! A; B; then`
+		// only B's status counts, so a failed gh attestation verify passes. And
+		// the zip's digest check is an unanchored substring, so it is satisfied by
+		// the same command text at the end of another command's line.
+		//
+		// The three cases below hang the same guard on a comment that begins right
+		// after a control operator, and must draw the message naming the comment
+		// (wantIn "comment").
+		{
+			name: "a trailing comment right after a ; on the --source-ref line",
+			workflow: mutate(t, acceptedWorkflow, "            --source-ref \"refs/tags/${tag}\" \\\n"+auditVerifyFlagLine,
+				"            --source-ref \"refs/tags/${tag}\";# \\\n"+auditVerifyFlagLine),
+			wantIn: "comment",
+		},
+		{
+			name: "a trailing comment right after a && on the --source-ref line",
+			workflow: mutate(t, acceptedWorkflow, "            --source-ref \"refs/tags/${tag}\" \\\n"+auditVerifyFlagLine,
+				"            --source-ref \"refs/tags/${tag}\"&&# \\\n"+auditVerifyFlagLine),
+			wantIn: "comment",
+		},
+		{
+			name: "a trailing comment right after a | on the --source-ref line",
+			workflow: mutate(t, acceptedWorkflow, "            --source-ref \"refs/tags/${tag}\" \\\n"+auditVerifyFlagLine,
+				"            --source-ref \"refs/tags/${tag}\"|# \\\n"+auditVerifyFlagLine),
+			wantIn: "comment",
+		},
+		{
+			name: "the zip's sha256sum hidden after a ; on the download",
+			workflow: mutate(t, mutate(t, acceptedWorkflow, auditZipDigestLine, ""),
+				auditChecksArtifactDownloadLine,
+				strings.TrimSuffix(auditChecksArtifactDownloadLine, "\n")+";#"+strings.TrimPrefix(auditZipDigestLine, "          ")),
+			wantIn: "comment",
+		},
+		{
+			name: "the zip's sha256sum hidden after a & on the download",
+			workflow: mutate(t, mutate(t, acceptedWorkflow, auditZipDigestLine, ""),
+				auditChecksArtifactDownloadLine,
+				strings.TrimSuffix(auditChecksArtifactDownloadLine, "\n")+"&#"+strings.TrimPrefix(auditZipDigestLine, "          ")),
+			wantIn: "comment",
+		},
+
+		// The verification is one command: the three cases below break it with no #
+		// at all, so only a contiguous check of the whole command - from the gh
+		// attestation verify line through every flag's line to the last flag - sees
+		// them. The message such a check owes names the command, so wantIn is
+		// "gh attestation verify".
+		{
+			name: "the verification cut after --source-ref by a ;",
+			workflow: mutate(t, acceptedWorkflow, "            --source-ref \"refs/tags/${tag}\" \\\n"+auditVerifyFlagLine,
+				"            --source-ref \"refs/tags/${tag}\"; \\\n"+auditVerifyFlagLine),
+			wantIn: "gh attestation verify",
+		},
+		{
+			name: "the verification cut before --deny-self-hosted-runners by the dropped continuation",
+			workflow: mutate(t, acceptedWorkflow, "            --source-ref \"refs/tags/${tag}\" \\\n"+auditVerifyFlagLine,
+				"            --source-ref \"refs/tags/${tag}\"\n"+auditVerifyFlagLine),
+			wantIn: "gh attestation verify",
+		},
+
+		// The zip's digest check stands on a line of its own: run at the end of
+		// another command's line, it still runs, but as part of that command's
+		// conditions, so the case that appends it without a # must draw the
+		// message naming the zip digest check.
+		{
+			name: "the zip's sha256sum appended to the download without a #",
+			workflow: mutate(t, mutate(t, acceptedWorkflow, auditZipDigestLine, ""),
+				auditChecksArtifactDownloadLine,
+				strings.TrimSuffix(auditChecksArtifactDownloadLine, "\n")+";"+strings.TrimPrefix(auditZipDigestLine, "          ")),
+			wantIn: "of the zip against the checked digest",
+		},
+
 		// A document the reader cannot follow tells the check nothing, so it is
 		// refused rather than passed.
 		{name: "an empty document", workflow: "", wantIn: "empty"},
