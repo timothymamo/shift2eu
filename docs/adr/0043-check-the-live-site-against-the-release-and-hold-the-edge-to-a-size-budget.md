@@ -234,8 +234,11 @@ running Caddy now serves `www` and the apex, writes the redirects and sends HSTS
 headers, and proxies the pipeline.
 
 - **The platform's headers.** Serverless Containers adds `server: envoy` and
-  `x-envoy-upstream-service-time` to every response (the maintainer's test C3). A later unit makes the
-  check allow them wherever it holds the response's headers; this amendment changes no code.
+  `x-envoy-upstream-service-time` to every response (the maintainer's test C3). The check has no
+  response-header allow list today (`ci/sitecheck/internal/livecheck` judges only the headers it names),
+  so a later unit confirms that it tolerates exactly those two and pins that with a test; if an allow
+  list is ever added, it allows exactly those two, not an `x-envoy-*` prefix. This amendment changes no
+  code.
 - **`-plain-http-www`** stays at `redirect`: the server redirects `http://www.shift2eu.com` itself, so
   the `refuse-or-close` mode is not needed by this hosting. Whether to keep or remove it is that later
   unit's.

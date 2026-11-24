@@ -27,8 +27,9 @@ this ADR with what it chose.
   key's scope and its canary step (R7), the attested bundle and the live checks were built and reviewed
   in milestone 3. A front that keeps them keeps that work.
 - **The maintainer tested the front before deciding** (C3, mac-mini-home, 2026-11-24, all pass; the
-  runbook's settings: `scw` 2.67, the official `docker.io/library/caddy:2.8.4` image with the container's
-  command and arguments set, `port=8080`, `privacy=public`, `https-connections-only=false`,
+  runbook's settings: `scw` 2.67, the official `docker.io/library/caddy:2.8.4` image by tag (C3's
+  release; the infra unit pins the release current when it writes the container, by digest) with the
+  container's command and arguments set, `port=8080`, `privacy=public`, `https-connections-only=false`,
   `min-scale=0`, `max-scale=1`, `mvcpu-limit=140`, `memory-limit-bytes=0.25GB`, region `nl-ams`):
   - the container's endpoint is `<namespace>-<name>.functions.fnc.nl-ams.scw.cloud`;
   - the container's own **308** reaches the client unchanged over plain HTTP and over HTTPS, so the
@@ -52,7 +53,12 @@ HTTPS traffic", `redirected` "Responds to HTTP request with a 301 redirect" on t
 a root domain needs CNAME flattening or "an ALIAS on your root domain", and "during that step [the
 certificate's issuance], the custom domain might be available in plain HTTP"
 ([custom domain](https://www.scaleway.com/en/docs/serverless-containers/how-to/add-a-custom-domain-to-a-container/)).
-The documentation does not name the certificate authority: that it is Let's Encrypt is C3's result.
+The certificate authority is Let's Encrypt: "Scaleway uses Let's Encrypt to generate and automatically
+renew certificates on your Custom Domains"
+([Serverless Containers FAQ](https://www.scaleway.com/en/docs/serverless-containers/faq/), source
+`pages/serverless-containers/faq.mdx` in `scaleway/docs-content`, read 2026-11-24), and C3 saw it for
+the apex under the existing CAA record. `www`'s certificate on the container is expected from the same
+issuer and is checked at the first deploy (R8).
 
 ## Decision
 
@@ -65,7 +71,7 @@ from the Edge Services pipeline endpoint, which stays the only reader of the pri
 
 - **One container, two custom domains:** `www.shift2eu.com` (a Namecheap CNAME to the container's
   endpoint) and `shift2eu.com` (a Namecheap ALIAS at `@` to the same endpoint), each with the
-  certificate Scaleway issues for a custom domain (Let's Encrypt, C3). DNSSEC stays on, and the CAA
+  certificate Scaleway issues for a custom domain (Let's Encrypt: the FAQ, and C3 for the apex). DNSSEC stays on, and the CAA
   record stays `0 issue "letsencrypt.org"`, `0 issuewild ";"` (Hosting decision 10).
 - **Plain HTTP `enabled`, not `redirected`.** `redirected` answers 301 on the same host, so
   `http://shift2eu.com` would take two hops to `https://www.shift2eu.com`, and the redirect would be the
@@ -76,7 +82,10 @@ from the Edge Services pipeline endpoint, which stays the only reader of the pri
   EUR 0.000002 per GB-second after 400,000 free, per account and month. The worst case, one instance
   running a whole 30-day month (2,592,000 s), is about **EUR 2.13 a month**; with no instance warm most
   of the time it stays in the free tier. `min_scale` (0, with a cold start on the first visit after an
-  idle period, or 1, always warm) is *for the infra unit*: both stay within the worst case. One instance
+  idle period, or 1, always warm) is *for the infra unit*: both stay within the worst case. A cold start
+  also meets the live check's request timeout (`DefaultRequestTimeout`, 30 s, ADR 0043) and the first
+  deploy's probes: with 0, the infra unit checks that the first request after an idle period fits that
+  timeout, or R8 warms the container (one request, answer discarded) before the checks run. One instance
   also bounds capacity: a burst beyond it waits or fails, which this small static site accepts.
 - **Who can change it:** only the maintainer, through `infra/site` and `dev/tofu.sh` on the admin
   machine (ADR 0039). The deploy key holds no Serverless Containers or Container Registry permission
@@ -86,19 +95,26 @@ from the Edge Services pipeline endpoint, which stays the only reader of the pri
 ### What the server answers
 
 Every rule is keyed on the request's `Host` and `X-Forwarded-Proto` (the TLS connection ends at the
-platform; Caddy listens on plain `:8080`, with its automatic HTTPS off). "The URI" is the path and the
-query, unchanged.
+platform; Caddy listens on plain `:8080`). The global options set `auto_https off` and `admin off` (no
+admin endpoint in the container), both pinned by the configuration test. **The scheme is read from the
+raw `X-Forwarded-Proto` request header, which must be one field whose whole value is `https`** (Caddy's
+`header X-Forwarded-Proto https` matcher; no `{scheme}` placeholder or `protocol` matcher, which on
+plain `:8080` always see `http` and would answer every request with a 308, a loop for `www`; no
+`trusted_proxies`); anything else, a missing header included, gets the 308. "The URI" is the path and
+the query, unchanged.
 
 | Request | Answer |
 |---|---|
 | `X-Forwarded-Proto` anything but exactly `https`, any host (`http://www.shift2eu.com`, `http://shift2eu.com`, the container's endpoint over plain HTTP) | **308** to `https://www.shift2eu.com` + the URI, one hop |
 | HTTPS, `Host: shift2eu.com` | **308** to `https://www.shift2eu.com` + the URI |
 | HTTPS, `Host: www.shift2eu.com` | the site: reverse proxy to the Edge Services pipeline endpoint, with the headers below |
-| HTTPS, any other host (the container's own endpoint `<namespace>-<name>.functions.fnc.<region>.scw.cloud`) | **308** to `https://www.shift2eu.com` + the URI |
+| HTTPS, any other host (the container's own endpoint `<namespace>-<name>.functions.fnc.<region>.scw.cloud`, and a `Host` with a port suffix, in another case or with a trailing dot, such as `www.shift2eu.com:443`, `WWW.shift2eu.com` or `www.shift2eu.com.`) | **308** to `https://www.shift2eu.com` + the URI; the configuration test pins those three variants to this row, never the proxy |
 
 So neither name, nor the container's endpoint, ever answers 200 over plain HTTP, the transient plain
 HTTP during a certificate's issuance included (it reaches the same rule), and only
-`https://www.shift2eu.com` serves the site through the container.
+`https://www.shift2eu.com` serves the site through the container. That is a property of this rule and of
+its tests below, not a result of C3: C3's redirect container answered 308 unconditionally, and showed
+only that the platform passes the container's 308 and headers unchanged.
 
 **The preload chain** (Hosting decision 2) is not configured while preload is not pursued. If milestone
 4 records `preload: true` in `site/records/hsts.json`, the configuration changes in the same change:
@@ -110,9 +126,15 @@ HTTP during a certificate's issuance included (it reaches the same rule), and on
 documentation says only that `X-Real-IP` is overwritten). If it did not, a client sending
 `X-Forwarded-Proto: https` over plain HTTP would get the site with a 200 on plain HTTP. Only that client
 could: a network attacker cannot make a victim's browser send the header, and could serve its own page
-anyway. The infra unit's test (below) and a live probe settle it: a plain-HTTP request carrying
-`X-Forwarded-Proto: https` must still get the 308. The infra unit records the answer here; a 200 is the
-maintainer's to accept or not, on the record, since it changes no browser's visit.
+anyway. If the platform appends its value to the client's rather than overwriting it (two fields, or
+`https, http` in one), the rule above fails closed: the header is no longer one field of exactly
+`https`, so that request gets the 308, and only the spoofing client, on `www` over HTTPS, would loop.
+That is intended. The infra unit's live probe settles what the platform does: it records the header's
+value as the container receives it on `www`, on the apex and on the container's endpoint, over plain
+HTTP and over HTTPS, and sends over plain HTTP a request carrying `X-Forwarded-Proto: https`, one
+carrying the header twice and one carrying `https, https`, each of which must still get the 308. The
+infra unit records the answers here; a 200 is the maintainer's to accept or not, on the record, since it
+changes no browser's visit.
 
 ### The headers
 
@@ -128,8 +150,12 @@ site's files and every other path alike:
 | `Permissions-Policy` | every feature the site does not use turned off (`()`); the exact list is *for the infra unit*, pinned by the configuration test |
 
 The `<meta>` policy and the framing guard in the page script stay: they travel with the bundle to every
-other origin (Hosting decision 11). The apex's 308 carries no HSTS while preload is not pursued (the live
-check only records the apex's header then, ADR 0043). No other header is decided here;
+other origin (Hosting decision 11). The apex's 308 carries no HSTS while preload is not pursued: the
+live check only records the apex's header then (ADR 0043), so nothing would hold a value sent there, and
+the apex's header changes together with the preload record, in one change (above). The alternative,
+`max-age=31536000` without `includeSubDomains` on the apex's HTTPS 308 while preload is not pursued,
+would protect a returning visitor who types `shift2eu.com`; it is left open as the maintainer's decision
+at milestone 4 (it changes neither the PRD's HSTS decision nor the record). No other header is decided here;
 `Clear-Site-Data` and `Cross-Origin-Opener-Policy` are now possible and are proposed follow-ups.
 
 ### The upstream
@@ -137,16 +163,20 @@ check only records the apex's header then, ADR 0043). No other header is decided
 Caddy reverse-proxies `www`'s HTTPS requests to `https://<pipeline id>.svc.edge.scw.cloud`, verifying
 its certificate, with the endpoint as SNI and `Host` (C3's `--change-host-header`). Edge Services' cache
 and the private bucket stay as ADR 0042 has them; `ci/sitedeploy`, the key's scope and R7 do not change.
-The pipeline's own `www.shift2eu.com` custom domain and its certificate are no longer needed (*for the
-infra unit*). The response passes through unchanged but for the headers above: status (a 3xx where a
+The pipeline's own `www.shift2eu.com` custom domain goes; the infra unit removes it (and its TLS stage)
+in `infra/site`. The response passes through unchanged but for the headers above: status (a 3xx where a
 manifest file is expected still fails the live check), body, `Content-Type`, `Content-Encoding`,
 `Cache-Control` and `Age`. The configuration has no `encode` directive and no cache, so the module
 script is still served with the bytes and the `Content-Encoding: gzip` the deploy uploaded (Hosting
 decision 4, ADR 0043's budgets).
 
-Proposed, *for the infra unit to confirm*: the configuration removes `X-Forwarded-For` from the request
-upstream (`header_up -X-Forwarded-For`), since Edge Services needs nothing of the visitor, and turns no
-access log on (no `log` directive). What the platform itself logs is Scaleway's, as for Edge Services;
+The configuration removes from the request sent upstream every header that carries the visitor's
+address or a client's forwarding headers, `X-Forwarded-For`, `X-Forwarded-Proto`, `X-Forwarded-Host`,
+`Forwarded`, `X-Real-IP` (set by the platform) and `X-Envoy-*`, and also `Cookie` and `Authorization`,
+since Edge Services needs nothing of the visitor; Caddy's own `X-Forwarded-*` are removed too
+(`header_up -<name>`). The exact list, and any further platform header such as `x-request-id`, is the
+infra unit's, and the behaviour test's local upstream asserts that it receives none of them. The
+configuration turns no access log on (no `log` directive). What the platform itself logs is Scaleway's, as for Edge Services;
 the privacy page already names Scaleway.
 
 ### The image and its configuration
@@ -154,9 +184,15 @@ the privacy page already names Scaleway.
 - **The image is the official `caddy` image, pinned by digest**
   (`docker.io/library/caddy:<version>@sha256:<digest>`), with a
   `# renovate: datasource=docker depName=caddy` comment on the line above it (CLAUDE.md rule 7), so
-  only a Renovate PR moves it. C3 ran the official image straight from Docker Hub (by tag). Whether the
-  platform pulls by digest, and how it behaves when Docker Hub is slow or limits pulls at a cold start,
-  is *for the infra unit*.
+  that Renovate, once its manager covers the file, moves it. Today `.github/renovate.json5`'s custom
+  manager matches no file in `infra/site`, and its `matchString` expects `key: "value"`, not HCL's
+  `image = "..."`: the infra unit extends it (below).
+- **Digest pull is a go/no-go for the infra unit.** C3 ran the official image straight from Docker Hub,
+  by tag. The infra unit confirms that the platform runs the image by its digest: the image reference
+  the platform records keeps `@sha256:`, and a container given a wrong digest fails to start. If not,
+  the pinned digest is copied into a private Container Registry namespace of the site's project and
+  pulled from there by digest, recorded in this ADR before it is taken. The same mirror is the answer if
+  Docker Hub's pull limits or an outage stop a cold start.
 - **The configuration is a file in the repository**, beside the container in `infra/site`, changed only
   by a reviewed pull request and applied by the maintainer. How it reaches the container is *for the
   infra unit*, preferring the upstream image byte for byte with the configuration given at start (C3
@@ -166,13 +202,27 @@ the privacy page already names Scaleway.
   push it to a Container Registry namespace in the site's project; that path is recorded here before it
   is taken.
 - **The configuration is tested, offline and live.** A static test under `make check` pins what the
-  configuration says: the four rules of the table, the HSTS value against `site/records/hsts.json`
-  (with `preload` exactly when it is pursued), and the `Content-Security-Policy` header against the
+  configuration says: the four rules of the table, with the raw `X-Forwarded-Proto` matcher, and the
+  `Host` variants pinned to the "any other host" 308; `auto_https off` and `admin off`; the HSTS header
+  against `site/records/hsts.json` (with `met`, the header with the record's value; with `waived`, no
+  header; `preload` exactly when it is pursued); and the `Content-Security-Policy` header against the
   built pages' `<meta>` policy plus `frame-ancestors 'none'`, so a change of the policy in `site/` fails
   until the configuration follows. A behaviour test runs the pinned image on the configuration in a
   local container, outside `make test` like the browser smoke test (ADR 0036), against a local
-  upstream, and drives every row of the table with `Host` and `X-Forwarded-Proto`, the headers, and a
-  gzip-encoded object passing unchanged. The live checks (ADR 0043) hold the result in production.
+  upstream, and drives:
+  - every row of the table with `Host` and `X-Forwarded-Proto`, the headers, and a gzip-encoded object
+    passing unchanged;
+  - an upstream that sends its own `Content-Security-Policy`, `Strict-Transport-Security` and
+    `Permissions-Policy` with other values (the client sees only Caddy's), an upstream 404, and no
+    upstream at all (Caddy's own 502 still carries every header);
+  - redirects of `//evil.example/x`, `/%2F%2Fevil.example`, a path with a query string, an
+    absolute-form request target (`GET http://evil.example/ HTTP/1.1`), and a `Host` with a port, a
+    trailing dot or in upper case: every `Location` starts with `https://www.shift2eu.com/`, and an
+    unknown host gets the 308, never the proxy;
+  - the upstream request: the local upstream asserts it receives none of the removed headers (*The
+    upstream*).
+
+  The live checks (ADR 0043) hold the result in production.
   Where each test lives and how it is run is *for the infra unit*.
 
 ### Why Caddy, not nginx
@@ -194,8 +244,8 @@ found.
   "never waived".
 - **The platform's `redirected` HTTP option.** A 301 on the same host: two hops from
   `http://shift2eu.com`, and the redirect outside the tested configuration.
-- **Namecheap's URL redirect for the apex.** No certificate on `https://shift2eu.com`, no HSTS, and
-  nothing for `http://www`.
+- **Namecheap's URL redirect for the apex.** No certificate on `https://shift2eu.com` (by Namecheap's
+  articles 384, 385 and 9604, not tested), so no HSTS either, and nothing for `http://www`.
 - **Proxying the bucket website endpoint instead of the pipeline** (`public_read = true`). Every bucket
   endpoint would then serve the site, and Edge Services' cache would be dropped; ADR 0042's residuals
   would widen for nothing.
@@ -218,18 +268,29 @@ found.
 - The header CSP binds every response of `www`, so a page or a script a leaked deploy key uploads at
   any path is held to `connect-src 'none'` and `worker-src 'none'` as well, whatever it carries itself
   (two policies both apply). Navigation stays outside the CSP. ADR 0042's residuals say so once the
-  header is live (milestone 4); the privacy page's sentences that the
-  site "cannot send" `Clear-Site-Data` or `Cross-Origin-Opener-Policy` become "does not send", in the
-  unit that changes `site/`.
+  header is live (milestone 4). Follow-ups for the unit that changes `site/`, on the privacy page
+  (`site/privacy.html`):
+  - the sentences that the site "cannot send" `Clear-Site-Data` (line 55) or
+    `Cross-Origin-Opener-Policy` (line 66) become "does not send";
+  - line 38, the downgrade risk: the apex redirect's provider is now Scaleway's container, which sends no
+    HSTS while preload is not pursued;
+  - line 67, the framing guard: `www` now sends `frame-ancestors 'none'` as a header; the script's guard
+    stays for the other origins.
 - Scaleway now also serves the apex: the apex redirect's provider (Hosting decision 3) is Scaleway, which
   the privacy page already names; no third party is added.
 - **For the infra unit:** a Serverless Containers namespace, the container (the pins above), two custom
   domains, the configuration and its tests in `infra/site` and `make check`; the pipeline's `www` custom
-  domain dropped; the provider stays `scaleway/scaleway` alone, so `dev/infra-rules.sh` keeps its one
+  domain and its TLS stage removed; the digest pull confirmed (or the registry mirror recorded, above);
+  `.github/renovate.json5` extended so Renovate moves the Caddy pin (a file pattern for the file that
+  holds it and a `matchString` for the pin's own syntax), proven by a configuration test or a Renovate
+  dry run; the provider stays `scaleway/scaleway` alone, so `dev/infra-rules.sh` keeps its one
   provider; ADR 0039 amended; the runbook's R4, R5 and R8 rewritten (the `www` CNAME and the apex ALIAS to
   the container's endpoint, the origin and redirect checks).
-- **For the live-check unit:** `ci/sitecheck` allows the platform's `server: envoy` and
-  `x-envoy-upstream-service-time` response headers; `-plain-http-www` stays at `redirect`, so the
+- **For the live-check unit:** it confirms that `ci/sitecheck` tolerates exactly the platform's
+  `server: envoy` and `x-envoy-upstream-service-time` response headers, and pins that with a test.
+  `ci/sitecheck/internal/livecheck` has no response-header allow list today (it judges only the headers
+  it names); if one is ever added, it allows exactly those two, not an `x-envoy-*` prefix.
+  `-plain-http-www` stays at `redirect`, so the
   refuse-or-close mode (ADR 0043) is no longer needed by this hosting.
 - New upkeep: Renovate's digest PRs for Caddy, each reviewed and applied by the maintainer; a Caddy CVE
   means such a PR and an apply. A container's cold start can delay the first visit after an idle period

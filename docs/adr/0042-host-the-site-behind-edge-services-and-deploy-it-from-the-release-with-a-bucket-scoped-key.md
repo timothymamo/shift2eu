@@ -627,8 +627,10 @@ read rule, the deploy, the key's scope, R7, the attestation, the records and the
 unchanged; only *Hosting*, *The origins* and *Recovery* change, as follows.
 
 - **Hosting.** One public Serverless Container serves both `www.shift2eu.com` and `shift2eu.com` as
-  custom domains (`www` by a Namecheap CNAME, the apex by a Namecheap ALIAS, DNSSEC kept, Let's Encrypt
-  certificates issued by Scaleway, CAA unchanged), with plain HTTP `enabled`. Its server, Caddy (the
+  custom domains (`www` by a Namecheap CNAME, the apex by a Namecheap ALIAS, DNSSEC kept, CAA
+  unchanged), with plain HTTP `enabled`. The apex's certificate was issued by Let's Encrypt under the
+  existing CAA record (C3); `www`'s is expected from the same issuer (Scaleway's Serverless Containers
+  FAQ) and is checked at the first deploy (R8). Its server, Caddy (the
   official image pinned by digest, ADR 0045), writes the redirects and the headers from its
   configuration in `infra/site`: `http://www.shift2eu.com`, `http://shift2eu.com` and
   `https://shift2eu.com` answer 308 to `https://www.shift2eu.com` with the same path in one hop, by
@@ -637,7 +639,8 @@ unchanged; only *Hosting*, *The origins* and *Recovery* change, as follows.
   pursued), the `<meta>` policy as a `Content-Security-Policy` header with `frame-ancestors 'none'`,
   `X-Content-Type-Options`, `Referrer-Policy` and `Permissions-Policy`. The apex sends no HSTS while
   preload is not pursued. The pipeline stays the bucket's only reader, its cache and its backend
-  unchanged; its own `www.shift2eu.com` custom domain goes. The apex redirect's provider is therefore
+  unchanged; its own `www.shift2eu.com` custom domain goes; the infra unit removes it (and its TLS
+  stage) in `infra/site`. The apex redirect's provider is therefore
   Scaleway, already named on the privacy page, with Let's Encrypt as its certificate authority. Context's
   force "the site sends no response headers of its own" holds for the bucket and the pipeline only: the
   headers now come from the container.
@@ -645,10 +648,15 @@ unchanged; only *Hosting*, *The origins* and *Recovery* change, as follows.
 
   | Origin | Serves the site | Plain HTTP |
   |---|---|---|
-  | `https://www.shift2eu.com` | Yes: the container, proxying the pipeline. The only origin attested and checked | `http://www.shift2eu.com` answers the server's own 308 to `https://www.shift2eu.com` + same path, never a 200 (C3 on a test container; R8, rewritten by the infra unit, records the live answer) |
-  | `https://shift2eu.com` | No: the server's 308 to `https://www.shift2eu.com` + same path (the preload chain, if pursued, first to `https://shift2eu.com`) | `http://shift2eu.com` answers 308 the same way, never a 200 (C3) |
-  | The container's endpoint `https://<namespace>-<name>.functions.fnc.<region>.scw.cloud` | No: every request gets the server's 308 to `https://www.shift2eu.com` + same path | The server's own 308, never a 200 (C3: the platform passes the container's 308 unchanged over plain HTTP) |
+  | `https://www.shift2eu.com` | Yes: the container, proxying the pipeline. The only origin attested and checked | `http://www.shift2eu.com` answers the server's own 308 to `https://www.shift2eu.com` + same path, never a 200 (ADR 0045's rule and its tests; R8, rewritten by the infra unit, records the live answer) |
+  | `https://shift2eu.com` | No: the server's 308 to `https://www.shift2eu.com` + same path (the preload chain, if pursued, first to `https://shift2eu.com`) | `http://shift2eu.com` answers 308 the same way, never a 200 (ADR 0045's rule and its tests) |
+  | The container's endpoint `https://<namespace>-<name>.functions.fnc.<region>.scw.cloud` | No: every request gets the server's 308 to `https://www.shift2eu.com` + same path | The server's own 308, never a 200 (ADR 0045's rule and its tests) |
   | The pipeline's endpoint, the bucket website endpoint and the bucket's S3 endpoints | As in the table above | As in the table above (R5) |
+
+  "Never a 200" over plain HTTP is a property of ADR 0045's rule (the raw `X-Forwarded-Proto` header,
+  one field whose whole value is `https`, else the 308) and of its tests, not a result of C3: C3's
+  redirect container answered 308 unconditionally, and showed only that the platform passes the
+  container's 308 and headers unchanged over plain HTTP and HTTPS.
 
   The pipeline's endpoint is now the container's upstream as well as an origin of its own; it serves the
   site without the container's headers, which the `<meta>` policy and the framing guard cover as on any
@@ -661,8 +669,10 @@ unchanged; only *Hosting*, *The origins* and *Recovery* change, as follows.
   digest bump that fails) is rolled back by reverting that PR and applying again. The deploy key cannot
   change the container: it holds no Serverless Containers or Container Registry permission.
 - **What the live check now meets.** The platform adds `server: envoy` and
-  `x-envoy-upstream-service-time` to every response (C3); a later unit makes `ci/sitecheck` allow them
-  (ADR 0043's note). Its `-plain-http-www` stays `redirect`.
+  `x-envoy-upstream-service-time` to every response (C3); a later unit confirms that `ci/sitecheck`
+  tolerates exactly those two and pins it with a test (ADR 0043's note: no response-header allow list
+  exists today; if one is ever added, exactly those two, not an `x-envoy-*` prefix). Its
+  `-plain-http-www` stays `redirect`.
 - **Consequences and the residuals.** Milestone 4 still amends this ADR with the live answers (R5, R8),
   R7's result, the HSTS outcome and whether preload is pursued. Once the header CSP is live, it also binds
   a page or script a leaked key uploads at any path (`connect-src 'none'`, `worker-src 'none'`), which

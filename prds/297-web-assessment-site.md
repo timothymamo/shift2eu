@@ -182,6 +182,10 @@ release), *live* (checked against the live site) or *review*.
   'none'`; they are pinned explicitly so no later directive can widen them by fallback. `worker-src 'none'`
   does not hinder the unregister function: `getRegistrations()` and `unregister()` load no script, and
   the CSP governs only the fetch of a worker's script.
+  *Amended 2026-11-24 (Hosting decision 2 as amended, ADR 0045):* once the container's front is live,
+  `www` sends the policy as a header on every response, so a same-origin worker's script there gets the
+  header CSP; on other origins it still gets none. `worker-src 'none'` stays right, and the reasoning
+  above now holds for those other origins.
   Where the host can also send the policy as a header (Hosting decision 2), the header adds
   `frame-ancestors 'none'`.
   - [x] Milestone 2: the `<meta>` policy of every built page and its static test
@@ -1016,7 +1020,9 @@ security audit (`security-audit` skill), since every one of them touches the tru
   `worker-src` to `child-src` to `script-src`, so same-origin dedicated and shared workers and a
   service-worker registration would be allowed. A worker loaded from a same-origin URL takes its CSP
   from its own response headers, not from the page, and this site sends no headers (Hosting decision 2),
-  so the worker's `fetch` would escape `connect-src 'none'`. `child-src`, `frame-src` and
+  so the worker's `fetch` would escape `connect-src 'none'`. (*Amended 2026-11-24:* once the container's
+  front is live, `www` sends the policy as a header, so a same-origin worker's script there gets it; the
+  reasoning holds on the other origins, and `worker-src 'none'` stays, ADR 0045.) `child-src`, `frame-src` and
   `manifest-src` already fall back to `default-src 'none'`, but are pinned so a later directive cannot
   widen them by fallback; the static test fails when any of the four is missing or other than exactly
   `'none'` (*Layer 2*). It does not conflict with the unregister function: `getRegistrations()` and
@@ -1072,7 +1078,7 @@ it. Decision 4 is amended by the orchestrator's decision above.
    Scaleway support (ticket #1639626) answered that Edge Services always answers plain HTTP with a 302,
    cannot turn plain HTTP off and cannot set response headers, so it cannot meet decision 3 or the HSTS
    go/no-go. **Both `www.shift2eu.com` and `shift2eu.com` are now served by one public Scaleway Serverless
-   Container in front of the Edge Services pipeline:** a small static server (Caddy) on both names as
+   Container in front of the Edge Services pipeline:** a small server (Caddy) on both names as
    custom domains (`www` by a Namecheap CNAME, the apex by a Namecheap ALIAS record), with the
    container's HTTP option `enabled` (not `redirected`), reverse-proxying `www` to the pipeline endpoint
    (`<id>.svc.edge.scw.cloud`). The private bucket, the pipeline and its cache, `ci/sitedeploy`, the
@@ -1134,7 +1140,8 @@ it. Decision 4 is amended by the orchestrator's decision above.
    `https://shift2eu.com` and `http://shift2eu.com` all answer **308** to `https://www.shift2eu.com` with
    the same path, in one hop (the preload chain only if preload is pursued, decision 2). So `http://www`
    is redirected, and the *refuse or close* alternative above is no longer used. Namecheap's URL
-   redirect is not used: it serves no certificate for `shift2eu.com`. **The apex redirect's provider is
+   redirect is not used: by Namecheap's articles 384, 385 and 9604 (not tested), it serves no certificate
+   for `shift2eu.com`. **The apex redirect's provider is
    Scaleway** (Serverless Containers), already named on the privacy page, so no third party is added;
    its certificate authority is Let's Encrypt, which the CAA record already names (decision 10).
 4. **Decided: the module script is uploaded pre-compressed with `Content-Encoding: gzip`** if Edge
@@ -1222,8 +1229,10 @@ it. Decision 4 is amended by the orchestrator's decision above.
     Scaleway's. If the apex redirect's provider issues its own certificate, the CAA record also names
     that provider's certificate authority (milestone 4).
     *Amended 2026-11-24 (decision 1 as amended):* both names' certificates are now issued by Scaleway for
-    the container's custom domains, with Let's Encrypt (the maintainer's test C3), so the CAA record
-    stays as decided and names no other authority. The `www` CNAME points at the container's endpoint,
+    the container's custom domains. The apex's certificate was issued by Let's Encrypt under the existing
+    CAA record (the maintainer's test C3); `www`'s is expected from the same issuer (Scaleway's Serverless
+    Containers FAQ) and is checked at the first deploy (R8). So the CAA record stays as decided and names
+    no other authority. The `www` CNAME points at the container's endpoint,
     and the apex is a Namecheap ALIAS record to the same endpoint; DNSSEC stays on, and C3 showed the
     ALIAS's synthesised records signed and validated.
 11. **Decided: other origins serving the site are accepted, and only `www` is attested and checked.**
@@ -1306,7 +1315,8 @@ Facts still unknown, each with the milestone that needs it. None blocks mileston
     from which authority, for CAA); and whether it can send HSTS with `includeSubDomains` and `preload`
     and redirect `http://shift2eu.com` to `https://shift2eu.com` first (the preload requirements,
     decision 2).
-    *Answered 2026-11-24:* not Namecheap's URL redirect (no certificate for `shift2eu.com`); the
+    *Answered 2026-11-24:* not Namecheap's URL redirect (no certificate for `shift2eu.com`, by Namecheap's
+    articles 384, 385 and 9604, not tested); the
     Serverless Container of decision 1 as amended, run by Scaleway, with a Let's Encrypt certificate
     (CAA unchanged). It can send HSTS with `preload` and redirect to `https://shift2eu.com` first, by
     its configuration. Checked by the maintainer's test C3 (below).
@@ -1327,8 +1337,10 @@ Facts still unknown, each with the milestone that needs it. None blocks mileston
     the container, stays DNSSEC-signed and validated, reaches *ready* as a custom domain with a Let's
     Encrypt certificate under the existing CAA record, and answers 308 over HTTPS and plain HTTP.
   - For the infra unit (ADR 0045): whether the platform overwrites a client's own `X-Forwarded-Proto`
-    (a plain-HTTP request carrying `X-Forwarded-Proto: https` must still get the 308); whether it pulls
-    the Caddy image by digest; how the configuration reaches the container; `min_scale`.
+    (a plain-HTTP request carrying `X-Forwarded-Proto: https`, the header twice or a comma list must
+    still get the 308); that it runs the Caddy image by its digest (a go/no-go; else a private Container
+    Registry mirror, recorded in ADR 0045 first); how the configuration reaches the container;
+    `min_scale`, and a cold start within the live check's request timeout.
   - The HSTS go/no-go (decision 2): HSTS on `www.shift2eu.com` with `max-age` of at least 31536000 and
     `includeSubDomains`, or the recorded waiver; whether preload is pursued, knowing it is effectively
     irreversible and binds every future subdomain; and the HSTS record (`met` or `waived`, preload or
