@@ -225,6 +225,40 @@ const (
 	// verification, whose --deny-self-hosted-runners the case that comments it
 	// out leaves in a comment alone.
 	auditVerifyFlagLine = "            --deny-self-hosted-runners\n"
+	// auditBareVerification is the fixture's verification as the attestation step
+	// runs it: bare, so that set -e fails the step for a refused attestation. It
+	// has no branch body to break, and the cases of review round 5 that break one
+	// put the conditional form below in its place first.
+	auditBareVerification = "          gh attestation verify \"oci://${image}@${digest}\" \\\n" +
+		"            --repo \"${GITHUB_REPOSITORY}\" \\\n" +
+		"            --signer-workflow \"${GITHUB_REPOSITORY}/.github/workflows/release.yml\" \\\n" +
+		"            --source-ref \"refs/tags/${tag}\" \\\n" +
+		"            --deny-self-hosted-runners\n"
+	// auditVerificationRefusal is the refusal the conditional form's branch holds:
+	// the named error, then the exit that fails the step. The cases that drop it
+	// or weaken it to exit 0 leave the echo alone.
+	auditVerificationRefusal = "            echo \"::error title=Audit publish::the image has no provenance attestation from the release workflow at that tag: see runbook step 11\"\n" +
+		"            exit 1\n"
+	// auditVerificationConditional is the form the repository's workflow runs the
+	// verification in, and the check accepts: the condition of an
+	// if ! ... > /dev/null; then, whose branch is the refusal above. It is the
+	// accepted alternative a pin of the branch body must keep, and the base the
+	// cases that break that body change.
+	auditVerificationConditional = "          if ! gh attestation verify \"oci://${image}@${digest}\" \\\n" +
+		"            --repo \"${GITHUB_REPOSITORY}\" \\\n" +
+		"            --signer-workflow \"${GITHUB_REPOSITORY}/.github/workflows/release.yml\" \\\n" +
+		"            --source-ref \"refs/tags/${tag}\" \\\n" +
+		"            --deny-self-hosted-runners > /dev/null; then\n" +
+		auditVerificationRefusal +
+		"          fi\n"
+	// auditDigestShapeCheck is the attestation step's digest-shape check, the guard
+	// the case that drops its exit 1 leaves refusing nothing.
+	auditDigestShapeCheck = "          if [[ ! \"${digest}\" =~ ^sha256:[0-9a-f]{64}$ ]]; then\n" +
+		"            echo \"::error title=Audit publish::the image digest is no sha256 digest: see runbook step 11\"\n" +
+		"            exit 1\n"
+	// auditReleaseLookup is the checks job's release lookup, whose text the case
+	// of review round 5 hides in a backtick comment.
+	auditReleaseLookup = "          tag=\"$(gh api \"repos/${GH_REPO}/releases/latest\" --jq .tag_name)\"\n"
 	// auditAttestationStep is the publish job's model-free attestation check: it
 	// stands alone, reading the digest as a string alone and refusing anything
 	// but exactly the empty value or one sha256 digest before the empty branch
@@ -1264,6 +1298,57 @@ func TestAuditWorkflow(t *testing.T) {
 				auditChecksArtifactDownloadLine,
 				strings.TrimSuffix(auditChecksArtifactDownloadLine, "\n")+";"+strings.TrimPrefix(auditZipDigestLine, "          ")),
 			wantIn: "of the zip against the checked digest",
+		},
+
+		// Review round 5 (the auditor's low finding L1, the reviewer's suggestion 1
+		// and nit 2): a guard is its branch body, not its [[ ... ]] header alone.
+		// A tag or digest check whose header still matches but whose branch no
+		// longer refuses the run checks nothing - the echo runs and the script
+		// carries on, so a tag of another shape or a digest that is no sha256 digest
+		// reaches the verification. The same holds for the verification in its
+		// if ! ... > /dev/null; then form: with the exit dropped, or weakened to
+		// exit 0, the echo is all the branch does and a refused attestation passes.
+		// And a backtick starts a word too, so a # right after one is a shell comment
+		// inside a command substitution, where a hidden command's text still stands
+		// for the patterns to read.
+		{
+			// The accepted fixture runs the verification bare under set -e, so it
+			// has no branch body of its own; this is the conditional form the
+			// repository's workflow runs, which the check accepts and the two cases
+			// below break. It draws no message, and must keep drawing none.
+			name:     "the real workflow's conditional verification",
+			workflow: mutate(t, acceptedWorkflow, auditBareVerification, auditVerificationConditional),
+		},
+		{
+			name: "the verification's branch without its exit 1",
+			workflow: mutate(t, mutate(t, acceptedWorkflow, auditBareVerification, auditVerificationConditional),
+				auditVerificationRefusal, strings.TrimSuffix(auditVerificationRefusal, "            exit 1\n")),
+			wantIn: "gh attestation verify",
+		},
+		{
+			name: "the verification's branch with exit 0",
+			workflow: mutate(t, mutate(t, acceptedWorkflow, auditBareVerification, auditVerificationConditional),
+				auditVerificationRefusal, strings.Replace(auditVerificationRefusal, "exit 1", "exit 0", 1)),
+			wantIn: "gh attestation verify",
+		},
+		{
+			name:     "the tag's shape without its exit 1",
+			workflow: mutate(t, acceptedWorkflow, auditTagShapeCheck, strings.Replace(auditTagShapeCheck, "            exit 1\n", "", 1)),
+			wantIn:   "tag's shape",
+		},
+		{
+			name:     "the digest's shape without its exit 1",
+			workflow: mutate(t, acceptedWorkflow, auditDigestShapeCheck, strings.Replace(auditDigestShapeCheck, "            exit 1\n", "", 1)),
+			wantIn:   "digest's shape",
+		},
+		{
+			// The lookup's text stays in the script, so the releases/latest
+			// pattern reads it; the substitution it sits in is a comment, so the
+			// lookup runs nowhere and the tag is empty.
+			name: "the release lookup hidden in a backtick comment",
+			workflow: mutate(t, acceptedWorkflow, auditReleaseLookup,
+				"          tag=`#$(gh api \"repos/${GH_REPO}/releases/latest\" --jq .tag_name)`\n"),
+			wantIn: "comment",
 		},
 
 		// A document the reader cannot follow tells the check nothing, so it is
