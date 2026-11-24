@@ -13,7 +13,7 @@ offering ever serves it.
 
 The inventory guide (`docs/guide/inventory.md`, *AWS classification*, *GCP classification*, *Azure
 classification*, and `docs/guide/inventory/{aws,gcp,azure}.jq`) therefore marks many common services
-`unclassified`: in-memory caches (ElastiCache, Memorystore, Azure Cache for Redis), load balancers
+`unclassified`, or does not list them at all (below): in-memory caches (ElastiCache, Memorystore, Azure Cache for Redis), load balancers
 (ELB, Cloud Load Balancing, Azure Load Balancer and Application Gateway), MongoDB-compatible databases
 (DocumentDB, Cosmos DB for MongoDB), pub/sub topics (SNS, Service Bus topics), serverless containers
 (Cloud Run, App Runner, Container Apps), container registries (ECR, Artifact Registry, Azure Container
@@ -209,9 +209,9 @@ Capabilities the programs derive, from settings the calls above return:
 | `database.mongodb` | as `database.*` today | DocumentDB, from the cluster's member instances: `point-in-time-restore` from `BackupRetentionPeriod` above 0, `encryption-at-rest` from `StorageEncrypted`, `read-replicas` and `node-high-availability` from two or more instances, `zone-high-availability` from instances in two or more `AvailabilityZone`s; Cosmos DB continuous backup for `point-in-time-restore`, `locations[].isZoneRedundant` true for `zone-high-availability` (not "more than one region", which is a regional replica, not zone redundancy; to be checked) |
 | `network.loadbalancer` | `zone-high-availability` | an ALB or NLB in two or more zones; a GCP regional load balancer, or a global one (anycast across regions; it maps onto a regional target load balancer, as a DNS or CDN service would, so only its zone redundancy within a region is claimed, never its reach across regions); an Azure Standard load balancer with a zone-redundant frontend, or an Application Gateway in two or more zones |
 | `network.loadbalancer` | `ipv6` | only where clients and backends are both reached over IPv6 (`ipv6` is inbound and outbound): an ALB or NLB with `IpAddressType` `dualstack` or `dualstack-without-public-ipv4` **and** a target group with `IpAddressType` `ipv6` (`describe-target-groups`); a GCP IPv6 forwarding rule whose backend service sends to IPv6 backends (`ipAddressSelectionPolicy` `IPV6_ONLY` or `PREFER_IPV6`; to be checked); an Azure IPv6 frontend with an IPv6 backend pool (to be checked). A load balancer with an IPv6 frontend only gets no `ipv6` |
-| `network.loadbalancer` | `udp` | an NLB with a listener of protocol `UDP` or `TCP_UDP` (`elbv2 describe-listeners`); an Azure load balancer rule of protocol `Udp` or `All`; a GCP backend service, target pool or forwarding rule of protocol `UDP` (the forwarding rule is read, then dropped) |
+| `network.loadbalancer` | `udp` | an NLB with a listener of protocol `UDP` or `TCP_UDP` (`elbv2 describe-listeners`); an Azure load balancer rule of protocol `Udp` or `All`; a GCP backend service of protocol `UDP`, or a forwarding rule of `IPProtocol` `UDP` (to a target pool or backend service; the forwarding rule is read, then dropped) |
 | `messaging.topic` | `encryption-at-rest` | SNS with a `KmsMasterKeyId` (`sns get-topic-attributes`); always on Pub/Sub and Service Bus |
-| `messaging.topic` | `dead-letter-queue` | per source, to be checked (SNS and Pub/Sub set it per subscription, Service Bus subscriptions always have one) |
+| `messaging.topic` | `dead-letter-queue` | per source, to be checked in milestones 2 (SNS), 3 (Pub/Sub) and 4 (Service Bus) (SNS and Pub/Sub set it per subscription, Service Bus subscriptions always have one) |
 | `messaging.queue` | `dead-letter-queue` | a Service Bus topic subscription: always, as a Service Bus queue today |
 | `registry.container` | `encryption-at-rest` | always: ECR, Artifact Registry and Azure Container Registry encrypt images at rest |
 | `storage.file` | `encryption-at-rest` | EFS `Encrypted`; always on Filestore and Azure Files |
@@ -253,7 +253,8 @@ whatever the tier's node count:
   MongoDB set; UpCloud sells 1-, 2- and 3-node Valkey plans): priced at `count` nodes, so the estimate is
   below what the target bills. The minimum node count is a minimum billed size, which the snapshot format
   cannot record yet (open question 10); the tier's `SOURCES.md` section names its node count.
-- `count` above it: priced at `count` nodes, as today for databases.
+- `count` above it: priced at `count` nodes, as today for databases, which overstates a tier of a fixed
+  node count (OVHcloud Production); open question 10 covers both directions.
 
 The guide writes `count` for a replicated cache group and a DocumentDB cluster, unlike an RDS instance
 with a standby (`aws.jq` leaves its count out): a cache replica and a DocumentDB instance are nodes the
@@ -265,7 +266,10 @@ count is the group's nodes, primary and replicas of every shard (ElastiCache `Me
 Markdown and HTML reports, as the other reasons are worded in plain text there
 (`internal/adapter/report/markdown/estimate.go`: "size unknown", "no fit", ...): today a category that
 has a fit but is never priced gets `usage-priced`, which would be wrong for a load balancer. A new value of the reason set
-keeps the JSON report's `schemaVersion` (*Decisions*).
+keeps the JSON report's `schemaVersion` (*Decisions*). `estimate.NotPriced` already names the `Method`
+of value `"not-priced"` (`internal/domain/estimate/estimate.go`), so the new `Reason` needs another Go
+identifier, which milestone 1 chooses; its JSON code stays `not-priced` and its Markdown text "not
+priced".
 
 ### Left out
 
@@ -308,8 +312,12 @@ All criteria are pinned by tests that run offline under `make test` or `make tes
   existing golden file of such an inventory changes (the e2e `assess-*` goldens, the report adapters'
   goldens; the `examples/` goldens change in milestone 1 only because the samples gain resources of the
   new categories); in milestones 5 to 7 such a golden may change only in its catalog line's or `snapshot`
-  object's source and retrieved date (none of the existing offerings, plans, prices or default regions
-  changes).
+  object's source and retrieved date, and in exactly the amounts of an existing offering whose price or
+  plan the re-read page shows changed. Each snapshot has one source and one retrieved date (ADR 0007),
+  so a milestone that re-reads a target's price page on a new date updates every existing price or plan
+  the page now shows differently to its current value, rather than keep a dated price the page no longer
+  shows, and says so in its PR and in the target's `SOURCES.md`; no other existing offering, plan, price
+  or default region changes.
 - [ ] The sample inventories under `examples/` together use every taxonomy category, the new ones
   included (the existing check in `test/examples`).
 
@@ -404,9 +412,11 @@ fit `none` with "no offering in the <target> catalog", which is already more pre
    their definitions; the `sharding` and `udp` capabilities and the widened `snapshots` definition
    (subject to open question 4); the size-field table for the new categories (`internal/domain/inventory`); memory-only
    plan matching for `cache.redis`, plan pricing for `database.mongodb`, GiB pricing for
-   `storage.file`, and the `not-priced` reason (`internal/domain/estimate`), rendered in the Markdown,
+   `storage.file`, and the `not-priced` reason (`internal/domain/estimate`; its Go identifier is
+   milestone 1's choice, distinct from the existing `NotPriced` method, and a never-priced category with
+   a fit gets this reason instead of `UsagePriced`), rendered in the Markdown,
    JSON and HTML reports; the JSON schemas' descriptions of the reason set. One ADR records the
-   categories, the capability, the field table (amending ADR 0025), the memory-only matching (amending
+   categories, the capabilities `sharding` and `udp` and the widened `snapshots`, the field table (amending ADR 0025), the memory-only matching (amending
    ADR 0027) and why no format version changes. The samples under `examples/` gain one resource per
    new category, and their goldens change. The guide's lists of categories and capabilities and its
    *Sizes* table name the new ones. A refactor with no new category: `test/e2e/inventory_guide_test.go`'s
@@ -446,7 +456,8 @@ fit `none` with "no offering in the <target> catalog", which is already more pre
    <https://www.ovhcloud.com/en-ie/public-cloud/prices/> (Valkey, MongoDB, File Storage, Load Balancer
    and Managed Private Registry sections) and the regions page
    <https://www.ovhcloud.com/en/public-cloud/regions-availability/>, fetched as before or, if they
-   refuse an automated client, saved by the maintainer. Depends on 1.
+   refuse an automated client, saved by the maintainer. An existing price or plan the re-read page
+   shows changed is updated to its current value (*Acceptance criteria*, goldens). Depends on 1.
 6. [ ] **Scaleway catalog.** Offerings for `cache.redis` (Managed Database for Redis™; a cluster-mode
    variant with `node-high-availability` and `sharding`), `database.mongodb` (Managed MongoDB®),
    `network.loadbalancer`, `messaging.topic` (Topics and Events), `serverless.container`,
@@ -457,14 +468,16 @@ fit `none` with "no offering in the <target> catalog", which is already more pre
    storage), <https://www.scaleway.com/en/pricing/storage/> (File Storage; to be checked that it is
    there) and <https://www.scaleway.com/en/product-availability-by-region/> (the regions of every new
    product). The load balancer, Topics and Events, Serverless Containers and Container Registry pages
-   are needed only if an open question makes them priced. Depends on 1.
+   are needed only if an open question makes them priced. An existing price or plan the re-read pages
+   show changed is updated to its current value (*Acceptance criteria*, goldens). Depends on 1.
 7. [ ] **UpCloud catalog.** Offerings for `cache.redis` (Managed Valkey: 1 node, and a multi-node
    variant with `node-high-availability`), `network.loadbalancer` (Managed Load Balancer, and a
    Production variant if its failover is confirmed; `udp` only if a page states it) and `storage.file` (File Storage),
    with plans and prices for Valkey and File Storage. **Gated on the maintainer saving
    <https://upcloud.com/pricing/>, EUR edition, logged out, as before:** the Managed Databases tab's
    Valkey table and the File Storage table (and the Managed Load Balancer table only if load balancers
-   become priced). Depends on 1.
+   become priced). An existing price or plan the re-read page shows changed is updated to its current
+   value (*Acceptance criteria*, goldens). Depends on 1.
 8. [ ] **Comparison, docs and close.** An e2e fixture inventory with a resource of every new category,
    assessed against all three targets, golden for Markdown and JSON, so each target's `direct`,
    `partial` and `none` for the new categories show side by side; the guide's *Everything else on AWS*
@@ -495,7 +508,8 @@ fit `none` with "no offering in the <target> catalog", which is already more pre
   consumer reads; both still have to move. An Azure Service Bus topic subscription is the same thing (it
   holds its own copy of each message for its receivers, with a dead-letter subqueue), so it becomes
   `messaging.queue` too. Resource Graph does not list it; the guide's existing per-namespace
-  `az servicebus` loop gains a per-topic `topic subscription list`, a read under `Reader`. SNS
+  `az servicebus` loop gains a per-topic `topic subscription list`, a read, expected under `Reader` (to
+be checked in milestone 4). SNS
   subscriptions are not resources that hold messages (they forward to an SQS queue, a Lambda or an HTTP
   endpoint, which are listed on their own), so they stay out.
 - **`serverless.container` is request-scaled containers only.** "Containers" is too vague: an App Service
@@ -581,12 +595,14 @@ fit `none` with "no offering in the <target> catalog", which is already more pre
 9. **Names.** `cache.redis` (rather than `cache.valkey` or `cache.keyvalue`), `network.loadbalancer`
    (rather than `loadbalancer.managed`), `registry.container` (rather than `container.registry`).
    *Recommendation:* as named.
-10. **Minimum billed sizes and node counts.** UpCloud File Storage starts at 250 GiB, so a 50 GiB EFS
-    file system priced per GiB is underestimated; likewise a 1-node cache on OVHcloud's 2-node Production
-    tier, or a 1-instance DocumentDB cluster on a 3-node MongoDB set, is priced at its own `count`
-    (*Estimates*). *Recommendation:* record each minimum (GiB, nodes) in `SOURCES.md`, say so in the
-    guide, and open one follow-up issue for minimum billed sizes and node counts in snapshot format v2;
-    do not block this PRD on it.
+10. **Minimum billed sizes and fixed node counts, in both directions.** UpCloud File Storage starts at
+    250 GiB, so a 50 GiB EFS file system priced per GiB is underestimated; likewise a 1-node cache on
+    OVHcloud's 2-node Production tier, or a 1-instance DocumentDB cluster on a 3-node MongoDB set, is
+    priced at its own `count`, below what the target bills. The other way, a 3-node cache on OVHcloud's
+    Production tier, which is exactly 2 nodes, is priced at 3 nodes, above what the target bills
+    (*Estimates*). *Recommendation:* record each minimum and each fixed node count (GiB, nodes) in
+    `SOURCES.md`, say so in the guide, and open one follow-up issue for minimum billed sizes and fixed or
+    bounded node counts in snapshot format v2; do not block this PRD on it.
 11. **Scaleway Redis High Availability.** Only Cluster mode is GA and highly available, and it needs
     a cluster-aware client, so a non-sharded cache that needs `node-high-availability` would be
     pointed at a tier its client may not use. *Recommendation:* list only Cluster mode as the highly
@@ -603,18 +619,21 @@ fit `none` with "no offering in the <target> catalog", which is already more pre
   `DBClusterIdentifier` and the `BackupRetentionPeriod` and `StorageEncrypted` of its cluster, and
   whether AWS Config lists the cluster (as `AWS::RDS::DBCluster` or a DocumentDB type) so that the program
   must drop it; which ElastiCache settings give node and zone high availability for a serverless cache;
-  that `TCP_UDP` and `UDP` are the NLB listener protocols that carry UDP and that a target group's
-  `IpAddressType` `ipv6` is what sends to IPv6 targets.
+  that `TCP_UDP` and `UDP` are the NLB listener protocols that carry UDP, and whether NLB `QUIC`/`TCP_QUIC`
+  listeners count as UDP; that a target group's `IpAddressType` `ipv6` is what sends to IPv6 targets;
+  the SNS rule for a topic's `dead-letter-queue` (a redrive policy is set per subscription).
 - Milestone 3: the rule that makes one GCP load balancer (a URL map, or a backend service no URL map
   names; `GlobalForwardingRule` and `RegionBackendService` are not in the search APIs, `ForwardingRule`
   and `BackendService` return both scopes); Memorystore zone placement for `zone-high-availability`;
   the `gcloud redis` and `memorystore` list calls and their fields; the backend service field that says
-  it sends to IPv6 backends (`ipAddressSelectionPolicy`) and the protocol fields that say UDP.
+  it sends to IPv6 backends (`ipAddressSelectionPolicy`) and the protocol fields that say UDP; the
+  Pub/Sub rule for a topic's `dead-letter-queue` (a dead-letter topic is set per subscription).
 - Milestone 4: whether Resource Graph lists file shares and NFS protocol, and whether `Reader` covers
   `az storage share-rm list` and `az servicebus topic subscription list`; the `Microsoft.Web/sites` kind
   values; Cosmos DB settings for point-in-time restore and `locations[].isZoneRedundant`; what makes an
   Azure load balancer's or Application Gateway's backend pool IPv6; the retirement of Basic load
-  balancers and Azure Database for MariaDB.
+  balancers and Azure Database for MariaDB; the Service Bus rule for a topic's `dead-letter-queue`
+  (every subscription has a dead-letter subqueue).
 - Milestone 5: OVHcloud Load Balancer node-level failover; File Storage Service regions and price;
   whether Managed Private Registry Small ("active-passive across 2 AZs") meets the zone rule without
   manual failover; whether the Valkey and MongoDB prices are per node or per service (the snapshot stores
