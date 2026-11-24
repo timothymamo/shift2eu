@@ -125,18 +125,19 @@ echo probe > "$W/$K" && aws s3api put-object --bucket "$B" --key "$K" --body "$W
 # FAIL "NoSuchBucket": the key's default project is not the site's; rerun the scw iam api-key update above
 # The private read first: public_read is false (the default) after the first apply. Only the bucket's own
 # access-denied answer means Edge Services cannot read the private objects: a 403 with the S3 API's XML body
-# (<Code>AccessDenied</Code>) or the bucket website endpoint's HTML page (<h1>403 Forbidden</h1> ... Code: AccessDenied);
-# Edge Services' backend stage reads the bucket's website endpoint, so the HTML form is the one it relays. Anything else (5xx, 404, 000, a TLS error, the edge's own error page) is most likely the pipeline or
-# its certificate still provisioning: retry for up to 30 minutes, every minute
+# (<Code>AccessDenied</Code>) or the bucket website endpoint's HTML page (<h1>403 Forbidden</h1> and the list item
+# <li>Code: AccessDenied</li>). Edge Services' backend stage reads the bucket's website endpoint, so the HTML form is
+# the one it relays. Anything else (5xx, 404, 000, a TLS error, the edge's own error page) is most likely the pipeline
+# or its certificate still provisioning: retry for up to 30 minutes, every minute
 edge() { curl -sS -o "$W/edge-body" -D "$W/edge-head" -w '%{http_code}' "https://$E/$K" 2>"$W/edge-err"; }
 for i in $(seq 1 30); do
   C="$(edge)"; [ "$C" = 200 ] && break
-  [ "$C" = 403 ] && grep -q -e '<Code>AccessDenied</Code>' -e 'Code: AccessDenied' "$W/edge-body" && break
-  echo "try $i: ${C:-000} $(cat "$W/edge-err" "$W/edge-body" 2>/dev/null | tr '\n' ' ' | cut -c1-200)"; sleep 60
+  [ "$C" = 403 ] && grep -q -e '<Code>AccessDenied</Code>' -e '<li>Code: AccessDenied</li>' "$W/edge-body" && break
+  echo "try $i: ${C:-000} $(cat "$W/edge-err" "$W/edge-body" 2>/dev/null | LC_ALL=C tr -c '[:print:]' ' ' | cut -c1-200)"; sleep 60
 done
-echo "status $C"; grep -i -E '^(server|via|x-amz-request-id|x-cache|content-type):' "$W/edge-head"; head -c 400 "$W/edge-body"; echo
+echo "status $C"; grep -i -E '^(server|via|x-amz-request-id|x-cache|content-type):' "$W/edge-head"; head -c 400 "$W/edge-body" | LC_ALL=C tr -c '[:print:]\n' ' '; echo
 # Status, headers and body tell the edge's own error from the bucket's: an x-amz-request-id header, an S3 XML
-#   <Code>AccessDenied</Code> body or the website endpoint's HTML page with Code: AccessDenied come from the bucket
+#   <Code>AccessDenied</Code> body or the website endpoint's HTML page with <li>Code: AccessDenied</li> come from the bucket
 # PASS 200 with public_read false: Edge Services reads the private objects; keep public_read false and record it
 # PASS 200 with public_read true (the second run, after the 403 outcome below): the recorded fallback, the site is
 #   served publicly; record it as the fallback in the hosting ADR
