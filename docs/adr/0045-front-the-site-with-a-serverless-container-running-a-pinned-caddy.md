@@ -225,8 +225,9 @@ applies the `header_up` deletions after it adds its own forwarding headers (by C
 documentation), but the behaviour test, not that reading, is what proves they are gone. The exact
 list, and any further platform header such as `x-request-id`, is the infra unit's, and the behaviour
 test's local upstream asserts that it receives none of them. The configuration turns no access log on
-(no `log` directive). What the platform itself logs is Scaleway's, as for Edge Services; the privacy
-page already names Scaleway.
+(no `log` directive in a site block), and the front writes nothing about a visitor to its output: see
+*Amendment: the front writes nothing about a visitor to its output* below. What the platform itself logs
+is Scaleway's, as for Edge Services; the privacy page already names Scaleway.
 
 ### The image and its configuration
 
@@ -441,8 +442,9 @@ TLS stage*.
   `*` as a prefix), `X-Request-Id`, `Via`, `Cookie` and `Authorization`; `Host` is set to
   `{upstream_hostport}` (Caddy's default for an `https://` upstream, written out so the file says it).
 - **The staged apply.** A custom domain needs its record first, so `var.front_domains` (default
-  `false`) gates both: R4's apply creates the namespace and the container (and removes the pipeline's
-  `www` and TLS stage on a pipeline created before this change), R8 points `www` (CNAME) and the apex
+  `false`) gates both: R4's apply creates the namespace and the container (and, with `pipeline_www` at
+  its default `false`, removes the pipeline's `www` and TLS stage on a pipeline created before this
+  change; ADR 0039's amendment), R8 points `www` (CNAME) and the apex
   (ALIAS) at the container's endpoint, then an apply with `front_domains = true` creates the domains, and
   R8 waits until both are *ready* before its live checks.
 - **Still to be settled live, before the deploy is turned on (R8):** the headers as the container
@@ -464,3 +466,29 @@ TLS stage*.
   whether it can match a request header and refuse without it is **unverified** (check Edge Services'
   request-header rules before relying on it). Until then the residual stands, and milestone 4's
   amendment of ADR 0042's residuals carries it with the header CSP.
+
+## Amendment: the front writes nothing about a visitor to its output (PRD #297 milestone 4)
+
+2026-11-24. "No `log` directive" turns no access log on, but it does not keep Caddy quiet about visitors.
+Caddy's default logger still writes two request loggers to the container's output:
+`http.log.error`, for every request a handler fails (the 502 with no upstream, or an upstream whose
+certificate does not verify), and `http.handlers.reverse_proxy`, for a failed round trip. Each line
+holds the request's `remote_ip` and `client_ip`, its URI and its headers, `User-Agent`,
+`X-Forwarded-For` and `X-Real-IP` included, and the platform ships the container's output to Cockpit.
+The review's finding, confirmed by the behaviour test on the pinned image.
+
+- **The decision.** The Caddyfile's global options hold exactly one `log` block,
+  `log { exclude http.log.error http.handlers.reverse_proxy }`, which removes both loggers from the
+  default log. No `log` stands anywhere else (a site block's `log` turns an access log on).
+- **Why the exclusion and not `log { output discard }`.** The exclusion keeps the default logger's
+  other lines, Caddy's startup and its configuration errors, which hold nothing of a visitor and are
+  what a failed start in R4 is read from. `discard` would hide those too. The behaviour test
+  (`TestSiteFront/the_log_holds_no_marker`) sends a proxied 200 and a 308 carrying a marker path, a
+  marker `User-Agent` and marker `X-Forwarded-For` and `X-Real-IP` addresses, then a 502 with no
+  upstream and a 502 against an upstream whose certificate an untrusted CA signs, and reads the
+  container's whole output: no marker appears with the exclusion, so no other logger writes one and
+  `discard` is not needed. Should a later Caddy release log a request under another logger name, that
+  test fails, and the exclusion grows or the form becomes `discard`.
+- **What holds it.** `test/sitefront`'s static test refuses a `log` outside the global options and wants
+  exactly one global `log` of one of those two shapes (`TestCaddyfileRefusedDirectives`,
+  `TestCheckGlobalLogForms`); the behaviour test proves it on the pinned image.

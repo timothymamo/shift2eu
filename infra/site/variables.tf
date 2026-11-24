@@ -49,6 +49,13 @@ variable "front_domains" {
   default     = false
 }
 
+variable "pipeline_www" {
+  description = "Whether the Edge Services pipeline serves www.shift2eu.com itself, through its TLS stage and managed certificate: milestone 3's chain, before the container fronted the site (ADR 0045). Off by default, the end state, in which the pipeline answers only its default endpoint for the container. The Runbook's R8 rollback sets it true in terraform.tfvars and re-runs R4."
+  type        = bool
+  nullable    = false
+  default     = false
+}
+
 variable "bucket_name" {
   description = "The site bucket's name. Bucket names are global across Scaleway: if this one is taken, choose another in terraform.tfvars."
   type        = string

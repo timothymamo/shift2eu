@@ -16,10 +16,16 @@
 # ADR 0045.
 #
 # UPSTREAM is the pipeline's default endpoint (<pipeline id>.svc.edge.scw.cloud), an environment variable
-# of the container, read when Caddy parses this file. No log, no encode, no cache, no tls.
+# of the container, read when Caddy parses this file. No access log, no encode, no cache, no tls.
 {
 	auto_https off
 	admin off
+	# The front writes nothing about a visitor to its output, which the platform ships to Cockpit: the
+	# default logger's two request loggers (a failed upstream's error, each with the client's address,
+	# the URI and the headers) are excluded; startup and configuration errors stay visible (ADR 0045).
+	log {
+		exclude http.log.error http.handlers.reverse_proxy
+	}
 }
 
 :8080 {

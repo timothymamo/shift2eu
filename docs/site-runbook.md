@@ -104,8 +104,9 @@ open 'https://www.scaleway.com/en/pricing/network/#edge-services'   # PASS: Star
 And after every change to `infra/site/` merged to `main`.
 
 The pipeline holds no TLS stage and no custom domain (ADR 0045): the container in front of it holds
-`www` and the apex, created with `front_domains` off here and on in R8. Only R8's rollback re-adds the
-TLS stage, which requests its managed certificate once, at its creation:
+`www` and the apex, created with `front_domains` off here and on in R8. Only R8's rollback,
+`pipeline_www = true` in `terraform.tfvars` and this apply, re-adds the TLS stage and the pipeline's
+`www` name; the stage requests its managed certificate once, at its creation:
 after that rollback, R8's recreate step is expected (issue #541).
 
 ```bash
@@ -420,8 +421,8 @@ the pipeline's own `www` as milestone 3 had it.
 scw container container list namespace-id="$NS" region="$REGION" -o json | jq -r '.[].name'   # PASS: "front" alone
 # FAIL header-probe or digest-probe listed: scw container container delete <its ID> region="$REGION" (scw container container list namespace-id="$NS" region="$REGION" name=<its name> -o json | jq -r '.[].id'), then this line again
 # Namecheap: the www CNAME back to $E (the edge_endpoint output); delete the ALIAS at @
-# (Once infra/site has the pipeline_www variable, the next change: the revert below becomes a tfvars flip, pipeline_www = true in terraform.tfvars, then R4, with no pull request)
-# A pull request that reverts container.tf's custom domains (front_domains = false in terraform.tfvars) and restores main.tf's TLS stage and fqdns = ["www.shift2eu.com"] (tls_stage_id, the stage's lifecycle block) from before ADR 0045; merged, then R4
+# In terraform.tfvars: front_domains = false (the container's custom domains go) and pipeline_www = true (the TLS stage and fqdns = ["www.shift2eu.com"] come back); then R4, with no pull request
+grep -E '^(front_domains|pipeline_www)[[:space:]]*=' infra/site/terraform.tfvars   # PASS: "front_domains = false" and "pipeline_www = true"
 dig +short CNAME www.shift2eu.com     # PASS: "$E."
 # The re-added TLS stage asks for its certificate once, at its creation; if that came before the CNAME resolved, recreate it as below
 n=0; until echo | openssl s_client -connect www.shift2eu.com:443 -servername www.shift2eu.com 2>/dev/null | openssl x509 -noout -issuer 2>/dev/null | grep -q Encrypt || [ "$n" -ge 30 ]; do sleep 30; n=$((n + 1)); done

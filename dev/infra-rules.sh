@@ -59,9 +59,9 @@
 #   [tls-stage-lifecycle] the resource scaleway_edge_services_tls_stage "site" without a lifecycle block
 #                    that sets create_before_destroy = true (issue #541): Scaleway issues its managed
 #                    certificate only at its creation, so R8 replaces it, and Scaleway refuses to delete
-#                    a TLS stage the DNS stage references, so the replacement must create first. The
-#                    pipeline holds no TLS stage since ADR 0045; the rule stays for R8's rollback, which
-#                    re-adds it
+#                    a TLS stage the DNS stage references, so the replacement must create first. Since
+#                    ADR 0045 the stage exists only with pipeline_www = true (count), R8's rollback; the
+#                    rule holds it either way
 #   [container-max-scale], [container-cpu], [container-memory]
 #                    a scaleway_container that does not set max_scale = 1, cpu_limit = 140 or
 #                    memory_limit_bytes = 268435456 exactly once, as that literal (ADR 0045's cost pins:
@@ -71,6 +71,9 @@
 #                    memory_limit or http_option on a scaleway_container, the deprecated spellings of
 #                    memory_limit_bytes and https_connections_only (that attribute gets this tag alone)
 #   [container-min-scale] a scaleway_container whose min_scale is missing or not the literal 0 or 1
+#   [container-repeat] count or for_each on a scaleway_container or a scaleway_container_namespace, or
+#                    more than one scaleway_container under the root: the front is one container in one
+#                    namespace (ADR 0045), and a repeat multiplies the cost pins' ceiling
 #   [provider-type]  a resource, data source or provider block of any provider but scaleway
 #   [provider-source] a required_providers entry whose source is not exactly "scaleway/scaleway"
 #   [lock-file]      a .terraform.lock.hcl with a line of a shape tofu init does not write: only blank and

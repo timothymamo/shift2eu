@@ -10,8 +10,10 @@
 // for either), every 308's target and the path guard the escaped request URI
 // hides behind, the response headers against site/records/hsts.json and the
 // policies every page carries in its <meta> element, the reverse proxy to
-// {$UPSTREAM} and the request and response headers it removes, and the
-// directives the design refuses: log, encode, cache and tls. It reads the
+// {$UPSTREAM} and the request and response headers it removes, the one global
+// log that keeps Caddy's request loggers out of the container's output, and
+// the directives the design refuses: a log outside the global options, encode,
+// cache and tls. It reads the
 // files, never a copy of them, and it parses the Caddyfile with a small
 // tokenizer of its own, so a comment cannot satisfy a check the configuration
 // no longer does.
@@ -22,8 +24,8 @@
 // starts, and drives every case of docs/adr/0045's list over raw HTTP/1.1: the
 // four rows of its table, the joined X-Forwarded-Proto, the Location of every
 // redirect, its own headers against the upstream's, its 502, a gzip object
-// passing byte for byte, the request headers the upstream never sees, and
-// OPTIONS *. `make test-sitefront` runs it, outside make test and make check,
+// passing byte for byte, the request headers the upstream never sees,
+// OPTIONS *, and a log that holds none of a visitor's markers. `make test-sitefront` runs it, outside make test and make check,
 // as `make test-browser` runs the browser smoke test (docs/adr/0036).
 //
 // Neither test builds an image, calls Scaleway or reads a credential, and

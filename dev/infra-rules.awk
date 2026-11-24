@@ -109,7 +109,7 @@ BEGIN { # explicit character sets, the same in every awk and locale (no [A-Z] ra
   # same PR that adds it, so the review of that PR sees both. A type a specific rule names (api-key,
   # object, bucket-acl, iam-other, provider-type) is reported by that rule alone. The TLS stage left
   # the list with the pipeline's www domain (ADR 0045): only scaleway_edge_services_tls_stage "site",
-  # which [tls-stage-lifecycle] judges, may come back, as R8's rollback re-adds it.
+  # which [tls-stage-lifecycle] judges, may stand, gated by pipeline_www for R8's rollback.
   split("scaleway_account_project scaleway_container scaleway_container_domain scaleway_container_namespace scaleway_edge_services_backend_stage scaleway_edge_services_cache_stage scaleway_edge_services_dns_stage scaleway_edge_services_head_stage scaleway_edge_services_pipeline scaleway_edge_services_plan scaleway_iam_application scaleway_iam_policy scaleway_object_bucket scaleway_object_bucket_policy scaleway_object_bucket_website_configuration", rt, " ")
   for (i in rt) {
     resourceType[rt[i]] = 1
@@ -704,6 +704,7 @@ END {
     configDir[dirof(f)] = 1
     if (m == 1 && typ == "resource" && lab[2] == "scaleway_container") {
       containerBlock[b] = 1 # its cost pins are judged after the attributes, below
+      containers++          # more than one is [container-repeat], judged at the end
     }
     if (typ == "resource" || typ == "data" || typ == "ephemeral") {
       if (lab[2] !~ /^scaleway_/) {
@@ -837,6 +838,10 @@ END {
     if (p ~ "^resource:scaleway_iam_(policy|application):[^/]+$" && (n == "count" || n == "for_each")) {
       problem("iam-repeat", f, aline[a], n " on " shownpath(p) ": infra/ creates exactly one IAM application and one policy")
     }
+    # The front is one container in one namespace (ADR 0045): a repeat multiplies the cost pins' ceiling.
+    if (p ~ "^resource:scaleway_container(_namespace)?:[^/]+$" && (n == "count" || n == "for_each")) {
+      problem("container-repeat", f, aline[a], n " on " shownpath(p) ": infra/ runs exactly one front container in one namespace, and a repeat multiplies the cost pins' ceiling (ADR 0045)")
+    }
   }
 
   for (b = 1; b <= nblk; b++) {
@@ -852,6 +857,7 @@ END {
     # most, each a literal in the file, never a provider default or a value a tfvars file could raise; no
     # deprecated spelling beside them; and at most one instance kept warm.
     if (b in containerBlock) {
+      pinsBefore = problems
       shownres = shownpath(bpath[b])
       for (j = 1; j <= npins; j++) {
         n = containerPinName[j]
@@ -874,6 +880,9 @@ END {
         problem("container-min-scale", bfile[b], bline[b], shownres " sets no min_scale: it must set min_scale = 0 or 1, the instances ADR 0045 allows to be kept warm")
       } else if (containerSet[ck] != 1 || containerKind[ck] != "D" || (containerVal[ck] != "0" && containerVal[ck] != "1")) {
         problem("container-min-scale", bfile[b], containerAt[ck], shownres " sets min_scale to something other than the literal 0 or 1: more instances kept warm are a cost nobody decided")
+      }
+      if (problems > pinsBefore) {
+        containerPinsBroken++
       }
     }
   }
@@ -926,6 +935,11 @@ END {
 
   if (iamPolicies != 1) {
     problem("iam-policy-count", root, "", iamPolicies + 0 " scaleway_iam_policy resources, want exactly one: the deploy application's")
+  }
+  # A second container whose pins are already refused gets those lines alone: the run fails either way,
+  # and the pin lines name its file. The count speaks for a second container the pins let through.
+  if (containers > 1 && containerPinsBroken == 0) {
+    problem("container-repeat", root, "", containers " scaleway_container resources, want at most one: the site's front (ADR 0045), whose cost pins bound one container's instances")
   }
   if (iamApplications != 1) {
     problem("iam-application-count", root, "", iamApplications + 0 " scaleway_iam_application resources, want exactly one: the deploy application")

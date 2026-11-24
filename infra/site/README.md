@@ -21,7 +21,9 @@ maintainer follows.
 - `variables.tf`: the inputs (`terraform.tfvars.example`): `organization_id` and `admin_principal` have no
   default; `region` defaults to `nl-ams`, `bucket_name` to `shift2eu-site-www`, `public_read` to `false`
   (set it only if the runbook's R5 finds that Edge Services cannot serve private objects), and
-  `front_domains` to `false` (set it only once R8's records point at the container).
+  `front_domains` to `false` (set it only once R8's records point at the container), and `pipeline_www`
+  to `false` (the pipeline serves only its default endpoint; R8's rollback sets it `true`, which restores
+  the pipeline's www domain and its TLS stage).
 - `.terraform.lock.hcl`: every hash the registry publishes for the provider version, whatever the
   `-platform` list: an `h1` hash for each platform the provider ships (13 for scaleway/scaleway 2.93.0) and the `zh` set from
   its signed `SHA256SUMS`. After a provider change, refresh it with

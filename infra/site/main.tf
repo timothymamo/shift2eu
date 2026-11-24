@@ -161,17 +161,36 @@ resource "scaleway_edge_services_cache_stage" "site" {
   include_cookies  = false
 }
 
-# No custom domain and no TLS stage (ADR 0045, The upstream): www.shift2eu.com and shift2eu.com are the
-# container's (container.tf), and the pipeline answers only its own default endpoint,
-# <pipeline id>.svc.edge.scw.cloud, which the container reverse-proxies. So the DNS stage hands every
-# request to the cache stage itself. fqdns is optional and computed, so it is written empty: left out, the
-# provider would keep the www name the pipeline served before. A pipeline created before ADR 0045 loses its
-# www domain and its TLS stage in R4's first apply after this change (R4, R8).
+# The TLS stage exists only with pipeline_www = true: milestone 3's chain, which R8's rollback restores.
+# By default (ADR 0045, The upstream) www.shift2eu.com and shift2eu.com are the container's (container.tf),
+# the pipeline answers only its own default endpoint, which the container reverse-proxies, and there is no
+# custom domain whose certificate a TLS stage would terminate.
+resource "scaleway_edge_services_tls_stage" "site" {
+  count = var.pipeline_www ? 1 : 0
+
+  pipeline_id         = scaleway_edge_services_pipeline.site.id
+  project_id          = scaleway_account_project.site.id
+  cache_stage_id      = scaleway_edge_services_cache_stage.site.id
+  managed_certificate = true
+
+  lifecycle {
+    # A replacement (R8's recreate) must create the new stage and repoint the DNS stage before deleting
+    # the old one: Scaleway refuses to delete a TLS stage the DNS stage references (issue #541).
+    create_before_destroy = true
+  }
+}
+
+# With pipeline_www at its default false, the DNS stage hands every request to the cache stage itself and
+# serves no custom domain. fqdns is optional and computed, so it is written empty: left out, the provider
+# would keep the www name the pipeline served before. A pipeline created before ADR 0045 loses its www
+# domain and its TLS stage in the apply that leaves pipeline_www false (R8); pipeline_www = true brings
+# both back (R8's rollback).
 resource "scaleway_edge_services_dns_stage" "site" {
   pipeline_id    = scaleway_edge_services_pipeline.site.id
   project_id     = scaleway_account_project.site.id
-  cache_stage_id = scaleway_edge_services_cache_stage.site.id
-  fqdns          = []
+  cache_stage_id = var.pipeline_www ? null : scaleway_edge_services_cache_stage.site.id
+  tls_stage_id   = var.pipeline_www ? scaleway_edge_services_tls_stage.site[0].id : null
+  fqdns          = var.pipeline_www ? ["www.shift2eu.com"] : []
 }
 
 # The DNS stage is where the pipeline's traffic enters.
