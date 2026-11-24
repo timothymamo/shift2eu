@@ -116,6 +116,113 @@ func TestClaudeSettingsFileIsTheADRsOnly(t *testing.T) {
 	}
 }
 
+// claudeProjectSettingsPath is the project's own settings file, the layer every
+// Claude Code role loads beside the rule in CLAUDE.md (issue #540).
+const claudeProjectSettingsPath = ".claude/settings.json"
+
+// claudeProjectEnvDeny are the rules the project's settings file must refuse.
+// They are matched by presence, not as a whole set: the file has other rules,
+// and a rule may be written again beside them. `Bash(env)` is bare `env` alone,
+// `Bash(env *)` its pipeline and separator forms but not `env VAR=value cmd`,
+// which the rule cannot tell the two apart from; `Bash(set)` is bare `set`,
+// and the options that print the shell's variables and exports are refused by
+// their own rules. `/proc/*/environ` is refused as a command's argument and as
+// a file a tool reads, because either prints every value in the process.
+var claudeProjectEnvDeny = []string{
+	"Bash(env)",
+	"Bash(env *)",
+	"Bash(/usr/bin/env*)",
+	"Bash(printenv)",
+	"Bash(printenv *)",
+	"Bash(set)",
+	"Bash(export)",
+	"Bash(export -p*)",
+	"Bash(declare -p*)",
+	"Bash(declare -x*)",
+	"Bash(typeset -p*)",
+	"Bash(compgen -v*)",
+	"Bash(compgen -e*)",
+	"Bash(*/proc/*/environ*)",
+	"Read(/proc/*/environ)",
+}
+
+// TestProjectClaudeSettingsDenyPrintingTheEnvironment pins the second layer
+// under CLAUDE.md rule 3 for the Claude Code roles (issue #540): each rule above
+// is in .claude/settings.json's permissions.deny, and none of them is also in
+// permissions.allow, where a later reader would take the command for allowed.
+// The file is read as a closed document first, so a key written twice cannot
+// hide a second, wider allow list from this test.
+func TestProjectClaudeSettingsDenyPrintingTheEnvironment(t *testing.T) {
+	t.Parallel()
+
+	data := readRepositoryFile(t, claudeProjectSettingsPath)
+
+	doc, err := decodeJSONDocument(data)
+	if err != nil {
+		t.Fatalf("%s: %v", claudeProjectSettingsPath, err)
+	}
+
+	allow, deny := projectPermissionRules(t, doc)
+
+	for _, rule := range claudeProjectEnvDeny {
+		if _, ok := deny[rule]; !ok {
+			t.Errorf("%s: permissions.deny does not hold %q, so the role runs the command CLAUDE.md rule 3 forbids (issue #540)", claudeProjectSettingsPath, rule)
+		}
+
+		if _, ok := allow[rule]; ok {
+			t.Errorf("%s: permissions.allow holds %q, which permissions.deny refuses and must not be handed back (issue #540)", claudeProjectSettingsPath, rule)
+		}
+	}
+}
+
+// projectPermissionRules returns the rule strings of the document's
+// permissions.allow and permissions.deny lists as sets, and fails the test when
+// the document holds no permissions object or one of the two lists is missing or
+// no list of strings: a settings file Claude Code cannot read refuses nothing.
+func projectPermissionRules(t *testing.T, doc any) (allow, deny map[string]struct{}) {
+	t.Helper()
+
+	root, ok := doc.(map[string]any)
+	if !ok {
+		t.Fatalf("%s: the document is no JSON object", claudeProjectSettingsPath)
+	}
+
+	permissions, ok := root["permissions"].(map[string]any)
+	if !ok {
+		t.Fatalf("%s: no permissions object", claudeProjectSettingsPath)
+	}
+
+	return projectRules(t, permissions, "allow"), projectRules(t, permissions, "deny")
+}
+
+// projectRules returns permissions[key] as a set of rule strings.
+func projectRules(t *testing.T, permissions map[string]any, key string) map[string]struct{} {
+	t.Helper()
+
+	value, ok := permissions[key]
+	if !ok {
+		t.Fatalf("%s: permissions holds no %s list", claudeProjectSettingsPath, key)
+	}
+
+	list, ok := value.([]any)
+	if !ok {
+		t.Fatalf("%s: permissions.%s is no list", claudeProjectSettingsPath, key)
+	}
+
+	rules := make(map[string]struct{}, len(list))
+
+	for _, entry := range list {
+		rule, ok := entry.(string)
+		if !ok {
+			t.Fatalf("%s: permissions.%s holds a value that is no rule: %v", claudeProjectSettingsPath, key, entry)
+		}
+
+		rules[rule] = struct{}{}
+	}
+
+	return rules
+}
+
 // TestClaudeSettingsFileRefusesADuplicateKey pins the reader the test above
 // reads the file with: encoding/json keeps the last of two equal keys silently,
 // so a file could hold a second permissions object or a second allow list that
