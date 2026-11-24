@@ -102,9 +102,9 @@ tar -xzf "$ARCHIVE"
 ```
 
 `awk` copies the line of `checksums.txt` whose name is exactly the archive's, and the check must print
-`<archive>: OK`; on macOS, run `shasum -a 256 --check "$ARCHIVE.sha256"` instead of `sha256sum`. A wrong digest prints `FAILED` and exits non-zero; a name missing from `checksums.txt`
-leaves the copied file empty, which fails the check too (non-zero exit, no `OK`) instead of checking
-nothing. `gh attestation verify` must print `✓ Verification succeeded!` and exits non-zero otherwise.
+`<archive>: OK`; on macOS, run `shasum -a 256 --check "$ARCHIVE.sha256"` instead of `sha256sum`. A
+wrong digest prints `FAILED` and exits non-zero; a name missing from `checksums.txt` leaves the copied
+file empty, which fails the check too (non-zero exit, no `OK`) instead of checking nothing. `gh attestation verify` must print `✓ Verification succeeded!` and exits non-zero otherwise.
 It works the same on macOS. `gh attestation verify checksums.txt ...`, with the same flags, verifies
 `checksums.txt` itself.
 
@@ -216,9 +216,9 @@ the live site does not serve that release's files; report it as the repository's
 Check it in the same shell, where `$D` is still set: the commands read the bundle's manifest from `$D`.
 
 ```bash
-cd "${D:?run the site check first}"
-curl --fail --silent --show-error --proto '=https' --compressed https://www.shift2eu.com/ | sha256sum
-jq -r '.files[] | select(.path == "index.html") | .sha256' site/manifest.json
+cd "${D:?run the site check first}" && \
+  curl --fail --silent --show-error --proto '=https' --compressed https://www.shift2eu.com/ | sha256sum && \
+  jq -r '.files[] | select(.path == "index.html") | .sha256' site/manifest.json
 ```
 
 The first line must print the digest the second prints. The release that is the highest release tag on

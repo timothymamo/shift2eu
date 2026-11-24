@@ -349,10 +349,11 @@ gh attestation verify "$W/shift2eu-site_$GOOD.tar.gz" --repo <owner>/shift2eu \
   --signer-workflow <owner>/shift2eu/.github/workflows/release.yml \
   --source-ref "refs/tags/$GOOD" --deny-self-hosted-runners \
   && tar -xzOf "$W/shift2eu-site_$GOOD.tar.gz" manifest.json > "$W/good-manifest.json"   # PASS: "Verification succeeded"
-# FAIL verification: no manifest is written, and every check line below FAILs: stop, the bundle is not to be trusted
+# FAIL verification: no manifest is written, the copy below is skipped and every check line below FAILs: stop, the bundle is not to be trusted
 jq -r .version "$W/good-manifest.json"   # PASS: the value of $GOOD
-# Each key's newest version written before $T, copied over the current one
-for k in index.html inventory.html privacy.html verify.html LICENSE NOTICE manifest.json; do
+# Each key's newest version written before $T, copied over the current one, only after a verified manifest
+test -s "$W/good-manifest.json" || echo "FAIL no verified manifest of $GOOD: the copy is skipped"
+test -s "$W/good-manifest.json" && for k in index.html inventory.html privacy.html verify.html LICENSE NOTICE manifest.json; do
   # LastModified prints as +00:00 or Z, with or without milliseconds: both sides compared as epoch seconds
   v="$(aws s3api list-object-versions --bucket "$B" --prefix "$k" --output json | jq -r --arg k "$k" --arg t "$T" 'def s: sub("\\.[0-9]+"; "") | sub("\\+00:00$"; "Z") | fromdateiso8601; [.Versions[]? | select(.Key == $k and (.LastModified | s) < ($t | s))] | max_by(.LastModified | s) | .VersionId // empty')"
   if [ -n "$v" ] && aws s3api copy-object --bucket "$B" --key "$k" --copy-source "$B/$k?versionId=$v" --query VersionId --output text; then echo "PASS $k restored from $v"; else echo "FAIL $k: no version before $T, or the copy failed"; fi
