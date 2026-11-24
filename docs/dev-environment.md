@@ -2344,8 +2344,9 @@ Everything below exists to keep the agents from waiting on you (#68). Three plac
 - **`.claude/settings.json`, checked in.** Permission rules apply on top of the mode: an allow rule skips
   the check, and a deny rule refuses the action. The deny rules (`--no-verify`, force pushes,
   `git branch -D` and `--delete`, see CLAUDE.md rule 8; the commands that print the environment, `env`,
-  `printenv`, bare `set` and `export`, `export -p`, `declare`/`typeset -p`/`-x`, `compgen -v`/`-e` and
-  `/proc/*/environ`, see CLAUDE.md rule 3 and
+  `printenv`, bare `set` and `export`, `export -p`, `declare`/`typeset -p`/`-x`, `compgen -v`/`-e`/`-A`,
+  `ps e*`, `make -p`/`--print-data-base`, any command naming `daemon.env` or expanding a `$..._API_KEY` or
+  `$..._TOKEN`, and reading `/proc` or `~/.config/dot-agent-deck/`, see CLAUDE.md rule 3 and
   [ADR 0044](adr/0044-refuse-printing-the-environment-in-pi-with-a-project-extension.md)) and the allow rules that name no path (the fixed `make` targets, `go test/build/vet`,
   `golangci-lint run`, `dot-agent-deck work-done`, web search and the provider documentation sites)
   live here, so every checkout has them, including the dispatch worktrees the deck creates.
@@ -2386,10 +2387,13 @@ pi, which runs the tester, has no permission prompts at all: it reads, edits and
 asking. Its `--approve` flag trusts the project for that process without a trust prompt, so pi loads the
 project's `.pi/settings.json` (and with it the skills) and its extension
 `.pi/extensions/deny-env-printing.ts`, which refuses a bash command that prints the environment (the
-patterns in `.pi/deny-env-printing.json`) and a file tool call on `/proc/*/environ`
+patterns in `.pi/deny-env-printing.json`, `env VAR=value cmd` allowed) and a file tool call on a path
+under `/proc` or naming `daemon.env`
 ([ADR 0044](adr/0044-refuse-printing-the-environment-in-pi-with-a-project-extension.md)). That refusal
 is a second layer beside CLAUDE.md rule 3, not a boundary: for the tester the VM is the only boundary, so
-never start the deck outside it.
+never start the deck outside it. An extension that fails to load is logged and skipped, so the refusal
+then fails open; a TUI pane shows "env-printing refusal loaded" when it is in place. Only tester panes
+started from a dispatch worktree created after the change was merged load it.
 
 ## Containers and image verification
 

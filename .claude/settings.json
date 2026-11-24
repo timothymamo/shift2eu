@@ -41,9 +41,19 @@
       "Bash(typeset -x*)",
       "Bash(compgen -v*)",
       "Bash(compgen -e*)",
+      "Bash(compgen -A*)",
+      "Bash(compgen *-A*)",
       "Bash(*/proc/*/environ*)",
-      "Read(/proc/*/environ)",
-      "Read(//proc/**/environ)"
+      "Bash(make -p*)",
+      "Bash(make --print-data-base*)",
+      "Bash(ps e*)",
+      "Bash(*daemon.env*)",
+      "Bash(*$*API_KEY*)",
+      "Bash(*$*TOKEN*)",
+      "Read(//proc)",
+      "Read(//proc/**)",
+      "Read(//proc/**/environ)",
+      "Read(~/.config/dot-agent-deck/**)"
     ]
   }
 }
