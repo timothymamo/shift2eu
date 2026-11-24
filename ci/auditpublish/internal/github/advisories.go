@@ -448,21 +448,29 @@ func FileAdvisories(ctx context.Context, c *Client, plan AdvisoryPlan) error {
 
 	endpoint := "repos/" + c.scope.Repository + "/security-advisories"
 
-	for i, w := range plan.writes {
+	// wrote is set once any advisory write of the run has gone through, so a
+	// refused creation is "not filed" only while nothing has been written.
+	wrote := false
+
+	for _, w := range plan.writes {
 		switch w.Action {
 		case AdvisoryCreate:
 			resp, err := send(ctx, c, "POST", endpoint, createBody(w.Text))
 			if err != nil {
-				if i == 0 && errors.Is(err, publish.ErrGitHub) && refusedCreation(resp.Status) {
+				if !wrote && errors.Is(err, publish.ErrGitHub) && refusedCreation(resp.Status) {
 					return fmt.Errorf("advisories: GitHub refused the creation: %w", publish.ErrPrivateNotFiled)
 				}
 
 				return fmt.Errorf("advisories: the create: %w", err)
 			}
+
+			wrote = true
 		case AdvisoryUpdate:
 			if _, err := send(ctx, c, "PATCH", endpoint+"/"+w.GHSAID, updateBody(w)); err != nil {
 				return fmt.Errorf("advisories: the update: %w", err)
 			}
+
+			wrote = true
 		default:
 			return fmt.Errorf("advisories: a write that is none of the two: %w", publish.ErrConfig)
 		}
