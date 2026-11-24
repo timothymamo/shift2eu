@@ -516,6 +516,13 @@ const (
 	// carries (PR 5c): a read-only root filesystem, no network, no capability
 	// and no new privilege.
 	auditContainerFlags = " --read-only --network none --cap-drop ALL --security-opt no-new-privileges"
+	// auditRow11Create and the two flag groups below are row 11's, row 13's and
+	// row 14's own docker create lines, each unique to its row: the anchors of
+	// the cases that take a flag out of one row alone, since the four flags are
+	// the same text in all three.
+	auditRow11Create = "cid=\"$(docker create --read-only --network none --cap-drop ALL --security-opt no-new-privileges \"${image}@${digest}\" version)\""
+	auditRow13Create = " --security-opt no-new-privileges --memory 512m --pids-limit 64 "
+	auditRow14Create = " --network none --cap-drop ALL --security-opt no-new-privileges --user 65534:65534"
 	// auditHostileCreateFlags is row 13's container's own limits, which no other
 	// docker create holds: the anchor the cases that put a flag, a mount or a
 	// tmpfs into a container use.
@@ -1742,6 +1749,24 @@ func TestAuditWorkflow(t *testing.T) {
 			name:     "no --security-opt no-new-privileges on the containers",
 			workflow: mutateEvery(t, acceptedWorkflow, auditContainerFlags, " --read-only --network none --cap-drop ALL"),
 			wantIn:   "no-new-privileges",
+		},
+		// The four cases above take each flag out of the three creates at once, so
+		// they hold the flag of the checks job and not of one row. These three take
+		// a flag out of one row alone: every row's spec has to require its own.
+		{
+			name:     "row 11's container without --read-only",
+			workflow: mutate(t, acceptedWorkflow, auditRow11Create, strings.Replace(auditRow11Create, " --read-only", "", 1)),
+			wantIn:   "--read-only",
+		},
+		{
+			name:     "row 13's container without --security-opt no-new-privileges",
+			workflow: mutate(t, acceptedWorkflow, auditRow13Create, strings.Replace(auditRow13Create, " --security-opt no-new-privileges", "", 1)),
+			wantIn:   "no-new-privileges",
+		},
+		{
+			name:     "row 14's container without --network none",
+			workflow: mutate(t, acceptedWorkflow, auditRow14Create, strings.Replace(auditRow14Create, " --network none", "", 1)),
+			wantIn:   "--network none",
 		},
 		{
 			// Row 14's one tmpfs, at the size and with the flags go test needs: a
