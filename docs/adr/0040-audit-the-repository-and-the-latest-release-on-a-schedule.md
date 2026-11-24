@@ -923,7 +923,9 @@ one listing needs; a client that may only read keeps the artifact check, whose s
 
 `auditpublish image -result <path> -gh <path> -tmp <dir>` (PR 4b) checks the result's release and image
 digest before `publish` trusts them: `CheckRelease` (row 2: 200 with the tag's `tag_name`, 404 is
-`ErrResultInvalid`) and `CheckImageDigest` (row 3, below). It is a subcommand of its own, run in its own
+`ErrResultInvalid`; then `R/releases/latest`, also row 2, whose `tag_name` must be the result's tag:
+another tag or no latest release is `ErrResultInvalid`, an answer that is no release `ErrGitHub`, PR 5b
+review round 1) and `CheckImageDigest` (row 3, below). It is a subcommand of its own, run in its own
 step with the job's `github.token` and `attestations: read`, because the audit App has no Attestations
 permission and is not widened for it (maintainer, decision 2 of PR 4's review). Its client is read-only
 by construction, `github.NewImageClient`, as the artifact check's is. It prints `image digest: as
@@ -1037,7 +1039,7 @@ branch and the audited commit are this run's own:
 | Method | Endpoint | Body |
 |---|---|---|
 | GET | `R/actions/runs/<run id>/artifacts?per_page=100` | none |
-| GET | `R/releases/tags/<tag>` | none |
+| GET | `R/releases/tags/<tag>` or `R/releases/latest` | none |
 | GET | `R/attestations/sha256:<64 hex>?per_page=100` | none |
 | GET | `R/git/commits/<40 hex>` | none |
 | GET | `R/git/ref/heads/security-audit/<date>-<run id>` | none |
@@ -1420,9 +1422,11 @@ test of ours (Decision 3's reason).
      line. `Audit(ctx, root, in, launch)` returns `([]byte, error)`: the bytes it read and checked,
      never the path. `Steps.Audit` carries them, and `Run.Result func(body []byte) error`, beside
      `Run.Out`, is handed exactly those bytes once, after every step passed, and never for a run that
-     failed; a `Result` that fails fails the run with the audit's line. It is the seam PR 5's
-     publication works from, so nothing reads the result file again by its path; `ci/auditrun` leaves
-     it nil until then.
+     failed; a `Result` that fails fails the run with the audit's line. It is the seam the
+     publication works from, so nothing reads the result file again by its path: `ci/auditrun`'s
+     `Result` writes exactly those bytes to its required `-result-out` path, a new file (`O_EXCL`, mode
+     0600) under the model step's `$RUNNER_TEMP`, which the workflow's encrypt step reads (The workflow,
+     below; PR 5b, review round 1).
 - **Exit codes:** 0 the audit finished and wrote the result file; 1 the run failed (the model, a probe
   not refused, no result file); 2 a usage or input error; 3 refused before the CLI ran (a managed
   setting, a checksum mismatch, the audit directory not as laid out); 4 bubblewrap cannot start.
@@ -2116,18 +2120,27 @@ output is refused on any line but the one its step's spec allows, comments inclu
 job output and `actions/cache` are refused anywhere. The raw lines also hold the model job free of every
 check and container command, so a document the YAML reader refuses still draws the message that names it.
 
-**Job permissions** (`GITHUB_TOKEN`, each read): the checks job `contents` and `attestations` (PR 5c's
-release-integrity rows; scorecard and row 15 may add `actions` or `issues` after the first run); the
+Review round 1 (2026-11-24) widened the check: a step's spec may also name commands its script must not
+run (comments aside) and commands it must run in a given order, and every copy of a `*_VERSION` or
+`*_SHA256` pin in the file must hold the first copy's value, since Renovate moves them together and a
+copy that differs is a hand edit that moved one alone.
+
+**Job permissions** (`GITHUB_TOKEN`, each read): the checks job `contents` alone (no row PR 5b runs reads
+an attestation: PR 5c adds `attestations` with its release-integrity rows, and scorecard and row 15 may
+add `actions` or `issues` after the first run); the
 model job `contents` and `actions`, the artifact listing and download; the publish job `contents`,
 `actions` and `attestations`, the listing, the download and the image check. No `packages`: the image is
 public.
 
-**Go without `actions/setup-go`.** No job runs setup-go, whose default restores an Actions cache. The
-first `go` command of each job runs in the module and fetches go.mod's toolchain (`GOTOOLCHAIN`, checked
-against the checksum database) with the modules (`go mod download`, and `go -C tools mod download` in the
-checks job); every later Go command, the builds of `ci/auditexec`, `ci/auditrun` and `ci/auditpublish`
-included, runs with `GOFLAGS=-mod=readonly GOPROXY=off`, and govulncheck with the same. The checks job
-then checks that `go env GOVERSION` is go.mod's.
+**Go without `actions/setup-go`.** No job runs setup-go, whose default restores an Actions cache. Each
+job's `go mod download`, run in the module, fetches go.mod's toolchain (`GOTOOLCHAIN`, checked against
+the checksum database) with the modules (and `go -C tools mod download` in the checks job). The checks
+job's `go install golang.org/x/vuln/cmd/govulncheck@<version>`, which runs before it, does not: `go
+install pkg@version` picks its toolchain from the target module's own go line, not from the checkout's
+go.mod, so the switch to go.mod's Go happens in "Download the Go modules". Every later Go command, the
+builds of `ci/auditexec`, `ci/auditrun` and `ci/auditpublish` included, runs with `GOFLAGS=-mod=readonly
+GOPROXY=off`, and govulncheck with the same. The checks job then checks that `go env GOVERSION` is
+go.mod's.
 
 **The encryption tool is `age`** (v1.3.2, pinned by version and the SHA-256 of
 `age-<version>-linux-amd64.tar.gz` in each job). The public halves are the variables
@@ -2136,24 +2149,29 @@ private half reaches `age --decrypt --identity -` on stdin, from that one step's
 written to a file. A ciphertext that does not decrypt fails the step, and `age` writes no output.
 
 **The artifact hand-off.** Each downloading job first runs `auditpublish artifacts -job model|publish`,
-which fails closed on an extra, a duplicate, a missing or an expired artifact. The same step then lists
-the run's artifacts again, takes the one artifact of the expected name (refusing none or two), its numeric
-ID and its `digest`, the SHA-256 that `upload-artifact` computes of the zip it stores, downloads exactly
-that ID through `gh api .../actions/artifacts/<id>/zip`, checks the zip against the digest, and refuses a
-zip that holds anything but the one `.age` file. The two listings are two calls; between them only the run
-itself could add an artifact, and its earlier jobs are finished (the guard skips every re-run), so that
-window is accepted. The model job checks the decrypted archive before unpacking it: only directories and
-regular files under `results/`, none with a `..` element, unpacked as root into `/srv/audit/checks` with
-the archive's owners and modes ignored, then every write bit removed.
+which fails closed on an extra, a duplicate, a missing or an expired artifact, and writes the artifact
+the job downloads, as the checked listing names it, to `$RUNNER_TEMP/artifact.json` (`O_EXCL`, mode
+0600, exactly `{"name":...,"id":...,"digest":"sha256:..."}`; a path that already exists is outcome 9, and
+a refused listing writes nothing): its numeric ID and its `digest`, the SHA-256 that `upload-artifact`
+computes of the zip it stores. The same step reads the ID and the digest from that file, never from a
+second listing (PR 5b review round 1: a second call could answer otherwise than the one the check
+accepted), downloads exactly that ID through `gh api .../actions/artifacts/<id>/zip`, checks the zip
+against the digest with `sha256sum --check --strict`, unzips it, and refuses a zip that holds anything but
+the one `.age` file (`ls -A`). The model job checks the decrypted archive before unpacking it (`tar
+-tvf`): only directories and regular files under `results/`, none with a `..` element, unpacked as root
+into `/srv/audit/checks` with `--no-same-owner --no-same-permissions`, then every write bit removed, and
+the decrypted archive and its two listings removed from `$RUNNER_TEMP` (`rm -f`) in the same step. The
+check holds each of these commands, in that order.
 
 **The checks job (5b)** runs rows 1 to 5 and 16: the commit and the latest release's tag, the pinned
 tools (gitleaks v8.30.1, osv-scanner v2.7.1, zizmor v1.33.1, age, each by SHA-256; govulncheck v1.10.0 as
 `security.yml` pins it, and actionlint from `tools/go.mod`), govulncheck and osv-scanner on the module and
-`tools/`, gitleaks on the whole history with `--redact`, zizmor and actionlint on the workflows. Each
+`tools/`, gitleaks on the whole history with `--redact` and `--ignore-gitleaks-allow` (no allow comment
+in the history hides a secret), and zizmor and actionlint on the workflows, in two steps. Each
 tool's output, its stderr and its exit code go to `$RUNNER_TEMP/results`, never to the log: a finding is
 data for the model, not a failure of the job. `results/not-run.txt` names rows 6 to 11 and 13 to 15, so
 the result reports them "not run", never "clean". `github.token` reaches only the row 1 step and the
-zizmor step's `env:` (zizmor's online audits).
+zizmor step's `env:` (zizmor's online audits); the actionlint step holds none.
 
 **The model job** installs `bubblewrap` (0.9.0-1ubuntu0.3) and `socat` (1.8.0.0-4ubuntu0.1) from the
 Ubuntu archive, each `.deb` checked against the SHA-256 of `noble-updates`' Packages index (whose
@@ -2171,8 +2189,15 @@ set. What holds that tree against its owner is the sandbox's write allow list, w
 and the layout check's mode walk. The model-free hardening step then stops and disables Docker, checks
 the owners and modes above (`stat`), removes `/etc/sudoers.d/runner`, and fails unless `sudo -n true`
 fails and the Docker socket is gone. The model step runs `auditrun -claude-tarball
-$RUNNER_TEMP/claude-code/claude-code.tgz -claude-integrity <the pin's integrity>`, the integrity from the
-pin step's output. **The canary is made in the model step for each run** (32 bytes of `/dev/urandom` as
+$RUNNER_TEMP/claude-code/claude-code.tgz -claude-integrity "${CLAUDE_CODE_PIN_INTEGRITY}" -result-out
+$RUNNER_TEMP/result.json`, the integrity from the pin step's output (`test/lint` holds that argument, and
+the installer's two last arguments, exactly, and refuses a `sha512-` literal anywhere outside the pin
+step). **The result reaches the encrypt step through the launcher alone** (PR 5b review round 1): the
+launcher's `Run.Result` writes the bytes its result check read and accepted (a regular file and no link,
+within the cap, one JSON value, neither the token nor the canary) to `-result-out`, a new file (`O_EXCL`,
+0600) under the step's `$RUNNER_TEMP`, out of the sandbox's reach, and the encrypt step encrypts that
+file; `/srv/audit/work/result.json` is never read again by its path, which the check refuses there. **The
+canary is made in the model step for each run** (32 bytes of `/dev/urandom` as
 hex, exported to the launcher alone): a constant in the workflow would be in the checkout copy the model
 reads, and a result that quoted it would be refused.
 
@@ -2180,12 +2205,18 @@ reads, and a result that quoted it would be refused.
 `image` subcommand it runs `gh attestation verify oci://ghcr.io/<owner>/<name>@<digest> --repo
 <owner>/<name> --signer-workflow <owner>/<name>/.github/workflows/release.yml --source-ref
 refs/tags/<tag> --deny-self-hosted-runners` as a model-free step with the job's `github.token` and
-`attestations: read`, the digest and tag read from the result and held to their shapes first; a refusal
-fails the run. That closes the image check's residual risk above: the attestation's Sigstore signature
-and certificate are verified before the digest is trusted. The App token step has exactly the four
+`attestations: read`, the digest and tag read from the result and held to their shapes first, the tag's
+whatever the digest is; a refusal fails the run. An empty `image_digest` is the result's documented
+"image not pulled", which `publish.Result` and `CheckImageDigest` accept: the step then prints the fixed
+notice `image not pulled: no provenance attestation to verify` and verifies nothing, rather than failing
+every such run (PR 5b review round 1). That closes the image check's residual risk above: the
+attestation's Sigstore signature and certificate are verified before a digest is trusted. The `image`
+step's `CheckRelease` also holds the result's tag to the repository's latest release, so a result that
+names an older release is refused before anything is written. gitleaks runs `stdin
+--ignore-gitleaks-allow --redact` over the decrypted result **before** the App token is minted, so a
+result it refuses has no write token minted for it; the App token step has exactly the four
 `permission-*` inputs of Decision 1 (`contents`, `pull-requests`, `issues`, `security-events`, each
-`write`); gitleaks runs `stdin --ignore-gitleaks-allow --redact` over the decrypted result; the publish
-step alone holds the App's token and `AUDIT_FINGERPRINT_KEY`.
+`write`); the publish step alone holds the App's token and `AUDIT_FINGERPRINT_KEY`.
 
 **Time budget:** checks 180 minutes, model 120 (its model step 90, around the preflight's 10-minute and
 the audit's 40-minute deadlines), publish 30; every step has its own `timeout-minutes`.
@@ -2202,7 +2233,9 @@ restore a cache could read a poisoned entry; their results are checks, not relea
 scorecard pins; the checks job's final read scopes after the first run; a check that times out recorded in
 the report's limits while the run still publishes (today a step timeout fails the job); and failure
 summaries that name the runbook step for every cause (today the programs' one lines and the workflow's
-own errors do; a tool download whose checksum differs fails with sha256sum's line alone). **To be checked
+own errors do; a tool download whose checksum differs fails with sha256sum's line alone, the hardening
+step's commands that fail under `set -e` before its own checks, such as `systemctl stop`, fail with their
+own lines, and the errors that point at runbook step 11 name none of their causes there yet). **To be checked
 on the first run** (runbook step 8): that `socat`'s and `bubblewrap`'s `.deb`s install with the image's
 libraries (`dpkg -i` does not fetch a missing dependency) and that the pinned versions are still in the
 archive's pool; that the runner's sudo rule is `/etc/sudoers.d/runner`; that the runner's preinstalled
