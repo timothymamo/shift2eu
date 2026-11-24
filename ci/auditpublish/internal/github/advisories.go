@@ -487,6 +487,12 @@ func refusedCreation(status int) bool {
 
 // createBody is a create's body: the text, the severity only when known, and
 // the one vulnerability of this module. Never a state, a CVE or a credit.
+//
+// The vulnerability's vulnerable_version_range, patched_versions and
+// vulnerable_functions keys are written, as explicit nulls: GitHub's create
+// wants the element's whole shape, and none of the three is the model's, so
+// the program sends the key with no value rather than one taken from the
+// model's result.
 func createBody(text publish.AdvisoryText) map[string]any {
 	body := map[string]any{
 		"summary":     text.Summary,
