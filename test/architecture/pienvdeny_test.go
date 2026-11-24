@@ -26,8 +26,11 @@ import (
 	"errors"
 	"io"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/google/go-cmp/cmp"
 )
 
 // The two files that make pi refuse a command: the pattern list the extension
@@ -121,13 +124,187 @@ func TestPiEnvDenyListPatternsUseTheNarrowestSyntax(t *testing.T) {
 	}
 }
 
+// TestPiEnvDenyListPatternsCannotBacktrackWithoutBound keeps every pattern to a
+// regular expression pi can evaluate in linear time. pi matches with
+// JavaScript's backtracking engine, where an unbounded repeat around a group
+// that itself holds an optional part costs exponentially many paths on a
+// command that almost matches: the shared command prefix of the first patterns
+// nests an optional option value (`-\S*( \S*)?`) inside a repeat over the
+// wrappers, which is linear in Go's RE2 and exponential in Node. A pattern that
+// is slow rather than wrong still refuses nothing useful: pi stalls on the
+// agent's own command, and a refused-but-hung tool call is a refusal the agent
+// cannot tell from a broken tool. Patterns are therefore pinned by structure, a
+// group repeat having to be bounded — `){0,8}` — because Go's RE2 cannot show
+// the cost the way Node does.
+func TestPiEnvDenyListPatternsCannotBacktrackWithoutBound(t *testing.T) {
+	t.Parallel()
+
+	data := readRepositoryFile(t, piEnvDenyListPath)
+
+	var list piEnvDenyList
+	if err := json.Unmarshal(data, &list); err != nil {
+		t.Fatalf("%s: %v", piEnvDenyListPath, err)
+	}
+
+	// The largest bound a group repeat may take: the work then grows with the
+	// command's length times the bound, which a long but legal command survives.
+	const maxGroupRepeat = 8
+
+	for i, pattern := range list.Patterns {
+		if bad := piUnboundedGroupRepeats(pattern, maxGroupRepeat); len(bad) > 0 {
+			t.Errorf("%s: patterns[%d] repeats a group without a bound (%s): pi matches with JavaScript's backtracking engine, where an unbounded repeat around a group with an optional part (the shared command prefix's `-\\S*( \\S*)?`) costs exponential time on a command that almost matches, so a long legal command stalls pi instead of running; write each group repeat with a bound of at most %d, `){0,%d}` (issue #540)", piEnvDenyListPath, i, piQuotedFragments(bad), maxGroupRepeat, maxGroupRepeat)
+		}
+	}
+}
+
+// TestPiUnboundedGroupRepeats pins the reader the test above decides with: a
+// `)` inside a character class or escaped is no group end, a bounded group
+// repeat is no finding, and every unbounded form is one.
+func TestPiUnboundedGroupRepeats(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name    string
+		pattern string
+		want    []string
+	}{
+		{name: "a star on a group", pattern: `(a|b)*`, want: []string{")*"}},
+		{name: "a plus on a group", pattern: `(a|b)+`, want: []string{")+"}},
+		{name: "a lazy star on a group", pattern: `(a|b)*?`, want: []string{")*?"}},
+		{name: "a lazy plus on a group", pattern: `(a|b)+?`, want: []string{")+?"}},
+		{name: "a group repeat with no upper bound", pattern: `(a|b){2,}`, want: []string{"){2,}"}},
+		{name: "a group repeat above the bound", pattern: `(a|b){0,9}`, want: []string{"){0,9}"}},
+		{name: "a group repeat at the bound", pattern: `(a|b){0,8}`},
+		{name: "a group repeat of one count", pattern: `(a|b){3}`},
+		{name: "a repeat of a class, not a group", pattern: `[ \t]*`},
+		{name: "a class repeat after a class that ends with a paren", pattern: `[()]*`},
+		{name: "an escaped paren", pattern: `\)*`},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := piUnboundedGroupRepeats(tc.pattern, 8)
+			if diff := cmp.Diff(tc.want, got); diff != "" {
+				t.Errorf("piUnboundedGroupRepeats(%q) (-want +got):\n%s", tc.pattern, diff)
+			}
+		})
+	}
+}
+
+// piUnboundedGroupRepeats returns the group repeats of pattern that are
+// unbounded, each once: a `)` followed by `*` or `+` (lazy or not), and a
+// `){n,}` or a `){n,m}` whose m is above max. A `)` inside a character class or
+// escaped as a literal is no group end and is skipped.
+func piUnboundedGroupRepeats(pattern string, max int) []string {
+	var found []string
+
+	seen := map[string]struct{}{}
+
+	add := func(fragment string) {
+		if _, ok := seen[fragment]; ok {
+			return
+		}
+
+		seen[fragment] = struct{}{}
+		found = append(found, fragment)
+	}
+
+	for i := 0; i < len(pattern); i++ {
+		c := pattern[i]
+
+		if c == '\\' {
+			// An escaped character, a literal `)` among them: skip it whole.
+			i++
+
+			continue
+		}
+
+		if c == '[' {
+			// A character class runs to its unescaped `]`, and a `)` inside it
+			// ends no group.
+			for i++; i < len(pattern) && pattern[i] != ']'; i++ {
+				if pattern[i] == '\\' {
+					i++
+				}
+			}
+
+			continue
+		}
+
+		if c != ')' {
+			continue
+		}
+
+		rest := pattern[i+1:]
+
+		switch {
+		case strings.HasPrefix(rest, "*?"), strings.HasPrefix(rest, "+?"):
+			add(pattern[i : i+3])
+		case strings.HasPrefix(rest, "*"), strings.HasPrefix(rest, "+"):
+			add(pattern[i : i+2])
+		case strings.HasPrefix(rest, "{"):
+			end := strings.Index(rest, "}")
+			if end < 0 {
+				continue
+			}
+
+			quantifier := rest[:end+1]
+			if !piGroupRepeatIsBounded(quantifier, max) {
+				add(pattern[i : i+1+len(quantifier)])
+			}
+		}
+	}
+
+	return found
+}
+
+// piQuotedFragments joins fragments for a failure message, each in quotes so a
+// fragment of `)*` is not read as the sentence's own brackets.
+func piQuotedFragments(fragments []string) string {
+	quoted := make([]string, 0, len(fragments))
+
+	for _, fragment := range fragments {
+		quoted = append(quoted, strconv.Quote(fragment))
+	}
+
+	return strings.Join(quoted, ", ")
+}
+
+// piGroupRepeatIsBounded tells whether the quantifier `{...}` that follows a
+// group bounds it to at most max repetitions: `{n}`, `{n,m}`, `{n,m}?` and
+// `{n}?` do, `{n,}` does not, and neither does an m above max.
+func piGroupRepeatIsBounded(quantifier string, max int) bool {
+	body := strings.TrimSuffix(strings.TrimSuffix(strings.TrimPrefix(quantifier, "{"), "}"), "?")
+
+	bounds := strings.Split(body, ",")
+	if len(bounds) == 2 && strings.TrimSpace(bounds[1]) == "" {
+		return false
+	}
+
+	upper := bounds[len(bounds)-1]
+
+	n, err := strconv.Atoi(strings.TrimSpace(upper))
+	if err != nil {
+		// Anything that is no repetition count is no unbounded repeat this test
+		// can name; the syntax test holds the patterns to what both engines read.
+		return true
+	}
+
+	return n <= max
+}
+
 // TestPiEnvDenyExtensionHooksTheToolCall pins the extension's wiring: it reads
 // the pattern list by name and it hooks pi's `tool_call` event, the one that
 // sees a bash command before the command runs. An extension that hooks no event
 // (or another one) is loaded and refuses nothing. It also pins what a refusal is
 // made of (a block with a reason), the file tools it holds beside bash, the
 // `/proc` and `daemon.env` paths a file tool must not read, and the reason the
-// fail-closed branch gives; and it keeps the extension off pi's package at run
+// fail-closed branch gives; and it holds resolvePath to the path normalisation
+// pi applies before a tool reads a file (the leading `@` it strips and the
+// `file://` URL it turns into a path), because a guard that resolves the raw
+// value sees `/proc/self/environ` where pi reads it. It also keeps the extension off pi's package at run
 // time, which it must not import: it is loaded before the tool call it guards,
 // so a value import would make the guard depend on the very module whose version
 // is the reason it exists (`import type` is erased and names the package alone).
@@ -155,6 +332,33 @@ func TestPiEnvDenyExtensionHooksTheToolCall(t *testing.T) {
 		if !strings.Contains(text, want.text) {
 			t.Errorf("%s: the extension does not name %s (%q), so it refuses no command (issue #540)", piEnvDenyExtension, want.name, want.text)
 		}
+	}
+
+	// pi normalises a file tool's path before the tool reads it: it strips a
+	// leading `@` (its own shorthand for a path), turns a `file://` URL into a
+	// path, and maps the Unicode spaces to plain ones. A guard that resolves the
+	// raw value sees `/proc/self/environ` where pi reads it, and allows the read.
+	resolveBody := piFunctionBody(text, "function resolvePath(")
+	if resolveBody == "" {
+		t.Fatalf("%s: the extension has no function resolvePath, so no file tool's path is resolved before it is read (issue #540)", piEnvDenyExtension)
+	}
+
+	for _, want := range []struct {
+		name string
+		text string
+	}{
+		{name: "strip the leading @ that pi strips", text: `startsWith("@")`},
+		{name: "turn a file:// URL into a path, as pi does", text: "fileURLToPath("},
+	} {
+		if !strings.Contains(resolveBody, want.text) {
+			t.Errorf("%s: resolvePath does not %s (%q), so `@/proc/self/environ` and `file:///proc/self/environ` are read by pi and allowed here (issue #540)", piEnvDenyExtension, want.name, want.text)
+		}
+	}
+
+	// A `catch` inside resolvePath has to rethrow: falling back to the raw value
+	// would resolve a `file://` URL as a relative path and allow the read.
+	if strings.Contains(resolveBody, "catch") && !strings.Contains(resolveBody, "throw") {
+		t.Errorf("%s: resolvePath catches an error without rethrowing it, so a path pi cannot resolve is read as one it can and the call is allowed (issue #540); let the error reach the handler's refusal", piEnvDenyExtension)
 	}
 
 	for _, statement := range piImportStatements(text) {
@@ -223,6 +427,42 @@ func piImportStatements(text string) []string {
 	}
 
 	return statements
+}
+
+// piFunctionBody returns the braced body of the first function whose opening
+// line starts with signature, or the empty string when the extension holds no
+// such function. The braces are counted as text: the extension's functions hold
+// none but their own, and a template literal's `${` would be counted as an
+// opening brace, so this reads a function's body, not a JavaScript file.
+func piFunctionBody(text, signature string) string {
+	start := strings.Index(text, signature)
+	if start < 0 {
+		return ""
+	}
+
+	open := strings.IndexByte(text[start:], '{')
+	if open < 0 {
+		return ""
+	}
+
+	open += start
+
+	depth := 0
+
+	for i := open; i < len(text); i++ {
+		switch text[i] {
+		case '{':
+			depth++
+		case '}':
+			depth--
+
+			if depth == 0 {
+				return text[open : i+1]
+			}
+		}
+	}
+
+	return ""
 }
 
 // TestPiEnvDenyListRefusesPrintingTheEnvironment pins what the patterns refuse:
@@ -385,10 +625,27 @@ func TestPiEnvDenyListRefusesPrintingTheEnvironment(t *testing.T) {
 		"cat ../../../../proc/self/environ",
 		"cd / && cat proc/self/environ",
 		"cat /pro?/self/environ",
+		// `)` ends a case pattern and a subshell before the printer, and the
+		// printer is still the command bash runs.
+		"case x in x) env;; esac",
+		// The deck's key directory, reached through a path bash normalises or a
+		// glob that names it: every spelling reads the same directory.
+		"cat ~/.config//dot-agent-deck/x",
+		"cat ~/.config/./dot-agent-deck/x",
+		"ls ~/.config/dot-agent*",
 		// The environment as an interpreter spells it, in the cheap form an agent
 		// would type when the shell's own printers are refused.
 		"ruby -e 'puts ENV.to_a'",
 		`ruby -e 'p ENV["X"]'`,
+		// The whole environment as an interpreter spells it, with no key named.
+		"ruby -e 'p ENV'",
+		// `gh` and `jq` print the token and the environment themselves, in the
+		// forms the agents' own tooling offers.
+		"gh auth token",
+		"gh auth status -t",
+		"gh auth status --show-token",
+		"jq -n env",
+		"jq -n '$ENV'",
 		"python3 -c 'from os import environ as e; print(e)'",
 	}
 
@@ -471,6 +728,18 @@ func TestPiEnvDenyListAllowsTheWork(t *testing.T) {
 		// nothing, and the wrapper's own option with a value.
 		"timeout 600 make check",
 		"nice -n 10 make check",
+		// A long but legal chain of wrappers in front of a command that prints
+		// nothing: the patterns must refuse the chain above and allow this one
+		// without work that grows with every wrapper.
+		"sudo -u x nice -n 1 timeout 5 make check",
+		// A path that holds the letters `pro` and the word `environ` without being
+		// /proc or a file under it.
+		"cat /home/u/projects/shift2eu/docs/dev-environment.md",
+		"ls internal/adapter/target/provider/environ_test.go",
+		// `gh` and `jq` in the forms that print no value of the environment.
+		"gh auth status",
+		"gh pr checks 12",
+		"jq -r .name file.json",
 		// The repository's own deck files: its configuration and the directory the
 		// deck writes a task and a report into.
 		"cat .dot-agent-deck.toml",

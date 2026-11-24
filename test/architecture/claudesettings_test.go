@@ -187,6 +187,13 @@ var claudeProjectEnvDeny = []string{
 	"Bash(*.config/dot-agent-deck*)",
 	"Bash(*$*API_KEY*)",
 	"Bash(*$*TOKEN*)",
+	// `gh` prints its own token, and it is a tool the agents install and would
+	// reach for when the shell's printers are refused. `gh auth status` alone is
+	// allowed (it names the account, not the token), so its `-t` and
+	// `--show-token` forms are refused on their own.
+	"Bash(gh auth token*)",
+	"Bash(gh auth status*-t*)",
+	"Bash(gh auth status*--show-token*)",
 	"Read(//proc)",
 	"Read(//proc/**)",
 	"Read(//proc/**/environ)",
