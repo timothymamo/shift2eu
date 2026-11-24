@@ -2905,7 +2905,8 @@ linters:
         # os.LookupEnv ci/sitedeploy/main.go passes to environment, which reads
         # the deploy key's two variables and GITHUB_STEP_SUMMARY and no other.
         # Everything else is refused: another way to read a variable or the
-        # whole environment, a process start through os, and the lookups of a
+        # whole environment (os.Expand included), a process start through os
+        # or package os/exec (but in livepage_test.go), and the lookups of a
         # home, config, cache or temp directory. depguard keeps os/exec out of
         # the entry point and os out of its library (site-deploy-main,
         # site-deploy-library). Scope: every file under ci/sitedeploy/,
