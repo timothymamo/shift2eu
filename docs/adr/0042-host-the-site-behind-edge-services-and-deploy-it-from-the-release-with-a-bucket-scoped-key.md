@@ -358,7 +358,8 @@ nil (`newHTTPClient` in `ci/sitedeploy`), so the proxy variables are never consu
 ### Recovery
 
 - **Redeploy the last good release:** re-run the deploy job of the `release.yml` run of the highest
-  release tag on `main` (R12), within GitHub's 30-day re-run window (below); after the window, either
+  release tag on `main` ([the site runbook](../site-runbook.md#r12-recovery), R12), within GitHub's
+  30-day re-run window (below); after the window, either
   the maintainer restores the last good version of each page from the bucket's object versions with
   their own key (R12), or cuts a new release with a `Release-As:` footer.
   The guard overwrites any live page that is not a genuine higher release,
@@ -563,8 +564,10 @@ accepted; and whether `ListBucket` was allowed, which decides `-list-bucket` abo
 - A release from PR C's merge on builds, attests and publishes the bundle, and deploys it only once the
   maintainer sets `SITE_DEPLOY_ENABLED` (milestone 4); until then the deploy and its live check are
   skipped visibly, by the `site-skipped` job's notice.
-- The maintainer sets the `site` environment's variables `SITE_BUCKET` and `SITE_REGION` (from `tofu
-  output`) before the switch; the `release-tag` skill reports them missing as "not set up yet" while the
+- The maintainer sets the `site` environment's variables `SITE_BUCKET` (`tofu output`'s
+  `bucket_name`) and `SITE_REGION` (R0's region: `infra/site`'s `terraform.tfvars`, or
+  `variables.tf`'s default; `tofu output` has no region) before the switch
+  ([R9](../site-runbook.md#r9-the-github-site-environment)); the `release-tag` skill reports them missing as "not set up yet" while the
   switch is unset, and stops the release once it is `true`.
 - The deploy key is in scope for one step, on a program and a bundle this run built and attested; a
   failed deploy fails the release run and leaves the previous release serving.
@@ -591,7 +594,9 @@ unchanged; where it says "four pages", read the five pages from that issue on.
 - **Rolling back across issue #528:** a rollback stays the maintainer's R12 restore with their own key,
   as Recovery (above) says; the deploy refuses it by design. To a release before issue #528, the restore
   copies the four pages that existed then, with `LICENSE`, `NOTICE` and `manifest.json`, from their
-  earlier versions; `about.html` has no earlier version to copy. The `ci/sitecheck` of a release at or
+  earlier versions; `about.html` has no earlier version to copy. R12 takes the pages to restore and
+  check from the good release's manifest, and its headers check knows `about.html`, so the same block
+  serves a rollback to either side of issue #528. The `ci/sitecheck` of a release at or
   after issue #528 refuses the restored manifest, which lists no `about.html`, so the live check fails
   until a fixing release ships, as Recovery expects.
 - **The newer About page outlives such a rollback:** the deploy never deletes, and an earlier release has

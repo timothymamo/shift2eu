@@ -19,8 +19,10 @@ import "testing"
 // go run ./ci/sitebuild, the one program ci/sitedeploy runs, and the
 // livepage_test.go rule drops that entry's msg in that one file alone.
 // Everything else is refused: another way to read a variable or the whole
-// environment, a process start through os, and the four lookups of a home,
-// config, cache or temp directory.
+// environment, os.Expand, a process start through os, and the four lookups of a
+// home, config, cache or temp directory. os.Expand reads no variable by itself,
+// but a mapping of os.Getenv turns it into os.ExpandEnv, so every env group
+// refuses it alike (issue #516).
 //
 // Scope: every file under ci/sitedeploy/, _test.go files included, as the group's
 // linters.exclusions.rules rules say and TestForbidigoExclusionsDropOneGroup
@@ -40,13 +42,16 @@ const siteDeployEnvOSMsg = "site-deploy-env: the site deploy program reads no en
 
 // siteDeployEnvEntries lists every entry of the group, named by its msg and the
 // package its pkg matches, with the exact set of names its pattern must refuse:
-// the broad os entry's eight names, os.LookupEnv alone in the entry
+// the broad os entry's nine names, os.LookupEnv alone in the entry
 // ci/sitedeploy/main.go's rule narrows on, and the uses of package os/exec in
 // the entry livepage_test.go's rule narrows on. That entry's pattern admits the
-// whole package as ^exec\., which its six names pin in more than the four the
+// whole package as ^exec\., which its nine names pin in more than the four the
 // test itself uses (exec.Command, exec.CommandContext, exec.Cmd, exec.LookPath):
 // exec.ErrNotFound, exec.ExitError and exec.Error are values of the package no
-// process start needs, and exec.Cmd.Run is a method of one of its types, so a
+// process start needs, and exec.Cmd.Run and exec.Cmd.Environ are methods of one of
+// its types, the latter the one call that hands a child the whole environment of
+// the test process (issue #185; the .golangci.yml comment says the entry refuses
+// it with the rest of the package, unlike in the audit publish groups), so a
 // pattern narrowed to those four no longer passes; a name outside package os/exec
 // may not join it.
 var siteDeployEnvEntries = []forbidGroupEntry{
@@ -56,6 +61,7 @@ var siteDeployEnvEntries = []forbidGroupEntry{
 		refuses: []rootName{
 			{"os", "os.Getenv"},
 			{"os", "os.ExpandEnv"},
+			{"os", "os.Expand"},
 			{"os", "os.Environ"},
 			{"os", "os.StartProcess"},
 			{"os", "os.UserHomeDir"},
@@ -83,6 +89,7 @@ var siteDeployEnvEntries = []forbidGroupEntry{
 			{"os/exec", "exec.ExitError"},
 			{"os/exec", "exec.Error"},
 			{"os/exec", "exec.Cmd.Run"},
+			{"os/exec", "exec.Cmd.Environ"},
 		},
 	},
 }

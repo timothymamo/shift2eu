@@ -54,6 +54,11 @@ type allowListEntry struct {
 // needs.
 var realDataAllowList = []allowListEntry{
 	{
+		file:  "docs/guide/verify-releases.md",
+		value: "www.shift2eu.com",
+		why:   "the project's own site (PRD #297), which the guide tells users to type",
+	},
+	{
 		file:  "test/e2e/testdata/inventory-guide/aws/eu-central-1/autoscaling-groups.json",
 		value: "00000000-0000-0000-0000-000000000001",
 		why:   "a synthetic Auto Scaling group ID in an ARN, all zero but its last digit so the two groups differ",
@@ -137,6 +142,11 @@ var realDataAllowList = []allowListEntry{
 		file:  "test/lint/testdata/cloudreadonly/mod/internal/adapter/source/gcp/cgo.go",
 		value: "C.int",
 		why:   "cgo's C.int type in a Go-source probe, a selector that names no domain although int is a TLD",
+	},
+	{
+		file:  "ci/auditpublish/internal/publish/testdata/report.golden.md",
+		value: "github.com/example",
+		why:   "the run URL of the audit fixtures' documented dummy repository, example/shift2eu, in the report the publish core renders; no account is named example, so it names no one's repository",
 	},
 }
 
