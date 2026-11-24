@@ -1476,7 +1476,7 @@ func imageBuildSections(goreleaser string) []imageBuildSection {
 			current = nil
 		}
 
-		if key, _, ok := strings.Cut(trimmed, ":"); ok && imageKeys[key] {
+		if key, ok := yamlMappingKey(trimmed); ok && imageKeys[key] {
 			current = &imageBuildSection{key: key}
 		}
 	}
@@ -1486,6 +1486,53 @@ func imageBuildSections(goreleaser string) []imageBuildSection {
 	}
 
 	return sections
+}
+
+// yamlMappingKey returns the key a top-level mapping line, its indentation
+// trimmed, opens, as YAML reads it: blanks between the key and its colon are
+// dropped and a quoted key is read as the plain key it spells, so `docker :`,
+// `"docker":` and `'docker':` all open the docker section. A quoted key ends at
+// its closing quote, so a colon inside it does not end it. It reports false
+// when line opens no key.
+func yamlMappingKey(line string) (string, bool) {
+	if line != "" && (line[0] == '"' || line[0] == '\'') {
+		end := yamlQuotedScalarEnd(line)
+		if end < 0 {
+			return "", false
+		}
+
+		rest := strings.TrimLeft(line[end:], " \t")
+		if !strings.HasPrefix(rest, ":") {
+			return "", false
+		}
+
+		return unquote(line[:end]), true
+	}
+
+	key, _, ok := strings.Cut(line, ":")
+
+	return strings.TrimSpace(key), ok
+}
+
+// yamlQuotedScalarEnd returns the index just past the quote that closes the
+// quoted scalar line opens with, or -1 when it does not close on the line. Two
+// single quotes in a row inside a single-quoted scalar, and a backslash and the
+// character after it inside a double-quoted one, do not close it.
+func yamlQuotedScalarEnd(line string) int {
+	quote := line[0]
+
+	for i := 1; i < len(line); i++ {
+		switch c := line[i]; {
+		case quote == '\'' && c == '\'' && i+1 < len(line) && line[i+1] == '\'':
+			i++
+		case quote == '"' && c == '\\':
+			i++
+		case c == quote:
+			return i + 1
+		}
+	}
+
+	return -1
 }
 
 // sectionImage is one image a GoReleaser docker section builds: a label for the
@@ -1502,7 +1549,8 @@ type sectionImage struct {
 // each block list item in the column of its first line, the list's own items,
 // and the dash and blanks that open an item turn into spaces, so an image's
 // keys all start in one column whether or not a key opens the item
-// (`- extra_files:`). A list section whose body holds no such item, an empty or
+// (`- extra_files:`). An item whose dash stands alone starts its image at the
+// line below, its mapping's first key. A list section whose body holds no such item, an empty or
 // a flow list, is taken as one image, so it is checked and, naming nothing,
 // reported: the check fails closed.
 func sectionImages(section imageBuildSection) []sectionImage {
@@ -1523,6 +1571,13 @@ func sectionImages(section imageBuildSection) []sectionImage {
 
 		if item, isItem := yamlListItem(trimmed); isItem && indent == itemColumn {
 			images = append(images, sectionImage{})
+
+			if strings.TrimSpace(withoutYAMLComment(item)) == "" {
+				// A bare dash: the item's mapping starts on the line below,
+				// which gives the image its key column.
+				continue
+			}
+
 			line = strings.Repeat(" ", len(line)-len(item)) + item
 		}
 
@@ -1548,6 +1603,10 @@ func sectionImages(section imageBuildSection) []sectionImage {
 // imageID returns the value of the id key at image's own key column, the
 // column of its first line, or "" when the image names none.
 func imageID(image []string) string {
+	if len(image) == 0 {
+		return ""
+	}
+
 	keyColumn := len(image[0]) - len(strings.TrimLeft(image[0], " \t"))
 
 	for _, raw := range image {
@@ -1574,7 +1633,8 @@ func imageID(image []string) string {
 // a block list, its entries indented under the key or level with it, and only
 // the items in the column of its first item: a list one of its entries carries
 // is not the extra_files list. It reads a flow list such as
-// `extra_files: [LICENSE, NOTICE]` only when it closes on the key's line: a flow
+// `extra_files: [LICENSE, NOTICE]` only when it closes on the key's line, split
+// only at a comma outside a quoted entry (yamlFlowEntries): a flow
 // list spread over several lines is not read, so its files are reported missing,
 // a limit that fails closed. Comments, own-line and inline, and every other key's
 // value are dropped, so only an entry counts.
@@ -1646,7 +1706,7 @@ func extraFiles(image []string) []string {
 				continue
 			}
 
-			for _, entry := range strings.Split(inner, ",") {
+			for _, entry := range yamlFlowEntries(inner) {
 				if entry = strings.TrimSpace(entry); entry != "" {
 					entries = append(entries, unquote(entry))
 				}
@@ -1655,6 +1715,42 @@ func extraFiles(image []string) []string {
 	}
 
 	return entries
+}
+
+// yamlFlowEntries splits inner, a flow list without its brackets, at each comma
+// outside a quoted scalar, as YAML reads it, so a quoted entry that holds commas
+// stays one entry. A quote opens a scalar only where opensYAMLScalar allows, and
+// the scalar closes as withoutYAMLComment reads it. The entries keep their
+// quotes and blanks.
+func yamlFlowEntries(inner string) []string {
+	var (
+		entries []string
+		quote   byte
+	)
+
+	start := 0
+
+	for i := 0; i < len(inner); i++ {
+		c := inner[i]
+
+		switch {
+		case quote == '\'' && c == '\'' && i+1 < len(inner) && inner[i+1] == '\'':
+			i++
+		case quote == '"' && c == '\\':
+			i++
+		case quote != 0:
+			if c == quote {
+				quote = 0
+			}
+		case (c == '"' || c == '\'') && opensYAMLScalar(inner[:i]):
+			quote = c
+		case c == ',':
+			entries = append(entries, inner[start:i])
+			start = i + 1
+		}
+	}
+
+	return append(entries, inner[start:])
 }
 
 // yamlListItem reports whether line, its indentation trimmed, is a YAML block
@@ -1672,8 +1768,9 @@ func yamlListItem(line string) (string, bool) {
 // line or after a blank, outside a quoted scalar, as YAML reads it. A quote
 // opens a scalar only where a scalar starts: at the start of the line, or after
 // `[`, `,`, `- ` or `: `, blanks allowed between, so the apostrophe in it's is
-// text. Inside a single-quoted scalar `”` is an escaped quote and inside a
-// double-quoted one `\"` is, neither closing it.
+// text. Inside a single-quoted scalar two single quotes in a row are an escaped
+// quote and inside a double-quoted one a backslash and a double quote are,
+// neither closing it.
 func withoutYAMLComment(line string) string {
 	var quote byte
 
