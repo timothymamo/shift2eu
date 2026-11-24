@@ -74,6 +74,21 @@ type auditStep struct {
 	refuses []auditCommand
 	// order are commands of runs its script must hold in this order.
 	order []auditCommand
+	// check is the coverage ID of a step that reads the release's files or
+	// its image (rows 7, 8, 9, 11 and 13, review round D of PR 5c): every
+	// command of auditBounded it runs is under a timeout and records its
+	// exit, and it records a failure as "<check> tool-failed" and a timeout as
+	// "<check> timed-out" in not-run.txt, so that nothing the release holds
+	// ends the step and the run's report.
+	check string
+	// budget is a step whose loop stops at an if [ "${SECONDS}" -ge <n> ]
+	// below its own timeout-minutes, so that the loop, not the step's
+	// timeout, ends it.
+	budget bool
+	// guardsChecksums is a download step whose every checksum check is a
+	// guard that names the tool and fails the step (PRD #175, "A failed run
+	// is visible").
+	guardsChecksums bool
 }
 
 // auditRead is one env: or with: key and the one expression it reads.
@@ -112,6 +127,9 @@ type auditJob struct {
 	// downloadsModules names a step that must run go mod download: every Go
 	// command after it runs offline.
 	downloadsModules string
+	// stepsWithinJob is a job whose steps' timeout-minutes add up to no more
+	// than its own.
+	stepsWithinJob bool
 }
 
 // secretValue is the expression that reads the secret name.
@@ -250,28 +268,66 @@ var (
 	binaryGovulncheck = command(regexp.QuoteMeta(`GOFLAGS=-mod=readonly GOPROXY=off timeout 5m govulncheck -mode=binary `),
 		"GOFLAGS=-mod=readonly GOPROXY=off timeout 5m govulncheck -mode=binary: the binary scan runs offline")
 
-	// Row 11: the version command, in a container with the four flags.
-	runtimeCreate = command(regexp.QuoteMeta(`cid="$(`+auditContainerFlags+` "${image}@${digest}" version)"`),
-		`cid="$(`+auditContainerFlags+` "${image}@${digest}" version)": the image's container read-only, with no network, no capability and no new privilege`)
+	// Row 7 (review round D of PR 5c): checksums.txt is the release's, so
+	// only its well-formed lines reach sha256sum.
+	checksumFilter = command(wholeLine(`timeout 1m grep -E '^[0-9a-f]{64}  [A-Za-z0-9._+-]+$' "${rel}/checksums.txt" > "${rel}/checksums.filtered" 2> "${out}/checksums-filter.stderr" || rc=$?`),
+		`timeout 1m grep -E '^[0-9a-f]{64}  [A-Za-z0-9._+-]+$' "${rel}/checksums.txt" > "${rel}/checksums.filtered" ... || rc=$?, on a line of its own: `+
+			`only checksums.txt's well-formed lines reach sha256sum, never a /dev/zero it lists`)
+	checksumFiltered = command(regexp.QuoteMeta(`timeout 10m sha256sum --check --strict checksums.filtered)`),
+		`timeout 10m sha256sum --check --strict checksums.filtered: the release's files against checksums.txt's filtered lines alone`)
+
+	// Row 9: each archive's member streamed through a size cap.
+	unpackTar = command(wholeLine(`*.tar.gz) timeout 2m tar -xOzf "${archive}" shift2eu 2> "${out}/${name}.unpack.stderr" | head -c 134217728 > "${dir}/shift2eu" || rc=$? ;;`),
+		`*.tar.gz) timeout 2m tar -xOzf "${archive}" shift2eu ... | head -c 134217728 > "${dir}/shift2eu" || rc=$? ;;: the member alone, through the 128 MiB size cap`)
+	unpackZip = command(wholeLine(`*.zip) timeout 2m unzip -p "${archive}" shift2eu.exe 2> "${out}/${name}.unpack.stderr" | head -c 134217728 > "${dir}/shift2eu.exe" || rc=$? ;;`),
+		`*.zip) timeout 2m unzip -p "${archive}" shift2eu.exe ... | head -c 134217728 > "${dir}/shift2eu.exe" || rc=$? ;;: the member alone, through the 128 MiB size cap`)
+
+	// Row 10: trivy scans offline, from the database row 2 downloaded: no
+	// database, Java database, check bundle or version download, no telemetry.
+	trivyScans = append(trivyFlags("--skip-db-update", "--skip-java-db-update", "--skip-check-update", "--offline-scan", "--disable-telemetry"),
+		command(regexp.QuoteMeta(`trivy image "${offline[@]}" `), `trivy image "${offline[@]}", the image scan with the offline flags`),
+		command(regexp.QuoteMeta(`trivy sbom "${offline[@]}" `), `trivy sbom "${offline[@]}", the SBOM scan with the offline flags`))
+
+	// Row 11: the version command, in a container with the four flags and
+	// row 13's limits, created under a timeout; the image's filesystem listed
+	// with tar's own warnings in the results directory, never on the log.
+	runtimeCreate = command(wholeLine(`cid="$(timeout 2m `+auditContainerFlags+` --memory 512m --pids-limit 64 "${image}@${digest}" version)" || rc=$?`),
+		`cid="$(timeout 2m `+auditContainerFlags+` --memory 512m --pids-limit 64 "${image}@${digest}" version)" || rc=$?, on a line of its own: `+
+			`the image's container read-only, with no network, no capability, no new privilege, its memory (--memory) and pid (--pids-limit) limits, and a create that cannot hang`)
+	runtimeListing = command(regexp.QuoteMeta(`| tar -tvf - > "${out}/filesystem.txt" 2> "${out}/filesystem.stderr" || rc=$?`),
+		`| tar -tvf - > "${out}/filesystem.txt" 2> "${out}/filesystem.stderr": tar's warnings name the image's entries, so they go to filesystem.stderr, never to the public log`)
 
 	// Row 13: the inputs reach the image by docker cp into a staging container
 	// that is never started, which docker commit turns into the image each
 	// run's container starts from (ADR 0040); each run's container has the
 	// four flags and its limits.
+	hostileCorpus = command(regexp.QuoteMeta(`cp -P .github/security-audit/testdata/hostile-inventories/*.json "${stage}/"`),
+		`cp -P .github/security-audit/testdata/hostile-inventories/*.json "${stage}/": a link the corpus holds is copied as a link, never followed on the runner`)
 	hostileCopy   = command(regexp.QuoteMeta(`docker cp "${stage}" "${staging}:/work/"`), `docker cp "${stage}" "${staging}:/work/", the inputs copied into the staging container`)
 	hostileCommit = command(regexp.QuoteMeta(`docker commit "${staging}" "audit-hostile:${GITHUB_RUN_ID}"`), `docker commit "${staging}" "audit-hostile:${GITHUB_RUN_ID}", the image the runs start from`)
-	hostileCreate = command(regexp.QuoteMeta(`cid="$(`+auditContainerFlags+` --memory 512m --pids-limit 64 "audit-hostile:${GITHUB_RUN_ID}" assess `),
-		`cid="$(`+auditContainerFlags+` --memory 512m --pids-limit 64 "audit-hostile:${GITHUB_RUN_ID}" assess ...: each run read-only, with no network, no capability, no new privilege and its limits`)
+	hostileCreate = command(regexp.QuoteMeta(`cid="$(timeout 2m `+auditContainerFlags+` --memory 512m --pids-limit 64 "audit-hostile:${GITHUB_RUN_ID}" assess `),
+		`cid="$(timeout 2m `+auditContainerFlags+` --memory 512m --pids-limit 64 "audit-hostile:${GITHUB_RUN_ID}" assess ...: each run read-only, with no network, no capability, no new privilege and its limits`)
 
 	// Row 14: the Go image by digest, each target's shape refused before it
 	// reaches the container, and the container with the four flags, its one
 	// tmpfs and the step's offline settings.
-	goImage   = command(wholeLine(`image="golang:${GO_IMAGE}"`), `image="golang:${GO_IMAGE}", the Go image the step's env: pins by digest`)
-	fuzzShape = command(guard(`[[ ! "${name}" =~ ^Fuzz[A-Za-z0-9_]*$ ]] || [[ ! "${pkg}" =~ ^[A-Za-z0-9_][A-Za-z0-9_./-]*$ ]] || [[ "${pkg}" == *..* ]]`),
-		`the fuzz target's shape guard: if [[ ! "${name}" =~ ^Fuzz[A-Za-z0-9_]*$ ]] || [[ ! "${pkg}" =~ ^[A-Za-z0-9_][A-Za-z0-9_./-]*$ ]] || [[ "${pkg}" == *..* ]]; then, `+
-			`echo "::error ...", exit 1 and fi, each on a line of its own`)
-	fuzzCreate = command(`(?m)`+regexp.QuoteMeta(`cid="$(`+auditContainerFlags+` --user 65534:65534 \`)+`$`,
-		`cid="$(`+auditContainerFlags+` --user 65534:65534 \: the fuzz container read-only, with no network, no capability and no new privilege, as nobody`)
+	goImage       = command(wholeLine(`image="golang:${GO_IMAGE}"`), `image="golang:${GO_IMAGE}", the Go image the step's env: pins by digest`)
+	fuzzDiscovery = command(regexp.QuoteMeta(`grep -oE '^func Fuzz[A-Z0-9_][A-Za-z0-9_]*\(f \*testing\.F\)' "${file}"`),
+		`grep -oE '^func Fuzz[A-Z0-9_][A-Za-z0-9_]*\(f \*testing\.F\)' "${file}": the Fuzz targets by their signature alone, never a helper such as Fuzzy`)
+	// fuzzShape records a target of another shape and goes on (review round D
+	// of PR 5c, G): its branch is held whole, continue included.
+	fuzzShape = command(`(?m)^[ \t]*`+regexp.QuoteMeta(`if [[ ! "${name}" =~ ^Fuzz[A-Z0-9_][A-Za-z0-9_]*$ ]] || [[ ! "${pkg}" =~ ^[A-Za-z0-9_][A-Za-z0-9_./-]*$ ]] || [[ "${pkg}" == *..* ]]; then`)+
+		`\n[ \t]+`+regexp.QuoteMeta(`echo "fuzzing unexpected-target" >> "${results}/not-run.txt"`)+`\n[ \t]+continue\n[ \t]*fi$`,
+		`the fuzz target's shape guard: if [[ ! "${name}" =~ ^Fuzz[A-Z0-9_][A-Za-z0-9_]*$ ]] || [[ ! "${pkg}" =~ ^[A-Za-z0-9_][A-Za-z0-9_./-]*$ ]] || [[ "${pkg}" == *..* ]]; then, `+
+			`echo "fuzzing unexpected-target" >> "${results}/not-run.txt", continue and fi, each on a line of its own: a target of another shape is recorded, `+
+			`and ends neither the step nor the run's report`)
+	// fuzzCreate holds the fuzz container's create whole, through its last
+	// line (review round D of PR 5c, B1): a flag added after the pinned ones
+	// would override them.
+	fuzzCreate = command(fuzzCreatePattern(),
+		`the fuzz container's create, whole and each line exactly: cid="$(`+auditContainerFlags+` --memory 10g --pids-limit 512 --user 65534:65534 \, `+
+			auditFuzzTmpfs+` \, its --env lines, "audit-fuzz:${GITHUB_RUN_ID}" \ and its sh -c command: read-only, with no network, no capability, no new privilege, `+
+			`its memory (--memory) and pid (--pids-limit) limits, as nobody, and no flag past the pinned ones`)
 	fuzzTmpfs = command(`(?m)`+regexp.QuoteMeta(`--user 65534:65534 \`)+`\n[ \t]+`+regexp.QuoteMeta(auditFuzzTmpfs+` \`)+`$`,
 		auditFuzzTmpfs+` \, exactly, on the line after --user 65534:65534 \: the fuzz container's one writable path`)
 	fuzzEnv = command(`(?m)`+regexp.QuoteMeta(auditFuzzTmpfs+` \`)+`\n[ \t]+`+regexp.QuoteMeta(`--env GOFLAGS --env GOPROXY `),
@@ -282,6 +338,20 @@ var (
 	rulesetShape = command(guard(`[[ ! "${id}" =~ ^[0-9]+$ ]]`),
 		`the ruleset ID's shape guard: if [[ ! "${id}" =~ ^[0-9]+$ ]]; then, echo "::error ...", exit 1 and fi, each on a line of its own`)
 	rulesetRead = command(regexp.QuoteMeta(`read_api "ruleset-${id}" "repos/${GH_REPO}/rulesets/${id}"`), `read_api "ruleset-${id}" "repos/${GH_REPO}/rulesets/${id}", the ruleset's read`)
+	// The variables endpoints return each variable's value, which no read
+	// keeps (review round D of PR 5c, D): read_api passes its third argument to
+	// gh api as the jq filter, and each names read passes the one that keeps
+	// the names alone.
+	readAPIFilter = command(regexp.QuoteMeta(`local name="$1" endpoint="$2" filter="${3:-.}" rc=0`),
+		`local name="$1" endpoint="$2" filter="${3:-.}" rc=0 in read_api: its third argument is the jq filter, "." when none is given`)
+	readAPIJq = command(regexp.QuoteMeta(`timeout 2m gh api "${endpoint}" --jq "${filter}" > "${out}/api/${name}.json"`),
+		`timeout 2m gh api "${endpoint}" --jq "${filter}" > "${out}/api/${name}.json" in read_api: every read through its filter`)
+	namesReads = []auditCommand{
+		namesRead(`read_api repository-variable-names "repos/${GH_REPO}/actions/variables" '[.variables[].name]'`),
+		namesRead(`read_api "environment-${env}-variable-names" "repos/${GH_REPO}/environments/${env}/variables" '[.variables[].name]'`),
+		namesRead(`read_api repository-secret-names "repos/${GH_REPO}/actions/secrets" '[.secrets[].name]'`),
+		namesRead(`read_api "environment-${env}-secret-names" "repos/${GH_REPO}/environments/${env}/secrets" '[.secrets[].name]'`),
+	}
 
 	// anyTmpfs is a tmpfs in a container that needs none.
 	anyTmpfs = command(`--tmpfs`, "--tmpfs, a writable path in a container that needs none: row 14's is the workflow's one tmpfs")
@@ -289,6 +359,50 @@ var (
 	// goImageDigest is row 14's Go image pin: a tag and its @sha256: digest.
 	goImageDigest = regexp.MustCompile(`^[0-9A-Za-z][0-9A-Za-z._-]*@sha256:[0-9a-f]{64}$`)
 )
+
+// namesRead returns the command of one of row 15's names reads, whole on a
+// line of its own: the jq filter at its end keeps the names alone.
+func namesRead(line string) auditCommand {
+	filter := line[strings.LastIndexByte(line[:len(line)-1], '\'')+1 : len(line)-1]
+
+	return command(wholeLine(line), line+": the names alone, through the jq filter "+filter+", never a value")
+}
+
+// trivyFlags returns one command per flag the offline=(...) array of row 10
+// must hold.
+func trivyFlags(flags ...string) []auditCommand {
+	out := make([]auditCommand, 0, len(flags))
+
+	for _, f := range flags {
+		out = append(out, command(`(?m)^[ \t]*offline=\([^\n]*`+regexp.QuoteMeta(" "+f)+`[ )]`,
+			f+` in trivy's offline=(...) flags: the scans download nothing and send nothing`))
+	}
+
+	return out
+}
+
+// fuzzCreateLines are row 14's docker create, line by line (review round D of
+// PR 5c, B1).
+var fuzzCreateLines = []string{
+	`cid="$(` + auditContainerFlags + ` --memory 10g --pids-limit 512 --user 65534:65534 \`,
+	auditFuzzTmpfs + ` \`,
+	`--env GOFLAGS --env GOPROXY --env GOTOOLCHAIN=local --env GOMODCACHE=/modcache --env GOCACHE=/scratch/go-build \`,
+	`--env GOTMPDIR=/scratch --env TMPDIR=/scratch --env HOME=/scratch --env FUZZ_PKG="${pkg}" --env FUZZ_NAME="${name}" \`,
+	`"audit-fuzz:${GITHUB_RUN_ID}" \`,
+	`sh -c 'cp -R /src /scratch/src && cd /scratch/src && go test -run "^$" -fuzz "^${FUZZ_NAME}\$" -fuzztime 10m "./${FUZZ_PKG}" >&2; rc=$?; ` +
+		`tar -C /scratch/src -cf - "${FUZZ_PKG}/testdata/fuzz" 2> /dev/null; exit "${rc}"')"`,
+}
+
+// fuzzCreatePattern matches fuzzCreateLines as one contiguous command, each
+// line whole.
+func fuzzCreatePattern() string {
+	quoted := make([]string, 0, len(fuzzCreateLines))
+	for _, l := range fuzzCreateLines {
+		quoted = append(quoted, regexp.QuoteMeta(l))
+	}
+
+	return `(?m)^[ \t]*` + strings.Join(quoted, `\n[ \t]+`) + `$`
+}
 
 // auditJobs are the workflow's three jobs, in order, with their steps in
 // order: the closed list a step is recognised by, by name.
@@ -303,6 +417,7 @@ var auditJobs = []auditJob{
 		// pulled anonymously) and no id-token (scorecard runs as the CLI).
 		permissions:      []string{"contents", "attestations", "actions", "issues"},
 		downloadsModules: "Download the Go modules",
+		stepsWithinJob:   true,
 		steps: []auditStep{
 			{name: "Check out the audited commit", uses: auditCheckout},
 			{
@@ -312,7 +427,7 @@ var auditJobs = []auditJob{
 				runs:  []auditCommand{latestTag, tagShape},
 				order: []auditCommand{latestTag, tagShape},
 			},
-			{name: "Download the pinned tools and verify their checksums", runs: []auditCommand{checksumCheck}},
+			{name: "Download the pinned tools and verify their checksums", runs: []auditCommand{checksumCheck}, guardsChecksums: true},
 			{
 				name: "Download the Go modules",
 				runs: []auditCommand{modDownload, command(`go -C tools mod download`, "go -C tools mod download")},
@@ -341,27 +456,36 @@ var auditJobs = []auditJob{
 			},
 			{
 				name: "Verify the release's files, signature and attestations", githubToken: true,
-				runs:  []auditCommand{tagRead, tagShape},
-				order: []auditCommand{tagRead, tagShape},
+				check: "release-integrity", budget: true,
+				runs:  []auditCommand{tagRead, tagShape, checksumFilter, checksumFiltered},
+				order: []auditCommand{tagRead, tagShape, checksumFilter, checksumFiltered},
 			},
 			{
 				name:  "Pull the image anonymously by digest",
+				check: "image-pull",
 				runs:  []auditCommand{anonymousConfig, recordedDigest, imageDigestShape, imagePull},
 				order: []auditCommand{anonymousConfig, recordedDigest, imageDigestShape, imagePull},
 			},
-			{name: "govulncheck on the release binaries", runs: []auditCommand{binaryGovulncheck}},
-			{name: "trivy on the image and its SBOM"},
+			{
+				name:  "govulncheck on the release binaries",
+				check: "binary-vulnerabilities",
+				runs:  []auditCommand{binaryGovulncheck, unpackTar, unpackZip},
+			},
+			{name: "trivy on the image and its SBOM", runs: trivyScans},
 			{
 				name:    "Check the image's runtime settings",
-				runs:    []auditCommand{recordedDigest, imageDigestShape, imageInspect, runtimeCreate},
+				check:   "image-runtime",
+				runs:    []auditCommand{recordedDigest, imageDigestShape, imageInspect, runtimeCreate, runtimeListing},
 				refuses: []auditCommand{anyTmpfs},
-				order:   []auditCommand{recordedDigest, imageDigestShape, imageInspect, runtimeCreate},
+				order:   []auditCommand{recordedDigest, imageDigestShape, imageInspect, runtimeCreate, runtimeListing},
 			},
 			{
 				name:    "Run the CLI on hostile inventory files",
-				runs:    []auditCommand{recordedDigest, imageDigestShape, imageInspect, hostileCopy, hostileCommit, hostileCreate},
+				check:   "hostile-inventories",
+				budget:  true,
+				runs:    []auditCommand{recordedDigest, imageDigestShape, imageInspect, hostileCorpus, hostileCopy, hostileCommit, hostileCreate},
 				refuses: []auditCommand{anyTmpfs},
-				order:   []auditCommand{recordedDigest, imageDigestShape, imageInspect, hostileCopy, hostileCommit, hostileCreate},
+				order:   []auditCommand{recordedDigest, imageDigestShape, imageInspect, hostileCorpus, hostileCopy, hostileCommit, hostileCreate},
 			},
 			{
 				name: "Fuzz the committed Fuzz targets",
@@ -370,13 +494,13 @@ var auditJobs = []auditJob{
 					key: "GO_IMAGE", re: goImageDigest,
 					want: `a tag and its @sha256:<64 hex> digest, so the image is the one Renovate pinned`,
 				}},
-				runs:  []auditCommand{goImage, fuzzShape, fuzzCreate, fuzzTmpfs, fuzzEnv, fuzzTime},
-				order: []auditCommand{goImage, fuzzShape, fuzzCreate, fuzzTmpfs, fuzzEnv},
+				runs:  []auditCommand{fuzzDiscovery, goImage, fuzzShape, fuzzCreate, fuzzTmpfs, fuzzEnv, fuzzTime},
+				order: []auditCommand{fuzzDiscovery, goImage, fuzzShape, fuzzCreate, fuzzTmpfs, fuzzEnv},
 			},
 			{
 				name: "Supply-chain reads", githubToken: true,
-				runs:  []auditCommand{rulesetShape, rulesetRead},
-				order: []auditCommand{rulesetShape, rulesetRead},
+				runs:  append([]auditCommand{readAPIFilter, readAPIJq, rulesetShape, rulesetRead}, namesReads...),
+				order: []auditCommand{readAPIFilter, rulesetShape, rulesetRead},
 			},
 			{
 				name: "Encrypt the checks' results to the model key",
@@ -399,8 +523,9 @@ var auditJobs = []auditJob{
 			// the install step's env: (test/lint, issue #277 round J).
 			{name: "Read the Claude Code pin", runs: []auditCommand{command(`\.github/claude-code\.yaml`, ".github/claude-code.yaml")}},
 			{
-				name: "Install the pinned tools",
-				runs: []auditCommand{checksumCheck, command(`dpkg -i `, "dpkg -i"), command(`\.github/scripts/install-claude-code\.sh `, ".github/scripts/install-claude-code.sh")},
+				name:            "Install the pinned tools",
+				runs:            []auditCommand{checksumCheck, command(`dpkg -i `, "dpkg -i"), command(`\.github/scripts/install-claude-code\.sh `, ".github/scripts/install-claude-code.sh")},
+				guardsChecksums: true,
 			},
 			{
 				name: "Load the AppArmor profile for bubblewrap",
@@ -471,7 +596,7 @@ var auditJobs = []auditJob{
 		permissions: []string{"contents", "actions", "attestations"},
 		steps: []auditStep{
 			{name: "Check out the audited commit", uses: auditCheckout},
-			{name: "Download the pinned tools and verify their checksums", runs: []auditCommand{checksumCheck}},
+			{name: "Download the pinned tools and verify their checksums", runs: []auditCommand{checksumCheck}, guardsChecksums: true},
 			{
 				name: "List the run's artifacts and download the model's ciphertext", githubToken: true,
 				runs:    []auditCommand{artifactsPublic, artifactFile, artifactID, artifactDigest, artifactShape, artifactZip, zipDigest, zipUnpack, zipOneFile},
@@ -601,7 +726,14 @@ var auditPin = regexp.MustCompile(`^([A-Za-z0-9_.-]+/[A-Za-z0-9_./-]+)@([0-9a-f]
 // hand-off, every secret and variable read in exactly one place, and every
 // container of the checks job read-only, networkless, capability-less and
 // unprivileged, with no mount, no socket, no registry login and no tmpfs but
-// row 14's (PR 5c). A document it cannot read, or an empty one, is refused.
+// row 14's (PR 5c). Since review round D of PR 5c it also holds that nothing
+// the release holds ends a step (timeouts, exit codes and not-run records in
+// rows 7 to 13, the checksums filter, the size cap, loop budgets and the
+// checks job's steps within its timeout), that no container is loosened past
+// its pinned flags, run, entered, or started unless created with the four
+// flags, that row 15 keeps names alone, and that every tool download's
+// checksum check is a guard that names its tool. A document it cannot read, or
+// an empty one, is refused.
 func AuditWorkflow(src []byte) []string {
 	if strings.TrimSpace(string(src)) == "" {
 		return []string{"the audit workflow is empty, so this check cannot tell what it runs"}
@@ -611,6 +743,7 @@ func AuditWorkflow(src []byte) []string {
 	a := &auditReader{r: r, allowed: map[int][]string{}}
 
 	a.lineRules()
+	a.containerStarts()
 
 	lines, err := yamlread.SplitLines(src)
 	if err != nil {
@@ -685,10 +818,29 @@ func (a *auditReader) lineRules() {
 // auditDockerWord matches a docker command on a line.
 var auditDockerWord = regexp.MustCompile("(?:^|[\\s;&|(`\"'])docker\\s")
 
-// auditDockerRefused matches the docker commands the workflow never runs: a
-// registry login (the image is pulled anonymously) and docker run, which
-// starts a container in one step with whatever flags it is given.
-var auditDockerRefused = regexp.MustCompile("(?:^|[\\s;&|(`\"'])docker\\s+(login|run)(?:$|\\s)")
+// auditDockerRefused are the docker subcommands the workflow never runs, read
+// after docker's global flags and its container or image management word
+// (review round D of PR 5c, B3): a registry login (the image is pulled
+// anonymously), run, which starts a container in one step with whatever flags
+// it is given, and exec, which runs a command in a container that is already
+// running.
+var auditDockerRefused = []string{"login", "run", "exec"}
+
+// auditDockerGlobalValue are docker's global flags that take a value, which
+// a subcommand is read after.
+var auditDockerGlobalValue = []string{"--config", "-c", "--context", "-H", "--host", "-l", "--log-level", "--tlscacert", "--tlscert", "--tlskey"}
+
+// The flags no container of the workflow is given with any value but its
+// one (review round D of PR 5c, B2), and those it is given with none: an
+// unconfined security profile, an environment file, a cgroup namespace,
+// another network (container:<id> included), a sysctl or another user.
+var (
+	auditSecurityOpt = regexp.MustCompile(`(?:^|\s)--security-opt[ =]"?([^\s"]*)`)
+	auditNetworkOpt  = regexp.MustCompile(`(?:^|\s)--(?:network|net)[ =]"?([^\s"]*)`)
+	auditUserOpt     = regexp.MustCompile(`(?:^|\s)--user[ =]"?([^\s"]*)`)
+	auditShortUser   = regexp.MustCompile(`(?:^|\s)-u[ ]+"?([^\s"]*)`)
+	auditFlagRefused = regexp.MustCompile(`(?:^|\s)(--env-file|--cgroupns|--sysctl)(?:[ =]|$)`)
+)
 
 // auditContainerRisk matches what no container of the workflow is given, on
 // any line: a volume or a mount, privileges, a host namespace, a capability or
@@ -714,17 +866,20 @@ func (a *auditReader) containerRules(num int, line string, inDocker bool) bool {
 		a.r.fail("line %d: %q names the Docker socket (docker.sock): no step hands a container, or anything else, the Docker daemon (ADR 0040)", num, trimmed)
 	}
 
-	if m := auditDockerRefused.FindStringSubmatch(line); m != nil {
-		if m[1] == "login" {
-			a.r.fail("line %d: %q runs docker login: the image is pulled anonymously, with no registry credential (ADR 0040)", num, trimmed)
+	for _, spelled := range dockerRefusedCommands(line) {
+		if strings.HasSuffix(spelled, " login") {
+			a.r.fail("line %d: %q runs %s: the image is pulled anonymously, with no registry credential (ADR 0040)", num, trimmed, spelled)
 		} else {
-			a.r.fail("line %d: %q runs docker run, want docker create with --read-only --network none --cap-drop ALL --security-opt no-new-privileges and docker start (ADR 0040)", num, trimmed)
+			a.r.fail("line %d: %q runs %s, want docker create with --read-only --network none --cap-drop ALL --security-opt no-new-privileges and docker start: "+
+				"no container is run or entered any other way (ADR 0040)", num, trimmed, spelled)
 		}
 	}
 
 	if m := auditContainerRisk.FindStringSubmatch(line); m != nil {
 		a.r.fail("line %d: %q gives a container %s: no container gets a mount, a volume, privileges, a host namespace, a capability or a device; its inputs reach it by docker cp (ADR 0040)", num, trimmed, m[1])
 	}
+
+	a.containerOptions(num, line, trimmed, docker)
 
 	if docker {
 		if auditShortVolume.MatchString(line) {
@@ -739,6 +894,135 @@ func (a *auditReader) containerRules(num int, line string, inDocker bool) bool {
 	}
 
 	return docker && strings.HasSuffix(line, `\`)
+}
+
+// containerOptions refuses, on a line outside the model job, a container
+// option the workflow gives no container, or gives only one value (review
+// round D of PR 5c, B2): a security option but no-new-privileges, a network
+// but none, a user but 65534:65534, an environment file, a cgroup namespace
+// or a sysctl. -u is read on a docker command's lines alone, where it is a
+// user and not some other program's flag.
+func (a *auditReader) containerOptions(num int, line, trimmed string, docker bool) {
+	only := []struct {
+		re          *regexp.Regexp
+		flag, value string
+	}{
+		{auditSecurityOpt, "--security-opt", "no-new-privileges"},
+		{auditNetworkOpt, "--network", "none"},
+		{auditUserOpt, "--user", "65534:65534"},
+	}
+
+	if docker {
+		only = append(only, struct {
+			re          *regexp.Regexp
+			flag, value string
+		}{auditShortUser, "-u", "65534:65534"})
+	}
+
+	for _, o := range only {
+		for _, m := range o.re.FindAllStringSubmatch(line, -1) {
+			if m[1] != o.value {
+				a.r.fail("line %d: %q gives a container %s %s: the one value of %s is %s (ADR 0040)", num, trimmed, o.flag, m[1], o.flag, o.value)
+			}
+		}
+	}
+
+	for _, m := range auditFlagRefused.FindAllStringSubmatch(line, -1) {
+		a.r.fail("line %d: %q gives a container %s: no container gets an environment file, a cgroup namespace or a sysctl (ADR 0040)", num, trimmed, m[1])
+	}
+}
+
+// dockerRefusedCommands returns, for every docker command on line whose
+// subcommand is one of auditDockerRefused, the command as it is spelled from
+// docker to the subcommand: docker's global flags and the container or image
+// management word are read past, so that docker --context x run and docker
+// container exec are what they are.
+func dockerRefusedCommands(line string) []string {
+	var out []string
+
+	for _, loc := range auditDockerWord.FindAllStringIndex(line, -1) {
+		words := strings.Fields(line[loc[1]:])
+		spelled := []string{"docker"}
+
+		i := 0
+		for i < len(words) && strings.HasPrefix(words[i], "-") {
+			spelled = append(spelled, words[i])
+
+			if slices.Contains(auditDockerGlobalValue, words[i]) && i+1 < len(words) {
+				i++
+				spelled = append(spelled, words[i])
+			}
+
+			i++
+		}
+
+		if i < len(words) && (words[i] == "container" || words[i] == "image") {
+			spelled = append(spelled, words[i])
+			i++
+		}
+
+		if i < len(words) && slices.Contains(auditDockerRefused, words[i]) {
+			out = append(out, strings.Join(append(spelled, words[i]), " "))
+		}
+	}
+
+	return out
+}
+
+// auditCreateAssign matches a variable assigned the ID of a container a
+// docker create makes, with or without a timeout, and what follows create.
+var auditCreateAssign = regexp.MustCompile(`(?:^|[\s;&|])([A-Za-z_][A-Za-z0-9_]*)="\$\((?:timeout \S+ )?docker (?:container )?create( [^\n]*)?`)
+
+// auditStart matches a docker start and its arguments.
+var auditStart = regexp.MustCompile("(?:^|[\\s;&|(`\"'])docker (?:container )?start( [^\\n]*)?")
+
+// auditStartVar matches a variable a docker start names.
+var auditStartVar = regexp.MustCompile(`\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?`)
+
+// containerStarts holds every docker start outside the model job to a
+// container that a docker create made with the four flags (review round D of
+// PR 5c, B4): a variable every create assigns with --read-only --network none
+// --cap-drop ALL --security-opt no-new-privileges first. A staging container,
+// created with no flag, only receives inputs by docker cp, and is never
+// started.
+func (a *auditReader) containerStarts() {
+	model := a.jobLines("model")
+	hardened := map[string]bool{}
+
+	code := func(i int) bool {
+		return !model[i+1] && !strings.HasPrefix(strings.TrimSpace(a.r.raw[i]), "#")
+	}
+
+	for i, line := range a.r.raw {
+		if !code(i) {
+			continue
+		}
+
+		for _, m := range auditCreateAssign.FindAllStringSubmatch(line, -1) {
+			ok, seen := hardened[m[1]]
+			flagged := strings.HasPrefix(m[2], strings.TrimPrefix(auditContainerFlags, "docker create")+" ")
+			hardened[m[1]] = flagged && (ok || !seen)
+		}
+	}
+
+	for i, line := range a.r.raw {
+		if !code(i) {
+			continue
+		}
+
+		for _, m := range auditStart.FindAllStringSubmatch(line, -1) {
+			v := auditStartVar.FindStringSubmatch(m[1])
+
+			switch {
+			case v == nil:
+				a.r.fail("line %d: %q runs docker start of no container a variable names, want ${cid}, the container a docker create made with %s (ADR 0040)",
+					i+1, strings.TrimSpace(line), strings.TrimPrefix(auditContainerFlags, "docker create "))
+			case !hardened[v[1]]:
+				a.r.fail("line %d: %q runs docker start of ${%s}, which no docker create made with %s first: only such a container is started, and a staging container never is (ADR 0040)",
+					i+1, strings.TrimSpace(line), v[1], strings.TrimPrefix(auditContainerFlags, "docker create "))
+			}
+		}
+	}
 }
 
 // auditSection is one job of the workflow as its raw lines hold it: its key
@@ -969,7 +1253,58 @@ func (a *auditReader) job(e yamlread.Entry, spec auditJob) {
 	}
 
 	if v, ok := keys["steps"]; ok {
-		a.steps(v, path, spec)
+		steps := a.steps(v, path, spec)
+
+		if t, ok := keys["timeout-minutes"]; ok && spec.stepsWithinJob {
+			a.stepsWithin(t, path, steps)
+		}
+	}
+}
+
+// auditJobOverhead is the time a job's timeout counts beyond its steps: the
+// runner's job set-up and the actions' post steps.
+const auditJobOverhead = 5
+
+// stepsWithin holds a job's steps' timeout-minutes, and auditJobOverhead, to
+// the job's own (review round D of PR 5c, A4): when they add up to more, the
+// job's timeout can fire while a step is still within its own, and then no
+// later step runs at all.
+func (a *auditReader) stepsWithin(t yamlread.Entry, path string, steps []auditParsedStep) {
+	value, err := yamlread.Single(t)
+	if err != nil {
+		return
+	}
+
+	job, err := strconv.Atoi(value)
+	if err != nil {
+		return
+	}
+
+	sum := 0
+
+	for _, s := range steps {
+		e, ok := s.keys["timeout-minutes"]
+		if !ok {
+			continue
+		}
+
+		v, err := yamlread.Single(e)
+		if err != nil {
+			continue
+		}
+
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			continue
+		}
+
+		sum += n
+		if sum+auditJobOverhead > job {
+			a.r.fail("line %d: %s: its steps' timeout-minutes add up to %d at the step %q, which with the job's %d minutes of set-up and post steps is past the job's timeout-minutes of %d: "+
+				"the steps stay within the job's timeout, so that a step's own timeout fires before the job's (ADR 0040)", e.Num, path, sum, s.name, auditJobOverhead, job)
+
+			return
+		}
 	}
 }
 
@@ -1020,18 +1355,19 @@ type auditParsedStep struct {
 	keys map[string]yamlread.Entry
 }
 
-// steps checks a job's steps: the closed list, in order, and each step.
-func (a *auditReader) steps(e yamlread.Entry, path string, spec auditJob) {
+// steps checks a job's steps: the closed list, in order, and each step. It
+// returns the steps it read.
+func (a *auditReader) steps(e yamlread.Entry, path string, spec auditJob) []auditParsedStep {
 	block := a.r.block(e, path+": steps")
 	if block == nil {
-		return
+		return nil
 	}
 
 	items, err := yamlread.Sequence(block)
 	if err != nil {
 		a.r.fail("%s: steps: %v", path, err)
 
-		return
+		return nil
 	}
 
 	parsed := make([]auditParsedStep, 0, len(items))
@@ -1079,6 +1415,8 @@ func (a *auditReader) steps(e yamlread.Entry, path string, spec auditJob) {
 			}
 		}
 	}
+
+	return parsed
 }
 
 // stepOrder holds the job's steps to the closed list: every name on it, in its
@@ -1131,8 +1469,14 @@ func (a *auditReader) stepOrder(path string, got []auditParsedStep, spec auditJo
 // step checks one step: its timeout, its action or script, and what its spec,
 // when it has one, wants of it.
 func (a *auditReader) step(s auditParsedStep, path string, want *auditStep, downloaded bool) {
+	minutes := 0
+
 	if t, ok := s.keys["timeout-minutes"]; ok {
 		a.timeout(t, path, auditJobLimit-1)
+
+		if v, err := yamlread.Single(t); err == nil {
+			minutes, _ = strconv.Atoi(v)
+		}
 	} else {
 		a.r.fail("%s has no timeout-minutes, want one on every step", path)
 	}
@@ -1155,7 +1499,7 @@ func (a *auditReader) step(s auditParsedStep, path string, want *auditStep, down
 	}
 
 	if hasRun {
-		a.run(run, path, want, env, downloaded)
+		a.run(run, path, want, env, downloaded, minutes)
 	}
 }
 
@@ -1436,8 +1780,9 @@ func (a *auditReader) appToken(with yamlread.Entry, path string, want *auditStep
 	}
 }
 
-// run checks a run: step's script.
-func (a *auditReader) run(e yamlread.Entry, path string, want *auditStep, env []auditVar, downloaded bool) {
+// run checks a run: step's script; minutes is the step's timeout-minutes, 0
+// when it has none.
+func (a *auditReader) run(e yamlread.Entry, path string, want *auditStep, env []auditVar, downloaded bool, minutes int) {
 	text, err := yamlread.LiteralBlock(a.r.raw, e)
 	if err != nil {
 		a.r.fail("%s: run: %v", path, err)
@@ -1512,6 +1857,120 @@ func (a *auditReader) run(e yamlread.Entry, path string, want *auditStep, env []
 	}
 
 	a.order(code, path, want.order)
+
+	if want.check != "" {
+		a.bounded(code, path, want.check)
+	}
+
+	if want.budget {
+		a.budget(code, path, minutes)
+	}
+
+	if want.guardsChecksums {
+		a.checksumGuards(code, path)
+	}
+}
+
+// auditBounded matches the commands that read the release's files or its
+// image (review round D of PR 5c, A1): each one runs under a timeout of its
+// own and records its exit with || rc=$?.
+var auditBounded = regexp.MustCompile(`(?:^|[\s;&|(])(sha256sum|tar|unzip|docker (?:export|create|cp|commit|image inspect|save)|cosign|gh attestation verify)(?:\s|$)`)
+
+// bounded holds a step that reads the release or its image (want.check) to
+// what nothing the release holds can make it skip: every command of
+// auditBounded under a timeout, its exit recorded with || rc=$?, and both a
+// failure and a timeout recorded as the check not run.
+func (a *auditReader) bounded(code, path, check string) {
+	for _, line := range logicalLines(code) {
+		for _, m := range auditBounded.FindAllStringSubmatchIndex(line, -1) {
+			name := line[m[2]:m[3]]
+			quoted := strings.TrimSpace(line)
+
+			if !strings.Contains(line[:m[2]], "timeout ") {
+				a.r.fail("%s runs %s without its timeout (%q): a command that reads the release's files or its image runs under timeout <duration> of its own, "+
+					"so that one the release makes wait is recorded as %s timed-out, not ended by the step's timeout", path, name, quoted, check)
+			}
+
+			if !strings.Contains(line[m[2]:], " || rc=$?") {
+				a.r.fail("%s runs %s without || rc=$? (%q): its exit is recorded, so that a failure is %s tool-failed, not the end of the step under set -e",
+					path, name, quoted, check)
+			}
+		}
+	}
+
+	for _, why := range []string{"tool-failed", "timed-out"} {
+		record := `echo "` + check + ` ` + why + `" >> "${results}/not-run.txt"`
+		if !strings.Contains(code, record) {
+			a.r.fail("%s records no %s %s (%s): a command of the check that fails or times out names the check as not run, never as clean", path, check, why, record)
+		}
+	}
+}
+
+// logicalLines returns the script's lines with every \ continuation joined
+// onto the line it continues.
+func logicalLines(code string) []string {
+	var out []string
+
+	cur := ""
+
+	for _, line := range strings.Split(code, "\n") {
+		if body, ok := strings.CutSuffix(line, `\`); ok {
+			cur += body + " "
+
+			continue
+		}
+
+		out = append(out, cur+line)
+		cur = ""
+	}
+
+	if cur != "" {
+		out = append(out, cur)
+	}
+
+	return out
+}
+
+// auditBudget matches a loop's budget: the seconds since the step began,
+// against a number.
+var auditBudget = regexp.MustCompile(`(?m)^[ \t]*if \[ "\$\{SECONDS\}" -ge ([0-9]+) \]; then$`)
+
+// budget holds a step's loop to a budget below the step's own timeout
+// (review round D of PR 5c, A3): the loop, not the step's timeout, ends it,
+// and what it did not reach is recorded.
+func (a *auditReader) budget(code, path string, minutes int) {
+	found := auditBudget.FindAllStringSubmatch(code, -1)
+	if len(found) == 0 {
+		a.r.fail(`%s has no loop budget (if [ "${SECONDS}" -ge <seconds> ]; then, on a line of its own): its loop stops below the step's timeout-minutes, so that what it did not reach is recorded, not lost to the step's timeout`, path)
+
+		return
+	}
+
+	for _, m := range found {
+		n, err := strconv.Atoi(m[1])
+		if err != nil || (minutes > 0 && n >= minutes*60) {
+			a.r.fail(`%s's loop budget of %s seconds (if [ "${SECONDS}" -ge %s ]) is not below its timeout-minutes of %d, %d seconds: the step's timeout would end the loop first`,
+				path, m[1], m[1], minutes, minutes*60)
+		}
+	}
+}
+
+// auditChecksumGuard matches one download's checksum guard, whole: the pin
+// compared by sha256sum under an if !, then its refusalBranch.
+var auditChecksumGuard = regexp.MustCompile(`(?m)^[ \t]*if ! echo "\$\{[A-Z0-9_]+_SHA256\}  \$\{[A-Za-z_]+\}/[A-Za-z0-9._-]+" \| sha256sum --check --strict -` + refusalBranch)
+
+// checksumGuards holds every checksum check of a download step to a guard
+// (round C of PR 5c, PRD #175 "A failed run is visible"): bare, the step
+// fails with sha256sum's own line alone, which names no cause.
+func (a *auditReader) checksumGuards(code, path string) {
+	rest := auditChecksumGuard.ReplaceAllString(code, "")
+
+	for _, line := range strings.Split(rest, "\n") {
+		if strings.Contains(line, "sha256sum") {
+			a.r.fail(`%s runs %q, a checksum check that is no guard: want if ! echo "${<TOOL>_SHA256}  <file>" | sha256sum --check --strict -; then, `+
+				`echo "::error ..." naming the tool and the runbook step, exit 1 and fi, each on a line of its own (PRD #175, a failed run is visible)`, path, strings.TrimSpace(line))
+		}
+	}
 }
 
 // lineAt returns the line of text that holds the byte at, trimmed: the text a
