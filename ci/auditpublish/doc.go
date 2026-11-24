@@ -1,21 +1,26 @@
 // Command auditpublish is the scheduled security audit's publish program
 // (PRD #175 milestone 2, ADR 0040, "The publish program's GitHub side"), run
-// by the audit workflow's model and publish jobs. It has one subcommand today:
+// by the audit workflow's model and publish jobs. It has three subcommands:
 //
 //   - artifacts -job model|publish -gh <path> -tmp <dir>: lists the run's
 //     artifacts and fails unless they are exactly the ones the job expects.
-//
-// The second, publish -result <path> -reports <dir> -gh <path> -gitleaks
-// <path> -tmp <dir>, which files the report's pull request, the draft
-// advisories and the issues, arrives with PR 4b; until then it is a usage
-// error like an unknown subcommand.
+//   - image -result <path> -gh <path> -tmp <dir>: on a read-only client with
+//     the job's token, checks that the result's tag is a release and that its
+//     image digest has the release workflow's provenance attestation.
+//   - publish -result <path> -reports <dir> -gh <path> -gitleaks <path> -tmp
+//     <dir>: files the report's pull request and the issues of the previous
+//     report's open public findings, every text scanned before the first
+//     write. The draft advisories come with PR 4c; until then a private
+//     finding is not filed, and the run ends with outcome 5.
 //
 // It reads the step's environment through one os.LookupEnv, passed to run:
 // GH_TOKEN, which it hands to gh unread, GITHUB_SERVER_URL,
-// GITHUB_REPOSITORY, GITHUB_RUN_ID and GITHUB_STEP_SUMMARY, and nothing else
-// (publish will also read GITHUB_SHA and AUDIT_FINGERPRINT_KEY). Before
-// anything else it refuses to run when the App's private key, either age
-// private key or the Claude Code token is set in its environment at all.
+// GITHUB_REPOSITORY, GITHUB_RUN_ID and GITHUB_STEP_SUMMARY, for image and
+// publish also GITHUB_SHA (40 lowercase hex), and for publish
+// AUDIT_FINGERPRINT_KEY (32 bytes or more), and nothing else. image and
+// publish refuse a GITHUB_SERVER_URL other than exactly https://github.com.
+// Before anything else it refuses to run when the App's private key, either
+// age private key or the Claude Code token is set in its environment at all.
 //
 // It prints exactly one line, to standard output and appended to the step
 // summary, and exits with that line's code; a usage error also writes one

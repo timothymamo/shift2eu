@@ -4,14 +4,17 @@ package main
 // 2, ADR 0040, "The publish program's GitHub side"). It is this test binary,
 // started through a symbolic link named gh, as the GitHub side's fake is: the
 // library gives gh an environment of its own, so no variable could mark it, and
-// the name it was started under is what TestMain reads.
+// the name it was started under is what TestMain reads. The same binary stands
+// in for gitleaks, through a link of that name: a scanner that finds nothing.
 //
-// It records every call's arguments and answers from one canned answer, the
-// shape `gh api --include` writes: the status line, the headers, a blank line and
-// the body, exit 0 for a 2xx status and 1 otherwise, with a marker on stderr
-// that the program must never print. It records no environment: the one gh is
-// given belongs to the GitHub side's tests, and this package must not read the
-// process's environment at all (forbidigo group audit-publish-main-env).
+// It records every call's arguments and answers it from its answers, the shape
+// `gh api --include` writes: the status line, the headers, a blank line and the
+// body, exit 0 for a 2xx status and 1 otherwise, with a marker on stderr that
+// the program must never print. An answer names the method and endpoint it
+// answers, or answers every call when they are empty. It records no environment:
+// the one gh is given belongs to the GitHub side's tests, and this package must
+// not read the process's environment at all (forbidigo group
+// audit-publish-main-env).
 
 import (
 	"bufio"
@@ -27,12 +30,14 @@ import (
 )
 
 const (
-	// fakeGHName is the link's name, which TestMain reads.
-	fakeGHName = "gh"
+	// fakeGHName and fakeGitleaksName are the links' names, which TestMain
+	// reads.
+	fakeGHName       = "gh"
+	fakeGitleaksName = "gitleaks"
 
 	// The fake's files, next to its link.
-	ghAnswerFile = "gh.answer.json"
-	ghCallsFile  = "gh.calls.jsonl"
+	ghAnswersFile = "gh.answers.json"
+	ghCallsFile   = "gh.calls.jsonl"
 
 	// fakeOutputMarker is what the fake writes to its stderr beside gh's own
 	// error line, so a test can show that none of it reaches the program's
@@ -40,23 +45,37 @@ const (
 	fakeOutputMarker = "FAKE-TOOL-OUTPUT"
 )
 
-// TestMain makes the test binary stand in for gh: the fake is a symbolic link
-// named gh to this binary (newFakeGH), so the name it was started under says
-// which one to be.
+// TestMain makes the test binary stand in for gh and gitleaks: both fakes are
+// symbolic links to this binary (newFakeGH, newFakeGitleaks), so the name it
+// was started under says which one to be.
 func TestMain(m *testing.M) {
-	if filepath.Base(os.Args[0]) == fakeGHName {
+	switch filepath.Base(os.Args[0]) {
+	case fakeGHName:
 		os.Exit(fakeGHMain())
+	case fakeGitleaksName:
+		// The fake gitleaks finds nothing in any text: it exits 0.
+		os.Exit(0)
 	}
 
 	os.Exit(m.Run())
 }
 
-// fakeAnswer is the one answer the fake gh gives every call.
+// fakeAnswer is one answer the fake gh gives: the calls its method and
+// endpoint name, or every call when they are empty.
 type fakeAnswer struct {
 	// Status is the HTTP status of the answer's status line.
 	Status int `json:"status"`
 	// Body is the answer's body, marshalled to JSON.
 	Body any `json:"body"`
+	// Method and Endpoint answer only the calls they match; empty answers
+	// every call.
+	Method   string `json:"method,omitempty"`
+	Endpoint string `json:"endpoint,omitempty"`
+}
+
+// matches reports whether the answer answers a call.
+func (a fakeAnswer) matches(method, endpoint string) bool {
+	return (a.Method == "" || a.Method == method) && (a.Endpoint == "" || a.Endpoint == endpoint)
 }
 
 // fakeCall is one invocation of the fake gh as it recorded it.
@@ -77,6 +96,14 @@ type fakeGH struct {
 func newFakeGH(t *testing.T, answer fakeAnswer) *fakeGH {
 	t.Helper()
 
+	return newRoutedFakeGH(t, answer)
+}
+
+// newRoutedFakeGH makes a fake gh that answers each call from the first of
+// answers that matches it, and 404 when none does.
+func newRoutedFakeGH(t *testing.T, answers ...fakeAnswer) *fakeGH {
+	t.Helper()
+
 	exe, err := os.Executable()
 	if err != nil {
 		t.Fatalf("os.Executable: %v", err)
@@ -91,16 +118,39 @@ func newFakeGH(t *testing.T, answer fakeAnswer) *fakeGH {
 		t.Fatalf("link the fake gh: %v", err)
 	}
 
-	body, err := json.Marshal(answer)
+	body, err := json.Marshal(answers)
 	if err != nil {
-		t.Fatalf("marshal the fake gh's answer: %v", err)
+		t.Fatalf("marshal the fake gh's answers: %v", err)
 	}
 
-	if err := os.WriteFile(filepath.Join(dir, ghAnswerFile), body, 0o600); err != nil {
-		t.Fatalf("write the fake gh's answer: %v", err)
+	if err := os.WriteFile(filepath.Join(dir, ghAnswersFile), body, 0o600); err != nil {
+		t.Fatalf("write the fake gh's answers: %v", err)
 	}
 
 	return &fakeGH{Path: filepath.Join(dir, fakeGHName), dir: dir}
+}
+
+// newFakeGitleaks makes a fake gitleaks, a link to this binary that finds
+// nothing in any text, and returns its path.
+func newFakeGitleaks(t *testing.T) string {
+	t.Helper()
+
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatalf("os.Executable: %v", err)
+	}
+
+	dir := filepath.Join(t.TempDir(), "bin")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatalf("mkdir %s: %v", dir, err)
+	}
+
+	path := filepath.Join(dir, fakeGitleaksName)
+	if err := os.Symlink(exe, path); err != nil {
+		t.Fatalf("link the fake gitleaks: %v", err)
+	}
+
+	return path
 }
 
 // Calls returns every call the fake recorded, in order.
@@ -137,8 +187,8 @@ func (f *fakeGH) Calls(t *testing.T) []fakeCall {
 	return out
 }
 
-// fakeGHMain is the fake gh: it records its arguments and answers them from its
-// one answer, the way gh api --include does.
+// fakeGHMain is the fake gh: it records its arguments and answers them from
+// its answers, the way gh api --include does.
 func fakeGHMain() int {
 	dir := filepath.Dir(os.Args[0])
 
@@ -150,18 +200,15 @@ func fakeGHMain() int {
 		return 1
 	}
 
-	data, err := os.ReadFile(filepath.Join(dir, ghAnswerFile)) //nolint:gosec // G304: the fake's own file, next to its link in the test's temporary directory
+	answer, ok, err := nextAnswer(dir, record.Args)
 	if err != nil {
 		_, _ = fmt.Fprintln(os.Stderr, "fake gh:", err)
 
 		return 1
 	}
 
-	var answer fakeAnswer
-	if err := json.Unmarshal(data, &answer); err != nil {
-		_, _ = fmt.Fprintln(os.Stderr, "fake gh:", err)
-
-		return 1
+	if !ok {
+		answer = fakeAnswer{Status: 404, Body: map[string]string{"message": "no route"}}
 	}
 
 	body, err := json.Marshal(answer.Body)
@@ -186,6 +233,33 @@ func fakeGHMain() int {
 	_, _ = fmt.Fprintf(os.Stderr, "gh: %s (HTTP %d) %s\n", fakeReason(answer.Status), answer.Status, fakeOutputMarker)
 
 	return 1
+}
+
+// nextAnswer returns the first answer that matches the call of args.
+func nextAnswer(dir string, args []string) (fakeAnswer, bool, error) {
+	data, err := os.ReadFile(filepath.Join(dir, ghAnswersFile)) //nolint:gosec // G304: the fake's own file, next to its link in the test's temporary directory
+	if err != nil {
+		return fakeAnswer{}, false, err
+	}
+
+	var answers []fakeAnswer
+	if err := json.Unmarshal(data, &answers); err != nil {
+		return fakeAnswer{}, false, err
+	}
+
+	// gh api --method <M> --include -H ... -H ... [--input -] <endpoint>.
+	method, endpoint := "", ""
+	if len(args) >= 9 {
+		method, endpoint = args[2], args[len(args)-1]
+	}
+
+	for _, answer := range answers {
+		if answer.matches(method, endpoint) {
+			return answer, true, nil
+		}
+	}
+
+	return fakeAnswer{}, false, nil
 }
 
 // fakeReason is the status line's reason phrase.

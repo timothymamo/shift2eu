@@ -168,7 +168,7 @@ func TestVersionText(t *testing.T) {
 	}{
 		{
 			name: "the footer's version span",
-			page: `<footer><p class="mono"><span id="site-version">v1.2.3</span></p></footer>`,
+			page: `<footer><p class="footer-links"><span class="mono" id="site-version">v1.2.3</span></p></footer>`,
 			want: "v1.2.3",
 		},
 		{

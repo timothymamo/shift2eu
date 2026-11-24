@@ -39,7 +39,7 @@ const (
 // wording does not refuse the whole run.
 var resultTextRules = []string{
 	"Write every text field of the result file in printable ASCII only: the characters U+0020 to U+007E, and in a multi-line field also LF and TAB. One character outside them, a typographic quote or dash, a non-breaking space or a non-ASCII name, refuses the whole run; write a non-ASCII text you quote in ASCII words instead.",
-	"Do not quote an MD5 or other 32-hex digest, an undashed UUID, a Rekor entry UUID, a SHA-384 or SHA-512 hex digest, or a go.sum h1: hash in any field: such a run refuses the whole run. Name the file and line that holds it instead.",
+	"Do not quote an MD5 or other 32-hex digest, an undashed UUID, a Rekor entry UUID, a SHA-384 or SHA-512 hex digest, or a go.sum h1: hash in any field: quoting one refuses the whole run. Name the file and line that holds it instead.",
 	"A 40- or 64-hex run (a commit SHA or a SHA-256 digest) is accepted only if its bytes do not all decode to printable ASCII: a token or text written as hex is refused, and refuses the whole run.",
 	"Never write gitleaks' inline allow comment literally in any field, in any letter case: gitleaks honours it, so a text holding it refuses the whole run. Name it in words instead.",
 }
