@@ -9,11 +9,14 @@
 // Every command the page shows is a command the section spells out, and the
 // flags the page shows for the command that verifies the bundle sit in the
 // section's own `gh attestation verify` command, the one whose arguments name
-// the bundle. Every step phrase of the page is a phrase of the section and every
-// step phrase of the section's is one of the page's, and both carry the site's
-// exact URL and the first-visit advice against an attacker who strips HTTPS from
-// an http:// link: a phrase either document lost fails the check, so neither is
-// read and left unasserted.
+// the bundle. Each step's page phrase is checked in the page, and its guide
+// phrase in the section, and the page's unconditional notice and the section
+// carry the site's exact URL and the first-visit advice against an attacker who
+// strips HTTPS from an http:// link: a phrase either document lost fails the
+// check, so neither is read and left unasserted. The notice is read as its own
+// element, not as the page: the conditional notice and the steps repeat its
+// words, so a check of the whole page would stay green on a notice that lost
+// them.
 //
 // The one exception is the page's links to documents of this repository, which
 // are checked against the guide as a whole: the page's other repository links
@@ -84,6 +87,11 @@ func TestVerificationGuideAgreesWithThePage(t *testing.T) {
 	}
 
 	groups := pageCommandGroups(t, codes)
+
+	// The page's notice, the element that states the advice for every visitor:
+	// the page's own side of the notice check is read from it and from no other
+	// part of the page.
+	pageNotice := noticeElement(t, page)
 
 	t.Run("the section's attestation command carries the page's commands and flags", func(t *testing.T) {
 		t.Parallel()
@@ -156,6 +164,11 @@ func TestVerificationGuideAgreesWithThePage(t *testing.T) {
 				why:   "the section's first step downloads that release's bundle, the command the page's first step summarises",
 			},
 			{
+				page:  "from the repository's releases",
+				guide: "release asset",
+				why:   "where the bundle comes from: the release's own asset of the repository, not an archive built or hosted elsewhere",
+			},
+			{
 				page:  "verify its attestation with the GitHub CLI",
 				guide: bundleAttestationCommand,
 				why:   "the command that verifies the bundle's build provenance, which the page names",
@@ -211,7 +224,7 @@ func TestVerificationGuideAgreesWithThePage(t *testing.T) {
 		// steps: a phrase the page no longer carries, and a phrase the section no
 		// longer carries. Both documents are checked, so a step either lost is
 		// reported, and not only a section that lost the words the page shows.
-		problems := func(page, section string) []string {
+		stepProblems := func(page, section string) []string {
 			pageLower := strings.ToLower(collapsed(page))
 			sectionLower := strings.ToLower(collapsed(section))
 
@@ -232,24 +245,26 @@ func TestVerificationGuideAgreesWithThePage(t *testing.T) {
 			return found
 		}
 
-		for _, problem := range problems(page, section) {
+		for _, problem := range stepProblems(page, section) {
 			t.Error(problem)
 		}
 
 		// The check reads the page as well as the section, so it is worth its
 		// claims only while a page that lost a step is a problem: this copy is
 		// the page with its run-yourself step reworded, and the check must name
-		// the step it lost.
+		// the step it lost. The problem asserted on is the page's own, so a
+		// section-side message that happens to carry the step's words cannot
+		// stand in for it.
 		t.Run("a page that lost a step is a problem", func(t *testing.T) {
 			t.Parallel()
 
 			const step = "Run the bundle yourself"
 
-			got := strings.Join(problems(strings.ReplaceAll(page, step, "Run it"), section), "\n")
+			got := strings.Join(stepProblems(strings.ReplaceAll(page, step, "Run it"), section), "\n")
 
-			if !strings.Contains(got, step) {
-				t.Errorf("%s reports no problem with %q, though %s no longer carries it: the check reads the page, so a page that dropped a step must fail it, not only a section that did (PRD #297 milestone 3)\nproblems: %s",
-					verifyPagePath, step, verifyPagePath, got)
+			if want := fmt.Sprintf("%s no longer carries %q", verifyPagePath, step); !strings.Contains(got, want) {
+				t.Errorf("%s reports no problem with %q, though %s no longer carries it: the check reads the page, so a page that dropped a step must fail it with %q, not only a section that did (PRD #297 milestone 3)\nproblems: %s",
+					verifyPagePath, step, verifyPagePath, want, got)
 			}
 		})
 	})
@@ -307,10 +322,10 @@ func TestVerificationGuideAgreesWithThePage(t *testing.T) {
 		}
 
 		// noticeProblems returns what a document fails to carry of the notice: the
-		// site's exact URL, and the two phrases of the advice. The page carries
-		// the advice and so does the section that repeats it, and both documents
-		// are checked: a page that lost the advice fails as the section that lost
-		// it does, and neither is read and left unasserted.
+		// site's exact URL, and the two phrases of the advice. The page's
+		// unconditional notice carries the advice and so does the section that
+		// repeats it, and both are checked: a notice that lost the advice fails as
+		// the section that lost it does, and neither is read and left unasserted.
 		noticeProblems := func(docPath, doc string) []string {
 			text := collapsed(doc)
 
@@ -337,7 +352,7 @@ func TestVerificationGuideAgreesWithThePage(t *testing.T) {
 			docPath string
 			text    string
 		}{
-			{docPath: verifyPagePath, text: page},
+			{docPath: verifyPagePath, text: pageNotice},
 			{docPath: verifyGuidePath, text: section},
 		} {
 			for _, problem := range noticeProblems(doc.docPath, doc.text) {
@@ -345,16 +360,40 @@ func TestVerificationGuideAgreesWithThePage(t *testing.T) {
 			}
 		}
 
-		// The page's side is worth its claims only while a page that lost the
-		// advice is a problem: this copy is the page without the site's URL.
-		t.Run("a page without the site's URL is a problem", func(t *testing.T) {
+		// The notice's side is worth its claims only while a notice that lost the
+		// advice is a problem: these copies are the page's notice without the
+		// site's URL and without the occasion, and the check must name each. The
+		// page's conditional notice and its steps still carry both, so a check of
+		// the whole page would stay green on either copy.
+		t.Run("a notice that lost the advice is a problem", func(t *testing.T) {
 			t.Parallel()
 
-			got := strings.Join(noticeProblems(verifyPagePath, strings.ReplaceAll(page, siteURL, "the site")), "\n")
+			for _, tc := range []struct {
+				name   string
+				notice string
+				want   string
+			}{
+				{
+					name:   "a notice without the site's URL",
+					notice: strings.ReplaceAll(pageNotice, siteURL, "the site"),
+					want:   siteURL,
+				},
+				{
+					name:   "a notice without the first visit",
+					notice: strings.ReplaceAll(pageNotice, "on a first visit", "now"),
+					want:   "first visit",
+				},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					t.Parallel()
 
-			if !strings.Contains(got, siteURL) {
-				t.Errorf("%s reports no problem with %s, though the page no longer carries it: the check reads the page, so a page without the URL must fail it (PRD #297 milestone 3)\nproblems: %s",
-					verifyPagePath, siteURL, got)
+					got := strings.Join(noticeProblems(verifyPagePath, tc.notice), "\n")
+
+					if !strings.Contains(got, tc.want) {
+						t.Errorf("%s reports no problem with %q, though its unconditional notice no longer carries it: the check reads that notice, so %s must fail it (PRD #297 milestone 3)\nproblems: %s",
+							verifyPagePath, tc.want, tc.name, got)
+					}
+				})
 			}
 		})
 	})
@@ -407,6 +446,29 @@ func codeElements(page string) []string {
 	}
 
 	return codes
+}
+
+// noticeElementPattern matches the page's unconditional notice and its content:
+// the first <p class="notice ..."> element, the one every visitor reads. The
+// page's other notice, the one inside its {{if .HSTSWaived}} action, carries an
+// id attribute before its class and so is not matched here, and neither is any
+// element that follows the notice.
+var noticeElementPattern = regexp.MustCompile(`(?s)<p class="notice [^"]*">(.*?)</p>`)
+
+// noticeElement returns the text of the page's unconditional notice. The test
+// fails when the page holds no such element: the notice's advice is what the
+// page's side of the notice check is held to, and a check of the whole page
+// would pass on the conditional notice's or a step's words while the notice
+// every visitor reads lost them.
+func noticeElement(t *testing.T, page string) string {
+	t.Helper()
+
+	match := noticeElementPattern.FindStringSubmatch(page)
+	if match == nil {
+		t.Fatalf("%s holds no <p class=\"notice \"> element: the page states the first-visit advice in its unconditional notice, so the page keeps that element and this check reads it (PRD #297 milestone 3)", verifyPagePath)
+	}
+
+	return strings.TrimSpace(match[1])
 }
 
 // codeEntities decodes the HTML entities a command's text is escaped with: the
