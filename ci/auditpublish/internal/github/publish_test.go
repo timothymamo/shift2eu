@@ -118,6 +118,7 @@ func TestPublishReadsScansThenWrites(t *testing.T) {
 
 	want := []string{
 		"GET " + fixtureReleaseEndpoint,
+		"GET " + fixtureLatestReleaseEndpoint,
 		"GET " + fixtureIssuesQuery + "page=1",
 		"GET " + fixtureAdvisoriesEndpoint,
 		"GET " + fixtureBranchEndpoint,
