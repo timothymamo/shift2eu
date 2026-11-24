@@ -30,7 +30,10 @@ import (
 //     format('skipped-{0}', github.run_id) for a run whose jobs will be
 //     skipped, and cancel-in-progress is false.
 //   - permissions: {} at the top level. Each job's scopes are exactly the ones
-//     the accepted shape declares, never a write scope and never packages:.
+//     the accepted shape declares, never a write scope and never packages: or
+//     id-token. The checks job's are contents, attestations, actions and
+//     issues, each read; the model job's are contents and actions, the publish
+//     job's contents, actions and attestations.
 //   - Each job runs in the security-audit environment on ubuntu-24.04, with a
 //     timeout-minutes below 360 and every step's timeout-minutes set. The model
 //     job needs checks, the publish job needs model. The checks job refuses a
@@ -88,6 +91,36 @@ import (
 //     digestVersion= comment of its own.
 //   - A document the reader cannot follow, or an empty one, is refused.
 //
+// The checks job's rows 6 to 15 (PR 5c), added to the shapes above:
+//
+//   - Nine steps after actionlint, in this order: OpenSSF scorecard; Verify the
+//     release's files, signature and attestations; Pull the image anonymously
+//     by digest; govulncheck on the release binaries; trivy on the image and its
+//     SBOM; Check the image's runtime settings; Run the CLI on hostile inventory
+//     files; Fuzz the committed Fuzz targets; Supply-chain reads.
+//   - The job's token, as GH_TOKEN in a step-level env:, only on the steps that
+//     read GitHub's API: the record of the tag (row 1), zizmor (row 5),
+//     scorecard (row 6), the release's verification (row 7) and the supply-chain
+//     reads (row 15). No container step holds it, and neither do rows 8, 9 and
+//     10, which read no API.
+//   - Every container the job creates carries --read-only, --network none,
+//     --cap-drop ALL and --security-opt no-new-privileges; row 14's is the only
+//     one with a --tmpfs, exactly /scratch:rw,exec,nosuid,size=4g,mode=1777,
+//     and it runs from a Go image pinned by @sha256: digest. Nowhere in the
+//     workflow is a mount (-v, --volume, --mount), a docker.sock, a
+//     --privileged container, --network host or a docker login.
+//   - Four guards, each whole: row 7's tag shape, before ${tag} reaches a
+//     command line; the image digest's shape in rows 8, 11 and 13; row 14's
+//     fuzz target's package and name shape; row 15's ruleset ID shape.
+//   - scorecard, cosign and trivy are pinned by version, SHA-256 and a
+//     # renovate: comment like every other tool, and scorecard neither
+//     publishes nor writes its report anywhere but the results directory; no
+//     id-token is asked for.
+//   - Every Go command after the module download runs offline: the binary-mode
+//     govulncheck of row 9 carries GOFLAGS=-mod=readonly and GOPROXY=off, and
+//     the fuzz container of row 14 is handed GOFLAGS and GOPROXY by its
+//     docker create.
+//
 // The check recognises each job's steps by name, and the accepted fixture's
 // names are the closed list: a step the check's list does not hold is reported
 // with its name, as is a step that is missing or out of order. Every message
@@ -123,12 +156,19 @@ const (
 	auditModelIf          = "    timeout-minutes: 120\n    if: ${{ " + auditGuard + " }}\n"
 	auditPublishIf        = "    timeout-minutes: 30\n    if: ${{ " + auditGuard + " }}\n"
 	// auditChecksPermissions is the checks job's permissions block, whose comment
-	// no other job shares. No attestations scope: no checks-job row reads one in
-	// 5b.
-	auditChecksPermissions = "    # GITHUB_TOKEN reads only: contents for the checkout and the release tag.\n" +
-		"    # The image is public, so no packages scope, and nothing here writes.\n" +
+	// no other job shares: the four read scopes rows 6 to 15 read GitHub with
+	// (PR 5c). No packages scope, because the image is pulled anonymously, and
+	// no id-token: scorecard runs as the CLI, not the action.
+	auditChecksPermissions = "    # GITHUB_TOKEN reads only: contents for the checkout, the release tag and the release download;\n" +
+		"    # attestations for gh attestation verify (row 7); actions for scorecard's reads of the workflows'\n" +
+		"    # runs (row 6); issues for Renovate's Dependency Dashboard (row 15). The image is public, so no\n" +
+		"    # packages scope: it is pulled anonymously (row 8). Nothing here writes, and no read needs admin:\n" +
+		"    # what the token is refused is recorded \"not run\".\n" +
 		"    permissions:\n" +
-		"      contents: read\n"
+		"      contents: read\n" +
+		"      attestations: read\n" +
+		"      actions: read\n" +
+		"      issues: read\n"
 	// auditPublishPermissions is the publish job's permissions block, whose
 	// comment no other job shares.
 	auditPublishPermissions = "    # artifacts, attestations for the image check. The audit App's token writes.\n" +
@@ -258,11 +298,19 @@ const (
 		"          fi\n"
 	// auditImage is the image the release publishes, ghcr.io/<the repository's
 	// owner>/<repository>, read from the run's own GITHUB_REPOSITORY, and
-	// auditImageLine the attestation step's line that reads it. The verification
-	// is about that image alone, so another image's attestation is no provenance
-	// for this release's, and the message a case draws names the image.
+	// auditImageLine the attestation step's head and its line that reads it. The
+	// verification is about that image alone, so another image's attestation is
+	// no provenance for this release's, and the message a case draws names the
+	// image. The step's head is part of it because rows 7, 8, 11 and 13 read the
+	// same image (PR 5c), and the attestation step is the one that verifies it.
 	auditImage     = "ghcr.io/${GITHUB_REPOSITORY,,}"
-	auditImageLine = "          image=\"" + auditImage + "\"\n"
+	auditImageLine = "      - name: Verify the image's provenance attestation\n" +
+		"        timeout-minutes: 10\n" +
+		"        env:\n" +
+		"          GH_TOKEN: ${{ github.token }}\n" +
+		"        run: |\n" +
+		"          set -euo pipefail\n" +
+		"          image=\"" + auditImage + "\"\n"
 	// auditChecksSingleFileCheck and auditPublishSingleFileCheck are the two
 	// download steps' single-file checks: the unzipped directory holds the one
 	// ciphertext and nothing else, and the branch that refuses anything more.
@@ -436,6 +484,95 @@ const (
 	// auditPublishCommand is the publish step's one line, the end of the job the
 	// case that moves the attestation check past it appends to.
 	auditPublishCommand = "          ci/auditpublish publish -result \"${RUNNER_TEMP}/result.json\" -reports docs/security/audits -gh \"$(command -v gh)\" -gitleaks \"$(command -v gitleaks)\" -tmp \"${RUNNER_TEMP}\"\n"
+	// auditScorecardStep is the checks job's row 6 step, the shortest of the nine
+	// PR 5c adds and the one the cases that remove, rename and reorder a step
+	// anchor on.
+	auditScorecardStep = "      - name: OpenSSF scorecard\n" +
+		"        timeout-minutes: 20\n" +
+		"        env:\n" +
+		"          GH_TOKEN: ${{ github.token }}\n" +
+		"          GH_REPO: ${{ github.repository }}\n" +
+		"        run: |\n" +
+		"          set -euo pipefail\n" +
+		"          results=\"${RUNNER_TEMP}/results\"\n" +
+		"          out=\"${results}/scorecard\"\n" +
+		"          mkdir -p \"${out}\"\n" +
+		"          checks=\"Binary-Artifacts,CI-Tests,CII-Best-Practices,Code-Review,Contributors,Dangerous-Workflow,Dependency-Update-Tool,Fuzzing,License,Maintained,Packaging,Pinned-Dependencies,SAST,Security-Policy,Signed-Releases,Token-Permissions,Vulnerabilities\"\n" +
+		"          rc=0\n" +
+		"          timeout 15m scorecard --repo \"github.com/${GH_REPO}\" --checks \"${checks}\" --format json --show-details > \"${out}/scorecard.json\" 2> \"${out}/scorecard.stderr\" || rc=$?\n" +
+		"          echo \"${rc}\" > \"${out}/scorecard.exit\"\n" +
+		"          if [ \"${rc}\" -eq 124 ]; then\n" +
+		"            echo \"scorecard timed-out\" >> \"${results}/not-run.txt\"\n" +
+		"            echo \"scorecard timed out after 15 minutes\" >> \"${results}/limits.txt\"\n" +
+		"          fi\n" +
+		"          printf '%s\\n' Branch-Protection Webhooks > \"${out}/admin-checks.txt\"\n" +
+		"          echo \"scorecard-admin needs-admin-read\" >> \"${results}/not-run.txt\"\n" +
+		"          echo \"finished\"\n"
+	// auditScorecardCommand is that step's scorecard command: the CLI, its report
+	// in the results directory, and no --publish, which would put the result
+	// somewhere the run does not keep it.
+	auditScorecardCommand = "          timeout 15m scorecard --repo \"github.com/${GH_REPO}\" --checks \"${checks}\" --format json --show-details > \"${out}/scorecard.json\" 2> \"${out}/scorecard.stderr\" || rc=$?\n"
+	// auditContainerFlags are the flags every container the checks job creates
+	// carries (PR 5c): a read-only root filesystem, no network, no capability
+	// and no new privilege.
+	auditContainerFlags = " --read-only --network none --cap-drop ALL --security-opt no-new-privileges"
+	// auditHostileCreateFlags is row 13's container's own limits, which no other
+	// docker create holds: the anchor the cases that put a flag, a mount or a
+	// tmpfs into a container use.
+	auditHostileCreateFlags = " --memory 512m --pids-limit 64 "
+	// auditFuzzTmpfs is row 14's one tmpfs, exactly the size, mode and flags its
+	// go test needs: the only tmpfs any container of the workflow has.
+	auditFuzzTmpfs = "--tmpfs /scratch:rw,exec,nosuid,size=4g,mode=1777"
+	// auditGoImage is row 14's Go image, pinned by tag and @sha256: digest.
+	auditGoImage = "          GO_IMAGE: \"1.27.4-alpine@sha256:70bd7ddea8b6cbe5d6943cde279d6b67feb10cc924fb9100d1d8757c1575b280\"\n"
+	// auditImagePull is row 8's pull, the line the case that logs in to the
+	// registry hangs its docker login on.
+	auditImagePull = "          timeout 10m docker pull --platform linux/amd64 \"${image}@${digest}\" > \"${out}/pull.stdout\" 2> \"${out}/pull.stderr\" || rc=$?\n"
+	// auditBinaryGovulncheck is row 9's binary-mode govulncheck, the one Go tool
+	// the workflow runs that is no go command, so its offline flags are the
+	// step's own.
+	auditBinaryGovulncheck = "GOFLAGS=-mod=readonly GOPROXY=off timeout 5m govulncheck -mode=binary"
+	// auditFuzzEnvHandoff is the docker create's hand-off of the step's env: to
+	// the fuzz container: go test runs offline only with both.
+	auditFuzzEnvHandoff = "--env GOFLAGS --env GOPROXY --env GOTOOLCHAIN=local"
+	// auditReleaseStepEnv is row 7's env: and the read of the tag it holds the
+	// token for, the anchor the case that drops the token uses.
+	auditReleaseStepEnv = "          GH_TOKEN: ${{ github.token }}\n" +
+		"          GH_REPO: ${{ github.repository }}\n" +
+		"        run: |\n" +
+		"          set -euo pipefail\n" +
+		"          results=\"${RUNNER_TEMP}/results\"\n" +
+		"          tag=\"$(sed -n 's/^release_tag=//p' \"${results}/target.txt\")\"\n"
+	// The checks job's four guards, each whole (PR 5c): row 7's tag shape, before
+	// the tag reaches a command line; the image digest's shape, the same four
+	// lines in rows 8, 11 and 13; row 14's fuzz target shape; and row 15's
+	// ruleset ID shape. A case removes one, drops its exit 1 or runs its branch
+	// together onto the echo's line.
+	auditReleaseTagGuard = "          if [[ ! \"${tag}\" =~ ^v[0-9]+\\.[0-9]+\\.[0-9]+$ ]]; then\n" +
+		"            echo \"::error title=Audit checks::the recorded release tag is no vMAJOR.MINOR.PATCH: see runbook step 11\"\n" +
+		"            exit 1\n" +
+		"          fi\n"
+	auditDigestGuard = "          if [[ ! \"${digest}\" =~ ^sha256:[0-9a-f]{64}$ ]]; then\n" +
+		"            echo \"::error title=Audit checks::the recorded image digest is no sha256 digest: see runbook step 11\"\n" +
+		"            exit 1\n" +
+		"          fi\n"
+	auditFuzzShapeGuard = "            if [[ ! \"${name}\" =~ ^Fuzz[A-Za-z0-9_]*$ ]] || [[ ! \"${pkg}\" =~ ^[A-Za-z0-9_][A-Za-z0-9_./-]*$ ]] || [[ \"${pkg}\" == *..* ]]; then\n" +
+		"              echo \"::error title=Audit checks::a fuzz target's package or name has an unexpected shape: see runbook step 11\"\n" +
+		"              exit 1\n" +
+		"            fi\n"
+	auditRulesetGuard = "            if [[ ! \"${id}\" =~ ^[0-9]+$ ]]; then\n" +
+		"              echo \"::error title=Audit checks::a ruleset ID is no number: see runbook step 11\"\n" +
+		"              exit 1\n" +
+		"            fi\n"
+	// The "image was not pulled" branch each of rows 8, 11 and 13 runs right
+	// before its digest guard, one message each: the context that lets a case
+	// take the guard out of one row alone, since the three guards are identical.
+	auditImagePullBranch = "            echo \"image-pull image-not-pulled\" >> \"${results}/not-run.txt\"\n" +
+		"            echo \"finished\"\n            exit 0\n          fi\n"
+	auditImageRuntimeBranch = "            echo \"image-runtime image-not-pulled\" >> \"${results}/not-run.txt\"\n" +
+		"            echo \"finished\"\n            exit 0\n          fi\n"
+	auditHostileNotPulledBranch = "            echo \"hostile-inventories image-not-pulled\" >> \"${results}/not-run.txt\"\n" +
+		"            echo \"finished\"\n            exit 0\n          fi\n"
 )
 
 // TestAuditWorkflowAcceptsTheAcceptedShape pins that the accepted fixture draws
@@ -483,8 +620,13 @@ func TestAuditWorkflow(t *testing.T) {
 	acceptedWorkflow := string(auditWorkflowFixtureBytes(t))
 	accepted := check.AuditWorkflow([]byte(acceptedWorkflow))
 
+	// The fixture's own messages are what added() takes every case's diff from,
+	// so a rule the check does not hold yet leaves the cases below decidable one
+	// by one instead of all of them failing for that one reason;
+	// TestAuditWorkflowAcceptsTheAcceptedShape is what refuses a fixture the
+	// check does not accept.
 	if len(accepted) != 0 {
-		t.Fatalf("AuditWorkflow(%s) = %q, want no message: the fixture is the accepted shape", auditWorkflowFixture, accepted)
+		t.Logf("AuditWorkflow(%s) = %q, want no message: every case's added() diff is taken from these", auditWorkflowFixture, accepted)
 	}
 
 	// withStep returns the accepted workflow with step inserted at the head of
@@ -1042,10 +1184,23 @@ func TestAuditWorkflow(t *testing.T) {
 		// the auditor accepted. Each case changes one part of the accepted shape and
 		// must draw a message that names it.
 		{
-			// F6: no 5b row of the checks job reads an attestation.
-			name:     "an attestations scope in the checks job",
-			workflow: mutate(t, acceptedWorkflow, auditChecksPermissions, auditChecksPermissions+"      attestations: read\n"),
+			// PR 5c: row 7 reads the release's attestations, so the checks job holds
+			// the scope - and exactly the four scopes its rows read with.
+			name:     "no attestations scope in the checks job",
+			workflow: mutate(t, acceptedWorkflow, auditChecksPermissions, strings.Replace(auditChecksPermissions, "      attestations: read\n", "", 1)),
 			wantIn:   "attestations",
+		},
+		{
+			// Scorecard runs as the CLI, never the action: no step of the workflow
+			// asks for an id-token.
+			name:     "an id-token scope in the checks job",
+			workflow: mutate(t, acceptedWorkflow, auditChecksPermissions, auditChecksPermissions+"      id-token: write\n"),
+			wantIn:   "id-token",
+		},
+		{
+			name:     "a write scope in the checks job",
+			workflow: mutate(t, acceptedWorkflow, auditChecksPermissions, strings.Replace(auditChecksPermissions, "      issues: read\n", "      issues: write\n", 1)),
+			wantIn:   "issues",
 		},
 		{
 			// F5: the split is held, so a step that hands actionlint zizmor's
@@ -1511,13 +1666,251 @@ func TestAuditWorkflow(t *testing.T) {
 		},
 		{
 			name:     "no image line in the attestation step",
-			workflow: mutate(t, acceptedWorkflow, auditImageLine, ""),
+			workflow: mutate(t, acceptedWorkflow, auditImageLine, strings.TrimSuffix(auditImageLine, "          image=\""+auditImage+"\"\n")),
 			wantIn:   auditImage,
 		},
 		{
 			name:     "the attestation step verifying another image",
-			workflow: mutate(t, acceptedWorkflow, auditImageLine, "          image=\"ghcr.io/example/other\"\n"),
+			workflow: mutate(t, acceptedWorkflow, auditImageLine, strings.Replace(auditImageLine, auditImage, "ghcr.io/example/other", 1)),
 			wantIn:   auditImage,
+		},
+
+		// PR 5c: the checks job's rows 6 to 15. Nine steps after actionlint, in
+		// order; the job's token only in the step-level env: of a step that reads
+		// GitHub's API; every container read-only, networkless, capability-less and
+		// unprivileged, with no mount and no socket; four guards held whole; three
+		// tool pins; and every Go command offline. Each case changes one of them.
+		{
+			name:     "no scorecard step",
+			workflow: withoutStep(auditScorecardStep),
+			wantIn:   "OpenSSF scorecard",
+		},
+		{
+			name:     "scorecard's step under another name",
+			workflow: mutate(t, acceptedWorkflow, "      - name: OpenSSF scorecard\n", "      - name: Scorecard run\n"),
+			wantIn:   "Scorecard run",
+		},
+		{
+			name:     "scorecard's step after the release's verification",
+			workflow: moveStep("      - name: Pull the image anonymously by digest\n", auditScorecardStep),
+			wantIn:   "want it before",
+		},
+
+		// The job's token is in the step-level env: of the steps that read
+		// GitHub's API alone: rows 1, 5, 6, 7 and 15. A container step, or a step
+		// that reads no API, holds none.
+		{
+			name:     "no token on the release's verification",
+			workflow: mutate(t, acceptedWorkflow, auditReleaseStepEnv, strings.Replace(auditReleaseStepEnv, "          GH_TOKEN: ${{ github.token }}\n", "", 1)),
+			wantIn:   "GH_TOKEN",
+		},
+		{
+			name:     "the job's token on the image pull",
+			workflow: mutate(t, acceptedWorkflow, "      - name: Pull the image anonymously by digest\n        timeout-minutes: 15\n        run: |\n", "      - name: Pull the image anonymously by digest\n        timeout-minutes: 15\n        env:\n          GH_TOKEN: ${{ github.token }}\n        run: |\n"),
+			wantIn:   "github.token",
+		},
+		{
+			name:     "the job's token on the hostile inventories",
+			workflow: mutate(t, acceptedWorkflow, "      - name: Run the CLI on hostile inventory files\n        timeout-minutes: 20\n        run: |\n", "      - name: Run the CLI on hostile inventory files\n        timeout-minutes: 20\n        env:\n          GH_TOKEN: ${{ github.token }}\n        run: |\n"),
+			wantIn:   "github.token",
+		},
+		{
+			name:     "the job's token on the fuzz step",
+			workflow: mutate(t, acceptedWorkflow, "        env:\n          GOFLAGS: -mod=readonly\n", "        env:\n          GH_TOKEN: ${{ github.token }}\n          GOFLAGS: -mod=readonly\n"),
+			wantIn:   "github.token",
+		},
+
+		// Every container the checks job creates is read-only, has no network,
+		// no capability and no new privilege. Each flag taken out in turn is one
+		// case, from the three docker create lines at once.
+		{
+			name:     "no --read-only on the containers",
+			workflow: mutateEvery(t, acceptedWorkflow, auditContainerFlags, " --network none --cap-drop ALL --security-opt no-new-privileges"),
+			wantIn:   "--read-only",
+		},
+		{
+			name:     "no --network none on the containers",
+			workflow: mutateEvery(t, acceptedWorkflow, auditContainerFlags, " --read-only --cap-drop ALL --security-opt no-new-privileges"),
+			wantIn:   "--network none",
+		},
+		{
+			name:     "no --cap-drop ALL on the containers",
+			workflow: mutateEvery(t, acceptedWorkflow, auditContainerFlags, " --read-only --network none --security-opt no-new-privileges"),
+			wantIn:   "--cap-drop ALL",
+		},
+		{
+			name:     "no --security-opt no-new-privileges on the containers",
+			workflow: mutateEvery(t, acceptedWorkflow, auditContainerFlags, " --read-only --network none --cap-drop ALL"),
+			wantIn:   "no-new-privileges",
+		},
+		{
+			// Row 14's one tmpfs, at the size and with the flags go test needs: a
+			// smaller one fails the fuzz build, and a tmpfs anywhere else is a
+			// writable path in a container that needs none.
+			name:     "another size on the fuzz container's tmpfs",
+			workflow: mutate(t, acceptedWorkflow, auditFuzzTmpfs, "--tmpfs /scratch:rw,exec,nosuid,size=8g,mode=1777"),
+			wantIn:   "tmpfs",
+		},
+		{
+			name:     "a tmpfs on the hostile inventories' container",
+			workflow: mutate(t, acceptedWorkflow, auditHostileCreateFlags, " "+auditFuzzTmpfs+auditHostileCreateFlags),
+			wantIn:   "tmpfs",
+		},
+		{
+			name:     "a --privileged container",
+			workflow: mutate(t, acceptedWorkflow, auditHostileCreateFlags, " --privileged"+auditHostileCreateFlags),
+			wantIn:   "--privileged",
+		},
+		{
+			name:     "a container with a host network",
+			workflow: mutate(t, acceptedWorkflow, auditHostileCreateFlags, " --network host"+auditHostileCreateFlags),
+			wantIn:   "--network host",
+		},
+		{
+			name:     "a bind mount into a container",
+			workflow: mutate(t, acceptedWorkflow, auditHostileCreateFlags, " -v /etc:/host"+auditHostileCreateFlags),
+			wantIn:   "-v",
+		},
+		{
+			name:     "a --volume into a container",
+			workflow: mutate(t, acceptedWorkflow, auditHostileCreateFlags, " --volume /etc:/host"+auditHostileCreateFlags),
+			wantIn:   "--volume",
+		},
+		{
+			name:     "a --mount into a container",
+			workflow: mutate(t, acceptedWorkflow, auditHostileCreateFlags, " --mount type=bind,source=/etc,target=/host"+auditHostileCreateFlags),
+			wantIn:   "--mount",
+		},
+		{
+			name:     "the Docker socket in a container",
+			workflow: mutate(t, acceptedWorkflow, auditHostileCreateFlags, " -v /var/run/docker.sock:/var/run/docker.sock"+auditHostileCreateFlags),
+			wantIn:   "docker.sock",
+		},
+		{
+			name:     "a docker login",
+			workflow: mutate(t, acceptedWorkflow, auditImagePull, "          docker login ghcr.io -u nobody --password-stdin <<< \"$(command -v true)\"\n"+auditImagePull),
+			wantIn:   "docker login",
+		},
+		{
+			name:     "the fuzz image pinned by tag alone",
+			workflow: mutate(t, acceptedWorkflow, auditGoImage, "          GO_IMAGE: \"1.27.4-alpine\"\n"),
+			wantIn:   "GO_IMAGE",
+		},
+
+		// The four guards, each held whole: removed, with its exit 1 dropped or
+		// with its branch run together onto the echo's line, it refuses nothing.
+		{
+			name:     "row 7's tag shape guard removed",
+			workflow: mutate(t, acceptedWorkflow, auditReleaseTagGuard, ""),
+			wantIn:   "tag's shape",
+		},
+		{
+			name:     "row 7's tag shape guard without its exit 1",
+			workflow: mutate(t, acceptedWorkflow, auditReleaseTagGuard, strings.Replace(auditReleaseTagGuard, "            exit 1\n", "", 1)),
+			wantIn:   "tag's shape",
+		},
+		{
+			name:     "row 7's tag shape guard joined onto the echo's line",
+			workflow: mutate(t, acceptedWorkflow, auditReleaseTagGuard, joinedBranch(auditReleaseTagGuard)),
+			wantIn:   "tag's shape",
+		},
+		{
+			name:     "row 8's digest guard removed",
+			workflow: mutate(t, acceptedWorkflow, auditImagePullBranch+auditDigestGuard, auditImagePullBranch),
+			wantIn:   "image digest",
+		},
+		{
+			name:     "row 11's digest guard removed",
+			workflow: mutate(t, acceptedWorkflow, auditImageRuntimeBranch+auditDigestGuard, auditImageRuntimeBranch),
+			wantIn:   "image digest",
+		},
+		{
+			name:     "row 13's digest guard removed",
+			workflow: mutate(t, acceptedWorkflow, auditHostileNotPulledBranch+auditDigestGuard, auditHostileNotPulledBranch),
+			wantIn:   "image digest",
+		},
+		{
+			name:     "the digest guards without their exit 1",
+			workflow: mutateEvery(t, acceptedWorkflow, auditDigestGuard, strings.ReplaceAll(auditDigestGuard, "            exit 1\n", "")),
+			wantIn:   "image digest",
+		},
+		{
+			name:     "the digest guards joined onto the echo's line",
+			workflow: mutateEvery(t, acceptedWorkflow, auditDigestGuard, joinedBranch(auditDigestGuard)),
+			wantIn:   "image digest",
+		},
+		{
+			name:     "the fuzz target's shape guard removed",
+			workflow: mutate(t, acceptedWorkflow, auditFuzzShapeGuard, ""),
+			wantIn:   "fuzz target",
+		},
+		{
+			name:     "the fuzz target's shape guard without its exit 1",
+			workflow: mutate(t, acceptedWorkflow, auditFuzzShapeGuard, strings.Replace(auditFuzzShapeGuard, "              exit 1\n", "", 1)),
+			wantIn:   "fuzz target",
+		},
+		{
+			name:     "the fuzz target's shape guard joined onto the echo's line",
+			workflow: mutate(t, acceptedWorkflow, auditFuzzShapeGuard, joinedBranch(auditFuzzShapeGuard)),
+			wantIn:   "fuzz target",
+		},
+		{
+			name:     "the ruleset ID guard removed",
+			workflow: mutate(t, acceptedWorkflow, auditRulesetGuard, ""),
+			wantIn:   "ruleset ID",
+		},
+		{
+			name:     "the ruleset ID guard without its exit 1",
+			workflow: mutate(t, acceptedWorkflow, auditRulesetGuard, strings.Replace(auditRulesetGuard, "              exit 1\n", "", 1)),
+			wantIn:   "ruleset ID",
+		},
+		{
+			name:     "the ruleset ID guard joined onto the echo's line",
+			workflow: mutate(t, acceptedWorkflow, auditRulesetGuard, joinedBranch(auditRulesetGuard)),
+			wantIn:   "ruleset ID",
+		},
+
+		// The three tools PR 5c adds are pinned like the rest: a version under a
+		// Renovate comment, and a SHA-256 beside it.
+		{
+			name:     "scorecard's version without a Renovate comment",
+			workflow: mutate(t, acceptedWorkflow, "          # renovate: datasource=github-releases depName=ossf/scorecard\n          SCORECARD_VERSION: v5.6.0\n", "          SCORECARD_VERSION: v5.6.0\n"),
+			wantIn:   "renovate",
+		},
+		{
+			name:     "trivy's SHA-256 removed",
+			workflow: mutate(t, acceptedWorkflow, "          # renovate: datasource=github-release-attachments depName=aquasecurity/trivy digestVersion=v0.76.2\n          TRIVY_SHA256: \"bc0fc726e017b8927a62b2d3531d7a84ee01769daf5c99ed866dced54089fdbf\"\n", ""),
+			wantIn:   "SHA-256",
+		},
+		{
+			// Scorecard's report belongs in the results directory, never on the
+			// run's public log, and the CLI publishes nothing.
+			name:     "scorecard publishing its result",
+			workflow: mutate(t, acceptedWorkflow, auditScorecardCommand, strings.Replace(auditScorecardCommand, "scorecard --repo", "scorecard --publish --repo", 1)),
+			wantIn:   "--publish",
+		},
+		{
+			name:     "scorecard's report on the log instead of the results directory",
+			workflow: mutate(t, acceptedWorkflow, auditScorecardCommand, strings.Replace(auditScorecardCommand, " > \"${out}/scorecard.json\"", "", 1)),
+			wantIn:   "scorecard.json",
+		},
+
+		// Every Go command after the module download runs offline, the binary
+		// govulncheck of row 9 and the fuzz container's go test included.
+		{
+			name:     "the binary govulncheck without its offline flags",
+			workflow: mutate(t, acceptedWorkflow, auditBinaryGovulncheck, "timeout 5m govulncheck -mode=binary"),
+			wantIn:   "GOFLAGS",
+		},
+		{
+			name:     "the fuzz container without --env GOPROXY",
+			workflow: mutate(t, acceptedWorkflow, auditFuzzEnvHandoff, "--env GOFLAGS --env GOTOOLCHAIN=local"),
+			wantIn:   "GOPROXY",
+		},
+		{
+			name:     "the fuzz step without its GOPROXY env",
+			workflow: mutate(t, acceptedWorkflow, "          GOPROXY: \"off\"\n", ""),
+			wantIn:   "GOPROXY",
 		},
 
 		// A document the reader cannot follow tells the check nothing, so it is

@@ -35,10 +35,16 @@ jobs:
     # Every job runs in the environment whose deployment branch policy is main
     # alone, which holds the two key pairs' public halves.
     environment: security-audit
-    # GITHUB_TOKEN reads only: contents for the checkout and the release tag.
-    # The image is public, so no packages scope, and nothing here writes.
+    # GITHUB_TOKEN reads only: contents for the checkout, the release tag and the release download;
+    # attestations for gh attestation verify (row 7); actions for scorecard's reads of the workflows'
+    # runs (row 6); issues for Renovate's Dependency Dashboard (row 15). The image is public, so no
+    # packages scope: it is pulled anonymously (row 8). Nothing here writes, and no read needs admin:
+    # what the token is refused is recorded "not run".
     permissions:
       contents: read
+      attestations: read
+      actions: read
+      issues: read
     steps:
       - name: Check out the audited commit
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -89,6 +95,20 @@ jobs:
           # dev/lima.yaml: go.sum verifies the module, so it has no SHA-256 line.
           # renovate: datasource=go depName=golang.org/x/vuln
           GOVULNCHECK_VERSION: v1.10.0
+          # renovate: datasource=github-releases depName=ossf/scorecard
+          SCORECARD_VERSION: v5.6.0
+          # renovate: datasource=github-release-attachments depName=ossf/scorecard digestVersion=v5.6.0
+          SCORECARD_SHA256: "19bde07129450cb65a95c6e3b9f34e034341579e6f0e241546ec3ae6efb2dd9a"
+          # Same version as release.yml's cosign-release and cosignVersion in dev/lima.yaml, whose amd64
+          # SHA-256 this is: Renovate's cosign group moves all of them in one PR.
+          # renovate: datasource=github-releases depName=sigstore/cosign
+          COSIGN_VERSION: v3.1.4
+          # renovate: datasource=github-release-attachments depName=sigstore/cosign digestVersion=v3.1.4
+          COSIGN_SHA256: "424e2c97d0b45fd7a6b608a87f090f35633f4c23ece5f092d48bba11aaf4bbfa"
+          # renovate: datasource=github-releases depName=aquasecurity/trivy
+          TRIVY_VERSION: v0.76.2
+          # renovate: datasource=github-release-attachments depName=aquasecurity/trivy digestVersion=v0.76.2
+          TRIVY_SHA256: "bc0fc726e017b8927a62b2d3531d7a84ee01769daf5c99ed866dced54089fdbf"
         run: |
           set -euo pipefail
           bin="${RUNNER_TEMP}/bin"
@@ -145,6 +165,526 @@ jobs:
         run: |
           set -euo pipefail
           GOFLAGS=-mod=readonly GOPROXY=off go -C tools run github.com/rhysd/actionlint/cmd/actionlint ../.github/workflows
+      # Row 6. OpenSSF scorecard, read-only: the CLI, not the action, so nothing is published and no
+      # id-token is asked for. It reads GitHub's API with the job's token, which scorecard takes from
+      # GH_TOKEN. The checks that need admin read, Branch-Protection and Webhooks, are left out and
+      # recorded as the check scorecard-admin, "not run (needs admin read)".
+      - name: OpenSSF scorecard
+        timeout-minutes: 20
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          results="${RUNNER_TEMP}/results"
+          out="${results}/scorecard"
+          mkdir -p "${out}"
+          checks="Binary-Artifacts,CI-Tests,CII-Best-Practices,Code-Review,Contributors,Dangerous-Workflow,Dependency-Update-Tool,Fuzzing,License,Maintained,Packaging,Pinned-Dependencies,SAST,Security-Policy,Signed-Releases,Token-Permissions,Vulnerabilities"
+          rc=0
+          timeout 15m scorecard --repo "github.com/${GH_REPO}" --checks "${checks}" --format json --show-details > "${out}/scorecard.json" 2> "${out}/scorecard.stderr" || rc=$?
+          echo "${rc}" > "${out}/scorecard.exit"
+          if [ "${rc}" -eq 124 ]; then
+            echo "scorecard timed-out" >> "${results}/not-run.txt"
+            echo "scorecard timed out after 15 minutes" >> "${results}/limits.txt"
+          fi
+          printf '%s\n' Branch-Protection Webhooks > "${out}/admin-checks.txt"
+          echo "scorecard-admin needs-admin-read" >> "${results}/not-run.txt"
+          echo "finished"
+      # Row 7. The release's files and its image as they are published: every release file against
+      # checksums.txt and its own build provenance, the image's cosign signature and its provenance and
+      # SBOM attestations, keyless, bound to this repository's release.yml at refs/tags/<tag>, and whether
+      # GitHub's latest release and the image's latest tag agree. A refusal is data for the model, not a
+      # failure of the job. The step reads GitHub's API with the job's token and runs no release code;
+      # the registry is read anonymously.
+      - name: Verify the release's files, signature and attestations
+        timeout-minutes: 30
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          results="${RUNNER_TEMP}/results"
+          tag="$(sed -n 's/^release_tag=//p' "${results}/target.txt")"
+          if [[ ! "${tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error title=Audit checks::the recorded release tag is no vMAJOR.MINOR.PATCH: see runbook step 11"
+            exit 1
+          fi
+          out="${results}/release-integrity"
+          rel="${RUNNER_TEMP}/release"
+          mkdir -p "${out}/attestations" "${rel}"
+          image="ghcr.io/${GITHUB_REPOSITORY,,}"
+          signer="${GH_REPO}/.github/workflows/release.yml"
+          identity="https://github.com/${signer}@refs/tags/${tag}"
+          issuer="https://token.actions.githubusercontent.com"
+          # No registry credential: the image is public, and every registry read here is anonymous.
+          export DOCKER_CONFIG="${RUNNER_TEMP}/docker-anonymous"
+          mkdir -p "${DOCKER_CONFIG}"
+          rc=0
+          timeout 10m gh release download "${tag}" --repo "${GH_REPO}" --dir "${rel}" > "${out}/download.stdout" 2> "${out}/download.stderr" || rc=$?
+          echo "${rc}" > "${out}/download.exit"
+          if [ "${rc}" -eq 124 ]; then
+            echo "release-integrity: the release download timed out after 10 minutes" >> "${results}/limits.txt"
+          fi
+          # Every file against checksums.txt, and checksums.txt against the release's files: a file it
+          # does not list, or one it lists that the release lacks, is data for the model too.
+          rc=0
+          (cd "${rel}" && sha256sum --check --strict checksums.txt) > "${out}/checksums.stdout" 2> "${out}/checksums.stderr" || rc=$?
+          echo "${rc}" > "${out}/checksums.exit"
+          find "${rel}" -maxdepth 1 -type f ! -name checksums.txt -printf '%f\n' | LC_ALL=C sort > "${out}/assets.txt"
+          { awk '{ print $2 }' "${rel}/checksums.txt" 2> /dev/null || true; } | LC_ALL=C sort > "${out}/listed.txt"
+          rc=0
+          diff "${out}/listed.txt" "${out}/assets.txt" > "${out}/listing.diff" || rc=$?
+          echo "${rc}" > "${out}/listing.exit"
+          # Every release file's build provenance, checksums.txt's included.
+          while IFS= read -r -d '' file; do
+            name="$(basename "${file}")"
+            rc=0
+            timeout 2m gh attestation verify "${file}" \
+              --repo "${GH_REPO}" \
+              --signer-workflow "${signer}" \
+              --source-ref "refs/tags/${tag}" \
+              --deny-self-hosted-runners > "${out}/attestations/${name}.stdout" 2> "${out}/attestations/${name}.stderr" || rc=$?
+            echo "${rc}" > "${out}/attestations/${name}.exit"
+          done < <(find "${rel}" -maxdepth 1 -type f -print0)
+          # The tag's digest, which every later row reads by, and the latest tag's: a digest the registry
+          # answers in any other shape is recorded as no digest, so the image is then not pulled.
+          rc=0
+          tag_digest="$(timeout 2m docker buildx imagetools inspect "${image}:${tag}" --format '{{.Manifest.Digest}}' 2> "${out}/tag-digest.stderr")" || rc=$?
+          echo "${rc}" > "${out}/tag-digest.exit"
+          if [[ ! "${tag_digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            tag_digest=""
+          fi
+          printf '%s\n' "${tag_digest}" > "${out}/image-digest.txt"
+          rc=0
+          latest_digest="$(timeout 2m docker buildx imagetools inspect "${image}:latest" --format '{{.Manifest.Digest}}' 2> "${out}/latest-digest.stderr")" || rc=$?
+          echo "${rc}" > "${out}/latest-digest.exit"
+          rc=0
+          latest_release="$(timeout 2m gh api "repos/${GH_REPO}/releases/latest" --jq .tag_name 2> "${out}/latest-release.stderr")" || rc=$?
+          echo "${rc}" > "${out}/latest-release.exit"
+          printf 'recorded_tag=%s\nlatest_release=%s\ntag_digest=%s\nlatest_digest=%s\n' "${tag}" "${latest_release}" "${tag_digest}" "${latest_digest}" > "${out}/latest.txt"
+          if [ -n "${tag_digest}" ]; then
+            ref="${image}@${tag_digest}"
+            rc=0
+            timeout 5m cosign verify "${ref}" \
+              --certificate-identity "${identity}" \
+              --certificate-oidc-issuer "${issuer}" \
+              --certificate-github-workflow-trigger push > "${out}/cosign-signature.json" 2> "${out}/cosign-signature.stderr" || rc=$?
+            echo "${rc}" > "${out}/cosign-signature.exit"
+            for pair in provenance:slsaprovenance1 sbom:https://spdx.dev/Document/v2.3; do
+              kind="${pair%%:*}"
+              type="${pair#*:}"
+              rc=0
+              timeout 5m cosign verify-attestation "${ref}" \
+                --type "${type}" \
+                --certificate-identity "${identity}" \
+                --certificate-oidc-issuer "${issuer}" \
+                --certificate-github-workflow-trigger push > "${out}/cosign-${kind}.json" 2> "${out}/cosign-${kind}.stderr" || rc=$?
+              echo "${rc}" > "${out}/cosign-${kind}.exit"
+            done
+            # The SBOM itself, for row 10: the predicate of the attestation gh verifies.
+            rc=0
+            timeout 5m gh attestation verify "oci://${ref}" \
+              --repo "${GH_REPO}" \
+              --signer-workflow "${signer}" \
+              --source-ref "refs/tags/${tag}" \
+              --deny-self-hosted-runners \
+              --predicate-type https://spdx.dev/Document/v2.3 \
+              --format json > "${out}/sbom-attestation.json" 2> "${out}/sbom-attestation.stderr" || rc=$?
+            echo "${rc}" > "${out}/sbom-attestation.exit"
+            rc=0
+            jq -e '.[0].verificationResult.statement.predicate' "${out}/sbom-attestation.json" > "${out}/sbom.spdx.json" 2> /dev/null || rc=$?
+            echo "${rc}" > "${out}/sbom-extract.exit"
+          fi
+          echo "finished"
+      # Row 8. The image, pulled anonymously from GHCR by the digest row 7 resolved: no packages scope and
+      # no docker login, so a pull that needs a credential fails as it would for any user. It is saved
+      # as an archive for trivy (row 10). No token: nothing here reads GitHub's API.
+      - name: Pull the image anonymously by digest
+        timeout-minutes: 15
+        run: |
+          set -euo pipefail
+          results="${RUNNER_TEMP}/results"
+          out="${results}/image-pull"
+          mkdir -p "${out}"
+          image="ghcr.io/${GITHUB_REPOSITORY,,}"
+          export DOCKER_CONFIG="${RUNNER_TEMP}/docker-anonymous"
+          mkdir -p "${DOCKER_CONFIG}"
+          digest="$(cat "${results}/release-integrity/image-digest.txt")"
+          if [ -z "${digest}" ]; then
+            echo "image-pull image-not-pulled" >> "${results}/not-run.txt"
+            echo "finished"
+            exit 0
+          fi
+          if [[ ! "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error title=Audit checks::the recorded image digest is no sha256 digest: see runbook step 11"
+            exit 1
+          fi
+          rc=0
+          timeout 10m docker pull --platform linux/amd64 "${image}@${digest}" > "${out}/pull.stdout" 2> "${out}/pull.stderr" || rc=$?
+          echo "${rc}" > "${out}/pull.exit"
+          if [ "${rc}" -eq 124 ]; then
+            echo "image-pull timed-out" >> "${results}/not-run.txt"
+            echo "image-pull timed out after 10 minutes" >> "${results}/limits.txt"
+          fi
+          if [ "${rc}" -eq 0 ]; then
+            mkdir -p "${RUNNER_TEMP}/image"
+            docker image inspect "${image}@${digest}" > "${out}/inspect.json"
+            docker save --output "${RUNNER_TEMP}/image/image.tar" "${image}@${digest}"
+          fi
+          echo "finished"
+      # Row 9. govulncheck in binary mode on every release binary: read, never run. Each archive gives up
+      # its shift2eu binary alone, unpacked with no owner or mode of the archive's, and only a regular
+      # file is read: a link the archive holds is never followed.
+      - name: govulncheck on the release binaries
+        timeout-minutes: 20
+        run: |
+          set -euo pipefail
+          results="${RUNNER_TEMP}/results"
+          out="${results}/binary-vulnerabilities"
+          rel="${RUNNER_TEMP}/release"
+          bins="${RUNNER_TEMP}/release-binaries"
+          mkdir -p "${out}" "${bins}"
+          found=0
+          while IFS= read -r -d '' archive; do
+            name="$(basename "${archive}")"
+            dir="${bins}/${name}"
+            mkdir -p "${dir}"
+            rc=0
+            case "${name}" in
+              *.tar.gz) tar -C "${dir}" --no-same-owner --no-same-permissions -xzf "${archive}" shift2eu 2> "${out}/${name}.unpack.stderr" || rc=$? ;;
+              *.zip) unzip -q -j "${archive}" shift2eu.exe -d "${dir}" 2> "${out}/${name}.unpack.stderr" || rc=$? ;;
+            esac
+            echo "${rc}" > "${out}/${name}.unpack.exit"
+            bin="$(find "${dir}" -maxdepth 1 -type f \( -name shift2eu -o -name shift2eu.exe \) -print -quit)"
+            if [ -z "${bin}" ]; then
+              continue
+            fi
+            found=$((found + 1))
+            rc=0
+            GOFLAGS=-mod=readonly GOPROXY=off timeout 5m govulncheck -mode=binary -format json "${bin}" > "${out}/${name}.json" 2> "${out}/${name}.stderr" || rc=$?
+            echo "${rc}" > "${out}/${name}.exit"
+            if [ "${rc}" -eq 124 ]; then
+              echo "binary-vulnerabilities: ${name} timed out after 5 minutes" >> "${results}/limits.txt"
+            fi
+          done < <(find "${rel}" -maxdepth 1 -type f \( -name 'shift2eu_*.tar.gz' -o -name 'shift2eu_*.zip' \) -print0)
+          if [ "${found}" -eq 0 ]; then
+            echo "binary-vulnerabilities results-missing" >> "${results}/not-run.txt"
+          fi
+          echo "finished"
+      # Row 10. trivy on the pulled image and on its attested SBOM, from the database row 2 downloaded:
+      # offline at scan time, with no database, Java database, check bundle or version download and no
+      # telemetry.
+      - name: trivy on the image and its SBOM
+        timeout-minutes: 15
+        run: |
+          set -euo pipefail
+          results="${RUNNER_TEMP}/results"
+          out="${results}/image-scan"
+          mkdir -p "${out}"
+          if [ "$(cat "${results}/trivy-db.exit")" != 0 ]; then
+            echo "image-scan tool-failed" >> "${results}/not-run.txt"
+            echo "finished"
+            exit 0
+          fi
+          offline=(--cache-dir "${RUNNER_TEMP}/trivy-cache" --skip-db-update --skip-java-db-update --skip-check-update --offline-scan --skip-version-check --disable-telemetry --no-progress --scanners vuln --format json)
+          scanned=0
+          if [ -f "${RUNNER_TEMP}/image/image.tar" ]; then
+            rc=0
+            timeout 10m trivy image "${offline[@]}" --input "${RUNNER_TEMP}/image/image.tar" --output "${out}/image.json" 2> "${out}/image.stderr" || rc=$?
+            echo "${rc}" > "${out}/image.exit"
+            if [ "${rc}" -eq 124 ]; then
+              echo "image-scan: the image scan timed out after 10 minutes" >> "${results}/limits.txt"
+            fi
+            scanned=$((scanned + 1))
+          else
+            echo "image-scan: the image was not pulled, so only its SBOM was scanned" >> "${results}/limits.txt"
+          fi
+          sbom="${results}/release-integrity/sbom.spdx.json"
+          if [ -s "${sbom}" ]; then
+            rc=0
+            timeout 5m trivy sbom "${offline[@]}" --output "${out}/sbom.json" "${sbom}" 2> "${out}/sbom.stderr" || rc=$?
+            echo "${rc}" > "${out}/sbom.exit"
+            if [ "${rc}" -eq 124 ]; then
+              echo "image-scan: the SBOM scan timed out after 5 minutes" >> "${results}/limits.txt"
+            fi
+            scanned=$((scanned + 1))
+          else
+            echo "image-scan: no verified SBOM, so only the image was scanned" >> "${results}/limits.txt"
+          fi
+          if [ "${scanned}" -eq 0 ]; then
+            echo "image-scan image-not-pulled" >> "${results}/not-run.txt"
+          fi
+          echo "finished"
+      # Row 11. The image's runtime settings, read from its configuration and its filesystem, never by
+      # a shell in it: its user, a start with a read-only root filesystem, no network and no capability,
+      # and the shells and setuid files its filesystem holds. docker create starts nothing, and docker
+      # export copies the created container's filesystem out as an archive that tar only lists.
+      - name: Check the image's runtime settings
+        timeout-minutes: 10
+        run: |
+          set -euo pipefail
+          results="${RUNNER_TEMP}/results"
+          out="${results}/image-runtime"
+          mkdir -p "${out}"
+          image="ghcr.io/${GITHUB_REPOSITORY,,}"
+          digest="$(cat "${results}/release-integrity/image-digest.txt")"
+          if [ -z "${digest}" ]; then
+            echo "image-runtime image-not-pulled" >> "${results}/not-run.txt"
+            echo "finished"
+            exit 0
+          fi
+          if [[ ! "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error title=Audit checks::the recorded image digest is no sha256 digest: see runbook step 11"
+            exit 1
+          fi
+          if ! docker image inspect "${image}@${digest}" > /dev/null 2>&1; then
+            echo "image-runtime image-not-pulled" >> "${results}/not-run.txt"
+            echo "finished"
+            exit 0
+          fi
+          docker image inspect --format '{{json .Config}}' "${image}@${digest}" > "${out}/config.json"
+          cid="$(docker create --read-only --network none --cap-drop ALL --security-opt no-new-privileges "${image}@${digest}" version)"
+          docker export "${cid}" | tar -tvf - > "${out}/filesystem.txt"
+          rc=0
+          timeout 60 docker start --attach "${cid}" > "${out}/version.stdout" 2> "${out}/version.stderr" < /dev/null || rc=$?
+          echo "${rc}" > "${out}/version.exit"
+          if [ "${rc}" -eq 124 ]; then
+            docker kill "${cid}" > /dev/null 2>&1 || true
+            echo "image-runtime: the read-only start timed out after 60 seconds" >> "${results}/limits.txt"
+          fi
+          docker inspect --format '{{.State.ExitCode}} {{.State.OOMKilled}}' "${cid}" > "${out}/version.state"
+          docker rm -f "${cid}" > /dev/null
+          grep -E '/(sh|ash|bash|dash|ksh|zsh|busybox)( -> .*)?$' "${out}/filesystem.txt" > "${out}/shells.txt" || true
+          grep -E '^[-l]..[sS]|^[-l].....[sS]' "${out}/filesystem.txt" > "${out}/setuid.txt" || true
+          echo "finished"
+      # Row 13. The released CLI on hostile inventory files: the committed corpus (ADR 0040) and the cases
+      # generated here, which no text file holds. The inputs reach the image one way: docker cp into a
+      # container that is created and never started, which docker commit turns into the image each run
+      # starts from, as Docker refuses a docker cp into a container whose root filesystem is read-only.
+      # Each run is a container of its own: no network, a read-only root filesystem, no capability, no new
+      # privileges, no tmpfs (the CLI writes nothing but its stdout and stderr), no mount and no socket,
+      # and its output leaves only on its stdout and stderr.
+      - name: Run the CLI on hostile inventory files
+        timeout-minutes: 20
+        run: |
+          set -euo pipefail
+          results="${RUNNER_TEMP}/results"
+          out="${results}/hostile-inventories"
+          mkdir -p "${out}"
+          image="ghcr.io/${GITHUB_REPOSITORY,,}"
+          digest="$(cat "${results}/release-integrity/image-digest.txt")"
+          if [ -z "${digest}" ]; then
+            echo "hostile-inventories image-not-pulled" >> "${results}/not-run.txt"
+            echo "finished"
+            exit 0
+          fi
+          if [[ ! "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error title=Audit checks::the recorded image digest is no sha256 digest: see runbook step 11"
+            exit 1
+          fi
+          if ! docker image inspect "${image}@${digest}" > /dev/null 2>&1; then
+            echo "hostile-inventories image-not-pulled" >> "${results}/not-run.txt"
+            echo "finished"
+            exit 0
+          fi
+          stage="${RUNNER_TEMP}/hostile/hostile"
+          mkdir -p "${stage}/a-directory"
+          cp .github/security-audit/testdata/hostile-inventories/*.json "${stage}/"
+          prefix='{"schemaVersion": 2, "source": "aws", "resources": ['
+          # One byte past the 10 MiB cap: a valid opening, then spaces.
+          { printf '%s' "${prefix}"; head -c 10485761 /dev/zero | tr '\0' ' '; printf ']}\n'; } > "${stage}/oversized.json"
+          # One resource past the cap of 50000.
+          {
+            printf '%s' "${prefix}"
+            for i in $(seq 1 50000); do
+              printf '{"id": "r%d", "rawType": "x", "category": "compute.vm", "region": "eu-central-1"},' "${i}"
+            done
+            printf '{"id": "last", "rawType": "x", "category": "compute.vm", "region": "eu-central-1"}]}\n'
+          } > "${stage}/too-many-resources.json"
+          # Arrays nested 100000 deep where a resource is wanted, and an ID of 1 MiB.
+          { printf '%s' "${prefix}"; head -c 100000 /dev/zero | tr '\0' '['; head -c 100000 /dev/zero | tr '\0' ']'; printf ']}\n'; } > "${stage}/deep-nesting.json"
+          { printf '%s{"id": "' "${prefix}"; head -c 1048576 /dev/zero | tr '\0' 'a'; printf '", "rawType": "x", "category": "compute.vm", "region": "eu-central-1"}]}\n'; } > "${stage}/huge-string.json"
+          # Malformed UTF-8 (a lone continuation byte, an overlong slash, an encoded surrogate), a byte
+          # order mark, a NUL byte outside a string, and nothing at all.
+          printf '%s{"id": "bad-\x80-\xc0\xaf-\xed\xa0\x80", "rawType": "x", "category": "compute.vm", "region": "eu-central-1"}]}\n' "${prefix}" > "${stage}/malformed-utf8.json"
+          printf '\xef\xbb\xbf{"schemaVersion": 2, "source": "aws", "resources": []}\n' > "${stage}/byte-order-mark.json"
+          printf '{"schemaVersion": 2, "source": "aws",\x00 "resources": []}\n' > "${stage}/nul-byte.json"
+          : > "${stage}/empty.json"
+          # Links out of the input: the CLI's own environment, endless files, a missing file and a loop.
+          ln -s /proc/self/environ "${stage}/link-to-environ.json"
+          ln -s /dev/zero "${stage}/link-to-zero.json"
+          ln -s /dev/urandom "${stage}/link-to-urandom.json"
+          ln -s missing.json "${stage}/dangling-link.json"
+          ln -s link-loop.json "${stage}/link-loop.json"
+          chmod 0755 "${stage}" "${stage}/a-directory"
+          find "${stage}" -type f -exec chmod 0644 {} +
+          staging="$(docker create "${image}@${digest}")"
+          docker cp "${stage}" "${staging}:/work/"
+          docker commit "${staging}" "audit-hostile:${GITHUB_RUN_ID}" > /dev/null
+          docker rm "${staging}" > /dev/null
+          for path in "${stage}"/*; do
+            name="$(basename "${path}")"
+            for format in markdown json; do
+              # The step's budget: 15 minutes of runs, which leaves room for the image's set-up.
+              if [ "${SECONDS}" -ge 900 ]; then
+                echo "hostile-inventories: the budget of 15 minutes ran out before ${name} as ${format}" >> "${results}/limits.txt"
+                continue
+              fi
+              run="${name}.${format}"
+              cid="$(docker create --read-only --network none --cap-drop ALL --security-opt no-new-privileges --memory 512m --pids-limit 64 "audit-hostile:${GITHUB_RUN_ID}" assess --inventory "hostile/${name}" --target all --format "${format}")"
+              rc=0
+              timeout 60 docker start --attach "${cid}" > "${out}/${run}.stdout" 2> "${out}/${run}.stderr" < /dev/null || rc=$?
+              echo "${rc}" > "${out}/${run}.exit"
+              if [ "${rc}" -eq 124 ]; then
+                docker kill "${cid}" > /dev/null 2>&1 || true
+                echo "hostile-inventories: ${run} timed out after 60 seconds" >> "${results}/limits.txt"
+              fi
+              docker inspect --format '{{.State.ExitCode}} {{.State.OOMKilled}}' "${cid}" > "${out}/${run}.state"
+              docker rm -f "${cid}" > /dev/null
+            done
+          done
+          docker image rm "audit-hostile:${GITHUB_RUN_ID}" > /dev/null
+          echo "finished"
+      # Row 14. Time-boxed fuzzing of the committed Fuzz* targets, found by reading the tracked *_test.go
+      # files outside testdata as text: nothing runs to list them. Each target fuzzes for 10 minutes in a
+      # container of its own, from the Go image pinned below by digest: no network, GOPROXY=off, a
+      # read-only root filesystem, no capability, no new privileges, an unprivileged user. Its inputs, the
+      # tree at the audited commit and the module cache, reach the image as row 13's do; its one tmpfs,
+      # /scratch, holds the copy of the tree go test writes crash inputs into, the build cache and the
+      # binaries go test builds and runs, so it is mounted exec. The crash inputs leave on stdout as a tar
+      # stream, and the log on stderr. At most three targets run, within the step's 50 minutes; any other
+      # target is recorded in the limits.
+      - name: Fuzz the committed Fuzz targets
+        timeout-minutes: 50
+        env:
+          GOFLAGS: -mod=readonly
+          GOPROXY: "off"
+          # The Dockerfile's builder image, by tag and digest: Renovate's Go toolchain group moves it with
+          # go.mod's go line and the Dockerfile's copy.
+          # renovate: datasource=docker depName=golang
+          GO_IMAGE: "1.27.4-alpine@sha256:70bd7ddea8b6cbe5d6943cde279d6b67feb10cc924fb9100d1d8757c1575b280"
+        run: |
+          set -euo pipefail
+          results="${RUNNER_TEMP}/results"
+          out="${results}/fuzzing"
+          mkdir -p "${out}/targets"
+          git ls-files -z -- '*_test.go' | while IFS= read -r -d '' file; do
+            case "/${file}" in
+              */testdata/*) continue ;;
+            esac
+            { grep -oE '^func Fuzz[A-Za-z0-9_]*\(' "${file}" || true; } | sed -e 's/^func //' -e 's/($//' | while IFS= read -r name; do
+              printf '%s %s\n' "$(dirname "${file}")" "${name}"
+            done
+          done | LC_ALL=C sort -u > "${out}/targets.txt"
+          if [ ! -s "${out}/targets.txt" ]; then
+            echo "fuzzing no-fuzz-targets" >> "${results}/not-run.txt"
+            echo "finished"
+            exit 0
+          fi
+          image="golang:${GO_IMAGE}"
+          rc=0
+          timeout 5m docker pull "${image}" > "${out}/pull.stdout" 2> "${out}/pull.stderr" || rc=$?
+          echo "${rc}" > "${out}/pull.exit"
+          if [ "${rc}" -ne 0 ]; then
+            echo "fuzzing tool-failed" >> "${results}/not-run.txt"
+            echo "finished"
+            exit 0
+          fi
+          src="${RUNNER_TEMP}/fuzz-src"
+          mkdir -p "${src}"
+          git archive --format=tar "${GITHUB_SHA}" | tar -C "${src}" -xf -
+          modcache="$(go env GOMODCACHE)"
+          staging="$(docker create "${image}")"
+          docker cp "${src}" "${staging}:/src"
+          docker cp "${modcache}" "${staging}:/modcache"
+          docker commit "${staging}" "audit-fuzz:${GITHUB_RUN_ID}" > /dev/null
+          docker rm "${staging}" > /dev/null
+          n=0
+          while read -r pkg name; do
+            if [[ ! "${name}" =~ ^Fuzz[A-Za-z0-9_]*$ ]] || [[ ! "${pkg}" =~ ^[A-Za-z0-9_][A-Za-z0-9_./-]*$ ]] || [[ "${pkg}" == *..* ]]; then
+              echo "::error title=Audit checks::a fuzz target's package or name has an unexpected shape: see runbook step 11"
+              exit 1
+            fi
+            n=$((n + 1))
+            if [ "${n}" -gt 3 ]; then
+              echo "fuzzing: ${pkg} ${name} not run, over the budget of three targets" >> "${results}/limits.txt"
+              continue
+            fi
+            cid="$(docker create --read-only --network none --cap-drop ALL --security-opt no-new-privileges --user 65534:65534 \
+              --tmpfs /scratch:rw,exec,nosuid,size=4g,mode=1777 \
+              --env GOFLAGS --env GOPROXY --env GOTOOLCHAIN=local --env GOMODCACHE=/modcache --env GOCACHE=/scratch/go-build \
+              --env GOTMPDIR=/scratch --env TMPDIR=/scratch --env HOME=/scratch --env FUZZ_PKG="${pkg}" --env FUZZ_NAME="${name}" \
+              "audit-fuzz:${GITHUB_RUN_ID}" \
+              sh -c 'cp -R /src /scratch/src && cd /scratch/src && go test -run "^$" -fuzz "^${FUZZ_NAME}\$" -fuzztime 10m "./${FUZZ_PKG}" >&2; rc=$?; tar -C /scratch/src -cf - "${FUZZ_PKG}/testdata/fuzz" 2> /dev/null; exit "${rc}"')"
+            rc=0
+            timeout 12m docker start --attach "${cid}" > "${out}/targets/${n}-${name}.tar" 2> "${out}/targets/${n}-${name}.log" < /dev/null || rc=$?
+            echo "${rc}" > "${out}/targets/${n}-${name}.exit"
+            if [ "${rc}" -eq 124 ]; then
+              docker kill "${cid}" > /dev/null 2>&1 || true
+              echo "fuzzing: ${pkg} ${name} timed out after 12 minutes" >> "${results}/limits.txt"
+            fi
+            docker rm -f "${cid}" > /dev/null
+          done < "${out}/targets.txt"
+          docker image rm "audit-fuzz:${GITHUB_RUN_ID}" > /dev/null
+          echo "finished"
+      # Row 15. Supply-chain reads: the workflows' action pins and permissions from the checkout, as
+      # text; the rulesets, the environments and their branch policies, and the secret and variable
+      # names, as the release-tag skill's step 2 reads them; Renovate's Dependency Dashboard and open pull
+      # requests; and the dependency files changed since the last report. Reads only, with the job's
+      # token: a read it is refused is recorded in read-refused.txt and the limits, "not run (read
+      # refused)" for that read.
+      - name: Supply-chain reads
+        timeout-minutes: 15
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          results="${RUNNER_TEMP}/results"
+          out="${results}/supply-chain"
+          mkdir -p "${out}/api"
+          grep -rnE '^[[:space:]]*(-[[:space:]]+)?uses:' .github/workflows > "${out}/uses.txt" || true
+          { grep -rnE '^[[:space:]]*(-[[:space:]]+)?uses:' .github/workflows || true; } | { grep -vE '@[0-9a-f]{40}([[:space:]]|$)' || true; } > "${out}/uses-not-pinned.txt"
+          grep -rn -A12 -E '^[[:space:]]*permissions:' .github/workflows > "${out}/permissions.txt" || true
+          touch "${out}/read-refused.txt"
+          read_api() {
+            local name="$1" endpoint="$2" rc=0
+            timeout 2m gh api "${endpoint}" > "${out}/api/${name}.json" 2> "${out}/api/${name}.stderr" || rc=$?
+            echo "${rc}" > "${out}/api/${name}.exit"
+            if [ "${rc}" -ne 0 ]; then
+              echo "${name}" >> "${out}/read-refused.txt"
+            fi
+          }
+          read_api rulesets "repos/${GH_REPO}/rulesets?includes_parents=true"
+          for id in $(jq -r '.[]?.id' "${out}/api/rulesets.json" 2> /dev/null || true); do
+            if [[ ! "${id}" =~ ^[0-9]+$ ]]; then
+              echo "::error title=Audit checks::a ruleset ID is no number: see runbook step 11"
+              exit 1
+            fi
+            read_api "ruleset-${id}" "repos/${GH_REPO}/rulesets/${id}"
+          done
+          for env in release-please release-tag ai-review site security-audit; do
+            read_api "environment-${env}" "repos/${GH_REPO}/environments/${env}"
+            read_api "environment-${env}-branch-policies" "repos/${GH_REPO}/environments/${env}/deployment-branch-policies"
+            read_api "environment-${env}-secret-names" "repos/${GH_REPO}/environments/${env}/secrets"
+            read_api "environment-${env}-variable-names" "repos/${GH_REPO}/environments/${env}/variables"
+          done
+          read_api repository-secret-names "repos/${GH_REPO}/actions/secrets"
+          read_api repository-variable-names "repos/${GH_REPO}/actions/variables"
+          read_api renovate-dashboard "repos/${GH_REPO}/issues?state=all&creator=renovate%5Bbot%5D&per_page=100"
+          read_api renovate-pull-requests "search/issues?q=repo:${GH_REPO}+is:pr+is:open+author:app/renovate&per_page=100"
+          last="$(git ls-files 'docs/security/audits/[0-9]*.md' | LC_ALL=C sort | tail -n 1)"
+          if [ -n "${last}" ]; then
+            base="$(git log -1 --format=%H -- "${last}")"
+            printf 'last_report=%s\nbase=%s\n' "${last}" "${base}" > "${out}/dependencies.txt"
+            git diff "${base}" "${GITHUB_SHA}" -- go.mod go.sum tools/go.mod tools/go.sum Dockerfile .github/workflows .github/claude-code.yaml dev/lima.yaml infra/tofu.yaml > "${out}/dependencies.diff"
+          else
+            echo "no earlier report" > "${out}/dependencies.txt"
+          fi
+          if [ -s "${out}/read-refused.txt" ]; then
+            echo "supply-chain: reads refused to the job's token, listed in supply-chain/read-refused.txt: not run (read refused)" >> "${results}/limits.txt"
+          fi
+          echo "finished"
       - name: Encrypt the checks' results to the model key
         timeout-minutes: 5
         env:
