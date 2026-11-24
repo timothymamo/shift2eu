@@ -6,9 +6,10 @@
  * the event that sees a tool call before it runs, and blocks:
  *
  * - a bash call whose command matches any pattern of ../deny-env-printing.json;
- * - a file-tool call (read, grep, find, ls, edit, write) whose path, after `~` and `..` are resolved
- *   against the working directory, is /proc or ~/.config/dot-agent-deck or lies under either, or whose
- *   path, glob or pattern names the deck's file of keys, daemon.env, or its directory.
+ * - a file-tool call (read, grep, find, ls, edit, write) whose path, normalised as pi normalises it (a
+ *   leading `@`, a `file://` URL, Unicode spaces, `~`, `..`) and resolved against the working directory,
+ *   is /proc or ~/.config/dot-agent-deck or lies under either, or whose path, glob or pattern names the
+ *   deck's file of keys, daemon.env, or its directory.
  *
  * The patterns are data, pinned by test/architecture/pienvdeny_test.go, and are written to the syntax Go's
  * RE2 and JavaScript share (no lookaround, no backreference, no inline flag).
@@ -69,10 +70,26 @@ function loadDenyList(): Loaded {
 // keeps there: refused whole, by resolved path and by name in a glob or pattern.
 const deckKeyDirectory = ".config/dot-agent-deck";
 
-// resolvePath resolves a file tool's path as pi resolves it: a leading `~` is the home directory, a
-// relative path is under the working directory, `..` is normalised.
+// The spellings of that directory a path normalises or a glob names (`.config//dot-agent-deck`,
+// `.config/./dot-agent-deck`, `.config/dot-agent*`), refused in a glob or pattern as the list refuses
+// them in a bash command.
+const deckDirectorySpelling = /\.config[/.]*\/dot-agent/;
+
+// The Unicode spaces pi maps to a plain space before it reads a path.
+const unicodeSpaces = /[  -   　]/g;
+
+// resolvePath resolves a file tool's path as pi's resolveToCwd and normalizePath do: one leading `@`
+// (pi's shorthand for a path) is dropped, a `file://` URL becomes its path, the Unicode spaces become
+// plain ones, a leading `~` is the home directory, a relative path is under the working directory and
+// `..` is normalised. A URL that does not convert throws, and the handler refuses the call: a fallback
+// to the raw value would resolve `file:///proc/...` as a relative path and allow it.
 function resolvePath(path: string, cwd: string): string {
-	let expanded = path;
+	let expanded = path.startsWith("@") ? path.slice(1) : path;
+	if (expanded.startsWith("file://")) {
+		expanded = fileURLToPath(expanded);
+	}
+
+	expanded = expanded.replace(unicodeSpaces, " ");
 	if (expanded === "~" || expanded.startsWith("~/")) {
 		expanded = homedir() + expanded.slice(1);
 	}
@@ -141,7 +158,7 @@ export default function (pi: ExtensionAPI) {
 						continue;
 					}
 
-					if (value.includes(deckKeyFile) || value.includes(deckKeyDirectory)) {
+					if (value.includes(deckKeyFile) || value.includes(deckKeyDirectory) || deckDirectorySpelling.test(value)) {
 						return { block: true, reason: keyFileReason };
 					}
 

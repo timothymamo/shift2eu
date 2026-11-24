@@ -27,9 +27,18 @@ Hold rule 3 with a second layer in both agents, beside the words in CLAUDE.md:
 - **pi:** `.pi/extensions/deny-env-printing.ts` hooks `tool_call`. It refuses a bash command that matches
   any pattern of `.pi/deny-env-printing.json` (`{"reason": ..., "patterns": [...]}`, read relative to the
   extension file), with the list's reason, and a read, grep, find, ls, edit or write call whose path
-  resolves to `/proc` or `~/.config/dot-agent-deck`, or below either (after `~` and `..`, against the
-  working directory), or whose path, glob or pattern names `daemon.env` or `.config/dot-agent-deck`. It tests `event.toolName` itself and imports pi's package for types
-  alone (`import type`), so the guard does not depend at run time on the module it guards.
+  resolves to `/proc` or `~/.config/dot-agent-deck`, or below either, or whose path, glob or pattern
+  names `daemon.env` or the deck's directory (`.config/dot-agent-deck`, or a spelling bash or a glob
+  reads the same: `.config//dot-agent-deck`, `.config/./dot-agent-deck`, `.config/dot-agent*`). The path
+  is normalised as pi's `resolveToCwd` and `normalizePath` normalise it before a tool reads it, or the
+  guard would resolve a value pi reads differently (`@/proc/self/environ`): one leading `@` (pi's
+  shorthand for a path) is dropped, a `file://` URL becomes its path (`fileURLToPath` from `node:url`; a
+  URL that does not convert throws, and the handler refuses the call rather than resolving the raw value
+  as a relative path), the Unicode spaces pi maps (`U+00A0`, `U+2000`-`U+200A`, `U+202F`, `U+205F`,
+  `U+3000`) become plain spaces, then `~` is the home directory and the result is resolved against the
+  working directory, `..` included. It tests `event.toolName` itself, imports only `node:` built-ins and
+  pi's package for types alone (`import type`), so the guard does not depend at run time on the module it
+  guards.
   - **What fails closed, and what does not.** pi reports an extension that fails to load and carries on
     without it: a load failure fails open. So the extension's top level does nothing that can throw (the
     list's path is computed inside the loader's `try`), and the factory never throws. After load it fails
@@ -39,15 +48,18 @@ Hold rule 3 with a second layer in both agents, beside the words in CLAUDE.md:
     "env-printing refusal loaded" (or that the list failed) when the pane has a UI (`ctx.hasUI`), and
     nothing otherwise.
   - **What the patterns refuse.** Every pattern for a command word shares one prefix: a separator
-    (start, newline, `;`, `&`, `|`, `(`, a backtick, `{`, a quote), then any number of redirects in front
+    (start, newline, `;`, `&`, `|`, `(`, `)`, a backtick, `{`, a quote; `)` ends a case pattern or a
+    subshell: `case x in x) env;; esac`), then up to six elements of the prefix (see the bound below):
+    redirects in front
     of the command word (`2>&1 env`, `</dev/null env`, `> out env`, `2>x export`: bash runs the printer
     all the same), assignments (`FOO=1 env`), shell keywords (`then`, `do`, `else`, `elif`, `if`,
     `while`, `until`, `!`) and wrappers that run their argument (`sudo`, `command`, `builtin`, `exec`,
     `nohup`, `time`, `xargs`, `timeout`, `nice`, `ionice`, `stdbuf`, `doas`, `busybox`, `eval`, `env`,
     `bash`/`sh`/`zsh`/`dash`/`ksh`/`fish`, `setsid`, `strace`, `ltrace`, `watch`, `script`, `unbuffer`,
-    `su`, `runuser`, `coproc`, each with options, an option's one plain value, numeric or duration words
-    and assignments: `timeout -s KILL 5 env`, `sudo -u x env`, `xargs -a f env`, `bash -c 'env'`; and
-    `flock` and `chroot`, which take one plain word before the command: `flock x env`, `chroot / env`),
+    `su`, `runuser`, `coproc`, each with up to four options, an option's one plain value, numeric or
+    duration words and assignments: `timeout -s KILL 5 env`, `sudo -u x env`, `xargs -a f env`,
+    `bash -c 'env'`, `sudo -u x nice -n 1 timeout 5 env`; and `flock` and `chroot`, which take up to four
+    options and one plain word before the command: `flock x env`, `chroot / env`),
     then an optional quote or backslash (a backslash-escaped command word, `\env`, `\printenv`, runs the
     same command). After that prefix they refuse: `env` followed only by options (also `-u`/`-C`/`--unset`/
     `--chdir` with their value: `env -u FOO`, `env -C /tmp`) and assignments, then the end, a separator or
@@ -58,13 +70,30 @@ Hold rule 3 with a second layer in both agents, beside the words in CLAUDE.md:
     argument is a BSD option word with `e` (`ps e`, `ps eww`, `ps auxeww`); `make` with an option holding
     `p` or `--print-data-base` (`make -p`, `make -pn`). Anywhere in a command they refuse a `/proc` path,
     absolute or relative (`ls /proc/1`, `cat /proc/self/env*`, `cat ../../proc/self/environ`), a
-    `pro...` path, relative or globbed, that leads to an `environ` (`cat proc/self/environ` after `cd /`,
-    `cat /pro?/self/environ`), `daemon.env`, the deck's key directory (`.config/dot-agent-deck`: `grep -r .
-    ~/.config/dot-agent-deck`; the repository's `.dot-agent-deck.toml` and `.dot-agent-deck/` are not
-    it), the expansion of a key by name (`$..._KEY`, `${..._TOKEN}`, `$..._SECRET`, `$..._PASSWORD`, and
-    `${!` indirection), and the interpreter one-liners that read the environment themselves (`ENVIRON`,
-    `os.environ`, `os.getenv`, `process.env`, `%ENV`, `$ENV{`, `getenv(`, Ruby's `ENV.` and `ENV[`,
-    Python's bare `environ` word).
+    `pro...` path, relative or globbed, whose second segment after it is `environ`
+    (`pro[^/\s]*/+[^/\s]*/+environ`: `cat proc/self/environ` after `cd /`, `cat /pro?/self/environ`; not
+    `.../provider/environ_test.go` or `.../projects/shift2eu/docs/dev-environment.md`), `daemon.env`, the
+    deck's key directory in every spelling bash reads the same (`\.config[/.]*/dot-agent`: `grep -r .
+    ~/.config/dot-agent-deck`, `~/.config//dot-agent-deck/x`, `~/.config/./dot-agent-deck/x`,
+    `ls ~/.config/dot-agent*`; the repository's `.dot-agent-deck.toml` and `.dot-agent-deck/`, and
+    `~/.local/bin/dot-agent-deck`, are not it), the expansion of a key by name (`$..._KEY`,
+    `${..._TOKEN}`, `$..._SECRET`, `$..._PASSWORD`, and `${!` indirection), the interpreter one-liners that
+    read the environment themselves (`ENVIRON`, `os.environ`, `os.getenv`, `process.env`, `%ENV`, `$ENV{`,
+    `getenv(`, Ruby's bare `ENV` word, `ruby -e 'p ENV'`, Python's bare `environ` word), `gh`'s own token
+    printers (`gh auth token`, and `gh auth status` with `-t` or `--show-token`), and `jq`'s environment
+    (its `env` builtin after `jq`, `jq -n env`, and `$ENV` anywhere, `jq -n '$ENV'`).
+  - **The bound on every repeat.** pi matches with JavaScript's backtracking engine. An unbounded group
+    repeat around a part that is itself optional (a wrapper's option with its optional plain value) costs
+    exponentially many paths on a command that almost matches: before the bound, `"sudo -u "` 22 times and
+    a `-` took 4.4 s in Node and 40 times never finished, a hung tool call the agent cannot tell from a
+    broken one. Go's RE2 is linear on the same pattern, so the Go tables cannot show the cost; every group
+    repeat is therefore bounded, at most `{0,8}`: the shared prefix's elements `{0,6}`, a wrapper's options
+    and `flock`/`chroot`'s options `{0,4}`, `env`'s own options and assignments `{0,8}`, `make`'s words
+    before `-p` `{0,8}?`. `TestPiEnvDenyListPatternsCannotBacktrackWithoutBound` guards the structure. In
+    Node every pattern took under 21 ms on the adversarial inputs (`"sudo -u "` 40 and 200 times and a
+    `-`, `"nice -n "` and `"timeout -s "` 40 times, a `git commit -m` holding `time -x` 40 times, 5000
+    characters of `-a `, `> `, `2>` or `if `, `sudo a=b ` 2500 times); the worst were the `gh` and `jq`
+    patterns, which scan the rest of the command and are quadratic, not exponential.
   - **What they leave alone.** `env` followed by a command word runs that command and prints nothing:
     `env GOTOOLCHAIN=local make check`, `env -u FOO make test`, `env -C dir make`,
     `/usr/bin/env bash dev/x.sh` are allowed in pi, unless the command word is itself a printer
@@ -84,7 +113,9 @@ Hold rule 3 with a second layer in both agents, beside the words in CLAUDE.md:
   and `typeset` with `-p*`/`-x*`, `compgen -v*`/`-e*`/`-A*`/`*-A*`, `*/proc/*/environ*`, `make -p*` and
   `make --print-data-base*`, `ps e*`, `*daemon.env*`, the deck's whole key directory
   (`*.config/dot-agent-deck*`), and a command holding a `$` before `API_KEY` or
-  `TOKEN` (`*$*API_KEY*`, `*$*TOKEN*`); and reading `/proc` whole (`Read(//proc)`, `Read(//proc/**)`,
+  `TOKEN` (`*$*API_KEY*`, `*$*TOKEN*`), `gh auth token*`, `gh auth status*-t*` and
+  `gh auth status*--show-token*` (bare `gh auth status` names the account, not the token, and stays
+  allowed; no skill, make recipe, dev script or workflow types a refused form); and reading `/proc` whole (`Read(//proc)`, `Read(//proc/**)`,
   `Read(//proc/**/environ)`) and the deck's directory (`Read(~/.config/dot-agent-deck/**)`). `//` is
   Claude Code's absolute path: a single leading `/` is relative to the project, so the earlier
   `Read(/proc/*/environ)` matched nothing and is gone. No rule is written for `make` with `-p` after
@@ -127,7 +158,14 @@ Claude Code rules, which ADR 0003 does not cover.
   wrapper the list does not name; a Go test (or any program) written with the edit tool that logs
   `os.Environ()` and is run with `go test -v`, because the file tools do not scan what they write; and a
   grep or find rooted at an ancestor of the deck's key directory (`~`, `~/.config`) whose glob does not
-  name `.config/dot-agent-deck`.
+  name `.config/dot-agent-deck`. Also: the deck's directory reached from its parent
+  (`cd ~/.config && cat dot-agent-deck/x`) or through a symlink to an ancestor; a command word split by
+  quotes (`e''nv`); a wrapper whose command follows a positional argument or a combined option
+  (`su x -c env`, `flock /tmp/l -c env`, `script -qc env /dev/null`); a wrapper the list does not name,
+  such as the shell named by a variable (`$SHELL -c env`, `${SHELL} -c env`); and, because every repeat
+  is bounded, a prefix of more elements than the bound (more than six wrappers, redirects, assignments
+  or keywords in front of the printer, more than four options on one wrapper, more than eight options
+  or assignments after `env`).
 - Whether Claude Code's matcher refuses a redirect in front of the command word (`2>&1 env`) cannot be
   checked offline: its rules are prefix rules on the command it parses, and no rule names that form. pi's
   patterns refuse it.
@@ -146,7 +184,12 @@ Claude Code rules, which ADR 0003 does not cover.
   `git commit -m "x; env"` and `git commit -m "env"` are refused too; `git commit -m "fix env bug"` is not.
   `make` with a quoted variable value that holds `-p` (`make test GOFLAGS='-run TestX -p 1'`) is refused
   as `make -p`: the pattern's argument class allows quotes, so it sees `-p` inside the value. That is rare
-  here, since the Makefile has no flags variable the agents pass.
+  here, since the Makefile has no flags variable the agents pass. The bare word `environ` is refused
+  wherever it stands (`git grep environ`, `cat x/environ.go`), and so is the bare word `ENV`
+  (`grep ENV Dockerfile`, `echo ENV`, a Dockerfile's `ENV` line in a heredoc or a quoted argument):
+  `\bENV\b` is what refuses `ruby -e 'p ENV'`; `VM_ENV` and `ENVIRONMENT` are not refused by it. `$ENV`
+  is refused anywhere, and so is a command that names `jq` and then a word `env` before the next
+  separator (`jq -r .name f.json env.json` is; `jq -r .env f` is not).
 - Rollout: the extension and the tester's `.scratch/` line reach only tester panes started from a dispatch
   worktree created after the merge; a pane started before it runs without them until it is restarted, and
   a branch cut before the merge does not ignore `.scratch/` (its `.gitignore` predates the line).
