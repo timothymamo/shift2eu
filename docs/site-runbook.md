@@ -111,9 +111,11 @@ after that rollback, R8's recreate step is expected (issue #541).
 ```bash
 dev/tofu.sh -chdir=infra/site init -backend-config=backend.hcl -lockfile=readonly   # PASS: "OpenTofu has been successfully initialized"
 grep -c '^front_domains *= *true' infra/site/terraform.tfvars   # PASS: 0 before R8's second apply, 1 after it
+# Once, on milestone 3's hosting, before the first apply after ADR 0045: the baseline of the pipeline's default endpoint, with its TLS stage still there
+E="$(dev/tofu.sh -chdir=infra/site output -raw edge_endpoint)"; curl -sS -o /dev/null -w 'baseline %{http_code} verify=%{ssl_verify_result}\n' "https://$E/"   # record it: the answer check 1 below compares with once the TLS stage is gone
 dev/tofu.sh -chdir=infra/site plan -out=site.tfplan        # PASS (first time): "Plan: 14 to add, 0 to change, 0 to destroy."
 # PASS (the first apply after ADR 0045, on milestone 3's hosting): "Plan: 2 to add, 1 to change, 1 to destroy." (the namespace and the container added, the DNS stage updated in place, the TLS stage destroyed)
-# FAIL the DNS stage "must be replaced": its default_fqdn, the container's UPSTREAM, changes with it; nothing serves visitors before R10, so apply it and record it in ADR 0039's container amendment
+# PASS (if the provider replaces the DNS stage): the same plan with the DNS stage "must be replaced": its default_fqdn changes, so $E changes and the container's UPSTREAM follows it in the same apply; nothing serves visitors before R10, so apply it, read $E again from the output lines below, and record it in ADR 0039's container amendment
 # FAIL any other resource replaced or destroyed: stop, apply nothing, rm infra/site/site.tfplan, and find out why
 dev/tofu.sh -chdir=infra/site show site.tfplan | less      # PASS: the bucket policy's three statements, four with public_read (ADR 0039), the IAM rule's two permission sets in one project; the container's image "docker.io/library/caddy:<tag>@sha256:...", max_scale 1, cpu_limit 140, memory_limit_bytes 268435456, min_scale 0, its UPSTREAM the DNS stage's default_fqdn
 dev/tofu.sh -chdir=infra/site apply site.tfplan            # PASS: "Apply complete"
@@ -169,6 +171,7 @@ scw container container deploy "$PR" region="$REGION" >/dev/null   # PASS: no er
 n=0; until scw container container list namespace-id="$NS" region="$REGION" name=digest-probe -o json | jq -e '.[0].status | IN("error","ready")' >/dev/null || [ "$n" -ge 30 ]; do sleep 20; n=$((n + 1)); done
 scw container container list namespace-id="$NS" region="$REGION" name=digest-probe -o json | jq -r '.[0] | "\(.status) \(.error_message)"'   # PASS: "error" with a pull or manifest error: the platform pulls by digest; record it in ADR 0045
 # FAIL "ready": the platform ignored the digest; record it, and take ADR 0045's registry mirror (recorded there first) before R8
+# On any FAIL or stop in this block, the two lines below first: the probe never stays in the namespace (an empty $PR in a fresh shell: scw container container list namespace-id="$NS" region="$REGION" name=digest-probe -o json | jq -r '.[].id')
 scw container container delete "$PR" region="$REGION"   # PASS: no error
 scw container container list namespace-id="$NS" region="$REGION" -o json | jq -r '.[].name'   # PASS: "front" alone
 ```
@@ -392,6 +395,8 @@ Check the flags against `scw container container create --help` first.
 ```bash
 IMG="$(sed -n 's/^ *caddy_image *= *"\(.*\)"$/\1/p' infra/site/container.tf)"; echo "$IMG"   # PASS: the pinned image, by digest
 ECHO=':8080 {
+	header Content-Type "text/plain; charset=utf-8"
+	header X-Content-Type-Options nosniff
 	respond "xfp=[{http.request.header.X-Forwarded-Proto}] host=[{http.request.hostport}] xfh=[{http.request.header.X-Forwarded-Host}] fwd=[{http.request.header.Forwarded}]" 200
 }'
 PR="$(scw container container create namespace-id="$NS" region="$REGION" name=header-probe registry-image="$IMG" port=8080 privacy=public min-scale=0 max-scale=1 cpu-limit=140 memory-limit-bytes=268435456 https-connections-only=false command.0=/bin/sh command.1=-c args.0='printf "%s" "$1" > /tmp/Caddyfile && exec caddy run --adapter caddyfile --config /tmp/Caddyfile' args.1=caddy args.2="$ECHO" -o json | jq -r '.id')"; echo "$PR"   # PASS: an ID
@@ -402,6 +407,8 @@ curl -s -H 'X-Forwarded-Proto: https' -H 'X-Forwarded-Host: evil.example' "http:
 curl -s -H 'X-Forwarded-Proto: https' -H 'X-Forwarded-Proto: http' "http://$PE/"; echo
 # PASS, record each: xfp=[http] over plain HTTP and xfp=[https] over HTTPS (or what the platform sends, and whether a client's value survives); host=[<the endpoint>] with no port and in lower case; xfh and fwd
 # FAIL host with a port, another case or empty, or the original host only in xfh: www's exact comparison would never match (a loop); stop before R10 and record it, the Caddyfile follows the probe
+# The probe reflects what it is sent (text/plain, nosniff): on any FAIL or stop in this block, the delete line below first, before anything else (an empty $PR in a fresh shell: scw container container list namespace-id="$NS" region="$REGION" name=header-probe -o json | jq -r '.[].id')
+curl -sS -D - -o /dev/null "https://$PE/" | grep -i -E '^(content-type|x-content-type-options):'   # PASS: "text/plain; charset=utf-8" and "nosniff"
 scw container container delete "$PR" region="$REGION"; scw container container list namespace-id="$NS" region="$REGION" -o json | jq -r '.[].name'   # PASS: "front" alone
 ```
 
@@ -409,7 +416,11 @@ scw container container delete "$PR" region="$REGION"; scw container container l
 the pipeline's own `www` as milestone 3 had it.
 
 ```bash
+# First, no probe container left behind (block 4's or R4's)
+scw container container list namespace-id="$NS" region="$REGION" -o json | jq -r '.[].name'   # PASS: "front" alone
+# FAIL header-probe or digest-probe listed: scw container container delete <its ID> region="$REGION" (scw container container list namespace-id="$NS" region="$REGION" name=<its name> -o json | jq -r '.[].id'), then this line again
 # Namecheap: the www CNAME back to $E (the edge_endpoint output); delete the ALIAS at @
+# (Once infra/site has the pipeline_www variable, the next change: the revert below becomes a tfvars flip, pipeline_www = true in terraform.tfvars, then R4, with no pull request)
 # A pull request that reverts container.tf's custom domains (front_domains = false in terraform.tfvars) and restores main.tf's TLS stage and fqdns = ["www.shift2eu.com"] (tls_stage_id, the stage's lifecycle block) from before ADR 0045; merged, then R4
 dig +short CNAME www.shift2eu.com     # PASS: "$E."
 # The re-added TLS stage asks for its certificate once, at its creation; if that came before the CNAME resolved, recreate it as below

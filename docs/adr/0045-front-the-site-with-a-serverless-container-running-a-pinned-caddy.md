@@ -326,9 +326,11 @@ found.
 - The mandatory go/no-go and the HSTS go/no-go can both be met: `http://www.shift2eu.com`,
   `http://shift2eu.com` and `https://shift2eu.com` answer 308 to `https://www.shift2eu.com` in one hop,
   and `www` sends HSTS and the four other headers. `frame-ancestors 'none'` works as a header at last.
-- The header CSP binds every response of `www`, so a page or a script a leaked deploy key uploads at
-  any path is held to `connect-src 'none'` and `worker-src 'none'` as well, whatever it carries itself
-  (two policies both apply). Navigation stays outside the CSP. ADR 0042's residuals say so once the
+- The header CSP binds every response the front serves for `www`, so a page or a script a leaked deploy
+  key uploads at any path is held there to `connect-src 'none'` and `worker-src 'none'` as well, whatever
+  it carries itself (two policies both apply). It binds `www` alone: the pipeline's default endpoint
+  serves the same objects without it (the residual in the amendment below). Navigation stays outside the
+  CSP. ADR 0042's residuals say so once the
   header is live (milestone 4). Follow-ups for the unit that changes `site/`, on the privacy page
   (`site/privacy.html`):
   - the sentences that the site "cannot send" `Clear-Site-Data` (line 55) or
@@ -447,5 +449,18 @@ TLS stage*.
   receives them (`X-Forwarded-Proto` and `Host` on `www`, the apex and the endpoint, over plain HTTP and
   HTTPS), the spoofed and repeated `X-Forwarded-Proto` requests, `OPTIONS *`, the digest pull (a
   container given a wrong digest must fail to start; if it starts, the registry mirror above is
-  recorded here before it is taken), and HTTPS on the pipeline's default endpoint with no TLS stage. R8
-  records each answer here.
+  recorded here before it is taken), HTTPS on the pipeline's default endpoint with no TLS stage, and
+  that the Containers API accepts the Caddyfile (about 4.6 KiB) as `args[2]` (the provider caps an
+  environment variable, not an argument; checked by R4's check 2, `front ready`). R8 records each answer
+  here.
+- **Residual: the pipeline's default endpoint is a second public origin.**
+  `https://<pipeline id>.svc.edge.scw.cloud`, the upstream, stays reachable by anyone and serves every
+  bucket object without the front's header policy: no HSTS, no header CSP, no `frame-ancestors`, so it
+  can be framed. A page a leaked deploy key uploads is held by the header CSP on `www` only; on the
+  default endpoint only its own meta CSP, if any, applies. This is the residual milestone 3 already had
+  (the pipeline served `www` and its default endpoint alike, with no header at all), not a regression
+  of this front. A shared-secret request header that the front adds and the edge checks would close it,
+  if Edge Services could check one: ticket #1639626 answered that Edge Services cannot set headers;
+  whether it can match a request header and refuse without it is **unverified** (check Edge Services'
+  request-header rules before relying on it). Until then the residual stands, and milestone 4's
+  amendment of ADR 0042's residuals carries it with the header CSP.
