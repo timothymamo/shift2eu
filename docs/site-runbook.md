@@ -365,7 +365,7 @@ for k in index.html inventory.html privacy.html verify.html LICENSE NOTICE; do
   [ -n "$want" ] && [ "$got" = "$want" ] && echo "PASS $k is $GOOD's" || echo "FAIL $k: $got, $GOOD's manifest says $want"
 done   # PASS: six "PASS ... is <GOOD>'s" lines
 aws s3 cp "s3://$B/manifest.json" - | cmp -s - "$W/good-manifest.json" && echo "PASS manifest.json is $GOOD's" || echo "FAIL manifest.json is not $GOOD's"
-# FAIL a line: pick another $T, and run both loops again
+# FAIL a line: set another $T and run this whole block again (the lines below have removed $W)
 rm -r "$W"
 scw iam api-key update "$SCW_ACCESS_KEY" default-project-id="$ADMIN_PROJECT"   # back to the admin project
 # The live checks fail until the expected version is live again; a rollback is followed by a fixing release,
