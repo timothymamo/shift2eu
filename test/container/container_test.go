@@ -1008,8 +1008,10 @@ func licenseFileFindings(t *testing.T, name, dockerfile, dockerignore, gorelease
 	}
 
 	for _, section := range imageBuildSections(goreleaser) {
+		shipped := extraFiles(section)
+
 		for _, file := range shippedLicenseFiles {
-			if !strings.Contains(section, file.name) {
+			if !slices.Contains(shipped, file.name) {
 				findings = append(findings, fmt.Sprintf("%s: the docker section of the release names no %s: GoReleaser sends the daemon only what the section's extra_files names, so the image it builds ships no %s whatever the Dockerfile copies; add %s beside the Dockerfile in extra_files (issue #495)",
 					goreleaserName, file.name, file.name, file.name))
 			}
@@ -1279,7 +1281,8 @@ func contextCopyDestinations(stage []instruction) map[string]contextCopy {
 
 // imageBuildSections returns the body of every top-level docker, dockers or
 // dockers_v2 section of .goreleaser.yaml, the sections that build the image with
-// GoReleaser, comment and blank lines dropped. A release that builds the image
+// GoReleaser, comment and blank lines dropped and each line's indentation kept,
+// for extraFiles to read. A release that builds the image
 // with docker build or make image has none, and returns nothing. The
 // dockers_v2 half stays although GoReleaser builds no image today — the release
 // builds it with docker/build-push-action and `context: .` — because it guards a
@@ -1321,13 +1324,124 @@ func imageBuildSections(goreleaser string) []string {
 		}
 
 		if inImage {
-			current = append(current, trimmed)
+			current = append(current, line)
 		}
 	}
 
 	closeSection()
 
 	return sections
+}
+
+// extraFiles returns the entries of every extra_files list in section, one body
+// imageBuildSections returns, unquoted and in file order: the files GoReleaser
+// copies into the context it sends the daemon, each at the path the entry names.
+// It reads a block list, its entries indented under the key or level with it,
+// and a flow list such as `extra_files: [LICENSE, NOTICE]`, whether the key
+// stands alone or opens a list item (`- extra_files:`). Comments, own-line and
+// inline, and every other key's value are dropped, so only an entry counts.
+func extraFiles(section string) []string {
+	var entries []string
+
+	keyColumn := -1
+
+	for _, raw := range strings.Split(section, "\n") {
+		content := strings.TrimRight(withoutYAMLComment(raw), " \t")
+		trimmed := strings.TrimLeft(content, " \t")
+
+		if trimmed == "" {
+			continue
+		}
+
+		indent := len(content) - len(trimmed)
+
+		if keyColumn >= 0 {
+			item, isItem := yamlListItem(trimmed)
+
+			switch {
+			case isItem && indent >= keyColumn:
+				entries = append(entries, unquote(item))
+
+				continue
+			case indent > keyColumn:
+				// A continuation of the entry above, not an entry of its own.
+				continue
+			}
+
+			keyColumn = -1
+		}
+
+		// A key may open a list item, as in `- extra_files:`: its column is the
+		// one after the dashes.
+		key, column := trimmed, indent
+
+		for {
+			item, isItem := yamlListItem(key)
+			if !isItem {
+				break
+			}
+
+			column += len(key) - len(item)
+			key = item
+		}
+
+		name, value, ok := strings.Cut(key, ":")
+		if !ok || strings.TrimSpace(name) != "extra_files" {
+			continue
+		}
+
+		value = strings.TrimSpace(value)
+
+		if value == "" {
+			keyColumn = column
+
+			continue
+		}
+
+		if inner, isFlow := strings.CutPrefix(value, "["); isFlow {
+			inner, _ = strings.CutSuffix(inner, "]")
+
+			for _, entry := range strings.Split(inner, ",") {
+				if entry = strings.TrimSpace(entry); entry != "" {
+					entries = append(entries, unquote(entry))
+				}
+			}
+		}
+	}
+
+	return entries
+}
+
+// yamlListItem reports whether line, its indentation trimmed, is a YAML block
+// list item, and returns what follows its dash.
+func yamlListItem(line string) (string, bool) {
+	rest, ok := strings.CutPrefix(line, "-")
+	if !ok || (rest != "" && rest[0] != ' ' && rest[0] != '\t') {
+		return "", false
+	}
+
+	return strings.TrimLeft(rest, " \t"), true
+}
+
+// withoutYAMLComment returns line up to its comment: a # at the start of the
+// line or after a blank, outside single and double quotes, as YAML reads it.
+func withoutYAMLComment(line string) string {
+	var quote rune
+
+	for i, r := range line {
+		switch {
+		case quote != 0:
+			if r == quote {
+				quote = 0
+			}
+		case r == '"' || r == '\'':
+			quote = r
+		case r == '#' && (i == 0 || line[i-1] == ' ' || line[i-1] == '\t'):
+			return line[:i]
+		}
+	}
+
+	return line
 }
 
 // TestTheDockerfileHasNoServerStage pins what issue #393 leaves of PRD #103's
