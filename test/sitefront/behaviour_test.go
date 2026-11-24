@@ -79,6 +79,10 @@ const (
 	// Permissions-Policy, an X-Content-Type-Options and a Referrer-Policy of its own, whose copies must not
 	// reach the client.
 	ownHeadersPath = "/own-headers"
+	// platformHeadersPath answers with headers that are the platform's and the store's, not the site's: a
+	// cookie and the S3 response headers of the bucket the pipeline serves, whose copies must not reach the
+	// client either.
+	platformHeadersPath = "/platform-headers"
 	// gzipPath answers a gzip object with the cache headers the deploy sets.
 	gzipPath = "/page.wasm"
 	// gzipBody is the object's uncompressed content.
@@ -104,6 +108,10 @@ const (
 
 // logMarkers are the values above as strings.Contains finds them in the container's log.
 var logMarkers = []string{markerPath, markerUserAgent, markerForwardedFor, markerRealIP}
+
+// servingLine is what Caddy logs once it serves the configuration it read, and the line the exclusion keeps:
+// testLogHoldsNoMarker reads it as the positive control of a log it finds no marker in (docs/adr/0045).
+const servingLine = "serving initial configuration"
 
 // TestSiteFront drives the front's every case, in the order they share one
 // container and one upstream (docs/adr/0045): the four rows of the table, the
@@ -375,7 +383,8 @@ func testLocations(t *testing.T, front *harness) {
 
 // testHeaders holds the headers of a proxied answer (docs/adr/0045, *The
 // headers*): Caddy's single copy of each of the five, when the upstream sends
-// its own copies of the three it may and the client sees only Caddy's.
+// its own copies of the three it may and the client sees only Caddy's; and no
+// header that is the platform's or the store's rather than the site's.
 func testHeaders(t *testing.T, front *harness) {
 	t.Helper()
 
@@ -403,6 +412,30 @@ func testHeaders(t *testing.T, front *harness) {
 		if got := resp.header.Values("Content-Security-Policy"); len(got) != 1 || strings.Contains(got[0], "upstream.example") {
 			t.Errorf("the client sees Content-Security-Policy %q, want Caddy's one copy, not the upstream's (docs/adr/0045)", got)
 		}
+	})
+
+	// The headers the store and the platform set are nobody's but theirs: a cookie and X-Amz-*, which reach
+	// the client as surely as an upstream's own copies of the five do, and none of them may (docs/adr/0045).
+	t.Run("an upstream whose headers are not the site's", func(t *testing.T) {
+		resp := front.do(t, request("GET "+platformHeadersPath+" HTTP/1.1", "Host: www.shift2eu.com", "X-Forwarded-Proto: https"))
+
+		if resp.status != http.StatusOK {
+			t.Fatalf("GET %s answers %d, want the upstream's 200", platformHeadersPath, resp.status)
+		}
+
+		for _, name := range []string{"Set-Cookie", "X-Amz-Request-Id", "X-Amz-Id-2", "X-Amz-Meta-Foo"} {
+			if got := resp.header.Values(name); len(got) > 0 {
+				t.Errorf("the client receives %s %q from the upstream, want none: a cookie and the bucket's X-Amz-* headers are the platform's, not the site's, and the client sees Caddy's headers alone (docs/adr/0045)", name, got)
+			}
+		}
+
+		for name := range resp.header {
+			if strings.HasPrefix(strings.ToLower(name), "x-amz-") {
+				t.Errorf("the client receives %s: %q, want no X-Amz-* header at all: the bucket's S3 headers are not the site's (docs/adr/0045)", name, resp.header.Values(name))
+			}
+		}
+
+		assertSiteHeaders(t, resp)
 	})
 }
 
@@ -519,7 +552,8 @@ func testRequestHeaders(t *testing.T, front *harness) {
 // line would expose: the path the visitor asked for, its user agent and its
 // address (docs/adr/0045, *The log*). The container's log is read once, after
 // the cases that make Caddy fail (testLogHoldsNoMarker): a log line of a failed
-// request is what Caddy's default logger writes.
+// request is what http.log.error, one of the loggers the exclusion silences,
+// writes.
 func testLogMarkers(t *testing.T, front *harness) {
 	t.Helper()
 
@@ -553,12 +587,17 @@ func testLogMarkers(t *testing.T, front *harness) {
 // (docs/adr/0045, *The log*): the front's output on stdout and stderr is what the
 // platform ships to Cockpit, so a line that holds the visitor's address, its user
 // agent or the path it asked for is a third party's record of that visitor. Caddy
-// writes such a line for every request it fails - the reverse proxy's own error,
-// http.handlers.reverse_proxy, and the server's http.log.error - unless the
-// global log silences both, so the two failures are driven here: no upstream at
-// all (the front's own 502), and an upstream whose certificate the container does
-// not trust. It runs last: it leaves an untrusted TLS server on the address Edge
-// Services had.
+// writes such a line for every request a handler fails, under http.log.error, the
+// logger the exclusion was added for: this test proves that leak and its fix on
+// the pinned image, by driving the two failures - no upstream at all (the front's
+// own 502), and an upstream whose certificate the container does not trust - and
+// finding none of the markers. The other two exclusions are defence in depth that
+// this test cannot prove: what http.handlers.reverse_proxy and http.stdlib write
+// for these two failures is not what carries a marker here, so their removal is
+// pinned statically, token by token, in TestCheckGlobalLogForms. The whole log is
+// read, and it must hold Caddy's "serving initial configuration" line: an empty or
+// partial log would pass this test without proving anything. It runs last: it
+// leaves an untrusted TLS server on the address Edge Services had.
 func testLogHoldsNoMarker(t *testing.T, front *harness) {
 	t.Helper()
 
@@ -578,6 +617,12 @@ func testLogHoldsNoMarker(t *testing.T, front *harness) {
 	log, err := front.wholeLog()
 	if err != nil {
 		t.Fatal(err)
+	}
+
+	// The positive control: the log the exclusion keeps holds Caddy's startup line, so the markers' absence
+	// below is a reading of a whole running front's output and not of an empty or partial log.
+	if !strings.Contains(log, servingLine) {
+		t.Fatalf("the container's whole log holds no %q: it is empty or partial, so it says nothing about the markers. The whole log:\n%s", servingLine, log)
 	}
 
 	for _, marker := range logMarkers {
@@ -1076,6 +1121,14 @@ func (u *upstream) handle(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Referrer-Policy", "unsafe-url")
 		w.Header().Set("Permissions-Policy", "camera=*")
 		fmt.Fprint(w, "upstream's own headers")
+	case platformHeadersPath:
+		// The headers the store and the platform answer with, which are nobody's but theirs: a cookie and
+		// three of the bucket's S3 headers. Caddy's one site sets none of them.
+		w.Header().Set("Set-Cookie", "s=1")
+		w.Header().Set("X-Amz-Request-Id", "x")
+		w.Header().Set("X-Amz-Id-2", "y")
+		w.Header().Set("X-Amz-Meta-Foo", "z")
+		fmt.Fprint(w, "the platform's own headers")
 	case missingPath:
 		http.Error(w, "not found upstream", http.StatusNotFound)
 	case gzipPath:

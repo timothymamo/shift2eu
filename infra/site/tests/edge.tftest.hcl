@@ -88,7 +88,8 @@ run "one_pipeline_serves_the_site_bucket_without_a_domain_or_a_tls_stage" {
   }
 }
 
-# The request's whole path, stage by stage: DNS -> cache -> backend (the site bucket in website mode), entered# through the head stage. Each stage names the one before it by id, so a stage chained to another pipeline's
+# The request's whole path, stage by stage: DNS -> cache -> backend (the site bucket in website mode), entered
+# through the head stage. Each stage names the one before it by id, so a stage chained to another pipeline's
 # stage, or a stage nothing points at, serves nothing. Everything the pipeline is made of is subscribed in the
 # site's project, so no Edge Services resource lands in the organization's default project; the head stage
 # names no project of its own (the provider's schema has none: it belongs to the pipeline's). The Starter plan

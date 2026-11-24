@@ -13,20 +13,21 @@
 // {$UPSTREAM} and the request and response headers it removes, the one global
 // log that keeps Caddy's request loggers out of the container's output, and
 // the directives the design refuses: a log outside the global options, encode,
-// cache and tls. It reads the
-// files, never a copy of them, and it parses the Caddyfile with a small
-// tokenizer of its own, so a comment cannot satisfy a check the configuration
-// no longer does.
+// cache and tls. It reads the files, never a copy of them, and it parses the
+// Caddyfile with a small tokenizer of its own, so a comment cannot satisfy a
+// check the configuration no longer does.
 //
 // The behaviour test, in the files built with the sitefront tag alone, runs the
 // image infra/site/container.tf pins, with the command and arguments that file
 // gives it and the Caddyfile's bytes, against a local HTTPS upstream the test
 // starts, and drives every case of docs/adr/0045's list over raw HTTP/1.1: the
 // four rows of its table, the joined X-Forwarded-Proto, the Location of every
-// redirect, its own headers against the upstream's, its 502, a gzip object
-// passing byte for byte, the request headers the upstream never sees,
-// OPTIONS *, and a log that holds none of a visitor's markers. `make test-sitefront` runs it, outside make test and make check,
-// as `make test-browser` runs the browser smoke test (docs/adr/0036).
+// redirect, its own headers against the upstream's, the upstream's headers that
+// are not the site's, its 502, a gzip object passing byte for byte, the request
+// headers the upstream never sees, OPTIONS *, and a log that names no visitor,
+// read from a whole log that holds Caddy's startup line. `make test-sitefront`
+// runs it, outside make test and make check, as `make test-browser` runs the
+// browser smoke test (docs/adr/0036).
 //
 // Neither test builds an image, calls Scaleway or reads a credential, and
 // neither runs in the js/wasm lint: the behaviour test drives a container from

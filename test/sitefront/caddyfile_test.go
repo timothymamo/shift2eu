@@ -100,7 +100,8 @@ func TestCaddyfileHeaders(t *testing.T) {
 // --change-host-header), and the request and response headers removed, so
 // neither the visitor's address nor the platform's forwarding headers nor a
 // cookie reach Edge Services, and the upstream's own copies of the three
-// headers never reach the client as duplicates.
+// headers, its cookie and its X-Amz-* headers never reach the client as
+// duplicates.
 func TestCaddyfileReverseProxy(t *testing.T) {
 	t.Parallel()
 
@@ -129,7 +130,7 @@ const designedCaddyfile = `{
 	auto_https off
 	admin off
 	log {
-		exclude http.log.error http.handlers.reverse_proxy
+		exclude http.log.error http.handlers.reverse_proxy http.stdlib
 	}
 }
 
@@ -164,6 +165,8 @@ const designedCaddyfile = `{
 			header_down -X-Content-Type-Options
 			header_down -Referrer-Policy
 			header_down -Permissions-Policy
+			header_down -Set-Cookie
+			header_down -X-Amz-*
 		}
 	}
 
@@ -317,6 +320,18 @@ func TestChecksRefuseBrokenConfigurations(t *testing.T) {
 			want:  "Referrer-Policy",
 		},
 		{
+			name:  "the upstream's own cookie not removed",
+			src:   strings.Replace(designedCaddyfile, "\t\t\theader_down -Set-Cookie\n", "", 1),
+			check: checkReverseProxy,
+			want:  "Set-Cookie",
+		},
+		{
+			name:  "the bucket's X-Amz-* headers not removed",
+			src:   strings.Replace(designedCaddyfile, "\t\t\theader_down -X-Amz-*\n", "", 1),
+			check: checkReverseProxy,
+			want:  "X-Amz-Request-Id",
+		},
+		{
 			name:  "no auto_https off",
 			src:   strings.Replace(designedCaddyfile, "\tauto_https off\n", "", 1),
 			check: checkGlobalOptions,
@@ -411,11 +426,12 @@ func TestCheckHeadersRefuses(t *testing.T) {
 }
 
 // TestCheckGlobalLogForms pins the two shapes of the front's one global log, and the ones it refuses
-// (docs/adr/0045, *The log*): Caddy's default logger writes http.log.error and
-// http.handlers.reverse_proxy with the request's remote_ip and client_ip, its uri and its headers, which
-// the platform ships to Cockpit, so the global options hold a log that excludes both loggers or one whose
-// output is discarded. Both accepted shapes are pinned, since either is the coder's to choose, and neither
-// may be written any other way; a log in a site block stays refused, as the table above pins.
+// (docs/adr/0045, *The log*): Caddy's default logger writes http.log.error,
+// http.handlers.reverse_proxy and http.stdlib with the request's remote_ip and client_ip, its uri and its
+// headers, which the platform ships to Cockpit, so the global options hold a log that excludes all three
+// loggers or one whose output is discarded. Both accepted shapes are pinned, since either is the coder's to
+// choose, and neither may be written any other way: the two-name exclusion leaves http.stdlib writing, so it
+// is refused with the rest. A log in a site block stays refused, as the table above pins.
 func TestCheckGlobalLogForms(t *testing.T) {
 	t.Parallel()
 
@@ -426,19 +442,24 @@ func TestCheckGlobalLogForms(t *testing.T) {
 	}{
 		{
 			name: "the exclude form",
-			src:  withGlobalLog("\tlog {\n\t\texclude http.log.error http.handlers.reverse_proxy\n\t}\n"),
+			src:  withGlobalLog("\tlog {\n\t\texclude http.log.error http.handlers.reverse_proxy http.stdlib\n\t}\n"),
 		},
 		{
-			name: "the exclude form, the two loggers in the other order",
-			src:  withGlobalLog("\tlog {\n\t\texclude http.handlers.reverse_proxy http.log.error\n\t}\n"),
+			name: "the exclude form, the three loggers in another order",
+			src:  withGlobalLog("\tlog {\n\t\texclude http.stdlib http.handlers.reverse_proxy http.log.error\n\t}\n"),
 		},
 		{
 			name: "the discard form",
 			src:  withGlobalLog("\tlog {\n\t\toutput discard\n\t}\n"),
 		},
 		{
-			name: "one of the two loggers left writing",
+			name: "one of the loggers left writing",
 			src:  withGlobalLog("\tlog {\n\t\texclude http.log.error\n\t}\n"),
+			want: "want either",
+		},
+		{
+			name: "the two loggers without http.stdlib",
+			src:  withGlobalLog("\tlog {\n\t\texclude http.log.error http.handlers.reverse_proxy\n\t}\n"),
 			want: "want either",
 		},
 		{
@@ -448,7 +469,7 @@ func TestCheckGlobalLogForms(t *testing.T) {
 		},
 		{
 			name: "a discard beside the exclusion",
-			src:  withGlobalLog("\tlog {\n\t\texclude http.log.error http.handlers.reverse_proxy\n\t\toutput discard\n\t}\n"),
+			src:  withGlobalLog("\tlog {\n\t\texclude http.log.error http.handlers.reverse_proxy http.stdlib\n\t\toutput discard\n\t}\n"),
 			want: "output",
 		},
 		{
@@ -765,7 +786,7 @@ func checkReverseProxy(f *caddyfile) []string {
 		}
 	}
 
-	if !deletedUp["x-envoy-*"] && (!deletedUp["x-envoy-upstream-service-time"] || !deletedUp["x-envoy-external-address"]) {
+	if !deletesPrefix(deletedUp, "X-Envoy-", "X-Envoy-Upstream-Service-Time", "X-Envoy-External-Address") {
 		problems = append(problems, "the proxy does not remove every X-Envoy-* header from the upstream request: header_up -X-Envoy-* removes the whole prefix, and the platform's X-Envoy-Upstream-Service-Time and X-Envoy-External-Address are what a client must not be able to relay (docs/adr/0045)")
 	}
 
@@ -776,18 +797,46 @@ func checkReverseProxy(f *caddyfile) []string {
 		}
 	}
 
+	// The upstream's own headers that are nobody's but the platform's: a cookie it sets and the S3 headers
+	// of the bucket it serves. The client sees the site's headers, not Edge Services'.
+	if !deletedDown["set-cookie"] {
+		problems = append(problems, "the proxy does not remove Set-Cookie from the upstream response (header_down -Set-Cookie): a cookie Edge Services or the bucket sets is the platform's, not the site's, and the front sets none (docs/adr/0045)")
+	}
+
+	if !deletesPrefix(deletedDown, "X-Amz-", "X-Amz-Request-Id", "X-Amz-Id-2", "X-Amz-Meta-Foo") {
+		problems = append(problems, "the proxy does not remove every X-Amz-* header from the upstream response: header_down -X-Amz-* removes the whole prefix, and the bucket's X-Amz-Request-Id, X-Amz-Id-2 and X-Amz-Meta-* are Edge Services' and the store's, not the site's (docs/adr/0045)")
+	}
+
 	return problems
 }
 
-// refusedLoggers are the two loggers the front's global log must silence when it keeps writing: Caddy's
+// deletesPrefix reports whether deleted holds the prefix deletion prefix*, or, instead, every one of the
+// headers examples names: a header_down of the whole prefix and one of each header it covers remove the same
+// headers, and the check accepts either.
+func deletesPrefix(deleted map[string]bool, prefix string, examples ...string) bool {
+	if deleted[strings.ToLower(prefix)+"*"] {
+		return true
+	}
+
+	for _, name := range examples {
+		if !deleted[strings.ToLower(name)] {
+			return false
+		}
+	}
+
+	return true
+}
+
+// refusedLoggers are the three loggers the front's global log must silence when it keeps writing: Caddy's
 // http.log.error writes every failed request with the request's remote_ip and client_ip, its uri and its
-// headers, and http.handlers.reverse_proxy writes the proxy's own failures the same way. The platform
-// ships the container's output to Cockpit, where such a line is a third party's record of a visitor
-// (docs/adr/0045, *The log*).
-var refusedLoggers = []string{"http.log.error", "http.handlers.reverse_proxy"}
+// headers, http.handlers.reverse_proxy writes the proxy's own failures the same way, and http.stdlib, the
+// standard library's error log Caddy's default logger wraps, writes a failed request's error and the
+// request line it came from. The platform ships the container's output to Cockpit, where such a line is a
+// third party's record of a visitor (docs/adr/0045, *The log*).
+var refusedLoggers = []string{"http.log.error", "http.handlers.reverse_proxy", "http.stdlib"}
 
 // checkRefusedDirectives refuses the directives the design turns off, and holds the global log: no site
-// block may turn an access log on, and the one global log must either exclude the two loggers that write
+// block may turn an access log on, and the one global log must either exclude the three loggers that write
 // the visitor's data or write nothing at all (docs/adr/0045).
 func checkRefusedDirectives(f *caddyfile) []string {
 	var problems []string
@@ -823,8 +872,8 @@ func checkRefusedDirectives(f *caddyfile) []string {
 	return problems
 }
 
-// checkGlobalLog holds the one shape the global log may have (docs/adr/0045): its block excludes both
-// loggers that write the visitor's data, or its output is discarded. Either exactly: a named log, another
+// checkGlobalLog holds the one shape the global log may have (docs/adr/0045): its block excludes every
+// logger that writes the visitor's data, or its output is discarded. Either exactly: a named log, another
 // output beside the exclusion, or a setting of its own beside the one that decides what is written leaves
 // Caddy's logger writing what the front must not keep.
 func checkGlobalLog(n *node) []string {
