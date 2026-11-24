@@ -33,7 +33,9 @@ import (
 //     the accepted shape declares, never a write scope and never packages:.
 //   - Each job runs in the security-audit environment on ubuntu-24.04, with a
 //     timeout-minutes below 360 and every step's timeout-minutes set. The model
-//     job needs checks, the publish job needs model.
+//     job needs checks, the publish job needs model. The checks job refuses a
+//     latest release tag that is no vMAJOR.MINOR.PATCH before it records it, as
+//     the publish job's attestation step does.
 //   - Every checkout is of ${{ github.sha }} with persist-credentials: false and
 //     no sparse-checkout.
 //   - Every action is pinned to a 40-hex commit with a version comment, except
@@ -59,6 +61,9 @@ import (
 //     model-result. Both carry retention-days: 1, and nothing else is uploaded.
 //     Each downloading job runs ci/auditpublish artifacts before it downloads,
 //     and fails closed on a name it does not expect or one that appears twice.
+//     The artifact's ID and digest are read from the file that check wrote
+//     before the guard of their shape runs, so the guard is what no value of
+//     another shape passes.
 //   - The model job holds no check and runs no container: no step runs
 //     gitleaks, govulncheck, osv-scanner, zizmor, actionlint, cosign, trivy or
 //     scorecard, and none pulls or runs a docker image. The model-free step that
@@ -74,7 +79,8 @@ import (
 //     holds. It runs after the checks job and before the publish step.
 //   - The publish job verifies the image's provenance attestation with
 //     gh attestation verify, its --signer-workflow release.yml and its
-//     --source-ref refs/tags/<tag>, before the step that trusts the digest.
+//     --source-ref refs/tags/<tag>, before the step that trusts the digest, and
+//     for the release's own image, ghcr.io/${GITHUB_REPOSITORY,,}.
 //     gitleaks runs the stdin subcommand with --ignore-gitleaks-allow.
 //   - No private key is written under /tmp or /run.
 //   - Every tool version line has a # renovate: comment above it, and every
@@ -234,6 +240,29 @@ const (
 		"            echo \"::error title=Audit publish::model-result has no artifact ID and SHA-256 digest: see runbook step 11\"\n" +
 		"            exit 1\n" +
 		"          fi\n"
+	// auditArtifactIDRead and auditArtifactDigestRead are the two download
+	// steps' reads of the artifact's ID and digest from the file the artifact
+	// check wrote, in the order the step runs them: both before the shape guard,
+	// so that no value of another shape reaches gh api, sha256sum or unzip. The
+	// message a guard moved above the ID read draws names the ID read.
+	auditArtifactIDRead     = "          id=\"$(jq -er '.id' \"${artifact}\")\"\n"
+	auditArtifactDigestRead = "          digest=\"$(jq -er '.digest' \"${artifact}\")\"\n"
+	// auditChecksTagShapeCheck is the checks job's own tag-shape check, in the
+	// step that records the latest release tag: the guard the publish job's
+	// attestation step holds too, with the checks job's own echo, because the
+	// result the audit reasons about names a release only when the tag is one.
+	// The message each of its breakages draws names the tag's shape.
+	auditChecksTagShapeCheck = "          if [[ ! \"${tag}\" =~ ^v[0-9]+\\.[0-9]+\\.[0-9]+$ ]]; then\n" +
+		"            echo \"::error title=Audit checks::the latest release's tag is no vMAJOR.MINOR.PATCH: see runbook step 11\"\n" +
+		"            exit 1\n" +
+		"          fi\n"
+	// auditImage is the image the release publishes, ghcr.io/<the repository's
+	// owner>/<repository>, read from the run's own GITHUB_REPOSITORY, and
+	// auditImageLine the attestation step's line that reads it. The verification
+	// is about that image alone, so another image's attestation is no provenance
+	// for this release's, and the message a case draws names the image.
+	auditImage     = "ghcr.io/${GITHUB_REPOSITORY,,}"
+	auditImageLine = "          image=\"" + auditImage + "\"\n"
 	// auditChecksSingleFileCheck and auditPublishSingleFileCheck are the two
 	// download steps' single-file checks: the unzipped directory holds the one
 	// ciphertext and nothing else, and the branch that refuses anything more.
@@ -301,7 +330,7 @@ const (
 		"          GH_TOKEN: ${{ github.token }}\n" +
 		"        run: |\n" +
 		"          set -euo pipefail\n" +
-		"          image=\"ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/shift2eu\"\n" +
+		"          image=\"ghcr.io/${GITHUB_REPOSITORY,,}\"\n" +
 		auditDigestComment +
 		auditDigestRefusal +
 		"          tag=\"$(jq -er '.release_tag' \"${RUNNER_TEMP}/result.json\")\"\n" +
@@ -1441,6 +1470,54 @@ func TestAuditWorkflow(t *testing.T) {
 			name:     "the publish download's shape guard without its exit 1",
 			workflow: mutate(t, acceptedWorkflow, auditPublishArtifactShapeGuard, strings.Replace(auditPublishArtifactShapeGuard, "            exit 1\n", "", 1)),
 			wantIn:   "artifact's ID",
+		},
+
+		// Round 7, carried from PR #549's review: three things the accepted shape
+		// runs and no case pinned. The two download steps read the artifact's ID
+		// from artifact.json before the guard of its shape, so the guard stands
+		// between a value of another shape and gh api; the checks job refuses a
+		// latest release tag of another shape before it records the tag its result
+		// names; and the attestation step verifies the release's own image, not
+		// another registry path's. A case below moves, drops or breaks each, and
+		// must draw the message that names it.
+		{
+			name: "the checks download's shape guard before the ID read",
+			workflow: mutate(t, acceptedWorkflow,
+				auditArtifactIDRead+auditArtifactDigestRead+auditChecksArtifactShapeGuard,
+				auditArtifactDigestRead+auditChecksArtifactShapeGuard+auditArtifactIDRead),
+			wantIn: "the ID from artifact.json",
+		},
+		{
+			name: "the publish download's shape guard before the ID read",
+			workflow: mutate(t, acceptedWorkflow,
+				auditArtifactIDRead+auditArtifactDigestRead+auditPublishArtifactShapeGuard,
+				auditArtifactDigestRead+auditPublishArtifactShapeGuard+auditArtifactIDRead),
+			wantIn: "the ID from artifact.json",
+		},
+		{
+			name:     "the checks job's tag shape guard removed",
+			workflow: mutate(t, acceptedWorkflow, auditChecksTagShapeCheck, ""),
+			wantIn:   "tag's shape",
+		},
+		{
+			name:     "the checks job's tag shape guard without its exit 1",
+			workflow: mutate(t, acceptedWorkflow, auditChecksTagShapeCheck, strings.Replace(auditChecksTagShapeCheck, "            exit 1\n", "", 1)),
+			wantIn:   "tag's shape",
+		},
+		{
+			name:     "the checks job's tag shape guard joined onto the echo's line",
+			workflow: mutate(t, acceptedWorkflow, auditChecksTagShapeCheck, joinedBranch(auditChecksTagShapeCheck)),
+			wantIn:   "tag's shape",
+		},
+		{
+			name:     "no image line in the attestation step",
+			workflow: mutate(t, acceptedWorkflow, auditImageLine, ""),
+			wantIn:   auditImage,
+		},
+		{
+			name:     "the attestation step verifying another image",
+			workflow: mutate(t, acceptedWorkflow, auditImageLine, "          image=\"ghcr.io/example/other\"\n"),
+			wantIn:   auditImage,
 		},
 
 		// A document the reader cannot follow tells the check nothing, so it is

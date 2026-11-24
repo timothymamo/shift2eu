@@ -60,6 +60,10 @@ jobs:
         run: |
           set -euo pipefail
           tag="$(gh api "repos/${GH_REPO}/releases/latest" --jq .tag_name)"
+          if [[ ! "${tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error title=Audit checks::the latest release's tag is no vMAJOR.MINOR.PATCH: see runbook step 11"
+            exit 1
+          fi
           printf 'sha=%s\ntag=%s\n' "${GITHUB_SHA}" "${tag}" > "${RUNNER_TEMP}/audit-target.txt"
       - name: Download the pinned tools and verify their checksums
         timeout-minutes: 15
@@ -431,7 +435,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          image="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/shift2eu"
+          image="ghcr.io/${GITHUB_REPOSITORY,,}"
           # The digest is read as a string alone, and refused unless it is exactly the empty value (the run
           # pulled no image) or one sha256 digest: any other value, a newline in it included, would reach
           # the empty branch below as a not-pulled image otherwise. The step stands alone: it trusts no
