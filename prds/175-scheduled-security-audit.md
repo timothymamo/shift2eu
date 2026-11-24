@@ -201,6 +201,11 @@ What crosses between the jobs:
 - [ ] Nothing else crosses: no job output, no cache, no other artifact. `github.sha` is the same in every
   job; the release tag travels inside the encrypted results, and the publish script checks that it names
   an existing release.
+- [ ] Before the result's image digest is trusted, a model-free workflow step (PR 5) runs
+  `gh attestation verify oci://<image>@<digest> --repo <owner>/<name> --signer-workflow
+  <owner>/<name>/.github/workflows/release.yml --source-ref refs/tags/<tag>`, outside the publish
+  program's `gh api` contract, and fails the run on any refusal: it verifies the attestation's Sigstore
+  signature, which the program's image check does not (ADR 0040, the image check's residual risk).
 - [ ] This is chosen over job outputs because a public repository's artifacts are downloadable by anyone
   and a job output is plaintext one `echo`, `set -x` or debug-logged re-run away from the public log;
   ciphertext stays harmless wherever it ends up. Anything in the checks job could forge a ciphertext with
@@ -342,16 +347,16 @@ The publish script:
   public) on a result that does not decrypt, does not match the schema, has a field over its length cap,
   has an unknown field, or exceeds the finding limit the ADR sets. Every model-written text is
   Markdown-escaped before it is published: no raw HTML, no images, no links to other hosts.
-- [ ] It **derives** public or private itself, from each finding's severity, confirmation and category
+- [x] It **derives** public or private itself, from each finding's severity, confirmation and category
   alone (Report and triage, the table). The model's own "public" flag can only make a finding more
   private, never less. A test covers each row of the table.
-- [ ] It derives each finding's status (new, open or fixed, and whether it regressed) and applies the
+- [x] It derives each finding's status (new, open or fixed, and whether it regressed) and applies the
   false-positive match itself, from the fingerprints it computes, and only to rows of a merged report:
   a dismissal proposed in a run only adds a row, and the finding stays in that run's findings table. A
   test covers an exact match on a low public finding (dropped), a match on a medium finding and on a
   private-category finding (each reported), and a near-match (reported). The result schema accepts
   exactly the ten categories of ADR 0040, and any other value is unknown and therefore private.
-- [ ] Before publishing, it scans every text it is about to send (the report, any issue title and body,
+- [x] Before publishing, it scans every text it is about to send (the report, any issue title and body,
   every advisory's text) with gitleaks plus patterns for Claude OAuth tokens and GitHub App private keys,
   and it **decodes every base64 or hex run and matches the decoded bytes against the same patterns**
   (the encoded-token check). One rule, stated the same way in Decision 2:
@@ -369,12 +374,12 @@ The publish script:
   base64 crash input in advisory text (published), and a public finding with a long repository path
   (`internal/adapter/source/inventoryfile/decode.go:42`) in a report that holds the `main` SHA and an
   image digest (published).
-- [ ] The PR's title and body, its branch `security-audit/YYYY-MM-DD-<run_id>` and its commit message are
+- [x] The PR's title and body, its branch `security-audit/YYYY-MM-DD-<run_id>` and its commit message are
   fixed templates filled only with the run's UTC date, the run ID, the `main` SHA, the release tag, the
   public count, the private-findings flag and the run's URL, built by the script from
   `GITHUB_SERVER_URL`, `GITHUB_REPOSITORY` and `GITHUB_RUN_ID`, never with model text. The branch holds
   **one commit** with the report file, made through the Git data endpoints (blob, tree, commit, ref).
-- [ ] It opens the report PR only after checking that the branch's diff is exactly
+- [x] It opens the report PR only after checking that the branch's diff is exactly
   `docs/security/audits/YYYY-MM-DD-<run_id>.md`, with the branch's date and run ID, refusing anything
   else or an existing branch of that name. No index edit: `docs/security/README.md` links the directory
   `audits/`, whose listing is the index (issue #280, ADR 0040), so two report PRs from the same `main`
@@ -387,7 +392,7 @@ The publish script:
   finding is published anyway. A **private** fingerprint is a keyed hash (HMAC) with the
   `AUDIT_FINGERPRINT_KEY` secret of the `security-audit` environment, referenced only in the publish job,
   so nobody can predict it from the committed script.
-- [ ] **Only what the App wrote is matched.** It matches, and updates with `PATCH`, only advisories the
+- [x] **Only what the App wrote is matched.** It matches, and updates with `PATCH`, only advisories the
   audit App authored, in `draft` or `closed` state, with no credited reporter or collaborator the App did
   not add; it never touches an advisory in `triage` state (a private vulnerability report) or any other.
   It matches issues only if `shift2eu-audit[bot]` authored them. An outsider therefore cannot steer a
@@ -395,7 +400,7 @@ The publish script:
   fingerprint. The fake-`gh` test covers a `triage`-state advisory and an advisory with a foreign
   collaborator, each holding a matching fingerprint (neither is touched; a new draft is created), and an
   outsider's issue holding a public finding's fingerprint (ignored; the bot's issue is opened).
-- [ ] It tracks private findings by fingerprint: it lists the App's advisories, updates a draft whose
+- [x] It tracks private findings by fingerprint: it lists the App's advisories, updates a draft whose
   fingerprint recurs, creates a draft for a new one, and marks a draft whose finding this run did not
   reproduce "not reproduced". An open App-authored draft with the fingerprint takes precedence over any
   closed advisory with it: the draft is updated and the closed ones are ignored. Closed advisories matter
@@ -412,24 +417,24 @@ The publish script:
   are new, still open, not reproduced, regressed or dismissed (Decision 2). A reproduced private finding
   sets the flag even when its advisory was closed as dismissed: the flag then stays steadier from run to
   run, so it signals less.
-- [ ] It calls **only a fixed set of endpoints**: the GitHub reads it needs; the Git data endpoints that
+- [x] It calls **only a fixed set of endpoints**: the GitHub reads it needs; the Git data endpoints that
   create one blob per file, one tree, one commit and the `security-audit/*` ref; creating the PR;
-  searching and creating issues; listing, creating and updating (`PATCH`) repository security
+  listing and creating issues; listing, creating and updating (`PATCH`) repository security
   advisories. Every advisory `state` it sends is hard-coded `draft`, and it never calls the endpoints that
   publish an advisory, request a CVE, approve or merge a PR, or touch a tag, release or other branch. The
   fake `gh` fails the test on any other endpoint or state.
-- [ ] It opens a `security` issue only for a public finding of a report **already merged on `main`**,
+- [x] It opens a `security` issue only for a public finding of a report **already merged on `main`**,
   never for the report it is opening (Decision 7), and only when no issue authored by
   `shift2eu-audit[bot]`, **open or closed**, carries that finding's fingerprint. A merged report counts as
   processed once every public finding in it has such an issue, so the work is idempotent and a finding
   whose issue the maintainer closed is not filed again. A test covers an open, a closed, and an unmatched
   fingerprint, and the report being opened.
-- [ ] If GitHub refuses advisory creation to the App, the run fails closed: it publishes only the public
+- [x] If GitHub refuses advisory creation to the App, the run fails closed: it publishes only the public
   count, the private-findings flag and the coverage, with the report saying "private findings: not filed"
   instead of "handled privately" (still one bit: the flag is set either way), and the summary says
   "private findings not filed: see runbook". The private findings are dropped, never written anywhere
   else (Decision 2).
-- [ ] The report's per-check coverage is derived by the publish script, not the model: "findings" only
+- [x] The report's per-check coverage is derived by the publish script, not the model: "findings" only
   when the check produced a **public** finding, "run" otherwise (including when its only findings are
   private), or "not run (why)", where the why is one of a fixed vocabulary in the publish script (for
   example "needs admin read", "no `Fuzz*` targets", "timed out"), never the model's text. A fixture test
@@ -879,9 +884,8 @@ An agent cannot do these steps. Each one is safe to stop at; the workflow is rol
       rotate per step 10 (the safe default), then start the new run.
     - `private findings not filed: see runbook` (exit 5): GitHub refused advisory creation to the App;
       the report says "private findings: not filed" and the private findings were dropped. Repeat step
-      3's advisory check, then start the new run. Until the advisory side lands (PR 4c), every run with
-      a private finding ends here: the report and the issues are published, the private findings are
-      neither filed nor published, and the job fails so the run is never green.
+      3's advisory check, then start the new run. The report and the issues were published, no
+      advisory call followed the refused creation, and the job fails so the run is never green.
     - `publish refused: duplicate draft advisories: see runbook step 11` (exit 6): the paragraph above.
     - `previous report unreadable: see runbook` (exit 7) has **two causes**, and the line does not say
       which: (1) the newest report in `docs/security/audits/` is unreadable as the publish script renders

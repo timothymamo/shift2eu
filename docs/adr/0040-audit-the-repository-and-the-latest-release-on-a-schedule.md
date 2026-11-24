@@ -1016,7 +1016,7 @@ compared or written. The artifact check's and the image check's steps get the jo
   bounded at ten pages per listing; a listing over the bound fails closed and is never truncated. For
   the issue listing the bound is the table itself: its row accepts pages 1 to 10 only. The advisory
   listing (row 14) pages by an opaque `after` cursor, which the table cannot count, so its row holds no
-  page bound: the ten-page bound lives in its caller (PR 4c), which stops and fails closed when the
+  page bound: the ten-page bound lives in its caller (`ListAuditAdvisories`, PR 4c), which stops and fails closed when the
   tenth page's answer still carries a `Link` to a next one, pinned by a fake-`gh` test that answers an
   eleventh `Link`.
 - Gitleaks honours inline allow comments: a line holding gitleaks' inline allow comment (its name, a
@@ -1057,7 +1057,8 @@ holds only `package` (itself exactly `ecosystem` and `name`), `vulnerable_versio
 allowed.
 
 The table cannot bind the PATCH row (16) to the App's own drafts: a GHSA ID matches its pattern whoever
-wrote the advisory and whatever its state. The caller (PR 4c) holds that bound: it PATCHes only a GHSA
+wrote the advisory and whatever its state. The caller (`PlanAdvisories` and `FileAdvisories`, PR 4c)
+holds that bound: it PATCHes only a GHSA
 that the same run's advisory listing showed with `state == draft` and authored by the audit App, never an
 ID from the model's result or a report, pinned by a fake-`gh` test in which the listing holds a published
 advisory and another author's draft and no PATCH reaches either.
@@ -1119,11 +1120,29 @@ of exactly 40 hex digits, either case, in those model fields must be a commit of
 `ErrScanRefused` (outcome 4), which narrows the hex-encoded-secret residual risk above. A hit at any of
 these writes nothing: the branch lookup, the first call of the writes' phase, is never made.
 
-**Private findings until PR 4c.** With no advisory side yet, a run with a private finding fails closed
-rather than filing or dropping it silently: the report is rendered with `private findings: not filed`,
-the report and the issues are published, and `Published.Private` is `PrivateNotFiled`, so the entry
-point's `OutcomeOf(nil).WithCounts` is outcome 5 and the job fails. Nothing of a private finding reaches
-a public text.
+**The draft advisories (PR 4c).** After the issue listing, `Publish` lists the repository's advisories
+(`ListAuditAdvisories`, row 14, ten pages through the `Link` header's `after` cursor, only the cursor
+read), takes the private findings with their keyed fingerprints (`publish.PrivateFindings`) and plans
+the advisory writes (`PlanAdvisories`) before anything is rendered: two matchable drafts with one
+fingerprint are `ErrDuplicateDrafts` (outcome 6) whatever the findings, and no write follows. A
+matchable advisory is the App's (`shift2eu-audit[bot]`, type `Bot`), `draft` or `closed`, with no credit
+and no collaborator, and its summary holds a fingerprint. A draft with a finding's fingerprint is
+updated `open` (a draft marked `not reproduced` that recurs is `open` again); with no draft, the most
+recently closed one (by `closed_at`, a tie the listing's first) marked `not reproduced` makes a new draft
+`regressed`, any other closed one is dismissed with no write, and no advisory at all a new draft `new`.
+A draft no finding holds is marked `not reproduced` by replacing only its last status line
+(`publish.SetAdvisoryStatus`), and skipped when it holds none (a maintainer's rewrite). A create sends
+`{summary, description, severity (only when known), vulnerabilities}`, its one element this module's Go
+package with the other three keys null; an update sends `state: "draft"` and never a severity, so the
+maintainer's severity or CVSS on the draft stands. Every advisory summary and description is scanned
+with `ScanAdvisory` and gitleaks before the first write. The writes go first: the advisories, then the
+report, then the issues. A create answered 403, 404 or 422 is `ErrPrivateNotFiled`: no further advisory
+call, the report and templates rendered beforehand under `private findings: not filed` are published
+with the issues, and `Published.Private` is `PrivateNotFiled`, so `OutcomeOf(nil).WithCounts` is
+outcome 5. A refused listing (any non-2xx) is `ErrGitHub` (outcome 8), as is any other failed advisory
+write, after which no report and no issue are written. The report states `handled privately` when the
+run reproduced a private finding, a dismissed one included, and `none` otherwise. Nothing of a private
+finding reaches a public text: the evidence goes into its advisory only.
 
 **The image check (PR 4b).** `CheckImageDigest` reads row 3 and accepts a digest when at least one
 attestation's DSSE envelope has the payload type `application/vnd.in-toto+json` and its statement
