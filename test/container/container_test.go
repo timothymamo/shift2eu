@@ -763,7 +763,17 @@ var shippedLicenseFiles = []struct{ name, path string }{
 // third_party/NOTICE sends the daemon no LICENSE and no NOTICE, so each of those
 // fixtures must be reported too. A path entry does not count, because GoReleaser
 // keeps the subpath it names and the final stage's `COPY LICENSE NOTICE` reads
-// the context's root.
+// the context's root. The entry must also belong to the image it is read for: a
+// section that builds two images sends each its own context, so the first
+// image's extra_files ships the second nothing, and a fixture whose second image
+// names neither file must be reported. Only an entry of the extra_files list
+// itself counts, at the list's own indentation and as a key of the image entry:
+// a list nested inside one of those entries, and an extra_files written under
+// another of the entry's keys, ship neither file. YAML reads a comment from the
+// first `#` after a blank that no quote opened, so an apostrophe inside an
+// unquoted scalar such as `it's` opens none and the names after it are text.
+// A block sequence may start in the first column, level with the key it belongs
+// to, without becoming a top-level key.
 //
 // It also holds the directory the files land in: BuildKit gives a COPY's
 // --chmod to the directories that COPY creates as well, so a stage that lets the
@@ -938,6 +948,82 @@ COPY --chmod=0444 LICENSE NOTICE /usr/share/doc/shift2eu/
 			dockerignore: "*\n!LICENSE\n!NOTICE\n",
 			goreleaser:   "dockers_v2:\n  - id: shift2eu\n    dockerfile: Dockerfile\n    extra_files:\n      - Dockerfile\n      - LICENSE.txt\n      - third_party/NOTICE\n",
 			want:         []string{"names no LICENSE", "names no NOTICE"},
+		},
+		{
+			// Each image the section builds gets its own build context, so
+			// the first image's extra_files ships nothing to the second.
+			name:         "a GoReleaser dockers_v2 section whose second image ships neither file",
+			dockerfile:   fixture,
+			dockerignore: "*\n!LICENSE\n!NOTICE\n",
+			goreleaser:   "dockers_v2:\n  - id: a\n    dockerfile: Dockerfile\n    extra_files:\n      - LICENSE\n      - NOTICE\n  - id: b\n    dockerfile: Dockerfile\n",
+			want:         []string{"names no LICENSE", "names no NOTICE"},
+		},
+		{
+			name:         "a GoReleaser dockers section whose second image ships neither file",
+			dockerfile:   fixture,
+			dockerignore: "*\n!LICENSE\n!NOTICE\n",
+			goreleaser:   "dockers:\n  - id: a\n    dockerfile: Dockerfile\n    extra_files:\n      - LICENSE\n      - NOTICE\n  - id: b\n    dockerfile: Dockerfile\n",
+			want:         []string{"names no LICENSE", "names no NOTICE"},
+		},
+		{
+			// GoReleaser reads extra_files as a key of the image entry, not as
+			// one nested under another of the entry's keys.
+			name:         "a GoReleaser docker section whose extra_files sits under another key",
+			dockerfile:   fixture,
+			dockerignore: "*\n!LICENSE\n!NOTICE\n",
+			goreleaser:   "dockers_v2:\n  - id: a\n    dockerfile: Dockerfile\n    labels:\n      extra_files: [LICENSE, NOTICE]\n",
+			want:         []string{"names no LICENSE", "names no NOTICE"},
+		},
+		{
+			// Only the items at the extra_files list's own indentation are its
+			// entries; the list one of its entries carries is not.
+			name:         "a GoReleaser docker section whose extra_files holds a nested list",
+			dockerfile:   fixture,
+			dockerignore: "*\n!LICENSE\n!NOTICE\n",
+			goreleaser:   "dockers_v2:\n  - id: a\n    dockerfile: Dockerfile\n    extra_files:\n      - glob: x\n        name_template:\n          - LICENSE\n          - NOTICE\n",
+			want:         []string{"names no LICENSE", "names no NOTICE"},
+		},
+		{
+			// The apostrophe in it's does not open a quoted scalar, so the #
+			// after the list starts a comment and the names in it are text.
+			name:         "a GoReleaser docker section whose comment follows an apostrophe",
+			dockerfile:   fixture,
+			dockerignore: "*\n!LICENSE\n!NOTICE\n",
+			goreleaser:   "dockers_v2:\n  - id: a\n    dockerfile: Dockerfile\n    extra_files: [Dockerfile, it's] # LICENSE, NOTICE\n",
+			want:         []string{"names no LICENSE", "names no NOTICE"},
+		},
+		{
+			// YAML lets a block sequence under a key start in the first column,
+			// at the key's own indentation.
+			name:         "a GoReleaser dockers_v2 section whose sequence is not indented",
+			dockerfile:   fixture,
+			dockerignore: "*\n!LICENSE\n!NOTICE\n",
+			goreleaser:   "dockers_v2:\n- id: a\n  extra_files:\n  - Dockerfile\n  - LICENSE\n  - NOTICE\n",
+		},
+		{
+			name:         "a GoReleaser docker section whose extra_files is a flow list",
+			dockerfile:   fixture,
+			dockerignore: "*\n!LICENSE\n!NOTICE\n",
+			goreleaser:   "docker:\n  id: shift2eu\n  dockerfile: Dockerfile\n  extra_files: [Dockerfile, \"LICENSE\", 'NOTICE']\n",
+		},
+		{
+			name:         "a GoReleaser docker section whose flow list leaves NOTICE out",
+			dockerfile:   fixture,
+			dockerignore: "*\n!LICENSE\n!NOTICE\n",
+			goreleaser:   "docker:\n  id: shift2eu\n  dockerfile: Dockerfile\n  extra_files: [Dockerfile, \"LICENSE\"]\n",
+			want:         []string{"names no NOTICE"},
+		},
+		{
+			name:         "a GoReleaser dockers_v2 section whose key opens a list item",
+			dockerfile:   fixture,
+			dockerignore: "*\n!LICENSE\n!NOTICE\n",
+			goreleaser:   "dockers_v2:\n  - extra_files:\n      - LICENSE\n      - NOTICE\n    id: a\n",
+		},
+		{
+			name:         "a GoReleaser dockers_v2 section whose two images both ship both files",
+			dockerfile:   fixture,
+			dockerignore: "*\n!LICENSE\n!NOTICE\n",
+			goreleaser:   "dockers_v2:\n  - id: a\n    dockerfile: Dockerfile\n    extra_files:\n      - Dockerfile\n      - LICENSE\n      - NOTICE\n  - id: b\n    dockerfile: Dockerfile\n    extra_files:\n      - LICENSE\n      - NOTICE\n",
 		},
 	}
 
