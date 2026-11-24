@@ -45,6 +45,11 @@ const (
 // scalar are read, and a name that merely starts with schedule is not.
 var scheduleWord = regexp.MustCompile(`(^|[^A-Za-z0-9_-])schedule([^A-Za-z0-9_-]|$)`)
 
+// otherLineBreaks are the line breaks YAML may read besides LF and CRLF: a
+// bare CR, and YAML 1.1's next line (NEL, U+0085), line separator (LS,
+// U+2028) and paragraph separator (PS, U+2029).
+const otherLineBreaks = "\r\u0085  "
+
 // hasScheduleTrigger reports whether a workflow may hold a schedule trigger
 // under its top-level on: key. It reads no YAML (the check needs one key of
 // the document and the module has no YAML package) and fails closed by
@@ -52,7 +57,10 @@ var scheduleWord = regexp.MustCompile(`(^|[^A-Za-z0-9_-])schedule([^A-Za-z0-9_-]
 // the schedule word against every line of that value, so no form of the key
 // or the value GitHub accepts can hide a schedule.
 //
-// A leading byte order mark is dropped. The root key column is the indent of
+// A leading byte order mark is dropped and CRLF is read as LF. Any other line
+// break YAML may read, a bare CR or a NEL, LS or PS anywhere in the file, is
+// reported as a schedule: lines are split on LF alone, so the text after such
+// a break could hide in what reads as a comment. The root key column is the indent of
 // the document's first content line (no blank, no comment), read afresh after
 // each document marker (--- or ... at column 0), so a root mapping indented as
 // a whole is read like one at column 0. The top-level on key is a line at the
@@ -96,6 +104,13 @@ var scheduleWord = regexp.MustCompile(`(^|[^A-Za-z0-9_-])schedule([^A-Za-z0-9_-]
 func hasScheduleTrigger(workflow []byte) bool {
 	// The byte order mark U+FEFF, in UTF-8.
 	text := strings.TrimPrefix(string(workflow), "\xef\xbb\xbf")
+
+	// Lines are split on LF alone, so CRLF is read as LF, and any other line
+	// break YAML may read (a bare CR, NEL, LS or PS) fails closed.
+	text = strings.ReplaceAll(text, "\r\n", "\n")
+	if strings.ContainsAny(text, otherLineBreaks) {
+		return true
+	}
 
 	// rootColumn is the indent of the document's top-level keys, -1 until
 	// its first content line.
