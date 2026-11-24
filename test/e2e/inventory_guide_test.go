@@ -530,7 +530,7 @@ func assertCategories(t *testing.T, source string, doc inventoryDoc) {
 	slices.Sort(got)
 	got = slices.Compact(got)
 
-	want := append(categories, "unclassified")
+	want := append(slices.Clone(categories), "unclassified")
 	slices.Sort(want)
 	want = slices.Compact(want)
 
