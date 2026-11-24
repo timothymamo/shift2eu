@@ -919,7 +919,10 @@ An agent cannot do these steps. Each one is safe to stop at; the workflow is rol
       listing matches those already filed, a timed-out issue that GitHub applied included. If only the
       branch exists (a `POST git/refs` that timed out but succeeded), delete it, then start the new
       run. A branch created between the lookup and the ref write answers 422 and lands here as well
-      (no write is lost: refs are never forced).
+      (no write is lost: refs are never forced). A refused advisory creation after an earlier advisory
+      write of the run ends here too, the likely case being an App that can still update its drafts but
+      can no longer create one: that run's earlier drafts stand, and before the next run repeat step 3's
+      advisory check to confirm the App's advisory permission.
     - `configuration invalid: see runbook` (exit 9): a variable, flag or secret of the publish step is
       missing or malformed (a `GITHUB_SHA` that is not 40 lowercase hex, an `AUDIT_FINGERPRINT_KEY`
       unset or shorter than 32 bytes, and, for `image` and `publish`, a `GITHUB_SERVER_URL` other than

@@ -1129,12 +1129,11 @@ matchable advisory is the App's (`shift2eu-audit[bot]`, type `Bot`), `draft` or 
 and no collaborator, and its summary holds a fingerprint. A listing entry whose `credits`,
 `credits_detailed`, `collaborating_users` or `collaborating_teams` is missing or `null` is no empty list:
 counted as none it would fail open on an advisory a person is on, so it fails the listing closed
-(`ErrGitHub`, outcome 8), as a missing `ghsa_id`, `summary` or `state` does. This supersedes the design's
-"a null list is an empty one". A draft with a finding's fingerprint is
-updated `open` (a draft marked `not reproduced` that recurs is `open` again); with no draft, the most
-recently closed one (by `closed_at`, a tie the listing's first) marked `not reproduced` makes a new draft
-`regressed`, any other closed one is dismissed with no write, and no advisory at all a new draft `new`.
-A draft no finding holds is marked `not reproduced` by replacing only its last status line
+(`ErrGitHub`, outcome 8), as a missing `ghsa_id`, `summary` or `state` does. A draft with a finding's
+fingerprint is updated `open` (a draft marked `not reproduced` that recurs is `open` again); with no
+draft, the most recently closed one (by `closed_at`, a tie the listing's first) marked `not reproduced`
+makes a new draft `regressed`, any other closed one is dismissed with no write, and no advisory at all a
+new draft `new`. A draft no finding holds is marked `not reproduced` by replacing only its last status line
 (`publish.SetAdvisoryStatus`), and skipped when it holds none (a maintainer's rewrite). A create sends
 `{summary, description, severity (only when known), vulnerabilities}`, its one element this module's Go
 package with the other three keys null; an update sends `state: "draft"` and never a severity, so the
@@ -1168,8 +1167,9 @@ the advisory is no longer the App's to update (a credit makes it unmatchable). A
 holds the fingerprint, so the next run that reproduces the finding creates a new draft. A maintainer's
 text in a draft's description that hits the advisory scan or gitleaks (a pasted example token, say) makes
 every later run that re-sends that description (the not-reproduced mark, which keeps the listing's text)
-fail with outcome 4 (`ErrScanRefused`) before any write, until the text is removed. The not-reproduced mark replaces only the status line, so the `Run:` line still names
-the run that last reproduced the finding: that is intended, since it is the run to look at.
+fail with outcome 4 (`ErrScanRefused`) before any write, until the text is removed. The not-reproduced
+mark replaces only the status line, so the `Run:` line still names the run that last reproduced the
+finding: that is intended, since it is the run to look at.
 
 **The image check (PR 4b).** `CheckImageDigest` reads row 3 and accepts a digest when at least one
 attestation's DSSE envelope has the payload type `application/vnd.in-toto+json` and its statement
