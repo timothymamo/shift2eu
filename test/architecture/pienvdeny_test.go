@@ -2,7 +2,8 @@
 // rule 3, issue #540).
 //
 // The tester runs pi with --approve, so nothing asks it for permission: the
-// only layer between it and an API key in its pane is the refusal pinned here.
+// refusal pinned here is the second layer, after the words of CLAUDE.md rule 3,
+// between it and an API key in its pane, not a boundary (ADR 0044).
 // On 2026-11-24 a tester ran `env | grep` while looking for its scratchpad
 // directory and printed DEEPSEEK_API_KEY, which then had to be rotated.
 //
@@ -29,6 +30,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/google/go-cmp/cmp"
 )
@@ -511,6 +514,89 @@ func TestPiEnvDenyExtensionAncestorCheckHoldsAtTheRoot(t *testing.T) {
 		t.Errorf("%s: the extension no longer names the recursive tools' check (`recursiveTools.has(`), so nothing here can tell whether an absent path is given its default before it (issue #540)", piEnvDenyExtension)
 	case pathDefaultAt > recursiveAt:
 		t.Errorf("%s: the extension gives a file tool's absent path its default after the recursive check reads the path, so the check sees no path and allows the call (issue #540)", piEnvDenyExtension)
+	}
+}
+
+// TestPiEnvDenyExtensionHoldsOnlyASCII pins how the extension writes the
+// Unicode spaces pi maps to a plain space before it reads a path: as code
+// points it builds with `String.fromCodePoint`, never as the invisible
+// characters themselves, so that a reader and a diff can see which code points
+// the class matches.
+//
+// Two properties are pinned. The whole file holds no byte above U+007F: a single
+// literal U+00A0 in the class, in a comment or anywhere else is invisible in a
+// diff and cannot be told from a plain space, so every character above U+007F
+// has to be built from its code point. And the declaration `const unicodeSpaces`
+// is pinned whole, with its whitespace collapsed: the code points it builds, the
+// range's `-` between them and the `g` flag.
+//
+// An exact pin is what the set needs, because every shorter or reordered class
+// still compiles and still normalises most paths: dropping the `-` loses
+// U+2001 to U+2009, swapping U+00A0 and U+2000 widens the range to
+// U+00A0-U+200A, dropping the `g` replaces only the first space of a path, and a
+// code point that survives only in a comment matches nothing. The set is pi's
+// own UNICODE_SPACES (U+00A0, U+2000 to U+200A, U+202F, U+205F and U+3000) and
+// changes only together with this pin.
+//
+// The test reads the source text only; it never runs the class (issue #546).
+func TestPiEnvDenyExtensionHoldsOnlyASCII(t *testing.T) {
+	t.Parallel()
+
+	text := string(readRepositoryFile(t, piEnvDenyExtension))
+
+	// Every character above U+007F, wherever it sits in the file, is reported
+	// with its line and code point: a literal one is the character itself and
+	// a diff shows no change when it comes back.
+	for i, line := range strings.Split(text, "\n") {
+		for at := 0; at < len(line); {
+			r, size := utf8.DecodeRuneInString(line[at:])
+
+			switch {
+			case r == utf8.RuneError && size == 1:
+				t.Errorf("%s:%d: the extension holds the byte 0x%02x at column %d, which is no valid UTF-8: this file holds only ASCII (issue #546)", piEnvDenyExtension, i+1, line[at], at+1)
+			case r > unicode.MaxASCII:
+				t.Errorf("%s:%d: the extension holds the non-ASCII code point U+%04X at column %d: a character above U+007F is invisible in a diff and cannot be told from the ASCII character it resembles, so the file holds only ASCII; spell it as U+%04X in a comment, or build it with `String.fromCodePoint(0x%04x)` in code (issue #546)", piEnvDenyExtension, i+1, r, at+1, r, r)
+			}
+
+			at += size
+		}
+	}
+
+	// The declaration is pinned whole, its whitespace collapsed, so that the code
+	// points, the `-` that makes U+2000 to U+200A a range and the `g` flag all
+	// have to stay. A substring search would hold neither: it reads a dropped `-`,
+	// two code points in the other order, a `g` turned into "" and a code point
+	// left only in a comment as the set it pins, and `0x2000` is found inside
+	// `0x20000`.
+	const declaration = "const unicodeSpaces ="
+
+	// The expected declaration is written as the extension writes it, over
+	// several lines, and collapsed by the same rule as the file's text below, so
+	// that this pin stays readable while it holds every token of the declaration.
+	wantDeclared := strings.Join(strings.Fields(`
+const unicodeSpaces = new RegExp(
+	"[" +
+		String.fromCodePoint(0x00a0, 0x2000) +
+		"-" +
+		String.fromCodePoint(0x200a, 0x202f, 0x205f, 0x3000) +
+		"]",
+	"g",
+);`), " ")
+
+	start := strings.Index(text, declaration)
+	if start < 0 {
+		t.Fatalf("%s: the extension no longer declares %q, so nothing here can tell which code points the Unicode space class holds (issue #546)", piEnvDenyExtension, declaration)
+	}
+
+	end := strings.IndexByte(text[start:], ';')
+	if end < 0 {
+		t.Fatalf("%s: the declaration %q has no closing `;`, so nothing here can read the code points the Unicode space class holds (issue #546)", piEnvDenyExtension, declaration)
+	}
+
+	declared := strings.Join(strings.Fields(text[start:start+end+1]), " ")
+
+	if declared != wantDeclared {
+		t.Errorf("%s: the declaration of the Unicode space class is not the one this pin holds: want %q, got %q. The class has to stay U+00A0, U+2000 to U+200A, U+202F, U+205F and U+3000 with the `g` flag (pi's own UNICODE_SPACES), built from their code points, and it changes only together with this pin (issue #546)", piEnvDenyExtension, wantDeclared, declared)
 	}
 }
 
