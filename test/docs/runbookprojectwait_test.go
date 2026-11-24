@@ -9,7 +9,10 @@
 // plan left the state lock behind. Every line that switches the key's default
 // project and is followed by a `dev/tofu.sh` line in the same section owes a
 // short bounded wait between the two - a `#` comment saying why, then a listing
-// of the state bucket that stops as soon as it answers. R7 owes one thing more:
+// of the state bucket that stops as soon as it answers. The wait alone proves
+// nothing: the loop exits 0 whether or not the switch has applied and prints
+// nothing, so a listing of the state bucket that states its expected result has
+// to follow it before the next tofu line. R7 owes one thing more:
 // a way out of the lock a leftover one already left, `site/terraform.tfstate.tflock`
 // named, and the `force-unlock` line carrying its PASS line.
 //
@@ -18,6 +21,7 @@
 package docs_test
 
 import (
+	"fmt"
 	"os"
 	"regexp"
 	"strings"
@@ -48,23 +52,29 @@ const (
 	projectWaitPassMarker = "# PASS:"
 )
 
-// projectWaitWaitFragments are what the wait line between a switch and the next
-// tofu line must hold: a state-bucket listing that answers at once, bounded to
-// two minutes, which stops as soon as S3 answers from the new project. The
-// bucket is the runbook's own placeholder for the state bucket, the one R1's
+// projectWaitWaitFragments are the fixed parts of the wait line between a switch
+// and the next tofu line: a state-bucket listing that answers at once, one item
+// at a time, in a loop that stops as soon as S3 answers from the new project.
+// The bucket is the runbook's own placeholder for the state bucket, the one R1's
 // listing lines use (`aws s3api list-objects-v2 --bucket <state-bucket>`).
 var projectWaitWaitFragments = []string{
 	"list-objects-v2",
 	"--bucket <state-bucket>",
 	"--max-items 1",
-	"seq 1 12",
 	"break",
-	"sleep 10",
 }
 
-// projectWaitSectionHeading matches a section heading, `## R7. The deploy key's
-// limits`, and keeps its R number.
-var projectWaitSectionHeading = regexp.MustCompile(`^##\s+(R\d+)\.`)
+// projectWaitWaitPatterns are the parts of the wait line the runbook may retune:
+// the bound of the tries and the sleep between them. They are matched loosely so
+// a shorter or longer wait still passes.
+var projectWaitWaitPatterns = []*regexp.Regexp{
+	regexp.MustCompile(`seq 1 [0-9]+`),
+	regexp.MustCompile(`sleep [0-9]+`),
+}
+
+// projectWaitListingFragment is a listing of the runbook's state bucket through
+// the maintainer's own key: the read that only answers once the switch applied.
+const projectWaitListingFragment = "list-objects-v2 --bucket <state-bucket>"
 
 // projectWaitSection is one `## R<n>.` section of the runbook: its name, the
 // 1-based number of its heading line and the lines below that heading.
@@ -77,6 +87,19 @@ type projectWaitSection struct {
 // number returns the 1-based line number of the section's i-th line.
 func (s projectWaitSection) number(i int) int {
 	return s.start + 1 + i
+}
+
+// numberOrEnd describes the line at index i of the section: its 1-based line
+// number and text, or the end of the section when the section holds no such
+// line.
+func (s projectWaitSection) numberOrEnd(i int) string {
+	if i >= len(s.lines) {
+		_, last := s.span()
+
+		return fmt.Sprintf("the end of the section (line %d)", last)
+	}
+
+	return fmt.Sprintf("line %d (`%s`)", s.number(i), strings.TrimSpace(s.lines[i]))
 }
 
 // span returns the 1-based numbers of the section's heading and last line.
@@ -98,6 +121,31 @@ func (s projectWaitSection) waits(from, to int) bool {
 	}
 
 	return false
+}
+
+// checksAfterWait reports whether a checked listing of the state bucket lies
+// strictly between the wait at index from and the tofu line at index to: the
+// line that turns the loop's silent exit into a PASS or a FAIL.
+func (s projectWaitSection) checksAfterWait(from, to int) bool {
+	for i := from + 1; i < to; i++ {
+		if projectWaitIsCheckedListing(s.lines[i]) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// nextTofu returns the index of the first `dev/tofu.sh` line below index from,
+// or len(s.lines) when the section holds none.
+func (s projectWaitSection) nextTofu(from int) int {
+	for i := from + 1; i < len(s.lines); i++ {
+		if projectWaitIsTofu(s.lines[i]) {
+			return i
+		}
+	}
+
+	return len(s.lines)
 }
 
 // carriesPass reports whether the line at index i carries the runbook's PASS
@@ -132,11 +180,11 @@ type projectWaitPair struct {
 // TestRunbookWaitsAfterADefaultProjectSwitchBeforeTofu pins that every line of
 // the site runbook that switches the maintainer's key's default project, and is
 // followed by a `dev/tofu.sh` line in the same section, puts a wait between the
-// two (issue #537). Today R7's step 8 and R13 fall short.
+// two (issue #537).
 func TestRunbookWaitsAfterADefaultProjectSwitchBeforeTofu(t *testing.T) {
 	t.Parallel()
 
-	sections := projectWaitSections(strings.Split(readDoc(t, os.DirFS(repoRoot), siteRunbookPath), "\n"))
+	sections := projectWaitSections(t)
 	pairs := projectWaitSwitchTofuPairs(sections)
 
 	t.Run("the runbook holds a switch followed by a tofu line", func(t *testing.T) {
@@ -160,7 +208,50 @@ func TestRunbookWaitsAfterADefaultProjectSwitchBeforeTofu(t *testing.T) {
 				siteRunbookPath, pair.section.name,
 				pair.section.number(pair.switchAt), strings.TrimSpace(pair.section.lines[pair.switchAt]),
 				pair.section.number(pair.tofuAt), strings.TrimSpace(pair.section.lines[pair.tofuAt]),
-				projectWaitWaitFragments)
+				projectWaitWaitDescription())
+		}
+	})
+}
+
+// TestRunbookChecksTheWaitWithAListingBeforeTheNextTofu pins that the runbook
+// does not take its wait on trust (issue #537): the loop exits 0 whether or not
+// the switch has applied and prints nothing, so a run that switched nothing
+// looks exactly like one that did. Between every wait line and the next
+// `dev/tofu.sh` line of its section the runbook must therefore list the state
+// bucket once more, with the result it expects in that same line.
+func TestRunbookChecksTheWaitWithAListingBeforeTheNextTofu(t *testing.T) {
+	t.Parallel()
+
+	sections := projectWaitSections(t)
+
+	waits := 0
+
+	for _, section := range sections {
+		for i, line := range section.lines {
+			if !projectWaitIsWait(line) {
+				continue
+			}
+
+			waits++
+
+			tofuAt := section.nextTofu(i)
+			if section.checksAfterWait(i, tofuAt) {
+				continue
+			}
+
+			t.Errorf("%s: section %s waits for the switch at line %d (`%s`), but no line between it and %s lists the state bucket with a %q line of its own: the loop exits 0 whether or not the switch applied, and prints nothing, so a run that never switched looks like one that did. List the state bucket again, `aws s3api list-objects-v2 --bucket <state-bucket> --query 'Contents[].Key'   %s \"site/terraform.tfstate\"`, so a switch that did not apply fails there instead of leaving a state lock behind (issue #537)",
+				siteRunbookPath, section.name,
+				section.number(i), strings.TrimSpace(line),
+				section.numberOrEnd(tofuAt), projectWaitPassMarker, projectWaitPassMarker)
+		}
+	}
+
+	t.Run("the runbook holds a wait before a tofu line", func(t *testing.T) {
+		t.Parallel()
+
+		if waits == 0 {
+			t.Fatalf("%s holds no wait line (%s) in any `## R<n>.` section, so this check would pass on nothing: point it at the waits and the tofu lines again (issue #537)",
+				siteRunbookPath, projectWaitWaitDescription())
 		}
 	})
 }
@@ -172,7 +263,7 @@ func TestRunbookWaitsAfterADefaultProjectSwitchBeforeTofu(t *testing.T) {
 func TestRunbookR7RecoversFromALeftoverStateLock(t *testing.T) {
 	t.Parallel()
 
-	sections := projectWaitSections(strings.Split(readDoc(t, os.DirFS(repoRoot), siteRunbookPath), "\n"))
+	sections := projectWaitSections(t)
 
 	section, ok := projectWaitSectionNamed(sections, projectWaitR7)
 	if !ok {
@@ -213,41 +304,48 @@ func TestRunbookR7RecoversFromALeftoverStateLock(t *testing.T) {
 	})
 }
 
-// projectWaitSections splits the runbook's lines into its `## R<n>.` sections,
-// each running from its heading to the next `##` heading, the next section's.
-// A `# ` line does not end a section: in this runbook every one of them is a
-// comment - a numbered step of R7's or a FAIL line - and not a heading.
-func projectWaitSections(lines []string) []projectWaitSection {
+// projectWaitSections returns the runbook's `## R<n>.` sections in the order the
+// runbook holds them, each section's lines taken with runbookSectionOf. The
+// heading is found with markdownHeading, outside a fenced code block, so a
+// `#` comment of a shell block neither opens a section nor ends one. The
+// section keeps its heading's 1-based line number, so a failure names the line
+// a maintainer has to fix.
+func projectWaitSections(t *testing.T) []projectWaitSection {
+	t.Helper()
+
+	lines := strings.Split(readDoc(t, os.DirFS(repoRoot), siteRunbookPath), "\n")
+
 	var sections []projectWaitSection
 
-	var (
-		name  string
-		start int // the 0-based index of the open section's heading line
-		open  bool
-	)
-
-	flush := func(end int) {
-		if !open {
-			return
-		}
-
-		sections = append(sections, projectWaitSection{name: name, start: start + 1, lines: lines[start+1 : end]})
-		open = false
-	}
+	fenced := false
 
 	for i, line := range lines {
-		switch {
-		case projectWaitSectionHeading.MatchString(line):
-			flush(i)
+		if strings.HasPrefix(strings.TrimSpace(line), "```") {
+			fenced = !fenced
 
-			name = projectWaitSectionHeading.FindStringSubmatch(line)[1]
-			start, open = i, true
-		case strings.HasPrefix(line, "## "):
-			flush(i)
+			continue
 		}
-	}
 
-	flush(len(lines))
+		if fenced {
+			continue
+		}
+
+		level, title, ok := markdownHeading(line)
+		if !ok || level != 2 {
+			continue
+		}
+
+		name, _, ok := strings.Cut(title, ". ")
+		if !ok || len(name) < 2 || name[0] != 'R' {
+			continue
+		}
+
+		sections = append(sections, projectWaitSection{
+			name:  name,
+			start: i + 1,
+			lines: runbookSectionOf(t, strings.TrimSpace(line)),
+		})
+	}
 
 	return sections
 }
@@ -333,11 +431,31 @@ func projectWaitIsWait(line string) bool {
 		return false
 	}
 
-	for _, fragment := range projectWaitWaitFragments {
-		if !strings.Contains(line, fragment) {
+	if !carriesAll(line, projectWaitWaitFragments) {
+		return false
+	}
+
+	for _, pattern := range projectWaitWaitPatterns {
+		if !pattern.MatchString(line) {
 			return false
 		}
 	}
 
 	return true
+}
+
+// projectWaitWaitDescription says what a wait line must hold, for the failure
+// messages: the fixed fragments and the retunable parts.
+func projectWaitWaitDescription() string {
+	return fmt.Sprintf("%v and one match each for %v", projectWaitWaitFragments, projectWaitWaitPatterns)
+}
+
+// projectWaitIsCheckedListing reports whether the line lists the state bucket
+// and states in the same line what it expects to read: the check a wait owes.
+func projectWaitIsCheckedListing(line string) bool {
+	if projectWaitIsComment(line) {
+		return false
+	}
+
+	return strings.Contains(line, projectWaitListingFragment) && strings.Contains(line, projectWaitPassMarker)
 }
