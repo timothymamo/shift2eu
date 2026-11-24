@@ -1,0 +1,34 @@
+{
+  "schemaVersion": 2,
+  "source": "aws",
+  "resources": [
+    {
+      "id": "../../../../etc/passwd",
+      "rawType": "/proc/self/environ",
+      "category": "compute.vm",
+      "region": "eu-central-1",
+      "workload": "../../../../work/out.md"
+    },
+    {
+      "id": "C:\\Windows\\System32\\config\\SAM",
+      "rawType": "\\\\example.com\\share\\file",
+      "category": "storage.object",
+      "region": "eu-central-1",
+      "workload": "file:///etc/shadow"
+    },
+    {
+      "id": "./-rf",
+      "rawType": "--target=all",
+      "category": "compute.vm",
+      "region": "eu-central-1",
+      "relations": [{ "type": "depends-on", "target": "../../../../etc/passwd" }]
+    },
+    {
+      "id": "nul\u0000byte",
+      "rawType": "$(id)`id`${HOME}",
+      "category": "storage.object",
+      "region": "eu-central-1",
+      "workload": "%s%n%x{{.}}"
+    }
+  ]
+}

@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 2,
+  "source": "aws",
+  "resources": [
+    {
+      "id": "unknown-category",
+      "rawType": "AWS::EC2::Instance",
+      "category": "../compute.vm",
+      "region": "eu-central-1"
+    },
+    {
+      "id": "upper-case-category",
+      "rawType": "AWS::EC2::Instance",
+      "category": "COMPUTE.VM",
+      "region": "eu-central-1"
+    },
+    {
+      "id": "unknown-capability",
+      "rawType": "AWS::EC2::Instance",
+      "category": "compute.vm",
+      "region": "eu-central-1",
+      "capabilities": ["ipv6", "ipv6", "not-a-capability", ""]
+    }
+  ]
+}
