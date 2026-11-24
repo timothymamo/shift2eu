@@ -2130,7 +2130,13 @@ must run in order are all matched against its script with every whole comment li
 non-blank character is `#`) taken out, so a guard commented out (`# --deny-self-hosted-runners`, the
 zip's `sha256sum --check --strict`, `-result-out`) is a guard missing, and a commented copy of a command
 above the real one cannot satisfy the order. Only whole lines go: a `#` inside a code line
-(`${digest#sha256:}`) is code. An order broken is reported for every pair out of order, the command that
+(`${digest#sha256:}`) is code. A trailing comment is refused outright (review round 3, H1): a code line
+holding a `#` at the start of a word (`(^|\s)#`) is a problem, because the shell drops the rest of the
+line, a trailing `\` included, so a guard hidden after it still matches every pattern while the shell
+never runs it, and a `--source-ref "refs/tags/${tag}" # \` cuts the continuation so that
+`gh attestation verify`'s failure is ignored (only the last command's status counts in
+`if ! A; B; then`). A `#` inside a word stays code; one after a blank inside quotes is refused too, which
+fails closed. An order broken is reported for every pair out of order, the command that
 must come first named first.
 
 **Job permissions** (`GITHUB_TOKEN`, each read): the checks job `contents` alone (no row PR 5b runs reads

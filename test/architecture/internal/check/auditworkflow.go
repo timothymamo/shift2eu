@@ -138,7 +138,7 @@ var (
 	// digest, then an empty digest skipped with a fixed notice (the run pulled
 	// no image), then the digest's shape, and only then the verification.
 	digestRead = command(`if ! digest="\$\(jq -er '\.image_digest \| select\(type == "string"\) \| select\(\. == "" or test\("\^sha256:\[0-9a-f\]\{64\}\\\\z"\)\)' "\$\{RUNNER_TEMP\}/result\.json"\)"; then\s+echo "::error [^"\n]*"\s+exit 1\s+fi`,
-		`the digest's string-and-shape read: if ! digest="$(jq -er '.image_digest | select(type == "string") | select(. == "" or test("^sha256:[0-9a-f]{64}\\z"))' ...)"; then ... exit 1`)
+		`string-and-shape read of the digest: if ! digest="$(jq -er '.image_digest | select(type == "string") | select(. == "" or test("^sha256:[0-9a-f]{64}\\z"))' ...)"; then ... exit 1`)
 	tagShape    = command(`\[\[ ! "\$\{tag\}" =~ \^v\[0-9\]\+\\\.\[0-9\]\+\\\.\[0-9\]\+\$ \]\]`, `the tag's shape check [[ ! "${tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]`)
 	emptyDigest = command(`if \[ -z "\$\{digest\}" \]; then\s+echo "image not pulled[^"\n]*"\s+exit 0\s+fi`, `the empty digest's branch: echo "image not pulled: ..." and exit 0`)
 	digestShape = command(`\[\[ ! "\$\{digest\}" =~ \^sha256:\[0-9a-f\]\{64\}\$ \]\]`, `the digest's shape check [[ ! "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]]`)
@@ -364,6 +364,13 @@ var auditModelTools = regexp.MustCompile("(?:^|[\\s;&|(`\"'/])(docker|podman|git
 
 // auditGoCommand matches a Go command: the word go and an argument.
 var auditGoCommand = regexp.MustCompile(`(?:^|[\s;&|(])go\s+\S`)
+
+// auditTrailingComment matches a # at the start of a word, which the shell
+// reads as a comment to the end of the line: on a code line it can hide a
+// guard or cut a \ continuation (review round 3, H1). A # inside a word
+// (${digest#sha256:}) is code; one after whitespace inside quotes is refused
+// too, which fails closed.
+var auditTrailingComment = regexp.MustCompile(`(?:^|\s)#`)
 
 // auditTempPath matches a path under /tmp or /run, which the sandbox's Bash
 // can read: the deny list does not name them.
@@ -1170,6 +1177,10 @@ func (a *auditReader) run(e yamlread.Entry, path string, want *auditStep, env []
 			continue
 		}
 
+		if auditTrailingComment.MatchString(line) {
+			a.r.fail("line %d: %s's script holds a trailing comment (%q): a # at the start of a word comments out the rest of the line, a trailing \\ included, so a guard after it is no command; put a comment on a line of its own", num, path, trimmed)
+		}
+
 		if m := auditTempPath.FindStringSubmatch(line); m != nil {
 			a.r.fail("line %d: %s names a path under %s (%q): no file of the audit lives under /tmp or /run, which the sandbox's Bash can read (ADR 0040)", num, path, m[1], trimmed)
 		}
@@ -1209,7 +1220,8 @@ func (a *auditReader) run(e yamlread.Entry, path string, want *auditStep, env []
 }
 
 // withoutComments returns the script's lines that are no comment, joined. Only
-// whole comment lines go: a # inside a code line (${digest#sha256:}) stays.
+// whole comment lines go: a # inside a code line (${digest#sha256:}) stays, and
+// a trailing comment is refused by run on its own.
 func withoutComments(lines []string) string {
 	kept := make([]string, 0, len(lines))
 
