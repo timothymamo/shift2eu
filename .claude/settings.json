@@ -24,7 +24,26 @@
       "Bash(git *push*--force*)",
       "Bash(git *push* -f*)",
       "Bash(git *branch -D*)",
-      "Bash(git *branch --delete*)"
+      "Bash(git *branch --delete*)",
+      "Bash(env)",
+      "Bash(env *)",
+      "Bash(/usr/bin/env*)",
+      "Bash(printenv)",
+      "Bash(printenv *)",
+      "Bash(set)",
+      "Bash(export)",
+      "Bash(export -p*)",
+      "Bash(declare)",
+      "Bash(declare -p*)",
+      "Bash(declare -x*)",
+      "Bash(typeset)",
+      "Bash(typeset -p*)",
+      "Bash(typeset -x*)",
+      "Bash(compgen -v*)",
+      "Bash(compgen -e*)",
+      "Bash(*/proc/*/environ*)",
+      "Read(/proc/*/environ)",
+      "Read(//proc/**/environ)"
     ]
   }
 }

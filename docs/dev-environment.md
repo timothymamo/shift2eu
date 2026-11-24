@@ -2343,7 +2343,10 @@ Everything below exists to keep the agents from waiting on you (#68). Three plac
 
 - **`.claude/settings.json`, checked in.** Permission rules apply on top of the mode: an allow rule skips
   the check, and a deny rule refuses the action. The deny rules (`--no-verify`, force pushes,
-  `git branch -D` and `--delete`, see CLAUDE.md rule 8) and the allow rules that name no path (the fixed `make` targets, `go test/build/vet`,
+  `git branch -D` and `--delete`, see CLAUDE.md rule 8; the commands that print the environment, `env`,
+  `printenv`, bare `set` and `export`, `export -p`, `declare`/`typeset -p`/`-x`, `compgen -v`/`-e` and
+  `/proc/*/environ`, see CLAUDE.md rule 3 and
+  [ADR 0044](adr/0044-refuse-printing-the-environment-in-pi-with-a-project-extension.md)) and the allow rules that name no path (the fixed `make` targets, `go test/build/vet`,
   `golangci-lint run`, `dot-agent-deck work-done`, web search and the provider documentation sites)
   live here, so every checkout has them, including the dispatch worktrees the deck creates.
 - **`.claude/worker-settings.json`, checked in.** Loaded by the workers only. It denies
@@ -2380,9 +2383,13 @@ mode already lets routine work run and still checks risky actions. Never use it 
 directly on the Mac.
 
 pi, which runs the tester, has no permission prompts at all: it reads, edits and runs commands without
-asking. Its `--approve` flag only makes it load the project's `.pi/settings.json` (and with it the
-skills) without a trust prompt. For the tester the VM is the only boundary, so never start the deck
-outside it.
+asking. Its `--approve` flag trusts the project for that process without a trust prompt, so pi loads the
+project's `.pi/settings.json` (and with it the skills) and its extension
+`.pi/extensions/deny-env-printing.ts`, which refuses a bash command that prints the environment (the
+patterns in `.pi/deny-env-printing.json`) and a file tool call on `/proc/*/environ`
+([ADR 0044](adr/0044-refuse-printing-the-environment-in-pi-with-a-project-extension.md)). That refusal
+is a second layer beside CLAUDE.md rule 3, not a boundary: for the tester the VM is the only boundary, so
+never start the deck outside it.
 
 ## Containers and image verification
 
