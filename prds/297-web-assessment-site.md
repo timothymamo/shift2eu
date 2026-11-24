@@ -1021,9 +1021,9 @@ security audit (`security-audit` skill), since every one of them touches the tru
   service-worker registration would be allowed. A worker loaded from a same-origin URL takes its CSP
   from its own response headers, not from the page, and this site sends no headers (Hosting decision 2),
   so the worker's `fetch` would escape `connect-src 'none'`. (*Amended 2026-11-24:* once the container's
-  front is live, `www` sends the policy as a header, so a same-origin worker's script there gets it; the
-  reasoning holds on the other origins, and `worker-src 'none'` stays, ADR 0045.) `child-src`, `frame-src` and
-  `manifest-src` already fall back to `default-src 'none'`, but are pinned so a later directive cannot
+  front is live, `www` sends the policy as a header, so a same-origin worker's script there gets it;
+  the reasoning holds on the other origins, and `worker-src 'none'` stays, ADR 0045.) `child-src`,
+  `frame-src` and `manifest-src` already fall back to `default-src 'none'`, but are pinned so a later directive cannot
   widen them by fallback; the static test fails when any of the four is missing or other than exactly
   `'none'` (*Layer 2*). It does not conflict with the unregister function: `getRegistrations()` and
   `unregister()` fetch no script, and `worker-src` governs only the fetch of a worker's script. The
@@ -1140,10 +1140,10 @@ it. Decision 4 is amended by the orchestrator's decision above.
    `https://shift2eu.com` and `http://shift2eu.com` all answer **308** to `https://www.shift2eu.com` with
    the same path, in one hop (the preload chain only if preload is pursued, decision 2). So `http://www`
    is redirected, and the *refuse or close* alternative above is no longer used. Namecheap's URL
-   redirect is not used: by Namecheap's articles 384, 385 and 9604 (not tested), it serves no certificate
-   for `shift2eu.com`. **The apex redirect's provider is
-   Scaleway** (Serverless Containers), already named on the privacy page, so no third party is added;
-   its certificate authority is Let's Encrypt, which the CAA record already names (decision 10).
+   redirect is not used: by Namecheap's articles 384, 385 and 9604 (not tested), it serves no
+   certificate for `shift2eu.com`. **The apex redirect's provider is Scaleway** (Serverless
+   Containers), already named on the privacy page, so no third party is added; its certificate
+   authority is Let's Encrypt, which the CAA record already names (decision 10).
 4. **Decided: the module script is uploaded pre-compressed with `Content-Encoding: gzip`** if Edge
    Services serves it with that header and `Content-Type: text/javascript`; otherwise it is served
    uncompressed, the uncompressed size is held to a budget too (milestone 3's ADR,
@@ -1337,8 +1337,10 @@ Facts still unknown, each with the milestone that needs it. None blocks mileston
     the container, stays DNSSEC-signed and validated, reaches *ready* as a custom domain with a Let's
     Encrypt certificate under the existing CAA record, and answers 308 over HTTPS and plain HTTP.
   - For the infra unit (ADR 0045): whether the platform overwrites a client's own `X-Forwarded-Proto`
-    (a plain-HTTP request carrying `X-Forwarded-Proto: https`, the header twice or a comma list must
-    still get the 308); that it runs the Caddy image by its digest (a go/no-go; else a private Container
+    (a plain-HTTP request carrying `X-Forwarded-Proto: https`, the header as two fields in both orders,
+    two `https` fields, or `https, https` in one field must still get the 308: the rule compares the
+    header's joined value exactly with `https`, never Caddy's `header` matcher, which accepts any one
+    field); that it runs the Caddy image by its digest (a go/no-go; else a private Container
     Registry mirror, recorded in ADR 0045 first); how the configuration reaches the container;
     `min_scale`, and a cold start within the live check's request timeout.
   - The HSTS go/no-go (decision 2): HSTS on `www.shift2eu.com` with `max-age` of at least 31536000 and

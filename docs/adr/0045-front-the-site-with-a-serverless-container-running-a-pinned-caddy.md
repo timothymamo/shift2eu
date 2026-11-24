@@ -71,8 +71,9 @@ from the Edge Services pipeline endpoint, which stays the only reader of the pri
 
 - **One container, two custom domains:** `www.shift2eu.com` (a Namecheap CNAME to the container's
   endpoint) and `shift2eu.com` (a Namecheap ALIAS at `@` to the same endpoint), each with the
-  certificate Scaleway issues for a custom domain (Let's Encrypt: the FAQ, and C3 for the apex). DNSSEC stays on, and the CAA
-  record stays `0 issue "letsencrypt.org"`, `0 issuewild ";"` (Hosting decision 10).
+  certificate Scaleway issues for a custom domain (Let's Encrypt: the FAQ, and C3 for the apex).
+  DNSSEC stays on, and the CAA record stays `0 issue "letsencrypt.org"`, `0 issuewild ";"` (Hosting
+  decision 10).
 - **Plain HTTP `enabled`, not `redirected`.** `redirected` answers 301 on the same host, so
   `http://shift2eu.com` would take two hops to `https://www.shift2eu.com`, and the redirect would be the
   platform's rather than the configuration's. With `enabled`, plain HTTP reaches Caddy, which redirects.
@@ -96,19 +97,37 @@ from the Edge Services pipeline endpoint, which stays the only reader of the pri
 
 Every rule is keyed on the request's `Host` and `X-Forwarded-Proto` (the TLS connection ends at the
 platform; Caddy listens on plain `:8080`). The global options set `auto_https off` and `admin off` (no
-admin endpoint in the container), both pinned by the configuration test. **The scheme is read from the
-raw `X-Forwarded-Proto` request header, which must be one field whose whole value is `https`** (Caddy's
-`header X-Forwarded-Proto https` matcher; no `{scheme}` placeholder or `protocol` matcher, which on
-plain `:8080` always see `http` and would answer every request with a 308, a loop for `www`; no
-`trusted_proxies`); anything else, a missing header included, gets the 308. "The URI" is the path and
-the query, unchanged.
+admin endpoint in the container), both pinned by the configuration test.
+
+- **The scheme is the joined value of the raw `X-Forwarded-Proto` request header, compared exactly
+  with `https`:** `@https expression {http.request.header.X-Forwarded-Proto} == "https"`. Caddy's
+  placeholder joins repeated fields with `,` (by Caddy's source and documentation, to be pinned by the
+  infra unit's behaviour test), so the rule fails closed for every value but one field of exactly
+  `https`: a missing header, two fields in either order (`https` + `http`, `http` + `https`), two
+  `https` fields and `https, https` in one field all get the 308. Not Caddy's `header
+  X-Forwarded-Proto https` matcher: it succeeds when *any* field equals `https`, so `https` + `http`
+  would be proxied with a 200 over plain HTTP. Not the `{scheme}` placeholder or the `protocol`
+  matcher either, which on plain `:8080` always see `http` and would answer every request with a 308,
+  a loop for `www`; no `trusted_proxies`.
+- **`www` is an exact comparison on the raw host:** `expression {http.request.hostport} ==
+  "www.shift2eu.com"` (or `header Host www.shift2eu.com`). Not Caddy's `host` matcher: it drops the
+  port and ignores case, so `host www.shift2eu.com` would proxy `www.shift2eu.com:443` and
+  `WWW.shift2eu.com`, contrary to the table.
+- **The redirect target is built from the path and the query, never from `{uri}`:**
+  `https://www.shift2eu.com{http.request.uri.path}`, plus `?{http.request.uri.query}` only when the
+  query is not empty. Caddy's `{uri}` is the raw request target, so an absolute-form target (`GET
+  http://evil.example/ HTTP/1.1`) would give `https://www.shift2eu.comhttp://evil.example/` and
+  `OPTIONS *` would give `https://www.shift2eu.com*`. A path that does not begin with `/` (`OPTIONS *`)
+  is redirected to `https://www.shift2eu.com/`. Whether the escaped or the decoded path is used (Caddy's
+  placeholder for the escaped form, if the pinned release has one) is *for the infra unit*, which
+  records it here. "The URI" below means that path and query.
 
 | Request | Answer |
 |---|---|
-| `X-Forwarded-Proto` anything but exactly `https`, any host (`http://www.shift2eu.com`, `http://shift2eu.com`, the container's endpoint over plain HTTP) | **308** to `https://www.shift2eu.com` + the URI, one hop |
+| Joined `X-Forwarded-Proto` anything but exactly `https`, any host (`http://www.shift2eu.com`, `http://shift2eu.com`, the container's endpoint over plain HTTP) | **308** to `https://www.shift2eu.com` + the URI, one hop |
 | HTTPS, `Host: shift2eu.com` | **308** to `https://www.shift2eu.com` + the URI |
-| HTTPS, `Host: www.shift2eu.com` | the site: reverse proxy to the Edge Services pipeline endpoint, with the headers below |
-| HTTPS, any other host (the container's own endpoint `<namespace>-<name>.functions.fnc.<region>.scw.cloud`, and a `Host` with a port suffix, in another case or with a trailing dot, such as `www.shift2eu.com:443`, `WWW.shift2eu.com` or `www.shift2eu.com.`) | **308** to `https://www.shift2eu.com` + the URI; the configuration test pins those three variants to this row, never the proxy |
+| HTTPS, `Host` exactly `www.shift2eu.com` | the site: reverse proxy to the Edge Services pipeline endpoint, with the headers below |
+| HTTPS, any other host (the container's own endpoint `<namespace>-<name>.functions.fnc.<region>.scw.cloud`, and a `Host` with a port suffix, in another case or with a trailing dot, such as `www.shift2eu.com:443`, `WWW.shift2eu.com` or `www.shift2eu.com.`) | **308** to `https://www.shift2eu.com` + the URI; the exact host comparison sends those three variants to this row, and the configuration and behaviour tests pin them here, never the proxy |
 
 So neither name, nor the container's endpoint, ever answers 200 over plain HTTP, the transient plain
 HTTP during a certificate's issuance included (it reaches the same rule), and only
@@ -126,20 +145,20 @@ only that the platform passes the container's 308 and headers unchanged.
 documentation says only that `X-Real-IP` is overwritten). If it did not, a client sending
 `X-Forwarded-Proto: https` over plain HTTP would get the site with a 200 on plain HTTP. Only that client
 could: a network attacker cannot make a victim's browser send the header, and could serve its own page
-anyway. If the platform appends its value to the client's rather than overwriting it (two fields, or
-`https, http` in one), the rule above fails closed: the header is no longer one field of exactly
-`https`, so that request gets the 308, and only the spoofing client, on `www` over HTTPS, would loop.
-That is intended. The infra unit's live probe settles what the platform does: it records the header's
-value as the container receives it on `www`, on the apex and on the container's endpoint, over plain
-HTTP and over HTTPS, and sends over plain HTTP a request carrying `X-Forwarded-Proto: https`, one
-carrying the header twice and one carrying `https, https`, each of which must still get the 308. The
-infra unit records the answers here; a 200 is the maintainer's to accept or not, on the record, since it
-changes no browser's visit.
+anyway. If the platform appends its value to the client's rather than overwriting it (two fields in
+either order, or `https, http` in one), the rule above fails closed: the joined value is no longer
+exactly `https`, so that request gets the 308, and only the spoofing client, on `www` over HTTPS, would
+loop. That is intended. The infra unit's live probe settles what the platform does: it records the
+header's value as the container receives it on `www`, on the apex and on the container's endpoint, over
+plain HTTP and over HTTPS, and sends over plain HTTP a request carrying `X-Forwarded-Proto: https`, the
+header as two fields in both orders (`https` + `http`, `http` + `https`), two `https` fields, and
+`https, https` in one field, each of which must still get the 308. The infra unit records the answers
+here; a 200 is the maintainer's to accept or not, on the record, since it changes no browser's visit.
 
 ### The headers
 
-Caddy sets these on every HTTPS response of `www.shift2eu.com` (replacing any copy from upstream), the
-site's files and every other path alike:
+Caddy sets these on every HTTPS response of `www.shift2eu.com` (replacing any copy from upstream),
+the site's files and every other path alike:
 
 | Header | Value |
 |---|---|
@@ -155,8 +174,15 @@ live check only records the apex's header then (ADR 0043), so nothing would hold
 the apex's header changes together with the preload record, in one change (above). The alternative,
 `max-age=31536000` without `includeSubDomains` on the apex's HTTPS 308 while preload is not pursued,
 would protect a returning visitor who types `shift2eu.com`; it is left open as the maintainer's decision
-at milestone 4 (it changes neither the PRD's HSTS decision nor the record). No other header is decided here;
-`Clear-Site-Data` and `Cross-Origin-Opener-Policy` are now possible and are proposed follow-ups.
+at milestone 4 (it changes neither the PRD's HSTS decision nor the record). No other header is decided
+here; `Clear-Site-Data` and `Cross-Origin-Opener-Policy` are now possible and are proposed follow-ups.
+
+Guidance for the infra unit (the behaviour tests below decide): Caddy's response `header` directive
+applies immediately, and `reverse_proxy` then adds the upstream's own `Content-Security-Policy`,
+`Strict-Transport-Security` and `Permissions-Policy` as duplicates; with `defer` instead, the headers
+can be missing from Caddy's own 502. The likely configuration is therefore the immediate `header` plus
+`header_down -Content-Security-Policy`, `-Strict-Transport-Security` and `-Permissions-Policy` in
+`reverse_proxy`.
 
 ### The upstream
 
@@ -174,10 +200,13 @@ The configuration removes from the request sent upstream every header that carri
 address or a client's forwarding headers, `X-Forwarded-For`, `X-Forwarded-Proto`, `X-Forwarded-Host`,
 `Forwarded`, `X-Real-IP` (set by the platform) and `X-Envoy-*`, and also `Cookie` and `Authorization`,
 since Edge Services needs nothing of the visitor; Caddy's own `X-Forwarded-*` are removed too
-(`header_up -<name>`). The exact list, and any further platform header such as `x-request-id`, is the
-infra unit's, and the behaviour test's local upstream asserts that it receives none of them. The
-configuration turns no access log on (no `log` directive). What the platform itself logs is Scaleway's, as for Edge Services;
-the privacy page already names Scaleway.
+(`header_up -<name>`). `Forwarded` is removed as a client's header: Caddy does not set it. Caddy
+applies the `header_up` deletions after it adds its own forwarding headers (by Caddy's source and
+documentation), but the behaviour test, not that reading, is what proves they are gone. The exact
+list, and any further platform header such as `x-request-id`, is the infra unit's, and the behaviour
+test's local upstream asserts that it receives none of them. The configuration turns no access log on
+(no `log` directive). What the platform itself logs is Scaleway's, as for Edge Services; the privacy
+page already names Scaleway.
 
 ### The image and its configuration
 
@@ -192,7 +221,11 @@ the privacy page already names Scaleway.
   the platform records keeps `@sha256:`, and a container given a wrong digest fails to start. If not,
   the pinned digest is copied into a private Container Registry namespace of the site's project and
   pulled from there by digest, recorded in this ADR before it is taken. The same mirror is the answer if
-  Docker Hub's pull limits or an outage stop a cold start.
+  Docker Hub's pull limits or an outage stop a cold start. The mirror has costs, recorded with it:
+  Renovate moves the Docker Hub digest while the reference points into the private namespace, so each
+  Renovate PR needs a copy step before the apply; the copy must preserve the digest (`skopeo copy
+  --preserve-digests`, or `crane copy` of the whole index); and the push needs a Container Registry
+  write key, which this ADR otherwise avoids.
 - **The configuration is a file in the repository**, beside the container in `infra/site`, changed only
   by a reviewed pull request and applied by the maintainer. How it reaches the container is *for the
   infra unit*, preferring the upstream image byte for byte with the configuration given at start (C3
@@ -202,23 +235,29 @@ the privacy page already names Scaleway.
   push it to a Container Registry namespace in the site's project; that path is recorded here before it
   is taken.
 - **The configuration is tested, offline and live.** A static test under `make check` pins what the
-  configuration says: the four rules of the table, with the raw `X-Forwarded-Proto` matcher, and the
-  `Host` variants pinned to the "any other host" 308; `auto_https off` and `admin off`; the HSTS header
-  against `site/records/hsts.json` (with `met`, the header with the record's value; with `waived`, no
-  header; `preload` exactly when it is pursued); and the `Content-Security-Policy` header against the
+  configuration says: the four rules of the table, with the scheme read by the joined-value
+  expression on `X-Forwarded-Proto` and `www` by the exact `{http.request.hostport}` comparison (no
+  `header X-Forwarded-Proto` or `host` matcher), the `Location` built from the path and the query
+  (no `{uri}`), and the `Host` variants pinned to the "any other host" 308; `auto_https off` and
+  `admin off`; the HSTS header against `site/records/hsts.json` (with `met`, the header with the
+  record's value; with `waived`, no header; `preload` exactly when it is pursued); and the `Content-Security-Policy` header against the
   built pages' `<meta>` policy plus `frame-ancestors 'none'`, so a change of the policy in `site/` fails
   until the configuration follows. A behaviour test runs the pinned image on the configuration in a
   local container, outside `make test` like the browser smoke test (ADR 0036), against a local
   upstream, and drives:
   - every row of the table with `Host` and `X-Forwarded-Proto`, the headers, and a gzip-encoded object
     passing unchanged;
+  - `X-Forwarded-Proto` missing, as two fields in both orders (`https` + `http`, `http` + `https`), as
+    two `https` fields, and as `https, https` in one field: each gets the 308, never the proxy (this
+    pins Caddy's joining of repeated fields);
   - an upstream that sends its own `Content-Security-Policy`, `Strict-Transport-Security` and
     `Permissions-Policy` with other values (the client sees only Caddy's), an upstream 404, and no
     upstream at all (Caddy's own 502 still carries every header);
   - redirects of `//evil.example/x`, `/%2F%2Fevil.example`, a path with a query string, an
-    absolute-form request target (`GET http://evil.example/ HTTP/1.1`), and a `Host` with a port, a
-    trailing dot or in upper case: every `Location` starts with `https://www.shift2eu.com/`, and an
-    unknown host gets the 308, never the proxy;
+    absolute-form request target (`GET http://evil.example/ HTTP/1.1`), `OPTIONS *`, and a `Host` with
+    a port, a trailing dot or in upper case: every `Location` parses as a URL, with scheme `https` and
+    host exactly `www.shift2eu.com` (not a prefix test), and an unknown host gets the 308, never the
+    proxy;
   - the upstream request: the local upstream asserts it receives none of the removed headers (*The
     upstream*).
 
@@ -239,9 +278,9 @@ found.
 ## Alternatives considered
 
 - **Edge Services as is, with the 302 accepted and HSTS waived.** Every visit starting at plain HTTP,
-  returning visits included, would cross the network in clear text before a temporary redirect; preload
-  would become impossible; the apex would still need a front. It breaks a mandatory go/no-go that is
-  "never waived".
+  returning visits included, would cross the network in clear text before a temporary redirect;
+  preload would become impossible; the apex would still need a front. It breaks a mandatory go/no-go
+  that is "never waived".
 - **The platform's `redirected` HTTP option.** A 301 on the same host: two hops from
   `http://shift2eu.com`, and the redirect outside the tested configuration.
 - **Namecheap's URL redirect for the apex.** No certificate on `https://shift2eu.com` (by Namecheap's

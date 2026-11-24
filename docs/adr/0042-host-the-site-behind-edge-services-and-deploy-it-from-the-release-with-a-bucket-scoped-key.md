@@ -653,8 +653,10 @@ unchanged; only *Hosting*, *The origins* and *Recovery* change, as follows.
   | The container's endpoint `https://<namespace>-<name>.functions.fnc.<region>.scw.cloud` | No: every request gets the server's 308 to `https://www.shift2eu.com` + same path | The server's own 308, never a 200 (ADR 0045's rule and its tests) |
   | The pipeline's endpoint, the bucket website endpoint and the bucket's S3 endpoints | As in the table above | As in the table above (R5) |
 
-  "Never a 200" over plain HTTP is a property of ADR 0045's rule (the raw `X-Forwarded-Proto` header,
-  one field whose whole value is `https`, else the 308) and of its tests, not a result of C3: C3's
+  "Never a 200" over plain HTTP is a property of ADR 0045's rule (the joined value of the raw
+  `X-Forwarded-Proto` header compared exactly with `https`, so two fields or a comma list fail closed,
+  else the 308; not Caddy's `header` matcher, which accepts any one field) and of its tests, not a
+  result of C3: C3's
   redirect container answered 308 unconditionally, and showed only that the platform passes the
   container's 308 and headers unchanged over plain HTTP and HTTPS.
 
