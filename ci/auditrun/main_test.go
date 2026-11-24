@@ -469,7 +469,7 @@ func TestResultWriteLeavesNoFileWhenTheWriteOrCloseFails(t *testing.T) {
 			dir := t.TempDir()
 			path := resultOutPath(dir)
 
-			file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600) //nolint:gosec // G304: the step's own -result-out path, which the test made
+			file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 			if err != nil {
 				t.Fatalf("open the result file %s: %v", path, err)
 			}
