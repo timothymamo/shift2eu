@@ -21,6 +21,13 @@ import "testing"
 // exec.Command and exec.LookPath, and keeps exec.CommandContext, which starts gh
 // and gitleaks under the deadline the run gives them.
 //
+// It also refuses os.CreateTemp, which makes a temp file in os.TempDir, TMPDIR by
+// default: the library's temp files are made in the directory its Config names,
+// which checkTempDir checks first, and a test that needs one has t.TempDir. And
+// it refuses exec.Cmd.Environ, the method that reads the whole environment of the
+// process, which is the one thing an explicit cmd.Env keeps from a child (issue
+// #516).
+//
 // Scope: every file under ci/auditpublish/internal/github/, _test.go files
 // included, as the two linters.exclusions.rules rules of the group say and
 // TestForbidigoExclusionsDropOneGroup checks.
@@ -42,9 +49,13 @@ var auditPublishGitHubEnvRefused = []forbidGroupRefusal{
 	{rootName{"os", "os.UserConfigDir"}, forbidGroupAnyEntry},
 	{rootName{"os", "os.UserCacheDir"}, forbidGroupAnyEntry},
 	{rootName{"os", "os.TempDir"}, forbidGroupAnyEntry},
+	{rootName{"os", "os.CreateTemp"}, forbidGroupAnyEntry},
 	{rootName{"os", "os.StartProcess"}, forbidGroupAnyEntry},
 	{rootName{"os/exec", "exec.Command"}, forbidGroupAnyEntry},
 	{rootName{"os/exec", "exec.LookPath"}, forbidGroupAnyEntry},
+	// A method is rendered as pkg.Type.Method, the pointer receiver dropped
+	// (docs/architecture.md, How forbidigo renders a name).
+	{rootName{"os/exec", "exec.Cmd.Environ"}, forbidGroupAnyEntry},
 }
 
 // auditPublishGitHubEnvExceptions lists the group's exception entries: the one
@@ -57,15 +68,19 @@ var auditPublishGitHubEnvExceptions = []forbidGroupException{
 
 // auditPublishGitHubEnvAllowed are names no entry of the group may refuse: the
 // one process start the library makes, with a context, the names that only extend
-// a refused one (os.Environments, exec.Commands, exec.LookPaths), the os calls the
-// library reads gh's output and the merged reports with and exits with, and a
-// package named os or os/exec elsewhere.
+// a refused one (os.Environments, os.CreateTemps, exec.Commands, exec.LookPaths,
+// exec.Cmd.Environments), the os calls the library reads gh's output and the
+// merged reports with and exits with, and a package named os or os/exec
+// elsewhere. An extension is listed so that an entry left unanchored fails here:
+// a pattern that matches exec.Cmd.Environ as a prefix refuses its longer sibling
+// too.
 var auditPublishGitHubEnvAllowed = []rootName{
 	{"os/exec", "exec.CommandContext"},
 	{"os/exec", "exec.Cmd"},
 	{"os/exec", "exec.ExitError"},
 	{"os/exec", "exec.Commands"},
 	{"os/exec", "exec.LookPaths"},
+	{"os/exec", "exec.Cmd.Environments"},
 	{"os", "os.ReadFile"},
 	{"os", "os.Open"},
 	{"os", "os.WriteFile"},
@@ -73,6 +88,7 @@ var auditPublishGitHubEnvAllowed = []rootName{
 	{"os", "os.Getenvs"},
 	{"os", "os.Environments"},
 	{"os", "os.TempDirs"},
+	{"os", "os.CreateTemps"},
 	{"example.com/otheros", "os.Getenv"},
 	{"example.com/otheros/exec", "exec.Command"},
 }
@@ -97,10 +113,10 @@ func TestAuditPublishGitHubEnvForbidigoPatterns(t *testing.T) {
 // .golangci.yml, on a module of the GitHub side's tree (testdata/
 // auditpublishgithubenv): a line there for every name the group refuses, each
 // refused with a msg of the group, so that forbidigo matches the names the pin
-// above reads from the patterns, os.Expand and the os/exec calls included, and
-// no other line of the tree is refused. The pin proves which entry refuses what;
-// the probe proves that forbidigo renders the names it is asked about as the pin
-// spells them.
+// above reads from the patterns, os.Expand, os.CreateTemp, exec.Cmd.Environ and
+// the os/exec calls included, and no other line of the tree is refused. The pin
+// proves which entry refuses what; the probe proves that forbidigo renders the
+// names it is asked about as the pin spells them.
 func TestAuditPublishGitHubEnvForbidigoProbe(t *testing.T) {
 	t.Parallel()
 

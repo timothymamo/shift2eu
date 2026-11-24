@@ -10,8 +10,11 @@ package github_test
 import (
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
+
+	"github.com/google/go-cmp/cmp"
 
 	"github.com/timothymamo/shift2eu/ci/auditpublish/internal/github"
 )
@@ -534,6 +537,42 @@ func TestAllowedRefusesDataAfterTheBody(t *testing.T) {
 				t.Fatalf("Allowed(%s %s) = %v, want an error wrapping ErrEndpointRefused: the body holds more than one JSON object", tc.method, tc.endpoint, err)
 			}
 		})
+	}
+}
+
+// TestEndpointsReturnsACopy pins the endpoint table's accessor: a caller that
+// changes the slice it returns changes neither what Allowed accepts nor the
+// table a later call reads, so no caller can widen the fixed set of calls.
+func TestEndpointsReturnsACopy(t *testing.T) {
+	t.Parallel()
+
+	good := endpointCase{name: "row 5: the report branch", method: "GET", endpoint: fixtureRepoPrefix + "/git/ref/heads/" + fixtureBranch}
+
+	table := github.Endpoints()
+	if len(table) == 0 {
+		t.Fatal("Endpoints() = nothing, want the table's rows")
+	}
+
+	want := slices.Clone(table)
+
+	for i := range table {
+		table[i].Method = "DELETE"
+		table[i].Pattern = ".*"
+	}
+
+	table = append(table, github.Endpoint{Method: "POST", Pattern: `{repo}/merges`, Body: github.BodyNone})
+
+	if len(table) != len(want)+1 {
+		t.Fatalf("the copy holds %d rows after the append, want %d: the slice is the caller's to change", len(table), len(want)+1)
+	}
+
+	if err := github.Allowed(testScope(), good.method, good.endpoint, nil); err != nil {
+		t.Errorf("Allowed(%s %s) after a caller changed its copy = %v, want no error: the table is the library's alone",
+			good.method, good.endpoint, err)
+	}
+
+	if diff := cmp.Diff(want, github.Endpoints()); diff != "" {
+		t.Errorf("Endpoints() after a caller changed its copy (-want +got):\n%s", diff)
 	}
 }
 

@@ -16,8 +16,10 @@ import "testing"
 // os.LookupEnv ci/aireview/main.go passes to review.SettingsFromEnv; that name
 // has an entry of its own, because the ci/aireview/main.go rule drops its msg in
 // that file alone. Everything else is refused: another way to read a variable or
-// the whole environment, a process start through os, and the four lookups of a
-// home, config, cache or temp directory.
+// the whole environment, os.Expand, a process start through os, and the four
+// lookups of a home, config, cache or temp directory. os.Expand reads no variable
+// by itself, but a mapping of os.Getenv turns it into os.ExpandEnv, so every env
+// group refuses it alike (issue #516).
 //
 // Scope: every file under ci/aireview/ and ci/internal/claudecode/, _test.go
 // files included, as the group's two linters.exclusions.rules rules say and
@@ -34,6 +36,7 @@ var aiReviewerEnvRefused = []forbidGroupRefusal{
 	{rootName{"os", "os.Getenv"}, forbidGroupAnyEntry},
 	{rootName{"os", "os.LookupEnv"}, aiReviewerLookupEnvMsg},
 	{rootName{"os", "os.ExpandEnv"}, forbidGroupAnyEntry},
+	{rootName{"os", "os.Expand"}, forbidGroupAnyEntry},
 	{rootName{"os", "os.Environ"}, forbidGroupAnyEntry},
 	{rootName{"os", "os.StartProcess"}, forbidGroupAnyEntry},
 	{rootName{"os", "os.UserHomeDir"}, forbidGroupAnyEntry},
@@ -54,7 +57,10 @@ var aiReviewerEnvExceptions = []forbidGroupException{
 // the reviewer and its library read, write and run their files with, the names
 // that only extend a refused one (os.Getenvs, os.LookupEnvs, os.ExpandEnvs,
 // os.Environments, os.StartProcesses, os.UserHomeDirs, os.UserConfigDirs,
-// os.UserCacheDirs, os.TempDirs), and a package named os elsewhere.
+// os.UserCacheDirs, os.TempDirs), and a package named os elsewhere. An extension
+// is listed so that an entry left unanchored fails here: a pattern that matches
+// os.Expand as a prefix refuses os.ExpandEnv again, which has an entry of its
+// own.
 var aiReviewerEnvAllowed = []rootName{
 	{"os", "os.Args"},
 	{"os", "os.Chmod"},

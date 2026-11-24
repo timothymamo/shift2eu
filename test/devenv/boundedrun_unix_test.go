@@ -1,0 +1,339 @@
+//go:build unix
+
+// Pins runBounded, the bounded runner runMakeIn uses: a make that never ends, or a grandchild that keeps its
+// stdout and stderr open after make itself exited, must fail the test with the command, its directory and what
+// it wrote named, instead of blocking the subtest until go test's package timeout names nothing (issue #512).
+// A command that leaves a background child holding its stdout open and then blocks pins the group kill: only a
+// kill of the whole process group closes those pipes within the bound, a kill of the command alone leaves them
+// open until the wait delay mops up seconds later. A bound that fires after the command exited on its own, while
+// a grandchild still holds its stdout open, pins that the bound's kill cannot pass a command's own result off as
+// a timeout, and that the run returns nil for a command that exited 0. A command that never starts, and one that
+// moves itself out of the process group, pin that a run which produced no verdict of its own fails the test
+// instead of hanging it. Unix only: the cases run /bin/sh and the runner kills the command's process group; lint
+// type-checks the package for the windows release targets too, where no /bin/sh exists.
+package devenv_test
+
+import (
+	"errors"
+	"os/exec"
+	"strings"
+	"testing"
+	"time"
+)
+
+// boundedCeilingMargin is how long past a case's maxElapsed the hard ceiling waits before it fails the subtest.
+// It is small: the cases a group kill has to close fast carry a maxElapsed well below boundedWaitDelay, so the
+// ceiling fails a runBounded that waits that delay out instead of returning as fast as a kill of the whole
+// process group does.
+const boundedCeilingMargin = time.Second
+
+// errKind is what a case's err must be.
+type errKind int
+
+const (
+	// errNone: the command exits 0 and runBounded returns no error.
+	errNone errKind = iota
+	// errExit: an error errors.As-matching *exec.ExitError with the case's exit code, and not errCommandTimedOut.
+	errExit
+	// errTimeout: an error errors.Is-matching errCommandTimedOut, naming the bound, the command line, the
+	// directory and what the command wrote.
+	errTimeout
+	// errUnpinned: a case whose error the contract leaves open, because a grandchild may leave nil or wrap
+	// exec.ErrWaitDelay.
+	errUnpinned
+	// errNotStarted: an error that is neither errCommandTimedOut nor an *exec.ExitError, since the command never
+	// ran: the run itself failed, so makeRunFailure fails the test rather than take the error for make's verdict
+	// on the recipe.
+	errNotStarted
+)
+
+// TestRunBounded pins the bounded runner's contract: what it returns for a command that exits 0, one that exits
+// non-zero, one that never finishes within its bound, one whose grandchild keeps its stdout open after the command
+// itself exited, one the bound cuts short although the command had already ended on its own, one that never
+// starts, and one that leaves the runner's process group.
+func TestRunBounded(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		// script is the shell script the case runs under /bin/sh -c.
+		script string
+		// path, when not empty, is the program the case runs instead of /bin/sh, with no script: a program that
+		// cannot start pins what runBounded returns for a command that never ran.
+		path string
+		// needsBin, when not empty, is a program the case's script needs on PATH: where it is missing (macOS
+		// ships no setsid) the case is skipped rather than failed.
+		needsBin string
+		// timeout is the bound runBounded gets.
+		timeout time.Duration
+		// wantStdout and wantStderr, when not empty, are exactly what the command wrote.
+		wantStdout string
+		wantStderr string
+		// wantStdoutContains, when not empty, is what stdout must hold instead of an exact value.
+		wantStdoutContains string
+		// wantErr is what the error must be.
+		wantErr errKind
+		// wantExitCode is the exit code err's *exec.ExitError must carry, for wantErr errExit.
+		wantExitCode int
+		// wantMessage holds the substrings err's message must name, beyond the directory every timeout names.
+		wantMessage []string
+		// maxElapsed bounds how long runBounded may take, and how long the hard ceiling waits for it to return at
+		// all: a runBounded that returns after it fails the case, and one that has not returned by
+		// maxElapsed+boundedCeilingMargin fails it too, naming the case, rather than block the package.
+		maxElapsed time.Duration
+	}{
+		{
+			name:       "it exits 0",
+			script:     `printf out; printf err >&2`,
+			timeout:    30 * time.Second,
+			wantStdout: "out",
+			wantStderr: "err",
+			wantErr:    errNone,
+			maxElapsed: 10 * time.Second,
+		},
+		{
+			name:         "it exits non-zero",
+			script:       `printf partial; exit 3`,
+			timeout:      30 * time.Second,
+			wantStdout:   "partial",
+			wantErr:      errExit,
+			wantExitCode: 3,
+			maxElapsed:   10 * time.Second,
+		},
+		{
+			name:    "it does not finish within the bound",
+			script:  `printf started; printf warming >&2; sleep 60`,
+			timeout: 300 * time.Millisecond,
+			wantErr: errTimeout,
+			wantMessage: []string{
+				"300ms",
+				"sleep 60",
+				"started",
+				"warming",
+			},
+			maxElapsed: 10 * time.Second,
+		},
+		{
+			name: "a background child holds stdout open until the group is killed",
+			// The command's own shell blocks on the second sleep while the first holds the write end of
+			// runBounded's stdout pipe: a kill of the command's process alone leaves that pipe open until the
+			// wait delay gives up on it, seconds after the bound, so maxElapsed sits well below
+			// boundedWaitDelay and only a kill of the whole group passes this case.
+			script:  `printf started; sleep 30 & sleep 30`,
+			timeout: 300 * time.Millisecond,
+			wantErr: errTimeout,
+			wantMessage: []string{
+				"300ms",
+				"sleep 30",
+				"started",
+			},
+			maxElapsed: 3 * time.Second,
+		},
+		{
+			name:               "a grandchild keeps stdout open",
+			script:             `sleep 20 & printf done`,
+			timeout:            30 * time.Second,
+			wantStdoutContains: "done",
+			wantErr:            errUnpinned,
+			maxElapsed:         15 * time.Second,
+		},
+		{
+			name: "the bound fires while a grandchild holds stdout open and the command has exited",
+			// The command exits 0 at once, but the grandchild holds the write end of runBounded's stdout pipe,
+			// so its Wait cannot return before boundedWaitDelay: the bound fires first, with a command that had
+			// already ended on its own. Its own status, not errCommandTimedOut, is the run's result: a command
+			// that ended on its own is never reported as a timeout, whatever order select saw its channels in
+			// (issue #512). The status is nil, not exec.ErrWaitDelay: the group kill ends the grandchild and
+			// closes the pipes long before the wait delay, and a kill that no longer reached the grandchild would
+			// let the wait delay pass this case off as a warning about the pipes instead of a broken kill.
+			script:             `sleep 30 & printf done`,
+			timeout:            time.Second,
+			wantStdoutContains: "done",
+			wantErr:            errNone,
+			maxElapsed:         3 * time.Second,
+		},
+		{
+			name: "the bound fires after the command exited 4 on its own",
+			// As above, the grandchild holds the stdout pipe when the bound fires, but the command had exited
+			// non-zero: its own status must be the run's result, an *exec.ExitError carrying 4, so that a
+			// command that ended on its own is never reported as a timeout and never as a success (issue #512).
+			script:             `sleep 30 & printf done; exit 4`,
+			timeout:            time.Second,
+			wantStdoutContains: "done",
+			wantErr:            errExit,
+			wantExitCode:       4,
+			maxElapsed:         3 * time.Second,
+		},
+		{
+			name: "it cannot start",
+			// The program does not exist, so the run fails with the start's own error at once: neither a
+			// timeout nor an *exec.ExitError, so makeRunFailure fails the test instead of reading the error as
+			// make's verdict on the recipe (issue #512).
+			path:       "/nonexistent/bounded",
+			timeout:    30 * time.Second,
+			wantErr:    errNotStarted,
+			maxElapsed: 10 * time.Second,
+		},
+		{
+			name: "the command moves itself out of the process group",
+			// exec replaces the shell, whose group runBounded's own holder leads, so setsid is no group leader
+			// and succeeds at once, moving the sleep into a session of its own: a kill of the group alone cannot
+			// reach it, so only a kill of the command's own process, or the wait delay's pipe close, ends the
+			// run. maxElapsed sits below both so a runner that only kills the group fails this case through the
+			// hard ceiling, rather than blocking the package (issue #512).
+			script:      `exec setsid sleep 30`,
+			needsBin:    "setsid",
+			timeout:     300 * time.Millisecond,
+			wantErr:     errTimeout,
+			wantMessage: []string{"300ms", "setsid"},
+			maxElapsed:  3 * time.Second,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			if tc.needsBin != "" {
+				// The commands run with PATH=/usr/bin:/bin, so a program the test process finds there is the one
+				// the case's script finds too; macOS ships no setsid, and there the case is skipped.
+				if _, err := exec.LookPath(tc.needsBin); err != nil {
+					t.Skipf("%s is not on PATH (%v), so the case's script cannot move its command out of the process group", tc.needsBin, err)
+				}
+			}
+
+			argv := []string{"/bin/sh", "-c", tc.script}
+			if tc.path != "" {
+				argv = []string{tc.path}
+			}
+
+			cmd := exec.Command(argv[0], argv[1:]...)
+			cmd.Dir = t.TempDir()
+			cmd.Env = []string{"PATH=/usr/bin:/bin"}
+
+			type result struct {
+				stdout, stderr string
+				err            error
+			}
+
+			returned := make(chan result, 1)
+
+			start := time.Now()
+
+			go func() {
+				stdout, stderr, err := runBounded(cmd, tc.timeout)
+				returned <- result{stdout: stdout, stderr: stderr, err: err}
+			}()
+
+			// The hard ceiling: a runBounded that never returns fails this case, naming it, instead of blocking
+			// the subtest and with it the whole package until go test's timeout names nothing (issue #512).
+			ceiling := time.NewTimer(tc.maxElapsed + boundedCeilingMargin)
+			defer ceiling.Stop()
+
+			var got result
+
+			select {
+			case got = <-returned:
+			case <-ceiling.C:
+				t.Fatalf("runBounded had not returned for %q with a %s bound after %s, more than the %s the case allows: the case fails here rather than blocking the package until go test's timeout names nothing (issue #512)",
+					tc.script, tc.timeout, tc.maxElapsed+boundedCeilingMargin, tc.maxElapsed)
+			}
+
+			stdout, stderr, err := got.stdout, got.stderr, got.err
+
+			elapsed := time.Since(start)
+
+			if elapsed > tc.maxElapsed {
+				t.Fatalf("runBounded took %s for %q with a %s bound, more than %s: a command, or a grandchild holding its stdout open, that never ends must fail the test rather than block it until go test's package timeout (issue #512)",
+					elapsed, tc.script, tc.timeout, tc.maxElapsed)
+			}
+
+			switch {
+			case tc.wantStdout != "":
+				if stdout != tc.wantStdout {
+					t.Errorf("runBounded returned stdout %q for %q, want %q", stdout, tc.script, tc.wantStdout)
+				}
+			case tc.wantStdoutContains != "":
+				if !strings.Contains(stdout, tc.wantStdoutContains) {
+					t.Errorf("runBounded returned stdout %q for %q, want it to hold %q", stdout, tc.script, tc.wantStdoutContains)
+				}
+			}
+
+			if tc.wantStderr != "" && stderr != tc.wantStderr {
+				t.Errorf("runBounded returned stderr %q for %q, want %q", stderr, tc.script, tc.wantStderr)
+			}
+
+			switch tc.wantErr {
+			case errNone:
+				if err != nil {
+					t.Errorf("runBounded returned %v for %q, which exits 0, want no error", err, tc.script)
+				}
+			case errExit:
+				var exit *exec.ExitError
+
+				if !errors.As(err, &exit) {
+					t.Fatalf("runBounded returned %v for %q, which exits %d, want an error errors.As-matching *exec.ExitError",
+						err, tc.script, tc.wantExitCode)
+				}
+
+				if code := exit.ExitCode(); code != tc.wantExitCode {
+					t.Errorf("runBounded's error carries exit code %d for %q, want %d", code, tc.script, tc.wantExitCode)
+				}
+
+				if errors.Is(err, errCommandTimedOut) {
+					t.Errorf("runBounded's error for %q, which exited %d within its bound, wraps errCommandTimedOut: a non-zero exit is not a timeout", tc.script, tc.wantExitCode)
+				}
+			case errTimeout:
+				if !errors.Is(err, errCommandTimedOut) {
+					t.Fatalf("runBounded returned %v for %q, which outlives its %s bound, want an error errors.Is-matching errCommandTimedOut",
+						err, tc.script, tc.timeout)
+				}
+
+				for _, want := range append(tc.wantMessage, cmd.Dir) {
+					if !strings.Contains(err.Error(), want) {
+						t.Errorf("runBounded's timeout error for %q does not name %q, so the blocked command cannot be told apart from another and what it wrote is lost:\n%s",
+							tc.script, want, err.Error())
+					}
+				}
+			case errNotStarted:
+				var exit *exec.ExitError
+
+				switch {
+				case err == nil:
+					t.Fatalf("runBounded returned no error for %q, which cannot start, want the start's own error: a run that never ran has no result to report", tc.path)
+				case errors.Is(err, errCommandTimedOut):
+					t.Errorf("runBounded's error for %q, which cannot start, wraps errCommandTimedOut: a command that never ran did not time out", tc.path)
+				}
+
+				if errors.As(err, &exit) {
+					t.Errorf("runBounded's error for %q, which cannot start, errors.As-matches *exec.ExitError (%v): a run that never ran has no exit status, and makeRunFailure would take it for make's verdict on the recipe",
+						tc.path, exit)
+				}
+
+				if !strings.Contains(err.Error(), tc.path) {
+					t.Errorf("runBounded's error for %q does not name it:\n%s", tc.path, err.Error())
+				}
+			case errUnpinned:
+				var exit *exec.ExitError
+
+				switch {
+				case err == nil:
+				case errors.Is(err, exec.ErrWaitDelay):
+				default:
+					t.Fatalf("runBounded returned %v for %q, whose own command exits 0 and whose grandchild only holds its stdout open, want no error or an error errors.Is-matching exec.ErrWaitDelay from a Wait that stopped waiting for the pipes",
+						err, tc.script)
+				}
+
+				if errors.Is(err, errCommandTimedOut) {
+					t.Errorf("runBounded's error for %q, which finished within its bound and only left a grandchild behind, wraps errCommandTimedOut: a timeout is not a warning about the pipes",
+						tc.script)
+				}
+
+				if errors.As(err, &exit) {
+					t.Errorf("runBounded's error for %q, which exits 0, errors.As-matches *exec.ExitError (%v): the grandchild's survival is no non-zero exit",
+						tc.script, exit)
+				}
+			}
+		})
+	}
+}

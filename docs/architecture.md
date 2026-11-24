@@ -172,8 +172,9 @@ Arrows are imports. They point inwards only:
   environment variable and no clock, and starts no process (`audit-publish-library`: named pure
   standard packages, no `os` or `net`, and no package of the product). Its entry point
   `ci/auditpublish` (ADR 0040, "The publish program's GitHub side") reads its inputs through one
-  `os.LookupEnv` and prints one line; its one subcommand is `artifacts`, the run's artifact check;
-  `publish` comes in PRD #175 milestone 2's PR 4b. Its GitHub side, the library `ci/auditpublish/internal/github`, runs `gh` and gitleaks by
+  `os.LookupEnv` and prints one line; its subcommands are `artifacts`, the run's artifact check,
+  `image`, the release and image-digest check on a read-only client, and `publish`, which files the
+  report's pull request and the issues of the previous report's findings. Its GitHub side, the library `ci/auditpublish/internal/github`, runs `gh` and gitleaks by
   absolute path with environments of its own, and sends every GitHub call through one function that
   checks it against a fixed table of endpoints and request bodies before `gh` runs (every advisory
   `state` `draft`; no merge, review, CVE, tag, release or other branch). The entry point is held to named
@@ -190,7 +191,8 @@ Arrows are imports. They point inwards only:
   default), then PUTs of the content-addressed assets, the manifest and the pages last, never a DELETE,
   and neither key in any output (ADR 0042). Both are held to named standard packages (`site-deploy-main`, which runs
   no program; `site-deploy-library`, no `os` and no package of the module), and the forbidigo group
-  `site-deploy-env` allows only the one `os.LookupEnv` its `main.go` passes on.
+  `site-deploy-env` allows only the one `os.LookupEnv` its `main.go` passes on and package `os/exec` in
+  `ci/sitedeploy/internal/deploy/livepage_test.go` alone, which builds the real bundle offline (issue #514).
 - **`ci/sitecheck`** is the live site check (PRD #297 milestone 3, issue #346, ADR 0043), which the release's `site-check` job runs, built by its `site-programs` job, and
   milestone 4's scheduled workflow will run: it fetches every file of a release's manifest from the canonical
   host and judges the edge's digests, redirects, certificates, caching, HSTS against `site/records/`, the
@@ -735,7 +737,8 @@ Known gaps, which these rules do not close:
   config or credential path, and `t.TempDir` goes through the same read, so refusing them would leave
   a test no way to get a temporary directory. They are accepted; `os.TempDir` named directly stays
   refused where `testutil-no-env`, `cli-no-env-or-process`,
-  `inventoryfile-no-env` and, since issue #152, `composition-root-env` refuse it. That refusal is no confidentiality control: `filepath.Dir` of any temporary path
+  `inventoryfile-no-env` and, since issue #152, `composition-root-env` refuse it, and `audit-publish-main-env` and `audit-publish-github-env`
+  refuse `os.CreateTemp` itself, whatever its directory (issue #516). That refusal is no confidentiality control: `filepath.Dir` of any temporary path
   recovers `$TMPDIR`. It is acceptable because `$TMPDIR` holds no secret; the refusal keeps a helper
   from building paths off the temporary directory by habit, nothing more.
 - **`os.Getwd` reads `$PWD`.** It returns the working directory only, a path the user chose, and
