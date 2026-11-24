@@ -137,6 +137,21 @@ moves or deletes a tag.
    - **whatever its value**: a policy other than exactly `tag v*.*.*`, a `protected_branches` policy, or
      either key at repository level stops the release: report it and stop.
    A 403 on any of these reads is a maintainer check you could not make: say so in the report and go on.
+   **The scheduled audit's secrets** (PRD #175, ADR 0040) are checked the same way. The `security-audit`
+   environment holds the audit App's key and client ID, the model and publish steps' age key pairs, the
+   fingerprint key and the Claude Code token the model step runs on:
+   - `gh api repos/{owner}/{repo}/environments/security-audit/secrets --jq '.secrets[].name'` must list
+     `AUDIT_APP_PRIVATE_KEY`, `AUDIT_MODEL_PRIVATE_KEY`, `AUDIT_PUBLISH_PRIVATE_KEY`,
+     `AUDIT_FINGERPRINT_KEY` and `CLAUDE_CODE_OAUTH_TOKEN`;
+   - `gh api repos/{owner}/{repo}/environments/security-audit/variables --jq '.variables[].name'` must
+     list `AUDIT_APP_CLIENT_ID`, `AUDIT_MODEL_PUBLIC_KEY` and `AUDIT_PUBLISH_PUBLIC_KEY`, the age public
+     halves and the App's client ID (not secrets);
+   - the repository-level listings above (`actions/secrets` and `actions/variables`) must list none of
+     `AUDIT_APP_PRIVATE_KEY`, `AUDIT_MODEL_PRIVATE_KEY`, `AUDIT_PUBLISH_PRIVATE_KEY`,
+     `AUDIT_FINGERPRINT_KEY` or `CLAUDE_CODE_OAUTH_TOKEN`: a key at repository level
+     would reach every workflow.
+   On a mismatch, report it and stop. A 403 on any of these reads is a maintainer check you could not
+   make: say so in the report and go on.
    **The rulesets' bypass lists after the switch.** The agents App's token cannot read `bypass_actors`
    (it needs Administration write, which the App never gets: ADR 0031, d): GitHub leaves the field out,
    or returns it empty. The checks above that hold a ruleset's `bypass_actors` are then a maintainer
