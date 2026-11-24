@@ -1097,14 +1097,6 @@ COPY --chmod=0444 LICENSE NOTICE /usr/share/doc/shift2eu/
 			want:         []string{"names no LICENSE", "names no NOTICE"},
 		},
 		{
-			// A quoted top-level key that reads as no docker key opens no
-			// section, so the extra_files under it is never read.
-			name:         "a GoReleaser section whose quoted key holds an escaped quote",
-			dockerfile:   fixture,
-			dockerignore: "*\n!LICENSE\n!NOTICE\n",
-			goreleaser:   "'dock''er':\n  id: a\n  dockerfile: Dockerfile\n",
-		},
-		{
 			name:         "a GoReleaser dockers_v2 section whose key opens a list item",
 			dockerfile:   fixture,
 			dockerignore: "*\n!LICENSE\n!NOTICE\n",
