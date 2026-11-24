@@ -90,6 +90,11 @@ func absoluteReferenceProblem(ref string) string {
 		parsed.Scheme, referenceSchemes)
 }
 
+// siteHost is the host the site is served from, with and without www: a page
+// that means its own index spells it as the relative index.html, so a reference
+// to this host's root is a site file at an absolute URL (issue #528).
+const siteHost = "shift2eu.com"
+
 // siteFileProblem says what about the absolute reference ref is a file of the
 // bundle addressed at an absolute URL, and "" when it addresses none. The mailto
 // scheme is exempt, because it names an address rather than a path of the site,
@@ -97,11 +102,13 @@ func absoluteReferenceProblem(ref string) string {
 // tel:+31201234567, which names no path at all: absoluteReferenceProblem decides
 // those. Every other scheme's path is read as one, so an uppercase HTTPS:// and
 // a protocol-relative //host are checked exactly like a file:///index.html a
-// later page might spell. An empty path names the bundle's own index.html only
-// when the reference names no host: a URL's root at a host is that site's own
+// later page might spell. An empty path names the bundle's own index.html when
+// the reference names no host or names the site's own host, shift2eu.com or its
+// www: the bundle must run unchanged on any origin, so a page that means its own
+// index spells it as the relative index.html, and the live site's root is no
+// more allowed than its /index.html. Another site's root is that site's own
 // index, which is no file of this bundle (the maintainer's bio links to
-// https://fika.works/ and https://timothymamo.com, issue #528), and a page that
-// means its own index spells it as the relative index.html.
+// https://fika.works/ and https://timothymamo.com, issue #528).
 func siteFileProblem(bundle *bundle, ref string) string {
 	parsed, err := url.Parse(ref)
 	if err != nil {
@@ -118,7 +125,7 @@ func siteFileProblem(bundle *bundle, ref string) string {
 
 	path := strings.TrimPrefix(parsed.Path, "/")
 	if path == "" {
-		if parsed.Host != "" {
+		if host := strings.ToLower(parsed.Hostname()); host != "" && host != siteHost && host != "www."+siteHost {
 			return ""
 		}
 
@@ -502,11 +509,13 @@ func TestLinkChecksAcceptAMailtoLink(t *testing.T) {
 // bundle at an absolute URL: the bundle runs unchanged on any origin, a local
 // static file server included (PRD #297, Layer 2 and Layer 3). A link to another
 // site is no site file and stays allowed, its root included (the maintainer's
-// bio links to https://fika.works/ and https://timothymamo.com, issue #528), and
-// so does a `mailto:` reference, which names an address rather than a path; an
-// opaque reference such as javascript:alert(1) names no path either and is left
-// to the scheme check below. No other scheme is exempt, so a file:, ftp:, ws: or
-// blob: reference is read as a path too (see TestSiteFileAtAnAbsoluteURLIsRefused).
+// bio links to https://fika.works/ and https://timothymamo.com, issue #528),
+// while the root of shift2eu.com or its www is the bundle's own index.html at an
+// absolute URL and is refused like any other. A `mailto:` reference is exempt,
+// naming an address rather than a path; an opaque reference such as
+// javascript:alert(1) names no path either and is left to the scheme check
+// below. No other scheme is exempt, so a file:, ftp:, ws: or blob: reference is
+// read as a path too (see TestSiteFileAtAnAbsoluteURLIsRefused).
 func TestNoAbsoluteURLToASiteFile(t *testing.T) {
 	t.Parallel()
 
@@ -531,10 +540,10 @@ func TestNoAbsoluteURLToASiteFile(t *testing.T) {
 // since it names no path at all; an uppercase HTTPS:// and a protocol-relative
 // //host are read as the paths they spell, so a later file:///index.html or
 // ftp://host/style.css is caught rather than skipped. A reference whose path is
-// the root names the bundle's own index.html when it names no host, and another
-// site's index when it does, which is no file of this bundle. Each case names
-// the bundle file the check must refuse, or none when the reference names no
-// site file.
+// the root names the bundle's own index.html when it names no host or the site's
+// own host, shift2eu.com or its www, and another site's index when it names
+// another host, which is no file of this bundle. Each case names the bundle file
+// the check must refuse, or none when the reference names no site file.
 func TestSiteFileAtAnAbsoluteURLIsRefused(t *testing.T) {
 	t.Parallel()
 
@@ -552,6 +561,10 @@ func TestSiteFileAtAnAbsoluteURLIsRefused(t *testing.T) {
 		{name: "a file URL to a site file", ref: "file:///index.html", wantFile: "index.html"},
 		{name: "an ftp URL to a site file", ref: "ftp://example.com/privacy.html", wantFile: "privacy.html"},
 		{name: "a host-less URL of the bundle's root", ref: "file:///", wantFile: "index.html"},
+		{name: "the site's own root with www", ref: "https://www." + siteHost + "/", wantFile: "index.html"},
+		{name: "the site's own root without www or a trailing slash", ref: "https://" + siteHost, wantFile: "index.html"},
+		{name: "a protocol-relative URL of the site's own root", ref: "//" + siteHost, wantFile: "index.html"},
+		{name: "an uppercase URL of the site's own root", ref: "HTTPS://WWW.SHIFT2EU.COM/", wantFile: "index.html"},
 		{name: "the contact address", ref: contactHref, wantFile: ""},
 		{name: "an address with a subject", ref: contactHref + "?subject=Assessment", wantFile: ""},
 		{name: "the repository", ref: repositoryURL, wantFile: ""},
