@@ -81,7 +81,7 @@ from the Edge Services pipeline endpoint, which stays the only reader of the pri
   `max_scale` **1**, **140 mvCPU**, **0.25 GB** of memory. Prices verified by the maintainer on
   2026-11-24 (Scaleway's pricing page, Amsterdam): EUR 0.00001 per vCPU-second after 200,000 free, and
   EUR 0.000002 per GB-second after 400,000 free, per account and month. The worst case, one instance
-  running a whole 30-day month (2,592,000 s), is about **EUR 2.13 a month**; with no instance warm most
+  running a whole 30-day month (2,592,000 s), is about **EUR 2.12 a month**; with no instance warm most
   of the time it stays in the free tier. `min_scale` (0, with a cold start on the first visit after an
   idle period, or 1, always warm) is *for the infra unit*: both stay within the worst case. A cold start
   also meets the live check's request timeout (`DefaultRequestTimeout`, 30 s, ADR 0043) and the first

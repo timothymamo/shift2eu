@@ -1220,7 +1220,7 @@ it. Decision 4 is amended by the orchestrator's decision above.
    `max_scale` 1, 140 mvCPU and 0.25 GB of memory. Serverless Containers' prices (verified by the
    maintainer on Scaleway's pricing page, 2026-11-24, Amsterdam): €0.00001 per vCPU-second after 200,000
    free and €0.000002 per GB-second after 400,000 free, per account and month. The worst case, one
-   instance running a whole 30-day month, is about **€2.13 a month**; an idle container scaled to zero
+   instance running a whole 30-day month, is about **€2.12 a month**; an idle container scaled to zero
    stays in the free tier. The apex no longer needs a front outside Scaleway.
 10. **Decided: CAA `0 issue "letsencrypt.org"` and `0 issuewild ";"`** (and an `iodef` address if the
     maintainer wants reports), since Edge Services generates managed certificates with Let's Encrypt
