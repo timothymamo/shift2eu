@@ -221,6 +221,36 @@ const (
 	// the comment then stands where the check stood, so the only difference the
 	// case makes is the # that hides it.
 	auditChecksArtifactDownloadLine = "          gh api \"repos/${GITHUB_REPOSITORY}/actions/artifacts/${id}/zip\" > \"${RUNNER_TEMP}/checks-result.zip\"\n"
+	// auditChecksArtifactShapeGuard and auditPublishArtifactShapeGuard are the
+	// two download steps' guards of the ID and digest the artifact check wrote
+	// to artifact.json: a value that is no ID or no sha256 digest reaches gh
+	// api, sha256sum and unzip otherwise. The message each draws names the
+	// artifact's ID.
+	auditChecksArtifactShapeGuard = "          if [[ ! \"${id}\" =~ ^[0-9]+$ ]] || [[ ! \"${digest}\" =~ ^sha256:[0-9a-f]{64}$ ]]; then\n" +
+		"            echo \"::error title=Audit model::checks-result has no artifact ID and SHA-256 digest: see runbook step 11\"\n" +
+		"            exit 1\n" +
+		"          fi\n"
+	auditPublishArtifactShapeGuard = "          if [[ ! \"${id}\" =~ ^[0-9]+$ ]] || [[ ! \"${digest}\" =~ ^sha256:[0-9a-f]{64}$ ]]; then\n" +
+		"            echo \"::error title=Audit publish::model-result has no artifact ID and SHA-256 digest: see runbook step 11\"\n" +
+		"            exit 1\n" +
+		"          fi\n"
+	// auditChecksSingleFileCheck and auditPublishSingleFileCheck are the two
+	// download steps' single-file checks: the unzipped directory holds the one
+	// ciphertext and nothing else, and the branch that refuses anything more.
+	auditChecksSingleFileCheck = "          if [ \"$(ls -A \"${RUNNER_TEMP}/checks-result\")\" != checks-result.age ]; then\n" +
+		"            echo \"::error title=Audit model::checks-result holds more than its ciphertext: see runbook step 11\"\n" +
+		"            exit 1\n" +
+		"          fi\n"
+	auditPublishSingleFileCheck = "          if [ \"$(ls -A \"${RUNNER_TEMP}/model-result\")\" != model-result.age ]; then\n" +
+		"            echo \"::error title=Audit publish::model-result holds more than its ciphertext: see runbook step 11\"\n" +
+		"            exit 1\n" +
+		"          fi\n"
+	// auditEmptyDigestCheck is the attestation step's branch for a run that
+	// pulled no image: a fixed notice and exit 0, the verification skipped.
+	auditEmptyDigestCheck = "          if [ -z \"${digest}\" ]; then\n" +
+		"            echo \"image not pulled: no provenance attestation to verify\"\n" +
+		"            exit 0\n" +
+		"          fi\n"
 	// auditVerifyFlagLine is the last line of the attestation step's gh
 	// verification, whose --deny-self-hosted-runners the case that comments it
 	// out leaves in a comment alone.
@@ -400,6 +430,16 @@ func auditWorkflowFixtureBytes(t *testing.T) []byte {
 	}
 
 	return src
+}
+
+// joinedBranch returns guard, a guard's whole header and branch, with the
+// branch's lines run together onto the echo's line: the echo, the exit and the
+// fi are then words of one command, which prints and carries on - the branch
+// refuses nothing while the header still matches.
+func joinedBranch(guard string) string {
+	lines := strings.Split(strings.TrimSuffix(guard, "\n"), "\n")
+
+	return lines[0] + "\n" + strings.Join(lines[1:], " ") + "\n"
 }
 
 // TestAuditWorkflow holds the scheduled security audit's workflow to
@@ -1075,9 +1115,11 @@ func TestAuditWorkflow(t *testing.T) {
 			name: "a second listing in the download step",
 			workflow: mutate(t, acceptedWorkflow, "          id=\"$(jq -er '.id' \"${artifact}\")\"\n"+
 				"          digest=\"$(jq -er '.digest' \"${artifact}\")\"\n"+
+				auditChecksArtifactShapeGuard+
 				"          gh api \"repos/${GITHUB_REPOSITORY}/actions/artifacts/${id}/zip\" > \"${RUNNER_TEMP}/checks-result.zip\"\n",
 				"          id=\"$(gh api \"repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts\" --jq '.artifacts[] | select(.name == \"checks-result\") | .id')\"\n"+
 					"          digest=\"$(gh api \"repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts\" --jq '.artifacts[] | select(.name == \"checks-result\") | .digest')\"\n"+
+					auditChecksArtifactShapeGuard+
 					"          gh api \"repos/${GITHUB_REPOSITORY}/actions/artifacts/${id}/zip\" > \"${RUNNER_TEMP}/checks-result.zip\"\n"),
 			wantIn: "artifact.json",
 		},
@@ -1107,12 +1149,9 @@ func TestAuditWorkflow(t *testing.T) {
 			wantIn:   "unzip",
 		},
 		{
-			name: "the download without the single-file check",
-			workflow: mutate(t, acceptedWorkflow, "          if [ \"$(ls -A \"${RUNNER_TEMP}/checks-result\")\" != checks-result.age ]; then\n"+
-				"            echo \"::error title=Audit model::checks-result holds more than its ciphertext: see runbook step 11\"\n"+
-				"            exit 1\n"+
-				"          fi\n", ""),
-			wantIn: "ls -A",
+			name:     "the download without the single-file check",
+			workflow: mutate(t, acceptedWorkflow, auditChecksSingleFileCheck, ""),
+			wantIn:   "ls -A",
 		},
 		{
 			// F11: the history scan ignores no allow comment, and the
@@ -1349,6 +1388,59 @@ func TestAuditWorkflow(t *testing.T) {
 			workflow: mutate(t, acceptedWorkflow, auditReleaseLookup,
 				"          tag=`#$(gh api \"repos/${GH_REPO}/releases/latest\" --jq .tag_name)`\n"),
 			wantIn: "comment",
+		},
+
+		// Review round 6 (the reviewer's and the auditor's findings): the guards
+		// of round 5 are pinned whole, but three of them still hold their branch
+		// with a \s+, which one space satisfies, and the download steps' own
+		// guards are pinned by nothing at all. The cases below run a branch's
+		// lines together onto its echo's line, drop a branch's exit 1 and drop
+		// the download's shape guard of the artifact's ID and digest; each must
+		// draw the message the check owes that guard.
+		{
+			name:     "the digest read's branch joined onto the echo's line",
+			workflow: mutate(t, acceptedWorkflow, auditDigestRefusal, joinedBranch(auditDigestRefusal)),
+			wantIn:   "read of the digest",
+		},
+		{
+			name:     "the digest read's branch without its exit 1",
+			workflow: mutate(t, acceptedWorkflow, auditDigestRefusal, strings.Replace(auditDigestRefusal, "            exit 1\n", "", 1)),
+			wantIn:   "read of the digest",
+		},
+		{
+			name:     "the empty-digest branch joined onto the echo's line",
+			workflow: mutate(t, acceptedWorkflow, auditEmptyDigestCheck, joinedBranch(auditEmptyDigestCheck)),
+			wantIn:   "empty digest",
+		},
+		{
+			name:     "the checks download's single-file check without its exit 1",
+			workflow: mutate(t, acceptedWorkflow, auditChecksSingleFileCheck, strings.Replace(auditChecksSingleFileCheck, "            exit 1\n", "", 1)),
+			wantIn:   "ls -A",
+		},
+		{
+			name:     "the publish download's single-file check without its exit 1",
+			workflow: mutate(t, acceptedWorkflow, auditPublishSingleFileCheck, strings.Replace(auditPublishSingleFileCheck, "            exit 1\n", "", 1)),
+			wantIn:   "ls -A",
+		},
+		{
+			name:     "the checks download without the artifact's shape guard",
+			workflow: mutate(t, acceptedWorkflow, auditChecksArtifactShapeGuard, ""),
+			wantIn:   "artifact's ID",
+		},
+		{
+			name:     "the publish download without the artifact's shape guard",
+			workflow: mutate(t, acceptedWorkflow, auditPublishArtifactShapeGuard, ""),
+			wantIn:   "artifact's ID",
+		},
+		{
+			name:     "the checks download's shape guard without its exit 1",
+			workflow: mutate(t, acceptedWorkflow, auditChecksArtifactShapeGuard, strings.Replace(auditChecksArtifactShapeGuard, "            exit 1\n", "", 1)),
+			wantIn:   "artifact's ID",
+		},
+		{
+			name:     "the publish download's shape guard without its exit 1",
+			workflow: mutate(t, acceptedWorkflow, auditPublishArtifactShapeGuard, strings.Replace(auditPublishArtifactShapeGuard, "            exit 1\n", "", 1)),
+			wantIn:   "artifact's ID",
 		},
 
 		// A document the reader cannot follow tells the check nothing, so it is

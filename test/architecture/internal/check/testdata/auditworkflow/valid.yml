@@ -270,6 +270,10 @@ jobs:
           artifact="${RUNNER_TEMP}/artifact.json"
           id="$(jq -er '.id' "${artifact}")"
           digest="$(jq -er '.digest' "${artifact}")"
+          if [[ ! "${id}" =~ ^[0-9]+$ ]] || [[ ! "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error title=Audit model::checks-result has no artifact ID and SHA-256 digest: see runbook step 11"
+            exit 1
+          fi
           gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${id}/zip" > "${RUNNER_TEMP}/checks-result.zip"
           echo "${digest#sha256:}  ${RUNNER_TEMP}/checks-result.zip" | sha256sum --check --strict -
           mkdir "${RUNNER_TEMP}/checks-result"
@@ -393,6 +397,10 @@ jobs:
           artifact="${RUNNER_TEMP}/artifact.json"
           id="$(jq -er '.id' "${artifact}")"
           digest="$(jq -er '.digest' "${artifact}")"
+          if [[ ! "${id}" =~ ^[0-9]+$ ]] || [[ ! "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error title=Audit publish::model-result has no artifact ID and SHA-256 digest: see runbook step 11"
+            exit 1
+          fi
           gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${id}/zip" > "${RUNNER_TEMP}/model-result.zip"
           echo "${digest#sha256:}  ${RUNNER_TEMP}/model-result.zip" | sha256sum --check --strict -
           mkdir "${RUNNER_TEMP}/model-result"
