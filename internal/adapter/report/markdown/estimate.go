@@ -76,8 +76,14 @@ func renderPlan(e *estimate.Estimate) string {
 	}
 }
 
-// planSize renders a plan's vCPUs and memory: "1 vCPU, 2 GiB".
+// planSize renders a plan's vCPUs and memory: "1 vCPU, 2 GiB", or its memory
+// alone, "8 GiB", for a plan whose target gives no vCPU count (VCPUs 0, a plan
+// matched on memory alone, ADR 0045).
 func planSize(p estimate.Plan) string {
+	if p.VCPUs == 0 {
+		return milliGiB(p.MemoryMilliGiB) + " GiB"
+	}
+
 	return strconv.FormatInt(p.VCPUs, 10) + " vCPU, " + milliGiB(p.MemoryMilliGiB) + " GiB"
 }
 
@@ -152,6 +158,8 @@ func renderNotEstimated(e estimate.Estimate, inTable bool) string {
 		return "no fit"
 	case estimate.UsagePriced:
 		return "usage-priced"
+	case estimate.NeverPriced:
+		return "not priced"
 	case estimate.NoSize:
 		return "size unknown"
 	case estimate.NoPlan:
@@ -186,6 +194,7 @@ func renderRelations(v assessment.Verdict) string {
 var reasonOrder = []estimate.Reason{
 	estimate.NoFit,
 	estimate.UsagePriced,
+	estimate.NeverPriced,
 	estimate.NoSize,
 	estimate.NoPlan,
 	estimate.NoPlanLargeEnough,
