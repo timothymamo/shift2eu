@@ -216,6 +216,11 @@ const (
 	// against the digest of artifact.json, the step the case that comments it out
 	// reads no longer.
 	auditZipDigestLine = "          echo \"${digest#sha256:}  ${RUNNER_TEMP}/checks-result.zip\" | sha256sum --check --strict -\n"
+	// auditChecksArtifactDownloadLine is the line right before it, the code line
+	// the case that hides the zip's sha256sum in a trailing comment hangs it on:
+	// the comment then stands where the check stood, so the only difference the
+	// case makes is the # that hides it.
+	auditChecksArtifactDownloadLine = "          gh api \"repos/${GITHUB_REPOSITORY}/actions/artifacts/${id}/zip\" > \"${RUNNER_TEMP}/checks-result.zip\"\n"
 	// auditVerifyFlagLine is the last line of the attestation step's gh
 	// verification, whose --deny-self-hosted-runners the case that comments it
 	// out leaves in a comment alone.
@@ -1141,6 +1146,33 @@ func TestAuditWorkflow(t *testing.T) {
 			name:     "the digest read without the string-and-shape refusal",
 			workflow: mutate(t, acceptedWorkflow, auditDigestRefusal, auditDigestRead),
 			wantIn:   "select(type == \"string\")",
+		},
+
+		// Review round 3, H1 (the auditor's finding): a # that starts a word on a
+		// code line of a run: script is a shell comment too, and it comments out
+		// the rest of that line - a trailing \ included. So
+		// `--source-ref "refs/tags/${tag}" # \` swallows the continuation and
+		// leaves --deny-self-hosted-runners to run alone (exit 127), and in
+		// `if ! A` / `B; then` only B's status counts: a verification that failed
+		// passes, while every regex above still matches the text under the #.
+		// Such a line is a problem, whichever command its comment holds: the two
+		// cases below hang a guard on a trailing comment and must draw a message
+		// naming the comment (wantIn "comment"). The # inside a word stays
+		// allowed - the accepted shape's ${digest#sha256:} and
+		// ${GITLEAKS_VERSION#v} draw no message - and a # after whitespace inside
+		// quotes is refused, which is accepted (fail closed).
+		{
+			name: "a trailing comment on the --source-ref line",
+			workflow: mutate(t, acceptedWorkflow, "            --source-ref \"refs/tags/${tag}\" \\\n"+auditVerifyFlagLine,
+				"            --source-ref \"refs/tags/${tag}\" # \\\n"+auditVerifyFlagLine),
+			wantIn: "comment",
+		},
+		{
+			name: "the zip's sha256sum hidden in a trailing comment on the download",
+			workflow: mutate(t, mutate(t, acceptedWorkflow, auditZipDigestLine, ""),
+				auditChecksArtifactDownloadLine,
+				strings.TrimSuffix(auditChecksArtifactDownloadLine, "\n")+" # "+strings.TrimPrefix(auditZipDigestLine, "          ")),
+			wantIn: "comment",
 		},
 
 		// A document the reader cannot follow tells the check nothing, so it is
