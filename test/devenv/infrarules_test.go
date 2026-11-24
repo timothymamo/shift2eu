@@ -1595,6 +1595,54 @@ var tlsStageLifecycleCases = []infraRuleCase{
 			tlsStageLifecycle(t, site, []string{"    create_before_destroy = true"})
 		},
 	},
+	{
+		name:   "tls-stage-without-a-lifecycle-block-beside-a-dns-stage-with-one",
+		why:    "the site's TLS stage without a lifecycle block while the DNS stage beside it carries create_before_destroy = true, a setting that is the DNS stage's and never the TLS stage's",
+		want:   "tls-stage-lifecycle",
+		wantIn: map[string]string{"tls-stage-lifecycle": "{site}/main.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			tlsStageLifecycle(t, site, nil)
+			editInfraFile(t, filepath.Join(site, "main.tf"),
+				`resource "scaleway_edge_services_dns_stage" "site" {`,
+				"resource \"scaleway_edge_services_dns_stage\" \"site\" {\n  lifecycle {\n    create_before_destroy = true\n  }\n")
+		},
+	},
+	{
+		name:   "tls-stage-without-a-lifecycle-block-in-a-second-root",
+		why:    "a second applied root beside the site's whose TLS stage has no lifecycle block, while the site's TLS stage keeps create_before_destroy = true",
+		want:   "tls-stage-lifecycle",
+		wantIn: map[string]string{"tls-stage-lifecycle": "{root}/other/main.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			tlsStageSecondRoot(t, site)
+		},
+	},
+}
+
+// tlsStageSecondRoot writes a second applied root beside a copy's site/, holding what a root needs - a copy of
+// the site's versions.tf, so the pinned release and provider live in one place, with a state key of its own -
+// and the TLS stage without a lifecycle block. Its resource and labels are the site's stage's, so a rule that
+// keys the stage by its block path alone reads the site's lifecycle block as this root's and lets the
+// destroy-first replacement through (issue #541).
+func tlsStageSecondRoot(t *testing.T, site string) {
+	t.Helper()
+
+	versions := filepath.Join(site, "versions.tf")
+	body, err := os.ReadFile(versions)
+	if err != nil {
+		t.Fatalf("read %s: %v", versions, err)
+	}
+
+	other := filepath.Join(filepath.Dir(site), "other")
+	otherVersions := filepath.Join(other, "versions.tf")
+
+	writeInfraText(t, otherVersions, string(body))
+	editInfraFile(t, otherVersions, `key = "site/terraform.tfstate"`, `key = "other/terraform.tfstate"`)
+
+	writeInfraText(t, filepath.Join(other, "main.tf"), `resource "scaleway_edge_services_tls_stage" "site" {
+}
+`)
 }
 
 // tlsStageLifecycle rewrites the lifecycle block of scaleway_edge_services_tls_stage.site in a copied

@@ -4,11 +4,14 @@
 // had created the www CNAME at Namecheap, and Scaleway can issue the managed Let's Encrypt certificate only
 // once that CNAME resolves to the pipeline, once, at the stage's creation. Hours after R8 the stage still
 // read `status: active`, `certificate_expires_at: null`, and every handshake to www failed. The only way to
-// ask again is to replace the stage, so R8 must say how - `dev/tofu.sh -chdir=infra/site apply
-// -replace=scaleway_edge_services_tls_stage.site` - and show a read-only command that tells a certificate
-// from none, with a PASS comment for the one and a FAIL comment for the other. R4, whose first apply is
-// where the certificate is requested too early, must say that R8's recreate step is expected on a first
-// setup, so a maintainer meeting the FAIL line knows it is the order and not a fault.
+// ask again is to replace the stage, so R8 must say how - a plan that writes the replacement to tls.tfplan,
+// then the apply of that file, never one interactive apply that plans and asks at once - and show a
+// read-only command that tells a certificate from none, with a PASS comment for the one and a FAIL comment
+// for the other. The plan is reviewed before it runs, so R8 must also say what makes a maintainer stop: a
+// plan that replaces or destroys anything other than the TLS stage, and an apply that failed part-way, which
+// is re-run. R4, whose first apply is where the certificate is requested too early, must say that R8's
+// recreate step is expected on a first setup, so a maintainer meeting the FAIL line knows it is the order and
+// not a fault.
 //
 // The check reads docs/site-runbook.md's lines as the repository holds them: it needs neither the scw CLI nor
 // OpenTofu and contacts nothing. Every step is judged inside its own section, so a line that belongs to
@@ -31,9 +34,18 @@ const (
 	// tlsStageResource is the resource R8 replaces to ask Scaleway for a new managed certificate.
 	tlsStageResource = "scaleway_edge_services_tls_stage.site"
 
-	// tlsStageRecreatePrefix starts R8's recreate step: a replace, never a destroy the DNS stage still
+	// tlsStagePlanPrefix starts R8's recreate step: a plan that writes the replacement to a file, so the
+	// maintainer reads what it touches before any apply runs. A replace, never a destroy the DNS stage still
 	// references (Scaleway answers that with a 500).
-	tlsStageRecreatePrefix = "dev/tofu.sh -chdir=infra/site apply -replace=" + tlsStageResource
+	tlsStagePlanPrefix = "dev/tofu.sh -chdir=infra/site plan -replace=" + tlsStageResource + " -out=tls.tfplan"
+
+	// tlsStageApplyPrefix starts R8's second step: the apply of the plan the line above wrote, and of nothing
+	// else.
+	tlsStageApplyPrefix = "dev/tofu.sh -chdir=infra/site apply tls.tfplan"
+
+	// tlsStageUnreviewedApplyPrefix starts an apply that plans and applies in one step: a maintainer never
+	// reads its plan, and answering yes is no review, so R8 must not hold it.
+	tlsStageUnreviewedApplyPrefix = "dev/tofu.sh -chdir=infra/site apply -replace="
 
 	// tlsStageListPrefix starts R8's read-only view of the pipeline's TLS stage.
 	tlsStageListPrefix = "scw edge-services tls-stage list pipeline-id="
@@ -43,22 +55,73 @@ const (
 	tlsStageCertificateField = "certificate_expires_at"
 )
 
-// TestTLSStageRecreateInR8 pins R8's recreate step and its check (issue #541): a line that replaces the TLS
-// stage, a read-only line that shows its certificate, a PASS and a FAIL comment on that check, and - in R4 or
-// the order note above R0 - that the recreate step is expected on a first setup.
+// TestTLSStageRecreateInR8 pins R8's recreate step and its check (issue #541): a plan that writes the TLS
+// stage's replacement to tls.tfplan, the apply of that file later in R8 and no interactive apply, the FAIL
+// comments that tell a plan touching anything else and an apply that failed part-way from a clean run, a
+// read-only line that shows the stage's certificate with a PASS and a FAIL comment on it, and - in R4 or the
+// order note above R0 - that the recreate step is expected on a first setup.
 func TestTLSStageRecreateInR8(t *testing.T) {
 	t.Parallel()
 
 	lines := strings.Split(readDoc(t, os.DirFS(repoRoot), siteRunbookPath), "\n")
 	r8 := tlsRunbookSection(t, lines, tlsStageHeading)
 
-	t.Run("R8 replaces the TLS stage", func(t *testing.T) {
+	t.Run("R8 plans the TLS stage's replacement and applies that plan", func(t *testing.T) {
 		t.Parallel()
 
-		if _, _, ok := runbookLineStartingWith(r8, tlsStageRecreatePrefix); !ok {
+		planAt, _, plans := runbookLineStartingWith(r8, tlsStagePlanPrefix)
+		if !plans {
 			t.Errorf("%s's R8 holds no line starting %q: Scaleway issues the managed certificate once, when the TLS stage is created, so a stage created before R8's CNAME never gets one and replacing it is the only way to ask again (issue #541). R8 was:\n%s",
-				siteRunbookPath, tlsStageRecreatePrefix, strings.Join(r8, "\n"))
+				siteRunbookPath, tlsStagePlanPrefix, strings.Join(r8, "\n"))
 		}
+
+		applyAt, _, applies := runbookLineStartingWith(r8, tlsStageApplyPrefix)
+		if !applies {
+			t.Errorf("%s's R8 holds no line starting %q, the apply of the plan the recreate step writes: a maintainer reviews that plan before it runs, and the step is unfinished while it is only written (issue #541). R8 was:\n%s",
+				siteRunbookPath, tlsStageApplyPrefix, strings.Join(r8, "\n"))
+		}
+
+		if plans && applies && applyAt < planAt {
+			t.Errorf("%s's R8 applies %q at line %d, before the plan that writes it at line %d: the apply would run a file the step has not written yet (issue #541)",
+				siteRunbookPath, tlsStageApplyPrefix, applyAt, planAt)
+		}
+
+		if number, line, ok := runbookLineStartingWith(r8, tlsStageUnreviewedApplyPrefix); ok {
+			t.Errorf("%s's R8 applies with %q at line %d: one apply that plans and asks in the same breath is never reviewed, so the step must write its plan to tls.tfplan and apply that file (issue #541):\n\t%s",
+				siteRunbookPath, tlsStageUnreviewedApplyPrefix, number, strings.TrimSpace(line))
+		}
+	})
+
+	t.Run("R8 stops when the plan touches anything else", func(t *testing.T) {
+		t.Parallel()
+
+		failLines := tlsRunbookFailLines(r8)
+
+		for _, line := range failLines {
+			lower := strings.ToLower(line)
+			if (strings.Contains(lower, "replaces") || strings.Contains(lower, "destroys")) && strings.Contains(lower, "other") {
+				return
+			}
+		}
+
+		t.Errorf("%s's R8 has no %q comment that names what the plan replaces or destroys with %q: the recreate step must replace the TLS stage and repoint the DNS stage's tls_stage_id, nothing else, so a plan that touches another resource is a stop, not an apply (issue #541). R8's FAIL comments were:\n%s",
+			siteRunbookPath, "# FAIL", "other", strings.Join(failLines, "\n"))
+	})
+
+	t.Run("R8 says to re-run an apply that failed part-way", func(t *testing.T) {
+		t.Parallel()
+
+		failLines := tlsRunbookFailLines(r8)
+
+		for _, line := range failLines {
+			lower := strings.ToLower(line)
+			if strings.Contains(lower, "part-way") || strings.Contains(lower, "partway") {
+				return
+			}
+		}
+
+		t.Errorf("%s's R8 has no %q comment that says to re-run an apply which failed part-way: the replacement creates the new stage and deletes the old one in two steps, and an apply that stopped between them leaves the plan still to finish, so re-running it is the recovery (issue #541). R8's FAIL comments were:\n%s",
+			siteRunbookPath, "# FAIL", strings.Join(failLines, "\n"))
 	})
 
 	t.Run("R8 shows the TLS stage's certificate", func(t *testing.T) {
@@ -84,17 +147,10 @@ func TestTLSStageRecreateInR8(t *testing.T) {
 	t.Run("R8 tells a certificate that never came apart", func(t *testing.T) {
 		t.Parallel()
 
-		var failLines []string
+		failLines := tlsRunbookFailLines(r8)
 
-		for _, line := range r8 {
-			trimmed := strings.TrimSpace(line)
-			if !strings.HasPrefix(trimmed, "# FAIL") {
-				continue
-			}
-
-			failLines = append(failLines, trimmed)
-
-			if strings.Contains(trimmed, "null") && strings.Contains(strings.ToLower(trimmed), "recreate") {
+		for _, line := range failLines {
+			if strings.Contains(line, "null") && strings.Contains(strings.ToLower(line), "recreate") {
 				return
 			}
 		}
@@ -107,7 +163,7 @@ func TestTLSStageRecreateInR8(t *testing.T) {
 		t.Parallel()
 
 		r4 := tlsRunbookSection(t, lines, tlsStageSetupHeading)
-		preamble := tlsRunbookPreamble(t, lines)
+		preamble := tlsRunbookPreamble(lines)
 
 		for _, section := range [][]string{r4, preamble} {
 			if tlsRunbookSaysRecreateAfterR8(section) {
@@ -187,11 +243,24 @@ func tlsRunbookSection(t *testing.T, lines []string, heading string) []string {
 	return lines[start:end]
 }
 
+// tlsRunbookFailLines returns a section's FAIL comments as the runbook writes them, trimmed: the lines a
+// maintainer reads when a check did not pass.
+func tlsRunbookFailLines(section []string) []string {
+	var failLines []string
+
+	for _, line := range section {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "# FAIL") {
+			failLines = append(failLines, trimmed)
+		}
+	}
+
+	return failLines
+}
+
 // tlsRunbookPreamble returns the lines above the first `## ` heading: the order note that tells the
 // maintainer the steps' order before R0 starts.
-func tlsRunbookPreamble(t *testing.T, lines []string) []string {
-	t.Helper()
-
+func tlsRunbookPreamble(lines []string) []string {
 	for i, line := range lines {
 		if strings.HasPrefix(line, "## ") {
 			return lines[:i]
