@@ -9,7 +9,8 @@
 // the rules see, a provider block setting only organization_id and
 // region, a lock file holding only the line shapes tofu init writes, the site's TLS stage recreating itself before
 // it destroys (so a replacement repoints the DNS stage first, issue #541), the site container's cost pins (one
-// instance, 140 mvCPU and 0.25 GB of memory at most, ADR 0045), and so on (the script lists them). With
+// instance, 140 mvCPU and 0.25 GB of memory at most, and no pin set twice or only in a nested block, ADR 0045),
+// the one file() call the Caddyfile is read with and no other (ADR 0045), and so on (the script lists them). With
 // every rule holding it prints nothing and exits 0; a usage error exits 2.
 //
 // The real infra/ must hold every rule, and each case below is one copy of infra/ with exactly one breakage,
@@ -71,8 +72,10 @@ type infraRuleCase struct {
 // from them fails here instead of passing unrefused.
 var infraRuleCases = slices.Concat(
 	infraFileFunctionCases(),
+	caddyfileReadCases,
 	namedInfraRuleCases,
 	tlsStageLifecycleCases,
+	resourceTypeAllowListCases,
 	containerCostPinCases,
 	infraTestNestedBlockCases,
 	infraTestLabelCases,
@@ -1622,6 +1625,61 @@ var tlsStageLifecycleCases = []infraRuleCase{
 	},
 }
 
+// resourceTypeAllowListCases pin [resource-type]'s allow list as ADR 0045 leaves it (PRD #297 milestone 4):
+// the front's three resources (scaleway_container, scaleway_container_domain, scaleway_container_namespace)
+// enter it, and scaleway_edge_services_tls_stage leaves it with the pipeline's www domain. The stage may come
+// back only as R8's rollback re-adds it - resource scaleway_edge_services_tls_stage "site" with a lifecycle
+// block that creates before it destroys - which [tls-stage-lifecycle] judges alone, so that one stage is no
+// [resource-type]; a stage under any other label is a pipeline the site no longer runs, and it is refused. A
+// container type the front does not use is refused too, so adding the three names opened no prefix.
+var resourceTypeAllowListCases = []infraRuleCase{
+	{
+		name:   "tls-stage-under-another-label",
+		why:    `a resource "scaleway_edge_services_tls_stage" "other", the type the pipeline no longer uses under a label the rollback does not re-add`,
+		want:   "resource-type",
+		wantIn: map[string]string{"resource-type": "{site}/main.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			appendInfraText(t, filepath.Join(site, "main.tf"), `
+resource "scaleway_edge_services_tls_stage" "other" {
+}
+`)
+		},
+	},
+	// The one TLS stage the rules still allow passes: the "site" stage with its lifecycle block, written on one
+	// line, which is the stage R8's rollback re-adds. The standard-shaped block is pinned by
+	// tls-stage-create-before-destroy-true, which requires no tag at all either.
+	{
+		name: "tls-stage-site-with-a-one-line-lifecycle",
+		why:  `a resource "scaleway_edge_services_tls_stage" "site" whose lifecycle { create_before_destroy = true } is written on one line, the stage R8's rollback re-adds`,
+		want: "",
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			appendInfraText(t, filepath.Join(site, "main.tf"), `
+resource "scaleway_edge_services_tls_stage" "site" {
+  lifecycle { create_before_destroy = true }
+}
+`)
+		},
+	},
+	{
+		name:   "container-cron-type",
+		why:    `a resource "scaleway_container_cron", a container type the front does not use`,
+		want:   "resource-type",
+		wantIn: map[string]string{"resource-type": "{site}/main.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			appendInfraText(t, filepath.Join(site, "main.tf"), `
+resource "scaleway_container_cron" "nightly" {
+  container_id = scaleway_container.site.id
+  schedule     = "0 3 * * *"
+  command      = "/bin/true"
+}
+`)
+		},
+	},
+}
+
 // containerCostPinCases pin the site container's cost pins (PRD #297 milestone 4, ADR 0045, *The container*,
 // and its Consequences): one instance of at most 140 mvCPU and 0.25 GB of memory bounds the worst case to about
 // EUR 2.12 a month, and min_scale 0 or 1 bounds how many instances the site keeps. dev/infra-rules.awk judges
@@ -1745,6 +1803,81 @@ var containerCostPinCases = []infraRuleCase{
 		breakage: func(t *testing.T, site string) {
 			t.Helper()
 			setContainerAttribute(t, site, "min_scale", "  min_scale = 1")
+		},
+	},
+	{
+		name:   "container-min-scale-missing",
+		why:    "the site's container without min_scale, so the provider's own default decides how many instances stay warm",
+		want:   "container-min-scale",
+		wantIn: map[string]string{"container-min-scale": "{site}/container.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			setContainerAttribute(t, site, "min_scale", "")
+		},
+	},
+	{
+		name:   "container-min-scale-as-an-expression",
+		why:    "min_scale = var.min_scale on the site's container, a value the maintainer's own tfvars could raise",
+		want:   "container-min-scale",
+		wantIn: map[string]string{"container-min-scale": "{site}/container.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			setContainerAttribute(t, site, "min_scale", "  min_scale = var.min_scale")
+		},
+	},
+	// A pin set twice is no one pinned value: the second setting could raise what the first fixes, and the
+	// rules cannot tell which one the provider reads. So a repeated pin is refused as a pin that is not set
+	// exactly once, under its own tag.
+	{
+		name:   "container-cpu-limit-set-twice",
+		why:    "cpu_limit = 140 added beside the site's container's own cpu_limit, the same pin set twice",
+		want:   "container-cpu",
+		wantIn: map[string]string{"container-cpu": "{site}/container.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			insertContainerLines(t, site, "  cpu_limit = 140")
+		},
+	},
+	// The pins judge every scaleway_container under the root, not the one container.tf holds: a second
+	// container, in a file of its own, sets no pin at all, so each pin is missing and each is reported against
+	// that file.
+	{
+		name:     "container-second-without-pins",
+		why:      "a second scaleway_container in site/second_container.tf without max_scale, cpu_limit, memory_limit_bytes or min_scale",
+		want:     "container-max-scale",
+		wantMore: []string{"container-cpu", "container-memory", "container-min-scale"},
+		wantIn: map[string]string{
+			"container-max-scale": "{site}/second_container.tf",
+			"container-cpu":       "{site}/second_container.tf",
+			"container-memory":    "{site}/second_container.tf",
+			"container-min-scale": "{site}/second_container.tf",
+		},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			writeInfraText(t, filepath.Join(site, "second_container.tf"), `
+resource "scaleway_container" "second" {
+  name         = "second"
+  namespace_id = scaleway_container_namespace.site.id
+  region       = var.region
+  image        = local.caddy_image
+  port         = 8080
+  privacy      = "public"
+}
+`)
+		},
+	},
+	// A pin only inside a nested block is no pin the container sets: the rule reads the container's own
+	// attributes, so max_scale inside scaling_option leaves the top level without one, whatever the nested
+	// block says.
+	{
+		name:   "container-pin-only-in-a-nested-block",
+		why:    "the site's container's top-level max_scale removed and max_scale = 1 set inside a scaling_option block instead",
+		want:   "container-max-scale",
+		wantIn: map[string]string{"container-max-scale": "{site}/container.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			setContainerAttribute(t, site, "max_scale", "")
+			insertContainerLines(t, site, "  scaling_option {", "    max_scale = 1", "  }")
 		},
 	},
 }
@@ -1991,6 +2124,16 @@ func setContainerAttribute(t *testing.T, site, name, line string) {
 func addContainerAttribute(t *testing.T, site, line string) {
 	t.Helper()
 
+	insertContainerLines(t, site, line)
+}
+
+// insertContainerLines writes lines as the first lines inside the container resource of a copy's
+// site/container.tf, on the line after the one that opens it, so a case can set an attribute or a nested block
+// in the resource block where the provider reads it. A file with no container resource, or with two, fails the
+// case loudly instead of passing without breaking anything.
+func insertContainerLines(t *testing.T, site string, lines ...string) {
+	t.Helper()
+
 	path := filepath.Join(site, containerFileName)
 
 	body, err := os.ReadFile(path)
@@ -1998,11 +2141,11 @@ func addContainerAttribute(t *testing.T, site, line string) {
 		t.Fatalf("read %s: %v: the container's cost pins live there (ADR 0045), and this case breaks one of them", path, err)
 	}
 
-	lines := strings.Split(string(body), "\n")
+	fileLines := strings.Split(string(body), "\n")
 
 	found := -1
 
-	for i, text := range lines {
+	for i, text := range fileLines {
 		if !strings.HasPrefix(strings.TrimSpace(text), containerResourceHeader) {
 			continue
 		}
@@ -2018,9 +2161,9 @@ func addContainerAttribute(t *testing.T, site, line string) {
 		t.Fatalf("%s holds no line opening %q, want one: the case does not name one breakage", path, containerResourceHeader)
 	}
 
-	out := append([]string{}, lines[:found+1]...)
-	out = append(out, line)
-	out = append(out, lines[found+1:]...)
+	out := append([]string{}, fileLines[:found+1]...)
+	out = append(out, lines...)
+	out = append(out, fileLines[found+1:]...)
 
 	writeInfraText(t, path, strings.Join(out, "\n"))
 }
@@ -2562,6 +2705,125 @@ locals {
 	}
 
 	return cases
+}
+
+// caddyfileReadCases pin [file-function]'s one exception (PRD #297 milestone 4, ADR 0045): the site container
+// hands Caddy the repository's Caddyfile as an argument, since the provider caps an environment variable at
+// 1000 characters, so the plan reads it with file("${path.module}/Caddyfile"). The rule allows exactly that
+// call, character for character, in a configuration file: the name must be file, no other file-reading
+// function, and its argument the string "${path.module}/Caddyfile" and nothing else - no other file beside it,
+// no .. segment, no bare name, no space before the closing parenthesis - and a test file may make no such call
+// at all. Each case is written on the real configuration, whose own allowed call stays in container.tf, so a
+// refused spelling is the one breakage: the allowance is no general permission to read a file, and a rule that
+// widened it to another name, path or file kind fails here.
+var caddyfileReadCases = []infraRuleCase{
+	{
+		name:   "caddyfile-read-in-a-test-file",
+		why:    `a run block in site/tests/iam.tftest.hcl whose variables block sets organization_id = file("${path.module}/Caddyfile"), the allowed call in a test file`,
+		want:   "file-function",
+		wantIn: map[string]string{"file-function": "{site}/tests/iam.tftest.hcl"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			appendInfraText(t, filepath.Join(site, "tests", "iam.tftest.hcl"), `
+run "a_run_reading_the_caddyfile" {
+  command = plan
+
+  variables {
+    organization_id = file("${path.module}/Caddyfile")
+  }
+}
+`)
+		},
+	},
+	{
+		name:   "caddyfile-read-of-another-file",
+		why:    `a locals value calling file("${path.module}/Caddyfile2"), a file beside the Caddyfile`,
+		want:   "file-function",
+		wantIn: map[string]string{"file-function": "{site}/main.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			appendInfraText(t, filepath.Join(site, "main.tf"), `
+locals {
+  caddyfile = file("${path.module}/Caddyfile2")
+}
+`)
+		},
+	},
+	{
+		name:   "caddyfile-read-through-a-parent-directory",
+		why:    `a locals value calling file("${path.module}/../Caddyfile"), a .. segment out of the configuration's own directory`,
+		want:   "file-function",
+		wantIn: map[string]string{"file-function": "{site}/main.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			appendInfraText(t, filepath.Join(site, "main.tf"), `
+locals {
+  caddyfile = file("${path.module}/../Caddyfile")
+}
+`)
+		},
+	},
+	{
+		name:   "caddyfile-read-of-a-bare-name",
+		why:    `a locals value calling file("Caddyfile"), which resolves against whichever directory tofu runs in`,
+		want:   "file-function",
+		wantIn: map[string]string{"file-function": "{site}/main.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			appendInfraText(t, filepath.Join(site, "main.tf"), `
+locals {
+  caddyfile = file("Caddyfile")
+}
+`)
+		},
+	},
+	{
+		name:   "caddyfile-read-through-templatefile",
+		why:    `a locals value calling templatefile("${path.module}/Caddyfile", {}), which renders the same file under another name`,
+		want:   "file-function",
+		wantIn: map[string]string{"file-function": "{site}/main.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			appendInfraText(t, filepath.Join(site, "main.tf"), `
+locals {
+  caddyfile = templatefile("${path.module}/Caddyfile", {})
+}
+`)
+		},
+	},
+	{
+		name:   "caddyfile-read-with-a-space-before-the-closing-parenthesis",
+		why:    `a locals value calling file("${path.module}/Caddyfile" ), the allowed path with a space the allowed call does not hold`,
+		want:   "file-function",
+		wantIn: map[string]string{"file-function": "{site}/main.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			appendInfraText(t, filepath.Join(site, "main.tf"), `
+locals {
+  caddyfile = file("${path.module}/Caddyfile" )
+}
+`)
+		},
+	},
+	// The one call the rule allows passes wherever a configuration file writes it, not only in container.tf:
+	// the allowance names the call, not the file. The copy's container.tf hands Caddy a plain string instead,
+	// so the copy makes the read exactly once, from main.tf.
+	{
+		name: "caddyfile-read-moved-to-main-tf",
+		why:  `the allowed file("${path.module}/Caddyfile") call in site/main.tf, with container.tf's argument a plain string instead`,
+		want: "",
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			editInfraFile(t, filepath.Join(site, "container.tf"),
+				`    file("${path.module}/Caddyfile"),`,
+				`    "the Caddyfile main.tf reads",`)
+			appendInfraText(t, filepath.Join(site, "main.tf"), `
+locals {
+  caddyfile = file("${path.module}/Caddyfile")
+}
+`)
+		},
+	},
 }
 
 // rootFileModuleSourceCase is one route-2 case: a configuration file directly under the root, whose module
