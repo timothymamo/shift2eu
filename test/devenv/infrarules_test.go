@@ -10,6 +10,7 @@
 // region, a lock file holding only the line shapes tofu init writes, the site's TLS stage recreating itself before
 // it destroys (so a replacement repoints the DNS stage first, issue #541), the site container's cost pins (one
 // instance, 140 mvCPU and 0.25 GB of memory at most, and no pin set twice or only in a nested block, ADR 0045),
+// the one front container in its one namespace (no count, no for_each, no second container, ADR 0045),
 // the one file() call the Caddyfile is read with and no other (ADR 0045), and so on (the script lists them). With
 // every rule holding it prints nothing and exits 0; a usage error exits 2.
 //
@@ -77,6 +78,7 @@ var infraRuleCases = slices.Concat(
 	tlsStageLifecycleCases,
 	resourceTypeAllowListCases,
 	containerCostPinCases,
+	containerRepeatCases,
 	infraTestNestedBlockCases,
 	infraTestLabelCases,
 	infraLabelPathCases,
@@ -1880,6 +1882,91 @@ resource "scaleway_container" "second" {
 			insertContainerLines(t, site, "  scaling_option {", "    max_scale = 1", "  }")
 		},
 	},
+}
+
+// containerRepeatCases pin [container-repeat] (PRD #297 milestone 4, ADR 0045): the site runs one front
+// container in one namespace, so infra/site holds exactly one scaleway_container and exactly one
+// scaleway_container_namespace, and neither of them is repeated by count or by for_each. The cost pins
+// bound one container's own instances (max_scale = 1, about EUR 2.12 a month in the worst case); a count
+// that makes two containers, or a second container beside it, multiplies that ceiling into a cost nobody
+// decided, and the two names the front serves are the one namespace's. dev/infra-rules.awk refuses count
+// or for_each on either resource, and a second scaleway_container under the root.
+var containerRepeatCases = []infraRuleCase{
+	{
+		name:   "container-repeated-by-count",
+		why:    "count = 2 on the site's container, two containers at the pinned ceiling each",
+		want:   "container-repeat",
+		wantIn: map[string]string{"container-repeat": "{site}/container.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			insertContainerLines(t, site, "  count = 2")
+		},
+	},
+	{
+		name:   "container-repeated-by-for-each",
+		why:    `for_each = toset(["second"]) on the site's container, one container per element`,
+		want:   "container-repeat",
+		wantIn: map[string]string{"container-repeat": "{site}/container.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			insertContainerLines(t, site, `  for_each = toset(["second"])`)
+		},
+	},
+	{
+		name:   "container-namespace-repeated-by-count",
+		why:    "count = 2 on the site's container namespace, two namespaces for the one front",
+		want:   "container-repeat",
+		wantIn: map[string]string{"container-repeat": "{site}/container.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			editInfraFile(t, filepath.Join(site, containerFileName), namespaceHeader, namespaceRepeated("  count       = 2"))
+		},
+	},
+	{
+		name:   "container-namespace-repeated-by-for-each",
+		why:    `for_each = toset(["shift2eu-site"]) on the site's container namespace, one namespace per element`,
+		want:   "container-repeat",
+		wantIn: map[string]string{"container-repeat": "{site}/container.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			editInfraFile(t, filepath.Join(site, containerFileName), namespaceHeader, namespaceRepeated(`  for_each    = toset(["shift2eu-site"])`))
+		},
+	},
+	// A second container in a file of its own, every cost pin set: the pins alone pass it, so the rule that
+	// holds the front to one container is the only one that refuses it.
+	{
+		name: "second-container",
+		why:  "a second scaleway_container in site/second_container.tf, with max_scale, cpu_limit, memory_limit_bytes and min_scale pinned like the first",
+		want: "container-repeat",
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			writeInfraText(t, filepath.Join(site, "second_container.tf"), `
+resource "scaleway_container" "second" {
+  name         = "second"
+  namespace_id = scaleway_container_namespace.site.id
+  region       = var.region
+  image        = local.caddy_image
+  port         = 8080
+  privacy      = "public"
+
+  min_scale          = 0
+  max_scale          = 1
+  cpu_limit          = 140
+  memory_limit_bytes = 268435456
+}
+`)
+		},
+	},
+}
+
+// namespaceHeader is the first two lines of the container namespace resource in the real configuration: the
+// anchor a [container-repeat] case adds a count or a for_each under.
+const namespaceHeader = `resource "scaleway_container_namespace" "site" {
+  name        = "shift2eu-site"`
+
+// namespaceRepeated returns namespaceHeader with line added after it, the repeat the rule must refuse.
+func namespaceRepeated(line string) string {
+	return strings.Replace(namespaceHeader, "\n  name        = ", "\n"+line+"\n  name        = ", 1)
 }
 
 // tlsStageSecondRoot writes a second applied root beside a copy's site/, holding what a root needs - a copy of

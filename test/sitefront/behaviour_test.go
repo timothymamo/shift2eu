@@ -75,9 +75,9 @@ const (
 	homeBody = "the site"
 	// missingPath is the upstream's 404.
 	missingPath = "/missing"
-	// ownHeadersPath answers with a Content-Security-Policy, a
-	// Strict-Transport-Security and a Permissions-Policy of its own, whose
-	// copies must not reach the client.
+	// ownHeadersPath answers with a Content-Security-Policy, a Strict-Transport-Security, a
+	// Permissions-Policy, an X-Content-Type-Options and a Referrer-Policy of its own, whose copies must not
+	// reach the client.
 	ownHeadersPath = "/own-headers"
 	// gzipPath answers a gzip object with the cache headers the deploy sets.
 	gzipPath = "/page.wasm"
@@ -91,12 +91,27 @@ const (
 	gzipAge = "42"
 )
 
+// The markers one request carries, whose value would make the container's log a record of the visitor who
+// sent them: the path it asked for, its user agent and its address, in the two headers the platform and a
+// client forward. testLogHoldsNoMarker reads the container's whole log for each of them (docs/adr/0045,
+// *The log*).
+const (
+	markerPath         = "/marker-path-1234"
+	markerUserAgent    = "shift2eu-marker-ua"
+	markerForwardedFor = "198.51.100.7"
+	markerRealIP       = "198.51.100.8"
+)
+
+// logMarkers are the values above as strings.Contains finds them in the container's log.
+var logMarkers = []string{markerPath, markerUserAgent, markerForwardedFor, markerRealIP}
+
 // TestSiteFront drives the front's every case, in the order they share one
 // container and one upstream (docs/adr/0045): the four rows of the table, the
 // joined X-Forwarded-Proto, the Location of every redirect, the headers against
 // an upstream that sends its own, a 404, a gzip object, the request headers the
-// upstream never sees, OPTIONS * and, last, the 502 of no upstream at all.
-// Nothing here is parallel: the cases share the container the first line starts.
+// upstream never sees, the markers no log may hold, OPTIONS * and, last, the 502
+// of no upstream at all, after which the container's whole log is read. Nothing
+// here is parallel: the cases share the container the first line starts.
 func TestSiteFront(t *testing.T) {
 	front := startFront(t)
 
@@ -107,8 +122,10 @@ func TestSiteFront(t *testing.T) {
 	t.Run("a 404 from the upstream", func(t *testing.T) { testUpstreamNotFound(t, front) })
 	t.Run("a gzip object passes byte for byte", func(t *testing.T) { testGzip(t, front) })
 	t.Run("the request headers the upstream never sees", func(t *testing.T) { testRequestHeaders(t, front) })
+	t.Run("the markers a visitor's request carries", func(t *testing.T) { testLogMarkers(t, front) })
 	t.Run("OPTIONS *", func(t *testing.T) { testOptionsAsterisk(t, front) })
 	t.Run("no upstream", func(t *testing.T) { testNoUpstream(t, front) })
+	t.Run("the log holds no marker", func(t *testing.T) { testLogHoldsNoMarker(t, front) })
 }
 
 // testTableRows drives docs/adr/0045's four rows: a request whose joined
@@ -458,6 +475,8 @@ func testRequestHeaders(t *testing.T, front *harness) {
 		"X-Real-IP: 203.0.113.7",
 		"Forwarded: for=203.0.113.7",
 		"X-Forwarded-Host: www.shift2eu.com",
+		"X-Forwarded-Port: 443",
+		"Via: 1.1 client.example",
 		"X-Envoy-Upstream-Service-Time: 12",
 		"X-Envoy-External-Address: 203.0.113.7",
 		"X-Request-Id: 1234-5678",
@@ -495,43 +514,123 @@ func testRequestHeaders(t *testing.T, front *harness) {
 	}
 }
 
-// testOptionsAsterisk records what OPTIONS * is answered with (docs/adr/0045):
-// Go's empty 200, or the site's 308 to https://www.shift2eu.com/. Both are
-// accepted; which one this image answers is logged for the ADR.
+// testLogMarkers sends the two requests whose answers are ordinary - one the site
+// proxies, one the front redirects - and each of which carries the markers a log
+// line would expose: the path the visitor asked for, its user agent and its
+// address (docs/adr/0045, *The log*). The container's log is read once, after
+// the cases that make Caddy fail (testLogHoldsNoMarker): a log line of a failed
+// request is what Caddy's default logger writes.
+func testLogMarkers(t *testing.T, front *harness) {
+	t.Helper()
+
+	tests := []struct {
+		name   string
+		raw    string
+		status int
+	}{
+		{
+			name:   "a request the site answers",
+			raw:    markerRequest("GET "+markerPath+" HTTP/1.1", "X-Forwarded-Proto: https"),
+			status: http.StatusOK,
+		},
+		{
+			name:   "a request the front redirects",
+			raw:    markerRequest("GET " + markerPath + " HTTP/1.1"),
+			status: http.StatusPermanentRedirect,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if resp := front.do(t, tc.raw); resp.status != tc.status {
+				t.Fatalf("%q answers %d, want %d", firstLine(tc.raw), resp.status, tc.status)
+			}
+		})
+	}
+}
+
+// testLogHoldsNoMarker holds that no line of the container's log names the visitor
+// (docs/adr/0045, *The log*): the front's output on stdout and stderr is what the
+// platform ships to Cockpit, so a line that holds the visitor's address, its user
+// agent or the path it asked for is a third party's record of that visitor. Caddy
+// writes such a line for every request it fails - the reverse proxy's own error,
+// http.handlers.reverse_proxy, and the server's http.log.error - unless the
+// global log silences both, so the two failures are driven here: no upstream at
+// all (the front's own 502), and an upstream whose certificate the container does
+// not trust. It runs last: it leaves an untrusted TLS server on the address Edge
+// Services had.
+func testLogHoldsNoMarker(t *testing.T, front *harness) {
+	t.Helper()
+
+	// The front's own 502: testNoUpstream stopped the upstream for good.
+	if resp := front.do(t, markerRequest("GET "+markerPath+" HTTP/1.1", "X-Forwarded-Proto: https")); resp.status != http.StatusBadGateway {
+		t.Fatalf("with no upstream the front answers %d, want its own 502", resp.status)
+	}
+
+	// The proxy's TLS failure: something answers on the upstream's address, and its certificate is one a
+	// CA of its own signs, which the container does not trust.
+	startUntrustedUpstream(t, front.upstream.addr)
+
+	if resp := front.do(t, markerRequest("GET "+markerPath+" HTTP/1.1", "X-Forwarded-Proto: https")); resp.status != http.StatusBadGateway {
+		t.Fatalf("with an upstream the container does not trust the front answers %d, want its own 502", resp.status)
+	}
+
+	log, err := front.wholeLog()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, marker := range logMarkers {
+		if strings.Contains(log, marker) {
+			t.Errorf("the container's log holds %q: the platform ships the container's output to Cockpit, so a line that names the visitor's address, its user agent or the path it asked for is a third party's record of that visitor, which the front keeps none of (docs/adr/0045, *The log*). The whole log:\n%s", marker, log)
+		}
+	}
+}
+
+// markerRequest builds a www request that carries the markers: the field lines every request has, plus the
+// visitor's user agent and the two headers its address is forwarded in.
+func markerRequest(requestLine string, fieldLines ...string) string {
+	head := []string{
+		"Host: www.shift2eu.com",
+		"User-Agent: " + markerUserAgent,
+		"X-Forwarded-For: " + markerForwardedFor,
+		"X-Real-IP: " + markerRealIP,
+	}
+
+	return request(requestLine, append(head, fieldLines...)...)
+}
+
+// testOptionsAsterisk pins what OPTIONS * is answered with (docs/adr/0045): Go's
+// general options handler answers it before Caddy's routes see the request, as
+// an empty 200 with no body and none of the site's headers. It is the ADR's
+// accepted exception and the only answer the front may give it: a redirect or a
+// proxied answer would mean the request reached the Caddyfile's routes.
 func testOptionsAsterisk(t *testing.T, front *harness) {
 	t.Helper()
 
 	resp := front.do(t, request("OPTIONS * HTTP/1.1", "Host: www.shift2eu.com"))
 
-	switch resp.status {
-	case http.StatusOK:
-		t.Logf("OPTIONS * is answered by Go's general options handler: 200, Content-Length: 0, no body, none of the site's headers (docs/adr/0045's accepted exception)")
+	if resp.status != http.StatusOK {
+		t.Fatalf("OPTIONS * answers %d, want Go's general options handler's empty 200, which no route of the Caddyfile reaches (docs/adr/0045)", resp.status)
+	}
 
-		if got := resp.header.Get("Content-Length"); got != "0" {
-			t.Errorf("OPTIONS * answers 200 with Content-Length %q, want 0", got)
+	if got := resp.header.Get("Content-Length"); got != "0" {
+		t.Errorf("OPTIONS * answers 200 with Content-Length %q, want 0", got)
+	}
+	if len(resp.body) != 0 {
+		t.Errorf("OPTIONS * answers 200 with %d bytes of body, want none: the general options handler sends no content (docs/adr/0045)", len(resp.body))
+	}
+	for _, name := range []string{"Content-Security-Policy", "Strict-Transport-Security", "Permissions-Policy", "X-Content-Type-Options", "Referrer-Policy"} {
+		if got := resp.header.Values(name); len(got) > 0 {
+			t.Errorf("OPTIONS * answers 200 with %s %q, want none: the accepted exception carries no header of the site (docs/adr/0045)", name, got)
 		}
-		if len(resp.body) != 0 {
-			t.Errorf("OPTIONS * answers 200 with %d bytes of body, want none: the general options handler sends no content (docs/adr/0045)", len(resp.body))
-		}
-		for _, name := range []string{"Content-Security-Policy", "Strict-Transport-Security", "Permissions-Policy", "X-Content-Type-Options", "Referrer-Policy"} {
-			if got := resp.header.Values(name); len(got) > 0 {
-				t.Errorf("OPTIONS * answers 200 with %s %q, want none: the accepted exception carries no header of the site (docs/adr/0045)", name, got)
-			}
-		}
-	case http.StatusPermanentRedirect:
-		t.Logf("OPTIONS * is answered by Caddy's redirect: 308 to https://www.shift2eu.com/ (docs/adr/0045)")
-
-		if got := resp.header.Get("Location"); got != "https://www.shift2eu.com/" {
-			t.Errorf("OPTIONS * redirects to %q, want https://www.shift2eu.com/", got)
-		}
-	default:
-		t.Errorf("OPTIONS * answers %d, want Go's 200 or the site's 308 (docs/adr/0045)", resp.status)
 	}
 }
 
 // testNoUpstream holds the front's own 502 (docs/adr/0045): when Edge Services
 // answers nothing, the client still gets every header, which a deferred header
-// would leave off. It runs last: it stops the upstream for good.
+// would leave off. It stops the upstream for good; testLogHoldsNoMarker, which
+// runs after it, uses the address it had.
 func testNoUpstream(t *testing.T, front *harness) {
 	t.Helper()
 
@@ -549,7 +648,9 @@ func testNoUpstream(t *testing.T, front *harness) {
 // assertSiteHeaders holds a response of the site to the five headers of
 // docs/adr/0045, each exactly once: HSTS as site/records/hsts.json implies it,
 // the pages' Content-Security-Policy plus frame-ancestors 'none', nosniff, no
-// referrer, and a Permissions-Policy that turns every feature off.
+// referrer, and a Permissions-Policy that turns every feature off. Every one of
+// them is compared against a one-element list, so a second copy - Caddy's and the
+// upstream's - fails here.
 func assertSiteHeaders(t *testing.T, resp *response) {
 	t.Helper()
 
@@ -731,6 +832,20 @@ func (h *harness) logs() string {
 	return string(out)
 }
 
+// wholeLog returns the container's whole log, stdout and stderr together, as the platform ships it: what the
+// front wrote about a request is what a visitor's data would be kept in (docs/adr/0045, *The log*).
+func (h *harness) wholeLog() (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	out, err := exec.CommandContext(ctx, h.runtime, "logs", h.name).CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("%s logs %s: %w", h.runtime, h.name, err)
+	}
+
+	return string(out), nil
+}
+
 // removeContainer removes the container, waiting no longer than rmDeadline, as
 // make test-browser does (docs/adr/0036, issue #449). A removal that times out
 // says which command removes it by hand: the test never signals a process it did
@@ -845,6 +960,12 @@ func startUpstream(leaf tls.Certificate) (*upstream, error) {
 		return nil, err
 	}
 
+	return serveUpstream(listener, leaf)
+}
+
+// serveUpstream answers on listener with the leaf certificate, recording every request it receives: the
+// upstream the front proxies to.
+func serveUpstream(listener net.Listener, leaf tls.Certificate) (*upstream, error) {
 	u := &upstream{addr: listener.Addr().String()}
 
 	srv := httptest.NewUnstartedServer(http.HandlerFunc(u.handle))
@@ -856,6 +977,49 @@ func startUpstream(leaf tls.Certificate) (*upstream, error) {
 	u.server = srv
 
 	return u, nil
+}
+
+// startUntrustedUpstream answers on addr with a certificate a CA of its own signs, which the container does
+// not trust: the front reaches it and refuses it in the TLS handshake, so its proxy answers its own 502 and
+// Caddy logs the failure. The handshake itself is the answer here, so every connection is closed once it
+// returns; the listener belongs to the test, which closes it when the test ends.
+func startUntrustedUpstream(t *testing.T, addr string) {
+	t.Helper()
+
+	_, leaf, err := testCertificates()
+	if err != nil {
+		t.Fatalf("create the untrusted CA: %v", err)
+	}
+
+	listener, err := tls.Listen("tcp", addr, &tls.Config{Certificates: []tls.Certificate{leaf}, MinVersion: tls.VersionTLS12})
+	if err != nil {
+		t.Fatalf("listen on %s, the address Edge Services had: %v", addr, err)
+	}
+
+	t.Cleanup(func() {
+		if err := listener.Close(); err != nil {
+			t.Logf("close the untrusted upstream on %s: %v", addr, err)
+		}
+	})
+
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return // the listener is closed: the test is over
+			}
+
+			go func(conn net.Conn) {
+				defer conn.Close()
+
+				// The client refuses the certificate during the handshake, which is the case here: its error is
+				// the front's 502, and the connection ends with it.
+				if tlsConn, ok := conn.(*tls.Conn); ok {
+					_ = tlsConn.Handshake()
+				}
+			}(conn)
+		}
+	}()
 }
 
 // stop stops the upstream: from here on the front reaches nothing, which is the
@@ -905,10 +1069,11 @@ func (u *upstream) handle(w http.ResponseWriter, r *http.Request) {
 
 	switch r.URL.Path {
 	case ownHeadersPath:
-		// Copies of the three headers Caddy also sets, with other values: the
-		// client must see Caddy's alone.
+		// Copies of the five headers Caddy also sets, with other values: the client must see Caddy's alone.
 		w.Header().Set("Content-Security-Policy", "default-src 'none'; frame-ancestors https://upstream.example")
 		w.Header().Set("Strict-Transport-Security", "max-age=1")
+		w.Header().Set("X-Content-Type-Options", "nosniff-from-the-upstream")
+		w.Header().Set("Referrer-Policy", "unsafe-url")
 		w.Header().Set("Permissions-Policy", "camera=*")
 		fmt.Fprint(w, "upstream's own headers")
 	case missingPath:

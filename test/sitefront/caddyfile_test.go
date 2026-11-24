@@ -108,10 +108,12 @@ func TestCaddyfileReverseProxy(t *testing.T) {
 }
 
 // TestCaddyfileRefusedDirectives pins the directives the design refuses
-// (docs/adr/0045, docs/adr/0043): no access log (the platform's is Scaleway's),
-// no encode and no cache, so a module uploaded with Content-Encoding: gzip is
-// served with its bytes, and no tls, since the platform terminates TLS and
-// auto_https is off.
+// (docs/adr/0045, docs/adr/0043): no access log in a site block (the visitor's
+// address, request line and headers are nobody's to keep, and the platform ships
+// the container's output to Cockpit), no encode and no cache, so a module
+// uploaded with Content-Encoding: gzip is served with its bytes, and no tls,
+// since the platform terminates TLS and auto_https is off. The one global log it
+// requires is TestCheckGlobalLogForms's.
 func TestCaddyfileRefusedDirectives(t *testing.T) {
 	t.Parallel()
 
@@ -126,6 +128,9 @@ func TestCaddyfileRefusedDirectives(t *testing.T) {
 const designedCaddyfile = `{
 	auto_https off
 	admin off
+	log {
+		exclude http.log.error http.handlers.reverse_proxy
+	}
 }
 
 :8080 {
@@ -146,14 +151,18 @@ const designedCaddyfile = `{
 			header_up -X-Forwarded-For
 			header_up -X-Forwarded-Proto
 			header_up -X-Forwarded-Host
+			header_up -X-Forwarded-Port
 			header_up -Forwarded
 			header_up -X-Real-IP
+			header_up -Via
 			header_up -X-Request-Id
 			header_up -Cookie
 			header_up -Authorization
 			header_up -X-Envoy-*
 			header_down -Content-Security-Policy
 			header_down -Strict-Transport-Security
+			header_down -X-Content-Type-Options
+			header_down -Referrer-Policy
 			header_down -Permissions-Policy
 		}
 	}
@@ -284,6 +293,30 @@ func TestChecksRefuseBrokenConfigurations(t *testing.T) {
 			want:  "Strict-Transport-Security",
 		},
 		{
+			name:  "the port the platform forwarded not removed",
+			src:   strings.Replace(designedCaddyfile, "\t\t\theader_up -X-Forwarded-Port\n", "", 1),
+			check: checkReverseProxy,
+			want:  "X-Forwarded-Port",
+		},
+		{
+			name:  "the client's Via not removed",
+			src:   strings.Replace(designedCaddyfile, "\t\t\theader_up -Via\n", "", 1),
+			check: checkReverseProxy,
+			want:  "Via",
+		},
+		{
+			name:  "the upstream's own nosniff not removed",
+			src:   strings.Replace(designedCaddyfile, "\t\t\theader_down -X-Content-Type-Options\n", "", 1),
+			check: checkReverseProxy,
+			want:  "X-Content-Type-Options",
+		},
+		{
+			name:  "the upstream's own Referrer-Policy not removed",
+			src:   strings.Replace(designedCaddyfile, "\t\t\theader_down -Referrer-Policy\n", "", 1),
+			check: checkReverseProxy,
+			want:  "Referrer-Policy",
+		},
+		{
 			name:  "no auto_https off",
 			src:   strings.Replace(designedCaddyfile, "\tauto_https off\n", "", 1),
 			check: checkGlobalOptions,
@@ -375,6 +408,114 @@ func TestCheckHeadersRefuses(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestCheckGlobalLogForms pins the two shapes of the front's one global log, and the ones it refuses
+// (docs/adr/0045, *The log*): Caddy's default logger writes http.log.error and
+// http.handlers.reverse_proxy with the request's remote_ip and client_ip, its uri and its headers, which
+// the platform ships to Cockpit, so the global options hold a log that excludes both loggers or one whose
+// output is discarded. Both accepted shapes are pinned, since either is the coder's to choose, and neither
+// may be written any other way; a log in a site block stays refused, as the table above pins.
+func TestCheckGlobalLogForms(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		src  string
+		want string // a problem the check must report; "" when it must report none
+	}{
+		{
+			name: "the exclude form",
+			src:  withGlobalLog("\tlog {\n\t\texclude http.log.error http.handlers.reverse_proxy\n\t}\n"),
+		},
+		{
+			name: "the exclude form, the two loggers in the other order",
+			src:  withGlobalLog("\tlog {\n\t\texclude http.handlers.reverse_proxy http.log.error\n\t}\n"),
+		},
+		{
+			name: "the discard form",
+			src:  withGlobalLog("\tlog {\n\t\toutput discard\n\t}\n"),
+		},
+		{
+			name: "one of the two loggers left writing",
+			src:  withGlobalLog("\tlog {\n\t\texclude http.log.error\n\t}\n"),
+			want: "want either",
+		},
+		{
+			name: "another output",
+			src:  withGlobalLog("\tlog {\n\t\toutput stderr\n\t}\n"),
+			want: "want either",
+		},
+		{
+			name: "a discard beside the exclusion",
+			src:  withGlobalLog("\tlog {\n\t\texclude http.log.error http.handlers.reverse_proxy\n\t\toutput discard\n\t}\n"),
+			want: "output",
+		},
+		{
+			name: "a named log",
+			src:  withGlobalLog("\tlog default {\n\t\toutput discard\n\t}\n"),
+			want: "log default",
+		},
+		{
+			name: "a log with no block",
+			src:  withGlobalLog("\tlog\n"),
+			want: "want either",
+		},
+		{
+			name: "no log at all",
+			src:  withGlobalLog(""),
+			want: "hold no log",
+		},
+		{
+			name: "a log in a site block",
+			src:  strings.Replace(withGlobalLog("\tlog {\n\t\toutput discard\n\t}\n"), "\n:8080 {\n", "\n:8080 {\n\tlog\n", 1),
+			want: "access log",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			problems := checkRefusedDirectives(parseFile(tc.src))
+
+			switch {
+			case tc.want == "" && len(problems) > 0:
+				t.Fatalf("the check refuses %q, which the design accepts: %q", describeLogs(tc.src), problems)
+			case tc.want != "" && len(problems) == 0:
+				t.Fatalf("the check accepts %q, which it must refuse: want a problem naming %q", describeLogs(tc.src), tc.want)
+			case tc.want != "" && !slices.ContainsFunc(problems, func(p string) bool { return strings.Contains(p, tc.want) }):
+				t.Errorf("the check reports %q, want one naming %q", problems, tc.want)
+			}
+		})
+	}
+}
+
+// globalLogConfiguration is a configuration with the front's two global options and nothing else, for the
+// cases that write one global log into it: the only problems they may find are the log's own.
+const globalLogConfiguration = "{\n\tauto_https off\n\tadmin off\n}\n\n:8080 {\n}\n"
+
+// withGlobalLog returns globalLogConfiguration with lines added to its global options block.
+func withGlobalLog(lines string) string {
+	return strings.Replace(globalLogConfiguration, "\tadmin off\n", "\tadmin off\n"+lines, 1)
+}
+
+// describeLogs returns the log directives of src as the source writes them, for a message that says which
+// log the check was given rather than quoting the whole configuration.
+func describeLogs(src string) string {
+	var logs []string
+
+	for _, n := range parseFile(src).all() {
+		if name, _ := n.head(); name == "log" {
+			logs = append(logs, describe(n))
+		}
+	}
+
+	if len(logs) == 0 {
+		return "no log"
+	}
+
+	return strings.Join(logs, " | ")
 }
 
 // The checks. Each returns the problems it finds, worded as the test reports
@@ -616,8 +757,8 @@ func checkReverseProxy(f *caddyfile) []string {
 	deletedUp := deleted(up)
 
 	for _, name := range []string{
-		"X-Forwarded-For", "X-Forwarded-Proto", "X-Forwarded-Host", "Forwarded",
-		"X-Real-IP", "Cookie", "Authorization", "X-Request-Id",
+		"X-Forwarded-For", "X-Forwarded-Proto", "X-Forwarded-Host", "X-Forwarded-Port",
+		"Forwarded", "X-Real-IP", "Via", "Cookie", "Authorization", "X-Request-Id",
 	} {
 		if !deletedUp[strings.ToLower(name)] {
 			problems = append(problems, fmt.Sprintf("the proxy does not remove %s from the upstream request (header_up -%s): it carries the visitor's address, a client's forwarding header or a credential, and Edge Services needs none of them (docs/adr/0045)", name, name))
@@ -629,7 +770,7 @@ func checkReverseProxy(f *caddyfile) []string {
 	}
 
 	deletedDown := deleted(down)
-	for _, name := range []string{"Content-Security-Policy", "Strict-Transport-Security", "Permissions-Policy"} {
+	for _, name := range []string{"Content-Security-Policy", "Strict-Transport-Security", "X-Content-Type-Options", "Referrer-Policy", "Permissions-Policy"} {
 		if !deletedDown[strings.ToLower(name)] {
 			problems = append(problems, fmt.Sprintf("the proxy does not remove %s from the upstream response (header_down -%s): the client would see Caddy's copy and the upstream's, and only Caddy's is the site's (docs/adr/0045)", name, name))
 		}
@@ -638,15 +779,34 @@ func checkReverseProxy(f *caddyfile) []string {
 	return problems
 }
 
-// checkRefusedDirectives refuses the directives the design turns off.
+// refusedLoggers are the two loggers the front's global log must silence when it keeps writing: Caddy's
+// http.log.error writes every failed request with the request's remote_ip and client_ip, its uri and its
+// headers, and http.handlers.reverse_proxy writes the proxy's own failures the same way. The platform
+// ships the container's output to Cockpit, where such a line is a third party's record of a visitor
+// (docs/adr/0045, *The log*).
+var refusedLoggers = []string{"http.log.error", "http.handlers.reverse_proxy"}
+
+// checkRefusedDirectives refuses the directives the design turns off, and holds the global log: no site
+// block may turn an access log on, and the one global log must either exclude the two loggers that write
+// the visitor's data or write nothing at all (docs/adr/0045).
 func checkRefusedDirectives(f *caddyfile) []string {
 	var problems []string
+
+	globals := f.globalBlock()
+	logs := 0
 
 	for _, n := range f.all() {
 		name, _ := n.head()
 		switch name {
 		case "log":
-			problems = append(problems, fmt.Sprintf("line %d: the Caddyfile turns an access log on: the front logs nothing (docs/adr/0045)", n.line))
+			if n.parent != globals {
+				problems = append(problems, fmt.Sprintf("line %d: the Caddyfile turns an access log on: a site block's log writes the visitor's address, the request line it asked for and the headers it sent, for every request, and the platform ships the container's output to Cockpit (docs/adr/0045)", n.line))
+
+				continue
+			}
+
+			logs++
+			problems = append(problems, checkGlobalLog(n)...)
 		case "encode":
 			problems = append(problems, fmt.Sprintf("line %d: the Caddyfile holds an encode directive: the module must keep the Content-Encoding: gzip the deploy uploaded (docs/adr/0043, docs/adr/0045)", n.line))
 		case "cache":
@@ -656,7 +816,65 @@ func checkRefusedDirectives(f *caddyfile) []string {
 		}
 	}
 
+	if logs == 0 {
+		problems = append(problems, fmt.Sprintf("the global options hold no log: Caddy's default logger still writes %s, each with the request's remote_ip and client_ip, its uri and its headers, and the platform ships the container's output to Cockpit, so the global options hold either `log { exclude %s }` or `log { output discard }` (docs/adr/0045)", strings.Join(refusedLoggers, " and "), strings.Join(refusedLoggers, " ")))
+	}
+
 	return problems
+}
+
+// checkGlobalLog holds the one shape the global log may have (docs/adr/0045): its block excludes both
+// loggers that write the visitor's data, or its output is discarded. Either exactly: a named log, another
+// output beside the exclusion, or a setting of its own beside the one that decides what is written leaves
+// Caddy's logger writing what the front must not keep.
+func checkGlobalLog(n *node) []string {
+	want := fmt.Sprintf("either `log { exclude %s }` or `log { output discard }`", strings.Join(refusedLoggers, " "))
+
+	if len(n.tokens) != 1 || len(n.children) != 1 {
+		return []string{fmt.Sprintf("line %d: the global log is %q, want %s (docs/adr/0045)", n.line, describe(n), want)}
+	}
+
+	name, args := n.children[0].head()
+
+	switch {
+	case name == "exclude" && excludesEvery(args, refusedLoggers):
+		return nil
+	case name == "output" && slices.Equal(args, []string{"discard"}):
+		return nil
+	}
+
+	return []string{fmt.Sprintf("line %d: the global log is %q, want %s (docs/adr/0045)", n.line, describe(n), want)}
+}
+
+// excludesEvery reports whether args names every logger in want, as an exclude line of the global log does.
+func excludesEvery(args, want []string) bool {
+	if len(args) != len(want) {
+		return false
+	}
+
+	for _, name := range want {
+		if !slices.Contains(args, name) {
+			return false
+		}
+	}
+
+	return true
+}
+
+// describe returns a directive of the file as the source writes it, its block's lines after it, so a
+// message quotes what the file holds rather than only the part of it the check read.
+func describe(n *node) string {
+	var b strings.Builder
+
+	b.WriteString(strings.Join(n.tokens, " "))
+
+	for _, child := range n.children {
+		b.WriteString(" { ")
+		b.WriteString(strings.Join(child.tokens, " "))
+		b.WriteString(" }")
+	}
+
+	return b.String()
 }
 
 // report fails the test on every problem a check found.
