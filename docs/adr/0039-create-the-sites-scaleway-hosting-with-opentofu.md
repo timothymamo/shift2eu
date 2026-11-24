@@ -200,7 +200,7 @@ the maintainer's, with their own credentials.
 
 ### What stays by hand (PRD #297 *Runbook*)
 
-The steps are in [the site runbook](../site-runbook.md), R0 to R13.
+The steps are in [the site runbook](../site-runbook.md), R0 to R14.
 
 | Item | Why |
 |---|---|
@@ -217,6 +217,9 @@ response headers and the `http://www` redirect from its configuration
 ([ADR 0045](0045-front-the-site-with-a-serverless-container-running-a-pinned-caddy.md)), so the row
 "Response headers, `http://www` redirect" and open point 2 below no longer hold; the infra unit that
 writes the container in `infra/site` amends this ADR.
+
+*Note (2026-11-24):* the retention of the project's *Scaleway logs* data sources stays by hand too, in
+the runbook's new R14; see *Amendment: log retention* below.
 
 ### The state
 
@@ -344,3 +347,47 @@ CNAME first, then `tofu destroy`, which keeps the bucket while it holds objects 
    [supported checksums](https://www.scaleway.com/en/docs/object-storage/reference-content/supported-checksums/)
    include the CRC64NVME the new default uses, so they may be unneeded. Kept, as they change no
    permission and rule out a checksum mismatch hiding as a probe's INCONCLUSIVE answer.
+
+## Amendment: log retention (PRD #297 milestone 4)
+
+2026-11-24. Scaleway's own products log into Cockpit, in one *Scaleway logs* data source per region of
+the project, the region of the product that wrote the log, which no setting changes
+([Cockpit FAQ](https://www.scaleway.com/en/docs/cockpit/faq/), scaleway/docs-content read 2026-11-24).
+Edge Services' logs name each request's client IP address, path and country
+([monitor Edge Services](https://www.scaleway.com/en/docs/edge-services/how-to/monitor-cockpit/)); the
+container's and the bucket's land there too. The default retention is 7 days, the minimum 1 day; the
+*Scaleway metrics* sources, which hold the aggregate request counts the privacy page names, keep 31 days,
+their minimum ([concepts](https://www.scaleway.com/en/docs/cockpit/concepts/), *Retention*).
+
+**Decision: the logs' retention is set to 1 day by hand, in the runbook's R14** (console, or
+`scw cockpit data-source update`), which also checks every Scaleway logs source at 1 day and every
+Scaleway metrics source at 31 days. `infra/site` does not manage the sources, and holds no `check` block
+for them.
+
+**Why not OpenTofu.** The pinned provider (v2.93.0) can change a source's `retention_days` only through
+`scaleway_cockpit_source`, whose create always makes a *custom* source: the managed one would have to be
+adopted with an `import` block. OpenTofu v1.13.9 allows that (`for_each` on `import`, an `id` from a
+lookup with `data "scaleway_cockpit_sources"` filtered by origin, type, project and region), but no form
+of it keeps every plan from writing to Scaleway's source in a way the maintainer did not mean:
+
+- **The sources appear late.** Scaleway creates a region's source only once a product there has logged,
+  so on the apply that creates the project and the container there is nothing to import. The resource
+  must then follow the lookup (`for_each` over what it finds), and a lookup that finds nothing, or a
+  source Scaleway renamed (`name` and `type` are ForceNew), turns into a planned destroy.
+  `prevent_destroy` makes that plan fail rather than delete, but then every later change to
+  `infra/site` is blocked until the state is fixed by hand, and a `tofu destroy` (R13) fails the same way.
+- **A replaced source is re-created as a custom one.** The provider's read drops a source that answers
+  404 from the state, so if Scaleway replaces its managed source (a new ID), the next plan proposes a
+  create, which makes a billable custom source of the same name in the project; `prevent_destroy` does
+  not stop a create, and nothing can make the resource refuse one.
+- **The rules would open for one number.** `dev/infra-rules.sh` refuses every `import` block (every
+  resource is created fresh, never adopted) and every `scaleway_*` data source; allowing them, or a
+  `check` block with a nested data source the rules do not read today, to set a value that is changed
+  once and only lowers what is kept, weakens rules that hold the rest of the configuration.
+- **Nothing offline could prove it.** Whether Scaleway's API accepts the provider's update of a
+  `scaleway`-origin source (the console's own edit does), and what a lookup finds, only a plan against
+  the real project shows; the mock provider of `tofu test` shows neither.
+
+A hand step changes nothing on its own and is checked by a read-only line. It is redone after a change
+that puts a product of the site in a new region (R14 says so). If a later provider version can set a
+managed source's retention without adopting it, this is revisited.

@@ -684,7 +684,7 @@ release), *live* (checked against the live site) or *review*.
   Services cache purge by the maintainer (Hosting decision 5); and how to re-enable the scheduled live
   check's workflow if GitHub has disabled its schedule (*Layer 3*).
 
-  The runbook is in [docs/site-runbook.md](../docs/site-runbook.md): steps R0 to R13, each a command
+  The runbook is in [docs/site-runbook.md](../docs/site-runbook.md): steps R0 to R14, each a command
   block with its `PASS` and `FAIL` lines.
   - [x] Milestone 3: written ([docs/site-runbook.md](../docs/site-runbook.md)).
   - [ ] Milestone 4: followed.

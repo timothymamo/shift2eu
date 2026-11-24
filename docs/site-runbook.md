@@ -343,6 +343,7 @@ gh api repos/<owner>/shift2eu/actions/variables/SITE_DEPLOY_ENABLED --jq .value 
 gh run view <that release's release.yml run ID> -R <owner>/shift2eu --json jobs --jq '.jobs[] | select(.name == "Site programs" or .name == "Deploy the site" or .name == "Check the live site" or .name == "Site deploy skipped") | .name + " " + .conclusion'
 # PASS: "Site programs success", "Deploy the site success", "Check the live site success", "Site deploy skipped skipped"
 # FAIL "Deploy the site failure" or "Check the live site failure": gh run view <run ID> -R <owner>/shift2eu --log-failed, then R12
+# Then R14: the site now serves visitors, so every product has logged and each region's Scaleway logs source exists
 ```
 
 ## R11. Rotate the deploy key
@@ -579,4 +580,25 @@ gh variable delete SITE_BUCKET --env site -R <owner>/shift2eu && gh variable del
 gh secret list --env site -R <owner>/shift2eu; gh variable list --env site -R <owner>/shift2eu   # PASS: no output
 dev/tofu.sh -chdir=infra/site destroy        # PASS: "Destroy complete"
 # FAIL "BucketNotEmpty": delete the remaining versions first
+```
+
+## R14. Log retention
+
+After R10, and again after any change that puts one of the site's products in another region. Scaleway
+keeps its products' logs (Edge Services' name each visitor's IP address and path) in one *Scaleway logs*
+data source per region of the project, 7 days by default, created only once a product there has logged;
+OpenTofu does not manage them (ADR 0039, *Amendment: log retention*). This sets each to 1 day, the
+minimum, and checks the *Scaleway metrics* sources, the aggregate request counts the privacy page names,
+at 31 days.
+
+```bash
+# Every region at once: the logs land in the region of the product that wrote them
+scw cockpit data-source list project-id="$P" origin=scaleway region=all -o json | jq -r '.[] | [.region, .type, .retention_days, .id, .name] | @tsv'
+# PASS: a "logs" line for $REGION (the bucket and the container) and one for Edge Services' region (fr-par, if it is not $REGION), and "metrics" lines
+# FAIL no "logs" line, or none for one of those regions: that product has not logged yet; after the site has served a request through it, R14 again
+# For each "logs" line whose retention_days is not 1. Console: Cockpit, project shift2eu-site, Data sources, Scaleway logs of that region, edit retention, 1 day, confirm. Or:
+scw cockpit data-source update <id> retention-days=1 region=<region>   # PASS: prints the source with retention_days 1
+# The check, every source at once
+scw cockpit data-source list project-id="$P" origin=scaleway region=all -o json | jq -e 'type == "array" and ([.[] | select(.type == "logs")] | length > 0 and all(.retention_days == 1)) and ([.[] | select(.type == "metrics")] | all(.retention_days == 31))' >/dev/null && echo "PASS logs 1 day, metrics 31 days" || echo "FAIL a logs source above 1 day, a metrics source not at 31 days, no logs source, or an error"
+# FAIL a logs source: the update above for it; a metrics source: set it back to 31 (its minimum), or change the privacy page's "kept 31 days" first; an error: run the list line alone and read it
 ```
