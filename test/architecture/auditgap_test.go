@@ -48,22 +48,50 @@ var scheduleWord = regexp.MustCompile(`(^|[^A-Za-z0-9_-])schedule([^A-Za-z0-9_-]
 // hasScheduleTrigger reports whether a workflow holds a schedule trigger under
 // its top-level on: key, in the block or the flow style GitHub accepts; the
 // key and the trigger may be bare, double-quoted or single-quoted, and the
-// trigger may carry a trailing comment. It reads no YAML: the check needs one
-// key of the document and the module has no YAML package. A line inside a
-// comment or a run: block is never a trigger, since only a nested line of a
-// top-level on: mapping is read.
+// trigger may carry a trailing comment. A flow mapping or sequence may span
+// several lines, and its schedule is read from every line up to the bracket
+// that closes it. It reads no YAML: the check needs one key of the document and
+// the module has no YAML package. A line inside a comment or a run: block is
+// never a trigger, since only a nested line of a top-level on: mapping is read.
+//
+// It fails closed: a top-level on: value that opens a `{` or a `[` never closed
+// before the end of the file or the next top-level key is malformed YAML whose
+// triggers nothing can read, and it reports a schedule for it, so that no
+// unbalanced bracket makes the gap check pass.
 func hasScheduleTrigger(workflow []byte) bool {
 	onBlock := false
+
+	// flow is the open flow value of the top-level on: key, nil when none is
+	// open: its text so far and its bracket depth.
+	var flow *flowValue
 
 	for _, line := range strings.Split(string(workflow), "\n") {
 		line = strings.TrimRight(line, " \t\r")
 
 		trimmed := strings.TrimSpace(line)
-		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+		if trimmed == "" || (strings.HasPrefix(trimmed, "#") && (flow == nil || !flow.inQuote())) {
 			continue
 		}
 
 		indented := len(line) - len(strings.TrimLeft(line, " "))
+
+		if flow != nil {
+			// A top-level line that closes no bracket is the next key: the
+			// flow value ended unclosed.
+			if indented == 0 && !strings.HasPrefix(trimmed, "}") && !strings.HasPrefix(trimmed, "]") && !flow.inQuote() {
+				return true
+			}
+
+			if flow.add(line) {
+				if scheduleWord.MatchString(flow.text.String()) {
+					return true
+				}
+
+				flow = nil
+			}
+
+			continue
+		}
 
 		if onBlock && indented > 0 {
 			if isScheduleKey(trimmed) {
@@ -91,12 +119,82 @@ func hasScheduleTrigger(workflow []byte) bool {
 			continue
 		}
 
+		if strings.HasPrefix(value, "{") || strings.HasPrefix(value, "[") {
+			flow = &flowValue{}
+			if !flow.add(value) {
+				continue
+			}
+
+			flow = nil
+		}
+
 		if scheduleWord.MatchString(value) {
 			return true
 		}
 	}
 
-	return false
+	// The file ended inside the on: key's flow value: fail closed.
+	return flow != nil
+}
+
+// flowValue is a top-level on: key's flow mapping or sequence read line by
+// line: the text read so far, its comments removed, and the depth of the
+// brackets it holds open. A bracket inside a quoted string counts for nothing.
+type flowValue struct {
+	text  strings.Builder
+	depth int
+	// quote is the quote character of the string the text ends inside, 0 when
+	// it ends outside one.
+	quote byte
+}
+
+// inQuote reports whether the text read so far ends inside a quoted string.
+func (f *flowValue) inQuote() bool { return f.quote != 0 }
+
+// add reads one more line of the value and reports whether the value is
+// closed: every bracket it opened is closed, outside a quoted string. A # that
+// starts the line or follows a space outside a quoted string starts a comment,
+// which ends the line.
+func (f *flowValue) add(line string) bool {
+	for i := 0; i < len(line); i++ {
+		c := line[i]
+
+		switch {
+		case f.quote == '"' && c == '\\':
+			f.text.WriteByte(c)
+
+			i++
+			if i < len(line) {
+				f.text.WriteByte(line[i])
+			}
+
+			continue
+		case f.quote != 0:
+			if c == f.quote {
+				f.quote = 0
+			}
+		case c == '"' || c == '\'':
+			f.quote = c
+		case c == '#' && (i == 0 || line[i-1] == ' ' || line[i-1] == '\t'):
+			f.text.WriteByte('\n')
+
+			return f.depth == 0
+		case c == '{' || c == '[':
+			f.depth++
+		case c == '}' || c == ']':
+			f.depth--
+		}
+
+		f.text.WriteByte(c)
+
+		if f.depth == 0 && f.quote == 0 {
+			return true
+		}
+	}
+
+	f.text.WriteByte('\n')
+
+	return f.depth == 0 && f.quote == 0
 }
 
 // topLevelOn returns the value after a line's top-level on: key, and whether
