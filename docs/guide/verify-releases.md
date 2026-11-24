@@ -222,8 +222,8 @@ cd "${D:?run the site check first}" && \
   jq -r '.files[] | select(.path == "index.html") | .sha256' site/manifest.json
 ```
 
-The first line must print the digest the second prints. A first digest of `e3b0c442...`, the digest of
-empty input, means `curl` failed (its error is on stderr), not that the site serves another page.
+The `curl` line must print the digest the `jq` line prints. A `curl` digest of `e3b0c442...`, the digest
+of empty input, means `curl` failed (its error is on stderr), not that the site serves another page.
 The release that is the highest release tag on `main` checks the live site after it deploys it, once
 the maintainer has switched the deploy on, and its check does more than this one: it also checks the
 root, the service worker's paths, the redirects, the certificate and HSTS.
