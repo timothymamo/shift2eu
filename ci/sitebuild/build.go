@@ -35,8 +35,9 @@ type options struct {
 }
 
 // pages are the site's HTML pages: each is a template under -site and a file of
-// the bundle of the same name.
-var pages = []string{"index.html", "inventory.html", "privacy.html", "verify.html"}
+// the bundle of the same name. about.html is the maintainer's About page (issue
+// #528).
+var pages = []string{"about.html", "index.html", "inventory.html", "privacy.html", "verify.html"}
 
 // The site's other sources, copied byte for byte under content-addressed names.
 const (

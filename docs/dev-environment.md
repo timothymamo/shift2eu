@@ -2319,6 +2319,555 @@ The trade-offs: a push after the first review goes unreviewed until someone adds
 request the reviewer made on an older head stays until you dismiss it by hand, as no later clean review
 runs to dismiss it.
 
+### The scheduled security audit
+
+PRD #175 ([`prds/175-scheduled-security-audit.md`](../prds/175-scheduled-security-audit.md)),
+[ADR 0040](adr/0040-audit-the-repository-and-the-latest-release-on-a-schedule.md). The workflow
+`scheduled-security-audit.yml` (live from step 7) audits `main` and the latest release with the Claude Code CLI on your
+subscription, and its publish job opens a docs-only report PR, files the private findings as draft
+advisories and the public ones as `security` issues ([the security index](security/README.md) lists the
+reports). The steps below are yours alone: an agent cannot do them. Each is safe to stop at; the workflow
+is rolled back by disabling it. The workflow's summary lines ("see runbook step 11", "see runbook step
+10") point at the steps of this section, by number.
+
+All commands run on the admin machine, logged in to `gh` as yourself with an admin token, unless the block
+says otherwise. Stop at the first `PASS` that does not hold.
+
+| Step | State |
+|---|---|
+| 1 to 4, 6 | done, checked 2026-11-22 (step 3's array check passed) |
+| 5 | done, rulesets checked 2026-11-24 |
+| 7 | the merge of PR 5c, the last pull request of milestone 2 (branch `feat/175-m2-audit-checks-job`) |
+| 8 | after step 7 |
+| 9 to 11 | every run, from milestone 3 on |
+
+The subscription token (step 2): created `<date>`, expires `<date>` (`claude setup-token` shows the term).
+Fill both in when you make or renew it.
+
+**1. Create the audit App** `shift2eu-audit`. *Done 2026-11-22.* Install it on this repository only, with
+the permissions Decision 1 settled (Contents, Pull requests, Issues and Repository security advisories
+write, nothing else: no Actions, Attestations, Workflows or Administration), no webhook, and no other
+repository. Make its private key on the App's page and keep it for step 2.
+
+```bash
+# GitHub, the installation's settings page: by hand
+# PASS: "Only select repositories" with only this one
+# Mac (admin), as yourself
+gh api /apps/shift2eu-audit --jq '.permissions | tojson'
+# PASS: contents, pull_requests, issues, repository_advisories write, metadata read, and nothing else
+```
+
+**2. Create the `security-audit` environment.** *Done 2026-11-22.* Deployment branches `main` only, no
+required reviewers (a scheduled run cannot wait for one). Make **two key pairs** with the encryption tool
+on your own machine, the model key and the publish key, and a random **fingerprint key** of at least 32
+bytes (for example `openssl rand -hex 32`). Add the variables (the App's client ID, both public halves)
+and the secrets (`AUDIT_APP_PRIVATE_KEY`, `AUDIT_MODEL_PRIVATE_KEY`, `AUDIT_PUBLISH_PRIVATE_KEY`,
+`AUDIT_FINGERPRINT_KEY`, and `CLAUDE_CODE_OAUTH_TOKEN` from `claude setup-token`). Record the token's dates
+above. Delete the two private key files from the machine once stored, and keep no copy of the fingerprint
+key (replacing it only makes the next run file existing private findings as new drafts).
+
+```bash
+# Mac (admin), as yourself
+gh api repos/timothymamo/shift2eu/environments/security-audit/deployment-branch-policies --jq '.branch_policies[] | .type + " " + .name'
+# PASS: only branch main
+gh api repos/timothymamo/shift2eu/environments/security-audit --jq '.deployment_branch_policy | [.custom_branch_policies, .protected_branches] | tojson'
+# PASS: [true,false]; FAIL: anything else ([null,null]: no policy, so any branch may deploy)
+gh api repos/timothymamo/shift2eu/environments/security-audit --jq '.protection_rules | map(.type) | tojson'
+# PASS: no required_reviewers entry
+gh api repos/timothymamo/shift2eu/environments/security-audit/secrets --jq '[.secrets[].name] | sort | tojson'
+# PASS: ["AUDIT_APP_PRIVATE_KEY","AUDIT_FINGERPRINT_KEY","AUDIT_MODEL_PRIVATE_KEY","AUDIT_PUBLISH_PRIVATE_KEY","CLAUDE_CODE_OAUTH_TOKEN"]
+gh api repos/timothymamo/shift2eu/environments/security-audit/variables --jq '[.variables[].name] | sort | tojson'
+# PASS: ["AUDIT_APP_CLIENT_ID","AUDIT_MODEL_PUBLIC_KEY","AUDIT_PUBLISH_PUBLIC_KEY"]
+gh api --paginate repos/timothymamo/shift2eu/actions/secrets --jq '.secrets[].name' | grep -E '^AUDIT_|^CLAUDE_CODE_OAUTH_TOKEN$'
+gh api --paginate repos/timothymamo/shift2eu/actions/variables --jq '.variables[].name' | grep -E '^AUDIT_|^CLAUDE_CODE_OAUTH_TOKEN$'
+# PASS: no output (repository level holds none of the five secrets and three variables)
+# FAIL: a name listed, or an error line from gh (a failed fetch prints its error, never a name)
+ls <the model key's private file> <the publish key's private file>
+# PASS: No such file or directory (both)
+```
+
+**3. Create the `security` label, and confirm advisory creation.** *Done 2026-11-22; the array check
+passed.* Mint an installation token by hand: sign a short-lived JWT with the App's private key file
+(`openssl`) and exchange it with `POST /app/installations/<id>/access_tokens` (a one-off workflow would
+itself have to be merged to `main` to reach the environment). With that token,
+`POST /repos/timothymamo/shift2eu/security-advisories` creates a draft advisory, a `PATCH` with
+`state: draft` updates it, then close it. Then delete the App's private key file from the machine (it
+lives only in the environment secret); the installation token expires within an hour. Milestone 2 is
+blocked until this check passes (Decision 2).
+
+```bash
+# Mac (admin), as yourself
+gh label list --repo timothymamo/shift2eu --search security --json name --jq '.[].name'
+# PASS: security
+gh api 'repos/timothymamo/shift2eu/security-advisories?state=closed' --jq '.[] | [.ghsa_id, .state, .created_at, .updated_at, .summary] | @tsv'
+# PASS: the test draft, closed, its updated_at later than its created_at
+ls <the App's private key file>
+# PASS: No such file or directory
+
+# The listing's array fields, with the test draft present (open or closed, it stays listed): GitHub's
+# REST schema declares these four nullable, and the publish program's listing fails closed (exit 8) on a
+# null or missing one, which would stop every run once any advisory exists
+gh api --paginate 'repos/timothymamo/shift2eu/security-advisories' --jq '.[] | [.credits, .credits_detailed, .collaborating_users, .collaborating_teams] | map(type)'
+# PASS: only "array" entries
+# FAIL "null": stop and file an issue before the schedule runs; whether the decoder changes is your decision
+```
+
+**4. Create the `security-audit/**` branch ruleset**, `Audit report branches`. *Done 2026-11-22.* Only
+the audit App, as its one bypass actor, may create, update or delete those branches; admins get no
+implicit bypass. An admin who must write there (trial PR 2 in step 5, a failed run's branch in step 11)
+first adds the **Repository admin** role (`RepositoryRole`, actor_id 5, mode `always`) as a temporary
+bypass actor, removes it afterwards, and re-runs this step's bypass check. The list endpoint returns no
+bypass actors, so the check reads the ruleset itself:
+
+```bash
+# Mac (admin), as yourself: the id of the Audit report branches ruleset, the <audit branches id>
+gh api repos/timothymamo/shift2eu/rulesets --jq '.[] | [.id, .name, .target, .enforcement] | @tsv'
+# PASS: a row Audit report branches  branch  active; FAIL: no such row, or not active
+
+# Bypass check of this step: the audit App only, mode always
+gh api repos/timothymamo/shift2eu/rulesets/<audit branches id> --jq '[.bypass_actors[] | [.actor_type, .actor_id, .bypass_mode]] | tojson'
+# PASS: [["Integration",5875190,"always"]]
+# FAIL: any other actor, or another mode (in pull_request mode the publish job
+# could not push its report branch directly)
+```
+
+**5. Create the audit-paths ruleset on `main`, and the branch ruleset for every other branch.** *Done;
+rulesets checked 2026-11-24.* The audit-paths ruleset requires the CI check that fails an audit PR
+touching anything outside `docs/security/`, `Audit report paths` (the job of the `Audit paths` workflow,
+`.github/workflows/audit-paths.yml`), with source **GitHub Actions** (`integration_id` 15368), so a status
+of that name from any other integration does not count, and with no bypass actor. Create it with
+enforcement **disabled**, and make it active only after the trial PRs below.
+
+Before it goes active, create the **branch ruleset for every other branch** (active at once): target
+`~ALL` excluding the default branch (`~DEFAULT_BRANCH`) and `security-audit/**`, rules `creation`,
+`update` and `deletion`, and exactly these bypass actors, each with mode **Always allow** (`always`): you
+as the **Repository admin** role (`RepositoryRole`, actor_id 5; on a user-owned repository a user cannot
+be a bypass actor), and the Apps (`Integration`) `shift2eu-agents`, Renovate (`renovate`) and the release
+App `shift2eu-release`, **not** the audit App `shift2eu-audit`. In `pull_request` mode those actors could
+write only through a pull request, which would reject the agents' direct pushes and branch deletions,
+Renovate's branches and release-please's release branch. The App's Contents write lets it push to any
+branch; this ruleset leaves it only `security-audit/**`, and without it the check's sender key is only a
+one-shot signal (ADR 0040). The default branch stays out of its target: `Protect main` already guards
+`main`, and with `main` included the `update` rule blocked every merge into it (2026-11-22, PRs #460 and
+#461). If you adopt Decision 1's optional tag ruleset, create the `**` tag ruleset too, with only the
+release App as bypass actor.
+
+```bash
+# Mac (admin), as yourself: the ids of the four Apps, for the bypass check below
+for s in shift2eu-agents renovate shift2eu-release shift2eu-audit; do echo "$s $(gh api /apps/$s --jq .id)"; done
+# PASS: shift2eu-agents 5798878, renovate 2740, shift2eu-release 5729776, shift2eu-audit 5875190
+
+gh api repos/timothymamo/shift2eu/rulesets --jq '.[] | [.id, .name, .target, .enforcement] | @tsv'
+# the branch ruleset is the <branch id>, the audit-paths ruleset the <id>,
+# the Audit report branches ruleset of step 4 the <audit branches id>, Protect main the <Protect main id>
+
+# Protect main before this step changes anything: keep the line, the <Protect main record>
+gh api repos/timothymamo/shift2eu/rulesets/<Protect main id> --jq '[.updated_at, (.rules | tojson)] | @tsv'
+# PASS: one line, a timestamp and the rules; FAIL: an API error
+
+# Branch ruleset: conditions, rules, bypass actors
+gh api repos/timothymamo/shift2eu/rulesets/<branch id> --jq '(.conditions.ref_name.include | tojson), (.conditions.ref_name.exclude | sort | tojson)'
+# PASS: ["~ALL"], then ["refs/heads/security-audit/**","~DEFAULT_BRANCH"] (the exclude list sorted,
+# so the order the API returns it in does not matter)
+# FAIL: anything else, main included in particular (an exclude without "~DEFAULT_BRANCH")
+gh api repos/timothymamo/shift2eu/rulesets/<branch id> --jq '([.rules[].type] | tojson), .enforcement'
+# PASS: holds "creation", "update", "deletion" (any order), then active; FAIL: one missing, or not active
+gh api repos/timothymamo/shift2eu/rulesets/<branch id> --jq '[.bypass_actors[] | [.actor_type, .actor_id, .bypass_mode]] | tojson'
+# PASS: exactly these four, in any order:
+#   ["RepositoryRole",5,"always"] ["Integration",5798878,"always"]
+#   ["Integration",2740,"always"] ["Integration",5729776,"always"]
+# FAIL: the audit App id 5875190 listed, any other or missing actor, or a mode other than always
+
+# Audit-paths ruleset: the required check is pinned to GitHub Actions, with no bypass actor
+gh api repos/timothymamo/shift2eu/rulesets/<id> \
+  --jq '.rules[] | select(.type == "required_status_checks") | .parameters.required_status_checks | tojson'
+# PASS: [{"context":"Audit report paths","integration_id":15368}]; FAIL: no integration_id, or another one
+gh api repos/timothymamo/shift2eu/rulesets/<id> --jq '.bypass_actors | tojson'
+# PASS: []
+
+# Trial PR 1 (any branch into main, docs only), before the ruleset is made active: the
+# pull_request_target run attaches to the PR head commit, where the ruleset looks for it
+gh pr view <n> --json headRefOid --jq .headRefOid
+# the <head sha>
+gh api repos/timothymamo/shift2eu/commits/<head sha>/check-runs \
+  --jq '.check_runs[] | select(.name == "Audit report paths") | [.name, .app.slug, .app.id, .conclusion] | @tsv'
+# PASS: Audit report paths  github-actions  15368  success; FAIL: no row, or another app
+```
+
+```bash
+# Mac (admin), in your own clone, as yourself: trial PR 2. The temporary bypass is the admin role, and a
+# push with the agents App credentials is refused for another reason than the FAIL line below names
+gh auth status
+# PASS: your account is the active one; FAIL: the agents App or another account
+
+# The Audit report branches ruleset of step 4 lets only the audit App push or
+# delete security-audit/** (admins get no implicit bypass), so add the admin role to it for
+# this trial only. The ~ALL branch ruleset excludes that pattern (and the default branch,
+# which Protect main guards) and plays no part here.
+# In Settings, Rules, Rulesets, Audit report branches: add the bypass actor Repository admin,
+# mode Always allow, and save. Then re-run step 4 bypass check:
+gh api repos/timothymamo/shift2eu/rulesets/<audit branches id> --jq '[.bypass_actors[] | [.actor_type, .actor_id, .bypass_mode]] | tojson'
+# PASS: exactly ["Integration",5875190,"always"] and ["RepositoryRole",5,"always"], in any order
+# FAIL: no RepositoryRole entry, any other actor, or a mode other than always
+
+# Push a branch security-audit/trial-paths that changes README.md, and open its PR into main
+git switch -c security-audit/trial-paths origin/main
+# edit README.md, then:
+git commit -am "test: trial PR 2 for the audit paths check"
+git push origin security-audit/trial-paths
+gh pr create --base main --head security-audit/trial-paths --title "Trial PR 2" --body "Audit paths trial, to close"
+# PASS: the push and the PR succeed, and the PR number is the <n>
+# FAIL: the push is rejected (the bypass actor is missing)
+
+# The fence fires
+gh pr view <n> --json headRefOid --jq .headRefOid
+# the <head sha>
+gh api repos/timothymamo/shift2eu/commits/<head sha>/check-runs \
+  --jq '.check_runs[] | select(.name == "Audit report paths") | [.name, .app.slug, .app.id, .conclusion] | @tsv'
+# PASS: Audit report paths  github-actions  15368  failure; FAIL: success, no row, or another app
+
+# Close trial PR 2 and delete its branch
+gh pr close <n> --delete-branch
+git ls-remote origin refs/heads/security-audit/trial-paths
+# PASS: no output; FAIL: the branch still exists
+
+# Remove the Repository admin bypass actor from Audit report branches again, and save.
+# Then re-run step 4 bypass check:
+gh api repos/timothymamo/shift2eu/rulesets/<audit branches id> --jq '[.bypass_actors[] | [.actor_type, .actor_id, .bypass_mode]] | tojson'
+# PASS: [["Integration",5875190,"always"]], the audit App only
+# FAIL: any other actor, the admin role included, or another mode
+
+# Then make the audit-paths ruleset active (enforcement: active), and check Protect main is unchanged
+gh api repos/timothymamo/shift2eu/rulesets/<id> --jq .enforcement
+# PASS: active
+gh api repos/timothymamo/shift2eu/rulesets/<Protect main id> --jq '[.updated_at, (.rules | tojson)] | @tsv'
+# PASS: the same line as the <Protect main record> at this step's start, updated_at and every rule
+#   (nothing of this step touched Protect main)
+# FAIL: any difference: read Protect main's rules in Settings, Rules, Rulesets before going on
+gh api repos/timothymamo/shift2eu/rulesets/<Protect main id> --jq '.rules[] | select(.type == "pull_request") | .parameters.require_code_owner_review'
+# PASS: true (step 6's Protect main read)
+```
+
+**6. Check the other rulesets and the Apps.** *Done 2026-11-22.* The audit App is in no bypass list of
+`Protect main`, the audit-paths ruleset or the tag rulesets, and `Protect main` still requires the code
+owner's approval, so an approval by the App does not count (as PRD #161 milestone 4 checks). No App
+installed on the repository other than the release flow's holds Actions write (not the agents' App, the
+AI reviewer's or Renovate): Actions write starts a `workflow_dispatch` run, which spends the subscription
+limit shared with the agents and the AI reviewer and publishes a report PR and advisories. The workflow's
+guard condition already skips a run anyone but you starts, and every re-run; this check keeps a second
+guard. If such an App does hold Actions write, remove it from that App before step 7. Repeat the App
+check whenever an App is installed or its permissions change.
+
+```bash
+# Mac (admin), as yourself: every ruleset's bypass actors (Protect main, audit-paths, tag rulesets)
+gh api repos/timothymamo/shift2eu/rulesets --jq '.[] | [.id, .name] | @tsv'
+gh api repos/timothymamo/shift2eu/rulesets/<each id> --jq '[.name, ([.bypass_actors[].actor_id] | tojson)] | @tsv'
+# PASS: 5875190 (the audit App) appears only in Audit report branches
+gh api repos/timothymamo/shift2eu/rulesets/<Protect main id> --jq '.rules[] | select(.type == "pull_request") | .parameters.require_code_owner_review'
+# PASS: true
+# GitHub, Settings, GitHub Apps: by hand, open each installed App's permissions
+# PASS: Actions write for the release flow's App alone
+```
+
+**7. Merge milestone 2**: the merge of PR 5c (branch `feat/175-m2-audit-checks-job`), the last pull
+request of milestone 2's PR 5 split (5a preliminaries, 5b the workflow frame and its jobs, 5c the rest of
+the checks job). Steps 1 to 6 come before it; the audit is live once it merges.
+
+```bash
+# Mac (admin), as yourself
+gh pr list --repo timothymamo/shift2eu --state merged --head feat/175-m2-audit-checks-job --json number,mergedAt --jq '.[] | [.number, .mergedAt] | @tsv'
+# PASS: one row, PR 5c, merged
+gh api repos/timothymamo/shift2eu/actions/workflows/scheduled-security-audit.yml --jq .state
+# PASS: active
+# The gate is the merge-time make check (TestAuditWorkflowHasNoScheduleTrigger); this is a second look
+gh api -H 'Accept: application/vnd.github.raw+json' repos/timothymamo/shift2eu/contents/.github/workflows/scheduled-security-audit.yml > <a scratch file> && echo fetched
+# PASS: fetched; FAIL: an API error, and no "fetched" line (stop: the check below would read nothing)
+sed -n '/^on:/,/^[^ #]/p' <a scratch file>
+# PASS: the on: line, workflow_dispatch: with nothing under it (no inputs:), then the next top-level key
+#   (milestone 2 runs on workflow_dispatch only; milestone 3 adds the schedule, PRD #175, ADR 0040)
+# FAIL: any other key (inputs: included), a flow { } or [ ] value, a \ escape, a * alias or a << merge key
+#   in those lines, or no on: line at all (read the file)
+grep -nwE 'schedule|cron' <a scratch file>
+# PASS: no line; FAIL: a line (a comment that only names the word is no trigger, but read it)
+```
+
+**8. Start the first run** (`workflow_dispatch` on `main`). Read its report PR and advisories. Then merge
+the report, then milestone 3's schedule.
+
+```bash
+# Mac (admin), as yourself: the newest dispatched run before the dispatch, the <previous id>, then the dispatch
+# <your login>: your GitHub login (gh api user --jq .login), here and in steps 10 and 11, so only your own dispatched runs are read
+gh run list --repo timothymamo/shift2eu --workflow scheduled-security-audit.yml --event workflow_dispatch --user <your login> --limit 1 --json databaseId --jq '.[].databaseId'
+# PASS: one ID, the <previous id>, or no output (no dispatched run yet); FAIL: an error
+gh workflow run scheduled-security-audit.yml --repo timothymamo/shift2eu --ref main
+# PASS: the workflow_dispatch event created; FAIL: an error
+
+# The run: the dispatch is asynchronous, so the newest run may still be the previous one
+gh run list --repo timothymamo/shift2eu --workflow scheduled-security-audit.yml --event workflow_dispatch --user <your login> --limit 1 --json databaseId --jq '.[].databaseId'
+# PASS: an ID other than the <previous id>: the <run_id>
+# FAIL: the <previous id> or no output: the run is not listed yet; wait a few seconds and list again
+gh run watch <run_id> --repo timothymamo/shift2eu --exit-status > /dev/null && echo succeeded
+# PASS, once it finishes: succeeded; FAIL: no "succeeded" line (the run failed: step 11)
+gh pr list --repo timothymamo/shift2eu --author app/shift2eu-audit --json number,headRefName --jq '.[] | select(.headRefName | endswith("-<run_id>")) | [.number, .headRefName] | @tsv'
+# PASS: one row, head branch security-audit/<date>-<run_id> (other runs' report PRs may be open too)
+# FAIL: no row (the run opened no report PR)
+gh api repos/timothymamo/shift2eu/actions/runs/<run_id>/artifacts --jq '[.artifacts[].name] | sort | tojson'
+# PASS: ["checks-result","model-result"]
+# GitHub, the run's page: by hand
+# PASS: the publish job's log and summary show only the public total and the private-findings flag,
+#   the other jobs' only "finished"; the two artifacts are ciphertext (never download them to read);
+#   the sandbox preflight's step reports all six probes refused (it runs on every run; this step only
+#   reads its result)
+```
+
+**Handling the App's draft advisories** (every run): close an advisory between scheduled runs, never
+while a run is in progress: a close between the run's listing and its update is reopened by the update's
+`state: draft` (the REST API has no conditional update). A reproduced draft's summary and description are
+rewritten on every run, so your edits to them are overwritten: put notes in the advisory's comments, or
+in its credits once it is no longer the App's to update (any credit makes the App leave it alone). A
+credited advisory is unmatchable, so a run that reproduces its finding files a new draft. A reworded
+summary no longer matches, so the next run creates a new draft. Text of yours in a draft's description
+that the token scan hits (a pasted example token, say) makes every later run that marks it not reproduced
+fail with `publish refused: see runbook` (exit 4) until you remove it. A draft marked not reproduced keeps
+its `Run:` line, which names the run that last reproduced the finding: that is intended.
+
+```bash
+# Mac (admin), as yourself, before you close or edit a draft
+gh run list --repo timothymamo/shift2eu --workflow scheduled-security-audit.yml --status in_progress --json databaseId --jq length
+# PASS: 0 (no run in progress); FAIL: wait for it to finish
+```
+
+**9. Keep the schedule alive** (from milestone 3). If the staleness check fails, look at the workflow's
+state and runs; if GitHub disabled the schedule after 60 days without repository activity, re-enable it
+and start one `workflow_dispatch` run.
+
+```bash
+# Mac (admin), as yourself: the action, only when the check below shows the workflow disabled
+gh workflow enable scheduled-security-audit.yml --repo timothymamo/shift2eu
+# PASS: no error
+```
+
+```bash
+# Mac (admin), as yourself: the check, read-only
+gh api repos/timothymamo/shift2eu/actions/workflows/scheduled-security-audit.yml --jq .state
+# PASS: active; FAIL: disabled_inactivity or disabled_manually (run the action above)
+# PASS, later: the next scheduled run appears at the next date the cron names (ADR 0040 records it)
+```
+
+To **run an audit outside the schedule**, start a `workflow_dispatch` run on `main` at any time, with no
+inputs; only you can, since the jobs are skipped for any other triggering actor. A run started while
+another is in progress waits for it (the concurrency group), and each run adds its own report on its own
+branch, `security-audit/<date>-<run_id>`. Two report PRs open at once touch only their own report files,
+so they merge in either order (issue #280). Never use Update branch or push to the App's branch: a commit
+of yours there cannot be approved (`require_last_push_approval`) and breaks the audit PR's docs-only
+check.
+
+```bash
+# Mac (admin), as yourself: the newest dispatched run before the dispatch, the <previous id>, then the dispatch
+gh run list --repo timothymamo/shift2eu --workflow scheduled-security-audit.yml --event workflow_dispatch --user <your login> --limit 1 --json databaseId --jq '.[].databaseId'
+# PASS: one ID, the <previous id>, or no output (no dispatched run yet); FAIL: an error
+gh workflow run scheduled-security-audit.yml --repo timothymamo/shift2eu --ref main
+# PASS: the workflow_dispatch event created; FAIL: an error
+
+# The run: the dispatch is asynchronous, so the newest run may still be the previous one
+gh run list --repo timothymamo/shift2eu --workflow scheduled-security-audit.yml --event workflow_dispatch --user <your login> --limit 1 --json databaseId --jq '.[].databaseId'
+# PASS: an ID other than the <previous id>: the <run_id>
+# FAIL: the <previous id> or no output: the run is not listed yet; wait a few seconds and list again
+gh run watch <run_id> --repo timothymamo/shift2eu --exit-status > /dev/null && echo succeeded
+# PASS, once it finishes: succeeded; FAIL: no "succeeded" line (the run failed: step 11)
+# PASS: its report PR opens like a scheduled run's (step 8's PR and artifact checks)
+```
+
+**10. Renew and rotate.** Renew the Claude token before it expires (PRD #175, The subscription token):
+run `claude setup-token` again on your own machine, replace the environment secret, revoke the old token
+where the Claude account allows it, update the dates above. Rotate the App's key, the model key or the
+publish key if any may have leaked (the App's key: generate a new one on the App's page, set the secret,
+then delete every older key there), and rotate any secret a private finding says is in the git history,
+once you have checked that it is real. Rotate the token at once if it may have leaked. If the sandbox
+preflight fails (`the preflight failed: see runbook step 10`, or `bubblewrap cannot start: see runbook
+step 10, the user-namespace note`), read ADR 0040's note on the runner's user-namespace restriction
+before changing anything.
+
+```bash
+# Mac (admin), as yourself: the action, one line per rotated secret. A value is read from the hidden
+# prompt or from the file on stdin, never echoed and never on the command line
+# The Claude token: paste it at the prompt
+gh secret set CLAUDE_CODE_OAUTH_TOKEN --env security-audit --repo timothymamo/shift2eu
+# The App's key: generate a new one on the App's page (shift2eu-audit), Private keys; the new key file on stdin
+gh secret set AUDIT_APP_PRIVATE_KEY --env security-audit --repo timothymamo/shift2eu < <the App's new key file>
+# The model key pair: both halves together
+gh secret set AUDIT_MODEL_PRIVATE_KEY --env security-audit --repo timothymamo/shift2eu < <the model key's new private file>
+gh variable set AUDIT_MODEL_PUBLIC_KEY --env security-audit --repo timothymamo/shift2eu < <the model key's new public file>
+# The publish key pair: both halves together
+gh secret set AUDIT_PUBLISH_PRIVATE_KEY --env security-audit --repo timothymamo/shift2eu < <the publish key's new private file>
+gh variable set AUDIT_PUBLISH_PUBLIC_KEY --env security-audit --repo timothymamo/shift2eu < <the publish key's new public file>
+# PASS: each line reports the secret or variable set; FAIL: an error
+# The App's key, once its secret is set: delete every older key on the App's page; a leaked one keeps minting tokens
+# GitHub, the App's page (shift2eu-audit), Private keys: by hand
+# PASS: one key, the new one; FAIL: an older key still listed
+# If the test run below fails on the App token, generate another key; never restore the deleted one
+ls <the App's new key file> <the model key's new private file> <the publish key's new private file>
+# PASS: No such file or directory (each one you stored, once you have deleted it)
+
+# A test run of the new secrets: the newest dispatched run before the dispatch, the <previous id>, then the dispatch
+gh run list --repo timothymamo/shift2eu --workflow scheduled-security-audit.yml --event workflow_dispatch --user <your login> --limit 1 --json databaseId --jq '.[].databaseId'
+# PASS: one ID, the <previous id>, or no output (no dispatched run yet); FAIL: an error
+gh workflow run scheduled-security-audit.yml --repo timothymamo/shift2eu --ref main
+# PASS: the workflow_dispatch event created; FAIL: an error
+```
+
+```bash
+# Mac (admin), as yourself: the check, read-only, after any renewal or rotation and its test run
+gh api repos/timothymamo/shift2eu/environments/security-audit/secrets --jq '[.secrets[].name] | sort | tojson'
+# PASS: ["AUDIT_APP_PRIVATE_KEY","AUDIT_FINGERPRINT_KEY","AUDIT_MODEL_PRIVATE_KEY","AUDIT_PUBLISH_PRIVATE_KEY","CLAUDE_CODE_OAUTH_TOKEN"]
+gh api repos/timothymamo/shift2eu/environments/security-audit/variables --jq '[.variables[].name] | sort | tojson'
+# PASS: ["AUDIT_APP_CLIENT_ID","AUDIT_MODEL_PUBLIC_KEY","AUDIT_PUBLISH_PUBLIC_KEY"]
+gh run list --repo timothymamo/shift2eu --workflow scheduled-security-audit.yml --event workflow_dispatch --user <your login> --limit 1 --json databaseId --jq '.[].databaseId'
+# PASS: an ID other than the action's <previous id>: the <run_id>
+# FAIL: the <previous id> or no output: the run is not listed yet (the dispatch is asynchronous); wait a few seconds and list again
+gh run watch <run_id> --repo timothymamo/shift2eu --exit-status > /dev/null && echo succeeded
+# PASS, once it finishes: succeeded (then step 8's checks)
+# FAIL: no "succeeded" line; an authentication error in the model job: the token is wrong or revoked;
+#   a decryption error: a key pair's halves do not match
+```
+
+**11. Recover a failed run.** Start a **new `workflow_dispatch` run** on `main`. The workflow enforces
+this: its guard condition skips every job of a re-run of any run ("re-run failed jobs" included), so the
+artifact check never sees an earlier attempt's artifact. The new run has its own run ID, so its report
+branch never meets the failed run's. If the publish job created `security-audit/<date>-<run_id>` but
+failed before opening the PR, that branch blocks nothing; delete it to keep things tidy, through step 4's
+temporary bypass (only the audit App may delete it otherwise):
+
+```bash
+# Mac (admin), in your own clone, as yourself: the temporary bypass is the admin role, and a DELETE with
+# the agents App credentials is refused for another reason than the FAIL line below names
+gh auth status
+# PASS: your account is the active one; FAIL: the agents App or another account
+
+# In Settings, Rules, Rulesets, Audit report branches: add the bypass actor Repository admin,
+# mode Always allow, and save. Then re-run step 4 bypass check:
+gh api repos/timothymamo/shift2eu/rulesets/<audit branches id> --jq '[.bypass_actors[] | [.actor_type, .actor_id, .bypass_mode]] | tojson'
+# PASS: exactly ["Integration",5875190,"always"] and ["RepositoryRole",5,"always"], in any order
+# FAIL: no RepositoryRole entry, any other actor, or a mode other than always
+
+# Delete the failed run branch
+gh api -X DELETE 'repos/timothymamo/shift2eu/git/refs/heads/security-audit/<date>-<run_id>'
+# PASS: no output; FAIL: an error (the bypass actor is missing, or the name is wrong)
+git ls-remote origin 'refs/heads/security-audit/<date>-<run_id>'
+# PASS: no output; FAIL: the branch still exists
+
+# Remove the Repository admin bypass actor from Audit report branches again, and save.
+# Then re-run step 4 bypass check:
+gh api repos/timothymamo/shift2eu/rulesets/<audit branches id> --jq '[.bypass_actors[] | [.actor_type, .actor_id, .bypass_mode]] | tojson'
+# PASS: [["Integration",5875190,"always"]], the audit App only
+# FAIL: any other actor, the admin role included, or another mode
+```
+
+If the publish job failed because it found two App-authored draft advisories with one fingerprint (its
+summary names this step), read both drafts, close the duplicate (keep the older one), then start the new
+run. The closed duplicate does not count as a dismissal: the kept draft takes precedence over it while
+the draft is open.
+
+```bash
+# Mac (admin), as yourself: the new run. The newest dispatched run before the dispatch, the <previous id>,
+# then the dispatch
+gh run list --repo timothymamo/shift2eu --workflow scheduled-security-audit.yml --event workflow_dispatch --user <your login> --limit 1 --json databaseId --jq '.[].databaseId'
+# PASS: one ID, the <previous id>, or no output (no dispatched run yet); FAIL: an error
+gh workflow run scheduled-security-audit.yml --repo timothymamo/shift2eu --ref main
+# PASS: the workflow_dispatch event created; FAIL: an error
+
+# The new run: the dispatch is asynchronous, so the newest run may still be the failed one
+gh run list --repo timothymamo/shift2eu --workflow scheduled-security-audit.yml --event workflow_dispatch --user <your login> --limit 1 --json databaseId --jq '.[].databaseId'
+# PASS: an ID other than the <previous id>: the new <run_id>
+# FAIL: the <previous id> or no output: the new run is not listed yet; wait a few seconds and list again
+gh run watch <run_id> --repo timothymamo/shift2eu --exit-status > /dev/null && echo succeeded
+# PASS, once it finishes: succeeded, and the new run opens the report PR (step 8's checks)
+# FAIL: no "succeeded" line: read the publish job's summary line (below)
+```
+
+The publish job's summary line names the class of a failure, never its detail (ADR 0040, "Exit codes and
+the summary line"). What to do for each, before the new run:
+
+- `artifacts: unexpected: see runbook step 11` (the artifact check of the model or the publish job):
+  exit 3 of the artifact check, not the core's outcome 3 (`result refused`, below). The check refuses
+  five things: an artifact the job does not expect, a name twice, an expected artifact missing, an
+  expired one, and a total above the listed count (a second page: more than 100 artifacts). Read the
+  run's artifact list
+  (`gh api repos/timothymamo/shift2eu/actions/runs/<run_id>/artifacts --jq '[.artifacts[] | [.name, .expired]]'`);
+  do not download an unexpected one. Check: the new run's list is exactly `checks-result` at the model
+  job's check, and `checks-result` and `model-result` at the publish job's.
+- `result refused: see runbook` (exit 3): the model's result did not decrypt or broke the schema, or the
+  release tag or image digest it named did not check out against GitHub. Start the new run; if it
+  repeats, read the model job's preflight line and the skill before changing anything.
+- `publish refused: see runbook` (exit 4): a text about to be published did not pass the scans. Nothing
+  was published. The line does not say which of three causes it was: (1) a scan found a token, a key or
+  an encoded run; (2) the text held gitleaks' inline allow comment, which the program refuses before
+  gitleaks runs, in any letter case; (3) gitleaks did not start or did not finish within its deadline (2
+  minutes when unset). Look for (3) first, then (2): a publish step that ran for about a scan deadline
+  or longer, or a gitleaks binary missing at the path its flag names on the runner, points to (3); fix
+  that and start the new run. For (2), start the new run once: the model writes the texts afresh, and a
+  refusal that repeats with no sign of (3) is treated as (1). A real hit (1), or a refusal neither (2)
+  nor (3) explains, is a possible leak: rotate per step 10 (the safe default), then start the new run.
+- `private findings not filed: see runbook` (exit 5): GitHub refused the run's first advisory write, a
+  creation, so nothing was filed; the report says "private findings: not filed" and the private findings
+  were written nowhere. Repeat step 3's advisory check, then start the new run. The report and the
+  issues were published, no advisory call followed the refused creation, and the job fails so the run is
+  never green. A 422 can also mean GitHub found a valid finding's body invalid (too long, say): if step
+  3's check passes, that is the residual risk the ADR names. A creation refused after an earlier
+  advisory write of the run is `GitHub call failed` (exit 8) instead, before the report: that run's
+  earlier drafts stand, and the next run's listing reconciles them.
+- `publish refused: duplicate draft advisories: see runbook step 11` (exit 6): the paragraph above.
+- `previous report unreadable: see runbook` (exit 7) has **two causes**, and the line does not say
+  which: (1) the newest report in `docs/security/audits/` is unreadable as the publish script renders
+  one (a hand edit, a merge that changed a table, a cell outside printable ASCII); (2) the newest report
+  is dated **after the run**, or on the run's own date with a run ID **not below the run's own** (a
+  hand-made report, or a later run's report merged first). Check: list the directory
+  (`ls docs/security/audits/` on `main`) and compare the newest name's date and run ID with the failed
+  run's; for (1), diff the newest report against what the publish script wrote in its PR. Fix it through
+  a pull request to `main` (for (2), rename or remove the misdated report), then start the new run.
+- `GitHub call failed: see runbook` (exit 8): a GitHub call failed or answered unexpectedly (a write that
+  answered anything but 2xx or ran past its deadline included: no write is retried). Check GitHub's
+  status. Then first look for this run's `security-audit/<date>-<run_id>` branch and pull request. If
+  the report PR is open (an issue write failed after it), review it and merge or close it: the next run
+  files the remaining issues of the previous report, since the bot-issue listing matches those already
+  filed, a timed-out issue that GitHub applied included. If only the branch exists (a `POST git/refs`
+  that timed out but succeeded), delete it, then start the new run. A branch created between the lookup
+  and the ref write answers 422 and lands here as well (no write is lost: refs are never forced). A
+  refused advisory creation after an earlier advisory write of the run ends here too, the likely case
+  being an App that can still update its drafts but can no longer create one: that run's earlier drafts
+  stand, and before the next run repeat step 3's advisory check to confirm the App's advisory
+  permission.
+- `configuration invalid: see runbook` (exit 9): a variable, flag or secret of the publish step is
+  missing or malformed (a `GITHUB_SHA` that is not 40 lowercase hex, an `AUDIT_FINGERPRINT_KEY` unset or
+  shorter than 32 bytes, and, for `image` and `publish`, a `GITHUB_SERVER_URL` other than exactly
+  `https://github.com` included), or a secret that must not be in the step is set there; the program was
+  started with a bad or unknown flag or subcommand; or `GITHUB_STEP_SUMMARY` is unset, not an absolute
+  path or cannot be opened. Compare the environment's secrets and variables with step 2, and the step's
+  command line with the workflow on `main`. An exit 9 after a `publish` step whose summary write or close
+  failed after the writes (a rare case, e.g. a full runner disk) may follow a published report: look for
+  the run's `security-audit/<date>-<run_id>` branch and pull request first, as on the exit-8 line.
+- `publish failed: see runbook` (exit 1): any other failure, among them two the publish program refuses
+  before it makes any ref or pull request: an existing `security-audit/<date>-<run_id>` branch (the
+  branch lookup answered 200; nothing was written: delete the branch as above), and a report commit
+  whose compare with the audited commit is not one commit ahead of it and none behind, on the audited
+  commit as its merge base, with exactly one added file, the run's report (the blob, tree and commit were
+  written, but no ref and no pull request were made; the commit object is unreferenced and GitHub
+  collects it). Start the new run; if it repeats, the publish program needs a fix through a pull
+  request.
+
+The image subcommand (`auditpublish image`, its own step before `publish`, with the job's `github.token`
+and `attestations: read`) prints one of these lines:
+
+- `image digest: as expected` (exit 0): the result's tag is a release, and its image digest is empty or
+  this repository's attestation listing for it holds an inline in-toto v1 statement of SLSA provenance
+  whose subject digest is the digest and whose workflow is `.github/workflows/release.yml` of this
+  repository at `refs/tags/<tag>`. The check reads the statement only, not its signature.
+- `result refused: see runbook` (exit 3): the tag names no release, or the digest has no such statement
+  (an attestation that carries only a `bundle_url`, no inline bundle, counts as none). Treat it as the
+  `result refused` line above.
+- `GitHub call failed: see runbook` (exit 8), `configuration invalid: see runbook` (exit 9) and
+  `publish failed: see runbook` (exit 1): as above.
+
 ## Agent permissions
 
 Each role's command in `.dot-agent-deck.toml` sets its permission mode explicitly, so no role depends

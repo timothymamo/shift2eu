@@ -349,3 +349,19 @@ that build an inventory, each with its own copy button (PR #379, item 15).
   in a secure context. When the hosting sets a Permissions-Policy (PRD #297, milestone 3), it must allow
   `clipboard-write` for the site's own origin (`clipboard-write=(self)`), or the copy buttons fail and say
   so.
+
+## Amendment: the About page and its inline avatar (issue #528)
+
+2026-11-24. The maintainer asked for a short intro on the Assessment page saying what the site does and
+who provides it, and for a page about the maintainer.
+
+- **The page is `site/about.html`**, a fifth page of the bundle. It carries the
+  same Content Security Policy, loads only the page script, is linked from every other page's footer and
+  from the Assessment page's intro, and is held by every per-page check of `test/site` and by
+  `test/browser`. `ci/sitebuild` builds it, `ci/sitedeploy`'s bundle check requires it among exactly the
+  five pages, and `ci/sitecheck` requires it in a release's manifest.
+- **The avatar is inline SVG**, traced from the maintainer's photo into a few flat-colour paths, inside a
+  size budget `test/site` pins (1 KiB to 30 KiB of markup). `img-src` stays `'none'`: no `<img>`, no
+  `data:` URL, no SVG `<image>` and no reference outside the document; its only reference is its own
+  `clip-path="url(#avatar-clip)"`. It is sized by a stylesheet class, since the policy allows no `style`
+  attribute. The photo itself is not in the repository.

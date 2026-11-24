@@ -1130,7 +1130,8 @@ and no collaborator, and its summary holds a fingerprint. A listing entry whose 
 `credits_detailed`, `collaborating_users` or `collaborating_teams` is missing or `null` is no empty list:
 counted as none it would fail open on an advisory a person is on, so it fails the listing closed
 (`ErrGitHub`, outcome 8), as a missing `ghsa_id`, `summary` or `state` does. GitHub's schema declares
-those four nullable, so PRD #175's runbook step 3 checks, before milestone 2 goes live, that GitHub
+those four nullable, so PRD #175's runbook step 3 (now in
+[`docs/dev-environment.md`](../dev-environment.md#the-scheduled-security-audit)) checks, before milestone 2 goes live, that GitHub
 answers arrays for them. A draft with a finding's
 fingerprint is updated `open` (a draft marked `not reproduced` that recurs is `open` again); with no
 draft, the most recently closed one (by `closed_at`, a tie the listing's first) marked `not reproduced`
@@ -1166,7 +1167,9 @@ the maintainer to close an advisory between scheduled runs, never during one.
 **The maintainer's edits.** A reproduced draft's summary and description are rewritten on every run, so
 the maintainer's edits to them are overwritten: notes go in the advisory's comments, or in its credits once
 the advisory is no longer the App's to update (a credit makes it unmatchable). A reworded summary no longer
-holds the fingerprint, so the next run that reproduces the finding creates a new draft. A maintainer's
+holds the fingerprint, so the next run that reproduces the finding creates a new draft. *Added 2026-11-24
+(PR 5a):* a credited advisory is unmatchable too, so a run that reproduces its finding files a new
+draft. A maintainer's
 text in a draft's description that hits the advisory scan or gitleaks (a pasted example token, say) makes
 every later run that re-sends that description (the not-reproduced mark, which keeps the listing's text)
 fail with outcome 4 (`ErrScanRefused`) before any write, until the text is removed. The not-reproduced
@@ -1952,7 +1955,13 @@ of milestone 2), and the constraints PR 5 must keep:
   reviewed change, not this one.
 - **The pinned tarball's entry types.** The checksum step refuses any entry but a regular file, a
   directory or a PAX global header. Before PR 5, run `tar -tvvf` once on the pinned tarball to confirm it
-  holds no other type, so the first run is not refused for a packing detail.
+  holds no other type, so the first run is not refused for a packing detail. *Added 2026-11-24 (PR 5a):*
+  done for the pin `@anthropic-ai/claude-code-linux-x64@2.1.331`, its tarball fetched from the registry's
+  `dist.tarball` and its SHA-512 matching the pin's `integrity:`. `tar -tvvf claude-code-linux-x64-2.1.331.tgz`
+  lists 4 entries, all regular files (`package/claude`, `package/package.json`, `package/LICENSE.md`,
+  `package/README.md`), and a walk of the raw ustar headers (each header's type flag read, so PAX `g` and
+  `x` and GNU `L` and `K` headers would show too) finds 4 headers, all type `0`: no directory, no PAX
+  header of either kind, no link. The result holds for that version only.
 - **Probe 5's `cat /proc/$$/environ`** probes the sandboxed shell's own environment, where the canary is
   present (the CLI passes it on) and the token is scrubbed: it fails only when the shell's environ is
   readable through the wrapper's `cat`, which the `Bash(*/proc/*/environ*)` rule and the sandbox refuse.
@@ -2118,6 +2127,8 @@ runs under a personal plan's token instead.
   accidental drops, since the model supplies its inputs), and the model step's network
   is held to the model API by configuration only.
 - The maintainer must create the App, the environment and its keys, the rulesets and the `security`
-  label, and check that no other App holds Actions write, before milestone 2 merges (the PRD's runbook,
-  which milestone 2 moves into `docs/dev-environment.md`).
+  label, and check that no other App holds Actions write, before milestone 2 merges
+  ([The scheduled security audit](../dev-environment.md#the-scheduled-security-audit) in
+  `docs/dev-environment.md`, the runbook PR 5a moved there from the PRD on 2026-11-24, its step numbers
+  kept).
 - Milestone 2 amends this record; milestone 3 enables the schedule after the first report is merged.

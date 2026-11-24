@@ -137,6 +137,27 @@ moves or deletes a tag.
    - **whatever its value**: a policy other than exactly `tag v*.*.*`, a `protected_branches` policy, or
      either key at repository level stops the release: report it and stop.
    A 403 on any of these reads is a maintainer check you could not make: say so in the report and go on.
+   **The scheduled audit's secrets** (PRD #175, ADR 0040) are checked the same way. The `security-audit`
+   environment holds the audit App's key and client ID, the model and publish steps' age key pairs, the
+   fingerprint key and the Claude Code token the model step runs on:
+   - `gh api repos/{owner}/{repo}/environments/security-audit` must show
+     `deployment_branch_policy.custom_branch_policies` `true` and `protected_branches` `false`, and
+     `protection_rules` with no `required_reviewers`, since the audit runs unattended;
+   - `gh api repos/{owner}/{repo}/environments/security-audit/deployment-branch-policies --jq '.branch_policies[] | .type + " " + .name'`
+     must print exactly `branch main`, since a wider branch policy would let any branch's workflow read
+     the audit's keys;
+   - `gh api repos/{owner}/{repo}/environments/security-audit/secrets --jq '.secrets[].name'` must list
+     `AUDIT_APP_PRIVATE_KEY`, `AUDIT_MODEL_PRIVATE_KEY`, `AUDIT_PUBLISH_PRIVATE_KEY`,
+     `AUDIT_FINGERPRINT_KEY` and `CLAUDE_CODE_OAUTH_TOKEN`;
+   - `gh api repos/{owner}/{repo}/environments/security-audit/variables --jq '.variables[].name'` must
+     list `AUDIT_APP_CLIENT_ID`, `AUDIT_MODEL_PUBLIC_KEY` and `AUDIT_PUBLISH_PUBLIC_KEY`, the age public
+     halves and the App's client ID (not secrets);
+   - the repository-level listings above (`actions/secrets` and `actions/variables`) must list none of
+     `AUDIT_APP_PRIVATE_KEY`, `AUDIT_MODEL_PRIVATE_KEY`, `AUDIT_PUBLISH_PRIVATE_KEY`,
+     `AUDIT_FINGERPRINT_KEY` or `CLAUDE_CODE_OAUTH_TOKEN`: a key at repository level
+     would reach every workflow.
+   On a mismatch, report it and stop. A 403 on any of these reads is a maintainer check you could not
+   make: say so in the report and go on.
    **The rulesets' bypass lists after the switch.** The agents App's token cannot read `bypass_actors`
    (it needs Administration write, which the App never gets: ADR 0031, d): GitHub leaves the field out,
    or returns it empty. The checks above that hold a ruleset's `bypass_actors` are then a maintainer
@@ -335,14 +356,17 @@ moves or deletes a tag.
      look at.
    Any other conclusion is a failed deploy: report it with the failed step's log
    (`gh run view <id> --log-failed`). The release itself is published; give the maintainer the
-   recovery, which only they start (never re-run anything yourself). GitHub re-runs a run's jobs only
-   within 30 days of the initial run, and the programs' artifacts are kept exactly that long: within
-   the 30-day re-run window, re-run `Deploy the site` (`gh run rerun <id> --job <its job id>`), which
-   re-runs `Check the live site` after it; after the window, either restore the last good version of
-   each page from the bucket's object versions with your own key (R12), or cut a new release with a
-   `Release-As:` footer. The bundle
-   comes from the published release, so the re-run never needs `Site bundle`, which must never be
-   re-run after publication (above).
+   recovery, which only they start. GitHub re-runs a run's jobs only within 30 days of the initial run,
+   and the programs' artifacts are kept exactly that long: within the 30-day re-run window, the
+   maintainer re-runs `Deploy the site` (`gh run rerun <id> --job <its job id>`), which re-runs
+   `Check the live site` after it; after the window, either the maintainer restores the last good
+   version of each page from the bucket's object versions with their own key
+   ([R12](../../../docs/site-runbook.md#r12-recovery)), or the maintainer cuts a new release with a
+   `Release-As:` footer. You run none of these: you never re-run a job, never hold, read or use any
+   Scaleway key (the deploy's key or the maintainer's), and never act on the bucket or a GitHub
+   setting; report the failure and the recovery, and stop. The bundle comes from the published
+   release, so the re-run never needs `Site bundle`, which must never be re-run after publication
+   (above).
 8. Check the published image yourself; do not hand this to the user. The Lima VM has cosign, a `gh`
    with `gh attestation`, `crane` and rootless `nerdctl` (ADR 0017); this is "Verify the image" in
    `docs/guide/verify-releases.md`, in its VM form, for the new tag. Run it from the repository root,

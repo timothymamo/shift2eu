@@ -1558,6 +1558,15 @@ func TestConfigValidate(t *testing.T) {
 			},
 			wantErr: true,
 		},
+		{
+			// Issue #528: the About page is one of the site's pages, so a release's
+			// manifest must list it, as it lists the other four.
+			name: "a manifest without about.html",
+			mutate: func(cfg *livecheck.Config) {
+				cfg.Manifest.Files = without(cfg.Manifest.Files, "about.html")
+			},
+			wantErr: true,
+		},
 		{name: "a manifest with no files", mutate: func(cfg *livecheck.Config) { cfg.Manifest.Files = nil }, wantErr: true},
 		{
 			name: "a manifest listing a service worker path",
@@ -1633,7 +1642,7 @@ func TestConfigValidate(t *testing.T) {
 func validConfig() livecheck.Config {
 	manifest := livecheck.Manifest{Version: testVersion}
 
-	for _, path := range []string{"index.html", "privacy.html", "verify.html", testModuleScript} {
+	for _, path := range []string{"about.html", "index.html", "privacy.html", "verify.html", testModuleScript} {
 		manifest.Files = append(manifest.Files, livecheck.ManifestFile{Path: path, SHA256: manifestDigest})
 	}
 

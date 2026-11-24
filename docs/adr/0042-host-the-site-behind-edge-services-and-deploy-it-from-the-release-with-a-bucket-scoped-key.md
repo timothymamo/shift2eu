@@ -358,7 +358,8 @@ nil (`newHTTPClient` in `ci/sitedeploy`), so the proxy variables are never consu
 ### Recovery
 
 - **Redeploy the last good release:** re-run the deploy job of the `release.yml` run of the highest
-  release tag on `main` (R12), within GitHub's 30-day re-run window (below); after the window, either
+  release tag on `main` ([the site runbook](../site-runbook.md#r12-recovery), R12), within GitHub's
+  30-day re-run window (below); after the window, either
   the maintainer restores the last good version of each page from the bucket's object versions with
   their own key (R12), or cuts a new release with a `Release-As:` footer.
   The guard overwrites any live page that is not a genuine higher release,
@@ -563,8 +564,10 @@ accepted; and whether `ListBucket` was allowed, which decides `-list-bucket` abo
 - A release from PR C's merge on builds, attests and publishes the bundle, and deploys it only once the
   maintainer sets `SITE_DEPLOY_ENABLED` (milestone 4); until then the deploy and its live check are
   skipped visibly, by the `site-skipped` job's notice.
-- The maintainer sets the `site` environment's variables `SITE_BUCKET` and `SITE_REGION` (from `tofu
-  output`) before the switch; the `release-tag` skill reports them missing as "not set up yet" while the
+- The maintainer sets the `site` environment's variables `SITE_BUCKET` (`tofu output`'s
+  `bucket_name`) and `SITE_REGION` (R0's region: `infra/site`'s `terraform.tfvars`, or
+  `variables.tf`'s default; `tofu output` has no region) before the switch
+  ([R9](../site-runbook.md#r9-the-github-site-environment)); the `release-tag` skill reports them missing as "not set up yet" while the
   switch is unset, and stops the release once it is `true`.
 - The deploy key is in scope for one step, on a program and a bundle this run built and attested; a
   failed deploy fails the release run and leaves the previous release serving.
@@ -577,3 +580,27 @@ accepted; and whether `ListBucket` was allowed, which decides `-list-bucket` abo
 - Milestone 4 amends this ADR: the origins' plain-HTTP answers, R7's result and the `-list-bucket`
   decision, the apex redirect's means, provider and certificate authority, Edge Services' headers and
   compression, the HSTS outcome or waiver, whether preload is pursued and the subdomains at submission.
+
+## Amendment: a fifth page, about.html (issue #528)
+
+2026-11-24. Issue #528 adds an About page (ADR 0036, amendment for issue #528). The decision above is
+unchanged; where it says "four pages", read the five pages from that issue on.
+
+- **The bundle has five pages:** `about.html`, `index.html`, `inventory.html`, `privacy.html` and
+  `verify.html`. `ci/sitedeploy`'s bundle check requires exactly those five, with one asset of each kind
+  and the two legal texts, and uploads them last as before, with the `*.html` headers of the table above.
+  `ci/sitecheck` refuses a release manifest that lists no `about.html`, as it refuses one without
+  `index.html`, `privacy.html` or `verify.html`.
+- **Rolling back across issue #528:** a rollback stays the maintainer's R12 restore with their own key,
+  as Recovery (above) says; the deploy refuses it by design. To a release before issue #528, the restore
+  copies the four pages that existed then, with `LICENSE`, `NOTICE` and `manifest.json`, from their
+  earlier versions; `about.html` has no earlier version to copy. R12 takes the pages to restore and
+  check from the good release's manifest, and its headers check knows `about.html`, so the same block
+  serves a rollback to either side of issue #528. The `ci/sitecheck` of a release at or
+  after issue #528 refuses the restored manifest, which lists no `about.html`, so the live check fails
+  until a fixing release ships, as Recovery expects.
+- **The newer About page outlives such a rollback:** the deploy never deletes, and an earlier release has
+  no `about.html` to restore, so the newer release's `about.html` stays in the bucket and is still served,
+  with that release's footer version and links, beside the older pages. The maintainer removes it by hand
+  (their own key, then an Edge Services cache purge, R12) when it should not stay; the fixing release that
+  follows a rollback uploads it again.
