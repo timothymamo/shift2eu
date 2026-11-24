@@ -20,6 +20,7 @@ var (
 
 	checkoutAction         = regexp.MustCompile(`^actions/checkout` + actionPin)
 	setupGoAction          = regexp.MustCompile(`^actions/setup-go` + actionPin)
+	setupNodeAction        = regexp.MustCompile(`^actions/setup-node` + actionPin)
 	goreleaserAction       = regexp.MustCompile(`^goreleaser/goreleaser-action` + actionPin)
 	setupBuildxAction      = regexp.MustCompile(`^docker/setup-buildx-action` + actionPin)
 	loginAction            = regexp.MustCompile(`^docker/login-action` + actionPin)
@@ -141,7 +142,10 @@ var (
 
 	// testSteps are the test job's steps: the whole history, the guard that
 	// the tagged commit is on main (ADR 0015) before anything runs repository
-	// code, and the tests, on a runner of their own.
+	// code, Go, the Node release dev/lima.yaml pins for
+	// TestPiEnvDenyExtensionLoads (issue #548), set up and checked as ci.yml's
+	// Test job does, and the tests, on a runner of their own, with
+	// SHIFT2EU_REQUIRE_NODE=1 so that check fails rather than skips.
 	testSteps = []releaseStep{
 		fullCheckoutStep,
 		{
@@ -158,7 +162,37 @@ var (
 			}, "\n"),
 		},
 		setupGoStep,
-		{what: "make test", name: "Test", run: "make test"},
+		{
+			what: "the read of dev/lima.yaml's nodeVersion", name: "The Node release dev/lima.yaml pins", id: "node",
+			run: strings.Join([]string{
+				`set -euo pipefail`,
+				`version="$(sed -nE 's/^  nodeVersion: "([^"]*)"$/\1/p' dev/lima.yaml)"`,
+				`if ! [[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then`,
+				`  echo "::error file=dev/lima.yaml::nodeVersion is not one release like 1.2.3: '${version}'"`,
+				`  exit 1`,
+				`fi`,
+				`echo "version=${version}" >> "${GITHUB_OUTPUT}"`,
+			}, "\n"),
+		},
+		{
+			what: "actions/setup-node", uses: setupNodeAction,
+			with: map[string]*regexp.Regexp{
+				"node-version":          exactly("${{ steps.node.outputs.version }}"),
+				"package-manager-cache": exactly("false"),
+			},
+		},
+		{
+			what: "the check that node on the PATH is the pinned one", name: "The node on the PATH is the pinned one",
+			env: []string{"NODE_VERSION: ${{ steps.node.outputs.version }}"},
+			run: strings.Join([]string{
+				`set -euo pipefail`,
+				`if [ "$(node --version)" != "v${NODE_VERSION}" ]; then`,
+				`  echo "::error file=.github/workflows/release.yml::node on the PATH is $(node --version), want v${NODE_VERSION}"`,
+				`  exit 1`,
+				`fi`,
+			}, "\n"),
+		},
+		{what: "make test", name: "Test", env: []string{`SHIFT2EU_REQUIRE_NODE: "1"`}, run: "make test"},
 	}
 
 	// goreleaserSteps are the goreleaser job's steps: no repository code runs

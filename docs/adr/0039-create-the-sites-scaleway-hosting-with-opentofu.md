@@ -212,6 +212,12 @@ The steps are in [the site runbook](../site-runbook.md), R0 to R13.
 | Response headers, `http://www` redirect | The provider cannot (below) |
 | The cache purge in the recovery steps | A one-off action, not state |
 
+*Note (2026-11-24):* the front changes to a Serverless Container running Caddy, which writes the
+response headers and the `http://www` redirect from its configuration
+([ADR 0045](0045-front-the-site-with-a-serverless-container-running-a-pinned-caddy.md)), so the row
+"Response headers, `http://www` redirect" and open point 2 below no longer hold; the infra unit that
+writes the container in `infra/site` amends this ADR.
+
 ### The state
 
 - **Location:** a private, versioned bucket in a project that is not the site's (the maintainer's admin
@@ -315,6 +321,8 @@ CNAME first, then `tofu destroy`, which keeps the bucket while it holds objects 
    lock-out recovery is under *The bucket policy* above.
 2. **Plain HTTP on `www` and on the other origins** (decisions 3 and 11): checked after the apply; if
    `http://www` serves 200, milestone 4 is a no-go until Edge Services can redirect or refuse it.
+   *Note (2026-11-24):* `http://www` is now redirected by the Serverless Container of ADR 0045; the
+   infra unit amends this point.
 3. **`s3:ListBucket` for the deploy key:** if the runbook's list probe answers 403, IAM does not grant
    it with the two object permission sets; the statement then does nothing and the deploy program does
    not list. Recommended: keep the statement, record the answer.

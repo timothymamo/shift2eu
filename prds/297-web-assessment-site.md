@@ -59,7 +59,7 @@ to Scaleway Object Storage behind Scaleway Edge Services from `release.yml`.
 | Taxonomy categories | Every taxonomy category the release's catalogs and inventory reader know; the site adds none. | New taxonomy categories. |
 | Output | The assessment and the comparison shown in the page, per resource and per workload, with estimates (on by default, with an equivalent of `--no-estimate`). Downloads of the Markdown report and the JSON report (schema version 2, ADR 0018, ADR 0030). | PDF. A readiness score. Changes to the Markdown or JSON report. |
 | Site | Static pages (HTML, CSS, one small script, the WebAssembly module embedded in a content-addressed script and Go's `wasm_exec.js`), a privacy page, built by Go's toolchain only and deployed by the release. | Accounts, saved or shared reports, any server-side code, analytics, a JavaScript framework, npm or any JavaScript build tool. The HTTP API (`shift2eu-server`): the site never calls it. |
-| Hosting | Scaleway Object Storage behind Scaleway Edge Services (Starter plan, one pipeline) serving the canonical host `www.shift2eu.com`, the domain `shift2eu.com` registered and DNS-hosted at Namecheap with the apex redirecting to `www`, deployed from this repository's GitHub Actions only. | Any third-party builder or hosting (Netlify, Vercel, Cloudflare Pages, GitHub Pages). |
+| Hosting | Scaleway Object Storage behind Scaleway Edge Services (Starter plan, one pipeline) serving the canonical host `www.shift2eu.com`, the domain `shift2eu.com` registered and DNS-hosted at Namecheap with the apex redirecting to `www`, deployed from this repository's GitHub Actions only. *Amended 2026-11-24 (Hosting decision 1):* a Scaleway Serverless Container running Caddy serves both `www` and the apex in front of the pipeline, writing the redirects and the headers. | Any third-party builder or hosting (Netlify, Vercel, Cloudflare Pages, GitHub Pages). |
 
 ## Acceptance criteria
 
@@ -182,11 +182,17 @@ release), *live* (checked against the live site) or *review*.
   'none'`; they are pinned explicitly so no later directive can widen them by fallback. `worker-src 'none'`
   does not hinder the unregister function: `getRegistrations()` and `unregister()` load no script, and
   the CSP governs only the fetch of a worker's script.
+  *Amended 2026-11-24 (Hosting decision 2 as amended, ADR 0045):* once the container's front is live,
+  `www` sends the policy as a header on every response, so a same-origin worker's script there gets the
+  header CSP; on other origins it still gets none. `worker-src 'none'` stays right, and the reasoning
+  above now holds for those other origins.
   Where the host can also send the policy as a header (Hosting decision 2), the header adds
   `frame-ancestors 'none'`.
   - [x] Milestone 2: the `<meta>` policy of every built page and its static test
     (`test/site`'s `TestContentSecurityPolicyIsExact` and `TestContentSecurityPolicyCheckRejects`).
   - [ ] Milestone 3: the policy as a header with `frame-ancestors 'none'`, where the host can send it.
+    *Amended 2026-11-24:* the host can (Hosting decision 2 as amended); the header comes from the
+    container's server configuration, in milestone 4 (ADR 0045).
 - [x] The site loads no image (*Decided by the orchestrator in review*). `img-src 'none'`, not `'self'`:
   an own-origin image GET carries data in its path or query to the host's logs, the same channel for
   which `connect-src 'self'` is rejected, and a CSP host-source that pins exact paths needs a host,
@@ -347,7 +353,10 @@ release), *live* (checked against the live site) or *review*.
 - [ ] The privacy page names the apex redirect's provider (chosen in milestone 4), says what it sees of a
   visitor who enters through `shift2eu.com` (IP address, user agent, the requested path and the
   `Referer`), and that it only serves the redirect and never the site or the inventory. *Review* at
-  milestone 4, when the provider is known.
+  milestone 4, when the provider is known. *Amended 2026-11-24:* the provider is Scaleway, whose
+  Serverless Container serves `www` too (Hosting decision 3 as amended), so the page names no new
+  party; it says that Scaleway also answers the apex, and that for `www` the same container passes the
+  site's files through from Edge Services.
 
 **`wasm_exec.js`.**
 
@@ -653,7 +662,9 @@ release), *live* (checked against the live site) or *review*.
   Namecheap records (the `www` CNAME to the Edge Services endpoint, the apex's permanent redirect to
   `https://www.shift2eu.com` by the means chosen in milestone 4, CAA allowing the certificate
   authorities of Edge Services and, if it issues its own certificate, the apex redirect's provider,
-  DNSSEC on, R8); the `site` GitHub environment, its deployment policy, secrets and variables
+  DNSSEC on, R8; *amended 2026-11-24, Hosting decisions 1 and 10:* the `www` CNAME and an apex ALIAS
+  both to the Serverless Container's endpoint, CAA unchanged, and OpenTofu also creates the container
+  and its two custom domains, ADR 0045); the `site` GitHub environment, its deployment policy, secrets and variables
   `SITE_BUCKET` and `SITE_REGION` (R9); the HSTS record
   (`site/records/hsts.json`) and the preload record (`site/records/preload.json`) committed, merged to
   `main` and included in a release tag (the outcome is read from `www.shift2eu.com`'s headers before the
@@ -798,7 +809,8 @@ security audit (`security-audit` skill), since every one of them touches the tru
    is set. Depends on 2.
 4. [ ] **First deploy and the privacy statement live.** After the maintainer has followed the runbook and
    settled the items left to check for this milestone (*To be checked by the maintainer*: how the apex
-   redirect is served over valid HTTPS, Edge Services' response headers and redirects, HSTS and preload),
+   redirect is served over valid HTTPS, Edge Services' response headers and redirects, HSTS and preload;
+   the first two answered on 2026-11-24 by Hosting decisions 1 to 3 as amended),
    and the go/no-go below is met: the HSTS record and the preload record merged to `main` and included
    in a release tag before `SITE_DEPLOY_ENABLED` is set (so this milestone's records land in a first
    PR, a `docs` change that cuts no release by itself, whose squash commit on `main` carries a
@@ -820,10 +832,11 @@ security audit (`security-audit` skill), since every one of them touches the tru
    `http://www.shift2eu.com` each answer with a 301 or 308 (no other status) to exactly
    `https://www.shift2eu.com` with the same path, and no other hop, except the preload chain
    `http://shift2eu.com` -> `https://shift2eu.com` -> `https://www.shift2eu.com` when preload is pursued
-   (Hosting decision 2); and the apex's HTTPS answer carries a valid certificate for `shift2eu.com`. If
-   Edge Services cannot redirect `http://www.shift2eu.com` but can refuse or close plain HTTP on `www`
-   (as *Layer 3* defines it), that is accepted in place of its redirect; if it can do neither, it is a
-   no-go (Hosting decision 3). Neither `shift2eu.com` nor `www.shift2eu.com` ever serves the site over
+   (Hosting decision 2); and the apex's HTTPS answer carries a valid certificate for `shift2eu.com`.
+   *Amended 2026-11-24 (Hosting decisions 1 to 3 as amended):* the earlier allowance for a refused or
+   closed plain-HTTP `www`, if Edge Services could not redirect, is dropped: the container's server
+   redirects `http://www.shift2eu.com` with a 308 like the apex, and a refusal is no longer the
+   expected answer. Neither `shift2eu.com` nor `www.shift2eu.com` ever serves the site over
    plain HTTP with a 200; for the other origins, milestone 3's ADR records whether they answer over
    plain HTTP.
 
@@ -836,7 +849,10 @@ security audit (`security-audit` skill), since every one of them touches the tru
    `hsts-waived` statement. Pursuing preload is effectively irreversible: removal from the list takes
    months to reach shipping browsers, and `includeSubDomains` binds every future subdomain of
    `shift2eu.com` to HTTPS. The go/no-go names that, and the ADR lists the subdomains that exist when
-   preload is submitted. Depends on 3.
+   preload is submitted. *Amended 2026-11-24:* the header comes from the container's server
+   configuration (Hosting decision 2 as amended), so `met` is reachable; a waiver stays possible but is
+   no longer forced by the host. The container, its configuration and its tests (ADR 0045) are part of
+   this milestone, in `infra/site`, before the first deploy. Depends on 3.
 
 ## Decisions
 
@@ -866,10 +882,12 @@ security audit (`security-audit` skill), since every one of them touches the tru
   docs validated 2026-06-08, read 2026-11-19). This replaces the earlier decision of the apex as canonical.
   How the apex redirect is served over valid HTTPS (Namecheap's URL redirect or another means) is left to
   check for milestone 4 (*To be checked by the maintainer*); it does not block milestones 1 to 3, where the
-  canonical host is one value of the build and the deploy.
+  canonical host is one value of the build and the deploy. *Amended 2026-11-24:* a Serverless Container
+  serves the apex redirect and `www` (Hosting decisions 1 to 3 as amended).
 - **Decided: the domain `shift2eu.com`, registered and DNS-hosted at Namecheap.** The maintainer sets the
   records the runbook lists: the `www` CNAME to the Edge Services endpoint, the apex redirect, CAA
-  restricting certificate issuance, DNSSEC on.
+  restricting certificate issuance, DNSSEC on. *Amended 2026-11-24:* the `www` CNAME and an apex ALIAS
+  point at the Serverless Container's endpoint (Hosting decision 10 as amended).
 - **Decided: Go's standard toolchain, not TinyGo.** One compiler keeps the downloads identical to the
   CLI's, `encoding/json` and reflection are fully supported, and no second toolchain trails Go's
   releases. The module is served compressed and cached per release; a test enforces a compressed-size
@@ -1002,10 +1020,12 @@ security audit (`security-audit` skill), since every one of them touches the tru
   `worker-src` to `child-src` to `script-src`, so same-origin dedicated and shared workers and a
   service-worker registration would be allowed. A worker loaded from a same-origin URL takes its CSP
   from its own response headers, not from the page, and this site sends no headers (Hosting decision 2),
-  so the worker's `fetch` would escape `connect-src 'none'`. `child-src`, `frame-src` and
-  `manifest-src` already fall back to `default-src 'none'`, but are pinned so a later directive cannot
-  widen them by fallback; the static test fails when any of the four is missing or other than exactly
-  `'none'` (*Layer 2*). It does not conflict with the unregister function: `getRegistrations()` and
+  so the worker's `fetch` would escape `connect-src 'none'`. (*Amended 2026-11-24:* once the container's
+  front is live, `www` sends the policy as a header, so a same-origin worker's script there gets it;
+  the reasoning holds on the other origins, and `worker-src 'none'` stays, ADR 0045.) `child-src`,
+  `frame-src` and `manifest-src` already fall back to `default-src 'none'`, but are pinned so a later
+  directive cannot widen them by fallback; the static test fails when any of the four is missing or
+  other than exactly `'none'` (*Layer 2*). It does not conflict with the unregister function: `getRegistrations()` and
   `unregister()` fetch no script, and `worker-src` governs only the fetch of a worker's script. The
   smoke test shows a dedicated worker (same-origin and `blob:`), a shared worker and a service-worker
   registration each blocked as a `worker-src` violation. Since `require-trusted-types-for 'script'`
@@ -1053,6 +1073,16 @@ it. Decision 4 is amended by the orchestrator's decision above.
    answers with a permanent redirect to `https://www.shift2eu.com` over HTTPS with a valid certificate
    (*Decided by the maintainer*). Asking Scaleway support about an apex on Edge Services is no longer
    needed. Milestones 1 to 3 do not depend on how the apex redirect is served; milestone 4 does.
+   *Amended 2026-11-24 by the maintainer (Option 1a,
+   [ADR 0045](../docs/adr/0045-front-the-site-with-a-serverless-container-running-a-pinned-caddy.md)):*
+   Scaleway support (ticket #1639626) answered that Edge Services always answers plain HTTP with a 302,
+   cannot turn plain HTTP off and cannot set response headers, so it cannot meet decision 3 or the HSTS
+   go/no-go. **Both `www.shift2eu.com` and `shift2eu.com` are now served by one public Scaleway Serverless
+   Container in front of the Edge Services pipeline:** a small server (Caddy) on both names as
+   custom domains (`www` by a Namecheap CNAME, the apex by a Namecheap ALIAS record), with the
+   container's HTTP option `enabled` (not `redirected`), reverse-proxying `www` to the pipeline endpoint
+   (`<id>.svc.edge.scw.cloud`). The private bucket, the pipeline and its cache, `ci/sitedeploy`, the
+   key's scope (decision 5) and the runbook's R7 stay.
 2. **Decided: the CSP in a `<meta>` element, the framing guard in the script, and HSTS as milestone 4's
    go/no-go.** The documentation lists caching, WAF and a custom domain, and no way to set response
    headers ([Edge Services FAQ](https://www.scaleway.com/en/docs/edge-services/faq/)); Object Storage
@@ -1079,6 +1109,20 @@ it. Decision 4 is amended by the orchestrator's decision above.
    subdomains that exist when preload is submitted. Milestone 4 records the HSTS outcome (`met` or
    `waived`) and whether preload is pursued in `site/records/hsts.json`, which the live checks read
    (*Layer 3*).
+   *Amended 2026-11-24 by the maintainer (decision 1 as amended, ADR 0045):* the host can now send
+   headers, so the conditional wording above no longer applies. The container's server sends, on every
+   HTTPS response of `www.shift2eu.com`, `Strict-Transport-Security: max-age=31536000;
+   includeSubDomains` and the four headers `Content-Security-Policy` (the `<meta>` policy plus
+   `frame-ancestors 'none'`), `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer` and
+   `Permissions-Policy`. The `<meta>` CSP and the script's framing guard stay, for the other origins
+   (decision 11). The apex's HTTPS redirect, served by the same container, sends no HSTS while preload
+   is not pursued. The preload decision is unchanged: it is still milestone 4's, and pursued only by
+   recording it in `site/records/hsts.json`; the container can then meet the list's requirements (the
+   apex's HTTPS answer with `preload` and `http://shift2eu.com` first to `https://shift2eu.com`, and
+   `www`'s header with `preload` too), by a change to its configuration made with the record. Where
+   this PRD says elsewhere that the site "cannot send" a response header (`Clear-Site-Data`,
+   `Cross-Origin-Opener-Policy`, a worker's own CSP), read "does not send": they are now possible and
+   not decided here.
 3. **Decided: permanent redirects over HTTPS only.** The apex, and `http://www.shift2eu.com`, answer with
    a 301 or 308 to `https://www.shift2eu.com` with the same path. For `http://www`, a redirect from Edge
    Services if it can redirect; if it cannot, plain HTTP on `www` is refused or the connection closed, if
@@ -1091,6 +1135,15 @@ it. Decision 4 is amended by the orchestrator's decision above.
    who enters through `shift2eu.com`, and serves only the redirect. The privacy page and milestone 3's
    hosting ADR (amended in milestone 4) name it, and if it issues its own certificate, its certificate
    authority goes into the CAA record (decision 10) and the ADR.
+   *Amended 2026-11-24 by the maintainer (decision 1 as amended, ADR 0045):* the container's server
+   writes the redirects itself, deciding the scheme by `X-Forwarded-Proto`: `http://www.shift2eu.com`,
+   `https://shift2eu.com` and `http://shift2eu.com` all answer **308** to `https://www.shift2eu.com` with
+   the same path, in one hop (the preload chain only if preload is pursued, decision 2). So `http://www`
+   is redirected, and the *refuse or close* alternative above is no longer used. Namecheap's URL
+   redirect is not used: by Namecheap's articles 384, 385 and 9604 (not tested), it serves no
+   certificate for `shift2eu.com`. **The apex redirect's provider is Scaleway** (Serverless
+   Containers), already named on the privacy page, so no third party is added; its certificate
+   authority is Let's Encrypt, which the CAA record already names (decision 10).
 4. **Decided: the module script is uploaded pre-compressed with `Content-Encoding: gzip`** if Edge
    Services serves it with that header and `Content-Type: text/javascript`; otherwise it is served
    uncompressed, the uncompressed size is held to a budget too (milestone 3's ADR,
@@ -1162,12 +1215,26 @@ it. Decision 4 is amended by the orchestrator's decision above.
    (€4/month) would not serve it either; the apex redirect is served outside Edge Services. Only if the
    maintainer later wants a second Edge-served host (none is planned) would it cost a second pipeline,
    €4/month, or the Professional plan (€12.99/month, 10 pipelines).
+   *Amended 2026-11-24 (decision 1 as amended):* the Starter plan and its one pipeline stay, as the
+   container's upstream. The container adds its own cost, held by three pins the infra unit enforces:
+   `max_scale` 1, 140 mvCPU and 0.25 GB of memory. Serverless Containers' prices (verified by the
+   maintainer on Scaleway's pricing page, 2026-11-24, Amsterdam): €0.00001 per vCPU-second after 200,000
+   free and €0.000002 per GB-second after 400,000 free, per account and month. The worst case, one
+   instance running a whole 30-day month, is about **€2.12 a month**; an idle container scaled to zero
+   stays in the free tier. The apex no longer needs a front outside Scaleway.
 10. **Decided: CAA `0 issue "letsencrypt.org"` and `0 issuewild ";"`** (and an `iodef` address if the
     maintainer wants reports), since Edge Services generates managed certificates with Let's Encrypt
     ([SSL/TLS certificates](https://www.scaleway.com/en/docs/edge-services/reference-content/ssl-tls-certificate/)),
     and DNSSEC on at Namecheap. DNSSEC covers Namecheap's records only; the CNAME's target zone is
     Scaleway's. If the apex redirect's provider issues its own certificate, the CAA record also names
     that provider's certificate authority (milestone 4).
+    *Amended 2026-11-24 (decision 1 as amended):* both names' certificates are now issued by Scaleway for
+    the container's custom domains. The apex's certificate was issued by Let's Encrypt under the existing
+    CAA record (the maintainer's test C3); `www`'s is expected from the same issuer (Scaleway's Serverless
+    Containers FAQ) and is checked at the first deploy (R8). So the CAA record stays as decided and names
+    no other authority. The `www` CNAME points at the container's endpoint,
+    and the apex is a Namecheap ALIAS record to the same endpoint; DNSSEC stays on, and C3 showed the
+    ALIAS's synthesised records signed and validated.
 11. **Decided: other origins serving the site are accepted, and only `www` is attested and checked.**
     The site's files are public through `www` in any case; the bucket website endpoint
     `<bucket>.s3-website.<region>.scw.cloud` serves them only under the public-read fallback below, and
@@ -1197,6 +1264,12 @@ it. Decision 4 is amended by the orchestrator's decision above.
     recorded in milestone 3's hosting ADR
     ([ADR 0042](../docs/adr/0042-host-the-site-behind-edge-services-and-deploy-it-from-the-release-with-a-bucket-scoped-key.md);
     ADR 0039, open point 8).
+    *Amended 2026-11-24 (decision 1 as amended):* the container's own endpoint
+    `<namespace>-<name>.functions.fnc.<region>.scw.cloud` is a further origin, but it serves no site: its
+    server answers every request there with a 308 to `https://www.shift2eu.com`, over plain HTTP too,
+    never a 200. The pipeline's endpoint is now the container's upstream and still serves the site on
+    its own origin, without the container's headers. The read rule is unchanged. ADR 0042, as amended
+    that day, lists the origins.
 
 ### To be checked by the maintainer
 
@@ -1242,10 +1315,34 @@ Facts still unknown, each with the milestone that needs it. None blocks mileston
     from which authority, for CAA); and whether it can send HSTS with `includeSubDomains` and `preload`
     and redirect `http://shift2eu.com` to `https://shift2eu.com` first (the preload requirements,
     decision 2).
+    *Answered 2026-11-24:* not Namecheap's URL redirect (no certificate for `shift2eu.com`, by Namecheap's
+    articles 384, 385 and 9604, not tested); the
+    Serverless Container of decision 1 as amended, run by Scaleway, with a Let's Encrypt certificate
+    (CAA unchanged). It can send HSTS with `preload` and redirect to `https://shift2eu.com` first, by
+    its configuration. Checked by the maintainer's test C3 (below).
   - Edge Services' response headers and redirects (decisions 2 and 3): whether it can add
     `Strict-Transport-Security`, `Content-Security-Policy`, `X-Content-Type-Options`, `Referrer-Policy`
     and `Permissions-Policy`, and redirect `http://www.shift2eu.com` to HTTPS, or else refuse or close
-    plain HTTP on `www`.
+    plain HTTP on `www`. *Answered 2026-11-24 by Scaleway support (ticket #1639626):* it cannot; it
+    always answers plain HTTP with a 302, cannot turn plain HTTP off and cannot set response headers.
+    Hence decisions 1 to 3 as amended.
+  - [x] *Checked 2026-11-24 by the maintainer (test C3, on mac-mini-home, throwaway containers in
+    `nl-ams`, all pass; ADR 0045 records the settings):* Serverless Containers accept the command and
+    arguments, 140 mvCPU, 0.25 GB, plain HTTP enabled (`https-connections-only=false`) and `max-scale`
+    1, with the endpoint `<namespace>-<name>.functions.fnc.nl-ams.scw.cloud`; the container's own 308
+    reaches the client unchanged over plain HTTP and HTTPS, and `Strict-Transport-Security`,
+    `X-Content-Type-Options` and `Content-Security-Policy` unchanged (the platform adds `server: envoy`
+    and `x-envoy-upstream-service-time`); a container reverse-proxying the pipeline endpoint answers
+    with the same status and the same probe object; and the apex behind a Namecheap ALIAS resolves to
+    the container, stays DNSSEC-signed and validated, reaches *ready* as a custom domain with a Let's
+    Encrypt certificate under the existing CAA record, and answers 308 over HTTPS and plain HTTP.
+  - For the infra unit (ADR 0045): whether the platform overwrites a client's own `X-Forwarded-Proto`
+    (a plain-HTTP request carrying `X-Forwarded-Proto: https`, the header as two fields in both orders,
+    two `https` fields, or `https, https` in one field must still get the 308: the rule compares the
+    header's joined value exactly with `https`, never Caddy's `header` matcher, which accepts any one
+    field); that it runs the Caddy image by its digest (a go/no-go; else a private Container
+    Registry mirror, recorded in ADR 0045 first); how the configuration reaches the container;
+    `min_scale`, and a cold start within the live check's request timeout.
   - The HSTS go/no-go (decision 2): HSTS on `www.shift2eu.com` with `max-age` of at least 31536000 and
     `includeSubDomains`, or the recorded waiver; whether preload is pursued, knowing it is effectively
     irreversible and binds every future subdomain; and the HSTS record (`met` or `waived`, preload or
@@ -1258,7 +1355,9 @@ Facts still unknown, each with the milestone that needs it. None blocks mileston
   - The records' release (*Runbook*): the version the records PR's `Release-As` footer names, picked
     when approving it and written into its squash commit's message when merging.
   - CAA and DNSSEC (decision 10): that Scaleway's managed issuance passes with the CAA record, and that
-    Namecheap supports CAA and DNSSEC for the domain.
+    Namecheap supports CAA and DNSSEC for the domain. *Checked 2026-11-24 for the apex (C3):* the
+    container's Let's Encrypt certificate was issued under the CAA record, and DNSSEC validated with the
+    ALIAS; `www`'s certificate on the container is checked at the first deploy (R8).
   - The deploy key's limits (decision 5): the runbook's canary step answers `403 AccessDenied` for every
     write action in the bucket-policy action list but `PutObject` and for the bucket calls IAM alone
     governs (any other answer recorded as inconclusive until explained), the site bucket's website
@@ -1270,6 +1369,8 @@ Facts still unknown, each with the milestone that needs it. None blocks mileston
 ### Proposed follow-ups (not filed)
 
 - Pruning earlier releases' assets from the bucket, by hand or with a separate key.
+- Sending `Cross-Origin-Opener-Policy` and, for the leaked-key repair, `Clear-Site-Data` from the
+  container's server, now that the host can send headers (Hosting decision 2 as amended, ADR 0045).
 
 ### Sources
 
