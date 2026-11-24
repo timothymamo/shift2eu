@@ -15,12 +15,9 @@ import (
 	"testing"
 )
 
-const (
-	// siteRunbookPath is the runbook the site's hosting is created and checked with, and readRuleHeading the R5
-	// section this file pins (PRD #297, issue #535).
-	siteRunbookPath = "docs/site-runbook.md"
-	readRuleHeading = "## R5. The read rule and the origins"
-)
+// readRuleHeading is the R5 section of siteRunbookPath (declared in runbookscwjson_test.go) this file pins
+// (PRD #297, issue #535).
+const readRuleHeading = "## R5. The read rule and the origins"
 
 // runbookCheck is one pin on the section's text: the items the check reads (a line, a comment block whose
 // consecutive comment lines are joined, or an outcome item), the substrings at least one of them must carry, and the
