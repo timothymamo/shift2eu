@@ -104,7 +104,8 @@ tar -xzf "$ARCHIVE"
 `awk` copies the line of `checksums.txt` whose name is exactly the archive's, and the check must print
 `<archive>: OK`; on macOS, run `shasum -a 256 --check "$ARCHIVE.sha256"` instead of `sha256sum`. A
 wrong digest prints `FAILED` and exits non-zero; a name missing from `checksums.txt` leaves the copied
-file empty, which fails the check too (non-zero exit, no `OK`) instead of checking nothing. `gh attestation verify` must print `✓ Verification succeeded!` and exits non-zero otherwise.
+file empty, which fails the check too (non-zero exit, no `OK`) instead of checking nothing.
+`gh attestation verify` must print `✓ Verification succeeded!` and exits non-zero otherwise.
 It works the same on macOS. `gh attestation verify checksums.txt ...`, with the same flags, verifies
 `checksums.txt` itself.
 
