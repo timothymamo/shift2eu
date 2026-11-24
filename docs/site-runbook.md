@@ -99,6 +99,10 @@ dev/tofu.sh -chdir=infra/site plan -out=site.tfplan        # PASS (first time): 
 dev/tofu.sh -chdir=infra/site show site.tfplan | less      # PASS: the bucket policy's three statements, four with public_read (ADR 0039), the IAM rule's two permission sets in one project
 dev/tofu.sh -chdir=infra/site apply site.tfplan            # PASS: "Apply complete"
 # FAIL "Error acquiring the state lock": another tofu holds it; wait, or after a crash dev/tofu.sh -chdir=infra/site force-unlock <lock ID>
+# Scaleway assigns the DNS stage's default_fqdn after creating it: edge_endpoint is empty right after apply, so refresh the state (no resource change) until it is set, 20 tries 30 s apart
+n=0; until [ -n "$(dev/tofu.sh -chdir=infra/site output -raw edge_endpoint 2>/dev/null)" ] || [ "$n" -ge 20 ]; do sleep 30; dev/tofu.sh -chdir=infra/site apply -refresh-only -auto-approve > /dev/null; n=$((n + 1)); done
+[ -n "$(dev/tofu.sh -chdir=infra/site output -raw edge_endpoint 2>/dev/null)" ] && echo "PASS edge_endpoint is set" || echo "FAIL edge_endpoint still empty after 10 minutes"
+# FAIL: check the pipeline's DNS stage in the console (Edge Services) for its default FQDN, then run the two lines above again
 dev/tofu.sh -chdir=infra/site plan -detailed-exitcode      # PASS: exit 0, "No changes."
 # FAIL exit 2: read the diff; the provider or someone changed a resource
 dev/tofu.sh -chdir=infra/site output                       # PASS: project_id, deploy_application_id, bucket_name, bucket_website_endpoint, pipeline_id, edge_endpoint
