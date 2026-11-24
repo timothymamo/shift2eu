@@ -1163,6 +1163,62 @@ on:
 `,
 			want: true,
 		},
+		// YAML reads a bare CR as a line break, and YAML 1.1 reads the next
+		// line (NEL), the line separator (LS) and the paragraph separator (PS)
+		// as ones too, so a comment ends at any of them and the text after it
+		// is no comment. A reader that splits only on LF takes each of these
+		// documents for a comment and the schedule behind it is a trigger the
+		// workflow check never sees.
+		{
+			name:     "a bare CR line break in a comment on the on key",
+			workflow: "on: # c\r  workflow_dispatch:\r  schedule:\r    - cron: '0 1 1 1 1'\njobs: {}\n",
+			want:     true,
+		},
+		{
+			name:     "a bare CR line break in a comment below the on key",
+			workflow: "on:\n  workflow_dispatch:\n  # c\r  schedule:\r    - cron: '0 1 1 1 1'\njobs: {}\n",
+			want:     true,
+		},
+		{
+			name:     "a bare CR line break in a root comment",
+			workflow: "# c\ron:\r  schedule:\r    - cron: '0 1 1 1 1'\n",
+			want:     true,
+		},
+		{
+			name:     "a NEL line break in a comment on the on key",
+			workflow: "on: # c\u0085  workflow_dispatch:\u0085  schedule:\u0085    - cron: '0 1 1 1 1'\njobs: {}\n",
+			want:     true,
+		},
+		{
+			name:     "a NEL line break in a comment below the on key",
+			workflow: "on:\n  workflow_dispatch:\n  # c\u0085  schedule:\u0085    - cron: '0 1 1 1 1'\njobs: {}\n",
+			want:     true,
+		},
+		{
+			name:     "a NEL line break in a root comment",
+			workflow: "# c\u0085on:\u0085  schedule:\u0085    - cron: '0 1 1 1 1'\n",
+			want:     true,
+		},
+		{
+			name:     "a line separator line break in a comment on the on key",
+			workflow: "on: # c\u2028  workflow_dispatch:\u2028  schedule:\u2028    - cron: '0 1 1 1 1'\njobs: {}\n",
+			want:     true,
+		},
+		{
+			name:     "a line separator line break in a comment below the on key",
+			workflow: "on:\n  workflow_dispatch:\n  # c\u2028  schedule:\u2028    - cron: '0 1 1 1 1'\njobs: {}\n",
+			want:     true,
+		},
+		{
+			name:     "a line separator line break in a root comment",
+			workflow: "# c\u2028on:\u2028  schedule:\u2028    - cron: '0 1 1 1 1'\n",
+			want:     true,
+		},
+		{
+			name:     "a paragraph separator line break in a comment on the on key",
+			workflow: "on: # c\u2029  workflow_dispatch:\u2029  schedule:\u2029    - cron: '0 1 1 1 1'\njobs: {}\n",
+			want:     true,
+		},
 	}
 
 	for _, tc := range tests {
