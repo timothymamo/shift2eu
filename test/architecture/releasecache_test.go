@@ -46,8 +46,9 @@ func TestReleaseWorkflowDisablesTheGoCache(t *testing.T) {
 // golangci/golangci-lint-action and does not turn the Actions cache off is reported at the line of its
 // dash, and a step that does turn it off is not: setup-go's input for it is cache: false, the lint
 // action's is skip-cache: true, and neither step's cache is turned off by the other's word, by a cache:
-// key outside the step's with:, or by nothing at all. Neither is another action's step, or a step whose
-// run: block happens to hold a line that looks like one.
+// key outside the step's with:, or by nothing at all. The step is the same step in the block style, in the
+// flow style, and with its uses: key quoted, which GitHub reads as one mapping. Neither is another
+// action's step, or a step whose run: block happens to hold a line that looks like one.
 func TestGoCacheGaps(t *testing.T) {
 	t.Parallel()
 
@@ -115,6 +116,37 @@ func TestGoCacheGaps(t *testing.T) {
 			want: []goCacheGap{{line: 4, action: "actions/setup-go"}},
 		},
 		{
+			// The key of a mapping line is a scalar too, and a quoted one names the same key: a reader
+			// that only knows the bare key would not see the step at all, and a step no check sees is
+			// the step this check exists for.
+			name: "a double-quoted uses key with no cache",
+			workflow: "jobs:\n  test:\n    steps:\n      - \"uses\": actions/setup-go" + pin + "\n" +
+				"        with:\n          go-version-file: go.mod\n",
+			want: []goCacheGap{{line: 4, action: "actions/setup-go"}},
+		},
+		{
+			name: "a single-quoted uses key with no cache",
+			workflow: "jobs:\n  test:\n    steps:\n      - 'uses': actions/setup-go" + pin + "\n" +
+				"        with:\n          go-version-file: go.mod\n",
+			want: []goCacheGap{{line: 4, action: "actions/setup-go"}},
+		},
+		{
+			name: "a double-quoted uses key with cache: false",
+			workflow: "jobs:\n  test:\n    steps:\n      - \"uses\": actions/setup-go" + pin + "\n" +
+				"        with:\n          go-version-file: go.mod\n          cache: false\n",
+		},
+		{
+			// A step written in the flow style is a mapping like any other: the very step this check
+			// exists for, written on one line, must still be the step it reports.
+			name:     "a flow-style setup-go step without cache",
+			workflow: "jobs:\n  test:\n    steps:\n      - {uses: actions/setup-go" + pin + ", with: {go-version-file: go.mod}}\n",
+			want:     []goCacheGap{{line: 4, action: "actions/setup-go"}},
+		},
+		{
+			name:     "a flow-style setup-go step with cache: false",
+			workflow: "jobs:\n  test:\n    steps:\n      - {uses: actions/setup-go" + pin + ", with: {go-version-file: go.mod, cache: false}}\n",
+		},
+		{
 			// skip-cache is the lint action's input, not setup-go's: a step that sets only that has the
 			// Go cache on and is a gap.
 			name: "a setup-go step with skip-cache: true only",
@@ -156,6 +188,15 @@ func TestGoCacheGaps(t *testing.T) {
 			want: []goCacheGap{{line: 4, action: "golangci/golangci-lint-action"}},
 		},
 		{
+			name:     "a flow-style golangci-lint step without skip-cache",
+			workflow: "jobs:\n  lint:\n    steps:\n      - {uses: golangci/golangci-lint-action" + pin + ", with: {version: v0.0.0}}\n",
+			want:     []goCacheGap{{line: 4, action: "golangci/golangci-lint-action"}},
+		},
+		{
+			name:     "a flow-style golangci-lint step with skip-cache: true",
+			workflow: "jobs:\n  lint:\n    steps:\n      - {uses: golangci/golangci-lint-action" + pin + ", with: {version: v0.0.0, skip-cache: true}}\n",
+		},
+		{
 			name: "another action's step with no cache",
 			workflow: "jobs:\n  test:\n    steps:\n      - uses: actions/checkout" + pinned + "\n" +
 				"        with:\n          persist-credentials: false\n",
@@ -189,6 +230,69 @@ func TestGoCacheGaps(t *testing.T) {
 			// name the same line and action, which is what the reader is pinned on.
 			if diff := cmp.Diff(tc.want, goCacheGaps([]byte(tc.workflow)), cmpopts.EquateComparable(goCacheGap{})); diff != "" {
 				t.Errorf("goCacheGaps() mismatch (-want +got):\n%s\n%q", diff, tc.workflow)
+			}
+		})
+	}
+}
+
+// TestGoSetupSteps pins the reader the release workflow's count is checked with: every step that uses
+// actions/setup-go is a step it hands the cache check, whichever style the step is written in. A step it
+// fails to recognise is a step no gap check reads, so the flow style and a quoted key, which GitHub reads
+// as the same step, are read as one.
+func TestGoSetupSteps(t *testing.T) {
+	t.Parallel()
+
+	// pin is the action's pin alone: a trailing comment, which the block form carries, would end a flow
+	// mapping at the # and leave the step unclosed.
+	const pin = "@0123456789abcdef0123456789abcdef01234567"
+
+	tests := []struct {
+		name     string
+		workflow string
+		want     int
+	}{
+		{
+			name:     "a block-style step",
+			workflow: "jobs:\n  test:\n    steps:\n      - uses: actions/setup-go" + pin + "\n",
+			want:     1,
+		},
+		{
+			name:     "a flow-style step",
+			workflow: "jobs:\n  test:\n    steps:\n      - {uses: actions/setup-go" + pin + ", with: {go-version-file: go.mod}}\n",
+			want:     1,
+		},
+		{
+			name:     "a double-quoted uses key",
+			workflow: "jobs:\n  test:\n    steps:\n      - \"uses\": actions/setup-go" + pin + "\n",
+			want:     1,
+		},
+		{
+			name:     "a single-quoted uses key",
+			workflow: "jobs:\n  test:\n    steps:\n      - 'uses': actions/setup-go" + pin + "\n",
+			want:     1,
+		},
+		{
+			// The step in every job counts once, whichever style it is written in: the count is what
+			// the release workflow's setup-go steps are held to, so one dropped step is one gap check
+			// short.
+			name: "two steps, one in each style",
+			workflow: "jobs:\n  test:\n    steps:\n      - uses: actions/setup-go" + pin + "\n" +
+				"  build:\n    steps:\n      - {uses: actions/setup-go" + pin + "}\n",
+			want: 2,
+		},
+		{
+			name:     "another action in the flow style",
+			workflow: "jobs:\n  test:\n    steps:\n      - {uses: actions/checkout" + pin + "}\n",
+			want:     0,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := len(goSetupSteps([]byte(tc.workflow))); got != tc.want {
+				t.Errorf("goSetupSteps() read %d setup-go steps, want %d:\n%q", got, tc.want, tc.workflow)
 			}
 		})
 	}
