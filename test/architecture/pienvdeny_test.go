@@ -24,11 +24,13 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"regexp"
 	"strconv"
 	"strings"
 	"testing"
+	"unicode"
 
 	"github.com/google/go-cmp/cmp"
 )
@@ -511,6 +513,46 @@ func TestPiEnvDenyExtensionAncestorCheckHoldsAtTheRoot(t *testing.T) {
 		t.Errorf("%s: the extension no longer names the recursive tools' check (`recursiveTools.has(`), so nothing here can tell whether an absent path is given its default before it (issue #540)", piEnvDenyExtension)
 	case pathDefaultAt > recursiveAt:
 		t.Errorf("%s: the extension gives a file tool's absent path its default after the recursive check reads the path, so the check sees no path and allows the call (issue #540)", piEnvDenyExtension)
+	}
+}
+
+// TestPiEnvDenyExtensionWritesTheSpaceClassAsEscapes pins how the extension
+// writes the Unicode spaces pi maps to a plain space before it reads a path: the
+// class of `const unicodeSpaces` has to be spelled with `\uXXXX` escapes, never
+// with the invisible characters themselves, so that a reader and a diff can see
+// which code points it matches. The same characters are meant, so nothing here
+// runs the class; it only holds the source text to ASCII (issue #546).
+func TestPiEnvDenyExtensionWritesTheSpaceClassAsEscapes(t *testing.T) {
+	t.Parallel()
+
+	text := string(readRepositoryFile(t, piEnvDenyExtension))
+
+	const declaration = "const unicodeSpaces ="
+
+	line, lineNumber := "", 0
+
+	for i, candidate := range strings.Split(text, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(candidate), declaration) {
+			line, lineNumber = candidate, i+1
+
+			break
+		}
+	}
+
+	if lineNumber == 0 {
+		t.Fatalf("%s: no line starts with %q, so nothing here can tell which characters the Unicode space class holds (issue #546)", piEnvDenyExtension, declaration)
+	}
+
+	var literal []string
+
+	for _, r := range line {
+		if r > unicode.MaxASCII {
+			literal = append(literal, fmt.Sprintf("U+%04X", r))
+		}
+	}
+
+	if len(literal) > 0 {
+		t.Errorf("%s:%d: the Unicode space class is written with the invisible characters themselves (%s) instead of escapes (%q), so a reader or a diff cannot see which code points it matches (issue #546); write every one of them as a `\\uXXXX` escape, as in `\\u00a0`, `\\u2000-\\u200a` and `\\u3000`", piEnvDenyExtension, lineNumber, strings.Join(literal, ", "), line)
 	}
 }
 
