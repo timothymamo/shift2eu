@@ -174,7 +174,9 @@ jobs:
       # if the line's form ever drifts from the sed's two spaces and double quotes). setup-node installs
       # that exact version, checked only by TLS to its download host, unlike the VM's SHASUMS256 check:
       # accepted for a binary that only runs a test, in a job whose token is contents: read. Its cache
-      # stays off, as no package manager runs here.
+      # stays off, as no package manager runs here. test/architecture/citestnode_test.go
+      # (TestCITestJobPinsTheNodeTheExtensionLoadRuns) holds these steps exactly and refuses an edit that
+      # drops or loosens them, as test/architecture/internal/check/releaseworkflow.go holds release.yml's.
       - name: The Node release dev/lima.yaml pins
         id: node
         run: |
