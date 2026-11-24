@@ -549,7 +549,7 @@ jobs:
       # provenance for exactly that digest and tag, its Sigstore signature included (ADR 0040, The image
       # check's residual risk). The result is the model's: its tag and digest are held to their shapes
       # before they reach a command line, the tag's first whatever the digest is. An empty digest is the
-      # result's "image not pulled", which the image step already accepted: nothing to verify.
+      # result's "image not pulled": nothing to verify.
       - name: Verify the image's provenance attestation
         timeout-minutes: 10
         env:
@@ -557,7 +557,14 @@ jobs:
         run: |
           set -euo pipefail
           image="ghcr.io/${GITHUB_REPOSITORY,,}"
-          digest="$(jq -er '.image_digest' "${RUNNER_TEMP}/result.json")"
+          # The digest is read as a string alone, and refused unless it is exactly the empty value (the run
+          # pulled no image) or one sha256 digest: any other value, a newline in it included, would reach
+          # the empty branch below as a not-pulled image otherwise. The step stands alone: it trusts no
+          # earlier step to have read the digest.
+          if ! digest="$(jq -er '.image_digest | select(type == "string") | select(. == "" or test("^sha256:[0-9a-f]{64}\\z"))' "${RUNNER_TEMP}/result.json")"; then
+            echo "::error title=Audit publish::the image digest is no string, no empty value and no sha256 digest: see runbook step 11"
+            exit 1
+          fi
           tag="$(jq -er '.release_tag' "${RUNNER_TEMP}/result.json")"
           if [[ ! "${tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "::error title=Audit publish::the tag's shape is no vMAJOR.MINOR.PATCH: see runbook step 11"

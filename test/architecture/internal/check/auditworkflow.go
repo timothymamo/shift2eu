@@ -132,9 +132,13 @@ var (
 	// so that what it downloads is no longer what the check accepted.
 	secondListing = command(`actions/runs/`, "a second listing of the run's artifacts (actions/runs/...), want the ID and digest from ${RUNNER_TEMP}/artifact.json, the checked listing's")
 
-	// The attestation step's order: the tag's shape whatever the digest, then
-	// an empty digest skipped with a fixed notice (the run pulled no image),
-	// then the digest's shape, and only then the verification.
+	// The attestation step's order: the digest read as a string alone and
+	// refused unless it is exactly "" or one sha256 digest (the step trusts no
+	// earlier step's read, review round 2, G3), the tag's shape whatever the
+	// digest, then an empty digest skipped with a fixed notice (the run pulled
+	// no image), then the digest's shape, and only then the verification.
+	digestRead = command(`if ! digest="\$\(jq -er '\.image_digest \| select\(type == "string"\) \| select\(\. == "" or test\("\^sha256:\[0-9a-f\]\{64\}\\\\z"\)\)' "\$\{RUNNER_TEMP\}/result\.json"\)"; then\s+echo "::error [^"\n]*"\s+exit 1\s+fi`,
+		`the digest's string-and-shape read: if ! digest="$(jq -er '.image_digest | select(type == "string") | select(. == "" or test("^sha256:[0-9a-f]{64}\\z"))' ...)"; then ... exit 1`)
 	tagShape    = command(`\[\[ ! "\$\{tag\}" =~ \^v\[0-9\]\+\\\.\[0-9\]\+\\\.\[0-9\]\+\$ \]\]`, `the tag's shape check [[ ! "${tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]`)
 	emptyDigest = command(`if \[ -z "\$\{digest\}" \]; then\s+echo "image not pulled[^"\n]*"\s+exit 0\s+fi`, `the empty digest's branch: echo "image not pulled: ..." and exit 0`)
 	digestShape = command(`\[\[ ! "\$\{digest\}" =~ \^sha256:\[0-9a-f\]\{64\}\$ \]\]`, `the digest's shape check [[ ! "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]]`)
@@ -284,13 +288,13 @@ var auditJobs = []auditJob{
 			{
 				name: "Verify the image's provenance attestation", githubToken: true,
 				runs: []auditCommand{
-					tagShape, emptyDigest, digestShape, verify,
+					digestRead, tagShape, emptyDigest, digestShape, verify,
 					command(`--repo "\$\{GITHUB_REPOSITORY\}"`, `--repo "${GITHUB_REPOSITORY}"`),
 					command(`--signer-workflow "\$\{GITHUB_REPOSITORY\}/\.github/workflows/release\.yml"`, `--signer-workflow "${GITHUB_REPOSITORY}/.github/workflows/release.yml"`),
 					command(`--source-ref "refs/tags/`, `--source-ref "refs/tags/<tag>"`),
 					command(`--deny-self-hosted-runners`, "--deny-self-hosted-runners: no provenance a self-hosted runner signed"),
 				},
-				order: []auditCommand{tagShape, emptyDigest, digestShape, verify},
+				order: []auditCommand{digestRead, tagShape, emptyDigest, digestShape, verify},
 			},
 			// The scan runs before the App's token is minted: a result gitleaks
 			// refuses has no write token minted for it (review round 1, A6).
@@ -1185,13 +1189,15 @@ func (a *auditReader) run(e yamlread.Entry, path string, want *auditStep, env []
 		return
 	}
 
+	// A comment line is no command: a guard commented out is a guard
+	// missing, and a commented copy stands in for no command in order.
+	code := withoutComments(lines)
+
 	for _, c := range want.runs {
-		if !c.re.MatchString(text) {
+		if !c.re.MatchString(code) {
 			a.r.fail("%s runs no %s", path, c.want)
 		}
 	}
-
-	code := withoutComments(lines)
 
 	for _, c := range want.refuses {
 		if c.re.MatchString(code) {
@@ -1199,10 +1205,11 @@ func (a *auditReader) run(e yamlread.Entry, path string, want *auditStep, env []
 		}
 	}
 
-	a.order(text, path, want.order)
+	a.order(code, path, want.order)
 }
 
-// withoutComments returns the script's lines that are no comment, joined.
+// withoutComments returns the script's lines that are no comment, joined. Only
+// whole comment lines go: a # inside a code line (${digest#sha256:}) stays.
 func withoutComments(lines []string) string {
 	kept := make([]string, 0, len(lines))
 
@@ -1217,22 +1224,24 @@ func withoutComments(lines []string) string {
 
 // order checks that the script holds the commands of order in that order. A
 // command the script lacks is left to runs, which reports it.
+// Every pair out of order is named, the command that must come first first, so
+// that one command moved names each command it now follows.
 func (a *auditReader) order(text, path string, order []auditCommand) {
-	last, lastWant := -1, ""
+	at := make([]int, len(order))
 
-	for _, c := range order {
-		loc := c.re.FindStringIndex(text)
-		if loc == nil {
-			continue
+	for i, c := range order {
+		at[i] = -1
+		if loc := c.re.FindStringIndex(text); loc != nil {
+			at[i] = loc[0]
 		}
+	}
 
-		if loc[0] < last {
-			a.r.fail("%s runs %s after %s, want it before", path, c.want, lastWant)
-
-			continue
+	for i, first := range order {
+		for j := i + 1; j < len(order); j++ {
+			if at[i] >= 0 && at[j] >= 0 && at[i] > at[j] {
+				a.r.fail("%s runs %s after %s, want it before", path, first.want, order[j].want)
+			}
 		}
-
-		last, lastWant = loc[0], c.want
 	}
 }
 
