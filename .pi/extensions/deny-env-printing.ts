@@ -92,8 +92,16 @@ const deckKeyDirectory = ".config/dot-agent-deck";
 // them in a bash command.
 const deckDirectorySpelling = /\.config[/.]*\/dot-agent/;
 
-// The Unicode spaces pi maps to a plain space before it reads a path.
-const unicodeSpaces = /[  -   　]/g;
+// The Unicode spaces pi maps to a plain space before it reads a path: U+00A0, U+2000 to U+200A, U+202F,
+// U+205F and U+3000. The class is built from their code points so that this file holds only ASCII.
+const unicodeSpaces = new RegExp(
+	"[" +
+		String.fromCodePoint(0x00a0, 0x2000) +
+		"-" +
+		String.fromCodePoint(0x200a, 0x202f, 0x205f, 0x3000) +
+		"]",
+	"g",
+);
 
 // resolvePath resolves a file tool's path as pi's resolveToCwd and normalizePath do: one leading `@`
 // (pi's shorthand for a path) is dropped, a `file://` URL becomes its path, the Unicode spaces become
