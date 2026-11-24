@@ -482,6 +482,41 @@ func TestListAuditAdvisoriesRefusesWhatIsNoListing(t *testing.T) {
 			name:  "an entry whose collaborating teams are no array",
 			route: advisoryListingRoute([]map[string]any{advisoryEntryWith("collaborating_teams", "a-team")}, ""),
 		},
+		// A credit or collaborator key the answer lacks, or one that is null,
+		// is no empty list: counted as none of them it would fail open on an
+		// advisory a person is on, which the run would then match and PATCH.
+		{
+			name:  "an entry without credits",
+			route: advisoryListingRoute([]map[string]any{advisoryEntryWithout("credits")}, ""),
+		},
+		{
+			name:  "an entry whose credits are null",
+			route: advisoryListingRoute([]map[string]any{advisoryEntryWith("credits", nil)}, ""),
+		},
+		{
+			name:  "an entry without credits_detailed",
+			route: advisoryListingRoute([]map[string]any{advisoryEntryWithout("credits_detailed")}, ""),
+		},
+		{
+			name:  "an entry whose credits_detailed are null",
+			route: advisoryListingRoute([]map[string]any{advisoryEntryWith("credits_detailed", nil)}, ""),
+		},
+		{
+			name:  "an entry without collaborating users",
+			route: advisoryListingRoute([]map[string]any{advisoryEntryWithout("collaborating_users")}, ""),
+		},
+		{
+			name:  "an entry whose collaborating users are null",
+			route: advisoryListingRoute([]map[string]any{advisoryEntryWith("collaborating_users", nil)}, ""),
+		},
+		{
+			name:  "an entry without collaborating teams",
+			route: advisoryListingRoute([]map[string]any{advisoryEntryWithout("collaborating_teams")}, ""),
+		},
+		{
+			name:  "an entry whose collaborating teams are null",
+			route: advisoryListingRoute([]map[string]any{advisoryEntryWith("collaborating_teams", nil)}, ""),
+		},
 		{
 			name: "a next link without a cursor",
 			route: advisoryListingRoute([]map[string]any{valid()},
@@ -537,10 +572,12 @@ func advisoryEntryWithout(name string) map[string]any {
 }
 
 // TestPlanAdvisoriesNeverMatchesAForeignAdvisory pins the match: only the
-// audit App's own draft or closed advisory, with no credit and no collaborator,
-// is ever matched - so a PATCH can never reach a triage, published or withdrawn
-// advisory, another author's, or one a person is on. Each fixture holds the
-// finding's fingerprint, so a match would be visible as an update.
+// audit App's own draft or closed advisory, whose ID the PATCH row accepts and
+// with no credit and no collaborator, is ever matched - so a PATCH can never
+// reach a triage, published or withdrawn advisory, another author's, one a
+// person is on, or one whose ID the row would refuse. Each fixture holds the
+// finding's fingerprint, so a match would be visible as an update; with no
+// finding at all it would be visible as a not-reproduced mark.
 func TestPlanAdvisoriesNeverMatchesAForeignAdvisory(t *testing.T) {
 	t.Parallel()
 
@@ -610,15 +647,6 @@ func TestPlanAdvisoriesNeverMatchesAForeignAdvisory(t *testing.T) {
 			},
 		},
 		{
-			name: "a draft with a detailed credit",
-			advisory: func() github.Advisory {
-				a := base()
-				a.Credits = 2
-
-				return a
-			},
-		},
-		{
 			name: "a draft with a collaborating user",
 			advisory: func() github.Advisory {
 				a := base()
@@ -628,10 +656,28 @@ func TestPlanAdvisoriesNeverMatchesAForeignAdvisory(t *testing.T) {
 			},
 		},
 		{
-			name: "a draft with a collaborating team",
+			name: "a draft whose GHSA ID holds a group of zeros",
 			advisory: func() github.Advisory {
 				a := base()
-				a.Collaborators = 3
+				a.GHSAID = "GHSA-0000-0000-0000"
+
+				return a
+			},
+		},
+		{
+			name: "a draft whose GHSA ID is lowercase",
+			advisory: func() github.Advisory {
+				a := base()
+				a.GHSAID = "ghsa-2222-3333-4444"
+
+				return a
+			},
+		},
+		{
+			name: "a draft whose GHSA ID's last group is short",
+			advisory: func() github.Advisory {
+				a := base()
+				a.GHSAID = "GHSA-2222-3333-444"
 
 				return a
 			},
@@ -657,6 +703,23 @@ func TestPlanAdvisoriesNeverMatchesAForeignAdvisory(t *testing.T) {
 
 			if !plan.Reproduced() {
 				t.Errorf("the plan does not report the finding reproduced, want it to: a new draft is filed")
+			}
+		})
+
+		t.Run(tc.name+", with no finding", func(t *testing.T) {
+			t.Parallel()
+
+			plan, err := github.PlanAdvisories(nil, []github.Advisory{tc.advisory()}, fixtureRun(t))
+			if err != nil {
+				t.Fatalf("PlanAdvisories = %v, want no error", err)
+			}
+
+			if writes := plan.Writes(); len(writes) != 0 {
+				t.Errorf("the plan's writes are %+v, want none: a foreign advisory is never marked not reproduced", writes)
+			}
+
+			if plan.Reproduced() {
+				t.Errorf("the plan reports a private finding reproduced, want none: the run has no finding")
 			}
 		})
 	}
@@ -753,12 +816,16 @@ func TestPlanAdvisoriesCreatesANewDraft(t *testing.T) {
 // reproduced by replacing only the listing's last status line. A draft that
 // already says so is written no more, and a draft whose description holds no
 // status line - a maintainer's rewrite - is skipped rather than refused, so a
-// rewrite can never stop the run.
+// rewrite can never stop the run. A closed advisory is never written at all,
+// whichever status its description states: a PATCH with state draft would
+// reopen it.
 func TestPlanAdvisoriesMarksADraftNotReproduced(t *testing.T) {
 	t.Parallel()
 
 	for _, tc := range []struct {
-		name        string
+		name string
+		// state is the listing entry's state, draft when empty.
+		state       string
 		description string
 		want        []github.AdvisoryWrite
 	}{
@@ -780,12 +847,34 @@ func TestPlanAdvisoriesMarksADraftNotReproduced(t *testing.T) {
 			name:        "a draft without a status line",
 			description: "a maintainer's own description, with no status line\n",
 		},
+		{
+			// A closed one with no finding holding its fingerprint: an earlier
+			// run's advisory, whose mark would reopen it.
+			name:        "a closed advisory that says open",
+			state:       github.AdvisoryStateClosed,
+			description: draftDescription("open"),
+		},
+		{
+			name:        "a closed advisory that says new",
+			state:       github.AdvisoryStateClosed,
+			description: draftDescription("new"),
+		},
+		{
+			name:        "a closed advisory that says regressed",
+			state:       github.AdvisoryStateClosed,
+			description: draftDescription("regressed"),
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
+			state := tc.state
+			if state == "" {
+				state = github.AdvisoryStateDraft
+			}
+
 			existing := []github.Advisory{
-				matchableAdvisory(fixtureGHSA, github.AdvisoryStateDraft, libraryFingerprint, tc.description),
+				matchableAdvisory(fixtureGHSA, state, libraryFingerprint, tc.description),
 			}
 
 			plan, err := github.PlanAdvisories(nil, existing, fixtureRun(t))
@@ -1214,6 +1303,98 @@ func TestFileAdvisoriesRefusesACreation(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestFileAdvisoriesRefusesACreationAfterAWrite pins what a refused create is
+// worth once the run has written: only a create refused before any advisory
+// write of the run is the private findings not filed - the first write, as
+// TestFileAdvisoriesRefusesACreation pins. A run whose earlier create or update
+// went through has filed part of its findings, so the refusal is GitHub's
+// failure, never "not filed", and no advisory call follows it.
+func TestFileAdvisoriesRefusesACreationAfterAWrite(t *testing.T) {
+	t.Parallel()
+
+	create := "POST " + fixtureRepoPrefix + "/security-advisories"
+
+	t.Run("a create answered 201, then a create refused", func(t *testing.T) {
+		t.Parallel()
+
+		first := libraryPrivateFinding(t, "G309")
+		second := libraryPrivateFinding(t, "G310")
+
+		for _, status := range []int{403, 422} {
+			t.Run(fmt.Sprint(status), func(t *testing.T) {
+				t.Parallel()
+
+				plan := planOf(t, []publish.PrivateFinding{first, second}, nil)
+
+				fake := newFakeGH(t,
+					Route{Method: "POST", Endpoint: fixtureRepoPrefix + "/security-advisories", Status: 201, Body: map[string]any{"ghsa_id": fixtureGHSA}},
+					Route{Method: "POST", Endpoint: fixtureRepoPrefix + "/security-advisories", Status: status, Body: map[string]string{"message": "refused"}},
+				)
+				client := newFixtureClient(t, fake.Path)
+
+				err := github.FileAdvisories(t.Context(), client, plan)
+
+				if errors.Is(err, publish.ErrPrivateNotFiled) {
+					t.Fatalf("FileAdvisories = %v, want no publish.ErrPrivateNotFiled: the run's first draft was written", err)
+				}
+
+				if !errors.Is(err, publish.ErrGitHub) {
+					t.Fatalf("FileAdvisories = %v, want an error wrapping publish.ErrGitHub", err)
+				}
+
+				var got []string
+				for _, c := range fake.Calls(t) {
+					got = append(got, endpointOf(c))
+				}
+
+				if diff := cmp.Diff([]string{create, create}, got); diff != "" {
+					t.Errorf("the refused run's calls (-want +got):\n%s", diff)
+				}
+			})
+		}
+	})
+
+	t.Run("an update answered 200, then a create refused", func(t *testing.T) {
+		t.Parallel()
+
+		first := libraryPrivateFinding(t, "G309")
+		second := libraryPrivateFinding(t, "G310")
+
+		existing := []github.Advisory{
+			matchableAdvisory(fixtureGHSA, github.AdvisoryStateDraft, first.Fingerprint, draftDescription("open")),
+		}
+
+		plan := planOf(t, []publish.PrivateFinding{first, second}, existing)
+
+		fake := newFakeGH(t,
+			Route{Method: "PATCH", Endpoint: advisoryPatchEndpoint(fixtureGHSA), Status: 200, Body: map[string]any{"ghsa_id": fixtureGHSA}},
+			Route{Method: "POST", Endpoint: fixtureRepoPrefix + "/security-advisories", Status: 403, Body: map[string]string{"message": "refused"}},
+		)
+		client := newFixtureClient(t, fake.Path)
+
+		err := github.FileAdvisories(t.Context(), client, plan)
+
+		if errors.Is(err, publish.ErrPrivateNotFiled) {
+			t.Fatalf("FileAdvisories = %v, want no publish.ErrPrivateNotFiled: the run's update went through first", err)
+		}
+
+		if !errors.Is(err, publish.ErrGitHub) {
+			t.Fatalf("FileAdvisories = %v, want an error wrapping publish.ErrGitHub", err)
+		}
+
+		var got []string
+		for _, c := range fake.Calls(t) {
+			got = append(got, endpointOf(c))
+		}
+
+		want := []string{"PATCH " + advisoryPatchEndpoint(fixtureGHSA), create}
+
+		if diff := cmp.Diff(want, got); diff != "" {
+			t.Errorf("the refused run's calls (-want +got):\n%s", diff)
+		}
+	})
 }
 
 // TestFileAdvisoriesStopsOnAFailedWrite pins every other failure: a create

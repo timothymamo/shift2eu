@@ -683,6 +683,85 @@ func TestPublishStopsOnAListingItCannotRead(t *testing.T) {
 	}
 }
 
+// TestPublishLeavesAClosedAdvisoryAlone pins the reopen guard on a whole run: a
+// closed App advisory of no finding's fingerprint, whose description says open,
+// is never patched - a PATCH with state draft would reopen it - and the report
+// says the run found no private finding.
+func TestPublishLeavesAClosedAdvisoryAlone(t *testing.T) {
+	t.Parallel()
+
+	listing := []map[string]any{closedEntry(fixtureGHSA, libraryFingerprint, "open", "2026-12-01T00:00:00Z")}
+
+	fake := newFakeGH(t, publishRoutesWithAdvisories(listing, nil)...)
+	client := newFixtureClient(t, fake.Path)
+	cfg := publishConfig(t, client, newFixtureGitleaks(t, newFakeGitleaks(t)), fixtureResultFile(t), fixtureReportsDir(t))
+
+	published, err := github.Publish(t.Context(), cfg)
+	if err != nil {
+		t.Fatalf("Publish = %v, want no error", err)
+	}
+
+	if published.Private != publish.PrivateNone {
+		t.Errorf("the run's private state is %v, want PrivateNone: the run has no private finding", published.Private)
+	}
+
+	if diff := cmp.Diff([]string{"GET " + fixtureAdvisoriesEndpoint}, advisoryEndpoints(fake.Calls(t))); diff != "" {
+		t.Errorf("the run's advisory calls (-want +got):\n%s", diff)
+	}
+}
+
+// TestPublishStopsOnARefusedCreationAfterAWrite pins what a refused create
+// means once the run has written to the advisories: the update of the existing
+// draft went through, so the run filed part of its private findings and the
+// refusal is GitHub's failure (exit 8), never the not-filed path (exit 5).
+// Nothing follows it: no report, no pull request and no issue.
+func TestPublishStopsOnARefusedCreationAfterAWrite(t *testing.T) {
+	t.Parallel()
+
+	reproduced := privateFindingOf()
+	fresh := fixtureFinding("G303", "high", "injection")
+
+	listing := []map[string]any{draftEntry(fixtureGHSA, fixtureFingerprint(t, reproduced), "open")}
+
+	fake := newFakeGH(t, publishRoutesWithAdvisories(listing, []Route{
+		{Method: "PATCH", Endpoint: advisoryPatchEndpoint(fixtureGHSA), Status: 200, Body: map[string]any{"ghsa_id": fixtureGHSA}},
+		advisoryCreateRoute(403),
+	})...)
+	client := newFixtureClient(t, fake.Path)
+	cfg := publishConfig(t, client, newFixtureGitleaks(t, newFakeGitleaks(t)), fixtureResultFile(t, reproduced, fresh), fixtureReportsDir(t))
+
+	published, err := github.Publish(t.Context(), cfg)
+
+	if !errors.Is(err, publish.ErrGitHub) {
+		t.Fatalf("Publish = %+v, %v, want an error wrapping publish.ErrGitHub: an advisory write of the run went through", published, err)
+	}
+
+	if errors.Is(err, publish.ErrPrivateNotFiled) {
+		t.Errorf("Publish = %v, want no publish.ErrPrivateNotFiled: the run's first advisory write went through", err)
+	}
+
+	wantCalls := []string{
+		"GET " + fixtureAdvisoriesEndpoint,
+		"PATCH " + advisoryPatchEndpoint(fixtureGHSA),
+		"POST " + fixtureRepoPrefix + "/security-advisories",
+	}
+
+	if diff := cmp.Diff(wantCalls, advisoryEndpoints(fake.Calls(t))); diff != "" {
+		t.Errorf("the run's advisory calls (-want +got):\n%s", diff)
+	}
+
+	for _, c := range fake.Calls(t) {
+		switch {
+		case c.Method == "POST" && c.Endpoint == fixtureBlobsEndpoint:
+			t.Errorf("the refused run published the report's blob, want no report after a refused creation")
+		case c.Method == "POST" && c.Endpoint == fixturePullsEndpoint:
+			t.Errorf("the refused run opened the report's pull request, want no report after a refused creation")
+		case c.Method == "POST" && c.Endpoint == fixtureIssuesEndpoint:
+			t.Errorf("the refused run filed an issue, want none after a refused creation")
+		}
+	}
+}
+
 // TestPublishStopsOnARefusedAdvisoryUpdate pins a failed write's place: the
 // advisories are written before the report, so a refused update publishes no
 // report and files no issue.
