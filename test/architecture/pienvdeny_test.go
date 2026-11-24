@@ -260,6 +260,19 @@ func piUnboundedGroupRepeats(pattern string, max int) []string {
 	return found
 }
 
+// piHoldsAny reports whether text holds any one of the alternatives, for a pin
+// whose spelling the extension may choose: the length bound of 32 KB, which a
+// writer may spell as a number, a product or a separator.
+func piHoldsAny(text string, alternatives ...string) bool {
+	for _, alternative := range alternatives {
+		if strings.Contains(text, alternative) {
+			return true
+		}
+	}
+
+	return false
+}
+
 // piQuotedFragments joins fragments for a failure message, each in quotes so a
 // fragment of `)*` is not read as the sentence's own brackets.
 func piQuotedFragments(fragments []string) string {
@@ -310,6 +323,15 @@ func piGroupRepeatIsBounded(quantifier string, max int) bool {
 // is the reason it exists (`import type` is erased and names the package alone).
 // A `console.` call is refused too: the command it would log is the command that
 // holds the key.
+//
+// Two further pins sit here because the extension cannot run: the two file tools
+// that read a whole directory (grep and find) are refused when the path they are
+// given is an ancestor of the deck's key directory or of `/proc`, since pi runs
+// grep as `rg --hidden` from that path and a grep rooted at `~` prints the deck's
+// file of keys; and a bash command longer than 32 KB is refused unread, with a
+// reason that points at the write tool, because the prefix patterns cost
+// quadratic time on one very long line and pi would stall on the agent's own
+// command instead of refusing it.
 func TestPiEnvDenyExtensionHooksTheToolCall(t *testing.T) {
 	t.Parallel()
 
@@ -332,6 +354,56 @@ func TestPiEnvDenyExtensionHooksTheToolCall(t *testing.T) {
 		if !strings.Contains(text, want.text) {
 			t.Errorf("%s: the extension does not name %s (%q), so it refuses no command (issue #540)", piEnvDenyExtension, want.name, want.text)
 		}
+	}
+
+	// grep and find read the contents of the directory they are pointed at, and
+	// pi runs grep as `rg --hidden`: a grep whose path is `~` reads
+	// ~/.config/dot-agent-deck/daemon.env and prints the keys, and one whose path
+	// is `/` walks /proc. Neither path lies under the two refused directories, so
+	// the checks above allow the call; the extension has to ask the reverse
+	// question, whether a refused directory lies under the path it was given, and
+	// it has to ask it of the two tools that read a directory's contents alone: a
+	// read, an ls or an edit of `~` prints no key.
+	for _, want := range []struct {
+		name string
+		text string
+	}{
+		{name: "the file tools that read a whole directory", text: "recursiveTools"},
+		{name: "the recursive file tools' own check", text: "recursiveTools.has("},
+		{name: "the check that the deck's key directory lies under the path", text: "under(keyDirectory, absolute)"},
+		{name: "the check that /proc lies under the path", text: `under("/proc", absolute)`},
+	} {
+		if !strings.Contains(text, want.text) {
+			t.Errorf("%s: the extension does not name %s (%q), so a grep or find rooted at an ancestor of a refused directory (path %q, path %q) reads it and prints the keys (issue #540)", piEnvDenyExtension, want.name, want.text, "~", "/")
+		}
+	}
+
+	// A very long command is refused before it is matched: the prefix patterns
+	// repeat with a bound, and every attempt still walks the command from its own
+	// starting position, so the match costs time quadratic in the command's
+	// length. 100 KB of minified JSON inside an `echo '...'` takes 35 s in Node,
+	// which the agent waits out as a tool call that never returns; the extension
+	// therefore refuses a bash command over 32 KB (32768 characters), says so in a
+	// reason that points at the write tool, and asks before it reaches the
+	// patterns, where the time goes.
+	if !piHoldsAny(text, "32768", "32 * 1024", "32*1024", "32_768") {
+		t.Errorf("%s: the extension names no length bound of 32 KB (`32768` or `32 * 1024`), so a very long bash command is matched against every pattern, which costs quadratic time: 100 KB of minified JSON takes 35 s in Node and the agent waits on a call that never returns (issue #540)", piEnvDenyExtension)
+	}
+
+	if !strings.Contains(text, "write tool") {
+		t.Errorf("%s: no refusal for a long command points at the write tool (%q), so an agent whose command was refused for its length is told nothing about how to run it (issue #540)", piEnvDenyExtension, "write tool")
+	}
+
+	lengthAt := strings.Index(text, "command.length")
+	if lengthAt < 0 {
+		t.Errorf("%s: the extension checks no bash command's length (`command.length`), so a command over the 32 KB bound is matched against every pattern (issue #540)", piEnvDenyExtension)
+	}
+
+	matchAt := strings.Index(text, "patterns.some(")
+	if matchAt < 0 {
+		t.Errorf("%s: the extension no longer matches a bash command against the patterns with `patterns.some(`, so nothing here can tell whether the length check comes first (issue #540)", piEnvDenyExtension)
+	} else if lengthAt >= 0 && lengthAt > matchAt {
+		t.Errorf("%s: the extension tries the patterns before it checks the command's length, so a command over the 32 KB bound pays the quadratic match first, which is the 35 s the length check exists to avoid (issue #540)", piEnvDenyExtension)
 	}
 
 	// pi normalises a file tool's path before the tool reads it: it strips a
@@ -647,6 +719,12 @@ func TestPiEnvDenyListRefusesPrintingTheEnvironment(t *testing.T) {
 		"jq -n env",
 		"jq -n '$ENV'",
 		"python3 -c 'from os import environ as e; print(e)'",
+		// A credential helper prints the token it fills in: `git credential
+		// fill` writes the password to stdout, and `gh` answers the same
+		// protocol itself, whatever feeds it.
+		`printf 'protocol=https\nhost=github.com\n' | git credential fill`,
+		"echo host=github.com | gh auth git-credential get",
+		"git credential fill < req.txt",
 	}
 
 	for _, command := range cases {
@@ -744,6 +822,11 @@ func TestPiEnvDenyListAllowsTheWork(t *testing.T) {
 		// deck writes a task and a report into.
 		"cat .dot-agent-deck.toml",
 		"ls .dot-agent-deck/",
+		// The git commands that read configuration or push a branch: the
+		// helper's own name and the branch's name hold no token, so the refusal
+		// of the credential helper must not reach them.
+		"git config --global credential.helper",
+		"git push origin chore/540-deny-env-printing",
 	}
 
 	for _, command := range cases {

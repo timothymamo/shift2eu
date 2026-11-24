@@ -194,6 +194,13 @@ var claudeProjectEnvDeny = []string{
 	"Bash(gh auth token*)",
 	"Bash(gh auth status*-t*)",
 	"Bash(gh auth status*--show-token*)",
+	// A credential helper prints the token it fills in, as surely as `gh auth
+	// token` does: `git credential fill` writes the password to stdout, and `gh`
+	// answers the same protocol itself. The wildcards cover the helper whatever
+	// feeds it (a pipeline, a redirect, a plain invocation), while the git
+	// commands that only read configuration or push a branch stay allowed.
+	"Bash(*git credential fill*)",
+	"Bash(*gh auth git-credential*)",
 	"Read(//proc)",
 	"Read(//proc/**)",
 	"Read(//proc/**/environ)",
