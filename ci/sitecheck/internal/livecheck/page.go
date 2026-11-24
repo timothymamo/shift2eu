@@ -33,21 +33,24 @@ const MaxVersionBytes = 64
 // attribute of another name ("data-id"). Two elements with the marker's id
 // are not carried (an ambiguous page).
 //
-// Only the hidden attribute is refused, not an inline display:none or
-// visibility:hidden, nor aria-hidden, and that is enough: Run checks
-// statements only on pages whose digest matched the release's manifest, so
-// their markup is the project's own (site/*.html), not an attacker's. The
-// hidden check guards against one of our own pages hiding a statement, and the
-// pages hide nothing the other ways: they carry no inline style attribute (their
-// Content Security Policy's style-src 'self' would not apply one), and they set
-// aria-hidden only on decorative icons and step numbers, never on a marked
-// element. The stylesheet, which style-src 'self' does apply, hides elements
-// through selectors (.visually-hidden, which page.js adds only to index.html's
-// loading notice; #report:empty + .next-steps; the print rules), but no rule
-// reaches a marked element (the "notice warn with-icon" paragraphs
-// #downgrade-risk and #hsts-waived of privacy.html and verify.html), and it is
-// ours as well: style.<h>.css and page.<h>.js are manifest files, digest-checked
-// like the pages.
+// Only the element's own hidden attribute is refused, not one on an ancestor,
+// an inline display:none or visibility:hidden, aria-hidden, nor what page.js
+// hides at run time, and that is enough: Run checks statements only on pages
+// whose digest matched the release's manifest, so their markup is the
+// project's own (site/*.html), not an attacker's. The hidden check guards
+// against one of our own pages hiding a statement, and the pages hide nothing
+// the other ways: their one hidden attribute, on inventory.html's
+// .source-picker, holds no marked element; they carry no inline style
+// attribute (their Content Security Policy's style-src 'self' would not apply
+// one); and they set aria-hidden only on decorative icons and step numbers.
+// page.js adds .visually-hidden only to index.html's loading notice and sets
+// the hidden property only on inventory.html's source picker and source
+// sections. The stylesheet, which style-src 'self' does apply, hides elements
+// through selectors (.visually-hidden; #report:empty + .next-steps; the print
+// rules), but no rule reaches a marked element (the "notice warn with-icon"
+// paragraphs #downgrade-risk and #hsts-waived of privacy.html and
+// verify.html). Both are ours as well: style.<h>.css and page.<h>.js are
+// manifest files, digest-checked like the pages.
 func Carries(page []byte, marker string) bool {
 	found := findMarked(page, marker)
 
