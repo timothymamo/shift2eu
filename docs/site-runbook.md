@@ -269,7 +269,12 @@ echo | openssl s_client -connect www.shift2eu.com:443 -servername www.shift2eu.c
 # FAIL "unable to load certificate": check the CAA record, then the TLS stage
 scw edge-services tls-stage list pipeline-id="$PL" -o json | jq '.[] | {status, certificate_expires_at}'   # PASS: a date in certificate_expires_at
 # FAIL certificate_expires_at: null after the wait: no certificate was issued (R4 created the stage before the CNAME existed, and Scaleway asks only once); recreate the TLS stage below and re-run the checks
-dev/tofu.sh -chdir=infra/site apply -replace=scaleway_edge_services_tls_stage.site   # PASS: the plan replaces the TLS stage ("create replacement and then destroy") and repoints the DNS stage's tls_stage_id, nothing else; answer yes; "Apply complete"
+dev/tofu.sh -chdir=infra/site plan -replace=scaleway_edge_services_tls_stage.site -out=tls.tfplan   # PASS: "Plan: 1 to add, 1 to change, 1 to destroy."
+dev/tofu.sh -chdir=infra/site show tls.tfplan | less      # PASS: the TLS stage "must be replaced" ("create replacement and then destroy") and the DNS stage's tls_stage_id changes in place, nothing else
+# FAIL the plan replaces, destroys or changes any other resource: stop, apply nothing, rm infra/site/tls.tfplan, and find out why (R4's no-changes check) before the recreate
+dev/tofu.sh -chdir=infra/site apply tls.tfplan            # PASS: "Apply complete! Resources: 1 added, 1 changed, 1 destroyed."
+# FAIL the apply stopped part-way (an error after the new stage was created): fix the error it printed, then run the plan line above again (a new tls.tfplan, which may now hold only what is left) and apply that plan; never re-apply the old tls.tfplan
+rm infra/site/tls.tfplan
 # Then the wait loop, the certificate check and the TLS stage check again
 curl -s -o /dev/null -w '%{http_code} %{redirect_url}\n' http://www.shift2eu.com/   # record it: 301/308 to https://www.shift2eu.com/, refused, or 200 (a no-go, Hosting decision 3)
 # The release-tag skill's and the live check's DNS, certificate and redirect checks verify this afterwards

@@ -673,7 +673,7 @@ END {
       } else if (typ == "resource" && lab[2] == "scaleway_object") {
         objects[b] = 1 # reported after the attributes, below
       } else if (m == 1 && typ == "resource" && k == 3 && lab[2] == "scaleway_edge_services_tls_stage" && lab[3] == "site") {
-        tlsStage[b] = p "/lifecycle" # judged after the attributes, below
+        tlsStage[b] = dirof(f) "/" p "/lifecycle" # judged after the attributes, below; keyed by directory, since every root may hold its own stage
       } else if (typ == "resource" && lab[2] == "scaleway_object_bucket_acl") {
         problem("bucket-acl", f, bline[b], "a scaleway_object_bucket_acl: the bucket policy alone decides who reads the site (ADR 0039), and an ACL could make every object, or the bucket, public")
       } else if (typ == "resource" && lab[2] == "scaleway_iam_policy") {
@@ -783,7 +783,7 @@ END {
       modSource[ablk[a]] = (akind[a] == "L") ? aval[a] : "<an expression>"
     }
     if (n == "create_before_destroy" && akind[a] == "I" && aval[a] == "true" && p == bpath[ablk[a]]) {
-      createFirst[p] = 1
+      createFirst[dirof(f) "/" p] = 1
     }
     if (p ~ "^resource:scaleway_iam_(policy|application):[^/]+$" && (n == "count" || n == "for_each")) {
       problem("iam-repeat", f, aline[a], n " on " shownpath(p) ": infra/ creates exactly one IAM application and one policy")
