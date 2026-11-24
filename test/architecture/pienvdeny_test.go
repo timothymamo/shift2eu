@@ -25,13 +25,13 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"regexp"
 	"strconv"
 	"strings"
 	"testing"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/google/go-cmp/cmp"
 )
@@ -517,43 +517,67 @@ func TestPiEnvDenyExtensionAncestorCheckHoldsAtTheRoot(t *testing.T) {
 	}
 }
 
-// TestPiEnvDenyExtensionWritesTheSpaceClassAsEscapes pins how the extension
-// writes the Unicode spaces pi maps to a plain space before it reads a path: the
-// class of `const unicodeSpaces` has to be spelled with `\uXXXX` escapes, never
-// with the invisible characters themselves, so that a reader and a diff can see
-// which code points it matches. The same characters are meant, so nothing here
-// runs the class; it only holds the source text to ASCII (issue #546).
-func TestPiEnvDenyExtensionWritesTheSpaceClassAsEscapes(t *testing.T) {
+// TestPiEnvDenyExtensionHoldsOnlyASCII pins how the extension writes the
+// Unicode spaces pi maps to a plain space before it reads a path: as code
+// points it builds with `String.fromCodePoint`, never as the invisible
+// characters themselves, so that a reader and a diff can see which code points
+// the class matches.
+//
+// Two properties are pinned. The whole file holds no byte above U+007F: a single
+// literal U+00A0 in the class, in a comment or anywhere else is invisible in a
+// diff and cannot be told from a plain space, so every character above U+007F
+// has to be built from its code point. And the declaration `const unicodeSpaces`
+// still names each of the code points the class holds (U+00A0, U+2000, U+200A,
+// U+202F, U+205F and U+3000, the ends of the range among them), so that the set
+// of spaces pi maps cannot be shortened without a failure here: a class that
+// quietly drops U+205F still compiles and still normalises most paths.
+//
+// The same characters are meant, so nothing here runs the class; it holds the
+// source text to ASCII and to the code points it has to name (issue #546).
+func TestPiEnvDenyExtensionHoldsOnlyASCII(t *testing.T) {
 	t.Parallel()
 
 	text := string(readRepositoryFile(t, piEnvDenyExtension))
 
+	// Every character above U+007F, wherever it sits in the file, is reported
+	// with its line and code point: a literal one is the character itself and
+	// a diff shows no change when it comes back.
+	for i, line := range strings.Split(text, "\n") {
+		for at := 0; at < len(line); {
+			r, size := utf8.DecodeRuneInString(line[at:])
+
+			switch {
+			case r == utf8.RuneError && size == 1:
+				t.Errorf("%s:%d: the extension holds the byte 0x%02x at column %d, which is no valid UTF-8: this file holds only ASCII (issue #546)", piEnvDenyExtension, i+1, line[at], at+1)
+			case r > unicode.MaxASCII:
+				t.Errorf("%s:%d: the extension holds the non-ASCII code point U+%04X at column %d: a character above U+007F is invisible in a diff and cannot be told from the ASCII character it resembles, so the file holds only ASCII; build such a character from its code point instead, as in `String.fromCodePoint(0x%04x)` (issue #546)", piEnvDenyExtension, i+1, r, at+1, r)
+			}
+
+			at += size
+		}
+	}
+
+	// The declaration has to keep naming every code point of the class, in the
+	// code-point form: a class that drops one still compiles and still normalises
+	// most paths, so nothing but this pin would see the shorter set.
 	const declaration = "const unicodeSpaces ="
 
-	line, lineNumber := "", 0
+	start := strings.Index(text, declaration)
+	if start < 0 {
+		t.Fatalf("%s: the extension no longer declares %q, so nothing here can tell which code points the Unicode space class holds (issue #546)", piEnvDenyExtension, declaration)
+	}
 
-	for i, candidate := range strings.Split(text, "\n") {
-		if strings.HasPrefix(strings.TrimSpace(candidate), declaration) {
-			line, lineNumber = candidate, i+1
+	end := strings.IndexByte(text[start:], ';')
+	if end < 0 {
+		t.Fatalf("%s: the declaration %q has no closing `;`, so nothing here can read the code points the Unicode space class holds (issue #546)", piEnvDenyExtension, declaration)
+	}
 
-			break
+	declared := strings.ToLower(text[start : start+end+1])
+
+	for _, codePoint := range []string{"0x00a0", "0x2000", "0x200a", "0x202f", "0x205f", "0x3000"} {
+		if !strings.Contains(declared, codePoint) {
+			t.Errorf("%s: the declaration %q does not name the code point %s, so the class is built from a shorter set of Unicode spaces than pi maps to a plain space (U+00A0, U+2000 to U+200A, U+202F, U+205F, U+3000); build each of them from its code point, as in `String.fromCodePoint(%s)` (issue #546)", piEnvDenyExtension, declaration, codePoint, codePoint)
 		}
-	}
-
-	if lineNumber == 0 {
-		t.Fatalf("%s: no line starts with %q, so nothing here can tell which characters the Unicode space class holds (issue #546)", piEnvDenyExtension, declaration)
-	}
-
-	var literal []string
-
-	for _, r := range line {
-		if r > unicode.MaxASCII {
-			literal = append(literal, fmt.Sprintf("U+%04X", r))
-		}
-	}
-
-	if len(literal) > 0 {
-		t.Errorf("%s:%d: the Unicode space class is written with the invisible characters themselves (%s) instead of escapes (%q), so a reader or a diff cannot see which code points it matches (issue #546); write every one of them as a `\\uXXXX` escape, as in `\\u00a0`, `\\u2000-\\u200a` and `\\u3000`", piEnvDenyExtension, lineNumber, strings.Join(literal, ", "), line)
 	}
 }
 
