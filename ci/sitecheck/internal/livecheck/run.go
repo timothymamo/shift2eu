@@ -114,7 +114,8 @@ type Config struct {
 // RetryBound; CertMargin below MinCertMargin; MaxBodyBytes negative or
 // non-zero below DecodedBudget+1; RequestTimeout negative; PlainHTTPWWW
 // neither PlainHTTPRedirect nor PlainHTTPRefuseOrClose; Now or Sleep nil;
-// a Manifest with no files, without index.html, privacy.html or verify.html,
+// a Manifest with no files, without about.html, index.html, privacy.html or
+// verify.html,
 // or listing a path of ServiceWorkerPaths (misconfigured), or whose
 // ModuleScript fails. Records and Tags are never a configuration error: they
 // fail their checks instead.
@@ -197,7 +198,7 @@ func (c Config) validateManifest() error {
 		}
 	}
 
-	for _, page := range []string{indexPage, privacyPage, verifyPage} {
+	for _, page := range []string{aboutPage, indexPage, privacyPage, verifyPage} {
 		if _, ok := c.Manifest.Digest(page); !ok {
 			return fmt.Errorf("the manifest lists no %s", page)
 		}
