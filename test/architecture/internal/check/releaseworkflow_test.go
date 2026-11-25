@@ -2015,6 +2015,80 @@ func TestReleaseWorkflow(t *testing.T) {
 			wantIn:   "want the read of dev/lima.yaml's nodeVersion: run is",
 			wantAlso: `if [ -z \"${version}\" ]; then`,
 		},
+		{
+			// The version source of the read: the sed line that makes the Node
+			// one release dev/lima.yaml pins, and not a file or a literal the
+			// release names itself.
+			name:     "the nodeVersion read from another file",
+			workflow: in("test", "' dev/lima.yaml)\"", "' dev/other.yaml)\""),
+			wantIn:   "want the read of dev/lima.yaml's nodeVersion: run is",
+		},
+		{
+			name:     "the nodeVersion read with a hard-coded version",
+			workflow: in("test", "version=\"$(sed -nE 's/^  nodeVersion: \"([^\"]*)\"$/\\1/p' dev/lima.yaml)\"", `version="1.2.3"`),
+			wantIn:   "want the read of dev/lima.yaml's nodeVersion: run is",
+		},
+
+		// The Node steps' scripts are literal blocks with clip chomping (|) and
+		// nothing else: release.yml's closed schema reads no other form, unlike
+		// ci.yml's Test job, which may chomp with |- or |+ (issue #554). The
+		// reader refuses a chomped or a folded run: rather than comparing the
+		// script it stands for, so no edit can slip a form past the comparison.
+		{
+			name:     "the nodeVersion read chomping its line ends",
+			workflow: in("test", "        id: node\n        run: |\n", "        id: node\n        run: |-\n"),
+			wantIn:   "want the read of dev/lima.yaml's nodeVersion: run",
+			wantAlso: "has lines below it, want one value on its line",
+		},
+		{
+			name:     "the nodeVersion read keeping its trailing line ends",
+			workflow: in("test", "        id: node\n        run: |\n", "        id: node\n        run: |+\n"),
+			wantIn:   "want the read of dev/lima.yaml's nodeVersion: run",
+			wantAlso: "has lines below it, want one value on its line",
+		},
+		{
+			name:     "the nodeVersion read folded",
+			workflow: in("test", "        id: node\n        run: |\n", "        id: node\n        run: >\n"),
+			wantIn:   "want the read of dev/lima.yaml's nodeVersion: run",
+			wantAlso: "has lines below it, want one value on its line",
+		},
+		{
+			name:     "the nodeVersion read folded and chomped",
+			workflow: in("test", "        id: node\n        run: |\n", "        id: node\n        run: >-\n"),
+			wantIn:   "want the read of dev/lima.yaml's nodeVersion: run",
+			wantAlso: "has lines below it, want one value on its line",
+		},
+		{
+			name:     "the node check chomping its line ends",
+			workflow: in("test", "          NODE_VERSION: ${{ steps.node.outputs.version }}\n        run: |\n", "          NODE_VERSION: ${{ steps.node.outputs.version }}\n        run: |-\n"),
+			wantIn:   "want the check that node on the PATH is the pinned one: run",
+			wantAlso: "has lines below it, want one value on its line",
+		},
+		{
+			name:     "the node check keeping its trailing line ends",
+			workflow: in("test", "          NODE_VERSION: ${{ steps.node.outputs.version }}\n        run: |\n", "          NODE_VERSION: ${{ steps.node.outputs.version }}\n        run: |+\n"),
+			wantIn:   "want the check that node on the PATH is the pinned one: run",
+			wantAlso: "has lines below it, want one value on its line",
+		},
+		{
+			name:     "the node check folded",
+			workflow: in("test", "          NODE_VERSION: ${{ steps.node.outputs.version }}\n        run: |\n", "          NODE_VERSION: ${{ steps.node.outputs.version }}\n        run: >\n"),
+			wantIn:   "want the check that node on the PATH is the pinned one: run",
+			wantAlso: "has lines below it, want one value on its line",
+		},
+
+		// The four Node steps and the job itself hold no key that turns a step
+		// or the job off, or lets it fail unseen: each of them is the way the
+		// load check skips again without the pin saying so (issue #548).
+		{name: "an if on the read of dev/lima.yaml's nodeVersion", workflow: in("test", "      - name: The Node release dev/lima.yaml pins\n", "      - name: The Node release dev/lima.yaml pins\n        if: always()\n"), wantIn: `want the read of dev/lima.yaml's nodeVersion holds the key "if"`},
+		{name: "a continue-on-error on the read of dev/lima.yaml's nodeVersion", workflow: in("test", "      - name: The Node release dev/lima.yaml pins\n", "      - name: The Node release dev/lima.yaml pins\n        continue-on-error: true\n"), wantIn: `want the read of dev/lima.yaml's nodeVersion holds the key "continue-on-error"`},
+		{name: "an if on setup-node", workflow: in("test", "      - uses: {{pin actions/setup-node}}\n", "      - uses: {{pin actions/setup-node}}\n        if: always()\n"), wantIn: `want actions/setup-node holds the key "if"`},
+		{name: "a continue-on-error on setup-node", workflow: in("test", "      - uses: {{pin actions/setup-node}}\n", "      - uses: {{pin actions/setup-node}}\n        continue-on-error: true\n"), wantIn: `want actions/setup-node holds the key "continue-on-error"`},
+		{name: "an if on the check of the node on the PATH", workflow: in("test", "      - name: The node on the PATH is the pinned one\n", "      - name: The node on the PATH is the pinned one\n        if: always()\n"), wantIn: `want the check that node on the PATH is the pinned one holds the key "if"`},
+		{name: "a continue-on-error on the check of the node on the PATH", workflow: in("test", "      - name: The node on the PATH is the pinned one\n", "      - name: The node on the PATH is the pinned one\n        continue-on-error: true\n"), wantIn: `want the check that node on the PATH is the pinned one holds the key "continue-on-error"`},
+		{name: "a continue-on-error on make test", workflow: in("test", "        run: make test\n", "        run: make test\n        continue-on-error: true\n"), wantIn: `want make test holds the key "continue-on-error"`},
+		{name: "a test job with a condition", workflow: in("test", "    name: Test\n", "    name: Test\n    if: false\n"), wantIn: `jobs: test holds the key "if"`},
+		{name: "a test job whose failure the run ignores", workflow: in("test", "    name: Test\n", "    name: Test\n    continue-on-error: true\n"), wantIn: `jobs: test holds the key "continue-on-error"`},
 		{name: "the guard after setup-go", workflow: steps("test", swappedSteps(t, testSteps, "name: The tagged commit is on main", "actions/setup-go@")), wantIn: `want the guard that the tagged commit is on main holds the key "uses"`},
 		{
 			name:     "the guard without the ancestry check",
@@ -2062,8 +2136,16 @@ func TestReleaseWorkflow(t *testing.T) {
 		// The keys around the steps.
 		{name: "a workflow-level env", workflow: strings.Replace(releaseWorkflow, "jobs:\n", "env:\n  SNEAKY: x\njobs:\n", 1), wantIn: `key "env"`},
 		{name: "a workflow-level defaults", workflow: strings.Replace(releaseWorkflow, "jobs:\n", "defaults:\n  run:\n    shell: bash\njobs:\n", 1), wantIn: `key "defaults"`},
+		{name: "a workflow-level env pointing at a script", workflow: strings.Replace(releaseWorkflow, "jobs:\n", "env:\n  BASH_ENV: .github/scripts/noop.sh\njobs:\n", 1), wantIn: `key "env"`},
+		{name: "a workflow-level env naming a script in ENV", workflow: strings.Replace(releaseWorkflow, "jobs:\n", "env:\n  ENV: .github/scripts/noop.sh\njobs:\n", 1), wantIn: `key "env"`},
+		{name: "a workflow-level defaults that no-ops every run step", workflow: strings.Replace(releaseWorkflow, "jobs:\n", "defaults:\n  run:\n    shell: \"true {0}\"\njobs:\n", 1), wantIn: `key "defaults"`},
 		{name: "a sixth job", workflow: releaseWorkflow + "  other:\n    runs-on: ubuntu-latest\n", wantIn: `key "other"`},
 		{name: "a job-level env", workflow: in("image", "    needs: [test, goreleaser, latest]\n", "    needs: [test, goreleaser, latest]\n    env:\n      SNEAKY: x\n"), wantIn: `key "env"`},
+		{name: "a test job with a defaults", workflow: in("test", "    name: Test\n", "    name: Test\n    defaults: {run: {shell: \"true {0}\"}}\n"), wantIn: `jobs: test holds the key "defaults"`},
+		{name: "a test job with a defaults block", workflow: in("test", "    name: Test\n", "    name: Test\n    defaults:\n      run:\n        shell: true {0}\n"), wantIn: `jobs: test holds the key "defaults"`},
+		{name: "a test job with an env pointing at a script", workflow: in("test", "    name: Test\n", "    name: Test\n    env:\n      BASH_ENV: .github/scripts/noop.sh\n"), wantIn: `jobs: test holds the key "env"`},
+		{name: "a test job with an env naming a script in ENV", workflow: in("test", "    name: Test\n", "    name: Test\n    env:\n      ENV: .github/scripts/noop.sh\n"), wantIn: `jobs: test holds the key "env"`},
+		{name: "a test job that needs another job", workflow: in("test", "    name: Test\n", "    name: Test\n    needs: latest\n"), wantIn: `jobs: test holds the key "needs"`},
 		{name: "a container", workflow: in("image", "    needs: [test, goreleaser, latest]\n", "    needs: [test, goreleaser, latest]\n    container: golang\n"), wantIn: `key "container"`},
 		{name: "no needs on goreleaser", workflow: in("goreleaser", "    needs: [test, site]\n", ""), wantIn: `no "needs"`},
 		{name: "goreleaser needs another job", workflow: in("goreleaser", "    needs: [test, site]\n", "    needs: [image, site]\n"), wantIn: "needs"},
