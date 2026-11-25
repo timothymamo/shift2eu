@@ -69,15 +69,22 @@ var nodeVersionLine = regexp.MustCompile(`(?m)` + nodeVersionPattern)
 
 // PinnedNodeVersion returns the Node release the dev/lima.yaml document lima
 // pins, read from its nodeVersion line as ci.yml's and release.yml's Test jobs
-// read it (issue #554), and an error when it holds no such line or pins an
-// empty version. It does not check the X.Y.Z form: the workflows' read step
-// does that before it installs the version.
+// read it (issue #554), and an error when it holds no such line, more than
+// one, or pins an empty version. Two lines fail as they fail the workflows'
+// read step, whose sed prints both and whose X.Y.Z check then refuses the
+// two-line value. It does not check the X.Y.Z form of one line: the
+// workflows' read step does that before it installs the version.
 func PinnedNodeVersion(lima []byte) (string, error) {
-	match := nodeVersionLine.FindSubmatch(lima)
-	if match == nil {
+	matches := nodeVersionLine.FindAllSubmatch(lima, -1)
+	if len(matches) == 0 {
 		return "", errors.New(`dev/lima.yaml holds no line   nodeVersion: "X", two spaces and the double quotes`)
 	}
 
+	if len(matches) > 1 {
+		return "", fmt.Errorf("dev/lima.yaml holds %d nodeVersion lines, want one: the workflows' sed would read them all and their X.Y.Z check refuse the value", len(matches))
+	}
+
+	match := matches[0]
 	if len(match[1]) == 0 {
 		return "", errors.New("dev/lima.yaml's nodeVersion is empty")
 	}

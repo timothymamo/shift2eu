@@ -121,7 +121,8 @@
 // its run: steps no-ops; each part an edit could break is also named on its
 // own. PinnedNodeVersion reads dev/lima.yaml's nodeVersion from the same
 // pattern as the workflows' sed line, for TestPiEnvDenyExtensionLoads to name
-// the Node it needs.
+// the Node it needs, and refuses a document with no such line or more than
+// one, as the workflows' read step does.
 //
 // AuditWorkflow holds the scheduled security audit's workflow,
 // .github/workflows/scheduled-security-audit.yml, to PRD #175 milestone 2 and
