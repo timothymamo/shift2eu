@@ -110,6 +110,11 @@ price; where a page prices a whole cluster, the snapshot converts it and `SOURCE
 caches. A count below or above a tier's fixed node count is priced at `count` (PRD #552's follow-up issue
 on fixed and minimum node counts covers these tiers too).
 
+A search or Kafka resource that gives no `storageGiB`, on a plan that includes no storage and whose
+offering prices storage per GiB in the estimate region, gets ADR 0032's "data storage not included" note
+(`estimate.DataStorage`, `"data-storage"` in the JSON report), as a managed database does: the data is
+the storage the plan leaves out, not a boot volume. No new note value is added.
+
 No not-estimated reason is added: every case is an existing one.
 
 ### No format version changes

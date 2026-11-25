@@ -181,8 +181,9 @@ priced.
   plan (OVHcloud Gen 3 Instances and Managed Kubernetes nodes, Scaleway Instances, Kubernetes Kapsule
   nodes and Managed Databases, UpCloud Cloud Native servers and Managed MySQL and PostgreSQL). For a
   resource that gives no `storageGiB` on such a plan, the estimate is the plan alone and the cell says
-  so: "(boot volume not included)" for a server or Kubernetes node, "(data storage not included)" for a
-  managed database. No size is guessed: give `storageGiB` and the storage is priced, and the note goes;
+  so: "(boot volume not included)" for a server or Kubernetes node (`compute.vm`, `compute.baremetal`,
+  `kubernetes.managed`), "(data storage not included)" for a managed database (`database.*`), a search
+  cluster (`search.opensearch`) or a Kafka cluster (`messaging.kafka`). No size is guessed: give `storageGiB` and the storage is priced, and the note goes;
   `storageGiB: 0` says the resource needs none. A total counts the estimates that carry the note,
   "€587.58 per month for 8 of 13 resources (storage not included in 4 estimates)". In the JSON report
   the estimate carries `"storageNotIncluded": "boot-volume"` or `"data-storage"` (accept any other
