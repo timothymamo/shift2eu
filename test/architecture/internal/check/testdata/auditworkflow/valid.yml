@@ -1376,6 +1376,14 @@ jobs:
             echo "::error title=Audit model::sudo still works: see runbook step 10"
             exit 1
           fi
+          if [ -e /var/run/docker.sock ]; then
+            echo "::error title=Audit model::the Docker socket is still there: see runbook step 10"
+            exit 1
+          fi
+          if systemctl is-active --quiet docker.service docker.socket; then
+            echo "::error title=Audit model::Docker is still running: see runbook step 10"
+            exit 1
+          fi
       - name: Run the audit in Claude Code's sandbox
         timeout-minutes: 90
         env:
