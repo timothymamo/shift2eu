@@ -1,0 +1,15 @@
+[
+  {
+    "name": "projects/example-project/locations/europe-west1/clusters/sessions",
+    "shardCount": 3,
+    "replicaCount": 1,
+    "nodeType": "REDIS_HIGHMEM_MEDIUM",
+    "sizeGb": 39,
+    "zoneDistributionConfig": {
+      "mode": "MULTI_ZONE"
+    },
+    "persistenceConfig": {
+      "mode": "DISABLED"
+    }
+  }
+]

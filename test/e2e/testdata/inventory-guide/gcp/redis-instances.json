@@ -1,0 +1,35 @@
+[
+  {
+    "name": "projects/example-project/locations/europe-west1/instances/cache-ha",
+    "tier": "STANDARD_HA",
+    "memorySizeGb": 5,
+    "replicaCount": 1,
+    "locationId": "europe-west1-b",
+    "alternativeLocationId": "europe-west1-c",
+    "nodes": [
+      {
+        "zone": "europe-west1-b"
+      },
+      {
+        "zone": "europe-west1-c"
+      }
+    ],
+    "persistenceConfig": {
+      "persistenceMode": "RDB"
+    }
+  },
+  {
+    "name": "projects/example-project/locations/europe-west1/instances/cache-basic",
+    "tier": "BASIC",
+    "memorySizeGb": 1,
+    "locationId": "europe-west1-b",
+    "nodes": [
+      {
+        "zone": "europe-west1-b"
+      }
+    ],
+    "persistenceConfig": {
+      "persistenceMode": "DISABLED"
+    }
+  }
+]

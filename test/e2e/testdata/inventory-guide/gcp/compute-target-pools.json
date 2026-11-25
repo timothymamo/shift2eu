@@ -1,0 +1,7 @@
+[
+  {
+    "kind": "compute#targetPool",
+    "selfLink": "https://www.googleapis.com/compute/v1/projects/example-project/regions/europe-west1/targetPools/shop-syslog-pool",
+    "region": "https://www.googleapis.com/compute/v1/projects/example-project/regions/europe-west1"
+  }
+]

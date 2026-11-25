@@ -92,10 +92,7 @@
   {
     "name": "//run.googleapis.com/projects/example-project/locations/europe-west1/services/shop-resize-images",
     "assetType": "run.googleapis.com/Service",
-    "location": "europe-west1",
-    "labels": {
-      "goog-managed-by": "cloudfunctions"
-    }
+    "location": "europe-west1"
   },
   {
     "name": "//run.googleapis.com/projects/example-project/locations/europe-west1/services/shop-storefront",
@@ -152,5 +149,130 @@
     "name": "//compute.googleapis.com/projects/example-project/global/snapshots/shop-imported",
     "assetType": "compute.googleapis.com/Snapshot",
     "location": "global"
+  },
+  {
+    "name": "//compute.googleapis.com/projects/example-project/global/urlMaps/shop-web-map",
+    "assetType": "compute.googleapis.com/UrlMap",
+    "location": "global"
+  },
+  {
+    "name": "//compute.googleapis.com/projects/example-project/global/urlMaps/shop-legacy-map",
+    "assetType": "compute.googleapis.com/UrlMap",
+    "location": "global"
+  },
+  {
+    "name": "//compute.googleapis.com/projects/example-project/global/backendServices/shop-web-be",
+    "assetType": "compute.googleapis.com/BackendService",
+    "location": "global"
+  },
+  {
+    "name": "//compute.googleapis.com/projects/example-project/regions/europe-west1/backendServices/shop-dns-be",
+    "assetType": "compute.googleapis.com/BackendService",
+    "location": "europe-west1"
+  },
+  {
+    "name": "//compute.googleapis.com/projects/example-project/regions/europe-west1/backendServices/shop-mesh-be",
+    "assetType": "compute.googleapis.com/BackendService",
+    "location": "europe-west1"
+  },
+  {
+    "name": "//compute.googleapis.com/projects/example-project/global/forwardingRules/shop-web-fr6",
+    "assetType": "compute.googleapis.com/ForwardingRule",
+    "location": "global"
+  },
+  {
+    "name": "//compute.googleapis.com/projects/example-project/global/forwardingRules/shop-legacy-fr6",
+    "assetType": "compute.googleapis.com/ForwardingRule",
+    "location": "global"
+  },
+  {
+    "name": "//compute.googleapis.com/projects/example-project/regions/europe-west1/forwardingRules/shop-dns-fr",
+    "assetType": "compute.googleapis.com/ForwardingRule",
+    "location": "europe-west1"
+  },
+  {
+    "name": "//compute.googleapis.com/projects/example-project/regions/europe-west1/forwardingRules/shop-syslog-fr",
+    "assetType": "compute.googleapis.com/ForwardingRule",
+    "location": "europe-west1"
+  },
+  {
+    "name": "//compute.googleapis.com/projects/example-project/regions/europe-west1/targetPools/shop-syslog-pool",
+    "assetType": "compute.googleapis.com/TargetPool",
+    "location": "europe-west1"
+  },
+  {
+    "name": "//compute.googleapis.com/projects/example-project/global/targetHttpsProxies/shop-web-proxy",
+    "assetType": "compute.googleapis.com/TargetHttpsProxy",
+    "location": "global"
+  },
+  {
+    "name": "//compute.googleapis.com/projects/example-project/global/targetHttpsProxies/shop-legacy-proxy",
+    "assetType": "compute.googleapis.com/TargetHttpsProxy",
+    "location": "global"
+  },
+  {
+    "name": "//redis.googleapis.com/projects/example-project/locations/europe-west1/instances/cache-ha",
+    "assetType": "redis.googleapis.com/Instance",
+    "location": "europe-west1"
+  },
+  {
+    "name": "//redis.googleapis.com/projects/example-project/locations/europe-west1/instances/cache-basic",
+    "assetType": "redis.googleapis.com/Instance",
+    "location": "europe-west1"
+  },
+  {
+    "name": "//redis.googleapis.com/projects/example-project/locations/europe-west1/clusters/sessions",
+    "assetType": "redis.googleapis.com/Cluster",
+    "location": "europe-west1"
+  },
+  {
+    "name": "//memorystore.googleapis.com/projects/example-project/locations/europe-west1/instances/valkey-1",
+    "assetType": "memorystore.googleapis.com/Instance",
+    "location": "europe-west1"
+  },
+  {
+    "name": "//memorystore.googleapis.com/projects/example-project/locations/europe-west1/instances/valkey-sessions",
+    "assetType": "memorystore.googleapis.com/Instance",
+    "location": "europe-west1"
+  },
+  {
+    "name": "//memcache.googleapis.com/projects/example-project/locations/europe-west1/instances/shop-cache",
+    "assetType": "memcache.googleapis.com/Instance",
+    "location": "europe-west1"
+  },
+  {
+    "name": "//artifactregistry.googleapis.com/projects/example-project/locations/europe-west1/repositories/images",
+    "assetType": "artifactregistry.googleapis.com/Repository",
+    "location": "europe-west1"
+  },
+  {
+    "name": "//artifactregistry.googleapis.com/projects/example-project/locations/europe-west1/repositories/jars",
+    "assetType": "artifactregistry.googleapis.com/Repository",
+    "location": "europe-west1"
+  },
+  {
+    "name": "//artifactregistry.googleapis.com/projects/example-project/locations/europe-west1/repositories/upstream",
+    "assetType": "artifactregistry.googleapis.com/Repository",
+    "location": "europe-west1"
+  },
+  {
+    "name": "//artifactregistry.googleapis.com/projects/example-project/locations/europe-west1/repositories/mirror",
+    "assetType": "artifactregistry.googleapis.com/Repository",
+    "location": "europe-west1"
+  },
+  {
+    "name": "//file.googleapis.com/projects/example-project/locations/europe-west1/instances/shared",
+    "assetType": "file.googleapis.com/Instance",
+    "location": "europe-west1"
+  },
+  {
+    "name": "//file.googleapis.com/projects/example-project/locations/europe-west1-b/instances/scratch",
+    "assetType": "file.googleapis.com/Instance",
+    "location": "europe-west1-b"
+  },
+  {
+    "name": "//file.googleapis.com/projects/example-project/locations/europe-west1/instances/shared/snapshots/daily",
+    "assetType": "file.googleapis.com/Snapshot",
+    "location": "europe-west1"
   }
 ]

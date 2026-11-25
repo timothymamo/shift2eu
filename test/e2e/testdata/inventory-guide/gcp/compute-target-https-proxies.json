@@ -1,0 +1,12 @@
+[
+  {
+    "kind": "compute#targetHttpsProxy",
+    "selfLink": "https://www.googleapis.com/compute/v1/projects/example-project/global/targetHttpsProxies/shop-web-proxy",
+    "urlMap": "https://www.googleapis.com/compute/v1/projects/example-project/global/urlMaps/shop-web-map"
+  },
+  {
+    "kind": "compute#targetHttpsProxy",
+    "selfLink": "https://www.googleapis.com/compute/v1/projects/example-project/global/targetHttpsProxies/shop-legacy-proxy",
+    "urlMap": "https://www.googleapis.com/compute/v1/projects/example-project/global/urlMaps/shop-legacy-map"
+  }
+]

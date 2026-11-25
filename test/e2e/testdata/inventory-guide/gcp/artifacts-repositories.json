@@ -1,0 +1,22 @@
+[
+  {
+    "name": "projects/example-project/locations/europe-west1/repositories/images",
+    "format": "DOCKER",
+    "mode": "STANDARD_REPOSITORY"
+  },
+  {
+    "name": "projects/example-project/locations/europe-west1/repositories/jars",
+    "format": "MAVEN",
+    "mode": "STANDARD_REPOSITORY"
+  },
+  {
+    "name": "projects/example-project/locations/europe-west1/repositories/upstream",
+    "format": "DOCKER",
+    "mode": "REMOTE_REPOSITORY"
+  },
+  {
+    "name": "projects/example-project/locations/europe-west1/repositories/mirror",
+    "format": "DOCKER",
+    "mode": "VIRTUAL_REPOSITORY"
+  }
+]

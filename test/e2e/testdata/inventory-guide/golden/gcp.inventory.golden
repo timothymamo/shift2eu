@@ -3,6 +3,50 @@
   "source": "gcp",
   "resources": [
     {
+      "id": "cache-basic",
+      "rawType": "redis.googleapis.com/Instance",
+      "category": "cache.redis",
+      "region": "europe-west1",
+      "capabilities": [
+        "encryption-at-rest"
+      ],
+      "size": {
+        "memoryGiB": 1,
+        "count": 1
+      }
+    },
+    {
+      "id": "cache-ha",
+      "rawType": "redis.googleapis.com/Instance",
+      "category": "cache.redis",
+      "region": "europe-west1",
+      "capabilities": [
+        "encryption-at-rest",
+        "node-high-availability",
+        "snapshots",
+        "zone-high-availability"
+      ],
+      "size": {
+        "memoryGiB": 5,
+        "count": 2
+      }
+    },
+    {
+      "id": "images",
+      "rawType": "artifactregistry.googleapis.com/Repository",
+      "category": "registry.container",
+      "region": "europe-west1",
+      "capabilities": [
+        "encryption-at-rest"
+      ]
+    },
+    {
+      "id": "jars",
+      "rawType": "artifactregistry.googleapis.com/Repository",
+      "category": "unclassified",
+      "region": "europe-west1"
+    },
+    {
       "id": "pvc-00000000-0000-0000-0000-000000000001",
       "rawType": "compute.googleapis.com/Disk",
       "category": "storage.block",
@@ -12,6 +56,47 @@
       ],
       "size": {
         "storageGiB": 50
+      }
+    },
+    {
+      "id": "scratch",
+      "rawType": "file.googleapis.com/Instance",
+      "category": "storage.file",
+      "region": "europe-west1",
+      "capabilities": [
+        "encryption-at-rest"
+      ],
+      "size": {
+        "storageGiB": 1024
+      }
+    },
+    {
+      "id": "sessions",
+      "rawType": "redis.googleapis.com/Cluster",
+      "category": "cache.redis",
+      "region": "europe-west1",
+      "capabilities": [
+        "encryption-at-rest",
+        "node-high-availability",
+        "sharding",
+        "zone-high-availability"
+      ],
+      "size": {
+        "count": 6
+      }
+    },
+    {
+      "id": "shared",
+      "rawType": "file.googleapis.com/Instance",
+      "category": "storage.file",
+      "region": "europe-west1",
+      "capabilities": [
+        "encryption-at-rest",
+        "snapshots",
+        "zone-high-availability"
+      ],
+      "size": {
+        "storageGiB": 1024
       }
     },
     {
@@ -37,6 +122,12 @@
       "id": "shop-baremetal-1",
       "rawType": "baremetalsolution.googleapis.com/Instance",
       "category": "compute.baremetal",
+      "region": "europe-west1"
+    },
+    {
+      "id": "shop-cache",
+      "rawType": "memcache.googleapis.com/Instance",
+      "category": "unclassified",
       "region": "europe-west1"
     },
     {
@@ -76,6 +167,16 @@
       }
     },
     {
+      "id": "shop-dns-be",
+      "rawType": "compute.googleapis.com/BackendService",
+      "category": "network.loadbalancer",
+      "region": "europe-west1",
+      "capabilities": [
+        "udp",
+        "zone-high-availability"
+      ]
+    },
+    {
       "id": "shop-gke",
       "rawType": "container.googleapis.com/Cluster",
       "category": "kubernetes.managed",
@@ -87,14 +188,37 @@
       ]
     },
     {
+      "id": "shop-int-map",
+      "rawType": "compute.googleapis.com/UrlMap",
+      "category": "network.loadbalancer",
+      "region": "europe-west1",
+      "capabilities": [
+        "zone-high-availability"
+      ]
+    },
+    {
+      "id": "shop-legacy-map",
+      "rawType": "compute.googleapis.com/UrlMap",
+      "category": "network.loadbalancer",
+      "capabilities": [
+        "zone-high-availability"
+      ]
+    },
+    {
       "id": "shop-orders",
       "rawType": "pubsub.googleapis.com/Topic",
-      "category": "messaging.queue"
+      "category": "messaging.topic",
+      "capabilities": [
+        "encryption-at-rest"
+      ]
     },
     {
       "id": "shop-orders-dlq",
       "rawType": "pubsub.googleapis.com/Topic",
-      "category": "messaging.queue"
+      "category": "messaging.topic",
+      "capabilities": [
+        "encryption-at-rest"
+      ]
     },
     {
       "id": "shop-orders-worker",
@@ -119,8 +243,18 @@
     {
       "id": "shop-storefront",
       "rawType": "run.googleapis.com/Service",
-      "category": "unclassified",
+      "category": "serverless.container",
       "region": "europe-west1"
+    },
+    {
+      "id": "shop-syslog-pool",
+      "rawType": "compute.googleapis.com/TargetPool",
+      "category": "network.loadbalancer",
+      "region": "europe-west1",
+      "capabilities": [
+        "udp",
+        "zone-high-availability"
+      ]
     },
     {
       "id": "shop-web-1 (compute.googleapis.com/Disk, europe-west1)",
@@ -161,6 +295,15 @@
       }
     },
     {
+      "id": "shop-web-map",
+      "rawType": "compute.googleapis.com/UrlMap",
+      "category": "network.loadbalancer",
+      "capabilities": [
+        "ipv6",
+        "zone-high-availability"
+      ]
+    },
+    {
       "id": "shop-web-mig",
       "rawType": "compute.googleapis.com/InstanceGroupManager",
       "category": "compute.vm",
@@ -174,6 +317,37 @@
       "id": "shop-zone",
       "rawType": "dns.googleapis.com/ManagedZone",
       "category": "unclassified"
+    },
+    {
+      "id": "valkey-1",
+      "rawType": "memorystore.googleapis.com/Instance",
+      "category": "cache.redis",
+      "region": "europe-west1",
+      "capabilities": [
+        "encryption-at-rest",
+        "snapshots"
+      ],
+      "size": {
+        "memoryGiB": 6.5,
+        "count": 1
+      }
+    },
+    {
+      "id": "valkey-sessions",
+      "rawType": "memorystore.googleapis.com/Instance",
+      "category": "cache.redis",
+      "region": "europe-west1",
+      "capabilities": [
+        "encryption-at-rest",
+        "node-high-availability",
+        "sharding",
+        "snapshots",
+        "zone-high-availability"
+      ],
+      "size": {
+        "memoryGiB": 6.5,
+        "count": 4
+      }
     }
   ]
 }

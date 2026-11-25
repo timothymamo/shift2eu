@@ -94,6 +94,11 @@ type resourceFact struct {
 	id       string
 	rawType  string
 	category string
+	// capabilities is the set of capabilities the inventory has to give the
+	// resource, sorted. It is nil when the fact checks none, and an empty,
+	// non-nil slice when the resource carries none: a capability the program
+	// added or dropped must not be able to hide in the golden file alone.
+	capabilities []string
 }
 
 // sizeFact is the size the inventory has to give one resource, by ID. A zero
@@ -203,6 +208,113 @@ func inventoryGuides() []inventoryGuideCase {
 				// So does a disk a standalone instance keeps after it goes: only a
 				// managed instance group's members and their disks are left out.
 				{id: "shop-web-1-data", rawType: "compute.googleapis.com/Disk", category: "storage.block"},
+				// A Pub/Sub topic is where publishers write, which a queue is not,
+				// and Google Cloud encrypts it at rest. A dead-letter policy is set
+				// on a subscription, not on a topic, so no topic carries
+				// dead-letter-queue: the subscription below carries it.
+				{
+					id: "shop-orders", rawType: "pubsub.googleapis.com/Topic", category: "messaging.topic",
+					capabilities: []string{"encryption-at-rest"},
+				},
+				{
+					id: "shop-orders-dlq", rawType: "pubsub.googleapis.com/Topic", category: "messaging.topic",
+					capabilities: []string{"encryption-at-rest"},
+				},
+				{
+					id: "shop-orders-worker", rawType: "pubsub.googleapis.com/Subscription", category: "messaging.queue",
+					capabilities: []string{"dead-letter-queue"},
+				},
+				// A Cloud Run service no Cloud Function runs is a container the
+				// provider runs and scales, and the category carries no capability.
+				{
+					id: "shop-storefront", rawType: "run.googleapis.com/Service", category: "serverless.container",
+					capabilities: []string{},
+				},
+				// The function stands for the Cloud Run service it deployed to, so
+				// the service is not in the inventory and the function keeps its
+				// own rawType.
+				{id: "shop-resize-images", rawType: "cloudfunctions.googleapis.com/Function", category: "serverless.function"},
+				// A Memorystore instance: an at-rest-encrypted cache, with snapshots
+				// when it writes RDB files, and high availability per node (a
+				// replica, STANDARD_HA) and per zone (its nodes in two zones).
+				{
+					id: "cache-ha", rawType: "redis.googleapis.com/Instance", category: "cache.redis",
+					capabilities: []string{"encryption-at-rest", "node-high-availability", "snapshots", "zone-high-availability"},
+				},
+				{
+					id: "cache-basic", rawType: "redis.googleapis.com/Instance", category: "cache.redis",
+					capabilities: []string{"encryption-at-rest"},
+				},
+				// A cluster is sharded by definition, and a shard's replica is what
+				// makes it highly available per node and per zone.
+				{
+					id: "sessions", rawType: "redis.googleapis.com/Cluster", category: "cache.redis",
+					capabilities: []string{"encryption-at-rest", "node-high-availability", "sharding", "zone-high-availability"},
+				},
+				// A sharded Valkey instance is the same kind of cache.
+				{
+					id: "valkey-1", rawType: "memorystore.googleapis.com/Instance", category: "cache.redis",
+					capabilities: []string{"encryption-at-rest", "snapshots"},
+				},
+				{
+					id: "valkey-sessions", rawType: "memorystore.googleapis.com/Instance", category: "cache.redis",
+					capabilities: []string{"encryption-at-rest", "node-high-availability", "sharding", "snapshots", "zone-high-availability"},
+				},
+				// A Memcached instance speaks another protocol, so no cache
+				// category serves it and it stays unclassified with its rawType.
+				{
+					id: "shop-cache", rawType: "memcache.googleapis.com/Instance", category: "unclassified",
+					capabilities: []string{},
+				},
+				// One load balancer per URL map, per backend service no URL map
+				// names and per target pool. A global URL map is zone redundant
+				// within its regions, and gets ipv6 only when an IPv6 forwarding
+				// rule reaches it and a backend service it names sends to IPv6
+				// backends.
+				{
+					id: "shop-web-map", rawType: "compute.googleapis.com/UrlMap", category: "network.loadbalancer",
+					capabilities: []string{"ipv6", "zone-high-availability"},
+				},
+				{
+					id: "shop-int-map", rawType: "compute.googleapis.com/UrlMap", category: "network.loadbalancer",
+					capabilities: []string{"zone-high-availability"},
+				},
+				// An IPv6 frontend over IPv4-only backends is not ipv6: the
+				// capability is the whole path, not the frontend alone.
+				{
+					id: "shop-legacy-map", rawType: "compute.googleapis.com/UrlMap", category: "network.loadbalancer",
+					capabilities: []string{"zone-high-availability"},
+				},
+				// A backend service no URL map names proves its own front end via
+				// a UDP forwarding rule; a target pool never names its protocol.
+				{
+					id: "shop-dns-be", rawType: "compute.googleapis.com/BackendService", category: "network.loadbalancer",
+					capabilities: []string{"udp", "zone-high-availability"},
+				},
+				{
+					id: "shop-syslog-pool", rawType: "compute.googleapis.com/TargetPool", category: "network.loadbalancer",
+					capabilities: []string{"udp", "zone-high-availability"},
+				},
+				// A Docker repository is a registry, and Artifact Registry
+				// encrypts it at rest; another format holds another kind of image.
+				{
+					id: "images", rawType: "artifactregistry.googleapis.com/Repository", category: "registry.container",
+					capabilities: []string{"encryption-at-rest"},
+				},
+				{
+					id: "jars", rawType: "artifactregistry.googleapis.com/Repository", category: "unclassified",
+					capabilities: []string{},
+				},
+				// Filestore is NFS file storage, regional when its tier says so,
+				// and snapshotted when a snapshot of it exists.
+				{
+					id: "shared", rawType: "file.googleapis.com/Instance", category: "storage.file",
+					capabilities: []string{"encryption-at-rest", "snapshots", "zone-high-availability"},
+				},
+				{
+					id: "scratch", rawType: "file.googleapis.com/Instance", category: "storage.file",
+					capabilities: []string{"encryption-at-rest"},
+				},
 			},
 			sized: []sizeFact{
 				// An e2-standard-2 is 2 vCPU and 8192 MB, from compute machine-types list.
@@ -220,6 +332,21 @@ func inventoryGuides() []inventoryGuideCase {
 				// db-custom-2-7680 is 2 vCPU and 7680 MiB. A zonal instance is one
 				// instance.
 				{id: "shop-catalog-mysql", vcpus: 2, memoryGiB: 7.5, storageGiB: 20, count: 1},
+				// A Memorystore instance's memorySizeGb is the memory of each node,
+				// which holds the whole data set, and nodes are the instance's.
+				{id: "cache-ha", memoryGiB: 5, count: 2},
+				{id: "cache-basic", memoryGiB: 1, count: 1},
+				// A cluster's sizeGb is the whole cluster, and no page read says
+				// whether it counts replicas, so the program writes no memoryGiB
+				// rather than a number divided on a guess. Its nodes are its shards
+				// and their replicas.
+				{id: "sessions", count: 6, noMemoryGiB: true},
+				// A Valkey node's sizeGb is its own node's memory.
+				{id: "valkey-1", memoryGiB: 6.5, count: 1},
+				{id: "valkey-sessions", memoryGiB: 6.5, count: 4},
+				// A Filestore instance's capacityGb is a string in the API's JSON.
+				{id: "shared", storageGiB: 1024},
+				{id: "scratch", storageGiB: 1024},
 			},
 			// An engine the program cannot classify gets no size at all, even
 			// though the sql instances list records the instance's disk and
@@ -233,6 +360,31 @@ func inventoryGuides() []inventoryGuideCase {
 				"gke-shop-gke-default-pool-0a1b2c3d-x1y2",
 				"shop-web-mig-0abc",
 				"shop-web-mig-0abc-data",
+				// The backend services its URL maps name, and the service mesh's
+				// own: a mesh has no load balancer in front of its backends, so it
+				// is not one.
+				"shop-web-be",
+				"shop-api-be",
+				"shop-canary-be",
+				"shop-int-be",
+				"shop-legacy-be",
+				"shop-mesh-be",
+				// A load balancer's frontends, the forwarding rules and the target
+				// proxies they reach: the URL map, backend service or target pool
+				// behind them stands for the load balancer.
+				"shop-web-fr6",
+				"shop-legacy-fr6",
+				"shop-dns-fr",
+				"shop-syslog-fr",
+				"shop-web-proxy",
+				"shop-legacy-proxy",
+				// A repository that only pulls through from an upstream, and one
+				// that only aggregates others: neither stores an image of its own.
+				"upstream",
+				"mirror",
+				// A Filestore snapshot is a capability of its instance, as a
+				// compute snapshot is of its disk.
+				"daily",
 			},
 		},
 		{
@@ -311,15 +463,21 @@ func taxonomyCategories(source string) []string {
 		}
 	case "gcp":
 		return []string{
+			"cache.redis",
 			"compute.baremetal",
 			"compute.vm",
-			"storage.block",
-			"storage.object",
-			"database.postgresql",
 			"database.mysql",
+			"database.postgresql",
 			"kubernetes.managed",
-			"serverless.function",
 			"messaging.queue",
+			"messaging.topic",
+			"network.loadbalancer",
+			"registry.container",
+			"serverless.container",
+			"serverless.function",
+			"storage.block",
+			"storage.file",
+			"storage.object",
 		}
 	case "azure":
 		return []string{
@@ -353,6 +511,9 @@ type inventoryResource struct {
 	RawType  string `json:"rawType"`
 	Category string `json:"category"`
 	Region   string `json:"region"`
+	// Capabilities is the set of capabilities the guide's program derives for
+	// the resource, sorted.
+	Capabilities []string `json:"capabilities"`
 	// Size is the resource's size, filled from the recorded read-only calls.
 	Size *sizeSpec `json:"size"`
 	// Workload, Relations and MonthlyCost are added by hand: no recorded call
@@ -590,6 +751,23 @@ func assertPresent(t *testing.T, source string, doc inventoryDoc, wants []resour
 			t.Errorf("%s: resource %q has rawType %q, want %q",
 				source, want.id, resource.RawType, want.rawType)
 		}
+
+		if want.capabilities != nil {
+			assertCapabilities(t, source, want, resource.Capabilities)
+		}
+	}
+}
+
+// assertCapabilities fails unless the inventory gives the resource exactly the
+// capabilities the fact lists. The golden file alone cannot catch a capability
+// a careless -update drops, and a capability is what the assessment matches a
+// plan on.
+func assertCapabilities(t *testing.T, source string, want resourceFact, got []string) {
+	t.Helper()
+
+	if diff := cmp.Diff(want.capabilities, got); diff != "" {
+		t.Errorf("%s: resource %q has capabilities that differ from the fact (-want +got):\n%s",
+			source, want.id, diff)
 	}
 }
 
