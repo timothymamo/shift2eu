@@ -1881,7 +1881,10 @@ It `exec`s with exactly this environment, nothing inherited: `PATH=/usr/bin:/bin
     with an empty error or exit 127, nothing at all; each now fails with `the token variable's absence
     was not shown`. The wrapper replaces itself with `/usr/bin/cat` (`syscall.Exec`) after its checks,
     so `cat` writes to the Bash tool's own stderr, and the wrapper neither prefixes nor rewrites its
-    line; GNU `cat` names itself `cat:` whatever path it was run by.
+    line. GNU `cat` prefixes its line with its argv[0], `/usr/bin/cat:` under the wrapper, while the
+    offline run's uutils `cat` prints `cat:`; the judgement looks for `cat:
+    /srv/audit/work/nonexistent/: No such file or directory` anywhere in the text, so either prefix
+    passes, and that match must stay unanchored.
   - **Probe 5's `$` calls likely test the CLI, not the sandbox.** Since 2.1.332 refuses every `$` form,
     probe 5's `.../cat /proc/$PPID/environ` and `.../cat /proc/$$/environ` calls are likely refused by
     the CLI's permission layer before they run; they then test the CLI rather than the sandbox, and a

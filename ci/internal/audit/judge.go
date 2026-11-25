@@ -270,7 +270,8 @@ func judgeCall(found *findings, call Call, made madeCall, nonce string) {
 // never names tokenset. A text that merely ends in the path - a refusal by the
 // wrapper or the CLI quoting the command, a shell that ran neither cat, an
 // empty error - holds no line of cat's and shows nothing (issue #613's second
-// review).
+// review). The line is matched unanchored on purpose: the runner's GNU cat
+// prints it after "/usr/bin/cat:", its argv[0].
 func showsTokenAbsent(made madeCall) bool {
 	return made.isError &&
 		strings.Contains(made.text, absenceLine) &&

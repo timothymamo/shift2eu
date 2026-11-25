@@ -2763,8 +2763,8 @@ The model job's errors that point here are titled `Audit model`. What each means
 - `preflight failed: probe 5, canary: the token-absence call was refused before it ran; see runbook
   step 10`: Claude Code's permission layer refused probe 5's last Bash call, `[[ -v
   CLAUDE_CODE_OAUTH_TOKEN ]] && <wrapper> cat /srv/audit/work/nonexistent/tokenset; [[ ! -v
-  CLAUDE_CODE_OAUTH_TOKEN ]] && <wrapper> cat /srv/audit/work/nonexistent/`, so it never showed whether the token reached the sandboxed shell (ADR
-  0040, issue #613). The call holds no `$` because 2.1.332 refuses any variable expansion before it runs
+  CLAUDE_CODE_OAUTH_TOKEN ]] && <wrapper> cat /srv/audit/work/nonexistent/`, so it never showed
+  whether the token reached the sandboxed shell (ADR 0040, issue #613). The call holds no `$` because 2.1.332 refuses any variable expansion before it runs
   (the old `${CLAUDE_CODE_OAUTH_TOKEN:+tokenset}` form failed every preflight); it relies on the CLI
   accepting `[[ ]]` with no allow rule (issue #614). Almost always a Claude Code bump changed that: report
   it as an issue with the CLI version pinned in `.github/claude-code.yaml`, and do not change the probe

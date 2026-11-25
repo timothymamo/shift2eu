@@ -109,6 +109,9 @@ const (
 // The words the token-absence call's result is judged by: cat's own error
 // line for the bare path, the only proof that the variable is unset (issue
 // #613's second review), and the word only the set branch's path holds.
+// absenceLine is matched anywhere in the text, deliberately unanchored: the
+// runner's GNU cat prefixes it with its argv[0], "/usr/bin/cat:", where the
+// offline run's uutils cat prints "cat:".
 const (
 	absenceLine = "cat: /" + workDir + "/nonexistent/: No such file or directory"
 	absenceSet  = "tokenset"
