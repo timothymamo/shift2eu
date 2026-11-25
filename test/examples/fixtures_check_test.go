@@ -64,16 +64,6 @@ var realDataAllowList = []allowListEntry{
 		why:   "the project's own site (PRD #297), which the guide tells users to type",
 	},
 	{
-		file:  "docs/guide/inventory.md",
-		value: "Microsoft.App",
-		why:   "the Resource Manager provider namespace of Container Apps in the guide's classification table, whose segment reads as a domain name because .app is a TLD (PRD #552); it names no host",
-	},
-	{
-		file:  "docs/guide/inventory/azure.jq",
-		value: "microsoft.app",
-		why:   "the Resource Manager provider namespace of Container Apps in the guide's classification program, whose segment reads as a domain name because .app is a TLD (PRD #552); it names no host",
-	},
-	{
 		file:  "test/e2e/testdata/inventory-guide/aws/eu-central-1/autoscaling-groups.json",
 		value: "00000000-0000-0000-0000-000000000001",
 		why:   "a synthetic Auto Scaling group ID in an ARN, all zero but its last digit so the two groups differ",
@@ -140,11 +130,6 @@ var realDataAllowList = []allowListEntry{
 	},
 	{
 		file:  "test/e2e/testdata/inventory-guide/azure/graph-2.json",
-		value: "microsoft.app",
-		why:   "the Resource Manager provider namespace of Container Apps, whose segment reads as a domain name because .app is a TLD; it names no host",
-	},
-	{
-		file:  "test/e2e/testdata/inventory-guide/azure/graph-2.json",
 		value: "databaseAccounts/cosmos-shop-catalog",
 		why:   "the synthetic Cosmos DB account of the inventory guide's sample shop's catalog; it names no one's account",
 	},
@@ -172,11 +157,6 @@ var realDataAllowList = []allowListEntry{
 		file:  "test/e2e/testdata/inventory-guide/azure/storage-queues.json",
 		value: "storageAccounts/stshopassets",
 		why:   "the synthetic storage account of the guide's sample shop that holds its queues; it names no one's account",
-	},
-	{
-		file:  "test/e2e/testdata/inventory-guide/golden/azure.inventory.golden",
-		value: "Microsoft.App",
-		why:   "the Resource Manager provider namespace of Container Apps in the guide's assessed inventory, whose segment reads as a domain name because .app is a TLD (PRD #552); it names no host",
 	},
 	{
 		file:  "test/e2e/testdata/inventory-guide/gcp/assets.json",
@@ -477,11 +457,12 @@ var publicVendorHosts = []string{
 // selector ends with (lowercaseOnlyTLDs), and that are not an exact public
 // vendor host (publicVendorHosts). Every name hostnameProblems already accepts
 // (example.com and its subdomains, the reserved .example name, the provider API
-// hosts, the taxonomy vocabulary) stays accepted.
+// hosts, the taxonomy vocabulary) stays accepted. An Azure resource type's
+// provider namespace is no host name either (maskAzureNamespaces).
 func fixtureHostnameProblems(text string) []problem {
 	var problems []problem
 
-	for _, p := range hostnameProblems(text) {
+	for _, p := range hostnameProblems(maskAzureNamespaces(text)) {
 		lower := strings.ToLower(p.value)
 
 		if slices.Contains(publicVendorHosts, lower) {
@@ -812,6 +793,52 @@ func vendorPathProblems(text string) []problem {
 func publicOwner(owner string) bool {
 	return strings.EqualFold(owner, sampleOwner) ||
 		slices.ContainsFunc(publicOpenSourceOwners, func(public string) bool { return strings.EqualFold(owner, public) })
+}
+
+// maskAzureNamespaces returns text with every Azure Resource Manager provider
+// namespace that starts a resource type overwritten by "x", so the host name
+// rule never sees it, and every offset and line stays where it was. It mirrors
+// the AI reviewer's scan exactly (ci/aireview/internal/review/scan.go,
+// hasHostname and isAzureNamespace, PRD #552), which test/examples cannot
+// import: a maximal run of ASCII letters, digits, "." and "-" that neither
+// starts nor ends with "." or "-", is exactly microsoft.<label> in any case
+// (two labels, the second not empty) and has "/" directly after it, as in
+// Microsoft.App/containerApps, names a kind of resource, never a host.
+// shop-corp.app, a bare microsoft.app, shop.microsoft.app/x and
+// xmicrosoft.app/x stay host names (issue #610).
+func maskAzureNamespaces(text string) string {
+	inRun := func(c byte) bool {
+		return 'a' <= c && c <= 'z' || 'A' <= c && c <= 'Z' || '0' <= c && c <= '9' || c == '.' || c == '-'
+	}
+
+	masked := []byte(text)
+
+	for start := 0; start < len(text); {
+		if !inRun(text[start]) {
+			start++
+
+			continue
+		}
+
+		end := start
+		for end < len(text) && inRun(text[end]) {
+			end++
+		}
+
+		run := text[start:end]
+		namespace, ok := strings.CutPrefix(strings.ToLower(run), "microsoft.")
+
+		if ok && end < len(text) && text[end] == '/' && run == strings.Trim(run, ".-") &&
+			namespace != "" && !strings.Contains(namespace, ".") {
+			for i := start; i < end; i++ {
+				masked[i] = 'x'
+			}
+		}
+
+		start = end
+	}
+
+	return string(masked)
 }
 
 // lastLabel returns the label after the last dot of name.
