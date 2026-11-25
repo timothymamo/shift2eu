@@ -100,11 +100,14 @@ The options for recording a global offering:
   declared regions the regional offerings and the default region use, so a global offering adds no
   region, and `--region` keeps accepting exactly today's regions. `defaultRegion` stays a real region.
   Every reader of an offering's regions follows the same rule: `AvailableIn`, `Offering.priceIn`
-  (`internal/domain/catalog/lookup.go`, under `PlanPrice` and `StoragePrice`), the estimate's
-  `offeredIn` and `plansOfferedIn` (`internal/domain/estimate`), which go through `AvailableIn`, and
-  `targettest`'s offering equality and dump (`equalOffering`, `describe`), which must carry the global
-  flag so the parsed-catalog goldens show it; the doc comments of `AvailableIn`, `PlanPrice` and
-  `StoragePrice` say what a global offering does.
+  (`internal/domain/catalog/lookup.go`, under `PlanPrice` and `StoragePrice`), `Offering.FixedFee`
+  (`internal/domain/catalog/catalog.go`, used by the estimate), which today checks
+  `slices.Contains(o.Regions, region)` itself and so would give a global offering no fee in any region,
+  the estimate's `offeredIn` and `plansOfferedIn` (`internal/domain/estimate`), which go through
+  `AvailableIn`, and `targettest`'s offering equality and dump (`equalOffering`, `describe`), which must
+  carry the global flag so the parsed-catalog goldens show it; the doc comments of `AvailableIn`,
+  `PlanPrice`, `StoragePrice` and `FixedFee` say what a global offering does. The snapshot doc's rule
+  that fixed fees cover every region (`internal/adapter/target/snapshot/doc.go`) gains the global case.
 - **Mapping and `--region`.** A global offering is a candidate in every region, so it is never dropped by
   `MapIn` and never gives "not offered in <region>". The alternative, listing global offerings
   separately from the region's, would show the same zone as served and not served at once.
@@ -327,7 +330,8 @@ All criteria are pinned by tests that run offline under `make test` or `make tes
   a comparison golden with a global best offering exists, and every golden document validates against
   its schema. Version 2 never writes either key; the frozen version 1 and 2 schemas are unchanged.
 - [ ] `Offering.AvailableIn("")` is false on a global offering and `AvailableIn(r)` true for every
-  non-empty `r`; `PlanPrice` and `StoragePrice` of a global offering apply in any non-empty region;
+  non-empty `r`; `PlanPrice`, `StoragePrice` and `FixedFee` of a global offering apply in any non-empty
+  region;
   `targettest`'s offering equality and dump compare and print the global flag.
 
 **Taxonomy and inventory**
@@ -370,14 +374,17 @@ All criteria are pinned by tests that run offline under `make test` or `make tes
   added); one whose count is 0 does not. A zone with `ServeSignature` `SIGNING` gets `dnssec` (if added).
 - [ ] No fixture, no collected sample and no program output holds record data or a DNSSEC key: a test
   scans them recursively and finds none of the keys `rrdatas`, `signatureRrdatas`,
-  `healthCheckedTargets`, a record set's `name`, `ResourceRecords`, `AliasTarget`, `KeySigningKeys`,
-  `SetIdentifier`, `signingKeys`, `publicKey` or `delegationSignerInfo`; the record-set output is a
-  count per zone. Every call's `--query`, `--format` or Resource Graph projection keeps only the fields
+  `healthCheckedTargets`, `ResourceRecords`, `AliasTarget`, `KeySigningKeys`, `SetIdentifier`,
+  `signingKeys`, `publicKey` or `delegationSignerInfo`. (`name` is not banned: every GCP asset row and
+  zone has one.) The record-set output is the count per zone, or `value(type)` lines only, and its
+  fixtures hold no key and no line but the record type. The test also checks that no record name of
+  the synthetic zones (for example `www.example.com.`) appears as a value anywhere in the fixtures, the
+  collected samples or the program output. Every call's `--query`, `--format` or Resource Graph projection keeps only the fields
   the programs read.
 - [ ] Every new command in the guide only lists, describes or gets; the AWS policy, GCP roles and Azure
   role in the guide cover it (*review*, and the existing `cloud-read-only` checks where they apply).
-- [ ] The site's inventory page shows the guide's new commands, and no command holds an unquoted `$zone`
-  or `$id` (`test/site`).
+- [ ] The site's inventory page shows the guide's new commands, and no command holds an unquoted loop
+  variable, `$zone`, `$id`, `$project` or `$rg` (`test/site`).
 - [ ] The guide marks the record-set permission optional, for `dns-routing` only, says it lets its
   holder read every record, and its collected-directory paragraph and *Privacy* section say that zone
   names are the user's domains and the record-set output is a count only (*review*).
@@ -418,8 +425,9 @@ catalog", never worse than `unclassified`.
    (`internal/adapter/target/snapshot`) and `catalog.New` (global means no regions, every-region prices
    and fees, global categories only); `Offering.AvailableIn` for a global offering; the taxonomy's set of
    global categories; `network.dns` with its definition, its row in the size-field table (no field), and
-   in the never-priced categories; the capabilities open questions 3 and 4 decide; the doc comments of
-   `AvailableIn`, `PlanPrice` and `StoragePrice`; `targettest`'s offering equality and dump carrying
+   in the never-priced categories; the capabilities open questions 3 and 4 decide; `Offering.FixedFee`
+   for a global offering; the doc comments of `AvailableIn`, `PlanPrice`, `StoragePrice` and
+   `FixedFee`, and the snapshot doc's fixed-fee rule; `targettest`'s offering equality and dump carrying
    the global flag; the "(global)" mark and its note in every place *The region model* lists (Markdown
    single-target and comparison, the site's HTML report, required changes included), and
    `bestOfferingGlobal` and `globalTies` in the version 3 JSON schemas (assessment and comparison) and
@@ -439,7 +447,9 @@ catalog", never worse than `unclassified`.
    variables, `while IFS= read -r`, no `eval`); the IAM actions in the guide's policy,
    `route53:ListResourceRecordSets` marked optional with what it lets its holder read; `aws.jq`
    classifies public zones, keeps private ones `unclassified` and drops Config's
-   `AWS::Route53::HostedZone` rows; the *Everything else on AWS* text no longer names Route 53 zones as
+   `AWS::Route53::HostedZone` rows; `list-hosted-zones` returns `Id` as `/hostedzone/Z...`, so the
+   milestone confirms that `get-dnssec` and `list-resource-record-sets` accept that form, or the loop
+   strips the prefix; the *Everything else on AWS* text no longer names Route 53 zones as
    `unclassified`; the collected-directory paragraph and *Privacy*; synthetic fixtures (zones under
    `example.com`, account `123456789012`), the recursive no-record-data test, the e2e golden and the
    AWS entries of the e2e category list. Depends on 1 and PRD #571 milestone 2 (PRD #552 milestone 2
@@ -573,7 +583,8 @@ also wait on its answer)
 **To be checked** (each in the milestone named; a fact not confirmed stays out of the snapshot)
 
 - Milestone 1: that no place reads an offering's regions but `catalog.New`, the snapshot reader,
-  `Offering.AvailableIn`, `Offering.priceIn` (`PlanPrice`, `StoragePrice`), the estimate's `offeredIn`
+  `Offering.AvailableIn`, `Offering.priceIn` (`PlanPrice`, `StoragePrice`), `Offering.FixedFee`
+  (`catalog.go`, used by the estimate), the estimate's `offeredIn`
   and `plansOfferedIn` (through `AvailableIn`) and `targettest`'s `equalOffering` and `describe` (the
   site builder writes `Catalog.Regions`, unchanged); that no report place names an offering beyond the
   ones *The region model* lists.
