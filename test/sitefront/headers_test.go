@@ -583,27 +583,29 @@ func TestCheckPermissionsPolicy(t *testing.T) {
 			name:      "a feature allowed",
 			value:     strings.Replace(allOff, "camera=()", "camera=(self)", 1),
 			wantErr:   true,
-			wantErrIn: "camera",
+			wantErrIn: "allows camera (self)",
 		},
 		{
 			name:      "a feature left out",
 			value:     strings.Replace(allOff, ", usb=()", "", 1),
 			wantErr:   true,
-			wantErrIn: "usb",
+			wantErrIn: "does not name usb, so the browser's default for it decides",
 		},
 		// interest-cohort may be left out but must not be allowed to anyone: the well-formed allow lists
-		// below are refused for the feature they allow, not for their spelling.
+		// below are refused for the feature they allow, not for their spelling. Each case names the refusal
+		// it expects, feature and allow list together, since a policy the parser refuses for its spelling (an
+		// entry written interest-cohort=*, say) would otherwise pass a case that only looked for the name.
 		{
 			name:      "interest-cohort allowed to every origin",
 			value:     allOff + ", interest-cohort=(*)",
 			wantErr:   true,
-			wantErrIn: "interest-cohort",
+			wantErrIn: "allows interest-cohort (*)",
 		},
 		{
 			name:      "interest-cohort allowed to self",
 			value:     allOff + ", interest-cohort=(self)",
 			wantErr:   true,
-			wantErrIn: "interest-cohort",
+			wantErrIn: "allows interest-cohort (self)",
 		},
 		{
 			name:    "an empty policy",
