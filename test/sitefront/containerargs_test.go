@@ -108,12 +108,13 @@ func containerRunFrom(src, caddyfile string) (containerRun, error) {
 }
 
 // hclElementValue returns what a quoted list element gives the container: the string the quotes hold, with
-// HCL's own escapes decoded - \n \r \t \" \\ \uNNNN and \UNNNNNNNN, and no others - and its template escapes
-// $${ and %%{ decoded to a literal ${ and %{. An element that carries a ${ or %{ template is refused: the
-// reader runs no template, so it would pass the template itself to the container instead of what the platform
-// runs (docs/adr/0045). An escape HCL has and Go also has as another character (\x41, \a, the octal \101) is
-// refused as well: tofu would refuse the configuration, and a reader that decoded them would run a command
-// line the configuration does not hold.
+// HCL's own escapes decoded - \n \r \t \" \\ \uNNNN and \UNNNNNNNN, and no others. An element that carries a
+// ${ or %{ template is refused: the reader runs no template, so it would pass the template itself to the
+// container instead of what the platform runs (docs/adr/0045). An element that holds a template escape ($${ or
+// %%{, which HCL decodes to a literal ${ or %{) or an escape that decodes to a $ or a % is refused too, fail
+// closed: the reader does not compare the value it would run with the one the platform gets. An escape HCL has
+// and Go also has as another character (\x41, \a, the octal \101) is refused as well: tofu would refuse the
+// configuration, and a reader that decoded them would run a command line the configuration does not hold.
 func hclElementValue(element string) (string, error) {
 	if err := checkHCLEscapes(element); err != nil {
 		return "", err
@@ -884,14 +885,40 @@ EOT
 `),
 			wantErr: "an HCL template (directive)",
 		},
+		// HCL decodes the escapes $${ and %%{ to a literal ${ and %{ (the hclsyntax spec, Template Literals), so
+		// the reader's own decoding would be right; it refuses them in a command or args element all the same, and
+		// an escape that decodes to a $ or a % too, so an element never reaches the platform through a spelling
+		// this reader reads one way and the platform another. container.tf's own args hold a raw $ and %, never an
+		// escape of either, so the real file is none of these cases.
 		{
-			name: "an element that escapes the template syntax",
-			tf: containerTF(caddyAt, shellOnly+`  args    = ["$${literal}", "%%{literal}"]
+			name: "an element that escapes the template syntax with a doubled dollar",
+			tf: containerTF(caddyAt, shellOnly+`  args    = ["echo $${HOME}"]
 `),
-			want: containerRun{
-				image: caddyAt,
-				argv:  []string{"/bin/sh", "-c", "${literal}", "%{literal}"},
-			},
+			wantErr: "$${",
+		},
+		{
+			name: "an element that escapes the template syntax with a doubled percent",
+			tf: containerTF(caddyAt, shellOnly+`  args    = ["echo %%{literal}"]
+`),
+			wantErr: "%%{",
+		},
+		{
+			name: "an element with an escape that decodes to a dollar, \\u0024",
+			tf: containerTF(caddyAt, shellOnly+`  args    = ["a\u0024b"]
+`),
+			wantErr: "decodes to",
+		},
+		{
+			name: "an element with an escape that decodes to a dollar, \\U00000024",
+			tf: containerTF(caddyAt, shellOnly+`  args    = ["a\U00000024b"]
+`),
+			wantErr: "decodes to",
+		},
+		{
+			name: "an element with an escape that decodes to a percent, \\U00000025",
+			tf: containerTF(caddyAt, shellOnly+`  args    = ["a\U00000025b"]
+`),
+			wantErr: "decodes to",
 		},
 		// A quoted string anywhere in the container block is a string this reader must read as a string: a
 		// template inside one nests a string in a string ("${ "x" }"), and a reader that ends a string at the
