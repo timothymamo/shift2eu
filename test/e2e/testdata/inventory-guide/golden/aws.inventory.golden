@@ -111,12 +111,6 @@
       "region": "eu-central-1"
     },
     {
-      "id": "shop-apps",
-      "rawType": "AWS::ECR::RepositoryCreationTemplate",
-      "category": "unclassified",
-      "region": "eu-central-1"
-    },
-    {
       "id": "shop-assets-example",
       "rawType": "AWS::S3::Bucket",
       "category": "storage.object",

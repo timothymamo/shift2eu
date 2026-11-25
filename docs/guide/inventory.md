@@ -326,17 +326,16 @@ aws elasticache describe-replication-groups --output json --query '{ReplicationG
   CacheNodeType: CacheNodeType}}' > "$out/elasticache-replication-groups.json"
 aws elasticache describe-cache-clusters --output json --query '{CacheClusters: CacheClusters[].{
   CacheClusterId: CacheClusterId, ARN: ARN, ReplicationGroupId: ReplicationGroupId, Engine: Engine,
-  NumCacheNodes: NumCacheNodes, PreferredAvailabilityZone: PreferredAvailabilityZone,
-  SnapshotRetentionLimit: SnapshotRetentionLimit, AtRestEncryptionEnabled: AtRestEncryptionEnabled,
+  NumCacheNodes: NumCacheNodes, SnapshotRetentionLimit: SnapshotRetentionLimit,
+  AtRestEncryptionEnabled: AtRestEncryptionEnabled,
   CacheNodeType: CacheNodeType}}' > "$out/elasticache-cache-clusters.json"
 aws elasticache describe-serverless-caches --output json --query '{ServerlessCaches: ServerlessCaches[].{
   ServerlessCacheName: ServerlessCacheName, ARN: ARN, Engine: Engine,
-  MajorEngineVersion: MajorEngineVersion, SnapshotRetentionLimit: SnapshotRetentionLimit,
-  StorageEncryptionType: StorageEncryptionType, Status: Status}}' \
+  SnapshotRetentionLimit: SnapshotRetentionLimit}}' \
   > "$out/elasticache-serverless-caches.json"
 
 aws elbv2 describe-load-balancers --output json --query '{LoadBalancers: LoadBalancers[].{
-  LoadBalancerName: LoadBalancerName, LoadBalancerArn: LoadBalancerArn, Type: Type, Scheme: Scheme,
+  LoadBalancerName: LoadBalancerName, LoadBalancerArn: LoadBalancerArn, Type: Type,
   IpAddressType: IpAddressType, AvailabilityZones: AvailabilityZones[].{ZoneName: ZoneName}}}' \
   > "$out/elbv2-load-balancers.json"
 jq -r '.LoadBalancers[].LoadBalancerArn' "$out/elbv2-load-balancers.json" | while read -r lb; do
@@ -430,7 +429,8 @@ Review `inventories/aws.inventory.json`, then delete the raw output: `rm -r inve
 
 A cache's and a DocumentDB cluster's memory is not filled in: ElastiCache names a node type
 (`CacheNodeType`, such as `cache.m6g.large`) and DocumentDB an instance class (`DBInstanceClass`, such as
-`db.r6g.large`), not a memory size. Add `memoryGiB` per node by hand from the node type, and for
+`db.r6g.large`), not a memory size. The ElastiCache queries project `CacheNodeType` for this alone:
+`aws.jq` does not read it. Add `memoryGiB` per node by hand from the node type, and for
 DocumentDB `vcpus` too from the instance class, as for an RDS instance. A DocumentDB cluster gets no
 `storageGiB`: its storage is the cluster volume, which `AllocatedStorage` does not describe, as for
 Aurora. An ElastiCache Serverless cache gets no size at all: it names no node type, and its data storage
@@ -441,9 +441,9 @@ the targets bill provisioned space, so set `storageGiB` to the size you will pro
 Some target tiers have a minimum billed size or a fixed node count, which the estimate does not apply
 yet: a share smaller than a target's smallest file share, a 1-node cache on a 2-node tier, or a
 1-instance DocumentDB cluster on a 3-node MongoDB set is priced at its own size and `count`, below what
-the target bills, and a 3-node cache on a tier of exactly 2 nodes is priced at 3, above it. The target's
-`SOURCES.md` names each minimum and fixed node count; check the tier the report names before you rely
-on such an estimate.
+the target bills, and a 3-node cache on a tier of exactly 2 nodes is priced at 3, above it. Once a target
+serves the category, its `SOURCES.md` names each minimum and fixed node count (PRD #552, milestones 5 to
+7); check the tier the report names before you rely on such an estimate.
 
 Not filled in: an RDS instance's vCPU and memory (from its `DBInstanceClass`, such as `db.m5.large`), the
 storage of an instance in a DB cluster (Aurora, or an RDS Multi-AZ DB cluster), whose storage belongs to
@@ -485,7 +485,7 @@ The `rawType` is the resource's AWS CloudFormation type.
 | `AWS::SNS::Topic` | `messaging.topic` | `sns get-topic-attributes` |
 | `AWS::AppRunner::Service` | `serverless.container` | `configservice select-resource-config` |
 | `AWS::ECR::Repository` | `registry.container` | `configservice select-resource-config` |
-| `AWS::ElasticLoadBalancingV2::Listener`, `::ListenerRule`, `::TargetGroup`, `AWS::EFS::AccessPoint`, `AWS::ECR::RegistryPolicy`, `::ReplicationConfiguration`, `::PullThroughCacheRule` | none: parts or settings of a load balancer, file system or registry, which stands for them | `configservice select-resource-config` |
+| `AWS::ElasticLoadBalancingV2::Listener`, `::ListenerRule`, `::TargetGroup`, `AWS::EFS::AccessPoint`, `AWS::ECR::RegistryPolicy`, `::ReplicationConfiguration`, `::PullThroughCacheRule`, `::RepositoryCreationTemplate` | none: parts or settings of a load balancer, file system or registry, which stands for them | `configservice select-resource-config` |
 | any other type AWS Config records (such as `AWS::DynamoDB::Table` or `AWS::ECR::PublicRepository`) | `unclassified` | `configservice select-resource-config` |
 
 App Runner services and ECR repositories come from AWS Config alone: the type is enough, since
