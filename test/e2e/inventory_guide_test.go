@@ -784,8 +784,8 @@ func inventoryGuides() []inventoryGuideCase {
 				// neither clustering nor persistence.
 				{id: "redis-shop-enterprise", rawType: "Microsoft.Cache/redisEnterprise", category: "cache.redis", capabilities: []string{"encryption-at-rest", "node-high-availability", "zone-high-availability"}},
 				// A legacy Enterprise cluster in no zone is node redundant all the same:
-				// an Enterprise-tier cache always runs on a cluster of at least three
-				// nodes, and every partition's primary has a replica on another data
+				// an Enterprise-tier cache always runs on a cluster of three nodes by
+				// default (always an odd number), and every partition's primary has a replica on another data
 				// node, so only the zones it does not name cost it
 				// zone-high-availability.
 				{id: "redis-shop-enterprise-nozone", rawType: "Microsoft.Cache/redisEnterprise", category: "cache.redis", capabilities: []string{"encryption-at-rest", "node-high-availability"}},
@@ -890,7 +890,7 @@ func inventoryGuides() []inventoryGuideCase {
 				// availability is disabled however many zones it names.
 				{id: "redis-shop-enterprise", count: 2},
 				// A legacy Enterprise cluster in no zone is the same two nodes: the
-				// zones it names decide only whether it survives the loss of one.
+				// zones it names decide only whether it survives the loss of a zone.
 				{id: "redis-shop-enterprise-nozone", count: 2},
 				{id: "amr-shop-scratch", count: 1},
 				// Azure DocumentDB: a primary and a standby per shard, 128 GiB each.

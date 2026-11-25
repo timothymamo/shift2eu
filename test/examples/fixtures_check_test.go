@@ -803,7 +803,11 @@ func publicOwner(owner string) bool {
 // import: a maximal run of ASCII letters, digits, "." and "-" that neither
 // starts nor ends with "." or "-", is exactly microsoft.<label> in any case
 // (two labels, the second not empty) and has "/" directly after it, as in
-// Microsoft.App/containerApps, names a kind of resource, never a host.
+// Microsoft.App/containerApps, names a kind of resource, never a host, unless
+// a non-ASCII byte comes right before it (the tail of a Unicode host,
+// https://shopémicrosoft.app/orders) or "//" does (a URL's host,
+// https://microsoft.app/orders, //Microsoft.corp/wiki); a single "/" before
+// it, as in /providers/Microsoft.App/containerApps, keeps it a namespace.
 // shop-corp.app, a bare microsoft.app, shop.microsoft.app/x and
 // xmicrosoft.app/x stay host names (issue #610).
 func maskAzureNamespaces(text string) string {
@@ -829,7 +833,8 @@ func maskAzureNamespaces(text string) string {
 		namespace, ok := strings.CutPrefix(strings.ToLower(run), "microsoft.")
 
 		if ok && end < len(text) && text[end] == '/' && run == strings.Trim(run, ".-") &&
-			namespace != "" && !strings.Contains(namespace, ".") {
+			namespace != "" && !strings.Contains(namespace, ".") &&
+			(start == 0 || text[start-1] < 0x80) && !strings.HasSuffix(text[:start], "//") {
 			for i := start; i < end; i++ {
 				masked[i] = 'x'
 			}

@@ -254,7 +254,9 @@ func scanSection(section, path string) (int, []ScanFinding) {
 //     contoso.Com) is an accepted miss: it cannot be told from cfg.Info, and
 //     hosts are rarely spelt so; nor is an Azure resource type, a provider
 //     namespace microsoft.<namespace> in any case with "/" right after it
-//     (isAzureNamespace, PRD #552: Microsoft.App/containerApps);
+//     (isAzureNamespace, PRD #552: Microsoft.App/containerApps), unless a
+//     non-ASCII byte or "//" comes right before it (a Unicode host's tail or
+//     a URL's host, issue #610);
 //   - a key is a run of letters and digits that is an access key ID (twenty
 //     upper-case letters and digits starting AKIA or ASIA) or is at least 32
 //     long with an upper-case letter, a lower-case letter and a digit (a
@@ -471,15 +473,18 @@ func isAWSRegion(label string) bool {
 
 // hasHostname reports whether line holds a host name (scanLine).
 func hasHostname(line string) bool {
-	return anyRun(line, func(c byte) bool { return isASCIIAlnum(c) || c == '.' || c == '-' },
-		func(run string, _, after byte) bool {
+	return anyRunAt(line, func(c byte) bool { return isASCIIAlnum(c) || c == '.' || c == '-' },
+		func(start, end int) bool {
+			run := line[start:end]
+
 			written := strings.Trim(run, ".-")
 			if isCodeName(strings.Split(written, ".")) {
 				return false
 			}
 
 			host := strings.ToLower(written)
-			if written == run && after == '/' && isAzureNamespace(host) {
+			if written == run && end < len(line) && line[end] == '/' && isAzureNamespace(host) &&
+				(start == 0 || line[start-1] < 0x80) && !strings.HasSuffix(line[:start], "//") {
 				return false
 			}
 
@@ -505,7 +510,12 @@ func hasHostname(line string) bool {
 // Microsoft.App/containerApps (PRD #552): a type names a kind of resource,
 // never a host. Anything else is untouched: shop-corp.app, a deeper name such
 // as shop.microsoft.app/x, and a namespace with no "/" after it stay host
-// names, and no customer can choose a name under microsoft.<tld>.
+// names, and no customer can choose a name under microsoft.<tld>. Two runs
+// of that shape stay host names too (issue #610): one right after a non-ASCII
+// byte, the tail of a Unicode host (https://shopémicrosoft.app/orders), and
+// one right after "//", a URL's host (https://microsoft.app/orders,
+// //Microsoft.corp/wiki). A single "/" before it, the separator of an ARM
+// resource id (/providers/Microsoft.App/containerApps), keeps it a namespace.
 func isAzureNamespace(name string) bool {
 	namespace, ok := strings.CutPrefix(name, "microsoft.")
 

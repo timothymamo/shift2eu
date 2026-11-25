@@ -128,7 +128,9 @@ var allowedHostnamesHint = strings.Join(allowedHostnames, ", ") +
 // subscription, so they identify no customer, and an Azure rawType is written
 // with one. They are matched with their exact case on purpose: Azure documents
 // them capitalised (Microsoft.Compute), while a lowercase name of the same
-// shape (microsoft.com) is the real public domain and must fail.
+// shape (microsoft.com) is the real public domain and must fail in a sample
+// (a fixture is checked after maskAzureNamespaces, as the AI reviewer's scan
+// reads a line).
 var allowedResourceTypeNamespaces = []string{
 	"Microsoft.Cdn",
 	"Microsoft.Compute",
