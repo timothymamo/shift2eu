@@ -14,8 +14,9 @@
 // renovate/<name> - <name> a lower-case word of letters, digits, dots, underscores and hyphens, holding no .. -
 // is accepted too, but resumed only: when origin/renovate/<name> exists the script prints
 // .worktrees/renovate-<name>, a worktree on the local branch tracking that remote at its commit, and the second
-// run prints the same path. When the remote branch does not exist, only a local one does, or the name holds
-// anything the pattern refuses, the script refuses the name: it never creates a Renovate branch.
+// run prints the same path. When the remote branch does not exist, only a local one does, origin is missing or
+// unreachable, or the name holds anything the pattern refuses, the script refuses the name: it never creates a
+// Renovate branch, and its own local refs never stand in for origin's.
 //
 // Every case builds its own throwaway repository in t.TempDir(): a bare origin holding main, a seed clone that
 // pushes the branches which come from elsewhere, and the checkout the script runs in. No case touches this
@@ -506,6 +507,20 @@ func TestWorktreeResumesARenovateBranch(t *testing.T) {
 	if again.path() != dir {
 		t.Errorf("the second run printed %q, want the same worktree %q: a branch that has its worktree gets that worktree's path (issue #573)", again.path(), dir)
 	}
+
+	// An existing worktree is resumed before the script looks at origin, so a rerun still prints its path once
+	// origin is gone: the work a unit did after the first run stays reachable (issue #573).
+	f.mustGitIn(t, f.checkout, "remote", "remove", "origin")
+
+	withoutOrigin := f.run(t, worktreeRenovateBranch)
+
+	if withoutOrigin.code != 0 {
+		t.Fatalf("dev/worktree.sh %s exited %d with origin removed, want 0: an existing worktree is resumed without looking at origin (issue #573)\nstdout: %s\nstderr: %s", worktreeRenovateBranch, withoutOrigin.code, withoutOrigin.stdout, withoutOrigin.stderr)
+	}
+
+	if withoutOrigin.path() != dir {
+		t.Errorf("the run with origin removed printed %q, want the same worktree %q (issue #573)", withoutOrigin.path(), dir)
+	}
 }
 
 // TestWorktreeRefusesARenovateNameThatIsNoRenovateBranch pins the usage refusal of a renovate/ name that is no
@@ -554,38 +569,83 @@ func TestWorktreeRefusesARenovateNameThatIsNoRenovateBranch(t *testing.T) {
 	}
 }
 
-// TestWorktreeRefusesARenovateBranchThatIsNotOnTheRemote pins that the script creates no Renovate branch: an
-// origin without it gets a refusal that names the branch and no such remote branch, and neither a local branch
-// nor a worktree is left behind (issue #573).
-func TestWorktreeRefusesARenovateBranchThatIsNotOnTheRemote(t *testing.T) {
+// TestWorktreeRefusesARenovateBranchItCannotResume pins that the script creates no Renovate branch: an origin
+// without it, an origin that is unreachable, and a checkout without an origin each get a refusal that names the
+// branch, and neither a local branch nor a worktree is left behind. The last two say that whether
+// origin/<branch> exists is unknown rather than absent, because the script never guesses from its own refs
+// (issue #573).
+func TestWorktreeRefusesARenovateBranchItCannotResume(t *testing.T) {
 	t.Parallel()
 
-	f := newWorktreeFixture(t)
+	cases := []struct {
+		name    string
+		setup   func(t *testing.T, f *worktreeFixture)
+		message string // a stable fragment of the refusal
+	}{
+		{
+			name:    "origin has no such Renovate branch",
+			setup:   func(*testing.T, *worktreeFixture) {},
+			message: "no such remote",
+		},
+		{
+			name: "origin is unreachable",
+			setup: func(t *testing.T, f *worktreeFixture) {
+				t.Helper()
 
-	got := f.run(t, worktreeRenovateBranch)
+				f.mustGitIn(t, f.checkout, "remote", "set-url", "origin", filepath.Join(f.root, "gone.git"))
+			},
+			message: "could not be fetched",
+		},
+		{
+			name: "the checkout has no origin",
+			setup: func(t *testing.T, f *worktreeFixture) {
+				t.Helper()
 
-	if got.code != 1 {
-		t.Fatalf("dev/worktree.sh %s exited %d, want the refusal's 1: origin has no such Renovate branch and the script creates none (issue #573)\nstdout: %s\nstderr: %s", worktreeRenovateBranch, got.code, got.stdout, got.stderr)
+				f.mustGitIn(t, f.checkout, "remote", "remove", "origin")
+			},
+			message: "could not be fetched",
+		},
 	}
 
-	if !strings.HasPrefix(got.stderr, "worktree: ") {
-		t.Errorf("dev/worktree.sh %s printed %q on stderr, want a message starting with \"worktree: \" (issue #573)", worktreeRenovateBranch, got.stderr)
-	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 
-	if !strings.Contains(got.stderr, worktreeRenovateBranch) {
-		t.Errorf("the refusal printed %q, want it to name the branch %s (issue #573)", got.stderr, worktreeRenovateBranch)
-	}
+			f := newWorktreeFixture(t)
+			tc.setup(t, f)
 
-	if !strings.Contains(got.stderr, "no such remote") {
-		t.Errorf("the refusal printed %q, want it to say no such remote Renovate branch exists, and that the script creates none (issue #573)", got.stderr)
-	}
+			got := f.run(t, worktreeRenovateBranch)
 
-	if f.hasBranch(t, worktreeRenovateBranch) {
-		t.Errorf("dev/worktree.sh %s created the local branch %s, want none: it never creates a Renovate branch (issue #573)", worktreeRenovateBranch, worktreeRenovateBranch)
-	}
+			if got.code != 1 {
+				t.Fatalf("dev/worktree.sh %s exited %d, want the refusal's 1: the remote Renovate branch cannot be confirmed and the script creates none (issue #573)\nstdout: %s\nstderr: %s", worktreeRenovateBranch, got.code, got.stdout, got.stderr)
+			}
 
-	if _, err := os.Stat(f.worktreeDir(worktreeRenovateBranch)); err == nil {
-		t.Errorf("dev/worktree.sh %s left the worktree %s behind, want none (issue #573)", worktreeRenovateBranch, f.worktreeDir(worktreeRenovateBranch))
+			// The refusal is the script's own line. Git may print its diagnostics first: a failed fetch of an
+			// unreachable origin writes its fatal: lines to the same stderr.
+			if !strings.HasPrefix(got.stderr, "worktree: ") && !strings.Contains(got.stderr, "\nworktree: ") {
+				t.Errorf("dev/worktree.sh %s printed %q on stderr, want a refusal line starting with \"worktree: \" (issue #573)", worktreeRenovateBranch, got.stderr)
+			}
+
+			if !strings.Contains(got.stderr, worktreeRenovateBranch) {
+				t.Errorf("the refusal printed %q, want it to name the branch %s (issue #573)", got.stderr, worktreeRenovateBranch)
+			}
+
+			if !strings.Contains(got.stderr, tc.message) {
+				t.Errorf("the refusal printed %q, want it to say %q (issue #573)", got.stderr, tc.message)
+			}
+
+			if got.stdout != "" {
+				t.Errorf("dev/worktree.sh %s printed %q on stdout, want nothing: a refusal names no worktree (issue #573)", worktreeRenovateBranch, got.stdout)
+			}
+
+			if f.hasBranch(t, worktreeRenovateBranch) {
+				t.Errorf("dev/worktree.sh %s created the local branch %s, want none: it never creates a Renovate branch (issue #573)", worktreeRenovateBranch, worktreeRenovateBranch)
+			}
+
+			if _, err := os.Stat(f.worktreeDir(worktreeRenovateBranch)); err == nil {
+				t.Errorf("dev/worktree.sh %s left the worktree %s behind, want none (issue #573)", worktreeRenovateBranch, f.worktreeDir(worktreeRenovateBranch))
+			}
+		})
 	}
 }
 
