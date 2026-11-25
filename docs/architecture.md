@@ -826,7 +826,7 @@ forbidigo matches a selector against its static type, so these get through:
 
 | Package | Holds |
 |---|---|
-| `taxonomy` | Provider-neutral categories (`compute.vm`, `compute.baremetal` (ADR 0023), `kubernetes.managed`, `storage.object`, `database.postgresql`, `serverless.function`, `messaging.queue`, ...) and the capability vocabulary |
+| `taxonomy` | Provider-neutral categories (`compute.vm`, `compute.baremetal` (ADR 0023), `kubernetes.managed`, `storage.object`, `database.postgresql`, `cache.redis`, `serverless.function`, `messaging.queue`, ...) and the capability vocabulary |
 | `inventory` | Resources discovered in a source: category, region, size, capabilities used, dependencies, and the raw provider type for traceability |
 | `catalog` | Offerings of a target: categories, capabilities, plans and sizes, EU regions |
 | `mapping` | Rules that match a resource to candidate offerings and assign a fit (direct, partial, none) with reasons |

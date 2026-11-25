@@ -1,6 +1,6 @@
 target: OVHcloud
 sourceURL: https://www.ovhcloud.com/en-ie/public-cloud/prices/
-retrievedOn: 2026-11-14
+retrievedOn: 2026-11-25
 defaultRegion: GRA
 Block Storage | storage.block | snapshots | GRA, LIM, RBX, SBG, WAW
   plans: -
@@ -13,6 +13,36 @@ Block Storage LUKS | storage.block | encryption-at-rest, snapshots | GRA, LIM, R
   storage prices: -
 Block Storage LUKS Zonal | storage.block | encryption-at-rest | MIL, PAR
   plans: -
+  storage prices: -
+Databases for Valkey | cache.redis | encryption-at-rest, snapshots | GRA, LIM, RBX, SBG, WAW
+  plan: Discovery B3-16 | 4 vcpu | 16 GiB | 0 GiB storage | 240.754 EUR @ -
+  plan: Discovery B3-32 | 8 vcpu | 32 GiB | 0 GiB storage | 481.508 EUR @ -
+  plan: Discovery B3-4 | 1 vcpu | 4 GiB | 0 GiB storage | 56.721 EUR @ -
+  plan: Discovery B3-8 | 2 vcpu | 8 GiB | 0 GiB storage | 107.748 EUR @ -
+  plan: Essential DB1-4 | 2 vcpu | 4 GiB | 0 GiB storage | 47.304 EUR @ GRA, LIM, SBG, WAW
+  plan: Essential DB1-7 | 2 vcpu | 7 GiB | 0 GiB storage | 95.703 EUR @ GRA, LIM, SBG, WAW
+  storage prices: -
+Databases for Valkey Multi-node | cache.redis | encryption-at-rest, node-high-availability, snapshots | GRA, LIM, RBX, SBG, WAW
+  plan: Business DB1-120 | 32 vcpu | 120 GiB | 0 GiB storage | 1421.164 EUR @ GRA, LIM, SBG, WAW
+  plan: Business DB1-15 | 4 vcpu | 15 GiB | 0 GiB storage | 180.383 EUR @ GRA, LIM, SBG, WAW
+  plan: Business DB1-30 | 8 vcpu | 30 GiB | 0 GiB storage | 356.386 EUR @ GRA, LIM, SBG, WAW
+  plan: Business DB1-4 | 2 vcpu | 4 GiB | 0 GiB storage | 54.458 EUR @ GRA, LIM, SBG, WAW
+  plan: Business DB1-60 | 16 vcpu | 60 GiB | 0 GiB storage | 712.772 EUR @ GRA, LIM, SBG, WAW
+  plan: Business DB1-7 | 2 vcpu | 7 GiB | 0 GiB storage | 121.034 EUR @ GRA, LIM, SBG, WAW
+  plan: Production B3-128 | 32 vcpu | 128 GiB | 0 GiB storage | 1925.667 EUR @ -
+  plan: Production B3-16 | 4 vcpu | 16 GiB | 0 GiB storage | 240.681 EUR @ -
+  plan: Production B3-256 | 64 vcpu | 256 GiB | 0 GiB storage | 3851.261 EUR @ -
+  plan: Production B3-32 | 8 vcpu | 32 GiB | 0 GiB storage | 481.435 EUR @ -
+  plan: Production B3-64 | 16 vcpu | 64 GiB | 0 GiB storage | 962.87 EUR @ -
+  plan: Production B3-8 | 2 vcpu | 8 GiB | 0 GiB storage | 107.748 EUR @ -
+  storage prices: -
+Databases for Valkey Multi-node 3-AZ | cache.redis | encryption-at-rest, node-high-availability, snapshots, zone-high-availability | MIL, PAR
+  plan: Production B3-128 | 32 vcpu | 128 GiB | 0 GiB storage | 2047.285 EUR @ -
+  plan: Production B3-16 | 4 vcpu | 16 GiB | 0 GiB storage | 255.865 EUR @ -
+  plan: Production B3-256 | 64 vcpu | 256 GiB | 0 GiB storage | 4094.424 EUR @ -
+  plan: Production B3-32 | 8 vcpu | 32 GiB | 0 GiB storage | 511.876 EUR @ -
+  plan: Production B3-64 | 16 vcpu | 64 GiB | 0 GiB storage | 1023.606 EUR @ -
+  plan: Production B3-8 | 2 vcpu | 8 GiB | 0 GiB storage | 114.099 EUR @ -
   storage prices: -
 Instances | compute.vm | ipv6, snapshots | GRA, LIM, MIL, PAR, RBX, SBG, WAW
   plan: b2-120 | 32 vcpu | 120 GiB | 400 GiB storage | 754.09 EUR @ GRA, LIM, RBX, SBG, WAW
@@ -44,6 +74,12 @@ Instances | compute.vm | ipv6, snapshots | GRA, LIM, MIL, PAR, RBX, SBG, WAW
   plan: r3-512 | 64 vcpu | 512 GiB | 0 GiB storage | 1546.14 EUR @ -
   plan: r3-64 | 8 vcpu | 64 GiB | 0 GiB storage | 193.304 EUR @ -
   storage price: 0.0431 EUR @ -
+Load Balancer | network.loadbalancer | udp | GRA, LIM, RBX, SBG, WAW
+  plans: -
+  storage prices: -
+Load Balancer 3-AZ | network.loadbalancer | node-high-availability, udp, zone-high-availability | MIL, PAR
+  plans: -
+  storage prices: -
 Managed Kubernetes Service | kubernetes.managed | autoscaling | GRA, LIM, RBX, SBG, WAW
   plan: b2-120 | 32 vcpu | 120 GiB | 400 GiB storage | 754.09 EUR @ -
   plan: b2-15 | 4 vcpu | 15 GiB | 100 GiB storage | 97.966 EUR @ -
@@ -99,6 +135,46 @@ Managed Kubernetes Service 3-AZ | kubernetes.managed | autoscaling, node-high-av
   plan: r3-512 | 64 vcpu | 512 GiB | 0 GiB storage | 1546.14 EUR @ -
   plan: r3-64 | 8 vcpu | 64 GiB | 0 GiB storage | 193.304 EUR @ -
   storage price: 0.0431 EUR @ -
+Managed MongoDB | database.mongodb | encryption-at-rest, node-high-availability, read-replicas | GRA, LIM, RBX, SBG, WAW
+  plan: Production B3-128 | 32 vcpu | 128 GiB | 640 GiB storage | 1265.674 EUR @ -
+  plan: Production B3-16 | 4 vcpu | 16 GiB | 80 GiB storage | 161.257 EUR @ -
+  plan: Production B3-256 | 64 vcpu | 256 GiB | 1280 GiB storage | 2531.275 EUR @ -
+  plan: Production B3-32 | 8 vcpu | 32 GiB | 160 GiB storage | 313.973 EUR @ -
+  plan: Production B3-64 | 16 vcpu | 64 GiB | 320 GiB storage | 626.559 EUR @ -
+  plan: Production B3-8 | 2 vcpu | 8 GiB | 40 GiB storage | 81.322 EUR @ -
+  plan: Production DB2-15 | 4 vcpu | 15 GiB | 80 GiB storage | 169.36 EUR @ GRA, LIM, SBG, WAW
+  plan: Production DB2-2 | 1 vcpu | 2 GiB | 10 GiB storage | 17.082 EUR @ GRA, LIM, SBG, WAW
+  plan: Production DB2-30 | 8 vcpu | 30 GiB | 160 GiB storage | 335.727 EUR @ GRA, LIM, SBG, WAW
+  plan: Production DB2-4 | 2 vcpu | 4 GiB | 20 GiB storage | 37.084 EUR @ GRA, LIM, SBG, WAW
+  plan: Production DB2-60 | 16 vcpu | 60 GiB | 320 GiB storage | 661.38 EUR @ GRA, LIM, SBG, WAW
+  plan: Production DB2-7 | 2 vcpu | 7 GiB | 40 GiB storage | 84.169 EUR @ GRA, LIM, SBG, WAW
+  storage price: 0.657 EUR @ -
+Managed MongoDB 3-AZ | database.mongodb | encryption-at-rest, node-high-availability, read-replicas, zone-high-availability | MIL, PAR
+  plan: Production B3-128 | 32 vcpu | 128 GiB | 640 GiB storage | 1340.134 EUR @ -
+  plan: Production B3-16 | 4 vcpu | 16 GiB | 80 GiB storage | 170.747 EUR @ -
+  plan: Production B3-256 | 64 vcpu | 256 GiB | 1280 GiB storage | 2680.195 EUR @ -
+  plan: Production B3-32 | 8 vcpu | 32 GiB | 160 GiB storage | 332.442 EUR @ -
+  plan: Production B3-64 | 16 vcpu | 64 GiB | 320 GiB storage | 663.351 EUR @ -
+  plan: Production B3-8 | 2 vcpu | 8 GiB | 40 GiB storage | 86.14 EUR @ -
+  storage price: 0.657 EUR @ -
+Managed MongoDB Advanced | database.mongodb | encryption-at-rest, node-high-availability, point-in-time-restore, read-replicas | GRA, LIM, RBX, SBG, WAW
+  plan: Advanced B3-128 | 32 vcpu | 128 GiB | 640 GiB storage | 1271.222 EUR @ -
+  plan: Advanced B3-16 | 4 vcpu | 16 GiB | 80 GiB storage | 161.914 EUR @ -
+  plan: Advanced B3-256 | 64 vcpu | 256 GiB | 1280 GiB storage | 2542.371 EUR @ -
+  plan: Advanced B3-32 | 8 vcpu | 32 GiB | 160 GiB storage | 315.36 EUR @ -
+  plan: Advanced B3-64 | 16 vcpu | 64 GiB | 320 GiB storage | 629.26 EUR @ -
+  plan: Advanced DB2-120 | 32 vcpu | 120 GiB | 640 GiB storage | 4137.567 EUR @ GRA, LIM, SBG, WAW
+  plan: Advanced DB2-15 | 4 vcpu | 15 GiB | 80 GiB storage | 520.125 EUR @ GRA, LIM, SBG, WAW
+  plan: Advanced DB2-30 | 8 vcpu | 30 GiB | 160 GiB storage | 1037.184 EUR @ GRA, LIM, SBG, WAW
+  plan: Advanced DB2-60 | 16 vcpu | 60 GiB | 320 GiB storage | 2069.258 EUR @ GRA, LIM, SBG, WAW
+  storage price: 0.876 EUR @ -
+Managed MongoDB Advanced 3-AZ | database.mongodb | encryption-at-rest, node-high-availability, point-in-time-restore, read-replicas, zone-high-availability | MIL, PAR
+  plan: Advanced B3-128 | 32 vcpu | 128 GiB | 640 GiB storage | 1350.281 EUR @ -
+  plan: Advanced B3-16 | 4 vcpu | 16 GiB | 80 GiB storage | 171.988 EUR @ -
+  plan: Advanced B3-256 | 64 vcpu | 256 GiB | 1280 GiB storage | 2700.489 EUR @ -
+  plan: Advanced B3-32 | 8 vcpu | 32 GiB | 160 GiB storage | 334.997 EUR @ -
+  plan: Advanced B3-64 | 16 vcpu | 64 GiB | 320 GiB storage | 668.461 EUR @ -
+  storage price: 0.876 EUR @ -
 Managed MySQL | database.mysql | encryption-at-rest, point-in-time-restore | GRA, LIM, RBX, SBG, WAW
   plan: Discovery B3-128 | 32 vcpu | 128 GiB | 2560 GiB storage | 2290.886 EUR @ -
   plan: Discovery B3-16 | 4 vcpu | 16 GiB | 320 GiB storage | 286.379 EUR @ -
@@ -213,6 +289,9 @@ Managed PostgreSQL Multi-node Advanced 3-AZ | database.postgresql | encryption-a
   plan: Advanced B3-64 | 16 vcpu | 64 GiB | 1280 GiB storage | 1486.499 EUR @ -
   plan: Advanced B3-8 | 2 vcpu | 8 GiB | 160 GiB storage | 185.785 EUR @ -
   storage price: 1.533 EUR @ -
+Managed Private Registry | registry.container | - | GRA, LIM, MIL, PAR
+  plans: -
+  storage prices: -
 Metal Instances | compute.baremetal | ipv6, snapshots | GRA, LIM, SBG, WAW
   plan: bm-l1 | 16 vcpu | 128 GiB | 1920 GiB storage | 1058.50 EUR @ -
   plan: bm-m1 | 8 vcpu | 64 GiB | 1920 GiB storage | 620.50 EUR @ -

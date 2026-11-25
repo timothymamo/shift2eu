@@ -1916,6 +1916,130 @@ func TestNewPlanAndPriceErrors(t *testing.T) {
 	}
 }
 
+// TestNewAcceptsPlansWithoutVCPUsOnACacheOffering pins ADR 0046: a plan's vCPU
+// count may be 0 only on an offering whose every category is matched on memory
+// alone, which cache.redis is. There 0 means the target's page gives no count,
+// and the count is shown but never matched on. Every other offering refuses it,
+// including one that serves cache.redis beside a category matched on vCPUs, and a
+// cache plan still needs its memory.
+func TestNewAcceptsPlansWithoutVCPUsOnACacheOffering(t *testing.T) {
+	t.Parallel()
+
+	const (
+		offeringName = "Example Cache"
+		planName     = "RED1-micro"
+	)
+
+	// cacheOffering sells one plan in fr-par, for the categories given.
+	cacheOffering := func(categories []taxonomy.Category, plan catalog.Plan) catalog.Offering {
+		plan.Name = planName
+		plan.Prices = []catalog.Price{{Amount: 120000, Currency: catalog.EUR}}
+
+		return catalog.Offering{
+			Name:       offeringName,
+			Categories: categories,
+			Regions:    []string{"fr-par"},
+			Plans:      []catalog.Plan{plan},
+		}
+	}
+
+	tests := []struct {
+		name     string
+		offering catalog.Offering
+		wantErr  error
+		// wantMsg lists the substrings the error must hold besides the offering
+		// name: the plan name and the field at fault.
+		wantMsg []string
+		// wantVCPUs is the count the accepted plan keeps.
+		wantVCPUs int64
+	}{
+		{
+			// Scaleway's Redis™ price page gives no vCPU count per plan, so its
+			// plans are written without one (ADR 0046).
+			name: "cache plan without vcpus",
+			offering: cacheOffering([]taxonomy.Category{taxonomy.CacheRedis},
+				catalog.Plan{VCPUs: 0, MemoryMilliGiB: 1000}),
+		},
+		{
+			// A cache plan whose page does give vCPUs records them: they are shown,
+			// never matched on.
+			name: "cache plan with vcpus",
+			offering: cacheOffering([]taxonomy.Category{taxonomy.CacheRedis},
+				catalog.Plan{VCPUs: 2, MemoryMilliGiB: 8000}),
+			wantVCPUs: 2,
+		},
+		{
+			// One offering serving a cache beside another category could match the
+			// other category on vCPUs, so a plan of it needs the count.
+			name: "vcpus 0 on a cache and compute offering",
+			offering: cacheOffering(
+				[]taxonomy.Category{taxonomy.CacheRedis, taxonomy.ComputeVM},
+				catalog.Plan{VCPUs: 0, MemoryMilliGiB: 1000}),
+			wantErr: catalog.ErrInvalidPlan,
+			wantMsg: []string{planName, "vcpus"},
+		},
+		{
+			name: "vcpus 0 on a compute offering",
+			offering: cacheOffering([]taxonomy.Category{taxonomy.ComputeVM},
+				catalog.Plan{VCPUs: 0, MemoryMilliGiB: 1000}),
+			wantErr: catalog.ErrInvalidPlan,
+			wantMsg: []string{planName, "vcpus"},
+		},
+		{
+			name: "negative vcpus on a cache offering",
+			offering: cacheOffering([]taxonomy.Category{taxonomy.CacheRedis},
+				catalog.Plan{VCPUs: -1, MemoryMilliGiB: 1000}),
+			wantErr: catalog.ErrInvalidPlan,
+			wantMsg: []string{planName, "vcpus"},
+		},
+		{
+			// Memory is what a cache plan is matched on, so it stays required even
+			// where the vCPU count is optional.
+			name: "no memory on a cache plan",
+			offering: cacheOffering([]taxonomy.Category{taxonomy.CacheRedis},
+				catalog.Plan{VCPUs: 0, MemoryMilliGiB: 0}),
+			wantErr: catalog.ErrInvalidPlan,
+			wantMsg: []string{planName, "memoryGiB"},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			cat, err := catalog.New(targetName, validSnapshot(), []catalog.Offering{tc.offering})
+
+			if tc.wantErr != nil {
+				if !errors.Is(err, tc.wantErr) {
+					t.Fatalf("New() error = %v, want one wrapping %v", err, tc.wantErr)
+				}
+
+				msg := err.Error()
+				for _, want := range append([]string{offeringName}, tc.wantMsg...) {
+					if !strings.Contains(msg, want) {
+						t.Errorf("New() error = %q, want it to name %s", msg, text.Quote(want))
+					}
+				}
+
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("New() returned unexpected error: %v", err)
+			}
+
+			plans := cat.Offerings()[0].Plans
+			if len(plans) != 1 {
+				t.Fatalf("New() kept %d plans, want 1", len(plans))
+			}
+
+			if plans[0].VCPUs != tc.wantVCPUs {
+				t.Errorf("the plan's VCPUs = %d, want %d", plans[0].VCPUs, tc.wantVCPUs)
+			}
+		})
+	}
+}
+
 // TestNewPlanBillingCapHours pins the optional monthly billing cap of an
 // offering's plans (ADR 0029): 0 is the domain's one spelling of "uncapped", a
 // cap from 1 to MaxBillingCapHours is kept as given, and a negative cap or one

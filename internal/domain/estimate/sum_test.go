@@ -51,6 +51,16 @@ func TestSum(t *testing.T) {
 			want: estimate.Total{Estimated: 0, Resources: 2},
 		},
 		{
+			// A category that is never priced (ADR 0046) is not counted as 0: it
+			// joins the estimates that are not estimated, whatever its reason.
+			name: "a resource that is never priced is not counted as 0",
+			estimates: []estimate.Estimate{
+				{Region: "xx-par", Reason: estimate.NeverPriced},
+				{Region: "xx-par", Estimated: true, Monthly: estimate.FromAmount(10000)},
+			},
+			want: estimate.Total{Monthly: estimate.FromAmount(10000), Estimated: 1, Resources: 2},
+		},
+		{
 			name: "a free estimate is estimated",
 			estimates: []estimate.Estimate{
 				{Region: "xx-par", Estimated: true},

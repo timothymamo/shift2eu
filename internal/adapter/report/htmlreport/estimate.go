@@ -116,6 +116,8 @@ func renderNotEstimated(e estimate.Estimate) rich {
 		return text("no fit")
 	case estimate.UsagePriced:
 		return text("usage-priced")
+	case estimate.NeverPriced:
+		return text("not priced")
 	case estimate.NoSize:
 		return text("size unknown")
 	case estimate.NoPlan:
@@ -150,6 +152,7 @@ func renderRelations(v assessment.Verdict) rich {
 var reasonOrder = []estimate.Reason{
 	estimate.NoFit,
 	estimate.UsagePriced,
+	estimate.NeverPriced,
 	estimate.NoSize,
 	estimate.NoPlan,
 	estimate.NoPlanLargeEnough,

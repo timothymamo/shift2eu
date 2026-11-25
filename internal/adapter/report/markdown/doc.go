@@ -51,7 +51,7 @@
 // resources could be estimated (reasons)", where the reasons are the phrases
 // the resources' Monthly estimate cells give after "not estimated: ", each
 // once, in the order estimate.For checks the reasons (no fit, usage-priced,
-// size unknown, no plan, no plan large enough, not offered, no price, no
+// not priced, size unknown, no plan, no plan large enough, not offered, no price, no
 // storage price; a reason the report does not know last, in verdict order),
 // joined with ", ". The renderer reads them from the verdicts the total sums.
 //

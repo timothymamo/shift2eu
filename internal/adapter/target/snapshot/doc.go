@@ -12,7 +12,11 @@
 // plans and storage prices, and optionally fixed fees and a plan billing cap. A
 // plan has a name, vcpus, memoryGiB, storageGiB and prices; a price an amount,
 // a currency and regions. Every field is required, at every level, and a list
-// may be empty, with two exceptions. An offering's fixedFees (ADR 0026), the
+// may be empty, with three exceptions. A plan's vcpus (ADR 0046) may be left
+// out when the target gives no vCPU count, which reads as VCPUs 0 and which
+// catalog.New accepts only on an offering matched on memory alone (cache.redis);
+// when present it is an integer of at least 1, and 0 is refused, so "not given"
+// has one spelling. An offering's fixedFees (ADR 0026), the
 // fixed monthly fee per instance (one Kubernetes cluster), may be left out,
 // which means no fixed fee; when present it is a non-empty array of prices
 // covering every region of the offering once, and an empty array or null is
@@ -32,8 +36,8 @@
 // Parse decodes a document through jsondoc, the strict JSON decoder adapters
 // share (ADR 0009), which holds the rules of the first five items below, worded
 // as it words them for the inventory file reader too. This package keeps the
-// format's own decisions: its keys, every one required but fixedFees and
-// planBillingCapHours; null refused
+// format's own decisions: its keys, every one required but a plan's vcpus,
+// fixedFees and planBillingCapHours; null refused
 // everywhere; the size cap; the schema version it reads, 2; the number
 // grammar; the checks after the walk; and its sentinels. Parse refuses a
 // document, with an error, unless all of these hold, checked in this order:

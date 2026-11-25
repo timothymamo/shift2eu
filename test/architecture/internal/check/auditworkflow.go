@@ -60,6 +60,9 @@ type auditStep struct {
 	// env and with are the credentials and variables the step reads, each one
 	// key whose value is exactly one expression.
 	env, with []auditRead
+	// envMatch are env: variables whose value a pattern holds, not one
+	// expression: a pin Renovate moves, such as an image's digest.
+	envMatch []auditEnvMatch
 	// githubToken is a step that reads GitHub's API with the job's token, as
 	// GH_TOKEN in its step-level env:.
 	githubToken bool
@@ -71,11 +74,57 @@ type auditStep struct {
 	refuses []auditCommand
 	// order are commands of runs its script must hold in this order.
 	order []auditCommand
+	// check is the coverage ID of a step that reads the release's files or
+	// its image (rows 7, 8, 9, 11 and 13, review round D of PR 5c): every
+	// command of auditBounded it runs is under a timeout and records its
+	// exit, and it records a failure as "<check> tool-failed" and a timeout as
+	// "<check> timed-out" in not-run.txt, so that nothing the release holds
+	// ends the step and the run's report.
+	check string
+	// budget is a step whose loop stops at an if [ "${SECONDS}" -ge <n> ]
+	// below its own timeout-minutes, so that the loop, not the step's
+	// timeout, ends it.
+	budget bool
+	// guardsChecksums is a download step whose every checksum check is a
+	// guard that names the tool and fails the step (PRD #175, "A failed run
+	// is visible").
+	guardsChecksums bool
+	// verifies is row 7's step (round E of PR 5c): each of its verifications
+	// records its outcome in one branch, a failed verification as the finding
+	// "<check> verification-failed", never as a check that did not run. Since
+	// review round I its release file checks are gated on the download, and an
+	// image digest it could not resolve records the verifications it skipped.
+	verifies bool
+	// outcomes are tool runs each followed by its outcome branch (review round
+	// I of PR 5c, L3): a timeout recorded as "<check> timed-out" and any other
+	// non-zero exit as "<check> tool-failed", both in not-run.txt.
+	outcomes []auditOutcome
+	// parts is a step whose check has several parts (rows 7, 13 and 14,
+	// review round K of PR 5c, B1): it sets ran_any=0 before its first part and
+	// ran_any=1 after each part's exit, records every part's outcome in the
+	// limits, and records the check in not-run.txt only before any part ran or,
+	// at its end, when ran_any is still 0.
+	parts bool
+}
+
+// auditOutcome is a tool run, by its first line, and the check its outcome
+// branch records.
+type auditOutcome struct {
+	run   auditCommand
+	check string
 }
 
 // auditRead is one env: or with: key and the one expression it reads.
 type auditRead struct {
 	key, value string
+}
+
+// auditEnvMatch is one env: variable whose value re must match; want names
+// the value in a message.
+type auditEnvMatch struct {
+	key  string
+	re   *regexp.Regexp
+	want string
 }
 
 // auditCommand is a command a step's script must hold: re matches it, want
@@ -101,6 +150,13 @@ type auditJob struct {
 	// downloadsModules names a step that must run go mod download: every Go
 	// command after it runs offline.
 	downloadsModules string
+	// stepsWithinJob is a job whose steps' timeout-minutes add up to no more
+	// than its own.
+	stepsWithinJob bool
+	// boundsTools is a job each of whose tool runs (auditToolRun) is under a
+	// timeout of its own with its exit recorded, in every step but the ones
+	// that download and verify the tools (round F of PR 5c).
+	boundsTools bool
 }
 
 // secretValue is the expression that reads the secret name.
@@ -148,6 +204,12 @@ var (
 	digestRead = command(`(?m)^[ \t]*if ! digest="\$\(jq -er '\.image_digest \| select\(type == "string"\) \| select\(\. == "" or test\("\^sha256:\[0-9a-f\]\{64\}\\\\z"\)\)' "\$\{RUNNER_TEMP\}/result\.json"\)"`+refusalBranch,
 		`string-and-shape read of the digest: if ! digest="$(jq -er '.image_digest | select(type == "string") | select(. == "" or test("^sha256:[0-9a-f]{64}\\z"))' ...)"; then, `+
 			`echo "::error ...", exit 1 and fi, each on a line of its own`)
+	// latestTag is the checks job's lookup of the latest release's tag.
+	latestTag = command(`releases/latest`, "the latest release's tag (releases/latest)")
+	// imageLine names the image the attestation step verifies: this
+	// repository's own, on a line of its own.
+	imageLine = command(`(?m)^[ \t]*image="ghcr\.io/\$\{GITHUB_REPOSITORY,,\}"$`,
+		`image="ghcr.io/${GITHUB_REPOSITORY,,}", this repository's image, on a line of its own`)
 	tagShape = command(`(?m)^[ \t]*if \[\[ ! "\$\{tag\}" =~ \^v\[0-9\]\+\\\.\[0-9\]\+\\\.\[0-9\]\+\$ \]\]`+refusalBranch,
 		`the tag's shape check: if [[ ! "${tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then, echo "::error ...", exit 1 and fi, each on a line of its own`)
 	emptyDigest = command(`(?m)^[ \t]*if \[ -z "\$\{digest\}" \]; then\n[ \t]+echo "image not pulled[^"\n]*"\n[ \t]+exit 0\n[ \t]*fi$`,
@@ -184,40 +246,558 @@ func verifyPattern() string {
 	return `(?m)^[ \t]*(?:if ! ` + body + ` > /dev/null` + refusalBranch + `|` + body + `$)`
 }
 
+// guard returns the pattern of a whole-line guard: the if whose condition is
+// cond, verbatim, and its refusalBranch.
+func guard(cond string) string {
+	return `(?m)^[ \t]*` + regexp.QuoteMeta("if "+cond) + refusalBranch
+}
+
+// wholeLine returns the pattern of text, verbatim, as a line of its own.
+func wholeLine(text string) string {
+	return `(?m)^[ \t]*` + regexp.QuoteMeta(text) + `$`
+}
+
+// auditContainerFlags are the flags every container the checks job starts is
+// created with (PR 5c): a read-only root filesystem, no network, no
+// capability and no new privilege.
+const auditContainerFlags = "docker create --read-only --network none --cap-drop ALL --security-opt no-new-privileges"
+
+// auditFuzzTmpfs is the one tmpfs of the workflow, row 14's: the size, mode
+// and flags its go test needs, and nothing else writable in its container.
+const auditFuzzTmpfs = "--tmpfs /scratch:rw,exec,nosuid,size=4g,mode=1777"
+
+// Rows 3 and 5's exit codes (round G of PR 5c), as the pinned tools' sources
+// write them: a branch that reads a tool's error as a finding records a check
+// that ran when none did, and one that reads a finding as an error loses what
+// the tool found.
+var (
+	// govulncheck exits 0 with -format json whatever it finds (only its text
+	// mode exits 3), so each of its branches reads every non-zero exit as the
+	// tool that failed, and no branch excuses another exit.
+	govulncheckFailed = command(wholeLine(`elif [ "${rc}" -ne 0 ]; then`),
+		`elif [ "${rc}" -ne 0 ]; then, on a line of its own: govulncheck -format json exits 0 whatever it finds, so every non-zero exit is the tool that failed (PRD #175 milestone 2, ADR 0040)`)
+	govulncheckExcuse = command(`(?m)^[ \t]*elif \[ "\$\{rc\}" -ne 0 \] &&`,
+		`a govulncheck branch that excuses a non-zero exit: govulncheck -format json exits 0 whatever it finds (3 is its text mode's), so no exit but 0 is a finding (PRD #175 milestone 2, ADR 0040)`)
+	// gitleaks exits 1 both on a leak and on an error unless told otherwise, so
+	// its run is told --exit-code 2 and only 2 is a finding.
+	gitleaksExitCode = command(`(?m)^[ \t]*timeout \S+ gitleaks git [^\n]* --exit-code 2 [^\n]*$`,
+		`gitleaks git ... --exit-code 2: its default leak exit, 1, is its error exit too, so an error that wrote no report would read as clean (PRD #175 milestone 2, ADR 0040)`)
+	gitleaksFailed = command(wholeLine(`elif [ "${rc}" -ne 0 ] && [ "${rc}" -ne 2 ]; then`),
+		`elif [ "${rc}" -ne 0 ] && [ "${rc}" -ne 2 ]; then, on a line of its own: run with --exit-code 2, gitleaks exits 2 on a leak and every other non-zero exit is the tool that failed (PRD #175 milestone 2, ADR 0040)`)
+	// zizmor exits 11 to 14 by the highest finding's severity and 1 on an error.
+	zizmorFailed = command(wholeLine(`elif [ "${rc}" -ne 0 ] && { [ "${rc}" -lt 11 ] || [ "${rc}" -gt 14 ]; }; then`),
+		`elif [ "${rc}" -ne 0 ] && { [ "${rc}" -lt 11 ] || [ "${rc}" -gt 14 ]; }; then, on a line of its own: zizmor exits 11 to 14 by its highest finding's severity and 1 on an error, which is the tool that failed (PRD #175 milestone 2, ADR 0040)`)
+)
+
+// The checks job's rows 6 to 15 (PR 5c): the commands their steps must hold.
+var (
+	// Row 6: scorecard's report goes to the results directory alone, and the
+	// CLI publishes nothing.
+	scorecardOut = command(wholeLine(`out="${results}/scorecard"`), `out="${results}/scorecard", scorecard's folder of the results directory`)
+	scorecardRun = command(`(?m)^[ \t]*timeout 15m scorecard --repo "github\.com/\$\{GH_REPO\}" [^\n]*> "\$\{out\}/scorecard\.json" 2> "\$\{out\}/scorecard\.stderr"`,
+		`timeout 15m scorecard --repo "github.com/${GH_REPO}" ... > "${out}/scorecard.json" 2> "${out}/scorecard.stderr": its report in the results directory, never on the public log`)
+	scorecardPublish = command(`(?:^|[\s;&|(])scorecard\s[^\n]*--publish`, "scorecard --publish, which sends the result where the run keeps nothing: the report stays in the results directory")
+
+	// Row 7: the recorded tag, read and its shape refused before it reaches a
+	// command line.
+	tagRead = command(wholeLine(`tag="$(sed -n 's/^release_tag=//p' "${results}/target.txt")"`),
+		`tag="$(sed -n 's/^release_tag=//p' "${results}/target.txt")", the tag row 1 recorded`)
+
+	// Rows 8, 11 and 13: the image digest row 7 recorded, its shape refused
+	// before it reaches a docker command.
+	recordedDigest = command(wholeLine(`digest="$(cat "${results}/release-integrity/image-digest.txt")"`),
+		`digest="$(cat "${results}/release-integrity/image-digest.txt")", the image digest the release's verification recorded`)
+	imageDigestShape = command(guard(`[[ ! "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]]`),
+		`the recorded image digest's shape guard: if [[ ! "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then, echo "::error ...", exit 1 and fi, each on a line of its own`)
+	anonymousConfig = command(wholeLine(`export DOCKER_CONFIG="${RUNNER_TEMP}/docker-anonymous"`),
+		`export DOCKER_CONFIG="${RUNNER_TEMP}/docker-anonymous", an empty Docker configuration: the image is pulled anonymously`)
+	imagePull    = command(regexp.QuoteMeta(`docker pull --platform linux/amd64 "${image}@${digest}"`), `docker pull --platform linux/amd64 "${image}@${digest}", the image by its recorded digest`)
+	imageInspect = command(regexp.QuoteMeta(`docker image inspect "${image}@${digest}"`), `docker image inspect "${image}@${digest}", the pulled image by its recorded digest`)
+
+	// Row 9: govulncheck is no go command, so its offline settings are its own.
+	binaryGovulncheck = command(regexp.QuoteMeta(`GOFLAGS=-mod=readonly GOPROXY=off timeout 5m govulncheck -mode=binary `),
+		"GOFLAGS=-mod=readonly GOPROXY=off timeout 5m govulncheck -mode=binary: the binary scan runs offline")
+
+	// Row 7 (review round D of PR 5c): checksums.txt is the release's, so
+	// only its well-formed lines reach sha256sum.
+	// The filtered list is the results directory's (round E), so neither the
+	// release's own listing nor its attestation loop ever sees it.
+	checksumFilter = command(wholeLine(`timeout 1m grep -E '^[0-9a-f]{64}  [A-Za-z0-9._+-]+$' "${rel}/checksums.txt" > "${out}/checksums.filtered" 2> "${out}/checksums-filter.stderr" || rc=$?`),
+		`timeout 1m grep -E '^[0-9a-f]{64}  [A-Za-z0-9._+-]+$' "${rel}/checksums.txt" > "${out}/checksums.filtered" ... || rc=$?, on a line of its own: `+
+			`only checksums.txt's well-formed lines reach sha256sum, never a /dev/zero it lists, and the filtered list is the results directory's, never the release's`)
+	checksumFiltered = command(regexp.QuoteMeta(`timeout 5m sha256sum --check --strict "${out}/checksums.filtered")`),
+		`timeout 5m sha256sum --check --strict "${out}/checksums.filtered": the release's files against checksums.txt's filtered lines alone`)
+
+	// Row 9: each archive's member streamed through a size cap.
+	unpackTar = command(wholeLine(`*.tar.gz) timeout 2m tar -xOzf "${archive}" shift2eu 2> "${out}/${name}.unpack.stderr" | head -c 134217728 > "${dir}/shift2eu" || rc=$? ;;`),
+		`*.tar.gz) timeout 2m tar -xOzf "${archive}" shift2eu ... | head -c 134217728 > "${dir}/shift2eu" || rc=$? ;;: the member alone, through the 128 MiB size cap`)
+	unpackZip = command(wholeLine(`*.zip) timeout 2m unzip -p "${archive}" shift2eu.exe 2> "${out}/${name}.unpack.stderr" | head -c 134217728 > "${dir}/shift2eu.exe" || rc=$? ;;`),
+		`*.zip) timeout 2m unzip -p "${archive}" shift2eu.exe ... | head -c 134217728 > "${dir}/shift2eu.exe" || rc=$? ;;: the member alone, through the 128 MiB size cap`)
+
+	// Row 10: trivy scans offline, from the database row 2 downloaded: no
+	// database, Java database, check bundle or version download, no telemetry.
+	trivyScans = append(trivyFlags("--skip-db-update", "--skip-java-db-update", "--skip-check-update", "--offline-scan", "--disable-telemetry"),
+		command(regexp.QuoteMeta(`trivy image "${offline[@]}" `), `trivy image "${offline[@]}", the image scan with the offline flags`),
+		command(regexp.QuoteMeta(`trivy sbom "${offline[@]}" `), `trivy sbom "${offline[@]}", the SBOM scan with the offline flags`))
+
+	// Row 11: the version command, in a container with the four flags and
+	// row 13's limits, created under a timeout; the image's filesystem listed
+	// with tar's own warnings in the results directory, never on the log.
+	runtimeCreate = command(wholeLine(`cid="$(timeout 2m `+auditContainerFlags+` --memory 512m --pids-limit 64 "${image}@${digest}" version)" || rc=$?`),
+		`cid="$(timeout 2m `+auditContainerFlags+` --memory 512m --pids-limit 64 "${image}@${digest}" version)" || rc=$?, on a line of its own: `+
+			`the image's container read-only, with no network, no capability, no new privilege, its memory (--memory) and pid (--pids-limit) limits, and a create that cannot hang`)
+	runtimeListing = command(regexp.QuoteMeta(`| tar -tvf - > "${out}/filesystem.txt" 2> "${out}/filesystem.stderr" || rc=$?`),
+		`| tar -tvf - > "${out}/filesystem.txt" 2> "${out}/filesystem.stderr": tar's warnings name the image's entries, so they go to filesystem.stderr, never to the public log`)
+
+	// Row 13: the inputs reach the image by docker cp into a staging container
+	// that is never started, which docker commit turns into the image each
+	// run's container starts from (ADR 0040); each run's container has the
+	// four flags and its limits.
+	hostileCorpus = command(regexp.QuoteMeta(`cp -P .github/security-audit/testdata/hostile-inventories/*.json "${stage}/"`),
+		`cp -P .github/security-audit/testdata/hostile-inventories/*.json "${stage}/": a link the corpus holds is copied as a link, never followed on the runner`)
+	hostileCopy   = command(regexp.QuoteMeta(`docker cp "${stage}" "${staging}:/work/"`), `docker cp "${stage}" "${staging}:/work/", the inputs copied into the staging container`)
+	hostileCommit = command(regexp.QuoteMeta(`docker commit "${staging}" "audit-hostile:${GITHUB_RUN_ID}"`), `docker commit "${staging}" "audit-hostile:${GITHUB_RUN_ID}", the image the runs start from`)
+	hostileCreate = command(regexp.QuoteMeta(`cid="$(timeout 2m `+auditContainerFlags+` --memory 512m --pids-limit 64 "audit-hostile:${GITHUB_RUN_ID}" assess `),
+		`cid="$(timeout 2m `+auditContainerFlags+` --memory 512m --pids-limit 64 "audit-hostile:${GITHUB_RUN_ID}" assess ...: each run read-only, with no network, no capability, no new privilege and its limits`)
+	// hostileFindingCandidate is row 13's limits line for a run its own timeout
+	// ended, held whole (review round L of PR 5c, K6): a run that hangs on a
+	// hostile file is a finding candidate, never a run that merely did not finish.
+	hostileFindingCandidate = command(wholeLine(`echo "hostile-inventories: ${run} timed out after 60 seconds, a finding candidate of the run" >> "${results}/limits.txt"`),
+		`echo "hostile-inventories: ${run} timed out after 60 seconds, a finding candidate of the run" >> "${results}/limits.txt", on a line of its own: `+
+			`a run its own timeout ended is a finding candidate of the run, which the skill weighs, never a part that merely did not finish (PRD #175 milestone 2, ADR 0040)`)
+
+	// Row 14: the Go image by digest, each target's shape refused before it
+	// reaches the container, and the container with the four flags, its one
+	// tmpfs and the step's offline settings.
+	goImage       = command(wholeLine(`image="golang:${GO_IMAGE}"`), `image="golang:${GO_IMAGE}", the Go image the step's env: pins by digest`)
+	fuzzDiscovery = command(regexp.QuoteMeta(`grep -oE '^func Fuzz[A-Z0-9_][A-Za-z0-9_]*\(f \*testing\.F\)' "${file}"`),
+		`grep -oE '^func Fuzz[A-Z0-9_][A-Za-z0-9_]*\(f \*testing\.F\)' "${file}": the Fuzz targets by their signature alone, never a helper such as Fuzzy`)
+	// fuzzShape records a target of another shape and goes on (review round D
+	// of PR 5c, G): its branch is held whole, continue included. Since round K
+	// (B2) it records a limits line, never a not-run line: one target skipped is
+	// a part of the check, and unexpected-target is no why id.
+	fuzzShape = command(`(?m)^[ \t]*`+regexp.QuoteMeta(`if [[ ! "${name}" =~ ^Fuzz[A-Z0-9_][A-Za-z0-9_]*$ ]] || [[ ! "${pkg}" =~ ^[A-Za-z0-9_][A-Za-z0-9_./-]*$ ]] || [[ "${pkg}" == *..* ]]; then`)+
+		`\n[ \t]+`+regexp.QuoteMeta(`echo "fuzzing: a target of an unexpected shape was not run" >> "${results}/limits.txt"`)+`\n[ \t]+continue\n[ \t]*fi$`,
+		`the fuzz target's shape guard: if [[ ! "${name}" =~ ^Fuzz[A-Z0-9_][A-Za-z0-9_]*$ ]] || [[ ! "${pkg}" =~ ^[A-Za-z0-9_][A-Za-z0-9_./-]*$ ]] || [[ "${pkg}" == *..* ]]; then, `+
+			`echo "fuzzing: a target of an unexpected shape was not run" >> "${results}/limits.txt", continue and fi, each on a line of its own: a target of another shape is a limits line `+
+			`of the check, never the check not run, and ends neither the step nor the run's report (PRD #175 milestone 2, ADR 0040)`)
+	// fuzzCreate holds the fuzz container's create whole, through its last
+	// line (review round D of PR 5c, B1): a flag added after the pinned ones
+	// would override them.
+	fuzzCreate = command(fuzzCreatePattern(),
+		`the fuzz container's create, whole and each line exactly: cid="$(timeout 2m `+auditContainerFlags+` --memory 10g --pids-limit 512 --user 65534:65534 \, `+
+			auditFuzzTmpfs+` \, its --env lines, "audit-fuzz:${GITHUB_RUN_ID}" \ and its sh -c command, closed by )" || rc=$?: read-only, with no network, no capability, no new privilege, `+
+			`its memory (--memory) and pid (--pids-limit) limits, as nobody, no flag past the pinned ones, and a create that cannot hang`)
+	fuzzTmpfs = command(`(?m)`+regexp.QuoteMeta(`--user 65534:65534 \`)+`\n[ \t]+`+regexp.QuoteMeta(auditFuzzTmpfs+` \`)+`$`,
+		auditFuzzTmpfs+` \, exactly, on the line after --user 65534:65534 \: the fuzz container's one writable path`)
+	fuzzEnv = command(`(?m)`+regexp.QuoteMeta(auditFuzzTmpfs+` \`)+`\n[ \t]+`+regexp.QuoteMeta(`--env GOFLAGS --env GOPROXY `),
+		"--env GOFLAGS --env GOPROXY on the line after the tmpfs: the step's GOFLAGS=-mod=readonly and GOPROXY=off handed to go test in the container")
+	fuzzTime = command(`-fuzztime 10m `, "-fuzztime 10m, each target's fuzzing budget")
+
+	// Row 15: each ruleset ID's shape refused before it reaches a URL, and
+	// recorded, never the end of the step (review round I of PR 5c, L6): an ID
+	// the API answers in another shape is that read not run, and the step goes
+	// on to its other reads. Since round K (B2) the record is a limits line: one
+	// read skipped is no check that did not run, and unexpected-ruleset is no why
+	// id.
+	rulesetShape = command(`(?m)^[ \t]*`+regexp.QuoteMeta(`if [[ ! "${id}" =~ ^[0-9]+$ ]]; then`)+
+		`\n[ \t]+`+regexp.QuoteMeta(`echo "supply-chain: a ruleset ID that is no number was not read" >> "${results}/limits.txt"`)+`\n[ \t]+continue\n[ \t]*fi$`,
+		`the ruleset ID's shape guard: if [[ ! "${id}" =~ ^[0-9]+$ ]]; then, echo "supply-chain: a ruleset ID that is no number was not read" >> "${results}/limits.txt", continue and fi, `+
+			`each on a line of its own: an ID of another shape is a limits line and never reaches a URL, and it ends neither the step nor the run's report (PRD #175 milestone 2, ADR 0040)`)
+	// S2 (round K): read_api's budget records the reads it did not reach in
+	// read-skipped.txt, never in read-refused.txt, and the step's end names that
+	// list in the limits by its own cause: a read the budget ran out on is no
+	// permission for the maintainer to chase.
+	readAPIBudget = command(`(?m)^[ \t]*if \[ "\$\{SECONDS\}" -ge [0-9]+ \]; then\n`+
+		wholeLines(`echo "${name}" >> "${out}/read-skipped.txt"`, `return 0`, `fi`)+`$`,
+		`read_api's budget, each on a line of its own: if [ "${SECONDS}" -ge <seconds> ]; then, echo "${name}" >> "${out}/read-skipped.txt", return 0 and fi: `+
+			`a read the budget ran out on goes to read-skipped.txt, never to read-refused.txt, since the API refused nothing (PRD #175 milestone 2, ADR 0040)`)
+	readSkippedLimits = command(`(?m)^[ \t]*`+regexp.QuoteMeta(`if [ -s "${out}/read-skipped.txt" ]; then`)+
+		`\n[ \t]+echo "supply-chain: [^"\n]*supply-chain/read-skipped\.txt[^"\n]*" >> "\$\{results\}/limits\.txt"\n[ \t]*fi$`,
+		`the step's end naming the skipped reads, each on a line of its own: if [ -s "${out}/read-skipped.txt" ]; then, `+
+			`echo "supply-chain: ... supply-chain/read-skipped.txt" >> "${results}/limits.txt" and fi: the reads the budget ran out on are a limits line of their own, `+
+			`never read refused (PRD #175 milestone 2, ADR 0040)`)
+	rulesetRead = command(regexp.QuoteMeta(`read_api "ruleset-${id}" "repos/${GH_REPO}/rulesets/${id}"`), `read_api "ruleset-${id}" "repos/${GH_REPO}/rulesets/${id}", the ruleset's read`)
+	// The variables endpoints return each variable's value, which no read
+	// keeps (review round D of PR 5c, D): read_api passes its third argument to
+	// gh api as the jq filter, and each names read passes the one that keeps
+	// the names alone.
+	readAPIFilter = command(regexp.QuoteMeta(`local name="$1" endpoint="$2" filter="${3:-.}" rc=0`),
+		`local name="$1" endpoint="$2" filter="${3:-.}" rc=0 in read_api: its third argument is the jq filter, "." when none is given`)
+	readAPIJq = command(regexp.QuoteMeta(`timeout 2m gh api "${endpoint}" --jq "${filter}" > "${out}/api/${name}.json"`),
+		`timeout 2m gh api "${endpoint}" --jq "${filter}" > "${out}/api/${name}.json" in read_api: every read through its filter`)
+	namesReads = []auditCommand{
+		namesRead(`read_api repository-variable-names "repos/${GH_REPO}/actions/variables" '[.variables[].name]'`),
+		namesRead(`read_api "environment-${env}-variable-names" "repos/${GH_REPO}/environments/${env}/variables" '[.variables[].name]'`),
+		namesRead(`read_api repository-secret-names "repos/${GH_REPO}/actions/secrets" '[.secrets[].name]'`),
+		namesRead(`read_api "environment-${env}-secret-names" "repos/${GH_REPO}/environments/${env}/secrets" '[.secrets[].name]'`),
+	}
+
+	// anyTmpfs is a tmpfs in a container that needs none.
+	anyTmpfs = command(`--tmpfs`, "--tmpfs, a writable path in a container that needs none: row 14's is the workflow's one tmpfs")
+
+	// goImageDigest is row 14's Go image pin: a tag and its @sha256: digest.
+	goImageDigest = regexp.MustCompile(`^[0-9A-Za-z][0-9A-Za-z._-]*@sha256:[0-9a-f]{64}$`)
+)
+
+// Review round I of PR 5c: the reviewer's and the auditor's findings, each a
+// command the checks job's steps must hold.
+var (
+	// L2: row 7's release download records its outcome and clears rel_ok on a
+	// timeout, a failure and a download with no checksums.txt, so that the
+	// release's file checks, which the rel_ok gate holds, never read an absent
+	// list as a mismatch. Review round L (K1): each branch sets the why and
+	// writes a limits line, never a not-run line, since the image half still
+	// runs; the step's end writes the why to not-run.txt when no part ran.
+	releaseDownloadOutcome = command(`(?m)^[ \t]*timeout \S+ gh release download "\$\{tag\}" [^\n]* \|\| rc=\$\?\n`+
+		wholeLines(
+			`echo "${rc}" > "${out}/download.exit"`,
+			`rel_ok=1`,
+			`if [ "${rc}" -eq 124 ]; then`,
+			`why=timed-out`,
+		)+`\n[ \t]+echo "release-integrity: [^"\n]+" >> "\$\{results\}/limits\.txt"\n`+
+		wholeLines(
+			`rel_ok=0`,
+			`elif [ "${rc}" -ne 0 ]; then`,
+			`why=tool-failed`,
+		)+`\n[ \t]+echo "release-integrity: [^"\n]+" >> "\$\{results\}/limits\.txt"\n`+
+		wholeLines(
+			`rel_ok=0`,
+			`elif [ ! -s "${rel}/checksums.txt" ]; then`,
+			`why=results-missing`,
+		)+`\n[ \t]+echo "release-integrity: [^"\n]+" >> "\$\{results\}/limits\.txt"\n`+
+		wholeLines(`rel_ok=0`, `fi`)+`$`,
+		`the release download's outcome right after it, each on a line of its own: echo "${rc}" > "${out}/download.exit", rel_ok=1, `+
+			`if [ "${rc}" -eq 124 ]; then (why=timed-out, its limits line, rel_ok=0), elif [ "${rc}" -ne 0 ]; then (why=tool-failed, its limits line, rel_ok=0), `+
+			`elif [ ! -s "${rel}/checksums.txt" ]; then (why=results-missing, its limits line, rel_ok=0) and fi: `+
+			`a failed, partial or empty download is limits lines of release-integrity and the why the step's end records when no part ran, never a checksum finding, `+
+			`and never a not-run line beside a finding of the image half (PRD #175 milestone 2, ADR 0040)`)
+	// releaseFileGate is the if that holds the release's file checks to a
+	// download that brought checksums.txt.
+	releaseFileGate = command(wholeLine(`if [ "${rel_ok}" -eq 1 ]; then`), `if [ "${rel_ok}" -eq 1 ]; then, on a line of its own`)
+	// releaseFileChecks are the commands the gate holds: the filter, the
+	// checksum check, the listing's diff and each release file's attestation.
+	releaseFileChecks = []auditCommand{
+		checksumFilter, checksumFiltered,
+		command(regexp.QuoteMeta(`diff "${out}/listed.txt" "${out}/assets.txt"`), `diff "${out}/listed.txt" "${out}/assets.txt", the listing's comparison`),
+		command(regexp.QuoteMeta(`gh attestation verify "${file}"`), `gh attestation verify "${file}", each release file's attestation`),
+	}
+
+	// L4 (round K): a checksums.txt that is not empty but holds no well-formed
+	// line names no file of the release, which is a finding about the release,
+	// recorded verification-failed with the limits line that says why, never a
+	// tool that failed and never a silent pass.
+	malformedChecksums = command(`(?m)^[ \t]*`+wholeLines(
+		`if [ -s "${rel}/checksums.txt" ] && [ ! -s "${out}/checksums.filtered" ]; then`,
+		`echo "release-integrity verification-failed" >> "${results}/verification-failed.txt"`,
+		`echo "release-integrity: checksums.txt holds no well-formed line" >> "${results}/limits.txt"`,
+		`fi`)+`$`,
+		`the record for a checksums.txt with no well-formed line, after the filter and before the checksum check, each on a line of its own: `+
+			`if [ -s "${rel}/checksums.txt" ] && [ ! -s "${out}/checksums.filtered" ]; then, echo "release-integrity verification-failed" >> "${results}/verification-failed.txt", `+
+			`echo "release-integrity: checksums.txt holds no well-formed line" >> "${results}/limits.txt" and fi: a malformed list is a finding about the release, `+
+			`never a tool that failed (PRD #175 milestone 2, ADR 0040)`)
+
+	// L5: the three values latest.txt holds beside the tag, each blanked unless
+	// it is of its one shape, before latest.txt is written.
+	tagDigestShape     = blankUnless("tag_digest", `^sha256:[0-9a-f]{64}$`)
+	latestDigestShape  = blankUnless("latest_digest", `^sha256:[0-9a-f]{64}$`)
+	latestReleaseShape = blankUnless("latest_release", `^v[0-9]+\.[0-9]+\.[0-9]+$`)
+	latestRecord       = command(regexp.QuoteMeta(`"${tag}" "${latest_release}" "${tag_digest}" "${latest_digest}" > "${out}/latest.txt"`),
+		`printf ... "${tag}" "${latest_release}" "${tag_digest}" "${latest_digest}" > "${out}/latest.txt", the release's latest record`)
+
+	// S4: the if that verifies the image when its digest resolved; its else
+	// records the verifications it skipped.
+	tagDigestBranch = command(wholeLine(`if [ -n "${tag_digest}" ]; then`), `if [ -n "${tag_digest}" ]; then, on a line of its own`)
+
+	// L4: row 9 counts an archive's member only when it holds bytes.
+	binaryFind = command(wholeLine(`bin="$(find "${dir}" -maxdepth 1 -type f -size +0 \( -name shift2eu -o -name shift2eu.exe \) -print -quit)"`),
+		`bin="$(find "${dir}" -maxdepth 1 -type f -size +0 \( -name shift2eu -o -name shift2eu.exe \) -print -quit)", on a line of its own: `+
+			`the binary counts only when it holds bytes (-size +0), so an archive whose member is missing leaves head's empty file, which is results-missing, never a scan (PRD #175 milestone 2, ADR 0040)`)
+
+	// Round N (the AI review of PR #565, point 10): row 9's branch for an
+	// archive whose unpack failed. A 124 is the check timed out, any other exit
+	// one that did not run; a limits line names the archive and its exit; and
+	// continue goes on to the next archive, so the part of a member head -c
+	// wrote before the 128 MiB cap (141) or the 2-minute timeout (124) is never
+	// counted or scanned.
+	unpackFailure = command(`(?m)^[ \t]*`+wholeLines(
+		`if [ "${rc}" -ne 0 ]; then`,
+		`if [ "${rc}" -eq 124 ]; then`,
+		`echo "binary-vulnerabilities timed-out" >> "${results}/not-run.txt"`,
+		`else`,
+		`echo "binary-vulnerabilities tool-failed" >> "${results}/not-run.txt"`,
+		`fi`,
+		`echo "binary-vulnerabilities: ${name} was not scanned: its unpack exited ${rc} (141: the 128 MiB cap, 124: the 2-minute timeout)" >> "${results}/limits.txt"`,
+		`continue`,
+		`fi`)+`$`,
+		`the failed unpack's branch, each on a line of its own: if [ "${rc}" -ne 0 ]; then, if [ "${rc}" -eq 124 ]; then, echo "binary-vulnerabilities timed-out" >> "${results}/not-run.txt", else, `+
+			`echo "binary-vulnerabilities tool-failed" >> "${results}/not-run.txt", fi, `+
+			`echo "binary-vulnerabilities: ${name} was not scanned: its unpack exited ${rc} (141: the 128 MiB cap, 124: the 2-minute timeout)" >> "${results}/limits.txt", continue and fi: `+
+			`an archive whose unpack failed is named in the limits and never scanned, so the part of a member head wrote is no binary (PRD #175 milestone 2, ADR 0040)`)
+
+	// Round N (the AI review of PR #565, point 4): row 15 reads Renovate's open
+	// Dependency Dashboard issue alone, its pull requests filtered out on the
+	// client after one page of 100 items, newest first, so the dashboard is
+	// missed only past 99 open Renovate pull requests; and a read that answered
+	// with no such issue is a limits line, never a clean answer.
+	renovateDashboardRead = command(wholeLine(`read_api renovate-dashboard "repos/${GH_REPO}/issues?state=open&creator=renovate%5Bbot%5D&per_page=100" '[.[] | select(.pull_request == null)]'`),
+		`read_api renovate-dashboard "repos/${GH_REPO}/issues?state=open&creator=renovate%5Bbot%5D&per_page=100" '[.[] | select(.pull_request == null)]', on a line of its own: `+
+			`the open issues alone (state=open) with the pull requests filtered out (select(.pull_request == null)) on the one page of 100, so the dashboard is missed only past 99 open Renovate pull requests, and the limits line then says no dashboard was found (PRD #175 milestone 2, ADR 0040)`)
+	renovateDashboardMissing = command(`(?m)^[ \t]*`+wholeLines(
+		`if [ -f "${out}/api/renovate-dashboard.exit" ] && [ "$(cat "${out}/api/renovate-dashboard.exit")" = 0 ] && [ "$(jq 'length' "${out}/api/renovate-dashboard.json")" = 0 ]; then`,
+		`echo "supply-chain: no open Renovate Dependency Dashboard issue was found" >> "${results}/limits.txt"`,
+		`fi`)+`$`,
+		`the record for a dashboard read that found no issue, each on a line of its own: `+
+			`if [ -f "${out}/api/renovate-dashboard.exit" ] && [ "$(cat "${out}/api/renovate-dashboard.exit")" = 0 ] && [ "$(jq 'length' "${out}/api/renovate-dashboard.json")" = 0 ]; then, `+
+			`echo "supply-chain: no open Renovate Dependency Dashboard issue was found" >> "${results}/limits.txt" and fi: an empty answer is said in the limits, never read as a clean one (PRD #175 milestone 2, ADR 0040)`)
+
+	// L3: rows 6, 8 and 10's tool runs, each followed by its outcome branch.
+	scorecardOutcome = command(`^[ \t]*timeout \S+ scorecard `, "scorecard's run (timeout 15m scorecard ...)")
+	pullOutcome      = command(`^[ \t]*timeout \S+ docker pull `, "the image's pull (timeout 8m docker pull ...)")
+	trivyOutcomes    = []auditCommand{
+		command(`^[ \t]*timeout \S+ trivy image `, `the image scan (timeout 8m trivy image ...)`),
+		command(`^[ \t]*timeout \S+ trivy sbom `, `the SBOM scan (timeout 4m trivy sbom ...)`),
+	}
+)
+
+// wholeLines returns the pattern of lines, each verbatim and whole, one after
+// the other, each after any indent; the first has no line start of its own,
+// so it follows the pattern before it.
+func wholeLines(lines ...string) string {
+	quoted := make([]string, 0, len(lines))
+	for _, l := range lines {
+		quoted = append(quoted, `[ \t]*`+regexp.QuoteMeta(l))
+	}
+
+	return strings.Join(quoted, `\n`)
+}
+
+// blankUnless returns the command of row 7's shape check of name: the value
+// blanked unless it matches shape, each line whole (review round I of PR 5c,
+// L5).
+func blankUnless(name, shape string) auditCommand {
+	cond := `if [[ ! "${` + name + `}" =~ ` + shape + ` ]]; then`
+
+	return command(`(?m)^[ \t]*`+regexp.QuoteMeta(cond)+`\n[ \t]+`+regexp.QuoteMeta(name+`=""`)+`\n[ \t]*fi$`,
+		cond+`, `+name+`="" and fi, each on a line of its own, before latest.txt is written: a registry's or the API's answer of another shape is recorded as no value, `+
+			`never as one (PRD #175 milestone 2, ADR 0040)`)
+}
+
+// The ::error lines of PRD #175's "A failed run is visible" (round E of PR
+// 5c): each step that can fail with one of the box's causes names the cause's
+// kind and the runbook step that recovers from it, and no secret and no
+// finding's detail.
+var (
+	// The hardening step's three commands record their own failure, so its
+	// branch, not set -e's own line, ends the step.
+	hardeningCommands = []auditCommand{
+		command(wholeLine(`sudo systemctl stop docker.service docker.socket || rc=$?`), `sudo systemctl stop docker.service docker.socket || rc=$?, on a line of its own`),
+		command(wholeLine(`sudo systemctl disable docker.service docker.socket || rc=$?`), `sudo systemctl disable docker.service docker.socket || rc=$?, on a line of its own`),
+		command(wholeLine(`sudo rm -f /etc/sudoers.d/runner || rc=$?`), `sudo rm -f /etc/sudoers.d/runner || rc=$?, on a line of its own`),
+	}
+	hardeningError = failureBranch(`(?m)^[ \t]*if \[ "\$\{rc\}" -ne 0 \]`, `if [ "${rc}" -ne 0 ]`,
+		"::error title=Audit model::the runner could not be hardened: see runbook step 10")
+	// The launcher prints one constant class, so an expired or revoked token,
+	// the usage limit, a failed preflight and a managed-settings path read
+	// alike here: the step's line names what the maintainer recovers from.
+	runError = failureBranch(`(?m)^[ \t]*if ! (?:ci/|"\$\{RUNNER_TEMP\}/bin/)auditrun"? -claude-tarball [^\n]*`, `if ! <auditrun> -claude-tarball ...`,
+		"::error title=Audit model::the audit did not run: see runbook step 10")
+	modelArtifactError = failureBranch(`(?m)^[ \t]*if ! (?:ci/|"\$\{RUNNER_TEMP\}/bin/)auditpublish"? artifacts -job model [^\n]*`, `if ! <auditpublish> artifacts -job model ...`,
+		"::error title=Audit model::the run's artifacts are unexpected: see runbook step 11")
+	publishArtifactError = failureBranch(`(?m)^[ \t]*if ! (?:ci/|"\$\{RUNNER_TEMP\}/bin/)auditpublish"? artifacts -job publish [^\n]*`, `if ! <auditpublish> artifacts -job publish ...`,
+		"::error title=Audit publish::the run's artifacts are unexpected: see runbook step 11")
+	publishError = failureBranch(`(?m)^[ \t]*if ! (?:ci/|"\$\{RUNNER_TEMP\}/bin/)auditpublish"? publish [^\n]*`, `if ! <auditpublish> publish ...`,
+		"::error title=Audit publish::the publish was refused: see runbook step 11")
+	// The install script is shared with the AI reviewer and its own two ::error
+	// lines name no runbook step (round F of PR 5c), so the model job's call of it
+	// is held whole under a guard that names the step: a pin the pin check holds to
+	// the registry's integrity, or a managed policy on the runner image.
+	installError = failureBranch(`(?m)^[ \t]*if ! \.github/scripts/install-claude-code\.sh "[^"\n]+" "[^"\n]+" "[^"\n]+"`,
+		`if ! .github/scripts/install-claude-code.sh "<dir>" "<package>" "<integrity>"`,
+		"::error title=Audit model::the Claude Code CLI did not install: see runbook step 11")
+)
+
+// failureBranch returns the command of a step's failure branch: the if whose
+// condition cond matches, up to its ; then, an echo of exactly the ::error
+// line msg, exit 1 and fi, each on a line of its own.
+func failureBranch(cond, condText, msg string) auditCommand {
+	return command(cond+`; then\n[ \t]+`+regexp.QuoteMeta(`echo "`+msg+`"`)+`\n[ \t]+exit 1\n[ \t]*fi$`,
+		condText+`; then, echo "`+msg+`", exit 1 and fi, each on a line of its own: a failed run names the cause's kind and the runbook step that recovers from it (PRD #175, a failed run is visible)`)
+}
+
+// namesRead returns the command of one of row 15's names reads, whole on a
+// line of its own: the jq filter at its end keeps the names alone.
+func namesRead(line string) auditCommand {
+	filter := line[strings.LastIndexByte(line[:len(line)-1], '\'')+1 : len(line)-1]
+
+	return command(wholeLine(line), line+": the names alone, through the jq filter "+filter+", never a value")
+}
+
+// trivyFlags returns one command per flag the offline=(...) array of row 10
+// must hold.
+func trivyFlags(flags ...string) []auditCommand {
+	out := make([]auditCommand, 0, len(flags))
+
+	for _, f := range flags {
+		out = append(out, command(`(?m)^[ \t]*offline=\([^\n]*`+regexp.QuoteMeta(" "+f)+`[ )]`,
+			f+` in trivy's offline=(...) flags: the scans download nothing and send nothing`))
+	}
+
+	return out
+}
+
+// fuzzCreateLines are row 14's docker create, line by line (review round D of
+// PR 5c, B1).
+// Since review round I (M2) the create runs under a timeout of its own and
+// records its exit after the command substitution's close.
+var fuzzCreateLines = []string{
+	`cid="$(timeout 2m ` + auditContainerFlags + ` --memory 10g --pids-limit 512 --user 65534:65534 \`,
+	auditFuzzTmpfs + ` \`,
+	`--env GOFLAGS --env GOPROXY --env GOTOOLCHAIN=local --env GOMODCACHE=/modcache --env GOCACHE=/scratch/go-build \`,
+	`--env GOTMPDIR=/scratch --env TMPDIR=/scratch --env HOME=/scratch --env FUZZ_PKG="${pkg}" --env FUZZ_NAME="${name}" \`,
+	`"audit-fuzz:${GITHUB_RUN_ID}" \`,
+	`sh -c 'cp -R /src /scratch/src && cd /scratch/src && go test -run "^$" -fuzz "^${FUZZ_NAME}\$" -fuzztime 10m "./${FUZZ_PKG}" >&2; rc=$?; ` +
+		`tar -C /scratch/src -cf - "${FUZZ_PKG}/testdata/fuzz" 2> /dev/null; exit "${rc}"')" || rc=$?`,
+}
+
+// fuzzCreatePattern matches fuzzCreateLines as one contiguous command, each
+// line whole.
+func fuzzCreatePattern() string {
+	quoted := make([]string, 0, len(fuzzCreateLines))
+	for _, l := range fuzzCreateLines {
+		quoted = append(quoted, regexp.QuoteMeta(l))
+	}
+
+	return `(?m)^[ \t]*` + strings.Join(quoted, `\n[ \t]+`) + `$`
+}
+
 // auditJobs are the workflow's three jobs, in order, with their steps in
 // order: the closed list a step is recognised by, by name.
 var auditJobs = []auditJob{
 	{
 		key:  "checks",
 		name: "Checks",
-		// No attestations scope: no row of the checks job PR 5b runs reads
-		// one; PR 5c adds it with the release-integrity rows.
-		permissions:      []string{"contents"},
+		// The four scopes its rows read with (PR 5c): contents for the
+		// checkout and the release, attestations for row 7's verification,
+		// actions for scorecard's reads of the workflows' runs, issues for
+		// Renovate's Dependency Dashboard. No packages scope (the image is
+		// pulled anonymously) and no id-token (scorecard runs as the CLI).
+		permissions:      []string{"contents", "attestations", "actions", "issues"},
 		downloadsModules: "Download the Go modules",
+		stepsWithinJob:   true,
+		boundsTools:      true,
 		steps: []auditStep{
 			{name: "Check out the audited commit", uses: auditCheckout},
 			{
 				name: "Record the audited commit and the latest release tag", githubToken: true,
-				runs: []auditCommand{command(`releases/latest`, "the latest release's tag (releases/latest)")},
+				// The tag's shape is checked right after the lookup, before the
+				// tag reaches any command line.
+				runs:  []auditCommand{latestTag, tagShape},
+				order: []auditCommand{latestTag, tagShape},
 			},
-			{name: "Download the pinned tools and verify their checksums", runs: []auditCommand{checksumCheck}},
+			{name: "Download the pinned tools and verify their checksums", runs: []auditCommand{checksumCheck}, guardsChecksums: true},
 			{
 				name: "Download the Go modules",
 				runs: []auditCommand{modDownload, command(`go -C tools mod download`, "go -C tools mod download")},
 			},
-			{name: "govulncheck", runs: []auditCommand{command(`govulncheck .*\./\.\.\.`, "govulncheck ./...")}},
+			{
+				name:    "govulncheck",
+				runs:    []auditCommand{command(`govulncheck .*\./\.\.\.`, "govulncheck ./..."), govulncheckFailed},
+				refuses: []auditCommand{govulncheckExcuse},
+			},
 			{name: "osv-scanner", runs: []auditCommand{command(`osv-scanner scan source `, "osv-scanner scan source")}},
 			{
 				name: "gitleaks on the history",
 				runs: []auditCommand{
 					command(`gitleaks git .*--redact`, "gitleaks git --redact"),
 					command(`gitleaks git .*--ignore-gitleaks-allow`, "gitleaks git --ignore-gitleaks-allow (no allow comment in the history hides a secret)"),
+					gitleaksExitCode, gitleaksFailed,
 				},
 			},
 			// Two steps: only zizmor's online audits read GitHub's API, so only
 			// its step holds the job's token.
-			{name: "zizmor", githubToken: true, runs: []auditCommand{command(`zizmor `, "zizmor")}},
+			{name: "zizmor", githubToken: true, runs: []auditCommand{command(`zizmor `, "zizmor"), zizmorFailed}},
 			{name: "actionlint", runs: []auditCommand{command(`actionlint`, "actionlint")}},
+			// Rows 6 to 15 (PR 5c). The job's token only on the steps that read
+			// GitHub's API: scorecard, the release's verification and the
+			// supply-chain reads; no container step holds it.
+			{
+				name: "OpenSSF scorecard", githubToken: true,
+				runs:     []auditCommand{scorecardOut, scorecardRun},
+				refuses:  []auditCommand{scorecardPublish},
+				order:    []auditCommand{scorecardOut, scorecardRun},
+				outcomes: []auditOutcome{{run: scorecardOutcome, check: "scorecard"}},
+			},
+			{
+				name: "Verify the release's files, signature and attestations", githubToken: true,
+				check: "release-integrity", budget: true, verifies: true, parts: true,
+				runs: []auditCommand{
+					tagRead, tagShape, releaseDownloadOutcome, releaseFileGate, checksumFilter, malformedChecksums, checksumFiltered,
+					tagDigestShape, latestDigestShape, latestReleaseShape, latestRecord, tagDigestBranch,
+				},
+				order: []auditCommand{
+					tagRead, tagShape, releaseDownloadOutcome, releaseFileGate, checksumFilter, malformedChecksums, checksumFiltered,
+					tagDigestShape, latestDigestShape, latestReleaseShape, latestRecord, tagDigestBranch,
+				},
+			},
+			{
+				name:     "Pull the image anonymously by digest",
+				check:    "image-pull",
+				runs:     []auditCommand{anonymousConfig, recordedDigest, imageDigestShape, imagePull},
+				order:    []auditCommand{anonymousConfig, recordedDigest, imageDigestShape, imagePull},
+				outcomes: []auditOutcome{{run: pullOutcome, check: "image-pull"}},
+			},
+			{
+				name:   "govulncheck on the release binaries",
+				check:  "binary-vulnerabilities",
+				budget: true,
+				runs:   []auditCommand{binaryGovulncheck, unpackTar, unpackZip, unpackFailure, binaryFind},
+				order:  []auditCommand{unpackFailure, binaryFind, binaryGovulncheck},
+			},
+			{
+				name: "trivy on the image and its SBOM", runs: trivyScans,
+				outcomes: []auditOutcome{{run: trivyOutcomes[0], check: "image-scan"}, {run: trivyOutcomes[1], check: "image-scan"}},
+			},
+			{
+				name:    "Check the image's runtime settings",
+				check:   "image-runtime",
+				runs:    []auditCommand{recordedDigest, imageDigestShape, imageInspect, runtimeCreate, runtimeListing},
+				refuses: []auditCommand{anyTmpfs},
+				order:   []auditCommand{recordedDigest, imageDigestShape, imageInspect, runtimeCreate, runtimeListing},
+			},
+			{
+				name:    "Run the CLI on hostile inventory files",
+				check:   "hostile-inventories",
+				budget:  true,
+				parts:   true,
+				runs:    []auditCommand{recordedDigest, imageDigestShape, imageInspect, hostileCorpus, hostileCopy, hostileCommit, hostileCreate, hostileFindingCandidate},
+				refuses: []auditCommand{anyTmpfs},
+				order:   []auditCommand{recordedDigest, imageDigestShape, imageInspect, hostileCorpus, hostileCopy, hostileCommit, hostileCreate},
+			},
+			{
+				name: "Fuzz the committed Fuzz targets",
+				// Its staging reads the tree, the module cache and the Go image
+				// (review round I of PR 5c, M2): bounded like row 13's, and its
+				// loop stopped by a budget.
+				check:  "fuzzing",
+				budget: true,
+				parts:  true,
+				env:    []auditRead{{key: "GOFLAGS", value: "-mod=readonly"}, {key: "GOPROXY", value: "off"}},
+				envMatch: []auditEnvMatch{{
+					key: "GO_IMAGE", re: goImageDigest,
+					want: `a tag and its @sha256:<64 hex> digest, so the image is the one Renovate pinned`,
+				}},
+				runs:  []auditCommand{fuzzDiscovery, goImage, fuzzShape, fuzzCreate, fuzzTmpfs, fuzzEnv, fuzzTime},
+				order: []auditCommand{fuzzDiscovery, goImage, fuzzShape, fuzzCreate, fuzzTmpfs, fuzzEnv},
+			},
+			{
+				name: "Supply-chain reads", githubToken: true,
+				runs: append([]auditCommand{
+					readAPIFilter, readAPIBudget, readAPIJq, rulesetShape, rulesetRead,
+					renovateDashboardRead, renovateDashboardMissing, readSkippedLimits,
+				}, namesReads...),
+				order: []auditCommand{readAPIFilter, readAPIBudget, readAPIJq, rulesetShape, rulesetRead, renovateDashboardRead, renovateDashboardMissing, readSkippedLimits},
+			},
 			{
 				name: "Encrypt the checks' results to the model key",
 				env:  []auditRead{{key: "AUDIT_MODEL_PUBLIC_KEY", value: varValue("AUDIT_MODEL_PUBLIC_KEY")}},
@@ -239,8 +819,9 @@ var auditJobs = []auditJob{
 			// the install step's env: (test/lint, issue #277 round J).
 			{name: "Read the Claude Code pin", runs: []auditCommand{command(`\.github/claude-code\.yaml`, ".github/claude-code.yaml")}},
 			{
-				name: "Install the pinned tools",
-				runs: []auditCommand{checksumCheck, command(`dpkg -i `, "dpkg -i"), command(`\.github/scripts/install-claude-code\.sh `, ".github/scripts/install-claude-code.sh")},
+				name:            "Install the pinned tools",
+				runs:            []auditCommand{checksumCheck, command(`dpkg -i `, "dpkg -i"), installError},
+				guardsChecksums: true,
 			},
 			{
 				name: "Load the AppArmor profile for bubblewrap",
@@ -256,9 +837,9 @@ var auditJobs = []auditJob{
 			},
 			{
 				name: "List the run's artifacts and download the checks' ciphertext", githubToken: true,
-				runs:    []auditCommand{artifactsModel, artifactFile, artifactID, artifactDigest, artifactShape, artifactZip, zipDigest, zipUnpack, zipOneFile},
+				runs:    []auditCommand{artifactsModel, modelArtifactError, artifactFile, artifactID, artifactDigest, artifactShape, artifactZip, zipDigest, zipUnpack, zipOneFile},
 				refuses: []auditCommand{secondListing},
-				order:   []auditCommand{artifactsModel, artifactFile, artifactDigest, artifactShape, artifactZip, zipDigest, zipUnpack, zipOneFile},
+				order:   []auditCommand{artifactsModel, artifactFile, artifactID, artifactDigest, artifactShape, artifactZip, zipDigest, zipUnpack, zipOneFile},
 			},
 			{
 				name: "Decrypt the checks' results into the audit directory",
@@ -274,11 +855,15 @@ var auditJobs = []auditJob{
 			{name: "Copy the checkout into the audit directory", runs: []auditCommand{command(`/srv/audit/checkout`, "/srv/audit/checkout")}},
 			{
 				name: "Stop Docker and remove the runner user's sudo rule",
-				runs: []auditCommand{
+				runs: append([]auditCommand{
 					command(`systemctl stop docker`, "systemctl stop docker"),
 					command(`rm -f /etc/sudoers\.d/runner`, "rm -f /etc/sudoers.d/runner"),
 					command(`sudo -n true`, "a check that sudo -n true fails"),
-				},
+					hardeningError,
+				}, hardeningCommands...),
+				// The branch reads the three commands' recorded failure, so it
+				// comes after them.
+				order: append(append([]auditCommand{}, hardeningCommands...), hardeningError),
 			},
 			{
 				name:     "Run the audit in Claude Code's sandbox",
@@ -289,6 +874,7 @@ var auditJobs = []auditJob{
 					// The launcher writes the result bytes it checked, and only
 					// those, out of the sandbox's reach (review round 1, R1).
 					command(`auditrun"? .* -result-out "\$\{RUNNER_TEMP\}/result\.json"`, `auditrun ... -result-out "${RUNNER_TEMP}/result.json", the checked result's bytes`),
+					runError,
 				},
 			},
 			{
@@ -311,12 +897,12 @@ var auditJobs = []auditJob{
 		permissions: []string{"contents", "actions", "attestations"},
 		steps: []auditStep{
 			{name: "Check out the audited commit", uses: auditCheckout},
-			{name: "Download the pinned tools and verify their checksums", runs: []auditCommand{checksumCheck}},
+			{name: "Download the pinned tools and verify their checksums", runs: []auditCommand{checksumCheck}, guardsChecksums: true},
 			{
 				name: "List the run's artifacts and download the model's ciphertext", githubToken: true,
-				runs:    []auditCommand{artifactsPublic, artifactFile, artifactID, artifactDigest, artifactShape, artifactZip, zipDigest, zipUnpack, zipOneFile},
+				runs:    []auditCommand{artifactsPublic, publishArtifactError, artifactFile, artifactID, artifactDigest, artifactShape, artifactZip, zipDigest, zipUnpack, zipOneFile},
 				refuses: []auditCommand{secondListing},
-				order:   []auditCommand{artifactsPublic, artifactFile, artifactDigest, artifactShape, artifactZip, zipDigest, zipUnpack, zipOneFile},
+				order:   []auditCommand{artifactsPublic, artifactFile, artifactID, artifactDigest, artifactShape, artifactZip, zipDigest, zipUnpack, zipOneFile},
 			},
 			{
 				name: "Decrypt the model's result",
@@ -329,9 +915,9 @@ var auditJobs = []auditJob{
 				runs: []auditCommand{
 					// verify holds every flag: one contiguous command, so no flag
 					// needs a pattern of its own.
-					digestRead, tagShape, emptyDigest, digestShape, verify,
+					imageLine, digestRead, tagShape, emptyDigest, digestShape, verify,
 				},
-				order: []auditCommand{digestRead, tagShape, emptyDigest, digestShape, verify},
+				order: []auditCommand{imageLine, digestRead, tagShape, emptyDigest, digestShape, verify},
 			},
 			// The scan runs before the App's token is minted: a result gitleaks
 			// refuses has no write token minted for it (review round 1, A6).
@@ -357,7 +943,7 @@ var auditJobs = []auditJob{
 					{key: "GH_TOKEN", value: "${{ " + auditAppTokenOutput + " }}"},
 					{key: "AUDIT_FINGERPRINT_KEY", value: secretValue("AUDIT_FINGERPRINT_KEY")},
 				},
-				runs: []auditCommand{command(`auditpublish"? publish `, "auditpublish publish")},
+				runs: []auditCommand{command(`auditpublish"? publish `, "auditpublish publish"), publishError},
 			},
 		},
 	},
@@ -438,7 +1024,34 @@ var auditPin = regexp.MustCompile(`^([A-Za-z0-9_.-]+/[A-Za-z0-9_./-]+)@([0-9a-f]
 // out): a workflow_dispatch with no inputs as its only trigger, the one guard
 // condition in every job and in the concurrency group, read-only scopes, three
 // jobs whose steps are a closed list in order, two ciphertexts and no other
-// hand-off, and every secret and variable read in exactly one place. A
+// hand-off, every secret and variable read in exactly one place, and every
+// container of the checks job read-only, networkless, capability-less and
+// unprivileged, with no mount, no socket, no registry login and no tmpfs but
+// row 14's (PR 5c). Since review round D of PR 5c it also holds that nothing
+// the release holds ends a step (timeouts, exit codes and not-run records in
+// rows 7 to 13, the checksums filter, the size cap, loop budgets and the
+// checks job's steps within its timeout), that no container is loosened past
+// its pinned flags, run, entered, or started unless created with the four
+// flags, that row 15 keeps names alone, and that every tool download's
+// checksum check is a guard that names its tool. Since round E it also holds
+// that row 7 records a failed verification as the finding verification-failed,
+// that every checks step's own timeouts fit its timeout-minutes, and that the
+// model and publish jobs' failures name their kind and runbook step. Since round
+// F it also holds every tool run of the checks job under a timeout of its own
+// with its exit recorded, and the model job's install of the Claude Code CLI to
+// a guard that names its runbook step. Since review round I it also holds
+// cosign verify's refusal exits (1 and 10 to 13) as a finding, every loop that
+// runs a timeout to a budget, every docker command of the checks job to a
+// timeout of its own, row 7's file checks to a download that brought
+// checksums.txt and its unresolved digest to a record, rows 6, 8 and 10's
+// failed tools to not-run.txt, row 9's binaries to files that hold bytes,
+// latest.txt's values to their shapes, and row 15's unexpected ruleset ID to a
+// record that ends nothing. Since review round K it also holds rows 7, 13 and
+// 14 to recording a part that timed out or failed in the limits and the check
+// in not-run.txt only when no part of it ran (ran_any), every not-run.txt line
+// to a why id of the publish core's vocabulary, a malformed checksums.txt to the
+// finding verification-failed, row 15's budget skips to read-skipped.txt, and
+// fit to refusing a timeout, a loop or an inner loop it cannot count. A
 // document it cannot read, or an empty one, is refused.
 func AuditWorkflow(src []byte) []string {
 	if strings.TrimSpace(string(src)) == "" {
@@ -449,6 +1062,7 @@ func AuditWorkflow(src []byte) []string {
 	a := &auditReader{r: r, allowed: map[int][]string{}}
 
 	a.lineRules()
+	a.containerStarts()
 
 	lines, err := yamlread.SplitLines(src)
 	if err != nil {
@@ -480,10 +1094,12 @@ type auditReader struct {
 }
 
 // lineRules checks every line on its own: the secrets context in a form no
-// list of names can follow, secrets: inherit, a traced shell, and in the model
-// job's lines a check or a container.
+// list of names can follow, secrets: inherit, a traced shell, in the model
+// job's lines a check or a container, and in every other job's lines what no
+// container is given (containerRules).
 func (a *auditReader) lineRules() {
 	model := a.jobLines("model")
+	inDocker := false
 
 	for i, line := range a.r.raw {
 		num := i + 1
@@ -506,6 +1122,223 @@ func (a *auditReader) lineRules() {
 		if model[num] {
 			if m := auditModelTools.FindStringSubmatch(line); m != nil {
 				a.r.fail("line %d: the model job runs %s (%q): it runs no check, no container and no release code, which are the checks job's (ADR 0040)", num, m[1], trimmed)
+			}
+
+			// The model job runs no container at all; its own rule refuses one.
+			inDocker = false
+
+			continue
+		}
+
+		inDocker = a.containerRules(num, line, inDocker)
+	}
+}
+
+// auditDockerWord matches a docker command on a line.
+var auditDockerWord = regexp.MustCompile("(?:^|[\\s;&|(`\"'])docker\\s")
+
+// auditDockerRefused are the docker subcommands the workflow never runs, read
+// after docker's global flags and its container or image management word
+// (review round D of PR 5c, B3): a registry login (the image is pulled
+// anonymously), run, which starts a container in one step with whatever flags
+// it is given, and exec, which runs a command in a container that is already
+// running.
+var auditDockerRefused = []string{"login", "run", "exec"}
+
+// auditDockerGlobalValue are docker's global flags that take a value, which
+// a subcommand is read after.
+var auditDockerGlobalValue = []string{"--config", "-c", "--context", "-H", "--host", "-l", "--log-level", "--tlscacert", "--tlscert", "--tlskey"}
+
+// The flags no container of the workflow is given with any value but its
+// one (review round D of PR 5c, B2), and those it is given with none: an
+// unconfined security profile, an environment file, a cgroup namespace,
+// another network (container:<id> included), a sysctl or another user.
+var (
+	auditSecurityOpt = regexp.MustCompile(`(?:^|\s)--security-opt[ =]"?([^\s"]*)`)
+	auditNetworkOpt  = regexp.MustCompile(`(?:^|\s)--(?:network|net)[ =]"?([^\s"]*)`)
+	auditUserOpt     = regexp.MustCompile(`(?:^|\s)--user[ =]"?([^\s"]*)`)
+	auditShortUser   = regexp.MustCompile(`(?:^|\s)-u[ ]+"?([^\s"]*)`)
+	auditFlagRefused = regexp.MustCompile(`(?:^|\s)(--env-file|--cgroupns|--sysctl)(?:[ =]|$)`)
+)
+
+// auditContainerRisk matches what no container of the workflow is given, on
+// any line: a volume or a mount, privileges, a host namespace, a capability or
+// a device. auditShortVolume is -v, read on a docker command's lines alone,
+// where it is a volume and not some other program's flag.
+var (
+	auditContainerRisk = regexp.MustCompile(`(?:^|[\s;&|("'])(--volume|--volumes-from|--mount|--privileged|--(?:network|net|pid|ipc|userns|uts)[ =]host|--cap-add|--device)(?:$|[\s=;&|)"'])`)
+	auditShortVolume   = regexp.MustCompile(`(?:^|\s)(-v)(?:$|\s)`)
+	auditTmpfsValue    = regexp.MustCompile(`(?:^|\s)--tmpfs[ =](\S+)`)
+)
+
+// containerRules refuses, on a line outside the model job, what no container
+// of the workflow is given (PR 5c, ADR 0040): its inputs reach it by docker cp
+// into a staging container, so it needs no mount, no volume and no socket, and
+// it gets no privilege, no host network and no tmpfs but row 14's. inDocker
+// says the line before was a docker command continued with \; it returns
+// whether this line is one.
+func (a *auditReader) containerRules(num int, line string, inDocker bool) bool {
+	trimmed := strings.TrimSpace(line)
+	docker := inDocker || auditDockerWord.MatchString(line)
+
+	if strings.Contains(line, "docker.sock") {
+		a.r.fail("line %d: %q names the Docker socket (docker.sock): no step hands a container, or anything else, the Docker daemon (ADR 0040)", num, trimmed)
+	}
+
+	for _, spelled := range dockerRefusedCommands(line) {
+		if strings.HasSuffix(spelled, " login") {
+			a.r.fail("line %d: %q runs %s: the image is pulled anonymously, with no registry credential (ADR 0040)", num, trimmed, spelled)
+		} else {
+			a.r.fail("line %d: %q runs %s, want docker create with --read-only --network none --cap-drop ALL --security-opt no-new-privileges and docker start: "+
+				"no container is run or entered any other way (ADR 0040)", num, trimmed, spelled)
+		}
+	}
+
+	if m := auditContainerRisk.FindStringSubmatch(line); m != nil {
+		a.r.fail("line %d: %q gives a container %s: no container gets a mount, a volume, privileges, a host namespace, a capability or a device; its inputs reach it by docker cp (ADR 0040)", num, trimmed, m[1])
+	}
+
+	a.containerOptions(num, line, trimmed, docker)
+
+	if docker {
+		if auditShortVolume.MatchString(line) {
+			a.r.fail("line %d: %q gives a container a volume (-v): no container gets a mount or a volume; its inputs reach it by docker cp (ADR 0040)", num, trimmed)
+		}
+	}
+
+	for _, m := range auditTmpfsValue.FindAllStringSubmatch(line, -1) {
+		if "--tmpfs "+m[1] != auditFuzzTmpfs {
+			a.r.fail("line %d: %q mounts the tmpfs %s, want only row 14's %s", num, trimmed, m[1], auditFuzzTmpfs)
+		}
+	}
+
+	return docker && strings.HasSuffix(line, `\`)
+}
+
+// containerOptions refuses, on a line outside the model job, a container
+// option the workflow gives no container, or gives only one value (review
+// round D of PR 5c, B2): a security option but no-new-privileges, a network
+// but none, a user but 65534:65534, an environment file, a cgroup namespace
+// or a sysctl. -u is read on a docker command's lines alone, where it is a
+// user and not some other program's flag.
+func (a *auditReader) containerOptions(num int, line, trimmed string, docker bool) {
+	only := []struct {
+		re          *regexp.Regexp
+		flag, value string
+	}{
+		{auditSecurityOpt, "--security-opt", "no-new-privileges"},
+		{auditNetworkOpt, "--network", "none"},
+		{auditUserOpt, "--user", "65534:65534"},
+	}
+
+	if docker {
+		only = append(only, struct {
+			re          *regexp.Regexp
+			flag, value string
+		}{auditShortUser, "-u", "65534:65534"})
+	}
+
+	for _, o := range only {
+		for _, m := range o.re.FindAllStringSubmatch(line, -1) {
+			if m[1] != o.value {
+				a.r.fail("line %d: %q gives a container %s %s: the one value of %s is %s (ADR 0040)", num, trimmed, o.flag, m[1], o.flag, o.value)
+			}
+		}
+	}
+
+	for _, m := range auditFlagRefused.FindAllStringSubmatch(line, -1) {
+		a.r.fail("line %d: %q gives a container %s: no container gets an environment file, a cgroup namespace or a sysctl (ADR 0040)", num, trimmed, m[1])
+	}
+}
+
+// dockerRefusedCommands returns, for every docker command on line whose
+// subcommand is one of auditDockerRefused, the command as it is spelled from
+// docker to the subcommand: docker's global flags and the container or image
+// management word are read past, so that docker --context x run and docker
+// container exec are what they are.
+func dockerRefusedCommands(line string) []string {
+	var out []string
+
+	for _, loc := range auditDockerWord.FindAllStringIndex(line, -1) {
+		words := strings.Fields(line[loc[1]:])
+		spelled := []string{"docker"}
+
+		i := 0
+		for i < len(words) && strings.HasPrefix(words[i], "-") {
+			spelled = append(spelled, words[i])
+
+			if slices.Contains(auditDockerGlobalValue, words[i]) && i+1 < len(words) {
+				i++
+				spelled = append(spelled, words[i])
+			}
+
+			i++
+		}
+
+		if i < len(words) && (words[i] == "container" || words[i] == "image") {
+			spelled = append(spelled, words[i])
+			i++
+		}
+
+		if i < len(words) && slices.Contains(auditDockerRefused, words[i]) {
+			out = append(out, strings.Join(append(spelled, words[i]), " "))
+		}
+	}
+
+	return out
+}
+
+// auditCreateAssign matches a variable assigned the ID of a container a
+// docker create makes, with or without a timeout, and what follows create.
+var auditCreateAssign = regexp.MustCompile(`(?:^|[\s;&|])([A-Za-z_][A-Za-z0-9_]*)="\$\((?:timeout \S+ )?docker (?:container )?create( [^\n]*)?`)
+
+// auditStart matches a docker start and its arguments.
+var auditStart = regexp.MustCompile("(?:^|[\\s;&|(`\"'])docker (?:container )?start( [^\\n]*)?")
+
+// auditStartVar matches a variable a docker start names.
+var auditStartVar = regexp.MustCompile(`\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?`)
+
+// containerStarts holds every docker start outside the model job to a
+// container that a docker create made with the four flags (review round D of
+// PR 5c, B4): a variable every create assigns with --read-only --network none
+// --cap-drop ALL --security-opt no-new-privileges first. A staging container,
+// created with no flag, only receives inputs by docker cp, and is never
+// started.
+func (a *auditReader) containerStarts() {
+	model := a.jobLines("model")
+	hardened := map[string]bool{}
+
+	code := func(i int) bool {
+		return !model[i+1] && !strings.HasPrefix(strings.TrimSpace(a.r.raw[i]), "#")
+	}
+
+	for i, line := range a.r.raw {
+		if !code(i) {
+			continue
+		}
+
+		for _, m := range auditCreateAssign.FindAllStringSubmatch(line, -1) {
+			ok, seen := hardened[m[1]]
+			flagged := strings.HasPrefix(m[2], strings.TrimPrefix(auditContainerFlags, "docker create")+" ")
+			hardened[m[1]] = flagged && (ok || !seen)
+		}
+	}
+
+	for i, line := range a.r.raw {
+		if !code(i) {
+			continue
+		}
+
+		for _, m := range auditStart.FindAllStringSubmatch(line, -1) {
+			v := auditStartVar.FindStringSubmatch(m[1])
+
+			switch {
+			case v == nil:
+				a.r.fail("line %d: %q runs docker start of no container a variable names, want ${cid}, the container a docker create made with %s (ADR 0040)",
+					i+1, strings.TrimSpace(line), strings.TrimPrefix(auditContainerFlags, "docker create "))
+			case !hardened[v[1]]:
+				a.r.fail("line %d: %q runs docker start of ${%s}, which no docker create made with %s first: only such a container is started, and a staging container never is (ADR 0040)",
+					i+1, strings.TrimSpace(line), v[1], strings.TrimPrefix(auditContainerFlags, "docker create "))
 			}
 		}
 	}
@@ -739,7 +1572,58 @@ func (a *auditReader) job(e yamlread.Entry, spec auditJob) {
 	}
 
 	if v, ok := keys["steps"]; ok {
-		a.steps(v, path, spec)
+		steps := a.steps(v, path, spec)
+
+		if t, ok := keys["timeout-minutes"]; ok && spec.stepsWithinJob {
+			a.stepsWithin(t, path, steps)
+		}
+	}
+}
+
+// auditJobOverhead is the time a job's timeout counts beyond its steps: the
+// runner's job set-up and the actions' post steps.
+const auditJobOverhead = 5
+
+// stepsWithin holds a job's steps' timeout-minutes, and auditJobOverhead, to
+// the job's own (review round D of PR 5c, A4): when they add up to more, the
+// job's timeout can fire while a step is still within its own, and then no
+// later step runs at all.
+func (a *auditReader) stepsWithin(t yamlread.Entry, path string, steps []auditParsedStep) {
+	value, err := yamlread.Single(t)
+	if err != nil {
+		return
+	}
+
+	job, err := strconv.Atoi(value)
+	if err != nil {
+		return
+	}
+
+	sum := 0
+
+	for _, s := range steps {
+		e, ok := s.keys["timeout-minutes"]
+		if !ok {
+			continue
+		}
+
+		v, err := yamlread.Single(e)
+		if err != nil {
+			continue
+		}
+
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			continue
+		}
+
+		sum += n
+		if sum+auditJobOverhead > job {
+			a.r.fail("line %d: %s: its steps' timeout-minutes add up to %d at the step %q, which with the job's %d minutes of set-up and post steps is past the job's timeout-minutes of %d: "+
+				"the steps stay within the job's timeout, so that a step's own timeout fires before the job's (ADR 0040)", e.Num, path, sum, s.name, auditJobOverhead, job)
+
+			return
+		}
 	}
 }
 
@@ -790,18 +1674,19 @@ type auditParsedStep struct {
 	keys map[string]yamlread.Entry
 }
 
-// steps checks a job's steps: the closed list, in order, and each step.
-func (a *auditReader) steps(e yamlread.Entry, path string, spec auditJob) {
+// steps checks a job's steps: the closed list, in order, and each step. It
+// returns the steps it read.
+func (a *auditReader) steps(e yamlread.Entry, path string, spec auditJob) []auditParsedStep {
 	block := a.r.block(e, path+": steps")
 	if block == nil {
-		return
+		return nil
 	}
 
 	items, err := yamlread.Sequence(block)
 	if err != nil {
 		a.r.fail("%s: steps: %v", path, err)
 
-		return
+		return nil
 	}
 
 	parsed := make([]auditParsedStep, 0, len(items))
@@ -844,11 +1729,47 @@ func (a *auditReader) steps(e yamlread.Entry, path string, spec auditJob) {
 
 		// A script the reader cannot follow was reported by step already.
 		if run, ok := s.keys["run"]; ok {
-			if text, err := yamlread.LiteralBlock(a.r.raw, run); err == nil && modDownload.re.MatchString(text) {
+			text, err := yamlread.LiteralBlock(a.r.raw, run)
+			if err == nil && modDownload.re.MatchString(text) {
 				downloaded = true
+			}
+
+			if err == nil && spec.stepsWithinJob {
+				a.fit(withoutComments(strings.Split(text, "\n")), fmt.Sprintf("%s: step %q (line %d)", path, s.name, s.num), stepMinutes(s))
+			}
+
+			// The download step installs the tools and runs none of them on the
+			// repository; its one run, trivy's database download, has a timeout.
+			if err == nil && spec.boundsTools && (want == nil || !want.guardsChecksums) {
+				a.toolRuns(withoutComments(strings.Split(text, "\n")), fmt.Sprintf("%s: step %q (line %d)", path, s.name, s.num))
+				a.dockerRuns(withoutComments(strings.Split(text, "\n")), fmt.Sprintf("%s: step %q (line %d)", path, s.name, s.num))
+				a.whyIDs(withoutComments(strings.Split(text, "\n")), fmt.Sprintf("%s: step %q (line %d)", path, s.name, s.num))
 			}
 		}
 	}
+
+	return parsed
+}
+
+// stepMinutes returns a step's timeout-minutes, 0 when it has none the reader
+// can follow (step reports that).
+func stepMinutes(s auditParsedStep) int {
+	t, ok := s.keys["timeout-minutes"]
+	if !ok {
+		return 0
+	}
+
+	v, err := yamlread.Single(t)
+	if err != nil {
+		return 0
+	}
+
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		return 0
+	}
+
+	return n
 }
 
 // stepOrder holds the job's steps to the closed list: every name on it, in its
@@ -901,8 +1822,14 @@ func (a *auditReader) stepOrder(path string, got []auditParsedStep, spec auditJo
 // step checks one step: its timeout, its action or script, and what its spec,
 // when it has one, wants of it.
 func (a *auditReader) step(s auditParsedStep, path string, want *auditStep, downloaded bool) {
+	minutes := 0
+
 	if t, ok := s.keys["timeout-minutes"]; ok {
 		a.timeout(t, path, auditJobLimit-1)
+
+		if v, err := yamlread.Single(t); err == nil {
+			minutes, _ = strconv.Atoi(v)
+		}
 	} else {
 		a.r.fail("%s has no timeout-minutes, want one on every step", path)
 	}
@@ -925,7 +1852,7 @@ func (a *auditReader) step(s auditParsedStep, path string, want *auditStep, down
 	}
 
 	if hasRun {
-		a.run(run, path, want, env, downloaded)
+		a.run(run, path, want, env, downloaded, minutes)
 	}
 }
 
@@ -987,6 +1914,23 @@ func (a *auditReader) reads(path string, want *auditStep, env []auditVar) {
 
 		if !found {
 			a.r.fail("%s has no %s: %s in its step-level env:", path, read.key, read.value)
+		}
+	}
+
+	if want.githubToken && !hasVar(env, "GH_TOKEN", "${{ "+auditGitHubToken+" }}") {
+		a.r.fail("%s has no GH_TOKEN: ${{ %s }} in its step-level env:, want it: the step reads GitHub's API with the job's token", path, auditGitHubToken)
+	}
+
+	for _, m := range want.envMatch {
+		i := slices.IndexFunc(env, func(v auditVar) bool { return v.name == m.key })
+		if i < 0 {
+			a.r.fail("%s has no %s in its step-level env:, want %s", path, m.key, m.want)
+
+			continue
+		}
+
+		if !m.re.MatchString(env[i].value) {
+			a.r.fail("line %d: %s: env: %s is %q, want %s", env[i].num, path, m.key, env[i].value, m.want)
 		}
 	}
 
@@ -1189,8 +2133,9 @@ func (a *auditReader) appToken(with yamlread.Entry, path string, want *auditStep
 	}
 }
 
-// run checks a run: step's script.
-func (a *auditReader) run(e yamlread.Entry, path string, want *auditStep, env []auditVar, downloaded bool) {
+// run checks a run: step's script; minutes is the step's timeout-minutes, 0
+// when it has none.
+func (a *auditReader) run(e yamlread.Entry, path string, want *auditStep, env []auditVar, downloaded bool, minutes int) {
 	text, err := yamlread.LiteralBlock(a.r.raw, e)
 	if err != nil {
 		a.r.fail("%s: run: %v", path, err)
@@ -1259,12 +2204,1334 @@ func (a *auditReader) run(e yamlread.Entry, path string, want *auditStep, env []
 	}
 
 	for _, c := range want.refuses {
-		if c.re.MatchString(code) {
-			a.r.fail("%s runs %s", path, c.want)
+		if loc := c.re.FindStringIndex(code); loc != nil {
+			a.r.fail("%s runs %s (%q)", path, c.want, lineAt(code, loc[0]))
 		}
 	}
 
 	a.order(code, path, want.order)
+
+	if want.check != "" {
+		a.bounded(code, path, want.check)
+	}
+
+	if want.budget {
+		a.budget(code, path, want.check, minutes)
+	}
+
+	if want.guardsChecksums {
+		a.checksumGuards(code, path)
+	}
+
+	if want.verifies {
+		a.verifications(code, path, want.check)
+		a.releaseBlocks(code, path, want.check)
+	}
+
+	if want.parts {
+		a.partRecords(code, path, want.check)
+	}
+
+	for _, o := range want.outcomes {
+		a.toolOutcomes(code, path, o)
+	}
+}
+
+// toolOutcome returns the pattern of a tool run's outcome, from the line after
+// its command to its fi (review round I of PR 5c, L3): its exit recorded, then
+// rc 124 as the check timed out, in not-run.txt and with its limits line, and
+// any other non-zero exit as the check's tool-failed, each on a line of its own.
+func toolOutcome(check string) *regexp.Regexp {
+	q := regexp.QuoteMeta(check)
+
+	return regexp.MustCompile(`\A[ \t]*echo "\$\{rc\}" > "\$\{out\}/[^"\n]+\.exit"\n` +
+		`[ \t]*if \[ "\$\{rc\}" -eq 124 \]; then\n` +
+		`[ \t]+echo "` + q + ` timed-out" >> "\$\{results\}/not-run\.txt"\n` +
+		`[ \t]+echo "` + q + `[^"\n]*" >> "\$\{results\}/limits\.txt"\n` +
+		`[ \t]*elif \[ "\$\{rc\}" -ne 0 \]; then\n` +
+		`[ \t]+echo "` + q + ` tool-failed" >> "\$\{results\}/not-run\.txt"\n` +
+		`[ \t]*fi(?:\n|\z)`)
+}
+
+// toolOutcomes holds every run of o.run to its outcome branch right after it
+// (review round I of PR 5c, L3): scorecard, trivy and docker pull exit non-zero
+// only on an error, so a run that failed is a check that did not run, recorded
+// in not-run.txt, never left to read as clean.
+func (a *auditReader) toolOutcomes(code, path string, o auditOutcome) {
+	outcome := toolOutcome(o.check)
+	lines := strings.Split(code, "\n")
+
+	for i := 0; i < len(lines); i++ {
+		if !o.run.re.MatchString(lines[i]) {
+			continue
+		}
+
+		end := i
+		for end < len(lines)-1 && strings.HasSuffix(lines[end], `\`) {
+			end++
+		}
+
+		if !outcome.MatchString(strings.Join(lines[end+1:], "\n")) {
+			a.r.fail(`%s runs %s (%q) without its outcome branch, want right after it, each on a line of its own: echo "${rc}" > "${out}/<name>.exit", `+
+				`if [ "${rc}" -eq 124 ]; then, echo "%s timed-out" >> "${results}/not-run.txt", echo "%s...: ..." >> "${results}/limits.txt", `+
+				`elif [ "${rc}" -ne 0 ]; then, echo "%s tool-failed" >> "${results}/not-run.txt" and fi: the tool exits non-zero only on an error, `+
+				`so a run that timed out or failed is the check not run, never clean (PRD #175 milestone 2, ADR 0040)`,
+				path, o.run.want, strings.TrimSpace(lines[i]), o.check, o.check, o.check)
+		}
+
+		i = end
+	}
+}
+
+// releaseBlocks holds row 7's two branches that decide what it verifies
+// (review round I of PR 5c): the release's file checks run only inside the
+// rel_ok gate the download sets (L2), and the if that verifies the image when
+// its digest resolved records, in its else, the verifications it skipped (S4).
+func (a *auditReader) releaseBlocks(code, path, check string) {
+	lines := strings.Split(code, "\n")
+
+	if i := lineMatching(lines, releaseFileGate.re); i >= 0 {
+		_, fi := ifBlock(lines, i)
+		body := strings.Join(lines[i+1:max(fi, i+1)], "\n")
+
+		for _, c := range releaseFileChecks {
+			if c.re.MatchString(code) && !c.re.MatchString(body) {
+				a.r.fail(`%s runs %s outside its if [ "${rel_ok}" -eq 1 ]; then gate: %s's file checks run only when the download brought the release's files and checksums.txt, `+
+					`so that a failed download is a check that did not run, never a checksum finding (PRD #175 milestone 2, ADR 0040)`, path, c.want, check)
+			}
+		}
+	} else {
+		a.r.fail(`%s runs no if [ "${rel_ok}" -eq 1 ]; then gate, on a line of its own, around the release's file checks: %s's filter, checksum check, listing and attestations `+
+			`run only when the download brought the files and checksums.txt, so that a failed download is a check that did not run, never a checksum finding (PRD #175 milestone 2, ADR 0040)`,
+			path, check)
+	}
+
+	i := lineMatching(lines, tagDigestBranch.re)
+	if i < 0 {
+		return
+	}
+
+	els, fi := ifBlock(lines, i)
+
+	limits := regexp.MustCompile(`^[ \t]+echo "` + regexp.QuoteMeta(check) + `: [^"\n]+" >> "\$\{results\}/limits\.txt"$`)
+
+	// Since review round K (B1) the else is a limits line alone: the release's
+	// file checks may have run, so an unresolved digest is a part of the check
+	// that was skipped, never the whole check that did not run.
+	if els < 0 || fi != els+2 || !limits.MatchString(lines[els+1]) {
+		a.r.fail(`%s's if [ -n "${tag_digest}" ]; then has no else that records what it skipped, want, each on a line of its own: else, `+
+			`echo "%s: ..." >> "${results}/limits.txt" naming the signature and attestations not verified, and fi: an image digest that did not resolve is a limits line of the check, `+
+			`never left silent and never the whole check not run, since its other parts may have run (PRD #175 milestone 2, ADR 0040)`, path, check)
+	}
+}
+
+// auditNotRunLine matches a line that writes to not-run.txt; auditNotRunRecord
+// one in the shape the checks job writes: echo "<check id> <why id>", whole.
+var (
+	auditNotRunLine   = regexp.MustCompile(`>>? "\$\{results\}/not-run\.txt"`)
+	auditNotRunRecord = regexp.MustCompile(`^[ \t]*echo "([a-z0-9-]+) ([^"\s]+)" >> "\$\{results\}/not-run\.txt"$`)
+	// auditPartExit is a part's exit recorded, the line ran_any=1 follows;
+	// auditCreateExit is a container's create recorded, which no ran_any=1
+	// follows (review round L of PR 5c, K2): a run whose create failed never
+	// started.
+	auditPartExit   = regexp.MustCompile(`^[ \t]*echo "\$\{rc\}" > "[^"\n]+\.exit"$`)
+	auditCreateExit = regexp.MustCompile(`^[ \t]*echo "\$\{rc\}" > "[^"\n]+\.create\.exit"$`)
+	// auditStepEndMessage is a message that may stand between a step-level
+	// not-run record and the exit 0 that ends the step (review round M of PR
+	// 5c, M1): a line of the check's limits or an ::error annotation, never a
+	// finding or any other file; endsStep refuses one with a command
+	// substitution.
+	auditStepEndMessage = regexp.MustCompile(`^[ \t]*echo "(?:::error [^"\n]*"|[^"\n]*" >> "\$\{results\}/limits\.txt")$`)
+)
+
+// The lines of a failure before any part ran (review round M of PR 5c, M1):
+// the branches its records stand in, and the step's guard after their fi.
+const (
+	auditRCTimedOut = `if [ "${rc}" -eq 124 ]; then`
+	auditRCFailed   = `elif [ "${rc}" -ne 0 ]; then`
+	auditRCGuard    = `if [ "${rc}" -ne 0 ]; then`
+)
+
+// auditWhyIDs are the why ids a not-run.txt line may end in (review round K of
+// PR 5c, B2): exactly the keys of whyNotRun in
+// ci/auditpublish/internal/publish/vocabulary.go, which the publish core
+// renders and outside which it refuses the result, so that the run would
+// publish no report. The check's test pins the two lists equal.
+var auditWhyIDs = []string{
+	"needs-admin-read", "no-fuzz-targets", "timed-out", "tool-failed",
+	"results-missing", "read-refused", "image-not-pulled", "declined",
+}
+
+// whyIDs holds every not-run.txt line of a checks step to the shape echo
+// "<check id> <why id>" >> "${results}/not-run.txt" and its why id to
+// auditWhyIDs (review round K of PR 5c, B2).
+func (a *auditReader) whyIDs(code, path string) {
+	for _, line := range strings.Split(code, "\n") {
+		if !auditNotRunLine.MatchString(line) {
+			continue
+		}
+
+		m := auditNotRunRecord.FindStringSubmatch(line)
+		if m == nil {
+			a.r.fail(`%s writes to not-run.txt in another shape (%q), want echo "<check id> <why id>" >> "${results}/not-run.txt" on a line of its own: `+
+				`the publish core reads each line as a check id and a why id, and refuses a result it cannot read, which publishes no report (PRD #175 milestone 2, ADR 0040)`,
+				path, strings.TrimSpace(line))
+
+			continue
+		}
+
+		if v := auditWhyDefault.FindStringSubmatch(m[2]); v != nil {
+			a.whyVariable(code, path, m[1], v[1])
+
+			continue
+		}
+
+		if !slices.Contains(auditWhyIDs, m[2]) {
+			a.r.fail(`%s records %s %s in ${results}/not-run.txt, and %q is no why id the publish core holds (%s): `+
+				`the core refuses a result whose why it cannot render, so the run publishes no report; a part of a check that was skipped is a limits line (PRD #175 milestone 2, ADR 0040)`,
+				path, m[1], m[2], m[2], strings.Join(auditWhyIDs, ", "))
+		}
+	}
+}
+
+// auditWhyDefault is a not-run.txt line's why read from the shell variable
+// why, with its default (review round L of PR 5c, K1); auditWhyWord is any
+// line that names why as a shell word (round M, M2), auditWhyID the one shape
+// such a line may take.
+var (
+	auditWhyDefault = regexp.MustCompile(`^\$\{why:-([^}]*)\}$`)
+	auditWhyWord    = regexp.MustCompile(`(?:^|[^A-Za-z0-9_])why(?:[^A-Za-z0-9_]|$)`)
+	auditWhyID      = regexp.MustCompile(`^[ \t]*why=([a-z0-9-]+)$`)
+)
+
+// whyVariable holds a not-run.txt line whose why is ${why:-<default>} to why
+// ids alone (review round L of PR 5c, K1): its default, and every line of the
+// step that names why as a shell word, outside comments, messages and that
+// record, is why=<why id> on a line of its own (round M, M2: no read,
+// printf -v, for, mapfile or ${why:=...} sets it), with an id of auditWhyIDs,
+// so that the line the step's end writes is one the publish core renders
+// whichever branch set it.
+func (a *auditReader) whyVariable(code, path, check, def string) {
+	if !slices.Contains(auditWhyIDs, def) {
+		a.r.fail(`%s records %s ${why:-%s} in ${results}/not-run.txt, and its default %q is no why id the publish core holds (%s): `+
+			`the core refuses a result whose why it cannot render, so the run publishes no report (PRD #175 milestone 2, ADR 0040)`,
+			path, check, def, def, strings.Join(auditWhyIDs, ", "))
+	}
+
+	for _, line := range strings.Split(code, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "#") || auditMessageLine.MatchString(line) || !auditWhyWord.MatchString(line) {
+			continue
+		}
+
+		if r := auditNotRunRecord.FindStringSubmatch(line); r != nil && r[1] == check && r[2] == "${why:-"+def+"}" {
+			continue
+		}
+
+		m := auditWhyID.FindStringSubmatch(line)
+		if m == nil {
+			a.r.fail(`%s sets why in another shape (%q), want why=<why id> on a line of its own: the step's end writes why to not-run.txt, `+
+				`and the publish core refuses a why it cannot render, so the run would publish no report (PRD #175 milestone 2, ADR 0040)`,
+				path, strings.TrimSpace(line))
+
+			continue
+		}
+
+		if !slices.Contains(auditWhyIDs, m[1]) {
+			a.r.fail(`%s sets why=%s, and %q is no why id the publish core holds (%s): the step's end writes why to not-run.txt, `+
+				`and the core refuses a result whose why it cannot render, so the run publishes no report (PRD #175 milestone 2, ADR 0040)`,
+				path, m[1], m[1], strings.Join(auditWhyIDs, ", "))
+		}
+	}
+}
+
+// partRecords holds a step whose check has several parts (rows 7, 13 and 14,
+// review round K of PR 5c, B1) to what not-run.txt means: the check did not
+// run. A part that timed out or failed is a limits line of the check, with its
+// exit file; the check goes to not-run.txt only right before the exit 0 of a
+// failure before any part ran (a pull or a staging that failed first) or, at
+// the step's end, when no part ran at all (review round L, K1: row 7's
+// download, after which the image half still runs, sets why and writes a
+// limits line instead). The step sets ran_any=0 before its first part,
+// ran_any=1 right after the exit of each part that started inside its loops,
+// never right after a create's exit (round L, K2), and ends with
+// if [ "${ran_any}" -eq 0 ]; then, echo "<check> tool-failed" >>
+// "${results}/not-run.txt" (or "<check> ${why:-tool-failed}") and fi, after
+// its last ran_any=1.
+func (a *auditReader) partRecords(code, path, check string) {
+	lines := strings.Split(code, "\n")
+
+	if lineMatching(lines, regexp.MustCompile(`^[ \t]*ran_any=0$`)) < 0 {
+		a.r.fail(`%s sets no ran_any=0, on a line of its own, before its first part: %s has several parts, and is recorded as a check that did not run only when none of them ran, `+
+			`which ran_any counts (PRD #175 milestone 2, ADR 0040)`, path, check)
+
+		return
+	}
+
+	inLoop := make([]bool, len(lines))
+
+	for i := range lines {
+		if auditLoopStart.MatchString(lines[i]) {
+			for j := i + 1; j < loopEnd(lines, i) && j < len(lines); j++ {
+				inLoop[j] = true
+			}
+		}
+	}
+
+	firstRan, lastRan := -1, -1
+
+	for i, l := range lines {
+		if strings.TrimSpace(l) == "ran_any=1" {
+			if firstRan < 0 {
+				firstRan = i
+			}
+
+			lastRan = i
+		}
+	}
+
+	// The end record's why is tool-failed, or the why a step-level part set
+	// before it (row 7's download, review round L of PR 5c, K1), tool-failed
+	// when none did.
+	record := `echo "` + check + ` tool-failed" >> "${results}/not-run.txt"`
+	whyRecord := `echo "` + check + ` ${why:-tool-failed}" >> "${results}/not-run.txt"`
+	end := -1
+
+	for i := max(lastRan, 0); i+2 < len(lines); i++ {
+		if r := strings.TrimSpace(lines[i+1]); !inLoop[i] && strings.TrimSpace(lines[i]) == `if [ "${ran_any}" -eq 0 ]; then` &&
+			(r == record || r == whyRecord) && strings.TrimSpace(lines[i+2]) == "fi" {
+			end = i + 1
+
+			break
+		}
+	}
+
+	if end < 0 || lastRan < 0 {
+		a.r.fail(`%s has no record of a check none of whose parts ran, want after its last ran_any=1, each on a line of its own: if [ "${ran_any}" -eq 0 ]; then, %s (or %s) and fi: `+
+			`a step whose parts all failed has no result to report, and is the check that did not run (PRD #175 milestone 2, ADR 0040)`, path, record, whyRecord)
+	}
+
+	for i, l := range lines {
+		a.ranAfterExit(lines, i, inLoop[i], path, check)
+
+		if i == end || !auditNotRunLine.MatchString(l) {
+			continue
+		}
+
+		what := strings.TrimSpace(l)
+		if m := auditNotRunRecord.FindStringSubmatch(l); m != nil {
+			what = m[1] + " " + m[2]
+		}
+
+		switch {
+		case inLoop[i]:
+			a.r.fail(`%s records %s in not-run.txt inside its loop, want a limits line of the part with its exit file: one run, target or file that timed out or failed `+
+				`is a part of %s, never the whole check that did not run, which the publish core would read as a check with no finding (PRD #175 milestone 2, ADR 0040)`, path, what, check)
+		case firstRan >= 0 && i > firstRan:
+			a.r.fail(`%s records %s in not-run.txt after a part ran, want a limits line of that part: once a part of %s produced a result the check ran, `+
+				`and only the step's end records it as not run, when ran_any is still 0 (PRD #175 milestone 2, ADR 0040)`, path, what, check)
+		default:
+			if bad, ok := endsStep(lines, i); !ok {
+				a.r.fail(`%s records %s in not-run.txt and goes on (%q), want a limits line, and the why at the step's end: a step of %s records the check in not-run.txt `+
+					`only at its end, when ran_any is still 0, or right before the exit 0 of a failure before any part ran: the record, limits lines or ::error messages, `+
+					`echo "finished" and exit 0 in one branch, or records in the if [ "${rc}" -eq 124 ] and elif [ "${rc}" -ne 0 ] branches, their fi, then `+
+					`if [ "${rc}" -ne 0 ]; then, echo "finished" and exit 0, with no command substitution between, `+
+					`since a later part may still record a finding of the same check, which a not-run line beside it would contradict (PRD #175 milestone 2, ADR 0040)`, path, what, bad, check)
+			}
+		}
+	}
+}
+
+// ranAfterExit holds lines[i], inside a loop of a step of several parts, to
+// how ran_any counts a part (review round L of PR 5c, K2): ran_any=1 right
+// after the exit of a run or target that started (whatever its exit), and
+// never right after a container's create, since a run whose create failed
+// never started, and is no part of the check that ran.
+func (a *auditReader) ranAfterExit(lines []string, i int, inLoop bool, path, check string) {
+	if !inLoop || !auditPartExit.MatchString(lines[i]) {
+		return
+	}
+
+	marked := i+1 < len(lines) && strings.TrimSpace(lines[i+1]) == "ran_any=1"
+	exit := strings.TrimSpace(lines[i])
+
+	switch create := auditCreateExit.MatchString(lines[i]); {
+	case create && marked:
+		a.r.fail(`%s sets ran_any=1 right after a create's exit (%q): a run whose create failed never started, so it is no part of %s; `+
+			`ran_any=1 follows the start's exit, after the create's continue guard, so that a step whose every create failed is the check that did not run, `+
+			`never one that ran clean (PRD #175 milestone 2, ADR 0040)`, path, exit, check)
+	case !create && !marked:
+		a.r.fail(`%s records a part's exit (%q) inside its loop without ran_any=1 on the line right after it: a part that ran, whatever its exit, is a result of %s, `+
+			`so that the check is recorded as not run only when no part ran (PRD #175 milestone 2, ADR 0040)`, path, exit, check)
+	}
+}
+
+// endsStep reports whether the not-run record on lines[i] is followed by the
+// step's exit 0 with nothing run between (review round L of PR 5c, K1, made
+// exact in round M, M1), in one of two shapes: (i) the record, messages,
+// echo "finished" and exit 0, all in one branch; (ii) the record in an
+// if [ "${rc}" -eq 124 ] or elif [ "${rc}" -ne 0 ] branch, messages, records
+// and that elif, the branches' fi, then exactly if [ "${rc}" -ne 0 ]; then,
+// echo "finished" and exit 0. A message is a limits line or an ::error
+// annotation without a command substitution. When it reports false, it
+// returns the line that breaks the shape (trimmed), or a description of the
+// end it lacks.
+func endsStep(lines []string, i int) (string, bool) {
+	// branchEnded: an elif has closed the record's branch, so its exit 0
+	// can only be the step's guard after the fi.
+	branchEnded := false
+
+	for j := i + 1; j < len(lines); j++ {
+		l := strings.TrimSpace(lines[j])
+
+		switch {
+		case l == "":
+			continue
+		case strings.Contains(l, "$(") || strings.Contains(l, "`"):
+			return l, false
+		case l == `echo "finished"` && !branchEnded:
+			return stepExit(lines, j+1)
+		case l == "fi":
+			if !inRCBranch(lines, i) {
+				return strings.TrimSpace(lines[i]), false
+			}
+
+			return stepGuard(lines, j+1)
+		case l == auditRCFailed:
+			branchEnded = true
+		case auditStepEndMessage.MatchString(l), auditNotRunRecord.MatchString(l):
+			continue
+		default:
+			return l, false
+		}
+	}
+
+	return "the step's end, with no exit 0", false
+}
+
+// nextLine returns the index of the first non-blank line from j on, len(lines)
+// for none.
+func nextLine(lines []string, j int) int {
+	for j < len(lines) && strings.TrimSpace(lines[j]) == "" {
+		j++
+	}
+
+	return j
+}
+
+// stepExit reports whether lines[j:] goes on with exit 0, the line that
+// follows echo "finished" at the step's end.
+func stepExit(lines []string, j int) (string, bool) {
+	j = nextLine(lines, j)
+	if j >= len(lines) {
+		return "the step's end, with no exit 0", false
+	}
+
+	if l := strings.TrimSpace(lines[j]); l != "exit 0" {
+		return l, false
+	}
+
+	return "", true
+}
+
+// stepGuard reports whether lines[j:], after the fi of a failure's branches,
+// is exactly the step's guard: if [ "${rc}" -ne 0 ]; then, echo "finished",
+// exit 0.
+func stepGuard(lines []string, j int) (string, bool) {
+	for _, want := range []string{auditRCGuard, `echo "finished"`} {
+		j = nextLine(lines, j)
+		if j >= len(lines) {
+			return "the step's end, with no " + want, false
+		}
+
+		if l := strings.TrimSpace(lines[j]); l != want {
+			return l, false
+		}
+
+		j++
+	}
+
+	return stepExit(lines, j)
+}
+
+// inRCBranch reports whether the record on lines[i] stands in an
+// if [ "${rc}" -eq 124 ] or elif [ "${rc}" -ne 0 ] branch: the first line
+// above it that is no message or record is that branch's own line.
+func inRCBranch(lines []string, i int) bool {
+	for j := i - 1; j >= 0; j-- {
+		l := strings.TrimSpace(lines[j])
+
+		switch {
+		case l == "", auditStepEndMessage.MatchString(l), auditNotRunRecord.MatchString(l):
+			continue
+		default:
+			return l == auditRCTimedOut || l == auditRCFailed
+		}
+	}
+
+	return false
+}
+
+// lineMatching returns the index of the first of lines re matches, -1 for
+// none.
+func lineMatching(lines []string, re *regexp.Regexp) int {
+	for i, l := range lines {
+		if re.MatchString(l) {
+			return i
+		}
+	}
+
+	return -1
+}
+
+// ifBlock returns, for the if on lines[i], the index of its else and of its
+// fi, each the first such line at the if's own indent; -1 for one it lacks.
+// The scripts the check reads indent every block, so a nested if is never at
+// the outer one's indent.
+func ifBlock(lines []string, i int) (els, fi int) {
+	indent := len(lines[i]) - len(strings.TrimLeft(lines[i], " \t"))
+	els = -1
+
+	for j := i + 1; j < len(lines); j++ {
+		text := strings.TrimLeft(lines[j], " \t")
+		if len(lines[j])-len(text) != indent {
+			continue
+		}
+
+		switch {
+		case text == "fi":
+			return els, j
+		case text == "else" && els < 0:
+			els = j
+		}
+	}
+
+	return els, -1
+}
+
+// auditVerification matches the first line of one of row 7's verifications,
+// under its timeout: the checksum check, gh attestation verify, cosign verify
+// and cosign verify-attestation.
+var auditVerification = regexp.MustCompile(`^[ \t]*(?:\(cd "\$\{rel\}" && )?timeout \S+ (sha256sum --check|gh attestation verify|cosign verify-attestation|cosign verify)\s`)
+
+// auditVerificationKinds are row 7's five verifications, each by its first
+// line: every one of them must be there, each with its outcome branch.
+var auditVerificationKinds = []auditCommand{
+	command(`sha256sum --check --strict "\$\{out\}/checksums\.filtered"`, `the checksum check (sha256sum --check --strict "${out}/checksums.filtered")`),
+	command(`gh attestation verify "\$\{file\}"`, `each release file's attestation (gh attestation verify "${file}")`),
+	command(`cosign verify "\$\{ref\}"`, `the image's signature (cosign verify "${ref}")`),
+	command(`cosign verify-attestation "\$\{ref\}"`, `the image's attestations' signatures (cosign verify-attestation "${ref}")`),
+	command(`gh attestation verify "oci://\$\{ref\}"`, `the SBOM's attestation (gh attestation verify "oci://${ref}")`),
+}
+
+// The finding conditions of row 7's verifications (review round I of PR 5c),
+// by the tool's own exits: each is the condition of the elif that records
+// verification-failed.
+const (
+	// findingExit1 is the finding of gh attestation verify and cosign
+	// verify-attestation, which exit 1 on a refusal.
+	findingExit1 = `[ "${rc}" -eq 1 ]`
+	// findingChecksum is sha256sum's mismatch (1), a finding only when the
+	// filtered list held well-formed lines (L2): over an empty list it is no
+	// verification at all.
+	findingChecksum = `[ "${rc}" -eq 1 ] && [ -s "${out}/checksums.filtered" ]`
+	// findingCosignVerify is cosign verify's refusal (B1): cosign v3.1.5 maps
+	// ErrNoSignaturesFound, ErrImageTagNotFound, ErrNoMatchingSignatures and
+	// ErrNoCertificateFoundOnSignature to 10 to 13
+	// (cmd/cosign/errors/exit_code_lookup.go, exit_codes.go), and any other
+	// refusal to 1.
+	findingCosignVerify = `[ "${rc}" -eq 1 ] || { [ "${rc}" -ge 10 ] && [ "${rc}" -le 13 ]; }`
+)
+
+// findingCondition returns the finding condition of the verification tool
+// auditVerification captured, and why it is that one.
+func findingCondition(tool string) (cond, why string) {
+	switch tool {
+	case "sha256sum --check":
+		return findingChecksum, "a mismatch over the filtered list's well-formed lines is a finding, and over an empty list no verification"
+	case "cosign verify":
+		return findingCosignVerify, "cosign v3.1.5 exits 1, or 10 to 13 (no signature, no such tag, no matching signature, no certificate on the signature), on a refused signature"
+	default:
+		return findingExit1, "the tool exits 1 on a refusal"
+	}
+}
+
+// verificationOutcome returns the pattern of a verification's outcome, from
+// the line after its command to its fi: its exit recorded, the part marked as
+// one that ran (ran_any=1, review round K of PR 5c), then rc 124 as a limits
+// line, the finding condition cond as the finding verification-failed, and any
+// other failure as a limits line, each on a line of its own. A verification is
+// one part of the check, so neither a timeout nor a failure of it is the whole
+// check that did not run (B1).
+func verificationOutcome(check, cond string) *regexp.Regexp {
+	q := regexp.QuoteMeta(check)
+
+	return regexp.MustCompile(`\A[ \t]*echo "\$\{rc\}" > "\$\{out\}/[^"\n]+\.exit"\n` +
+		`[ \t]*ran_any=1\n` +
+		`[ \t]*if \[ "\$\{rc\}" -eq 124 \]; then\n` +
+		`[ \t]+echo "` + q + `: [^"\n]+" >> "\$\{results\}/limits\.txt"\n` +
+		`[ \t]*` + regexp.QuoteMeta(`elif `+cond+`; then`) + `\n` +
+		`[ \t]+echo "` + q + ` verification-failed" >> "\$\{results\}/verification-failed\.txt"\n` +
+		`[ \t]*elif \[ "\$\{rc\}" -ne 0 \]; then\n` +
+		`[ \t]+echo "` + q + `: [^"\n]+" >> "\$\{results\}/limits\.txt"\n` +
+		`[ \t]*fi(?:\n|\z)`)
+}
+
+// verifications holds row 7's verifications to one outcome each (round E of
+// PR 5c): a checksum mismatch, a refused attestation or a refused signature
+// (rc 1) is a finding about the release, recorded as verification-failed in
+// the results, never as a check that did not run, and a timeout (rc 124) or
+// any other failure is a limits line of that part (round K).
+func (a *auditReader) verifications(code, path, check string) {
+	lines := strings.Split(code, "\n")
+
+	for _, k := range auditVerificationKinds {
+		if !k.re.MatchString(code) {
+			a.r.fail("%s runs no %s: each of the release's five verifications runs, and records its outcome", path, k.want)
+		}
+	}
+
+	for i := 0; i < len(lines); i++ {
+		m := auditVerification.FindStringSubmatch(lines[i])
+		if m == nil {
+			continue
+		}
+
+		first := strings.TrimSpace(lines[i])
+		cond, why := findingCondition(m[1])
+
+		end := i
+		for end < len(lines)-1 && strings.HasSuffix(lines[end], `\`) {
+			end++
+		}
+
+		if !verificationOutcome(check, cond).MatchString(strings.Join(lines[end+1:], "\n")) {
+			a.r.fail(`%s runs %q without its outcome branch, want right after it, each on a line of its own: echo "${rc}" > "${out}/<name>.exit", ran_any=1, `+
+				`if [ "${rc}" -eq 124 ]; then, echo "%s: ..." >> "${results}/limits.txt", `+
+				`elif %s; then, echo "%s verification-failed" >> "${results}/verification-failed.txt", `+
+				`elif [ "${rc}" -ne 0 ]; then, echo "%s: ..." >> "${results}/limits.txt" and fi: `+
+				`a mismatch or a refusal is a finding about the release (verification-failed), and a timeout or a failure is a limits line of this part, never the whole check not run; `+
+				`%s (PRD #175 milestone 2, ADR 0040)`,
+				path, first, check, cond, check, check, why)
+		}
+
+		i = end
+	}
+}
+
+// auditStepTimeout matches one timeout <duration> of a script: whole
+// minutes (m), seconds (s) or a bare number of seconds.
+var auditStepTimeout = regexp.MustCompile(`(?:^|[\s;&|(])timeout (?:-\S+ )*([0-9]+)([sm]?)(?:\s|$)`)
+
+// auditLoopStart and auditLoopEnd are a while, until or for loop's first and
+// last lines; a loop may be the last command of a pipeline.
+var (
+	auditLoopStart = regexp.MustCompile(`^[ \t]*(?:[^\n]*\|[ \t]*)?(?:while|until|for)\s.*(?:;|\s)do$`)
+	auditLoopEnd   = regexp.MustCompile(`^[ \t]*done(?:\s|;|$)`)
+	// auditLiteralLoop is a for loop over a list of literal words, which
+	// expands to nothing the release or the API holds: its words are how many
+	// times it runs.
+	auditLiteralLoop = regexp.MustCompile("^[ \\t]*for [A-Za-z_][A-Za-z0-9_]* in ([^;$*?\\[\\](){}\"'`\\\\]+); do$")
+)
+
+// auditCaseStart and auditCaseEnd are a case statement's first and last
+// lines, auditCaseArmEnd the end of one of its arms; auditFunctionStart is a
+// shell function's first line, its name in the group (review round J of PR
+// 5c).
+var (
+	auditCaseStart     = regexp.MustCompile(`^[ \t]*case\s.*\sin$`)
+	auditCaseEnd       = regexp.MustCompile(`^[ \t]*esac(?:\s|;|$)`)
+	auditCaseArmEnd    = regexp.MustCompile(`;;[ \t]*$`)
+	auditFunctionStart = regexp.MustCompile(`^[ \t]*([A-Za-z_][A-Za-z0-9_]*)[ \t]*\(\)[ \t]*\{$`)
+	auditLocalLine     = regexp.MustCompile(`^[ \t]*local\s`)
+)
+
+// scriptTimeouts returns the seconds the timeouts of lines add up to, and each
+// as it is spelled. The arms of a case statement are alternatives: only one of
+// them runs, so the case counts its longest arm (review round J of PR 5c).
+func scriptTimeouts(lines []string) (int, []string) {
+	seconds := 0
+
+	var parts []string
+
+	for i := 0; i < len(lines); i++ {
+		if auditCaseStart.MatchString(lines[i]) {
+			end := caseEnd(lines, i)
+			s, p := caseTimeouts(lines[i+1 : end])
+			seconds += s
+			parts = append(parts, p...)
+			i = end
+
+			continue
+		}
+
+		// A loop over literal words with no budget inside runs its body once
+		// per word (review round K of PR 5c): inside a budgeted loop's body or a
+		// function's, its timeouts count that many times.
+		if words := auditLiteralLoop.FindStringSubmatch(lines[i]); words != nil {
+			end := loopEnd(lines, i)
+			body := lines[i+1 : min(end, len(lines))]
+
+			if maxBudget(body) == 0 {
+				s, p := scriptTimeouts(body)
+				if n := len(strings.Fields(words[1])); len(p) > 0 {
+					seconds += n * s
+					parts = append(parts, fmt.Sprintf("%d runs of the loop %q (%s)", n, strings.TrimSpace(lines[i]), strings.Join(p, ", ")))
+				}
+
+				i = end
+
+				continue
+			}
+		}
+
+		s, p := lineTimeouts(lines[i])
+		seconds += s
+		parts = append(parts, p...)
+	}
+
+	return seconds, parts
+}
+
+// lineTimeouts returns the seconds the timeouts of one line add up to, and
+// each as it is spelled.
+func lineTimeouts(line string) (int, []string) {
+	seconds := 0
+
+	var parts []string
+
+	for _, m := range auditStepTimeout.FindAllStringSubmatch(line, -1) {
+		n, err := strconv.Atoi(m[1])
+		if err != nil {
+			continue
+		}
+
+		if m[2] == "m" {
+			n *= 60
+		}
+
+		seconds += n
+		parts = append(parts, "timeout "+m[1]+m[2])
+	}
+
+	return seconds, parts
+}
+
+// caseEnd returns the index of the esac that closes the case lines[i] starts,
+// len(lines) when none does.
+func caseEnd(lines []string, i int) int {
+	depth := 0
+
+	for j := i; j < len(lines); j++ {
+		switch {
+		case auditCaseStart.MatchString(lines[j]):
+			depth++
+		case auditCaseEnd.MatchString(lines[j]):
+			depth--
+			if depth == 0 {
+				return j
+			}
+		}
+	}
+
+	return len(lines)
+}
+
+// caseTimeouts returns the timeouts of a case statement's longest arm, arms
+// being the lines between its case and its esac.
+func caseTimeouts(arms []string) (int, []string) {
+	longest := 0
+
+	var parts []string
+
+	start := 0
+	depth := 0
+
+	for j, line := range arms {
+		switch {
+		case auditCaseStart.MatchString(line):
+			depth++
+		case auditCaseEnd.MatchString(line):
+			depth--
+		}
+
+		if depth > 0 || (!auditCaseArmEnd.MatchString(line) && j < len(arms)-1) {
+			continue
+		}
+
+		if s, p := scriptTimeouts(arms[start : j+1]); s > longest {
+			longest, parts = s, p
+		}
+
+		start = j + 1
+	}
+
+	if len(parts) == 0 {
+		return 0, nil
+	}
+
+	return longest, []string{"the longest arm of a case (" + strings.Join(parts, ", ") + ")"}
+}
+
+// functionEnd returns the index of the } that closes the shell function
+// lines[i] starts, the first one indented as its first line, len(lines) when
+// none does.
+func functionEnd(lines []string, i int) int {
+	indent := lines[i][:len(lines[i])-len(strings.TrimLeft(lines[i], " \t"))]
+
+	for j := i + 1; j < len(lines); j++ {
+		if lines[j] == indent+"}" {
+			return j
+		}
+	}
+
+	return len(lines)
+}
+
+// headBudget returns the budget a shell function's body holds at its head:
+// its first line past its local lines and blank lines, as auditBudget spells
+// it.
+func headBudget(body []string) (int, bool) {
+	for _, line := range body {
+		if strings.TrimSpace(line) == "" || auditLocalLine.MatchString(line) {
+			continue
+		}
+
+		m := auditBudget.FindStringSubmatch(line)
+		if m == nil {
+			return 0, false
+		}
+
+		n, err := strconv.Atoi(m[1])
+
+		return n, err == nil
+	}
+
+	return 0, false
+}
+
+// maxBudget returns the largest budget lines hold, 0 when they hold none.
+func maxBudget(lines []string) int {
+	budget := 0
+
+	for _, m := range auditBudget.FindAllStringSubmatch(strings.Join(lines, "\n"), -1) {
+		if n, err := strconv.Atoi(m[1]); err == nil && n > budget {
+			budget = n
+		}
+	}
+
+	return budget
+}
+
+// stepBound is the running bound fit adds a step's timeouts to, in seconds,
+// and the parts that make it up.
+type stepBound struct {
+	seconds int
+	parts   []string
+}
+
+// add adds timeouts that run once.
+func (b *stepBound) add(seconds int, parts []string) {
+	b.seconds += seconds
+	b.parts = append(b.parts, parts...)
+}
+
+// budgeted counts what a budget stops (a loop, or a shell function called any
+// number of times): nothing of it starts past its budget of budget seconds,
+// so it ends by that budget and the timeouts of the one round, an iteration
+// or a call, that began just before it. That bounds it together with every
+// timeout before it, which ran before that round began, so the bound becomes
+// the larger of the two; what follows adds to it.
+func (b *stepBound) budgeted(what string, budget, round int, roundParts []string) {
+	desc := fmt.Sprintf(`%s's budget of %d seconds (if [ "${SECONDS}" -ge %d ]) and the timeouts of its last round (%s)`,
+		what, budget, budget, strings.Join(roundParts, ", "))
+
+	if budget+round < b.seconds {
+		b.parts = append(b.parts, desc+", which end within the timeouts before it")
+
+		return
+	}
+
+	b.seconds = budget + round
+	b.parts = []string{desc}
+}
+
+// loopEnd returns the index of the done that closes the loop lines[i] starts,
+// len(lines) when none does.
+func loopEnd(lines []string, i int) int {
+	depth := 0
+
+	for j := i; j < len(lines); j++ {
+		switch {
+		case auditLoopStart.MatchString(lines[j]):
+			depth++
+		case auditLoopEnd.MatchString(lines[j]):
+			depth--
+			if depth == 0 {
+				return j
+			}
+		}
+	}
+
+	return len(lines)
+}
+
+// fit holds a step of a job whose steps stay within its timeout to its own
+// timeout-minutes (round E of PR 5c): its worst case adds up to less, because
+// a step's timeout firing ends the job and every later step of it, the
+// encrypt step included, is skipped. Since review round J the worst case is
+// counted in the script's order, as one sum T of its timeouts: a timeout
+// outside its loops and functions adds once, a case its longest arm; a loop
+// with a budget B inside, whose body's timeouts are T_iter, sets T to
+// max(T, B + T_iter), since no iteration begins past B but the last one begun
+// runs to its timeouts; a shell function with a timeout holds a budget B at
+// the head of its body and counts as max(T, B + one call's timeouts), never per
+// call, or is refused; a loop over literal words with no budget inside counts
+// its timeouts once per word, but only when the step holds a budget somewhere
+// (a loop's or a function's, maxBudget over the whole script is above 0) and
+// the loop's body starts no loop of its own. A loop that holds a timeout and is
+// none of these is refused (review round I, M1): nothing bounds how often it
+// runs, so nothing bounds the step. Only a budgeted loop's body is searched for
+// inner loops (innerLoops); a function's body is not.
+func (a *auditReader) fit(code, path string, minutes int) {
+	if minutes <= 0 {
+		return
+	}
+
+	lines := logicalLines(code)
+	stepBudget := maxBudget(lines)
+
+	a.fitShapes(lines, path)
+
+	var bound stepBound
+
+	for i := 0; i < len(lines); i++ {
+		switch {
+		case auditFunctionStart.MatchString(lines[i]):
+			name := auditFunctionStart.FindStringSubmatch(lines[i])[1]
+			end := functionEnd(lines, i)
+			body := lines[i+1 : min(end, len(lines))]
+			i = end
+
+			s, p := scriptTimeouts(body)
+			if len(p) == 0 {
+				continue
+			}
+
+			budget, ok := headBudget(body)
+			if !ok {
+				a.r.fail(`%s runs the shell function %q, which holds %s with no function budget (if [ "${SECONDS}" -ge <seconds> ]; then, on a line of its own, at the head of its body): `+
+					`nothing bounds how often the step calls it, so its timeouts can outrun the step's timeout-minutes, which ends the job and skips every later step, the encrypt step included; `+
+					`a function with a timeout stops at a budget and records the reads it did not make (PRD #175 milestone 2, ADR 0040)`, path, name, strings.Join(p, ", "))
+				bound.add(s, p)
+
+				continue
+			}
+
+			bound.budgeted(fmt.Sprintf("the shell function %q", name), budget, s, p)
+		case auditCaseStart.MatchString(lines[i]):
+			end := caseEnd(lines, i)
+			bound.add(scriptTimeouts(lines[i:min(end+1, len(lines))]))
+			i = end
+		case auditLoopStart.MatchString(lines[i]):
+			end := loopEnd(lines, i)
+			body := lines[i+1 : end]
+			header := strings.TrimSpace(lines[i])
+			i = end
+
+			s, p := scriptTimeouts(body)
+			if len(p) == 0 {
+				continue
+			}
+
+			if budget := maxBudget(body); budget > 0 {
+				a.innerLoops(body, path, header)
+				bound.budgeted(fmt.Sprintf("the loop %q", header), budget, s, p)
+
+				continue
+			}
+
+			words := auditLiteralLoop.FindStringSubmatch(header)
+			if stepBudget > 0 && words != nil && !slices.ContainsFunc(body, auditLoopStart.MatchString) {
+				n := len(strings.Fields(words[1]))
+				bound.add(n*s, []string{fmt.Sprintf("%d runs of the loop %q (%s)", n, header, strings.Join(p, ", "))})
+
+				continue
+			}
+
+			a.r.fail(`%s runs the loop %q, which holds %s with no loop budget (if [ "${SECONDS}" -ge <seconds> ]; then, on a line of its own, at the head of its body): `+
+				`nothing bounds how often it runs, so its timeouts can outrun the step's timeout-minutes, which ends the job and skips every later step, the encrypt step included; `+
+				`a loop with a timeout stops at a budget and records what it did not reach (PRD #175 milestone 2, ADR 0040)`, path, header, strings.Join(p, ", "))
+		default:
+			bound.add(lineTimeouts(lines[i]))
+		}
+	}
+
+	if bound.seconds >= minutes*60 {
+		a.r.fail("%s's own timeouts and its budgets, counted in the script's order, add up to %d seconds (%s), not below and so past its timeout-minutes of %d, %d seconds: "+
+			"a step's timeout firing ends the job and skips every later step, the encrypt step included, so each of its own timeouts fires first (ADR 0040)",
+			path, bound.seconds, strings.Join(bound.parts, ", "), minutes, minutes*60)
+	}
+}
+
+// The shapes fit cannot count (review round K of PR 5c, the auditor's L2 and
+// the reviewer's S1): a timeout word, its spelling after it, a line that
+// starts a loop, a loop's body on its header's line, and a timeout a command
+// runs once per argument. A loop word is one after a line start, a blank or
+// an operator (review round L of PR 5c, K3), so a header after && or ; is one
+// fit must follow or refuse; a timeout word may follow a quote (round L, K4 and
+// the auditor's L1), so one inside a quoted sh -c string is seen, and refused.
+var (
+	auditTimeoutWord     = regexp.MustCompile(`(?:^|[\s;&|('"])timeout(?:[ \t]|$)`)
+	auditTimeoutSpelling = regexp.MustCompile(`^ [0-9]+[sm]? \S`)
+	auditLoopWord        = regexp.MustCompile(`(?:^|[\s;&|(])(?:for|while|until)\s`)
+	auditOneLineLoop     = regexp.MustCompile(`(?:^|[\s;&|(])(?:for|while|until)\s.*;\s*do\s+\S`)
+	auditPerArgument     = regexp.MustCompile(`(?:^|[\s;&|(])(?:xargs|find\s[^\n]*-exec(?:dir)?)\s(?:[^\n]*[\s;&|('"])?timeout(?:\s|$)`)
+)
+
+// fitShapes refuses, in a step fit holds, what its sum cannot follow (review
+// round K of PR 5c): a timeout that is no timeout <N>, <N>s or <N>m before its
+// command (timeout 1h, 1.5m or a flag such as -k 5, which fit would count as 0
+// or as the flag's value); a loop whose header is no auditLoopStart (its body on
+// the header's line, do on a line of its own, or a loop word after && or ;),
+// which fit would count as lines run once; a timeout xargs or find -exec runs
+// once per argument, whatever stands between the runner and the timeout; and a
+// timeout inside a quoted string, which a shell the step starts runs (round L).
+func (a *auditReader) fitShapes(lines []string, path string) {
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+
+		if !auditMessageLine.MatchString(line) {
+			for _, loc := range auditTimeoutWord.FindAllStringIndex(line, -1) {
+				at := loc[0] + strings.Index(line[loc[0]:loc[1]], "timeout") + len("timeout")
+				if before := at - len("timeout") - 1; before >= 0 && (line[before] == '\'' || line[before] == '"') {
+					a.r.fail(`%s runs a timeout inside a quoted string (%q), the script of a shell such as sh -c: fit counts the step's own timeouts, `+
+						`not those of a shell the step starts, so this one could outrun the step's timeout-minutes, which ends the job before the encrypt step; `+
+						`run the timeout in the step's own script (PRD #175 milestone 2, ADR 0040)`, path, trimmed)
+
+					continue
+				}
+
+				if auditTimeoutSpelling.MatchString(line[at:]) {
+					continue
+				}
+
+				spelled := "timeout" + strings.Join(append([]string{""}, firstWords(line[at:], 3)...), " ")
+				a.r.fail(`%s runs %q, whose duration is no whole number of minutes or seconds (%q): fit counts a timeout <N>, <N>s or <N>m before its command, `+
+					`so another spelling (hours, a fraction, a flag such as -k) would be counted short and the step's own timeouts could outrun its timeout-minutes, `+
+					`which ends the job before the encrypt step (PRD #175 milestone 2, ADR 0040)`, path, trimmed, spelled)
+			}
+		}
+
+		if m := auditPerArgument.FindStringSubmatch(line); m != nil {
+			a.r.fail(`%s runs a timeout once per argument through xargs or find -exec (%q): fit counts a timeout once, and nothing bounds how many arguments the command reads, `+
+				`so the step's own timeouts could outrun its timeout-minutes; run the timeout in a budgeted loop instead (PRD #175 milestone 2, ADR 0040)`, path, trimmed)
+		}
+
+		if auditMessageLine.MatchString(line) || auditLoopStart.MatchString(line) || (!auditLoopWord.MatchString(line) && !auditOneLineLoop.MatchString(line)) {
+			continue
+		}
+
+		switch {
+		case auditOneLineLoop.MatchString(line):
+			a.r.fail(`%s runs the loop %q on one line, its body on its header's line: fit follows a loop whose header ends in do and whose body and done are lines of their own, `+
+				`so a loop on one line would be counted as one run of its timeouts (PRD #175 milestone 2, ADR 0040)`, path, trimmed)
+		case i+1 < len(lines) && strings.TrimSpace(lines[i+1]) == "do":
+			a.r.fail(`%s runs the loop %q with do on a line of its own: fit follows a loop whose header ends in ; do on its own line, `+
+				`so this one's body would be counted as lines run once (PRD #175 milestone 2, ADR 0040)`, path, trimmed)
+		default:
+			a.r.fail(`%s runs the loop %q, whose header fit cannot follow: a loop's header is one line ending in ; do, its body and done lines of their own, `+
+				`so this one's body would be counted as lines run once (PRD #175 milestone 2, ADR 0040)`, path, trimmed)
+		}
+	}
+}
+
+// innerLoops refuses, inside the body of a budgeted loop, an inner loop that
+// holds a timeout and is neither budgeted itself nor a loop over literal words
+// (review round K of PR 5c): the outer budget bounds when an iteration begins,
+// not how long an inner loop runs within it, so one iteration's timeouts, T_iter,
+// would be counted short.
+func (a *auditReader) innerLoops(body []string, path, outer string) {
+	for j := 0; j < len(body); j++ {
+		if !auditLoopStart.MatchString(body[j]) {
+			continue
+		}
+
+		end := loopEnd(body, j)
+		inner := body[j+1 : min(end, len(body))]
+		header := strings.TrimSpace(body[j])
+
+		if _, p := scriptTimeouts(inner); len(p) > 0 && maxBudget(inner) == 0 && !auditLiteralLoop.MatchString(body[j]) {
+			a.r.fail(`%s runs, inside the budgeted loop %q, the inner loop with a timeout %q (%s) and no budget of its own: the outer budget bounds when an iteration begins, `+
+				`not how often the inner loop runs, so nothing bounds one iteration's timeouts; budget the inner loop, or loop over literal words (PRD #175 milestone 2, ADR 0040)`,
+				path, outer, header, strings.Join(p, ", "))
+		}
+
+		j = end
+	}
+}
+
+// firstWords returns up to n of the words of s.
+func firstWords(s string, n int) []string {
+	words := strings.Fields(s)
+
+	return words[:min(n, len(words))]
+}
+
+// auditBounded matches the commands that read the release's files or its
+// image (review round D of PR 5c, A1): each one runs under a timeout of its
+// own and records its exit with || rc=$?.
+var auditBounded = regexp.MustCompile(`(?:^|[\s;&|(])(sha256sum|tar|unzip|docker (?:export|create|cp|commit|image inspect|save)|cosign|gh attestation verify)(?:\s|$)`)
+
+// bounded holds a step that reads the release or its image (want.check) to
+// what nothing the release holds can make it skip: every command of
+// auditBounded under a timeout, its exit recorded with || rc=$?, and both a
+// failure and a timeout recorded as the check not run.
+func (a *auditReader) bounded(code, path, check string) {
+	for _, line := range logicalLines(code) {
+		for _, m := range auditBounded.FindAllStringSubmatchIndex(line, -1) {
+			name := line[m[2]:m[3]]
+			quoted := strings.TrimSpace(line)
+
+			if !strings.Contains(line[:m[2]], "timeout ") {
+				a.r.fail("%s runs %s without its timeout (%q): a command that reads the release's files or its image runs under timeout <duration> of its own, "+
+					"so that one the release makes wait is recorded as %s timed-out, not ended by the step's timeout", path, name, quoted, check)
+			}
+
+			if !strings.Contains(line[m[2]:], " || rc=$?") {
+				a.r.fail("%s runs %s without || rc=$? (%q): its exit is recorded, so that a failure is %s tool-failed, not the end of the step under set -e",
+					path, name, quoted, check)
+			}
+		}
+	}
+
+	// Row 7's download records its why in a variable the step's end writes
+	// (review round L of PR 5c, K1): why=<why> on a line of its own, with the
+	// end's echo "<check> ${why:-<id>}" record, is that why recorded too.
+	whyRecord := regexp.MustCompile(`(?m)^[ \t]*echo "` + regexp.QuoteMeta(check) + ` \$\{why:-[a-z0-9-]+\}" >> "\$\{results\}/not-run\.txt"$`)
+
+	for _, why := range []string{"tool-failed", "timed-out"} {
+		record := `echo "` + check + ` ` + why + `" >> "${results}/not-run.txt"`
+		set := regexp.MustCompile(`(?m)^[ \t]*why=` + regexp.QuoteMeta(why) + `$`)
+
+		if !strings.Contains(code, record) && (!set.MatchString(code) || !whyRecord.MatchString(code)) {
+			a.r.fail("%s records no %s %s (%s, or why=%s with the step's end record echo \"%s ${why:-<why id>}\" >> \"${results}/not-run.txt\"): "+
+				"a command of the check that fails or times out names the check as not run, never as clean", path, check, why, record, why, check)
+		}
+	}
+}
+
+// auditToolRun matches a run of one of the checks job's tools, by its command
+// word; auditGoToolRun matches one the go command runs (go run <path>/<tool>,
+// go tool <tool>), by the tool's last path element (round F of PR 5c).
+var (
+	auditToolRun   = regexp.MustCompile(`(?:^|[\s;&|(])(govulncheck|osv-scanner|gitleaks|zizmor|actionlint|scorecard|trivy|cosign|gh attestation verify|go test)(?:\s|$)`)
+	auditGoToolRun = regexp.MustCompile(`(?:^|[\s;&|(])go\s+(?:-C\s+\S+\s+)?(?:run|tool)\s+(?:-\S+\s+)*(?:\S*/)?(govulncheck|osv-scanner|gitleaks|zizmor|actionlint|scorecard|trivy|cosign)(?:\s|$)`)
+	// auditToolTimeout is the timeout a tool run is under: whole minutes or
+	// seconds.
+	auditToolTimeout = regexp.MustCompile(`(?:^|[\s;&|(])timeout [0-9]+[ms] `)
+	// auditMessageLine is a line that only echoes a quoted text, to the log or
+	// to a quoted file: a tool it names is no run of it.
+	auditMessageLine = regexp.MustCompile(`^[ \t]*echo "[^"\n]*"(?: >>? "[^"\n]*")?$`)
+	// auditContainerTest is the go test a container's sh -c runs (row 14), and
+	// auditBoundedStart the docker start that bounds it: timeout and rc=$? are
+	// that line's, not the container's script's.
+	auditContainerTest = regexp.MustCompile(`docker create [^\n]*\ssh -c '[^'\n]*$`)
+	auditBoundedStart  = regexp.MustCompile(`(?m)^[ \t]*timeout [0-9]+[ms] docker start [^\n]* \|\| rc=\$\?$`)
+)
+
+// toolRuns holds every tool run of a checks step to a timeout of its own and
+// its exit recorded (round F of PR 5c): timeout <N>m or <N>s before the tool,
+// || rc=$? after it, on its line. A tool that hangs is then the check that timed
+// out, recorded not run, never the end of the step and of every later one, the
+// encrypt step included; a tool that fails is recorded, never the end of the
+// step under set -e. The go test a container runs is bounded by the docker start
+// that runs the container.
+func (a *auditReader) toolRuns(code, path string) {
+	for _, line := range logicalLines(code) {
+		if auditMessageLine.MatchString(line) {
+			continue
+		}
+
+		seen := map[int]bool{}
+
+		for _, re := range []*regexp.Regexp{auditGoToolRun, auditToolRun} {
+			for _, m := range re.FindAllStringSubmatchIndex(line, -1) {
+				if seen[m[2]] {
+					continue
+				}
+
+				seen[m[2]] = true
+				a.toolRun(code, path, line, line[m[2]:m[3]], m[2])
+			}
+		}
+	}
+}
+
+// toolRun holds one tool run, tool at pos of line, to its timeout and its
+// recorded exit.
+func (a *auditReader) toolRun(code, path, line, tool string, pos int) {
+	quoted := strings.TrimSpace(line)
+
+	if tool == "go test" && auditContainerTest.MatchString(line[:pos]) {
+		if !auditBoundedStart.MatchString(code) {
+			a.r.fail("%s runs go test in a container (%q) with no timeout <N>m docker start ... || rc=$? on a line of its own: the container's run is under a timeout of its own, "+
+				"so that a target that hangs is recorded, not the end of the step", path, quoted)
+		}
+
+		return
+	}
+
+	if !auditToolTimeout.MatchString(line[:pos]) {
+		a.r.fail("%s runs %s without its timeout (%q): every tool run of the checks job is under timeout <N>m or <N>s of its own, "+
+			"so that a tool that hangs is recorded as the check that timed out, not the end of the step and of every later one, the encrypt step included (ADR 0040)",
+			path, tool, quoted)
+	}
+
+	if !strings.Contains(line[pos:], " || rc=$?") {
+		a.r.fail("%s runs %s without || rc=$? (%q): its exit is recorded, so that a failure is the check's tool-failed or its finding, not the end of the step under set -e",
+			path, tool, quoted)
+	}
+}
+
+// auditDockerTimeout is the timeout right before a docker command: whole
+// minutes, seconds or a bare number of seconds.
+var auditDockerTimeout = regexp.MustCompile(`(?:^|[\s;&|(])timeout (?:-\S+ )*[0-9]+[sm]? $`)
+
+// dockerRuns holds every docker command of a checks step to a timeout of its
+// own and its exit handled (review round I of PR 5c, L1): timeout <N> right
+// before docker, and || rc=$? or, for a command that only cleans up, || true
+// after it. The daemon, the registry and the release's image are no less able
+// to make an inspect, a kill or a rm wait than a run, and a step whose own
+// timeout fires ends the job before the encrypt step.
+func (a *auditReader) dockerRuns(code, path string) {
+	for _, line := range logicalLines(code) {
+		if auditMessageLine.MatchString(line) {
+			continue
+		}
+
+		for _, loc := range auditDockerWord.FindAllStringIndex(line, -1) {
+			pos := loc[0] + strings.Index(line[loc[0]:loc[1]], "docker")
+			spelled := dockerSpelled(line[pos:])
+
+			if !auditDockerTimeout.MatchString(line[:pos]) {
+				a.r.fail("%s runs %s without its timeout (%q): every docker command of the checks job runs right after timeout <N>m or <N> of its own, "+
+					"so that one the daemon, the registry or the image makes wait ends in the check's record, not in the step's timeout, which ends the job before the encrypt step (PRD #175 milestone 2, ADR 0040)",
+					path, spelled, strings.TrimSpace(line))
+			}
+
+			if rest := line[pos:]; !strings.Contains(rest, " || rc=$?") && !strings.Contains(rest, " || true") {
+				a.r.fail("%s runs %s without || rc=$? or || true (%q): its exit is recorded, or for a command that only cleans up ignored, never the end of the step under set -e (PRD #175 milestone 2, ADR 0040)",
+					path, spelled, strings.TrimSpace(line))
+			}
+		}
+	}
+}
+
+// dockerSpelled returns a docker command as a message names it: docker, its
+// subcommand past any global flag, and the subcommand's own word after a
+// management word (docker image rm, docker buildx imagetools inspect).
+func dockerSpelled(cmd string) string {
+	words := strings.Fields(cmd)
+	spelled := []string{"docker"}
+
+	i := 1
+	for i < len(words) && strings.HasPrefix(words[i], "-") {
+		i++
+	}
+
+	for n := 0; i < len(words) && n < 3; n++ {
+		spelled = append(spelled, words[i])
+
+		if !slices.Contains([]string{"image", "container", "buildx", "imagetools"}, words[i]) {
+			break
+		}
+
+		i++
+	}
+
+	return strings.Join(spelled, " ")
+}
+
+// logicalLines returns the script's lines with every \ continuation joined
+// onto the line it continues.
+func logicalLines(code string) []string {
+	var out []string
+
+	cur := ""
+
+	for _, line := range strings.Split(code, "\n") {
+		if body, ok := strings.CutSuffix(line, `\`); ok {
+			cur += body + " "
+
+			continue
+		}
+
+		out = append(out, cur+line)
+		cur = ""
+	}
+
+	if cur != "" {
+		out = append(out, cur)
+	}
+
+	return out
+}
+
+// auditBudget matches a loop's budget: the seconds since the step began,
+// against a number.
+var auditBudget = regexp.MustCompile(`(?m)^[ \t]*if \[ "\$\{SECONDS\}" -ge ([0-9]+) \]; then$`)
+
+// budget holds a step's loop to a budget below the step's own timeout
+// (review round D of PR 5c, A3): the loop, not the step's timeout, ends it,
+// and what it did not reach is recorded.
+func (a *auditReader) budget(code, path, check string, minutes int) {
+	found := auditBudget.FindAllStringSubmatch(code, -1)
+	if len(found) == 0 {
+		a.r.fail(`%s has no loop budget (if [ "${SECONDS}" -ge <seconds> ]; then, on a line of its own): its loop stops below the step's timeout-minutes, so that what %s did not reach is recorded in the limits, `+
+			`not lost to the step's timeout (PRD #175 milestone 2, ADR 0040)`, path, check)
+
+		return
+	}
+
+	for _, m := range found {
+		n, err := strconv.Atoi(m[1])
+		if err != nil || (minutes > 0 && n >= minutes*60) {
+			a.r.fail(`%s's loop budget of %s seconds (if [ "${SECONDS}" -ge %s ]) is not below its timeout-minutes of %d, %d seconds: the step's timeout would end the loop first`,
+				path, m[1], m[1], minutes, minutes*60)
+		}
+	}
+}
+
+// auditChecksumGuard matches one download's checksum guard, whole: the pin
+// compared by sha256sum under an if !, then its refusalBranch.
+var auditChecksumGuard = regexp.MustCompile(`(?m)^[ \t]*if ! echo "\$\{[A-Z0-9_]+_SHA256\}  \$\{[A-Za-z_]+\}/[A-Za-z0-9._-]+" \| sha256sum --check --strict -` + refusalBranch)
+
+// checksumGuards holds every checksum check of a download step to a guard
+// (round C of PR 5c, PRD #175 "A failed run is visible"): bare, the step
+// fails with sha256sum's own line alone, which names no cause.
+func (a *auditReader) checksumGuards(code, path string) {
+	rest := auditChecksumGuard.ReplaceAllString(code, "")
+
+	for _, line := range strings.Split(rest, "\n") {
+		if strings.Contains(line, "sha256sum") {
+			a.r.fail(`%s runs %q, a checksum check that is no guard: want if ! echo "${<TOOL>_SHA256}  <file>" | sha256sum --check --strict -; then, `+
+				`echo "::error ..." naming the tool and the runbook step, exit 1 and fi, each on a line of its own (PRD #175, a failed run is visible)`, path, strings.TrimSpace(line))
+		}
+	}
+}
+
+// lineAt returns the line of text that holds the byte at, trimmed: the text a
+// refusal quotes.
+func lineAt(text string, at int) string {
+	start := strings.LastIndexByte(text[:at], '\n') + 1
+
+	end := strings.IndexByte(text[at:], '\n')
+	if end < 0 {
+		return strings.TrimSpace(text[start:])
+	}
+
+	return strings.TrimSpace(text[start : at+end])
 }
 
 // withoutComments returns the script's lines that are no comment, joined. Only

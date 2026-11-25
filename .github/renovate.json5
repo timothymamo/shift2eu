@@ -70,11 +70,11 @@
       ],
     },
     {
-      description: 'cosign: release.yml, and dev/lima.yaml version and per-architecture digests, together',
+      description: 'cosign: release.yml, the scheduled audit, and dev/lima.yaml version and per-architecture digests, together',
       matchDepNames: ['sigstore/cosign'],
       groupName: 'cosign',
       prBodyNotes: [
-        '**Before merging:** the "VM tools" check must be green: it verifies each pinned digest against sigstore/cosign\'s signature with an independently installed cosign (ADR 0017). Every `digestVersion` in `dev/lima.yaml` must equal the new `cosignVersion`. The same digests change in each `dev/testdata/lima-invalid/*.yaml`: those copies follow `dev/lima.yaml` and are held equal to it by `test/devenv`. They are never provisioned, so only `dev/lima.yaml`\'s copy is verified; review that one.',
+        '**Before merging:** the "VM tools" check must be green: it verifies each pinned digest against sigstore/cosign\'s signature with an independently installed cosign (ADR 0017). Every `digestVersion` in `dev/lima.yaml` must equal the new `cosignVersion`, and the `COSIGN_SHA256` `digestVersion` in `.github/workflows/scheduled-security-audit.yml` the new `COSIGN_VERSION`, whose SHA-256 is the same `cosign-linux-amd64` digest as `cosignSha256Amd64`. The same digests change in each `dev/testdata/lima-invalid/*.yaml`: those copies follow `dev/lima.yaml` and are held equal to it by `test/devenv`. They are never provisioned, so only `dev/lima.yaml`\'s copy is verified; review that one.',
       ],
     },
     {
@@ -198,7 +198,8 @@
         '/^\\.github/workflows/vm-tools\\.yml$/',
         // ci.yml's lint-shell job pins the shellcheck release the VM does.
         '/^\\.github/workflows/ci\\.yml$/',
-        // The scheduled audit's tools: gitleaks, osv-scanner, zizmor and age (PRD #175, ADR 0040).
+        // The scheduled audit's tools: gitleaks, osv-scanner, zizmor, age, scorecard, cosign and trivy
+        // (PRD #175, ADR 0040).
         '/^\\.github/workflows/scheduled-security-audit\\.yml$/',
         // The OpenTofu release dev/tofu.sh runs, by a SHA-256 per platform (issue #422).
         '/^infra/tofu\\.yaml$/',

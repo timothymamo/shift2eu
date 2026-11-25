@@ -118,6 +118,23 @@
       "relations": [{ "type": "dead-letter-queue-of", "target": "shop-orders" }]
     },
     {
+      "id": "shop-checkout",
+      "rawType": "run.googleapis.com/Service",
+      "category": "serverless.container",
+      "region": "europe-west1",
+      "workload": "shop",
+      "relations": [{ "type": "depends-on", "target": "shop-orders" }]
+    },
+    {
+      "id": "shop-uploads",
+      "rawType": "file.googleapis.com/Instance",
+      "category": "storage.file",
+      "region": "europe-west1",
+      "capabilities": ["encryption-at-rest", "snapshots"],
+      "size": { "storageGiB": 1024 },
+      "workload": "shop"
+    },
+    {
       "id": "shop-cdn-backend",
       "rawType": "compute.googleapis.com/BackendBucket",
       "category": "unclassified",

@@ -21,16 +21,20 @@ type Method string
 
 const (
 	// ByPlan is a category priced by plan: compute.vm, compute.baremetal,
-	// kubernetes.managed (its nodes), database.postgresql and database.mysql.
+	// kubernetes.managed (its nodes), database.postgresql, database.mysql and
+	// database.mongodb, matched on vCPUs and memory, and cache.redis (its
+	// nodes), matched on memory alone (catalog.MatchesOnMemory, ADR 0046).
 	ByPlan Method = "plan"
-	// ByStorage is a category priced by stored GiB: storage.block and
-	// storage.object.
+	// ByStorage is a category priced by stored GiB: storage.block,
+	// storage.object and storage.file (its provisioned GiB).
 	ByStorage Method = "storage"
-	// ByUsage is a category priced by requests or messages, which this tool does
-	// not estimate: serverless.function and messaging.queue.
+	// ByUsage is a category priced by requests, messages or seconds run, which
+	// this tool does not estimate: serverless.function, serverless.container,
+	// messaging.queue and messaging.topic.
 	ByUsage Method = "usage"
-	// NotPriced is a category that is never priced: taxonomy.Unclassified, and
-	// any category this package does not know.
+	// NotPriced is a category that is never priced: network.loadbalancer and
+	// registry.container (ADR 0046), taxonomy.Unclassified, and any category
+	// this package does not know.
 	NotPriced Method = "not-priced"
 )
 
@@ -38,11 +42,13 @@ const (
 func PricingOf(c taxonomy.Category) Method {
 	switch c {
 	case taxonomy.ComputeVM, taxonomy.ComputeBareMetal, taxonomy.KubernetesManaged,
-		taxonomy.DatabasePostgreSQL, taxonomy.DatabaseMySQL:
+		taxonomy.DatabasePostgreSQL, taxonomy.DatabaseMySQL, taxonomy.DatabaseMongoDB,
+		taxonomy.CacheRedis:
 		return ByPlan
-	case taxonomy.StorageBlock, taxonomy.StorageObject:
+	case taxonomy.StorageBlock, taxonomy.StorageObject, taxonomy.StorageFile:
 		return ByStorage
-	case taxonomy.ServerlessFunction, taxonomy.MessagingQueue:
+	case taxonomy.ServerlessFunction, taxonomy.ServerlessContainer,
+		taxonomy.MessagingQueue, taxonomy.MessagingTopic:
 		return ByUsage
 	default:
 		return NotPriced
@@ -58,11 +64,17 @@ const (
 	// NoFit is the reason for a resource with fit mapping.None, including one
 	// that is unclassified or not offered in the chosen region.
 	NoFit Reason = "no-fit"
-	// UsagePriced is the reason for a resource whose category is priced by usage
-	// (ByUsage), or never priced (NotPriced) while still having a fit.
+	// UsagePriced is the reason for a resource with a fit whose category is
+	// priced by usage (ByUsage).
 	UsagePriced Reason = "usage-priced"
+	// NeverPriced is the reason for a resource with a fit whose category is
+	// never priced (NotPriced), such as a load balancer, which a target bills
+	// per size but not per use (ADR 0046). It sits where UsagePriced sits in
+	// the order. Its value is that of the Method NotPriced, a different type.
+	NeverPriced Reason = "not-priced"
 	// NoSize is the reason for a resource that does not give the size its
 	// category is priced by: vcpus and memoryGiB for ByPlan (both needed),
+	// memoryGiB alone for a category matched on memory alone (cache.redis),
 	// storageGiB for ByStorage. A size or usage that is NaN, infinite or
 	// negative, which only a resource built without inventory.New can hold, is
 	// no size either.
@@ -124,10 +136,11 @@ type Breakdown struct {
 	// Storage is the storage the estimate prices × the per-GiB price, never
 	// scaled by hours: for compute.vm, compute.baremetal and kubernetes.managed
 	// the GiB above what the plan includes per instance or node, × count; for
-	// database.postgresql and database.mysql the GiB of the service's data above
-	// what the plan includes, once (not × count: the snapshots' database storage
-	// prices and included storage are for the whole service); for storage.block
-	// the volume's GiB × count; for storage.object the stored GiB.
+	// database.postgresql, database.mysql and database.mongodb the GiB of the
+	// service's data above what the plan includes, once (not × count: the
+	// snapshots' database storage prices and included storage are for the whole
+	// service); for storage.block the volume's GiB × count; for storage.object
+	// the stored GiB; for storage.file the provisioned GiB.
 	Storage Money
 	// FixedFee is the offering's fixed fee in the estimate region × hoursPerMonth
 	// / 730, never capped by PlanBillingCapHours, once per resource and never ×
@@ -192,8 +205,8 @@ const (
 	// BootVolume is left out of an estimate for compute.vm, compute.baremetal
 	// and kubernetes.managed: each instance's or node's boot volume.
 	BootVolume StorageNotIncluded = "boot-volume"
-	// DataStorage is left out of an estimate for database.postgresql and
-	// database.mysql: the service's data storage.
+	// DataStorage is left out of an estimate for database.postgresql,
+	// database.mysql and database.mongodb: the service's data storage.
 	DataStorage StorageNotIncluded = "data-storage"
 )
 
@@ -217,8 +230,10 @@ func For(result mapping.Result, region string) Estimate {
 		return byPlan(r, offerings, region)
 	case ByStorage:
 		return byStorage(r, offerings, region)
-	default:
+	case ByUsage:
 		return Estimate{Region: region, Reason: UsagePriced}
+	default:
+		return Estimate{Region: region, Reason: NeverPriced}
 	}
 }
 
@@ -281,19 +296,32 @@ type offeredPlan struct {
 	plan     catalog.Plan
 }
 
-// byPlan estimates a resource priced by plan.
+// byPlan estimates a resource priced by plan. A resource of a category matched
+// on memory alone (catalog.MatchesOnMemory, ADR 0046) needs only memoryGiB,
+// is covered by memory alone, orders plans without their vCPUs and never adds
+// storage.
 func byPlan(r inventory.Resource, offerings []catalog.Offering, region string) Estimate {
 	e := Estimate{Region: region}
+	m := matcher{memoryOnly: catalog.MatchesOnMemory(r.Category)}
 
-	if r.Size == nil || r.Size.VCPUs == nil || r.Size.MemoryGiB == nil {
+	if r.Size == nil || r.Size.MemoryGiB == nil || (!m.memoryOnly && r.Size.VCPUs == nil) {
 		e.Reason = NoSize
 
 		return e
 	}
 
-	vcpus, okVCPUs := exact(*r.Size.VCPUs)
+	vcpus, okVCPUs := new(big.Rat), true
+	if !m.memoryOnly {
+		vcpus, okVCPUs = exact(*r.Size.VCPUs)
+	}
+
 	memoryGiB, okMemory := exact(*r.Size.MemoryGiB)
-	stored, okStored := optionalExact(r.Size.StorageGiB)
+
+	stored, okStored := (*big.Rat)(nil), true
+	if !m.memoryOnly {
+		stored, okStored = optionalExact(r.Size.StorageGiB)
+	}
+
 	count, countAssumed, okCount := countOf(r.Size)
 	hours, hoursAssumed, okHours := hoursOf(r.Usage)
 
@@ -322,7 +350,8 @@ func byPlan(r inventory.Resource, offerings []catalog.Offering, region string) E
 	var covering []offeredPlan
 
 	for _, op := range all {
-		if big.NewRat(op.plan.VCPUs, 1).Cmp(vcpus) >= 0 && big.NewRat(op.plan.MemoryMilliGiB, 1).Cmp(memory) >= 0 {
+		if big.NewRat(op.plan.MemoryMilliGiB, 1).Cmp(memory) >= 0 &&
+			(m.memoryOnly || big.NewRat(op.plan.VCPUs, 1).Cmp(vcpus) >= 0) {
 			covering = append(covering, op)
 		}
 	}
@@ -330,7 +359,7 @@ func byPlan(r inventory.Resource, offerings []catalog.Offering, region string) E
 	if len(covering) == 0 {
 		largest := all[0]
 		for _, op := range all[1:] {
-			if larger(op, largest) {
+			if m.larger(op, largest) {
 				largest = op
 			}
 		}
@@ -349,11 +378,11 @@ func byPlan(r inventory.Resource, offerings []catalog.Offering, region string) E
 		return e
 	}
 
-	chosen, ok := cheapest(covering, region)
+	chosen, ok := m.cheapest(covering, region)
 	if !ok {
 		first := covering[0]
 		for _, op := range covering[1:] {
-			if smaller(op, first) {
+			if m.smaller(op, first) {
 				first = op
 			}
 		}
@@ -412,9 +441,9 @@ func byPlan(r inventory.Resource, offerings []catalog.Offering, region string) E
 // (ADR 0032): none unless the resource gives no storage size, the chosen plan
 // includes no storage and its offering prices storage in region; then the
 // boot volume for compute.vm, compute.baremetal and kubernetes.managed, the
-// data storage for database.postgresql and database.mysql, and none for any
-// other category. A count of 0 is estimated at 0 and leaves nothing out, so
-// it gets none.
+// data storage for database.postgresql, database.mysql and database.mongodb,
+// and none for any other category. A count of 0 is estimated at 0 and leaves
+// nothing out, so it gets none.
 func storageNotIncluded(c taxonomy.Category, count, stored *big.Rat, chosen offeredPlan, region string) StorageNotIncluded {
 	if count.Sign() == 0 || stored != nil || chosen.plan.IncludedStorageGiB != 0 {
 		return ""
@@ -427,7 +456,7 @@ func storageNotIncluded(c taxonomy.Category, count, stored *big.Rat, chosen offe
 	switch c {
 	case taxonomy.ComputeVM, taxonomy.ComputeBareMetal, taxonomy.KubernetesManaged:
 		return BootVolume
-	case taxonomy.DatabasePostgreSQL, taxonomy.DatabaseMySQL:
+	case taxonomy.DatabasePostgreSQL, taxonomy.DatabaseMySQL, taxonomy.DatabaseMongoDB:
 		return DataStorage
 	default:
 		return ""
@@ -506,7 +535,7 @@ func byStorage(r inventory.Resource, offerings []catalog.Offering, region string
 // holds while the offerings of a category in one target share one
 // PlanBillingCapHours (ADR 0029). A target mixing capped and uncapped
 // offerings in one category could get a plan that is dearer at partial hours.
-func cheapest(covering []offeredPlan, region string) (offeredPlan, bool) {
+func (m matcher) cheapest(covering []offeredPlan, region string) (offeredPlan, bool) {
 	var (
 		best      offeredPlan
 		bestPrice catalog.Amount
@@ -519,7 +548,7 @@ func cheapest(covering []offeredPlan, region string) (offeredPlan, bool) {
 			continue
 		}
 
-		if !found || a < bestPrice || (a == bestPrice && smaller(op, best)) {
+		if !found || a < bestPrice || (a == bestPrice && m.smaller(op, best)) {
 			best, bestPrice, found = op, a, true
 		}
 	}
@@ -527,16 +556,25 @@ func cheapest(covering []offeredPlan, region string) (offeredPlan, bool) {
 	return best, found
 }
 
-// smaller reports whether a comes before b in the plan order: fewer vCPUs, less
-// memory, then plan name and offering name in byte order.
-func smaller(a, b offeredPlan) bool {
-	return comparePlans(a, b) < 0
+// matcher holds how a resource's category is matched to plans: on vCPUs and
+// memory, or, when memoryOnly, on memory alone (ADR 0046), in which case the
+// plans' vCPUs take no part in the plan order either.
+type matcher struct {
+	memoryOnly bool
 }
 
-// larger reports whether a is a larger plan than b: more vCPUs, more memory,
-// then the smaller plan name and the smaller offering name in byte order.
-func larger(a, b offeredPlan) bool {
-	if a.plan.VCPUs != b.plan.VCPUs {
+// smaller reports whether a comes before b in the plan order: fewer vCPUs
+// (unless memoryOnly), less memory, then plan name and offering name in byte
+// order.
+func (m matcher) smaller(a, b offeredPlan) bool {
+	return m.comparePlans(a, b) < 0
+}
+
+// larger reports whether a is a larger plan than b: more vCPUs (unless
+// memoryOnly), more memory, then the smaller plan name and the smaller offering
+// name in byte order.
+func (m matcher) larger(a, b offeredPlan) bool {
+	if !m.memoryOnly && a.plan.VCPUs != b.plan.VCPUs {
 		return a.plan.VCPUs > b.plan.VCPUs
 	}
 
@@ -547,10 +585,11 @@ func larger(a, b offeredPlan) bool {
 	return compareNames(a, b) < 0
 }
 
-// comparePlans orders plans by vCPUs, memory, plan name and offering name.
-func comparePlans(a, b offeredPlan) int {
+// comparePlans orders plans by vCPUs (unless memoryOnly), memory, plan name
+// and offering name.
+func (m matcher) comparePlans(a, b offeredPlan) int {
 	switch {
-	case a.plan.VCPUs != b.plan.VCPUs:
+	case !m.memoryOnly && a.plan.VCPUs != b.plan.VCPUs:
 		return compareInt(a.plan.VCPUs, b.plan.VCPUs)
 	case a.plan.MemoryMilliGiB != b.plan.MemoryMilliGiB:
 		return compareInt(a.plan.MemoryMilliGiB, b.plan.MemoryMilliGiB)
@@ -600,7 +639,7 @@ func planOf(op offeredPlan, region string) *Plan {
 // storedOnce reports whether the storage of category c is the whole service's
 // data, counted once and not × count: the managed databases (ADR 0027).
 func storedOnce(c taxonomy.Category) bool {
-	return c == taxonomy.DatabasePostgreSQL || c == taxonomy.DatabaseMySQL
+	return c == taxonomy.DatabasePostgreSQL || c == taxonomy.DatabaseMySQL || c == taxonomy.DatabaseMongoDB
 }
 
 // countOf returns the resource's count, or 1 and true when it gives none. The

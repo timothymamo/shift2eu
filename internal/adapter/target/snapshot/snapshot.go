@@ -208,7 +208,7 @@ var (
 	}
 	planKeys = []jsondoc.Key{
 		{Name: keyName, Required: true},
-		{Name: keyVCPUs, Required: true},
+		{Name: keyVCPUs, Required: false},
 		{Name: keyMemoryGiB, Required: true},
 		{Name: keyStorageGiB, Required: true},
 		{Name: keyPrices, Required: true},

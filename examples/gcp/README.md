@@ -19,6 +19,8 @@ and `gcloud asset export` report them.
 | `shop-resize-images` | `cloudfunctions.googleapis.com/Function` | `serverless.function` | `autoscaling` |  | `shop` | depends-on `shop-assets` |  |
 | `shop-orders` | `pubsub.googleapis.com/Subscription` | `messaging.queue` | `dead-letter-queue` |  | `shop` |  |  |
 | `shop-orders-dlq` | `pubsub.googleapis.com/Topic` | `messaging.queue` |  |  | `shop` | dead-letter-queue-of `shop-orders` |  |
+| `shop-checkout` | `run.googleapis.com/Service` | `serverless.container` |  |  | `shop` | depends-on `shop-orders` |  |
+| `shop-uploads` | `file.googleapis.com/Instance` | `storage.file` | `encryption-at-rest`, `snapshots` | 1024 GiB provisioned | `shop` |  |  |
 | `shop-cdn-backend` | `compute.googleapis.com/BackendBucket` | `unclassified` |  |  | `shop` | depends-on `shop-assets` |  |
 | `shop-zone` | `dns.googleapis.com/ManagedZone` | `unclassified` |  |  | `shop` |  |  |
 

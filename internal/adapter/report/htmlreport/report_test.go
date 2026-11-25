@@ -431,6 +431,44 @@ func TestReport(t *testing.T) {
 	}
 }
 
+// TestReportWithNeverPricedEstimates pins what the fragment says about a resource
+// the target never prices (ADR 0046): its Monthly estimate cell says it is not
+// estimated, and, when nothing could be estimated, the Cost estimate names the
+// reason in plain words as "not priced". A category that is never priced is not
+// usage-priced: a load balancer is billed a flat fee per size, not per use.
+func TestReportWithNeverPricedEstimates(t *testing.T) {
+	t.Parallel()
+
+	cat := catalogFor(t, "Scaleway", testutil.ScalewaySnapshot(), []catalog.Offering{
+		{
+			Name:       "Load Balancer",
+			Categories: []taxonomy.Category{taxonomy.NetworkLoadBalancer},
+			Regions:    []string{"fr-par"},
+		},
+	})
+
+	resources := []inventory.Resource{
+		{
+			ID:       "lb-example",
+			RawType:  "AWS::ElasticLoadBalancingV2::LoadBalancer",
+			Category: taxonomy.NetworkLoadBalancer,
+			Region:   "eu-west-1",
+		},
+	}
+
+	a := assessment.AssessWith(newInventory(t, sourceName, resources), cat, assessment.Options{Estimate: true})
+	got := string(render(t, a, analysis.ReportMeta{InventoryName: inventoryFileName}))
+
+	checkFragment(t, []byte(got))
+
+	// The sentence is markup: the total sits in a strong element, so only its
+	// text content carries the words.
+	want := "none of 1 resource could be estimated (not priced)"
+	if text := textOf(got); !strings.Contains(text, want) {
+		t.Errorf("the fragment does not say %q, its text content is:\n%s", want, text)
+	}
+}
+
 // TestReportHostileValues pins that every value a report takes from an inventory
 // or a catalog reaches the fragment as text: the golden shows the escaping, and
 // the assertions below fail when any of the values arrives as markup. A value the

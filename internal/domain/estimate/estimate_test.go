@@ -121,6 +121,16 @@ func TestPricingOf(t *testing.T) {
 		{name: "storage.object", category: taxonomy.StorageObject, want: estimate.ByStorage},
 		{name: "serverless.function", category: taxonomy.ServerlessFunction, want: estimate.ByUsage},
 		{name: "messaging.queue", category: taxonomy.MessagingQueue, want: estimate.ByUsage},
+		// PRD #552: caches and MongoDB databases are priced by plan, file shares
+		// by GiB, topics and serverless containers by usage, and load balancers
+		// and registries are never priced (ADR 0046).
+		{name: "cache.redis", category: taxonomy.CacheRedis, want: estimate.ByPlan},
+		{name: "database.mongodb", category: taxonomy.DatabaseMongoDB, want: estimate.ByPlan},
+		{name: "storage.file", category: taxonomy.StorageFile, want: estimate.ByStorage},
+		{name: "messaging.topic", category: taxonomy.MessagingTopic, want: estimate.ByUsage},
+		{name: "serverless.container", category: taxonomy.ServerlessContainer, want: estimate.ByUsage},
+		{name: "network.loadbalancer", category: taxonomy.NetworkLoadBalancer, want: estimate.NotPriced},
+		{name: "registry.container", category: taxonomy.RegistryContainer, want: estimate.NotPriced},
 		{name: "unclassified", category: taxonomy.Unclassified, want: estimate.NotPriced},
 		{name: "a category the taxonomy does not know", category: taxonomy.Category("quantum.widget"), want: estimate.NotPriced},
 	}
@@ -1522,6 +1532,291 @@ func TestFor(t *testing.T) {
 			wantExact:     "3/2",
 			wantPlanExact: "0",
 		},
+
+		// PRD #552's categories (ADR 0046). A cache is matched on memory alone,
+		// a MongoDB database as a PostgreSQL one, a file share by the GiB, and
+		// the rest is not priced or priced by usage.
+		{
+			// The resource gives 8 GiB and two nodes: CACHE-8 and CACHE-16 cover
+			// it, and the cheaper one wins. The offering prices storage, which a
+			// cache estimate never adds and never notes.
+			name:     "cache.redis: the cheapest covering plan, per node",
+			resource: cacheResource(&inventory.Size{MemoryGiB: f(8), Count: n(2)}, nil),
+			offerings: []catalog.Offering{cacheOffering("Example Cache",
+				cachePlan("CACHE-4", 0, 4, 100000),
+				cachePlan("CACHE-8", 0, 8, 200000),
+				cachePlan("CACHE-16", 0, 16, 350000))},
+			region: testutil.PricedDefaultRegion,
+			want: estimate.Estimate{
+				Region:       testutil.PricedDefaultRegion,
+				Estimated:    true,
+				Offering:     "Example Cache",
+				Plan:         pricedPlan("CACHE-8", 0, 8000, 0, 200000),
+				Monthly:      estimate.FromAmount(400000),
+				Breakdown:    estimate.Breakdown{Plan: estimate.FromAmount(400000)},
+				HoursAssumed: true,
+			},
+			wantMonthly: "40.00",
+			wantExact:   "40",
+		},
+		{
+			// vCPUs take no part in matching a cache: the cheaper plan has one
+			// vCPU and more memory, the dearer one two vCPUs and too little.
+			name:     "cache.redis: a plan with given vCPUs is still matched on memory alone",
+			resource: cacheResource(&inventory.Size{MemoryGiB: f(8)}, nil),
+			offerings: []catalog.Offering{cacheOffering("Example Cache",
+				cachePlan("CACHE-16-1CPU", 1, 16, 200000),
+				cachePlan("CACHE-8-2CPU", 2, 8, 250000))},
+			region: testutil.PricedDefaultRegion,
+			want: estimate.Estimate{
+				Region:       testutil.PricedDefaultRegion,
+				Estimated:    true,
+				Offering:     "Example Cache",
+				Plan:         pricedPlan("CACHE-16-1CPU", 1, 16000, 0, 200000),
+				Monthly:      estimate.FromAmount(200000),
+				Breakdown:    estimate.Breakdown{Plan: estimate.FromAmount(200000)},
+				CountAssumed: true,
+				HoursAssumed: true,
+			},
+			wantMonthly: "20.00",
+			wantExact:   "20",
+		},
+		{
+			// Two covering plans at the same price: the one with less memory wins.
+			name:     "cache.redis: a price tie goes to the plan with less memory",
+			resource: cacheResource(&inventory.Size{MemoryGiB: f(8)}, nil),
+			offerings: []catalog.Offering{cacheOffering("Example Cache",
+				cachePlan("CACHE-16", 0, 16, 200000),
+				cachePlan("CACHE-8", 0, 8, 200000))},
+			region: testutil.PricedDefaultRegion,
+			want: estimate.Estimate{
+				Region:       testutil.PricedDefaultRegion,
+				Estimated:    true,
+				Offering:     "Example Cache",
+				Plan:         pricedPlan("CACHE-8", 0, 8000, 0, 200000),
+				Monthly:      estimate.FromAmount(200000),
+				Breakdown:    estimate.Breakdown{Plan: estimate.FromAmount(200000)},
+				CountAssumed: true,
+				HoursAssumed: true,
+			},
+			wantMonthly: "20.00",
+		},
+		{
+			// A tie of equal price is broken by memory alone, not by vCPUs: the
+			// plan with less memory wins though it has more vCPUs, and though the
+			// other has fewer.
+			name:     "cache.redis: a price tie ignores vCPUs and goes to the plan with less memory",
+			resource: cacheResource(&inventory.Size{MemoryGiB: f(8)}, nil),
+			offerings: []catalog.Offering{cacheOffering("Example Cache",
+				cachePlan("CACHE-16", 1, 16, 200000),
+				cachePlan("CACHE-8", 4, 8, 200000))},
+			region: testutil.PricedDefaultRegion,
+			want: estimate.Estimate{
+				Region:       testutil.PricedDefaultRegion,
+				Estimated:    true,
+				Offering:     "Example Cache",
+				Plan:         pricedPlan("CACHE-8", 4, 8000, 0, 200000),
+				Monthly:      estimate.FromAmount(200000),
+				Breakdown:    estimate.Breakdown{Plan: estimate.FromAmount(200000)},
+				CountAssumed: true,
+				HoursAssumed: true,
+			},
+			wantMonthly: "20.00",
+		},
+		{
+			// Hours scale a cache's plan price as they scale any plan price: half
+			// a month of 730 hours costs half the per-node monthly price of each
+			// of the two nodes.
+			name: "cache.redis: usage hoursPerMonth scale the per-node plan price",
+			resource: cacheResource(&inventory.Size{MemoryGiB: f(8), Count: n(2)},
+				&inventory.Usage{HoursPerMonth: f(365)}),
+			offerings: []catalog.Offering{cacheOffering("Example Cache",
+				cachePlan("CACHE-8", 0, 8, 200000))},
+			region: testutil.PricedDefaultRegion,
+			want: estimate.Estimate{
+				Region:    testutil.PricedDefaultRegion,
+				Estimated: true,
+				Offering:  "Example Cache",
+				Plan:      pricedPlan("CACHE-8", 0, 8000, 0, 200000),
+				// 20.00 × 365/730 × 2 nodes = 20.00.
+				Monthly:   estimate.FromAmount(200000),
+				Breakdown: estimate.Breakdown{Plan: estimate.FromAmount(200000)},
+			},
+			wantMonthly:   "20.00",
+			wantExact:     "20",
+			wantPlanExact: "20",
+		},
+		{
+			// With memory and price equal, the plan name decides before the
+			// offering name: plan AAA of the offering that sorts last wins.
+			name:     "cache.redis: a tie of memory and price goes to the plan name",
+			resource: cacheResource(&inventory.Size{MemoryGiB: f(8)}, nil),
+			offerings: []catalog.Offering{
+				cacheOffering("Zulu Cache", cachePlan("AAA", 0, 8, 200000)),
+				cacheOffering("Alpha Cache", cachePlan("ZZZ", 0, 8, 200000)),
+			},
+			region: testutil.PricedDefaultRegion,
+			want: estimate.Estimate{
+				Region:       testutil.PricedDefaultRegion,
+				Estimated:    true,
+				Offering:     "Zulu Cache",
+				Plan:         pricedPlan("AAA", 0, 8000, 0, 200000),
+				Monthly:      estimate.FromAmount(200000),
+				Breakdown:    estimate.Breakdown{Plan: estimate.FromAmount(200000)},
+				CountAssumed: true,
+				HoursAssumed: true,
+			},
+			wantMonthly: "20.00",
+		},
+		{
+			name:     "cache.redis: no memory is no size",
+			resource: cacheResource(&inventory.Size{Count: n(2)}, nil),
+			offerings: []catalog.Offering{cacheOffering("Example Cache",
+				cachePlan("CACHE-8", 0, 8, 200000))},
+			region: testutil.PricedDefaultRegion,
+			want:   estimate.Estimate{Region: testutil.PricedDefaultRegion, Reason: estimate.NoSize},
+		},
+		{
+			name:     "cache.redis: no plan large enough names the plan with most memory",
+			resource: cacheResource(&inventory.Size{MemoryGiB: f(32)}, nil),
+			offerings: []catalog.Offering{cacheOffering("Example Cache",
+				cachePlan("CACHE-4", 0, 4, 100000),
+				cachePlan("CACHE-8", 0, 8, 200000))},
+			region: testutil.PricedDefaultRegion,
+			want: estimate.Estimate{
+				Region:   testutil.PricedDefaultRegion,
+				Reason:   estimate.NoPlanLargeEnough,
+				Offering: "Example Cache",
+				Largest:  pricedPlan("CACHE-8", 0, 8000, 0, 200000),
+			},
+		},
+		{
+			// The plan named as the largest is the one with most memory, not the
+			// one with most vCPUs: a cache is matched and ordered on memory alone.
+			name:     "cache.redis: no plan large enough names the plan with most memory, not most vCPUs",
+			resource: cacheResource(&inventory.Size{MemoryGiB: f(32)}, nil),
+			offerings: []catalog.Offering{cacheOffering("Example Cache",
+				cachePlan("A", 8, 4, 300000),
+				cachePlan("B", 1, 8, 200000))},
+			region: testutil.PricedDefaultRegion,
+			want: estimate.Estimate{
+				Region:   testutil.PricedDefaultRegion,
+				Reason:   estimate.NoPlanLargeEnough,
+				Offering: "Example Cache",
+				Largest:  pricedPlan("B", 1, 8000, 0, 200000),
+			},
+		},
+		{
+			// No covering plan is priced in the region: the plan named is the first
+			// in the plan order, by less memory, plan name and offering name, and
+			// its vCPUs take no part (ADR 0046).
+			name:     "cache.redis: no price names the covering plan with less memory",
+			resource: cacheResource(&inventory.Size{MemoryGiB: f(8)}, nil),
+			offerings: []catalog.Offering{{
+				Name:       "Example Cache",
+				Categories: []taxonomy.Category{taxonomy.CacheRedis},
+				Regions:    []string{testutil.PricedDefaultRegion, testutil.ReportSecondRegion},
+				Plans: []catalog.Plan{
+					plan("CACHE-8", 4, 8000, 0, 200000, testutil.ReportSecondRegion),
+					plan("CACHE-16", 1, 16000, 0, 300000, testutil.ReportSecondRegion),
+				},
+			}},
+			region: testutil.PricedDefaultRegion,
+			want: estimate.Estimate{
+				Region:   testutil.PricedDefaultRegion,
+				Reason:   estimate.NoPrice,
+				Offering: "Example Cache",
+				Plan:     unpricedPlan("CACHE-8", 4, 8000, 0),
+			},
+		},
+		{
+			// A MongoDB database is priced as a PostgreSQL one: the plan per node,
+			// and the service's storage above what the plan includes, once.
+			name: "database.mongodb: a plan per node and the storage above it",
+			resource: mongoResource(&inventory.Size{
+				VCPUs:      f(2),
+				MemoryGiB:  f(4),
+				StorageGiB: f(120),
+				Count:      n(2),
+			}, nil),
+			offerings: []catalog.Offering{mongoOffering()},
+			region:    testutil.PricedDefaultRegion,
+			want: estimate.Estimate{
+				Region:       testutil.PricedDefaultRegion,
+				Estimated:    true,
+				Offering:     "Example MongoDB",
+				Plan:         pricedPlan("MO-1", 2, 4000, 20, 200000),
+				Monthly:      estimate.FromAmount(500000),
+				Breakdown:    estimate.Breakdown{Plan: estimate.FromAmount(400000), Storage: estimate.FromAmount(100000)},
+				HoursAssumed: true,
+			},
+			wantMonthly:   "50.00",
+			wantExact:     "50",
+			wantPlanExact: "40",
+		},
+		{
+			name:      "storage.file: the provisioned GiB, once",
+			resource:  fileResource(&inventory.Size{StorageGiB: f(500)}),
+			offerings: []catalog.Offering{fileOffering(200)},
+			region:    testutil.PricedDefaultRegion,
+			want: estimate.Estimate{
+				Region:    testutil.PricedDefaultRegion,
+				Estimated: true,
+				Offering:  "Example File Storage",
+				Monthly:   estimate.FromAmount(100000),
+				Breakdown: estimate.Breakdown{Storage: estimate.FromAmount(100000)},
+			},
+			wantMonthly: "10.00",
+			wantExact:   "10",
+		},
+		{
+			name:      "usage-priced: a messaging.topic with a fit",
+			resource:  topicResource(),
+			offerings: []catalog.Offering{topicOffering()},
+			region:    testutil.PricedDefaultRegion,
+			want:      estimate.Estimate{Region: testutil.PricedDefaultRegion, Reason: estimate.UsagePriced},
+		},
+		{
+			name:      "usage-priced: a serverless.container with a fit",
+			resource:  containerResource(),
+			offerings: []catalog.Offering{containerOffering()},
+			region:    testutil.PricedDefaultRegion,
+			want:      estimate.Estimate{Region: testutil.PricedDefaultRegion, Reason: estimate.UsagePriced},
+		},
+		{
+			// A load balancer is billed a flat fee per size, and the size is chosen
+			// by bandwidth or connections, which no inventory field records: it is
+			// not priced, not usage-priced (ADR 0046).
+			name:      "not-priced: a network.loadbalancer with a fit",
+			resource:  loadBalancerResource(),
+			offerings: []catalog.Offering{loadBalancerOffering()},
+			region:    testutil.PricedDefaultRegion,
+			want:      estimate.Estimate{Region: testutil.PricedDefaultRegion, Reason: estimate.NeverPriced},
+		},
+		{
+			// A registry sells plans with included storage on one target and prices
+			// stored GiB on another: one method would misprice one of them.
+			name:      "not-priced: a registry.container with a fit",
+			resource:  registryResource(),
+			offerings: []catalog.Offering{registryOffering()},
+			region:    testutil.PricedDefaultRegion,
+			want:      estimate.Estimate{Region: testutil.PricedDefaultRegion, Reason: estimate.NeverPriced},
+		},
+		{
+			// NoFit still comes first, whatever a category is priced by.
+			name:      "no-fit: a cache the catalog does not serve anywhere",
+			resource:  cacheResource(&inventory.Size{MemoryGiB: f(8)}, nil),
+			offerings: testutil.PricedOfferings(),
+			region:    testutil.PricedDefaultRegion,
+			want:      estimate.Estimate{Region: testutil.PricedDefaultRegion, Reason: estimate.NoFit},
+		},
+		{
+			name:      "no-fit: a load balancer the catalog does not serve anywhere",
+			resource:  loadBalancerResource(),
+			offerings: testutil.PricedOfferings(),
+			region:    testutil.PricedDefaultRegion,
+			want:      estimate.Estimate{Region: testutil.PricedDefaultRegion, Reason: estimate.NoFit},
+		},
 	}
 
 	for _, tc := range tests {
@@ -2077,6 +2372,186 @@ func queueResource() inventory.Resource {
 		RawType:  "AWS::SQS::Queue",
 		Category: taxonomy.MessagingQueue,
 		Region:   "eu-west-1",
+	}
+}
+
+// cachePlan is one plan of a cache offering: its memory in GiB and its monthly
+// price per node, with the vCPU count the target's page gives, or 0 when it gives
+// none (ADR 0046).
+func cachePlan(name string, vcpus, memoryGiB int64, amount catalog.Amount) catalog.Plan {
+	return plan(name, vcpus, memoryGiB*1000, 0, amount)
+}
+
+// cacheOffering sells the cache plans given, all of them matched on memory alone,
+// and prices storage per GiB beside them, which a cache estimate never uses.
+func cacheOffering(name string, plans ...catalog.Plan) catalog.Offering {
+	return catalog.Offering{
+		Name:          name,
+		Categories:    []taxonomy.Category{taxonomy.CacheRedis},
+		Regions:       []string{testutil.PricedDefaultRegion},
+		Plans:         plans,
+		StoragePrices: []catalog.Price{price(250)},
+	}
+}
+
+// cacheResource is a cache.redis resource: the memory of one node, its nodes and
+// how much of a month it runs.
+func cacheResource(size *inventory.Size, usage *inventory.Usage) inventory.Resource {
+	return inventory.Resource{
+		ID:       "cache-example",
+		RawType:  "AWS::ElastiCache::ReplicationGroup",
+		Category: taxonomy.CacheRedis,
+		Region:   "eu-west-1",
+		Size:     size,
+		Usage:    usage,
+	}
+}
+
+// mongoOffering sells one database.mongodb plan and a per-GiB storage price for
+// the service's data, as postgresOffering does for PostgreSQL.
+func mongoOffering() catalog.Offering {
+	return catalog.Offering{
+		Name:          "Example MongoDB",
+		Categories:    []taxonomy.Category{taxonomy.DatabaseMongoDB},
+		Regions:       []string{testutil.PricedDefaultRegion},
+		Plans:         []catalog.Plan{plan("MO-1", 2, 4000, 20, 200000)},
+		StoragePrices: []catalog.Price{price(1000)},
+	}
+}
+
+// mongoResource is a database.mongodb resource with the given size and usage.
+func mongoResource(size *inventory.Size, usage *inventory.Usage) inventory.Resource {
+	return inventory.Resource{
+		ID:       "db-example",
+		RawType:  "AWS::DocDB::DBCluster",
+		Category: taxonomy.DatabaseMongoDB,
+		Region:   "eu-west-1",
+		Size:     size,
+		Usage:    usage,
+	}
+}
+
+// fileOffering sells storage.file at a per-GiB price, and no plan.
+func fileOffering(storageAmount catalog.Amount) catalog.Offering {
+	return catalog.Offering{
+		Name:          "Example File Storage",
+		Categories:    []taxonomy.Category{taxonomy.StorageFile},
+		Regions:       []string{testutil.PricedDefaultRegion},
+		StoragePrices: []catalog.Price{price(storageAmount)},
+	}
+}
+
+// fileResource is a storage.file resource with the given size.
+func fileResource(size *inventory.Size) inventory.Resource {
+	return inventory.Resource{
+		ID:       "share-example",
+		RawType:  "AWS::EFS::FileSystem",
+		Category: taxonomy.StorageFile,
+		Region:   "eu-west-1",
+		Size:     size,
+	}
+}
+
+// topicOffering serves messaging.topic, a category priced by usage, and sells no
+// plan.
+func topicOffering() catalog.Offering {
+	return catalog.Offering{
+		Name:       "Example Topics",
+		Categories: []taxonomy.Category{taxonomy.MessagingTopic},
+		Regions:    []string{testutil.PricedDefaultRegion},
+	}
+}
+
+// topicResource is a messaging.topic resource.
+func topicResource() inventory.Resource {
+	return inventory.Resource{
+		ID:       "topic-example",
+		RawType:  "AWS::SNS::Topic",
+		Category: taxonomy.MessagingTopic,
+		Region:   "eu-west-1",
+	}
+}
+
+// containerOffering serves serverless.container, a category priced by usage, and
+// sells no plan.
+func containerOffering() catalog.Offering {
+	return catalog.Offering{
+		Name:       "Example Serverless Containers",
+		Categories: []taxonomy.Category{taxonomy.ServerlessContainer},
+		Regions:    []string{testutil.PricedDefaultRegion},
+	}
+}
+
+// containerResource is a serverless.container resource.
+func containerResource() inventory.Resource {
+	return inventory.Resource{
+		ID:       "container-example",
+		RawType:  "AWS::AppRunner::Service",
+		Category: taxonomy.ServerlessContainer,
+		Region:   "eu-west-1",
+	}
+}
+
+// loadBalancerOffering serves network.loadbalancer and sells no plan: the target
+// charges a flat fee per size, which snapshot format v2 cannot record.
+func loadBalancerOffering() catalog.Offering {
+	return catalog.Offering{
+		Name:       "Example Load Balancer",
+		Categories: []taxonomy.Category{taxonomy.NetworkLoadBalancer},
+		Regions:    []string{testutil.PricedDefaultRegion},
+	}
+}
+
+// loadBalancerResource is a network.loadbalancer resource using the capabilities
+// given.
+func loadBalancerResource(capabilities ...taxonomy.Capability) inventory.Resource {
+	return inventory.Resource{
+		ID:           "lb-example",
+		RawType:      "AWS::ElasticLoadBalancingV2::LoadBalancer",
+		Category:     taxonomy.NetworkLoadBalancer,
+		Region:       "eu-west-1",
+		Capabilities: capabilities,
+	}
+}
+
+// registryOffering serves registry.container and sells no plan.
+func registryOffering() catalog.Offering {
+	return catalog.Offering{
+		Name:       "Example Container Registry",
+		Categories: []taxonomy.Category{taxonomy.RegistryContainer},
+		Regions:    []string{testutil.PricedDefaultRegion},
+	}
+}
+
+// registryResource is a registry.container resource.
+func registryResource() inventory.Resource {
+	return inventory.Resource{
+		ID:       "registry-example",
+		RawType:  "AWS::ECR::Repository",
+		Category: taxonomy.RegistryContainer,
+		Region:   "eu-west-1",
+	}
+}
+
+// TestNeverPriced pins the reason a category that is never priced gets (ADR
+// 0046): its String value is "not-priced", the same text as the Method
+// estimate.NotPriced, which is a value of another type and keeps its own name. A
+// load balancer with a fit is not "usage-priced": that reason would claim a
+// target bills it per use.
+func TestNeverPriced(t *testing.T) {
+	t.Parallel()
+
+	if got, want := string(estimate.NeverPriced), "not-priced"; got != want {
+		t.Errorf("string(estimate.NeverPriced) = %q, want %q", got, want)
+	}
+
+	if got, want := string(estimate.NotPriced), "not-priced"; got != want {
+		t.Errorf("string(estimate.NotPriced) = %q, want %q", got, want)
+	}
+
+	if estimate.NeverPriced == estimate.UsagePriced {
+		t.Errorf("estimate.NeverPriced and estimate.UsagePriced are the same value %q, want one reason per rule",
+			estimate.NeverPriced)
 	}
 }
 

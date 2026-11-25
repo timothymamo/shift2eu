@@ -37,6 +37,28 @@ const (
 	ServerlessFunction Category = "serverless.function"
 	// MessagingQueue is a message queue the provider runs.
 	MessagingQueue Category = "messaging.queue"
+	// CacheRedis is an in-memory key-value store the provider runs that speaks
+	// the Redis protocol: Redis OSS or its fork Valkey.
+	CacheRedis Category = "cache.redis"
+	// DatabaseMongoDB is a document database the provider runs that speaks the
+	// MongoDB wire protocol.
+	DatabaseMongoDB Category = "database.mongodb"
+	// NetworkLoadBalancer is a load balancer the provider runs in front of a
+	// set of backends, at layer 4 (TCP, and UDP where the capability udp says
+	// so) or layer 7 (HTTP/HTTPS).
+	NetworkLoadBalancer Category = "network.loadbalancer"
+	// MessagingTopic is a publish-subscribe topic the provider runs: every
+	// subscription gets its own copy of each message.
+	MessagingTopic Category = "messaging.topic"
+	// ServerlessContainer is a container image the provider runs and scales
+	// with requests; it may scale to zero when idle.
+	ServerlessContainer Category = "serverless.container"
+	// RegistryContainer is a private registry of OCI container images the
+	// provider runs.
+	RegistryContainer Category = "registry.container"
+	// StorageFile is a shared file system the provider runs, mounted by
+	// several machines over NFS.
+	StorageFile Category = "storage.file"
 	// Unclassified marks a source resource that fits no other category. It is a
 	// fact about the resource, not a fallback for unknown values, and no target
 	// offering ever serves it.
@@ -48,14 +70,21 @@ var ErrUnknownCategory = errors.New("unknown taxonomy category")
 
 // categories lists every category, sorted by value. It is read-only.
 var categories = []Category{
+	CacheRedis,
 	ComputeBareMetal,
 	ComputeVM,
+	DatabaseMongoDB,
 	DatabaseMySQL,
 	DatabasePostgreSQL,
 	KubernetesManaged,
 	MessagingQueue,
+	MessagingTopic,
+	NetworkLoadBalancer,
+	RegistryContainer,
+	ServerlessContainer,
 	ServerlessFunction,
 	StorageBlock,
+	StorageFile,
 	StorageObject,
 	Unclassified,
 }

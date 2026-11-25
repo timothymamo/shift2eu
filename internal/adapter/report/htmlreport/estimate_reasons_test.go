@@ -26,6 +26,7 @@ var reasonPhrases = map[estimate.Reason]struct {
 }{
 	estimate.NoFit:             {want: "no fit"},
 	estimate.UsagePriced:       {want: "usage-priced"},
+	estimate.NeverPriced:       {want: "not priced"},
 	estimate.NoSize:            {want: "size unknown"},
 	estimate.NoPlan:            {want: "no plan"},
 	estimate.NoPlanLargeEnough: {want: "no plan large enough"},

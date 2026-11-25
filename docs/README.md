@@ -91,6 +91,7 @@ supersedes it.
 - [0043. Check the live site against the release's manifest, and hold the edge to a size budget](adr/0043-check-the-live-site-against-the-release-and-hold-the-edge-to-a-size-budget.md)
 - [0044. Refuse printing the environment in pi with a project extension, and in Claude Code with deny rules](adr/0044-refuse-printing-the-environment-in-pi-with-a-project-extension.md)
 - [0045. Front the site with a Serverless Container running a pinned Caddy that writes the redirects and headers](adr/0045-front-the-site-with-a-serverless-container-running-a-pinned-caddy.md)
+- [0046. Add seven taxonomy categories, match cache plans on memory alone, and keep every format version](adr/0046-add-seven-taxonomy-categories-and-match-cache-plans-on-memory.md)
 
 ## Writing a page
 

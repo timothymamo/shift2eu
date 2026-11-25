@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 2,
+  "source": "aws",
+  "resources": [
+    {
+      "id": "red-\u001b[31mRED\u001b[0m-reset",
+      "rawType": "\u001b]8;;https://example.com/\u0007a link\u001b]8;;\u0007",
+      "category": "compute.vm",
+      "region": "eu-central-1",
+      "workload": "title-\u001b]0;audit\u0007-bell"
+    },
+    {
+      "id": "carriage\roverwrite",
+      "rawType": "back\b\b\b\bspace",
+      "category": "storage.object",
+      "region": "eu-central-1",
+      "workload": "csi-\u009b2J-c1"
+    },
+    {
+      "id": "clear-\u001b[2J\u001b[H-home",
+      "rawType": "dcs-\u001bP1$r\u001b\\-query",
+      "category": "compute.vm",
+      "region": "eu-central-1",
+      "relations": [{ "type": "depends-on", "target": "red-\u001b[31mRED\u001b[0m-reset" }]
+    }
+  ]
+}
