@@ -45,15 +45,15 @@
   },
   {
     "selfLink": "https://www.googleapis.com/compute/v1/projects/example-project/global/urlMaps/shop-mixed-map",
-    "defaultService": "https://www.googleapis.com/compute/v1/projects/example-project/global/backendServices/shop-mixed-v6-be",
+    "defaultService": "https://www.googleapis.com/compute/v1/projects/example-project/global/backendServices/shop-mixed-v4-be",
     "pathMatchers": [
       {
         "name": "shop-mixed-v4",
         "defaultService": "https://www.googleapis.com/compute/v1/projects/example-project/global/backendServices/shop-mixed-v4-be",
         "pathRules": [
           {
-            "paths": ["/legacy/*"],
-            "service": "https://www.googleapis.com/compute/v1/projects/example-project/global/backendServices/shop-mixed-v4-be"
+            "paths": ["/v6/*"],
+            "service": "https://www.googleapis.com/compute/v1/projects/example-project/global/backendServices/shop-mixed-v6-be"
           }
         ]
       }

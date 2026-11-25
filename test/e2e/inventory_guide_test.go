@@ -590,10 +590,13 @@ func inventoryGuides() []inventoryGuideCase {
 					id: "shop-edge-map", rawType: "compute.googleapis.com/UrlMap", category: "network.loadbalancer",
 					capabilities: []string{"ipv6", "zone-high-availability"},
 				},
-				// One IPv6 backend service is enough: this URL map sends its
-				// default path to an IPv6-only service and a legacy path to an
-				// IPv4-only one, and the load balancer is ipv6 all the same (the
-				// maintainer kept "any" rather than "all", issue #600).
+				// One IPv6 backend service is enough, wherever a URL map names it:
+				// this one sends its default path, and its path matcher's, to an
+				// IPv4-only service and only a /v6/* path rule to the IPv6-only
+				// one, and the load balancer is ipv6 all the same (the maintainer
+				// kept "any" rather than "all", issue #600). The IPv6 service is
+				// deliberately not the default service: a program that read only
+				// that one would lose the capability.
 				{
 					id: "shop-mixed-map", rawType: "compute.googleapis.com/UrlMap", category: "network.loadbalancer",
 					capabilities: []string{"ipv6", "zone-high-availability"},
@@ -791,7 +794,7 @@ func inventoryGuides() []inventoryGuideCase {
 				// redundancy and continuous backup; one region serves no read replica.
 				// An account of any other kind stays unclassified.
 				{id: "cosmos-shop-catalog", rawType: "Microsoft.DocumentDB/databaseAccounts", category: "database.mongodb", capabilities: []string{"encryption-at-rest", "node-high-availability", "point-in-time-restore", "zone-high-availability"}},
-				{id: "cosmos-shop-events", rawType: "Microsoft.DocumentDB/databaseAccounts", category: "unclassified"},
+				{id: "cosmos-shop-events", rawType: "Microsoft.DocumentDB/databaseAccounts", category: "unclassified", capabilities: []string{}},
 				// An account served from two regions serves reads from both.
 				{id: "cosmos-shop-history", rawType: "Microsoft.DocumentDB/databaseAccounts", category: "database.mongodb", capabilities: []string{"encryption-at-rest", "node-high-availability", "read-replicas"}},
 				// Azure DocumentDB: two shards, each with a standby, 128 GiB each.
@@ -821,28 +824,28 @@ func inventoryGuides() []inventoryGuideCase {
 				{id: "lb-shop-mesh", rawType: "Microsoft.Network/loadBalancers", category: "network.loadbalancer", capabilities: []string{"ipv6"}},
 				{id: "lb-shop-quic", rawType: "Microsoft.Network/loadBalancers", category: "network.loadbalancer", capabilities: []string{"udp"}},
 				{id: "lb-shop-all", rawType: "Microsoft.Network/loadBalancers", category: "network.loadbalancer", capabilities: []string{"udp"}},
-				{id: "lb-shop-gateway", rawType: "Microsoft.Network/loadBalancers", category: "unclassified"},
+				{id: "lb-shop-gateway", rawType: "Microsoft.Network/loadBalancers", category: "unclassified", capabilities: []string{}},
 				// An Application Gateway in three zones is zone redundant, and is
 				// neither an IPv6 nor a UDP load balancer.
 				{id: "agw-shop", rawType: "Microsoft.Network/applicationGateways", category: "network.loadbalancer", capabilities: []string{"zone-high-availability"}},
 				// A container app scales with requests. Of kind functionapp it is a
 				// function, of kind workflowapp a Logic App, which stays unclassified.
-				{id: "ca-shop-api", rawType: "Microsoft.App/containerApps", category: "serverless.container"},
-				{id: "ca-shop-fn", rawType: "Microsoft.App/containerApps", category: "serverless.function"},
-				{id: "ca-shop-flows", rawType: "Microsoft.App/containerApps", category: "unclassified"},
+				{id: "ca-shop-api", rawType: "Microsoft.App/containerApps", category: "serverless.container", capabilities: []string{}},
+				{id: "ca-shop-fn", rawType: "Microsoft.App/containerApps", category: "serverless.function", capabilities: []string{}},
+				{id: "ca-shop-flows", rawType: "Microsoft.App/containerApps", category: "unclassified", capabilities: []string{}},
 				// A registry encrypts every image it holds at rest.
 				{id: "acrshop", rawType: "Microsoft.ContainerRegistry/registries", category: "registry.container", capabilities: []string{"encryption-at-rest"}},
 				// An NFS share of a zone-redundant FileStorage account has a snapshot
 				// and keeps serving through the loss of a zone; its SMB sibling stays
 				// unclassified, as an SMB share has no target equivalent.
 				{id: "shop-media", rawType: "Microsoft.Storage/storageAccounts/fileServices/shares", category: "storage.file", capabilities: []string{"encryption-at-rest", "snapshots", "zone-high-availability"}},
-				{id: "shop-reports", rawType: "Microsoft.Storage/storageAccounts/fileServices/shares", category: "unclassified"},
+				{id: "shop-reports", rawType: "Microsoft.Storage/storageAccounts/fileServices/shares", category: "unclassified", capabilities: []string{}},
 				// A Microsoft.FileShares share is NFS only; one deployed across zones
 				// keeps serving through the loss of a zone, a local one cannot.
 				{id: "fs-shop-build", rawType: "Microsoft.FileShares/fileShares", category: "storage.file", capabilities: []string{"encryption-at-rest", "zone-high-availability"}},
 				{id: "fs-shop-archive", rawType: "Microsoft.FileShares/fileShares", category: "storage.file", capabilities: []string{"encryption-at-rest"}},
 				// No target runs MariaDB as a public cloud managed database.
-				{id: "mariadb-shop-legacy", rawType: "Microsoft.DBforMariaDB/servers", category: "unclassified"},
+				{id: "mariadb-shop-legacy", rawType: "Microsoft.DBforMariaDB/servers", category: "unclassified", capabilities: []string{}},
 				// A persistent volume in the node resource group holds data and
 				// stays: only what AKS manages for the cluster is left out.
 				{id: "pvc-00000000-0000-0000-0000-000000000000", rawType: "Microsoft.Compute/disks", category: "storage.block"},
