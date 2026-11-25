@@ -491,6 +491,12 @@ func TestNewAcceptsVersion2FieldsPerCategory(t *testing.T) {
 			resource: withCategory(vm("lb-example"), taxonomy.NetworkLoadBalancer),
 		},
 		{
+			// A public DNS zone takes no size field either: a zone is one zone, and
+			// the sources bill it per zone (PRD #581, Estimates).
+			name:     "network.dns without a size",
+			resource: withCategory(vm("zone-example"), taxonomy.NetworkDNS),
+		},
+		{
 			name:     "messaging.topic without a size",
 			resource: withCategory(vm("topic-example"), taxonomy.MessagingTopic),
 		},
@@ -1030,6 +1036,32 @@ func TestNewRejectsVersion2FieldsPerCategory(t *testing.T) {
 			resources: second(sized("aa-lb", taxonomy.NetworkLoadBalancer,
 				inventory.Size{MemoryGiB: ptr(1.0)}, nil)),
 			wantPath: "resources[1].size.memoryGiB",
+		},
+		{
+			// network.dns's row in the size-field table holds no field: a zone is
+			// not sized by vCPUs, memory, storage or a count (PRD #581, Estimates).
+			name: "vcpus on network.dns",
+			resources: second(sized("aa-zone", taxonomy.NetworkDNS,
+				inventory.Size{VCPUs: ptr(2.0)}, nil)),
+			wantPath: "resources[1].size.vcpus",
+		},
+		{
+			name: "count on network.dns",
+			resources: second(sized("aa-zone", taxonomy.NetworkDNS,
+				inventory.Size{Count: ptr(1)}, nil)),
+			wantPath: "resources[1].size.count",
+		},
+		{
+			name: "storageGiB on network.dns",
+			resources: second(sized("aa-zone", taxonomy.NetworkDNS,
+				inventory.Size{StorageGiB: ptr(1.0)}, nil)),
+			wantPath: "resources[1].size.storageGiB",
+		},
+		{
+			name: "hoursPerMonth on network.dns",
+			resources: second(sized("aa-zone", taxonomy.NetworkDNS,
+				inventory.Size{}, &inventory.Usage{HoursPerMonth: ptr(730.0)})),
+			wantPath: "resources[1].usage.hoursPerMonth",
 		},
 		{
 			name: "vcpus on messaging.topic",
