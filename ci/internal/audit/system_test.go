@@ -640,6 +640,24 @@ func appendFileCommandLine(path, line string) error {
 	return file.Close()
 }
 
+// appendStepSummary appends line to the step summary at path, the way a step
+// writing $GITHUB_STEP_SUMMARY does: the file is created when it is not there
+// yet and appended to when it is, as ci/auditrun's summaryWriter opens it.
+func appendStepSummary(path, line string) error {
+	file, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+
+	if _, err := file.WriteString(line); err != nil {
+		_ = file.Close()
+
+		return err
+	}
+
+	return file.Close()
+}
+
 // cliPlaceholderFiles are the empty files Claude Code 2.1.332 creates in its
 // working directory at session start when CLAUDE_CODE_SUBPROCESS_ENV_SCRUB is
 // set, and never removes (issue #615).
@@ -1109,15 +1127,34 @@ func TestAuditTakesOnlyAResultFileTheRunWrote(t *testing.T) {
 		// $GITHUB_STEP_SUMMARY lies in the same directory as $GITHUB_ENV. That one
 		// file, by its exact path, is outside the digest - it is the run's own to
 		// write - and every other entry of the directory is inside it (issues #615,
-		// #614).
+		// #614). Both shapes the summary has there are covered: the run's write
+		// creates it when nothing laid it down before the audit, and appends to it
+		// when the summaryWriter created it before the audit, which is what a real
+		// run does.
 		{
-			name: "the run wrote its step summary in the $GITHUB_ENV file's directory",
+			name: "the run created its step summary in the $GITHUB_ENV file's directory",
 			write: func(root string) error {
 				if err := os.WriteFile(workPath(root, "result.json"), []byte(resultFile), 0o600); err != nil {
 					return err
 				}
 
-				return appendFileCommandLine(testInputs(root).StepSummary, "the audit ran\n")
+				return appendStepSummary(testInputs(root).StepSummary, "the audit ran\n")
+			},
+			wantLaunched: true,
+			wantResult:   resultFile,
+		},
+		{
+			name: "the run appended to the step summary laid down before it",
+			before: func(t *testing.T, root string) {
+				t.Helper()
+				writeFile(t, testInputs(root).StepSummary, "## the audit\n", 0o600)
+			},
+			write: func(root string) error {
+				if err := os.WriteFile(workPath(root, "result.json"), []byte(resultFile), 0o600); err != nil {
+					return err
+				}
+
+				return appendStepSummary(testInputs(root).StepSummary, "the audit ran\n")
 			},
 			wantLaunched: true,
 			wantResult:   resultFile,
