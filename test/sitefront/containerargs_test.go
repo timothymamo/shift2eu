@@ -268,70 +268,68 @@ func isImageDigest(s string) bool {
 }
 
 // hclList returns the elements of the attribute's list, from src, as their text:
-// command = ["/bin/sh", "-c"]. A multi-line list, a comment after an element and
-// white space around the brackets are read too, and every element must be a
-// quoted string or a file() call, so a list this reader does not understand
-// fails the test rather than running something else.
+// command = ["/bin/sh", "-c"]. The list is read from the same tokens as the
+// attribute (hclTokens), so a multi-line list, a #, // or /* */ comment between
+// its elements and white space around the brackets are read too, while a comment
+// marker inside a quoted string ("a // b") stays part of that string. An element's
+// text runs from its first token to its last, so a comment inside one element
+// stays in its text and fails checkElements. Every element must be a quoted
+// string or a file() call, so a list this reader does not understand fails the
+// test rather than running something else.
 func hclList(src, attribute string) ([]string, error) {
-	start, err := attrValueStart(src, attribute)
+	tokens, err := hclTokens(src)
 	if err != nil {
 		return nil, err
 	}
 
-	if start >= len(src) || src[start] != '[' {
+	body := containerBody(tokens)
+
+	j, err := attrValue(body, attribute)
+	if err != nil {
+		return nil, err
+	}
+
+	if j >= len(body) || body[j].kind != tokPunct || body[j].text != "[" {
 		return nil, fmt.Errorf("%s is not a list", attribute)
 	}
 
-	var (
-		elements []string
-		element  strings.Builder
-		depth    int
-		quoted   bool
-		escaped  bool
-	)
+	var elements []string
 
-	for i := start + 1; i < len(src); i++ {
-		c := src[i]
-
-		switch {
-		case escaped:
-			element.WriteByte(c)
-			escaped = false
-		case quoted && c == '\\':
-			element.WriteByte(c)
-			escaped = true
-		case c == '"':
-			quoted = !quoted
-			element.WriteByte(c)
-		case quoted:
-			element.WriteByte(c)
-		case c == '#':
-			for i < len(src) && src[i] != '\n' {
-				i++
-			}
-		case c == '(' || c == '[' || c == '{':
-			depth++
-			element.WriteByte(c)
-		case c == ')' || c == '}':
-			depth--
-			element.WriteByte(c)
-		case c == ']' && depth > 0:
-			depth--
-			element.WriteByte(c)
-		case c == ']':
-			if text := strings.TrimSpace(element.String()); text != "" {
-				elements = append(elements, text)
-			}
-
-			return elements, checkElements(attribute, elements)
-		case c == ',' && depth == 0:
-			if text := strings.TrimSpace(element.String()); text != "" {
-				elements = append(elements, text)
-			}
-			element.Reset()
-		default:
-			element.WriteByte(c)
+	first, last := -1, -1
+	flush := func() {
+		if first >= 0 {
+			end := body[last].start + len(body[last].text)
+			elements = append(elements, src[body[first].start:end])
 		}
+		first, last = -1, -1
+	}
+
+	for k, depth := j+1, 0; k < len(body); k++ {
+		tok := body[k]
+
+		if tok.kind == tokPunct {
+			switch {
+			case tok.text == "(" || tok.text == "[" || tok.text == "{":
+				depth++
+			case tok.text == ")" || tok.text == "}":
+				depth--
+			case tok.text == "]" && depth > 0:
+				depth--
+			case tok.text == "]":
+				flush()
+
+				return elements, checkElements(attribute, elements)
+			case tok.text == "," && depth == 0:
+				flush()
+
+				continue
+			}
+		}
+
+		if first < 0 {
+			first = k
+		}
+		last = k
 	}
 
 	return nil, fmt.Errorf("%s's list is not closed by ]", attribute)
@@ -356,27 +354,17 @@ func checkElements(attribute string, elements []string) error {
 	return nil
 }
 
-// attrValueStart returns the offset in src of the attribute's value, just past
-// `attribute =`, inside the block that opens with the scaleway_container
-// resource the container's start command lives in: the same attribute in another
-// block, or in the namespace beside it, is no start command. A name inside a
-// comment (a #, // or /* */ one) or a quoted string is no attribute either, so
-// `# args = [...]` and a description holding `args = [` are skipped. Two settings
-// of the attribute in that block are refused: the reader cannot tell which one
-// the platform reads, so it runs neither.
-//
-// The scan reads src once into tokens (hclTokens), so comments and strings are
-// skipped wherever they stand. A src with no such resource block (a fragment)
-// is read as one block body. Only the block's own attributes count, not those of
-// a block or object nested in it.
-func attrValueStart(src, attribute string) (int, error) {
-	tokens, err := hclTokens(src)
-	if err != nil {
-		return 0, err
-	}
-
-	body := containerBody(tokens)
-
+// attrValue returns the index in body of the first token of the attribute's
+// value, just past `attribute =`, or len(body) when nothing follows it. body is
+// the container block's tokens (containerBody), the block the container's start
+// command lives in: the same attribute in another block, or in the namespace
+// beside it, is no start command. A name inside a comment (a #, // or /* */ one)
+// or a quoted string is no token, so `# args = [...]` and a description holding
+// `args = [` are skipped. Two settings of the attribute in that block are
+// refused: the reader cannot tell which one the platform reads, so it runs
+// neither. Only the block's own attributes count, not those of a block or object
+// nested in it.
+func attrValue(body []hclToken, attribute string) (int, error) {
 	value, found := -1, false
 
 	for j, depth := 0, 0; j < len(body); j++ {
@@ -395,10 +383,7 @@ func attrValueStart(src, attribute string) (int, error) {
 			}
 
 			found = true
-			value = len(src)
-			if j+2 < len(body) {
-				value = body[j+2].start
-			}
+			value = j + 2
 		}
 	}
 
@@ -426,7 +411,11 @@ type hclToken struct {
 // hclTokens reads src into its tokens, skipping white space, # and // comments
 // up to the end of their line, /* */ comments across lines and the inside of
 // quoted strings, so that nothing a comment or a string holds is read as code. An
-// unclosed /* */ comment or string is refused.
+// unclosed /* */ comment or string is refused, and so is every string this
+// reader cannot end for certain (hclStringEnd): a template, which can nest a
+// string in the string, and a raw newline, which ends no HCL string. The scan
+// covers the whole file, so no string anywhere can shift what the reader takes
+// for code.
 func hclTokens(src string) ([]hclToken, error) {
 	var tokens []hclToken
 
@@ -447,18 +436,12 @@ func hclTokens(src string) ([]hclToken, error) {
 			}
 			i += 2 + end + 2
 		case c == '"':
-			j := i + 1
-			for j < len(src) && src[j] != '"' {
-				if src[j] == '\\' {
-					j++
-				}
-				j++
+			end, err := hclStringEnd(src, i, tokens)
+			if err != nil {
+				return nil, err
 			}
-			if j >= len(src) {
-				return nil, fmt.Errorf("%s: a quoted string is not closed", containerPath)
-			}
-			tokens = append(tokens, hclToken{kind: tokString, text: src[i : j+1], start: i})
-			i = j + 1
+			tokens = append(tokens, hclToken{kind: tokString, text: src[i:end], start: i})
+			i = end
 		case isIdent(c):
 			j := i
 			for j < len(src) && (isIdent(src[j]) || src[j] == '-') {
@@ -473,6 +456,75 @@ func hclTokens(src string) ([]hclToken, error) {
 	}
 
 	return tokens, nil
+}
+
+// caddyfileArg is the one template string the reader accepts: file()'s argument,
+// which names the Caddyfile the container writes (docs/adr/0045).
+const caddyfileArg = `"${path.module}/Caddyfile"`
+
+// hclStringEnd returns the offset just past the quoted string that opens at
+// src[start], whose tokens before it are before. It fails closed on what would
+// let a reader that ends a string at its first unescaped quote misread the file:
+//
+//   - a ${ (interpolation) or %{ (directive) template, which can hold a nested
+//     string ("${ "(" }") whose quotes and brackets that reader would take for
+//     code; the escapes $${ and %%{ are a literal ${ and %{, no template. The one
+//     exception is file("${path.module}/Caddyfile"), the argument the container
+//     reads the front's Caddyfile from, matched as exactly those bytes after the
+//     tokens file and (;
+//   - a raw newline before the closing quote, which ends no HCL string: tofu
+//     refuses it, and a reader that ran over it would read the rest of the file
+//     as one string.
+//
+// A run of more than two $ or % before a { is refused as a template too, rather
+// than guessed at.
+func hclStringEnd(src string, start int, before []hclToken) (int, error) {
+	line := strings.Count(src[:start], "\n") + 1
+
+	for j := start + 1; j < len(src); j++ {
+		switch c := src[j]; c {
+		case '"':
+			return j + 1, nil
+		case '\n':
+			return 0, fmt.Errorf("%s: the string on line %d holds a raw newline, which ends no HCL string: tofu refuses it, and this reader would read the rest of the file as one string (docs/adr/0045)", containerPath, line)
+		case '\\':
+			if j+1 < len(src) && src[j+1] == '\n' {
+				return 0, fmt.Errorf("%s: the string on line %d holds a raw newline after a \\, which ends no HCL string (docs/adr/0045)", containerPath, line)
+			}
+			j++
+		case '$', '%':
+			run := j
+			for run < len(src) && src[run] == c {
+				run++
+			}
+
+			if run < len(src) && src[run] == '{' && run-j != 2 {
+				if c == '$' && isFileCall(before) && strings.HasPrefix(src[start:], caddyfileArg) {
+					return start + len(caddyfileArg), nil
+				}
+
+				what := "interpolation"
+				if c == '%' {
+					what = "directive"
+				}
+
+				return 0, fmt.Errorf("%s: the string on line %d holds an HCL template (%s), which this reader does not run and cannot end for certain: write %c%c{ for a literal %c{; the only template string it reads is file(%s) (docs/adr/0045)", containerPath, line, what, c, c, c, caddyfileArg)
+			}
+
+			j = run - 1
+		}
+	}
+
+	return 0, fmt.Errorf("%s: a quoted string is not closed", containerPath)
+}
+
+// isFileCall reports whether tokens end with `file (`, so the string that
+// follows is a file() call's argument.
+func isFileCall(tokens []hclToken) bool {
+	n := len(tokens)
+
+	return n >= 2 && tokens[n-2].kind == tokIdent && tokens[n-2].text == "file" &&
+		tokens[n-1].kind == tokPunct && tokens[n-1].text == "("
 }
 
 // containerBody returns the tokens inside resource "scaleway_container" "site"
