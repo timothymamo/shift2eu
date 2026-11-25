@@ -70,6 +70,16 @@ resource "scaleway_container" "site" {
   memory_limit_bytes = 268435456
 
   lifecycle {
+    # Scaleway sets the DNS stage's default_fqdn a while after creating the stage, so on a first setup it may
+    # still be empty when the container comes next: UPSTREAM would be "", and Caddy refuses
+    # reverse_proxy https:// at start. Refuse the container then (issue #566); the rest of the apply stands,
+    # and R4 creates the container in a second pass once edge_endpoint is set. An unknown value (a stage
+    # created or replaced in the same plan) is checked at the apply.
+    precondition {
+      condition     = scaleway_edge_services_dns_stage.site.default_fqdn != null && scaleway_edge_services_dns_stage.site.default_fqdn != ""
+      error_message = "The Edge DNS stage's default_fqdn is still empty, so the container's UPSTREAM would be \"\" and Caddy would refuse to start (ADR 0045). On a first setup this is expected: the rest of the apply stands; run R4's wait loop until edge_endpoint is set, then plan and apply again to create the container."
+    }
+
     # The provider leaves false and 0 out of the create request (it reads them with GetOk), so the platform's
     # own default would decide them: check after the apply that it kept plain HTTP and the configured
     # min_scale.

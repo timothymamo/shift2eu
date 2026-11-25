@@ -210,6 +210,9 @@ func TestChecksRefuseBrokenConfigurations(t *testing.T) {
 		src   string
 		check func(*caddyfile) []string
 		want  string
+		// exactly, when not zero, is the number of problems the check must report: the
+		// configuration breaks the one rule the case names and nothing else.
+		exactly int
 	}{
 		{
 			name:  "a header matcher for the scheme",
@@ -260,22 +263,25 @@ func TestChecksRefuseBrokenConfigurations(t *testing.T) {
 			want:  "holds no redir",
 		},
 		{
-			name:  "an access log",
-			src:   withLine(`	log`),
-			check: checkRefusedDirectives,
-			want:  "access log",
+			name:    "an access log",
+			src:     withLine(`	log`),
+			check:   checkRefusedDirectives,
+			want:    "access log",
+			exactly: 1,
 		},
 		{
-			name:  "an encode directive",
-			src:   withLine(`	encode gzip`),
-			check: checkRefusedDirectives,
-			want:  "encode directive",
+			name:    "an encode directive",
+			src:     withLine(`	encode gzip`),
+			check:   checkRefusedDirectives,
+			want:    "encode directive",
+			exactly: 1,
 		},
 		{
-			name:  "a tls directive",
-			src:   withLine(`	tls internal`),
-			check: checkRefusedDirectives,
-			want:  "tls directive",
+			name:    "a tls directive",
+			src:     withLine(`	tls internal`),
+			check:   checkRefusedDirectives,
+			want:    "tls directive",
+			exactly: 1,
 		},
 		{
 			name:  "the Host not sent as the upstream's",
@@ -361,6 +367,9 @@ func TestChecksRefuseBrokenConfigurations(t *testing.T) {
 			}
 			if !slices.ContainsFunc(problems, func(p string) bool { return strings.Contains(p, tc.want) }) {
 				t.Errorf("the check reports %q, want one naming %q", problems, tc.want)
+			}
+			if tc.exactly != 0 && len(problems) != tc.exactly {
+				t.Errorf("the check reports %d problems (%q), want %d: the configuration breaks exactly the one rule the case names", len(problems), problems, tc.exactly)
 			}
 		})
 	}
@@ -956,11 +965,14 @@ func broken(from, to string) string {
 }
 
 // withLine returns the designed configuration with line added to the site
-// block, for the directives a configuration must not hold at all.
+// block, on a line of its own, for the directives a configuration must not hold
+// at all. The line is followed by a newline: the site block's own first line
+// follows it, and a line glued to that one would be a line of its own tokens
+// rather than the directive the case names.
 func withLine(line string) string {
 	const site = "\n:8080 {\n"
 
-	return strings.Replace(designedCaddyfile, site, site+line+line, 1)
+	return strings.Replace(designedCaddyfile, site, site+line+"\n", 1)
 }
 
 // parseFile parses src as a Caddyfile.

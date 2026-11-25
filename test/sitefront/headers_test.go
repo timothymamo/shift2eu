@@ -193,31 +193,40 @@ func metaCSP(src string) (string, bool) {
 }
 
 // tagAttributes returns the attributes of one tag, by their lower-case name,
-// with a double-quoted value as the pages write it.
+// with a double-quoted value as the pages write it. A quoted value is read as
+// one and skipped whole, so an = inside it is the value's own: a page's policy
+// may carry one (an integrity hash such as 'sha256-abc='), and nothing there is
+// an attribute of the tag.
 func tagAttributes(tag string) map[string]string {
 	attrs := map[string]string{}
 
 	for i := 0; i < len(tag); i++ {
-		if tag[i] != '=' {
-			continue
-		}
-
-		// Read the name back to the white space before it.
-		nameEnd := i
-		nameStart := nameEnd
-		for nameStart > 0 && !strings.ContainsRune(" \t\n\r<", rune(tag[nameStart-1])) {
-			nameStart--
-		}
-
-		value := ""
-		if i+1 < len(tag) && tag[i+1] == '"' {
-			if stop := strings.IndexByte(tag[i+2:], '"'); stop >= 0 {
-				value = tag[i+2 : i+2+stop]
+		switch tag[i] {
+		case '"':
+			// The value's quoted text, skipped whole: its = signs are the value's.
+			stop := strings.IndexByte(tag[i+1:], '"')
+			if stop < 0 {
+				return attrs
 			}
-		}
+			i += stop + 1
+		case '=':
+			// Read the name back to the white space before it.
+			nameEnd := i
+			nameStart := nameEnd
+			for nameStart > 0 && !strings.ContainsRune(" \t\n\r<", rune(tag[nameStart-1])) {
+				nameStart--
+			}
 
-		if name := strings.ToLower(tag[nameStart:nameEnd]); name != "" {
-			attrs[name] = value
+			value := ""
+			if i+1 < len(tag) && tag[i+1] == '"' {
+				if stop := strings.IndexByte(tag[i+2:], '"'); stop >= 0 {
+					value = tag[i+2 : i+2+stop]
+				}
+			}
+
+			if name := strings.ToLower(tag[nameStart:nameEnd]); name != "" {
+				attrs[name] = value
+			}
 		}
 	}
 
@@ -434,6 +443,59 @@ func TestCSPDirectives(t *testing.T) {
 			got := cspDirectives(tc.policy)
 			if !slices.Equal(got, tc.want) {
 				t.Errorf("cspDirectives(%q) = %q, want %q", tc.policy, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestTagAttributes pins the tag reader the <meta> lookup reads a page with: an
+// attribute's name and its double-quoted value, and an = inside a quoted value
+// read as that value's own, never as an attribute of the tag -- a page's policy
+// may carry one, as an integrity hash such as 'sha256-abc=' does (issue #566,
+// point 9).
+func TestTagAttributes(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		tag  string
+		want map[string]string
+	}{
+		{
+			name: "the attributes as the pages write them",
+			tag:  `<meta http-equiv="Content-Security-Policy" content="default-src 'none'">`,
+			want: map[string]string{"http-equiv": "Content-Security-Policy", "content": "default-src 'none'"},
+		},
+		{
+			name: "the names in another case",
+			tag:  `<META HTTP-EQUIV="Content-Security-Policy" CONTENT="default-src 'none'">`,
+			want: map[string]string{"http-equiv": "Content-Security-Policy", "content": "default-src 'none'"},
+		},
+		{
+			name: "an = inside an integrity hash of a policy",
+			tag:  `<meta content="script-src 'sha256-abc='" http-equiv="Content-Security-Policy">`,
+			want: map[string]string{"content": "script-src 'sha256-abc='", "http-equiv": "Content-Security-Policy"},
+		},
+		{
+			name: "an = inside a quoted value that spells an attribute",
+			tag:  `<meta content="a=http-equiv" http-equiv="Content-Security-Policy">`,
+			want: map[string]string{"content": "a=http-equiv", "http-equiv": "Content-Security-Policy"},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := tagAttributes(tc.tag)
+			if len(got) != len(tc.want) {
+				t.Fatalf("tagAttributes(%q) = %v, want %v: an = inside a quoted value is the value's, not an attribute's", tc.tag, got, tc.want)
+			}
+
+			for name, want := range tc.want {
+				if got[name] != want {
+					t.Errorf("tagAttributes(%q)[%s] = %q, want %q: an = inside a quoted value is the value's, not an attribute's", tc.tag, name, got[name], want)
+				}
 			}
 		})
 	}
