@@ -650,6 +650,15 @@ text as the decision)
     `SOURCES.md` section and the report's tie or required change say that Cluster mode needs a
     cluster-aware client; if that cannot be said without a capability, Scaleway Redis lists no
     `node-high-availability` until then.
+12. **Load balancers a Kubernetes cluster created.** The acceptance criterion "a load balancer a
+    Kubernetes cluster created is not in the inventory" (*Acceptance criteria*) was narrowed to AWS and
+    Azure: GCP URL maps and backend services carry no labels to recognise one GKE created, so GCP keeps
+    them (*To be checked*). *Decision (2026-11-25, decided by the maintainer):* the narrowed criterion is
+    confirmed: it holds for AWS and Azure, and GCP keeps GKE-created load balancers. Issue #600.
+13. **A GCP URL map's `ipv6`: any backend service, or all?** *Decision (2026-11-25, decided by the
+    maintainer):* any. A proxy-based load balancer gets `ipv6` when an IPv6 forwarding rule reaches it
+    and one backend service it names is `IPV6_ONLY` or `PREFER_IPV6`; "all" would under-report a load
+    balancer whose main paths are IPv6. A mixed e2e fixture pins it. Issue #600.
 
 **To be checked** (each in the milestone named; a fact not confirmed stays out of the snapshot)
 
