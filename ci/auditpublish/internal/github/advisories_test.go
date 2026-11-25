@@ -1451,12 +1451,22 @@ func TestFileAdvisoriesStopsOnAFailedWrite(t *testing.T) {
 // TestFileAdvisoriesRunsUnderItsDeadline pins a write that outlives its
 // deadline: it is made once - never retried, since it may have been applied -
 // and nothing follows it. The next run's listing reconciles.
+//
+// The deadline is generous against what a loaded machine costs, and the route's
+// delay stays well beyond it. The fake gh is this test binary, so a call's fork
+// and exec of it and the record of the call it appends have to fit inside the
+// deadline before the "one call" below can be read at all: on a six-core VM at
+// load average 45 that took up to 199 ms, and a 200 ms deadline ended 14 of 300
+// calls before the fake had recorded anything - a run that made its one write
+// and was read as one that made none (issue #253). The delay is three
+// deadlines, so a FileAdvisories that ignored its deadline still reaches the
+// fake's answer, and the run's last line is the failure that pins it.
 func TestFileAdvisoriesRunsUnderItsDeadline(t *testing.T) {
 	t.Parallel()
 
 	const (
-		callTimeout = 200 * time.Millisecond
-		routeDelay  = 10 * time.Second
+		callTimeout = 5 * time.Second
+		routeDelay  = 15 * time.Second
 	)
 
 	t.Run("a create past its deadline", func(t *testing.T) {
@@ -1481,7 +1491,7 @@ func TestFileAdvisoriesRunsUnderItsDeadline(t *testing.T) {
 		}
 
 		if calls := fake.Calls(t); len(calls) != 1 {
-			t.Errorf("the run's calls are %v, want the one create that timed out", calls)
+			t.Errorf("the run's calls are %v, want the one create that timed out: a write past its deadline is made once and never retried, and a run with no calls at all made no write - or the machine could not start the fake gh inside the deadline (issue #253)", calls)
 		}
 	})
 
@@ -1511,7 +1521,7 @@ func TestFileAdvisoriesRunsUnderItsDeadline(t *testing.T) {
 		}
 
 		if calls := fake.Calls(t); len(calls) != 1 {
-			t.Errorf("the run's calls are %v, want the one update that timed out", calls)
+			t.Errorf("the run's calls are %v, want the one update that timed out: a write past its deadline is made once and never retried, and a run with no calls at all made no write - or the machine could not start the fake gh inside the deadline (issue #253)", calls)
 		}
 	})
 }
