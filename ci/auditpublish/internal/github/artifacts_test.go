@@ -4,8 +4,10 @@ package github_test
 // downloads an artifact downloads it by exact name"; ADR 0040, "The publish
 // program's GitHub side"). One listing of the run's artifacts decides whether a
 // job may download: exactly the job's names, no name twice, nothing expired and
-// no second page. GitHub's failure is the core's GitHub class, and the check's
-// one summary line and exit code come from the error's class alone.
+// no second page, and the artifact the job downloads carries a positive ID and
+// a sha256:<64 hex> digest, the two values the download is bound to. GitHub's
+// failure is the core's GitHub class, and the check's one summary line and exit
+// code come from the error's class alone.
 
 import (
 	"encoding/json"
@@ -25,12 +27,15 @@ const artifactsResponseMarker = "RESPONSE-TEXT-MARKER"
 // artifactEntry is one entry of the run's artifact listing. id and digest are
 // the values the listing carries for the download: a test that leaves them out
 // gets the entry's own, one per position, so a listing is always one the check
-// can bind.
+// can bind. override writes an entry the check must refuse: a key it sets is
+// written in place of the entry's own, and a key it sets to nil is written
+// not at all.
 type artifactEntry struct {
-	name    string
-	expired bool
-	id      int64
-	digest  string
+	name     string
+	expired  bool
+	id       int64
+	digest   string
+	override map[string]any
 }
 
 // artifactEntryID and artifactEntryDigest are the ID and digest the listing
@@ -52,7 +57,19 @@ func artifactEntryBody(e artifactEntry, i int) map[string]any {
 		digest = artifactEntryDigest(i)
 	}
 
-	return map[string]any{"name": e.name, "expired": e.expired, "id": id, "digest": digest}
+	body := map[string]any{"name": e.name, "expired": e.expired, "id": id, "digest": digest}
+
+	for key, value := range e.override {
+		if value == nil {
+			delete(body, key)
+
+			continue
+		}
+
+		body[key] = value
+	}
+
+	return body
 }
 
 // artifactsRoute is the artifact check's answer: the entries GitHub lists and
@@ -101,8 +118,11 @@ type artifactCase struct {
 }
 
 // artifactCases is the check's answers for one job's expected names: the right
-// list, and each way a list is wrong.
-func artifactCases(t *testing.T, expected []artifactEntry) []artifactCase {
+// list, and each way a list is wrong. download is the artifact the job
+// downloads, the entry whose ID and digest the check binds: the cases below
+// answer it without an ID, with an ID that is no ID, and without a digest or
+// with one that is no sha256:<64 lower-case hex>.
+func artifactCases(t *testing.T, expected []artifactEntry, download string) []artifactCase {
 	t.Helper()
 
 	extra := append(append([]artifactEntry{}, expected...), artifactEntry{name: "unexpected-artifact"})
@@ -111,6 +131,29 @@ func artifactCases(t *testing.T, expected []artifactEntry) []artifactCase {
 	expired[0].expired = true
 	missing := expected[1:]
 	listing := artifactListingJSON(t, len(expected), expected...)
+
+	// downloaded answers the job's download entry with override, and every other
+	// entry as it is: the listing stays the one the check accepts but for the
+	// entry the download is bound to.
+	downloaded := func(override map[string]any) []artifactEntry {
+		entries := append([]artifactEntry{}, expected...)
+
+		for i := range entries {
+			if entries[i].name == download {
+				entries[i].override = override
+			}
+		}
+
+		return entries
+	}
+
+	// withDownload is the case's listing, at the job's own size: the check counts
+	// the entries the answer lists.
+	withDownload := func(override map[string]any) Route {
+		entries := downloaded(override)
+
+		return artifactsRoute(len(entries), entries...)
+	}
 
 	// withTrailing answers the one call with the listing followed by trailing
 	// data, written after the JSON document as it is.
@@ -131,6 +174,17 @@ func artifactCases(t *testing.T, expected []artifactEntry) []artifactCase {
 		{name: "an expected artifact missing", route: artifactsRoute(len(missing), missing...), want: github.ErrArtifacts},
 		{name: "a second page", route: artifactsRoute(len(expected)+1, expected...), want: github.ErrArtifacts},
 		{name: "an expired artifact", route: artifactsRoute(len(expected), expired...), want: github.ErrArtifacts},
+		// The download is bound to the ID and the digest the listing carries for
+		// the artifact the job downloads (Artifact), so an entry without a
+		// positive ID or without a sha256:<64 lower-case hex> digest is an answer
+		// the check refuses, and not one a step downloads unbound.
+		{name: "the downloaded artifact without an ID", route: withDownload(map[string]any{"id": nil}), want: publish.ErrGitHub},
+		{name: "the downloaded artifact with ID 0", route: withDownload(map[string]any{"id": 0}), want: publish.ErrGitHub},
+		{name: "the downloaded artifact with an ID that is no number", route: withDownload(map[string]any{"id": "1000"}), want: publish.ErrGitHub},
+		{name: "the downloaded artifact without a digest", route: withDownload(map[string]any{"digest": nil}), want: publish.ErrGitHub},
+		{name: "the downloaded artifact with a truncated digest", route: withDownload(map[string]any{"digest": "sha256:0123456789abcdef"}), want: publish.ErrGitHub},
+		{name: "the downloaded artifact with an upper-case digest", route: withDownload(map[string]any{"digest": "sha256:" + strings.Repeat("A", 64)}), want: publish.ErrGitHub},
+		{name: "the downloaded artifact with a digest of another algorithm", route: withDownload(map[string]any{"digest": "sha512:" + strings.Repeat("a", 64)}), want: publish.ErrGitHub},
 		{
 			name:  "a non-2xx answer",
 			route: Route{Method: "GET", Endpoint: fixtureArtifactsEndpoint, Status: 403, Body: map[string]string{"message": artifactsResponseMarker}},
@@ -191,7 +245,7 @@ func TestCheckArtifactsRefusesAnyListThatIsNotExactlyTheJobs(t *testing.T) {
 		t.Run(j.name, func(t *testing.T) {
 			t.Parallel()
 
-			for _, tc := range artifactCases(t, j.expected) {
+			for _, tc := range artifactCases(t, j.expected, j.download) {
 				t.Run(tc.name, func(t *testing.T) {
 					t.Parallel()
 

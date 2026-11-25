@@ -1372,11 +1372,21 @@ func TestClaudeCodeAuditWorkflowPinsOnlyWhereItReadsThem(t *testing.T) {
 			wantIn: "install-claude-code.sh",
 		},
 		{
+			// The guard's own ; then is the one text that may follow the pin's
+			// two arguments (round F of PR 5c): any other text is a pin the line
+			// does not hand on as the installer's last two arguments.
+			name: "the installer with text after the pin's two arguments",
+			rel:  claudeCodeAuditWorkflowPath,
+			src: rewrite(`"${CLAUDE_CODE_PIN_INTEGRITY}"; then`,
+				`"${CLAUDE_CODE_PIN_INTEGRITY}" || true; then`, 1),
+			wantIn: "install-claude-code.sh",
+		},
+		{
 			// The alias trick: a literal under another name on a line of its
 			// own is still a pin written into the workflow.
 			name:   "an integrity behind an alias",
 			rel:    claudeCodeAuditWorkflowPath,
-			src:    rewrite(`          .github/scripts/install-claude-code.sh`, "          i=\""+integrity+"\"\n          .github/scripts/install-claude-code.sh", 1),
+			src:    rewrite(`          if ! .github/scripts/install-claude-code.sh`, "          i=\""+integrity+"\"\n          if ! .github/scripts/install-claude-code.sh", 1),
 			wantIn: "sha512-",
 		},
 		{
@@ -1551,7 +1561,13 @@ func claudeCodePinAuditWorkflowArguments(num int, text string, readsIntegrity bo
 		return problems
 	}
 
-	if strings.Contains(text, claudeCodePinInstaller) && !strings.HasSuffix(trimmed, claudeCodePinInstallerArguments) {
+	// The audit's workflow runs the installer under a ! in an if, whose two
+	// arguments stay the last ones the line holds (round F of PR 5c): the
+	// installer's call may end there or in the ; then of that guard, and in
+	// nothing else.
+	installerGuarded := strings.HasSuffix(trimmed, claudeCodePinInstallerArguments+"; then")
+
+	if strings.Contains(text, claudeCodePinInstaller) && !strings.HasSuffix(trimmed, claudeCodePinInstallerArguments) && !installerGuarded {
 		problems = append(problems, fmt.Sprintf("line %d runs %s without the pin's two arguments,%s, as its last: the installer takes exactly the pin step's version and integrity (PRD #175 milestone 2, ADR 0040)", num, claudeCodePinInstaller, claudeCodePinInstallerArguments))
 	}
 
