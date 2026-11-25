@@ -180,18 +180,18 @@ const coopSentence = "One gap remains: the site does not send Cross-Origin-Opene
 // #567, item 3; issue #601): the site's own front answers http://shift2eu.com with
 // a plain-HTTP 308 that carries no HSTS, not the apex redirect's provider, whose
 // HSTS the site cannot promise. The scheme is named because only that redirect
-// lacks HSTS: the apex's HTTPS answer carries it (apexHTSTSSentence). The
+// lacks HSTS: the apex's HTTPS answer carries it (apexHSTSSentence). The
 // paragraph keeps the downgrade-risk marker the live check reads.
 const apexRedirectSentence = "(answered by the site's own front, the same server as www.shift2eu.com, with a plain-HTTP 308 redirect that carries no HSTS)"
 
-// apexHTSTSSentence is the downgrade risk's account of where HSTS already
+// apexHSTSSentence is the downgrade risk's account of where HSTS already
 // protects a visit (issue #601): https://shift2eu.com answers with its 308 to
 // www.shift2eu.com and carries Strict-Transport-Security: max-age=31536000 for
 // shift2eu.com alone, with no includeSubDomains, so a browser that has already
 // been to the apex over HTTPS is protected there too. A page that left that out
 // would understate the site's protection, and one that said the apex's redirect
 // carried no HSTS would be false of the HTTPS one.
-const apexHTSTSSentence = "at www.shift2eu.com or at https://shift2eu.com, whose 308 redirect to www.shift2eu.com carries HSTS for shift2eu.com alone"
+const apexHSTSSentence = "at www.shift2eu.com or at https://shift2eu.com, whose 308 redirect to www.shift2eu.com carries HSTS for shift2eu.com alone"
 
 // frameAncestorsSentence is the privacy page's framing guard (issue #567, item
 // 4): the Content-Security-Policy header every HTTPS response carries refuses
@@ -279,7 +279,7 @@ func TestPrivacyPageStatesWhatTheFrontAndTheLogsDo(t *testing.T) {
 		},
 		{
 			name:     "the apex's HTTPS redirect carries HSTS",
-			sentence: apexHTSTSSentence,
+			sentence: apexHSTSSentence,
 			expected: "the downgrade-risk statement must say that https://shift2eu.com's 308 redirect to www.shift2eu.com carries HSTS for shift2eu.com alone, so a browser that has been to the apex over HTTPS is protected there too: the apex's HTTPS answer sends Strict-Transport-Security: max-age=31536000 without includeSubDomains (issue #601)",
 		},
 		{
