@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -488,8 +487,15 @@ func TestTagAttributes(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			if got := tagAttributes(tc.tag); !maps.Equal(got, tc.want) {
-				t.Errorf("tagAttributes(%q) = %v, want %v: an = inside a quoted value is the value's, not an attribute's", tc.tag, got, tc.want)
+			got := tagAttributes(tc.tag)
+			if len(got) != len(tc.want) {
+				t.Fatalf("tagAttributes(%q) = %v, want %v: an = inside a quoted value is the value's, not an attribute's", tc.tag, got, tc.want)
+			}
+
+			for name, want := range tc.want {
+				if got[name] != want {
+					t.Errorf("tagAttributes(%q)[%s] = %q, want %q: an = inside a quoted value is the value's, not an attribute's", tc.tag, name, got[name], want)
+				}
 			}
 		})
 	}
