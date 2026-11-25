@@ -35,6 +35,18 @@
       }
     },
     {
+      "id": "amr-shop-scratch",
+      "rawType": "Microsoft.Cache/redisEnterprise",
+      "category": "cache.redis",
+      "region": "westeurope",
+      "capabilities": [
+        "encryption-at-rest"
+      ],
+      "size": {
+        "count": 1
+      }
+    },
+    {
       "id": "amr-shop-session",
       "rawType": "Microsoft.Cache/redisEnterprise",
       "category": "cache.redis",

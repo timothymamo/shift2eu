@@ -365,14 +365,16 @@ def zone_count: (.zones // []) | length;
               elif $tier == "Premium" then (1 + ($p.replicasPerPrimary? // $p.replicasPerMaster? // 1)) * $shards
               else null end)})}
         elif $t == "microsoft.cache/redisenterprise" then
-          # Azure Managed Redis: a primary and a replica with high availability.
-          # A legacy Enterprise or Enterprise Flash cluster names its zones in
-          # zones instead; over two or more it runs two or more nodes.
-          # Clustering and persistence are its databases' settings, from the
-          # databases call; without it neither is claimed. Disks are always
-          # encrypted.
+          # Azure Managed Redis: a primary and a replica with high availability;
+          # its zones never override highAvailability and redundancyMode.
+          # Only a legacy Enterprise or Enterprise Flash cluster (an Enterprise*
+          # SKU) names its zones in zones instead; over two or more it runs two
+          # or more nodes. Clustering and persistence are its databases'
+          # settings, from the databases call; without it neither is claimed.
+          # Disks are always encrypted.
           [$redisdatabases[] | select(.id | lid | startswith($id + "/databases/"))] as $dbs
-          | (zone_count >= 2) as $zonal
+          | (((.sku.name? // "") | ascii_downcase | startswith("enterprise"))
+              and zone_count >= 2) as $zonal
           | (.properties.highAvailability? == "Enabled"
               or (.properties.redundancyMode? | IN("LR", "ZR")) or $zonal) as $ha
           | $base + {category: "cache.redis", capabilities: [

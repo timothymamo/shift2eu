@@ -798,7 +798,7 @@ Review `inventories/azure.inventory.json`, then delete the raw output: `rm -r in
 | PostgreSQL or MySQL flexible server, single-node | `count`: 1 | `properties.highAvailability.mode` `Disabled` or not set |
 | AKS cluster | `count` | the sum of its agent pools' `count` |
 | Azure Cache for Redis | `count` | Basic 1; Standard 2; Premium (1 + `properties.replicasPerPrimary`, or `replicasPerMaster`, 1 when neither is set) × `properties.shardCount` (at least 1) |
-| Azure Managed Redis (Redis Enterprise) | `count` | 2 (a primary and a replica) with high availability (for a legacy Enterprise or Enterprise Flash cluster, two or more `zones`), else 1 |
+| Azure Managed Redis (Redis Enterprise) | `count` | 2 (a primary and a replica) with high availability (for a legacy Enterprise or Enterprise Flash cluster only, two or more `zones`), else 1 |
 | Azure DocumentDB (`mongoClusters`) | `count` | `properties.sharding.shardCount` (at least 1), × 2 with high availability (a standby per shard) |
 | Azure DocumentDB (`mongoClusters`) | `storageGiB` | `properties.storage.sizeGb` (per shard) × the shard count |
 | NFS file share of a FileStorage account | `storageGiB` | `properties.shareQuota` |
@@ -878,12 +878,14 @@ A Service Bus topic (where publishers write) and each of its subscriptions (wher
 queue of their own with a dead-letter subqueue) are both listed, as both have to move. A subscription
 is named `<topic>/<subscription>`, as the same subscription name often recurs across topics. An SMB
 share, a Cosmos DB account of another kind than `MongoDB`, a Logic App and a MariaDB server stay
-`unclassified`, so the report shows them as blockers. Azure Database
-for MariaDB was retired on 19 September 2025, and Basic Load Balancer on 30 September 2025; a Basic
-load balancer still running is classified, with no capability. Azure Cache for Redis Basic, Standard
-and Premium retire on 30 September 2028, its Enterprise and Enterprise Flash tiers on 31 March 2027
-(Microsoft Learn, *Frequently asked questions on the retirement of Azure Cache for Redis*). Redis modules of an Azure Managed Redis cluster are no
-capability.
+`unclassified`, so the report shows them as blockers. Azure Database for MariaDB was retired on 19
+September 2025, and Basic Load Balancer on 30 September 2025; a Basic load balancer still running is
+classified, with no capability. Azure Cache for Redis Basic, Standard and Premium retire on 30
+September 2028, its Enterprise and Enterprise Flash tiers on 31 March 2027 (Microsoft Learn,
+*Frequently asked questions on the retirement of Azure Cache for Redis*). The `zones` rule of a Redis
+Enterprise cluster holds only for those legacy tiers (an `Enterprise_*` or `EnterpriseFlash_*` SKU):
+an Azure Managed Redis cluster reads its `highAvailability` and `redundancyMode`, whatever its
+`zones`. Redis modules of an Azure Managed Redis cluster are no capability.
 
 Left out: virtual machines of a scale set, their OS disks (`storageProfile.osDisk`) and their data
 disks created with `deleteOption: Delete` (the scale set stands for them), snapshots and autoscale
@@ -925,8 +927,8 @@ holds data, and stays; so does a share of such a FileStorage account, a persiste
 | `cache.redis` (Azure Cache for Redis) | `snapshots` | tier Premium with `rdb-backup-enabled` `true` (RDB persistence; AOF alone is no snapshot) |
 | `cache.redis` (Azure Cache for Redis) | `encryption-at-rest` | any SKU but C0 and C1, whose disks Azure does not encrypt |
 | `cache.redis` (Azure Managed Redis) | `encryption-at-rest` | always |
-| `cache.redis` (Azure Managed Redis) | `node-high-availability` | `highAvailability` `Enabled`, `redundancyMode` `LR` or `ZR`, or two or more `zones` (a legacy Enterprise or Enterprise Flash cluster) |
-| `cache.redis` (Azure Managed Redis) | `zone-high-availability` | `redundancyMode` `ZR`, or two or more `zones` (a legacy Enterprise or Enterprise Flash cluster) |
+| `cache.redis` (Azure Managed Redis) | `node-high-availability` | `highAvailability` `Enabled`, `redundancyMode` `LR` or `ZR`, or two or more `zones` (a legacy Enterprise or Enterprise Flash cluster only) |
+| `cache.redis` (Azure Managed Redis) | `zone-high-availability` | `redundancyMode` `ZR`, or two or more `zones` (a legacy Enterprise or Enterprise Flash cluster only) |
 | `cache.redis` (Azure Managed Redis) | `sharding` | a database's `clusteringPolicy` is `OSSCluster` |
 | `cache.redis` (Azure Managed Redis) | `snapshots` | a database has RDB persistence (`persistence.rdbEnabled`) |
 | `database.mongodb` (Cosmos DB) | `encryption-at-rest` | always |
@@ -956,12 +958,11 @@ too. A frontend's public IP address without `zones` is not counted as zone redun
 now makes a Standard one zone redundant in a region with zones: the program cannot see whether a
 region has zones, so it understates rather than overstates. A DocumentDB cluster with `SameZone` high
 availability gets `node-high-availability` but no `zone-high-availability`: its standby protects
-against a node failure, not a zone outage
-(Microsoft Learn, *High availability in Azure DocumentDB*). A
-`ZoneRedundantPreferred` cluster in a region without zones falls back to the same zone, and is still
+against a node failure, not a zone outage (Microsoft Learn, *High availability in Azure DocumentDB*).
+A `ZoneRedundantPreferred` cluster in a region without zones falls back to the same zone, and is still
 credited `zone-high-availability` it does not have, as the program cannot see the region's zones:
-remove it by hand there. An Application Gateway is never `ipv6` (it supports no IPv6 backends)
-and never `udp` (it balances HTTP). A `Microsoft.FileShares` share's snapshots are not listed.
+remove it by hand there. An Application Gateway is never `ipv6` (it supports no IPv6 backends) and
+never `udp` (it balances HTTP). A `Microsoft.FileShares` share's snapshots are not listed.
 
 ## Trim what you do not want assessed
 
