@@ -107,9 +107,12 @@ func containerRunFrom(src, caddyfile string) (containerRun, error) {
 }
 
 // hclElementValue returns what a quoted list element gives the container: the string the quotes hold, with
-// HCL's template escapes $${ and %%{ decoded to a literal ${ and %{. An element that carries a ${ or %{
-// template is refused: the reader runs no template, so it would pass the template itself to the container
-// instead of what the platform runs (docs/adr/0045).
+// HCL's own escapes decoded - \n \r \t \" \\ \uNNNN and \UNNNNNNNN, and no others - and its template escapes
+// $${ and %%{ decoded to a literal ${ and %{. An element that carries a ${ or %{ template is refused: the
+// reader runs no template, so it would pass the template itself to the container instead of what the platform
+// runs (docs/adr/0045). An escape HCL has and Go also has as another character (\x41, \a, the octal \101) is
+// refused as well: tofu would refuse the configuration, and a reader that decoded them would run a command
+// line the configuration does not hold.
 func hclElementValue(element string) (string, error) {
 	value, err := strconv.Unquote(element)
 	if err != nil {
@@ -302,8 +305,13 @@ func checkElements(attribute string, elements []string) error {
 }
 
 // attrValueStart returns the offset in src of the attribute's value, just past
-// `attribute =`. A name inside a # or // comment is no attribute, so a comment
-// such as # args = [...] above the real one is skipped.
+// `attribute =`, inside the block that opens with the scaleway_container
+// resource the container's start command lives in: the same attribute in another
+// block, or in the namespace beside it, is no start command. A name inside a
+// comment (a #, // or /* */ one) or a quoted string is no attribute either, so
+// `# args = [...]` and a description holding `args = [` are skipped. Two settings
+// of the attribute in that block are refused: the reader cannot tell which one
+// the platform reads, so it runs neither.
 func attrValueStart(src, attribute string) (int, error) {
 	for i := 0; i < len(src); i++ {
 		if i > 0 && isIdent(src[i-1]) {
@@ -462,6 +470,79 @@ resource "scaleway_container" "site" {
 			},
 		},
 		{
+			name: "a block comment holding the attribute above the real one",
+			tf: comment + imageLine + `
+resource "scaleway_container" "site" {
+  command = ["/bin/sh", "-c"]
+  /* args = ["evil"] */
+  args = ["run", "caddy"]
+}
+`,
+			want: containerRun{
+				image: caddyAt,
+				argv:  []string{"/bin/sh", "-c", "run", "caddy"},
+			},
+		},
+		{
+			name: "a multi-line block comment holding the attribute above the real one",
+			tf: comment + imageLine + `
+resource "scaleway_container" "site" {
+  command = ["/bin/sh", "-c"]
+  /*
+    args = ["evil"]
+  */
+  args = ["run", "caddy"]
+}
+`,
+			want: containerRun{
+				image: caddyAt,
+				argv:  []string{"/bin/sh", "-c", "run", "caddy"},
+			},
+		},
+		{
+			name: "the attribute named inside a quoted string above the real one",
+			tf: comment + imageLine + `
+resource "scaleway_container" "site" {
+  description = "the string that prints args = [\"evil\"] to the log"
+  command     = ["/bin/sh", "-c"]
+  args        = ["run", "caddy"]
+}
+`,
+			want: containerRun{
+				image: caddyAt,
+				argv:  []string{"/bin/sh", "-c", "run", "caddy"},
+			},
+		},
+		{
+			name: "the attribute in another block before the container",
+			tf: comment + imageLine + `
+resource "scaleway_container_namespace" "site" {
+  name = "shift2eu-site"
+  args = ["evil"]
+}
+
+resource "scaleway_container" "site" {
+  command = ["/bin/sh", "-c"]
+  args    = ["run", "caddy"]
+}
+`,
+			want: containerRun{
+				image: caddyAt,
+				argv:  []string{"/bin/sh", "-c", "run", "caddy"},
+			},
+		},
+		{
+			name: "the attribute set twice in the container",
+			tf: comment + imageLine + `
+resource "scaleway_container" "site" {
+  command = ["/bin/sh", "-c"]
+  args    = ["run", "caddy"]
+  args    = ["evil"]
+}
+`,
+			wantErr: "twice",
+		},
+		{
 			name: "a digest truncated below its 64 hex characters",
 			tf:   comment + "image = \"caddy@sha256:" + digestTail[:63] + "\"\n",
 			// The reader refuses the digest before it looks for a command.
@@ -511,6 +592,43 @@ resource "scaleway_container" "site" {
 				image: caddyAt,
 				argv:  []string{"/bin/sh", "-c", "${literal}", "%{literal}"},
 			},
+		},
+		{
+			name: "an element that escapes what HCL escapes",
+			tf: comment + imageLine + `command = ["/bin/sh", "-c"]
+args    = ["line\n", "carriage\r", "tab\t", "quote\"", "backslash\\", "unicode\u0041", "unicode long\U00000041"]
+`,
+			want: containerRun{
+				image: caddyAt,
+				argv: []string{
+					"/bin/sh", "-c",
+					"line\n", "carriage\r", "tab\t", "quote\"", "backslash\\", "unicodeA", "unicode longA",
+				},
+			},
+		},
+		// HCL's string escapes are \n \r \t \" \\ \uNNNN and \UNNNNNNNN, and no others: the Go escapes
+		// \x41, \a and the octal \101 are no HCL, so the platform would refuse the configuration, and a reader
+		// that decoded them would run a command line the configuration does not hold.
+		{
+			name: "an element with an escape HCL does not have, \\x41",
+			tf: comment + imageLine + `command = ["/bin/sh", "-c"]
+args    = ["a\x41"]
+`,
+			wantErr: "\\x41",
+		},
+		{
+			name: "an element with an escape HCL does not have, \\a",
+			tf: comment + imageLine + `command = ["/bin/sh", "-c"]
+args    = ["a\a"]
+`,
+			wantErr: "\\a",
+		},
+		{
+			name: "an element with an escape HCL does not have, the octal \\101",
+			tf: comment + imageLine + `command = ["/bin/sh", "-c"]
+args    = ["a\101"]
+`,
+			wantErr: "\\101",
 		},
 		{
 			name:    "a file() that is not the Caddyfile",
