@@ -158,8 +158,9 @@ inventory yourself, with an editor or `jq`:
   night. Only compute (`compute.vm`, `compute.baremetal`), Kubernetes (`kubernetes.managed`),
   database (`database.postgresql`, `database.mysql`, `database.mongodb`) and cache (`cache.redis`)
   resources take it; on any other category the inventory is refused.
-- any size the calls do not give, such as an RDS instance's vCPU and memory (its instance class), a
-  Cloud SQL instance's unless its tier is `db-custom-*`, the `count` of a high-availability database
+- any size the calls do not give, such as an RDS instance's vCPU and memory (its instance class), an
+  ElastiCache cache's memory per node (its node type), a DocumentDB cluster's vCPU and memory per
+  instance (its instance class), a Cloud SQL instance's unless its tier is `db-custom-*`, the `count` of a high-availability database
   (Multi-AZ, `REGIONAL`, `ZoneRedundant` or `SameZone`; see [Sizes](#sizes)), or an Auto Scaling
   group's instance count.
 
@@ -247,6 +248,16 @@ only the calls this page makes:
         "lambda:ListFunctions",
         "sqs:ListQueues",
         "sqs:GetQueueAttributes",
+        "sns:ListTopics",
+        "sns:GetTopicAttributes",
+        "elasticache:DescribeReplicationGroups",
+        "elasticache:DescribeCacheClusters",
+        "elasticache:DescribeServerlessCaches",
+        "elasticloadbalancing:DescribeLoadBalancers",
+        "elasticloadbalancing:DescribeListeners",
+        "elasticloadbalancing:DescribeTargetGroups",
+        "elasticloadbalancing:DescribeTags",
+        "elasticfilesystem:DescribeFileSystems",
         "config:SelectResourceConfig"
       ],
       "Resource": "*"
@@ -303,8 +314,50 @@ done > "$out/s3-versioning.json"
 aws rds describe-db-instances --output json --query '{DBInstances: DBInstances[].{
   DBInstanceIdentifier: DBInstanceIdentifier, DBInstanceArn: DBInstanceArn,
   DBClusterIdentifier: DBClusterIdentifier, Engine: Engine, AllocatedStorage: AllocatedStorage,
-  BackupRetentionPeriod: BackupRetentionPeriod, MultiAZ: MultiAZ, StorageEncrypted: StorageEncrypted,
+  AvailabilityZone: AvailabilityZone, BackupRetentionPeriod: BackupRetentionPeriod, MultiAZ: MultiAZ,
+  StorageEncrypted: StorageEncrypted,
   ReadReplicaDBInstanceIdentifiers: ReadReplicaDBInstanceIdentifiers}}' > "$out/rds-instances.json"
+
+aws elasticache describe-replication-groups --output json --query '{ReplicationGroups: ReplicationGroups[].{
+  ReplicationGroupId: ReplicationGroupId, ARN: ARN, Engine: Engine, AutomaticFailover: AutomaticFailover,
+  MultiAZ: MultiAZ, ClusterEnabled: ClusterEnabled, SnapshotRetentionLimit: SnapshotRetentionLimit,
+  AtRestEncryptionEnabled: AtRestEncryptionEnabled, StorageEncryptionType: StorageEncryptionType,
+  MemberClusters: MemberClusters, NodeGroups: NodeGroups[].{
+  NodeGroupMembers: NodeGroupMembers[].{CacheClusterId: CacheClusterId}},
+  CacheNodeType: CacheNodeType}}' > "$out/elasticache-replication-groups.json"
+aws elasticache describe-cache-clusters --output json --query '{CacheClusters: CacheClusters[].{
+  CacheClusterId: CacheClusterId, ARN: ARN, ReplicationGroupId: ReplicationGroupId, Engine: Engine,
+  NumCacheNodes: NumCacheNodes, SnapshotRetentionLimit: SnapshotRetentionLimit,
+  AtRestEncryptionEnabled: AtRestEncryptionEnabled,
+  CacheNodeType: CacheNodeType}}' > "$out/elasticache-cache-clusters.json"
+aws elasticache describe-serverless-caches --output json --query '{ServerlessCaches: ServerlessCaches[].{
+  ServerlessCacheName: ServerlessCacheName, ARN: ARN, Engine: Engine,
+  SnapshotRetentionLimit: SnapshotRetentionLimit}}' \
+  > "$out/elasticache-serverless-caches.json"
+
+aws elbv2 describe-load-balancers --output json --query '{LoadBalancers: LoadBalancers[].{
+  LoadBalancerName: LoadBalancerName, LoadBalancerArn: LoadBalancerArn, Type: Type,
+  IpAddressType: IpAddressType, AvailabilityZones: AvailabilityZones[].{ZoneName: ZoneName}}}' \
+  > "$out/elbv2-load-balancers.json"
+jq -r '.LoadBalancers[].LoadBalancerArn' "$out/elbv2-load-balancers.json" | while read -r lb; do
+  aws elbv2 describe-listeners --load-balancer-arn "$lb" --output json --query '{Listeners: Listeners[].{
+    ListenerArn: ListenerArn, LoadBalancerArn: LoadBalancerArn, Protocol: Protocol, Port: Port}}'
+done > "$out/elbv2-listeners.json"
+aws elbv2 describe-target-groups --output json --query '{TargetGroups: TargetGroups[].{
+  TargetGroupArn: TargetGroupArn, IpAddressType: IpAddressType, LoadBalancerArns: LoadBalancerArns}}' \
+  > "$out/elbv2-target-groups.json"
+# The tag keys of the load balancers, to leave out those a Kubernetes cluster created.
+jq -r '.LoadBalancers[].LoadBalancerArn' "$out/elbv2-load-balancers.json" |
+  xargs -r -n 20 aws elbv2 describe-tags --output json --query '{TagDescriptions: TagDescriptions[].{
+    ResourceArn: ResourceArn, Tags: Tags[].{Key: Key}}}' --resource-arns > "$out/elbv2-tags.json"
+aws elb describe-load-balancers --output json --query '{LoadBalancerDescriptions: LoadBalancerDescriptions[].{
+  LoadBalancerName: LoadBalancerName, AvailabilityZones: AvailabilityZones}}' \
+  > "$out/elb-load-balancers.json"
+
+aws efs describe-file-systems --output json --query '{FileSystems: FileSystems[].{
+  FileSystemId: FileSystemId, FileSystemArn: FileSystemArn, Encrypted: Encrypted,
+  AvailabilityZoneName: AvailabilityZoneName, SizeInBytes: {Value: SizeInBytes.Value}}}' \
+  > "$out/efs-file-systems.json"
 
 aws eks list-clusters --output json | jq -r '.clusters[]' | while read -r cluster; do
   aws eks describe-cluster --name "$cluster" --output json \
@@ -327,6 +380,11 @@ aws sqs list-queues --output json | jq -r '.QueueUrls[]?' | while read -r queue;
     --attribute-names QueueArn RedrivePolicy SqsManagedSseEnabled KmsMasterKeyId
 done > "$out/sqs-queues.json"
 
+aws sns list-topics --output json | jq -r '.Topics[]?.TopicArn' | while read -r topic; do
+  aws sns get-topic-attributes --topic-arn "$topic" --output json --query '{Attributes: {
+    TopicArn: Attributes.TopicArn, KmsMasterKeyId: Attributes.KmsMasterKeyId}}'
+done > "$out/sns-topics.json"
+
 # Optional: everything else, from AWS Config (see "Everything else on AWS").
 aws configservice select-resource-config \
   --expression "SELECT resourceId, resourceName, resourceType, awsRegion" \
@@ -338,7 +396,11 @@ AWS CLI version 2 fetches every page and merges them before it applies `--query`
 the whole region. Do not pass `--no-paginate` or `--max-items`.
 
 `describe-instance-types` takes at most 100 instance types per call; `xargs -n 100` splits a longer list
-into several calls, and the program reads each.
+into several calls, and the program reads each. `elbv2 describe-tags` takes at most 20 load balancers per
+call, so `xargs -n 20` splits the same way.
+
+`sns get-topic-attributes` keeps only the topic's ARN and its KMS key: the attributes it leaves out
+include the owner's account ID and the topic's access policy.
 
 S3 is global: `list-buckets` returns every bucket from any region, and the program lists each bucket
 once. A bucket's region comes from the `BucketRegion` field, which recent versions of the AWS CLI
@@ -361,6 +423,28 @@ Review `inventories/aws.inventory.json`, then delete the raw output: `rm -r inve
 | RDS DB instance (not in a DB cluster) | `storageGiB` | `rds describe-db-instances`, `DBInstances[].AllocatedStorage` |
 | RDS DB instance (not in a DB cluster), single-node | `count`: 1 | `rds describe-db-instances`, `DBInstances[].MultiAZ` not true |
 | EKS cluster | `count` | the sum of its managed node groups' `scalingConfig.desiredSize` (`eks describe-nodegroup`) |
+| ElastiCache replication group | `count` | its nodes, primary and replicas of every shard: `elasticache describe-replication-groups`, the number of `MemberClusters` |
+| ElastiCache cluster outside a group | `count` | `elasticache describe-cache-clusters`, `NumCacheNodes` |
+| DocumentDB cluster | `count` | its instances: the `rds describe-db-instances` entries of engine `docdb` with its `DBClusterIdentifier` |
+| EFS file system | `storageGiB` | `efs describe-file-systems`, `SizeInBytes.Value` / 1073741824 |
+
+A cache's and a DocumentDB cluster's memory is not filled in: ElastiCache names a node type
+(`CacheNodeType`, such as `cache.m6g.large`) and DocumentDB an instance class (`DBInstanceClass`, such as
+`db.r6g.large`), not a memory size. The ElastiCache queries project `CacheNodeType` for this alone:
+`aws.jq` does not read it. Add `memoryGiB` per node by hand from the node type, and for
+DocumentDB `vcpus` too from the instance class, as for an RDS instance. A DocumentDB cluster gets no
+`storageGiB`: its storage is the cluster volume, which `AllocatedStorage` does not describe, as for
+Aurora. An ElastiCache Serverless cache gets no size at all: it names no node type, and its data storage
+setting is a limit, not a size. EFS has no provisioned size: `SizeInBytes` is the metered size of the
+data stored (AWS says it is exact only when the file system has not changed for a couple of hours), and
+the targets bill provisioned space, so set `storageGiB` to the size you will provision if it differs.
+
+Some target tiers have a minimum billed size or a fixed node count, which the estimate does not apply
+yet: a share smaller than a target's smallest file share, a 1-node cache on a 2-node tier, or a
+1-instance DocumentDB cluster on a 3-node MongoDB set is priced at its own size and `count`, below what
+the target bills, and a 3-node cache on a tier of exactly 2 nodes is priced at 3, above it. Once a target
+serves the category, its `SOURCES.md` names each minimum and fixed node count (PRD #552, milestones 5 to
+7); check the tier the report names before you rely on such an estimate.
 
 Not filled in: an RDS instance's vCPU and memory (from its `DBInstanceClass`, such as `db.m5.large`), the
 storage of an instance in a DB cluster (Aurora, or an RDS Multi-AZ DB cluster), whose storage belongs to
@@ -385,12 +469,37 @@ The `rawType` is the resource's AWS CloudFormation type.
 | `AWS::S3::Bucket` | `storage.object` | `s3api list-buckets` |
 | `AWS::RDS::DBInstance`, engine `postgres` or `aurora-postgresql` | `database.postgresql` | `rds describe-db-instances` |
 | `AWS::RDS::DBInstance`, engine `mysql` or `aurora-mysql` | `database.mysql` | `rds describe-db-instances` |
-| `AWS::RDS::DBInstance`, any other engine (MariaDB, Oracle, SQL Server) | `unclassified` | `rds describe-db-instances` |
-| `AWS::RDS::DBCluster` (Aurora) | none: its instances stand for it | `configservice select-resource-config` |
+| `AWS::RDS::DBInstance`, any other engine but `docdb` (MariaDB, Oracle, SQL Server, Neptune) | `unclassified` | `rds describe-db-instances` |
+| `AWS::DocDB::DBCluster`: one per DocumentDB cluster, from the instances of engine `docdb`, grouped by `DBClusterIdentifier` | `database.mongodb` | `rds describe-db-instances` |
+| `AWS::RDS::DBCluster` (Aurora or DocumentDB) | none: its instances stand for it | `configservice select-resource-config` |
+| `AWS::ElastiCache::ReplicationGroup`, engine `redis` or `valkey` | `cache.redis` | `elasticache describe-replication-groups` |
+| `AWS::ElastiCache::CacheCluster` not in a replication group, engine `redis` or `valkey` | `cache.redis` | `elasticache describe-cache-clusters` |
+| `AWS::ElastiCache::ServerlessCache`, engine `redis` or `valkey` | `cache.redis` | `elasticache describe-serverless-caches` |
+| `AWS::ElastiCache::*` of engine `memcached` | `unclassified` | the same calls |
+| `AWS::ElasticLoadBalancingV2::LoadBalancer`, type `application` or `network` | `network.loadbalancer` | `elbv2 describe-load-balancers` |
+| `AWS::ElasticLoadBalancingV2::LoadBalancer`, type `gateway` | `unclassified` | `elbv2 describe-load-balancers` |
+| `AWS::ElasticLoadBalancing::LoadBalancer` (Classic) | `network.loadbalancer` | `elb describe-load-balancers` |
+| `AWS::EFS::FileSystem` | `storage.file` | `efs describe-file-systems` |
 | `AWS::EKS::Cluster` | `kubernetes.managed` | `eks describe-cluster` |
 | `AWS::Lambda::Function` | `serverless.function` | `lambda list-functions` |
 | `AWS::SQS::Queue` | `messaging.queue` | `sqs get-queue-attributes` |
-| any other type AWS Config records | `unclassified` | `configservice select-resource-config` |
+| `AWS::SNS::Topic` | `messaging.topic` | `sns get-topic-attributes` |
+| `AWS::AppRunner::Service` | `serverless.container` | `configservice select-resource-config` |
+| `AWS::ECR::Repository` | `registry.container` | `configservice select-resource-config` |
+| `AWS::ElasticLoadBalancingV2::Listener`, `::ListenerRule`, `::TargetGroup`, `AWS::EFS::AccessPoint`, `AWS::ECR::RegistryPolicy`, `::ReplicationConfiguration`, `::PullThroughCacheRule`, `::RepositoryCreationTemplate` | none: parts or settings of a load balancer, file system or registry, which stands for them | `configservice select-resource-config` |
+| any other type AWS Config records (such as `AWS::DynamoDB::Table` or `AWS::ECR::PublicRepository`) | `unclassified` | `configservice select-resource-config` |
+
+App Runner services and ECR repositories come from AWS Config alone: the type is enough, since
+`serverless.container` carries no capability and every ECR repository is encrypted at rest. Without
+`config.json` they are not in the inventory.
+
+MemoryDB is not collected and stays out of the inventory, or `unclassified` if AWS Config records it: it
+is a durable primary database with a Multi-AZ transaction log, not a cache, and no capability expresses
+that durability. Likewise a node-based Valkey 9.0 or later cache with durability turned on
+(`Durability` in `describe-replication-groups`) keeps a Multi-AZ transaction log and may serve as a
+primary database: the program still classifies it as `cache.redis`, and a target cache that snapshots
+from time to time would lose that durability, so check such a cache by hand. Memcached is not the Redis
+protocol and stays `unclassified`.
 
 Left out:
 
@@ -401,6 +510,17 @@ Left out:
   group (`describe-nodegroup` names it), instances and Auto Scaling groups tagged `eks:cluster-name`
   or `kubernetes.io/cluster/<name>`, and a node's volumes that are deleted with it
   (`DeleteOnTermination`). A volume that outlives its node, such as a persistent volume, stays;
+- a load balancer a Kubernetes cluster created, tagged `elbv2.k8s.aws/cluster` (the AWS Load Balancer
+  Controller's tag, read with `elbv2 describe-tags`): it goes with its cluster, as the nodes do. The
+  in-tree Kubernetes cloud provider's `kubernetes.io/cluster/<name>` tag is not used on load balancers,
+  because AWS documents it on subnets only: a load balancer that provider created is listed, and you
+  can delete it from the inventory by hand;
+- the member clusters of an ElastiCache replication group (those with a `ReplicationGroupId`): the
+  group stands for them, and counts them as its nodes;
+- the instances of a DocumentDB cluster: the cluster is one `database.mongodb` resource, since every
+  target sells MongoDB as one replica-set service, and one resource per instance would count the
+  cluster several times. A cluster with no instances has no entry in `describe-db-instances` and is not
+  listed;
 - an Aurora cluster (`AWS::RDS::DBCluster`, which AWS Config lists): Aurora is assessed per instance,
   and each instance of the cluster is a `database.postgresql` or `database.mysql` resource. Its
   capabilities come from the instance's settings, and Aurora keeps replicas and zone redundancy at the
@@ -424,25 +544,52 @@ another region gets none of their capabilities.
 | `storage.block` | `snapshots` | the volume has a snapshot you own |
 | `storage.object` | `encryption-at-rest` | always: S3 encrypts every bucket at rest |
 | `storage.object` | `object-versioning` | versioning status is `Enabled` |
-| `database.*` | `point-in-time-restore` | `BackupRetentionPeriod` is above 0 |
-| `database.*` | `read-replicas` | it has read replicas |
-| `database.*` | `zone-high-availability` | `MultiAZ` is true |
-| `database.*` | `encryption-at-rest` | `StorageEncrypted` is true |
+| `database.postgresql`, `database.mysql` | `point-in-time-restore` | `BackupRetentionPeriod` is above 0 |
+| `database.postgresql`, `database.mysql` | `read-replicas` | it has read replicas |
+| `database.postgresql`, `database.mysql` | `zone-high-availability` | `MultiAZ` is true |
+| `database.postgresql`, `database.mysql` | `encryption-at-rest` | `StorageEncrypted` is true |
+| `database.mongodb` (DocumentDB) | `point-in-time-restore` | every instance's `BackupRetentionPeriod` is above 0 |
+| `database.mongodb` (DocumentDB) | `encryption-at-rest` | every instance's `StorageEncrypted` is true |
+| `database.mongodb` (DocumentDB) | `read-replicas`, `node-high-availability` | it has two or more instances |
+| `database.mongodb` (DocumentDB) | `zone-high-availability` | its instances are in two or more `AvailabilityZone`s |
+| `cache.redis` (replication group) | `node-high-availability` | `AutomaticFailover` is `enabled` and every one of its `NodeGroups` (shards) has two or more `NodeGroupMembers` (a replica to fail over to in every shard: a cluster-mode group must turn failover on even with none, and a shard with a primary only loses its data with its node) |
+| `cache.redis` (replication group) | `zone-high-availability` | `MultiAZ` is `enabled` |
+| `cache.redis` (replication group) | `sharding` | `ClusterEnabled` is true (cluster mode) |
+| `cache.redis` (replication group or cluster) | `snapshots` | `SnapshotRetentionLimit` is above 0 |
+| `cache.redis` (replication group) | `encryption-at-rest` | `StorageEncryptionType` is `sse-elasticache` or `sse-kms` (the effective state; `AtRestEncryptionEnabled` can be false while it is on) |
+| `cache.redis` (cluster outside a group) | `encryption-at-rest` | `AtRestEncryptionEnabled` is true |
+| `cache.redis` (serverless) | `node-high-availability`, `zone-high-availability`, `sharding`, `encryption-at-rest` | always: ElastiCache Serverless stores data across three zones, always encrypts it and runs cluster mode only |
+| `cache.redis` (serverless) | `snapshots` | `SnapshotRetentionLimit` is above 0 |
+| `network.loadbalancer` (ALB, NLB or Classic) | `zone-high-availability` | it is in two or more availability zones |
+| `network.loadbalancer` (NLB) | `udp` | a listener of protocol `UDP`, `TCP_UDP`, `QUIC` or `TCP_QUIC` (QUIC runs over UDP) |
+| `network.loadbalancer` (ALB or NLB) | `ipv6` | `IpAddressType` is `dualstack` or `dualstack-without-public-ipv4` **and** one of its target groups has `IpAddressType` `ipv6`: clients and backends both over IPv6. An IPv6 frontend over IPv4 target groups gets none |
+| `storage.file` | `encryption-at-rest` | `Encrypted` is true |
+| `storage.file` | `zone-high-availability` | a Regional file system (no `AvailabilityZoneName`), not One Zone |
 | `kubernetes.managed` | `autoscaling` | a managed node group's `maxSize` is above its `minSize` |
 | `kubernetes.managed` | `node-high-availability` | its managed node groups want two or more nodes in all |
 | `messaging.queue` | `dead-letter-queue` | it has a `RedrivePolicy` |
 | `messaging.queue` | `encryption-at-rest` | SQS-managed or KMS server-side encryption is on |
+| `messaging.topic` | `encryption-at-rest` | it has a `KmsMasterKeyId` |
+| `messaging.topic` | `dead-letter-queue` | never: SNS sets a dead-letter queue per subscription, which no topic attribute says; add it by hand if every subscription has one |
+| `registry.container` | `encryption-at-rest` | always: ECR encrypts every repository at rest |
+
+A Classic Load Balancer never gets `udp` or `ipv6`: its listeners are HTTP, HTTPS, TCP or SSL, and it
+has no IP address type. DocumentDB keeps backups and encryption per cluster, and AWS does not say that
+an instance reports its cluster's values, so a cluster gets either capability only when every instance
+reports it.
 
 ### Everything else on AWS
 
-The service calls above cover what the taxonomy classifies. Everything else (CloudFront
-distributions, Route 53 zones, load balancers, and also networking and IAM resources) should show up
+The service calls above, with AWS Config's App Runner and ECR types, cover what the taxonomy
+classifies. Everything else (CloudFront distributions, Route 53 zones, DynamoDB tables, and also
+networking and IAM resources) should show up
 as `unclassified`, so the report shows what has no place to go. Two AWS services list everything:
 
 - **AWS Config** (`configservice select-resource-config`, an SQL-like read-only query). Its
   `resourceType` is the CloudFormation type, the same convention as the table above, so the program
-  reads it: every type the table does not cover becomes `unclassified`, and the types it does cover
-  are dropped, as the service calls already list them. Config only knows what its recorder records,
+  reads it: App Runner services and ECR repositories are classified from it, the types the service
+  calls cover and the parts of a resource listed in the table are dropped, as the calls already list
+  them, and every other type becomes `unclassified`. Config only knows what its recorder records,
   per region, and the recorder must be switched on by your administrator. With a Config aggregator,
   `select-aggregate-resource-config` queries every account and region at once; its output has the
   same shape.
