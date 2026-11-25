@@ -1689,10 +1689,20 @@ resource "scaleway_container_cron" "nightly" {
 // pinned literal - a missing pin leaves the provider's default, and an expression such as var.max_scale is a
 // value the maintainer's own tfvars could set - memory_limit and http_option, the deprecated spellings beside
 // memory_limit_bytes and https_connections_only, must not be set at all, and min_scale must be 0 or 1. The tags
-// are [container-max-scale], [container-cpu], [container-memory], [container-deprecated-attribute] and
-// [container-min-scale], and an attribute gets the one tag that names it: a deprecated memory_limit is no
-// [container-memory] beside it, and a deprecated http_option no [container-cpu] or [container-memory], since a
-// breakage is reported once, under the rule that refuses it.
+// are [container-max-scale], [container-cpu], [container-memory], [container-deprecated-attribute],
+// [container-min-scale] and [container-min-scale-postcondition], and an attribute gets the one tag that names
+// it: a deprecated memory_limit is no [container-memory] beside it, and a deprecated http_option no
+// [container-cpu] or [container-memory], since a breakage is reported once, under the rule that refuses it.
+//
+// min_scale is the one pin the configuration may write as a local (ADR 0045, The container): write the value
+// once, as a local, and read it in both places, so the pin and the postcondition that checks it after an
+// apply cannot drift from each other. [container-min-scale] accepts min_scale = local.<name> only when that
+// local is the literal 0 or 1 (a comment saying "0" is no literal), and [container-min-scale-postcondition]
+// refuses a min_scale postcondition whose condition compares self.min_scale against anything but the same
+// expression the attribute sets - the literal the attribute writes, or the local it names. The postcondition
+// is judged only for a pin the rules otherwise accept, and only when a condition compares self.min_scale:
+// one refusal per breakage, and a container with no such postcondition (the second container of a case below)
+// is no postcondition rule's business.
 //
 // Every case edits site/container.tf, the file the pins live in, by the attribute's name, so the cases do not
 // depend on how the configuration aligns its = signs; a copy whose container.tf sets the attribute no line of,
@@ -1800,11 +1810,12 @@ var containerCostPinCases = []infraRuleCase{
 	},
 	{
 		name: "container-min-scale-one",
-		why:  "min_scale = 1 on the site's container, the one warm instance ADR 0045 allows",
+		why:  "min_scale = 1 on the site's container, the one warm instance ADR 0045 allows, and its postcondition comparing the same literal",
 		want: "",
 		breakage: func(t *testing.T, site string) {
 			t.Helper()
 			setContainerAttribute(t, site, "min_scale", "  min_scale = 1")
+			setContainerMinScalePostcondition(t, site, "1")
 		},
 	},
 	{
@@ -1825,6 +1836,58 @@ var containerCostPinCases = []infraRuleCase{
 		breakage: func(t *testing.T, site string) {
 			t.Helper()
 			setContainerAttribute(t, site, "min_scale", "  min_scale = var.min_scale")
+		},
+	},
+	// min_scale written once, as a local, and the postcondition checking the same local (ADR 0045, The
+	// container): the pair is the pin, so the rule accepts the local's literal value, the same one it accepts
+	// written on the attribute itself, and refuses a local whose literal is another number.
+	{
+		name: "container-min-scale-from-a-local-zero",
+		why:  "min_scale = local.container_min_scale with the local set to the literal 0, and the postcondition comparing the same local",
+		want: "",
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			setContainerMinScaleLocal(t, site, "0")
+			setContainerAttribute(t, site, "min_scale", "  min_scale = local.container_min_scale")
+			setContainerMinScalePostcondition(t, site, "local.container_min_scale")
+		},
+	},
+	{
+		name: "container-min-scale-from-a-local-one",
+		why:  "min_scale = local.container_min_scale with the local set to the literal 1, the one warm instance ADR 0045 allows",
+		want: "",
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			setContainerMinScaleLocal(t, site, "1")
+			setContainerAttribute(t, site, "min_scale", "  min_scale = local.container_min_scale")
+			setContainerMinScalePostcondition(t, site, "local.container_min_scale")
+		},
+	},
+	{
+		name:   "container-min-scale-from-a-local-out-of-range",
+		why:    "min_scale = local.container_min_scale with the local set to the literal 2, two instances kept warm behind a local no rule reads as a value",
+		want:   "container-min-scale",
+		wantIn: map[string]string{"container-min-scale": "{site}/container.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			setContainerMinScaleLocal(t, site, "2")
+			setContainerAttribute(t, site, "min_scale", "  min_scale = local.container_min_scale")
+			setContainerMinScalePostcondition(t, site, "local.container_min_scale")
+		},
+	},
+	// The check that holds a platform-set min_scale to the pin would pass while the pin moved: the local says
+	// 0 today and the postcondition hard-codes the 0, so raising the local to 1 leaves a check that still
+	// compares 0. The postcondition must read the same expression the attribute sets.
+	{
+		name:   "container-min-scale-postcondition-hard-codes-the-value",
+		why:    "min_scale = local.container_min_scale with the local set to 0, and the postcondition comparing the literal 0 instead of the local",
+		want:   "container-min-scale-postcondition",
+		wantIn: map[string]string{"container-min-scale-postcondition": "{site}/container.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			setContainerMinScaleLocal(t, site, "0")
+			setContainerAttribute(t, site, "min_scale", "  min_scale = local.container_min_scale")
+			setContainerMinScalePostcondition(t, site, "0")
 		},
 	},
 	// A pin set twice is no one pinned value: the second setting could raise what the first fixes, and the
@@ -2256,6 +2319,110 @@ func insertContainerLines(t *testing.T, site string, lines ...string) {
 	out = append(out, fileLines[found+1:]...)
 
 	writeInfraText(t, path, strings.Join(out, "\n"))
+}
+
+// containerMinScaleLocalName is the local a case declares for the site's min_scale pin (ADR 0045, The
+// container): the value the configuration may write once and read in both the attribute and its
+// postcondition. A case may use the name the configuration already declares, or declare it itself before the
+// configuration moves its pin to a local.
+const containerMinScaleLocalName = "container_min_scale"
+
+// setContainerMinScaleLocal sets the local the site's min_scale pin reads, in a copy's site/container.tf: value
+// becomes the literal a line sets containerMinScaleLocalName to, or - when the file declares no such local yet
+// - the line is written as the first one of the file's locals block, where the configuration's own locals live.
+// The case survives the configuration moving its pin to a local, before and after. A file with no locals block
+// to declare it in fails the case loudly instead of passing without breaking anything.
+func setContainerMinScaleLocal(t *testing.T, site, value string) {
+	t.Helper()
+
+	path := filepath.Join(site, containerFileName)
+
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v: the min_scale pin and the local it may read live there (ADR 0045)", path, err)
+	}
+
+	lines := strings.Split(string(body), "\n")
+
+	found := -1
+
+	for i, text := range lines {
+		fields := strings.Fields(text)
+		if len(fields) < 2 || fields[0] != containerMinScaleLocalName || !strings.HasPrefix(fields[1], "=") {
+			continue
+		}
+
+		if found >= 0 {
+			t.Fatalf("%s:%d and %s:%d both set %s, want at most one line: the case does not name one breakage", path, found+1, path, i+1, containerMinScaleLocalName)
+		}
+
+		found = i
+	}
+
+	if found >= 0 {
+		lines[found] = "  " + containerMinScaleLocalName + " = " + value
+		writeInfraText(t, path, strings.Join(lines, "\n"))
+
+		return
+	}
+
+	for i, text := range lines {
+		if strings.TrimSpace(text) != "locals {" {
+			continue
+		}
+
+		out := append([]string{}, lines[:i+1]...)
+		out = append(out, "  "+containerMinScaleLocalName+" = "+value)
+		out = append(out, lines[i+1:]...)
+
+		writeInfraText(t, path, strings.Join(out, "\n"))
+
+		return
+	}
+
+	t.Fatalf("%s holds no locals block to declare %s in, want one: the case does not name one breakage", path, containerMinScaleLocalName)
+}
+
+// setContainerMinScalePostcondition sets the condition of the site's min_scale postcondition, in a copy's
+// site/container.tf, to `self.min_scale == expr`: what the check after an apply compares the platform's value
+// with. The line is found by the self.min_scale it compares, so a case survives the expression the
+// configuration writes there; a file with no such line, or two, fails the case loudly instead of passing
+// without breaking anything.
+func setContainerMinScalePostcondition(t *testing.T, site, expr string) {
+	t.Helper()
+
+	path := filepath.Join(site, containerFileName)
+
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v: the container's min_scale postcondition lives there (ADR 0045)", path, err)
+	}
+
+	lines := strings.Split(string(body), "\n")
+
+	found := -1
+
+	for i, text := range lines {
+		fields := strings.Fields(text)
+		if len(fields) < 2 || fields[0] != "condition" || !strings.HasPrefix(fields[1], "=") || !strings.Contains(text, "self.min_scale") {
+			continue
+		}
+
+		if found >= 0 {
+			t.Fatalf("%s:%d and %s:%d both compare self.min_scale, want exactly one line: the case does not name one breakage", path, found+1, path, i+1)
+		}
+
+		found = i
+	}
+
+	if found < 0 {
+		t.Fatalf("%s holds no condition comparing self.min_scale, want one: the case does not name one breakage", path)
+	}
+
+	indent := lines[found][:len(lines[found])-len(strings.TrimLeft(lines[found], " \t"))]
+	lines[found] = indent + "condition     = self.min_scale == " + expr
+
+	writeInfraText(t, path, strings.Join(lines, "\n"))
 }
 
 // infraTestNestedBlockCases pin the allow list of the blocks nested directly in a test file's run and
