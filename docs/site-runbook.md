@@ -398,7 +398,8 @@ for u in http://www.shift2eu.com/ http://shift2eu.com/ https://shift2eu.com/ "ht
 # PASS: every line "308 https://www.shift2eu.com/" (the last "308 https://www.shift2eu.com/a?b=1"); never a 200, never a 301 or 302
 curl -sS -D - -o /dev/null https://www.shift2eu.com/ | grep -i -E '^(HTTP|strict-transport-security|content-security-policy|x-content-type-options|referrer-policy|permissions-policy|server|x-envoy)'
 # PASS: "HTTP/2 200" (or 1.1), exactly one of each of the five headers with infra/site/Caddyfile's values, "server: envoy" and x-envoy-upstream-service-time from the platform, nothing else of theirs
-curl -sS -D - -o /dev/null https://shift2eu.com/ | grep -i '^strict-transport-security' | tr -d '\r'   # PASS: exactly one line "strict-transport-security: max-age=31536000" (no includeSubDomains, no preload; ADR 0045, issue #601)
+curl -sS -D - -o /dev/null https://shift2eu.com/ | grep -i '^strict-transport-security' | tr -d '\r'   # PASS: exactly one line "strict-transport-security: max-age=31536000", the name in any case (HTTP/1.1 prints "Strict-Transport-Security:"; grep -i matches both), no includeSubDomains, no preload (ADR 0045, issue #601)
+# FAIL no line: infra/site's apply with the apex's HSTS (issue #601) has not run; apply it (R4) before the release that carries the privacy page saying so (R10)
 curl -sS -D - -o /dev/null http://shift2eu.com/ | grep -ic '^strict-transport-security'   # PASS: 0 (the plain-HTTP 308 carries no HSTS)
 ```
 
@@ -518,6 +519,13 @@ gh run view <that release's release.yml run ID> -R <owner>/shift2eu --json jobs 
 Milestone 4, last; the release's live check reads the records at its tag. The deploy runs with
 `-list-bucket` off and the live check with `-plain-http-www` at its default, `redirect`, until milestone 4
 sets them (R7's ListBucket answer, R8's plain-HTTP answer).
+
+*The apex's HSTS first (issue #601):* the privacy page says the apex's HTTPS redirect carries HSTS, but
+the release deploys only the bundle; the Caddyfile that sends the header reaches the live site only
+through infra/site's apply. So, once that change is merged to `main`, apply `infra/site` (R4) and pass
+R8's block 3 apex line (`strict-transport-security: max-age=31536000` on `https://shift2eu.com/`)
+before merging the release PR of the first release that carries that privacy page, and again before
+any later release deploys while the deploy is on.
 
 ```bash
 # The HSTS and preload records PR merged, its squash commit with "Release-As: <version>", and release-please's release PR for it merged

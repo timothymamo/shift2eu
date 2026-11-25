@@ -504,9 +504,9 @@ ADR with them and commits both records in a first PR whose squash commit carries
 - **Preload: not pursued.** Pursuing preload is effectively irreversible: removal from the browsers'
   preload lists takes months to reach shipping browsers, and `includeSubDomains` under preload binds
   every present and future subdomain of `shift2eu.com` to HTTPS. HSTS on `www` alone meets the site's
-  go/no-go without that commitment. As read live on 2026-11-25, the apex's 308 sends no HSTS, as ADR 0045
-  configures while preload is not pursued, and `http://shift2eu.com` needs no first hop to
-  `https://shift2eu.com`.
+  go/no-go without that commitment. As read live on 2026-11-25, the apex's 308 sent no HSTS, as ADR 0045
+  then configured (until issue #601: the next item), and `http://shift2eu.com` needs no first hop to
+  `https://shift2eu.com` while preload is not pursued.
 - **The apex: `max-age=31536000` on its HTTPS 308** (decided 2026-11-25, issue #601). The alternative
   ADR 0045 named is taken: the apex's HTTPS 308 sends exactly one `Strict-Transport-Security:
   max-age=31536000`, without `includeSubDomains` and without `preload`, so a returning visitor who types
@@ -667,9 +667,9 @@ unchanged; only *Hosting*, *The origins* and *Recovery* change, as follows.
   `X-Forwarded-Proto` and `Host`; `https://www.shift2eu.com` is reverse-proxied to the pipeline endpoint
   and carries `Strict-Transport-Security` (`max-age=31536000; includeSubDomains`, `preload` only once
   pursued), the `<meta>` policy as a `Content-Security-Policy` header with `frame-ancestors 'none'`,
-  `X-Content-Type-Options`, `Referrer-Policy` and `Permissions-Policy`. The apex sends no HSTS while
-  preload is not pursued (since 2026-11-25, issue #601: its HTTPS 308 sends `max-age=31536000`, its
-  plain-HTTP 308 none; ADR 0045, *The headers*). The pipeline stays the bucket's only reader, its cache and its backend
+  `X-Content-Type-Options`, `Referrer-Policy` and `Permissions-Policy`. The apex sent no HSTS until
+  2026-11-25 (issue #601); since then its HTTPS 308 sends `max-age=31536000`, without
+  `includeSubDomains` or `preload`, and its plain-HTTP 308 none (ADR 0045, *The headers*). The pipeline stays the bucket's only reader, its cache and its backend
   unchanged; its own `www.shift2eu.com` custom domain goes; the infra unit removes it (and its TLS
   stage) in `infra/site`. The apex redirect's provider is therefore
   Scaleway, already named on the privacy page, with Let's Encrypt as its certificate authority. Context's

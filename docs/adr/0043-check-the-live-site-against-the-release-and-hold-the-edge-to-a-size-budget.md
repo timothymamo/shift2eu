@@ -260,5 +260,5 @@ pursued, `ci/sitecheck` still only records the apex's header, and its code is un
   under `make test` (exactly one `max-age=31536000` on the apex's HTTPS answers, none on a plain-HTTP
   one) and the behaviour test against the pinned Caddy image under `make test-sitefront`. After the
   apply, `docs/site-runbook.md` R8 reads it live.
-- **When preload is pursued,** the apex's header is judged as the Decision says (the same minimum with
-  `preload`), and the apex's header and the preload record change in one change.
+- **When preload is pursued,** the apex's header is judged as the Decision says (`max-age` at least
+  31536000, `includeSubDomains`, `preload`), and the apex's header and the preload record change in one change.

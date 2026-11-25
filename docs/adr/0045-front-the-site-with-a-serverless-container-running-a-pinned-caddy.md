@@ -209,7 +209,9 @@ capitals), none of which is proxied:
 The live check still only records the apex's header while preload is not pursued (ADR 0043, its
 amendment of 2026-11-25): the value is pinned by `test/sitefront` (the static test under `make test`,
 the behaviour test under `make test-sitefront`) and read live by `docs/site-runbook.md` R8 after the
-maintainer applies `infra/site`. Pursuing preload changes the apex's header (to the same minimum with
+maintainer applies `infra/site`. The release ships the privacy page that states this header but not the
+Caddyfile, so the maintainer applies `infra/site` and passes R8's apex line before merging the first
+release that carries that page (`docs/site-runbook.md` R10). Pursuing preload changes the apex's header (to the same minimum with
 `includeSubDomains` and `preload`) together with the preload record, in one change (above). This
 replaces the earlier wording that left the apex's header to the maintainer at milestone 4; it changes
 neither the PRD's HSTS decision nor the record. No other header is decided
