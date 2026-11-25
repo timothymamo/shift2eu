@@ -445,8 +445,8 @@ func byPlan(r inventory.Resource, offerings []catalog.Offering, region string) E
 // boot volume for compute.vm, compute.baremetal and kubernetes.managed, the
 // data storage for database.postgresql, database.mysql, database.mongodb,
 // search.opensearch and messaging.kafka (ADR 0047), and none for any other
-// category. A count of 0 is estimated at 0 and leaves
-// nothing out, so it gets none.
+// category. A count of 0 is estimated at 0 and leaves nothing out, so it gets
+// none.
 func storageNotIncluded(c taxonomy.Category, count, stored *big.Rat, chosen offeredPlan, region string) StorageNotIncluded {
 	if count.Sign() == 0 || stored != nil || chosen.plan.IncludedStorageGiB != 0 {
 		return ""
