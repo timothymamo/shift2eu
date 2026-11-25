@@ -203,7 +203,9 @@ func (f *worktreeFixture) branchAt(t *testing.T, branch string) string {
 	return f.mustGitIn(t, f.checkout, "rev-parse", "refs/heads/"+branch)
 }
 
-// upstreamOf returns the upstream of the checkout's local branch as git names it, or "" without one.
+// upstreamOf returns the upstream of the checkout's local branch as git names it, or "" without one. Only the
+// feat/ cases read it: the Renovate cases use trackingRefOf, since beside a tag named origin/<branch> the short
+// name widens to remotes/origin/<branch> and no longer says which ref is tracked.
 func (f *worktreeFixture) upstreamOf(t *testing.T, branch string) string {
 	t.Helper()
 
@@ -738,6 +740,10 @@ func TestWorktreeRefusesALocalRenovateBranchWithoutTheRemoteOne(t *testing.T) {
 // tracking it, the script refuses the name as differing from origin, prints nothing on stdout, makes no worktree
 // and leaves the local branch at its own commit, so a unit is never handed a stale base it would have to force
 // (issue #573).
+//
+// Tracking a ref whose name only looks like origin's is no tracking of origin (issue #602): a local branch
+// origin/renovate/<name> is another ref than the remote-tracking refs/remotes/origin/renovate/<name>, so the
+// comparison of the full upstream ref is what refuses it, where a short name would read as origin's.
 func TestWorktreeRefusesALocalRenovateBranchThatDiffersFromOrigin(t *testing.T) {
 	t.Parallel()
 
@@ -792,6 +798,30 @@ func TestWorktreeRefusesALocalRenovateBranchThatDiffersFromOrigin(t *testing.T) 
 				f.mustGitIn(t, f.checkout, "fetch", "--quiet", "origin")
 				f.mustGitIn(t, f.checkout, "branch", "--no-track", worktreeRenovateBranch, "origin/"+worktreeRenovateBranch)
 				f.mustGitIn(t, f.checkout, "branch", "--set-upstream-to=origin/main", worktreeRenovateBranch)
+
+				return sha
+			},
+		},
+		{
+			name: "the local branch is at origin's commit and tracks a local branch named origin's",
+			setup: func(t *testing.T, f *worktreeFixture) string {
+				t.Helper()
+
+				sha := f.publishBranch(t, worktreeRenovateBranch)
+				f.mustGitIn(t, f.checkout, "fetch", "--quiet", "origin")
+				f.mustGitIn(t, f.checkout, "branch", "--no-track", worktreeRenovateBranch, "origin/"+worktreeRenovateBranch)
+
+				// A local branch of origin's name at the same commit, tracked through git config: its short name
+				// reads as origin/renovate/<name>, but it is refs/heads/origin/renovate/<name>, no remote-tracking
+				// ref, and no base a unit may work on.
+				f.mustGitIn(t, f.checkout, "branch", "--no-track", "origin/"+worktreeRenovateBranch, sha)
+				f.mustGitIn(t, f.checkout, "config", "branch."+worktreeRenovateBranch+".remote", ".")
+				f.mustGitIn(t, f.checkout, "config", "branch."+worktreeRenovateBranch+".merge", "refs/heads/origin/"+worktreeRenovateBranch)
+
+				// The case says nothing unless the branch really tracks that local ref, not origin's.
+				if want := "refs/heads/origin/" + worktreeRenovateBranch; f.trackingRefOf(t, worktreeRenovateBranch) != want {
+					t.Fatalf("the local branch %s tracks %q, want the local ref %s: the case cannot tell the two refs apart (issue #602)", worktreeRenovateBranch, f.trackingRefOf(t, worktreeRenovateBranch), want)
+				}
 
 				return sha
 			},
