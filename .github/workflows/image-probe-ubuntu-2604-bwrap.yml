@@ -1,0 +1,174 @@
+name: Image probe ubuntu-26.04 bwrap
+
+# The second ubuntu-26.04 runner image probe (issue #608; ADR 0040, The runner image: the move to
+# ubuntu-26.04, "The image probe"). Its pull request is closed unmerged: only this job's log matters. It
+# settles whether the audit's AppArmor profile can be fixed for bwrap's
+# "loopback: Failed RTM_NEWADDR: Operation not permitted" (the first probe, issue #575, PR #605), or
+# whether Ubuntu's own bwrap-userns-restrict profile is used instead; and it re-runs the GNU coreutils
+# switch's simulation as root after apt-get update, only to record whether it would plan.
+#
+# Safety terms (issue #575): pull_request only, permissions: {}, no secret, no environment, a timeout on
+# the job; the pinned actions/checkout with persist-credentials: false (the probe loads the profiles from
+# the checkout) and no other action; no expression in any run: script; no artifact, no cache; nothing
+# runs model or audit code. It writes only on the throwaway runner (its ${RUNNER_TEMP}, the AppArmor
+# profiles it loads and unloads, apt's lists), and its log prints only versions, names and exit codes:
+# aa-status only filtered to lines naming bwrap, never the environment. Its commands print and fail on
+# nothing they find: shell: bash runs bash --noprofile --norc -eo pipefail, so every run: script starts
+# with set +e -uo pipefail, every probe reports its exit code or ends in || true, and every step after
+# checkout runs if: !cancelled(). The job's timeout lies above the steps' timeouts together (15 minutes)
+# and the checkout. Every probe command reads </dev/null.
+on:
+  pull_request:
+    branches: [main]
+
+permissions: {}
+
+jobs:
+  image-probe-bwrap:
+    name: Image probe bwrap (ubuntu-26.04)
+    runs-on: ubuntu-26.04
+    timeout-minutes: 25
+    permissions: {}
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Versions
+        if: ${{ !cancelled() }}
+        timeout-minutes: 2
+        shell: bash
+        run: |
+          set +e -uo pipefail
+          version="$(/usr/bin/bwrap --version </dev/null 2>&1)"
+          rc=$?
+          echo "/usr/bin/bwrap --version: ${version%%$'\n'*} (exit ${rc})"
+          dpkg-query -W bubblewrap apparmor </dev/null 2>&1
+          echo "dpkg-query -W bubblewrap apparmor: exit $?"
+          echo "uname -r: $(uname -r 2>&1)"
+          version_id="unknown"
+          while IFS='=' read -r key value; do
+            if [ "${key}" = VERSION_ID ]; then
+              version_id="${value}"
+            fi
+          done </etc/os-release
+          echo "/etc/os-release VERSION_ID: ${version_id}"
+          sysctl kernel.apparmor_restrict_unprivileged_userns kernel.apparmor_restrict_unprivileged_unconfined </dev/null 2>&1 || true
+          version="$(apparmor_parser --version </dev/null 2>&1)"
+          rc=$?
+          echo "apparmor_parser --version: ${version%%$'\n'*} (exit ${rc})"
+
+      # Each state prints aa-status's lines naming bwrap, the bwrap check (the sandbox preflight's own
+      # invocation), and the AppArmor label bwrap's child runs under, read with a user namespace alone
+      # (no network namespace, so no loopback setup): the label says which profile owns /usr/bin/bwrap.
+      # Every load is sudo apparmor_parser -r, as the scheduled audit workflow loads bwrap.apparmor.
+      #
+      # 1. baseline: the image's profiles only;
+      # 2. today's bwrap.apparmor loaded beside Ubuntu's (the first probe's failing state);
+      # 3. candidate A (bwrap.apparmor plus capability net_admin and network netlink raw) replacing it;
+      # 4. candidate A alone: Ubuntu's bwrap-userns-restrict (bwrap, unpriv_bwrap) removed, so two
+      #    profiles no longer attach to /usr/bin/bwrap;
+      # 5. today's bwrap.apparmor alone (replacing A): whether the clash of attachments, not a missing
+      #    rule, is the cause;
+      # 6. ours removed, Ubuntu's bwrap-userns-restrict reloaded from the image's file, as shipped.
+      - name: bwrap under each AppArmor state
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        shell: bash
+        run: |
+          set +e -uo pipefail
+          ours=.github/security-audit/bwrap.apparmor
+          candidate_a=.github/security-audit/probe/bwrap-candidate-loopback.apparmor
+          ubuntu=/etc/apparmor.d/bwrap-userns-restrict
+          check() {
+            echo "== state: $1"
+            echo "-- sudo aa-status, lines naming bwrap"
+            sudo aa-status </dev/null 2>&1 | grep -i bwrap || true
+            /usr/bin/bwrap --unshare-all --die-with-parent --ro-bind / / /bin/true </dev/null 2>&1
+            echo "bwrap check ($1): exit $?"
+            local label rc
+            label="$(/usr/bin/bwrap --unshare-user --die-with-parent --ro-bind / / /bin/cat /proc/self/attr/apparmor/current </dev/null 2>&1)"
+            rc=$?
+            echo "bwrap child label ($1): ${label%%$'\n'*} (exit ${rc})"
+          }
+          load() {
+            sudo apparmor_parser "$1" "$2" </dev/null 2>&1
+            echo "sudo apparmor_parser $1 $2: exit $?"
+          }
+          [ -e "${ubuntu}" ]
+          echo "[ -e ${ubuntu} ]: exit $?"
+          check "1 baseline"
+          load -r "${ours}"
+          check "2 today's profile beside Ubuntu's"
+          load -r "${candidate_a}"
+          check "3 candidate A beside Ubuntu's"
+          load -R "${ubuntu}"
+          check "4 candidate A alone"
+          load -r "${ours}"
+          check "5 today's profile alone"
+          load -R "${ours}"
+          load -r "${ubuntu}"
+          check "6 Ubuntu's bwrap-userns-restrict alone"
+
+      # The switch's simulation as root after apt-get update, once, only to record whether it would plan
+      # (the move's route no longer depends on it: issue #608). Never installs: apt-get -s only. First the
+      # move's local form (the _all.deb, digest-checked, --no-download), then the same plan by package
+      # name, so a failed local form shows whether apt can plan the switch at all. Each prints its exit
+      # code and one line: the first E: line, or the plan's Remv/Purg and Inst package names.
+      - name: GNU coreutils switch, simulated as root
+        if: ${{ !cancelled() }}
+        timeout-minutes: 8
+        shell: bash
+        env:
+          COREUTILS_FROM_GNU_VERSION: 0.0.0~ubuntu25
+          # SHA-256 of pool/main/c/coreutils-from/coreutils-from-gnu_0.0.0~ubuntu25_all.deb in resolute's
+          # main/binary-amd64 Packages index (issue #575, read 2026-11-25).
+          COREUTILS_FROM_GNU_DEB_SHA256: "862be75c7dd5d92815f2b80149bbcf819d11d21b1dba734f62b545bc5acb0eb7"
+        run: |
+          set +e -uo pipefail
+          summary() {
+            local out="$1" line verb pkg removed="" installed="" error=""
+            while IFS= read -r line; do
+              case "${line}" in
+                E:*)
+                  if [ -z "${error}" ]; then
+                    error="${line}"
+                  fi
+                  ;;
+                Remv\ * | Purg\ *)
+                  read -r verb pkg _ <<<"${line}"
+                  removed="${removed} ${verb}:${pkg}"
+                  ;;
+                Inst\ *)
+                  read -r verb pkg _ <<<"${line}"
+                  installed="${installed} ${pkg}"
+                  ;;
+              esac
+            done <<<"${out}"
+            if [ -n "${error}" ]; then
+              echo "result: ${error}"
+            else
+              echo "result: removals [${removed# }], Inst [${installed# }]"
+            fi
+          }
+          sudo apt-get update </dev/null >/dev/null 2>&1
+          echo "sudo apt-get update: exit $?"
+          deb="${RUNNER_TEMP}/coreutils-from-gnu.deb"
+          curl -fsSLo "${deb}" "https://archive.ubuntu.com/ubuntu/pool/main/c/coreutils-from/coreutils-from-gnu_${COREUTILS_FROM_GNU_VERSION}_all.deb" </dev/null
+          echo "curl: exit $?"
+          echo "${COREUTILS_FROM_GNU_DEB_SHA256}  ${deb}" | /usr/bin/gnusha256sum --check --strict -
+          rc=$?
+          echo "gnusha256sum --check --strict: exit ${rc}"
+          if [ "${rc}" -eq 0 ]; then
+            out="$(sudo apt-get -s install -y --no-download --allow-remove-essential "${deb}" coreutils-from-uutils- </dev/null 2>&1)"
+            rc=$?
+            echo "sudo apt-get -s install --no-download <local .deb> coreutils-from-uutils-: exit ${rc}"
+            summary "${out}"
+          else
+            echo "coreutils-from-gnu: the digest MISMATCHED or could not be checked; the local form not simulated"
+          fi
+          out="$(sudo apt-get -s install -y --allow-remove-essential coreutils-from-gnu coreutils-from-uutils- </dev/null 2>&1)"
+          rc=$?
+          echo "sudo apt-get -s install coreutils-from-gnu coreutils-from-uutils-: exit ${rc}"
+          summary "${out}"
