@@ -2500,10 +2500,10 @@ func TestParseGlobalOffering(t *testing.T) {
 			Name:           "Zone",
 			VCPUs:          1,
 			MemoryMilliGiB: 1000,
-			Prices:         []catalog.Price{{Amount: 1200, Currency: catalog.EUR}},
+			Prices:         []catalog.Price{{Amount: 120000, Currency: catalog.EUR}},
 		}},
-		StoragePrices: []catalog.Price{{Amount: 4, Currency: catalog.EUR}},
-		FixedFees:     []catalog.Price{{Amount: 500, Currency: catalog.EUR}},
+		StoragePrices: []catalog.Price{{Amount: 400, Currency: catalog.EUR}},
+		FixedFees:     []catalog.Price{{Amount: 50000, Currency: catalog.EUR}},
 	}
 
 	got := doc.Catalog.Offerings()
@@ -2515,9 +2515,11 @@ func TestParseGlobalOffering(t *testing.T) {
 		t.Errorf("the parsed offering mismatch (-want +got):\n%s", diff)
 	}
 
-	// A global offering adds no region the target lists, so --region keeps
-	// accepting exactly the regions the document declares.
-	if diff := cmp.Diff([]string{"fr-par", "nl-ams"}, doc.Catalog.Regions()); diff != "" {
+	// A global offering adds no region to the target's list: Catalog.Regions is
+	// the union of the offerings' regions and the default region (ADR 0024), and
+	// the only offering here is global, so it is the default region alone (PRD
+	// #581, The region model). The document's own regions stay as declared.
+	if diff := cmp.Diff([]string{"fr-par"}, doc.Catalog.Regions()); diff != "" {
 		t.Errorf("the catalog's Regions() mismatch (-want +got):\n%s", diff)
 	}
 
@@ -2526,11 +2528,11 @@ func TestParseGlobalOffering(t *testing.T) {
 			t.Errorf("AvailableIn(%s) = false, want true for a global offering", text.Quote(region))
 		}
 
-		if amount, ok := got[0].PlanPrice("Zone", region); !ok || amount != 1200 {
+		if amount, ok := got[0].PlanPrice("Zone", region); !ok || amount != 120000 {
 			t.Errorf("PlanPrice(\"Zone\", %s) = (%s, %t), want (12.00, true)", text.Quote(region), amount, ok)
 		}
 
-		if amount, ok := got[0].FixedFee(region); !ok || amount != 500 {
+		if amount, ok := got[0].FixedFee(region); !ok || amount != 50000 {
 			t.Errorf("FixedFee(%s) = (%s, %t), want (5.00, true)", text.Quote(region), amount, ok)
 		}
 	}
@@ -2626,8 +2628,17 @@ func TestParseGlobalOfferingErrors(t *testing.T) {
 
 			data := tc.data(t)
 
-			if !strings.Contains(data, `"schemaVersion": 2`) {
-				t.Fatalf("the document no longer declares schema version 2, the only version this reader reads")
+			// The edit helpers re-encode the document compactly, so the version is
+			// read back as a value, never matched as bytes.
+			var header struct {
+				SchemaVersion int `json:"schemaVersion"`
+			}
+			if err := json.Unmarshal([]byte(data), &header); err != nil {
+				t.Fatalf("the edited document is not JSON: %v", err)
+			}
+
+			if header.SchemaVersion != 2 {
+				t.Fatalf("the document declares schema version %d, want 2, the only version this reader reads", header.SchemaVersion)
 			}
 
 			_, err := snapshot.Parse([]byte(data))
