@@ -965,8 +965,8 @@ END {
       problem("tls-stage-lifecycle", bfile[b], bline[b], "resource scaleway_edge_services_tls_stage \"site\" has no lifecycle block with create_before_destroy = true: a replacement would delete the stage first, which Scaleway refuses while the DNS stage references it")
     }
     # The site container's cost pins (ADR 0045, The container): one instance of 140 mvCPU and 268 MB
-    # (268000000 bytes) at most, each a literal in the file, never a provider default or a value a tfvars file could raise; no
-    # deprecated spelling beside them; and at most one instance kept warm.
+    # (268000000 bytes) at most, each a literal in the file, never a provider default or a value a
+    # tfvars file could raise; no deprecated spelling beside them; and at most one instance kept warm.
     if (b in containerBlock) {
       shownres = shownpath(bpath[b])
       for (j = 1; j <= npins; j++) {

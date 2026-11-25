@@ -116,7 +116,7 @@ run "one_public_container_sized_to_the_cost_pins" {
 
   assert {
     condition     = scaleway_container.site.memory_limit_bytes == 268000000
-    error_message = "scaleway_container.site must set memory_limit_bytes = 268000000 (268 MB, about 0.268 GB, the value the platform kept when asked for 268435456): it is the cost pin ADR 0045 prices, and memory_limit, the deprecated spelling in megabytes, stays unset. 268435456 (256 MiB) came back as 268000000 (observed 2026-11-25, issue #596), so every plan after an apply would show the change."
+    error_message = "scaleway_container.site must set memory_limit_bytes = 268000000 (268 MB, about 0.268 GB, the value the platform kept when asked for 268435456): it is the pin ADR 0045 bounds the cost with (priced at 0.25 GB; about EUR 2.22 billed at 268 MB), and memory_limit, the deprecated spelling in megabytes, stays unset. 268435456 (256 MiB) came back as 268000000 (observed 2026-11-25, issue #596), so every plan after an apply would show the change."
   }
 
   assert {

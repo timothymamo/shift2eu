@@ -1707,7 +1707,7 @@ resource "scaleway_container_cron" "nightly" {
 // and none of the texts state one; the pin holds the value an apply answered rather than a guess at the rule.
 // [container-memory] pins 268000000, the value the platform holds, and refuses 268435456 beside every other literal:
 // a plan that never reaches "No changes" is a drift the maintainer cannot tell from a real one, while 268000000 is the
-// memory ADR 0045 prices.
+// pin ADR 0045 bounds the cost with (priced at 0.25 GB; about EUR 2.22 billed at 268 MB).
 //
 // The image is no pin of a value but of a reference: the container must read the one local the Renovate comment
 // above it pins - image = local.caddy_image and nothing else - so the line Renovate moves is the line the
