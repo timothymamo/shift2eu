@@ -402,7 +402,7 @@ decision stands.
 | Resource | Key arguments |
 |---|---|
 | `scaleway_container_namespace.site` (new, `container.tf`) | `shift2eu-site`, `project_id` the site's project, `region` `var.region` |
-| `scaleway_container.site` (new) | `front` in that namespace, `region` `var.region`; the image `docker.io/library/caddy:<tag>-alpine@sha256:<index digest>` from a `locals` value under a `# renovate:` comment; `command = ["/bin/sh", "-c"]` and `args` that write the Caddyfile (`file("${path.module}/Caddyfile")`, the shell's `$1`) to `/tmp/Caddyfile` and exec Caddy on it; `environment_variables = { UPSTREAM = <the DNS stage's default_fqdn> }`; `port = 8080`, `privacy = "public"`, `https_connections_only = false`, `enable_default_public_endpoint = true`; the cost pins `min_scale = 0`, `max_scale = 1`, `cpu_limit = 140`, `memory_limit_bytes = 268435456`; two `postcondition`s and a `precondition` (below) |
+| `scaleway_container.site` (new) | `front` in that namespace, `region` `var.region`; the image `docker.io/library/caddy:<tag>-alpine@sha256:<index digest>` from a `locals` value under a `# renovate:` comment; `command = ["/bin/sh", "-c"]` and `args` that write the Caddyfile (`file("${path.module}/Caddyfile")`, the shell's `$1`) to `/tmp/Caddyfile` and exec Caddy on it; `environment_variables = { UPSTREAM = <the DNS stage's default_fqdn> }`; `port = 8080`, `privacy = "public"`, `https_connections_only = false`, `enable_default_public_endpoint = true`; the cost pins `min_scale = 0`, `max_scale = 1`, `cpu_limit = 140`, `memory_limit_bytes = 268000000` (the value the platform keeps, ADR 0045's amendment *The memory the platform keeps*; issue #596); two `postcondition`s and a `precondition` (below) |
 | `scaleway_container_domain.front` (new) | `www.shift2eu.com` and `shift2eu.com` on that container, only with `var.front_domains` (default `false`, below) |
 | `scaleway_edge_services_tls_stage.site` | **gated by `var.pipeline_www`** (`count`, default `false`: none), with the pipeline's `www.shift2eu.com` domain; with `true` it is milestone 3's stage, `managed_certificate = true` and `create_before_destroy` |
 | `scaleway_edge_services_dns_stage.site` | with `pipeline_www = false`: `cache_stage_id` the cache stage, `fqdns = []`, so the pipeline answers only its default endpoint, which the container proxies; with `true`: `tls_stage_id` the TLS stage, `fqdns = ["www.shift2eu.com"]` |
@@ -418,7 +418,7 @@ CNAME's target.
   configuration, never a test file, another path or another function.
 - **The cost pins are rules, not only values.** `[container-max-scale]`, `[container-cpu]` and
   `[container-memory]` refuse a `scaleway_container` that does not set `max_scale = 1`, `cpu_limit = 140`
-  and `memory_limit_bytes = 268435456` as literals (a missing pin leaves the provider's default; an
+  and `memory_limit_bytes = 268000000` as literals (a missing pin leaves the provider's default; an
   expression is a value a tfvars file could raise); `[container-deprecated-attribute]` refuses
   `memory_limit` and `http_option`, the deprecated spellings beside them; `[container-min-scale]` wants
   `min_scale` 0 or 1. The rules' tokenizer now keeps a lone whole number as a literal of its own, which
@@ -442,6 +442,11 @@ CNAME's target.
   `pipeline_www` at `false`. Nothing serves visitors before R10 turns the deploy on, so the gap between
   that apply and R8's records is accepted; the removal's ordering is the one `create_before_destroy`
   recorded in the state gives (the DNS stage is updated before the stage it referenced is destroyed).
+  A removed instance's destroy reads `create_before_destroy` from the state, never the configuration
+  (OpenTofu v1.13.9, `internal/tofu/node_resource_destroy.go`): a stage written to the state before the
+  flag was configured has none, so its destroy runs first and Scaleway refuses it; R4 checks the state's
+  flag before such an apply and writes it with a refresh-only apply that keeps the stage configured
+  (issue #595).
   R8's rollback is a tfvars change, `pipeline_www = true`, and R4's apply, which recreates the stage
   (its managed certificate requested anew) and gives the DNS stage the `www` name back: no revert PR.
   `[tls-stage-lifecycle]` holds the `count`ed stage to `create_before_destroy` as before, and the TLS

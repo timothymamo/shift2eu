@@ -64,9 +64,10 @@
 #                    rule holds it either way
 #   [container-max-scale], [container-cpu], [container-memory]
 #                    a scaleway_container that does not set max_scale = 1, cpu_limit = 140 or
-#                    memory_limit_bytes = 268435456 exactly once, as that literal (ADR 0045's cost pins:
-#                    one instance of 140 mvCPU and 0.25 GB at most): missing, another number or an
-#                    expression such as var.max_scale is refused
+#                    memory_limit_bytes = 268000000 exactly once, as that literal (ADR 0045's cost pins:
+#                    one instance of 140 mvCPU and 0.25 GB at most, the memory in the whole decimal
+#                    megabytes the platform keeps, issue #596): missing, another number (268435456 too)
+#                    or an expression such as var.max_scale is refused
 #   [container-deprecated-attribute]
 #                    memory_limit or http_option on a scaleway_container, the deprecated spellings of
 #                    memory_limit_bytes and https_connections_only (that attribute gets this tag alone)

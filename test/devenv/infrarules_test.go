@@ -1700,6 +1700,13 @@ resource "scaleway_container_cron" "nightly" {
 // and a deprecated http_option no [container-cpu] or [container-memory], since a breakage is reported once,
 // under the rule that refuses it.
 //
+// The memory pin is the value Scaleway's Serverless Containers keep, not the size in bytes the pin means: the
+// platform rounds memory_limit_bytes to whole decimal megabytes, so 268435456 (256 MiB) comes back as
+// 268000000 and every plan after an apply shows that change (issue #596). [container-memory] pins 268000000, the
+// value the platform holds, and refuses 268435456 beside every other literal: a plan that never reaches "No
+// changes" is a drift the maintainer cannot tell from a real one, while 268000000 is the 0.25 GB ADR 0045
+// prices.
+//
 // The image is no pin of a value but of a reference: the container must read the one local the Renovate comment
 // above it pins - image = local.caddy_image and nothing else - so the line Renovate moves is the line the
 // container runs. [container-image-pin] refuses any other expression there, a literal or another local: a
@@ -1793,6 +1800,28 @@ var containerCostPinCases = []infraRuleCase{
 		breakage: func(t *testing.T, site string) {
 			t.Helper()
 			setContainerAttribute(t, site, "cpu_limit", "")
+		},
+	},
+	// The value the platform keeps at the pinned size: Scaleway's Serverless Containers round
+	// memory_limit_bytes down to whole decimal megabytes, so 268000000 is the 0.25 GB ADR 0045 prices and the
+	// only literal the rule accepts (issue #596).
+	{
+		name: "container-memory-limit-bytes-the-platform-keeps",
+		why:  "memory_limit_bytes = 268000000 (0.25 GB, in whole decimal megabytes) on the site's container, the memory Scaleway keeps",
+		want: "",
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			setContainerAttribute(t, site, "memory_limit_bytes", "  memory_limit_bytes = 268000000")
+		},
+	},
+	{
+		name:   "container-memory-limit-bytes-256-mib",
+		why:    "memory_limit_bytes = 268435456 (256 MiB) on the site's container, the 0.25 GB in binary bytes that the platform rounds back to 268000000, so every plan after an apply shows the change",
+		want:   "container-memory",
+		wantIn: map[string]string{"container-memory": "{site}/container.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			setContainerAttribute(t, site, "memory_limit_bytes", "  memory_limit_bytes = 268435456")
 		},
 	},
 	{
@@ -2472,7 +2501,7 @@ resource "scaleway_container" "second" {
   min_scale          = 0
   max_scale          = 1
   cpu_limit          = 140
-  memory_limit_bytes = 268435456
+  memory_limit_bytes = 268000000
 
   lifecycle {
     postcondition {
