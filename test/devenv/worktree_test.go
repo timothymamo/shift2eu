@@ -323,10 +323,9 @@ func TestWorktreeRefusesANameThatIsNoPullRequestBranch(t *testing.T) {
 // origin cannot be fetched - without an upstream, so it can never push to main (issue #573).
 //
 // A tag of the base's short name must change none of that (issue #602). Git's own ref lookup tries a tag before a
-// branch or a remote-tracking ref, so a tag named origin/main hands the script the tag wherever it asks git about
-// the short name origin/main, and one named main does the same to the checkout's own main without an origin: a
-// base named in full is what keeps a new branch cut from main, and left unfoldable when git calls the short name
-// ambiguous.
+// branch or a remote-tracking ref, so a tag named origin/main would win over the short name origin/main, and one
+// named main over the checkout's own main without an origin: the cases put such a tag at an older commit, so a new
+// branch cut from the tag is told apart from one cut from the latest main.
 func TestWorktreeCreatesANewBranch(t *testing.T) {
 	t.Parallel()
 
@@ -351,9 +350,10 @@ func TestWorktreeCreatesANewBranch(t *testing.T) {
 			beside: func(t *testing.T, f *worktreeFixture) string {
 				t.Helper()
 
-				// The tag is at the commit origin's main had before the script's fetch, the branch is cut from the
-				// one that fetch brings: a new branch at the tag's commit is told apart from one cut from origin's
-				// main only when the two differ.
+				// The tag is at the commit origin's main had before the script's fetch, and the branch is cut from
+				// the one that fetch brings: a tag named origin/main would win over that short name, so a new branch
+				// at the tag's commit is told apart from one cut from the fetched origin's main only when the two
+				// differ.
 				older := f.mustGitIn(t, f.checkout, "rev-parse", "refs/remotes/origin/main")
 				mainSHA := f.advanceMain(t)
 				if older == mainSHA {
@@ -382,9 +382,9 @@ func TestWorktreeCreatesANewBranch(t *testing.T) {
 			beside: func(t *testing.T, f *worktreeFixture) string {
 				t.Helper()
 
-				// Without origin the script cuts from the checkout's own main, which it names by the short name main:
-				// the tag is put at the commit that branch had before, so a new branch at the tag's commit is told
-				// apart from one cut from main.
+				// Without origin the script cuts from the checkout's own main; a tag named main would win over the
+				// short name, so the tag is put at the commit that branch had before, and a new branch at the tag's
+				// commit is told apart from one cut from the checkout's own latest main.
 				f.mustGitIn(t, f.checkout, "remote", "remove", "origin")
 				older := f.branchAt(t, "main")
 				f.mustGitIn(t, f.checkout, "commit", "--quiet", "--allow-empty", "-m", "a further commit of the checkout's own main")
