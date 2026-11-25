@@ -2,6 +2,7 @@ package check_test
 
 import (
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -178,6 +179,39 @@ import (
 //     artifact steps (an unexpected artifact) and the publish step (a refused
 //     publish). The three download steps' checksums, round D's guards, are the
 //     box's tool-checksum cause and stay as they are.
+//
+// Round K's fixes, and what the checks job's own records mean:
+//
+//   - A check of several parts is no one verdict. Rows 7, 13 and 14 set
+//     `ran_any=0` before their first part, mark `ran_any=1` right after each
+//     part's exit is recorded (comments aside), and record the check as one that
+//     did not run only when the flag is still 0 at the step's end:
+//     `if [ "${ran_any}" -eq 0 ]; then echo "<check> tool-failed" >>
+//     "${results}/not-run.txt"; fi`. A part that timed out or failed is a
+//     `limits.txt` line of that check with its `.exit` file, inside a loop or
+//     outside it, never a `not-run.txt` line: a run that hung the CLI, a target
+//     that timed out and a release file whose attestation failed are results the
+//     model reads, and the skill reads a check with any finding, and any
+//     verification-failed.txt line, as one that ran. Row 7's unresolved image
+//     digest is the same: a limits line, never "not run". The step-level
+//     download, pull and staging failures before any part ran keep their
+//     not-run records, since no part produced a result yet.
+//   - Every `not-run.txt` line of the checks job ends in a why id the publish
+//     core's `whyNotRun` holds (ci/auditpublish/internal/publish/vocabulary.go),
+//     and the check's own list of them is pinned equal to that map. A part the
+//     release or the API answers in another shape - a ruleset ID that is no
+//     number, a fuzz target of another shape - is a limits line, never a why.
+//   - A checksums.txt that is not empty and holds no well-formed line is a
+//     finding about the release: `release-integrity verification-failed` with
+//     the limits line that says why, never a tool that failed.
+//   - Row 15's budget skips go to `read-skipped.txt` with their own limits line,
+//     never to `read-refused.txt`: nothing refused them, and the runbook sends
+//     the maintainer to a permission only for a refused read.
+//   - fit refuses a timeout it cannot read as whole minutes or seconds
+//     (`timeout 1h`, `timeout -k 5 50m`, `timeout 1.5m`), a loop whose header it
+//     cannot follow (a body on the header's own line, `do` on a line of its
+//     own), an unbudgeted inner loop with a timeout inside a budgeted one, and a
+//     timeout a command runs once per argument (`xargs`, `find -exec`).
 //
 // The check recognises each job's steps by name, and the accepted fixture's
 // names are the closed list: a step the check's list does not hold is reported
@@ -658,14 +692,15 @@ const (
 		"            exit 1\n" +
 		"          fi\n"
 	auditFuzzShapeGuard = "            if [[ ! \"${name}\" =~ ^Fuzz[A-Z0-9_][A-Za-z0-9_]*$ ]] || [[ ! \"${pkg}\" =~ ^[A-Za-z0-9_][A-Za-z0-9_./-]*$ ]] || [[ \"${pkg}\" == *..* ]]; then\n" +
-		"              echo \"fuzzing unexpected-target\" >> \"${results}/not-run.txt\"\n" +
+		"              echo \"fuzzing: a target of an unexpected shape was not run\" >> \"${results}/limits.txt\"\n" +
 		"              continue\n" +
 		"            fi\n"
-	// The ruleset ID's shape is refused by a record in the limits and a continue,
-	// never by exit 1: a read the API answers in another shape records that read
-	// as not run and leaves the step to its other reads (round I of PR 5c).
+	// The ruleset ID's shape is refused by a limits line and a continue, never
+	// by exit 1 and never by a not-run record: a read the API answers in another
+	// shape records that read in the limits and leaves the step to its other
+	// reads (round I of PR 5c; a why id no vocabulary holds, round K).
 	auditRulesetGuard = "            if [[ ! \"${id}\" =~ ^[0-9]+$ ]]; then\n" +
-		"              echo \"supply-chain unexpected-ruleset\" >> \"${results}/not-run.txt\"\n" +
+		"              echo \"supply-chain: a ruleset ID that is no number was not read\" >> \"${results}/limits.txt\"\n" +
 		"              continue\n" +
 		"            fi\n"
 	// The "image was not pulled" branch each of rows 8, 11 and 13 runs right
@@ -737,13 +772,15 @@ const (
 	auditReadAPIFilter = "            local name=\"$1\" endpoint=\"$2\" filter=\"${3:-.}\" rc=0\n"
 	// auditReadAPIBudget is read_api's budget, at the head of its body (round J of
 	// PR 5c): the step's reads number more than 25, each of 2 minutes, far past
-	// its 15, so no read starts after its 12th minute; a read it did not make is
-	// recorded in read-refused.txt, which the step's end names in the limits.
+	// its 15, so no read starts after its 12th minute. The reads it did not reach
+	// are recorded in read-skipped.txt, which the step's end names in the limits
+	// (round K: the budget ran out on them, the API refused nothing).
 	auditReadAPIBudget = "            # The function's budget: the step's reads number more than 25, each of 2 minutes, far past\n" +
-		"            # its 15, so no read starts after 12 minutes of it; the reads it did not make are recorded\n" +
-		"            # in read-refused.txt, which the step's end names in the limits, \"not run (read refused)\".\n" +
+		"            # its 15, so no read starts after 12 minutes of it. The reads it did not reach are recorded in\n" +
+		"            # read-skipped.txt, never in read-refused.txt: the budget ran out on them, the API refused\n" +
+		"            # nothing, and the step's end names each list in the limits by its own cause.\n" +
 		"            if [ \"${SECONDS}\" -ge 720 ]; then\n" +
-		"              echo \"${name}\" >> \"${out}/read-refused.txt\"\n" +
+		"              echo \"${name}\" >> \"${out}/read-skipped.txt\"\n" +
 		"              return 0\n" +
 		"            fi\n"
 	// The four reads that keep names alone: the two variables endpoints and the
@@ -770,18 +807,24 @@ const (
 // causes. Each is exactly as the fixture writes it, so a case that mistypes one
 // fails in mutate.
 var (
-	// Row 7's five verifications record one shape of outcome: rc 124 as the
-	// check that timed out, the release's refusal - a checksum mismatch, a
-	// refused attestation or a refused signature - as the finding
-	// verification-failed in the results, and any other failure as a check that
-	// did not run. The checksum check's finding is rc 1 only when the filtered
-	// list held well-formed lines, and cosign's signature check reads cosign's
-	// own refusal exits, 10 to 13, as the same finding (round I of PR 5c).
-	auditChecksumOutcome    = auditVerificationBranchWhen("            ", `[ "${rc}" -eq 1 ] && [ -s "${out}/checksums.filtered" ]`, "the checksum check timed out after 5 minutes")
-	auditReleaseFileOutcome = auditVerificationBranch("              ", "the attestation of ${name} timed out after 2 minutes")
-	auditSignatureOutcome   = auditVerificationBranchWhen("            ", `[ "${rc}" -eq 1 ] || { [ "${rc}" -ge 10 ] && [ "${rc}" -le 13 ]; }`, "the image's signature timed out after 3 minutes")
-	auditAttestedSigOutcome = auditVerificationBranch("              ", "the ${kind} attestation's signature timed out after 3 minutes")
-	auditSBOMOutcome        = auditVerificationBranch("            ", "the SBOM's attestation timed out after 3 minutes")
+	// Row 7's five verifications record one shape of outcome: their exit, then
+	// the part marked as one that ran (ran_any, round K), the release's refusal - a
+	// checksum mismatch, a refused attestation or a refused signature - as the
+	// finding verification-failed in the results, and a timeout or any other
+	// failure as a limits line of this check, never as the check that did not run.
+	// The checksum check's finding is rc 1 only when the filtered list held
+	// well-formed lines, and cosign's signature check reads cosign's own refusal
+	// exits, 10 to 13, as the same finding (round I of PR 5c).
+	auditChecksumOutcome = auditVerificationBranchWhen("            ", `[ "${rc}" -eq 1 ] && [ -s "${out}/checksums.filtered" ]`,
+		"the checksum check timed out after 5 minutes", "the checksum check failed with exit ${rc}")
+	auditReleaseFileOutcome = auditVerificationBranch("              ", "the attestation of ${name} timed out after 2 minutes",
+		"the attestation of ${name} failed with exit ${rc}")
+	auditSignatureOutcome = auditVerificationBranchWhen("            ", `[ "${rc}" -eq 1 ] || { [ "${rc}" -ge 10 ] && [ "${rc}" -le 13 ]; }`,
+		"the image's signature timed out after 3 minutes", "the image's signature check failed with exit ${rc}")
+	auditAttestedSigOutcome = auditVerificationBranch("              ", "the ${kind} attestation's signature timed out after 3 minutes",
+		"the ${kind} attestation's signature check failed with exit ${rc}")
+	auditSBOMOutcome = auditVerificationBranch("            ", "the SBOM's attestation timed out after 3 minutes",
+		"the SBOM's attestation failed with exit ${rc}")
 
 	// The five ::error lines round E adds, one per step that can fail with a
 	// cause PRD #175's box lists: the hardening step's own commands, the model
@@ -914,12 +957,12 @@ const (
 		"          fi\n"
 
 	// auditNoDigestRecord is row 7's else: an image digest it could not resolve
-	// leaves the signature and the two attestations unverified, which is recorded
-	// as the check that did not run, with the limits line that names them (S4).
+	// leaves the signature and the two attestations unverified, which is a limits
+	// line about this check, never a check that did not run (S4, round K).
 	auditNoDigestRecord = "          else\n" +
 		"            # No digest is no verification: the image's signature and its two attestations were not\n" +
-		"            # checked, which is recorded as the check that did not run, never left silent.\n" +
-		"            echo \"release-integrity tool-failed\" >> \"${results}/not-run.txt\"\n" +
+		"            # checked, which is a limits line about this check, never a check that did not run and never\n" +
+		"            # a part of it that ran.\n" +
 		"            echo \"release-integrity: no image digest, so the image's signature and attestations were not verified\" >> \"${results}/limits.txt\"\n" +
 		"          fi\n"
 
@@ -954,26 +997,148 @@ const (
 		"            fi\n"
 )
 
+// Round K's anchors (the reviewer's and the auditor's findings on PR 5c, round
+// K): the accepted shape's per-part records (B1), its limits-only records for a
+// part that is no whole check (B2), its malformed-checksums record (L4), its
+// budget skips (S2), and the shapes the fit tripwire must refuse (L2, S1).
+const (
+	// The three end-of-step records: a check of several parts is written to
+	// not-run.txt only when no part of it produced a result at all, which the
+	// flag ran_any counts in shell.
+	auditReleaseEndRecord = "          if [ \"${ran_any}\" -eq 0 ]; then\n" +
+		"            echo \"release-integrity tool-failed\" >> \"${results}/not-run.txt\"\n" +
+		"          fi\n"
+	auditHostileEndRecord = "          if [ \"${ran_any}\" -eq 0 ]; then\n" +
+		"            echo \"hostile-inventories tool-failed\" >> \"${results}/not-run.txt\"\n" +
+		"          fi\n"
+	auditFuzzEndRecord = "          if [ \"${ran_any}\" -eq 0 ]; then\n" +
+		"            echo \"fuzzing tool-failed\" >> \"${results}/not-run.txt\"\n" +
+		"          fi\n"
+
+	// auditHostileRunCreate, auditHostileRunStart, auditFuzzTargetCreate and
+	// auditFuzzTargetStart are rows 13 and 14's per-run and per-target outcomes
+	// inside their loops, as round K writes them: the run's exit recorded, the part
+	// marked as one that ran, and its timeout or failure in the limits, never as
+	// the whole check that did not run.
+	auditHostileRunCreate = "              echo \"${rc}\" > \"${out}/${run}.create.exit\"\n" +
+		"              ran_any=1\n" +
+		"              if [ \"${rc}\" -eq 124 ]; then\n" +
+		"                echo \"hostile-inventories: the create for ${run} timed out after 2 minutes\" >> \"${results}/limits.txt\"\n" +
+		"              elif [ \"${rc}\" -ne 0 ]; then\n" +
+		"                echo \"hostile-inventories: the create for ${run} failed with exit ${rc}\" >> \"${results}/limits.txt\"\n" +
+		"              fi\n"
+	auditHostileRunStart = "              echo \"${rc}\" > \"${out}/${run}.exit\"\n" +
+		"              ran_any=1\n" +
+		"              if [ \"${rc}\" -eq 124 ]; then\n" +
+		"                timeout 1m docker kill \"${cid}\" > /dev/null 2>&1 || true\n" +
+		"                echo \"hostile-inventories: ${run} timed out after 60 seconds, a finding candidate of the run\" >> \"${results}/limits.txt\"\n" +
+		"              fi\n"
+	auditFuzzTargetCreate = "            echo \"${rc}\" > \"${out}/targets/${n}-${name}.create.exit\"\n" +
+		"            ran_any=1\n" +
+		"            if [ \"${rc}\" -eq 124 ]; then\n" +
+		"              echo \"fuzzing: the create for ${pkg} ${name} timed out after 2 minutes\" >> \"${results}/limits.txt\"\n" +
+		"            elif [ \"${rc}\" -ne 0 ]; then\n" +
+		"              echo \"fuzzing: the create for ${pkg} ${name} failed with exit ${rc}\" >> \"${results}/limits.txt\"\n" +
+		"            fi\n"
+	auditFuzzTargetStart = "            echo \"${rc}\" > \"${out}/targets/${n}-${name}.exit\"\n" +
+		"            ran_any=1\n" +
+		"            if [ \"${rc}\" -eq 124 ]; then\n" +
+		"              timeout 1m docker kill \"${cid}\" > /dev/null 2>&1 || true\n" +
+		"              echo \"fuzzing: ${pkg} ${name} timed out after 12 minutes\" >> \"${results}/limits.txt\"\n" +
+		"            fi\n"
+
+	// auditHostileRunCreateWhole and auditFuzzTargetCreateWhole are those two
+	// branches as the accepted shape wrote them before round K: a part's timeout
+	// and failure written to not-run.txt as the whole check not running, which is
+	// B1. A case puts one back.
+	auditHostileRunCreateWhole = "              echo \"${rc}\" > \"${out}/${run}.create.exit\"\n" +
+		"              if [ \"${rc}\" -eq 124 ]; then\n" +
+		"                echo \"hostile-inventories timed-out\" >> \"${results}/not-run.txt\"\n" +
+		"                echo \"hostile-inventories: the create for ${run} timed out after 2 minutes\" >> \"${results}/limits.txt\"\n" +
+		"              elif [ \"${rc}\" -ne 0 ]; then\n" +
+		"                echo \"hostile-inventories tool-failed\" >> \"${results}/not-run.txt\"\n" +
+		"              fi\n"
+	auditFuzzTargetCreateWhole = "            echo \"${rc}\" > \"${out}/targets/${n}-${name}.create.exit\"\n" +
+		"            if [ \"${rc}\" -eq 124 ]; then\n" +
+		"              echo \"fuzzing timed-out\" >> \"${results}/not-run.txt\"\n" +
+		"              echo \"fuzzing: the create for ${pkg} ${name} timed out after 2 minutes\" >> \"${results}/limits.txt\"\n" +
+		"            elif [ \"${rc}\" -ne 0 ]; then\n" +
+		"              echo \"fuzzing tool-failed\" >> \"${results}/not-run.txt\"\n" +
+		"            fi\n"
+
+	// auditReleaseFileOutcomeWhole is one release file's attestation as the
+	// accepted shape wrote it before round K: a file's refused attestation read as
+	// the whole check that did not run (B1).
+	auditReleaseFileOutcomeWhole = "              echo \"${rc}\" > \"${out}/attestations/${name}.exit\"\n" +
+		"              if [ \"${rc}\" -eq 124 ]; then\n" +
+		"                echo \"release-integrity timed-out\" >> \"${results}/not-run.txt\"\n" +
+		"                echo \"release-integrity: the attestation of ${name} timed out after 2 minutes\" >> \"${results}/limits.txt\"\n" +
+		"              elif [ \"${rc}\" -eq 1 ]; then\n" +
+		"                echo \"release-integrity verification-failed\" >> \"${results}/verification-failed.txt\"\n" +
+		"              elif [ \"${rc}\" -ne 0 ]; then\n" +
+		"                echo \"release-integrity tool-failed\" >> \"${results}/not-run.txt\"\n" +
+		"              fi\n"
+
+	// auditNoDigestNotRun is row 7's else as it read before round K: an image
+	// digest that did not resolve written to not-run.txt as the whole check not
+	// running (B1, S4).
+	auditNoDigestNotRun = "          else\n" +
+		"            echo \"release-integrity tool-failed\" >> \"${results}/not-run.txt\"\n" +
+		"            echo \"release-integrity: no image digest, so the image's signature and attestations were not verified\" >> \"${results}/limits.txt\"\n" +
+		"          fi\n"
+
+	// auditMalformedChecksums is row 7's record of a checksums.txt that is no
+	// empty and holds no well-formed line: a finding about the release, recorded
+	// verification-failed, with the limits line that says why (L4).
+	auditMalformedChecksums = "            ran_any=1\n" +
+		"            # A checksums.txt that holds no well-formed line names no file of the release: that is a\n" +
+		"            # finding about the release, recorded verification-failed with the limits line that says why,\n" +
+		"            # never a tool that failed and never a silent pass.\n" +
+		"            if [ -s \"${rel}/checksums.txt\" ] && [ ! -s \"${out}/checksums.filtered\" ]; then\n" +
+		"              echo \"release-integrity verification-failed\" >> \"${results}/verification-failed.txt\"\n" +
+		"              echo \"release-integrity: checksums.txt holds no well-formed line\" >> \"${results}/limits.txt\"\n" +
+		"            fi\n"
+
+	// auditWhyIDLine is the one not-run line of the checks job that no other rule
+	// of the check pins: row 15's scorecard-admin record. The why id it ends in is
+	// what the vocabulary test moves, so the check's list of why ids is pinned
+	// against ci/auditpublish/internal/publish/vocabulary.go without any other
+	// rule standing in for it.
+	auditWhyIDLine = "          echo \"scorecard-admin needs-admin-read\" >> \"${results}/not-run.txt\"\n"
+
+	// auditFuzzTargetRm is row 14's removal of a target's container, with the fi of
+	// the branch above it, inside the budgeted loop: the lines the case of an
+	// unbudgeted inner loop wraps in one.
+	auditFuzzTargetRm = "            fi\n            timeout 1m docker rm -f \"${cid}\" > /dev/null || true\n"
+)
+
+// auditWhyNotRunLiteral matches the publish core's whyNotRun map: its
+// declaration through its closing brace.
+var auditWhyNotRunLiteral = regexp.MustCompile(`(?s)var whyNotRun = map\[string\]string\{\n(.*?)\n\}`)
+
+// auditWhyIDLiteral matches one why id of that map: a quoted key.
+var auditWhyIDLiteral = regexp.MustCompile(`"([a-z0-9-]+)":`)
+
 // auditVerificationBranch returns one of row 7's verifications' outcome branch,
-// exactly as the accepted fixture writes it: the check that timed out recorded as
-// not run, with its limits line, a failure of the verification itself recorded as
-// the finding verification-failed in the results, and any other failure recorded
-// as a check that did not run. A verification whose refusal the tool reports with
-// other exit codes passes them as cond (round I of PR 5c).
-func auditVerificationBranch(indent, limits string) string {
-	return auditVerificationBranchWhen(indent, `[ "${rc}" -eq 1 ]`, limits)
+// exactly as the accepted fixture writes it (round K): the exit recorded, the part
+// marked as one that ran, a timeout and a failure in the limits lines of this
+// check, and a refusal of the verification itself recorded as the finding
+// verification-failed in the results. A verification whose refusal the tool
+// reports with other exit codes passes them as cond (round I of PR 5c).
+func auditVerificationBranch(indent, timedOut, failed string) string {
+	return auditVerificationBranchWhen(indent, `[ "${rc}" -eq 1 ]`, timedOut, failed)
 }
 
 // auditVerificationBranchWhen returns row 7's outcome branch whose finding line
 // reads cond, the condition of its elif.
-func auditVerificationBranchWhen(indent, cond, limits string) string {
-	return indent + "if [ \"${rc}\" -eq 124 ]; then\n" +
-		indent + "  echo \"release-integrity timed-out\" >> \"${results}/not-run.txt\"\n" +
-		indent + "  echo \"release-integrity: " + limits + "\" >> \"${results}/limits.txt\"\n" +
+func auditVerificationBranchWhen(indent, cond, timedOut, failed string) string {
+	return indent + "ran_any=1\n" +
+		indent + "if [ \"${rc}\" -eq 124 ]; then\n" +
+		indent + "  echo \"release-integrity: " + timedOut + "\" >> \"${results}/limits.txt\"\n" +
 		indent + "elif " + cond + "; then\n" +
 		indent + "  echo \"release-integrity verification-failed\" >> \"${results}/verification-failed.txt\"\n" +
 		indent + "elif [ \"${rc}\" -ne 0 ]; then\n" +
-		indent + "  echo \"release-integrity tool-failed\" >> \"${results}/not-run.txt\"\n" +
+		indent + "  echo \"release-integrity: " + failed + "\" >> \"${results}/limits.txt\"\n" +
 		indent + "fi\n"
 }
 
@@ -1144,8 +1309,17 @@ var auditLineNumber = regexp.MustCompile(`\(line [0-9]+\)|^line [0-9]+: `)
 // compared without their line numbers: a case that adds or removes a line moves
 // every line below it, and the check then reports the same problem at another
 // line, which is no complaint of the case's own. A complaint is fresh when the
-// accepted shape draws none of its kind.
-func auditFresh(accepted, got []string) []string {
+// accepted shape draws none of its kind; a fixture the check refuses makes every
+// case undecidable, so it fails the test here rather than being logged past (the
+// reviewer's N2, round K).
+func auditFresh(t *testing.T, accepted, got []string) []string {
+	t.Helper()
+
+	if len(accepted) != 0 {
+		t.Fatalf("the accepted shape %s draws %d messages, want none (%q is the first): every case's fresh diff is taken from them, so a fixture the check refuses decides no case",
+			auditWorkflowFixture, len(accepted), accepted[0])
+	}
+
 	seen := make(map[string]bool, len(accepted))
 
 	for _, m := range accepted {
@@ -1163,6 +1337,77 @@ func auditFresh(accepted, got []string) []string {
 	return out
 }
 
+// TestAuditWorkflowWhyIDsMatchThePublishCore pins the checks job's closed list of
+// why ids (round K's B2): every not-run.txt line the checks job writes ends in a
+// why id that ci/auditpublish/internal/publish/vocabulary.go's whyNotRun holds,
+// read here at test time as the other cross-file pins read theirs, and an id that
+// file does not hold is refused. The line the cases move is row 15's
+// scorecard-admin record, which no other rule of the check pins: the case's
+// message can be the why-id one and no other.
+func TestAuditWorkflowWhyIDsMatchThePublishCore(t *testing.T) {
+	t.Parallel()
+
+	acceptedWorkflow := string(auditWorkflowFixtureBytes(t))
+	accepted := check.AuditWorkflow([]byte(acceptedWorkflow))
+
+	for _, id := range auditPublishWhyIDs(t) {
+		t.Run("the why id "+id+" is accepted", func(t *testing.T) {
+			t.Parallel()
+
+			doc := mutate(t, acceptedWorkflow, auditWhyIDLine, "          echo \"scorecard-admin "+id+"\" >> \"${results}/not-run.txt\"\n")
+
+			if got := auditFresh(t, accepted, check.AuditWorkflow([]byte(doc))); len(got) != 0 {
+				t.Errorf("AuditWorkflow() draws %q for a not-run line whose why id is %q, which vocabulary.go holds: the check's list of why ids is short of it", got, id)
+			}
+		})
+	}
+
+	for _, id := range []string{"unexpected-ruleset", "unexpected-target"} {
+		t.Run("the why id "+id+" is refused", func(t *testing.T) {
+			t.Parallel()
+
+			doc := mutate(t, acceptedWorkflow, auditWhyIDLine, "          echo \"scorecard-admin "+id+"\" >> \"${results}/not-run.txt\"\n")
+
+			fresh := auditFresh(t, accepted, check.AuditWorkflow([]byte(doc)))
+
+			joined := strings.Join(fresh, "\n")
+			if !strings.Contains(joined, id) || !strings.Contains(joined, "is no why id") {
+				t.Errorf("AuditWorkflow() = %q, want a message naming %q as no why id: vocabulary.go holds no such id, so a not-run line ending in it is a why the report cannot render", fresh, id)
+			}
+		})
+	}
+}
+
+// auditPublishWhyIDs returns the why ids ci/auditpublish/internal/publish/
+// vocabulary.go's whyNotRun map holds, read from the file at test time.
+func auditPublishWhyIDs(t *testing.T) []string {
+	t.Helper()
+
+	path := filepath.FromSlash("../../../../ci/auditpublish/internal/publish/vocabulary.go")
+
+	src, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v; the check's list of why ids is pinned against it", path, err)
+	}
+
+	m := auditWhyNotRunLiteral.FindSubmatch(src)
+	if m == nil {
+		t.Fatalf("%s holds no var whyNotRun = map[string]string{...}: the check's list of why ids is pinned against it", path)
+	}
+
+	var ids []string
+
+	for _, e := range auditWhyIDLiteral.FindAllSubmatch(m[1], -1) {
+		ids = append(ids, string(e[1]))
+	}
+
+	if len(ids) == 0 {
+		t.Fatalf("%s's whyNotRun holds no why id", path)
+	}
+
+	return ids
+}
+
 // TestAuditWorkflow holds the scheduled security audit's workflow to
 // check.AuditWorkflow: the frame, the two ciphertexts and the reach of every
 // secret. Each case changes one part of the accepted shape and must draw a
@@ -1175,14 +1420,10 @@ func TestAuditWorkflow(t *testing.T) {
 	acceptedWorkflow := string(auditWorkflowFixtureBytes(t))
 	accepted := check.AuditWorkflow([]byte(acceptedWorkflow))
 
-	// The fixture's own messages are what added() takes every case's diff from,
-	// so a rule the check does not hold yet leaves the cases below decidable one
-	// by one instead of all of them failing for that one reason;
-	// TestAuditWorkflowAcceptsTheAcceptedShape is what refuses a fixture the
-	// check does not accept.
-	if len(accepted) != 0 {
-		t.Logf("AuditWorkflow(%s) = %q, want no message: every case's added() diff is taken from these", auditWorkflowFixture, accepted)
-	}
+	// Every case's fresh diff is taken from the accepted shape's messages, so a
+	// fixture the check refuses decides no case: auditFresh fails the test rather
+	// than logging it, and TestAuditWorkflowAcceptsTheAcceptedShape is what
+	// refuses the fixture on its own name.
 
 	// withStep returns the accepted workflow with step inserted at the head of
 	// the job's steps, named head.
@@ -2449,7 +2690,7 @@ func TestAuditWorkflow(t *testing.T) {
 		},
 		{
 			name:     "the ruleset ID guard without its record",
-			workflow: mutate(t, acceptedWorkflow, auditRulesetGuard, strings.Replace(auditRulesetGuard, "              echo \"supply-chain unexpected-ruleset\" >> \"${results}/not-run.txt\"\n", "", 1)),
+			workflow: mutate(t, acceptedWorkflow, auditRulesetGuard, strings.Replace(auditRulesetGuard, "              echo \"supply-chain: a ruleset ID that is no number was not read\" >> \"${results}/limits.txt\"\n", "", 1)),
 			wantIn:   "the ruleset ID's shape guard",
 		},
 		{
@@ -2805,12 +3046,12 @@ func TestAuditWorkflow(t *testing.T) {
 		{
 			name:     "the fuzz target's shape guard ending the step",
 			workflow: mutate(t, acceptedWorkflow, auditFuzzShapeGuard, strings.Replace(auditFuzzShapeGuard, "              continue\n", "              exit 1\n", 1)),
-			wantIn:   "unexpected-target",
+			wantIn:   "a target of an unexpected shape was not run",
 		},
 		{
 			name:     "the fuzz target's shape guard without what it records",
-			workflow: mutate(t, acceptedWorkflow, auditFuzzShapeGuard, strings.Replace(auditFuzzShapeGuard, "              echo \"fuzzing unexpected-target\" >> \"${results}/not-run.txt\"\n", "", 1)),
-			wantIn:   "unexpected-target",
+			workflow: mutate(t, acceptedWorkflow, auditFuzzShapeGuard, strings.Replace(auditFuzzShapeGuard, "              echo \"fuzzing: a target of an unexpected shape was not run\" >> \"${results}/limits.txt\"\n", "", 1)),
+			wantIn:   "a target of an unexpected shape was not run",
 		},
 
 		// H. trivy scans offline: no database, Java database, check bundle or
@@ -2843,32 +3084,34 @@ func TestAuditWorkflow(t *testing.T) {
 
 		// Round E's first part: a verification that fails is a finding about the
 		// release, not a check that did not run. Row 7's five verifications record
-		// rc 1 as release-integrity verification-failed in the results, and keep rc
-		// 124 and any other failure as "not run".
+		// rc 1 as release-integrity verification-failed in the results, and a timeout
+		// or any other failure in the limits.
 		{
 			name:     "row 7's checksum mismatch recorded as tool-failed",
 			workflow: mutate(t, acceptedWorkflow, auditChecksumOutcome, auditWithoutFinding(auditChecksumOutcome)),
-			wantIn:   "verification-failed",
+			wantIn:   "without its outcome branch",
 		},
 		{
 			name:     "row 7's refused release-file attestation without its verification-failed record",
 			workflow: mutate(t, acceptedWorkflow, auditReleaseFileOutcome, auditWithoutFinding(auditReleaseFileOutcome)),
-			wantIn:   "verification-failed",
+			wantIn:   "without its outcome branch",
 		},
 		{
-			name:     "row 7's SBOM attestation timing out recorded as tool-failed",
-			workflow: mutate(t, acceptedWorkflow, auditSBOMOutcome, strings.Replace(auditSBOMOutcome, "-eq 124", "-eq 200", 1)),
-			wantIn:   "timed-out",
+			// Round K's B1: a verification's timeout is the part's own limits line,
+			// never the whole check recorded as one that did not run.
+			name:     "row 7's SBOM attestation's timeout recorded as the whole check not running",
+			workflow: mutate(t, acceptedWorkflow, auditSBOMOutcome, strings.Replace(auditSBOMOutcome, "              echo \"release-integrity: the SBOM's attestation timed out after 3 minutes\"", "              echo \"release-integrity timed-out\" >> \"${results}/not-run.txt\"\n              echo \"release-integrity: the SBOM's attestation timed out after 3 minutes\"", 1)),
+			wantIn:   "in not-run.txt after a part ran",
 		},
 		{
 			name:     "row 7's refused image signature without its verification-failed record",
 			workflow: mutate(t, acceptedWorkflow, auditSignatureOutcome, auditWithoutFinding(auditSignatureOutcome)),
-			wantIn:   "verification-failed",
+			wantIn:   "without its outcome branch",
 		},
 		{
 			name:     "row 7's refused attestation signature without its verification-failed record",
 			workflow: mutate(t, acceptedWorkflow, auditAttestedSigOutcome, auditWithoutFinding(auditAttestedSigOutcome)),
-			wantIn:   "verification-failed",
+			wantIn:   "without its outcome branch",
 		},
 
 		// Round E's second part: no step's own timeouts reach its
@@ -3043,12 +3286,12 @@ func TestAuditWorkflow(t *testing.T) {
 		{
 			name:     "row 14's staging copy without its timeout",
 			workflow: mutate(t, acceptedWorkflow, auditFuzzStagingCopy, strings.Replace(auditFuzzStagingCopy, "timeout 2m docker cp", "docker cp", 1)),
-			wantIn:   "docker cp",
+			wantIn:   "runs docker cp without its timeout",
 		},
 		{
 			name:     "row 14's staging copy without its exit code check",
 			workflow: mutate(t, acceptedWorkflow, auditFuzzStagingCopy, strings.Replace(auditFuzzStagingCopy, " || rc=$?", "", 1)),
-			wantIn:   "rc=$?",
+			wantIn:   "runs docker cp without || rc=$?",
 		},
 		{
 			name:     "row 14's fuzz loop without its budget",
@@ -3058,7 +3301,7 @@ func TestAuditWorkflow(t *testing.T) {
 		{
 			name:     "row 11's exit state read without its timeout",
 			workflow: mutate(t, acceptedWorkflow, auditRuntimeState, strings.Replace(auditRuntimeState, "timeout 1m docker inspect", "docker inspect", 1)),
-			wantIn:   "docker inspect",
+			wantIn:   "runs docker inspect without its timeout",
 		},
 		{
 			name: "row 7's checks run though the release download failed",
@@ -3069,27 +3312,27 @@ func TestAuditWorkflow(t *testing.T) {
 		{
 			name:     "scorecard's failed run recorded nowhere",
 			workflow: mutate(t, acceptedWorkflow, auditScorecardToolFailed, ""),
-			wantIn:   "scorecard",
+			wantIn:   "without its outcome branch",
 		},
 		{
 			name:     "row 8's failed image pull recorded nowhere",
 			workflow: mutate(t, acceptedWorkflow, auditImagePullToolFailed, "            echo \"image-pull timed out after 8 minutes\" >> \"${results}/limits.txt\"\n          fi\n"),
-			wantIn:   "image-pull",
+			wantIn:   "without its outcome branch",
 		},
 		{
 			name:     "row 10's failed image scan recorded nowhere",
 			workflow: mutate(t, acceptedWorkflow, auditTrivyImageToolFailed, "              echo \"image-scan: the image scan timed out after 8 minutes\" >> \"${results}/limits.txt\"\n            fi\n"),
-			wantIn:   "image-scan",
+			wantIn:   "without its outcome branch",
 		},
 		{
 			name:     "row 10's failed SBOM scan recorded nowhere",
 			workflow: mutate(t, acceptedWorkflow, auditTrivySBOMToolFailed, "              echo \"image-scan: the SBOM scan timed out after 4 minutes\" >> \"${results}/limits.txt\"\n            fi\n"),
-			wantIn:   "image-scan",
+			wantIn:   "without its outcome branch",
 		},
 		{
 			name:     "row 10's timed-out image scan recorded only in the limits",
 			workflow: mutate(t, acceptedWorkflow, auditTrivyImageTimedOut, "              echo \"image-scan: the image scan timed out after 8 minutes\" >> \"${results}/limits.txt\"\n"),
-			wantIn:   "image-scan",
+			wantIn:   "without its outcome branch",
 		},
 		{
 			name:     "row 9's binary search counting an empty file",
@@ -3099,12 +3342,12 @@ func TestAuditWorkflow(t *testing.T) {
 		{
 			name:     "row 7's latest image digest read without its shape check",
 			workflow: mutate(t, acceptedWorkflow, auditLatestDigestShape, ""),
-			wantIn:   "latest_digest",
+			wantIn:   "before latest.txt is written",
 		},
 		{
 			name:     "row 7's latest release tag read without its shape check",
 			workflow: mutate(t, acceptedWorkflow, auditLatestReleaseShape, ""),
-			wantIn:   "latest_release",
+			wantIn:   "before latest.txt is written",
 		},
 		{
 			name:     "row 7's unresolved image digest leaving the image unverified",
@@ -3160,6 +3403,128 @@ func TestAuditWorkflow(t *testing.T) {
 				auditRepositoryVariableNames),
 		},
 
+		// Round K: the reviewer's B1, B2, L4 and S2 findings, and the fit
+		// tripwire's holes (L2, S1). A check of several parts records each part's own
+		// outcome in the limits, with its exit file, and the check itself as one that
+		// did not run only when no part produced a result at all; a not-run line
+		// ends in a why id the publish core's vocabulary holds; a malformed
+		// checksums.txt is a finding about the release; a read the step's budget ran
+		// out on is no read the API refused; and every timeout, loop and inner loop
+		// fit counts is one it can follow.
+		{
+			name:     "row 13's per-run create timeout written to not-run.txt",
+			workflow: mutate(t, acceptedWorkflow, auditHostileRunCreate, auditHostileRunCreateWhole),
+			wantIn:   "in not-run.txt inside its loop",
+		},
+		{
+			name:     "row 14's per-target create timeout written to not-run.txt",
+			workflow: mutate(t, acceptedWorkflow, auditFuzzTargetCreate, auditFuzzTargetCreateWhole),
+			wantIn:   "in not-run.txt inside its loop",
+		},
+		{
+			name:     "row 7's one file's refused attestation written as the whole check not running",
+			workflow: mutate(t, acceptedWorkflow, auditReleaseFileOutcome, auditReleaseFileOutcomeWhole),
+			wantIn:   "in not-run.txt inside its loop",
+		},
+		{
+			name:     "row 7's unresolved image digest written as the whole check not running",
+			workflow: mutate(t, acceptedWorkflow, auditNoDigestRecord, auditNoDigestNotRun),
+			wantIn:   "in not-run.txt after a part ran",
+		},
+		{
+			name:     "row 7's no-part-ran record removed",
+			workflow: mutate(t, acceptedWorkflow, auditReleaseEndRecord, ""),
+			wantIn:   "has no record of a check none of whose parts ran",
+		},
+		{
+			name:     "row 13's no-part-ran record removed",
+			workflow: mutate(t, acceptedWorkflow, auditHostileEndRecord, ""),
+			wantIn:   "has no record of a check none of whose parts ran",
+		},
+		{
+			name:     "row 14's no-part-ran record removed",
+			workflow: mutate(t, acceptedWorkflow, auditFuzzEndRecord, ""),
+			wantIn:   "has no record of a check none of whose parts ran",
+		},
+		{
+			// B2: unexpected-ruleset is no why id the publish core holds, and a
+			// ruleset ID of another shape is no reason to write the check as one that
+			// did not run.
+			name: "the ruleset ID written to not-run.txt with an id no vocabulary holds",
+			workflow: mutate(t, acceptedWorkflow, auditRulesetGuard, "            if [[ ! \"${id}\" =~ ^[0-9]+$ ]]; then\n"+
+				"              echo \"supply-chain unexpected-ruleset\" >> \"${results}/not-run.txt\"\n"+
+				"              continue\n"+
+				"            fi\n"),
+			wantIn: "is no why id",
+		},
+		{
+			name:     "row 7's malformed checksums.txt recorded nowhere",
+			workflow: mutate(t, acceptedWorkflow, auditMalformedChecksums, "            ran_any=1\n"),
+			wantIn:   "for a checksums.txt with no well-formed line",
+		},
+		{
+			// S2: the budget ran out on these reads; nothing refused them, so they
+			// are no read the API refused and the maintainer has no permission to
+			// look for.
+			name:     "row 15's budget skips written to read-refused.txt",
+			workflow: mutate(t, acceptedWorkflow, auditReadAPIBudget, strings.Replace(auditReadAPIBudget, "> \"${out}/read-skipped.txt\"", "> \"${out}/read-refused.txt\"", 1)),
+			wantIn:   "read-skipped.txt",
+		},
+
+		// Fit's holes (round K, the auditor's L2 and the reviewer's S1): a timeout
+		// fit cannot read as whole minutes or seconds, a loop whose header it cannot
+		// follow, an inner loop in a budgeted body that nothing bounds, and a timeout
+		// a command runs once per argument. None of them is counted today, so a step
+		// whose own timeouts outrun its timeout-minutes is accepted.
+		{
+			name:     "row 14's tree extraction under timeout 1h",
+			workflow: mutate(t, acceptedWorkflow, auditFuzzTree, strings.Replace(auditFuzzTree, "timeout 2m tar", "timeout 1h tar", 1)),
+			wantIn:   "is no whole number of minutes or seconds",
+		},
+		{
+			name:     "row 14's tree extraction under timeout -k 5 50m",
+			workflow: mutate(t, acceptedWorkflow, auditFuzzTree, strings.Replace(auditFuzzTree, "timeout 2m tar", "timeout -k 5 50m tar", 1)),
+			wantIn:   "is no whole number of minutes or seconds",
+		},
+		{
+			name:     "row 14's tree extraction under timeout 1.5m",
+			workflow: mutate(t, acceptedWorkflow, auditFuzzTree, strings.Replace(auditFuzzTree, "timeout 2m tar", "timeout 1.5m tar", 1)),
+			wantIn:   "is no whole number of minutes or seconds",
+		},
+		{
+			name: "row 7's loop whose body and header share a line",
+			workflow: mutate(t, acceptedWorkflow, auditReleaseEndRecord,
+				"          for f in one two; do timeout 1m cat \"${out}/image-digest.txt\" > /dev/null || true; done\n"+
+					auditReleaseEndRecord),
+			wantIn: "on one line",
+		},
+		{
+			name: "row 7's loop with do on a line of its own",
+			workflow: mutate(t, acceptedWorkflow, auditReleaseEndRecord,
+				"          for f in one two\n"+
+					"          do\n"+
+					"            timeout 1m cat \"${out}/image-digest.txt\" > /dev/null || true\n"+
+					"          done\n"+
+					auditReleaseEndRecord),
+			wantIn: "do on a line of its own",
+		},
+		{
+			name: "row 14's unbudgeted inner loop in the budgeted target loop",
+			workflow: mutate(t, acceptedWorkflow, auditFuzzTargetRm,
+				"            fi\n"+
+					"            for attempt in $(seq 1 20); do\n"+
+					"              timeout 1m docker rm -f \"${cid}\" > /dev/null || true\n"+
+					"            done\n"),
+			wantIn: "inner loop with a timeout",
+		},
+		{
+			name: "row 7's timeout run once per argument by xargs",
+			workflow: mutate(t, acceptedWorkflow, auditReleaseEndRecord,
+				"          printf '%s\\n' one two | xargs -n1 timeout 1m cat > /dev/null || true\n"+
+					auditReleaseEndRecord),
+			wantIn: "xargs",
+		},
+
 		// A document the reader cannot follow tells the check nothing, so it is
 		// refused rather than passed.
 		{name: "an empty document", workflow: "", wantIn: "empty"},
@@ -3204,7 +3569,7 @@ func TestAuditWorkflow(t *testing.T) {
 				return
 			}
 
-			fresh := auditFresh(accepted, got)
+			fresh := auditFresh(t, accepted, got)
 			if len(fresh) == 0 {
 				t.Errorf("AuditWorkflow() draws no message for the case, want one naming %q: the accepted shape's messages were %q", tc.wantIn, got)
 

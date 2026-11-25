@@ -322,6 +322,10 @@ jobs:
           # No registry credential: the image is public, and every registry read here is anonymous.
           export DOCKER_CONFIG="${RUNNER_TEMP}/docker-anonymous"
           mkdir -p "${DOCKER_CONFIG}"
+          # A part of the check that produced a result, whatever its exit, sets ran_any: release-integrity
+          # is recorded as a check that did not run only when no part of it ran at all, and every part's
+          # own outcome, its exit file and a limits line, goes to the limits.
+          ran_any=0
           rc=0
           timeout 5m gh release download "${tag}" --repo "${GH_REPO}" --dir "${rel}" > "${out}/download.stdout" 2> "${out}/download.stderr" || rc=$?
           echo "${rc}" > "${out}/download.exit"
@@ -349,6 +353,14 @@ jobs:
             rc=0
             timeout 1m grep -E '^[0-9a-f]{64}  [A-Za-z0-9._+-]+$' "${rel}/checksums.txt" > "${out}/checksums.filtered" 2> "${out}/checksums-filter.stderr" || rc=$?
             echo "${rc}" > "${out}/checksums-filter.exit"
+            ran_any=1
+            # A checksums.txt that holds no well-formed line names no file of the release: that is a
+            # finding about the release, recorded verification-failed with the limits line that says why,
+            # never a tool that failed and never a silent pass.
+            if [ -s "${rel}/checksums.txt" ] && [ ! -s "${out}/checksums.filtered" ]; then
+              echo "release-integrity verification-failed" >> "${results}/verification-failed.txt"
+              echo "release-integrity: checksums.txt holds no well-formed line" >> "${results}/limits.txt"
+            fi
             # Every file against checksums.txt's well-formed lines, and checksums.txt against the release's
             # files: a file it does not list, or one it lists that the release lacks, is data for the model
             # too, and a sha256sum a hostile line makes read forever ends in the check's own timeout. A
@@ -357,19 +369,20 @@ jobs:
             rc=0
             (cd "${rel}" && timeout 5m sha256sum --check --strict "${out}/checksums.filtered") > "${out}/checksums.stdout" 2> "${out}/checksums.stderr" || rc=$?
             echo "${rc}" > "${out}/checksums.exit"
+            ran_any=1
             if [ "${rc}" -eq 124 ]; then
-              echo "release-integrity timed-out" >> "${results}/not-run.txt"
               echo "release-integrity: the checksum check timed out after 5 minutes" >> "${results}/limits.txt"
             elif [ "${rc}" -eq 1 ] && [ -s "${out}/checksums.filtered" ]; then
               echo "release-integrity verification-failed" >> "${results}/verification-failed.txt"
             elif [ "${rc}" -ne 0 ]; then
-              echo "release-integrity tool-failed" >> "${results}/not-run.txt"
+              echo "release-integrity: the checksum check failed with exit ${rc}" >> "${results}/limits.txt"
             fi
             find "${rel}" -maxdepth 1 -type f ! -name checksums.txt -printf '%f\n' | LC_ALL=C sort > "${out}/assets.txt"
             { awk '{ print $2 }' "${rel}/checksums.txt" 2> /dev/null || true; } | LC_ALL=C sort > "${out}/listed.txt"
             rc=0
             diff "${out}/listed.txt" "${out}/assets.txt" > "${out}/listing.diff" || rc=$?
             echo "${rc}" > "${out}/listing.exit"
+            ran_any=1
             # Every release file's build provenance, checksums.txt's included, within the loop's budget of
             # 20 minutes: the budget, the 2 minutes of the iteration it began before that budget and the 18
             # minutes of timeouts after the loop (the two cosign verify-attestation runs counted) are 40,
@@ -387,13 +400,13 @@ jobs:
                 --source-ref "refs/tags/${tag}" \
                 --deny-self-hosted-runners > "${out}/attestations/${name}.stdout" 2> "${out}/attestations/${name}.stderr" || rc=$?
               echo "${rc}" > "${out}/attestations/${name}.exit"
+              ran_any=1
               if [ "${rc}" -eq 124 ]; then
-                echo "release-integrity timed-out" >> "${results}/not-run.txt"
                 echo "release-integrity: the attestation of ${name} timed out after 2 minutes" >> "${results}/limits.txt"
               elif [ "${rc}" -eq 1 ]; then
                 echo "release-integrity verification-failed" >> "${results}/verification-failed.txt"
               elif [ "${rc}" -ne 0 ]; then
-                echo "release-integrity tool-failed" >> "${results}/not-run.txt"
+                echo "release-integrity: the attestation of ${name} failed with exit ${rc}" >> "${results}/limits.txt"
               fi
             done < <(find "${rel}" -maxdepth 1 -type f -print0)
           fi
@@ -430,13 +443,13 @@ jobs:
             # cosign maps a refused signature to exit codes 10 to 13 (no signature, no such tag, no
             # matching signature, no certificate on the signature), so those are a finding about the
             # release too, never a tool that failed.
+            ran_any=1
             if [ "${rc}" -eq 124 ]; then
-              echo "release-integrity timed-out" >> "${results}/not-run.txt"
               echo "release-integrity: the image's signature timed out after 3 minutes" >> "${results}/limits.txt"
             elif [ "${rc}" -eq 1 ] || { [ "${rc}" -ge 10 ] && [ "${rc}" -le 13 ]; }; then
               echo "release-integrity verification-failed" >> "${results}/verification-failed.txt"
             elif [ "${rc}" -ne 0 ]; then
-              echo "release-integrity tool-failed" >> "${results}/not-run.txt"
+              echo "release-integrity: the image's signature check failed with exit ${rc}" >> "${results}/limits.txt"
             fi
             for pair in provenance:slsaprovenance1 sbom:https://spdx.dev/Document/v2.3; do
               kind="${pair%%:*}"
@@ -448,13 +461,13 @@ jobs:
                 --certificate-oidc-issuer "${issuer}" \
                 --certificate-github-workflow-trigger push > "${out}/cosign-${kind}.json" 2> "${out}/cosign-${kind}.stderr" || rc=$?
               echo "${rc}" > "${out}/cosign-${kind}.exit"
+              ran_any=1
               if [ "${rc}" -eq 124 ]; then
-                echo "release-integrity timed-out" >> "${results}/not-run.txt"
                 echo "release-integrity: the ${kind} attestation's signature timed out after 3 minutes" >> "${results}/limits.txt"
               elif [ "${rc}" -eq 1 ]; then
                 echo "release-integrity verification-failed" >> "${results}/verification-failed.txt"
               elif [ "${rc}" -ne 0 ]; then
-                echo "release-integrity tool-failed" >> "${results}/not-run.txt"
+                echo "release-integrity: the ${kind} attestation's signature check failed with exit ${rc}" >> "${results}/limits.txt"
               fi
             done
             # The SBOM itself, for row 10: the predicate of the attestation gh verifies.
@@ -467,22 +480,28 @@ jobs:
               --predicate-type https://spdx.dev/Document/v2.3 \
               --format json > "${out}/sbom-attestation.json" 2> "${out}/sbom-attestation.stderr" || rc=$?
             echo "${rc}" > "${out}/sbom-attestation.exit"
+            ran_any=1
             if [ "${rc}" -eq 124 ]; then
-              echo "release-integrity timed-out" >> "${results}/not-run.txt"
               echo "release-integrity: the SBOM's attestation timed out after 3 minutes" >> "${results}/limits.txt"
             elif [ "${rc}" -eq 1 ]; then
               echo "release-integrity verification-failed" >> "${results}/verification-failed.txt"
             elif [ "${rc}" -ne 0 ]; then
-              echo "release-integrity tool-failed" >> "${results}/not-run.txt"
+              echo "release-integrity: the SBOM's attestation failed with exit ${rc}" >> "${results}/limits.txt"
             fi
             rc=0
             jq -e '.[0].verificationResult.statement.predicate' "${out}/sbom-attestation.json" > "${out}/sbom.spdx.json" 2> /dev/null || rc=$?
             echo "${rc}" > "${out}/sbom-extract.exit"
           else
             # No digest is no verification: the image's signature and its two attestations were not
-            # checked, which is recorded as the check that did not run, never left silent.
-            echo "release-integrity tool-failed" >> "${results}/not-run.txt"
+            # checked, which is a limits line about this check, never a check that did not run and never
+            # a part of it that ran.
             echo "release-integrity: no image digest, so the image's signature and attestations were not verified" >> "${results}/limits.txt"
+          fi
+          # release-integrity is recorded as a check that did not run only when no part of it produced a
+          # result at all: a part that ran, whatever its exit, is a limits line, and the skill reads a
+          # check with any finding, and any verification-failed.txt line, as one that ran.
+          if [ "${ran_any}" -eq 0 ]; then
+            echo "release-integrity tool-failed" >> "${results}/not-run.txt"
           fi
           echo "finished"
       # Row 8. The image, pulled anonymously from GHCR by the digest row 7 resolved: no packages scope and
@@ -741,6 +760,10 @@ jobs:
           results="${RUNNER_TEMP}/results"
           out="${results}/hostile-inventories"
           mkdir -p "${out}"
+          # A part of the check that produced a result, whatever its exit, sets ran_any: the step's loops
+          # record each run's outcome in the limits, and the check itself as not run only when no part of
+          # it ran at all.
+          ran_any=0
           image="ghcr.io/${GITHUB_REPOSITORY,,}"
           digest="$(cat "${results}/release-integrity/image-digest.txt")"
           if [ -z "${digest}" ]; then
@@ -849,11 +872,11 @@ jobs:
               rc=0
               cid="$(timeout 2m docker create --read-only --network none --cap-drop ALL --security-opt no-new-privileges --memory 512m --pids-limit 64 "audit-hostile:${GITHUB_RUN_ID}" assess --inventory "hostile/${name}" --target all --format "${format}")" || rc=$?
               echo "${rc}" > "${out}/${run}.create.exit"
+              ran_any=1
               if [ "${rc}" -eq 124 ]; then
-                echo "hostile-inventories timed-out" >> "${results}/not-run.txt"
                 echo "hostile-inventories: the create for ${run} timed out after 2 minutes" >> "${results}/limits.txt"
               elif [ "${rc}" -ne 0 ]; then
-                echo "hostile-inventories tool-failed" >> "${results}/not-run.txt"
+                echo "hostile-inventories: the create for ${run} failed with exit ${rc}" >> "${results}/limits.txt"
               fi
               if [ "${rc}" -ne 0 ]; then
                 continue
@@ -861,16 +884,21 @@ jobs:
               rc=0
               timeout 60 docker start --attach "${cid}" > "${out}/${run}.stdout" 2> "${out}/${run}.stderr" < /dev/null || rc=$?
               echo "${rc}" > "${out}/${run}.exit"
+              ran_any=1
               if [ "${rc}" -eq 124 ]; then
                 timeout 1m docker kill "${cid}" > /dev/null 2>&1 || true
-                echo "hostile-inventories timed-out" >> "${results}/not-run.txt"
-                echo "hostile-inventories: ${run} timed out after 60 seconds" >> "${results}/limits.txt"
+                echo "hostile-inventories: ${run} timed out after 60 seconds, a finding candidate of the run" >> "${results}/limits.txt"
               fi
               timeout 1m docker inspect --format '{{.State.ExitCode}} {{.State.OOMKilled}}' "${cid}" > "${out}/${run}.state" || true
               timeout 1m docker rm -f "${cid}" > /dev/null || true
             done
           done
           timeout 1m docker image rm "audit-hostile:${GITHUB_RUN_ID}" > /dev/null || true
+          # The run loop's parts each recorded themselves in the limits: only a step whose loop ran no part
+          # at all has no result to report, and only then is the check recorded as one that did not run.
+          if [ "${ran_any}" -eq 0 ]; then
+            echo "hostile-inventories tool-failed" >> "${results}/not-run.txt"
+          fi
           echo "finished"
       # Row 14. Time-boxed fuzzing of the committed Fuzz* targets, found by reading the tracked *_test.go
       # files outside testdata as text: nothing runs to list them. Each target fuzzes for 10 minutes in a
@@ -895,6 +923,9 @@ jobs:
           results="${RUNNER_TEMP}/results"
           out="${results}/fuzzing"
           mkdir -p "${out}/targets"
+          # A part of the check that produced a result, whatever its exit, sets ran_any: each target's
+          # outcome is a limits line, and fuzzing is recorded as not run only when no target ran at all.
+          ran_any=0
           git ls-files -z -- '*_test.go' | while IFS= read -r -d '' file; do
             case "/${file}" in
               */testdata/*) continue ;;
@@ -997,7 +1028,7 @@ jobs:
           n=0
           while read -r pkg name; do
             if [[ ! "${name}" =~ ^Fuzz[A-Z0-9_][A-Za-z0-9_]*$ ]] || [[ ! "${pkg}" =~ ^[A-Za-z0-9_][A-Za-z0-9_./-]*$ ]] || [[ "${pkg}" == *..* ]]; then
-              echo "fuzzing unexpected-target" >> "${results}/not-run.txt"
+              echo "fuzzing: a target of an unexpected shape was not run" >> "${results}/limits.txt"
               continue
             fi
             n=$((n + 1))
@@ -1019,11 +1050,11 @@ jobs:
               "audit-fuzz:${GITHUB_RUN_ID}" \
               sh -c 'cp -R /src /scratch/src && cd /scratch/src && go test -run "^$" -fuzz "^${FUZZ_NAME}\$" -fuzztime 10m "./${FUZZ_PKG}" >&2; rc=$?; tar -C /scratch/src -cf - "${FUZZ_PKG}/testdata/fuzz" 2> /dev/null; exit "${rc}"')" || rc=$?
             echo "${rc}" > "${out}/targets/${n}-${name}.create.exit"
+            ran_any=1
             if [ "${rc}" -eq 124 ]; then
-              echo "fuzzing timed-out" >> "${results}/not-run.txt"
               echo "fuzzing: the create for ${pkg} ${name} timed out after 2 minutes" >> "${results}/limits.txt"
             elif [ "${rc}" -ne 0 ]; then
-              echo "fuzzing tool-failed" >> "${results}/not-run.txt"
+              echo "fuzzing: the create for ${pkg} ${name} failed with exit ${rc}" >> "${results}/limits.txt"
             fi
             if [ "${rc}" -ne 0 ]; then
               continue
@@ -1031,21 +1062,27 @@ jobs:
             rc=0
             timeout 12m docker start --attach "${cid}" > "${out}/targets/${n}-${name}.tar" 2> "${out}/targets/${n}-${name}.log" < /dev/null || rc=$?
             echo "${rc}" > "${out}/targets/${n}-${name}.exit"
+            ran_any=1
             if [ "${rc}" -eq 124 ]; then
               timeout 1m docker kill "${cid}" > /dev/null 2>&1 || true
-              echo "fuzzing timed-out" >> "${results}/not-run.txt"
               echo "fuzzing: ${pkg} ${name} timed out after 12 minutes" >> "${results}/limits.txt"
             fi
             timeout 1m docker rm -f "${cid}" > /dev/null || true
           done < "${out}/targets.txt"
           timeout 1m docker image rm "audit-fuzz:${GITHUB_RUN_ID}" > /dev/null || true
+          # Each target's outcome is a limits line: fuzzing is recorded as not run only when no target of
+          # the loop ran at all.
+          if [ "${ran_any}" -eq 0 ]; then
+            echo "fuzzing tool-failed" >> "${results}/not-run.txt"
+          fi
           echo "finished"
       # Row 15. Supply-chain reads: the workflows' action pins and permissions from the checkout, as
       # text; the rulesets, the environments and their branch policies, and the secret and variable
       # names, as the release-tag skill's step 2 reads them; Renovate's Dependency Dashboard and open pull
       # requests; and the dependency files changed since the last report. Reads only, with the job's
       # token: a read it is refused is recorded in read-refused.txt and the limits, "not run (read
-      # refused)" for that read.
+      # refused)" for that read, and a read the step's budget ran out on in read-skipped.txt and the
+      # limits, so that a permission that is fine is never chased for it.
       - name: Supply-chain reads
         timeout-minutes: 15
         env:
@@ -1059,17 +1096,18 @@ jobs:
           grep -rnE '^[[:space:]]*(-[[:space:]]+)?uses:' .github/workflows > "${out}/uses.txt" || true
           { grep -rnE '^[[:space:]]*(-[[:space:]]+)?uses:' .github/workflows || true; } | { grep -vE '@[0-9a-f]{40}([[:space:]]|$)' || true; } > "${out}/uses-not-pinned.txt"
           grep -rn -A12 -E '^[[:space:]]*permissions:' .github/workflows > "${out}/permissions.txt" || true
-          touch "${out}/read-refused.txt"
+          touch "${out}/read-refused.txt" "${out}/read-skipped.txt"
           # read_api reads one endpoint into the results directory, never the log, and keeps its third
           # argument as the jq filter: the reads that return values pass a filter that keeps the names
           # alone, so no variable's value reaches the model.
           read_api() {
             local name="$1" endpoint="$2" filter="${3:-.}" rc=0
             # The function's budget: the step's reads number more than 25, each of 2 minutes, far past
-            # its 15, so no read starts after 12 minutes of it; the reads it did not make are recorded
-            # in read-refused.txt, which the step's end names in the limits, "not run (read refused)".
+            # its 15, so no read starts after 12 minutes of it. The reads it did not reach are recorded in
+            # read-skipped.txt, never in read-refused.txt: the budget ran out on them, the API refused
+            # nothing, and the step's end names each list in the limits by its own cause.
             if [ "${SECONDS}" -ge 720 ]; then
-              echo "${name}" >> "${out}/read-refused.txt"
+              echo "${name}" >> "${out}/read-skipped.txt"
               return 0
             fi
             timeout 2m gh api "${endpoint}" --jq "${filter}" > "${out}/api/${name}.json" 2> "${out}/api/${name}.stderr" || rc=$?
@@ -1081,7 +1119,7 @@ jobs:
           read_api rulesets "repos/${GH_REPO}/rulesets?includes_parents=true"
           for id in $(jq -r '.[]?.id' "${out}/api/rulesets.json" 2> /dev/null || true); do
             if [[ ! "${id}" =~ ^[0-9]+$ ]]; then
-              echo "supply-chain unexpected-ruleset" >> "${results}/not-run.txt"
+              echo "supply-chain: a ruleset ID that is no number was not read" >> "${results}/limits.txt"
               continue
             fi
             read_api "ruleset-${id}" "repos/${GH_REPO}/rulesets/${id}"
@@ -1106,6 +1144,9 @@ jobs:
           fi
           if [ -s "${out}/read-refused.txt" ]; then
             echo "supply-chain: reads refused to the job's token, listed in supply-chain/read-refused.txt: not run (read refused)" >> "${results}/limits.txt"
+          fi
+          if [ -s "${out}/read-skipped.txt" ]; then
+            echo "supply-chain: the budget of 12 minutes ran out before these reads, listed in supply-chain/read-skipped.txt" >> "${results}/limits.txt"
           fi
           echo "finished"
       - name: Encrypt the checks' results to the model key
