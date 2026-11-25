@@ -113,10 +113,11 @@ type Config struct {
 	Settings string
 
 	// PermissionMode is --permission-mode, default or dontAsk only: never
-	// bypassPermissions, plan or any other. Empty passes no flag. With a
-	// Transcript, the session's system/init element must report exactly this
-	// mode (ModeCheck, issue #592): the run is stopped at the line that
-	// refuses it, and fails with a *PermissionModeError.
+	// bypassPermissions, plan or any other. Empty passes no flag. A mode
+	// needs a Transcript: without one, the launch is refused with ErrModel
+	// before anything runs. The session's system/init element must report
+	// exactly this mode (ModeCheck, issue #592): the run is stopped at the
+	// line that refuses it, and fails with a *PermissionModeError.
 	PermissionMode string
 
 	// AppendSystemPrompt appends the prompt's System to the CLI's own system
@@ -499,6 +500,10 @@ func (c *CLI) checkLaunch() error {
 
 	if c.cfg.PermissionMode != "" && !contains(permissionModes, c.cfg.PermissionMode) {
 		return fmt.Errorf("%w: the permission mode %q is not one of %s", ErrModel, cliCode(c.cfg.PermissionMode), strings.Join(permissionModes, ", "))
+	}
+
+	if c.cfg.PermissionMode != "" && c.cfg.Transcript == nil {
+		return fmt.Errorf("%w: a permission mode is passed on only with a transcript to check the session's init element in", ErrModel)
 	}
 
 	if c.cfg.Settings != "" && !strings.HasPrefix(c.cfg.Settings, "/") {

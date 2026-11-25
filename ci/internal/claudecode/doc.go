@@ -22,7 +22,9 @@
 // the token and every value of the config's Redact redacted, and name an error result by a constant class and its
 // subtype alone (issue #374).
 //
-// A streamed run of a config that asks for a permission mode is checked
+// A config that asks for a permission mode without a transcript is refused
+// with ErrModel before anything runs. A streamed run of one that asks for a
+// permission mode is checked
 // against the session's system/init element as the CLI prints it (ModeCheck,
 // issue #592): an element of another mode, none before the session's turn, a
 // second one, or one naming type, subtype or permissionMode twice or in

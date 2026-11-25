@@ -1276,7 +1276,7 @@ test of ours (Decision 3's reason).
   | `Tools` | `--tools`, the built-in tools, joined with `,`; each a tool name of letters only | **no tools**: `--tools ""` |
   | `Effort` | `--effort`; one of `low`, `medium`, `high`, `xhigh`, `max` | no flag: the CLI's default |
   | `Settings` | `--settings <absolute path>` | no flag |
-  | `PermissionMode` | `--permission-mode`; `default` or `dontAsk` only, never `bypassPermissions` (*amended 2026-11-25, issue #592*: `default` added, `plan` removed); with a `Transcript`, the session's init element must report it, or the run is stopped and fails with a `*PermissionModeError` | no flag, no check |
+  | `PermissionMode` | `--permission-mode`; `default` or `dontAsk` only, never `bypassPermissions` (*amended 2026-11-25, issue #592*: `default` added, `plan` removed); needs a `Transcript`, or the launch is refused before anything runs; the session's init element must report it, or the run is stopped and fails with a `*PermissionModeError` | no flag, no check |
   | `AppendSystemPrompt` | the system prompt is appended to the CLI's own (`--append-system-prompt-file`) | it replaces it (`--system-prompt-file`) |
   | `SafeModeOff` | leave `--safe-mode` out | `--safe-mode` |
   | `WorkDir` | the CLI's working directory, an absolute path that exists | a fresh empty temporary directory, removed after the run |
@@ -2160,7 +2160,7 @@ tarball is never kept.
 The launcher's empty MCP configuration is passed by both callers from this pull request: the reviewer's
 argument vector gains `--mcp-config {"mcpServers":{}}` after `--strict-mcp-config`, and
 `ci/aireview/internal/review/claudecli_test.go` pins it. The launcher refuses, naming the field, before
-anything runs: an `Effort` outside the five, a `PermissionMode` other than `default` or `dontAsk` (`dontAsk` or `plan` until issue #592), a relative
+anything runs: an `Effort` outside the five, a `PermissionMode` other than `default` or `dontAsk` (`dontAsk` or `plan` until issue #592), a `PermissionMode` with no `Transcript` (issue #592), a relative
 `Settings` path, a `WorkDir` or `Home` that is not an absolute path to a directory that exists, and an
 `Env` entry that is no `NAME=VALUE` or whose name is not on the `Env` allow list (`TMPDIR`,
 `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB` and `SHIFT2EU_AUDIT_CANARY`, amended 2026-11-23, issue #277 round F;
