@@ -559,8 +559,9 @@ func inventoryGuides() []inventoryGuideCase {
 					id: "shop-edge-map", rawType: "compute.googleapis.com/UrlMap", category: "network.loadbalancer",
 					capabilities: []string{"ipv6", "zone-high-availability"},
 				},
-				// A backend service no URL map names proves its own front end via
-				// a UDP forwarding rule; a target pool never names its protocol.
+				// A backend service no URL map names is a load balancer of its own,
+				// and a UDP forwarding rule reaching it gives it udp. A target pool
+				// names no protocol, so its UDP comes from its forwarding rule.
 				{
 					id: "shop-dns-be", rawType: "compute.googleapis.com/BackendService", category: "network.loadbalancer",
 					capabilities: []string{"udp", "zone-high-availability"},
