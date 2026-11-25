@@ -665,7 +665,7 @@ func normalise(o Offering) (Offering, error) {
 
 	regions := newRegionSet(o.Regions)
 
-	plans, err := normalisePlans(o.Plans, regions)
+	plans, err := normalisePlans(o.Plans, regions, allMatchOnMemory(o.Categories))
 	if err != nil {
 		return Offering{}, err
 	}

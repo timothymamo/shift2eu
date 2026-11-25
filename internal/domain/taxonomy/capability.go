@@ -36,10 +36,16 @@ const (
 	Autoscaling Capability = "autoscaling"
 	// EncryptionAtRest is encrypting stored data.
 	EncryptionAtRest Capability = "encryption-at-rest"
-	// Snapshots is taking point-in-time copies of a volume or instance.
+	// Snapshots is taking point-in-time copies of a volume, instance, file
+	// share or data set (such as a cache's RDB snapshot).
 	Snapshots Capability = "snapshots"
 	// DeadLetterQueue is setting aside messages that repeatedly fail processing.
 	DeadLetterQueue Capability = "dead-letter-queue"
+	// Sharding is data partitioned across several primary nodes that clients
+	// address, such as a Redis Cluster.
+	Sharding Capability = "sharding"
+	// UDP is forwarding UDP datagrams, as a layer 4 load balancer may.
+	UDP Capability = "udp"
 )
 
 // ErrUnknownCapability is returned for a value that is not in the capability
@@ -63,7 +69,9 @@ var capabilities = []Capability{
 	ObjectVersioning,
 	PointInTimeRestore,
 	ReadReplicas,
+	Sharding,
 	Snapshots,
+	UDP,
 	ZoneHighAvailability,
 }
 

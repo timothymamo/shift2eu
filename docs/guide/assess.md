@@ -168,10 +168,13 @@ priced.
 
 - **Plan.** For a resource with a size and a fit other than `none`, the plan is the cheapest plan of
   its best offering whose vCPU and memory are each at least the resource's; ties go to fewer vCPU, then
-  less memory, then the name. A size no plan covers shows "no plan large enough" with the largest
-  plan's size. The size never changes the fit.
+  less memory, then the name. A `cache.redis` resource is matched on its memory alone, and a cache plan
+  whose target gives no vCPU count is shown by its memory, "8 GiB"
+  ([ADR 0046](../adr/0046-add-seven-taxonomy-categories-and-match-cache-plans-on-memory.md)). A size no
+  plan covers shows "no plan large enough" with the largest plan's size. The size never changes the
+  fit.
 - **Monthly estimate** = plan price × `count` × `hoursPerMonth` / 730, plus storage above what the plan
-  includes × the offering's per-GiB price. Block and object storage are priced per GiB alone. A
+  includes × the offering's per-GiB price. Block, object and file storage are priced per GiB alone. A
   `count` that is not given is taken as 1, and an `hoursPerMonth` that is not given as 730; the cell
   says "(count assumed 1)" or "(730 hours assumed)". Amounts are rounded to the cent only when shown.
 - **Storage not included.** Some plans include no disk: their storage is sold per GiB apart from the
@@ -195,7 +198,9 @@ priced.
   ([ADR 0026](../adr/0026-add-an-optional-fixed-monthly-fee-per-offering-to-snapshot-format-v2.md)). A
   fee alone never makes an estimate.
 - **Not estimated.** A resource that cannot be priced says "not estimated" and why: `no fit`,
-  `usage-priced` (`serverless.function`, `messaging.queue`), `size unknown`, `no plan` (the offering
+  `usage-priced` (`serverless.function`, `serverless.container`, `messaging.queue`,
+  `messaging.topic`), `not priced` (`network.loadbalancer`, `registry.container`: billed per size or
+  plan, which no inventory field records; `not-priced` in the JSON report), `size unknown`, `no plan` (the offering
   lists none), `no plan large enough`, `not offered in <region>` (the offering is not sold in that
   region), or `no price in <region>` / `no storage price in <region>` (the offering is sold there but
   the snapshot has no price for it). It is never priced at €0: totals add only the estimated resources and say how

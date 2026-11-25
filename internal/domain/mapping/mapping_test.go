@@ -62,6 +62,28 @@ func computeResource(id string, capabilities ...taxonomy.Capability) inventory.R
 	}
 }
 
+// categoryOffering is an offering that serves one category in fr-par, with the
+// capabilities the candidate ordering compares.
+func categoryOffering(name string, category taxonomy.Category, capabilities ...taxonomy.Capability) catalog.Offering {
+	return catalog.Offering{
+		Name:         name,
+		Categories:   []taxonomy.Category{category},
+		Capabilities: capabilities,
+		Regions:      []string{"fr-par"},
+	}
+}
+
+// categoryResource is a resource of one category, with the capabilities it uses.
+func categoryResource(id, rawType string, category taxonomy.Category, capabilities ...taxonomy.Capability) inventory.Resource {
+	return inventory.Resource{
+		ID:           id,
+		RawType:      rawType,
+		Category:     category,
+		Region:       "eu-west-1",
+		Capabilities: capabilities,
+	}
+}
+
 func TestMap(t *testing.T) {
 	t.Parallel()
 
@@ -333,6 +355,71 @@ func TestMap(t *testing.T) {
 			wantFit:   mapping.Direct,
 			wantCands: []mapping.Candidate{{Offering: computeOffering("Instances", taxonomy.IPv6), Fit: mapping.Direct}},
 			wantReas:  []mapping.Reason{{Code: mapping.AllCapabilities, Offering: "Instances"}},
+		},
+		// PRD #552: udp is a capability of a load balancer, and sharding of a
+		// cache. An offering that does not list it accepts the resource partially
+		// and the reason names the capability, a UDP load balancer on Scaleway.
+		{
+			name: "a UDP load balancer is partial on an offering without udp",
+			resource: categoryResource("lb-example", "AWS::ElasticLoadBalancingV2::LoadBalancer",
+				taxonomy.NetworkLoadBalancer, taxonomy.UDP),
+			offerings: []catalog.Offering{categoryOffering("Load Balancer", taxonomy.NetworkLoadBalancer)},
+			wantFit:   mapping.Partial,
+			wantCands: []mapping.Candidate{{
+				Offering: categoryOffering("Load Balancer", taxonomy.NetworkLoadBalancer),
+				Fit:      mapping.Partial,
+				Missing:  []taxonomy.Capability{taxonomy.UDP},
+			}},
+			wantReas: []mapping.Reason{{
+				Code:       mapping.MissingCapability,
+				Offering:   "Load Balancer",
+				Capability: taxonomy.UDP,
+			}},
+		},
+		{
+			name: "a UDP load balancer is direct on an offering that lists udp",
+			resource: categoryResource("lb-example", "AWS::ElasticLoadBalancingV2::LoadBalancer",
+				taxonomy.NetworkLoadBalancer, taxonomy.UDP),
+			offerings: []catalog.Offering{
+				categoryOffering("Load Balancer", taxonomy.NetworkLoadBalancer, taxonomy.UDP),
+			},
+			wantFit: mapping.Direct,
+			wantCands: []mapping.Candidate{{
+				Offering: categoryOffering("Load Balancer", taxonomy.NetworkLoadBalancer, taxonomy.UDP),
+				Fit:      mapping.Direct,
+			}},
+			wantReas: []mapping.Reason{{Code: mapping.AllCapabilities, Offering: "Load Balancer"}},
+		},
+		{
+			name: "a sharded cache is partial on an offering without sharding",
+			resource: categoryResource("cache-example", "AWS::ElastiCache::ReplicationGroup",
+				taxonomy.CacheRedis, taxonomy.Sharding),
+			offerings: []catalog.Offering{categoryOffering("Managed Valkey", taxonomy.CacheRedis)},
+			wantFit:   mapping.Partial,
+			wantCands: []mapping.Candidate{{
+				Offering: categoryOffering("Managed Valkey", taxonomy.CacheRedis),
+				Fit:      mapping.Partial,
+				Missing:  []taxonomy.Capability{taxonomy.Sharding},
+			}},
+			wantReas: []mapping.Reason{{
+				Code:       mapping.MissingCapability,
+				Offering:   "Managed Valkey",
+				Capability: taxonomy.Sharding,
+			}},
+		},
+		{
+			name: "a sharded cache is direct on an offering that lists sharding",
+			resource: categoryResource("cache-example", "AWS::ElastiCache::ReplicationGroup",
+				taxonomy.CacheRedis, taxonomy.Sharding),
+			offerings: []catalog.Offering{
+				categoryOffering("Managed Valkey", taxonomy.CacheRedis, taxonomy.Sharding),
+			},
+			wantFit: mapping.Direct,
+			wantCands: []mapping.Candidate{{
+				Offering: categoryOffering("Managed Valkey", taxonomy.CacheRedis, taxonomy.Sharding),
+				Fit:      mapping.Direct,
+			}},
+			wantReas: []mapping.Reason{{Code: mapping.AllCapabilities, Offering: "Managed Valkey"}},
 		},
 	}
 

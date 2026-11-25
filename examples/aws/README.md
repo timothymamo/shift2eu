@@ -15,6 +15,10 @@ A made-up web shop on AWS in `eu-central-1`, as an inventory: dummy data only, f
 | `shop-thumbnailer` | `AWS::Lambda::Function` | `serverless.function` |  |  | `media` | depends-on `shop-assets` |  |
 | `shop-orders` | `AWS::SQS::Queue` | `messaging.queue` | `dead-letter-queue`, `encryption-at-rest` |  | `shop` |  |  |
 | `shop-orders-dlq` | `AWS::SQS::Queue` | `messaging.queue` | `encryption-at-rest` |  | `shop` | dead-letter-queue-of `shop-orders` |  |
+| `shop-sessions` | `AWS::ElastiCache::ReplicationGroup` | `cache.redis` | `node-high-availability`, `sharding`, `encryption-at-rest` | 13 GiB × 4 nodes | `shop` |  |  |
+| `shop-catalog-docs` | `AWS::DocDB::DBCluster` | `database.mongodb` | `point-in-time-restore`, `read-replicas`, `node-high-availability`, `encryption-at-rest` | 2 vCPU, 16 GiB × 3 instances | `shop` |  |  |
+| `shop-order-events` | `AWS::SNS::Topic` | `messaging.topic` | `encryption-at-rest` |  | `shop` | depends-on `shop-orders` |  |
+| `shop-images` | `AWS::ECR::Repository` | `registry.container` | `encryption-at-rest` |  | `shop` |  |  |
 | `shop-cdn` | `AWS::CloudFront::Distribution` | `unclassified` |  |  | `media` | depends-on `shop-assets` |  |
 | `shop.example.com` | `AWS::Route53::HostedZone` | `unclassified` |  |  | `shop` |  |  |
 

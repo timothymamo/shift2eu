@@ -1218,6 +1218,36 @@ func TestSchemaV3StorageBreakdownDescription(t *testing.T) {
 	}
 }
 
+// TestSchemaV3NamesTheNeverPricedReasonAndTheOptionalVCPUs pins the two
+// descriptions PRD #552 changes in a schema (ADR 0046): the reason set lists
+// not-priced, and vcpus says 0 means the target gives no count, for a plan
+// matched on memory alone. Only the version 3 files change: version 1 and 2 are
+// frozen by digest (issue #293, TestFrozenSchemaFilesAreUnchanged), so their
+// descriptions keep saying what a document of their version was published with.
+func TestSchemaV3NamesTheNeverPricedReasonAndTheOptionalVCPUs(t *testing.T) {
+	t.Parallel()
+
+	for _, name := range []string{"assessment-v3.schema.json", "comparison-v3.schema.json"} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			s := readSchema(t, filepath.Join("schema", name))
+
+			reason := schemaAt(t, s, "/$defs/resourceEstimate/properties/reason")
+			if !strings.Contains(reason.description, "not-priced") {
+				t.Errorf("the description of $defs/resourceEstimate.reason in %s is\n%q\nwant it to list not-priced, "+
+					"the reason a category that is never priced gets", name, reason.description)
+			}
+
+			vcpus := schemaAt(t, s, "/$defs/plan/properties/vcpus")
+			if !strings.Contains(vcpus.description, "no vCPU count") {
+				t.Errorf("the description of $defs/plan.vcpus in %s is\n%q\nwant it to say that 0 means the "+
+					"target gives no vCPU count", name, vcpus.description)
+			}
+		})
+	}
+}
+
 // frozenSchemaDigests are the SHA-256 digests of the schema files the project
 // froze: version 1, which no later release changes, and version 2, which version
 // 3 supersedes. A digest is recorded when the file is written and checked ever

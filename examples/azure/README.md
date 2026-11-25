@@ -14,6 +14,7 @@ subscription. The raw types are Azure Resource Manager resource types.
 | `aks-shop` | `Microsoft.ContainerService/managedClusters` | `kubernetes.managed` | `autoscaling` | 4 vCPU, 16 GiB × 3 | `shop` | depends-on `mysql-shop-catalog`, depends-on `psql-shop` |  |
 | `func-shop-thumbnails` | `Microsoft.Web/sites` | `serverless.function` |  |  | `shop` | depends-on `stshopassets` |  |
 | `sb-shop-orders` | `Microsoft.ServiceBus/namespaces/queues` | `messaging.queue` | `dead-letter-queue` |  | `shop` |  |  |
+| `lb-shop-web` | `Microsoft.Network/loadBalancers` | `network.loadbalancer` | `zone-high-availability`, `udp` |  | `shop` |  |  |
 | `cdn-shop` | `Microsoft.Cdn/profiles` | `unclassified` |  |  | `shop` | depends-on `stshopassets` |  |
 | `dns-shop` | `Microsoft.Network/dnsZones` | `unclassified` |  |  | `shop` |  |  |
 

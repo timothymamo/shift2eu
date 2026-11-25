@@ -69,7 +69,7 @@ usage, workload, relations and monthly cost, all optional. `shift2eu assess` rea
 | `resources[].region` | no | The source region; absent for a global resource |
 | `resources[].capabilities` | no | Capabilities the resource depends on, below |
 | `resources[].size` | no | `vcpus`, `memoryGiB`, `storageGiB` and `count` (instances, nodes or volumes), each optional; see [Sizes](#sizes) |
-| `resources[].usage` | no | `hoursPerMonth`, the hours a month the resource runs: 730 when absent, at most 744. Only for compute, Kubernetes and database categories; on any other category it is an error |
+| `resources[].usage` | no | `hoursPerMonth`, the hours a month the resource runs: 730 when absent, at most 744. Only for compute, Kubernetes, database and `cache.redis` categories; on any other category it is an error |
 | `resources[].workload` | no | A free-text name of the application the resource belongs to, such as `shop` |
 | `resources[].relations` | no | A list of `{"type", "target"}`: `type` is `replica-of`, `dead-letter-queue-of`, `attached-to` or `depends-on`, and `target` is another resource's `id` |
 | `resources[].monthlyCost` | no | `{"amount", "currency"}`: what the source charges for the resource a month, from your own bill; `currency` is an ISO 4217 code such as `USD` or `EUR` |
@@ -77,10 +77,17 @@ usage, workload, relations and monthly cost, all optional. `shift2eu assess` rea
 The **taxonomy categories** are the only bridge between a source and a target: `compute.vm` (a
 virtual machine), `compute.baremetal` (a dedicated physical server, with no hypervisor; see
 [ADR 0023](../adr/0023-separate-bare-metal-servers-from-virtual-machines-in-the-taxonomy.md)),
-`kubernetes.managed`, `storage.object`, `storage.block`, `database.postgresql`, `database.mysql`,
-`serverless.function` and `messaging.queue`. A resource that fits none of them is `unclassified`
-and keeps its `rawType`: it then shows up in the report as a blocker on every target, instead of
-disappearing from the assessment.
+`kubernetes.managed`, `storage.object`, `storage.block`, `storage.file` (an NFS file share),
+`database.postgresql`, `database.mysql`, `database.mongodb` (a database that speaks the MongoDB wire
+protocol), `cache.redis` (a Redis or Valkey cache), `network.loadbalancer`, `serverless.function`,
+`serverless.container` (a container image run and scaled with requests), `registry.container` (a
+private OCI image registry), `messaging.queue` and `messaging.topic` (a publish-subscribe topic, every
+subscription getting its own copy of each message;
+[ADR 0046](../adr/0046-add-seven-taxonomy-categories-and-match-cache-plans-on-memory.md)). A
+resource that fits none of these categories is `unclassified` and keeps its `rawType`: it then shows
+up in the report as a blocker on every target, instead of disappearing from the assessment. The
+programs below do not classify into the seven categories ADR 0046 adds yet (they list those resources
+as `unclassified`, or not at all): until they do, set such a resource's category by hand.
 
 The **capabilities** are features a resource depends on:
 
@@ -94,8 +101,10 @@ The **capabilities** are features a resource depends on:
 | `read-replicas` | Reads are served from replicas of a primary database |
 | `autoscaling` | Capacity is added and removed with load |
 | `encryption-at-rest` | Stored data is encrypted |
-| `snapshots` | Point-in-time copies of a volume or machine are taken |
+| `snapshots` | Point-in-time copies of a volume, machine, file share or data set (such as a cache's) are taken |
 | `dead-letter-queue` | Messages that keep failing are set aside |
+| `sharding` | Data is partitioned across several primary nodes that clients address (a Redis Cluster) |
+| `udp` | UDP datagrams are forwarded (a layer 4 load balancer) |
 
 A capability changes the verdict: an offering that serves the category but lacks a capability the
 resource lists is a partial fit, not a direct one, and the report names the missing capability. A
@@ -105,18 +114,22 @@ derive them from the resources' settings rather than leaving them out.
 ### Sizes
 
 The size is what `assess` matches a target's plans against and prices: the cheapest plan whose vCPU and
-memory cover the resource's, times the `count`, plus storage per GiB
+memory cover the resource's (memory alone for `cache.redis`), times the `count`, plus storage per GiB
 ([Assess an inventory](assess.md#read-the-estimate)). Which fields a category takes:
 
 | Category | `vcpus`, `memoryGiB` | `storageGiB` | `count` | Priced by |
 |---|---|---|---|---|
 | `compute.vm`, `compute.baremetal` | per instance or server | yes | instances | plan |
 | `kubernetes.managed` | per node | per node | nodes | plan per node, plus the control-plane fee |
-| `database.postgresql`, `database.mysql` | yes | yes | nodes | plan, plus storage above what it includes |
+| `database.postgresql`, `database.mysql`, `database.mongodb` | yes | yes | nodes | plan, plus storage above what it includes |
+| `cache.redis` | `memoryGiB` only, per node | no | nodes | plan per node, matched on memory alone |
 | `storage.block` | no | yes | volumes | GiB |
 | `storage.object` | no | stored GiB | no | GiB |
+| `storage.file` | no | provisioned GiB | no | GiB |
 | `serverless.function` | `memoryGiB` only | no | no | not estimated (priced by usage) |
-| `messaging.queue`, `unclassified` | no | no | no | not estimated |
+| `messaging.queue`, `messaging.topic`, `serverless.container` | no | no | no | not estimated (priced by usage) |
+| `network.loadbalancer`, `registry.container` | no | no | no | not estimated (not priced) |
+| `unclassified` | no | no | no | not estimated |
 
 A field a category does not take is an error that names it. A resource without the fields its category
 is priced by shows "not estimated: size unknown", never €0. The programs fill in the sizes the
@@ -142,9 +155,9 @@ inventory yourself, with an editor or `jq`:
   `shift2eu` never reads billing APIs and knows no hyperscaler price; the report shows this cost next
   to the estimate, per currency, without converting it.
 - **`usage.hoursPerMonth`**: for a resource that does not run all month, such as a server stopped at
-  night. Only compute (`compute.vm`, `compute.baremetal`), Kubernetes (`kubernetes.managed`) and
-  database (`database.postgresql`, `database.mysql`) resources take it; on any other category the
-  inventory is refused.
+  night. Only compute (`compute.vm`, `compute.baremetal`), Kubernetes (`kubernetes.managed`),
+  database (`database.postgresql`, `database.mysql`, `database.mongodb`) and cache (`cache.redis`)
+  resources take it; on any other category the inventory is refused.
 - any size the calls do not give, such as an RDS instance's vCPU and memory (its instance class), a
   Cloud SQL instance's unless its tier is `db-custom-*`, the `count` of a high-availability database
   (Multi-AZ, `REGIONAL`, `ZoneRedundant` or `SameZone`; see [Sizes](#sizes)), or an Auto Scaling

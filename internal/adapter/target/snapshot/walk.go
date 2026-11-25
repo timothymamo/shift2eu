@@ -212,7 +212,7 @@ func readPlan(w *jsondoc.Walker) (catalog.Plan, error) {
 		case keyName:
 			p.Name, err = w.String()
 		case keyVCPUs:
-			p.VCPUs, err = integer(w)
+			p.VCPUs, err = givenVCPUs(w)
 		case keyMemoryGiB:
 			p.MemoryMilliGiB, err = exactDecimal(w, memoryDigits)
 		case keyStorageGiB:

@@ -46,6 +46,26 @@ func integer(w *jsondoc.Walker) (int64, error) {
 	return n, nil
 }
 
+// givenVCPUs reads the next value, a plan's vcpus, as integer does, and also
+// refuses 0 with ErrDecode: a plan whose target gives no vCPU count leaves the
+// key out, so "not given" has exactly one spelling (ADR 0046). Whether a plan
+// may lack the count, and a negative count, are catalog.New's rules.
+func givenVCPUs(w *jsondoc.Walker) (int64, error) {
+	path, at := w.Path(), w.Position()
+
+	n, err := integer(w)
+	if err != nil {
+		return 0, err
+	}
+
+	if n == 0 {
+		return 0, fmt.Errorf("%w: %s is 0, want at least 1, or leave the key out when the target gives no count, at %s",
+			ErrDecode, text.Quote(path), at)
+	}
+
+	return n, nil
+}
+
 // exactDecimal reads the next value, which must be a JSON number written as an
 // exact decimal, -?(0|[1-9][0-9]*)(\.[0-9]+)?, with at most digits fractional
 // digits, trailing zeros included, and returns it as an integer count of

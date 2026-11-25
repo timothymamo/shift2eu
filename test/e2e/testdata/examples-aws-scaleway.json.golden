@@ -13,8 +13,8 @@
   "summary": {
     "direct": 6,
     "partial": 5,
-    "none": 2,
-    "total": 13
+    "none": 6,
+    "total": 17
   },
   "resources": [
     {
@@ -45,6 +45,30 @@
           "storage": "4.03",
           "fixedFee": "0.00"
         }
+      }
+    },
+    {
+      "id": "shop-catalog-docs",
+      "rawType": "AWS::DocDB::DBCluster",
+      "category": "database.mongodb",
+      "region": "eu-central-1",
+      "fit": "none",
+      "bestOffering": "",
+      "ties": [],
+      "reasons": [
+        {
+          "code": "no-offering",
+          "text": "no offering in the Scaleway catalog for database.mongodb",
+          "target": "Scaleway",
+          "category": "database.mongodb"
+        }
+      ],
+      "requiredChanges": [],
+      "relations": [],
+      "affectedBy": [],
+      "estimate": {
+        "estimated": false,
+        "reason": "no-fit"
       }
     },
     {
@@ -160,6 +184,30 @@
       }
     },
     {
+      "id": "shop-images",
+      "rawType": "AWS::ECR::Repository",
+      "category": "registry.container",
+      "region": "eu-central-1",
+      "fit": "none",
+      "bestOffering": "",
+      "ties": [],
+      "reasons": [
+        {
+          "code": "no-offering",
+          "text": "no offering in the Scaleway catalog for registry.container",
+          "target": "Scaleway",
+          "category": "registry.container"
+        }
+      ],
+      "requiredChanges": [],
+      "relations": [],
+      "affectedBy": [],
+      "estimate": {
+        "estimated": false,
+        "reason": "no-fit"
+      }
+    },
+    {
       "id": "shop-legacy-mysql",
       "rawType": "AWS::RDS::DBInstance",
       "category": "database.mysql",
@@ -197,6 +245,35 @@
           "storage": "4.97",
           "fixedFee": "0.00"
         }
+      }
+    },
+    {
+      "id": "shop-order-events",
+      "rawType": "AWS::SNS::Topic",
+      "category": "messaging.topic",
+      "region": "eu-central-1",
+      "fit": "none",
+      "bestOffering": "",
+      "ties": [],
+      "reasons": [
+        {
+          "code": "no-offering",
+          "text": "no offering in the Scaleway catalog for messaging.topic",
+          "target": "Scaleway",
+          "category": "messaging.topic"
+        }
+      ],
+      "requiredChanges": [],
+      "relations": [
+        {
+          "type": "depends-on",
+          "target": "shop-orders"
+        }
+      ],
+      "affectedBy": [],
+      "estimate": {
+        "estimated": false,
+        "reason": "no-fit"
       }
     },
     {
@@ -254,6 +331,30 @@
       "estimate": {
         "estimated": false,
         "reason": "usage-priced"
+      }
+    },
+    {
+      "id": "shop-sessions",
+      "rawType": "AWS::ElastiCache::ReplicationGroup",
+      "category": "cache.redis",
+      "region": "eu-central-1",
+      "fit": "none",
+      "bestOffering": "",
+      "ties": [],
+      "reasons": [
+        {
+          "code": "no-offering",
+          "text": "no offering in the Scaleway catalog for cache.redis",
+          "target": "Scaleway",
+          "category": "cache.redis"
+        }
+      ],
+      "requiredChanges": [],
+      "relations": [],
+      "affectedBy": [],
+      "estimate": {
+        "estimated": false,
+        "reason": "no-fit"
       }
     },
     {
@@ -473,10 +574,46 @@
   ],
   "blockers": [
     {
+      "resourceId": "shop-catalog-docs",
+      "reason": {
+        "code": "no-offering",
+        "text": "no offering in the Scaleway catalog for database.mongodb",
+        "target": "Scaleway",
+        "category": "database.mongodb"
+      }
+    },
+    {
       "resourceId": "shop-cdn",
       "reason": {
         "code": "not-classified",
         "text": "not classified"
+      }
+    },
+    {
+      "resourceId": "shop-images",
+      "reason": {
+        "code": "no-offering",
+        "text": "no offering in the Scaleway catalog for registry.container",
+        "target": "Scaleway",
+        "category": "registry.container"
+      }
+    },
+    {
+      "resourceId": "shop-order-events",
+      "reason": {
+        "code": "no-offering",
+        "text": "no offering in the Scaleway catalog for messaging.topic",
+        "target": "Scaleway",
+        "category": "messaging.topic"
+      }
+    },
+    {
+      "resourceId": "shop-sessions",
+      "reason": {
+        "code": "no-offering",
+        "text": "no offering in the Scaleway catalog for cache.redis",
+        "target": "Scaleway",
+        "category": "cache.redis"
       }
     },
     {
@@ -521,14 +658,50 @@
     {
       "name": "shop",
       "noWorkload": false,
-      "resources": 9,
+      "resources": 13,
       "summary": {
         "direct": 4,
         "partial": 4,
-        "none": 1,
-        "total": 9
+        "none": 5,
+        "total": 13
       },
       "blockers": [
+        {
+          "resourceId": "shop-catalog-docs",
+          "reason": {
+            "code": "no-offering",
+            "text": "no offering in the Scaleway catalog for database.mongodb",
+            "target": "Scaleway",
+            "category": "database.mongodb"
+          }
+        },
+        {
+          "resourceId": "shop-images",
+          "reason": {
+            "code": "no-offering",
+            "text": "no offering in the Scaleway catalog for registry.container",
+            "target": "Scaleway",
+            "category": "registry.container"
+          }
+        },
+        {
+          "resourceId": "shop-order-events",
+          "reason": {
+            "code": "no-offering",
+            "text": "no offering in the Scaleway catalog for messaging.topic",
+            "target": "Scaleway",
+            "category": "messaging.topic"
+          }
+        },
+        {
+          "resourceId": "shop-sessions",
+          "reason": {
+            "code": "no-offering",
+            "text": "no offering in the Scaleway catalog for cache.redis",
+            "target": "Scaleway",
+            "category": "cache.redis"
+          }
+        },
         {
           "resourceId": "shop.example.com",
           "reason": {
@@ -540,12 +713,12 @@
       "estimate": {
         "amount": "517.16",
         "estimated": 6,
-        "resources": 9,
+        "resources": 13,
         "storageNotIncluded": 4
       },
       "sourceCost": {
         "covered": 4,
-        "resources": 9,
+        "resources": 13,
         "currencies": [
           {
             "currency": "USD",
@@ -591,13 +764,13 @@
     "total": {
       "amount": "587.58",
       "estimated": 8,
-      "resources": 13,
+      "resources": 17,
       "storageNotIncluded": 4
     }
   },
   "sourceCost": {
     "covered": 4,
-    "resources": 13,
+    "resources": 17,
     "currencies": [
       {
         "currency": "USD",

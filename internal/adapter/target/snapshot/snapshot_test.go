@@ -966,6 +966,20 @@ func TestParseErrors(t *testing.T) {
 			wantContains: []string{"the number"},
 		},
 		{
+			// A plan's vcpus key is optional for an offering matched on memory
+			// alone, but a present 0 is refused by the reader, so "not given" has
+			// exactly one spelling: the key left out (ADR 0046). The reader refuses
+			// it, not the domain, which cannot tell 0 from "not given" in a plan.
+			name: "vcpus 0 on a cache plan",
+			data: docIn(t, pricedDocument,
+				`"categories": ["compute.vm"],`, `"categories": ["cache.redis"],`,
+				`"vcpus": 2,`, `"vcpus": 0,`),
+			wantErr:      []error{snapshot.ErrDecode},
+			wantNotErr:   []error{catalog.ErrInvalidPlan},
+			wantQuoted:   []string{"offerings[0].plans[0].vcpus"},
+			wantContains: []string{"leave the key out"},
+		},
+		{
 			name:         "included storage written as -0",
 			data:         docIn(t, pricedDocument, `"storageGiB": 20,`, `"storageGiB": -0,`),
 			wantErr:      []error{snapshot.ErrDecode},
@@ -1693,6 +1707,76 @@ func TestParsePlansAndPrices(t *testing.T) {
 	})
 }
 
+// TestParsePlanWithoutVCPUs pins the one change format version 2 gains (ADR
+// 0046): a plan's vcpus key is optional, and absent the plan's VCPUs is 0, which
+// the domain reads as "the target gives no count" on an offering matched on
+// memory alone. A document that leaves the key out on any other offering is
+// still refused, by the domain this time, because a compute or database plan
+// without vCPUs could never cover a resource.
+func TestParsePlanWithoutVCPUs(t *testing.T) {
+	t.Parallel()
+
+	cacheDocument := docIn(t, pricedDocument,
+		`"categories": ["compute.vm"],`, `"categories": ["cache.redis"],`)
+
+	t.Run("a cache plan without vcpus reads as no count", func(t *testing.T) {
+		t.Parallel()
+
+		withoutVCPUs := withoutNested(t, cacheDocument, planPath, "vcpus")
+
+		document, err := snapshot.Parse([]byte(withoutVCPUs))
+		if err != nil {
+			t.Fatalf("Parse() of a cache plan without vcpus returned unexpected error: %v", err)
+		}
+
+		plans := document.Catalog.Offerings()[0].Plans
+		if len(plans) != 2 {
+			t.Fatalf("Parse() kept %d plans, want the document's 2", len(plans))
+		}
+
+		var plan *catalog.Plan
+
+		for i, p := range plans {
+			if p.Name == "EC-2-4" {
+				plan = &plans[i]
+			}
+		}
+
+		if plan == nil {
+			t.Fatalf("Parse() dropped the plan EC-2-4: %v", plans)
+		}
+
+		if plan.VCPUs != 0 {
+			t.Errorf("the plan's VCPUs = %d, want 0 for a plan the document gives no count for", plan.VCPUs)
+		}
+
+		// Every other key is read as before: only vcpus became optional.
+		if plan.MemoryMilliGiB != 4000 || plan.IncludedStorageGiB != 20 {
+			t.Errorf("the plan's memory and included storage = %d and %d, want 4000 and 20",
+				plan.MemoryMilliGiB, plan.IncludedStorageGiB)
+		}
+
+		if !slices.ContainsFunc(plans, func(p catalog.Plan) bool { return p.VCPUs == 1 }) {
+			t.Errorf("Parse() lost the second plan's given vcpus: %v", plans)
+		}
+	})
+
+	t.Run("a compute plan without vcpus is refused by the domain", func(t *testing.T) {
+		t.Parallel()
+
+		withoutVCPUs := withoutNested(t, pricedDocument, planPath, "vcpus")
+
+		_, err := snapshot.Parse([]byte(withoutVCPUs))
+		if !errors.Is(err, catalog.ErrInvalidPlan) {
+			t.Fatalf("Parse() error = %v, want one wrapping %v", err, catalog.ErrInvalidPlan)
+		}
+
+		if msg := err.Error(); !strings.Contains(msg, "vcpus") {
+			t.Errorf("Parse() error = %q, want it to name vcpus", msg)
+		}
+	})
+}
+
 // TestParseFixedFees pins what the optional fixedFees key of a version 2
 // document becomes in the catalog (ADR 0026): each amount is an exact monthly
 // EUR amount in ten-thousandths (65.7 is Amount(657000), 0 stays a fee of 0), the
@@ -1858,7 +1942,10 @@ func TestParsePlanBillingCapHours(t *testing.T) {
 // storagePrices, every plan key and every price key is refused with ErrDecode
 // when it is missing, null, of the wrong type, repeated or spelt inexactly. A
 // key that a document forgot would otherwise read as a value the document never
-// stated (ADR 0007, ADR 0024).
+// stated (ADR 0007, ADR 0024). A plan's vcpus is the one exception to the first
+// of those: version 2 lets a document leave it out, and the plan it reads is the
+// domain's to refuse (ADR 0046, TestParsePlanWithoutVCPUs); its other four cases
+// hold as for every other key.
 func TestParseRequiresEveryVersion2Key(t *testing.T) {
 	t.Parallel()
 
@@ -1878,6 +1965,9 @@ func TestParseRequiresEveryVersion2Key(t *testing.T) {
 		// the key differently or writes it a second time.
 		misspelt [2]string
 		repeated [2]string
+		// optional is whether version 2 lets a document leave the key out, in
+		// which case this reader does not refuse its absence (ADR 0046).
+		optional bool
 	}{
 		{
 			name:     "defaultRegion",
@@ -1929,6 +2019,9 @@ func TestParseRequiresEveryVersion2Key(t *testing.T) {
 			wrong:    `"2"`,
 			misspelt: [2]string{`"vcpus": 2,`, `"Vcpus": 2,`},
 			repeated: [2]string{`"vcpus": 2,`, `"vcpus": 2, "vcpus": 2,`},
+			// ADR 0046 makes the key optional: a plan without it reads with no
+			// count, which the domain refuses, not this layer.
+			optional: true,
 		},
 		{
 			name:     "plan memoryGiB",
@@ -2025,19 +2118,25 @@ func TestParseRequiresEveryVersion2Key(t *testing.T) {
 				return withoutNested(t, tc.base, tc.path, tc.key)
 			}
 
-			cases := []struct {
+			type keyCase struct {
 				name   string
 				data   string
 				quoted []string
 				// want contains the substrings the message must hold besides the
 				// key's own name, which every case requires.
 				want []string
-			}{
+				// requiredOnly is whether the case reads the key's absence, which
+				// a key a document may leave out does not have.
+				requiredOnly bool
+			}
+
+			cases := []keyCase{
 				{
-					name:   "missing",
-					data:   remove(t),
-					quoted: []string{tc.key},
-					want:   []string{"required key", "is missing"},
+					name:         "missing",
+					data:         remove(t),
+					quoted:       []string{tc.key},
+					want:         []string{"required key", "is missing"},
+					requiredOnly: true,
 				},
 				{
 					name:   "null",
@@ -2062,6 +2161,14 @@ func TestParseRequiresEveryVersion2Key(t *testing.T) {
 					quoted: []string{tc.key},
 					want:   []string{"unknown key", "keys are exact"},
 				},
+			}
+
+			// A key version 2 lets a document leave out is not refused here when
+			// it is missing: what its absence reads as is the domain's to refuse
+			// (ADR 0046). The key is still refused null, of the wrong type,
+			// repeated and spelt inexactly, as the cases below pin.
+			if tc.optional {
+				cases = slices.DeleteFunc(cases, func(c keyCase) bool { return c.requiredOnly })
 			}
 
 			for _, tt := range cases {

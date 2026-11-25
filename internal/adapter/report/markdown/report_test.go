@@ -1572,6 +1572,112 @@ func TestReportWithBillingCapHours(t *testing.T) {
 	}
 }
 
+// TestReportWithCachePlansAndNeverPricedResources pins what the report says
+// about the two things PRD #552 adds to an estimate (ADR 0046): a plan the target
+// gives no vCPU count for is shown by its memory alone, and a category that is
+// never priced is "not priced", never counted as 0 EUR.
+//
+// The catalog and the amounts are invented, so a test states them exactly.
+func TestReportWithCachePlansAndNeverPricedResources(t *testing.T) {
+	t.Parallel()
+
+	cat := newCatalog(t, []catalog.Offering{
+		{
+			Name:       "Example Cache",
+			Categories: []taxonomy.Category{taxonomy.CacheRedis},
+			Regions:    []string{"fr-par"},
+			Plans: []catalog.Plan{
+				{
+					Name:           "CACHE-8",
+					VCPUs:          0,
+					MemoryMilliGiB: 8000,
+					Prices:         []catalog.Price{{Amount: 200000, Currency: catalog.EUR}},
+				},
+				{
+					Name:           "CACHE-8-2CPU",
+					VCPUs:          2,
+					MemoryMilliGiB: 8000,
+					Prices:         []catalog.Price{{Amount: 300000, Currency: catalog.EUR}},
+				},
+				{
+					Name:           "CACHE-16",
+					VCPUs:          2,
+					MemoryMilliGiB: 16000,
+					Prices:         []catalog.Price{{Amount: 350000, Currency: catalog.EUR}},
+				},
+			},
+		},
+		{
+			Name:       "Example Load Balancer",
+			Categories: []taxonomy.Category{taxonomy.NetworkLoadBalancer},
+			Regions:    []string{"fr-par"},
+		},
+	})
+
+	resources := []inventory.Resource{
+		{
+			ID:       "cache-example",
+			RawType:  "AWS::ElastiCache::ReplicationGroup",
+			Category: taxonomy.CacheRedis,
+			Region:   "eu-west-1",
+			Size:     &inventory.Size{MemoryGiB: sized(8)},
+		},
+		{
+			ID:       "lb-example",
+			RawType:  "AWS::ElasticLoadBalancingV2::LoadBalancer",
+			Category: taxonomy.NetworkLoadBalancer,
+			Region:   "eu-west-1",
+		},
+		{
+			ID:       "cache-large",
+			RawType:  "AWS::ElastiCache::ReplicationGroup",
+			Category: taxonomy.CacheRedis,
+			Region:   "eu-west-1",
+			Size:     &inventory.Size{MemoryGiB: sized(16)},
+		},
+	}
+
+	a := assessment.AssessWith(newInventory(t, sourceName, resources), cat, assessment.Options{Estimate: true})
+	out := render(t, a, analysis.ReportMeta{InventoryName: inventoryFileName})
+
+	t.Run("a plan without vCPUs is shown by its memory alone", func(t *testing.T) {
+		t.Parallel()
+
+		if got, want := tableRow(t, out, "`cache-example`")[5], "`CACHE-8` (8 GiB)"; got != want {
+			t.Errorf("cache-example Plan cell = %q, want %q", got, want)
+		}
+
+		// A plan that gives its vCPUs is shown as it was before.
+		if got, want := tableRow(t, out, "`cache-large`")[5], "`CACHE-16` (2 vCPU, 16 GiB)"; got != want {
+			t.Errorf("cache-large Plan cell = %q, want %q", got, want)
+		}
+
+		// The cache is priced on the cheaper covering plan, and the cell says it
+		// assumed a count of one node and 730 hours.
+		if got, want := tableRow(t, out, "`cache-example`")[6],
+			"€20.00 (count assumed 1) (730 hours assumed)"; got != want {
+			t.Errorf("cache-example Monthly estimate = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("a resource that is never priced says so", func(t *testing.T) {
+		t.Parallel()
+
+		if got, want := tableRow(t, out, "`lb-example`")[6], reportEstimateCell("not priced"); got != want {
+			t.Errorf("lb-example Monthly estimate = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("a resource that is never priced is not counted as 0", func(t *testing.T) {
+		t.Parallel()
+
+		want := "- Total: €55.00 per month for 2 of 3 resources"
+		if got := lineWithPrefix(t, out, "- Total: "); got != want {
+			t.Errorf("total = %q, want %q", got, want)
+		}
+	})
+}
+
 // TestReportWithChosenRegion pins that a region chosen with --region is the one
 // line that says so, and is the region the prices are for: the same inventory
 // costs more in the report fixture's second region, and only the region line and

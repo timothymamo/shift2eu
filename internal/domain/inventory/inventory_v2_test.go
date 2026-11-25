@@ -450,6 +450,39 @@ func TestNewAcceptsVersion2FieldsPerCategory(t *testing.T) {
 			name:     "messaging.queue without a size",
 			resource: withCategory(vm("queue-example"), taxonomy.MessagingQueue),
 		},
+		// The seven categories PRD #552 adds take the fields of ADR 0046: a cache
+		// by memory and nodes, a MongoDB database exactly what PostgreSQL takes, a
+		// file share by provisioned GiB, and the rest none at all.
+		{
+			name: "cache.redis",
+			resource: sized("cache-example", taxonomy.CacheRedis,
+				inventory.Size{MemoryGiB: ptr(8.0), Count: ptr(2)}, ptr(730.0)),
+		},
+		{
+			name:     "database.mongodb",
+			resource: sized("db-example", taxonomy.DatabaseMongoDB, computeSize, ptr(730.0)),
+		},
+		{
+			name: "storage.file",
+			resource: sized("share-example", taxonomy.StorageFile,
+				inventory.Size{StorageGiB: ptr(500.0)}, nil),
+		},
+		{
+			name:     "network.loadbalancer without a size",
+			resource: withCategory(vm("lb-example"), taxonomy.NetworkLoadBalancer),
+		},
+		{
+			name:     "messaging.topic without a size",
+			resource: withCategory(vm("topic-example"), taxonomy.MessagingTopic),
+		},
+		{
+			name:     "serverless.container without a size",
+			resource: withCategory(vm("container-example"), taxonomy.ServerlessContainer),
+		},
+		{
+			name:     "registry.container without a size",
+			resource: withCategory(vm("registry-example"), taxonomy.RegistryContainer),
+		},
 		{
 			name:     "unclassified without a size",
 			resource: withCategory(vm("mystery-example"), taxonomy.Unclassified),
@@ -932,6 +965,82 @@ func TestNewRejectsVersion2FieldsPerCategory(t *testing.T) {
 			resources: second(sized("aa-mystery", taxonomy.Unclassified,
 				inventory.Size{VCPUs: ptr(2.0)}, nil)),
 			wantPath: "resources[1].size.vcpus",
+		},
+		// A cache is sized by memory and nodes only: its vCPUs are rarely known
+		// and are never matched on (ADR 0046), and its storage is the provider's.
+		{
+			name: "vcpus on cache.redis",
+			resources: second(sized("aa-cache", taxonomy.CacheRedis,
+				inventory.Size{VCPUs: ptr(2.0)}, nil)),
+			wantPath: "resources[1].size.vcpus",
+		},
+		{
+			name: "storageGiB on cache.redis",
+			resources: second(sized("aa-cache", taxonomy.CacheRedis,
+				inventory.Size{StorageGiB: ptr(100.0)}, nil)),
+			wantPath: "resources[1].size.storageGiB",
+		},
+		// A file share is billed on its provisioned GiB, once: no count and no
+		// memory.
+		{
+			name: "count on storage.file",
+			resources: second(sized("aa-share", taxonomy.StorageFile,
+				inventory.Size{StorageGiB: ptr(500.0), Count: ptr(1)}, nil)),
+			wantPath: "resources[1].size.count",
+		},
+		{
+			name: "memoryGiB on storage.file",
+			resources: second(sized("aa-share", taxonomy.StorageFile,
+				inventory.Size{MemoryGiB: ptr(8.0)}, nil)),
+			wantPath: "resources[1].size.memoryGiB",
+		},
+		{
+			name: "hoursPerMonth on storage.file",
+			resources: second(sized("aa-share", taxonomy.StorageFile,
+				inventory.Size{StorageGiB: ptr(500.0)}, &inventory.Usage{HoursPerMonth: ptr(730.0)})),
+			wantPath: "resources[1].usage.hoursPerMonth",
+		},
+		{
+			name: "storageGiB on network.loadbalancer",
+			resources: second(sized("aa-lb", taxonomy.NetworkLoadBalancer,
+				inventory.Size{StorageGiB: ptr(1.0)}, nil)),
+			wantPath: "resources[1].size.storageGiB",
+		},
+		{
+			name: "memoryGiB on network.loadbalancer",
+			resources: second(sized("aa-lb", taxonomy.NetworkLoadBalancer,
+				inventory.Size{MemoryGiB: ptr(1.0)}, nil)),
+			wantPath: "resources[1].size.memoryGiB",
+		},
+		{
+			name: "vcpus on messaging.topic",
+			resources: second(sized("aa-topic", taxonomy.MessagingTopic,
+				inventory.Size{VCPUs: ptr(2.0)}, nil)),
+			wantPath: "resources[1].size.vcpus",
+		},
+		{
+			name: "storageGiB on messaging.topic",
+			resources: second(sized("aa-topic", taxonomy.MessagingTopic,
+				inventory.Size{StorageGiB: ptr(1.0)}, nil)),
+			wantPath: "resources[1].size.storageGiB",
+		},
+		{
+			name: "hoursPerMonth on messaging.topic",
+			resources: second(sized("aa-topic", taxonomy.MessagingTopic,
+				inventory.Size{}, &inventory.Usage{HoursPerMonth: ptr(730.0)})),
+			wantPath: "resources[1].usage.hoursPerMonth",
+		},
+		{
+			name: "memoryGiB on serverless.container",
+			resources: second(sized("aa-container", taxonomy.ServerlessContainer,
+				inventory.Size{MemoryGiB: ptr(2.0)}, nil)),
+			wantPath: "resources[1].size.memoryGiB",
+		},
+		{
+			name: "count on registry.container",
+			resources: second(sized("aa-registry", taxonomy.RegistryContainer,
+				inventory.Size{Count: ptr(1)}, nil)),
+			wantPath: "resources[1].size.count",
 		},
 		{
 			name: "count on unclassified",
