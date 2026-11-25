@@ -2046,7 +2046,14 @@ of milestone 2), and the constraints PR 5 must keep:
   limit, the CLI could not start, other non-JSON output (matched on a table of lower-cased phrases
   over the line's first 4 KiB only), a JSON value that is not an element (JSON `null` included), an
   element whose type is not a string - and never with any of the line's bytes: the transcript stays
-  private. Runbook step 10 says what to do for each class.
+  private. Runbook step 10 says what to do for each class. The login, usage-limit and could-not-start
+  classes appear only when such a line reaches a run that still ended in a successful result: a run that
+  is not logged in, over its limit or unable to start normally fails its CLI run instead (`the
+  preflight's CLI run failed`, shown as `the preflight failed: see runbook step 10`), and the classes
+  stay as a defence. An element whose top-level object names a key twice, or names `type` or `message`
+  in another case, is refused as a JSON value that is not an element: `encoding/json` matches keys
+  case-insensitively and keeps the last, so such a line could read as a skipped type and hide the
+  `tool_use` it carries (auditor L2); the judge walks the top-level object once, token by token.
 - *Open point, 2026-11-25 (issue #590):* with `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1`, Claude Code 2.1.332
   forces the permission mode to `default` in place of the launcher's `--permission-mode dontAsk`, and
   warns on stderr. In `-p` mode with no permission-prompt tool, the calls it would ask about were
