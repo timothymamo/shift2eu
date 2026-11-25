@@ -276,6 +276,10 @@ func inventoryGuides() []inventoryGuideCase {
 				// Azure Managed Redis: a primary and a replica, zone redundant, and
 				// clustered and persisted as its database says.
 				{id: "amr-shop-session", rawType: "Microsoft.Cache/redisEnterprise", category: "cache.redis", capabilities: []string{"encryption-at-rest", "node-high-availability", "sharding", "snapshots", "zone-high-availability"}},
+				// An Azure Managed Redis cluster in three zones with its high availability
+				// disabled is one node: its own highAvailability setting is what makes it
+				// redundant, and the zones it is deployed in do not stand in for it.
+				{id: "amr-shop-scratch", rawType: "Microsoft.Cache/redisEnterprise", category: "cache.redis", capabilities: []string{"encryption-at-rest"}},
 				// A Cosmos DB account for MongoDB: replicas within a region, zone
 				// redundancy and continuous backup; one region serves no read replica.
 				// An account of any other kind stays unclassified.
@@ -365,6 +369,11 @@ func inventoryGuides() []inventoryGuideCase {
 				{id: "redis-shop-sessions", count: 2},
 				{id: "redis-shop-catalog", count: 2},
 				{id: "amr-shop-session", count: 2},
+				// The nodes of the legacy Enterprise cluster spread over three zones, one
+				// per zone, and the one node of an Azure Managed Redis cluster whose high
+				// availability is disabled however many zones it names.
+				{id: "redis-shop-enterprise", count: 2},
+				{id: "amr-shop-scratch", count: 1},
 				// Azure DocumentDB: a primary and a standby per shard, 128 GiB each.
 				{id: "docdb-shop-orders", count: 4, storageGiB: 256},
 				// A cluster in the same zone runs the same standby per shard.

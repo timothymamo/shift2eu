@@ -1,5 +1,5 @@
 {
-  "count": 48,
+  "count": 49,
   "data": [
     {
       "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shop/providers/Microsoft.DBforPostgreSQL/flexibleServers/psql-shop",
@@ -326,6 +326,25 @@
       "properties": {
         "highAvailability": "Enabled",
         "redundancyMode": "ZR"
+      }
+    },
+    {
+      "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shop/providers/Microsoft.Cache/redisEnterprise/amr-shop-scratch",
+      "name": "amr-shop-scratch",
+      "type": "microsoft.cache/redisenterprise",
+      "kind": "",
+      "location": "westeurope",
+      "zones": [
+        "1",
+        "2",
+        "3"
+      ],
+      "sku": {
+        "name": "Balanced_B1"
+      },
+      "properties": {
+        "highAvailability": "Disabled",
+        "redundancyMode": "None"
       }
     },
     {
