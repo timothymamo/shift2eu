@@ -330,18 +330,19 @@ jobs:
           timeout 5m gh release download "${tag}" --repo "${GH_REPO}" --dir "${rel}" > "${out}/download.stdout" 2> "${out}/download.stderr" || rc=$?
           echo "${rc}" > "${out}/download.exit"
           # the release's files are checked only when the download brought them and checksums.txt with
-          # them: a failed, partial or empty download is no checksum finding, only a check that did not
-          # run, recorded tool-failed or results-missing in not-run.txt and named in limits.txt.
+          # them: a failed, partial or empty download is no checksum finding, only limits lines of the
+          # check and the why it is recorded with at the step's end, once the image half has run too.
           rel_ok=1
           if [ "${rc}" -eq 124 ]; then
-            echo "release-integrity timed-out" >> "${results}/not-run.txt"
+            why=timed-out
             echo "release-integrity: the release download timed out after 5 minutes" >> "${results}/limits.txt"
             rel_ok=0
           elif [ "${rc}" -ne 0 ]; then
-            echo "release-integrity tool-failed" >> "${results}/not-run.txt"
+            why=tool-failed
+            echo "release-integrity: the release download failed with exit ${rc}" >> "${results}/limits.txt"
             rel_ok=0
           elif [ ! -s "${rel}/checksums.txt" ]; then
-            echo "release-integrity results-missing" >> "${results}/not-run.txt"
+            why=results-missing
             echo "release-integrity: no checksums.txt, so the release's files were neither checksummed nor attested" >> "${results}/limits.txt"
             rel_ok=0
           fi
@@ -499,9 +500,11 @@ jobs:
           fi
           # release-integrity is recorded as a check that did not run only when no part of it produced a
           # result at all: a part that ran, whatever its exit, is a limits line, and the skill reads a
-          # check with any finding, and any verification-failed.txt line, as one that ran.
+          # check with any finding, and any verification-failed.txt line, as one that ran. The download's
+          # why reaches not-run.txt here, and only here, so that a download that failed while the image
+          # half verified is the finding it made, never a check that did not run beside it.
           if [ "${ran_any}" -eq 0 ]; then
-            echo "release-integrity tool-failed" >> "${results}/not-run.txt"
+            echo "release-integrity ${why:-tool-failed}" >> "${results}/not-run.txt"
           fi
           echo "finished"
       # Row 8. The image, pulled anonymously from GHCR by the digest row 7 resolved: no packages scope and
@@ -762,7 +765,8 @@ jobs:
           mkdir -p "${out}"
           # A part of the check that produced a result, whatever its exit, sets ran_any: the step's loops
           # record each run's outcome in the limits, and the check itself as not run only when no part of
-          # it ran at all.
+          # it ran at all. A run whose create failed never started, so it is no part of the check and
+          # sets nothing: only a started run does.
           ran_any=0
           image="ghcr.io/${GITHUB_REPOSITORY,,}"
           digest="$(cat "${results}/release-integrity/image-digest.txt")"
@@ -872,7 +876,6 @@ jobs:
               rc=0
               cid="$(timeout 2m docker create --read-only --network none --cap-drop ALL --security-opt no-new-privileges --memory 512m --pids-limit 64 "audit-hostile:${GITHUB_RUN_ID}" assess --inventory "hostile/${name}" --target all --format "${format}")" || rc=$?
               echo "${rc}" > "${out}/${run}.create.exit"
-              ran_any=1
               if [ "${rc}" -eq 124 ]; then
                 echo "hostile-inventories: the create for ${run} timed out after 2 minutes" >> "${results}/limits.txt"
               elif [ "${rc}" -ne 0 ]; then
@@ -881,6 +884,7 @@ jobs:
               if [ "${rc}" -ne 0 ]; then
                 continue
               fi
+              ran_any=1
               rc=0
               timeout 60 docker start --attach "${cid}" > "${out}/${run}.stdout" 2> "${out}/${run}.stderr" < /dev/null || rc=$?
               echo "${rc}" > "${out}/${run}.exit"
@@ -925,6 +929,7 @@ jobs:
           mkdir -p "${out}/targets"
           # A part of the check that produced a result, whatever its exit, sets ran_any: each target's
           # outcome is a limits line, and fuzzing is recorded as not run only when no target ran at all.
+          # A target whose create failed never started, so it is no part of the check and sets nothing.
           ran_any=0
           git ls-files -z -- '*_test.go' | while IFS= read -r -d '' file; do
             case "/${file}" in
@@ -1050,7 +1055,6 @@ jobs:
               "audit-fuzz:${GITHUB_RUN_ID}" \
               sh -c 'cp -R /src /scratch/src && cd /scratch/src && go test -run "^$" -fuzz "^${FUZZ_NAME}\$" -fuzztime 10m "./${FUZZ_PKG}" >&2; rc=$?; tar -C /scratch/src -cf - "${FUZZ_PKG}/testdata/fuzz" 2> /dev/null; exit "${rc}"')" || rc=$?
             echo "${rc}" > "${out}/targets/${n}-${name}.create.exit"
-            ran_any=1
             if [ "${rc}" -eq 124 ]; then
               echo "fuzzing: the create for ${pkg} ${name} timed out after 2 minutes" >> "${results}/limits.txt"
             elif [ "${rc}" -ne 0 ]; then
@@ -1059,6 +1063,7 @@ jobs:
             if [ "${rc}" -ne 0 ]; then
               continue
             fi
+            ran_any=1
             rc=0
             timeout 12m docker start --attach "${cid}" > "${out}/targets/${n}-${name}.tar" 2> "${out}/targets/${n}-${name}.log" < /dev/null || rc=$?
             echo "${rc}" > "${out}/targets/${n}-${name}.exit"

@@ -4,8 +4,11 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
+
+	"github.com/google/go-cmp/cmp"
 
 	"github.com/timothymamo/shift2eu/test/architecture/internal/check"
 )
@@ -195,7 +198,8 @@ import (
 //     verification-failed.txt line, as one that ran. Row 7's unresolved image
 //     digest is the same: a limits line, never "not run". The step-level
 //     download, pull and staging failures before any part ran keep their
-//     not-run records, since no part produced a result yet.
+//     not-run records, since no part produced a result yet - row 7's download
+//     only at the step's end, its why in a shell variable (round L).
 //   - Every `not-run.txt` line of the checks job ends in a why id the publish
 //     core's `whyNotRun` holds (ci/auditpublish/internal/publish/vocabulary.go),
 //     and the check's own list of them is pinned equal to that map. A part the
@@ -212,6 +216,34 @@ import (
 //     cannot follow (a body on the header's own line, `do` on a line of its
 //     own), an unbudgeted inner loop with a timeout inside a budgeted one, and a
 //     timeout a command runs once per argument (`xargs`, `find -exec`).
+//
+// Round L's fixes, and what a part of a check that ran means:
+//
+//   - Row 7's download is no whole verdict either: its branches record a
+//     `limits.txt` line and the why in a shell variable (`why=timed-out`,
+//     `why=tool-failed`, `why=results-missing`), and the step's end writes the
+//     one not-run line, `echo "release-integrity ${why:-tool-failed}" >>
+//     "${results}/not-run.txt"`, only when `ran_any` is still 0. The image
+//     half runs whatever the download did, so a download that failed beside a
+//     verification-failed.txt line is that finding, never also a check that did
+//     not run. A not-run.txt line inside a step's body is refused unless it is
+//     right before that step's `exit 0` (a step-level failure before any part
+//     ran, as rows 13 and 14 have).
+//   - A run or a target counts as a part that ran only once it started: rows 13
+//     and 14 set `ran_any=1` after the create's `continue` guard, so a create
+//     that failed counts for nothing, and right after the start's exit is
+//     recorded, where a run that began is a part of the check whatever its
+//     exit. `ran_any=1` right after a `.create.exit` is refused.
+//   - fit follows a loop word after `&&` or `;` as well (a header there is one it
+//     must read or refuse), and counts a timeout inside a quoted `sh -c`
+//     string: `sh -c 'timeout 50m true'` and
+//     `find ... -exec sh -c 'timeout 50m true' \;` are timeouts of the step.
+//     A timeout `xargs` or `find -exec`/`-execdir` runs once per argument is
+//     refused whatever comes between the runner and the timeout.
+//   - Row 13's finding-candidate limits line is held whole, as row 7's malformed
+//     checksums record is.
+//   - The check's list of why ids and the publish core's `whyNotRun` are pinned
+//     equal in both directions.
 //
 // The check recognises each job's steps by name, and the accepted fixture's
 // names are the closed list: a step the check's list does not hold is reported
@@ -792,13 +824,15 @@ const (
 	auditEnvironmentSecretNames   = "            read_api \"environment-${env}-secret-names\" \"repos/${GH_REPO}/environments/${env}/secrets\" '[.secrets[].name]'\n"
 
 	// The five checks job's rows that read release bytes record a failure of
-	// theirs as a check that did not run, not as a step that stops the job.
-	auditReleaseTimedOut   = "echo \"release-integrity timed-out\" >> \"${results}/not-run.txt\""
-	auditReleaseToolFailed = "echo \"release-integrity tool-failed\" >> \"${results}/not-run.txt\""
-	auditPullToolFailed    = "echo \"image-pull tool-failed\" >> \"${results}/not-run.txt\""
-	auditBinaryToolFailed  = "echo \"binary-vulnerabilities tool-failed\" >> \"${results}/not-run.txt\""
-	auditRuntimeTimedOut   = "echo \"image-runtime timed-out\" >> \"${results}/not-run.txt\""
-	auditHostileTimedOut   = "echo \"hostile-inventories timed-out\" >> \"${results}/not-run.txt\""
+	// theirs as a check that did not run, not as a step that stops the job. Row
+	// 7's download records it at the step's end, from the why its branch sets
+	// (round L's K1), and rows 8, 9, 11 and 13 in the branch that failed.
+	auditReleaseDownloadTimedOutWhy   = "            why=timed-out\n"
+	auditReleaseDownloadToolFailedWhy = "            why=tool-failed\n"
+	auditPullToolFailed               = "echo \"image-pull tool-failed\" >> \"${results}/not-run.txt\""
+	auditBinaryToolFailed             = "echo \"binary-vulnerabilities tool-failed\" >> \"${results}/not-run.txt\""
+	auditRuntimeTimedOut              = "echo \"image-runtime timed-out\" >> \"${results}/not-run.txt\""
+	auditHostileTimedOut              = "echo \"hostile-inventories timed-out\" >> \"${results}/not-run.txt\""
 )
 
 // Round E's anchors (PRD #175, "A failed run is visible", and the workflow's own
@@ -1006,7 +1040,7 @@ const (
 	// not-run.txt only when no part of it produced a result at all, which the
 	// flag ran_any counts in shell.
 	auditReleaseEndRecord = "          if [ \"${ran_any}\" -eq 0 ]; then\n" +
-		"            echo \"release-integrity tool-failed\" >> \"${results}/not-run.txt\"\n" +
+		"            echo \"release-integrity ${why:-tool-failed}\" >> \"${results}/not-run.txt\"\n" +
 		"          fi\n"
 	auditHostileEndRecord = "          if [ \"${ran_any}\" -eq 0 ]; then\n" +
 		"            echo \"hostile-inventories tool-failed\" >> \"${results}/not-run.txt\"\n" +
@@ -1018,10 +1052,10 @@ const (
 	// auditHostileRunCreate, auditHostileRunStart, auditFuzzTargetCreate and
 	// auditFuzzTargetStart are rows 13 and 14's per-run and per-target outcomes
 	// inside their loops, as round K writes them: the run's exit recorded, the part
-	// marked as one that ran, and its timeout or failure in the limits, never as
-	// the whole check that did not run.
+	// marked as one that ran once it started (round L's K2, so the create's mark
+	// follows its continue guard), and its timeout or failure in the limits, never
+	// as the whole check that did not run.
 	auditHostileRunCreate = "              echo \"${rc}\" > \"${out}/${run}.create.exit\"\n" +
-		"              ran_any=1\n" +
 		"              if [ \"${rc}\" -eq 124 ]; then\n" +
 		"                echo \"hostile-inventories: the create for ${run} timed out after 2 minutes\" >> \"${results}/limits.txt\"\n" +
 		"              elif [ \"${rc}\" -ne 0 ]; then\n" +
@@ -1034,7 +1068,6 @@ const (
 		"                echo \"hostile-inventories: ${run} timed out after 60 seconds, a finding candidate of the run\" >> \"${results}/limits.txt\"\n" +
 		"              fi\n"
 	auditFuzzTargetCreate = "            echo \"${rc}\" > \"${out}/targets/${n}-${name}.create.exit\"\n" +
-		"            ran_any=1\n" +
 		"            if [ \"${rc}\" -eq 124 ]; then\n" +
 		"              echo \"fuzzing: the create for ${pkg} ${name} timed out after 2 minutes\" >> \"${results}/limits.txt\"\n" +
 		"            elif [ \"${rc}\" -ne 0 ]; then\n" +
@@ -1110,6 +1143,121 @@ const (
 	// the branch above it, inside the budgeted loop: the lines the case of an
 	// unbudgeted inner loop wraps in one.
 	auditFuzzTargetRm = "            fi\n            timeout 1m docker rm -f \"${cid}\" > /dev/null || true\n"
+)
+
+// Round L's anchors (the reviewer's K1, K2, K3, K4 and K6 findings and the
+// auditor's L1 on PR 5c, round L): row 7's download records the why it did not
+// run at the step's end and only there, a run or a target counts only once it
+// started, and the shapes fit must follow or refuse are the ones the accepted
+// shape writes.
+const (
+	// auditReleaseDownloadBranches is row 7's download outcome as the accepted
+	// shape writes it (K1): each branch records a limits line and the why, and the
+	// step's end writes the one not-run line, so that a download that failed
+	// beside a finding of the image half is that finding, never also a check that
+	// did not run.
+	auditReleaseDownloadBranches = "          if [ \"${rc}\" -eq 124 ]; then\n" +
+		"            why=timed-out\n" +
+		"            echo \"release-integrity: the release download timed out after 5 minutes\" >> \"${results}/limits.txt\"\n" +
+		"            rel_ok=0\n" +
+		"          elif [ \"${rc}\" -ne 0 ]; then\n" +
+		"            why=tool-failed\n" +
+		"            echo \"release-integrity: the release download failed with exit ${rc}\" >> \"${results}/limits.txt\"\n" +
+		"            rel_ok=0\n" +
+		"          elif [ ! -s \"${rel}/checksums.txt\" ]; then\n" +
+		"            why=results-missing\n" +
+		"            echo \"release-integrity: no checksums.txt, so the release's files were neither checksummed nor attested\" >> \"${results}/limits.txt\"\n" +
+		"            rel_ok=0\n" +
+		"          fi\n"
+
+	// auditReleaseDownloadNotRunBranches is that outcome as K1 finds it: the
+	// not-run line written in the download's own branch, while the image half
+	// still runs and may record a finding of the same check.
+	auditReleaseDownloadNotRunBranches = "          if [ \"${rc}\" -eq 124 ]; then\n" +
+		"            why=timed-out\n" +
+		"            echo \"release-integrity timed-out\" >> \"${results}/not-run.txt\"\n" +
+		"            echo \"release-integrity: the release download timed out after 5 minutes\" >> \"${results}/limits.txt\"\n" +
+		"            rel_ok=0\n" +
+		"          elif [ \"${rc}\" -ne 0 ]; then\n" +
+		"            why=tool-failed\n" +
+		"            echo \"release-integrity tool-failed\" >> \"${results}/not-run.txt\"\n" +
+		"            echo \"release-integrity: the release download failed with exit ${rc}\" >> \"${results}/limits.txt\"\n" +
+		"            rel_ok=0\n" +
+		"          elif [ ! -s \"${rel}/checksums.txt\" ]; then\n" +
+		"            why=results-missing\n" +
+		"            echo \"release-integrity results-missing\" >> \"${results}/not-run.txt\"\n" +
+		"            echo \"release-integrity: no checksums.txt, so the release's files were neither checksummed nor attested\" >> \"${results}/limits.txt\"\n" +
+		"            rel_ok=0\n" +
+		"          fi\n"
+
+	// auditHostileRunCreateFixed and auditFuzzTargetCreateFixed are rows 13 and
+	// 14's create outcome as the accepted shape writes it (K2): the exit recorded,
+	// its limits lines, the continue that skips the run, and only then the line
+	// that counts it as a part of the check that ran.
+	auditHostileRunCreateFixed = "              echo \"${rc}\" > \"${out}/${run}.create.exit\"\n" +
+		"              if [ \"${rc}\" -eq 124 ]; then\n" +
+		"                echo \"hostile-inventories: the create for ${run} timed out after 2 minutes\" >> \"${results}/limits.txt\"\n" +
+		"              elif [ \"${rc}\" -ne 0 ]; then\n" +
+		"                echo \"hostile-inventories: the create for ${run} failed with exit ${rc}\" >> \"${results}/limits.txt\"\n" +
+		"              fi\n" +
+		"              if [ \"${rc}\" -ne 0 ]; then\n" +
+		"                continue\n" +
+		"              fi\n" +
+		"              ran_any=1\n"
+	auditFuzzTargetCreateFixed = "            echo \"${rc}\" > \"${out}/targets/${n}-${name}.create.exit\"\n" +
+		"            if [ \"${rc}\" -eq 124 ]; then\n" +
+		"              echo \"fuzzing: the create for ${pkg} ${name} timed out after 2 minutes\" >> \"${results}/limits.txt\"\n" +
+		"            elif [ \"${rc}\" -ne 0 ]; then\n" +
+		"              echo \"fuzzing: the create for ${pkg} ${name} failed with exit ${rc}\" >> \"${results}/limits.txt\"\n" +
+		"            fi\n" +
+		"            if [ \"${rc}\" -ne 0 ]; then\n" +
+		"              continue\n" +
+		"            fi\n" +
+		"            ran_any=1\n"
+
+	// auditHostileRunCreateFailed and auditFuzzTargetCreateFailed are those
+	// outcomes as K2 finds them: ran_any=1 right after the create's exit, before
+	// the continue guard, so a create that failed counts as a run that ran and a
+	// check whose every create failed reads as one that ran clean.
+	auditHostileRunCreateFailed = "              echo \"${rc}\" > \"${out}/${run}.create.exit\"\n" +
+		"              ran_any=1\n" +
+		"              if [ \"${rc}\" -eq 124 ]; then\n" +
+		"                echo \"hostile-inventories: the create for ${run} timed out after 2 minutes\" >> \"${results}/limits.txt\"\n" +
+		"              elif [ \"${rc}\" -ne 0 ]; then\n" +
+		"                echo \"hostile-inventories: the create for ${run} failed with exit ${rc}\" >> \"${results}/limits.txt\"\n" +
+		"              fi\n" +
+		"              if [ \"${rc}\" -ne 0 ]; then\n" +
+		"                continue\n" +
+		"              fi\n"
+	auditFuzzTargetCreateFailed = "            echo \"${rc}\" > \"${out}/targets/${n}-${name}.create.exit\"\n" +
+		"            ran_any=1\n" +
+		"            if [ \"${rc}\" -eq 124 ]; then\n" +
+		"              echo \"fuzzing: the create for ${pkg} ${name} timed out after 2 minutes\" >> \"${results}/limits.txt\"\n" +
+		"            elif [ \"${rc}\" -ne 0 ]; then\n" +
+		"              echo \"fuzzing: the create for ${pkg} ${name} failed with exit ${rc}\" >> \"${results}/limits.txt\"\n" +
+		"            fi\n" +
+		"            if [ \"${rc}\" -ne 0 ]; then\n" +
+		"              continue\n" +
+		"            fi\n"
+
+	// auditHostileRunStartUnmarked and auditFuzzTargetStartUnmarked are the
+	// started run's and target's outcome without the line that counts them: a run
+	// that began then counts for nothing, and a check whose every run began is
+	// recorded as one that did not run at all.
+	auditHostileRunStartUnmarked = "              echo \"${rc}\" > \"${out}/${run}.exit\"\n" +
+		"              if [ \"${rc}\" -eq 124 ]; then\n" +
+		"                timeout 1m docker kill \"${cid}\" > /dev/null 2>&1 || true\n" +
+		"                echo \"hostile-inventories: ${run} timed out after 60 seconds, a finding candidate of the run\" >> \"${results}/limits.txt\"\n" +
+		"              fi\n"
+	auditFuzzTargetStartUnmarked = "            echo \"${rc}\" > \"${out}/targets/${n}-${name}.exit\"\n" +
+		"            if [ \"${rc}\" -eq 124 ]; then\n" +
+		"              timeout 1m docker kill \"${cid}\" > /dev/null 2>&1 || true\n" +
+		"              echo \"fuzzing: ${pkg} ${name} timed out after 12 minutes\" >> \"${results}/limits.txt\"\n" +
+		"            fi\n"
+
+	// auditHostileRunFindingCandidate is row 13's finding-candidate limits line,
+	// the one the run's own timeout writes (K6).
+	auditHostileRunFindingCandidate = "echo \"hostile-inventories: ${run} timed out after 60 seconds, a finding candidate of the run\" >> \"${results}/limits.txt\""
 )
 
 // auditWhyNotRunLiteral matches the publish core's whyNotRun map: its
@@ -1376,6 +1524,25 @@ func TestAuditWorkflowWhyIDsMatchThePublishCore(t *testing.T) {
 			}
 		})
 	}
+
+	// Round L's K7: the cases above prove every why id vocabulary.go holds is
+	// accepted, and an id neither holds is refused, but an id the check holds and
+	// the publish core does not would pass them. Both lists are the one set.
+	t.Run("the check's list is the publish core's, both ways", func(t *testing.T) {
+		t.Parallel()
+
+		want := auditPublishWhyIDs(t)
+		got := check.AuditWhyIDs()
+
+		slices.Sort(want)
+		slices.Sort(got)
+
+		if diff := cmp.Diff(want, got); diff != "" {
+			t.Errorf("check.AuditWhyIDs() and vocabulary.go's whyNotRun differ (-publish core +check):\n%s\n"+
+				"an id only the check holds is a not-run line it accepts and the core cannot render, which publishes no report, "+
+				"and an id only the core holds is one the workflow cannot write (PRD #175 milestone 2, ADR 0040)", diff)
+		}
+	})
 }
 
 // auditPublishWhyIDs returns the why ids ci/auditpublish/internal/publish/
@@ -2809,13 +2976,13 @@ func TestAuditWorkflow(t *testing.T) {
 		},
 		{
 			name:     "row 7's timed-out download recorded nowhere",
-			workflow: mutateEvery(t, acceptedWorkflow, auditReleaseTimedOut, ""),
-			wantIn:   "records no release-integrity timed-out",
+			workflow: mutate(t, acceptedWorkflow, auditReleaseDownloadTimedOutWhy, ""),
+			wantIn:   "release-integrity",
 		},
 		{
 			name:     "row 7's failed command recorded nowhere",
-			workflow: mutateEvery(t, acceptedWorkflow, auditReleaseToolFailed, ""),
-			wantIn:   "records no release-integrity tool-failed",
+			workflow: mutate(t, acceptedWorkflow, auditReleaseDownloadToolFailedWhy, ""),
+			wantIn:   "release-integrity",
 		},
 		{
 			name:     "row 8's failed image save recorded nowhere",
@@ -3523,6 +3690,102 @@ func TestAuditWorkflow(t *testing.T) {
 				"          printf '%s\\n' one two | xargs -n1 timeout 1m cat > /dev/null || true\n"+
 					auditReleaseEndRecord),
 			wantIn: "xargs",
+		},
+
+		// Round L: the reviewer's K1, K2, K3, K4 and K6 findings and the auditor's
+		// L1. A check of several parts is recorded as one that did not run only at
+		// its end (K1); a run or a target counts only once it started (K2); and every
+		// loop header, timeout per argument, quoted timeout and finding-candidate
+		// line the accepted shape writes is one fit follows or refuses (K3, K4/L1,
+		// K6).
+		{
+			name:     "row 7's download not-run line written in its branch again",
+			workflow: mutate(t, acceptedWorkflow, auditReleaseDownloadBranches, auditReleaseDownloadNotRunBranches),
+			wantIn:   "not-run.txt",
+		},
+		{
+			name:     "row 13's failed create counted as a run that ran",
+			workflow: mutate(t, acceptedWorkflow, auditHostileRunCreateFixed, auditHostileRunCreateFailed),
+			wantIn:   "ran_any",
+		},
+		{
+			name:     "row 14's failed target create counted as a target that ran",
+			workflow: mutate(t, acceptedWorkflow, auditFuzzTargetCreateFixed, auditFuzzTargetCreateFailed),
+			wantIn:   "ran_any",
+		},
+		{
+			name:     "row 13's started run left uncounted",
+			workflow: mutate(t, acceptedWorkflow, auditHostileRunStart, auditHostileRunStartUnmarked),
+			wantIn:   "ran_any",
+		},
+		{
+			name:     "row 14's started target left uncounted",
+			workflow: mutate(t, acceptedWorkflow, auditFuzzTargetStart, auditFuzzTargetStartUnmarked),
+			wantIn:   "ran_any",
+		},
+		{
+			// K3: the loop word after && is no loop start, so its body was counted
+			// as lines that run once.
+			name: "row 7's loop header after &&",
+			workflow: mutate(t, acceptedWorkflow, auditReleaseEndRecord,
+				"          cd \"${out}\" && for f in $(ls); do\n"+
+					"            timeout 30 true\n"+
+					"          done\n"+
+					auditReleaseEndRecord),
+			wantIn: "fit cannot follow",
+		},
+		{
+			name: "row 7's loop header after ;",
+			workflow: mutate(t, acceptedWorkflow, auditReleaseEndRecord,
+				"          cd \"${out}\"; for f in $(ls); do\n"+
+					"            timeout 30 true\n"+
+					"          done\n"+
+					auditReleaseEndRecord),
+			wantIn: "fit cannot follow",
+		},
+		{
+			// K4 and the auditor's L1: a timeout xargs or find runs once per
+			// argument, and one inside a quoted sh -c string.
+			name: "row 7's timeout run once per argument by xargs without -n1",
+			workflow: mutate(t, acceptedWorkflow, auditReleaseEndRecord,
+				"          printf '%s\\n' one two | xargs timeout 1m cat > /dev/null || true\n"+
+					auditReleaseEndRecord),
+			wantIn: "xargs",
+		},
+		{
+			name: "row 7's timeout run once per argument by find -exec",
+			workflow: mutate(t, acceptedWorkflow, auditReleaseEndRecord,
+				"          find . -type f -exec timeout 1m cat {} + > /dev/null || true\n"+
+					auditReleaseEndRecord),
+			wantIn: "-exec",
+		},
+		{
+			name: "row 7's timeout run once per argument by find -execdir",
+			workflow: mutate(t, acceptedWorkflow, auditReleaseEndRecord,
+				"          find . -type f -execdir timeout 1m cat {} + > /dev/null || true\n"+
+					auditReleaseEndRecord),
+			wantIn: "-execdir",
+		},
+		{
+			name: "row 7's timeout in a quoted sh -c string",
+			workflow: mutate(t, acceptedWorkflow, auditReleaseEndRecord,
+				"          sh -c 'timeout 50m true'\n"+
+					auditReleaseEndRecord),
+			wantIn: "timeout 50m",
+		},
+		{
+			name: "row 7's timeout in a quoted sh -c string under find -exec",
+			workflow: mutate(t, acceptedWorkflow, auditReleaseEndRecord,
+				"          find \"${out}\" -type f -exec sh -c 'timeout 50m true' \\;\n"+
+					auditReleaseEndRecord),
+			wantIn: "timeout 50m",
+		},
+		{
+			// K6: row 13's finding-candidate limits line, held whole as row 7's
+			// malformed-checksums record is.
+			name:     "row 13's finding-candidate limits line without its text",
+			workflow: mutate(t, acceptedWorkflow, auditHostileRunFindingCandidate, "echo \"hostile-inventories: ${run} timed out after 60 seconds\" >> \"${results}/limits.txt\""),
+			wantIn:   "a finding candidate of the run",
 		},
 
 		// A document the reader cannot follow tells the check nothing, so it is
