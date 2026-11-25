@@ -319,35 +319,121 @@ func TestWorktreeRefusesANameThatIsNoPullRequestBranch(t *testing.T) {
 }
 
 // TestWorktreeCreatesANewBranch pins a new branch's worktree: the path the script prints, the branch checked out
-// there, and that it is cut from the latest origin/main, which the script fetches, without an upstream, so it
-// can never push to main (issue #573).
+// there, and that it is cut from the latest main - origin's after the script's fetch, or the checkout's own when
+// origin cannot be fetched - without an upstream, so it can never push to main (issue #573).
+//
+// A tag of the base's short name must change none of that (issue #602). Git's own ref lookup tries a tag before a
+// branch or a remote-tracking ref, so a tag named origin/main hands the script the tag wherever it asks git about
+// the short name origin/main, and one named main does the same to the checkout's own main without an origin: a
+// base named in full is what keeps a new branch cut from main, and left unfoldable when git calls the short name
+// ambiguous.
 func TestWorktreeCreatesANewBranch(t *testing.T) {
 	t.Parallel()
 
-	f := newWorktreeFixture(t)
-	mainSHA := f.advanceMain(t)
+	cases := []struct {
+		name string
+		// beside leaves origin and the checkout as the case needs them beside the new branch's base, and returns
+		// the commit the new branch must be cut from.
+		beside func(t *testing.T, f *worktreeFixture) (base string)
+		// after, when set, checks the state the case's base depends on once the script has run.
+		after func(t *testing.T, f *worktreeFixture)
+	}{
+		{
+			name: "origin's main alone",
+			beside: func(t *testing.T, f *worktreeFixture) string {
+				t.Helper()
 
-	got := f.run(t, "feat/12-x")
+				return f.advanceMain(t)
+			},
+		},
+		{
+			name: "a tag named origin/main at an older commit",
+			beside: func(t *testing.T, f *worktreeFixture) string {
+				t.Helper()
 
-	if got.code != 0 {
-		t.Fatalf("dev/worktree.sh feat/12-x exited %d, want 0 (issue #573)\nstdout: %s\nstderr: %s", got.code, got.stdout, got.stderr)
+				// The tag is at the commit origin's main had before the script's fetch, the branch is cut from the
+				// one that fetch brings: a new branch at the tag's commit is told apart from one cut from origin's
+				// main only when the two differ.
+				older := f.mustGitIn(t, f.checkout, "rev-parse", "refs/remotes/origin/main")
+				mainSHA := f.advanceMain(t)
+				if older == mainSHA {
+					t.Fatalf("the tag's commit is origin's main %s: move main on, or the case cannot tell which of the two the script cut from (issue #602)", mainSHA)
+				}
+
+				// In origin, so that the script's own fetch brings it into the checkout: a tag only the checkout holds
+				// would say nothing about the fetch a maintainer's checkout gets.
+				f.mustGitIn(t, f.origin, "tag", "origin/main", older)
+
+				return mainSHA
+			},
+			after: func(t *testing.T, f *worktreeFixture) {
+				t.Helper()
+
+				// The state the case needs: were the tag absent, the short name origin/main would name one ref and the
+				// case would pin nothing.
+				tagged := f.mustGitIn(t, f.checkout, "rev-parse", "--verify", "--quiet", "refs/tags/origin/main")
+				if at := f.mustGitIn(t, f.checkout, "rev-parse", "refs/remotes/origin/main"); tagged == at {
+					t.Fatalf("the fetched tag origin/main is at %s, origin's main itself: point it at another commit, or the case cannot tell which of the two the script cut from (issue #602)", at)
+				}
+			},
+		},
+		{
+			name: "no origin, a tag named main at an older commit",
+			beside: func(t *testing.T, f *worktreeFixture) string {
+				t.Helper()
+
+				// Without origin the script cuts from the checkout's own main, which it names by the short name main:
+				// the tag is put at the commit that branch had before, so a new branch at the tag's commit is told
+				// apart from one cut from main.
+				f.mustGitIn(t, f.checkout, "remote", "remove", "origin")
+				older := f.branchAt(t, "main")
+				f.mustGitIn(t, f.checkout, "commit", "--quiet", "--allow-empty", "-m", "a further commit of the checkout's own main")
+				mainSHA := f.branchAt(t, "main")
+				if older == mainSHA {
+					t.Fatalf("the tag's commit is the main branch %s: commit on main, or the case cannot tell which of the two the script cut from (issue #602)", mainSHA)
+				}
+
+				f.mustGitIn(t, f.checkout, "tag", "main", older)
+
+				return mainSHA
+			},
+		},
 	}
 
-	dir := f.worktreeDir("feat/12-x")
-	if got.path() != dir {
-		t.Errorf("dev/worktree.sh feat/12-x printed %q, want %q (issue #573)", got.path(), dir)
-	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 
-	if on := f.mustGitIn(t, dir, "rev-parse", "--abbrev-ref", "HEAD"); on != "feat/12-x" {
-		t.Errorf("the worktree %s is on %q, want the branch feat/12-x (issue #573)", dir, on)
-	}
+			f := newWorktreeFixture(t)
+			mainSHA := tc.beside(t, f)
 
-	if at := f.branchAt(t, "feat/12-x"); at != mainSHA {
-		t.Errorf("the new branch feat/12-x is at %s, want origin/main's %s, the commit the script fetched: a new branch is cut from the latest main, not from the checkout's older one (issue #573)", at, mainSHA)
-	}
+			got := f.run(t, "feat/12-x")
 
-	if upstream := f.upstreamOf(t, "feat/12-x"); upstream != "" {
-		t.Errorf("the new branch feat/12-x tracks %q, want no upstream: it must never push to main (issue #573)", upstream)
+			if got.code != 0 {
+				t.Fatalf("dev/worktree.sh feat/12-x exited %d, want 0 (issue #573, issue #602)\nstdout: %s\nstderr: %s", got.code, got.stdout, got.stderr)
+			}
+
+			if tc.after != nil {
+				tc.after(t, f)
+			}
+
+			dir := f.worktreeDir("feat/12-x")
+			if got.path() != dir {
+				t.Errorf("dev/worktree.sh feat/12-x printed %q, want %q (issue #573, issue #602)", got.path(), dir)
+			}
+
+			if on := f.mustGitIn(t, dir, "rev-parse", "--abbrev-ref", "HEAD"); on != "feat/12-x" {
+				t.Errorf("the worktree %s is on %q, want the branch feat/12-x (issue #573)", dir, on)
+			}
+
+			if at := f.branchAt(t, "feat/12-x"); at != mainSHA {
+				t.Errorf("the new branch feat/12-x is at %s, want main's %s, the commit the script cut from: a new branch is cut from the latest main, not from a tag of the base's name and not from the checkout's older one (issue #573, issue #602)", at, mainSHA)
+			}
+
+			if upstream := f.upstreamOf(t, "feat/12-x"); upstream != "" {
+				t.Errorf("the new branch feat/12-x tracks %q, want no upstream: it must never push to main (issue #573, issue #602)", upstream)
+			}
+		})
 	}
 }
 
