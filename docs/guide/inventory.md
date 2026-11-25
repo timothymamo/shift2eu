@@ -162,7 +162,8 @@ inventory yourself, with an editor or `jq`:
 - **`usage.hoursPerMonth`**: for a resource that does not run all month, such as a server stopped at
   night. Only compute (`compute.vm`, `compute.baremetal`), Kubernetes (`kubernetes.managed`),
   database (`database.postgresql`, `database.mysql`, `database.mongodb`), cache (`cache.redis`),
-  search (`search.opensearch`) and Kafka (`messaging.kafka`) resources take it; on any other category the inventory is refused.
+  search (`search.opensearch`) and Kafka (`messaging.kafka`) resources take it; on any other category
+  the inventory is refused.
 - any size the calls do not give, such as an RDS instance's vCPU and memory (its instance class), an
   ElastiCache cache's memory per node (its node type), a DocumentDB cluster's vCPU and memory per
   instance (its instance class), a Cloud SQL instance's unless its tier is `db-custom-*`, the `count` of a high-availability database
