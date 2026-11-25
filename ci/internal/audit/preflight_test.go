@@ -70,26 +70,36 @@ func underRoot(rel string) string {
 }
 
 // replacementTokenAbsenceCommand is probe 5's token-absence command as issue
-// #613 fixes it: the sandboxed shell tests the variable's presence itself, with
-// `[[ -v NAME ]]`, which expands nothing, so the command holds no $ - Claude
-// Code 2.1.332 refuses to run a Bash command in which a variable is expanded,
-// before it runs it - and each of the two paths still ends in cat's own error,
-// which names the work area's nonexistent/ path, with tokenset after it when
-// the variable is set. The wrapper is Targets' own; the paths are the work
-// area's as the wrapper sees it, inside the roots it holds every path word to
-// (issue #277, round I).
+// #613's second review fixes it: the sandboxed shell tests the variable's
+// presence itself, with `[[ -v NAME ]]` and `[[ ! -v NAME ]]`, which expand
+// nothing, so the command holds no $ - Claude Code 2.1.332 refuses to run a Bash
+// command in which a variable is expanded, before it runs it - and each of the
+// two paths still ends in cat's own error, which names the work area's
+// nonexistent/ path, with tokenset after it when the variable is set. Both
+// branches are positive tests of the variable: the first reads tokenset when it
+// is set, the second reads the bare path when it is not, and neither path is
+// read because a test or a branch failed instead. The old `||` form ran its
+// second branch whenever the first one failed for any reason - a shell that
+// cannot evaluate `[[` exits 127 without running either cat - so the bare
+// path's absence text could appear without the variable's presence having been
+// tested. The wrapper is Targets' own; the paths are the work area's as the
+// wrapper sees it, inside the roots it holds every path word to (issue #277,
+// round I).
 var replacementTokenAbsenceCommand = "[[ -v CLAUDE_CODE_OAUTH_TOKEN ]] && " +
-	underRoot("srv/audit/bin/audit-exec") + " cat /srv/audit/work/nonexistent/tokenset || " +
+	underRoot("srv/audit/bin/audit-exec") + " cat /srv/audit/work/nonexistent/tokenset; " +
+	"[[ ! -v CLAUDE_CODE_OAUTH_TOKEN ]] && " +
 	underRoot("srv/audit/bin/audit-exec") + " cat /srv/audit/work/nonexistent/"
 
 // The two results probe 5's token-absence call can print, as 2.1.332 records
 // them (issue #613): cat's error for the work area's nonexistent/ path when the
-// variable is absent, and, when it is set, the same run's two errors, the first
-// naming tokenset, so what the transcript shows is whether the variable
-// reached the sandboxed shell.
+// variable is absent, and, when it is set, the first branch's error alone,
+// naming tokenset - the second branch's test is false then, so the bare read
+// never runs and its line never stands beside the set one. What the transcript
+// shows is whether the variable reached the sandboxed shell, and cat's own line
+// for the bare path is the only proof that it did not.
 const (
 	absenceUnsetText = "cat: /srv/audit/work/nonexistent/: No such file or directory"
-	absenceSetText   = "cat: /srv/audit/work/nonexistent/tokenset: No such file or directory\n" + absenceUnsetText
+	absenceSetText   = "cat: /srv/audit/work/nonexistent/tokenset: No such file or directory"
 )
 
 // stepCanary is a canary with no run of 64 hex characters, so the judgement can
@@ -740,6 +750,13 @@ func TestPreflightPlanPassesThePathsItsGlobsSearch(t *testing.T) {
 // never ran, and probe 5 tested the permission layer instead of the scrubbed
 // shell on every run. `[[ -v NAME ]]` is the shell's own test, which the CLI
 // runs, and it expands nothing.
+//
+// Both of the command's branches test the variable positively, and neither is a
+// fallback (issue #613's second review): with `&&` and a `;` between them, a
+// shell that cannot evaluate `[[`, or the first branch's own failure, cannot
+// make the second branch run, so the bare path's error never appears on a run
+// that did not test the variable. A `||` between them did exactly that: an exit
+// 127 took the fallback and the absence text appeared untested.
 func TestPreflightPlanProvesTheTokenVariableIsAbsent(t *testing.T) {
 	t.Parallel()
 
@@ -1879,14 +1896,28 @@ func tokenCases() []judgeCase {
 
 // absenceCases are the ways probe 5's token-absence call fails to prove the
 // scrubbed shell lacks the token variable (issue #277, audit A4): a result that
-// holds the variable's own expansion, one that is not an error, and one that is
-// an error for another reason - a refusal by the settings file among them, which
-// is what every other call of the plan expects and this one must not accept.
+// holds the variable's own expansion, one that is not an error, one that is an
+// error for another reason - a refusal by the settings file among them, which
+// is what every other call of the plan expects and this one must not accept -
+// and, since issue #613's second review, any result whose text holds no line of
+// cat's own, which is what an approval refusal quoting the command and a shell
+// that cannot evaluate `[[` print.
 func absenceCases() []judgeCase {
 	refusal := []string{
 		fmt.Sprintf("probe 5, %s", probeShortName[5]),
 		"runbook step 10",
 	}
+
+	// forAnotherReason is the refusal plus probe 5's own sentence with reason
+	// after it: the rows that pin cat's own line as the only proof assert why
+	// the call did not fail, not only that it did not (issue #613).
+	forAnotherReason := func(reason string) []string {
+		return append(slices.Clone(refusal), fmt.Sprintf("probe 5, %s: %s", probeShortName[5], reason))
+	}
+
+	// wrapper is the launcher's wrapper as the plan renders it, for the rows
+	// whose result is a refusal quoting the command.
+	wrapper := underRoot("srv/audit/bin/audit-exec")
 
 	// theCall answers the token-absence call with result.
 	theCall := func(result callResult) func(plan audit.Plan, answers []callResult) {
@@ -1900,8 +1931,8 @@ func absenceCases() []judgeCase {
 	return []judgeCase{
 		{
 			name:    "the token-absence call's result holds the variable's expansion",
-			answers: theCall(callResult{text: "cat: /srv/audit/work/nonexistent/tokenset: No such file or directory", isError: true}),
-			want:    refusal,
+			answers: theCall(callResult{text: absenceSetText, isError: true}),
+			want:    forAnotherReason(reasonTokenSet),
 		},
 		{
 			name:    "the token-absence call's result is not an error",
@@ -1914,18 +1945,16 @@ func absenceCases() []judgeCase {
 			want:    refusal,
 		},
 		{
-			// Round I moved the call to a path inside the roots, and this row is
-			// why (issue #277): the wrapper refuses a path outside them before
-			// cat runs, and its one-line refusal of the unexpanded path -
-			// /nonexistent/ with a quote after it - is exactly what cat's own
-			// error reads, so the judgement accepts it. The old call showed
-			// absence too, since a refusal of the expanded word carries tokenset
-			// and is refused (round J's correction), but it tested the wrapper
-			// and not cat: only a path the wrapper passes makes cat run and its
-			// failure an absent token.
-			name:     "the wrapper's refusal of the unexpanded path outside the roots reads as an absent token",
-			answers:  theCall(callResult{text: `audit-exec: refused: "/nonexistent/"`, isError: true}),
-			wantPass: true,
+			// Round I moved the call to a path inside the roots (issue #277), and
+			// issue #613's second review turned this row round: the wrapper
+			// refuses a path outside them before cat runs, and its one-line
+			// refusal of the unexpanded word ends in the path cat's own error
+			// names, so an earlier judgement read it as absence. No cat ran, so
+			// it says nothing about the sandboxed shell.
+			name:    "the wrapper's refusal of the unexpanded path reads as an absent token",
+			answers: theCall(callResult{text: `audit-exec: refused: "/nonexistent/"`, isError: true}),
+			want:    forAnotherReason(reasonTokenSet),
+			wantNot: []string{"audit-exec: refused"},
 		},
 
 		// Issue #613: 2.1.332 refuses the call the plan used to ask for, so the
@@ -1935,6 +1964,15 @@ func absenceCases() []judgeCase {
 		// error, which is an ordinary error naming tokenset, would pass as a
 		// refusal: fail-open, on the one result that proves the token reached the
 		// sandboxed shell.
+		//
+		// Issue #613's second review: the pass needs cat's own line for the bare
+		// path, the one absenceUnsetText holds, and not merely a text that ends
+		// in .../nonexistent/. A branch that never ran prints no line of cat's:
+		// the shell that cannot evaluate `[[` exits 127, and the CLI's approval
+		// refusal quotes the command or one part of it. The rows below pin both
+		// sides, the same call with the same command: the bare line passes, and
+		// every text without it fails with the token-set reason, whether it ends
+		// in the path or quotes the whole command.
 		{
 			name:     "the replacement call's result shows the variable absent",
 			command:  replacementTokenAbsenceCommand,
@@ -1945,7 +1983,8 @@ func absenceCases() []judgeCase {
 			name:    "the replacement call's result holds the variable's expansion",
 			command: replacementTokenAbsenceCommand,
 			answers: theCall(callResult{text: "Exit code 1\n" + absenceSetText, isError: true}),
-			want:    refusal,
+			want:    forAnotherReason(reasonTokenSet),
+			wantNot: []string{"No such file or directory"},
 		},
 		{
 			name:    "the replacement call's result is not an error",
@@ -1958,6 +1997,46 @@ func absenceCases() []judgeCase {
 			command: replacementTokenAbsenceCommand,
 			answers: theCall(callResult{noResult: true}),
 			want:    refusal,
+		},
+		{
+			// A shell that cannot evaluate `[[` runs neither cat, and the old
+			// `||` form ran its fallback on this exit 127: the result holds no
+			// line of cat's, so the variable's absence was not shown (issue
+			// #613's second review).
+			name:    "the token-absence call's result holds no cat line",
+			command: replacementTokenAbsenceCommand,
+			answers: theCall(callResult{text: "Exit code 127\nbash: [[: command not found", isError: true}),
+			want:    forAnotherReason(reasonTokenSet),
+			wantNot: []string{"command not found"},
+		},
+		{
+			name:    "the token-absence call's error result is empty",
+			command: replacementTokenAbsenceCommand,
+			answers: theCall(callResult{isError: true}),
+			want:    forAnotherReason(reasonTokenSet),
+		},
+		{
+			// The CLI's approval refusal quotes the part of the compound it would
+			// run - here the bare read - and records no refusal the judgement
+			// reads. Its text ends in the path the judgement looks for, so an
+			// earlier judgement read it as cat's error (issue #613's second
+			// review).
+			name:    "the CLI's refusal of the command's last part names the bare path alone",
+			command: replacementTokenAbsenceCommand,
+			answers: theCall(callResult{text: "The following part requires approval: " + wrapper + " cat /srv/audit/work/nonexistent/", isError: true}),
+			want:    forAnotherReason(reasonTokenSet),
+			wantNot: []string{"requires approval"},
+		},
+		{
+			// The same refusal quoting the whole command: it holds the literal
+			// tokenset, so the set-variable reason is what it draws, and the row
+			// above passes for cat's line alone, not for the phrase a refusal
+			// opens with (issue #613's second review).
+			name:    "the CLI's refusal quotes the whole command",
+			command: replacementTokenAbsenceCommand,
+			answers: theCall(callResult{text: "This command requires approval: " + replacementTokenAbsenceCommand, isError: true}),
+			want:    forAnotherReason(reasonTokenSet),
+			wantNot: []string{"requires approval"},
 		},
 
 		// Issue #613: a tool_result_meta entry whose non_execution_kind is null,
