@@ -1120,6 +1120,11 @@ func bestOf(c mapping.Candidate) bestFit {
 // balancer. A private registry has no tier: PRD #552 milestone 5 records one
 // offering, because no quoted page says it keeps serving through the loss of a
 // zone, so a zone-level request is partial there.
+//
+// The rows that list both node-high-availability and zone-high-availability
+// guard the naming convention: a 3-AZ offering records zone level alone, because
+// ADR 0011 makes zone level imply node level, and a resource that lists both is
+// still direct there.
 func TestNewCategoryBestOfferingAndFit(t *testing.T) {
 	t.Parallel()
 
@@ -1147,6 +1152,15 @@ func TestNewCategoryBestOfferingAndFit(t *testing.T) {
 			category:     taxonomy.CacheRedis,
 			capabilities: []taxonomy.Capability{taxonomy.ZoneHighAvailability},
 			want:         bestFit{Name: "Databases for Valkey Multi-node 3-AZ", Fit: mapping.Direct},
+		},
+		{
+			name:     "cache.redis/zone-high-availability and node-high-availability",
+			category: taxonomy.CacheRedis,
+			capabilities: []taxonomy.Capability{
+				taxonomy.NodeHighAvailability,
+				taxonomy.ZoneHighAvailability,
+			},
+			want: bestFit{Name: "Databases for Valkey Multi-node 3-AZ", Fit: mapping.Direct},
 		},
 		{
 			name:         "cache.redis/sharding",
@@ -1182,6 +1196,15 @@ func TestNewCategoryBestOfferingAndFit(t *testing.T) {
 			want:         bestFit{Name: "Managed MongoDB Advanced 3-AZ", Fit: mapping.Direct},
 		},
 		{
+			name:     "database.mongodb/zone-high-availability and node-high-availability",
+			category: taxonomy.DatabaseMongoDB,
+			capabilities: []taxonomy.Capability{
+				taxonomy.NodeHighAvailability,
+				taxonomy.ZoneHighAvailability,
+			},
+			want: bestFit{Name: "Managed MongoDB 3-AZ", Fit: mapping.Direct},
+		},
+		{
 			name:     "network.loadbalancer/no capabilities",
 			category: taxonomy.NetworkLoadBalancer,
 			want:     bestFit{Name: "Load Balancer", Fit: mapping.Direct},
@@ -1203,6 +1226,15 @@ func TestNewCategoryBestOfferingAndFit(t *testing.T) {
 			category:     taxonomy.NetworkLoadBalancer,
 			capabilities: []taxonomy.Capability{taxonomy.NodeHighAvailability},
 			want:         bestFit{Name: "Load Balancer 3-AZ", Fit: mapping.Direct},
+		},
+		{
+			name:     "network.loadbalancer/zone-high-availability and node-high-availability",
+			category: taxonomy.NetworkLoadBalancer,
+			capabilities: []taxonomy.Capability{
+				taxonomy.NodeHighAvailability,
+				taxonomy.ZoneHighAvailability,
+			},
+			want: bestFit{Name: "Load Balancer 3-AZ", Fit: mapping.Direct},
 		},
 		{
 			name:         "network.loadbalancer/ipv6",
