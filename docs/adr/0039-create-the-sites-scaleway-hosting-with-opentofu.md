@@ -442,6 +442,11 @@ CNAME's target.
   `pipeline_www` at `false`. Nothing serves visitors before R10 turns the deploy on, so the gap between
   that apply and R8's records is accepted; the removal's ordering is the one `create_before_destroy`
   recorded in the state gives (the DNS stage is updated before the stage it referenced is destroyed).
+  A removed instance's destroy reads `create_before_destroy` from the state, never the configuration
+  (OpenTofu v1.13.9, `internal/tofu/node_resource_destroy.go`): a stage written to the state before the
+  flag was configured has none, so its destroy runs first and Scaleway refuses it; R4 checks the state's
+  flag before such an apply and writes it with a refresh-only apply that keeps the stage configured
+  (issue #595).
   R8's rollback is a tfvars change, `pipeline_www = true`, and R4's apply, which recreates the stage
   (its managed certificate requested anew) and gives the DNS stage the `www` name back: no revert PR.
   `[tls-stage-lifecycle]` holds the `count`ed stage to `create_before_destroy` as before, and the TLS

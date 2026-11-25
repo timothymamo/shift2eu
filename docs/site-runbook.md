@@ -109,20 +109,43 @@ The pipeline holds no TLS stage and no custom domain (ADR 0045): the container i
 `www` name; the stage requests its managed certificate once, at its creation:
 after that rollback, R8's recreate step is expected (issue #541).
 
+An apply that removes the TLS stage (`pipeline_www = false` on a pipeline that still has one: milestone
+3's hosting, or the end of R8's rollback) must update the DNS stage before it destroys the stage it
+referenced: Scaleway refuses to delete a TLS stage a DNS stage references. OpenTofu orders it so only
+when the TLS stage's state carries `create_before_destroy: true`, since a removed instance's destroy
+reads that flag from the state, not the configuration; a stage written to the state before the flag
+was in the configuration has none, and its destroy then runs first and fails (issue #595). The check
+after the plan below reads the flag.
+
 ```bash
 dev/tofu.sh -chdir=infra/site init -backend-config=backend.hcl -lockfile=readonly   # PASS: "OpenTofu has been successfully initialized"
 grep -c '^front_domains *= *true' infra/site/terraform.tfvars   # PASS: 0 before R8's second apply, 1 after it
-# Once, on milestone 3's hosting, before the first apply after ADR 0045: the baseline of the pipeline's default endpoint, with its TLS stage still there
+# Before an apply that removes the TLS stage: the baseline of the pipeline's default endpoint, with its TLS stage still there
 E="$(dev/tofu.sh -chdir=infra/site output -raw edge_endpoint)"; curl -sS -o /dev/null -w 'baseline %{http_code} verify=%{ssl_verify_result}\n' "https://$E/"   # record it: the answer check 1 below compares with once the TLS stage is gone
 dev/tofu.sh -chdir=infra/site plan -out=site.tfplan        # PASS (first time): "Plan: 14 to add, 0 to change, 0 to destroy."
-# PASS (the first apply after ADR 0045, on milestone 3's hosting): "Plan: 2 to add, 1 to change, 1 to destroy." (the namespace and the container added, the DNS stage updated in place, the TLS stage destroyed)
+# PASS (a plan that removes the TLS stage): the DNS stage updated in place and the TLS stage destroyed; on milestone 3's hosting with the namespace and the container added, "Plan: 2 to add, 1 to change, 1 to destroy.", at the end of R8's rollback "Plan: 0 to add, 1 to change, 1 to destroy." (plus the container's domains with front_domains = true)
 # PASS (if the provider replaces the DNS stage): the same plan with the DNS stage "must be replaced": its default_fqdn changes, so $E changes; if the new stage's default_fqdn is still empty at apply, the container's precondition fails and the container keeps its old UPSTREAM until the second pass below (a short outage window after R10); nothing serves visitors before R10, so apply it, read $E again from the output lines below, and record it in ADR 0039's container amendment
 # FAIL any other resource replaced or destroyed: stop, apply nothing, rm infra/site/site.tfplan, and find out why
+# The TLS stage's create_before_destroy as the state holds it: the flag a removal's destroy reads (issue #595); run it before applying any plan that destroys the TLS stage
+dev/tofu.sh -chdir=infra/site state pull | jq -c '[.resources[] | select(.type == "scaleway_edge_services_tls_stage") | .instances[] | .create_before_destroy]'   # PASS: [] (no TLS stage) or [true]
+# FAIL [null] or [false]: the stage's state predates the flag, and the apply would destroy it before updating the DNS stage; apply nothing, rm infra/site/site.tfplan, write the flag into the state with the stage still in the configuration, then plan again from the plan line above:
+dev/tofu.sh -chdir=infra/site apply -var=pipeline_www=true -refresh-only   # only after that FAIL; it changes no resource, only the state (answer "yes" if it asks); -var sets pipeline_www = true for this run alone and terraform.tfvars keeps false, so the plan after it removes the stage again
+# PASS: the state check line above, run again, reads [true]; FAIL still [null] or [false]: apply nothing, and take the route under the apply line's second 500 FAIL below
 dev/tofu.sh -chdir=infra/site show site.tfplan | less      # PASS: the bucket policy's three statements, four with public_read (ADR 0039), the IAM rule's two permission sets in one project; the container's image "docker.io/library/caddy:<tag>@sha256:...", max_scale 1, cpu_limit 140, memory_limit_bytes 268000000 (the 0.25 GB the platform keeps; issue #596), min_scale 0, its UPSTREAM the DNS stage's default_fqdn
 dev/tofu.sh -chdir=infra/site apply site.tfplan            # PASS: "Apply complete"
 # FAIL (expected on a first setup, or when the DNS stage is replaced) "Resource precondition failed" on scaleway_container.site, "default_fqdn is still empty": the rest is applied; go on with the wait loop, then the second pass below
 # FAIL "Resource postcondition failed" on scaleway_container.site: the platform kept a redirect or a warm instance the provider did not send; set plain HTTP "enabled" and min scale 0 in the console (Serverless Containers, the namespace shift2eu-site, front, Settings), then plan again: PASS "No changes."
 # FAIL "Error acquiring the state lock": another tofu holds it; wait, or after a crash dev/tofu.sh -chdir=infra/site force-unlock <lock ID>
+# FAIL a bare 500 on scaleway_edge_services_tls_stage.site[0] while destroying it (the destroy ran before the DNS stage's update): re-plan before retrying: the old plan no longer matches the state; rm infra/site/site.tfplan, run the state check and its refresh-only line above, then the plan line again, and apply that plan
+# FAIL the 500 again, or the state check still reads [null] after the refresh-only line: take the TLS stage out of the state, apply the DNS stage's update alone, and delete the stage by hand (the next eight lines, only after this FAIL)
+T="$(mktemp -d)"; dev/tofu.sh -chdir=infra/site state pull > "$T/state-backup.json"; jq -r '.serial' "$T/state-backup.json"   # PASS: a number (the backup; keep it until the last line below)
+TLS="$(jq -r '.resources[] | select(.type == "scaleway_edge_services_tls_stage") | .instances[0].attributes.id' "$T/state-backup.json")"; TLS="${TLS##*/}"; echo "$TLS"   # PASS: the TLS stage's ID, not empty
+dev/tofu.sh -chdir=infra/site state rm 'scaleway_edge_services_tls_stage.site[0]'   # PASS: "Removed scaleway_edge_services_tls_stage.site[0]" and "Successfully removed 1 resource instance(s)."
+dev/tofu.sh -chdir=infra/site plan -out=site.tfplan        # PASS: "Plan: 1 to add, 1 to change, 0 to destroy." (the container added, and the DNS stage updated: cache_stage_id set, tls_stage_id gone, fqdns []; "0 to add" if the failed apply created the container); FAIL any destroy or replace: stop, apply nothing, and find out why
+dev/tofu.sh -chdir=infra/site apply site.tfplan            # PASS: "Apply complete"; then rm infra/site/site.tfplan
+scw edge-services tls-stage delete "$TLS"                  # PASS: no error (or delete it in the console: Edge Services, the pipeline, its TLS stage)
+PL="$(dev/tofu.sh -chdir=infra/site output -raw pipeline_id)"; scw edge-services tls-stage list pipeline-id="$PL" -o json | jq -c '[.[].id]'   # PASS: []
+dev/tofu.sh -chdir=infra/site plan -detailed-exitcode && rm -r "$T"   # PASS: exit 0, "No changes." (the backup removed); then go on with the wait loop below; FAIL exit 2: read the diff, and keep "$T/state-backup.json" until it is explained
 # Scaleway assigns the DNS stage's default_fqdn after creating it: edge_endpoint is empty right after apply, so refresh the state (no resource change) until it is set, 20 tries 30 s apart
 # Watch the first iteration: with the container absent, refresh-only should not trip the precondition, and the container_endpoint output reads "" (try()) rather than failing (not verifiable offline)
 n=0; refresh_failed=0; until [ -n "$(dev/tofu.sh -chdir=infra/site output -raw edge_endpoint 2>/dev/null)" ] || [ "$n" -ge 20 ]; do sleep 30; dev/tofu.sh -chdir=infra/site apply -refresh-only -auto-approve || { refresh_failed=1; break; }; n=$((n + 1)); done
@@ -449,6 +472,7 @@ rm infra/site/tls.tfplan
 # Then the wait loop, the certificate check and the TLS stage check again
 curl -s -o /dev/null -w '%{http_code} %{redirect_url}\n' http://www.shift2eu.com/   # record it: the pipeline's 302 (ADR 0045's Context): a no-go for R10 until the front is back
 # After a rollback, R10 waits: the pipeline alone meets neither the redirect nor the HSTS go/no-go (ADR 0045)
+# Ending the rollback is pipeline_www = false and R4 again: the stage this rollback created carries create_before_destroy in its state, so that removal updates the DNS stage first; R4's state check confirms it before the apply (issue #595)
 ```
 
 The release-tag skill's and the live check's DNS, certificate, redirect and header checks verify blocks
