@@ -6,10 +6,19 @@
 // cut unprintable bytes (a redirect's or a binary body's would otherwise reach the terminal and the report) and never
 // use head (with two files head prints "==> file <==" headers into the output), and each outcome item says which read
 // rule a 200 means - public_read false, and the recorded fallback under public_read true.
+//
+// It pins issue #567's follow-up of PR #582's review on R4 as well: the wait loop that refreshes the state until
+// edge_endpoint is set records a refresh-only that failed before it breaks, so the check line after it prints a FAIL
+// naming that case beside the timeout FAIL, and infra/site/outputs.tf's container_endpoint tolerates the container
+// being absent, since R4's refresh-only reads every output while the first apply's precondition can leave the
+// container uncreated. The R4 loop is read as text too and pinned on the property rather than on one shell spelling:
+// the branch after `apply -refresh-only` must assign a variable before it breaks, and the variable name is the
+// maintainer's choice.
 package docs_test
 
 import (
 	"os"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -113,6 +122,160 @@ func carriesAll(item string, substrings []string) bool {
 	}
 
 	return true
+}
+
+// hostingHeading is R4 of siteRunbookPath (issue #567): the apply that creates the hosting and the wait loop after it,
+// whose lines this file pins as text.
+const hostingHeading = "## R4. Create the hosting"
+
+// TestSiteRunbookHostingWaitLoopNamesARefreshOnlyFailure pins the follow-up of PR #582's review on R4 (issue #567): the
+// wait loop refreshes the state until Scaleway has assigned the pipeline's default_fqdn, and a refresh-only that fails
+// there - an absent scaleway_container.site after the expected precondition FAIL is one way - must not look like the
+// timeout. The loop therefore records the failure before it breaks, and the check line after it prints a FAIL that
+// names that case apart from "FAIL edge_endpoint still empty after 10 minutes". Both are pinned as properties of the
+// section's text, so the loop's variable name and the FAIL's wording are the maintainer's choice.
+func TestSiteRunbookHostingWaitLoopNamesARefreshOnlyFailure(t *testing.T) {
+	t.Parallel()
+
+	section := runbookSectionOf(t, hostingHeading)
+
+	t.Run("the loop records a refresh-only failure before it breaks", func(t *testing.T) {
+		t.Parallel()
+
+		loops := runbookLinesContaining(section, "apply -refresh-only")
+		if len(loops) == 0 {
+			t.Fatalf("%s: %s runs no `apply -refresh-only`, so this check pins nothing: the wait loop refreshes the state until edge_endpoint is set, and the refresh is the line whose failure the loop must record (issue #567)",
+				siteRunbookPath, hostingHeading)
+		}
+
+		for _, line := range loops {
+			if problem := refreshOnlyFailureUnrecorded(line); problem != "" {
+				t.Errorf("%s: %s: the wait loop's `apply -refresh-only` %s, want the loop to record the failure before it breaks, as `|| { refresh_failed=1; break; }` does, so the check line after it can print a FAIL that names that case rather than the timeout's (issue #567)\n  read: %q",
+					siteRunbookPath, hostingHeading, problem, line)
+			}
+		}
+	})
+
+	t.Run("the check line names the refresh-only failure apart from the timeout", func(t *testing.T) {
+		t.Parallel()
+
+		// timeoutFAIL is the FAIL the check line prints when the loop ran out of tries: it must stay, and it must not
+		// be the only FAIL the line can print.
+		const timeoutFAIL = "FAIL edge_endpoint still empty after 10 minutes"
+
+		var timeoutNamed, failureNamed bool
+
+		for _, line := range runbookLinesContaining(section, "FAIL") {
+			if strings.Contains(line, timeoutFAIL) {
+				timeoutNamed = true
+			}
+
+			if !strings.Contains(strings.ToLower(line), "refresh-only") {
+				continue
+			}
+
+			// The FAIL that names the refresh-only case must be a phrase of its own: a line that carries the timeout
+			// FAIL beside the case's name still prints the misleading FAIL alone when only the loop records the error.
+			if strings.Contains(strings.ReplaceAll(line, timeoutFAIL, ""), "FAIL") {
+				failureNamed = true
+			}
+		}
+
+		if !timeoutNamed {
+			t.Errorf("%s: %s no longer prints the timeout FAIL %q, want it kept: a loop that ran its 20 tries without edge_endpoint set is still a FAIL of its own (issue #567)",
+				siteRunbookPath, hostingHeading, timeoutFAIL)
+		}
+
+		if !failureNamed {
+			t.Errorf("%s: %s prints no FAIL that names a refresh-only failure apart from %q, want one such FAIL, as `FAIL refresh-only failed: read the error above` is: the loop's refresh can fail for a reason of its own, and the check line must not report it as ten minutes of an empty edge_endpoint (issue #567)\n  read:\n    %s",
+				siteRunbookPath, hostingHeading, timeoutFAIL, strings.Join(runbookLinesContaining(section, "FAIL"), "\n    "))
+		}
+	})
+}
+
+// refreshOnlyFailureUnrecorded says why the runbook line that runs `apply -refresh-only` hands the command's failure to
+// no branch that records it, and "" when it does. The branch after the command's `||` must assign a variable before it
+// breaks, so the loop remembers that it broke on an error and the check line after it can print a FAIL naming that
+// case; a bare `break` leaves the check line to print the timeout FAIL, which is misleading.
+func refreshOnlyFailureUnrecorded(line string) string {
+	_, rest, ok := strings.Cut(line, "apply -refresh-only")
+	if !ok {
+		return "runs on no such line"
+	}
+
+	_, branch, ok := strings.Cut(rest, "||")
+	if !ok {
+		return "hands its failure to no `||` branch"
+	}
+
+	before, _, broke := strings.Cut(branch, "break")
+	if !broke {
+		return "hands its failure to a branch that does not break"
+	}
+
+	if !shellAssignment.MatchString(before) {
+		return "breaks without recording the failure first"
+	}
+
+	return ""
+}
+
+// shellAssignment matches an assignment of a shell variable, the way R4's loop records the failure it broke on: the
+// loop names the variable as it likes.
+var shellAssignment = regexp.MustCompile(`[A-Za-z_][A-Za-z0-9_]*=`)
+
+// TestContainerEndpointOutputToleratesAnAbsentContainer pins the other half of the same follow-up (issue #567): R4's
+// refresh-only reads every output of infra/site, and the first apply can leave scaleway_container.site uncreated (its
+// precondition fails while the pipeline's default_fqdn is still empty), so the container_endpoint output must read the
+// container's endpoint when it exists and the empty string when it does not, rather than failing the whole refresh.
+func TestContainerEndpointOutputToleratesAnAbsentContainer(t *testing.T) {
+	t.Parallel()
+
+	const (
+		outputsPath = "infra/site/outputs.tf"
+		want        = `value = try(scaleway_container.site.public_endpoint, "")`
+	)
+
+	var values []string
+
+	for _, line := range strings.Split(outputBlock(t, readDoc(t, os.DirFS(repoRoot), outputsPath), "container_endpoint"), "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "value") {
+			values = append(values, strings.Join(strings.Fields(line), " "))
+		}
+	}
+
+	if len(values) != 1 {
+		t.Fatalf("%s: the container_endpoint output states %d value lines, want exactly one", outputsPath, len(values))
+	}
+
+	if values[0] != want {
+		t.Errorf("%s: the container_endpoint output's value is %q, want %q: R4's refresh-only reads every output, so a container the first apply could not create yet would fail the refresh there instead of leaving R4 to wait for edge_endpoint (issue #567)",
+			outputsPath, values[0], want)
+	}
+}
+
+// outputBlock returns the text of the `output "<name>" {` block of an OpenTofu file, from its opening line to the line
+// that closes it.
+func outputBlock(t *testing.T, src, name string) string {
+	t.Helper()
+
+	lines := strings.Split(src, "\n")
+
+	start := slices.IndexFunc(lines, func(line string) bool {
+		return strings.TrimSpace(line) == `output "`+name+`" {`
+	})
+	if start < 0 {
+		t.Fatalf("the OpenTofu file holds no output %q", name)
+	}
+
+	end := slices.IndexFunc(lines[start+1:], func(line string) bool {
+		return strings.TrimSpace(line) == "}"
+	})
+	if end < 0 {
+		t.Fatalf("the output %q never closes", name)
+	}
+
+	return strings.Join(lines[start:start+end+2], "\n")
 }
 
 // runbookSectionOf returns the lines under the heading of the runbook, from the line after the heading to the line of
