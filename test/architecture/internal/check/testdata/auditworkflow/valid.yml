@@ -1356,9 +1356,9 @@ jobs:
           sudo install -d -o root -g root -m 0755 /srv/audit/checkout
           sudo cp -a "${GITHUB_WORKSPACE}/." /srv/audit/checkout/
           sudo chmod -R a-w /srv/audit/checkout
-      # Model-free, while sudo still works and before the sandbox preflight: no Docker socket and no sudo
-      # rule for the runner's user. Each command records its own failure, so the step can name the cause
-      # instead of ending on set -e's own line.
+      # Model-free, while sudo still works and before the sandbox preflight: no Docker daemon, no stale
+      # socket file and no sudo rule for the runner's user. Each command records its own failure, so the
+      # step can name the cause instead of ending on set -e's own line.
       - name: Stop Docker and remove the runner user's sudo rule
         timeout-minutes: 5
         run: |
@@ -1366,6 +1366,7 @@ jobs:
           rc=0
           sudo systemctl stop docker.service docker.socket || rc=$?
           sudo systemctl disable docker.service docker.socket || rc=$?
+          sudo rm -f /var/run/docker.sock || rc=$?
           sudo rm -f /etc/sudoers.d/runner || rc=$?
           if [ "${rc}" -ne 0 ]; then
             echo "::error title=Audit model::the runner could not be hardened: see runbook step 10"
