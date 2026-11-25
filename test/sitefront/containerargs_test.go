@@ -602,6 +602,25 @@ resource "scaleway_container" "site" {
 			},
 		},
 		{
+			name: "a multi-line list with // and /* */ comments between its elements",
+			tf: comment + imageLine + `
+resource "scaleway_container" "site" {
+  command = ["/bin/sh", "-c"]
+  args = [
+    "run", // the subcommand
+    "caddy", /* the program
+    the shell execs */
+    "a // b",
+    "c /* d */",
+  ]
+}
+`,
+			want: containerRun{
+				image: caddyAt,
+				argv:  []string{"/bin/sh", "-c", "run", "caddy", "a // b", "c /* d */"},
+			},
+		},
+		{
 			name: "a commented-out list above the real one",
 			tf: comment + imageLine + `
 resource "scaleway_container" "site" {
