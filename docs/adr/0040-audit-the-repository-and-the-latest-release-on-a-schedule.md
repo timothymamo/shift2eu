@@ -6,7 +6,9 @@
   amendment, how Claude Code runs in the model job, is dated 2026-11-22, its second, the publish
   program's core, 2026-11-23. Issue #568 amends it with the plan for the runner image's move to
   `ubuntu-26.04` (2026-11-25); issue #592 amends the model step's permission mode (2026-11-25); issue
-  #613 amends the preflight's token-absence call (2026-11-25)
+  #613 amends the preflight's token-absence call (2026-11-25); issue #615 moves the CLI's working
+  directory out of the work area, and issue #614 accepts the CLI's built-in read-only Bash commands
+  (2026-11-25)
 - Date: 2026-11-21, amended 2026-11-22 to 2026-11-25
 
 ## Context
@@ -1469,13 +1471,15 @@ removes sudo, and never under `$RUNNER_TEMP` or the workspace (both under `/home
 |---|---|---|
 | `/srv/audit/checkout` | a copy of the `github.sha` checkout, `.git` included, every write bit removed | Read, Grep, Glob |
 | `/srv/audit/checks` | the decrypted `checks-result`, every write bit removed | Read, Grep, Glob |
-| `/srv/audit/work` | the CLI's working directory; the result file `result.json`; `tmp/`, the commands' `TMPDIR` | Read, Grep, Glob, Write, Edit; Bash writes here only |
+| `/srv/audit/work` | the result file `result.json`; `tmp/`, the commands' `TMPDIR` | Read, Grep, Glob, Write, Edit; Bash writes here (and, by redirection, into `cwd`; amended 2026-11-25, issue #614) |
+| `/srv/audit/cwd` | the CLI's working directory (*added 2026-11-25, issue #615*): empty before the run, made by the same `install -d` as `work` (the runner's, mode 0755); under the scrub the CLI leaves its placeholders here; nothing reads it back | no rule names it; as the working directory, the CLI's built-in read-only Bash commands list and read it, and a Bash redirection may write into it (issue #614) |
 | `/srv/audit/state` | `home/` (the fresh `HOME`, with Claude Code's configuration and transcripts), `tmp/` (the CLI's `TMPDIR`), `bin/claude`, `out/` (transcripts and stderr) | none: denied to every tool |
 | `/srv/audit/bin/audit-exec` | the wrapper, built from `ci/auditexec`, owned by root, mode 0555 | Bash runs it, nothing else |
 
-The working directory is `/srv/audit/work`, so no `CLAUDE.md` or `.claude/` of the checkout copy is
-found from it: they sit in a sibling directory, and the CLI looks for them only in the working directory
-and its parents (`/srv`, `/`, which hold none). The skill reaches the model only as the system prompt
+The working directory is `/srv/audit/cwd` (`/srv/audit/work` until issue #615, 2026-11-25; see "The
+CLI's working directory and its built-in read-only commands" below), so no `CLAUDE.md` or `.claude/` of
+the checkout copy is found from it: they sit in a sibling directory, and the CLI looks for them only in
+the working directory and its parents (`/srv/audit`, `/srv`, `/`, which hold none). The skill reaches the model only as the system prompt
 `ci/auditrun` hands it.
 
 #### The settings file
@@ -1491,7 +1495,7 @@ dropping or widening any entry below fails `make test`.
   issue #592, from `dontAsk`), `SafeModeOff` (the
   settings file must apply, and `--safe-mode` turns customisations off; each thing it would turn off is
   off by another flag or key here), `AppendSystemPrompt` (the default prompt explains the tools the
-  audit uses), `WorkDir` `/srv/audit/work`, `Home` `/srv/audit/state/home`, `Transcript` the file above,
+  audit uses), `WorkDir` `/srv/audit/cwd` (*amended 2026-11-25, issue #615*, from `/srv/audit/work`), `Home` `/srv/audit/state/home`, `Transcript` the file above,
   `--strict-mcp-config` with the empty MCP configuration.
 - **Permission mode `default`** (*amended 2026-11-25, issue #592*; it was `dontAsk`): in `-p` with no
   permission-prompt tool, a tool call no allow rule matches is refused, not asked about, exactly as
@@ -1524,7 +1528,12 @@ dropping or widening any entry below fails `make test`.
   `sandbox.excludedCommands`, `sandbox.network.allowedDomains` `[]`, `sandbox.network.allowUnixSockets`
   `[]`, `sandbox.network.allowLocalBinding` `false`. The sandbox takes its filesystem rules from the
   permission rules and the working directory: Bash writes only under `/srv/audit/work` and reads nothing
-  the deny list names. The file sets no `sandbox.filesystem` key.
+  the deny list names. The file sets no `sandbox.filesystem` key. *Amended 2026-11-25 (issue #614):*
+  that holds without the scrub only. Under the scrub, bubblewrap's argv as 2.1.332 builds it also binds
+  `/home`, `/root`, `/tmp`, `/var`, `/opt`, `/run` and `/mnt` read-write and re-exposes `/home` after the
+  read-deny tmpfs (seen offline with a stand-in bwrap's argv log, not yet with a real bwrap): there the
+  CLI's permission layer, not the sandbox, keeps Bash's reads and writes to the allowed areas. See "The
+  CLI's working directory and its built-in read-only commands" below.
 - **No hooks, no MCP:** `disableAllHooks` `true`, no `hooks` key, `enableAllProjectMcpServers` `false`,
   no `mcpServers`; the CLI gets `--strict-mcp-config --mcp-config {"mcpServers":{}}`. No `env`, `apiKeyHelper`,
   `awsCredentialExport` or `otelHeadersHelper` key: nothing of the file runs a program.
@@ -1852,7 +1861,8 @@ It `exec`s with exactly this environment, nothing inherited: `PATH=/usr/bin:/bin
   only bwrap's environment handling), the refusal is the same under the scrub and without it, with
   the `Bash(/srv/audit/bin/audit-exec:*)` rule matching, and for any variable name; and every `$` is
   refused in the `default` mode whatever an allow rule's prefix says: an unbraced variable (`A variable
-  in this command ...`), a command substitution (`A nested command ...`), `test -n "$..."`. The CLI
+  in this command ...`), a command substitution (`A nested command ...`), `test -n "$..."` (*corrected
+  2026-11-25, issue #614:* not every `$`; `echo $HOME` ran, while `$PPID` and `$$` are refused). The CLI
   records the refusal three times: a `system`/`permission_denied` element naming the call's
   `tool_use_id`, the call's error result holding the sentence, and the result's `tool_result_meta`
   entry with `non_execution_kind` `user-rejected`. The judgement read it as the absence not shown, so
@@ -1888,7 +1898,9 @@ It `exec`s with exactly this environment, nothing inherited: `PATH=/usr/bin:/bin
   - **Probe 5's `$` calls likely test the CLI, not the sandbox.** Since 2.1.332 refuses every `$` form,
     probe 5's `.../cat /proc/$PPID/environ` and `.../cat /proc/$$/environ` calls are likely refused by
     the CLI's permission layer before they run; they then test the CLI rather than the sandbox, and a
-    follow-up issue is to decide that.
+    follow-up issue is to decide that. *Observed 2026-11-25 (issue #614):* they are refused in the
+    `default` mode, by the deny rule `Bash(*/proc/*/environ*)` first and, with that rule removed, by
+    the variable check; probe 5's `/proc` calls test the CLI, not the sandbox.
   - **It relies on `[[ ]]`** being accepted with no allow rule: 2.1.332 runs it as a read-only part of
     the compound (`permission_decision` accept, `reason_type` `subcommandResults`), and each wrapper part
     matches `Bash(/srv/audit/bin/audit-exec:*)`. That is the built-in read-only class issue #614 is
@@ -1897,7 +1909,11 @@ It `exec`s with exactly this environment, nothing inherited: `PATH=/usr/bin:/bin
     step stops, it never passes. An exact rule `Bash([[ -v CLAUDE_CODE_OAUTH_TOKEN ]])` matches the
     lone command offline (`reason_type` `rule`, and a variant with two spaces does not match it), so it
     could make the call independent of that class; it is **not added**, since the settings file is pinned
-    whole by `test/architecture` and the change waits for its test.
+    whole by `test/architecture` and the change waits for its test. *Settled 2026-11-25 (issue #614):*
+    no such rule. Probe 5 works through the class today, and a CLI bump that drops `[[` from it makes
+    the call refused, which the judge fails closed on; the rule would only pin the call's text into the
+    settings file. An ask or deny on `[[` would not be met by a per-part rule anyway: offline, ask beat
+    an exact allow rule on a part, and deny beat every allow rule.
   - **A call the CLI never ran fails probe 5**, whatever its result's text: the judge reads a
     `system`/`permission_denied` element's `tool_use_id`, and a `user` element's `tool_result_meta`
     entries' `id` and `non_execution_kind` (any value but `null`), each walked token by token as the
@@ -1910,7 +1926,9 @@ It `exec`s with exactly this environment, nothing inherited: `PATH=/usr/bin:/bin
     and judged it as an ordinary probe call, under which a set variable's error passes (fail-open).
   - Offline, 2.1.332 kept `CLAUDE_CODE_OAUTH_TOKEN` out of the Bash shell **without** the scrub too, so
     the issue #592 premise that the scrub is the one mechanism shown to do it is to be rechecked in the
-    real sandbox; the scrub stays, and probe 5 is the proof either way.
+    real sandbox; the scrub stays, and probe 5 is the proof either way. *Observed 2026-11-25 (issue
+    #614):* the subprocess environment builder deletes the CLI's fixed credential list,
+    `CLAUDE_CODE_OAUTH_TOKEN` first, with no scrub condition, so offline the premise does not hold.
 
 - **A probe fails (good)** when every one of its calls appears in the transcript with a `tool_result` that
   is an error or a refusal, and its effect is not observed. It **succeeds** (the step fails) when an
@@ -2147,7 +2165,8 @@ of milestone 2), and the constraints PR 5 must keep:
 
   **Decision:** keep `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1`, and ask for the mode that runs: the audit's
   `PermissionMode` is `default`, passed as `--permission-mode default`. Not dropping the scrub: it is
-  the one mechanism shown to keep the token out of the shell the CLI starts for a Bash call, which
+  the one mechanism shown to keep the token out of the shell the CLI starts for a Bash call (*corrected
+  2026-11-25, issue #614:* offline, 2.1.332 keeps it out without the scrub too; the scrub stays), which
   expands variables before `audit-exec` runs, so the wrapper's clean environment cannot do it. Not
   keeping `--permission-mode dontAsk` under the scrub: the flag would claim a mode that never runs,
   warn on every run, and leave nothing that checks the mode against what was asked for. In `-p` with no
@@ -2254,7 +2273,135 @@ runs under a personal plan's token instead.
   and probes 1 and 2 then fail the step, so a bad file stops the run rather than running it
   unsandboxed.
 - **Bash rules are text patterns** and easy to step around; they are defence in depth. The containment
-  is the sandbox, the wrapper and the read deny list, which the probes test on every run.
+  is the sandbox, the wrapper and the read deny list, which the probes test on every run. *Amended
+  2026-11-25 (issue #614):* not every Bash command goes through the allow list and the wrapper: the
+  CLI's built-in read-only commands run without either, bounded by the permission layer's path checks
+  and the deny rules, and under the scrub that layer, not the sandbox, holds `/home`, `/tmp` and the
+  other areas the scrub binds read-write (the next section).
+
+#### The CLI's working directory and its built-in read-only commands (issues #615 and #614, amended 2026-11-25)
+
+Both read offline in Claude Code 2.1.332's bundle (the arm64 build, the pinned integrity) and run against
+a local fake Messages API with a dummy token, the audit's launch flags and settings, the scrub on and
+`default` mode; real socat, and a stand-in bwrap that logs its argv and enforces no isolation (the VM's
+AppArmor refuses a real bwrap's user namespace). No real token, no model, no workflow. The x64 build, the
+runner's kernel and a real bwrap were not run.
+
+**Issue #615: the scrub's placeholders.** Under `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB`, 2.1.332 creates empty
+files and directories at session start (before the sandbox check: a run that refused to start for lack of
+socat already had them) and removes none at exit; a second session in the same directory only reopens
+them.
+
+- **In the working directory**, three groups:
+  - 17 empty regular files (mode from the umask): `.env`, `.env.local`, `.env.development`,
+    `.env.development.local`, `.env.test`, `.env.test.local`, `.env.production`,
+    `.env.production.local`, `.gitmodules`, `.npmrc`, `.yarnrc`, `.yarnrc.yml`, `bunfig.toml`,
+    `package.json`, `package-lock.json`, `yarn.lock`, `pnpm-lock.yaml`;
+  - `.claude/agents/` and `.claude/commands/`, empty, and on the first sandboxed Bash call (with or
+    without the scrub, whenever the sandbox is on) the sandbox's own staging directory
+    `.claude/.cc-writes/`, empty, mode 0700;
+  - `node_modules/.bin/`, empty.
+  - It also tries, non-recursively, to make `.git/info`, `.git/modules`, `.git/worktrees`,
+    `.git/glab-cli`, `.git/config.worktree`, `.git/commondir` and a stub block in `.git/info/exclude`:
+    each fails silently where the directory has no `.git`. So the checkout copy must never be the CLI's
+    working directory.
+- **In `HOME`** (`state/home`): empty `.gitconfig`, `.bash_profile`, `.bashrc`, `.bash_aliases`,
+  `.profile`, `.zshrc`, `.bunfig.toml`, `.netrc`, `.npmrc`, `.yarnrc`, `.yarnrc.yml`, and the directories
+  `.config/{gh,glab-cli,git,pip}` and `.pip`. Nothing checks `HOME` after `CheckLayout`.
+- **Outside both:** an empty `/tmp/inline-comments-buffer.jsonl`.
+- **Probably, unconfirmed:** the mount points a real bwrap makes. Each Bash call's argv `--ro-bind`s
+  `/dev/null` onto `scripts`, `.github`, `.gitconfig`, `.bashrc`, `.bash_profile`, `.zshrc`, `.zprofile`,
+  `.profile`, `.ripgreprc`, `.mcp.json`, `.vscode` and `.idea` in the working directory, and an empty
+  directory onto `.git`; bwrap creates a missing mount point, and the working directory is a read-write
+  bind of the host directory, so they would stay there. A real-bwrap run on the runner is to confirm them.
+- **The gates in the bundle**, in order: the scrub itself (only an unset or false scrub skips the
+  stubs); a missing bwrap, which stops the CLI; then `diskless()`, a hosted launch mode, and
+  `leavesStartingFolderAlone()`, set only on a CLI subcommand's start-up path, never in `-p`. No settings
+  key, flag or environment variable reaches either, and no `sandbox.*` key is consulted.
+- With `/srv/audit/work` as the working directory, the preflight leaves all of them in the work area and
+  the audit's `checkWorkArea`, which wants `tmp/` alone, refuses every real run after a passing
+  preflight.
+
+**Decision (#615): the CLI runs in `/srv/audit/cwd`**, a sibling of the work area that the model-free step
+makes beside `work` (`install -d`, the runner's, mode 0755), that `CheckLayout` wants to exist as a
+directory, no symbolic link, and empty, and that nothing reads back. `checkWorkArea`'s rule stays exactly
+as it is. Offline, with the working directory moved, every placeholder and every mount point of bwrap's
+argv landed in the new directory, and the work area held only `tmp/` and what the model wrote (Write,
+Edit, a Bash redirection and a wrapper's output into it). The settings file is unchanged:
+`Edit(//srv/audit/work/**)` keeps the work area writable for Write and Edit and makes the sandbox bind it
+read-write; the sandbox binds the working directory read-write by itself; and the Read rules keep the
+checkout, checks and work readable. `ci/internal/audit/bubblewrap.go`'s start check does not depend on the
+directory. The wrapper's own `-C /srv/audit/checkout` and its `os.Chdir("/srv/audit/work")` do not depend
+on the CLI's working directory either.
+
+- **Not a tolerance list in `checkWorkArea`:** it would have to name exactly 17 files, `node_modules/`
+  holding an empty `.bin/`, and `.claude/` holding empty `agents/`, `commands/` and a 0700 `.cc-writes/`,
+  very probably also bwrap's 13 mount points, which no stand-in can confirm: three directory shapes, code
+  in the CLI that changes between versions, so a bump could break or silently widen the list. They are
+  also names the model can write through `Edit(//srv/audit/work/**)`, so the check would have to hold
+  their emptiness too.
+- **Not stopping them:** only the scrub off does, and the scrub stays (issue #592's decision); the sandbox's
+  `.cc-writes/` would appear even then.
+- **What it costs:** a relative path now resolves in `cwd`. A relative Write or Edit there matches no
+  Edit rule and is refused; a Bash redirection into it is accepted (it is the session's working
+  directory), so the model could leave a file there, harmlessly, since the result is read only from
+  `work/result.json`. The prompt's "the one place you may write" stays true for the tools.
+
+**Issue #614: the built-in read-only Bash commands.** In the `default` mode, 2.1.332's Bash permission
+check runs, per subcommand: deny rules, ask rules, path checks (the working directory and the Read and
+Edit rules' areas, minus the deny rules), `blockReadsOutsideWorkingDirectories`, allow rules, and then
+accepts a command its read-only validator knows ("Read-only command is allowed"). No setting switches
+that last step off. Offline, under the audit's settings, these ran **with no allow rule and not through
+the wrapper**: `ls`, `pwd`, `echo`; `cat`, `head`, `grep -r`, `find -name`, `wc -l`, `stat`, `ls -la` of
+a path in the checkout (a Read rule's area); `cat` of a relative path in the working directory; `git
+status` and `git log` in the working directory only (now the empty `/srv/audit/cwd`; `git -C <checkout>
+log` needs approval and is refused); `[ ]`, `[[ ]]` (`[[ -v NAME ]]` included); and `echo hi >
+<work>/x.txt`, a write by redirection. The class, per the bundle's own list for 2.1.332, holds about 80
+commands (among them `cat`, `head`, `tail`, `wc`, `stat`, `ls`, `cd`, `echo`, `diff`, `readlink`,
+`realpath`; `grep`, `find`, `sed`, `sort`, `jq`, `rg` with safe flags only; `pwd` and `whoami` without
+arguments; git's read-only subcommands), and changes between versions. The deny rules `Bash(gh:*)`,
+`Bash(docker:*)`, `Bash(git tag:*)` and `Bash(git remote:*)` refuse those subcommand sets first.
+
+- **What bounds them:** the permission layer's path checks and the deny rules. Reads reach only the
+  working directory and the Read rules' areas (`checkout`, `checks`, `work`), minus the denied
+  `/proc`, `/sys`, `/etc`, `/home` and `state`; writes by redirection reach only the working directory and
+  the Edit rule's area (`work`). Refused offline: `cat /etc/hostname`, `cat`/`ls` of the state area
+  (also through `checkout/../state` and a relative `../state`), `ls /home`, `< /home/...`, `cat`/`ls` of a
+  path no rule names, `< /tmp/x` and `> /tmp/x` (through the wrapper too).
+- **The wrapper's option analysis and log do not see these commands**: they never run it. Its rules hold
+  for the commands named through it; the class is held by the CLI alone.
+
+**Decision (#614): accept the class.** No setting is added.
+
+- `permissions.ask` or `deny` on `Bash` refuses the wrapper's calls too: ask and deny come before allow.
+- A per-command deny or ask list is an enumerated deny list of about 80 commands and subcommand sets
+  that changes between versions, which this record's allow-list design rejects elsewhere; offline, `head`
+  ran because it was not listed.
+- `permissions.blockReadsOutsideWorkingDirectories: true` refuses the wrapper's checkout reads (the
+  block applies to its arguments), and the class still runs in the working directory.
+- **Probe 5's token-absence call relies on the class** for `[[ -v ]]`: no `Bash([[ -v
+  CLAUDE_CODE_OAUTH_TOKEN ]])` allow rule is added (the open question of PR #623), as settled under the
+  sandbox preflight above.
+
+**Observations, recorded, not decided:**
+
+- **The scrub's mounts.** Under the scrub, bwrap's argv binds `/home`, `/root`, `/tmp`, `/var`, `/opt`,
+  `/run` and `/mnt` read-write (the scrub's own `allowWrite`), and after the read-deny tmpfs over
+  `/proc`, `/sys`, `/etc`, `/home` and `state`, binds `/home` again, read-write. Without the scrub the same
+  settings give only `--ro-bind / /`, the working directory and `work` read-write, and the tmpfs. Seen in a
+  stand-in bwrap's argv log, not with a real bwrap. So under the scrub the permission layer, not the
+  sandbox, holds those areas: the statements above that the sandbox bounds Bash's writes to the work area
+  hold without the scrub only. To recheck with a real bwrap on the runner.
+- **Probe 5's `/proc` calls test the CLI.** `cat /proc/$PPID/environ` and `cat /proc/$$/environ` are
+  refused in the `default` mode, by the deny rule first and the variable check otherwise. Not every `$`
+  is refused: `echo $HOME` ran.
+- **The token offline.** `CLAUDE_CODE_OAUTH_TOKEN` never reached the Bash shell offline, with the scrub
+  or without it: the subprocess environment builder deletes the CLI's credential list unconditionally. So
+  issue #592's premise that the scrub is the one mechanism does not hold offline; the scrub stays, and
+  probe 5 shows the token's absence on every run.
+- **Follow-up, not done here:** a preflight probe that holds the class's boundary, for example a bare
+  `cat` of a state path and a bare write to `/tmp`, both expected refused, the file checked absent, so a
+  CLI bump that widens the class past the permission layer fails the run.
 
 ### The workflow (milestone 2, PR 5b, amended 2026-11-24)
 
