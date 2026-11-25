@@ -461,6 +461,36 @@ func TestReportWithNeverPricedEstimates(t *testing.T) {
 
 	checkFragment(t, []byte(got))
 
+	// The resource's Monthly estimate cell says it is not estimated. Unlike the
+	// Markdown report's cell, this one carries no reason (issue #373, item 04):
+	// the reason is what the Cost estimate's total names below.
+	elements := fragmentElements(t, got)
+	table := resourcesTableIndex(t, elements)
+	idColumn := column(t, elements, table, "ID")
+	estimateColumn := column(t, elements, table, "Monthly estimate")
+	read := false
+
+	for _, cells := range bodyRows(t, elements, table) {
+		if idColumn >= len(cells) || textOfElement(elements, cells[idColumn]) != "lb-example" {
+			continue
+		}
+
+		read = true
+
+		if estimateColumn >= len(cells) {
+			t.Fatalf("the lb-example row holds %d cells, too few for the Monthly estimate column %d", len(cells), estimateColumn)
+		}
+
+		if cell := textOfElement(elements, cells[estimateColumn]); cell != "not estimated" {
+			t.Errorf("lb-example's Monthly estimate cell = %q, want %q: a resource the target never prices is not estimated (ADR 0046)",
+				cell, "not estimated")
+		}
+	}
+
+	if !read {
+		t.Fatal("the Resources table holds no lb-example row, so this check read nothing")
+	}
+
 	// The sentence is markup: the total sits in a strong element, so only its
 	// text content carries the words.
 	want := "none of 1 resource could be estimated (not priced)"
