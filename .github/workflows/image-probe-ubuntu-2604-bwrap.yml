@@ -12,7 +12,8 @@ name: Image probe ubuntu-26.04 bwrap
 # the checkout) and no other action; no expression in any run: script; no artifact, no cache; nothing
 # runs model or audit code. It writes only on the throwaway runner (its ${RUNNER_TEMP}, the AppArmor
 # profiles it loads and unloads, apt's lists), and its log prints only versions, names and exit codes:
-# aa-status only filtered to lines naming bwrap, never the environment. Its commands print and fail on
+# aa-status only filtered to lines naming bwrap, dmesg only as the AppArmor fields listed above the bwrap
+# step and the count of its apparmor="STATUS" lines, never the environment. Its commands print and fail on
 # nothing they find: shell: bash runs bash --noprofile --norc -eo pipefail, so every run: script starts
 # with set +e -uo pipefail, every probe reports its exit code or ends in || true, and every step after
 # checkout runs if: !cancelled(). The job's timeout lies above the steps' timeouts together (15 minutes)
@@ -55,6 +56,7 @@ jobs:
           done </etc/os-release
           echo "/etc/os-release VERSION_ID: ${version_id}"
           sysctl kernel.apparmor_restrict_unprivileged_userns kernel.apparmor_restrict_unprivileged_unconfined </dev/null 2>&1 || true
+          echo "systemctl is-active auditd: $(systemctl is-active auditd </dev/null 2>&1 || true)"
           version="$(apparmor_parser --version </dev/null 2>&1)"
           rc=$?
           echo "apparmor_parser --version: ${version%%$'\n'*} (exit ${rc})"
@@ -62,11 +64,16 @@ jobs:
       # Each state prints aa-status's lines naming bwrap, the bwrap check (the sandbox preflight's own
       # invocation), and the AppArmor label bwrap's child runs under, read with a user namespace alone
       # (no network namespace, so no loopback setup): the label says which profile owns /usr/bin/bwrap.
-      # Then the kernel's AppArmor DENIED/AUDIT lines of that state naming bwrap or userns, reduced to
-      # their operation, profile, comm, capname, family, sock_type, requested_mask and denied_mask fields
-      # and counted (sort | uniq -c); nothing else of a line is printed, and an unreadable dmesg prints
-      # only its exit code. The ring buffer is cleared once before state 1 and after each state.
-      # Every load is sudo apparmor_parser -r, as the scheduled audit workflow loads bwrap.apparmor.
+      # Then the kernel's AppArmor DENIED/AUDIT lines of that state naming bwrap or userns, each reduced
+      # to one record of its operation, profile, comm, capname, family, sock_type, requested_mask and
+      # denied_mask fields, and the records counted (sort | uniq -c), so the log shows which profile
+      # denied which capname; nothing else of a line is printed, and an unreadable dmesg prints only its
+      # exit code. As a positive control for an empty list, the same dmesg read's apparmor="STATUS"
+      # lines are counted (a number only). The ring buffer is cleared once before state 1 and at the end
+      # of each state's check, after its read, so each state's read holds exactly the loads and removals
+      # that lead to it (state 1's none, so its count is 0 unless the image loads profiles meanwhile)
+      # and its own checks. Every load is sudo apparmor_parser -r, as the scheduled audit workflow loads
+      # bwrap.apparmor, and every removal -R.
       #
       # 1. baseline: the image's profiles only;
       # 2. today's bwrap.apparmor loaded beside Ubuntu's (the first probe's failing state);
@@ -77,10 +84,13 @@ jobs:
       #    rule, is the cause;
       # 6. ours removed, Ubuntu's bwrap-userns-restrict reloaded from the image's file, as shipped;
       # 7. control: today's bwrap.apparmor loaded again beside Ubuntu's (as in 2), with
-      #    kernel.apparmor_restrict_unprivileged_userns set to 0 for the check and back to 1 after it.
-      #    If bwrap passes here but fails in 2, the userns restriction together with our profile is the
-      #    cause; if it fails in both, the attachment precedence alone is. It runs last, so states 1 to 6
-      #    keep the image's sysctl.
+      #    kernel.apparmor_restrict_unprivileged_userns set to 0 for the check and back to the value read
+      #    before it. If bwrap passes here but fails in state 2, the userns restriction denies the
+      #    capability: with both profiles loaded bwrap runs without a profile that grants userns (state
+      #    2's child label says which: unconfined, unprivileged_userns or ours). If it fails in both, the
+      #    sysctl is not the cause: the attached profile mediates the capability away (attachment
+      #    precedence), and states 3 to 5 tell the clash of attachments from a missing rule. It runs
+      #    last, so states 1 to 6 keep the image's sysctl.
       - name: bwrap under each AppArmor state
         if: ${{ !cancelled() }}
         timeout-minutes: 5
@@ -105,7 +115,8 @@ jobs:
             denials="$(sudo dmesg </dev/null 2>/dev/null)"
             rc=$?
             if [ "${rc}" -eq 0 ]; then
-              printf '%s\n' "${denials}" | grep -E 'apparmor="(DENIED|AUDIT)"' | grep -i -e bwrap -e userns | grep -oE '(operation|profile|comm|capname|family|sock_type|requested_mask|denied_mask)="[^"]*"' | sort | uniq -c || true
+              printf '%s\n' "${denials}" | grep -E 'apparmor="(DENIED|AUDIT)"' | grep -i -e bwrap -e userns | while IFS= read -r l; do grep -oE '(operation|profile|comm|capname|family|sock_type|requested_mask|denied_mask)="[^"]*"' <<<"${l}" | paste -sd' ' -; done | sort | uniq -c || true
+              echo "apparmor=\"STATUS\" lines ($1): $(printf '%s\n' "${denials}" | grep -c 'apparmor="STATUS"' || true)"
             else
               echo "sudo dmesg: exit ${rc}"
             fi
@@ -119,8 +130,11 @@ jobs:
             sudo apparmor_parser "$1" "$2" </dev/null 2>&1
             echo "sudo apparmor_parser $1 $2: exit $?"
           }
-          [ -e "${ubuntu}" ]
-          echo "[ -e ${ubuntu} ]: exit $?"
+          if [ -e "${ubuntu}" ]; then
+            echo "[ -e ${ubuntu} ]: exit 0"
+          else
+            echo "[ -e ${ubuntu} ]: exit 1"
+          fi
           clear_dmesg
           check "1 baseline"
           load -r "${ours}"
@@ -135,11 +149,18 @@ jobs:
           load -r "${ubuntu}"
           check "6 Ubuntu's bwrap-userns-restrict alone"
           load -r "${ours}"
+          userns_before="$(sysctl -n kernel.apparmor_restrict_unprivileged_userns </dev/null 2>/dev/null)"
+          rc=$?
+          echo "sysctl -n kernel.apparmor_restrict_unprivileged_userns: ${userns_before} (exit ${rc})"
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 </dev/null >/dev/null 2>&1
           echo "sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0: exit $?"
           check "7 today's profile beside Ubuntu's, userns restriction off"
-          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=1 </dev/null >/dev/null 2>&1
-          echo "sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=1: exit $?"
+          if [ "${rc}" -eq 0 ] && [ -n "${userns_before}" ]; then
+            sudo sysctl -w "kernel.apparmor_restrict_unprivileged_userns=${userns_before}" </dev/null >/dev/null 2>&1
+            echo "sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=${userns_before}: exit $?"
+          else
+            echo "kernel.apparmor_restrict_unprivileged_userns: not restored, its value could not be read"
+          fi
 
       # The switch's simulation as root after apt-get update, once, only to record whether it would plan
       # (the move's route no longer depends on it: issue #608). Never installs: apt-get -s only. First the
