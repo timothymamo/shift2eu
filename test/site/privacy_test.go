@@ -183,28 +183,37 @@ const coopSentence = "One gap remains: the site does not send Cross-Origin-Opene
 const apexRedirectSentence = "(answered by the site's own front, the same server as www.shift2eu.com, with a 308 redirect that carries no HSTS)"
 
 // frameAncestorsSentence is the privacy page's framing guard (issue #567, item
-// 4): the Content-Security-Policy header every response carries refuses the
-// framing, and the page script's own guard travels with the bundle.
-const frameAncestorsSentence = "Every response from www.shift2eu.com carries frame-ancestors 'none' in its Content-Security-Policy header, so a browser refuses to show the site inside another page. A meta Content Security Policy cannot carry frame-ancestors, so the page script also stops, and says why, when another page frames it: that guard travels with the bundle to any other origin."
+// 4): the Content-Security-Policy header every HTTPS response carries refuses
+// the framing, and the page script's own guard travels with the bundle. The
+// header rides only on the TLS answers, which is why the sentence names HTTPS
+// rather than every response: the scheme's plain redirect carries no headers.
+const frameAncestorsSentence = "Every HTTPS response from www.shift2eu.com carries frame-ancestors 'none' in its Content-Security-Policy header, so a browser refuses to show the site inside another page. A meta Content Security Policy cannot carry frame-ancestors, so the page script also stops, and says why, when another page frames it: that guard travels with the bundle to any other origin."
 
 // logsSentence is the privacy page's paragraph on what is logged (issue #567,
-// item 5): the front that answers every request first keeps no access log and
-// passes neither the visitor's address nor their cookies on, while Scaleway's
-// own logs of the hosting can name all three, kept 1 day once R14 has run and 7
-// until then. The page says what holds until the runbook's log-retention step
-// runs, because that step can run only after Scaleway has logged a request.
-const logsSentence = "The site's front, the server that answers every request first, keeps no access log and passes neither your IP address nor your cookies on to the rest of the hosting. Scaleway's own logs of the hosting can name your IP address, the path you request and your country. The maintainer sets them to be kept 1 day, the shortest Scaleway allows, once the site has served its first requests (Scaleway creates its log store only then); until that is done, Scaleway's default of 7 days applies."
+// item 5): the front keeps no access log and passes neither the visitor's
+// address nor their cookies on, while Scaleway's platform - the layer that ends
+// the encrypted connection and so receives every request before the front - can
+// log the visitor's address, path and country, kept 1 day once the maintainer
+// has set it and 7 until then. The page says what holds until the runbook's
+// log-retention step runs, because that step can run only after Scaleway has
+// logged a request; and it names the platform, not the front, as the layer that
+// answers first, since the front sees only what the platform forwards (ADR 0045,
+// What the server answers).
+const logsSentence = "The site's front keeps no access log and passes neither your IP address nor your cookies on to the rest of the hosting. Scaleway's platform, which ends the encrypted connection and receives your request before the front does, can log your IP address, the path you request and your country. The maintainer sets Scaleway's logs to be kept 1 day, the shortest Scaleway allows, once the site has served its first requests (Scaleway creates its log store only then); until that is done, Scaleway's default of 7 days applies."
 
 // oldPrivacyClaims are the claims the page made before issue #567 and must not
 // make again: the site cannot send Clear-Site-Data and cannot send
 // Cross-Origin-Opener-Policy were both false of the hosting after ADR 0045 (the
-// site does not send either header, which is a decision, not a gap), and the
-// apex redirect's provider was the wrong server once the container answered the
-// apex itself.
+// site does not send either header, which is a decision, not a gap), the apex
+// redirect's provider was the wrong server once the container answered the apex
+// itself, and the front answered no request first once Scaleway's Serverless
+// Containers platform ended the TLS connection ahead of it and kept the logs
+// that can name a visitor.
 var oldPrivacyClaims = []string{
 	"cannot send Clear-Site-Data",
 	"cannot send Cross-Origin-Opener-Policy",
 	"apex redirect's provider",
+	"the server that answers every request first",
 }
 
 // TestPrivacyPageStatesWhatTheFrontAndTheLogsDo pins the five statements issue
@@ -241,12 +250,12 @@ func TestPrivacyPageStatesWhatTheFrontAndTheLogsDo(t *testing.T) {
 		{
 			name:     "frame-ancestors is in the header",
 			sentence: frameAncestorsSentence,
-			expected: "the Technical note must say that every response's Content-Security-Policy header carries frame-ancestors 'none', so a browser refuses to frame the site, and that the page script's guard travels with the bundle (issue #567, item 4)",
+			expected: "the Technical note must say that every HTTPS response's Content-Security-Policy header carries frame-ancestors 'none', so a browser refuses to frame the site, and that the page script's guard travels with the bundle (issue #567, item 4)",
 		},
 		{
 			name:     "the front and Scaleway's logs",
 			sentence: logsSentence,
-			expected: "the \"What the site cannot promise\" list must say, after the hosting-provider paragraph, that the front keeps no access log and passes no IP address and no cookie on, that Scaleway's logs of the hosting can name all three, and that the maintainer keeps them 1 day once R14 has run, 7 days until then (issue #567, item 5)",
+			expected: "the \"What the site cannot promise\" list must say, after the hosting-provider paragraph, that the front keeps no access log and passes no IP address and no cookie on, that Scaleway's platform, which ends the connection before the front, can log the IP address, the path and the country, and that the maintainer sets those logs to 1 day once the site has served its first requests, Scaleway's default of 7 until then (issue #567, item 5)",
 		},
 	}
 
