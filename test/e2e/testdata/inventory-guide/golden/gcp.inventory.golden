@@ -192,6 +192,15 @@
       ]
     },
     {
+      "id": "shop-edge-map",
+      "rawType": "compute.googleapis.com/UrlMap",
+      "category": "network.loadbalancer",
+      "capabilities": [
+        "ipv6",
+        "zone-high-availability"
+      ]
+    },
+    {
       "id": "shop-gke",
       "rawType": "container.googleapis.com/Cluster",
       "category": "kubernetes.managed",

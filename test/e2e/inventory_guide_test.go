@@ -552,6 +552,13 @@ func inventoryGuides() []inventoryGuideCase {
 					id: "shop-legacy-map", rawType: "compute.googleapis.com/UrlMap", category: "network.loadbalancer",
 					capabilities: []string{"zone-high-availability"},
 				},
+				// A frontend is not only an HTTPS proxy: an IPv6 forwarding rule
+				// reaches this URL map through a target HTTP proxy, and its
+				// backends select IPv6 addresses, so the load balancer is ipv6.
+				{
+					id: "shop-edge-map", rawType: "compute.googleapis.com/UrlMap", category: "network.loadbalancer",
+					capabilities: []string{"ipv6", "zone-high-availability"},
+				},
 				// A backend service no URL map names proves its own front end via
 				// a UDP forwarding rule; a target pool never names its protocol.
 				{
@@ -646,6 +653,7 @@ func inventoryGuides() []inventoryGuideCase {
 				"shop-canary-be",
 				"shop-int-be",
 				"shop-legacy-be",
+				"shop-edge-be",
 				"shop-mesh-be",
 				// The error service a URL map links as its custom error page, at the
 				// URL map and at one of its path matchers: the URL map stands for it,
@@ -659,10 +667,14 @@ func inventoryGuides() []inventoryGuideCase {
 				// behind them stands for the load balancer.
 				"shop-web-fr6",
 				"shop-legacy-fr6",
+				// A frontend of its own kind: the IPv6 forwarding rule and the
+				// target HTTP proxy it reaches.
+				"shop-edge-fr6",
 				"shop-dns-fr",
 				"shop-syslog-fr",
 				"shop-web-proxy",
 				"shop-legacy-proxy",
+				"shop-edge-proxy",
 				// A repository that only pulls through from an upstream, and one
 				// that only aggregates others: neither stores an image of its own.
 				"upstream",
