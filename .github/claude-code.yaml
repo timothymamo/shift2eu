@@ -7,5 +7,5 @@
 # dist.integrity` on every bump; ci/claudecodepin fails the pull request
 # until it matches what the registry publishes.
 # renovate: datasource=npm depName=@anthropic-ai/claude-code-linux-x64
-version: 2.1.331
+version: 2.1.332
 integrity: sha512-IpvZ9c/NopO/sr8ThWLVAUDXVAFT3auLWrhbR6wq1dgkuJfZYdTtoXf6GajE5KL9R58iTt/86OPXrJAsM4+l8g==
