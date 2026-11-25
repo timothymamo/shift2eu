@@ -297,8 +297,8 @@ jobs:
       # mismatch and a refused attestation or signature are recorded as release-integrity
       # verification-failed in the results, never as a check that did not run. The step reads GitHub's API
       # with the job's token and runs no release code; the registry is read anonymously. Its own timeouts
-      # stay below its own timeout-minutes: the loop's 20-minute budget and the 29 minutes of timeouts
-      # outside it (the two cosign verify-attestation runs counted) add up to 49, under the step's 50.
+      # stay below its own timeout-minutes: the loop's 20-minute budget, the 2 minutes of the iteration it
+      # began before that budget, and the 18 minutes of timeouts after the loop are 40, under the step's 50.
       - name: Verify the release's files, signature and attestations
         timeout-minutes: 50
         env:
@@ -371,9 +371,9 @@ jobs:
             diff "${out}/listed.txt" "${out}/assets.txt" > "${out}/listing.diff" || rc=$?
             echo "${rc}" > "${out}/listing.exit"
             # Every release file's build provenance, checksums.txt's included, within the loop's budget of
-            # 20 minutes: the budget and the 29 minutes of the step's own timeouts outside the loop (the two
-            # cosign verify-attestation runs counted) add up to 49, under the step's 50, and a loop that
-            # runs out records the files it did not reach.
+            # 20 minutes: the budget, the 2 minutes of the iteration it began before that budget and the 18
+            # minutes of timeouts after the loop (the two cosign verify-attestation runs counted) are 40,
+            # under the step's 50, and a loop that runs out records the files it did not reach.
             while IFS= read -r -d '' file; do
               if [ "${SECONDS}" -ge 1200 ]; then
                 echo "release-integrity: the budget of 20 minutes ran out before $(basename "${file}")" >> "${results}/limits.txt"
@@ -838,10 +838,11 @@ jobs:
           for path in "${stage}"/*; do
             name="$(basename "${path}")"
             for format in markdown json; do
-              # The step's budget: 14 minutes of runs, which leaves room for the image's set-up and the
-              # runs' own timeouts outside the loops.
-              if [ "${SECONDS}" -ge 840 ]; then
-                echo "hostile-inventories: the budget of 14 minutes ran out before ${name} as ${format}" >> "${results}/limits.txt"
+              # The step's budget: no run starts after 12 minutes of the step, so the last run's 6 minutes
+              # of timeouts (create, start, kill, inspect and rm) and the image's removal end within the
+              # step's 20.
+              if [ "${SECONDS}" -ge 720 ]; then
+                echo "hostile-inventories: the budget of 12 minutes ran out before ${name} as ${format}" >> "${results}/limits.txt"
                 continue
               fi
               run="${name}.${format}"
@@ -945,7 +946,7 @@ jobs:
           echo "${rc}" > "${out}/staging-create.exit"
           if [ "${rc}" -eq 124 ]; then
             echo "fuzzing timed-out" >> "${results}/not-run.txt"
-            echo "fuzzing: the staging container's create timed out after 1 minute" >> "${results}/limits.txt"
+            echo "fuzzing: the staging container's create timed out after 2 minutes" >> "${results}/limits.txt"
           elif [ "${rc}" -ne 0 ]; then
             echo "fuzzing tool-failed" >> "${results}/not-run.txt"
           fi
@@ -1064,6 +1065,13 @@ jobs:
           # alone, so no variable's value reaches the model.
           read_api() {
             local name="$1" endpoint="$2" filter="${3:-.}" rc=0
+            # The function's budget: the step's reads number more than 25, each of 2 minutes, far past
+            # its 15, so no read starts after 12 minutes of it; the reads it did not make are recorded
+            # in read-refused.txt, which the step's end names in the limits, "not run (read refused)".
+            if [ "${SECONDS}" -ge 720 ]; then
+              echo "${name}" >> "${out}/read-refused.txt"
+              return 0
+            fi
             timeout 2m gh api "${endpoint}" --jq "${filter}" > "${out}/api/${name}.json" 2> "${out}/api/${name}.stderr" || rc=$?
             echo "${rc}" > "${out}/api/${name}.exit"
             if [ "${rc}" -ne 0 ]; then

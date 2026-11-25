@@ -152,16 +152,22 @@ import (
 //     finding and not as a check that never ran.
 //   - No step's own timeouts can reach its timeout-minutes, because a step's
 //     timeout firing skips every later step, the encrypt step included. A
-//     step whose loop carries a `${SECONDS}` budget holds that budget plus the
-//     `timeout <N>` values outside the loop below its timeout-minutes; any
-//     other step holds the sum of its `timeout <N>` values outside loops below
-//     it. Row 7's 20-minute budget and its 29 minutes of timeouts outside the
-//     loop (the two cosign verify-attestation runs counted) add up to 49 of
-//     its 50, row 8's three timeouts to 14 of its 15, row 9's 12-minute budget
-//     to its 20, row 13's 14-minute budget and its 5 minutes of staging to its
-//     20, row 14's 25-minute budget and its 18 minutes outside the loop to its
-//     45, and the checks job's steps add up to 348, with the job's 5 minutes of
-//     set-up and post steps inside its 355.
+//     loop's `${SECONDS}` budget stops only the iterations that have not begun,
+//     so the step's bound is the larger of the timeouts before the loop and the
+//     budget plus one iteration's own timeouts, plus the timeouts after the
+//     loop, and a step with no loop holds the sum of its `timeout <N>` values.
+//     Row 7's max(11 minutes before the loop, its 20-minute budget plus the 2
+//     minutes of one iteration) plus the 18 minutes after it are 40 of its 50,
+//     row 8's three timeouts 14 of its 15, row 9's 12-minute budget plus one
+//     scan's 7 minutes 19 of its 20, row 13's 12-minute budget plus one run's 6
+//     minutes and the image's removal 19 of its 20, and row 14's 25-minute
+//     budget plus one target's 16 minutes and the image's removal 42 of its 45.
+//     A shell function's timeout counts once per call, so a function the step
+//     calls many times must hold a budget of its own, and then the step's bound
+//     is that budget plus one call's timeouts: row 15's read_api is 12 minutes
+//     plus one read's 2, 14 of its 15, however many reads it makes. The checks
+//     job's steps add up to 348, with the job's 5 minutes of set-up and post
+//     steps inside its 355.
 //   - Every step that can fail with a cause the box lists ends with an
 //     `::error title=Audit <job>::<kind>: see runbook step <N>` line on that
 //     failure, naming no secret and no finding's detail: the hardening step's
@@ -729,6 +735,17 @@ const (
 	// answer through the jq filter its caller names, and the filter's default.
 	auditReadAPI       = "            timeout 2m gh api \"${endpoint}\" --jq \"${filter}\" > \"${out}/api/${name}.json\" 2> \"${out}/api/${name}.stderr\" || rc=$?\n"
 	auditReadAPIFilter = "            local name=\"$1\" endpoint=\"$2\" filter=\"${3:-.}\" rc=0\n"
+	// auditReadAPIBudget is read_api's budget, at the head of its body (round J of
+	// PR 5c): the step's reads number more than 25, each of 2 minutes, far past
+	// its 15, so no read starts after its 12th minute; a read it did not make is
+	// recorded in read-refused.txt, which the step's end names in the limits.
+	auditReadAPIBudget = "            # The function's budget: the step's reads number more than 25, each of 2 minutes, far past\n" +
+		"            # its 15, so no read starts after 12 minutes of it; the reads it did not make are recorded\n" +
+		"            # in read-refused.txt, which the step's end names in the limits, \"not run (read refused)\".\n" +
+		"            if [ \"${SECONDS}\" -ge 720 ]; then\n" +
+		"              echo \"${name}\" >> \"${out}/read-refused.txt\"\n" +
+		"              return 0\n" +
+		"            fi\n"
 	// The four reads that keep names alone: the two variables endpoints and the
 	// two secrets endpoints return each entry's value or nothing, so each call
 	// passes the filter that keeps the names.
@@ -847,6 +864,15 @@ const (
 		"              echo \"binary-vulnerabilities: the budget of 12 minutes ran out before $(basename \"${archive}\")\" >> \"${results}/limits.txt\"\n" +
 		"              continue\n" +
 		"            fi\n"
+
+	// auditHostileLoopBudget is row 13's run loop's budget: no run starts after
+	// 12 minutes of the 20-minute step, so its last run's 6 minutes of timeouts
+	// (create, start, kill, inspect and rm) and the image's removal end within it
+	// (round J of PR 5c).
+	auditHostileLoopBudget = "              if [ \"${SECONDS}\" -ge 720 ]; then\n" +
+		"                echo \"hostile-inventories: the budget of 12 minutes ran out before ${name} as ${format}\" >> \"${results}/limits.txt\"\n" +
+		"                continue\n" +
+		"              fi\n"
 
 	// auditRow8Pull is row 8's pull and the two lines around it: the block the
 	// case that retries the pull in a loop with no budget replaces (M1's rule).
@@ -2419,17 +2445,17 @@ func TestAuditWorkflow(t *testing.T) {
 		{
 			name:     "the ruleset ID guard removed",
 			workflow: mutate(t, acceptedWorkflow, auditRulesetGuard, ""),
-			wantIn:   "ruleset",
+			wantIn:   "the ruleset ID's shape guard",
 		},
 		{
 			name:     "the ruleset ID guard without its record",
 			workflow: mutate(t, acceptedWorkflow, auditRulesetGuard, strings.Replace(auditRulesetGuard, "              echo \"supply-chain unexpected-ruleset\" >> \"${results}/not-run.txt\"\n", "", 1)),
-			wantIn:   "ruleset",
+			wantIn:   "the ruleset ID's shape guard",
 		},
 		{
 			name:     "the ruleset ID guard joined onto the echo's line",
 			workflow: mutate(t, acceptedWorkflow, auditRulesetGuard, joinedBranch(auditRulesetGuard)),
-			wantIn:   "ruleset",
+			wantIn:   "the ruleset ID's shape guard",
 		},
 
 		// The three tools PR 5c adds are pinned like the rest: a version under a
@@ -2503,7 +2529,7 @@ func TestAuditWorkflow(t *testing.T) {
 		{
 			name:     "row 7's attestation loop without its budget",
 			workflow: mutate(t, acceptedWorkflow, auditReleaseLoopBudget, ""),
-			wantIn:   "SECONDS",
+			wantIn:   "no loop budget",
 		},
 		{
 			name:     "row 7's provenance verification without its timeout",
@@ -2513,7 +2539,7 @@ func TestAuditWorkflow(t *testing.T) {
 		{
 			name:     "row 7's signature check without its timeout",
 			workflow: mutate(t, acceptedWorkflow, auditCosignVerify, strings.Replace(auditCosignVerify, "timeout 3m cosign verify", "cosign verify", 1)),
-			wantIn:   "cosign",
+			wantIn:   "runs cosign without its timeout",
 		},
 		{
 			name:     "row 8's image save without its timeout",
@@ -2543,12 +2569,12 @@ func TestAuditWorkflow(t *testing.T) {
 		{
 			name:     "row 7's timed-out download recorded nowhere",
 			workflow: mutateEvery(t, acceptedWorkflow, auditReleaseTimedOut, ""),
-			wantIn:   "release-integrity",
+			wantIn:   "records no release-integrity timed-out",
 		},
 		{
 			name:     "row 7's failed command recorded nowhere",
 			workflow: mutateEvery(t, acceptedWorkflow, auditReleaseToolFailed, ""),
-			wantIn:   "release-integrity",
+			wantIn:   "records no release-integrity tool-failed",
 		},
 		{
 			name:     "row 8's failed image save recorded nowhere",
@@ -2558,7 +2584,7 @@ func TestAuditWorkflow(t *testing.T) {
 		{
 			name:     "row 9's tar without its timeout",
 			workflow: mutate(t, acceptedWorkflow, auditBinaryUnpack, strings.Replace(auditBinaryUnpack, "timeout 2m tar", "tar", 1)),
-			wantIn:   "tar",
+			wantIn:   "runs tar without its timeout",
 		},
 		{
 			name:     "row 9's tar without its size cap",
@@ -2990,12 +3016,12 @@ func TestAuditWorkflow(t *testing.T) {
 		{
 			name:     "row 7's cosign verify reading a refused signature as tool-failed",
 			workflow: mutate(t, acceptedWorkflow, auditSignatureFinding, auditSignatureFindingBefore),
-			wantIn:   "cosign",
+			wantIn:   `runs "timeout 3m cosign verify`,
 		},
 		{
 			name:     "row 9's binary-vulnerabilities loop without its budget",
 			workflow: mutate(t, acceptedWorkflow, auditBinaryLoopBudget, ""),
-			wantIn:   "binary-vulnerabilities",
+			wantIn:   "no loop budget",
 		},
 		{
 			// M1's rule holds every loop that runs a command under a timeout, in any
@@ -3007,12 +3033,12 @@ func TestAuditWorkflow(t *testing.T) {
 				"            [ \"${rc}\" -eq 0 ] && break\n"+
 				"          done\n"+
 				"          echo \"${rc}\" > \"${out}/pull.exit\"\n"),
-			wantIn: "SECONDS",
+			wantIn: "no loop budget",
 		},
 		{
 			name:     "row 14's staging extraction without its timeout",
 			workflow: mutate(t, acceptedWorkflow, auditFuzzTree, strings.Replace(auditFuzzTree, "timeout 2m tar", "tar", 1)),
-			wantIn:   "tar",
+			wantIn:   "runs tar without its timeout",
 		},
 		{
 			name:     "row 14's staging copy without its timeout",
@@ -3027,7 +3053,7 @@ func TestAuditWorkflow(t *testing.T) {
 		{
 			name:     "row 14's fuzz loop without its budget",
 			workflow: mutate(t, acceptedWorkflow, auditFuzzLoopBudget, ""),
-			wantIn:   "fuzzing",
+			wantIn:   "no loop budget",
 		},
 		{
 			name:     "row 11's exit state read without its timeout",
@@ -3038,7 +3064,7 @@ func TestAuditWorkflow(t *testing.T) {
 			name: "row 7's checks run though the release download failed",
 			workflow: mutate(t, mutate(t, acceptedWorkflow, auditReleaseFileGate, ""),
 				auditReleaseFileGateEnd, strings.TrimSuffix(auditReleaseFileGateEnd, "          fi\n")),
-			wantIn: "release-integrity",
+			wantIn: `[ "${rel_ok}" -eq 1 ]; then gate`,
 		},
 		{
 			name:     "scorecard's failed run recorded nowhere",
@@ -3083,12 +3109,55 @@ func TestAuditWorkflow(t *testing.T) {
 		{
 			name:     "row 7's unresolved image digest leaving the image unverified",
 			workflow: mutate(t, acceptedWorkflow, auditNoDigestRecord, "          fi\n"),
-			wantIn:   "release-integrity",
+			wantIn:   "has no else that records what it skipped",
 		},
 		{
 			name:     "the ruleset ID guard ending the step",
 			workflow: mutate(t, acceptedWorkflow, auditRulesetGuard, auditRulesetExit),
-			wantIn:   "ruleset",
+			wantIn:   "the ruleset ID's shape guard",
+		},
+
+		// Round J: a step's own time bound counted the whole way. A loop's
+		// `${SECONDS}` budget stops only the iterations that have not begun, so the
+		// iteration that began just before it runs to its own timeouts: the step's
+		// bound is the larger of the timeouts before the loop and the budget plus
+		// one iteration's timeouts, plus the timeouts after it. A shell function's
+		// timeout counts once per call, so a function the step calls many times
+		// must hold a budget of its own, which then stands in the calls' place.
+		{
+			name:     "row 13's run loop's budget past its step's last iteration",
+			workflow: mutate(t, acceptedWorkflow, auditHostileLoopBudget, strings.Replace(auditHostileLoopBudget, "-ge 720", "-ge 840", 1)),
+			wantIn:   "1260",
+		},
+		{
+			name:     "row 9's binary-vulnerabilities budget past its step's last scan",
+			workflow: mutate(t, acceptedWorkflow, auditBinaryLoopBudget, strings.Replace(auditBinaryLoopBudget, "-ge 720", "-ge 790", 1)),
+			wantIn:   "1210",
+		},
+		{
+			name:     "row 15's read_api without its budget",
+			workflow: mutate(t, acceptedWorkflow, auditReadAPIBudget, ""),
+			wantIn:   "with no function budget",
+		},
+		{
+			name:     "row 15's read_api's budget past its step's last read",
+			workflow: mutate(t, acceptedWorkflow, auditReadAPIBudget, strings.Replace(auditReadAPIBudget, "-ge 720", "-ge 790", 1)),
+			wantIn:   "910",
+		},
+		{
+			// The function's budget ends the reads it did not reach, so they are no
+			// time at all: the step is held by read_api's 12 minutes and one read's 2,
+			// not by 33 reads of 2.
+			name: "row 15's read_api called more times than one call's timeouts allow",
+			workflow: mutate(t, acceptedWorkflow, auditRepositoryVariableNames, "          read_api repository-labels \"repos/${GH_REPO}/labels\"\n"+
+				"          read_api repository-topics \"repos/${GH_REPO}/topics\"\n"+
+				"          read_api repository-languages \"repos/${GH_REPO}/languages\"\n"+
+				"          read_api repository-contributors \"repos/${GH_REPO}/contributors\"\n"+
+				"          read_api repository-branches \"repos/${GH_REPO}/branches\"\n"+
+				"          read_api repository-tags \"repos/${GH_REPO}/tags\"\n"+
+				"          read_api repository-milestones \"repos/${GH_REPO}/milestones\"\n"+
+				"          read_api repository-releases \"repos/${GH_REPO}/releases\"\n"+
+				auditRepositoryVariableNames),
 		},
 
 		// A document the reader cannot follow tells the check nothing, so it is
