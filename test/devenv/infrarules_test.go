@@ -1691,8 +1691,8 @@ resource "scaleway_container_cron" "nightly" {
 // value the maintainer's own tfvars could set - memory_limit and http_option, the deprecated spellings beside
 // memory_limit_bytes and https_connections_only, must not be set at all, and min_scale must be 0 or 1. The tags
 // are [container-max-scale], [container-cpu], [container-memory], [container-deprecated-attribute],
-// [container-image-pin], [container-min-scale], [container-min-scale-postcondition] and
-// [container-https-only-postcondition-missing],
+// [container-image-pin], [container-min-scale], [container-min-scale-postcondition],
+// [container-https-only-postcondition] and [container-https-only-postcondition-missing],
 // and an attribute gets the one tag that names it: a deprecated memory_limit is no [container-memory] beside it,
 // and a deprecated http_option no [container-cpu] or [container-memory], since a breakage is reported once,
 // under the rule that refuses it.
@@ -1725,7 +1725,9 @@ resource "scaleway_container_cron" "nightly" {
 // rules could not read would let a check after an apply run that never compares what the pin sets. Exactly one
 // postcondition may compare self.min_scale with the pin - a second, even an identical one, is refused - and a
 // check standing in a precondition is no check after an apply at all: it runs before the platform holds
-// anything, so a container whose only min_scale check stands there has none.
+// anything, so a container whose only min_scale check stands there has none. The https_connections_only check is
+// one too: a second postcondition on self.https_connections_only, even an identical one, is refused under the
+// tag [container-https-only-postcondition], the tag that names a count the missing one does not.
 //
 // Every case edits site/container.tf, the file the pins live in, by the attribute's name, so the cases do not
 // depend on how the configuration aligns its = signs; a copy whose container.tf sets the attribute no line of,
@@ -2092,6 +2094,19 @@ locals {
 		breakage: func(t *testing.T, site string) {
 			t.Helper()
 			setContainerHTTPSOnlyPostconditionText(t, site, "condition     = !self.https_connections_only")
+		},
+	},
+	// The other check after an apply is one, not two: a second postcondition on self.https_connections_only is a copy
+	// beside the check that holds it, the same way a second self.min_scale one is refused above, under
+	// [container-https-only-postcondition].
+	{
+		name:   "container-https-only-postcondition-set-twice",
+		why:    "a second postcondition comparing self.https_connections_only with false beside the site container's own, the one check after an apply claimed by two conditions",
+		want:   "container-https-only-postcondition",
+		wantIn: map[string]string{"container-https-only-postcondition": "{site}/container.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			addContainerPostcondition(t, site, "self.https_connections_only == false", "The container's https_connections_only is not false.")
 		},
 	},
 	// A pin set twice is no one pinned value: the second setting could raise what the first fixes, and the
