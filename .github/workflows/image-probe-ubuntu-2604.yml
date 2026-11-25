@@ -13,8 +13,10 @@ name: Image probe ubuntu-26.04
 # /etc/sudoers.d, never the environment. Its commands print and fail on nothing they find: shell: bash
 # runs bash --noprofile --norc -eo pipefail, so every run: script starts with set +e -uo pipefail to
 # clear -e, every probe that could stop a step ends in || true or reports its exit code, and every step
-# after checkout runs if: !cancelled(), so a failed or timed-out step skips none after it (the sudo-rule
-# step in particular). Every probe command that could read stdin reads </dev/null.
+# after checkout runs if: !cancelled(), so a failed step, or one stopped by its own timeout-minutes,
+# skips none after it (the sudo-rule step in particular). A job timeout would cancel the job and skip
+# the rest, so the job's timeout lies above the steps' timeouts together (31 minutes) and the checkout.
+# Every probe command that could read stdin reads </dev/null.
 #
 # Every .deb is checked with /usr/bin/gnusha256sum --check --strict - against the SHA-256 of resolute's
 # Packages index before it is installed, and is not installed on a mismatch. The versions carry no
@@ -29,7 +31,7 @@ jobs:
   image-probe:
     name: Image probe (ubuntu-26.04)
     runs-on: ubuntu-26.04
-    timeout-minutes: 20
+    timeout-minutes: 40
     steps:
       - name: Check out the repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
