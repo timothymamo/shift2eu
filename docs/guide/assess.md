@@ -62,7 +62,8 @@ you read an amount. And version 3 marks a global offering, one not bound to a re
 [Global offerings](#global-offerings)): a resource carries `"bestOfferingGlobal": true` after
 `bestOffering` when its best offering is global, and `globalTies`, the global ties' names in the
 order of `ties`, after `ties`; each key is absent when it would be false or empty, and version 2
-writes neither. Its schemas are `assessment-v3.schema.json` and `comparison-v3.schema.json`
+writes neither. Version 2 does not mark global offerings, so a residency check of a JSON report needs
+version 3. Its schemas are `assessment-v3.schema.json` and `comparison-v3.schema.json`
 beside the version 2 ones ([ADR 0018](../adr/0018-version-the-json-report-format-for-the-cli-and-the-api.md),
 issue #307). `--schema-version` with any format but `json`, or a version other than 2 or 3, is a usage
 error (exit code 2).
@@ -159,7 +160,8 @@ shift2eu: --region: target "scaleway": region "xx" is not one of the target's re
 ### Global offerings
 
 Some offerings, such as a public DNS zone (`network.dns`), are global: not bound to a region you
-choose, the provider serves them from its own locations, which the target's `SOURCES.md` names. A
+choose, including the one `--region` names; the provider serves them from its own locations, which
+may be outside the EU and which the target's `SOURCES.md` names. A
 global offering is a candidate whatever `--region` says, and the reports mark it "(global)" after its
 name wherever they name it as an offering: the best offering and each tie, a comparison's best-offering
 cell, and a required change's "(not offered by X)". The Markdown and HTML reports say what the mark

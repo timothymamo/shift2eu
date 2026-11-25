@@ -147,9 +147,9 @@ it.
 
 ### What "(global)" means, and where the reports mark it
 
-For a reader checking data residency, **"(global)" means "not bound to a region you choose: the
-provider serves it from its own locations"**, which the target's `SOURCES.md` names as its pages state
-them. Each report says so once, in a note under the first table that shows a global offering (Markdown
+For a reader checking data residency, **"(global)" means "not bound to a region you choose, including
+the one `--region` names: the provider serves it from its own locations, which may be outside the
+EU"**, which the target's `SOURCES.md` names as its pages state them. Each report says so once, in a note under the first table that shows a global offering (Markdown
 and HTML) or in the schema's description of the keys (JSON), pointing to `SOURCES.md`. The report's
 region line is unchanged: it states the region chosen or estimated for.
 
@@ -165,9 +165,10 @@ Every report marks the same offerings, the best offering and each of its ties:
   `bestOffering` when it is global, and an optional `globalTies`, the names of the global ties in the
   order of `ties`; each key is absent when it would be false or empty.
 
-The note's words are, in Markdown, "`(global)` means not bound to a region you choose: the provider
-serves the offering from its own locations, which the target's `SOURCES.md` names." and the same
-sentence as one paragraph in HTML. It follows the first table that shows a global offering, once per
+The note's words are, in Markdown, "`(global)` means not bound to a region you choose, including the
+one `--region` names: the provider serves the offering from its own locations, which may be outside
+the EU and which the target's `SOURCES.md` names." and the same sentence as one paragraph in HTML.
+The JSON schemas' descriptions of the two keys say the same. It follows the first table that shows a global offering, once per
 report: in a single-target report the Resources table; in a Markdown comparison the comparison's
 Resources table when it shows a global best offering, else the first target section's Resources table
 that shows one (a global tie the comparison table does not name); in an HTML comparison, which has no
@@ -287,6 +288,10 @@ source is a required change the guide names, not a capability.
 - A later global category (a CDN, transactional email) joins by being added to `taxonomy.IsGlobal` and
   reuses every rule here, the residency note included. A priced global category would rely on the
   estimate rule above, which no amount exercises yet.
+- JSON version 2 does not mark global offerings: a residency check of a JSON report needs version 3.
+- The released version 3 schemas change in place: they gain the two optional keys. A consumer that
+  validates against an older copy of a version 3 schema with `additionalProperties: false` must
+  refresh its copy, or a report that marks a global offering fails its validation.
 - The snapshot format now has three optional offering keys. Any further change follows ADR 0007's policy
   unless an ADR records another exception.
 - The guide's per-source classification of zones (milestones 2 to 4) is still to come: until then a
