@@ -536,7 +536,9 @@ Test levels:
 - [ ] *Native parity:* given the same inventory and options, the web adapter's PDF bytes equal what
   `internal/cli` writes for `--format pdf`. This is checked over every example inventory and every
   hostile fixture the reader accepts, for one target, several and `all`, with and without a region and
-  estimates. Any difference fails the test. This replaces the Markdown and JSON parity tests.
+  estimates. Any difference fails the test. This replaces the Markdown and JSON parity tests. Both sides
+  run in the one `go test` binary (`wire` runs `cli.Run` in process), so they read the same
+  `internal/version` values, unstamped, and the version lines match with no stamping.
 - [ ] *Native parity:* the option-parity table no longer has a schema-version row for the web adapter.
   Every other row is unchanged.
 - [ ] *Static:* `go list -deps` of `./cmd/shift2eu-web` with `GOOS=js GOARCH=wasm` holds `pdfreport` and
@@ -553,7 +555,16 @@ Test levels:
   "Download PDF". It reads the blob's bytes and checks that they are byte-identical to what the CLI binary
   built from the same commit writes for the same inventory and options. Its file name is
   `shift2eu-report.pdf` and its type `application/pdf`. It does the same for a comparison of all three
-  targets. The bytes are read as today's download test reads them, with no page API: the test's own
+  targets. Both sides carry the same version line because neither is stamped: the test builds its
+  reference CLI as it does today (`buildCLI` in `test/browser`, a plain `go build ./cmd/shift2eu` with no
+  `-ldflags`), and the bundle `make test-browser` builds is untagged, so `ci/sitebuild` passes no `-X`
+  either. Both print `shift2eu dev (commit none, built unknown)`. The test does not stamp its CLI with
+  the Makefile's `VERSION`, `COMMIT` and `DATE` instead, and the module with the same values, because
+  `make build`'s `DATE` is the clock, which would make the bundle unreproducible (ADR 0036), and
+  because an untagged build keeps the development values (*ADR 0035* above); this needs no new stamping
+  path outside a release. When the bundle is a release's (`TEST_BROWSER_BUNDLE`, its `manifest.json`
+  naming a tag), the module is stamped and the test's own unstamped CLI is no reference: that run
+  compares against the released CLI, as the *Release* criterion below says. The bytes are read as today's download test reads them, with no page API: the test's own
   injected script (`recordDownloads` in `test/browser`) keeps the blob the page's `download` function
   passes to `URL.createObjectURL`, and the test reads it with `blob.arrayBuffer()` and hands the bytes
   back as an array of byte values, in place of today's `blob.text()`. The page script does not change for
@@ -696,7 +707,9 @@ Milestones 1 and 2 touch the handling of hostile text and the site's trust model
      - no links, JavaScript, forms or embedded files;
      - the string escaping, and the printable-ASCII file;
      - the version line passed by the constructor;
-     - the answers to *Open questions* 2 to 6, 8 and 10 to 12.
+     - the answers to *Open questions* 2 to 4, 6, 8 and 10 to 12, and the interim answers to 5
+       (compression) and 9 (tagged PDF): not in milestones 1 and 2. Milestone 3 amends the ADR with the
+       final decisions on both.
    - The site does not change in this milestone.
 2. [ ] **The site's switch to the PDF download.** Depends on 1.
    - `internal/web`'s `Deps`, `Options` and `Result`, and `wire` constructing `pdfreport` and
@@ -728,6 +741,8 @@ Milestones 1 and 2 touch the handling of hostile text and the site's trust model
      stacked cells is applied.
    - The goldens are updated, and the parity holds.
    - The questions this PRD defers are decided and done or filed: compression (5), tagged PDF (9).
+     Milestone 3's PR amends milestone 1's ADR with both final decisions, in place of their interim
+     answers.
    - This PRD moves to `prds/done/` (`Closes #584`).
 
 ## Decisions and open questions
