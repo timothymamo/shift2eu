@@ -79,9 +79,9 @@ func containerRunFrom(src, caddyfile string) (containerRun, error) {
 	argv := make([]string, 0, len(command)+len(args))
 
 	for _, element := range command {
-		value, err := strconv.Unquote(element)
+		value, err := hclElementValue(element)
 		if err != nil {
-			return containerRun{}, fmt.Errorf("%s: command: %w", containerPath, err)
+			return containerRun{}, fmt.Errorf("%s: command's element %s: %w", containerPath, element, err)
 		}
 		argv = append(argv, value)
 	}
@@ -96,14 +96,57 @@ func containerRunFrom(src, caddyfile string) (containerRun, error) {
 			continue
 		}
 
-		value, err := strconv.Unquote(element)
+		value, err := hclElementValue(element)
 		if err != nil {
-			return containerRun{}, fmt.Errorf("%s: args: %w", containerPath, err)
+			return containerRun{}, fmt.Errorf("%s: args' element %s: %w", containerPath, element, err)
 		}
 		argv = append(argv, value)
 	}
 
 	return containerRun{image: image, argv: argv}, nil
+}
+
+// hclElementValue returns what a quoted list element gives the container: the string the quotes hold, with
+// HCL's template escapes $${ and %%{ decoded to a literal ${ and %{. An element that carries a ${ or %{
+// template is refused: the reader runs no template, so it would pass the template itself to the container
+// instead of what the platform runs (docs/adr/0045).
+func hclElementValue(element string) (string, error) {
+	value, err := strconv.Unquote(element)
+	if err != nil {
+		return "", err
+	}
+
+	var out strings.Builder
+
+	for i := 0; i < len(value); i++ {
+		c := value[i]
+		if c != '$' && c != '%' {
+			out.WriteByte(c)
+
+			continue
+		}
+
+		if i+2 < len(value) && value[i+1] == c && value[i+2] == '{' { // $${ and %%{ are HCL's literal ${ and %{
+			out.WriteByte(c)
+			out.WriteByte('{')
+			i += 2
+
+			continue
+		}
+
+		if i+1 < len(value) && value[i+1] == '{' {
+			what := "interpolation"
+			if c == '%' {
+				what = "directive"
+			}
+
+			return "", fmt.Errorf("%c{ starts an HCL template (%s), which this reader does not run: write %c%c{ for a literal %c{", c, what, c, c, c)
+		}
+
+		out.WriteByte(c)
+	}
+
+	return out.String(), nil
 }
 
 // imageReference returns the image reference src pins: the string on the line
@@ -133,8 +176,13 @@ func imageReference(src string) (string, error) {
 				return "", fmt.Errorf("%s: unquote the image on line %d: %w", containerPath, i+j+2, err)
 			}
 
-			if !strings.Contains(image, "@sha256:") {
+			_, digest, ok := strings.Cut(image, "@sha256:")
+			if !ok {
 				return "", fmt.Errorf("%s: the image is %q, want a reference pinned by digest (name:tag@sha256:...): a tag alone can be moved under the platform (docs/adr/0045)", containerPath, image)
+			}
+
+			if !isImageDigest(digest) {
+				return "", fmt.Errorf("%s: the image is %q, want @sha256: followed by exactly 64 lower-case hex characters and nothing after them: the digest names the one immutable image the platform runs (docs/adr/0045)", containerPath, image)
 			}
 
 			return image, nil
@@ -144,6 +192,24 @@ func imageReference(src string) (string, error) {
 	}
 
 	return "", fmt.Errorf("%s: no line carries %q, the comment that pins the image (CLAUDE.md rule 7, docs/adr/0045)", containerPath, imagePinComment)
+}
+
+// isImageDigest reports whether s is exactly the 64 lower-case hex characters of a sha256 digest, and nothing
+// after them: the digest a pinned image reference ends with (docs/adr/0045).
+func isImageDigest(s string) bool {
+	if len(s) != 64 {
+		return false
+	}
+
+	for i := 0; i < len(s); i++ {
+		if s[i] >= '0' && s[i] <= '9' || s[i] >= 'a' && s[i] <= 'f' {
+			continue
+		}
+
+		return false
+	}
+
+	return true
 }
 
 // hclList returns the elements of the attribute's list, from src, as their text:
@@ -296,7 +362,13 @@ func TestContainerRunFrom(t *testing.T) {
 
 	const (
 		comment = "# renovate: datasource=docker depName=caddy\n"
-		digest  = "docker.io/library/caddy:2.11.9-alpine@sha256:003a9780"
+		// digestTail is the 64 lower-case hex characters of the pinned image's sha256 digest.
+		digestTail = "003a97808e781aa9f7e75cc2f43d34d461099031faf5e20faefb9f61126836f0"
+		digest     = "docker.io/library/caddy:2.11.9-alpine@sha256:" + digestTail
+		// caddyAt is a shorter reference pinned by the same digest, for the cases that are about the command
+		// line rather than the image.
+		caddyAt   = "caddy@sha256:" + digestTail
+		imageLine = "image = \"" + caddyAt + "\"\n"
 	)
 
 	tests := []struct {
@@ -327,8 +399,7 @@ resource "scaleway_container" "site" {
 		},
 		{
 			name: "a multi-line list with a comment",
-			tf: comment + `image = "caddy@sha256:00"
-
+			tf: comment + imageLine + `
 resource "scaleway_container" "site" {
   command = [
     "/bin/sh", # the shell
@@ -341,9 +412,25 @@ resource "scaleway_container" "site" {
 }
 `,
 			want: containerRun{
-				image: "caddy@sha256:00",
+				image: caddyAt,
 				argv:  []string{"/bin/sh", "-c", "run", "caddy"},
 			},
+		},
+		{
+			name: "a digest truncated below its 64 hex characters",
+			tf:   comment + "image = \"caddy@sha256:" + digestTail[:63] + "\"\n",
+			// The reader refuses the digest before it looks for a command.
+			wantErr: "exactly 64 lower-case hex",
+		},
+		{
+			name:    "a digest with one character after its 64 hex characters",
+			tf:      comment + "image = \"caddy@sha256:" + digestTail + "0\"\n",
+			wantErr: "exactly 64 lower-case hex",
+		},
+		{
+			name:    "a digest written in upper-case hex",
+			tf:      comment + "image = \"caddy@sha256:" + strings.ToUpper(digestTail) + "\"\n",
+			wantErr: "exactly 64 lower-case hex",
 		},
 		{
 			name: "an image without a digest",
@@ -354,30 +441,40 @@ resource "scaleway_container" "site" {
 		},
 		{
 			name:    "no Renovate comment",
-			tf:      "image = \"caddy@sha256:00\"\n",
+			tf:      imageLine,
 			wantErr: "no line carries",
 		},
 		{
-			name: "an element the reader does not understand",
-			tf: comment + `image = "caddy@sha256:00"
-command = ["/bin/sh", "-c"]
-args    = [var.script, "caddy"]
-`,
+			name:    "an element the reader does not understand",
+			tf:      comment + imageLine + "command = [\"/bin/sh\", \"-c\"]\nargs    = [var.script, \"caddy\"]\n",
 			wantErr: "neither a quoted string nor a file() call",
 		},
 		{
-			name: "a file() that is not the Caddyfile",
-			tf: comment + `image = "caddy@sha256:00"
-command = ["/bin/sh", "-c"]
-args    = ["run", file("${path.module}/other")]
-`,
+			name:    "an element with a template interpolation",
+			tf:      comment + imageLine + "command = [\"/bin/sh\", \"-c\"]\nargs    = [\"run\", \"${var.script}\"]\n",
+			wantErr: "an HCL template (interpolation)",
+		},
+		{
+			name:    "an element with a template directive",
+			tf:      comment + imageLine + "command = [\"/bin/sh\", \"%{ if true }-c%{ endif }\"]\nargs    = [\"run\"]\n",
+			wantErr: "an HCL template (directive)",
+		},
+		{
+			name: "an element that escapes the template syntax",
+			tf:   comment + imageLine + "command = [\"/bin/sh\", \"-c\"]\nargs    = [\"$${literal}\", \"%%{literal}\"]\n",
+			want: containerRun{
+				image: caddyAt,
+				argv:  []string{"/bin/sh", "-c", "${literal}", "%{literal}"},
+			},
+		},
+		{
+			name:    "a file() that is not the Caddyfile",
+			tf:      comment + imageLine + "command = [\"/bin/sh\", \"-c\"]\nargs    = [\"run\", file(\"${path.module}/other\")]\n",
 			wantErr: "${path.module}/Caddyfile",
 		},
 		{
-			name: "no args attribute",
-			tf: comment + `image = "caddy@sha256:00"
-command = ["/bin/sh", "-c"]
-`,
+			name:    "no args attribute",
+			tf:      comment + imageLine + "command = [\"/bin/sh\", \"-c\"]\n",
 			wantErr: "no args attribute",
 		},
 	}

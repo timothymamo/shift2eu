@@ -561,9 +561,10 @@ func TestCheckPermissionsPolicy(t *testing.T) {
 	allOff := "browsing-topics=(), camera=(), geolocation=(), microphone=(), payment=(), usb=()"
 
 	tests := []struct {
-		name    string
-		value   string
-		wantErr bool
+		name      string
+		value     string
+		wantErr   bool
+		wantErrIn string // a substring the error must hold, when set
 	}{
 		{
 			name:  "all off, interest-cohort left out",
@@ -574,19 +575,30 @@ func TestCheckPermissionsPolicy(t *testing.T) {
 			value: allOff + ", interest-cohort=()",
 		},
 		{
-			name:    "a feature allowed",
-			value:   strings.Replace(allOff, "camera=()", "camera=(self)", 1),
-			wantErr: true,
+			name:      "a feature allowed",
+			value:     strings.Replace(allOff, "camera=()", "camera=(self)", 1),
+			wantErr:   true,
+			wantErrIn: "camera",
 		},
 		{
-			name:    "a feature left out",
-			value:   strings.Replace(allOff, ", usb=()", "", 1),
-			wantErr: true,
+			name:      "a feature left out",
+			value:     strings.Replace(allOff, ", usb=()", "", 1),
+			wantErr:   true,
+			wantErrIn: "usb",
+		},
+		// interest-cohort may be left out but must not be allowed to anyone: the well-formed allow lists
+		// below are refused for the feature they allow, not for their spelling.
+		{
+			name:      "interest-cohort allowed to every origin",
+			value:     allOff + ", interest-cohort=(*)",
+			wantErr:   true,
+			wantErrIn: "interest-cohort",
 		},
 		{
-			name:    "interest-cohort allowed",
-			value:   allOff + ", interest-cohort=*",
-			wantErr: true,
+			name:      "interest-cohort allowed to self",
+			value:     allOff + ", interest-cohort=(self)",
+			wantErr:   true,
+			wantErrIn: "interest-cohort",
 		},
 		{
 			name:    "an empty policy",
@@ -599,8 +611,12 @@ func TestCheckPermissionsPolicy(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			if err := checkPermissionsPolicy(tc.value); (err != nil) != tc.wantErr {
+			err := checkPermissionsPolicy(tc.value)
+			if (err != nil) != tc.wantErr {
 				t.Errorf("checkPermissionsPolicy(%q) error = %v, want error: %t", tc.value, err, tc.wantErr)
+			}
+			if err != nil && tc.wantErrIn != "" && !strings.Contains(err.Error(), tc.wantErrIn) {
+				t.Errorf("checkPermissionsPolicy(%q) reports %q, want an error naming %q: the refusal is the feature the policy allows, not its spelling", tc.value, err, tc.wantErrIn)
 			}
 		})
 	}
