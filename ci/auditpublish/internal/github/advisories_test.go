@@ -1458,15 +1458,16 @@ func TestFileAdvisoriesStopsOnAFailedWrite(t *testing.T) {
 // deadline before the "one call" below can be read at all: on a six-core VM at
 // load average 45 that took up to 199 ms, and a 200 ms deadline ended 14 of 300
 // calls before the fake had recorded anything - a run that made its one write
-// and was read as one that made none (issue #253). The delay is three
+// and was read as one that made none (issue #253). The deadline is a second,
+// ten times that measured 199 ms and as its siblings' is; the delay is five
 // deadlines, so a FileAdvisories that ignored its deadline still reaches the
-// fake's answer, and the run's last line is the failure that pins it.
+// fake's answer and returns no error, which the first check refuses.
 func TestFileAdvisoriesRunsUnderItsDeadline(t *testing.T) {
 	t.Parallel()
 
 	const (
-		callTimeout = 5 * time.Second
-		routeDelay  = 15 * time.Second
+		callTimeout = 2 * time.Second
+		routeDelay  = 10 * time.Second
 	)
 
 	t.Run("a create past its deadline", func(t *testing.T) {
@@ -1491,7 +1492,7 @@ func TestFileAdvisoriesRunsUnderItsDeadline(t *testing.T) {
 		}
 
 		if calls := fake.Calls(t); len(calls) != 1 {
-			t.Errorf("the run's calls are %v, want the one create that timed out: a write past its deadline is made once and never retried, and a run with no calls at all made no write - or the machine could not start the fake gh inside the deadline (issue #253)", calls)
+			t.Errorf("the run's calls are %v, want the one create that timed out: a write past its deadline is made once and never retried, and no calls means either the write was never made or the fake gh could not start inside the deadline (issue #253)", calls)
 		}
 	})
 
@@ -1521,7 +1522,7 @@ func TestFileAdvisoriesRunsUnderItsDeadline(t *testing.T) {
 		}
 
 		if calls := fake.Calls(t); len(calls) != 1 {
-			t.Errorf("the run's calls are %v, want the one update that timed out: a write past its deadline is made once and never retried, and a run with no calls at all made no write - or the machine could not start the fake gh inside the deadline (issue #253)", calls)
+			t.Errorf("the run's calls are %v, want the one update that timed out: a write past its deadline is made once and never retried, and no calls means either the write was never made or the fake gh could not start inside the deadline (issue #253)", calls)
 		}
 	})
 }
