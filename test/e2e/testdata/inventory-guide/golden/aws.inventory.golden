@@ -340,6 +340,15 @@
       }
     },
     {
+      "id": "shop-quic-nlb",
+      "rawType": "AWS::ElasticLoadBalancingV2::LoadBalancer",
+      "category": "network.loadbalancer",
+      "region": "eu-central-1",
+      "capabilities": [
+        "udp"
+      ]
+    },
+    {
       "id": "shop-reports-mariadb",
       "rawType": "AWS::RDS::DBInstance",
       "category": "unclassified",
@@ -362,6 +371,12 @@
       "size": {
         "count": 1
       }
+    },
+    {
+      "id": "shop-tcp-nlb",
+      "rawType": "AWS::ElasticLoadBalancingV2::LoadBalancer",
+      "category": "network.loadbalancer",
+      "region": "eu-central-1"
     },
     {
       "id": "shop-thumbnailer",

@@ -220,6 +220,18 @@ func inventoryGuides() []inventoryGuideCase {
 					id: "shop-nlb", rawType: "AWS::ElasticLoadBalancingV2::LoadBalancer", category: "network.loadbalancer",
 					capabilities: []string{"udp", "zone-high-availability"},
 				},
+				// QUIC runs over UDP, so a TCP_QUIC listener carries UDP too: the
+				// NLB is only one zone and IPv4, so udp is all it has.
+				{
+					id: "shop-quic-nlb", rawType: "AWS::ElasticLoadBalancingV2::LoadBalancer", category: "network.loadbalancer",
+					capabilities: []string{"udp"},
+				},
+				// The same NLB with a TCP listener instead: TCP is not UDP, so a
+				// TCP-only listener gives no udp, whatever else the load balancer is.
+				{
+					id: "shop-tcp-nlb", rawType: "AWS::ElasticLoadBalancingV2::LoadBalancer", category: "network.loadbalancer",
+					capabilities: []string{},
+				},
 				// A Classic Load Balancer is a load balancer as well, with no
 				// IPv6 address type and no UDP listener to read.
 				{

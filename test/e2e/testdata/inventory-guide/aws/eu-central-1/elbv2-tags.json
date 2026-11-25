@@ -17,6 +17,22 @@
       ]
     },
     {
+      "ResourceArn": "arn:aws:elasticloadbalancing:eu-central-1:123456789012:loadbalancer/net/shop-quic-nlb/0123456789abcdef",
+      "Tags": [
+        {
+          "Key": "Name"
+        }
+      ]
+    },
+    {
+      "ResourceArn": "arn:aws:elasticloadbalancing:eu-central-1:123456789012:loadbalancer/net/shop-tcp-nlb/0123456789abcdef",
+      "Tags": [
+        {
+          "Key": "Name"
+        }
+      ]
+    },
+    {
       "ResourceArn": "arn:aws:elasticloadbalancing:eu-central-1:123456789012:loadbalancer/app/k8s-shop-ingress/0123456789abcdef",
       "Tags": [
         {

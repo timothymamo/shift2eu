@@ -31,6 +31,30 @@
       ]
     },
     {
+      "LoadBalancerName": "shop-quic-nlb",
+      "LoadBalancerArn": "arn:aws:elasticloadbalancing:eu-central-1:123456789012:loadbalancer/net/shop-quic-nlb/0123456789abcdef",
+      "Type": "network",
+      "Scheme": "internet-facing",
+      "IpAddressType": "ipv4",
+      "AvailabilityZones": [
+        {
+          "ZoneName": "eu-central-1a"
+        }
+      ]
+    },
+    {
+      "LoadBalancerName": "shop-tcp-nlb",
+      "LoadBalancerArn": "arn:aws:elasticloadbalancing:eu-central-1:123456789012:loadbalancer/net/shop-tcp-nlb/0123456789abcdef",
+      "Type": "network",
+      "Scheme": "internet-facing",
+      "IpAddressType": "ipv4",
+      "AvailabilityZones": [
+        {
+          "ZoneName": "eu-central-1a"
+        }
+      ]
+    },
+    {
       "LoadBalancerName": "k8s-shop-ingress",
       "LoadBalancerArn": "arn:aws:elasticloadbalancing:eu-central-1:123456789012:loadbalancer/app/k8s-shop-ingress/0123456789abcdef",
       "Type": "application",

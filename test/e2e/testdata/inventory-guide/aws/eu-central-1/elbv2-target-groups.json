@@ -15,6 +15,20 @@
       ]
     },
     {
+      "TargetGroupArn": "arn:aws:elasticloadbalancing:eu-central-1:123456789012:targetgroup/tg-shop-quic-nlb/0123456789abcdef",
+      "IpAddressType": "ipv4",
+      "LoadBalancerArns": [
+        "arn:aws:elasticloadbalancing:eu-central-1:123456789012:loadbalancer/net/shop-quic-nlb/0123456789abcdef"
+      ]
+    },
+    {
+      "TargetGroupArn": "arn:aws:elasticloadbalancing:eu-central-1:123456789012:targetgroup/tg-shop-tcp-nlb/0123456789abcdef",
+      "IpAddressType": "ipv4",
+      "LoadBalancerArns": [
+        "arn:aws:elasticloadbalancing:eu-central-1:123456789012:loadbalancer/net/shop-tcp-nlb/0123456789abcdef"
+      ]
+    },
+    {
       "TargetGroupArn": "arn:aws:elasticloadbalancing:eu-central-1:123456789012:targetgroup/tg-k8s-shop-ingress/0123456789abcdef",
       "IpAddressType": "ipv4",
       "LoadBalancerArns": [
