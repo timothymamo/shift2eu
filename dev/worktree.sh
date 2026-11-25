@@ -199,10 +199,12 @@ if [[ -n "${renovate}" ]]; then
   if git show-ref --verify --quiet "refs/heads/${branch}"; then
     at="$(git rev-parse "refs/heads/${branch}")"
     origin_at="$(git rev-parse "refs/remotes/origin/${branch}")"
-    # The upstream by the branch's full ref, never its short name, which a same-named tag would shadow
-    # (git rejects refs/heads/<branch>@{upstream}, hence for-each-ref); empty when it tracks nothing.
-    upstream="$(git for-each-ref --format='%(upstream:short)' "refs/heads/${branch}")"
-    if [[ "${at}" != "${origin_at}" || "${upstream}" != "origin/${branch}" ]]; then
+    # The upstream as a full ref, read by the branch's full ref: a short name on either side is
+    # ambiguous beside a same-named tag (git rejects refs/heads/<branch>@{upstream}, hence for-each-ref,
+    # and %(upstream:short) widens to remotes/origin/<branch> beside a tag origin/<branch>); empty when
+    # it tracks nothing.
+    upstream="$(git for-each-ref --format='%(upstream)' "refs/heads/${branch}")"
+    if [[ "${at}" != "${origin_at}" || "${upstream}" != "refs/remotes/origin/${branch}" ]]; then
       refuse "the local branch '${branch}' differs from origin/${branch}: it is at another commit or does" \
         "not track it, so it is no base to work on; leave it where it is and report it (only the" \
         "maintainer removes local branches)"
