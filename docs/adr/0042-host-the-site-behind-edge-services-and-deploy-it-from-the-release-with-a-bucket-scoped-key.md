@@ -464,7 +464,7 @@ fail safe (*Layer 3*); for `ci/sitebuild`, a missing `hsts.json` reads as not wa
 | `format` | `1` | The record's format; a reader refuses another. |
 | `outcome` | `"met"` or `"waived"` | `met`: `https://www.shift2eu.com/` sends `Strict-Transport-Security` with `max-age` at least 31536000 and `includeSubDomains` (plus `preload` when `preload` is true), which the live checks then require whatever the pages say. `waived`: the maintainer waived HSTS; the privacy and verification pages carry the `hsts-waived` statement (`ci/sitebuild` shows it), which the live checks then require. |
 | `preload` | `true` or `false` | Whether preload is pursued. `true` only with `outcome` `met`; then the apex's header is held to the same minimum with `preload`, and `http://shift2eu.com` must redirect to `https://shift2eu.com` first (Hosting decision 2). |
-| `date` | `YYYY-MM-DD` | The day the outcome was read from the live headers, before the first deploy. |
+| `date` | `YYYY-MM-DD` | The day the outcome was read from the live headers, before the first deploy from the release (`SITE_DEPLOY_ENABLED`). |
 | `reason` | a string of at most 500 printable characters | Empty when `met`; required when `waived`: why. |
 
 `site/records/preload.json`:
@@ -495,18 +495,21 @@ ADR with them and commits both records in a first PR whose squash commit carries
 
 **Decided 2026-11-25** (the maintainer, PRD #297 milestone 4):
 
-- **HSTS: met.** The first deploy read `strict-transport-security: max-age=31536000; includeSubDomains`
-  on `https://www.shift2eu.com/` on 2026-11-25, the header the container front sends (the amendment *a
-  Serverless Container in front of Edge Services*, below). `site/records/hsts.json` records
+- **HSTS: met.** `strict-transport-security: max-age=31536000; includeSubDomains` was read live on
+  `https://www.shift2eu.com/` during the first deploy's checks (R8, ADR 0045) on 2026-11-25, before the
+  release deploy is enabled (`SITE_DEPLOY_ENABLED`): the header the container front sends (the amendment
+  *a Serverless Container in front of Edge Services*, below). `site/records/hsts.json` records
   `"outcome": "met"`, `"preload": false`, `"date": "2026-11-25"` and an empty `"reason"`; the pages
   carry no `hsts-waived` statement.
 - **Preload: not pursued.** Pursuing preload is effectively irreversible: removal from the browsers'
   preload lists takes months to reach shipping browsers, and `includeSubDomains` under preload binds
   every present and future subdomain of `shift2eu.com` to HTTPS. HSTS on `www` alone meets the site's
-  go/no-go without that commitment. The apex sends no HSTS (it only redirects), and `http://shift2eu.com`
-  needs no first hop to `https://shift2eu.com`.
+  go/no-go without that commitment. As read live on 2026-11-25, the apex's 308 sends no HSTS, as ADR 0045
+  configures while preload is not pursued, and `http://shift2eu.com` needs no first hop to
+  `https://shift2eu.com`. The alternative ADR 0045 names, `max-age=31536000` without `includeSubDomains`
+  on the apex's HTTPS 308, stays open for the maintainer: it is not decided here.
 - **No subdomains submitted.** `site/records/preload.json` records `"listed": false`, `"submitted": ""`,
-  `"checked": "2026-11-25"` and no `"subdomains"`; while `listed` is false the live checks require the
+  `"checked": "2026-11-25"` and an empty `"subdomains"` array (`[]`); while `listed` is false the live checks require the
   `downgrade-risk` statement on the privacy page, as the table above says.
 
 Pursuing preload later is a new decision: it changes both records (`preload` true, then a `submitted`
