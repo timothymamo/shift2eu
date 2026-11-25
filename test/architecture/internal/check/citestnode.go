@@ -1,6 +1,7 @@
 package check
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"regexp"
@@ -30,10 +31,13 @@ const (
 
 	// nodeVersionPattern is the form of dev/lima.yaml's nodeVersion line, the
 	// one pin of the Node the VM installs for pi: two spaces and the double
-	// quotes, the version in the one group. It is written so that sed -E and
-	// Go's regexp read it alike, and both the workflows' sed (nodeVersionRead)
-	// and PinnedNodeVersion, through which pienvdenyload_test.go's
-	// piNodeVersionPin parses the same line, are built from it.
+	// quotes, the version in the one group. Both the workflows' sed
+	// (nodeVersionRead) and PinnedNodeVersion, through which
+	// pienvdenyload_test.go's piNodeVersionPin parses the same line, are built
+	// from it. sed -E and Go's regexp read it alike on one line; only Go's
+	// [^"] also matches a line end, which sed, reading line by line, never
+	// sees, so PinnedNodeVersion refuses a value that spans lines, for which
+	// the sed reads nothing.
 	nodeVersionPattern = `^  nodeVersion: "([^"]*)"$`
 
 	// nodeVersionRead is the line that makes a step the read of dev/lima.yaml's
@@ -63,16 +67,18 @@ const (
 	requiredNodeValue = `"1"`
 )
 
-// nodeVersionLine reads dev/lima.yaml's nodeVersion line as the workflows' sed
-// does, from the same pattern.
+// nodeVersionLine reads dev/lima.yaml's nodeVersion line from the pattern the
+// workflows' sed reads it with; PinnedNodeVersion refuses the matches that
+// span lines, which the sed never makes.
 var nodeVersionLine = regexp.MustCompile(`(?m)` + nodeVersionPattern)
 
 // PinnedNodeVersion returns the Node release the dev/lima.yaml document lima
 // pins, read from its nodeVersion line as ci.yml's and release.yml's Test jobs
 // read it (issue #554), and an error when it holds no such line, more than
-// one, or pins an empty version. Two lines fail as they fail the workflows'
-// read step, whose sed prints both and whose X.Y.Z check then refuses the
-// two-line value. It does not check the X.Y.Z form of one line: the
+// one, a version that spans lines, or an empty version. Two lines fail as
+// they fail the workflows' read step, whose sed prints both and whose X.Y.Z
+// check then refuses the two-line value; a version spread over lines fails
+// as the sed, line by line, reads nothing for it. It does not check the X.Y.Z form of one line: the
 // workflows' read step does that before it installs the version.
 func PinnedNodeVersion(lima []byte) (string, error) {
 	matches := nodeVersionLine.FindAllSubmatch(lima, -1)
@@ -85,6 +91,10 @@ func PinnedNodeVersion(lima []byte) (string, error) {
 	}
 
 	match := matches[0]
+	if bytes.ContainsAny(match[1], "\r\n") {
+		return "", errors.New("dev/lima.yaml's nodeVersion spans lines, want one line: the workflows' sed reads line by line and would read nothing")
+	}
+
 	if len(match[1]) == 0 {
 		return "", errors.New("dev/lima.yaml's nodeVersion is empty")
 	}
