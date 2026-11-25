@@ -8,6 +8,28 @@
       "category": "unclassified"
     },
     {
+      "id": "fs-shop-onezone",
+      "rawType": "AWS::EFS::FileSystem",
+      "category": "storage.file",
+      "region": "eu-central-1",
+      "size": {
+        "storageGiB": 1
+      }
+    },
+    {
+      "id": "fs-shop-regional",
+      "rawType": "AWS::EFS::FileSystem",
+      "category": "storage.file",
+      "region": "eu-central-1",
+      "capabilities": [
+        "encryption-at-rest",
+        "zone-high-availability"
+      ],
+      "size": {
+        "storageGiB": 5
+      }
+    },
+    {
       "id": "i-0123456789abcdef0",
       "rawType": "AWS::EC2::Instance",
       "category": "compute.vm",
@@ -54,7 +76,35 @@
     {
       "id": "shop-alb",
       "rawType": "AWS::ElasticLoadBalancingV2::LoadBalancer",
-      "category": "unclassified",
+      "category": "network.loadbalancer",
+      "region": "eu-central-1",
+      "capabilities": [
+        "ipv6",
+        "zone-high-availability"
+      ]
+    },
+    {
+      "id": "shop-alerts",
+      "rawType": "AWS::SNS::Topic",
+      "category": "messaging.topic",
+      "region": "eu-central-1",
+      "capabilities": [
+        "encryption-at-rest"
+      ]
+    },
+    {
+      "id": "shop-analytics-redis",
+      "rawType": "AWS::ElastiCache::CacheCluster",
+      "category": "cache.redis",
+      "region": "eu-central-1",
+      "size": {
+        "count": 1
+      }
+    },
+    {
+      "id": "shop-api",
+      "rawType": "AWS::AppRunner::Service",
+      "category": "serverless.container",
       "region": "eu-central-1"
     },
     {
@@ -85,6 +135,21 @@
       "capabilities": [
         "encryption-at-rest",
         "point-in-time-restore"
+      ]
+    },
+    {
+      "id": "shop-carts",
+      "rawType": "AWS::DynamoDB::Table",
+      "category": "unclassified",
+      "region": "eu-central-1"
+    },
+    {
+      "id": "shop-classic",
+      "rawType": "AWS::ElasticLoadBalancing::LoadBalancer",
+      "category": "network.loadbalancer",
+      "region": "eu-central-1",
+      "capabilities": [
+        "zone-high-availability"
       ]
     },
     {
@@ -127,6 +192,41 @@
       }
     },
     {
+      "id": "shop-docs",
+      "rawType": "AWS::DocDB::DBCluster",
+      "category": "database.mongodb",
+      "region": "eu-central-1",
+      "capabilities": [
+        "encryption-at-rest",
+        "node-high-availability",
+        "point-in-time-restore",
+        "read-replicas",
+        "zone-high-availability"
+      ],
+      "size": {
+        "count": 3
+      }
+    },
+    {
+      "id": "shop-edge-memcached",
+      "rawType": "AWS::ElastiCache::ServerlessCache",
+      "category": "unclassified",
+      "region": "eu-central-1"
+    },
+    {
+      "id": "shop-edge-valkey",
+      "rawType": "AWS::ElastiCache::ServerlessCache",
+      "category": "cache.redis",
+      "region": "eu-central-1",
+      "capabilities": [
+        "encryption-at-rest",
+        "node-high-availability",
+        "sharding",
+        "snapshots",
+        "zone-high-availability"
+      ]
+    },
+    {
       "id": "shop-eks (AWS::EKS::Cluster, eu-central-1)",
       "rawType": "AWS::EKS::Cluster",
       "category": "kubernetes.managed",
@@ -149,6 +249,21 @@
       }
     },
     {
+      "id": "shop-events",
+      "rawType": "AWS::SNS::Topic",
+      "category": "messaging.topic",
+      "region": "eu-central-1"
+    },
+    {
+      "id": "shop-images",
+      "rawType": "AWS::ECR::Repository",
+      "category": "registry.container",
+      "region": "eu-central-1",
+      "capabilities": [
+        "encryption-at-rest"
+      ]
+    },
+    {
       "id": "shop-legacy-mysql",
       "rawType": "AWS::RDS::DBInstance",
       "category": "database.mysql",
@@ -168,6 +283,16 @@
       "region": "eu-west-1",
       "capabilities": [
         "encryption-at-rest"
+      ]
+    },
+    {
+      "id": "shop-nlb",
+      "rawType": "AWS::ElasticLoadBalancingV2::LoadBalancer",
+      "category": "network.loadbalancer",
+      "region": "eu-central-1",
+      "capabilities": [
+        "udp",
+        "zone-high-availability"
       ]
     },
     {
@@ -199,10 +324,44 @@
       "region": "eu-central-1"
     },
     {
+      "id": "shop-orders-redis",
+      "rawType": "AWS::ElastiCache::ReplicationGroup",
+      "category": "cache.redis",
+      "region": "eu-central-1",
+      "capabilities": [
+        "encryption-at-rest",
+        "node-high-availability",
+        "sharding",
+        "snapshots",
+        "zone-high-availability"
+      ],
+      "size": {
+        "count": 4
+      }
+    },
+    {
       "id": "shop-reports-mariadb",
       "rawType": "AWS::RDS::DBInstance",
       "category": "unclassified",
       "region": "eu-central-1"
+    },
+    {
+      "id": "shop-reports-memcached",
+      "rawType": "AWS::ElastiCache::CacheCluster",
+      "category": "unclassified",
+      "region": "eu-central-1"
+    },
+    {
+      "id": "shop-sessions-valkey",
+      "rawType": "AWS::ElastiCache::ReplicationGroup",
+      "category": "cache.redis",
+      "region": "eu-central-1",
+      "capabilities": [
+        "sharding"
+      ],
+      "size": {
+        "count": 1
+      }
     },
     {
       "id": "shop-thumbnailer",
