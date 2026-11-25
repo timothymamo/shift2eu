@@ -30,6 +30,16 @@
   },
   {
     "kind": "compute#forwardingRule",
+    "selfLink": "https://www.googleapis.com/compute/v1/projects/example-project/regions/europe-west1/forwardingRules/shop-ntp-fr6",
+    "region": "https://www.googleapis.com/compute/v1/projects/example-project/regions/europe-west1",
+    "IPProtocol": "UDP",
+    "ipVersion": "IPV6",
+    "IPAddress": "2001:db8::1",
+    "loadBalancingScheme": "EXTERNAL",
+    "backendService": "https://www.googleapis.com/compute/v1/projects/example-project/regions/europe-west1/backendServices/shop-ntp-be"
+  },
+  {
+    "kind": "compute#forwardingRule",
     "selfLink": "https://www.googleapis.com/compute/v1/projects/example-project/regions/europe-west1/forwardingRules/shop-syslog-fr",
     "region": "https://www.googleapis.com/compute/v1/projects/example-project/regions/europe-west1",
     "IPProtocol": "UDP",

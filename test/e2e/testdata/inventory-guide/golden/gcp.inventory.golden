@@ -239,6 +239,16 @@
       ]
     },
     {
+      "id": "shop-ntp-be",
+      "rawType": "compute.googleapis.com/BackendService",
+      "category": "network.loadbalancer",
+      "region": "europe-west1",
+      "capabilities": [
+        "udp",
+        "zone-high-availability"
+      ]
+    },
+    {
       "id": "shop-orders",
       "rawType": "pubsub.googleapis.com/Topic",
       "category": "messaging.topic",

@@ -591,10 +591,23 @@ func inventoryGuides() []inventoryGuideCase {
 				},
 				// A backend service no URL map names is a load balancer of its own,
 				// and a UDP forwarding rule reaching it gives it udp. A target pool
-				// names no protocol, so its UDP comes from its forwarding rule.
+				// names no protocol, so its UDP comes from its forwarding rule. The
+				// forwarding rule in front of this passthrough service is IPv4, so
+				// the load balancer serves no IPv6.
 				{
 					id: "shop-dns-be", rawType: "compute.googleapis.com/BackendService", category: "network.loadbalancer",
 					capabilities: []string{"udp", "zone-high-availability"},
+				},
+				// A passthrough Network Load Balancer serves IPv6 through its
+				// IPv6 forwarding rule alone: ipAddressSelectionPolicy is a proxy
+				// feature, and Google documents it only for proxy-based load
+				// balancers, so a passthrough backend service carries none and is
+				// still ipv6. The rule reaches the service directly, with no URL
+				// map or proxy between them.
+				{
+					id: "shop-ntp-be", rawType: "compute.googleapis.com/BackendService", category: "network.loadbalancer",
+					region: "europe-west1",
+					capabilities: []string{"ipv6", "udp", "zone-high-availability"},
 				},
 				{
 					id: "shop-syslog-pool", rawType: "compute.googleapis.com/TargetPool", category: "network.loadbalancer",
@@ -707,6 +720,7 @@ func inventoryGuides() []inventoryGuideCase {
 				// target HTTP proxy it reaches.
 				"shop-edge-fr6",
 				"shop-dns-fr",
+				"shop-ntp-fr6",
 				"shop-syslog-fr",
 				"shop-web-proxy",
 				"shop-legacy-proxy",

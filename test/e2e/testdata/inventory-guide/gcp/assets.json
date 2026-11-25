@@ -181,6 +181,11 @@
     "location": "europe-west1"
   },
   {
+    "name": "//compute.googleapis.com/projects/example-project/regions/europe-west1/backendServices/shop-ntp-be",
+    "assetType": "compute.googleapis.com/BackendService",
+    "location": "europe-west1"
+  },
+  {
     "name": "//compute.googleapis.com/projects/example-project/regions/europe-west1/backendServices/shop-mesh-be",
     "assetType": "compute.googleapis.com/BackendService",
     "location": "europe-west1"
@@ -202,6 +207,11 @@
   },
   {
     "name": "//compute.googleapis.com/projects/example-project/regions/europe-west1/forwardingRules/shop-dns-fr",
+    "assetType": "compute.googleapis.com/ForwardingRule",
+    "location": "europe-west1"
+  },
+  {
+    "name": "//compute.googleapis.com/projects/example-project/regions/europe-west1/forwardingRules/shop-ntp-fr6",
     "assetType": "compute.googleapis.com/ForwardingRule",
     "location": "europe-west1"
   },
