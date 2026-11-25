@@ -35,6 +35,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -1713,7 +1714,10 @@ resource "scaleway_container_cron" "nightly" {
 // respectively. However a condition spells the attribute (self["min_scale"] is the same attribute) and
 // whatever one pair of parentheses and one line break an editor puts around the comparison, the rules read
 // it as the comparison it is, and refuse it when it compares something else than the pin: a spelling the
-// rules could not read would let a check after an apply run that never compares what the pin sets.
+// rules could not read would let a check after an apply run that never compares what the pin sets. Exactly one
+// postcondition may compare self.min_scale with the pin - a second, even an identical one, is refused - and a
+// check standing in a precondition is no check after an apply at all: it runs before the platform holds
+// anything, so a container whose only min_scale check stands there has none.
 //
 // Every case edits site/container.tf, the file the pins live in, by the attribute's name, so the cases do not
 // depend on how the configuration aligns its = signs; a copy whose container.tf sets the attribute no line of,
@@ -1989,6 +1993,87 @@ locals {
 		breakage: func(t *testing.T, site string) {
 			t.Helper()
 			dropContainerPostcondition(t, site, "self.https_connections_only")
+		},
+	},
+	// Exactly one postcondition may compare self.min_scale with the pin: a second, identical one is a copy beside
+	// the check that holds it, and a maintainer who edited one of them would leave the other claiming the pin.
+	{
+		name:   "container-min-scale-postcondition-set-twice",
+		why:    "a second postcondition comparing self.min_scale with the same local beside the site container's own, the one pin claimed by two checks after an apply",
+		want:   "container-min-scale-postcondition",
+		wantIn: map[string]string{"container-min-scale-postcondition": "{site}/container.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			addContainerPostcondition(t, site, "self.min_scale == local.container_min_scale", "The container's min_scale differs from local.container_min_scale.")
+		},
+	},
+	// A condition that is no comparison with the pin is refused whatever it says: a >= would accept more instances
+	// kept warm than the pin sets, and || true accepts the platform's value whatever it is.
+	{
+		name:   "container-min-scale-postcondition-compares-with-greater-or-equal",
+		why:    "min_scale = local.container_min_scale with the postcondition written condition = self.min_scale >= local.container_min_scale, a comparison that accepts every value above the pin",
+		want:   "container-min-scale-postcondition",
+		wantIn: map[string]string{"container-min-scale-postcondition": "{site}/container.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			setContainerMinScalePostconditionText(t, site, "condition     = self.min_scale >= local.container_min_scale")
+		},
+	},
+	{
+		name:   "container-min-scale-postcondition-with-a-trailing-or-true",
+		why:    "min_scale = local.container_min_scale with the postcondition written condition = self.min_scale == local.container_min_scale || true, a condition that passes whatever the platform holds",
+		want:   "container-min-scale-postcondition",
+		wantIn: map[string]string{"container-min-scale-postcondition": "{site}/container.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			setContainerMinScalePostconditionText(t, site, "condition     = self.min_scale == local.container_min_scale || true")
+		},
+	},
+	// A precondition runs before the apply, so it says nothing about what the platform kept: a check after an
+	// apply in that block is no postcondition, and a container whose only min_scale check stands there has none.
+	{
+		name:   "container-min-scale-check-in-a-precondition",
+		why:    "the site container's only self.min_scale postcondition rewritten as a precondition, so no check after an apply compares the platform's min_scale with the pin",
+		want:   "container-min-scale-postcondition",
+		wantIn: map[string]string{"container-min-scale-postcondition": "{site}/container.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			moveContainerPostcondition(t, site, "self.min_scale")
+		},
+	},
+	// The comparison's two sides are no other condition: local.container_min_scale == self.min_scale draws the same
+	// check as the pin's own order, and so does false == self.https_connections_only beside it.
+	{
+		name: "container-postconditions-with-their-sides-reversed",
+		why:  "the site container's min_scale postcondition written local.container_min_scale == self.min_scale and its https_connections_only postcondition written false == self.https_connections_only, the comparisons with their two sides swapped",
+		want: "",
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			setContainerMinScalePostconditionText(t, site, "condition     = local.container_min_scale == self.min_scale")
+			setContainerHTTPSOnlyPostconditionText(t, site, "condition     = false == self.https_connections_only")
+		},
+	},
+	// One pair of parentheses around the comparison is no other condition, the same way the min_scale check is read
+	// through its own.
+	{
+		name: "container-https-only-postcondition-parenthesised",
+		why:  "the site container's https_connections_only postcondition written condition = (self.https_connections_only == false), one pair of parentheses around the comparison",
+		want: "",
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			setContainerHTTPSOnlyPostconditionText(t, site, "condition     = (self.https_connections_only == false)")
+		},
+	},
+	// The check after an apply must compare https_connections_only with false: a negated check passes when the
+	// platform made it true, the opposite of the pin, so it is no check of the pin at all.
+	{
+		name:   "container-https-only-postcondition-negated",
+		why:    "the site container's https_connections_only postcondition written condition = !self.https_connections_only, a condition that passes when plain HTTP was disabled",
+		want:   "container-https-only-postcondition-missing",
+		wantIn: map[string]string{"container-https-only-postcondition-missing": "{site}/container.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			setContainerHTTPSOnlyPostconditionText(t, site, "condition     = !self.https_connections_only")
 		},
 	},
 	// A pin set twice is no one pinned value: the second setting could raise what the first fixes, and the
@@ -2533,18 +2618,27 @@ func removeContainerMinScaleLocal(t *testing.T, site string) {
 	writeInfraText(t, path, strings.Join(append(lines[:found:found], lines[found+1:]...), "\n"))
 }
 
-// findContainerMinScalePostcondition returns the path of a copy's site/container.tf, the file's lines and the
-// index of the one line that sets a condition comparing self.min_scale, the check after an apply that holds the
-// platform's min_scale to the pin. A file with no such line, or two, fails the case loudly instead of passing
-// without breaking anything.
-func findContainerMinScalePostcondition(t *testing.T, site string) (string, []string, int) {
+// containerConditionNames are the two checks after an apply ADR 0045 requires beside the pins, by the attribute
+// each reads: the one holding self.min_scale, which follows the pin, and the one holding self.https_connections_only,
+// which says the platform kept plain HTTP. A case that rewrites one names it here, so a copy's own spelling is
+// the only thing it has to hold.
+const (
+	containerMinScaleCondition = "self.min_scale"
+	containerHTTPSCondition    = "self.https_connections_only"
+)
+
+// findContainerCondition returns the path of a copy's site/container.tf, the file's lines and the index of the
+// one line that sets a condition holding holds - containerMinScaleCondition or containerHTTPSCondition - the
+// check after an apply that holds the platform's value to what the configuration sets. A file with no such
+// line, or two, fails the case loudly instead of passing without breaking anything.
+func findContainerCondition(t *testing.T, site, holds string) (string, []string, int) {
 	t.Helper()
 
 	path := filepath.Join(site, containerFileName)
 
 	body, err := os.ReadFile(path)
 	if err != nil {
-		t.Fatalf("read %s: %v: the container's min_scale postcondition lives there (ADR 0045)", path, err)
+		t.Fatalf("read %s: %v: the container's postconditions live there (ADR 0045)", path, err)
 	}
 
 	lines := strings.Split(string(body), "\n")
@@ -2553,19 +2647,19 @@ func findContainerMinScalePostcondition(t *testing.T, site string) (string, []st
 
 	for i, text := range lines {
 		fields := strings.Fields(text)
-		if len(fields) < 2 || fields[0] != "condition" || !strings.HasPrefix(fields[1], "=") || !strings.Contains(text, "self.min_scale") {
+		if len(fields) < 2 || fields[0] != "condition" || !strings.HasPrefix(fields[1], "=") || !strings.Contains(text, holds) {
 			continue
 		}
 
 		if found >= 0 {
-			t.Fatalf("%s:%d and %s:%d both compare self.min_scale, want exactly one line: the case does not name one breakage", path, found+1, path, i+1)
+			t.Fatalf("%s:%d and %s:%d both hold a condition on %s, want exactly one line: the case does not name one breakage", path, found+1, path, i+1, holds)
 		}
 
 		found = i
 	}
 
 	if found < 0 {
-		t.Fatalf("%s holds no condition comparing self.min_scale, want one: the case does not name one breakage", path)
+		t.Fatalf("%s holds no condition on %s, want one: the case does not name one breakage", path, holds)
 	}
 
 	return path, lines, found
@@ -2588,7 +2682,25 @@ func setContainerMinScalePostcondition(t *testing.T, site, expr string) {
 func setContainerMinScalePostconditionText(t *testing.T, site string, lines ...string) {
 	t.Helper()
 
-	path, fileLines, found := findContainerMinScalePostcondition(t, site)
+	setContainerConditionText(t, site, containerMinScaleCondition, lines...)
+}
+
+// setContainerHTTPSOnlyPostconditionText replaces the condition of the site's https_connections_only
+// postcondition with lines, each indented like the line it replaces, so a case can write the check after an
+// apply that says the platform kept plain HTTP in the spelling the rules must read: the comparison's two sides
+// reversed, or one pair of parentheses around it.
+func setContainerHTTPSOnlyPostconditionText(t *testing.T, site string, lines ...string) {
+	t.Helper()
+
+	setContainerConditionText(t, site, containerHTTPSCondition, lines...)
+}
+
+// setContainerConditionText replaces the condition of the site container's postcondition holding holds with
+// lines, each indented like the line it replaces. The line is found as findContainerCondition finds it.
+func setContainerConditionText(t *testing.T, site, holds string, lines ...string) {
+	t.Helper()
+
+	path, fileLines, found := findContainerCondition(t, site, holds)
 
 	indent := fileLines[found][:len(fileLines[found])-len(strings.TrimLeft(fileLines[found], " \t"))]
 
@@ -2598,6 +2710,82 @@ func setContainerMinScalePostconditionText(t *testing.T, site string, lines ...s
 	}
 
 	out = append(out, fileLines[found+1:]...)
+
+	writeInfraText(t, path, strings.Join(out, "\n"))
+}
+
+// moveContainerPostcondition turns the postcondition block of the site's container in a copy's site/container.tf
+// that holds condition into a precondition, so a case can leave the check after an apply with neither postcondition
+// comparing what the pin sets: tofu runs a precondition before the apply, so it says nothing about what the
+// platform kept. A file whose condition stands in no postcondition block fails the case loudly instead of passing
+// without breaking anything.
+func moveContainerPostcondition(t *testing.T, site, condition string) {
+	t.Helper()
+
+	path, lines, found := findContainerCondition(t, site, condition)
+
+	for i := found; i >= 0; i-- {
+		if strings.TrimSpace(lines[i]) != "postcondition {" {
+			continue
+		}
+
+		lines[i] = strings.Replace(lines[i], "postcondition", "precondition", 1)
+		writeInfraText(t, path, strings.Join(lines, "\n"))
+
+		return
+	}
+
+	t.Fatalf("%s holds no postcondition block above the condition on line %d, want one: the case does not name one breakage", path, found+1)
+}
+
+// addContainerPostcondition writes a postcondition block - its condition and its error_message - as the first
+// block of the site container's lifecycle block in a copy's site/container.tf, so a case can set a second check
+// after an apply. A file with no container resource, or none with a lifecycle block, fails the case loudly
+// instead of passing without breaking anything.
+func addContainerPostcondition(t *testing.T, site, condition, errorMessage string) {
+	t.Helper()
+
+	path := filepath.Join(site, containerFileName)
+
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v: the container's postconditions live there (ADR 0045)", path, err)
+	}
+
+	lines := strings.Split(string(body), "\n")
+
+	resource, lifecycle := -1, -1
+
+	for i, text := range lines {
+		if resource < 0 && strings.HasPrefix(strings.TrimSpace(text), containerResourceHeader) {
+			resource = i
+
+			continue
+		}
+
+		if resource >= 0 && strings.TrimSpace(text) == "lifecycle {" {
+			lifecycle = i
+
+			break
+		}
+	}
+
+	if resource < 0 {
+		t.Fatalf("%s holds no line opening %q, want one: the case does not name one breakage", path, containerResourceHeader)
+	}
+
+	if lifecycle < 0 {
+		t.Fatalf("%s holds no lifecycle block in its container resource, want one: the case does not name one breakage", path)
+	}
+
+	out := append([]string{}, lines[:lifecycle+1]...)
+	out = append(out,
+		"    postcondition {",
+		"      condition     = "+condition,
+		"      error_message = "+strconv.Quote(errorMessage),
+		"    }",
+	)
+	out = append(out, lines[lifecycle+1:]...)
 
 	writeInfraText(t, path, strings.Join(out, "\n"))
 }
