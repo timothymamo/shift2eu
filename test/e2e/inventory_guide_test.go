@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
 
 	"github.com/timothymamo/shift2eu/internal/testutil"
 )
@@ -761,11 +762,13 @@ func assertPresent(t *testing.T, source string, doc inventoryDoc, wants []resour
 // assertCapabilities fails unless the inventory gives the resource exactly the
 // capabilities the fact lists. The golden file alone cannot catch a capability
 // a careless -update drops, and a capability is what the assessment matches a
-// plan on.
+// plan on. A fact that lists none means the resource carries none, and the
+// program writes that by omitting the key, so the decoded slice is nil there:
+// an empty want matches nil or an empty got, which is the same inventory.
 func assertCapabilities(t *testing.T, source string, want resourceFact, got []string) {
 	t.Helper()
 
-	if diff := cmp.Diff(want.capabilities, got); diff != "" {
+	if diff := cmp.Diff(want.capabilities, got, cmpopts.EquateEmpty()); diff != "" {
 		t.Errorf("%s: resource %q has capabilities that differ from the fact (-want +got):\n%s",
 			source, want.id, diff)
 	}
