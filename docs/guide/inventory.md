@@ -533,7 +533,7 @@ gcloud pubsub subscriptions list --project="$project" \
 
 # Load balancers: global and every region's, each list by default.
 gcloud compute url-maps list --project="$project" --quiet \
-  --format='json(selfLink,region,defaultService,defaultRouteAction.weightedBackendServices[].backendService,defaultRouteAction.requestMirrorPolicy.backendService,pathMatchers[].defaultService,pathMatchers[].defaultRouteAction.weightedBackendServices[].backendService,pathMatchers[].defaultRouteAction.requestMirrorPolicy.backendService,pathMatchers[].pathRules[].service,pathMatchers[].pathRules[].routeAction.weightedBackendServices[].backendService,pathMatchers[].pathRules[].routeAction.requestMirrorPolicy.backendService,pathMatchers[].routeRules[].service,pathMatchers[].routeRules[].routeAction.weightedBackendServices[].backendService,pathMatchers[].routeRules[].routeAction.requestMirrorPolicy.backendService)' \
+  --format='json(selfLink,region,defaultService,defaultRouteAction.weightedBackendServices[].backendService,defaultRouteAction.requestMirrorPolicy.backendService,defaultCustomErrorResponsePolicy.errorService,pathMatchers[].defaultService,pathMatchers[].defaultRouteAction.weightedBackendServices[].backendService,pathMatchers[].defaultRouteAction.requestMirrorPolicy.backendService,pathMatchers[].defaultCustomErrorResponsePolicy.errorService,pathMatchers[].pathRules[].service,pathMatchers[].pathRules[].routeAction.weightedBackendServices[].backendService,pathMatchers[].pathRules[].routeAction.requestMirrorPolicy.backendService,pathMatchers[].pathRules[].customErrorResponsePolicy.errorService,pathMatchers[].routeRules[].service,pathMatchers[].routeRules[].routeAction.weightedBackendServices[].backendService,pathMatchers[].routeRules[].routeAction.requestMirrorPolicy.backendService,pathMatchers[].routeRules[].customErrorResponsePolicy.errorService)' \
   > "$out/compute-url-maps.json"
 gcloud compute backend-services list --project="$project" --quiet \
   --format='json(kind,selfLink,region,protocol,loadBalancingScheme,ipAddressSelectionPolicy)' \
@@ -592,7 +592,9 @@ example, but not their values, which hold startup scripts and SSH keys, and of i
 source, whether it boots and whether it is deleted with the instance (`autoDelete`). Of the asset
 labels, `jq` keeps only `goog-gke-node`, the one the program reads; the Cloud Run service behind
 each function comes from `functions list`, not from a label. Of a URL map, only the links to its
-backend services are kept, not its route actions' header values.
+backend services are kept (its default, path and route services, the weighted and mirrored backends
+of its route actions, and the error services of its custom error response policies), not its route
+actions' header values.
 
 The load balancer lists read only the HTTP and HTTPS target proxies, the frontends of an Application
 Load Balancer; a TCP, SSL or gRPC proxy is not listed, so a load balancer behind one gets no `ipv6`.
