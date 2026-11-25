@@ -9,7 +9,10 @@
 // offering whose tier provides it. Since ADR 0011 that tier is the 3-AZ variant
 // for zone level and a multi-node plan for the databases, and a capability is
 // listed only where the documentation states it in full, which puts read replicas
-// on the Advanced database plan alone. The storage an offering charges beyond what
+// on the Advanced database plan alone. Since PRD #552 milestone 5 the snapshot
+// also serves the cache, MongoDB, load balancer and registry categories, prices
+// the first two by plan and records no price for the last two (decided question
+// 6). The storage an offering charges beyond what
 // a plan includes is pinned against the embedded snapshot too (issue #219): a
 // compute.vm with a disk is estimated with its storage priced, and every offering
 // in scope carries a per-GiB storage price or says in SOURCES.md why it has none.
@@ -81,7 +84,8 @@ var nonEURegions = []string{"ERI", "UK", "LON", "BHS", "TOR", "HIL", "VIN", "SGP
 
 // TestCatalogContract runs the target contract suite every target adapter must
 // pass: the display name, every offering only in a declared EU region, the six
-// categories PRD 11 requires, the same catalog on every call, and cancellation.
+// categories PRD 11 requires and the four PRD #552 milestone 5 adds, the same
+// catalog on every call, and cancellation.
 func TestCatalogContract(t *testing.T) {
 	t.Parallel()
 
@@ -96,6 +100,10 @@ func TestCatalogContract(t *testing.T) {
 			taxonomy.StorageBlock,
 			taxonomy.DatabasePostgreSQL,
 			taxonomy.DatabaseMySQL,
+			taxonomy.CacheRedis,
+			taxonomy.DatabaseMongoDB,
+			taxonomy.NetworkLoadBalancer,
+			taxonomy.RegistryContainer,
 		},
 	})
 }
@@ -167,6 +175,8 @@ func TestCatalogPlansAndPrices(t *testing.T) {
 		taxonomy.KubernetesManaged,
 		taxonomy.DatabasePostgreSQL,
 		taxonomy.DatabaseMySQL,
+		taxonomy.CacheRedis,
+		taxonomy.DatabaseMongoDB,
 	}
 
 	// storageCategories are the categories PRD #190 prices per GiB of storage
@@ -176,6 +186,7 @@ func TestCatalogPlansAndPrices(t *testing.T) {
 		taxonomy.StorageObject,
 		taxonomy.DatabasePostgreSQL,
 		taxonomy.DatabaseMySQL,
+		taxonomy.DatabaseMongoDB,
 	}
 
 	// leftOut exempts an offering from the two coverage rules, never from the
@@ -650,16 +661,26 @@ func newResource(t *testing.T, id string, category taxonomy.Category, capabiliti
 // TestNoOfferingForUnservedCategories pins PRD 11's criterion that a resource of
 // a category OVHcloud does not serve gets fit none, the target-neutral reason
 // naming OVHcloud and the category, and is listed as a blocker. The snapshot
-// serves neither serverless functions nor message queues.
+// serves neither serverless functions nor message queues, and of the categories
+// PRD #552 adds it serves neither a publish-subscribe topic, nor a serverless
+// container, nor a file share: File Storage Service's general availability was
+// not confirmed when the snapshot was compiled, so PRD #552 milestone 5 records
+// no offering for storage.file.
 func TestNoOfferingForUnservedCategories(t *testing.T) {
 	t.Parallel()
 
 	cat := catalogOf(t)
 
-	// PRD 11 expects no generally available OVHcloud offering to serve these. A
-	// milestone-2 change that adds one updates the PRD with the snapshot, so this
-	// test fails first and the review sees it.
-	unserved := []taxonomy.Category{taxonomy.ServerlessFunction, taxonomy.MessagingQueue}
+	// PRD 11 and PRD #552 expect no generally available OVHcloud offering to serve
+	// these. A later change that adds one updates the PRD with the snapshot, so
+	// this test fails first and the review sees it.
+	unserved := []taxonomy.Category{
+		taxonomy.ServerlessFunction,
+		taxonomy.MessagingQueue,
+		taxonomy.MessagingTopic,
+		taxonomy.ServerlessContainer,
+		taxonomy.StorageFile,
+	}
 
 	for _, o := range cat.Offerings() {
 		for _, category := range o.Categories {
@@ -717,7 +738,7 @@ func offeringNamed(t *testing.T, cat catalog.Catalog, name string) catalog.Offer
 		}
 	}
 
-	t.Fatalf("the catalog has no offering called %s: the 3-AZ rule below assumes it", text.Quote(name))
+	t.Fatalf("the catalog has no offering called %s: the snapshot must serve it for this test", text.Quote(name))
 
 	return catalog.Offering{}
 }
@@ -1066,6 +1087,433 @@ func TestKubernetesTierVariantIsBestOffering(t *testing.T) {
 			}
 		})
 	}
+}
+
+// bestFit is the candidate a mapping is expected to pick: the name of its
+// offering, its fit, and the capabilities the offering lacks, which a partial
+// fit names. Its fields are exported because cmp cannot compare a struct with
+// unexported ones.
+type bestFit struct {
+	Name    string
+	Fit     mapping.Fit
+	Missing []taxonomy.Capability
+}
+
+// bestOf renders the candidate a mapping picked as a bestFit.
+func bestOf(c mapping.Candidate) bestFit {
+	return bestFit{Name: c.Offering.Name, Fit: c.Fit, Missing: c.Missing}
+}
+
+// TestNewCategoryBestOfferingAndFit pins PRD #552 milestone 5's mapping
+// criterion for the four categories the snapshot gains: a resource of each is
+// pointed at the offering that takes it over, with fit direct when the offering
+// lists every capability the resource lists and partial naming each capability it
+// lacks otherwise. Every row goes through mapping.Map on the embedded catalog, so
+// the offering's capabilities, the tiers the snapshot records and the mapping's
+// ordering (direct before partial, then by offering name) are pinned together.
+//
+// The capabilities are the ones a tier variant exists for: OVHcloud adds node
+// level high availability on the Valkey and MongoDB multi-node plans and zone
+// level in the 3-AZ regions, serves point-in-time restore on the Advanced MongoDB
+// plan alone, forwards UDP on its load balancer, and records neither sharding on
+// a cache ("Cluster mode (sharding) is not supported") nor IPv6 on a load
+// balancer. A private registry has no tier: PRD #552 milestone 5 records one
+// offering, because no quoted page says it keeps serving through the loss of a
+// zone, so a zone-level request is partial there.
+func TestNewCategoryBestOfferingAndFit(t *testing.T) {
+	t.Parallel()
+
+	cat := catalogOf(t)
+
+	tests := []struct {
+		name         string
+		category     taxonomy.Category
+		capabilities []taxonomy.Capability
+		want         bestFit
+	}{
+		{
+			name:     "cache.redis/no capabilities",
+			category: taxonomy.CacheRedis,
+			want:     bestFit{Name: "Databases for Valkey", Fit: mapping.Direct},
+		},
+		{
+			name:         "cache.redis/node-high-availability",
+			category:     taxonomy.CacheRedis,
+			capabilities: []taxonomy.Capability{taxonomy.NodeHighAvailability},
+			want:         bestFit{Name: "Databases for Valkey Multi-node", Fit: mapping.Direct},
+		},
+		{
+			name:         "cache.redis/zone-high-availability",
+			category:     taxonomy.CacheRedis,
+			capabilities: []taxonomy.Capability{taxonomy.ZoneHighAvailability},
+			want:         bestFit{Name: "Databases for Valkey Multi-node 3-AZ", Fit: mapping.Direct},
+		},
+		{
+			name:         "cache.redis/sharding",
+			category:     taxonomy.CacheRedis,
+			capabilities: []taxonomy.Capability{taxonomy.Sharding},
+			want: bestFit{
+				Name:    "Databases for Valkey",
+				Fit:     mapping.Partial,
+				Missing: []taxonomy.Capability{taxonomy.Sharding},
+			},
+		},
+		{
+			name:     "database.mongodb/no capabilities",
+			category: taxonomy.DatabaseMongoDB,
+			want:     bestFit{Name: "Managed MongoDB", Fit: mapping.Direct},
+		},
+		{
+			name:         "database.mongodb/point-in-time-restore",
+			category:     taxonomy.DatabaseMongoDB,
+			capabilities: []taxonomy.Capability{taxonomy.PointInTimeRestore},
+			want:         bestFit{Name: "Managed MongoDB Advanced", Fit: mapping.Direct},
+		},
+		{
+			name:         "database.mongodb/zone-high-availability",
+			category:     taxonomy.DatabaseMongoDB,
+			capabilities: []taxonomy.Capability{taxonomy.ZoneHighAvailability},
+			want:         bestFit{Name: "Managed MongoDB 3-AZ", Fit: mapping.Direct},
+		},
+		{
+			name:         "database.mongodb/zone-high-availability and point-in-time-restore",
+			category:     taxonomy.DatabaseMongoDB,
+			capabilities: []taxonomy.Capability{taxonomy.PointInTimeRestore, taxonomy.ZoneHighAvailability},
+			want:         bestFit{Name: "Managed MongoDB Advanced 3-AZ", Fit: mapping.Direct},
+		},
+		{
+			name:     "network.loadbalancer/no capabilities",
+			category: taxonomy.NetworkLoadBalancer,
+			want:     bestFit{Name: "Load Balancer", Fit: mapping.Direct},
+		},
+		{
+			name:         "network.loadbalancer/udp",
+			category:     taxonomy.NetworkLoadBalancer,
+			capabilities: []taxonomy.Capability{taxonomy.UDP},
+			want:         bestFit{Name: "Load Balancer", Fit: mapping.Direct},
+		},
+		{
+			name:         "network.loadbalancer/zone-high-availability",
+			category:     taxonomy.NetworkLoadBalancer,
+			capabilities: []taxonomy.Capability{taxonomy.ZoneHighAvailability},
+			want:         bestFit{Name: "Load Balancer 3-AZ", Fit: mapping.Direct},
+		},
+		{
+			name:         "network.loadbalancer/node-high-availability",
+			category:     taxonomy.NetworkLoadBalancer,
+			capabilities: []taxonomy.Capability{taxonomy.NodeHighAvailability},
+			want:         bestFit{Name: "Load Balancer 3-AZ", Fit: mapping.Direct},
+		},
+		{
+			name:         "network.loadbalancer/ipv6",
+			category:     taxonomy.NetworkLoadBalancer,
+			capabilities: []taxonomy.Capability{taxonomy.IPv6},
+			want: bestFit{
+				Name:    "Load Balancer",
+				Fit:     mapping.Partial,
+				Missing: []taxonomy.Capability{taxonomy.IPv6},
+			},
+		},
+		{
+			name:     "registry.container/no capabilities",
+			category: taxonomy.RegistryContainer,
+			want:     bestFit{Name: "Managed Private Registry", Fit: mapping.Direct},
+		},
+		{
+			name:         "registry.container/encryption-at-rest",
+			category:     taxonomy.RegistryContainer,
+			capabilities: []taxonomy.Capability{taxonomy.EncryptionAtRest},
+			want: bestFit{
+				Name:    "Managed Private Registry",
+				Fit:     mapping.Partial,
+				Missing: []taxonomy.Capability{taxonomy.EncryptionAtRest},
+			},
+		},
+		{
+			name:         "registry.container/zone-high-availability",
+			category:     taxonomy.RegistryContainer,
+			capabilities: []taxonomy.Capability{taxonomy.ZoneHighAvailability},
+			want: bestFit{
+				Name:    "Managed Private Registry",
+				Fit:     mapping.Partial,
+				Missing: []taxonomy.Capability{taxonomy.ZoneHighAvailability},
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			r := newResource(t, "res-example", tc.category, tc.capabilities...)
+
+			got := mapping.Map(r, cat)
+
+			best, ok := got.Best()
+			if !ok {
+				t.Fatalf("Map() returned no candidate, want offering %s: the snapshot must serve %s",
+					text.Quote(tc.want.Name), text.Quote(string(tc.category)))
+			}
+
+			if diff := cmp.Diff(tc.want, bestOf(best)); diff != "" {
+				t.Errorf("Map() best candidate mismatch (-want +got):\n%s", diff)
+			}
+
+			if got.Fit != best.Fit {
+				t.Errorf("Map() fit = %s, want the best candidate's %s",
+					text.Quote(string(got.Fit)), text.Quote(string(best.Fit)))
+			}
+		})
+	}
+}
+
+// TestNewCategoryPlansAndPrices pins PRD #552 milestone 5's prices for the two
+// categories OVHcloud prices by plan, on the embedded snapshot. A plan's price is
+// the prices page's "Price (excl. VAT / hour / node)" x 730, stored per node and
+// in ten-thousandths of a EUR (ADR 0024): the Valkey Discovery, Essential and
+// Production plans and the MongoDB Production and Advanced ones, with their
+// memory and vCPUs, so a swapped per-node and total price (the page's total is
+// per node x the node count) or plan fails here. The MongoDB offerings price the
+// storage above what a plan includes per GiB: 0.657 EUR on Production and 0.876
+// on Advanced, the page's hourly price x 3 nodes x 730.
+func TestNewCategoryPlansAndPrices(t *testing.T) {
+	t.Parallel()
+
+	cat := catalogOf(t)
+
+	t.Run("plans", func(t *testing.T) {
+		t.Parallel()
+
+		tests := []struct {
+			name               string
+			offering           string
+			plan               string
+			region             string
+			wantVCPUs          int64
+			wantMemoryMilliGiB int64
+			wantIncludedGiB    int64
+			wantAmount         catalog.Amount
+		}{
+			{
+				name:               "valkey/discovery-b3-4",
+				offering:           "Databases for Valkey",
+				plan:               "Discovery B3-4",
+				region:             "GRA",
+				wantVCPUs:          1,
+				wantMemoryMilliGiB: 4_000,
+				wantAmount:         catalog.Amount(567_210),
+			},
+			{
+				name:               "valkey/essential-db1-4",
+				offering:           "Databases for Valkey",
+				plan:               "Essential DB1-4",
+				region:             "GRA",
+				wantVCPUs:          2,
+				wantMemoryMilliGiB: 4_000,
+				wantAmount:         catalog.Amount(473_040),
+			},
+			{
+				name:               "valkey-multi-node/production-b3-8",
+				offering:           "Databases for Valkey Multi-node",
+				plan:               "Production B3-8",
+				region:             "GRA",
+				wantVCPUs:          2,
+				wantMemoryMilliGiB: 8_000,
+				wantAmount:         catalog.Amount(1_077_480),
+			},
+			{
+				name:               "valkey-multi-node-3az/production-b3-8",
+				offering:           "Databases for Valkey Multi-node 3-AZ",
+				plan:               "Production B3-8",
+				region:             "PAR",
+				wantVCPUs:          2,
+				wantMemoryMilliGiB: 8_000,
+				wantAmount:         catalog.Amount(1_140_990),
+			},
+			{
+				name:               "mongodb/production-b3-8",
+				offering:           "Managed MongoDB",
+				plan:               "Production B3-8",
+				region:             "GRA",
+				wantVCPUs:          2,
+				wantMemoryMilliGiB: 8_000,
+				wantIncludedGiB:    40,
+				wantAmount:         catalog.Amount(813_220),
+			},
+			{
+				name:               "mongodb-3az/production-b3-8",
+				offering:           "Managed MongoDB 3-AZ",
+				plan:               "Production B3-8",
+				region:             "PAR",
+				wantVCPUs:          2,
+				wantMemoryMilliGiB: 8_000,
+				wantIncludedGiB:    40,
+				wantAmount:         catalog.Amount(861_400),
+			},
+			{
+				name:               "mongodb-advanced/advanced-b3-16",
+				offering:           "Managed MongoDB Advanced",
+				plan:               "Advanced B3-16",
+				region:             "GRA",
+				wantVCPUs:          4,
+				wantMemoryMilliGiB: 16_000,
+				wantIncludedGiB:    80,
+				wantAmount:         catalog.Amount(1_619_140),
+			},
+		}
+
+		for _, tc := range tests {
+			t.Run(tc.name, func(t *testing.T) {
+				t.Parallel()
+
+				o := offeringNamed(t, cat, tc.offering)
+				p := planNamed(t, o, tc.plan)
+
+				if p.VCPUs != tc.wantVCPUs {
+					t.Errorf("offering %s plan %s vCPUs = %d, want %d: the prices page's vCore column, per node",
+						text.Quote(o.Name), text.Quote(p.Name), p.VCPUs, tc.wantVCPUs)
+				}
+
+				if p.MemoryMilliGiB != tc.wantMemoryMilliGiB {
+					t.Errorf("offering %s plan %s memory = %d thousandths of a GiB, want %d",
+						text.Quote(o.Name), text.Quote(p.Name), p.MemoryMilliGiB, tc.wantMemoryMilliGiB)
+				}
+
+				if p.IncludedStorageGiB != tc.wantIncludedGiB {
+					t.Errorf("offering %s plan %s included storage = %d GiB, want %d",
+						text.Quote(o.Name), text.Quote(p.Name), p.IncludedStorageGiB, tc.wantIncludedGiB)
+				}
+
+				got, ok := o.PlanPrice(tc.plan, tc.region)
+				if !ok {
+					t.Fatalf("offering %s lists no price for plan %s in region %s, want %s a month",
+						text.Quote(o.Name), text.Quote(tc.plan), text.Quote(tc.region), tc.wantAmount)
+				}
+
+				if got != tc.wantAmount {
+					t.Errorf("offering %s plan %s price in region %s = %s, want %s: the page's price per node per hour x 730, never the page's total for the tier's nodes",
+						text.Quote(o.Name), text.Quote(tc.plan), text.Quote(tc.region), got, tc.wantAmount)
+				}
+			})
+		}
+	})
+
+	t.Run("mongodb storage prices", func(t *testing.T) {
+		t.Parallel()
+
+		tests := []struct {
+			offering string
+			want     catalog.Amount
+		}{
+			{offering: "Managed MongoDB", want: catalog.Amount(6_570)},
+			{offering: "Managed MongoDB 3-AZ", want: catalog.Amount(6_570)},
+			{offering: "Managed MongoDB Advanced", want: catalog.Amount(8_760)},
+			{offering: "Managed MongoDB Advanced 3-AZ", want: catalog.Amount(8_760)},
+		}
+
+		for _, tc := range tests {
+			t.Run(tc.offering, func(t *testing.T) {
+				t.Parallel()
+
+				o := offeringNamed(t, cat, tc.offering)
+
+				for _, region := range o.Regions {
+					got, ok := o.StoragePrice(region)
+					if !ok {
+						t.Errorf("offering %s lists no storage price in region %s, want %s a GiB a month",
+							text.Quote(o.Name), text.Quote(region), tc.want)
+
+						continue
+					}
+
+					if got != tc.want {
+						t.Errorf("offering %s storage price in region %s = %s, want %s: the page's price per GiB per hour x the tier's 3 nodes x 730",
+							text.Quote(o.Name), text.Quote(region), got, tc.want)
+					}
+				}
+			})
+		}
+	})
+}
+
+// TestNotPricedOfferingsCarryNoPrice pins PRD #552's decided question 6 on the
+// embedded snapshot: OVHcloud bills a load balancer by size and a private
+// registry by plan, and neither size is recorded in an inventory, so no method
+// could price them (the categories' reason is "not priced"). A plan in the
+// snapshot format carries a price, so neither offering may list a plan, a
+// per-GiB storage price or a fixed fee: an estimate never reads a missing price
+// as zero.
+func TestNotPricedOfferingsCarryNoPrice(t *testing.T) {
+	t.Parallel()
+
+	cat := catalogOf(t)
+
+	tests := []struct {
+		offering string
+		category taxonomy.Category
+	}{
+		{offering: "Load Balancer", category: taxonomy.NetworkLoadBalancer},
+		{offering: "Load Balancer 3-AZ", category: taxonomy.NetworkLoadBalancer},
+		{offering: "Managed Private Registry", category: taxonomy.RegistryContainer},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.offering, func(t *testing.T) {
+			t.Parallel()
+
+			o := offeringNamed(t, cat, tc.offering)
+
+			if !slices.Contains(o.Categories, tc.category) {
+				t.Errorf("offering %s categories = %v, want them to include %s",
+					text.Quote(o.Name), o.Categories, text.Quote(string(tc.category)))
+			}
+
+			if len(o.Plans) != 0 {
+				t.Errorf("offering %s lists plans %s, want none: OVHcloud prices a load balancer by size and a registry by plan, none of which an inventory records, so the snapshot records no plan (PRD #552 decided question 6)",
+					text.Quote(o.Name), planNames(o.Plans))
+			}
+
+			if len(o.StoragePrices) != 0 {
+				t.Errorf("offering %s lists %d storage prices, want none: the category is not estimated",
+					text.Quote(o.Name), len(o.StoragePrices))
+			}
+
+			if len(o.FixedFees) != 0 {
+				t.Errorf("offering %s lists fixed fees, want none: OVHcloud publishes a control-plane fee for its Kubernetes offerings only",
+					text.Quote(o.Name))
+			}
+		})
+	}
+}
+
+// planNamed returns o's plan called name, and fails the test if there is none.
+func planNamed(t *testing.T, o catalog.Offering, name string) catalog.Plan {
+	t.Helper()
+
+	for _, p := range o.Plans {
+		if p.Name == name {
+			return p
+		}
+	}
+
+	t.Fatalf("offering %s has no plan called %s: it sells %s",
+		text.Quote(o.Name), text.Quote(name), planNames(o.Plans))
+
+	return catalog.Plan{}
+}
+
+// planNames lists the names of plans for a message, or says there are none.
+func planNames(plans []catalog.Plan) string {
+	if len(plans) == 0 {
+		return "none"
+	}
+
+	names := make([]string, len(plans))
+	for i, p := range plans {
+		names[i] = p.Name
+	}
+
+	return strings.Join(names, ", ")
 }
 
 // TestExtraStorageEstimateThroughEmbeddedCatalog pins issue #219 on the snapshot
