@@ -763,7 +763,9 @@ configurations with their private IP addresses, a scale set's network interface 
 load balancer's frontend IP configurations, backend pools with their members' IP addresses and
 load-balancing rules, a Cosmos DB account's locations, an AKS cluster's node pools with their labels,
 tags (keys and values), taints, subnet IDs and node image versions), as Resource Graph cannot trim
-inside an array.
+inside an array. So a Cosmos DB account's locations keep each region's endpoint host name
+(`documentEndpoint`), and a scale set's network interface configurations keep a public IP
+address's DNS label (`dnsSettings.domainNameLabel`), where one is set.
 
 Resource Graph holds most settings; Service Bus queues, topics and topic subscriptions, storage
 queues, a storage account's blob versioning, file shares, the databases of an Azure Managed Redis
@@ -771,8 +773,9 @@ cluster and the VM sizes are not in it, hence the loops. Storage queues, file sh
 Enterprise databases are listed through the Resource Manager API (`az rest --method get`, a read), not
 the data plane, so `Reader` is enough and no account key is needed. A Basic tier Service Bus
 namespace has no topics, and its `topic list` fails: that error is expected. An account with more
-queues or shares than one response returns adds a `nextLink` to the response; run that call without
-`--query` and fetch the `nextLink` URL with `az rest --method get --url` as well. The shares call
+queues or shares, or a Redis Enterprise cluster with more databases, than one response returns adds a
+`nextLink` to the response; run that call without `--query` and fetch the `nextLink` URL with
+`az rest --method get --url` as well. The shares call
 lists each share snapshot as one more element with its share's ID and a `snapshotTime`; the program
 counts it as a snapshot of the share, not as a share.
 
@@ -795,7 +798,7 @@ Review `inventories/azure.inventory.json`, then delete the raw output: `rm -r in
 | PostgreSQL or MySQL flexible server, single-node | `count`: 1 | `properties.highAvailability.mode` `Disabled` or not set |
 | AKS cluster | `count` | the sum of its agent pools' `count` |
 | Azure Cache for Redis | `count` | Basic 1; Standard 2; Premium (1 + `properties.replicasPerPrimary`, or `replicasPerMaster`, 1 when neither is set) × `properties.shardCount` (at least 1) |
-| Azure Managed Redis (Redis Enterprise) | `count` | 2 (a primary and a replica) with high availability, else 1 |
+| Azure Managed Redis (Redis Enterprise) | `count` | 2 (a primary and a replica) with high availability (for a legacy Enterprise or Enterprise Flash cluster, two or more `zones`), else 1 |
 | Azure DocumentDB (`mongoClusters`) | `count` | `properties.sharding.shardCount` (at least 1), × 2 with high availability (a standby per shard) |
 | Azure DocumentDB (`mongoClusters`) | `storageGiB` | `properties.storage.sizeGb` (per shard) × the shard count |
 | NFS file share of a FileStorage account | `storageGiB` | `properties.shareQuota` |
@@ -819,9 +822,16 @@ An Azure DocumentDB cluster's vCPU and memory per shard follow its `properties.c
 | vCores | 1 (burstable) | 2 (burstable) | 2 (burstable) | 2 | 4 | 8 | 16 | 32 | 64 |
 | Memory (GiB) | 2 | 4 | 8 | 8 | 16 | 32 | 64 | 128 | 256 |
 
-An Azure Managed Redis cluster's memory is its `sku.name`'s size, which the program does not look up. A server with high availability has a standby, and how many nodes a standby
-counts as depends on how a target prices high availability: the program does not guess, so the estimate
-says "(count assumed 1)" until you set the `count` (see [Sizes](#sizes) for the value).
+An Azure Managed Redis cluster's memory is its `sku.name`'s size, which the program does not look up.
+A legacy Enterprise or Enterprise Flash cluster (`sku.name` such as `Enterprise_E10`) runs
+`sku.capacity` nodes (its scale), which the program does not read either: its count
+of 2 (or 1) may understate it, so set the `count` by hand from `sku.capacity`.
+
+A flexible server with high availability has a standby, and how many nodes a standby counts as depends
+on how a target prices high availability: the program does not guess, so the estimate says "(count
+assumed 1)" until you set the `count` (see [Sizes](#sizes) for the value). A DocumentDB cluster's
+standbys are counted as nodes all the same: the targets sell managed MongoDB per node, and the source
+lists and runs each standby as a node of its own.
 
 ### Azure classification
 
@@ -871,7 +881,8 @@ share, a Cosmos DB account of another kind than `MongoDB`, a Logic App and a Mar
 `unclassified`, so the report shows them as blockers. Azure Database
 for MariaDB was retired on 19 September 2025, and Basic Load Balancer on 30 September 2025; a Basic
 load balancer still running is classified, with no capability. Azure Cache for Redis Basic, Standard
-and Premium retire on 30 September 2028. Redis modules of an Azure Managed Redis cluster are no
+and Premium retire on 30 September 2028, its Enterprise and Enterprise Flash tiers on 31 March 2027
+(Microsoft Learn, *Frequently asked questions on the retirement of Azure Cache for Redis*). Redis modules of an Azure Managed Redis cluster are no
 capability.
 
 Left out: virtual machines of a scale set, their OS disks (`storageProfile.osDisk`) and their data
@@ -882,8 +893,9 @@ FileStorage account whose shares are listed (they stand for it), share snapshots
 capability of their share, the databases of an Azure Managed Redis cluster (the cluster stands for
 them), and everything in an AKS cluster's node resource group (`properties.nodeResourceGroup`, usually
 `MC_<group>_<cluster>_<region>`): the node pools' scale sets, load balancers, public IP addresses
-and network interfaces, which AKS manages and the cluster stands for. A managed disk in that group
-is a persistent volume that holds data, and stays.
+and network interfaces, which AKS manages and the cluster stands for, and the FileStorage accounts
+the Azure Files CSI driver creates there. A managed disk in that group is a persistent volume that
+holds data, and stays; so does a share of such a FileStorage account, a persistent volume too.
 
 | Category | Capability | When |
 |---|---|---|
@@ -913,8 +925,8 @@ is a persistent volume that holds data, and stays.
 | `cache.redis` (Azure Cache for Redis) | `snapshots` | tier Premium with `rdb-backup-enabled` `true` (RDB persistence; AOF alone is no snapshot) |
 | `cache.redis` (Azure Cache for Redis) | `encryption-at-rest` | any SKU but C0 and C1, whose disks Azure does not encrypt |
 | `cache.redis` (Azure Managed Redis) | `encryption-at-rest` | always |
-| `cache.redis` (Azure Managed Redis) | `node-high-availability` | `highAvailability` `Enabled`, or `redundancyMode` `LR` or `ZR` |
-| `cache.redis` (Azure Managed Redis) | `zone-high-availability` | `redundancyMode` `ZR` |
+| `cache.redis` (Azure Managed Redis) | `node-high-availability` | `highAvailability` `Enabled`, `redundancyMode` `LR` or `ZR`, or two or more `zones` (a legacy Enterprise or Enterprise Flash cluster) |
+| `cache.redis` (Azure Managed Redis) | `zone-high-availability` | `redundancyMode` `ZR`, or two or more `zones` (a legacy Enterprise or Enterprise Flash cluster) |
 | `cache.redis` (Azure Managed Redis) | `sharding` | a database's `clusteringPolicy` is `OSSCluster` |
 | `cache.redis` (Azure Managed Redis) | `snapshots` | a database has RDB persistence (`persistence.rdbEnabled`) |
 | `database.mongodb` (Cosmos DB) | `encryption-at-rest` | always |
@@ -923,7 +935,8 @@ is a persistent volume that holds data, and stays.
 | `database.mongodb` (Cosmos DB) | `zone-high-availability` | a location has `isZoneRedundant` true |
 | `database.mongodb` (Cosmos DB) | `read-replicas` | two or more locations |
 | `database.mongodb` (DocumentDB) | `encryption-at-rest`, `point-in-time-restore` | always |
-| `database.mongodb` (DocumentDB) | `node-high-availability`, `zone-high-availability` | `highAvailability.targetMode` is not `Disabled` |
+| `database.mongodb` (DocumentDB) | `node-high-availability` | `highAvailability.targetMode` is not `Disabled` (`SameZone` or `ZoneRedundantPreferred`) |
+| `database.mongodb` (DocumentDB) | `zone-high-availability` | `highAvailability.targetMode` is `ZoneRedundantPreferred` (a `SameZone` standby shares its primary's zone) |
 | `database.mongodb` (DocumentDB) | `read-replicas` | another cluster names it in `replicaParameters.sourceResourceId` |
 | `network.loadbalancer` (load balancer) | `zone-high-availability` | SKU `Standard`, and a frontend IP configuration, or its public IP address, in two or more zones |
 | `network.loadbalancer` (load balancer) | `udp` | a load-balancing rule's protocol is `Udp`, `All` (HA ports) or `Quic` (carried over UDP) |
@@ -941,9 +954,13 @@ A frontend is IPv6 when its `privateIPAddressVersion` or its public IP address's
 address. An IPv6 frontend over IPv4 backends is no `ipv6`: the backends would have to move to IPv6
 too. A frontend's public IP address without `zones` is not counted as zone redundant, although Azure
 now makes a Standard one zone redundant in a region with zones: the program cannot see whether a
-region has zones, so it understates rather than overstates. For the same reason a DocumentDB cluster
-with high availability in a region without zones is credited `zone-high-availability` it does not
-have: remove it by hand there. An Application Gateway is never `ipv6` (it supports no IPv6 backends)
+region has zones, so it understates rather than overstates. A DocumentDB cluster with `SameZone` high
+availability gets `node-high-availability` but no `zone-high-availability`: its standby protects
+against a node failure, not a zone outage
+(Microsoft Learn, *High availability in Azure DocumentDB*). A
+`ZoneRedundantPreferred` cluster in a region without zones falls back to the same zone, and is still
+credited `zone-high-availability` it does not have, as the program cannot see the region's zones:
+remove it by hand there. An Application Gateway is never `ipv6` (it supports no IPv6 backends)
 and never `udp` (it balances HTTP). A `Microsoft.FileShares` share's snapshots are not listed.
 
 ## Trim what you do not want assessed

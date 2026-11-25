@@ -34,8 +34,10 @@
 # (an Azure Resource Manager type), so it shows up as a blocker.
 #
 # Everything in an AKS cluster's node resource group (its scale sets, load
-# balancers, public IP addresses, network interfaces) is left out, the cluster
-# stands for it; its managed disks, persistent volumes that hold data, stay. So
+# balancers, public IP addresses, network interfaces, the Azure Files CSI
+# driver's FileStorage accounts) is left out, the cluster stands for it; its
+# managed disks and those accounts' shares, persistent volumes that hold data,
+# stay. So
 # are a FileStorage account whose shares are listed (they stand for it), share
 # snapshots (a capability of their share) and Redis Enterprise databases (their
 # cluster stands for them).
@@ -49,7 +51,7 @@
 # gets no count, how many nodes a target bills for a standby is the target's to
 # say), an AKS cluster's node count (the counts of its agent pools), a cache's
 # node count (from its tier, replicas and shards, or an Azure Managed Redis
-# cluster's high availability), an Azure DocumentDB cluster's node count and
+# cluster's high availability or zones), an Azure DocumentDB cluster's node count and
 # storage (its shards, a standby each with high availability, and sizeGb per
 # shard) and an NFS share's GiB (shareQuota, or provisionedStorageGiB). A number
 # no call gives is left out, never guessed. The workload, relations and
@@ -364,16 +366,19 @@ def zone_count: (.zones // []) | length;
               else null end)})}
         elif $t == "microsoft.cache/redisenterprise" then
           # Azure Managed Redis: a primary and a replica with high availability.
+          # A legacy Enterprise or Enterprise Flash cluster names its zones in
+          # zones instead; over two or more it runs two or more nodes.
           # Clustering and persistence are its databases' settings, from the
           # databases call; without it neither is claimed. Disks are always
           # encrypted.
           [$redisdatabases[] | select(.id | lid | startswith($id + "/databases/"))] as $dbs
+          | (zone_count >= 2) as $zonal
           | (.properties.highAvailability? == "Enabled"
-              or (.properties.redundancyMode? | IN("LR", "ZR"))) as $ha
+              or (.properties.redundancyMode? | IN("LR", "ZR")) or $zonal) as $ha
           | $base + {category: "cache.redis", capabilities: [
               "encryption-at-rest",
               cap("node-high-availability"; $ha),
-              cap("zone-high-availability"; .properties.redundancyMode? == "ZR"),
+              cap("zone-high-availability"; .properties.redundancyMode? == "ZR" or $zonal),
               cap("sharding"; any($dbs[]; .properties.clusteringPolicy? == "OSSCluster")),
               cap("snapshots"; any($dbs[]; .properties.persistence.rdbEnabled? == true))
             ],
@@ -391,7 +396,8 @@ def zone_count: (.zones // []) | length;
             ]}
         elif $t == "microsoft.documentdb/mongoclusters" then
           # Azure DocumentDB (vCore): with high availability, a standby per
-          # shard, zone redundant in a region with zones. Backups restore to a
+          # shard; zone redundant only with ZoneRedundantPreferred (SameZone
+          # keeps the standby in the primary's zone). Backups restore to a
           # point in time, and data is always encrypted.
           (.properties.highAvailability.targetMode? // "Disabled") as $hamode
           | ([.properties.sharding.shardCount? // 1, 1] | max) as $shards
@@ -399,7 +405,7 @@ def zone_count: (.zones // []) | length;
               "encryption-at-rest",
               "point-in-time-restore",
               cap("node-high-availability"; $hamode != "Disabled"),
-              cap("zone-high-availability"; $hamode != "Disabled"),
+              cap("zone-high-availability"; $hamode == "ZoneRedundantPreferred"),
               cap("read-replicas"; $id | IN($mongoreplicated[]))
             ],
             size: size_of({count: ($shards * (if $hamode == "Disabled" then 1 else 2 end)),
