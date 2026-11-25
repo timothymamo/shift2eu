@@ -522,10 +522,10 @@ sets them (R7's ListBucket answer, R8's plain-HTTP answer).
 
 *The apex's HSTS first (issue #601):* the privacy page says the apex's HTTPS redirect carries HSTS, but
 the release deploys only the bundle; the Caddyfile that sends the header reaches the live site only
-through infra/site's apply. So, once that change is merged to `main`, apply `infra/site` (R4) and pass
-R8's block 3 apex line (`strict-transport-security: max-age=31536000` on `https://shift2eu.com/`)
-before merging the release PR of the first release that carries that privacy page, and again before
-any later release deploys while the deploy is on.
+through infra/site's apply. So, once issue #601's change (the Caddyfile's apex HSTS) is merged to
+`main`, apply `infra/site` (R4) and pass R8's block 3 apex line
+(`strict-transport-security: max-age=31536000` on `https://shift2eu.com/`) before merging the release
+PR of the first release that carries that privacy page.
 
 ```bash
 # The HSTS and preload records PR merged, its squash commit with "Release-As: <version>", and release-please's release PR for it merged

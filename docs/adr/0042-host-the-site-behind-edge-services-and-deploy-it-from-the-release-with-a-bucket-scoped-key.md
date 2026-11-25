@@ -667,9 +667,9 @@ unchanged; only *Hosting*, *The origins* and *Recovery* change, as follows.
   `X-Forwarded-Proto` and `Host`; `https://www.shift2eu.com` is reverse-proxied to the pipeline endpoint
   and carries `Strict-Transport-Security` (`max-age=31536000; includeSubDomains`, `preload` only once
   pursued), the `<meta>` policy as a `Content-Security-Policy` header with `frame-ancestors 'none'`,
-  `X-Content-Type-Options`, `Referrer-Policy` and `Permissions-Policy`. The apex sent no HSTS until
-  2026-11-25 (issue #601); since then its HTTPS 308 sends `max-age=31536000`, without
-  `includeSubDomains` or `preload`, and its plain-HTTP 308 none (ADR 0045, *The headers*). The pipeline stays the bucket's only reader, its cache and its backend
+  `X-Content-Type-Options`, `Referrer-Policy` and `Permissions-Policy`. The apex sent no HSTS; decided
+  2026-11-25 (issue #601), its HTTPS 308 sends `max-age=31536000`, without `includeSubDomains` or
+  `preload`, once `infra/site` is applied, and its plain-HTTP 308 none (ADR 0045, *The headers*). The pipeline stays the bucket's only reader, its cache and its backend
   unchanged; its own `www.shift2eu.com` custom domain goes; the infra unit removes it (and its TLS
   stage) in `infra/site`. The apex redirect's provider is therefore
   Scaleway, already named on the privacy page, with Let's Encrypt as its certificate authority. Context's
