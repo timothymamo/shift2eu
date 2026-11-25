@@ -614,11 +614,21 @@ Prefer these roles on the project, each of which reads configuration only:
 
 - `roles/cloudasset.viewer` (Cloud Asset Inventory, which also lists Bare Metal Solution servers:
   no Bare Metal Solution role is needed, as the program reads nothing more about them);
-- `roles/compute.viewer` (instances, managed instance groups, snapshots);
+- `roles/compute.viewer` (instances, managed instance groups, snapshots, and the URL maps, backend
+  services, forwarding rules, target pools and target HTTP and HTTPS proxies of load balancers);
 - `roles/cloudsql.viewer` (Cloud SQL instances);
 - `roles/container.clusterViewer` (GKE clusters);
 - `roles/pubsub.viewer` (Pub/Sub subscriptions);
-- `roles/storage.bucketViewer` (bucket metadata, with no access to the objects in them).
+- `roles/storage.bucketViewer` (bucket metadata, with no access to the objects in them);
+- `roles/redis.viewer` (Memorystore for Redis instances and clusters);
+- `roles/memorystore.viewer` (Memorystore for Valkey instances);
+- `roles/file.viewer` (Filestore instances);
+- `roles/cloudfunctions.viewer` (Cloud Functions, for the Cloud Run service each one runs on);
+- `roles/artifactregistry.reader` (Artifact Registry repositories). It is read-only, but it can also
+  download the artifacts in the repositories (`artifactregistry.repositories.downloadArtifacts`), which
+  the listing does not need; no predefined Artifact Registry role lists repositories without it. If
+  that is too much, grant a custom role with only `artifactregistry.repositories.list` and
+  `artifactregistry.repositories.get` instead.
 
 The simpler fallback is `roles/cloudasset.viewer` and the basic role `roles/viewer`, which covers
 every call too but is broad: it reads the configuration of every service in the project, far more
@@ -632,52 +642,141 @@ project=example-project   # your project ID
 out=inventories/gcp
 mkdir -p "$out"
 
-# Keep only the two labels gcp.jq reads, not the values of any other label.
-gcloud asset search-all-resources --scope="projects/$project" \
+# Keep only the one label gcp.jq reads, not the values of any other label.
+gcloud asset search-all-resources --scope="projects/$project" --quiet \
   --format='json(name,assetType,location,labels)' |
-  jq '[.[] | if .labels then .labels |= with_entries(select(.key == "goog-gke-node" or .key == "goog-managed-by")) else . end]' \
+  jq '[.[] | if .labels then .labels |= with_entries(select(.key == "goog-gke-node")) else . end]' \
   > "$out/assets.json"
 
-gcloud compute instances list --project="$project" \
+# Whether the asset listing holds an asset type, in a region when one is given:
+# the Memorystore, Filestore and Artifact Registry lists below run only then.
+has() { jq -e --arg t "$1" --arg r "${2:-}" \
+  'any(.[]; .assetType == $t and ($r == "" or (.name | contains("/locations/" + $r + "/"))))' \
+  "$out/assets.json" > /dev/null; }
+
+gcloud compute instances list --project="$project" --quiet \
   --format='json(kind,selfLink,machineType,metadata.items[].key,disks[].source,disks[].boot,disks[].autoDelete,networkInterfaces[].stackType,networkInterfaces[].ipv6AccessConfigs[].type)' \
   > "$out/compute-instances.json"
 # The vCPU and memory of the machine types in use, and every disk's size.
 types="$(jq -r '[.[].machineType // empty | split("/") | last] | unique | join(" ")' "$out/compute-instances.json")"
 # With no instances there are no types to ask for: write an empty list instead.
 if [ -n "$types" ]; then
-  gcloud compute machine-types list --project="$project" --filter="name:($types)" \
+  gcloud compute machine-types list --project="$project" --filter="name:($types)" --quiet \
     --format='json(kind,selfLink,name,zone,guestCpus,memoryMb)' > "$out/compute-machine-types.json"
 else
   echo '[]' > "$out/compute-machine-types.json"
 fi
 
-gcloud compute disks list --project="$project" \
+gcloud compute disks list --project="$project" --quiet \
   --format='json(kind,name,zone,region,sizeGb)' > "$out/compute-disks.json"
-gcloud compute instance-groups managed list --project="$project" \
+gcloud compute instance-groups managed list --project="$project" --quiet \
   --format='json(kind,selfLink,status.autoscaler)' > "$out/compute-instance-groups.json"
-gcloud compute snapshots list --project="$project" \
+gcloud compute snapshots list --project="$project" --quiet \
   --format='json(kind,sourceDisk)' > "$out/compute-snapshots.json"
-gcloud sql instances list --project="$project" \
+gcloud sql instances list --project="$project" --quiet \
   --format='json(kind,selfLink,region,databaseVersion,replicaNames,settings.availabilityType,settings.tier,settings.dataDiskSizeGb,settings.backupConfiguration.pointInTimeRecoveryEnabled,settings.backupConfiguration.binaryLogEnabled)' \
   > "$out/sql-instances.json"
-gcloud storage buckets list --project="$project" --raw \
+gcloud storage buckets list --project="$project" --raw --quiet \
   --format='json(kind,name,versioning)' > "$out/storage-buckets.json"
-gcloud container clusters list --project="$project" \
+gcloud container clusters list --project="$project" --quiet \
   --format='json(selfLink,location,currentNodeCount,autopilot.enabled,nodePools[].autoscaling.enabled,nodePools[].instanceGroupUrls)' \
   > "$out/container-clusters.json"
-gcloud pubsub subscriptions list --project="$project" \
+gcloud pubsub subscriptions list --project="$project" --quiet \
   --format='json(name,deadLetterPolicy.deadLetterTopic)' > "$out/pubsub-subscriptions.json"
+
+# Load balancers: global and every region's, each list by default.
+gcloud compute url-maps list --project="$project" --quiet \
+  --format='json(selfLink,region,defaultService,defaultRouteAction.weightedBackendServices[].backendService,defaultRouteAction.requestMirrorPolicy.backendService,defaultCustomErrorResponsePolicy.errorService,pathMatchers[].defaultService,pathMatchers[].defaultRouteAction.weightedBackendServices[].backendService,pathMatchers[].defaultRouteAction.requestMirrorPolicy.backendService,pathMatchers[].defaultCustomErrorResponsePolicy.errorService,pathMatchers[].pathRules[].service,pathMatchers[].pathRules[].routeAction.weightedBackendServices[].backendService,pathMatchers[].pathRules[].routeAction.requestMirrorPolicy.backendService,pathMatchers[].pathRules[].customErrorResponsePolicy.errorService,pathMatchers[].routeRules[].service,pathMatchers[].routeRules[].routeAction.weightedBackendServices[].backendService,pathMatchers[].routeRules[].routeAction.requestMirrorPolicy.backendService,pathMatchers[].routeRules[].customErrorResponsePolicy.errorService)' \
+  > "$out/compute-url-maps.json"
+gcloud compute backend-services list --project="$project" --quiet \
+  --format='json(kind,selfLink,region,protocol,loadBalancingScheme,ipAddressSelectionPolicy)' \
+  > "$out/compute-backend-services.json"
+gcloud compute forwarding-rules list --project="$project" --quiet \
+  --format='json(kind,selfLink,region,IPProtocol,ipVersion,target,backendService)' \
+  > "$out/compute-forwarding-rules.json"
+gcloud compute target-pools list --project="$project" --quiet \
+  --format='json(kind,selfLink,region)' > "$out/compute-target-pools.json"
+gcloud compute target-https-proxies list --project="$project" --quiet \
+  --format='json(kind,selfLink,urlMap)' > "$out/compute-target-https-proxies.json"
+gcloud compute target-http-proxies list --project="$project" --quiet \
+  --format='json(kind,selfLink,urlMap)' > "$out/compute-target-http-proxies.json"
+
+# Memorystore, per region: the regions come from the asset listing, and each
+# list runs only in a region that holds its asset type.
+for region in $(jq -r '[.[] | select(.assetType | test("^(redis|memorystore)\\.googleapis\\.com/")) | .name | capture("/locations/(?<r>[^/]+)/").r] | unique | .[]' "$out/assets.json"); do
+  if has redis.googleapis.com/Instance "$region"; then
+    gcloud redis instances list --project="$project" --region="$region" --quiet \
+      --format='json(name,tier,memorySizeGb,replicaCount,locationId,alternativeLocationId,nodes[].zone,persistenceConfig.persistenceMode)'
+  fi
+  if has redis.googleapis.com/Cluster "$region"; then
+    gcloud redis clusters list --project="$project" --region="$region" --quiet \
+      --format='json(name,shardCount,replicaCount,nodeType,sizeGb,zoneDistributionConfig.mode,persistenceConfig.mode)'
+  fi
+  if has memorystore.googleapis.com/Instance "$region"; then
+    gcloud memorystore instances list --project="$project" --location="$region" --quiet \
+      --format='json(name,mode,shardCount,replicaCount,nodeType,nodeConfig.sizeGb,zoneDistributionConfig.mode,persistenceConfig.mode)'
+  fi
+done > "$out/memorystore.json"
+
+# Filestore and Artifact Registry, when the asset listing holds one of theirs.
+if has file.googleapis.com/Instance; then
+  gcloud filestore instances list --project="$project" --quiet \
+    --format='json(name,tier,fileShares[].capacityGb,protocol)' > "$out/filestore-instances.json"
+else
+  echo '[]' > "$out/filestore-instances.json"
+fi
+if has artifactregistry.googleapis.com/Repository; then
+  gcloud artifacts repositories list --project="$project" --location=all --quiet \
+    --format='json(name,format,mode)' > "$out/artifacts-repositories.json"
+else
+  echo '[]' > "$out/artifacts-repositories.json"
+fi
+
+# The Cloud Run service each 2nd gen function runs on, per region with functions.
+for region in $(jq -r '[.[] | select(.assetType == "cloudfunctions.googleapis.com/Function") | .name | capture("/locations/(?<r>[^/]+)/").r] | unique | .[]' "$out/assets.json"); do
+  gcloud functions list --project="$project" --v2 --regions="$region" --quiet \
+    --format='json(name,serviceConfig.service)'
+done > "$out/functions.json"
 ```
+
+The Memorystore, Filestore, Artifact Registry and Cloud Functions lists run only when the asset
+listing holds a resource of theirs, so a project that does not use a service never calls its API,
+which may not be enabled. Every `gcloud` call above carries `--quiet`, which makes it take the
+default answer, No, when it offers to enable an API, as it does on a project with that API disabled;
+if any call still asks to enable one, answer N: enabling an API writes to the project.
+
+Check that a list is not empty when the asset listing holds its resources: a failed list (a
+missing role or an interrupted run) writes nothing and stops nothing. With Cloud
+Functions, check `functions.json`: without it each function's Cloud Run service is counted a second
+time, as a `serverless.container` (`roles/cloudfunctions.viewer`). With load balancers, check the
+compute lists (`roles/compute.viewer`). A failed `compute-target-pools.json` leaves every target
+pool out, with nothing in its place. A failed `compute-url-maps.json` puts, in place of each URL
+map, one load balancer per backend service it names. A failed `compute-backend-services.json`
+leaves out every load balancer that is a backend service alone, gives the URL maps no `udp` or
+`ipv6` from their backend services, and keeps a service mesh's URL map as a load balancer. A failed
+`compute-forwarding-rules.json`, `compute-target-https-proxies.json` or
+`compute-target-http-proxies.json` leaves the load balancers in, but without the `ipv6` or `udp`
+their forwarding rules prove. A failed Valkey list in `memorystore.json`
+leaves every Valkey instance without `sharding` and without its size (`roles/memorystore.viewer`).
 
 The `--format` projections keep only what the program reads: an instance's metadata keys, for
 example, but not their values, which hold startup scripts and SSH keys, and of its disks only the
 source, whether it boots and whether it is deleted with the instance (`autoDelete`). Of the asset
-labels, `jq` keeps only `goog-gke-node` and `goog-managed-by`, the two the program reads.
+labels, `jq` keeps only `goog-gke-node`, the one the program reads; the Cloud Run service behind
+each function comes from `functions list`, not from a label. Of a URL map, only the links to its
+backend services are kept (its default, path and route services, the weighted and mirrored backends
+of its route actions, and the error services of its custom error response policies), not its route
+actions' header values.
 
-The Cloud Asset Inventory listing is the list of resources; the other calls add the settings the
-capabilities need. A resource the other calls do not cover still appears, as `unclassified` or
-without capabilities. For several projects, collect each into a directory of its own and build one
-inventory per project.
+The load balancer lists read only the HTTP and HTTPS target proxies, the frontends of an Application
+Load Balancer; a TCP, SSL or gRPC proxy is not listed, so a load balancer behind one gets no `ipv6`.
+The Memorystore lists run once per region the asset listing names: the gcloud pages document no
+"all regions" value for them. Every call above lists or describes; none changes anything.
+
+The Cloud Asset Inventory listing is the list of resources, but for load balancers, which come from
+the compute lists; the other calls add the settings the capabilities and sizes need. A resource the
+other calls do not cover still appears, as `unclassified` or without capabilities. For several
+projects, collect each into a directory of its own and build one inventory per project.
 
 ### Build the GCP inventory
 
@@ -696,6 +795,16 @@ Review `inventories/gcp.inventory.json`, then delete the raw output: `rm -r inve
 | Cloud SQL instance (PostgreSQL or MySQL) | `storageGiB` | `sql instances list`, `settings.dataDiskSizeGb` (a string in the API's JSON) |
 | Cloud SQL instance, custom tier | `vcpus`, `memoryGiB` | `sql instances list`, `settings.tier` `db-custom-<vCPU>-<memory MiB>` (`db-custom-2-7680`: 2 vCPU, 7.5 GiB) |
 | Cloud SQL instance, single-node | `count`: 1 | `sql instances list`, `settings.availabilityType` `ZONAL` |
+| Memorystore for Redis instance | `memoryGiB` (per node), `count` | `redis instances list`, `memorySizeGb` (each node holds the whole data set) and the number of `nodes` (for an instance that lists none, 1 for `BASIC` and `replicaCount` + 1 for `STANDARD_HA`) |
+| Memorystore for Redis Cluster | `count` | `redis clusters list`, `shardCount` × (`replicaCount` + 1) |
+| Memorystore for Valkey instance | `memoryGiB` (per node), `count` | `memorystore instances list`, `nodeConfig.sizeGb` and `shardCount` × (`replicaCount` + 1) |
+| Filestore instance | `storageGiB` | `filestore instances list`, the sum of `fileShares[].capacityGb` (a string in the API's JSON) |
+
+The Memorystore and Filestore APIs write GB; Filestore defines a GB as 1024³ bytes, and the program
+takes every one of these GB as GiB. A Redis cluster names only the memory of the whole cluster
+(`sizeGb`), and no page says whether it counts the replicas, so the program writes no `memoryGiB` for
+it: add the memory of one node by hand (its `nodeType`, from Google's node specification) for an
+estimate.
 
 Not filled in: the vCPU and memory of a Cloud SQL instance whose tier is not a custom one (such as
 `db-n1-standard-2` or `db-f1-micro`), the count of a `REGIONAL` Cloud SQL instance, a GKE cluster's
@@ -722,20 +831,46 @@ The `rawType` is the resource's Cloud Asset Inventory asset type.
 | `sqladmin.googleapis.com/Instance`, any other engine, or not in `sql instances list` | `unclassified` |
 | `container.googleapis.com/Cluster` | `kubernetes.managed` |
 | `cloudfunctions.googleapis.com/Function`, `cloudfunctions.googleapis.com/CloudFunction` | `serverless.function` |
-| `pubsub.googleapis.com/Topic` | `messaging.queue` |
+| `pubsub.googleapis.com/Topic` | `messaging.topic` |
 | `pubsub.googleapis.com/Subscription` | `messaging.queue` |
-| `run.googleapis.com/Service` | `unclassified` |
+| `run.googleapis.com/Service` that no 2nd gen Cloud Function runs on | `serverless.container` |
+| `redis.googleapis.com/Instance`, `redis.googleapis.com/Cluster` (Memorystore for Redis) | `cache.redis` |
+| `memorystore.googleapis.com/Instance` (Memorystore for Valkey) | `cache.redis` |
+| `compute.googleapis.com/UrlMap`, from `compute url-maps list` | `network.loadbalancer` |
+| `compute.googleapis.com/BackendService` that no URL map names, from `compute backend-services list` | `network.loadbalancer` |
+| `compute.googleapis.com/TargetPool`, from `compute target-pools list` | `network.loadbalancer` |
+| `artifactregistry.googleapis.com/Repository`, `format` `DOCKER` | `registry.container` |
+| `artifactregistry.googleapis.com/Repository`, any other format, or not in `artifacts repositories list` | `unclassified` |
+| `file.googleapis.com/Instance` (Filestore) | `storage.file` |
+| `memcache.googleapis.com/Instance` (Memorystore for Memcached) | `unclassified` |
 | any other asset type | `unclassified` |
 
-A Pub/Sub topic (where publishers write) and a subscription (where consumers read) are both listed,
-as both have to move. Left out: instances a managed instance group created (metadata `created-by`;
-the group stands for them) and the disks they delete with them (`disks[].autoDelete`, boot disk or
-not), the nodes of a GKE cluster (the managed instance groups its node pools name in
-`instanceGroupUrls`, and instances and disks labelled `goog-gke-node`; the cluster stands for them,
-while a persistent volume's disk stays), the Cloud Run service behind a 2nd gen Cloud Function
-(label `goog-managed-by: cloudfunctions`; the function stands for it), and snapshots and
-autoscalers, which become capabilities of their disk or group. Any other Cloud Run service runs a
-container, not a function, and stays `unclassified`.
+A Pub/Sub topic (where publishers write, and every subscription gets its own copy of each message) and
+a subscription (where consumers read) are both listed, as both have to move. Memcached speaks another
+protocol than Redis, so it stays `unclassified`.
+
+A load balancer is one URL map (an Application Load Balancer), one backend service no URL map names (a
+passthrough Network Load Balancer, or a proxy Network Load Balancer) or one target pool. These come
+from the compute lists, not from the asset listing, which may not hold a regional URL map: the asset
+rows of URL maps, backend services and target pools are left out, so none is listed twice. A backend
+service of scheme `INTERNAL_SELF_MANAGED` belongs to a service mesh (no load balancer runs in front of
+its backends) and is left out, as is a URL map that names only such services. A load balancer a GKE
+cluster created is kept: URL maps and backend services carry no labels, and no documented rule tells
+them apart, so delete it from the inventory by hand if the cluster's move recreates it.
+
+Left out: instances a managed instance group created (metadata `created-by`; the group stands for
+them) and the disks they delete with them (`disks[].autoDelete`, boot disk or not), the nodes of a GKE
+cluster (the managed instance groups its node pools name in `instanceGroupUrls`, and instances and
+disks labelled `goog-gke-node`; the cluster stands for them, while a persistent volume's disk stays),
+the Cloud Run service behind a 2nd gen Cloud Function (the one its `serviceConfig.service` names in
+`functions list`; the function stands for it), a load balancer's forwarding rules and target proxies
+(its frontends, read for its protocol and IP version; the URL map, backend service or target pool
+stands for the load balancer), the backend services a URL map names, target instances (the asset
+rows of `TargetInstance`, a forwarding rule's target that is no load balancer), Artifact Registry
+repositories of mode `REMOTE_REPOSITORY` or `VIRTUAL_REPOSITORY` (they pull through from an upstream
+or aggregate other repositories, and store no image of their own), compute and Filestore snapshots
+and autoscalers, which become capabilities of their disk, file share or group, and Filestore backups,
+which belong to their instance.
 
 | Category | Capability | When |
 |---|---|---|
@@ -754,6 +889,26 @@ container, not a function, and stays `unclassified`.
 | `kubernetes.managed` | `node-high-availability` | it runs two or more nodes |
 | `kubernetes.managed` | `autoscaling` | Autopilot, or a node pool with autoscaling |
 | `messaging.queue` (subscription) | `dead-letter-queue` | it has a dead-letter topic |
+| `messaging.topic` | `encryption-at-rest` | always: Pub/Sub encrypts messages at rest. A dead-letter topic is set on a subscription, never on a topic, so a topic gets no `dead-letter-queue` |
+| `cache.redis` | `encryption-at-rest` | always |
+| `cache.redis` (Redis instance) | `node-high-availability` | tier `STANDARD_HA` |
+| `cache.redis` (Redis instance) | `zone-high-availability` | tier `STANDARD_HA`, and either its `nodes` are in two or more zones or its `alternativeLocationId` is another zone than its `locationId`: either one is enough |
+| `cache.redis` (Redis instance) | `snapshots` | `persistenceConfig.persistenceMode` is `RDB` |
+| `cache.redis` (Redis cluster, Valkey) | `node-high-availability` | `replicaCount` is 1 or more |
+| `cache.redis` (Redis cluster, Valkey) | `zone-high-availability` | `replicaCount` is 1 or more and `zoneDistributionConfig.mode` is not `SINGLE_ZONE` (absent means `MULTI_ZONE`) |
+| `cache.redis` (Redis cluster, Valkey) | `sharding` | always for a Redis cluster; a listed Valkey instance unless its `mode` is `CLUSTER_DISABLED` or its deprecated spelling `STANDALONE` (absent or `MODE_UNSPECIFIED` means `CLUSTER`) |
+| `cache.redis` (Redis cluster, Valkey) | `snapshots` | `persistenceConfig.mode` is `RDB` (an AOF log is not a snapshot) |
+| `network.loadbalancer` | `zone-high-availability` | always: every GCP load balancer is regional or global, and a global one counts only for its zone redundancy within a region |
+| `network.loadbalancer` | `udp` | one of its backend services has `protocol` `UDP`, or a forwarding rule of `IPProtocol` `UDP` reaches it |
+| `network.loadbalancer` | `ipv6` | a passthrough load balancer (a backend service of `loadBalancingScheme` `EXTERNAL` or `INTERNAL`) when a forwarding rule of `ipVersion` `IPV6` names that backend service in `backendService`: it delivers IPv6 to dual-stack or IPv6-only backends and has no IP selection policy. A proxy-based load balancer (a URL map, a target proxy, or scheme `EXTERNAL_MANAGED` or `INTERNAL_MANAGED`) when a forwarding rule of `ipVersion` `IPV6` reaches it **and** one of its backend services has `ipAddressSelectionPolicy` `IPV6_ONLY` or `PREFER_IPV6`; there an IPv6 frontend over IPv4 backends gets none. A target pool takes IPv4 only and gets none |
+| `registry.container` | `encryption-at-rest` | always |
+| `storage.file` | `encryption-at-rest` | always |
+| `storage.file` | `zone-high-availability` | tier `REGIONAL` or `ENTERPRISE` |
+| `storage.file` | `snapshots` | a Filestore snapshot of the instance is in the asset listing |
+
+A forwarding rule of `IPProtocol` `L3_DEFAULT` forwards every protocol, but no page read says so in
+as many words, so it does not count as UDP: add `udp` by hand for such a load balancer that carries
+UDP.
 
 ## Azure
 

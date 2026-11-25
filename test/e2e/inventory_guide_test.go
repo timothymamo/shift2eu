@@ -462,6 +462,185 @@ func inventoryGuides() []inventoryGuideCase {
 				// So does a disk a standalone instance keeps after it goes: only a
 				// managed instance group's members and their disks are left out.
 				{id: "shop-web-1-data", rawType: "compute.googleapis.com/Disk", category: "storage.block"},
+				// A Pub/Sub topic is where publishers write, which a queue is not,
+				// and Google Cloud encrypts it at rest. A dead-letter policy is set
+				// on a subscription, not on a topic, so no topic carries
+				// dead-letter-queue: the subscription below carries it.
+				{
+					id: "shop-orders", rawType: "pubsub.googleapis.com/Topic", category: "messaging.topic",
+					capabilities: []string{"encryption-at-rest"},
+				},
+				{
+					id: "shop-orders-dlq", rawType: "pubsub.googleapis.com/Topic", category: "messaging.topic",
+					capabilities: []string{"encryption-at-rest"},
+				},
+				{
+					id: "shop-orders-worker", rawType: "pubsub.googleapis.com/Subscription", category: "messaging.queue",
+					capabilities: []string{"dead-letter-queue"},
+				},
+				// A Cloud Run service no Cloud Function runs is a container the
+				// provider runs and scales, and the category carries no capability.
+				{
+					id: "shop-storefront", rawType: "run.googleapis.com/Service", category: "serverless.container",
+					capabilities: []string{},
+				},
+				// The function stands for the Cloud Run service it deployed to, so
+				// the service is not in the inventory and the function keeps its
+				// own rawType.
+				{id: "shop-resize-images", rawType: "cloudfunctions.googleapis.com/Function", category: "serverless.function"},
+				// A Memorystore instance: an at-rest-encrypted cache, with snapshots
+				// when it writes RDB files, and high availability per node (a
+				// replica, STANDARD_HA) and per zone (its nodes in two zones).
+				{
+					id: "cache-ha", rawType: "redis.googleapis.com/Instance", category: "cache.redis",
+					capabilities: []string{"encryption-at-rest", "node-high-availability", "snapshots", "zone-high-availability"},
+				},
+				{
+					id: "cache-basic", rawType: "redis.googleapis.com/Instance", category: "cache.redis",
+					capabilities: []string{"encryption-at-rest"},
+				},
+				// An instance that lists no nodes of its own is zone redundant when
+				// its alternative location is another zone: the replica it takes over
+				// with lives there.
+				{
+					id: "cache-alt", rawType: "redis.googleapis.com/Instance", category: "cache.redis",
+					capabilities: []string{"encryption-at-rest", "node-high-availability", "zone-high-availability"},
+				},
+				// A cluster is sharded by definition, and a shard's replica is what
+				// makes it highly available per node and per zone.
+				{
+					id: "sessions", rawType: "redis.googleapis.com/Cluster", category: "cache.redis",
+					capabilities: []string{"encryption-at-rest", "node-high-availability", "sharding", "zone-high-availability"},
+				},
+				// A Valkey instance is the same kind of cache: sharded unless its mode
+				// is CLUSTER_DISABLED (or STANDALONE).
+				{
+					id: "valkey-1", rawType: "memorystore.googleapis.com/Instance", category: "cache.redis",
+					capabilities: []string{"encryption-at-rest", "snapshots"},
+				},
+				{
+					id: "valkey-sessions", rawType: "memorystore.googleapis.com/Instance", category: "cache.redis",
+					capabilities: []string{"encryption-at-rest", "node-high-availability", "sharding", "snapshots", "zone-high-availability"},
+				},
+				// A Valkey instance created without a mode runs with Cluster Mode
+				// Enabled: only CLUSTER_DISABLED turns sharding off, so an absent
+				// mode is sharding. It is valkey-sessions without its mode, so it
+				// carries the same capabilities.
+				{
+					id: "valkey-default", rawType: "memorystore.googleapis.com/Instance", category: "cache.redis",
+					capabilities: []string{"encryption-at-rest", "node-high-availability", "sharding", "snapshots", "zone-high-availability"},
+				},
+				// STANDALONE is the deprecated spelling of CLUSTER_DISABLED, so this
+				// instance is valkey-1's: no sharding, and the same capabilities.
+				{
+					id: "valkey-legacy", rawType: "memorystore.googleapis.com/Instance", category: "cache.redis",
+					capabilities: []string{"encryption-at-rest", "snapshots"},
+				},
+				// An instance the assets listing holds and the instances list does
+				// not is no instance the program has read: no call gives its mode,
+				// so it is not sharded, and it has no size either (unsized).
+				{
+					id: "valkey-archive", rawType: "memorystore.googleapis.com/Instance", category: "cache.redis",
+					capabilities: []string{"encryption-at-rest"},
+				},
+				// Every node of a single-zone Valkey instance is in one zone, so the
+				// replica in each shard survives a node's loss but not a zone's.
+				{
+					id: "valkey-single", rawType: "memorystore.googleapis.com/Instance", category: "cache.redis",
+					capabilities: []string{"encryption-at-rest", "node-high-availability"},
+				},
+				// MODE_UNSPECIFIED is a mode the instance carries without naming one:
+				// the API documents the default as Cluster Mode Enabled, so only
+				// CLUSTER_DISABLED and STANDALONE turn sharding off. It is
+				// valkey-default with the mode spelled out, so it carries the same
+				// capabilities.
+				{
+					id: "valkey-unspecified", rawType: "memorystore.googleapis.com/Instance", category: "cache.redis",
+					capabilities: []string{"encryption-at-rest", "node-high-availability", "sharding", "snapshots", "zone-high-availability"},
+				},
+				// A Memcached instance speaks another protocol, so no cache
+				// category serves it and it stays unclassified with its rawType.
+				{
+					id: "shop-cache", rawType: "memcache.googleapis.com/Instance", category: "unclassified",
+					capabilities: []string{},
+				},
+				// One load balancer per URL map, per backend service no URL map
+				// names and per target pool. A global URL map is zone redundant
+				// within its regions, and gets ipv6 only when an IPv6 forwarding
+				// rule reaches it and a backend service it names sends to IPv6
+				// backends.
+				{
+					id: "shop-web-map", rawType: "compute.googleapis.com/UrlMap", category: "network.loadbalancer",
+					capabilities: []string{"ipv6", "zone-high-availability"},
+				},
+				{
+					id: "shop-int-map", rawType: "compute.googleapis.com/UrlMap", category: "network.loadbalancer",
+					capabilities: []string{"zone-high-availability"},
+				},
+				// An IPv6 frontend over IPv4-only backends is not ipv6: the
+				// capability is the whole path, not the frontend alone.
+				{
+					id: "shop-legacy-map", rawType: "compute.googleapis.com/UrlMap", category: "network.loadbalancer",
+					capabilities: []string{"zone-high-availability"},
+				},
+				// A frontend is not only an HTTPS proxy: an IPv6 forwarding rule
+				// reaches this URL map through a target HTTP proxy, and its
+				// backends select IPv6 addresses, so the load balancer is ipv6.
+				{
+					id: "shop-edge-map", rawType: "compute.googleapis.com/UrlMap", category: "network.loadbalancer",
+					capabilities: []string{"ipv6", "zone-high-availability"},
+				},
+				// A backend service no URL map names is a load balancer of its own,
+				// and a UDP forwarding rule reaching it gives it udp. A target pool
+				// names no protocol, so its UDP comes from its forwarding rule. The
+				// forwarding rule in front of this passthrough service is IPv4, so
+				// the load balancer serves no IPv6.
+				{
+					id: "shop-dns-be", rawType: "compute.googleapis.com/BackendService", category: "network.loadbalancer",
+					capabilities: []string{"udp", "zone-high-availability"},
+				},
+				// A passthrough Network Load Balancer serves IPv6 through its
+				// IPv6 forwarding rule alone: ipAddressSelectionPolicy is a proxy
+				// feature, and Google documents it only for proxy-based load
+				// balancers, so a passthrough backend service carries none and is
+				// still ipv6. The rule reaches the service directly, with no URL
+				// map or proxy between them.
+				{
+					id: "shop-ntp-be", rawType: "compute.googleapis.com/BackendService", category: "network.loadbalancer",
+					region:       "europe-west1",
+					capabilities: []string{"ipv6", "udp", "zone-high-availability"},
+				},
+				{
+					id: "shop-syslog-pool", rawType: "compute.googleapis.com/TargetPool", category: "network.loadbalancer",
+					capabilities: []string{"udp", "zone-high-availability"},
+				},
+				// A backend service no URL map names and no forwarding rule reaches
+				// is a load balancer too, and its own UDP protocol is what proves it
+				// forwards UDP: there is no frontend to read it from.
+				{
+					id: "shop-metrics-be", rawType: "compute.googleapis.com/BackendService", category: "network.loadbalancer",
+					capabilities: []string{"udp", "zone-high-availability"},
+				},
+				// A Docker repository is a registry, and Artifact Registry
+				// encrypts it at rest; another format holds another kind of image.
+				{
+					id: "images", rawType: "artifactregistry.googleapis.com/Repository", category: "registry.container",
+					capabilities: []string{"encryption-at-rest"},
+				},
+				{
+					id: "jars", rawType: "artifactregistry.googleapis.com/Repository", category: "unclassified",
+					capabilities: []string{},
+				},
+				// Filestore is NFS file storage, regional when its tier says so,
+				// and snapshotted when a snapshot of it exists.
+				{
+					id: "shared", rawType: "file.googleapis.com/Instance", category: "storage.file",
+					capabilities: []string{"encryption-at-rest", "snapshots", "zone-high-availability"},
+				},
+				{
+					id: "scratch", rawType: "file.googleapis.com/Instance", category: "storage.file",
+					capabilities: []string{"encryption-at-rest"},
+				},
 			},
 			sized: []sizeFact{
 				// An e2-standard-2 is 2 vCPU and 8192 MB, from compute machine-types list.
@@ -479,11 +658,35 @@ func inventoryGuides() []inventoryGuideCase {
 				// db-custom-2-7680 is 2 vCPU and 7680 MiB. A zonal instance is one
 				// instance.
 				{id: "shop-catalog-mysql", vcpus: 2, memoryGiB: 7.5, storageGiB: 20, count: 1},
+				// A Memorystore instance's memorySizeGb is the memory of each node,
+				// which holds the whole data set, and nodes are the instance's.
+				{id: "cache-ha", memoryGiB: 5, count: 2},
+				{id: "cache-basic", memoryGiB: 1, count: 1},
+				// An instance that lists no nodes names them through its replica
+				// count: one replica next to the primary is two nodes.
+				{id: "cache-alt", memoryGiB: 5, count: 2},
+				// A cluster's sizeGb is the whole cluster, and no page read says
+				// whether it counts replicas, so the program writes no memoryGiB
+				// rather than a number divided on a guess. Its nodes are its shards
+				// and their replicas.
+				{id: "sessions", count: 6, noMemoryGiB: true},
+				// A Valkey node's sizeGb is its own node's memory, and its shards
+				// times one plus their replicas are its nodes.
+				{id: "valkey-1", memoryGiB: 6.5, count: 1},
+				{id: "valkey-sessions", memoryGiB: 6.5, count: 4},
+				{id: "valkey-default", memoryGiB: 6.5, count: 4},
+				{id: "valkey-legacy", memoryGiB: 6.5, count: 1},
+				{id: "valkey-single", memoryGiB: 6.5, count: 2},
+				{id: "valkey-unspecified", memoryGiB: 6.5, count: 4},
+				// A Filestore instance's capacityGb is a string in the API's JSON.
+				{id: "shared", storageGiB: 1024},
+				{id: "scratch", storageGiB: 1024},
 			},
 			// An engine the program cannot classify gets no size at all, even
 			// though the sql instances list records the instance's disk and
-			// tier.
-			unsized: []string{"shop-reports-sqlserver"},
+			// tier. So does a Valkey instance the instances list does not hold: no
+			// call gives its shards, its replicas or its node's memory.
+			unsized: []string{"shop-reports-sqlserver", "valkey-archive"},
 			// A node pool's managed instance group, a node with its disk,
 			// labelled goog-gke-node, and the boot and data disks of the group's
 			// member: the group stands for its instances.
@@ -492,6 +695,47 @@ func inventoryGuides() []inventoryGuideCase {
 				"gke-shop-gke-default-pool-0a1b2c3d-x1y2",
 				"shop-web-mig-0abc",
 				"shop-web-mig-0abc-data",
+				// The backend services its URL maps name, and the service mesh's
+				// own: a mesh has no load balancer in front of its backends, so it
+				// is not one.
+				"shop-web-be",
+				"shop-api-be",
+				"shop-canary-be",
+				"shop-int-be",
+				"shop-legacy-be",
+				"shop-edge-be",
+				"shop-mesh-be",
+				// The error service a URL map links as its custom error page, at the
+				// URL map and at one of its path matchers: the URL map stands for it,
+				// as it does for the backends in its routes.
+				"shop-errors-be",
+				// A URL map that names only that mesh's services fronts no load
+				// balancer either: the mesh's backends are reached directly.
+				"shop-mesh-map",
+				// A load balancer's frontends, the forwarding rules and the target
+				// proxies they reach: the URL map, backend service or target pool
+				// behind them stands for the load balancer.
+				"shop-web-fr6",
+				"shop-legacy-fr6",
+				// A frontend of its own kind: the IPv6 forwarding rule and the
+				// target HTTP proxy it reaches.
+				"shop-edge-fr6",
+				"shop-dns-fr",
+				"shop-ntp-fr6",
+				"shop-syslog-fr",
+				"shop-web-proxy",
+				"shop-legacy-proxy",
+				"shop-edge-proxy",
+				// A repository that only pulls through from an upstream, and one
+				// that only aggregates others: neither stores an image of its own.
+				"upstream",
+				"mirror",
+				// A Filestore snapshot is a capability of its instance, as a
+				// compute snapshot is of its disk.
+				"daily",
+				// So is a Filestore backup: it belongs to its instance, which is
+				// the resource to move.
+				"shared-backup",
 			},
 		},
 		{
@@ -549,12 +793,11 @@ func inventoryGuides() []inventoryGuideCase {
 // taxonomyCategories returns the taxonomy categories the recorded fixtures of
 // source cover, unclassified aside, and nil for a source it does not know. Each
 // source has a list of its own, so a change to one source's guide adds only
-// that source's entries (PRD #552: GCP, for one, will have no
-// database.mongodb). They are written out because this package is black box
-// and imports no domain package (the e2e-is-black-box depguard rule), and
-// because a -update that dropped a mapping must not be able to hide itself: the
-// inventory is checked against this list, not against the golden file it was
-// written from.
+// that source's entries (PRD #552: GCP, for one, has no database.mongodb). They
+// are written out because this package is black box and imports no domain
+// package (the e2e-is-black-box depguard rule), and because a -update that
+// dropped a mapping must not be able to hide itself: the inventory is checked
+// against this list, not against the golden file it was written from.
 func taxonomyCategories(source string) []string {
 	switch source {
 	case "aws":
@@ -581,15 +824,21 @@ func taxonomyCategories(source string) []string {
 		}
 	case "gcp":
 		return []string{
+			"cache.redis",
 			"compute.baremetal",
 			"compute.vm",
-			"storage.block",
-			"storage.object",
-			"database.postgresql",
 			"database.mysql",
+			"database.postgresql",
 			"kubernetes.managed",
-			"serverless.function",
 			"messaging.queue",
+			"messaging.topic",
+			"network.loadbalancer",
+			"registry.container",
+			"serverless.container",
+			"serverless.function",
+			"storage.block",
+			"storage.file",
+			"storage.object",
 		}
 	case "azure":
 		return []string{

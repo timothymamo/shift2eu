@@ -1,0 +1,158 @@
+[
+  {
+    "name": "projects/example-project/locations/europe-west1/instances/cache-ha",
+    "tier": "STANDARD_HA",
+    "memorySizeGb": 5,
+    "replicaCount": 1,
+    "locationId": "europe-west1-b",
+    "alternativeLocationId": "europe-west1-c",
+    "nodes": [
+      {
+        "zone": "europe-west1-b"
+      },
+      {
+        "zone": "europe-west1-c"
+      }
+    ],
+    "persistenceConfig": {
+      "persistenceMode": "RDB"
+    }
+  },
+  {
+    "name": "projects/example-project/locations/europe-west1/instances/cache-basic",
+    "tier": "BASIC",
+    "memorySizeGb": 1,
+    "locationId": "europe-west1-b",
+    "nodes": [
+      {
+        "zone": "europe-west1-b"
+      }
+    ],
+    "persistenceConfig": {
+      "persistenceMode": "DISABLED"
+    }
+  },
+  {
+    "name": "projects/example-project/locations/europe-west1/instances/cache-alt",
+    "tier": "STANDARD_HA",
+    "memorySizeGb": 5,
+    "replicaCount": 1,
+    "locationId": "europe-west1-b",
+    "alternativeLocationId": "europe-west1-c",
+    "persistenceConfig": {
+      "persistenceMode": "DISABLED"
+    }
+  }
+]
+[
+  {
+    "name": "projects/example-project/locations/europe-west1/clusters/sessions",
+    "shardCount": 3,
+    "replicaCount": 1,
+    "nodeType": "REDIS_HIGHMEM_MEDIUM",
+    "sizeGb": 39,
+    "zoneDistributionConfig": {
+      "mode": "MULTI_ZONE"
+    },
+    "persistenceConfig": {
+      "mode": "DISABLED"
+    }
+  }
+]
+[
+  {
+    "name": "projects/example-project/locations/europe-west1/instances/valkey-1",
+    "mode": "CLUSTER_DISABLED",
+    "shardCount": 1,
+    "replicaCount": 0,
+    "nodeType": "STANDARD_SMALL",
+    "nodeConfig": {
+      "sizeGb": 6.5
+    },
+    "zoneDistributionConfig": {
+      "mode": "SINGLE_ZONE"
+    },
+    "persistenceConfig": {
+      "mode": "RDB"
+    }
+  },
+  {
+    "name": "projects/example-project/locations/europe-west1/instances/valkey-sessions",
+    "mode": "CLUSTER",
+    "shardCount": 2,
+    "replicaCount": 1,
+    "nodeType": "STANDARD_SMALL",
+    "nodeConfig": {
+      "sizeGb": 6.5
+    },
+    "zoneDistributionConfig": {
+      "mode": "MULTI_ZONE"
+    },
+    "persistenceConfig": {
+      "mode": "RDB"
+    }
+  },
+  {
+    "name": "projects/example-project/locations/europe-west1/instances/valkey-single",
+    "mode": "CLUSTER_DISABLED",
+    "shardCount": 1,
+    "replicaCount": 1,
+    "nodeType": "STANDARD_SMALL",
+    "nodeConfig": {
+      "sizeGb": 6.5
+    },
+    "zoneDistributionConfig": {
+      "mode": "SINGLE_ZONE"
+    },
+    "persistenceConfig": {
+      "mode": "DISABLED"
+    }
+  },
+  {
+    "name": "projects/example-project/locations/europe-west1/instances/valkey-default",
+    "shardCount": 2,
+    "replicaCount": 1,
+    "nodeType": "STANDARD_SMALL",
+    "nodeConfig": {
+      "sizeGb": 6.5
+    },
+    "zoneDistributionConfig": {
+      "mode": "MULTI_ZONE"
+    },
+    "persistenceConfig": {
+      "mode": "RDB"
+    }
+  },
+  {
+    "name": "projects/example-project/locations/europe-west1/instances/valkey-legacy",
+    "mode": "STANDALONE",
+    "shardCount": 1,
+    "replicaCount": 0,
+    "nodeType": "STANDARD_SMALL",
+    "nodeConfig": {
+      "sizeGb": 6.5
+    },
+    "zoneDistributionConfig": {
+      "mode": "SINGLE_ZONE"
+    },
+    "persistenceConfig": {
+      "mode": "RDB"
+    }
+  },
+  {
+    "name": "projects/example-project/locations/europe-west1/instances/valkey-unspecified",
+    "mode": "MODE_UNSPECIFIED",
+    "shardCount": 2,
+    "replicaCount": 1,
+    "nodeType": "STANDARD_SMALL",
+    "nodeConfig": {
+      "sizeGb": 6.5
+    },
+    "zoneDistributionConfig": {
+      "mode": "MULTI_ZONE"
+    },
+    "persistenceConfig": {
+      "mode": "RDB"
+    }
+  }
+]

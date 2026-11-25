@@ -1,6 +1,6 @@
 # PRD #552: More taxonomy categories
 
-**Status:** In progress, milestones 1, 2 and 5 done. The maintainer decided all eleven questions under *Decisions and
+**Status:** In progress, milestones 1, 2, 3 and 5 done. The maintainer decided all eleven questions under *Decisions and
 decided questions* on 2026-11-24, as recommended. Milestone 1's ADR is
 [0046](../docs/adr/0046-add-seven-taxonomy-categories-and-match-cache-plans-on-memory.md).
 **Issue:** #552
@@ -190,15 +190,20 @@ setting).
 | `storage.file` | `AWS::EFS::FileSystem` (*call*: `efs describe-file-systems` for size and settings) | `file.googleapis.com/Instance` (Filestore) | `Microsoft.Storage/storageAccounts/fileServices/shares` with protocol NFS (*call*: `az storage share-rm list`); a `FileStorage` account whose shares are listed is left out, as a Service Bus namespace is |
 
 Left out on the source side, as the guide leaves out an EKS cluster's nodes today: load balancers that
-a Kubernetes cluster created (AWS tag `elbv2.k8s.aws/cluster`, GCP `goog-gke-*` labels, everything in
-an AKS node resource group, which the guide already drops; milestone 2 found `kubernetes.io/cluster/<name>`
-documented by AWS on subnets only, so it is not used on load balancers), a GCP forwarding rule and target
-proxy (the frontends of a load balancer the URL map or backend service stands for), the parts and
-settings of a classified AWS resource that AWS Config records as types of their own (an ELBv2 listener,
-listener rule and target group, an EFS access point, an ECR registry policy, replication configuration,
-pull-through cache rule and repository creation template; `AWS::ECR::PublicRepository` stays `unclassified`), the member clusters of an ElastiCache replication group (the group stands for them), the member
-instances of a DocumentDB cluster (the cluster stands for them), and the Cloud Run service behind a 2nd
-gen Cloud Function (already dropped).
+a Kubernetes cluster created (AWS tag `elbv2.k8s.aws/cluster`, everything in an AKS node resource
+group, which the guide already drops; milestone 2 found `kubernetes.io/cluster/<name>` documented by
+AWS on subnets only, so it is not used on load balancers; GCP keeps them, as URL maps and backend
+services carry no labels, see *To be checked*), a GCP forwarding rule and target proxy (the frontends
+of a load balancer the URL map or backend service stands for), a GCP backend service of scheme
+`INTERNAL_SELF_MANAGED` (a service mesh) and a URL map naming only such services, Artifact Registry
+repositories of mode `REMOTE_REPOSITORY` or `VIRTUAL_REPOSITORY` (they store no image of their own),
+Filestore backups (they belong to their instance), the parts and settings of a classified AWS resource
+that AWS Config records as types of their own (an ELBv2 listener, listener rule and target group, an
+EFS access point, an ECR registry policy, replication configuration, pull-through cache rule and
+repository creation template; `AWS::ECR::PublicRepository` stays `unclassified`), the member clusters of
+an ElastiCache replication group (the group stands for them), the member instances of a DocumentDB
+cluster (the cluster stands for them), and the Cloud Run service behind a 2nd gen Cloud Function
+(already dropped).
 
 A DocumentDB cluster moves away from today's `AWS::RDS::DBInstance` on purpose. Every target sells
 MongoDB as a replica set of three nodes or more, one service; classified per instance, a three-instance
@@ -218,7 +223,7 @@ Capabilities the programs derive, from settings the calls above return:
 | `cache.redis` | `encryption-at-rest` | ElastiCache at-rest encryption on (a group's `StorageEncryptionType`, the effective state, not `AtRestEncryptionEnabled`), always on ElastiCache Serverless; always on Memorystore and Azure |
 | `database.mongodb` | as `database.*` today | DocumentDB, from the cluster's member instances: `point-in-time-restore` when every instance's `BackupRetentionPeriod` is above 0, `encryption-at-rest` when every instance's `StorageEncrypted` is true (no page says an instance reports its cluster's values), `read-replicas` and `node-high-availability` from two or more instances, `zone-high-availability` from instances in two or more `AvailabilityZone`s; Cosmos DB continuous backup for `point-in-time-restore`, `locations[].isZoneRedundant` true for `zone-high-availability` (not "more than one region", which is a regional replica, not zone redundancy; to be checked) |
 | `network.loadbalancer` | `zone-high-availability` | an ALB or NLB in two or more zones; a GCP regional load balancer, or a global one (anycast across regions; it maps onto a regional target load balancer, as a DNS or CDN service would, so only its zone redundancy within a region is claimed, never its reach across regions); an Azure Standard load balancer with a zone-redundant frontend, or an Application Gateway in two or more zones |
-| `network.loadbalancer` | `ipv6` | only where clients and backends are both reached over IPv6 (`ipv6` is inbound and outbound): an ALB or NLB with `IpAddressType` `dualstack` or `dualstack-without-public-ipv4` **and** a target group with `IpAddressType` `ipv6` (`describe-target-groups`); a GCP IPv6 forwarding rule whose backend service sends to IPv6 backends (`ipAddressSelectionPolicy` `IPV6_ONLY` or `PREFER_IPV6`; to be checked); an Azure IPv6 frontend with an IPv6 backend pool (to be checked). A load balancer with an IPv6 frontend only gets no `ipv6` |
+| `network.loadbalancer` | `ipv6` | only where clients and backends are both reached over IPv6 (`ipv6` is inbound and outbound): an ALB or NLB with `IpAddressType` `dualstack` or `dualstack-without-public-ipv4` **and** a target group with `IpAddressType` `ipv6` (`describe-target-groups`); a GCP IPv6 forwarding rule that names a passthrough backend service (scheme `EXTERNAL` or `INTERNAL`) in `backendService`, or that reaches a proxy-based load balancer whose backend service sends to IPv6 backends (`ipAddressSelectionPolicy` `IPV6_ONLY` or `PREFER_IPV6`; checked in milestone 3); an Azure IPv6 frontend with an IPv6 backend pool (to be checked). A load balancer with an IPv6 frontend only gets no `ipv6` |
 | `network.loadbalancer` | `udp` | an NLB with a listener of protocol `UDP`, `TCP_UDP`, `QUIC` or `TCP_QUIC` (`elbv2 describe-listeners`; QUIC runs over UDP); an Azure load balancer rule of protocol `Udp` or `All`; a GCP backend service of protocol `UDP`, or a forwarding rule of `IPProtocol` `UDP` (to a target pool or backend service; the forwarding rule is read, then dropped) |
 | `messaging.topic` | `encryption-at-rest` | SNS with a `KmsMasterKeyId` (`sns get-topic-attributes`); always on Pub/Sub and Service Bus |
 | `messaging.topic` | `dead-letter-queue` | never on SNS (milestone 2: a dead-letter queue is attached to a subscription, which no topic attribute says); per source, to be checked in milestones 3 (Pub/Sub) and 4 (Service Bus) (SNS and Pub/Sub set it per subscription, Service Bus subscriptions always have one) |
@@ -379,7 +384,8 @@ All criteria are pinned by tests that run offline under `make test` or `make tes
   listener or rule has `udp`.
 - [ ] An ElastiCache Memcached cluster, a MemoryDB cluster, a DynamoDB table, an RDS MariaDB instance and
   an Azure Files SMB share in the fixtures stay `unclassified` (MemoryDB and Memcached only when
-  collected); a load balancer a Kubernetes cluster created, a GCP forwarding rule, an ElastiCache group's
+  collected); a load balancer a Kubernetes cluster created (AWS, Azure; GCP keeps them, see *To be
+  checked*), a GCP forwarding rule, an ElastiCache group's
   member cluster and a DocumentDB cluster's member instance are not in the inventory.
 - [ ] Every new command in the guide only lists, describes or gets, and the AWS policy, GCP roles and
   Azure role in the guide cover it (*review*, and the existing `cloud-read-only` checks where they apply).
@@ -454,7 +460,7 @@ fit `none` with "no offering in the <target> catalog", which is already more pre
    `database.mongodb` cluster each; tables, recorded fixtures, the e2e golden and the AWS entries of the
    e2e category list updated. Depends on 1. Done on 2026-11-25 with the rules *To be checked*,
    Milestone 2 records.
-3. [ ] **GCP classification in the guide.** The asset types of the GCP column, Pub/Sub topics moved to
+3. [x] **GCP classification in the guide.** The asset types of the GCP column, Pub/Sub topics moved to
    `messaging.topic`, Cloud Run services to `serverless.container`, the calls for Memorystore sizes, URL
    maps, backend services and forwarding rules (read for protocol and IPv6, then dropped), Artifact
    Registry formats and Filestore capacity, with the roles they need; fixtures, golden and the GCP entries
@@ -725,6 +731,85 @@ text as the decision)
   the `gcloud redis` and `memorystore` list calls and their fields; the backend service field that says
   it sends to IPv6 backends (`ipAddressSelectionPolicy`) and the protocol fields that say UDP; the
   Pub/Sub rule for a topic's `dead-letter-queue` (a dead-letter topic is set per subscription).
+  Checked on 2026-11-25 (public documentation, read-only; the `cloud.google.com` URLs now redirect to
+  `docs.cloud.google.com`):
+  - One load balancer: confirmed. `ForwardingRule` and `BackendService` return both scopes in search,
+    `GlobalForwardingRule` and `RegionBackendService` are not in it
+    (<https://docs.cloud.google.com/asset-inventory/docs/supported-asset-types>); the `url-maps`,
+    `backend-services`, `forwarding-rules`, `target-https-proxies` and `target-http-proxies` lists give
+    global and every region's by default, `target-pools` every region's
+    (<https://docs.cloud.google.com/sdk/gcloud/reference/compute/url-maps/list> and the sibling
+    pages); a target proxy's `urlMap`
+    (<https://docs.cloud.google.com/compute/docs/reference/rest/v1/targetHttpsProxies>,
+    <https://docs.cloud.google.com/compute/docs/reference/rest/v1/targetHttpProxies>). Not confirmed,
+    and so the rule does not rest on it: that search returns regional URL maps (no `RegionUrlMap` row),
+    so the load balancers come from the compute lists and their asset rows are dropped. Decided: a
+    backend service of scheme `INTERNAL_SELF_MANAGED` (a service mesh) is left out, and so is a URL
+    map naming only such services. Not confirmed, and left out: a rule for the load balancers a GKE
+    cluster created (URL maps and backend services carry no labels, the `k8s-` prefixes appear only in
+    examples), so they are kept and the guide says so; the default scope of the TCP, SSL and gRPC proxy
+    lists, which the guide does not call; the zone redundancy of each load balancer type, where the
+    PRD's own rule stands.
+  - Memorystore zone placement: confirmed. A Redis instance's `nodes[].zone` and
+    `alternativeLocationId`
+    (<https://docs.cloud.google.com/memorystore/docs/redis/reference/rest/v1/projects.locations.instances>,
+    <https://docs.cloud.google.com/memorystore/docs/redis/redis-tiers>), and for a Redis cluster and
+    Valkey `zoneDistributionConfig.mode`, "Defaults to MULTI_ZONE", with one replica per shard needed
+    for high availability
+    (<https://docs.cloud.google.com/memorystore/docs/cluster/ha-and-replicas>,
+    <https://docs.cloud.google.com/memorystore/docs/valkey/ha-and-replicas>). Not confirmed, and left
+    out: that a `STANDARD_HA` instance always has its replica in another zone, so its placement
+    decides: listed nodes in two or more zones, or an `alternativeLocationId` other than its
+    `locationId`, either one is enough.
+  - The `gcloud redis` and `memorystore` list calls and fields: confirmed
+    (<https://docs.cloud.google.com/sdk/gcloud/reference/redis/instances/list>,
+    <https://docs.cloud.google.com/sdk/gcloud/reference/redis/clusters/list>,
+    <https://docs.cloud.google.com/sdk/gcloud/reference/memorystore/instances/list>, and the REST
+    pages above: `memorySizeGb`, `shardCount`, `replicaCount`, `nodeConfig.sizeGb`, `mode`,
+    `persistenceConfig`). Not confirmed, and left out: an "all regions" value for the gcloud calls (the
+    guide loops over the regions the asset listing names); the API spelling of `nodeType`, and whether
+    a Redis cluster's `sizeGb` counts replicas, so a Redis cluster gets a `count` and no `memoryGiB`.
+  - Memorystore for Valkey's default mode: confirmed, Cluster Mode Enabled
+    (<https://docs.cloud.google.com/memorystore/docs/valkey/create-instances>,
+    <https://docs.cloud.google.com/memorystore/docs/valkey/configure-instances>), and `STANDALONE` is
+    the deprecated spelling of `CLUSTER_DISABLED`; so a listed instance gets `sharding` unless its
+    `mode` is `CLUSTER_DISABLED` or `STANDALONE`, and one with no list data gets none. Not confirmed:
+    whether a list response omits `mode` (or gives `MODE_UNSPECIFIED`) for an instance created without
+    it.
+  - IPv6 backends and UDP: confirmed. `ipAddressSelectionPolicy` `IPV6_ONLY` and `PREFER_IPV6`
+    (`IPV4_ONLY` the default), a backend service's `protocol` `UDP`, a forwarding rule's `IPProtocol`
+    and `ipVersion`, and a target pool has no protocol
+    (<https://docs.cloud.google.com/compute/docs/reference/rest/v1/backendServices>,
+    <https://docs.cloud.google.com/compute/docs/reference/rest/v1/forwardingRules>,
+    <https://docs.cloud.google.com/compute/docs/reference/rest/v1/targetPools>). Not confirmed, and left
+    out: that `L3_DEFAULT` forwards UDP, so it does not count as `udp` and the guide says so.
+    Corrected on 2026-11-25 (PR #591's review): `ipAddressSelectionPolicy` is documented only for
+    proxy-based load balancers, "a preference for traffic sent from the proxy to the backend", for
+    schemes `EXTERNAL_MANAGED`, `INTERNAL_MANAGED` and `INTERNAL_SELF_MANAGED`
+    (<https://docs.cloud.google.com/compute/docs/reference/rest/v1/backendServices>); an external
+    passthrough Network Load Balancer serves IPv6 through an IPv6 forwarding rule to backends with
+    `stack-type` `IPV4_IPV6` or `IPV6_ONLY`
+    (<https://docs.cloud.google.com/load-balancing/docs/network/networklb-backend-service>), and so
+    does an internal one (<https://docs.cloud.google.com/load-balancing/docs/internal>), neither naming
+    a selection policy. So a backend service of scheme `EXTERNAL` or `INTERNAL` that an IPv6 forwarding
+    rule names in `backendService` gets `ipv6`; proxy-based load balancers keep the policy rule. A
+    target pool "support[s] only IPv4 traffic"
+    (<https://docs.cloud.google.com/load-balancing/docs/network/networklb-target-pools>), so it gets
+    none. Not confirmed, and left out: that the backends are in fact dual-stack (the forwarding rule
+    can point only at dual-stack or IPv6-only backends, so the program does not read the instances'
+    `stackType`).
+  - Pub/Sub `dead-letter-queue`: confirmed per subscription, "You configure a dead-letter topic on a
+    subscription, not on the topic it pulls from"
+    (<https://docs.cloud.google.com/pubsub/docs/handling-failures>), so a topic gets none and its
+    subscription keeps it; a topic gets `encryption-at-rest`
+    (<https://docs.cloud.google.com/pubsub/docs/encryption>).
+  - Also checked: the Cloud Run service behind a 2nd gen function is the one its
+    `serviceConfig.service` names
+    (<https://docs.cloud.google.com/functions/docs/reference/rest/v2/projects.locations.functions>),
+    confirmed; the label `goog-managed-by: cloudfunctions` the guide relied on is documented nowhere,
+    so the program no longer reads it. `roles/artifactregistry.reader` can also download artifacts
+    (<https://docs.cloud.google.com/iam/docs/roles-permissions/artifactregistry>), which the guide
+    says next to the role.
 - Milestone 4: whether Resource Graph lists file shares and NFS protocol, and whether `Reader` covers
   `az storage share-rm list` and `az servicebus topic subscription list`; the `Microsoft.Web/sites` kind
   values; Cosmos DB settings for point-in-time restore and `locations[].isZoneRedundant`; what makes an
