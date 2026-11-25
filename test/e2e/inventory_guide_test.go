@@ -785,9 +785,9 @@ func inventoryGuides() []inventoryGuideCase {
 				{id: "redis-shop-enterprise", rawType: "Microsoft.Cache/redisEnterprise", category: "cache.redis", capabilities: []string{"encryption-at-rest", "node-high-availability", "zone-high-availability"}},
 				// A legacy Enterprise cluster in no zone is node redundant all the same:
 				// an Enterprise-tier cache always runs on a cluster of three nodes by
-				// default (always an odd number), and every partition's primary has a replica on another data
-				// node, so only the zones it does not name cost it
-				// zone-high-availability.
+				// default (always an odd number), and every partition's primary has a
+				// replica on another data node, so only the zones it does not name
+				// cost it zone-high-availability.
 				{id: "redis-shop-enterprise-nozone", rawType: "Microsoft.Cache/redisEnterprise", category: "cache.redis", capabilities: []string{"encryption-at-rest", "node-high-availability"}},
 				// Azure Managed Redis: a primary and a replica, zone redundant, and
 				// clustered and persisted as its database says.

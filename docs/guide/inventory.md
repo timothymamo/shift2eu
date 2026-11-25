@@ -91,9 +91,10 @@ resource that fits none of these categories is `unclassified` and keeps its `raw
 up in the report as a blocker on every target, instead of disappearing from the assessment. The
 programs below classify into the seven categories ADR 0046 adds, on every source that has such a
 service: AWS and Azure into all seven, GCP into all but `database.mongodb` (its program classifies no
-GCP service as one; Firestore stays `unclassified`, PRD #552); each source's *classification* table names the types. They do not classify into the two
-ADR 0047 adds yet: an OpenSearch domain or a Kafka cluster is listed as `unclassified`, or not at all,
-so set its category (`search.opensearch` or `messaging.kafka`) by hand.
+GCP service as one; Firestore stays `unclassified`, PRD #552); each source's *classification* table
+names the types. They do not classify into the two ADR 0047 adds yet: an OpenSearch domain or a Kafka
+cluster is listed as `unclassified`, or not at all, so set its category (`search.opensearch` or
+`messaging.kafka`) by hand.
 
 The **capabilities** are features a resource depends on:
 
@@ -1195,12 +1196,11 @@ September 2028, its Enterprise and Enterprise Flash tiers on 31 March 2027 (Micr
 *Frequently asked questions on the retirement of Azure Cache for Redis*). A cluster in those legacy
 tiers (an `Enterprise_*` or `EnterpriseFlash_*` SKU) is always `node-high-availability`, with or
 without `zones`: it runs on a Redis Enterprise cluster of three nodes by default (always an odd
-number) that never puts a
-partition's primary and replica on the same node (Microsoft Learn, *High availability for Azure Cache
-for Redis*, Enterprise and Enterprise Flash tiers); two or more `zones` decide only its
-`zone-high-availability`. The `zones` rule holds only for those legacy tiers:
-an Azure Managed Redis cluster reads its `highAvailability` and `redundancyMode`, whatever its
-`zones`. Redis modules of an Azure Managed Redis cluster are no capability.
+number) that never puts a partition's primary and replica on the same node (Microsoft Learn, *High
+availability for Azure Cache for Redis*, Enterprise and Enterprise Flash tiers); two or more `zones`
+decide only its `zone-high-availability`. The `zones` rule holds only for those legacy tiers: an Azure
+Managed Redis cluster reads its `highAvailability` and `redundancyMode`, whatever its `zones`. Redis
+modules of an Azure Managed Redis cluster are no capability.
 
 Left out: virtual machines of a scale set, their OS disks (`storageProfile.osDisk`) and their data
 disks created with `deleteOption: Delete` (the scale set stands for them), snapshots and autoscale

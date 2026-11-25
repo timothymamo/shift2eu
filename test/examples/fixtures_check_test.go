@@ -803,13 +803,10 @@ func publicOwner(owner string) bool {
 // import: a maximal run of ASCII letters, digits, "." and "-" that neither
 // starts nor ends with "." or "-", is exactly microsoft.<label> in any case
 // (two labels, the second not empty) and has "/" directly after it, as in
-// Microsoft.App/containerApps, names a kind of resource, never a host, unless
-// a non-ASCII byte comes right before it (the tail of a Unicode host,
-// https://shopémicrosoft.app/orders) or "//" does (a URL's host,
-// https://microsoft.app/orders, //Microsoft.corp/wiki); a single "/" before
-// it, as in /providers/Microsoft.App/containerApps, keeps it a namespace.
-// shop-corp.app, a bare microsoft.app, shop.microsoft.app/x and
-// xmicrosoft.app/x stay host names (issue #610).
+// Microsoft.App/containerApps, names a kind of resource, never a host, when
+// the byte right before it is on an allow list (namespaceMayFollow, issue
+// #610). shop-corp.app, a bare microsoft.app, shop.microsoft.app/x and
+// xmicrosoft.app/x stay host names.
 func maskAzureNamespaces(text string) string {
 	inRun := func(c byte) bool {
 		return 'a' <= c && c <= 'z' || 'A' <= c && c <= 'Z' || '0' <= c && c <= '9' || c == '.' || c == '-'
@@ -834,7 +831,7 @@ func maskAzureNamespaces(text string) string {
 
 		if ok && end < len(text) && text[end] == '/' && run == strings.Trim(run, ".-") &&
 			namespace != "" && !strings.Contains(namespace, ".") &&
-			(start == 0 || text[start-1] < 0x80) && !strings.HasSuffix(text[:start], "//") {
+			namespaceMayFollow(text[:start]) {
 			for i := start; i < end; i++ {
 				masked[i] = 'x'
 			}
@@ -844,6 +841,41 @@ func maskAzureNamespaces(text string) string {
 	}
 
 	return string(masked)
+}
+
+// namespaceMayFollow reports whether before, the text before an Azure provider
+// namespace, lets it be one, mirroring the AI reviewer's namespaceMayFollow
+// (ci/aireview/internal/review/scan.go) for a whole text rather than a line:
+// the namespace may start the text or a line ("\n" right before it), or follow
+// a delimiter it is written after in code, JSON, YAML and Markdown: a quote (",
+// ', `), a space or a tab, "=" (a flag or a key), "|" (a table cell), "(" or
+// "[" (a call or a list) and "," (a list's next item); or a single "/" that
+// does not itself follow "/", "\" or ":", the separator of an ARM resource id
+// (/providers/Microsoft.App/containerApps). Everything else keeps the run a
+// host name: a non-ASCII byte (the tail of a Unicode host,
+// https://shopémicrosoft.app/orders), "//" or ":/" (a URL's host,
+// https://microsoft.app/orders, http:/microsoft.corp/x), "\" (a UNC or a
+// mistyped authority, \\Microsoft.corp/share) and "@" (a URL's userinfo,
+// https://svc-user@microsoft.corp/share).
+func namespaceMayFollow(before string) bool {
+	if before == "" {
+		return true
+	}
+
+	switch before[len(before)-1] {
+	case '\n', '"', '\'', '`', ' ', '\t', '=', '|', '(', '[', ',':
+		return true
+	case '/':
+		if len(before) == 1 {
+			return true
+		}
+
+		prev := before[len(before)-2]
+
+		return prev != '/' && prev != '\\' && prev != ':'
+	default:
+		return false
+	}
 }
 
 // lastLabel returns the label after the last dot of name.
