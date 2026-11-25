@@ -746,7 +746,10 @@ time, as a `serverless.container` (`roles/cloudfunctions.viewer`). With URL maps
 target pools, check `compute-url-maps.json`, `compute-backend-services.json`,
 `compute-forwarding-rules.json` and `compute-target-pools.json`: load balancers come only from these
 lists, so a failed one leaves every load balancer out of the inventory, with nothing in its place
-(`roles/compute.viewer`).
+(`roles/compute.viewer`). A failed `compute-target-https-proxies.json` or
+`compute-target-http-proxies.json` leaves the load balancers in, but without the `ipv6` or `udp`
+their forwarding rules prove (`roles/compute.viewer`). A failed Valkey list in `memorystore.json`
+leaves every Valkey instance without `sharding` and without its size (`roles/memorystore.viewer`).
 
 The `--format` projections keep only what the program reads: an instance's metadata keys, for
 example, but not their values, which hold startup scripts and SSH keys, and of its disks only the
@@ -885,7 +888,7 @@ which belong to their instance.
 | `cache.redis` (Redis instance) | `snapshots` | `persistenceConfig.persistenceMode` is `RDB` |
 | `cache.redis` (Redis cluster, Valkey) | `node-high-availability` | `replicaCount` is 1 or more |
 | `cache.redis` (Redis cluster, Valkey) | `zone-high-availability` | `replicaCount` is 1 or more and `zoneDistributionConfig.mode` is not `SINGLE_ZONE` (absent means `MULTI_ZONE`) |
-| `cache.redis` (Redis cluster, Valkey) | `sharding` | always for a Redis cluster; a listed Valkey instance unless its `mode` is `CLUSTER_DISABLED` or `STANDALONE` (the deprecated spelling of `CLUSTER_DISABLED`; absent means `CLUSTER`) |
+| `cache.redis` (Redis cluster, Valkey) | `sharding` | always for a Redis cluster; a listed Valkey instance unless its `mode` is `CLUSTER_DISABLED` or its deprecated spelling `STANDALONE` (absent or `MODE_UNSPECIFIED` means `CLUSTER`) |
 | `cache.redis` (Redis cluster, Valkey) | `snapshots` | `persistenceConfig.mode` is `RDB` (an AOF log is not a snapshot) |
 | `network.loadbalancer` | `zone-high-availability` | always: every GCP load balancer is regional or global, and a global one counts only for its zone redundancy within a region |
 | `network.loadbalancer` | `udp` | one of its backend services has `protocol` `UDP`, or a forwarding rule of `IPProtocol` `UDP` reaches it |

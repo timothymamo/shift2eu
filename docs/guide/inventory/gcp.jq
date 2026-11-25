@@ -329,8 +329,8 @@ def reaches($proxies):
         # takes over, and with one the cluster survives a zone unless all of it
         # is in one zone (MULTI_ZONE is the default). A Redis cluster is
         # sharded; a listed Valkey instance is unless its mode is
-        # CLUSTER_DISABLED or STANDALONE (the deprecated spelling of
-        # CLUSTER_DISABLED): an unset mode defaults to CLUSTER.
+        # CLUSTER_DISABLED or its deprecated spelling STANDALONE; an unset or
+        # MODE_UNSPECIFIED mode means CLUSTER.
         (.assetType == "redis.googleapis.com/Cluster") as $cluster
         | (if $cluster then $redisclusters[$key] else $valkey[$key] end) as $d
         | (($d.replicaCount? // 0) >= 1) as $replicas
