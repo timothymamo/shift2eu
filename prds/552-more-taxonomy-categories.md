@@ -1,6 +1,6 @@
 # PRD #552: More taxonomy categories
 
-**Status:** In progress, milestone 1 done. The maintainer decided all eleven questions under *Decisions and
+**Status:** In progress, milestones 1 and 2 done. The maintainer decided all eleven questions under *Decisions and
 decided questions* on 2026-11-24, as recommended. Milestone 1's ADR is
 [0046](../docs/adr/0046-add-seven-taxonomy-categories-and-match-cache-plans-on-memory.md).
 **Issue:** #552
@@ -177,7 +177,7 @@ setting).
 |---|---|---|---|
 | `cache.redis` | `AWS::ElastiCache::ReplicationGroup`, and `AWS::ElastiCache::CacheCluster` not in a group, engine `redis` or `valkey` (*call*: `elasticache describe-replication-groups`, `describe-cache-clusters`); `AWS::ElastiCache::ServerlessCache`, engine `redis` or `valkey` (*call*: `describe-serverless-caches`) | `redis.googleapis.com/Instance`, `redis.googleapis.com/Cluster`, `memorystore.googleapis.com/Instance` | `Microsoft.Cache/redis`, `Microsoft.Cache/redisEnterprise` |
 | `database.mongodb` | `AWS::DocDB::DBCluster`, one resource per DocumentDB cluster: the `rds describe-db-instances` entries with engine `docdb` (*call*, already made, no new one), grouped by `DBClusterIdentifier`; the member instances are dropped, as an ElastiCache group's member clusters are | none (GCP runs no managed MongoDB) | `Microsoft.DocumentDB/databaseAccounts`, kind `MongoDB`; `Microsoft.DocumentDB/mongoClusters` |
-| `network.loadbalancer` | `AWS::ElasticLoadBalancingV2::LoadBalancer`, type `application` or `network` (*call*: `elbv2 describe-load-balancers`, and for `udp` and `ipv6` `describe-listeners` and `describe-target-groups`); `AWS::ElasticLoadBalancing::LoadBalancer` | `compute.googleapis.com/UrlMap`; `compute.googleapis.com/BackendService` that no URL map names; `compute.googleapis.com/TargetPool` (*call*: `compute url-maps list`, `backend-services list`) | `Microsoft.Network/loadBalancers`, SKU `Standard` or `Basic`; `Microsoft.Network/applicationGateways` |
+| `network.loadbalancer` | `AWS::ElasticLoadBalancingV2::LoadBalancer`, type `application` or `network` (*call*: `elbv2 describe-load-balancers`, and for `udp` and `ipv6` `describe-listeners` and `describe-target-groups`, and `describe-tags` for the Kubernetes tag); `AWS::ElasticLoadBalancing::LoadBalancer` (*call*: `elb describe-load-balancers`, for its zones); AWS Config's `AWS::ElasticLoadBalancingV2::Listener`, `::ListenerRule` and `::TargetGroup` are parts of the load balancer and dropped (milestone 2) | `compute.googleapis.com/UrlMap`; `compute.googleapis.com/BackendService` that no URL map names; `compute.googleapis.com/TargetPool` (*call*: `compute url-maps list`, `backend-services list`) | `Microsoft.Network/loadBalancers`, SKU `Standard` or `Basic`; `Microsoft.Network/applicationGateways` |
 | `messaging.topic` | `AWS::SNS::Topic` (*call*: `sns list-topics` and `sns get-topic-attributes` for `KmsMasterKeyId`; the guide's `select-resource-config` selects no configuration, and Config lists topics only where the optional recorder runs) | `pubsub.googleapis.com/Topic` (today `messaging.queue`) | `Microsoft.ServiceBus/namespaces/topics` (today `unclassified`) |
 | `messaging.queue` (moved or new rows only) | | `pubsub.googleapis.com/Subscription` (unchanged) | `Microsoft.ServiceBus/namespaces/topics/subscriptions` (*call*: `az servicebus topic subscription list`, per topic, as the guide's `topic list` loop already runs; Resource Graph lists neither topics nor subscriptions, which is why the guide calls `az servicebus` today) |
 | `serverless.container` | `AWS::AppRunner::Service` (AWS Config alone: the category carries no capability, so the type is enough) | `run.googleapis.com/Service` not backing a 2nd gen Cloud Function (today `unclassified`) | `Microsoft.App/containerApps` |
@@ -185,10 +185,13 @@ setting).
 | `storage.file` | `AWS::EFS::FileSystem` (*call*: `efs describe-file-systems` for size and settings) | `file.googleapis.com/Instance` (Filestore) | `Microsoft.Storage/storageAccounts/fileServices/shares` with protocol NFS (*call*: `az storage share-rm list`); a `FileStorage` account whose shares are listed is left out, as a Service Bus namespace is |
 
 Left out on the source side, as the guide leaves out an EKS cluster's nodes today: load balancers that
-a Kubernetes cluster created (AWS tags `elbv2.k8s.aws/cluster` or `kubernetes.io/cluster/<name>`, GCP
-`goog-gke-*` labels, everything in an AKS node resource group, which the guide already drops), a GCP
-forwarding rule and target proxy (the frontends of a load balancer the URL map or backend service stands
-for), the member clusters of an ElastiCache replication group (the group stands for them), the member
+a Kubernetes cluster created (AWS tag `elbv2.k8s.aws/cluster`, GCP `goog-gke-*` labels, everything in
+an AKS node resource group, which the guide already drops; milestone 2 found `kubernetes.io/cluster/<name>`
+documented by AWS on subnets only, so it is not used on load balancers), a GCP forwarding rule and target
+proxy (the frontends of a load balancer the URL map or backend service stands for), the parts and
+settings of a classified AWS resource that AWS Config records as types of their own (an ELBv2 listener,
+listener rule and target group, an EFS access point, an ECR registry policy, replication configuration
+and pull-through cache rule; `AWS::ECR::PublicRepository` stays `unclassified`), the member clusters of an ElastiCache replication group (the group stands for them), the member
 instances of a DocumentDB cluster (the cluster stands for them), and the Cloud Run service behind a 2nd
 gen Cloud Function (already dropped).
 
@@ -203,17 +206,17 @@ Capabilities the programs derive, from settings the calls above return:
 
 | Category | Capability | When (examples; each milestone pins the exact rule) |
 |---|---|---|
-| `cache.redis` | `node-high-availability` | ElastiCache automatic failover on; Memorystore tier `STANDARD_HA` or a cluster with replicas; Azure Standard or Premium tier |
-| `cache.redis` | `zone-high-availability` | ElastiCache Multi-AZ on; Azure zones set on a Premium cache; Memorystore per its placement (to be checked) |
-| `cache.redis` | `sharding` | ElastiCache cluster mode on; `redis.googleapis.com/Cluster` or a sharded Valkey instance; Azure Premium with `shardCount`, or Azure Managed Redis in cluster policy `OSSCluster` |
+| `cache.redis` | `node-high-availability` | ElastiCache automatic failover on with a replica (more member clusters than shards; failover alone is not enough, a cluster-mode group must enable it with no replica), always on ElastiCache Serverless; Memorystore tier `STANDARD_HA` or a cluster with replicas; Azure Standard or Premium tier |
+| `cache.redis` | `zone-high-availability` | ElastiCache Multi-AZ on, always on ElastiCache Serverless (three zones); Azure zones set on a Premium cache; Memorystore per its placement (to be checked) |
+| `cache.redis` | `sharding` | ElastiCache cluster mode on (`ClusterEnabled`), always on ElastiCache Serverless (cluster mode only); `redis.googleapis.com/Cluster` or a sharded Valkey instance; Azure Premium with `shardCount`, or Azure Managed Redis in cluster policy `OSSCluster` |
 | `cache.redis` | `snapshots` | ElastiCache snapshot retention above 0; Azure Premium RDB persistence; Memorystore RDB persistence |
-| `cache.redis` | `encryption-at-rest` | ElastiCache at-rest encryption on; always on Memorystore and Azure |
-| `database.mongodb` | as `database.*` today | DocumentDB, from the cluster's member instances: `point-in-time-restore` from `BackupRetentionPeriod` above 0, `encryption-at-rest` from `StorageEncrypted`, `read-replicas` and `node-high-availability` from two or more instances, `zone-high-availability` from instances in two or more `AvailabilityZone`s; Cosmos DB continuous backup for `point-in-time-restore`, `locations[].isZoneRedundant` true for `zone-high-availability` (not "more than one region", which is a regional replica, not zone redundancy; to be checked) |
+| `cache.redis` | `encryption-at-rest` | ElastiCache at-rest encryption on (a group's `StorageEncryptionType`, the effective state, not `AtRestEncryptionEnabled`), always on ElastiCache Serverless; always on Memorystore and Azure |
+| `database.mongodb` | as `database.*` today | DocumentDB, from the cluster's member instances: `point-in-time-restore` when every instance's `BackupRetentionPeriod` is above 0, `encryption-at-rest` when every instance's `StorageEncrypted` is true (no page says an instance reports its cluster's values), `read-replicas` and `node-high-availability` from two or more instances, `zone-high-availability` from instances in two or more `AvailabilityZone`s; Cosmos DB continuous backup for `point-in-time-restore`, `locations[].isZoneRedundant` true for `zone-high-availability` (not "more than one region", which is a regional replica, not zone redundancy; to be checked) |
 | `network.loadbalancer` | `zone-high-availability` | an ALB or NLB in two or more zones; a GCP regional load balancer, or a global one (anycast across regions; it maps onto a regional target load balancer, as a DNS or CDN service would, so only its zone redundancy within a region is claimed, never its reach across regions); an Azure Standard load balancer with a zone-redundant frontend, or an Application Gateway in two or more zones |
 | `network.loadbalancer` | `ipv6` | only where clients and backends are both reached over IPv6 (`ipv6` is inbound and outbound): an ALB or NLB with `IpAddressType` `dualstack` or `dualstack-without-public-ipv4` **and** a target group with `IpAddressType` `ipv6` (`describe-target-groups`); a GCP IPv6 forwarding rule whose backend service sends to IPv6 backends (`ipAddressSelectionPolicy` `IPV6_ONLY` or `PREFER_IPV6`; to be checked); an Azure IPv6 frontend with an IPv6 backend pool (to be checked). A load balancer with an IPv6 frontend only gets no `ipv6` |
-| `network.loadbalancer` | `udp` | an NLB with a listener of protocol `UDP` or `TCP_UDP` (`elbv2 describe-listeners`); an Azure load balancer rule of protocol `Udp` or `All`; a GCP backend service of protocol `UDP`, or a forwarding rule of `IPProtocol` `UDP` (to a target pool or backend service; the forwarding rule is read, then dropped) |
+| `network.loadbalancer` | `udp` | an NLB with a listener of protocol `UDP`, `TCP_UDP`, `QUIC` or `TCP_QUIC` (`elbv2 describe-listeners`; QUIC runs over UDP); an Azure load balancer rule of protocol `Udp` or `All`; a GCP backend service of protocol `UDP`, or a forwarding rule of `IPProtocol` `UDP` (to a target pool or backend service; the forwarding rule is read, then dropped) |
 | `messaging.topic` | `encryption-at-rest` | SNS with a `KmsMasterKeyId` (`sns get-topic-attributes`); always on Pub/Sub and Service Bus |
-| `messaging.topic` | `dead-letter-queue` | per source, to be checked in milestones 2 (SNS), 3 (Pub/Sub) and 4 (Service Bus) (SNS and Pub/Sub set it per subscription, Service Bus subscriptions always have one) |
+| `messaging.topic` | `dead-letter-queue` | never on SNS (milestone 2: a dead-letter queue is attached to a subscription, which no topic attribute says); per source, to be checked in milestones 3 (Pub/Sub) and 4 (Service Bus) (SNS and Pub/Sub set it per subscription, Service Bus subscriptions always have one) |
 | `messaging.queue` | `dead-letter-queue` | a Service Bus topic subscription: always, as a Service Bus queue today |
 | `registry.container` | `encryption-at-rest` | always: ECR, Artifact Registry and Azure Container Registry encrypt images at rest |
 | `storage.file` | `encryption-at-rest` | EFS `Encrypted`; always on Filestore and Azure Files |
@@ -235,7 +238,8 @@ Capabilities the programs derive, from settings the calls above return:
 | `registry.container` | none | not estimated: not priced | OVHcloud sells plans with included storage, Scaleway prices stored GB; one method would misprice one of them (decided question 6) |
 
 Sizes the guide's programs fill in: a Memorystore instance's `memorySizeGb`, a node count where the
-call gives it, an EFS file system's `SizeInBytes`, a Filestore share's `capacityGb`, an Azure share's
+call gives it, an EFS file system's `SizeInBytes` (its metered size: EFS has no provisioned size, and
+the guide says so), a Filestore share's `capacityGb`, an Azure share's
 `shareQuota`, and a DocumentDB cluster's `count` from its instances (no `storageGiB`: its storage is the
 cluster volume, which `AllocatedStorage` does not describe, as for Aurora today). ElastiCache, Azure Cache
 and DocumentDB name a node type or instance class, not a memory size; the guide says to add `memoryGiB`
@@ -363,7 +367,7 @@ All criteria are pinned by tests that run offline under `make test` or `make tes
   Service Bus topic is `messaging.topic` and its subscription is `messaging.queue` with
   `dead-letter-queue`; a Cloud Run service that is not behind a Cloud Function is
   `serverless.container`.
-- [ ] A DocumentDB cluster of three instances is one `database.mongodb` resource, `rawType`
+- [x] A DocumentDB cluster of three instances is one `database.mongodb` resource, `rawType`
   `AWS::DocDB::DBCluster`, `count` 3; its instances are not in the inventory.
 - [ ] A load balancer with an IPv6 frontend and IPv4 backends only has no `ipv6`; one with a UDP
   listener or rule has `udp`.
@@ -432,16 +436,18 @@ fit `none` with "no offering in the <target> catalog", which is already more pre
    [ADR 0046](../docs/adr/0046-add-seven-taxonomy-categories-and-match-cache-plans-on-memory.md) makes a
    plan's `vcpus` optional on a `cache.redis`-only offering and names the new reason
    `estimate.NeverPriced`.
-2. [ ] **AWS classification in the guide.** New read-only calls for ElastiCache (replication groups,
+2. [x] **AWS classification in the guide.** New read-only calls for ElastiCache (replication groups,
    cache clusters, serverless caches), ELBv2 (`describe-load-balancers`, `describe-listeners`,
-   `describe-target-groups`), EFS and SNS (`list-topics`, `get-topic-attributes`), with their IAM actions
+   `describe-target-groups`, and `describe-tags` for the Kubernetes tag, with
+   `elasticloadbalancing:DescribeTags`), Classic ELB (`elb describe-load-balancers`), EFS and SNS (`list-topics`, `get-topic-attributes`), with their IAM actions
    (`elasticloadbalancing:DescribeLoadBalancers`, `elasticloadbalancing:DescribeListeners`,
    `elasticloadbalancing:DescribeTargetGroups`, `sns:ListTopics`, `sns:GetTopicAttributes` and the
    ElastiCache and EFS describe actions) in the guide's policy; App Runner and ECR need none, AWS Config's
    type is enough; `aws.jq` classifies the AWS column of *How the sources classify* and drops what is
    left out; DocumentDB instances from the existing `rds describe-db-instances` become one
    `database.mongodb` cluster each; tables, recorded fixtures, the e2e golden and the AWS entries of the
-   e2e category list updated. Depends on 1.
+   e2e category list updated. Depends on 1. Done on 2026-11-25 with the rules *To be checked*,
+   Milestone 2 records.
 3. [ ] **GCP classification in the guide.** The asset types of the GCP column, Pub/Sub topics moved to
    `messaging.topic`, Cloud Run services to `serverless.container`, the calls for Memorystore sizes, URL
    maps, backend services and forwarding rules (read for protocol and IPv6, then dropped), Artifact
@@ -644,6 +650,61 @@ text as the decision)
   that `TCP_UDP` and `UDP` are the NLB listener protocols that carry UDP, and whether NLB `QUIC`/`TCP_QUIC`
   listeners count as UDP; that a target group's `IpAddressType` `ipv6` is what sends to IPv6 targets;
   the SNS rule for a topic's `dead-letter-queue` (a redrive policy is set per subscription).
+  Checked on 2026-11-25 (public AWS documentation, read-only, no AWS call):
+  - DocumentDB: `rds describe-db-instances` returns DocumentDB instances, engine `docdb`
+    (<https://docs.aws.amazon.com/documentdb/latest/developerguide/db-instance-view-details.html>,
+    <https://docs.aws.amazon.com/cli/latest/reference/docdb/describe-db-instances.html>); an instance's
+    `DBClusterIdentifier` names "the cluster that the instance is a member of", and no page describes an
+    instance outside a cluster
+    (<https://docs.aws.amazon.com/documentdb/latest/developerguide/API_DBInstance.html>,
+    <https://docs.aws.amazon.com/documentdb/latest/developerguide/how-it-works.html>), so `aws.jq` groups
+    by `DBClusterIdentifier`, falling back to the instance's own identifier. That the instance carries
+    its cluster's `BackupRetentionPeriod` and `StorageEncrypted` is **not confirmed** (both are cluster
+    settings, <https://docs.aws.amazon.com/documentdb/latest/developerguide/API_DBCluster.html>), so with
+    no new call a cluster gets `point-in-time-restore` or `encryption-at-rest` only when every instance
+    reports it. AWS Config records the cluster as `AWS::RDS::DBCluster` and has no DocumentDB type
+    (<https://docs.aws.amazon.com/config/latest/developerguide/docdb-cluster-encrypted.html>,
+    <https://docs.aws.amazon.com/config/latest/developerguide/resource-config-reference.html>): already
+    dropped, nothing to add. A cluster of 0 instances has no instance row and is not listed.
+  - ElastiCache Serverless: stores data across three zones, always encrypted at rest, cluster mode only
+    (<https://docs.aws.amazon.com/AmazonElastiCache/latest/dg/WhatIs.deployment.html>,
+    <https://docs.aws.amazon.com/AmazonElastiCache/latest/dg/WhatIs.corecomponents.html>,
+    <https://docs.aws.amazon.com/AmazonElastiCache/latest/APIReference/API_ServerlessCache.html>): always
+    `node-high-availability`, `zone-high-availability`, `encryption-at-rest` and `sharding`, `snapshots`
+    from `SnapshotRetentionLimit` above 0. Node-based groups: `AutomaticFailover` `enabled` alone is not
+    a replica (<https://docs.aws.amazon.com/AmazonElastiCache/latest/dg/AutoFailover.html>), so
+    `node-high-availability` also needs more member clusters than shards; `StorageEncryptionType` is the
+    effective encryption state, not `AtRestEncryptionEnabled`
+    (<https://docs.aws.amazon.com/AmazonElastiCache/latest/APIReference/API_ReplicationGroup.html>).
+    Node-based Valkey 9.0+ `Durability` (a Multi-AZ transaction log) gets no rule; the guide notes it.
+  - NLB: `UDP` and `TCP_UDP` carry UDP, and so do `QUIC` and `TCP_QUIC` (QUIC per RFC 9000, over UDP),
+    so all four give `udp`
+    (<https://docs.aws.amazon.com/elasticloadbalancing/latest/APIReference/API_Listener.html>,
+    <https://docs.aws.amazon.com/elasticloadbalancing/latest/network/load-balancer-listeners.html>).
+  - IPv6: a target group of `IpAddressType` `ipv6` communicates with its targets over IPv6
+    (<https://docs.aws.amazon.com/elasticloadbalancing/latest/APIReference/API_TargetGroup.html>,
+    <https://docs.aws.amazon.com/elasticloadbalancing/latest/network/load-balancer-target-groups.html>,
+    <https://docs.aws.amazon.com/elasticloadbalancing/latest/application/load-balancer-target-groups.html>):
+    confirmed, joined to its load balancer through `LoadBalancerArns`.
+  - SNS: a dead-letter queue is attached to a subscription, not a topic
+    (<https://docs.aws.amazon.com/sns/latest/dg/sns-dead-letter-queues.html>), so a topic never gets
+    `dead-letter-queue`; `KmsMasterKeyId` gives `encryption-at-rest`
+    (<https://docs.aws.amazon.com/sns/latest/api/API_GetTopicAttributes.html>), and the guide projects
+    away the `Owner` and `Policy` attributes.
+  - Kubernetes load balancers: `elbv2.k8s.aws/cluster` is confirmed
+    (<https://kubernetes-sigs.github.io/aws-load-balancer-controller/latest/guide/service/annotations/>);
+    `kubernetes.io/cluster/<name>` is documented on subnets only
+    (<https://docs.aws.amazon.com/eks/latest/userguide/network-load-balancing.html>), so it is not used.
+  - AWS Config also records an ELBv2 listener, listener rule and target group, an EFS access point and
+    ECR registry settings (resource-config reference above): dropped as parts of a classified resource.
+    EFS `SizeInBytes` is the metered size
+    (<https://docs.aws.amazon.com/efs/latest/ug/API_FileSystemSize.html>), and `AvailabilityZoneName` is
+    set only on One Zone file systems
+    (<https://docs.aws.amazon.com/efs/latest/ug/API_FileSystemDescription.html>). Every new IAM action is
+    of access level List or Read in the Service Authorization Reference
+    (<https://docs.aws.amazon.com/service-authorization/latest/reference/list_amazonelasticache.html>,
+    `list_awselasticloadbalancingv2.html`, `list_awselasticloadbalancing.html`,
+    `list_amazonelasticfilesystem.html`, `list_amazonsns.html`).
 - Milestone 3: the rule that makes one GCP load balancer (a URL map, or a backend service no URL map
   names; `GlobalForwardingRule` and `RegionBackendService` are not in the search APIs, `ForwardingRule`
   and `BackendService` return both scopes); Memorystore zone placement for `zone-high-availability`;
