@@ -555,8 +555,8 @@ TLS stage*.
   example is `2048000000`, whole decimal megabytes (scaleway-sdk-go's `scw.MB` is 1000 x 1000 bytes).
   The pin is the value observed on the platform.
 - **The cost.** The pin is 268000000 bytes, 268 MB (about 0.268 GB), not 0.25 GB (250000000 bytes),
-  and is not to be "corrected" to that; the scaleway/scaleway memory table names the size for 140 mvCPU
-  256 MB. The worst case above, about EUR 2.12 a month, prices 0.25 GB of memory; billed at 0.268 GB
+  and is not to be "corrected" to that; the scaleway/scaleway memory table lists 256 MB for 140
+  mvCPU. The worst case above, about EUR 2.12 a month, prices 0.25 GB of memory; billed at 0.268 GB
   per second, which 268435456 was as well, it would be about EUR 2.22. The choice
   between the two values moves it by less than one cent, so no figure here or in PRD #297 changes.
 - **What holds it.** `dev/infra-rules.sh`'s `[container-memory]` accepts only the literal 268000000 and
