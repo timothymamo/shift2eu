@@ -14,9 +14,12 @@
 // renovate/<name> - <name> a lower-case word of letters, digits, dots, underscores and hyphens, holding no .. -
 // is accepted too, but resumed only: when origin/renovate/<name> exists the script prints
 // .worktrees/renovate-<name>, a worktree on the local branch tracking that remote at its commit, and the second
-// run prints the same path. When the remote branch does not exist, only a local one does, origin is missing or
-// unreachable, or the name holds anything the pattern refuses, the script refuses the name: it never creates a
-// Renovate branch, and its own local refs never stand in for origin's.
+// run prints the same path. A local branch left by an earlier run is resumed only when it is the fetched remote
+// branch itself, at its commit and tracking it; a local branch at another commit, or tracking something else (the
+// checkout's autoSetupMerge often leaves one tracking origin/main), is refused as differing from origin, so no
+// unit ever works on a stale base. When the remote branch does not exist, only a local one does, origin is missing
+// or unreachable, or the name holds anything the pattern or git's own ref rules refuse, the script refuses the
+// name: it never creates a Renovate branch, and its own local refs never stand in for origin's.
 //
 // Every case builds its own throwaway repository in t.TempDir(): a bare origin holding main, a seed clone that
 // pushes the branches which come from elsewhere, and the checkout the script runs in. No case touches this
@@ -540,6 +543,8 @@ func TestWorktreeRefusesARenovateNameThatIsNoRenovateBranch(t *testing.T) {
 		{name: "a name starting with a hyphen", branch: "renovate/-x"},
 		{name: "a name in capitals", branch: "renovate/Claude-Code"},
 		{name: "a name with a further slash", branch: "renovate/a/b"},
+		{name: "a name git refuses for its .lock ending", branch: "renovate/x.lock"},
+		{name: "a name git refuses for its dot ending", branch: "renovate/x."},
 	}
 
 	for _, tc := range names {
@@ -678,6 +683,152 @@ func TestWorktreeRefusesALocalRenovateBranchWithoutTheRemoteOne(t *testing.T) {
 
 	if _, err := os.Stat(f.worktreeDir(worktreeRenovateBranch)); err == nil {
 		t.Errorf("dev/worktree.sh %s made a worktree of the local branch, %s, want none (issue #573)", worktreeRenovateBranch, f.worktreeDir(worktreeRenovateBranch))
+	}
+}
+
+// TestWorktreeRefusesALocalRenovateBranchThatDiffersFromOrigin pins that a local Renovate branch left by an earlier
+// run is resumed only when it is origin's branch: at another commit than the fetched origin/renovate/<name>, or not
+// tracking it, the script refuses the name as differing from origin, prints nothing on stdout, makes no worktree
+// and leaves the local branch at its own commit, so a unit is never handed a stale base it would have to force
+// (issue #573).
+func TestWorktreeRefusesALocalRenovateBranchThatDiffersFromOrigin(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		// setup leaves the local branch as the case needs it, with origin/renovate/<name> at another commit when
+		// the case wants one, and returns the commit the branch must still be at after the refusal.
+		setup func(t *testing.T, f *worktreeFixture) (leftAt string)
+	}{
+		{
+			name: "the local branch is at an older commit and tracks origin/main",
+			setup: func(t *testing.T, f *worktreeFixture) string {
+				t.Helper()
+
+				f.mustGitIn(t, f.checkout, "branch", "--track", worktreeRenovateBranch, "origin/main")
+				leftAt := f.branchAt(t, worktreeRenovateBranch)
+				f.publishBranch(t, worktreeRenovateBranch)
+
+				return leftAt
+			},
+		},
+		{
+			name: "the local branch is at an older commit and has no upstream",
+			setup: func(t *testing.T, f *worktreeFixture) string {
+				t.Helper()
+
+				f.mustGitIn(t, f.checkout, "branch", "--no-track", worktreeRenovateBranch, "origin/main")
+				leftAt := f.branchAt(t, worktreeRenovateBranch)
+				f.publishBranch(t, worktreeRenovateBranch)
+
+				return leftAt
+			},
+		},
+		{
+			name: "the local branch is at origin's commit and has no upstream",
+			setup: func(t *testing.T, f *worktreeFixture) string {
+				t.Helper()
+
+				sha := f.publishBranch(t, worktreeRenovateBranch)
+				f.mustGitIn(t, f.checkout, "fetch", "--quiet", "origin")
+				f.mustGitIn(t, f.checkout, "branch", "--no-track", worktreeRenovateBranch, "origin/"+worktreeRenovateBranch)
+
+				return sha
+			},
+		},
+		{
+			name: "the local branch is at origin's commit and tracks origin/main",
+			setup: func(t *testing.T, f *worktreeFixture) string {
+				t.Helper()
+
+				sha := f.publishBranch(t, worktreeRenovateBranch)
+				f.mustGitIn(t, f.checkout, "fetch", "--quiet", "origin")
+				f.mustGitIn(t, f.checkout, "branch", "--no-track", worktreeRenovateBranch, "origin/"+worktreeRenovateBranch)
+				f.mustGitIn(t, f.checkout, "branch", "--set-upstream-to=origin/main", worktreeRenovateBranch)
+
+				return sha
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newWorktreeFixture(t)
+			leftAt := tc.setup(t, f)
+
+			got := f.run(t, worktreeRenovateBranch)
+
+			if got.code != 1 {
+				t.Fatalf("dev/worktree.sh %s exited %d, want the refusal's 1: a local branch that is not origin's, at its commit and tracking it, is no base to work on (issue #573)\nstdout: %s\nstderr: %s", worktreeRenovateBranch, got.code, got.stdout, got.stderr)
+			}
+
+			// The refusal is the script's own line. Git may print its diagnostics first: a failed fetch writes its
+			// fatal: lines to the same stderr.
+			if !strings.HasPrefix(got.stderr, "worktree: ") && !strings.Contains(got.stderr, "\nworktree: ") {
+				t.Errorf("dev/worktree.sh %s printed %q on stderr, want a refusal line starting with \"worktree: \" (issue #573)", worktreeRenovateBranch, got.stderr)
+			}
+
+			if !strings.Contains(got.stderr, worktreeRenovateBranch) {
+				t.Errorf("the refusal printed %q, want it to name the branch %s (issue #573)", got.stderr, worktreeRenovateBranch)
+			}
+
+			if !strings.Contains(got.stderr, "differs from origin") {
+				t.Errorf("the refusal printed %q, want it to say the local branch differs from origin, so a unit reads why it is not handed that base (issue #573)", got.stderr)
+			}
+
+			if got.stdout != "" {
+				t.Errorf("dev/worktree.sh %s printed %q on stdout, want nothing: a refusal names no worktree (issue #573)", worktreeRenovateBranch, got.stdout)
+			}
+
+			if _, err := os.Stat(f.worktreeDir(worktreeRenovateBranch)); err == nil {
+				t.Errorf("dev/worktree.sh %s left the worktree %s behind, want none: the local branch is no base to work on (issue #573)", worktreeRenovateBranch, f.worktreeDir(worktreeRenovateBranch))
+			}
+
+			if at := f.branchAt(t, worktreeRenovateBranch); at != leftAt {
+				t.Errorf("dev/worktree.sh %s moved the local branch %s to %s, want it left at its own commit %s: a refused branch is never rewritten (issue #573)", worktreeRenovateBranch, worktreeRenovateBranch, at, leftAt)
+			}
+		})
+	}
+}
+
+// TestWorktreeResumesALocalRenovateBranchTrackingOrigin pins the state an earlier run leaves once its worktree is
+// removed: a local renovate/<name> at origin's commit and tracking it is resumed as it is - the path the script
+// prints, the worktree on the branch at that commit, and the branch still tracking origin/renovate/<name>, never
+// a new branch from main (issue #573).
+func TestWorktreeResumesALocalRenovateBranchTrackingOrigin(t *testing.T) {
+	t.Parallel()
+
+	f := newWorktreeFixture(t)
+	sha := f.publishBranch(t, worktreeRenovateBranch)
+
+	// A worktree of the branch, tracking origin's, removed again: what a finished unit leaves behind.
+	dir := f.worktreeDir(worktreeRenovateBranch)
+	f.mustGitIn(t, f.checkout, "fetch", "--quiet", "origin")
+	f.mustGitIn(t, f.checkout, "worktree", "add", "--quiet", "--track", "-b", worktreeRenovateBranch, dir, "origin/"+worktreeRenovateBranch)
+	f.mustGitIn(t, f.checkout, "worktree", "remove", dir)
+
+	got := f.run(t, worktreeRenovateBranch)
+
+	if got.code != 0 {
+		t.Fatalf("dev/worktree.sh %s exited %d, want 0: a local branch at origin's commit and tracking it is resumed (issue #573)\nstdout: %s\nstderr: %s", worktreeRenovateBranch, got.code, got.stdout, got.stderr)
+	}
+
+	if got.path() != dir {
+		t.Errorf("dev/worktree.sh %s printed %q, want %q (issue #573)", worktreeRenovateBranch, got.path(), dir)
+	}
+
+	if on := f.mustGitIn(t, dir, "rev-parse", "--abbrev-ref", "HEAD"); on != worktreeRenovateBranch {
+		t.Errorf("the worktree %s is on %q, want the branch %s (issue #573)", dir, on, worktreeRenovateBranch)
+	}
+
+	if head := f.mustGitIn(t, dir, "rev-parse", "HEAD"); head != sha {
+		t.Errorf("the worktree %s is at %s, want origin's commit %s: the resumed branch is not rewritten (issue #573)", dir, head, sha)
+	}
+
+	if upstream := f.upstreamOf(t, worktreeRenovateBranch); upstream != "origin/"+worktreeRenovateBranch {
+		t.Errorf("the resumed branch %s tracks %q, want origin/%s (issue #573)", worktreeRenovateBranch, upstream, worktreeRenovateBranch)
 	}
 }
 
