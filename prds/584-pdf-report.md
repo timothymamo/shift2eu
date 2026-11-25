@@ -79,16 +79,20 @@ exactly the characters that encoding names:
 - the Latin-1 Supplement, U+00A1 to U+00FF (bytes 0xA1 to 0xFF), except U+00AD SOFT HYPHEN.
 
 U+00A0 NO-BREAK SPACE and U+00AD SOFT HYPHEN are left out on purpose. One shows as a blank and the other
-as nothing or a hyphen, so two values that differ only by one would look the same. `internal/domain/text`
-refuses such look-alikes for the same reason.
+as nothing or a hyphen, so two values that differ only by one would look the same. The rule is about
+invisible and blank-looking characters only. Visible characters of the set that resemble ASCII ones
+(‘ ’ and `'`, “ ” and `"`, – — and `-`, ‚ and `,`, ‹ › and `< >`, ˜ and `~`, ˆ and `^`, × and `x`) are
+shown as they are, as in the Markdown report, and `text.Validate` does not refuse them.
 
 The report's own words use only these characters. A value from the inventory or a catalog goes through
 `pdfreport`'s own escaper. It keeps every rune of the set above as it is, and writes every other rune as
-a visible escape. It never drops a rune and never replaces one with `?` or anything else, so two values
-that differ always look different. It uses the escape forms of Go's `strconv` package, with lowercase hex
-as `strconv` writes it:
+a visible escape. It never drops a rune and never replaces one with `?` or anything else, so a rune
+outside the set is always visible as an escape. Two values that differ only inside the set can still
+look alike, through the visible look-alikes above. It uses the escape forms of Go's `strconv` package,
+with lowercase hex as `strconv` writes it:
 
-- `\u` and four lowercase hex digits for a code point up to U+FFFF (`Ж` is `Ж`, `é` stays `é`);
+- `\u` and four lowercase hex digits for a code point up to U+FFFF: U+0416 CYRILLIC CAPITAL LETTER
+  ZHE becomes the six ASCII characters backslash, `u`, `0`, `4`, `1`, `6` (`\u0416`), and `é` stays `é`;
 - `\U` and eight for one above it (`😀` is `\U0001f600`);
 - `\x` and two hex digits for each byte of invalid UTF-8 (`\xff`);
 - a backslash in the value is `\\`, so an escape can never be confused with a value that spells one.
@@ -103,7 +107,8 @@ reference, not the function to call:
 - it never truncates: `text.Quote` cuts a value after 128 runes, while the PDF shows the whole value,
   which the domain already caps (*Tables and page breaks*).
 
-U+00A0 and U+00AD are outside the set, so they are always escaped, as ` ` and `­`.
+U+00A0 and U+00AD are outside the set, so they are always escaped, as the six ASCII characters
+`\u00a0` and `\u00ad` (backslash, `u`, then the four hex digits), never shown as themselves.
 
 This covers control characters, the line and paragraph separators, bidi overrides and other invisible
 formatting characters, as well as every non-Latin script. `text.Validate` already refuses controls, bidi
@@ -219,11 +224,15 @@ The comparison ranks no target and recommends none, as today.
   that tall; such a row is then split at a line.
 - A value wraps at the character boundaries of its escaped form. It is never cut short: the domain
   already caps a value's length (`text.Validate`).
-- The worst case is real, not theoretical. A value of 2048 bytes (`text.MaxLen`) made of escaped runes
-  grows to between 4,098 and 6,144 shown characters: 1,024 two-byte runes such as `Ж` give 6,144
-  (`Ж` is 6 characters), 512 four-byte runes 5,120 (`\U0001f600` is 10), 682 three-byte runes about
-  4,100. In a narrow Courier table column that is more lines than a page holds, so the split-at-a-line
-  path runs. The hostile golden holds a 2048-byte value of two-byte runes.
+- The worst case is real, not theoretical. A value `text.Validate` accepts, of 2048 bytes
+  (`text.MaxLen`) made of escaped runes, grows to between 4,098 and 6,144 shown characters:
+  1,024 two-byte runes such as U+0416 give 6,144 (its escape `\u0416` is 6 characters), 512 four-byte
+  runes 5,120 (`\U0001f600` is 10), and 682 three-byte runes with one two-byte rune in the 2 bytes left
+  give 4,098 (683 escapes of 6). In a narrow Courier table column that is more lines than a page holds, so the
+  split-at-a-line path runs. The hostile golden holds a 2048-byte value of two-byte runes.
+- The escaper's own table test can go further, since its in-test values skip `text.Validate`: 2048
+  bytes of invalid UTF-8 (`0xff`) give 8,192 characters (`\xff` is 4 each), and 2048 backslashes give
+  4,096. The unit test of the split-at-a-line path uses the 8,192-character case.
 - A section heading never ends a page.
 
 ## How it fits the architecture
@@ -291,21 +300,25 @@ The `%PDF-` header's version (*Open questions*, 4) is the file format's version,
   writes it into the HTML. For the PDF's version line, and its byte-identity with the released CLI's,
   milestone 2 stamps the module with the same three values `.goreleaser.yaml` gives the CLI:
   - `version`: GoReleaser's `{{ .Version }}`, the tag without its leading `v` (`0.15.0` for `v0.15.0`);
-  - `commit`: the commit hash, at a fixed length on both sides (below);
-  - `date`: `{{ .CommitDate }}`, the commit's date in UTC, RFC 3339.
+  - `commit`: the commit hash, as GoReleaser's binaries and the container image carry it (below);
+  - `date`: `{{ .CommitDate }}`, the commit's committer date in UTC, RFC 3339. A depth-1 checkout gives
+    exactly that string with the recipe the `image` job already uses:
+    `TZ=UTC git log -1 --format=%cd --date=format-local:%Y-%m-%dT%H:%M:%SZ`.
 
   The values are taken from the tag and its commit, never from the clock, so the bundle stays
   reproducible (ADR 0036). An untagged build keeps the development values `shift2eu version` shows.
-- **The commit hash has a fixed length on both sides.** Today the CLI gets `{{ .ShortCommit }}`, git's
-  abbreviated hash. Its length depends on which objects the clone holds. The release's `site` job checks
-  out shallowly (`release.yml`: "ci/sitebuild reads no history, so a shallow checkout is enough"), so a
-  short hash computed there can differ from the one GoReleaser computes in its full clone. And the `site`
-  job runs before `goreleaser` (`goreleaser` needs `site`), so it cannot take GoReleaser's outputs.
-  Milestone 2 therefore gives both sides the first 12 hex digits of the full hash: `.goreleaser.yaml`
-  stamps `{{ slice .FullCommit 0 12 }}`, and `release.yml` passes `ci/sitebuild` the tag, the same slice
-  of `github.sha`, and the commit date, which `ci/sitebuild` stamps with `-X`. The CLI's
-  `shift2eu version` then shows a 12-digit commit in every release, a visible change the release notes
-  mention. Milestone 2's ADR amendment records it (*Open questions*, 7).
+- **The commit hash must be the same string in all three release binaries:** GoReleaser's archives, the
+  container image and the module. Today GoReleaser stamps `{{ .ShortCommit }}`, git's abbreviated hash,
+  whose length depends on which objects the clone holds. The `image` job copies it on purpose: it checks
+  out the full history and runs `git rev-parse --short HEAD`, "as GoReleaser stamps them" (`release.yml`,
+  ADR 0015's "Same stamp as the release binaries", pinned by `test/architecture`'s release workflow check,
+  `releaseworkflow.go` and `imageStepTemplates` in its test). The `site` job checks out shallowly
+  (`release.yml`: "ci/sitebuild reads no history, so a shallow checkout is enough"), so a short hash
+  computed there can differ. And it runs before `goreleaser` (`goreleaser` needs `site`), so it cannot
+  take GoReleaser's outputs. How milestone 2 gets one string on all three is *Open questions* 7, the
+  maintainer's choice. Its recommendation, (a), is a fixed cut of the full hash on all three; option (c)
+  keeps `shift2eu version` unchanged. The milestone 2 and release criteria below hold for whichever
+  option is chosen.
 
 ### ADR 0036: the bundle, the CSP and the banned-API scan
 
@@ -449,12 +462,17 @@ Test levels:
 - [ ] *Unit:* the escaper's table test covers each character class, with the exact escaped form of each:
   - printable ASCII, `"` and `\` included (`"` stays, `\` is `\\`);
   - the 27 WinAnsi characters in 0x80 to 0x9F and the Latin-1 Supplement, kept as they are;
-  - U+00A0 and U+00AD, escaped as ` ` and `­`;
+  - U+00A0 and U+00AD, escaped as the ASCII text `\u00a0` and `\u00ad`;
   - C0 and C1 controls, U+2028, U+2029 and bidi overrides, escaped (defence in depth: `text.Validate`
     already refuses them at read);
-  - a printable non-Latin letter (`Ж` is `Ж`), escaped and never replaced or dropped;
+  - a printable non-Latin letter, U+0416, escaped as the ASCII text `\u0416` and never replaced or
+    dropped;
   - a character above U+FFFF (`\U0001f600`) and invalid UTF-8 (`\xff`);
-  - a value of `text.MaxLen` bytes, escaped in full, never truncated.
+  - a value of `text.MaxLen` bytes, escaped in full, never truncated, and 2048 bytes of `0xff`
+    (8,192 characters, *Tables and page breaks*).
+
+  The test's expected values are written as ASCII Go string literals, so no editor or tool can turn an
+  expected escape into the character it names.
 - [ ] *Unit:* the hostile report and hostile comparison goldens take in-test hostile values, as the other
   reporters' hostile goldens do, in every field the PDF shows. The values carry PDF metacharacters and
   syntax: unbalanced `(` and `)`, `\`, `) Tj ET`, `endstream`, `%%EOF`, `/JavaScript`, `<< >>`, `obj`,
@@ -463,13 +481,20 @@ Test levels:
   content stream.
 - [ ] *Unit:* the structural invariants, checked for every golden and in the fuzz test:
   - the test-only reader parses the output;
-  - the text extracted for a value, joined across its wrapped lines, equals the value's escaped form;
-  - every token of every content stream is a literal string or one of the writer's fixed operators and
-    their numeric operands;
+  - the text extracted for a value, joined across its wrapped lines, equals the value's escaped form.
+    The writer draws each wrapped line of a value as its own `Tj` at the x of the value's column or
+    line start, so the test finds a value's lines by that x on consecutive lines, across a page break;
+    the hostile and fuzz tests check this in reports where only the field under test holds the value;
+  - every token of every content stream is a literal string, or a pair of an operator and operand shape
+    from the writer's fixed table, which the test pins (`BT`, `ET`, `Tf`, `Td` or `Tm`, `Tj`, `re`, `f`,
+    `S`, `w`, `q`, `Q` and whatever else the writer uses, each with the operands it takes). Operands are
+    numbers, except `Tf`'s first, one of the writer's constant font resource names (`/F1` to `/F3`).
+    `gs`, `Do` and inline images are not in the table: the writer uses no graphics state dictionary and
+    no XObject;
   - no object has a type outside the writer's set (catalog, pages, page, font, content stream, info);
   - every byte is 0x0A or in 0x20 to 0x7E.
-- [ ] *Unit:* a native Go fuzz test (standard `testing`, seeds run under `make test`) writes a report
-  whose values are the fuzzed string, and fails when a structural invariant does not hold.
+- [ ] *Unit:* a native Go fuzz test (standard `testing`, seeds run under `make test`) writes reports in
+  which one field at a time holds the fuzzed string, and fails when a structural invariant does not hold.
 - [ ] *Unit:* the same input written twice gives the same bytes. A test fails if a non-test file of
   `pdfreport` imports `math`, declares a floating-point type, holds a floating-point literal, calls
   `strconv.FormatFloat` or `strconv.ParseFloat`, or uses a `%f`, `%F`, `%g`, `%G`, `%e` or `%E` verb.
@@ -530,14 +555,20 @@ Test levels:
   while building or offering it, and the existing network test passes.
 - [ ] *Browser:* the download works with the keyboard alone, and the accessibility checks of the main flow
   pass with the one button.
-- [ ] *Release:* the release builds the module with the release's version (the tag without `v`), its
-  12-digit commit and its commit date, and the CLI with the same three values. The smoke
-  test on the attested bundle compares its PDF download with the output of the released `linux/amd64`
-  CLI for one example: the same bytes, version line included.
-- [ ] *Review:* the scheduled audit's row 13 (`.github/workflows/scheduled-security-audit.yml`, the CLI on
-  hostile inventory files) also runs `--format pdf` on every file of its corpus and the files it
-  generates, and the `security-audit-run` skill reads those runs as it reads the Markdown ones. It runs
-  the latest release, so it covers the PDF from the first release that holds milestone 1.
+- [ ] *Release:* the release builds the module, GoReleaser's binaries and the container image's binary
+  with the same three values: the release's version (the tag without `v`), one commit string (in the
+  form *Open questions* 7's chosen option gives) and its commit date. The smoke test on the attested
+  bundle compares its PDF download with the output of the released `linux/amd64` CLI for one example:
+  the same bytes, version line included. The image's `shift2eu version` line equals the archive's.
+- [ ] *Static:* `test/architecture`'s pins of the release steps that stamp the version (the `site` and
+  `image` jobs) match the chosen option.
+- [ ] *Review:* the scheduled audit's row 13 (ADR 0040's table, `.github/workflows/scheduled-security-audit.yml`,
+  the CLI on hostile inventory files) also runs `--format pdf` on every file of its corpus and the files
+  it generates. Its step text and corpus pins in `test/architecture` (`auditworkflow.go` and its tests,
+  `auditcorpus_test.go`) and ADR 0040's row 13 are amended to match. The `security-audit-run` skill reads
+  those runs as it reads the Markdown ones. Row 13 runs the latest release, which may not hold milestone
+  1 yet: the skill reads a release that refuses `--format pdf` as an unknown format as "PDF not covered
+  by this release", never as a finding, so the row passes until the first such release.
 - [ ] *Static:* the module size budget test passes. Milestone 2's PR states the raw module size, the
   module script file and its gzip size before and after the change, and ADR 0043 records them.
 - [ ] *Static:* the privacy page says the report download is a PDF made in the browser, that nothing is
@@ -547,6 +578,8 @@ Test levels:
 - [ ] *Review:* PRD #297's amended criteria and decisions (*Amendments to PRD #297*) are edited in place
   with a dated amendment note. ADRs 0018, 0035, 0036 and 0043, and the doc.go files of `jsonreport`,
   `htmlreport` and `internal/web`, are amended where they name the site's Markdown or JSON downloads.
+  ADR 0035 records the module's version stamp, ADR 0040 row 13's PDF runs, and, under option (a) of
+  *Open questions* 7, ADR 0015 the image's new commit stamp.
 
 ## Amendments to PRD #297
 
@@ -633,17 +666,21 @@ Milestones 1 and 2 touch the handling of hostile text and the site's trust model
    - `internal/web`'s `Deps`, `Options` and `Result`, and `wire` constructing `pdfreport` and
      `htmlreport` only.
    - The glue's `Uint8Array` hand-over.
-   - The module stamped with the release's version, commit and date by `ci/sitebuild`, and in
-     `release.yml`, with the 12-digit commit on both the module's and GoReleaser's side
-     (`.goreleaser.yaml`).
-   - The scheduled audit's row 13 runs `--format pdf` over its hostile corpus too.
+   - The module stamped with the release's version, commit and date by `ci/sitebuild`, from
+     `release.yml`'s `site` job, as *Open questions* 7's chosen option says, with the same commit string
+     in GoReleaser's binaries and the container image. Under the recommended (a): `.goreleaser.yaml`, the
+     `image` job's stamp step and its `test/architecture` pin, and ADR 0015's "Same stamp" bullet.
+   - The scheduled audit's row 13 runs `--format pdf` over its hostile corpus too, with its
+     `test/architecture` pins, ADR 0040's row 13, and the `security-audit-run` skill's reading of a
+     release without the format.
    - The page script's single download path, and the one button.
    - The native parity, option-parity, dependency and static tests; the browser smoke test's PDF
      download and its release run.
    - The size budget measurements, before and after.
    - The privacy, verification and inventory guide pages, the README and the guides.
    - PRD #297 amended in place (*Amendments to PRD #297*).
-   - ADRs 0018, 0035, 0036 and 0043 and the doc.go files amended.
+   - ADRs 0018, 0035, 0036, 0040 and 0043 (and 0015 under option (a) of *Open questions* 7) and the
+     doc.go files amended.
    - Ships on PRD #297's site track. It does not depend on PRD #297 milestone 4, and the first deploy does
      not wait for it.
 3. [ ] **Polish round on layout and the detail sections.** Planned on PRD #297's site track **after the
@@ -745,19 +782,41 @@ Milestones 1 and 2 touch the handling of hostile text and the site's trust model
    `docs/architecture.md` mentions one. A small docs issue could mark it "not yet implemented" in both.
    This PRD does not change either.
 7. **Where the module's version stamp comes from** (milestone 2). GoReleaser's `{{ .ShortCommit }}` is
-   git's abbreviated hash, whose length depends on which objects the clone holds, and the release's
-   `site` job checks out shallowly and runs before `goreleaser`, so it can neither compute the same
-   abbreviation reliably nor take GoReleaser's outputs. The options:
-   - (a) a fixed length on both sides: `.goreleaser.yaml` stamps `{{ slice .FullCommit 0 12 }}`, and
-     `release.yml` passes `ci/sitebuild` the tag without `v`, the same 12 digits of `github.sha` and the
-     commit date, which `ci/sitebuild` stamps with `-X`;
-   - (b) reorder the jobs so `site` needs `goreleaser` and takes its version, commit and date as job
-     outputs.
+   git's abbreviated hash, whose length depends on which objects the clone holds. The `image` job
+   matches it from a full clone (ADR 0015). The release's `site` job checks out shallowly and runs before
+   `goreleaser`, so it can neither compute the same abbreviation reliably nor take GoReleaser's outputs.
+   In every option the `site` job takes the version from the tag without `v` and the date with the
+   `image` job's recipe (`TZ=UTC git log -1 --format=%cd --date=format-local:%Y-%m-%dT%H:%M:%SZ`, which
+   works in a depth-1 checkout), and `ci/sitebuild` stamps the three values with `-X`. The options for
+   the commit:
+   - (a) **a fixed cut of the full hash, the first 12 hex digits, on all three release binaries:**
+     - `.goreleaser.yaml` stamps `{{ slice .FullCommit 0 12 }}` (`slice` is a `text/template` builtin);
+     - the `image` job stamps `commit=$(git rev-parse HEAD | cut -c1-12)`, and the `site` job passes
+       `ci/sitebuild` the same cut of `github.sha` (the tagged commit on a tag push). Never
+       `git rev-parse --short=12`: `--short=N` is a minimum, and git lengthens it when the prefix is
+       ambiguous;
+     - `test/architecture`'s pin of the image step (`releaseworkflow.go`, `imageStepTemplates`) follows,
+       and ADR 0015's "Same stamp" bullet is amended;
+     - `test/internal/releasetarget/testdata/real.goreleaser.yaml` is a snapshot of the file's shape, not
+       a copy (its test says so), so it need not change; milestone 2 changes its commit line too, to keep
+       the shape faithful;
+     - the Makefile's `COMMIT` and `ci.yml`'s image stamp build no release binary and keep
+       `git rev-parse --short HEAD`; a later change can align them, and this PRD does not ask for it.
 
-   *Recommendation:* (a). It keeps today's job order (the site is built and smoke-tested before
-   GoReleaser runs), needs no new job outputs, and does not depend on the clone's depth. Its cost is that
-   `shift2eu version` shows a 12-digit commit from then on. For an untagged build, the development
-   values stay. Milestone 2's ADR amendment records the choice.
+     Cost: `shift2eu version` shows a 12-digit commit in every release from then on, a visible change
+     the release notes mention.
+   - (b) reorder the jobs so `site` needs `goreleaser` and takes its version, commit and date as job
+     outputs. Cost: the site is no longer built and smoke-tested before GoReleaser publishes, and the
+     jobs gain outputs.
+   - (c) give the `site` job `fetch-depth: 0` and `git rev-parse --short HEAD`, exactly as the `image`
+     job does (ADR 0015). It keeps `shift2eu version`'s output unchanged. Cost: the `site` job checks out
+     the whole history, and the release keeps today's latent risk, now across three full clones, that
+     clones taken at different moments abbreviate the same commit differently, which no test catches.
+
+   *Recommendation:* (a). It keeps today's job order, needs no new job outputs, does not depend on any
+   clone's depth, and removes the latent risk for all three binaries. For an untagged build, the
+   development values stay. Milestone 2's ADR amendments (ADR 0035, and ADR 0015 under (a)) record the
+   choice.
 8. **Document metadata.** *Recommendation:* an `/Info` dictionary with one constant `/Title`
    ("shift2eu migration assessment"), so viewers show a title and not a blob name. No `/Producer`,
    `/Author`, `/Creator` or dates, and no trailer `/ID`, which ISO 32000-1 requires only for encrypted
