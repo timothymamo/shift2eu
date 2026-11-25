@@ -324,9 +324,9 @@ func TestInventoryCommentHeadsOnlyItsCommand(t *testing.T) {
 			others:    []string{"aws ec2 describe-volumes", "aws ec2 describe-snapshots", "aws autoscaling describe-auto-scaling-groups"},
 		},
 		{
-			name:      "the two GCP labels the program reads",
+			name:      "the one GCP label the program reads",
 			key:       "gcp",
-			comment:   "# Keep only the two labels gcp.jq reads, not the values of any other label.",
+			comment:   "# Keep only the one label gcp.jq reads, not the values of any other label.",
 			describes: "gcloud asset search-all-resources",
 			others:    []string{"gcloud compute instances list"},
 		},

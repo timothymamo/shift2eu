@@ -489,10 +489,10 @@ project=example-project   # your project ID
 out=inventories/gcp
 mkdir -p "$out"
 
-# Keep only the two labels gcp.jq reads, not the values of any other label.
+# Keep only the one label gcp.jq reads, not the values of any other label.
 gcloud asset search-all-resources --scope="projects/$project" \
   --format='json(name,assetType,location,labels)' |
-  jq '[.[] | if .labels then .labels |= with_entries(select(.key == "goog-gke-node" or .key == "goog-managed-by")) else . end]' \
+  jq '[.[] | if .labels then .labels |= with_entries(select(.key == "goog-gke-node")) else . end]' \
   > "$out/assets.json"
 
 gcloud compute instances list --project="$project" \
@@ -565,9 +565,8 @@ done > "$out/functions.json"
 The `--format` projections keep only what the program reads: an instance's metadata keys, for
 example, but not their values, which hold startup scripts and SSH keys, and of its disks only the
 source, whether it boots and whether it is deleted with the instance (`autoDelete`). Of the asset
-labels, `jq` keeps only `goog-gke-node`, which the program reads, and `goog-managed-by`, which it no
-longer reads: no Google page documents that label, and `functions list` now names the Cloud Run
-service behind each function.
+labels, `jq` keeps only `goog-gke-node`, the one the program reads; the Cloud Run service behind
+each function comes from `functions list`, not from a label.
 
 The load balancer lists read only the HTTP and HTTPS target proxies, the frontends of an Application
 Load Balancer; a TCP, SSL or gRPC proxy is not listed, so a load balancer behind one gets no `ipv6`.
