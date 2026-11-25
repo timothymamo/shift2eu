@@ -476,14 +476,58 @@ TLS stage*.
   change; ADR 0039's amendment), R8 points `www` (CNAME) and the apex
   (ALIAS) at the container's endpoint, then an apply with `front_domains = true` creates the domains, and
   R8 waits until both are *ready* before its live checks.
-- **Still to be settled live, before the deploy is turned on (R8):** the headers as the container
-  receives them (`X-Forwarded-Proto` and `Host` on `www`, the apex and the endpoint, over plain HTTP and
-  HTTPS), the spoofed and repeated `X-Forwarded-Proto` requests, `OPTIONS *`, the digest pull (a
-  container given a wrong digest must fail to start; if it starts, the registry mirror above is
-  recorded here before it is taken), HTTPS on the pipeline's default endpoint with no TLS stage, and
-  that the Containers API accepts the Caddyfile (about 5.2 KiB) as `args[2]` (the provider caps an
-  environment variable, not an argument; checked by R4's check 2, `front ready`). R8 records each answer
-  here.
+- **Settled live, before the deploy is turned on (R8), 2026-11-25.** This bullet listed what only the
+  live platform could answer: the headers as the container receives them (`X-Forwarded-Proto` and
+  `Host` over plain HTTP and HTTPS), the spoofed and repeated `X-Forwarded-Proto` requests, `OPTIONS *`,
+  the digest pull, HTTPS on the pipeline's default endpoint with no TLS stage, and that the Containers
+  API accepts the Caddyfile (about 5.2 KiB) as `args[2]`. The maintainer's live reading on 2026-11-25
+  answered each:
+  - **The digest pull.** A container given a zero digest fails to start:
+    `error image was not found in container registry`. The platform enforces the digest, so the
+    registry mirror above is neither needed nor recorded.
+  - **The Caddyfile as `args[2]`.** The Containers API accepted it: the front started with it (R4's
+    check 2, `front ready`).
+  - **The origins.** The pipeline's default endpoint (Edge Services): HTTPS 200, plain HTTP 302 to
+    HTTPS; so HTTPS on it works with no TLS stage. The bucket website endpoint: HTTPS and plain HTTP 200.
+    The bucket's S3 endpoints: HTTPS and plain HTTP 200. The container's own endpoint: HTTPS and plain
+    HTTP `308 https://www.shift2eu.com/<key>`.
+  - **The front.** A warm request answered 404 in 0.34 s. All six redirect URLs answer 308 to
+    `https://www.shift2eu.com/`, the query kept. On `www` each of the five Caddyfile headers comes once
+    with its exact value, beside `server: envoy` and `x-envoy-upstream-service-time`, with no
+    `set-cookie` and no `x-amz-*` header. The apex sends no HSTS: it only redirects.
+  - **Spoofed and repeated `X-Forwarded-Proto` over plain HTTP:** one `https`; `https` + `http`;
+    `http` + `https`; `https` + `https`; the one field `https, https`. All five answer the 308. The rule
+    fails closed, and the platform does not pass a client's own header through to Caddy as `https`.
+  - **`OPTIONS *` over TLS** gets the platform's own answer, `HTTP/1.1 404 Not Found`, `server: envoy`,
+    `content-length: 0`, none of the site's headers: it never reaches Caddy, so Go's empty 200 above
+    never reaches a visitor.
+  - **The headers as the container receives them**, read by a temporary container `header-probe` on its
+    default endpoint (deleted after; only `front` remains):
+    - `X-Forwarded-Proto: http` over plain HTTP, `X-Forwarded-Proto: https` over HTTPS: the platform sets
+      the header itself.
+    - `Host` is the endpoint, `<namespace>-header-probe.functions.fnc.nl-ams.scw.cloud`, in lower case,
+      with no port. `www`'s exact host comparison cannot loop.
+    - The platform sends no `X-Forwarded-Host`.
+    - The platform adds `Forwarded: for=192.0.2.1;proto=http|https, for=100.96.x.x`, where `192.0.2.1`
+      is a documentation address standing in for the visitor's. Caddy never logs it (no access log; the
+      amendment *the front writes nothing about a visitor*, below) and strips it upstream
+      (`header_up -Forwarded`).
+    - A client's `X-Forwarded-Proto: https` plus `X-Forwarded-Proto: http` over plain HTTP reaches the
+      container as `X-Forwarded-Proto: http`: the platform replaces a client's value, neither passing it
+      through nor joining it.
+    - A client's `X-Forwarded-Proto: https` plus `X-Forwarded-Host: evil.example` over plain HTTP on the
+      probe's default endpoint got an empty body, its status not captured. This stays **unexplained**:
+      likely the platform routing that request by `X-Forwarded-Host` and answering itself, but
+      unverified. The front's own answer to the header: against the front, `X-Forwarded-Host:
+      evil.example` and `X-Forwarded-Host: www.shift2eu.com` over plain HTTP both answer
+      `308 https://www.shift2eu.com/` (the redirect target never follows the header), and over HTTPS
+      `evil.example` gets `HTTP/2 404` with the site's headers (CSP, HSTS) and `server: envoy`, the same
+      answer as without it. The front ignores a client's `X-Forwarded-Host`.
+  - **The domains and certificates.** `www` is a CNAME to the container's endpoint; the apex's ALIAS
+    answers the same A records as the container; CAA unchanged; the DS record present, and DNSSEC
+    validates with the ALIAS. Both custom domains were *ready* at the first check. Both certificates are
+    Let's Encrypt's (YR2): `www` until 2027-02-23 13:45:22 GMT, the apex until 2027-02-23 13:44:47 GMT,
+    which answers Context's "checked at the first deploy (R8)".
 - **Residual: the pipeline's default endpoint is a second public origin.**
   `https://<pipeline id>.svc.edge.scw.cloud`, the upstream, stays reachable by anyone and serves every
   bucket object without the front's header policy: no HSTS, no header CSP, no `frame-ancestors`, so it

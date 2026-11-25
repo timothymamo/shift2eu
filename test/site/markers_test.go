@@ -73,23 +73,25 @@ func TestDowngradeRiskIsShown(t *testing.T) {
 }
 
 // TestHSTSStatementFollowsTheRecord pins the branch the HSTS record decides
-// (PRD #297, Privacy statement): the HSTS record site/records/hsts.json is not
-// in the repository yet, and a missing record means "not waived", so the default
-// build must not show the hsts-waived statement; a build of a fixture copy whose
-// record says waived must show it on the privacy page and on the verification
-// page.
+// (PRD #297, Privacy statement): the committed HSTS record site/records/hsts.json
+// says met with preload false, so the default build, which reads that record from
+// the repository, must not show the hsts-waived statement; a build of a fixture
+// copy whose record says waived must show it on the privacy page and on the
+// verification page; and a build of a fixture copy with no records directory at
+// all must show it on neither, because the builder reads a missing record as not
+// waived (ci/sitebuild's readHSTSWaived, ADR 0042).
 func TestHSTSStatementFollowsTheRecord(t *testing.T) {
 	t.Parallel()
 
-	t.Run("a missing record is not waived", func(t *testing.T) {
+	t.Run("the committed met record is not waived", func(t *testing.T) {
 		t.Parallel()
 
 		checkMarker(t, theBundle(t), "privacy.html", "hsts-waived", false,
 			"the HSTS waiver statement",
-			"site/records/hsts.json does not exist yet, and a missing record reads as not waived, so the page states no waiver")
+			"the committed site/records/hsts.json says met, so the page states no waiver")
 		checkMarker(t, theBundle(t), "verify.html", "hsts-waived", false,
 			"the HSTS waiver statement",
-			"site/records/hsts.json does not exist yet, and a missing record reads as not waived, so the page states no waiver")
+			"the committed site/records/hsts.json says met, so the page states no waiver")
 	})
 
 	t.Run("a waived record is shown on both pages", func(t *testing.T) {
@@ -103,6 +105,19 @@ func TestHSTSStatementFollowsTheRecord(t *testing.T) {
 		checkMarker(t, waived, "verify.html", "hsts-waived", true,
 			"the HSTS waiver statement",
 			"the HSTS record says waived, so the verification page states it too")
+	})
+
+	t.Run("a missing record is not waived", func(t *testing.T) {
+		t.Parallel()
+
+		unrecorded := theUnrecordedBundle(t)
+
+		checkMarker(t, unrecorded, "privacy.html", "hsts-waived", false,
+			"the HSTS waiver statement",
+			"the fixture holds no site/records/hsts.json, and the builder reads a missing record as not waived (ADR 0042), so the page states no waiver")
+		checkMarker(t, unrecorded, "verify.html", "hsts-waived", false,
+			"the HSTS waiver statement",
+			"the fixture holds no site/records/hsts.json, and the builder reads a missing record as not waived (ADR 0042), so the page states no waiver")
 	})
 }
 

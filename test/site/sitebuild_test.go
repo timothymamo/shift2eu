@@ -8,7 +8,9 @@
 // in the tests that need them, each into its own temporary directory: a second
 // build proves the bundle reproducible (Layer 3), and a build of a fixture copy
 // of site/ whose HSTS record says waived, with -version set, proves the waived
-// statement and the tagged version's links.
+// statement and the tagged version's links. A fourth builds a fixture copy with
+// no records directory at all, which pins what the builder reads a missing HSTS
+// record as (ADR 0042).
 package site_test
 
 import (
@@ -18,6 +20,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -147,6 +150,51 @@ func waivedSiteFixture(dir, source string) (string, error) {
 
 	if err := os.WriteFile(filepath.Join(records, "hsts.json"), []byte("{\n  \"outcome\": \"waived\"\n}\n"), 0o600); err != nil {
 		return "", fmt.Errorf("write the waived HSTS record: %w", err)
+	}
+
+	return dir, nil
+}
+
+// theUnrecordedBundle builds a fixture copy of site/ whose records directory is
+// gone and returns that build, failing the test with the build's own failure: a
+// missing HSTS record must read as not waived (ADR 0042), so the built pages
+// must carry no waiver. Building it here rather than in TestMain keeps the
+// default bundle every other check reads untouched by the missing record.
+func theUnrecordedBundle(t *testing.T) *bundle {
+	t.Helper()
+
+	dir := t.TempDir()
+
+	site, err := unrecordedSiteFixture(filepath.Join(dir, "site"), filepath.Join(theRepositoryRoot(t), "site"))
+	if err != nil {
+		t.Fatalf("build a fixture copy of site/ with no records directory: %v", err)
+	}
+
+	built, err := buildSite(t.Context(), filepath.Join(dir, "build"), "", site)
+	if err != nil {
+		t.Fatalf("the build of a fixture copy of site/ with no records directory failed: %v", err)
+	}
+
+	return built
+}
+
+// unrecordedSiteFixture copies the site sources at source to dir and removes the
+// copy's records directory, the state of a repository whose HSTS record the
+// builder has never seen: the copy holds no records/hsts.json, and the fixture
+// fails when the directory survives, so a check over it cannot read the record
+// the repository commits. It returns dir.
+func unrecordedSiteFixture(dir, source string) (string, error) {
+	if err := copyTree(source, dir); err != nil {
+		return "", fmt.Errorf("copy the site sources from %s: %w", source, err)
+	}
+
+	records := filepath.Join(dir, "records")
+	if err := os.RemoveAll(records); err != nil {
+		return "", fmt.Errorf("remove the copied records directory %s: %w", records, err)
+	}
+
+	if _, err := os.Stat(records); !errors.Is(err, fs.ErrNotExist) {
+		return "", fmt.Errorf("the fixture copy still holds %s, want no records directory", records)
 	}
 
 	return dir, nil
