@@ -742,13 +742,15 @@ if any call still asks to enable one, answer N: enabling an API writes to the pr
 Check that a list is not empty when the asset listing holds its resources: a failed list (a
 missing role or an interrupted run) writes nothing and stops nothing. With Cloud
 Functions, check `functions.json`: without it each function's Cloud Run service is counted a second
-time, as a `serverless.container` (`roles/cloudfunctions.viewer`). With URL maps, backend services or
-target pools, check `compute-url-maps.json`, `compute-backend-services.json`,
-`compute-forwarding-rules.json` and `compute-target-pools.json`: load balancers come only from these
-lists, so a failed one leaves every load balancer out of the inventory, with nothing in its place
-(`roles/compute.viewer`). A failed `compute-target-https-proxies.json` or
+time, as a `serverless.container` (`roles/cloudfunctions.viewer`). With load balancers, check the
+compute lists (`roles/compute.viewer`). A failed `compute-target-pools.json` leaves every target
+pool out, with nothing in its place. A failed `compute-url-maps.json` puts, in place of each URL
+map, one load balancer per backend service it names. A failed `compute-backend-services.json`
+leaves out every load balancer that is a backend service alone, gives the URL maps no `udp` or
+`ipv6` from their backend services, and keeps a service mesh's URL map as a load balancer. A failed
+`compute-forwarding-rules.json`, `compute-target-https-proxies.json` or
 `compute-target-http-proxies.json` leaves the load balancers in, but without the `ipv6` or `udp`
-their forwarding rules prove (`roles/compute.viewer`). A failed Valkey list in `memorystore.json`
+their forwarding rules prove. A failed Valkey list in `memorystore.json`
 leaves every Valkey instance without `sharding` and without its size (`roles/memorystore.viewer`).
 
 The `--format` projections keep only what the program reads: an instance's metadata keys, for
