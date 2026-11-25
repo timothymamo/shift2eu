@@ -887,6 +887,16 @@ text as the decision)
     Managed Redis cluster's clustering and persistence are its databases' settings,
     <https://learn.microsoft.com/en-us/rest/api/redis/redisenterprisecache/databases/get>, read with
     one more `az rest` call. Not confirmed, so out of the guide: an Azure Managed Redis SKU's memory.
+  - Checked on 2026-11-25 (issue #610, public Microsoft documentation only, no Azure call): a legacy
+    Enterprise or Enterprise Flash cluster is always replicated, with or without zones. "A cache in
+    either Enterprise tier runs on a Redis Enterprise cluster. It always requires an odd number of
+    server nodes to form a quorum. By default, it has three nodes ... Each partition has a primary and
+    at least one replica ... The Enterprise cluster ensures that the primary and replica(s) of any
+    partition are never collocated on the same data node." (Microsoft Learn, *High availability for
+    Azure Cache for Redis*, section *Enterprise and Enterprise Flash tiers*,
+    <https://learn.microsoft.com/en-us/azure/azure-cache-for-redis/cache-high-availability>). So
+    `azure.jq` gives every `Enterprise_*` and `EnterpriseFlash_*` cluster `node-high-availability` and
+    a count of 2; its zones decide only `zone-high-availability`.
 - Milestone 5: OVHcloud Load Balancer node-level failover; File Storage Service regions and price;
   whether Managed Private Registry Small ("active-passive across 2 AZs") meets the zone rule without
   manual failover; whether the Valkey and MongoDB prices are per node or per service (the snapshot stores
