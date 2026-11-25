@@ -1407,6 +1407,11 @@ test of ours (Decision 3's reason).
      canary; otherwise the run fails with exit 1 and the audit's constant line. No 64-hex rule applies
      to it, as the preflight's judgement applies to its transcript: the audit's findings may quote
      SHA-256 pins, which are 64 lower-case hex characters too.
+     *Amended 2026-11-25 (issues #615 and #614):* beside the work area, the audit's working directory
+     `cwd-audit` must still be an empty real directory (`Lstat`, no link), and the `$GITHUB_ENV` file is
+     digested before and after the audit's launch as around the preflight's; any change fails the run
+     with exit 1 and the audit's constant line (see "The CLI's working directory and its built-in
+     read-only commands" below).
      *Amended 2026-11-23 (issue #277 round D):* the result file is read from one descriptor and never
      through a link: its entry must be a regular file (`Lstat`, so neither a link nor a FIFO is
      opened), and the descriptor opened must be that same file (`os.SameFile` on its `Stat`). That gives
@@ -1471,15 +1476,18 @@ removes sudo, and never under `$RUNNER_TEMP` or the workspace (both under `/home
 |---|---|---|
 | `/srv/audit/checkout` | a copy of the `github.sha` checkout, `.git` included, every write bit removed | Read, Grep, Glob |
 | `/srv/audit/checks` | the decrypted `checks-result`, every write bit removed | Read, Grep, Glob |
-| `/srv/audit/work` | the result file `result.json`; `tmp/`, the commands' `TMPDIR` | Read, Grep, Glob, Write, Edit; Bash writes here (and, by redirection, into `cwd`; amended 2026-11-25, issue #614) |
-| `/srv/audit/cwd` | the CLI's working directory (*added 2026-11-25, issue #615*): empty before the run, made by the same `install -d` as `work` (the runner's, mode 0755); under the scrub the CLI leaves its placeholders here; nothing reads it back | no rule names it; as the working directory, the CLI's built-in read-only Bash commands list and read it, and a Bash redirection may write into it (issue #614) |
+| `/srv/audit/work` | the result file `result.json`; `tmp/`, the commands' `TMPDIR` | Read, Grep, Glob, Write, Edit; Bash writes here (and, by redirection, into the session's working directory; amended 2026-11-25, issue #614) |
+| `/srv/audit/cwd-preflight` | the preflight session's working directory (*added 2026-11-25, issues #615 and #614*): empty before the preflight, made by the same `install -d` as `work` (the runner's, mode 0755); under the scrub the CLI leaves its placeholders here; checked by `CheckLayout` only, never read by the launcher after the session | no rule names it; as the working directory, the CLI's built-in read-only Bash commands list and read it, and a Bash redirection may write into it (issue #614) |
+| `/srv/audit/cwd-audit` | the audit session's working directory (*added 2026-11-25, issues #615 and #614*): made like `cwd-preflight`, checked by `CheckLayout` and again by `Audit` before its launch, which refuses it unless it is still an empty real directory; the CLI leaves its placeholders here; never read by the launcher after the session | as `cwd-preflight`, for the audit's session |
 | `/srv/audit/state` | `home/` (the fresh `HOME`, with Claude Code's configuration and transcripts), `tmp/` (the CLI's `TMPDIR`), `bin/claude`, `out/` (transcripts and stderr) | none: denied to every tool |
 | `/srv/audit/bin/audit-exec` | the wrapper, built from `ci/auditexec`, owned by root, mode 0555 | Bash runs it, nothing else |
 
-The working directory is `/srv/audit/cwd` (`/srv/audit/work` until issue #615, 2026-11-25; see "The
-CLI's working directory and its built-in read-only commands" below), so no `CLAUDE.md` or `.claude/` of
-the checkout copy is found from it: they sit in a sibling directory, and the CLI looks for them only in
-the working directory and its parents (`/srv/audit`, `/srv`, `/`, which hold none). The skill reaches the model only as the system prompt
+The working directory is `/srv/audit/cwd-preflight` for the preflight's session and
+`/srv/audit/cwd-audit` for the audit's (`/srv/audit/work` until issue #615, then a shared
+`/srv/audit/cwd`, both 2026-11-25; see "The CLI's working directory and its built-in read-only commands"
+below), so no `CLAUDE.md` or `.claude/` of the checkout copy is found from it: they sit in a sibling
+directory, and the CLI looks for them only in the working directory and its parents (`/srv/audit`,
+`/srv`, `/`, which hold none). The skill reaches the model only as the system prompt
 `ci/auditrun` hands it.
 
 #### The settings file
@@ -1495,7 +1503,7 @@ dropping or widening any entry below fails `make test`.
   issue #592, from `dontAsk`), `SafeModeOff` (the
   settings file must apply, and `--safe-mode` turns customisations off; each thing it would turn off is
   off by another flag or key here), `AppendSystemPrompt` (the default prompt explains the tools the
-  audit uses), `WorkDir` `/srv/audit/cwd` (*amended 2026-11-25, issue #615*, from `/srv/audit/work`), `Home` `/srv/audit/state/home`, `Transcript` the file above,
+  audit uses), `WorkDir` `/srv/audit/cwd-audit`, the preflight's `/srv/audit/cwd-preflight` (*amended 2026-11-25, issues #615 and #614*, from `/srv/audit/work`), `Home` `/srv/audit/state/home`, `Transcript` the file above,
   `--strict-mcp-config` with the empty MCP configuration.
 - **Permission mode `default`** (*amended 2026-11-25, issue #592*; it was `dontAsk`): in `-p` with no
   permission-prompt tool, a tool call no allow rule matches is refused, not asked about, exactly as
@@ -1527,7 +1535,8 @@ dropping or widening any entry below fails `make test`.
   `sandbox.allowUnsandboxedCommands` `false`, `sandbox.enableWeakerNestedSandbox` `false`, no
   `sandbox.excludedCommands`, `sandbox.network.allowedDomains` `[]`, `sandbox.network.allowUnixSockets`
   `[]`, `sandbox.network.allowLocalBinding` `false`. The sandbox takes its filesystem rules from the
-  permission rules and the working directory: Bash writes only under `/srv/audit/work` and reads nothing
+  permission rules and the working directory: Bash writes only under `/srv/audit/work` and the
+  session's working directory (amended 2026-11-25, issue #614) and reads nothing
   the deny list names. The file sets no `sandbox.filesystem` key. *Amended 2026-11-25 (issue #614):*
   that holds without the scrub only. Under the scrub, bubblewrap's argv as 2.1.332 builds it also binds
   `/home`, `/root`, `/tmp`, `/var`, `/opt`, `/run` and `/mnt` read-write and re-exposes `/home` after the
@@ -2082,7 +2091,10 @@ of milestone 2), and the constraints PR 5 must keep:
   `is_error`.** Claude Code's read-before-write guard refuses a Write or an Edit of a file the run has not
   read, before any permission rule or sandbox is consulted, so their error shows the guard, not the
   deny rule. Probe 6 rests on the launcher's own observation, the `$GITHUB_ENV` file's digest before and
-  after the run.
+  after the run. *Amended 2026-11-25 (issue #614):* the digest spans the audit's launch too, not the
+  preflight's alone: under the scrub the sandbox no longer holds `/home`, where the file lives (bwrap's
+  argv re-binds it read-write), and the built-in read-only commands run without the wrapper, so the
+  preflight's refusal of probe 6 no longer shows the audit's session cannot write it.
 - *Added 2026-11-23:* **Whether the pinned CLI marks a non-zero Bash exit as `is_error`.** Probe 5's
   token-absence call needs it: if a Bash call that exits non-zero comes back without `is_error`, the
   judgement reads that call wrongly. The first run's transcript shows which; a change to the judgement
@@ -2322,10 +2334,18 @@ them.
   the audit's `checkWorkArea`, which wants `tmp/` alone, refuses every real run after a passing
   preflight.
 
-**Decision (#615): the CLI runs in `/srv/audit/cwd`**, a sibling of the work area that the model-free step
-makes beside `work` (`install -d`, the runner's, mode 0755), that `CheckLayout` wants to exist as a
-directory, no symbolic link, and empty, and that nothing reads back. `checkWorkArea`'s rule stays exactly
-as it is. Offline, with the working directory moved, every placeholder and every mount point of bwrap's
+**Decision (#615): each CLI session runs in its own directory**, `/srv/audit/cwd-preflight` for the
+preflight's and `/srv/audit/cwd-audit` for the audit's, two siblings of the work area directly under
+`/srv/audit` that the model-free step makes beside `work` (`install -d`, the runner's, mode 0755), and
+that `CheckLayout` wants to exist as directories, no symbolic link, and empty. `Audit`, beside
+`checkWorkArea` and before its launch, refuses unless `cwd-audit` is still an empty real directory
+(`Lstat`, no link); `cwd-preflight` is never checked after `CheckLayout`. No tolerance list: an entry of
+`cwd-audit` before the audit is refused whatever its name. *Amended 2026-11-25 (round 2):* a first
+version shared one `/srv/audit/cwd`, checked empty once, in `CheckLayout`; but the CLI itself reads its
+working directory at session start (memory discovery loads a `CLAUDE.md` or `CLAUDE.local.md` there,
+and a start-up `git status` runs in it), and 2.1.332 does not refuse a Bash redirection into it, so a
+preflight session could plant a `CLAUDE.md` the audit's session would load. `checkWorkArea`'s rule stays
+exactly as it is. Offline, with the working directory moved, every placeholder and every mount point of bwrap's
 argv landed in the new directory, and the work area held only `tmp/` and what the model wrote (Write,
 Edit, a Bash redirection and a wrapper's output into it). The settings file is unchanged:
 `Edit(//srv/audit/work/**)` keeps the work area writable for Write and Edit and makes the sandbox bind it
@@ -2342,10 +2362,20 @@ on the CLI's working directory either.
   their emptiness too.
 - **Not stopping them:** only the scrub off does, and the scrub stays (issue #592's decision); the sandbox's
   `.cc-writes/` would appear even then.
-- **What it costs:** a relative path now resolves in `cwd`. A relative Write or Edit there matches no
-  Edit rule and is refused; a Bash redirection into it is accepted (it is the session's working
-  directory), so the model could leave a file there, harmlessly, since the result is read only from
-  `work/result.json`. The prompt's "the one place you may write" stays true for the tools.
+- **What it costs:** a relative path now resolves in the session's working directory. A relative Write
+  or Edit there matches no Edit rule and is refused; a Bash redirection into it is accepted (it is the
+  session's working directory), so the model can leave a file there. The launcher never reads it after
+  the session (the result is read only from `work/result.json`), but the CLI itself reads it at session
+  start, which is why each session has its own and the audit checks its own empty before its launch. A
+  file the model writes into its own working directory during its session is harmless because:
+  `--setting-sources ""` loads no project or local settings, so a planted `.claude/settings.json` or
+  `settings.local.json` is never read; `--disable-slash-commands` and no `Skill` or `Agent` (`Task`) tool,
+  so a planted `.claude/commands/`, `agents/` or skill is never run; the sandbox's `denyWrite` on
+  `.claude` keeps Bash from writing there at all; and its read-only bind of an empty directory onto
+  `.git` keeps a planted `.git/config` away from the start-up `git status` and the built-in read-only git
+  commands, which run without the wrapper.
+  The bwrap part is unconfirmed: it is read from a stand-in bwrap's argv log, not seen with a real bwrap.
+  The prompt's "the one place you may write" stays true for the tools.
 
 **Issue #614: the built-in read-only Bash commands.** In the `default` mode, 2.1.332's Bash permission
 check runs, per subcommand: deny rules, ask rules, path checks (the working directory and the Read and
@@ -2354,7 +2384,7 @@ accepts a command its read-only validator knows ("Read-only command is allowed")
 that last step off. Offline, under the audit's settings, these ran **with no allow rule and not through
 the wrapper**: `ls`, `pwd`, `echo`; `cat`, `head`, `grep -r`, `find -name`, `wc -l`, `stat`, `ls -la` of
 a path in the checkout (a Read rule's area); `cat` of a relative path in the working directory; `git
-status` and `git log` in the working directory only (now the empty `/srv/audit/cwd`; `git -C <checkout>
+status` and `git log` in the working directory only (now the session's empty `/srv/audit/cwd-preflight` or `/srv/audit/cwd-audit`; `git -C <checkout>
 log` needs approval and is refused); `[ ]`, `[[ ]]` (`[[ -v NAME ]]` included); and `echo hi >
 <work>/x.txt`, a write by redirection. The class, per the bundle's own list for 2.1.332, holds about 80
 commands (among them `cat`, `head`, `tail`, `wc`, `stat`, `ls`, `cd`, `echo`, `diff`, `readlink`,
@@ -2399,9 +2429,15 @@ arguments; git's read-only subcommands), and changes between versions. The deny 
   or without it: the subprocess environment builder deletes the CLI's credential list unconditionally. So
   issue #592's premise that the scrub is the one mechanism does not hold offline; the scrub stays, and
   probe 5 shows the token's absence on every run.
-- **Follow-up, not done here:** a preflight probe that holds the class's boundary, for example a bare
-  `cat` of a state path and a bare write to `/tmp`, both expected refused, the file checked absent, so a
-  CLI bump that widens the class past the permission layer fails the run.
+- **The `$GITHUB_ENV` digest spans both launches** (*amended 2026-11-25*): the launcher digests the file
+  before and after the audit's launch as around the preflight's, and any change fails the run. Under the
+  scrub the sandbox no longer holds `/home`, where the file lives, and the class runs without the
+  wrapper, so the preflight's probe 6 alone no longer shows the audit's session cannot write it.
+- **Follow-up, not done here:** recheck the scrub's mounts with a real bwrap on the x64 runner, the
+  `.claude` `denyWrite` and the empty directory bound onto `.git` included; and a preflight probe that
+  holds the class's boundary, a bare `cat` of a state path and a bare `>` into `/tmp`, both expected
+  refused, the file checked absent, so a CLI bump that widens the class past the permission layer fails
+  the run.
 
 ### The workflow (milestone 2, PR 5b, amended 2026-11-24)
 
