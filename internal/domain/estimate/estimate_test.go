@@ -2622,7 +2622,8 @@ func searchOffering(name string, plans ...catalog.Plan) catalog.Offering {
 }
 
 // kafkaOffering sells the messaging.kafka plans given, priced as a search
-// cluster is: per broker, and the GiB above what a plan includes a GiB.
+// cluster is: per broker, and prices the GiB above what a plan includes at
+// 0.10 EUR a GiB.
 func kafkaOffering(name string, plans ...catalog.Plan) catalog.Offering {
 	return nodeOffering(name, taxonomy.MessagingKafka, 1000, plans...)
 }

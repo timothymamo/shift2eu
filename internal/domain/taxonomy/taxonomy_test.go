@@ -77,12 +77,8 @@ func TestParseCategory(t *testing.T) {
 		{name: "serverless container", in: "serverless.container", want: taxonomy.ServerlessContainer},
 		{name: "registry container", in: "registry.container", want: taxonomy.RegistryContainer},
 		{name: "storage file", in: "storage.file", want: taxonomy.StorageFile},
-		// The two categories PRD #571 adds. They are written as the value, the name
-		// the inventory file and the report spell, and not as the package's
-		// constants, so this file compiles while those constants do not exist yet:
-		// what a file or a report spells is the whole behaviour here.
-		{name: "search opensearch", in: "search.opensearch", want: taxonomy.Category("search.opensearch")},
-		{name: "messaging kafka", in: "messaging.kafka", want: taxonomy.Category("messaging.kafka")},
+		{name: "search opensearch", in: "search.opensearch", want: taxonomy.SearchOpenSearch},
+		{name: "messaging kafka", in: "messaging.kafka", want: taxonomy.MessagingKafka},
 		{name: "unclassified", in: "unclassified", want: taxonomy.Unclassified},
 	}
 
@@ -215,15 +211,12 @@ func TestCategories(t *testing.T) {
 		taxonomy.DatabaseMySQL,
 		taxonomy.DatabasePostgreSQL,
 		taxonomy.KubernetesManaged,
-		// PRD #571's two categories, written as values for the reason
-		// TestParseCategory gives: this test must compile before their constants
-		// exist, and what it pins is the value, at its place in the order.
-		taxonomy.Category("messaging.kafka"),
+		taxonomy.MessagingKafka,
 		taxonomy.MessagingQueue,
 		taxonomy.MessagingTopic,
 		taxonomy.NetworkLoadBalancer,
 		taxonomy.RegistryContainer,
-		taxonomy.Category("search.opensearch"),
+		taxonomy.SearchOpenSearch,
 		taxonomy.ServerlessContainer,
 		taxonomy.ServerlessFunction,
 		taxonomy.StorageBlock,

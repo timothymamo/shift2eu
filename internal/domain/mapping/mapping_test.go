@@ -496,7 +496,7 @@ func TestMapNoOfferingForKafka(t *testing.T) {
 	resource := newResource(t, inventory.Resource{
 		ID:       "kafka-example",
 		RawType:  "AWS::MSK::Cluster",
-		Category: taxonomy.Category("messaging.kafka"),
+		Category: taxonomy.MessagingKafka,
 		Region:   "eu-west-1",
 	})
 
@@ -513,7 +513,7 @@ func TestMapNoOfferingForKafka(t *testing.T) {
 	want := []mapping.Reason{{
 		Code:     mapping.NoOffering,
 		Target:   "UpCloud",
-		Category: taxonomy.Category("messaging.kafka"),
+		Category: taxonomy.MessagingKafka,
 	}}
 
 	if diff := cmp.Diff(want, got.Reasons); diff != "" {

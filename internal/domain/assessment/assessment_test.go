@@ -346,7 +346,7 @@ func TestAssessVerdictsComeFromMapping(t *testing.T) {
 func TestAssessBlockerForKafkaOnUpCloud(t *testing.T) {
 	t.Parallel()
 
-	kafka := taxonomy.Category("messaging.kafka")
+	kafka := taxonomy.MessagingKafka
 
 	inv := newInventory(t, []inventory.Resource{{
 		ID:       "kafka-example",

@@ -29,12 +29,11 @@ func ptr[T any](v T) *T {
 	return &v
 }
 
-// The two categories PRD #571 adds, as the values the taxonomy, the inventory
-// file and the report share. They are written as values, not as the package's
-// constants, so this file compiles while those constants do not exist yet.
+// The two categories PRD #571 adds, as the values the taxonomy shares with the
+// inventory file and the report.
 const (
-	searchCategory = taxonomy.Category("search.opensearch")
-	kafkaCategory  = taxonomy.Category("messaging.kafka")
+	searchCategory = taxonomy.SearchOpenSearch
+	kafkaCategory  = taxonomy.MessagingKafka
 )
 
 // vm returns a compute.vm resource with a valid ID and raw type: the base of

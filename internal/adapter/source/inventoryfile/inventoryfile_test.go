@@ -1731,19 +1731,17 @@ func TestInventoryReadsEveryTaxonomyCategory(t *testing.T) {
 			size:     `"storageGiB": 500`,
 			wantSize: &inventory.Size{StorageGiB: ptr(500.0)},
 		},
-		// PRD #571's two categories are sized per node, as a database is, and
-		// written as values for the reason the taxonomy's tests give: this file must
-		// compile before their constants exist.
+		// PRD #571's two categories are sized per node, as a database is.
 		{
 			name:     "search.opensearch",
-			category: taxonomy.Category("search.opensearch"),
+			category: taxonomy.SearchOpenSearch,
 			rawType:  "AWS::OpenSearchService::Domain",
 			size:     `"vcpus": 2, "memoryGiB": 8, "storageGiB": 100, "count": 3`,
 			wantSize: &inventory.Size{VCPUs: ptr(2.0), MemoryGiB: ptr(8.0), StorageGiB: ptr(100.0), Count: ptr(3)},
 		},
 		{
 			name:     "messaging.kafka",
-			category: taxonomy.Category("messaging.kafka"),
+			category: taxonomy.MessagingKafka,
 			rawType:  "AWS::MSK::Cluster",
 			size:     `"vcpus": 2, "memoryGiB": 8, "storageGiB": 1000, "count": 3`,
 			wantSize: &inventory.Size{VCPUs: ptr(2.0), MemoryGiB: ptr(8.0), StorageGiB: ptr(1000.0), Count: ptr(3)},
