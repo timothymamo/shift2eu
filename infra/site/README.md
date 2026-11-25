@@ -51,7 +51,8 @@ release deploys the objects), no call, in a configuration or test file, of a fun
 local machine (`file`, `templatefile`, `templatestring`, `fileset`, `pathexpand`, `abspath`, ...) but
 exactly `file("${path.module}/Caddyfile")` in a configuration file, every `scaleway_container` at the cost
 pins (`max_scale = 1`, `cpu_limit = 140`, `memory_limit_bytes = 268435456` as literals, `min_scale` 0 or 1,
-no deprecated `memory_limit` or `http_option`), nothing
+as a literal or a local set to one, with any postcondition on `self.min_scale` comparing that same
+expression, no deprecated `memory_limit` or `http_option`), nothing
 in a `terraform` block but `required_version`, `required_providers`, `backend` and `cloud`
 (`[terraform-setting]`: no `encryption`, whose `external` key provider runs a local command), no `import`
 block, no `mock_provider` with a `source` and no `*.tfmock.hcl` or `*.tfmock.json` file, and only the

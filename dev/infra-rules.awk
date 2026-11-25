@@ -8,8 +8,9 @@
 # The tokenizer knows HCL's strings (with ${...} and %{...} templates, which may nest strings), comments
 # (#, // and /* */), identifiers, numbers and punctuation. The parser above it tracks only what the rules
 # need: blocks with their type and labels, and attributes with their name and whether their value is one
-# literal string ("L", its value kept), one identifier such as true ("I", its name kept), an object ("O")
-# or any other expression ("E"). Anything it does
+# literal string ("L", its value kept), one identifier such as true ("I", its name kept), one whole number
+# ("D", kept), one local.<name> reference ("R", the name kept), an object ("O") or any other expression
+# ("E"); a condition's value is also kept as its tokens. Anything it does
 # not read is a [parse] failure: a heredoc; an unbalanced string, brace or comment; a backslash in a block
 # label or a quoted object key (HCL decodes escapes such as _, so the raw text is not the name tofu
 # reads); a $${ or %%{ in a block label (read as ${ and %{); and a { after a block header whose labels
@@ -298,6 +299,9 @@ function attr(n, k, v) {
   aname[nattr] = n
   akind[nattr] = k
   aval[nattr] = v
+  if (rec && recattr == 0) { # the condition whose tokens are being kept (tok)
+    recattr = nattr
+  }
 }
 
 # One token: t is "I" (identifier), "S" (string; lit is 1 when it holds no template), "P" (one of
@@ -305,6 +309,12 @@ function attr(n, k, v) {
 function tok(t, v, lit, esc,   i, ok, n) {
   if (broken) {
     return
+  }
+  # A condition's value is kept as its tokens, joined by one space (a string quoted), until the newline,
+  # comma or } that ends it at the depth it began: [container-min-scale-postcondition] reads it.
+  recend = rec && sp == recsp && (t == "N" || (t == "P" && (v == "," || v == "}")))
+  if (rec && !recend && t != "N") {
+    rectext = rectext " " (t == "S" ? "\"" v "\"" : v)
   }
   if (pstate == 2) { # an attribute whose value began with a literal string: one string, or more?
     if (t == "N" || (t == "P" && (v == "," || v == "}"))) {
@@ -316,6 +326,24 @@ function tok(t, v, lit, esc,   i, ok, n) {
   } else if (pstate == 3) { # an attribute whose value began with an identifier: that one, or more?
     if (t == "N" || (t == "P" && (v == "," || v == "}"))) {
       attr(pa, "I", pval)
+    } else if (pval == "local" && t == "X" && v == ".") { # local.<name>, perhaps
+      pstate = 5
+      return
+    } else {
+      attr(pa, "E", "")
+    }
+    pstate = 0
+  } else if (pstate == 5) { # local. read: a name must follow
+    if (t == "I") {
+      pstate = 6
+      pval = v
+      return
+    }
+    attr(pa, "E", "")
+    pstate = 0
+  } else if (pstate == 6) { # local.<name> read: that one reference, kept as kind "R" with the name, or more?
+    if (t == "N" || (t == "P" && (v == "," || v == "}"))) {
+      attr(pa, "R", pval)
     } else {
       attr(pa, "E", "")
     }
@@ -350,6 +378,12 @@ function tok(t, v, lit, esc,   i, ok, n) {
       return
     }
     attr(pa, "E", "")
+  }
+  if (recend) { # the condition's value has ended, and its attribute is recorded by now
+    rec = 0
+    if (recattr) {
+      atext[recattr] = substr(rectext, 2)
+    }
   }
 
   if (t == "P" && (v == "{" || v == "(" || v == "[")) {
@@ -413,6 +447,12 @@ function tok(t, v, lit, esc,   i, ok, n) {
     pa = bv[1]
     pstate = 1
     skip = 1
+    if (pa == "condition") { # keep its tokens (above)
+      rec = 1
+      recsp = sp
+      recattr = 0
+      rectext = ""
+    }
     return
   }
   bn++
@@ -433,6 +473,7 @@ FNR == 1 {
   md = 0
   incomment = 0
   pstate = 0
+  rec = 0
   broken = 0
   ffpend = ""
   reset()
@@ -835,6 +876,18 @@ END {
       containerVal[ck] = aval[a]
       containerAt[ck] = aline[a]
     }
+    # A configuration's locals, by directory (a module's scope), for the min_scale pin that may read one.
+    if (p == "locals") {
+      lk = dirof(f) SUBSEP n
+      localSet[lk]++
+      localKind[lk] = akind[a]
+      localVal[lk] = aval[a]
+    }
+    # Every postcondition's condition, for the one that checks the container's min_scale.
+    if (n == "condition" && p ~ "/lifecycle/postcondition$") {
+      nconds++
+      condAttr[nconds] = a
+    }
     if (p ~ "^resource:scaleway_iam_(policy|application):[^/]+$" && (n == "count" || n == "for_each")) {
       problem("iam-repeat", f, aline[a], n " on " shownpath(p) ": infra/ creates exactly one IAM application and one policy")
     }
@@ -874,11 +927,42 @@ END {
           problem("container-deprecated-attribute", bfile[b], containerAt[ck], shownres " sets " n ", the deprecated spelling of " containerDeprecated[n] ": the pins judge " containerDeprecated[n] " alone, so " n " could set what they do not see")
         }
       }
+      # min_scale may also read a local set once, in the container's own directory, to the literal 0 or 1:
+      # the value is then written once and read by the pin and its postcondition alike.
       ck = b SUBSEP "min_scale"
+      msexpr = "" # the expression an accepted pin sets, as tokens: its literal, or local . <name>
       if (!(ck in containerSet)) {
         problem("container-min-scale", bfile[b], bline[b], shownres " sets no min_scale: it must set min_scale = 0 or 1, the instances ADR 0045 allows to be kept warm")
-      } else if (containerSet[ck] != 1 || containerKind[ck] != "D" || (containerVal[ck] != "0" && containerVal[ck] != "1")) {
-        problem("container-min-scale", bfile[b], containerAt[ck], shownres " sets min_scale to something other than the literal 0 or 1: more instances kept warm are a cost nobody decided")
+      } else if (containerSet[ck] == 1 && containerKind[ck] == "D" && (containerVal[ck] == "0" || containerVal[ck] == "1")) {
+        msexpr = containerVal[ck]
+      } else if (containerSet[ck] == 1 && containerKind[ck] == "R") {
+        lk = dirof(bfile[b]) SUBSEP containerVal[ck]
+        if (localSet[lk] == 1 && localKind[lk] == "D" && (localVal[lk] == "0" || localVal[lk] == "1")) {
+          msexpr = "local . " containerVal[ck]
+        } else {
+          problem("container-min-scale", bfile[b], containerAt[ck], shownres " sets min_scale = local." shownkey(containerVal[ck]) ", which is no local set once to the literal 0 or 1: more instances kept warm are a cost nobody decided")
+        }
+      } else {
+        problem("container-min-scale", bfile[b], containerAt[ck], shownres " sets min_scale to something other than the literal 0 or 1, or a local set to one: more instances kept warm are a cost nobody decided")
+      }
+      # The check after an apply must compare the platform's min_scale with what the pin sets, so the two
+      # cannot drift: a hard-coded 0 beside a local would still pass once the local is raised.
+      if (msexpr != "") {
+        for (j = 1; j <= nconds; j++) {
+          a = condAttr[j]
+          if (afile[a] != bfile[b] || apath[a] != bpath[b] "/lifecycle/postcondition") {
+            continue
+          }
+          ct = atext[a]
+          if (index(" " ct " ", " self . min_scale ") == 0) {
+            continue
+          }
+          if (ct != "self . min_scale == " msexpr && ct != msexpr " == self . min_scale") {
+            msshown = msexpr
+            sub(/ [.] /, ".", msshown)
+            problem("container-min-scale-postcondition", afile[a], aline[a], shownres " has a postcondition comparing self.min_scale with something other than what min_scale sets (" shownkey(msshown) "): the condition must be self.min_scale == the same expression, so the check after an apply follows the pin")
+          }
+        }
       }
     }
   }

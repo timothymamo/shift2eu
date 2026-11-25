@@ -14,6 +14,10 @@ locals {
   # The names the container serves, each a custom domain with its own Let's Encrypt certificate: www (a
   # Namecheap CNAME to the container's endpoint) and the apex (an ALIAS at @), which Caddy redirects to www.
   front_hostnames = toset(["www.shift2eu.com", "shift2eu.com"])
+
+  # The instances kept warm (ADR 0045, The container), written once: the container sets it and its
+  # postcondition checks it, so the two cannot drift. dev/infra-rules.sh accepts only the literal 0 or 1.
+  container_min_scale = 0
 }
 
 # The front's namespace, in the site's project and region: the project is the site's boundary, and the region
@@ -60,21 +64,22 @@ resource "scaleway_container" "site" {
   https_connections_only         = false
   enable_default_public_endpoint = true
 
-  min_scale          = 0
+  min_scale          = local.container_min_scale
   max_scale          = 1
   cpu_limit          = 140
   memory_limit_bytes = 268435456
 
   lifecycle {
     # The provider leaves false and 0 out of the create request (it reads them with GetOk), so the platform's
-    # own default would decide them: check after the apply that it kept plain HTTP and no warm instance.
+    # own default would decide them: check after the apply that it kept plain HTTP and the configured
+    # min_scale.
     postcondition {
       condition     = self.https_connections_only == false
       error_message = "The container redirects plain HTTP itself (https_connections_only is true): http:// would get the platform's 301 on the same host instead of Caddy's 308 (ADR 0045). Set plain HTTP to enabled in the console, then plan again."
     }
     postcondition {
-      condition     = self.min_scale == 0
-      error_message = "The container keeps an instance warm (min_scale is not 0), a cost the configuration did not set (ADR 0045). Set min_scale to 0 in the console, then plan again."
+      condition     = self.min_scale == local.container_min_scale
+      error_message = "The container's min_scale differs from local.container_min_scale, so it keeps warm a number of instances the configuration did not set (ADR 0045). Set min_scale to that value in the console, then plan again."
     }
   }
 }

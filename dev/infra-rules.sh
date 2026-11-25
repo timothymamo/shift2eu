@@ -70,7 +70,14 @@
 #   [container-deprecated-attribute]
 #                    memory_limit or http_option on a scaleway_container, the deprecated spellings of
 #                    memory_limit_bytes and https_connections_only (that attribute gets this tag alone)
-#   [container-min-scale] a scaleway_container whose min_scale is missing or not the literal 0 or 1
+#   [container-min-scale] a scaleway_container whose min_scale is missing, or set other than once as the
+#                    literal 0 or 1 or as local.<name> where that local, in the same directory, is set once
+#                    to the literal 0 or 1
+#   [container-min-scale-postcondition]
+#                    for a min_scale the rule above accepts, a postcondition of that container whose
+#                    condition compares self.min_scale with anything but the same expression min_scale
+#                    sets (self.min_scale == <it>, either side): a hard-coded 0 beside a local would pass
+#                    once the local is raised
 #   [container-repeat] count or for_each on a scaleway_container or a scaleway_container_namespace, or
 #                    more than one scaleway_container under the root: the front is one container in one
 #                    namespace (ADR 0045), and a repeat multiplies the cost pins' ceiling
