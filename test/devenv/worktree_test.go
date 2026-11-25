@@ -905,8 +905,9 @@ func TestWorktreeRefusesALocalRenovateBranchThatDiffersFromOrigin(t *testing.T) 
 				f.mustGitIn(t, f.checkout, "config", "branch."+worktreeRenovateBranch+".merge", "refs/heads/origin/"+worktreeRenovateBranch)
 
 				// The case says nothing unless the branch really tracks that local ref, not origin's.
-				if want := "refs/heads/origin/" + worktreeRenovateBranch; f.trackingRefOf(t, worktreeRenovateBranch) != want {
-					t.Fatalf("the local branch %s tracks %q, want the local ref %s: the case cannot tell the two refs apart (issue #602)", worktreeRenovateBranch, f.trackingRefOf(t, worktreeRenovateBranch), want)
+				want := "refs/heads/origin/" + worktreeRenovateBranch
+				if got := f.trackingRefOf(t, worktreeRenovateBranch); got != want {
+					t.Fatalf("the local branch %s tracks %q, want the local ref %s: the case cannot tell the two refs apart (issue #602)", worktreeRenovateBranch, got, want)
 				}
 
 				return sha
