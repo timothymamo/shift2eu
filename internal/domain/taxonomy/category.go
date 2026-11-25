@@ -67,6 +67,11 @@ const (
 	// Apache Kafka protocol: a partitioned, replicated log whose consumers track
 	// their own offsets.
 	MessagingKafka Category = "messaging.kafka"
+	// NetworkDNS is a public DNS zone the provider's authoritative name servers
+	// serve on the internet: the records of one domain or subdomain, delegated
+	// to the provider by NS records at the parent. A private zone, which answers
+	// only inside the networks it is attached to, is not one.
+	NetworkDNS Category = "network.dns"
 	// Unclassified marks a source resource that fits no other category. It is a
 	// fact about the resource, not a fallback for unknown values, and no target
 	// offering ever serves it.
@@ -88,6 +93,7 @@ var categories = []Category{
 	MessagingKafka,
 	MessagingQueue,
 	MessagingTopic,
+	NetworkDNS,
 	NetworkLoadBalancer,
 	RegistryContainer,
 	SearchOpenSearch,
@@ -116,4 +122,13 @@ func ParseCategory(s string) (Category, error) {
 // on each call.
 func Categories() []Category {
 	return slices.Clone(categories)
+}
+
+// IsGlobal reports whether offerings of c may be global: served from the
+// provider's own locations, bound to no region the user chooses, and so
+// available in every region (PRD #581, The region model). NetworkDNS is the
+// only such category; any other value, one outside the vocabulary included, is
+// not global. A global category may still have regional offerings.
+func IsGlobal(c Category) bool {
+	return c == NetworkDNS
 }

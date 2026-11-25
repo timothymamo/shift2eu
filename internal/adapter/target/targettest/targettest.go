@@ -142,6 +142,7 @@ func checkCatalog(cat catalog.Catalog, want Expectations) []error {
 
 	errs = append(errs, checkDefaultRegion(snapshot.DefaultRegion, want)...)
 	errs = append(errs, checkRegions(cat, want.Regions)...)
+	errs = append(errs, checkGlobalCategories(cat.Offerings())...)
 
 	for _, category := range want.Categories {
 		if len(cat.OfferingsFor(category)) == 0 {
@@ -188,6 +189,30 @@ func checkRegions(cat catalog.Catalog, allowed []string) []error {
 			if !slices.Contains(allowed, region) {
 				errs = append(errs, fmt.Errorf("regions: offering %s is available in region %s, want one of %s",
 					text.Quote(o.Name), text.Quote(region), quoteAll(allowed)))
+			}
+		}
+	}
+
+	return errs
+}
+
+// checkGlobalCategories returns a global-category violation for every category
+// a global offering serves that taxonomy.IsGlobal does not accept (PRD #581,
+// The region model). catalog.New refuses such an offering already; the check is
+// defence in depth, and names every offering and category at fault. A regional
+// offering is never a violation here, whatever it serves.
+func checkGlobalCategories(offerings []catalog.Offering) []error {
+	var errs []error
+
+	for _, o := range offerings {
+		if !o.Global {
+			continue
+		}
+
+		for _, category := range o.Categories {
+			if !taxonomy.IsGlobal(category) {
+				errs = append(errs, fmt.Errorf("global-category: offering %s is global and serves %s, which is not a global category",
+					text.Quote(o.Name), text.Quote(string(category))))
 			}
 		}
 	}
@@ -272,12 +297,14 @@ func diff(got, want catalog.Catalog) string {
 }
 
 // equalOffering reports whether a and b are the same offering, field by field,
-// plans, prices, storage prices, fixed fees and plan billing cap included.
+// global flag, plans, prices, storage prices, fixed fees and plan billing cap
+// included.
 func equalOffering(a, b catalog.Offering) bool {
 	return a.Name == b.Name &&
 		slices.Equal(a.Categories, b.Categories) &&
 		slices.Equal(a.Capabilities, b.Capabilities) &&
 		slices.Equal(a.Regions, b.Regions) &&
+		a.Global == b.Global &&
 		slices.EqualFunc(a.Plans, b.Plans, equalPlan) &&
 		slices.EqualFunc(a.StoragePrices, b.StoragePrices, equalPrice) &&
 		slices.EqualFunc(a.FixedFees, b.FixedFees, equalPrice) &&
@@ -300,9 +327,9 @@ func equalPrice(a, b catalog.Price) bool {
 
 // describe formats o for a violation message, quoting every value.
 func describe(o catalog.Offering) string {
-	return fmt.Sprintf("{Name: %s, Categories: %s, Capabilities: %s, Regions: %s, Plans: %s, StoragePrices: %s, FixedFees: %s, "+
-		"PlanBillingCapHours: %d}",
-		text.Quote(o.Name), quoteAll(o.Categories), quoteAll(o.Capabilities), quoteAll(o.Regions),
+	return fmt.Sprintf("{Name: %s, Categories: %s, Capabilities: %s, Regions: %s, Global: %t, Plans: %s, StoragePrices: %s, "+
+		"FixedFees: %s, PlanBillingCapHours: %d}",
+		text.Quote(o.Name), quoteAll(o.Categories), quoteAll(o.Capabilities), quoteAll(o.Regions), o.Global,
 		describePlans(o.Plans), describePrices(o.StoragePrices), describePrices(o.FixedFees), o.PlanBillingCapHours)
 }
 

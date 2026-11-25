@@ -20,7 +20,7 @@
 // storage. Storage categories (storage.block, storage.object, storage.file)
 // have no plan: their estimate is the stored GiB × the per-GiB price.
 // Categories priced by usage are not estimated, as usage-priced; categories
-// never priced (network.loadbalancer, registry.container) are not estimated,
+// never priced (network.loadbalancer, registry.container, network.dns) are not estimated,
 // as NeverPriced ("not-priced"). An estimate on a capped offering records the
 // cap (Estimate.BillingCapHours), so a report can state it.
 //
