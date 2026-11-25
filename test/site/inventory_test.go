@@ -270,7 +270,7 @@ func TestInventoryCommandsPerStep(t *testing.T) {
 		collect int
 		build   int
 	}{
-		{key: "aws", collect: 10, build: 1},
+		{key: "aws", collect: 15, build: 1},
 		{key: "gcp", collect: 11, build: 1},
 		{key: "azure", collect: 6, build: 1},
 	}

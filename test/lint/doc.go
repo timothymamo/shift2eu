@@ -27,9 +27,9 @@
 //     to name its linters and give a reason, but it cannot refuse one named
 //     linter, and it lets some directives that silence every linter through,
 //     such as //nolint: all with a space after the colon.
-//   - A //go:build or // +build line that negates the e2e or integration tag.
-//     Every lint run sets both, so lint would never read a file behind !e2e
-//     that a build without the tag compiles.
+//   - A //go:build or // +build line that negates the e2e, integration,
+//     browser or sitefront tag. Every lint run sets all four, so lint would
+//     never read a file behind !e2e that a build without the tag compiles.
 //   - A Go file that is a symbolic link: golangci-lint lints it with the
 //     directives of its target, wherever that lies.
 //

@@ -8,7 +8,13 @@
 // the blocks beneath it out of the rule that judges them), a block label whose %, / or : never decides what
 // the rules see, a provider block setting only organization_id and
 // region, a lock file holding only the line shapes tofu init writes, the site's TLS stage recreating itself before
-// it destroys (so a replacement repoints the DNS stage first, issue #541), and so on (the script lists them). With
+// it destroys (so a replacement repoints the DNS stage first, issue #541), the site container's cost pins (one
+// instance, 140 mvCPU and 0.25 GB of memory at most, and no pin set twice or only in a nested block, ADR 0045),
+// the one front container in its one namespace (no count, no for_each, no second container, ADR 0045),
+// the environment that container runs with (the one UPSTREAM the Caddyfile reads, and no secret, on the container
+// and on the namespace the platform injects into it), no lifecycle block ignoring a change or disabling the
+// resource on the container or on its namespace (ADR 0045),
+// the one file() call the Caddyfile is read with and no other (ADR 0045), and so on (the script lists them). With
 // every rule holding it prints nothing and exits 0; a usage error exits 2.
 //
 // The real infra/ must hold every rule, and each case below is one copy of infra/ with exactly one breakage,
@@ -32,6 +38,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -70,8 +77,12 @@ type infraRuleCase struct {
 // from them fails here instead of passing unrefused.
 var infraRuleCases = slices.Concat(
 	infraFileFunctionCases(),
+	caddyfileReadCases,
 	namedInfraRuleCases,
 	tlsStageLifecycleCases,
+	resourceTypeAllowListCases,
+	containerCostPinCases,
+	containerRepeatCases,
 	infraTestNestedBlockCases,
 	infraTestLabelCases,
 	infraLabelPathCases,
@@ -1620,6 +1631,875 @@ var tlsStageLifecycleCases = []infraRuleCase{
 	},
 }
 
+// resourceTypeAllowListCases pin [resource-type]'s allow list as ADR 0045 leaves it (PRD #297 milestone 4):
+// the front's three resources (scaleway_container, scaleway_container_domain, scaleway_container_namespace)
+// enter it, and scaleway_edge_services_tls_stage leaves it with the pipeline's www domain. The stage may come
+// back only as R8's rollback re-adds it - resource scaleway_edge_services_tls_stage "site" with a lifecycle
+// block that creates before it destroys - which [tls-stage-lifecycle] judges alone, so that one stage is no
+// [resource-type]; a stage under any other label is a pipeline the site no longer runs, and it is refused. A
+// container type the front does not use is refused too, so adding the three names opened no prefix.
+var resourceTypeAllowListCases = []infraRuleCase{
+	{
+		name:   "tls-stage-under-another-label",
+		why:    `a resource "scaleway_edge_services_tls_stage" "other", the type the pipeline no longer uses under a label the rollback does not re-add`,
+		want:   "resource-type",
+		wantIn: map[string]string{"resource-type": "{site}/main.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			appendInfraText(t, filepath.Join(site, "main.tf"), `
+resource "scaleway_edge_services_tls_stage" "other" {
+}
+`)
+		},
+	},
+	// The one TLS stage the rules still allow passes: the "site" stage with its lifecycle block, written on one
+	// line, which is the stage R8's rollback re-adds. The standard-shaped block is pinned by
+	// tls-stage-create-before-destroy-true, which requires no tag at all either.
+	{
+		name: "tls-stage-site-with-a-one-line-lifecycle",
+		why:  `a resource "scaleway_edge_services_tls_stage" "site" whose lifecycle { create_before_destroy = true } is written on one line, the stage R8's rollback re-adds`,
+		want: "",
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			appendInfraText(t, filepath.Join(site, "main.tf"), `
+resource "scaleway_edge_services_tls_stage" "site" {
+  lifecycle { create_before_destroy = true }
+}
+`)
+		},
+	},
+	{
+		name:   "container-cron-type",
+		why:    `a resource "scaleway_container_cron", a container type the front does not use`,
+		want:   "resource-type",
+		wantIn: map[string]string{"resource-type": "{site}/main.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			appendInfraText(t, filepath.Join(site, "main.tf"), `
+resource "scaleway_container_cron" "nightly" {
+  container_id = scaleway_container.site.id
+  schedule     = "0 3 * * *"
+  command      = "/bin/true"
+}
+`)
+		},
+	},
+}
+
+// containerCostPinCases pin the site container's cost pins (PRD #297 milestone 4, ADR 0045, *The container*,
+// and its Consequences): one instance of at most 140 mvCPU and 0.25 GB of memory bounds the worst case to about
+// EUR 2.12 a month, and min_scale 0 or 1 bounds how many instances the site keeps. dev/infra-rules.awk judges
+// every scaleway_container in infra/: max_scale, cpu_limit and memory_limit_bytes must each be set once, as the
+// pinned literal - a missing pin leaves the provider's default, and an expression such as var.max_scale is a
+// value the maintainer's own tfvars could set - memory_limit and http_option, the deprecated spellings beside
+// memory_limit_bytes and https_connections_only, must not be set at all, and min_scale must be 0 or 1. The tags
+// are [container-max-scale], [container-cpu], [container-memory], [container-deprecated-attribute],
+// [container-image-pin], [container-min-scale], [container-min-scale-postcondition],
+// [container-https-only-postcondition] and [container-https-only-postcondition-missing],
+// and an attribute gets the one tag that names it: a deprecated memory_limit is no [container-memory] beside it,
+// and a deprecated http_option no [container-cpu] or [container-memory], since a breakage is reported once,
+// under the rule that refuses it.
+//
+// The image is no pin of a value but of a reference: the container must read the one local the Renovate comment
+// above it pins - image = local.caddy_image and nothing else - so the line Renovate moves is the line the
+// container runs. [container-image-pin] refuses any other expression there, a literal or another local: a
+// reference no comment pins can be moved under the platform, and Renovate would move a line the container does
+// not read. The pin's own digest is the sitefront reader's business (test/sitefront, behind the sitefront tag,
+// reads it and runs what the container runs): a rule of dev/infra-rules.awk reads no image reference.
+//
+// min_scale is the one pin the configuration may write as a local (ADR 0045, The container): write the value
+// once, as a local, and read it in both places, so the pin and the postcondition that checks it after an
+// apply cannot drift from each other. [container-min-scale] accepts min_scale = local.<name> only when that
+// local is the literal 0 or 1 (a comment saying "0" is no literal) and the local is written once, in the
+// container's own directory - a second declaration, or one a module's own scope holds, is no one value the
+// pin reads - and [container-min-scale-postcondition] refuses a min_scale postcondition whose condition
+// compares self.min_scale against anything but the same expression the attribute sets - the literal the
+// attribute writes, or the local it names. That tag judges only a pin the rules otherwise accept: one refusal
+// per breakage, and a container whose min_scale is already refused is no postcondition rule's business.
+//
+// Both postconditions are required, not judged only when they are there: the provider leaves false and 0 out of
+// the create request, so nothing but a check after an apply says what the platform holds. A container whose
+// min_scale pin the rules accept must carry a postcondition comparing self.min_scale with what the attribute
+// sets, and every container must carry one comparing self.https_connections_only with false: a missing block
+// is refused, under [container-min-scale-postcondition] and [container-https-only-postcondition-missing]
+// respectively. However a condition spells the attribute (self["min_scale"] is the same attribute) and
+// whatever one pair of parentheses and one line break an editor puts around the comparison, the rules read
+// it as the comparison it is, and refuse it when it compares something else than the pin: a spelling the
+// rules could not read would let a check after an apply run that never compares what the pin sets. Exactly one
+// postcondition may compare self.min_scale with the pin - a second, even an identical one, is refused - and a
+// check standing in a precondition is no check after an apply at all: it runs before the platform holds
+// anything, so a container whose only min_scale check stands there has none. The https_connections_only check is
+// one too: a second postcondition on self.https_connections_only, even an identical one, is refused under the
+// tag [container-https-only-postcondition], the tag that names a count the missing one does not.
+//
+// Every case edits site/container.tf, the file the pins live in, by the attribute's name, so the cases do not
+// depend on how the configuration aligns its = signs; a copy whose container.tf sets the attribute no line of,
+// or two, fails here as a test failure, never as a silent pass.
+//
+// The table also pins what the container runs with and what a plan may pass over: [container-environment] holds
+// environment_variables to the one UPSTREAM the Caddyfile reads and refuses secret_environment_variables, so a
+// variable set beside it - a proxy, which would route every visitor's traffic while every other rule held -
+// cannot pass unnoticed, on the container and on its namespace, which the platform injects into every container
+// in it, and in any shape but the object literal the keys are read from, and [container-lifecycle] refuses an
+// ignore_changes, a replace_triggered_by or an enabled = false on the container or on its namespace, since each
+// stops a plan applying what a test pins (the image, the command, the Caddyfile's bytes) or reverting a console
+// change to a cost pin, while an empty ignore_changes stays accepted for passing over nothing.
+var containerCostPinCases = []infraRuleCase{
+	{
+		name:   "container-max-scale-two",
+		why:    "max_scale = 2 on the site's container, a second instance in the worst case",
+		want:   "container-max-scale",
+		wantIn: map[string]string{"container-max-scale": "{site}/container.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			setContainerAttribute(t, site, "max_scale", "  max_scale = 2")
+		},
+	},
+	{
+		name:   "container-max-scale-missing",
+		why:    "the site's container without max_scale, so the provider's own default decides how many instances run",
+		want:   "container-max-scale",
+		wantIn: map[string]string{"container-max-scale": "{site}/container.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			setContainerAttribute(t, site, "max_scale", "")
+		},
+	},
+	{
+		name:   "container-max-scale-as-an-expression",
+		why:    "max_scale = var.max_scale on the site's container, a value the maintainer's own tfvars could raise",
+		want:   "container-max-scale",
+		wantIn: map[string]string{"container-max-scale": "{site}/container.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			setContainerAttribute(t, site, "max_scale", "  max_scale = var.max_scale")
+		},
+	},
+	{
+		name:   "container-cpu-limit-too-large",
+		why:    "cpu_limit = 280 on the site's container, a second vCPU in the worst case",
+		want:   "container-cpu",
+		wantIn: map[string]string{"container-cpu": "{site}/container.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			setContainerAttribute(t, site, "cpu_limit", "  cpu_limit = 280")
+		},
+	},
+	{
+		name:   "container-cpu-limit-missing",
+		why:    "the site's container without cpu_limit, so the provider's own default decides how many mvCPU it gets",
+		want:   "container-cpu",
+		wantIn: map[string]string{"container-cpu": "{site}/container.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			setContainerAttribute(t, site, "cpu_limit", "")
+		},
+	},
+	{
+		name:   "container-memory-limit-bytes-too-large",
+		why:    "memory_limit_bytes = 536870912 (0.5 GB) on the site's container, twice the pinned memory",
+		want:   "container-memory",
+		wantIn: map[string]string{"container-memory": "{site}/container.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			setContainerAttribute(t, site, "memory_limit_bytes", "  memory_limit_bytes = 536870912")
+		},
+	},
+	{
+		name:   "container-memory-limit-bytes-missing",
+		why:    "the site's container without memory_limit_bytes, so the provider's own default decides how much memory it gets",
+		want:   "container-memory",
+		wantIn: map[string]string{"container-memory": "{site}/container.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			setContainerAttribute(t, site, "memory_limit_bytes", "")
+		},
+	},
+	{
+		name:   "container-deprecated-memory-limit",
+		why:    `memory_limit = 256 added to the site's container, the deprecated spelling in megabytes beside memory_limit_bytes`,
+		want:   "container-deprecated-attribute",
+		wantIn: map[string]string{"container-deprecated-attribute": "{site}/container.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			addContainerAttribute(t, site, "  memory_limit = 256")
+		},
+	},
+	{
+		name:   "container-deprecated-http-option",
+		why:    `http_option = "enabled" added to the site's container, the older spelling of https_connections_only`,
+		want:   "container-deprecated-attribute",
+		wantIn: map[string]string{"container-deprecated-attribute": "{site}/container.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			addContainerAttribute(t, site, `  http_option = "enabled"`)
+		},
+	},
+	{
+		name:   "container-image-pin-literal",
+		why:    `image = "caddy:latest" on the site's container, a literal reference in place of the local the Renovate comment pins`,
+		want:   "container-image-pin",
+		wantIn: map[string]string{"container-image-pin": "{site}/container.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			setContainerAttribute(t, site, "image", `  image   = "caddy:latest"`)
+		},
+	},
+	{
+		name:   "container-min-scale-two",
+		why:    "min_scale = 2 on the site's container, two instances kept warm",
+		want:   "container-min-scale",
+		wantIn: map[string]string{"container-min-scale": "{site}/container.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			setContainerAttribute(t, site, "min_scale", "  min_scale = 2")
+		},
+	},
+	{
+		name: "container-min-scale-one",
+		why:  "min_scale = 1 on the site's container, the one warm instance ADR 0045 allows, and its postcondition comparing the same literal",
+		want: "",
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			setContainerAttribute(t, site, "min_scale", "  min_scale = 1")
+			setContainerMinScalePostcondition(t, site, "1")
+		},
+	},
+	{
+		name:   "container-min-scale-missing",
+		why:    "the site's container without min_scale, so the provider's own default decides how many instances stay warm",
+		want:   "container-min-scale",
+		wantIn: map[string]string{"container-min-scale": "{site}/container.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			setContainerAttribute(t, site, "min_scale", "")
+		},
+	},
+	{
+		name:   "container-min-scale-as-an-expression",
+		why:    "min_scale = var.min_scale on the site's container, a value the maintainer's own tfvars could raise",
+		want:   "container-min-scale",
+		wantIn: map[string]string{"container-min-scale": "{site}/container.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			setContainerAttribute(t, site, "min_scale", "  min_scale = var.min_scale")
+		},
+	},
+	// min_scale written once, as a local, and the postcondition checking the same local (ADR 0045, The
+	// container): the pair is the pin, so the rule accepts the local's literal value, the same one it accepts
+	// written on the attribute itself, and refuses a local whose literal is another number.
+	{
+		name: "container-min-scale-from-a-local-zero",
+		why:  "min_scale = local.container_min_scale with the local set to the literal 0, and the postcondition comparing the same local",
+		want: "",
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			setContainerMinScaleLocal(t, site, "0")
+			setContainerAttribute(t, site, "min_scale", "  min_scale = local.container_min_scale")
+			setContainerMinScalePostcondition(t, site, "local.container_min_scale")
+		},
+	},
+	{
+		name: "container-min-scale-from-a-local-one",
+		why:  "min_scale = local.container_min_scale with the local set to the literal 1, the one warm instance ADR 0045 allows",
+		want: "",
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			setContainerMinScaleLocal(t, site, "1")
+			setContainerAttribute(t, site, "min_scale", "  min_scale = local.container_min_scale")
+			setContainerMinScalePostcondition(t, site, "local.container_min_scale")
+		},
+	},
+	{
+		name:   "container-min-scale-from-a-local-out-of-range",
+		why:    "min_scale = local.container_min_scale with the local set to the literal 2, two instances kept warm behind a local no rule reads as a value",
+		want:   "container-min-scale",
+		wantIn: map[string]string{"container-min-scale": "{site}/container.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			setContainerMinScaleLocal(t, site, "2")
+			setContainerAttribute(t, site, "min_scale", "  min_scale = local.container_min_scale")
+			setContainerMinScalePostcondition(t, site, "local.container_min_scale")
+		},
+	},
+	// A postcondition that compares another value is refused, and so is a container that carries none: the check
+	// after an apply is what says the platform kept the pin.
+	{
+		name:   "container-min-scale-postcondition-hard-codes-the-value",
+		why:    "min_scale = local.container_min_scale with the local set to 0, and the postcondition comparing the literal 0 instead of the local",
+		want:   "container-min-scale-postcondition",
+		wantIn: map[string]string{"container-min-scale-postcondition": "{site}/container.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			setContainerMinScaleLocal(t, site, "0")
+			setContainerAttribute(t, site, "min_scale", "  min_scale = local.container_min_scale")
+			setContainerMinScalePostcondition(t, site, "0")
+		},
+	},
+	{
+		name:   "container-min-scale-postcondition-missing",
+		why:    "the site container's min_scale postcondition block removed entirely, so no check after an apply compares the platform's min_scale with the pin",
+		want:   "container-min-scale-postcondition",
+		wantIn: map[string]string{"container-min-scale-postcondition": "{site}/container.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			dropContainerPostcondition(t, site, "self.min_scale")
+		},
+	},
+	// HCL reads self["min_scale"] as the attribute the pin sets, so a condition that spells it that way is no
+	// check of the pin: it must be read as the comparison it writes, and refused here because it compares 0
+	// while the pin reads the local.
+	{
+		name:   "container-min-scale-postcondition-with-index-syntax",
+		why:    `min_scale = local.container_min_scale with the postcondition written condition = self["min_scale"] == 0, an index expression comparing a literal the pin does not set`,
+		want:   "container-min-scale-postcondition",
+		wantIn: map[string]string{"container-min-scale-postcondition": "{site}/container.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			setContainerMinScaleLocal(t, site, "0")
+			setContainerAttribute(t, site, "min_scale", "  min_scale = local.container_min_scale")
+			setContainerMinScalePostconditionText(t, site, `condition     = self["min_scale"] == 0`)
+		},
+	},
+	// One pair of parentheses around the comparison and the line break an editor makes inside it are no other
+	// condition: the check is the same comparison, so the rules accept it.
+	{
+		name: "container-min-scale-postcondition-parenthesised-over-two-lines",
+		why:  "min_scale = local.container_min_scale with the postcondition written (self.min_scale == local.container_min_scale) across two lines, one pair of parentheses around the comparison",
+		want: "",
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			setContainerMinScaleLocal(t, site, "0")
+			setContainerAttribute(t, site, "min_scale", "  min_scale = local.container_min_scale")
+			setContainerMinScalePostconditionText(t, site,
+				"condition     = (self.min_scale ==",
+				"                   local.container_min_scale)",
+			)
+		},
+	},
+	// The local the pin reads is written once, or it is no one value: a second declaration beside it could say 1
+	// while the file's first still says 0.
+	{
+		name:   "container-min-scale-local-set-twice",
+		why:    "container_min_scale declared a second time in site/zz_local.tf, beside the one container.tf declares, so the local the pin reads is no one value",
+		want:   "container-min-scale",
+		wantIn: map[string]string{"container-min-scale": "{site}/container.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			writeInfraText(t, filepath.Join(site, "zz_local.tf"), `
+locals {
+  container_min_scale = 1
+}
+`)
+		},
+	},
+	// A local lives in its own directory, as a module's scope: one the container's directory does not declare
+	// is a value the rules never read, whatever another directory says.
+	{
+		name:   "container-min-scale-local-in-another-directory",
+		why:    "container_min_scale declared only in site/m/locals.tf, the scope of the module site/m, while the container and its pin live in site/",
+		want:   "container-min-scale",
+		wantIn: map[string]string{"container-min-scale": "{site}/container.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			removeContainerMinScaleLocal(t, site)
+			appendInfraText(t, filepath.Join(site, "main.tf"), `
+module "m" {
+  source = "./m"
+}
+`)
+			writeInfraText(t, filepath.Join(site, "m", "locals.tf"), `
+locals {
+  container_min_scale = 0
+}
+`)
+		},
+	},
+	// The other check after an apply: the provider leaves false out of the create request, so only a
+	// postcondition says whether the platform kept plain HTTP enabled for Caddy's own redirect.
+	{
+		name:   "container-https-only-postcondition-missing",
+		why:    "the site container's https_connections_only postcondition block removed entirely, so no check after an apply says what the platform kept beside the pin",
+		want:   "container-https-only-postcondition-missing",
+		wantIn: map[string]string{"container-https-only-postcondition-missing": "{site}/container.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			dropContainerPostcondition(t, site, "self.https_connections_only")
+		},
+	},
+	// Exactly one postcondition may compare self.min_scale with the pin: a second, identical one is a copy beside
+	// the check that holds it, and a maintainer who edited one of them would leave the other claiming the pin.
+	{
+		name:   "container-min-scale-postcondition-set-twice",
+		why:    "a second postcondition comparing self.min_scale with the same local beside the site container's own, the one pin claimed by two checks after an apply",
+		want:   "container-min-scale-postcondition",
+		wantIn: map[string]string{"container-min-scale-postcondition": "{site}/container.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			addContainerPostcondition(t, site, "self.min_scale == local.container_min_scale", "The container's min_scale differs from local.container_min_scale.")
+		},
+	},
+	// A condition that is no comparison with the pin is refused whatever it says: a >= would accept more instances
+	// kept warm than the pin sets, and || true accepts the platform's value whatever it is.
+	{
+		name:   "container-min-scale-postcondition-compares-with-greater-or-equal",
+		why:    "min_scale = local.container_min_scale with the postcondition written condition = self.min_scale >= local.container_min_scale, a comparison that accepts every value above the pin",
+		want:   "container-min-scale-postcondition",
+		wantIn: map[string]string{"container-min-scale-postcondition": "{site}/container.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			setContainerMinScalePostconditionText(t, site, "condition     = self.min_scale >= local.container_min_scale")
+		},
+	},
+	{
+		name:   "container-min-scale-postcondition-with-a-trailing-or-true",
+		why:    "min_scale = local.container_min_scale with the postcondition written condition = self.min_scale == local.container_min_scale || true, a condition that passes whatever the platform holds",
+		want:   "container-min-scale-postcondition",
+		wantIn: map[string]string{"container-min-scale-postcondition": "{site}/container.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			setContainerMinScalePostconditionText(t, site, "condition     = self.min_scale == local.container_min_scale || true")
+		},
+	},
+	// A precondition runs before the apply, so it says nothing about what the platform kept: a check after an
+	// apply in that block is no postcondition, and a container whose only min_scale check stands there has none.
+	{
+		name:   "container-min-scale-check-in-a-precondition",
+		why:    "the site container's only self.min_scale postcondition rewritten as a precondition, so no check after an apply compares the platform's min_scale with the pin",
+		want:   "container-min-scale-postcondition",
+		wantIn: map[string]string{"container-min-scale-postcondition": "{site}/container.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			moveContainerPostcondition(t, site, "self.min_scale")
+		},
+	},
+	// The comparison's two sides are no other condition: local.container_min_scale == self.min_scale draws the same
+	// check as the pin's own order, and so does false == self.https_connections_only beside it.
+	{
+		name: "container-postconditions-with-their-sides-reversed",
+		why:  "the site container's min_scale postcondition written local.container_min_scale == self.min_scale and its https_connections_only postcondition written false == self.https_connections_only, the comparisons with their two sides swapped",
+		want: "",
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			setContainerMinScalePostconditionText(t, site, "condition     = local.container_min_scale == self.min_scale")
+			setContainerHTTPSOnlyPostconditionText(t, site, "condition     = false == self.https_connections_only")
+		},
+	},
+	// One pair of parentheses around the comparison is no other condition, the same way the min_scale check is read
+	// through its own.
+	{
+		name: "container-https-only-postcondition-parenthesised",
+		why:  "the site container's https_connections_only postcondition written condition = (self.https_connections_only == false), one pair of parentheses around the comparison",
+		want: "",
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			setContainerHTTPSOnlyPostconditionText(t, site, "condition     = (self.https_connections_only == false)")
+		},
+	},
+	// The check after an apply must compare https_connections_only with false: a negated check passes when the
+	// platform made it true, the opposite of the pin, so it is no check of the pin at all.
+	{
+		name:   "container-https-only-postcondition-negated",
+		why:    "the site container's https_connections_only postcondition written condition = !self.https_connections_only, a condition that passes when plain HTTP was disabled",
+		want:   "container-https-only-postcondition-missing",
+		wantIn: map[string]string{"container-https-only-postcondition-missing": "{site}/container.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			setContainerHTTPSOnlyPostconditionText(t, site, "condition     = !self.https_connections_only")
+		},
+	},
+	// The other check after an apply is one, not two: a second postcondition on self.https_connections_only is a copy
+	// beside the check that holds it, the same way a second self.min_scale one is refused above, under
+	// [container-https-only-postcondition].
+	{
+		name:   "container-https-only-postcondition-set-twice",
+		why:    "a second postcondition comparing self.https_connections_only with false beside the site container's own, the one check after an apply claimed by two conditions",
+		want:   "container-https-only-postcondition",
+		wantIn: map[string]string{"container-https-only-postcondition": "{site}/container.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			addContainerPostcondition(t, site, "self.https_connections_only == false", "The container's https_connections_only is not false.")
+		},
+	},
+	// A pin set twice is no one pinned value: the second setting could raise what the first fixes, and the
+	// rules cannot tell which one the provider reads. So a repeated pin is refused as a pin that is not set
+	// exactly once, under its own tag.
+	{
+		name:   "container-cpu-limit-set-twice",
+		why:    "cpu_limit = 140 added beside the site's container's own cpu_limit, the same pin set twice",
+		want:   "container-cpu",
+		wantIn: map[string]string{"container-cpu": "{site}/container.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			insertContainerLines(t, site, "  cpu_limit = 140")
+		},
+	},
+	// The pins judge every scaleway_container under the root, not the one container.tf holds: a second
+	// container, in a file of its own, sets no pin at all, so each pin is missing and each is reported against
+	// that file. It is also a repeat whatever its pins: the count is a rule of its own, judged on its own
+	// grounds, and one refusal never hides another - a maintainer who only read the pins would come back to a
+	// second container still refused after pinning it. Its https_connections_only postcondition is there, so the
+	// case pins the pins alone: a container whose min_scale is refused is no min_scale postcondition rule's
+	// business, and the other postcondition is no pin.
+	{
+		name:     "container-second-without-pins",
+		why:      "a second scaleway_container in site/second_container.tf without max_scale, cpu_limit, memory_limit_bytes or min_scale, with its https_connections_only postcondition",
+		want:     "container-max-scale",
+		wantMore: []string{"container-cpu", "container-memory", "container-min-scale", "container-repeat"},
+		wantIn: map[string]string{
+			"container-max-scale": "{site}/second_container.tf",
+			"container-cpu":       "{site}/second_container.tf",
+			"container-memory":    "{site}/second_container.tf",
+			"container-min-scale": "{site}/second_container.tf",
+			"container-repeat":    "{root}",
+		},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			writeInfraText(t, filepath.Join(site, "second_container.tf"), `
+resource "scaleway_container" "second" {
+  name         = "second"
+  namespace_id = scaleway_container_namespace.site.id
+  region       = var.region
+  image        = local.caddy_image
+  port         = 8080
+  privacy      = "public"
+
+  lifecycle {
+    postcondition {
+      condition     = self.https_connections_only == false
+      error_message = "kept"
+    }
+  }
+}
+`)
+		},
+	},
+	// A pin only inside a nested block is no pin the container sets: the rule reads the container's own
+	// attributes, so max_scale inside scaling_option leaves the top level without one, whatever the nested
+	// block says.
+	{
+		name:   "container-pin-only-in-a-nested-block",
+		why:    "the site's container's top-level max_scale removed and max_scale = 1 set inside a scaling_option block instead",
+		want:   "container-max-scale",
+		wantIn: map[string]string{"container-max-scale": "{site}/container.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			setContainerAttribute(t, site, "max_scale", "")
+			insertContainerLines(t, site, "  scaling_option {", "    max_scale = 1", "  }")
+		},
+	},
+	// The environment the container runs with is the one variable the Caddyfile reads: a second one is a setting
+	// nobody decided, and one the provider sets on every instance reaches every visitor.
+	{
+		name:   "container-environment-second-key",
+		why:    `HTTPS_PROXY = "http://proxy.example.com:3128" added beside UPSTREAM in the site container's environment_variables, so every visitor's traffic leaves through a proxy`,
+		want:   "container-environment",
+		wantIn: map[string]string{"container-environment": "{site}/container.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			addContainerEnvironmentVariable(t, site, `    HTTPS_PROXY = "http://proxy.example.com:3128"`)
+		},
+	},
+	{
+		name:   "container-environment-secret",
+		why:    `secret_environment_variables = { X = "y" } added to the site's container, a secret in the plan and in the state`,
+		want:   "container-environment",
+		wantIn: map[string]string{"container-environment": "{site}/container.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			addContainerAttribute(t, site, `  secret_environment_variables = { X = "y" }`)
+		},
+	},
+	{
+		name:   "container-environment-without-upstream",
+		why:    `the site container's environment_variables holding only ANOTHER = "x", so the Caddyfile's {$UPSTREAM} reads an empty upstream`,
+		want:   "container-environment",
+		wantIn: map[string]string{"container-environment": "{site}/container.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			dropContainerEnvironmentVariable(t, site, "UPSTREAM")
+			addContainerEnvironmentVariable(t, site, `    ANOTHER = "x"`)
+		},
+	},
+	// The environment's shape is pinned too: an object the rules could not read, or one written as a block, is a
+	// set of variables nobody can hold to the one UPSTREAM, so it is refused whatever it holds.
+	{
+		name:   "container-environment-for-expression",
+		why:    "the site container's environment_variables written as a for expression over a map, a shape whose keys no rule reads",
+		want:   "container-environment",
+		wantIn: map[string]string{"container-environment": "{site}/container.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			setContainerEnvironment(t, site, `  environment_variables = { for name, value in { UPSTREAM = scaleway_edge_services_dns_stage.site.default_fqdn } : name => value }`)
+		},
+	},
+	{
+		name:   "container-environment-parenthesised-key",
+		why:    `a parenthesised key ("HTTPS_PROXY") = "http://proxy.example.com:3128" beside UPSTREAM in the site container's environment_variables, a key the rules could not read as one entry`,
+		want:   "container-environment",
+		wantIn: map[string]string{"container-environment": "{site}/container.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			setContainerEnvironment(t, site,
+				"  environment_variables = {",
+				"    UPSTREAM = scaleway_edge_services_dns_stage.site.default_fqdn",
+				`    ("HTTPS_PROXY") = "http://proxy.example.com:3128"`,
+				"  }",
+			)
+		},
+	},
+	{
+		name:   "container-environment-merge",
+		why:    `environment_variables = merge({ UPSTREAM = ... }, { HTTPS_PROXY = "x" }) on the site's container, a call that hides the second key from the rules`,
+		want:   "container-environment",
+		wantIn: map[string]string{"container-environment": "{site}/container.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			setContainerEnvironment(t, site, `  environment_variables = merge({ UPSTREAM = scaleway_edge_services_dns_stage.site.default_fqdn }, { HTTPS_PROXY = "http://proxy.example.com:3128" })`)
+		},
+	},
+	{
+		name:   "container-environment-block",
+		why:    "the site container's environment written as an environment_variables block instead of the attribute, a shape whose entries no rule reads",
+		want:   "container-environment",
+		wantIn: map[string]string{"container-environment": "{site}/container.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			setContainerEnvironment(t, site,
+				"  environment_variables {",
+				"    UPSTREAM = scaleway_edge_services_dns_stage.site.default_fqdn",
+				"  }",
+			)
+		},
+	},
+	// Scaleway injects the namespace's own environment into every container in it, so the namespace is judged
+	// like the container: a variable set there reaches the front without a line of the container changing.
+	{
+		name:   "container-namespace-environment",
+		why:    `environment_variables = { HTTPS_PROXY = "http://proxy.example.com:3128" } added to the site's container namespace, which the platform injects into the container in it`,
+		want:   "container-environment",
+		wantIn: map[string]string{"container-environment": "{site}/container.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			addNamespaceAttribute(t, site, `  environment_variables = { HTTPS_PROXY = "http://proxy.example.com:3128" }`)
+		},
+	},
+	{
+		name:   "container-namespace-secret-environment",
+		why:    `secret_environment_variables = { X = "y" } added to the site's container namespace, a secret in the plan and in the state, injected into the container`,
+		want:   "container-environment",
+		wantIn: map[string]string{"container-environment": "{site}/container.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			addNamespaceAttribute(t, site, `  secret_environment_variables = { X = "y" }`)
+		},
+	},
+	{
+		name:   "container-namespace-environment-block",
+		why:    "the site's container namespace holding an environment_variables block instead of the attribute, a shape whose entries no rule reads",
+		want:   "container-environment",
+		wantIn: map[string]string{"container-environment": "{site}/container.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			addNamespaceAttribute(t, site,
+				"  environment_variables {",
+				`    HTTPS_PROXY = "http://proxy.example.com:3128"`,
+				"  }",
+			)
+		},
+	},
+	// A lifecycle block that ignores a change stops a plan from applying it: the image a test reads by digest,
+	// the command and args that write the Caddyfile byte for byte, and a cost pin a console change raised would
+	// all stay as the platform holds them while every rule still held.
+	{
+		name:   "container-lifecycle-ignores-image",
+		why:    "ignore_changes = [image] added inside the site container's lifecycle block, beside its two postconditions, so the tested image is never applied",
+		want:   "container-lifecycle",
+		wantIn: map[string]string{"container-lifecycle": "{site}/container.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			addContainerLifecycleSetting(t, site, "    ignore_changes = [image]")
+		},
+	},
+	{
+		name:   "container-lifecycle-ignores-everything",
+		why:    "ignore_changes = all added inside the site container's lifecycle block, which passes over every change to it",
+		want:   "container-lifecycle",
+		wantIn: map[string]string{"container-lifecycle": "{site}/container.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			addContainerLifecycleSetting(t, site, "    ignore_changes = all")
+		},
+	},
+	{
+		name:   "container-lifecycle-replace-triggered-by",
+		why:    "replace_triggered_by = [scaleway_container_namespace.site.id] added inside the site container's lifecycle block, a replacement no change to the container asks for",
+		want:   "container-lifecycle",
+		wantIn: map[string]string{"container-lifecycle": "{site}/container.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			addContainerLifecycleSetting(t, site, "    replace_triggered_by = [scaleway_container_namespace.site.id]")
+		},
+	},
+	{
+		name:   "container-namespace-lifecycle-ignores-description",
+		why:    "a lifecycle block with ignore_changes = [description] added to the site's container namespace, a change a plan would never apply",
+		want:   "container-lifecycle",
+		wantIn: map[string]string{"container-lifecycle": "{site}/container.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			setNamespaceLifecycle(t, site, "    ignore_changes = [description]")
+		},
+	},
+	{
+		name:   "container-lifecycle-ignores-image-and-args",
+		why:    "a multi-line ignore_changes = [image, args] inside the site container's lifecycle block, which passes over the tested image and the command that writes the Caddyfile",
+		want:   "container-lifecycle",
+		wantIn: map[string]string{"container-lifecycle": "{site}/container.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			addContainerLifecycleLines(t, site,
+				"    ignore_changes = [",
+				"      image,",
+				"      args",
+				"    ]",
+			)
+		},
+	},
+	// An ignore_changes that ignores nothing changes no plan's behaviour, so the rule stays quiet on it: the rule
+	// refuses what a plan would pass over, not the setting's name.
+	{
+		name: "container-lifecycle-ignores-nothing",
+		why:  "ignore_changes = [\n] inside the site container's lifecycle block, an empty list that ignores no change",
+		want: "",
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			addContainerLifecycleLines(t, site, "    ignore_changes = [", "    ]")
+		},
+	},
+	// OpenTofu 1.11 accepts a lifecycle block's enabled = false, which acts as count = 0: the front is then not
+	// created at all while every other rule still holds.
+	{
+		name:   "container-lifecycle-enabled-false",
+		why:    "enabled = false added inside the site container's lifecycle block, beside its two postconditions, so a plan creates no front at all",
+		want:   "container-lifecycle",
+		wantIn: map[string]string{"container-lifecycle": "{site}/container.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			addContainerLifecycleSetting(t, site, "    enabled = false")
+		},
+	},
+	{
+		name:   "container-namespace-lifecycle-enabled-false",
+		why:    "a lifecycle block with enabled = false added to the site's container namespace",
+		want:   "container-lifecycle",
+		wantIn: map[string]string{"container-lifecycle": "{site}/container.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			setNamespaceLifecycle(t, site, "    enabled = false")
+		},
+	},
+}
+
+// containerRepeatCases pin [container-repeat] (PRD #297 milestone 4, ADR 0045): the site runs one front
+// container in one namespace, so infra/site holds exactly one scaleway_container and exactly one
+// scaleway_container_namespace, and neither of them is repeated by count or by for_each. The cost pins
+// bound one container's own instances (max_scale = 1, about EUR 2.12 a month in the worst case); a count
+// that makes two containers, or a second container beside it, multiplies that ceiling into a cost nobody
+// decided, and the two names the front serves are the one namespace's. dev/infra-rules.awk refuses count
+// or for_each on either resource, and a second scaleway_container under the root.
+var containerRepeatCases = []infraRuleCase{
+	{
+		name:   "container-repeated-by-count",
+		why:    "count = 2 on the site's container, two containers at the pinned ceiling each",
+		want:   "container-repeat",
+		wantIn: map[string]string{"container-repeat": "{site}/container.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			insertContainerLines(t, site, "  count = 2")
+		},
+	},
+	{
+		name:   "container-repeated-by-for-each",
+		why:    `for_each = toset(["second"]) on the site's container, one container per element`,
+		want:   "container-repeat",
+		wantIn: map[string]string{"container-repeat": "{site}/container.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			insertContainerLines(t, site, `  for_each = toset(["second"])`)
+		},
+	},
+	{
+		name:   "container-namespace-repeated-by-count",
+		why:    "count = 2 on the site's container namespace, two namespaces for the one front",
+		want:   "container-repeat",
+		wantIn: map[string]string{"container-repeat": "{site}/container.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			editInfraFile(t, filepath.Join(site, containerFileName), namespaceHeader, namespaceRepeated("  count       = 2"))
+		},
+	},
+	{
+		name:   "container-namespace-repeated-by-for-each",
+		why:    `for_each = toset(["shift2eu-site"]) on the site's container namespace, one namespace per element`,
+		want:   "container-repeat",
+		wantIn: map[string]string{"container-repeat": "{site}/container.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			editInfraFile(t, filepath.Join(site, containerFileName), namespaceHeader, namespaceRepeated(`  for_each    = toset(["shift2eu-site"])`))
+		},
+	},
+	// A second container in a file of its own, every cost pin and both postconditions set: the pins alone pass
+	// it, so the rule that holds the front to one container is the only one that refuses it.
+	{
+		name: "second-container",
+		why:  "a second scaleway_container in site/second_container.tf, with max_scale, cpu_limit, memory_limit_bytes and min_scale pinned like the first, and both postconditions",
+		want: "container-repeat",
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			writeInfraText(t, filepath.Join(site, "second_container.tf"), `
+resource "scaleway_container" "second" {
+  name         = "second"
+  namespace_id = scaleway_container_namespace.site.id
+  region       = var.region
+  image        = local.caddy_image
+  port         = 8080
+  privacy      = "public"
+
+  https_connections_only         = false
+  enable_default_public_endpoint = true
+
+  min_scale          = 0
+  max_scale          = 1
+  cpu_limit          = 140
+  memory_limit_bytes = 268435456
+
+  lifecycle {
+    postcondition {
+      condition     = self.https_connections_only == false
+      error_message = "kept"
+    }
+    postcondition {
+      condition     = self.min_scale == 0
+      error_message = "kept"
+    }
+  }
+}
+`)
+		},
+	},
+}
+
+// namespaceHeader is the first two lines of the container namespace resource in the real configuration: the
+// anchor a [container-repeat] case adds a count or a for_each under.
+const namespaceHeader = `resource "scaleway_container_namespace" "site" {
+  name        = "shift2eu-site"`
+
+// namespaceRepeated returns namespaceHeader with line added after it, the repeat the rule must refuse.
+func namespaceRepeated(line string) string {
+	return strings.Replace(namespaceHeader, "\n  name        = ", "\n"+line+"\n  name        = ", 1)
+}
+
 // tlsStageSecondRoot writes a second applied root beside a copy's site/, holding what a root needs - a copy of
 // the site's versions.tf, so the pinned release and provider live in one place, with a state key of its own -
 // and the TLS stage without a lifecycle block. Its resource and labels are the site's stage's, so a rule that
@@ -1652,6 +2532,11 @@ func tlsStageSecondRoot(t *testing.T, site string) {
 // The resource and its lifecycle block end where their braces close, so a block written the standard way
 // (its settings indented, its "}" on its own line) and one closed with a trailing comment are both read.
 // Only the TLS stage is edited: a lifecycle block on the DNS stage beside it stays as the copy found it.
+//
+// The configuration may hold no such stage at all: PRD #297 milestone 4 removes the pipeline's www domain and
+// its TLS stage (ADR 0045, *The upstream*), so the chain becomes DNS -> cache -> backend. The case then writes
+// the stage into main.tf, so [tls-stage-lifecycle] keeps a stage to judge, wherever the site's own
+// configuration goes.
 func tlsStageLifecycle(t *testing.T, site string, body []string) {
 	t.Helper()
 
@@ -1677,7 +2562,20 @@ func tlsStageLifecycle(t *testing.T, site string, body []string) {
 	}
 
 	if start < 0 {
-		t.Fatalf("%s holds no line %q: the case names the TLS stage the rule judges", path, header)
+		out := append([]string{}, lines...)
+		out = append(out, header)
+
+		if len(body) > 0 {
+			out = append(out, "  lifecycle {")
+			out = append(out, body...)
+			out = append(out, "  }")
+		}
+
+		out = append(out, "}")
+
+		writeInfraText(t, path, strings.Join(out, "\n"))
+
+		return
 	}
 
 	// The resource's end is the line whose closing brace takes the depth back to zero, never the first
@@ -1784,6 +2682,637 @@ func infraOpensBlock(line, name string) bool {
 	fields := strings.Fields(line)
 
 	return len(fields) >= 2 && fields[0] == name && strings.HasPrefix(fields[1], "{")
+}
+
+// containerFileName is the file of the site's front in a copy of infra/site (PRD #297 milestone 4, ADR 0045):
+// the Serverless Containers namespace, the container with its cost pins and the two gated custom domains.
+const containerFileName = "container.tf"
+
+// containerResourceHeader is the one line of that file that opens the container resource: the namespace's own
+// header reads scaleway_container_namespace, so this prefix names the container alone.
+const containerResourceHeader = `resource "scaleway_container" "`
+
+// setContainerAttribute replaces the one line of a copy's site/container.tf that sets the attribute name with
+// line, or removes that line when line is empty. The line is found by the attribute's name and not by the
+// spacing around its =, so a case survives however the configuration aligns its attributes; a file that sets
+// the attribute on no line, or on two, fails the case loudly instead of passing without breaking anything.
+func setContainerAttribute(t *testing.T, site, name, line string) {
+	t.Helper()
+
+	path := filepath.Join(site, containerFileName)
+
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v: the container's cost pins live there (ADR 0045), and this case breaks one of them", path, err)
+	}
+
+	lines := strings.Split(string(body), "\n")
+
+	found := -1
+
+	for i, text := range lines {
+		fields := strings.Fields(text)
+		if len(fields) < 2 || fields[0] != name || !strings.HasPrefix(fields[1], "=") {
+			continue
+		}
+
+		if found >= 0 {
+			t.Fatalf("%s:%d and %s:%d both set %s, want exactly one line: the case does not name one breakage", path, found+1, path, i+1, name)
+		}
+
+		found = i
+	}
+
+	if found < 0 {
+		t.Fatalf("%s sets %s on no line, want exactly one: the case does not name one breakage", path, name)
+	}
+
+	if line == "" {
+		lines = append(lines[:found:found], lines[found+1:]...)
+	} else {
+		lines[found] = line
+	}
+
+	writeInfraText(t, path, strings.Join(lines, "\n"))
+}
+
+// addContainerAttribute adds line as the first attribute of the container resource in a copy's
+// site/container.tf, so a case can set an attribute the configuration must not: inside the resource block, where
+// the provider reads it, and in a file the configuration already holds.
+func addContainerAttribute(t *testing.T, site, line string) {
+	t.Helper()
+
+	insertContainerLines(t, site, line)
+}
+
+// insertContainerLines writes lines as the first lines inside the container resource of a copy's
+// site/container.tf, on the line after the one that opens it, so a case can set an attribute or a nested block
+// in the resource block where the provider reads it. A file with no container resource, or with two, fails the
+// case loudly instead of passing without breaking anything.
+func insertContainerLines(t *testing.T, site string, lines ...string) {
+	t.Helper()
+
+	path := filepath.Join(site, containerFileName)
+
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v: the container's cost pins live there (ADR 0045), and this case breaks one of them", path, err)
+	}
+
+	fileLines := strings.Split(string(body), "\n")
+
+	found := -1
+
+	for i, text := range fileLines {
+		if !strings.HasPrefix(strings.TrimSpace(text), containerResourceHeader) {
+			continue
+		}
+
+		if found >= 0 {
+			t.Fatalf("%s:%d and %s:%d both open a container resource, want exactly one: the case does not name one breakage", path, found+1, path, i+1)
+		}
+
+		found = i
+	}
+
+	if found < 0 {
+		t.Fatalf("%s holds no line opening %q, want one: the case does not name one breakage", path, containerResourceHeader)
+	}
+
+	out := append([]string{}, fileLines[:found+1]...)
+	out = append(out, lines...)
+	out = append(out, fileLines[found+1:]...)
+
+	writeInfraText(t, path, strings.Join(out, "\n"))
+}
+
+// findContainerBlock returns a copy's site/container.tf, the file's lines and the range of the one block a line
+// of it opens with header: opening is that line, closing the line whose closing brace takes the depth back to
+// zero. A file with no such block, or with two, fails the case loudly instead of passing without breaking
+// anything.
+func findContainerBlock(t *testing.T, site, header string) (string, []string, int, int) {
+	t.Helper()
+
+	path := filepath.Join(site, containerFileName)
+
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v: the site's front lives there (ADR 0045), and this case breaks one of its rules", path, err)
+	}
+
+	lines := strings.Split(string(body), "\n")
+
+	opening := -1
+
+	for i, text := range lines {
+		if !strings.HasPrefix(strings.TrimSpace(text), header) {
+			continue
+		}
+
+		if opening >= 0 {
+			t.Fatalf("%s:%d and %s:%d both open %q, want exactly one: the case does not name one breakage", path, opening+1, path, i+1, header)
+		}
+
+		opening = i
+	}
+
+	if opening < 0 {
+		t.Fatalf("%s holds no line opening %q, want one: the case does not name one breakage", path, header)
+	}
+
+	return path, lines, opening, infraBlockEnd(t, path, lines, opening)
+}
+
+// findNestedBlock returns the range of the one block named name opened between the lines from and to, the inside
+// of an enclosing block: opening is the line that opens it, closing the line whose brace closes it. A range that
+// opens no such block, or two, fails the case loudly instead of passing without breaking anything.
+func findNestedBlock(t *testing.T, path string, lines []string, from, to int, name string) (int, int) {
+	t.Helper()
+
+	opening := -1
+
+	for i := from; i < to; i++ {
+		if !infraOpensBlock(lines[i], name) {
+			continue
+		}
+
+		if opening >= 0 {
+			t.Fatalf("%s:%d and %s:%d both open a %s block, want exactly one: the case does not name one breakage", path, opening+1, path, i+1, name)
+		}
+
+		opening = i
+	}
+
+	if opening < 0 {
+		t.Fatalf("%s opens no %s block in the block this case edits, want one: the case does not name one breakage", path, name)
+	}
+
+	return opening, infraBlockEnd(t, path, lines, opening)
+}
+
+// containerEnvironmentVariables returns a copy's site/container.tf, its lines and the range of the container's
+// one environment_variables map: opening is the line that starts it, closing the line whose brace ends it. The
+// map is an attribute written as a value, so it opens with environment_variables = {, not as a block.
+func containerEnvironmentVariables(t *testing.T, site string) (string, []string, int, int) {
+	t.Helper()
+
+	path, lines, start, end := findContainerBlock(t, site, containerResourceHeader)
+
+	opening := -1
+
+	for i := start + 1; i < end; i++ {
+		fields := strings.Fields(lines[i])
+		if len(fields) < 2 || fields[0] != "environment_variables" || !strings.HasPrefix(fields[1], "=") {
+			continue
+		}
+
+		if opening >= 0 {
+			t.Fatalf("%s:%d and %s:%d both set environment_variables, want exactly one: the case does not name one breakage", path, opening+1, path, i+1)
+		}
+
+		opening = i
+	}
+
+	if opening < 0 {
+		t.Fatalf("%s's container sets no environment_variables, want one: the case does not name one breakage", path)
+	}
+
+	closing := infraBlockEnd(t, path, lines, opening)
+	if closing <= opening {
+		t.Fatalf("%s:%d holds the whole environment_variables map on one line: the case cannot add an entry to it", path, opening+1)
+	}
+
+	return path, lines, opening, closing
+}
+
+// addContainerEnvironmentVariable writes line as the last entry of the container's environment_variables map,
+// where the provider reads it: beside the UPSTREAM the Caddyfile reads, or in the place of it.
+func addContainerEnvironmentVariable(t *testing.T, site, line string) {
+	t.Helper()
+
+	path, lines, _, closing := containerEnvironmentVariables(t, site)
+
+	insertInfraLines(t, path, lines, closing-1, line)
+}
+
+// dropContainerEnvironmentVariable removes the one line of the container's environment_variables map that sets
+// name, so a case can leave the map without the variable the Caddyfile reads. A map that sets it on no line, or
+// on two, fails the case loudly instead of passing without breaking anything.
+func dropContainerEnvironmentVariable(t *testing.T, site, name string) {
+	t.Helper()
+
+	path, lines, opening, closing := containerEnvironmentVariables(t, site)
+
+	found := -1
+
+	for i := opening + 1; i < closing; i++ {
+		fields := strings.Fields(lines[i])
+		if len(fields) < 2 || fields[0] != name || !strings.HasPrefix(fields[1], "=") {
+			continue
+		}
+
+		if found >= 0 {
+			t.Fatalf("%s:%d and %s:%d both set %s in environment_variables, want exactly one line: the case does not name one breakage", path, found+1, path, i+1, name)
+		}
+
+		found = i
+	}
+
+	if found < 0 {
+		t.Fatalf("%s's environment_variables sets %s on no line, want exactly one: the case does not name one breakage", path, name)
+	}
+
+	out := append([]string{}, lines[:found]...)
+	out = append(out, lines[found+1:]...)
+
+	writeInfraText(t, path, strings.Join(out, "\n"))
+}
+
+// addContainerLifecycleSetting writes line as the first setting of the container's lifecycle block, beside the
+// postconditions it keeps: the block the rules judge is the one a case adds an ignore_changes or a
+// replace_triggered_by to.
+func addContainerLifecycleSetting(t *testing.T, site, line string) {
+	t.Helper()
+
+	addContainerLifecycleLines(t, site, line)
+}
+
+// addContainerLifecycleLines writes lines as the first settings of the container's lifecycle block, beside the
+// postconditions it keeps, so a case can add a setting an editor spreads over several lines.
+func addContainerLifecycleLines(t *testing.T, site string, lines ...string) {
+	t.Helper()
+
+	path, fileLines, start, end := findContainerBlock(t, site, containerResourceHeader)
+	opening, _ := findNestedBlock(t, path, fileLines, start+1, end, "lifecycle")
+
+	insertInfraLines(t, path, fileLines, opening, lines...)
+}
+
+// setContainerEnvironment replaces the container's whole environment_variables map with lines: the map the real
+// configuration writes as an object literal becomes the shape a case pins, an object the reader cannot hold to
+// one key or another shape entirely.
+func setContainerEnvironment(t *testing.T, site string, lines ...string) {
+	t.Helper()
+
+	path, fileLines, opening, closing := containerEnvironmentVariables(t, site)
+
+	out := append([]string{}, fileLines[:opening]...)
+	out = append(out, lines...)
+	out = append(out, fileLines[closing+1:]...)
+
+	writeInfraText(t, path, strings.Join(out, "\n"))
+}
+
+// addNamespaceAttribute writes lines as the last thing inside the site's container namespace, where a case sets
+// an attribute or a block the rules must judge on the namespace as well as on the container: Scaleway injects
+// the namespace's own environment into every container in it.
+func addNamespaceAttribute(t *testing.T, site string, lines ...string) {
+	t.Helper()
+
+	path, fileLines, _, end := findContainerBlock(t, site, containerNamespaceResourceHeader)
+
+	insertInfraLines(t, path, fileLines, end-1, lines...)
+}
+
+// containerNamespaceResourceHeader is the one line of a copy's site/container.tf that opens the namespace
+// resource: the container's own header reads scaleway_container, which this prefix does not.
+const containerNamespaceResourceHeader = `resource "scaleway_container_namespace" "`
+
+// setNamespaceLifecycle writes a lifecycle block holding body as the last thing in the site's container
+// namespace, where a case adds the setting a plan must not pass over.
+func setNamespaceLifecycle(t *testing.T, site string, body ...string) {
+	t.Helper()
+
+	path, lines, _, end := findContainerBlock(t, site, containerNamespaceResourceHeader)
+
+	added := append([]string{"", "  lifecycle {"}, body...)
+	added = append(added, "  }")
+
+	insertInfraLines(t, path, lines, end-1, added...)
+}
+
+// insertInfraLines writes added into a copy's configuration file after the line at, leaving every other line as
+// it was.
+func insertInfraLines(t *testing.T, path string, lines []string, at int, added ...string) {
+	t.Helper()
+
+	out := append([]string{}, lines[:at+1]...)
+	out = append(out, added...)
+	out = append(out, lines[at+1:]...)
+
+	writeInfraText(t, path, strings.Join(out, "\n"))
+}
+
+// containerMinScaleLocalName is the local a case declares for the site's min_scale pin (ADR 0045, The
+// container): the value the configuration may write once and read in both the attribute and its
+// postcondition. A case may use the name the configuration already declares, or declare it itself before the
+// configuration moves its pin to a local.
+const containerMinScaleLocalName = "container_min_scale"
+
+// findContainerMinScaleLocal returns the path of a copy's site/container.tf, the file's lines and the index of
+// the one line that sets containerMinScaleLocalName, or -1 when the file declares no such local. Two
+// declarations fail the case loudly instead of passing without breaking anything: a case breaks one thing.
+func findContainerMinScaleLocal(t *testing.T, site string) (string, []string, int) {
+	t.Helper()
+
+	path := filepath.Join(site, containerFileName)
+
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v: the min_scale pin and the local it may read live there (ADR 0045)", path, err)
+	}
+
+	lines := strings.Split(string(body), "\n")
+
+	found := -1
+
+	for i, text := range lines {
+		fields := strings.Fields(text)
+		if len(fields) < 2 || fields[0] != containerMinScaleLocalName || !strings.HasPrefix(fields[1], "=") {
+			continue
+		}
+
+		if found >= 0 {
+			t.Fatalf("%s:%d and %s:%d both set %s, want at most one line: the case does not name one breakage", path, found+1, path, i+1, containerMinScaleLocalName)
+		}
+
+		found = i
+	}
+
+	return path, lines, found
+}
+
+// setContainerMinScaleLocal sets the local the site's min_scale pin reads, in a copy's site/container.tf: value
+// becomes the literal a line sets containerMinScaleLocalName to, or - when the file declares no such local yet
+// - the line is written as the first one of the file's locals block, where the configuration's own locals live.
+// The case survives the configuration moving its pin to a local, before and after. A file with no locals block
+// to declare it in fails the case loudly instead of passing without breaking anything.
+func setContainerMinScaleLocal(t *testing.T, site, value string) {
+	t.Helper()
+
+	path, lines, found := findContainerMinScaleLocal(t, site)
+
+	if found >= 0 {
+		lines[found] = "  " + containerMinScaleLocalName + " = " + value
+		writeInfraText(t, path, strings.Join(lines, "\n"))
+
+		return
+	}
+
+	for i, text := range lines {
+		if strings.TrimSpace(text) != "locals {" {
+			continue
+		}
+
+		out := append([]string{}, lines[:i+1]...)
+		out = append(out, "  "+containerMinScaleLocalName+" = "+value)
+		out = append(out, lines[i+1:]...)
+
+		writeInfraText(t, path, strings.Join(out, "\n"))
+
+		return
+	}
+
+	t.Fatalf("%s holds no locals block to declare %s in, want one: the case does not name one breakage", path, containerMinScaleLocalName)
+}
+
+// removeContainerMinScaleLocal removes the line of a copy's site/container.tf that sets containerMinScaleLocalName,
+// so a case can declare the local in a directory other than the one the pin lives in. A file that sets the local
+// on no line fails the case loudly instead of passing without breaking anything.
+func removeContainerMinScaleLocal(t *testing.T, site string) {
+	t.Helper()
+
+	path, lines, found := findContainerMinScaleLocal(t, site)
+
+	if found < 0 {
+		t.Fatalf("%s sets %s on no line, want exactly one: the case does not name one breakage", path, containerMinScaleLocalName)
+	}
+
+	writeInfraText(t, path, strings.Join(append(lines[:found:found], lines[found+1:]...), "\n"))
+}
+
+// containerConditionNames are the two checks after an apply ADR 0045 requires beside the pins, by the attribute
+// each reads: the one holding self.min_scale, which follows the pin, and the one holding self.https_connections_only,
+// which says the platform kept plain HTTP. A case that rewrites one names it here, so a copy's own spelling is
+// the only thing it has to hold.
+const (
+	containerMinScaleCondition = "self.min_scale"
+	containerHTTPSCondition    = "self.https_connections_only"
+)
+
+// findContainerCondition returns the path of a copy's site/container.tf, the file's lines and the index of the
+// one line that sets a condition holding holds - containerMinScaleCondition or containerHTTPSCondition - the
+// check after an apply that holds the platform's value to what the configuration sets. A file with no such
+// line, or two, fails the case loudly instead of passing without breaking anything.
+func findContainerCondition(t *testing.T, site, holds string) (string, []string, int) {
+	t.Helper()
+
+	path := filepath.Join(site, containerFileName)
+
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v: the container's postconditions live there (ADR 0045)", path, err)
+	}
+
+	lines := strings.Split(string(body), "\n")
+
+	found := -1
+
+	for i, text := range lines {
+		fields := strings.Fields(text)
+		if len(fields) < 2 || fields[0] != "condition" || !strings.HasPrefix(fields[1], "=") || !strings.Contains(text, holds) {
+			continue
+		}
+
+		if found >= 0 {
+			t.Fatalf("%s:%d and %s:%d both hold a condition on %s, want exactly one line: the case does not name one breakage", path, found+1, path, i+1, holds)
+		}
+
+		found = i
+	}
+
+	if found < 0 {
+		t.Fatalf("%s holds no condition on %s, want one: the case does not name one breakage", path, holds)
+	}
+
+	return path, lines, found
+}
+
+// setContainerMinScalePostcondition sets the condition of the site's min_scale postcondition, in a copy's
+// site/container.tf, to `self.min_scale == expr`: what the check after an apply compares the platform's value
+// with. The line is found by the self.min_scale it compares, so a case survives the expression the
+// configuration writes there.
+func setContainerMinScalePostcondition(t *testing.T, site, expr string) {
+	t.Helper()
+
+	setContainerMinScalePostconditionText(t, site, "condition     = self.min_scale == "+expr)
+}
+
+// setContainerMinScalePostconditionText replaces the condition of the site's min_scale postcondition with lines,
+// each indented like the line it replaces, so a case can write a condition whose spelling the rules must read:
+// an index expression such as self["min_scale"], or a comparison one pair of parentheses wider and spread over
+// two lines. The line is found as setContainerMinScalePostcondition finds it.
+func setContainerMinScalePostconditionText(t *testing.T, site string, lines ...string) {
+	t.Helper()
+
+	setContainerConditionText(t, site, containerMinScaleCondition, lines...)
+}
+
+// setContainerHTTPSOnlyPostconditionText replaces the condition of the site's https_connections_only
+// postcondition with lines, each indented like the line it replaces, so a case can write the check after an
+// apply that says the platform kept plain HTTP in the spelling the rules must read: the comparison's two sides
+// reversed, or one pair of parentheses around it.
+func setContainerHTTPSOnlyPostconditionText(t *testing.T, site string, lines ...string) {
+	t.Helper()
+
+	setContainerConditionText(t, site, containerHTTPSCondition, lines...)
+}
+
+// setContainerConditionText replaces the condition of the site container's postcondition holding holds with
+// lines, each indented like the line it replaces. The line is found as findContainerCondition finds it.
+func setContainerConditionText(t *testing.T, site, holds string, lines ...string) {
+	t.Helper()
+
+	path, fileLines, found := findContainerCondition(t, site, holds)
+
+	indent := fileLines[found][:len(fileLines[found])-len(strings.TrimLeft(fileLines[found], " \t"))]
+
+	out := append([]string{}, fileLines[:found]...)
+	for _, text := range lines {
+		out = append(out, indent+text)
+	}
+
+	out = append(out, fileLines[found+1:]...)
+
+	writeInfraText(t, path, strings.Join(out, "\n"))
+}
+
+// moveContainerPostcondition turns the postcondition block of the site's container in a copy's site/container.tf
+// that holds condition into a precondition, so a case can leave the check after an apply with neither postcondition
+// comparing what the pin sets: tofu runs a precondition before the apply, so it says nothing about what the
+// platform kept. A file whose condition stands in no postcondition block fails the case loudly instead of passing
+// without breaking anything.
+func moveContainerPostcondition(t *testing.T, site, condition string) {
+	t.Helper()
+
+	path, lines, found := findContainerCondition(t, site, condition)
+
+	for i := found; i >= 0; i-- {
+		if strings.TrimSpace(lines[i]) != "postcondition {" {
+			continue
+		}
+
+		lines[i] = strings.Replace(lines[i], "postcondition", "precondition", 1)
+		writeInfraText(t, path, strings.Join(lines, "\n"))
+
+		return
+	}
+
+	t.Fatalf("%s holds no postcondition block above the condition on line %d, want one: the case does not name one breakage", path, found+1)
+}
+
+// addContainerPostcondition writes a postcondition block - its condition and its error_message - as the first
+// block of the site container's lifecycle block in a copy's site/container.tf, so a case can set a second check
+// after an apply. A file with no container resource, or none with a lifecycle block, fails the case loudly
+// instead of passing without breaking anything.
+func addContainerPostcondition(t *testing.T, site, condition, errorMessage string) {
+	t.Helper()
+
+	path := filepath.Join(site, containerFileName)
+
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v: the container's postconditions live there (ADR 0045)", path, err)
+	}
+
+	lines := strings.Split(string(body), "\n")
+
+	resource, lifecycle := -1, -1
+
+	for i, text := range lines {
+		if resource < 0 && strings.HasPrefix(strings.TrimSpace(text), containerResourceHeader) {
+			resource = i
+
+			continue
+		}
+
+		if resource >= 0 && strings.TrimSpace(text) == "lifecycle {" {
+			lifecycle = i
+
+			break
+		}
+	}
+
+	if resource < 0 {
+		t.Fatalf("%s holds no line opening %q, want one: the case does not name one breakage", path, containerResourceHeader)
+	}
+
+	if lifecycle < 0 {
+		t.Fatalf("%s holds no lifecycle block in its container resource, want one: the case does not name one breakage", path)
+	}
+
+	out := append([]string{}, lines[:lifecycle+1]...)
+	out = append(out,
+		"    postcondition {",
+		"      condition     = "+condition,
+		"      error_message = "+strconv.Quote(errorMessage),
+		"    }",
+	)
+	out = append(out, lines[lifecycle+1:]...)
+
+	writeInfraText(t, path, strings.Join(out, "\n"))
+}
+
+// dropContainerPostcondition removes the lifecycle postcondition block of the site's container in a copy's
+// site/container.tf whose own lines hold condition, through the line that closes it, so a case can take a whole
+// postcondition away without restating its body (its error_message included). A file with no such block, or two,
+// fails the case loudly instead of passing without breaking anything.
+func dropContainerPostcondition(t *testing.T, site, condition string) {
+	t.Helper()
+
+	path := filepath.Join(site, containerFileName)
+
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v: the container's postconditions live there (ADR 0045)", path, err)
+	}
+
+	lines := strings.Split(string(body), "\n")
+
+	start, end := -1, -1
+
+	for i, text := range lines {
+		if strings.TrimSpace(text) != "postcondition {" {
+			continue
+		}
+
+		blockEnd := infraBlockEnd(t, path, lines, i)
+		holds := false
+
+		for j := i + 1; j < blockEnd; j++ {
+			if strings.Contains(lines[j], condition) {
+				holds = true
+
+				break
+			}
+		}
+
+		if !holds {
+			continue
+		}
+
+		if start >= 0 {
+			t.Fatalf("%s:%d and %s:%d both hold a postcondition of %s, want exactly one: the case does not name one breakage", path, start+1, path, i+1, condition)
+		}
+
+		start, end = i, blockEnd
+	}
+
+	if start < 0 {
+		t.Fatalf("%s holds no postcondition block of %s, want exactly one: the case does not name one breakage", path, condition)
+	}
+
+	writeInfraText(t, path, strings.Join(append(lines[:start:start], lines[end+1:]...), "\n"))
 }
 
 // infraTestNestedBlockCases pin the allow list of the blocks nested directly in a test file's run and
@@ -2323,6 +3852,125 @@ locals {
 	}
 
 	return cases
+}
+
+// caddyfileReadCases pin [file-function]'s one exception (PRD #297 milestone 4, ADR 0045): the site container
+// hands Caddy the repository's Caddyfile as an argument, since the provider caps an environment variable at
+// 1000 characters, so the plan reads it with file("${path.module}/Caddyfile"). The rule allows exactly that
+// call, character for character, in a configuration file: the name must be file, no other file-reading
+// function, and its argument the string "${path.module}/Caddyfile" and nothing else - no other file beside it,
+// no .. segment, no bare name, no space before the closing parenthesis - and a test file may make no such call
+// at all. Each case is written on the real configuration, whose own allowed call stays in container.tf, so a
+// refused spelling is the one breakage: the allowance is no general permission to read a file, and a rule that
+// widened it to another name, path or file kind fails here.
+var caddyfileReadCases = []infraRuleCase{
+	{
+		name:   "caddyfile-read-in-a-test-file",
+		why:    `a run block in site/tests/iam.tftest.hcl whose variables block sets organization_id = file("${path.module}/Caddyfile"), the allowed call in a test file`,
+		want:   "file-function",
+		wantIn: map[string]string{"file-function": "{site}/tests/iam.tftest.hcl"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			appendInfraText(t, filepath.Join(site, "tests", "iam.tftest.hcl"), `
+run "a_run_reading_the_caddyfile" {
+  command = plan
+
+  variables {
+    organization_id = file("${path.module}/Caddyfile")
+  }
+}
+`)
+		},
+	},
+	{
+		name:   "caddyfile-read-of-another-file",
+		why:    `a locals value calling file("${path.module}/Caddyfile2"), a file beside the Caddyfile`,
+		want:   "file-function",
+		wantIn: map[string]string{"file-function": "{site}/main.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			appendInfraText(t, filepath.Join(site, "main.tf"), `
+locals {
+  caddyfile = file("${path.module}/Caddyfile2")
+}
+`)
+		},
+	},
+	{
+		name:   "caddyfile-read-through-a-parent-directory",
+		why:    `a locals value calling file("${path.module}/../Caddyfile"), a .. segment out of the configuration's own directory`,
+		want:   "file-function",
+		wantIn: map[string]string{"file-function": "{site}/main.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			appendInfraText(t, filepath.Join(site, "main.tf"), `
+locals {
+  caddyfile = file("${path.module}/../Caddyfile")
+}
+`)
+		},
+	},
+	{
+		name:   "caddyfile-read-of-a-bare-name",
+		why:    `a locals value calling file("Caddyfile"), which resolves against whichever directory tofu runs in`,
+		want:   "file-function",
+		wantIn: map[string]string{"file-function": "{site}/main.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			appendInfraText(t, filepath.Join(site, "main.tf"), `
+locals {
+  caddyfile = file("Caddyfile")
+}
+`)
+		},
+	},
+	{
+		name:   "caddyfile-read-through-templatefile",
+		why:    `a locals value calling templatefile("${path.module}/Caddyfile", {}), which renders the same file under another name`,
+		want:   "file-function",
+		wantIn: map[string]string{"file-function": "{site}/main.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			appendInfraText(t, filepath.Join(site, "main.tf"), `
+locals {
+  caddyfile = templatefile("${path.module}/Caddyfile", {})
+}
+`)
+		},
+	},
+	{
+		name:   "caddyfile-read-with-a-space-before-the-closing-parenthesis",
+		why:    `a locals value calling file("${path.module}/Caddyfile" ), the allowed path with a space the allowed call does not hold`,
+		want:   "file-function",
+		wantIn: map[string]string{"file-function": "{site}/main.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			appendInfraText(t, filepath.Join(site, "main.tf"), `
+locals {
+  caddyfile = file("${path.module}/Caddyfile" )
+}
+`)
+		},
+	},
+	// The one call the rule allows passes wherever a configuration file writes it, not only in container.tf:
+	// the allowance names the call, not the file. The copy's container.tf hands Caddy a plain string instead,
+	// so the copy makes the read exactly once, from main.tf.
+	{
+		name: "caddyfile-read-moved-to-main-tf",
+		why:  `the allowed file("${path.module}/Caddyfile") call in site/main.tf, with container.tf's argument a plain string instead`,
+		want: "",
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			editInfraFile(t, filepath.Join(site, "container.tf"),
+				`    file("${path.module}/Caddyfile"),`,
+				`    "the Caddyfile main.tf reads",`)
+			appendInfraText(t, filepath.Join(site, "main.tf"), `
+locals {
+  caddyfile = file("${path.module}/Caddyfile")
+}
+`)
+		},
+	},
 }
 
 // rootFileModuleSourceCase is one route-2 case: a configuration file directly under the root, whose module

@@ -1,0 +1,2 @@
+{"schemaVersion": 2, "source": "aws", "resources": []}
+{"schemaVersion": 2, "source": "gcp", "resources": [{"id": "second", "rawType": "x", "category": "compute.vm", "region": "europe-west4"}]}

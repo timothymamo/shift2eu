@@ -1,7 +1,7 @@
 # 0045. Front the site with a Serverless Container running a pinned Caddy that writes the redirects and headers
 
-- Status: Proposed
-- Date: 2026-11-24
+- Status: Accepted
+- Date: 2026-11-25
 
 Part of [PRD #297](../../prds/297-web-assessment-site.md) milestone 4 (Hosting decisions 1 to 3, as
 amended on 2026-11-24). It amends the front of
@@ -225,8 +225,11 @@ applies the `header_up` deletions after it adds its own forwarding headers (by C
 documentation), but the behaviour test, not that reading, is what proves they are gone. The exact
 list, and any further platform header such as `x-request-id`, is the infra unit's, and the behaviour
 test's local upstream asserts that it receives none of them. The configuration turns no access log on
-(no `log` directive). What the platform itself logs is Scaleway's, as for Edge Services; the privacy
-page already names Scaleway.
+(no `log` directive in a site block), and the front writes nothing about a visitor to its output: see
+*Amendment: the front writes nothing about a visitor to its output* below. What the platform itself logs
+is Scaleway's, as for Edge Services; the privacy page already names Scaleway, and says that the
+maintainer reads the hosting provider's aggregate request counts (no IP address, no user agent, no
+cookie, kept 31 days; ADR 0039, *Amendment: log retention*).
 
 ### The image and its configuration
 
@@ -326,9 +329,11 @@ found.
 - The mandatory go/no-go and the HSTS go/no-go can both be met: `http://www.shift2eu.com`,
   `http://shift2eu.com` and `https://shift2eu.com` answer 308 to `https://www.shift2eu.com` in one hop,
   and `www` sends HSTS and the four other headers. `frame-ancestors 'none'` works as a header at last.
-- The header CSP binds every response of `www`, so a page or a script a leaked deploy key uploads at
-  any path is held to `connect-src 'none'` and `worker-src 'none'` as well, whatever it carries itself
-  (two policies both apply). Navigation stays outside the CSP. ADR 0042's residuals say so once the
+- The header CSP binds every response the front serves for `www`, so a page or a script a leaked deploy
+  key uploads at any path is held there to `connect-src 'none'` and `worker-src 'none'` as well, whatever
+  it carries itself (two policies both apply). It binds `www` alone: the pipeline's default endpoint
+  serves the same objects without it (the residual in the amendment below). Navigation stays outside the
+  CSP. ADR 0042's residuals say so once the
   header is live (milestone 4). Follow-ups for the unit that changes `site/`, on the privacy page
   (`site/privacy.html`):
   - the sentences that the site "cannot send" `Clear-Site-Data` (line 55) or
@@ -359,3 +364,178 @@ found.
 - Recovery gains a step: if the container or its configuration is broken or changed, the maintainer
   re-applies `infra/site` at `main` (the pinned digest and the committed configuration), then runs the
   redirect and header checks (ADR 0042, *Recovery*, as amended).
+
+## Amendment: what the infra unit chose (PRD #297 milestone 4)
+
+2026-11-24. The passages *for the infra unit* above, settled from Caddy v2.11.9's source,
+terraform-provider-scaleway v2.93.0 (the lock file's version) and a local run of the pinned image on
+`infra/site/Caddyfile`. How the resources are created is ADR 0039's amendment *The container front, and no
+TLS stage*.
+
+- **The image** is `docker.io/library/caddy:2.11.9-alpine@sha256:003a97808e781aa9f7e75cc2f43d34d461099031faf5e20faefb9f61126836f0`,
+  the digest of the `-alpine` tag's multi-arch index: `caddy:2.11.9` holds the same linux/amd64 image,
+  but its index also lists Windows images, which this Linux platform never runs. The image has busybox's
+  `/bin/sh`. The pin is one `locals` value in `infra/site/container.tf`, under
+  `# renovate: datasource=docker depName=caddy`; a custom manager of `.github/renovate.json5` reads that
+  HCL line (Docker versioning, so `2.11.9-alpine` moves to the next `-alpine` tag, its digest with it),
+  pinned by `test/lint`'s `TestCaddyImagePinIsFoundOnce`.
+- **The configuration** reaches the upstream image at start, with no image build and no registry key:
+  `command = ["/bin/sh", "-c"]`, and `args` whose first writes its `$1`, the Caddyfile's bytes
+  (`file("${path.module}/Caddyfile")`), to `/tmp/Caddyfile` with `printf '%s'` and execs
+  `caddy run --adapter caddyfile --config /tmp/Caddyfile` (the provider caps an environment variable at
+  1000 characters, too few for the file, about 5.2 KiB, which travels as `args[2]`). The upstream's name is the environment variable `UPSTREAM`,
+  the DNS stage's `default_fqdn`, read as `{$UPSTREAM}` when Caddy parses the file, so the file names no
+  ID. The registry mirror is not taken unless the digest pull fails (below).
+- **The upstream's precondition** (issue #566). Scaleway sets the DNS stage's `default_fqdn` a while
+  after creating the stage, so on a first setup it may still be empty when the container is created:
+  `UPSTREAM` would be `""` and Caddy refuses `reverse_proxy https://` at start. The container's
+  `lifecycle` holds a `precondition` that `default_fqdn` is neither null nor `""`; it fails that apply on
+  `scaleway_container.site` alone (the rest stands), and R4 creates the container in a second pass once
+  `edge_endpoint` is set. `[container-lifecycle]` leaves preconditions be, like the postconditions.
+- **`min_scale = 0`**: the site stays in the free tier. The first request after an idle period starts an
+  instance; R8 warms the container (one request, its answer discarded) before the live checks, and
+  records how long that first request took against the live check's 30 s.
+- **Postconditions.** The provider does not send `false` or `0` on create (`GetOk`), so the container's
+  `lifecycle` asserts `self.https_connections_only == false` and
+  `self.min_scale == local.container_min_scale` after the apply. `min_scale` is written once, as the
+  local `container_min_scale` (0), which the attribute and the postcondition both read, so the check
+  follows the pin: `[container-min-scale]` accepts the local only when it is the literal 0 or 1,
+  `[container-min-scale-postcondition]` requires exactly one postcondition comparing `self.min_scale` with
+  the expression the attribute sets, and refuses one missing or any other condition on `self` and
+  `min_scale` (another value, `self["min_scale"]`), and `[container-https-only-postcondition-missing]`
+  requires the `self.https_connections_only == false` postcondition, of which
+  `[container-https-only-postcondition]` refuses a second, even an identical one. `[container-image-pin]`
+  refuses an `image` other than exactly `local.caddy_image`, the local the Renovate comment pins.
+  `[container-environment]` holds `environment_variables` to an object literal whose one key is `UPSTREAM`
+  and refuses `secret_environment_variables`, since another variable (`HTTPS_PROXY`, which Caddy's
+  `reverse_proxy` honours, `GODEBUG`, `SSL_CERT_FILE`) would change what the front does while the
+  behaviour test runs only its own environment; it also refuses any `environment_variables` or
+  `secret_environment_variables` on the namespace, attribute or block, since the platform injects a
+  namespace's variables into every container in it. `[container-lifecycle]` refuses a non-empty
+  `ignore_changes` and any `replace_triggered_by` on the container or its namespace, either of which lets
+  a plan pass over a tested change or a console change to a cost pin, and any `enabled` there (OpenTofu
+  1.11+), since `enabled = false` acts like `count = 0` and destroys the front. The rules read a condition as its
+  tokens: either side of `==`, and one outer pair of parentheses, are the same comparison; any other
+  spelling of these two checks is refused, not read.
+- **The escaped path.** Caddy v2.11.9 has no placeholder for Go's `URL.EscapedPath()` alone:
+  `{http.request.uri.path_escaped}` is `url.QueryEscape` of the path, which escapes every `/`.
+  `{http.request.uri}` is Go's `URL.RequestURI()`, the escaped path plus `?` and the raw query when there
+  is one, and for an absolute-form target it drops the scheme and the host (`GET http://evil.example/x?q=1`
+  gives `/x?q=1`). This amends the ban on `{uri}` above: the `Location` is
+  `https://www.shift2eu.com{http.request.uri}` **only behind the guard**
+  `@rooted expression {http.request.uri.path}.startsWith("/")`; a target whose path is empty or does not
+  start with `/` (an opaque `GET http:foo`, `*`) is redirected to `https://www.shift2eu.com/`. Caddy's
+  own `{uri}` stays unused. The local run gave `/a%3Fb?x=1`, `/a%0Ab` and `//evil.example/x` kept
+  escaped behind `https://www.shift2eu.com`, and `/` for `GET http:foo`.
+- **Repeated `X-Forwarded-Proto`.** Caddy's `{http.request.header.*}` placeholder joins a field's values
+  with `,` (its replacer), so `https` + `http` is `https,http`, which the expression misses: the local run
+  answered that request with the 308. The behaviour test pins all four spoofing cases on the pinned
+  image: `https` then `http`, `http` then `https`, two `https` fields, and the one field `https, https`
+  each arrive as a joined value that is not exactly `https`, and each gets the 308 to
+  `https://www.shift2eu.com` + the URI, with no request reaching the upstream.
+  `{http.request.hostport}` is the request's raw `Host`, port and case as received.
+- **`OPTIONS *`: Go's empty 200.** Caddy v2.11.9 never sets `DisableGeneralOptionsHandler`, so Go's server
+  answers `OPTIONS *` itself (200, `Content-Length: 0`, no body, no header of the site's) before any
+  route; the local run confirmed it, and so does the behaviour test on the pinned image, which pins
+  that answer (no Caddy header, none of the site's five). It is the accepted exception above. R4's live
+  probe records whether the platform's Envoy forwards it at all.
+- **The behaviour test** (`test/sitefront`, `sitefront && !js`) runs the image and the command line
+  `infra/site/container.tf` gives, with the Caddyfile's bytes, on the host's network (the fixed `:8080`),
+  against a local Go HTTPS upstream named by `UPSTREAM`. Caddy trusts that upstream's test CA through
+  `SSL_CERT_FILE`, the CA file mounted read-only: a test-only setting, so the Caddyfile and the
+  production container stay as they are and Caddy verifies the upstream's certificate as it does live.
+  `make test-sitefront` runs it (docker or nerdctl, through `SHIFT2EU_SITEFRONT_RUNTIME`), outside
+  `make test` and `make check`, one run at a time on a machine because of the fixed port; the first run
+  pulls the pinned image from Docker Hub. The static Caddyfile test in the same package runs under
+  `make test`.
+- **Routes.** Matchers in their block form, so each expression is a line of its own: `@https` (the scheme
+  expression), `@www` (the hostport expression) and `@rooted` (the guard). `handle @https { handle @www
+  { headers; reverse_proxy } handle @rooted { 308 with the URI } handle { 308 to / } }`, then the same two
+  redirects for every other request. Nested `handle` blocks are mutually exclusive, so a request matches
+  exactly one row of the table.
+- **Headers.** The immediate `header` directive (one line per header), and `header_down` deleting the
+  upstream's `Strict-Transport-Security`, `Content-Security-Policy`, `Permissions-Policy`,
+  `X-Content-Type-Options` and `Referrer-Policy`, and its `Set-Cookie` and `X-Amz-*` (the amendment
+  below). The local run with no upstream answered Caddy's 502
+  with every header. `Permissions-Policy` turns off by name `accelerometer`, `ambient-light-sensor`,
+  `autoplay`, `bluetooth`, `browsing-topics`, `camera`, `compute-pressure`, `display-capture`,
+  `encrypted-media`, `fullscreen`, `gamepad`, `geolocation`, `gyroscope`, `hid`,
+  `identity-credentials-get`, `idle-detection`, `local-fonts`, `magnetometer`, `microphone`, `midi`,
+  `otp-credentials`, `payment`, `picture-in-picture`, `publickey-credentials-create`,
+  `publickey-credentials-get`, `screen-wake-lock`, `serial`, `storage-access`, `usb`, `web-share`,
+  `window-management` and `xr-spatial-tracking`. **`clipboard-write` is left out**, at the browser's
+  default (`self`): the pages' copy buttons write a command to the clipboard on a click
+  (`site/page.js`, `copyCommand`), so turning it off would break them.
+- **Request headers removed upstream:** `X-Forwarded-For`, `X-Forwarded-Proto`, `X-Forwarded-Host`,
+  `X-Forwarded-Port`, `Forwarded`, `X-Real-IP`, `X-Envoy-*` (Caddy's header deletion takes a trailing
+  `*` as a prefix), `X-Request-Id`, `Via`, `Cookie` and `Authorization`; `Host` is set to
+  `{upstream_hostport}` (Caddy's default for an `https://` upstream, written out so the file says it).
+- **The staged apply.** A custom domain needs its record first, so `var.front_domains` (default
+  `false`) gates both: R4's apply creates the namespace and the container (and, with `pipeline_www` at
+  its default `false`, removes the pipeline's `www` and TLS stage on a pipeline created before this
+  change; ADR 0039's amendment), R8 points `www` (CNAME) and the apex
+  (ALIAS) at the container's endpoint, then an apply with `front_domains = true` creates the domains, and
+  R8 waits until both are *ready* before its live checks.
+- **Still to be settled live, before the deploy is turned on (R8):** the headers as the container
+  receives them (`X-Forwarded-Proto` and `Host` on `www`, the apex and the endpoint, over plain HTTP and
+  HTTPS), the spoofed and repeated `X-Forwarded-Proto` requests, `OPTIONS *`, the digest pull (a
+  container given a wrong digest must fail to start; if it starts, the registry mirror above is
+  recorded here before it is taken), HTTPS on the pipeline's default endpoint with no TLS stage, and
+  that the Containers API accepts the Caddyfile (about 5.2 KiB) as `args[2]` (the provider caps an
+  environment variable, not an argument; checked by R4's check 2, `front ready`). R8 records each answer
+  here.
+- **Residual: the pipeline's default endpoint is a second public origin.**
+  `https://<pipeline id>.svc.edge.scw.cloud`, the upstream, stays reachable by anyone and serves every
+  bucket object without the front's header policy: no HSTS, no header CSP, no `frame-ancestors`, so it
+  can be framed. A page a leaked deploy key uploads is held by the header CSP on `www` only; on the
+  default endpoint only its own meta CSP, if any, applies. This is the residual milestone 3 already had
+  (the pipeline served `www` and its default endpoint alike, with no header at all), not a regression
+  of this front. A shared-secret request header that the front adds and the edge checks would close it,
+  if Edge Services could check one: ticket #1639626 answered that Edge Services cannot set headers;
+  whether it can match a request header and refuse without it is **unverified** (check Edge Services'
+  request-header rules before relying on it). Until then the residual stands, and milestone 4's
+  amendment of ADR 0042's residuals carries it with the header CSP.
+
+## Amendment: the front writes nothing about a visitor to its output (PRD #297 milestone 4)
+
+2026-11-24. "No `log` directive" turns no access log on, but it does not keep Caddy quiet about visitors.
+Caddy's default logger still writes request loggers to the container's output: `http.log.error`, for
+every request a handler fails (the 502 with no upstream, or an upstream whose certificate does not
+verify), `http.handlers.reverse_proxy`, for a failed round trip, and `http.stdlib`, Go's standard
+library server log, whose `http: panic serving <remote addr>` names the client's address. The first two
+lines hold the request's `remote_ip` and `client_ip`, its URI and its headers, `User-Agent`,
+`X-Forwarded-For` and `X-Real-IP` included, and the platform ships the container's output to Cockpit.
+The review's finding; the `http.log.error` leak is confirmed by the behaviour test on the pinned image.
+
+- **The decision.** The Caddyfile's global options hold exactly one `log` block,
+  `log { exclude http.log.error http.handlers.reverse_proxy http.stdlib }`, which removes the three
+  loggers from the default log. No `log` stands anywhere else (a site block's `log` turns an access log
+  on).
+- **Why `http.stdlib` too.** Behind the platform the remote address Go names is the platform's, not the
+  visitor's, so the line holds no visitor today; it is excluded anyway, since nothing decides that the
+  platform always stands in front, and a panic line is no startup or configuration error that R4 reads.
+- **Why the exclusion and not `log { output discard }`.** The exclusion keeps the default logger's
+  other lines, Caddy's startup and its configuration errors, which hold nothing of a visitor and are
+  what a failed start in R4 is read from. `discard` would hide those too.
+- **What the behaviour test proves, and what it does not.** `TestSiteFront/the_log_holds_no_marker`
+  sends a proxied 200 and a 308 carrying a marker path, a marker `User-Agent` and marker
+  `X-Forwarded-For` and `X-Real-IP` addresses, then a 502 with no upstream and a 502 against an upstream
+  whose certificate an untrusted CA signs, and reads the container's whole output. It proves the
+  `http.log.error` leak and its fix: without that exclusion the markers appear, with it none does. Its
+  positive control is Caddy's startup line `serving initial configuration`, which must be in the log
+  read, so an empty or partial log cannot pass. The `http.handlers.reverse_proxy` and `http.stdlib`
+  exclusions are defence in depth that the test cannot prove (for these two failures neither writes a
+  marker, so a Caddyfile excluding `http.log.error` alone still passes it); they are pinned statically,
+  name by name. Should a later Caddy release log a request under another logger name, the behaviour
+  test fails, and the exclusion grows or the form becomes `discard`.
+- **What holds it.** `test/sitefront`'s static test refuses a `log` outside the global options and wants
+  exactly one global `log` of one of two shapes, the three-name exclusion in any order or `output
+  discard` (`TestCaddyfileRefusedDirectives`, `TestCheckGlobalLogForms`); the behaviour test proves the
+  `http.log.error` fix on the pinned image.
+- **The upstream's cookie and S3 headers.** The same review pass adds `header_down -Set-Cookie` and
+  `header_down -X-Amz-*` to `reverse_proxy`: a cookie Edge Services or the bucket sets, and the store's
+  `X-Amz-Request-Id`, `X-Amz-Id-2` and `X-Amz-Meta-*`, are the platform's and the bucket's, not the
+  site's. The front sets no cookie, so no cookie reaches the visitor. The static proxy check
+  (`TestCaddyfileReverseProxy`) and the behaviour test
+  (`TestSiteFront/the_headers_against_the_upstream's_own/an_upstream_whose_headers_are_not_the_site's`)
+  hold both.

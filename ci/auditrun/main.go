@@ -96,18 +96,29 @@ func resultWriter(path string) func([]byte) error {
 			return fmt.Errorf("open the result file: %w", err)
 		}
 
-		if _, err := file.Write(body); err != nil {
-			_ = file.Close()
-
-			return fmt.Errorf("write the result file: %w", err)
-		}
-
-		if err := file.Close(); err != nil {
-			return fmt.Errorf("close the result file: %w", err)
-		}
-
-		return nil
+		return writeResult(path, file, body)
 	}
+}
+
+// writeResult writes body to the result file resultWriter opened at path and
+// closes it. A write or a close that fails removes the file and returns the
+// error, so a failed run leaves no partial result for an encrypt step to read
+// (doc.go).
+func writeResult(path string, file io.WriteCloser, body []byte) error {
+	if _, err := file.Write(body); err != nil {
+		_ = file.Close()
+		_ = os.Remove(path)
+
+		return fmt.Errorf("write the result file: %w", err)
+	}
+
+	if err := file.Close(); err != nil {
+		_ = os.Remove(path)
+
+		return fmt.Errorf("close the result file: %w", err)
+	}
+
+	return nil
 }
 
 // inputs reads the command line and the step's environment, and returns the

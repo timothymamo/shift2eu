@@ -172,7 +172,8 @@ func checkListing(ctx context.Context, c *Client, want []string, download string
 // WriteArtifact writes the checked artifact to dir/ArtifactFile as one JSON
 // line, {"name":...,"id":...,"digest":...}, opened O_EXCL with mode 0600: a
 // path that already exists is refused, never overwritten, and wraps
-// publish.ErrConfig, as does a dir that is not absolute or a write that fails.
+// publish.ErrConfig, as does a dir that is not absolute or a write or close
+// that fails, which also removes the file, so a failed run writes none.
 // The workflow's download step reads the ID and digest from that file instead
 // of listing the run's artifacts again (review round 1 of PR 5b, finding A4).
 func WriteArtifact(dir string, a Artifact) error {
@@ -192,10 +193,19 @@ func WriteArtifact(dir string, a Artifact) error {
 		return fmt.Errorf("artifact file: cannot create it: %w", publish.ErrConfig)
 	}
 
-	_, writeErr := file.Write(append(body, '\n'))
+	return writeArtifact(path, file, append(body, '\n'))
+}
+
+// writeArtifact writes body to file, the artifact file just created at path,
+// and closes it. A write or a close that fails removes path, so a failed run
+// leaves no partial artifact.json, and wraps publish.ErrConfig.
+func writeArtifact(path string, file io.WriteCloser, body []byte) error {
+	_, writeErr := file.Write(body)
 	closeErr := file.Close()
 
 	if writeErr != nil || closeErr != nil {
+		_ = os.Remove(path)
+
 		return fmt.Errorf("artifact file: cannot write it: %w", publish.ErrConfig)
 	}
 

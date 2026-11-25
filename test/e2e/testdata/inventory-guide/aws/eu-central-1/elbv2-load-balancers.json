@@ -1,0 +1,85 @@
+{
+  "LoadBalancers": [
+    {
+      "LoadBalancerName": "shop-alb",
+      "LoadBalancerArn": "arn:aws:elasticloadbalancing:eu-central-1:123456789012:loadbalancer/app/shop-alb/0123456789abcdef",
+      "Type": "application",
+      "Scheme": "internet-facing",
+      "IpAddressType": "dualstack",
+      "AvailabilityZones": [
+        {
+          "ZoneName": "eu-central-1a"
+        },
+        {
+          "ZoneName": "eu-central-1b"
+        }
+      ]
+    },
+    {
+      "LoadBalancerName": "shop-nlb",
+      "LoadBalancerArn": "arn:aws:elasticloadbalancing:eu-central-1:123456789012:loadbalancer/net/shop-nlb/0123456789abcdef",
+      "Type": "network",
+      "Scheme": "internet-facing",
+      "IpAddressType": "dualstack",
+      "AvailabilityZones": [
+        {
+          "ZoneName": "eu-central-1a"
+        },
+        {
+          "ZoneName": "eu-central-1b"
+        }
+      ]
+    },
+    {
+      "LoadBalancerName": "shop-quic-nlb",
+      "LoadBalancerArn": "arn:aws:elasticloadbalancing:eu-central-1:123456789012:loadbalancer/net/shop-quic-nlb/0123456789abcdef",
+      "Type": "network",
+      "Scheme": "internet-facing",
+      "IpAddressType": "ipv4",
+      "AvailabilityZones": [
+        {
+          "ZoneName": "eu-central-1a"
+        }
+      ]
+    },
+    {
+      "LoadBalancerName": "shop-tcp-nlb",
+      "LoadBalancerArn": "arn:aws:elasticloadbalancing:eu-central-1:123456789012:loadbalancer/net/shop-tcp-nlb/0123456789abcdef",
+      "Type": "network",
+      "Scheme": "internet-facing",
+      "IpAddressType": "ipv4",
+      "AvailabilityZones": [
+        {
+          "ZoneName": "eu-central-1a"
+        }
+      ]
+    },
+    {
+      "LoadBalancerName": "shop-inspection-gwlb",
+      "LoadBalancerArn": "arn:aws:elasticloadbalancing:eu-central-1:123456789012:loadbalancer/gwy/shop-inspection-gwlb/0123456789abcdef",
+      "Type": "gateway",
+      "Scheme": "internet-facing",
+      "IpAddressType": "ipv4",
+      "AvailabilityZones": [
+        {
+          "ZoneName": "eu-central-1a"
+        },
+        {
+          "ZoneName": "eu-central-1b"
+        }
+      ]
+    },
+    {
+      "LoadBalancerName": "k8s-shop-ingress",
+      "LoadBalancerArn": "arn:aws:elasticloadbalancing:eu-central-1:123456789012:loadbalancer/app/k8s-shop-ingress/0123456789abcdef",
+      "Type": "application",
+      "Scheme": "internal",
+      "IpAddressType": "ipv4",
+      "AvailabilityZones": [
+        {
+          "ZoneName": "eu-central-1a"
+        }
+      ]
+    }
+  ]
+}

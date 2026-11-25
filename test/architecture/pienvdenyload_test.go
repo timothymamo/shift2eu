@@ -40,11 +40,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/timothymamo/shift2eu/test/architecture/internal/check"
 )
 
 // piNodeLoadScript is the program node runs: it imports the file it is given as
@@ -464,11 +465,12 @@ func piNodeEnvFrom(lookup func(name string) (string, bool)) []string {
 	return out
 }
 
-// piNodeVersionPin matches dev/lima.yaml's nodeVersion param, the Node the VM
+// piNodeVersionPin parses dev/lima.yaml's nodeVersion param, the Node the VM
 // installs for pi and the one ci.yml's and release.yml's Test jobs install for
-// this check. It reads the line as those jobs' sed does, two spaces and
-// `nodeVersion: "X"`, never any other indentation or spacing.
-var piNodeVersionPin = regexp.MustCompile(`(?m)^  nodeVersion: "([^"]+)"$`)
+// this check. It is check.PinnedNodeVersion, built from the same pattern as
+// those jobs' sed, two spaces and `nodeVersion: "X"`, never any other
+// indentation or spacing (issue #554).
+var piNodeVersionPin = check.PinnedNodeVersion
 
 // piPinnedNodeVersion returns the Node version dev/lima.yaml pins, which a skip
 // or a failure names as the one to install.
@@ -477,12 +479,12 @@ func piPinnedNodeVersion(t *testing.T) string {
 
 	const lima = "dev/lima.yaml"
 
-	match := piNodeVersionPin.FindSubmatch(readRepositoryFile(t, lima))
-	if match == nil {
-		t.Fatalf("%s pins no nodeVersion, so a skip cannot say which Node this check needs (issue #548)", lima)
+	version, err := piNodeVersionPin(readRepositoryFile(t, lima))
+	if err != nil {
+		t.Fatalf("%s: cannot read its nodeVersion, so a skip cannot say which Node this check needs (issue #548): %v", lima, err)
 	}
 
-	return string(match[1])
+	return version
 }
 
 // piProbeNode asks node what it calls itself and whether it strips TypeScript
