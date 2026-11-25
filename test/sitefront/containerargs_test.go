@@ -278,7 +278,10 @@ func isImageDigest(s string) bool {
 // text runs from its first token to its last, so a comment inside one element
 // stays in its text and fails checkElements. Every element must be a quoted
 // string or a file() call, so a list this reader does not understand fails the
-// test rather than running something else.
+// test rather than running something else. The closing ] ends the attribute's
+// value only when nothing is left in the body or the next attribute or block
+// starts there: a list an expression follows (["a"] == [] ? ["x"] : ["y"]) is
+// refused, since the platform runs the expression's value rather than the list.
 func hclList(src, attribute string) ([]string, error) {
 	tokens, err := hclTokens(src)
 	if err != nil {
@@ -754,6 +757,23 @@ func TestContainerRunFrom(t *testing.T) {
 				image: caddyAt,
 				argv:  []string{"/bin/sh", "-c", "run", "caddy"},
 			},
+		},
+		// A list's closing ] ends the attribute's value only when nothing follows it: an expression after it (a
+		// comparison, a conditional) is the value the platform runs, and a reader that stopped at the ] would
+		// run the list the expression only compares against. So what follows the ] must be the end of the body,
+		// or the start of the next attribute or block.
+		{
+			name: "the args followed by a comparison and a conditional",
+			tf: containerTF(caddyAt, shellOnly+`  args    = ["a"] == [] ? ["x"] : ["y"]
+`),
+			wantErr: "an expression follows the list",
+		},
+		{
+			name: "the command followed by a comment, a comparison and a conditional",
+			tf: containerTF(caddyAt, `  command = ["/bin/sh", "-c"] /* x */ == [] ? [] : []
+  args    = ["run", "caddy"]
+`),
+			wantErr: "an expression follows the list",
 		},
 		{
 			name: "the attribute set twice in the container",
