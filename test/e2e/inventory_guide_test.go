@@ -290,11 +290,12 @@ func inventoryGuides() []inventoryGuideCase {
 // taxonomyCategories returns the taxonomy categories the recorded fixtures of
 // source cover, unclassified aside, and nil for a source it does not know. Each
 // source has a list of its own, so a change to one source's guide adds only
-// that source's entries (PRD #552: GCP, for one, has no database.mongodb). They
-// are written out because this package is black box and imports no domain
-// package (the e2e-is-black-box depguard rule), and because a -update that
-// dropped a mapping must not be able to hide itself: the inventory is checked
-// against this list, not against the golden file it was written from.
+// that source's entries (PRD #552: GCP, for one, will have no
+// database.mongodb). They are written out because this package is black box
+// and imports no domain package (the e2e-is-black-box depguard rule), and
+// because a -update that dropped a mapping must not be able to hide itself: the
+// inventory is checked against this list, not against the golden file it was
+// written from.
 func taxonomyCategories(source string) []string {
 	switch source {
 	case "aws":
