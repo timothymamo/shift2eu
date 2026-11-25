@@ -41,6 +41,11 @@ mock_provider "scaleway" {
       id = "55555555-5555-5555-5555-555555555555"
     }
   }
+  mock_resource "scaleway_edge_services_tls_stage" {
+    defaults = {
+      id = "66666666-6666-6666-6666-666666666666"
+    }
+  }
   mock_resource "scaleway_edge_services_dns_stage" {
     defaults = {
       id = "77777777-7777-7777-7777-777777777777"
