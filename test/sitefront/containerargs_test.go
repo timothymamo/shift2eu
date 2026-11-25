@@ -419,7 +419,9 @@ type hclToken struct {
 // quoted strings, so that nothing a comment or a string holds is read as code. An
 // unclosed /* */ comment or string is refused, and so is every string this
 // reader cannot end for certain (hclStringEnd): a template, which can nest a
-// string in the string, and a raw newline, which ends no HCL string. The scan
+// string in the string, and a raw newline, which ends no HCL string. A << outside
+// a string and a comment opens a heredoc, whose body HCL reads as one string and
+// this reader would read as code, so it is refused too. The scan
 // covers the whole file, so no string anywhere can shift what the reader takes
 // for code.
 func hclTokens(src string) ([]hclToken, error) {
@@ -830,6 +832,38 @@ func TestContainerRunFrom(t *testing.T) {
 			tf: "locals {\n  /*\n  " + renovateComment + "\n  caddy_image = \"caddy@sha256:" + digestTail + "\"\n  */\n" +
 				"  caddy_image = \"caddy:latest\"\n}\n\n" + containerBlock(caddyImageLocal, designed),
 			wantErr: "Renovate comment",
+		},
+		// A heredoc is no quoted string: HCL reads its body as one string, while this reader would read the body as
+		// code (dev/infra-rules.awk refuses a << under [parse] for the same reason).
+		{
+			name: "a heredoc in the container holding the args and a bracket",
+			tf: containerTF(caddyAt, `  description = <<EOT
+  args = ["fake"]
+  (
+  EOT
+  command = ["/bin/sh", "-c"]
+  args    = ["run", "caddy"]
+`),
+			wantErr: "heredoc",
+		},
+		{
+			name: "a heredoc in another block holding the container's closing brace and a fake container",
+			tf: imageLocals(caddyAt) + `resource "scaleway_container_namespace" "site" {
+  name        = "shift2eu-site"
+  description = <<EOT
+}
+resource "scaleway_container" "site" {
+  image   = local.caddy_image
+  command = ["/bin/bash", "-c"]
+  args    = ["evil"]
+}
+EOT
+}
+
+` + containerBlock(caddyImageLocal, `  command = ["/bin/sh", "-c"]
+  args    = ["run", "caddy"]
+`),
+			wantErr: "heredoc",
 		},
 		{
 			name: "an element the reader does not understand",
