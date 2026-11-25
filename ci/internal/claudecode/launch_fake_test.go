@@ -8,6 +8,7 @@ package claudecode_test
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -128,9 +129,9 @@ func writeFakeFile(t *testing.T, path string, content []byte, mode os.FileMode) 
 	}
 }
 
-// reached reports whether the fake CLI wrote its marker: the file a slow fake
-// writes only after the pause that follows the elements it prints first, so a run
-// the launcher stops never reaches it.
+// reached reports whether the fake CLI wrote its marker: the file a gated fake
+// writes only after the gate it waits at opens, so a run the launcher stops never
+// reaches it.
 func (r claudeRecording) reached(t *testing.T) bool {
 	t.Helper()
 
@@ -197,12 +198,19 @@ func (r claudeRecording) env(t *testing.T) map[string]string {
 	return values
 }
 
-// newSlowFakeClaudeCLI writes an executable fake CLI that prints head, waits a
-// second, writes a marker and then prints tail: a run the launcher stops at an
-// element of head never reaches the marker, and one it lets run reads tail's
-// result. The pause is what makes "the run was stopped" observable: the CLI would
-// otherwise print everything before the launcher read its first line.
-func newSlowFakeClaudeCLI(t *testing.T, head, tail string) (string, claudeRecording) {
+// gateName is the fake CLI's gate in its recording directory: a FIFO it opens
+// for reading after printing head.
+const gateName = "gate"
+
+// newBlockedFakeClaudeCLI writes an executable fake CLI that prints head and
+// then waits at a gate: a FIFO it opens for reading, which blocks until the test
+// opens the same FIFO for writing. Only two things end that wait - the test's
+// release, which it gives a run the launcher must let finish, or the launcher's
+// stop, which kills the CLI. So a run the launcher stops never writes the marker
+// nor prints tail, and one it lets run writes both. The wait is what makes "the
+// run was stopped" observable, and it is no timer: a run that is not stopped
+// waits at the gate however long it is given (CLAUDE.md, Testing).
+func newBlockedFakeClaudeCLI(t *testing.T, head, tail string) (string, claudeRecording) {
 	t.Helper()
 
 	rec := claudeRecording{dir: t.TempDir()}
@@ -210,17 +218,43 @@ func newSlowFakeClaudeCLI(t *testing.T, head, tail string) (string, claudeRecord
 	writeFakeFile(t, filepath.Join(rec.dir, "canned-head"), []byte(head), 0o600)
 	writeFakeFile(t, filepath.Join(rec.dir, "canned-tail"), []byte(tail), 0o600)
 
+	gate := filepath.Join(rec.dir, gateName)
+	makeGateFIFO(t, gate)
+
 	path := filepath.Join(t.TempDir(), "claude")
 	writeFakeFile(t, path, []byte(fmt.Sprintf(`#!/bin/sh
 rec=%q
 cat > "$rec/stdin"
 cat "$rec/canned-head"
-sleep 1
+# The gate: this open blocks in the shell itself until the test holds the same
+# FIFO open for writing, and a run the launcher stops is killed here, before the
+# marker and the answer below.
+exec 3< "$rec/gate"
 : > "$rec/reached"
 cat "$rec/canned-tail"
 `, rec.dir)), 0o700)
 
 	return path, rec
+}
+
+// release opens the fake CLI's gate for writing and leaves the release in it, so
+// the fake CLI's open of the gate succeeds, and it writes its marker and prints
+// its tail. The gate stays open, and the release in it, until the run ends: a
+// FIFO opened for reading waits while no writer holds it, so a gate the test
+// closed before the fake opens it would block the fake forever.
+func (r claudeRecording) release(t *testing.T) {
+	t.Helper()
+
+	gate, err := os.OpenFile(filepath.Join(r.dir, gateName), os.O_RDWR, 0)
+	if err != nil {
+		t.Fatalf("open the fake CLI's gate: %v", err)
+	}
+
+	t.Cleanup(func() { _ = gate.Close() })
+
+	if _, err := gate.WriteString("run\n"); err != nil {
+		t.Fatalf("release the fake CLI's gate: %v", err)
+	}
 }
 
 // launcherVariableNames are the names the launcher sets in the CLI's
@@ -497,6 +531,14 @@ func TestAskKeepsTheReviewersSystemPromptInTheTemporaryDirectory(t *testing.T) {
 // (issue #592).
 const initCanary = "canary-in-the-init-element"
 
+// runGuard bounds a run the launcher should have ended but did not, so such a
+// run fails with a message instead of holding the test: the fake CLI waits at
+// its gate until the launcher kills it or the test releases it. It is a failure
+// guard only - no assertion here reads a clock - and it is shorter than the
+// config's own timeout of 30s, so the run that reaches it is the launcher's
+// failure, not the CLI's timeout.
+const runGuard = 20 * time.Second
+
 // TestAskRefusesASessionWhoseInitReportsAnotherPermissionMode pins the check
 // issue #592 adds. With CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1, Claude Code 2.1.332
 // forces the permission mode to default whatever the launch asks for, so the
@@ -534,8 +576,8 @@ func TestAskRefusesASessionWhoseInitReportsAnotherPermissionMode(t *testing.T) {
 
 	cases := []struct {
 		name string
-		// head is what the fake prints before its pause: the session's elements,
-		// the init one among them or not.
+		// head is what the fake prints before it waits at its gate: the session's
+		// elements, the init one among them or not.
 		head string
 		// wantAnswer is whether the launcher accepts the session and returns its
 		// result.
@@ -662,7 +704,15 @@ func TestAskRefusesASessionWhoseInitReportsAnotherPermissionMode(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			cli, rec := newSlowFakeClaudeCLI(t, tc.head, theAnswer)
+			cli, rec := newBlockedFakeClaudeCLI(t, tc.head, theAnswer)
+
+			// A run the launcher must let finish is released before it starts: the
+			// test's byte is in the gate when the fake opens it. A run the launcher
+			// must stop is never released, so it waits at the gate until the launcher
+			// kills it there, and the marker below never appears.
+			if !tc.wantStopped {
+				rec.release(t)
+			}
 
 			var transcript bytes.Buffer
 
@@ -675,9 +725,20 @@ func TestAskRefusesASessionWhoseInitReportsAnotherPermissionMode(t *testing.T) {
 				Timeout:        30 * time.Second,
 			})
 
-			answer, err := launcher.Ask(t.Context(), claudecode.Prompt{System: "s", User: "u"})
+			// The guard is a failure message, never what an assertion relies on: a
+			// stopped run ends when the launcher kills it at the gate, and a released
+			// one when it reads the release. Only a run the launcher neither stopped
+			// nor finished reaches this deadline, and the failure below says so.
+			ctx, cancel := context.WithTimeout(t.Context(), runGuard)
+			defer cancel()
+
+			answer, err := launcher.Ask(ctx, claudecode.Prompt{System: "s", User: "u"})
 
 			reached := rec.reached(t)
+
+			if ctx.Err() != nil {
+				t.Fatalf("Ask did not return within %s, want the launcher to end the run: the fake CLI waits at its gate for a release only a run that must finish is given, so a run the launcher neither stopped nor finished waits until this guard (issue #592)", runGuard)
+			}
 
 			if tc.wantAnswer {
 				if err != nil {
@@ -724,7 +785,7 @@ func TestAskRefusesASessionWhoseInitReportsAnotherPermissionMode(t *testing.T) {
 			}
 
 			if tc.wantStopped && reached {
-				t.Error("the run reached the fake CLI's marker and its answer, want the launcher to stop it at the element it refused: a session of another permission mode must not make a tool call")
+				t.Error("the run reached the fake CLI's marker and its answer, want the launcher to stop it at the element it refused, before the gate it waits at opens: a session of another permission mode must not make a tool call")
 			}
 		})
 	}
