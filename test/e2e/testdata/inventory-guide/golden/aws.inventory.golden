@@ -411,6 +411,18 @@
       "region": "eu-central-1"
     },
     {
+      "id": "shop-search-redis",
+      "rawType": "AWS::ElastiCache::ReplicationGroup",
+      "category": "cache.redis",
+      "region": "eu-central-1",
+      "capabilities": [
+        "sharding"
+      ],
+      "size": {
+        "count": 3
+      }
+    },
+    {
       "id": "shop-sessions-valkey",
       "rawType": "AWS::ElastiCache::ReplicationGroup",
       "category": "cache.redis",

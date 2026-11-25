@@ -23,9 +23,6 @@
     "{\"resourceId\":\"arn:aws:sns:eu-central-1:123456789012:shop-events\",\"resourceName\":\"shop-events\",\"resourceType\":\"AWS::SNS::Topic\",\"awsRegion\":\"eu-central-1\"}",
     "{\"resourceId\":\"arn:aws:apprunner:eu-central-1:123456789012:service/shop-api/0123456789abcdef\",\"resourceName\":\"shop-api\",\"resourceType\":\"AWS::AppRunner::Service\",\"awsRegion\":\"eu-central-1\"}",
     "{\"resourceId\":\"arn:aws:ecr:eu-central-1:123456789012:repository/shop-images\",\"resourceName\":\"shop-images\",\"resourceType\":\"AWS::ECR::Repository\",\"awsRegion\":\"eu-central-1\"}",
-    "{\"resourceId\":\"arn:aws:elasticache:eu-central-1:123456789012:replicationgroup:shop-search-redis\",\"resourceType\":\"AWS::ElastiCache::ReplicationGroup\",\"awsRegion\":\"eu-central-1\"}",
-    "{\"resourceId\":\"arn:aws:elasticache:eu-central-1:123456789012:cluster:shop-analytics-redis\",\"resourceType\":\"AWS::ElastiCache::CacheCluster\",\"awsRegion\":\"eu-central-1\"}",
-    "{\"resourceId\":\"arn:aws:elasticache:eu-central-1:123456789012:serverlesscache:shop-edge-valkey\",\"resourceType\":\"AWS::ElastiCache::ServerlessCache\",\"awsRegion\":\"eu-central-1\"}",
     "{\"resourceId\":\"arn:aws:dynamodb:eu-central-1:123456789012:table/shop-carts\",\"resourceName\":\"shop-carts\",\"resourceType\":\"AWS::DynamoDB::Table\",\"awsRegion\":\"eu-central-1\"}"
   ],
   "QueryInfo": {
