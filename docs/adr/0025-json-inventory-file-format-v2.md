@@ -2,7 +2,9 @@
 
 - Status: Accepted; amends [0006](0006-json-inventory-file-format-v1.md), whose rules version 2 keeps;
   amended by [0046](0046-add-seven-taxonomy-categories-and-match-cache-plans-on-memory.md): the size-field
-  rows of seven new categories
+  rows of seven new categories; amended by
+  [0047](0047-add-search-opensearch-and-messaging-kafka-and-price-their-storage-per-node.md): the size-field
+  rows of `search.opensearch` and `messaging.kafka`
 - Date: 2026-11-13
 
 ## Context

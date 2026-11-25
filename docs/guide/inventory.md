@@ -69,7 +69,7 @@ usage, workload, relations and monthly cost, all optional. `shift2eu assess` rea
 | `resources[].region` | no | The source region; absent for a global resource |
 | `resources[].capabilities` | no | Capabilities the resource depends on, below |
 | `resources[].size` | no | `vcpus`, `memoryGiB`, `storageGiB` and `count` (instances, nodes or volumes), each optional; see [Sizes](#sizes) |
-| `resources[].usage` | no | `hoursPerMonth`, the hours a month the resource runs: 730 when absent, at most 744. Only for compute, Kubernetes, database and `cache.redis` categories; on any other category it is an error |
+| `resources[].usage` | no | `hoursPerMonth`, the hours a month the resource runs: 730 when absent, at most 744. Only for compute, Kubernetes, database, `cache.redis`, `search.opensearch` and `messaging.kafka` categories; on any other category it is an error |
 | `resources[].workload` | no | A free-text name of the application the resource belongs to, such as `shop` |
 | `resources[].relations` | no | A list of `{"type", "target"}`: `type` is `replica-of`, `dead-letter-queue-of`, `attached-to` or `depends-on`, and `target` is another resource's `id` |
 | `resources[].monthlyCost` | no | `{"amount", "currency"}`: what the source charges for the resource a month, from your own bill; `currency` is an ISO 4217 code such as `USD` or `EUR` |
@@ -83,11 +83,15 @@ protocol), `cache.redis` (a Redis or Valkey cache), `network.loadbalancer`, `ser
 `serverless.container` (a container image run and scaled with requests), `registry.container` (a
 private OCI image registry), `messaging.queue` and `messaging.topic` (a publish-subscribe topic, every
 subscription getting its own copy of each message;
-[ADR 0046](../adr/0046-add-seven-taxonomy-categories-and-match-cache-plans-on-memory.md)). A
+[ADR 0046](../adr/0046-add-seven-taxonomy-categories-and-match-cache-plans-on-memory.md)),
+`search.opensearch` (a search engine that speaks the OpenSearch REST API: OpenSearch, or Elasticsearch
+up to 7.10) and `messaging.kafka` (a cluster of brokers that speaks the Apache Kafka protocol;
+[ADR 0047](../adr/0047-add-search-opensearch-and-messaging-kafka-and-price-their-storage-per-node.md)). A
 resource that fits none of these categories is `unclassified` and keeps its `rawType`: it then shows
 up in the report as a blocker on every target, instead of disappearing from the assessment. The
-programs below do not classify into the seven categories ADR 0046 adds yet (they list those resources
-as `unclassified`, or not at all): until they do, set such a resource's category by hand.
+programs below do not classify into the seven categories ADR 0046 adds yet, nor into the two ADR 0047
+adds (they list those resources as `unclassified`, or not at all): until they do, set such a
+resource's category by hand.
 
 The **capabilities** are features a resource depends on:
 
@@ -123,6 +127,7 @@ memory cover the resource's (memory alone for `cache.redis`), times the `count`,
 | `kubernetes.managed` | per node | per node | nodes | plan per node, plus the control-plane fee |
 | `database.postgresql`, `database.mysql`, `database.mongodb` | yes | yes | nodes | plan, plus storage above what it includes |
 | `cache.redis` | `memoryGiB` only, per node | no | nodes | plan per node, matched on memory alone |
+| `search.opensearch`, `messaging.kafka` | per data node or broker | per node | data nodes or brokers | plan per node, plus storage above what it includes, per node |
 | `storage.block` | no | yes | volumes | GiB |
 | `storage.object` | no | stored GiB | no | GiB |
 | `storage.file` | no | provisioned GiB | no | GiB |
@@ -156,8 +161,9 @@ inventory yourself, with an editor or `jq`:
   to the estimate, per currency, without converting it.
 - **`usage.hoursPerMonth`**: for a resource that does not run all month, such as a server stopped at
   night. Only compute (`compute.vm`, `compute.baremetal`), Kubernetes (`kubernetes.managed`),
-  database (`database.postgresql`, `database.mysql`, `database.mongodb`) and cache (`cache.redis`)
-  resources take it; on any other category the inventory is refused.
+  database (`database.postgresql`, `database.mysql`, `database.mongodb`), cache (`cache.redis`),
+  search (`search.opensearch`) and Kafka (`messaging.kafka`) resources take it; on any other category
+  the inventory is refused.
 - any size the calls do not give, such as an RDS instance's vCPU and memory (its instance class), an
   ElastiCache cache's memory per node (its node type), a DocumentDB cluster's vCPU and memory per
   instance (its instance class), a Cloud SQL instance's unless its tier is `db-custom-*`, the `count` of a high-availability database

@@ -29,6 +29,13 @@ func ptr[T any](v T) *T {
 	return &v
 }
 
+// The two categories PRD #571 adds, as the values the taxonomy shares with the
+// inventory file and the report.
+const (
+	searchCategory = taxonomy.SearchOpenSearch
+	kafkaCategory  = taxonomy.MessagingKafka
+)
+
 // vm returns a compute.vm resource with a valid ID and raw type: the base of
 // the version 2 field tests.
 func vm(id string) inventory.Resource {
@@ -461,6 +468,18 @@ func TestNewAcceptsVersion2FieldsPerCategory(t *testing.T) {
 		{
 			name:     "database.mongodb",
 			resource: sized("db-example", taxonomy.DatabaseMongoDB, computeSize, ptr(730.0)),
+		},
+		// The two categories PRD #571 adds take every size field the table knows,
+		// as a database does: vCPUs, memory and storage of one node, the node count
+		// and the hours a month (PRD #571, Estimates). Taking every field, they have
+		// no "no" cell in TestNewRejectsVersion2FieldsPerCategory.
+		{
+			name:     "search.opensearch",
+			resource: sized("search-example", searchCategory, computeSize, ptr(730.0)),
+		},
+		{
+			name:     "messaging.kafka",
+			resource: sized("kafka-example", kafkaCategory, computeSize, ptr(730.0)),
 		},
 		{
 			name: "storage.file",

@@ -135,6 +135,7 @@ var allowedResourceTypeNamespaces = []string{
 	"Microsoft.ContainerService",
 	"Microsoft.DBforMySQL",
 	"Microsoft.DBforPostgreSQL",
+	"Microsoft.HDInsight",
 	"Microsoft.Network",
 	"Microsoft.ServiceBus",
 	"Microsoft.Storage",
