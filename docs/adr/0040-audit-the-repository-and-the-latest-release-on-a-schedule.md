@@ -3064,11 +3064,16 @@ works, switches the image, and **runs no other coreutil of ours until the GNU ch
    `gnu-coreutils` (on the image, since `coreutils-from-uutils` depends on it; the probe confirms it),
    never `/usr/bin/sha256sum`, which is still uutils' here.
 3. The plan is **simulated first**: `apt-get -s install -y --no-download --allow-remove-essential
-   "${RUNNER_TEMP}/coreutils-from-gnu.deb" coreutils-from-uutils-`, its output read into a variable and
-   walked with bash's `read` (no coreutil), and the step fails unless its only `Remv ` line removes
-   `coreutils-from-uutils`. `-y --allow-remove-essential` would let apt's solver remove any other
-   Essential package without asking; today nothing else depends on `coreutils-from-uutils`, so the one
-   removal is expected, and the simulation makes any other one a failure before it happens.
+   "${RUNNER_TEMP}/coreutils-from-gnu.deb" coreutils-from-uutils-`, its output captured in a plain
+   assignment (`out=$(...)`, never `local out=$(...)` and never `|| true`, so `bash -e` fails the step
+   when apt-get exits non-zero) and walked with bash's `read` (no coreutil). The step fails unless all
+   of these hold: apt-get exits 0; the plan has exactly one removal line (`Remv ` or `Purg `, which apt
+   prints when `APT::Get::Purge` is set), whose package field is exactly `coreutils-from-uutils` (an
+   exact match, never a prefix); and it has exactly one `Inst ` line, whose package field is exactly
+   `coreutils-from-gnu`. An empty plan or one with no removal fails. The pin test holds the counts, the
+   exact fields and the unmasked exit. `-y --allow-remove-essential` would let apt's solver remove any
+   other Essential package without asking; today nothing else depends on `coreutils-from-uutils`, so
+   the one removal is expected, and the simulation makes any other one a failure before it happens.
 4. The switch is **`sudo apt-get install -y --no-download --allow-remove-essential
    "${RUNNER_TEMP}/coreutils-from-gnu.deb" coreutils-from-uutils-`**: one apt transaction that installs
    the local `.deb` and removes `coreutils-from-uutils`, which a bare `dpkg -i` cannot do for an
@@ -3081,7 +3086,8 @@ works, switches the image, and **runs no other coreutil of ours until the GNU ch
    checking:
    - `dpkg-query -W -f='${db:Status-Abbrev}'` prints exactly `ii ` for `coreutils-from-gnu`,
      `gnu-coreutils` and the `coreutils` meta package; for `coreutils-from-uutils` it passes only if
-     `dpkg-query` exits non-zero (no such package) or prints exactly `un ` or `rc `. Any other state
+     `dpkg-query` exits 1 with nothing on stdout (no such package) or exits 0 printing exactly `un `
+     or `rc `. Any other exit (2 is a dpkg error, such as a database it could not read) or state
      (`iU`, `iF`, `iH`, `rH`, ...) fails: a half-removed or half-configured package can leave uutils'
      files in place;
    - for every coreutil in the job's list, **`/usr/bin/gnureadlink -f /usr/bin/<tool>`** (GNU's
@@ -3135,7 +3141,8 @@ names and exit codes. Its commands print, and fail on nothing they find. It prin
 - the same **after the switch, run in exactly the move's form**: the `_all.deb` by `curl`, checked with
   `/usr/bin/gnusha256sum --check --strict -`; the simulation `apt-get -s install -y --no-download
   --allow-remove-essential <the local .deb> coreutils-from-uutils-`, printed whole, so the move's pull
-  request cites a plan whose only removal is `coreutils-from-uutils`; then `sudo apt-get install -y
+  request cites a plan with exactly one removal (`Remv ` or `Purg `), `coreutils-from-uutils`, and
+  exactly one `Inst `, `coreutils-from-gnu`; then `sudo apt-get install -y
   --no-download --allow-remove-essential <the local .deb> coreutils-from-uutils-`, then the broadened
   GNU check (`/usr/bin/gnureadlink`, the exact dpkg states, `test`'s exception); the move's pull request
   cites this log for the form, never apt's network form;
@@ -3173,7 +3180,8 @@ that would change a decision here comes back as an amendment first.
    `ubuntu-26.04` with the check's message (`want ubuntu-26.04, never a moving image: the wrapper's
    option analysis assumes the GNU coreutils the switch installs (ADR 0040)`), adds the switch step and
    the broadened GNU check to every job's closed step list (each before the job's first download), with
-   the switch held to `gnusha256sum`, the simulated plan and `apt-get install -y --no-download
+   the switch held to `gnusha256sum`, the simulated plan (its counts, exact package fields and unmasked
+   exit) and `apt-get install -y --no-download
    --allow-remove-essential`, the GNU check held to `/usr/bin/gnureadlink`, the parameter expansion and
    the exact dpkg states, and the per-job coreutil lists (with `test`'s exception) with the test that
    finds a missing one, replaces the bubblewrap and socat pins and digests with resolute's, adds the
