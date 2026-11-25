@@ -97,6 +97,18 @@ param:
 param2:
   nodeVersion: "26.13.1"
 `
+
+	// limaTwoDistinctNodeVersionsDoc pins 24.11.1 and 22.0.0, two different
+	// releases: the document names no one Node, whatever the reader picks.
+	limaTwoDistinctNodeVersionsDoc = `minimumLimaVersion: "2.0.3"
+
+param:
+  nodeVersion: "24.11.1"
+  goVersion: "1.25.5"
+
+param2:
+  nodeVersion: "22.0.0"
+`
 )
 
 // TestPinnedNodeVersion pins what check.PinnedNodeVersion reads out of a
@@ -106,9 +118,10 @@ param2:
 //
 // The cases follow the workflows' sed, which reads the same pattern: a document
 // the sed prints nothing for must error here, and a document it prints one
-// version for must return that version. Where the two differ - two nodeVersion
-// lines, which the sed prints both of and this reader returns the first of -
-// the case pins what the reader does, so a change to it is a change here.
+// version for must return that version. A document with two nodeVersion lines
+// must error here as the workflows' step does: the sed prints both, the step's
+// X.Y.Z check refuses the two-line value, and a reader that returned the first
+// version silently would check one Node while the document named another.
 func TestPinnedNodeVersion(t *testing.T) {
 	t.Parallel()
 
@@ -147,10 +160,11 @@ func TestPinnedNodeVersion(t *testing.T) {
 		{name: "the nodeVersion line at four spaces", lima: []byte(limaFourSpaceNodeVersionDoc), wantErr: "holds no line"},
 		{name: "an unquoted nodeVersion", lima: []byte(limaUnquotedNodeVersionDoc), wantErr: "holds no line"},
 
-		// Two nodeVersion lines: unlike the sed, which prints both and hands the
-		// step's X.Y.Z check a two-line value that fails it, the reader returns
-		// the first version silently.
-		{name: "two nodeVersion lines", lima: []byte(limaTwoNodeVersionsDoc), want: "24.11.1"},
+		// Two nodeVersion lines: the sed prints both and hands the step's X.Y.Z
+		// check a two-line value that fails it, so the reader refuses the document
+		// too, naming the two lines it found where it wants one.
+		{name: "two nodeVersion lines", lima: []byte(limaTwoNodeVersionsDoc), wantErr: "nodeVersion lines"},
+		{name: "two nodeVersion lines of different versions", lima: []byte(limaTwoDistinctNodeVersionsDoc), wantErr: "nodeVersion lines"},
 	}
 
 	for _, tc := range cases {
@@ -166,7 +180,7 @@ func TestPinnedNodeVersion(t *testing.T) {
 
 			if tc.wantErr != "" {
 				if err == nil {
-					t.Fatalf("PinnedNodeVersion(%q) = %q, want an error holding %q: the workflows' sed reads no version there either (issue #554)", doc, got, tc.wantErr)
+					t.Fatalf("PinnedNodeVersion(%q) = %q, want an error holding %q: the workflows' read step refuses that document too (issue #554)", doc, got, tc.wantErr)
 				}
 
 				if !strings.Contains(err.Error(), tc.wantErr) {
