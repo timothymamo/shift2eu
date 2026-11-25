@@ -2,7 +2,8 @@
 // 0040's model-job amendment, issue #277, "The audit directory"): the
 // directory exists where the model-free step made it, with the checkout copy
 // and the checks' results holding no write bit, an empty work area with its
-// tmp/, an empty state home/ and tmp/, the state area's bin/ and out/, and the
+// tmp/, the CLI's working directory empty beside it, an empty state home/ and
+// tmp/, the state area's bin/ and out/, and the
 // wrapper at bin/audit-exec with mode 0555.
 //
 // Every path the layout puts something of its own at is checked as an entry: a
@@ -141,6 +142,7 @@ var (
 	checks    = []string{"checks"}
 	work      = []string{"work"}
 	workTmp   = []string{"work", "tmp"}
+	cwd       = []string{"cwd"}
 	state     = []string{"state"}
 	home      = []string{"state", "home"}
 	stateTmp  = []string{"state", "tmp"}
@@ -241,6 +243,22 @@ func TestCheckLayoutRefusesAnythingElse(t *testing.T) {
 		{name: "the checks' results are missing", wantNamed: "srv/audit/checks", mutate: gone(checks)},
 		{name: "the work area is missing", wantNamed: "srv/audit/work", mutate: gone(work)},
 		{name: "the work area's tmp is missing", wantNamed: "srv/audit/work/tmp", mutate: gone(workTmp)},
+
+		// The CLI's working directory is a sibling of the work area, and the
+		// model-free step makes it: the CLI creates empty placeholder files and
+		// directories in the directory it starts in and removes none of them,
+		// so it starts in this one and the work area stays the model's (issue
+		// #615).
+		{name: "the CLI's working directory is missing", wantNamed: "srv/audit/cwd", mutate: gone(cwd)},
+		{
+			name:      "the CLI's working directory holds an entry of its own",
+			wantNamed: ".env",
+			mutate: func(t *testing.T, root string) {
+				t.Helper()
+				writeFile(t, filepath.Join(pathOf(root, cwd), ".env"), "", 0o600)
+			},
+		},
+		{name: "the CLI's working directory is a symbolic link", wantNamed: "srv/audit/cwd", mutate: linkElsewhere(cwd)},
 		{name: "the state area is missing", wantNamed: "srv/audit/state", mutate: gone(state)},
 		{name: "the state area's home is missing", wantNamed: "srv/audit/state/home", mutate: gone(home)},
 		{name: "the state area's tmp is missing", wantNamed: "srv/audit/state/tmp", mutate: gone(stateTmp)},
@@ -789,6 +807,7 @@ func writeAuditTree(t *testing.T, root string) {
 		checks,
 		work,
 		workTmp,
+		cwd,
 		state,
 		home,
 		stateTmp,

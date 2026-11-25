@@ -602,6 +602,70 @@ func workPath(root string, parts ...string) string {
 	return filepath.Join(append([]string{root, "srv", "audit", "work"}, parts...)...)
 }
 
+// cwdPath is a path of the CLI's working directory under root: the directory of
+// its own the launch starts it in, a sibling of the work area (issue #615).
+func cwdPath(root string, parts ...string) string {
+	return filepath.Join(append([]string{root, "srv", "audit", "cwd"}, parts...)...)
+}
+
+// cliPlaceholderFiles are the empty files Claude Code 2.1.332 creates in its
+// working directory at session start when CLAUDE_CODE_SUBPROCESS_ENV_SCRUB is
+// set, and never removes (issue #615).
+var cliPlaceholderFiles = []string{
+	".env",
+	".env.local",
+	".env.development",
+	".env.development.local",
+	".env.test",
+	".env.test.local",
+	".env.production",
+	".env.production.local",
+	".gitmodules",
+	".npmrc",
+	".yarnrc",
+	".yarnrc.yml",
+	"bunfig.toml",
+	"package.json",
+	"package-lock.json",
+	"yarn.lock",
+	"pnpm-lock.yaml",
+}
+
+// cliPlaceholderDirs are the empty directories the same session start creates
+// in its working directory: .claude/.cc-writes is the first sandboxed Bash
+// call's, and the other three are the env scrub's (issue #615).
+var cliPlaceholderDirs = []string{
+	".claude/agents",
+	".claude/commands",
+	".claude/.cc-writes",
+	"node_modules/.bin",
+}
+
+// writeCLIPlaceholders lays the entries Claude Code 2.1.332 leaves in its
+// working directory under dir, each empty and with the mode the CLI gives it:
+// the files as regular files, the directories as directories (issue #615).
+func writeCLIPlaceholders(dir string) error {
+	for _, name := range cliPlaceholderFiles {
+		path := filepath.Join(dir, filepath.FromSlash(name))
+
+		if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
+			return err
+		}
+
+		if err := os.WriteFile(path, nil, 0o600); err != nil {
+			return err
+		}
+	}
+
+	for _, name := range cliPlaceholderDirs {
+		if err := os.MkdirAll(filepath.Join(dir, filepath.FromSlash(name)), 0o750); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
 // resultFile is the result the audit's model writes.
 const resultFile = `{"findings":[]}`
 
@@ -652,6 +716,11 @@ func jsonEscaped(s string) string {
 // transcript is not applied here. A result nested deeper than the audit's own
 // limit is refused as an invalid result rather than walked to its end, and one
 // nested to the limit is accepted (issue #277, round E nit 1, round J nit 6).
+//
+// The CLI's working directory is a directory of its own, a sibling of the work
+// area, so the empty placeholders Claude Code 2.1.332 leaves in the directory
+// it starts in - .env, package.json, node_modules/.bin, .claude/agents - are
+// outside the area the audit checks and tolerate no name in it (issue #615).
 func TestAuditTakesOnlyAResultFileTheRunWrote(t *testing.T) {
 	t.Parallel()
 
@@ -807,6 +876,56 @@ func TestAuditTakesOnlyAResultFileTheRunWrote(t *testing.T) {
 			before: func(t *testing.T, root string) {
 				t.Helper()
 				writeFile(t, workPath(root, "tmp", "leftover"), "the preflight left this behind\n", 0o600)
+			},
+			wantRefused: true,
+		},
+		{
+			// The CLI starts in a directory of its own, and the placeholders it
+			// leaves there are outside the area the audit checks: the run passes
+			// and its result file is taken as the other cases' is (issue #615).
+			name: "the run left the CLI's placeholders in its own directory",
+			write: func(root string) error {
+				if err := writeCLIPlaceholders(cwdPath(root)); err != nil {
+					return err
+				}
+
+				return os.WriteFile(workPath(root, "result.json"), []byte(resultFile), 0o600)
+			},
+			wantLaunched: true,
+			wantResult:   resultFile,
+		},
+		// The other half of that decision: no placeholder is tolerated in the
+		// work area itself, where the launcher's check would meet one of the
+		// prefixes the CLI's own working directory holds (issue #615).
+		{
+			name: "the work area holds the CLI's .env",
+			before: func(t *testing.T, root string) {
+				t.Helper()
+				writeFile(t, workPath(root, ".env"), "", 0o600)
+			},
+			wantRefused: true,
+		},
+		{
+			name: "the work area holds the CLI's package.json",
+			before: func(t *testing.T, root string) {
+				t.Helper()
+				writeFile(t, workPath(root, "package.json"), "", 0o600)
+			},
+			wantRefused: true,
+		},
+		{
+			name: "the work area holds the CLI's node_modules/.bin",
+			before: func(t *testing.T, root string) {
+				t.Helper()
+				makeDir(t, workPath(root, "node_modules", ".bin"))
+			},
+			wantRefused: true,
+		},
+		{
+			name: "the work area holds the CLI's .claude/agents",
+			before: func(t *testing.T, root string) {
+				t.Helper()
+				makeDir(t, workPath(root, ".claude", "agents"))
 			},
 			wantRefused: true,
 		},
