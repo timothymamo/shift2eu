@@ -185,10 +185,13 @@ setting).
 | `storage.file` | `AWS::EFS::FileSystem` (*call*: `efs describe-file-systems` for size and settings) | `file.googleapis.com/Instance` (Filestore) | `Microsoft.Storage/storageAccounts/fileServices/shares` with protocol NFS (*call*: `az storage share-rm list`); a `FileStorage` account whose shares are listed is left out, as a Service Bus namespace is |
 
 Left out on the source side, as the guide leaves out an EKS cluster's nodes today: load balancers that
-a Kubernetes cluster created (AWS tags `elbv2.k8s.aws/cluster` or `kubernetes.io/cluster/<name>`, GCP
-`goog-gke-*` labels, everything in an AKS node resource group, which the guide already drops), a GCP
+a Kubernetes cluster created (AWS tags `elbv2.k8s.aws/cluster` or `kubernetes.io/cluster/<name>`,
+everything in an AKS node resource group, which the guide already drops; GCP keeps them, as URL maps
+and backend services carry no labels, see *To be checked*), a GCP
 forwarding rule and target proxy (the frontends of a load balancer the URL map or backend service stands
-for), the member clusters of an ElastiCache replication group (the group stands for them), the member
+for), a GCP backend service of scheme `INTERNAL_SELF_MANAGED` (a service mesh) and a URL map naming only
+such services, Artifact Registry repositories of mode `REMOTE_REPOSITORY` or `VIRTUAL_REPOSITORY` (they
+store no image of their own), Filestore backups (they belong to their instance), the member clusters of an ElastiCache replication group (the group stands for them), the member
 instances of a DocumentDB cluster (the cluster stands for them), and the Cloud Run service behind a 2nd
 gen Cloud Function (already dropped).
 
@@ -369,7 +372,8 @@ All criteria are pinned by tests that run offline under `make test` or `make tes
   listener or rule has `udp`.
 - [ ] An ElastiCache Memcached cluster, a MemoryDB cluster, a DynamoDB table, an RDS MariaDB instance and
   an Azure Files SMB share in the fixtures stay `unclassified` (MemoryDB and Memcached only when
-  collected); a load balancer a Kubernetes cluster created, a GCP forwarding rule, an ElastiCache group's
+  collected); a load balancer a Kubernetes cluster created (AWS, Azure; GCP keeps them, see *To be
+  checked*), a GCP forwarding rule, an ElastiCache group's
   member cluster and a DocumentDB cluster's member instance are not in the inventory.
 - [ ] Every new command in the guide only lists, describes or gets, and the AWS policy, GCP roles and
   Azure role in the guide cover it (*review*, and the existing `cloud-read-only` checks where they apply).
