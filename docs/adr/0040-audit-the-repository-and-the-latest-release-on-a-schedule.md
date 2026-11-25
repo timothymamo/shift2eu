@@ -2988,6 +2988,12 @@ PR #565 (on `main` the three `runs-on` lines are now 35, 1254 and 1535); and **L
 reports that `lint-shell` failed (run 45504245044 of 2026-11-24). The maintainer decided on 2026-11-25
 to plan the move with this amendment rather than close the PR outright.
 
+*Amended by issue #608 (2026-11-25):* two image probes ran, and two of their facts break the plan below:
+the switch to GNU coreutils and the AppArmor profile as written. The audit stays on `ubuntu-24.04` until
+a trigger, and the move takes another route; both are recorded under "The probes, the decision to stay
+and the move's route" at the end of this section. Where that text and the text before it differ, it
+holds.
+
 **Decision.** The audit **stays on `ubuntu-24.04` until two conditions hold**, and then moves in **one
 pull request** that changes the image, the GNU coreutils it relies on, the Ubuntu packages and their
 pins, and the pin test together:
@@ -3308,6 +3314,270 @@ with the commands their scripts must run.
   fork of a project whose maintenance is in question, is a supply-chain change to a tool that runs on
   every workflow; rejected.
 - **Skipping actionlint for the audit workflow.** It is the workflow that most needs it; rejected.
+
+#### The probes, the decision to stay and the move's route (issue #608, amended 2026-11-25)
+
+**The first probe** (issue #575; PR #605, head `76690f1`, closed unmerged; job
+<https://github.com/timothymamo/shift2eu/actions/runs/45647020149/job/139320618977>, 2026-11-25; facts in
+<https://github.com/timothymamo/shift2eu/issues/575#issuecomment-7167312227>) ran on image `ubuntu-26.04`
+version `20261116.202.1`. It settled the facts marked *unconfirmed* above: the image installs the uutils
+alternative (`coreutils-from-uutils [ii ]`, `coreutils-from-gnu [un ]`, `gnu-coreutils 9.7-3ubuntu2.1
+[ii ]`), with a mixed layout (every listed tool resolves to `/usr/lib/cargo/bin/coreutils/<tool>`,
+uutils 0.10.0, except `cp`, `rm` and `true`, which resolve to `/usr/bin/gnu<tool>`), and `ls /usr/bin/gnu*`
+lists the GNU set; `kernel.apparmor_restrict_unprivileged_userns = 1`; `abi <abi/4.0>` loads under
+AppArmor 5.0.2 (`apparmor_parser -r ...bwrap.apparmor: exit 0`). Two facts break the plan:
+
+1. **The local `--no-download` switch produced no plan:** `E: Unable to fetch some archives, maybe run apt
+   update or try with --fix-missing?`, `apt-get -s install: exit 100`. It ran as the runner user and with
+   no `apt-get update` first; the log does not name the archive.
+2. **An Ubuntu profile already attaches to `/usr/bin/bwrap`** (`aa-status`: `:glycin:bwrap`, `bwrap`,
+   `unpriv_bwrap`; `/etc/apparmor.d`: `bwrap-userns-restrict`, `glycin.bwrap`). The bwrap check passed
+   before our profile's load and failed after it: `bwrap: loopback: Failed RTM_NEWADDR: Operation not
+   permitted`, exit 1.
+
+Also: bubblewrap `0.11.1-1ubuntu0.3` is preinstalled (the pinned `.deb` reinstalled over it); socat is
+not; `/usr/bin/sudo` is **sudo-rs** 0.2.13 (`readlink -f`: `/usr/lib/cargo/bin/sudo`), and the sudo rule
+is still `/etc/sudoers.d/runner` alone (`sudo -n true`: exit 0 before its removal, exit 1 after);
+**`test --version` cannot tell GNU from uutils** (uutils' `/usr/bin/test --version` prints nothing too).
+
+**The second probe** (issue #608; PR #612, head `b6d409f`, closed unmerged, under #575's safety terms; job
+<https://github.com/timothymamo/shift2eu/actions/runs/45667963154/job/139395171171>, 2026-11-25; the
+same image version, kernel 7.0.0-1020-azure, bubblewrap 0.11.1, apparmor 5.0.2-0ubuntu1~26.04.1,
+`apparmor_restrict_unprivileged_userns = 1`, `apparmor_restrict_unprivileged_unconfined = 1`, auditd
+inactive) ran the bwrap check, `/usr/bin/bwrap --unshare-all --die-with-parent --ro-bind / / /bin/true`,
+under seven AppArmor states:
+
+| State | Profiles naming bwrap (`aa-status`) | bwrap check |
+|---|---|---|
+| 1 baseline | `:glycin:bwrap`, `bwrap`, `unpriv_bwrap` | exit 0 |
+| 2 our `bwrap.apparmor` beside Ubuntu's | + `shift2eu-audit-bwrap` | exit 1, `Failed RTM_NEWADDR` |
+| 3 candidate A (ours + `capability net_admin,` + `network netlink raw,`) beside Ubuntu's | as 2 | exit 1, the same |
+| 4 candidate A alone (Ubuntu's removed with `apparmor_parser -R /etc/apparmor.d/bwrap-userns-restrict`) | `:glycin:bwrap`, `shift2eu-audit-bwrap` | exit 0 |
+| 5 our profile alone | `:glycin:bwrap`, `shift2eu-audit-bwrap` | exit 0 |
+| 6 ours removed, Ubuntu's reloaded as shipped | `:glycin:bwrap`, `bwrap`, `unpriv_bwrap` | exit 0 |
+| 7 ours beside Ubuntu's, `apparmor_restrict_unprivileged_userns=0` | as 2 | exit 0 |
+
+State 2's denials (dmesg), among them: `operation="userns_create" profile="unconfined" comm="bwrap"`, then
+`operation="capable" profile="unprivileged_userns" comm="bwrap" capname="net_admin"` (and `setpcap`),
+one `open` denied under `unprivileged_userns`, and two `operation="exec" profile="unconfined"
+comm="bash" requested_mask="x"`. **The cause is two profiles attaching to
+`/usr/bin/bwrap`, not a missing rule:** with both loaded, bwrap's user namespace is created `unconfined`,
+the userns restriction moves it into `unprivileged_userns`, and that profile denies `CAP_NET_ADMIN`, so
+the loopback setup in the new network namespace fails. Candidate A's rules change nothing (3 = 2, 4 = 5):
+under `flags=(unconfined)` they are inert. Either profile alone passes (5, 6), and state 7 confirms the
+userns restriction is the mechanism. Reading that log: an empty denial list means no denial reached dmesg
+(AppArmor suppresses repeats, and auditd was inactive; state 3 logged none), and its child-label line did
+not work (the child could not open `/dev/null` in the sandbox), so the attachment is read from the
+denials, not from a label.
+
+The same probe re-ran the GNU switch **as root after `apt-get update`** (exit 0), only to record it: the
+pinned `coreutils-from-gnu_0.0.0~ubuntu25_all.deb` downloaded and checked (`/usr/bin/gnusha256sum --check
+--strict`: exit 0, so `gnusha256sum` is present and works); the local `--no-download` simulation **still
+failed** (`E: Unable to fetch some archives`, exit 100); the same switch by package name planned
+(`Remv coreutils-from-uutils`, `Inst coreutils-from-gnu`, exit 0). The route below depends on neither.
+
+**Decision (the maintainer, 2026-11-25).** The audit **stays on `ubuntu-24.04` for now.** Issues #576,
+#577 and #578 and PR #561 are **parked**. The move starts on the first of: **GitHub's deprecation notice
+for `ubuntu-24.04`** (the runner-images README or its announcements), or **the 2027-03-01 actionlint
+review** (#576, the review trigger above). That trigger replaces the two conditions above as what starts
+the move: condition 2 is met (the probes ran), and condition 1 is then met by an actionlint release that
+knows the label or by the maintainer's choice on ADR 0022, as the review trigger already provides.
+
+Options considered and not taken:
+
+- **A Debian job container** (`container:`, to keep GNU coreutils): the host stays Ubuntu, with its
+  AppArmor and userns restriction, and bubblewrap inside Docker needs `--privileged` or a custom seccomp
+  profile, a weaker sandbox than the one reviewed.
+- **A self-hosted runner** on an image of our own: a long-lived machine that holds the audit's keys,
+  against this record's fresh runner per run.
+- **Another sandbox**: a redesign of the model job's containment to solve an image problem.
+
+**The move's route** (for #577, when the trigger fires; the probes settle it, the first real run on
+26.04 remains its gate):
+
+1. **Coreutils: the image's GNU set by absolute path, no switch.** The wrapper and every workflow guard
+   (the steps' own `run:` scripts; not the body of `.github/scripts/install-claude-code.sh`, below) call
+   `/usr/bin/gnu<tool>` (from `gnu-coreutils`, which the first probe found installed, `gnu-coreutils
+   9.7-3ubuntu2.1 [ii ]`) instead of `/usr/bin/<tool>`: no `coreutils-from-gnu` `.deb`, no apt, no pin
+   or Renovate entry for it. This **replaces "The switch to GNU coreutils"** above (its steps 1 to 4,
+   the simulated plan and the dpkg states of `coreutils-from-gnu` and `coreutils-from-uutils`), and
+   answers the reason that section gave against `/usr/bin/gnu<tool>` ("covers only the wrapper"): the
+   guards move too.
+   Bash's builtins (`test`/`[`, `printf`, `echo`, `true`, `false`) are not coreutils and stay. A tool a
+   wrapper runs on our behalf takes the absolute path as its program: `timeout`'s
+   (`/usr/bin/gnutimeout 5m /usr/bin/gnusha256sum ...`), `sudo`'s (`sudo /usr/bin/gnuinstall ...`) and
+   `find -exec`'s (`-exec /usr/bin/gnuchmod 0644 {} +`). The tools and where they are called (`main` at
+   5e07da8, read in the code; the list above, in the PR #565 amendment, named `env`, `id`, `readlink`
+   and `rm` in the checks job, which calls none of them: `go env`, a loop variable `id` and `docker rm`
+   are not coreutils; and the guard list under **Decision** above names `/usr/bin/test`, which no step
+   calls):
+
+   | Where | Tools (call sites) |
+   |---|---|
+   | `ci/auditexec`, `run.go`'s command table (the wrapper `/srv/audit/bin/audit-exec`) | `sha256sum`, `base64`, `od`, `cat`, `head`, `tail`, `wc`, `sort`, `uniq`, `cut`, `tr` (all 11, by `/usr/bin/<tool>` today) |
+   | `ci/internal/audit`, `bubblewrap.go` (`bwrapCheck`, run by `CheckBubblewrap`, the launcher's check 4) | `true` (`/bin/true`, inside the sandbox; the move makes it `/usr/bin/gnutrue`, which `--ro-bind / /` binds) |
+   | `ci/internal/audit`, `system.go` (`Observe`, `sudoPath`) and the preflight's probe 4 (`preflight.go`, `preflightCalls`: `sudo -n true`) | `true`, as sudo's argument: sudo resolves it, and the probe is judged by its effect (sudo refused); every other preflight call runs a coreutil only through the wrapper (`{wrapper} cat`). `ci/auditrun` itself execs none |
+   | Checks job, `Record the audited commit and the latest release tag` | `mkdir`, `touch` |
+   | Checks job, `Download the pinned tools and verify their checksums` | `mkdir`, `sha256sum --check --strict -`, `install -m 0755`, `timeout` (trivy's DB) |
+   | Checks job, every step from govulncheck to `Supply-chain reads` (the rows below add their own) | `mkdir -p`, `timeout` (exit 124) |
+   | Checks job, `Verify the release's files, signature and attestations` | `sha256sum --check --strict`, `sort` (`LC_ALL=C`), `basename` |
+   | Checks job, `Pull the image anonymously by digest`, `trivy on the image and its SBOM`, `Check the image's runtime settings` | `cat` |
+   | Checks job, `govulncheck on the release binaries` | `basename`, `head -c` (the 128 MiB cap, exit 141) |
+   | Checks job, `Run the CLI on hostile inventory files` | `cat`, `cp -P`, `head -c`, `tr`, `seq`, `ln -s`, `chmod` (and `find -exec chmod`), `basename` |
+   | Checks job, `Fuzz the committed Fuzz targets` | `dirname`, `sort -u` (the container's own `cp` runs in the image, not on the runner) |
+   | Checks job, `Supply-chain reads` | `touch`, `cat`, `sort`, `tail -n 1` |
+   | Model job, `Install the pinned tools` and `.github/scripts/install-claude-code.sh` | `mkdir`, `sha256sum --check --strict -`, `install`; the script's shebang `#!/usr/bin/env bash` (`env`); its body's `mktemp -d`, `mkdir -p`, `base64 -w0`, `cp --`, `rm -rf --` stay on plain names, outside the rule (below) |
+   | Model job, `Check the GNU coreutils` | the wrapper's 11 (`--version`), replaced by the check below |
+   | Model job, `Build and install the audit's command wrapper` | `sudo install`, `sudo chmod`, `id -u`/`id -g` |
+   | Model job, `List the run's artifacts and download the checks' ciphertext` | `sha256sum --check --strict -`, `mkdir`, `ls -A` |
+   | Model job, `Decrypt the checks' results into the audit directory` | `cut -c1`, `sudo install -d`, `sudo chmod -R`, `rm -f` |
+   | Model job, `Copy the checkout into the audit directory` | `sudo install -d`, `id`, `cp -a`, `chmod -R` |
+   | Model job, `Stop Docker and remove the runner user's sudo rule` | `sudo rm -f` (twice), `stat -c` (and `sudo -n true`, as above) |
+   | Model job, `Run the audit in Claude Code's sandbox` | `od -An -N32 -tx1`, `tr -d` |
+   | Publish job, `Download the pinned tools ...` and `List the run's artifacts and download the model's ciphertext` | `mkdir`, `sha256sum --check --strict -`, `install -m 0755`, `ls -A` |
+
+   So the lists are: checks job `basename`, `cat`, `chmod`, `cp`, `dirname`, `head`, `install`, `ln`,
+   `mkdir`, `seq`, `sha256sum`, `sort`, `tail`, `timeout`, `touch`, `tr`; model job the wrapper's 11 plus
+   `chmod`, `cp`, `id`, `install`, `ls`, `mkdir`, `rm`, `stat` and `true` (the steps' own calls; the
+   shared script's body adds none, below); publish job
+   `install`, `ls`, `mkdir`, `sha256sum`; each with `readlink` (as `gnureadlink`, the check's own tool).
+   `test` is in no list: no step calls `/usr/bin/test` (every `test`/`[` is bash's builtin); a call by
+   path would be `/usr/bin/gnutest` and would add it to its job's list.
+   **`env`, the model job's shebang.** `.github/scripts/install-claude-code.sh` starts with
+   `#!/usr/bin/env bash`, so the model job runs `/usr/bin/env`, uutils' on 26.04. It is the only script
+   file the workflow runs (every other step is inline bash or a Go program; `dev/actionlint.sh` is named
+   only in a comment). **Route: its shebang becomes `#!/bin/bash`**, not `#!/usr/bin/gnuenv bash`. The
+   script is shared with the AI reviewer (`ai-review.yml`) and the pin check (`claude-code-pin.yml`),
+   and `/bin/bash` is the same path on 24.04 and 26.04 and on every Ubuntu runner, where
+   `/usr/bin/gnuenv` exists only beside the uutils alternative; dropping `env` takes a coreutil out of
+   the chain instead of pinning one, and the script needs nothing `env` gives (it is run by path from
+   the checkout, with bash on the image at `/bin/bash`). So `env` joins no list.
+   **The script's body stays on plain names, outside the gnu-path rule.** Its `mktemp -d`, `mkdir -p`,
+   `base64 -w0`, `cp --` and `rm -rf --` keep their plain names: `ai-review.yml` runs the same
+   file on `ubuntu-latest` (24.04 today), where `/usr/bin/gnu<tool>` does not exist, so a `gnu` path
+   there would break the AI reviewer. That is safe because the script runs before the wrapper exists
+   and its verdict rests on no coreutil's behaviour beyond what uutils also provides (read in the
+   script at 5e07da8): `mktemp -d` and `mkdir -p` are relied on only to fail with a non-zero exit
+   (`set -euo pipefail`) or to give a directory, which `npm pack` then writes into; the tarball's
+   integrity is `openssl dgst -sha512 -binary` piped to `base64 -w0` and compared as a string with
+   the pin, so a wrong or wrapped base64 output fails closed (no match, exit 1); `cp --` copies the
+   verified tarball, which the launcher checks against the pin again in the model step; and `rm -rf
+   --` is the EXIT trap's cleanup, its result ignored (`|| true`). `-d`, `-p`, `-w0` (as `-w 0`), `--`
+   and `-rf` are options uutils implements; that the script runs under uutils 0.10.0 is for #577's
+   first run to show (on 26.04 `cp` and `rm` already resolve to GNU's, the first probe), and a failure
+   there fails the install step closed. `tar`, `npm` and `openssl` are not coreutils. The pin test
+   checks only the script's shebang (exactly `#!/bin/bash`), never its body.
+   **The GNU check** (per job, before any other step uses a coreutil) runs in this order:
+   1. **`gnureadlink` itself first:** `dpkg-query -S /usr/bin/gnureadlink` names `gnu-coreutils`, and
+      `/usr/bin/gnureadlink --version`'s first line holds `(GNU coreutils)`; only then is it used.
+   2. **Ownership, per file, for every tool in the job's list:** `dpkg-query -S /usr/bin/gnu<tool>` names
+      exactly `gnu-coreutils` (and, optionally, `dpkg --verify gnu-coreutils` prints nothing, so no file
+      of the package was changed).
+   3. **Not a link:** `/usr/bin/gnureadlink -f /usr/bin/gnu<tool>` prints exactly `/usr/bin/gnu<tool>`.
+      This proves only that the path is no symlink (so not a link to uutils' multicall binary); the
+      ownership in 2 is what ties the file to GNU.
+   4. **`--version`:** the first line holds `(GNU coreutils)`, a second check for every tool in the
+      lists (none of which is `test`: `test --version` prints nothing under GNU and uutils alike, so for
+      `test` a `--version` check could tell nothing, which is one more reason it stays out).
+   Never `--version` alone. The pin test holds the wrapper's table, the guards' paths and the lists,
+   with a test that fails on a coreutil a step's `run:` script calls without its `gnu` path or missing
+   from its job's list, and it **also checks the shebang of every script file the workflow runs**
+   (today `install-claude-code.sh`): exactly `#!/bin/bash`, its body exempt (above). The re-verification
+   of GNU 9.4 to 9.7 for the wrapper's 11 (the table above) stands.
+2. **bwrap: remove Ubuntu's profiles, then load ours unchanged** (state 5), the default route. The
+   model job's `Load the AppArmor profile for bubblewrap` step runs `sudo apparmor_parser -R
+   /etc/apparmor.d/bwrap-userns-restrict` and then `sudo apparmor_parser -r
+   .github/security-audit/bwrap.apparmor`, while sudo works, **after every `dpkg -i`** (today it already
+   follows `Install the pinned tools`).
+   **Guard, by whole names and attachments, never substrings** (`:glycin:bwrap` and
+   `shift2eu-audit-bwrap` both contain `bwrap`): as root, read the loaded profiles' attachments, in
+   the root namespace (`/sys/kernel/security/apparmor/policy/profiles/*/attach`) and in every child
+   namespace (`/sys/kernel/security/apparmor/policy/namespaces/*/profiles/*/attach`; `:glycin:bwrap`
+   sits under `policy/namespaces/glycin/...`, which the first glob alone does not see), each with its
+   directory's `name`, and require **exactly one profile attaching to `/usr/bin/bwrap`, named
+   `shift2eu-audit-bwrap`**, so a third profile under another name is caught too; and no loaded
+   profile named exactly `bwrap` or `unpriv_bwrap` (a trimmed `grep -Fx` on the names, or `aa-status
+   --json` with jq on the profile names, never `grep bwrap`). *Unconfirmed:* read as a non-root user
+   on a 26.04 machine, `bwrap`'s `attach` prints `<unknown>`; that it prints `/usr/bin/bwrap` as root
+   is for #577 to confirm on the runner. **If root reads `<unknown>` too**, the attachment check cannot
+   be made and the fallback is an exact set: the loaded profiles whose names contain `bwrap` (the
+   whole-name list, filtered only to choose what the set compares) are exactly `:glycin:bwrap` and
+   `shift2eu-audit-bwrap`, no more and no fewer. That fallback leaves a gap this record accepts: a
+   third profile attaching to `/usr/bin/bwrap` under a name without `bwrap` would not be caught by
+   name; the launcher's bwrap check (state 2's failure) is then what catches a clash. `:glycin:bwrap`
+   stays loaded, as in state 5, where the check passed with it. The guard also asserts that
+   `/proc/sys/kernel/apparmor_restrict_unprivileged_userns` reads exactly `1`, so the property below
+   (a missed reload fails closed) is checked, not assumed: with it at `0`, both profiles together pass
+   (state 7). Otherwise the step fails; and the launcher's bwrap check must pass, as today.
+   **The removal does not last on its own:** `apparmor_parser -R` only unloads, and the file stays in
+   `/etc/apparmor.d`, so any later AppArmor reload (a `dpkg -i` of a package with an apparmor trigger,
+   `systemctl reload apparmor`) loads it back. So no step after this one may reload AppArmor, and the
+   guard is **re-asserted just before `Stop Docker and remove the runner user's sudo rule`** (the last
+   step with sudo), and optionally again in the launcher's preflight: the launcher runs after sudo is
+   gone, as the runner user, and a non-root read of `attach` printed `<unknown>`, so that re-check can
+   rely only on names (the loaded profiles' names as a non-root read gives them, which #577 confirms
+   on the runner: no profile named exactly `bwrap` or `unpriv_bwrap`, `shift2eu-audit-bwrap` loaded)
+   and the sysctl, never on attachments; if a non-root read gives no names either, the option is
+   dropped. A
+   reload it misses fails closed: with both profiles loaded and the sysctl at `1` (which the guard
+   asserts) the bwrap check fails (state 2).
+   **The trade, stated plainly.** This route buys **parity with the reviewed 24.04 sandbox** (bwrap
+   unconfined with `userns`, as `bwrap.apparmor` grants) and a **profile the repository owns, pins and
+   reviews** (`TestBwrapAppArmorProfile`). It gives up **Ubuntu's capability denial for the sandbox's
+   children**: Ubuntu's `bwrap` profile ends `allow pix /** -> &bwrap//&unpriv_bwrap`, stacking every
+   program bwrap runs onto `unpriv_bwrap`, whose rules hold `audit deny capability` (the text of
+   `/etc/apparmor.d/bwrap-userns-restrict` in the `apparmor` package, 5.0.2-0ubuntu1~26.04.1, the
+   probe's version, read from that package's installed file on 2026-11-25; its header: "bwrap is
+   allowed access to user namespaces and capabilities within the user namespace, but its children do
+   not have capabilities"). The probe log shows only the profiles' names; what `unpriv_bwrap` denies
+   comes from that text, not from the probe. So **Ubuntu's profile alone is the stricter sandbox**, but
+   it is untested with Claude Code's real sandbox (its socat proxy and its seccomp setup may need
+   capabilities inside the namespace; the probe ran only `/bin/true`) and it is image-owned: it can
+   change with any image update, outside this repository's review.
+   **Ubuntu's profile alone stays an open option, not a rejection.** The first real run on 26.04 (#578)
+   also tries it (state 6) with the real sandbox, Claude Code's bwrap plus the socat proxy, not just
+   `/bin/true`: if the sandbox works under `unpriv_bwrap`, that stricter route is preferred, and the
+   step keeps Ubuntu's profiles and does not load ours (with the guard turned round: exactly
+   `bwrap` attaching to `/usr/bin/bwrap`, and `unpriv_bwrap` loaded). Then the repository pins the
+   SHA-256 of `/etc/apparmor.d/bwrap-userns-restrict` and the step checks it (by
+   `/usr/bin/gnusha256sum`) on every run, so an image update to that profile fails closed.
+   **This deviates from #608's two offered options** (fix our profile, or use Ubuntu's): the probe
+   showed our profile needs no fix (candidate A's rules are inert, and ours alone passes, state 5), only
+   the removal of the clashing one. It is the orchestrator's choice on the probe's facts (issue #608);
+   the maintainer accepts or overrules it in the review of this record. Candidate A is not taken
+   (inert). Turning the sysctl off (state 7) lifts the restriction for every program, which the
+   original decision rejected. Only `bwrap.apparmor`'s comment ("Ubuntu 24.04 runners") changes, with
+   the line `TestBwrapAppArmorProfile` pins.
+   **Whether `bwrap-userns-restrict` is loaded on `ubuntu-24.04` today is not known:** the repository
+   records no `aa-status` of a 24.04 runner (the probes ran on 26.04 only, and the workflow does not
+   merge its schedule before milestone 3). **The decision to stay on 24.04 depends on it:** if noble
+   loads it, the first 24.04 run's preflight fails closed (state 2's mechanism, two profiles attaching
+   to `/usr/bin/bwrap`), and the same remove-then-load step, with its guard, then applies on 24.04.
+   The probe checked only the preflight's `/bin/true`; **the first real run's preflight and model step
+   on 26.04 remain the gate** (#578).
+3. **bubblewrap: the pinned `.deb` stays.** The image preinstalls bubblewrap 0.11.1, but the model job
+   keeps installing the pinned resolute `.deb` (its digest checked first, by `/usr/bin/gnusha256sum`),
+   as today and as the first probe did over the image's: the version moves only by a reviewed Renovate
+   pull request, never with the image, and the step is needed for socat anyway. **Check:** after
+   `dpkg -i`, `dpkg-query -W -f='${Version}' bubblewrap` prints exactly the pin and `/usr/bin/bwrap` is
+   executable (as `test -x` checks today).
+4. **sudo-rs** (0.2.13) is `/usr/bin/sudo`: the first probe showed the sudo-rule removal still works
+   (`sudo rm -f /etc/sudoers.d/runner`, then `sudo -n true` exits 1), so the hardening step's mechanism and
+   its check stand; the move re-reads them on the first run.
+5. **`test`:** in no list, since no step calls it by path (the GNU check, step 1).
+
+**The order, from here:** the probes (done); parked until the trigger; then #576 (or ADR 0022's
+amendment), #577 (the move on this route, replacing PR #561) and #578 (the first run's record), as
+before.
+
+**Open points:** whether `bwrap-userns-restrict` is loaded on `ubuntu-24.04` (the first run on 24.04
+can print `aa-status`; the decision to stay depends on it: if noble loads it, that run's preflight
+fails closed and the remove-then-load step of route step 2 applies on 24.04 too); whether Claude
+Code's real sandbox works under Ubuntu's profile alone (#578, route step 2); whether root reads
+`/usr/bin/bwrap` from `attach` (else the exact-set fallback and its gap, route step 2); whether the
+shared install script runs under uutils (route step 1); the GNU 9.5 to 9.7 NEWS and jq 1.8.1 reviews
+(#577); whether Ubuntu's profile set or `gnu-coreutils`' file list changes by the trigger (#577
+re-reads both on the image it moves to, and the route's guards fail closed if either has).
 
 ## Alternatives considered
 
