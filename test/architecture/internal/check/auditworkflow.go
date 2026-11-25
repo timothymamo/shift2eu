@@ -2296,10 +2296,20 @@ var (
 	// started.
 	auditPartExit   = regexp.MustCompile(`^[ \t]*echo "\$\{rc\}" > "[^"\n]+\.exit"$`)
 	auditCreateExit = regexp.MustCompile(`^[ \t]*echo "\$\{rc\}" > "[^"\n]+\.create\.exit"$`)
-	// auditStepEndLine is a line that runs nothing between a step-level
-	// not-run record and the exit 0 that ends the step (review round L of PR
-	// 5c, K1): a message, an if or elif on a test, else or fi.
-	auditStepEndLine = regexp.MustCompile(`^[ \t]*(?:(?:el)?if \[ [^\n]* \]; then|else|fi)$`)
+	// auditStepEndMessage is a message that may stand between a step-level
+	// not-run record and the exit 0 that ends the step (review round M of PR
+	// 5c, M1): a line of the check's limits or an ::error annotation, never a
+	// finding or any other file; endsStep refuses one with a command
+	// substitution.
+	auditStepEndMessage = regexp.MustCompile(`^[ \t]*echo "(?:::error [^"\n]*"|[^"\n]*" >> "\$\{results\}/limits\.txt")$`)
+)
+
+// The lines of a failure before any part ran (review round M of PR 5c, M1):
+// the branches its records stand in, and the step's guard after their fi.
+const (
+	auditRCTimedOut = `if [ "${rc}" -eq 124 ]; then`
+	auditRCFailed   = `elif [ "${rc}" -ne 0 ]; then`
+	auditRCGuard    = `if [ "${rc}" -ne 0 ]; then`
 )
 
 // auditWhyIDs are the why ids a not-run.txt line may end in (review round K of
@@ -2345,19 +2355,22 @@ func (a *auditReader) whyIDs(code, path string) {
 }
 
 // auditWhyDefault is a not-run.txt line's why read from the shell variable
-// why, with its default (review round L of PR 5c, K1); auditWhyAssignment is
-// any assignment to that variable, auditWhyID the one shape it may take.
+// why, with its default (review round L of PR 5c, K1); auditWhyWord is any
+// line that names why as a shell word (round M, M2), auditWhyID the one shape
+// such a line may take.
 var (
-	auditWhyDefault    = regexp.MustCompile(`^\$\{why:-([^}]*)\}$`)
-	auditWhyAssignment = regexp.MustCompile(`(?:^|[\s;&|(])(?:local\s+|export\s+|readonly\s+|declare\s+(?:-\S+\s+)*)?why(?:\+)?=`)
-	auditWhyID         = regexp.MustCompile(`^[ \t]*why=([a-z0-9-]+)$`)
+	auditWhyDefault = regexp.MustCompile(`^\$\{why:-([^}]*)\}$`)
+	auditWhyWord    = regexp.MustCompile(`(?:^|[^A-Za-z0-9_])why(?:[^A-Za-z0-9_]|$)`)
+	auditWhyID      = regexp.MustCompile(`^[ \t]*why=([a-z0-9-]+)$`)
 )
 
 // whyVariable holds a not-run.txt line whose why is ${why:-<default>} to why
-// ids alone (review round L of PR 5c, K1): its default, and every assignment
-// to why in the step, each why=<why id> on a line of its own, is an id of
-// auditWhyIDs, so that the line the step's end writes is one the publish core
-// renders whichever branch set it.
+// ids alone (review round L of PR 5c, K1): its default, and every line of the
+// step that names why as a shell word, outside comments, messages and that
+// record, is why=<why id> on a line of its own (round M, M2: no read,
+// printf -v, for, mapfile or ${why:=...} sets it), with an id of auditWhyIDs,
+// so that the line the step's end writes is one the publish core renders
+// whichever branch set it.
 func (a *auditReader) whyVariable(code, path, check, def string) {
 	if !slices.Contains(auditWhyIDs, def) {
 		a.r.fail(`%s records %s ${why:-%s} in ${results}/not-run.txt, and its default %q is no why id the publish core holds (%s): `+
@@ -2366,7 +2379,12 @@ func (a *auditReader) whyVariable(code, path, check, def string) {
 	}
 
 	for _, line := range strings.Split(code, "\n") {
-		if auditMessageLine.MatchString(line) || !auditWhyAssignment.MatchString(line) {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "#") || auditMessageLine.MatchString(line) || !auditWhyWord.MatchString(line) {
+			continue
+		}
+
+		if r := auditNotRunRecord.FindStringSubmatch(line); r != nil && r[1] == check && r[2] == "${why:-"+def+"}" {
 			continue
 		}
 
@@ -2472,10 +2490,14 @@ func (a *auditReader) partRecords(code, path, check string) {
 		case firstRan >= 0 && i > firstRan:
 			a.r.fail(`%s records %s in not-run.txt after a part ran, want a limits line of that part: once a part of %s produced a result the check ran, `+
 				`and only the step's end records it as not run, when ran_any is still 0 (PRD #175 milestone 2, ADR 0040)`, path, what, check)
-		case !endsStep(lines, i):
-			a.r.fail(`%s records %s in not-run.txt and goes on, want a limits line, and the why at the step's end: a step of %s records the check in not-run.txt `+
-				`only at its end, when ran_any is still 0, or right before the exit 0 of a failure before any part ran (only messages, if, elif, else and fi between), `+
-				`since a later part may still record a finding of the same check, which a not-run line beside it would contradict (PRD #175 milestone 2, ADR 0040)`, path, what, check)
+		default:
+			if bad, ok := endsStep(lines, i); !ok {
+				a.r.fail(`%s records %s in not-run.txt and goes on (%q), want a limits line, and the why at the step's end: a step of %s records the check in not-run.txt `+
+					`only at its end, when ran_any is still 0, or right before the exit 0 of a failure before any part ran: the record, limits lines or ::error messages, `+
+					`echo "finished" and exit 0 in one branch, or records in the if [ "${rc}" -eq 124 ] and elif [ "${rc}" -ne 0 ] branches, their fi, then `+
+					`if [ "${rc}" -ne 0 ]; then, echo "finished" and exit 0, with no command substitution between, `+
+					`since a later part may still record a finding of the same check, which a not-run line beside it would contradict (PRD #175 milestone 2, ADR 0040)`, path, what, bad, check)
+			}
 		}
 	}
 }
@@ -2496,7 +2518,7 @@ func (a *auditReader) ranAfterExit(lines []string, i int, inLoop bool, path, che
 	switch create := auditCreateExit.MatchString(lines[i]); {
 	case create && marked:
 		a.r.fail(`%s sets ran_any=1 right after a create's exit (%q): a run whose create failed never started, so it is no part of %s; `+
-			`ran_any=1 follows the create's continue guard, or the start's exit, so that a step whose every create failed is the check that did not run, `+
+			`ran_any=1 follows the start's exit, after the create's continue guard, so that a step whose every create failed is the check that did not run, `+
 			`never one that ran clean (PRD #175 milestone 2, ADR 0040)`, path, exit, check)
 	case !create && !marked:
 		a.r.fail(`%s records a part's exit (%q) inside its loop without ran_any=1 on the line right after it: a part that ran, whatever its exit, is a result of %s, `+
@@ -2505,20 +2527,105 @@ func (a *auditReader) ranAfterExit(lines []string, i int, inLoop bool, path, che
 }
 
 // endsStep reports whether the not-run record on lines[i] is followed by the
-// step's exit 0 with nothing run between (review round L of PR 5c, K1): only
-// messages, and the if, elif, else and fi lines of its branch and of the
-// exit's guard.
-func endsStep(lines []string, i int) bool {
+// step's exit 0 with nothing run between (review round L of PR 5c, K1, made
+// exact in round M, M1), in one of two shapes: (i) the record, messages,
+// echo "finished" and exit 0, all in one branch; (ii) the record in an
+// if [ "${rc}" -eq 124 ] or elif [ "${rc}" -ne 0 ] branch, messages, records
+// and that elif, the branches' fi, then exactly if [ "${rc}" -ne 0 ]; then,
+// echo "finished" and exit 0. A message is a limits line or an ::error
+// annotation without a command substitution. When it reports false, it
+// returns the line that breaks the shape (trimmed), or a description of the
+// end it lacks.
+func endsStep(lines []string, i int) (string, bool) {
+	// branchEnded: an elif has closed the record's branch, so its exit 0
+	// can only be the step's guard after the fi.
+	branchEnded := false
+
 	for j := i + 1; j < len(lines); j++ {
-		l := lines[j]
+		l := strings.TrimSpace(lines[j])
 
 		switch {
-		case strings.TrimSpace(l) == "exit 0":
-			return true
-		case auditMessageLine.MatchString(l), auditStepEndLine.MatchString(l), strings.TrimSpace(l) == "":
+		case l == "":
+			continue
+		case strings.Contains(l, "$(") || strings.Contains(l, "`"):
+			return l, false
+		case l == `echo "finished"` && !branchEnded:
+			return stepExit(lines, j+1)
+		case l == "fi":
+			if !inRCBranch(lines, i) {
+				return strings.TrimSpace(lines[i]), false
+			}
+
+			return stepGuard(lines, j+1)
+		case l == auditRCFailed:
+			branchEnded = true
+		case auditStepEndMessage.MatchString(l), auditNotRunRecord.MatchString(l):
 			continue
 		default:
-			return false
+			return l, false
+		}
+	}
+
+	return "the step's end, with no exit 0", false
+}
+
+// nextLine returns the index of the first non-blank line from j on, len(lines)
+// for none.
+func nextLine(lines []string, j int) int {
+	for j < len(lines) && strings.TrimSpace(lines[j]) == "" {
+		j++
+	}
+
+	return j
+}
+
+// stepExit reports whether lines[j:] goes on with exit 0, the line that
+// follows echo "finished" at the step's end.
+func stepExit(lines []string, j int) (string, bool) {
+	j = nextLine(lines, j)
+	if j >= len(lines) {
+		return "the step's end, with no exit 0", false
+	}
+
+	if l := strings.TrimSpace(lines[j]); l != "exit 0" {
+		return l, false
+	}
+
+	return "", true
+}
+
+// stepGuard reports whether lines[j:], after the fi of a failure's branches,
+// is exactly the step's guard: if [ "${rc}" -ne 0 ]; then, echo "finished",
+// exit 0.
+func stepGuard(lines []string, j int) (string, bool) {
+	for _, want := range []string{auditRCGuard, `echo "finished"`} {
+		j = nextLine(lines, j)
+		if j >= len(lines) {
+			return "the step's end, with no " + want, false
+		}
+
+		if l := strings.TrimSpace(lines[j]); l != want {
+			return l, false
+		}
+
+		j++
+	}
+
+	return stepExit(lines, j)
+}
+
+// inRCBranch reports whether the record on lines[i] stands in an
+// if [ "${rc}" -eq 124 ] or elif [ "${rc}" -ne 0 ] branch: the first line
+// above it that is no message or record is that branch's own line.
+func inRCBranch(lines []string, i int) bool {
+	for j := i - 1; j >= 0; j-- {
+		l := strings.TrimSpace(lines[j])
+
+		switch {
+		case l == "", auditStepEndMessage.MatchString(l), auditNotRunRecord.MatchString(l):
+			continue
+		default:
+			return l == auditRCTimedOut || l == auditRCFailed
 		}
 	}
 

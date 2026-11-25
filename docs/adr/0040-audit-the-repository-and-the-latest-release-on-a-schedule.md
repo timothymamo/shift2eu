@@ -2789,13 +2789,15 @@ held by `check.AuditWorkflow` and a case of its test:
   download one of its own, `release-integrity: the release download failed with exit ${rc}`, the
   auditor's N1), and the step's end writes `release-integrity ${why:-tool-failed}` only when `ran_any` is
   still 0. The check refuses, in rows 7, 13 and 14, a not-run line anywhere but the step's end record
-  unless only messages and the `if`, `elif`, `else` and `fi` lines of its branch stand between it and the
-  step's `exit 0`; it accepts a `${why:-<id>}` record only when its default and every assignment to `why`
-  in the step, each `why=<why id>` on a line of its own, are why ids of `whyNotRun`.
+  unless it ends the step in one of round M's two shapes (M1, below: round L's own rule let any message
+  and any `if`, `elif`, `else` or `fi` line stand between the record and an `exit 0`); it accepts a
+  `${why:-<id>}` record only when its default and every line of the step that names `why` as a shell word
+  (since round M, M2; round L saw only assignments), each `why=<why id>` on a line of its own, are why ids
+  of `whyNotRun`.
 - **K2, a failed create is no run.** Rows 13 and 14 set `ran_any=1` right after the create's exit, so a
-  step whose every create failed read as a check that ran clean. `ran_any=1` now follows the create's
-  `continue` guard and the start's exit; the check refuses it right after a `.create.exit` and still
-  demands it right after the start's.
+  step whose every create failed read as a check that ran clean. `ran_any=1` now follows the start's
+  exit, after the create's `continue` guard (round M, M5, dropped a second one right after that guard);
+  the check refuses it right after a `.create.exit` and still demands it right after the start's.
 - **K3, a loop header after `&&` or `;`.** A loop word after a blank or an operator is a loop header
   `fit` must follow, and it refuses one that is no `auditLoopStart`.
 - **K4 (auditor L1), a timeout per argument or in a quoted string.** `fit` refuses a `timeout` that
@@ -2813,6 +2815,35 @@ part's failure as the whole check's not-run line while another part of the check
 skill's paragraph "A check that ran, and one that did not" is the only guard there. Applying `ran_any` to
 those rows is a milestone 3 follow-up. The numbers are unchanged: no timeout moved, every step's bound is
 round J's, and the job's steps add up to 348 of its 355 minutes.
+
+**Review round M of PR 5c (2026-11-25).** The reviewer's suggestions and the auditor's low findings on
+round L; nothing blocked. Each test-side one is held by `check.AuditWorkflow` and a case of its test:
+
+- **M1 (reviewer S1, auditor L-1), a step's end is one of two shapes.** Round L's rule took any `exit 0`
+  it reached as the step's end, so a finding written beside the not-run line, a guard narrowed to
+  `-eq 124`, an `exit 0` in an `else` and a never-taken branch before the guard all passed. In rows 7, 13
+  and 14 a not-run line other than the end record now stands either (i) in one branch with only messages
+  after it, then `echo "finished"` and `exit 0` (row 13's `image-not-pulled`, row 14's `no-fuzz-targets`
+  and pull), or (ii) in an `if [ "${rc}" -eq 124 ]` or `elif [ "${rc}" -ne 0 ]` branch, with messages,
+  records and that `elif` up to the branches' `fi`, then exactly `if [ "${rc}" -ne 0 ]; then`,
+  `echo "finished"` and `exit 0` (rows 13 and 14's staging). A message there is a limits line
+  (`>> "${results}/limits.txt"`) or an `echo "::error ..."`; a line with `$(` or a backtick, an `else`,
+  any other guard or file is refused, and the message quotes it.
+- **M2 (auditor L-2), every word `why`.** Round L saw only assignments: `read -r why <
+  "${out}/download.stderr"` would have made gh's stderr the why id the core refuses. In a step with a
+  `${why:-<id>}` record, every line that names `why` as a shell word, outside comments, messages and that
+  record, must be `why=<why id>` on a line of its own (no `read`, `printf -v`, `for why in`, `mapfile` or
+  `${why:=...}`). A step or job `env:` key `why` was already refused, as a variable the env reader does
+  not understand.
+- **M3 (reviewer S2).** The test's why-id list is a copy, so sorting it races with no parallel case.
+- **M4.** Row 7 sets `why=tool-failed` before its first part, so no inherited value reaches the end record.
+- **M5.** Rows 13 and 14 set `ran_any=1` once per started run, right after the start's exit.
+
+*Kept as is:* the `# shellcheck disable=SC2100` directive above `why=results-missing` (added in round L),
+scoped to that line and explained on it: shellcheck reads `results-missing` as a subtraction of the
+variable `results`, and quoting the three ids instead would need another change to the check's
+`why=<id>` shape. Quoting them is a later option. The numbers are unchanged: the job's steps add up to 348
+of its 355 minutes.
 
 ## Alternatives considered
 

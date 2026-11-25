@@ -371,6 +371,9 @@ jobs:
           # is recorded as a check that did not run only when no part of it ran at all, and every part's
           # own outcome, its exit file and a limits line, goes to the limits.
           ran_any=0
+          # why is set before the first part, so that no value inherited from the runner's environment
+          # reaches the step's end record, where a step of no part records the why it did not run.
+          why=tool-failed
           rc=0
           timeout 5m gh release download "${tag}" --repo "${GH_REPO}" --dir "${rel}" > "${out}/download.stdout" 2> "${out}/download.stderr" || rc=$?
           echo "${rc}" > "${out}/download.exit"
@@ -940,7 +943,6 @@ jobs:
               if [ "${rc}" -ne 0 ]; then
                 continue
               fi
-              ran_any=1
               rc=0
               timeout 60 docker start --attach "${cid}" > "${out}/${run}.stdout" 2> "${out}/${run}.stderr" < /dev/null || rc=$?
               echo "${rc}" > "${out}/${run}.exit"
@@ -1125,7 +1127,6 @@ jobs:
             if [ "${rc}" -ne 0 ]; then
               continue
             fi
-            ran_any=1
             rc=0
             timeout 12m docker start --attach "${cid}" > "${out}/targets/${n}-${name}.tar" 2> "${out}/targets/${n}-${name}.log" < /dev/null || rc=$?
             echo "${rc}" > "${out}/targets/${n}-${name}.exit"
