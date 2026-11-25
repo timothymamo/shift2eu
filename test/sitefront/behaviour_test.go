@@ -801,9 +801,13 @@ func startFrontWith(t *testing.T, container containerRun) *harness {
 
 // startContainer starts the container as the platform does: the pinned image,
 // then the command line container.tf gives it, with UPSTREAM as the local
-// upstream and SSL_CERT_FILE the test's CA. The front is on the host's network
-// namespace, as the browser smoke test's Chromium is, so 127.0.0.1:8080 is the
-// Caddyfile's :8080 and 127.0.0.1:<port> is the upstream the container reaches.
+// upstream and SSL_CERT_FILE the test's CA. The platform's command replaces the
+// image's ENTRYPOINT and its args are the arguments after it, so the runtime is
+// told to override the entrypoint with the command's first word: appending the
+// whole command line after the image would replace only the image's CMD, which
+// is not what Scaleway runs. The front is on the host's network namespace, as
+// the browser smoke test's Chromium is, so 127.0.0.1:8080 is the Caddyfile's
+// :8080 and 127.0.0.1:<port> is the upstream the container reaches.
 func (h *harness) startContainer(t *testing.T, container containerRun, caPath string) {
 	t.Helper()
 
@@ -814,9 +818,16 @@ func (h *harness) startContainer(t *testing.T, container containerRun, caPath st
 		"-e", "UPSTREAM=" + h.upstream.addr,
 		"-e", "SSL_CERT_FILE=" + containerCAPath,
 		"-v", caPath + ":" + containerCAPath + ":ro",
-		container.image,
 	}
-	args = append(args, container.argv...)
+
+	if len(container.argv) > 0 {
+		args = append(args, "--entrypoint", container.argv[0])
+	}
+
+	args = append(args, container.image)
+	if len(container.argv) > 1 {
+		args = append(args, container.argv[1:]...)
+	}
 
 	ctx, cancel := context.WithTimeout(t.Context(), startDeadline)
 	defer cancel()
