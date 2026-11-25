@@ -248,8 +248,9 @@ Checked on 2026-11-25:
   But the guide's `select-resource-config` selects `resourceId, resourceName, resourceType, awsRegion`,
   no configuration, so it cannot tell a public zone from a private one; and Config lists only what the
   recorder records. So the guide needs the direct `list-hosted-zones` call, and `aws.jq` drops Config's
-  `AWS::Route53::HostedZone` rows (they join `covered_types`), as it drops the types its service calls
-  list. `ListHostedZones` "Retrieves a list of the public and private hosted zones" with `PrivateZone`
+  `AWS::Route53::HostedZone` and `AWS::Route53::DNSSEC` rows (both join `covered_types`), as it drops
+  the types its service calls list: `get-dnssec` already reads a zone's signed state into `dnssec`, so a
+  signed zone is listed once, never again as an `unclassified` DNSSEC row. `ListHostedZones` "Retrieves a list of the public and private hosted zones" with `PrivateZone`
   per zone, at most 100 per response (the CLI pages through them)
   (<https://docs.aws.amazon.com/Route53/latest/APIReference/API_ListHostedZones.html>); `GetDNSSEC`
   returns `Status.ServeSignature` beside the key-signing keys
@@ -367,7 +368,8 @@ All criteria are pinned by tests that run offline under `make test` or `make tes
 - [ ] Run as the guide runs them, against synthetic fixtures (zones under `example.com`, account
   `123456789012`, all-zero GUIDs), each source's jq program writes a public zone as `network.dns` with
   no `region`, with the capabilities the table gives, and a private zone as `unclassified` with its
-  `rawType`; AWS Config's rows for the same zones are dropped, and on GCP each zone is the asset
+  `rawType`; AWS Config's `AWS::Route53::HostedZone` and `AWS::Route53::DNSSEC` rows for the same zones
+  are dropped, and on GCP each zone is the asset
   search's row joined to its `managed-zones list` details (`unclassified` when they are missing), so
   each zone is listed once.
 - [ ] A Route 53 zone whose fixture count of routed record sets is above 0 gets `dns-routing` (if
@@ -447,7 +449,8 @@ catalog", never worse than `unclassified`.
    variables, `while IFS= read -r`, no `eval`); the IAM actions in the guide's policy,
    `route53:ListResourceRecordSets` marked optional with what it lets its holder read; `aws.jq`
    classifies public zones, keeps private ones `unclassified` and drops Config's
-   `AWS::Route53::HostedZone` rows; `list-hosted-zones` returns `Id` as `/hostedzone/Z...`, so the
+   `AWS::Route53::HostedZone` and `AWS::Route53::DNSSEC` rows (both join `covered_types`; `get-dnssec`
+   reads the signed state); `list-hosted-zones` returns `Id` as `/hostedzone/Z...`, so the
    milestone confirms that `get-dnssec` and `list-resource-record-sets` accept that form, or the loop
    strips the prefix; the *Everything else on AWS* text no longer names Route 53 zones as
    `unclassified`; the collected-directory paragraph and *Privacy*; synthetic fixtures (zones under
@@ -548,8 +551,8 @@ also wait on its answer)
    0018: optional keys), says exactly what Markdown and HTML say, ties included, and leaves `ties` as it
    is; (a') hides a global tie from every reader; (c) is a breaking change for one flag.
 3. **`dnssec` as a capability.** A signed source zone moved to a provider that cannot sign it must be
-   unsigned first (the DS record removed at the registrar), or validating resolvers fail it. Every source
-   signs; OVHcloud signs an external zone through its API; Scaleway is to be read. *Recommendation:* add
+   unsigned first (the DS record removed at the registrar), or validating resolvers fail it. Route 53
+   and Cloud DNS sign, and milestone 4 checks Azure DNS signing; OVHcloud signs an external zone through its API; Scaleway is to be read. *Recommendation:* add
    `dnssec`, "the provider signs the zone with DNSSEC and publishes the keys the parent's DS record
    points at", derived read-only from each source's DNSSEC state. It costs one call per zone and names
    a real dependency; if both targets sign, it still keeps a signed zone from mapping `direct` to a later
@@ -592,8 +595,8 @@ also wait on its answer)
   zone (an error the program must tolerate, or the call made only for public zones); that the count's
   predicate (`SetIdentifier || HealthCheckId || MultiValueAnswer`) catches every non-simple record set,
   and whether an alias to a resource of another zone with `EvaluateTargetHealth` counts. (Whether AWS
-  Config records a hosted zone with `awsRegion` `global` does not matter: `aws.jq` drops its rows by
-  `resourceType`, `covered_types`.)
+  Config records a hosted zone with `awsRegion` `global` does not matter: `aws.jq` drops its rows, and
+  the `AWS::Route53::DNSSEC` rows, by `resourceType`, `covered_types`.)
 - Milestone 3: that `gcloud dns managed-zones list` returns `visibility` and `dnssecConfig.state` in
   every project, whether its output carries the project (or the guide's `jq` filter adds it), and
   whether forwarding and peering zones are `private`; that `--filter='routingPolicy:*'` with
