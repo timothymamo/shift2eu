@@ -98,10 +98,13 @@
 #                    an object literal whose one key is UPSTREAM (a key in parentheses, a for expression or a
 #                    function call fails closed), an environment block, or any secret_environment_variables:
 #                    another variable (HTTPS_PROXY, GODEBUG, SSL_CERT_FILE) changes what the front does
-#                    while the behaviour test runs only its own environment
-#   [container-lifecycle] ignore_changes (a non-empty list, or all) or replace_triggered_by in the
-#                    lifecycle block of a scaleway_container or a scaleway_container_namespace: a plan would
-#                    pass over a tested image, command or Caddyfile, or a console change to a cost pin;
+#                    while the behaviour test runs only its own environment; and any environment_variables
+#                    or secret_environment_variables, attribute or block, on a scaleway_container_namespace,
+#                    whose variables the platform injects into every container in it
+#   [container-lifecycle] ignore_changes (a non-empty list, or all), replace_triggered_by or enabled (any
+#                    value) in the lifecycle block of a scaleway_container or a scaleway_container_namespace:
+#                    a plan would pass over a tested image, command or Caddyfile, or a console change to a
+#                    cost pin, and enabled = false acts like count = 0 and destroys the front;
 #                    ignore_changes = [] and the postconditions stay accepted
 #   [provider-type]  a resource, data source or provider block of any provider but scaleway
 #   [provider-source] a required_providers entry whose source is not exactly "scaleway/scaleway"

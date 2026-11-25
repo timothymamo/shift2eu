@@ -799,7 +799,11 @@ END {
     }
     # The environment is an attribute; written as a block it is a shape [container-environment] does not read.
     if (m == 2 && el[1] ~ "^resource:scaleway_container:" && (typ == "environment_variables" || typ == "secret_environment_variables")) {
-      problem("container-environment", f, bline[b], shownpath(el[1]) " holds an " typ " block: the environment is the attribute environment_variables = { UPSTREAM = ... } alone (ADR 0045)")
+      problem("container-environment", f, bline[b], shownpath(el[1]) " holds a block " typ ": the environment is the attribute environment_variables = { UPSTREAM = ... } alone (ADR 0045)")
+    }
+    # The namespace's environment, in any form: the platform injects it into every container in it.
+    if (m == 2 && el[1] ~ "^resource:scaleway_container_namespace:" && (typ == "environment_variables" || typ == "secret_environment_variables")) {
+      problem("container-environment", f, bline[b], shownpath(el[1]) " holds a block " typ ": the platform injects a namespace's variables into every container in it, and the front needs none (ADR 0045)")
     }
     if (m == 2 && el[1] == "terraform" && !(typ in terraformSetting)) {
       problem("terraform-setting", f, bline[b], "the terraform block holds " typ ": it may hold only " TERRAFORM_SETTINGS_TEXT ", since anything else (an encryption key provider, provider_meta, experiments) changes how tofu runs on the admin machine")
@@ -920,6 +924,15 @@ END {
     # ignores nothing and stays accepted.
     if (p ~ "^resource:scaleway_container(_namespace)?:[^/]+/lifecycle$" && (n == "replace_triggered_by" || (n == "ignore_changes" && atext[a] != "[ ]"))) {
       problem("container-lifecycle", f, aline[a], n " in the lifecycle block of " shownpath(substr(p, 1, length(p) - 10)) ": a plan would pass over a change to it, so a tested image, command or Caddyfile is never applied, or a console change to a cost pin never reverted (ADR 0045)")
+    }
+    # enabled (OpenTofu 1.11+), any value: false acts like count = 0 and destroys the front, and an
+    # expression leaves that to a tfvars file.
+    if (p ~ "^resource:scaleway_container(_namespace)?:[^/]+/lifecycle$" && n == "enabled") {
+      problem("container-lifecycle", f, aline[a], "enabled in the lifecycle block of " shownpath(substr(p, 1, length(p) - 10)) ": enabled = false acts like count = 0, so a plan would destroy the front (ADR 0045)")
+    }
+    # The namespace's environment, as an attribute: the platform injects it into every container in it.
+    if (p ~ "^resource:scaleway_container_namespace:[^/]+$" && (n == "environment_variables" || n == "secret_environment_variables")) {
+      problem("container-environment", f, aline[a], shownpath(p) " sets " n ": the platform injects a namespace's variables into every container in it, and the front needs none (ADR 0045)")
     }
     # A configuration's locals, by directory (a module's scope), for the min_scale pin that may read one.
     if (p == "locals") {

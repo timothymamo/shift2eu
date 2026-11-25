@@ -401,9 +401,12 @@ TLS stage*.
   `[container-environment]` holds `environment_variables` to an object literal whose one key is `UPSTREAM`
   and refuses `secret_environment_variables`, since another variable (`HTTPS_PROXY`, which Caddy's
   `reverse_proxy` honours, `GODEBUG`, `SSL_CERT_FILE`) would change what the front does while the
-  behaviour test runs only its own environment. `[container-lifecycle]` refuses a non-empty
+  behaviour test runs only its own environment; it also refuses any `environment_variables` or
+  `secret_environment_variables` on the namespace, attribute or block, since the platform injects a
+  namespace's variables into every container in it. `[container-lifecycle]` refuses a non-empty
   `ignore_changes` and any `replace_triggered_by` on the container or its namespace, either of which lets
-  a plan pass over a tested change or a console change to a cost pin. The rules read a condition as its
+  a plan pass over a tested change or a console change to a cost pin, and any `enabled` there (OpenTofu
+  1.11+), since `enabled = false` acts like `count = 0` and destroys the front. The rules read a condition as its
   tokens: either side of `==`, and one outer pair of parentheses, are the same comparison; any other
   spelling of these two checks is refused, not read.
 - **The escaped path.** Caddy v2.11.9 has no placeholder for Go's `URL.EscapedPath()` alone:
