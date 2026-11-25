@@ -884,7 +884,7 @@ which belong to their instance.
 | `messaging.topic` | `encryption-at-rest` | always: Pub/Sub encrypts messages at rest. A dead-letter topic is set on a subscription, never on a topic, so a topic gets no `dead-letter-queue` |
 | `cache.redis` | `encryption-at-rest` | always |
 | `cache.redis` (Redis instance) | `node-high-availability` | tier `STANDARD_HA` |
-| `cache.redis` (Redis instance) | `zone-high-availability` | tier `STANDARD_HA`, and its `nodes` are in two or more zones (or `alternativeLocationId` is another zone than `locationId`) |
+| `cache.redis` (Redis instance) | `zone-high-availability` | tier `STANDARD_HA`, and either its `nodes` are in two or more zones or its `alternativeLocationId` is another zone than its `locationId`: either one is enough |
 | `cache.redis` (Redis instance) | `snapshots` | `persistenceConfig.persistenceMode` is `RDB` |
 | `cache.redis` (Redis cluster, Valkey) | `node-high-availability` | `replicaCount` is 1 or more |
 | `cache.redis` (Redis cluster, Valkey) | `zone-high-availability` | `replicaCount` is 1 or more and `zoneDistributionConfig.mode` is not `SINGLE_ZONE` (absent means `MULTI_ZONE`) |
@@ -892,7 +892,7 @@ which belong to their instance.
 | `cache.redis` (Redis cluster, Valkey) | `snapshots` | `persistenceConfig.mode` is `RDB` (an AOF log is not a snapshot) |
 | `network.loadbalancer` | `zone-high-availability` | always: every GCP load balancer is regional or global, and a global one counts only for its zone redundancy within a region |
 | `network.loadbalancer` | `udp` | one of its backend services has `protocol` `UDP`, or a forwarding rule of `IPProtocol` `UDP` reaches it |
-| `network.loadbalancer` | `ipv6` | a forwarding rule of `ipVersion` `IPV6` reaches it (directly, or through a target HTTP or HTTPS proxy) **and** one of its backend services has `ipAddressSelectionPolicy` `IPV6_ONLY` or `PREFER_IPV6`; an IPv6 frontend over IPv4 backends gets none, nor does a target pool |
+| `network.loadbalancer` | `ipv6` | a passthrough load balancer (a backend service of `loadBalancingScheme` `EXTERNAL` or `INTERNAL`) when a forwarding rule of `ipVersion` `IPV6` names that backend service in `backendService`: it delivers IPv6 to dual-stack or IPv6-only backends and has no IP selection policy. A proxy-based load balancer (a URL map, a target proxy, or scheme `EXTERNAL_MANAGED` or `INTERNAL_MANAGED`) when a forwarding rule of `ipVersion` `IPV6` reaches it **and** one of its backend services has `ipAddressSelectionPolicy` `IPV6_ONLY` or `PREFER_IPV6`; there an IPv6 frontend over IPv4 backends gets none. A target pool takes IPv4 only and gets none |
 | `registry.container` | `encryption-at-rest` | always |
 | `storage.file` | `encryption-at-rest` | always |
 | `storage.file` | `zone-high-availability` | tier `REGIONAL` or `ENTERPRISE` |

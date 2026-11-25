@@ -223,7 +223,7 @@ Capabilities the programs derive, from settings the calls above return:
 | `cache.redis` | `encryption-at-rest` | ElastiCache at-rest encryption on (a group's `StorageEncryptionType`, the effective state, not `AtRestEncryptionEnabled`), always on ElastiCache Serverless; always on Memorystore and Azure |
 | `database.mongodb` | as `database.*` today | DocumentDB, from the cluster's member instances: `point-in-time-restore` when every instance's `BackupRetentionPeriod` is above 0, `encryption-at-rest` when every instance's `StorageEncrypted` is true (no page says an instance reports its cluster's values), `read-replicas` and `node-high-availability` from two or more instances, `zone-high-availability` from instances in two or more `AvailabilityZone`s; Cosmos DB continuous backup for `point-in-time-restore`, `locations[].isZoneRedundant` true for `zone-high-availability` (not "more than one region", which is a regional replica, not zone redundancy; to be checked) |
 | `network.loadbalancer` | `zone-high-availability` | an ALB or NLB in two or more zones; a GCP regional load balancer, or a global one (anycast across regions; it maps onto a regional target load balancer, as a DNS or CDN service would, so only its zone redundancy within a region is claimed, never its reach across regions); an Azure Standard load balancer with a zone-redundant frontend, or an Application Gateway in two or more zones |
-| `network.loadbalancer` | `ipv6` | only where clients and backends are both reached over IPv6 (`ipv6` is inbound and outbound): an ALB or NLB with `IpAddressType` `dualstack` or `dualstack-without-public-ipv4` **and** a target group with `IpAddressType` `ipv6` (`describe-target-groups`); a GCP IPv6 forwarding rule whose backend service sends to IPv6 backends (`ipAddressSelectionPolicy` `IPV6_ONLY` or `PREFER_IPV6`; to be checked); an Azure IPv6 frontend with an IPv6 backend pool (to be checked). A load balancer with an IPv6 frontend only gets no `ipv6` |
+| `network.loadbalancer` | `ipv6` | only where clients and backends are both reached over IPv6 (`ipv6` is inbound and outbound): an ALB or NLB with `IpAddressType` `dualstack` or `dualstack-without-public-ipv4` **and** a target group with `IpAddressType` `ipv6` (`describe-target-groups`); a GCP IPv6 forwarding rule that names a passthrough backend service (scheme `EXTERNAL` or `INTERNAL`) in `backendService`, or that reaches a proxy-based load balancer whose backend service sends to IPv6 backends (`ipAddressSelectionPolicy` `IPV6_ONLY` or `PREFER_IPV6`; checked in milestone 3); an Azure IPv6 frontend with an IPv6 backend pool (to be checked). A load balancer with an IPv6 frontend only gets no `ipv6` |
 | `network.loadbalancer` | `udp` | an NLB with a listener of protocol `UDP`, `TCP_UDP`, `QUIC` or `TCP_QUIC` (`elbv2 describe-listeners`; QUIC runs over UDP); an Azure load balancer rule of protocol `Udp` or `All`; a GCP backend service of protocol `UDP`, or a forwarding rule of `IPProtocol` `UDP` (to a target pool or backend service; the forwarding rule is read, then dropped) |
 | `messaging.topic` | `encryption-at-rest` | SNS with a `KmsMasterKeyId` (`sns get-topic-attributes`); always on Pub/Sub and Service Bus |
 | `messaging.topic` | `dead-letter-queue` | never on SNS (milestone 2: a dead-letter queue is attached to a subscription, which no topic attribute says); per source, to be checked in milestones 3 (Pub/Sub) and 4 (Service Bus) (SNS and Pub/Sub set it per subscription, Service Bus subscriptions always have one) |
@@ -758,8 +758,9 @@ text as the decision)
     for high availability
     (<https://docs.cloud.google.com/memorystore/docs/cluster/ha-and-replicas>,
     <https://docs.cloud.google.com/memorystore/docs/valkey/ha-and-replicas>). Not confirmed, and left
-    out: that a `STANDARD_HA` instance always has its replica in another zone, so the node zones
-    decide.
+    out: that a `STANDARD_HA` instance always has its replica in another zone, so its placement
+    decides: listed nodes in two or more zones, or an `alternativeLocationId` other than its
+    `locationId`, either one is enough.
   - The `gcloud redis` and `memorystore` list calls and fields: confirmed
     (<https://docs.cloud.google.com/sdk/gcloud/reference/redis/instances/list>,
     <https://docs.cloud.google.com/sdk/gcloud/reference/redis/clusters/list>,
@@ -782,6 +783,21 @@ text as the decision)
     <https://docs.cloud.google.com/compute/docs/reference/rest/v1/forwardingRules>,
     <https://docs.cloud.google.com/compute/docs/reference/rest/v1/targetPools>). Not confirmed, and left
     out: that `L3_DEFAULT` forwards UDP, so it does not count as `udp` and the guide says so.
+    Corrected on 2026-11-25 (PR #591's review): `ipAddressSelectionPolicy` is documented only for
+    proxy-based load balancers, "a preference for traffic sent from the proxy to the backend", for
+    schemes `EXTERNAL_MANAGED`, `INTERNAL_MANAGED` and `INTERNAL_SELF_MANAGED`
+    (<https://docs.cloud.google.com/compute/docs/reference/rest/v1/backendServices>); an external
+    passthrough Network Load Balancer serves IPv6 through an IPv6 forwarding rule to backends with
+    `stack-type` `IPV4_IPV6` or `IPV6_ONLY`
+    (<https://docs.cloud.google.com/load-balancing/docs/network/networklb-backend-service>), and so
+    does an internal one (<https://docs.cloud.google.com/load-balancing/docs/internal>), neither naming
+    a selection policy. So a backend service of scheme `EXTERNAL` or `INTERNAL` that an IPv6 forwarding
+    rule names in `backendService` gets `ipv6`; proxy-based load balancers keep the policy rule. A
+    target pool "support[s] only IPv4 traffic"
+    (<https://docs.cloud.google.com/load-balancing/docs/network/networklb-target-pools>), so it gets
+    none. Not confirmed, and left out: that the backends are in fact dual-stack (the forwarding rule
+    can point only at dual-stack or IPv6-only backends, so the program does not read the instances'
+    `stackType`).
   - Pub/Sub `dead-letter-queue`: confirmed per subscription, "You configure a dead-letter topic on a
     subscription, not on the topic it pulls from"
     (<https://docs.cloud.google.com/pubsub/docs/handling-failures>), so a topic gets none and its

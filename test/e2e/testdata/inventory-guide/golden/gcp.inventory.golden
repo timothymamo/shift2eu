@@ -244,6 +244,7 @@
       "category": "network.loadbalancer",
       "region": "europe-west1",
       "capabilities": [
+        "ipv6",
         "udp",
         "zone-high-availability"
       ]

@@ -606,7 +606,7 @@ func inventoryGuides() []inventoryGuideCase {
 				// map or proxy between them.
 				{
 					id: "shop-ntp-be", rawType: "compute.googleapis.com/BackendService", category: "network.loadbalancer",
-					region: "europe-west1",
+					region:       "europe-west1",
 					capabilities: []string{"ipv6", "udp", "zone-high-availability"},
 				},
 				{

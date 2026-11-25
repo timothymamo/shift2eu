@@ -302,7 +302,8 @@ def reaches($proxies):
         ]}
       elif .assetType == "redis.googleapis.com/Instance" then
         # Memorystore for Redis: STANDARD_HA has a replica that takes over, and
-        # its nodes in two or more zones make it zone redundant. Each node holds
+        # its nodes in two or more zones, or an alternativeLocationId other than
+        # its locationId, either one, make it zone redundant. Each node holds
         # the whole data set.
         $redis[$key] as $d
         | ($d.tier? == "STANDARD_HA") as $ha
@@ -387,10 +388,14 @@ def reaches($proxies):
     # One network.loadbalancer per URL map, backend service no URL map names
     # and target pool. A regional or global load balancer is zone redundant
     # within a region. It forwards UDP when one of its backend services or a
-    # forwarding rule that reaches it is UDP, and it is ipv6 only when an IPv6
-    # forwarding rule reaches it and one of its backend services sends to IPv6
-    # backends (IPV6_ONLY or PREFER_IPV6; absent is IPV4_ONLY). A target pool
-    # has no protocol and no IP selection policy of its own.
+    # forwarding rule that reaches it is UDP. It is ipv6 when an IPv6 forwarding
+    # rule names a passthrough backend service (scheme EXTERNAL or INTERNAL)
+    # directly in backendService: a passthrough load balancer delivers IPv6 to
+    # dual-stack or IPv6-only backends and has no IP selection policy. A proxy
+    # (an IPv6 rule through a target proxy, or scheme EXTERNAL_MANAGED or
+    # INTERNAL_MANAGED) is ipv6 only when one of its backend services also
+    # sends to IPv6 backends (IPV6_ONLY or PREFER_IPV6; absent is IPV4_ONLY).
+    # A target pool has no protocol and takes IPv4 only.
     $loadbalancers[] as $lb
     | [$frontends[] | select(any(reaches($proxies); . == $lb.key))] as $fronts
     | {
@@ -401,8 +406,10 @@ def reaches($proxies):
         capabilities: [
           "zone-high-availability",
           cap("udp"; any($lb.services[]; $backends[.].protocol? == "UDP") or any($fronts[]; .IPProtocol? == "UDP")),
-          cap("ipv6"; any($fronts[]; .ipVersion? == "IPV6")
-            and any($lb.services[]; $backends[.].ipAddressSelectionPolicy? | IN("IPV6_ONLY", "PREFER_IPV6")))
+          cap("ipv6"; any($fronts[]; .ipVersion? == "IPV6" and .backendService != null
+              and ($backends[.backendService | key].loadBalancingScheme? | IN("EXTERNAL", "INTERNAL")))
+            or (any($fronts[]; .ipVersion? == "IPV6")
+              and any($lb.services[]; $backends[.].ipAddressSelectionPolicy? | IN("IPV6_ONLY", "PREFER_IPV6"))))
         ]
       }
   ]
