@@ -174,10 +174,11 @@ if [[ -e "${dir}" ]]; then
   refuse_detached "${dir}"
 fi
 
-base=main
+# main's full ref, never its short name: a tag named main or origin/main makes the short name ambiguous.
+base=refs/heads/main
 fetched=''
 if git remote get-url origin >/dev/null 2>&1 && git fetch --quiet --prune origin; then
-  base=origin/main
+  base=refs/remotes/origin/main
   fetched=1
 fi
 
@@ -200,9 +201,9 @@ if [[ -n "${renovate}" ]]; then
     at="$(git rev-parse "refs/heads/${branch}")"
     origin_at="$(git rev-parse "refs/remotes/origin/${branch}")"
     # The upstream as a full ref, read by the branch's full ref: a short name on either side is
-    # ambiguous beside a same-named tag (git rejects refs/heads/<branch>@{upstream}, hence for-each-ref,
-    # and %(upstream:short) widens to remotes/origin/<branch> beside a tag origin/<branch>); empty when
-    # it tracks nothing.
+    # ambiguous beside a same-named tag. git rejects refs/heads/<branch>@{upstream}, hence for-each-ref.
+    # %(upstream:short) widens to remotes/origin/<branch> beside a tag origin/<branch>, hence the full
+    # ref. Empty when the branch tracks nothing.
     upstream="$(git for-each-ref --format='%(upstream)' "refs/heads/${branch}")"
     if [[ "${at}" != "${origin_at}" || "${upstream}" != "refs/remotes/origin/${branch}" ]]; then
       refuse "the local branch '${branch}' differs from origin/${branch}: it is at another commit or does" \
