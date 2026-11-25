@@ -530,7 +530,10 @@ func (r *schemaReader) ciExtraKeys(what string, step ciStep, want releaseStep) {
 }
 
 // ciRead names the parts of the step that reads dev/lima.yaml's nodeVersion
-// an edit is likely to break.
+// an edit is likely to break. Its X.Y.Z range check and its output line
+// check refuse nothing the exact run comparison of schemaReader.step does not
+// refuse already: they are only named diagnostics, which say what the missing
+// line was for. The id check is one too, beside step's exact id.
 func (r *schemaReader) ciRead(step ciStep, want releaseStep) {
 	r.ciExtraKeys("step that reads dev/lima.yaml's nodeVersion", step, want)
 
