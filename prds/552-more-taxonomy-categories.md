@@ -31,7 +31,7 @@ category of its own.
 Some services are missing from the inventory altogether. AWS Config records neither ElastiCache nor
 MemoryDB clusters (the
 [AWS Config resource type list](https://docs.aws.amazon.com/config/latest/developerguide/resource-config-reference.html)
-has no `AWS::ElastiCache::*` and no MemoryDB type), so the guide's AWS inventory does not list them at
+has no `AWS::ElastiCache::*` and no MemoryDB cluster type), so the guide's AWS inventory does not list them at
 all, not even as `unclassified`. DocumentDB is listed, but not as what it is: `rds describe-db-instances`
 returns DocumentDB (and Neptune) instances, and `aws.jq` writes each one as an `unclassified`
 `AWS::RDS::DBInstance`.

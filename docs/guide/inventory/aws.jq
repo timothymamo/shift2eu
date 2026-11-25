@@ -67,6 +67,10 @@
 # cluster (AWS::RDS::DBCluster) is covered by its instances, which
 # rds describe-db-instances lists; AWS Config records a DocumentDB cluster as
 # AWS::RDS::DBCluster too, and its instances stand for it the same way.
+# ElastiCache is not in this list: AWS Config records no AWS::ElastiCache::*
+# type (its developer guide's "Supported Resource Types" reference, checked
+# 2026-11-25), so the elasticache calls are the only source of caches and none
+# is listed twice.
 def covered_types:
   [
     "AWS::EC2::Instance", "AWS::EC2::Volume", "AWS::AutoScaling::AutoScalingGroup",
@@ -291,8 +295,9 @@ def inventory($source):
     # nodes. Failover is node high availability only when every shard has a
     # replica to promote (two or more NodeGroupMembers in each node group): a
     # cluster-mode group must turn failover on even with none, and a shard
-    # with a primary only loses its data with its node. StorageEncryptionType is the effective
-    # encryption state; AtRestEncryptionEnabled can be false while it is on.
+    # with a primary only loses its data with its node. StorageEncryptionType
+    # is the effective encryption state; AtRestEncryptionEnabled can be false
+    # while it is on.
     ($docs[] | .ReplicationGroups? // empty | .[]
       | ((.Engine // "") | is_redis) as $redis
       | ((.MemberClusters // []) | length) as $nodes
