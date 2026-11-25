@@ -569,10 +569,14 @@ done > "$out/memorystore.json"
 if has file.googleapis.com/Instance; then
   gcloud filestore instances list --project="$project" --quiet \
     --format='json(name,tier,fileShares[].capacityGb,protocol)' > "$out/filestore-instances.json"
+else
+  echo '[]' > "$out/filestore-instances.json"
 fi
 if has artifactregistry.googleapis.com/Repository; then
   gcloud artifacts repositories list --project="$project" --location=all --quiet \
     --format='json(name,format,mode)' > "$out/artifacts-repositories.json"
+else
+  echo '[]' > "$out/artifacts-repositories.json"
 fi
 
 # The Cloud Run service each 2nd gen function runs on, per region with functions.
