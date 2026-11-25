@@ -691,6 +691,20 @@ test-browser: ## Build the site's bundle into a directory of this run's own, or 
 	SHIFT2EU_DEVTOOLS_URL="$$devtools" SHIFT2EU_SITE_BUNDLE="$$site" \
 		go test -count=1 -timeout 20m -tags browser ./test/browser/
 
+# The site front's behaviour test (PRD #297 milestone 4, docs/adr/0045): test/sitefront, behind the sitefront
+# tag, runs the Caddy image infra/site/container.tf pins, with that file's command, arguments and the
+# Caddyfile's bytes, against a local HTTPS upstream it starts, and drives docs/adr/0045's list. The test starts
+# and removes the container itself; the recipe only names the runtime, DOCKER (docker or nerdctl), through
+# SHIFT2EU_SITEFRONT_RUNTIME. The first run pulls the pinned image from Docker Hub. The container is on the
+# host's network on the fixed port 8080, so one run at a time on a machine. Like test-browser, it is outside
+# make test and make check.
+.PHONY: test-sitefront
+test-sitefront: ## Run the site front's behaviour test in the pinned Caddy image (docker or nerdctl; port 8080 on the host network, one run at a time; outside make test and make check)
+	@command -v "$(DOCKER)" >/dev/null 2>&1 || { \
+		echo "test-sitefront: $(DOCKER) is not installed: the test starts the front's container itself" >&2; exit 1; }
+	SHIFT2EU_SITEFRONT_RUNTIME="$(DOCKER)" \
+		go test -count=1 -timeout 20m -tags sitefront ./test/sitefront/
+
 .PHONY: cover
 cover: ## Unit tests with a coverage report in coverage.out
 	go test -race -count=1 -covermode=atomic -coverprofile=coverage.out ./...

@@ -40,10 +40,11 @@
 #                    templatefile, templatestring, filemd5, filesha1, filesha256, filesha512, pathexpand or
 #                    abspath in a configuration or test file, a template's ${...} too: the plan would read
 #                    the machine that runs it. A name in a comment or in a string without a template is no
-#                    call
+#                    call. One call is allowed, written exactly file("${path.module}/Caddyfile") in a
+#                    configuration file: the site container's committed Caddyfile beside it (ADR 0045)
 #   [import-block]   a top-level import block in a configuration file: every resource is created fresh,
 #                    never adopted (a test file's import block gets [block-type] alone)
-#   [resource-type]  a scaleway_* resource type infra/site/main.tf does not use, or any scaleway_* data or
+#   [resource-type]  a scaleway_* resource type infra/site does not use, or any scaleway_* data or
 #                    ephemeral type, that no rule above or below names: an allow list in
 #                    dev/infra-rules.awk, extended in the same PR as the new resource. A type a specific
 #                    rule names ([api-key], [object], [bucket-acl], [iam-other], [provider-type]) gets
@@ -58,7 +59,53 @@
 #   [tls-stage-lifecycle] the resource scaleway_edge_services_tls_stage "site" without a lifecycle block
 #                    that sets create_before_destroy = true (issue #541): Scaleway issues its managed
 #                    certificate only at its creation, so R8 replaces it, and Scaleway refuses to delete
-#                    a TLS stage the DNS stage references, so the replacement must create first
+#                    a TLS stage the DNS stage references, so the replacement must create first. Since
+#                    ADR 0045 the stage exists only with pipeline_www = true (count), R8's rollback; the
+#                    rule holds it either way
+#   [container-max-scale], [container-cpu], [container-memory]
+#                    a scaleway_container that does not set max_scale = 1, cpu_limit = 140 or
+#                    memory_limit_bytes = 268435456 exactly once, as that literal (ADR 0045's cost pins:
+#                    one instance of 140 mvCPU and 0.25 GB at most): missing, another number or an
+#                    expression such as var.max_scale is refused
+#   [container-deprecated-attribute]
+#                    memory_limit or http_option on a scaleway_container, the deprecated spellings of
+#                    memory_limit_bytes and https_connections_only (that attribute gets this tag alone)
+#   [container-image-pin] a scaleway_container whose image is missing, or set other than once as exactly
+#                    local.caddy_image, the local the Renovate comment pins (ADR 0045): a literal or another
+#                    local is a reference Renovate does not move (its digest is test/sitefront's to read)
+#   [container-min-scale] a scaleway_container whose min_scale is missing, or set other than once as the
+#                    literal 0 or 1 or as local.<name> where that local, in the same directory, is set once
+#                    to the literal 0 or 1
+#   [container-min-scale-postcondition]
+#                    for a min_scale the rule above accepts, a container without exactly one postcondition
+#                    whose condition is self.min_scale == the same expression min_scale sets (either
+#                    side, one outer pair of parentheses and line breaks inside them allowed): missing,
+#                    a second one, or a condition naming self and min_scale in any other way (another
+#                    value, self["min_scale"]) is refused, since a hard-coded 0 beside a local would pass
+#                    once the local is raised
+#   [container-https-only-postcondition-missing]
+#                    a scaleway_container without a postcondition whose condition is
+#                    self.https_connections_only == false (either side, one outer pair of parentheses):
+#                    the provider leaves false out of the create request, so only that check after an
+#                    apply says whether the platform kept plain HTTP for Caddy's own redirect
+#   [container-https-only-postcondition]
+#                    a second postcondition self.https_connections_only == false on a scaleway_container,
+#                    even an identical one: exactly one checks plain HTTP after an apply
+#   [container-repeat] count or for_each on a scaleway_container or a scaleway_container_namespace, or
+#                    more than one scaleway_container under the root: the front is one container in one
+#                    namespace (ADR 0045), and a repeat multiplies the cost pins' ceiling
+#   [container-environment] a scaleway_container whose environment_variables, when set, is not set once as
+#                    an object literal whose one key is UPSTREAM (a key in parentheses, a for expression or a
+#                    function call fails closed), an environment block, or any secret_environment_variables:
+#                    another variable (HTTPS_PROXY, GODEBUG, SSL_CERT_FILE) changes what the front does
+#                    while the behaviour test runs only its own environment; and any environment_variables
+#                    or secret_environment_variables, attribute or block, on a scaleway_container_namespace,
+#                    whose variables the platform injects into every container in it
+#   [container-lifecycle] ignore_changes (a non-empty list, or all), replace_triggered_by or enabled (any
+#                    value) in the lifecycle block of a scaleway_container or a scaleway_container_namespace:
+#                    a plan would pass over a tested image, command or Caddyfile, or a console change to a
+#                    cost pin, and enabled = false acts like count = 0 and destroys the front;
+#                    ignore_changes = [] and the postconditions stay accepted
 #   [provider-type]  a resource, data source or provider block of any provider but scaleway
 #   [provider-source] a required_providers entry whose source is not exactly "scaleway/scaleway"
 #   [lock-file]      a .terraform.lock.hcl with a line of a shape tofu init does not write: only blank and

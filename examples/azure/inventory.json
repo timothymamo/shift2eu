@@ -99,6 +99,15 @@
       "workload": "shop"
     },
     {
+      "id": "hdi-shop-events",
+      "rawType": "Microsoft.HDInsight/clusters",
+      "category": "messaging.kafka",
+      "region": "westeurope",
+      "capabilities": ["node-high-availability", "encryption-at-rest"],
+      "size": { "vcpus": 4, "memoryGiB": 16, "storageGiB": 1024, "count": 3 },
+      "workload": "shop"
+    },
+    {
       "id": "cdn-shop",
       "rawType": "Microsoft.Cdn/profiles",
       "category": "unclassified",

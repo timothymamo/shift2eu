@@ -1,0 +1,1 @@
+{"schemaVersion": 2, "source": "aws", "resources": [{"id": "lone-\ud800-surrogate", "rawType": "x\udfff", "category": "compute.vm", "region": "eu-central-1"}]}

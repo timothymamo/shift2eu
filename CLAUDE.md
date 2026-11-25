@@ -59,6 +59,7 @@ Hexagonal (ports and adapters). Dependencies point inwards only. See `docs/archi
 | Site (no Go) | `site/`: the site's pages, stylesheet and one page script (ADR 0036); `site/records/` is never bundled | Nothing: the page script is held by `test/site`'s banned-API scan, and every page by its Content Security Policy |
 | Infrastructure (no Go) | `infra/`: the OpenTofu configuration of the site's Scaleway hosting (`infra/site`, ADR 0039), the OpenTofu pins (`infra/tofu.yaml`) | Only the `scaleway/scaleway` provider, run only through `dev/tofu.sh`; held by `dev/infra-rules.sh`'s static rules and checked offline by `make infra-check`. Plan and apply are the maintainer's alone: agents never run them |
 | Browser smoke test | `test/browser` (`browser && !js`), run by `make test-browser` against a pinned headless Chromium | Exactly its listed standard and `chromedp` packages (`browser-smoke-test`), no package of the module; only it imports `chromedp` (`chromedp-only-in-the-browser-test`) |
+| Site front test | `test/sitefront`: the static Caddyfile test (under `make test`) and the behaviour test (`sitefront && !js`), run by `make test-sitefront` against the pinned Caddy image (ADR 0045) | Exactly its listed standard packages (`sitefront-behaviour-test`), no package of the module; its `doc.go` imports nothing (`sitefront-test-doc`) |
 
 - The dependency rule is **enforced by `golangci-lint` (depguard)** and, package by package for every
   release target, by `test/architecture` (ADR 0012). Do not add `//nolint:depguard`; fix the design.
@@ -85,6 +86,7 @@ make build             # ./bin/shift2eu
 make site              # the site's bundle into bin/site and its archive bin/shift2eu-site_<version>.tar.gz
 make site-programs     # ci/sitedeploy and ci/sitecheck into bin/, static and -trimpath, as the release builds them
 make test-browser      # a bundle of its own (never bin/site), then the headless-browser smoke test in a pinned Chromium container
+make test-sitefront    # the site front's behaviour test in the pinned Caddy container (host port 8080: one run at a time)
 ```
 
 Every make target runs exactly go.mod's go line (`GOTOOLCHAIN`, issue #347, ADR 0035). When the local Go is
@@ -118,7 +120,9 @@ provider (checked against `infra/site/.terraform.lock.hcl`); it fetches nothing 
    environment and in `~/.config/dot-agent-deck/daemon.env`: never print the environment (`env`,
    `printenv`, `set`), never read that file, and never copy either into files, output or tests.
 4. **Never work on `main`.** Every PRD milestone or issue gets its own branch, `<type>/<issue>-<slug>`, in
-   its own worktree under `.worktrees/` (`make worktree BRANCH=...`, skill: `start-work`). Work only
+   its own worktree under `.worktrees/` (`make worktree BRANCH=...`, skill: `start-work`); a Renovate
+   PR's existing `renovate/<name>` branch is resumed with `make worktree BRANCH=renovate/<name>`, never
+   created. Work only
    inside that worktree; the repository root stays on `main` and is never edited. Never commit or push to
    `main`, and never pass `--no-verify` to get past the hooks that refuse it. Commit messages are
    Conventional Commits (`feat(mapping): ...`, `fix(aws): ...`, `test(...)`, `docs(...)`).

@@ -32,13 +32,17 @@ import (
 )
 
 // representative is the one sized resource a category gets in the table: the
-// size and usage the category takes in inventory format version 2. A nil size
-// or usage is "not given", as in the format (ADR 0025), and only a field the
-// category allows may be set (inventory's allowedFields): vcpus on
-// storage.object, say, is refused by inventory.New.
+// size, capabilities and usage the category takes in inventory format version 2.
+// A nil size or usage is "not given", as in the format (ADR 0025), and only a
+// field the category allows may be set (inventory's allowedFields): vcpus on
+// storage.object, say, is refused by inventory.New. Capabilities are empty for a
+// category whose offering the table can reach without one; a cache lists
+// node-level high availability because the plan the tier serves it on is the
+// interesting half of its row (PRD #552).
 type representative struct {
-	size  *inventory.Size
-	usage *inventory.Usage
+	size         *inventory.Size
+	capabilities []taxonomy.Capability
+	usage        *inventory.Usage
 }
 
 // representatives is the representative resource of every taxonomy category the
@@ -56,12 +60,18 @@ type representative struct {
 //     a month;
 //   - database.postgresql and database.mysql: 2 vCPU, 4 GiB of memory, 50 GiB of
 //     storage, count 1, 730 hours a month;
+//   - database.mongodb: as a managed database, with 100 GiB of storage and count
+//     3, the number of nodes a MongoDB replica set runs;
+//   - cache.redis: 6 GiB of memory per node, count 2 and 730 hours a month, and
+//     node-high-availability, since a replicated cache is what the tier is for;
+//     no vCPUs, which the category does not take (a cache is matched on memory
+//     alone, ADR 0046);
 //   - storage.block: one 100 GiB volume (count 1);
 //   - storage.object: 100 GiB stored;
 //   - serverless.function: a function of 1 GiB of memory, the only size field
 //     the category takes;
-//   - messaging.queue: no size: the category takes no size field, and it is
-//     priced by usage.
+//   - messaging.queue, network.loadbalancer and registry.container: no size: the
+//     categories take no size field, and they are priced by usage or not at all.
 var representatives = map[taxonomy.Category]representative{
 	taxonomy.ComputeVM: {
 		size:  &inventory.Size{VCPUs: number(2), MemoryGiB: number(4), Count: count(1)},
@@ -83,6 +93,15 @@ var representatives = map[taxonomy.Category]representative{
 		size:  &inventory.Size{VCPUs: number(2), MemoryGiB: number(4), StorageGiB: number(50), Count: count(1)},
 		usage: &inventory.Usage{HoursPerMonth: number(730)},
 	},
+	taxonomy.DatabaseMongoDB: {
+		size:  &inventory.Size{VCPUs: number(2), MemoryGiB: number(8), StorageGiB: number(100), Count: count(3)},
+		usage: &inventory.Usage{HoursPerMonth: number(730)},
+	},
+	taxonomy.CacheRedis: {
+		size:         &inventory.Size{MemoryGiB: number(6), Count: count(2)},
+		capabilities: []taxonomy.Capability{taxonomy.NodeHighAvailability},
+		usage:        &inventory.Usage{HoursPerMonth: number(730)},
+	},
 	taxonomy.StorageBlock: {
 		size: &inventory.Size{StorageGiB: number(100), Count: count(1)},
 	},
@@ -92,7 +111,9 @@ var representatives = map[taxonomy.Category]representative{
 	taxonomy.ServerlessFunction: {
 		size: &inventory.Size{MemoryGiB: number(1)},
 	},
-	taxonomy.MessagingQueue: {},
+	taxonomy.MessagingQueue:      {},
+	taxonomy.NetworkLoadBalancer: {},
+	taxonomy.RegistryContainer:   {},
 }
 
 // TestEstimatePerTargetAndCategory renders one estimate per target and taxonomy
@@ -120,7 +141,11 @@ func TestEstimatePerTargetAndCategory(t *testing.T) {
 	out.WriteString("bare-metal server is 4 vCPU and 32 GiB, the smallest plan OVHcloud's and Scaleway's bare-metal\n")
 	out.WriteString("offerings cover (UpCloud offers none); Kubernetes counts 3 nodes of the virtual-machine size; a\n")
 	out.WriteString("managed database is 2 vCPU, 4 GiB of memory and 50 GiB of storage; block storage is one 100 GiB\n")
-	out.WriteString("volume and object storage 100 GiB stored; a function is 1 GiB of memory; a queue takes no size.\n\n")
+	out.WriteString("volume and object storage 100 GiB stored; a function is 1 GiB of memory; a queue takes no size.\n")
+	out.WriteString("A MongoDB database is 2 vCPU, 8 GiB of memory, 100 GiB of storage and count 3, the nodes of a\n")
+	out.WriteString("replica set; a cache is 6 GiB of memory per node, count 2 and `node-high-availability`, so it is\n")
+	out.WriteString("priced on the multi-node tier a replicated cache is served by, and its capability is shown after\n")
+	out.WriteString("its size; a load balancer and a container registry take no size and are not priced.\n\n")
 
 	for _, target := range targets {
 		cat, err := target.catalog().Catalog(t.Context())
@@ -206,12 +231,13 @@ func estimateRow(t *testing.T, cat catalog.Catalog, category taxonomy.Category) 
 	}
 
 	inv, err := inventory.New("aws", []inventory.Resource{{
-		ID:       "res-example",
-		RawType:  "Example::Resource",
-		Category: category,
-		Region:   "eu-west-1",
-		Size:     rep.size,
-		Usage:    rep.usage,
+		ID:           "res-example",
+		RawType:      "Example::Resource",
+		Category:     category,
+		Region:       "eu-west-1",
+		Capabilities: rep.capabilities,
+		Size:         rep.size,
+		Usage:        rep.usage,
 	}})
 	if err != nil {
 		t.Fatalf("%s %q: inventory.New: %v", cat.Target(), category, err)
@@ -257,8 +283,9 @@ func estimateRow(t *testing.T, cat catalog.Catalog, category taxonomy.Category) 
 }
 
 // String renders the representative resource as the table's Size cell: its size
-// and usage fields in the order the inventory format lists them, or "none" for
-// a category that takes no size.
+// and usage fields in the order the inventory format lists them, then the
+// capabilities it lists, backticked like every other name in the table, or
+// "none" for a category that takes no size and lists no capability.
 func (r representative) String() string {
 	var parts []string
 
@@ -282,6 +309,10 @@ func (r representative) String() string {
 
 	if r.usage != nil && r.usage.HoursPerMonth != nil {
 		parts = append(parts, decimal(*r.usage.HoursPerMonth)+" h/month")
+	}
+
+	for _, capability := range r.capabilities {
+		parts = append(parts, "`"+string(capability)+"`")
 	}
 
 	if len(parts) == 0 {

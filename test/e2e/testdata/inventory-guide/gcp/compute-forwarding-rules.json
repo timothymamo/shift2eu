@@ -1,0 +1,49 @@
+[
+  {
+    "kind": "compute#forwardingRule",
+    "selfLink": "https://www.googleapis.com/compute/v1/projects/example-project/global/forwardingRules/shop-web-fr6",
+    "IPProtocol": "TCP",
+    "ipVersion": "IPV6",
+    "target": "https://www.googleapis.com/compute/v1/projects/example-project/global/targetHttpsProxies/shop-web-proxy"
+  },
+  {
+    "kind": "compute#forwardingRule",
+    "selfLink": "https://www.googleapis.com/compute/v1/projects/example-project/global/forwardingRules/shop-legacy-fr6",
+    "IPProtocol": "TCP",
+    "ipVersion": "IPV6",
+    "target": "https://www.googleapis.com/compute/v1/projects/example-project/global/targetHttpsProxies/shop-legacy-proxy"
+  },
+  {
+    "kind": "compute#forwardingRule",
+    "selfLink": "https://www.googleapis.com/compute/v1/projects/example-project/global/forwardingRules/shop-edge-fr6",
+    "IPProtocol": "TCP",
+    "ipVersion": "IPV6",
+    "target": "https://www.googleapis.com/compute/v1/projects/example-project/global/targetHttpProxies/shop-edge-proxy"
+  },
+  {
+    "kind": "compute#forwardingRule",
+    "selfLink": "https://www.googleapis.com/compute/v1/projects/example-project/regions/europe-west1/forwardingRules/shop-dns-fr",
+    "region": "https://www.googleapis.com/compute/v1/projects/example-project/regions/europe-west1",
+    "IPProtocol": "UDP",
+    "ipVersion": "IPV4",
+    "backendService": "https://www.googleapis.com/compute/v1/projects/example-project/regions/europe-west1/backendServices/shop-dns-be"
+  },
+  {
+    "kind": "compute#forwardingRule",
+    "selfLink": "https://www.googleapis.com/compute/v1/projects/example-project/regions/europe-west1/forwardingRules/shop-ntp-fr6",
+    "region": "https://www.googleapis.com/compute/v1/projects/example-project/regions/europe-west1",
+    "IPProtocol": "UDP",
+    "ipVersion": "IPV6",
+    "IPAddress": "2001:db8::1",
+    "loadBalancingScheme": "EXTERNAL",
+    "backendService": "https://www.googleapis.com/compute/v1/projects/example-project/regions/europe-west1/backendServices/shop-ntp-be"
+  },
+  {
+    "kind": "compute#forwardingRule",
+    "selfLink": "https://www.googleapis.com/compute/v1/projects/example-project/regions/europe-west1/forwardingRules/shop-syslog-fr",
+    "region": "https://www.googleapis.com/compute/v1/projects/example-project/regions/europe-west1",
+    "IPProtocol": "UDP",
+    "ipVersion": "IPV4",
+    "target": "https://www.googleapis.com/compute/v1/projects/example-project/regions/europe-west1/targetPools/shop-syslog-pool"
+  }
+]

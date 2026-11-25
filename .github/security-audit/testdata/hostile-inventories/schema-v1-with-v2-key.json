@@ -1,0 +1,1 @@
+{"schemaVersion": 1, "source": "aws", "resources": [{"id": "v1", "rawType": "AWS::EC2::Instance", "category": "compute.vm", "region": "eu-central-1", "size": {"vcpus": 2, "memoryGiB": 8}}]}

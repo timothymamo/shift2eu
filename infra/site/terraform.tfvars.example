@@ -8,3 +8,7 @@ admin_principal = "user_id:00000000-0000-0000-0000-000000000000"
 # bucket_name = "shift2eu-site-www"
 # Set true only when the Runbook's R5 finds that Edge Services cannot serve the private objects:
 # public_read = false
+# Set true only after R8's records point at the container (ADR 0045):
+# front_domains = false
+# Set true only for R8's rollback: the pipeline serves www through its TLS stage again (milestone 3's chain):
+# pipeline_www = false

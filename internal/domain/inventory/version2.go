@@ -137,12 +137,12 @@ const (
 	fieldHours
 )
 
-// sized is the set of fields a category of compute, Kubernetes nodes or
-// database nodes takes: every field.
+// sized is the set of fields a category of compute, Kubernetes nodes,
+// database nodes, search data nodes or Kafka brokers takes: every field.
 const sized = fieldVCPUs | fieldMemory | fieldStorage | fieldCount | fieldHours
 
 // allowedFields says which size and usage fields each category takes (ADR
-// 0025, amended by ADR 0046). A category that is not listed takes none, as
+// 0025, amended by ADR 0046 and ADR 0047). A category that is not listed takes none, as
 // network.loadbalancer, messaging.topic, serverless.container and
 // registry.container do.
 var allowedFields = map[taxonomy.Category]int{
@@ -152,6 +152,8 @@ var allowedFields = map[taxonomy.Category]int{
 	taxonomy.DatabasePostgreSQL: sized,
 	taxonomy.DatabaseMySQL:      sized,
 	taxonomy.DatabaseMongoDB:    sized,
+	taxonomy.SearchOpenSearch:   sized,
+	taxonomy.MessagingKafka:     sized,
 	taxonomy.StorageBlock:       fieldStorage | fieldCount,
 	taxonomy.StorageObject:      fieldStorage,
 	taxonomy.StorageFile:        fieldStorage,

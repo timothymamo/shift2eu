@@ -2,7 +2,7 @@
   "schemaVersion": 2,
   "target": "OVHcloud",
   "sourceURL": "https://www.ovhcloud.com/en-ie/public-cloud/prices/",
-  "retrievedOn": "2026-11-14",
+  "retrievedOn": "2026-11-25",
   "regions": ["GRA", "LIM", "MIL", "PAR", "RBX", "SBG", "WAW"],
   "defaultRegion": "GRA",
   "offerings": [
@@ -36,6 +36,57 @@
       "capabilities": ["encryption-at-rest"],
       "regions": ["MIL", "PAR"],
       "plans": [],
+      "storagePrices": []
+    },
+    {
+      "name": "Databases for Valkey",
+      "categories": ["cache.redis"],
+      "capabilities": ["encryption-at-rest", "snapshots"],
+      "regions": ["GRA", "LIM", "RBX", "SBG", "WAW"],
+      "plans": [
+        { "name": "Essential DB1-4", "vcpus": 2, "memoryGiB": 4, "storageGiB": 0, "prices": [{ "amount": 47.304, "currency": "EUR", "regions": ["GRA", "LIM", "SBG", "WAW"] }] },
+        { "name": "Essential DB1-7", "vcpus": 2, "memoryGiB": 7, "storageGiB": 0, "prices": [{ "amount": 95.703, "currency": "EUR", "regions": ["GRA", "LIM", "SBG", "WAW"] }] },
+        { "name": "Discovery B3-4", "vcpus": 1, "memoryGiB": 4, "storageGiB": 0, "prices": [{ "amount": 56.721, "currency": "EUR", "regions": [] }] },
+        { "name": "Discovery B3-8", "vcpus": 2, "memoryGiB": 8, "storageGiB": 0, "prices": [{ "amount": 107.748, "currency": "EUR", "regions": [] }] },
+        { "name": "Discovery B3-16", "vcpus": 4, "memoryGiB": 16, "storageGiB": 0, "prices": [{ "amount": 240.754, "currency": "EUR", "regions": [] }] },
+        { "name": "Discovery B3-32", "vcpus": 8, "memoryGiB": 32, "storageGiB": 0, "prices": [{ "amount": 481.508, "currency": "EUR", "regions": [] }] }
+      ],
+      "storagePrices": []
+    },
+    {
+      "name": "Databases for Valkey Multi-node",
+      "categories": ["cache.redis"],
+      "capabilities": ["encryption-at-rest", "node-high-availability", "snapshots"],
+      "regions": ["GRA", "LIM", "RBX", "SBG", "WAW"],
+      "plans": [
+        { "name": "Business DB1-4", "vcpus": 2, "memoryGiB": 4, "storageGiB": 0, "prices": [{ "amount": 54.458, "currency": "EUR", "regions": ["GRA", "LIM", "SBG", "WAW"] }] },
+        { "name": "Business DB1-7", "vcpus": 2, "memoryGiB": 7, "storageGiB": 0, "prices": [{ "amount": 121.034, "currency": "EUR", "regions": ["GRA", "LIM", "SBG", "WAW"] }] },
+        { "name": "Business DB1-15", "vcpus": 4, "memoryGiB": 15, "storageGiB": 0, "prices": [{ "amount": 180.383, "currency": "EUR", "regions": ["GRA", "LIM", "SBG", "WAW"] }] },
+        { "name": "Business DB1-30", "vcpus": 8, "memoryGiB": 30, "storageGiB": 0, "prices": [{ "amount": 356.386, "currency": "EUR", "regions": ["GRA", "LIM", "SBG", "WAW"] }] },
+        { "name": "Business DB1-60", "vcpus": 16, "memoryGiB": 60, "storageGiB": 0, "prices": [{ "amount": 712.772, "currency": "EUR", "regions": ["GRA", "LIM", "SBG", "WAW"] }] },
+        { "name": "Business DB1-120", "vcpus": 32, "memoryGiB": 120, "storageGiB": 0, "prices": [{ "amount": 1421.164, "currency": "EUR", "regions": ["GRA", "LIM", "SBG", "WAW"] }] },
+        { "name": "Production B3-8", "vcpus": 2, "memoryGiB": 8, "storageGiB": 0, "prices": [{ "amount": 107.748, "currency": "EUR", "regions": [] }] },
+        { "name": "Production B3-16", "vcpus": 4, "memoryGiB": 16, "storageGiB": 0, "prices": [{ "amount": 240.681, "currency": "EUR", "regions": [] }] },
+        { "name": "Production B3-32", "vcpus": 8, "memoryGiB": 32, "storageGiB": 0, "prices": [{ "amount": 481.435, "currency": "EUR", "regions": [] }] },
+        { "name": "Production B3-64", "vcpus": 16, "memoryGiB": 64, "storageGiB": 0, "prices": [{ "amount": 962.87, "currency": "EUR", "regions": [] }] },
+        { "name": "Production B3-128", "vcpus": 32, "memoryGiB": 128, "storageGiB": 0, "prices": [{ "amount": 1925.667, "currency": "EUR", "regions": [] }] },
+        { "name": "Production B3-256", "vcpus": 64, "memoryGiB": 256, "storageGiB": 0, "prices": [{ "amount": 3851.261, "currency": "EUR", "regions": [] }] }
+      ],
+      "storagePrices": []
+    },
+    {
+      "name": "Databases for Valkey Multi-node 3-AZ",
+      "categories": ["cache.redis"],
+      "capabilities": ["encryption-at-rest", "snapshots", "zone-high-availability"],
+      "regions": ["MIL", "PAR"],
+      "plans": [
+        { "name": "Production B3-8", "vcpus": 2, "memoryGiB": 8, "storageGiB": 0, "prices": [{ "amount": 114.099, "currency": "EUR", "regions": [] }] },
+        { "name": "Production B3-16", "vcpus": 4, "memoryGiB": 16, "storageGiB": 0, "prices": [{ "amount": 255.865, "currency": "EUR", "regions": [] }] },
+        { "name": "Production B3-32", "vcpus": 8, "memoryGiB": 32, "storageGiB": 0, "prices": [{ "amount": 511.876, "currency": "EUR", "regions": [] }] },
+        { "name": "Production B3-64", "vcpus": 16, "memoryGiB": 64, "storageGiB": 0, "prices": [{ "amount": 1023.606, "currency": "EUR", "regions": [] }] },
+        { "name": "Production B3-128", "vcpus": 32, "memoryGiB": 128, "storageGiB": 0, "prices": [{ "amount": 2047.285, "currency": "EUR", "regions": [] }] },
+        { "name": "Production B3-256", "vcpus": 64, "memoryGiB": 256, "storageGiB": 0, "prices": [{ "amount": 4094.424, "currency": "EUR", "regions": [] }] }
+      ],
       "storagePrices": []
     },
     {
@@ -74,6 +125,22 @@
         { "name": "r3-1024", "vcpus": 128, "memoryGiB": 1024, "storageGiB": 0, "prices": [{ "amount": 3092.28, "currency": "EUR", "regions": [] }] }
       ],
       "storagePrices": [{ "amount": 0.0431, "currency": "EUR", "regions": [] }]
+    },
+    {
+      "name": "Load Balancer",
+      "categories": ["network.loadbalancer"],
+      "capabilities": ["udp"],
+      "regions": ["GRA", "LIM", "RBX", "SBG", "WAW"],
+      "plans": [],
+      "storagePrices": []
+    },
+    {
+      "name": "Load Balancer 3-AZ",
+      "categories": ["network.loadbalancer"],
+      "capabilities": ["udp", "zone-high-availability"],
+      "regions": ["MIL", "PAR"],
+      "plans": [],
+      "storagePrices": []
     },
     {
       "name": "Managed Kubernetes Service",
@@ -148,6 +215,74 @@
       ],
       "storagePrices": [{ "amount": 0.0431, "currency": "EUR", "regions": [] }],
       "fixedFees": [{ "amount": 65.7, "currency": "EUR", "regions": [] }]
+    },
+    {
+      "name": "Managed MongoDB",
+      "categories": ["database.mongodb"],
+      "capabilities": ["encryption-at-rest", "node-high-availability", "read-replicas"],
+      "regions": ["GRA", "LIM", "RBX", "SBG", "WAW"],
+      "plans": [
+        { "name": "Production DB2-2", "vcpus": 1, "memoryGiB": 2, "storageGiB": 10, "prices": [{ "amount": 17.082, "currency": "EUR", "regions": ["GRA", "LIM", "SBG", "WAW"] }] },
+        { "name": "Production DB2-4", "vcpus": 2, "memoryGiB": 4, "storageGiB": 20, "prices": [{ "amount": 37.084, "currency": "EUR", "regions": ["GRA", "LIM", "SBG", "WAW"] }] },
+        { "name": "Production DB2-7", "vcpus": 2, "memoryGiB": 7, "storageGiB": 40, "prices": [{ "amount": 84.169, "currency": "EUR", "regions": ["GRA", "LIM", "SBG", "WAW"] }] },
+        { "name": "Production DB2-15", "vcpus": 4, "memoryGiB": 15, "storageGiB": 80, "prices": [{ "amount": 169.36, "currency": "EUR", "regions": ["GRA", "LIM", "SBG", "WAW"] }] },
+        { "name": "Production DB2-30", "vcpus": 8, "memoryGiB": 30, "storageGiB": 160, "prices": [{ "amount": 335.727, "currency": "EUR", "regions": ["GRA", "LIM", "SBG", "WAW"] }] },
+        { "name": "Production DB2-60", "vcpus": 16, "memoryGiB": 60, "storageGiB": 320, "prices": [{ "amount": 661.38, "currency": "EUR", "regions": ["GRA", "LIM", "SBG", "WAW"] }] },
+        { "name": "Production B3-8", "vcpus": 2, "memoryGiB": 8, "storageGiB": 40, "prices": [{ "amount": 81.322, "currency": "EUR", "regions": [] }] },
+        { "name": "Production B3-16", "vcpus": 4, "memoryGiB": 16, "storageGiB": 80, "prices": [{ "amount": 161.257, "currency": "EUR", "regions": [] }] },
+        { "name": "Production B3-32", "vcpus": 8, "memoryGiB": 32, "storageGiB": 160, "prices": [{ "amount": 313.973, "currency": "EUR", "regions": [] }] },
+        { "name": "Production B3-64", "vcpus": 16, "memoryGiB": 64, "storageGiB": 320, "prices": [{ "amount": 626.559, "currency": "EUR", "regions": [] }] },
+        { "name": "Production B3-128", "vcpus": 32, "memoryGiB": 128, "storageGiB": 640, "prices": [{ "amount": 1265.674, "currency": "EUR", "regions": [] }] },
+        { "name": "Production B3-256", "vcpus": 64, "memoryGiB": 256, "storageGiB": 1280, "prices": [{ "amount": 2531.275, "currency": "EUR", "regions": [] }] }
+      ],
+      "storagePrices": [{ "amount": 0.657, "currency": "EUR", "regions": [] }]
+    },
+    {
+      "name": "Managed MongoDB 3-AZ",
+      "categories": ["database.mongodb"],
+      "capabilities": ["encryption-at-rest", "read-replicas", "zone-high-availability"],
+      "regions": ["MIL", "PAR"],
+      "plans": [
+        { "name": "Production B3-8", "vcpus": 2, "memoryGiB": 8, "storageGiB": 40, "prices": [{ "amount": 86.14, "currency": "EUR", "regions": [] }] },
+        { "name": "Production B3-16", "vcpus": 4, "memoryGiB": 16, "storageGiB": 80, "prices": [{ "amount": 170.747, "currency": "EUR", "regions": [] }] },
+        { "name": "Production B3-32", "vcpus": 8, "memoryGiB": 32, "storageGiB": 160, "prices": [{ "amount": 332.442, "currency": "EUR", "regions": [] }] },
+        { "name": "Production B3-64", "vcpus": 16, "memoryGiB": 64, "storageGiB": 320, "prices": [{ "amount": 663.351, "currency": "EUR", "regions": [] }] },
+        { "name": "Production B3-128", "vcpus": 32, "memoryGiB": 128, "storageGiB": 640, "prices": [{ "amount": 1340.134, "currency": "EUR", "regions": [] }] },
+        { "name": "Production B3-256", "vcpus": 64, "memoryGiB": 256, "storageGiB": 1280, "prices": [{ "amount": 2680.195, "currency": "EUR", "regions": [] }] }
+      ],
+      "storagePrices": [{ "amount": 0.657, "currency": "EUR", "regions": [] }]
+    },
+    {
+      "name": "Managed MongoDB Advanced",
+      "categories": ["database.mongodb"],
+      "capabilities": ["encryption-at-rest", "node-high-availability", "point-in-time-restore", "read-replicas"],
+      "regions": ["GRA", "LIM", "RBX", "SBG", "WAW"],
+      "plans": [
+        { "name": "Advanced DB2-15", "vcpus": 4, "memoryGiB": 15, "storageGiB": 80, "prices": [{ "amount": 520.125, "currency": "EUR", "regions": ["GRA", "LIM", "SBG", "WAW"] }] },
+        { "name": "Advanced DB2-30", "vcpus": 8, "memoryGiB": 30, "storageGiB": 160, "prices": [{ "amount": 1037.184, "currency": "EUR", "regions": ["GRA", "LIM", "SBG", "WAW"] }] },
+        { "name": "Advanced DB2-60", "vcpus": 16, "memoryGiB": 60, "storageGiB": 320, "prices": [{ "amount": 2069.258, "currency": "EUR", "regions": ["GRA", "LIM", "SBG", "WAW"] }] },
+        { "name": "Advanced DB2-120", "vcpus": 32, "memoryGiB": 120, "storageGiB": 640, "prices": [{ "amount": 4137.567, "currency": "EUR", "regions": ["GRA", "LIM", "SBG", "WAW"] }] },
+        { "name": "Advanced B3-16", "vcpus": 4, "memoryGiB": 16, "storageGiB": 80, "prices": [{ "amount": 161.914, "currency": "EUR", "regions": [] }] },
+        { "name": "Advanced B3-32", "vcpus": 8, "memoryGiB": 32, "storageGiB": 160, "prices": [{ "amount": 315.36, "currency": "EUR", "regions": [] }] },
+        { "name": "Advanced B3-64", "vcpus": 16, "memoryGiB": 64, "storageGiB": 320, "prices": [{ "amount": 629.26, "currency": "EUR", "regions": [] }] },
+        { "name": "Advanced B3-128", "vcpus": 32, "memoryGiB": 128, "storageGiB": 640, "prices": [{ "amount": 1271.222, "currency": "EUR", "regions": [] }] },
+        { "name": "Advanced B3-256", "vcpus": 64, "memoryGiB": 256, "storageGiB": 1280, "prices": [{ "amount": 2542.371, "currency": "EUR", "regions": [] }] }
+      ],
+      "storagePrices": [{ "amount": 0.876, "currency": "EUR", "regions": [] }]
+    },
+    {
+      "name": "Managed MongoDB Advanced 3-AZ",
+      "categories": ["database.mongodb"],
+      "capabilities": ["encryption-at-rest", "point-in-time-restore", "read-replicas", "zone-high-availability"],
+      "regions": ["MIL", "PAR"],
+      "plans": [
+        { "name": "Advanced B3-16", "vcpus": 4, "memoryGiB": 16, "storageGiB": 80, "prices": [{ "amount": 171.988, "currency": "EUR", "regions": [] }] },
+        { "name": "Advanced B3-32", "vcpus": 8, "memoryGiB": 32, "storageGiB": 160, "prices": [{ "amount": 334.997, "currency": "EUR", "regions": [] }] },
+        { "name": "Advanced B3-64", "vcpus": 16, "memoryGiB": 64, "storageGiB": 320, "prices": [{ "amount": 668.461, "currency": "EUR", "regions": [] }] },
+        { "name": "Advanced B3-128", "vcpus": 32, "memoryGiB": 128, "storageGiB": 640, "prices": [{ "amount": 1350.281, "currency": "EUR", "regions": [] }] },
+        { "name": "Advanced B3-256", "vcpus": 64, "memoryGiB": 256, "storageGiB": 1280, "prices": [{ "amount": 2700.489, "currency": "EUR", "regions": [] }] }
+      ],
+      "storagePrices": [{ "amount": 0.876, "currency": "EUR", "regions": [] }]
     },
     {
       "name": "Managed MySQL",
@@ -332,6 +467,14 @@
         { "name": "Advanced B3-256", "vcpus": 64, "memoryGiB": 256, "storageGiB": 5120, "prices": [{ "amount": 5946.069, "currency": "EUR", "regions": [] }] }
       ],
       "storagePrices": [{ "amount": 1.533, "currency": "EUR", "regions": [] }]
+    },
+    {
+      "name": "Managed Private Registry",
+      "categories": ["registry.container"],
+      "capabilities": [],
+      "regions": ["GRA", "LIM", "MIL", "PAR"],
+      "plans": [],
+      "storagePrices": []
     },
     {
       "name": "Metal Instances",

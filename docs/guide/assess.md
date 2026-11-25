@@ -75,7 +75,7 @@ one. Its start looks like this:
 
 - Inventory file: `inventory.json`
 - Source: `aws`
-- Catalog: `OVHcloud` snapshot from `https://www.ovhcloud.com/en-ie/public-cloud/prices/`, retrieved 2026-11-14
+- Catalog: `OVHcloud` snapshot from `https://www.ovhcloud.com/en-ie/public-cloud/prices/`, retrieved 2026-11-25
 - Catalog: `Scaleway` snapshot from `https://www.scaleway.com/en/pricing/`, retrieved 2026-11-13
 - Catalog: `UpCloud` snapshot from `https://upcloud.com/pricing/`, retrieved 2026-11-13
 - Region: `OVHcloud`: `GRA` (the target's default for estimates)
@@ -174,20 +174,27 @@ priced.
   plan covers shows "no plan large enough" with the largest plan's size. The size never changes the
   fit.
 - **Monthly estimate** = plan price × `count` × `hoursPerMonth` / 730, plus storage above what the plan
-  includes × the offering's per-GiB price. Block, object and file storage are priced per GiB alone. A
+  includes × the offering's per-GiB price. That storage is per node, × `count`, for compute
+  (`compute.vm`, `compute.baremetal`), Kubernetes nodes (`kubernetes.managed`), search
+  (`search.opensearch`) and Kafka (`messaging.kafka`); a managed database's (`database.*`) is the
+  service's data, counted once
+  ([ADR 0027](../adr/0027-match-plans-and-estimate-monthly-prices-in-a-domain-package.md),
+  [ADR 0047](../adr/0047-add-search-opensearch-and-messaging-kafka-and-price-their-storage-per-node.md)).
+  A cache (`cache.redis`) has no storage. Block, object and file storage are priced per GiB alone. A
   `count` that is not given is taken as 1, and an `hoursPerMonth` that is not given as 730; the cell
   says "(count assumed 1)" or "(730 hours assumed)". Amounts are rounded to the cent only when shown.
 - **Storage not included.** Some plans include no disk: their storage is sold per GiB apart from the
   plan (OVHcloud Gen 3 Instances and Managed Kubernetes nodes, Scaleway Instances, Kubernetes Kapsule
   nodes and Managed Databases, UpCloud Cloud Native servers and Managed MySQL and PostgreSQL). For a
   resource that gives no `storageGiB` on such a plan, the estimate is the plan alone and the cell says
-  so: "(boot volume not included)" for a server or Kubernetes node, "(data storage not included)" for a
-  managed database. No size is guessed: give `storageGiB` and the storage is priced, and the note goes;
-  `storageGiB: 0` says the resource needs none. A total counts the estimates that carry the note,
-  "€587.58 per month for 8 of 13 resources (storage not included in 4 estimates)". In the JSON report
-  the estimate carries `"storageNotIncluded": "boot-volume"` or `"data-storage"` (accept any other
-  value too), and the total `"storageNotIncluded"` with the count; both are left out when there is
-  nothing to say
+  so: "(boot volume not included)" for a server or Kubernetes node (`compute.vm`, `compute.baremetal`,
+  `kubernetes.managed`), "(data storage not included)" for a managed database (`database.*`), a search
+  cluster (`search.opensearch`) or a Kafka cluster (`messaging.kafka`). No size is guessed: give
+  `storageGiB` and the storage is priced, and the note goes; `storageGiB: 0` says the resource needs
+  none. A total counts the estimates that carry the note, "€587.58 per month for 8 of 13 resources
+  (storage not included in 4 estimates)". In the JSON report the estimate carries
+  `"storageNotIncluded": "boot-volume"` or `"data-storage"` (accept any other value too), and the
+  total `"storageNotIncluded"` with the count; both are left out when there is nothing to say
   ([ADR 0032](../adr/0032-say-when-an-estimate-leaves-out-storage-its-plan-does-not-include.md)).
 - **Hourly prices.** A target that publishes hourly prices has them converted at 730 hours a month in
   its snapshot. UpCloud bills a server at most 672 hours a month, so its plans are priced at no more

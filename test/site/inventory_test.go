@@ -270,8 +270,8 @@ func TestInventoryCommandsPerStep(t *testing.T) {
 		collect int
 		build   int
 	}{
-		{key: "aws", collect: 10, build: 1},
-		{key: "gcp", collect: 6, build: 1},
+		{key: "aws", collect: 15, build: 1},
+		{key: "gcp", collect: 11, build: 1},
 		{key: "azure", collect: 8, build: 1},
 	}
 
@@ -324,9 +324,9 @@ func TestInventoryCommentHeadsOnlyItsCommand(t *testing.T) {
 			others:    []string{"aws ec2 describe-volumes", "aws ec2 describe-snapshots", "aws autoscaling describe-auto-scaling-groups"},
 		},
 		{
-			name:      "the two GCP labels the program reads",
+			name:      "the one GCP label the program reads",
 			key:       "gcp",
-			comment:   "# Keep only the two labels gcp.jq reads, not the values of any other label.",
+			comment:   "# Keep only the one label gcp.jq reads, not the values of any other label.",
 			describes: "gcloud asset search-all-resources",
 			others:    []string{"gcloud compute instances list"},
 		},

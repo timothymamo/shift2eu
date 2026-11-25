@@ -11,8 +11,8 @@
 |---|---|
 | direct | 6 |
 | partial | 3 |
-| none | 3 |
-| total | 12 |
+| none | 4 |
+| total | 13 |
 
 ## Resources
 
@@ -23,6 +23,7 @@
 | `disk-shop-web-1-data` | `Microsoft.Compute/disks` | `storage.block` | direct | `Block Storage` |  | €6.07 (count assumed 1) | attached-to `vm-shop-web-1` | `Block Storage` offers every capability the resource uses |
 | `dns-shop` | `Microsoft.Network/dnsZones` | `unclassified` | none |  |  | not estimated: no fit |  | not classified |
 | `func-shop-thumbnails` | `Microsoft.Web/sites` | `serverless.function` | direct | `Serverless Functions` |  | not estimated: usage-priced | depends-on `stshopassets` | `Serverless Functions` offers every capability the resource uses |
+| `hdi-shop-events` | `Microsoft.HDInsight/clusters` | `messaging.kafka` | none |  |  | not estimated: no fit |  | no offering in the `Scaleway` catalog for `messaging.kafka` |
 | `lb-shop-web` | `Microsoft.Network/loadBalancers` | `network.loadbalancer` | none |  |  | not estimated: no fit |  | no offering in the `Scaleway` catalog for `network.loadbalancer` |
 | `mysql-shop-catalog` | `Microsoft.DBforMySQL/flexibleServers` | `database.mysql` | partial | `Managed Database for PostgreSQL and MySQL High Availability` | `DB-PRO2-XXS` (2 vCPU, 8 GiB) | €67.78 (count assumed 1) (730 hours assumed) |  | `Managed Database for PostgreSQL and MySQL High Availability` does not offer `point-in-time-restore` |
 | `psql-shop` | `Microsoft.DBforPostgreSQL/flexibleServers` | `database.postgresql` | partial | `Managed Database for PostgreSQL and MySQL High Availability` | `DB-PRO2-XXS` (2 vCPU, 8 GiB) | €86.85 (count assumed 1) (730 hours assumed) |  | `Managed Database for PostgreSQL and MySQL High Availability` does not offer `point-in-time-restore` |
@@ -41,6 +42,7 @@
 
 - `cdn-shop`: not classified
 - `dns-shop`: not classified
+- `hdi-shop-events`: no offering in the `Scaleway` catalog for `messaging.kafka`
 - `lb-shop-web`: no offering in the `Scaleway` catalog for `network.loadbalancer`
 
 ## Workloads
@@ -54,18 +56,19 @@
 
 ### `shop`
 
-- Fit: 6 direct, 2 partial, 3 none
-- Monthly estimate: €462.49 per month for 6 of 11 resources (storage not included in 3 estimates), list prices on 2026-11-13, excluding VAT and discounts
-- Source cost: `EUR` €379.97 for 3 of 11 resources
+- Fit: 6 direct, 2 partial, 4 none
+- Monthly estimate: €462.49 per month for 6 of 12 resources (storage not included in 3 estimates), list prices on 2026-11-13, excluding VAT and discounts
+- Source cost: `EUR` €379.97 for 3 of 12 resources
 - Blockers:
   - `cdn-shop`: not classified
   - `dns-shop`: not classified
+  - `hdi-shop-events`: no offering in the `Scaleway` catalog for `messaging.kafka`
   - `lb-shop-web`: no offering in the `Scaleway` catalog for `network.loadbalancer`
 
 ## Cost estimate
 
-- Total: €530.27 per month for 7 of 12 resources (storage not included in 3 estimates)
+- Total: €530.27 per month for 7 of 13 resources (storage not included in 3 estimates)
 - Estimate: list prices on 2026-11-13, excluding VAT and discounts; a fixed fee is the offering's listed fee
 - Prices in `fr-par`
 - Hours: plan price × count × hours / 730, 730 hours for a resource that gives none
-- Source cost: `EUR` €379.97 for 3 of 12 resources
+- Source cost: `EUR` €379.97 for 3 of 13 resources

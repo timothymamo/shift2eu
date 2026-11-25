@@ -1,0 +1,8 @@
+[
+  {
+    "name": "projects/example-project/locations/europe-west1/functions/shop-resize-images",
+    "serviceConfig": {
+      "service": "projects/example-project/locations/europe-west1/services/shop-resize-images"
+    }
+  }
+]

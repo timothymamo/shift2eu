@@ -6,10 +6,19 @@
 // cut unprintable bytes (a redirect's or a binary body's would otherwise reach the terminal and the report) and never
 // use head (with two files head prints "==> file <==" headers into the output), and each outcome item says which read
 // rule a 200 means - public_read false, and the recorded fallback under public_read true.
+//
+// It pins issue #567's follow-up of PR #582's review on R4 as well: the wait loop that refreshes the state until
+// edge_endpoint is set records a refresh-only that failed before it breaks, so the check line after it prints a FAIL
+// naming that case beside the timeout FAIL, and infra/site/outputs.tf's container_endpoint tolerates the container
+// being absent, since R4's refresh-only reads every output while the first apply's precondition can leave the
+// container uncreated. The R4 loop is read as text too and pinned on the property rather than on one shell spelling:
+// the branch after `apply -refresh-only` must assign a variable before it breaks, and the variable name is the
+// maintainer's choice.
 package docs_test
 
 import (
 	"os"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -113,6 +122,409 @@ func carriesAll(item string, substrings []string) bool {
 	}
 
 	return true
+}
+
+// hostingHeading is R4 of siteRunbookPath (issue #567): the apply that creates the hosting and the wait loop after it,
+// whose lines this file pins as text.
+const hostingHeading = "## R4. Create the hosting"
+
+// TestSiteRunbookHostingWaitLoopNamesARefreshOnlyFailure pins the follow-up of PR #582's review on R4 (issue #567): the
+// wait loop refreshes the state until Scaleway has assigned the pipeline's default_fqdn, and a refresh-only that fails
+// there - an absent scaleway_container.site after the expected precondition FAIL is one way - must not look like the
+// timeout. The loop therefore records the failure before it breaks, and the check line after it prints a FAIL that
+// names that case apart from "FAIL edge_endpoint still empty after 10 minutes", before it prints the PASS an empty
+// edge_endpoint can no longer hide. All of it is pinned as properties of the section's text, so the loop's variable
+// name and the FAIL's wording are the maintainer's choice: the check must be a command line (a comment that states the
+// outcome in the runbook's prose prints nothing and proves nothing), and it must test the variable the loop assigns.
+//
+// It pins R4's container_endpoint check as well (the same review, the other half of the follow-up): container_endpoint
+// reads "" while the container is absent, so R4 checks the variable it read and says which pass sets it.
+func TestSiteRunbookHostingWaitLoopNamesARefreshOnlyFailure(t *testing.T) {
+	t.Parallel()
+
+	section := runbookSectionOf(t, hostingHeading)
+
+	loops := runbookLinesContaining(section, "apply -refresh-only")
+	if len(loops) == 0 {
+		t.Fatalf("%s: %s runs no `apply -refresh-only`, so this check pins nothing: the wait loop refreshes the state until edge_endpoint is set, and the refresh is the line whose failure the loop must record (issue #567)",
+			siteRunbookPath, hostingHeading)
+	}
+
+	// recorded is the variable the loop's refresh line sets before it breaks. The loop names it as it likes, and the
+	// check line after the loop has to test that name, so both are read from the loop rather than spelled here.
+	recorded := refreshOnlyRecordedVariables(loops[0])
+
+	t.Run("the loop records a refresh-only failure before it breaks", func(t *testing.T) {
+		t.Parallel()
+
+		for _, line := range loops {
+			if problem := refreshOnlyFailureUnrecorded(line); problem != "" {
+				t.Errorf("%s: %s: the wait loop's `apply -refresh-only` %s, want the loop to record the failure before it breaks, as `|| { refresh_failed=1; break; }` does, so the check line after it can print a FAIL that names that case rather than the timeout's (issue #567)\n  read: %q",
+					siteRunbookPath, hostingHeading, problem, line)
+			}
+		}
+	})
+
+	t.Run("the check line names the refresh-only failure apart from the timeout", func(t *testing.T) {
+		t.Parallel()
+
+		// timeoutFAIL is the FAIL the check line prints when the loop ran out of tries: it must stay, and it must not
+		// be the only FAIL the line can print.
+		const timeoutFAIL = "FAIL edge_endpoint still empty after 10 minutes"
+
+		var timeoutNamed bool
+
+		for _, line := range runbookLinesContaining(section, "FAIL") {
+			if !isRunbookComment(line) && strings.Contains(line, timeoutFAIL) {
+				timeoutNamed = true
+			}
+		}
+
+		if !timeoutNamed {
+			t.Errorf("%s: %s no longer prints the timeout FAIL %q, want it kept: a loop that ran its 20 tries without edge_endpoint set is still a FAIL of its own (issue #567)",
+				siteRunbookPath, hostingHeading, timeoutFAIL)
+		}
+
+		printed := refreshOnlyFAILLines(section, timeoutFAIL)
+		if len(printed) == 0 {
+			t.Fatalf("%s: %s prints no FAIL that names a refresh-only failure apart from %q, want one such FAIL in an `echo \"...\"` on a command line, as `echo \"FAIL refresh-only failed: read the error above\"` is: the loop's refresh can fail for a reason of its own, and the check line must not report it as ten minutes of an empty edge_endpoint. A `# FAIL ...` comment states the outcome; it prints nothing, so it cannot stand in for the command (issue #567)\n  read:\n    %s",
+				siteRunbookPath, hostingHeading, timeoutFAIL, strings.Join(runbookLinesContaining(section, "FAIL"), "\n    "))
+		}
+
+		if len(recorded) == 0 {
+			t.Fatalf("%s: %s: the wait loop's `apply -refresh-only` sets no variable before it breaks, so no check line can test the failure it recorded:\n    %s",
+				siteRunbookPath, hostingHeading, strings.Join(loops, "\n    "))
+		}
+
+		for _, line := range printed {
+			if !testsRecordedVariable(line, recorded) {
+				t.Errorf("%s: %s: the line that prints a FAIL naming the refresh-only failure tests none of the variables the wait loop sets before it breaks (%s), want it to test one, as `elif [ \"$refresh_failed\" -eq 1 ]` does: the FAIL must be printed for the failure the loop recorded, not for every line that carries the word, or an edge_endpoint that stayed empty has no FAIL of its own (issue #567)\n  read: %q",
+					siteRunbookPath, hostingHeading, strings.Join(recorded, ", "), line)
+			}
+		}
+	})
+
+	t.Run("the check line tests the refresh failure before it prints the PASS", func(t *testing.T) {
+		t.Parallel()
+
+		const timeoutFAIL = "FAIL edge_endpoint still empty after 10 minutes"
+
+		if len(recorded) == 0 {
+			t.Fatalf("%s: %s: the wait loop's `apply -refresh-only` sets no variable before it breaks, so this check pins nothing: the check line after it must test the failure the loop recorded before it prints the PASS (issue #567)",
+				siteRunbookPath, hostingHeading)
+		}
+
+		var checked int
+
+		for _, line := range refreshOnlyFAILLines(section, timeoutFAIL) {
+			checked++
+
+			refreshFailedAt := testsRecordedVariableAt(line, recorded)
+
+			passAt, printedPass := firstEchoMatching(line, func(printed string) bool {
+				return strings.Contains(printed, "PASS") && strings.Contains(printed, "edge_endpoint")
+			})
+			if !printedPass {
+				continue // the subtest above pins the check line's PASS; here only the order of the two matters.
+			}
+
+			if refreshFailedAt < 0 || refreshFailedAt > passAt {
+				t.Errorf("%s: %s: the check line prints its PASS about edge_endpoint at offset %d and tests none of the variables the wait loop sets before it breaks (%s) before that, want the refresh-only test first: a refresh-only that failed leaves edge_endpoint empty too, so a check that reads edge_endpoint first prints the PASS for the one case the loop broke on, and the FAIL naming it never shows (issue #567)\n  read: %q",
+					siteRunbookPath, hostingHeading, passAt, strings.Join(recorded, ", "), line)
+			}
+		}
+
+		if checked == 0 {
+			t.Errorf("%s: %s: no command line prints a FAIL naming the refresh-only failure, so this check pins nothing: the check line must test the failure the loop recorded before it prints the PASS that an empty edge_endpoint no longer hides (issue #567)",
+				siteRunbookPath, hostingHeading)
+		}
+	})
+
+	t.Run("R4 checks the container endpoint it read, naming the second pass", func(t *testing.T) {
+		t.Parallel()
+
+		read := slices.IndexFunc(section, func(line string) bool {
+			return !isRunbookComment(line) && strings.Contains(line, "output -raw container_endpoint")
+		})
+		if read < 0 {
+			t.Fatalf("%s: %s reads no `output -raw container_endpoint`, so this check pins nothing: container_endpoint reads \"\" while the container is absent, and R4 must check the value it read (issue #567)",
+				siteRunbookPath, hostingHeading)
+		}
+
+		check := slices.IndexFunc(section, func(line string) bool {
+			if isRunbookComment(line) || !strings.Contains(line, `$CE`) {
+				return false
+			}
+
+			_, printed := firstEchoMatching(line, func(printed string) bool {
+				return strings.Contains(printed, "FAIL") && strings.Contains(strings.ToLower(printed), "container_endpoint")
+			})
+
+			return printed && strings.Contains(strings.ToLower(line), "second pass")
+		})
+
+		if check < 0 {
+			t.Errorf("%s: %s holds no command line that checks container_endpoint and prints a FAIL naming the second pass, want one after the lines that read it, as `[ -n \"$CE\" ] && echo \"PASS container_endpoint is set\" || echo \"FAIL container_endpoint is empty: the container does not exist yet; run R4's second pass\"` is: container_endpoint is try(..., \"\") now, so an absent container leaves an empty value and no error, and a reader who takes the empty string for a printed endpoint stops R4 silently (issue #567)\n  read:\n    %s",
+				siteRunbookPath, hostingHeading, strings.Join(section, "\n    "))
+			return
+		}
+
+		if check < read {
+			t.Errorf("%s: %s checks container_endpoint on line %d of the section, before the line %d that reads it, want the check after the value it checks (issue #567)",
+				siteRunbookPath, hostingHeading, check+1, read+1)
+		}
+	})
+}
+
+// refreshOnlyRecordedVariables returns the names of the shell variables the line's `||` branch assigns before it breaks:
+// the wait loop's way of remembering that the refresh failed. The loop names them as it likes, so the checks that read
+// the name take it from here rather than spelling it.
+func refreshOnlyRecordedVariables(line string) []string {
+	_, rest, ok := strings.Cut(line, "apply -refresh-only")
+	if !ok {
+		return nil
+	}
+
+	_, branch, ok := strings.Cut(rest, "||")
+	if !ok {
+		return nil
+	}
+
+	before, _, broke := strings.Cut(branch, "break")
+	if !broke {
+		return nil
+	}
+
+	var names []string
+
+	for _, match := range shellVariableAssignment.FindAllStringSubmatch(before, -1) {
+		names = append(names, match[1])
+	}
+
+	return names
+}
+
+// refreshOnlyFAILLines returns the section's command lines that print a FAIL naming the refresh-only failure: each line
+// is no comment once trimmed, and one of its echoed strings carries "refresh-only" beside a FAIL of its own - one that
+// is not the timeout FAIL, which a line may print as well. A `# FAIL ...` comment states the outcome for a maintainer in
+// the runbook's prose; it prints nothing, so it is no evidence that the check line reports the case.
+func refreshOnlyFAILLines(section []string, timeoutFAIL string) []string {
+	var found []string
+
+	for _, line := range section {
+		trimmed := strings.TrimSpace(line)
+		if isRunbookComment(trimmed) {
+			continue
+		}
+
+		if _, printed := firstEchoMatching(trimmed, func(printed string) bool {
+			return strings.Contains(strings.ToLower(printed), "refresh-only") &&
+				strings.Contains(strings.ReplaceAll(printed, timeoutFAIL, ""), "FAIL")
+		}); printed {
+			found = append(found, trimmed)
+		}
+	}
+
+	return found
+}
+
+// isRunbookComment reports whether the trimmed line is a comment of the runbook's shell blocks.
+func isRunbookComment(trimmed string) bool {
+	return strings.HasPrefix(trimmed, "#")
+}
+
+// firstEchoMatching returns the offset of the first `echo "..."` of the line whose quoted text matches, and whether the
+// line holds one. The offset is where the printed text starts, so two calls on one line compare which of the two the
+// shell reaches first.
+func firstEchoMatching(line string, matches func(printed string) bool) (int, bool) {
+	for offset := 0; ; {
+		i := strings.Index(line[offset:], `echo "`)
+		if i < 0 {
+			return 0, false
+		}
+
+		start := offset + i + len(`echo "`)
+
+		end := strings.Index(line[start:], `"`)
+		if end < 0 {
+			return 0, false
+		}
+
+		if matches(line[start : start+end]) {
+			return start, true
+		}
+
+		offset = start + end + 1
+	}
+}
+
+// testsRecordedVariable reports whether the line tests one of the names, as `[ "$refresh_failed" -eq 1 ]` does.
+func testsRecordedVariable(line string, names []string) bool {
+	return testsRecordedVariableAt(line, names) >= 0
+}
+
+// testsRecordedVariableAt returns the offset of the first test of one of the names on the line, and -1 when it tests
+// none. A name must end there: `$refresh_failed` is no test of a loop variable named `refresh`.
+func testsRecordedVariableAt(line string, names []string) int {
+	at := -1
+
+	for _, name := range names {
+		for offset := 0; ; {
+			i := strings.Index(line[offset:], "$"+name)
+			if i < 0 {
+				break
+			}
+
+			end := offset + i + 1 + len(name)
+
+			if end == len(line) || !isShellNameByte(line[end]) {
+				if at < 0 || offset+i < at {
+					at = offset + i
+				}
+
+				break
+			}
+
+			offset = end
+		}
+	}
+
+	return at
+}
+
+// isShellNameByte reports whether b continues a shell variable's name.
+func isShellNameByte(b byte) bool {
+	return b == '_' || (b >= '0' && b <= '9') || (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z')
+}
+
+// refreshOnlyFailureUnrecorded says why the runbook line that runs `apply -refresh-only` hands the command's failure to
+// no branch that records it, and "" when it does. The branch after the command's `||` must assign a variable before it
+// breaks, so the loop remembers that it broke on an error and the check line after it can print a FAIL naming that
+// case; a bare `break` leaves the check line to print the timeout FAIL, which is misleading.
+func refreshOnlyFailureUnrecorded(line string) string {
+	_, rest, ok := strings.Cut(line, "apply -refresh-only")
+	if !ok {
+		return "runs on no such line"
+	}
+
+	_, branch, ok := strings.Cut(rest, "||")
+	if !ok {
+		return "hands its failure to no `||` branch"
+	}
+
+	before, _, broke := strings.Cut(branch, "break")
+	if !broke {
+		return "hands its failure to a branch that does not break"
+	}
+
+	if !shellVariableAssignment.MatchString(before) {
+		return "breaks without recording the failure first"
+	}
+
+	return ""
+}
+
+// shellVariableAssignment matches an assignment of a shell variable, the way R4's loop records the failure it broke on:
+// the loop names the variable as it likes. The name is captured so the checks that read it need no spelling.
+var shellVariableAssignment = regexp.MustCompile(`([A-Za-z_][A-Za-z0-9_]*)=`)
+
+// TestRefreshOnlyFAILLines pins the helper the check line's pins rest on, so a comment cannot count as the command that
+// prints the FAIL: a `# FAIL ...` line of the runbook's prose prints nothing, a line whose echoed FAIL is the timeout's
+// alone names no refresh-only failure, and a command line that echoes the case's own FAIL is the one the tests read
+// (issue #567).
+func TestRefreshOnlyFAILLines(t *testing.T) {
+	t.Parallel()
+
+	const timeoutFAIL = "FAIL edge_endpoint still empty after 10 minutes"
+
+	tests := []struct {
+		name    string
+		section []string
+		want    []string
+	}{
+		{
+			name:    "a comment that states the outcome is no printing line",
+			section: []string{"# FAIL refresh-only failed: a state lock: as the apply line's FAIL says"},
+		},
+		{
+			name:    "a line that prints the timeout FAIL alone names no refresh-only failure",
+			section: []string{`[ -n "$E" ] && echo "PASS edge_endpoint is set" || echo "` + timeoutFAIL + `"`},
+		},
+		{
+			name:    "a command line that echoes the case's own FAIL",
+			section: []string{`if [ "$refresh_failed" -eq 1 ]; then echo "FAIL refresh-only failed: read the error above"; fi`},
+			want:    []string{`if [ "$refresh_failed" -eq 1 ]; then echo "FAIL refresh-only failed: read the error above"; fi`},
+		},
+		{
+			name:    "a line that prints both FAILs",
+			section: []string{`if [ "$refresh_failed" -eq 1 ]; then echo "FAIL refresh-only failed: read the error above"; else echo "` + timeoutFAIL + `"; fi`},
+			want:    []string{`if [ "$refresh_failed" -eq 1 ]; then echo "FAIL refresh-only failed: read the error above"; else echo "` + timeoutFAIL + `"; fi`},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := refreshOnlyFAILLines(tc.section, timeoutFAIL); !slices.Equal(got, tc.want) {
+				t.Errorf("refreshOnlyFAILLines(%q, %q) = %q, want %q", tc.section, timeoutFAIL, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestContainerEndpointOutputToleratesAnAbsentContainer pins the other half of the same follow-up (issue #567): R4's
+// refresh-only reads every output of infra/site, and the first apply can leave scaleway_container.site uncreated (its
+// precondition fails while the pipeline's default_fqdn is still empty), so the container_endpoint output must read the
+// container's endpoint when it exists and the empty string when it does not, rather than failing the whole refresh.
+func TestContainerEndpointOutputToleratesAnAbsentContainer(t *testing.T) {
+	t.Parallel()
+
+	const (
+		outputsPath = "infra/site/outputs.tf"
+		want        = `value = try(scaleway_container.site.public_endpoint, "")`
+	)
+
+	var values []string
+
+	for _, line := range strings.Split(outputBlock(t, readDoc(t, os.DirFS(repoRoot), outputsPath), "container_endpoint"), "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "value") {
+			values = append(values, strings.Join(strings.Fields(line), " "))
+		}
+	}
+
+	if len(values) != 1 {
+		t.Fatalf("%s: the container_endpoint output states %d value lines, want exactly one", outputsPath, len(values))
+	}
+
+	if values[0] != want {
+		t.Errorf("%s: the container_endpoint output's value is %q, want %q: R4's refresh-only reads every output, so a container the first apply could not create yet would fail the refresh there instead of leaving R4 to wait for edge_endpoint (issue #567)",
+			outputsPath, values[0], want)
+	}
+}
+
+// outputBlock returns the text of the `output "<name>" {` block of an OpenTofu file, from its opening line to the line
+// that closes it.
+func outputBlock(t *testing.T, src, name string) string {
+	t.Helper()
+
+	lines := strings.Split(src, "\n")
+
+	start := slices.IndexFunc(lines, func(line string) bool {
+		return strings.TrimSpace(line) == `output "`+name+`" {`
+	})
+	if start < 0 {
+		t.Fatalf("the OpenTofu file holds no output %q", name)
+	}
+
+	end := slices.IndexFunc(lines[start+1:], func(line string) bool {
+		return strings.TrimSpace(line) == "}"
+	})
+	if end < 0 {
+		t.Fatalf("the output %q never closes", name)
+	}
+
+	return strings.Join(lines[start:start+end+2], "\n")
 }
 
 // runbookSectionOf returns the lines under the heading of the runbook, from the line after the heading to the line of

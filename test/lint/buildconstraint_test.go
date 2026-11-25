@@ -16,8 +16,11 @@ import (
 
 // negatableTags are the build tags every lint run sets, run.build-tags in
 // .golangci.yml, which a build constraint must never negate.
-// TestNegatableTagsMatchGolangci keeps the two equal.
-var negatableTags = map[string]bool{"browser": true, "e2e": true, "integration": true}
+// TestNegatableTagsMatchGolangci keeps the two equal. sitefront is the front's
+// behaviour test (PRD #297 milestone 4, docs/adr/0045): only `make
+// test-sitefront` runs it, and every lint run loads its files all the same, so
+// the code that starts the container is never code no lint rule reads.
+var negatableTags = map[string]bool{"browser": true, "e2e": true, "integration": true, "sitefront": true}
 
 // constraintHides says why comment, the text of a comment above a file's
 // package clause, could keep the file out of lint while a build compiles it.

@@ -1,0 +1,40 @@
+{
+  "Listeners": [
+    {
+      "ListenerArn": "arn:aws:elasticloadbalancing:eu-central-1:123456789012:listener/app/shop-alb/0123456789abcdef/0123456789abcdef",
+      "LoadBalancerArn": "arn:aws:elasticloadbalancing:eu-central-1:123456789012:loadbalancer/app/shop-alb/0123456789abcdef",
+      "Protocol": "HTTP",
+      "Port": 80
+    },
+    {
+      "ListenerArn": "arn:aws:elasticloadbalancing:eu-central-1:123456789012:listener/net/shop-nlb/0123456789abcdef/0123456789abcdef",
+      "LoadBalancerArn": "arn:aws:elasticloadbalancing:eu-central-1:123456789012:loadbalancer/net/shop-nlb/0123456789abcdef",
+      "Protocol": "UDP",
+      "Port": 53
+    },
+    {
+      "ListenerArn": "arn:aws:elasticloadbalancing:eu-central-1:123456789012:listener/net/shop-nlb/0123456789abcdef/abcdef0123456789",
+      "LoadBalancerArn": "arn:aws:elasticloadbalancing:eu-central-1:123456789012:loadbalancer/net/shop-nlb/0123456789abcdef",
+      "Protocol": "TCP",
+      "Port": 443
+    },
+    {
+      "ListenerArn": "arn:aws:elasticloadbalancing:eu-central-1:123456789012:listener/net/shop-quic-nlb/0123456789abcdef/0123456789abcdef",
+      "LoadBalancerArn": "arn:aws:elasticloadbalancing:eu-central-1:123456789012:loadbalancer/net/shop-quic-nlb/0123456789abcdef",
+      "Protocol": "TCP_QUIC",
+      "Port": 443
+    },
+    {
+      "ListenerArn": "arn:aws:elasticloadbalancing:eu-central-1:123456789012:listener/net/shop-tcp-nlb/0123456789abcdef/0123456789abcdef",
+      "LoadBalancerArn": "arn:aws:elasticloadbalancing:eu-central-1:123456789012:loadbalancer/net/shop-tcp-nlb/0123456789abcdef",
+      "Protocol": "TCP",
+      "Port": 443
+    },
+    {
+      "ListenerArn": "arn:aws:elasticloadbalancing:eu-central-1:123456789012:listener/app/k8s-shop-ingress/0123456789abcdef/0123456789abcdef",
+      "LoadBalancerArn": "arn:aws:elasticloadbalancing:eu-central-1:123456789012:loadbalancer/app/k8s-shop-ingress/0123456789abcdef",
+      "Protocol": "HTTPS",
+      "Port": 443
+    }
+  ]
+}

@@ -1,0 +1,23 @@
+[
+  {
+    "name": "projects/example-project/locations/europe-west1/instances/shared",
+    "tier": "REGIONAL",
+    "fileShares": [
+      {
+        "name": "vol1",
+        "capacityGb": "1024"
+      }
+    ],
+    "protocol": "NFS_V4_1"
+  },
+  {
+    "name": "projects/example-project/locations/europe-west1-b/instances/scratch",
+    "tier": "BASIC_HDD",
+    "fileShares": [
+      {
+        "name": "vol1",
+        "capacityGb": "1024"
+      }
+    ]
+  }
+]

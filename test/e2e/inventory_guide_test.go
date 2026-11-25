@@ -94,9 +94,16 @@ type resourceFact struct {
 	id       string
 	rawType  string
 	category string
-	// capabilities are the capabilities the resource has to have, checked as a
-	// set: no order, and an empty (non-nil) slice for a resource with none. A
-	// nil slice does not check them.
+	// region is the region the inventory has to give the resource; "" does not
+	// check it. A recorded call names a resource's region in more than one way
+	// (an ARN, an availability zone, or the instances a cluster is made of), so
+	// the sources whose calls disagree pin it here rather than in the golden
+	// file, which a careless -update could accept away.
+	region string
+	// capabilities is the exact capability set the inventory has to give the
+	// resource, sorted or not. A nil slice does not check it; an empty, non-nil
+	// slice says the resource has none, so a capability the program over-claims
+	// fails as well as one it loses.
 	capabilities []string
 }
 
@@ -115,11 +122,14 @@ type sizeFact struct {
 	storageGiB float64
 	// count is the number of instances, nodes or volumes.
 	count int
-	// noVCPUs and noMemoryGiB say the resource gives no vcpus and no memoryGiB:
-	// a Cloud SQL tier other than db-custom-<vcpu>-<memory MiB> names no size
-	// the other calls report, so a number taken from it would be a guess.
-	noVCPUs     bool
-	noMemoryGiB bool
+	// noVCPUs, noMemoryGiB and noStorageGiB say the resource gives no vcpus, no
+	// memoryGiB and no storageGiB: a Cloud SQL tier other than
+	// db-custom-<vcpu>-<memory MiB> names no size the other calls report, so a
+	// number taken from it would be a guess, and a DocumentDB cluster's
+	// AllocatedStorage describes the volume of nothing.
+	noVCPUs      bool
+	noMemoryGiB  bool
+	noStorageGiB bool
 	// noCount says the resource gives no count: a database instance of high
 	// availability gets none, because what its standby adds to the count
 	// depends on how the target prices high availability, and the guide fills
@@ -151,6 +161,187 @@ func inventoryGuides() []inventoryGuideCase {
 				// A volume that outlives its node is a persistent volume and
 				// stays: only the node's own root volume is left out.
 				{id: "vol-0123456789abcdef6", rawType: "AWS::EC2::Volume", category: "storage.block"},
+				// No target runs MariaDB: an instance of it carries no
+				// capability, whatever its settings say.
+				{
+					id: "shop-reports-mariadb", rawType: "AWS::RDS::DBInstance", category: "unclassified",
+					capabilities: []string{},
+				},
+				// A replication group is one cache, its member clusters are
+				// not: the group stands for them. Failover with a replica in
+				// every shard is node high availability and Multi-AZ is zone
+				// high availability, while failover alone is not (a cluster-mode
+				// group must enable it with no replica at all); cluster mode is
+				// sharding; the effective encryption state is
+				// StorageEncryptionType, not the at-rest flag; the count is the
+				// group's member clusters, its nodes. Both shards list a primary
+				// and a replica in their NodeGroupMembers, so the loss of either
+				// shard's primary is survived.
+				{
+					id: "shop-orders-redis", rawType: "AWS::ElastiCache::ReplicationGroup", category: "cache.redis",
+					region:       "eu-central-1",
+					capabilities: []string{"encryption-at-rest", "node-high-availability", "sharding", "snapshots", "zone-high-availability"},
+				},
+				// One shard of this cluster-mode group lists a primary only: losing
+				// that shard's node breaks the cache, so failover on and more
+				// member clusters than shards is not node high availability. Only
+				// cluster mode is left: MultiAZ is off, there is no snapshot and
+				// StorageEncryptionType is none.
+				{
+					id: "shop-search-redis", rawType: "AWS::ElastiCache::ReplicationGroup", category: "cache.redis",
+					region:       "eu-central-1",
+					capabilities: []string{"sharding"},
+				},
+				// A non-cluster-mode group with a replica in its one shard has node
+				// high availability, but no sharding, no snapshot and no zone high
+				// availability: MultiAZ is off. StorageEncryptionType is null here,
+				// so the at-rest flag is what says the cache encrypts.
+				{
+					id: "shop-cart-redis", rawType: "AWS::ElastiCache::ReplicationGroup", category: "cache.redis",
+					capabilities: []string{"encryption-at-rest", "node-high-availability"},
+				},
+				// Failover on with no replica to promote keeps serving through
+				// no node loss, so only cluster mode is left.
+				{
+					id: "shop-sessions-valkey", rawType: "AWS::ElastiCache::ReplicationGroup", category: "cache.redis",
+					capabilities: []string{"sharding"},
+				},
+				// A cache cluster outside a group is a resource of its own, one
+				// node, with neither failover nor sharding nor a snapshot. It
+				// encrypts at rest: a standalone cluster has no
+				// StorageEncryptionType, so its AtRestEncryptionEnabled is the
+				// effective state.
+				{
+					id: "shop-analytics-redis", rawType: "AWS::ElastiCache::CacheCluster", category: "cache.redis",
+					capabilities: []string{"encryption-at-rest"},
+				},
+				// The same standalone cluster unencrypted, and with no snapshot: the
+				// other branch of the at-rest rule, where the flag is false and the
+				// cluster carries no capability at all.
+				{
+					id: "shop-preview-redis", rawType: "AWS::ElastiCache::CacheCluster", category: "cache.redis",
+					capabilities: []string{},
+				},
+				// Memcached is not the Redis protocol, so no target runs it. Its
+				// NumCacheNodes is the nodes of a cache no category takes, not a
+				// size: the program writes none.
+				{
+					id: "shop-reports-memcached", rawType: "AWS::ElastiCache::CacheCluster", category: "unclassified",
+					capabilities: []string{},
+				},
+				// ElastiCache Serverless always replicates over three zones,
+				// always encrypts and runs cluster mode only, so those four hold
+				// always; snapshots follow the retention.
+				{
+					id: "shop-edge-valkey", rawType: "AWS::ElastiCache::ServerlessCache", category: "cache.redis",
+					region:       "eu-central-1",
+					capabilities: []string{"encryption-at-rest", "node-high-availability", "sharding", "snapshots", "zone-high-availability"},
+				},
+				{
+					id: "shop-edge-memcached", rawType: "AWS::ElastiCache::ServerlessCache", category: "unclassified",
+					capabilities: []string{},
+				},
+				// A DocumentDB cluster is one document database, not one
+				// resource per instance: every target sells MongoDB as a replica
+				// set, so per instance the cluster would be counted three times.
+				{
+					id: "shop-docs", rawType: "AWS::DocDB::DBCluster", category: "database.mongodb",
+					region:       "eu-central-1",
+					capabilities: []string{"encryption-at-rest", "node-high-availability", "point-in-time-restore", "read-replicas", "zone-high-availability"},
+				},
+				// The cluster settings are per instance in the only call the guide
+				// makes, so a capability holds only when every instance reports it:
+				// one instance without backups or encryption loses both for the
+				// cluster, and two instances in one zone are no zone high
+				// availability. Two instances still replicate and survive a node.
+				{
+					id: "shop-docs-dev", rawType: "AWS::DocDB::DBCluster", category: "database.mongodb",
+					capabilities: []string{"node-high-availability", "read-replicas"},
+				},
+				// An ALB whose target group is IPv6 reaches clients and backends
+				// over IPv6; two zones are zone high availability.
+				{
+					id: "shop-alb", rawType: "AWS::ElasticLoadBalancingV2::LoadBalancer", category: "network.loadbalancer",
+					region:       "eu-central-1",
+					capabilities: []string{"ipv6", "zone-high-availability"},
+				},
+				// A Gateway Load Balancer inspects traffic for appliances through
+				// a gateway endpoint: no target sells one, so it carries no
+				// capability, whatever its zones and listeners say.
+				{
+					id: "shop-inspection-gwlb", rawType: "AWS::ElasticLoadBalancingV2::LoadBalancer", category: "unclassified",
+					capabilities: []string{},
+				},
+				// A dualstack NLB whose only target group is IPv4 is not reached
+				// over IPv6 at both ends; its UDP listener is the udp capability.
+				{
+					id: "shop-nlb", rawType: "AWS::ElasticLoadBalancingV2::LoadBalancer", category: "network.loadbalancer",
+					capabilities: []string{"udp", "zone-high-availability"},
+				},
+				// QUIC runs over UDP, so a TCP_QUIC listener carries UDP too: the
+				// NLB is only one zone and IPv4, so udp is all it has.
+				{
+					id: "shop-quic-nlb", rawType: "AWS::ElasticLoadBalancingV2::LoadBalancer", category: "network.loadbalancer",
+					capabilities: []string{"udp"},
+				},
+				// The same NLB with a TCP listener instead: TCP is not UDP, so a
+				// TCP-only listener gives no udp, whatever else the load balancer is.
+				{
+					id: "shop-tcp-nlb", rawType: "AWS::ElasticLoadBalancingV2::LoadBalancer", category: "network.loadbalancer",
+					capabilities: []string{},
+				},
+				// A Classic Load Balancer is a load balancer as well, with no
+				// IPv6 address type and no UDP listener to read. It has no ARN, so
+				// its region comes from its zones.
+				{
+					id: "shop-classic", rawType: "AWS::ElasticLoadBalancing::LoadBalancer", category: "network.loadbalancer",
+					region:       "eu-central-1",
+					capabilities: []string{"zone-high-availability"},
+				},
+				// An SNS topic is a topic, never a queue: its dead-letter queue
+				// is per subscription, which no topic attribute says.
+				{
+					id: "shop-alerts", rawType: "AWS::SNS::Topic", category: "messaging.topic",
+					region:       "eu-central-1",
+					capabilities: []string{"encryption-at-rest"},
+				},
+				{
+					id: "shop-events", rawType: "AWS::SNS::Topic", category: "messaging.topic",
+					capabilities: []string{},
+				},
+				// A Regional EFS file system stores data across zones; a One
+				// Zone one stays in a single zone.
+				{
+					id: "fs-shop-regional", rawType: "AWS::EFS::FileSystem", category: "storage.file",
+					region:       "eu-central-1",
+					capabilities: []string{"encryption-at-rest", "zone-high-availability"},
+				},
+				{
+					id: "fs-shop-onezone", rawType: "AWS::EFS::FileSystem", category: "storage.file",
+					capabilities: []string{},
+				},
+				// App Runner and ECR are in AWS Config alone: App Runner's
+				// category carries no capability, and ECR always encrypts.
+				{
+					id: "shop-api", rawType: "AWS::AppRunner::Service", category: "serverless.container",
+					capabilities: []string{},
+				},
+				{
+					id: "shop-images", rawType: "AWS::ECR::Repository", category: "registry.container",
+					capabilities: []string{"encryption-at-rest"},
+				},
+				// A public gallery is not a private registry a workload pulls
+				// from, and no category covers it: it keeps its type and no
+				// capability, unlike the private repository beside it.
+				{
+					id: "shop-public-gallery", rawType: "AWS::ECR::PublicRepository", category: "unclassified",
+					capabilities: []string{},
+				},
+				// No target runs a key-value table.
+				{
+					id: "shop-carts", rawType: "AWS::DynamoDB::Table", category: "unclassified",
+					capabilities: []string{},
+				},
 			},
 			// The storage of an Aurora instance belongs to its cluster, so
 			// rds describe-db-instances gives every Aurora instance
@@ -163,6 +354,13 @@ func inventoryGuides() []inventoryGuideCase {
 				"shop-aurora-2",
 				"shop-db-cluster-writer",
 				"shop-reports-mariadb",
+				// ElastiCache Serverless names no node type and no memory: its
+				// DataStorage limit is not a size.
+				"shop-edge-valkey",
+				"shop-edge-memcached",
+				// The NumCacheNodes of a Memcached cluster is the nodes of a cache
+				// the program cannot classify, not a size.
+				"shop-reports-memcached",
 			},
 			sized: []sizeFact{
 				// An m5.large is 2 vCPU and 8 GiB, from ec2 describe-instance-types.
@@ -180,6 +378,26 @@ func inventoryGuides() []inventoryGuideCase {
 				{id: "shop-legacy-mysql", storageGiB: 20, count: 1},
 				// The nodes a managed node group wants, from eks describe-nodegroup.
 				{id: "shop-eks (AWS::EKS::Cluster, eu-central-1)", count: 3},
+				// The nodes of a cache: a replication group's member clusters,
+				// both shards of shop-orders-redis included (1 primary and 1
+				// replica each), and a standalone cluster's NumCacheNodes. No
+				// recorded call gives a node's memory, so the guide has the user
+				// add memoryGiB by hand.
+				{id: "shop-orders-redis", count: 4, noMemoryGiB: true},
+				{id: "shop-search-redis", count: 3, noMemoryGiB: true},
+				{id: "shop-sessions-valkey", count: 1, noMemoryGiB: true},
+				{id: "shop-cart-redis", count: 2, noMemoryGiB: true},
+				{id: "shop-analytics-redis", count: 1, noMemoryGiB: true},
+				{id: "shop-preview-redis", count: 1, noMemoryGiB: true},
+				// A DocumentDB cluster's instances are its nodes. Its
+				// AllocatedStorage describes nothing: the storage is the
+				// cluster's volume, so the cluster gets no storageGiB.
+				{id: "shop-docs", count: 3, noStorageGiB: true},
+				{id: "shop-docs-dev", count: 2, noStorageGiB: true},
+				// The metered size of an EFS file system, in GiB: 5 GiB for the
+				// Regional one and 1 GiB for the One Zone one.
+				{id: "fs-shop-regional", storageGiB: 5},
+				{id: "fs-shop-onezone", storageGiB: 1},
 			},
 			// The EKS nodes, the Auto Scaling groups that run them and their
 			// root volumes, and the root volume of an Auto Scaling group's
@@ -192,8 +410,45 @@ func inventoryGuides() []inventoryGuideCase {
 				"vol-0123456789abcdef5",
 				"eks-shop-eks-default-00000000-0000-0000-0000-000000000000",
 				"shop-eks-self-managed",
+				// A replication group's member clusters: the group stands for
+				// them, as it does for the nodes they run.
+				"shop-orders-redis-001",
+				"shop-orders-redis-002",
+				"shop-orders-redis-003",
+				"shop-orders-redis-004",
+				"shop-search-redis-001",
+				"shop-search-redis-002",
+				"shop-search-redis-003",
+				"shop-sessions-valkey-001",
+				"shop-cart-redis-001",
+				"shop-cart-redis-002",
+				// A DocumentDB cluster's member instances: the cluster stands
+				// for them.
+				"shop-docs-1",
+				"shop-docs-2",
+				"shop-docs-3",
+				"shop-docs-dev-1",
+				"shop-docs-dev-2",
+				// A load balancer a Kubernetes cluster created: it goes with
+				// the cluster, as its nodes do.
+				"k8s-shop-ingress",
 			},
-			absentRawTypes: []string{"AWS::RDS::DBCluster"},
+			absentRawTypes: []string{
+				"AWS::RDS::DBCluster",
+				// The parts of a load balancer AWS Config records: the load
+				// balancer stands for them, so they are not resources of their
+				// own.
+				"AWS::ElasticLoadBalancingV2::Listener",
+				"AWS::ElasticLoadBalancingV2::ListenerRule",
+				"AWS::ElasticLoadBalancingV2::TargetGroup",
+				// So are a file system's access points and a registry's settings:
+				// parts and settings of the resource that stands for them.
+				"AWS::EFS::AccessPoint",
+				"AWS::ECR::RegistryPolicy",
+				"AWS::ECR::ReplicationConfiguration",
+				"AWS::ECR::PullThroughCacheRule",
+				"AWS::ECR::RepositoryCreationTemplate",
+			},
 		},
 		{
 			source:    "gcp",
@@ -207,6 +462,185 @@ func inventoryGuides() []inventoryGuideCase {
 				// So does a disk a standalone instance keeps after it goes: only a
 				// managed instance group's members and their disks are left out.
 				{id: "shop-web-1-data", rawType: "compute.googleapis.com/Disk", category: "storage.block"},
+				// A Pub/Sub topic is where publishers write, which a queue is not,
+				// and Google Cloud encrypts it at rest. A dead-letter policy is set
+				// on a subscription, not on a topic, so no topic carries
+				// dead-letter-queue: the subscription below carries it.
+				{
+					id: "shop-orders", rawType: "pubsub.googleapis.com/Topic", category: "messaging.topic",
+					capabilities: []string{"encryption-at-rest"},
+				},
+				{
+					id: "shop-orders-dlq", rawType: "pubsub.googleapis.com/Topic", category: "messaging.topic",
+					capabilities: []string{"encryption-at-rest"},
+				},
+				{
+					id: "shop-orders-worker", rawType: "pubsub.googleapis.com/Subscription", category: "messaging.queue",
+					capabilities: []string{"dead-letter-queue"},
+				},
+				// A Cloud Run service no Cloud Function runs is a container the
+				// provider runs and scales, and the category carries no capability.
+				{
+					id: "shop-storefront", rawType: "run.googleapis.com/Service", category: "serverless.container",
+					capabilities: []string{},
+				},
+				// The function stands for the Cloud Run service it deployed to, so
+				// the service is not in the inventory and the function keeps its
+				// own rawType.
+				{id: "shop-resize-images", rawType: "cloudfunctions.googleapis.com/Function", category: "serverless.function"},
+				// A Memorystore instance: an at-rest-encrypted cache, with snapshots
+				// when it writes RDB files, and high availability per node (a
+				// replica, STANDARD_HA) and per zone (its nodes in two zones).
+				{
+					id: "cache-ha", rawType: "redis.googleapis.com/Instance", category: "cache.redis",
+					capabilities: []string{"encryption-at-rest", "node-high-availability", "snapshots", "zone-high-availability"},
+				},
+				{
+					id: "cache-basic", rawType: "redis.googleapis.com/Instance", category: "cache.redis",
+					capabilities: []string{"encryption-at-rest"},
+				},
+				// An instance that lists no nodes of its own is zone redundant when
+				// its alternative location is another zone: the replica it takes over
+				// with lives there.
+				{
+					id: "cache-alt", rawType: "redis.googleapis.com/Instance", category: "cache.redis",
+					capabilities: []string{"encryption-at-rest", "node-high-availability", "zone-high-availability"},
+				},
+				// A cluster is sharded by definition, and a shard's replica is what
+				// makes it highly available per node and per zone.
+				{
+					id: "sessions", rawType: "redis.googleapis.com/Cluster", category: "cache.redis",
+					capabilities: []string{"encryption-at-rest", "node-high-availability", "sharding", "zone-high-availability"},
+				},
+				// A Valkey instance is the same kind of cache: sharded unless its mode
+				// is CLUSTER_DISABLED (or STANDALONE).
+				{
+					id: "valkey-1", rawType: "memorystore.googleapis.com/Instance", category: "cache.redis",
+					capabilities: []string{"encryption-at-rest", "snapshots"},
+				},
+				{
+					id: "valkey-sessions", rawType: "memorystore.googleapis.com/Instance", category: "cache.redis",
+					capabilities: []string{"encryption-at-rest", "node-high-availability", "sharding", "snapshots", "zone-high-availability"},
+				},
+				// A Valkey instance created without a mode runs with Cluster Mode
+				// Enabled: only CLUSTER_DISABLED turns sharding off, so an absent
+				// mode is sharding. It is valkey-sessions without its mode, so it
+				// carries the same capabilities.
+				{
+					id: "valkey-default", rawType: "memorystore.googleapis.com/Instance", category: "cache.redis",
+					capabilities: []string{"encryption-at-rest", "node-high-availability", "sharding", "snapshots", "zone-high-availability"},
+				},
+				// STANDALONE is the deprecated spelling of CLUSTER_DISABLED, so this
+				// instance is valkey-1's: no sharding, and the same capabilities.
+				{
+					id: "valkey-legacy", rawType: "memorystore.googleapis.com/Instance", category: "cache.redis",
+					capabilities: []string{"encryption-at-rest", "snapshots"},
+				},
+				// An instance the assets listing holds and the instances list does
+				// not is no instance the program has read: no call gives its mode,
+				// so it is not sharded, and it has no size either (unsized).
+				{
+					id: "valkey-archive", rawType: "memorystore.googleapis.com/Instance", category: "cache.redis",
+					capabilities: []string{"encryption-at-rest"},
+				},
+				// Every node of a single-zone Valkey instance is in one zone, so the
+				// replica in each shard survives a node's loss but not a zone's.
+				{
+					id: "valkey-single", rawType: "memorystore.googleapis.com/Instance", category: "cache.redis",
+					capabilities: []string{"encryption-at-rest", "node-high-availability"},
+				},
+				// MODE_UNSPECIFIED is a mode the instance carries without naming one:
+				// the API documents the default as Cluster Mode Enabled, so only
+				// CLUSTER_DISABLED and STANDALONE turn sharding off. It is
+				// valkey-default with the mode spelled out, so it carries the same
+				// capabilities.
+				{
+					id: "valkey-unspecified", rawType: "memorystore.googleapis.com/Instance", category: "cache.redis",
+					capabilities: []string{"encryption-at-rest", "node-high-availability", "sharding", "snapshots", "zone-high-availability"},
+				},
+				// A Memcached instance speaks another protocol, so no cache
+				// category serves it and it stays unclassified with its rawType.
+				{
+					id: "shop-cache", rawType: "memcache.googleapis.com/Instance", category: "unclassified",
+					capabilities: []string{},
+				},
+				// One load balancer per URL map, per backend service no URL map
+				// names and per target pool. A global URL map is zone redundant
+				// within its regions, and gets ipv6 only when an IPv6 forwarding
+				// rule reaches it and a backend service it names sends to IPv6
+				// backends.
+				{
+					id: "shop-web-map", rawType: "compute.googleapis.com/UrlMap", category: "network.loadbalancer",
+					capabilities: []string{"ipv6", "zone-high-availability"},
+				},
+				{
+					id: "shop-int-map", rawType: "compute.googleapis.com/UrlMap", category: "network.loadbalancer",
+					capabilities: []string{"zone-high-availability"},
+				},
+				// An IPv6 frontend over IPv4-only backends is not ipv6: the
+				// capability is the whole path, not the frontend alone.
+				{
+					id: "shop-legacy-map", rawType: "compute.googleapis.com/UrlMap", category: "network.loadbalancer",
+					capabilities: []string{"zone-high-availability"},
+				},
+				// A frontend is not only an HTTPS proxy: an IPv6 forwarding rule
+				// reaches this URL map through a target HTTP proxy, and its
+				// backends select IPv6 addresses, so the load balancer is ipv6.
+				{
+					id: "shop-edge-map", rawType: "compute.googleapis.com/UrlMap", category: "network.loadbalancer",
+					capabilities: []string{"ipv6", "zone-high-availability"},
+				},
+				// A backend service no URL map names is a load balancer of its own,
+				// and a UDP forwarding rule reaching it gives it udp. A target pool
+				// names no protocol, so its UDP comes from its forwarding rule. The
+				// forwarding rule in front of this passthrough service is IPv4, so
+				// the load balancer serves no IPv6.
+				{
+					id: "shop-dns-be", rawType: "compute.googleapis.com/BackendService", category: "network.loadbalancer",
+					capabilities: []string{"udp", "zone-high-availability"},
+				},
+				// A passthrough Network Load Balancer serves IPv6 through its
+				// IPv6 forwarding rule alone: ipAddressSelectionPolicy is a proxy
+				// feature, and Google documents it only for proxy-based load
+				// balancers, so a passthrough backend service carries none and is
+				// still ipv6. The rule reaches the service directly, with no URL
+				// map or proxy between them.
+				{
+					id: "shop-ntp-be", rawType: "compute.googleapis.com/BackendService", category: "network.loadbalancer",
+					region:       "europe-west1",
+					capabilities: []string{"ipv6", "udp", "zone-high-availability"},
+				},
+				{
+					id: "shop-syslog-pool", rawType: "compute.googleapis.com/TargetPool", category: "network.loadbalancer",
+					capabilities: []string{"udp", "zone-high-availability"},
+				},
+				// A backend service no URL map names and no forwarding rule reaches
+				// is a load balancer too, and its own UDP protocol is what proves it
+				// forwards UDP: there is no frontend to read it from.
+				{
+					id: "shop-metrics-be", rawType: "compute.googleapis.com/BackendService", category: "network.loadbalancer",
+					capabilities: []string{"udp", "zone-high-availability"},
+				},
+				// A Docker repository is a registry, and Artifact Registry
+				// encrypts it at rest; another format holds another kind of image.
+				{
+					id: "images", rawType: "artifactregistry.googleapis.com/Repository", category: "registry.container",
+					capabilities: []string{"encryption-at-rest"},
+				},
+				{
+					id: "jars", rawType: "artifactregistry.googleapis.com/Repository", category: "unclassified",
+					capabilities: []string{},
+				},
+				// Filestore is NFS file storage, regional when its tier says so,
+				// and snapshotted when a snapshot of it exists.
+				{
+					id: "shared", rawType: "file.googleapis.com/Instance", category: "storage.file",
+					capabilities: []string{"encryption-at-rest", "snapshots", "zone-high-availability"},
+				},
+				{
+					id: "scratch", rawType: "file.googleapis.com/Instance", category: "storage.file",
+					capabilities: []string{"encryption-at-rest"},
+				},
 			},
 			sized: []sizeFact{
 				// An e2-standard-2 is 2 vCPU and 8192 MB, from compute machine-types list.
@@ -224,11 +658,35 @@ func inventoryGuides() []inventoryGuideCase {
 				// db-custom-2-7680 is 2 vCPU and 7680 MiB. A zonal instance is one
 				// instance.
 				{id: "shop-catalog-mysql", vcpus: 2, memoryGiB: 7.5, storageGiB: 20, count: 1},
+				// A Memorystore instance's memorySizeGb is the memory of each node,
+				// which holds the whole data set, and nodes are the instance's.
+				{id: "cache-ha", memoryGiB: 5, count: 2},
+				{id: "cache-basic", memoryGiB: 1, count: 1},
+				// An instance that lists no nodes names them through its replica
+				// count: one replica next to the primary is two nodes.
+				{id: "cache-alt", memoryGiB: 5, count: 2},
+				// A cluster's sizeGb is the whole cluster, and no page read says
+				// whether it counts replicas, so the program writes no memoryGiB
+				// rather than a number divided on a guess. Its nodes are its shards
+				// and their replicas.
+				{id: "sessions", count: 6, noMemoryGiB: true},
+				// A Valkey node's sizeGb is its own node's memory, and its shards
+				// times one plus their replicas are its nodes.
+				{id: "valkey-1", memoryGiB: 6.5, count: 1},
+				{id: "valkey-sessions", memoryGiB: 6.5, count: 4},
+				{id: "valkey-default", memoryGiB: 6.5, count: 4},
+				{id: "valkey-legacy", memoryGiB: 6.5, count: 1},
+				{id: "valkey-single", memoryGiB: 6.5, count: 2},
+				{id: "valkey-unspecified", memoryGiB: 6.5, count: 4},
+				// A Filestore instance's capacityGb is a string in the API's JSON.
+				{id: "shared", storageGiB: 1024},
+				{id: "scratch", storageGiB: 1024},
 			},
 			// An engine the program cannot classify gets no size at all, even
 			// though the sql instances list records the instance's disk and
-			// tier.
-			unsized: []string{"shop-reports-sqlserver"},
+			// tier. So does a Valkey instance the instances list does not hold: no
+			// call gives its shards, its replicas or its node's memory.
+			unsized: []string{"shop-reports-sqlserver", "valkey-archive"},
 			// A node pool's managed instance group, a node with its disk,
 			// labelled goog-gke-node, and the boot and data disks of the group's
 			// member: the group stands for its instances.
@@ -237,6 +695,47 @@ func inventoryGuides() []inventoryGuideCase {
 				"gke-shop-gke-default-pool-0a1b2c3d-x1y2",
 				"shop-web-mig-0abc",
 				"shop-web-mig-0abc-data",
+				// The backend services its URL maps name, and the service mesh's
+				// own: a mesh has no load balancer in front of its backends, so it
+				// is not one.
+				"shop-web-be",
+				"shop-api-be",
+				"shop-canary-be",
+				"shop-int-be",
+				"shop-legacy-be",
+				"shop-edge-be",
+				"shop-mesh-be",
+				// The error service a URL map links as its custom error page, at the
+				// URL map and at one of its path matchers: the URL map stands for it,
+				// as it does for the backends in its routes.
+				"shop-errors-be",
+				// A URL map that names only that mesh's services fronts no load
+				// balancer either: the mesh's backends are reached directly.
+				"shop-mesh-map",
+				// A load balancer's frontends, the forwarding rules and the target
+				// proxies they reach: the URL map, backend service or target pool
+				// behind them stands for the load balancer.
+				"shop-web-fr6",
+				"shop-legacy-fr6",
+				// A frontend of its own kind: the IPv6 forwarding rule and the
+				// target HTTP proxy it reaches.
+				"shop-edge-fr6",
+				"shop-dns-fr",
+				"shop-ntp-fr6",
+				"shop-syslog-fr",
+				"shop-web-proxy",
+				"shop-legacy-proxy",
+				"shop-edge-proxy",
+				// A repository that only pulls through from an upstream, and one
+				// that only aggregates others: neither stores an image of its own.
+				"upstream",
+				"mirror",
+				// A Filestore snapshot is a capability of its instance, as a
+				// compute snapshot is of its disk.
+				"daily",
+				// So is a Filestore backup: it belongs to its instance, which is
+				// the resource to move.
+				"shared-backup",
 			},
 		},
 		{
@@ -426,18 +925,34 @@ func taxonomyCategories(source string) []string {
 			"kubernetes.managed",
 			"serverless.function",
 			"messaging.queue",
+			// PRD #552's AWS classification: the caches, the MongoDB-compatible
+			// cluster, the load balancers, the topic, the serverless container,
+			// the registry and the file system its fixtures record.
+			"cache.redis",
+			"database.mongodb",
+			"network.loadbalancer",
+			"messaging.topic",
+			"serverless.container",
+			"registry.container",
+			"storage.file",
 		}
 	case "gcp":
 		return []string{
+			"cache.redis",
 			"compute.baremetal",
 			"compute.vm",
-			"storage.block",
-			"storage.object",
-			"database.postgresql",
 			"database.mysql",
+			"database.postgresql",
 			"kubernetes.managed",
-			"serverless.function",
 			"messaging.queue",
+			"messaging.topic",
+			"network.loadbalancer",
+			"registry.container",
+			"serverless.container",
+			"serverless.function",
+			"storage.block",
+			"storage.file",
+			"storage.object",
 		}
 	case "azure":
 		return []string{
@@ -474,13 +989,11 @@ type inventoryDoc struct {
 // programs write, and the version 2 fields the guide tells the user to add by
 // hand, which a program must not write.
 type inventoryResource struct {
-	ID       string `json:"id"`
-	RawType  string `json:"rawType"`
-	Category string `json:"category"`
-	// Capabilities are the capabilities the program derives from the recorded
-	// settings of the resource.
-	Capabilities []string `json:"capabilities"`
+	ID           string   `json:"id"`
+	RawType      string   `json:"rawType"`
+	Category     string   `json:"category"`
 	Region       string   `json:"region"`
+	Capabilities []string `json:"capabilities"`
 	// Size is the resource's size, filled from the recorded read-only calls.
 	Size *sizeSpec `json:"size"`
 	// Workload, Relations and MonthlyCost are added by hand: no recorded call
@@ -697,7 +1210,7 @@ func assertBareMetal(t *testing.T, source string, doc inventoryDoc, wants []bare
 }
 
 // assertPresent fails unless the inventory holds each fact's resource, by ID,
-// with its category and raw type.
+// with its category, raw type and (when the fact names one) region.
 func assertPresent(t *testing.T, source string, doc inventoryDoc, wants []resourceFact) {
 	t.Helper()
 
@@ -719,29 +1232,27 @@ func assertPresent(t *testing.T, source string, doc inventoryDoc, wants []resour
 				source, want.id, resource.RawType, want.rawType)
 		}
 
-		if want.capabilities != nil {
-			assertCapabilities(t, source, want.id, want.capabilities, resource.Capabilities)
+		if want.region != "" && resource.Region != want.region {
+			t.Errorf("%s: resource %q has region %q, want %q",
+				source, want.id, resource.Region, want.region)
 		}
-	}
-}
 
-// assertCapabilities fails unless the resource's capabilities are exactly want,
-// in any order. A capability the program dropped, added or guessed shows up
-// here, which the golden file alone cannot catch after an -update; an empty want
-// pins a resource with no capability at all.
-func assertCapabilities(t *testing.T, source, id string, want, got []string) {
-	t.Helper()
+		if want.capabilities == nil {
+			continue
+		}
 
-	wantSorted := slices.Clone(want)
-	slices.Sort(wantSorted)
+		got := slices.Clone(resource.Capabilities)
+		slices.Sort(got)
 
-	// An inventory without capabilities decodes as nil: an empty slice on both
-	// sides compares equal, whether the program wrote none or an empty array.
-	gotSorted := append([]string{}, got...)
-	slices.Sort(gotSorted)
+		wantCaps := slices.Clone(want.capabilities)
+		slices.Sort(wantCaps)
 
-	if diff := cmp.Diff(wantSorted, gotSorted); diff != "" {
-		t.Errorf("%s: resource %q has other capabilities than it should (-want +got):\n%s", source, id, diff)
+		// slices.Equal holds a nil capability list and an empty one equal: a
+		// resource with no capability writes no key at all.
+		if !slices.Equal(wantCaps, got) {
+			t.Errorf("%s: resource %q has capabilities %v, want exactly %v",
+				source, want.id, got, wantCaps)
+		}
 	}
 }
 
@@ -773,6 +1284,7 @@ func assertSized(t *testing.T, source string, doc inventoryDoc, wants []sizeFact
 		assertSizeNumber(t, source, want.id, "storageGiB", want.storageGiB, resource.Size.StorageGiB)
 		assertNoSizeNumber(t, source, want.id, "vcpus", want.noVCPUs, resource.Size.VCPUs)
 		assertNoSizeNumber(t, source, want.id, "memoryGiB", want.noMemoryGiB, resource.Size.MemoryGiB)
+		assertNoSizeNumber(t, source, want.id, "storageGiB", want.noStorageGiB, resource.Size.StorageGiB)
 		assertNoSizeCount(t, source, want.id, want.noCount, resource.Size.Count)
 
 		if want.count != 0 && (resource.Size.Count == nil || *resource.Size.Count != want.count) {
@@ -808,6 +1320,10 @@ func (f sizeFact) describe() string {
 
 	if f.noMemoryGiB {
 		fields = append(fields, "no memoryGiB")
+	}
+
+	if f.noStorageGiB {
+		fields = append(fields, "no storageGiB")
 	}
 
 	if f.noCount {

@@ -21,8 +21,9 @@ type Method string
 
 const (
 	// ByPlan is a category priced by plan: compute.vm, compute.baremetal,
-	// kubernetes.managed (its nodes), database.postgresql, database.mysql and
-	// database.mongodb, matched on vCPUs and memory, and cache.redis (its
+	// kubernetes.managed (its nodes), database.postgresql, database.mysql,
+	// database.mongodb, search.opensearch (its data nodes) and messaging.kafka
+	// (its brokers), matched on vCPUs and memory (ADR 0047), and cache.redis (its
 	// nodes), matched on memory alone (catalog.MatchesOnMemory, ADR 0046).
 	ByPlan Method = "plan"
 	// ByStorage is a category priced by stored GiB: storage.block,
@@ -43,7 +44,7 @@ func PricingOf(c taxonomy.Category) Method {
 	switch c {
 	case taxonomy.ComputeVM, taxonomy.ComputeBareMetal, taxonomy.KubernetesManaged,
 		taxonomy.DatabasePostgreSQL, taxonomy.DatabaseMySQL, taxonomy.DatabaseMongoDB,
-		taxonomy.CacheRedis:
+		taxonomy.CacheRedis, taxonomy.SearchOpenSearch, taxonomy.MessagingKafka:
 		return ByPlan
 	case taxonomy.StorageBlock, taxonomy.StorageObject, taxonomy.StorageFile:
 		return ByStorage
@@ -206,7 +207,8 @@ const (
 	// and kubernetes.managed: each instance's or node's boot volume.
 	BootVolume StorageNotIncluded = "boot-volume"
 	// DataStorage is left out of an estimate for database.postgresql,
-	// database.mysql and database.mongodb: the service's data storage.
+	// database.mysql, database.mongodb, search.opensearch and messaging.kafka:
+	// the service's data storage (ADR 0047).
 	DataStorage StorageNotIncluded = "data-storage"
 )
 
@@ -441,9 +443,10 @@ func byPlan(r inventory.Resource, offerings []catalog.Offering, region string) E
 // (ADR 0032): none unless the resource gives no storage size, the chosen plan
 // includes no storage and its offering prices storage in region; then the
 // boot volume for compute.vm, compute.baremetal and kubernetes.managed, the
-// data storage for database.postgresql, database.mysql and database.mongodb,
-// and none for any other category. A count of 0 is estimated at 0 and leaves
-// nothing out, so it gets none.
+// data storage for database.postgresql, database.mysql, database.mongodb,
+// search.opensearch and messaging.kafka (ADR 0047), and none for any other
+// category. A count of 0 is estimated at 0 and leaves nothing out, so it gets
+// none.
 func storageNotIncluded(c taxonomy.Category, count, stored *big.Rat, chosen offeredPlan, region string) StorageNotIncluded {
 	if count.Sign() == 0 || stored != nil || chosen.plan.IncludedStorageGiB != 0 {
 		return ""
@@ -456,7 +459,8 @@ func storageNotIncluded(c taxonomy.Category, count, stored *big.Rat, chosen offe
 	switch c {
 	case taxonomy.ComputeVM, taxonomy.ComputeBareMetal, taxonomy.KubernetesManaged:
 		return BootVolume
-	case taxonomy.DatabasePostgreSQL, taxonomy.DatabaseMySQL, taxonomy.DatabaseMongoDB:
+	case taxonomy.DatabasePostgreSQL, taxonomy.DatabaseMySQL, taxonomy.DatabaseMongoDB,
+		taxonomy.SearchOpenSearch, taxonomy.MessagingKafka:
 		return DataStorage
 	default:
 		return ""
@@ -637,7 +641,9 @@ func planOf(op offeredPlan, region string) *Plan {
 }
 
 // storedOnce reports whether the storage of category c is the whole service's
-// data, counted once and not × count: the managed databases (ADR 0027).
+// data, counted once and not × count: the managed databases (ADR 0027). A
+// search.opensearch or messaging.kafka cluster shards its data across its
+// nodes, so its storage is per node, × count (ADR 0047).
 func storedOnce(c taxonomy.Category) bool {
 	return c == taxonomy.DatabasePostgreSQL || c == taxonomy.DatabaseMySQL || c == taxonomy.DatabaseMongoDB
 }

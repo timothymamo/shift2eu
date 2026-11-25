@@ -916,6 +916,84 @@ func TestRunPassesTheAcceptedVariants(t *testing.T) {
 	}
 }
 
+// platformEnvoyHeaders returns the headers the platform in front of the site
+// adds to every answer it lets through: the two ADR 0045's Consequences names,
+// server and the upstream service time, and the decorator operation the front
+// adds too. Any further x-envoy-* header is of the same kind: none of them is
+// the site's to send, so none of them may fail a check.
+func platformEnvoyHeaders() http.Header {
+	return http.Header{
+		"Server":                        {"envoy"},
+		"X-Envoy-Upstream-Service-Time": {"3"},
+		"X-Envoy-Decorator-Operation":   {"x"},
+	}
+}
+
+// TestRunToleratesThePlatformsEnvoyHeaders pins that the platform's headers
+// never fail a check (ADR 0045, Consequences): the site runs behind a Scaleway
+// Serverless Container, whose Envoy front adds server: envoy and its own
+// x-envoy-* headers to every answer it lets through, so the pages, the module
+// script and the redirect answers all carry headers the site itself does not
+// send. The check judges what the site serves, not which proxy served it, so a
+// correct site that also carries them still passes with no finding. Should a
+// response-header allow list ever be added, ADR 0045 allows exactly the two it
+// names, not an x-envoy-* prefix; this test adds a third, which such a list may
+// not refuse either, since the front adds headers the site cannot enumerate.
+//
+// The fixture would pass this test with no header at all, so the test asserts
+// that its case was not vacuous: every one of the four servers answered a
+// request carrying the headers, and the run recorded responses for the pages,
+// the module script and the redirect answers the checks judge.
+func TestRunToleratesThePlatformsEnvoyHeaders(t *testing.T) {
+	t.Parallel()
+
+	site := newSite(t)
+	site.setPlatformHeaders(platformEnvoyHeaders())
+
+	report, err := livecheck.Run(t.Context(), site.config(t))
+	if err != nil {
+		t.Fatalf("Run failed: %v, want a report: the platform's headers are no error", err)
+	}
+
+	if !report.Passed() {
+		t.Fatalf("the check of a correct site carrying the platform's Envoy headers failed, want it to pass:\n%s", reportText(report))
+	}
+
+	for _, server := range []struct {
+		name    string
+		content *content
+	}{
+		{"the canonical host over HTTPS", site.hostTLS},
+		{"the apex over HTTPS", site.apexTLS},
+		{"the canonical host over plain HTTP", site.hostHTTP},
+		{"the apex over plain HTTP", site.apexHTTP},
+	} {
+		if server.content.platformHeaderCount() == 0 {
+			t.Errorf("%s answered no request with the platform's Envoy headers, want the run to judge answers carrying them", server.name)
+		}
+	}
+
+	requested := make(map[string]bool, len(report.Responses))
+	for _, response := range report.Responses {
+		requested[response.URL] = true
+	}
+
+	for _, url := range []string{
+		"https://" + livecheck.DefaultHost + "/",
+		"https://" + livecheck.DefaultHost + "/privacy.html",
+		"https://" + livecheck.DefaultHost + "/about.html",
+		"https://" + livecheck.DefaultHost + "/verify.html",
+		"https://" + livecheck.DefaultHost + "/" + testModuleScript,
+		"https://" + livecheck.DefaultApex + "/",
+		"http://" + livecheck.DefaultHost + "/",
+		"http://" + livecheck.DefaultApex + "/",
+	} {
+		if !requested[url] {
+			t.Errorf("the run recorded no response for %s, want the pages, the module script and the redirect answers judged while every answer carried the platform's Envoy headers:\n%s", url, reportText(report))
+		}
+	}
+}
+
 // TestRunHSTSAndStatements pins behaviour 8: the Strict-Transport-Security
 // minimum the record's two states hold the site to, the statements the pages must
 // carry, and the fail-safe of a record that is missing or cannot be read.
