@@ -227,7 +227,9 @@ list, and any further platform header such as `x-request-id`, is the infra unit'
 test's local upstream asserts that it receives none of them. The configuration turns no access log on
 (no `log` directive in a site block), and the front writes nothing about a visitor to its output: see
 *Amendment: the front writes nothing about a visitor to its output* below. What the platform itself logs
-is Scaleway's, as for Edge Services; the privacy page already names Scaleway.
+is Scaleway's, as for Edge Services; the privacy page already names Scaleway, and says that the
+maintainer reads only the hosting provider's aggregate request counts (no IP address, no user agent, no
+cookie, kept 31 days; ADR 0039, *Amendment: log retention*).
 
 ### The image and its configuration
 
@@ -381,7 +383,7 @@ TLS stage*.
   `command = ["/bin/sh", "-c"]`, and `args` whose first writes its `$1`, the Caddyfile's bytes
   (`file("${path.module}/Caddyfile")`), to `/tmp/Caddyfile` with `printf '%s'` and execs
   `caddy run --adapter caddyfile --config /tmp/Caddyfile` (the provider caps an environment variable at
-  1000 characters, too few for the file). The upstream's name is the environment variable `UPSTREAM`,
+  1000 characters, too few for the file, about 5.2 KiB, which travels as `args[2]`). The upstream's name is the environment variable `UPSTREAM`,
   the DNS stage's `default_fqdn`, read as `{$UPSTREAM}` when Caddy parses the file, so the file names no
   ID. The registry mirror is not taken unless the digest pull fails (below).
 - **`min_scale = 0`**: the site stays in the free tier. The first request after an idle period starts an

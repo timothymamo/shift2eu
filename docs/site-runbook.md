@@ -150,7 +150,7 @@ W="$(mktemp -d)"
 # 1. The pipeline's default endpoint over HTTPS with no TLS stage (unverified before the first apply after ADR 0045)
 curl -sS -o /dev/null -w '%{http_code} verify=%{ssl_verify_result}\n' "https://$E/"   # PASS: "verify=0" and a status (200, 403 or 404 from the bucket); record it in ADR 0045's amendment
 # FAIL a TLS or connection error: the pipeline serves no HTTPS without a TLS stage; the container cannot fetch the site: R8's rollback, then record it in ADR 0045
-# 2. The container: ready, and running the image by its digest
+# 2. The container: ready, and running the image by its digest (ready also means the Containers API took the Caddyfile, about 5.2 KiB, as args[2]; record it in ADR 0045)
 scw container container list namespace-id="$NS" region="$REGION" -o json | jq -r '.[] | "\(.name) \(.status) \(.registry_image)"'   # PASS: exactly "front ready docker.io/library/caddy:<tag>@sha256:<the digest in infra/site/container.tf>"
 # FAIL "error" with an error_message, or a reference without @sha256: record it; ADR 0045's registry mirror is then the way, recorded there before it is taken
 # A failed start is read from the container's startup log (Cockpit, the container's logs; nothing of a visitor is in it, ADR 0045). Expected there, and no failure: Caddy's warning "Unnecessary header_up Host ...": the Caddyfile writes Caddy's default for an https:// upstream out on purpose
@@ -742,8 +742,8 @@ After R10, and again after any change that puts one of the site's products in an
 keeps its products' logs (Edge Services' name each visitor's IP address and path) in one *Scaleway logs*
 data source per region of the project, 7 days by default, created only once a product there has logged;
 OpenTofu does not manage them (ADR 0039, *Amendment: log retention*). This sets each to 1 day, the
-minimum, and checks the *Scaleway metrics* sources, the aggregate request counts the privacy page names,
-at 31 days.
+minimum, and checks the *Scaleway metrics* sources, the aggregate request counts the privacy page names
+(no IP address, no user agent, no cookie, kept 31 days), at 31 days.
 
 ```bash
 # Every region at once: the logs land in the region of the product that wrote them
