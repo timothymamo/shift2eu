@@ -164,3 +164,128 @@ func TestUnnegatedClaims(t *testing.T) {
 		})
 	}
 }
+
+// clearSiteDataSentence is the privacy page's sentence about Clear-Site-Data
+// (issue #567, item 1): the site does not send the header, so a page served from
+// a poisoned cache stays in the browser's cache until its max-age runs out, and
+// the page says what holds rather than what it cannot do.
+const clearSiteDataSentence = "since the site does not send Clear-Site-Data."
+
+// coopSentence is the privacy page's Technical note on Cross-Origin-Opener-Policy
+// (issue #567, item 2): the site does not send it, so a page that opened this one
+// keeps its handle, and it says that rather than that it cannot.
+const coopSentence = "One gap remains: the site does not send Cross-Origin-Opener-Policy, so"
+
+// apexRedirectSentence is the downgrade risk's account of the apex redirect (issue
+// #567, item 3): the site's own front answers http://shift2eu.com with a 308 that
+// carries no HSTS, not the apex redirect's provider, whose HSTS the site cannot
+// promise. The paragraph keeps the downgrade-risk marker the live check reads.
+const apexRedirectSentence = "(answered by the site's own front, the same server as www.shift2eu.com, with a 308 redirect that carries no HSTS)"
+
+// frameAncestorsSentence is the privacy page's framing guard (issue #567, item
+// 4): the Content-Security-Policy header every HTTPS response carries refuses
+// the framing, and the page script's own guard travels with the bundle. The
+// header rides only on the TLS answers, which is why the sentence names HTTPS
+// rather than every response: the scheme's plain redirect carries no headers.
+const frameAncestorsSentence = "Every HTTPS response from www.shift2eu.com carries frame-ancestors 'none' in its Content-Security-Policy header, so a browser refuses to show the site inside another page. A meta Content Security Policy cannot carry frame-ancestors, so the page script also stops, and says why, when another page frames it: that guard travels with the bundle to any other origin."
+
+// logsSentence is the privacy page's paragraph on what is logged (issue #567,
+// item 5): the front keeps no access log and passes neither the visitor's
+// address nor their cookies on, while Scaleway's platform - the layer that ends
+// the encrypted connection and so receives every request before the front - can
+// log the visitor's address, path and country, kept 1 day once the maintainer
+// has set it and 7 until then. The page says what holds until the runbook's
+// log-retention step runs, because that step can run only after Scaleway has
+// logged a request; and it names the platform, not the front, as the layer that
+// answers first, since the front sees only what the platform forwards (ADR 0045,
+// What the server answers).
+const logsSentence = "The site's front keeps no access log and passes neither your IP address nor your cookies on to the rest of the hosting. Scaleway's platform, which ends the encrypted connection and receives your request before the front does, can log your IP address, the path you request and your country. The maintainer sets Scaleway's logs to be kept 1 day, the shortest Scaleway allows, once the site has served its first requests (Scaleway creates its log store only then); until that is done, Scaleway's default of 7 days applies."
+
+// oldPrivacyClaims are the claims the page made before issue #567 and must not
+// make again: the site cannot send Clear-Site-Data and cannot send
+// Cross-Origin-Opener-Policy were both false of the hosting after ADR 0045 (the
+// site does not send either header, which is a decision, not a gap), the apex
+// redirect's provider was the wrong server once the container answered the apex
+// itself, and the front answered no request first once Scaleway's Serverless
+// Containers platform ended the TLS connection ahead of it and kept the logs
+// that can name a visitor.
+var oldPrivacyClaims = []string{
+	"cannot send Clear-Site-Data",
+	"cannot send Cross-Origin-Opener-Policy",
+	"apex redirect's provider",
+	"the server that answers every request first",
+}
+
+// TestPrivacyPageStatesWhatTheFrontAndTheLogsDo pins the five statements issue
+// #567 corrects or adds to the built privacy page: what the site does not send
+// (Clear-Site-Data, Cross-Origin-Opener-Policy), who answers the apex, the
+// framing guard the policy header carries, and what the front and Scaleway's
+// logs hold. The statements are matched after collapsing white space, as the
+// rest of this file does, so the page may wrap them as it likes.
+func TestPrivacyPageStatesWhatTheFrontAndTheLogsDo(t *testing.T) {
+	t.Parallel()
+
+	text := collapseSpace(theBundle(t).html(t, privacyPageName).body(t).textContent())
+
+	tests := []struct {
+		name     string
+		sentence string
+		expected string
+	}{
+		{
+			name:     "Clear-Site-Data is not sent",
+			sentence: clearSiteDataSentence,
+			expected: "the page must say that the site does not send Clear-Site-Data: the hosting sends no such header, so the words describe the site rather than a gap it cannot close (issue #567, item 1)",
+		},
+		{
+			name:     "Cross-Origin-Opener-Policy is not sent",
+			sentence: coopSentence,
+			expected: "the page must say that the site does not send Cross-Origin-Opener-Policy: the hosting sends no such header, so a page that opened this one keeps its handle because the site chose not to send it (issue #567, item 2)",
+		},
+		{
+			name:     "the apex redirect is the site's own front",
+			sentence: apexRedirectSentence,
+			expected: "the downgrade-risk statement must say that the site's own front answers http://shift2eu.com with a 308 that carries no HSTS, not the apex redirect's provider: the container holds both hostnames and answers the apex itself (issue #567, item 3)",
+		},
+		{
+			name:     "frame-ancestors is in the header",
+			sentence: frameAncestorsSentence,
+			expected: "the Technical note must say that every HTTPS response's Content-Security-Policy header carries frame-ancestors 'none', so a browser refuses to frame the site, and that the page script's guard travels with the bundle (issue #567, item 4)",
+		},
+		{
+			name:     "the front and Scaleway's logs",
+			sentence: logsSentence,
+			expected: "the \"What the site cannot promise\" list must say, after the hosting-provider paragraph, that the front keeps no access log and passes no IP address and no cookie on, that Scaleway's platform, which ends the connection before the front, can log the IP address, the path and the country, and that the maintainer sets those logs to 1 day once the site has served its first requests, Scaleway's default of 7 until then (issue #567, item 5)",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			if !strings.Contains(text, collapseSpace(tc.sentence)) {
+				t.Errorf("the privacy page does not read %q: %s", tc.sentence, tc.expected)
+			}
+		})
+	}
+}
+
+// TestPrivacyPageDropsTheOldClaims pins the other side of issue #567: the three
+// claims the page used to make are gone, so a rewrite that keeps one beside the
+// corrected sentence cannot leave the page saying both that the site cannot send
+// a header and that it does not.
+func TestPrivacyPageDropsTheOldClaims(t *testing.T) {
+	t.Parallel()
+
+	text := theBundle(t).html(t, privacyPageName).body(t).textContent()
+
+	for _, claim := range oldPrivacyClaims {
+		t.Run(claim, func(t *testing.T) {
+			t.Parallel()
+
+			if strings.Contains(collapseSpace(text), claim) {
+				t.Errorf("the privacy page still says %q, want it gone: the site does not send either header, and its own front answers the apex (issue #567)", claim)
+			}
+		})
+	}
+}

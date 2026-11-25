@@ -124,10 +124,11 @@ dev/tofu.sh -chdir=infra/site apply site.tfplan            # PASS: "Apply comple
 # FAIL "Resource postcondition failed" on scaleway_container.site: the platform kept a redirect or a warm instance the provider did not send; set plain HTTP "enabled" and min scale 0 in the console (Serverless Containers, the namespace shift2eu-site, front, Settings), then plan again: PASS "No changes."
 # FAIL "Error acquiring the state lock": another tofu holds it; wait, or after a crash dev/tofu.sh -chdir=infra/site force-unlock <lock ID>
 # Scaleway assigns the DNS stage's default_fqdn after creating it: edge_endpoint is empty right after apply, so refresh the state (no resource change) until it is set, 20 tries 30 s apart
-# Watch the first iteration: with the container absent, refresh-only should neither trip the precondition nor error on the container_endpoint output (not verifiable offline)
-n=0; until [ -n "$(dev/tofu.sh -chdir=infra/site output -raw edge_endpoint 2>/dev/null)" ] || [ "$n" -ge 20 ]; do sleep 30; dev/tofu.sh -chdir=infra/site apply -refresh-only -auto-approve || break; n=$((n + 1)); done
-[ -n "$(dev/tofu.sh -chdir=infra/site output -raw edge_endpoint 2>/dev/null)" ] && echo "PASS edge_endpoint is set" || echo "FAIL edge_endpoint still empty after 10 minutes"
-# FAIL: first an error printed above (a state lock: as the apply line's FAIL says; a key error: R0), else check the pipeline's DNS stage in the console (Edge Services) for its default FQDN; then run the wait loop and its check again
+# Watch the first iteration: with the container absent, refresh-only should not trip the precondition, and the container_endpoint output reads "" (try()) rather than failing (not verifiable offline)
+n=0; refresh_failed=0; until [ -n "$(dev/tofu.sh -chdir=infra/site output -raw edge_endpoint 2>/dev/null)" ] || [ "$n" -ge 20 ]; do sleep 30; dev/tofu.sh -chdir=infra/site apply -refresh-only -auto-approve || { refresh_failed=1; break; }; n=$((n + 1)); done
+if [ "$refresh_failed" -eq 1 ]; then echo "FAIL refresh-only failed: read the error above"; elif [ -n "$(dev/tofu.sh -chdir=infra/site output -raw edge_endpoint 2>/dev/null)" ]; then echo "PASS edge_endpoint is set"; else echo "FAIL edge_endpoint still empty after 10 minutes"; fi
+# FAIL refresh-only failed: a state lock: as the apply line's FAIL says; a key error: R0; any other error: fix its cause, then run the wait loop and its check again
+# FAIL edge_endpoint still empty: first an error printed above (a state lock: as the apply line's FAIL says; a key error: R0), else check the pipeline's DNS stage in the console (Edge Services) for its default FQDN; then run the wait loop and its check again
 # The second pass: run the next two lines only after the apply line's precondition FAIL; otherwise skip them
 dev/tofu.sh -chdir=infra/site plan -out=site.tfplan        # PASS (second pass, first setup): "Plan: 1 to add, 0 to change, 0 to destroy." (the container, its UPSTREAM $E)
 # PASS (second pass, the DNS stage was replaced): "Plan: 0 to add, 1 to change, 0 to destroy." (only the container's UPSTREAM, set to $E)
@@ -143,6 +144,7 @@ B="$(dev/tofu.sh -chdir=infra/site output -raw bucket_name)"; E="$(dev/tofu.sh -
 PL="$(dev/tofu.sh -chdir=infra/site output -raw pipeline_id)"; echo "$P $A $B $E $PL"   # PASS: five values, none empty
 NS="$(dev/tofu.sh -chdir=infra/site output -raw container_namespace_id)"; CE="$(dev/tofu.sh -chdir=infra/site output -raw container_endpoint)"; CE="${CE#https://}"; CE="${CE%/}"
 echo "$NS $CE"                                             # PASS: the namespace ID and "shift2eu-site-<...>-front.functions.fnc.$REGION.scw.cloud" (or the like), none empty
+[ -n "$CE" ] && echo "PASS container_endpoint is set" || echo "FAIL container_endpoint is empty: the container does not exist yet; run R4's second pass"
 [ -n "$P" ] && [ "$P" != "$ADMIN_PROJECT" ] && echo "PASS the site's project is not the admin project" || echo "FAIL the site's project is the admin project"
 # FAIL: R0's ADMIN_PROJECT line ran while your key's default project was the site's; fix it as R0 says, then R0 again
 # After a change to the IAM or the bucket policy: R7 again
@@ -744,7 +746,9 @@ dev/tofu.sh -chdir=infra/site destroy        # PASS: "Destroy complete"
 ## R14. Log retention
 
 After R10, and again after any change that puts one of the site's products in another region. Scaleway
-keeps its products' logs (Edge Services' name each visitor's IP address and path) in one *Scaleway logs*
+keeps its products' logs (they can name a visitor's IP address and path: the container platform's logs
+the visitor's address, Edge Services' logs the front's, and a visitor's only on a direct request to the
+pipeline's endpoint) in one *Scaleway logs*
 data source per region of the project, 7 days by default, created only once a product there has logged;
 OpenTofu does not manage them (ADR 0039, *Amendment: log retention*). This sets each to 1 day, the
 minimum, and checks the *Scaleway metrics* sources, the aggregate request counts the privacy page names

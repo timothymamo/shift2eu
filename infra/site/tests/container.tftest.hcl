@@ -208,7 +208,7 @@ run "front_domains_on_adds_www_and_the_apex_to_the_one_container" {
 # default_fqdn, the pipeline's own endpoint; on a first apply the stage may still report it empty, and Caddy
 # refuses `reverse_proxy https://` without a host, so a container created with an empty UPSTREAM starts, fails to
 # load its configuration and answers nothing. The container holds a precondition for it (ADR 0045, *The
-# upstream*), and this run is that first setup: the DNS stage's default_fqdn is empty, and the plan must fail on
+# upstream's precondition*), and this run is that first setup: the DNS stage's default_fqdn is empty, and the plan must fail on
 # scaleway_container.site rather than create a container that cannot serve the site. The other runs above keep the
 # mock's non-empty default_fqdn, so they are the second pass, in which the endpoint exists.
 run "an_empty_upstream_fails_the_plan_on_the_container" {

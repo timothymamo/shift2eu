@@ -77,7 +77,7 @@ resource "scaleway_container" "site" {
     # created or replaced in the same plan) is checked at the apply.
     precondition {
       condition     = scaleway_edge_services_dns_stage.site.default_fqdn != null && scaleway_edge_services_dns_stage.site.default_fqdn != ""
-      error_message = "The Edge DNS stage's default_fqdn is still empty, so the container's UPSTREAM would be \"\" and Caddy would refuse to start (ADR 0045). On a first setup this is expected: the rest of the apply stands; run R4's wait loop until edge_endpoint is set, then plan and apply again to create the container."
+      error_message = "The Edge DNS stage's default_fqdn is still empty, so the container's UPSTREAM would be \"\" and Caddy would refuse to start (ADR 0045). On a first setup, or after the DNS stage was replaced, this is expected: the rest of the apply stands; run R4's wait loop until edge_endpoint is set, then plan and apply again to create the container."
     }
 
     # The provider leaves false and 0 out of the create request (it reads them with GetOk), so the platform's

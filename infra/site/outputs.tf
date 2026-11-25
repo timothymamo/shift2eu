@@ -36,8 +36,8 @@ output "container_namespace_id" {
 }
 
 output "container_endpoint" {
-  description = "The container's default endpoint (<namespace>-<name>.functions.fnc.<region>.scw.cloud), the target of the www CNAME and the apex ALIAS at Namecheap (R8)."
-  value       = scaleway_container.site.public_endpoint
+  description = "The container's default endpoint (<namespace>-<name>.functions.fnc.<region>.scw.cloud), the target of the www CNAME and the apex ALIAS at Namecheap (R8); empty while the container does not exist yet, so R4's refresh-only does not fail after the first apply's precondition FAIL."
+  value       = try(scaleway_container.site.public_endpoint, "")
 }
 
 output "front_domains" {

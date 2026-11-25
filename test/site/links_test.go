@@ -469,12 +469,14 @@ func TestVerificationPageLinksItsGuide(t *testing.T) {
 }
 
 // TestLinkChecksAcceptAMailtoLink pins what this file's two checks do with the
-// page's contact points, both `mailto:info@shift2eu.com` (issue #373): the
-// reference is absolute, so TestRelativeLinksResolve never resolves it as a file
-// of the bundle, and the site-file check exempts mailto rather than reading the
-// address as a path inside the bundle. Neither check refuses it. The contact
-// address is opaque, so the exemption is the one every opaque reference gets
-// (see TestSiteFileAtAnAbsoluteURLIsRefused).
+// page's contact points, both `mailto:` references to the contact address (issue
+// #373, issue #585): the reference is absolute, so TestRelativeLinksResolve never
+// resolves it as a file of the bundle, and the site-file check exempts mailto
+// rather than reading the address as a path inside the bundle. Neither check
+// refuses it, whether the mailto: carries the title and the query of one of the
+// site's two letters or nothing at all. The contact address is opaque, so the
+// exemption is the one every opaque reference gets (see
+// TestSiteFileAtAnAbsoluteURLIsRefused).
 func TestLinkChecksAcceptAMailtoLink(t *testing.T) {
 	t.Parallel()
 
@@ -484,8 +486,8 @@ func TestLinkChecksAcceptAMailtoLink(t *testing.T) {
 		name string
 		ref  string
 	}{
-		{name: "the contact address", ref: contactHref},
-		{name: "the contact address with a subject", ref: contactHref + "?subject=Assessment"},
+		{name: "the general question", ref: contactHrefGeneral},
+		{name: "the assessment's letter", ref: contactHrefAssessment},
 	}
 
 	for _, tc := range tests {
@@ -570,8 +572,8 @@ func TestSiteFileAtAnAbsoluteURLIsRefused(t *testing.T) {
 		{name: "an uppercase URL of the site's own root", ref: "HTTPS://WWW.SHIFT2EU.COM/", wantFile: "index.html"},
 		{name: "the site's own root at a fully qualified host", ref: "https://" + siteHost + "./", wantFile: "index.html"},
 		{name: "the site's own www root at a fully qualified host", ref: "https://www." + siteHost + "./", wantFile: "index.html"},
-		{name: "the contact address", ref: contactHref, wantFile: ""},
-		{name: "an address with a subject", ref: contactHref + "?subject=Assessment", wantFile: ""},
+		{name: "the general question", ref: contactHrefGeneral, wantFile: ""},
+		{name: "the assessment's letter", ref: contactHrefAssessment, wantFile: ""},
 		{name: "the repository", ref: repositoryURL, wantFile: ""},
 		{name: "an external site's root", ref: "https://fika.works/", wantFile: ""},
 		{name: "an external site's root without a trailing slash", ref: "https://timothymamo.com", wantFile: ""},
@@ -720,7 +722,8 @@ func TestAbsoluteReferenceSchemes(t *testing.T) {
 		{name: "a file reference", ref: "file:///index.html", want: false},
 		{name: "an ftp reference", ref: "ftp://example.com/style.css", want: false},
 		{name: "a blob reference", ref: "blob:https://example.com/6f2c", want: false},
-		{name: "the contact address", ref: contactHref, want: true},
+		{name: "the general question", ref: contactHrefGeneral, want: true},
+		{name: "the assessment's letter", ref: contactHrefAssessment, want: true},
 		{name: "an https reference", ref: "https://example.com/index.html", want: true},
 		{name: "an uppercase HTTPS reference", ref: "HTTPS://example.com/index.html", want: true},
 		{name: "a protocol-relative reference", ref: "//example.com/index.html", want: true},
