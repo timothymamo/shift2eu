@@ -17,3 +17,15 @@
     "type": "Microsoft.ServiceBus/Namespaces/Topics"
   }
 ]
+[
+  {
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shop/providers/Microsoft.ServiceBus/namespaces/sb-shop/topics/sb-shop-order-events/subscriptions/billing",
+    "name": "billing",
+    "type": "Microsoft.ServiceBus/Namespaces/Topics/Subscriptions"
+  },
+  {
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shop/providers/Microsoft.ServiceBus/namespaces/sb-shop/topics/sb-shop-order-events/subscriptions/shipping",
+    "name": "shipping",
+    "type": "Microsoft.ServiceBus/Namespaces/Topics/Subscriptions"
+  }
+]

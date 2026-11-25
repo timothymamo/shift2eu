@@ -590,6 +590,17 @@ func inventoryGuides() []inventoryGuideCase {
 					id: "shop-edge-map", rawType: "compute.googleapis.com/UrlMap", category: "network.loadbalancer",
 					capabilities: []string{"ipv6", "zone-high-availability"},
 				},
+				// One IPv6 backend service is enough, wherever a URL map names it:
+				// this one sends its default path, and its path matcher's, to an
+				// IPv4-only service and only a /v6/* path rule to the IPv6-only
+				// one, and the load balancer is ipv6 all the same (the maintainer
+				// kept "any" rather than "all", issue #600). The IPv6 service is
+				// deliberately not the default service: a program that read only
+				// that one would lose the capability.
+				{
+					id: "shop-mixed-map", rawType: "compute.googleapis.com/UrlMap", category: "network.loadbalancer",
+					capabilities: []string{"ipv6", "zone-high-availability"},
+				},
 				// A backend service no URL map names is a load balancer of its own,
 				// and a UDP forwarding rule reaching it gives it udp. A target pool
 				// names no protocol, so its UDP comes from its forwarding rule. The
@@ -748,10 +759,93 @@ func inventoryGuides() []inventoryGuideCase {
 				{id: "shop-hana-1", rawType: "Microsoft.AzureLargeInstance/azureLargeInstances"},
 			},
 			present: []resourceFact{
-				// A storage queue is a queue; a Service Bus topic publishes and
-				// subscribes, which no taxonomy category covers.
+				// A storage queue is a queue, and so is a topic subscription, which
+				// has a dead-letter subqueue of its own. A topic publishes and
+				// subscribes, and Azure encrypts every Service Bus namespace at rest.
 				{id: "shop-thumbnail-jobs", rawType: "Microsoft.Storage/storageAccounts/queueServices/queues", category: "messaging.queue"},
-				{id: "sb-shop-order-events", rawType: "Microsoft.ServiceBus/namespaces/topics", category: "unclassified"},
+				{id: "sb-shop-order-events", rawType: "Microsoft.ServiceBus/namespaces/topics", category: "messaging.topic", capabilities: []string{"encryption-at-rest"}},
+				{id: "sb-shop-order-events/billing", rawType: "Microsoft.ServiceBus/namespaces/topics/subscriptions", category: "messaging.queue", capabilities: []string{"dead-letter-queue"}},
+				{id: "sb-shop-order-events/shipping", rawType: "Microsoft.ServiceBus/namespaces/topics/subscriptions", category: "messaging.queue", capabilities: []string{"dead-letter-queue"}},
+				// A Premium cache is a cluster of shards with a replica each, spread
+				// over zones, snapshotting its data with RDB persistence, and encrypted
+				// at rest. A Basic C0 cache is one node, in no zone, and one of the two
+				// SKUs Azure does not encrypt its disks for.
+				{id: "redis-shop-cart", rawType: "Microsoft.Cache/redis", category: "cache.redis", capabilities: []string{"encryption-at-rest", "node-high-availability", "sharding", "snapshots", "zone-high-availability"}},
+				{id: "redis-shop-dev", rawType: "Microsoft.Cache/redis", category: "cache.redis", capabilities: []string{}},
+				// A Standard cache is a primary and a replica, in no zone, and one of the
+				// SKUs Azure encrypts the disks of. So is a Premium cache that names
+				// neither shards nor replicas: two nodes, not four.
+				{id: "redis-shop-sessions", rawType: "Microsoft.Cache/redis", category: "cache.redis", capabilities: []string{"encryption-at-rest", "node-high-availability"}},
+				{id: "redis-shop-catalog", rawType: "Microsoft.Cache/redis", category: "cache.redis", capabilities: []string{"encryption-at-rest", "node-high-availability"}},
+				// A legacy Redis Enterprise cluster spread over three zones keeps serving
+				// through the loss of a zone, and the nodes that needs: one per zone is a
+				// primary and its failover replicas. It names no redundancy mode, so only
+				// its zones make it zone redundant. Without a database row it claims
+				// neither clustering nor persistence.
+				{id: "redis-shop-enterprise", rawType: "Microsoft.Cache/redisEnterprise", category: "cache.redis", capabilities: []string{"encryption-at-rest", "node-high-availability", "zone-high-availability"}},
+				// Azure Managed Redis: a primary and a replica, zone redundant, and
+				// clustered and persisted as its database says.
+				{id: "amr-shop-session", rawType: "Microsoft.Cache/redisEnterprise", category: "cache.redis", capabilities: []string{"encryption-at-rest", "node-high-availability", "sharding", "snapshots", "zone-high-availability"}},
+				// An Azure Managed Redis cluster in three zones with its high availability
+				// disabled is one node: its own highAvailability setting is what makes it
+				// redundant, and the zones it is deployed in do not stand in for it.
+				{id: "amr-shop-scratch", rawType: "Microsoft.Cache/redisEnterprise", category: "cache.redis", capabilities: []string{"encryption-at-rest"}},
+				// A Cosmos DB account for MongoDB: replicas within a region, zone
+				// redundancy and continuous backup; one region serves no read replica.
+				// An account of any other kind stays unclassified.
+				{id: "cosmos-shop-catalog", rawType: "Microsoft.DocumentDB/databaseAccounts", category: "database.mongodb", capabilities: []string{"encryption-at-rest", "node-high-availability", "point-in-time-restore", "zone-high-availability"}},
+				{id: "cosmos-shop-events", rawType: "Microsoft.DocumentDB/databaseAccounts", category: "unclassified", capabilities: []string{}},
+				// An account served from two regions serves reads from both.
+				{id: "cosmos-shop-history", rawType: "Microsoft.DocumentDB/databaseAccounts", category: "database.mongodb", capabilities: []string{"encryption-at-rest", "node-high-availability", "read-replicas"}},
+				// Azure DocumentDB: two shards, each with a standby, 128 GiB each.
+				{id: "docdb-shop-orders", rawType: "Microsoft.DocumentDB/mongoClusters", category: "database.mongodb", capabilities: []string{"encryption-at-rest", "node-high-availability", "point-in-time-restore", "zone-high-availability"}},
+				// A cluster in the same zone keeps a standby per shard against a node
+				// failure, not against the loss of an availability zone: Microsoft,
+				// "Same-zone HA protects against node failures but doesn't protect against
+				// an availability zone outage"
+				// (https://learn.microsoft.com/en-us/azure/documentdb/high-availability), so
+				// it is not zone redundant.
+				{id: "docdb-shop-samezone", rawType: "Microsoft.DocumentDB/mongoClusters", category: "database.mongodb", capabilities: []string{"encryption-at-rest", "node-high-availability", "point-in-time-restore"}},
+				// A cluster another cluster replicates from serves read replicas.
+				{id: "docdb-shop-events", rawType: "Microsoft.DocumentDB/mongoClusters", category: "database.mongodb", capabilities: []string{"encryption-at-rest", "node-high-availability", "point-in-time-restore", "read-replicas", "zone-high-availability"}},
+				// A Standard load balancer with a UDP rule from an IPv6 frontend to an
+				// IPv6 backend pool is IPv6 end to end. One with an IPv6 frontend over
+				// IPv4-only backends is not IPv6 at all, and one in no zone is not zone
+				// redundant. A Basic load balancer claims neither.
+				{id: "lb-shop-dns", rawType: "Microsoft.Network/loadBalancers", category: "network.loadbalancer", capabilities: []string{"ipv6", "udp", "zone-high-availability"}},
+				{id: "lb-shop-web-v6front", rawType: "Microsoft.Network/loadBalancers", category: "network.loadbalancer", capabilities: []string{}},
+				{id: "lb-shop-legacy", rawType: "Microsoft.Network/loadBalancers", category: "network.loadbalancer", capabilities: []string{}},
+				// An IPv6 frontend is IPv6 end to end with an IPv6 member of its pool,
+				// whether the member is a scale set's IPv6 IP configuration or an IPv6
+				// address the pool names itself. A rule of protocol All or Quic carries UDP.
+				// A Gateway load balancer inserts a firewall appliance into a flow, and is
+				// no load balancer to move.
+				{id: "lb-shop-api", rawType: "Microsoft.Network/loadBalancers", category: "network.loadbalancer", capabilities: []string{"ipv6"}},
+				{id: "lb-shop-mesh", rawType: "Microsoft.Network/loadBalancers", category: "network.loadbalancer", capabilities: []string{"ipv6"}},
+				{id: "lb-shop-quic", rawType: "Microsoft.Network/loadBalancers", category: "network.loadbalancer", capabilities: []string{"udp"}},
+				{id: "lb-shop-all", rawType: "Microsoft.Network/loadBalancers", category: "network.loadbalancer", capabilities: []string{"udp"}},
+				{id: "lb-shop-gateway", rawType: "Microsoft.Network/loadBalancers", category: "unclassified", capabilities: []string{}},
+				// An Application Gateway in three zones is zone redundant, and is
+				// neither an IPv6 nor a UDP load balancer.
+				{id: "agw-shop", rawType: "Microsoft.Network/applicationGateways", category: "network.loadbalancer", capabilities: []string{"zone-high-availability"}},
+				// A container app scales with requests. Of kind functionapp it is a
+				// function, of kind workflowapp a Logic App, which stays unclassified.
+				{id: "ca-shop-api", rawType: "Microsoft.App/containerApps", category: "serverless.container", capabilities: []string{}},
+				{id: "ca-shop-fn", rawType: "Microsoft.App/containerApps", category: "serverless.function", capabilities: []string{}},
+				{id: "ca-shop-flows", rawType: "Microsoft.App/containerApps", category: "unclassified", capabilities: []string{}},
+				// A registry encrypts every image it holds at rest.
+				{id: "acrshop", rawType: "Microsoft.ContainerRegistry/registries", category: "registry.container", capabilities: []string{"encryption-at-rest"}},
+				// An NFS share of a zone-redundant FileStorage account has a snapshot
+				// and keeps serving through the loss of a zone; its SMB sibling stays
+				// unclassified, as an SMB share has no target equivalent.
+				{id: "shop-media", rawType: "Microsoft.Storage/storageAccounts/fileServices/shares", category: "storage.file", capabilities: []string{"encryption-at-rest", "snapshots", "zone-high-availability"}},
+				{id: "shop-reports", rawType: "Microsoft.Storage/storageAccounts/fileServices/shares", category: "unclassified", capabilities: []string{}},
+				// A Microsoft.FileShares share is NFS only; one deployed across zones
+				// keeps serving through the loss of a zone, a local one cannot.
+				{id: "fs-shop-build", rawType: "Microsoft.FileShares/fileShares", category: "storage.file", capabilities: []string{"encryption-at-rest", "zone-high-availability"}},
+				{id: "fs-shop-archive", rawType: "Microsoft.FileShares/fileShares", category: "storage.file", capabilities: []string{"encryption-at-rest"}},
+				// No target runs MariaDB as a public cloud managed database.
+				{id: "mariadb-shop-legacy", rawType: "Microsoft.DBforMariaDB/servers", category: "unclassified", capabilities: []string{}},
 				// A persistent volume in the node resource group holds data and
 				// stays: only what AKS manages for the cluster is left out.
 				{id: "pvc-00000000-0000-0000-0000-000000000000", rawType: "Microsoft.Compute/disks", category: "storage.block"},
@@ -776,15 +870,46 @@ func inventoryGuides() []inventoryGuideCase {
 				{id: "mysql-shop-catalog", storageGiB: 64, noCount: true},
 				{id: "psql-shop-replica", storageGiB: 128, count: 1},
 				{id: "mysql-shop-reports", storageGiB: 32, count: 1},
+				// A cache's nodes: one per shard, a replica on each for a Premium
+				// cache (two shards are four nodes), one for a Basic cache, and the
+				// primary and replica of an Azure Managed Redis cluster.
+				{id: "redis-shop-cart", count: 4},
+				{id: "redis-shop-dev", count: 1},
+				// A Standard or Premium cache that names no shard and no replica.
+				{id: "redis-shop-sessions", count: 2},
+				{id: "redis-shop-catalog", count: 2},
+				{id: "amr-shop-session", count: 2},
+				// The nodes of the legacy Enterprise cluster spread over three zones, one
+				// per zone, and the one node of an Azure Managed Redis cluster whose high
+				// availability is disabled however many zones it names.
+				{id: "redis-shop-enterprise", count: 2},
+				{id: "amr-shop-scratch", count: 1},
+				// Azure DocumentDB: a primary and a standby per shard, 128 GiB each.
+				{id: "docdb-shop-orders", count: 4, storageGiB: 256},
+				// A cluster in the same zone runs the same standby per shard.
+				{id: "docdb-shop-samezone", count: 2},
+				// A cluster and the replica another cluster replicates from it.
+				{id: "docdb-shop-events", count: 4},
+				{id: "docdb-shop-events-replica", count: 4},
+				// The quota of an NFS share, from the shares list, and the
+				// provisioned GiB of a Microsoft.FileShares share.
+				{id: "shop-media", storageGiB: 1024},
+				{id: "fs-shop-build", storageGiB: 256},
+				{id: "fs-shop-archive", storageGiB: 512},
 			},
 			// The cluster's node scale set and its load balancer, the OS disk
 			// of a scale set member, and a member's data disk its member deletes
-			// with it: the member's scale set stands for all of them.
+			// with it: the member's scale set stands for all of them. So does a
+			// FileStorage account for its shares, and a Redis Enterprise cluster for
+			// its database.
 			absent: []string{
 				"aks-system-12345678-vmss",
 				"kubernetes",
 				"vmss-shop-web_0abc_OsDisk_1",
 				"vmss-shop-web_0abc_DataDisk_0",
+				"stshopfiles",
+				"default",
+				"amr-shop-session/default",
 			},
 		},
 	}
@@ -846,11 +971,18 @@ func taxonomyCategories(source string) []string {
 			"compute.vm",
 			"storage.block",
 			"storage.object",
+			"storage.file",
 			"database.postgresql",
 			"database.mysql",
+			"database.mongodb",
+			"cache.redis",
 			"kubernetes.managed",
 			"serverless.function",
+			"serverless.container",
 			"messaging.queue",
+			"messaging.topic",
+			"network.loadbalancer",
+			"registry.container",
 		}
 	default:
 		return nil

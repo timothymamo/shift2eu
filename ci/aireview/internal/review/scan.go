@@ -252,7 +252,9 @@ func scanSection(section, path string) (int, []ScanFinding) {
 //     Shop.Acme.Com, db01.corp.Info and DB01.CORP.INFO are host names, and a
 //     lower-case host with a title-case top-level domain (db.corp.Info,
 //     contoso.Com) is an accepted miss: it cannot be told from cfg.Info, and
-//     hosts are rarely spelt so;
+//     hosts are rarely spelt so; nor is an Azure resource type, a provider
+//     namespace microsoft.<namespace> in any case with "/" right after it
+//     (isAzureNamespace, PRD #552: Microsoft.App/containerApps);
 //   - a key is a run of letters and digits that is an access key ID (twenty
 //     upper-case letters and digits starting AKIA or ASIA) or is at least 32
 //     long with an upper-case letter, a lower-case letter and a digit (a
@@ -470,13 +472,16 @@ func isAWSRegion(label string) bool {
 // hasHostname reports whether line holds a host name (scanLine).
 func hasHostname(line string) bool {
 	return anyRun(line, func(c byte) bool { return isASCIIAlnum(c) || c == '.' || c == '-' },
-		func(run string, _, _ byte) bool {
+		func(run string, _, after byte) bool {
 			written := strings.Trim(run, ".-")
 			if isCodeName(strings.Split(written, ".")) {
 				return false
 			}
 
 			host := strings.ToLower(written)
+			if written == run && after == '/' && isAzureNamespace(host) {
+				return false
+			}
 
 			labels := strings.Split(host, ".")
 			if len(labels) < 2 || !slices.Contains(publicTLDs, labels[len(labels)-1]) {
@@ -491,6 +496,20 @@ func hasHostname(line string) bool {
 
 			return !isAllowedHost(host)
 		})
+}
+
+// isAzureNamespace reports whether name, lower-case, is an Azure Resource
+// Manager provider namespace, microsoft.<namespace> with exactly two labels
+// (microsoft.app, microsoft.compute). hasHostname takes it for no host name only
+// when "/" and a resource type follow it directly, as in
+// Microsoft.App/containerApps (PRD #552): a type names a kind of resource,
+// never a host. Anything else is untouched: shop-corp.app, a deeper name such
+// as shop.microsoft.app/x, and a namespace with no "/" after it stay host
+// names, and no customer can choose a name under microsoft.<tld>.
+func isAzureNamespace(name string) bool {
+	namespace, ok := strings.CutPrefix(name, "microsoft.")
+
+	return ok && namespace != "" && !strings.Contains(namespace, ".")
 }
 
 // isCodeName reports whether labels, the labels of a dotted name as written,

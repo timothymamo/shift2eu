@@ -413,6 +413,31 @@ func TestScanLeftOutFindsRealDataInTheFilesLeftOut(t *testing.T) {
 			wantFiles: []review.LeftOutFile{{Path: golden, Added: 1}},
 		},
 		{
+			// PRD #552: an Azure Resource Manager type names a kind of resource,
+			// never a host, though its provider namespace reads as a domain name
+			// because .app is a public TLD. A left-out golden, a guide page or the
+			// classification program that names Container Apps would otherwise fail
+			// the scan for a value that identifies nobody.
+			name: "an Azure resource type is no host name",
+			diff: goldenAdds(golden,
+				`"rawType": "Microsoft.App/containerApps"`,
+				`"type": "microsoft.app/containerapps"`),
+			wantFiles: []review.LeftOutFile{{Path: golden, Added: 2}},
+		},
+		{
+			// The rule that quiets the scan about a resource type must not quiet
+			// it about a name under the same TLD that a customer chose (PRD #552).
+			name: "a host name under the app TLD is still found",
+			diff: goldenAdds(golden,
+				`"shop": "shop-corp.app"`,
+				`"store": "https://shop.example-corp.app/"`),
+			wantFiles: []review.LeftOutFile{{Path: golden, Added: 2}},
+			wantFindings: []review.ScanFinding{
+				{Path: golden, Line: 1, Kind: review.ScanHostname},
+				{Path: golden, Line: 2, Kind: review.ScanHostname},
+			},
+		},
+		{
 			// A report's taxonomy categories read like host names, and the
 			// committed goldens are full of them.
 			name: "a taxonomy category is no host name",

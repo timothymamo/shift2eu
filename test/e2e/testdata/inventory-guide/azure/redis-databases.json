@@ -1,0 +1,15 @@
+[
+  {
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shop/providers/Microsoft.Cache/redisEnterprise/amr-shop-session/databases/default",
+    "name": "amr-shop-session/default",
+    "type": "Microsoft.Cache/redisEnterprise/databases",
+    "properties": {
+      "clusteringPolicy": "OSSCluster",
+      "persistence": {
+        "aofEnabled": false,
+        "rdbEnabled": true,
+        "rdbFrequency": "12h"
+      }
+    }
+  }
+]

@@ -340,7 +340,7 @@ func TestPlantedRealDataFailsTheFixtureCheck(t *testing.T) {
 			want:    []string{"namespaces/sb-contoso-prod"},
 		},
 		{
-			// The guide's seven synthetic shop names are the guide's own sample,
+			// The guide's synthetic shop names are the guide's own sample,
 			// so they are excused in the guide's fixtures
 			// (test/e2e/testdata/inventory-guide/) and nowhere else: the same ARM
 			// ID planted at another checked path names a customer's PostgreSQL
@@ -361,7 +361,7 @@ func TestPlantedRealDataFailsTheFixtureCheck(t *testing.T) {
 			want:    []string{"namespaces/sb-shop"},
 		},
 		{
-			// The guide's seven synthetic shop names are excused by allow-list
+			// The guide's synthetic shop names are excused by allow-list
 			// entries that each name one file and one value with its type
 			// segment, since a value the check reads only in an ARM ID cannot
 			// be held to a file by a bare entry (issue #424's review); a

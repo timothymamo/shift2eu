@@ -900,7 +900,7 @@ which belong to their instance.
 | `cache.redis` (Redis cluster, Valkey) | `snapshots` | `persistenceConfig.mode` is `RDB` (an AOF log is not a snapshot) |
 | `network.loadbalancer` | `zone-high-availability` | always: every GCP load balancer is regional or global, and a global one counts only for its zone redundancy within a region |
 | `network.loadbalancer` | `udp` | one of its backend services has `protocol` `UDP`, or a forwarding rule of `IPProtocol` `UDP` reaches it |
-| `network.loadbalancer` | `ipv6` | a passthrough load balancer (a backend service of `loadBalancingScheme` `EXTERNAL` or `INTERNAL`) when a forwarding rule of `ipVersion` `IPV6` names that backend service in `backendService`: it delivers IPv6 to dual-stack or IPv6-only backends and has no IP selection policy. A proxy-based load balancer (a URL map, a target proxy, or scheme `EXTERNAL_MANAGED` or `INTERNAL_MANAGED`) when a forwarding rule of `ipVersion` `IPV6` reaches it **and** one of its backend services has `ipAddressSelectionPolicy` `IPV6_ONLY` or `PREFER_IPV6`; there an IPv6 frontend over IPv4 backends gets none. A target pool takes IPv4 only and gets none |
+| `network.loadbalancer` | `ipv6` | a passthrough load balancer when a forwarding rule of `ipVersion` `IPV6` names its backend service directly in `backendService` (not through a target proxy) and that backend service has `loadBalancingScheme` `EXTERNAL` or `INTERNAL`: it delivers IPv6 to dual-stack or IPv6-only backends and has no IP selection policy. A scheme alone is not enough, as a classic Application Load Balancer and a proxy Network Load Balancer are `EXTERNAL` too. A proxy-based load balancer (a URL map, a target proxy, or a backend service of scheme `EXTERNAL_MANAGED` or `INTERNAL_MANAGED`) when a forwarding rule of `ipVersion` `IPV6` reaches it **and** at least one backend service it names has `ipAddressSelectionPolicy` `IPV6_ONLY` or `PREFER_IPV6`: one IPv6 backend service is enough (say, one path of a URL map), the others may stay IPv4, so a load balancer whose main paths are IPv6 is not under-reported. An IPv6 frontend over IPv4 backends only gets none. A target pool takes IPv4 only and gets none |
 | `registry.container` | `encryption-at-rest` | always |
 | `storage.file` | `encryption-at-rest` | always |
 | `storage.file` | `zone-high-availability` | tier `REGIONAL` or `ENTERPRISE` |
@@ -914,9 +914,14 @@ UDP.
 
 ### Azure permissions
 
-The built-in `Reader` role on the subscription. It covers Resource Graph and the management-plane
-reads below (Service Bus queues and topics, storage queues, blob service properties); none of the
-commands reads a storage account key or any data.
+The built-in `Reader` role on the subscription. Its one action, `*/read`, covers Resource Graph and
+the management-plane reads below (Service Bus queues, topics and topic subscriptions, storage queues,
+blob service properties, file shares and Redis Enterprise databases); none of the commands reads a
+storage account key, an access key or any data. The three reads added for file shares, topic
+subscriptions and Azure Managed Redis are the actions
+`Microsoft.Storage/storageAccounts/fileServices/shares/read`,
+`Microsoft.ServiceBus/namespaces/topics/subscriptions/read` and
+`Microsoft.Cache/redisEnterprise/databases/read`, all within `*/read`.
 
 ### Collect from Azure
 
@@ -954,6 +959,39 @@ query="Resources
     type =~ 'microsoft.containerservice/managedclusters',
       bag_pack('nodeResourceGroup', properties.nodeResourceGroup,
         'agentPoolProfiles', properties.agentPoolProfiles),
+    type =~ 'microsoft.compute/virtualmachinescalesets',
+      bag_pack('virtualMachineProfile', bag_pack('networkProfile',
+        bag_pack('networkInterfaceConfigurations',
+          properties.virtualMachineProfile.networkProfile.networkInterfaceConfigurations))),
+    type =~ 'microsoft.cache/redis',
+      bag_pack('sku', properties.sku,
+        'shardCount', properties.shardCount,
+        'replicasPerMaster', properties.replicasPerMaster,
+        'replicasPerPrimary', properties.replicasPerPrimary,
+        'zonalAllocationPolicy', properties.zonalAllocationPolicy,
+        'redisConfiguration', bag_pack('rdb-backup-enabled', properties.redisConfiguration['rdb-backup-enabled'])),
+    type =~ 'microsoft.cache/redisenterprise',
+      bag_pack('highAvailability', properties.highAvailability,
+        'redundancyMode', properties.redundancyMode),
+    type =~ 'microsoft.documentdb/databaseaccounts',
+      bag_pack('backupPolicy', bag_pack('type', properties.backupPolicy.type),
+        'locations', properties.locations),
+    type =~ 'microsoft.documentdb/mongoclusters',
+      bag_pack('highAvailability', bag_pack('targetMode', properties.highAvailability.targetMode),
+        'sharding', bag_pack('shardCount', properties.sharding.shardCount),
+        'storage', bag_pack('sizeGb', properties.storage.sizeGb),
+        'compute', bag_pack('tier', properties.compute.tier),
+        'replicaParameters', bag_pack('sourceResourceId', properties.replicaParameters.sourceResourceId)),
+    type =~ 'microsoft.network/loadbalancers',
+      bag_pack('frontendIPConfigurations', properties.frontendIPConfigurations,
+        'backendAddressPools', properties.backendAddressPools,
+        'loadBalancingRules', properties.loadBalancingRules),
+    type =~ 'microsoft.network/publicipaddresses',
+      bag_pack('publicIPAddressVersion', properties.publicIPAddressVersion),
+    type =~ 'microsoft.fileshares/fileshares',
+      bag_pack('protocol', properties.protocol,
+        'provisionedStorageGiB', properties.provisionedStorageGiB,
+        'redundancy', properties.redundancy),
     dynamic(null))
 | project id, name, type, kind, location, zones, sku, properties"
 page=1
@@ -977,6 +1015,12 @@ az servicebus namespace list --query "[].[name, resourceGroup]" --output tsv |
       --query "[].{id: id, name: name, type: type}" --output json
     az servicebus topic list --namespace-name "$name" --resource-group "$group" \
       --query "[].{id: id, name: name, type: type}" --output json
+    az servicebus topic list --namespace-name "$name" --resource-group "$group" \
+      --query "[].name" --output tsv |
+      while read -r topic; do
+        az servicebus topic subscription list --namespace-name "$name" --resource-group "$group" \
+          --topic-name "$topic" --query "[].{id: id, name: name, type: type}" --output json
+      done
   done > "$out/servicebus.json"
 
 az storage account list --query "[?kind=='StorageV2' || kind=='Storage'].id" --output tsv |
@@ -993,6 +1037,23 @@ az storage account list --query "[].[name, resourceGroup]" --output tsv |
       --output json
   done > "$out/blob-services.json"
 
+# The file shares of FileStorage accounts, the only ones with NFS shares, and their snapshots.
+az storage account list --query "[?kind=='FileStorage'].id" --output tsv |
+  while read -r id; do
+    az rest --method get \
+      --url "https://management.azure.com${id}/fileServices/default/shares?api-version=2023-05-01&\$expand=snapshots" \
+      --query "value[].{id: id, name: name, type: type, properties: {enabledProtocols: properties.enabledProtocols, shareQuota: properties.shareQuota, snapshotTime: properties.snapshotTime}}" \
+      --output json
+  done > "$out/file-shares.json"
+
+# The databases of every Azure Managed Redis (Redis Enterprise) cluster: clustering and persistence.
+jq -r '.data[] | select(.type == "microsoft.cache/redisenterprise") | .id' "$out"/graph-*.json |
+  while read -r id; do
+    az rest --method get --url "https://management.azure.com${id}/databases?api-version=2026-09-01" \
+      --query "value[].{id: id, name: name, type: type, properties: {clusteringPolicy: properties.clusteringPolicy, persistence: properties.persistence}}" \
+      --output json
+  done > "$out/redis-databases.json"
+
 # The vCPU and memory of every VM size, in each region with virtual machines or scale sets.
 jq -r '[.data[] | select(.type == "microsoft.compute/virtualmachines"
     or .type == "microsoft.compute/virtualmachinescalesets") | .location] | unique[]' "$out"/graph-*.json |
@@ -1001,19 +1062,30 @@ jq -r '[.data[] | select(.type == "microsoft.compute/virtualmachines"
   done > "$out/vm-sizes.json"
 ```
 
-The query keeps no admin user names, SSH keys, server logins or host names. It keeps whole arrays
-where the program reads one field of each element (a virtual machine's data disks and network
-interfaces, a network interface's IP configurations with their private IP addresses, an AKS
-cluster's node pools with their labels, tags (keys and values), taints, subnet IDs and node image
-versions), as Resource Graph cannot trim inside an array.
+The query keeps no admin user names, SSH keys, server logins or host names. Of a cache's
+`redisConfiguration` it keeps only `rdb-backup-enabled`: the whole object can hold a storage
+connection string (`rdb-storage-connection-string`), a secret. No query or call keeps an access key, a
+connection string or a cache's host name. It keeps whole arrays where the program reads one field of
+each element (a virtual machine's data disks and network interfaces, a network interface's IP
+configurations with their private IP addresses, a scale set's network interface configurations, a
+load balancer's frontend IP configurations, backend pools with their members' IP addresses and
+load-balancing rules, a Cosmos DB account's locations, an AKS cluster's node pools with their labels,
+tags (keys and values), taints, subnet IDs and node image versions), as Resource Graph cannot trim
+inside an array. So a Cosmos DB account's locations keep each region's endpoint host name
+(`documentEndpoint`), and a scale set's network interface configurations keep a public IP
+address's DNS label (`dnsSettings.domainNameLabel`), where one is set.
 
-Resource Graph holds most settings; Service Bus queues and topics, storage queues, a storage
-account's blob versioning and the VM sizes are not in it, hence the four loops. Storage queues are listed through the
-Resource Manager API (`az rest --method get`, a read), not the data plane, so `Reader` is enough and
-no account key is needed. A Basic tier Service Bus namespace has no topics, and its `topic list`
-fails: that error is expected. An account with more queues than one response returns adds a
+Resource Graph holds most settings; Service Bus queues, topics and topic subscriptions, storage
+queues, a storage account's blob versioning, file shares, the databases of an Azure Managed Redis
+cluster and the VM sizes are not in it, hence the loops. Storage queues, file shares and Redis
+Enterprise databases are listed through the Resource Manager API (`az rest --method get`, a read), not
+the data plane, so `Reader` is enough and no account key is needed. A Basic tier Service Bus
+namespace has no topics, and its `topic list` fails: that error is expected. An account with more
+queues or shares, or a Redis Enterprise cluster with more databases, than one response returns adds a
 `nextLink` to the response; run that call without `--query` and fetch the `nextLink` URL with
-`az rest --method get --url` as well.
+`az rest --method get --url` as well. The shares call
+lists each share snapshot as one more element with its share's ID and a `snapshotTime`; the program
+counts it as a snapshot of the share, not as a share.
 
 ### Build the Azure inventory
 
@@ -1033,13 +1105,41 @@ Review `inventories/azure.inventory.json`, then delete the raw output: `rm -r in
 | PostgreSQL or MySQL flexible server | `storageGiB` | `properties.storage.storageSizeGB` |
 | PostgreSQL or MySQL flexible server, single-node | `count`: 1 | `properties.highAvailability.mode` `Disabled` or not set |
 | AKS cluster | `count` | the sum of its agent pools' `count` |
+| Azure Cache for Redis | `count` | Basic 1; Standard 2; Premium (1 + `properties.replicasPerPrimary`, or `replicasPerMaster`, 1 when neither is set) × `properties.shardCount` (at least 1) |
+| Azure Managed Redis (Redis Enterprise) | `count` | 2 (a primary and a replica) with high availability (for a legacy Enterprise or Enterprise Flash cluster only, two or more `zones`), else 1 |
+| Azure DocumentDB (`mongoClusters`) | `count` | `properties.sharding.shardCount` (at least 1), × 2 with high availability (a standby per shard) |
+| Azure DocumentDB (`mongoClusters`) | `storageGiB` | `properties.storage.sizeGb` (per shard) × the shard count |
+| NFS file share of a FileStorage account | `storageGiB` | `properties.shareQuota` |
+| `Microsoft.FileShares` file share | `storageGiB` | `properties.provisionedStorageGiB` |
 
 Not filled in: a flexible server's vCPU and memory (its `sku.name`, such as `Standard_D2ds_v4`), the
 count of a flexible server with high availability (`ZoneRedundant` or `SameZone`), an AKS cluster's
-per-node vCPU and memory (its pools' `vmSize`), and a storage account's stored GiB. Add them by hand
-where you want an estimate. A server with high availability has a standby, and how many nodes a standby
-counts as depends on how a target prices high availability: the program does not guess, so the estimate
-says "(count assumed 1)" until you set the `count` (see [Sizes](#sizes) for the value).
+per-node vCPU and memory (its pools' `vmSize`), a storage account's stored GiB, a cache's memory, an
+Azure DocumentDB cluster's vCPU and memory, and a Cosmos DB account's size (it is billed in request
+units, not nodes). Add them by hand where you want an estimate. An Azure Cache for Redis node's memory
+follows its `properties.sku` family and capacity (per shard for a clustered Premium cache):
+
+| SKU | C0 | C1 | C2 | C3 | C4 | C5 | C6 | P1 | P2 | P3 | P4 | P5 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| Memory | 250 MB | 1 GB | 2.5 GB | 6 GB | 13 GB | 26 GB | 53 GB | 6 GB | 13 GB | 26 GB | 53 GB | 120 GB |
+
+An Azure DocumentDB cluster's vCPU and memory per shard follow its `properties.compute.tier`:
+
+| Tier | M10 | M20 | M25 | M30 | M40 | M50 | M60 | M80 | M200 |
+|---|---|---|---|---|---|---|---|---|---|
+| vCores | 1 (burstable) | 2 (burstable) | 2 (burstable) | 2 | 4 | 8 | 16 | 32 | 64 |
+| Memory (GiB) | 2 | 4 | 8 | 8 | 16 | 32 | 64 | 128 | 256 |
+
+An Azure Managed Redis cluster's memory is its `sku.name`'s size, which the program does not look up.
+A legacy Enterprise or Enterprise Flash cluster (`sku.name` such as `Enterprise_E10`) runs
+`sku.capacity` nodes (its scale), which the program does not read either: its count
+of 2 (or 1) may understate it, so set the `count` by hand from `sku.capacity`.
+
+A flexible server with high availability has a standby, and how many nodes a standby counts as depends
+on how a target prices high availability: the program does not guess, so the estimate says "(count
+assumed 1)" until you set the `count` (see [Sizes](#sizes) for the value). A DocumentDB cluster's
+standbys are counted as nodes all the same: the targets sell managed MongoDB per node, and the source
+lists and runs each standby as a node of its own.
 
 ### Azure classification
 
@@ -1054,29 +1154,58 @@ Graph writes types in lower case).
 | `Microsoft.AzureLargeInstance/azureLargeInstances` (SAP HANA Large Instances) | `compute.baremetal` |
 | `Microsoft.Compute/disks` | `storage.block` |
 | `Microsoft.Storage/storageAccounts` (not kind `FileStorage`) | `storage.object` |
-| `Microsoft.Storage/storageAccounts`, kind `FileStorage` | `unclassified` |
+| `Microsoft.Storage/storageAccounts`, kind `FileStorage`, with no share listed | `unclassified` |
+| `Microsoft.Storage/storageAccounts/fileServices/shares`, protocol `NFS` | `storage.file` |
+| `Microsoft.Storage/storageAccounts/fileServices/shares`, protocol `SMB` (or none given) | `unclassified` |
+| `Microsoft.FileShares/fileShares`, protocol `NFS` | `storage.file` |
 | `Microsoft.DBforPostgreSQL/flexibleServers` | `database.postgresql` |
 | `Microsoft.DBforMySQL/flexibleServers` | `database.mysql` |
+| `Microsoft.DocumentDB/databaseAccounts`, kind `MongoDB` (Azure Cosmos DB for MongoDB, RU) | `database.mongodb` |
+| `Microsoft.DocumentDB/databaseAccounts`, any other kind | `unclassified` |
+| `Microsoft.DocumentDB/mongoClusters` (Azure DocumentDB, vCore) | `database.mongodb` |
+| `Microsoft.DBforMariaDB/servers` | `unclassified` |
+| `Microsoft.Cache/redis` (Azure Cache for Redis) | `cache.redis` |
+| `Microsoft.Cache/redisEnterprise` (Azure Managed Redis) | `cache.redis` |
 | `Microsoft.ContainerService/managedClusters` | `kubernetes.managed` |
 | `Microsoft.Web/sites`, kind `functionapp` | `serverless.function` |
 | `Microsoft.Web/sites`, any other kind (web app, Logic App) | `unclassified` |
+| `Microsoft.App/containerApps`, kind `functionapp` | `serverless.function` |
+| `Microsoft.App/containerApps`, kind `workflowapp` (Logic App) | `unclassified` |
+| `Microsoft.App/containerApps`, any other kind | `serverless.container` |
+| `Microsoft.ContainerRegistry/registries` | `registry.container` |
+| `Microsoft.Network/loadBalancers`, SKU `Standard` or `Basic` | `network.loadbalancer` |
+| `Microsoft.Network/loadBalancers`, SKU `Gateway` | `unclassified` |
+| `Microsoft.Network/applicationGateways` | `network.loadbalancer` |
 | `Microsoft.ServiceBus/namespaces/queues` | `messaging.queue` |
-| `Microsoft.ServiceBus/namespaces/topics` | `unclassified` |
+| `Microsoft.ServiceBus/namespaces/topics` | `messaging.topic` |
+| `Microsoft.ServiceBus/namespaces/topics/subscriptions` | `messaging.queue` |
 | `Microsoft.Storage/storageAccounts/queueServices/queues` | `messaging.queue` |
 | any other type | `unclassified` |
 
-A Service Bus topic, where every subscription gets its own copy of a message, is publish and
-subscribe, which no taxonomy category covers: each topic is listed as `unclassified` under its own
-name, so the report shows it as a blocker.
+A Service Bus topic (where publishers write) and each of its subscriptions (where consumers read, a
+queue of their own with a dead-letter subqueue) are both listed, as both have to move. A subscription
+is named `<topic>/<subscription>`, as the same subscription name often recurs across topics. An SMB
+share, a Cosmos DB account of another kind than `MongoDB`, a Logic App and a MariaDB server stay
+`unclassified`, so the report shows them as blockers. Azure Database for MariaDB was retired on 19
+September 2025, and Basic Load Balancer on 30 September 2025; a Basic load balancer still running is
+classified, with no capability. Azure Cache for Redis Basic, Standard and Premium retire on 30
+September 2028, its Enterprise and Enterprise Flash tiers on 31 March 2027 (Microsoft Learn,
+*Frequently asked questions on the retirement of Azure Cache for Redis*). The `zones` rule of a Redis
+Enterprise cluster holds only for those legacy tiers (an `Enterprise_*` or `EnterpriseFlash_*` SKU):
+an Azure Managed Redis cluster reads its `highAvailability` and `redundancyMode`, whatever its
+`zones`. Redis modules of an Azure Managed Redis cluster are no capability.
 
 Left out: virtual machines of a scale set, their OS disks (`storageProfile.osDisk`) and their data
 disks created with `deleteOption: Delete` (the scale set stands for them), snapshots and autoscale
-settings, which become capabilities of their disk or scale set, a Service Bus namespace whose queues
-or topics are listed (they stand for it; a namespace with neither stays `unclassified`), and
-everything in an AKS cluster's node resource group (`properties.nodeResourceGroup`, usually
+settings, which become capabilities of their disk or scale set, a Service Bus namespace whose queues,
+topics or subscriptions are listed (they stand for it; a namespace with none stays `unclassified`), a
+FileStorage account whose shares are listed (they stand for it), share snapshots, which become a
+capability of their share, the databases of an Azure Managed Redis cluster (the cluster stands for
+them), and everything in an AKS cluster's node resource group (`properties.nodeResourceGroup`, usually
 `MC_<group>_<cluster>_<region>`): the node pools' scale sets, load balancers, public IP addresses
-and network interfaces, which AKS manages and the cluster stands for. A managed disk in that group
-is a persistent volume that holds data, and stays.
+and network interfaces, which AKS manages and the cluster stands for, and the FileStorage accounts
+the Azure Files CSI driver creates there. A managed disk in that group is a persistent volume that
+holds data, and stays; so does a share of such a FileStorage account, a persistent volume too.
 
 | Category | Capability | When |
 |---|---|---|
@@ -1097,7 +1226,51 @@ is a persistent volume that holds data, and stays.
 | `kubernetes.managed` | `zone-high-availability` | a node pool spans two or more zones |
 | `kubernetes.managed` | `node-high-availability` | its node pools run two or more nodes in all |
 | `messaging.queue` (Service Bus) | `dead-letter-queue` | always: every Service Bus queue has a dead-letter subqueue |
+| `messaging.queue` (topic subscription) | `dead-letter-queue` | always: every subscription has a dead-letter subqueue |
 | `messaging.queue` (storage queue) | `encryption-at-rest` | always: Azure encrypts every storage account |
+| `messaging.topic` | `encryption-at-rest` | always: topics exist only in the Standard and Premium tiers, which encrypt all data at rest |
+| `cache.redis` (Azure Cache for Redis) | `node-high-availability` | tier Standard or Premium (a primary and a replica) |
+| `cache.redis` (Azure Cache for Redis) | `zone-high-availability` | tier Standard or Premium, and two or more `zones` or `zonalAllocationPolicy` `Automatic` |
+| `cache.redis` (Azure Cache for Redis) | `sharding` | tier Premium with `shardCount` 1 or more (OSS clustering) |
+| `cache.redis` (Azure Cache for Redis) | `snapshots` | tier Premium with `rdb-backup-enabled` `true` (RDB persistence; AOF alone is no snapshot) |
+| `cache.redis` (Azure Cache for Redis) | `encryption-at-rest` | any SKU but C0 and C1, whose disks Azure does not encrypt |
+| `cache.redis` (Azure Managed Redis) | `encryption-at-rest` | always |
+| `cache.redis` (Azure Managed Redis) | `node-high-availability` | `highAvailability` `Enabled`, `redundancyMode` `LR` or `ZR`, or two or more `zones` (a legacy Enterprise or Enterprise Flash cluster only) |
+| `cache.redis` (Azure Managed Redis) | `zone-high-availability` | `redundancyMode` `ZR`, or two or more `zones` (a legacy Enterprise or Enterprise Flash cluster only) |
+| `cache.redis` (Azure Managed Redis) | `sharding` | a database's `clusteringPolicy` is `OSSCluster` |
+| `cache.redis` (Azure Managed Redis) | `snapshots` | a database has RDB persistence (`persistence.rdbEnabled`) |
+| `database.mongodb` (Cosmos DB) | `encryption-at-rest` | always |
+| `database.mongodb` (Cosmos DB) | `node-high-availability` | always: each region keeps a quorum of replicas |
+| `database.mongodb` (Cosmos DB) | `point-in-time-restore` | `backupPolicy.type` `Continuous` |
+| `database.mongodb` (Cosmos DB) | `zone-high-availability` | a location has `isZoneRedundant` true |
+| `database.mongodb` (Cosmos DB) | `read-replicas` | two or more locations |
+| `database.mongodb` (DocumentDB) | `encryption-at-rest`, `point-in-time-restore` | always |
+| `database.mongodb` (DocumentDB) | `node-high-availability` | `highAvailability.targetMode` is not `Disabled` (`SameZone` or `ZoneRedundantPreferred`) |
+| `database.mongodb` (DocumentDB) | `zone-high-availability` | `highAvailability.targetMode` is `ZoneRedundantPreferred` (a `SameZone` standby shares its primary's zone) |
+| `database.mongodb` (DocumentDB) | `read-replicas` | another cluster names it in `replicaParameters.sourceResourceId` |
+| `network.loadbalancer` (load balancer) | `zone-high-availability` | SKU `Standard`, and a frontend IP configuration, or its public IP address, in two or more zones |
+| `network.loadbalancer` (load balancer) | `udp` | a load-balancing rule's protocol is `Udp`, `All` (HA ports) or `Quic` (carried over UDP) |
+| `network.loadbalancer` (load balancer) | `ipv6` | a load-balancing rule leads from an IPv6 frontend to a backend pool with an IPv6 member |
+| `network.loadbalancer` (Application Gateway) | `zone-high-availability` | it spans two or more zones |
+| `registry.container` | `encryption-at-rest` | always: Azure encrypts every image in a registry |
+| `storage.file` | `encryption-at-rest` | always: Azure Files encrypts every share |
+| `storage.file` (share of a FileStorage account) | `zone-high-availability` | the account's SKU is zone redundant (`_ZRS`) |
+| `storage.file` (share of a FileStorage account) | `snapshots` | the share has a snapshot |
+| `storage.file` (`Microsoft.FileShares`) | `zone-high-availability` | `redundancy` `Zone` |
+
+A frontend is IPv6 when its `privateIPAddressVersion` or its public IP address's
+`publicIPAddressVersion` is `IPv6`. A backend pool member is IPv6 when the IP configuration it names
+(of a network interface, or of a scale set's network profile) is `IPv6`, or its address is an IPv6
+address. An IPv6 frontend over IPv4 backends is no `ipv6`: the backends would have to move to IPv6
+too. A frontend's public IP address without `zones` is not counted as zone redundant, although Azure
+now makes a Standard one zone redundant in a region with zones: the program cannot see whether a
+region has zones, so it understates rather than overstates. A DocumentDB cluster with `SameZone` high
+availability gets `node-high-availability` but no `zone-high-availability`: its standby protects
+against a node failure, not a zone outage (Microsoft Learn, *High availability in Azure DocumentDB*).
+A `ZoneRedundantPreferred` cluster in a region without zones falls back to the same zone, and is still
+credited `zone-high-availability` it does not have, as the program cannot see the region's zones:
+remove it by hand there. An Application Gateway is never `ipv6` (it supports no IPv6 backends) and
+never `udp` (it balances HTTP). A `Microsoft.FileShares` share's snapshots are not listed.
 
 ## Trim what you do not want assessed
 

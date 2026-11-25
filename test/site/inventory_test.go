@@ -272,7 +272,7 @@ func TestInventoryCommandsPerStep(t *testing.T) {
 	}{
 		{key: "aws", collect: 15, build: 1},
 		{key: "gcp", collect: 11, build: 1},
-		{key: "azure", collect: 6, build: 1},
+		{key: "azure", collect: 8, build: 1},
 	}
 
 	doc := theBundle(t).html(t, inventoryPageName)

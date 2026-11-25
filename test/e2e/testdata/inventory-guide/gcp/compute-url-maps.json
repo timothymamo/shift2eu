@@ -44,6 +44,22 @@
     "defaultService": "https://www.googleapis.com/compute/v1/projects/example-project/global/backendServices/shop-edge-be"
   },
   {
+    "selfLink": "https://www.googleapis.com/compute/v1/projects/example-project/global/urlMaps/shop-mixed-map",
+    "defaultService": "https://www.googleapis.com/compute/v1/projects/example-project/global/backendServices/shop-mixed-v4-be",
+    "pathMatchers": [
+      {
+        "name": "shop-mixed-v4",
+        "defaultService": "https://www.googleapis.com/compute/v1/projects/example-project/global/backendServices/shop-mixed-v4-be",
+        "pathRules": [
+          {
+            "paths": ["/v6/*"],
+            "service": "https://www.googleapis.com/compute/v1/projects/example-project/global/backendServices/shop-mixed-v6-be"
+          }
+        ]
+      }
+    ]
+  },
+  {
     "selfLink": "https://www.googleapis.com/compute/v1/projects/example-project/regions/europe-west1/urlMaps/shop-mesh-map",
     "region": "https://www.googleapis.com/compute/v1/projects/example-project/regions/europe-west1",
     "defaultService": "https://www.googleapis.com/compute/v1/projects/example-project/regions/europe-west1/backendServices/shop-mesh-be"

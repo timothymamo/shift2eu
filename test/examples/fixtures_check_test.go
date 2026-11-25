@@ -64,6 +64,16 @@ var realDataAllowList = []allowListEntry{
 		why:   "the project's own site (PRD #297), which the guide tells users to type",
 	},
 	{
+		file:  "docs/guide/inventory.md",
+		value: "Microsoft.App",
+		why:   "the Resource Manager provider namespace of Container Apps in the guide's classification table, whose segment reads as a domain name because .app is a TLD (PRD #552); it names no host",
+	},
+	{
+		file:  "docs/guide/inventory/azure.jq",
+		value: "microsoft.app",
+		why:   "the Resource Manager provider namespace of Container Apps in the guide's classification program, whose segment reads as a domain name because .app is a TLD (PRD #552); it names no host",
+	},
+	{
 		file:  "test/e2e/testdata/inventory-guide/aws/eu-central-1/autoscaling-groups.json",
 		value: "00000000-0000-0000-0000-000000000001",
 		why:   "a synthetic Auto Scaling group ID in an ARN, all zero but its last digit so the two groups differ",
@@ -77,6 +87,11 @@ var realDataAllowList = []allowListEntry{
 		file:  "test/e2e/testdata/inventory-guide/azure/blob-services.json",
 		value: "storageAccounts/stshopassets",
 		why:   "the synthetic storage account of the guide's sample shop, named the way Azure's naming guide (st prefix) spells one; it names no one's account",
+	},
+	{
+		file:  "test/e2e/testdata/inventory-guide/azure/file-shares.json",
+		value: "storageAccounts/stshopfiles",
+		why:   "the shares of the guide's sample shop's synthetic FileStorage account, whose row the Resource Graph export holds; it names no one's account",
 	},
 	{
 		file:  "test/e2e/testdata/inventory-guide/azure/graph-1.json",
@@ -124,6 +139,31 @@ var realDataAllowList = []allowListEntry{
 		why:   "the synthetic Service Bus namespace of the inventory guide's sample shop in the Resource Graph export; it names no one's namespace",
 	},
 	{
+		file:  "test/e2e/testdata/inventory-guide/azure/graph-2.json",
+		value: "microsoft.app",
+		why:   "the Resource Manager provider namespace of Container Apps, whose segment reads as a domain name because .app is a TLD; it names no host",
+	},
+	{
+		file:  "test/e2e/testdata/inventory-guide/azure/graph-2.json",
+		value: "databaseAccounts/cosmos-shop-catalog",
+		why:   "the synthetic Cosmos DB account of the inventory guide's sample shop's catalog; it names no one's account",
+	},
+	{
+		file:  "test/e2e/testdata/inventory-guide/azure/graph-2.json",
+		value: "databaseAccounts/cosmos-shop-events",
+		why:   "the synthetic Cosmos DB account of the inventory guide's sample shop's events; it names no one's account",
+	},
+	{
+		file:  "test/e2e/testdata/inventory-guide/azure/graph-2.json",
+		value: "databaseAccounts/cosmos-shop-history",
+		why:   "the synthetic two-region Cosmos DB account of the inventory guide's sample shop's history; it names no one's account",
+	},
+	{
+		file:  "test/e2e/testdata/inventory-guide/azure/graph-2.json",
+		value: "registries/acrshop",
+		why:   "the synthetic container registry of the inventory guide's sample shop; it names no one's registry",
+	},
+	{
 		file:  "test/e2e/testdata/inventory-guide/azure/servicebus.json",
 		value: "namespaces/sb-shop",
 		why:   "the synthetic Service Bus namespace of the inventory guide's sample shop that holds its queues; it names no one's namespace",
@@ -132,6 +172,11 @@ var realDataAllowList = []allowListEntry{
 		file:  "test/e2e/testdata/inventory-guide/azure/storage-queues.json",
 		value: "storageAccounts/stshopassets",
 		why:   "the synthetic storage account of the guide's sample shop that holds its queues; it names no one's account",
+	},
+	{
+		file:  "test/e2e/testdata/inventory-guide/golden/azure.inventory.golden",
+		value: "Microsoft.App",
+		why:   "the Resource Manager provider namespace of Container Apps in the guide's assessed inventory, whose segment reads as a domain name because .app is a TLD (PRD #552); it names no host",
 	},
 	{
 		file:  "test/e2e/testdata/inventory-guide/gcp/assets.json",

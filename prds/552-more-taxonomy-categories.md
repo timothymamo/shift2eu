@@ -1,7 +1,7 @@
 # PRD #552: More taxonomy categories
 
-**Status:** In progress, milestones 1, 2, 3 and 5 done. The maintainer decided all eleven questions under *Decisions and
-decided questions* on 2026-11-24, as recommended. Milestone 1's ADR is
+**Status:** In progress, milestones 1, 2, 3, 4 and 5 done. The maintainer decided questions 1-11 under *Decisions and
+decided questions* on 2026-11-24, as recommended, and 12-13 on 2026-11-25 (issue #600). Milestone 1's ADR is
 [0046](../docs/adr/0046-add-seven-taxonomy-categories-and-match-cache-plans-on-memory.md).
 **Issue:** #552
 
@@ -180,14 +180,14 @@ setting).
 
 | Category | AWS | GCP | Azure |
 |---|---|---|---|
-| `cache.redis` | `AWS::ElastiCache::ReplicationGroup`, and `AWS::ElastiCache::CacheCluster` not in a group, engine `redis` or `valkey` (*call*: `elasticache describe-replication-groups`, `describe-cache-clusters`); `AWS::ElastiCache::ServerlessCache`, engine `redis` or `valkey` (*call*: `describe-serverless-caches`) | `redis.googleapis.com/Instance`, `redis.googleapis.com/Cluster`, `memorystore.googleapis.com/Instance` | `Microsoft.Cache/redis`, `Microsoft.Cache/redisEnterprise` |
+| `cache.redis` | `AWS::ElastiCache::ReplicationGroup`, and `AWS::ElastiCache::CacheCluster` not in a group, engine `redis` or `valkey` (*call*: `elasticache describe-replication-groups`, `describe-cache-clusters`); `AWS::ElastiCache::ServerlessCache`, engine `redis` or `valkey` (*call*: `describe-serverless-caches`) | `redis.googleapis.com/Instance`, `redis.googleapis.com/Cluster`, `memorystore.googleapis.com/Instance` | `Microsoft.Cache/redis`, `Microsoft.Cache/redisEnterprise` (*call*: its databases, `az rest --method get .../databases`, for clustering and persistence) |
 | `database.mongodb` | `AWS::DocDB::DBCluster`, one resource per DocumentDB cluster: the `rds describe-db-instances` entries with engine `docdb` (*call*, already made, no new one), grouped by `DBClusterIdentifier`; the member instances are dropped, as an ElastiCache group's member clusters are | none (GCP runs no managed MongoDB) | `Microsoft.DocumentDB/databaseAccounts`, kind `MongoDB`; `Microsoft.DocumentDB/mongoClusters` |
 | `network.loadbalancer` | `AWS::ElasticLoadBalancingV2::LoadBalancer`, type `application` or `network` (*call*: `elbv2 describe-load-balancers`, and for `udp` and `ipv6` `describe-listeners` and `describe-target-groups`, and `describe-tags` for the Kubernetes tag); `AWS::ElasticLoadBalancing::LoadBalancer` (*call*: `elb describe-load-balancers`, for its zones); AWS Config's `AWS::ElasticLoadBalancingV2::Listener`, `::ListenerRule` and `::TargetGroup` are parts of the load balancer and dropped (milestone 2) | `compute.googleapis.com/UrlMap`; `compute.googleapis.com/BackendService` that no URL map names; `compute.googleapis.com/TargetPool` (*call*: `compute url-maps list`, `backend-services list`) | `Microsoft.Network/loadBalancers`, SKU `Standard` or `Basic`; `Microsoft.Network/applicationGateways` |
 | `messaging.topic` | `AWS::SNS::Topic` (*call*: `sns list-topics` and `sns get-topic-attributes` for `KmsMasterKeyId`; the guide's `select-resource-config` selects no configuration, and Config lists topics only where the optional recorder runs) | `pubsub.googleapis.com/Topic` (today `messaging.queue`) | `Microsoft.ServiceBus/namespaces/topics` (today `unclassified`) |
 | `messaging.queue` (moved or new rows only) | | `pubsub.googleapis.com/Subscription` (unchanged) | `Microsoft.ServiceBus/namespaces/topics/subscriptions` (*call*: `az servicebus topic subscription list`, per topic, as the guide's `topic list` loop already runs; Resource Graph lists neither topics nor subscriptions, which is why the guide calls `az servicebus` today) |
-| `serverless.container` | `AWS::AppRunner::Service` (AWS Config alone: the category carries no capability, so the type is enough) | `run.googleapis.com/Service` not backing a 2nd gen Cloud Function (today `unclassified`) | `Microsoft.App/containerApps` |
+| `serverless.container` | `AWS::AppRunner::Service` (AWS Config alone: the category carries no capability, so the type is enough) | `run.googleapis.com/Service` not backing a 2nd gen Cloud Function (today `unclassified`) | `Microsoft.App/containerApps` (kind `functionapp`: `serverless.function`; kind `workflowapp`: `unclassified`) |
 | `registry.container` | `AWS::ECR::Repository` (AWS Config alone: its one capability, `encryption-at-rest`, holds for every repository) | `artifactregistry.googleapis.com/Repository`, format `DOCKER` (*call*: `artifacts repositories list`) | `Microsoft.ContainerRegistry/registries` |
-| `storage.file` | `AWS::EFS::FileSystem` (*call*: `efs describe-file-systems` for size and settings) | `file.googleapis.com/Instance` (Filestore) | `Microsoft.Storage/storageAccounts/fileServices/shares` with protocol NFS (*call*: `az storage share-rm list`); a `FileStorage` account whose shares are listed is left out, as a Service Bus namespace is |
+| `storage.file` | `AWS::EFS::FileSystem` (*call*: `efs describe-file-systems` for size and settings) | `file.googleapis.com/Instance` (Filestore) | `Microsoft.Storage/storageAccounts/fileServices/shares` with protocol NFS (*call*: the shares list, `az rest --method get .../fileServices/default/shares`, the REST call `az storage share-rm list` wraps); a `FileStorage` account whose shares are listed is left out, as a Service Bus namespace is; `Microsoft.FileShares/fileShares` (NFS only, in Resource Graph) |
 
 Left out on the source side, as the guide leaves out an EKS cluster's nodes today: load balancers that
 a Kubernetes cluster created (AWS tag `elbv2.k8s.aws/cluster`, everything in an AKS node resource
@@ -220,7 +220,7 @@ Capabilities the programs derive, from settings the calls above return:
 | `cache.redis` | `zone-high-availability` | ElastiCache Multi-AZ on, always on ElastiCache Serverless (three zones); Azure zones set on a Premium cache; Memorystore per its placement (to be checked) |
 | `cache.redis` | `sharding` | ElastiCache cluster mode on (`ClusterEnabled`), always on ElastiCache Serverless (cluster mode only); `redis.googleapis.com/Cluster` or a sharded Valkey instance; Azure Premium with `shardCount`, or Azure Managed Redis in cluster policy `OSSCluster` |
 | `cache.redis` | `snapshots` | ElastiCache snapshot retention above 0; Azure Premium RDB persistence; Memorystore RDB persistence |
-| `cache.redis` | `encryption-at-rest` | ElastiCache at-rest encryption on (a group's `StorageEncryptionType`, the effective state, not `AtRestEncryptionEnabled`), always on ElastiCache Serverless; always on Memorystore and Azure |
+| `cache.redis` | `encryption-at-rest` | ElastiCache at-rest encryption on (a group's `StorageEncryptionType`, the effective state, not `AtRestEncryptionEnabled`), always on ElastiCache Serverless; always on Memorystore and Azure, except Azure Cache for Redis Basic and Standard C0 and C1 |
 | `database.mongodb` | as `database.*` today | DocumentDB, from the cluster's member instances: `point-in-time-restore` when every instance's `BackupRetentionPeriod` is above 0, `encryption-at-rest` when every instance's `StorageEncrypted` is true (no page says an instance reports its cluster's values), `read-replicas` and `node-high-availability` from two or more instances, `zone-high-availability` from instances in two or more `AvailabilityZone`s; Cosmos DB continuous backup for `point-in-time-restore`, `locations[].isZoneRedundant` true for `zone-high-availability` (not "more than one region", which is a regional replica, not zone redundancy; to be checked) |
 | `network.loadbalancer` | `zone-high-availability` | an ALB or NLB in two or more zones; a GCP regional load balancer, or a global one (anycast across regions; it maps onto a regional target load balancer, as a DNS or CDN service would, so only its zone redundancy within a region is claimed, never its reach across regions); an Azure Standard load balancer with a zone-redundant frontend, or an Application Gateway in two or more zones |
 | `network.loadbalancer` | `ipv6` | only where clients and backends are both reached over IPv6 (`ipv6` is inbound and outbound): an ALB or NLB with `IpAddressType` `dualstack` or `dualstack-without-public-ipv4` **and** a target group with `IpAddressType` `ipv6` (`describe-target-groups`); a GCP IPv6 forwarding rule that names a passthrough backend service (scheme `EXTERNAL` or `INTERNAL`) in `backendService`, or that reaches a proxy-based load balancer whose backend service sends to IPv6 backends (`ipAddressSelectionPolicy` `IPV6_ONLY` or `PREFER_IPV6`; checked in milestone 3); an Azure IPv6 frontend with an IPv6 backend pool (to be checked). A load balancer with an IPv6 frontend only gets no `ipv6` |
@@ -465,12 +465,17 @@ fit `none` with "no offering in the <target> catalog", which is already more pre
    maps, backend services and forwarding rules (read for protocol and IPv6, then dropped), Artifact
    Registry formats and Filestore capacity, with the roles they need; fixtures, golden and the GCP entries
    of the e2e category list. Depends on 1.
-4. [ ] **Azure classification in the guide.** The types of the Azure column, Service Bus topics to
+4. [x] **Azure classification in the guide.** The types of the Azure column, Service Bus topics to
    `messaging.topic` and their subscriptions to `messaging.queue` (`az servicebus topic subscription
    list` in the existing loop), the Resource Graph projection extended to the properties read (cache SKU
    and zones, Cosmos DB `kind`, capabilities and `locations[].isZoneRedundant`, load balancer SKU,
    frontends, backend pools and rule protocols), the file share loop; fixtures, golden and the Azure
-   entries of the e2e category list. Depends on 1.
+   entries of the e2e category list. Depends on 1. Checked on 2026-11-25 (*To be checked*): Resource
+   Graph lists neither classic file shares nor Redis Enterprise databases, so the guide lists shares
+   with `az rest` (snapshots included) and adds one `az rest` read of each Azure Managed Redis
+   cluster's databases; `Microsoft.FileShares/fileShares` (NFS only, in Resource Graph) is
+   `storage.file` too; a container app's `kind` splits it three ways; Azure Cache for Redis C0 and C1
+   have no encryption at rest.
 5. [x] **OVHcloud catalog.** Offerings for `cache.redis` (Valkey Discovery, Production and their 3-AZ
    variants), `database.mongodb` (Production, Advanced, 3-AZ variants), `network.loadbalancer` (1-AZ
    and 3-AZ, with `udp`), `registry.container` (Managed Private Registry, 3-AZ variant for Medium and Large) and
@@ -645,6 +650,15 @@ text as the decision)
     `SOURCES.md` section and the report's tie or required change say that Cluster mode needs a
     cluster-aware client; if that cannot be said without a capability, Scaleway Redis lists no
     `node-high-availability` until then.
+12. **Load balancers a Kubernetes cluster created.** The acceptance criterion "a load balancer a
+    Kubernetes cluster created is not in the inventory" (*Acceptance criteria*) was narrowed to AWS and
+    Azure: GCP URL maps and backend services carry no labels to recognise one GKE created, so GCP keeps
+    them (*To be checked*). *Decision (2026-11-25, decided by the maintainer):* the narrowed criterion is
+    confirmed: it holds for AWS and Azure, and GCP keeps GKE-created load balancers. Issue #600.
+13. **A GCP URL map's `ipv6`: any backend service, or all?** *Decision (2026-11-25, decided by the
+    maintainer):* any. A proxy-based load balancer gets `ipv6` when an IPv6 forwarding rule reaches it
+    and one backend service it names is `IPV6_ONLY` or `PREFER_IPV6`; "all" would under-report a load
+    balancer whose main paths are IPv6. A mixed e2e fixture pins it. Issue #600.
 
 **To be checked** (each in the milestone named; a fact not confirmed stays out of the snapshot)
 
@@ -816,6 +830,63 @@ text as the decision)
   Azure load balancer's or Application Gateway's backend pool IPv6; the retirement of Basic load
   balancers and Azure Database for MariaDB; the Service Bus rule for a topic's `dead-letter-queue`
   (every subscription has a dead-letter subqueue).
+  Checked on 2026-11-25 (public Microsoft documentation only, no Azure call):
+  - File shares: Resource Graph lists no `fileServices/shares` (nor Service Bus topics or
+    subscriptions, nor Redis Enterprise databases), but does list `microsoft.fileshares/fileshares`,
+    <https://learn.microsoft.com/en-us/azure/governance/resource-graph/reference/supported-tables-resources>.
+    The guide lists shares with `az rest --method get .../fileServices/default/shares` and
+    `$expand=snapshots`, whose `enabledProtocols` gives NFS,
+    <https://learn.microsoft.com/en-us/rest/api/storagerp/file-shares/list?view=rest-storagerp-2023-05-01>
+    (`az storage share-rm list` documents no output shape). `Microsoft.FileShares/fileShares` is GA and
+    NFS only, <https://learn.microsoft.com/en-us/azure/storage/files/files-management-concepts>; it is
+    `storage.file` as well (its snapshots are not listed).
+  - `Reader` is `*/read`,
+    <https://learn.microsoft.com/en-us/azure/role-based-access-control/built-in-roles/general#reader>,
+    and covers `Microsoft.Storage/storageAccounts/fileServices/shares/read`,
+    `Microsoft.ServiceBus/namespaces/topics/subscriptions/read` and
+    `Microsoft.Cache/redisEnterprise/databases/read`,
+    <https://learn.microsoft.com/en-us/azure/role-based-access-control/permissions/storage>,
+    <https://learn.microsoft.com/en-us/azure/role-based-access-control/permissions/integration>,
+    <https://learn.microsoft.com/en-us/azure/role-based-access-control/permissions/databases>.
+  - `Microsoft.Web/sites` kinds: every function app kind contains `functionapp`,
+    <https://github.com/Azure/app-service-linux-docs/blob/master/Things_You_Should_Know/kind_property.md>;
+    today's rule stays. A container app's `kind` is `functionapp` or `workflowapp`,
+    <https://learn.microsoft.com/en-us/rest/api/resource-manager/containerapps/container-apps/get>:
+    `functionapp` is `serverless.function`, `workflowapp` (a Logic App) `unclassified`, any other
+    `serverless.container`.
+  - Cosmos DB: `backupPolicy.type` `Continuous` is point-in-time restore,
+    <https://learn.microsoft.com/en-us/azure/cosmos-db/continuous-backup-restore-introduction>, and
+    `locations[].isZoneRedundant` is per region,
+    <https://learn.microsoft.com/en-us/rest/api/cosmos-db-resource-provider/database-accounts/get>;
+    node high availability always, read replicas with two or more locations. Azure DocumentDB
+    (`mongoClusters`): `highAvailability.targetMode` not `Disabled` gives a standby per shard (node
+    high availability); only `ZoneRedundantPreferred` is zone redundant, where the region has zones,
+    while `SameZone` "protects against node failures but doesn't protect against an availability zone
+    outage", <https://learn.microsoft.com/en-us/azure/documentdb/high-availability>.
+  - Load balancer IPv6: a backend pool member is IPv6 when the network interface IP configuration it
+    names is `IPv6`,
+    <https://learn.microsoft.com/en-us/azure/load-balancer/virtual-network-ipv4-ipv6-dual-stack-standard-load-balancer-cli>;
+    an Application Gateway supports no IPv6 backends, so never `ipv6`,
+    <https://learn.microsoft.com/en-us/azure/application-gateway/ipv6-application-gateway-portal>. Rule
+    protocols are `Udp`, `Tcp`, `All` and `Quic`; `Udp`, `All` and `Quic` count as `udp`,
+    <https://learn.microsoft.com/en-us/rest/api/load-balancer/load-balancers/get>.
+  - Retirements: Basic Load Balancer on 30 September 2025 (still running, unsupported; classified),
+    <https://learn.microsoft.com/en-us/azure/load-balancer/load-balancer-basic-upgrade-guidance>;
+    Azure Database for MariaDB on 19 September 2025,
+    <https://learn.microsoft.com/en-us/lifecycle/products/azure-database-for-mariadb>; Azure Cache
+    for Redis Basic, Standard and Premium on 30 September 2028, Enterprise and Enterprise Flash on
+    31 March 2027 (both still classified),
+    <https://learn.microsoft.com/en-us/azure/azure-cache-for-redis/retirement-faq>.
+  - Service Bus: every queue and subscription has a dead-letter subqueue, a topic none ("messages
+    don't sit at the topic level"),
+    <https://learn.microsoft.com/en-us/azure/service-bus-messaging/service-bus-dead-letter-queues>;
+    a topic is `encryption-at-rest`, as topics exist only in Standard and Premium, which encrypt at
+    rest, <https://learn.microsoft.com/en-us/azure/service-bus-messaging/service-bus-premium-messaging>.
+  - Also found: Azure Cache for Redis C0 and C1 have no disk encryption,
+    <https://learn.microsoft.com/en-us/azure/azure-cache-for-redis/cache-how-to-encryption>; an Azure
+    Managed Redis cluster's clustering and persistence are its databases' settings,
+    <https://learn.microsoft.com/en-us/rest/api/redis/redisenterprisecache/databases/get>, read with
+    one more `az rest` call. Not confirmed, so out of the guide: an Azure Managed Redis SKU's memory.
 - Milestone 5: OVHcloud Load Balancer node-level failover; File Storage Service regions and price;
   whether Managed Private Registry Small ("active-passive across 2 AZs") meets the zone rule without
   manual failover; whether the Valkey and MongoDB prices are per node or per service (the snapshot stores

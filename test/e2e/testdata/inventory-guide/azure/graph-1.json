@@ -115,7 +115,33 @@
         "2",
         "3"
       ],
-      "properties": null
+      "properties": {
+        "virtualMachineProfile": {
+          "networkProfile": {
+            "networkInterfaceConfigurations": [
+              {
+                "name": "nic-shop-web",
+                "properties": {
+                  "ipConfigurations": [
+                    {
+                      "name": "ipconfig-v4",
+                      "properties": {
+                        "privateIPAddressVersion": "IPv4"
+                      }
+                    },
+                    {
+                      "name": "ipconfig-v6",
+                      "properties": {
+                        "privateIPAddressVersion": "IPv6"
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      }
     },
     {
       "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shop/providers/microsoft.insights/autoscalesettings/as-vmss-shop-web",
@@ -223,6 +249,10 @@
       "kind": "FileStorage",
       "location": "westeurope",
       "zones": null,
+      "sku": {
+        "name": "Premium_ZRS",
+        "tier": "Premium"
+      },
       "properties": null
     }
   ],

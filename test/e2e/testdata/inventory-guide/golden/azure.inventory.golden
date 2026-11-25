@@ -3,6 +3,24 @@
   "source": "azure",
   "resources": [
     {
+      "id": "acrshop",
+      "rawType": "Microsoft.ContainerRegistry/registries",
+      "category": "registry.container",
+      "region": "westeurope",
+      "capabilities": [
+        "encryption-at-rest"
+      ]
+    },
+    {
+      "id": "agw-shop",
+      "rawType": "Microsoft.Network/applicationGateways",
+      "category": "network.loadbalancer",
+      "region": "westeurope",
+      "capabilities": [
+        "zone-high-availability"
+      ]
+    },
+    {
       "id": "aks-shop",
       "rawType": "Microsoft.ContainerService/managedClusters",
       "category": "kubernetes.managed",
@@ -17,15 +35,90 @@
       }
     },
     {
+      "id": "amr-shop-scratch",
+      "rawType": "Microsoft.Cache/redisEnterprise",
+      "category": "cache.redis",
+      "region": "westeurope",
+      "capabilities": [
+        "encryption-at-rest"
+      ],
+      "size": {
+        "count": 1
+      }
+    },
+    {
+      "id": "amr-shop-session",
+      "rawType": "Microsoft.Cache/redisEnterprise",
+      "category": "cache.redis",
+      "region": "westeurope",
+      "capabilities": [
+        "encryption-at-rest",
+        "node-high-availability",
+        "sharding",
+        "snapshots",
+        "zone-high-availability"
+      ],
+      "size": {
+        "count": 2
+      }
+    },
+    {
       "id": "app-shop-storefront",
       "rawType": "Microsoft.Web/sites",
       "category": "unclassified",
       "region": "westeurope"
     },
     {
+      "id": "ca-shop-api",
+      "rawType": "Microsoft.App/containerApps",
+      "category": "serverless.container",
+      "region": "westeurope"
+    },
+    {
+      "id": "ca-shop-flows",
+      "rawType": "Microsoft.App/containerApps",
+      "category": "unclassified",
+      "region": "westeurope"
+    },
+    {
+      "id": "ca-shop-fn",
+      "rawType": "Microsoft.App/containerApps",
+      "category": "serverless.function",
+      "region": "westeurope"
+    },
+    {
       "id": "cdn-shop",
       "rawType": "Microsoft.Cdn/profiles",
       "category": "unclassified"
+    },
+    {
+      "id": "cosmos-shop-catalog",
+      "rawType": "Microsoft.DocumentDB/databaseAccounts",
+      "category": "database.mongodb",
+      "region": "westeurope",
+      "capabilities": [
+        "encryption-at-rest",
+        "node-high-availability",
+        "point-in-time-restore",
+        "zone-high-availability"
+      ]
+    },
+    {
+      "id": "cosmos-shop-events",
+      "rawType": "Microsoft.DocumentDB/databaseAccounts",
+      "category": "unclassified",
+      "region": "westeurope"
+    },
+    {
+      "id": "cosmos-shop-history",
+      "rawType": "Microsoft.DocumentDB/databaseAccounts",
+      "category": "database.mongodb",
+      "region": "westeurope",
+      "capabilities": [
+        "encryption-at-rest",
+        "node-high-availability",
+        "read-replicas"
+      ]
     },
     {
       "id": "disk-shop-web-1-data",
@@ -41,9 +134,169 @@
       }
     },
     {
+      "id": "docdb-shop-events",
+      "rawType": "Microsoft.DocumentDB/mongoClusters",
+      "category": "database.mongodb",
+      "region": "westeurope",
+      "capabilities": [
+        "encryption-at-rest",
+        "node-high-availability",
+        "point-in-time-restore",
+        "read-replicas",
+        "zone-high-availability"
+      ],
+      "size": {
+        "count": 4,
+        "storageGiB": 128
+      }
+    },
+    {
+      "id": "docdb-shop-events-replica",
+      "rawType": "Microsoft.DocumentDB/mongoClusters",
+      "category": "database.mongodb",
+      "region": "westeurope",
+      "capabilities": [
+        "encryption-at-rest",
+        "node-high-availability",
+        "point-in-time-restore",
+        "zone-high-availability"
+      ],
+      "size": {
+        "count": 4,
+        "storageGiB": 128
+      }
+    },
+    {
+      "id": "docdb-shop-orders",
+      "rawType": "Microsoft.DocumentDB/mongoClusters",
+      "category": "database.mongodb",
+      "region": "westeurope",
+      "capabilities": [
+        "encryption-at-rest",
+        "node-high-availability",
+        "point-in-time-restore",
+        "zone-high-availability"
+      ],
+      "size": {
+        "count": 4,
+        "storageGiB": 256
+      }
+    },
+    {
+      "id": "docdb-shop-samezone",
+      "rawType": "Microsoft.DocumentDB/mongoClusters",
+      "category": "database.mongodb",
+      "region": "westeurope",
+      "capabilities": [
+        "encryption-at-rest",
+        "node-high-availability",
+        "point-in-time-restore"
+      ],
+      "size": {
+        "count": 2,
+        "storageGiB": 128
+      }
+    },
+    {
+      "id": "fs-shop-archive",
+      "rawType": "Microsoft.FileShares/fileShares",
+      "category": "storage.file",
+      "region": "westeurope",
+      "capabilities": [
+        "encryption-at-rest"
+      ],
+      "size": {
+        "storageGiB": 512
+      }
+    },
+    {
+      "id": "fs-shop-build",
+      "rawType": "Microsoft.FileShares/fileShares",
+      "category": "storage.file",
+      "region": "westeurope",
+      "capabilities": [
+        "encryption-at-rest",
+        "zone-high-availability"
+      ],
+      "size": {
+        "storageGiB": 256
+      }
+    },
+    {
       "id": "func-shop-thumbnails",
       "rawType": "Microsoft.Web/sites",
       "category": "serverless.function",
+      "region": "westeurope"
+    },
+    {
+      "id": "lb-shop-all",
+      "rawType": "Microsoft.Network/loadBalancers",
+      "category": "network.loadbalancer",
+      "region": "westeurope",
+      "capabilities": [
+        "udp"
+      ]
+    },
+    {
+      "id": "lb-shop-api",
+      "rawType": "Microsoft.Network/loadBalancers",
+      "category": "network.loadbalancer",
+      "region": "westeurope",
+      "capabilities": [
+        "ipv6"
+      ]
+    },
+    {
+      "id": "lb-shop-dns",
+      "rawType": "Microsoft.Network/loadBalancers",
+      "category": "network.loadbalancer",
+      "region": "westeurope",
+      "capabilities": [
+        "ipv6",
+        "udp",
+        "zone-high-availability"
+      ]
+    },
+    {
+      "id": "lb-shop-gateway",
+      "rawType": "Microsoft.Network/loadBalancers",
+      "category": "unclassified",
+      "region": "westeurope"
+    },
+    {
+      "id": "lb-shop-legacy",
+      "rawType": "Microsoft.Network/loadBalancers",
+      "category": "network.loadbalancer",
+      "region": "westeurope"
+    },
+    {
+      "id": "lb-shop-mesh",
+      "rawType": "Microsoft.Network/loadBalancers",
+      "category": "network.loadbalancer",
+      "region": "westeurope",
+      "capabilities": [
+        "ipv6"
+      ]
+    },
+    {
+      "id": "lb-shop-quic",
+      "rawType": "Microsoft.Network/loadBalancers",
+      "category": "network.loadbalancer",
+      "region": "westeurope",
+      "capabilities": [
+        "udp"
+      ]
+    },
+    {
+      "id": "lb-shop-web-v6front",
+      "rawType": "Microsoft.Network/loadBalancers",
+      "category": "network.loadbalancer",
+      "region": "westeurope"
+    },
+    {
+      "id": "mariadb-shop-legacy",
+      "rawType": "Microsoft.DBforMariaDB/servers",
+      "category": "unclassified",
       "region": "westeurope"
     },
     {
@@ -75,8 +328,32 @@
       }
     },
     {
+      "id": "nic-shop-dns-1",
+      "rawType": "Microsoft.Network/networkInterfaces",
+      "category": "unclassified",
+      "region": "westeurope"
+    },
+    {
       "id": "nic-shop-web-1",
       "rawType": "Microsoft.Network/networkInterfaces",
+      "category": "unclassified",
+      "region": "westeurope"
+    },
+    {
+      "id": "nic-shop-web-2",
+      "rawType": "Microsoft.Network/networkInterfaces",
+      "category": "unclassified",
+      "region": "westeurope"
+    },
+    {
+      "id": "pip-shop-dns-v6",
+      "rawType": "Microsoft.Network/publicIPAddresses",
+      "category": "unclassified",
+      "region": "westeurope"
+    },
+    {
+      "id": "pip-shop-web-v6",
+      "rawType": "Microsoft.Network/publicIPAddresses",
       "category": "unclassified",
       "region": "westeurope"
     },
@@ -122,6 +399,71 @@
       }
     },
     {
+      "id": "redis-shop-cart",
+      "rawType": "Microsoft.Cache/redis",
+      "category": "cache.redis",
+      "region": "westeurope",
+      "capabilities": [
+        "encryption-at-rest",
+        "node-high-availability",
+        "sharding",
+        "snapshots",
+        "zone-high-availability"
+      ],
+      "size": {
+        "count": 4
+      }
+    },
+    {
+      "id": "redis-shop-catalog",
+      "rawType": "Microsoft.Cache/redis",
+      "category": "cache.redis",
+      "region": "westeurope",
+      "capabilities": [
+        "encryption-at-rest",
+        "node-high-availability"
+      ],
+      "size": {
+        "count": 2
+      }
+    },
+    {
+      "id": "redis-shop-dev",
+      "rawType": "Microsoft.Cache/redis",
+      "category": "cache.redis",
+      "region": "westeurope",
+      "size": {
+        "count": 1
+      }
+    },
+    {
+      "id": "redis-shop-enterprise",
+      "rawType": "Microsoft.Cache/redisEnterprise",
+      "category": "cache.redis",
+      "region": "westeurope",
+      "capabilities": [
+        "encryption-at-rest",
+        "node-high-availability",
+        "zone-high-availability"
+      ],
+      "size": {
+        "count": 2
+      }
+    },
+    {
+      "id": "redis-shop-sessions",
+      "rawType": "Microsoft.Cache/redis",
+      "category": "cache.redis",
+      "region": "westeurope",
+      "capabilities": [
+        "encryption-at-rest",
+        "node-high-availability"
+      ],
+      "size": {
+        "count": 2
+      }
+    },
+    {
       "id": "sb-shop-invoices",
       "rawType": "Microsoft.ServiceBus/namespaces/queues",
       "category": "messaging.queue",
@@ -133,8 +475,29 @@
     {
       "id": "sb-shop-order-events",
       "rawType": "Microsoft.ServiceBus/namespaces/topics",
-      "category": "unclassified",
-      "region": "westeurope"
+      "category": "messaging.topic",
+      "region": "westeurope",
+      "capabilities": [
+        "encryption-at-rest"
+      ]
+    },
+    {
+      "id": "sb-shop-order-events/billing",
+      "rawType": "Microsoft.ServiceBus/namespaces/topics/subscriptions",
+      "category": "messaging.queue",
+      "region": "westeurope",
+      "capabilities": [
+        "dead-letter-queue"
+      ]
+    },
+    {
+      "id": "sb-shop-order-events/shipping",
+      "rawType": "Microsoft.ServiceBus/namespaces/topics/subscriptions",
+      "category": "messaging.queue",
+      "region": "westeurope",
+      "capabilities": [
+        "dead-letter-queue"
+      ]
     },
     {
       "id": "sb-shop-orders",
@@ -155,6 +518,26 @@
       "id": "shop-hana-1",
       "rawType": "Microsoft.AzureLargeInstance/azureLargeInstances",
       "category": "compute.baremetal",
+      "region": "westeurope"
+    },
+    {
+      "id": "shop-media",
+      "rawType": "Microsoft.Storage/storageAccounts/fileServices/shares",
+      "category": "storage.file",
+      "region": "westeurope",
+      "capabilities": [
+        "encryption-at-rest",
+        "snapshots",
+        "zone-high-availability"
+      ],
+      "size": {
+        "storageGiB": 1024
+      }
+    },
+    {
+      "id": "shop-reports",
+      "rawType": "Microsoft.Storage/storageAccounts/fileServices/shares",
+      "category": "unclassified",
       "region": "westeurope"
     },
     {
@@ -180,12 +563,6 @@
         "encryption-at-rest",
         "object-versioning"
       ]
-    },
-    {
-      "id": "stshopfiles",
-      "rawType": "Microsoft.Storage/storageAccounts",
-      "category": "unclassified",
-      "region": "westeurope"
     },
     {
       "id": "vm-shop-web-1",
