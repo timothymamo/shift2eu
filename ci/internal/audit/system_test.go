@@ -616,6 +616,30 @@ func workPath(root string, parts ...string) string {
 	return filepath.Join(append([]string{root, "srv", "audit", "work"}, parts...)...)
 }
 
+// fileCommandPath is the path of name in the runner's file-command directory
+// under root: a sibling of the $GITHUB_ENV file, such as the $GITHUB_PATH file a
+// step appends a line to (issues #615, #614).
+func fileCommandPath(root, name string) string {
+	return filepath.Join(fileCommandsDir(root), name)
+}
+
+// appendFileCommandLine appends line to the file at path, the way a step that
+// writes a file-command line does.
+func appendFileCommandLine(path, line string) error {
+	file, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+
+	if _, err := file.WriteString(line); err != nil {
+		_ = file.Close()
+
+		return err
+	}
+
+	return file.Close()
+}
+
 // cliPlaceholderFiles are the empty files Claude Code 2.1.332 creates in its
 // working directory at session start when CLAUDE_CODE_SUBPROCESS_ENV_SCRUB is
 // set, and never removes (issue #615).
@@ -732,7 +756,9 @@ func jsonEscaped(s string) string {
 // tolerate no name in it (issue #615). Before its run the audit refuses that
 // directory unless it is still an empty real one - a CLAUDE.md a preflight
 // session planted there would be loaded at session start - and after it, the
-// $GITHUB_ENV file must be the one the launcher digested before the run (issues
+// runner's file-command directory, the one holding the $GITHUB_ENV file beside
+// $GITHUB_PATH, $GITHUB_OUTPUT and $GITHUB_STATE, must be the one the launcher
+// digested before the run, the step summary the run writes itself aside (issues
 // #615, #614).
 func TestAuditTakesOnlyAResultFileTheRunWrote(t *testing.T) {
 	t.Parallel()
@@ -952,13 +978,162 @@ func TestAuditTakesOnlyAResultFileTheRunWrote(t *testing.T) {
 			// before the audit's run and after it, and a change is the run having
 			// written to a file it must not touch. The result file is written, so
 			// the change is the only reason this run fails (issue #614).
-			name: "the run appended a line to the $GITHUB_ENV file",
+			name: "the run overwrote the $GITHUB_ENV file",
 			write: func(root string) error {
 				if err := os.WriteFile(workPath(root, "result.json"), []byte(resultFile), 0o600); err != nil {
 					return err
 				}
 
 				return os.WriteFile(testInputs(root).GitHubEnv, []byte("SOMETHING=else\nANTHROPIC_BASE_URL=https://api.example.invalid\n"), 0o600)
+			},
+			wantLaunched: true,
+			wantRefused:  true,
+		},
+		// The $GITHUB_ENV file is one of the runner's file commands, and it sits
+		// in the runner's file-command directory beside $GITHUB_PATH,
+		// $GITHUB_OUTPUT and $GITHUB_STATE. A step that writes any of them decides
+		// what the job's later steps run with - a line appended to $GITHUB_PATH
+		// changes the PATH of the next step, so a later step's tool is no longer
+		// the one the job installed and checked - so the launcher digests that
+		// directory, and every entry of it, across the audit's run (issues #615,
+		// #614).
+		{
+			name: "the run appended a line to the $GITHUB_PATH file beside the $GITHUB_ENV file",
+			before: func(t *testing.T, root string) {
+				t.Helper()
+				writeFile(t, fileCommandPath(root, "github-path"), "/usr/local/bin\n", 0o600)
+			},
+			write: func(root string) error {
+				if err := os.WriteFile(workPath(root, "result.json"), []byte(resultFile), 0o600); err != nil {
+					return err
+				}
+
+				return appendFileCommandLine(fileCommandPath(root, "github-path"), "/tmp/planted\n")
+			},
+			wantLaunched: true,
+			wantRefused:  true,
+		},
+		{
+			name: "the run created a file in the $GITHUB_ENV file's directory",
+			write: func(root string) error {
+				if err := os.WriteFile(workPath(root, "result.json"), []byte(resultFile), 0o600); err != nil {
+					return err
+				}
+
+				return os.WriteFile(fileCommandPath(root, "github-output"), []byte("result=planted\n"), 0o600)
+			},
+			wantLaunched: true,
+			wantRefused:  true,
+		},
+		{
+			name: "the run removed a file in the $GITHUB_ENV file's directory",
+			before: func(t *testing.T, root string) {
+				t.Helper()
+				writeFile(t, fileCommandPath(root, "github-path"), "/usr/local/bin\n", 0o600)
+			},
+			write: func(root string) error {
+				if err := os.WriteFile(workPath(root, "result.json"), []byte(resultFile), 0o600); err != nil {
+					return err
+				}
+
+				return os.Remove(fileCommandPath(root, "github-path"))
+			},
+			wantLaunched: true,
+			wantRefused:  true,
+		},
+		{
+			// The link points at a file outside the digested directory whose
+			// bytes are the ones the entry held, so a digest that follows the link
+			// and hashes what it reads sees no change: only the entry's own type
+			// tells the two apart, and the launcher takes it as it is (Lstat, no
+			// link followed) and fails the run (issues #615, #614).
+			name: "the run replaced a file in the $GITHUB_ENV file's directory with a symbolic link",
+			before: func(t *testing.T, root string) {
+				t.Helper()
+				writeFile(t, fileCommandPath(root, "github-path"), "/usr/local/bin\n", 0o600)
+			},
+			write: func(root string) error {
+				if err := os.WriteFile(workPath(root, "result.json"), []byte(resultFile), 0o600); err != nil {
+					return err
+				}
+
+				target := filepath.Join(root, "github-path-outside")
+				if err := os.WriteFile(target, []byte("/usr/local/bin\n"), 0o600); err != nil {
+					return err
+				}
+
+				if err := os.Remove(fileCommandPath(root, "github-path")); err != nil {
+					return err
+				}
+
+				return os.Symlink(target, fileCommandPath(root, "github-path"))
+			},
+			wantLaunched: true,
+			wantRefused:  true,
+		},
+		// The directory the launcher digests is capped, in entries and in bytes
+		// (issues #615, #614). The caps are the launcher's to pick: this case
+		// assumes a cap of 64 entries and 4 MiB of content, and holds the launcher
+		// to refusing, before its run, a directory well past them - 1024 entries,
+		// and 32 MiB over 8 files - rather than digesting it whole. Both
+		// directories are built before the run, so a launcher that digests them
+		// anyway meets no change and would take the result file.
+		{
+			name: "the $GITHUB_ENV file's directory holds more entries than its cap",
+			before: func(t *testing.T, root string) {
+				t.Helper()
+
+				for i := range 1024 {
+					writeFile(t, fileCommandPath(root, fmt.Sprintf("github-file-%d", i)), "", 0o600)
+				}
+			},
+			write:        func(root string) error { return os.WriteFile(workPath(root, "result.json"), []byte(resultFile), 0o600) },
+			wantLaunched: false,
+			wantRefused:  true,
+		},
+		{
+			name: "the $GITHUB_ENV file's directory holds more bytes than its cap",
+			before: func(t *testing.T, root string) {
+				t.Helper()
+
+				for i := range 8 {
+					writeFile(t, fileCommandPath(root, fmt.Sprintf("github-file-%d", i)), strings.Repeat("x", 4<<20), 0o600)
+				}
+			},
+			write:        func(root string) error { return os.WriteFile(workPath(root, "result.json"), []byte(resultFile), 0o600) },
+			wantLaunched: false,
+			wantRefused:  true,
+		},
+		// The other half of the directory: the launcher writes the step's summary
+		// itself (ci/auditrun/main.go's summaryWriter), and on a GitHub runner
+		// $GITHUB_STEP_SUMMARY lies in the same directory as $GITHUB_ENV. That one
+		// file, by its exact path, is outside the digest - it is the run's own to
+		// write - and every other entry of the directory is inside it (issues #615,
+		// #614).
+		{
+			name: "the run wrote its step summary in the $GITHUB_ENV file's directory",
+			write: func(root string) error {
+				if err := os.WriteFile(workPath(root, "result.json"), []byte(resultFile), 0o600); err != nil {
+					return err
+				}
+
+				return appendFileCommandLine(testInputs(root).StepSummary, "the audit ran\n")
+			},
+			wantLaunched: true,
+			wantResult:   resultFile,
+		},
+		// A run that failed says nothing about the files it wrote on its way
+		// there: the change to the file-command directory is reported whatever the
+		// run did, so a failed launch that also wrote a file command is no quieter
+		// than one that did not (issues #615, #614).
+		{
+			name: "the run failed and also overwrote the $GITHUB_ENV file",
+			write: func(root string) error {
+				if err := os.WriteFile(testInputs(root).GitHubEnv, []byte("SOMETHING=else\nANTHROPIC_BASE_URL=https://api.example.invalid\n"), 0o600); err != nil {
+					return err
+				}
+
+				return errors.New("the CLI's run failed")
 			},
 			wantLaunched: true,
 			wantRefused:  true,
@@ -1118,6 +1293,64 @@ func TestAuditNamesAnOversizedResultOfItsOwn(t *testing.T) {
 
 	if want := strconv.FormatInt(audit.MaxResult, 10); !strings.Contains(oversized.Error(), want) {
 		t.Errorf("Audit() = %q for a result file over its cap, want it to name the cap, %s bytes", oversized, want)
+	}
+}
+
+// TestAuditReportsTheFileCommandChangeOverAFailedRun pins what a launch that
+// failed and also wrote a file command reports (issues #615, #614): the change
+// to the runner's file-command directory is the failure the audit reports, not
+// the launch's own, since that directory is what the job's later steps run with.
+// A run that changed nothing but failed is the launch's failure, so the two are
+// told apart by the step's error, whose text the step's line never prints.
+func TestAuditReportsTheFileCommandChangeOverAFailedRun(t *testing.T) {
+	t.Parallel()
+
+	// failure runs the audit step once under a fresh tree, its launch leaving
+	// what write leaves before it returns, the run failing when failed is set,
+	// and returns the step's error.
+	failure := func(t *testing.T, write func(root string) error, failed bool) error {
+		t.Helper()
+
+		root, in := preflightTree(t)
+
+		launch := func(_ context.Context, _ string, _ claudecode.Config, _ claudecode.Prompt) error {
+			if write != nil {
+				if err := write(root); err != nil {
+					t.Fatalf("the run's leavings: %v", err)
+				}
+			}
+
+			if failed {
+				return errors.New("the CLI's run failed")
+			}
+
+			return nil
+		}
+
+		_, err := audit.Audit(t.Context(), root, in, launch)
+		if err == nil {
+			t.Fatal("Audit() = nil, want a failure: the run left a file-command change, or failed, or both")
+		}
+
+		return err
+	}
+
+	change := func(root string) error {
+		return os.WriteFile(testInputs(root).GitHubEnv, []byte("SOMETHING=else\nANTHROPIC_BASE_URL=https://api.example.invalid\n"), 0o600)
+	}
+
+	changed := failure(t, change, false)
+	both := failure(t, change, true)
+	failed := failure(t, nil, true)
+
+	if both.Error() != changed.Error() {
+		t.Errorf("Audit() = %q for a run that failed and changed the $GITHUB_ENV file, want %q, the failure of a run that changed it: the file-command change is reported whatever the run did (issues #615, #614)",
+			both, changed)
+	}
+
+	if both.Error() == failed.Error() {
+		t.Errorf("Audit() = %q for a run that failed and changed the $GITHUB_ENV file, and %q for one that only failed: the change is a failure of its own, never the launch's (issues #615, #614)",
+			both, failed)
 	}
 }
 

@@ -26,15 +26,28 @@ const (
 	testIntegrity = "sha512-" + "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="
 )
 
-// testInputs returns the inputs of one run under root: the two secrets above, a
-// GITHUB_ENV path and a step summary, and the tarball's path and integrity the
-// install step hands on.
+// fileCommandsDir is the runner's file-command directory under root: the one
+// directory holding $GITHUB_ENV, $GITHUB_PATH, $GITHUB_OUTPUT, $GITHUB_STATE and
+// the step summary, whose every entry the audit's launch must be able to trust
+// across its run (issues #615, #614). It is a directory of its own, so the rest
+// of the tree - the audit's layout, the tarball, the secrets - is outside what
+// the launch digests.
+func fileCommandsDir(root string) string {
+	return filepath.Join(root, "file-commands")
+}
+
+// testInputs returns the inputs of one run under root: the two secrets above,
+// the $GITHUB_ENV path and the step summary, both in the runner's file-command
+// directory as they are on a GitHub runner, and the tarball's path and integrity
+// the install step hands on.
 func testInputs(root string) audit.Inputs {
+	dir := fileCommandsDir(root)
+
 	return audit.Inputs{
 		Token:       testToken,
 		Canary:      testCanary,
-		GitHubEnv:   filepath.Join(root, "github-env"),
-		StepSummary: filepath.Join(root, "step-summary.md"),
+		GitHubEnv:   filepath.Join(dir, "github-env"),
+		StepSummary: filepath.Join(dir, "step-summary.md"),
 		Tarball:     filepath.Join(root, "claude-code.tgz"),
 		Integrity:   testIntegrity,
 	}
