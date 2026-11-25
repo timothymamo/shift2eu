@@ -35,7 +35,11 @@
 //     `make` it found by name, possibly another unit's run);
 //   - docs/site-runbook.md's R5 stops on both forms of the bucket's
 //     AccessDenied, the S3 API's XML body and the website endpoint's HTML page,
-//     and its outcome items name which read rule a 200 means (issue #535).
+//     and its outcome items name which read rule a 200 means (issue #535);
+//   - docs/site-runbook.md's R4 wait loop records a refresh-only failure
+//     before it breaks, its check line prints a FAIL naming that case apart
+//     from the ten-minute timeout, and infra/site/outputs.tf's
+//     container_endpoint reads "" while the container is absent (issue #567).
 //
 // make test, and so make check, run it. The link checker is
 // test/internal/mdlink.
