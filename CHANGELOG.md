@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.15.0](https://github.com/timothymamo/shift2eu/compare/v0.14.0...v0.15.0) (2026-11-25)
+
+
+### Features
+
+* **infra:** front the site with a Caddy Serverless Container, cost pins and no visitor logs (PRD [#297](https://github.com/timothymamo/shift2eu/issues/297)) ([#562](https://github.com/timothymamo/shift2eu/issues/562)) ([333e9db](https://github.com/timothymamo/shift2eu/commit/333e9dbb79b224a6e0a12f591a8f9e5294a311ed))
+* **ovhcloud:** serve the cache, MongoDB, load balancer and registry categories (PRD [#552](https://github.com/timothymamo/shift2eu/issues/552) M5) ([#570](https://github.com/timothymamo/shift2eu/issues/570)) ([dc01e3d](https://github.com/timothymamo/shift2eu/commit/dc01e3d2aaefea3b4c918420033002b09b052b9c))
+
 ## [0.14.0](https://github.com/timothymamo/shift2eu/compare/v0.13.0...v0.14.0) (2026-11-25)
 
 
