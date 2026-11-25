@@ -569,23 +569,29 @@ Test levels:
   the same bytes, version line included.
 - [ ] *Release:* on every release, `release.yml`'s `verify` job, which already runs the signed image's
   `shift2eu version`, also runs the `linux/amd64` archive's binary from the `goreleaser` job's `archives`
-  artifact, and fails unless the two lines are identical, version, commit and date included. This holds
-  for every option of *Open questions* 7, and its step is pinned in `test/architecture` with the others.
+  artifact, and fails unless the two lines are identical, version, commit and date included. To download
+  that artifact, `verify` gains `contents: read`, with a comment saying why, and `test/architecture`'s pin
+  of its permissions, if it has one, is amended to match. The archive's binary runs in a step of its own
+  with no token in its `env`, after the archive is checked against the artifact's `checksums.txt`
+  (`sha256sum -c --ignore-missing`), as the `goreleaser` job checks the site bundle. This holds for every
+  option of *Open questions* 7, and its step is pinned in `test/architecture` with the others.
 - [ ] *Static:* `test/architecture`'s pins of every step and template that stamps the version, in
   whichever jobs the chosen option uses (the `site` and `image` jobs' steps, `.goreleaser.yaml`'s commit
   template, and a new job's under option (b)), match the chosen option.
-- [ ] *Review:* the scheduled audit's row 13 (ADR 0040's table, `.github/workflows/scheduled-security-audit.yml`,
-  the CLI on hostile inventory files) also runs `--format pdf` on every file of its corpus and the files
-  it generates. Its step text and corpus pins in `test/architecture` (`auditworkflow.go` and its tests,
-  `auditcorpus_test.go`) and ADR 0040's row 13 are amended to match. The `security-audit-run` skill reads
-  those runs as it reads the Markdown ones. Row 13 runs the latest release, which may not hold milestone
-  1 yet. The skill reads a refusal of `--format pdf` as "PDF not covered by this release" only when both
-  hold:
+- [ ] *Review:* the scheduled audit's row 13 (ADR 0040's table,
+  `.github/workflows/scheduled-security-audit.yml`, the CLI on hostile inventory files) also runs
+  `--format pdf` on every file of its corpus and the files it generates. Its step text and corpus pins
+  in `test/architecture` (`auditworkflow.go` and its tests, `auditcorpus_test.go`) and ADR 0040's row 13
+  are amended to match. The `security-audit-run` skill reads those runs as it reads the Markdown ones.
+  Row 13 runs the latest release, which may not hold milestone 1 yet. The skill reads a refusal of
+  `--format pdf` as "PDF not covered by this release" only when both hold:
   - the run is a usage error (exit 2) with the CLI's message `unknown format "pdf"`;
   - the release under audit predates the first release that ships `--format pdf`. The skill tells this
     from the release's version, as the image's `shift2eu version` prints it, against that first
     release's version, which the skill names once that release exists; until then every release
-    predates it.
+    predates it. If milestone 1 is already released when milestone 2's PR is written, that PR names the
+    version in the skill; if not, the `release-tag` review of the first release that ships `--format pdf`
+    files an issue to add it.
 
   Any other refusal of `--format pdf` is a finding.
 - [ ] *Review:* milestone 2's PR states row 13's step time before and after the PDF runs, from a manual
