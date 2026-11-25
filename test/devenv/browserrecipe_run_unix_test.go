@@ -133,12 +133,12 @@ const injectedMarker = "INJECTED"
 // builds anything out of it (issue #449).
 const injectedDeadlineValue = "1' in 1) echo " + injectedMarker + ";; esac; case '1"
 
-// The cases a run must fail at once get this long before the test stops the run, counted from the moment the test does
-// something to the run - the signal it sends, never make's start, which a loaded machine pushes far behind it (issue
-// #253). The stand-ins answer in milliseconds, so the run ends well inside it, and this is only the hang guard - a
-// recipe that waits where the test waits would hold the package here - never the thing under test. What such a run
-// did is counted below, in calls of the stand-in container command: a count is the same on every machine, where a wall
-// clock is not (issue #423, the reviewer's advice on PR #443).
+// The cases a run must fail at once get this long before the test stops the run: counted from make's start for a run
+// that must fail on its own, and from the signal for a run the test interrupts, never from make's start there, which a
+// loaded machine pushes far behind the signal (issue #253). The stand-ins answer in milliseconds, so the run ends well
+// inside it, and this is only the hang guard - a recipe that waits where the test waits would hold the package here -
+// never the thing under test. What such a run did is counted below, in calls of the stand-in container command: a
+// count is the same on every machine, where a wall clock is not (issue #423, the reviewer's advice on PR #443).
 const failFastTimeout = 20 * time.Second
 
 // The counts a run that must fail at once is read back by, in calls of the stand-in container command rather than in
@@ -1885,7 +1885,9 @@ func TestMakeTestBrowserRecipeCleansUpOnASignal(t *testing.T) {
 				// The guard below bounds what the run does once it is interrupted, so it is counted from the
 				// moment of the first signal: the run's start lies before the bundle build, the container start and
 				// the test's own waits for them, which a loaded machine stretches and which are no part of an
-				// interrupted run's cleanup (issue #253).
+				// interrupted run's cleanup (issue #253). The second-signal deliveries do wait inside that bound:
+				// the rendezvous the test holds the trap at before it sends the second signal is in it, a poll of
+				// two files that costs about 1.3 s on a loaded machine and is short against the guard.
 				signalled := time.Now()
 
 				if delivery.group {
