@@ -1893,6 +1893,12 @@ type schemaReader struct {
 	// block is read.
 	raw      []string
 	messages []string
+	// chompedRun reads a step's run: written as a literal block with a
+	// chomping indicator (|- or |+) as the literal block (|) it compares
+	// equal to, the newline after the last line dropped either way: ci.yml's
+	// Test job may write its run: steps so (CITestJobNode), release.yml's
+	// closed schema may not.
+	chompedRun bool
 }
 
 func (r *schemaReader) fail(format string, args ...any) {
@@ -2122,6 +2128,10 @@ func (r *schemaReader) env(e yamlread.Entry, path string, want []string) {
 // expression in it: the runner pastes the expression's value into the script
 // before the shell reads it, so a tag or a branch name could run as a command.
 func (r *schemaReader) run(e yamlread.Entry, path, want string) {
+	if r.chompedRun && (e.Value == "|-" || e.Value == "|+") {
+		e.Value = "|"
+	}
+
 	value, err := r.value(e)
 	if err != nil {
 		r.fail("%s: %v", path, err)

@@ -176,6 +176,9 @@ var ciTopLevelKeys = ciKeys{
 
 // ciStep is one step of ci.yml's test job, as CITestJobNode reads it.
 type ciStep struct {
+	// item is the step as the steps: list holds it, which schemaReader.step
+	// compares with the declaration.
+	item yamlread.Item
 	// num is the line the step's item starts on.
 	num int
 	// entries are the step's keys, in the order written.
@@ -183,10 +186,10 @@ type ciStep struct {
 	// uses is the action the step runs, without the version comment beside
 	// it; "" for a run: step.
 	uses string
-	// run is the step's command, a literal block's lines joined by newlines;
-	// "" for none. runProblem says why it could not be read as one, "" when
-	// it could.
-	run, runProblem string
+	// run is the step's command as written, a block's lines joined by
+	// newlines; "" for none. It recognises the step and feeds the named
+	// diagnostics; schemaReader.step reads it exactly.
+	run string
 }
 
 // entry returns the step's key, and whether it holds it.
@@ -234,10 +237,13 @@ func (s ciStep) runLines() []string {
 // it does (the read by its sed line, actions/setup-node by its uses:, the
 // check by its compare line, the tests by their make cover), each with exactly
 // the keys, name, id, uses, with, env and run the declaration lists, and in
-// that order, the tests after the check. Beside the exact comparison, each
-// part an edit could break is named on its own: the read's id, its X.Y.Z check
+// that order, the tests after the check. The comparison is schemaReader.step's,
+// the one release.yml's steps go through, with a run: written as |- or |+ read
+// as |. Beside it, each part an edit could break is named on its own, the
+// messages the cases pin: the steps' keys beyond the declaration's; the read's
+// id, its X.Y.Z check
 // and its output; setup-node's pin by commit, its version from the read's
-// output and its cache off; the check's exit 1 inside its if and its
+// with: mapping and its cache off; the check's exit 1 inside its if and its
 // NODE_VERSION from the read's output; and SHIFT2EU_REQUIRE_NODE: "1" on the
 // tests. The job itself holds only name, runs-on and steps, and the workflow's
 // top level only name, on, permissions, concurrency and jobs, so no if:,
@@ -247,7 +253,7 @@ func (s ciStep) runLines() []string {
 // release.yml's, ci.yml's steps are not a closed schema: the job holds the
 // other steps every pull request runs.
 func CITestJobNode(src []byte) []string {
-	r := &schemaReader{raw: rawLines(src)}
+	r := &schemaReader{raw: rawLines(src), chompedRun: true}
 
 	lines, err := yamlread.SplitLines(src)
 	if err != nil {
@@ -258,17 +264,23 @@ func CITestJobNode(src []byte) []string {
 
 	jobsBlock, err := yamlread.Walk(lines, "jobs")
 	if err != nil {
-		return []string{fmt.Sprintf("%s: %v", ciFile, err)}
+		r.fail("%s: %v", ciFile, err)
+
+		return r.messages
 	}
 
 	jobs, err := yamlread.Mapping(jobsBlock)
 	if err != nil {
-		return []string{fmt.Sprintf("%s: jobs: %v", ciFile, err)}
+		r.fail("%s: jobs: %v", ciFile, err)
+
+		return r.messages
 	}
 
 	i := slices.IndexFunc(jobs, func(e yamlread.Entry) bool { return e.Key == ciTestJob })
 	if i < 0 {
-		return []string{ciFile + " holds no test job under jobs:, so no CI run runs the tests the load check is in (issue #548)"}
+		r.fail("%s holds no test job under jobs:, so no CI run runs the tests the load check is in (issue #548)", ciFile)
+
+		return r.messages
 	}
 
 	job := jobs[i]
@@ -360,11 +372,11 @@ func (r *schemaReader) ciSteps(block []yamlread.Line) ([]ciStep, bool) {
 			return nil, false
 		}
 
-		step := ciStep{num: it.Num, entries: entries}
+		step := ciStep{item: it, num: it.Num, entries: entries}
 		step.uses = step.scalar("uses")
 
 		if e, ok := step.entry("run"); ok {
-			step.run, step.runProblem = r.ciRun(e)
+			step.run = ciRunText(e)
 		}
 
 		steps = append(steps, step)
@@ -373,39 +385,26 @@ func (r *schemaReader) ciSteps(block []yamlread.Line) ([]ciStep, bool) {
 	return steps, true
 }
 
-// ciRun reads a step's run:: one scalar on its line, or a literal block, with
-// or without a chomping indicator, whose lines are compared without the
-// newline after the last one either way. A folded block is not read as the
-// script it stands for: its lines are joined for the step to be recognised,
-// and the problem is returned.
-func (r *schemaReader) ciRun(e yamlread.Entry) (run, problem string) {
-	switch {
-	case e.Value == "|" || e.Value == "|-" || e.Value == "|+":
-		e.Value = "|"
-
-		value, err := yamlread.LiteralBlock(r.raw, e)
-		if err == nil {
-			return value, ""
+// ciRunText returns a step's run: as written, for the step to be recognised
+// and its named diagnostics read: a block's lines joined by newlines, whatever
+// its indicator, or the one scalar on the key's line. It reads nothing
+// exactly: schemaReader.step compares the run: with the declaration, and
+// refuses a value it cannot read as the script it stands for.
+func ciRunText(e yamlread.Entry) string {
+	if len(e.Block) > 0 {
+		texts := make([]string, 0, len(e.Block))
+		for _, l := range e.Block {
+			texts = append(texts, l.Text)
 		}
 
-		problem = err.Error()
-	case strings.HasPrefix(e.Value, "|") || strings.HasPrefix(e.Value, ">"):
-		problem = fmt.Sprintf("line %d: run: is %q, want a literal block (|) or one line", e.Num, e.Value)
-	default:
-		value, err := yamlread.Single(e)
-		if err != nil {
-			return "", err.Error()
-		}
-
-		return value, ""
+		return strings.Join(texts, "\n")
 	}
 
-	texts := make([]string, 0, len(e.Block))
-	for _, l := range e.Block {
-		texts = append(texts, l.Text)
+	if value, err := yamlread.Single(e); err == nil {
+		return value
 	}
 
-	return strings.Join(texts, "\n"), problem
+	return e.Value
 }
 
 // ciOne returns the index of the one step keep selects, and records a message
@@ -432,30 +431,41 @@ func (r *schemaReader) ciOne(steps []ciStep, what string, keep func(ciStep) bool
 
 // ciNodeSteps holds steps, ci.yml's test job's, to want, the four Node steps
 // nodeSteps declares: the read, actions/setup-node, the check and the tests.
+// Each step it finds goes through schemaReader.step, the comparison
+// release.yml's steps go through, and then through its named diagnostics.
 func (r *schemaReader) ciNodeSteps(steps []ciStep, want []releaseStep) {
 	readWant, setupWant, checkWant, testsWant := want[0], want[1], want[2], want[3]
+
+	// compare holds steps[i] to w as release.yml's schema holds its steps.
+	compare := func(i int, w releaseStep) {
+		r.step(steps[i].item, fmt.Sprintf("%s: jobs: %s: step %d", ciFile, ciTestJob, i+1), w)
+	}
 
 	read := r.ciOne(steps, "whose run reads dev/lima.yaml's nodeVersion, the one pin of the Node the VM installs for pi",
 		func(s ciStep) bool { return strings.Contains(s.run, nodeVersionRead) })
 	if read >= 0 {
+		compare(read, readWant)
 		r.ciRead(steps[read], readWant)
 	}
 
 	setup := r.ciOne(steps, "that run actions/setup-node, the action that installs the pinned Node",
 		func(s ciStep) bool { return strings.HasPrefix(s.uses, "actions/setup-node@") })
 	if setup >= 0 {
+		compare(setup, setupWant)
 		r.ciSetupNode(steps[setup], setupWant)
 	}
 
 	nodeCheck := r.ciOne(steps, "whose run checks that node on the PATH is the pinned one",
 		func(s ciStep) bool { return strings.Contains(s.run, nodeCheckPrefix) })
 	if nodeCheck >= 0 {
+		compare(nodeCheck, checkWant)
 		r.ciNodeCheck(steps[nodeCheck], checkWant)
 	}
 
 	tests := r.ciOne(steps, "that run "+testsWant.run+", the step the tests run in",
 		func(s ciStep) bool { return slices.Contains(s.runLines(), testsWant.run) })
 	if tests >= 0 {
+		compare(tests, testsWant)
 		r.ciTests(steps[tests], testsWant)
 	}
 
@@ -476,10 +486,11 @@ func (r *schemaReader) ciNodeSteps(steps []ciStep, want []releaseStep) {
 	}
 }
 
-// ciStepExactly holds step, which is what, to want's keys, name, id, env and
-// run exactly: a key beyond them, if: and continue-on-error: above all, turns
-// the step off or lets it fail unseen.
-func (r *schemaReader) ciStepExactly(what string, step ciStep, want releaseStep) {
+// ciExtraKeys names every key of step, which is what, beyond want's: if: and
+// continue-on-error: above all turn the step off or let it fail unseen. The
+// keys themselves are schemaReader.step's to compare; this is the named
+// diagnostic the cases pin, which says why such a key is refused.
+func (r *schemaReader) ciExtraKeys(what string, step ciStep, want releaseStep) {
 	keys := want.keys()
 
 	for _, e := range step.entries {
@@ -487,40 +498,12 @@ func (r *schemaReader) ciStepExactly(what string, step ciStep, want releaseStep)
 			r.fail("ci.yml's test job's %s (line %d) holds the key %q, want exactly %s: a key beyond these, if: and continue-on-error: above all, turns the step off or lets it fail unseen (issue #548)", what, step.num, e.Key, strings.Join(keys, ", "))
 		}
 	}
-
-	for _, key := range keys {
-		if _, ok := step.entry(key); !ok {
-			r.fail("ci.yml's test job's %s (line %d) holds no %s, want exactly %s (issue #548)", what, step.num, key, strings.Join(keys, ", "))
-		}
-	}
-
-	if got := step.scalar("name"); want.name != "" && got != want.name {
-		r.fail("ci.yml's test job's %s (line %d) is named %q, want %q, as nodeSteps declares it for ci.yml and release.yml (issue #554)", what, step.num, got, want.name)
-	}
-
-	if e, ok := step.entry("env"); ok && want.env != nil {
-		got := make([]string, 0, len(e.Block))
-		for _, l := range e.Block {
-			got = append(got, l.Text)
-		}
-
-		if e.Value != "" || !slices.Equal(got, want.env) {
-			r.fail("ci.yml's test job's %s (line %d): env: holds %q, want exactly %q, so the step could run with an environment the check never lists (issue #554)", what, step.num, got, want.env)
-		}
-	}
-
-	if _, ok := step.entry("run"); ok && want.run != "" {
-		if step.runProblem != "" {
-			r.fail("ci.yml's test job's %s (line %d): run: %s (issue #554)", what, step.num, step.runProblem)
-		} else if step.run != want.run {
-			r.fail("ci.yml's test job's %s (line %d): run: is %q, want exactly %q, as nodeSteps declares it for ci.yml and release.yml (issue #554)", what, step.num, step.run, want.run)
-		}
-	}
 }
 
-// ciRead checks the step that reads dev/lima.yaml's nodeVersion.
+// ciRead names the parts of the step that reads dev/lima.yaml's nodeVersion
+// an edit is likely to break.
 func (r *schemaReader) ciRead(step ciStep, want releaseStep) {
-	r.ciStepExactly("step that reads dev/lima.yaml's nodeVersion", step, want)
+	r.ciExtraKeys("step that reads dev/lima.yaml's nodeVersion", step, want)
 
 	switch id := step.scalar("id"); {
 	case id == "":
@@ -538,11 +521,12 @@ func (r *schemaReader) ciRead(step ciStep, want releaseStep) {
 	}
 }
 
-// ciSetupNode checks the actions/setup-node step: pinned by a commit, its
-// with: mapping exactly the declaration's, the version taken from the read's
-// output, and its package-manager cache off.
+// ciSetupNode names the parts of the actions/setup-node step an edit is
+// likely to break: its pin by a commit, its with: mapping's keys and its
+// package-manager cache off. The version taken from the read's output is
+// schemaReader.step's to compare.
 func (r *schemaReader) ciSetupNode(step ciStep, want releaseStep) {
-	r.ciStepExactly("actions/setup-node step", step, want)
+	r.ciExtraKeys("actions/setup-node step", step, want)
 
 	if !want.uses.MatchString(step.uses) {
 		r.fail("actions/setup-node (line %d) uses %q, want actions/setup-node@<40 hex digits>, the commit it is pinned to: a tag or a range can be moved under CI (issue #548)", step.num, step.uses)
@@ -575,31 +559,14 @@ func (r *schemaReader) ciSetupNode(step ciStep, want releaseStep) {
 	}
 
 	for _, key := range withKeys {
-		w, ok := values[key]
-		if !ok {
+		if _, ok := values[key]; !ok {
 			r.fail("actions/setup-node (line %d): with: holds no %s, want exactly %s (issue #548)", step.num, key, strings.Join(withKeys, " and "))
-
-			continue
 		}
+	}
 
-		got, err := yamlread.Single(w)
-		if err != nil {
-			r.fail("actions/setup-node (line %d): with: %v (issue #548)", w.Num, err)
-
-			continue
-		}
-
-		if want.with[key].MatchString(got) {
-			continue
-		}
-
-		switch key {
-		case "package-manager-cache":
+	if w, ok := values["package-manager-cache"]; ok {
+		if got, err := yamlread.Single(w); err == nil && got != packageManagerCache {
 			r.fail("actions/setup-node (line %d): with: package-manager-cache is %q, want %q: no package manager runs in this job, so its cache would save and restore what nothing reads (issue #548)", w.Num, got, packageManagerCache)
-		case "node-version":
-			r.fail("actions/setup-node (line %d): with: node-version is %q, want %q, the version the step that reads dev/lima.yaml wrote to its output: a literal is a version dev/lima.yaml does not pin, and the VM's pin must stay the only one (issue #548)", w.Num, got, nodeVersionExpr)
-		default:
-			r.fail("actions/setup-node (line %d): with: %s is %q, want one matching %s (issue #554)", w.Num, key, got, want.with[key])
 		}
 	}
 }
@@ -607,7 +574,7 @@ func (r *schemaReader) ciSetupNode(step ciStep, want releaseStep) {
 // ciNodeCheck checks the step that compares node --version with the version
 // setup-node installed, and fails when they differ.
 func (r *schemaReader) ciNodeCheck(step ciStep, want releaseStep) {
-	r.ciStepExactly("step that checks node", step, want)
+	r.ciExtraKeys("step that checks node", step, want)
 
 	lines := step.runLines()
 
@@ -648,7 +615,7 @@ func (r *schemaReader) ciNodeCheck(step ciStep, want releaseStep) {
 // rather than skips on 1, and the quoted form is the one the declaration
 // holds, a bare 1 being turned into the same string by GitHub Actions.
 func (r *schemaReader) ciTests(step ciStep, want releaseStep) {
-	r.ciStepExactly("step that runs "+want.run, step, want)
+	r.ciExtraKeys("step that runs "+want.run, step, want)
 
 	e, ok := step.entry("env")
 	if !ok || e.Value != "" || len(e.Block) == 0 {

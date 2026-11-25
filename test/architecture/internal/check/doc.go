@@ -113,11 +113,13 @@
 // check's error names and in the name and command of the step the tests run in.
 // ReleaseWorkflow's closed schema holds release.yml's Test job to them;
 // CITestJobNode holds ci.yml's Test job, read with yamlread, to exactly one of
-// each, with exactly the declared keys and values, in that order, the job's
-// keys closed to name, runs-on and steps and the workflow's top level to name,
-// on, permissions, concurrency and jobs, so no if:, needs:,
-// continue-on-error:, defaults: or env: can skip the job or make its run:
-// steps no-ops, naming each part an edit could break.
+// each, compared with the declaration by the step comparison release.yml's
+// steps go through, so with exactly the declared keys and values, in that
+// order. The job's keys are closed to name, runs-on and steps and the
+// workflow's top level to name, on, permissions, concurrency and jobs, so no
+// if:, needs:, continue-on-error:, defaults: or env: can skip the job or make
+// its run: steps no-ops; each part an edit could break is also named on its
+// own.
 //
 // AuditWorkflow holds the scheduled security audit's workflow,
 // .github/workflows/scheduled-security-audit.yml, to PRD #175 milestone 2 and
