@@ -177,10 +177,21 @@ const clearSiteDataSentence = "since the site does not send Clear-Site-Data."
 const coopSentence = "One gap remains: the site does not send Cross-Origin-Opener-Policy, so"
 
 // apexRedirectSentence is the downgrade risk's account of the apex redirect (issue
-// #567, item 3): the site's own front answers http://shift2eu.com with a 308 that
-// carries no HSTS, not the apex redirect's provider, whose HSTS the site cannot
-// promise. The paragraph keeps the downgrade-risk marker the live check reads.
-const apexRedirectSentence = "(answered by the site's own front, the same server as www.shift2eu.com, with a 308 redirect that carries no HSTS)"
+// #567, item 3; issue #601): the site's own front answers http://shift2eu.com with
+// a plain-HTTP 308 that carries no HSTS, not the apex redirect's provider, whose
+// HSTS the site cannot promise. The scheme is named because only that redirect
+// lacks HSTS: the apex's HTTPS answer carries it (apexHTSTSSentence). The
+// paragraph keeps the downgrade-risk marker the live check reads.
+const apexRedirectSentence = "(answered by the site's own front, the same server as www.shift2eu.com, with a plain-HTTP 308 redirect that carries no HSTS)"
+
+// apexHTSTSSentence is the downgrade risk's account of where HSTS already
+// protects a visit (issue #601): https://shift2eu.com answers with its 308 to
+// www.shift2eu.com and carries Strict-Transport-Security: max-age=31536000 for
+// shift2eu.com alone, with no includeSubDomains, so a browser that has already
+// been to the apex over HTTPS is protected there too. A page that left that out
+// would understate the site's protection, and one that said the apex's redirect
+// carried no HSTS would be false of the HTTPS one.
+const apexHTSTSSentence = "at www.shift2eu.com or at https://shift2eu.com, whose 308 redirect to www.shift2eu.com carries HSTS for shift2eu.com alone"
 
 // frameAncestorsSentence is the privacy page's framing guard (issue #567, item
 // 4): the Content-Security-Policy header every HTTPS response carries refuses
@@ -202,26 +213,45 @@ const frameAncestorsSentence = "Every HTTPS response from www.shift2eu.com carri
 const logsSentence = "The site's front keeps no access log and passes neither your IP address nor your cookies on to the rest of the hosting. Scaleway's platform, which ends the encrypted connection and receives your request before the front does, can log your IP address, the path you request and your country. The maintainer sets Scaleway's logs to be kept 1 day, the shortest Scaleway allows, once the site has served its first requests (Scaleway creates its log store only then); until that is done, Scaleway's default of 7 days applies."
 
 // oldPrivacyClaims are the claims the page made before issue #567 and must not
-// make again: the site cannot send Clear-Site-Data and cannot send
-// Cross-Origin-Opener-Policy were both false of the hosting after ADR 0045 (the
-// site does not send either header, which is a decision, not a gap), the apex
-// redirect's provider was the wrong server once the container answered the apex
-// itself, and the front answered no request first once Scaleway's Serverless
-// Containers platform ended the TLS connection ahead of it and kept the logs
-// that can name a visitor.
-var oldPrivacyClaims = []string{
-	"cannot send Clear-Site-Data",
-	"cannot send Cross-Origin-Opener-Policy",
-	"apex redirect's provider",
-	"the server that answers every request first",
+// make again, each with why it is gone: the site cannot send Clear-Site-Data and
+// cannot send Cross-Origin-Opener-Policy were both false of the hosting after
+// ADR 0045 (the site does not send either header, which is a decision, not a
+// gap), the apex redirect's provider was the wrong server once the container
+// answered the apex itself, the front answered no request first once Scaleway's
+// Serverless Containers platform ended the TLS connection ahead of it and kept
+// the logs that can name a visitor, and the page no longer says HSTS protects
+// only a browser that visited www.shift2eu.com over HTTPS, since the apex's own
+// HTTPS redirect carries it too (issue #601).
+var oldPrivacyClaims = []struct{ claim, reason string }{
+	{
+		claim:  "cannot send Clear-Site-Data",
+		reason: "the hosting sends no such header, which is a decision rather than a gap (issue #567, item 1)",
+	},
+	{
+		claim:  "cannot send Cross-Origin-Opener-Policy",
+		reason: "the hosting sends no such header either, which is a decision rather than a gap (issue #567, item 2)",
+	},
+	{
+		claim:  "apex redirect's provider",
+		reason: "the container holds both hostnames and answers the apex itself (issue #567, item 3)",
+	},
+	{
+		claim:  "the server that answers every request first",
+		reason: "Scaleway's platform ends the TLS connection ahead of the front and keeps the logs that can name a visitor (issue #567, item 5)",
+	},
+	{
+		claim:  "HSTS on www.shift2eu.com protects only a browser",
+		reason: "the apex's HTTPS 308 to www.shift2eu.com carries Strict-Transport-Security: max-age=31536000 for shift2eu.com alone, so a browser that has been to https://shift2eu.com is protected at the apex too; only the plain-HTTP redirect carries no HSTS (issue #601)",
+	},
 }
 
 // TestPrivacyPageStatesWhatTheFrontAndTheLogsDo pins the five statements issue
-// #567 corrects or adds to the built privacy page: what the site does not send
-// (Clear-Site-Data, Cross-Origin-Opener-Policy), who answers the apex, the
-// framing guard the policy header carries, and what the front and Scaleway's
-// logs hold. The statements are matched after collapsing white space, as the
-// rest of this file does, so the page may wrap them as it likes.
+// #567 corrects or adds to the built privacy page and the one issue #601 adds:
+// what the site does not send (Clear-Site-Data, Cross-Origin-Opener-Policy), who
+// answers the apex and which of its redirects carries HSTS, the framing guard the
+// policy header carries, and what the front and Scaleway's logs hold. The
+// statements are matched after collapsing white space, as the rest of this file
+// does, so the page may wrap them as it likes.
 func TestPrivacyPageStatesWhatTheFrontAndTheLogsDo(t *testing.T) {
 	t.Parallel()
 
@@ -245,7 +275,12 @@ func TestPrivacyPageStatesWhatTheFrontAndTheLogsDo(t *testing.T) {
 		{
 			name:     "the apex redirect is the site's own front",
 			sentence: apexRedirectSentence,
-			expected: "the downgrade-risk statement must say that the site's own front answers http://shift2eu.com with a 308 that carries no HSTS, not the apex redirect's provider: the container holds both hostnames and answers the apex itself (issue #567, item 3)",
+			expected: "the downgrade-risk statement must say that the site's own front answers http://shift2eu.com with a plain-HTTP 308 that carries no HSTS, not the apex redirect's provider: the container holds both hostnames and answers the apex itself, and only the plain-HTTP 308 lacks HSTS (issue #567, item 3; issue #601)",
+		},
+		{
+			name:     "the apex's HTTPS redirect carries HSTS",
+			sentence: apexHTSTSSentence,
+			expected: "the downgrade-risk statement must say that https://shift2eu.com's 308 redirect to www.shift2eu.com carries HSTS for shift2eu.com alone, so a browser that has been to the apex over HTTPS is protected there too: the apex's HTTPS answer sends Strict-Transport-Security: max-age=31536000 without includeSubDomains (issue #601)",
 		},
 		{
 			name:     "frame-ancestors is in the header",
@@ -270,21 +305,22 @@ func TestPrivacyPageStatesWhatTheFrontAndTheLogsDo(t *testing.T) {
 	}
 }
 
-// TestPrivacyPageDropsTheOldClaims pins the other side of issue #567: the three
-// claims the page used to make are gone, so a rewrite that keeps one beside the
-// corrected sentence cannot leave the page saying both that the site cannot send
-// a header and that it does not.
+// TestPrivacyPageDropsTheOldClaims pins the other side of issues #567 and #601:
+// the claims the page used to make are gone, so a rewrite that keeps one beside
+// the corrected sentence cannot leave the page saying both that the site cannot
+// send a header and that it does not, or that HSTS protects only a browser that
+// has visited www.shift2eu.com over HTTPS.
 func TestPrivacyPageDropsTheOldClaims(t *testing.T) {
 	t.Parallel()
 
 	text := theBundle(t).html(t, privacyPageName).body(t).textContent()
 
-	for _, claim := range oldPrivacyClaims {
-		t.Run(claim, func(t *testing.T) {
+	for _, tc := range oldPrivacyClaims {
+		t.Run(tc.claim, func(t *testing.T) {
 			t.Parallel()
 
-			if strings.Contains(collapseSpace(text), claim) {
-				t.Errorf("the privacy page still says %q, want it gone: the site does not send either header, and its own front answers the apex (issue #567)", claim)
+			if strings.Contains(collapseSpace(text), tc.claim) {
+				t.Errorf("the privacy page still says %q, want it gone: %s", tc.claim, tc.reason)
 			}
 		})
 	}
