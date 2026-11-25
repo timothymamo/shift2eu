@@ -8,8 +8,9 @@ the bundle's attestation, the HSTS and preload records' format, the origins and 
 [ADR 0039](0039-create-the-sites-scaleway-hosting-with-opentofu.md) records how the hosting is created;
 this one records how the site is served and deployed on it. Milestone 4 amends it with what only the live
 hosting can tell (marked *to be checked in milestone 4* below): the origins' plain-HTTP answers, the
-key-limit step's result, the apex redirect's means and provider, Edge Services' headers and compression,
-and the HSTS and preload outcome. Passages marked *proposed, for the maintainer to confirm* are values
+key-limit step's result, the apex redirect's means and provider, and Edge Services' headers and
+compression. The HSTS and preload outcome is settled (2026-11-25: HSTS met, preload not pursued; *The
+HSTS and preload records*). Passages marked *proposed, for the maintainer to confirm* are values
 the maintainer has not decided yet; the PR that lands each one (named there) checks it against this ADR.
 
 ## Context
@@ -439,7 +440,8 @@ milestone 4 adds the margin for queueing and pins the number.
 ### The HSTS and preload records (milestone 4 creates them)
 
 **The formats are confirmed by the maintainer (2026-11-23)** (PR B reads them, milestone 4 writes them).
-Milestone 4 still decides the outcome, whether preload is pursued and the subdomains.
+The outcome, whether preload is pursued and the subdomains were decided on 2026-11-25 (*Decided
+2026-11-25*, below).
 Both live under `site/records/`, which `ci/sitebuild` never bundles. Both are one JSON object of exactly
 the fields below, read strictly: no unknown, missing or duplicate field, field names matched exactly
 (case-sensitive), no trailing data, at most 4 KiB. A missing or unreadable record makes the live checks
@@ -486,10 +488,29 @@ fail safe (*Layer 3*); for `ci/sitebuild`, a missing `hsts.json` reads as not wa
 | `subdomains` | an array of host names under `shift2eu.com`, sorted, each once | The subdomains that existed when the domain was submitted (such as `"www.shift2eu.com"`); empty when not submitted. `includeSubDomains` binds each of them, and every future one, to HTTPS. |
 
 Pursuing preload is effectively irreversible: removal takes months to reach shipping browsers, and
-`includeSubDomains` binds every present and future subdomain of `shift2eu.com`. Whether it is pursued,
-the subdomains at submission and the HSTS outcome or waiver are *to be decided in milestone 4*, which
-amends this ADR with them and commits both records in a first PR whose squash commit carries
+`includeSubDomains` binds every present and future subdomain of `shift2eu.com`. Milestone 4 decided
+whether it is pursued, the subdomains at submission and the HSTS outcome or waiver (below), amends this
+ADR with them and commits both records in a first PR whose squash commit carries
 `Release-As: <next version>`, so a release tag contains them before `SITE_DEPLOY_ENABLED` is set.
+
+**Decided 2026-11-25** (the maintainer, PRD #297 milestone 4):
+
+- **HSTS: met.** The first deploy read `strict-transport-security: max-age=31536000; includeSubDomains`
+  on `https://www.shift2eu.com/` on 2026-11-25, the header the container front sends (the amendment *a
+  Serverless Container in front of Edge Services*, below). `site/records/hsts.json` records
+  `"outcome": "met"`, `"preload": false`, `"date": "2026-11-25"` and an empty `"reason"`; the pages
+  carry no `hsts-waived` statement.
+- **Preload: not pursued.** Pursuing preload is effectively irreversible: removal from the browsers'
+  preload lists takes months to reach shipping browsers, and `includeSubDomains` under preload binds
+  every present and future subdomain of `shift2eu.com` to HTTPS. HSTS on `www` alone meets the site's
+  go/no-go without that commitment. The apex sends no HSTS (it only redirects), and `http://shift2eu.com`
+  needs no first hop to `https://shift2eu.com`.
+- **No subdomains submitted.** `site/records/preload.json` records `"listed": false`, `"submitted": ""`,
+  `"checked": "2026-11-25"` and no `"subdomains"`; while `listed` is false the live checks require the
+  `downgrade-risk` statement on the privacy page, as the table above says.
+
+Pursuing preload later is a new decision: it changes both records (`preload` true, then a `submitted`
+date and the subdomains at submission) and amends this ADR again.
 
 ### The leaked-key residuals
 
@@ -589,7 +610,8 @@ accepted; and whether `ListBucket` was allowed, which decides `-list-bucket` abo
   R12 rollback for all four pages, `LICENSE`, `NOTICE` and `manifest.json`, and the guide.
 - Milestone 4 amends this ADR: the origins' plain-HTTP answers, R7's result and the `-list-bucket`
   decision, the apex redirect's means, provider and certificate authority, Edge Services' headers and
-  compression, the HSTS outcome or waiver, whether preload is pursued and the subdomains at submission.
+  compression, the HSTS outcome or waiver, whether preload is pursued and the subdomains at submission
+  (these last three settled on 2026-11-25: met, not pursued, none; *The HSTS and preload records*).
 
 ## Amendment: a fifth page, about.html (issue #528)
 
@@ -674,7 +696,8 @@ unchanged; only *Hosting*, *The origins* and *Recovery* change, as follows.
   tolerates exactly those two and pins it with a test (ADR 0043's note: no response-header allow list
   exists today; if one is ever added, exactly those two, not an `x-envoy-*` prefix). Its
   `-plain-http-www` stays `redirect`.
-- **Consequences and the residuals.** Milestone 4 still amends this ADR with the live answers (R5, R8),
-  R7's result, the HSTS outcome and whether preload is pursued. Once the header CSP is live, it also binds
+- **Consequences and the residuals.** Milestone 4 still amends this ADR with the live answers (R5, R8)
+  and R7's result; the HSTS outcome (met) and preload (not pursued) are settled (2026-11-25, *The HSTS
+  and preload records*). Once the header CSP is live, it also binds
   a page or script a leaked key uploads at any path (`connect-src 'none'`, `worker-src 'none'`), which
   narrows the residuals above; that amendment says so with the live result.

@@ -351,7 +351,10 @@ release), *live* (checked against the live site) or *review*.
   - [x] Milestone 3: the release's live check (`ci/sitecheck/internal/livecheck`, `KindStatement`)
     enforces `hsts-waived` on both deployed pages when the record says waived and `downgrade-risk` on the
     privacy page unless the site counts as preloaded, and fails safe on a missing or unreadable record.
-  - [ ] Milestone 4: the scheduled live check doing the same, and the record itself.
+  - [ ] Milestone 4: the scheduled live check doing the same.
+  - [x] Milestone 4: the record itself: `site/records/hsts.json` (`met`, preload not pursued) and
+    `site/records/preload.json` (not listed, not submitted), 2026-11-25 (ADR 0042, *The HSTS and preload
+    records*).
 - [ ] The privacy page names the apex redirect's provider (chosen in milestone 4), says what it sees of a
   visitor who enters through `shift2eu.com` (IP address, user agent, the requested path and the
   `Referer`), and that it only serves the redirect and never the site or the inventory. *Review* at
