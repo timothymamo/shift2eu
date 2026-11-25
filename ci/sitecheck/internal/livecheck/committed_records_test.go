@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
 
 	"github.com/timothymamo/shift2eu/ci/sitecheck/internal/livecheck"
 )
@@ -19,7 +20,7 @@ import (
 // reads the commit's own bytes, and pins their values, so that editing a record
 // is a deliberate change of this file too.
 
-// committedRecordPaths are the two records, from the repository root.
+// The two records' paths, from the repository root.
 const (
 	hstsRecordPath    = "site/records/hsts.json"
 	preloadRecordPath = "site/records/preload.json"
@@ -60,7 +61,11 @@ func TestTheCommittedRecordsParse(t *testing.T) {
 			Subdomains: []string{},
 		}
 
-		if diff := cmp.Diff(want, preload); diff != "" {
+		// EquateEmpty: whether the reader reports no subdomains as nil or as
+		// an empty slice is a representation detail the record does not
+		// decide, so the check pins the values and not which of the two the
+		// reader happens to return for an empty list.
+		if diff := cmp.Diff(want, preload, cmpopts.EquateEmpty()); diff != "" {
 			t.Errorf("the committed %s is not the record it was committed as (-want +got):\n%s", preloadRecordPath, diff)
 		}
 	})
