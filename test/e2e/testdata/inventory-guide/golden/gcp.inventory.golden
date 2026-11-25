@@ -383,6 +383,7 @@
       "capabilities": [
         "encryption-at-rest",
         "node-high-availability",
+        "sharding",
         "snapshots",
         "zone-high-availability"
       ],

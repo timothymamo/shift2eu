@@ -768,6 +768,13 @@ text as the decision)
     `persistenceConfig`). Not confirmed, and left out: an "all regions" value for the gcloud calls (the
     guide loops over the regions the asset listing names); the API spelling of `nodeType`, and whether
     a Redis cluster's `sizeGb` counts replicas, so a Redis cluster gets a `count` and no `memoryGiB`.
+  - Memorystore for Valkey's default mode: confirmed, Cluster Mode Enabled
+    (<https://docs.cloud.google.com/memorystore/docs/valkey/create-instances>,
+    <https://docs.cloud.google.com/memorystore/docs/valkey/configure-instances>), and `STANDALONE` is
+    the deprecated spelling of `CLUSTER_DISABLED`; so a listed instance gets `sharding` unless its
+    `mode` is `CLUSTER_DISABLED` or `STANDALONE`, and one with no list data gets none. Not confirmed:
+    whether a list response omits `mode` (or gives `MODE_UNSPECIFIED`) for an instance created without
+    it.
   - IPv6 backends and UDP: confirmed. `ipAddressSelectionPolicy` `IPV6_ONLY` and `PREFER_IPV6`
     (`IPV4_ONLY` the default), a backend service's `protocol` `UDP`, a forwarding rule's `IPProtocol`
     and `ipVersion`, and a target pool has no protocol

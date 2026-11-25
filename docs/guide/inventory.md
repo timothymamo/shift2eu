@@ -885,7 +885,7 @@ which belong to their instance.
 | `cache.redis` (Redis instance) | `snapshots` | `persistenceConfig.persistenceMode` is `RDB` |
 | `cache.redis` (Redis cluster, Valkey) | `node-high-availability` | `replicaCount` is 1 or more |
 | `cache.redis` (Redis cluster, Valkey) | `zone-high-availability` | `replicaCount` is 1 or more and `zoneDistributionConfig.mode` is not `SINGLE_ZONE` (absent means `MULTI_ZONE`) |
-| `cache.redis` (Redis cluster, Valkey) | `sharding` | always for a Redis cluster; a Valkey instance of `mode` `CLUSTER` |
+| `cache.redis` (Redis cluster, Valkey) | `sharding` | always for a Redis cluster; a listed Valkey instance unless its `mode` is `CLUSTER_DISABLED` or `STANDALONE` (the deprecated spelling of `CLUSTER_DISABLED`; absent means `CLUSTER`) |
 | `cache.redis` (Redis cluster, Valkey) | `snapshots` | `persistenceConfig.mode` is `RDB` (an AOF log is not a snapshot) |
 | `network.loadbalancer` | `zone-high-availability` | always: every GCP load balancer is regional or global, and a global one counts only for its zone redundancy within a region |
 | `network.loadbalancer` | `udp` | one of its backend services has `protocol` `UDP`, or a forwarding rule of `IPProtocol` `UDP` reaches it |

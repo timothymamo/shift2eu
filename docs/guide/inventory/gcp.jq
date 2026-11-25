@@ -328,7 +328,9 @@ def reaches($proxies):
         # Memorystore for Redis Cluster and for Valkey: a replica per shard
         # takes over, and with one the cluster survives a zone unless all of it
         # is in one zone (MULTI_ZONE is the default). A Redis cluster is
-        # sharded; a Valkey instance is when its mode is CLUSTER.
+        # sharded; a listed Valkey instance is unless its mode is
+        # CLUSTER_DISABLED or STANDALONE (the deprecated spelling of
+        # CLUSTER_DISABLED): an unset mode defaults to CLUSTER.
         (.assetType == "redis.googleapis.com/Cluster") as $cluster
         | (if $cluster then $redisclusters[$key] else $valkey[$key] end) as $d
         | (($d.replicaCount? // 0) >= 1) as $replicas
@@ -337,7 +339,8 @@ def reaches($proxies):
             cap("node-high-availability"; $replicas),
             cap("zone-high-availability"; $replicas
               and ($d.zoneDistributionConfig.mode? // "MULTI_ZONE") != "SINGLE_ZONE"),
-            cap("sharding"; $cluster or $d.mode? == "CLUSTER"),
+            cap("sharding"; $cluster
+              or ($d != null and ($d.mode? | IN("CLUSTER_DISABLED", "STANDALONE") | not))),
             cap("snapshots"; $d.persistenceConfig.mode? == "RDB")
           ],
           size: (if $d == null then null else size_of({
