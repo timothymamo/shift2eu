@@ -1341,6 +1341,12 @@ test of ours (Decision 3's reason).
      installs it with `sudo install -o root -m 0555`; amended 2026-11-23, issue #277 round H).
      *Amended 2026-11-23 (issue #277 round J):* `bin/` itself has no write bit and holds `audit-exec`
      alone: a second file or a link beside the wrapper is refused.
+     *Amended 2026-11-26 (issues #615 and #614):* the layout `CheckLayout` holds (`layoutDirs`, parents
+     first, each checked with `Lstat`, no link) is now `/srv`, `/srv/audit`, `checkout` and `checks`
+     (no write bit), `work` holding only `tmp`, `work/tmp` empty, `/srv/audit/cwd-preflight` and
+     `/srv/audit/cwd-audit` empty, `state`, `state/home` and `state/tmp` empty, `state/bin`,
+     `state/out`, and `bin` (no write bit) holding only `audit-exec`; the work area itself is no longer
+     a session's working directory.
      *Amended 2026-11-23 (issue #277 round L):* read-only here means read-only **by mode**, and that is
      defence in depth: the runner's user owns `checkout/` and `checks/` and could add a write bit back.
      What holds both trees against their owner is the sandbox's write allow list, which names neither;
@@ -1411,7 +1417,8 @@ test of ours (Decision 3's reason).
      `cwd-audit` must still be an empty real directory (`Lstat`, no link), and the `$GITHUB_ENV` file is
      digested before and after the audit's launch as around the preflight's; any change fails the run
      with exit 1 and the audit's constant line (see "The CLI's working directory and its built-in
-     read-only commands" below).
+     read-only commands" below). *Amended 2026-11-26 (security finding L1):* what is digested is the
+     runner's whole file-command directory, the `$GITHUB_ENV` file's (see there).
      *Amended 2026-11-23 (issue #277 round D):* the result file is read from one descriptor and never
      through a link: its entry must be a regular file (`Lstat`, so neither a link nor a FIFO is
      opened), and the descriptor opened must be that same file (`os.SameFile` on its `Stat`). That gives
@@ -1450,7 +1457,7 @@ test of ours (Decision 3's reason).
   | Variable | Value | Why |
   |---|---|---|
   | `CLAUDE_CODE_OAUTH_TOKEN` | the token | the subscription |
-  | `HOME` | `/srv/audit/state/home` | fresh, inside the state area, which the tools cannot read |
+  | `HOME` | `/srv/audit/state/home` | inside the state area, which the tools cannot read; empty before the preflight (`CheckLayout`), but not fresh for the audit's session, which gets the `HOME` the preflight's CLI already wrote (*amended 2026-11-26*, see below) |
   | `PATH` | `/usr/bin:/bin` | fixed; the sandbox's `bwrap` and `socat` are in `/usr/bin` |
   | `TMPDIR` | `/srv/audit/state/tmp` | the CLI's own temporary files stay in the state area |
   | `DISABLE_AUTOUPDATER` | `1` | no update of the pinned binary |
@@ -1467,6 +1474,16 @@ test of ours (Decision 3's reason).
   nothing. *Why not made by the launcher itself:* a variable a process sets after it starts never shows
   in its `/proc/<pid>/environ`, which is the file the probe must show unreadable.
 
+  **`HOME` is shared by the two sessions** (*amended 2026-11-26, issues #615 and #614, security
+  finding L2*). Earlier text called it fresh; that holds for the preflight's session only. `CheckLayout`
+  wants `state/home` empty before the preflight, and nothing empties or checks it again: the audit's
+  session starts with the `HOME` the preflight's CLI already wrote (its configuration, its session
+  state). The state area is denied to every tool, so neither session's tools can plant anything there;
+  what the audit's CLI reads from it is what the same pinned CLI wrote itself. *Follow-up:* `HOME` is a
+  candidate for a later boundary probe - the audit's launch checking `state/home` against what the
+  preflight's CLI is known to leave there, or giving each session a `HOME` of its own, as it already gets
+  a working directory of its own.
+
 #### The audit directory
 
 Outside `/home`, made by a model-free step with `sudo install -d -o runner` before the hardening step
@@ -1479,7 +1496,7 @@ removes sudo, and never under `$RUNNER_TEMP` or the workspace (both under `/home
 | `/srv/audit/work` | the result file `result.json`; `tmp/`, the commands' `TMPDIR` | Read, Grep, Glob, Write, Edit; Bash writes here (and, by redirection, into the session's working directory; amended 2026-11-25, issue #614) |
 | `/srv/audit/cwd-preflight` | the preflight session's working directory (*added 2026-11-25, issues #615 and #614*): empty before the preflight, made by the same `install -d` as `work` (the runner's, mode 0755); under the scrub the CLI leaves its placeholders here; checked by `CheckLayout` only, never read by the launcher after the session | no rule names it; as the working directory, the CLI's built-in read-only Bash commands list and read it, and a Bash redirection may write into it (issue #614) |
 | `/srv/audit/cwd-audit` | the audit session's working directory (*added 2026-11-25, issues #615 and #614*): made like `cwd-preflight`, checked by `CheckLayout` and again by `Audit` before its launch, which refuses it unless it is still an empty real directory; the CLI leaves its placeholders here; never read by the launcher after the session | as `cwd-preflight`, for the audit's session |
-| `/srv/audit/state` | `home/` (the fresh `HOME`, with Claude Code's configuration and transcripts), `tmp/` (the CLI's `TMPDIR`), `bin/claude`, `out/` (transcripts and stderr) | none: denied to every tool |
+| `/srv/audit/state` | `home/` (the sessions' shared `HOME`, empty before the preflight, with Claude Code's configuration and transcripts), `tmp/` (the CLI's `TMPDIR`), `bin/claude`, `out/` (transcripts and stderr) | none: denied to every tool |
 | `/srv/audit/bin/audit-exec` | the wrapper, built from `ci/auditexec`, owned by root, mode 0555 | Bash runs it, nothing else |
 
 The working directory is `/srv/audit/cwd-preflight` for the preflight's session and
@@ -2433,6 +2450,23 @@ arguments; git's read-only subcommands), and changes between versions. The deny 
   before and after the audit's launch as around the preflight's, and any change fails the run. Under the
   scrub the sandbox no longer holds `/home`, where the file lives, and the class runs without the
   wrapper, so the preflight's probe 6 alone no longer shows the audit's session cannot write it.
+  *Amended 2026-11-26 (security finding L1):* the digest covers the **runner's file-command directory**,
+  `filepath.Dir` of the `$GITHUB_ENV` path, not the one file: beside `$GITHUB_ENV` it holds
+  `$GITHUB_PATH`, `$GITHUB_OUTPUT`, `$GITHUB_STATE` and the step summary, and a line appended to
+  `$GITHUB_PATH` changes what a later step's bare command word resolves to. Every entry is taken as it
+  is (`Lstat`, no link followed, never opened through one): its name, its type and, for a regular file,
+  its bytes, read from the descriptor of the entry `Lstat` saw (`os.SameFile`); a link counts as its own
+  target's text, so a file replaced by a link to the same bytes is a change. The directory is capped at
+  64 entries and 4 MiB of content; a directory over either fails closed before the launch, never
+  digested in part. The audit's digest leaves out exactly one path, the step summary's
+  (`$GITHUB_STEP_SUMMARY`, when set), which the launcher writes itself and which may not exist before
+  the run; the preflight's digest and the observer's leave out nothing, since nothing writes the summary
+  while the preflight runs (`Run` prints its one line after the last step). Any change, a created,
+  removed, retyped or rewritten entry, fails the run whatever the run did, and is the failure reported
+  over a failed launch. The caps assume the runner keeps few file-command files per job; a runner that
+  keeps every earlier step's files there could pass 64 in a long job, and the run would then fail closed.
+  The steps after the model session do not rely on the digest alone: each runs `age` by its absolute
+  path (see "The encryption tool is `age`").
 - **Follow-up, not done here:** recheck the scrub's mounts with a real bwrap on the x64 runner, the
   `.claude` `denyWrite` and the empty directory bound onto `.git` included; and a preflight probe that
   holds the class's boundary, a bare `cat` of a state path and a bare `>` into `/tmp`, both expected
@@ -2533,6 +2567,12 @@ go.mod's.
 `AUDIT_MODEL_PUBLIC_KEY` and `AUDIT_PUBLISH_PUBLIC_KEY`, read only in the step that encrypts to them. Each
 private half reaches `age --decrypt --identity -` on stdin, from that one step's `env:`, and is never
 written to a file. A ciphertext that does not decrypt fails the step, and `age` writes no output.
+*Amended 2026-11-26 (issues #615 and #614, security finding L1):* the checks job's encrypt step, the
+model job's decrypt step and the model job's encrypt step, the one after the model session, run
+`"${RUNNER_TEMP}/bin/age"`, the binary the job's install step downloaded and checked against its pin,
+never the bare word `age` the step's shell resolves through `PATH`, which an earlier step's
+`$GITHUB_PATH` line decides. `check.AuditWorkflow` recognises those three steps by the absolute form
+only, so a bare `age` there is refused.
 
 **The artifact hand-off.** Each downloading job first runs `auditpublish artifacts -job model|publish`,
 which fails closed on an extra, a duplicate, a missing or an expired artifact, and writes the artifact
