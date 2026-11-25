@@ -302,13 +302,17 @@ func checkElements(attribute string, elements []string) error {
 }
 
 // attrValueStart returns the offset in src of the attribute's value, just past
-// `attribute =`.
+// `attribute =`. A name inside a # or // comment is no attribute, so a comment
+// such as # args = [...] above the real one is skipped.
 func attrValueStart(src, attribute string) (int, error) {
 	for i := 0; i < len(src); i++ {
 		if i > 0 && isIdent(src[i-1]) {
 			continue // the end of a longer name
 		}
 		if !strings.HasPrefix(src[i:], attribute) {
+			continue
+		}
+		if inLineComment(src, i) {
 			continue
 		}
 		if i+len(attribute) < len(src) && isIdent(src[i+len(attribute)]) {
@@ -329,6 +333,32 @@ func attrValueStart(src, attribute string) (int, error) {
 	}
 
 	return 0, fmt.Errorf("no %s attribute: the container's start command is what the platform runs (docs/adr/0045)", attribute)
+}
+
+// inLineComment reports whether offset i of src lies in a # or // comment: one
+// of them starts earlier on i's line, outside a quoted string.
+func inLineComment(src string, i int) bool {
+	lineStart := strings.LastIndexByte(src[:i], '\n') + 1
+
+	quoted, escaped := false, false
+
+	for j := lineStart; j < i; j++ {
+		c := src[j]
+
+		switch {
+		case escaped:
+			escaped = false
+		case quoted && c == '\\':
+			escaped = true
+		case c == '"':
+			quoted = !quoted
+		case quoted:
+		case c == '#', c == '/' && j+1 < len(src) && src[j+1] == '/':
+			return true
+		}
+	}
+
+	return false
 }
 
 // isIdent reports whether b may be part of a name in a .tf file.
@@ -409,6 +439,21 @@ resource "scaleway_container" "site" {
     "run",
     "caddy",
   ]
+}
+`,
+			want: containerRun{
+				image: caddyAt,
+				argv:  []string{"/bin/sh", "-c", "run", "caddy"},
+			},
+		},
+		{
+			name: "a commented-out list above the real one",
+			tf: comment + imageLine + `
+resource "scaleway_container" "site" {
+  # command = ["/bin/bash", "-c"]
+  command = ["/bin/sh", "-c"]
+  // args = ["evil"]
+  args = ["run", "caddy"] # args = ["trailing"]
 }
 `,
 			want: containerRun{
@@ -513,9 +558,9 @@ resource "scaleway_container" "site" {
 	}
 }
 
-// TestContainerRunIsTheDesigns fails while infra/site/container.tf does not hold
-// the pinned image and the /bin/sh -c command line the behaviour test runs: RED
-// until the coder writes the container (docs/adr/0045).
+// TestContainerRunIsTheDesigns holds infra/site/container.tf to the design the
+// behaviour test runs: an image pinned by digest, started as /bin/sh -c with the
+// front's Caddyfile as an argument (docs/adr/0045).
 func TestContainerRunIsTheDesigns(t *testing.T) {
 	t.Parallel()
 

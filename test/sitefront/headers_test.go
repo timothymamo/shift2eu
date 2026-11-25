@@ -275,14 +275,19 @@ func checkPermissionsPolicy(value string) error {
 		return err
 	}
 
+	// The features in name order, so a policy allowing several is refused for
+	// the same one every run, whatever the map's order.
 	names := make([]string, 0, len(features))
-	for name, allowlist := range features {
+	for name := range features {
 		names = append(names, name)
-		if allowlist != "" {
+	}
+	slices.Sort(names)
+
+	for _, name := range names {
+		if allowlist := features[name]; allowlist != "" {
 			return fmt.Errorf("allows %s (%s): the site uses no feature, so every one is turned off (docs/adr/0045)", name, allowlist)
 		}
 	}
-	slices.Sort(names)
 
 	for _, want := range permissionsPolicyFeatures {
 		if _, ok := features[want]; !ok {
