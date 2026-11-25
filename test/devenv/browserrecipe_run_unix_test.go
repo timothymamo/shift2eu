@@ -133,11 +133,12 @@ const injectedMarker = "INJECTED"
 // builds anything out of it (issue #449).
 const injectedDeadlineValue = "1' in 1) echo " + injectedMarker + ";; esac; case '1"
 
-// The cases a run must fail at once get this long before the test stops the run: the stand-ins answer in
-// milliseconds, so the run ends well inside it, and this is only the hang guard - a recipe that waits where the test
-// waits would hold the package here - never the thing under test. What such a run did is counted below, in calls of
-// the stand-in container command: a count is the same on every machine, where a wall clock is not (issue #423, the
-// reviewer's advice on PR #443).
+// The cases a run must fail at once get this long before the test stops the run, counted from the moment the test does
+// something to the run - the signal it sends, never make's start, which a loaded machine pushes far behind it (issue
+// #253). The stand-ins answer in milliseconds, so the run ends well inside it, and this is only the hang guard - a
+// recipe that waits where the test waits would hold the package here - never the thing under test. What such a run
+// did is counted below, in calls of the stand-in container command: a count is the same on every machine, where a wall
+// clock is not (issue #423, the reviewer's advice on PR #443).
 const failFastTimeout = 20 * time.Second
 
 // The counts a run that must fail at once is read back by, in calls of the stand-in container command rather than in
@@ -1881,6 +1882,12 @@ func TestMakeTestBrowserRecipeCleansUpOnASignal(t *testing.T) {
 
 				shell := shellPid(t, calls)
 
+				// The guard below bounds what the run does once it is interrupted, so it is counted from the
+				// moment of the first signal: the run's start lies before the bundle build, the container start and
+				// the test's own waits for them, which a loaded machine stretches and which are no part of an
+				// interrupted run's cleanup (issue #253).
+				signalled := time.Now()
+
 				if delivery.group {
 					if err := syscall.Kill(-proc.pgid(), sig.signal); err != nil {
 						t.Fatalf("send %v to the process group %d of make test-browser, the one closing the pane reaches: %v", sig.signal, proc.pgid(), err)
@@ -1902,12 +1909,12 @@ func TestMakeTestBrowserRecipeCleansUpOnASignal(t *testing.T) {
 					sb.releaseCleanupCall(t)
 				}
 
-				run := proc.wait(failFastTimeout)
+				run := proc.waitFrom(signalled, failFastTimeout)
 				output := run.output()
 
 				switch {
 				case run.timedOut:
-					t.Fatalf("make test-browser was still running after %s although the test interrupted it with %v (%s): a trapped signal must end the run at once, and an untrapped one ends the shell with it (issue #423, the reviewer's finding S2)\n%s",
+					t.Fatalf("make test-browser was still running %s after the test interrupted it with %v (%s): a trapped signal must end the run at once, and an untrapped one ends the shell with it (issue #423, the reviewer's finding S2)\n%s",
 						run.elapsed, sig.signal, delivery.name, output)
 				case run.err == nil:
 					t.Fatalf("make test-browser exited 0 although the test interrupted it with %v (%s) and no smoke test ever ran: an interrupted run must not report success (issue #423, the reviewer's finding S2)\n%s",
@@ -2320,22 +2327,40 @@ func (proc *browserRecipeProcess) pgid() int {
 	return proc.cmd.Process.Pid
 }
 
-// wait gives make until timeout to end, and reports what it printed and how it ended as runBrowserMake does for a
-// run it waited for, killing the process group and reporting the timeout when make is still running then.
+// wait gives make until timeout after the run started to end, and reports what it printed and how it ended as
+// runBrowserMake does for a run it waited for, killing the process group and reporting the timeout when make is
+// still running then.
 func (proc *browserRecipeProcess) wait(timeout time.Duration) browserRecipeRun {
+	return proc.waitFrom(proc.start, timeout)
+}
+
+// waitFrom is wait with the moment its bound counts from given: a run a test waits for after it did something to the
+// run is bounded from that moment, never from make's start, which a loaded machine pushes far behind it - the
+// bundle build, the container start and the test's waits for both are the machine's time, and a guard that spent
+// its bound on them would report a cleanup that never trailed the signal at all (issue #253).
+func (proc *browserRecipeProcess) waitFrom(from time.Time, timeout time.Duration) browserRecipeRun {
+	ended := func() browserRecipeRun {
+		return browserRecipeRun{stdout: proc.stdout.String(), stderr: proc.stderr.String(), err: proc.err, elapsed: time.Since(from)}
+	}
+
 	select {
 	case <-proc.done:
-		return browserRecipeRun{stdout: proc.stdout.String(), stderr: proc.stderr.String(), err: proc.err, elapsed: time.Since(proc.start)}
-	case <-time.After(timeout):
-		_ = syscall.Kill(-proc.pgid(), syscall.SIGKILL)
-		<-proc.done
-
-		return browserRecipeRun{
-			stdout:   proc.stdout.String(),
-			stderr:   proc.stderr.String(),
-			err:      proc.err,
-			timedOut: true,
-			elapsed:  time.Since(proc.start),
-		}
+		return ended()
+	case <-time.After(max(time.Until(from.Add(timeout)), 0)):
 	}
+
+	// A run that ended in the same instant as its bound has ended: only a run still going is given up on.
+	select {
+	case <-proc.done:
+		return ended()
+	default:
+	}
+
+	_ = syscall.Kill(-proc.pgid(), syscall.SIGKILL)
+	<-proc.done
+
+	run := ended()
+	run.timedOut = true
+
+	return run
 }
