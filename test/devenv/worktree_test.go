@@ -849,6 +849,11 @@ func TestWorktreeRefusesALocalRenovateBranchThatDiffersFromOrigin(t *testing.T) 
 // a branch, so a tag left beside the branch hands the script the tag wherever it asks git about the short name
 // renovate/<name>. The branch is still what is resumed, at its own commit, not the tag's.
 //
+// A tag of origin's name, origin/renovate/<name>, must change none of that either (issue #602): beside such a tag
+// git widens the branch's %(upstream:short) from origin/renovate/<name> to remotes/origin/renovate/<name>, so a
+// check of the short name refuses a branch that does track origin/renovate/<name> at its commit. The branch is
+// still what is resumed, at its own commit, still tracking the remote-tracking ref.
+//
 // The tag case is a regression pin, and it passed before the fix too: git resolves the branch's @{upstream} by the
 // branch itself, whatever tag shares its name, so what it catches is a short-name commit lookup (git rev-parse
 // renovate/<name>, which names the tag) and a checkout left on that tag, a detached HEAD.
@@ -877,6 +882,22 @@ func TestWorktreeResumesALocalRenovateBranchTrackingOrigin(t *testing.T) {
 				if at := f.branchAt(t, worktreeRenovateBranch); tagAt == at {
 					t.Fatalf("the tag %s is at %s, the same commit as the branch: point it at another commit, or the case cannot tell which of the two the script resumed (issue #602)", worktreeRenovateBranch, tagAt)
 				}
+			},
+		},
+		{
+			name: "a tag of origin's name at main's commit beside the branch tracking origin's",
+			beside: func(t *testing.T, f *worktreeFixture) {
+				t.Helper()
+
+				// The tag is at main's commit, origin's branch that the local one tracks at its own: git's answer
+				// about either name tells which of the two the script resumed, so the two must differ for the case
+				// to say anything.
+				mainSHA := f.mustGitIn(t, f.checkout, "rev-parse", "origin/main")
+				if at := f.branchAt(t, worktreeRenovateBranch); mainSHA == at {
+					t.Fatalf("origin/main is at %s, the same commit as the branch %s: point the branch at another commit, or the case cannot tell which of the two the script resumed (issue #602)", mainSHA, worktreeRenovateBranch)
+				}
+
+				f.mustGitIn(t, f.checkout, "tag", "origin/"+worktreeRenovateBranch, mainSHA)
 			},
 		},
 	}
@@ -915,8 +936,10 @@ func TestWorktreeResumesALocalRenovateBranchTrackingOrigin(t *testing.T) {
 				t.Errorf("the worktree %s is at %s, want origin's commit %s: the resumed branch is not rewritten (issue #573, issue #602)", dir, head, sha)
 			}
 
-			if upstream := f.upstreamOf(t, worktreeRenovateBranch); upstream != "origin/"+worktreeRenovateBranch {
-				t.Errorf("the resumed branch %s tracks %q, want origin/%s (issue #573, issue #602)", worktreeRenovateBranch, upstream, worktreeRenovateBranch)
+			// The full ref, not %(upstream:short): beside a tag named origin/renovate/<name> that short name widens
+			// to remotes/origin/renovate/<name>, and the remote-tracking ref is what must stay tracked.
+			if tracking := f.trackingRefOf(t, worktreeRenovateBranch); tracking != "refs/remotes/origin/"+worktreeRenovateBranch {
+				t.Errorf("the resumed branch %s tracks %q, want refs/remotes/origin/%s (issue #573, issue #602)", worktreeRenovateBranch, tracking, worktreeRenovateBranch)
 			}
 
 			if at := f.branchAt(t, worktreeRenovateBranch); at != sha {
