@@ -6,7 +6,10 @@
   carry an optional `fixedFees` key, a fixed monthly fee per instance, within schema version 2. Amended by
   [0029](0029-cap-the-billed-hours-of-an-offerings-plans-in-target-snapshot-format-v2.md): an offering
   may carry an optional `planBillingCapHours` key, the most hours a month its plans are billed, within
-  schema version 2
+  schema version 2. Amended by
+  [0048](0048-record-global-offerings-in-target-snapshot-format-v2-and-add-network-dns.md): an offering
+  of a global category (`network.dns`) may carry an optional `global` key, within schema version 2; a
+  global offering lists no region, and its prices and fixed fees have `"regions": []`
 - Date: 2026-11-13
 
 ## Context

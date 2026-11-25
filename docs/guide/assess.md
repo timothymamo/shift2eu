@@ -207,7 +207,7 @@ priced.
 - **Not estimated.** A resource that cannot be priced says "not estimated" and why: `no fit`,
   `usage-priced` (`serverless.function`, `serverless.container`, `messaging.queue`,
   `messaging.topic`), `not priced` (`network.loadbalancer`, `registry.container`: billed per size or
-  plan, which no inventory field records; `not-priced` in the JSON report), `size unknown`, `no plan` (the offering
+  plan, and `network.dns`: billed per zone and per query, none of which an inventory field records; `not-priced` in the JSON report), `size unknown`, `no plan` (the offering
   lists none), `no plan large enough`, `not offered in <region>` (the offering is not sold in that
   region), or `no price in <region>` / `no storage price in <region>` (the offering is sold there but
   the snapshot has no price for it). It is never priced at €0: totals add only the estimated resources and say how
