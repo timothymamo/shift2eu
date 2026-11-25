@@ -1,7 +1,7 @@
 # 0045. Front the site with a Serverless Container running a pinned Caddy that writes the redirects and headers
 
-- Status: Proposed
-- Date: 2026-11-24
+- Status: Accepted
+- Date: 2026-11-25
 
 Part of [PRD #297](../../prds/297-web-assessment-site.md) milestone 4 (Hosting decisions 1 to 3, as
 amended on 2026-11-24). It amends the front of
