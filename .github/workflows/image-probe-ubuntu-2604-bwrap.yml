@@ -16,7 +16,7 @@ name: Image probe ubuntu-26.04 bwrap
 # nothing they find: shell: bash runs bash --noprofile --norc -eo pipefail, so every run: script starts
 # with set +e -uo pipefail, every probe reports its exit code or ends in || true, and every step after
 # checkout runs if: !cancelled(). The job's timeout lies above the steps' timeouts together (15 minutes)
-# and the checkout. Every probe command reads </dev/null.
+# and the checkout. Every command that could read stdin reads </dev/null.
 on:
   pull_request:
     branches: [main]
@@ -62,6 +62,10 @@ jobs:
       # Each state prints aa-status's lines naming bwrap, the bwrap check (the sandbox preflight's own
       # invocation), and the AppArmor label bwrap's child runs under, read with a user namespace alone
       # (no network namespace, so no loopback setup): the label says which profile owns /usr/bin/bwrap.
+      # Then the kernel's AppArmor DENIED/AUDIT lines of that state naming bwrap or userns, reduced to
+      # their operation, profile, comm, capname, family, sock_type, requested_mask and denied_mask fields
+      # and counted (sort | uniq -c); nothing else of a line is printed, and an unreadable dmesg prints
+      # only its exit code. The ring buffer is cleared once before state 1 and after each state.
       # Every load is sudo apparmor_parser -r, as the scheduled audit workflow loads bwrap.apparmor.
       #
       # 1. baseline: the image's profiles only;
@@ -71,7 +75,12 @@ jobs:
       #    profiles no longer attach to /usr/bin/bwrap;
       # 5. today's bwrap.apparmor alone (replacing A): whether the clash of attachments, not a missing
       #    rule, is the cause;
-      # 6. ours removed, Ubuntu's bwrap-userns-restrict reloaded from the image's file, as shipped.
+      # 6. ours removed, Ubuntu's bwrap-userns-restrict reloaded from the image's file, as shipped;
+      # 7. control: today's bwrap.apparmor loaded again beside Ubuntu's (as in 2), with
+      #    kernel.apparmor_restrict_unprivileged_userns set to 0 for the check and back to 1 after it.
+      #    If bwrap passes here but fails in 2, the userns restriction together with our profile is the
+      #    cause; if it fails in both, the attachment precedence alone is. It runs last, so states 1 to 6
+      #    keep the image's sysctl.
       - name: bwrap under each AppArmor state
         if: ${{ !cancelled() }}
         timeout-minutes: 5
@@ -88,9 +97,23 @@ jobs:
             /usr/bin/bwrap --unshare-all --die-with-parent --ro-bind / / /bin/true </dev/null 2>&1
             echo "bwrap check ($1): exit $?"
             local label rc
-            label="$(/usr/bin/bwrap --unshare-user --die-with-parent --ro-bind / / /bin/cat /proc/self/attr/apparmor/current </dev/null 2>&1)"
+            local denials
+            label="$(/usr/bin/bwrap --unshare-user --die-with-parent --ro-bind / / /bin/sh -c 'cat /proc/self/attr/apparmor/current 2>/dev/null || cat /proc/self/attr/current' </dev/null 2>&1)"
             rc=$?
             echo "bwrap child label ($1): ${label%%$'\n'*} (exit ${rc})"
+            echo "-- AppArmor DENIED/AUDIT fields naming bwrap or userns ($1)"
+            denials="$(sudo dmesg </dev/null 2>/dev/null)"
+            rc=$?
+            if [ "${rc}" -eq 0 ]; then
+              printf '%s\n' "${denials}" | grep -E 'apparmor="(DENIED|AUDIT)"' | grep -i -e bwrap -e userns | grep -oE '(operation|profile|comm|capname|family|sock_type|requested_mask|denied_mask)="[^"]*"' | sort | uniq -c || true
+            else
+              echo "sudo dmesg: exit ${rc}"
+            fi
+            clear_dmesg
+          }
+          clear_dmesg() {
+            sudo dmesg -C </dev/null >/dev/null 2>&1
+            echo "sudo dmesg -C: exit $?"
           }
           load() {
             sudo apparmor_parser "$1" "$2" </dev/null 2>&1
@@ -98,6 +121,7 @@ jobs:
           }
           [ -e "${ubuntu}" ]
           echo "[ -e ${ubuntu} ]: exit $?"
+          clear_dmesg
           check "1 baseline"
           load -r "${ours}"
           check "2 today's profile beside Ubuntu's"
@@ -110,6 +134,12 @@ jobs:
           load -R "${ours}"
           load -r "${ubuntu}"
           check "6 Ubuntu's bwrap-userns-restrict alone"
+          load -r "${ours}"
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 </dev/null >/dev/null 2>&1
+          echo "sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0: exit $?"
+          check "7 today's profile beside Ubuntu's, userns restriction off"
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=1 </dev/null >/dev/null 2>&1
+          echo "sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=1: exit $?"
 
       # The switch's simulation as root after apt-get update, once, only to record whether it would plan
       # (the move's route no longer depends on it: issue #608). Never installs: apt-get -s only. First the

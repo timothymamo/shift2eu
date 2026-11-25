@@ -7,6 +7,10 @@
 # to give lo 127.0.0.1, which the kernel allows only with CAP_NET_ADMIN over that namespace. The first
 # probe (issue #575) failed exactly there: "bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted".
 # Same profile name as today's, so apparmor_parser -r replaces it in place.
+#
+# The two rules may change nothing: under flags=(unconfined) AppArmor may not mediate capability or
+# network rules at all, so candidate A may behave exactly like today's profile. The probe's states 4
+# (A alone) and 5 (today's profile alone) decide it.
 
 abi <abi/4.0>,
 
