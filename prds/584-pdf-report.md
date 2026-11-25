@@ -113,9 +113,11 @@ U+00A0 and U+00AD are outside the set, so they are always escaped, as the six AS
 This covers control characters, the line and paragraph separators, bidi overrides and other invisible
 formatting characters, as well as every non-Latin script. `text.Validate` already refuses controls, bidi
 and other format characters, the line and paragraph separators and invalid UTF-8 when the inventory is
-read, so those reach the escaper only from a test: its handling of them is defence in depth. No font is embedded to show them. This keeps
-the WebAssembly module inside its size budget (ADR 0043: 3 MiB transferred gzip-compressed, 11 MiB decoded,
-about 2.5 MiB of decoded headroom today). The *How this report is worked out* section tells the reader
+read, so those reach the escaper only from a test: its handling of them is defence in depth.
+
+No font is embedded to show the escaped characters. This keeps the WebAssembly module inside its size
+budget (ADR 0043: 3 MiB transferred gzip-compressed, 11 MiB decoded, about 2.5 MiB of decoded headroom
+today). The *How this report is worked out* section tells the reader
 what the escapes mean.
 
 ### Page header and footer
@@ -225,14 +227,19 @@ The comparison ranks no target and recommends none, as today.
 - A value wraps at the character boundaries of its escaped form. It is never cut short: the domain
   already caps a value's length (`text.Validate`).
 - The worst case is real, not theoretical. A value `text.Validate` accepts, of 2048 bytes
-  (`text.MaxLen`) made of escaped runes, grows to between 4,098 and 6,144 shown characters:
-  1,024 two-byte runes such as U+0416 give 6,144 (its escape `\u0416` is 6 characters), 512 four-byte
-  runes 5,120 (`\U0001f600` is 10), and 682 three-byte runes with one two-byte rune in the 2 bytes left
-  give 4,098 (683 escapes of 6). In a narrow Courier table column that is more lines than a page holds, so the
-  split-at-a-line path runs. The hostile golden holds a 2048-byte value of two-byte runes.
+  (`text.MaxLen`) made only of characters the escaper rewrites, grows to between 4,096 and 6,144 shown
+  characters:
+  - 1,024 two-byte runes such as U+0416 give 6,144 (its escape `\u0416` is 6 characters);
+  - 512 four-byte runes give 5,120 (`\U0001f600` is 10);
+  - 682 three-byte runes with one two-byte rune in the 2 bytes left give 4,098 (683 escapes of 6);
+  - 2048 backslashes give 4,096: `text.Validate` accepts a backslash, the one ASCII character the
+    escaper rewrites, as `\\`.
+
+  In a narrow Courier table column that is more lines than a page holds, so the split-at-a-line path
+  runs. The hostile golden holds a 2048-byte value of two-byte runes.
 - The escaper's own table test can go further, since its in-test values skip `text.Validate`: 2048
-  bytes of invalid UTF-8 (`0xff`) give 8,192 characters (`\xff` is 4 each), and 2048 backslashes give
-  4,096. The unit test of the split-at-a-line path uses the 8,192-character case.
+  bytes of invalid UTF-8 (`0xff`) give 8,192 characters (`\xff` is 4 each). The unit test of the
+  split-at-a-line path uses that 8,192-character case.
 - A section heading never ends a page.
 
 ## How it fits the architecture
@@ -314,11 +321,11 @@ The `%PDF-` header's version (*Open questions*, 4) is the file format's version,
   ADR 0015's "Same stamp as the release binaries", pinned by `test/architecture`'s release workflow check,
   `releaseworkflow.go` and `imageStepTemplates` in its test). The `site` job checks out shallowly
   (`release.yml`: "ci/sitebuild reads no history, so a shallow checkout is enough"), so a short hash
-  computed there can differ. And it runs before `goreleaser` (`goreleaser` needs `site`), so it cannot
-  take GoReleaser's outputs. How milestone 2 gets one string on all three is *Open questions* 7, the
-  maintainer's choice. Its recommendation, (a), is a fixed cut of the full hash on all three; option (c)
-  keeps `shift2eu version` unchanged. The milestone 2 and release criteria below hold for whichever
-  option is chosen.
+  computed there can differ. And it runs before `goreleaser`, which consumes its bundle (it lists it in
+  `checksums.txt` and uploads it), so it cannot take GoReleaser's outputs. How milestone 2 gets one
+  string on all three is *Open questions* 7, the maintainer's choice. Its recommendation, (a), is a fixed
+  cut of the full hash on all three; options (b) and (c) keep `shift2eu version`'s format. The
+  milestone 2 and release criteria below hold for whichever option is chosen.
 
 ### ADR 0036: the bundle, the CSP and the banned-API scan
 
@@ -559,27 +566,45 @@ Test levels:
   with the same three values: the release's version (the tag without `v`), one commit string (in the
   form *Open questions* 7's chosen option gives) and its commit date. The smoke test on the attested
   bundle compares its PDF download with the output of the released `linux/amd64` CLI for one example:
-  the same bytes, version line included. The image's `shift2eu version` line equals the archive's.
-- [ ] *Static:* `test/architecture`'s pins of the release steps that stamp the version (the `site` and
-  `image` jobs) match the chosen option.
+  the same bytes, version line included.
+- [ ] *Release:* on every release, `release.yml`'s `verify` job, which already runs the signed image's
+  `shift2eu version`, also runs the `linux/amd64` archive's binary from the `goreleaser` job's `archives`
+  artifact, and fails unless the two lines are identical, version, commit and date included. This holds
+  for every option of *Open questions* 7, and its step is pinned in `test/architecture` with the others.
+- [ ] *Static:* `test/architecture`'s pins of every step and template that stamps the version, in
+  whichever jobs the chosen option uses (the `site` and `image` jobs' steps, `.goreleaser.yaml`'s commit
+  template, and a new job's under option (b)), match the chosen option.
 - [ ] *Review:* the scheduled audit's row 13 (ADR 0040's table, `.github/workflows/scheduled-security-audit.yml`,
   the CLI on hostile inventory files) also runs `--format pdf` on every file of its corpus and the files
   it generates. Its step text and corpus pins in `test/architecture` (`auditworkflow.go` and its tests,
   `auditcorpus_test.go`) and ADR 0040's row 13 are amended to match. The `security-audit-run` skill reads
   those runs as it reads the Markdown ones. Row 13 runs the latest release, which may not hold milestone
-  1 yet: the skill reads a release that refuses `--format pdf` as an unknown format as "PDF not covered
-  by this release", never as a finding, so the row passes until the first such release.
+  1 yet. The skill reads a refusal of `--format pdf` as "PDF not covered by this release" only when both
+  hold:
+  - the run is a usage error (exit 2) with the CLI's message `unknown format "pdf"`;
+  - the release under audit predates the first release that ships `--format pdf`. The skill tells this
+    from the release's version, as the image's `shift2eu version` prints it, against that first
+    release's version, which the skill names once that release exists; until then every release
+    predates it.
+
+  Any other refusal of `--format pdf` is a finding.
+- [ ] *Review:* milestone 2's PR states row 13's step time before and after the PDF runs, from a manual
+  dispatch of the scheduled audit or its last scheduled run. A third format adds half again as many
+  container runs to a loop that starts no run after 720 seconds and only logs the skipped ones to
+  `limits.txt`. If that limit no longer leaves headroom, the PR raises it, with its `test/architecture`
+  pin and ADR 0040's row 13, or runs the PDF on a subset of the corpus the PR names.
 - [ ] *Static:* the module size budget test passes. Milestone 2's PR states the raw module size, the
   module script file and its gzip size before and after the change, and ADR 0043 records them.
 - [ ] *Static:* the privacy page says the report download is a PDF made in the browser, that nothing is
   sent, that the PDF holds no link, action, script or form, that some viewers make URL-shaped text
-  clickable, which only a click follows, and that the PDF names the inventory's file name. The verification page and the inventory guide page mention no
-  Markdown or JSON download. The README and the guides that describe the site say the same.
+  clickable, which only a click follows, and that the PDF names the inventory's file name.
+  The verification page and the inventory guide page mention no Markdown or JSON download. The README
+  and the guides that describe the site say the same.
 - [ ] *Review:* PRD #297's amended criteria and decisions (*Amendments to PRD #297*) are edited in place
   with a dated amendment note. ADRs 0018, 0035, 0036 and 0043, and the doc.go files of `jsonreport`,
   `htmlreport` and `internal/web`, are amended where they name the site's Markdown or JSON downloads.
-  ADR 0035 records the module's version stamp, ADR 0040 row 13's PDF runs, and, under option (a) of
-  *Open questions* 7, ADR 0015 the image's new commit stamp.
+  ADR 0035 records the module's version stamp, ADR 0040 row 13's PDF runs, and, under option (a) or (b)
+  of *Open questions* 7, ADR 0015 the image's new commit stamp.
 
 ## Amendments to PRD #297
 
@@ -671,15 +696,16 @@ Milestones 1 and 2 touch the handling of hostile text and the site's trust model
      in GoReleaser's binaries and the container image. Under the recommended (a): `.goreleaser.yaml`, the
      `image` job's stamp step and its `test/architecture` pin, and ADR 0015's "Same stamp" bullet.
    - The scheduled audit's row 13 runs `--format pdf` over its hostile corpus too, with its
-     `test/architecture` pins, ADR 0040's row 13, and the `security-audit-run` skill's reading of a
-     release without the format.
+     `test/architecture` pins, ADR 0040's row 13, the `security-audit-run` skill's reading of a
+     release without the format, and row 13's step time before and after.
+   - The `verify` job's comparison of the image's and the archive's `shift2eu version` lines.
    - The page script's single download path, and the one button.
    - The native parity, option-parity, dependency and static tests; the browser smoke test's PDF
      download and its release run.
    - The size budget measurements, before and after.
    - The privacy, verification and inventory guide pages, the README and the guides.
    - PRD #297 amended in place (*Amendments to PRD #297*).
-   - ADRs 0018, 0035, 0036, 0040 and 0043 (and 0015 under option (a) of *Open questions* 7) and the
+   - ADRs 0018, 0035, 0036, 0040 and 0043 (and 0015 under option (a) or (b) of *Open questions* 7) and the
      doc.go files amended.
    - Ships on PRD #297's site track. It does not depend on PRD #297 milestone 4, and the first deploy does
      not wait for it.
@@ -784,7 +810,9 @@ Milestones 1 and 2 touch the handling of hostile text and the site's trust model
 7. **Where the module's version stamp comes from** (milestone 2). GoReleaser's `{{ .ShortCommit }}` is
    git's abbreviated hash, whose length depends on which objects the clone holds. The `image` job
    matches it from a full clone (ADR 0015). The release's `site` job checks out shallowly and runs before
-   `goreleaser`, so it can neither compute the same abbreviation reliably nor take GoReleaser's outputs.
+   `goreleaser`, which consumes its bundle (it downloads the `site` artifact, checks its digest, lists it
+   in `checksums.txt` and uploads it), so it can neither compute the same abbreviation reliably nor take
+   GoReleaser's outputs.
    In every option the `site` job takes the version from the tag without `v` and the date with the
    `image` job's recipe (`TZ=UTC git log -1 --format=%cd --date=format-local:%Y-%m-%dT%H:%M:%SZ`, which
    works in a depth-1 checkout), and `ci/sitebuild` stamps the three values with `-X`. The options for
@@ -792,9 +820,10 @@ Milestones 1 and 2 touch the handling of hostile text and the site's trust model
    - (a) **a fixed cut of the full hash, the first 12 hex digits, on all three release binaries:**
      - `.goreleaser.yaml` stamps `{{ slice .FullCommit 0 12 }}` (`slice` is a `text/template` builtin);
      - the `image` job stamps `commit=$(git rev-parse HEAD | cut -c1-12)`, and the `site` job passes
-       `ci/sitebuild` the same cut of `github.sha` (the tagged commit on a tag push). Never
-       `git rev-parse --short=12`: `--short=N` is a minimum, and git lengthens it when the prefix is
-       ambiguous;
+       `ci/sitebuild` the same expression, run in its own checkout (it works in a depth-1 clone), so
+       every binary takes the commit from what it built, never from an event field such as
+       `github.sha`. Never `git rev-parse --short=12`: `--short=N` is a minimum, and git lengthens it
+       when the prefix is ambiguous;
      - `test/architecture`'s pin of the image step (`releaseworkflow.go`, `imageStepTemplates`) follows,
        and ADR 0015's "Same stamp" bullet is amended;
      - `test/internal/releasetarget/testdata/real.goreleaser.yaml` is a snapshot of the file's shape, not
@@ -805,18 +834,32 @@ Milestones 1 and 2 touch the handling of hostile text and the site's trust model
 
      Cost: `shift2eu version` shows a 12-digit commit in every release from then on, a visible change
      the release notes mention.
-   - (b) reorder the jobs so `site` needs `goreleaser` and takes its version, commit and date as job
-     outputs. Cost: the site is no longer built and smoke-tested before GoReleaser publishes, and the
-     jobs gain outputs.
+   - (b) **compute the stamp once, in a new job that `site`, `goreleaser` and `image` all need.** The
+     job checks out the full history, computes the version, `git rev-parse --short HEAD` and the date,
+     and gives them as job outputs; `.goreleaser.yaml` reads the commit from an environment variable in
+     place of `{{ .ShortCommit }}`, and the `image` and `site` jobs take the outputs. It keeps
+     `shift2eu version`'s output format. Cost: a new job on the release's critical path, a
+     `.goreleaser.yaml` change, three jobs' `needs` and their `test/architecture` pins, and ADR 0015's
+     "Same stamp" bullet amended. The abbreviation's length still depends on that one clone, but all three
+     binaries carry the same string.
+
+     Simply reordering the jobs, so that `site` needs `goreleaser` and takes its outputs, is not an
+     option: `goreleaser` consumes the `site` bundle, so that order is a cycle. Breaking it would take
+     the bundle out of GoReleaser's `checksums.txt` and upload, and give it a checksum and attestation
+     path of its own, which changes what the release attests and publishes (ADR 0036, PRD #297
+     milestone 3). That is out of proportion to a version line.
    - (c) give the `site` job `fetch-depth: 0` and `git rev-parse --short HEAD`, exactly as the `image`
      job does (ADR 0015). It keeps `shift2eu version`'s output unchanged. Cost: the `site` job checks out
      the whole history, and the release keeps today's latent risk, now across three full clones, that
-     clones taken at different moments abbreviate the same commit differently, which no test catches.
+     clones taken at different moments abbreviate the same commit differently. The `verify` job's
+     comparison (*Release* criteria) catches a mismatch between the image and the archives, and the
+     smoke test's byte comparison one between the module and the archives, so it would fail the
+     release, not ship silently, but a release could fail for it.
 
-   *Recommendation:* (a). It keeps today's job order, needs no new job outputs, does not depend on any
-   clone's depth, and removes the latent risk for all three binaries. For an untagged build, the
-   development values stay. Milestone 2's ADR amendments (ADR 0035, and ADR 0015 under (a)) record the
-   choice.
+   *Recommendation:* (a). It keeps today's job order, needs no new job or job outputs, does not depend on
+   any clone's depth, and removes the latent risk for all three binaries. For an untagged build, the
+   development values stay. Milestone 2's ADR amendments (ADR 0035, and ADR 0015 under (a) or (b))
+   record the choice.
 8. **Document metadata.** *Recommendation:* an `/Info` dictionary with one constant `/Title`
    ("shift2eu migration assessment"), so viewers show a title and not a blob name. No `/Producer`,
    `/Author`, `/Creator` or dates, and no trailer `/ID`, which ISO 32000-1 requires only for encrypted
