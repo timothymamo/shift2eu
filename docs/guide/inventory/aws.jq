@@ -77,9 +77,9 @@ def covered_types:
 
 # The parts and settings of a classified resource that AWS Config records as
 # types of their own: a load balancer's listeners, rules and target groups, an
-# EFS file system's access points, and an ECR registry's settings and
-# repository creation templates. The
-# resource stands for them, so they are dropped, not listed as unclassified.
+# EFS file system's access points, and an ECR registry's settings and repository
+# creation templates. The resource stands for them, so they are dropped, not
+# listed as unclassified.
 def part_types:
   [
     "AWS::ElasticLoadBalancingV2::Listener", "AWS::ElasticLoadBalancingV2::ListenerRule",
