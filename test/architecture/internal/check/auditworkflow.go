@@ -536,12 +536,13 @@ var (
 			`an archive whose unpack failed is named in the limits and never scanned, so the part of a member head wrote is no binary (PRD #175 milestone 2, ADR 0040)`)
 
 	// Round N (the AI review of PR #565, point 4): row 15 reads Renovate's open
-	// Dependency Dashboard issue alone, its pull requests filtered out, so the
-	// dashboard never falls off a first page of 100 items; and a read that
-	// answered with no such issue is a limits line, never a clean answer.
+	// Dependency Dashboard issue alone, its pull requests filtered out on the
+	// client after one page of 100 items, newest first, so the dashboard is
+	// missed only past 99 open Renovate pull requests; and a read that answered
+	// with no such issue is a limits line, never a clean answer.
 	renovateDashboardRead = command(wholeLine(`read_api renovate-dashboard "repos/${GH_REPO}/issues?state=open&creator=renovate%5Bbot%5D&per_page=100" '[.[] | select(.pull_request == null)]'`),
 		`read_api renovate-dashboard "repos/${GH_REPO}/issues?state=open&creator=renovate%5Bbot%5D&per_page=100" '[.[] | select(.pull_request == null)]', on a line of its own: `+
-			`the open issues alone (state=open) with the pull requests filtered out (select(.pull_request == null)), so the dashboard cannot fall off the first page (PRD #175 milestone 2, ADR 0040)`)
+			`the open issues alone (state=open) with the pull requests filtered out (select(.pull_request == null)) on the one page of 100, so the dashboard is missed only past 99 open Renovate pull requests, and the limits line then says no dashboard was found (PRD #175 milestone 2, ADR 0040)`)
 	renovateDashboardMissing = command(`(?m)^[ \t]*`+wholeLines(
 		`if [ -f "${out}/api/renovate-dashboard.exit" ] && [ "$(cat "${out}/api/renovate-dashboard.exit")" = 0 ] && [ "$(jq 'length' "${out}/api/renovate-dashboard.json")" = 0 ]; then`,
 		`echo "supply-chain: no open Renovate Dependency Dashboard issue was found" >> "${results}/limits.txt"`,

@@ -2343,7 +2343,8 @@ signature, which the model reads as a finding against the release (the run's ski
 
 **Time budget** (within the checks job's 355 minutes, amended in review round D from 180 to 340 and in
 round E to 355): row 2's download 25 minutes (trivy's database included), scorecard 20 (its run 15), the
-release's verification 50 (its loop's 20-minute budget and 29 minutes of timeouts outside it: the
+release's verification 50 (11 minutes of timeouts before the loop and 18 after it, counted as fit counts them:
+max(11, 20 + 2) + 18 = 40 of 50; the timeouts are the
 download 5, the filter 1, the checksum check 5, three registry and API reads of 2, `cosign verify` 3,
 the two `cosign verify-attestation` runs 3 each and the SBOM's attestation 3), the pull 15 (the pull 8,
 the inspect 2, the save 4), the binaries' govulncheck 20 (5 per binary), trivy 15 (the image 8, the SBOM
@@ -2417,8 +2418,9 @@ scope above should allow is a finding, and a scope no read used is dropped.
   and variable names, as the `release-tag` skill's step 2 reads them, names only: the secrets endpoints
   return no value, but the variables endpoints return each variable's value, so every names read keeps
   the names alone through `gh api --jq` (`[.variables[].name]`, `[.secrets[].name]`, review round D); Renovate's open Dependency Dashboard issue (`issues?state=open&creator=renovate[bot]`,
-  its pull requests filtered out with `select(.pull_request == null)`, so the dashboard cannot fall off a
-  first page of 100 items; a read that succeeded with no such issue writes the limits line `supply-chain:
+  its pull requests filtered out with `select(.pull_request == null)` on the client, after one page of
+  100 items, newest first: the open Renovate pull requests share that page, so the dashboard is missed only
+  past 99 of them, and the limits line below then says no dashboard was found; a read that succeeded with no such issue writes the limits line `supply-chain:
   no open Renovate Dependency Dashboard issue was found`, review round N) and its open pull requests; and `git diff` of the
   dependency files (`go.mod`, `go.sum`, `tools/`, `Dockerfile`, the workflows, the Claude Code pin,
   `dev/lima.yaml`, `infra/tofu.yaml`) from the commit of the last report under `docs/security/audits/`.
