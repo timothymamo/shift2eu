@@ -1691,10 +1691,18 @@ resource "scaleway_container_cron" "nightly" {
 // value the maintainer's own tfvars could set - memory_limit and http_option, the deprecated spellings beside
 // memory_limit_bytes and https_connections_only, must not be set at all, and min_scale must be 0 or 1. The tags
 // are [container-max-scale], [container-cpu], [container-memory], [container-deprecated-attribute],
-// [container-min-scale], [container-min-scale-postcondition] and [container-https-only-postcondition-missing],
+// [container-image-pin], [container-min-scale], [container-min-scale-postcondition] and
+// [container-https-only-postcondition-missing],
 // and an attribute gets the one tag that names it: a deprecated memory_limit is no [container-memory] beside it,
 // and a deprecated http_option no [container-cpu] or [container-memory], since a breakage is reported once,
 // under the rule that refuses it.
+//
+// The image is no pin of a value but of a reference: the container must read the one local the Renovate comment
+// above it pins - image = local.caddy_image and nothing else - so the line Renovate moves is the line the
+// container runs. [container-image-pin] refuses any other expression there, a literal or another local: a
+// reference no comment pins can be moved under the platform, and Renovate would move a line the container does
+// not read. The pin's own digest is the sitefront reader's business (test/sitefront, behind the sitefront tag,
+// reads it and runs what the container runs): a rule of dev/infra-rules.awk reads no image reference.
 //
 // min_scale is the one pin the configuration may write as a local (ADR 0045, The container): write the value
 // once, as a local, and read it in both places, so the pin and the postcondition that checks it after an
@@ -1811,6 +1819,16 @@ var containerCostPinCases = []infraRuleCase{
 		breakage: func(t *testing.T, site string) {
 			t.Helper()
 			addContainerAttribute(t, site, `  http_option = "enabled"`)
+		},
+	},
+	{
+		name:   "container-image-pin-literal",
+		why:    `image = "caddy:latest" on the site's container, a literal reference in place of the local the Renovate comment pins`,
+		want:   "container-image-pin",
+		wantIn: map[string]string{"container-image-pin": "{site}/container.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			setContainerAttribute(t, site, "image", `  image   = "caddy:latest"`)
 		},
 	},
 	{
