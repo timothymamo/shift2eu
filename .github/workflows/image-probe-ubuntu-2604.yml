@@ -1,0 +1,365 @@
+name: Image probe ubuntu-26.04
+
+# The ubuntu-26.04 runner image probe (issue #575; ADR 0040, The runner image: the move to ubuntu-26.04,
+# "The image probe"). Its pull request is closed unmerged: only this job's log matters, and the move's
+# pull request cites it for every fact the amendment marks unconfirmed.
+#
+# Safety terms: pull_request only, permissions: {}, no secret, no environment, a timeout on the job; the
+# pinned actions/checkout with persist-credentials: false (the probe loads
+# .github/security-audit/bwrap.apparmor) and no other action; no expression in any run: script; no
+# artifact, no cache; nothing runs model or audit code. It writes only on the throwaway runner (its
+# ${RUNNER_TEMP}, the packages it installs, the AppArmor profile it loads, the sudoers rule it removes),
+# and its log prints only versions, names and exit codes: never a file's contents of /etc/sudoers.d,
+# never the environment. Its commands print and fail on nothing they find: no step sets -e, and every
+# probe that could stop a step ends in || true or reports its exit code.
+#
+# Every .deb is checked with /usr/bin/gnusha256sum --check --strict - against the SHA-256 of resolute's
+# Packages index before it is installed, and is not installed on a mismatch. The versions carry no
+# Renovate annotation: this file is never merged, so nothing would ever bump them.
+on:
+  pull_request:
+    branches: [main]
+
+permissions: {}
+
+jobs:
+  image-probe:
+    name: Image probe (ubuntu-26.04)
+    runs-on: ubuntu-26.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Identity, packages, GNU binaries and diversions
+        timeout-minutes: 2
+        shell: bash
+        run: |
+          set -uo pipefail
+          echo "== id"
+          id || true
+          echo "== dpkg-query"
+          for pkg in coreutils coreutils-from-uutils coreutils-from-gnu gnu-coreutils rust-coreutils bubblewrap socat apparmor sudo sudo-rs; do
+            dpkg-query -W -f='${Package} ${Version} [${db:Status-Abbrev}]\n' "${pkg}" 2>&1
+            echo "dpkg-query ${pkg}: exit $?"
+          done
+          echo "== ls /usr/bin/gnu*"
+          ls -1 /usr/bin/gnu* || true
+          echo "== dpkg-divert --list"
+          dpkg-divert --list || true
+
+      # The coreutils every job of the scheduled audit runs (ADR 0040, The switch to GNU coreutils: the
+      # checks, model and publish jobs' lists, joined); test and [ separately, since GNU's test --version
+      # prints nothing.
+      - name: The coreutils before the switch
+        timeout-minutes: 2
+        shell: bash
+        run: |
+          set -uo pipefail
+          for tool in base64 basename cat chmod cp cut dirname env head id install ln ls mkdir mktemp od readlink rm seq sha256sum sort stat tail timeout touch tr true uniq wc test '['; do
+            echo "== /usr/bin/${tool}"
+            resolved="$(readlink -f "/usr/bin/${tool}" 2>&1)"
+            echo "readlink -f: ${resolved} (exit $?)"
+            dpkg -S "/usr/bin/${tool}" 2>&1 || true
+            if [ "${resolved}" != "/usr/bin/${tool}" ]; then
+              dpkg -S "${resolved}" 2>&1 || true
+            fi
+            version="$("/usr/bin/${tool}" --version 2>&1)"
+            rc=$?
+            echo "--version first line: ${version%%$'\n'*} (exit ${rc})"
+          done
+          echo "== /usr/bin/test --version (whole)"
+          /usr/bin/test --version 2>&1
+          echo "exit $?"
+          echo "== /usr/bin/[ --version (whole)"
+          bracket='/usr/bin/['
+          "${bracket}" --version 2>&1
+          echo "exit $?"
+          echo "== /usr/bin/gnusha256sum --version"
+          /usr/bin/gnusha256sum --version 2>&1
+          echo "exit $?"
+
+      # The switch, in exactly the move's form: the local _all.deb by curl, its digest, the simulation
+      # printed whole, then the one apt transaction with --no-download. Never apt's network form.
+      - name: Switch to GNU coreutils
+        timeout-minutes: 5
+        shell: bash
+        env:
+          COREUTILS_FROM_GNU_VERSION: 0.0.0~ubuntu25
+          # SHA-256 of pool/main/c/coreutils-from/coreutils-from-gnu_0.0.0~ubuntu25_all.deb in resolute's
+          # main/binary-amd64 Packages index (issue #575, read 2026-11-25).
+          COREUTILS_FROM_GNU_DEB_SHA256: "862be75c7dd5d92815f2b80149bbcf819d11d21b1dba734f62b545bc5acb0eb7"
+        run: |
+          set -uo pipefail
+          deb="${RUNNER_TEMP}/coreutils-from-gnu.deb"
+          curl -fsSLo "${deb}" "https://archive.ubuntu.com/ubuntu/pool/main/c/coreutils-from/coreutils-from-gnu_${COREUTILS_FROM_GNU_VERSION}_all.deb"
+          echo "curl: exit $?"
+          echo "${COREUTILS_FROM_GNU_DEB_SHA256}  ${deb}" | /usr/bin/gnusha256sum --check --strict -
+          rc=$?
+          echo "gnusha256sum --check --strict: exit ${rc}"
+          if [ "${rc}" -ne 0 ]; then
+            echo "coreutils-from-gnu: the digest MISMATCHED or could not be checked; not installed, no switch"
+            exit 0
+          fi
+          echo "== apt-get -s install (simulation, whole)"
+          out=$(apt-get -s install -y --no-download --allow-remove-essential "${RUNNER_TEMP}/coreutils-from-gnu.deb" coreutils-from-uutils- 2>&1)
+          rc=$?
+          printf '%s\n' "${out}"
+          echo "apt-get -s install: exit ${rc}"
+          removals=0
+          installs=0
+          while IFS=' ' read -r verb pkg _; do
+            case "${verb}" in
+              Remv | Purg)
+                removals=$((removals + 1))
+                echo "plan removal: ${verb} ${pkg}"
+                ;;
+              Inst)
+                installs=$((installs + 1))
+                echo "plan install: ${verb} ${pkg}"
+                ;;
+            esac
+          done <<<"${out}"
+          echo "plan: ${removals} removal line(s), ${installs} Inst line(s)"
+          echo "== sudo apt-get install"
+          sudo apt-get install -y --no-download --allow-remove-essential "${RUNNER_TEMP}/coreutils-from-gnu.deb" coreutils-from-uutils- 2>&1
+          echo "sudo apt-get install: exit $?"
+
+      # The broadened GNU check, printed rather than enforced: the exact dpkg states, gnureadlink and the
+      # first --version line by bash's parameter expansion, test's exception by gnutest and gnu[.
+      - name: The coreutils after the switch (the GNU check)
+        timeout-minutes: 2
+        shell: bash
+        run: |
+          set -uo pipefail
+          echo "== dpkg states"
+          for pkg in coreutils-from-gnu gnu-coreutils coreutils coreutils-from-uutils; do
+            state="$(dpkg-query -W -f='${db:Status-Abbrev}' "${pkg}" 2>/dev/null)"
+            rc=$?
+            echo "dpkg-query ${pkg}: [${state}] exit ${rc}"
+          done
+          for tool in base64 basename cat chmod cp cut dirname env head id install ln ls mkdir mktemp od readlink rm seq sha256sum sort stat tail timeout touch tr true uniq wc; do
+            echo "== /usr/bin/${tool}"
+            resolved="$(/usr/bin/gnureadlink -f "/usr/bin/${tool}" 2>&1)"
+            echo "gnureadlink -f: ${resolved} (exit $?)"
+            dpkg -S "/usr/bin/${tool}" 2>&1 || true
+            if [ "${resolved}" != "/usr/bin/${tool}" ]; then
+              dpkg -S "${resolved}" 2>&1 || true
+            fi
+            version="$("/usr/bin/${tool}" --version 2>&1)"
+            rc=$?
+            first="${version%%$'\n'*}"
+            echo "--version first line: ${first} (exit ${rc})"
+            verdict=FAIL
+            if [ "${resolved}" = "/usr/bin/gnu${tool}" ]; then
+              case "${first}" in
+                *"(GNU coreutils)"*) verdict=PASS ;;
+              esac
+            fi
+            echo "GNU check ${tool}: ${verdict}"
+          done
+          echo "== test's exception"
+          test_resolved="$(/usr/bin/gnureadlink -f /usr/bin/test 2>&1)"
+          echo "gnureadlink -f /usr/bin/test: ${test_resolved} (exit $?)"
+          bracket_resolved="$(/usr/bin/gnureadlink -f '/usr/bin/[' 2>&1)"
+          echo "gnureadlink -f /usr/bin/[: ${bracket_resolved} (exit $?)"
+          echo "-- /usr/bin/test --version (whole)"
+          /usr/bin/test --version 2>&1
+          echo "exit $?"
+          bracket='/usr/bin/['
+          version="$("${bracket}" --version 2>&1)"
+          rc=$?
+          first="${version%%$'\n'*}"
+          echo "/usr/bin/[ --version first line: ${first} (exit ${rc})"
+          verdict=FAIL
+          if [ "${test_resolved}" = /usr/bin/gnutest ] && [ "${bracket_resolved}" = '/usr/bin/gnu[' ]; then
+            case "${first}" in
+              *"(GNU coreutils)"*) verdict=PASS ;;
+            esac
+          fi
+          echo "GNU check test and [: ${verdict}"
+          echo "== /usr/bin/gnusha256sum --version"
+          version="$(/usr/bin/gnusha256sum --version 2>&1)"
+          echo "${version%%$'\n'*} (exit $?)"
+
+      - name: The sudo provider
+        timeout-minutes: 2
+        shell: bash
+        run: |
+          set -uo pipefail
+          echo "readlink -f /usr/bin/sudo: $(readlink -f /usr/bin/sudo 2>&1)"
+          echo "== update-alternatives --display sudo"
+          update-alternatives --display sudo 2>&1 || true
+          version="$(/usr/bin/sudo --version 2>&1)"
+          echo "/usr/bin/sudo --version first line: ${version%%$'\n'*} (exit $?)"
+          echo "== sudo ls /etc/sudoers.d (names only)"
+          sudo ls -1 /etc/sudoers.d 2>&1 || true
+
+      # A local listener on 127.0.0.1 and bash's /dev/tcp connecting to it, so that a refused connection
+      # in the sandbox preflight means the sandbox, not a bash without /dev/tcp; and a port nothing
+      # listens on, which must be refused.
+      - name: The /dev/tcp positive control
+        timeout-minutes: 2
+        shell: bash
+        run: |
+          set -uo pipefail
+          port=47123
+          if command -v socat >/dev/null 2>&1; then
+            echo "listener: socat ($(command -v socat))"
+            socat -u "TCP-LISTEN:${port},bind=127.0.0.1,reuseaddr" OPEN:/dev/null </dev/null >/dev/null 2>&1 &
+          elif command -v python3 >/dev/null 2>&1; then
+            echo "listener: python3 ($(command -v python3))"
+            python3 -c 'import socket,sys; s=socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1); s.bind(("127.0.0.1", int(sys.argv[1]))); s.listen(1); c, _ = s.accept(); c.close()' "${port}" </dev/null >/dev/null 2>&1 &
+          else
+            echo "listener: none available (no socat, no python3)"
+            exit 0
+          fi
+          listener=$!
+          sleep 2
+          bash -c "exec 3<>/dev/tcp/127.0.0.1/${port}" 2>&1
+          echo "bash /dev/tcp/127.0.0.1/${port} (listener): exit $?"
+          bash -c 'exec 3<>/dev/tcp/127.0.0.1/47124' 2>&1
+          echo "bash /dev/tcp/127.0.0.1/47124 (no listener): exit $?"
+          kill "${listener}" 2>/dev/null || true
+          wait "${listener}" 2>/dev/null || true
+
+      - name: Docker
+        timeout-minutes: 2
+        shell: bash
+        run: |
+          set -uo pipefail
+          echo "== systemctl list-unit-files 'docker*'"
+          systemctl list-unit-files 'docker*' 2>&1 || true
+          echo "== systemctl cat docker.socket (paths and Listen/Socket lines)"
+          systemctl cat docker.socket 2>&1 | grep -E '^(# /|ListenStream|SocketUser|SocketGroup|SocketMode)' || true
+          echo "[ -e /var/run/docker.sock ]: $([ -e /var/run/docker.sock ] && echo yes || echo no)"
+          echo "readlink -f /var/run: $(readlink -f /var/run 2>&1)"
+          echo "== docker version"
+          docker version 2>&1 || true
+          echo "== docker buildx version"
+          docker buildx version 2>&1 || true
+
+      # The bubblewrap check's own invocation before and after a real load of the audit's profile, so the
+      # log shows whether the kernel accepts abi <abi/4.0> and bwrap then starts.
+      - name: AppArmor
+        timeout-minutes: 3
+        shell: bash
+        run: |
+          set -uo pipefail
+          sysctl kernel.apparmor_restrict_unprivileged_userns 2>&1 || true
+          echo "== sudo aa-status, profiles naming bwrap"
+          sudo aa-status 2>&1 | grep -i bwrap || true
+          echo "== /etc/apparmor.d entries naming bwrap (any case)"
+          shopt -s nocasematch
+          for entry in /etc/apparmor.d/*; do
+            case "${entry##*/}" in
+              *bwrap*) echo "${entry##*/}" ;;
+            esac
+          done
+          shopt -u nocasematch
+          echo "== apparmor_parser --version"
+          apparmor_parser --version 2>&1 || true
+          echo "bwrap: $(command -v bwrap || echo 'not installed')"
+          /usr/bin/bwrap --unshare-all --die-with-parent --ro-bind / / /bin/true 2>&1
+          echo "bwrap check before the load: exit $?"
+          sudo apparmor_parser -r .github/security-audit/bwrap.apparmor 2>&1
+          echo "sudo apparmor_parser -r .github/security-audit/bwrap.apparmor: exit $?"
+          sudo aa-status 2>&1 | grep -i bwrap || true
+          /usr/bin/bwrap --unshare-all --die-with-parent --ro-bind / / /bin/true 2>&1
+          echo "bwrap check after the load: exit $?"
+
+      - name: Install resolute's bubblewrap and socat
+        timeout-minutes: 5
+        shell: bash
+        env:
+          BUBBLEWRAP_VERSION: 0.11.1-1ubuntu0.3
+          # SHA-256 of pool/main/b/bubblewrap/bubblewrap_0.11.1-1ubuntu0.3_amd64.deb in resolute-updates'
+          # and resolute-security's main/binary-amd64 Packages index, read 2026-11-25 from
+          # archive.ubuntu.com (the index checked against its InRelease, signed by the Ubuntu archive key).
+          BUBBLEWRAP_DEB_SHA256: "d3a6c1b6b0e0474eaed6dbd055c0d601fd875af153976a0dc4aae75f4ea10868"
+          SOCAT_VERSION: 1.8.1.1-1ubuntu0.1
+          # SHA-256 of pool/main/s/socat/socat_1.8.1.1-1ubuntu0.1_amd64.deb in resolute-updates' and
+          # resolute-security's main/binary-amd64 Packages index, read 2026-11-25 from archive.ubuntu.com
+          # (the index checked against its InRelease, signed by the Ubuntu archive key).
+          SOCAT_DEB_SHA256: "7e216496b3dfd7c0d7d655f5230e3062c0db028e0a95afff79b00ee17f557188"
+        run: |
+          set -uo pipefail
+          bw="${RUNNER_TEMP}/bubblewrap.deb"
+          so="${RUNNER_TEMP}/socat.deb"
+          curl -fsSLo "${bw}" "https://archive.ubuntu.com/ubuntu/pool/main/b/bubblewrap/bubblewrap_${BUBBLEWRAP_VERSION}_amd64.deb"
+          echo "curl bubblewrap: exit $?"
+          curl -fsSLo "${so}" "https://archive.ubuntu.com/ubuntu/pool/main/s/socat/socat_${SOCAT_VERSION}_amd64.deb"
+          echo "curl socat: exit $?"
+          verified=()
+          if echo "${BUBBLEWRAP_DEB_SHA256}  ${bw}" | /usr/bin/gnusha256sum --check --strict -; then
+            verified+=("${bw}")
+          else
+            echo "bubblewrap: the digest MISMATCHED or could not be checked; not installed"
+          fi
+          if echo "${SOCAT_DEB_SHA256}  ${so}" | /usr/bin/gnusha256sum --check --strict -; then
+            verified+=("${so}")
+          else
+            echo "socat: the digest MISMATCHED or could not be checked; not installed"
+          fi
+          if [ "${#verified[@]}" -gt 0 ]; then
+            sudo dpkg -i "${verified[@]}" 2>&1
+            echo "sudo dpkg -i: exit $?"
+          fi
+          for pkg in bubblewrap socat; do
+            dpkg-query -W -f='${Package} ${Version} [${db:Status-Abbrev}]\n' "${pkg}" 2>&1
+            echo "dpkg-query ${pkg}: exit $?"
+          done
+          version="$(/usr/bin/bwrap --version 2>&1)"
+          echo "/usr/bin/bwrap --version: ${version%%$'\n'*} (exit $?)"
+          version="$(/usr/bin/socat -V 2>&1 | grep -m1 'socat version')"
+          echo "/usr/bin/socat -V: ${version} (exit $?)"
+          /usr/bin/bwrap --unshare-all --die-with-parent --ro-bind / / /bin/true 2>&1
+          echo "bwrap check with resolute's bubblewrap and the loaded profile: exit $?"
+
+      - name: Tool versions
+        timeout-minutes: 2
+        shell: bash
+        run: |
+          set -uo pipefail
+          first() {
+            local out rc
+            out="$("$@" 2>&1)"
+            rc=$?
+            echo "$*: ${out%%$'\n'*} (exit ${rc})"
+          }
+          first tar --version
+          first grep --version
+          first find --version
+          first awk -W version
+          first awk --version
+          first unzip -v
+          first npm --version
+          first node --version
+          first openssl version
+
+      - name: Paths of gh, git, jq and go; managed settings
+        timeout-minutes: 2
+        shell: bash
+        run: |
+          set -uo pipefail
+          for cmd in gh git jq go; do
+            echo "command -v ${cmd}: $(command -v "${cmd}" || echo 'not found')"
+          done
+          go version 2>&1 || true
+          test -e /etc/claude-code
+          echo "test -e /etc/claude-code: exit $?"
+
+      # The last step: sudo may be gone after it.
+      - name: Remove the runner's sudo rule
+        timeout-minutes: 2
+        shell: bash
+        run: |
+          set -uo pipefail
+          sudo -n true
+          echo "sudo -n true before: exit $?"
+          sudo rm -f /etc/sudoers.d/runner
+          echo "sudo rm -f /etc/sudoers.d/runner: exit $?"
+          sudo -n true
+          echo "sudo -n true after: exit $?"
