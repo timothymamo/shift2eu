@@ -15,7 +15,7 @@
 #
 # A Renovate pull request's branch, renovate/<name>, is only ever resumed, never created: the script
 # accepts it only when origin/renovate/<name> exists after its fetch of origin, or when the branch already
-# has its worktree (issue #573).
+# has its worktree, and resumes a local branch only at origin's commit and tracking it (issue #573).
 #
 # Usage: dev/worktree.sh <type>/<issue>-<slug>   (or: make worktree BRANCH=<type>/<issue>-<slug>)
 #        dev/worktree.sh renovate/<name>         (or: make worktree BRANCH=renovate/<name>)
@@ -24,13 +24,15 @@ set -euo pipefail
 branch="${1:-}"
 types='feat|fix|test|docs|refactor|perf|build|ci|chore|prd'
 renovate=''
-if [[ "${branch}" =~ ^renovate/[a-z0-9][a-z0-9._-]*$ && "${branch}" != *..* ]]; then
+if [[ "${branch}" =~ ^renovate/[a-z0-9][a-z0-9._-]*$ && "${branch}" != *..* ]] &&
+  git check-ref-format "refs/heads/${branch}"; then
   renovate=1
 elif [[ ! "${branch}" =~ ^(${types})/[0-9]+-[a-z0-9]+(-[a-z0-9]+)*$ ]]; then
   echo "usage: make worktree BRANCH=<type>/<issue>-<slug>, for example feat/12-aws-ec2-discovery" >&2
   echo "<type> is one of: ${types//|/, }" >&2
   echo "or, to resume a Renovate pull request's existing branch: make worktree BRANCH=renovate/<name>," \
-    "<name> of lower-case letters, digits, dots, underscores and hyphens, holding no .." >&2
+    "<name> of lower-case letters, digits, dots, underscores and hyphens, holding no .. and" \
+    "a name git accepts for a branch" >&2
   exit 2
 fi
 slug="${branch//\//-}"
@@ -181,7 +183,9 @@ fi
 
 # A Renovate branch without a worktree is resumed only from origin's branch, as fetched just now: a local
 # one alone, or a remote-tracking ref left by an earlier fetch, may be a branch Renovate has since rebased
-# or deleted.
+# or deleted. A local branch is resumed only when it is that branch itself, at its commit and tracking it;
+# any other is refused and left as it is, since only the maintainer removes local branches (CLAUDE.md
+# rule 8).
 if [[ -n "${renovate}" ]]; then
   if [[ -z "${fetched}" ]]; then
     refuse "'${branch}' is resumed only from origin's branch, but origin could not be fetched (no remote" \
@@ -192,6 +196,16 @@ if [[ -n "${renovate}" ]]; then
     refuse "'${branch}' has no such remote branch origin/${branch}; make worktree resumes an existing" \
       "Renovate branch and never creates one"
   fi
+  if git show-ref --verify --quiet "refs/heads/${branch}"; then
+    at="$(git rev-parse "refs/heads/${branch}")"
+    origin_at="$(git rev-parse "refs/remotes/origin/${branch}")"
+    upstream="$(git rev-parse --abbrev-ref "${branch}@{upstream}" 2>/dev/null || true)"
+    if [[ "${at}" != "${origin_at}" || "${upstream}" != "origin/${branch}" ]]; then
+      refuse "the local branch '${branch}' differs from origin/${branch}: it is at another commit or does" \
+        "not track it, so it is no base to work on; leave it where it is and report it (only the" \
+        "maintainer removes local branches)"
+    fi
+  fi
 fi
 
 if git show-ref --verify --quiet "refs/heads/${branch}"; then
@@ -201,7 +215,8 @@ elif git show-ref --verify --quiet "refs/remotes/origin/${branch}"; then
   # Resume a branch that was pushed from elsewhere.
   git worktree add --quiet --track -b "${branch}" "${dir}" "origin/${branch}"
 else
-  # New work, cut from the latest main (never a Renovate branch, refused above without its remote one). --no-track: the branch must never push to main.
+  # New work, cut from the latest main (never a Renovate branch, refused above without its remote one).
+  # --no-track: the branch must never push to main.
   git worktree add --quiet --no-track -b "${branch}" "${dir}" "${base}"
 fi
 echo "${dir}"

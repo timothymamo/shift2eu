@@ -30,7 +30,11 @@ has its own branch, and every branch its own worktree under `.worktrees/`
    `.worktrees/<type>-<issue>-<slug>` in any checkout, which may be the branch in the middle of a rebase.
    For `BRANCH=renovate/<name>` it creates no branch: it resumes `origin/renovate/<name>` in
    `.worktrees/renovate-<name>`, tracking origin (or prints the existing worktree's path), and refuses
-   when origin has no such branch or cannot be fetched, even if a local `renovate/<name>` exists.
+   when origin has no such branch or cannot be fetched, even if a local `renovate/<name>` exists. A
+   local `renovate/<name>` without a worktree it resumes only when it is at origin's commit and tracks
+   `origin/renovate/<name>`; any other it refuses as differing from origin, to be left and reported.
+   Push only the Renovate PR's "Before merging" change to its branch: Renovate stops rebasing a PR once
+   someone else has pushed to it.
    When it refuses, do what its message says; most say to leave the worktree where it is and report it.
 3. Work only in that worktree: run every non-git command from it (`cd <path> && ...`), and read and edit
    files only under it. Run git as `git -C <path> ...`, never `cd <path> && git ...`. Write the
