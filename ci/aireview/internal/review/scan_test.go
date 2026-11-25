@@ -467,19 +467,24 @@ func TestScanLeftOutFindsRealDataInTheFilesLeftOut(t *testing.T) {
 		{
 			// Issue #610: the "@" right before the run ends a URL's userinfo,
 			// so the name after it is the URL's host: userinfo is no delimiter
-			// that introduces a resource type.
+			// that introduces a resource type. The host ends in a public TLD of
+			// the scan's list (hasHostname): a private zone such as .corp is no
+			// host name to the scan whatever precedes it, so the delimiter
+			// cannot be told apart there.
 			name:         "a URL host right after userinfo is found",
-			diff:         goldenAdds(golden, `"url": "https://svc-user@microsoft.corp/share/payroll"`),
+			diff:         goldenAdds(golden, `"url": "https://svc-user@microsoft.app/share/payroll"`),
 			wantFiles:    []review.LeftOutFile{{Path: golden, Added: 1}},
 			wantFindings: []review.ScanFinding{{Path: golden, Line: 1, Kind: review.ScanHostname}},
 		},
 		{
 			// Issue #610: an authority is written with a backslash as well as
-			// with a slash, and the name after it is the host either way.
+			// with a slash, and the name after it is the host either way. The
+			// host ends in a public TLD of the scan's list, for the reason the
+			// case above gives.
 			name: "a host right after a backslash authority marker is found",
 			diff: goldenAdds(golden,
-				`"wiki": "https:\\microsoft.corp/wiki"`,
-				`"share": "\\Microsoft.corp/share"`),
+				`"wiki": "https:\\microsoft.app/wiki"`,
+				`"share": "\\Microsoft.app/share"`),
 			wantFiles: []review.LeftOutFile{{Path: golden, Added: 2}},
 			wantFindings: []review.ScanFinding{
 				{Path: golden, Line: 1, Kind: review.ScanHostname},
@@ -489,9 +494,11 @@ func TestScanLeftOutFindsRealDataInTheFilesLeftOut(t *testing.T) {
 		{
 			// Issue #610: a scheme the text writes with a single "/" still
 			// marks the name after it as a URL's host, since the slash follows
-			// the scheme's colon rather than a resource id's segment.
+			// the scheme's colon rather than a resource id's segment. The host
+			// ends in a public TLD of the scan's list, for the reason the first
+			// case above gives.
 			name:         "a URL host right after a single-slash scheme is found",
-			diff:         goldenAdds(golden, `"payroll": "http:/microsoft.corp/x"`),
+			diff:         goldenAdds(golden, `"payroll": "http:/microsoft.app/x"`),
 			wantFiles:    []review.LeftOutFile{{Path: golden, Added: 1}},
 			wantFindings: []review.ScanFinding{{Path: golden, Line: 1, Kind: review.ScanHostname}},
 		},
