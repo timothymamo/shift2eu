@@ -22,6 +22,13 @@
   },
   {
     "kind": "compute#forwardingRule",
+    "selfLink": "https://www.googleapis.com/compute/v1/projects/example-project/global/forwardingRules/shop-mixed-fr6",
+    "IPProtocol": "TCP",
+    "ipVersion": "IPV6",
+    "target": "https://www.googleapis.com/compute/v1/projects/example-project/global/targetHttpsProxies/shop-mixed-proxy"
+  },
+  {
+    "kind": "compute#forwardingRule",
     "selfLink": "https://www.googleapis.com/compute/v1/projects/example-project/regions/europe-west1/forwardingRules/shop-dns-fr",
     "region": "https://www.googleapis.com/compute/v1/projects/example-project/regions/europe-west1",
     "IPProtocol": "UDP",

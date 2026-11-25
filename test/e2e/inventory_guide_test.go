@@ -590,6 +590,14 @@ func inventoryGuides() []inventoryGuideCase {
 					id: "shop-edge-map", rawType: "compute.googleapis.com/UrlMap", category: "network.loadbalancer",
 					capabilities: []string{"ipv6", "zone-high-availability"},
 				},
+				// One IPv6 backend service is enough: this URL map sends its
+				// default path to an IPv6-only service and a legacy path to an
+				// IPv4-only one, and the load balancer is ipv6 all the same (the
+				// maintainer kept "any" rather than "all", issue #600).
+				{
+					id: "shop-mixed-map", rawType: "compute.googleapis.com/UrlMap", category: "network.loadbalancer",
+					capabilities: []string{"ipv6", "zone-high-availability"},
+				},
 				// A backend service no URL map names is a load balancer of its own,
 				// and a UDP forwarding rule reaching it gives it udp. A target pool
 				// names no protocol, so its UDP comes from its forwarding rule. The

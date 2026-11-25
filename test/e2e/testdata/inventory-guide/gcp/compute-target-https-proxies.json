@@ -8,5 +8,10 @@
     "kind": "compute#targetHttpsProxy",
     "selfLink": "https://www.googleapis.com/compute/v1/projects/example-project/global/targetHttpsProxies/shop-legacy-proxy",
     "urlMap": "https://www.googleapis.com/compute/v1/projects/example-project/global/urlMaps/shop-legacy-map"
+  },
+  {
+    "kind": "compute#targetHttpsProxy",
+    "selfLink": "https://www.googleapis.com/compute/v1/projects/example-project/global/targetHttpsProxies/shop-mixed-proxy",
+    "urlMap": "https://www.googleapis.com/compute/v1/projects/example-project/global/urlMaps/shop-mixed-map"
   }
 ]

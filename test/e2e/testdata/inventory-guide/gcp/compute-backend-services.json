@@ -40,6 +40,20 @@
   },
   {
     "kind": "compute#backendService",
+    "selfLink": "https://www.googleapis.com/compute/v1/projects/example-project/global/backendServices/shop-mixed-v6-be",
+    "protocol": "HTTP",
+    "loadBalancingScheme": "EXTERNAL_MANAGED",
+    "ipAddressSelectionPolicy": "IPV6_ONLY"
+  },
+  {
+    "kind": "compute#backendService",
+    "selfLink": "https://www.googleapis.com/compute/v1/projects/example-project/global/backendServices/shop-mixed-v4-be",
+    "protocol": "HTTP",
+    "loadBalancingScheme": "EXTERNAL_MANAGED",
+    "ipAddressSelectionPolicy": "IPV4_ONLY"
+  },
+  {
+    "kind": "compute#backendService",
     "selfLink": "https://www.googleapis.com/compute/v1/projects/example-project/regions/europe-west1/backendServices/shop-int-be",
     "region": "https://www.googleapis.com/compute/v1/projects/example-project/regions/europe-west1",
     "protocol": "HTTP",

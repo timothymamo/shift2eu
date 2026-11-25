@@ -239,6 +239,15 @@
       ]
     },
     {
+      "id": "shop-mixed-map",
+      "rawType": "compute.googleapis.com/UrlMap",
+      "category": "network.loadbalancer",
+      "capabilities": [
+        "ipv6",
+        "zone-high-availability"
+      ]
+    },
+    {
       "id": "shop-ntp-be",
       "rawType": "compute.googleapis.com/BackendService",
       "category": "network.loadbalancer",
