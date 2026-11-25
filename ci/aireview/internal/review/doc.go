@@ -30,7 +30,8 @@
 // note its truncation never cuts. A model-free scan of those added lines
 // (ScanLeftOut, issue #342) looks for account IDs, IPv4 addresses, host names
 // (a provider's domain allowed only as its apex or a service one label below
-// it; a Go selector such as slog.Info is none, issue #365) and key-like strings
+// it; a Go selector such as slog.Info is none, issue #365, and so is an Azure
+// resource type such as Microsoft.App/containerApps, PRD #552) and key-like strings
 // (a run holding "+" or "/" only at a secret access key's exact 40 characters)
 // by fixed rules; a false positive is fixed in those rules, never with an allow
 // list of paths. The paths themselves are shown escaped and cut, never scanned.
