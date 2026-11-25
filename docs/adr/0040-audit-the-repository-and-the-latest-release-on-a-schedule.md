@@ -2235,9 +2235,11 @@ is root's, every write bit removed; `work/` and `state/` are the runner's, as th
 **`checkout/` stays the runner's** (round L's owner question): git refuses a repository another user
 owns, and the wrapper's git reads no global or system configuration where a `safe.directory` could be
 set. What holds that tree against its owner is the sandbox's write allow list, which names neither tree,
-and the layout check's mode walk. The model-free hardening step then stops and disables Docker, checks
-the owners and modes above (`stat`), removes `/etc/sudoers.d/runner`, and fails unless `sudo -n true`
-fails and the Docker socket is gone. The model step runs `auditrun -claude-tarball
+and the layout check's mode walk. The model-free hardening step then stops and disables Docker, removes
+the stale socket file `/var/run/docker.sock` while sudo still works, checks the owners and modes above
+(`stat`), removes `/etc/sudoers.d/runner`, and fails unless `sudo -n true` fails and the Docker socket is
+gone. The socket file is removed by hand because stopping `docker.socket` leaves it on the ubuntu-24.04
+runner image: systemd removes a socket unit's file on stop only with `RemoveOnStop=yes` (issue #574). The model step runs `auditrun -claude-tarball
 $RUNNER_TEMP/claude-code/claude-code.tgz -claude-integrity "${CLAUDE_CODE_PIN_INTEGRITY}" -result-out
 $RUNNER_TEMP/result.json`, the integrity from the pin step's output (`test/lint` holds that argument, and
 the installer's two last arguments, exactly, and refuses a `sha512-` literal on every line but the pin
@@ -2300,7 +2302,11 @@ on the first run** (runbook step 8): that `socat`'s and `bubblewrap`'s `.deb`s i
 libraries (`dpkg -i` does not fetch a missing dependency) and that the pinned versions are still in the
 archive's pool; that the runner's sudo rule is `/etc/sudoers.d/runner`; that the runner's preinstalled
 Go switches to go.mod's toolchain; that govulncheck runs offline on what `go mod download` fetched; and
-the round E note on an empty section header in the checkout copy's `.git/config`.
+the round E note on an empty section header in the checkout copy's `.git/config`. *Found on the first
+runs:* runs 45569051548 (on 5121caa) and 45570875086 (on 6896d38) failed in the hardening step with `the
+Docker socket is still there: see runbook step 10` after both `systemctl` lines succeeded: stopping
+`docker.socket` left `/var/run/docker.sock` behind. Fixed by issue #574: the step removes the file
+before the sudo rule.
 
 ### The checks job's rows 6 to 15 (milestone 2, PR 5c, amended 2026-11-24)
 

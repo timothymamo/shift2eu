@@ -1457,10 +1457,11 @@ jobs:
           sudo install -d -o "$(id -u)" -g "$(id -g)" -m 0755 /srv/audit/checkout
           cp -a "${GITHUB_WORKSPACE}/." /srv/audit/checkout/
           chmod -R a-w /srv/audit/checkout
-      # Model-free, while sudo still works and before the sandbox preflight: no Docker socket, no sudo
-      # rule for the runner's user, and the owners the launcher cannot check itself (rounds H and L). The
-      # three hardening commands record their own failure, so the step names the cause instead of ending
-      # on set -e's own line.
+      # Model-free, while sudo still works and before the sandbox preflight: no Docker daemon, no stale
+      # socket file (stopping docker.socket leaves it on the runner image, issue #574), no sudo rule for the
+      # runner's user, and the owners the launcher cannot check itself (rounds H and L). The four hardening
+      # commands record their own failure, so the step names the cause instead of ending on set -e's own
+      # line.
       - name: Stop Docker and remove the runner user's sudo rule
         timeout-minutes: 5
         run: |
@@ -1468,6 +1469,7 @@ jobs:
           rc=0
           sudo systemctl stop docker.service docker.socket || rc=$?
           sudo systemctl disable docker.service docker.socket || rc=$?
+          sudo rm -f /var/run/docker.sock || rc=$?
           owners="$(stat -c '%U:%G %a %n' /srv /srv/audit /srv/audit/bin /srv/audit/bin/audit-exec /srv/audit/checks)"
           want="$(printf '%s\n' 'root:root 755 /srv' 'root:root 755 /srv/audit' 'root:root 555 /srv/audit/bin' 'root:root 555 /srv/audit/bin/audit-exec' 'root:root 555 /srv/audit/checks')"
           if [ "${owners}" != "${want}" ]; then

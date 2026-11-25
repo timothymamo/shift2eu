@@ -588,11 +588,18 @@ func blankUnless(name, shape string) auditCommand {
 // kind and the runbook step that recovers from it, and no secret and no
 // finding's detail.
 var (
-	// The hardening step's three commands record their own failure, so its
-	// branch, not set -e's own line, ends the step.
+	// The hardening step's four commands record their own failure, so its
+	// branch, not set -e's own line, ends the step. Stopping docker.socket
+	// leaves the socket file on the runner image (systemd removes it on stop
+	// only with RemoveOnStop=yes), so the step removes the stale file after
+	// stopping and disabling Docker and before the runner user's sudo rule,
+	// while sudo still works (issue #574, ADR 0040).
 	hardeningCommands = []auditCommand{
 		command(wholeLine(`sudo systemctl stop docker.service docker.socket || rc=$?`), `sudo systemctl stop docker.service docker.socket || rc=$?, on a line of its own`),
 		command(wholeLine(`sudo systemctl disable docker.service docker.socket || rc=$?`), `sudo systemctl disable docker.service docker.socket || rc=$?, on a line of its own`),
+		command(wholeLine(`sudo rm -f /var/run/docker.sock || rc=$?`),
+			`sudo rm -f /var/run/docker.sock || rc=$?, on a line of its own, after Docker is stopped and disabled and before the runner user's sudo rule is removed: `+
+				`stopping docker.socket leaves the stale socket file behind (issue #574)`),
 		command(wholeLine(`sudo rm -f /etc/sudoers.d/runner || rc=$?`), `sudo rm -f /etc/sudoers.d/runner || rc=$?, on a line of its own`),
 	}
 	hardeningError = failureBranch(`(?m)^[ \t]*if \[ "\$\{rc\}" -ne 0 \]`, `if [ "${rc}" -ne 0 ]`,
@@ -861,7 +868,7 @@ var auditJobs = []auditJob{
 					command(`sudo -n true`, "a check that sudo -n true fails"),
 					hardeningError,
 				}, hardeningCommands...),
-				// The branch reads the three commands' recorded failure, so it
+				// The branch reads the four commands' recorded failure, so it
 				// comes after them.
 				order: append(append([]auditCommand{}, hardeningCommands...), hardeningError),
 			},

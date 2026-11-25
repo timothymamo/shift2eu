@@ -2728,9 +2728,12 @@ The model job's errors that point here are titled `Audit model`. What each means
   paragraph above; `refused: the Claude Code tarball does not match its pin` is step 11's checksum
   paragraph, for the CLI's pin in `.github/claude-code.yaml`. The line cannot tell a token from the
   usage limit: if the limit has not been reached, renew the token.
-- `the runner could not be hardened: see runbook step 10`: stopping or disabling Docker, or removing
-  `/etc/sudoers.d/runner`, failed; `sudo still works`, `the Docker socket is still there` and `the audit
-  directory's owners or modes are not as laid out` name what is still as it was. The runner image
+- `the runner could not be hardened: see runbook step 10`: stopping or disabling Docker, removing the
+  stale socket file `/var/run/docker.sock` or removing `/etc/sudoers.d/runner` failed; `sudo still
+  works`, `the Docker socket is still there` and `the audit directory's owners or modes are not as laid
+  out` name what is still as it was. The step removes the socket file that stopping `docker.socket`
+  leaves behind before it removes the sudo rule (issue #574), so `the Docker socket is still there` now
+  means the file survived that removal, or something recreated it. The runner image
   changed under `ubuntu-24.04`: compare it with what ADR 0040 records for this step before changing
   it, and start the new run only once the step matches the image.
 
