@@ -86,6 +86,29 @@ param:
   goVersion: "1.25.5"
 `
 
+	// limaWrappedNodeVersionDoc and limaClosingQuoteNodeVersionDoc write the
+	// version as a double-quoted YAML scalar that spans two lines, valid YAML
+	// that a YAML reader reads as one value with a line break in it, while the
+	// workflows' sed, line by line, reads nothing: the nodeVersion line holds no
+	// closing quote. The value the pattern matches wraps the line end, because
+	// Go's [^"] matches a \n, so a reader built on the pattern alone would return
+	// "22.1.0\n  22.2.0" and "22.1.0\n" where the read step installs no version.
+	limaWrappedNodeVersionDoc = `minimumLimaVersion: "2.0.3"
+
+param:
+  nodeVersion: "22.1.0
+  22.2.0"
+  goVersion: "1.25.5"
+`
+
+	limaClosingQuoteNodeVersionDoc = `minimumLimaVersion: "2.0.3"
+
+param:
+  nodeVersion: "22.1.0
+"
+  goVersion: "1.25.5"
+`
+
 	// limaTwoNodeVersionsDoc pins two versions: 24.11.1 first, 26.13.1 in a
 	// second param: block.
 	limaTwoNodeVersionsDoc = `minimumLimaVersion: "2.0.3"
@@ -159,6 +182,13 @@ func TestPinnedNodeVersion(t *testing.T) {
 		{name: "the nodeVersion line at column 0", lima: []byte(limaColumn0NodeVersionDoc), wantErr: "holds no line"},
 		{name: "the nodeVersion line at four spaces", lima: []byte(limaFourSpaceNodeVersionDoc), wantErr: "holds no line"},
 		{name: "an unquoted nodeVersion", lima: []byte(limaUnquotedNodeVersionDoc), wantErr: "holds no line"},
+
+		// A version spread over two lines: the sed reads nothing for it, the
+		// pattern's [^"] reads across the line end, so the reader refuses the
+		// document with a message saying that the value spans lines, rather than
+		// returning a version no workflow would install.
+		{name: "a nodeVersion spread over two lines", lima: []byte(limaWrappedNodeVersionDoc), wantErr: "spans"},
+		{name: "a nodeVersion whose closing quote is alone on the next line", lima: []byte(limaClosingQuoteNodeVersionDoc), wantErr: "spans"},
 
 		// Two nodeVersion lines: the sed prints both and hands the step's X.Y.Z
 		// check a two-line value that fails it, so the reader refuses the document
