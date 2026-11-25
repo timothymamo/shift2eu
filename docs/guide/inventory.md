@@ -89,9 +89,11 @@ up to 7.10) and `messaging.kafka` (a cluster of brokers that speaks the Apache K
 [ADR 0047](../adr/0047-add-search-opensearch-and-messaging-kafka-and-price-their-storage-per-node.md)). A
 resource that fits none of these categories is `unclassified` and keeps its `rawType`: it then shows
 up in the report as a blocker on every target, instead of disappearing from the assessment. The
-programs below do not classify into the seven categories ADR 0046 adds yet, nor into the two ADR 0047
-adds (they list those resources as `unclassified`, or not at all): until they do, set such a
-resource's category by hand.
+programs below classify into the seven categories ADR 0046 adds, on every source that has such a
+service: AWS and Azure into all seven, GCP into all but `database.mongodb` (GCP runs no managed
+MongoDB); each source's *classification* table names the types. They do not classify into the two
+ADR 0047 adds yet: an OpenSearch domain or a Kafka cluster is listed as `unclassified`, or not at all,
+so set its category (`search.opensearch` or `messaging.kafka`) by hand.
 
 The **capabilities** are features a resource depends on:
 
