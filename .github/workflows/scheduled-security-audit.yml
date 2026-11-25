@@ -1237,7 +1237,7 @@ jobs:
         run: |
           set -euo pipefail
           tar -C "${RUNNER_TEMP}" -cf "${RUNNER_TEMP}/checks.tar" results
-          age --encrypt --recipient "${AUDIT_MODEL_PUBLIC_KEY}" --output "${RUNNER_TEMP}/checks-result.age" "${RUNNER_TEMP}/checks.tar"
+          "${RUNNER_TEMP}/bin/age" --encrypt --recipient "${AUDIT_MODEL_PUBLIC_KEY}" --output "${RUNNER_TEMP}/checks-result.age" "${RUNNER_TEMP}/checks.tar"
           echo "finished"
       - name: Upload the checks' ciphertext
         timeout-minutes: 5
@@ -1431,7 +1431,7 @@ jobs:
           AUDIT_MODEL_PRIVATE_KEY: ${{ secrets.AUDIT_MODEL_PRIVATE_KEY }}
         run: |
           set -euo pipefail
-          printf '%s\n' "${AUDIT_MODEL_PRIVATE_KEY}" | age --decrypt --identity - --output "${RUNNER_TEMP}/checks.tar" "${RUNNER_TEMP}/checks-result/checks-result.age"
+          printf '%s\n' "${AUDIT_MODEL_PRIVATE_KEY}" | "${RUNNER_TEMP}/bin/age" --decrypt --identity - --output "${RUNNER_TEMP}/checks.tar" "${RUNNER_TEMP}/checks-result/checks-result.age"
           # Listed into files first: a grep -q that stops reading early would end tar with SIGPIPE, which
           # pipefail would read as no match.
           tar -tvf "${RUNNER_TEMP}/checks.tar" > "${RUNNER_TEMP}/checks.types"
@@ -1526,7 +1526,7 @@ jobs:
           AUDIT_PUBLISH_PUBLIC_KEY: ${{ vars.AUDIT_PUBLISH_PUBLIC_KEY }}
         run: |
           set -euo pipefail
-          age --encrypt --recipient "${AUDIT_PUBLISH_PUBLIC_KEY}" --output "${RUNNER_TEMP}/model-result.age" "${RUNNER_TEMP}/result.json"
+          "${RUNNER_TEMP}/bin/age" --encrypt --recipient "${AUDIT_PUBLISH_PUBLIC_KEY}" --output "${RUNNER_TEMP}/model-result.age" "${RUNNER_TEMP}/result.json"
           echo "finished"
       - name: Upload the model's ciphertext
         timeout-minutes: 5

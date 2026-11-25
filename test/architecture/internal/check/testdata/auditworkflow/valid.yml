@@ -1174,7 +1174,7 @@ jobs:
         run: |
           set -euo pipefail
           tar -C "${RUNNER_TEMP}" -cf "${RUNNER_TEMP}/checks.tar" results
-          age --encrypt --recipient "${AUDIT_MODEL_PUBLIC_KEY}" --output "${RUNNER_TEMP}/checks-result.age" "${RUNNER_TEMP}/checks.tar"
+          "${RUNNER_TEMP}/bin/age" --encrypt --recipient "${AUDIT_MODEL_PUBLIC_KEY}" --output "${RUNNER_TEMP}/checks-result.age" "${RUNNER_TEMP}/checks.tar"
       - name: Upload the checks' ciphertext
         timeout-minutes: 5
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -1337,7 +1337,7 @@ jobs:
         run: |
           set -euo pipefail
           sudo install -d -o root -g root -m 0755 /srv/audit/checks
-          printf '%s\n' "${AUDIT_MODEL_PRIVATE_KEY}" | age --decrypt --identity - --output "${RUNNER_TEMP}/checks.tar" "${RUNNER_TEMP}/checks-result/checks-result.age"
+          printf '%s\n' "${AUDIT_MODEL_PRIVATE_KEY}" | "${RUNNER_TEMP}/bin/age" --decrypt --identity - --output "${RUNNER_TEMP}/checks.tar" "${RUNNER_TEMP}/checks-result/checks-result.age"
           tar -tvf "${RUNNER_TEMP}/checks.tar" > "${RUNNER_TEMP}/checks.types"
           tar -tf "${RUNNER_TEMP}/checks.tar" > "${RUNNER_TEMP}/checks.names"
           if cut -c1 "${RUNNER_TEMP}/checks.types" | grep -v '^[-d]$' > /dev/null ||
@@ -1410,7 +1410,7 @@ jobs:
           AUDIT_PUBLISH_PUBLIC_KEY: ${{ vars.AUDIT_PUBLISH_PUBLIC_KEY }}
         run: |
           set -euo pipefail
-          age --encrypt --recipient "${AUDIT_PUBLISH_PUBLIC_KEY}" --output "${RUNNER_TEMP}/model-result.age" "${RUNNER_TEMP}/result.json"
+          "${RUNNER_TEMP}/bin/age" --encrypt --recipient "${AUDIT_PUBLISH_PUBLIC_KEY}" --output "${RUNNER_TEMP}/model-result.age" "${RUNNER_TEMP}/result.json"
       - name: Upload the model's ciphertext
         timeout-minutes: 5
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

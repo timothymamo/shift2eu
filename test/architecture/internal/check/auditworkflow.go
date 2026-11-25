@@ -167,9 +167,12 @@ func varValue(name string) string { return "${{ vars." + name + " }}" }
 
 // The scripts' commands the steps must hold.
 var (
-	checksumCheck   = command(`sha256sum --check --strict`, "sha256sum --check --strict")
-	modDownload     = command(`(?m)(?:^|[\s;&|])go mod download(?:$|\s)`, "go mod download")
-	stdinIdentity   = command(`age --decrypt --identity - `, "age --decrypt --identity - (the private key on stdin)")
+	checksumCheck = command(`sha256sum --check --strict`, "sha256sum --check --strict")
+	modDownload   = command(`(?m)(?:^|[\s;&|])go mod download(?:$|\s)`, "go mod download")
+	stdinIdentity = command(`age --decrypt --identity - `, "age --decrypt --identity - (the private key on stdin)")
+	// modelIdentity is the model job's decrypt: age by the absolute path its
+	// install step put in place, as its encrypt step runs it (issues #615, #614).
+	modelIdentity   = command(`"\$\{RUNNER_TEMP\}/bin/age" --decrypt --identity - `, `"${RUNNER_TEMP}/bin/age" --decrypt --identity - (the private key on stdin, the age the install step checked)`)
 	artifactsModel  = command(`auditpublish"? artifacts -job model `, "auditpublish artifacts -job model")
 	artifactsPublic = command(`auditpublish"? artifacts -job publish `, "auditpublish artifacts -job publish")
 
@@ -817,7 +820,8 @@ var auditJobs = []auditJob{
 			{
 				name: "Encrypt the checks' results to the model key",
 				env:  []auditRead{{key: "AUDIT_MODEL_PUBLIC_KEY", value: varValue("AUDIT_MODEL_PUBLIC_KEY")}},
-				runs: []auditCommand{command(`age --encrypt --recipient "\$\{AUDIT_MODEL_PUBLIC_KEY\}"`, `age --encrypt --recipient "${AUDIT_MODEL_PUBLIC_KEY}"`)},
+				runs: []auditCommand{command(`"\$\{RUNNER_TEMP\}/bin/age" --encrypt --recipient "\$\{AUDIT_MODEL_PUBLIC_KEY\}"`,
+					`"${RUNNER_TEMP}/bin/age" --encrypt --recipient "${AUDIT_MODEL_PUBLIC_KEY}", the age the install step checked, never one PATH resolves (issues #615, #614)`)},
 			},
 			{name: "Upload the checks' ciphertext", uses: auditUpload, artifact: auditChecksArtifact},
 		},
@@ -861,7 +865,7 @@ var auditJobs = []auditJob{
 				name: "Decrypt the checks' results into the audit directory",
 				env:  []auditRead{{key: "AUDIT_MODEL_PRIVATE_KEY", value: secretValue("AUDIT_MODEL_PRIVATE_KEY")}},
 				runs: []auditCommand{
-					stdinIdentity,
+					modelIdentity,
 					command(`tar -tvf "\$\{RUNNER_TEMP\}/checks\.tar"`, "tar -tvf of the archive, whose entries' types are checked before it is unpacked"),
 					command(`tar -C /srv/audit/checks --no-same-owner --no-same-permissions -xf `, "tar -C /srv/audit/checks --no-same-owner --no-same-permissions -xf: never the archive's owners or modes"),
 					command(`rm -f "\$\{RUNNER_TEMP\}/checks\.tar" "\$\{RUNNER_TEMP\}/checks\.types" "\$\{RUNNER_TEMP\}/checks\.names"`,
@@ -900,8 +904,8 @@ var auditJobs = []auditJob{
 				name: "Encrypt the audit's result to the publish key",
 				env:  []auditRead{{key: "AUDIT_PUBLISH_PUBLIC_KEY", value: varValue("AUDIT_PUBLISH_PUBLIC_KEY")}},
 				runs: []auditCommand{
-					command(`age --encrypt --recipient "\$\{AUDIT_PUBLISH_PUBLIC_KEY\}" --output "\$\{RUNNER_TEMP\}/model-result\.age" "\$\{RUNNER_TEMP\}/result\.json"`,
-						`age --encrypt --recipient "${AUDIT_PUBLISH_PUBLIC_KEY}" --output "${RUNNER_TEMP}/model-result.age" "${RUNNER_TEMP}/result.json", the launcher's checked bytes`),
+					command(`"\$\{RUNNER_TEMP\}/bin/age" --encrypt --recipient "\$\{AUDIT_PUBLISH_PUBLIC_KEY\}" --output "\$\{RUNNER_TEMP\}/model-result\.age" "\$\{RUNNER_TEMP\}/result\.json"`,
+						`"${RUNNER_TEMP}/bin/age" --encrypt --recipient "${AUDIT_PUBLISH_PUBLIC_KEY}" --output "${RUNNER_TEMP}/model-result.age" "${RUNNER_TEMP}/result.json", the launcher's checked bytes`),
 				},
 				refuses: []auditCommand{command(`/srv/audit/work/result\.json`,
 					"/srv/audit/work/result.json, the work area's result read again by its path, want ${RUNNER_TEMP}/result.json, the bytes the launcher checked (-result-out)")},
