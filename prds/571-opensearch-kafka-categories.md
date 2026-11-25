@@ -206,12 +206,15 @@ reaches the raw output the guide keeps in its scratch directory (*Privacy*, `doc
 - MSK: `ClusterName`, `ClusterType`, the broker instance type, the broker count, the per-broker storage,
   the client subnets and encryption at rest;
 - HDInsight: `clusterDefinition.kind`, the worker role's `targetInstanceCount` and
-  `hardwareProfile.vmSize`, and the zones;
+  `hardwareProfile.vmSize`, the zones and, if milestone 4 confirms they give `storageGiB`, the worker
+  role's `dataDisksGroups` (disks per node, disk size);
 - GCP Managed Kafka: likewise only the fields read (name, capacity, zones and encryption, as milestone 3
   confirms).
 
-Never `AccessPolicies`, `AdvancedSecurityOptions`, `CognitoOptions`, an endpoint (`Endpoint`,
-`Endpoints`, `DomainEndpointOptions`, bootstrap brokers), `osProfile` or `connectivityEndpoints`.
+Never `AccessPolicies`, `AdvancedSecurityOptions`, `CognitoOptions`, `Endpoint`, `Endpoints`,
+`DomainEndpointOptions`, a `ZookeeperConnectString*` or `BootstrapBroker*` key (MSK),
+`collectionEndpoint` or `dashboardEndpoint` (OpenSearch Serverless), `bootstrapAddress` (GCP Managed
+Kafka), `osProfile` or `connectivityEndpoints` (HDInsight).
 
 **No data-plane or configuration access.** No data-plane permission and no configuration or credentials
 call is used or granted: not `es:ESHttp*`, `aoss:APIAccessAll`, `kafka-cluster:*`,
@@ -280,11 +283,12 @@ milestones 2 and 3 check whether a single-zone cluster can exist at all.
   and `memoryGiB` by hand, as for an RDS instance class. `count` is `InstanceCount` (data nodes, not the
   dedicated masters) or `NumberOfBrokerNodes`; `storageGiB` the per-node volume. HDInsight: `count` from
   the worker role's `targetInstanceCount`, `vcpus` and `memoryGiB` from its VM size, which the guide's
-  existing VM size lookup gives; `storageGiB` from the worker role's managed disks
-  (`dataDisksGroups`: disks per node × disk size) if Resource Graph projects them and the disk size
-  can be read (milestone 4 checks), and otherwise no `storageGiB`, so storage is not priced. GCP Managed Kafka sizes a cluster in total vCPUs and memory, not
-  brokers; milestone 3 checks whether a broker count can be derived, and otherwise writes no size
-  ("not estimated: size unknown"), never a cluster total as one node.
+  existing VM size lookup gives; `storageGiB` from the worker role's managed disks (`dataDisksGroups`:
+  disks per node × disk size) if Resource Graph projects them and the disk size can be read
+  (milestone 4 checks), and otherwise no `storageGiB`, so storage is not priced. GCP Managed Kafka
+  sizes a cluster in total vCPUs and memory, not brokers; milestone 3 checks whether a broker count can
+  be derived, and otherwise writes no size ("not estimated: size unknown"), never a cluster total as
+  one node.
 - **Serverless resources** (MSK Serverless, OpenSearch Serverless collections) have no node size: no
   size fields, so "not estimated: size unknown". They are billed by usage (partitions and throughput,
   OCUs), and a plan-priced category has no usage path; open question 3.
@@ -372,9 +376,19 @@ All criteria are pinned by tests that run offline under `make test` or `make tes
   Azure role in the guide cover it (*review*, and the existing `cloud-read-only` checks where they
   apply).
 - [ ] Every new call keeps only the fields its program reads, with an explicit `--query`, `--format`
-  or Resource Graph `project` (*Only the fields the program reads*), and a test pins that the raw-output
-  fixtures carry none of `AccessPolicies`, `AdvancedSecurityOptions`, `CognitoOptions`, an endpoint key,
-  `osProfile` or `connectivityEndpoints` (the guide's *Privacy* section, `docs/guide/inventory.md`).
+  or Resource Graph `project` (*Only the fields the program reads*; the guide's *Privacy* section,
+  `docs/guide/inventory.md`). Two offline tests pin it:
+  - *the fixtures:* every key in a new call's raw-output fixture is one that call's jq program reads (an
+    allow list), so none of `AccessPolicies`, `AdvancedSecurityOptions`, `CognitoOptions`, `Endpoint`,
+    `Endpoints`, `DomainEndpointOptions`, `ZookeeperConnectString*`, `BootstrapBroker*`,
+    `collectionEndpoint`, `dashboardEndpoint`, `bootstrapAddress` (GCP Managed Kafka), `osProfile` or
+    `connectivityEndpoints` (HDInsight) appears;
+  - *the guide's command text*, so that a fixture without those keys cannot hide a command that dropped
+    its projection: an extension of the guide-command comparison (`TestInventoryCommandsAreTheGuides`,
+    `test/site/inventory_test.go`) checks that each new `aws opensearch`, `aws opensearchserverless` and
+    `aws kafka` command has a `--query`, the `gcloud managed-kafka` command a `--format`, and the
+    Resource Graph query a `project`, and, where the projection parses, that it names only the fields
+    under *Only the fields the program reads*. A half of this that cannot be made a test is *review*.
 - [ ] *Review:* no data-plane permission and no configuration or credentials call is used or granted
   (*No data-plane or configuration access*): the guide's AWS policy, GCP roles and Azure role name
   none of the permissions listed there.
@@ -467,7 +481,8 @@ lands, its report shows the new categories as fit `none` with "no offering in th
    (*OpenSearch* and *Kafka* sections) and the regions page
    <https://www.ovhcloud.com/en/public-cloud/regions-availability/>, fetched as in PRD #552 milestone 5
    (`www.ovhcloud.com` answered an automated client on 2026-11-25) or, if they refuse one, saved by the
-   maintainer. An existing price or plan the re-read page shows changed is updated to its current value.
+   maintainer into a scratch directory outside the repository, never committed (as milestones 6 and 7
+   say). An existing price or plan the re-read page shows changed is updated to its current value.
    Depends on 1.
 6. [ ] **UpCloud catalog.** Offerings for `search.opensearch`: Managed OpenSearch (1 node) and a
    multi-node variant with `node-high-availability`, `encryption-at-rest` and `snapshots` (the backups
@@ -499,7 +514,7 @@ lands, its report shows the new categories as fit `none` with "no offering in th
 
 ## Decisions and open questions
 
-**Decisions**
+**Proposed decisions** (pending the maintainer's answer to the open questions that name them)
 
 - **Two categories, named after the protocol** (*Names*): `search.opensearch` in a new `search` family,
   `messaging.kafka` in the existing `messaging` family.
@@ -551,7 +566,7 @@ lands, its report shows the new categories as fit `none` with "no offering in th
    Scaleway shows "no offering in the Scaleway catalog" until its pages confirm GA, as PRD #552 did for
    OVHcloud File Storage. Milestone 7 then adds the offerings or records their absence.
 3. **Serverless variants unsized.** *Recommendation:* classify them and leave them unsized ("size
-   unknown"), as decided above. The alternative, a usage path for a ByPlan category, would need an
+   unknown"), as proposed under *Proposed decisions* (*Serverless variants are in, unsized*). The alternative, a usage path for a ByPlan category, would need an
    estimate method per resource rather than per category, which ADR 0027 does not have.
 4. **No new capability.** Candidates were a Kafka `tiered-storage` and an OpenSearch `k-nn` (vector
    search). *Recommendation:* none now. Every target's OpenSearch enables k-NN by default (OVHcloud's
