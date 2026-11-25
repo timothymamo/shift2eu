@@ -6,8 +6,10 @@
 #
 # The cost pins (ADR 0045, *The container*): max_scale 1, 140 mvCPU and 0.25 GB of memory bound the worst case
 # to one instance; min_scale 0 keeps the site in the free tier, at the price of a cold start on the first visit
-# after an idle period. The deprecated spellings stay out: memory_limit is in megabytes and http_option is the
-# older spelling of https_connections_only.
+# after an idle period. The memory pin is 268000000 bytes, the value the platform keeps, not 268435456 (256 MiB):
+# Serverless Containers round memory_limit_bytes to whole decimal megabytes, so the binary size comes back as
+# 268000000 and every plan after an apply would show that change (issue #596). The deprecated spellings stay out:
+# memory_limit is in megabytes and http_option is the older spelling of https_connections_only.
 #
 # `mock_provider` replaces the Scaleway provider, so `tofu test` needs no credential and contacts nothing. The
 # mock's computed ids must be the values the configuration needs at plan time (the container's required
@@ -112,8 +114,8 @@ run "one_public_container_sized_to_the_cost_pins" {
   }
 
   assert {
-    condition     = scaleway_container.site.memory_limit_bytes == 268435456
-    error_message = "scaleway_container.site must set memory_limit_bytes = 268435456 (0.25 GB): it is the cost pin ADR 0045 prices, and memory_limit, the deprecated spelling in megabytes, stays unset."
+    condition     = scaleway_container.site.memory_limit_bytes == 268000000
+    error_message = "scaleway_container.site must set memory_limit_bytes = 268000000 (0.25 GB in whole decimal megabytes, the value the platform keeps): it is the cost pin ADR 0045 prices, and memory_limit, the deprecated spelling in megabytes, stays unset. 268435456 (256 MiB) would come back as 268000000, so every plan after an apply would show the change (issue #596)."
   }
 
   assert {
