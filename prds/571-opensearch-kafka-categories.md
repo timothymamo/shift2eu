@@ -514,7 +514,8 @@ lands, its report shows the new categories as fit `none` with "no offering in th
 
 ## Decisions and open questions
 
-**Proposed decisions** (pending the maintainer's answer to the open questions that name them)
+**Proposed decisions** (all pending the maintainer's approval of this PRD; those an open question names
+also wait on its answer)
 
 - **Two categories, named after the protocol** (*Names*): `search.opensearch` in a new `search` family,
   `messaging.kafka` in the existing `messaging` family.
@@ -566,8 +567,9 @@ lands, its report shows the new categories as fit `none` with "no offering in th
    Scaleway shows "no offering in the Scaleway catalog" until its pages confirm GA, as PRD #552 did for
    OVHcloud File Storage. Milestone 7 then adds the offerings or records their absence.
 3. **Serverless variants unsized.** *Recommendation:* classify them and leave them unsized ("size
-   unknown"), as proposed under *Proposed decisions* (*Serverless variants are in, unsized*). The alternative, a usage path for a ByPlan category, would need an
-   estimate method per resource rather than per category, which ADR 0027 does not have.
+   unknown"), as proposed under *Proposed decisions* (*Serverless variants are in, unsized*). The
+   alternative, a usage path for a ByPlan category, would need an estimate method per resource rather
+   than per category, which ADR 0027 does not have.
 4. **No new capability.** Candidates were a Kafka `tiered-storage` and an OpenSearch `k-nn` (vector
    search). *Recommendation:* none now. Every target's OpenSearch enables k-NN by default (OVHcloud's
    plugin list) or does not say, and no target documents Kafka tiered storage; a capability that every
