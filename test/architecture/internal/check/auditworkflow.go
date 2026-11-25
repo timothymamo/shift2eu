@@ -2382,30 +2382,206 @@ var (
 	auditLiteralLoop = regexp.MustCompile("^[ \\t]*for [A-Za-z_][A-Za-z0-9_]* in ([^;$*?\\[\\](){}\"'`\\\\]+); do$")
 )
 
+// auditCaseStart and auditCaseEnd are a case statement's first and last
+// lines, auditCaseArmEnd the end of one of its arms; auditFunctionStart is a
+// shell function's first line, its name in the group (review round J of PR
+// 5c).
+var (
+	auditCaseStart     = regexp.MustCompile(`^[ \t]*case\s.*\sin$`)
+	auditCaseEnd       = regexp.MustCompile(`^[ \t]*esac(?:\s|;|$)`)
+	auditCaseArmEnd    = regexp.MustCompile(`;;[ \t]*$`)
+	auditFunctionStart = regexp.MustCompile(`^[ \t]*([A-Za-z_][A-Za-z0-9_]*)[ \t]*\(\)[ \t]*\{$`)
+	auditLocalLine     = regexp.MustCompile(`^[ \t]*local\s`)
+)
+
 // scriptTimeouts returns the seconds the timeouts of lines add up to, and each
-// as it is spelled.
+// as it is spelled. The arms of a case statement are alternatives: only one of
+// them runs, so the case counts its longest arm (review round J of PR 5c).
 func scriptTimeouts(lines []string) (int, []string) {
 	seconds := 0
 
 	var parts []string
 
-	for _, line := range lines {
-		for _, m := range auditStepTimeout.FindAllStringSubmatch(line, -1) {
-			n, err := strconv.Atoi(m[1])
-			if err != nil {
-				continue
-			}
+	for i := 0; i < len(lines); i++ {
+		if auditCaseStart.MatchString(lines[i]) {
+			end := caseEnd(lines, i)
+			s, p := caseTimeouts(lines[i+1 : end])
+			seconds += s
+			parts = append(parts, p...)
+			i = end
 
-			if m[2] == "m" {
-				n *= 60
-			}
-
-			seconds += n
-			parts = append(parts, "timeout "+m[1]+m[2])
+			continue
 		}
+
+		s, p := lineTimeouts(lines[i])
+		seconds += s
+		parts = append(parts, p...)
 	}
 
 	return seconds, parts
+}
+
+// lineTimeouts returns the seconds the timeouts of one line add up to, and
+// each as it is spelled.
+func lineTimeouts(line string) (int, []string) {
+	seconds := 0
+
+	var parts []string
+
+	for _, m := range auditStepTimeout.FindAllStringSubmatch(line, -1) {
+		n, err := strconv.Atoi(m[1])
+		if err != nil {
+			continue
+		}
+
+		if m[2] == "m" {
+			n *= 60
+		}
+
+		seconds += n
+		parts = append(parts, "timeout "+m[1]+m[2])
+	}
+
+	return seconds, parts
+}
+
+// caseEnd returns the index of the esac that closes the case lines[i] starts,
+// len(lines) when none does.
+func caseEnd(lines []string, i int) int {
+	depth := 0
+
+	for j := i; j < len(lines); j++ {
+		switch {
+		case auditCaseStart.MatchString(lines[j]):
+			depth++
+		case auditCaseEnd.MatchString(lines[j]):
+			depth--
+			if depth == 0 {
+				return j
+			}
+		}
+	}
+
+	return len(lines)
+}
+
+// caseTimeouts returns the timeouts of a case statement's longest arm, arms
+// being the lines between its case and its esac.
+func caseTimeouts(arms []string) (int, []string) {
+	longest := 0
+
+	var parts []string
+
+	start := 0
+	depth := 0
+
+	for j, line := range arms {
+		switch {
+		case auditCaseStart.MatchString(line):
+			depth++
+		case auditCaseEnd.MatchString(line):
+			depth--
+		}
+
+		if depth > 0 || (!auditCaseArmEnd.MatchString(line) && j < len(arms)-1) {
+			continue
+		}
+
+		if s, p := scriptTimeouts(arms[start : j+1]); s > longest {
+			longest, parts = s, p
+		}
+
+		start = j + 1
+	}
+
+	if len(parts) == 0 {
+		return 0, nil
+	}
+
+	return longest, []string{"the longest arm of a case (" + strings.Join(parts, ", ") + ")"}
+}
+
+// functionEnd returns the index of the } that closes the shell function
+// lines[i] starts, the first one indented as its first line, len(lines) when
+// none does.
+func functionEnd(lines []string, i int) int {
+	indent := lines[i][:len(lines[i])-len(strings.TrimLeft(lines[i], " \t"))]
+
+	for j := i + 1; j < len(lines); j++ {
+		if lines[j] == indent+"}" {
+			return j
+		}
+	}
+
+	return len(lines)
+}
+
+// headBudget returns the budget a shell function's body holds at its head:
+// its first line past its local lines and blank lines, as auditBudget spells
+// it.
+func headBudget(body []string) (int, bool) {
+	for _, line := range body {
+		if strings.TrimSpace(line) == "" || auditLocalLine.MatchString(line) {
+			continue
+		}
+
+		m := auditBudget.FindStringSubmatch(line)
+		if m == nil {
+			return 0, false
+		}
+
+		n, err := strconv.Atoi(m[1])
+
+		return n, err == nil
+	}
+
+	return 0, false
+}
+
+// maxBudget returns the largest budget lines hold, 0 when they hold none.
+func maxBudget(lines []string) int {
+	budget := 0
+
+	for _, m := range auditBudget.FindAllStringSubmatch(strings.Join(lines, "\n"), -1) {
+		if n, err := strconv.Atoi(m[1]); err == nil && n > budget {
+			budget = n
+		}
+	}
+
+	return budget
+}
+
+// stepBound is the running bound fit adds a step's timeouts to, in seconds,
+// and the parts that make it up.
+type stepBound struct {
+	seconds int
+	parts   []string
+}
+
+// add adds timeouts that run once.
+func (b *stepBound) add(seconds int, parts []string) {
+	b.seconds += seconds
+	b.parts = append(b.parts, parts...)
+}
+
+// budgeted counts what a budget stops (a loop, or a shell function called any
+// number of times): nothing of it starts past its budget of budget seconds,
+// so it ends by that budget and the timeouts of the one round, an iteration
+// or a call, that began just before it. That bounds it together with every
+// timeout before it, which ran before that round began, so the bound becomes
+// the larger of the two; what follows adds to it.
+func (b *stepBound) budgeted(what string, budget, round int, roundParts []string) {
+	desc := fmt.Sprintf(`%s's budget of %d seconds (if [ "${SECONDS}" -ge %d ]) and the timeouts of its last round (%s)`,
+		what, budget, budget, strings.Join(roundParts, ", "))
+
+	if budget+round < b.seconds {
+		b.parts = append(b.parts, desc+", which end within the timeouts before it")
+
+		return
+	}
+
+	b.seconds = budget + round
+	b.parts = []string{desc}
 }
 
 // loopEnd returns the index of the done that closes the loop lines[i] starts,
@@ -2429,74 +2605,94 @@ func loopEnd(lines []string, i int) int {
 }
 
 // fit holds a step of a job whose steps stay within its timeout to its own
-// timeout-minutes (round E of PR 5c): the timeouts outside its loops, and its
-// loop budget, add up to less, because a step's timeout firing ends the job
-// and every later step of it, the encrypt step included, is skipped. A loop's
-// own timeouts are bounded by the budget inside it, which counts in their
-// place; a loop over literal words with no budget inside counts its timeouts
-// once per word. Since review round I (M1) a loop that holds a timeout and is
-// neither is refused: nothing bounds how often it runs, so nothing bounds the
-// step.
+// timeout-minutes (round E of PR 5c): its worst case adds up to less, because
+// a step's timeout firing ends the job and every later step of it, the
+// encrypt step included, is skipped. Since review round J the worst case is
+// counted in the script's order, as one sum T of its timeouts: a timeout
+// outside its loops and functions adds once, a case its longest arm; a loop
+// with a budget B inside, whose body's timeouts are T_iter, sets T to
+// max(T, B + T_iter), since no iteration begins past B but the last one begun
+// runs to its timeouts; a shell function with a timeout holds a budget B at
+// the head of its body and counts as max(T, B + one call's timeouts), never per
+// call, or is refused; a loop over literal words with no budget inside counts
+// its timeouts once per word. A loop that holds a timeout and is none of these
+// is refused (review round I, M1): nothing bounds how often it runs, so
+// nothing bounds the step.
 func (a *auditReader) fit(code, path string, minutes int) {
 	if minutes <= 0 {
 		return
 	}
 
-	budget := 0
-
-	for _, m := range auditBudget.FindAllStringSubmatch(code, -1) {
-		if n, err := strconv.Atoi(m[1]); err == nil && n > budget {
-			budget = n
-		}
-	}
-
 	lines := logicalLines(code)
-	seconds := 0
+	stepBudget := maxBudget(lines)
 
-	var parts []string
+	var bound stepBound
 
 	for i := 0; i < len(lines); i++ {
-		if !auditLoopStart.MatchString(lines[i]) {
-			s, p := scriptTimeouts(lines[i : i+1])
-			seconds += s
-			parts = append(parts, p...)
+		switch {
+		case auditFunctionStart.MatchString(lines[i]):
+			name := auditFunctionStart.FindStringSubmatch(lines[i])[1]
+			end := functionEnd(lines, i)
+			body := lines[i+1 : min(end, len(lines))]
+			i = end
 
-			continue
+			s, p := scriptTimeouts(body)
+			if len(p) == 0 {
+				continue
+			}
+
+			budget, ok := headBudget(body)
+			if !ok {
+				a.r.fail(`%s runs the shell function %q, which holds %s with no function budget (if [ "${SECONDS}" -ge <seconds> ]; then, on a line of its own, at the head of its body): `+
+					`nothing bounds how often the step calls it, so its timeouts can outrun the step's timeout-minutes, which ends the job and skips every later step, the encrypt step included; `+
+					`a function with a timeout stops at a budget and records the reads it did not make (PRD #175 milestone 2, ADR 0040)`, path, name, strings.Join(p, ", "))
+				bound.add(s, p)
+
+				continue
+			}
+
+			bound.budgeted(fmt.Sprintf("the shell function %q", name), budget, s, p)
+		case auditCaseStart.MatchString(lines[i]):
+			end := caseEnd(lines, i)
+			bound.add(scriptTimeouts(lines[i:min(end+1, len(lines))]))
+			i = end
+		case auditLoopStart.MatchString(lines[i]):
+			end := loopEnd(lines, i)
+			body := lines[i+1 : end]
+			header := strings.TrimSpace(lines[i])
+			i = end
+
+			s, p := scriptTimeouts(body)
+			if len(p) == 0 {
+				continue
+			}
+
+			if budget := maxBudget(body); budget > 0 {
+				bound.budgeted(fmt.Sprintf("the loop %q", header), budget, s, p)
+
+				continue
+			}
+
+			words := auditLiteralLoop.FindStringSubmatch(header)
+			if stepBudget > 0 && words != nil && !slices.ContainsFunc(body, auditLoopStart.MatchString) {
+				n := len(strings.Fields(words[1]))
+				bound.add(n*s, []string{fmt.Sprintf("%d runs of the loop %q (%s)", n, header, strings.Join(p, ", "))})
+
+				continue
+			}
+
+			a.r.fail(`%s runs the loop %q, which holds %s with no loop budget (if [ "${SECONDS}" -ge <seconds> ]; then, on a line of its own, at the head of its body): `+
+				`nothing bounds how often it runs, so its timeouts can outrun the step's timeout-minutes, which ends the job and skips every later step, the encrypt step included; `+
+				`a loop with a timeout stops at a budget and records what it did not reach (PRD #175 milestone 2, ADR 0040)`, path, header, strings.Join(p, ", "))
+		default:
+			bound.add(lineTimeouts(lines[i]))
 		}
-
-		end := loopEnd(lines, i)
-		body := lines[i+1 : end]
-		header := strings.TrimSpace(lines[i])
-		i = end
-
-		s, p := scriptTimeouts(body)
-		if len(p) == 0 || auditBudget.MatchString(strings.Join(body, "\n")) {
-			continue
-		}
-
-		words := auditLiteralLoop.FindStringSubmatch(header)
-		if budget > 0 && words != nil && !slices.ContainsFunc(body, auditLoopStart.MatchString) {
-			n := len(strings.Fields(words[1]))
-			seconds += n * s
-			parts = append(parts, fmt.Sprintf("%d runs of the loop %q (%s)", n, header, strings.Join(p, ", ")))
-
-			continue
-		}
-
-		a.r.fail(`%s runs the loop %q, which holds %s with no loop budget (if [ "${SECONDS}" -ge <seconds> ]; then, on a line of its own, at the head of its body): `+
-			`nothing bounds how often it runs, so its timeouts can outrun the step's timeout-minutes, which ends the job and skips every later step, the encrypt step included; `+
-			`a loop with a timeout stops at a budget and records what it did not reach (PRD #175 milestone 2, ADR 0040)`, path, header, strings.Join(p, ", "))
 	}
 
-	if budget > 0 {
-		seconds += budget
-		parts = append(parts, fmt.Sprintf(`the loop budget of %d seconds (if [ "${SECONDS}" -ge %d ])`, budget, budget))
-	}
-
-	if seconds >= minutes*60 {
-		a.r.fail("%s's own timeouts outside its loops and its loop budget add up to %d seconds (%s), not below and so past its timeout-minutes of %d, %d seconds: "+
+	if bound.seconds >= minutes*60 {
+		a.r.fail("%s's own timeouts and its budgets, counted in the script's order, add up to %d seconds (%s), not below and so past its timeout-minutes of %d, %d seconds: "+
 			"a step's timeout firing ends the job and skips every later step, the encrypt step included, so each of its own timeouts fires first (ADR 0040)",
-			path, seconds, strings.Join(parts, ", "), minutes, minutes*60)
+			path, bound.seconds, strings.Join(bound.parts, ", "), minutes, minutes*60)
 	}
 }
 

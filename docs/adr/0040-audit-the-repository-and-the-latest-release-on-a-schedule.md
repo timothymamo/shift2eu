@@ -2672,7 +2672,38 @@ iterations, so a step's worst case is the later of the time before its loop and 
 whole iteration, plus the timeouts after the loop. In the workflow: row 7, max(11, 20 + 2) + 18 = 40 of
 50 minutes; row 9, 12 + 7 = 19 of 20; row 13, max(4.5, 12 + 6) + 1 = 19 of 20 (its budget is 12
 minutes, not 15, for this); row 14, max(18.5, 25 + 16) + 1 = 42 of 45. `fit` counts the budget and every
-timeout outside the loop, not the last iteration, so it does not yet hold this bound.
+timeout outside the loop, not the last iteration, so it does not yet hold this bound; review round J
+does.
+
+**Review round J of PR 5c (2026-11-25).** Round I's own record left two holes in `fit`: it counted a
+loop's budget but not the iteration begun just before it, and a shell function's timeout once, however
+often the step called it. Row 15's `read_api` holds `timeout 2m gh api` and runs more than 25 times in a
+15-minute step. Each is held by `check.AuditWorkflow` and a case of its test:
+
+- **The sound bound.** `fit` walks the step's script in order as one sum `T` of its timeouts. A
+  timeout outside its loops and functions adds once; a `case` adds its longest arm, since one arm runs
+  (row 9's `tar` or `unzip`). A loop whose body holds a budget `B`, with its body's timeouts `T_iter`,
+  sets `T` to `max(T, B + T_iter)`: everything before the loop's last iteration ended before that
+  iteration began, below `B`, and the iteration runs to its own timeouts at most. What follows the loop
+  adds to `T`, so a second budgeted loop is bounded the same way. A literal-word loop with no budget
+  still counts `n * T_iter`, and any other loop with a timeout is still refused. The bound is strictly
+  below the step's `timeout-minutes` or the check names it in seconds, with its parts.
+- **The function budget.** A shell function whose body holds a `timeout` holds its own budget, `if [
+  "${SECONDS}" -ge <seconds> ]; then` on a line of its own at the head of its body (past its `local`
+  lines), or the check refuses it, by name, as `with no function budget`. A budgeted function counts
+  once as `max(T, B + one call's timeouts)`, never per call. That is sound because the budget is tested
+  before the call's timeout: the last call that reads begins below `B` and ends within its timeouts, every
+  later call returns at once, and every timeout outside the function that runs between calls ran before
+  that last call or adds after it.
+- **Row 15's fix.** `read_api` stops at `if [ "${SECONDS}" -ge 720 ]; then`, records the endpoint it did
+  not read in `read-refused.txt` and returns 0; the step's end already names `read-refused.txt` in the
+  limits as "not run (read refused)". Its bound is 12 + 2 = 14 of 15 minutes: the step's other commands
+  (`grep`, `jq`, `git`) run under no timeout, as before.
+
+The checks job's bounds, in seconds, the fixture's and the workflow's alike: row 7, max(660, 1200 + 120)
++ 1080 = 2400 of 3000 (40 of 50 minutes); row 8, 840 of 900; row 9, 0 + 720 + 420 = 1140 of 1200; row 13,
+max(270, 720 + 360) + 60 = 1140 of 1200; row 14, max(1110, 1500 + 960) + 60 = 2520 of 2700; row 15, 720
++ 120 = 840 of 900. The job's steps still add up to 348 of its 355 minutes.
 
 ## Alternatives considered
 

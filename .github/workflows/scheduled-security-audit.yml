@@ -341,9 +341,9 @@ jobs:
       # mismatch and a refused attestation or signature are recorded as release-integrity
       # verification-failed in the results' verification-failed.txt, never as a check that did not run.
       # The step reads GitHub's API with the job's token and runs no release code; the registry is read
-      # anonymously. Its own timeouts stay below its own timeout-minutes: the loop's 20-minute budget and
-      # the 29 minutes of timeouts outside it (the two cosign verify-attestation runs counted) add up to
-      # 49, under the step's 50.
+      # anonymously. Its own timeouts stay below its own timeout-minutes: the loop's 20-minute budget, the
+      # 2 minutes of the iteration it began before that budget, and the 18 minutes of timeouts after the
+      # loop are 40, under the step's 50.
       - name: Verify the release's files, signature and attestations
         timeout-minutes: 50
         env:
@@ -416,7 +416,8 @@ jobs:
             diff "${out}/listed.txt" "${out}/assets.txt" > "${out}/listing.diff" || rc=$?
             echo "${rc}" > "${out}/listing.exit"
             # Every release file's build provenance, checksums.txt's included, within the loop's budget of
-            # 20 minutes from the step's start: the budget and the step's own timeouts outside the loop stay
+            # 20 minutes: the budget, the 2 minutes of the iteration it began before that budget and the 18
+            # minutes of timeouts after the loop (the two cosign verify-attestation runs counted) are 40,
             # under the step's 50, and a loop that runs out records the files it did not reach.
             while IFS= read -r -d '' file; do
               if [ "${SECONDS}" -ge 1200 ]; then
@@ -1122,6 +1123,13 @@ jobs:
           # alone, so no variable's value reaches the model.
           read_api() {
             local name="$1" endpoint="$2" filter="${3:-.}" rc=0
+            # The function's budget: the step's reads number more than 25, each of 2 minutes, far past
+            # its 15, so no read starts after 12 minutes of it; the reads it did not make are recorded
+            # in read-refused.txt, which the step's end names in the limits, "not run (read refused)".
+            if [ "${SECONDS}" -ge 720 ]; then
+              echo "${name}" >> "${out}/read-refused.txt"
+              return 0
+            fi
             timeout 2m gh api "${endpoint}" --jq "${filter}" > "${out}/api/${name}.json" 2> "${out}/api/${name}.stderr" || rc=$?
             echo "${rc}" > "${out}/api/${name}.exit"
             if [ "${rc}" -ne 0 ]; then
