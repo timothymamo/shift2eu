@@ -2738,9 +2738,8 @@ The model job's errors that point here are titled `Audit model`. What each means
   disable succeeded: since the step removes the socket file itself, the file's absence no longer shows the
   daemon stopped. Check, on a runner of the same image, `systemctl status docker.service docker.socket`
   and `systemctl list-dependencies --reverse docker.service` for a unit that starts Docker again. The
-  runner image
-  changed under `ubuntu-24.04`: compare it with what ADR 0040 records for this step before changing
-  it, and start the new run only once the step matches the image.
+  runner image changed under `ubuntu-24.04`: compare it with what ADR 0040 records for this step
+  before changing it, and start the new run only once the step matches the image.
 
 ```bash
 # Mac (admin), as yourself: the action, one line per rotated secret. A value is read from the hidden
