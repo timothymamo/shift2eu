@@ -105,7 +105,10 @@ func PinnedNodeVersion(lima []byte) (string, error) {
 // nodeSteps returns the four Node steps of the Test job of the workflow file,
 // whose check names that file in its error, and whose tests run in the step
 // named testsName that runs testsRun: the only parts in which ci.yml's and
-// release.yml's steps differ.
+// release.yml's steps differ. The named diagnostics CITestJobNode adds for
+// ci.yml (ciRead, ciSetupNode, ciNodeCheck and ciTests) name parts of this
+// declaration (its id, with:, env: and run lines, through the constants
+// above), so an edit of nodeSteps updates them with it.
 func nodeSteps(file, testsName, testsRun string) []releaseStep {
 	return []releaseStep{
 		{

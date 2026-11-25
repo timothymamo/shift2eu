@@ -481,7 +481,7 @@ func piPinnedNodeVersion(t *testing.T) string {
 
 	version, err := piNodeVersionPin(readRepositoryFile(t, lima))
 	if err != nil {
-		t.Fatalf("%s pins no nodeVersion, so a skip cannot say which Node this check needs (issue #548): %v", lima, err)
+		t.Fatalf("%s: cannot read its nodeVersion, so a skip cannot say which Node this check needs (issue #548): %v", lima, err)
 	}
 
 	return version
