@@ -360,15 +360,22 @@ func TestOfferingAvailableInGlobal(t *testing.T) {
 func TestOfferingGlobalPrices(t *testing.T) {
 	t.Parallel()
 
+	// Amounts are ten-thousandths of a euro: 1200 is 0.12 EUR.
+	const (
+		planPrice    catalog.Amount = 1200
+		storagePrice catalog.Amount = 40
+		fixedFee     catalog.Amount = 500
+	)
+
 	offering := globalOffering()
 	offering.Plans = []catalog.Plan{{
 		Name:           "Zone",
 		VCPUs:          1,
 		MemoryMilliGiB: 1000,
-		Prices:         []catalog.Price{{Amount: 1200, Currency: catalog.EUR}},
+		Prices:         []catalog.Price{{Amount: planPrice, Currency: catalog.EUR}},
 	}}
-	offering.StoragePrices = []catalog.Price{{Amount: 40, Currency: catalog.EUR}}
-	offering.FixedFees = []catalog.Price{{Amount: 500, Currency: catalog.EUR}}
+	offering.StoragePrices = []catalog.Price{{Amount: storagePrice, Currency: catalog.EUR}}
+	offering.FixedFees = []catalog.Price{{Amount: fixedFee, Currency: catalog.EUR}}
 
 	cat := newCatalog(t, targetName, validSnapshot(), []catalog.Offering{offering})
 
@@ -378,16 +385,19 @@ func TestOfferingGlobalPrices(t *testing.T) {
 		t.Parallel()
 
 		for _, region := range []string{"fr-par", "nl-ams", "de-fra", "FR-PAR"} {
-			if amount, ok := got.PlanPrice("Zone", region); !ok || amount != 1200 {
-				t.Errorf("PlanPrice(\"Zone\", %s) = (%s, %t), want (12.00, true)", text.Quote(region), amount, ok)
+			if amount, ok := got.PlanPrice("Zone", region); !ok || amount != planPrice {
+				t.Errorf("PlanPrice(\"Zone\", %s) = (%s, %t), want (%s, true)",
+					text.Quote(region), amount, ok, planPrice)
 			}
 
-			if amount, ok := got.StoragePrice(region); !ok || amount != 40 {
-				t.Errorf("StoragePrice(%s) = (%s, %t), want (0.40, true)", text.Quote(region), amount, ok)
+			if amount, ok := got.StoragePrice(region); !ok || amount != storagePrice {
+				t.Errorf("StoragePrice(%s) = (%s, %t), want (%s, true)",
+					text.Quote(region), amount, ok, storagePrice)
 			}
 
-			if amount, ok := got.FixedFee(region); !ok || amount != 500 {
-				t.Errorf("FixedFee(%s) = (%s, %t), want (5.00, true)", text.Quote(region), amount, ok)
+			if amount, ok := got.FixedFee(region); !ok || amount != fixedFee {
+				t.Errorf("FixedFee(%s) = (%s, %t), want (%s, true)",
+					text.Quote(region), amount, ok, fixedFee)
 			}
 		}
 	})
