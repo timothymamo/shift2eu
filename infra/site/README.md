@@ -3,7 +3,10 @@
 The OpenTofu configuration of the site's Scaleway hosting (PRD #297 milestone 3, issue #422,
 [ADR 0039](../../docs/adr/0039-create-the-sites-scaleway-hosting-with-opentofu.md)): the project that holds
 only the site's bucket, the bucket (versioned, website mode, its bucket policy), the deploy IAM
-application and its policy, and the Edge Services Starter plan and pipeline serving `www.shift2eu.com`.
+application and its policy, the Edge Services Starter plan and pipeline in front of the bucket, and the
+site's front: one Serverless Container running the pinned Caddy image with the `Caddyfile` beside it,
+serving `www.shift2eu.com` and the apex in front of the pipeline (milestone 4,
+[ADR 0045](../../docs/adr/0045-front-the-site-with-a-serverless-container-running-a-pinned-caddy.md)).
 The deploy API key, the state bucket, the Namecheap records and the GitHub `site` environment are made by
 hand, in [the site runbook](../../docs/site-runbook.md) (R0 to R13, PRD #297's *Runbook*), which the
 maintainer follows.
@@ -11,10 +14,16 @@ maintainer follows.
 - `versions.tf`: OpenTofu and the `scaleway/scaleway` provider, pinned exactly; the `s3` backend on
   Scaleway's endpoint with state locking (`use_lockfile`), partially configured (`backend.hcl.example`).
 - `providers.tf`: the provider, with the organization and region and no default project.
-- `main.tf`: every resource; `outputs.tf`: the IDs and endpoints the runbook's hand steps need.
+- `main.tf`: the project, the bucket, IAM and Edge Services; `container.tf`: the front's namespace, its
+  container (the Caddy pin, which Renovate moves, and the cost pins `dev/infra-rules.sh` holds) and its
+  two custom domains; `Caddyfile`: what the container runs, byte for byte; `outputs.tf`: the IDs and
+  endpoints the runbook's hand steps need.
 - `variables.tf`: the inputs (`terraform.tfvars.example`): `organization_id` and `admin_principal` have no
   default; `region` defaults to `nl-ams`, `bucket_name` to `shift2eu-site-www`, `public_read` to `false`
-  (set it only if the runbook's R5 finds that Edge Services cannot serve private objects).
+  (set it only if the runbook's R5 finds that Edge Services cannot serve private objects), and
+  `front_domains` to `false` (set it only once R8's records point at the container), and `pipeline_www`
+  to `false` (the pipeline serves only its default endpoint; R8's rollback sets it `true`, which restores
+  the pipeline's www domain and its TLS stage).
 - `.terraform.lock.hcl`: every hash the registry publishes for the provider version, whatever the
   `-platform` list: an `h1` hash for each platform the provider ships (13 for scaleway/scaleway 2.93.0) and the `zh` set from
   its signed `SHA256SUMS`. After a provider change, refresh it with
@@ -39,11 +48,16 @@ override, JSON or hidden (`.`-named, which OpenTofu ignores) files, every test f
 provider, no `provisioner` or `connection` block, no `*.auto.tfvars` (`.json` too), no setting in the
 `s3` backend block beyond `key`, `use_lockfile` and the four `skip_*` ones, no `scaleway_object` (the
 release deploys the objects), no call, in a configuration or test file, of a function that reads the
-local machine (`file`, `templatefile`, `templatestring`, `fileset`, `pathexpand`, `abspath`, ...), nothing
+local machine (`file`, `templatefile`, `templatestring`, `fileset`, `pathexpand`, `abspath`, ...) but
+exactly `file("${path.module}/Caddyfile")` in a configuration file, every `scaleway_container` at the cost
+pins (`max_scale = 1`, `cpu_limit = 140`, `memory_limit_bytes = 268435456` as literals, `min_scale` 0 or 1,
+as a literal or a local set to one, with exactly one postcondition on `self.min_scale`, comparing that same
+expression, and exactly one postcondition `self.https_connections_only == false`, `image` exactly
+`local.caddy_image`, no deprecated `memory_limit` or `http_option`), nothing
 in a `terraform` block but `required_version`, `required_providers`, `backend` and `cloud`
 (`[terraform-setting]`: no `encryption`, whose `external` key provider runs a local command), no `import`
 block, no `mock_provider` with a `source` and no `*.tfmock.hcl` or `*.tfmock.json` file, and only the
-resource types `main.tf` uses today, no data or ephemeral type (`[resource-type]`). A new resource type
+resource types `infra/site` uses today, no data or ephemeral type (`[resource-type]`). A new resource type
 extends that allow list in `dev/infra-rules.awk` in the same PR as the resource.
 `init`, `validate` and `test` run in every applied root (each directory directly under `infra/`).
 

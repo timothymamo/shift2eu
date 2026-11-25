@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 2,
+  "source": "aws",
+  "resources": [
+    {
+      "id": "bidi-‮gnp.exe‬-override",
+      "rawType": "zero​width⁠joiner",
+      "category": "storage.object",
+      "region": "eu-central-1",
+      "workload": "line separator paragraph"
+    },
+    {
+      "id": "homoglyph-аdmin",
+      "rawType": "combining-é́́́́́́́",
+      "category": "compute.vm",
+      "region": "eu-central-1",
+      "workload": "fullwidth-＜script＞"
+    },
+    {
+      "id": "astral-😀-emoji",
+      "rawType": "tag-󠁁󠁂-chars",
+      "category": "compute.vm",
+      "region": "eu-central-1",
+      "relations": [{ "type": "depends-on", "target": "homoglyph-аdmin" }]
+    }
+  ]
+}

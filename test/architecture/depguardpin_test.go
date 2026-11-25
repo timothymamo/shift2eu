@@ -965,6 +965,70 @@ var pinnedDepguardRules = []check.DepguardRule{
 		Deny:  []string{"os"},
 	},
 	{
+		// The front's behaviour test (PRD #297 milestone 4, docs/adr/0045),
+		// behind the sitefront tag and run by make test-sitefront: it starts the
+		// pinned container and a local TLS upstream, so it takes exactly what it
+		// imports, each exact, and no package of the module. Its doc.go is held by
+		// sitefront-test-doc, as test/browser's is by browser-smoke-test-doc.
+		Name:     "sitefront-behaviour-test",
+		ListMode: "strict",
+		Files: []string{
+			"**/test/sitefront/**/*_test.go",
+			"**/test/sitefront/*_test.go",
+		},
+		Allow: []string{
+			"bufio$",
+			"bytes$",
+			"compress/gzip$",
+			"context$",
+			"crypto/ecdsa$",
+			"crypto/elliptic$",
+			"crypto/rand$",
+			"crypto/tls$",
+			"crypto/x509$",
+			"crypto/x509/pkix$",
+			"encoding/json$",
+			"encoding/pem$",
+			"errors$",
+			"fmt$",
+			"io$",
+			"math/big$",
+			"net$",
+			"net/http$",
+			"net/http/httptest$",
+			"net/url$",
+			"os$",
+			"os/exec$",
+			"path/filepath$",
+			"slices$",
+			"strconv$",
+			"strings$",
+			"sync$",
+			"testing$",
+			"time$",
+		},
+		Deny: []string{
+			"github.com/timothymamo/shift2eu/",
+		},
+	},
+	{
+		// test/sitefront's one production file, doc.go, which carries no build
+		// tag so that go test ./... accepts the package: it imports nothing, so
+		// the rule allows nothing (allow: [] and the one deny entry, os, as
+		// config-is-pure). It is a rule of its own rather than an entry of
+		// test-docs-are-pure, which the package check skips, because
+		// sitefront-behaviour-test holds the test files alone and the package
+		// check must read a rule that holds the package's own imports.
+		Name:     "sitefront-test-doc",
+		ListMode: "strict",
+		Files: []string{
+			"**/test/sitefront/**",
+			"!$test",
+		},
+		Allow: []string{},
+		Deny:  []string{"os"},
+	},
+	{
 		Name:     "e2e-is-black-box",
 		ListMode: "strict",
 		Files: []string{

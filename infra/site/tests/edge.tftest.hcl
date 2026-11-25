@@ -1,10 +1,16 @@
-# The Edge Services pipeline that serves the site (issue #422, PRD #297 "Hosting decisions" 1, 9 and 10).
-# Edge Services serves only a subdomain, so one pipeline serves www.shift2eu.com with a managed Let's
-# Encrypt certificate (decision 10's CAA record), fronted by the site bucket. All stages belong to the one
-# pipeline, each names the one before it by id - the head stage enters at DNS, then TLS, then cache, then
-# the backend - and the domain's traffic reaches it through the TLS stage: a certificate that is not in the
-# domain's chain does not serve the domain. Every resource of the pipeline is subscribed in the site's
+# The Edge Services pipeline that serves the site (issue #422, PRD #297 "Hosting decisions" 1, 9 and 10,
+# milestone 4 and ADR 0045). Edge Services stays the only reader of the private bucket: the front is the
+# Serverless Container of container.tftest.hcl, which reverse-proxies the pipeline's own endpoint, so the
+# pipeline serves no custom domain of its own any more - its www.shift2eu.com DNS stage would answer the
+# bucket beside Caddy's redirects and headers, which is what ADR 0045 removed. The pipeline's stages belong to
+# the one pipeline, each names the one before it by id - the head stage enters at DNS, then cache, then the
+# backend - and with no domain the DNS stage's fqdns is empty and it hands the request to the cache stage
+# directly: no TLS stage remains in the chain. Every resource of the pipeline is subscribed in the site's
 # project, the deploy key's boundary, and the plan is the Starter one decision 9 priced.
+#
+# The removal sits behind pipeline_www (a bool, false by default): the run below, with it true, pins the
+# milestone 3 chain that R8's rollback restores - the DNS stage's www fqdn and its TLS stage - so the rollback
+# is a variable, not a rewrite of this file.
 #
 # `mock_provider` replaces the Scaleway provider, so `tofu test` needs no credential and contacts nothing.
 # The mock's computed ids must satisfy the provider's own validators (UUIDs), hence the fixed values below.
@@ -52,7 +58,7 @@ variables {
   admin_principal = "user_id:88888888-8888-8888-8888-888888888888"
 }
 
-run "one_pipeline_serves_www_from_the_site_bucket" {
+run "one_pipeline_serves_the_site_bucket_without_a_domain_or_a_tls_stage" {
   command = apply
 
   assert {
@@ -60,26 +66,25 @@ run "one_pipeline_serves_www_from_the_site_bucket" {
       for pipeline_id in [
         scaleway_edge_services_backend_stage.site.pipeline_id,
         scaleway_edge_services_cache_stage.site.pipeline_id,
-        scaleway_edge_services_tls_stage.site.pipeline_id,
         scaleway_edge_services_dns_stage.site.pipeline_id,
       ] : pipeline_id == scaleway_edge_services_pipeline.site.id
     ])
-    error_message = "the backend, cache, TLS and DNS stages must all belong to scaleway_edge_services_pipeline.site: the Starter plan includes one pipeline, and a stage in another pipeline does not serve www.shift2eu.com (PRD #297 hosting decision 9)."
+    error_message = "the backend, cache and DNS stages must all belong to scaleway_edge_services_pipeline.site: the Starter plan includes one pipeline, and a stage in another pipeline serves nothing the container fetches (PRD #297 hosting decision 9)."
   }
 
   assert {
-    condition     = toset(flatten([try(scaleway_edge_services_dns_stage.site.fqdns, [])])) == toset(["www.shift2eu.com"])
-    error_message = "scaleway_edge_services_dns_stage.site's fqdns must be exactly [\"www.shift2eu.com\"]: Edge Services serves the www subdomain only, and the apex shift2eu.com is a redirect served outside Edge Services (PRD #297 hosting decision 1)."
+    condition     = length(try(scaleway_edge_services_dns_stage.site.fqdns, [])) == 0
+    error_message = "scaleway_edge_services_dns_stage.site's fqdns must be empty: the pipeline serves no custom domain, since www.shift2eu.com and shift2eu.com are the container's custom domains and Caddy, not Edge Services, answers them (ADR 0045, *The upstream*)."
   }
 
   assert {
-    condition     = scaleway_edge_services_dns_stage.site.tls_stage_id == scaleway_edge_services_tls_stage.site.id
-    error_message = "scaleway_edge_services_dns_stage.site must be served through scaleway_edge_services_tls_stage.site (tls_stage_id = its id): otherwise the managed certificate is not in the chain that answers www.shift2eu.com."
+    condition     = length(scaleway_edge_services_tls_stage.site) == 0
+    error_message = "the pipeline must hold no scaleway_edge_services_tls_stage: with pipeline_www at its default false no custom domain enters the pipeline, so there is no certificate to terminate and the chain is DNS -> cache -> backend (ADR 0045, *The upstream*). The stage is gated by pipeline_www, so R8's rollback can bring it back - see the run below."
   }
 
   assert {
-    condition     = scaleway_edge_services_tls_stage.site.managed_certificate == true
-    error_message = "scaleway_edge_services_tls_stage.site must set managed_certificate = true: Scaleway then generates and renews the Let's Encrypt certificate for www.shift2eu.com, which PRD #297 hosting decision 10's CAA record pins (a certificate from Secret Manager would be billed and would need a secret in the state)."
+    condition     = try(scaleway_edge_services_dns_stage.site.cache_stage_id, null) == scaleway_edge_services_cache_stage.site.id
+    error_message = "scaleway_edge_services_dns_stage.site must hand every request to scaleway_edge_services_cache_stage.site (cache_stage_id = its id): with no custom domain there is no certificate to terminate, so the chain is DNS -> cache -> backend, and a DNS stage still pointing at a TLS stage either fails the apply or serves through a certificate nothing needs."
   }
 
   assert {
@@ -88,28 +93,23 @@ run "one_pipeline_serves_www_from_the_site_bucket" {
   }
 }
 
-# The request's whole path, stage by stage: DNS (www.shift2eu.com) -> TLS (the managed certificate) -> cache ->
-# backend (the site bucket in website mode), entered through the head stage. Each stage names the one before it by
-# id, so a stage chained to another pipeline's stage, or a stage nothing points at, answers nothing. Everything
-# the pipeline is made of is subscribed in the site's project, so no Edge Services resource lands in the
-# organization's default project; the head stage names no project of its own (the provider's schema has none:
-# it belongs to the pipeline's). The Starter plan is the one PRD #297 hosting decision 9 priced.
+# The request's whole path, stage by stage: DNS -> cache -> backend (the site bucket in website mode), entered
+# through the head stage. Each stage names the one before it by id, so a stage chained to another pipeline's
+# stage, or a stage nothing points at, serves nothing. Everything the pipeline is made of is subscribed in the
+# site's project, so no Edge Services resource lands in the organization's default project; the head stage
+# names no project of its own (the provider's schema has none: it belongs to the pipeline's). The Starter plan
+# is the one PRD #297 hosting decision 9 priced.
 run "the_chain_covers_every_stage_and_names_the_site_project" {
   command = apply
 
   assert {
     condition     = scaleway_edge_services_head_stage.site.head_stage_id == scaleway_edge_services_dns_stage.site.id
-    error_message = "scaleway_edge_services_head_stage.site must enter the pipeline at scaleway_edge_services_dns_stage.site (head_stage_id = its id): the DNS stage is where www.shift2eu.com's traffic arrives, and a head stage pointing at another stage serves another path."
+    error_message = "scaleway_edge_services_head_stage.site must enter the pipeline at scaleway_edge_services_dns_stage.site (head_stage_id = its id): the DNS stage is where the container's own requests arrive, and a head stage pointing at another stage serves another path."
   }
 
   assert {
     condition     = scaleway_edge_services_cache_stage.site.backend_stage_id == scaleway_edge_services_backend_stage.site.id
     error_message = "scaleway_edge_services_cache_stage.site must fetch from scaleway_edge_services_backend_stage.site (backend_stage_id = its id): the cache in front of another backend, or of none, does not serve the site bucket."
-  }
-
-  assert {
-    condition     = scaleway_edge_services_tls_stage.site.cache_stage_id == scaleway_edge_services_cache_stage.site.id
-    error_message = "scaleway_edge_services_tls_stage.site must terminate TLS in front of scaleway_edge_services_cache_stage.site (cache_stage_id = its id): a TLS stage chained to no cache stage leaves the managed certificate out of the chain that answers www.shift2eu.com."
   }
 
   assert {
@@ -129,10 +129,49 @@ run "the_chain_covers_every_stage_and_names_the_site_project" {
         scaleway_edge_services_pipeline.site.project_id,
         scaleway_edge_services_backend_stage.site.project_id,
         scaleway_edge_services_cache_stage.site.project_id,
-        scaleway_edge_services_tls_stage.site.project_id,
         scaleway_edge_services_dns_stage.site.project_id,
       ] : project_id == scaleway_account_project.site.id
     ])
-    error_message = "the plan, the pipeline and the backend, cache, TLS and DNS stages must all be subscribed in scaleway_account_project.site.id (project_id = its id): that project is the deploy key's boundary, and a resource in the organization's default project is one the site's IAM policy does not scope."
+    error_message = "the plan, the pipeline and the backend, cache and DNS stages must all be subscribed in scaleway_account_project.site.id (project_id = its id): that project is the deploy key's boundary, and a resource in the organization's default project is one the site's IAM policy does not scope."
+  }
+}
+
+# pipeline_www = true brings the pipeline's www custom domain and its TLS stage back (ADR 0045, *The
+# upstream*; R8's rollback): the milestone 3 chain, DNS -> TLS -> cache -> backend, with the managed
+# certificate at the TLS stage. The stage's certificate is requested only when the stage is created, so its
+# lifecycle block sets create_before_destroy = true - a lifecycle block is nothing a run can assert, and
+# dev/infra-rules.sh holds the one scaleway_edge_services_tls_stage "site" to it ([tls-stage-lifecycle],
+# issue #541). The stage is gated by pipeline_www, so its absence above and its presence here are one
+# setting's two states: each run reads its own.
+run "pipeline_www_restores_the_www_chain" {
+  command = apply
+
+  variables {
+    pipeline_www = true
+  }
+
+  assert {
+    condition     = length(scaleway_edge_services_tls_stage.site) == 1
+    error_message = "with pipeline_www = true the pipeline must hold exactly one scaleway_edge_services_tls_stage named site: www is a custom domain of the pipeline again, so the certificate that serves it has a stage to be terminated at (ADR 0045, *The upstream*)."
+  }
+
+  assert {
+    condition     = try(scaleway_edge_services_tls_stage.site[0].managed_certificate, false)
+    error_message = "scaleway_edge_services_tls_stage.site must set managed_certificate = true: Scaleway issues and renews the www certificate (PRD #297 hosting decision 9), and an unmanaged one would need a certificate and a key in the state."
+  }
+
+  assert {
+    condition     = try(scaleway_edge_services_tls_stage.site[0].cache_stage_id, null) == scaleway_edge_services_cache_stage.site.id
+    error_message = "scaleway_edge_services_tls_stage.site must terminate in front of scaleway_edge_services_cache_stage.site (cache_stage_id = its id): the TLS stage of the milestone 3 chain hands the request to the cache, which fetches from the backend, and a TLS stage in front of another stage serves another path."
+  }
+
+  assert {
+    condition     = try(scaleway_edge_services_dns_stage.site.tls_stage_id, null) == scaleway_edge_services_tls_stage.site[0].id
+    error_message = "with pipeline_www = true scaleway_edge_services_dns_stage.site must enter the chain at the TLS stage (tls_stage_id = its id): the www fqdn is terminated there, and a DNS stage left pointing at the cache stage would answer https for www with no certificate of its own."
+  }
+
+  assert {
+    condition     = try(length(scaleway_edge_services_dns_stage.site.fqdns) == 1 && contains(scaleway_edge_services_dns_stage.site.fqdns, "www.shift2eu.com"), false)
+    error_message = "with pipeline_www = true scaleway_edge_services_dns_stage.site's fqdns must be [\"www.shift2eu.com\"]: it is the one custom domain the pipeline served before ADR 0045, and the Rollback gives it back so www reaches the bucket through the pipeline again."
   }
 }

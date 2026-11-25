@@ -1,0 +1,1 @@
+{"schemaVersion": 2, "source": "aws", "resources": [{"id": "escaped", "rawType": "x", "category": "compute.vm", "region": "eu-central-1", "iD": "case twin"}]}

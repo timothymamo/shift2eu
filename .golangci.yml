@@ -16,15 +16,19 @@ version: "2"
 #     milestone 2), is behind the browser tag; its test files have the strict
 #     rule browser-smoke-test, and chromedp-only-in-the-browser-test keeps the
 #     browser driver out of every other file.
-# e2e, integration and browser are the only custom build tags. Never negate
-# them: lint always sets all three, so a file behind !e2e, !integration or
-# !browser would never be linted, and test/lint refuses such a build
-# constraint.
+#   - the site front's behaviour test, test/sitefront (PRD #297 milestone 4,
+#     docs/adr/0045), is behind the sitefront tag; its test files have the
+#     strict rule sitefront-behaviour-test.
+# e2e, integration, browser and sitefront are the only custom build tags.
+# Never negate them: lint always sets all four, so a file behind !e2e,
+# !integration, !browser or !sitefront would never be linted, and test/lint
+# refuses such a build constraint.
 run:
   build-tags:
     - e2e
     - integration
     - browser
+    - sitefront
 
 linters:
   default: standard
@@ -1454,6 +1458,70 @@ linters:
           deny:
             - pkg: os
               desc: test/browser's doc.go imports nothing; its tests, behind the browser tag, are held by browser-smoke-test
+        # The site front's tests (PRD #297 milestone 4, docs/adr/0045): the
+        # static Caddyfile test, untagged, and the behaviour test behind the
+        # sitefront tag, which make test-sitefront runs. The behaviour test
+        # starts the pinned Caddy container and a local TLS upstream with a CA
+        # of its own, so the test files are held to exactly the standard
+        # packages they import, each ending in $, and no package of the module.
+        # The package's one production file, doc.go, imports nothing and is
+        # held by sitefront-test-doc, as test/browser's is by
+        # browser-smoke-test-doc. The tests run in their own test binary,
+        # which no composition root links.
+        sitefront-behaviour-test:
+          list-mode: strict
+          files:
+            - "**/test/sitefront/**/*_test.go"
+            - "**/test/sitefront/*_test.go"
+          allow:
+            - bufio$
+            - bytes$
+            - compress/gzip$
+            - context$
+            - crypto/ecdsa$
+            - crypto/elliptic$
+            - crypto/rand$
+            - crypto/tls$
+            - crypto/x509$
+            - crypto/x509/pkix$
+            - encoding/json$
+            - encoding/pem$
+            - errors$
+            - fmt$
+            - io$
+            - math/big$
+            - net$
+            - net/http$
+            - net/http/httptest$
+            - net/url$
+            - os$
+            - os/exec$
+            - path/filepath$
+            - slices$
+            - strconv$
+            - strings$
+            - sync$
+            - testing$
+            - time$
+          deny:
+            - pkg: github.com/timothymamo/shift2eu/
+              desc: the front's tests read infra/site and site/ as files and drive the container as a black box; they import no package of the module
+        # test/sitefront's one production file, doc.go, untagged so that
+        # go test ./... accepts the package: it imports nothing, so the rule
+        # allows nothing (allow: [] and the one deny entry, os, as
+        # config-is-pure). A rule of its own rather than an entry of
+        # test-docs-are-pure, which test/architecture's package check skips:
+        # sitefront-behaviour-test holds the test files alone, and the package
+        # check must read a rule that holds the package's own imports.
+        sitefront-test-doc:
+          list-mode: strict
+          files:
+            - "**/test/sitefront/**"
+            - "!$test"
+          allow: []
+          deny:
+            - pkg: os
+              desc: test/sitefront's doc.go imports nothing; its tests are held by sitefront-behaviour-test
         # The composition roots' _test.go files (issue #111). The strict
         # rules composition-root and web-composition-root skip test files
         # (!$test), yet a test is compiled into the root's package and runs in
@@ -1643,7 +1711,8 @@ linters:
         # test/site/internal/jsscan, which Go's internal rule keeps out of reach of the roots, is
         # taken out with a negated glob as test/architecture's internal tree is. test/ci (issue
         # #275), the behaviour tests of .github/scripts, is held here as well: its doc.go is its
-        # one production file and imports nothing.
+        # one production file and imports nothing. test/sitefront's doc.go is held by
+        # sitefront-test-doc instead, as test/browser's is by browser-smoke-test-doc.
         test-docs-are-pure:
           list-mode: strict
           files:

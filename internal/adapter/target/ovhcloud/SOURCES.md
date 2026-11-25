@@ -5,12 +5,14 @@ in taxonomy terms. This file records where each fact comes from, so the snapshot
 
 ## How it was compiled
 
-- **Retrieved on:** 2026-11-14, the date the extra-storage prices were read and every compute plan price
-  re-checked (issue #219, below); the other plans and prices were read on 2026-11-13 (PRD #190 milestone 3,
-  ADR 0024). The snapshot's `retrievedOn` and `sourceURL` name the prices, the facts most likely to change. The
-  regions come from the regions page, read on 2026-11-10, and the capabilities were last re-verified on
-  2026-11-11 (below). Every page cited below was fetched on one of those four dates, without credentials
-  and without calling any OVHcloud API. A page fetched or saved to read the data from, such as a browser
+- **Retrieved on:** 2026-11-25, the date the offerings of PRD #552 milestone 5 were read and every
+  existing plan and storage price, fixed fee and regions-page tick was re-checked against the prices page
+  and the regions page (below). The existing plans and prices were first read on 2026-11-13 (PRD #190
+  milestone 3, ADR 0024) and 2026-11-14 (issue #219); none changed on 2026-11-25. The snapshot's
+  `retrievedOn` and `sourceURL` name the prices, the facts most likely to change (one date per snapshot,
+  ADR 0007). The regions of the existing offerings were read on 2026-11-10 and their capabilities last
+  re-verified on 2026-11-11 (below). Every page cited below was fetched on one of those dates, without
+  credentials and without calling any OVHcloud API. A page fetched or saved to read the data from, such as a browser
   copy of a price page, is kept in a scratch directory outside the repository, treated as data, and never
   committed (`TestNoTrackedSavedPages` in `test/lint`, issue #212).
 - **`sourceURL`** is OVHcloud's Public Cloud price list in its Ireland edition,
@@ -61,7 +63,26 @@ in taxonomy terms. This file records where each fact comes from, so the snapshot
   (LUKS) volumes. None was found, and no page states that an encrypted volume costs what its unencrypted
   class costs (*Block Storage LUKS*). Only those pages and the volume prices were read again: no offering,
   capability or region changed, and the volume prices on the prices page are unchanged. Nothing in
-  `catalog.json` changed, and `retrievedOn` stays 2026-11-14.
+  `catalog.json` changed, and `retrievedOn` stayed 2026-11-14.
+- **Read on 2026-11-25 for PRD #552 milestone 5 (more taxonomy categories).** The prices page, the
+  regions page, the product pages (Ireland edition) of Valkey, MongoDB, Load Balancer, Managed Private
+  Registry and File Storage, and the documentation cited in the new sections were read live, with an
+  anonymous client: `www.ovhcloud.com` answered it with the full pages, the prices page's price data
+  included, so no page had to be saved by hand. Roadmap issues #54 and #1194 were read for File Storage
+  Service (*Left out on purpose*). `ovh/ovhcloud-docs` `develop` was then at
+  [`7bfee4324ea4b0de720da6df5d997571557fd7c9`](https://github.com/ovh/ovhcloud-docs/tree/7bfee4324ea4b0de720da6df5d997571557fd7c9)
+  (2026-11-24), read only to find the pages. Ten offerings were added: *Databases for Valkey*, its
+  *Multi-node* and *Multi-node 3-AZ* forms (`cache.redis`), *Managed MongoDB*, *Managed MongoDB 3-AZ*,
+  *Managed MongoDB Advanced* and *Managed MongoDB Advanced 3-AZ* (`database.mongodb`), *Load Balancer*
+  and *Load Balancer 3-AZ* (`network.loadbalancer`) and *Managed Private Registry*
+  (`registry.container`). `storage.file`, `messaging.topic` and `serverless.container` stay unserved
+  (*Left out on purpose*). The same read re-checked the **whole existing snapshot**: every plan price of
+  every existing offering (704 plan and region prices, the Linux hourly price for instances), every
+  plan's vCPU and memory, every storage price and the Managed Kubernetes fixed fees, each as the page's
+  hourly price × 730, and the regions page's ticks of every existing product. Nothing changed: no
+  existing offering, plan, price, capability, region or default region differs from before, and the
+  regions page carried no beta mark in any EMEA cell. `retrievedOn` in `catalog.json` is this date,
+  2026-11-25.
 
 ## Prices
 
@@ -119,7 +140,18 @@ read on 2026-11-13, or on 2026-11-14 where a section says so (issue #219). "The 
   for a database is its data size, so the storage price is not multiplied by the count again. The page's
   own data behind each storage line also carries a monthly figure that the page does not display (€0.25,
   €0.37 and €0.44 a month per node) and that is not the displayed hourly price × 730; the displayed
-  hourly price, which the guide calls the source of truth, is the one used.
+  hourly price, which the guide calls the source of truth, is the one used. Valkey and MongoDB (read on
+  2026-11-25) follow the same rule: their tables' column is "Price (excl. VAT / hour / node)", the data
+  carries a `per-node` price beside the `total`, and the total is the per-node price × the tier's nodes
+  in every row (Valkey Discovery/Essential 1, Production/Business 2; MongoDB Production and Advanced 3).
+  The Valkey tables give memory and a "vCore" count per node and no storage column or storage price, so
+  a Valkey plan records the page's vCPUs and memory, no included storage, and its offering no storage
+  price (a cache is matched on memory alone, ADR 0046). The MongoDB tables give a "Usable storage" range
+  and a "Price per GB of additional storage" per node, priced as above at the tier's 3 nodes.
+- **Not priced.** Load Balancer and Managed Private Registry are sold by size or plan (S, M, L, XL;
+  Small, Medium, Large), which no inventory field records, so their offerings carry no plan, storage
+  price or fixed fee, and an estimate reports them "not priced" (PRD #552, decided question 6). The
+  prices page's figures for them are in their sections, for the reader only.
 - **Managed Kubernetes.** The page prices only the control plane; worker nodes are Public Cloud
   instances "billed at standard price". A Kubernetes plan is therefore a worker node flavour at its
   *Instances* price, with the flavours the Kubernetes regions page offers. The Free plan's control plane
@@ -128,8 +160,9 @@ read on 2026-11-13, or on 2026-11-14 where a section says so (issue #219). "The 
   cluster (`fixedFees`, ADR 0026): 0.09 × 730 = `65.70` a month where the Standard plan is sold, and
   `0.00` where the control plane is "Included".
 - **Plans chosen.** Instances: the General Purpose (B3, B2), Compute Optimised (C3) and Memory Optimised
-  (R3) ranges, the sizes a general workload is matched against. Metal Instances, MySQL and PostgreSQL:
-  every flavour the page lists. The plans left out are listed under *Left out on purpose*.
+  (R3) ranges, the sizes a general workload is matched against. Metal Instances, MySQL, PostgreSQL,
+  Valkey and MongoDB: every flavour the page lists, but MongoDB's free Discovery flavour. The plans left
+  out are listed under *Left out on purpose*.
 
 ## Licences of the sources
 
@@ -162,7 +195,8 @@ read on 2026-11-13, or on 2026-11-14 where a section says so (issue #219). "The 
   it, which is noted.
 - **1-AZ and 3-AZ regions:** Paris and Milan are 3-AZ regions (three availability zones); the others are
   1-AZ regions. OVHcloud sets a product's deployment mode by the region: Object Storage, Managed Kubernetes
-  and Public Cloud Databases deployed in Paris or Milan are 3-AZ deployments. Where a product reaches
+  and Public Cloud Databases deployed in Paris or Milan are 3-AZ deployments, and so is a Load Balancer
+  there (*Load Balancer 3-AZ*). Where a product reaches
   zone-level high availability only in the 3-AZ regions, the snapshot lists a variant whose name has
   "3-AZ" in `MIL` and `PAR` only, beside the offering in the 1-AZ regions (PRD #11, *a capability limited
   to some regions makes a separate offering*). For the same reason, a capability missing from some of a product's
@@ -183,7 +217,10 @@ read on 2026-11-13, or on 2026-11-14 where a section says so (issue #219). "The 
   *Managed PostgreSQL Multi-node* (the Business/Production plan), *Managed MySQL Multi-node Advanced*
   and *Managed PostgreSQL Multi-node Advanced* (the Enterprise/Advanced plan, which adds read
   replicas), each with its *3-AZ* form, and *Block Storage 3-AZ Regional Classic*, named after the
-  volume class. A **Needs:** line names the tier its offering is named after,
+  volume class. Since PRD #552 milestone 5 the Valkey base tier is the Discovery/Essential plan (*Databases
+  for Valkey*), with *Databases for Valkey Multi-node* (Production/Business) and its *3-AZ* form; the
+  MongoDB base tier is the Production plan (*Managed MongoDB*), with *Managed MongoDB Advanced*, which adds
+  point-in-time restore, and the *3-AZ* form of each. A **Needs:** line names the tier its offering is named after,
   or the product's default tier. **Naming order:** a variant is `<base offering> <tier>`, and a
   region-group suffix such as `3-AZ` comes after the tier (*Managed PostgreSQL Multi-node 3-AZ*). The
   1-AZ variant's name is then a prefix of the 3-AZ one, so it wins ties by name, and a resource that
@@ -242,6 +279,12 @@ the Block Storage encryption page
 <https://docs.ovhcloud.com/en/guides/public-cloud/compute/encrypting-a-block-storage-volume-with-luks>
 (DE1, WAW1, RBX-A, EU-WEST-PAR and EU-SOUTH-MIL as OpenStack regions).
 
+Load Balancer uses the compute (OpenStack) names (the prices page's availability for it: DE1,
+EU-SOUTH-MIL, EU-WEST-PAR, GRA1 to GRA11, RBX-A, SBG5, SBG7, WAW1); Valkey and MongoDB use the database
+names; Managed Private Registry uses DE, GRA, EU-WEST-PAR and EU-SOUTH-MIL (its FAQ's region table). Each
+maps to its code as in the table above. On 2026-11-25 the regions page still listed the same eight EMEA
+locations.
+
 ## Default region
 
 `GRA` (Gravelines, France) is the snapshot's `defaultRegion`: the region a cost estimate uses when the user names
@@ -255,6 +298,14 @@ flavours (*Managed Kubernetes Service*). `GRA` is kept over `LIM`, which ties it
 already the default and is the first of the declared codes, kept in code order: no price makes either one a
 better default. The eight offerings available only in `MIL` and `PAR` (the seven 3-AZ offerings and Block
 Storage LUKS Zonal) are still estimated when the user names `--region PAR` or `MIL`.
+
+**Re-checked on 2026-11-25 (PRD #552 milestone 5)** with the ten new offerings, of 30 in all: `GRA` and
+`LIM` host 18 each (the 12 above, *Databases for Valkey*, *Databases for Valkey Multi-node*, *Managed
+MongoDB*, *Managed MongoDB Advanced*, *Load Balancer* and *Managed Private Registry*); `SBG` hosts 17 (no
+Managed Private Registry), `RBX` and `WAW` 16, and `PAR` and `MIL` 14 each (the 9 above, the three 3-AZ
+database offerings, *Load Balancer 3-AZ* and *Managed Private Registry*). `GRA` and `LIM` still tie, and
+both price every plan of their offerings (the Gen 2 Valkey and MongoDB flavours are priced in both, not
+in `RBX`), so `GRA` stays the default for the same reason as before.
 
 The choice says nothing about which region is cheapest or best. Prices are the same in every 1-AZ region
 where a plan is offered; the 3-AZ regions charge more for databases (*Prices*).
@@ -370,6 +421,152 @@ type `high-speed-gen2-luks`). Each volume sits in one availability zone of the r
 
 - **No storage price**, as for *Block Storage LUKS*, re-examined on 2026-11-14 (issue #219): the prices page, with its *Locations* filter on Paris or Milan, lists the High Speed Gen2 volume (`volume.high-speed-gen2`, €0.000119 per GB and hour) and no `high-speed-gen2-luks` type, and neither the storage class page nor the encryption page gives a price for encrypted volumes (*Left out on purpose*). Re-checked on 2026-11-20 (issue #244), with the same result: High Speed Gen2 is still €0.000119 per GB and hour, and no page read prices an encrypted volume (*Block Storage LUKS*).
 
+### Databases for Valkey
+
+Category `cache.redis`: Public Cloud Databases for Valkey ("Databases for Valkey" on the product page;
+Valkey 8.1 and 9.1) on the Discovery/Essential plan, one node, in the 1-AZ regions. Valkey is a fork of
+Redis OSS and speaks the Redis protocol (the category's definition, ADR 0046). This is the base offering
+(tier-variant rule): the 2-node plan adds a capability and is *Databases for Valkey Multi-node*, with its
+*3-AZ* form. The name is OVHcloud's own; no OVHcloud page calls it "Managed Valkey". Pages, read
+2026-11-25: <https://www.ovhcloud.com/en-ie/public-cloud/valkey/>,
+<https://docs.ovhcloud.com/en/guides/public-cloud/databases/valkey-capabilities> (the Valkey capabilities
+page), <https://docs.ovhcloud.com/en/guides/public-cloud/databases/valkey-advanced-parameters-references>,
+<https://docs.ovhcloud.com/en/guides/public-cloud/databases/capabilities>,
+<https://docs.ovhcloud.com/en/guides/public-cloud/databases/public-cloud-databases-regions-comparison>
+(the deployment modes page), <https://docs.ovhcloud.com/en/guides/public-cloud/databases/backups>,
+<https://docs.ovhcloud.com/en/guides/public-cloud/databases/concepts-security-overview> (the security
+page), <https://docs.ovhcloud.com/en/guides/public-cloud/databases/faq>, and the prices page.
+
+- `encryption-at-rest`: the security page says that "for all the databases engines such as MySQL,
+  PostgreSQL, Valkey and so on, at-rest data encryption covers both active service instances as well as
+  service backups in cloud object storage", and answers "Are the nodes and the backups encrypted at
+  rest?" with "Yes, on every plan". **Needs:** nothing beyond the default Discovery/Essential plan.
+- `snapshots` (a data set's point-in-time copy, ADR 0046): with the persistence parameter at `rdb`,
+  "Valkey writes RDB snapshots to disk, which are used for backups", and "Discovery plan clusters are
+  automatically backed up every 12 hours. Backup retention is 1 day." (Valkey capabilities page); the
+  backups page gives Valkey "Backup on object storage", twice a day. **Needs:** the advanced parameter
+  `valkey_persistence` at `rdb`: at `off` "no RDB snapshot is written. Backups and forks are unavailable"
+  (Valkey capabilities page). No page states which value is the default: the advanced parameters page
+  (<https://docs.ovhcloud.com/en/guides/public-cloud/databases/valkey-advanced-parameters-references>)
+  lists `valkey_persistence` with "values: off , rdb" and no default. But the Valkey capabilities page
+  (<https://docs.ovhcloud.com/en/guides/public-cloud/databases/valkey-capabilities>) says, with no
+  setting named, that "Discovery plan clusters are automatically backed up every 12 hours", and backups
+  need `rdb`, so `rdb` is the default in practice; keep the capability unless a page says otherwise.
+- No `node-high-availability` and no `zone-high-availability`: the plan runs one node ("Discovery: 1 node",
+  Valkey capabilities page). See *Left out on purpose*.
+- Regions `GRA`, `LIM`, `RBX`, `SBG`, `WAW`: the regions page ticks Valkey in each, and the Valkey
+  capabilities page says the offer is available "in all Public Cloud 1-AZ and 3-AZ regions". As for
+  *Managed MySQL*, no page states that the one-node plan runs in the 3-AZ regions (the capabilities
+  page's plan overview has "Multi AZ" columns for the multi-node plans only), so `MIL` and `PAR` are not
+  listed; see *Left out on purpose*.
+- **Minimum and fixed node count** (PRD #552, decided question 10; follow-up issue #558): the plan runs
+  exactly 1 node. A cache resource with `count` 2 pointed here is priced at 2 nodes, which this plan does
+  not sell.
+
+- **Prices** (prices page, *Databases*, table "Essential/Discovery Plan - Databases for Valkey", read 2026-11-25). Plans: the Gen 2 Essential flavours, priced in `GRA`, `LIM`, `SBG` and `WAW` only (no Roubaix price), and the Gen 3 Discovery flavours, in all five 1-AZ regions at one price. vCPU ("vCore") and memory are per node, as the page gives them; the page gives no storage, so no plan includes any. The plan's price is the page's "Price (excl. VAT / hour / node)" × 730, so an estimate multiplies it by the resource's count, its nodes (ADR 0025). The tier runs 1 node: the page's total is the per-node price × 1. No price needed rounding.
+
+| Plan | vCPU | Memory | EUR/hour per node | EUR/month per node (× 730) | Price regions |
+|---|---|---|---|---|---|
+| `Essential DB1-4` | 2 | 4 GB × 1 node | 0.0648 | `47.304` | `GRA`, `LIM`, `SBG`, `WAW` |
+| `Essential DB1-7` | 2 | 7 GB × 1 node | 0.1311 | `95.703` | `GRA`, `LIM`, `SBG`, `WAW` |
+| `Discovery B3-4` | 1 | 4 GB × 1 node | 0.0777 | `56.721` | all |
+| `Discovery B3-8` | 2 | 8 GB × 1 node | 0.1476 | `107.748` | all |
+| `Discovery B3-16` | 4 | 16 GB × 1 node | 0.3298 | `240.754` | all |
+| `Discovery B3-32` | 8 | 32 GB × 1 node | 0.6596 | `481.508` | all |
+
+- **No storage price:** the Valkey tables price no storage and no additional storage; a cache is priced on its plan alone.
+
+### Databases for Valkey Multi-node
+
+Category `cache.redis`: Public Cloud Databases for Valkey on the Production/Business plan (2 nodes, "a
+primary node and a replica node") in the 1-AZ regions. A tier variant of *Databases for Valkey*
+(tier-variant rule). Pages, read 2026-11-25: <https://www.ovhcloud.com/en-ie/public-cloud/valkey/>,
+<https://docs.ovhcloud.com/en/guides/public-cloud/databases/valkey-capabilities>,
+<https://docs.ovhcloud.com/en/guides/public-cloud/databases/capabilities>,
+<https://docs.ovhcloud.com/en/guides/public-cloud/databases/public-cloud-databases-regions-comparison>
+(the deployment modes page), <https://docs.ovhcloud.com/en/guides/public-cloud/databases/backups>,
+<https://docs.ovhcloud.com/en/guides/public-cloud/databases/concepts-security-overview>,
+<https://docs.ovhcloud.com/en/guides/public-cloud/databases/faq>, and the prices page.
+
+- `encryption-at-rest`: as for *Databases for Valkey*; the security page states it "on every plan".
+- `snapshots`: as for *Databases for Valkey*; "Production plan clusters are automatically backed up every
+  12 hours. Backup retention is 3 days." (Valkey capabilities page). **Needs:** `valkey_persistence` at
+  `rdb`.
+- `node-high-availability`. **Needs:** the Production/Business plan, the plan this offering is named after
+  ("Production: 2 nodes (a primary node and a replica node)", Valkey capabilities page). **Scope:
+  node-level only**, by the node-level bar (*Rules applied*): "in case of a node failure, the failover
+  mechanism is automatic, whatever the DBMS is" (FAQ); in a 1-AZ region "the nodes of a multi-node
+  database service are deployed in different physical hosts offering resilience to host outage", and
+  "this single AZ setup offers resilience against node and disk failures", but the nodes "may be deployed
+  within a single data center" (deployment modes page). It survives the loss of a node or host, not of
+  the zone, so `zone-high-availability` is not claimed.
+- Regions `GRA`, `LIM`, `RBX`, `SBG`, `WAW`: as for *Databases for Valkey*.
+- **Fixed node count** (decided question 10, issue #558): the plan runs exactly 2 nodes. A 1-node cache
+  pointed here is priced at 1 node, half what OVHcloud bills; a 3-node one at 3 nodes, 1.5 times what it
+  bills.
+
+- **Prices** (prices page, *Databases*, table "Business/Production Plan - Databases for Valkey", read 2026-11-25). Plans: the Gen 2 Business flavours, priced in `GRA`, `LIM`, `SBG` and `WAW` only (no Roubaix price), and the Gen 3 Production flavours, in all five 1-AZ regions at one price. vCPU ("vCore") and memory are per node; no storage is given. The plan's price is the page's price per node × 730 (ADR 0025). The tier runs 2 nodes: the page's total is the per-node price × 2 in every row. No price needed rounding.
+
+| Plan | vCPU | Memory | EUR/hour per node | EUR/hour total (2 nodes) | EUR/month per node (× 730) | Price regions |
+|---|---|---|---|---|---|---|
+| `Business DB1-4` | 2 | 4 GB per node × 2 nodes | 0.0746 | 0.1492 | `54.458` | `GRA`, `LIM`, `SBG`, `WAW` |
+| `Business DB1-7` | 2 | 7 GB per node × 2 nodes | 0.1658 | 0.3316 | `121.034` | `GRA`, `LIM`, `SBG`, `WAW` |
+| `Business DB1-15` | 4 | 15 GB per node × 2 nodes | 0.2471 | 0.4942 | `180.383` | `GRA`, `LIM`, `SBG`, `WAW` |
+| `Business DB1-30` | 8 | 30 GB per node × 2 nodes | 0.4882 | 0.9764 | `356.386` | `GRA`, `LIM`, `SBG`, `WAW` |
+| `Business DB1-60` | 16 | 60 GB per node × 2 nodes | 0.9764 | 1.9528 | `712.772` | `GRA`, `LIM`, `SBG`, `WAW` |
+| `Business DB1-120` | 32 | 120 GB per node × 2 nodes | 1.9468 | 3.8936 | `1421.164` | `GRA`, `LIM`, `SBG`, `WAW` |
+| `Production B3-8` | 2 | 8 GB per node × 2 nodes | 0.1476 | 0.2952 | `107.748` | all |
+| `Production B3-16` | 4 | 16 GB per node × 2 nodes | 0.3297 | 0.6594 | `240.681` | all |
+| `Production B3-32` | 8 | 32 GB per node × 2 nodes | 0.6595 | 1.319 | `481.435` | all |
+| `Production B3-64` | 16 | 64 GB per node × 2 nodes | 1.319 | 2.638 | `962.87` | all |
+| `Production B3-128` | 32 | 128 GB per node × 2 nodes | 2.6379 | 5.2758 | `1925.667` | all |
+| `Production B3-256` | 64 | 256 GB per node × 2 nodes | 5.2757 | 10.5514 | `3851.261` | all |
+
+- **No storage price:** as for *Databases for Valkey*.
+
+### Databases for Valkey Multi-node 3-AZ
+
+Category `cache.redis`: Public Cloud Databases for Valkey on the Production plan, Multi AZ, in the 3-AZ
+regions. A tier variant of *Databases for Valkey* (tier-variant rule). Pages, read 2026-11-25:
+<https://www.ovhcloud.com/en-ie/public-cloud/valkey/>,
+<https://docs.ovhcloud.com/en/guides/public-cloud/databases/valkey-capabilities>,
+<https://docs.ovhcloud.com/en/guides/public-cloud/databases/capabilities>,
+<https://docs.ovhcloud.com/en/guides/public-cloud/databases/public-cloud-databases-regions-comparison>
+(the deployment modes page),
+<https://docs.ovhcloud.com/en/guides/public-cloud/cross-functional/deployments-modes-reference-architecture>
+(the reference architecture page), <https://docs.ovhcloud.com/en/guides/public-cloud/databases/backups>,
+<https://docs.ovhcloud.com/en/guides/public-cloud/databases/concepts-security-overview>,
+<https://docs.ovhcloud.com/en/guides/public-cloud/databases/faq>, and the prices page.
+
+- `encryption-at-rest` and `snapshots`: as for *Databases for Valkey Multi-node*; the pages state them per
+  engine and plan, not per region. **Needs:** `valkey_persistence` at `rdb` for `snapshots`.
+- `zone-high-availability`. **Needs:** the Production plan, Multi AZ, the plan this offering is named
+  after. **Scope: zone-level.** In a 3-AZ region a multi-node database service "is deployed across three
+  independent availability zones, ensuring service continuity even if one zone experiences an outage"
+  (deployment modes page); the reference architecture page's "DBaaS" row says that in an AZ failure
+  "databases and data will remain available. The Production and Advanced offerings include at least two
+  nodes, ensuring no service interruption." The capabilities page gives a 99.95% SLA for "Production
+  Multi AZ".
+- `node-high-availability`: implied by zone level (ADR 0011); failover after a node failure is automatic
+  (FAQ).
+- Regions `MIL`, `PAR`: the regions page ticks Valkey in "3-AZ Paris" and "3-AZ Milan"; the prices page
+  prices the Production flavours there (`EU-WEST-PAR`, `EU-SOUTH-MIL`).
+- **Fixed node count** (decided question 10, issue #558): exactly 2 nodes, as for *Databases for Valkey
+  Multi-node*.
+
+- **Prices** (prices page, *Databases*, table "Business/Production Plan - Databases for Valkey", *Locations* filter on Paris or Milan, the same in both, read 2026-11-25). Plans: the Gen 3 Production flavours; the page offers no Business (Gen 2) flavour there. vCPU and memory per node; the plan's price is the page's price per node × 730 (ADR 0025); the tier runs 2 nodes, and the total is the per-node price × 2 in every row. No price needed rounding.
+
+| Plan | vCPU | Memory | EUR/hour per node | EUR/hour total (2 nodes) | EUR/month per node (× 730) | Price regions |
+|---|---|---|---|---|---|---|
+| `Production B3-8` | 2 | 8 GB per node × 2 nodes | 0.1563 | 0.3126 | `114.099` | all |
+| `Production B3-16` | 4 | 16 GB per node × 2 nodes | 0.3505 | 0.701 | `255.865` | all |
+| `Production B3-32` | 8 | 32 GB per node × 2 nodes | 0.7012 | 1.4024 | `511.876` | all |
+| `Production B3-64` | 16 | 64 GB per node × 2 nodes | 1.4022 | 2.8044 | `1023.606` | all |
+| `Production B3-128` | 32 | 128 GB per node × 2 nodes | 2.8045 | 5.609 | `2047.285` | all |
+| `Production B3-256` | 64 | 256 GB per node × 2 nodes | 5.6088 | 11.2176 | `4094.424` | all |
+
+- **No storage price:** as for *Databases for Valkey*.
+
 ### Instances
 
 Category `compute.vm`: Public Cloud virtual machine instances (General Purpose, Compute and Memory
@@ -426,6 +623,58 @@ page is titled "Virtual Machine Instances". Pages:
 | `r3-1024` | 128 | 1024 GB | local storage, priced apart | 4.236 | `3092.28` | all |
 
 - **Storage price** (prices page, *Block Storage*, read 2026-11-14, issue #219): the Classic volume row, €0.000059 per GB and hour, × 730 = 0.04307, rounded half up to `0.0431` per GiB a month, one price in all seven regions (the page's data prices `volume.classic` the same in DE1, EU-SOUTH-MIL, EU-WEST-PAR, GRA, RBX-A, SBG and WAW1). It is the price of the storage beyond what a plan includes: all of a B3, C3 or R3 instance's disk, and a B2 instance's disk above its SSD. A Public Cloud instance's persistent disks beyond its plan are Block Storage volumes: an additional disk is a volume attached to the instance (<https://docs.ovhcloud.com/en/guides/public-cloud/compute/create-and-configure-an-additional-disk-on-an-instance>), and an instance can boot from a volume (<https://docs.ovhcloud.com/en/guides/public-cloud/compute/start-instance-on-attached-volume>). Classic is the base class, as under *Block Storage*. The Gen 3 *Local Storage* option (`instance.local-storage-gen3-gb`, "Local storage low latency", €0.0001458 per GB and hour, × 730 = 0.106434) is not the price recorded: the prices page calls it "Ephemeral local storage, designed for hot, temporary data directly on your instances", so it does not hold a migrated machine's persistent disk (*Left out on purpose*). A resource with no storage size gets no volume priced (an absent `storageGiB` is no storage beyond the plan, ADR 0027), although a Gen 3 instance, whose plan includes none of its disk, needs a boot volume, so the estimate for such a VM is its plan price alone, which is too low.
+
+### Load Balancer
+
+Category `network.loadbalancer`: Public Cloud Load Balancer (OpenStack Octavia) in the 1-AZ regions, a
+load balancer OVHcloud runs in front of a pool of backends, with HTTP, HTTPS, TCP, UDP and SCTP
+listeners and TLS termination ("TERMINATED_HTTPS listener is managing the SSL/TLS termination", product
+page). Pages, read 2026-11-25: <https://www.ovhcloud.com/en-ie/public-cloud/load-balancer/>,
+<https://docs.ovhcloud.com/en/guides/public-cloud/network-services/load-balancer-concepts> (the
+concepts page),
+<https://docs.ovhcloud.com/en/guides/public-cloud/network-services/getting-started-load-balancer>,
+<https://docs.ovhcloud.com/en/guides/public-cloud/network-services/loadbalancer-update-size>, and the
+prices page.
+
+- `udp`: "The following protocols are available for incoming traffic: HTTP, HTTPS, TCP, UDP, SCTP."
+  (concepts page, *Listener*); a pool takes "HTTP, HTTPS, PROXY, PROXYV2, SCTP, TCP, or UDP", and the
+  page's compatibility matrix pairs a UDP listener with a UDP pool. The product page's FAQ lists UDP among
+  "the supported protocols for Load Balancer". No page restricts it to some regions or sizes. **Needs:** a
+  UDP listener and pool.
+- No `node-high-availability` and no `zone-high-availability`: no page names a failure that a 1-AZ load
+  balancer keeps serving through (node-level bar, *Rules applied*); see *Left out on purpose*. No `ipv6`:
+  no Load Balancer page mentions IPv6 (*Left out on purpose*).
+- Regions `GRA`, `LIM`, `RBX`, `SBG`, `WAW`: the regions page ticks Load Balancer in each, and the prices
+  page's availability lists GRA1 to GRA11, DE1, RBX-A, SBG5, SBG7 and WAW1. In Paris and Milan a load
+  balancer is the regional, 3-AZ one (getting started page: "Region 3-AZ (spread across three
+  availability zones for high availability)"), so those regions are *Load Balancer 3-AZ*'s.
+
+- **Not priced** (PRD #552, decided question 6): OVHcloud bills a load balancer by its size, S, M, L or XL (update-size page: "small, medium, large, xl"), chosen by bandwidth and connections, which no inventory field records. The offering records no plan and no storage price, and an estimate says "not priced". For the reader only: the prices page, read 2026-11-25, gives Load Balancer S at €0.0083, M at €0.0208, L at €0.0556 and XL at €0.2083 an hour, the same in every region, Paris and Milan included.
+
+### Load Balancer 3-AZ
+
+Category `network.loadbalancer`: Public Cloud Load Balancer in the 3-AZ regions, where it is a regional
+load balancer spread across the zones. Pages, read 2026-11-25:
+<https://www.ovhcloud.com/en-ie/public-cloud/load-balancer/>,
+<https://docs.ovhcloud.com/en/guides/public-cloud/network-services/load-balancer-concepts>,
+<https://docs.ovhcloud.com/en/guides/public-cloud/network-services/getting-started-load-balancer>,
+<https://docs.ovhcloud.com/en/guides/public-cloud/cross-functional/deployments-modes-reference-architecture>
+(the reference architecture page), and the prices page.
+
+- `udp`: as for *Load Balancer*; the concepts page states the protocols for every region.
+- `zone-high-availability`. **Needs:** nothing: every load balancer in Paris and Milan is the regional
+  one. **Scope: zone-level.** The reference architecture page's row "Public Cloud Load Balancer
+  (Octavia)" says that "the regional Load Balancer consists of an active Load Balancer and a passive Load
+  Balancer, each deployed in a separate AZ", and that in an AZ failure "The service will remain available
+  without interruption. In the event of failure of an AZ containing a Load Balancer node, the latter will
+  automatically be moved to the last AZ." The getting started page calls a 3-AZ region one "spread across
+  three availability zones for high availability".
+- `node-high-availability`: implied by zone level (ADR 0011); the same row says "The passive Load
+  Balancer becomes active to ensure continuity of service."
+- Regions `MIL`, `PAR`: the regions page ticks Load Balancer in "3-AZ Paris" and "3-AZ Milan", and the
+  prices page's availability lists EU-WEST-PAR and EU-SOUTH-MIL.
+
+- **Not priced:** as for *Load Balancer*; the prices page gives the same four sizes at the same hourly prices in Paris and Milan.
 
 ### Managed Kubernetes Service
 
@@ -547,6 +796,190 @@ Category `kubernetes.managed`: Managed Kubernetes on the Standard plan in the 3-
 | `r3-1024` | 128 | 1024 GB | local storage, priced apart | 4.236 | `3092.28` | all |
 
 - **Storage price** (prices page, *Block Storage*, read 2026-11-14, issue #219): as for *Managed Kubernetes Service*, a node's storage beyond its plan is a Block Storage volume. The Classic volume row, which the page prices the same with its *Locations* filter on Paris or Milan, €0.000059 per GB and hour, × 730 = 0.04307, rounded half up to `0.0431` per GiB a month, one price in both regions. The page has no separate Regional Classic row (as under *Block Storage 3-AZ Regional Classic*), so the Classic row's price is also the price of a Regional Classic volume, the class a persistent volume must use to survive the loss of a zone (the caveat under `zone-high-availability` above). Paris and Milan also offer zonal High Speed Gen2 volumes, and no page names Regional Classic as the default class there; Classic is recorded as the base class, as under *Block Storage*.
+
+### Managed MongoDB
+
+Category `database.mongodb`: Public Cloud Databases for MongoDB ("Managed MongoDB" on the product page;
+MongoDB 7.0 and 8.0) on the Production plan, 3 nodes, in the 1-AZ regions. This is the base offering
+(tier-variant rule): the Advanced plan adds a capability and is *Managed MongoDB Advanced*, and each has a
+*3-AZ* form. Pages, read 2026-11-25: <https://www.ovhcloud.com/en-ie/public-cloud/mongodb/>,
+<https://docs.ovhcloud.com/en/guides/public-cloud/databases/mongodb-concept-capabilities> (the MongoDB
+capabilities page),
+<https://docs.ovhcloud.com/en/guides/public-cloud/databases/mongodb-read-preference-and-write-concern>
+(the read preference page), <https://docs.ovhcloud.com/en/guides/public-cloud/databases/capabilities>,
+<https://docs.ovhcloud.com/en/guides/public-cloud/databases/public-cloud-databases-regions-comparison>
+(the deployment modes page), <https://docs.ovhcloud.com/en/guides/public-cloud/databases/backups>,
+<https://docs.ovhcloud.com/en/guides/public-cloud/databases/concepts-security-overview> (the security
+page), <https://docs.ovhcloud.com/en/guides/public-cloud/databases/faq>, and the prices page.
+
+- `encryption-at-rest`: "For a MongoDB engine: Nodes: service instances and the underlying VMs use full
+  volume encryption using LUKS with a randomly generated ephemeral key for each instance and each volume"
+  (security page), which answers "Yes, on every plan". **Needs:** nothing beyond the default Production
+  plan.
+- `node-high-availability`. **Needs:** nothing beyond the default Production plan: "Two plans are
+  available: Production: 3 nodes; Advanced: 3 to 7 nodes" (MongoDB capabilities page), and the product
+  page says "All plans include a minimum 3-node replica set". **Scope: node-level only**, by the
+  node-level bar (*Rules applied*): "MongoDB high-Availability starts with 3 nodes" and "in case of a node
+  failure, the failover mechanism is automatic, whatever the DBMS is" (FAQ); in a 1-AZ region the nodes
+  are "deployed in different physical hosts offering resilience to host outage", but "may be deployed
+  within a single data center" (deployment modes page), so `zone-high-availability` is not claimed.
+- `read-replicas`. **Needs:** nothing beyond the default Production plan. The capabilities page's feature
+  table ticks "Read-only nodes" for MongoDB with no plan footnote (unlike PITR's "depends on the plan"),
+  the product page gives "Replica node access" as "In read-only" with no plan named, and the read
+  preference page says that "by setting the read preference to secondary, you can distribute read
+  operations across all secondary nodes". Unlike MySQL and PostgreSQL, whose product pages name a read
+  replica on the Advanced plan only, no MongoDB page restricts it to a plan.
+- No `point-in-time-restore`: "Production plan clusters are automatically backed up daily. Backup
+  retention is 7 days.", with PITR on the Advanced plan only (MongoDB capabilities page); it is on *Managed
+  MongoDB Advanced*. See *Left out on purpose* for `snapshots`, `sharding` and `ipv6`.
+- Regions `GRA`, `LIM`, `RBX`, `SBG`, `WAW`: the regions page ticks MongoDB in each, and the MongoDB
+  capabilities page says the offer is "available in all Public Cloud 1-AZ and 3-AZ regions"; the 3-AZ
+  regions are *Managed MongoDB 3-AZ*'s.
+- **Fixed node count** (decided question 10, issue #558): the plan runs exactly 3 nodes. A 1-instance
+  DocumentDB cluster pointed here is priced at 1 node, a third of what OVHcloud bills.
+
+- **Prices** (prices page, *Databases*, table "Production Plan - Databases for MongoDB", read 2026-11-25). Plans: the Gen 2 flavours (DB2), priced in `GRA`, `LIM`, `SBG` and `WAW` only (no Roubaix price), and the Gen 3 flavours (B3), in all five 1-AZ regions at one price. vCPU and memory are per node; the plan's price is the page's "Price (excl. VAT / hour / node)" × 730 (ADR 0025). The tier runs 3 nodes: the page's "Dedicated node(s)" is 3 in every row, and the total is the per-node price × 3. Included storage is the lower bound of the page's "Usable storage" range (TiB × 1024), the service's data. No price needed rounding.
+
+| Plan | vCPU | Memory | Storage on the page | EUR/hour per node | EUR/month per node (× 730) | Price regions |
+|---|---|---|---|---|---|---|
+| `Production DB2-2` | 1 | 2 GB per node × 3 nodes | From 10 GiB to 100 GiB | 0.0234 | `17.082` | `GRA`, `LIM`, `SBG`, `WAW` |
+| `Production DB2-4` | 2 | 4 GB per node × 3 nodes | From 20 GiB to 250 GiB | 0.0508 | `37.084` | `GRA`, `LIM`, `SBG`, `WAW` |
+| `Production DB2-7` | 2 | 7 GB per node × 3 nodes | From 40 GiB to 500 GiB | 0.1153 | `84.169` | `GRA`, `LIM`, `SBG`, `WAW` |
+| `Production DB2-15` | 4 | 15 GB per node × 3 nodes | From 80 GiB to 1000 GiB | 0.232 | `169.36` | `GRA`, `LIM`, `SBG`, `WAW` |
+| `Production DB2-30` | 8 | 30 GB per node × 3 nodes | From 160 GiB to 1.953125 TiB | 0.4599 | `335.727` | `GRA`, `LIM`, `SBG`, `WAW` |
+| `Production DB2-60` | 16 | 60 GB per node × 3 nodes | From 320 GiB to 3.90625 TiB | 0.906 | `661.38` | `GRA`, `LIM`, `SBG`, `WAW` |
+| `Production B3-8` | 2 | 8 GB per node × 3 nodes | From 40 GiB to 500 GiB | 0.1114 | `81.322` | all |
+| `Production B3-16` | 4 | 16 GB per node × 3 nodes | From 80 GiB to 1000 GiB | 0.2209 | `161.257` | all |
+| `Production B3-32` | 8 | 32 GB per node × 3 nodes | From 160 GiB to 1.953125 TiB | 0.4301 | `313.973` | all |
+| `Production B3-64` | 16 | 64 GB per node × 3 nodes | From 320 GiB to 3.90625 TiB | 0.8583 | `626.559` | all |
+| `Production B3-128` | 32 | 128 GB per node × 3 nodes | From 640 GiB to 7.8125 TiB | 1.7338 | `1265.674` | all |
+| `Production B3-256` | 64 | 256 GB per node × 3 nodes | From 1.25 TiB to 7.8125 TiB | 3.4675 | `2531.275` | all |
+
+- **Storage price:** the Production table's "Price per GB of additional storage: €0.0003/hour/node" (the same in every region of the offering), × 3 (3 nodes, since every node holds the data) × 730 = `0.657` per GiB of the service's data a month, for the whole service at its tier's node count; it is not multiplied by the resource's count (*Prices*). The page's data also carries an undisplayed monthly figure that is not the hourly price × 730; it is not used.
+
+### Managed MongoDB 3-AZ
+
+Category `database.mongodb`: Public Cloud Databases for MongoDB on the Production plan, Multi AZ, in the
+3-AZ regions. A tier variant of *Managed MongoDB* (tier-variant rule). Pages, read 2026-11-25:
+<https://www.ovhcloud.com/en-ie/public-cloud/mongodb/>,
+<https://docs.ovhcloud.com/en/guides/public-cloud/databases/mongodb-concept-capabilities>,
+<https://docs.ovhcloud.com/en/guides/public-cloud/databases/capabilities>,
+<https://docs.ovhcloud.com/en/guides/public-cloud/databases/public-cloud-databases-regions-comparison>
+(the deployment modes page),
+<https://docs.ovhcloud.com/en/guides/public-cloud/cross-functional/deployments-modes-reference-architecture>
+(the reference architecture page),
+<https://docs.ovhcloud.com/en/guides/public-cloud/databases/concepts-security-overview>,
+<https://docs.ovhcloud.com/en/guides/public-cloud/databases/faq>, and the prices page.
+
+- `encryption-at-rest` and `read-replicas`: as for *Managed MongoDB*; the pages state them per engine,
+  not per region.
+- `zone-high-availability`. **Needs:** the Production plan, Multi AZ, the plan this offering is named
+  after. **Scope: zone-level.** A multi-node service in a 3-AZ region "is deployed across three
+  independent availability zones, ensuring service continuity even if one zone experiences an outage"
+  (deployment modes page); the reference architecture page's "DBaaS" row says that in an AZ failure
+  "databases and data will remain available"; the product page's FAQ says "This architecture maintains
+  service availability even if an entire availability zone fails". The capabilities page gives a 99.95%
+  SLA for "Production Multi AZ".
+- `node-high-availability`: implied by zone level (ADR 0011); failover after a node failure is automatic
+  (FAQ).
+- Regions `MIL`, `PAR`: the regions page ticks MongoDB in "3-AZ Paris" and "3-AZ Milan"; the prices page
+  prices the Production B3 flavours there.
+- **Fixed node count** (decided question 10, issue #558): exactly 3 nodes, as for *Managed MongoDB*.
+
+- **Prices** (prices page, *Databases*, table "Production Plan - Databases for MongoDB", *Locations* filter on Paris or Milan, the same in both, read 2026-11-25). Plans: the Gen 3 flavours; the page offers no Gen 2 flavour there. vCPU and memory per node; price per node × 730 (ADR 0025); 3 nodes; included storage as for *Managed MongoDB*. No price needed rounding.
+
+| Plan | vCPU | Memory | Storage on the page | EUR/hour per node | EUR/month per node (× 730) | Price regions |
+|---|---|---|---|---|---|---|
+| `Production B3-8` | 2 | 8 GB per node × 3 nodes | From 40 GiB to 500 GiB | 0.118 | `86.14` | all |
+| `Production B3-16` | 4 | 16 GB per node × 3 nodes | From 80 GiB to 1000 GiB | 0.2339 | `170.747` | all |
+| `Production B3-32` | 8 | 32 GB per node × 3 nodes | From 160 GiB to 1.953125 TiB | 0.4554 | `332.442` | all |
+| `Production B3-64` | 16 | 64 GB per node × 3 nodes | From 320 GiB to 3.90625 TiB | 0.9087 | `663.351` | all |
+| `Production B3-128` | 32 | 128 GB per node × 3 nodes | From 640 GiB to 7.8125 TiB | 1.8358 | `1340.134` | all |
+| `Production B3-256` | 64 | 256 GB per node × 3 nodes | From 1.25 TiB to 7.8125 TiB | 3.6715 | `2680.195` | all |
+
+- **Storage price:** as for *Managed MongoDB*: "€0.0003/hour/node", the same in Paris and Milan, × 3 × 730 = `0.657` per GiB of the service's data a month.
+
+### Managed MongoDB Advanced
+
+Category `database.mongodb`: Public Cloud Databases for MongoDB on the Advanced plan (3 to 7 nodes) in
+the 1-AZ regions. A tier variant of *Managed MongoDB* (tier-variant rule): it adds
+`point-in-time-restore`. Pages, read 2026-11-25: <https://www.ovhcloud.com/en-ie/public-cloud/mongodb/>,
+<https://docs.ovhcloud.com/en/guides/public-cloud/databases/mongodb-concept-capabilities>,
+<https://docs.ovhcloud.com/en/guides/public-cloud/databases/mongodb-read-preference-and-write-concern>,
+<https://docs.ovhcloud.com/en/guides/public-cloud/databases/capabilities>,
+<https://docs.ovhcloud.com/en/guides/public-cloud/databases/public-cloud-databases-regions-comparison>
+(the deployment modes page), <https://docs.ovhcloud.com/en/guides/public-cloud/databases/backups>,
+<https://docs.ovhcloud.com/en/guides/public-cloud/databases/concepts-security-overview>,
+<https://docs.ovhcloud.com/en/guides/public-cloud/databases/faq>, and the prices page.
+
+- `encryption-at-rest`, `node-high-availability` and `read-replicas`: as for *Managed MongoDB*; the pages
+  state them for every plan, and the product page gives Advanced "Multi-AZ with 2+ failovers".
+  **Scope** of `node-high-availability`: node-level only, as for *Managed MongoDB*.
+- `point-in-time-restore`. **Needs:** the Advanced plan, the plan this offering is named after:
+  "Advanced plan clusters are automatically backed up daily, with PITR support. Backup retention is 30
+  days with PITR capability for the last 24 hours." (MongoDB capabilities page); the backups page adds
+  that "the point in time must be within the last 24 hours". The product page's "PITR with 30-day
+  retention" is contradicted by the documentation, which is the source.
+- Regions `GRA`, `LIM`, `RBX`, `SBG`, `WAW`: as for *Managed MongoDB*.
+- **Node count** (decided question 10, issue #558): 3 to 7 nodes ("Advanced: 3 to 7 nodes (including
+  optionally an analytics node)"); the page prices it at 3. A 1-instance cluster pointed here is priced
+  at 1 node, a third of the smallest service OVHcloud bills.
+
+- **Prices** (prices page, *Databases*, table "Advanced Plan - Databases for MongoDB", read 2026-11-25). Plans: the Gen 2 flavours, priced in `GRA`, `LIM`, `SBG` and `WAW` only (no Roubaix price), and the Gen 3 flavours, in all five 1-AZ regions at one price; Advanced has no 2, 4 or 7 GB flavour and no B3-8. vCPU and memory per node; price per node × 730 (ADR 0025); the page's "Dedicated node(s)" is 3 in every row and the total is the per-node price × 3; included storage is the lower bound of "Usable storage". The Gen 2 prices are far above the Gen 3 ones (`Advanced DB2-60` against `Advanced B3-64`); that is what the page's data says. No price needed rounding.
+
+| Plan | vCPU | Memory | Storage on the page | EUR/hour per node | EUR/month per node (× 730) | Price regions |
+|---|---|---|---|---|---|---|
+| `Advanced DB2-15` | 4 | 15 GB per node × 3 nodes | From 80 GiB to 1000 GiB | 0.7125 | `520.125` | `GRA`, `LIM`, `SBG`, `WAW` |
+| `Advanced DB2-30` | 8 | 30 GB per node × 3 nodes | From 160 GiB to 1.953125 TiB | 1.4208 | `1037.184` | `GRA`, `LIM`, `SBG`, `WAW` |
+| `Advanced DB2-60` | 16 | 60 GB per node × 3 nodes | From 320 GiB to 3.90625 TiB | 2.8346 | `2069.258` | `GRA`, `LIM`, `SBG`, `WAW` |
+| `Advanced DB2-120` | 32 | 120 GB per node × 3 nodes | From 640 GiB to 3.90625 TiB | 5.6679 | `4137.567` | `GRA`, `LIM`, `SBG`, `WAW` |
+| `Advanced B3-16` | 4 | 16 GB per node × 3 nodes | From 80 GiB to 1000 GiB | 0.2218 | `161.914` | all |
+| `Advanced B3-32` | 8 | 32 GB per node × 3 nodes | From 160 GiB to 1.953125 TiB | 0.432 | `315.36` | all |
+| `Advanced B3-64` | 16 | 64 GB per node × 3 nodes | From 320 GiB to 3.90625 TiB | 0.862 | `629.26` | all |
+| `Advanced B3-128` | 32 | 128 GB per node × 3 nodes | From 640 GiB to 7.8125 TiB | 1.7414 | `1271.222` | all |
+| `Advanced B3-256` | 64 | 256 GB per node × 3 nodes | From 1.25 TiB to 7.8125 TiB | 3.4827 | `2542.371` | all |
+
+- **Storage price:** the Advanced table's "Price per GB of additional storage: €0.0004/hour/node" (the same in every region), × 3 (the 3 nodes the page prices the tier at) × 730 = `0.876` per GiB of the service's data a month, for the whole service; it is not multiplied by the resource's count (*Prices*).
+
+### Managed MongoDB Advanced 3-AZ
+
+Category `database.mongodb`: Public Cloud Databases for MongoDB on the Advanced plan, Multi AZ, in the
+3-AZ regions. A tier variant of *Managed MongoDB* (tier-variant rule), apart from *Managed MongoDB 3-AZ*
+because it adds `point-in-time-restore`. Pages, read 2026-11-25:
+<https://www.ovhcloud.com/en-ie/public-cloud/mongodb/>,
+<https://docs.ovhcloud.com/en/guides/public-cloud/databases/mongodb-concept-capabilities>,
+<https://docs.ovhcloud.com/en/guides/public-cloud/databases/capabilities>,
+<https://docs.ovhcloud.com/en/guides/public-cloud/databases/public-cloud-databases-regions-comparison>
+(the deployment modes page),
+<https://docs.ovhcloud.com/en/guides/public-cloud/cross-functional/deployments-modes-reference-architecture>
+(the reference architecture page), <https://docs.ovhcloud.com/en/guides/public-cloud/databases/backups>,
+<https://docs.ovhcloud.com/en/guides/public-cloud/databases/concepts-security-overview>,
+<https://docs.ovhcloud.com/en/guides/public-cloud/databases/faq>, and the prices page.
+
+- `encryption-at-rest` and `read-replicas`: as for *Managed MongoDB*; per engine, not per region.
+- `point-in-time-restore`: as for *Managed MongoDB Advanced*. **Needs:** the Advanced plan, Multi AZ.
+- `zone-high-availability`. **Needs:** the Advanced plan, Multi AZ, the plan this offering is named
+  after. **Scope: zone-level**, from the same quotes as *Managed MongoDB 3-AZ* ("ensuring service
+  continuity even if one zone experiences an outage", deployment modes page); the capabilities page gives
+  a 99.99% SLA for "Advanced Multi AZ".
+- `node-high-availability`: implied by zone level (ADR 0011); failover after a node failure is automatic
+  (FAQ).
+- Regions `MIL`, `PAR`: the regions page ticks MongoDB in "3-AZ Paris" and "3-AZ Milan"; the prices page
+  prices the Advanced B3 flavours there.
+- **Node count** (decided question 10, issue #558): 3 to 7 nodes, priced at 3, as for *Managed MongoDB
+  Advanced*.
+
+- **Prices** (prices page, *Databases*, table "Advanced Plan - Databases for MongoDB", *Locations* filter on Paris or Milan, the same in both, read 2026-11-25). Plans: the Gen 3 flavours; no Gen 2 flavour there. vCPU and memory per node; price per node × 730 (ADR 0025); 3 nodes; included storage as for *Managed MongoDB Advanced*. No price needed rounding.
+
+| Plan | vCPU | Memory | Storage on the page | EUR/hour per node | EUR/month per node (× 730) | Price regions |
+|---|---|---|---|---|---|---|
+| `Advanced B3-16` | 4 | 16 GB per node × 3 nodes | From 80 GiB to 1000 GiB | 0.2356 | `171.988` | all |
+| `Advanced B3-32` | 8 | 32 GB per node × 3 nodes | From 160 GiB to 1.953125 TiB | 0.4589 | `334.997` | all |
+| `Advanced B3-64` | 16 | 64 GB per node × 3 nodes | From 320 GiB to 3.90625 TiB | 0.9157 | `668.461` | all |
+| `Advanced B3-128` | 32 | 128 GB per node × 3 nodes | From 640 GiB to 7.8125 TiB | 1.8497 | `1350.281` | all |
+| `Advanced B3-256` | 64 | 256 GB per node × 3 nodes | From 1.25 TiB to 7.8125 TiB | 3.6993 | `2700.489` | all |
+
+- **Storage price:** as for *Managed MongoDB Advanced*: "€0.0004/hour/node", the same in Paris and Milan, × 3 × 730 = `0.876` per GiB of the service's data a month.
 
 ### Managed MySQL
 
@@ -1012,6 +1445,46 @@ from *Managed PostgreSQL Multi-node 3-AZ* because it adds `read-replicas`. Pages
 
 - **Storage price:** the Enterprise/Advanced table's "Price per GB of additional storage: €0.0007/hour/node", × 3 (3 nodes, since every node holds the data) × 730 = `1.533` per GiB of the service's data a month, for the whole service at its tier's node count, in every region of the offering; it is not multiplied by the resource's count. The databases pricing guide bills additional storage per GB, per hour and per node (*Prices*).
 
+### Managed Private Registry
+
+Category `registry.container`: Managed Private Registry, a private registry of OCI container images
+OVHcloud runs on Harbor (2.15.1 on 2026-11-25), plans Small, Medium and Large. One offering with no
+capability and no tier variant (PRD #552 milestone 5, below). Pages, read 2026-11-25:
+<https://www.ovhcloud.com/en-ie/public-cloud/managed-private-registry/>,
+<https://docs.ovhcloud.com/en/guides/public-cloud/containers-orchestration/managed-private-registry/managed-private-registry-faq>
+(the registry FAQ),
+<https://docs.ovhcloud.com/en/guides/public-cloud/containers-orchestration/managed-private-registry/overview>,
+<https://docs.ovhcloud.com/en/guides/public-cloud/containers-orchestration/managed-private-registry/responsibility-model>,
+<https://docs.ovhcloud.com/en/guides/public-cloud/containers-orchestration/managed-private-registry/creation>,
+the regions page and the prices page.
+
+- No capability is listed. The pages read state none of the vocabulary in full:
+  - No `zone-high-availability` (and so no *Managed Private Registry 3-AZ*): the registry FAQ's
+    *Deployment in 3 AZ region* says "The service is replicated and distributed across multiple distinct
+    Availability Zones (up to 3), depending on the chosen plan", and "Plans Medium and Large run in
+    active-active mode across at least 2 AZs: traffic is load-balanced, and data is simultaneously
+    available in multiple zones, ensuring increased resilience"; the product page gives Medium and Large
+    a "3-AZ SLA: 99.99%". No quoted sentence says that the registry **keeps serving through the loss of a
+    zone**, as the database pages do ("ensuring service continuity even if one zone experiences an
+    outage"). Active-active traffic across zones and a higher SLA make that likely, but it is an
+    inference from the architecture, not a stated fact, and the zone rule (PRD #552, *Catalogs*) lists
+    `zone-high-availability` only where a quoted source says it. Small "runs in active-passive mode across
+    2 AZs: one primary zone is continuously used, while a secondary zone can take over in case of an
+    issue", which says neither that the takeover is automatic nor that service continues; its 3-AZ SLA is
+    99.9%, the same as in a 1-AZ region. See *Left out on purpose*.
+  - No `node-high-availability`: in a 1-AZ region "All service components are hosted within a single
+    Availability Zone" (registry FAQ), and no page names a failure the registry keeps serving through.
+  - No `encryption-at-rest`: no registry page mentions encryption at rest; the registry FAQ says only that
+    storage "is based on S3 Standard". Object Storage's encryption is a feature of that product, not one a
+    registry page states (target rule). Every ECR repository lists `encryption-at-rest` (PRD #552), so it
+    is `partial` here, missing it.
+- Regions `GRA`, `LIM`, `MIL`, `PAR`: the regions page ticks Managed Private Registry in Gravelines,
+  Frankfurt, "3-AZ Paris" and "3-AZ Milan" only, and the registry FAQ's region table lists GRA and DE
+  (1-AZ) and EU-WEST-PAR and EU-SOUTH-MIL (3-AZ) among its EU regions. Roubaix, Strasbourg and Warsaw are
+  not ticked. The prices page prices the plans in the same four.
+
+- **Not priced** (PRD #552, decided question 6): OVHcloud sells a registry by plan with included storage, which no inventory field records. The offering records no plan and no storage price, and an estimate says "not priced". For the reader only: the prices page, read 2026-11-25, gives Small (200 GiB) at €0.0237, Medium (600 GiB) at €0.0538 and Large (5 TiB) at €0.255 an hour in Gravelines and Frankfurt, and €0.0261, €0.0592 and €0.286 in Paris and Milan. (The product page gives "Storage up to 200 GB" for Medium as well as Small; the prices page's 600 GiB is the figure quoted here.)
+
 ### Metal Instances
 
 Category `compute.baremetal`: Public Cloud instances on dedicated physical servers with no virtualisation
@@ -1125,6 +1598,112 @@ Active Archive, and Cold Archive in Paris only). Pages: <https://www.ovhcloud.co
   including the advanced parameters reference
   (<https://docs.ovhcloud.com/en/guides/public-cloud/databases/kafka-advanced-parameters-references>), do not
   mention them, so they are not counted.
+- **`messaging.topic`: no offering.** Checked on 2026-11-25 (PRD #552 milestone 5): the prices page's and
+  the regions page's only messaging products are Kafka, Kafka Connect and Kafka MirrorMaker (the
+  `messaging.queue` entry above). No OVHcloud Public Cloud product is a publish-subscribe topic that gives
+  every subscription its own copy of each message.
+- **`serverless.container`: no offering.** Checked on 2026-11-25: the prices page and the regions page
+  list no request-scaled container product. AI Deploy (GRA only on the regions page) runs a customer's
+  image on resources it keeps "as long as your app is running"
+  (<https://docs.ovhcloud.com/en/guides/public-cloud/ai-machine-learning/ai-deploy-capabilities>, the
+  `serverless.function` entry above): a long-running deployment with at least one replica, not a
+  container scaled with requests.
+- **`storage.file`: no offering, because the general availability of File Storage Service is not
+  confirmed.** Checked on 2026-11-25 (PRD #552 milestone 5; "a fact not confirmed stays out of the
+  snapshot"). File Storage Service (OpenStack Manila) offers "managed NFS shares on private networks,
+  supporting ReadWriteMany (RWX) access across multiple instances or Kubernetes pods"
+  (<https://docs.ovhcloud.com/en/guides/storage-and-backup/file-storage/file-storage-service/getting-started>),
+  which is the category. Pages checked: that page, the key concepts page
+  (<https://docs.ovhcloud.com/en/guides/storage-and-backup/file-storage/file-storage-service/key-concepts>),
+  the snapshots page
+  (<https://docs.ovhcloud.com/en/guides/storage-and-backup/file-storage/file-storage-service/create-snapshot>),
+  the product page (<https://www.ovhcloud.com/en-ie/public-cloud/file-storage/>), the prices page, the
+  regions page, the former beta page <https://labs.ovhcloud.com/en/file-storage/>, and roadmap issues
+  <https://github.com/ovh/public-cloud-roadmap/issues/54> and
+  <https://github.com/ovh/public-cloud-roadmap/issues/1194>.
+  - **Against general availability:** the product page's FAQ says shares are resized "via the OVHcloud
+    API, OpenStack API, or Manila CSI (other consumption modes coming at GA)", and the page still carries a
+    "New" badge and "volumes under 150 GiB coming soon". Roadmap issue #54, "FSaaS - File Storage", is
+    open; its last OVHcloud comment (2026-03-05) announces the "File Storage BETA" and says that "all
+    resources created will be billed once General Availability (GA) begins (early April 2026)", and no
+    later comment announces it. The regions page has no File Storage row at all, neither a tick nor a beta
+    mark.
+  - **For general availability:** the prices page prices it ("File Storage Standard", €0.000194 per GB
+    and hour) with no beta mark; the product page shows "€0.1416 ex. VAT/GiB/month", "Hourly billing" and
+    a "99.9% Service Level Agreement (SLA)"; the beta page now redirects to the product page; the
+    documentation (updated 2026-11-04 and 2026-11-05) carries no beta notice; and billing was to start at
+    GA.
+  - **What the offering would be once GA is confirmed** (one change to `catalog.json` and a section here,
+    with the facts read on 2026-11-25): *File Storage Service*, category `storage.file`, in all seven
+    declared regions (the product page: "available in most Public Cloud regions (3-AZ and 1-AZ except SYD
+    and BHS1)"; the prices page's availability: DE1, EU-SOUTH-MIL, EU-WEST-PAR, GRA1 to GRA11, RBX-A,
+    SBG5, SBG7, WAW1; in Paris and Milan a share is still a 1-AZ share, share type `standard-1az`).
+    Capabilities `encryption-at-rest` ("shares can be encrypted at rest using OVHcloud Managed Keys (OMK)";
+    "use the standard-1az-luks type instead of standard-1az", set at creation only, getting started page;
+    released per roadmap issue #1194, "Feature released, available through API", 2026-09-29; **Needs:**
+    the `standard-1az-luks` share type; **the pages disagree:** on 2026-10-12 an OVHcloud comment on
+    #1194 says "Feature is available now on the console !", yet #1194 is still open and the product page,
+    read 2026-11-25, still says "It will soon be enhanced with encryption via OVHcloud Managed Keys". The
+    getting started page documents the `standard-1az-luks` type and the API's `encryption.encrypted`
+    request field with no "coming soon" mark; the pages do not say whether the product page is merely out
+    of date or whether OMK encryption differs from the released luks share type. The
+    refresh that adds the offering re-checks this before it lists the capability) and `snapshots` ("Snapshots capture a point-in-time state of a File
+    Storage NFS share", snapshots page, for any available share). No `node-high-availability` and no
+    `zone-high-availability`: the product page says it will "soon" gain "deployment across multiple
+    availability zones", and an OVHcloud comment on issue #54 (2025-10-13) says "The service is not yet
+    HA". Storage price €0.000194 per GiB and hour × 730 = 0.14162, rounded half up to 0.1416 per GiB a
+    month, one price in every region, the same for encrypted shares (the page has one `share.standard`
+    price). **Minimum billed size** (decided question 10, issue #558): "Volumes from 150 GiB to 10 TiB"
+    (product page), so a 50 GiB EFS file system would be priced at 50 GiB, a third of the smallest share.
+- **Load Balancer (1-AZ) `node-high-availability` and `zone-high-availability`:** the product page says
+  the Load Balancer "is built on a distributed architecture, and is backed by a 99.99% SLA. It uses its
+  health check feature to distribute load across available instances." The health check is about the
+  backends; no page names a failure of the load balancer itself that it keeps serving through, or says it
+  runs active and standby in a 1-AZ region (node-level bar, *Rules applied*). The active and passive pair
+  in separate zones is documented for the regional (3-AZ) load balancer only (*Load Balancer 3-AZ*). The
+  price data's high-availability column, ticked for every size with no text, is not a capability source.
+- **Load Balancer and Load Balancer 3-AZ `ipv6`:** neither the product page nor the concepts, getting
+  started and update-size pages
+  (<https://docs.ovhcloud.com/en/guides/public-cloud/network-services/load-balancer-concepts>) mention
+  IPv6 for a load balancer (the word appears only in the documentation's navigation menu), so it is not
+  stated.
+- **Managed Private Registry `zone-high-availability` (no *Managed Private Registry 3-AZ*), and Small in
+  the 3-AZ regions:** the registry FAQ
+  (<https://docs.ovhcloud.com/en/guides/public-cloud/containers-orchestration/managed-private-registry/managed-private-registry-faq>)
+  says that "Plans Medium and Large run in active-active mode across at least 2 AZs: traffic is
+  load-balanced, and data is simultaneously available in multiple zones, ensuring increased resilience",
+  and the product page gives them a "3-AZ SLA: 99.99%". Neither says the registry keeps serving through
+  the loss of a zone, which the zone rule needs a quoted source for (PRD #552, *Catalogs*; decided on
+  2026-11-25 on that strict reading). Small's "a secondary zone can take over in case
+  of an issue" states no automatic, uninterrupted takeover either. A later refresh that finds such a
+  sentence adds *Managed Private Registry 3-AZ* (Medium and Large, `MIL` and `PAR`, with
+  `zone-high-availability`) as a tier variant.
+- **Managed Private Registry `encryption-at-rest` and `node-high-availability`:** not stated on any
+  registry page (its section).
+- **Databases for Valkey `sharding`:** "Cluster mode (sharding) is not supported."
+  (<https://docs.ovhcloud.com/en/guides/public-cloud/databases/valkey-capabilities>, *Other
+  limitations*; `cluster` is also among its unsupported commands). A clustered ElastiCache group is
+  therefore `partial` on every Valkey offering.
+- **Databases for Valkey `read-replicas`, `point-in-time-restore` and `ipv6`:** `read-replicas` is a
+  database capability (PRD #552), and the capabilities page's feature table leaves "Read-only nodes" and
+  PITR empty for Valkey; the product page's "Replication node access: Read-only" is not borne out by the
+  documentation, which is the source. IPv6 is not stated. AOF persistence ("AOF (Append Only File)
+  persistence is not available") has no vocabulary entry.
+- **The Discovery plan of Valkey in Paris and Milan:** as for MySQL and PostgreSQL (below), no page states
+  that the one-node plan runs in the 3-AZ regions, so *Databases for Valkey* lists the 1-AZ regions only.
+  The prices page lists Discovery there (`Discovery B3-8` at €0.1563 an hour); that price is not
+  recorded, since a price may name only regions of its offering.
+- **Managed MongoDB (all four) `sharding`, `snapshots` and `ipv6`:** no MongoDB page states a sharded
+  cluster (only the role `enableSharding` is listed). Backups are automated daily dumps to object storage
+  (MongoDB capabilities page), as for MySQL and PostgreSQL, which list no `snapshots`; the product page's
+  "Snapshots with 14-day retention" is contradicted by the documentation ("backed up daily. Backup
+  retention is 7 days" on Production) and is not used. IPv6 is not stated. Client-side field level
+  encryption (Advanced) has no vocabulary entry.
+- **Managed MongoDB and Managed MongoDB Advanced (1-AZ) `zone-high-availability`:** the nodes "may be
+  deployed within a single data center"
+  (<https://docs.ovhcloud.com/en/guides/public-cloud/databases/public-cloud-databases-regions-comparison>).
+- **Managed MongoDB and Managed MongoDB 3-AZ `point-in-time-restore`:** PITR is stated for the Advanced
+  plan only (*Managed MongoDB Advanced*).
 - **Managed Kubernetes Service (1-AZ) `node-high-availability` and `zone-high-availability` (PRD #14,
   target rule):** two pages claim high availability in general terms. The product page FAQ
   (<https://www.ovhcloud.com/en/public-cloud/kubernetes/>) says that in a Free cluster the control plane
@@ -1208,9 +1787,11 @@ Active Archive, and Cold Archive in Paris only). Pages: <https://www.ovhcloud.co
   (vRack); Managed Kubernetes custom gateways and disabled public exposure; instance remote snapshots in
   another region.
 - **Products not in the snapshot:** Swift Object Storage and Cloud Archive (older Swift-API storage; S3
-  Object Storage already serves the category); File Storage; MongoDB, Valkey, ClickHouse, OpenSearch and
-  Kafka (no matching taxonomy category); Managed Private Registry, Load Balancer, Gateway and the other
-  network services (no matching category); Local Zones (PRD #11).
+  Object Storage already serves the category); File Storage Service (general availability not
+  confirmed, the `storage.file` entry above); ClickHouse, OpenSearch and Kafka (no matching taxonomy
+  category); Gateway and the other network services but the Load Balancer (no matching category); Local
+  Zones (PRD #11). MongoDB, Valkey, Load Balancer and Managed Private Registry are offerings since PRD
+  #552 milestone 5.
 
 Prices and plans left out (PRD #190 milestone 3, read 2026-11-13):
 
@@ -1254,3 +1835,18 @@ Prices and plans left out (PRD #190 milestone 3, read 2026-11-13):
   recorded, since a price may name only regions of its offering.
 - **Database backups:** included in the service price ("The database service itself (covering compute, base
   storage and backups)", databases pricing guide), so nothing is added.
+
+Prices and plans left out, and minimum sizes (PRD #552 milestone 5, read 2026-11-25):
+
+- **Load Balancer sizes and Managed Private Registry plans:** not priced (decided question 6); their
+  hourly prices are quoted in their sections for the reader, and the snapshot records no plan for them.
+- **MongoDB's free Discovery flavour** (`Discovery DB2-FREE`, Gravelines only, 512 MiB): the MongoDB
+  capabilities page lists two plans only, Production and Advanced, and the flavour gives "0 vCore" and no
+  price, which a plan cannot record.
+- **Fixed node counts and minimum sizes** (decided question 10, followed up by issue #558): Valkey
+  Discovery/Essential runs exactly 1 node and Production/Business exactly 2; MongoDB Production exactly 3
+  and Advanced 3 to 7 (priced at 3). An estimate prices a resource at its own `count` (ADR 0025), so a
+  1-node cache on *Databases for Valkey Multi-node* or a 1-instance DocumentDB cluster on *Managed
+  MongoDB* is below what OVHcloud bills, and a 3-node cache on the Multi-node offering above it. No new
+  offering has a minimum billed storage size beyond its plans' included storage; File Storage Service's
+  150 GiB minimum is in its entry above.

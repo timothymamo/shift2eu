@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 2,
+  "source": "aws",
+  "resources": [
+    {
+      "id": "overflow",
+      "rawType": "AWS::EC2::Instance",
+      "category": "compute.vm",
+      "region": "eu-central-1",
+      "size": { "vcpus": 1e400, "memoryGiB": 8, "count": 1 }
+    }
+  ]
+}

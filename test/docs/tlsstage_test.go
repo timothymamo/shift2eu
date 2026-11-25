@@ -31,13 +31,22 @@ const (
 	// tlsStageSetupHeading is R4's heading: the apply that creates the TLS stage and requests the certificate.
 	tlsStageSetupHeading = "## R4. Create the hosting"
 
-	// tlsStageResource is the resource R8 replaces to ask Scaleway for a new managed certificate.
-	tlsStageResource = "scaleway_edge_services_tls_stage.site"
+	// tlsStageResource is the TLS stage as the configuration addresses it, the instance R8 replaces to ask
+	// Scaleway for a new managed certificate: the stage is gated by var.pipeline_www (count), so its address
+	// carries the instance key [0], and an address without it names the resource, not the instance.
+	tlsStageResource = "scaleway_edge_services_tls_stage.site[0]"
 
 	// tlsStagePlanPrefix starts R8's recreate step: a plan that writes the replacement to a file, so the
 	// maintainer reads what it touches before any apply runs. A replace, never a destroy the DNS stage still
-	// references (Scaleway answers that with a 500).
-	tlsStagePlanPrefix = "dev/tofu.sh -chdir=infra/site plan -replace=" + tlsStageResource + " -out=tls.tfplan"
+	// references (Scaleway answers that with a 500). The address is single-quoted: bare, the brackets are a
+	// shell pattern, which zsh's nomatch (the maintainer's Mac) refuses because no file matches it - the line
+	// dies before tofu runs - and which bash would replace with whatever a file beside it happened to match.
+	tlsStagePlanPrefix = "dev/tofu.sh -chdir=infra/site plan -replace='" + tlsStageResource + "' -out=tls.tfplan"
+
+	// tlsStageUnquotedPlanPrefix is the same plan line with the instance key left bare: R8 must not hold it,
+	// since OpenTofu's -replace= on a counted resource without the key warns "incompletely-matched" and
+	// replaces nothing, and the shell refuses or rewrites the line before that.
+	tlsStageUnquotedPlanPrefix = "dev/tofu.sh -chdir=infra/site plan -replace=" + tlsStageResource + " -out=tls.tfplan"
 
 	// tlsStageApplyPrefix starts R8's second step: the apply of the plan the line above wrote, and of nothing
 	// else.
@@ -83,8 +92,13 @@ func TestTLSStageRecreateInR8(t *testing.T) {
 
 		planAt, _, plans := runbookLineStartingWith(r8, tlsStagePlanPrefix)
 		if !plans {
-			t.Errorf("%s's R8 holds no line starting %q: Scaleway issues the managed certificate once, when the TLS stage is created, so a stage created before R8's CNAME never gets one and replacing it is the only way to ask again (issue #541). R8 was:\n%s",
-				siteRunbookPath, tlsStagePlanPrefix, strings.Join(r8, "\n"))
+			t.Errorf("%s's R8 holds no line starting %q: Scaleway issues the managed certificate once, when the TLS stage is created, so a stage created before R8's CNAME never gets one and replacing it is the only way to ask again (issue #541), and the stage is counted (var.pipeline_www), so the line must replace the instance %s, its key in single quotes. R8 was:\n%s",
+				siteRunbookPath, tlsStagePlanPrefix, tlsStageResource, strings.Join(r8, "\n"))
+		}
+
+		if number, line, ok := runbookLineStartingWith(r8, tlsStageUnquotedPlanPrefix); ok {
+			t.Errorf("%s's R8 replaces %q at line %d with the instance key unquoted: zsh's nomatch (the maintainer's Mac) refuses the bare brackets as a pattern no file matches, so the line dies before tofu runs, and bash would pass whatever its expansion matched instead. The key must be single-quoted, as in %q (issue #541):\n\t%s",
+				siteRunbookPath, tlsStageResource, number, tlsStagePlanPrefix, strings.TrimSpace(line))
 		}
 
 		applyAt, _, applies := runbookLineStartingWith(r8, tlsStageApplyPrefix)

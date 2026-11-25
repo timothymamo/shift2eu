@@ -88,11 +88,11 @@ summary counts the fits and gives each target's estimated total:
 
 | Fit | `OVHcloud` | `Scaleway` | `UpCloud` |
 |---|---|---|---|
-| direct | 7 | 6 | 6 |
-| partial | 1 | 5 | 2 |
-| none | 9 | 6 | 9 |
+| direct | 8 | 6 | 6 |
+| partial | 3 | 5 | 2 |
+| none | 6 | 6 | 9 |
 | total | 17 | 17 | 17 |
-| `OVHcloud` estimate | €797.66 per month for 8 of 17 resources (storage not included in 4 estimates) |  |  |
+| `OVHcloud` estimate | €2,004.93 per month for 10 of 17 resources (storage not included in 4 estimates) |  |  |
 | `Scaleway` estimate |  | €587.58 per month for 8 of 17 resources (storage not included in 4 estimates) |  |
 | `UpCloud` estimate |  |  | €359.31 per month for 8 of 17 resources |
 
@@ -283,9 +283,9 @@ you would have to replace, rebuild or do without on that target.
 ```
 
 **Blockers** lists every resource whose fit is none, with the reason. Blockers are a result, not a
-failure: `assess` still exits 0. Here the CDN and the DNS zone are unclassified; on OVHcloud the queues
-and the function have no offering at all, and no target's snapshot has an offering yet for the cache,
-the MongoDB database, the topic or the container registry. The web server and the topic `depends-on`
+failure: `assess` still exits 0. Here the CDN and the DNS zone are unclassified; on OVHcloud the queues,
+the function and the topic have no offering at all (OVHcloud does serve the cache, the MongoDB database
+and the container registry, which no other target's snapshot does yet). The web server and the topic `depends-on`
 the order queue, so the blocker on the queue is listed under them too, as "affected by a blocker"; their
 own fit does not change
 ([`aws-all-estimates.md.golden`](../../test/examples/testdata/aws-all-estimates.md.golden)):
@@ -293,13 +293,10 @@ own fit does not change
 ```markdown
 ### Blockers
 
-- `shop-catalog-docs`: no offering in the `OVHcloud` catalog for `database.mongodb`
 - `shop-cdn`: not classified
-- `shop-images`: no offering in the `OVHcloud` catalog for `registry.container`
 - `shop-order-events`: no offering in the `OVHcloud` catalog for `messaging.topic`
 - `shop-orders`: no offering in the `OVHcloud` catalog for `messaging.queue`
 - `shop-orders-dlq`: no offering in the `OVHcloud` catalog for `messaging.queue`
-- `shop-sessions`: no offering in the `OVHcloud` catalog for `cache.redis`
 - `shop-thumbnailer`: no offering in the `OVHcloud` catalog for `serverless.function`
 - `shop.example.com`: not classified
 - `shop-order-events`: affected by a blocker on `shop-orders`

@@ -2597,7 +2597,30 @@ grep -nwE 'schedule|cron' <a scratch file>
 ```
 
 **8. Start the first run** (`workflow_dispatch` on `main`). Read its report PR and advisories. Then merge
-the report, then milestone 3's schedule.
+the report, then milestone 3's schedule. On the first run, read the report's Coverage and Limits against
+ADR 0040's two "To be checked on the first run" lists (PRs 5b and 5c): every check but `scorecard-admin`
+should read "run" or "findings", and a read the checks job's token was refused (Limits, "read refused")
+that one of its four read scopes should allow is a finding to fix before the schedule. The checks job
+names each check that did not run in the Limits, never as clean (ADR 0040, review rounds I, K and L of
+PR 5c): `release-integrity results-missing` (the release download brought no `checksums.txt`, so no file
+was checksummed or attested, and no part of the image's verification ran either: check the release's
+assets; a download that failed while the image was verified is only the limits line
+"release-integrity: no checksums.txt, ..." or "release-integrity: the release download ..."), and `scorecard`, `image-pull` and `image-scan`
+`tool-failed` or `timed-out` (the tool exited with an error or ran out of time: its `.exit` file in the
+results names it). A check that ran in part keeps "run" or "findings", and names each part that did not
+in a limits line of its own: "release-integrity: no image digest, ..." (the tag's image digest did not
+resolve, so its signature and attestations were not verified: check the image's tag on GHCR), one
+release file's attestation or the image's signature that timed out or failed, one hostile run or fuzz
+target whose create failed or that timed out, "supply-chain: a ruleset ID that is no number was not
+read" (the rulesets list held such an ID) and "fuzzing: a target of an unexpected shape was not run".
+`release-integrity` `tool-failed`, `results-missing` or `timed-out`, and `hostile-inventories` or
+`fuzzing` `tool-failed`, alone mean none of the check's parts ran (a run or target whose create failed
+never started, so it is no part that ran). Each is a limit to explain before the schedule, not a run to repeat blindly; a
+`release-integrity verification-failed` is a finding about the release (a checksum mismatch, a refused
+attestation or signature, or "checksums.txt holds no well-formed line"), never one of these. A read
+listed in `supply-chain/read-skipped.txt` (Limits, "the budget of 12 minutes ran out before these
+reads") was never made, because the step ran out of time: it is no permission to fix, unlike a read
+refused.
 
 ```bash
 # Mac (admin), as yourself: the newest dispatched run before the dispatch, the <previous id>, then the dispatch
@@ -2692,6 +2715,24 @@ once you have checked that it is real. Rotate the token at once if it may have l
 preflight fails (`the preflight failed: see runbook step 10`, or `bubblewrap cannot start: see runbook
 step 10, the user-namespace note`), read ADR 0040's note on the runner's user-namespace restriction
 before changing anything.
+
+The model job's errors that point here are titled `Audit model`. What each means, before the new run
+(step 11):
+
+- `the audit did not run: see runbook step 10`: the launcher failed. Its one line, just above in the
+  step summary, names the class: `the audit failed: the model's run or its result file` is an expired
+  or revoked token (renew it, above) or the subscription's usage limit (wait until it resets; nothing
+  to rotate); `refused: a Claude Code managed-settings path exists` means the runner image holds an
+  admin policy, which the audit never runs under (read ADR 0040's managed-settings refusal, report it,
+  do not remove the file in the workflow); `the preflight failed` and `bubblewrap cannot start` are the
+  paragraph above; `refused: the Claude Code tarball does not match its pin` is step 11's checksum
+  paragraph, for the CLI's pin in `.github/claude-code.yaml`. The line cannot tell a token from the
+  usage limit: if the limit has not been reached, renew the token.
+- `the runner could not be hardened: see runbook step 10`: stopping or disabling Docker, or removing
+  `/etc/sudoers.d/runner`, failed; `sudo still works`, `the Docker socket is still there` and `the audit
+  directory's owners or modes are not as laid out` name what is still as it was. The runner image
+  changed under `ubuntu-24.04`: compare it with what ADR 0040 records for this step before changing
+  it, and start the new run only once the step matches the image.
 
 ```bash
 # Mac (admin), as yourself: the action, one line per rotated secret. A value is read from the hidden
@@ -2789,6 +2830,39 @@ gh run watch <run_id> --repo timothymamo/shift2eu --exit-status > /dev/null && e
 # PASS, once it finishes: succeeded, and the new run opens the report PR (step 8's checks)
 # FAIL: no "succeeded" line: read the publish job's summary line (below)
 ```
+
+A download step's error `<tool>'s checksum differs from its pin: see runbook step 11` (titled `Audit
+checks`, `Audit model` or `Audit publish`, after the job whose download step it is) means the file
+downloaded is not the one the workflow's `<TOOL>_SHA256` pin names: the step stopped before unpacking or
+installing it, and no later step ran. Do not start the new run at once. Compare the pin with the
+checksum file the tool's release publishes for the pinned version:
+
+```bash
+# Mac (admin): the workflow's pin for the tool the error names, e.g. GITLEAKS
+grep -n -A3 'GITLEAKS_VERSION:' .github/workflows/scheduled-security-audit.yml
+# PASS: the version line, its digestVersion= comment naming the same version, and a 64-hex SHA-256
+# FAIL: a digestVersion= other than the version (a hand edit or a half-applied bump): fix it through a pull request
+```
+
+If the pin matches the release's checksum file, the release asset changed under the same version: a
+supply-chain finding, not a run to repeat; report it and do not raise the pin by hand. If the pin does not
+match, the pin is wrong: fix it through a pull request to `main` (Renovate moves a version and its digest
+in one PR, CLAUDE.md rule 7), then start the new run. The model job's install step checks the Claude
+Code CLI's tarball itself (`.github/scripts/install-claude-code.sh`, shared with the AI reviewer): its own
+error is titled `Claude Code CLI` and names no runbook step, so the workflow adds the line `the Claude
+Code CLI did not install: see runbook step 11` (titled `Audit model`) below it. Read the script's line
+above it: `the downloaded tarball does not match the pinned sha512 integrity` is this paragraph, for the
+pin in `.github/claude-code.yaml` (`ci/claudecodepin` checks it against the registry); `... exists on
+this runner; its managed policy would apply ...` is a managed-settings file on the runner image, as step
+10's `refused: a Claude Code managed-settings path exists`. With neither line above it, read the step's
+log: an `install-claude-code: ... is not ...` line is a malformed value in `.github/claude-code.yaml`, to
+fix through a pull request; an error of `npm pack` is the download itself (no network, no answer from the
+registry): start the new run.
+
+Two more errors point here, each naming its job: `the run's artifacts are unexpected: see runbook step
+11` (`Audit model` or `Audit publish`) is the artifact check's refusal, the first item below; `the publish
+was refused: see runbook step 11` (`Audit publish`) means the publish program failed, and its own summary
+line, just above, is one of the items below.
 
 The publish job's summary line names the class of a failure, never its detail (ADR 0040, "Exit codes and
 the summary line"). What to do for each, before the new run:

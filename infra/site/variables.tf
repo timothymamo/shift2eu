@@ -42,6 +42,20 @@ variable "public_read" {
   default     = false
 }
 
+variable "front_domains" {
+  description = "Whether the site's container serves its two custom domains, www.shift2eu.com and shift2eu.com (ADR 0045). Off by default: Scaleway checks each name's DNS record before it issues the certificate, so the Runbook sets this true in terraform.tfvars only after R8's www CNAME and apex ALIAS point at the container's endpoint."
+  type        = bool
+  nullable    = false
+  default     = false
+}
+
+variable "pipeline_www" {
+  description = "Whether the Edge Services pipeline serves www.shift2eu.com itself, through its TLS stage and managed certificate: milestone 3's chain, before the container fronted the site (ADR 0045). Off by default, the end state, in which the pipeline answers only its default endpoint for the container. The Runbook's R8 rollback sets it true in terraform.tfvars and re-runs R4."
+  type        = bool
+  nullable    = false
+  default     = false
+}
+
 variable "bucket_name" {
   description = "The site bucket's name. Bucket names are global across Scaleway: if this one is taken, choose another in terraform.tfvars."
   type        = string

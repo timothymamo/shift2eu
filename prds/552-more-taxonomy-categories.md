@@ -1,6 +1,6 @@
 # PRD #552: More taxonomy categories
 
-**Status:** In progress, milestones 1 and 2 done. The maintainer decided all eleven questions under *Decisions and
+**Status:** In progress, milestones 1, 2 and 5 done. The maintainer decided all eleven questions under *Decisions and
 decided questions* on 2026-11-24, as recommended. Milestone 1's ADR is
 [0046](../docs/adr/0046-add-seven-taxonomy-categories-and-match-cache-plans-on-memory.md).
 **Issue:** #552
@@ -78,8 +78,8 @@ production estates, not a measured figure.
 | `network.loadbalancer` | A load balancer the provider runs in front of a set of backends, at layer 4 (TCP, and UDP where the capability `udp` says so) or layer 7 (HTTP/HTTPS) | Very common; every target has one, with TCP, HTTP and TLS termination (UDP on OVHcloud only, so far) | Public Cloud Load Balancer | Load Balancer | Managed Load Balancer |
 | `messaging.topic` | A publish-subscribe topic the provider runs: every subscription gets its own copy of each message | Common (SNS, Service Bus topics, Pub/Sub); stops a topic mapping `direct` to a queue | none | Topics and Events | none |
 | `serverless.container` | A container image the provider runs and scales with requests; it may scale to zero when idle (Cloud Run, Container Apps and Scaleway can, App Runner keeps at least one provisioned instance) | Common on GCP (Cloud Run) and Azure (Container Apps) | none | Serverless Containers | none |
-| `registry.container` | A private registry of OCI container images the provider runs | Very common; two targets have a GA registry | Managed Private Registry | Container Registry | none (open beta) |
-| `storage.file` | A shared file system the provider runs, mounted by several machines over NFS | Moderate (EFS, Filestore, Azure Files NFS); every target has one | File Storage Service | File Storage | File Storage |
+| `registry.container` | A private registry of OCI container images the provider runs | Very common; two targets have a GA registry | Managed Private Registry (no 3-AZ variant: zone continuity not stated, milestone 5) | Container Registry | none (open beta) |
+| `storage.file` | A shared file system the provider runs, mounted by several machines over NFS | Moderate (EFS, Filestore, Azure Files NFS); every target has one | none (File Storage Service: general availability not confirmed, milestone 5) | File Storage | File Storage |
 
 The target offerings, with the documentation they were found in on 2026-11-24 (milestones 5 to 7
 re-read each one and cite it in `SOURCES.md`):
@@ -149,6 +149,8 @@ re-read each one and cite it in `SOURCES.md`):
   - OVHcloud: Managed Private Registry (Harbor), plans Small, Medium and Large; in 3-AZ regions "Plans
     Medium and Large run in active-active mode across at least 2 AZs".
     <https://docs.ovhcloud.com/en/guides/public-cloud/containers-orchestration/managed-private-registry/managed-private-registry-faq>.
+    Milestone 5 (2026-11-25) records one offering with no 3-AZ variant: no quoted sentence says the
+    registry keeps serving through the loss of a zone, so `zone-high-availability` is not listed.
   - Scaleway: Container Registry, in Paris, Amsterdam and Warsaw; €0.027 per GB and month stored for
     private images. <https://www.scaleway.com/en/docs/container-registry/faq/>.
   - UpCloud: Managed Container Registry is in open beta ("standard UpCloud SLAs do not apply"), so
@@ -157,6 +159,9 @@ re-read each one and cite it in `SOURCES.md`):
   - OVHcloud: File Storage Service (OpenStack Manila), "managed NFS shares on private networks", NFSv4,
     optional encryption at rest, snapshots.
     <https://docs.ovhcloud.com/en/guides/storage-and-backup/file-storage/file-storage-service/getting-started>.
+    Milestone 5 (2026-11-25) records no offering: general availability is not confirmed (roadmap issue
+    #54 open, the product page's "other consumption modes coming at GA"), so OVHcloud shows fit `none`
+    for `storage.file` until a refresh confirms it.
   - Scaleway: File Storage, GA in Paris (2026-07-16) and Amsterdam (2026-10-21), 25 GB to 50 TB,
     "triple replication" within one zone, encrypted at rest, snapshots, billed on provisioned space;
     mounted by Instances and Kapsule. <https://www.scaleway.com/en/docs/file-storage/faq/>,
@@ -332,7 +337,8 @@ All criteria are pinned by tests that run offline under `make test` or `make tes
 - [ ] Given a resource of a new category and a target with no offering for it, its fit is `none`, the
   reason is "no offering in the <target> catalog for `<category>`", and it is listed as a blocker. This
   holds for `database.mongodb`, `serverless.container` and `registry.container` on UpCloud, and for
-  `messaging.topic` and `serverless.container` on OVHcloud and UpCloud.
+  `messaging.topic` and `serverless.container` on OVHcloud and UpCloud, and for `storage.file` on
+  OVHcloud (milestone 5: general availability not confirmed).
 - [ ] Given a resource of each new category and a target that serves it, the report names the best
   offering, with fit `direct` when the offering lists every capability the resource lists and
   `partial` naming each missing capability otherwise. A test per target pins the best offering for a
@@ -459,7 +465,7 @@ fit `none` with "no offering in the <target> catalog", which is already more pre
    and zones, Cosmos DB `kind`, capabilities and `locations[].isZoneRedundant`, load balancer SKU,
    frontends, backend pools and rule protocols), the file share loop; fixtures, golden and the Azure
    entries of the e2e category list. Depends on 1.
-5. [ ] **OVHcloud catalog.** Offerings for `cache.redis` (Valkey Discovery, Production and their 3-AZ
+5. [x] **OVHcloud catalog.** Offerings for `cache.redis` (Valkey Discovery, Production and their 3-AZ
    variants), `database.mongodb` (Production, Advanced, 3-AZ variants), `network.loadbalancer` (1-AZ
    and 3-AZ, with `udp`), `registry.container` (Managed Private Registry, 3-AZ variant for Medium and Large) and
    `storage.file` (File Storage Service), with plans and prices for the priced ones; `SOURCES.md`,
@@ -469,6 +475,11 @@ fit `none` with "no offering in the <target> catalog", which is already more pre
    <https://www.ovhcloud.com/en/public-cloud/regions-availability/>, fetched as before or, if they
    refuse an automated client, saved by the maintainer. An existing price or plan the re-read page
    shows changed is updated to its current value (*Acceptance criteria*, goldens). Depends on 1.
+   Done on 2026-11-25 with two departures, each a fact not confirmed (*To be checked*): no
+   `storage.file` offering, since File Storage Service's general availability is not confirmed, and one
+   Managed Private Registry offering with no 3-AZ variant, since no quoted page says it keeps serving
+   through the loss of a zone. Both are under *Left out on purpose* in OVHcloud's `SOURCES.md`, with what
+   reverses them. The re-read prices page changed no existing price or plan.
 6. [ ] **Scaleway catalog.** Offerings for `cache.redis` (Managed Database for Redis™; a cluster-mode
    variant with `node-high-availability` and `sharding`), `database.mongodb` (Managed MongoDB®),
    `network.loadbalancer`, `messaging.topic` (Topics and Events), `serverless.container`,
@@ -724,7 +735,31 @@ text as the decision)
   whether Managed Private Registry Small ("active-passive across 2 AZs") meets the zone rule without
   manual failover; whether the Valkey and MongoDB prices are per node or per service (the snapshot stores
   per node, *Estimates*) and that the Valkey page gives a vCPU count per plan; whether
-  `www.ovhcloud.com` answers an automated client.
+  `www.ovhcloud.com` answers an automated client. Checked on 2026-11-25 (public pages, anonymous client;
+  sources in OVHcloud's `SOURCES.md`):
+  - Load Balancer node-level failover: confirmed in the 3-AZ regions only (the reference architecture
+    page's Octavia row: an active and a passive load balancer "each deployed in a separate AZ", "The
+    service will remain available without interruption",
+    <https://docs.ovhcloud.com/en/guides/public-cloud/cross-functional/deployments-modes-reference-architecture>),
+    so *Load Balancer 3-AZ* lists `zone-high-availability` (node level implied). Not confirmed in a
+    1-AZ region: the product page's "distributed architecture" and 99.99% SLA name no failure the load
+    balancer survives, so *Load Balancer* lists neither level.
+  - File Storage Service regions and price: all seven EU regions and €0.000194 per GiB and hour (0.1416
+    a month) on the prices page and the product page, but general availability is not confirmed
+    (roadmap issue <https://github.com/ovh/public-cloud-roadmap/issues/54> open, the product page's
+    "other consumption modes coming at GA"), so no offering; *Left out on purpose* records the offering a
+    confirmed GA would add.
+  - Managed Private Registry Small: not confirmed ("a secondary zone can take over in case of an issue"
+    says neither automatic nor uninterrupted; 3-AZ SLA 99.9%), and Medium and Large not either (their
+    "active-active mode across at least 2 AZs" and 99.99% SLA state no continuity through a zone loss,
+    <https://docs.ovhcloud.com/en/guides/public-cloud/containers-orchestration/managed-private-registry/managed-private-registry-faq>):
+    no 3-AZ variant.
+  - Valkey and MongoDB prices: per node (the prices page's "Price (excl. VAT / hour / node)", its data's
+    `per-node` price beside the `total`, which is the per-node price × the tier's nodes in every row);
+    the snapshot stores the per-node price × 730. The Valkey tables give a "vCore" count per plan, which
+    the snapshot records as `vcpus` (<https://www.ovhcloud.com/en-ie/public-cloud/prices/>).
+  - `www.ovhcloud.com` answers an automated client: yes, with the full pages and the prices page's price
+    data; no page had to be saved by hand.
 - Milestone 6: the regions of every new Scaleway product (the documentation names none but Redis's
   zones); encryption at rest for Redis™ and MongoDB®; whether Topics and Events has a dead-letter
   setting; the page that prices File Storage; whether the Redis™ and MongoDB® node-type prices are per

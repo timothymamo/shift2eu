@@ -251,8 +251,8 @@ func TestGoCacheGaps(t *testing.T) {
 // guard knows: the steps that use the action asked for, in document order, and no other action's step. A
 // step it fails to recognise is a step no gap check reads, so the flow style and a quoted key, which
 // GitHub reads as the same step, are read as one, and a line of a run: block is text, not a step. Both
-// actions the guard knows are read by the one function (test/architecture/releasecache_test.go's
-// stepsUsing): setup-go's steps and the lint action's.
+// actions the guard knows are read by the one function, stepsUsing: setup-go's steps and the lint
+// action's.
 func TestWorkflowStepsUsing(t *testing.T) {
 	t.Parallel()
 

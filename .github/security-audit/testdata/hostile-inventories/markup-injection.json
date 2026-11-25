@@ -1,0 +1,34 @@
+{
+  "schemaVersion": 2,
+  "source": "aws",
+  "resources": [
+    {
+      "id": "<script>alert(1)</script>",
+      "rawType": "<img src=x onerror=alert(1)>",
+      "category": "compute.vm",
+      "region": "eu-central-1",
+      "workload": "[click](javascript:alert(1))"
+    },
+    {
+      "id": "| cell | cell | |---|---|",
+      "rawType": "<!-- comment",
+      "category": "storage.object",
+      "region": "eu-central-1",
+      "workload": "![image](https://example.com/x.png)"
+    },
+    {
+      "id": "``` fenced ```",
+      "rawType": "\"},{\"injected\":true,\"x\":\"",
+      "category": "compute.vm",
+      "region": "eu-central-1",
+      "relations": [{ "type": "depends-on", "target": "<script>alert(1)</script>" }]
+    },
+    {
+      "id": "@everyone #1 :x:",
+      "rawType": "&lt;b&gt;&amp;",
+      "category": "storage.object",
+      "region": "eu-central-1",
+      "workload": "<a href=\"https://example.com\">link</a>"
+    }
+  ]
+}
