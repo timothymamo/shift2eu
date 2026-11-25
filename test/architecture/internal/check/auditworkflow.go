@@ -359,6 +359,12 @@ var (
 	hostileCommit = command(regexp.QuoteMeta(`docker commit "${staging}" "audit-hostile:${GITHUB_RUN_ID}"`), `docker commit "${staging}" "audit-hostile:${GITHUB_RUN_ID}", the image the runs start from`)
 	hostileCreate = command(regexp.QuoteMeta(`cid="$(timeout 2m `+auditContainerFlags+` --memory 512m --pids-limit 64 "audit-hostile:${GITHUB_RUN_ID}" assess `),
 		`cid="$(timeout 2m `+auditContainerFlags+` --memory 512m --pids-limit 64 "audit-hostile:${GITHUB_RUN_ID}" assess ...: each run read-only, with no network, no capability, no new privilege and its limits`)
+	// hostileFindingCandidate is row 13's limits line for a run its own timeout
+	// ended, held whole (review round L of PR 5c, K6): a run that hangs on a
+	// hostile file is a finding candidate, never a run that merely did not finish.
+	hostileFindingCandidate = command(wholeLine(`echo "hostile-inventories: ${run} timed out after 60 seconds, a finding candidate of the run" >> "${results}/limits.txt"`),
+		`echo "hostile-inventories: ${run} timed out after 60 seconds, a finding candidate of the run" >> "${results}/limits.txt", on a line of its own: `+
+			`a run its own timeout ended is a finding candidate of the run, which the skill weighs, never a part that merely did not finish (PRD #175 milestone 2, ADR 0040)`)
 
 	// Row 14: the Go image by digest, each target's shape refused before it
 	// reaches the container, and the container with the four flags, its one
@@ -440,27 +446,32 @@ var (
 	// L2: row 7's release download records its outcome and clears rel_ok on a
 	// timeout, a failure and a download with no checksums.txt, so that the
 	// release's file checks, which the rel_ok gate holds, never read an absent
-	// list as a mismatch.
+	// list as a mismatch. Review round L (K1): each branch sets the why and
+	// writes a limits line, never a not-run line, since the image half still
+	// runs; the step's end writes the why to not-run.txt when no part ran.
 	releaseDownloadOutcome = command(`(?m)^[ \t]*timeout \S+ gh release download "\$\{tag\}" [^\n]* \|\| rc=\$\?\n`+
 		wholeLines(
 			`echo "${rc}" > "${out}/download.exit"`,
 			`rel_ok=1`,
 			`if [ "${rc}" -eq 124 ]; then`,
-			`echo "release-integrity timed-out" >> "${results}/not-run.txt"`,
+			`why=timed-out`,
 		)+`\n[ \t]+echo "release-integrity: [^"\n]+" >> "\$\{results\}/limits\.txt"\n`+
 		wholeLines(
 			`rel_ok=0`,
 			`elif [ "${rc}" -ne 0 ]; then`,
-			`echo "release-integrity tool-failed" >> "${results}/not-run.txt"`,
+			`why=tool-failed`,
+		)+`\n[ \t]+echo "release-integrity: [^"\n]+" >> "\$\{results\}/limits\.txt"\n`+
+		wholeLines(
 			`rel_ok=0`,
 			`elif [ ! -s "${rel}/checksums.txt" ]; then`,
-			`echo "release-integrity results-missing" >> "${results}/not-run.txt"`,
+			`why=results-missing`,
 		)+`\n[ \t]+echo "release-integrity: [^"\n]+" >> "\$\{results\}/limits\.txt"\n`+
 		wholeLines(`rel_ok=0`, `fi`)+`$`,
 		`the release download's outcome right after it, each on a line of its own: echo "${rc}" > "${out}/download.exit", rel_ok=1, `+
-			`if [ "${rc}" -eq 124 ]; then (release-integrity timed-out, its limits line, rel_ok=0), elif [ "${rc}" -ne 0 ]; then (release-integrity tool-failed, rel_ok=0), `+
-			`elif [ ! -s "${rel}/checksums.txt" ]; then (release-integrity results-missing, its limits line, rel_ok=0) and fi: `+
-			`a failed, partial or empty download is a check that did not run, never a checksum finding (PRD #175 milestone 2, ADR 0040)`)
+			`if [ "${rc}" -eq 124 ]; then (why=timed-out, its limits line, rel_ok=0), elif [ "${rc}" -ne 0 ]; then (why=tool-failed, its limits line, rel_ok=0), `+
+			`elif [ ! -s "${rel}/checksums.txt" ]; then (why=results-missing, its limits line, rel_ok=0) and fi: `+
+			`a failed, partial or empty download is limits lines of release-integrity and the why the step's end records when no part ran, never a checksum finding, `+
+			`and never a not-run line beside a finding of the image half (PRD #175 milestone 2, ADR 0040)`)
 	// releaseFileGate is the if that holds the release's file checks to a
 	// download that brought checksums.txt.
 	releaseFileGate = command(wholeLine(`if [ "${rel_ok}" -eq 1 ]; then`), `if [ "${rel_ok}" -eq 1 ]; then, on a line of its own`)
@@ -722,7 +733,7 @@ var auditJobs = []auditJob{
 				check:   "hostile-inventories",
 				budget:  true,
 				parts:   true,
-				runs:    []auditCommand{recordedDigest, imageDigestShape, imageInspect, hostileCorpus, hostileCopy, hostileCommit, hostileCreate},
+				runs:    []auditCommand{recordedDigest, imageDigestShape, imageInspect, hostileCorpus, hostileCopy, hostileCommit, hostileCreate, hostileFindingCandidate},
 				refuses: []auditCommand{anyTmpfs},
 				order:   []auditCommand{recordedDigest, imageDigestShape, imageInspect, hostileCorpus, hostileCopy, hostileCommit, hostileCreate},
 			},
@@ -2279,8 +2290,16 @@ func (a *auditReader) releaseBlocks(code, path, check string) {
 var (
 	auditNotRunLine   = regexp.MustCompile(`>>? "\$\{results\}/not-run\.txt"`)
 	auditNotRunRecord = regexp.MustCompile(`^[ \t]*echo "([a-z0-9-]+) ([^"\s]+)" >> "\$\{results\}/not-run\.txt"$`)
-	// auditPartExit is a part's exit recorded, the line ran_any=1 follows.
-	auditPartExit = regexp.MustCompile(`^[ \t]*echo "\$\{rc\}" > "[^"\n]+\.exit"$`)
+	// auditPartExit is a part's exit recorded, the line ran_any=1 follows;
+	// auditCreateExit is a container's create recorded, which no ran_any=1
+	// follows (review round L of PR 5c, K2): a run whose create failed never
+	// started.
+	auditPartExit   = regexp.MustCompile(`^[ \t]*echo "\$\{rc\}" > "[^"\n]+\.exit"$`)
+	auditCreateExit = regexp.MustCompile(`^[ \t]*echo "\$\{rc\}" > "[^"\n]+\.create\.exit"$`)
+	// auditStepEndLine is a line that runs nothing between a step-level
+	// not-run record and the exit 0 that ends the step (review round L of PR
+	// 5c, K1): a message, an if or elif on a test, else or fi.
+	auditStepEndLine = regexp.MustCompile(`^[ \t]*(?:(?:el)?if \[ [^\n]* \]; then|else|fi)$`)
 )
 
 // auditWhyIDs are the why ids a not-run.txt line may end in (review round K of
@@ -2311,6 +2330,12 @@ func (a *auditReader) whyIDs(code, path string) {
 			continue
 		}
 
+		if v := auditWhyDefault.FindStringSubmatch(m[2]); v != nil {
+			a.whyVariable(code, path, m[1], v[1])
+
+			continue
+		}
+
 		if !slices.Contains(auditWhyIDs, m[2]) {
 			a.r.fail(`%s records %s %s in ${results}/not-run.txt, and %q is no why id the publish core holds (%s): `+
 				`the core refuses a result whose why it cannot render, so the run publishes no report; a part of a check that was skipped is a limits line (PRD #175 milestone 2, ADR 0040)`,
@@ -2319,15 +2344,62 @@ func (a *auditReader) whyIDs(code, path string) {
 	}
 }
 
+// auditWhyDefault is a not-run.txt line's why read from the shell variable
+// why, with its default (review round L of PR 5c, K1); auditWhyAssignment is
+// any assignment to that variable, auditWhyID the one shape it may take.
+var (
+	auditWhyDefault    = regexp.MustCompile(`^\$\{why:-([^}]*)\}$`)
+	auditWhyAssignment = regexp.MustCompile(`(?:^|[\s;&|(])(?:local\s+|export\s+|readonly\s+|declare\s+(?:-\S+\s+)*)?why(?:\+)?=`)
+	auditWhyID         = regexp.MustCompile(`^[ \t]*why=([a-z0-9-]+)$`)
+)
+
+// whyVariable holds a not-run.txt line whose why is ${why:-<default>} to why
+// ids alone (review round L of PR 5c, K1): its default, and every assignment
+// to why in the step, each why=<why id> on a line of its own, is an id of
+// auditWhyIDs, so that the line the step's end writes is one the publish core
+// renders whichever branch set it.
+func (a *auditReader) whyVariable(code, path, check, def string) {
+	if !slices.Contains(auditWhyIDs, def) {
+		a.r.fail(`%s records %s ${why:-%s} in ${results}/not-run.txt, and its default %q is no why id the publish core holds (%s): `+
+			`the core refuses a result whose why it cannot render, so the run publishes no report (PRD #175 milestone 2, ADR 0040)`,
+			path, check, def, def, strings.Join(auditWhyIDs, ", "))
+	}
+
+	for _, line := range strings.Split(code, "\n") {
+		if auditMessageLine.MatchString(line) || !auditWhyAssignment.MatchString(line) {
+			continue
+		}
+
+		m := auditWhyID.FindStringSubmatch(line)
+		if m == nil {
+			a.r.fail(`%s sets why in another shape (%q), want why=<why id> on a line of its own: the step's end writes why to not-run.txt, `+
+				`and the publish core refuses a why it cannot render, so the run would publish no report (PRD #175 milestone 2, ADR 0040)`,
+				path, strings.TrimSpace(line))
+
+			continue
+		}
+
+		if !slices.Contains(auditWhyIDs, m[1]) {
+			a.r.fail(`%s sets why=%s, and %q is no why id the publish core holds (%s): the step's end writes why to not-run.txt, `+
+				`and the core refuses a result whose why it cannot render, so the run publishes no report (PRD #175 milestone 2, ADR 0040)`,
+				path, m[1], m[1], strings.Join(auditWhyIDs, ", "))
+		}
+	}
+}
+
 // partRecords holds a step whose check has several parts (rows 7, 13 and 14,
 // review round K of PR 5c, B1) to what not-run.txt means: the check did not
 // run. A part that timed out or failed is a limits line of the check, with its
-// exit file; the check goes to not-run.txt only before any part ran (a
-// download, a pull or a staging that failed first) or, at the step's end, when
-// no part ran at all. The step sets ran_any=0 before its first part, ran_any=1
-// right after each part's exit inside its loops, and ends with
+// exit file; the check goes to not-run.txt only right before the exit 0 of a
+// failure before any part ran (a pull or a staging that failed first) or, at
+// the step's end, when no part ran at all (review round L, K1: row 7's
+// download, after which the image half still runs, sets why and writes a
+// limits line instead). The step sets ran_any=0 before its first part,
+// ran_any=1 right after the exit of each part that started inside its loops,
+// never right after a create's exit (round L, K2), and ends with
 // if [ "${ran_any}" -eq 0 ]; then, echo "<check> tool-failed" >>
-// "${results}/not-run.txt" and fi, after its last ran_any=1.
+// "${results}/not-run.txt" (or "<check> ${why:-tool-failed}") and fi, after
+// its last ran_any=1.
 func (a *auditReader) partRecords(code, path, check string) {
 	lines := strings.Split(code, "\n")
 
@@ -2360,12 +2432,16 @@ func (a *auditReader) partRecords(code, path, check string) {
 		}
 	}
 
+	// The end record's why is tool-failed, or the why a step-level part set
+	// before it (row 7's download, review round L of PR 5c, K1), tool-failed
+	// when none did.
 	record := `echo "` + check + ` tool-failed" >> "${results}/not-run.txt"`
+	whyRecord := `echo "` + check + ` ${why:-tool-failed}" >> "${results}/not-run.txt"`
 	end := -1
 
 	for i := max(lastRan, 0); i+2 < len(lines); i++ {
-		if !inLoop[i] && strings.TrimSpace(lines[i]) == `if [ "${ran_any}" -eq 0 ]; then` &&
-			strings.TrimSpace(lines[i+1]) == record && strings.TrimSpace(lines[i+2]) == "fi" {
+		if r := strings.TrimSpace(lines[i+1]); !inLoop[i] && strings.TrimSpace(lines[i]) == `if [ "${ran_any}" -eq 0 ]; then` &&
+			(r == record || r == whyRecord) && strings.TrimSpace(lines[i+2]) == "fi" {
 			end = i + 1
 
 			break
@@ -2373,15 +2449,12 @@ func (a *auditReader) partRecords(code, path, check string) {
 	}
 
 	if end < 0 || lastRan < 0 {
-		a.r.fail(`%s has no record of a check none of whose parts ran, want after its last ran_any=1, each on a line of its own: if [ "${ran_any}" -eq 0 ]; then, %s and fi: `+
-			`a step whose parts all failed has no result to report, and is the check that did not run (PRD #175 milestone 2, ADR 0040)`, path, record)
+		a.r.fail(`%s has no record of a check none of whose parts ran, want after its last ran_any=1, each on a line of its own: if [ "${ran_any}" -eq 0 ]; then, %s (or %s) and fi: `+
+			`a step whose parts all failed has no result to report, and is the check that did not run (PRD #175 milestone 2, ADR 0040)`, path, record, whyRecord)
 	}
 
 	for i, l := range lines {
-		if inLoop[i] && auditPartExit.MatchString(l) && (i+1 >= len(lines) || strings.TrimSpace(lines[i+1]) != "ran_any=1") {
-			a.r.fail(`%s records a part's exit (%q) inside its loop without ran_any=1 on the line right after it: a part that ran, whatever its exit, is a result of %s, `+
-				`so that the check is recorded as not run only when no part ran (PRD #175 milestone 2, ADR 0040)`, path, strings.TrimSpace(l), check)
-		}
+		a.ranAfterExit(lines, i, inLoop[i], path, check)
 
 		if i == end || !auditNotRunLine.MatchString(l) {
 			continue
@@ -2399,8 +2472,57 @@ func (a *auditReader) partRecords(code, path, check string) {
 		case firstRan >= 0 && i > firstRan:
 			a.r.fail(`%s records %s in not-run.txt after a part ran, want a limits line of that part: once a part of %s produced a result the check ran, `+
 				`and only the step's end records it as not run, when ran_any is still 0 (PRD #175 milestone 2, ADR 0040)`, path, what, check)
+		case !endsStep(lines, i):
+			a.r.fail(`%s records %s in not-run.txt and goes on, want a limits line, and the why at the step's end: a step of %s records the check in not-run.txt `+
+				`only at its end, when ran_any is still 0, or right before the exit 0 of a failure before any part ran (only messages, if, elif, else and fi between), `+
+				`since a later part may still record a finding of the same check, which a not-run line beside it would contradict (PRD #175 milestone 2, ADR 0040)`, path, what, check)
 		}
 	}
+}
+
+// ranAfterExit holds lines[i], inside a loop of a step of several parts, to
+// how ran_any counts a part (review round L of PR 5c, K2): ran_any=1 right
+// after the exit of a run or target that started (whatever its exit), and
+// never right after a container's create, since a run whose create failed
+// never started, and is no part of the check that ran.
+func (a *auditReader) ranAfterExit(lines []string, i int, inLoop bool, path, check string) {
+	if !inLoop || !auditPartExit.MatchString(lines[i]) {
+		return
+	}
+
+	marked := i+1 < len(lines) && strings.TrimSpace(lines[i+1]) == "ran_any=1"
+	exit := strings.TrimSpace(lines[i])
+
+	switch create := auditCreateExit.MatchString(lines[i]); {
+	case create && marked:
+		a.r.fail(`%s sets ran_any=1 right after a create's exit (%q): a run whose create failed never started, so it is no part of %s; `+
+			`ran_any=1 follows the create's continue guard, or the start's exit, so that a step whose every create failed is the check that did not run, `+
+			`never one that ran clean (PRD #175 milestone 2, ADR 0040)`, path, exit, check)
+	case !create && !marked:
+		a.r.fail(`%s records a part's exit (%q) inside its loop without ran_any=1 on the line right after it: a part that ran, whatever its exit, is a result of %s, `+
+			`so that the check is recorded as not run only when no part ran (PRD #175 milestone 2, ADR 0040)`, path, exit, check)
+	}
+}
+
+// endsStep reports whether the not-run record on lines[i] is followed by the
+// step's exit 0 with nothing run between (review round L of PR 5c, K1): only
+// messages, and the if, elif, else and fi lines of its branch and of the
+// exit's guard.
+func endsStep(lines []string, i int) bool {
+	for j := i + 1; j < len(lines); j++ {
+		l := lines[j]
+
+		switch {
+		case strings.TrimSpace(l) == "exit 0":
+			return true
+		case auditMessageLine.MatchString(l), auditStepEndLine.MatchString(l), strings.TrimSpace(l) == "":
+			continue
+		default:
+			return false
+		}
+	}
+
+	return false
 }
 
 // lineMatching returns the index of the first of lines re matches, -1 for
@@ -2905,21 +3027,26 @@ func (a *auditReader) fit(code, path string, minutes int) {
 // The shapes fit cannot count (review round K of PR 5c, the auditor's L2 and
 // the reviewer's S1): a timeout word, its spelling after it, a line that
 // starts a loop, a loop's body on its header's line, and a timeout a command
-// runs once per argument.
+// runs once per argument. A loop word is one after a line start, a blank or
+// an operator (review round L of PR 5c, K3), so a header after && or ; is one
+// fit must follow or refuse; a timeout word may follow a quote (round L, K4 and
+// the auditor's L1), so one inside a quoted sh -c string is seen, and refused.
 var (
-	auditTimeoutWord     = regexp.MustCompile(`(?:^|[\s;&|(])timeout(?:[ \t]|$)`)
+	auditTimeoutWord     = regexp.MustCompile(`(?:^|[\s;&|('"])timeout(?:[ \t]|$)`)
 	auditTimeoutSpelling = regexp.MustCompile(`^ [0-9]+[sm]? \S`)
-	auditLoopWord        = regexp.MustCompile(`^[ \t]*(?:[^\n]*\|[ \t]*)?(?:while|until|for)\s`)
+	auditLoopWord        = regexp.MustCompile(`(?:^|[\s;&|(])(?:for|while|until)\s`)
 	auditOneLineLoop     = regexp.MustCompile(`(?:^|[\s;&|(])(?:for|while|until)\s.*;\s*do\s+\S`)
-	auditPerArgument     = regexp.MustCompile(`(?:^|[\s;&|(])(xargs\s[^\n]*|find\s[^\n]*-exec(?:dir)?\s[^\n]*)(?:^|[\s;&|(])timeout(?:\s|$)`)
+	auditPerArgument     = regexp.MustCompile(`(?:^|[\s;&|(])(?:xargs|find\s[^\n]*-exec(?:dir)?)\s(?:[^\n]*[\s;&|('"])?timeout(?:\s|$)`)
 )
 
 // fitShapes refuses, in a step fit holds, what its sum cannot follow (review
 // round K of PR 5c): a timeout that is no timeout <N>, <N>s or <N>m before its
 // command (timeout 1h, 1.5m or a flag such as -k 5, which fit would count as 0
 // or as the flag's value); a loop whose header is no auditLoopStart (its body on
-// the header's line, or do on a line of its own), which fit would count as
-// lines run once; and a timeout xargs or find -exec runs once per argument.
+// the header's line, do on a line of its own, or a loop word after && or ;),
+// which fit would count as lines run once; a timeout xargs or find -exec runs
+// once per argument, whatever stands between the runner and the timeout; and a
+// timeout inside a quoted string, which a shell the step starts runs (round L).
 func (a *auditReader) fitShapes(lines []string, path string) {
 	for i, line := range lines {
 		trimmed := strings.TrimSpace(line)
@@ -2927,6 +3054,14 @@ func (a *auditReader) fitShapes(lines []string, path string) {
 		if !auditMessageLine.MatchString(line) {
 			for _, loc := range auditTimeoutWord.FindAllStringIndex(line, -1) {
 				at := loc[0] + strings.Index(line[loc[0]:loc[1]], "timeout") + len("timeout")
+				if before := at - len("timeout") - 1; before >= 0 && (line[before] == '\'' || line[before] == '"') {
+					a.r.fail(`%s runs a timeout inside a quoted string (%q), the script of a shell such as sh -c: fit counts the step's own timeouts, `+
+						`not those of a shell the step starts, so this one could outrun the step's timeout-minutes, which ends the job before the encrypt step; `+
+						`run the timeout in the step's own script (PRD #175 milestone 2, ADR 0040)`, path, trimmed)
+
+					continue
+				}
+
 				if auditTimeoutSpelling.MatchString(line[at:]) {
 					continue
 				}
@@ -2943,7 +3078,7 @@ func (a *auditReader) fitShapes(lines []string, path string) {
 				`so the step's own timeouts could outrun its timeout-minutes; run the timeout in a budgeted loop instead (PRD #175 milestone 2, ADR 0040)`, path, trimmed)
 		}
 
-		if auditLoopStart.MatchString(line) || (!auditLoopWord.MatchString(line) && !auditOneLineLoop.MatchString(line)) {
+		if auditMessageLine.MatchString(line) || auditLoopStart.MatchString(line) || (!auditLoopWord.MatchString(line) && !auditOneLineLoop.MatchString(line)) {
 			continue
 		}
 
@@ -3020,10 +3155,18 @@ func (a *auditReader) bounded(code, path, check string) {
 		}
 	}
 
+	// Row 7's download records its why in a variable the step's end writes
+	// (review round L of PR 5c, K1): why=<why> on a line of its own, with the
+	// end's echo "<check> ${why:-<id>}" record, is that why recorded too.
+	whyRecord := regexp.MustCompile(`(?m)^[ \t]*echo "` + regexp.QuoteMeta(check) + ` \$\{why:-[a-z0-9-]+\}" >> "\$\{results\}/not-run\.txt"$`)
+
 	for _, why := range []string{"tool-failed", "timed-out"} {
 		record := `echo "` + check + ` ` + why + `" >> "${results}/not-run.txt"`
-		if !strings.Contains(code, record) {
-			a.r.fail("%s records no %s %s (%s): a command of the check that fails or times out names the check as not run, never as clean", path, check, why, record)
+		set := regexp.MustCompile(`(?m)^[ \t]*why=` + regexp.QuoteMeta(why) + `$`)
+
+		if !strings.Contains(code, record) && (!set.MatchString(code) || !whyRecord.MatchString(code)) {
+			a.r.fail("%s records no %s %s (%s, or why=%s with the step's end record echo \"%s ${why:-<why id>}\" >> \"${results}/not-run.txt\"): "+
+				"a command of the check that fails or times out names the check as not run, never as clean", path, check, why, record, why, check)
 		}
 	}
 }

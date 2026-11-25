@@ -2601,9 +2601,11 @@ the report, then milestone 3's schedule. On the first run, read the report's Cov
 ADR 0040's two "To be checked on the first run" lists (PRs 5b and 5c): every check but `scorecard-admin`
 should read "run" or "findings", and a read the checks job's token was refused (Limits, "read refused")
 that one of its four read scopes should allow is a finding to fix before the schedule. The checks job
-names each check that did not run in the Limits, never as clean (ADR 0040, review rounds I and K of PR
-5c): `release-integrity results-missing` (the release download brought no `checksums.txt`, so no file
-was checksummed or attested: check the release's assets), and `scorecard`, `image-pull` and `image-scan`
+names each check that did not run in the Limits, never as clean (ADR 0040, review rounds I, K and L of
+PR 5c): `release-integrity results-missing` (the release download brought no `checksums.txt`, so no file
+was checksummed or attested, and no part of the image's verification ran either: check the release's
+assets; a download that failed while the image was verified is only the limits line
+"release-integrity: no checksums.txt, ..." or "release-integrity: the release download ..."), and `scorecard`, `image-pull` and `image-scan`
 `tool-failed` or `timed-out` (the tool exited with an error or ran out of time: its `.exit` file in the
 results names it). A check that ran in part keeps "run" or "findings", and names each part that did not
 in a limits line of its own: "release-integrity: no image digest, ..." (the tag's image digest did not
@@ -2611,8 +2613,9 @@ resolve, so its signature and attestations were not verified: check the image's 
 release file's attestation or the image's signature that timed out or failed, one hostile run or fuzz
 target whose create failed or that timed out, "supply-chain: a ruleset ID that is no number was not
 read" (the rulesets list held such an ID) and "fuzzing: a target of an unexpected shape was not run".
-`release-integrity`, `hostile-inventories` or `fuzzing` `tool-failed` alone means none of the check's
-parts ran. Each is a limit to explain before the schedule, not a run to repeat blindly; a
+`release-integrity` `tool-failed`, `results-missing` or `timed-out`, and `hostile-inventories` or
+`fuzzing` `tool-failed`, alone mean none of the check's parts ran (a run or target whose create failed
+never started, so it is no part that ran). Each is a limit to explain before the schedule, not a run to repeat blindly; a
 `release-integrity verification-failed` is a finding about the release (a checksum mismatch, a refused
 attestation or signature, or "checksums.txt holds no well-formed line"), never one of these. A read
 listed in `supply-chain/read-skipped.txt` (Limits, "the budget of 12 minutes ran out before these

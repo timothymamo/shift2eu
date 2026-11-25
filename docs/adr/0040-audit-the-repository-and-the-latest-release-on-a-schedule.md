@@ -2317,7 +2317,10 @@ download, pull or staging failed before any part ran, or every part failed. A pa
 out or failed (one release file's attestation, one hostile run, one fuzz target) is a `limits.txt` line
 of that check with its `.exit` file, never a `not-run.txt` line, since the publish core refuses a finding
 of a check recorded with `ran: false`. Rows 7, 13 and 14, whose checks have several parts, count them in
-shell (`ran_any`) and write `<check> tool-failed` at the step's end only when none ran; every why id is
+shell (`ran_any`) and write `<check> tool-failed` at the step's end only when none ran (*amended in
+review round L:* row 7 writes `release-integrity ${why:-tool-failed}`, the why its download set, since
+the image half runs after a failed download; a run or a fuzz target counts only once it started, never
+after a failed create); every why id is
 one of the publish core's `whyNotRun`, which `check.AuditWorkflow` holds. Each row
 appends its own: `scorecard-admin needs-admin-read` on every run; `image-pull`, `image-runtime`,
 `hostile-inventories` and `image-scan` `image-not-pulled` when row 7 resolved no digest or row 8 pulled
@@ -2674,7 +2677,7 @@ finding, never a limit. Each is held by `check.AuditWorkflow` and a case of its 
   report a `verification-failed` as a limit only when the command's `.exit` file records a code other
   than the refusal codes above; stderr is context, never a reason, because the registry's, Sigstore's and
   GitHub's text in it can be shaped in part by whoever tampered with the image. Its rows 6, 8 and 10 name
-  their new `tool-failed` records.
+  their new `tool-failed` records. *Amended in review round K:* never downgraded (N3).
 - **N1.** The fixture's cosign pin is v3.1.5's, as the workflow's.
 
 *Accepted residual (N3, unchanged):* `timeout` sends no `SIGKILL` (`--kill-after`), as round F records:
@@ -2733,7 +2736,11 @@ of its test:
   step-level download, pull and staging records before any part ran keep their not-run lines. The check
   refuses, in those three steps, a not-run line inside a loop, one outside the loops after the first
   `ran_any=1` (the end record aside), a part's exit inside a loop with no `ran_any=1` after it, and a
-  step with no end record after its last `ran_any=1`. Row 13's run that hangs the CLI is the limits line
+  step with no end record after its last `ran_any=1`. *Corrected in review round L:* this left row 7's
+  download writing its not-run line in its own branch while the image half still ran, and rows 13 and 14
+  counting a failed create as a part that ran. Since round L a step writes a not-run line only at its end,
+  when no part ran, or right before the `exit 0` of a failure before any part ran (rows 13 and 14's pull
+  and staging); row 7's download writes a limits line and the why (round L, below). Row 13's run that hangs the CLI is the limits line
   `<run> timed out after 60 seconds, a finding candidate of the run`, with exit 124 in its `.exit` file,
   which the skill reads as a finding candidate. The skill adds the belt and braces: a check with any
   finding, or any `verification-failed.txt` line, ran, and any not-run line of it goes to the limits.
@@ -2757,7 +2764,9 @@ of its test:
   and any other loop header that is no `auditLoopStart`; (c) inside a budgeted loop's body, an inner loop
   with a timeout that is neither budgeted nor over literal words, and a literal-word inner loop with no
   budget counts its timeouts once per word; (d) a `timeout` that `xargs` or `find -exec` runs once per
-  argument. (d) is closed, not left as a residual.
+  argument. *Corrected in review round L:* (b) and (d) are closed only for the shapes round L refuses: a
+  loop header after `&&` or `;`, and `xargs timeout ...` or `find ... -exec timeout ... {} +` with nothing
+  between, passed round K's check (K3, K4).
 
 *Accepted residuals of the text tripwire*, which `fit` does not hold: an outer loop's timeouts around a
 budgeted inner loop (counted once, not per outer iteration); a budget that is not at the head of a loop
@@ -2766,7 +2775,44 @@ budgeted functions, beyond round J's rule; and a timeout reached through anythin
 line (a variable that holds the command, `eval`, a script file). The numbers are unchanged: every
 step's bound is round J's, and the job's steps add up to 348 of its 355 minutes. The PRD's box "A failed
 run is visible" stays unticked, for milestone 3, and rows 9 and 10, which also write a part's failure to
-`not-run.txt`, are left as they are: the B1 rule is scoped to rows 7, 13 and 14.
+`not-run.txt`, are left as they are: the B1 rule is scoped to rows 7, 13 and 14. *Amended in review
+round L:* rows 3, 5 and 11 do so too (round L, below).
+
+**Review round L of PR 5c (2026-11-25).** The reviewer's and the auditor's findings on round K. Each is
+held by `check.AuditWorkflow` and a case of its test:
+
+- **K1 (auditor M1), row 7's download is no whole verdict.** Its three branches wrote `release-integrity
+  timed-out`, `tool-failed` or `results-missing` to `not-run.txt`, and the image half ran after them, so a
+  release with no `checksums.txt` and a tampered image signature gave a not-run line beside a
+  `verification-failed.txt` line of the same check, which the core refuses. Each branch now sets
+  `why=timed-out`, `why=tool-failed` or `why=results-missing` and writes a limits line (the failed
+  download one of its own, `release-integrity: the release download failed with exit ${rc}`, the
+  auditor's N1), and the step's end writes `release-integrity ${why:-tool-failed}` only when `ran_any` is
+  still 0. The check refuses, in rows 7, 13 and 14, a not-run line anywhere but the step's end record
+  unless only messages and the `if`, `elif`, `else` and `fi` lines of its branch stand between it and the
+  step's `exit 0`; it accepts a `${why:-<id>}` record only when its default and every assignment to `why`
+  in the step, each `why=<why id>` on a line of its own, are why ids of `whyNotRun`.
+- **K2, a failed create is no run.** Rows 13 and 14 set `ran_any=1` right after the create's exit, so a
+  step whose every create failed read as a check that ran clean. `ran_any=1` now follows the create's
+  `continue` guard and the start's exit; the check refuses it right after a `.create.exit` and still
+  demands it right after the start's.
+- **K3, a loop header after `&&` or `;`.** A loop word after a blank or an operator is a loop header
+  `fit` must follow, and it refuses one that is no `auditLoopStart`.
+- **K4 (auditor L1), a timeout per argument or in a quoted string.** `fit` refuses a `timeout` that
+  `xargs` or `find -exec`/`-execdir` runs, whatever stands between the runner and the timeout, and a
+  `timeout` inside a quoted string (`sh -c 'timeout 50m true'`), which a shell the step starts would run.
+- **K6.** Row 13's limits line `hostile-inventories: ${run} timed out after 60 seconds, a finding
+  candidate of the run` is held whole.
+- **K7.** The check's list of why ids and `whyNotRun` are pinned equal in both directions.
+
+*Accepted residuals*, besides round K's: a `timeout` invoked by its path (`/usr/bin/timeout`), and other
+runners that run a command once per argument, such as `parallel`, which `fit` does not see. **K5:** rows
+3 (`dependencies`: govulncheck on the module and the tools, osv-scanner), 5 (`workflows`: zizmor,
+actionlint), 9 (`binary-vulnerabilities`), 10 (`image-scan`) and 11 (`image-runtime`) can still write a
+part's failure as the whole check's not-run line while another part of the check has a finding; the
+skill's paragraph "A check that ran, and one that did not" is the only guard there. Applying `ran_any` to
+those rows is a milestone 3 follow-up. The numbers are unchanged: no timeout moved, every step's bound is
+round J's, and the job's steps add up to 348 of its 355 minutes.
 
 ## Alternatives considered
 
