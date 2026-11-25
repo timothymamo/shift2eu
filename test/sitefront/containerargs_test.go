@@ -740,6 +740,95 @@ resource "scaleway_container" "site" {
 				argv:  []string{"/bin/sh", "-c", "${literal}", "%{literal}"},
 			},
 		},
+		// A quoted string anywhere in the container block is a string this reader must read as a string: a
+		// template inside one nests a string in a string ("${ "x" }"), and a reader that ends a string at the
+		// first unescaped quote reads what stands inside the nested one as code, so it can return a command line
+		// the platform never runs. Every such string is refused, except file()'s Caddyfile argument below.
+		{
+			name: "a description holding a nested template string before the args",
+			tf: comment + imageLine + `
+resource "scaleway_container" "site" {
+  description = "${ "(" }The site's Caddy front"
+  command     = ["/bin/sh", "-c"]
+  args        = ["run", "caddy"]
+}
+`,
+			wantErr: "holds an HCL template (interpolation)",
+		},
+		{
+			name: "a name holding a nested template expression after the args",
+			tf: comment + imageLine + `
+resource "scaleway_container" "site" {
+  command = ["/bin/sh", "-c"]
+  args    = ["run", "caddy"]
+  name    = "front${ "))))${ length({ args = ["evil"] }) }" }"
+}
+`,
+			wantErr: "holds an HCL template (interpolation)",
+		},
+		{
+			name: "a description whose interpolation holds only an empty string",
+			tf: comment + imageLine + `
+resource "scaleway_container" "site" {
+  description = "${"{"}"
+  command     = ["/bin/sh", "-c"]
+  args        = ["run", "caddy"]
+}
+`,
+			wantErr: "holds an HCL template (interpolation)",
+		},
+		{
+			name: "a name holding a plain template above the real command",
+			tf: comment + imageLine + `
+resource "scaleway_container" "site" {
+  name    = "${var.prefix}-front"
+  command = ["/bin/sh", "-c"]
+  args    = ["run", "caddy"]
+}
+`,
+			wantErr: "holds an HCL template (interpolation)",
+		},
+		{
+			name: "a description holding a template directive",
+			tf: comment + imageLine + `
+resource "scaleway_container" "site" {
+  description = "%{ if true }front%{ endif }"
+  command     = ["/bin/sh", "-c"]
+  args        = ["run", "caddy"]
+}
+`,
+			wantErr: "holds an HCL template (directive)",
+		},
+		// A raw newline ends no quoted string in HCL: tofu refuses one, so a reader that runs over it reads the
+		// rest of the file as one string.
+		{
+			name: "a description string that reaches a newline",
+			tf: comment + imageLine + `
+resource "scaleway_container" "site" {
+  description = "The site's Caddy
+  front"
+  command     = ["/bin/sh", "-c"]
+  args        = ["run", "caddy"]
+}
+`,
+			wantErr: "holds a raw newline",
+		},
+		// The escapes HCL writes for a literal template are no template, so every string of the block may hold
+		// them: the refusal above is about a template the reader would have to run.
+		{
+			name: "a description that escapes the template syntax",
+			tf: comment + imageLine + `
+resource "scaleway_container" "site" {
+  description = "$${literal} and %%{literal} front"
+  command     = ["/bin/sh", "-c"]
+  args        = ["run", "caddy"]
+}
+`,
+			want: containerRun{
+				image: caddyAt,
+				argv:  []string{"/bin/sh", "-c", "run", "caddy"},
+			},
+		},
 		{
 			name: "an element that escapes what HCL escapes",
 			tf: comment + imageLine + `command = ["/bin/sh", "-c"]
