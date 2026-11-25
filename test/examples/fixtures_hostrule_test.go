@@ -349,6 +349,46 @@ func TestSanitisationProblemsHostNameRule(t *testing.T) {
 			want: nil,
 		},
 		{
+			// A resource type names a kind of resource, never a host: the
+			// provider namespace of Container Apps with "/" and its type
+			// directly after it is Azure's own vocabulary (PRD #552, issue
+			// #610), whatever case it is written in. The rule is the AI
+			// reviewer's scan's (ci/aireview/internal/review/scan.go,
+			// isAzureNamespace), so the fixture check needs no allow list
+			// entry for it.
+			name: "Azure Container Apps resource types",
+			text: `{"type": "Microsoft.App/containerApps", "managed": "microsoft.app/managedenvironments"}`,
+			want: nil,
+		},
+		{
+			// A customer's own host under the .app TLD is still reported: the
+			// rule excuses microsoft.<namespace>/ alone.
+			name: "planted customer host under the app TLD",
+			text: "the storefront answers at shop-corp.app",
+			want: []string{"shop-corp.app"},
+		},
+		{
+			// The rule needs "/" and a resource type right after the
+			// namespace: a bare microsoft.app is the public host of the
+			// provider namespace's owner, and stays reported.
+			name: "Azure namespace with no resource type after it",
+			text: "the type is written microsoft.app in prose",
+			want: []string{"microsoft.app"},
+		},
+		{
+			// So does a deeper name: only a name that is exactly
+			// microsoft.<namespace> is no host, never a name below one.
+			name: "name below the Azure namespace",
+			text: "the type shop.microsoft.app/containerApps is no namespace",
+			want: []string{"shop.microsoft.app"},
+		},
+		{
+			// And so does a name that only ends in the namespace's shape.
+			name: "name that only ends in the Azure namespace",
+			text: "the host xmicrosoft.app/x is no namespace",
+			want: []string{"xmicrosoft.app"},
+		},
+		{
 			name: "Go selector in a Go-source fixture",
 			text: "the test calls testing.T",
 			want: nil,
