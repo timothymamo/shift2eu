@@ -375,6 +375,15 @@
       }
     },
     {
+      "id": "shop-preview-redis",
+      "rawType": "AWS::ElastiCache::CacheCluster",
+      "category": "cache.redis",
+      "region": "eu-central-1",
+      "size": {
+        "count": 1
+      }
+    },
+    {
       "id": "shop-public-gallery",
       "rawType": "AWS::ECR::PublicRepository",
       "category": "unclassified",

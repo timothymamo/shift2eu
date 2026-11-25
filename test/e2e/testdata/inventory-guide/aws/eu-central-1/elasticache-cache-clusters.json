@@ -67,6 +67,17 @@
       "CacheNodeType": "cache.t4g.small"
     },
     {
+      "CacheClusterId": "shop-preview-redis",
+      "ARN": "arn:aws:elasticache:eu-central-1:123456789012:cluster:shop-preview-redis",
+      "ReplicationGroupId": null,
+      "Engine": "redis",
+      "NumCacheNodes": 1,
+      "PreferredAvailabilityZone": "eu-central-1c",
+      "SnapshotRetentionLimit": 0,
+      "AtRestEncryptionEnabled": false,
+      "CacheNodeType": "cache.t4g.micro"
+    },
+    {
       "CacheClusterId": "shop-cart-redis-001",
       "ARN": "arn:aws:elasticache:eu-central-1:123456789012:cluster:shop-cart-redis-001",
       "ReplicationGroupId": "shop-cart-redis",

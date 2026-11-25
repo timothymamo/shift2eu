@@ -203,6 +203,13 @@ func inventoryGuides() []inventoryGuideCase {
 					id: "shop-analytics-redis", rawType: "AWS::ElastiCache::CacheCluster", category: "cache.redis",
 					capabilities: []string{"encryption-at-rest"},
 				},
+				// The same standalone cluster unencrypted, and with no snapshot: the
+				// other branch of the at-rest rule, where the flag is false and the
+				// cluster carries no capability at all.
+				{
+					id: "shop-preview-redis", rawType: "AWS::ElastiCache::CacheCluster", category: "cache.redis",
+					capabilities: []string{},
+				},
 				// Memcached is not the Redis protocol, so no target runs it. Its
 				// NumCacheNodes is the nodes of a cache no category takes, not a
 				// size: the program writes none.
@@ -368,6 +375,7 @@ func inventoryGuides() []inventoryGuideCase {
 				{id: "shop-sessions-valkey", count: 1, noMemoryGiB: true},
 				{id: "shop-cart-redis", count: 2, noMemoryGiB: true},
 				{id: "shop-analytics-redis", count: 1, noMemoryGiB: true},
+				{id: "shop-preview-redis", count: 1, noMemoryGiB: true},
 				// A DocumentDB cluster's instances are its nodes. Its
 				// AllocatedStorage describes nothing: the storage is the
 				// cluster's volume, so the cluster gets no storageGiB.
