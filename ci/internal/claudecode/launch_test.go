@@ -350,8 +350,10 @@ func TestEnvIsTheAllowListAlone(t *testing.T) {
 // TestAskRefusesTheNewFieldsAtTheirZeroShape pins what a config of a shape ADR
 // 0040's model-job amendment does not allow fails with: ErrModel, before the CLI starts,
 // like a relative path or a model name of the wrong shape. A permission mode
-// other than dontAsk or plan is the one that matters most: bypassPermissions,
-// the CLI's own name for running a call no rule matches, is never passed on.
+// other than default or dontAsk is the one that matters most: bypassPermissions,
+// the CLI's own name for running a call no rule matches, is never passed on, and
+// plan, which in 2.1.332 ran calls no allow rule matches, is refused too (issue
+// #592).
 func TestAskRefusesTheNewFieldsAtTheirZeroShape(t *testing.T) {
 	t.Parallel()
 
@@ -383,6 +385,15 @@ func TestAskRefusesTheNewFieldsAtTheirZeroShape(t *testing.T) {
 			name:  "the permission mode acceptEdits",
 			field: "permission mode",
 			apply: func(c *claudecode.Config) { c.PermissionMode = "acceptEdits" },
+		},
+		{
+			// plan ran Read and Glob calls no allow rule matches in 2.1.332, and
+			// falls back to the auto-mode classifier for Bash: the two modes the
+			// launcher passes on are the ones that deny every call no rule allows
+			// (issue #592).
+			name:  "the permission mode plan",
+			field: "permission mode",
+			apply: func(c *claudecode.Config) { c.PermissionMode = "plan" },
 		},
 		{
 			name:  "a permission mode with a space in it",
@@ -698,6 +709,42 @@ func TestAskRefusesTheNewFieldsAtTheirZeroShape(t *testing.T) {
 			// launcher refuses puts no credential of the caller's in a log.
 			if strings.Contains(err.Error(), subscriptionToken) {
 				t.Errorf("Ask = %v, want the error to hold none of the token: the refusal names the field, never the value the CLI's environment holds (CLAUDE.md rule 3, issue #277)", err)
+			}
+		})
+	}
+}
+
+// TestAskAcceptsThePermissionModesThatDenyUnlistedCalls pins the two modes the
+// launcher passes on (issue #592): default, the mode Claude Code 2.1.332 runs
+// under CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1 whatever the launch asks for, and
+// dontAsk, its non-interactive spelling. Each reaches the CLI as
+// --permission-mode, and a run that reports no init element is not refused here:
+// the launcher asks for no transcript, so the review of the session's mode does
+// not apply.
+func TestAskAcceptsThePermissionModesThatDenyUnlistedCalls(t *testing.T) {
+	t.Parallel()
+
+	for _, mode := range []string{"default", "dontAsk"} {
+		t.Run(mode, func(t *testing.T) {
+			t.Parallel()
+
+			cli, rec := newFakeClaudeCLI(t, claudeFake{stdout: answeredRun})
+
+			launcher := claudecode.New(claudecode.Config{
+				Path:           cli,
+				Token:          subscriptionToken,
+				Model:          auditModel,
+				PermissionMode: mode,
+				Timeout:        time.Minute,
+			})
+
+			if _, err := launcher.Ask(t.Context(), claudecode.Prompt{System: "s", User: "u"}); err != nil {
+				t.Fatalf("Ask: %v; the launcher passes on %q", err, mode)
+			}
+
+			got, ok := valueAfter(rec.args(t), "--permission-mode")
+			if !ok || got != mode {
+				t.Errorf("the CLI's --permission-mode is %q (found: %t), want %q: the mode the caller asked for is the one the CLI is told to run", got, ok, mode)
 			}
 		})
 	}

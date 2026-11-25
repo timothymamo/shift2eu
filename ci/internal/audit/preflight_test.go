@@ -20,6 +20,7 @@ package audit_test
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 	"path/filepath"
@@ -1806,5 +1807,167 @@ func TestJudgeNamesEveryProbeThatDidNotFail(t *testing.T) {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("Judge() error = %q, want it to hold %q", err, want)
 		}
+	}
+}
+
+// preflightInitCanary is the value the transcript's init elements carry in a key
+// of their own: a verdict names the mode or the class of the report, never a byte
+// of the line (issue #592).
+const preflightInitCanary = "canary-in-the-preflight-init"
+
+// TestJudgeRefusesASessionWhoseInitReportsAnotherPermissionMode pins the judge's
+// own layer of issue #592: when the judgement is told the permission mode the
+// launch asks for, it reads the preflight transcript's system/init element and
+// fails a session that reports another one, with a verdict holding the same fixed
+// sentence the launcher's error carries - expected default and the reported mode,
+// one of the CLI's known modes or a class, never a byte of the line. The judge
+// fails closed on its own: the launcher's check is the other layer, and neither
+// rests on the other. A judgement told no mode reads no init element.
+func TestJudgeRefusesASessionWhoseInitReportsAnotherPermissionMode(t *testing.T) {
+	t.Parallel()
+
+	// initLine is the CLI's system/init element, mode being the JSON value of its
+	// permissionMode and the canary in a key of its own.
+	initLine := func(mode string) string {
+		return fmt.Sprintf(`{"type":"system","subtype":"init","permissionMode":%s,"cwd":%q}`, mode, preflightInitCanary)
+	}
+
+	// bareInit is an init element of the given keys, for the rows whose shape is
+	// not one permissionMode value.
+	bareInit := func(keys string) string {
+		return fmt.Sprintf(`{"type":"system","subtype":"init",%s,"cwd":%q}`, keys, preflightInitCanary)
+	}
+
+	cases := []struct {
+		name string
+		// judged is Judgement.PermissionMode; "" reads no init element.
+		judged string
+		// head, when set, is printed as the transcript's first lines.
+		head string
+		// wantPass is whether the judgement passes.
+		wantPass bool
+		// wantReported is the mode or the class the verdict names.
+		wantReported string
+	}{
+		{
+			name:     "the session reports the mode the launch asked for",
+			judged:   "default",
+			head:     initLine(`"default"`) + "\n",
+			wantPass: true,
+		},
+		{
+			name:         "the session reports dontAsk",
+			judged:       "default",
+			head:         initLine(`"dontAsk"`) + "\n",
+			wantReported: "dontAsk",
+		},
+		{
+			name:         "the session reports the mode in another case",
+			judged:       "default",
+			head:         initLine(`"Default"`) + "\n",
+			wantReported: "another mode",
+		},
+		{
+			// The mode string itself holds the canary: the verdict names the
+			// class, never the string.
+			name:         "the session reports a mode the CLI does not know, and the mode string is the canary",
+			judged:       "default",
+			head:         initLine(`"`+preflightInitCanary+`"`) + "\n",
+			wantReported: "another mode",
+		},
+		{
+			name:         "the permission mode is null",
+			judged:       "default",
+			head:         initLine(`null`) + "\n",
+			wantReported: "not a string",
+		},
+		{
+			name:         "the init element names no permission mode",
+			judged:       "default",
+			head:         fmt.Sprintf(`{"type":"system","subtype":"init","cwd":%q}`, preflightInitCanary) + "\n",
+			wantReported: "missing",
+		},
+		{
+			name:         "the transcript holds two init elements",
+			judged:       "default",
+			head:         initLine(`"default"`) + "\n" + initLine(`"dontAsk"`) + "\n",
+			wantReported: "two init lines",
+		},
+		{
+			name:         "the init element names permissionMode twice",
+			judged:       "default",
+			head:         bareInit(`"permissionMode":"default","permissionMode":"dontAsk"`) + "\n",
+			wantReported: "two init lines",
+		},
+		{
+			name:         "the init element spells permissionMode in another case",
+			judged:       "default",
+			head:         bareInit(`"PermissionMode":"default"`) + "\n",
+			wantReported: "two init lines",
+		},
+		{
+			// The preflight's transcript without an init element: the client named
+			// no session mode, so the mode asked for was never reported.
+			name:         "the transcript holds no init element",
+			judged:       "default",
+			wantReported: "missing",
+		},
+		{
+			name:     "the judgement is told no mode and reads no init element",
+			head:     initLine(`"dontAsk"`) + "\n",
+			wantPass: true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			thePlan := plan()
+			transcript := transcriptOf(thePlan, passingAnswers(thePlan, preflightNonce))
+
+			if tc.head != "" {
+				transcript = append([]byte(tc.head), transcript...)
+			}
+
+			err := audit.Judge(audit.Judgement{
+				Plan:           thePlan,
+				Nonce:          preflightNonce,
+				Token:          testToken,
+				Transcript:     transcript,
+				Effects:        fakeEffects{},
+				PermissionMode: tc.judged,
+			})
+
+			if tc.wantPass {
+				if err != nil {
+					t.Fatalf("Judge() = %v, want nil: the session reports the mode the judgement was told, or it is told none", err)
+				}
+
+				return
+			}
+
+			if err == nil {
+				t.Fatalf("Judge() = nil, want a refusal: %s does not leave the session's mode the one asked for", tc.name)
+			}
+
+			var verdict *audit.Verdict
+			if !errors.As(err, &verdict) {
+				t.Fatalf("Judge() = %v, want a *Verdict: the judge fails closed on its own (issue #592)", err)
+			}
+
+			want := "the session's permission mode is not the one asked for: expected default, reported " + tc.wantReported
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("Judge() error = %q, want it to hold %q: the verdict is the fixed sentence with the mode or the class of the report", err, want)
+			}
+
+			if strings.Contains(err.Error(), preflightInitCanary) {
+				t.Errorf("Judge() error = %q, which holds the init element's canary: a verdict is made of fixed words, never of the transcript's bytes", err)
+			}
+
+			if !strings.Contains(err.Error(), "runbook step 10") {
+				t.Errorf("Judge() error = %q, want it to name runbook step 10, as every verdict does", err)
+			}
+		})
 	}
 }

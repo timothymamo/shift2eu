@@ -19,6 +19,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/go-cmp/cmp"
+
 	"github.com/timothymamo/shift2eu/ci/internal/claudecode"
 )
 
@@ -117,6 +119,25 @@ func writeFakeFile(t *testing.T, path string, content []byte, mode os.FileMode) 
 	}
 }
 
+// reached reports whether the fake CLI wrote its marker: the file a slow fake
+// writes only after the pause that follows the elements it prints first, so a run
+// the launcher stops never reaches it.
+func (r claudeRecording) reached(t *testing.T) bool {
+	t.Helper()
+
+	_, err := os.Lstat(filepath.Join(r.dir, "reached"))
+	switch {
+	case err == nil:
+		return true
+	case errors.Is(err, fs.ErrNotExist):
+		return false
+	default:
+		t.Fatalf("look for the fake CLI's marker: %v", err)
+	}
+
+	return false
+}
+
 // read returns the text the fake CLI recorded under name.
 func (r claudeRecording) read(t *testing.T, name string) string {
 	t.Helper()
@@ -165,6 +186,32 @@ func (r claudeRecording) env(t *testing.T) map[string]string {
 	}
 
 	return values
+}
+
+// newSlowFakeClaudeCLI writes an executable fake CLI that prints head, waits a
+// second, writes a marker and then prints tail: a run the launcher stops at an
+// element of head never reaches the marker, and one it lets run reads tail's
+// result. The pause is what makes "the run was stopped" observable: the CLI would
+// otherwise print everything before the launcher read its first line.
+func newSlowFakeClaudeCLI(t *testing.T, head, tail string) (string, claudeRecording) {
+	t.Helper()
+
+	rec := claudeRecording{dir: t.TempDir()}
+
+	writeFakeFile(t, filepath.Join(rec.dir, "canned-head"), []byte(head), 0o600)
+	writeFakeFile(t, filepath.Join(rec.dir, "canned-tail"), []byte(tail), 0o600)
+
+	path := filepath.Join(t.TempDir(), "claude")
+	writeFakeFile(t, path, []byte(fmt.Sprintf(`#!/bin/sh
+rec=%q
+cat > "$rec/stdin"
+cat "$rec/canned-head"
+sleep 1
+: > "$rec/reached"
+cat "$rec/canned-tail"
+`, rec.dir)), 0o700)
+
+	return path, rec
 }
 
 // launcherVariableNames are the names the launcher sets in the CLI's
@@ -432,6 +479,292 @@ func TestAskKeepsTheReviewersSystemPromptInTheTemporaryDirectory(t *testing.T) {
 
 	if _, err := os.Lstat(systemDir); !errors.Is(err, fs.ErrNotExist) {
 		t.Errorf("the system prompt's directory %q is still there after the run (%v), want it removed: the launcher removes every directory it made", systemDir, err)
+	}
+}
+
+// initCanary is the value the session's system/init elements carry in a key of
+// their own and, in one row, as the permission mode itself: the launcher's error
+// holds the expected mode and a known mode or a class, never a byte of the line
+// (issue #592).
+const initCanary = "canary-in-the-init-element"
+
+// TestAskRefusesASessionWhoseInitReportsAnotherPermissionMode pins the check
+// issue #592 adds. With CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1, Claude Code 2.1.332
+// forces the permission mode to default whatever the launch asks for, so the
+// launcher reads the session's system/init element and refuses one that reports
+// a mode other than the one it asked for - before the CLI makes a tool call. The
+// error wraps ErrModel and a *PermissionModeError whose Expected is the mode the
+// config asked for and whose Reported is one of the CLI's known modes as it is,
+// or the class of a report that names none: missing (no init element before the
+// first assistant element or the end, or one without permissionMode), not a
+// string, another mode, two init lines. The error never quotes the element.
+func TestAskRefusesASessionWhoseInitReportsAnotherPermissionMode(t *testing.T) {
+	t.Parallel()
+
+	// theAnswer is the result line the fake prints after its marker: a session the
+	// launcher accepts has answered, and one it stops never reaches it.
+	const theAnswer = `{"type":"result","subtype":"success","is_error":false,"result":"the answer"}` + "\n"
+
+	// assistant is an element of the session's turn after its init element.
+	const assistant = `{"type":"assistant","subtype":"text"}` + "\n"
+
+	// initElement is the CLI's system/init element, with the canary in a key of
+	// its own and mode as the JSON value of permissionMode.
+	initElement := func(mode string) string {
+		return `{"type":"system","subtype":"init","permissionMode":` + mode + `,"cwd":"` + initCanary + `"}` + "\n"
+	}
+
+	// bareInit is an init element of the given body, for the rows whose shape is
+	// not one permissionMode value.
+	bareInit := func(body string) string {
+		return `{"type":"system","subtype":"init",` + body + `,"cwd":"` + initCanary + `"}` + "\n"
+	}
+
+	cases := []struct {
+		name string
+		// head is what the fake prints before its pause: the session's elements,
+		// the init one among them or not.
+		head string
+		// wantAnswer is whether the launcher accepts the session and returns its
+		// result.
+		wantAnswer bool
+		// wantReported is the mode or the class *PermissionModeError names.
+		wantReported string
+		// wantStopped is whether the launcher must stop the run at the element it
+		// refused, so the fake never reaches its marker nor its answer.
+		wantStopped bool
+	}{
+		{
+			name:       "the mode asked for is the mode the session reports",
+			head:       initElement(`"default"`) + assistant,
+			wantAnswer: true,
+		},
+		{
+			name:         "the session reports dontAsk",
+			head:         initElement(`"dontAsk"`) + assistant,
+			wantReported: "dontAsk",
+			wantStopped:  true,
+		},
+		{
+			name:         "the session reports plan",
+			head:         initElement(`"plan"`) + assistant,
+			wantReported: "plan",
+			wantStopped:  true,
+		},
+		{
+			name:         "the session reports auto",
+			head:         initElement(`"auto"`) + assistant,
+			wantReported: "auto",
+			wantStopped:  true,
+		},
+		{
+			name:         "the session reports acceptEdits",
+			head:         initElement(`"acceptEdits"`) + assistant,
+			wantReported: "acceptEdits",
+			wantStopped:  true,
+		},
+		{
+			name:         "the session reports bypassPermissions",
+			head:         initElement(`"bypassPermissions"`) + assistant,
+			wantReported: "bypassPermissions",
+			wantStopped:  true,
+		},
+		{
+			name:         "the session reports the mode in another case",
+			head:         initElement(`"Default"`) + assistant,
+			wantReported: "another mode",
+			wantStopped:  true,
+		},
+		{
+			// The mode string itself holds the canary: the error names the class,
+			// never the string.
+			name:         "the session reports a mode the CLI does not know, and the mode string is the canary",
+			head:         initElement(`"`+initCanary+`"`) + assistant,
+			wantReported: "another mode",
+			wantStopped:  true,
+		},
+		{
+			name:         "the permission mode is null",
+			head:         initElement(`null`) + assistant,
+			wantReported: "not a string",
+			wantStopped:  true,
+		},
+		{
+			name:         "the permission mode is a number",
+			head:         initElement(`5`) + assistant,
+			wantReported: "not a string",
+			wantStopped:  true,
+		},
+		{
+			name:         "the permission mode is an object",
+			head:         initElement(`{"mode":"default"}`) + assistant,
+			wantReported: "not a string",
+			wantStopped:  true,
+		},
+		{
+			name:         "the permission mode is a boolean",
+			head:         initElement(`true`) + assistant,
+			wantReported: "not a string",
+			wantStopped:  true,
+		},
+		{
+			name:         "the init element names no permission mode",
+			head:         `{"type":"system","subtype":"init","cwd":"` + initCanary + `"}` + "\n" + assistant,
+			wantReported: "missing",
+			wantStopped:  true,
+		},
+		{
+			name:         "the session prints two init elements",
+			head:         initElement(`"default"`) + initElement(`"dontAsk"`),
+			wantReported: "two init lines",
+			wantStopped:  true,
+		},
+		{
+			name:         "the init element names permissionMode twice",
+			head:         bareInit(`"permissionMode":"default","permissionMode":"dontAsk"`),
+			wantReported: "two init lines",
+			wantStopped:  true,
+		},
+		{
+			name:         "the init element spells permissionMode in another case",
+			head:         bareInit(`"PermissionMode":"default"`),
+			wantReported: "two init lines",
+			wantStopped:  true,
+		},
+		{
+			name:         "an assistant element comes before any init element",
+			head:         assistant,
+			wantReported: "missing",
+			wantStopped:  true,
+		},
+		{
+			// The run has to end before the launcher can know no init element
+			// came, so the fake reaches its marker: the refusal is at the end.
+			name:         "the run prints no init element at all",
+			head:         `{"type":"system","subtype":"ui_invalidate"}` + "\n",
+			wantReported: "missing",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			cli, rec := newSlowFakeClaudeCLI(t, tc.head, theAnswer)
+
+			var transcript bytes.Buffer
+
+			launcher := claudecode.New(claudecode.Config{
+				Path:           cli,
+				Token:          "fake-subscription-value-123",
+				Model:          auditModel,
+				PermissionMode: "default",
+				Transcript:     &transcript,
+				Timeout:        30 * time.Second,
+			})
+
+			answer, err := launcher.Ask(t.Context(), claudecode.Prompt{System: "s", User: "u"})
+
+			reached := rec.reached(t)
+
+			if tc.wantAnswer {
+				if err != nil {
+					t.Fatalf("Ask: %v; the session reports the mode the launcher asked for", err)
+				}
+
+				if answer != "the answer" {
+					t.Errorf("Ask = %q, want %q: the session's result is the run's answer", answer, "the answer")
+				}
+
+				if !reached {
+					t.Error("the run stopped before the fake CLI's marker, want it to run to its end: the session reports the mode asked for, and the check must not refuse it")
+				}
+
+				return
+			}
+
+			if !errors.Is(err, claudecode.ErrModel) {
+				t.Fatalf("Ask = %q, %v; want an error wrapping ErrModel: the session reports a mode other than %q", answer, err, "default")
+			}
+
+			var modeErr *claudecode.PermissionModeError
+			if !errors.As(err, &modeErr) {
+				t.Fatalf("Ask = %v, want a *claudecode.PermissionModeError: the launcher names the session's permission mode (issue #592)", err)
+			}
+
+			want := struct{ Expected, Reported string }{Expected: "default", Reported: tc.wantReported}
+			got := struct{ Expected, Reported string }{Expected: modeErr.Expected, Reported: modeErr.Reported}
+
+			if diff := cmp.Diff(want, got); diff != "" {
+				t.Errorf("the permission mode error's modes (-want +got):\n%s", diff)
+			}
+
+			wantText := "the session's permission mode is not the one asked for: expected default, reported " + tc.wantReported
+			if !strings.Contains(err.Error(), wantText) {
+				t.Errorf("Ask's error %q does not hold %q: the refusal is the fixed sentence with the mode or the class of the report", err, wantText)
+			}
+
+			// The element carries the canary in a key of its own, and one row in its
+			// mode string: the refusal is made of fixed words, never of the line's
+			// bytes (issue #592).
+			if strings.Contains(err.Error(), initCanary) {
+				t.Errorf("Ask's error %q holds the init element's canary: the refusal names the expected mode and a known mode or a class, never a byte of the line", err)
+			}
+
+			if tc.wantStopped && reached {
+				t.Error("the run reached the fake CLI's marker and its answer, want the launcher to stop it at the element it refused: a session of another permission mode must not make a tool call")
+			}
+		})
+	}
+}
+
+// TestAskChecksThePermissionModeOnlyWithAModeAndATranscript pins the check's two
+// gates (issue #592): the AI reviewer's launch asks for no permission mode and
+// reads one JSON result, so it has no system/init element to check and runs as it
+// did.
+func TestAskChecksThePermissionModeOnlyWithAModeAndATranscript(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		// config is the launcher's, beside the path, token, model and timeout.
+		config claudecode.Config
+		// canned is what the fake CLI prints: streamedRun's init element names no
+		// permission mode, which a launcher that asked for one would refuse.
+		canned string
+	}{
+		{
+			name:   "the launch asks for no permission mode",
+			config: claudecode.Config{Transcript: &bytes.Buffer{}},
+			canned: streamedRun,
+		},
+		{
+			// No transcript is --output-format json: one result element and no
+			// init element, which is the reviewer's launch.
+			name:   "the launch reads one JSON result",
+			config: claudecode.Config{PermissionMode: "default"},
+			canned: answeredRun,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			cli, _ := newFakeClaudeCLI(t, claudeFake{stdout: tc.canned})
+
+			cfg := tc.config
+			cfg.Path, cfg.Token, cfg.Model, cfg.Timeout = cli, "fake-subscription-value-123", auditModel, time.Minute
+
+			got, err := claudecode.New(cfg).Ask(t.Context(), claudecode.Prompt{System: "s", User: "u"})
+			if err != nil {
+				t.Fatalf("Ask: %v; the permission mode's check applies to a streamed run the config asks a mode for, and to no other", err)
+			}
+
+			if got != "the last result" {
+				t.Errorf("Ask = %q, want %q", got, "the last result")
+			}
+		})
 	}
 }
 

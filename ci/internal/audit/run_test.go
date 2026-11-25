@@ -19,12 +19,14 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
 
 	"github.com/timothymamo/shift2eu/ci/internal/audit"
+	"github.com/timothymamo/shift2eu/ci/internal/claudecode"
 )
 
 // The names of the six steps, in the order the ADR's "In order" list gives.
@@ -230,4 +232,56 @@ func preflightVerdict(t *testing.T) error {
 	}
 
 	return err
+}
+
+// permissionModeRefusal is the one line a run prints when the session reports a
+// permission mode other than the one the launch asked for (issue #592).
+func permissionModeRefusal(reported string) string {
+	return "refused: the session's permission mode is not the one asked for: expected default, reported " + reported
+}
+
+// permissionModeFailure is the launcher's refusal of such a session, wrapped as a
+// step wraps the error its CLI run left.
+func permissionModeFailure(reported string) error {
+	return fmt.Errorf("%w: %w", errors.New("the step's CLI run failed"), &claudecode.PermissionModeError{Expected: "default", Reported: reported})
+}
+
+// TestRunPrintsThePermissionModeRefusalAlone pins issue #592's line: a session
+// whose init element reports a mode other than the one the launch asked for fails
+// the run with ExitFailed and with the fixed sentence alone - the expected mode
+// and the reported one, a known mode or a class - whichever of the two model
+// steps ran into it. The step's own error text never reaches the log.
+func TestRunPrintsThePermissionModeRefusalAlone(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		// fail is the step whose CLI run left the refusal.
+		fail string
+		// reported is the mode or the class the session reported.
+		reported string
+	}{
+		{name: "the preflight's session reports dontAsk", fail: stepPreflight, reported: "dontAsk"},
+		{name: "the audit's session reports auto", fail: stepAudit, reported: "auto"},
+		{name: "the preflight's session prints no init element", fail: stepPreflight, reported: "missing"},
+		{name: "the audit's session prints its init element twice", fail: stepAudit, reported: "two init lines"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			recorder := &stepsRecorder{errs: map[string]error{tc.fail: permissionModeFailure(tc.reported)}}
+
+			code, out := runSteps(t, t.TempDir(), recorder.steps())
+
+			if code != audit.ExitFailed {
+				t.Errorf("the run's exit code is %d, want %d: a session of another permission mode is a failed run", code, audit.ExitFailed)
+			}
+
+			if want := permissionModeRefusal(tc.reported) + "\n"; out != want {
+				t.Errorf("the run printed %q, want %q: the refusal is one fixed line, holding the expected mode and a known mode or a class, never a byte of the element", out, want)
+			}
+		})
+	}
 }
