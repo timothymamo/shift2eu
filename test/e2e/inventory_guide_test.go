@@ -74,6 +74,27 @@ type inventoryGuideCase struct {
 	absent []string
 	// absentRawTypes are raw types no resource of this source may carry.
 	absentRawTypes []string
+	// configCovered are the raw types AWS Config records for resources a
+	// service call of the guide lists as well: the Config row must be dropped,
+	// not listed a second time. A Config row carries no engine, so a row that
+	// got through would show up as an unclassified resource of the type.
+	configCovered []configCoveredType
+}
+
+// configCoveredType is one raw type AWS Config records for resources a service
+// call of the guide lists too, by raw type.
+type configCoveredType struct {
+	// rawType is the raw type both AWS Config and a service call record.
+	rawType string
+	// total is how many resources of the raw type the service calls list: AWS
+	// Config lists the same ones, so a Config row that got through would make
+	// one more.
+	total int
+	// unclassified is how many of those the service calls leave unclassified,
+	// because their type alone does not classify them (a Memcached cache, whose
+	// engine no category covers). A Config row is unclassified by its type, so
+	// one that got through would make one more here too.
+	unclassified int
 }
 
 // bareMetalServer is one bare-metal server a source's recorded output holds.
@@ -169,16 +190,28 @@ func inventoryGuides() []inventoryGuideCase {
 				},
 				// A replication group is one cache, its member clusters are
 				// not: the group stands for them. Failover with a replica in
-				// each shard is node high availability and Multi-AZ is zone
+				// every shard is node high availability and Multi-AZ is zone
 				// high availability, while failover alone is not (a cluster-mode
 				// group must enable it with no replica at all); cluster mode is
 				// sharding; the effective encryption state is
 				// StorageEncryptionType, not the at-rest flag; the count is the
-				// group's member clusters, its nodes.
+				// group's member clusters, its nodes. Both shards list a primary
+				// and a replica in their NodeGroupMembers, so the loss of either
+				// shard's primary is survived.
 				{
 					id: "shop-orders-redis", rawType: "AWS::ElastiCache::ReplicationGroup", category: "cache.redis",
 					region:       "eu-central-1",
 					capabilities: []string{"encryption-at-rest", "node-high-availability", "sharding", "snapshots", "zone-high-availability"},
+				},
+				// One shard of this cluster-mode group lists a primary only: losing
+				// that shard's node breaks the cache, so failover on and more
+				// member clusters than shards is not node high availability. Only
+				// cluster mode is left: MultiAZ is off, there is no snapshot and
+				// StorageEncryptionType is none.
+				{
+					id: "shop-search-redis", rawType: "AWS::ElastiCache::ReplicationGroup", category: "cache.redis",
+					region:       "eu-central-1",
+					capabilities: []string{"sharding"},
 				},
 				// A non-cluster-mode group with a replica in its one shard has node
 				// high availability, but no sharding, no snapshot and no zone high
@@ -372,6 +405,7 @@ func inventoryGuides() []inventoryGuideCase {
 				// recorded call gives a node's memory, so the guide has the user
 				// add memoryGiB by hand.
 				{id: "shop-orders-redis", count: 4, noMemoryGiB: true},
+				{id: "shop-search-redis", count: 3, noMemoryGiB: true},
 				{id: "shop-sessions-valkey", count: 1, noMemoryGiB: true},
 				{id: "shop-cart-redis", count: 2, noMemoryGiB: true},
 				{id: "shop-analytics-redis", count: 1, noMemoryGiB: true},
@@ -403,6 +437,9 @@ func inventoryGuides() []inventoryGuideCase {
 				"shop-orders-redis-002",
 				"shop-orders-redis-003",
 				"shop-orders-redis-004",
+				"shop-search-redis-001",
+				"shop-search-redis-002",
+				"shop-search-redis-003",
 				"shop-sessions-valkey-001",
 				"shop-cart-redis-001",
 				"shop-cart-redis-002",
@@ -432,6 +469,16 @@ func inventoryGuides() []inventoryGuideCase {
 				"AWS::ECR::ReplicationConfiguration",
 				"AWS::ECR::PullThroughCacheRule",
 				"AWS::ECR::RepositoryCreationTemplate",
+			},
+			// AWS Config records the ElastiCache resources the elasticache calls
+			// list as well, and a Config row names no engine. A row that got
+			// through is a second, unclassified resource of the same type; the
+			// Memcached caches, which no category covers, are the only
+			// unclassified ones the service calls write.
+			configCovered: []configCoveredType{
+				{rawType: "AWS::ElastiCache::ReplicationGroup", total: 4, unclassified: 0},
+				{rawType: "AWS::ElastiCache::CacheCluster", total: 3, unclassified: 1},
+				{rawType: "AWS::ElastiCache::ServerlessCache", total: 2, unclassified: 1},
 			},
 		},
 		{
@@ -706,6 +753,7 @@ func TestInventoryGuidePrograms(t *testing.T) {
 			assertNoUserFields(t, tc.source, doc)
 			assertAbsent(t, tc.source, doc, tc.absent)
 			assertNoRawTypes(t, tc.source, doc, tc.absentRawTypes)
+			assertConfigCovered(t, tc.source, doc, tc.configCovered)
 			assertUnclassifiedKeepsRawType(t, tc.source, doc)
 			assertShortIDs(t, tc.source, doc)
 
@@ -1103,6 +1151,40 @@ func assertNoRawTypes(t *testing.T, source string, doc inventoryDoc, rawTypes []
 		if slices.Contains(rawTypes, resource.RawType) {
 			t.Errorf("%s: resource %q has rawType %q, want none: another resource covers it",
 				source, resource.ID, resource.RawType)
+		}
+	}
+}
+
+// assertConfigCovered fails when the inventory holds more resources of a raw
+// type than the source's service calls list, or more of them unclassified: AWS
+// Config records the type too, and its row names no engine, so a row that got
+// through would list the resource a second time, unclassified.
+func assertConfigCovered(t *testing.T, source string, doc inventoryDoc, wants []configCoveredType) {
+	t.Helper()
+
+	for _, want := range wants {
+		var total, unclassified []string
+
+		for _, resource := range doc.Resources {
+			if resource.RawType != want.rawType {
+				continue
+			}
+
+			total = append(total, resource.ID)
+
+			if resource.Category == "unclassified" {
+				unclassified = append(unclassified, resource.ID)
+			}
+		}
+
+		if len(total) != want.total {
+			t.Errorf("%s: the inventory holds %d resource(s) of rawType %q (%v), want %d: AWS Config records the type too, and a Config row must not be listed beside the service call's",
+				source, len(total), want.rawType, total, want.total)
+		}
+
+		if len(unclassified) != want.unclassified {
+			t.Errorf("%s: the inventory holds %d unclassified resource(s) of rawType %q (%v), want %d: AWS Config records the type too, and its row carries no engine to classify, so the service call's resource must stand alone",
+				source, len(unclassified), want.rawType, unclassified, want.unclassified)
 		}
 	}
 }

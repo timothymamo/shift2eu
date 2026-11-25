@@ -18,13 +18,92 @@
       ],
       "NodeGroups": [
         {
-          "NodeGroupId": "0001"
+          "NodeGroupId": "0001",
+          "Status": "available",
+          "NodeGroupMembers": [
+            {
+              "CacheClusterId": "shop-orders-redis-001",
+              "CacheNodeId": "0001",
+              "PreferredAvailabilityZone": "eu-central-1a",
+              "CurrentRole": "primary"
+            },
+            {
+              "CacheClusterId": "shop-orders-redis-002",
+              "CacheNodeId": "0001",
+              "PreferredAvailabilityZone": "eu-central-1b",
+              "CurrentRole": "replica"
+            }
+          ]
         },
         {
-          "NodeGroupId": "0002"
+          "NodeGroupId": "0002",
+          "Status": "available",
+          "NodeGroupMembers": [
+            {
+              "CacheClusterId": "shop-orders-redis-003",
+              "CacheNodeId": "0001",
+              "PreferredAvailabilityZone": "eu-central-1a",
+              "CurrentRole": "primary"
+            },
+            {
+              "CacheClusterId": "shop-orders-redis-004",
+              "CacheNodeId": "0001",
+              "PreferredAvailabilityZone": "eu-central-1b",
+              "CurrentRole": "replica"
+            }
+          ]
         }
       ],
       "CacheNodeType": "cache.m6g.large"
+    },
+    {
+      "ReplicationGroupId": "shop-search-redis",
+      "ARN": "arn:aws:elasticache:eu-central-1:123456789012:replicationgroup:shop-search-redis",
+      "Engine": "redis",
+      "AutomaticFailover": "enabled",
+      "MultiAZ": "disabled",
+      "ClusterEnabled": true,
+      "SnapshotRetentionLimit": 0,
+      "AtRestEncryptionEnabled": false,
+      "StorageEncryptionType": "none",
+      "MemberClusters": [
+        "shop-search-redis-001",
+        "shop-search-redis-002",
+        "shop-search-redis-003"
+      ],
+      "NodeGroups": [
+        {
+          "NodeGroupId": "0001",
+          "Status": "available",
+          "NodeGroupMembers": [
+            {
+              "CacheClusterId": "shop-search-redis-001",
+              "CacheNodeId": "0001",
+              "PreferredAvailabilityZone": "eu-central-1a",
+              "CurrentRole": "primary"
+            },
+            {
+              "CacheClusterId": "shop-search-redis-002",
+              "CacheNodeId": "0001",
+              "PreferredAvailabilityZone": "eu-central-1b",
+              "CurrentRole": "replica"
+            }
+          ]
+        },
+        {
+          "NodeGroupId": "0002",
+          "Status": "available",
+          "NodeGroupMembers": [
+            {
+              "CacheClusterId": "shop-search-redis-003",
+              "CacheNodeId": "0001",
+              "PreferredAvailabilityZone": "eu-central-1c",
+              "CurrentRole": "primary"
+            }
+          ]
+        }
+      ],
+      "CacheNodeType": "cache.t4g.medium"
     },
     {
       "ReplicationGroupId": "shop-sessions-valkey",
@@ -41,7 +120,16 @@
       ],
       "NodeGroups": [
         {
-          "NodeGroupId": "0001"
+          "NodeGroupId": "0001",
+          "Status": "available",
+          "NodeGroupMembers": [
+            {
+              "CacheClusterId": "shop-sessions-valkey-001",
+              "CacheNodeId": "0001",
+              "PreferredAvailabilityZone": "eu-central-1a",
+              "CurrentRole": "primary"
+            }
+          ]
         }
       ],
       "CacheNodeType": "cache.t4g.micro"
@@ -62,7 +150,22 @@
       ],
       "NodeGroups": [
         {
-          "NodeGroupId": "0001"
+          "NodeGroupId": "0001",
+          "Status": "available",
+          "NodeGroupMembers": [
+            {
+              "CacheClusterId": "shop-cart-redis-001",
+              "CacheNodeId": "0001",
+              "PreferredAvailabilityZone": "eu-central-1a",
+              "CurrentRole": "primary"
+            },
+            {
+              "CacheClusterId": "shop-cart-redis-002",
+              "CacheNodeId": "0001",
+              "PreferredAvailabilityZone": "eu-central-1b",
+              "CurrentRole": "replica"
+            }
+          ]
         }
       ],
       "CacheNodeType": "cache.m6g.large"

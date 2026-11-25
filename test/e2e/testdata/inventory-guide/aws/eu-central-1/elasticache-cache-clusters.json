@@ -45,6 +45,39 @@
       "CacheNodeType": "cache.m6g.large"
     },
     {
+      "CacheClusterId": "shop-search-redis-001",
+      "ARN": "arn:aws:elasticache:eu-central-1:123456789012:cluster:shop-search-redis-001",
+      "ReplicationGroupId": "shop-search-redis",
+      "Engine": "redis",
+      "NumCacheNodes": 1,
+      "PreferredAvailabilityZone": "eu-central-1a",
+      "SnapshotRetentionLimit": 0,
+      "AtRestEncryptionEnabled": false,
+      "CacheNodeType": "cache.t4g.medium"
+    },
+    {
+      "CacheClusterId": "shop-search-redis-002",
+      "ARN": "arn:aws:elasticache:eu-central-1:123456789012:cluster:shop-search-redis-002",
+      "ReplicationGroupId": "shop-search-redis",
+      "Engine": "redis",
+      "NumCacheNodes": 1,
+      "PreferredAvailabilityZone": "eu-central-1b",
+      "SnapshotRetentionLimit": 0,
+      "AtRestEncryptionEnabled": false,
+      "CacheNodeType": "cache.t4g.medium"
+    },
+    {
+      "CacheClusterId": "shop-search-redis-003",
+      "ARN": "arn:aws:elasticache:eu-central-1:123456789012:cluster:shop-search-redis-003",
+      "ReplicationGroupId": "shop-search-redis",
+      "Engine": "redis",
+      "NumCacheNodes": 1,
+      "PreferredAvailabilityZone": "eu-central-1c",
+      "SnapshotRetentionLimit": 0,
+      "AtRestEncryptionEnabled": false,
+      "CacheNodeType": "cache.t4g.medium"
+    },
+    {
       "CacheClusterId": "shop-sessions-valkey-001",
       "ARN": "arn:aws:elasticache:eu-central-1:123456789012:cluster:shop-sessions-valkey-001",
       "ReplicationGroupId": "shop-sessions-valkey",
