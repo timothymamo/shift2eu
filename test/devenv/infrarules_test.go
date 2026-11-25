@@ -9,7 +9,8 @@
 // the rules see, a provider block setting only organization_id and
 // region, a lock file holding only the line shapes tofu init writes, the site's TLS stage recreating itself before
 // it destroys (so a replacement repoints the DNS stage first, issue #541), the site container's cost pins (one
-// instance, 140 mvCPU and 0.25 GB of memory at most, and no pin set twice or only in a nested block, ADR 0045),
+// instance, 140 mvCPU and 268 MB (about 0.268 GB) of memory at most, and no pin set twice or only in a nested block,
+// ADR 0045),
 // the one front container in its one namespace (no count, no for_each, no second container, ADR 0045),
 // the environment that container runs with (the one UPSTREAM the Caddyfile reads, and no secret, on the container
 // and on the namespace the platform injects into it), no lifecycle block ignoring a change or disabling the
@@ -1687,10 +1688,10 @@ resource "scaleway_container_cron" "nightly" {
 }
 
 // containerCostPinCases pin the site container's cost pins (PRD #297 milestone 4, ADR 0045, *The container*,
-// and its Consequences): one instance of at most 140 mvCPU and 0.25 GB of memory bounds the worst case to about
-// EUR 2.12 a month, and min_scale 0 or 1 bounds how many instances the site keeps. dev/infra-rules.awk judges
-// every scaleway_container in infra/: max_scale, cpu_limit and memory_limit_bytes must each be set once, as the
-// pinned literal - a missing pin leaves the provider's default, and an expression such as var.max_scale is a
+// and its Consequences): one instance of at most 140 mvCPU and 268 MB (about 0.268 GB) of memory bounds the worst
+// case to about EUR 2.12 a month, and min_scale 0 or 1 bounds how many instances the site keeps. dev/infra-rules.awk
+// judges every scaleway_container in infra/: max_scale, cpu_limit and memory_limit_bytes must each be set once, as
+// the pinned literal - a missing pin leaves the provider's default, and an expression such as var.max_scale is a
 // value the maintainer's own tfvars could set - memory_limit and http_option, the deprecated spellings beside
 // memory_limit_bytes and https_connections_only, must not be set at all, and min_scale must be 0 or 1. The tags
 // are [container-max-scale], [container-cpu], [container-memory], [container-deprecated-attribute],
@@ -1700,12 +1701,13 @@ resource "scaleway_container_cron" "nightly" {
 // and a deprecated http_option no [container-cpu] or [container-memory], since a breakage is reported once,
 // under the rule that refuses it.
 //
-// The memory pin is the value Scaleway's Serverless Containers keep, not the size in bytes the pin means: the
-// platform rounds memory_limit_bytes to whole decimal megabytes, so 268435456 (256 MiB) comes back as
-// 268000000 and every plan after an apply shows that change (issue #596). [container-memory] pins 268000000, the
-// value the platform holds, and refuses 268435456 beside every other literal: a plan that never reaches "No
-// changes" is a drift the maintainer cannot tell from a real one, while 268000000 is the 0.25 GB ADR 0045
-// prices.
+// The memory pin is the value the platform keeps at the pinned size, not the size in bytes the pin means: asked for
+// 268435456 (256 MiB), Scaleway kept 268000000 (268 MB, about 0.268 GB), observed 2026-11-25 (issue #596), and every
+// plan after an apply shows the change back. That the platform keeps whole decimal megabytes is no documented rule
+// and none of the texts state one; the pin holds the value an apply answered rather than a guess at the rule.
+// [container-memory] pins 268000000, the value the platform holds, and refuses 268435456 beside every other literal:
+// a plan that never reaches "No changes" is a drift the maintainer cannot tell from a real one, while 268000000 is the
+// memory ADR 0045 prices.
 //
 // The image is no pin of a value but of a reference: the container must read the one local the Renovate comment
 // above it pins - image = local.caddy_image and nothing else - so the line Renovate moves is the line the
@@ -1802,12 +1804,11 @@ var containerCostPinCases = []infraRuleCase{
 			setContainerAttribute(t, site, "cpu_limit", "")
 		},
 	},
-	// The value the platform keeps at the pinned size: Scaleway's Serverless Containers round
-	// memory_limit_bytes down to whole decimal megabytes, so 268000000 is the 0.25 GB ADR 0045 prices and the
-	// only literal the rule accepts (issue #596).
+	// The value the platform keeps at the pinned size: asked for 268435456, the platform kept 268000000 (268 MB, about
+	// 0.268 GB), observed 2026-11-25 (issue #596), and 268000000 is the only literal the rule accepts.
 	{
 		name: "container-memory-limit-bytes-the-platform-keeps",
-		why:  "memory_limit_bytes = 268000000 (0.25 GB, in whole decimal megabytes) on the site's container, the memory Scaleway keeps",
+		why:  "memory_limit_bytes = 268000000 (268 MB, about 0.268 GB) on the site's container, the value the platform kept when asked for 268435456 (observed 2026-11-25, issue #596)",
 		want: "",
 		breakage: func(t *testing.T, site string) {
 			t.Helper()
@@ -1816,7 +1817,7 @@ var containerCostPinCases = []infraRuleCase{
 	},
 	{
 		name:   "container-memory-limit-bytes-256-mib",
-		why:    "memory_limit_bytes = 268435456 (256 MiB) on the site's container, the 0.25 GB in binary bytes that the platform rounds back to 268000000, so every plan after an apply shows the change",
+		why:    "memory_limit_bytes = 268435456 (256 MiB) on the site's container, the size the platform kept as 268000000 when asked for it (observed 2026-11-25, issue #596), so every plan after an apply shows the change",
 		want:   "container-memory",
 		wantIn: map[string]string{"container-memory": "{site}/container.tf"},
 		breakage: func(t *testing.T, site string) {
