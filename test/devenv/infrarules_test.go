@@ -1690,19 +1690,30 @@ resource "scaleway_container_cron" "nightly" {
 // value the maintainer's own tfvars could set - memory_limit and http_option, the deprecated spellings beside
 // memory_limit_bytes and https_connections_only, must not be set at all, and min_scale must be 0 or 1. The tags
 // are [container-max-scale], [container-cpu], [container-memory], [container-deprecated-attribute],
-// [container-min-scale] and [container-min-scale-postcondition], and an attribute gets the one tag that names
-// it: a deprecated memory_limit is no [container-memory] beside it, and a deprecated http_option no
-// [container-cpu] or [container-memory], since a breakage is reported once, under the rule that refuses it.
+// [container-min-scale], [container-min-scale-postcondition] and [container-https-only-postcondition-missing],
+// and an attribute gets the one tag that names it: a deprecated memory_limit is no [container-memory] beside it,
+// and a deprecated http_option no [container-cpu] or [container-memory], since a breakage is reported once,
+// under the rule that refuses it.
 //
 // min_scale is the one pin the configuration may write as a local (ADR 0045, The container): write the value
 // once, as a local, and read it in both places, so the pin and the postcondition that checks it after an
 // apply cannot drift from each other. [container-min-scale] accepts min_scale = local.<name> only when that
-// local is the literal 0 or 1 (a comment saying "0" is no literal), and [container-min-scale-postcondition]
-// refuses a min_scale postcondition whose condition compares self.min_scale against anything but the same
-// expression the attribute sets - the literal the attribute writes, or the local it names. The postcondition
-// is judged only for a pin the rules otherwise accept, and only when a condition compares self.min_scale:
-// one refusal per breakage, and a container with no such postcondition (the second container of a case below)
-// is no postcondition rule's business.
+// local is the literal 0 or 1 (a comment saying "0" is no literal) and the local is written once, in the
+// container's own directory - a second declaration, or one a module's own scope holds, is no one value the
+// pin reads - and [container-min-scale-postcondition] refuses a min_scale postcondition whose condition
+// compares self.min_scale against anything but the same expression the attribute sets - the literal the
+// attribute writes, or the local it names. That tag judges only a pin the rules otherwise accept: one refusal
+// per breakage, and a container whose min_scale is already refused is no postcondition rule's business.
+//
+// Both postconditions are required, not judged only when they are there: the provider leaves false and 0 out of
+// the create request, so nothing but a check after an apply says what the platform holds. A container whose
+// min_scale pin the rules accept must carry a postcondition comparing self.min_scale with what the attribute
+// sets, and every container must carry one comparing self.https_connections_only with false: a missing block
+// is refused, under [container-min-scale-postcondition] and [container-https-only-postcondition-missing]
+// respectively. However a condition spells the attribute (self["min_scale"] is the same attribute) and
+// whatever one pair of parentheses and one line break an editor puts around the comparison, the rules read
+// it as the comparison it is, and refuse it when it compares something else than the pin: a spelling the
+// rules could not read would let a check after an apply run that never compares what the pin sets.
 //
 // Every case edits site/container.tf, the file the pins live in, by the attribute's name, so the cases do not
 // depend on how the configuration aligns its = signs; a copy whose container.tf sets the attribute no line of,
@@ -1875,9 +1886,8 @@ var containerCostPinCases = []infraRuleCase{
 			setContainerMinScalePostcondition(t, site, "local.container_min_scale")
 		},
 	},
-	// The check that holds a platform-set min_scale to the pin would pass while the pin moved: the local says
-	// 0 today and the postcondition hard-codes the 0, so raising the local to 1 leaves a check that still
-	// compares 0. The postcondition must read the same expression the attribute sets.
+	// A postcondition that compares another value is refused, and so is a container that carries none: the check
+	// after an apply is what says the platform kept the pin.
 	{
 		name:   "container-min-scale-postcondition-hard-codes-the-value",
 		why:    "min_scale = local.container_min_scale with the local set to 0, and the postcondition comparing the literal 0 instead of the local",
@@ -1888,6 +1898,97 @@ var containerCostPinCases = []infraRuleCase{
 			setContainerMinScaleLocal(t, site, "0")
 			setContainerAttribute(t, site, "min_scale", "  min_scale = local.container_min_scale")
 			setContainerMinScalePostcondition(t, site, "0")
+		},
+	},
+	{
+		name:   "container-min-scale-postcondition-missing",
+		why:    "the site container's min_scale postcondition block removed entirely, so no check after an apply compares the platform's min_scale with the pin",
+		want:   "container-min-scale-postcondition",
+		wantIn: map[string]string{"container-min-scale-postcondition": "{site}/container.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			dropContainerPostcondition(t, site, "self.min_scale")
+		},
+	},
+	// HCL reads self["min_scale"] as the attribute the pin sets, so a condition that spells it that way is no
+	// check of the pin: it must be read as the comparison it writes, and refused here because it compares 0
+	// while the pin reads the local.
+	{
+		name:   "container-min-scale-postcondition-with-index-syntax",
+		why:    `min_scale = local.container_min_scale with the postcondition written condition = self["min_scale"] == 0, an index expression comparing a literal the pin does not set`,
+		want:   "container-min-scale-postcondition",
+		wantIn: map[string]string{"container-min-scale-postcondition": "{site}/container.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			setContainerMinScaleLocal(t, site, "0")
+			setContainerAttribute(t, site, "min_scale", "  min_scale = local.container_min_scale")
+			setContainerMinScalePostconditionText(t, site, `condition     = self["min_scale"] == 0`)
+		},
+	},
+	// One pair of parentheses around the comparison and the line break an editor makes inside it are no other
+	// condition: the check is the same comparison, so the rules accept it.
+	{
+		name: "container-min-scale-postcondition-parenthesised-over-two-lines",
+		why:  "min_scale = local.container_min_scale with the postcondition written (self.min_scale == local.container_min_scale) across two lines, one pair of parentheses around the comparison",
+		want: "",
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			setContainerMinScaleLocal(t, site, "0")
+			setContainerAttribute(t, site, "min_scale", "  min_scale = local.container_min_scale")
+			setContainerMinScalePostconditionText(t, site,
+				"condition     = (self.min_scale ==",
+				"                   local.container_min_scale)",
+			)
+		},
+	},
+	// The local the pin reads is written once, or it is no one value: a second declaration beside it could say 1
+	// while the file's first still says 0.
+	{
+		name:   "container-min-scale-local-set-twice",
+		why:    "container_min_scale declared a second time in site/zz_local.tf, beside the one container.tf declares, so the local the pin reads is no one value",
+		want:   "container-min-scale",
+		wantIn: map[string]string{"container-min-scale": "{site}/container.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			writeInfraText(t, filepath.Join(site, "zz_local.tf"), `
+locals {
+  container_min_scale = 1
+}
+`)
+		},
+	},
+	// A local lives in its own directory, as a module's scope: one the container's directory does not declare
+	// is a value the rules never read, whatever another directory says.
+	{
+		name:   "container-min-scale-local-in-another-directory",
+		why:    "container_min_scale declared only in site/m/locals.tf, the scope of the module site/m, while the container and its pin live in site/",
+		want:   "container-min-scale",
+		wantIn: map[string]string{"container-min-scale": "{site}/container.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			removeContainerMinScaleLocal(t, site)
+			appendInfraText(t, filepath.Join(site, "main.tf"), `
+module "m" {
+  source = "./m"
+}
+`)
+			writeInfraText(t, filepath.Join(site, "m", "locals.tf"), `
+locals {
+  container_min_scale = 0
+}
+`)
+		},
+	},
+	// The other check after an apply: the provider leaves false out of the create request, so only a
+	// postcondition says whether the platform kept plain HTTP enabled for Caddy's own redirect.
+	{
+		name:   "container-https-only-postcondition-missing",
+		why:    "the site container's https_connections_only postcondition block removed entirely, so no check after an apply says what the platform kept beside the pin",
+		want:   "container-https-only-postcondition-missing",
+		wantIn: map[string]string{"container-https-only-postcondition-missing": "{site}/container.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			dropContainerPostcondition(t, site, "self.https_connections_only")
 		},
 	},
 	// A pin set twice is no one pinned value: the second setting could raise what the first fixes, and the
@@ -1907,10 +2008,12 @@ var containerCostPinCases = []infraRuleCase{
 	// container, in a file of its own, sets no pin at all, so each pin is missing and each is reported against
 	// that file. It is also a repeat whatever its pins: the count is a rule of its own, judged on its own
 	// grounds, and one refusal never hides another - a maintainer who only read the pins would come back to a
-	// second container still refused after pinning it.
+	// second container still refused after pinning it. Its https_connections_only postcondition is there, so the
+	// case pins the pins alone: a container whose min_scale is refused is no min_scale postcondition rule's
+	// business, and the other postcondition is no pin.
 	{
 		name:     "container-second-without-pins",
-		why:      "a second scaleway_container in site/second_container.tf without max_scale, cpu_limit, memory_limit_bytes or min_scale",
+		why:      "a second scaleway_container in site/second_container.tf without max_scale, cpu_limit, memory_limit_bytes or min_scale, with its https_connections_only postcondition",
 		want:     "container-max-scale",
 		wantMore: []string{"container-cpu", "container-memory", "container-min-scale", "container-repeat"},
 		wantIn: map[string]string{
@@ -1930,6 +2033,13 @@ resource "scaleway_container" "second" {
   image        = local.caddy_image
   port         = 8080
   privacy      = "public"
+
+  lifecycle {
+    postcondition {
+      condition     = self.https_connections_only == false
+      error_message = "kept"
+    }
+  }
 }
 `)
 		},
@@ -1998,11 +2108,11 @@ var containerRepeatCases = []infraRuleCase{
 			editInfraFile(t, filepath.Join(site, containerFileName), namespaceHeader, namespaceRepeated(`  for_each    = toset(["shift2eu-site"])`))
 		},
 	},
-	// A second container in a file of its own, every cost pin set: the pins alone pass it, so the rule that
-	// holds the front to one container is the only one that refuses it.
+	// A second container in a file of its own, every cost pin and both postconditions set: the pins alone pass
+	// it, so the rule that holds the front to one container is the only one that refuses it.
 	{
 		name: "second-container",
-		why:  "a second scaleway_container in site/second_container.tf, with max_scale, cpu_limit, memory_limit_bytes and min_scale pinned like the first",
+		why:  "a second scaleway_container in site/second_container.tf, with max_scale, cpu_limit, memory_limit_bytes and min_scale pinned like the first, and both postconditions",
 		want: "container-repeat",
 		breakage: func(t *testing.T, site string) {
 			t.Helper()
@@ -2015,10 +2125,24 @@ resource "scaleway_container" "second" {
   port         = 8080
   privacy      = "public"
 
+  https_connections_only         = false
+  enable_default_public_endpoint = true
+
   min_scale          = 0
   max_scale          = 1
   cpu_limit          = 140
   memory_limit_bytes = 268435456
+
+  lifecycle {
+    postcondition {
+      condition     = self.https_connections_only == false
+      error_message = "kept"
+    }
+    postcondition {
+      condition     = self.min_scale == 0
+      error_message = "kept"
+    }
+  }
 }
 `)
 		},
@@ -2327,12 +2451,10 @@ func insertContainerLines(t *testing.T, site string, lines ...string) {
 // configuration moves its pin to a local.
 const containerMinScaleLocalName = "container_min_scale"
 
-// setContainerMinScaleLocal sets the local the site's min_scale pin reads, in a copy's site/container.tf: value
-// becomes the literal a line sets containerMinScaleLocalName to, or - when the file declares no such local yet
-// - the line is written as the first one of the file's locals block, where the configuration's own locals live.
-// The case survives the configuration moving its pin to a local, before and after. A file with no locals block
-// to declare it in fails the case loudly instead of passing without breaking anything.
-func setContainerMinScaleLocal(t *testing.T, site, value string) {
+// findContainerMinScaleLocal returns the path of a copy's site/container.tf, the file's lines and the index of
+// the one line that sets containerMinScaleLocalName, or -1 when the file declares no such local. Two
+// declarations fail the case loudly instead of passing without breaking anything: a case breaks one thing.
+func findContainerMinScaleLocal(t *testing.T, site string) (string, []string, int) {
 	t.Helper()
 
 	path := filepath.Join(site, containerFileName)
@@ -2359,6 +2481,19 @@ func setContainerMinScaleLocal(t *testing.T, site, value string) {
 		found = i
 	}
 
+	return path, lines, found
+}
+
+// setContainerMinScaleLocal sets the local the site's min_scale pin reads, in a copy's site/container.tf: value
+// becomes the literal a line sets containerMinScaleLocalName to, or - when the file declares no such local yet
+// - the line is written as the first one of the file's locals block, where the configuration's own locals live.
+// The case survives the configuration moving its pin to a local, before and after. A file with no locals block
+// to declare it in fails the case loudly instead of passing without breaking anything.
+func setContainerMinScaleLocal(t *testing.T, site, value string) {
+	t.Helper()
+
+	path, lines, found := findContainerMinScaleLocal(t, site)
+
 	if found >= 0 {
 		lines[found] = "  " + containerMinScaleLocalName + " = " + value
 		writeInfraText(t, path, strings.Join(lines, "\n"))
@@ -2383,12 +2518,26 @@ func setContainerMinScaleLocal(t *testing.T, site, value string) {
 	t.Fatalf("%s holds no locals block to declare %s in, want one: the case does not name one breakage", path, containerMinScaleLocalName)
 }
 
-// setContainerMinScalePostcondition sets the condition of the site's min_scale postcondition, in a copy's
-// site/container.tf, to `self.min_scale == expr`: what the check after an apply compares the platform's value
-// with. The line is found by the self.min_scale it compares, so a case survives the expression the
-// configuration writes there; a file with no such line, or two, fails the case loudly instead of passing
+// removeContainerMinScaleLocal removes the line of a copy's site/container.tf that sets containerMinScaleLocalName,
+// so a case can declare the local in a directory other than the one the pin lives in. A file that sets the local
+// on no line fails the case loudly instead of passing without breaking anything.
+func removeContainerMinScaleLocal(t *testing.T, site string) {
+	t.Helper()
+
+	path, lines, found := findContainerMinScaleLocal(t, site)
+
+	if found < 0 {
+		t.Fatalf("%s sets %s on no line, want exactly one: the case does not name one breakage", path, containerMinScaleLocalName)
+	}
+
+	writeInfraText(t, path, strings.Join(append(lines[:found:found], lines[found+1:]...), "\n"))
+}
+
+// findContainerMinScalePostcondition returns the path of a copy's site/container.tf, the file's lines and the
+// index of the one line that sets a condition comparing self.min_scale, the check after an apply that holds the
+// platform's min_scale to the pin. A file with no such line, or two, fails the case loudly instead of passing
 // without breaking anything.
-func setContainerMinScalePostcondition(t *testing.T, site, expr string) {
+func findContainerMinScalePostcondition(t *testing.T, site string) (string, []string, int) {
 	t.Helper()
 
 	path := filepath.Join(site, containerFileName)
@@ -2419,10 +2568,90 @@ func setContainerMinScalePostcondition(t *testing.T, site, expr string) {
 		t.Fatalf("%s holds no condition comparing self.min_scale, want one: the case does not name one breakage", path)
 	}
 
-	indent := lines[found][:len(lines[found])-len(strings.TrimLeft(lines[found], " \t"))]
-	lines[found] = indent + "condition     = self.min_scale == " + expr
+	return path, lines, found
+}
 
-	writeInfraText(t, path, strings.Join(lines, "\n"))
+// setContainerMinScalePostcondition sets the condition of the site's min_scale postcondition, in a copy's
+// site/container.tf, to `self.min_scale == expr`: what the check after an apply compares the platform's value
+// with. The line is found by the self.min_scale it compares, so a case survives the expression the
+// configuration writes there.
+func setContainerMinScalePostcondition(t *testing.T, site, expr string) {
+	t.Helper()
+
+	setContainerMinScalePostconditionText(t, site, "condition     = self.min_scale == "+expr)
+}
+
+// setContainerMinScalePostconditionText replaces the condition of the site's min_scale postcondition with lines,
+// each indented like the line it replaces, so a case can write a condition whose spelling the rules must read:
+// an index expression such as self["min_scale"], or a comparison one pair of parentheses wider and spread over
+// two lines. The line is found as setContainerMinScalePostcondition finds it.
+func setContainerMinScalePostconditionText(t *testing.T, site string, lines ...string) {
+	t.Helper()
+
+	path, fileLines, found := findContainerMinScalePostcondition(t, site)
+
+	indent := fileLines[found][:len(fileLines[found])-len(strings.TrimLeft(fileLines[found], " \t"))]
+
+	out := append([]string{}, fileLines[:found]...)
+	for _, text := range lines {
+		out = append(out, indent+text)
+	}
+
+	out = append(out, fileLines[found+1:]...)
+
+	writeInfraText(t, path, strings.Join(out, "\n"))
+}
+
+// dropContainerPostcondition removes the lifecycle postcondition block of the site's container in a copy's
+// site/container.tf whose own lines hold condition, through the line that closes it, so a case can take a whole
+// postcondition away without restating its body (its error_message included). A file with no such block, or two,
+// fails the case loudly instead of passing without breaking anything.
+func dropContainerPostcondition(t *testing.T, site, condition string) {
+	t.Helper()
+
+	path := filepath.Join(site, containerFileName)
+
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v: the container's postconditions live there (ADR 0045)", path, err)
+	}
+
+	lines := strings.Split(string(body), "\n")
+
+	start, end := -1, -1
+
+	for i, text := range lines {
+		if strings.TrimSpace(text) != "postcondition {" {
+			continue
+		}
+
+		blockEnd := infraBlockEnd(t, path, lines, i)
+		holds := false
+
+		for j := i + 1; j < blockEnd; j++ {
+			if strings.Contains(lines[j], condition) {
+				holds = true
+
+				break
+			}
+		}
+
+		if !holds {
+			continue
+		}
+
+		if start >= 0 {
+			t.Fatalf("%s:%d and %s:%d both hold a postcondition of %s, want exactly one: the case does not name one breakage", path, start+1, path, i+1, condition)
+		}
+
+		start, end = i, blockEnd
+	}
+
+	if start < 0 {
+		t.Fatalf("%s holds no postcondition block of %s, want exactly one: the case does not name one breakage", path, condition)
+	}
+
+	writeInfraText(t, path, strings.Join(append(lines[:start:start], lines[end+1:]...), "\n"))
 }
 
 // infraTestNestedBlockCases pin the allow list of the blocks nested directly in a test file's run and
