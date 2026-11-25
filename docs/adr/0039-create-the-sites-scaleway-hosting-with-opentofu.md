@@ -402,7 +402,7 @@ decision stands.
 | Resource | Key arguments |
 |---|---|
 | `scaleway_container_namespace.site` (new, `container.tf`) | `shift2eu-site`, `project_id` the site's project, `region` `var.region` |
-| `scaleway_container.site` (new) | `front` in that namespace, `region` `var.region`; the image `docker.io/library/caddy:<tag>-alpine@sha256:<index digest>` from a `locals` value under a `# renovate:` comment; `command = ["/bin/sh", "-c"]` and `args` that write the Caddyfile (`file("${path.module}/Caddyfile")`, the shell's `$1`) to `/tmp/Caddyfile` and exec Caddy on it; `environment_variables = { UPSTREAM = <the DNS stage's default_fqdn> }`; `port = 8080`, `privacy = "public"`, `https_connections_only = false`, `enable_default_public_endpoint = true`; the cost pins `min_scale = 0`, `max_scale = 1`, `cpu_limit = 140`, `memory_limit_bytes = 268435456`; two `postcondition`s (below) |
+| `scaleway_container.site` (new) | `front` in that namespace, `region` `var.region`; the image `docker.io/library/caddy:<tag>-alpine@sha256:<index digest>` from a `locals` value under a `# renovate:` comment; `command = ["/bin/sh", "-c"]` and `args` that write the Caddyfile (`file("${path.module}/Caddyfile")`, the shell's `$1`) to `/tmp/Caddyfile` and exec Caddy on it; `environment_variables = { UPSTREAM = <the DNS stage's default_fqdn> }`; `port = 8080`, `privacy = "public"`, `https_connections_only = false`, `enable_default_public_endpoint = true`; the cost pins `min_scale = 0`, `max_scale = 1`, `cpu_limit = 140`, `memory_limit_bytes = 268435456`; two `postcondition`s and a `precondition` (below) |
 | `scaleway_container_domain.front` (new) | `www.shift2eu.com` and `shift2eu.com` on that container, only with `var.front_domains` (default `false`, below) |
 | `scaleway_edge_services_tls_stage.site` | **gated by `var.pipeline_www`** (`count`, default `false`: none), with the pipeline's `www.shift2eu.com` domain; with `true` it is milestone 3's stage, `managed_certificate = true` and `create_before_destroy` |
 | `scaleway_edge_services_dns_stage.site` | with `pipeline_www = false`: `cache_stage_id` the cache stage, `fqdns = []`, so the pipeline answers only its default endpoint, which the container proxies; with `true`: `tls_stage_id` the TLS stage, `fqdns = ["www.shift2eu.com"]` |
@@ -428,7 +428,9 @@ CNAME's target.
   decide them. A `lifecycle { postcondition }` checks `self.https_connections_only == false` and
   `self.min_scale == local.container_min_scale` (the local `min_scale` is set from, 0) after the apply,
   so a platform default of a redirect or a warm instance fails the apply instead of passing silently
-  (ADR 0045, *Postconditions*).
+  (ADR 0045, *Postconditions*). A `precondition` refuses the container while the DNS stage's
+  `default_fqdn` is still empty, as it may be on a first setup; R4 then creates it in a second pass
+  (ADR 0045, *The upstream's precondition*, issue #566).
 - **The custom domains come in an apply of their own.** Scaleway checks a custom domain's CNAME or ALIAS,
   then issues its certificate, and fails the apply after three minutes when the record is missing. So
   `front_domains` (default `false`) gates both: the first apply creates the namespace and the container,

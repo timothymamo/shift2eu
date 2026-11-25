@@ -386,6 +386,12 @@ TLS stage*.
   1000 characters, too few for the file, about 5.2 KiB, which travels as `args[2]`). The upstream's name is the environment variable `UPSTREAM`,
   the DNS stage's `default_fqdn`, read as `{$UPSTREAM}` when Caddy parses the file, so the file names no
   ID. The registry mirror is not taken unless the digest pull fails (below).
+- **The upstream's precondition** (issue #566). Scaleway sets the DNS stage's `default_fqdn` a while
+  after creating the stage, so on a first setup it may still be empty when the container is created:
+  `UPSTREAM` would be `""` and Caddy refuses `reverse_proxy https://` at start. The container's
+  `lifecycle` holds a `precondition` that `default_fqdn` is neither null nor `""`; it fails that apply on
+  `scaleway_container.site` alone (the rest stands), and R4 creates the container in a second pass once
+  `edge_endpoint` is set. `[container-lifecycle]` leaves preconditions be, like the postconditions.
 - **`min_scale = 0`**: the site stays in the free tier. The first request after an idle period starts an
   instance; R8 warms the container (one request, its answer discarded) before the live checks, and
   records how long that first request took against the live check's 30 s.

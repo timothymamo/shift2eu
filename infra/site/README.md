@@ -59,7 +59,8 @@ expression, and exactly one postcondition `self.https_connections_only == false`
 attribute or block, on a `scaleway_container_namespace`, whose variables reach every container in it
 (`[container-environment]`), no `ignore_changes` (but an empty list), `replace_triggered_by` or
 `enabled` in the `lifecycle` of a `scaleway_container` or a `scaleway_container_namespace`
-(`[container-lifecycle]`: the postconditions stay allowed), nothing
+(`[container-lifecycle]`: the postconditions and the precondition that the DNS stage's `default_fqdn` is
+not empty, ADR 0045, stay allowed), nothing
 in a `terraform` block but `required_version`, `required_providers`, `backend` and `cloud`
 (`[terraform-setting]`: no `encryption`, whose `external` key provider runs a local command), no `import`
 block, no `mock_provider` with a `source` and no `*.tfmock.hcl` or `*.tfmock.json` file, and only the
