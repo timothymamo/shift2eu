@@ -5,18 +5,19 @@ describes the same small web shop as it might run on one source:
 
 | Directory | Source | Resources |
 |---|---|---|
-| [`aws/`](aws/) | AWS | 17 |
+| [`aws/`](aws/) | AWS | 18 |
 | [`gcp/`](gcp/) | GCP | 16 |
-| [`azure/`](azure/) | Azure | 12 |
+| [`azure/`](azure/) | Azure | 13 |
 
 The shop has web VMs (one of them a scaling group), on GCP a bare-metal search server, a data
 volume, an object storage bucket with versioning, a PostgreSQL database with point-in-time restore,
 read replicas and node or zone high availability, a MySQL database, a managed Kubernetes cluster, a
 function, an order queue with a dead-letter queue, and a CDN and a DNS zone that `shift2eu` does
 not classify (`unclassified`, with their `rawType`). On AWS it also has a sharded Redis cache, a
-DocumentDB (MongoDB) cluster, an SNS topic and a container registry; on GCP a Cloud Run service and a
-Filestore file share; on Azure a load balancer with UDP rules. No target's catalog snapshot serves
-these seven categories yet (PRD #552), so every target shows them as fit `none`, "no offering in the
+DocumentDB (MongoDB) cluster, an SNS topic, a container registry and an OpenSearch product search
+domain; on GCP a Cloud Run service and a Filestore file share; on Azure a load balancer with UDP rules
+and an HDInsight Kafka cluster for the shop's events. No target's catalog snapshot serves these nine
+categories yet (PRD #552, PRD #571), so every target shows them as fit `none`, "no offering in the
 `<target>` catalog". Together the samples use every taxonomy
 category and every capability, and give every fit (direct, partial, none) on at least one target,
 so a report shows all its sections.

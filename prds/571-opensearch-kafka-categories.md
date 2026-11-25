@@ -1,6 +1,8 @@
 # PRD #571: OpenSearch and Kafka as taxonomy categories
 
-**Status:** Draft
+**Status:** In progress, milestone 1 done. The maintainer decided all six questions under *Decisions and
+decided questions* on 2026-11-25, as recommended. Milestone 1's ADR is
+[0047](../docs/adr/0047-add-search-opensearch-and-messaging-kafka-and-price-their-storage-per-node.md).
 **Issue:** #571
 
 ## Problem
@@ -46,7 +48,7 @@ version 2, and the JSON report keeps its `schemaVersion`s.
 | Source providers | None live. The inventory file (schema versions 1 and 2) and the inventory guide's commands, jq programs and tables for **AWS**, **GCP** and **Azure** | Live discovery (`shift2eu discover`) |
 | Target providers | **OVHcloud**, **Scaleway** and **UpCloud**: new offerings in their embedded snapshots, with sources, plans and prices | New targets. Live catalog or pricing APIs |
 | Taxonomy categories | New: `search.opensearch`, `messaging.kafka`. The sixteen existing categories keep their meaning | Everything under *Left out*, among them Kinesis, Pub/Sub, Event Hubs without its Kafka endpoint, Azure AI Search, Elastic Cloud, Kafka Connect and Schema Registry as resources. DNS and other global services (a separate PRD) |
-| Capabilities | The existing `node-high-availability`, `zone-high-availability`, `encryption-at-rest` and `snapshots`, reused with their current definitions | Any new capability (open question 4: none proposed) |
+| Capabilities | The existing `node-high-availability`, `zone-high-availability`, `encryption-at-rest` and `snapshots`, reused with their current definitions | Any new capability (decided question 4: none) |
 | Inventory | Schema version 2, with the size fields the new categories take (*Estimates*) | A schema version 3 |
 | Assessment and output | The current fit rules; plan estimates for both categories; Markdown, JSON and the site's HTML report | A JSON report `schemaVersion` bump. Minimum billed sizes and fixed node counts (PRD #552's follow-up issue covers them). Usage pricing (MSK Serverless, OpenSearch Serverless OCUs) |
 
@@ -56,8 +58,8 @@ Each definition is what the taxonomy's doc comment will say (`internal/domain/ta
 
 | Category | Definition | OVHcloud | Scaleway | UpCloud |
 |---|---|---|---|---|
-| `search.opensearch` | A search and analytics engine the provider runs that speaks the OpenSearch REST API: OpenSearch, or Elasticsearch up to 7.10, from which OpenSearch was forked | Public Cloud Databases for OpenSearch (GA) | Cloud Essentials for OpenSearch (general availability not confirmed: open question 2) | Managed OpenSearch (GA) |
-| `messaging.kafka` | A cluster of brokers the provider runs that speaks the Apache Kafka protocol: a partitioned, replicated log whose consumers track their own offsets | Public Cloud Analytics for Kafka (GA) | Clusters for Apache Kafka® (general availability not confirmed: open question 2) | none |
+| `search.opensearch` | A search and analytics engine the provider runs that speaks the OpenSearch REST API: OpenSearch, or Elasticsearch up to 7.10, from which OpenSearch was forked | Public Cloud Databases for OpenSearch (GA) | Cloud Essentials for OpenSearch (general availability not confirmed: decided question 2) | Managed OpenSearch (GA) |
+| `messaging.kafka` | A cluster of brokers the provider runs that speaks the Apache Kafka protocol: a partitioned, replicated log whose consumers track their own offsets | Public Cloud Analytics for Kafka (GA) | Clusters for Apache Kafka® (general availability not confirmed: decided question 2) | none |
 
 **Names.** Both are named after the protocol, as `cache.redis`, `database.postgresql` and
 `database.mongodb` are (ADR 0046, *The categories*): an application's client library decides what it
@@ -82,14 +84,14 @@ can move to, and an OpenSearch or Kafka client moves to any engine that speaks t
 | Source service | Category | Why |
 |---|---|---|
 | Amazon OpenSearch Service domain, engine `OpenSearch_*` | `search.opensearch` | It is OpenSearch |
-| Amazon OpenSearch Service domain, engine `Elasticsearch_7.*` | `search.opensearch` | OpenSearch is a fork of Elasticsearch 7.10.2 and keeps its REST API: a client written against the 7.x API speaks it unchanged |
+| Amazon OpenSearch Service domain, engine `Elasticsearch_7.*` | `search.opensearch` | OpenSearch is a fork of Elasticsearch 7.10.2 and keeps its REST API: a client using the typeless 7.x API speaks it unchanged. A 7.x client that still uses typed endpoints or `include_type_name` (deprecated in 7.x, removed in OpenSearch 2.x and 3.x) needs a change; the guide's warning (milestones 2 to 4) states it |
 | Amazon OpenSearch Service domain, engine `Elasticsearch_1.5` to `Elasticsearch_6.8` | `unclassified` | The client and REST API break: 7.0 removed mapping types, so a client written against the 6.x API needs a change before it runs on OpenSearch, and `direct` would hide a rewrite |
 | OpenSearch Serverless collection (`AWS::OpenSearchServerless::Collection`) | `search.opensearch` | It speaks the OpenSearch API (a subset of it), so every OpenSearch client that works against it works against a provisioned target cluster; no size (*Estimates*) |
 | Amazon MSK provisioned cluster | `messaging.kafka` | It is Apache Kafka |
 | Amazon MSK Serverless cluster (`AWS::MSK::ServerlessCluster`) | `messaging.kafka` | It speaks the Kafka protocol (IAM authentication only, which the move replaces); no size |
 | Google Cloud Managed Service for Apache Kafka cluster (`managedkafka.googleapis.com/Cluster`) | `messaging.kafka` | It is Apache Kafka |
 | Azure HDInsight cluster, kind `KAFKA` | `messaging.kafka` | It is Apache Kafka on VMs the provider runs |
-| Azure Event Hubs namespace with its Kafka endpoint | `unclassified`, with a hand rule in the guide | Recommended in open question 1, not yet decided: the namespace exposes the Kafka protocol, but most Event Hubs clients use AMQP or the Event Hubs SDKs, and no read-only call says which protocol the clients use. Classified `messaging.kafka` by the program, an AMQP client would map `direct` to Kafka and hide a client rewrite. The guide says to change the category by hand when every client of the namespace uses the Kafka endpoint |
+| Azure Event Hubs namespace with its Kafka endpoint | `unclassified`, with a hand rule in the guide | Decided question 1 (2026-11-25): the namespace exposes the Kafka protocol, but most Event Hubs clients use AMQP or the Event Hubs SDKs, and no read-only call says which protocol the clients use. Classified `messaging.kafka` by the program, an AMQP client would map `direct` to Kafka and hide a client rewrite. The guide says to change the category by hand when every client of the namespace uses the Kafka endpoint |
 | Confluent Cloud, Elastic Cloud, Aiven or Instaclustr through a marketplace (Elastic on Azure `Microsoft.Elastic/monitors`, Confluent on Azure `Microsoft.Confluent/organizations`, GCP Marketplace) | `unclassified`, or not in the inventory | Another vendor runs the service, under its own account and bill: it is not a resource of the source, and the vendor may run in the EU already. Where the source lists it (Azure's resource types), it stays `unclassified`; GCP Marketplace SaaS is not an asset at all |
 | Self-managed OpenSearch, Elasticsearch or Kafka on VMs or Kubernetes | the VM's or cluster's category | The source sees VMs and clusters, not the software; they map as `compute.vm` or `kubernetes.managed` today |
 | Azure AI Search (`Microsoft.Search/searchServices`) | `unclassified` | Its own REST API and index model, not OpenSearch's |
@@ -237,7 +239,7 @@ Capabilities the programs derive (each milestone pins the exact rule):
 | `search.opensearch` | `zone-high-availability` | AWS: `ClusterConfig.ZoneAwarenessEnabled` true, or `MultiAZWithStandbyEnabled` true; a Serverless collection with standby replicas `ENABLED` (to be checked: AWS says it places them in another zone) |
 | `search.opensearch` | `encryption-at-rest` | AWS: `EncryptionAtRestOptions.Enabled` true; always for a Serverless collection |
 | `search.opensearch` | `snapshots` | AWS: always for a domain (OpenSearch Service takes automated snapshots of every domain; to be checked) |
-| `messaging.kafka` | `node-high-availability` | MSK: `NumberOfBrokerNodes` 2 or more; MSK Serverless: always; GCP Managed Kafka: always (to be checked); HDInsight: 3 or more worker nodes (to be checked: its minimum) |
+| `messaging.kafka` | `node-high-availability` | MSK: `NumberOfBrokerNodes` 2 or more (to be checked: whether a topic's replication factor, 2 or more for a topic to survive the loss of a broker, which no cluster setting gives, must be stated by hand); MSK Serverless: always; GCP Managed Kafka: always (to be checked); HDInsight: 3 or more worker nodes (to be checked: its minimum, and the replication factor, as for MSK) |
 | `messaging.kafka` | `zone-high-availability` | MSK: brokers in two or more zones (`BrokerNodeGroupInfo.ClientSubnets`, one subnet per zone; to be checked); MSK Serverless: always (to be checked); GCP: to be checked; HDInsight: zones set on the cluster |
 | `messaging.kafka` | `encryption-at-rest` | MSK and MSK Serverless: always (`EncryptionInfo.EncryptionAtRest`); GCP: always (Google default encryption); HDInsight: always (Azure managed disks, encrypted by default; to be checked) |
 
@@ -291,7 +293,7 @@ milestones 2 and 3 check whether a single-zone cluster can exist at all.
   one node.
 - **Serverless resources** (MSK Serverless, OpenSearch Serverless collections) have no node size: no
   size fields, so "not estimated: size unknown". They are billed by usage (partitions and throughput,
-  OCUs), and a plan-priced category has no usage path; open question 3.
+  OCUs), and a plan-priced category has no usage path; decided question 3.
 
 No new not-estimated reason: every case above is an existing one.
 
@@ -299,7 +301,7 @@ No new not-estimated reason: every case above is an existing one.
 
 | Candidate | Why left out |
 |---|---|
-| Event Hubs namespaces as `messaging.kafka` by default | Open question 1 (recommendation) |
+| Event Hubs namespaces as `messaging.kafka` by default | Decided question 1: they stay `unclassified`, with the guide's hand rule |
 | Elasticsearch after 7.10 (Elastic Cloud, Elastic on Azure) | Another vendor runs it, and its APIs have moved past OpenSearch's |
 | Elasticsearch domains before 7.0 | Not served by OpenSearch without a reindex and a client change |
 | Kinesis Data Streams, Kinesis Firehose | Its own protocol; no target equivalent (PRD #552, *Left out*) |
@@ -313,11 +315,11 @@ All criteria are pinned by tests that run offline under `make test` or `make tes
 
 **Taxonomy and inventory**
 
-- [ ] An inventory (schema version 1 or 2) with a resource of category `search.opensearch` or
+- [x] An inventory (schema version 1 or 2) with a resource of category `search.opensearch` or
   `messaging.kafka` is read, and `shift2eu assess` exits 0. An unknown value such as
   `search.elasticsearch` or `messaging.kinesis` is still refused with exit 1 and "unknown taxonomy
   category".
-- [ ] A version 2 resource of either new category takes `vcpus`, `memoryGiB`, `storageGiB`, `count` and
+- [x] A version 2 resource of either new category takes `vcpus`, `memoryGiB`, `storageGiB`, `count` and
   `usage.hoursPerMonth`, and nothing else; a resource of another category keeps exactly the fields it
   takes today.
 - [ ] Inventories without the new categories keep their reports: in milestones 1 to 4 no existing
@@ -326,7 +328,7 @@ All criteria are pinned by tests that run offline under `make test` or `make tes
   categories); in milestones 5 to 7 such a golden may change only in its catalog line's or `snapshot`
   object's source and retrieved date, and in exactly the amounts of an existing offering whose price or
   plan the re-read page shows changed, as PRD #552's same criterion says.
-- [ ] The sample inventories under `examples/` together use every taxonomy category, the new ones
+- [x] The sample inventories under `examples/` together use every taxonomy category, the new ones
   included (the existing check in `test/examples`).
 
 **Mapping and report**
@@ -342,17 +344,17 @@ All criteria are pinned by tests that run offline under `make test` or `make tes
   `zone-high-availability` on a `search.opensearch` resource gives `partial` missing
   `zone-high-availability` on UpCloud, and points at an OVHcloud 3-AZ OpenSearch variant if milestone 5
   confirms one exists).
-- [ ] The JSON report carries the new category values in `category` and keeps `schemaVersion` 1, 2 and
+- [x] The JSON report carries the new category values in `category` and keeps `schemaVersion` 1, 2 and
   3 as today; every golden document validates against its schema.
 
 **Estimates**
 
-- [ ] A `search.opensearch` or `messaging.kafka` resource with `vcpus`, `memoryGiB` and `count` is priced
+- [x] A `search.opensearch` or `messaging.kafka` resource with `vcpus`, `memoryGiB` and `count` is priced
   at the per-node price of the cheapest covering plan of the best offering × `count`, scaled by
   `hoursPerMonth`, plus `max(0, storageGiB − included) × per-GiB × count`; without `count` as one node
   with "(count assumed 1)"; without `vcpus` or `memoryGiB` "not estimated: size unknown"; never counted
   as 0 in a total.
-- [ ] The storage of a `search.opensearch` or `messaging.kafka` resource is multiplied by `count`, and
+- [x] The storage of a `search.opensearch` or `messaging.kafka` resource is multiplied by `count`, and
   that of a `database.*` resource still is not (a test with the same sizes in both).
 - [ ] The per-category estimate table in `test/examples` has a representative resource for every new
   category each snapshot offers, and pins its plan and amount.
@@ -398,7 +400,7 @@ All criteria are pinned by tests that run offline under `make test` or `make tes
 **Catalogs**
 
 - [ ] OVHcloud's catalog serves `search.opensearch` and `messaging.kafka`, UpCloud's
-  `search.opensearch` only, and Scaleway's neither until open question 2 is met; each served
+  `search.opensearch` only, and Scaleway's neither until decided question 2's gate is met; each served
   category with at least one offering (`targettest` *category* check), only in declared EU regions
   (*regions* check). A golden file per target pins the parsed catalog, which is what pins the absence of
   the others.
@@ -427,7 +429,7 @@ Each milestone ships as one PR. All depend on this PRD being merged, and every o
 milestone 1. Milestones 2 to 4 (the guide) and 5 to 7 (the catalogs) are independent of one another.
 The guide milestones also touch the files PRD #552's milestones 2 to 4 change (`docs/guide/inventory.md`,
 the `.jq` programs, the fixtures and e2e goldens): each starts after the PRD #552 milestone of the same
-source has merged, so the two never conflict (open question 5). The catalog milestones likewise touch the
+source has merged, so the two never conflict (decided question 5). The catalog milestones likewise touch the
 files PRD #552's catalog milestones change (`catalog.json`, the parsed-catalog golden, the `targettest`
 category list, and `SOURCES.md`'s *Left out on purpose* and *Products not in the snapshot*): milestone 6
 (UpCloud) starts after PRD #552 milestone 7 (UpCloud) has merged and milestone 7 (Scaleway) after PRD
@@ -435,7 +437,7 @@ category list, and `SOURCES.md`'s *Left out on purpose* and *Products not in the
 (OVHcloud) has merged. Until a target's catalog milestone
 lands, its report shows the new categories as fit `none` with "no offering in the <target> catalog".
 
-1. [ ] **Taxonomy, inventory and estimates.** `search.opensearch` and `messaging.kafka` in
+1. [x] **Taxonomy, inventory and estimates.** `search.opensearch` and `messaging.kafka` in
    `internal/domain/taxonomy`, with their definitions; their rows in the size-field table
    (`internal/domain/inventory`, all five fields); both in `estimate.ByPlan`, matched on vCPUs and
    memory, storage per node × `count` (not `storedOnce`). One ADR records the categories and their
@@ -492,7 +494,7 @@ lands, its report shows the new categories as fit `none` with "no offering in th
    the repository, never committed (as milestone 7 says):** the Managed Databases tab's OpenSearch
    table. One saved page serves this milestone and PRD #552 milestone 7 (its Valkey table), so the
    maintainer saves it once, for whichever runs first. Depends on 1 and PRD #552 milestone 7.
-7. [ ] **Scaleway catalog, or its record of absence.** **Gated on open question 2.** If the maintainer
+7. [ ] **Scaleway catalog, or its record of absence.** **Gated on decided question 2.** If the maintainer
    confirms general availability: offerings for `search.opensearch` (Standalone, and High Availability
    with `node-high-availability`) and `messaging.kafka` (Single-AZ, and Multi-AZ with
    `zone-high-availability` only if a page says it keeps serving through the loss of a zone; the
@@ -512,29 +514,32 @@ lands, its report shows the new categories as fit `none` with "no offering in th
    assessed against all three targets, golden for Markdown and JSON; the README and the `CLAUDE.md`
    status line updated. Moves this PRD to `prds/done/` and closes #571. Depends on 2 to 7.
 
-## Decisions and open questions
+## Decisions and decided questions
 
-**Proposed decisions** (all pending the maintainer's approval of this PRD; those an open question names
-also wait on its answer)
+**Decisions** (approved by the maintainer with the decided questions below, 2026-11-25)
 
 - **Two categories, named after the protocol** (*Names*): `search.opensearch` in a new `search` family,
   `messaging.kafka` in the existing `messaging` family.
 - **Elasticsearch 7.x is in, before 7.0 is out.** The boundary is the client and REST API break alone:
-  the OpenSearch API is the Elasticsearch 7.10 API, and 7.0 removed mapping types, so a 6.x client
-  needs a change. Upgrades and index compatibility do not decide it (a move is a new cluster either
-  way). As for the databases, the engine version is not assessed beyond that boundary; the guide warns
-  that Elastic clients from 7.14 on refuse a server that is not Elasticsearch.
+  the OpenSearch API is the Elasticsearch 7.10 API, so a client using the typeless 7.x API speaks it
+  unchanged, and 7.0 removed mapping types, so a 6.x client needs a change. Upgrades and index
+  compatibility do not decide it (a move is a new cluster either way). As for the databases, the engine
+  version is not assessed beyond that boundary. The guide's warning (milestones 2 to 4) says that a 7.x
+  client still using typed endpoints or `include_type_name` needs a change for OpenSearch 2.x and 3.x,
+  and that Elastic clients from 7.14 on refuse a server that is not Elasticsearch.
 - **Serverless variants are in, unsized.** An OpenSearch Serverless collection and an MSK Serverless
   cluster speak their protocol, so their clients move to a target cluster; leaving them `unclassified`
   would show a blocker where a target serves them. They carry no size, and the report says "size
-  unknown" (open question 3).
+  unknown" (decided question 3).
 - **Vendor-run services are out.** Elastic Cloud, Confluent Cloud and Aiven through a marketplace are the
   vendor's service, not the source's.
 - **No new capability.** `node-high-availability`, `zone-high-availability`, `encryption-at-rest` and
   `snapshots` cover the differences the targets document; partitions and shards are what the categories
   are.
 - **Plan pricing with storage per node.** Both categories are ByPlan on vCPUs and memory, and storage is
-  per node × `count`, unlike the managed databases (*Estimates*).
+  per node × `count`, unlike the managed databases (*Estimates*). Recorded in
+  [ADR 0047](../docs/adr/0047-add-search-opensearch-and-messaging-kafka-and-price-their-storage-per-node.md),
+  with the boundaries, the field rows and why no format version changes.
 - **No inventory format version.** As ADR 0023 and ADR 0046: `taxonomy.ParseCategory` accepts a new
   value in a version 1 or 2 file; the field table gains rows for new categories only, so no existing
   file changes meaning; ADR 0025 asks for a new version only once `shift2eu discover` writes files. An
@@ -550,10 +555,12 @@ also wait on its answer)
 - **The guide can ship before the catalogs.** A classified resource with no offering yet is fit `none`
   with a reason naming its category, never worse than `unclassified`.
 
-**Open questions for the maintainer** (each with a recommendation)
+**Decided by the maintainer** (2026-11-25, as recommended: each question keeps its recommendation's
+text as the decision)
 
 1. **Event Hubs and its Kafka endpoint.** The Standard, Premium and Dedicated tiers expose the Kafka
-   protocol, but most clients use AMQP, and no read-only call tells which. *Recommendation:* keep Event
+   protocol, but most clients use AMQP, and no read-only call tells which. *Decision (2026-11-25,
+   decided by the maintainer as recommended):* keep Event
    Hubs namespaces `unclassified`, and have the guide say: change the category to `messaging.kafka` by
    hand when every client uses the Kafka endpoint. The alternative, `messaging.kafka` for every Standard
    or higher namespace, maps AMQP clients `direct` to Kafka and hides a client rewrite.
@@ -562,28 +569,31 @@ also wait on its answer)
    APIs are `v1alpha1` in `fr-par` only, and the product pages that would show a status are on
    `www.scaleway.com`, which refuses automated clients. Options: (a) add both categories now with
    OVHcloud and UpCloud (OpenSearch) and OVHcloud alone (Kafka), and gate Scaleway's milestone on the
-   maintainer's saved product pages; (b) wait for Scaleway. *Recommendation:* (a). A category with fewer
+   maintainer's saved product pages; (b) wait for Scaleway. *Decision (2026-11-25, decided by the
+   maintainer as recommended):* (a), both categories now, only the Scaleway milestone gated. A category with fewer
    targets is still more precise than `unclassified`: OVHcloud's and UpCloud's offerings are GA, and
    Scaleway shows "no offering in the Scaleway catalog" until its pages confirm GA, as PRD #552 did for
    OVHcloud File Storage. Milestone 7 then adds the offerings or records their absence.
-3. **Serverless variants unsized.** *Recommendation:* classify them and leave them unsized ("size
-   unknown"), as proposed under *Proposed decisions* (*Serverless variants are in, unsized*). The
+3. **Serverless variants unsized.** *Decision (2026-11-25, decided by the maintainer as recommended):*
+   classify them and leave them unsized ("size unknown"), as under *Decisions* (*Serverless variants
+   are in, unsized*). The
    alternative, a usage path for a ByPlan category, would need an estimate method per resource rather
    than per category, which ADR 0027 does not have.
 4. **No new capability.** Candidates were a Kafka `tiered-storage` and an OpenSearch `k-nn` (vector
-   search). *Recommendation:* none now. Every target's OpenSearch enables k-NN by default (OVHcloud's
+   search). *Decision (2026-11-25, decided by the maintainer as recommended):* none now. Every target's OpenSearch enables k-NN by default (OVHcloud's
    plugin list) or does not say, and no target documents Kafka tiered storage; a capability that every
    offering lists, or none does, only blurs the vocabulary.
 5. **Order against PRD #552's milestones.** Both PRDs change the same guide sections, jq programs and
    fixtures, and the same catalog files (`catalog.json`, the parsed-catalog golden, the `targettest`
    category list, `SOURCES.md`'s *Left out on purpose* and *Products not in the snapshot*).
-   *Recommendation:* each guide milestone here starts after PRD #552's milestone of the same source
+   *Decision (2026-11-25, decided by the maintainer as recommended):* each guide milestone here starts after PRD #552's milestone of the same source
    merges, and each catalog milestone after PRD #552's milestone of the same target: UpCloud
    (milestone 6) after PRD #552 milestone 7, Scaleway (milestone 7) after PRD #552 milestone 6;
    OVHcloud (milestone 5) waits for nothing, PRD #552 milestone 5 having merged. One saved
    `upcloud.com/pricing/` page serves both PRDs' UpCloud milestones, so the maintainer saves it once.
 6. **Names.** `search.opensearch` (rather than `database.opensearch` or `search.managed`) and
-   `messaging.kafka` (rather than `streaming.kafka`). *Recommendation:* as named, for the reasons under
+   `messaging.kafka` (rather than `streaming.kafka`). *Decision (2026-11-25, decided by the maintainer
+   as recommended):* as named, for the reasons under
    *Names*.
 
 **To be checked** (each in the milestone named; a fact not confirmed stays out of the snapshot)

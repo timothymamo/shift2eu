@@ -15,6 +15,7 @@ subscription. The raw types are Azure Resource Manager resource types.
 | `func-shop-thumbnails` | `Microsoft.Web/sites` | `serverless.function` |  |  | `shop` | depends-on `stshopassets` |  |
 | `sb-shop-orders` | `Microsoft.ServiceBus/namespaces/queues` | `messaging.queue` | `dead-letter-queue` |  | `shop` |  |  |
 | `lb-shop-web` | `Microsoft.Network/loadBalancers` | `network.loadbalancer` | `zone-high-availability`, `udp` |  | `shop` |  |  |
+| `hdi-shop-events` | `Microsoft.HDInsight/clusters` | `messaging.kafka` | `node-high-availability`, `encryption-at-rest` | 4 vCPU, 16 GiB, 1024 GiB × 3 brokers | `shop` |  |  |
 | `cdn-shop` | `Microsoft.Cdn/profiles` | `unclassified` |  |  | `shop` | depends-on `stshopassets` |  |
 | `dns-shop` | `Microsoft.Network/dnsZones` | `unclassified` |  |  | `shop` |  |  |
 

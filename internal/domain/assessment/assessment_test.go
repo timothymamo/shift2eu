@@ -338,7 +338,58 @@ func TestAssessVerdictsComeFromMapping(t *testing.T) {
 	}
 }
 
-// An empty inventory is a valid run: no verdicts, no blockers, zero counts.
+// TestAssessBlockerForKafkaOnUpCloud pins that a resource of a category the
+// target does not serve is a blocker that names its category: PRD #571's
+// messaging.kafka against UpCloud, whose product list has no Kafka, so its fit
+// is none, its summary counts it as not portable, and its one blocker carries
+// the reason the report shows (PRD #571, Mapping and report).
+func TestAssessBlockerForKafkaOnUpCloud(t *testing.T) {
+	t.Parallel()
+
+	kafka := taxonomy.MessagingKafka
+
+	inv := newInventory(t, []inventory.Resource{{
+		ID:       "kafka-example",
+		RawType:  "AWS::MSK::Cluster",
+		Category: kafka,
+		Region:   "eu-west-1",
+	}})
+	cat := testutil.UpCloudCatalog(t)
+
+	got := assessment.Assess(inv, cat)
+
+	verdict := verdictFor(t, got.Verdicts, "kafka-example")
+	if verdict.Fit != mapping.None {
+		t.Errorf("Fit = %q, want %q", verdict.Fit, mapping.None)
+	}
+
+	wantSummary := assessment.Summary{Total: 1, None: 1}
+	if diff := cmp.Diff(wantSummary, got.Summary); diff != "" {
+		t.Errorf("Summary mismatch (-want +got):\n%s", diff)
+	}
+
+	wantBlockers := []assessment.Blocker{{
+		ResourceID: "kafka-example",
+		Reason:     mapping.Reason{Code: mapping.NoOffering, Target: "UpCloud", Category: kafka},
+	}}
+
+	if len(got.Blockers) != 1 {
+		t.Fatalf("Blockers = %v, want exactly one", got.Blockers)
+	}
+
+	if diff := cmp.Diff(wantBlockers, got.Blockers); diff != "" {
+		t.Errorf("Blockers mismatch (-want +got):\n%s", diff)
+	}
+
+	const wantReason = "no offering in the UpCloud catalog for messaging.kafka"
+
+	if reason := got.Blockers[0].Reason.String(); reason != wantReason {
+		t.Errorf("blocker reason = %q, want %q", reason, wantReason)
+	}
+}
+
+// TestAssessEmptyInventory pins that an empty inventory is a valid run: no
+// verdicts, no blockers, zero counts.
 func TestAssessEmptyInventory(t *testing.T) {
 	t.Parallel()
 

@@ -81,6 +81,8 @@ var pricedSizes = map[taxonomy.Category]pricedSize{
 	taxonomy.DatabasePostgreSQL: {vcpus: true, memory: true},
 	taxonomy.DatabaseMySQL:      {vcpus: true, memory: true},
 	taxonomy.DatabaseMongoDB:    {vcpus: true, memory: true},
+	taxonomy.SearchOpenSearch:   {vcpus: true, memory: true},
+	taxonomy.MessagingKafka:     {vcpus: true, memory: true},
 	taxonomy.CacheRedis:         {memory: true},
 	taxonomy.StorageBlock:       {storage: true},
 	taxonomy.StorageObject:      {storage: true},

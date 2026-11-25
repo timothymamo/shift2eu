@@ -10,26 +10,28 @@
 // instead when the offering bills its plans at most cap hours a month,
 // ADR 0029), plus the storage above what the plan includes × the offering's
 // per-GiB price, plus the offering's fixed fee once per resource ×
-// hoursPerMonth / 730, never capped (ADR 0026). A cache.redis resource is
-// matched on memory alone (catalog.MatchesOnMemory, ADR 0046): the cheapest
-// plan whose memory covers it, ties broken by less memory, plan name and
-// offering name, its per-node price × count, and no storage. Storage
-// categories (storage.block, storage.object, storage.file) have no plan: their
-// estimate is the stored GiB × the per-GiB price. Categories priced by usage
-// are not estimated, as usage-priced; categories never priced
-// (network.loadbalancer, registry.container) are not estimated, as
-// NeverPriced ("not-priced"). An estimate on a
-// capped offering records the cap (Estimate.BillingCapHours), so a report can
-// state it.
+// hoursPerMonth / 730, never capped (ADR 0026). The storage above what the
+// plan includes is per node, × count, except for the managed databases
+// (database.*), whose storage is the service's data, counted once (ADR 0027):
+// search.opensearch and messaging.kafka store per node (ADR 0047). A
+// cache.redis resource is matched on memory alone (catalog.MatchesOnMemory,
+// ADR 0046): the cheapest plan whose memory covers it, ties broken by less
+// memory, plan name and offering name, its per-node price × count, and no
+// storage. Storage categories (storage.block, storage.object, storage.file)
+// have no plan: their estimate is the stored GiB × the per-GiB price.
+// Categories priced by usage are not estimated, as usage-priced; categories
+// never priced (network.loadbalancer, registry.container) are not estimated,
+// as NeverPriced ("not-priced"). An estimate on a capped offering records the
+// cap (Estimate.BillingCapHours), so a report can state it.
 //
 // An estimate by plan says which storage it leaves out
 // (Estimate.StorageNotIncluded, ADR 0032) when the chosen plan includes no
 // storage, its offering prices storage per GiB in the estimate region, and the
 // resource gives no storage size: the boot volume for compute.vm,
 // compute.baremetal and kubernetes.managed, the data storage for
-// database.postgresql, database.mysql and database.mongodb. The note adds a
-// statement, not a price: the amount is unchanged, and Sum counts the
-// estimates that carry it.
+// database.postgresql, database.mysql, database.mongodb, search.opensearch and
+// messaging.kafka (ADR 0047). The note adds a statement, not a price: the
+// amount is unchanged, and Sum counts the estimates that carry it.
 //
 // A resource that cannot be priced is never priced at 0: its Estimate says it
 // is not estimated, and why (Reason). Sum totals only the estimated resources
