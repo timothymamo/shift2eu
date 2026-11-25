@@ -190,8 +190,8 @@ an AKS node resource group, which the guide already drops; milestone 2 found `ku
 documented by AWS on subnets only, so it is not used on load balancers), a GCP forwarding rule and target
 proxy (the frontends of a load balancer the URL map or backend service stands for), the parts and
 settings of a classified AWS resource that AWS Config records as types of their own (an ELBv2 listener,
-listener rule and target group, an EFS access point, an ECR registry policy, replication configuration
-and pull-through cache rule; `AWS::ECR::PublicRepository` stays `unclassified`), the member clusters of an ElastiCache replication group (the group stands for them), the member
+listener rule and target group, an EFS access point, an ECR registry policy, replication configuration,
+pull-through cache rule and repository creation template; `AWS::ECR::PublicRepository` stays `unclassified`), the member clusters of an ElastiCache replication group (the group stands for them), the member
 instances of a DocumentDB cluster (the cluster stands for them), and the Cloud Run service behind a 2nd
 gen Cloud Function (already dropped).
 
@@ -618,7 +618,9 @@ text as the decision)
     Production tier, which is exactly 2 nodes, is priced at 3 nodes, above what the target bills
     (*Estimates*). *Decision (2026-11-24, decided by the maintainer as recommended):* record each minimum and each fixed node count (GiB, nodes) in
     `SOURCES.md`, say so in the guide, and open one follow-up issue for minimum billed sizes and fixed or
-    bounded node counts in snapshot format v2; do not block this PRD on it.
+    bounded node counts in snapshot format v2; do not block this PRD on it. The guide (milestone 2)
+    already says a target's `SOURCES.md` names each minimum and fixed node count once the target serves
+    the category: the catalog milestones 5 to 7 must make that true for every new offering.
 11. **Scaleway Redis High Availability.** Only Cluster mode is GA and highly available, and it needs
     a cluster-aware client, so a non-sharded cache that needs `node-high-availability` would be
     pointed at a tier its client may not use. *Decision (2026-11-24, decided by the maintainer as recommended):* list only Cluster mode as the highly
