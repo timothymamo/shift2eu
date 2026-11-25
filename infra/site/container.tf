@@ -30,9 +30,10 @@ resource "scaleway_container_namespace" "site" {
 }
 
 # The cost pins (ADR 0045, The container; dev/infra-rules.sh refuses another value): one instance at most, of
-# 140 mvCPU and 268 MB (268000000 bytes, about 0.268 GB), about EUR 2.12 a month in the worst case (ADR 0045's
-# price for the 0.25 GB size; 268 MB moves it by less than one cent). min_scale 0 keeps the site in the free tier
-# with a cold start on the first visit after an idle period; R8 warms the container before the live checks.
+# 140 mvCPU and 268 MB (268000000 bytes, about 0.268 GB), about EUR 2.12 a month in the worst case at ADR 0045's
+# 0.25 GB price, about EUR 2.22 billed at 268 MB (ADR 0045, Amendment: the memory the platform keeps). min_scale 0
+# keeps the site in the free tier with a cold start on the first visit after an idle period; R8 warms the
+# container before the live checks.
 # memory_limit (MB) and http_option are the deprecated spellings of memory_limit_bytes and
 # https_connections_only, and are never set.
 #

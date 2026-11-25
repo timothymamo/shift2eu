@@ -146,7 +146,7 @@ dev/tofu.sh -chdir=infra/site apply site.tfplan            # PASS: "Apply comple
 PL="$(dev/tofu.sh -chdir=infra/site output -raw pipeline_id)"; scw edge-services tls-stage list pipeline-id="$PL" -o json | jq -c '[.[].id]'   # PASS: ["<the $TLS value>"], the orphan alone; FAIL anything else: stop, do not delete
 scw edge-services tls-stage delete "$TLS"                  # PASS: no error (or delete it in the console: Edge Services, the pipeline, its TLS stage)
 scw edge-services tls-stage list pipeline-id="$PL" -o json | jq -c '[.[].id]'   # PASS: []
-dev/tofu.sh -chdir=infra/site plan -detailed-exitcode && rm -r "$T"   # PASS: exit 0, "No changes." (the backup removed); then go on with the wait loop below; FAIL exit 2: read the diff, and keep "$T/state-backup.json" until it is explained, then rm -r "$T"
+dev/tofu.sh -chdir=infra/site plan -detailed-exitcode && rm -r "$T"   # PASS: exit 0, "No changes." (the backup removed); then go on with the wait loop below; FAIL exit 2: read the diff, and keep "$T/state-backup.json" until it is explained, then [ -f "$T/state-backup.json" ] && rm -r "$T"
 # Scaleway assigns the DNS stage's default_fqdn after creating it: edge_endpoint is empty right after apply, so refresh the state (no resource change) until it is set, 20 tries 30 s apart
 # Watch the first iteration: with the container absent, refresh-only should not trip the precondition, and the container_endpoint output reads "" (try()) rather than failing (not verifiable offline)
 n=0; refresh_failed=0; until [ -n "$(dev/tofu.sh -chdir=infra/site output -raw edge_endpoint 2>/dev/null)" ] || [ "$n" -ge 20 ]; do sleep 30; dev/tofu.sh -chdir=infra/site apply -refresh-only -auto-approve || { refresh_failed=1; break; }; n=$((n + 1)); done
