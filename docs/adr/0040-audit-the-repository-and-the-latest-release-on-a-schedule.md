@@ -2448,9 +2448,11 @@ which the container is killed and removed.
 verify` reads them, as `release.yml`'s `verify` job shows); that scorecard reads with these scopes and
 which row 15 reads are refused; that trivy runs offline with these flags; that `docker commit` keeps the
 release image's user, working directory and entry point; that `go test -fuzz` builds offline from
-the copied module cache without writing to it; and that `cosign` and `gh attestation verify` exit 1
-for a refused verification and another code for a network failure (round E, below), else the model
-tells them apart by the command's stderr alone.
+the copied module cache without writing to it; and that `gh attestation verify` exits 1 for a refused
+verification and another code for a network failure (round E, below). If it exits 1 for both, a network
+failure reads as a finding the maintainer confirms, never a refusal read as a limit: the model
+downgrades on the recorded exit code alone, never on stderr (review round I, below). cosign's codes are
+no longer to be checked: round I read them from its source.
 
 **Review round D of PR 5c (2026-11-24).** The review's and the audit's findings, each held by
 `check.AuditWorkflow` and a case of its test:
@@ -2601,6 +2603,76 @@ tool-failed branch is `elif [ "${rc}" -ne 0 ] && [ "${rc}" -ne 2 ]; then`; zizmo
 -ne 0 ]; then`, and any govulncheck branch that excuses a further exit (`-ne 0 ] && ...`, such as text
 mode's 3) is refused, so neither of its two runs can read an error as a finding. Each branch is a whole
 line, and each message names its tool.
+
+**Review round I of PR 5c (2026-11-25).** The reviewer's and the auditor's findings on the whole branch.
+The invariant behind them: nothing in the checks job ends the job before the encrypt step, a check that
+did not run is recorded in `not-run.txt`, never reported clean, and a real verification failure is a
+finding, never a limit. Each is held by `check.AuditWorkflow` and a case of its test:
+
+- **B1, cosign's refusal exits.** cosign v3.1.5 maps `verify`'s errors to exit codes in
+  `cmd/cosign/errors/exit_code_lookup.go`, with the constants in `cmd/cosign/errors/exit_codes.go`:
+  `ErrNoSignaturesFound` 10, `ErrImageTagNotFound` 11, `ErrNoMatchingSignatures` 12,
+  `ErrNoCertificateFoundOnSignature` 13; `cmd/cosign/cli/verify/verify.go` wraps the error it returns
+  with that lookup, and every other error, a network failure included, is 1. Row 7 read only 1 as a
+  finding, so a missing or non-matching signature read as `tool-failed`. Its `cosign verify` branch is now
+  `elif [ "${rc}" -eq 1 ] || { [ "${rc}" -ge 10 ] && [ "${rc}" -le 13 ]; }; then`, whole on its line.
+  `cosign verify-attestation` does not wrap its error, so 1 stays its one finding exit; `gh attestation
+  verify` keeps 1 too. A network failure of either cosign command is 1 as well: it reads as a finding
+  the maintainer confirms, which fails closed.
+- **M1, every loop with a timeout has a budget.** Row 9's archive loop had none: six archives of up to
+  2 + 5 minutes against the step's 20. It now stops new archives at `if [ "${SECONDS}" -ge 720 ]; then`
+  with a limits line, and the check holds rows 9 and 14 to the budget rule rows 7 and 13 had. `fit`
+  refuses a loop that holds a `timeout` and has no budget at the head of its body; the one exception is
+  a `for` over literal words (row 7's two cosign attestations) in a step that has a budget, whose
+  timeouts it counts once per word.
+- **M2, row 14's staging is bounded.** The tree's extraction, the staging create, both `docker cp`s and
+  the commit each run under a `timeout` of their own with `|| rc=$?`, record `fuzzing timed-out` or
+  `fuzzing tool-failed`, and end the step with `finished` and `exit 0` when the rest needs what failed;
+  each target's create is under `timeout 2m` and records its own exit; the pull's timeout is
+  `fuzzing timed-out`; and no target starts after the step's 25th minute. The check holds the step under
+  the `bounded` rule (check `fuzzing`) and the loop budget, and pins the create through its `|| rc=$?`.
+- **L1, every docker command is bounded.** Rows 11, 13 and 14's post-run `docker kill`, `inspect`,
+  `rm`, `rm -f` and `image rm` ran with no timeout. Each now runs right after `timeout <N>` and ends in
+  `|| rc=$?`, or in `|| true` for a command that only cleans up; row 11's exit-state read records its
+  exit and branch. The check refuses any docker command of the checks job without both. Row 11's
+  timeout-minutes is 13 (its own timeouts are 12), and the job's steps now add up to 348 of its 355.
+- **L2, a failed download is no checksum finding.** A failed or empty download left `checksums.txt`
+  absent, the filtered list empty and `sha256sum` exiting 1, a false `verification-failed`. The download
+  now sets `rel_ok`: 0 on a timeout, a failure or a missing `checksums.txt` (`release-integrity
+  results-missing` with its limits line), and the filter, the checksum check, the listing and the
+  per-file attestations run only inside `if [ "${rel_ok}" -eq 1 ]; then`. The checksum finding needs a
+  non-empty list: `elif [ "${rc}" -eq 1 ] && [ -s "${out}/checksums.filtered" ]; then`.
+- **L3, a tool that failed is a check that did not run.** scorecard, trivy (default `--exit-code 0`)
+  and `docker pull` exit non-zero only on an error, and only 124 was branched. Each run is now followed by
+  `elif [ "${rc}" -ne 0 ]; then` recording `scorecard`, `image-pull` or `image-scan tool-failed`, and
+  trivy's timeouts are `image-scan timed-out` in `not-run.txt` as well as their limits line.
+- **L4, an archive without its binary is no scan.** `head` creates the binary's file whatever `tar`
+  gives it, so row 9's `find` counts a member only with `-size +0`, and an archive with none is
+  `results-missing`.
+- **L5, latest.txt is shape-checked.** `latest_release` and `latest_digest` are blanked unless they are
+  `^v[0-9]+\.[0-9]+\.[0-9]+$` and `^sha256:[0-9a-f]{64}$`, as `tag_digest` is.
+- **L6, an unexpected ruleset ID does not end the step.** Row 15 records `supply-chain
+  unexpected-ruleset` in `not-run.txt` and goes on with `continue`, never `exit 1`.
+- **S4, an unresolved digest is recorded.** The `else` of `if [ -n "${tag_digest}" ]` records
+  `release-integrity tool-failed` and a limits line naming the signature and attestations it did not
+  verify.
+- **S5, the model downgrades on the exit code alone.** The `security-audit-run` skill lets the model
+  report a `verification-failed` as a limit only when the command's `.exit` file records a code other
+  than the refusal codes above; stderr is context, never a reason, because the registry's, Sigstore's and
+  GitHub's text in it can be shaped in part by whoever tampered with the image. Its rows 6, 8 and 10 name
+  their new `tool-failed` records.
+- **N1.** The fixture's cosign pin is v3.1.5's, as the workflow's.
+
+*Accepted residual (N3, unchanged):* `timeout` sends no `SIGKILL` (`--kill-after`), as round F records:
+the host tools are Go programs that exit on `SIGTERM`, and a container whose `docker start` times out is
+followed by `docker kill`.
+
+*Loop budgets and their last iteration.* A `${SECONDS}` budget at the head of a loop's body stops only new
+iterations, so a step's worst case is the later of the time before its loop and the budget plus one
+whole iteration, plus the timeouts after the loop. In the workflow: row 7, max(11, 20 + 2) + 18 = 40 of
+50 minutes; row 9, 12 + 7 = 19 of 20; row 13, max(4.5, 12 + 6) + 1 = 19 of 20 (its budget is 12
+minutes, not 15, for this); row 14, max(18.5, 25 + 16) + 1 = 42 of 45. `fit` counts the budget and every
+timeout outside the loop, not the last iteration, so it does not yet hold this bound.
 
 ## Alternatives considered
 
