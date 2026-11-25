@@ -11,8 +11,9 @@
 // it destroys (so a replacement repoints the DNS stage first, issue #541), the site container's cost pins (one
 // instance, 140 mvCPU and 0.25 GB of memory at most, and no pin set twice or only in a nested block, ADR 0045),
 // the one front container in its one namespace (no count, no for_each, no second container, ADR 0045),
-// the environment that container runs with (the one UPSTREAM the Caddyfile reads, and no secret), no lifecycle
-// block ignoring a change on the container or on its namespace (ADR 0045),
+// the environment that container runs with (the one UPSTREAM the Caddyfile reads, and no secret, on the container
+// and on the namespace the platform injects into it), no lifecycle block ignoring a change or disabling the
+// resource on the container or on its namespace (ADR 0045),
 // the one file() call the Caddyfile is read with and no other (ADR 0045), and so on (the script lists them). With
 // every rule holding it prints nothing and exits 0; a usage error exits 2.
 //
@@ -1738,9 +1739,11 @@ resource "scaleway_container_cron" "nightly" {
 // The table also pins what the container runs with and what a plan may pass over: [container-environment] holds
 // environment_variables to the one UPSTREAM the Caddyfile reads and refuses secret_environment_variables, so a
 // variable set beside it - a proxy, which would route every visitor's traffic while every other rule held -
-// cannot pass unnoticed, and [container-lifecycle] refuses an ignore_changes or a replace_triggered_by on the
-// container or on its namespace, since either stops a plan applying what a test pins (the image, the command,
-// the Caddyfile's bytes) or reverting a console change to a cost pin.
+// cannot pass unnoticed, on the container and on its namespace, which the platform injects into every container
+// in it, and in any shape but the object literal the keys are read from, and [container-lifecycle] refuses an
+// ignore_changes, a replace_triggered_by or an enabled = false on the container or on its namespace, since each
+// stops a plan applying what a test pins (the image, the command, the Caddyfile's bytes) or reverting a console
+// change to a cost pin, while an empty ignore_changes stays accepted for passing over nothing.
 var containerCostPinCases = []infraRuleCase{
 	{
 		name:   "container-max-scale-two",
@@ -2218,6 +2221,93 @@ resource "scaleway_container" "second" {
 			addContainerEnvironmentVariable(t, site, `    ANOTHER = "x"`)
 		},
 	},
+	// The environment's shape is pinned too: an object the rules could not read, or one written as a block, is a
+	// set of variables nobody can hold to the one UPSTREAM, so it is refused whatever it holds.
+	{
+		name:   "container-environment-for-expression",
+		why:    "the site container's environment_variables written as a for expression over a map, a shape whose keys no rule reads",
+		want:   "container-environment",
+		wantIn: map[string]string{"container-environment": "{site}/container.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			setContainerEnvironment(t, site, `  environment_variables = { for name, value in { UPSTREAM = scaleway_edge_services_dns_stage.site.default_fqdn } : name => value }`)
+		},
+	},
+	{
+		name:   "container-environment-parenthesised-key",
+		why:    `a parenthesised key ("HTTPS_PROXY") = "http://proxy.example.com:3128" beside UPSTREAM in the site container's environment_variables, a key the rules could not read as one entry`,
+		want:   "container-environment",
+		wantIn: map[string]string{"container-environment": "{site}/container.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			setContainerEnvironment(t, site,
+				"  environment_variables = {",
+				"    UPSTREAM = scaleway_edge_services_dns_stage.site.default_fqdn",
+				`    ("HTTPS_PROXY") = "http://proxy.example.com:3128"`,
+				"  }",
+			)
+		},
+	},
+	{
+		name:   "container-environment-merge",
+		why:    `environment_variables = merge({ UPSTREAM = ... }, { HTTPS_PROXY = "x" }) on the site's container, a call that hides the second key from the rules`,
+		want:   "container-environment",
+		wantIn: map[string]string{"container-environment": "{site}/container.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			setContainerEnvironment(t, site, `  environment_variables = merge({ UPSTREAM = scaleway_edge_services_dns_stage.site.default_fqdn }, { HTTPS_PROXY = "http://proxy.example.com:3128" })`)
+		},
+	},
+	{
+		name:   "container-environment-block",
+		why:    "the site container's environment written as an environment_variables block instead of the attribute, a shape whose entries no rule reads",
+		want:   "container-environment",
+		wantIn: map[string]string{"container-environment": "{site}/container.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			setContainerEnvironment(t, site,
+				"  environment_variables {",
+				"    UPSTREAM = scaleway_edge_services_dns_stage.site.default_fqdn",
+				"  }",
+			)
+		},
+	},
+	// Scaleway injects the namespace's own environment into every container in it, so the namespace is judged
+	// like the container: a variable set there reaches the front without a line of the container changing.
+	{
+		name:   "container-namespace-environment",
+		why:    `environment_variables = { HTTPS_PROXY = "http://proxy.example.com:3128" } added to the site's container namespace, which the platform injects into the container in it`,
+		want:   "container-environment",
+		wantIn: map[string]string{"container-environment": "{site}/container.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			addNamespaceAttribute(t, site, `  environment_variables = { HTTPS_PROXY = "http://proxy.example.com:3128" }`)
+		},
+	},
+	{
+		name:   "container-namespace-secret-environment",
+		why:    `secret_environment_variables = { X = "y" } added to the site's container namespace, a secret in the plan and in the state, injected into the container`,
+		want:   "container-environment",
+		wantIn: map[string]string{"container-environment": "{site}/container.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			addNamespaceAttribute(t, site, `  secret_environment_variables = { X = "y" }`)
+		},
+	},
+	{
+		name:   "container-namespace-environment-block",
+		why:    "the site's container namespace holding an environment_variables block instead of the attribute, a shape whose entries no rule reads",
+		want:   "container-environment",
+		wantIn: map[string]string{"container-environment": "{site}/container.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			addNamespaceAttribute(t, site,
+				"  environment_variables {",
+				`    HTTPS_PROXY = "http://proxy.example.com:3128"`,
+				"  }",
+			)
+		},
+	},
 	// A lifecycle block that ignores a change stops a plan from applying it: the image a test reads by digest,
 	// the command and args that write the Caddyfile byte for byte, and a cost pin a console change raised would
 	// all stay as the platform holds them while every rule still held.
@@ -2259,6 +2349,54 @@ resource "scaleway_container" "second" {
 		breakage: func(t *testing.T, site string) {
 			t.Helper()
 			setNamespaceLifecycle(t, site, "    ignore_changes = [description]")
+		},
+	},
+	{
+		name:   "container-lifecycle-ignores-image-and-args",
+		why:    "a multi-line ignore_changes = [image, args] inside the site container's lifecycle block, which passes over the tested image and the command that writes the Caddyfile",
+		want:   "container-lifecycle",
+		wantIn: map[string]string{"container-lifecycle": "{site}/container.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			addContainerLifecycleLines(t, site,
+				"    ignore_changes = [",
+				"      image,",
+				"      args",
+				"    ]",
+			)
+		},
+	},
+	// An ignore_changes that ignores nothing changes no plan's behaviour, so the rule stays quiet on it: the rule
+	// refuses what a plan would pass over, not the setting's name.
+	{
+		name: "container-lifecycle-ignores-nothing",
+		why:  "ignore_changes = [\n] inside the site container's lifecycle block, an empty list that ignores no change",
+		want: "",
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			addContainerLifecycleLines(t, site, "    ignore_changes = [", "    ]")
+		},
+	},
+	// OpenTofu 1.11 accepts a lifecycle block's enabled = false, which acts as count = 0: the front is then not
+	// created at all while every other rule still holds.
+	{
+		name:   "container-lifecycle-enabled-false",
+		why:    "enabled = false added inside the site container's lifecycle block, beside its two postconditions, so a plan creates no front at all",
+		want:   "container-lifecycle",
+		wantIn: map[string]string{"container-lifecycle": "{site}/container.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			addContainerLifecycleSetting(t, site, "    enabled = false")
+		},
+	},
+	{
+		name:   "container-namespace-lifecycle-enabled-false",
+		why:    "a lifecycle block with enabled = false added to the site's container namespace",
+		want:   "container-lifecycle",
+		wantIn: map[string]string{"container-lifecycle": "{site}/container.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			setNamespaceLifecycle(t, site, "    enabled = false")
 		},
 	},
 }
@@ -2796,10 +2934,44 @@ func dropContainerEnvironmentVariable(t *testing.T, site, name string) {
 func addContainerLifecycleSetting(t *testing.T, site, line string) {
 	t.Helper()
 
-	path, lines, start, end := findContainerBlock(t, site, containerResourceHeader)
-	opening, _ := findNestedBlock(t, path, lines, start+1, end, "lifecycle")
+	addContainerLifecycleLines(t, site, line)
+}
 
-	insertInfraLines(t, path, lines, opening, line)
+// addContainerLifecycleLines writes lines as the first settings of the container's lifecycle block, beside the
+// postconditions it keeps, so a case can add a setting an editor spreads over several lines.
+func addContainerLifecycleLines(t *testing.T, site string, lines ...string) {
+	t.Helper()
+
+	path, fileLines, start, end := findContainerBlock(t, site, containerResourceHeader)
+	opening, _ := findNestedBlock(t, path, fileLines, start+1, end, "lifecycle")
+
+	insertInfraLines(t, path, fileLines, opening, lines...)
+}
+
+// setContainerEnvironment replaces the container's whole environment_variables map with lines: the map the real
+// configuration writes as an object literal becomes the shape a case pins, an object the reader cannot hold to
+// one key or another shape entirely.
+func setContainerEnvironment(t *testing.T, site string, lines ...string) {
+	t.Helper()
+
+	path, fileLines, opening, closing := containerEnvironmentVariables(t, site)
+
+	out := append([]string{}, fileLines[:opening]...)
+	out = append(out, lines...)
+	out = append(out, fileLines[closing+1:]...)
+
+	writeInfraText(t, path, strings.Join(out, "\n"))
+}
+
+// addNamespaceAttribute writes lines as the last thing inside the site's container namespace, where a case sets
+// an attribute or a block the rules must judge on the namespace as well as on the container: Scaleway injects
+// the namespace's own environment into every container in it.
+func addNamespaceAttribute(t *testing.T, site string, lines ...string) {
+	t.Helper()
+
+	path, fileLines, _, end := findContainerBlock(t, site, containerNamespaceResourceHeader)
+
+	insertInfraLines(t, path, fileLines, end-1, lines...)
 }
 
 // containerNamespaceResourceHeader is the one line of a copy's site/container.tf that opens the namespace
