@@ -438,6 +438,59 @@ func TestScanLeftOutFindsRealDataInTheFilesLeftOut(t *testing.T) {
 			},
 		},
 		{
+			// Issue #610: a byte that is no part of a namespace's run right
+			// before the run means the run is the tail of a name that byte
+			// belongs to. é is two UTF-8 bytes the run never holds, so
+			// shopémicrosoft.app is a customer's own internationalised host and
+			// the run after é is its last labels, not a resource type.
+			name:         "a Unicode host whose tail reads as an Azure namespace is found",
+			diff:         goldenAdds(golden, `"shop": "https://shopémicrosoft.app/orders"`),
+			wantFiles:    []review.LeftOutFile{{Path: golden, Added: 1}},
+			wantFindings: []review.ScanFinding{{Path: golden, Line: 1, Kind: review.ScanHostname}},
+		},
+		{
+			// Issue #610: the "/" after the namespace makes it a resource type
+			// only where a resource type follows a resource id's single "/".
+			// A "//" right before the run is a URL's authority marker, whether
+			// the scheme writes it (https://) or the URL is protocol-relative,
+			// so the name after it is the URL's host.
+			name: "a URL host that reads as an Azure namespace is found",
+			diff: goldenAdds(golden,
+				`"url": "https://microsoft.app/orders"`,
+				`"wiki": "//Microsoft.App/wiki"`),
+			wantFiles: []review.LeftOutFile{{Path: golden, Added: 2}},
+			wantFindings: []review.ScanFinding{
+				{Path: golden, Line: 1, Kind: review.ScanHostname},
+				{Path: golden, Line: 2, Kind: review.ScanHostname},
+			},
+		},
+		{
+			// Issue #610: the two forms the rule was added for stay quiet (PRD
+			// #552), the narrowing included: an inventory's resource type, and
+			// a resource type inside an ARM ID, whose single "/" before the
+			// namespace is the resource id's separator rather than a URL's
+			// authority marker.
+			name: "an Azure resource type and an ARM ID stay no host name",
+			diff: goldenAdds(golden,
+				`"type": "microsoft.app/managedenvironments"`,
+				`"id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shop/providers/Microsoft.App/containerApps/app-shop"`),
+			wantFiles: []review.LeftOutFile{{Path: golden, Added: 2}},
+		},
+		{
+			// Issue #610: the rule reads only a run that neither starts nor
+			// ends with "." or "-", so a run that does is no provider
+			// namespace and both names inside it stay host names.
+			name: "a name that only reads as an Azure namespace after a trim is found",
+			diff: goldenAdds(golden,
+				`"host": "-microsoft.app/x"`,
+				`"dotted": "Microsoft.App./x"`),
+			wantFiles: []review.LeftOutFile{{Path: golden, Added: 2}},
+			wantFindings: []review.ScanFinding{
+				{Path: golden, Line: 1, Kind: review.ScanHostname},
+				{Path: golden, Line: 2, Kind: review.ScanHostname},
+			},
+		},
+		{
 			// A report's taxonomy categories read like host names, and the
 			// committed goldens are full of them.
 			name: "a taxonomy category is no host name",

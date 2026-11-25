@@ -389,6 +389,54 @@ func TestSanitisationProblemsHostNameRule(t *testing.T) {
 			want: []string{"xmicrosoft.app"},
 		},
 		{
+			// A byte that is no part of a namespace's run right before the run
+			// means the run is the tail of a name that byte belongs to (issue
+			// #610): é is two UTF-8 bytes the run never holds, so
+			// shopémicrosoft.app is a customer's own internationalised host and
+			// the microsoft.app after é is its last labels, not a resource type.
+			name: "Unicode host whose tail reads as an Azure namespace",
+			text: "the orders are at https://shopémicrosoft.app/orders",
+			want: []string{"microsoft.app"},
+		},
+		{
+			// The "//" right before the run is a URL's authority marker, the
+			// one a scheme and a protocol-relative URL write alike, so the name
+			// after it is the URL's host and is reported (issue #610).
+			name: "customer host right after a scheme's authority marker",
+			text: "the payroll rules are at https://microsoft.internal/share/payroll",
+			want: []string{"microsoft.internal"},
+		},
+		{
+			name: "customer host right after a protocol-relative URL's authority marker",
+			text: "the policy is at //Microsoft.corp/wiki",
+			want: []string{"Microsoft.corp"},
+		},
+		{
+			// A single "/" before the namespace is the separator of an ARM
+			// resource id's segments, not a URL's authority marker, and the
+			// namespace there still starts a resource type: nothing is
+			// reported (issue #610).
+			name: "Azure resource type inside an ARM resource id",
+			text: "/subscriptions/" + dummyGUID + "/resourceGroups/rg-shop/providers/Microsoft.App/containerApps/app-shop",
+			want: nil,
+		},
+		{
+			// A resource type directly after its namespace in an inventory's
+			// JSON is the form PRD #552 added the rule for, and the narrowing
+			// leaves it quiet (issue #610).
+			name: "Azure managed-environment resource type",
+			text: `"type": "microsoft.app/managedenvironments"`,
+			want: nil,
+		},
+		{
+			// The namespace rule reads only a run that neither starts nor ends
+			// with "." or "-": a run that does is no provider namespace, so the
+			// name inside it is a host and stays reported (issue #610).
+			name: "name that only reads as an Azure namespace after a trim",
+			text: "the host -microsoft.app/x and the dotted Microsoft.App./x are no namespaces",
+			want: []string{"microsoft.app", "Microsoft.App"},
+		},
+		{
 			name: "Go selector in a Go-source fixture",
 			text: "the test calls testing.T",
 			want: nil,
