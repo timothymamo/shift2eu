@@ -13,9 +13,10 @@ import (
 
 // This file holds the behaviour test's reading of infra/site/container.tf, the
 // one place the front's image and its command line live (docs/adr/0045, *The
-// image and its configuration*): the image reference below the Renovate comment
-// and the command and args the container runs, with the Caddyfile's bytes in
-// the one Terraform's file() fills in. The behaviour test then runs exactly what
+// image and its configuration*): the image the container reads (the local the
+// Renovate comment pins, and nothing else) and the command and args the
+// container runs, with the Caddyfile's bytes in the one Terraform's file()
+// fills in. The behaviour test then runs exactly what
 // the platform will run, so a change of the container's start command is held to
 // the front's answers, and the image pin is read here rather than copied a
 // second time.
@@ -204,9 +205,11 @@ func hexDigits(s string, i, n int) bool {
 	return true
 }
 
-// imageReference returns the image reference src pins: the string on the line
-// below the Renovate comment, which must name a digest, so the platform runs one
-// immutable image (docs/adr/0045).
+// imageReference returns the image reference src pins, read from the tokens of the file: the site container's
+// image attribute, which must be exactly local.caddy_image, and that local, which a top-level locals block sets
+// once and the Renovate comment's own line pins, and whose reference must name a digest, so the platform runs one
+// immutable image (docs/adr/0045). A pin a /* */ comment holds is no pin: a commented-out line is no line the
+// platform reads.
 func imageReference(src string) (string, error) {
 	lines := strings.Split(src, "\n")
 
@@ -591,6 +594,32 @@ func hclFileCall(element string) (string, bool) {
 	return path, true
 }
 
+// caddyImageLocal is what the site container's image must be (docs/adr/0045): the local the Renovate comment
+// pins, written once and read by the container, so the one line Renovate moves is the line the platform's
+// image comes from, and the reader reads that same line.
+const caddyImageLocal = "local.caddy_image"
+
+// renovateComment is the line above the image pin (CLAUDE.md rule 7), as infra/site/container.tf writes it.
+const renovateComment = "# renovate: " + imagePinComment
+
+// imageLocals returns a container.tf's top-level locals block with the one local the Renovate comment pins,
+// shaped as infra/site/container.tf writes it: the comment on the line above the local it pins.
+func imageLocals(pin string) string {
+	return "locals {\n  " + renovateComment + "\n  caddy_image = \"" + pin + "\"\n}\n\n"
+}
+
+// containerBlock returns the site container's resource block, the block the start command lives in: its image
+// is the expression image, and body is the rest of its body.
+func containerBlock(image, body string) string {
+	return "resource \"scaleway_container\" \"site\" {\n  image = " + image + "\n" + body + "}\n"
+}
+
+// containerTF returns a container.tf's text shaped like infra/site/container.tf: the locals block that pins
+// pin, and the site container, whose image reads that local, with body as the rest of its body.
+func containerTF(pin, body string) string {
+	return imageLocals(pin) + containerBlock(caddyImageLocal, body)
+}
+
 // TestContainerRunFrom pins the reader on the forms container.tf may take and on
 // the ones it must refuse, so that the behaviour test runs the container's
 // command line rather than something it misread.
@@ -598,14 +627,18 @@ func TestContainerRunFrom(t *testing.T) {
 	t.Parallel()
 
 	const (
-		comment = "# renovate: datasource=docker depName=caddy\n"
 		// digestTail is the 64 lower-case hex characters of the pinned image's sha256 digest.
 		digestTail = "003a97808e781aa9f7e75cc2f43d34d461099031faf5e20faefb9f61126836f0"
 		digest     = "docker.io/library/caddy:2.11.9-alpine@sha256:" + digestTail
 		// caddyAt is a shorter reference pinned by the same digest, for the cases that are about the command
 		// line rather than the image.
-		caddyAt   = "caddy@sha256:" + digestTail
-		imageLine = "image = \"" + caddyAt + "\"\n"
+		caddyAt = "caddy@sha256:" + digestTail
+		// shellOnly is the command the cases that are about the args write: the design's shell on one line.
+		shellOnly = "  command = [\"/bin/sh\", \"-c\"]\n"
+		// designed is the container's body in the design's form: the shell that writes the Caddyfile and execs
+		// Caddy on it (docs/adr/0045).
+		designed = shellOnly + `  args    = ["printf '%s\n' \"$1\" > /tmp/Caddyfile && exec caddy", "caddy", file("${path.module}/Caddyfile")]
+`
 	)
 
 	tests := []struct {
@@ -616,13 +649,7 @@ func TestContainerRunFrom(t *testing.T) {
 	}{
 		{
 			name: "the designed one-line lists",
-			tf: comment + `image = "` + digest + `"
-
-resource "scaleway_container" "site" {
-  command = ["/bin/sh", "-c"]
-  args    = ["printf '%s\n' \"$1\" > /tmp/Caddyfile && exec caddy", "caddy", file("${path.module}/Caddyfile")]
-}
-`,
+			tf:   containerTF(digest, designed),
 			want: containerRun{
 				image: digest,
 				argv: []string{
@@ -636,9 +663,7 @@ resource "scaleway_container" "site" {
 		},
 		{
 			name: "a multi-line list with a comment",
-			tf: comment + imageLine + `
-resource "scaleway_container" "site" {
-  command = [
+			tf: containerTF(caddyAt, `  command = [
     "/bin/sh", # the shell
     "-c",
   ]
@@ -646,8 +671,7 @@ resource "scaleway_container" "site" {
     "run",
     "caddy",
   ]
-}
-`,
+`),
 			want: containerRun{
 				image: caddyAt,
 				argv:  []string{"/bin/sh", "-c", "run", "caddy"},
@@ -655,9 +679,7 @@ resource "scaleway_container" "site" {
 		},
 		{
 			name: "a multi-line list with // and /* */ comments between its elements",
-			tf: comment + imageLine + `
-resource "scaleway_container" "site" {
-  command = ["/bin/sh", "-c"]
+			tf: containerTF(caddyAt, `  command = ["/bin/sh", "-c"]
   args = [
     "run", // the subcommand
     "caddy", /* the program
@@ -665,8 +687,7 @@ resource "scaleway_container" "site" {
     "a // b",
     "c /* d */",
   ]
-}
-`,
+`),
 			want: containerRun{
 				image: caddyAt,
 				argv:  []string{"/bin/sh", "-c", "run", "caddy", "a // b", "c /* d */"},
@@ -674,14 +695,11 @@ resource "scaleway_container" "site" {
 		},
 		{
 			name: "a commented-out list above the real one",
-			tf: comment + imageLine + `
-resource "scaleway_container" "site" {
-  # command = ["/bin/bash", "-c"]
+			tf: containerTF(caddyAt, `  # command = ["/bin/bash", "-c"]
   command = ["/bin/sh", "-c"]
   // args = ["evil"]
   args = ["run", "caddy"] # args = ["trailing"]
-}
-`,
+`),
 			want: containerRun{
 				image: caddyAt,
 				argv:  []string{"/bin/sh", "-c", "run", "caddy"},
@@ -689,13 +707,10 @@ resource "scaleway_container" "site" {
 		},
 		{
 			name: "a block comment holding the attribute above the real one",
-			tf: comment + imageLine + `
-resource "scaleway_container" "site" {
-  command = ["/bin/sh", "-c"]
+			tf: containerTF(caddyAt, `  command = ["/bin/sh", "-c"]
   /* args = ["evil"] */
   args = ["run", "caddy"]
-}
-`,
+`),
 			want: containerRun{
 				image: caddyAt,
 				argv:  []string{"/bin/sh", "-c", "run", "caddy"},
@@ -703,15 +718,12 @@ resource "scaleway_container" "site" {
 		},
 		{
 			name: "a multi-line block comment holding the attribute above the real one",
-			tf: comment + imageLine + `
-resource "scaleway_container" "site" {
-  command = ["/bin/sh", "-c"]
+			tf: containerTF(caddyAt, `  command = ["/bin/sh", "-c"]
   /*
     args = ["evil"]
   */
   args = ["run", "caddy"]
-}
-`,
+`),
 			want: containerRun{
 				image: caddyAt,
 				argv:  []string{"/bin/sh", "-c", "run", "caddy"},
@@ -719,13 +731,10 @@ resource "scaleway_container" "site" {
 		},
 		{
 			name: "the attribute named inside a quoted string above the real one",
-			tf: comment + imageLine + `
-resource "scaleway_container" "site" {
-  description = "the string that prints args = [\"evil\"] to the log"
+			tf: containerTF(caddyAt, `  description = "the string that prints args = [\"evil\"] to the log"
   command     = ["/bin/sh", "-c"]
   args        = ["run", "caddy"]
-}
-`,
+`),
 			want: containerRun{
 				image: caddyAt,
 				argv:  []string{"/bin/sh", "-c", "run", "caddy"},
@@ -733,17 +742,14 @@ resource "scaleway_container" "site" {
 		},
 		{
 			name: "the attribute in another block before the container",
-			tf: comment + imageLine + `
-resource "scaleway_container_namespace" "site" {
+			tf: imageLocals(caddyAt) + `resource "scaleway_container_namespace" "site" {
   name = "shift2eu-site"
   args = ["evil"]
 }
 
-resource "scaleway_container" "site" {
-  command = ["/bin/sh", "-c"]
+` + containerBlock(caddyImageLocal, `  command = ["/bin/sh", "-c"]
   args    = ["run", "caddy"]
-}
-`,
+`),
 			want: containerRun{
 				image: caddyAt,
 				argv:  []string{"/bin/sh", "-c", "run", "caddy"},
@@ -751,61 +757,83 @@ resource "scaleway_container" "site" {
 		},
 		{
 			name: "the attribute set twice in the container",
-			tf: comment + imageLine + `
-resource "scaleway_container" "site" {
-  command = ["/bin/sh", "-c"]
+			tf: containerTF(caddyAt, `  command = ["/bin/sh", "-c"]
   args    = ["run", "caddy"]
   args    = ["evil"]
-}
-`,
+`),
 			wantErr: "twice",
 		},
 		{
 			name: "a digest truncated below its 64 hex characters",
-			tf:   comment + "image = \"caddy@sha256:" + digestTail[:63] + "\"\n",
+			tf:   containerTF("caddy@sha256:"+digestTail[:63], designed),
 			// The reader refuses the digest before it looks for a command.
 			wantErr: "exactly 64 lower-case hex",
 		},
 		{
 			name:    "a digest with one character after its 64 hex characters",
-			tf:      comment + "image = \"caddy@sha256:" + digestTail + "0\"\n",
+			tf:      containerTF("caddy@sha256:"+digestTail+"0", designed),
 			wantErr: "exactly 64 lower-case hex",
 		},
 		{
 			name:    "a digest written in upper-case hex",
-			tf:      comment + "image = \"caddy@sha256:" + strings.ToUpper(digestTail) + "\"\n",
+			tf:      containerTF("caddy@sha256:"+strings.ToUpper(digestTail), designed),
 			wantErr: "exactly 64 lower-case hex",
 		},
 		{
 			name: "an image without a digest",
-			tf:   comment + "image = \"docker.io/library/caddy:2.11.9\"\n",
+			tf:   containerTF("docker.io/library/caddy:2.11.9", designed),
 			want: containerRun{},
 			// The reader refuses the tag before it looks for a command.
 			wantErr: "pinned by digest",
 		},
 		{
 			name:    "no Renovate comment",
-			tf:      imageLine,
+			tf:      "locals {\n  caddy_image = \"" + caddyAt + "\"\n}\n\n" + containerBlock(caddyImageLocal, designed),
 			wantErr: "no line carries",
 		},
+		// The container's image is the pinned local and nothing else (docs/adr/0045): a literal, or another local,
+		// is a reference the Renovate comment never moves, so the reader cannot tell which image the platform runs.
 		{
-			name:    "an element the reader does not understand",
-			tf:      comment + imageLine + "command = [\"/bin/sh\", \"-c\"]\nargs    = [var.script, \"caddy\"]\n",
+			name:    "an image literal in the container",
+			tf:      imageLocals(caddyAt) + containerBlock(`"caddy:latest"`, designed),
+			wantErr: "local.caddy_image",
+		},
+		{
+			name:    "another local as the container's image",
+			tf:      imageLocals(caddyAt) + containerBlock("local.other_image", designed),
+			wantErr: "local.caddy_image",
+		},
+		// A pin inside a /* */ comment is no pin: the live local below carries none, so the reader refuses the file
+		// rather than read the commented-out digest.
+		{
+			name: "a pin inside a block comment above an unpinned local",
+			tf: "locals {\n  /*\n  " + renovateComment + "\n  caddy_image = \"caddy@sha256:" + digestTail + "\"\n  */\n" +
+				"  caddy_image = \"caddy:latest\"\n}\n\n" + containerBlock(caddyImageLocal, designed),
+			wantErr: "Renovate comment",
+		},
+		{
+			name: "an element the reader does not understand",
+			tf: containerTF(caddyAt, shellOnly+`  args    = [var.script, "caddy"]
+`),
 			wantErr: "neither a quoted string nor a file() call",
 		},
 		{
-			name:    "an element with a template interpolation",
-			tf:      comment + imageLine + "command = [\"/bin/sh\", \"-c\"]\nargs    = [\"run\", \"${var.script}\"]\n",
+			name: "an element with a template interpolation",
+			tf: containerTF(caddyAt, shellOnly+`  args    = ["run", "${var.script}"]
+`),
 			wantErr: "an HCL template (interpolation)",
 		},
 		{
-			name:    "an element with a template directive",
-			tf:      comment + imageLine + "command = [\"/bin/sh\", \"%{ if true }-c%{ endif }\"]\nargs    = [\"run\"]\n",
+			name: "an element with a template directive",
+			tf: containerTF(caddyAt, `  command = ["/bin/sh", "%{ if true }-c%{ endif }"]
+  args    = ["run"]
+`),
 			wantErr: "an HCL template (directive)",
 		},
 		{
 			name: "an element that escapes the template syntax",
-			tf:   comment + imageLine + "command = [\"/bin/sh\", \"-c\"]\nargs    = [\"$${literal}\", \"%%{literal}\"]\n",
+			tf: containerTF(caddyAt, shellOnly+`  args    = ["$${literal}", "%%{literal}"]
+`),
 			want: containerRun{
 				image: caddyAt,
 				argv:  []string{"/bin/sh", "-c", "${literal}", "%{literal}"},
@@ -817,84 +845,64 @@ resource "scaleway_container" "site" {
 		// the platform never runs. Every such string is refused, except file()'s Caddyfile argument below.
 		{
 			name: "a description holding a nested template string before the args",
-			tf: comment + imageLine + `
-resource "scaleway_container" "site" {
-  description = "${ "(" }The site's Caddy front"
+			tf: containerTF(caddyAt, `  description = "${ "(" }The site's Caddy front"
   command     = ["/bin/sh", "-c"]
   args        = ["run", "caddy"]
-}
-`,
+`),
 			wantErr: "holds an HCL template (interpolation)",
 		},
 		{
 			name: "a name holding a nested template expression after the args",
-			tf: comment + imageLine + `
-resource "scaleway_container" "site" {
-  command = ["/bin/sh", "-c"]
+			tf: containerTF(caddyAt, `  command = ["/bin/sh", "-c"]
   args    = ["run", "caddy"]
   name    = "front${ "))))${ length({ args = ["evil"] }) }" }"
-}
-`,
+`),
 			wantErr: "holds an HCL template (interpolation)",
 		},
 		{
 			name: "a description whose interpolation holds only an empty string",
-			tf: comment + imageLine + `
-resource "scaleway_container" "site" {
-  description = "${"{"}"
+			tf: containerTF(caddyAt, `  description = "${"{"}"
   command     = ["/bin/sh", "-c"]
   args        = ["run", "caddy"]
-}
-`,
+`),
 			wantErr: "holds an HCL template (interpolation)",
 		},
 		{
 			name: "a name holding a plain template above the real command",
-			tf: comment + imageLine + `
-resource "scaleway_container" "site" {
-  name    = "${var.prefix}-front"
+			tf: containerTF(caddyAt, `  name    = "${var.prefix}-front"
   command = ["/bin/sh", "-c"]
   args    = ["run", "caddy"]
-}
-`,
+`),
 			wantErr: "holds an HCL template (interpolation)",
 		},
 		{
 			name: "a description holding a template directive",
-			tf: comment + imageLine + `
-resource "scaleway_container" "site" {
-  description = "%{ if true }front%{ endif }"
+			tf: containerTF(caddyAt, `  description = "%{ if true }front%{ endif }"
   command     = ["/bin/sh", "-c"]
   args        = ["run", "caddy"]
-}
-`,
+`),
 			wantErr: "holds an HCL template (directive)",
 		},
 		// A raw newline ends no quoted string in HCL: tofu refuses one, so a reader that runs over it reads the
 		// rest of the file as one string.
 		{
 			name: "a description string that reaches a newline",
-			tf: comment + imageLine + `
-resource "scaleway_container" "site" {
-  description = "The site's Caddy
+			tf: containerTF(caddyAt, `  description = "The site's Caddy
   front"
   command     = ["/bin/sh", "-c"]
   args        = ["run", "caddy"]
-}
-`,
+`),
 			wantErr: "holds a raw newline",
 		},
-		// The escapes HCL writes for a literal template are no template, so every string of the block may hold
-		// them: the refusal above is about a template the reader would have to run.
+		// The escapes HCL writes for a literal template are no template, so a string of the block that is no
+		// command or args element may hold them: the refusal above is about a template the reader would have to
+		// run, and an element of args or command that holds one is refused on its own ground (above).
 		{
 			name: "a description that escapes the template syntax",
-			tf: comment + imageLine + `
-resource "scaleway_container" "site" {
-  description = "$${literal} and %%{literal} front"
+			tf: containerTF(caddyAt, `  description = "$${literal} and %%{literal} front"
   command     = ["/bin/sh", "-c"]
   args        = ["run", "caddy"]
-}
-`,
+`),
 			want: containerRun{
 				image: caddyAt,
 				argv:  []string{"/bin/sh", "-c", "run", "caddy"},
@@ -902,9 +910,9 @@ resource "scaleway_container" "site" {
 		},
 		{
 			name: "an element that escapes what HCL escapes",
-			tf: comment + imageLine + `command = ["/bin/sh", "-c"]
-args    = ["line\n", "carriage\r", "tab\t", "quote\"", "backslash\\", "unicode\u0041", "unicode long\U00000041"]
-`,
+			tf: containerTF(caddyAt, `  command = ["/bin/sh", "-c"]
+  args    = ["line\n", "carriage\r", "tab\t", "quote\"", "backslash\\", "unicode\u0041", "unicode long\U00000041"]
+`),
 			want: containerRun{
 				image: caddyAt,
 				argv: []string{
@@ -918,33 +926,31 @@ args    = ["line\n", "carriage\r", "tab\t", "quote\"", "backslash\\", "unicode\u
 		// that decoded them would run a command line the configuration does not hold.
 		{
 			name: "an element with an escape HCL does not have, \\x41",
-			tf: comment + imageLine + `command = ["/bin/sh", "-c"]
-args    = ["a\x41"]
-`,
+			tf: containerTF(caddyAt, shellOnly+`  args    = ["a\x41"]
+`),
 			wantErr: "\\x41",
 		},
 		{
 			name: "an element with an escape HCL does not have, \\a",
-			tf: comment + imageLine + `command = ["/bin/sh", "-c"]
-args    = ["a\a"]
-`,
+			tf: containerTF(caddyAt, shellOnly+`  args    = ["a\a"]
+`),
 			wantErr: "\\a",
 		},
 		{
 			name: "an element with an escape HCL does not have, the octal \\101",
-			tf: comment + imageLine + `command = ["/bin/sh", "-c"]
-args    = ["a\101"]
-`,
+			tf: containerTF(caddyAt, shellOnly+`  args    = ["a\101"]
+`),
 			wantErr: "\\101",
 		},
 		{
-			name:    "a file() that is not the Caddyfile",
-			tf:      comment + imageLine + "command = [\"/bin/sh\", \"-c\"]\nargs    = [\"run\", file(\"${path.module}/other\")]\n",
+			name: "a file() that is not the Caddyfile",
+			tf: containerTF(caddyAt, shellOnly+`  args    = ["run", file("${path.module}/other")]
+`),
 			wantErr: "${path.module}/Caddyfile",
 		},
 		{
 			name:    "no args attribute",
-			tf:      comment + imageLine + "command = [\"/bin/sh\", \"-c\"]\n",
+			tf:      containerTF(caddyAt, shellOnly),
 			wantErr: "no args attribute",
 		},
 	}
