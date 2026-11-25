@@ -1458,10 +1458,11 @@ func TestFileAdvisoriesStopsOnAFailedWrite(t *testing.T) {
 // deadline before the "one call" below can be read at all: on a six-core VM at
 // load average 45 that took up to 199 ms, and a 200 ms deadline ended 14 of 300
 // calls before the fake had recorded anything - a run that made its one write
-// and was read as one that made none (issue #253). The deadline is a second,
-// ten times that measured 199 ms and as its siblings' is; the delay is five
-// deadlines, so a FileAdvisories that ignored its deadline still reaches the
-// fake's answer and returns no error, which the first check refuses.
+// and was read as one that made none (issue #253). The deadline is two seconds,
+// ten times that measured 199 ms and the same as its siblings' in issues_test.go
+// and report_test.go; the delay is five deadlines, so a FileAdvisories that
+// ignored its deadline still reaches the fake's answer and returns no error,
+// which the first check refuses.
 func TestFileAdvisoriesRunsUnderItsDeadline(t *testing.T) {
 	t.Parallel()
 
