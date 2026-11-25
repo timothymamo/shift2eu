@@ -25,7 +25,7 @@
 </tbody>
 </table>
 </section>
-<p><code>(global)</code> means not bound to a region you choose: the provider serves the offering from its own locations, which the target&#39;s <code>SOURCES.md</code> names.</p>
+<p><code>(global)</code> means not bound to a region you choose, including the one <code>--region</code> names: the provider serves the offering from its own locations, which may be outside the EU and which the target&#39;s <code>SOURCES.md</code> names.</p>
 </section>
 <section>
 <section class="part part-changes">

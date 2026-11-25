@@ -1288,12 +1288,13 @@ func TestSchemaV3MarksGlobalOfferings(t *testing.T) {
 			}
 
 			// A reader who checked what global means finds the same sentence the
-			// reports say, and where the target lists its sources.
+			// reports say, including where the offering is served, and where the target
+			// lists its sources.
 			for pointer, description := range map[string]string{
 				"$defs/resource.bestOfferingGlobal": global.description,
 				"$defs/resource.globalTies":         ties.description,
 			} {
-				for _, phrase := range []string{"not bound to a region you choose", "SOURCES.md"} {
+				for _, phrase := range []string{"not bound to a region you choose", "outside the EU", "SOURCES.md"} {
 					if !strings.Contains(description, phrase) {
 						t.Errorf("the description of %s in %s is\n%q\nwant it to say %q", pointer, name, description, phrase)
 					}

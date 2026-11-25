@@ -22,8 +22,9 @@ import (
 // The note is the report's own words, so a golden pins its exact wording: this
 // constant is the same sentence, for the assertions that count it. A report that
 // shows no global offering says neither the mark nor the note.
-const globalNote = "`(global)` means not bound to a region you choose: the provider serves the " +
-	"offering from its own locations, which the target's `SOURCES.md` names."
+const globalNote = "`(global)` means not bound to a region you choose, including the one `--region` " +
+	"names: the provider serves the offering from its own locations, which may be outside the EU and " +
+	"which the target's `SOURCES.md` names."
 
 // globalMark is what a report writes after the name of a global offering.
 const globalMark = "(global)"

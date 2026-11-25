@@ -23,8 +23,9 @@ const (
 	// globalNote is the note the report says once: the report's own words with
 	// the mark and SOURCES.md as code, and the apostrophe escaped as the reporter
 	// escapes every text character.
-	globalNote = "<p><code>(global)</code> means not bound to a region you choose: the provider serves the " +
-		"offering from its own locations, which the target&#39;s <code>SOURCES.md</code> names.</p>"
+	globalNote = "<p><code>(global)</code> means not bound to a region you choose, including the one " +
+		"<code>--region</code> names: the provider serves the offering from its own locations, which may " +
+		"be outside the EU and which the target&#39;s <code>SOURCES.md</code> names.</p>"
 	// globalBestCell is the best-offering cell of a verdict whose best offering is
 	// the global "DNS Zone", tied with the global "DNS Zone Premium".
 	globalBestCell = "<td><code>DNS Zone</code> (global) (tie: <code>DNS Zone Premium</code> (global))</td>"
