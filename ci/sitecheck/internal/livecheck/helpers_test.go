@@ -394,7 +394,13 @@ type content struct {
 	mu        sync.Mutex
 	responses map[string]served
 	hsts      string
-	requests  []recordedRequest
+	// platform holds the headers every answer carries, as the platform in
+	// front of the site adds them (site.setPlatformHeaders); platformServed
+	// counts the answers that carried them, so a test can assert its case was
+	// not vacuous.
+	platform       http.Header
+	platformServed int
+	requests       []recordedRequest
 }
 
 // newContent returns a server's content with nothing served.
@@ -414,7 +420,20 @@ func (c *content) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	})
 	s, ok := c.responses[r.URL.Path]
 	hsts := c.hsts
+	platform := c.platform
+	if len(platform) > 0 {
+		c.platformServed++
+	}
 	c.mu.Unlock()
+
+	// The platform's headers go on every answer it lets through, the ones it
+	// answers itself (a 404) included, as the edge adds them in front of the
+	// container.
+	for name, values := range platform {
+		for _, value := range values {
+			w.Header().Add(name, value)
+		}
+	}
 
 	if !ok {
 		w.WriteHeader(http.StatusNotFound)
@@ -541,6 +560,14 @@ func (c *content) file(path string) ([]byte, bool) {
 	}
 
 	return s.file(), true
+}
+
+// platformHeaderCount returns how many answers carried the platform's headers.
+func (c *content) platformHeaderCount() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	return c.platformServed
 }
 
 // requestLog returns the requests c answered.
@@ -1114,6 +1141,19 @@ func (s *site) setVerify(withHSTSWaived bool) {
 // allContent returns the four servers' content, for the request assertions.
 func (s *site) allContent() []*content {
 	return []*content{s.hostTLS, s.apexTLS, s.hostHTTP, s.apexHTTP}
+}
+
+// setPlatformHeaders makes every answer of the fixture's four servers carry
+// headers, as the platform in front of the site does: the site runs behind
+// Scaleway's Serverless Container, whose Envoy front adds server and x-envoy-*
+// headers to every response it lets through (ADR 0045, Consequences), the
+// redirects and the module script included.
+func (s *site) setPlatformHeaders(headers http.Header) {
+	for _, c := range s.allContent() {
+		c.mu.Lock()
+		c.platform = headers.Clone()
+		c.mu.Unlock()
+	}
 }
 
 // reportText returns the report's text form, or the error that kept it from

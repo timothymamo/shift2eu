@@ -8,8 +8,9 @@
 # The tokenizer knows HCL's strings (with ${...} and %{...} templates, which may nest strings), comments
 # (#, // and /* */), identifiers, numbers and punctuation. The parser above it tracks only what the rules
 # need: blocks with their type and labels, and attributes with their name and whether their value is one
-# literal string ("L", its value kept), one identifier such as true ("I", its name kept), an object ("O")
-# or any other expression ("E"). Anything it does
+# literal string ("L", its value kept), one identifier such as true ("I", its name kept), one whole number
+# ("D", kept), one local.<name> reference ("R", the name kept), an object ("O") or any other expression
+# ("E"); a condition's value is also kept as its tokens. Anything it does
 # not read is a [parse] failure: a heredoc; an unbalanced string, brace or comment; a backslash in a block
 # label or a quoted object key (HCL decodes escapes such as _, so the raw text is not the name tofu
 # reads); a $${ or %%{ in a block label (read as ${ and %{); and a { after a block header whose labels
@@ -40,6 +41,27 @@ BEGIN { # explicit character sets, the same in every awk and locale (no [A-Z] ra
   for (i in ff) {
     fileFunc[ff[i]] = 1
   }
+  # The one file function call a configuration may make, character for character: file() of the Caddyfile
+  # in the configuration's own directory, which the site container runs (ADR 0045).
+  CADDYFILE_READ = "(\"${path.module}/Caddyfile\")"
+  # The site container's cost pins (ADR 0045, The container): each set once, as exactly this literal.
+  npins = split("max_scale=1 cpu_limit=140 memory_limit_bytes=268435456", cp, " ")
+  for (i = 1; i <= npins; i++) {
+    split(cp[i], kv, "=")
+    containerPinName[i] = kv[1]
+    containerPin[kv[1]] = kv[2]
+  }
+  containerPinTag["max_scale"] = "container-max-scale"
+  containerPinTag["cpu_limit"] = "container-cpu"
+  containerPinTag["memory_limit_bytes"] = "container-memory"
+  containerPinWhy["max_scale"] = "one instance at most, the worst case ADR 0045 prices at about EUR 2.12 a month"
+  containerPinWhy["cpu_limit"] = "140 mvCPU, the size ADR 0045 prices"
+  containerPinWhy["memory_limit_bytes"] = "0.25 GB, the size ADR 0045 prices"
+  # The deprecated spellings beside the pinned ones: memory_limit (MB) beside memory_limit_bytes, and
+  # http_option beside https_connections_only. Either could set what the pin does not see.
+  ndeprecated = split("memory_limit http_option", containerDeprecatedName, " ")
+  containerDeprecated["memory_limit"] = "memory_limit_bytes"
+  containerDeprecated["http_option"] = "https_connections_only"
   # The settings a top-level terraform block may hold, each judged by its own rule. Anything else
   # (encryption, provider_meta, experiments, ...) changes how tofu runs on the admin machine.
   TERRAFORM_SETTINGS_TEXT = "required_version, required_providers, backend and cloud"
@@ -83,11 +105,13 @@ BEGIN { # explicit character sets, the same in every awk and locale (no [A-Z] ra
   for (i in ps) {
     providerSetting[ps[i]] = 1
   }
-  # The resource types the configuration may hold: exactly the ones infra/site/main.tf uses. No data or
-  # ephemeral type is allowed. A new resource extends this list in the same PR that adds it, so the
-  # review of that PR sees both. A type a specific rule names (api-key, object, bucket-acl, iam-other,
-  # provider-type) is reported by that rule alone.
-  split("scaleway_account_project scaleway_edge_services_backend_stage scaleway_edge_services_cache_stage scaleway_edge_services_dns_stage scaleway_edge_services_head_stage scaleway_edge_services_tls_stage scaleway_edge_services_pipeline scaleway_edge_services_plan scaleway_iam_application scaleway_iam_policy scaleway_object_bucket scaleway_object_bucket_policy scaleway_object_bucket_website_configuration", rt, " ")
+  # The resource types the configuration may hold: exactly the ones infra/site uses (main.tf and the
+  # front's container.tf). No data or ephemeral type is allowed. A new resource extends this list in the
+  # same PR that adds it, so the review of that PR sees both. A type a specific rule names (api-key,
+  # object, bucket-acl, iam-other, provider-type) is reported by that rule alone. The TLS stage left
+  # the list with the pipeline's www domain (ADR 0045): only scaleway_edge_services_tls_stage "site",
+  # which [tls-stage-lifecycle] judges, may stand, gated by pipeline_www for R8's rollback.
+  split("scaleway_account_project scaleway_container scaleway_container_domain scaleway_container_namespace scaleway_edge_services_backend_stage scaleway_edge_services_cache_stage scaleway_edge_services_dns_stage scaleway_edge_services_head_stage scaleway_edge_services_pipeline scaleway_edge_services_plan scaleway_iam_application scaleway_iam_policy scaleway_object_bucket scaleway_object_bucket_policy scaleway_object_bucket_website_configuration", rt, " ")
   for (i in rt) {
     resourceType[rt[i]] = 1
   }
@@ -213,6 +237,27 @@ function shownpath(p) {
   return shown(p, "{}[(", "a block path with an unprintable label")
 }
 
+# A condition's tokens (joined by one space) without one outer pair of parentheses around them all, when
+# the first token's ( is closed by the last token's ): (a == b) is the comparison a == b.
+function unparen(s,   n, t, i, d) {
+  if (substr(s, 1, 2) != "( " || substr(s, length(s) - 1) != " )") {
+    return s
+  }
+  n = split(s, t, " ")
+  d = 0
+  for (i = 1; i <= n; i++) {
+    if (t[i] == "(") {
+      d++
+    } else if (t[i] == ")") {
+      d--
+    }
+    if (d == 0 && i < n) {
+      return s
+    }
+  }
+  return substr(s, 3, length(s) - 4)
+}
+
 # An attribute's or object's key as a message prints it.
 function shownkey(n) {
   return shown(n, "", "an unprintable name")
@@ -275,6 +320,9 @@ function attr(n, k, v) {
   aname[nattr] = n
   akind[nattr] = k
   aval[nattr] = v
+  if (rec && recattr == 0) { # the condition whose tokens are being kept (tok)
+    recattr = nattr
+  }
 }
 
 # One token: t is "I" (identifier), "S" (string; lit is 1 when it holds no template), "P" (one of
@@ -282,6 +330,13 @@ function attr(n, k, v) {
 function tok(t, v, lit, esc,   i, ok, n) {
   if (broken) {
     return
+  }
+  # A condition's value, and an ignore_changes value, is kept as its tokens, joined by one space (a string
+  # quoted), until the newline, comma or } that ends it at the depth it began:
+  # [container-min-scale-postcondition] reads a condition, [container-lifecycle] an ignore_changes.
+  recend = rec && sp == recsp && (t == "N" || (t == "P" && (v == "," || v == "}")))
+  if (rec && !recend && t != "N") {
+    rectext = rectext " " (t == "S" ? "\"" v "\"" : v)
   }
   if (pstate == 2) { # an attribute whose value began with a literal string: one string, or more?
     if (t == "N" || (t == "P" && (v == "," || v == "}"))) {
@@ -293,6 +348,31 @@ function tok(t, v, lit, esc,   i, ok, n) {
   } else if (pstate == 3) { # an attribute whose value began with an identifier: that one, or more?
     if (t == "N" || (t == "P" && (v == "," || v == "}"))) {
       attr(pa, "I", pval)
+    } else if (pval == "local" && t == "X" && v == ".") { # local.<name>, perhaps
+      pstate = 5
+      return
+    } else {
+      attr(pa, "E", "")
+    }
+    pstate = 0
+  } else if (pstate == 5) { # local. read: a name must follow
+    if (t == "I") {
+      pstate = 6
+      pval = v
+      return
+    }
+    attr(pa, "E", "")
+    pstate = 0
+  } else if (pstate == 6) { # local.<name> read: that one reference, kept as kind "R" with the name, or more?
+    if (t == "N" || (t == "P" && (v == "," || v == "}"))) {
+      attr(pa, "R", pval)
+    } else {
+      attr(pa, "E", "")
+    }
+    pstate = 0
+  } else if (pstate == 4) { # an attribute whose value began with a whole number: that one, or more?
+    if (t == "N" || (t == "P" && (v == "," || v == "}"))) {
+      attr(pa, "D", pval)
     } else {
       attr(pa, "E", "")
     }
@@ -301,6 +381,11 @@ function tok(t, v, lit, esc,   i, ok, n) {
     pstate = 0
     if (t == "S" && lit) {
       pstate = 2
+      pval = v
+      return
+    }
+    if (t == "X" && v ~ /^[0-9]+$/) { # a lone whole number, such as 140, is kept as kind "D"
+      pstate = 4
       pval = v
       return
     }
@@ -316,7 +401,19 @@ function tok(t, v, lit, esc,   i, ok, n) {
     }
     attr(pa, "E", "")
   }
+  if (recend) { # the condition's value has ended, and its attribute is recorded by now
+    rec = 0
+    if (recattr) {
+      atext[recattr] = substr(rectext, 2)
+    }
+  }
 
+  # An object entry these rules cannot read as one key = value (a key in parentheses, a for expression,
+  # tokens left over at a newline, a comma or the closing brace) marks the object unread, so a rule that
+  # judges an object's keys ([container-environment]) fails closed on it instead of missing a key.
+  if (kind[sp] == "obj" && !skip && ((t == "P" && (v == "{" || v == "(" || v == "[")) || (bn > 0 && (t == "N" || (t == "P" && (v == "," || v == "}")))))) {
+    objUnread[FILENAME SUBSEP path()] = 1
+  }
   if (t == "P" && (v == "{" || v == "(" || v == "[")) {
     if (v == "{" && kind[sp] == "body" && !skip) { # a block header: <type> <label>... {
       if (bn < 1 || bt[1] != "I") {
@@ -378,6 +475,12 @@ function tok(t, v, lit, esc,   i, ok, n) {
     pa = bv[1]
     pstate = 1
     skip = 1
+    if (pa == "condition" || pa == "ignore_changes") { # keep its tokens (above)
+      rec = 1
+      recsp = sp
+      recattr = 0
+      rectext = ""
+    }
     return
   }
   bn++
@@ -398,6 +501,7 @@ FNR == 1 {
   md = 0
   incomment = 0
   pstate = 0
+  rec = 0
   broken = 0
   ffpend = ""
   reset()
@@ -465,7 +569,10 @@ FNR == 1 {
       continue
     }
     if (ffpend != "" && c != " " && c != "\t" && c != "\r") { # a file function's name: is it called?
-      if (c == "(") {
+      # The one read allowed: the site container's Caddyfile, a committed file beside the configuration
+      # that reads it (ADR 0045), named exactly so, in a configuration file. A test file, another function,
+      # another path or an argument built any other way is still a call.
+      if (c == "(" && !(ffpend == "file" && !isTest[FILENAME] && substr(line, i, length(CADDYFILE_READ)) == CADDYFILE_READ)) {
         nff++
         ffFile[nff] = FILENAME
         ffLine[nff] = FNR
@@ -664,6 +771,10 @@ END {
       continue
     }
     configDir[dirof(f)] = 1
+    if (m == 1 && typ == "resource" && lab[2] == "scaleway_container") {
+      containerBlock[b] = 1 # its cost pins are judged after the attributes, below
+      containers++          # more than one is [container-repeat], judged at the end
+    }
     if (typ == "resource" || typ == "data" || typ == "ephemeral") {
       if (lab[2] !~ /^scaleway_/) {
         problem("provider-type", f, bline[b], typ " " quoted(unescaped(lab[2])) " belongs to no scaleway provider: infra/ uses scaleway/scaleway alone")
@@ -683,8 +794,16 @@ END {
       } else if (typ == "resource" && lab[2] ~ /^scaleway_iam_/) {
         problem("iam-other", f, bline[b], "a resource " quoted(unescaped(lab[2])) ": infra/ creates exactly one IAM application and its one policy, nothing else in IAM")
       } else if (lab[2] ~ /^scaleway_/ && !(typ == "resource" && (lab[2] in resourceType))) {
-        problem("resource-type", f, bline[b], typ " " quoted(unescaped(lab[2])) " is no resource type infra/site/main.tf uses (and no data or ephemeral type is allowed): a new type extends the allow list in dev/infra-rules.awk in the same PR, so its review sees both")
+        problem("resource-type", f, bline[b], typ " " quoted(unescaped(lab[2])) " is no resource type infra/site uses (and no data or ephemeral type is allowed): a new type extends the allow list in dev/infra-rules.awk in the same PR, so its review sees both")
       }
+    }
+    # The environment is an attribute; written as a block it is a shape [container-environment] does not read.
+    if (m == 2 && el[1] ~ "^resource:scaleway_container:" && (typ == "environment_variables" || typ == "secret_environment_variables")) {
+      problem("container-environment", f, bline[b], shownpath(el[1]) " holds a block " typ ": the environment is the attribute environment_variables = { UPSTREAM = ... } alone (ADR 0045)")
+    }
+    # The namespace's environment, in any form: the platform injects it into every container in it.
+    if (m == 2 && el[1] ~ "^resource:scaleway_container_namespace:" && (typ == "environment_variables" || typ == "secret_environment_variables")) {
+      problem("container-environment", f, bline[b], shownpath(el[1]) " holds a block " typ ": the platform injects a namespace's variables into every container in it, and the front needs none (ADR 0045)")
     }
     if (m == 2 && el[1] == "terraform" && !(typ in terraformSetting)) {
       problem("terraform-setting", f, bline[b], "the terraform block holds " typ ": it may hold only " TERRAFORM_SETTINGS_TEXT ", since anything else (an encryption key provider, provider_meta, experiments) changes how tofu runs on the admin machine")
@@ -785,8 +904,54 @@ END {
     if (n == "create_before_destroy" && akind[a] == "I" && aval[a] == "true" && p == bpath[ablk[a]]) {
       createFirst[dirof(f) "/" p] = 1
     }
+    # The site container's own attributes (not those of its nested blocks), for its cost pins.
+    if ((ablk[a] in containerBlock) && p == bpath[ablk[a]]) {
+      ck = ablk[a] SUBSEP n
+      containerSet[ck]++
+      containerKind[ck] = akind[a]
+      containerVal[ck] = aval[a]
+      containerAt[ck] = aline[a]
+    }
+    # The keys of the site container's environment_variables object, for [container-environment].
+    if ((ablk[a] in containerBlock) && p == bpath[ablk[a]] "/environment_variables") {
+      envKeys[ablk[a]]++
+      if (n == "UPSTREAM") {
+        envUpstream[ablk[a]]++
+      }
+    }
+    # A lifecycle setting that lets a plan pass over a change, on the container or its namespace (ADR 0045):
+    # ignore_changes holding anything (a list or all) or replace_triggered_by. An empty ignore_changes = []
+    # ignores nothing and stays accepted.
+    if (p ~ "^resource:scaleway_container(_namespace)?:[^/]+/lifecycle$" && (n == "replace_triggered_by" || (n == "ignore_changes" && atext[a] != "[ ]"))) {
+      problem("container-lifecycle", f, aline[a], n " in the lifecycle block of " shownpath(substr(p, 1, length(p) - 10)) ": a plan would pass over a change to it, so a tested image, command or Caddyfile is never applied, or a console change to a cost pin never reverted (ADR 0045)")
+    }
+    # enabled (OpenTofu 1.11+), any value: false acts like count = 0 and destroys the front, and an
+    # expression leaves that to a tfvars file.
+    if (p ~ "^resource:scaleway_container(_namespace)?:[^/]+/lifecycle$" && n == "enabled") {
+      problem("container-lifecycle", f, aline[a], "enabled in the lifecycle block of " shownpath(substr(p, 1, length(p) - 10)) ": enabled = false acts like count = 0, so a plan would destroy the front (ADR 0045)")
+    }
+    # The namespace's environment, as an attribute: the platform injects it into every container in it.
+    if (p ~ "^resource:scaleway_container_namespace:[^/]+$" && (n == "environment_variables" || n == "secret_environment_variables")) {
+      problem("container-environment", f, aline[a], shownpath(p) " sets " n ": the platform injects a namespace's variables into every container in it, and the front needs none (ADR 0045)")
+    }
+    # A configuration's locals, by directory (a module's scope), for the min_scale pin that may read one.
+    if (p == "locals") {
+      lk = dirof(f) SUBSEP n
+      localSet[lk]++
+      localKind[lk] = akind[a]
+      localVal[lk] = aval[a]
+    }
+    # Every postcondition's condition, for the one that checks the container's min_scale.
+    if (n == "condition" && p ~ "/lifecycle/postcondition$") {
+      nconds++
+      condAttr[nconds] = a
+    }
     if (p ~ "^resource:scaleway_iam_(policy|application):[^/]+$" && (n == "count" || n == "for_each")) {
       problem("iam-repeat", f, aline[a], n " on " shownpath(p) ": infra/ creates exactly one IAM application and one policy")
+    }
+    # The front is one container in one namespace (ADR 0045): a repeat multiplies the cost pins' ceiling.
+    if (p ~ "^resource:scaleway_container(_namespace)?:[^/]+$" && (n == "count" || n == "for_each")) {
+      problem("container-repeat", f, aline[a], n " on " shownpath(p) ": infra/ runs exactly one front container in one namespace, and a repeat multiplies the cost pins' ceiling (ADR 0045)")
     }
   }
 
@@ -798,6 +963,116 @@ END {
     # Scaleway refuses to delete a TLS stage the DNS stage references (issue #541).
     if ((b in tlsStage) && !(tlsStage[b] in createFirst)) {
       problem("tls-stage-lifecycle", bfile[b], bline[b], "resource scaleway_edge_services_tls_stage \"site\" has no lifecycle block with create_before_destroy = true: a replacement would delete the stage first, which Scaleway refuses while the DNS stage references it")
+    }
+    # The site container's cost pins (ADR 0045, The container): one instance of 140 mvCPU and 0.25 GB at
+    # most, each a literal in the file, never a provider default or a value a tfvars file could raise; no
+    # deprecated spelling beside them; and at most one instance kept warm.
+    if (b in containerBlock) {
+      shownres = shownpath(bpath[b])
+      for (j = 1; j <= npins; j++) {
+        n = containerPinName[j]
+        ck = b SUBSEP n
+        if (!(ck in containerSet)) {
+          problem(containerPinTag[n], bfile[b], bline[b], shownres " sets no " n ": it must set " n " = " containerPin[n] " (" containerPinWhy[n] "), not leave it to the provider's default")
+        } else if (containerSet[ck] != 1 || containerKind[ck] != "D" || containerVal[ck] != containerPin[n]) {
+          problem(containerPinTag[n], bfile[b], containerAt[ck], shownres " sets " n " to something other than the literal " containerPin[n] " (" containerPinWhy[n] "): another value, or an expression a tfvars file could set, is a cost nobody decided")
+        }
+      }
+      for (j = 1; j <= ndeprecated; j++) {
+        n = containerDeprecatedName[j]
+        ck = b SUBSEP n
+        if (ck in containerSet) {
+          problem("container-deprecated-attribute", bfile[b], containerAt[ck], shownres " sets " n ", the deprecated spelling of " containerDeprecated[n] ": the pins judge " containerDeprecated[n] " alone, so " n " could set what they do not see")
+        }
+      }
+      # The image is the one local the Renovate comment pins (ADR 0045): image = local.caddy_image, set once,
+      # so the line Renovate moves is the line the container reads. Its digest is the sitefront reader's.
+      ck = b SUBSEP "image"
+      if (!(ck in containerSet)) {
+        problem("container-image-pin", bfile[b], bline[b], shownres " sets no image: it must set image = local.caddy_image, the local the Renovate comment pins (ADR 0045)")
+      } else if (containerSet[ck] != 1 || containerKind[ck] != "R" || containerVal[ck] != "caddy_image") {
+        problem("container-image-pin", bfile[b], containerAt[ck], shownres " sets image to something other than exactly local.caddy_image: a literal or another local is a reference the Renovate comment does not move, so the platform could run an image nobody pinned (ADR 0045)")
+      }
+      # The environment (ADR 0045): environment_variables, when set, set once, as an object literal whose one
+      # key is the UPSTREAM the Caddyfile reads, and no secret_environment_variables. Another variable
+      # (HTTPS_PROXY, which Caddy's reverse_proxy honours, GODEBUG, SSL_CERT_FILE) changes what the front does
+      # while the behaviour test runs only its own environment; an object the reader cannot read is refused
+      # too. A container without environment_variables runs no variable at all, which this rule leaves be.
+      ck = b SUBSEP "environment_variables"
+      if ((ck in containerSet) && (containerSet[ck] != 1 || containerKind[ck] != "O" || ((bfile[b] SUBSEP bpath[b] "/environment_variables") in objUnread))) {
+        problem("container-environment", bfile[b], containerAt[ck], shownres " sets environment_variables other than once as an object literal of key = value entries: the rules must read every variable the container runs with (ADR 0045)")
+      } else if ((ck in containerSet) && (envKeys[b] != 1 || envUpstream[b] != 1)) {
+        problem("container-environment", bfile[b], containerAt[ck], shownres " sets environment_variables with keys other than exactly UPSTREAM: another variable (a proxy, GODEBUG, SSL_CERT_FILE) changes what the front does while every other rule holds (ADR 0045)")
+      }
+      ck = b SUBSEP "secret_environment_variables"
+      if (ck in containerSet) {
+        problem("container-environment", bfile[b], containerAt[ck], shownres " sets secret_environment_variables: the front needs no secret, and one would sit in the plan and the state (ADR 0045)")
+      }
+      # min_scale may also read a local set once, in the container's own directory, to the literal 0 or 1:
+      # the value is then written once and read by the pin and its postcondition alike.
+      ck = b SUBSEP "min_scale"
+      msexpr = "" # the expression an accepted pin sets, as tokens: its literal, or local . <name>
+      if (!(ck in containerSet)) {
+        problem("container-min-scale", bfile[b], bline[b], shownres " sets no min_scale: it must set min_scale = 0 or 1, the instances ADR 0045 allows to be kept warm")
+      } else if (containerSet[ck] == 1 && containerKind[ck] == "D" && (containerVal[ck] == "0" || containerVal[ck] == "1")) {
+        msexpr = containerVal[ck]
+      } else if (containerSet[ck] == 1 && containerKind[ck] == "R") {
+        lk = dirof(bfile[b]) SUBSEP containerVal[ck]
+        if (localSet[lk] == 1 && localKind[lk] == "D" && (localVal[lk] == "0" || localVal[lk] == "1")) {
+          msexpr = "local . " containerVal[ck]
+        } else {
+          problem("container-min-scale", bfile[b], containerAt[ck], shownres " sets min_scale = local." shownkey(containerVal[ck]) ", which is no local set once to the literal 0 or 1: more instances kept warm are a cost nobody decided")
+        }
+      } else {
+        problem("container-min-scale", bfile[b], containerAt[ck], shownres " sets min_scale to something other than the literal 0 or 1, or a local set to one: more instances kept warm are a cost nobody decided")
+      }
+      # The checks after an apply (the provider leaves false and 0 out of the create request): the container
+      # must assert that the platform kept plain HTTP, and, for a min_scale pin accepted above, compare the
+      # platform's min_scale with what the pin sets, so the two cannot drift (a hard-coded 0 beside a local
+      # would still pass once the local is raised). A condition is read as its tokens, one outer pair of
+      # parentheses dropped; any condition naming self and min_scale, in any spelling (self["min_scale"]
+      # too), must be that one comparison, and exactly one must be.
+      httpsOk = 0
+      msOk = 0
+      msBad = 0
+      msshown = msexpr
+      sub(/ [.] /, ".", msshown)
+      for (j = 1; j <= nconds; j++) {
+        a = condAttr[j]
+        if (afile[a] != bfile[b] || apath[a] != bpath[b] "/lifecycle/postcondition") {
+          continue
+        }
+        ct = unparen(atext[a])
+        if (ct == "self . https_connections_only == false" || ct == "false == self . https_connections_only") {
+          httpsOk++
+          if (httpsOk > 1) {
+            problem("container-https-only-postcondition", afile[a], aline[a], shownres " has a second postcondition self.https_connections_only == false: exactly one checks plain HTTP after an apply, so no copy can be edited alone")
+          }
+        }
+        if (msexpr == "") {
+          continue
+        }
+        cs = " " ct " "
+        if (index(cs, " self ") == 0 || (index(cs, " min_scale ") == 0 && index(cs, " \"min_scale\" ") == 0)) {
+          continue
+        }
+        if (ct == "self . min_scale == " msexpr || ct == msexpr " == self . min_scale") {
+          msOk++
+          if (msOk > 1) {
+            msBad++
+            problem("container-min-scale-postcondition", afile[a], aline[a], shownres " has a second postcondition on self.min_scale: exactly one condition, self.min_scale == " shownkey(msshown) ", checks the pin after an apply")
+          }
+        } else {
+          msBad++
+          problem("container-min-scale-postcondition", afile[a], aline[a], shownres " has a postcondition on self.min_scale other than a comparison with what min_scale sets (" shownkey(msshown) "): the condition must be self.min_scale == the same expression, so the check after an apply follows the pin")
+        }
+      }
+      if (msexpr != "" && msOk == 0 && msBad == 0) {
+        problem("container-min-scale-postcondition", bfile[b], bline[b], shownres " has no postcondition comparing self.min_scale with what min_scale sets (" shownkey(msshown) "): the provider leaves 0 out of the create request, so only that check after an apply says what the platform kept warm")
+      }
+      if (httpsOk == 0) {
+        problem("container-https-only-postcondition-missing", bfile[b], bline[b], shownres " has no postcondition self.https_connections_only == false: the provider leaves false out of the create request, so only that check after an apply says whether the platform kept plain HTTP for Caddy's own redirect (ADR 0045)")
+      }
     }
   }
 
@@ -849,6 +1124,10 @@ END {
 
   if (iamPolicies != 1) {
     problem("iam-policy-count", root, "", iamPolicies + 0 " scaleway_iam_policy resources, want exactly one: the deploy application's")
+  }
+  # The count speaks even when a second container's pins are refused too: one refusal never hides another.
+  if (containers > 1) {
+    problem("container-repeat", root, "", containers " scaleway_container resources, want at most one: the site's front (ADR 0045), whose cost pins bound one container's instances")
   }
   if (iamApplications != 1) {
     problem("iam-application-count", root, "", iamApplications + 0 " scaleway_iam_application resources, want exactly one: the deploy application")
