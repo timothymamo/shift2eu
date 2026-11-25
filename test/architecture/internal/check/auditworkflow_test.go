@@ -2128,46 +2128,51 @@ func TestAuditWorkflow(t *testing.T) {
 		// removed, and the step's own existence check after both still fails a
 		// run whose socket is there (issue #574, ADR 0040). A step that leaves the
 		// file behind, removes it once sudo is gone, or removes it without
-		// recording its exit hardens nothing.
+		// recording its exit hardens nothing, so each case pins the removal rule's
+		// own message, never the bare docker.sock that several of the step's
+		// messages hold; the two that leave the step without the whole removal
+		// line draw that one message and so share its fragment.
 		{
 			name:     "no removal of the stale Docker socket file",
 			workflow: mutate(t, acceptedWorkflow, auditDockerSocketRemoval, ""),
-			wantIn:   "docker.sock",
+			wantIn:   "runs no sudo rm -f /var/run/docker.sock || rc=$?, on a line of its own, after Docker is stopped and disabled and before the runner user's sudo rule is removed",
 		},
 		{
 			name:     "the stale Docker socket file removed after the runner user's sudo rule",
 			workflow: mutate(t, acceptedWorkflow, auditDockerSocketRemoval+auditSudoRuleRemoval, auditSudoRuleRemoval+auditDockerSocketRemoval),
-			wantIn:   "docker.sock",
+			wantIn:   "after sudo rm -f /etc/sudoers.d/runner || rc=$?, on a line of its own, want it before",
 		},
 		{
 			name:     "the stale Docker socket file removed without recording its exit",
 			workflow: mutate(t, acceptedWorkflow, auditDockerSocketRemoval, "          sudo rm -f /var/run/docker.sock\n"),
-			wantIn:   "docker.sock",
+			wantIn:   "runs no sudo rm -f /var/run/docker.sock || rc=$?, on a line of its own, after Docker is stopped and disabled and before the runner user's sudo rule is removed",
 		},
 		// The step's own refusals of a socket still there and of a daemon still
 		// running: the removal of the file shows nothing about the daemon, so a
 		// step that keeps no existence check, or one that asks before it removes
-		// the file (and so before the sudoers rule goes), hardens nothing.
+		// the file (and so before the sudoers rule goes), hardens nothing. Each
+		// case pins its rule's own message: the refusal made absent ("runs no
+		// if ...") or the refusal overtaken ("after if ...").
 		{
 			name:     "no Docker socket existence check",
 			workflow: mutate(t, acceptedWorkflow, auditDockerSocketCheck, ""),
-			wantIn:   "docker.sock",
+			wantIn:   "runs no if [ -e /var/run/docker.sock ]; then",
 		},
 		{
 			name: "the Docker socket existence check before the stale socket file is removed",
 			workflow: mutate(t, withoutStep(auditDockerSocketCheck), auditDockerSocketRemoval,
 				auditDockerSocketCheck+auditDockerSocketRemoval),
-			wantIn: "docker.sock",
+			wantIn: "after if [ -e /var/run/docker.sock ]; then",
 		},
 		{
 			name:     "no Docker daemon check",
 			workflow: mutate(t, acceptedWorkflow, auditDockerActiveCheck, ""),
-			wantIn:   "is-active",
+			wantIn:   "runs no if systemctl is-active --quiet docker.service docker.socket",
 		},
 		{
 			name:     "the Docker daemon check before Docker is stopped",
 			workflow: mutate(t, withoutStep(auditDockerActiveCheck), auditDockerStop, auditDockerActiveCheck+auditDockerStop),
-			wantIn:   "is-active",
+			wantIn:   "after if systemctl is-active --quiet docker.service docker.socket; then",
 		},
 		// The step that reads the Claude Code pin file into the outputs the
 		// install step's env: names is required: without it the installer takes a
