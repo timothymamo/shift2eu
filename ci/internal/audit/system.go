@@ -66,6 +66,8 @@ var (
 	errResultSecret   = errors.New("the audit's result file holds a secret of the step's")
 	errWorkArea       = errors.New("the work area is not as laid out before the audit")
 	errPreflightSetup = errors.New("the preflight could not be set up")
+	errAuditCwd       = errors.New("the audit's working directory is not an empty real directory before the audit")
+	errGitHubEnv      = errors.New("the $GITHUB_ENV file could not be read, or changed across the audit's run")
 )
 
 // Prober runs the CLI once with the preflight's prompt and returns its
@@ -189,8 +191,11 @@ func Preflight(ctx context.Context, root string, in Inputs, prober Prober, obser
 
 // Audit runs the audit: it checks that the work area again holds only its
 // empty tmp/ - nothing the preflight's run left, no result file of an earlier
-// run - then has launch make one CLI run with the skill and the fixed user
-// prompt, and takes the result file the run must leave in the work area only
+// run - and that its own working directory cwd-audit/ is still an empty real
+// directory, then has launch make one CLI run with the skill and the fixed
+// user prompt, the $GITHUB_ENV file's digest taken before the run and after it
+// and any change failing the run, and takes the result file the run must leave
+// in the work area only
 // when it is a regular file, no link, within MaxResult, one JSON value, and
 // holds neither the token nor the canary in its bytes or in any of its decoded
 // strings. It returns the bytes it read and checked: the publication works
@@ -201,13 +206,32 @@ func Audit(ctx context.Context, root string, in Inputs, launch Launch) ([]byte, 
 		return nil, err
 	}
 
+	if err := checkAuditCwd(root); err != nil {
+		return nil, err
+	}
+
 	prompt, err := Prompt(root)
 	if err != nil {
 		return nil, err
 	}
 
-	if err := launch(ctx, root, LaunchConfig(root, in), prompt); err != nil {
-		return nil, keepModeError(errAuditRun, err)
+	before, err := digest(in.GitHubEnv)
+	if err != nil {
+		return nil, errGitHubEnv
+	}
+
+	runErr := launch(ctx, root, LaunchConfig(root, in), prompt)
+
+	// The $GITHUB_ENV file decides what a later step of the job runs with:
+	// any change across the audit's run fails it, whatever the run did
+	// (issue #614).
+	after, err := digest(in.GitHubEnv)
+	if err != nil || after != before {
+		return nil, errGitHubEnv
+	}
+
+	if runErr != nil {
+		return nil, keepModeError(errAuditRun, runErr)
 	}
 
 	return checkResult(root, in)
@@ -248,6 +272,24 @@ func checkWorkArea(root string) error {
 	tmp, err := os.ReadDir(under(root, workTmpDir))
 	if err != nil || len(tmp) != 0 {
 		return errWorkArea
+	}
+
+	return nil
+}
+
+// checkAuditCwd refuses an audit's working directory that is not an empty real
+// directory (Lstat, no link followed): the CLI reads the directory it starts
+// in, so nothing a preflight session could have left may be there (issues
+// #615, #614).
+func checkAuditCwd(root string) error {
+	info, err := os.Lstat(under(root, auditCwdDir))
+	if err != nil || !info.IsDir() {
+		return errAuditCwd
+	}
+
+	entries, err := os.ReadDir(under(root, auditCwdDir))
+	if err != nil || len(entries) != 0 {
+		return errAuditCwd
 	}
 
 	return nil
@@ -376,6 +418,7 @@ type cliProber struct {
 func (p cliProber) Probe(ctx context.Context, prompt claudecode.Prompt) ([]byte, error) {
 	cfg := LaunchConfig(p.root, p.in)
 	cfg.Timeout = preflightTimeout
+	cfg.WorkDir = under(p.root, preflightCwdDir)
 
 	var transcript cappedWriter
 
