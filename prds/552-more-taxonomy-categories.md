@@ -442,7 +442,7 @@ fit `none` with "no offering in the <target> catalog", which is already more pre
    left out; DocumentDB instances from the existing `rds describe-db-instances` become one
    `database.mongodb` cluster each; tables, recorded fixtures, the e2e golden and the AWS entries of the
    e2e category list updated. Depends on 1.
-3. [ ] **GCP classification in the guide.** The asset types of the GCP column, Pub/Sub topics moved to
+3. [x] **GCP classification in the guide.** The asset types of the GCP column, Pub/Sub topics moved to
    `messaging.topic`, Cloud Run services to `serverless.container`, the calls for Memorystore sizes, URL
    maps, backend services and forwarding rules (read for protocol and IPv6, then dropped), Artifact
    Registry formats and Filestore capacity, with the roles they need; fixtures, golden and the GCP entries
@@ -650,6 +650,62 @@ text as the decision)
   the `gcloud redis` and `memorystore` list calls and their fields; the backend service field that says
   it sends to IPv6 backends (`ipAddressSelectionPolicy`) and the protocol fields that say UDP; the
   Pub/Sub rule for a topic's `dead-letter-queue` (a dead-letter topic is set per subscription).
+  Checked on 2026-11-25 (public documentation, read-only; the `cloud.google.com` URLs now redirect to
+  `docs.cloud.google.com`):
+  - One load balancer: confirmed. `ForwardingRule` and `BackendService` return both scopes in search,
+    `GlobalForwardingRule` and `RegionBackendService` are not in it
+    (<https://docs.cloud.google.com/asset-inventory/docs/supported-asset-types>); the `url-maps`,
+    `backend-services`, `forwarding-rules`, `target-https-proxies` and `target-http-proxies` lists give
+    global and every region's by default, `target-pools` every region's
+    (<https://docs.cloud.google.com/sdk/gcloud/reference/compute/url-maps/list> and the sibling
+    pages); a target proxy's `urlMap`
+    (<https://docs.cloud.google.com/compute/docs/reference/rest/v1/targetHttpsProxies>,
+    <https://docs.cloud.google.com/compute/docs/reference/rest/v1/targetHttpProxies>). Not confirmed,
+    and so the rule does not rest on it: that search returns regional URL maps (no `RegionUrlMap` row),
+    so the load balancers come from the compute lists and their asset rows are dropped. Decided: a
+    backend service of scheme `INTERNAL_SELF_MANAGED` (a service mesh) is left out, and so is a URL
+    map naming only such services. Not confirmed, and left out: a rule for the load balancers a GKE
+    cluster created (URL maps and backend services carry no labels, the `k8s-` prefixes appear only in
+    examples), so they are kept and the guide says so; the default scope of the TCP, SSL and gRPC proxy
+    lists, which the guide does not call; the zone redundancy of each load balancer type, where the
+    PRD's own rule stands.
+  - Memorystore zone placement: confirmed. A Redis instance's `nodes[].zone` and
+    `alternativeLocationId`
+    (<https://docs.cloud.google.com/memorystore/docs/redis/reference/rest/v1/projects.locations.instances>,
+    <https://docs.cloud.google.com/memorystore/docs/redis/redis-tiers>), and for a Redis cluster and
+    Valkey `zoneDistributionConfig.mode`, "Defaults to MULTI_ZONE", with one replica per shard needed
+    for high availability
+    (<https://docs.cloud.google.com/memorystore/docs/cluster/ha-and-replicas>,
+    <https://docs.cloud.google.com/memorystore/docs/valkey/ha-and-replicas>). Not confirmed, and left
+    out: that a `STANDARD_HA` instance always has its replica in another zone, so the node zones
+    decide.
+  - The `gcloud redis` and `memorystore` list calls and fields: confirmed
+    (<https://docs.cloud.google.com/sdk/gcloud/reference/redis/instances/list>,
+    <https://docs.cloud.google.com/sdk/gcloud/reference/redis/clusters/list>,
+    <https://docs.cloud.google.com/sdk/gcloud/reference/memorystore/instances/list>, and the REST
+    pages above: `memorySizeGb`, `shardCount`, `replicaCount`, `nodeConfig.sizeGb`, `mode`,
+    `persistenceConfig`). Not confirmed, and left out: an "all regions" value for the gcloud calls (the
+    guide loops over the regions the asset listing names); the API spelling of `nodeType`, and whether
+    a Redis cluster's `sizeGb` counts replicas, so a Redis cluster gets a `count` and no `memoryGiB`.
+  - IPv6 backends and UDP: confirmed. `ipAddressSelectionPolicy` `IPV6_ONLY` and `PREFER_IPV6`
+    (`IPV4_ONLY` the default), a backend service's `protocol` `UDP`, a forwarding rule's `IPProtocol`
+    and `ipVersion`, and a target pool has no protocol
+    (<https://docs.cloud.google.com/compute/docs/reference/rest/v1/backendServices>,
+    <https://docs.cloud.google.com/compute/docs/reference/rest/v1/forwardingRules>,
+    <https://docs.cloud.google.com/compute/docs/reference/rest/v1/targetPools>). Not confirmed, and left
+    out: that `L3_DEFAULT` forwards UDP, so it does not count as `udp` and the guide says so.
+  - Pub/Sub `dead-letter-queue`: confirmed per subscription, "You configure a dead-letter topic on a
+    subscription, not on the topic it pulls from"
+    (<https://docs.cloud.google.com/pubsub/docs/handling-failures>), so a topic gets none and its
+    subscription keeps it; a topic gets `encryption-at-rest`
+    (<https://docs.cloud.google.com/pubsub/docs/encryption>).
+  - Also checked: the Cloud Run service behind a 2nd gen function is the one its
+    `serviceConfig.service` names
+    (<https://docs.cloud.google.com/functions/docs/reference/rest/v2/projects.locations.functions>),
+    confirmed; the label `goog-managed-by: cloudfunctions` the guide relied on is documented nowhere,
+    so the program no longer reads it. `roles/artifactregistry.reader` can also download artifacts
+    (<https://docs.cloud.google.com/iam/docs/roles-permissions/artifactregistry>), which the guide
+    says next to the role.
 - Milestone 4: whether Resource Graph lists file shares and NFS protocol, and whether `Reader` covers
   `az storage share-rm list` and `az servicebus topic subscription list`; the `Microsoft.Web/sites` kind
   values; Cosmos DB settings for point-in-time restore and `locations[].isZoneRedundant`; what makes an
