@@ -255,9 +255,11 @@ func renderBestOffering(v assessment.Verdict) string {
 		return best
 	}
 
+	global := v.GlobalTies()
+
 	ties := make([]string, 0, len(names))
 	for _, name := range names {
-		ties = append(ties, codeSpan(name, true)+globalMark(v.IsGlobalTie(name)))
+		ties = append(ties, codeSpan(name, true)+globalMark(slices.Contains(global, name)))
 	}
 
 	return best + " (tie: " + strings.Join(ties, nameSeparator) + ")"
@@ -265,8 +267,9 @@ func renderBestOffering(v assessment.Verdict) string {
 
 // globalNoteText says once per report what the global mark means (PRD #581,
 // ADR 0048).
-const globalNoteText = "`(global)` means not bound to a region you choose: the provider serves the " +
-	"offering from its own locations, which the target's `SOURCES.md` names."
+const globalNoteText = "`(global)` means not bound to a region you choose, including the one " +
+	"`--region` names: the provider serves the offering from its own locations, which may be " +
+	"outside the EU and which the target's `SOURCES.md` names."
 
 // globalMark returns what a report writes after the name of an offering:
 // " (global)" when global is true, and nothing otherwise.

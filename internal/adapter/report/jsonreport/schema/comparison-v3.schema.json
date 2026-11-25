@@ -153,7 +153,7 @@
         },
         "bestOfferingGlobal": {
           "type": "boolean",
-          "description": "Present, and true, only when the best offering is global: not bound to a region you choose. The provider serves it from its own locations, which the target's SOURCES.md names."
+          "description": "Present, and true, only when the best offering is global: not bound to a region you choose, including the one --region names. The provider serves it from its own locations, which may be outside the EU and which the target's SOURCES.md names."
         },
         "ties": {
           "type": "array",
@@ -164,7 +164,7 @@
         },
         "globalTies": {
           "type": "array",
-          "description": "Present only when some tie is global: the names of the ties that are global, in the order of ties. A global offering is not bound to a region you choose: the provider serves it from its own locations, which the target's SOURCES.md names.",
+          "description": "Present only when some tie is global: the names of the ties that are global, in the order of ties. A global offering is not bound to a region you choose, including the one --region names: the provider serves it from its own locations, which may be outside the EU and which the target's SOURCES.md names.",
           "items": {
             "type": "string"
           }

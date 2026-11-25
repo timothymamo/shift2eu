@@ -367,9 +367,11 @@ func renderBestOffering(v assessment.Verdict) rich {
 		return best
 	}
 
+	global := v.GlobalTies()
+
 	ties := make([]rich, 0, len(names))
 	for _, name := range names {
-		ties = append(ties, code(name).words(globalMark(v.IsGlobalTie(name))))
+		ties = append(ties, code(name).words(globalMark(slices.Contains(global, name))))
 	}
 
 	return best.words(" (tie: ").join(ties, nameSeparator).words(")")
@@ -394,8 +396,9 @@ func writeGlobalNote(f *fragment, verdicts []assessment.Verdict, noted *bool) {
 		return
 	}
 
-	f.paragraph(code("(global)").words(" means not bound to a region you choose: the provider serves the " +
-		"offering from its own locations, which the target's ").code("SOURCES.md").words(" names."))
+	f.paragraph(code("(global)").words(" means not bound to a region you choose, including the one ").
+		code("--region").words(" names: the provider serves the offering from its own locations, which may be " +
+		"outside the EU and which the target's ").code("SOURCES.md").words(" names."))
 
 	*noted = true
 }

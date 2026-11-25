@@ -28,7 +28,9 @@
 //     the Resources table's best-offering cell (the best one and each tie)
 //     and in a required change's "(not offered by X)", as in the Markdown
 //     report, and the first Resources table that shows one is followed by
-//     the one paragraph that says what the mark means (ADR 0048), also in a
+//     the one paragraph that says what the mark means (ADR 0048: the
+//     Markdown report's note, served from locations that may be outside
+//     the EU), also in a
 //     comparison, under the first target section that shows one. The
 //     fragment names the source's cost
 //     nowhere (round 3, item 04): the Markdown and JSON reports keep it;

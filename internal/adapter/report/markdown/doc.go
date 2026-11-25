@@ -30,7 +30,9 @@
 //     a global offering (catalog.Offering.Global, ADR 0048), the best one or a
 //     tie, is marked "(global)" after its name, and the table that shows the
 //     report's first global offering is followed by the one note that says
-//     what the mark means and points to the target's SOURCES.md;
+//     what the mark means (not bound to a region you choose, including the
+//     one --region names, and served from the provider's own locations,
+//     which may be outside the EU) and points to the target's SOURCES.md;
 //   - "## Required changes": one list item per partial verdict with required
 //     changes, in the assessment's order, "ID: capabilities (not offered by
 //     offering)", the offering marked "(global)" when it is global, or "None."

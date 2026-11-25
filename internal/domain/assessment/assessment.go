@@ -98,11 +98,6 @@ func (v Verdict) GlobalTies() []string {
 	return global
 }
 
-// IsGlobalTie reports whether name is one of GlobalTies.
-func (v Verdict) IsGlobalTie(name string) bool {
-	return slices.Contains(v.GlobalTies(), name)
-}
-
 // ShowsGlobal reports whether a report that shows v's best offering and its
 // ties names a global offering.
 func (v Verdict) ShowsGlobal() bool {
