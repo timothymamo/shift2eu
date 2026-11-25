@@ -1,7 +1,7 @@
 # PRD #552: More taxonomy categories
 
-**Status:** In progress, milestones 1, 2, 3, 4 and 5 done. The maintainer decided all eleven questions under *Decisions and
-decided questions* on 2026-11-24, as recommended. Milestone 1's ADR is
+**Status:** In progress, milestones 1, 2, 3, 4 and 5 done. The maintainer decided questions 1-11 under *Decisions and
+decided questions* on 2026-11-24, as recommended, and 12-13 on 2026-11-25 (issue #600). Milestone 1's ADR is
 [0046](../docs/adr/0046-add-seven-taxonomy-categories-and-match-cache-plans-on-memory.md).
 **Issue:** #552
 
