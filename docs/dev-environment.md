@@ -2728,6 +2728,23 @@ The model job's errors that point here are titled `Audit model`. What each means
   paragraph above; `refused: the Claude Code tarball does not match its pin` is step 11's checksum
   paragraph, for the CLI's pin in `.github/claude-code.yaml`. The line cannot tell a token from the
   usage limit: if the limit has not been reached, renew the token.
+- `preflight failed: the transcript is not stream-json at line <n>: <class>; see runbook step 10`: a
+  line of the preflight's transcript is no stream-json element. The line names its number (counted from
+  1, empty lines too) and its class, never its text, which stays private (ADR 0040, issue #590):
+  - `the CLI is not logged in or its token is invalid or expired`: renew the token with `claude
+    setup-token` and replace the secret (above);
+  - `the subscription's usage limit`: wait until the limit resets; nothing to rotate;
+  - `the CLI could not start`: the sandbox; read the user-namespace note (the paragraph above);
+  - `the CLI wrote other non-JSON output`, `a JSON value that is not an element` or `an element whose
+    type is not a string`: the CLI's output changed. Report it as an issue with the line number and the
+    CLI version pinned in `.github/claude-code.yaml`; do not change the judge in the workflow. The same
+    holds for `preflight failed: the transcript at line <n> holds a message of an unknown shape` (an
+    assistant or user element the judge cannot read).
+
+  The old line `preflight failed: the transcript is not stream-json; see runbook step 10`, with no line
+  and no class, was issue #590: Claude Code 2.1.332's `system/permission_denied` element, whose
+  `message` is a string, made the judge refuse every real preflight. Since the fix the judge skips the
+  elements it does not judge.
 - `the runner could not be hardened: see runbook step 10`: stopping or disabling Docker, removing the
   stale socket file `/var/run/docker.sock` or removing `/etc/sudoers.d/runner` failed; `sudo still
   works`, `the Docker socket is still there` and `the audit directory's owners or modes are not as laid
