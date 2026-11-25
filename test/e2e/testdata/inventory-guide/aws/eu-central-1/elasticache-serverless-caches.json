@@ -1,0 +1,22 @@
+{
+  "ServerlessCaches": [
+    {
+      "ServerlessCacheName": "shop-edge-valkey",
+      "ARN": "arn:aws:elasticache:eu-central-1:123456789012:serverlesscache:shop-edge-valkey",
+      "Engine": "valkey",
+      "MajorEngineVersion": "8.1",
+      "SnapshotRetentionLimit": 1,
+      "StorageEncryptionType": "sse-elasticache",
+      "Status": "available"
+    },
+    {
+      "ServerlessCacheName": "shop-edge-memcached",
+      "ARN": "arn:aws:elasticache:eu-central-1:123456789012:serverlesscache:shop-edge-memcached",
+      "Engine": "memcached",
+      "MajorEngineVersion": "1.6",
+      "SnapshotRetentionLimit": 0,
+      "StorageEncryptionType": "sse-elasticache",
+      "Status": "available"
+    }
+  ]
+}

@@ -207,8 +207,9 @@ func testTableRows(t *testing.T, front *harness) {
 				t.Errorf("%q redirects to %q, want %q", firstLine(tc.raw), got, tc.loc)
 			}
 
-			// The preceding row carries no HSTS: the header is the HTTPS answer's,
-			// and nothing holds a value sent on a redirect (docs/adr/0043,
+			// This row is a redirect, and a redirect carries no
+			// Strict-Transport-Security: the header is the site's HTTPS answer's
+			// alone, and nothing holds a value sent on a 308 (docs/adr/0043,
 			// docs/adr/0045).
 			if got := resp.header.Values("Strict-Transport-Security"); len(got) > 0 {
 				t.Errorf("%q answers Strict-Transport-Security %q, want none: the header belongs to the site's HTTPS answers (docs/adr/0045)", firstLine(tc.raw), got)

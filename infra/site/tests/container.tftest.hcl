@@ -203,3 +203,24 @@ run "front_domains_on_adds_www_and_the_apex_to_the_one_container" {
     error_message = "both custom domains must be on scaleway_container.site (container_id = its id): the apex redirects with the same Caddy configuration the www site is served with, so a certificate, a header or a rule never differs between the two names (ADR 0045)."
   }
 }
+
+# An empty upstream on a first setup (issue #566, point 1). The container's UPSTREAM is the DNS stage's
+# default_fqdn, the pipeline's own endpoint; on a first apply the stage may still report it empty, and Caddy
+# refuses `reverse_proxy https://` without a host, so a container created with an empty UPSTREAM starts, fails to
+# load its configuration and answers nothing. The container holds a precondition for it (ADR 0045, *The
+# upstream*), and this run is that first setup: the DNS stage's default_fqdn is empty, and the plan must fail on
+# scaleway_container.site rather than create a container that cannot serve the site. The other runs above keep the
+# mock's non-empty default_fqdn, so they are the second pass, in which the endpoint exists.
+run "an_empty_upstream_fails_the_plan_on_the_container" {
+  command = plan
+
+  override_resource {
+    target = scaleway_edge_services_dns_stage.site
+    values = {
+      id           = "77777777-7777-7777-7777-777777777777"
+      default_fqdn = ""
+    }
+  }
+
+  expect_failures = [scaleway_container.site]
+}

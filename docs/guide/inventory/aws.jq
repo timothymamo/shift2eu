@@ -21,6 +21,16 @@
 #   {"nodegroup": ...}             eks describe-nodegroup
 #   {"Functions": ...}             lambda list-functions
 #   {"Attributes": {"QueueArn"}}   sqs get-queue-attributes
+#   {"Attributes": {"TopicArn"}}   sns get-topic-attributes
+#   {"ReplicationGroups": ...}     elasticache describe-replication-groups
+#   {"CacheClusters": ...}         elasticache describe-cache-clusters
+#   {"ServerlessCaches": ...}      elasticache describe-serverless-caches
+#   {"LoadBalancers": ...}         elbv2 describe-load-balancers
+#   {"Listeners": ...}             elbv2 describe-listeners
+#   {"TargetGroups": ...}          elbv2 describe-target-groups
+#   {"TagDescriptions": ...}       elbv2 describe-tags
+#   {"LoadBalancerDescriptions"}   elb describe-load-balancers (Classic)
+#   {"FileSystems": ...}           efs describe-file-systems
 #   {"Results": [...]}             configservice select-resource-config (optional;
 #                                  one value per page if you page by hand)
 #
@@ -30,10 +40,14 @@
 #
 # The nodes of an EKS cluster are left out, the cluster stands for them: the Auto
 # Scaling groups of its managed node groups, and instances and Auto Scaling groups
-# tagged eks:cluster-name or kubernetes.io/cluster/<name>. An instance an Auto
-# Scaling group launched is left out too, the group stands for it. The volumes
-# deleted with an instance left out go with it (a persistent volume, which
-# outlives its instance, stays).
+# tagged eks:cluster-name or kubernetes.io/cluster/<name>. A load balancer tagged
+# elbv2.k8s.aws/cluster (the AWS Load Balancer Controller made it) is left out
+# with its cluster too. An instance an Auto Scaling group launched is left out,
+# the group stands for it. The volumes deleted with an instance left out go with
+# it (a persistent volume, which outlives its instance, stays). The member
+# clusters of an ElastiCache replication group are left out, the group stands
+# for them, and so are the instances of a DocumentDB cluster, which is one
+# resource.
 #
 # The size comes from the calls too: an instance's vCPU and memory from its
 # instance type (ec2 describe-instance-types), a volume's GiB (Size), a DB
@@ -41,21 +55,52 @@
 # cluster, Aurora or an RDS Multi-AZ DB cluster, whose storage belongs to the
 # cluster), a single-node DB instance's count of 1 (MultiAZ not true; an
 # instance with a standby gets no count, how many nodes a target bills for a
-# standby is the target's to say) and an EKS cluster's node count (the desired
-# sizes of its managed node groups). A number no call gives is left out, never
-# guessed. The workload, relations and monthlyCost fields are the user's to add
-# by hand; this program never writes them.
+# standby is the target's to say), an EKS cluster's node count (the desired
+# sizes of its managed node groups), a cache's node count (a replication
+# group's member clusters, a standalone cluster's NumCacheNodes), a DocumentDB
+# cluster's instance count and an EFS file system's metered size. A number no
+# call gives is left out, never guessed. The workload, relations and monthlyCost
+# fields are the user's to add by hand; this program never writes them.
 
 # The CloudFormation types the service calls above cover. AWS Config lists them
 # too; those entries are dropped, so a resource is not listed twice. An Aurora
 # cluster (AWS::RDS::DBCluster) is covered by its instances, which
-# rds describe-db-instances lists.
+# rds describe-db-instances lists; AWS Config records a DocumentDB cluster as
+# AWS::RDS::DBCluster too, and its instances stand for it the same way.
+# ElastiCache is not in this list: AWS Config records no AWS::ElastiCache::*
+# type (its developer guide's "Supported Resource Types" reference, checked
+# 2026-11-25), so the elasticache calls are the only source of caches and none
+# is listed twice.
 def covered_types:
   [
     "AWS::EC2::Instance", "AWS::EC2::Volume", "AWS::AutoScaling::AutoScalingGroup",
     "AWS::S3::Bucket", "AWS::RDS::DBInstance", "AWS::RDS::DBCluster", "AWS::EKS::Cluster",
-    "AWS::Lambda::Function", "AWS::SQS::Queue"
+    "AWS::Lambda::Function", "AWS::SQS::Queue", "AWS::SNS::Topic", "AWS::EFS::FileSystem",
+    "AWS::ElasticLoadBalancingV2::LoadBalancer", "AWS::ElasticLoadBalancing::LoadBalancer"
   ];
+
+# The parts and settings of a classified resource that AWS Config records as
+# types of their own: a load balancer's listeners, rules and target groups, an
+# EFS file system's access points, and an ECR registry's settings and repository
+# creation templates. The resource stands for them, so they are dropped, not
+# listed as unclassified.
+def part_types:
+  [
+    "AWS::ElasticLoadBalancingV2::Listener", "AWS::ElasticLoadBalancingV2::ListenerRule",
+    "AWS::ElasticLoadBalancingV2::TargetGroup", "AWS::EFS::AccessPoint",
+    "AWS::ECR::RegistryPolicy", "AWS::ECR::ReplicationConfiguration", "AWS::ECR::PullThroughCacheRule",
+    "AWS::ECR::RepositoryCreationTemplate"
+  ];
+
+# The category of an AWS Config type that needs no service call: the type is
+# enough. Any other type is unclassified.
+def config_category:
+  if . == "AWS::AppRunner::Service" then "serverless.container"
+  elif . == "AWS::ECR::Repository" then "registry.container"
+  else "unclassified" end;
+
+# True for an ElastiCache engine that speaks the Redis protocol.
+def is_redis: . == "redis" or . == "valkey";
 
 # True for an instance or an Auto Scaling group that is a Kubernetes node, by its
 # tag keys.
@@ -119,6 +164,14 @@ def inventory($source):
 | ([$nodegroups[] | .resources.autoScalingGroups[]?.name]
    + [$docs[] | .AutoScalingGroups? // empty | .[] | select(is_node) | .AutoScalingGroupName]
    | unique) as $nodegroupasgs
+| ([$docs[] | .TagDescriptions? // empty | .[]
+    | select(any(.Tags[]?.Key // empty; . == "elbv2.k8s.aws/cluster"))
+    | .ResourceArn] | unique) as $k8slbs
+| [$docs[] | .Listeners? // empty | .[]] as $listeners
+| [$docs[] | .TargetGroups? // empty | .[]] as $targetgroups
+| [$docs[] | .DBInstances? // empty | .[] | select(.Engine == "docdb")
+   | . + {cluster: (.DBClusterIdentifier // .DBInstanceIdentifier), region: (.DBInstanceArn | arn_region)}]
+  as $docdb
 | [
     # EC2 instances. One launched by an Auto Scaling group is left out: the group
     # stands for it. A Kubernetes node is left out: its cluster stands for it.
@@ -193,8 +246,10 @@ def inventory($source):
     # cluster) gets no storage size: its storage belongs to the cluster, and
     # AllocatedStorage does not describe it. A single-node instance (MultiAZ
     # not true) is one instance; one with a standby gets no count, since how
-    # many nodes a standby is depends on how a target prices it.
+    # many nodes a standby is depends on how a target prices it. A DocumentDB
+    # instance is left out here: its cluster is listed below.
     ($docs[] | .DBInstances? // empty | .[]
+      | select(.Engine != "docdb")
       | (if .Engine == "postgres" or .Engine == "aurora-postgresql" then "database.postgresql"
          elif .Engine == "mysql" or .Engine == "aurora-mysql" then "database.mysql"
          else "unclassified" end) as $category
@@ -212,6 +267,141 @@ def inventory($source):
           size: (if $category == "unclassified" or .DBClusterIdentifier != null then null
                  else size_of({storageGiB: .AllocatedStorage,
                                count: (if .MultiAZ == true then null else 1 end)}) end)
+        }),
+
+    # DocumentDB clusters, one resource each from the instances
+    # rds describe-db-instances lists with engine docdb, grouped by cluster and
+    # region. Backups and encryption are cluster settings; no page says an
+    # instance reports its cluster's, so a capability holds only when every
+    # instance reports it. The storage is the cluster volume, which
+    # AllocatedStorage does not describe: no storageGiB.
+    ($docdb | group_by([.region, .cluster])[]
+      | {
+          id: .[0].cluster,
+          rawType: "AWS::DocDB::DBCluster",
+          category: "database.mongodb",
+          region: .[0].region,
+          capabilities: [
+            cap("point-in-time-restore"; all(.[]; (.BackupRetentionPeriod // 0) > 0)),
+            cap("encryption-at-rest"; all(.[]; .StorageEncrypted == true)),
+            cap("read-replicas"; length >= 2),
+            cap("node-high-availability"; length >= 2),
+            cap("zone-high-availability"; [.[].AvailabilityZone // empty] | unique | length >= 2)
+          ],
+          size: {count: length}
+        }),
+
+    # ElastiCache replication groups: one cache each, its member clusters its
+    # nodes. Failover is node high availability only when every shard has a
+    # replica to promote (two or more NodeGroupMembers in each node group): a
+    # cluster-mode group must turn failover on even with none, and a shard
+    # with a primary only loses its data with its node. StorageEncryptionType
+    # is the effective encryption state; AtRestEncryptionEnabled can be false
+    # while it is on.
+    ($docs[] | .ReplicationGroups? // empty | .[]
+      | ((.Engine // "") | is_redis) as $redis
+      | ((.MemberClusters // []) | length) as $nodes
+      | {
+          id: .ReplicationGroupId,
+          rawType: "AWS::ElastiCache::ReplicationGroup",
+          category: (if $redis then "cache.redis" else "unclassified" end),
+          region: (.ARN | arn_region),
+          capabilities: (if $redis then [
+            cap("node-high-availability"; .AutomaticFailover == "enabled"
+              and ((.NodeGroups // []) | length >= 1 and all(.[]; (.NodeGroupMembers // []) | length >= 2))),
+            cap("zone-high-availability"; .MultiAZ == "enabled"),
+            cap("sharding"; .ClusterEnabled == true),
+            cap("snapshots"; (.SnapshotRetentionLimit // 0) > 0),
+            cap("encryption-at-rest"; if .StorageEncryptionType != null
+              then .StorageEncryptionType == "sse-elasticache" or .StorageEncryptionType == "sse-kms"
+              else .AtRestEncryptionEnabled == true end)
+          ] else [] end),
+          size: (if $redis and $nodes >= 1 then {count: $nodes} else null end)
+        }),
+
+    # ElastiCache clusters outside a replication group (a member cluster is
+    # left out: its group stands for it). Memcached is not the Redis protocol.
+    ($docs[] | .CacheClusters? // empty | .[]
+      | select((.ReplicationGroupId // "") == "")
+      | ((.Engine // "") | is_redis) as $redis
+      | {
+          id: .CacheClusterId,
+          rawType: "AWS::ElastiCache::CacheCluster",
+          category: (if $redis then "cache.redis" else "unclassified" end),
+          region: (.ARN | arn_region),
+          capabilities: (if $redis then [
+            cap("snapshots"; (.SnapshotRetentionLimit // 0) > 0),
+            cap("encryption-at-rest"; .AtRestEncryptionEnabled == true)
+          ] else [] end),
+          size: (if $redis then size_of({count: .NumCacheNodes}) else null end)
+        }),
+
+    # ElastiCache Serverless caches: always replicated across three zones,
+    # always encrypted at rest and always in cluster mode. No size: no node
+    # type, and the data storage limit is a limit, not a size.
+    ($docs[] | .ServerlessCaches? // empty | .[]
+      | ((.Engine // "") | is_redis) as $redis
+      | {
+          id: .ServerlessCacheName,
+          rawType: "AWS::ElastiCache::ServerlessCache",
+          category: (if $redis then "cache.redis" else "unclassified" end),
+          region: (.ARN | arn_region),
+          capabilities: (if $redis then [
+            "node-high-availability", "zone-high-availability", "sharding", "encryption-at-rest",
+            cap("snapshots"; (.SnapshotRetentionLimit // 0) > 0)
+          ] else [] end)
+        }),
+
+    # Application and Network Load Balancers; a Gateway Load Balancer is
+    # unclassified. One a Kubernetes cluster made is left out. ipv6 needs IPv6
+    # at both ends: a dualstack load balancer and an IPv6 target group of its
+    # own. udp: a listener of a protocol that carries UDP (QUIC runs over UDP).
+    ($docs[] | .LoadBalancers? // empty | .[]
+      | select(.LoadBalancerArn | IN($k8slbs[]) | not)
+      | .LoadBalancerArn as $arn
+      | (.Type == "application" or .Type == "network") as $lb
+      | {
+          id: .LoadBalancerName,
+          rawType: "AWS::ElasticLoadBalancingV2::LoadBalancer",
+          category: (if $lb then "network.loadbalancer" else "unclassified" end),
+          region: ($arn | arn_region),
+          capabilities: (if $lb then [
+            cap("zone-high-availability"; [.AvailabilityZones[]?.ZoneName] | unique | length >= 2),
+            cap("udp"; any($listeners[]; .LoadBalancerArn == $arn
+              and (.Protocol | IN("UDP", "TCP_UDP", "QUIC", "TCP_QUIC")))),
+            cap("ipv6"; (.IpAddressType | IN("dualstack", "dualstack-without-public-ipv4"))
+              and any($targetgroups[]; .IpAddressType == "ipv6" and any(.LoadBalancerArns[]?; . == $arn)))
+          ] else [] end)
+        }),
+
+    # Classic Load Balancers: no ARN, so the region comes from a zone; their
+    # listeners are HTTP, HTTPS, TCP or SSL, and they have no IPv6 type.
+    ($docs[] | .LoadBalancerDescriptions? // empty | .[]
+      | {
+          id: .LoadBalancerName,
+          rawType: "AWS::ElasticLoadBalancing::LoadBalancer",
+          category: "network.loadbalancer",
+          region: (.AvailabilityZones[0]? | zone_region),
+          capabilities: [
+            cap("zone-high-availability"; (.AvailabilityZones // []) | unique | length >= 2)
+          ]
+        }),
+
+    # EFS file systems. A Regional one (no AvailabilityZoneName) stores data
+    # across zones; a One Zone one does not. EFS has no provisioned size: the
+    # size is the metered size of the data stored.
+    ($docs[] | .FileSystems? // empty | .[]
+      | {
+          id: .FileSystemId,
+          rawType: "AWS::EFS::FileSystem",
+          category: "storage.file",
+          region: (.FileSystemArn | arn_region),
+          capabilities: [
+            cap("encryption-at-rest"; .Encrypted == true),
+            cap("zone-high-availability"; (.AvailabilityZoneName // "") == "")
+          ],
+          size: size_of({storageGiB: (if .SizeInBytes.Value? == null then null
+                                      else .SizeInBytes.Value / 1073741824 end)})
         }),
 
     # EKS clusters, with their managed node groups. Cluster names are unique per
@@ -255,15 +445,32 @@ def inventory($source):
           ]
         }),
 
-    # Everything else AWS Config recorded: unclassified, with its type.
+    # SNS topics. A dead-letter queue is set per subscription, which no topic
+    # attribute says, so a topic never gets dead-letter-queue.
+    ($docs[] | .Attributes? // empty | select(.TopicArn?)
+      | {
+          id: (.TopicArn | short_id),
+          rawType: "AWS::SNS::Topic",
+          category: "messaging.topic",
+          region: (.TopicArn | arn_region),
+          capabilities: [
+            cap("encryption-at-rest"; (.KmsMasterKeyId // "") != "")
+          ]
+        }),
+
+    # Everything else AWS Config recorded. App Runner services and ECR
+    # repositories need no call: the type is enough, and ECR encrypts every
+    # repository at rest. Any other type is unclassified.
     ($docs[] | .Results? // empty | .[]
       | if type == "string" then fromjson else . end
-      | select(.resourceType | IN(covered_types[]) | not)
+      | select(.resourceType | IN(covered_types[], part_types[]) | not)
+      | (.resourceType | config_category) as $category
       | {
           id: ((.resourceName // .resourceId) | short_id),
           rawType: .resourceType,
-          category: "unclassified",
-          region: (if .awsRegion == "global" then null else .awsRegion end)
+          category: $category,
+          region: (if .awsRegion == "global" then null else .awsRegion end),
+          capabilities: [cap("encryption-at-rest"; $category == "registry.container")]
         })
   ]
 | inventory("aws")

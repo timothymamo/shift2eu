@@ -116,17 +116,22 @@ grep -c '^front_domains *= *true' infra/site/terraform.tfvars   # PASS: 0 before
 E="$(dev/tofu.sh -chdir=infra/site output -raw edge_endpoint)"; curl -sS -o /dev/null -w 'baseline %{http_code} verify=%{ssl_verify_result}\n' "https://$E/"   # record it: the answer check 1 below compares with once the TLS stage is gone
 dev/tofu.sh -chdir=infra/site plan -out=site.tfplan        # PASS (first time): "Plan: 14 to add, 0 to change, 0 to destroy."
 # PASS (the first apply after ADR 0045, on milestone 3's hosting): "Plan: 2 to add, 1 to change, 1 to destroy." (the namespace and the container added, the DNS stage updated in place, the TLS stage destroyed)
-# PASS (if the provider replaces the DNS stage): the same plan with the DNS stage "must be replaced": its default_fqdn changes, so $E changes and the container's UPSTREAM follows it in the same apply; nothing serves visitors before R10, so apply it, read $E again from the output lines below, and record it in ADR 0039's container amendment
+# PASS (if the provider replaces the DNS stage): the same plan with the DNS stage "must be replaced": its default_fqdn changes, so $E changes; if the new stage's default_fqdn is still empty at apply, the container's precondition fails and the container keeps its old UPSTREAM until the second pass below (a short outage window after R10); nothing serves visitors before R10, so apply it, read $E again from the output lines below, and record it in ADR 0039's container amendment
 # FAIL any other resource replaced or destroyed: stop, apply nothing, rm infra/site/site.tfplan, and find out why
 dev/tofu.sh -chdir=infra/site show site.tfplan | less      # PASS: the bucket policy's three statements, four with public_read (ADR 0039), the IAM rule's two permission sets in one project; the container's image "docker.io/library/caddy:<tag>@sha256:...", max_scale 1, cpu_limit 140, memory_limit_bytes 268435456, min_scale 0, its UPSTREAM the DNS stage's default_fqdn
 dev/tofu.sh -chdir=infra/site apply site.tfplan            # PASS: "Apply complete"
+# FAIL (expected on a first setup, or when the DNS stage is replaced) "Resource precondition failed" on scaleway_container.site, "default_fqdn is still empty": the rest is applied; go on with the wait loop, then the second pass below
 # FAIL "Resource postcondition failed" on scaleway_container.site: the platform kept a redirect or a warm instance the provider did not send; set plain HTTP "enabled" and min scale 0 in the console (Serverless Containers, the namespace shift2eu-site, front, Settings), then plan again: PASS "No changes."
 # FAIL "Error acquiring the state lock": another tofu holds it; wait, or after a crash dev/tofu.sh -chdir=infra/site force-unlock <lock ID>
 # Scaleway assigns the DNS stage's default_fqdn after creating it: edge_endpoint is empty right after apply, so refresh the state (no resource change) until it is set, 20 tries 30 s apart
+# Watch the first iteration: with the container absent, refresh-only should neither trip the precondition nor error on the container_endpoint output (not verifiable offline)
 n=0; until [ -n "$(dev/tofu.sh -chdir=infra/site output -raw edge_endpoint 2>/dev/null)" ] || [ "$n" -ge 20 ]; do sleep 30; dev/tofu.sh -chdir=infra/site apply -refresh-only -auto-approve || break; n=$((n + 1)); done
 [ -n "$(dev/tofu.sh -chdir=infra/site output -raw edge_endpoint 2>/dev/null)" ] && echo "PASS edge_endpoint is set" || echo "FAIL edge_endpoint still empty after 10 minutes"
 # FAIL: first an error printed above (a state lock: as the apply line's FAIL says; a key error: R0), else check the pipeline's DNS stage in the console (Edge Services) for its default FQDN; then run the wait loop and its check again
-# A first setup: the container was created while edge_endpoint was still empty, so its UPSTREAM is "": plan and apply that one in-place update first (PASS "Plan: 0 to add, 1 to change, 0 to destroy.", the container's UPSTREAM set to $E), then the plan below
+# The second pass: run the next two lines only after the apply line's precondition FAIL; otherwise skip them
+dev/tofu.sh -chdir=infra/site plan -out=site.tfplan        # PASS (second pass, first setup): "Plan: 1 to add, 0 to change, 0 to destroy." (the container, its UPSTREAM $E)
+# PASS (second pass, the DNS stage was replaced): "Plan: 0 to add, 1 to change, 0 to destroy." (only the container's UPSTREAM, set to $E)
+dev/tofu.sh -chdir=infra/site apply site.tfplan            # PASS (second pass): "Apply complete"; FAIL the precondition again: edge_endpoint is still empty, run the wait loop and its check again
 dev/tofu.sh -chdir=infra/site plan -detailed-exitcode      # PASS: exit 0, "No changes."
 # FAIL exit 2: read the diff; the provider or someone changed a resource; one "to add" after the refresh was dropped from the state by the refresh: check in the console whether it still exists; if it does, import it; if it is really gone, find out why before re-creating it
 dev/tofu.sh -chdir=infra/site output                       # PASS: project_id, deploy_application_id, bucket_name, bucket_website_endpoint, pipeline_id, edge_endpoint, container_namespace_id, container_endpoint, front_domains ([] before R8's second apply)
@@ -150,7 +155,7 @@ W="$(mktemp -d)"
 # 1. The pipeline's default endpoint over HTTPS with no TLS stage (unverified before the first apply after ADR 0045)
 curl -sS -o /dev/null -w '%{http_code} verify=%{ssl_verify_result}\n' "https://$E/"   # PASS: "verify=0" and a status (200, 403 or 404 from the bucket); record it in ADR 0045's amendment
 # FAIL a TLS or connection error: the pipeline serves no HTTPS without a TLS stage; the container cannot fetch the site: R8's rollback, then record it in ADR 0045
-# 2. The container: ready, and running the image by its digest
+# 2. The container: ready, and running the image by its digest (ready also means the Containers API took the Caddyfile, about 5.2 KiB, as args[2]; record it in ADR 0045)
 scw container container list namespace-id="$NS" region="$REGION" -o json | jq -r '.[] | "\(.name) \(.status) \(.registry_image)"'   # PASS: exactly "front ready docker.io/library/caddy:<tag>@sha256:<the digest in infra/site/container.tf>"
 # FAIL "error" with an error_message, or a reference without @sha256: record it; ADR 0045's registry mirror is then the way, recorded there before it is taken
 # A failed start is read from the container's startup log (Cockpit, the container's logs; nothing of a visitor is in it, ADR 0045). Expected there, and no failure: Caddy's warning "Unnecessary header_up Host ...": the Caddyfile writes Caddy's default for an https:// upstream out on purpose
@@ -742,8 +747,8 @@ After R10, and again after any change that puts one of the site's products in an
 keeps its products' logs (Edge Services' name each visitor's IP address and path) in one *Scaleway logs*
 data source per region of the project, 7 days by default, created only once a product there has logged;
 OpenTofu does not manage them (ADR 0039, *Amendment: log retention*). This sets each to 1 day, the
-minimum, and checks the *Scaleway metrics* sources, the aggregate request counts the privacy page names,
-at 31 days.
+minimum, and checks the *Scaleway metrics* sources, the aggregate request counts the privacy page names
+(no IP address, no user agent, no cookie, kept 31 days), at 31 days.
 
 ```bash
 # Every region at once: the logs land in the region of the product that wrote them

@@ -1,7 +1,7 @@
 # 0045. Front the site with a Serverless Container running a pinned Caddy that writes the redirects and headers
 
-- Status: Proposed
-- Date: 2026-11-24
+- Status: Accepted
+- Date: 2026-11-25
 
 Part of [PRD #297](../../prds/297-web-assessment-site.md) milestone 4 (Hosting decisions 1 to 3, as
 amended on 2026-11-24). It amends the front of
@@ -227,7 +227,9 @@ list, and any further platform header such as `x-request-id`, is the infra unit'
 test's local upstream asserts that it receives none of them. The configuration turns no access log on
 (no `log` directive in a site block), and the front writes nothing about a visitor to its output: see
 *Amendment: the front writes nothing about a visitor to its output* below. What the platform itself logs
-is Scaleway's, as for Edge Services; the privacy page already names Scaleway.
+is Scaleway's, as for Edge Services; the privacy page already names Scaleway, and says that the
+maintainer reads the hosting provider's aggregate request counts (no IP address, no user agent, no
+cookie, kept 31 days; ADR 0039, *Amendment: log retention*).
 
 ### The image and its configuration
 
@@ -381,9 +383,15 @@ TLS stage*.
   `command = ["/bin/sh", "-c"]`, and `args` whose first writes its `$1`, the Caddyfile's bytes
   (`file("${path.module}/Caddyfile")`), to `/tmp/Caddyfile` with `printf '%s'` and execs
   `caddy run --adapter caddyfile --config /tmp/Caddyfile` (the provider caps an environment variable at
-  1000 characters, too few for the file). The upstream's name is the environment variable `UPSTREAM`,
+  1000 characters, too few for the file, about 5.2 KiB, which travels as `args[2]`). The upstream's name is the environment variable `UPSTREAM`,
   the DNS stage's `default_fqdn`, read as `{$UPSTREAM}` when Caddy parses the file, so the file names no
   ID. The registry mirror is not taken unless the digest pull fails (below).
+- **The upstream's precondition** (issue #566). Scaleway sets the DNS stage's `default_fqdn` a while
+  after creating the stage, so on a first setup it may still be empty when the container is created:
+  `UPSTREAM` would be `""` and Caddy refuses `reverse_proxy https://` at start. The container's
+  `lifecycle` holds a `precondition` that `default_fqdn` is neither null nor `""`; it fails that apply on
+  `scaleway_container.site` alone (the rest stands), and R4 creates the container in a second pass once
+  `edge_endpoint` is set. `[container-lifecycle]` leaves preconditions be, like the postconditions.
 - **`min_scale = 0`**: the site stays in the free tier. The first request after an idle period starts an
   instance; R8 warms the container (one request, its answer discarded) before the live checks, and
   records how long that first request took against the live check's 30 s.

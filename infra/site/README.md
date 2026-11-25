@@ -8,7 +8,7 @@ site's front: one Serverless Container running the pinned Caddy image with the `
 serving `www.shift2eu.com` and the apex in front of the pipeline (milestone 4,
 [ADR 0045](../../docs/adr/0045-front-the-site-with-a-serverless-container-running-a-pinned-caddy.md)).
 The deploy API key, the state bucket, the Namecheap records and the GitHub `site` environment are made by
-hand, in [the site runbook](../../docs/site-runbook.md) (R0 to R13, PRD #297's *Runbook*), which the
+hand, in [the site runbook](../../docs/site-runbook.md) (R0 to R14, PRD #297's *Runbook*), which the
 maintainer follows.
 
 - `versions.tf`: OpenTofu and the `scaleway/scaleway` provider, pinned exactly; the `s3` backend on
@@ -53,7 +53,14 @@ exactly `file("${path.module}/Caddyfile")` in a configuration file, every `scale
 pins (`max_scale = 1`, `cpu_limit = 140`, `memory_limit_bytes = 268435456` as literals, `min_scale` 0 or 1,
 as a literal or a local set to one, with exactly one postcondition on `self.min_scale`, comparing that same
 expression, and exactly one postcondition `self.https_connections_only == false`, `image` exactly
-`local.caddy_image`, no deprecated `memory_limit` or `http_option`), nothing
+`local.caddy_image`, no deprecated `memory_limit` or `http_option`), a container's
+`environment_variables`, if set, once and as an object literal whose one key is `UPSTREAM`, with no
+`environment` block and no `secret_environment_variables`, and no environment variable of either kind,
+attribute or block, on a `scaleway_container_namespace`, whose variables reach every container in it
+(`[container-environment]`), no `ignore_changes` (but an empty list), `replace_triggered_by` or
+`enabled` in the `lifecycle` of a `scaleway_container` or a `scaleway_container_namespace`
+(`[container-lifecycle]`: the postconditions and the precondition that the DNS stage's `default_fqdn` is
+not empty, ADR 0045, stay allowed), nothing
 in a `terraform` block but `required_version`, `required_providers`, `backend` and `cloud`
 (`[terraform-setting]`: no `encryption`, whose `external` key provider runs a local command), no `import`
 block, no `mock_provider` with a `source` and no `*.tfmock.hcl` or `*.tfmock.json` file, and only the

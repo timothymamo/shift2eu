@@ -219,7 +219,12 @@ func imageReference(src string) (string, error) {
 		return "", err
 	}
 
-	if err := checkContainerImage(containerBody(tokens)); err != nil {
+	body, err := containerBody(tokens)
+	if err != nil {
+		return "", err
+	}
+
+	if err := checkContainerImage(body); err != nil {
 		return "", err
 	}
 
@@ -379,7 +384,10 @@ func hclList(src, attribute string) ([]string, error) {
 		return nil, err
 	}
 
-	body := containerBody(tokens)
+	body, err := containerBody(tokens)
+	if err != nil {
+		return nil, err
+	}
 
 	j, err := attrValue(body, attribute)
 	if err != nil {
@@ -692,9 +700,11 @@ func isFileCall(tokens []hclToken) bool {
 }
 
 // containerBody returns the tokens inside resource "scaleway_container" "site"
-// { ... }, the block the start command lives in, or all of them when no such
-// block stands at the top level.
-func containerBody(tokens []hclToken) []hclToken {
+// { ... }, the block the start command lives in. A file without that block is an
+// error: every token of the file is no container's body, and a reader that took
+// them for one would run a command line the platform never runs
+// (docs/adr/0045).
+func containerBody(tokens []hclToken) ([]hclToken, error) {
 	for i, depth := 0, 0; i < len(tokens); i++ {
 		tok := tokens[i]
 
@@ -712,10 +722,10 @@ func containerBody(tokens []hclToken) []hclToken {
 
 		body, _ := blockBody(tokens, i+3)
 
-		return body
+		return body, nil
 	}
 
-	return tokens
+	return nil, fmt.Errorf("%s: no resource \"scaleway_container\" \"site\" block: that block is where the start command lives, and the rest of the file is no command line the platform runs (docs/adr/0045)", containerPath)
 }
 
 // isIdent reports whether b may be part of a name in a .tf file.
@@ -901,6 +911,18 @@ func TestContainerRunFrom(t *testing.T) {
 				image: caddyAt,
 				argv:  []string{"/bin/sh", "-c", "run", "caddy"},
 			},
+		},
+		// A file with no site container block holds no start command: the reader refuses it rather than reading
+		// every token of the file as one (issue #566, point 8).
+		{
+			name: "no site container block",
+			tf: imageLocals(caddyAt) + `resource "scaleway_container_namespace" "site" {
+  name    = "shift2eu-site"
+  command = ["/bin/sh", "-c"]
+  args    = ["run", "caddy"]
+}
+`,
+			wantErr: `no resource "scaleway_container" "site" block`,
 		},
 		// A list's closing ] ends the attribute's value only when nothing follows it: an expression after it (a
 		// comparison, a conditional) is the value the platform runs, and a reader that stopped at the ] would
