@@ -10,6 +10,7 @@ package claudecode_test
 import (
 	"bytes"
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -350,8 +351,10 @@ func TestEnvIsTheAllowListAlone(t *testing.T) {
 // TestAskRefusesTheNewFieldsAtTheirZeroShape pins what a config of a shape ADR
 // 0040's model-job amendment does not allow fails with: ErrModel, before the CLI starts,
 // like a relative path or a model name of the wrong shape. A permission mode
-// other than dontAsk or plan is the one that matters most: bypassPermissions,
-// the CLI's own name for running a call no rule matches, is never passed on.
+// other than default or dontAsk is the one that matters most: bypassPermissions,
+// the CLI's own name for running a call no rule matches, is never passed on, and
+// plan, which in 2.1.332 ran calls no allow rule matches, is refused too (issue
+// #592).
 func TestAskRefusesTheNewFieldsAtTheirZeroShape(t *testing.T) {
 	t.Parallel()
 
@@ -383,6 +386,15 @@ func TestAskRefusesTheNewFieldsAtTheirZeroShape(t *testing.T) {
 			name:  "the permission mode acceptEdits",
 			field: "permission mode",
 			apply: func(c *claudecode.Config) { c.PermissionMode = "acceptEdits" },
+		},
+		{
+			// plan ran Read and Glob calls no allow rule matches in 2.1.332, and
+			// falls back to the auto-mode classifier for Bash: the two modes the
+			// launcher passes on are the ones that deny every call no rule allows
+			// (issue #592).
+			name:  "the permission mode plan",
+			field: "permission mode",
+			apply: func(c *claudecode.Config) { c.PermissionMode = "plan" },
 		},
 		{
 			name:  "a permission mode with a space in it",
@@ -698,6 +710,102 @@ func TestAskRefusesTheNewFieldsAtTheirZeroShape(t *testing.T) {
 			// launcher refuses puts no credential of the caller's in a log.
 			if strings.Contains(err.Error(), subscriptionToken) {
 				t.Errorf("Ask = %v, want the error to hold none of the token: the refusal names the field, never the value the CLI's environment holds (CLAUDE.md rule 3, issue #277)", err)
+			}
+		})
+	}
+}
+
+// TestAskRefusesAPermissionModeWithNoTranscript pins the cross-field rule issue
+// #592 leaves: the launcher passes --permission-mode on, but the session's
+// system/init element - the one thing that shows which mode the run really used
+// - is read only from a streamed run. A config that asks for a mode and reads no
+// transcript would get --permission-mode with no check at all, so checkLaunch
+// refuses it before anything runs, naming the field it refuses and the one it
+// needs.
+func TestAskRefusesAPermissionModeWithNoTranscript(t *testing.T) {
+	t.Parallel()
+
+	for _, mode := range []string{"default", "dontAsk"} {
+		t.Run(mode, func(t *testing.T) {
+			t.Parallel()
+
+			cli, rec := newFakeClaudeCLI(t, claudeFake{stdout: answeredRun})
+
+			launcher := claudecode.New(claudecode.Config{
+				Path:           cli,
+				Token:          subscriptionToken,
+				Model:          auditModel,
+				PermissionMode: mode,
+				Timeout:        time.Minute,
+			})
+
+			text, err := launcher.Ask(t.Context(), claudecode.Prompt{System: "s", User: "u"})
+			if !errors.Is(err, claudecode.ErrModel) {
+				t.Fatalf("Ask = %q, %v; want an error wrapping ErrModel: a mode is passed on only beside the transcript the session's init element is checked in", text, err)
+			}
+
+			for _, want := range []string{"permission mode", "transcript"} {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("Ask = %v, want the error to name %q: the refusal names the field it refuses and the one it needs", err, want)
+				}
+			}
+
+			// Nothing ran: the fake CLI writes its arguments before all else.
+			if _, statErr := os.Lstat(filepath.Join(rec.dir, "args")); !errors.Is(statErr, fs.ErrNotExist) {
+				t.Errorf("the fake CLI recorded its arguments (%v), want the config refused before the CLI starts", statErr)
+			}
+		})
+	}
+}
+
+// TestAskAcceptsThePermissionModesThatDenyUnlistedCalls pins the two modes the
+// launcher passes on (issue #592): default, the mode Claude Code 2.1.332 runs
+// under CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1 whatever the launch asks for, and
+// dontAsk, its non-interactive spelling. Each reaches the CLI as
+// --permission-mode, on the streamed run whose init element the launcher checks
+// it against: a mode with no transcript is refused instead
+// (TestAskRefusesAPermissionModeWithNoTranscript).
+func TestAskAcceptsThePermissionModesThatDenyUnlistedCalls(t *testing.T) {
+	t.Parallel()
+
+	for _, mode := range []string{"default", "dontAsk"} {
+		t.Run(mode, func(t *testing.T) {
+			t.Parallel()
+
+			// The session's init element reports the mode the launch asks for, as
+			// a run of that mode does.
+			canned := `{"type":"system","subtype":"init","permissionMode":"` + mode + `"}` + "\n" +
+				`{"type":"result","subtype":"success","is_error":false,"result":"the last result"}` + "\n"
+
+			cli, rec := newFakeClaudeCLI(t, claudeFake{stdout: canned})
+
+			var transcript bytes.Buffer
+
+			launcher := claudecode.New(claudecode.Config{
+				Path:           cli,
+				Token:          subscriptionToken,
+				Model:          auditModel,
+				PermissionMode: mode,
+				Transcript:     &transcript,
+				Timeout:        time.Minute,
+			})
+
+			answer, err := launcher.Ask(t.Context(), claudecode.Prompt{System: "s", User: "u"})
+			if err != nil {
+				t.Fatalf("Ask: %v; the launcher passes on %q", err, mode)
+			}
+
+			if answer != "the last result" {
+				t.Errorf("Ask = %q, want %q: a streamed run's answer is its last result element", answer, "the last result")
+			}
+
+			if diff := transcript.String(); diff != canned {
+				t.Errorf("the transcript holds %q, want every byte the CLI printed, %q", diff, canned)
+			}
+
+			got, ok := valueAfter(rec.args(t), "--permission-mode")
+			if !ok || got != mode {
+				t.Errorf("the CLI's --permission-mode is %q (found: %t), want %q: the mode the caller asked for is the one the CLI is told to run", got, ok, mode)
 			}
 		})
 	}

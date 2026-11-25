@@ -173,16 +173,17 @@ func Preflight(ctx context.Context, root string, in Inputs, prober Prober, obser
 			return verdict
 		}
 
-		return errPreflightRun
+		return keepModeError(errPreflightRun, runErr)
 	}
 
 	return Judge(Judgement{
-		Plan:       PreflightPlan(t),
-		Nonce:      nonce,
-		Token:      in.Token,
-		Canary:     in.Canary,
-		Transcript: transcript,
-		Effects:    effects,
+		Plan:           PreflightPlan(t),
+		Nonce:          nonce,
+		Token:          in.Token,
+		Canary:         in.Canary,
+		Transcript:     transcript,
+		Effects:        effects,
+		PermissionMode: permissionMode,
 	})
 }
 
@@ -206,10 +207,23 @@ func Audit(ctx context.Context, root string, in Inputs, launch Launch) ([]byte, 
 	}
 
 	if err := launch(ctx, root, LaunchConfig(root, in), prompt); err != nil {
-		return nil, errAuditRun
+		return nil, keepModeError(errAuditRun, err)
 	}
 
 	return checkResult(root, in)
+}
+
+// keepModeError returns class, a step's constant failure, wrapping the
+// launcher's *claudecode.PermissionModeError when runErr holds one, so Run
+// prints its fixed sentence (issue #592). Nothing else of runErr is kept: its
+// text can quote the CLI's output.
+func keepModeError(class, runErr error) error {
+	var modeErr *claudecode.PermissionModeError
+	if errors.As(runErr, &modeErr) {
+		return fmt.Errorf("%w: %w", class, &claudecode.PermissionModeError{Expected: modeErr.Expected, Reported: modeErr.Reported})
+	}
+
+	return class
 }
 
 // cliLaunch is the Launch of a real run: the CLI's transcript in the state

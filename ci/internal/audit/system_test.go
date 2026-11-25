@@ -169,7 +169,7 @@ func TestPreflightRunsThePlansCallsAndRemovesTheControl(t *testing.T) {
 		targets := audit.Targets{Root: root, Port: portIn(t, prompt), Pid: preflightPid, GitHubEnv: in.GitHubEnv}
 		thePlan := audit.PreflightPlan(targets)
 
-		return transcriptOf(thePlan, passingAnswers(thePlan, nonce))
+		return append([]byte(defaultInitLine), transcriptOf(thePlan, passingAnswers(thePlan, nonce))...)
 	}
 
 	if err := audit.Preflight(t.Context(), root, in, prober, observer.observe, preflightPid); err != nil {
@@ -344,7 +344,9 @@ func TestPreflightJudgesTheTranscriptWithTheStepsToken(t *testing.T) {
 			"the environ holds "+in.Token,
 		)
 
-		return append(transcriptOf(thePlan, passingAnswers(thePlan, nonce)), []byte(telling)...)
+		transcript := append([]byte(defaultInitLine), transcriptOf(thePlan, passingAnswers(thePlan, nonce))...)
+
+		return append(transcript, []byte(telling)...)
 	}
 
 	err := audit.Preflight(t.Context(), root, in, prober, observer.observe, preflightPid)
@@ -512,6 +514,88 @@ func runAuditStep(t *testing.T, root string, in audit.Inputs, launch audit.Launc
 
 	return code, out.String(), result
 }
+
+// TestPreflightKeepsThePermissionModeErrorThroughItsWrapping pins issue #592's
+// first layer in the preflight: a session whose init element reports another
+// permission mode than the launch asked for is the launcher's
+// *claudecode.PermissionModeError, and the step keeps it through its wrapping, so
+// the run prints the fixed sentence instead of the preflight's constant class.
+func TestPreflightKeepsThePermissionModeErrorThroughItsWrapping(t *testing.T) {
+	t.Parallel()
+
+	root, in := preflightTree(t)
+
+	observer := &observerFake{effects: fakeEffects{}}
+	prober := &proberFake{root: root, err: permissionModeFailure("dontAsk")}
+
+	err := audit.Preflight(t.Context(), root, in, prober, observer.observe, preflightPid)
+
+	assertPermissionModeError(t, err, "default", "dontAsk")
+}
+
+// TestAuditKeepsThePermissionModeErrorThroughItsWrapping pins the same layer in
+// the audit's one CLI run (issue #592).
+func TestAuditKeepsThePermissionModeErrorThroughItsWrapping(t *testing.T) {
+	t.Parallel()
+
+	root, in := preflightTree(t)
+
+	launch := &launchFake{write: func(string) error { return permissionModeFailure("missing") }}
+
+	_, err := audit.Audit(t.Context(), root, in, launch.launch)
+
+	assertPermissionModeError(t, err, "default", "missing")
+}
+
+// TestPreflightJudgesTheSessionsPermissionMode pins that the preflight hands the
+// judgement the mode the launch asks for (issue #592): the transcript's init
+// element reports dontAsk, so the step fails although the control passed and
+// every probe was refused, with the judgement's fixed sentence.
+func TestPreflightJudgesTheSessionsPermissionMode(t *testing.T) {
+	t.Parallel()
+
+	root, in := preflightTree(t)
+
+	observer := &observerFake{effects: fakeEffects{}}
+
+	prober := &proberFake{root: root}
+	prober.answer = func(nonce, prompt string) []byte {
+		targets := audit.Targets{Root: root, Port: portIn(t, prompt), Pid: preflightPid, GitHubEnv: in.GitHubEnv}
+		thePlan := audit.PreflightPlan(targets)
+
+		initLine := fmt.Sprintf(`{"type":"system","subtype":"init","permissionMode":"dontAsk","cwd":%q}`+"\n", preflightInitCanary)
+
+		return append([]byte(initLine), transcriptOf(thePlan, passingAnswers(thePlan, nonce))...)
+	}
+
+	err := audit.Preflight(t.Context(), root, in, prober, observer.observe, preflightPid)
+	if err == nil {
+		t.Fatal("Preflight() = nil, want a failure: the session reports dontAsk, and the launch asks for default")
+	}
+
+	var verdict *audit.Verdict
+	if !errors.As(err, &verdict) {
+		t.Fatalf("Preflight() = %v, want a verdict: the judgement reads the session's permission mode (issue #592)", err)
+	}
+
+	want := "the session's permission mode is not the one asked for: expected default, reported dontAsk"
+	if !strings.Contains(err.Error(), want) {
+		t.Errorf("Preflight() = %q, want it to hold %q", err, want)
+	}
+
+	if !strings.Contains(err.Error(), "runbook step 10") {
+		t.Errorf("Preflight() = %q, want it to name runbook step 10, as every verdict does", err)
+	}
+
+	if strings.Contains(err.Error(), preflightInitCanary) {
+		t.Errorf("Preflight() = %q, which holds the init element's canary: a verdict is made of fixed words", err)
+	}
+}
+
+// defaultInitLine is the session's system/init element as Claude Code 2.1.332
+// prints it under the subprocess environment scrub: the mode the audit's launch
+// asks for, which the preflight's judgement wants to read (issue #592).
+const defaultInitLine = `{"type":"system","subtype":"init","permissionMode":"default"}` + "\n"
 
 // workPath is a path of the audit's work area under root.
 func workPath(root string, parts ...string) string {

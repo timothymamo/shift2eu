@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	"github.com/timothymamo/shift2eu/ci/internal/claudecode"
 )
 
 // Effects are what the launcher observes itself after the preflight's run,
@@ -30,14 +32,17 @@ type Effects interface {
 // the observed effects. Canary and Token, when set, are the step's canary and
 // subscription token, each looked for in every byte of the transcript; a run
 // of 64 lower-case hex characters in a tool_result counts as the canary
-// whether or not it is set.
+// whether or not it is set. PermissionMode, when set, is the mode the launch
+// asked for, which the transcript's system/init element must report (issue
+// #592); empty reads no init element.
 type Judgement struct {
-	Plan       Plan
-	Nonce      string
-	Token      string
-	Canary     string
-	Transcript []byte
-	Effects    Effects
+	Plan           Plan
+	Nonce          string
+	Token          string
+	Canary         string
+	Transcript     []byte
+	Effects        Effects
+	PermissionMode string
 }
 
 // Verdict is the preflight's refusal. Its text is made of constants alone -
@@ -92,6 +97,12 @@ func Judge(j Judgement) error {
 		return &Verdict{problems: []string{"the preflight has no plan, nonce or effects to judge"}}
 	}
 
+	if j.PermissionMode != "" {
+		if err := judgeMode(j.Transcript, j.PermissionMode); err != nil {
+			return err
+		}
+	}
+
 	calls, err := parseTranscript(j.Transcript)
 	if err != nil {
 		return err
@@ -140,6 +151,27 @@ func Judge(j Judgement) error {
 	judgeSecrets(found, j, calls)
 
 	return found.verdict()
+}
+
+// judgeMode reads the transcript's lines through the launcher's own
+// claudecode.ModeCheck and returns the *Verdict of a session whose init
+// element does not report expected: the check's fixed sentence alone, never a
+// byte of the line. It is the judgement's own layer beside the launcher's,
+// which stops such a run as it streams: the judge fails closed on its own.
+func judgeMode(transcript []byte, expected string) error {
+	check := claudecode.NewModeCheck(expected)
+
+	for line := range bytes.Lines(transcript) {
+		if check.Line(line) {
+			break
+		}
+	}
+
+	if err := check.Err(); err != nil {
+		return &Verdict{problems: []string{err.Error()}}
+	}
+
+	return nil
 }
 
 // judgeSecrets adds probe 5's finding for the canary in a tool result (or a

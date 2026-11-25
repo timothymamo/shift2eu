@@ -5,7 +5,7 @@
   PRD #175 milestone 2 amends this record with the workflow's implementation (below); its first
   amendment, how Claude Code runs in the model job, is dated 2026-11-22, its second, the publish
   program's core, 2026-11-23. Issue #568 amends it with the plan for the runner image's move to
-  `ubuntu-26.04` (2026-11-25)
+  `ubuntu-26.04` (2026-11-25); issue #592 amends the model step's permission mode (2026-11-25)
 - Date: 2026-11-21, amended 2026-11-22 to 2026-11-25
 
 ## Context
@@ -1276,7 +1276,7 @@ test of ours (Decision 3's reason).
   | `Tools` | `--tools`, the built-in tools, joined with `,`; each a tool name of letters only | **no tools**: `--tools ""` |
   | `Effort` | `--effort`; one of `low`, `medium`, `high`, `xhigh`, `max` | no flag: the CLI's default |
   | `Settings` | `--settings <absolute path>` | no flag |
-  | `PermissionMode` | `--permission-mode`; `dontAsk` or `plan` only, never `bypassPermissions` | no flag |
+  | `PermissionMode` | `--permission-mode`; `default` or `dontAsk` only, never `bypassPermissions` (*amended 2026-11-25, issue #592*: `default` added, `plan` removed); needs a `Transcript`, or the launch is refused before anything runs; the session's init element must report it, or the run is stopped and fails with a `*PermissionModeError` | no flag, no check |
   | `AppendSystemPrompt` | the system prompt is appended to the CLI's own (`--append-system-prompt-file`) | it replaces it (`--system-prompt-file`) |
   | `SafeModeOff` | leave `--safe-mode` out | `--safe-mode` |
   | `WorkDir` | the CLI's working directory, an absolute path that exists | a fresh empty temporary directory, removed after the run |
@@ -1486,13 +1486,18 @@ change to `.claude/settings.json` cannot widen the audit. A test in `test/archit
 dropping or widening any entry below fails `make test`.
 
 - **The audit's launch:** `Model` `claude-fable-5-2`, `Effort` `high`, `Tools` `Read,Grep,Glob,Write,Edit,Bash`
-  (no `WebFetch`, `WebSearch`, `Task` or any other), `PermissionMode` `dontAsk`, `SafeModeOff` (the
+  (no `WebFetch`, `WebSearch`, `Task` or any other), `PermissionMode` `default` (amended 2026-11-25,
+  issue #592, from `dontAsk`), `SafeModeOff` (the
   settings file must apply, and `--safe-mode` turns customisations off; each thing it would turn off is
   off by another flag or key here), `AppendSystemPrompt` (the default prompt explains the tools the
   audit uses), `WorkDir` `/srv/audit/work`, `Home` `/srv/audit/state/home`, `Transcript` the file above,
   `--strict-mcp-config` with the empty MCP configuration.
-- **Permission mode `dontAsk`:** the non-interactive mode in which a tool call no allow rule matches is
-  refused, not asked about. `permissions.defaultMode` is `dontAsk` as well, and
+- **Permission mode `default`** (*amended 2026-11-25, issue #592*; it was `dontAsk`): in `-p` with no
+  permission-prompt tool, a tool call no allow rule matches is refused, not asked about, exactly as
+  `dontAsk` refuses it. Claude Code 2.1.332 runs `default` whenever `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB`
+  is set, so the launch asks for the mode that runs, and the launcher stops a session whose init
+  element reports another (the issue #592 amendment under the sandbox preflight).
+  `permissions.defaultMode` stays `dontAsk`, inert under the scrub, and
   `permissions.disableBypassPermissionsMode` is `disable`. Never `bypassPermissions`,
   `--dangerously-skip-permissions` or `--allow-dangerously-skip-permissions`.
 - **Allow list** (`permissions.allow`), literal absolute paths in Claude Code's rule syntax, where `//`
@@ -2054,12 +2059,63 @@ of milestone 2), and the constraints PR 5 must keep:
   in another case, is refused as a JSON value that is not an element: `encoding/json` matches keys
   case-insensitively and keeps the last, so such a line could read as a skipped type and hide the
   `tool_use` it carries (auditor L2); the judge walks the top-level object once, token by token.
-- *Open point, 2026-11-25 (issue #590):* with `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1`, Claude Code 2.1.332
-  forces the permission mode to `default` in place of the launcher's `--permission-mode dontAsk`, and
-  warns on stderr. In `-p` mode with no permission-prompt tool, the calls it would ask about were
-  denied, so the effect matched `dontAsk`. Recorded only: the launcher is not changed for
-  it in issue #590's PR; a later CLI that prompts or allows in `default` mode would show in the
-  preflight, which fails closed.
+- *Amended 2026-11-25 (issue #592), the model step's permission mode.* Issue #590 recorded as an open
+  point that Claude Code 2.1.332 does not run the mode the launch asked for. What 2.1.332 does, read in
+  its bundle and run against a local fake Messages API with a dummy token (no real token, no workflow):
+  - **The resolver.** Its first check is the scrub: whenever `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB` is set,
+    the mode is `default`, whatever `--permission-mode`, `permissions.defaultMode` or
+    `--dangerously-skip-permissions` say. No flag or setting keeps `dontAsk`. It warns on stderr,
+    `Permission mode forced to default — CLAUDE_CODE_SUBPROCESS_ENV_SCRUB is set (allowed_non_write_users
+    hardening). Declare allowedTools explicitly, or set CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=0 to opt out.`,
+    only when a mode other than `default` came from the command line; a `defaultMode` in the settings
+    file is overridden **silently**, and `--permission-mode default` prints nothing.
+  - **The scrub's other work.** It strips a fixed credential list, `CLAUDE_CODE_OAUTH_TOKEN` among
+    them, from every subprocess's environment, the shell of a Bash call included, and turns on a
+    bubblewrap isolation of subprocesses of its own (without bwrap the CLI does not start).
+  - **The combinations**, each in `-p` with no permission-prompt tool, over calls no allow rule names
+    (Bash, Write, Read and Glob outside the allowed areas) and calls one does: with the scrub, every
+    combination of flag and `defaultMode` ran `default`, which denied every unlisted call and ran the
+    listed ones. Without it, `dontAsk` and `default` denied and ran exactly the same calls; only the
+    denial text differed. `plan` without the scrub **ran Read and Glob outside the allow list**, fell
+    back to the auto-mode classifier for Bash, and refused an allowed Write.
+
+  **Decision:** keep `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1`, and ask for the mode that runs: the audit's
+  `PermissionMode` is `default`, passed as `--permission-mode default`. Not dropping the scrub: it is
+  the one mechanism shown to keep the token out of the shell the CLI starts for a Bash call, which
+  expands variables before `audit-exec` runs, so the wrapper's clean environment cannot do it. Not
+  keeping `--permission-mode dontAsk` under the scrub: the flag would claim a mode that never runs,
+  warn on every run, and leave nothing that checks the mode against what was asked for. In `-p` with no
+  prompt tool, `default` denies every call no allow rule matches, exactly where `dontAsk` does; that is
+  shown for 2.1.332 only, hence the check below.
+  - **`plan` is removed** from the launcher's modes, which are now `default` and `dontAsk`: it ran calls
+    no rule allows, and nothing used it.
+  - **`permissions.defaultMode` stays `dontAsk`**, and is inert in 2.1.332: the scrub overrides it, and
+    the flag would anyway. It is the stricter value for a CLI that would honour it; `test/architecture`
+    still pins it.
+  - **The init-line check.** With a `Transcript` and a `PermissionMode`, the launcher reads each
+    stream-json line as it arrives (`claudecode.ModeCheck`): the session's `system`/`init` element must
+    name `permissionMode` exactly as asked. Its top-level object is walked once, token by token, as
+    the judge's is (issue #590); `type`, `subtype` or `permissionMode` named twice or in another case
+    is refused. It refuses an init element of another mode, a second init element, and any element
+    other than a `system` one before the init element, and **cancels the run at that line**; a run that
+    answers with no init element at all is refused at its end. The check is a detective backstop, not a
+    barrier: it reads the line on the goroutine that copies the CLI's stdout, the cancel is
+    asynchronous, and the kill (`exec.CommandContext`'s SIGKILL) stops only the CLI's process, not its
+    children (the runner VM is discarded after the job). A refusal at the init element lands, in
+    practice, before the first model turn: 2.1.332 prints that element before its first API request,
+    and an API round trip is slower than the pipe read and the kill. That is a race, not a guarantee,
+    and a later refusal (`two init lines`, or a key named twice or in another case in a later element)
+    comes after tool calls may already have run. The fail-closed gate stays the CLI's own permission
+    layer, the sandbox and the preflight's probes and judge. The
+    error wraps `ErrModel` and a `*claudecode.PermissionModeError` whose text is fixed words: `the
+    session's permission mode is not the one asked for: expected default, reported <X>`, `<X>` one of
+    the CLI's modes (`default`, `acceptEdits`, `plan`, `dontAsk`, `bypassPermissions`, `auto`) as it is,
+    or a class, `missing`, `not a string`, `another mode` or `two init lines`; never a byte of the line.
+    The preflight's and the audit's steps keep that error through their wrapping, and the run prints
+    `refused: ` and the sentence, exit 1. The judge runs the same check over the preflight's transcript
+    (`Judgement.PermissionMode`), so it fails closed on its own; its verdict holds the same sentence.
+    The reviewer passes no mode and reads one JSON result, so its launch is unchanged. Runbook step 10
+    names the line and its remedy: a CLI bump changed the resolver; re-read it in the new version.
 
 #### The runner's user-namespace restriction
 
@@ -2104,7 +2160,7 @@ tarball is never kept.
 The launcher's empty MCP configuration is passed by both callers from this pull request: the reviewer's
 argument vector gains `--mcp-config {"mcpServers":{}}` after `--strict-mcp-config`, and
 `ci/aireview/internal/review/claudecli_test.go` pins it. The launcher refuses, naming the field, before
-anything runs: an `Effort` outside the five, a `PermissionMode` other than `dontAsk` or `plan`, a relative
+anything runs: an `Effort` outside the five, a `PermissionMode` other than `default` or `dontAsk` (`dontAsk` or `plan` until issue #592), a `PermissionMode` with no `Transcript` (issue #592), a relative
 `Settings` path, a `WorkDir` or `Home` that is not an absolute path to a directory that exists, and an
 `Env` entry that is no `NAME=VALUE` or whose name is not on the `Env` allow list (`TMPDIR`,
 `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB` and `SHIFT2EU_AUDIT_CANARY`, amended 2026-11-23, issue #277 round F;

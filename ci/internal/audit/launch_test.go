@@ -1,8 +1,9 @@
 // Pins the launch the audit and its preflight run the model with (ADR 0040's
 // model-job amendment, issue #277, "The audit's programs" and "The settings
 // file"): the model claude-fable-5-2 at effort high, the six tools the audit
-// uses and no other, the non-interactive permission mode that refuses every
-// tool call no rule allows, the settings file read from the checkout copy, the
+// uses and no other, the permission mode that refuses every tool call no rule
+// allows - default, the mode Claude Code 2.1.332 runs under the subprocess
+// environment scrub (issue #592) - the settings file read from the checkout copy, the
 // work area as the working directory, a fresh HOME and TMPDIR in the state
 // area, safe mode off so the settings file applies, and the skill appended to
 // the CLI's own system prompt.
@@ -62,7 +63,11 @@ func TestLaunchConfigIsTheADRsLaunch(t *testing.T) {
 		{"Token", cfg.Token, inputs.Token},
 		{"Model", cfg.Model, "claude-fable-5-2"},
 		{"Effort", cfg.Effort, "high"},
-		{"PermissionMode", cfg.PermissionMode, "dontAsk"},
+		// The mode the audit asks for is the mode that runs: Claude Code 2.1.332
+		// forces default whenever CLAUDE_CODE_SUBPROCESS_ENV_SCRUB is set, so the
+		// launch asks for default and the launcher refuses a session that reports
+		// another one (issue #592).
+		{"PermissionMode", cfg.PermissionMode, "default"},
 	} {
 		if field.got != field.want {
 			t.Errorf("the audit launch's %s is %q, want %q", field.name, field.got, field.want)

@@ -5,12 +5,14 @@
 package audit_test
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/timothymamo/shift2eu/ci/internal/audit"
+	"github.com/timothymamo/shift2eu/ci/internal/claudecode"
 )
 
 const (
@@ -55,4 +57,33 @@ func writeFile(t *testing.T, path, body string, mode os.FileMode) {
 // error can: a run must print it nowhere.
 func secretText() string {
 	return strings.Join([]string{testToken, testCanary, "the-clis-own-text"}, " ")
+}
+
+// assertPermissionModeError fails unless err is the launcher's refusal of a
+// session that reported another permission mode, kept through a step's wrapping
+// (issue #592): a *claudecode.PermissionModeError with the expected and the
+// reported mode, whose text is the fixed sentence.
+func assertPermissionModeError(t *testing.T, err error, expected, reported string) {
+	t.Helper()
+
+	if err == nil {
+		t.Fatal("the step returned no error, want the launcher's refusal: the session's permission mode is not the one asked for")
+	}
+
+	var modeErr *claudecode.PermissionModeError
+	if !errors.As(err, &modeErr) {
+		t.Fatalf("the step's error %v is no *claudecode.PermissionModeError: the launcher's refusal is kept through the step's wrapping (issue #592)", err)
+	}
+
+	want := struct{ Expected, Reported string }{Expected: expected, Reported: reported}
+	got := struct{ Expected, Reported string }{Expected: modeErr.Expected, Reported: modeErr.Reported}
+
+	if want != got {
+		t.Errorf("the permission mode error's expected and reported modes are %v, want %v", got, want)
+	}
+
+	text := "the session's permission mode is not the one asked for: expected " + expected + ", reported " + reported
+	if !strings.Contains(err.Error(), text) {
+		t.Errorf("the step's error %q does not hold %q: the refusal is made of fixed words alone", err, text)
+	}
 }

@@ -368,6 +368,19 @@ func recordedEnv(t *testing.T, record string) map[string]string {
 	return values
 }
 
+// recordedArgs returns the arguments the fake CLI ran with, one per line, the
+// empty argument included.
+func recordedArgs(t *testing.T, record string) []string {
+	t.Helper()
+
+	body, err := os.ReadFile(filepath.Join(record, "args"))
+	if err != nil {
+		t.Fatalf("read the fake CLI's arguments: %v; the run never reached it", err)
+	}
+
+	return strings.Split(strings.TrimSuffix(string(body), "\n"), "\n")
+}
+
 // TestRunReachesTheFakeCLIUnderATemporaryRoot pins the ADR's whole-launcher test:
 // the real steps carry a run from the tarball's integrity to the CLI's launch
 // under a temporary root, and the environment the fake CLI was given is the
@@ -391,6 +404,14 @@ func TestRunReachesTheFakeCLIUnderATemporaryRoot(t *testing.T) {
 	}
 
 	assertTheAllowListAlone(t, recordedEnv(t, record), root)
+
+	// The mode the audit asks for is the mode the scrub lets run (issue #592):
+	// Claude Code 2.1.332 forces default whenever CLAUDE_CODE_SUBPROCESS_ENV_SCRUB
+	// is set, so the workflow's model step asks for default, and the launcher
+	// refuses a session that reports another mode.
+	if mode := flagArgument(t, recordedArgs(t, record), "--permission-mode"); mode != "default" {
+		t.Errorf("the CLI's --permission-mode is %q, want %q: default is the mode the scrub lets run, and the launch asks for the mode that runs (issue #592)", mode, "default")
+	}
 
 	// The audit's system prompt is the checkout copy's skill, and the file that
 	// carries it lies in the state area's tmp/, which the caller names, not in

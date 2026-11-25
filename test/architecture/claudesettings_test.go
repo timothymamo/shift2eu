@@ -40,6 +40,11 @@ const claudeSettingsPath = ".github/security-audit/claude-settings.json"
 // preflight's probes hold the rules to each tool on every run.
 var claudeSettings = map[string]any{
 	"permissions": map[string]any{
+		// Inert under CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1, which makes Claude Code
+		// 2.1.332 run the default mode whatever this file says: the audit's launch
+		// asks for default explicitly and the launcher checks the mode the session
+		// reports (ADR 0040, issue #592). The entry stays the stricter value for a
+		// CLI that would honour it.
 		"defaultMode":                  "dontAsk",
 		"disableBypassPermissionsMode": "disable",
 		"allow": []any{
