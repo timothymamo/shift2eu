@@ -58,8 +58,8 @@ starts with its inputs, the region its prices are for, and the fits counted:
 |---|---|
 | direct | 6 |
 | partial | 5 |
-| none | 6 |
-| total | 17 |
+| none | 7 |
+| total | 18 |
 ```
 
 [Read the report](#read-the-report) explains the rest. `--output report.md` writes the report to a
@@ -90,11 +90,11 @@ summary counts the fits and gives each target's estimated total:
 |---|---|---|---|
 | direct | 8 | 6 | 6 |
 | partial | 3 | 5 | 2 |
-| none | 6 | 6 | 9 |
-| total | 17 | 17 | 17 |
-| `OVHcloud` estimate | €2,004.93 per month for 10 of 17 resources (storage not included in 4 estimates) |  |  |
-| `Scaleway` estimate |  | €587.58 per month for 8 of 17 resources (storage not included in 4 estimates) |  |
-| `UpCloud` estimate |  |  | €359.31 per month for 8 of 17 resources |
+| none | 7 | 7 | 10 |
+| total | 18 | 18 | 18 |
+| `OVHcloud` estimate | €2,004.93 per month for 10 of 18 resources (storage not included in 4 estimates) |  |  |
+| `Scaleway` estimate |  | €587.58 per month for 8 of 18 resources (storage not included in 4 estimates) |  |
+| `UpCloud` estimate |  |  | €359.31 per month for 8 of 18 resources |
 
 Estimates are list prices on each catalog's retrieval date, excluding VAT and discounts; each target's own section gives its basis.
 ```
@@ -137,8 +137,8 @@ Every total in it estimated something, so `--schema-version 2` writes the same d
   "summary": {
     "direct": 6,
     "partial": 5,
-    "none": 6,
-    "total": 17
+    "none": 7,
+    "total": 18
   },
   "estimate": {
     "region": "fr-par",
@@ -153,7 +153,7 @@ Every total in it estimated something, so `--schema-version 2` writes the same d
     "total": {
       "amount": "587.58",
       "estimated": 8,
-      "resources": 17,
+      "resources": 18,
       "storageNotIncluded": 4
     }
   },
@@ -321,13 +321,14 @@ database belongs to no workload:
 
 ### `shop`
 
-- Fit: 4 direct, 4 partial, 5 none
-- Monthly estimate: €517.16 per month for 6 of 13 resources (storage not included in 4 estimates), list prices on 2026-11-13, excluding VAT and discounts
-- Source cost: `USD` $518.92 for 4 of 13 resources
+- Fit: 4 direct, 4 partial, 6 none
+- Monthly estimate: €517.16 per month for 6 of 14 resources (storage not included in 4 estimates), list prices on 2026-11-13, excluding VAT and discounts
+- Source cost: `USD` $518.92 for 4 of 14 resources
 - Blockers:
   - `shop-catalog-docs`: no offering in the `Scaleway` catalog for `database.mongodb`
   - `shop-images`: no offering in the `Scaleway` catalog for `registry.container`
   - `shop-order-events`: no offering in the `Scaleway` catalog for `messaging.topic`
+  - `shop-product-search`: no offering in the `Scaleway` catalog for `search.opensearch`
   - `shop-sessions`: no offering in the `Scaleway` catalog for `cache.redis`
   - `shop.example.com`: not classified
 
@@ -344,11 +345,11 @@ the source's cost is shown beside it per currency, never converted, with how man
 ```markdown
 ## Cost estimate
 
-- Total: €587.58 per month for 8 of 17 resources (storage not included in 4 estimates)
+- Total: €587.58 per month for 8 of 18 resources (storage not included in 4 estimates)
 - Estimate: list prices on 2026-11-13, excluding VAT and discounts; a fixed fee is the offering's listed fee
 - Prices in `fr-par`
 - Hours: plan price × count × hours / 730, 730 hours for a resource that gives none
-- Source cost: `USD` $518.92 for 4 of 17 resources
+- Source cost: `USD` $518.92 for 4 of 18 resources
 ```
 
 An estimate is not a quote: it uses list prices on the snapshot's date, without VAT, discounts,

@@ -17,11 +17,11 @@
 |---|---|---|---|
 | direct | 8 | 6 | 6 |
 | partial | 3 | 5 | 2 |
-| none | 6 | 6 | 9 |
-| total | 17 | 17 | 17 |
-| `OVHcloud` estimate | €2,004.93 per month for 10 of 17 resources (storage not included in 4 estimates) |  |  |
-| `Scaleway` estimate |  | €587.58 per month for 8 of 17 resources (storage not included in 4 estimates) |  |
-| `UpCloud` estimate |  |  | €359.31 per month for 8 of 17 resources |
+| none | 7 | 7 | 10 |
+| total | 18 | 18 | 18 |
+| `OVHcloud` estimate | €2,004.93 per month for 10 of 18 resources (storage not included in 4 estimates) |  |  |
+| `Scaleway` estimate |  | €587.58 per month for 8 of 18 resources (storage not included in 4 estimates) |  |
+| `UpCloud` estimate |  |  | €359.31 per month for 8 of 18 resources |
 
 Estimates are list prices on each catalog's retrieval date, excluding VAT and discounts; each target's own section gives its basis.
 
@@ -39,6 +39,7 @@ Estimates are list prices on each catalog's retrieval date, excluding VAT and di
 | `shop-order-events` | `messaging.topic` | none |  | not estimated: no fit | none |  | not estimated: no fit | none |  | not estimated: no fit |
 | `shop-orders` | `messaging.queue` | none |  | not estimated: no fit | partial | `Queues` | not estimated: usage-priced | none |  | not estimated: no fit |
 | `shop-orders-dlq` | `messaging.queue` | none |  | not estimated: no fit | partial | `Queues` | not estimated: usage-priced | none |  | not estimated: no fit |
+| `shop-product-search` | `search.opensearch` | none |  | not estimated: no fit | none |  | not estimated: no fit | none |  | not estimated: no fit |
 | `shop-sessions` | `cache.redis` | partial | `Databases for Valkey Multi-node` | €721.53 (730 hours assumed) | none |  | not estimated: no fit | none |  | not estimated: no fit |
 | `shop-thumbnailer` | `serverless.function` | none |  | not estimated: no fit | direct | `Serverless Functions` | not estimated: usage-priced | none |  | not estimated: no fit |
 | `shop-web-1` | `compute.vm` | direct | `Instances` | €37.38 (count assumed 1) (730 hours assumed) (boot volume not included) | direct | `Instances` | €40.21 (count assumed 1) (730 hours assumed) (boot volume not included) | direct | `Cloud Servers` | €18.00 (count assumed 1) (730 hours assumed) |
@@ -57,6 +58,10 @@ Estimates are list prices on each catalog's retrieval date, excluding VAT and di
   - `OVHcloud`: no offering in the `OVHcloud` catalog for `messaging.topic`
   - `Scaleway`: no offering in the `Scaleway` catalog for `messaging.topic`
   - `UpCloud`: no offering in the `UpCloud` catalog for `messaging.topic`
+- `shop-product-search`
+  - `OVHcloud`: no offering in the `OVHcloud` catalog for `search.opensearch`
+  - `Scaleway`: no offering in the `Scaleway` catalog for `search.opensearch`
+  - `UpCloud`: no offering in the `UpCloud` catalog for `search.opensearch`
 - `shop.example.com`
   - `OVHcloud`: not classified
   - `Scaleway`: not classified
@@ -70,8 +75,8 @@ Estimates are list prices on each catalog's retrieval date, excluding VAT and di
 |---|---|
 | direct | 8 |
 | partial | 3 |
-| none | 6 |
-| total | 17 |
+| none | 7 |
+| total | 18 |
 
 ### Resources
 
@@ -87,6 +92,7 @@ Estimates are list prices on each catalog's retrieval date, excluding VAT and di
 | `shop-order-events` | `AWS::SNS::Topic` | `messaging.topic` | none |  |  | not estimated: no fit | depends-on `shop-orders` | no offering in the `OVHcloud` catalog for `messaging.topic` |
 | `shop-orders` | `AWS::SQS::Queue` | `messaging.queue` | none |  |  | not estimated: no fit |  | no offering in the `OVHcloud` catalog for `messaging.queue` |
 | `shop-orders-dlq` | `AWS::SQS::Queue` | `messaging.queue` | none |  |  | not estimated: no fit | dead-letter-queue-of `shop-orders` | no offering in the `OVHcloud` catalog for `messaging.queue` |
+| `shop-product-search` | `AWS::OpenSearchService::Domain` | `search.opensearch` | none |  |  | not estimated: no fit |  | no offering in the `OVHcloud` catalog for `search.opensearch` |
 | `shop-sessions` | `AWS::ElastiCache::ReplicationGroup` | `cache.redis` | partial | `Databases for Valkey Multi-node` (tie: `Databases for Valkey Multi-node 3-AZ`) | `Business DB1-15` (4 vCPU, 15 GiB) | €721.53 (730 hours assumed) |  | `Databases for Valkey Multi-node` does not offer `sharding` |
 | `shop-thumbnailer` | `AWS::Lambda::Function` | `serverless.function` | none |  |  | not estimated: no fit | depends-on `shop-assets` | no offering in the `OVHcloud` catalog for `serverless.function` |
 | `shop-web-1` | `AWS::EC2::Instance` | `compute.vm` | direct | `Instances` | `b3-8` (2 vCPU, 8 GiB) | €37.38 (count assumed 1) (730 hours assumed) (boot volume not included) | depends-on `shop-orders` | `Instances` offers every capability the resource uses |
@@ -107,6 +113,7 @@ Estimates are list prices on each catalog's retrieval date, excluding VAT and di
 - `shop-order-events`: no offering in the `OVHcloud` catalog for `messaging.topic`
 - `shop-orders`: no offering in the `OVHcloud` catalog for `messaging.queue`
 - `shop-orders-dlq`: no offering in the `OVHcloud` catalog for `messaging.queue`
+- `shop-product-search`: no offering in the `OVHcloud` catalog for `search.opensearch`
 - `shop-thumbnailer`: no offering in the `OVHcloud` catalog for `serverless.function`
 - `shop.example.com`: not classified
 - `shop-order-events`: affected by a blocker on `shop-orders`
@@ -125,13 +132,14 @@ Estimates are list prices on each catalog's retrieval date, excluding VAT and di
 
 #### `shop`
 
-- Fit: 6 direct, 3 partial, 4 none
-- Monthly estimate: €1,840.37 per month for 8 of 13 resources (storage not included in 4 estimates), list prices on 2026-11-25, excluding VAT and discounts
-- Source cost: `USD` $518.92 for 4 of 13 resources
+- Fit: 6 direct, 3 partial, 5 none
+- Monthly estimate: €1,840.37 per month for 8 of 14 resources (storage not included in 4 estimates), list prices on 2026-11-25, excluding VAT and discounts
+- Source cost: `USD` $518.92 for 4 of 14 resources
 - Blockers:
   - `shop-order-events`: no offering in the `OVHcloud` catalog for `messaging.topic`
   - `shop-orders`: no offering in the `OVHcloud` catalog for `messaging.queue`
   - `shop-orders-dlq`: no offering in the `OVHcloud` catalog for `messaging.queue`
+  - `shop-product-search`: no offering in the `OVHcloud` catalog for `search.opensearch`
   - `shop.example.com`: not classified
 
 #### No workload
@@ -143,11 +151,11 @@ Estimates are list prices on each catalog's retrieval date, excluding VAT and di
 
 ### Cost estimate
 
-- Total: €2,004.93 per month for 10 of 17 resources (storage not included in 4 estimates)
+- Total: €2,004.93 per month for 10 of 18 resources (storage not included in 4 estimates)
 - Estimate: list prices on 2026-11-25, excluding VAT and discounts; a fixed fee is the offering's listed fee
 - Prices in `GRA`
 - Hours: plan price × count × hours / 730, 730 hours for a resource that gives none
-- Source cost: `USD` $518.92 for 4 of 17 resources
+- Source cost: `USD` $518.92 for 4 of 18 resources
 
 ## `Scaleway`
 
@@ -157,8 +165,8 @@ Estimates are list prices on each catalog's retrieval date, excluding VAT and di
 |---|---|
 | direct | 6 |
 | partial | 5 |
-| none | 6 |
-| total | 17 |
+| none | 7 |
+| total | 18 |
 
 ### Resources
 
@@ -174,6 +182,7 @@ Estimates are list prices on each catalog's retrieval date, excluding VAT and di
 | `shop-order-events` | `AWS::SNS::Topic` | `messaging.topic` | none |  |  | not estimated: no fit | depends-on `shop-orders` | no offering in the `Scaleway` catalog for `messaging.topic` |
 | `shop-orders` | `AWS::SQS::Queue` | `messaging.queue` | partial | `Queues` |  | not estimated: usage-priced |  | `Queues` does not offer `encryption-at-rest` |
 | `shop-orders-dlq` | `AWS::SQS::Queue` | `messaging.queue` | partial | `Queues` |  | not estimated: usage-priced | dead-letter-queue-of `shop-orders` | `Queues` does not offer `encryption-at-rest` |
+| `shop-product-search` | `AWS::OpenSearchService::Domain` | `search.opensearch` | none |  |  | not estimated: no fit |  | no offering in the `Scaleway` catalog for `search.opensearch` |
 | `shop-sessions` | `AWS::ElastiCache::ReplicationGroup` | `cache.redis` | none |  |  | not estimated: no fit |  | no offering in the `Scaleway` catalog for `cache.redis` |
 | `shop-thumbnailer` | `AWS::Lambda::Function` | `serverless.function` | direct | `Serverless Functions` |  | not estimated: usage-priced | depends-on `shop-assets` | `Serverless Functions` offers every capability the resource uses |
 | `shop-web-1` | `AWS::EC2::Instance` | `compute.vm` | direct | `Instances` | `PLAY2-MICRO` (4 vCPU, 8 GiB) | €40.21 (count assumed 1) (730 hours assumed) (boot volume not included) | depends-on `shop-orders` | `Instances` offers every capability the resource uses |
@@ -196,6 +205,7 @@ Estimates are list prices on each catalog's retrieval date, excluding VAT and di
 - `shop-cdn`: not classified
 - `shop-images`: no offering in the `Scaleway` catalog for `registry.container`
 - `shop-order-events`: no offering in the `Scaleway` catalog for `messaging.topic`
+- `shop-product-search`: no offering in the `Scaleway` catalog for `search.opensearch`
 - `shop-sessions`: no offering in the `Scaleway` catalog for `cache.redis`
 - `shop.example.com`: not classified
 
@@ -211,13 +221,14 @@ Estimates are list prices on each catalog's retrieval date, excluding VAT and di
 
 #### `shop`
 
-- Fit: 4 direct, 4 partial, 5 none
-- Monthly estimate: €517.16 per month for 6 of 13 resources (storage not included in 4 estimates), list prices on 2026-11-13, excluding VAT and discounts
-- Source cost: `USD` $518.92 for 4 of 13 resources
+- Fit: 4 direct, 4 partial, 6 none
+- Monthly estimate: €517.16 per month for 6 of 14 resources (storage not included in 4 estimates), list prices on 2026-11-13, excluding VAT and discounts
+- Source cost: `USD` $518.92 for 4 of 14 resources
 - Blockers:
   - `shop-catalog-docs`: no offering in the `Scaleway` catalog for `database.mongodb`
   - `shop-images`: no offering in the `Scaleway` catalog for `registry.container`
   - `shop-order-events`: no offering in the `Scaleway` catalog for `messaging.topic`
+  - `shop-product-search`: no offering in the `Scaleway` catalog for `search.opensearch`
   - `shop-sessions`: no offering in the `Scaleway` catalog for `cache.redis`
   - `shop.example.com`: not classified
 
@@ -230,11 +241,11 @@ Estimates are list prices on each catalog's retrieval date, excluding VAT and di
 
 ### Cost estimate
 
-- Total: €587.58 per month for 8 of 17 resources (storage not included in 4 estimates)
+- Total: €587.58 per month for 8 of 18 resources (storage not included in 4 estimates)
 - Estimate: list prices on 2026-11-13, excluding VAT and discounts; a fixed fee is the offering's listed fee
 - Prices in `fr-par`
 - Hours: plan price × count × hours / 730, 730 hours for a resource that gives none
-- Source cost: `USD` $518.92 for 4 of 17 resources
+- Source cost: `USD` $518.92 for 4 of 18 resources
 
 ## `UpCloud`
 
@@ -244,8 +255,8 @@ Estimates are list prices on each catalog's retrieval date, excluding VAT and di
 |---|---|
 | direct | 6 |
 | partial | 2 |
-| none | 9 |
-| total | 17 |
+| none | 10 |
+| total | 18 |
 
 ### Resources
 
@@ -261,6 +272,7 @@ Estimates are list prices on each catalog's retrieval date, excluding VAT and di
 | `shop-order-events` | `AWS::SNS::Topic` | `messaging.topic` | none |  |  | not estimated: no fit | depends-on `shop-orders` | no offering in the `UpCloud` catalog for `messaging.topic` |
 | `shop-orders` | `AWS::SQS::Queue` | `messaging.queue` | none |  |  | not estimated: no fit |  | no offering in the `UpCloud` catalog for `messaging.queue` |
 | `shop-orders-dlq` | `AWS::SQS::Queue` | `messaging.queue` | none |  |  | not estimated: no fit | dead-letter-queue-of `shop-orders` | no offering in the `UpCloud` catalog for `messaging.queue` |
+| `shop-product-search` | `AWS::OpenSearchService::Domain` | `search.opensearch` | none |  |  | not estimated: no fit |  | no offering in the `UpCloud` catalog for `search.opensearch` |
 | `shop-sessions` | `AWS::ElastiCache::ReplicationGroup` | `cache.redis` | none |  |  | not estimated: no fit |  | no offering in the `UpCloud` catalog for `cache.redis` |
 | `shop-thumbnailer` | `AWS::Lambda::Function` | `serverless.function` | none |  |  | not estimated: no fit | depends-on `shop-assets` | no offering in the `UpCloud` catalog for `serverless.function` |
 | `shop-web-1` | `AWS::EC2::Instance` | `compute.vm` | direct | `Cloud Servers` | `STARTER-2xCPU-8GB` (2 vCPU, 8 GiB) | €18.00 (count assumed 1) (730 hours assumed) | depends-on `shop-orders` | `Cloud Servers` offers every capability the resource uses |
@@ -282,6 +294,7 @@ Estimates are list prices on each catalog's retrieval date, excluding VAT and di
 - `shop-order-events`: no offering in the `UpCloud` catalog for `messaging.topic`
 - `shop-orders`: no offering in the `UpCloud` catalog for `messaging.queue`
 - `shop-orders-dlq`: no offering in the `UpCloud` catalog for `messaging.queue`
+- `shop-product-search`: no offering in the `UpCloud` catalog for `search.opensearch`
 - `shop-sessions`: no offering in the `UpCloud` catalog for `cache.redis`
 - `shop-thumbnailer`: no offering in the `UpCloud` catalog for `serverless.function`
 - `shop.example.com`: not classified
@@ -301,15 +314,16 @@ Estimates are list prices on each catalog's retrieval date, excluding VAT and di
 
 #### `shop`
 
-- Fit: 4 direct, 2 partial, 7 none
-- Monthly estimate: €286.30 per month for 6 of 13 resources, list prices on 2026-11-13, excluding VAT and discounts
-- Source cost: `USD` $518.92 for 4 of 13 resources
+- Fit: 4 direct, 2 partial, 8 none
+- Monthly estimate: €286.30 per month for 6 of 14 resources, list prices on 2026-11-13, excluding VAT and discounts
+- Source cost: `USD` $518.92 for 4 of 14 resources
 - Blockers:
   - `shop-catalog-docs`: no offering in the `UpCloud` catalog for `database.mongodb`
   - `shop-images`: no offering in the `UpCloud` catalog for `registry.container`
   - `shop-order-events`: no offering in the `UpCloud` catalog for `messaging.topic`
   - `shop-orders`: no offering in the `UpCloud` catalog for `messaging.queue`
   - `shop-orders-dlq`: no offering in the `UpCloud` catalog for `messaging.queue`
+  - `shop-product-search`: no offering in the `UpCloud` catalog for `search.opensearch`
   - `shop-sessions`: no offering in the `UpCloud` catalog for `cache.redis`
   - `shop.example.com`: not classified
 
@@ -322,8 +336,8 @@ Estimates are list prices on each catalog's retrieval date, excluding VAT and di
 
 ### Cost estimate
 
-- Total: €359.31 per month for 8 of 17 resources
+- Total: €359.31 per month for 8 of 18 resources
 - Estimate: list prices on 2026-11-13, excluding VAT and discounts; a fixed fee is the offering's listed fee
 - Prices in `de-fra1`
 - Hours: plan price × count × hours / 730, 730 hours for a resource that gives none; a plan billed for at most 672 hours a month costs plan price × count × min(hours, 672) / 672
-- Source cost: `USD` $518.92 for 4 of 17 resources
+- Source cost: `USD` $518.92 for 4 of 18 resources
