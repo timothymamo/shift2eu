@@ -26,6 +26,7 @@
 #   {"selfLink": ".../forwardingRules/..."}   compute forwarding-rules list
 #   {"selfLink": ".../targetPools/..."}       compute target-pools list
 #   {"selfLink": ".../targetHttpsProxies/.."} compute target-https-proxies list
+#   {"selfLink": ".../targetHttpProxies/.."}  compute target-http-proxies list
 #   {"name": ".../instances/..", "memorySizeGb"} redis instances list
 #   {"name": ".../clusters/..", "shardCount"} redis clusters list
 #   {"name": ".../instances/..", "nodeConfig"} memorystore instances list
