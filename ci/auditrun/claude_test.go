@@ -48,6 +48,7 @@ var auditDirs = [][]string{
 	{"srv", "audit", "checks"},
 	{"srv", "audit", "work"},
 	{"srv", "audit", "work", "tmp"},
+	{"srv", "audit", "cwd"},
 	{"srv", "audit", "state"},
 	{"srv", "audit", "state", "home"},
 	{"srv", "audit", "state", "tmp"},
