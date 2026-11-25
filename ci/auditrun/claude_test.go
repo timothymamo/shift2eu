@@ -48,7 +48,8 @@ var auditDirs = [][]string{
 	{"srv", "audit", "checks"},
 	{"srv", "audit", "work"},
 	{"srv", "audit", "work", "tmp"},
-	{"srv", "audit", "cwd"},
+	{"srv", "audit", "cwd-preflight"},
+	{"srv", "audit", "cwd-audit"},
 	{"srv", "audit", "state"},
 	{"srv", "audit", "state", "home"},
 	{"srv", "audit", "state", "tmp"},
@@ -121,13 +122,14 @@ func (observed) GitHubEnvDigestChanged() bool { return false }
 // no socket, so a default test runs neither.
 func observe(context.Context, string, string, [32]byte, bool) audit.Effects { return observed{} }
 
-// claudeFakeScript returns the fake CLI: it records its environment, its
-// arguments and the file either system prompt flag names, prints nothing and exits
-// 0. A run that printed no transcript is a preflight whose CLI run failed, which is
-// what the run's line must say.
+// claudeFakeScript returns the fake CLI: it records the working directory it was
+// started in, its environment, its arguments and the file either system prompt flag
+// names, prints nothing and exits 0. A run that printed no transcript is a preflight
+// whose CLI run failed, which is what the run's line must say.
 func claudeFakeScript(record string) string {
 	return fmt.Sprintf(`#!/bin/sh
 record=%q
+pwd > "$record/cwd"
 env > "$record/env"
 for a in "$@"; do printf '%%s\n' "$a"; done > "$record/args"
 prev=
@@ -430,6 +432,20 @@ func TestRunReachesTheFakeCLIUnderATemporaryRoot(t *testing.T) {
 
 	if want := filepath.Join(root, "srv", "audit", "state", "tmp"); filepath.Dir(systemFile) != want {
 		t.Errorf("the system prompt file is %q, want it in %q: the audit's launch names the directory (issue #277)", systemFile, want)
+	}
+
+	// The preflight's session starts in a directory of its own, a sibling of the
+	// work area and of the audit's directory: the placeholders the scrub leaves
+	// in the directory the CLI starts in, and a CLAUDE.md beside them, never
+	// reach the area the audit checks or the directory the audit's session starts
+	// in (issues #615, #614).
+	cwd, err := os.ReadFile(filepath.Join(record, "cwd"))
+	if err != nil {
+		t.Fatalf("read the working directory from the fake CLI: %v", err)
+	}
+
+	if want := filepath.Join(root, "srv", "audit", "cwd-preflight"); strings.TrimSpace(string(cwd)) != want {
+		t.Errorf("the preflight's session started in %q, want the preflight's own working directory %q: the two sessions do not share one (issues #615, #614)", strings.TrimSpace(string(cwd)), want)
 	}
 
 	assertNoSecret(t, result)

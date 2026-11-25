@@ -457,16 +457,30 @@ func TestPreflightJudgesAFailedRunsEffects(t *testing.T) {
 }
 
 // launchFake is the fake launch of the audit's one CLI run: it records that it
-// ran, and writes what the case asks for into the work area.
+// ran and the working directory the config it was handed names, and leaves what
+// the case asks for in the work area and in that working directory.
 type launchFake struct {
 	called bool
+	// workDir is the working directory of the config the audit's launch was
+	// handed: the directory the session starts in.
+	workDir string
 	// write, when set, is what the run leaves in the work area.
 	write func(root string) error
+	// writeInWorkDir, when set, is what the run leaves in the working directory
+	// it was handed.
+	writeInWorkDir func(workDir string) error
 }
 
 // launch is the Launch the audit takes.
-func (l *launchFake) launch(_ context.Context, root string, _ claudecode.Config, _ claudecode.Prompt) error {
+func (l *launchFake) launch(_ context.Context, root string, cfg claudecode.Config, _ claudecode.Prompt) error {
 	l.called = true
+	l.workDir = cfg.WorkDir
+
+	if l.writeInWorkDir != nil {
+		if err := l.writeInWorkDir(cfg.WorkDir); err != nil {
+			return err
+		}
+	}
 
 	if l.write == nil {
 		return nil
@@ -602,12 +616,6 @@ func workPath(root string, parts ...string) string {
 	return filepath.Join(append([]string{root, "srv", "audit", "work"}, parts...)...)
 }
 
-// cwdPath is a path of the CLI's working directory under root: the directory of
-// its own the launch starts it in, a sibling of the work area (issue #615).
-func cwdPath(root string, parts ...string) string {
-	return filepath.Join(append([]string{root, "srv", "audit", "cwd"}, parts...)...)
-}
-
 // cliPlaceholderFiles are the empty files Claude Code 2.1.332 creates in its
 // working directory at session start when CLAUDE_CODE_SUBPROCESS_ENV_SCRUB is
 // set, and never removes (issue #615).
@@ -717,19 +725,28 @@ func jsonEscaped(s string) string {
 // limit is refused as an invalid result rather than walked to its end, and one
 // nested to the limit is accepted (issue #277, round E nit 1, round J nit 6).
 //
-// The CLI's working directory is a directory of its own, a sibling of the work
-// area, so the empty placeholders Claude Code 2.1.332 leaves in the directory
-// it starts in - .env, package.json, node_modules/.bin, .claude/agents - are
-// outside the area the audit checks and tolerate no name in it (issue #615).
+// The CLI's audit session starts in a working directory of its own, a sibling of
+// the work area and of the preflight's, so the empty placeholders Claude Code
+// 2.1.332 leaves in the directory it starts in - .env, package.json,
+// node_modules/.bin, .claude/agents - are outside the area the audit checks and
+// tolerate no name in it (issue #615). Before its run the audit refuses that
+// directory unless it is still an empty real one - a CLAUDE.md a preflight
+// session planted there would be loaded at session start - and after it, the
+// $GITHUB_ENV file must be the one the launcher digested before the run (issues
+// #615, #614).
 func TestAuditTakesOnlyAResultFileTheRunWrote(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
 		name string
-		// before, when set, lays something in the work area before the run.
+		// before, when set, lays something in the work area before the run - or in
+		// one of the CLI's two working directories, where a session's leavings land.
 		before func(t *testing.T, root string)
 		// write, when set, is what the run leaves in the work area.
 		write func(root string) error
+		// writeInWorkDir, when set, is what the run leaves in the working directory
+		// the launch hands it.
+		writeInWorkDir func(workDir string) error
 		// wantLaunched is whether the CLI's run happens at all.
 		wantLaunched bool
 		// wantRefused is whether the run fails with the audit's constant line.
@@ -880,23 +897,83 @@ func TestAuditTakesOnlyAResultFileTheRunWrote(t *testing.T) {
 			wantRefused: true,
 		},
 		{
-			// The CLI starts in a directory of its own, and the placeholders it
-			// leaves there are outside the area the audit checks: the run passes
-			// and its result file is taken as the other cases' is (issue #615).
-			name: "the run left the CLI's placeholders in its own directory",
-			write: func(root string) error {
-				if err := writeCLIPlaceholders(cwdPath(root)); err != nil {
-					return err
-				}
-
-				return os.WriteFile(workPath(root, "result.json"), []byte(resultFile), 0o600)
+			// The CLI starts in the working directory the launch hands it, and the
+			// placeholders it leaves there are outside the area the audit checks:
+			// the run passes and its result file is taken as the other cases' is
+			// (issue #615). They are left where the handed config points, never at
+			// a path this test invents: a run that started elsewhere would leave
+			// them where nothing looks, and the case would pass for the wrong
+			// reason (issue #615, the reviewer's N2).
+			name:           "the run left the CLI's placeholders in the working directory it was handed",
+			writeInWorkDir: writeCLIPlaceholders,
+			write:          func(root string) error { return os.WriteFile(workPath(root, "result.json"), []byte(resultFile), 0o600) },
+			wantLaunched:   true,
+			wantResult:     resultFile,
+		},
+		{
+			// The preflight's session leaves the placeholders the scrub creates,
+			// and a CLAUDE.md, in the directory it starts in - the preflight's own
+			// - and the audit's session starts in another one: what the preflight
+			// left is outside everything the audit checks, and the run passes with
+			// its result file taken (issues #615, #614).
+			name: "the preflight left the CLI's placeholders and a CLAUDE.md in its own working directory",
+			before: func(t *testing.T, root string) {
+				t.Helper()
+				leaveCLIPlaceholders(t, pathOf(root, cwdPreflight))
 			},
+			write:        func(root string) error { return os.WriteFile(workPath(root, "result.json"), []byte(resultFile), 0o600) },
 			wantLaunched: true,
 			wantResult:   resultFile,
 		},
-		// The other half of that decision: no placeholder is tolerated in the
-		// work area itself, where the launcher's check would meet one of the
-		// prefixes the CLI's own working directory holds (issue #615).
+		{
+			// The CLI loads a CLAUDE.md from the directory it starts in, so an
+			// entry of the audit's working directory is what a preflight session
+			// could plant there: the audit refuses it before its run, as it
+			// refuses a work area that is not empty (issues #615, #614).
+			name: "the audit's working directory holds a CLAUDE.md",
+			before: func(t *testing.T, root string) {
+				t.Helper()
+				writeFile(t, filepath.Join(pathOf(root, cwdAudit), "CLAUDE.md"), "# planted by the preflight's session\n", 0o600)
+			},
+			wantRefused: true,
+		},
+		{
+			// The audit's working directory is an entry of the layout like any
+			// other: a symbolic link there is refused rather than followed, and it
+			// is no longer the empty real directory the audit's run starts in
+			// (issues #615, #614).
+			name:        "the audit's working directory is a symbolic link",
+			before:      linkElsewhere(cwdAudit),
+			wantRefused: true,
+		},
+		{
+			// The $GITHUB_ENV file decides what a later step of the job runs with,
+			// and the audit's session runs Bash: the launcher digests the file
+			// before the audit's run and after it, and a change is the run having
+			// written to a file it must not touch. The result file is written, so
+			// the change is the only reason this run fails (issue #614).
+			name: "the run appended a line to the $GITHUB_ENV file",
+			write: func(root string) error {
+				if err := os.WriteFile(workPath(root, "result.json"), []byte(resultFile), 0o600); err != nil {
+					return err
+				}
+
+				return os.WriteFile(testInputs(root).GitHubEnv, []byte("SOMETHING=else\nANTHROPIC_BASE_URL=https://api.example.invalid\n"), 0o600)
+			},
+			wantLaunched: true,
+			wantRefused:  true,
+		},
+		{
+			// The other half: a run that leaves the file as it was changes
+			// nothing, and its result file is taken (issue #614).
+			name:         "the run left the $GITHUB_ENV file as it was",
+			write:        func(root string) error { return os.WriteFile(workPath(root, "result.json"), []byte(resultFile), 0o600) },
+			wantLaunched: true,
+			wantResult:   resultFile,
+		},
+		// The other half of the placeholders decision above: no placeholder is
+		// tolerated in the work area itself, where the launcher's check would meet
+		// one of the prefixes the CLI's own working directory holds (issue #615).
 		{
 			name: "the work area holds the CLI's .env",
 			before: func(t *testing.T, root string) {
@@ -949,6 +1026,15 @@ func TestAuditTakesOnlyAResultFileTheRunWrote(t *testing.T) {
 				t.Errorf("the CLI's run %s, want it %s: the work area is checked before the run, so a result file that is already there never counts as the run's", ran(launch.called), ran(tc.wantLaunched))
 			}
 
+			// The audit's session starts in the audit's own working directory, a
+			// sibling of the work area and of the preflight's directory: the
+			// placeholders the CLI leaves there are outside the checked area, and
+			// nothing a preflight session leaves in its own directory reaches this
+			// one (issues #615, #614).
+			if want := pathOf(root, cwdAudit); launch.called && launch.workDir != want {
+				t.Errorf("the audit's session started in %q, want the audit's own working directory %q", launch.workDir, want)
+			}
+
 			// The run hands the publish job the bytes it read and checked, never
 			// the path (issue #277, round D finding 4): a run that passed hands on
 			// the file's own bytes, and a run that failed hands on nothing.
@@ -981,6 +1067,21 @@ func TestAuditTakesOnlyAResultFileTheRunWrote(t *testing.T) {
 			}
 		})
 	}
+}
+
+// leaveCLIPlaceholders lays what one CLI session leaves in the working directory
+// it starts in: the placeholders Claude Code 2.1.332 creates there under the
+// subprocess environment scrub, and a CLAUDE.md, which the CLI loads from that
+// directory, so a session that writes one changes what a session starting there
+// reads (issues #615, #614).
+func leaveCLIPlaceholders(t *testing.T, dir string) {
+	t.Helper()
+
+	if err := writeCLIPlaceholders(dir); err != nil {
+		t.Fatalf("leave the CLI's placeholders in %s: %v", dir, err)
+	}
+
+	writeFile(t, filepath.Join(dir, "CLAUDE.md"), "# planted by a CLI session\n", 0o600)
 }
 
 // TestAuditNamesAnOversizedResultOfItsOwn pins the other half of finding 4 of

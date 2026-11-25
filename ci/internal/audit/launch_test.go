@@ -3,9 +3,9 @@
 // file"): the model claude-fable-5-2 at effort high, the six tools the audit
 // uses and no other, the permission mode that refuses every tool call no rule
 // allows - default, the mode Claude Code 2.1.332 runs under the subprocess
-// environment scrub (issue #592) - the settings file read from the checkout copy, a
-// directory of its own as the working directory, out of the checked work area
-// (issue #615), a fresh HOME and TMPDIR in the state
+// environment scrub (issue #592) - the settings file read from the checkout copy, the
+// audit's own directory as the working directory, out of the checked work area and
+// apart from the preflight's (issues #615, #614), a fresh HOME and TMPDIR in the state
 // area, safe mode off so the settings file applies, and the skill appended to
 // the CLI's own system prompt.
 //
@@ -54,13 +54,16 @@ func TestLaunchConfigIsTheADRsLaunch(t *testing.T) {
 	}{
 		{"Path", cfg.Path, filepath.Join(root, "srv/audit/state/bin/claude")},
 		{"Settings", cfg.Settings, filepath.Join(root, "srv/audit/checkout/.github/security-audit/claude-settings.json")},
-		// The CLI's working directory is a directory of its own, a sibling of the
-		// work area. Under CLAUDE_CODE_SUBPROCESS_ENV_SCRUB the CLI creates
-		// empty placeholder files and directories - .env, package.json,
-		// node_modules/.bin, .claude/agents - in the directory it starts in and
-		// leaves them there, and the work area is checked to hold its tmp/ alone
-		// (issue #615).
-		{"WorkDir", cfg.WorkDir, filepath.Join(root, "srv/audit/cwd")},
+		// The audit's working directory is a directory of its own, a sibling of the
+		// work area and of the preflight's directory. Under
+		// CLAUDE_CODE_SUBPROCESS_ENV_SCRUB the CLI creates empty placeholder
+		// files and directories - .env, package.json, node_modules/.bin,
+		// .claude/agents - in the directory it starts in and leaves them there,
+		// and the work area is checked to hold its tmp/ alone. The two sessions
+		// do not share it: the CLI loads a CLAUDE.md from the directory it starts
+		// in, so a preflight session must not be able to plant one the audit
+		// loads (issues #615, #614).
+		{"WorkDir", cfg.WorkDir, filepath.Join(root, "srv/audit/cwd-audit")},
 		{"Home", cfg.Home, filepath.Join(root, "srv/audit/state/home")},
 		// The CLI writes a long system prompt to a file in this directory
 		// before it reads it back: the state area's tmp/, never the work area

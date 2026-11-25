@@ -2,9 +2,9 @@
 // 0040's model-job amendment, issue #277, "The audit directory"): the
 // directory exists where the model-free step made it, with the checkout copy
 // and the checks' results holding no write bit, an empty work area with its
-// tmp/, the CLI's working directory empty beside it, an empty state home/ and
-// tmp/, the state area's bin/ and out/, and the
-// wrapper at bin/audit-exec with mode 0555.
+// tmp/, the two CLI working directories - the preflight's and the audit's -
+// empty beside it, an empty state home/ and tmp/, the state area's bin/ and
+// out/, and the wrapper at bin/audit-exec with mode 0555.
 //
 // Every path the layout puts something of its own at is checked as an entry: a
 // symbolic link there - the state area's home/ in particular, which holds the
@@ -138,19 +138,23 @@ const worktreeGitConfig = `[core]
 
 // The audit directory's paths under a root, each a part of the layout.
 var (
-	checkout  = []string{"checkout"}
-	checks    = []string{"checks"}
-	work      = []string{"work"}
-	workTmp   = []string{"work", "tmp"}
-	cwd       = []string{"cwd"}
-	state     = []string{"state"}
-	home      = []string{"state", "home"}
-	stateTmp  = []string{"state", "tmp"}
-	stateBin  = []string{"state", "bin"}
-	stateOut  = []string{"state", "out"}
-	wrapper   = []string{"bin", "audit-exec"}
-	claudeBin = []string{"state", "bin", "claude"}
-	binDir    = []string{"bin"}
+	checkout = []string{"checkout"}
+	checks   = []string{"checks"}
+	work     = []string{"work"}
+	workTmp  = []string{"work", "tmp"}
+	// The two CLI sessions start in directories of their own: the preflight's
+	// and the audit's, each a sibling of the work area and of the other, so
+	// neither session's leavings reach the other (issues #615, #614).
+	cwdPreflight = []string{"cwd-preflight"}
+	cwdAudit     = []string{"cwd-audit"}
+	state        = []string{"state"}
+	home         = []string{"state", "home"}
+	stateTmp     = []string{"state", "tmp"}
+	stateBin     = []string{"state", "bin"}
+	stateOut     = []string{"state", "out"}
+	wrapper      = []string{"bin", "audit-exec"}
+	claudeBin    = []string{"state", "bin", "claude"}
+	binDir       = []string{"bin"}
 )
 
 // TestCheckLayoutTakesTheADRsDirectory pins the layout that passes. Nothing is
@@ -244,21 +248,34 @@ func TestCheckLayoutRefusesAnythingElse(t *testing.T) {
 		{name: "the work area is missing", wantNamed: "srv/audit/work", mutate: gone(work)},
 		{name: "the work area's tmp is missing", wantNamed: "srv/audit/work/tmp", mutate: gone(workTmp)},
 
-		// The CLI's working directory is a sibling of the work area, and the
-		// model-free step makes it: the CLI creates empty placeholder files and
-		// directories in the directory it starts in and removes none of them,
-		// so it starts in this one and the work area stays the model's (issue
-		// #615).
-		{name: "the CLI's working directory is missing", wantNamed: "srv/audit/cwd", mutate: gone(cwd)},
+		// Each CLI session starts in a directory of its own, a sibling of the
+		// work area, and the model-free step makes both: the CLI creates empty
+		// placeholder files and directories in the directory it starts in and
+		// removes none of them, so it starts in these and the work area stays
+		// the model's (issue #615). The audit's directory is checked again
+		// before the audit's run, so an entry a preflight session could plant in
+		// it - a CLAUDE.md, which the CLI loads at session start - is refused
+		// there rather than loaded (issue #614).
+		{name: "the preflight's working directory is missing", wantNamed: "srv/audit/cwd-preflight", mutate: gone(cwdPreflight)},
 		{
-			name:      "the CLI's working directory holds an entry of its own",
+			name:      "the preflight's working directory holds an entry of its own",
 			wantNamed: ".env",
 			mutate: func(t *testing.T, root string) {
 				t.Helper()
-				writeFile(t, filepath.Join(pathOf(root, cwd), ".env"), "", 0o600)
+				writeFile(t, filepath.Join(pathOf(root, cwdPreflight), ".env"), "", 0o600)
 			},
 		},
-		{name: "the CLI's working directory is a symbolic link", wantNamed: "srv/audit/cwd", mutate: linkElsewhere(cwd)},
+		{name: "the preflight's working directory is a symbolic link", wantNamed: "srv/audit/cwd-preflight", mutate: linkElsewhere(cwdPreflight)},
+		{name: "the audit's working directory is missing", wantNamed: "srv/audit/cwd-audit", mutate: gone(cwdAudit)},
+		{
+			name:      "the audit's working directory holds an entry of its own",
+			wantNamed: ".env",
+			mutate: func(t *testing.T, root string) {
+				t.Helper()
+				writeFile(t, filepath.Join(pathOf(root, cwdAudit), ".env"), "", 0o600)
+			},
+		},
+		{name: "the audit's working directory is a symbolic link", wantNamed: "srv/audit/cwd-audit", mutate: linkElsewhere(cwdAudit)},
 		{name: "the state area is missing", wantNamed: "srv/audit/state", mutate: gone(state)},
 		{name: "the state area's home is missing", wantNamed: "srv/audit/state/home", mutate: gone(home)},
 		{name: "the state area's tmp is missing", wantNamed: "srv/audit/state/tmp", mutate: gone(stateTmp)},
@@ -807,7 +824,8 @@ func writeAuditTree(t *testing.T, root string) {
 		checks,
 		work,
 		workTmp,
-		cwd,
+		cwdPreflight,
+		cwdAudit,
 		state,
 		home,
 		stateTmp,
