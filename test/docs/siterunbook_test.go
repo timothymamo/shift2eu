@@ -349,7 +349,9 @@ func TestSiteRunbookHostingWaitLoopNamesARefreshOnlyFailure(t *testing.T) {
 		// (issue #607).
 		const backup = "state-backup.json"
 
-		var keeps, removes []string
+		// naming collects the outcomes that name the backup; removing, those of them that go on to say to remove it
+		// once the cause is explained.
+		var naming, removing []string
 
 		for _, line := range section {
 			for _, outcome := range failOutcomes(strings.TrimSpace(line)) {
@@ -357,22 +359,22 @@ func TestSiteRunbookHostingWaitLoopNamesARefreshOnlyFailure(t *testing.T) {
 					continue
 				}
 
-				keeps = append(keeps, outcome)
+				naming = append(naming, outcome)
 
-				if strings.Contains(outcome, "explain") && saysToRemoveAFile(outcome) {
-					removes = append(removes, outcome)
+				if removesTheBackupOnceExplained(outcome) {
+					removing = append(removing, outcome)
 				}
 			}
 		}
 
-		if len(keeps) == 0 {
+		if len(naming) == 0 {
 			t.Fatalf("%s: %s holds no FAIL outcome that names the state backup %q, so this check pins nothing: R4 takes the backup before the state rm fallback and its FAIL path keeps it until the cause is explained (issue #607)\n  read:\n    %s",
 				siteRunbookPath, hostingHeading, backup, strings.Join(section, "\n    "))
 		}
 
-		if len(removes) == 0 {
+		if len(removing) == 0 {
 			t.Errorf("%s: %s: no FAIL outcome that names the state backup %q says to remove it once the cause is explained, want one that does, as `# FAIL exit 2: read the diff, and keep \"$T/state-backup.json\" until it is explained, then rm -r \"$T\"` does: the backup is the only copy of the state the state rm fallback left, so a maintainer who has explained the diff has no line to remove it and the file outlives its reason (issue #607)\n  read:\n    %s",
-				siteRunbookPath, hostingHeading, backup, strings.Join(keeps, "\n    "))
+				siteRunbookPath, hostingHeading, backup, strings.Join(naming, "\n    "))
 		}
 	})
 }
@@ -407,11 +409,33 @@ func failOutcomes(line string) []string {
 	}
 }
 
+// removesTheBackupOnceExplained reports whether a FAIL outcome that names the state backup tells the maintainer to remove
+// it once the cause is explained, as `keep "$T/state-backup.json" until it is explained, then rm -r "$T"` does. The
+// removal has to come after the explanation: an outcome that explains the diff and then says "do not remove it" names
+// both and still leaves the backup where it is, which is the state the check reports missing (issue #607).
+func removesTheBackupOnceExplained(outcome string) bool {
+	_, after, explained := strings.Cut(outcome, "explain")
+
+	return explained && saysToRemoveAFile(after)
+}
+
 // saysToRemoveAFile reports whether the runbook text tells the maintainer to remove a file, as R4's state backup's FAIL
-// path must once the cause is explained: the spelling is the maintainer's choice, so rm, remove and delete all count.
+// path must once the cause is explained: the spelling is the maintainer's choice, so rm, remove and delete all count. A
+// clause that negates its verb - "do not remove it", "remove nothing" - tells the maintainer to keep the file, so it is
+// no removal, and each comma-separated clause is read on its own: a negation in one says nothing about another's.
 func saysToRemoveAFile(text string) bool {
-	for _, verb := range []string{"rm ", "rm -r", "remove", "delete"} {
-		if strings.Contains(text, verb) {
+	for _, clause := range strings.Split(text, ",") {
+		verb, negated := false, false
+
+		for _, spelling := range []string{"rm ", "rm -r", "remove", "delete"} {
+			verb = verb || strings.Contains(clause, spelling)
+		}
+
+		for _, negation := range []string{"not ", "nothing", "never"} {
+			negated = negated || strings.Contains(clause, negation)
+		}
+
+		if verb && !negated {
 			return true
 		}
 	}
@@ -611,6 +635,53 @@ func TestRefreshOnlyFAILLines(t *testing.T) {
 
 			if got := refreshOnlyFAILLines(tc.section, timeoutFAIL); !slices.Equal(got, tc.want) {
 				t.Errorf("refreshOnlyFAILLines(%q, %q) = %q, want %q", tc.section, timeoutFAIL, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestRemovesTheBackupOnceExplained pins how R4's exit 2 FAIL is read (issue #607): the outcome has to say to remove the
+// backup after it says to explain the diff, because a wording that negates the removal leaves the file where it is just
+// as the old wording did.
+func TestRemovesTheBackupOnceExplained(t *testing.T) {
+	t.Parallel()
+
+	const backup = "state-backup.json"
+
+	tests := []struct {
+		name    string
+		outcome string
+		want    bool
+	}{
+		{
+			name:    "the runbook's wording",
+			outcome: `FAIL exit 2: read the diff, and keep "$T/` + backup + `" until it is explained, then rm -r "$T"`,
+			want:    true,
+		},
+		{
+			name:    "a negated removal after the explanation",
+			outcome: `FAIL exit 2: read the diff, and keep "$T/` + backup + `" until it is explained, do not remove it`,
+		},
+		{
+			name:    "a removal of nothing after the explanation",
+			outcome: `FAIL exit 2: keep "$T/` + backup + `" until it is explained, remove nothing`,
+		},
+		{
+			name:    "the removal dropped",
+			outcome: `FAIL exit 2: read the diff, and keep "$T/` + backup + `" until it is explained`,
+		},
+		{
+			name:    "no explanation at all",
+			outcome: `FAIL exit 2: keep "$T/` + backup + `", then rm -r "$T"`,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := removesTheBackupOnceExplained(tc.outcome); got != tc.want {
+				t.Errorf("removesTheBackupOnceExplained(%q) = %t, want %t", tc.outcome, got, tc.want)
 			}
 		})
 	}
