@@ -21,8 +21,9 @@ type Method string
 
 const (
 	// ByPlan is a category priced by plan: compute.vm, compute.baremetal,
-	// kubernetes.managed (its nodes), database.postgresql, database.mysql and
-	// database.mongodb, matched on vCPUs and memory, and cache.redis (its
+	// kubernetes.managed (its nodes), database.postgresql, database.mysql,
+	// database.mongodb, search.opensearch (its data nodes) and messaging.kafka
+	// (its brokers), matched on vCPUs and memory (ADR 0047), and cache.redis (its
 	// nodes), matched on memory alone (catalog.MatchesOnMemory, ADR 0046).
 	ByPlan Method = "plan"
 	// ByStorage is a category priced by stored GiB: storage.block,
@@ -43,7 +44,7 @@ func PricingOf(c taxonomy.Category) Method {
 	switch c {
 	case taxonomy.ComputeVM, taxonomy.ComputeBareMetal, taxonomy.KubernetesManaged,
 		taxonomy.DatabasePostgreSQL, taxonomy.DatabaseMySQL, taxonomy.DatabaseMongoDB,
-		taxonomy.CacheRedis:
+		taxonomy.CacheRedis, taxonomy.SearchOpenSearch, taxonomy.MessagingKafka:
 		return ByPlan
 	case taxonomy.StorageBlock, taxonomy.StorageObject, taxonomy.StorageFile:
 		return ByStorage
@@ -637,7 +638,9 @@ func planOf(op offeredPlan, region string) *Plan {
 }
 
 // storedOnce reports whether the storage of category c is the whole service's
-// data, counted once and not × count: the managed databases (ADR 0027).
+// data, counted once and not × count: the managed databases (ADR 0027). A
+// search.opensearch or messaging.kafka cluster shards its data across its
+// nodes, so its storage is per node, × count (ADR 0047).
 func storedOnce(c taxonomy.Category) bool {
 	return c == taxonomy.DatabasePostgreSQL || c == taxonomy.DatabaseMySQL || c == taxonomy.DatabaseMongoDB
 }

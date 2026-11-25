@@ -59,6 +59,14 @@ const (
 	// StorageFile is a shared file system the provider runs, mounted by
 	// several machines over NFS.
 	StorageFile Category = "storage.file"
+	// SearchOpenSearch is a search and analytics engine the provider runs that
+	// speaks the OpenSearch REST API: OpenSearch, or Elasticsearch up to 7.10,
+	// from which OpenSearch was forked.
+	SearchOpenSearch Category = "search.opensearch"
+	// MessagingKafka is a cluster of brokers the provider runs that speaks the
+	// Apache Kafka protocol: a partitioned, replicated log whose consumers track
+	// their own offsets.
+	MessagingKafka Category = "messaging.kafka"
 	// Unclassified marks a source resource that fits no other category. It is a
 	// fact about the resource, not a fallback for unknown values, and no target
 	// offering ever serves it.
@@ -77,10 +85,12 @@ var categories = []Category{
 	DatabaseMySQL,
 	DatabasePostgreSQL,
 	KubernetesManaged,
+	MessagingKafka,
 	MessagingQueue,
 	MessagingTopic,
 	NetworkLoadBalancer,
 	RegistryContainer,
+	SearchOpenSearch,
 	ServerlessContainer,
 	ServerlessFunction,
 	StorageBlock,
