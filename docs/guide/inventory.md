@@ -739,10 +739,14 @@ which may not be enabled. Every `gcloud` call above carries `--quiet`, which mak
 default answer, No, when it offers to enable an API, as it does on a project with that API disabled;
 if any call still asks to enable one, answer N: enabling an API writes to the project.
 
-When the asset listing holds Cloud Functions, check that `functions.json` is not empty. A failed
-`functions list` (a missing `roles/cloudfunctions.viewer`, for example) writes nothing and does not
-stop the loop, and each function's Cloud Run service is then counted a second time, as a
-`serverless.container`.
+Check that a list is not empty when the asset listing holds its resources: a failed list (a
+missing role or an interrupted run) writes nothing and stops nothing. With Cloud
+Functions, check `functions.json`: without it each function's Cloud Run service is counted a second
+time, as a `serverless.container` (`roles/cloudfunctions.viewer`). With URL maps, backend services or
+target pools, check `compute-url-maps.json`, `compute-backend-services.json`,
+`compute-forwarding-rules.json` and `compute-target-pools.json`: load balancers come only from these
+lists, so a failed one leaves every load balancer out of the inventory, with nothing in its place
+(`roles/compute.viewer`).
 
 The `--format` projections keep only what the program reads: an instance's metadata keys, for
 example, but not their values, which hold startup scripts and SSH keys, and of its disks only the
