@@ -2733,7 +2733,12 @@ The model job's errors that point here are titled `Audit model`. What each means
   works`, `the Docker socket is still there` and `the audit directory's owners or modes are not as laid
   out` name what is still as it was. The step removes the socket file that stopping `docker.socket`
   leaves behind before it removes the sudo rule (issue #574), so `the Docker socket is still there` now
-  means the file survived that removal, or something recreated it. The runner image
+  means the file survived that removal, or something recreated it. `Docker is still running` means
+  `systemctl is-active` still reports `docker.service` or `docker.socket` active after the stop and the
+  disable succeeded: since the step removes the socket file itself, the file's absence no longer shows the
+  daemon stopped. Check, on a runner of the same image, `systemctl status docker.service docker.socket`
+  and `systemctl list-dependencies --reverse docker.service` for a unit that starts Docker again. The
+  runner image
   changed under `ubuntu-24.04`: compare it with what ADR 0040 records for this step before changing
   it, and start the new run only once the step matches the image.
 

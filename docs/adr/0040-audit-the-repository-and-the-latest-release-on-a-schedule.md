@@ -2241,16 +2241,19 @@ owns, and the wrapper's git reads no global or system configuration where a `saf
 set. What holds that tree against its owner is the sandbox's write allow list, which names neither tree,
 and the layout check's mode walk. The model-free hardening step then stops and disables Docker, removes
 the stale socket file `/var/run/docker.sock` while sudo still works, checks the owners and modes above
-(`stat`), removes `/etc/sudoers.d/runner`, and fails unless `sudo -n true` fails and the Docker socket is
-gone. The socket file is removed by hand because stopping `docker.socket` leaves it on the ubuntu-24.04
-runner image: systemd removes a socket unit's file on stop only with `RemoveOnStop=yes` (issue #574). The model step runs `auditrun -claude-tarball
-$RUNNER_TEMP/claude-code/claude-code.tgz -claude-integrity "${CLAUDE_CODE_PIN_INTEGRITY}" -result-out
-$RUNNER_TEMP/result.json`, the integrity from the pin step's output (`test/lint` holds that argument, and
-the installer's two last arguments, exactly, and refuses a `sha512-` literal on every line but the pin
-step's anchored `grep -E '^integrity: sha512-...'` of the pin file, other lines of the pin step included:
-review round 2). **The result reaches the encrypt step through the launcher alone** (PR 5b review round 1): the
-launcher's `Run.Result` writes the bytes its result check read and accepted (a regular file and no link,
-within the cap, one JSON value, neither the token nor the canary) to `-result-out`, a new file (`O_EXCL`,
+(`stat`), removes `/etc/sudoers.d/runner`, and fails unless `sudo -n true` fails, the Docker socket is
+gone and neither `docker.service` nor `docker.socket` is still active (`systemctl is-active`). The socket
+file is removed by hand because stopping `docker.socket` leaves it on the ubuntu-24.04 runner image:
+systemd removes a socket unit's file on stop only with `RemoveOnStop=yes` (issue #574). With the file
+removed by the step itself, its absence no longer shows the daemon stopped, so the step asks systemd
+too. The model step runs `auditrun -claude-tarball $RUNNER_TEMP/claude-code/claude-code.tgz
+-claude-integrity "${CLAUDE_CODE_PIN_INTEGRITY}" -result-out $RUNNER_TEMP/result.json`, the integrity
+from the pin step's output (`test/lint` holds that argument, and the installer's two last arguments,
+exactly, and refuses a `sha512-` literal on every line but the pin step's anchored `grep -E
+'^integrity: sha512-...'` of the pin file, other lines of the pin step included: review round 2). **The
+result reaches the encrypt step through the launcher alone** (PR 5b review round 1): the launcher's
+`Run.Result` writes the bytes its result check read and accepted (a regular file and no link, within the
+cap, one JSON value, neither the token nor the canary) to `-result-out`, a new file (`O_EXCL`,
 0600) under the step's `$RUNNER_TEMP`, out of the sandbox's reach, and the encrypt step encrypts that
 file; `/srv/audit/work/result.json` is never read again by its path, which the check refuses there. **The
 canary is made in the model step for each run** (32 bytes of `/dev/urandom` as
@@ -2310,7 +2313,7 @@ the round E note on an empty section header in the checkout copy's `.git/config`
 runs:* runs 45569051548 (on 5121caa) and 45570875086 (on 6896d38) failed in the hardening step with `the
 Docker socket is still there: see runbook step 10` after both `systemctl` lines succeeded: stopping
 `docker.socket` left `/var/run/docker.sock` behind. Fixed by issue #574: the step removes the file
-before the sudo rule.
+before the sudo rule, and then refuses a `docker.service` or `docker.socket` that is still active.
 
 ### The checks job's rows 6 to 15 (milestone 2, PR 5c, amended 2026-11-24)
 
@@ -3046,7 +3049,7 @@ notice (read 2026-11-25), and the workflow does not merge its schedule before mi
 | `Install the pinned tools` | bubblewrap and socat `.deb`s from noble-updates, digests from its `Packages` index | Resolute's versions and digests, from resolute's signed index (the suite that carries each, `resolute-updates` or `resolute-security`); `dpkg -i` must still find their libraries on the image |
 | `.github/renovate.json5`'s deb rule | `suite=noble-updates`, `bubblewrap` and `socat` | The resolute suite that holds each pinned version (`resolute` for `coreutils-from-gnu`, which is in no other pocket today; `resolute-updates` or `resolute-security` for bubblewrap and socat), and `coreutils-from-gnu` added to the rule (its `.deb`'s digest also by hand) |
 | `bwrap.apparmor` and `TestBwrapAppArmorProfile` | AppArmor 4 (`abi <abi/4.0>`), the runner's userns restriction, no other profile for `/usr/bin/bwrap` | **Re-verify** all three; the comment's "Ubuntu 24.04 runners" changes; the profile's rules change only by a reviewed amendment here |
-| The hardening step | `docker.service` and `docker.socket`, `/etc/sudoers.d/runner`, `sudo -n true` failing after its removal, `stat -c` | Docker 29's unit names, the sudo provider and the runner's sudo rule: **re-verify** by the probe's mechanism checks |
+| The hardening step | `docker.service` and `docker.socket` (stopped, disabled, `systemctl is-active` after), `/etc/sudoers.d/runner`, `sudo -n true` failing after its removal, `stat -c` | Docker 29's unit names, the sudo provider and the runner's sudo rule: **re-verify** by the probe's mechanism checks |
 | Go | No setup-go; the image's `go` switches to go.mod's toolchain (`GOTOOLCHAIN`) in `go mod download`; `go env GOVERSION` checked | The same tool cache on both images (1.27.4, go.mod's, among them; default 1.26), so the same mechanism; the check holds |
 | `gh` | `/usr/bin/gh` (the artifact listing, the image check, the publish) | 2.104.0 on both; **re-verify** the path. A missing path fails closed: `auditpublish -gh /usr/bin/gh` runs `gh` by that absolute path only, and a run that cannot start it fails |
 | `check.AuditWorkflow` (`auditRunner`) and its tests, `testdata/auditworkflow/valid.yml`, `check/doc.go`'s summary, `auditworkflow_test.go`'s comment and label cases | `ubuntu-24.04` on every job | `ubuntu-26.04`; still exact, still never `ubuntu-latest`; the switch step and the GNU check in every job join the jobs' closed step lists, and the check holds each job's list of coreutils (below) |
