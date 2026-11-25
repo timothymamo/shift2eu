@@ -99,6 +99,12 @@ type auditStep struct {
 	// I of PR 5c, L3): a timeout recorded as "<check> timed-out" and any other
 	// non-zero exit as "<check> tool-failed", both in not-run.txt.
 	outcomes []auditOutcome
+	// parts is a step whose check has several parts (rows 7, 13 and 14,
+	// review round K of PR 5c, B1): it sets ran_any=0 before its first part and
+	// ran_any=1 after each part's exit, records every part's outcome in the
+	// limits, and records the check in not-run.txt only before any part ran or,
+	// at its end, when ran_any is still 0.
+	parts bool
 }
 
 // auditOutcome is a tool run, by its first line, and the check its outcome
@@ -361,12 +367,14 @@ var (
 	fuzzDiscovery = command(regexp.QuoteMeta(`grep -oE '^func Fuzz[A-Z0-9_][A-Za-z0-9_]*\(f \*testing\.F\)' "${file}"`),
 		`grep -oE '^func Fuzz[A-Z0-9_][A-Za-z0-9_]*\(f \*testing\.F\)' "${file}": the Fuzz targets by their signature alone, never a helper such as Fuzzy`)
 	// fuzzShape records a target of another shape and goes on (review round D
-	// of PR 5c, G): its branch is held whole, continue included.
+	// of PR 5c, G): its branch is held whole, continue included. Since round K
+	// (B2) it records a limits line, never a not-run line: one target skipped is
+	// a part of the check, and unexpected-target is no why id.
 	fuzzShape = command(`(?m)^[ \t]*`+regexp.QuoteMeta(`if [[ ! "${name}" =~ ^Fuzz[A-Z0-9_][A-Za-z0-9_]*$ ]] || [[ ! "${pkg}" =~ ^[A-Za-z0-9_][A-Za-z0-9_./-]*$ ]] || [[ "${pkg}" == *..* ]]; then`)+
-		`\n[ \t]+`+regexp.QuoteMeta(`echo "fuzzing unexpected-target" >> "${results}/not-run.txt"`)+`\n[ \t]+continue\n[ \t]*fi$`,
+		`\n[ \t]+`+regexp.QuoteMeta(`echo "fuzzing: a target of an unexpected shape was not run" >> "${results}/limits.txt"`)+`\n[ \t]+continue\n[ \t]*fi$`,
 		`the fuzz target's shape guard: if [[ ! "${name}" =~ ^Fuzz[A-Z0-9_][A-Za-z0-9_]*$ ]] || [[ ! "${pkg}" =~ ^[A-Za-z0-9_][A-Za-z0-9_./-]*$ ]] || [[ "${pkg}" == *..* ]]; then, `+
-			`echo "fuzzing unexpected-target" >> "${results}/not-run.txt", continue and fi, each on a line of its own: a target of another shape is recorded, `+
-			`and ends neither the step nor the run's report`)
+			`echo "fuzzing: a target of an unexpected shape was not run" >> "${results}/limits.txt", continue and fi, each on a line of its own: a target of another shape is a limits line `+
+			`of the check, never the check not run, and ends neither the step nor the run's report (PRD #175 milestone 2, ADR 0040)`)
 	// fuzzCreate holds the fuzz container's create whole, through its last
 	// line (review round D of PR 5c, B1): a flag added after the pinned ones
 	// would override them.
@@ -383,11 +391,26 @@ var (
 	// Row 15: each ruleset ID's shape refused before it reaches a URL, and
 	// recorded, never the end of the step (review round I of PR 5c, L6): an ID
 	// the API answers in another shape is that read not run, and the step goes
-	// on to its other reads.
+	// on to its other reads. Since round K (B2) the record is a limits line: one
+	// read skipped is no check that did not run, and unexpected-ruleset is no why
+	// id.
 	rulesetShape = command(`(?m)^[ \t]*`+regexp.QuoteMeta(`if [[ ! "${id}" =~ ^[0-9]+$ ]]; then`)+
-		`\n[ \t]+`+regexp.QuoteMeta(`echo "supply-chain unexpected-ruleset" >> "${results}/not-run.txt"`)+`\n[ \t]+continue\n[ \t]*fi$`,
-		`the ruleset ID's shape guard: if [[ ! "${id}" =~ ^[0-9]+$ ]]; then, echo "supply-chain unexpected-ruleset" >> "${results}/not-run.txt", continue and fi, `+
-			`each on a line of its own: an ID of another shape is recorded and never reaches a URL, and it ends neither the step nor the run's report (PRD #175 milestone 2, ADR 0040)`)
+		`\n[ \t]+`+regexp.QuoteMeta(`echo "supply-chain: a ruleset ID that is no number was not read" >> "${results}/limits.txt"`)+`\n[ \t]+continue\n[ \t]*fi$`,
+		`the ruleset ID's shape guard: if [[ ! "${id}" =~ ^[0-9]+$ ]]; then, echo "supply-chain: a ruleset ID that is no number was not read" >> "${results}/limits.txt", continue and fi, `+
+			`each on a line of its own: an ID of another shape is a limits line and never reaches a URL, and it ends neither the step nor the run's report (PRD #175 milestone 2, ADR 0040)`)
+	// S2 (round K): read_api's budget records the reads it did not reach in
+	// read-skipped.txt, never in read-refused.txt, and the step's end names that
+	// list in the limits by its own cause: a read the budget ran out on is no
+	// permission for the maintainer to chase.
+	readAPIBudget = command(`(?m)^[ \t]*if \[ "\$\{SECONDS\}" -ge [0-9]+ \]; then\n`+
+		wholeLines(`echo "${name}" >> "${out}/read-skipped.txt"`, `return 0`, `fi`)+`$`,
+		`read_api's budget, each on a line of its own: if [ "${SECONDS}" -ge <seconds> ]; then, echo "${name}" >> "${out}/read-skipped.txt", return 0 and fi: `+
+			`a read the budget ran out on goes to read-skipped.txt, never to read-refused.txt, since the API refused nothing (PRD #175 milestone 2, ADR 0040)`)
+	readSkippedLimits = command(`(?m)^[ \t]*`+regexp.QuoteMeta(`if [ -s "${out}/read-skipped.txt" ]; then`)+
+		`\n[ \t]+echo "supply-chain: [^"\n]*supply-chain/read-skipped\.txt[^"\n]*" >> "\$\{results\}/limits\.txt"\n[ \t]*fi$`,
+		`the step's end naming the skipped reads, each on a line of its own: if [ -s "${out}/read-skipped.txt" ]; then, `+
+			`echo "supply-chain: ... supply-chain/read-skipped.txt" >> "${results}/limits.txt" and fi: the reads the budget ran out on are a limits line of their own, `+
+			`never read refused (PRD #175 milestone 2, ADR 0040)`)
 	rulesetRead = command(regexp.QuoteMeta(`read_api "ruleset-${id}" "repos/${GH_REPO}/rulesets/${id}"`), `read_api "ruleset-${id}" "repos/${GH_REPO}/rulesets/${id}", the ruleset's read`)
 	// The variables endpoints return each variable's value, which no read
 	// keeps (review round D of PR 5c, D): read_api passes its third argument to
@@ -448,6 +471,20 @@ var (
 		command(regexp.QuoteMeta(`diff "${out}/listed.txt" "${out}/assets.txt"`), `diff "${out}/listed.txt" "${out}/assets.txt", the listing's comparison`),
 		command(regexp.QuoteMeta(`gh attestation verify "${file}"`), `gh attestation verify "${file}", each release file's attestation`),
 	}
+
+	// L4 (round K): a checksums.txt that is not empty but holds no well-formed
+	// line names no file of the release, which is a finding about the release,
+	// recorded verification-failed with the limits line that says why, never a
+	// tool that failed and never a silent pass.
+	malformedChecksums = command(`(?m)^[ \t]*`+wholeLines(
+		`if [ -s "${rel}/checksums.txt" ] && [ ! -s "${out}/checksums.filtered" ]; then`,
+		`echo "release-integrity verification-failed" >> "${results}/verification-failed.txt"`,
+		`echo "release-integrity: checksums.txt holds no well-formed line" >> "${results}/limits.txt"`,
+		`fi`)+`$`,
+		`the record for a checksums.txt with no well-formed line, after the filter and before the checksum check, each on a line of its own: `+
+			`if [ -s "${rel}/checksums.txt" ] && [ ! -s "${out}/checksums.filtered" ]; then, echo "release-integrity verification-failed" >> "${results}/verification-failed.txt", `+
+			`echo "release-integrity: checksums.txt holds no well-formed line" >> "${results}/limits.txt" and fi: a malformed list is a finding about the release, `+
+			`never a tool that failed (PRD #175 milestone 2, ADR 0040)`)
 
 	// L5: the three values latest.txt holds beside the tag, each blanked unless
 	// it is of its one shape, before latest.txt is written.
@@ -645,13 +682,13 @@ var auditJobs = []auditJob{
 			},
 			{
 				name: "Verify the release's files, signature and attestations", githubToken: true,
-				check: "release-integrity", budget: true, verifies: true,
+				check: "release-integrity", budget: true, verifies: true, parts: true,
 				runs: []auditCommand{
-					tagRead, tagShape, releaseDownloadOutcome, releaseFileGate, checksumFilter, checksumFiltered,
+					tagRead, tagShape, releaseDownloadOutcome, releaseFileGate, checksumFilter, malformedChecksums, checksumFiltered,
 					tagDigestShape, latestDigestShape, latestReleaseShape, latestRecord, tagDigestBranch,
 				},
 				order: []auditCommand{
-					tagRead, tagShape, releaseDownloadOutcome, releaseFileGate, checksumFilter, checksumFiltered,
+					tagRead, tagShape, releaseDownloadOutcome, releaseFileGate, checksumFilter, malformedChecksums, checksumFiltered,
 					tagDigestShape, latestDigestShape, latestReleaseShape, latestRecord, tagDigestBranch,
 				},
 			},
@@ -684,6 +721,7 @@ var auditJobs = []auditJob{
 				name:    "Run the CLI on hostile inventory files",
 				check:   "hostile-inventories",
 				budget:  true,
+				parts:   true,
 				runs:    []auditCommand{recordedDigest, imageDigestShape, imageInspect, hostileCorpus, hostileCopy, hostileCommit, hostileCreate},
 				refuses: []auditCommand{anyTmpfs},
 				order:   []auditCommand{recordedDigest, imageDigestShape, imageInspect, hostileCorpus, hostileCopy, hostileCommit, hostileCreate},
@@ -695,6 +733,7 @@ var auditJobs = []auditJob{
 				// loop stopped by a budget.
 				check:  "fuzzing",
 				budget: true,
+				parts:  true,
 				env:    []auditRead{{key: "GOFLAGS", value: "-mod=readonly"}, {key: "GOPROXY", value: "off"}},
 				envMatch: []auditEnvMatch{{
 					key: "GO_IMAGE", re: goImageDigest,
@@ -705,8 +744,8 @@ var auditJobs = []auditJob{
 			},
 			{
 				name: "Supply-chain reads", githubToken: true,
-				runs:  append([]auditCommand{readAPIFilter, readAPIJq, rulesetShape, rulesetRead}, namesReads...),
-				order: []auditCommand{readAPIFilter, rulesetShape, rulesetRead},
+				runs:  append([]auditCommand{readAPIFilter, readAPIBudget, readAPIJq, rulesetShape, rulesetRead, readSkippedLimits}, namesReads...),
+				order: []auditCommand{readAPIFilter, readAPIBudget, readAPIJq, rulesetShape, rulesetRead, readSkippedLimits},
 			},
 			{
 				name: "Encrypt the checks' results to the model key",
@@ -956,8 +995,13 @@ var auditPin = regexp.MustCompile(`^([A-Za-z0-9_.-]+/[A-Za-z0-9_./-]+)@([0-9a-f]
 // checksums.txt and its unresolved digest to a record, rows 6, 8 and 10's
 // failed tools to not-run.txt, row 9's binaries to files that hold bytes,
 // latest.txt's values to their shapes, and row 15's unexpected ruleset ID to a
-// record that ends nothing. A document it cannot read, or an empty one, is
-// refused.
+// record that ends nothing. Since review round K it also holds rows 7, 13 and
+// 14 to recording a part that timed out or failed in the limits and the check
+// in not-run.txt only when no part of it ran (ran_any), every not-run.txt line
+// to a why id of the publish core's vocabulary, a malformed checksums.txt to the
+// finding verification-failed, row 15's budget skips to read-skipped.txt, and
+// fit to refusing a timeout, a loop or an inner loop it cannot count. A
+// document it cannot read, or an empty one, is refused.
 func AuditWorkflow(src []byte) []string {
 	if strings.TrimSpace(string(src)) == "" {
 		return []string{"the audit workflow is empty, so this check cannot tell what it runs"}
@@ -1648,6 +1692,7 @@ func (a *auditReader) steps(e yamlread.Entry, path string, spec auditJob) []audi
 			if err == nil && spec.boundsTools && (want == nil || !want.guardsChecksums) {
 				a.toolRuns(withoutComments(strings.Split(text, "\n")), fmt.Sprintf("%s: step %q (line %d)", path, s.name, s.num))
 				a.dockerRuns(withoutComments(strings.Split(text, "\n")), fmt.Sprintf("%s: step %q (line %d)", path, s.name, s.num))
+				a.whyIDs(withoutComments(strings.Split(text, "\n")), fmt.Sprintf("%s: step %q (line %d)", path, s.name, s.num))
 			}
 		}
 	}
@@ -2132,6 +2177,10 @@ func (a *auditReader) run(e yamlread.Entry, path string, want *auditStep, env []
 		a.releaseBlocks(code, path, want.check)
 	}
 
+	if want.parts {
+		a.partRecords(code, path, want.check)
+	}
+
 	for _, o := range want.outcomes {
 		a.toolOutcomes(code, path, o)
 	}
@@ -2213,13 +2262,144 @@ func (a *auditReader) releaseBlocks(code, path, check string) {
 
 	els, fi := ifBlock(lines, i)
 
-	notRun := `echo "` + check + ` tool-failed" >> "${results}/not-run.txt"`
 	limits := regexp.MustCompile(`^[ \t]+echo "` + regexp.QuoteMeta(check) + `: [^"\n]+" >> "\$\{results\}/limits\.txt"$`)
 
-	if els < 0 || fi != els+3 || strings.TrimSpace(lines[els+1]) != notRun || !limits.MatchString(lines[els+2]) {
-		a.r.fail(`%s's if [ -n "${tag_digest}" ]; then has no else that records what it skipped, want, each on a line of its own: else, %s, `+
-			`echo "%s: ..." >> "${results}/limits.txt" naming the signature and attestations not verified, and fi: an image digest that did not resolve is a check that did not run, never left silent `+
-			`(PRD #175 milestone 2, ADR 0040)`, path, notRun, check)
+	// Since review round K (B1) the else is a limits line alone: the release's
+	// file checks may have run, so an unresolved digest is a part of the check
+	// that was skipped, never the whole check that did not run.
+	if els < 0 || fi != els+2 || !limits.MatchString(lines[els+1]) {
+		a.r.fail(`%s's if [ -n "${tag_digest}" ]; then has no else that records what it skipped, want, each on a line of its own: else, `+
+			`echo "%s: ..." >> "${results}/limits.txt" naming the signature and attestations not verified, and fi: an image digest that did not resolve is a limits line of the check, `+
+			`never left silent and never the whole check not run, since its other parts may have run (PRD #175 milestone 2, ADR 0040)`, path, check)
+	}
+}
+
+// auditNotRunLine matches a line that writes to not-run.txt; auditNotRunRecord
+// one in the shape the checks job writes: echo "<check id> <why id>", whole.
+var (
+	auditNotRunLine   = regexp.MustCompile(`>>? "\$\{results\}/not-run\.txt"`)
+	auditNotRunRecord = regexp.MustCompile(`^[ \t]*echo "([a-z0-9-]+) ([^"\s]+)" >> "\$\{results\}/not-run\.txt"$`)
+	// auditPartExit is a part's exit recorded, the line ran_any=1 follows.
+	auditPartExit = regexp.MustCompile(`^[ \t]*echo "\$\{rc\}" > "[^"\n]+\.exit"$`)
+)
+
+// auditWhyIDs are the why ids a not-run.txt line may end in (review round K of
+// PR 5c, B2): exactly the keys of whyNotRun in
+// ci/auditpublish/internal/publish/vocabulary.go, which the publish core
+// renders and outside which it refuses the result, so that the run would
+// publish no report. The check's test pins the two lists equal.
+var auditWhyIDs = []string{
+	"needs-admin-read", "no-fuzz-targets", "timed-out", "tool-failed",
+	"results-missing", "read-refused", "image-not-pulled", "declined",
+}
+
+// whyIDs holds every not-run.txt line of a checks step to the shape echo
+// "<check id> <why id>" >> "${results}/not-run.txt" and its why id to
+// auditWhyIDs (review round K of PR 5c, B2).
+func (a *auditReader) whyIDs(code, path string) {
+	for _, line := range strings.Split(code, "\n") {
+		if !auditNotRunLine.MatchString(line) {
+			continue
+		}
+
+		m := auditNotRunRecord.FindStringSubmatch(line)
+		if m == nil {
+			a.r.fail(`%s writes to not-run.txt in another shape (%q), want echo "<check id> <why id>" >> "${results}/not-run.txt" on a line of its own: `+
+				`the publish core reads each line as a check id and a why id, and refuses a result it cannot read, which publishes no report (PRD #175 milestone 2, ADR 0040)`,
+				path, strings.TrimSpace(line))
+
+			continue
+		}
+
+		if !slices.Contains(auditWhyIDs, m[2]) {
+			a.r.fail(`%s records %s %s in ${results}/not-run.txt, and %q is no why id the publish core holds (%s): `+
+				`the core refuses a result whose why it cannot render, so the run publishes no report; a part of a check that was skipped is a limits line (PRD #175 milestone 2, ADR 0040)`,
+				path, m[1], m[2], m[2], strings.Join(auditWhyIDs, ", "))
+		}
+	}
+}
+
+// partRecords holds a step whose check has several parts (rows 7, 13 and 14,
+// review round K of PR 5c, B1) to what not-run.txt means: the check did not
+// run. A part that timed out or failed is a limits line of the check, with its
+// exit file; the check goes to not-run.txt only before any part ran (a
+// download, a pull or a staging that failed first) or, at the step's end, when
+// no part ran at all. The step sets ran_any=0 before its first part, ran_any=1
+// right after each part's exit inside its loops, and ends with
+// if [ "${ran_any}" -eq 0 ]; then, echo "<check> tool-failed" >>
+// "${results}/not-run.txt" and fi, after its last ran_any=1.
+func (a *auditReader) partRecords(code, path, check string) {
+	lines := strings.Split(code, "\n")
+
+	if lineMatching(lines, regexp.MustCompile(`^[ \t]*ran_any=0$`)) < 0 {
+		a.r.fail(`%s sets no ran_any=0, on a line of its own, before its first part: %s has several parts, and is recorded as a check that did not run only when none of them ran, `+
+			`which ran_any counts (PRD #175 milestone 2, ADR 0040)`, path, check)
+
+		return
+	}
+
+	inLoop := make([]bool, len(lines))
+
+	for i := range lines {
+		if auditLoopStart.MatchString(lines[i]) {
+			for j := i + 1; j < loopEnd(lines, i) && j < len(lines); j++ {
+				inLoop[j] = true
+			}
+		}
+	}
+
+	firstRan, lastRan := -1, -1
+
+	for i, l := range lines {
+		if strings.TrimSpace(l) == "ran_any=1" {
+			if firstRan < 0 {
+				firstRan = i
+			}
+
+			lastRan = i
+		}
+	}
+
+	record := `echo "` + check + ` tool-failed" >> "${results}/not-run.txt"`
+	end := -1
+
+	for i := max(lastRan, 0); i+2 < len(lines); i++ {
+		if !inLoop[i] && strings.TrimSpace(lines[i]) == `if [ "${ran_any}" -eq 0 ]; then` &&
+			strings.TrimSpace(lines[i+1]) == record && strings.TrimSpace(lines[i+2]) == "fi" {
+			end = i + 1
+
+			break
+		}
+	}
+
+	if end < 0 || lastRan < 0 {
+		a.r.fail(`%s has no record of a check none of whose parts ran, want after its last ran_any=1, each on a line of its own: if [ "${ran_any}" -eq 0 ]; then, %s and fi: `+
+			`a step whose parts all failed has no result to report, and is the check that did not run (PRD #175 milestone 2, ADR 0040)`, path, record)
+	}
+
+	for i, l := range lines {
+		if inLoop[i] && auditPartExit.MatchString(l) && (i+1 >= len(lines) || strings.TrimSpace(lines[i+1]) != "ran_any=1") {
+			a.r.fail(`%s records a part's exit (%q) inside its loop without ran_any=1 on the line right after it: a part that ran, whatever its exit, is a result of %s, `+
+				`so that the check is recorded as not run only when no part ran (PRD #175 milestone 2, ADR 0040)`, path, strings.TrimSpace(l), check)
+		}
+
+		if i == end || !auditNotRunLine.MatchString(l) {
+			continue
+		}
+
+		what := strings.TrimSpace(l)
+		if m := auditNotRunRecord.FindStringSubmatch(l); m != nil {
+			what = m[1] + " " + m[2]
+		}
+
+		switch {
+		case inLoop[i]:
+			a.r.fail(`%s records %s in not-run.txt inside its loop, want a limits line of the part with its exit file: one run, target or file that timed out or failed `+
+				`is a part of %s, never the whole check that did not run, which the publish core would read as a check with no finding (PRD #175 milestone 2, ADR 0040)`, path, what, check)
+		case firstRan >= 0 && i > firstRan:
+			a.r.fail(`%s records %s in not-run.txt after a part ran, want a limits line of that part: once a part of %s produced a result the check ran, `+
+				`and only the step's end records it as not run, when ran_any is still 0 (PRD #175 milestone 2, ADR 0040)`, path, what, check)
+		}
 	}
 }
 
@@ -2308,29 +2488,31 @@ func findingCondition(tool string) (cond, why string) {
 }
 
 // verificationOutcome returns the pattern of a verification's outcome, from
-// the line after its command to its fi: its exit recorded, then rc 124 as the
-// check timed out with its limits line, the finding condition cond as the
-// finding verification-failed, any other failure as the check's tool-failed,
-// each on a line of its own.
+// the line after its command to its fi: its exit recorded, the part marked as
+// one that ran (ran_any=1, review round K of PR 5c), then rc 124 as a limits
+// line, the finding condition cond as the finding verification-failed, and any
+// other failure as a limits line, each on a line of its own. A verification is
+// one part of the check, so neither a timeout nor a failure of it is the whole
+// check that did not run (B1).
 func verificationOutcome(check, cond string) *regexp.Regexp {
 	q := regexp.QuoteMeta(check)
 
 	return regexp.MustCompile(`\A[ \t]*echo "\$\{rc\}" > "\$\{out\}/[^"\n]+\.exit"\n` +
+		`[ \t]*ran_any=1\n` +
 		`[ \t]*if \[ "\$\{rc\}" -eq 124 \]; then\n` +
-		`[ \t]+echo "` + q + ` timed-out" >> "\$\{results\}/not-run\.txt"\n` +
 		`[ \t]+echo "` + q + `: [^"\n]+" >> "\$\{results\}/limits\.txt"\n` +
 		`[ \t]*` + regexp.QuoteMeta(`elif `+cond+`; then`) + `\n` +
 		`[ \t]+echo "` + q + ` verification-failed" >> "\$\{results\}/verification-failed\.txt"\n` +
 		`[ \t]*elif \[ "\$\{rc\}" -ne 0 \]; then\n` +
-		`[ \t]+echo "` + q + ` tool-failed" >> "\$\{results\}/not-run\.txt"\n` +
+		`[ \t]+echo "` + q + `: [^"\n]+" >> "\$\{results\}/limits\.txt"\n` +
 		`[ \t]*fi(?:\n|\z)`)
 }
 
 // verifications holds row 7's verifications to one outcome each (round E of
 // PR 5c): a checksum mismatch, a refused attestation or a refused signature
 // (rc 1) is a finding about the release, recorded as verification-failed in
-// the results, never as a check that did not run, and a timeout (rc 124) is
-// the check timed out, never a tool that failed.
+// the results, never as a check that did not run, and a timeout (rc 124) or
+// any other failure is a limits line of that part (round K).
 func (a *auditReader) verifications(code, path, check string) {
 	lines := strings.Split(code, "\n")
 
@@ -2355,12 +2537,13 @@ func (a *auditReader) verifications(code, path, check string) {
 		}
 
 		if !verificationOutcome(check, cond).MatchString(strings.Join(lines[end+1:], "\n")) {
-			a.r.fail(`%s runs %q without its outcome branch, want right after it, each on a line of its own: echo "${rc}" > "${out}/<name>.exit", `+
-				`if [ "${rc}" -eq 124 ]; then, echo "%s timed-out" >> "${results}/not-run.txt", echo "%s: ..." >> "${results}/limits.txt", `+
+			a.r.fail(`%s runs %q without its outcome branch, want right after it, each on a line of its own: echo "${rc}" > "${out}/<name>.exit", ran_any=1, `+
+				`if [ "${rc}" -eq 124 ]; then, echo "%s: ..." >> "${results}/limits.txt", `+
 				`elif %s; then, echo "%s verification-failed" >> "${results}/verification-failed.txt", `+
-				`elif [ "${rc}" -ne 0 ]; then, echo "%s tool-failed" >> "${results}/not-run.txt" and fi: `+
-				`a mismatch or a refusal is a finding about the release (verification-failed), a timeout is timed-out, and neither is a tool that failed; %s (PRD #175 milestone 2, ADR 0040)`,
-				path, first, check, check, cond, check, check, why)
+				`elif [ "${rc}" -ne 0 ]; then, echo "%s: ..." >> "${results}/limits.txt" and fi: `+
+				`a mismatch or a refusal is a finding about the release (verification-failed), and a timeout or a failure is a limits line of this part, never the whole check not run; `+
+				`%s (PRD #175 milestone 2, ADR 0040)`,
+				path, first, check, cond, check, check, why)
 		}
 
 		i = end
@@ -2411,6 +2594,26 @@ func scriptTimeouts(lines []string) (int, []string) {
 			i = end
 
 			continue
+		}
+
+		// A loop over literal words with no budget inside runs its body once
+		// per word (review round K of PR 5c): inside a budgeted loop's body or a
+		// function's, its timeouts count that many times.
+		if words := auditLiteralLoop.FindStringSubmatch(lines[i]); words != nil {
+			end := loopEnd(lines, i)
+			body := lines[i+1 : min(end, len(lines))]
+
+			if maxBudget(body) == 0 {
+				s, p := scriptTimeouts(body)
+				if n := len(strings.Fields(words[1])); len(p) > 0 {
+					seconds += n * s
+					parts = append(parts, fmt.Sprintf("%d runs of the loop %q (%s)", n, strings.TrimSpace(lines[i]), strings.Join(p, ", ")))
+				}
+
+				i = end
+
+				continue
+			}
 		}
 
 		s, p := lineTimeouts(lines[i])
@@ -2626,6 +2829,8 @@ func (a *auditReader) fit(code, path string, minutes int) {
 	lines := logicalLines(code)
 	stepBudget := maxBudget(lines)
 
+	a.fitShapes(lines, path)
+
 	var bound stepBound
 
 	for i := 0; i < len(lines); i++ {
@@ -2668,6 +2873,7 @@ func (a *auditReader) fit(code, path string, minutes int) {
 			}
 
 			if budget := maxBudget(body); budget > 0 {
+				a.innerLoops(body, path, header)
 				bound.budgeted(fmt.Sprintf("the loop %q", header), budget, s, p)
 
 				continue
@@ -2694,6 +2900,97 @@ func (a *auditReader) fit(code, path string, minutes int) {
 			"a step's timeout firing ends the job and skips every later step, the encrypt step included, so each of its own timeouts fires first (ADR 0040)",
 			path, bound.seconds, strings.Join(bound.parts, ", "), minutes, minutes*60)
 	}
+}
+
+// The shapes fit cannot count (review round K of PR 5c, the auditor's L2 and
+// the reviewer's S1): a timeout word, its spelling after it, a line that
+// starts a loop, a loop's body on its header's line, and a timeout a command
+// runs once per argument.
+var (
+	auditTimeoutWord     = regexp.MustCompile(`(?:^|[\s;&|(])timeout(?:[ \t]|$)`)
+	auditTimeoutSpelling = regexp.MustCompile(`^ [0-9]+[sm]? \S`)
+	auditLoopWord        = regexp.MustCompile(`^[ \t]*(?:[^\n]*\|[ \t]*)?(?:while|until|for)\s`)
+	auditOneLineLoop     = regexp.MustCompile(`(?:^|[\s;&|(])(?:for|while|until)\s.*;\s*do\s+\S`)
+	auditPerArgument     = regexp.MustCompile(`(?:^|[\s;&|(])(xargs\s[^\n]*|find\s[^\n]*-exec(?:dir)?\s[^\n]*)(?:^|[\s;&|(])timeout(?:\s|$)`)
+)
+
+// fitShapes refuses, in a step fit holds, what its sum cannot follow (review
+// round K of PR 5c): a timeout that is no timeout <N>, <N>s or <N>m before its
+// command (timeout 1h, 1.5m or a flag such as -k 5, which fit would count as 0
+// or as the flag's value); a loop whose header is no auditLoopStart (its body on
+// the header's line, or do on a line of its own), which fit would count as
+// lines run once; and a timeout xargs or find -exec runs once per argument.
+func (a *auditReader) fitShapes(lines []string, path string) {
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+
+		if !auditMessageLine.MatchString(line) {
+			for _, loc := range auditTimeoutWord.FindAllStringIndex(line, -1) {
+				at := loc[0] + strings.Index(line[loc[0]:loc[1]], "timeout") + len("timeout")
+				if auditTimeoutSpelling.MatchString(line[at:]) {
+					continue
+				}
+
+				spelled := "timeout" + strings.Join(append([]string{""}, firstWords(line[at:], 3)...), " ")
+				a.r.fail(`%s runs %q, whose duration is no whole number of minutes or seconds (%q): fit counts a timeout <N>, <N>s or <N>m before its command, `+
+					`so another spelling (hours, a fraction, a flag such as -k) would be counted short and the step's own timeouts could outrun its timeout-minutes, `+
+					`which ends the job before the encrypt step (PRD #175 milestone 2, ADR 0040)`, path, trimmed, spelled)
+			}
+		}
+
+		if m := auditPerArgument.FindStringSubmatch(line); m != nil {
+			a.r.fail(`%s runs a timeout once per argument through xargs or find -exec (%q): fit counts a timeout once, and nothing bounds how many arguments the command reads, `+
+				`so the step's own timeouts could outrun its timeout-minutes; run the timeout in a budgeted loop instead (PRD #175 milestone 2, ADR 0040)`, path, trimmed)
+		}
+
+		if auditLoopStart.MatchString(line) || (!auditLoopWord.MatchString(line) && !auditOneLineLoop.MatchString(line)) {
+			continue
+		}
+
+		switch {
+		case auditOneLineLoop.MatchString(line):
+			a.r.fail(`%s runs the loop %q on one line, its body on its header's line: fit follows a loop whose header ends in do and whose body and done are lines of their own, `+
+				`so a loop on one line would be counted as one run of its timeouts (PRD #175 milestone 2, ADR 0040)`, path, trimmed)
+		case i+1 < len(lines) && strings.TrimSpace(lines[i+1]) == "do":
+			a.r.fail(`%s runs the loop %q with do on a line of its own: fit follows a loop whose header ends in ; do on its own line, `+
+				`so this one's body would be counted as lines run once (PRD #175 milestone 2, ADR 0040)`, path, trimmed)
+		default:
+			a.r.fail(`%s runs the loop %q, whose header fit cannot follow: a loop's header is one line ending in ; do, its body and done lines of their own, `+
+				`so this one's body would be counted as lines run once (PRD #175 milestone 2, ADR 0040)`, path, trimmed)
+		}
+	}
+}
+
+// innerLoops refuses, inside the body of a budgeted loop, an inner loop that
+// holds a timeout and is neither budgeted itself nor a loop over literal words
+// (review round K of PR 5c): the outer budget bounds when an iteration begins,
+// not how long an inner loop runs within it, so one iteration's timeouts, T_iter,
+// would be counted short.
+func (a *auditReader) innerLoops(body []string, path, outer string) {
+	for j := 0; j < len(body); j++ {
+		if !auditLoopStart.MatchString(body[j]) {
+			continue
+		}
+
+		end := loopEnd(body, j)
+		inner := body[j+1 : min(end, len(body))]
+		header := strings.TrimSpace(body[j])
+
+		if _, p := scriptTimeouts(inner); len(p) > 0 && maxBudget(inner) == 0 && !auditLiteralLoop.MatchString(body[j]) {
+			a.r.fail(`%s runs, inside the budgeted loop %q, the inner loop with a timeout %q (%s) and no budget of its own: the outer budget bounds when an iteration begins, `+
+				`not how often the inner loop runs, so nothing bounds one iteration's timeouts; budget the inner loop, or loop over literal words (PRD #175 milestone 2, ADR 0040)`,
+				path, outer, header, strings.Join(p, ", "))
+		}
+
+		j = end
+	}
+}
+
+// firstWords returns up to n of the words of s.
+func firstWords(s string, n int) []string {
+	words := strings.Fields(s)
+
+	return words[:min(n, len(words))]
 }
 
 // auditBounded matches the commands that read the release's files or its

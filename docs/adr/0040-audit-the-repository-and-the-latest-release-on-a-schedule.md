@@ -2311,7 +2311,14 @@ the commit, the tag and that a step finished. A finding is data for the model, n
 
 **Not run and limits.** Row 1 now creates two empty files instead of naming rows 6 to 15 as not run:
 `results/not-run.txt`, one line `<check id> <why id>` (the why vocabulary above) per check that did not
-run, and `results/limits.txt`, one line per check, or part of one, that timed out or ran in part. Each row
+run, and `results/limits.txt`, one line per check, or part of one, that timed out or ran in part. *Amended
+in review round K:* a check **did not run** only when no part of it produced a result: its step-level
+download, pull or staging failed before any part ran, or every part failed. A part of a check that timed
+out or failed (one release file's attestation, one hostile run, one fuzz target) is a `limits.txt` line
+of that check with its `.exit` file, never a `not-run.txt` line, since the publish core refuses a finding
+of a check recorded with `ran: false`. Rows 7, 13 and 14, whose checks have several parts, count them in
+shell (`ran_any`) and write `<check> tool-failed` at the step's end only when none ran; every why id is
+one of the publish core's `whyNotRun`, which `check.AuditWorkflow` holds. Each row
 appends its own: `scorecard-admin needs-admin-read` on every run; `image-pull`, `image-runtime`,
 `hostile-inventories` and `image-scan` `image-not-pulled` when row 7 resolved no digest or row 8 pulled
 none; `image-scan tool-failed` when row 2's database download failed; `binary-vulnerabilities
@@ -2337,13 +2344,15 @@ release's verification 50 (its loop's 20-minute budget and 29 minutes of timeout
 download 5, the filter 1, the checksum check 5, three registry and API reads of 2, `cosign verify` 3,
 the two `cosign verify-attestation` runs 3 each and the SBOM's attestation 3), the pull 15 (the pull 8,
 the inspect 2, the save 4), the binaries' govulncheck 20 (5 per binary), trivy 15 (the image 8, the SBOM
-4), the runtime check 10 (its timeouts 9: 1 + 1 + 2 + 4 minutes and the 60-second start), the hostile
-inventories 20 (1 + 1 + 1 + 1 minutes of staging and the 15 minutes of runs, 60 seconds per run),
-fuzzing 45 (10 minutes of fuzzing and 12 in all per target, at most three targets, the others recorded
-in the limits, and the 5-minute pull), the supply-chain reads 15 (2 per read). The dynamic tests, rows
-13 and 14, take at most 65 of their steps' minutes. The job's steps add up to 345 minutes, which with 5
-minutes for the job's set-up and post steps stays within its 355 (`test/architecture` holds that sum),
-and GitHub's own limit is 360.
+4), the runtime check 13 (its timeouts 12, every docker command bounded since review round I), the
+hostile inventories 20 (its staging, then a 12-minute budget after which no run starts, plus the 6
+minutes of the last run begun and the image's removal: 19 minutes), fuzzing 45 (10 minutes of fuzzing
+and 16 of timeouts in all per target, at most three targets, the others recorded in the limits, no target
+started after its 25-minute budget, and the 5-minute pull), the supply-chain reads 15 (`read_api`'s
+12-minute function budget plus one read's 2 minutes; the reads it did not reach go to
+`read-skipped.txt`). Rounds I and J give each step's bound in seconds (below). The job's steps add up to
+348 minutes, which with 5 minutes for the job's set-up and post steps stays within its 355
+(`test/architecture` holds that sum), and GitHub's own limit is 360.
 
 **Pins.** scorecard v5.6.0 (`scorecard_<version>_linux_amd64.tar.gz`), cosign v3.1.5
 (`cosign-linux-amd64`, the version and digest `release.yml` and `dev/lima.yaml` pin, so Renovate's
@@ -2364,7 +2373,8 @@ No `packages` scope: the image is public, and rows 7 and 8 read the registry ano
 and `Webhooks` checks are left out of its run (`scorecard-admin`, "not run (needs admin read)"), and row
 15's reads the token is refused (the secret and variable name listings at least, which need admin, and
 whatever the first run shows) are listed in `supply-chain/read-refused.txt` and the limits, "not run
-(read refused)". The scopes are confirmed on the first run (runbook step 8): a read refused that a
+(read refused)"; the reads its budget ran out on are listed apart, in `supply-chain/read-skipped.txt`
+and a limits line of their own (review round K), since nothing refused them. The scopes are confirmed on the first run (runbook step 8): a read refused that a
 scope above should allow is a finding, and a scope no read used is dropped.
 
 **The rows.**
@@ -2430,7 +2440,8 @@ which the container is killed and removed.
 - **Row 14, fuzzing.** The targets are found by reading the tracked `*_test.go` files outside `testdata`
   as text, by their signature alone (`^func Fuzz[A-Z0-9_][A-Za-z0-9_]*\(f \*testing\.F\)`, so a helper
   such as `Fuzzy` is none): nothing is built or run to list them. A target whose package or name has
-  another shape is recorded as `fuzzing unexpected-target` and skipped, never a reason to end the step.
+  another shape is recorded in the limits (`fuzzing: a target of an unexpected shape was not run`, since
+  review round K) and skipped, never a reason to end the step.
   Each target runs `go test -run '^$'
   -fuzz '^<name>$' -fuzztime 10m` in a container of its own from the pinned Go image, with
   `GOFLAGS=-mod=readonly`, `GOPROXY=off` and `GOTOOLCHAIN=local`, as user 65534, with
@@ -2501,7 +2512,8 @@ no longer to be checked: round I read them from its source.
   image's entries, to `filesystem.stderr`, never to the public log.
 - **Fuzz discovery and an unexpected target.** Discovery matches the `Fuzz` signature alone, so
   `func Fuzzy(` and helpers are no target; a target of another shape is recorded `fuzzing
-  unexpected-target` ("not run") and skipped, where it ended the job with no report before.
+  unexpected-target` ("not run") and skipped, where it ended the job with no report before. *Amended in
+  review round K:* `unexpected-target` is no why id, so the target is now a limits line.
 - **trivy offline.** The check holds row 10's `offline=(...)` flags `--skip-db-update
   --skip-java-db-update --skip-check-update --offline-scan --disable-telemetry`, which both scans use:
   without them trivy would send the image's package identifiers to third-party services.
@@ -2652,10 +2664,12 @@ finding, never a limit. Each is held by `check.AuditWorkflow` and a case of its 
 - **L5, latest.txt is shape-checked.** `latest_release` and `latest_digest` are blanked unless they are
   `^v[0-9]+\.[0-9]+\.[0-9]+$` and `^sha256:[0-9a-f]{64}$`, as `tag_digest` is.
 - **L6, an unexpected ruleset ID does not end the step.** Row 15 records `supply-chain
-  unexpected-ruleset` in `not-run.txt` and goes on with `continue`, never `exit 1`.
+  unexpected-ruleset` in `not-run.txt` and goes on with `continue`, never `exit 1`. *Amended in review
+  round K:* `unexpected-ruleset` is no why id, so the ID is now the limits line `supply-chain: a ruleset ID
+  that is no number was not read`.
 - **S4, an unresolved digest is recorded.** The `else` of `if [ -n "${tag_digest}" ]` records
   `release-integrity tool-failed` and a limits line naming the signature and attestations it did not
-  verify.
+  verify. *Amended in review round K:* the limits line alone, since the file checks may have run.
 - **S5, the model downgrades on the exit code alone.** The `security-audit-run` skill lets the model
   report a `verification-failed` as a limit only when the command's `.exit` file records a code other
   than the refusal codes above; stderr is context, never a reason, because the registry's, Sigstore's and
@@ -2704,6 +2718,55 @@ The checks job's bounds, in seconds, the fixture's and the workflow's alike: row
 + 1080 = 2400 of 3000 (40 of 50 minutes); row 8, 840 of 900; row 9, 0 + 720 + 420 = 1140 of 1200; row 13,
 max(270, 720 + 360) + 60 = 1140 of 1200; row 14, max(1110, 1500 + 960) + 60 = 2520 of 2700; row 15, 720
 + 120 = 840 of 900. The job's steps still add up to 348 of its 355 minutes.
+
+**Review round K of PR 5c (2026-11-25).** The reviewer's and the auditor's findings on round J. The
+invariant: `not-run.txt` means the check did not run, and every line of it is one the publish core can
+render, since a result it refuses publishes no report. Each is held by `check.AuditWorkflow` and a case
+of its test:
+
+- **B1, a part is no whole verdict.** Rows 7, 13 and 14 wrote a part that timed out or failed (one
+  file's attestation, the image's signature, one hostile run, one fuzz target) as the whole check not
+  run, so a tampered archive with a deleted image tag gave a finding of a check recorded `ran: false`,
+  which the core refuses. Each step now sets `ran_any=0` before its first part and `ran_any=1` right
+  after each part's exit, records each part's timeout or failure as a limits line of the check, and ends
+  with `if [ "${ran_any}" -eq 0 ]; then echo "<check> tool-failed" >> "${results}/not-run.txt"; fi`. The
+  step-level download, pull and staging records before any part ran keep their not-run lines. The check
+  refuses, in those three steps, a not-run line inside a loop, one outside the loops after the first
+  `ran_any=1` (the end record aside), a part's exit inside a loop with no `ran_any=1` after it, and a
+  step with no end record after its last `ran_any=1`. Row 13's run that hangs the CLI is the limits line
+  `<run> timed out after 60 seconds, a finding candidate of the run`, with exit 124 in its `.exit` file,
+  which the skill reads as a finding candidate. The skill adds the belt and braces: a check with any
+  finding, or any `verification-failed.txt` line, ran, and any not-run line of it goes to the limits.
+- **B2, why ids outside the vocabulary.** `fuzzing unexpected-target` and `supply-chain
+  unexpected-ruleset` are no why id of `whyNotRun`, so the core refused the result. Both are limits lines
+  now, and the check holds every not-run line of the checks job to the shape `echo "<check id> <why id>"`
+  and its why id to a list its test pins equal to `whyNotRun` in
+  `ci/auditpublish/internal/publish/vocabulary.go`.
+- **L4, a malformed checksums.txt.** A non-empty `checksums.txt` with no well-formed line filtered to an
+  empty list and read as `tool-failed`. It is now `release-integrity verification-failed` with the limits
+  line `release-integrity: checksums.txt holds no well-formed line`, right after the filter.
+- **S2, budget skips are no refused reads.** `read_api`'s budget wrote the reads it did not reach to
+  `read-refused.txt`, which sends the maintainer to a permission that is fine. They go to
+  `read-skipped.txt`, which the step's end names in a limits line of its own.
+- **N3, the skill's row 7.** Its downgrade condition was vacuous (the workflow writes
+  `verification-failed` only on the refusal codes); the skill now says never to downgrade one, and to use
+  the `.exit` files to name the command that refused.
+- **The fit tripwire's holes (auditor L2, reviewer S1).** `fit` now refuses: (a) a `timeout` whose
+  duration is no `<N>`, `<N>s` or `<N>m` before its command (`timeout 1h`, `1.5m`, `-k 5 50m`, which it
+  counted as 0 or as the flag's 5 seconds); (b) a loop on one line, a loop with `do` on a line of its own,
+  and any other loop header that is no `auditLoopStart`; (c) inside a budgeted loop's body, an inner loop
+  with a timeout that is neither budgeted nor over literal words, and a literal-word inner loop with no
+  budget counts its timeouts once per word; (d) a `timeout` that `xargs` or `find -exec` runs once per
+  argument. (d) is closed, not left as a residual.
+
+*Accepted residuals of the text tripwire*, which `fit` does not hold: an outer loop's timeouts around a
+budgeted inner loop (counted once, not per outer iteration); a budget that is not at the head of a loop
+body; commands under no timeout, counted as zero; loops inside a `case` arm; nested budgeted loops, and
+budgeted functions, beyond round J's rule; and a timeout reached through anything but its own command
+line (a variable that holds the command, `eval`, a script file). The numbers are unchanged: every
+step's bound is round J's, and the job's steps add up to 348 of its 355 minutes. The PRD's box "A failed
+run is visible" stays unticked, for milestone 3, and rows 9 and 10, which also write a part's failure to
+`not-run.txt`, are left as they are: the B1 rule is scoped to rows 7, 13 and 14.
 
 ## Alternatives considered
 
