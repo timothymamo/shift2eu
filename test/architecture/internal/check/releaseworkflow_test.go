@@ -2029,6 +2029,54 @@ func TestReleaseWorkflow(t *testing.T) {
 			wantIn:   "want the read of dev/lima.yaml's nodeVersion: run is",
 		},
 
+		// The Node steps' scripts are literal blocks with clip chomping (|) and
+		// nothing else: release.yml's closed schema reads no other form, unlike
+		// ci.yml's Test job, which may chomp with |- or |+ (issue #554). The
+		// reader refuses a chomped or a folded run: rather than comparing the
+		// script it stands for, so no edit can slip a form past the comparison.
+		{
+			name:     "the nodeVersion read chomping its line ends",
+			workflow: in("test", "        id: node\n        run: |\n", "        id: node\n        run: |-\n"),
+			wantIn:   "want the read of dev/lima.yaml's nodeVersion: run",
+			wantAlso: "has lines below it, want one value on its line",
+		},
+		{
+			name:     "the nodeVersion read keeping its trailing line ends",
+			workflow: in("test", "        id: node\n        run: |\n", "        id: node\n        run: |+\n"),
+			wantIn:   "want the read of dev/lima.yaml's nodeVersion: run",
+			wantAlso: "has lines below it, want one value on its line",
+		},
+		{
+			name:     "the nodeVersion read folded",
+			workflow: in("test", "        id: node\n        run: |\n", "        id: node\n        run: >\n"),
+			wantIn:   "want the read of dev/lima.yaml's nodeVersion: run",
+			wantAlso: "has lines below it, want one value on its line",
+		},
+		{
+			name:     "the nodeVersion read folded and chomped",
+			workflow: in("test", "        id: node\n        run: |\n", "        id: node\n        run: >-\n"),
+			wantIn:   "want the read of dev/lima.yaml's nodeVersion: run",
+			wantAlso: "has lines below it, want one value on its line",
+		},
+		{
+			name:     "the node check chomping its line ends",
+			workflow: in("test", "          NODE_VERSION: ${{ steps.node.outputs.version }}\n        run: |\n", "          NODE_VERSION: ${{ steps.node.outputs.version }}\n        run: |-\n"),
+			wantIn:   "want the check that node on the PATH is the pinned one: run",
+			wantAlso: "has lines below it, want one value on its line",
+		},
+		{
+			name:     "the node check keeping its trailing line ends",
+			workflow: in("test", "          NODE_VERSION: ${{ steps.node.outputs.version }}\n        run: |\n", "          NODE_VERSION: ${{ steps.node.outputs.version }}\n        run: |+\n"),
+			wantIn:   "want the check that node on the PATH is the pinned one: run",
+			wantAlso: "has lines below it, want one value on its line",
+		},
+		{
+			name:     "the node check folded",
+			workflow: in("test", "          NODE_VERSION: ${{ steps.node.outputs.version }}\n        run: |\n", "          NODE_VERSION: ${{ steps.node.outputs.version }}\n        run: >\n"),
+			wantIn:   "want the check that node on the PATH is the pinned one: run",
+			wantAlso: "has lines below it, want one value on its line",
+		},
+
 		// The four Node steps and the job itself hold no key that turns a step
 		// or the job off, or lets it fail unseen: each of them is the way the
 		// load check skips again without the pin saying so (issue #548).
