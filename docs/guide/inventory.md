@@ -86,7 +86,7 @@ subscription getting its own copy of each message;
 [ADR 0046](../adr/0046-add-seven-taxonomy-categories-and-match-cache-plans-on-memory.md)),
 `search.opensearch` (a search engine that speaks the OpenSearch REST API: OpenSearch, or Elasticsearch
 up to 7.10) and `messaging.kafka` (a cluster of brokers that speaks the Apache Kafka protocol;
-[ADR 0047](../adr/0047-add-search-opensearch-and-messaging-kafka-and-store-their-data-per-node.md)). A
+[ADR 0047](../adr/0047-add-search-opensearch-and-messaging-kafka-and-price-their-storage-per-node.md)). A
 resource that fits none of these categories is `unclassified` and keeps its `rawType`: it then shows
 up in the report as a blocker on every target, instead of disappearing from the assessment. The
 programs below do not classify into the seven categories ADR 0046 adds yet, nor into the two ADR 0047

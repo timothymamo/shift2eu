@@ -179,7 +179,7 @@ priced.
   (`search.opensearch`) and Kafka (`messaging.kafka`); a managed database's (`database.*`) is the
   service's data, counted once
   ([ADR 0027](../adr/0027-match-plans-and-estimate-monthly-prices-in-a-domain-package.md),
-  [ADR 0047](../adr/0047-add-search-opensearch-and-messaging-kafka-and-store-their-data-per-node.md)).
+  [ADR 0047](../adr/0047-add-search-opensearch-and-messaging-kafka-and-price-their-storage-per-node.md)).
   A cache (`cache.redis`) has no storage. Block, object and file storage are priced per GiB alone. A
   `count` that is not given is taken as 1, and an `hoursPerMonth` that is not given as 730; the cell
   says "(count assumed 1)" or "(730 hours assumed)". Amounts are rounded to the cent only when shown.

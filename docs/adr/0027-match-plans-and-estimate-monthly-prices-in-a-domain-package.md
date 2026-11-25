@@ -9,7 +9,7 @@
   estimates nothing gives no amount in the Markdown report; amended by
   [0046](0046-add-seven-taxonomy-categories-and-match-cache-plans-on-memory.md): `cache.redis` is matched on
   memory alone, and a never-priced category with a fit gets the reason `not-priced`; amended by
-  [0047](0047-add-search-opensearch-and-messaging-kafka-and-store-their-data-per-node.md): `search.opensearch`
+  [0047](0047-add-search-opensearch-and-messaging-kafka-and-price-their-storage-per-node.md): `search.opensearch`
   and `messaging.kafka` are priced by plan with their storage per node × count, not stored once
 - Date: 2026-11-14
 

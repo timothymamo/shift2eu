@@ -1,8 +1,7 @@
 // Package taxonomy defines the provider-neutral service categories (for example
 // compute.vm, compute.baremetal, kubernetes.managed, storage.object,
 // database.postgresql, cache.redis, network.loadbalancer, search.opensearch,
-// messaging.kafka) and the capability
-// vocabulary (for example ipv6,
+// messaging.kafka) and the capability vocabulary (for example ipv6,
 // point-in-time-restore) that are the shared language between source
 // hyperscalers and target EU providers.
 //

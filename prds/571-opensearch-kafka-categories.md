@@ -2,7 +2,7 @@
 
 **Status:** In progress, milestone 1 done. The maintainer decided all six questions under *Decisions and
 decided questions* on 2026-11-25, as recommended. Milestone 1's ADR is
-[0047](../docs/adr/0047-add-search-opensearch-and-messaging-kafka-and-store-their-data-per-node.md).
+[0047](../docs/adr/0047-add-search-opensearch-and-messaging-kafka-and-price-their-storage-per-node.md).
 **Issue:** #571
 
 ## Problem
@@ -538,7 +538,7 @@ lands, its report shows the new categories as fit `none` with "no offering in th
   are.
 - **Plan pricing with storage per node.** Both categories are ByPlan on vCPUs and memory, and storage is
   per node × `count`, unlike the managed databases (*Estimates*). Recorded in
-  [ADR 0047](../docs/adr/0047-add-search-opensearch-and-messaging-kafka-and-store-their-data-per-node.md),
+  [ADR 0047](../docs/adr/0047-add-search-opensearch-and-messaging-kafka-and-price-their-storage-per-node.md),
   with the boundaries, the field rows and why no format version changes.
 - **No inventory format version.** As ADR 0023 and ADR 0046: `taxonomy.ParseCategory` accepts a new
   value in a version 1 or 2 file; the field table gains rows for new categories only, so no existing
