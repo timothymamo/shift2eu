@@ -79,20 +79,38 @@ func (v Verdict) BestOfferingGlobal() bool {
 }
 
 // GlobalTies returns the names of the ties (Ties) whose offering is global, in
-// the order of Ties, and nil when there is none.
+// the order of Ties, and nil when there is none or when there is no best
+// offering (BestOffering is empty).
 func (v Verdict) GlobalTies() []string {
-	if len(v.Candidates) == 0 {
+	if v.BestOffering == "" {
 		return nil
 	}
 
-	first := v.Candidates[0]
+	ties := v.Ties()
+	if len(ties) == 0 {
+		return nil
+	}
 
 	var global []string
 
-	for _, c := range v.Candidates[1:] {
-		if c.Fit == first.Fit && len(c.Missing) == len(first.Missing) && c.Offering.Global {
-			global = append(global, c.Offering.Name)
+	// Ties are a subsequence of Candidates[1:], in candidate order: walk both
+	// in step so that each tie is matched to its own candidate.
+	rest := v.Candidates[1:]
+
+	for _, name := range ties {
+		for len(rest) > 0 && rest[0].Offering.Name != name {
+			rest = rest[1:]
 		}
+
+		if len(rest) == 0 {
+			break
+		}
+
+		if rest[0].Offering.Global {
+			global = append(global, name)
+		}
+
+		rest = rest[1:]
 	}
 
 	return global
