@@ -495,6 +495,12 @@ gcloud asset search-all-resources --scope="projects/$project" \
   jq '[.[] | if .labels then .labels |= with_entries(select(.key == "goog-gke-node")) else . end]' \
   > "$out/assets.json"
 
+# Whether the asset listing holds an asset type, in a region when one is given:
+# the Memorystore, Filestore and Artifact Registry lists below run only then.
+has() { jq -e --arg t "$1" --arg r "${2:-}" \
+  'any(.[]; .assetType == $t and ($r == "" or (.name | contains("/locations/" + $r + "/"))))' \
+  "$out/assets.json" > /dev/null; }
+
 gcloud compute instances list --project="$project" \
   --format='json(kind,selfLink,machineType,metadata.items[].key,disks[].source,disks[].boot,disks[].autoDelete,networkInterfaces[].stackType,networkInterfaces[].ipv6AccessConfigs[].type)' \
   > "$out/compute-instances.json"
@@ -526,47 +532,67 @@ gcloud pubsub subscriptions list --project="$project" \
   --format='json(name,deadLetterPolicy.deadLetterTopic)' > "$out/pubsub-subscriptions.json"
 
 # Load balancers: global and every region's, each list by default.
-gcloud compute url-maps list --project="$project" \
-  --format='json(selfLink,region,defaultService,defaultRouteAction,pathMatchers)' > "$out/compute-url-maps.json"
-gcloud compute backend-services list --project="$project" \
+gcloud compute url-maps list --project="$project" --quiet \
+  --format='json(selfLink,region,defaultService,defaultRouteAction.weightedBackendServices[].backendService,defaultRouteAction.requestMirrorPolicy.backendService,pathMatchers[].defaultService,pathMatchers[].defaultRouteAction.weightedBackendServices[].backendService,pathMatchers[].defaultRouteAction.requestMirrorPolicy.backendService,pathMatchers[].pathRules[].service,pathMatchers[].pathRules[].routeAction.weightedBackendServices[].backendService,pathMatchers[].pathRules[].routeAction.requestMirrorPolicy.backendService,pathMatchers[].routeRules[].service,pathMatchers[].routeRules[].routeAction.weightedBackendServices[].backendService,pathMatchers[].routeRules[].routeAction.requestMirrorPolicy.backendService)' \
+  > "$out/compute-url-maps.json"
+gcloud compute backend-services list --project="$project" --quiet \
   --format='json(kind,selfLink,region,protocol,loadBalancingScheme,ipAddressSelectionPolicy)' \
   > "$out/compute-backend-services.json"
-gcloud compute forwarding-rules list --project="$project" \
+gcloud compute forwarding-rules list --project="$project" --quiet \
   --format='json(kind,selfLink,region,IPProtocol,ipVersion,target,backendService)' \
   > "$out/compute-forwarding-rules.json"
-gcloud compute target-pools list --project="$project" \
+gcloud compute target-pools list --project="$project" --quiet \
   --format='json(kind,selfLink,region)' > "$out/compute-target-pools.json"
-gcloud compute target-https-proxies list --project="$project" \
+gcloud compute target-https-proxies list --project="$project" --quiet \
   --format='json(kind,selfLink,urlMap)' > "$out/compute-target-https-proxies.json"
-gcloud compute target-http-proxies list --project="$project" \
+gcloud compute target-http-proxies list --project="$project" --quiet \
   --format='json(kind,selfLink,urlMap)' > "$out/compute-target-http-proxies.json"
 
-# Memorystore, per region: the regions come from the asset listing.
+# Memorystore, per region: the regions come from the asset listing, and each
+# list runs only in a region that holds its asset type.
 for region in $(jq -r '[.[] | select(.assetType | test("^(redis|memorystore)\\.googleapis\\.com/")) | .name | capture("/locations/(?<r>[^/]+)/").r] | unique | .[]' "$out/assets.json"); do
-  gcloud redis instances list --project="$project" --region="$region" \
-    --format='json(name,tier,memorySizeGb,replicaCount,locationId,alternativeLocationId,nodes[].zone,persistenceConfig.persistenceMode)'
-  gcloud redis clusters list --project="$project" --region="$region" \
-    --format='json(name,shardCount,replicaCount,nodeType,sizeGb,zoneDistributionConfig.mode,persistenceConfig.mode)'
-  gcloud memorystore instances list --project="$project" --location="$region" \
-    --format='json(name,mode,shardCount,replicaCount,nodeType,nodeConfig.sizeGb,zoneDistributionConfig.mode,persistenceConfig.mode)'
+  if has redis.googleapis.com/Instance "$region"; then
+    gcloud redis instances list --project="$project" --region="$region" --quiet \
+      --format='json(name,tier,memorySizeGb,replicaCount,locationId,alternativeLocationId,nodes[].zone,persistenceConfig.persistenceMode)'
+  fi
+  if has redis.googleapis.com/Cluster "$region"; then
+    gcloud redis clusters list --project="$project" --region="$region" --quiet \
+      --format='json(name,shardCount,replicaCount,nodeType,sizeGb,zoneDistributionConfig.mode,persistenceConfig.mode)'
+  fi
+  if has memorystore.googleapis.com/Instance "$region"; then
+    gcloud memorystore instances list --project="$project" --location="$region" --quiet \
+      --format='json(name,mode,shardCount,replicaCount,nodeType,nodeConfig.sizeGb,zoneDistributionConfig.mode,persistenceConfig.mode)'
+  fi
 done > "$out/memorystore.json"
 
-gcloud filestore instances list --project="$project" \
-  --format='json(name,tier,fileShares[].capacityGb,protocol)' > "$out/filestore-instances.json"
-gcloud artifacts repositories list --project="$project" --location=all \
-  --format='json(name,format,mode)' > "$out/artifacts-repositories.json"
+# Filestore and Artifact Registry, when the asset listing holds one of theirs.
+if has file.googleapis.com/Instance; then
+  gcloud filestore instances list --project="$project" --quiet \
+    --format='json(name,tier,fileShares[].capacityGb,protocol)' > "$out/filestore-instances.json"
+fi
+if has artifactregistry.googleapis.com/Repository; then
+  gcloud artifacts repositories list --project="$project" --location=all --quiet \
+    --format='json(name,format,mode)' > "$out/artifacts-repositories.json"
+fi
+
 # The Cloud Run service each 2nd gen function runs on, per region with functions.
 for region in $(jq -r '[.[] | select(.assetType == "cloudfunctions.googleapis.com/Function") | .name | capture("/locations/(?<r>[^/]+)/").r] | unique | .[]' "$out/assets.json"); do
-  gcloud functions list --project="$project" --v2 --regions="$region" \
+  gcloud functions list --project="$project" --v2 --regions="$region" --quiet \
     --format='json(name,serviceConfig.service)'
 done > "$out/functions.json"
 ```
+
+The Memorystore, Filestore, Artifact Registry and Cloud Functions lists run only when the asset
+listing holds a resource of theirs, so a project that does not use a service never calls its API,
+which may not be enabled. `--quiet` makes `gcloud` take the default answer, No, when it offers to
+enable an API; if a call still asks to enable one, answer N: enabling an API writes to the project.
 
 The `--format` projections keep only what the program reads: an instance's metadata keys, for
 example, but not their values, which hold startup scripts and SSH keys, and of its disks only the
 source, whether it boots and whether it is deleted with the instance (`autoDelete`). Of the asset
 labels, `jq` keeps only `goog-gke-node`, the one the program reads; the Cloud Run service behind
-each function comes from `functions list`, not from a label.
+each function comes from `functions list`, not from a label. Of a URL map, only the links to its
+backend services are kept, not its route actions' header values.
 
 The load balancer lists read only the HTTP and HTTPS target proxies, the frontends of an Application
 Load Balancer; a TCP, SSL or gRPC proxy is not listed, so a load balancer behind one gets no `ipv6`.
@@ -574,9 +600,9 @@ The Memorystore lists run once per region the asset listing names: the gcloud pa
 "all regions" value for them. Every call above lists or describes; none changes anything.
 
 The Cloud Asset Inventory listing is the list of resources, but for load balancers, which come from
-the compute lists; the other calls add the settings the capabilities and sizes need. A resource the other calls do not cover still appears, as `unclassified` or
-without capabilities. For several projects, collect each into a directory of its own and build one
-inventory per project.
+the compute lists; the other calls add the settings the capabilities and sizes need. A resource the
+other calls do not cover still appears, as `unclassified` or without capabilities. For several
+projects, collect each into a directory of its own and build one inventory per project.
 
 ### Build the GCP inventory
 
@@ -595,7 +621,7 @@ Review `inventories/gcp.inventory.json`, then delete the raw output: `rm -r inve
 | Cloud SQL instance (PostgreSQL or MySQL) | `storageGiB` | `sql instances list`, `settings.dataDiskSizeGb` (a string in the API's JSON) |
 | Cloud SQL instance, custom tier | `vcpus`, `memoryGiB` | `sql instances list`, `settings.tier` `db-custom-<vCPU>-<memory MiB>` (`db-custom-2-7680`: 2 vCPU, 7.5 GiB) |
 | Cloud SQL instance, single-node | `count`: 1 | `sql instances list`, `settings.availabilityType` `ZONAL` |
-| Memorystore for Redis instance | `memoryGiB` (per node), `count` | `redis instances list`, `memorySizeGb` (each node holds the whole data set) and the number of `nodes` (1 for a `BASIC` instance that lists none) |
+| Memorystore for Redis instance | `memoryGiB` (per node), `count` | `redis instances list`, `memorySizeGb` (each node holds the whole data set) and the number of `nodes` (for an instance that lists none, 1 for `BASIC` and `replicaCount` + 1 for `STANDARD_HA`) |
 | Memorystore for Redis Cluster | `count` | `redis clusters list`, `shardCount` × (`replicaCount` + 1) |
 | Memorystore for Valkey instance | `memoryGiB` (per node), `count` | `memorystore instances list`, `nodeConfig.sizeGb` and `shardCount` × (`replicaCount` + 1) |
 | Filestore instance | `storageGiB` | `filestore instances list`, the sum of `fileShares[].capacityGb` (a string in the API's JSON) |
@@ -665,10 +691,12 @@ disks labelled `goog-gke-node`; the cluster stands for them, while a persistent 
 the Cloud Run service behind a 2nd gen Cloud Function (the one its `serviceConfig.service` names in
 `functions list`; the function stands for it), a load balancer's forwarding rules and target proxies
 (its frontends, read for its protocol and IP version; the URL map, backend service or target pool
-stands for the load balancer), the backend services a URL map names, Artifact Registry repositories
-of mode `REMOTE_REPOSITORY` or `VIRTUAL_REPOSITORY` (they pull through from an upstream or aggregate
-other repositories, and store no image of their own), and compute and Filestore snapshots and
-autoscalers, which become capabilities of their disk, file share or group.
+stands for the load balancer), the backend services a URL map names, target instances (the asset
+rows of `TargetInstance`, a forwarding rule's target that is no load balancer), Artifact Registry
+repositories of mode `REMOTE_REPOSITORY` or `VIRTUAL_REPOSITORY` (they pull through from an upstream
+or aggregate other repositories, and store no image of their own), compute and Filestore snapshots
+and autoscalers, which become capabilities of their disk, file share or group, and Filestore backups,
+which belong to their instance.
 
 | Category | Capability | When |
 |---|---|---|

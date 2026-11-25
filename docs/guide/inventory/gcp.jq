@@ -65,12 +65,14 @@
 # REGIONAL one with a standby gets no count, how many nodes a target bills for
 # a standby is the target's to say). A Memorystore cache's memory is per node
 # (a Redis instance's memorySizeGb, a Valkey instance's nodeConfig.sizeGb) and its
-# count its nodes (a Redis instance's nodes, a cluster's or Valkey instance's
-# shards times one plus their replicas); a Redis cluster names only its whole
-# memory (sizeGb), so it gets a count and no memory. A Filestore instance's
-# storage is the sum of its shares' capacityGb (a string). The GB of these APIs
-# are taken as GiB. A number no call gives is left out, never guessed. The workload, relations and monthlyCost fields are the user's to
-# add by hand; this program never writes them.
+# count its nodes (a Redis instance's nodes, or for a STANDARD_HA one that lists
+# none its replicaCount plus one; a cluster's or Valkey instance's shards times
+# one plus their replicas); a Redis cluster names only its whole memory
+# (sizeGb), so it gets a count and no memory. A Filestore instance's storage is
+# the sum of its shares' capacityGb (a string). The GB of these APIs are taken
+# as GiB. A number no call gives is left out, never guessed. The workload,
+# relations and monthlyCost fields are the user's to add by hand; this program
+# never writes them.
 
 # A key that names the same resource in an asset name
 # (//compute.googleapis.com/projects/p/zones/z/instances/n), a selfLink
@@ -313,7 +315,12 @@ def reaches($proxies):
           size: (if $d == null then null else size_of({
             memoryGiB: $d.memorySizeGb,
             count: ((($d.nodes // []) | length) as $n
-              | if $n > 0 then $n elif $d.tier == "BASIC" then 1 else null end)
+              | if $n > 0 then $n
+                elif $d.tier == "BASIC" then 1
+                # A STANDARD_HA instance that lists no nodes: the primary and
+                # its replicas.
+                elif $d.tier == "STANDARD_HA" and $d.replicaCount != null then $d.replicaCount + 1
+                else null end)
           }) end)}
       elif .assetType == "redis.googleapis.com/Cluster"
         or .assetType == "memorystore.googleapis.com/Instance" then
@@ -363,9 +370,10 @@ def reaches($proxies):
         empty
       elif .assetType == "compute.googleapis.com/Snapshot"
         or .assetType == "compute.googleapis.com/Autoscaler"
-        or .assetType == "file.googleapis.com/Snapshot" then
+        or .assetType == "file.googleapis.com/Snapshot"
+        or .assetType == "file.googleapis.com/Backup" then
         # Part of a disk's, a group's or a file share's capabilities, not a
-        # resource to move.
+        # resource to move. A Filestore backup adds no capability.
         empty
       else
         $base + {category: "unclassified"}
