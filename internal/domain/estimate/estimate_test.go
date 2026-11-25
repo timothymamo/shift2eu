@@ -133,8 +133,8 @@ func TestPricingOf(t *testing.T) {
 		{name: "registry.container", category: taxonomy.RegistryContainer, want: estimate.NotPriced},
 		// PRD #571's two categories are priced by plan, on vCPUs and memory, as
 		// every plan-priced category but cache.redis is.
-		{name: "search.opensearch", category: searchCategory, want: estimate.ByPlan},
-		{name: "messaging.kafka", category: kafkaCategory, want: estimate.ByPlan},
+		{name: "search.opensearch", category: taxonomy.SearchOpenSearch, want: estimate.ByPlan},
+		{name: "messaging.kafka", category: taxonomy.MessagingKafka, want: estimate.ByPlan},
 		{name: "unclassified", category: taxonomy.Unclassified, want: estimate.NotPriced},
 		{name: "a category the taxonomy does not know", category: taxonomy.Category("quantum.widget"), want: estimate.NotPriced},
 	}
@@ -2101,8 +2101,9 @@ func namedComputeOffering(name string, plans ...catalog.Plan) catalog.Offering {
 // includes no storage, the offering prices storage per GiB in the estimate
 // region and the resource gives no storage size. The note names what is left out
 // by category - a boot volume for compute.vm, compute.baremetal and
-// kubernetes.managed, the data storage for database.postgresql and
-// database.mysql - and the amount, the breakdown and the totals do not change.
+// kubernetes.managed, the data storage for database.postgresql, database.mysql,
+// database.mongodb, search.opensearch and messaging.kafka - and the amount, the
+// breakdown and the totals do not change.
 func TestForStorageNotIncluded(t *testing.T) {
 	t.Parallel()
 
@@ -2280,6 +2281,70 @@ func TestForStorageNotIncluded(t *testing.T) {
 			wantMonthly:   "18.00",
 		},
 		{
+			// PRD #571's search.opensearch is plan-priced as a database is, and a
+			// data node's storage is its data storage: a plan that includes none
+			// leaves out what the cluster stores, as a database's plan does.
+			name:          "search.opensearch: a plan with no included storage leaves out the data storage",
+			resource:      searchResource(&inventory.Size{VCPUs: f(2), MemoryGiB: f(4)}, nil),
+			offerings:     []catalog.Offering{searchOffering("Example Search Without Included Storage", nodePlan("SE-NS", 2, 4, 0, 200000))},
+			region:        testutil.PricedDefaultRegion,
+			want:          estimate.DataStorage,
+			wantEstimated: true,
+			wantMonthly:   "20.00",
+		},
+		{
+			// A data node that gives its storage size said what it needs beyond
+			// the plan, so nothing is left out: 20.00 + 100 GiB × 0.10.
+			name: "search.opensearch: a storage size the resource gives gets no note",
+			resource: searchResource(&inventory.Size{
+				VCPUs: f(2), MemoryGiB: f(4), StorageGiB: f(100),
+			}, nil),
+			offerings:     []catalog.Offering{searchOffering("Example Search Without Included Storage", nodePlan("SE-NS", 2, 4, 0, 200000))},
+			region:        testutil.PricedDefaultRegion,
+			wantEstimated: true,
+			wantMonthly:   "30.00",
+		},
+		{
+			name:          "search.opensearch: a plan that includes storage gets no note without a size",
+			resource:      searchResource(&inventory.Size{VCPUs: f(2), MemoryGiB: f(4)}, nil),
+			offerings:     []catalog.Offering{searchOffering("Example Search With Included Storage", nodePlan("SE-INC", 2, 4, 20, 200000))},
+			region:        testutil.PricedDefaultRegion,
+			wantEstimated: true,
+			wantMonthly:   "20.00",
+		},
+		{
+			// messaging.kafka is priced per broker as a search cluster is per data
+			// node, so a plan that includes no storage leaves out the brokers' data
+			// storage: 18.00 × 3.
+			name:          "messaging.kafka: a plan with no included storage leaves out the data storage",
+			resource:      kafkaResource(&inventory.Size{VCPUs: f(2), MemoryGiB: f(4), Count: n(3)}, nil),
+			offerings:     []catalog.Offering{kafkaOffering("Example Kafka Without Included Storage", nodePlan("KF-NS", 2, 4, 0, 180000))},
+			region:        testutil.PricedDefaultRegion,
+			want:          estimate.DataStorage,
+			wantEstimated: true,
+			wantMonthly:   "54.00",
+		},
+		{
+			// A broker set that gives its storage size said what it needs beyond
+			// the plan, so nothing is left out: 18.00 × 3 + 100 GiB × 0.10 × 3.
+			name: "messaging.kafka: a storage size the resource gives gets no note",
+			resource: kafkaResource(&inventory.Size{
+				VCPUs: f(2), MemoryGiB: f(4), StorageGiB: f(100), Count: n(3),
+			}, nil),
+			offerings:     []catalog.Offering{kafkaOffering("Example Kafka Without Included Storage", nodePlan("KF-NS", 2, 4, 0, 180000))},
+			region:        testutil.PricedDefaultRegion,
+			wantEstimated: true,
+			wantMonthly:   "84.00",
+		},
+		{
+			name:          "messaging.kafka: a plan that includes storage gets no note without a size",
+			resource:      kafkaResource(&inventory.Size{VCPUs: f(2), MemoryGiB: f(4), Count: n(3)}, nil),
+			offerings:     []catalog.Offering{kafkaOffering("Example Kafka With Included Storage", nodePlan("KF-INC", 2, 4, 20, 180000))},
+			region:        testutil.PricedDefaultRegion,
+			wantEstimated: true,
+			wantMonthly:   "54.00",
+		},
+		{
 			// A resource priced by storage has no plan whose included storage
 			// could be short: it is the stored GiB itself, so it carries no note.
 			name:          "storage.block: a resource priced by storage gets no note",
@@ -2329,6 +2394,17 @@ func TestForStorageNotIncluded(t *testing.T) {
 
 			if got.StorageNotIncluded != tc.want {
 				t.Errorf("StorageNotIncluded = %q, want %q", got.StorageNotIncluded, tc.want)
+			}
+
+			// A note is what a total counts: the report's "storage not included in
+			// N estimates" is how many estimated resources carry one (ADR 0032).
+			wantStorageNotIncluded := 0
+			if tc.want != "" {
+				wantStorageNotIncluded = 1
+			}
+
+			if total := estimate.Sum([]estimate.Estimate{got}); total.StorageNotIncluded != wantStorageNotIncluded {
+				t.Errorf("Sum([got]).StorageNotIncluded = %d, want %d", total.StorageNotIncluded, wantStorageNotIncluded)
 			}
 
 			if tc.wantMonthly != "" {
@@ -2520,15 +2596,6 @@ func cachePlan(name string, vcpus, memoryGiB int64, amount catalog.Amount) catal
 	return plan(name, vcpus, memoryGiB*1000, 0, amount)
 }
 
-// searchCategory and kafkaCategory are PRD #571's two categories, as the values
-// the taxonomy, the inventory file and the report share. They are written as
-// values, not as the package's constants, so this file compiles while those
-// constants do not exist yet.
-const (
-	searchCategory = taxonomy.Category("search.opensearch")
-	kafkaCategory  = taxonomy.Category("messaging.kafka")
-)
-
 // nodePlan is one plan of a search.opensearch or messaging.kafka offering: the
 // vCPUs and memory of one node, the storage it includes per node and its monthly
 // price per node.
@@ -2551,13 +2618,13 @@ func nodeOffering(name string, c taxonomy.Category, storageAmount catalog.Amount
 // searchOffering sells the search.opensearch plans given, each the price of one
 // data node, and prices the GiB above what a plan includes at 0.10 EUR a GiB.
 func searchOffering(name string, plans ...catalog.Plan) catalog.Offering {
-	return nodeOffering(name, searchCategory, 1000, plans...)
+	return nodeOffering(name, taxonomy.SearchOpenSearch, 1000, plans...)
 }
 
 // kafkaOffering sells the messaging.kafka plans given, priced as a search
 // cluster is: per broker, and the GiB above what a plan includes a GiB.
 func kafkaOffering(name string, plans ...catalog.Plan) catalog.Offering {
-	return nodeOffering(name, kafkaCategory, 1000, plans...)
+	return nodeOffering(name, taxonomy.MessagingKafka, 1000, plans...)
 }
 
 // searchResource is a search.opensearch resource: the size of one data node, the
@@ -2566,7 +2633,7 @@ func searchResource(size *inventory.Size, usage *inventory.Usage) inventory.Reso
 	return inventory.Resource{
 		ID:       "search-example",
 		RawType:  "AWS::OpenSearchService::Domain",
-		Category: searchCategory,
+		Category: taxonomy.SearchOpenSearch,
 		Region:   "eu-west-1",
 		Size:     size,
 		Usage:    usage,
@@ -2578,7 +2645,7 @@ func kafkaResource(size *inventory.Size, usage *inventory.Usage) inventory.Resou
 	return inventory.Resource{
 		ID:       "kafka-example",
 		RawType:  "AWS::MSK::Cluster",
-		Category: kafkaCategory,
+		Category: taxonomy.MessagingKafka,
 		Region:   "eu-west-1",
 		Size:     size,
 		Usage:    usage,
