@@ -82,16 +82,33 @@ U+00A0 NO-BREAK SPACE and U+00AD SOFT HYPHEN are left out on purpose. One shows 
 as nothing or a hyphen, so two values that differ only by one would look the same. `internal/domain/text`
 refuses such look-alikes for the same reason.
 
-The report's own words use only these characters. For a value from the inventory or a catalog, every
-other character is written as a visible escape in the form `text.Quote` and Go's `strconv.Quote` use:
+The report's own words use only these characters. A value from the inventory or a catalog goes through
+`pdfreport`'s own escaper. It keeps every rune of the set above as it is, and writes every other rune as
+a visible escape. It never drops a rune and never replaces one with `?` or anything else, so two values
+that differ always look different. It uses the escape forms of Go's `strconv` package, with lowercase hex
+as `strconv` writes it:
 
-- `\u` and four uppercase hex digits for a code point up to U+FFFF (`Ж` is `Ж`);
-- `\U` and eight for one above it (`😀` is `\U0001F600`);
-- `\x` and two hex digits for each byte of invalid UTF-8;
+- `\u` and four lowercase hex digits for a code point up to U+FFFF (`Ж` is `Ж`, `é` stays `é`);
+- `\U` and eight for one above it (`😀` is `\U0001f600`);
+- `\x` and two hex digits for each byte of invalid UTF-8 (`\xff`);
 - a backslash in the value is `\\`, so an escape can never be confused with a value that spells one.
 
+The escaper differs from `text.Quote` and `strconv.Quote` in three ways. `text.Quote` is the style
+reference, not the function to call:
+
+- it escapes every rune outside the set above, printable or not, so a printable non-Latin letter such as
+  `Ж` is escaped, where `strconv.Quote` keeps it;
+- it adds no surrounding quotes, and `"` is printable ASCII, so it stays `"`; it uses no short escape
+  such as `\n` or `\t`: a line feed is `\u000a`;
+- it never truncates: `text.Quote` cuts a value after 128 runes, while the PDF shows the whole value,
+  which the domain already caps (*Tables and page breaks*).
+
+U+00A0 and U+00AD are outside the set, so they are always escaped, as ` ` and `­`.
+
 This covers control characters, the line and paragraph separators, bidi overrides and other invisible
-formatting characters, as well as every non-Latin script. No font is embedded to show them. This keeps
+formatting characters, as well as every non-Latin script. `text.Validate` already refuses controls, bidi
+and other format characters, the line and paragraph separators and invalid UTF-8 when the inventory is
+read, so those reach the escaper only from a test: its handling of them is defence in depth. No font is embedded to show them. This keeps
 the WebAssembly module inside its size budget (ADR 0043: 3 MiB transferred gzip-compressed, 11 MiB decoded,
 about 2.5 MiB of decoded headroom today). The *How this report is worked out* section tells the reader
 what the escapes mean.
@@ -159,13 +176,15 @@ section says so in one sentence, and explains the fits instead (*Open questions*
 **About this report.** What a reader needs to check what produced the report:
 
 - the shift2eu version line, exactly what `shift2eu version` prints for the build that wrote the PDF
-  (`internal/version.String()`: "shift2eu <version> (commit <commit>, built <date>)"). The site's
-  footer shows the version from the same source;
+  (`internal/version.String()`: "shift2eu <version> (commit <commit>, built <date>)"). In a release,
+  `<version>` is GoReleaser's `{{ .Version }}`, the tag without its leading `v` (`0.15.0`). The site's
+  pages show the tag itself (`v0.15.0`), which `ci/sitebuild` writes from its `-version` flag. Both come
+  from the same tag; the PDF shows the version line, and the footer the tag;
 - every catalog snapshot used: the target's display name, the snapshot's source URL (`sourceURL`), its
   retrieval date as a UTC calendar date, and its default region for estimates;
 - the options the report reflects: the targets, the region per target (chosen with `--region`, or the
   default for estimates), and whether estimates were on;
-- the inventory file name and the source, as in the title block.
+- the inventory file name and the source, as in the title block (*Open questions*, 12).
 
 ### Comparison report (several targets)
 
@@ -200,6 +219,11 @@ The comparison ranks no target and recommends none, as today.
   that tall; such a row is then split at a line.
 - A value wraps at the character boundaries of its escaped form. It is never cut short: the domain
   already caps a value's length (`text.Validate`).
+- The worst case is real, not theoretical. A value of 2048 bytes (`text.MaxLen`) made of escaped runes
+  grows to between 4,098 and 6,144 shown characters: 1,024 two-byte runes such as `Ж` give 6,144
+  (`Ж` is 6 characters), 512 four-byte runes 5,120 (`\U0001f600` is 10), 682 three-byte runes about
+  4,100. In a narrow Courier table column that is more lines than a page holds, so the split-at-a-line
+  path runs. The hostile golden holds a 2048-byte value of two-byte runes.
 - A section heading never ends a page.
 
 ## How it fits the architecture
@@ -217,6 +241,11 @@ The comparison ranks no target and recommends none, as today.
   `version.String()`. Both already import `internal/version`, and their strict allow lists
   (`composition-root`, `web-composition-root-wire`) gain `pdfreport$`. Both construct `pdfreport`; unlike
   `htmlreport`, the CLI must construct it too. So it is not added to `web-imported-only-by-the-web-root`.
+- That rule's deny entries for `htmlreport` carry the desc "only cmd/shift2eu-web/internal/wire
+  constructs the HTML reporter; the CLI writes Markdown and JSON (PRD #297)" (`.golangci.yml`). Milestone
+  1 makes it untrue, so milestone 1's depguard changes reword it to "the CLI writes Markdown, JSON and
+  PDF (PRD #297, PRD #584)". The depguard pin (`TestDepguardRulesArePinned`) pins deny entries by their
+  `pkg` only and drops the desc, so the pin does not change for it.
 - `internal/cli` gets the `pdf` format through `cli.Deps`'s format table. `cmd/shift2eu` adds it.
   `analysis.SelectSchemaVersion` already refuses `--schema-version` for any format but `json`.
 - New depguard rules or entries are added to the depguard pin (`TestDepguardRulesArePinned`).
@@ -239,13 +268,20 @@ The `%PDF-` header's version (*Open questions*, 4) is the file format's version,
 
 - `internal/web`'s `Deps` drops `Markdown` and `JSON` and gains `PDF`. Its `Result` holds the PDF's
   bytes and the HTML fragment. Its `Options` drops `SchemaVersion`, which only the JSON download used.
+- With `SchemaVersion` gone, no web format takes a schema version, so `web.Format`'s constructors drop
+  their `schemaVersion int` parameter: `NewReporter func() analysis.Reporter` and
+  `NewComparisonReporter func() analysis.ComparisonReporter`. `wire` wraps `pdfreport.New(version.String())`
+  and `htmlreport` in them. `cli.Format` keeps its parameter, since the CLI's JSON format uses it.
 - `wire` constructs `pdfreport` and `htmlreport` and no longer constructs `markdown` or `jsonreport`.
   A test pins that the `js/wasm` dependency tree of `cmd/shift2eu-web` holds neither, so the module stops
   carrying them.
 - **The glue hands the PDF over as bytes, not as a string.** Today the glue converts the Markdown and
   JSON reports to JavaScript strings. That is safe for UTF-8 text, but not a byte-exact path for a file
-  format. So the glue copies the PDF into a `Uint8Array` (`js.CopyBytesToJS`). `test/site`'s glue scan
-  allow list of constant names gains `Uint8Array`, which none of its banned names matches. The PDF is
+  format. So the glue copies the PDF into a `Uint8Array` (`js.CopyBytesToJS`). `test/site`'s exact glue
+  allow list of constant names (`TestGlueAllowListIsExact`) gains `Uint8Array`, which none of its banned
+  names matches, and loses `schemaVersion`, since the glue no longer reads that option; nothing else
+  changes in it. `assess`'s doc comment in `cmd/shift2eu-web/main.go`, which names the `markdown` and
+  `json` fields, is updated to the `pdf` (bytes) and `html` fields. The PDF is
   also 7-bit ASCII (*Trust*), so the bytes would survive either path. The `Uint8Array` path keeps
   byte-exactness from depending on that, and keeps a later compression (*Open questions*, 5) from
   needing a glue change.
@@ -254,14 +290,22 @@ The `%PDF-` header's version (*Open questions*, 4) is the file format's version,
   `shift2eu dev (commit none, built unknown)`. The pages show the release's version because the builder
   writes it into the HTML. For the PDF's version line, and its byte-identity with the released CLI's,
   milestone 2 stamps the module with the same three values `.goreleaser.yaml` gives the CLI:
-  - `version`: the tag;
-  - `commit`: `{{ .ShortCommit }}`;
-  - `date`: `{{ .CommitDate }}`.
+  - `version`: GoReleaser's `{{ .Version }}`, the tag without its leading `v` (`0.15.0` for `v0.15.0`);
+  - `commit`: the commit hash, at a fixed length on both sides (below);
+  - `date`: `{{ .CommitDate }}`, the commit's date in UTC, RFC 3339.
 
   The values are taken from the tag and its commit, never from the clock, so the bundle stays
   reproducible (ADR 0036). An untagged build keeps the development values `shift2eu version` shows.
-  Where the builder takes the abbreviated commit from, so that it matches GoReleaser's, is for
-  milestone 2's ADR amendment to settle (*Open questions*, 7).
+- **The commit hash has a fixed length on both sides.** Today the CLI gets `{{ .ShortCommit }}`, git's
+  abbreviated hash. Its length depends on which objects the clone holds. The release's `site` job checks
+  out shallowly (`release.yml`: "ci/sitebuild reads no history, so a shallow checkout is enough"), so a
+  short hash computed there can differ from the one GoReleaser computes in its full clone. And the `site`
+  job runs before `goreleaser` (`goreleaser` needs `site`), so it cannot take GoReleaser's outputs.
+  Milestone 2 therefore gives both sides the first 12 hex digits of the full hash: `.goreleaser.yaml`
+  stamps `{{ slice .FullCommit 0 12 }}`, and `release.yml` passes `ci/sitebuild` the tag, the same slice
+  of `github.sha`, and the commit date, which `ci/sitebuild` stamps with `-X`. The CLI's
+  `shift2eu version` then shows a 12-digit commit in every release, a visible change the release notes
+  mention. Milestone 2's ADR amendment records it (*Open questions*, 7).
 
 ### ADR 0036: the bundle, the CSP and the banned-API scan
 
@@ -288,9 +332,13 @@ What it may not use, held by `test/site`'s banned-API scan, which does not chang
 The scan's expectations that name the two buttons change to the one. The bundle's reproducibility test
 and SRI values are unaffected beyond the changed files.
 
-A saved PDF opened later in a viewer cannot reach the network or run anything. It holds no link
+A saved PDF opened later in a viewer contacts nothing and runs nothing by itself. It holds no link
 annotation, no URI or launch action, no JavaScript, no form, no embedded file and no reference to an
-outside resource. A test pins this, and the privacy page says so.
+outside resource. A test pins this. Some viewers (Chromium's and Firefox's, Acrobat, macOS Preview) make
+URL-shaped text clickable on their own: the catalog snapshots' source URLs, which *About this report*
+prints, and any inventory value shaped like a URL, which the escaper keeps as ASCII. Only a click on such
+text follows it. The privacy page says exactly this: the PDF holds no link, action, script or form, and
+some viewers make URL-shaped text clickable, which only a click follows.
 
 ### ADR 0043: the size budget
 
@@ -329,15 +377,19 @@ outside resource. A test pins this, and the privacy page says so.
     output or `--output` exactly as the other formats do;
   - the golden files diff as text.
 - **No active content.** No `/Annots`, `/URI`, `/Launch`, `/JavaScript`, `/JS`, `/OpenAction`, `/AA`,
-  `/AcroForm`, `/EmbeddedFile`, `/RichMedia` or `/XFA` key appears in the file. The catalog snapshot's
-  source URL is shown as text, never as a link.
+  `/AcroForm`, `/EmbeddedFile`, `/RichMedia` or `/XFA` name appears in the file's objects. Every name the
+  writer emits is a constant of its own and holds no `#`, so no name can spell another with `#xx`
+  (`/J#53` is `/JS`). The catalog snapshot's source URL is shown as text, never as a link; a viewer may
+  still make such text clickable, and only a click follows it (*ADR 0036* above).
 - **Nothing leaves the browser.** The PDF is built in the module from the inventory already in memory,
   and offered through the one download path. The privacy page's statement that no inventory, report or
   choice is sent anywhere holds unchanged. Milestone 2 updates its wording from "report" downloads in
-  general to the PDF.
+  general to the PDF, says the PDF holds no link, action, script or form and that some viewers make
+  URL-shaped text clickable, which only a click follows, and says the PDF names the inventory's file name
+  (*Open questions*, 12), since it is a document meant to be passed on.
 - **Reproducible.** The bytes depend only on the assessment, the report metadata and the version line:
   - never the clock, the environment or map iteration;
-  - no creation or modification date, no `/ID`, no `/Producer` that varies;
+  - no creation or modification date, no `/ID`, no `/Producer`;
   - integer layout arithmetic only (positions and widths in thousandths of a point), so no
     floating-point result differs between amd64, arm64 and `js/wasm` (arm64 may fuse a multiply and an
     add, so the same float expression can round differently there).
@@ -388,31 +440,39 @@ Test levels:
 - [ ] *Unit:* every page carries the header and "Page N of M" with the right N and M, and the version
   line. A table continued on a new page repeats its header row.
 - [ ] *Unit:* every byte of every golden is 0x0A or in 0x20 to 0x7E.
-- [ ] *Unit:* no golden contains any of `/Annots`, `/URI`, `/Launch`, `/JavaScript`, `/JS`,
-  `/OpenAction`, `/AA`, `/AcroForm`, `/EmbeddedFile`, `/RichMedia`, `/XFA`, `/FontFile`, `/FontFile2`,
-  `/FontFile3`, `/CreationDate`, `/ModDate` or `/ID`. Every font object is a standard Type 1 font named
+- [ ] *Unit:* the test-only reader's parsed names, after `#xx` decoding and outside strings, hold none of
+  `/Annots`, `/URI`, `/Launch`, `/JavaScript`, `/JS`, `/OpenAction`, `/AA`, `/AcroForm`, `/EmbeddedFile`,
+  `/RichMedia`, `/XFA`, `/FontFile`, `/FontFile2`, `/FontFile3`, `/CreationDate`, `/ModDate`, `/ID` or
+  `/Producer`, in any golden. No name the writer emits contains `#`. A value that merely spells one of
+  these names inside a string is not a finding. Every font object is a standard Type 1 font named
   `Helvetica`, `Helvetica-Bold` or `Courier`, with `/Encoding /WinAnsiEncoding`.
-- [ ] *Unit:* every value of the hostile fixtures in `.github/security-audit/testdata/hostile-inventories/`
-  appears in the extracted text in its escaped form, and the file's structure is unchanged by it:
-  - the escaped form follows *Characters*: `\u`, `\U` and `\x` escapes, `\\` for a backslash;
-  - the structure means the same objects, the same operators per text line, and no extra string,
-    operator or object.
-
-  `(`, `)` and `\` inside a value are escaped in the content stream. A table test covers each character
-  class:
-  - printable ASCII;
-  - the 27 WinAnsi characters in 0x80 to 0x9F and the Latin-1 Supplement;
-  - U+00A0 and U+00AD;
-  - C0 and C1 controls, U+2028, U+2029 and bidi overrides;
-  - a non-Latin letter, a character above U+FFFF, and invalid UTF-8.
+- [ ] *Unit:* the escaper's table test covers each character class, with the exact escaped form of each:
+  - printable ASCII, `"` and `\` included (`"` stays, `\` is `\\`);
+  - the 27 WinAnsi characters in 0x80 to 0x9F and the Latin-1 Supplement, kept as they are;
+  - U+00A0 and U+00AD, escaped as ` ` and `­`;
+  - C0 and C1 controls, U+2028, U+2029 and bidi overrides, escaped (defence in depth: `text.Validate`
+    already refuses them at read);
+  - a printable non-Latin letter (`Ж` is `Ж`), escaped and never replaced or dropped;
+  - a character above U+FFFF (`\U0001f600`) and invalid UTF-8 (`\xff`);
+  - a value of `text.MaxLen` bytes, escaped in full, never truncated.
+- [ ] *Unit:* the hostile report and hostile comparison goldens take in-test hostile values, as the other
+  reporters' hostile goldens do, in every field the PDF shows. The values carry PDF metacharacters and
+  syntax: unbalanced `(` and `)`, `\`, `) Tj ET`, `endstream`, `%%EOF`, `/JavaScript`, `<< >>`, `obj`,
+  plus a 2048-byte value of two-byte runes (*Tables and page breaks*) and the escaper's character classes.
+  For each, the structural invariants below hold, and `(`, `)` and `\` inside a value are escaped in the
+  content stream.
+- [ ] *Unit:* the structural invariants, checked for every golden and in the fuzz test:
+  - the test-only reader parses the output;
+  - the text extracted for a value, joined across its wrapped lines, equals the value's escaped form;
+  - every token of every content stream is a literal string or one of the writer's fixed operators and
+    their numeric operands;
+  - no object has a type outside the writer's set (catalog, pages, page, font, content stream, info);
+  - every byte is 0x0A or in 0x20 to 0x7E.
 - [ ] *Unit:* a native Go fuzz test (standard `testing`, seeds run under `make test`) writes a report
-  whose values are the fuzzed string. It fails when:
-  - the test-only reader cannot parse the output;
-  - the output holds a byte outside 0x0A and 0x20 to 0x7E;
-  - the number of objects or of text-showing operators differs from the output for a plain value of
-    the same length.
-- [ ] *Unit:* the same input written twice gives the same bytes, and a test fails if `pdfreport`'s non-test
-  files import `math` or declare a floating-point type.
+  whose values are the fuzzed string, and fails when a structural invariant does not hold.
+- [ ] *Unit:* the same input written twice gives the same bytes. A test fails if a non-test file of
+  `pdfreport` imports `math`, declares a floating-point type, holds a floating-point literal, calls
+  `strconv.FormatFloat` or `strconv.ParseFloat`, or uses a `%f`, `%F`, `%g`, `%G`, `%e` or `%E` verb.
 - [ ] *Unit:* a comparison with no target, or whose targets assess different resources, is an error, and
   nothing is written, as with the other comparison reporters.
 - [ ] *CLI:* `shift2eu assess --inventory <file> --target <t> --format pdf` exits 0 and writes the PDF to
@@ -424,6 +484,14 @@ Test levels:
 - [ ] *e2e:* the built binary writes a PDF for each example inventory (`examples/aws`, `examples/azure`,
   `examples/gcp`) against each target and `--target all`, with and without `--no-estimate`, and exits 0.
   Each file starts with `%PDF-`, and two runs give the same bytes.
+- [ ] *CLI and e2e:* `--format pdf` runs on every fixture of
+  `.github/security-audit/testdata/hostile-inventories/`. Of today's eighteen, the reader accepts one,
+  `markup-injection.json`: its PDF exits 0 and passes the structural invariants. Every other fixture
+  (the `schema-*` files, `number-overflow`, `numbers`, and `path-like-names`, `terminal-escapes`,
+  `unicode-tricks`, `relations-graph` and `unknown-values`, whose controls, bidi characters, duplicate ID
+  or unknown category the reader refuses) is refused with `--format pdf` exactly as with Markdown: the
+  same message and exit code, and nothing on standard output. The test derives the accepted set from the
+  Markdown run, so a fixture added later is covered without a change.
 - [ ] *Lint and static:* `pdfreport` imports only the allow list of `reporters-stay-offline`.
   `cmd/shift2eu` and `wire` may import it, and the depguard pin holds the changed rules.
   `test/architecture` checks it for every release target and `js/wasm`.
@@ -447,24 +515,34 @@ Test levels:
 - [ ] *Static:* `test/site`'s banned-API scan passes unchanged in its banned names. The download function
   stays the one place `URL.createObjectURL`, `click()` and the `href` assignment appear. The page script
   creates exactly one blob type, `application/pdf`, and the file name `shift2eu-report.pdf`. The glue's
-  allow list of constant names adds `Uint8Array` and nothing else.
+  allow list of constant names adds `Uint8Array`, removes `schemaVersion`, and changes nothing else.
 - [ ] *Static:* the CSP of every page is unchanged.
 - [ ] *Browser:* the smoke test runs an example with one target and estimates on and clicks
   "Download PDF". It reads the blob's bytes and checks that they are byte-identical to what the CLI binary
   built from the same commit writes for the same inventory and options. Its file name is
   `shift2eu-report.pdf` and its type `application/pdf`. It does the same for a comparison of all three
-  targets.
+  targets. The bytes are read as today's download test reads them, with no page API: the test's own
+  injected script (`recordDownloads` in `test/browser`) keeps the blob the page's `download` function
+  passes to `URL.createObjectURL`, and the test reads it with `blob.arrayBuffer()` and hands the bytes
+  back as an array of byte values, in place of today's `blob.text()`. The page script does not change for
+  the test, and the browser still refuses to write the file.
 - [ ] *Browser:* with the network disabled, the PDF download still works. The page makes no request
   while building or offering it, and the existing network test passes.
 - [ ] *Browser:* the download works with the keyboard alone, and the accessibility checks of the main flow
   pass with the one button.
-- [ ] *Release:* the release builds the module with the release's version, commit and date. The smoke
+- [ ] *Release:* the release builds the module with the release's version (the tag without `v`), its
+  12-digit commit and its commit date, and the CLI with the same three values. The smoke
   test on the attested bundle compares its PDF download with the output of the released `linux/amd64`
   CLI for one example: the same bytes, version line included.
+- [ ] *Review:* the scheduled audit's row 13 (`.github/workflows/scheduled-security-audit.yml`, the CLI on
+  hostile inventory files) also runs `--format pdf` on every file of its corpus and the files it
+  generates, and the `security-audit-run` skill reads those runs as it reads the Markdown ones. It runs
+  the latest release, so it covers the PDF from the first release that holds milestone 1.
 - [ ] *Static:* the module size budget test passes. Milestone 2's PR states the raw module size, the
   module script file and its gzip size before and after the change, and ADR 0043 records them.
-- [ ] *Static:* the privacy page says the report download is a PDF made in the browser, with no link,
-  script or form, and that nothing is sent. The verification page and the inventory guide page mention no
+- [ ] *Static:* the privacy page says the report download is a PDF made in the browser, that nothing is
+  sent, that the PDF holds no link, action, script or form, that some viewers make URL-shaped text
+  clickable, which only a click follows, and that the PDF names the inventory's file name. The verification page and the inventory guide page mention no
   Markdown or JSON download. The README and the guides that describe the site say the same.
 - [ ] *Review:* PRD #297's amended criteria and decisions (*Amendments to PRD #297*) are edited in place
   with a dated amendment note. ADRs 0018, 0035, 0036 and 0043, and the doc.go files of `jsonreport`,
@@ -475,7 +553,9 @@ Test levels:
 This PRD **lists** the amendments; milestone 2's PR **edits PRD #297's text in place**, each change marked
 "*Amended 2026-11-25 (PRD #584):*" as PRD #297 already marks its hosting amendments. The reason: until
 milestone 2 ships, the site does offer the Markdown and JSON downloads, and PRD #297 must keep describing
-what runs. Milestone 1 of PRD #297, which is done, keeps its text as history.
+what runs. Item 1 of PRD #297's milestone list (milestone 1, done) keeps its text as history. The
+criteria that milestone ticked and this list amends (3 to 5) are edited in place like the rest, each with
+the dated note, and stay ticked.
 
 1. **Outcome**, first paragraph: "They can download the report as Markdown and as the versioned JSON
    report, byte for byte what `shift2eu assess` prints for the same inventory and options" becomes "They
@@ -497,17 +577,14 @@ what runs. Milestone 1 of PRD #297, which is done, keeps its text as history.
 5. **Acceptance criteria, *Architecture*, the third criterion** (`wire`):
    - "the Markdown, JSON and HTML reporters" becomes "the PDF and HTML reporters";
    - the download parity test compares the PDF.
-6. **Acceptance criteria, *Architecture*, the fourth criterion** (the depguard rules): the composition
-   roots' allow lists name `pdfreport`. `web-imported-only-by-the-web-root`'s description "the CLI writes
-   Markdown and JSON" becomes "the CLI writes Markdown, JSON and PDF".
-7. **Acceptance criteria, *Architecture*, the *Review* criterion**: "the Markdown and JSON reporters are
+6. **Acceptance criteria, *Architecture*, the *Review* criterion**: "the Markdown and JSON reporters are
    reused unchanged; the CLI's and the HTTP API's output do not change" becomes "the Markdown and JSON
    reporters are reused unchanged, and the CLI's Markdown and JSON output do not change. The CLI gains
    `--format pdf` (PRD #584), and the HTTP API is retired (ADR 0037)".
-8. **Decisions, *Decided by the maintainer (2026-11-19)*, "the first version's scope"**: "Markdown and
+7. **Decisions, *Decided by the maintainer (2026-11-19)*, "the first version's scope"**: "Markdown and
    JSON downloads identical to the CLI's" becomes "a PDF download identical to the CLI's (decided by the
    maintainer, 2026-11-25, PRD #584)".
-9. **Decisions, *Decided in this PRD*, the `htmlreport` decision**: "the downloads are the existing
+8. **Decisions, *Decided in this PRD*, the `htmlreport` decision**: "the downloads are the existing
    reporters' bytes" becomes "the download is the PDF reporter's bytes, which the CLI writes too
    (PRD #584)".
 
@@ -532,10 +609,13 @@ Milestones 1 and 2 touch the handling of hostile text and the site's trust model
      - text wrapping, tables, repeated header rows and page breaks;
      - the sections of *The PDF* for the single-target and the comparison report, and the
        `--no-estimate` and `--region` variants.
-   - Its golden files, hostile ones included, the test-only reader, and the fuzz test.
+   - Its golden files, hostile ones included, the escaper and its table test, the test-only reader, the
+     structural invariants, and the fuzz test.
    - `pdfreport.New(versionLine)`, wired in `cmd/shift2eu`, and `--format pdf` in `internal/cli`, with
      CLI goldens and e2e tests.
-   - The depguard allow list changes and their pin, and `test/architecture`.
+   - The depguard allow list changes and their pin, the reworded `htmlreport` deny desc of
+     `web-imported-only-by-the-web-root` ("the CLI writes Markdown, JSON and PDF"), and
+     `test/architecture`.
    - CLAUDE.md's adapters row and status paragraph, `docs/architecture.md`, and the CLI guide.
    - An ADR that records:
      - PDF as the report's people-facing format, not versioned (ADR 0018);
@@ -547,14 +627,16 @@ Milestones 1 and 2 touch the handling of hostile text and the site's trust model
      - no links, JavaScript, forms or embedded files;
      - the string escaping, and the printable-ASCII file;
      - the version line passed by the constructor;
-     - the answers to *Open questions* 1 to 5, 8 and 10.
+     - the answers to *Open questions* 1 to 5, 8, 10 and 12.
    - The site does not change in this milestone.
 2. [ ] **The site's switch to the PDF download.** Depends on 1.
    - `internal/web`'s `Deps`, `Options` and `Result`, and `wire` constructing `pdfreport` and
      `htmlreport` only.
    - The glue's `Uint8Array` hand-over.
    - The module stamped with the release's version, commit and date by `ci/sitebuild`, and in
-     `release.yml`.
+     `release.yml`, with the 12-digit commit on both the module's and GoReleaser's side
+     (`.goreleaser.yaml`).
+   - The scheduled audit's row 13 runs `--format pdf` over its hostile corpus too.
    - The page script's single download path, and the one button.
    - The native parity, option-parity, dependency and static tests; the browser smoke test's PDF
      download and its release run.
@@ -589,7 +671,9 @@ Milestones 1 and 2 touch the handling of hostile text and the site's trust model
      golden files.
    - No timestamp and no varying metadata in the file, so it is reproducible.
    - No links, JavaScript, forms or embedded files.
-   - Hostile inventory text escaped, and the audit's hostile-inventory fixtures cover it.
+   - Hostile inventory text escaped, and the audit's hostile-inventory fixtures cover it: the ones the
+     reader accepts in the CLI and e2e tests, PDF metacharacters in the unit goldens, and the whole
+     corpus in the scheduled audit's row 13 from milestone 2.
    - One ADR (milestone 1) records the format, the writer and these choices.
 3. **Non-Latin characters are shown as escapes, not with an embedded font,** so the module's size budget
    (ADR 0043) stays safe. *Characters* names the set the core fonts show (WinAnsiEncoding) and how every
@@ -657,11 +741,23 @@ Milestones 1 and 2 touch the handling of hostile text and the site's trust model
    scope. *Recommendation:* the PDF explains how fits, blockers, required changes and estimates are
    worked out, and says in one sentence that there is no readiness score. A score is a domain decision
    for its own PRD. When it lands, the PDF's *How this report is worked out* section gains it.
+   *Recommended follow-up:* CLAUDE.md's glossary defines **Assessment** with a "readiness score", and
+   `docs/architecture.md` mentions one. A small docs issue could mark it "not yet implemented" in both.
+   This PRD does not change either.
 7. **Where the module's version stamp comes from** (milestone 2). GoReleaser's `{{ .ShortCommit }}` is
-   git's abbreviated hash, whose length depends on the repository, and `{{ .CommitDate }}` is the
-   commit's date. *Recommendation:* `release.yml` passes the same three values GoReleaser uses to
-   `ci/sitebuild`, which stamps the module with `-X`, rather than `ci/sitebuild` computing its own.
-   For an untagged build, the development values stay. Milestone 2's ADR amendment records it.
+   git's abbreviated hash, whose length depends on which objects the clone holds, and the release's
+   `site` job checks out shallowly and runs before `goreleaser`, so it can neither compute the same
+   abbreviation reliably nor take GoReleaser's outputs. The options:
+   - (a) a fixed length on both sides: `.goreleaser.yaml` stamps `{{ slice .FullCommit 0 12 }}`, and
+     `release.yml` passes `ci/sitebuild` the tag without `v`, the same 12 digits of `github.sha` and the
+     commit date, which `ci/sitebuild` stamps with `-X`;
+   - (b) reorder the jobs so `site` needs `goreleaser` and takes its version, commit and date as job
+     outputs.
+
+   *Recommendation:* (a). It keeps today's job order (the site is built and smoke-tested before
+   GoReleaser runs), needs no new job outputs, and does not depend on the clone's depth. Its cost is that
+   `shift2eu version` shows a 12-digit commit from then on. For an untagged build, the development
+   values stay. Milestone 2's ADR amendment records the choice.
 8. **Document metadata.** *Recommendation:* an `/Info` dictionary with one constant `/Title`
    ("shift2eu migration assessment"), so viewers show a title and not a blob name. No `/Producer`,
    `/Author`, `/Creator` or dates, and no trailer `/ID`, which ISO 32000-1 requires only for encrypted
@@ -677,6 +773,13 @@ Milestones 1 and 2 touch the handling of hostile text and the site's trust model
 11. **Where *About this report* sits.** *Recommendation:* at the end, with the version line in every page
     footer too, so a printed page always names its build. The alternative is right after the title
     block, which puts the evidence first but pushes the summary down.
+12. **The inventory's file name in the PDF.** The title block and *About this report* name the base name
+    of the user's inventory file (`analysis.ReportMeta.InventoryName`), as the Markdown report does. A
+    name such as `acme-prod-aws.json` can name a customer, and the PDF is made to be passed on.
+    *Recommendation:* keep it. It ties the report to its input, which a reader checking the report needs,
+    and the user chose the name. The privacy page says the PDF names the file, so the user can rename it
+    before running. The alternative is a constant ("the inventory") in the PDF only, which breaks its
+    agreement with the other reports' header.
 
 ## Out of scope
 
