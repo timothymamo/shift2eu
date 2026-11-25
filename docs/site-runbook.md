@@ -118,7 +118,7 @@ dev/tofu.sh -chdir=infra/site plan -out=site.tfplan        # PASS (first time): 
 # PASS (the first apply after ADR 0045, on milestone 3's hosting): "Plan: 2 to add, 1 to change, 1 to destroy." (the namespace and the container added, the DNS stage updated in place, the TLS stage destroyed)
 # PASS (if the provider replaces the DNS stage): the same plan with the DNS stage "must be replaced": its default_fqdn changes, so $E changes; if the new stage's default_fqdn is still empty at apply, the container's precondition fails and the container keeps its old UPSTREAM until the second pass below (a short outage window after R10); nothing serves visitors before R10, so apply it, read $E again from the output lines below, and record it in ADR 0039's container amendment
 # FAIL any other resource replaced or destroyed: stop, apply nothing, rm infra/site/site.tfplan, and find out why
-dev/tofu.sh -chdir=infra/site show site.tfplan | less      # PASS: the bucket policy's three statements, four with public_read (ADR 0039), the IAM rule's two permission sets in one project; the container's image "docker.io/library/caddy:<tag>@sha256:...", max_scale 1, cpu_limit 140, memory_limit_bytes 268435456, min_scale 0, its UPSTREAM the DNS stage's default_fqdn
+dev/tofu.sh -chdir=infra/site show site.tfplan | less      # PASS: the bucket policy's three statements, four with public_read (ADR 0039), the IAM rule's two permission sets in one project; the container's image "docker.io/library/caddy:<tag>@sha256:...", max_scale 1, cpu_limit 140, memory_limit_bytes 268000000 (the 0.25 GB the platform keeps; issue #596), min_scale 0, its UPSTREAM the DNS stage's default_fqdn
 dev/tofu.sh -chdir=infra/site apply site.tfplan            # PASS: "Apply complete"
 # FAIL (expected on a first setup, or when the DNS stage is replaced) "Resource precondition failed" on scaleway_container.site, "default_fqdn is still empty": the rest is applied; go on with the wait loop, then the second pass below
 # FAIL "Resource postcondition failed" on scaleway_container.site: the platform kept a redirect or a warm instance the provider did not send; set plain HTTP "enabled" and min scale 0 in the console (Serverless Containers, the namespace shift2eu-site, front, Settings), then plan again: PASS "No changes."
@@ -175,7 +175,7 @@ flags against `scw container container create --help` first (ADR 0039, open poin
 
 ```bash
 BAD="docker.io/library/caddy:2.11.9-alpine@sha256:$(printf '0%.0s' $(seq 1 64))"; echo "$BAD"   # PASS: the tag, then 64 zeros
-PR="$(scw container container create namespace-id="$NS" region="$REGION" name=digest-probe registry-image="$BAD" min-scale=0 max-scale=1 cpu-limit=140 memory-limit-bytes=268435456 -o json | jq -r '.id')"; echo "$PR"   # PASS: an ID
+PR="$(scw container container create namespace-id="$NS" region="$REGION" name=digest-probe registry-image="$BAD" min-scale=0 max-scale=1 cpu-limit=140 memory-limit-bytes=268000000 -o json | jq -r '.id')"; echo "$PR"   # PASS: an ID
 scw container container deploy "$PR" region="$REGION" >/dev/null   # PASS: no error (a create that deploys by itself may answer that it is already deploying: fine)
 n=0; until scw container container list namespace-id="$NS" region="$REGION" name=digest-probe -o json | jq -e '.[0].status | IN("error","ready")' >/dev/null || [ "$n" -ge 30 ]; do sleep 20; n=$((n + 1)); done
 scw container container list namespace-id="$NS" region="$REGION" name=digest-probe -o json | jq -r '.[0] | "\(.status) \(.error_message)"'   # PASS: "error" with a pull or manifest error: the platform pulls by digest; record it in ADR 0045
@@ -408,7 +408,7 @@ ECHO=':8080 {
 	header X-Content-Type-Options nosniff
 	respond "xfp=[{http.request.header.X-Forwarded-Proto}] host=[{http.request.hostport}] xfh=[{http.request.header.X-Forwarded-Host}] fwd=[{http.request.header.Forwarded}]" 200
 }'
-PR="$(scw container container create namespace-id="$NS" region="$REGION" name=header-probe registry-image="$IMG" port=8080 privacy=public min-scale=0 max-scale=1 cpu-limit=140 memory-limit-bytes=268435456 https-connections-only=false command.0=/bin/sh command.1=-c args.0='printf "%s" "$1" > /tmp/Caddyfile && exec caddy run --adapter caddyfile --config /tmp/Caddyfile' args.1=caddy args.2="$ECHO" -o json | jq -r '.id')"; echo "$PR"   # PASS: an ID
+PR="$(scw container container create namespace-id="$NS" region="$REGION" name=header-probe registry-image="$IMG" port=8080 privacy=public min-scale=0 max-scale=1 cpu-limit=140 memory-limit-bytes=268000000 https-connections-only=false command.0=/bin/sh command.1=-c args.0='printf "%s" "$1" > /tmp/Caddyfile && exec caddy run --adapter caddyfile --config /tmp/Caddyfile' args.1=caddy args.2="$ECHO" -o json | jq -r '.id')"; echo "$PR"   # PASS: an ID
 scw container container deploy "$PR" region="$REGION" >/dev/null; n=0; until scw container container get "$PR" region="$REGION" -o json | jq -e '.status == "ready"' >/dev/null || [ "$n" -ge 30 ]; do sleep 20; n=$((n + 1)); done
 PE="$(scw container container get "$PR" region="$REGION" -o json | jq -r '.domain_name // .public_endpoint' | sed 's,^https://,,')"; echo "$PE"   # PASS: the probe's endpoint
 for u in "http://$PE/" "https://$PE/"; do printf '%s ' "$u"; curl -s "$u"; echo; done

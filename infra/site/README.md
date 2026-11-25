@@ -50,7 +50,7 @@ provider, no `provisioner` or `connection` block, no `*.auto.tfvars` (`.json` to
 release deploys the objects), no call, in a configuration or test file, of a function that reads the
 local machine (`file`, `templatefile`, `templatestring`, `fileset`, `pathexpand`, `abspath`, ...) but
 exactly `file("${path.module}/Caddyfile")` in a configuration file, every `scaleway_container` at the cost
-pins (`max_scale = 1`, `cpu_limit = 140`, `memory_limit_bytes = 268435456` as literals, `min_scale` 0 or 1,
+pins (`max_scale = 1`, `cpu_limit = 140`, `memory_limit_bytes = 268000000` as literals, `min_scale` 0 or 1,
 as a literal or a local set to one, with exactly one postcondition on `self.min_scale`, comparing that same
 expression, and exactly one postcondition `self.https_connections_only == false`, `image` exactly
 `local.caddy_image`, no deprecated `memory_limit` or `http_option`), a container's

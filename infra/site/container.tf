@@ -64,10 +64,18 @@ resource "scaleway_container" "site" {
   https_connections_only         = false
   enable_default_public_endpoint = true
 
+  # memory_limit_bytes is 0.25 GB as the platform keeps it, in whole decimal megabytes (issue #596): asked for
+  # 268435456 (256 MiB), Scaleway's Serverless Containers kept 268000000 on the first apply, so every later
+  # plan showed the change.
+  # Neither Scaleway's documentation nor the provider states the rounding: scaleway/scaleway 2.93.0 sends
+  # memory_limit_bytes unchanged (internal/services/container/helpers_container.go, setCreateContainerRequest)
+  # and reads back the platform's value (container.go, ResourceContainerRead), and its docs
+  # (docs/resources/container.md) give the example 2048000000, whole decimal MB (scaleway-sdk-go's scw.MB is
+  # 1000 * 1000 bytes). The value here is the one the platform was observed to keep.
   min_scale          = local.container_min_scale
   max_scale          = 1
   cpu_limit          = 140
-  memory_limit_bytes = 268435456
+  memory_limit_bytes = 268000000
 
   lifecycle {
     # Scaleway sets the DNS stage's default_fqdn a while after creating the stage, so on a first setup it may

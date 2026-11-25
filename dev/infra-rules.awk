@@ -45,7 +45,7 @@ BEGIN { # explicit character sets, the same in every awk and locale (no [A-Z] ra
   # in the configuration's own directory, which the site container runs (ADR 0045).
   CADDYFILE_READ = "(\"${path.module}/Caddyfile\")"
   # The site container's cost pins (ADR 0045, The container): each set once, as exactly this literal.
-  npins = split("max_scale=1 cpu_limit=140 memory_limit_bytes=268435456", cp, " ")
+  npins = split("max_scale=1 cpu_limit=140 memory_limit_bytes=268000000", cp, " ")
   for (i = 1; i <= npins; i++) {
     split(cp[i], kv, "=")
     containerPinName[i] = kv[1]
@@ -56,7 +56,7 @@ BEGIN { # explicit character sets, the same in every awk and locale (no [A-Z] ra
   containerPinTag["memory_limit_bytes"] = "container-memory"
   containerPinWhy["max_scale"] = "one instance at most, the worst case ADR 0045 prices at about EUR 2.12 a month"
   containerPinWhy["cpu_limit"] = "140 mvCPU, the size ADR 0045 prices"
-  containerPinWhy["memory_limit_bytes"] = "0.25 GB, the size ADR 0045 prices"
+  containerPinWhy["memory_limit_bytes"] = "0.25 GB, the size ADR 0045 prices, in the whole decimal megabytes the platform keeps: 268435456 would come back as 268000000, issue #596"
   # The deprecated spellings beside the pinned ones: memory_limit (MB) beside memory_limit_bytes, and
   # http_option beside https_connections_only. Either could set what the pin does not see.
   ndeprecated = split("memory_limit http_option", containerDeprecatedName, " ")
