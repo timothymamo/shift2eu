@@ -142,19 +142,10 @@ func TestReportGlobalOfferings(t *testing.T) {
 			t.Errorf("the report says what (global) means %d times, want once:\n%s", count, got)
 		}
 
-		// The note follows the Resources table, whose last row is the last
-		// resource's, and precedes the Required changes heading.
-		lines := strings.Split(string(got), "\n")
-		note := indexOfLine(lines, globalNote)
-
-		if note < 0 {
-			t.Fatalf("the report has no note line %q:\n%s", globalNote, got)
-		}
-
-		if last := lastTableRowLine(lines); last > note {
-			t.Errorf("the note is on line %d, before the last table row on line %d, want it under the "+
-				"table that shows the global offering:\n%s", note+1, last+1, got)
-		}
+		// The note follows the Resources table, below its last row, and precedes
+		// the heading that ends that section, whatever it is: a table a later
+		// section adds stays below the note.
+		assertNoteUnder(t, got, "## Resources", globalNote)
 	})
 }
 
@@ -269,6 +260,15 @@ func TestReportComparisonGlobalOfferings(t *testing.T) {
 		}
 	})
 
+	t.Run("the note is under the first table that shows a global offering", func(t *testing.T) {
+		t.Parallel()
+
+		// The comparison's "### Resources" is the comparison table, the first
+		// table of the report that shows a global offering: the note follows it
+		// and precedes the next heading.
+		assertNoteUnder(t, got, "### Resources", globalNote)
+	})
+
 	t.Run("a blocker names no offering and gains no mark", func(t *testing.T) {
 		t.Parallel()
 
@@ -295,26 +295,70 @@ func containsLine(lines []string, want string) bool {
 	return false
 }
 
-// indexOfLine returns the index of the line equal to want, or -1.
-func indexOfLine(lines []string, want string) int {
-	for i, line := range lines {
-		if line == want {
-			return i
+// assertNoteUnder asserts that the note sits under the section headed by
+// heading: below the section's last table row and above the heading that ends
+// the section, the next heading of the section's level or a higher one. The
+// first heading equal to heading is the section's, and a later table of another
+// section never moves the note.
+func assertNoteUnder(t *testing.T, out []byte, heading, note string) {
+	t.Helper()
+
+	lines := strings.Split(string(out), "\n")
+
+	start := slices.Index(lines, heading)
+	if start < 0 {
+		t.Fatalf("the report has no %q heading:\n%s", heading, out)
+	}
+
+	level := headingLevel(heading)
+	end := len(lines)
+
+	for i, line := range lines[start+1:] {
+		if next := headingLevel(line); next > 0 && next <= level {
+			end = start + 1 + i
+
+			break
 		}
 	}
 
-	return -1
+	noteLine, lastRow := -1, -1
+
+	for i := start + 1; i < end; i++ {
+		if lines[i] == note {
+			noteLine = i
+		}
+
+		if strings.HasPrefix(lines[i], "|") {
+			lastRow = i
+		}
+	}
+
+	if lastRow < 0 {
+		t.Fatalf("the %q section has no table row:\n%s", heading, out)
+	}
+
+	if noteLine < 0 {
+		t.Fatalf("the report has no note line %q under %q:\n%s", note, heading, out)
+	}
+
+	if noteLine < lastRow {
+		t.Errorf("the note is on line %d, before the section's last table row on line %d, want "+
+			"it under the table that shows the global offering:\n%s", noteLine+1, lastRow+1, out)
+	}
 }
 
-// lastTableRowLine returns the index of the last table row of the report.
-func lastTableRowLine(lines []string) int {
-	last := -1
+// headingLevel returns the level of a Markdown heading line, or 0 when the line
+// is not a heading.
+func headingLevel(line string) int {
+	level := 0
 
-	for i, line := range lines {
-		if strings.HasPrefix(line, "|") {
-			last = i
-		}
+	for level < len(line) && line[level] == '#' {
+		level++
 	}
 
-	return last
+	if level == 0 || level == len(line) || line[level] != ' ' {
+		return 0
+	}
+
+	return level
 }

@@ -6,6 +6,7 @@ import (
 
 	"github.com/timothymamo/shift2eu/internal/app/analysis"
 	"github.com/timothymamo/shift2eu/internal/domain/assessment"
+	"github.com/timothymamo/shift2eu/internal/domain/catalog"
 	"github.com/timothymamo/shift2eu/internal/domain/inventory"
 	"github.com/timothymamo/shift2eu/internal/domain/taxonomy"
 	"github.com/timothymamo/shift2eu/internal/testutil"
@@ -110,15 +111,38 @@ func TestReportGlobalOfferings(t *testing.T) {
 }
 
 // TestReportNoGlobalOfferingSaysNeither pins that a fragment whose best offerings
-// and ties are all regional says neither the mark nor the note: a global offering
-// the catalog holds but the report never shows is not marked, and the note is only
-// written when a table shows one.
+// and ties are all regional says neither the mark nor the note, even when a global
+// offering is a candidate: a global offering the report never shows is not
+// marked, and the note is only written when a table shows one.
 func TestReportNoGlobalOfferingSaysNeither(t *testing.T) {
 	t.Parallel()
 
-	// The Scaleway fixture serves no DNS zone, so an inventory of buckets and
-	// virtual machines shows no offering that could be global.
-	a := assessment.Assess(newInventory(t, sourceName, awsResources()), testutil.ScalewayCatalog(t))
+	// "DNS Zone" is global but fits worse than the regional "Apex DNS Zone" for
+	// the resource below, so it is a candidate that is neither the best offering
+	// nor a tie: the fragment shows the regional offering alone.
+	cat := catalogFor(t, "Scaleway", testutil.ScalewaySnapshot(), []catalog.Offering{
+		{
+			Name:         "Apex DNS Zone",
+			Categories:   []taxonomy.Category{taxonomy.NetworkDNS},
+			Capabilities: []taxonomy.Capability{taxonomy.DNSSEC},
+			Regions:      []string{"fr-par"},
+		},
+		{
+			Name:         "DNS Zone",
+			Categories:   []taxonomy.Category{taxonomy.NetworkDNS},
+			Capabilities: []taxonomy.Capability{taxonomy.DNSRouting},
+			Global:       true,
+		},
+	})
+
+	a := assessment.Assess(newInventory(t, sourceName, []inventory.Resource{
+		{
+			ID:           "zone-example",
+			RawType:      "AWS::Route53::HostedZone",
+			Category:     taxonomy.NetworkDNS,
+			Capabilities: []taxonomy.Capability{taxonomy.DNSSEC},
+		},
+	}), cat)
 	got := string(render(t, a, analysis.ReportMeta{InventoryName: inventoryFileName}))
 
 	if strings.Contains(got, globalMark) {
@@ -127,6 +151,10 @@ func TestReportNoGlobalOfferingSaysNeither(t *testing.T) {
 
 	if strings.Contains(got, globalNote) {
 		t.Errorf("the fragment says what (global) means although it shows no global offering:\n%s", got)
+	}
+
+	if want := "<td><code>Apex DNS Zone</code></td>"; !strings.Contains(got, want) {
+		t.Errorf("the fragment holds no regional best-offering cell %q:\n%s", want, got)
 	}
 }
 
