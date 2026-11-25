@@ -64,6 +64,16 @@ var realDataAllowList = []allowListEntry{
 		why:   "the project's own site (PRD #297), which the guide tells users to type",
 	},
 	{
+		file:  "docs/guide/inventory.md",
+		value: "Microsoft.App",
+		why:   "the Resource Manager provider namespace of Container Apps in the guide's classification table, whose segment reads as a domain name because .app is a TLD (PRD #552); it names no host",
+	},
+	{
+		file:  "docs/guide/inventory/azure.jq",
+		value: "microsoft.app",
+		why:   "the Resource Manager provider namespace of Container Apps in the guide's classification program, whose segment reads as a domain name because .app is a TLD (PRD #552); it names no host",
+	},
+	{
 		file:  "test/e2e/testdata/inventory-guide/aws/eu-central-1/autoscaling-groups.json",
 		value: "00000000-0000-0000-0000-000000000001",
 		why:   "a synthetic Auto Scaling group ID in an ARN, all zero but its last digit so the two groups differ",
@@ -157,6 +167,11 @@ var realDataAllowList = []allowListEntry{
 		file:  "test/e2e/testdata/inventory-guide/azure/storage-queues.json",
 		value: "storageAccounts/stshopassets",
 		why:   "the synthetic storage account of the guide's sample shop that holds its queues; it names no one's account",
+	},
+	{
+		file:  "test/e2e/testdata/inventory-guide/golden/azure.inventory.golden",
+		value: "Microsoft.App",
+		why:   "the Resource Manager provider namespace of Container Apps in the guide's assessed inventory, whose segment reads as a domain name because .app is a TLD (PRD #552); it names no host",
 	},
 	{
 		file:  "test/e2e/testdata/inventory-guide/gcp/assets.json",
