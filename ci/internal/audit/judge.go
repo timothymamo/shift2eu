@@ -329,17 +329,6 @@ type madeCall struct {
 	text     string
 }
 
-// element is one line of the CLI's stream-json, read in two steps: its shape
-// first, its type and its message as raw JSON, and its message's content only
-// when the type is one the judgement reads (assistant or user). The CLI prints
-// other elements whose message is a string or anything else - 2.1.332's
-// system/permission_denied element is one (issue #590) - and those are skipped
-// whatever they hold.
-type element struct {
-	Type    json.RawMessage `json:"type"`
-	Message json.RawMessage `json:"message"`
-}
-
 // message is the message of an assistant or user element.
 type message struct {
 	Content json.RawMessage `json:"content"`
@@ -430,7 +419,11 @@ func notStreamJSON(n int, class string) *Verdict {
 
 // readElement reads line n's shape: a JSON object whose type is a JSON
 // string. It returns the type and the raw message, or the refusal naming the
-// line's class.
+// line's class. An element is read in two steps: its shape here, its type and
+// its message as raw JSON, and its message's content only when the type is one
+// the judgement reads (assistant or user). The CLI prints other elements whose
+// message is a string or anything else - 2.1.332's system/permission_denied
+// element is one (issue #590) - and those are skipped whatever they hold.
 func readElement(n int, line []byte) (string, json.RawMessage, error) {
 	if !json.Valid(line) {
 		return "", nil, notStreamJSON(n, nonJSONClass(line))
@@ -443,17 +436,93 @@ func readElement(n int, line []byte) (string, json.RawMessage, error) {
 		return "", nil, notStreamJSON(n, classNotAnElement)
 	}
 
-	var el element
-	if err := json.Unmarshal(line, &el); err != nil {
+	elementType, raw, ok := topLevelKeys(line)
+	if !ok {
 		return "", nil, notStreamJSON(n, classNotAnElement)
 	}
 
-	var elementType string
-	if len(el.Type) == 0 || el.Type[0] != '"' || json.Unmarshal(el.Type, &elementType) != nil {
+	var t string
+	if len(elementType) == 0 || elementType[0] != '"' || json.Unmarshal(elementType, &t) != nil {
 		return "", nil, notStreamJSON(n, classTypeNotAString)
 	}
 
-	return elementType, el.Message, nil
+	return t, raw, nil
+}
+
+// topLevelKeys walks the top-level object of line, valid JSON that starts
+// with '{', once, token by token, and returns the raw values of its type and
+// message keys, nil when absent. It returns false for an object that names a
+// key twice, or names type or message in another case: encoding/json matches
+// a key case-insensitively and keeps the last one, so such a line could read
+// as a type that hides the tool_use it carries (issue #590, auditor L2). The
+// decoder's errors are never formatted: they can quote the line.
+func topLevelKeys(line []byte) (elementType, msg json.RawMessage, ok bool) {
+	dec := json.NewDecoder(bytes.NewReader(line))
+	dec.UseNumber()
+
+	if tok, err := dec.Token(); err != nil || tok != json.Delim('{') {
+		return nil, nil, false
+	}
+
+	seen := map[string]bool{}
+
+	for dec.More() {
+		tok, err := dec.Token()
+		if err != nil {
+			return nil, nil, false
+		}
+
+		key, isKey := tok.(string)
+		if !isKey || seen[key] {
+			return nil, nil, false
+		}
+
+		seen[key] = true
+
+		switch {
+		case key == "type":
+			err = dec.Decode(&elementType)
+		case key == "message":
+			err = dec.Decode(&msg)
+		case strings.EqualFold(key, "type"), strings.EqualFold(key, "message"):
+			return nil, nil, false
+		default:
+			err = skipValue(dec)
+		}
+
+		if err != nil {
+			return nil, nil, false
+		}
+	}
+
+	if tok, err := dec.Token(); err != nil || tok != json.Delim('}') {
+		return nil, nil, false
+	}
+
+	return elementType, msg, true
+}
+
+// skipValue reads one JSON value of dec, token by token, without keeping it.
+func skipValue(dec *json.Decoder) error {
+	depth := 0
+
+	for {
+		tok, err := dec.Token()
+		if err != nil {
+			return err
+		}
+
+		switch tok {
+		case json.Delim('{'), json.Delim('['):
+			depth++
+		case json.Delim('}'), json.Delim(']'):
+			depth--
+		}
+
+		if depth == 0 {
+			return nil
+		}
+	}
 }
 
 // parseTranscript returns the transcript's tool calls in order, each with its
