@@ -103,6 +103,27 @@
 // the step that job runs on the release's own bundle, at the same checkout and
 // setup-go commits (PRD #297 milestone 3).
 //
+// The four Node steps through which the Test jobs of ci.yml and release.yml
+// run TestPiEnvDenyExtensionLoads on the Node dev/lima.yaml pins (issue #548,
+// ADR 0044) are declared once, by nodeSteps (issue #554): the read of
+// dev/lima.yaml's nodeVersion with its strict X.Y.Z check, actions/setup-node
+// pinned by commit installing that version with its package-manager cache off,
+// the check that the node on the PATH is that one, and the tests with
+// SHIFT2EU_REQUIRE_NODE: "1". The two workflows differ only in the file the
+// check's error names and in the name and command of the step the tests run in.
+// ReleaseWorkflow's closed schema holds release.yml's Test job to them;
+// CITestJobNode holds ci.yml's Test job, read with yamlread, to exactly one of
+// each, compared with the declaration by the step comparison release.yml's
+// steps go through, so with exactly the declared keys and values, in that
+// order. The job's keys are closed to name, runs-on and steps and the
+// workflow's top level to name, on, permissions, concurrency and jobs, so no
+// if:, needs:, continue-on-error:, defaults: or env: can skip the job or make
+// its run: steps no-ops; each part an edit could break is also named on its
+// own. PinnedNodeVersion reads dev/lima.yaml's nodeVersion from the same
+// pattern as the workflows' sed line, for TestPiEnvDenyExtensionLoads to name
+// the Node it needs, and refuses a document with no such line or more than
+// one, as the workflows' read step does.
+//
 // AuditWorkflow holds the scheduled security audit's workflow,
 // .github/workflows/scheduled-security-audit.yml, to PRD #175 milestone 2 and
 // ADR 0040: workflow_dispatch with no inputs as its only trigger, the one guard
