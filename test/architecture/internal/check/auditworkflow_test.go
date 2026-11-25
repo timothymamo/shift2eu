@@ -2174,6 +2174,30 @@ func TestAuditWorkflow(t *testing.T) {
 			workflow: mutate(t, withoutStep(auditDockerActiveCheck), auditDockerStop, auditDockerActiveCheck+auditDockerStop),
 			wantIn:   "after if systemctl is-active --quiet docker.service docker.socket; then",
 		},
+		// A refusal whose condition is weakened refuses nothing: a condition
+		// that can never be true leaves the step's whole line in place while
+		// the daemon or the socket it must refuse passes. failureBranch holds a
+		// refusal's condition whole, through its ; then, so the appended
+		// neutraliser is no required line and the case is refused as the line's
+		// absence (issue #574, round 3 of the AI review of PR #586).
+		{
+			name: "the Docker daemon check's condition neutralised",
+			workflow: mutate(t, acceptedWorkflow, auditDockerActiveCheck,
+				"          if systemctl is-active --quiet docker.service docker.socket && false; then\n"+
+					"            echo \"::error title=Audit model::Docker is still running: see runbook step 10\"\n"+
+					"            exit 1\n"+
+					"          fi\n"),
+			wantIn: "runs no if systemctl is-active --quiet docker.service docker.socket; then",
+		},
+		{
+			name: "the Docker socket check's condition neutralised",
+			workflow: mutate(t, acceptedWorkflow, auditDockerSocketCheck,
+				"          if [ -e /var/run/docker.sock ] && false; then\n"+
+					"            echo \"::error title=Audit model::the Docker socket is still there: see runbook step 10\"\n"+
+					"            exit 1\n"+
+					"          fi\n"),
+			wantIn: "runs no if [ -e /var/run/docker.sock ]; then",
+		},
 		// The step that reads the Claude Code pin file into the outputs the
 		// install step's env: names is required: without it the installer takes a
 		// version and an integrity from nowhere, or from a pin of its own that
