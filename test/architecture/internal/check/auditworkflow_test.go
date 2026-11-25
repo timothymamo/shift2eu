@@ -160,12 +160,13 @@ import (
 //     so the step's bound is the larger of the timeouts before the loop and the
 //     budget plus one iteration's own timeouts, plus the timeouts after the
 //     loop, and a step with no loop holds the sum of its `timeout <N>` values.
-//     Row 7's 20-minute budget and the 29 minutes of timeouts outside its loop
-//     add up to 49 of its 50, row 8's three timeouts 14 of its 15, row 9's
-//     12-minute budget plus one scan's 7 minutes 19 of its 20, row 13's
-//     12-minute budget plus one run's 6 minutes and the image's removal 19 of
-//     its 20, and row 14's 25-minute budget plus one target's 16 minutes and the
-//     image's removal 42 of its 45.
+//     Row 7's 20-minute budget plus the 2 minutes of the iteration it had
+//     begun before that budget are 22, past the 11 minutes of timeouts before
+//     the loop, so with the 18 minutes after the loop 40 of its 50, row 8's
+//     three timeouts 14 of its 15, row 9's 12-minute budget plus one scan's
+//     7 minutes 19 of its 20, row 13's 12-minute budget plus one run's 6
+//     minutes and the image's removal 19 of its 20, and row 14's 25-minute
+//     budget plus one target's 16 minutes and the image's removal 42 of its 45.
 //     A shell function's timeout counts once per call, so a function the step
 //     calls many times must hold a budget of its own, and then the step's bound
 //     is that budget plus one call's timeouts: row 15's read_api is 12 minutes
@@ -3349,9 +3350,10 @@ func TestAuditWorkflow(t *testing.T) {
 		},
 
 		// Round E's second part: no step's own timeouts reach its
-		// timeout-minutes. Row 7's 20-minute budget and the 29 minutes of timeouts
-		// outside its loop add up to 49 of its 50, and row 8's three timeouts to 14
-		// of its 15.
+		// timeout-minutes. Row 7's bound is the larger of the 11 minutes of timeouts
+		// before its loop and that loop's 20-minute budget plus one iteration's 2,
+		// plus the 18 minutes after the loop: 40 of its 50. Row 8's three timeouts
+		// add up to 14 of its 15.
 		{
 			name:     "row 7's download timeout raised past its step's time-outs",
 			workflow: mutate(t, acceptedWorkflow, "timeout 5m gh release download", "timeout 30m gh release download"),
