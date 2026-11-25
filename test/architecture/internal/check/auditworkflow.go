@@ -588,15 +588,31 @@ func blankUnless(name, shape string) auditCommand {
 // kind and the runbook step that recovers from it, and no secret and no
 // finding's detail.
 var (
-	// The hardening step's three commands record their own failure, so its
-	// branch, not set -e's own line, ends the step.
+	// The hardening step's four commands record their own failure, so its
+	// branch, not set -e's own line, ends the step. Stopping docker.socket
+	// leaves the socket file on the runner image (systemd removes it on stop
+	// only with RemoveOnStop=yes), so the step removes the stale file after
+	// stopping and disabling Docker and before the runner user's sudo rule,
+	// while sudo still works (issue #574, ADR 0040).
 	hardeningCommands = []auditCommand{
 		command(wholeLine(`sudo systemctl stop docker.service docker.socket || rc=$?`), `sudo systemctl stop docker.service docker.socket || rc=$?, on a line of its own`),
 		command(wholeLine(`sudo systemctl disable docker.service docker.socket || rc=$?`), `sudo systemctl disable docker.service docker.socket || rc=$?, on a line of its own`),
+		command(wholeLine(`sudo rm -f /var/run/docker.sock || rc=$?`),
+			`sudo rm -f /var/run/docker.sock || rc=$?, on a line of its own, after Docker is stopped and disabled and before the runner user's sudo rule is removed: `+
+				`stopping docker.socket leaves the stale socket file behind (issue #574)`),
 		command(wholeLine(`sudo rm -f /etc/sudoers.d/runner || rc=$?`), `sudo rm -f /etc/sudoers.d/runner || rc=$?, on a line of its own`),
 	}
 	hardeningError = failureBranch(`(?m)^[ \t]*if \[ "\$\{rc\}" -ne 0 \]`, `if [ "${rc}" -ne 0 ]`,
 		"::error title=Audit model::the runner could not be hardened: see runbook step 10")
+	// The step's own refusals of the Docker daemon, after the removals: a socket
+	// file still there, and, since the step removes the file itself and its
+	// absence so no longer shows the daemon stopped, a docker.service or
+	// docker.socket systemd still reports active (issue #574, ADR 0040).
+	hardeningSocketCheck = failureBranch(`(?m)^[ \t]*if \[ -e /var/run/docker\.sock \]`, `if [ -e /var/run/docker.sock ]`,
+		"::error title=Audit model::the Docker socket is still there: see runbook step 10")
+	hardeningActiveCheck = failureBranch(`(?m)^[ \t]*if systemctl is-active --quiet docker\.service docker\.socket`,
+		`if systemctl is-active --quiet docker.service docker.socket`,
+		"::error title=Audit model::Docker is still running: see runbook step 10")
 	// The launcher prints one constant class, so an expired or revoked token,
 	// the usage limit, a failed preflight and a managed-settings path read
 	// alike here: the step's line names what the maintainer recovers from.
@@ -860,10 +876,13 @@ var auditJobs = []auditJob{
 					command(`rm -f /etc/sudoers\.d/runner`, "rm -f /etc/sudoers.d/runner"),
 					command(`sudo -n true`, "a check that sudo -n true fails"),
 					hardeningError,
+					hardeningSocketCheck,
+					hardeningActiveCheck,
 				}, hardeningCommands...),
-				// The branch reads the three commands' recorded failure, so it
-				// comes after them.
-				order: append(append([]auditCommand{}, hardeningCommands...), hardeningError),
+				// The branch reads the four commands' recorded failure, so it
+				// comes after them, and the refusals of the socket and of the
+				// daemon ask only once the removals are done.
+				order: append(append([]auditCommand{}, hardeningCommands...), hardeningError, hardeningSocketCheck, hardeningActiveCheck),
 			},
 			{
 				name:     "Run the audit in Claude Code's sandbox",

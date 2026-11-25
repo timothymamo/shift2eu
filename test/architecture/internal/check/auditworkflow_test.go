@@ -75,8 +75,10 @@ import (
 //   - The model job holds no check and runs no container: no step runs
 //     gitleaks, govulncheck, osv-scanner, zizmor, actionlint, cosign, trivy or
 //     scorecard, and none pulls or runs a docker image. The model-free step that
-//     stops Docker and removes the runner user's sudo rule runs before the step
-//     that starts ci/auditrun, which runs the sandbox preflight and the audit.
+//     stops Docker, removes the stale Docker socket file the stopped
+//     docker.socket leaves on the runner image, and removes the runner user's
+//     sudo rule runs before the step that starts ci/auditrun, which runs the
+//     sandbox preflight and the audit.
 //     The model job reads the Claude Code pin file into the outputs its install
 //     step's env: names, and that step is required (test/lint's install check,
 //     issue #277).
@@ -339,15 +341,18 @@ const (
 	// auditHardeningStep is the model-free step that hardens the runner: it must
 	// run before the sandbox preflight, which is inside the model step, and it
 	// records each of its own commands' failure, so that a run fails with an
-	// ::error naming the runbook step instead of with set -e's own line.
+	// ::error naming the runbook step instead of with set -e's own line. It
+	// removes the stale Docker socket file while sudo still works: stopping
+	// docker.socket leaves the file on the runner image (issue #574).
 	auditHardeningStep = "      - name: Stop Docker and remove the runner user's sudo rule\n" +
 		"        timeout-minutes: 5\n" +
 		"        run: |\n" +
 		"          set -euo pipefail\n" +
 		"          rc=0\n" +
-		"          sudo systemctl stop docker.service docker.socket || rc=$?\n" +
+		auditDockerStop +
 		"          sudo systemctl disable docker.service docker.socket || rc=$?\n" +
-		"          sudo rm -f /etc/sudoers.d/runner || rc=$?\n" +
+		auditDockerSocketRemoval +
+		auditSudoRuleRemoval +
 		"          if [ \"${rc}\" -ne 0 ]; then\n" +
 		"            echo \"::error title=Audit model::the runner could not be hardened: see runbook step 10\"\n" +
 		"            exit 1\n" +
@@ -355,7 +360,34 @@ const (
 		"          if sudo -n true 2> /dev/null; then\n" +
 		"            echo \"::error title=Audit model::sudo still works: see runbook step 10\"\n" +
 		"            exit 1\n" +
+		"          fi\n" +
+		auditDockerSocketCheck +
+		auditDockerActiveCheck
+	// auditDockerStop is the hardening step's stopping of Docker, the line the
+	// case that moves the daemon check above the stop anchors on.
+	auditDockerStop = "          sudo systemctl stop docker.service docker.socket || rc=$?\n"
+	// auditDockerSocketRemoval is the hardening step's removal of the stale
+	// Docker socket file, which stopping docker.socket leaves behind on the
+	// runner image, and auditSudoRuleRemoval the removal of the runner user's
+	// sudo rule that follows it (issue #574, ADR 0040). The socket file is
+	// removed while sudo still works, and the existence check after both is what
+	// still refuses a socket that is there.
+	auditDockerSocketRemoval = "          sudo rm -f /var/run/docker.sock || rc=$?\n"
+	auditSudoRuleRemoval     = "          sudo rm -f /etc/sudoers.d/runner || rc=$?\n"
+	// auditDockerSocketCheck is the hardening step's refusal of a Docker socket
+	// still there after the step removed the file, and auditDockerActiveCheck its
+	// refusal of a daemon still running: the removal of the file no longer shows
+	// the daemon stopped, so the step asks systemd (issue #574, ADR 0040). Both
+	// come after the removals and before the sandbox preflight.
+	auditDockerSocketCheck = "          if [ -e /var/run/docker.sock ]; then\n" +
+		"            echo \"::error title=Audit model::the Docker socket is still there: see runbook step 10\"\n" +
+		"            exit 1\n" +
 		"          fi\n"
+	auditDockerActiveCheck = "          if systemctl is-active --quiet docker.service docker.socket; then\n" +
+		"            echo \"::error title=Audit model::Docker is still running: see runbook step 10\"\n" +
+		"            exit 1\n" +
+		"          fi\n"
+
 	// auditModelCanary is the model step's env:, whose canary line the cases that
 	// widen it append to.
 	auditModelCanary = "          SHIFT2EU_AUDIT_CANARY: \"8f14e45fceea167a5a36dedd4bea2543f0e1a2b3c4d5e6f708192a3b4c5d6e7f\"\n"
@@ -2089,6 +2121,82 @@ func TestAuditWorkflow(t *testing.T) {
 			name:     "no hardening step",
 			workflow: withoutStep(auditHardeningStep),
 			wantIn:   "sudo rule",
+		},
+		// The stale socket file: stopping docker.socket leaves it on the runner
+		// image, so the hardening step removes it while sudo still works, after
+		// stopping and disabling Docker and before the runner user's sudo rule is
+		// removed, and the step's own existence check after both still fails a
+		// run whose socket is there (issue #574, ADR 0040). A step that leaves the
+		// file behind, removes it once sudo is gone, or removes it without
+		// recording its exit hardens nothing, so each case pins the removal rule's
+		// own message, never the bare docker.sock that several of the step's
+		// messages hold; the two that leave the step without the whole removal
+		// line draw that one message and so share its fragment.
+		{
+			name:     "no removal of the stale Docker socket file",
+			workflow: mutate(t, acceptedWorkflow, auditDockerSocketRemoval, ""),
+			wantIn:   "runs no sudo rm -f /var/run/docker.sock || rc=$?, on a line of its own, after Docker is stopped and disabled and before the runner user's sudo rule is removed",
+		},
+		{
+			name:     "the stale Docker socket file removed after the runner user's sudo rule",
+			workflow: mutate(t, acceptedWorkflow, auditDockerSocketRemoval+auditSudoRuleRemoval, auditSudoRuleRemoval+auditDockerSocketRemoval),
+			wantIn:   "after sudo rm -f /etc/sudoers.d/runner || rc=$?, on a line of its own, want it before",
+		},
+		{
+			name:     "the stale Docker socket file removed without recording its exit",
+			workflow: mutate(t, acceptedWorkflow, auditDockerSocketRemoval, "          sudo rm -f /var/run/docker.sock\n"),
+			wantIn:   "runs no sudo rm -f /var/run/docker.sock || rc=$?, on a line of its own, after Docker is stopped and disabled and before the runner user's sudo rule is removed",
+		},
+		// The step's own refusals of a socket still there and of a daemon still
+		// running: the removal of the file shows nothing about the daemon, so a
+		// step that keeps no existence check, or one that asks before it removes
+		// the file (and so before the sudoers rule goes), hardens nothing. Each
+		// case pins its rule's own message: the refusal made absent ("runs no
+		// if ...") or the refusal overtaken ("after if ...").
+		{
+			name:     "no Docker socket existence check",
+			workflow: mutate(t, acceptedWorkflow, auditDockerSocketCheck, ""),
+			wantIn:   "runs no if [ -e /var/run/docker.sock ]; then",
+		},
+		{
+			name: "the Docker socket existence check before the stale socket file is removed",
+			workflow: mutate(t, withoutStep(auditDockerSocketCheck), auditDockerSocketRemoval,
+				auditDockerSocketCheck+auditDockerSocketRemoval),
+			wantIn: "after if [ -e /var/run/docker.sock ]; then",
+		},
+		{
+			name:     "no Docker daemon check",
+			workflow: mutate(t, acceptedWorkflow, auditDockerActiveCheck, ""),
+			wantIn:   "runs no if systemctl is-active --quiet docker.service docker.socket",
+		},
+		{
+			name:     "the Docker daemon check before Docker is stopped",
+			workflow: mutate(t, withoutStep(auditDockerActiveCheck), auditDockerStop, auditDockerActiveCheck+auditDockerStop),
+			wantIn:   "after if systemctl is-active --quiet docker.service docker.socket; then",
+		},
+		// A refusal whose condition is weakened refuses nothing: a condition
+		// that can never be true leaves the step's whole line in place while
+		// the daemon or the socket it must refuse passes. failureBranch holds a
+		// refusal's condition whole, through its ; then, so the appended
+		// neutraliser is no required line and the case is refused as the line's
+		// absence (issue #574, round 3 of the AI review of PR #586).
+		{
+			name: "the Docker daemon check's condition neutralised",
+			workflow: mutate(t, acceptedWorkflow, auditDockerActiveCheck,
+				"          if systemctl is-active --quiet docker.service docker.socket && false; then\n"+
+					"            echo \"::error title=Audit model::Docker is still running: see runbook step 10\"\n"+
+					"            exit 1\n"+
+					"          fi\n"),
+			wantIn: "runs no if systemctl is-active --quiet docker.service docker.socket; then",
+		},
+		{
+			name: "the Docker socket check's condition neutralised",
+			workflow: mutate(t, acceptedWorkflow, auditDockerSocketCheck,
+				"          if [ -e /var/run/docker.sock ] && false; then\n"+
+					"            echo \"::error title=Audit model::the Docker socket is still there: see runbook step 10\"\n"+
+					"            exit 1\n"+
+					"          fi\n"),
+			wantIn: "runs no if [ -e /var/run/docker.sock ]; then",
 		},
 		// The step that reads the Claude Code pin file into the outputs the
 		// install step's env: names is required: without it the installer takes a
