@@ -138,5 +138,21 @@
     "persistenceConfig": {
       "mode": "RDB"
     }
+  },
+  {
+    "name": "projects/example-project/locations/europe-west1/instances/valkey-unspecified",
+    "mode": "MODE_UNSPECIFIED",
+    "shardCount": 2,
+    "replicaCount": 1,
+    "nodeType": "STANDARD_SMALL",
+    "nodeConfig": {
+      "sizeGb": 6.5
+    },
+    "zoneDistributionConfig": {
+      "mode": "MULTI_ZONE"
+    },
+    "persistenceConfig": {
+      "mode": "RDB"
+    }
   }
 ]

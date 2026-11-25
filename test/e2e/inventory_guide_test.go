@@ -548,6 +548,15 @@ func inventoryGuides() []inventoryGuideCase {
 					id: "valkey-single", rawType: "memorystore.googleapis.com/Instance", category: "cache.redis",
 					capabilities: []string{"encryption-at-rest", "node-high-availability"},
 				},
+				// MODE_UNSPECIFIED is a mode the instance carries without naming one:
+				// the API documents the default as Cluster Mode Enabled, so only
+				// CLUSTER_DISABLED and STANDALONE turn sharding off. It is
+				// valkey-default with the mode spelled out, so it carries the same
+				// capabilities.
+				{
+					id: "valkey-unspecified", rawType: "memorystore.googleapis.com/Instance", category: "cache.redis",
+					capabilities: []string{"encryption-at-rest", "node-high-availability", "sharding", "snapshots", "zone-high-availability"},
+				},
 				// A Memcached instance speaks another protocol, so no cache
 				// category serves it and it stays unclassified with its rawType.
 				{
@@ -654,6 +663,7 @@ func inventoryGuides() []inventoryGuideCase {
 				{id: "valkey-default", memoryGiB: 6.5, count: 4},
 				{id: "valkey-legacy", memoryGiB: 6.5, count: 1},
 				{id: "valkey-single", memoryGiB: 6.5, count: 2},
+				{id: "valkey-unspecified", memoryGiB: 6.5, count: 4},
 				// A Filestore instance's capacityGb is a string in the API's JSON.
 				{id: "shared", storageGiB: 1024},
 				{id: "scratch", storageGiB: 1024},

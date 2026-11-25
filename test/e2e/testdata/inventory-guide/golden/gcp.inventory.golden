@@ -436,6 +436,23 @@
         "memoryGiB": 6.5,
         "count": 2
       }
+    },
+    {
+      "id": "valkey-unspecified",
+      "rawType": "memorystore.googleapis.com/Instance",
+      "category": "cache.redis",
+      "region": "europe-west1",
+      "capabilities": [
+        "encryption-at-rest",
+        "node-high-availability",
+        "sharding",
+        "snapshots",
+        "zone-high-availability"
+      ],
+      "size": {
+        "memoryGiB": 6.5,
+        "count": 4
+      }
     }
   ]
 }
