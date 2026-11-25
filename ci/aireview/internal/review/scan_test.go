@@ -465,6 +465,37 @@ func TestScanLeftOutFindsRealDataInTheFilesLeftOut(t *testing.T) {
 			},
 		},
 		{
+			// Issue #610: the "@" right before the run ends a URL's userinfo,
+			// so the name after it is the URL's host: userinfo is no delimiter
+			// that introduces a resource type.
+			name:         "a URL host right after userinfo is found",
+			diff:         goldenAdds(golden, `"url": "https://svc-user@microsoft.corp/share/payroll"`),
+			wantFiles:    []review.LeftOutFile{{Path: golden, Added: 1}},
+			wantFindings: []review.ScanFinding{{Path: golden, Line: 1, Kind: review.ScanHostname}},
+		},
+		{
+			// Issue #610: an authority is written with a backslash as well as
+			// with a slash, and the name after it is the host either way.
+			name: "a host right after a backslash authority marker is found",
+			diff: goldenAdds(golden,
+				`"wiki": "https:\\microsoft.corp/wiki"`,
+				`"share": "\\Microsoft.corp/share"`),
+			wantFiles: []review.LeftOutFile{{Path: golden, Added: 2}},
+			wantFindings: []review.ScanFinding{
+				{Path: golden, Line: 1, Kind: review.ScanHostname},
+				{Path: golden, Line: 2, Kind: review.ScanHostname},
+			},
+		},
+		{
+			// Issue #610: a scheme the text writes with a single "/" still
+			// marks the name after it as a URL's host, since the slash follows
+			// the scheme's colon rather than a resource id's segment.
+			name:         "a URL host right after a single-slash scheme is found",
+			diff:         goldenAdds(golden, `"payroll": "http:/microsoft.corp/x"`),
+			wantFiles:    []review.LeftOutFile{{Path: golden, Added: 1}},
+			wantFindings: []review.ScanFinding{{Path: golden, Line: 1, Kind: review.ScanHostname}},
+		},
+		{
 			// Issue #610: the two forms the rule was added for stay quiet (PRD
 			// #552), the narrowing included: an inventory's resource type, and
 			// a resource type inside an ARM ID, whose single "/" before the
@@ -489,6 +520,22 @@ func TestScanLeftOutFindsRealDataInTheFilesLeftOut(t *testing.T) {
 				{Path: golden, Line: 1, Kind: review.ScanHostname},
 				{Path: golden, Line: 2, Kind: review.ScanHostname},
 			},
+		},
+		{
+			// Issue #610: the delimiters that introduce a resource type leave it
+			// no host name, wherever a page or a fixture writes one: the start of
+			// the text, a JSON value's quote, a Markdown code span's backtick, a
+			// Markdown table cell, a settings assignment's "=" and an ARM id's
+			// segment separator, a single "/" after a path segment.
+			name: "an Azure resource type at the start of a text, after a quote, a backtick, a table delimiter, an assignment or an ARM segment is no host name",
+			diff: goldenAdds(golden,
+				`Microsoft.App/containerApps`,
+				`"type": "Microsoft.App/containerApps"`,
+				"the type is `Microsoft.App/containerApps` in the guide",
+				`| Microsoft.App/containerApps |`,
+				`type=microsoft.app/managedenvironments`,
+				`/providers/Microsoft.App/containerApps/app-shop`),
+			wantFiles: []review.LeftOutFile{{Path: golden, Added: 6}},
 		},
 		{
 			// A report's taxonomy categories read like host names, and the
