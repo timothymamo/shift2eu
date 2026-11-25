@@ -53,8 +53,9 @@ var auditTools = []string{"Read", "Grep", "Glob", "Write", "Edit", "Bash"}
 
 // LaunchConfig returns the launcher's config of the audit and its preflight
 // under root: the ADR's model, effort, tools, permission mode and settings
-// file, safe mode off, the skill appended to the CLI's system prompt, the work
-// area as the working directory, HOME in the state area, the system prompt's
+// file, safe mode off, the skill appended to the CLI's system prompt, cwd/,
+// a sibling of the work area, as the working directory (the scrub's
+// placeholders land there, never in the checked work area; issue #615), HOME in the state area, the system prompt's
 // file in the state area's tmp/, the canary redacted beside the token in the
 // launcher's errors, the fixed PATH, and an environment of TMPDIR, the
 // subprocess environment scrub and the canary, beside the launcher's own. It
@@ -72,7 +73,7 @@ func LaunchConfig(root string, in Inputs) claudecode.Config {
 		PermissionMode:     permissionMode,
 		AppendSystemPrompt: true,
 		SafeModeOff:        true,
-		WorkDir:            under(root, workDir),
+		WorkDir:            under(root, cliWorkDir),
 		Home:               under(root, homeDir),
 		SearchPath:         searchPath,
 		SystemPromptDir:    under(root, stateTmpDir),

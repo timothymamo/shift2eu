@@ -18,6 +18,12 @@ const (
 	checksDir   = auditDir + "/checks"
 	workDir     = auditDir + "/work"
 	workTmpDir  = workDir + "/tmp"
+	// cliWorkDir is the CLI's working directory, a sibling of the work
+	// area: under the subprocess environment scrub, Claude Code 2.1.332
+	// creates empty placeholder files and directories in the directory it
+	// starts in and leaves them there, so they stay out of the checked work
+	// area (issue #615).
+	cliWorkDir  = auditDir + "/cwd"
 	stateDir    = auditDir + "/state"
 	homeDir     = stateDir + "/home"
 	stateTmpDir = stateDir + "/tmp"
@@ -60,6 +66,7 @@ var layoutDirs = []dirRule{
 	{path: checksDir, readOnly: true},
 	{path: workDir, entries: []string{"tmp"}},
 	{path: workTmpDir, entries: []string{}},
+	{path: cliWorkDir, entries: []string{}},
 	{path: stateDir},
 	{path: homeDir, entries: []string{}},
 	{path: stateTmpDir, entries: []string{}},
@@ -76,7 +83,8 @@ var layoutDirs = []dirRule{
 // directory whose config and config.worktree, each if there, hold only the
 // keys of their allow lists in lines of the forms git writes (checkGitConfig)
 // and which holds no commondir or gitdir, the work area
-// holding only its empty tmp/, the state area's home/ and tmp/ empty, bin/
+// holding only its empty tmp/, the CLI's working directory cwd/ empty, the
+// state area's home/ and tmp/ empty, bin/
 // without a write bit and holding the wrapper alone, and the wrapper a
 // regular file of mode 0555. It creates nothing: a missing path is
 // the model-free step that did not run. The wrapper's owner (root) is the
