@@ -727,10 +727,12 @@ func TestAskRefusesASessionWhoseInitReportsAnotherPermissionMode(t *testing.T) {
 	}
 }
 
-// TestAskChecksThePermissionModeOnlyWithAModeAndATranscript pins the check's two
-// gates (issue #592): the AI reviewer's launch asks for no permission mode and
-// reads one JSON result, so it has no system/init element to check and runs as it
-// did.
+// TestAskChecksThePermissionModeOnlyWithAModeAndATranscript pins the check's
+// transcript gate (issue #592): the AI reviewer's launch asks for no permission
+// mode and reads one JSON result, so it has no system/init element to check and
+// runs as it did, with a transcript or without one. A launch that asks for a
+// mode and reads no transcript is the one refused before the CLI starts
+// (TestAskRefusesAPermissionModeWithNoTranscript).
 func TestAskChecksThePermissionModeOnlyWithAModeAndATranscript(t *testing.T) {
 	t.Parallel()
 
@@ -743,15 +745,15 @@ func TestAskChecksThePermissionModeOnlyWithAModeAndATranscript(t *testing.T) {
 		canned string
 	}{
 		{
-			name:   "the launch asks for no permission mode",
+			name:   "the launch asks for no permission mode, and reads a streamed run",
 			config: claudecode.Config{Transcript: &bytes.Buffer{}},
 			canned: streamedRun,
 		},
 		{
 			// No transcript is --output-format json: one result element and no
 			// init element, which is the reviewer's launch.
-			name:   "the launch reads one JSON result",
-			config: claudecode.Config{PermissionMode: "default"},
+			name:   "the launch asks for no permission mode and reads one JSON result",
+			config: claudecode.Config{},
 			canned: answeredRun,
 		},
 	}
