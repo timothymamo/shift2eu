@@ -157,7 +157,7 @@ run "pipeline_www_restores_the_www_chain" {
 
   assert {
     condition     = try(scaleway_edge_services_tls_stage.site[0].managed_certificate, false)
-    error_message = "scaleway_edge_services_tls_stage.site must set managed_certificate = true: Scaleway issues and renews the www certificate (PRD #297 hosting decision 9), and an unmanaged one would need a certificate and a key in the state."
+    error_message = "scaleway_edge_services_tls_stage.site must set managed_certificate = true: Scaleway issues and renews the www certificate under the CAA record hosting decision 10 decides (PRD #297 hosting decision 10, ADR 0039), and an unmanaged one would need a certificate and a key in the state."
   }
 
   assert {
