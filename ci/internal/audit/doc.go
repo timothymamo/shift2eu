@@ -35,7 +35,11 @@
 //     any of its bytes (issue #590). It walks each element's top-level object
 //     once, token by token, and refuses one that names a key twice or names
 //     type or message in another case, which encoding/json would read
-//     case-insensitively, keeping the last.
+//     case-insensitively, keeping the last. Told the launch's permission mode
+//     (default, which Claude Code 2.1.332 runs under the subprocess
+//     environment scrub, issue #592), it first reads the transcript's
+//     system/init element through the launcher's ModeCheck and refuses one
+//     that reports another mode, or none.
 //  6. Audit checks that the work area again holds only its empty tmp/, asks
 //     the model once through a Launch, with the skill from the checkout copy as
 //     the appended system prompt, and wants a result file in the work area -
@@ -43,8 +47,11 @@
 //     neither the token nor the canary in its bytes or its decoded strings. It
 //     returns the bytes it read and checked.
 //
-// Run takes the steps and prints one line: "finished", a constant class, or
-// the preflight's Verdict, whose text is made of constants alone. No step's
+// Run takes the steps and prints one line: "finished", a constant class, the
+// preflight's Verdict, whose text is made of constants alone, or, when the
+// preflight's or the audit's CLI run was stopped by the launcher's
+// permission-mode check, "refused: " and the *claudecode.PermissionModeError's
+// fixed sentence (issue #592), which the steps keep through their wrapping. No step's
 // error text is printed: it can hold the CLI's output, the token or the canary.
 // Once every step passed, Run hands the audit's bytes to its Result, the seam
 // the publication works from.

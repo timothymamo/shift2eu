@@ -15,8 +15,12 @@ const (
 	Model = "claude-fable-5-2"
 	// effort is the audit's --effort.
 	effort = "high"
-	// permissionMode refuses every tool call no allow rule matches.
-	permissionMode = "dontAsk"
+	// permissionMode refuses every tool call no allow rule matches in a -p
+	// run: default, the mode Claude Code 2.1.332 runs whenever
+	// CLAUDE_CODE_SUBPROCESS_ENV_SCRUB is set, so the launch asks for the mode
+	// that runs, and the launcher and the judgement refuse a session whose init
+	// element reports another (ADR 0040, issue #592).
+	permissionMode = "default"
 	// searchPath is the CLI's PATH: the sandbox's bwrap and socat are in
 	// /usr/bin.
 	searchPath = "/usr/bin:/bin"

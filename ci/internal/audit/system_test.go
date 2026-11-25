@@ -169,7 +169,7 @@ func TestPreflightRunsThePlansCallsAndRemovesTheControl(t *testing.T) {
 		targets := audit.Targets{Root: root, Port: portIn(t, prompt), Pid: preflightPid, GitHubEnv: in.GitHubEnv}
 		thePlan := audit.PreflightPlan(targets)
 
-		return transcriptOf(thePlan, passingAnswers(thePlan, nonce))
+		return append([]byte(defaultInitLine), transcriptOf(thePlan, passingAnswers(thePlan, nonce))...)
 	}
 
 	if err := audit.Preflight(t.Context(), root, in, prober, observer.observe, preflightPid); err != nil {
@@ -344,7 +344,9 @@ func TestPreflightJudgesTheTranscriptWithTheStepsToken(t *testing.T) {
 			"the environ holds "+in.Token,
 		)
 
-		return append(transcriptOf(thePlan, passingAnswers(thePlan, nonce)), []byte(telling)...)
+		transcript := append([]byte(defaultInitLine), transcriptOf(thePlan, passingAnswers(thePlan, nonce))...)
+
+		return append(transcript, []byte(telling)...)
 	}
 
 	err := audit.Preflight(t.Context(), root, in, prober, observer.observe, preflightPid)
@@ -589,6 +591,11 @@ func TestPreflightJudgesTheSessionsPermissionMode(t *testing.T) {
 		t.Errorf("Preflight() = %q, which holds the init element's canary: a verdict is made of fixed words", err)
 	}
 }
+
+// defaultInitLine is the session's system/init element as Claude Code 2.1.332
+// prints it under the subprocess environment scrub: the mode the audit's launch
+// asks for, which the preflight's judgement wants to read (issue #592).
+const defaultInitLine = `{"type":"system","subtype":"init","permissionMode":"default"}` + "\n"
 
 // workPath is a path of the audit's work area under root.
 func workPath(root string, parts ...string) string {

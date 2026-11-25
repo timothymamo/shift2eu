@@ -112,8 +112,11 @@ type Config struct {
 	// (--settings). Empty passes no flag.
 	Settings string
 
-	// PermissionMode is --permission-mode, dontAsk or plan only: never
-	// bypassPermissions or any other. Empty passes no flag.
+	// PermissionMode is --permission-mode, default or dontAsk only: never
+	// bypassPermissions, plan or any other. Empty passes no flag. With a
+	// Transcript, the session's system/init element must report exactly this
+	// mode (ModeCheck, issue #592): the run is stopped at the line that
+	// refuses it, and fails with a *PermissionModeError.
 	PermissionMode string
 
 	// AppendSystemPrompt appends the prompt's System to the CLI's own system
@@ -164,9 +167,12 @@ type Config struct {
 var efforts = []string{"low", "medium", "high", "xhigh", "max"}
 
 // permissionModes are the values of --permission-mode the launcher passes on:
-// the two that never run a tool call no rule allows. bypassPermissions,
-// acceptEdits and every other mode are refused.
-var permissionModes = []string{"dontAsk", "plan"}
+// the two that, in a -p run with no permission-prompt tool, deny every tool
+// call no allow rule matches. default is the mode Claude Code 2.1.332 runs
+// whenever CLAUDE_CODE_SUBPROCESS_ENV_SCRUB is set (issue #592).
+// bypassPermissions, acceptEdits, plan - which in 2.1.332 ran Read and Glob
+// calls no rule allows - and every other mode are refused.
+var permissionModes = []string{"default", "dontAsk"}
 
 // allowedEnv are the only variables a config's Env may set (ADR 0040,
 // amended 2026-11-23, issue #277 round F): the audit's TMPDIR, the switch
@@ -225,7 +231,10 @@ type cliResult struct {
 // config's Env entries: nothing of the runner's environment, an
 // ANTHROPIC_API_KEY included, is inherited. With a Transcript, every byte the
 // CLI prints on stdout is copied there, whatever the run's outcome, and the
-// answer is the stream's last result element. It
+// answer is the stream's last result element; when the config also asks for a
+// permission mode, the session's system/init element must report it, and a
+// session ModeCheck refuses is stopped at the line that decides it and fails
+// with an error wrapping ErrModel and a *PermissionModeError (issue #592). It
 // returns an error wrapping ErrModel when the config is refused (a relative
 // path, a model or a tool name of the wrong shape, a field checkLaunch
 // refuses, which the error names), the CLI cannot start, runs
@@ -289,6 +298,15 @@ func (c *CLI) Ask(ctx context.Context, p Prompt) (string, error) {
 	if c.cfg.Transcript != nil {
 		stream = &resultStream{transcript: c.cfg.Transcript}
 		stdout = stream
+
+		// A streamed run of a config that asks for a permission mode is checked
+		// against the session's init element as it arrives, and stopped at the
+		// line that refuses it: before the CLI acts on a turn run under another
+		// mode (issue #592).
+		if c.cfg.PermissionMode != "" {
+			stream.mode = NewModeCheck(c.cfg.PermissionMode)
+			stream.stop = cancel
+		}
 	}
 
 	stderr := &cappedBuffer{limit: maxCLIStderr}
@@ -316,8 +334,24 @@ func (c *CLI) Ask(ctx context.Context, p Prompt) (string, error) {
 	// cancellation or the timeout it most likely is.
 	text, err := c.answer(runErr, stdout, stderr)
 
+	// A session the check refused at one of its lines was stopped there: that
+	// refusal is the run's outcome, whatever the stop left behind.
+	if stream != nil && stream.mode != nil {
+		if modeErr := stream.mode.refusedEarly(); modeErr != nil {
+			return "", fmt.Errorf("%w: %w", ErrModel, modeErr)
+		}
+	}
+
 	switch decideRunOutcome(err, ctx.Err(), runCtx.Err()) {
 	case outcomeAnswer:
+		// A session that answered without ever reporting its permission mode
+		// is no answer either.
+		if stream != nil && stream.mode != nil {
+			if modeErr := stream.mode.Err(); modeErr != nil {
+				return "", fmt.Errorf("%w: %w", ErrModel, modeErr)
+			}
+		}
+
 		// An answer whose transcript is incomplete is no answer: the caller
 		// keeps the transcript to judge the run by (ADR 0040's model-job amendment).
 		if stream != nil && stream.writeErr != nil {
@@ -440,7 +474,7 @@ func decideRunOutcome(answerErr, parentErr, runErr error) runOutcome {
 
 // checkLaunch refuses, before anything runs, a field of the config ADR 0040's
 // model-job amendment does not allow, naming the field: an effort outside the five, a
-// permission mode other than dontAsk or plan, a relative settings path, a
+// permission mode other than default or dontAsk, a relative settings path, a
 // working directory or HOME that is not an absolute path to a directory that
 // exists, and an Env entry that is no NAME=VALUE, sets a variable outside
 // allowedEnv or holds a NUL or a newline in its value; and an empty token or a
@@ -751,6 +785,11 @@ type resultStream struct {
 	transcript io.Writer
 	writeErr   error
 
+	// mode, when set, checks the session's permission mode line by line, and
+	// stop ends the run at the first line it refuses.
+	mode *ModeCheck
+	stop context.CancelFunc
+
 	// line is the line being read, overLine whether it ran past the cap.
 	line     []byte
 	overLine bool
@@ -799,6 +838,19 @@ func (s *resultStream) take(part []byte) {
 
 // endLine reads the line taken so far and starts the next.
 func (s *resultStream) endLine() {
+	if s.mode != nil {
+		var refused bool
+		if s.overLine {
+			refused = s.mode.Cut()
+		} else {
+			refused = s.mode.Line(s.line)
+		}
+
+		if refused && s.stop != nil {
+			s.stop()
+		}
+	}
+
 	switch {
 	case s.overLine:
 		s.overflow = true

@@ -2756,6 +2756,19 @@ The model job's errors that point here are titled `Audit model`. What each means
   and no class, was issue #590: Claude Code 2.1.332's `system/permission_denied` element, whose
   `message` is a string, made the judge refuse every real preflight. Since the fix the judge skips the
   elements it does not judge.
+- `refused: the session's permission mode is not the one asked for: expected default, reported <X>`
+  (or, from the preflight's judgement, `preflight failed: the session's permission mode is not the one
+  asked for: expected default, reported <X>; see runbook step 10`): the CLI's `system/init` element
+  reported another permission mode than the launch's `--permission-mode default`, and the run was
+  stopped at that line, before the model acted (ADR 0040, issue #592). `<X>` is one of Claude Code's
+  own modes (`dontAsk`, `plan`, `auto`, `acceptEdits`, `bypassPermissions`) or a class: `missing` (no
+  init element before the session's turn or the run's end, or one without `permissionMode`), `not a
+  string`, `another mode` (a string Claude Code does not name, compared case and all) or `two init
+  lines` (a second init element, or `type`, `subtype` or `permissionMode` named twice or in another
+  case). Almost always a Claude Code bump changed how it resolves the mode: read the new version's
+  resolver for `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB` (ADR 0040's issue #592 amendment says what 2.1.332
+  does), report it as an issue with the line and the CLI version pinned in `.github/claude-code.yaml`,
+  and do not change the launch or the scrub in the workflow. Nothing leaked, so nothing to rotate.
 - `the runner could not be hardened: see runbook step 10`: stopping or disabling Docker, removing the
   stale socket file `/var/run/docker.sock` or removing `/etc/sudoers.d/runner` failed; `sudo still
   works`, `the Docker socket is still there` and `the audit directory's owners or modes are not as laid

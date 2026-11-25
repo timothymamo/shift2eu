@@ -33,6 +33,15 @@ const streamedRun = `{"type":"system","subtype":"init"}
 {"type":"result","subtype":"success","is_error":false,"result":"the last result"}
 `
 
+// streamedDontAskRun is streamedRun with an init element that reports the
+// permission mode dontAsk: a streamed run of a config that asks for a mode
+// is checked against the session's init element (issue #592).
+const streamedDontAskRun = `{"type":"system","subtype":"init","permissionMode":"dontAsk"}
+{"type":"assistant","subtype":"text"}
+{"type":"result","subtype":"success","is_error":false,"result":"the first result"}
+{"type":"result","subtype":"success","is_error":false,"result":"the last result"}
+`
+
 // answeredRun is what a fake CLI prints for --output-format json: the one result
 // element the launcher reads.
 const answeredRun = `{"type":"result","subtype":"success","is_error":false,"result":"the last result"}`
@@ -252,7 +261,7 @@ func valueAfter(args []string, flag string) (string, bool) {
 func TestAskRunsTheConfiguredLaunch(t *testing.T) {
 	t.Parallel()
 
-	cli, rec := newFakeClaudeCLI(t, claudeFake{stdout: streamedRun})
+	cli, rec := newFakeClaudeCLI(t, claudeFake{stdout: streamedDontAskRun})
 
 	work, home := t.TempDir(), t.TempDir()
 
@@ -291,8 +300,8 @@ func TestAskRunsTheConfiguredLaunch(t *testing.T) {
 		t.Errorf("Ask = %q, want %q: a streamed run's answer is its last result element", got, "the last result")
 	}
 
-	if diff := transcript.String(); diff != streamedRun {
-		t.Errorf("the transcript holds %q, want every byte the CLI printed, %q", diff, streamedRun)
+	if diff := transcript.String(); diff != streamedDontAskRun {
+		t.Errorf("the transcript holds %q, want every byte the CLI printed, %q", diff, streamedDontAskRun)
 	}
 
 	if pwd := strings.TrimSuffix(rec.read(t, "pwd"), "\n"); pwd != work {

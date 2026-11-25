@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+
+	"github.com/timothymamo/shift2eu/ci/internal/claudecode"
 )
 
 // The exit codes of an audit run (ADR 0040, "The audit's programs").
@@ -37,6 +39,10 @@ const (
 	linePreflight       = "the preflight failed: see runbook step 10"
 	lineAudit           = "the audit failed: the model's run or its result file"
 	lineMissingStep     = "the run was not given all six steps"
+	// linePermissionMode starts the line of a session whose init element
+	// reports another permission mode than the launch asked for; the
+	// launcher's fixed sentence follows (issue #592).
+	linePermissionMode = "refused: "
 )
 
 // Inputs are what one run is handed by the model step: the two secrets, the
@@ -144,6 +150,10 @@ func (r Run) steps(ctx context.Context) (int, string) {
 	}
 
 	if err := s.Preflight(ctx, r.Root); err != nil {
+		if line, ok := modeRefusal(err); ok {
+			return ExitFailed, line
+		}
+
 		// A verdict's text is made of constants alone: the probes' numbers
 		// and short names, never the transcript.
 		var verdict *Verdict
@@ -156,6 +166,10 @@ func (r Run) steps(ctx context.Context) (int, string) {
 
 	body, err := s.Audit(ctx, r.Root)
 	if err != nil {
+		if line, ok := modeRefusal(err); ok {
+			return ExitFailed, line
+		}
+
 		return ExitFailed, lineAudit
 	}
 
@@ -164,4 +178,17 @@ func (r Run) steps(ctx context.Context) (int, string) {
 	}
 
 	return ExitOK, lineFinished
+}
+
+// modeRefusal returns the line of a step's failure that holds the launcher's
+// *claudecode.PermissionModeError (issue #592): linePermissionMode and the
+// error's fixed sentence, which names the expected mode and a known mode or a
+// class, never a byte of the session's element.
+func modeRefusal(err error) (string, bool) {
+	var modeErr *claudecode.PermissionModeError
+	if !errors.As(err, &modeErr) {
+		return "", false
+	}
+
+	return linePermissionMode + modeErr.Error(), true
 }
