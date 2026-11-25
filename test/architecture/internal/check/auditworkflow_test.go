@@ -2,6 +2,7 @@ package check_test
 
 import (
 	"os"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -156,9 +157,11 @@ import (
 //     other step holds the sum of its `timeout <N>` values outside loops below
 //     it. Row 7's 20-minute budget and its 29 minutes of timeouts outside the
 //     loop (the two cosign verify-attestation runs counted) add up to 49 of
-//     its 50, row 8's three timeouts to 14 of its 15, and the checks job's
-//     steps add up to 345, with the job's 5 minutes of set-up and post steps
-//     inside its 355.
+//     its 50, row 8's three timeouts to 14 of its 15, row 9's 12-minute budget
+//     to its 20, row 13's 14-minute budget and its 5 minutes of staging to its
+//     20, row 14's 25-minute budget and its 18 minutes outside the loop to its
+//     45, and the checks job's steps add up to 348, with the job's 5 minutes of
+//     set-up and post steps inside its 355.
 //   - Every step that can fail with a cause the box lists ends with an
 //     `::error title=Audit <job>::<kind>: see runbook step <N>` line on that
 //     failure, naming no secret and no finding's detail: the hardening step's
@@ -587,6 +590,8 @@ const (
 		"          if [ \"${rc}\" -eq 124 ]; then\n" +
 		"            echo \"scorecard timed-out\" >> \"${results}/not-run.txt\"\n" +
 		"            echo \"scorecard timed out after 15 minutes\" >> \"${results}/limits.txt\"\n" +
+		"          elif [ \"${rc}\" -ne 0 ]; then\n" +
+		"            echo \"scorecard tool-failed\" >> \"${results}/not-run.txt\"\n" +
 		"          fi\n" +
 		"          printf '%s\\n' Branch-Protection Webhooks > \"${out}/admin-checks.txt\"\n" +
 		"          echo \"scorecard-admin needs-admin-read\" >> \"${results}/not-run.txt\"\n" +
@@ -650,9 +655,12 @@ const (
 		"              echo \"fuzzing unexpected-target\" >> \"${results}/not-run.txt\"\n" +
 		"              continue\n" +
 		"            fi\n"
+	// The ruleset ID's shape is refused by a record in the limits and a continue,
+	// never by exit 1: a read the API answers in another shape records that read
+	// as not run and leaves the step to its other reads (round I of PR 5c).
 	auditRulesetGuard = "            if [[ ! \"${id}\" =~ ^[0-9]+$ ]]; then\n" +
-		"              echo \"::error title=Audit checks::a ruleset ID is no number: see runbook step 11\"\n" +
-		"              exit 1\n" +
+		"              echo \"supply-chain unexpected-ruleset\" >> \"${results}/not-run.txt\"\n" +
+		"              continue\n" +
 		"            fi\n"
 	// The "image was not pulled" branch each of rows 8, 11 and 13 runs right
 	// before its digest guard, one message each: the context that lets a case
@@ -669,7 +677,7 @@ const (
 	// start from, so it is never started itself. A case that starts one hangs a
 	// docker start on its create.
 	auditHostileStaging = "          staging=\"$(timeout 1m docker create \"${image}@${digest}\")\" || rc=$?\n"
-	auditFuzzStaging    = "          staging=\"$(docker create \"${image}\")\"\n"
+	auditFuzzStaging    = "          staging=\"$(timeout 2m docker create \"${image}\")\" || rc=$?\n"
 	// auditHostileStagingCreate is the head of row 13's staging create: the one
 	// docker create of the checks job whose flags the check does not pin
 	// verbatim, so a case that hangs a flag on it is caught by the rule about
@@ -684,11 +692,11 @@ const (
 	// A release file, an archive or the image is the untrusted party: every
 	// command that reads one runs under a timeout and records a failure of its
 	// own, never as a step that aborts the run's report.
-	auditChecksumFilter  = "          timeout 1m grep -E '^[0-9a-f]{64}  [A-Za-z0-9._+-]+$' \"${rel}/checksums.txt\" > \"${out}/checksums.filtered\" 2> \"${out}/checksums-filter.stderr\" || rc=$?\n"
-	auditReleaseChecksum = "          (cd \"${rel}\" && timeout 5m sha256sum --check --strict \"${out}/checksums.filtered\") > \"${out}/checksums.stdout\" 2> \"${out}/checksums.stderr\" || rc=$?\n"
+	auditChecksumFilter  = "            timeout 1m grep -E '^[0-9a-f]{64}  [A-Za-z0-9._+-]+$' \"${rel}/checksums.txt\" > \"${out}/checksums.filtered\" 2> \"${out}/checksums-filter.stderr\" || rc=$?\n"
+	auditReleaseChecksum = "            (cd \"${rel}\" && timeout 5m sha256sum --check --strict \"${out}/checksums.filtered\") > \"${out}/checksums.stdout\" 2> \"${out}/checksums.stderr\" || rc=$?\n"
 	// auditReleaseLoopBudget is row 7's attestation loop's overall budget, in
 	// seconds of the step, which its timeout-minutes (50) has to be above.
-	auditReleaseLoopBudget = "            if [ \"${SECONDS}\" -ge 1200 ]; then\n"
+	auditReleaseLoopBudget = "              if [ \"${SECONDS}\" -ge 1200 ]; then\n"
 	// auditBinaryUnpack is row 9's unpack: the one member, to stdout, through a
 	// size cap, under a timeout.
 	auditBinaryUnpack = "              *.tar.gz) timeout 2m tar -xOzf \"${archive}\" shift2eu 2> \"${out}/${name}.unpack.stderr\" | head -c 134217728 > \"${dir}/shift2eu\" || rc=$? ;;\n"
@@ -703,7 +711,7 @@ const (
 	auditBinaryUnpackZip = "              *.zip) timeout 2m unzip -p \"${archive}\" shift2eu.exe 2> \"${out}/${name}.unpack.stderr\" | head -c 134217728 > \"${dir}/shift2eu.exe\" || rc=$? ;;\n"
 	// auditProvenanceVerify and auditCosignVerify are row 7's reads of the
 	// release's attestations and its signature.
-	auditProvenanceVerify = "            timeout 2m gh attestation verify \"${file}\" \\\n"
+	auditProvenanceVerify = "              timeout 2m gh attestation verify \"${file}\" \\\n"
 	auditCosignVerify     = "            timeout 3m cosign verify \"${ref}\" \\\n"
 	// auditHostileCopy and auditHostileCommit are row 13's staging copy and
 	// commit, each under a timeout of its own.
@@ -746,12 +754,15 @@ const (
 // fails in mutate.
 var (
 	// Row 7's five verifications record one shape of outcome: rc 124 as the
-	// check that timed out, rc 1 - a checksum mismatch, a refused attestation
-	// or a refused signature - as the finding verification-failed in the
-	// results, and any other failure as a check that did not run.
-	auditChecksumOutcome    = auditVerificationBranch("          ", "the checksum check timed out after 5 minutes")
-	auditReleaseFileOutcome = auditVerificationBranch("            ", "the attestation of ${name} timed out after 2 minutes")
-	auditSignatureOutcome   = auditVerificationBranch("            ", "the image's signature timed out after 3 minutes")
+	// check that timed out, the release's refusal - a checksum mismatch, a
+	// refused attestation or a refused signature - as the finding
+	// verification-failed in the results, and any other failure as a check that
+	// did not run. The checksum check's finding is rc 1 only when the filtered
+	// list held well-formed lines, and cosign's signature check reads cosign's
+	// own refusal exits, 10 to 13, as the same finding (round I of PR 5c).
+	auditChecksumOutcome    = auditVerificationBranchWhen("            ", `[ "${rc}" -eq 1 ] && [ -s "${out}/checksums.filtered" ]`, "the checksum check timed out after 5 minutes")
+	auditReleaseFileOutcome = auditVerificationBranch("              ", "the attestation of ${name} timed out after 2 minutes")
+	auditSignatureOutcome   = auditVerificationBranchWhen("            ", `[ "${rc}" -eq 1 ] || { [ "${rc}" -ge 10 ] && [ "${rc}" -le 13 ]; }`, "the image's signature timed out after 3 minutes")
 	auditAttestedSigOutcome = auditVerificationBranch("              ", "the ${kind} attestation's signature timed out after 3 minutes")
 	auditSBOMOutcome        = auditVerificationBranch("            ", "the SBOM's attestation timed out after 3 minutes")
 
@@ -817,20 +828,149 @@ var (
 		"          fi\n"
 )
 
+// Round I's anchors (the reviewer's and the auditor's findings on PR 5c): the
+// accepted shape's fixes, each exactly as the fixture writes it, so a case that
+// mistypes one fails in mutate.
+const (
+	// auditSignatureFinding is row 7's cosign verify branch's finding condition,
+	// widened to cosign's own refusal exits: v3 maps a missing signature, a
+	// missing tag, no matching signature and no certificate on the signature to
+	// 10, 11, 12 and 13, which are a finding about the release, never a tool that
+	// failed (B1). auditSignatureFindingBefore is the branch that read only 1.
+	auditSignatureFinding       = "            elif [ \"${rc}\" -eq 1 ] || { [ \"${rc}\" -ge 10 ] && [ \"${rc}\" -le 13 ]; }; then\n"
+	auditSignatureFindingBefore = "            elif [ \"${rc}\" -eq 1 ]; then\n"
+
+	// auditBinaryLoopBudget is row 9's loop budget: six archives of up to 2m tar
+	// and 5m govulncheck are 42 minutes against the step's 20, so no archive's
+	// scan starts after its 12th minute (M1).
+	auditBinaryLoopBudget = "            if [ \"${SECONDS}\" -ge 720 ]; then\n" +
+		"              echo \"binary-vulnerabilities: the budget of 12 minutes ran out before $(basename \"${archive}\")\" >> \"${results}/limits.txt\"\n" +
+		"              continue\n" +
+		"            fi\n"
+
+	// auditRow8Pull is row 8's pull and the two lines around it: the block the
+	// case that retries the pull in a loop with no budget replaces (M1's rule).
+	auditRow8Pull = "          rc=0\n" +
+		"          timeout 8m docker pull --platform linux/amd64 \"${image}@${digest}\" > \"${out}/pull.stdout\" 2> \"${out}/pull.stderr\" || rc=$?\n" +
+		"          echo \"${rc}\" > \"${out}/pull.exit\"\n"
+
+	// auditFuzzTree, auditFuzzStagingCopy and auditFuzzLoopBudget are row 14's
+	// staging extraction, its copy of the tree into the staging container and its
+	// loop budget: each command under a timeout of its own with its exit
+	// recorded, and no target's fuzzing started after the step's 25th minute (M2).
+	auditFuzzTree        = "          git archive --format=tar \"${GITHUB_SHA}\" | timeout 2m tar -C \"${src}\" -xf - 2> \"${out}/tree.stderr\" || rc=$?\n"
+	auditFuzzStagingCopy = "          timeout 2m docker cp \"${src}\" \"${staging}:/src\" 2> \"${out}/staging-src.stderr\" || rc=$?\n"
+	auditFuzzLoopBudget  = "            if [ \"${SECONDS}\" -ge 1500 ]; then\n" +
+		"              echo \"fuzzing: the budget of 25 minutes ran out before ${pkg} ${name}\" >> \"${results}/limits.txt\"\n" +
+		"              continue\n" +
+		"            fi\n"
+
+	// auditRuntimeState is row 11's read of the run container's exit state, under
+	// a timeout of its own: the post-run docker commands are no less hangable
+	// than the runs (L1).
+	auditRuntimeState = "          timeout 1m docker inspect --format '{{.State.ExitCode}} {{.State.OOMKilled}}' \"${cid}\" > \"${out}/version.state\" || rc=$?\n"
+
+	// auditReleaseFileGate and auditReleaseFileGateEnd are row 7's gate around
+	// the release's file checks: they run only when the download brought the
+	// files and checksums.txt with them, and its failure records a check that did
+	// not run, never a checksum finding (L2).
+	auditReleaseFileGate    = "          if [ \"${rel_ok}\" -eq 1 ]; then\n"
+	auditReleaseFileGateEnd = "            done < <(find \"${rel}\" -maxdepth 1 -type f -print0)\n          fi\n"
+
+	// auditLatestDigestShape and auditLatestReleaseShape are row 7's shape checks
+	// of the two values latest.txt holds beside the tag: a registry answer or an
+	// API answer of another shape is recorded as no value, never as one (L5).
+	auditLatestDigestShape = "          if [[ ! \"${latest_digest}\" =~ ^sha256:[0-9a-f]{64}$ ]]; then\n" +
+		"            latest_digest=\"\"\n" +
+		"          fi\n"
+	auditLatestReleaseShape = "          if [[ ! \"${latest_release}\" =~ ^v[0-9]+\\.[0-9]+\\.[0-9]+$ ]]; then\n" +
+		"            latest_release=\"\"\n" +
+		"          fi\n"
+
+	// auditNoDigestRecord is row 7's else: an image digest it could not resolve
+	// leaves the signature and the two attestations unverified, which is recorded
+	// as the check that did not run, with the limits line that names them (S4).
+	auditNoDigestRecord = "          else\n" +
+		"            # No digest is no verification: the image's signature and its two attestations were not\n" +
+		"            # checked, which is recorded as the check that did not run, never left silent.\n" +
+		"            echo \"release-integrity tool-failed\" >> \"${results}/not-run.txt\"\n" +
+		"            echo \"release-integrity: no image digest, so the image's signature and attestations were not verified\" >> \"${results}/limits.txt\"\n" +
+		"          fi\n"
+
+	// auditScorecardToolFailed, auditImagePullToolFailed, auditTrivyImageToolFailed,
+	// auditTrivySBOMToolFailed and auditTrivyImageTimedOut are rows 6, 8 and 10's
+	// branches for a run that did not time out but failed: scorecard, trivy and
+	// docker pull each exit non-zero only on an error, and a check that did not
+	// run is recorded in not-run.txt, never left to read as clean (L3).
+	auditScorecardToolFailed = "          elif [ \"${rc}\" -ne 0 ]; then\n" +
+		"            echo \"scorecard tool-failed\" >> \"${results}/not-run.txt\"\n"
+	auditImagePullToolFailed = "            echo \"image-pull timed out after 8 minutes\" >> \"${results}/limits.txt\"\n" +
+		"          elif [ \"${rc}\" -ne 0 ]; then\n" +
+		"            echo \"image-pull tool-failed\" >> \"${results}/not-run.txt\"\n" +
+		"          fi\n"
+	auditTrivyImageToolFailed = "              echo \"image-scan: the image scan timed out after 8 minutes\" >> \"${results}/limits.txt\"\n" +
+		"            elif [ \"${rc}\" -ne 0 ]; then\n" +
+		"              echo \"image-scan tool-failed\" >> \"${results}/not-run.txt\"\n" +
+		"            fi\n"
+	auditTrivySBOMToolFailed = "              echo \"image-scan: the SBOM scan timed out after 4 minutes\" >> \"${results}/limits.txt\"\n" +
+		"            elif [ \"${rc}\" -ne 0 ]; then\n" +
+		"              echo \"image-scan tool-failed\" >> \"${results}/not-run.txt\"\n" +
+		"            fi\n"
+	auditTrivyImageTimedOut = "              echo \"image-scan timed-out\" >> \"${results}/not-run.txt\"\n" +
+		"              echo \"image-scan: the image scan timed out after 8 minutes\" >> \"${results}/limits.txt\"\n"
+
+	// auditRulesetExit is the ruleset ID's branch as it read before round I: a
+	// shape it does not expect ends the whole step with exit 1, and so the run's
+	// report (L6).
+	auditRulesetExit = "            if [[ ! \"${id}\" =~ ^[0-9]+$ ]]; then\n" +
+		"              echo \"::error title=Audit checks::a ruleset ID is no number: see runbook step 11\"\n" +
+		"              exit 1\n" +
+		"            fi\n"
+)
+
 // auditVerificationBranch returns one of row 7's verifications' outcome branch,
 // exactly as the accepted fixture writes it: the check that timed out recorded as
 // not run, with its limits line, a failure of the verification itself recorded as
 // the finding verification-failed in the results, and any other failure recorded
-// as a check that did not run.
+// as a check that did not run. A verification whose refusal the tool reports with
+// other exit codes passes them as cond (round I of PR 5c).
 func auditVerificationBranch(indent, limits string) string {
+	return auditVerificationBranchWhen(indent, `[ "${rc}" -eq 1 ]`, limits)
+}
+
+// auditVerificationBranchWhen returns row 7's outcome branch whose finding line
+// reads cond, the condition of its elif.
+func auditVerificationBranchWhen(indent, cond, limits string) string {
 	return indent + "if [ \"${rc}\" -eq 124 ]; then\n" +
 		indent + "  echo \"release-integrity timed-out\" >> \"${results}/not-run.txt\"\n" +
 		indent + "  echo \"release-integrity: " + limits + "\" >> \"${results}/limits.txt\"\n" +
-		indent + "elif [ \"${rc}\" -eq 1 ]; then\n" +
+		indent + "elif " + cond + "; then\n" +
 		indent + "  echo \"release-integrity verification-failed\" >> \"${results}/verification-failed.txt\"\n" +
 		indent + "elif [ \"${rc}\" -ne 0 ]; then\n" +
 		indent + "  echo \"release-integrity tool-failed\" >> \"${results}/not-run.txt\"\n" +
 		indent + "fi\n"
+}
+
+// auditWithoutFinding returns one of row 7's outcome branches without its
+// finding: the elif that reads the release's refusal and the record it writes,
+// so that the branch records only a timeout and a tool that failed - the shape
+// round E refuses, because the refusal then reads as a check that did not run.
+func auditWithoutFinding(branch string) string {
+	lines := strings.Split(strings.TrimSuffix(branch, "\n"), "\n")
+
+	out := make([]string, 0, len(lines))
+
+	for i := 0; i < len(lines); i++ {
+		if strings.Contains(lines[i], `elif [ "${rc}" -eq 1 ]`) {
+			i++
+
+			continue
+		}
+
+		out = append(out, lines[i])
+	}
+
+	return strings.Join(out, "\n") + "\n"
 }
 
 // auditChecksum is one tool download of a download step: the job it runs in,
@@ -968,6 +1108,33 @@ func joinedBranch(guard string) string {
 	lines := strings.Split(strings.TrimSuffix(guard, "\n"), "\n")
 
 	return lines[0] + "\n" + strings.Join(lines[1:], " ") + "\n"
+}
+
+// auditLineNumber is a line number the check quotes: a step's "(line N)" and a
+// line-ruled message's "line N: ".
+var auditLineNumber = regexp.MustCompile(`\(line [0-9]+\)|^line [0-9]+: `)
+
+// auditFresh returns the messages got draws that the accepted shape does not,
+// compared without their line numbers: a case that adds or removes a line moves
+// every line below it, and the check then reports the same problem at another
+// line, which is no complaint of the case's own. A complaint is fresh when the
+// accepted shape draws none of its kind.
+func auditFresh(accepted, got []string) []string {
+	seen := make(map[string]bool, len(accepted))
+
+	for _, m := range accepted {
+		seen[auditLineNumber.ReplaceAllString(m, "(line)")] = true
+	}
+
+	out := make([]string, 0, len(got))
+
+	for _, m := range got {
+		if !seen[auditLineNumber.ReplaceAllString(m, "(line)")] {
+			out = append(out, m)
+		}
+	}
+
+	return out
 }
 
 // TestAuditWorkflow holds the scheduled security audit's workflow to
@@ -2252,17 +2419,17 @@ func TestAuditWorkflow(t *testing.T) {
 		{
 			name:     "the ruleset ID guard removed",
 			workflow: mutate(t, acceptedWorkflow, auditRulesetGuard, ""),
-			wantIn:   "ruleset ID",
+			wantIn:   "ruleset",
 		},
 		{
-			name:     "the ruleset ID guard without its exit 1",
-			workflow: mutate(t, acceptedWorkflow, auditRulesetGuard, strings.Replace(auditRulesetGuard, "              exit 1\n", "", 1)),
-			wantIn:   "ruleset ID",
+			name:     "the ruleset ID guard without its record",
+			workflow: mutate(t, acceptedWorkflow, auditRulesetGuard, strings.Replace(auditRulesetGuard, "              echo \"supply-chain unexpected-ruleset\" >> \"${results}/not-run.txt\"\n", "", 1)),
+			wantIn:   "ruleset",
 		},
 		{
 			name:     "the ruleset ID guard joined onto the echo's line",
 			workflow: mutate(t, acceptedWorkflow, auditRulesetGuard, joinedBranch(auditRulesetGuard)),
-			wantIn:   "ruleset ID",
+			wantIn:   "ruleset",
 		},
 
 		// The three tools PR 5c adds are pinned like the rest: a version under a
@@ -2439,11 +2606,11 @@ func TestAuditWorkflow(t *testing.T) {
 			wantIn:   "hostile-inventories",
 		},
 		{
-			// The checks job's steps add up to 345 minutes: with the job's 5 minutes
+			// The checks job's steps add up to 348 minutes: with the job's 5 minutes
 			// of set-up and post steps they stay within its 355, and a step raised by
 			// 20 puts them past it.
 			name:     "a checks step adding up past the job's timeout",
-			workflow: mutate(t, acceptedWorkflow, "      - name: Check the image's runtime settings\n        timeout-minutes: 10\n", "      - name: Check the image's runtime settings\n        timeout-minutes: 30\n"),
+			workflow: mutate(t, acceptedWorkflow, "      - name: Check the image's runtime settings\n        timeout-minutes: 13\n", "      - name: Check the image's runtime settings\n        timeout-minutes: 30\n"),
 			wantIn:   "timeout-minutes",
 		},
 
@@ -2653,18 +2820,14 @@ func TestAuditWorkflow(t *testing.T) {
 		// rc 1 as release-integrity verification-failed in the results, and keep rc
 		// 124 and any other failure as "not run".
 		{
-			name: "row 7's checksum mismatch recorded as tool-failed",
-			workflow: mutate(t, acceptedWorkflow, auditChecksumOutcome,
-				strings.Replace(auditChecksumOutcome, "          elif [ \"${rc}\" -eq 1 ]; then\n"+
-					"            echo \"release-integrity verification-failed\" >> \"${results}/verification-failed.txt\"\n", "", 1)),
-			wantIn: "verification-failed",
+			name:     "row 7's checksum mismatch recorded as tool-failed",
+			workflow: mutate(t, acceptedWorkflow, auditChecksumOutcome, auditWithoutFinding(auditChecksumOutcome)),
+			wantIn:   "verification-failed",
 		},
 		{
-			name: "row 7's refused release-file attestation without its verification-failed record",
-			workflow: mutate(t, acceptedWorkflow, auditReleaseFileOutcome,
-				strings.Replace(auditReleaseFileOutcome,
-					"              echo \"release-integrity verification-failed\" >> \"${results}/verification-failed.txt\"\n", "", 1)),
-			wantIn: "verification-failed",
+			name:     "row 7's refused release-file attestation without its verification-failed record",
+			workflow: mutate(t, acceptedWorkflow, auditReleaseFileOutcome, auditWithoutFinding(auditReleaseFileOutcome)),
+			wantIn:   "verification-failed",
 		},
 		{
 			name:     "row 7's SBOM attestation timing out recorded as tool-failed",
@@ -2672,18 +2835,14 @@ func TestAuditWorkflow(t *testing.T) {
 			wantIn:   "timed-out",
 		},
 		{
-			name: "row 7's refused image signature without its verification-failed record",
-			workflow: mutate(t, acceptedWorkflow, auditSignatureOutcome,
-				strings.Replace(auditSignatureOutcome, "            elif [ \"${rc}\" -eq 1 ]; then\n"+
-					"              echo \"release-integrity verification-failed\" >> \"${results}/verification-failed.txt\"\n", "", 1)),
-			wantIn: "verification-failed",
+			name:     "row 7's refused image signature without its verification-failed record",
+			workflow: mutate(t, acceptedWorkflow, auditSignatureOutcome, auditWithoutFinding(auditSignatureOutcome)),
+			wantIn:   "verification-failed",
 		},
 		{
-			name: "row 7's refused attestation signature without its verification-failed record",
-			workflow: mutate(t, acceptedWorkflow, auditAttestedSigOutcome,
-				strings.Replace(auditAttestedSigOutcome, "              elif [ \"${rc}\" -eq 1 ]; then\n"+
-					"                echo \"release-integrity verification-failed\" >> \"${results}/verification-failed.txt\"\n", "", 1)),
-			wantIn: "verification-failed",
+			name:     "row 7's refused attestation signature without its verification-failed record",
+			workflow: mutate(t, acceptedWorkflow, auditAttestedSigOutcome, auditWithoutFinding(auditAttestedSigOutcome)),
+			wantIn:   "verification-failed",
 		},
 
 		// Round E's second part: no step's own timeouts reach its
@@ -2821,6 +2980,117 @@ func TestAuditWorkflow(t *testing.T) {
 			wantIn:   "the Claude Code CLI did not install",
 		},
 
+		// Round I: the reviewer's and the auditor's findings on PR 5c, each case
+		// changing one of them back. A refusal the tool reports with an exit code
+		// that the branch does not read is a finding lost to "tool-failed"; a loop
+		// without a budget, and a docker command without a timeout, is a step that
+		// its own timeout ends, the encrypt step with it; a check that did not run
+		// is recorded in not-run.txt, never left silent; and no content the release
+		// or the API answers with may end the step.
+		{
+			name:     "row 7's cosign verify reading a refused signature as tool-failed",
+			workflow: mutate(t, acceptedWorkflow, auditSignatureFinding, auditSignatureFindingBefore),
+			wantIn:   "cosign",
+		},
+		{
+			name:     "row 9's binary-vulnerabilities loop without its budget",
+			workflow: mutate(t, acceptedWorkflow, auditBinaryLoopBudget, ""),
+			wantIn:   "binary-vulnerabilities",
+		},
+		{
+			// M1's rule holds every loop that runs a command under a timeout, in any
+			// step: a retried pull with no budget is a loop the step's timeout ends.
+			name: "row 8's pull retried in a loop with a timeout but no budget",
+			workflow: mutate(t, acceptedWorkflow, auditRow8Pull, "          rc=0\n"+
+				"          for attempt in 1 2 3; do\n"+
+				"            timeout 8m docker pull --platform linux/amd64 \"${image}@${digest}\" > \"${out}/pull.stdout\" 2> \"${out}/pull.stderr\" || rc=$?\n"+
+				"            [ \"${rc}\" -eq 0 ] && break\n"+
+				"          done\n"+
+				"          echo \"${rc}\" > \"${out}/pull.exit\"\n"),
+			wantIn: "SECONDS",
+		},
+		{
+			name:     "row 14's staging extraction without its timeout",
+			workflow: mutate(t, acceptedWorkflow, auditFuzzTree, strings.Replace(auditFuzzTree, "timeout 2m tar", "tar", 1)),
+			wantIn:   "tar",
+		},
+		{
+			name:     "row 14's staging copy without its timeout",
+			workflow: mutate(t, acceptedWorkflow, auditFuzzStagingCopy, strings.Replace(auditFuzzStagingCopy, "timeout 2m docker cp", "docker cp", 1)),
+			wantIn:   "docker cp",
+		},
+		{
+			name:     "row 14's staging copy without its exit code check",
+			workflow: mutate(t, acceptedWorkflow, auditFuzzStagingCopy, strings.Replace(auditFuzzStagingCopy, " || rc=$?", "", 1)),
+			wantIn:   "rc=$?",
+		},
+		{
+			name:     "row 14's fuzz loop without its budget",
+			workflow: mutate(t, acceptedWorkflow, auditFuzzLoopBudget, ""),
+			wantIn:   "fuzzing",
+		},
+		{
+			name:     "row 11's exit state read without its timeout",
+			workflow: mutate(t, acceptedWorkflow, auditRuntimeState, strings.Replace(auditRuntimeState, "timeout 1m docker inspect", "docker inspect", 1)),
+			wantIn:   "docker inspect",
+		},
+		{
+			name: "row 7's checks run though the release download failed",
+			workflow: mutate(t, mutate(t, acceptedWorkflow, auditReleaseFileGate, ""),
+				auditReleaseFileGateEnd, strings.TrimSuffix(auditReleaseFileGateEnd, "          fi\n")),
+			wantIn: "release-integrity",
+		},
+		{
+			name:     "scorecard's failed run recorded nowhere",
+			workflow: mutate(t, acceptedWorkflow, auditScorecardToolFailed, ""),
+			wantIn:   "scorecard",
+		},
+		{
+			name:     "row 8's failed image pull recorded nowhere",
+			workflow: mutate(t, acceptedWorkflow, auditImagePullToolFailed, "            echo \"image-pull timed out after 8 minutes\" >> \"${results}/limits.txt\"\n          fi\n"),
+			wantIn:   "image-pull",
+		},
+		{
+			name:     "row 10's failed image scan recorded nowhere",
+			workflow: mutate(t, acceptedWorkflow, auditTrivyImageToolFailed, "              echo \"image-scan: the image scan timed out after 8 minutes\" >> \"${results}/limits.txt\"\n            fi\n"),
+			wantIn:   "image-scan",
+		},
+		{
+			name:     "row 10's failed SBOM scan recorded nowhere",
+			workflow: mutate(t, acceptedWorkflow, auditTrivySBOMToolFailed, "              echo \"image-scan: the SBOM scan timed out after 4 minutes\" >> \"${results}/limits.txt\"\n            fi\n"),
+			wantIn:   "image-scan",
+		},
+		{
+			name:     "row 10's timed-out image scan recorded only in the limits",
+			workflow: mutate(t, acceptedWorkflow, auditTrivyImageTimedOut, "              echo \"image-scan: the image scan timed out after 8 minutes\" >> \"${results}/limits.txt\"\n"),
+			wantIn:   "image-scan",
+		},
+		{
+			name:     "row 9's binary search counting an empty file",
+			workflow: mutate(t, acceptedWorkflow, "-size +0 ", ""),
+			wantIn:   "-size +0",
+		},
+		{
+			name:     "row 7's latest image digest read without its shape check",
+			workflow: mutate(t, acceptedWorkflow, auditLatestDigestShape, ""),
+			wantIn:   "latest_digest",
+		},
+		{
+			name:     "row 7's latest release tag read without its shape check",
+			workflow: mutate(t, acceptedWorkflow, auditLatestReleaseShape, ""),
+			wantIn:   "latest_release",
+		},
+		{
+			name:     "row 7's unresolved image digest leaving the image unverified",
+			workflow: mutate(t, acceptedWorkflow, auditNoDigestRecord, "          fi\n"),
+			wantIn:   "release-integrity",
+		},
+		{
+			name:     "the ruleset ID guard ending the step",
+			workflow: mutate(t, acceptedWorkflow, auditRulesetGuard, auditRulesetExit),
+			wantIn:   "ruleset",
+		},
+
 		// A document the reader cannot follow tells the check nothing, so it is
 		// refused rather than passed.
 		{name: "an empty document", workflow: "", wantIn: "empty"},
@@ -2865,7 +3135,7 @@ func TestAuditWorkflow(t *testing.T) {
 				return
 			}
 
-			fresh := added(accepted, got)
+			fresh := auditFresh(accepted, got)
 			if len(fresh) == 0 {
 				t.Errorf("AuditWorkflow() draws no message for the case, want one naming %q: the accepted shape's messages were %q", tc.wantIn, got)
 
