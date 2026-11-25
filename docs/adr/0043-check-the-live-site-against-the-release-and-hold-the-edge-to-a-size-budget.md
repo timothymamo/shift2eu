@@ -244,3 +244,21 @@ headers, and proxies the pipeline.
   unit's.
 - **The size budget** still measures what the deploy uploaded: the server proxies the pipeline's bytes
   and `Content-Encoding` unchanged and compresses nothing (ADR 0045).
+
+## Amendment: the apex's HSTS stays recorded, not judged (issue #601)
+
+2026-11-25. The maintainer decided that the apex's HTTPS 308 sends `Strict-Transport-Security:
+max-age=31536000`, without `includeSubDomains` and without `preload` (ADR 0045, *The headers*; ADR
+0042, *Decided 2026-11-25*). The live check's handling of the apex does not change: while preload is not
+pursued, `ci/sitecheck` still only records the apex's header, and its code is unchanged.
+
+- **Why not judge it.** The Caddyfile reaches the live site only when the maintainer applies
+  `infra/site` (agents never plan or apply), independently of any release. A check that required the
+  apex's value would fail the `site-check` job of a release that runs before that apply, though the
+  release changed nothing about the apex.
+- **What holds the value instead.** `test/sitefront` pins it: the static test of `infra/site/Caddyfile`
+  under `make test` (exactly one `max-age=31536000` on the apex's HTTPS answers, none on a plain-HTTP
+  one) and the behaviour test against the pinned Caddy image under `make test-sitefront`. After the
+  apply, `docs/site-runbook.md` R8 reads it live.
+- **When preload is pursued,** the apex's header is judged as the Decision says (the same minimum with
+  `preload`), and the apex's header and the preload record change in one change.
