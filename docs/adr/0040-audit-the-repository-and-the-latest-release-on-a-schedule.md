@@ -2032,6 +2032,34 @@ of milestone 2), and the constraints PR 5 must keep:
   workflow must join that list, which `test/lint`'s `TestEveryAnnotatedWorkflowPinIsScanned` enforces
   once the workflow holds a `# renovate: datasource=` comment. *Added 2026-11-24 (PR 5b):* it has joined
   both managers' lists, the versions' and the release assets' digests'.
+- *Found on the first run to reach the preflight, 2026-11-25 (issue #590):* run 45595381685 on de628a5
+  failed at the preflight with `preflight failed: the transcript is not stream-json; see runbook step
+  10`. Claude Code 2.1.332 prints a `{"type":"system","subtype":"permission_denied",...}` element for
+  each denied tool call, and its `message` is a string; the judge decoded every element's `message` as
+  an object, so the whole transcript was refused, and every real preflight hits this, since its probes
+  are denied on purpose. The judge now reads a line in two steps: its shape (a JSON object whose `type`
+  is a JSON string), then the message and its content blocks only of an `assistant` or `user` element;
+  every other element is skipped, whatever it holds. Every `tool_use` and `tool_result` is still read
+  and judged, an `assistant` or `user` element of an unknown shape is still refused, and the canary and
+  token search still covers every byte. A line it cannot read is refused with its 1-based number and a
+  class from a fixed list - the CLI is not logged in or its token is invalid or expired, the usage
+  limit, the CLI could not start, other non-JSON output (matched on a table of lower-cased phrases
+  over the line's first 4 KiB only), a JSON value that is not an element (JSON `null` included), an
+  element whose type is not a string - and never with any of the line's bytes: the transcript stays
+  private. Runbook step 10 says what to do for each class. The login, usage-limit and could-not-start
+  classes appear only when such a line reaches a run that still ended in a successful result: a run that
+  is not logged in, over its limit or unable to start normally fails its CLI run instead (`the
+  preflight's CLI run failed`, shown as `the preflight failed: see runbook step 10`), and the classes
+  stay as a defence. An element whose top-level object names a key twice, or names `type` or `message`
+  in another case, is refused as a JSON value that is not an element: `encoding/json` matches keys
+  case-insensitively and keeps the last, so such a line could read as a skipped type and hide the
+  `tool_use` it carries (auditor L2); the judge walks the top-level object once, token by token.
+- *Open point, 2026-11-25 (issue #590):* with `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1`, Claude Code 2.1.332
+  forces the permission mode to `default` in place of the launcher's `--permission-mode dontAsk`, and
+  warns on stderr. In `-p` mode with no permission-prompt tool, the calls it would ask about were
+  denied, so the effect matched `dontAsk`. Recorded only: the launcher is not changed for
+  it in issue #590's PR; a later CLI that prompts or allows in `default` mode would show in the
+  preflight, which fails closed.
 
 #### The runner's user-namespace restriction
 

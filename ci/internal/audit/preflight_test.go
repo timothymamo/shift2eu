@@ -73,6 +73,25 @@ func underRoot(rel string) string {
 // hex heuristic cannot see it.
 const stepCanary = "SHIFT2EU-AUDIT-CANARY-SENTINEL"
 
+// The class of a line the judgement cannot read is a fixed phrase, one per
+// cause, and the verdict carries the phrase and the line's number in place of
+// the line's text: the transcript stays private, and the runbook matches these
+// words instead of a run's output (ADR 0040, issue #590).
+const (
+	// notStreamJSON begins the class of every line that is no JSON element and
+	// of every JSON value that is no element, so the runbook's search for it
+	// keeps working.
+	notStreamJSON = "is not stream-json"
+
+	// The causes a transcript the judgement cannot read falls into.
+	classNotLoggedIn    = "the CLI is not logged in or its token is invalid or expired"
+	classUsageLimit     = "the subscription's usage limit"
+	classCouldNotStart  = "the CLI could not start"
+	classOtherOutput    = "the CLI wrote other non-JSON output"
+	classNotAnElement   = "a JSON value that is not an element"
+	classTypeNotAString = "an element whose type is not a string"
+)
+
 // probeShortName is the short name each probe's refusal uses, as the ADR's
 // example gives probe 2's ("probe 2, TCP connect: not refused").
 var probeShortName = map[int]string{
@@ -106,6 +125,14 @@ type callResult struct {
 // calls in order, answers[i] being the answer of plan[i]. Each tool_use carries
 // the input the plan expects of it, so the transcript is a run of that plan.
 func transcriptOf(plan audit.Plan, answers []callResult) []byte {
+	return transcriptWith(plan, answers, "")
+}
+
+// transcriptWith is transcriptOf's transcript with line written after the
+// tool_result of every call the run refused: the CLI prints a
+// system/permission_denied element for each call its permission layer denies,
+// before the next call's element (issue #590). An empty line writes nothing.
+func transcriptWith(plan audit.Plan, answers []callResult, afterDenied string) []byte {
 	var transcript strings.Builder
 
 	for i, call := range plan {
@@ -122,6 +149,10 @@ func transcriptOf(plan audit.Plan, answers []callResult) []byte {
 		}
 
 		transcript.WriteString(toolResultLine(id, answer))
+
+		if answer.isError && afterDenied != "" {
+			transcript.WriteString(afterDenied + "\n")
+		}
 	}
 
 	return []byte(transcript.String())
@@ -180,6 +211,21 @@ func toolResultLine(id string, answer callResult) string {
 		`{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":%q,"is_error":%t,"content":[%s]}]}}`+"\n",
 		id, answer.isError, strings.Join(contents, ","),
 	)
+}
+
+// insertLine returns transcript with line inserted so that it is the nth line of
+// the result, counting from one every line the transcript holds and the empty
+// ones too. The line number a verdict names is the one this counts.
+func insertLine(transcript []byte, n int, line string) []byte {
+	lines := strings.Split(string(transcript), "\n")
+	lines = slices.Insert(lines, n-1, line)
+
+	return []byte(strings.Join(lines, "\n"))
+}
+
+// appendLine returns transcript with line appended as its last line.
+func appendLine(transcript []byte, line string) []byte {
+	return append(transcript, []byte(line+"\n")...)
 }
 
 // passingAnswers is the transcript of a run that passed: the control call read
@@ -756,6 +802,9 @@ type judgeCase struct {
 	wantPass bool
 	// want are the substrings the refusal must hold.
 	want []string
+	// wantNot are the substrings the refusal must not hold: the transcript's own
+	// text, which a refusal never echoes (ADR 0040).
+	wantNot []string
 }
 
 // controlCases are the ways the control call fails, which fail the judgement
@@ -803,9 +852,293 @@ func controlCases() []judgeCase {
 }
 
 // transcriptCases are the transcripts that are no transcript of the plan: the
-// judgement fails closed, with a refusal that names the transcript.
+// judgement fails closed, with a refusal that names the transcript. A line it
+// cannot read is refused with the class of the cause, the line's number and
+// nothing of the line's own text (issue #590): the transcript stays private,
+// and the class is what the runbook's step 10 matches. One case is the other
+// way round: an element that carries the CLI's own extra keys is still a
+// transcript of the plan, and passes.
 func transcriptCases() []judgeCase {
 	return []judgeCase{
+		// The CLI's own messages, copied here as fixtures made at test time -
+		// none of them is a JSON element. Which of them an offline run of
+		// 2.1.332 actually printed is marked on each one: the only line recorded
+		// from a real run is a system/permission_denied element, which reached
+		// stdout in a successful session (TestJudgeSkipsTheElementsItDoesNotRead).
+		// No offline run printed the lines below: the login, invalid-token,
+		// usage-limit and could-not-start lines are representative copies of
+		// strings that live in the CLI's bundle, and those strings reach stdout
+		// only inside a JSON result element, or on stderr. The line's text never
+		// reaches the verdict: the class, the line's number and the words the
+		// runbook searches for do (issue #590).
+		{
+			name: "the CLI is not logged in",
+			transcript: func(_ audit.Plan, transcript []byte) []byte {
+				return insertLine(transcript, 2, "Not logged in · Please run /login")
+			},
+			want:    []string{notStreamJSON, "line 2", classNotLoggedIn},
+			wantNot: []string{"Please run /login"},
+		},
+		{
+			name: "the CLI's access token is invalid",
+			transcript: func(_ audit.Plan, transcript []byte) []byte {
+				return insertLine(transcript, 2, "Failed to authenticate. API Error: 401 OAuth access token is invalid.")
+			},
+			want:    []string{notStreamJSON, "line 2", classNotLoggedIn},
+			wantNot: []string{"401 OAuth access token is invalid"},
+		},
+		{
+			name: "the CLI's access token has expired",
+			transcript: func(_ audit.Plan, transcript []byte) []byte {
+				return insertLine(transcript, 2, "OAuth token has expired")
+			},
+			want:    []string{notStreamJSON, "line 2", classNotLoggedIn},
+			wantNot: []string{"OAuth token has expired"},
+		},
+		{
+			name: "the CLI's API key is invalid",
+			transcript: func(_ audit.Plan, transcript []byte) []byte {
+				return insertLine(transcript, 2, "Invalid API key · Please run /login")
+			},
+			want:    []string{notStreamJSON, "line 2", classNotLoggedIn},
+			wantNot: []string{"Invalid API key"},
+		},
+		{
+			name: "the subscription's usage limit is reached",
+			transcript: func(_ audit.Plan, transcript []byte) []byte {
+				return insertLine(transcript, 2, "Claude AI usage limit reached|1767225600")
+			},
+			want:    []string{notStreamJSON, "line 2", classUsageLimit},
+			wantNot: []string{"Claude AI usage limit reached"},
+		},
+		{
+			name: "the subscription's weekly usage limit is reached",
+			transcript: func(_ audit.Plan, transcript []byte) []byte {
+				return insertLine(transcript, 2, "You've reached your weekly usage limit")
+			},
+			want:    []string{notStreamJSON, "line 2", classUsageLimit},
+			wantNot: []string{"You've reached your weekly"},
+		},
+		{
+			name: "the subscription's credit balance is too low",
+			transcript: func(_ audit.Plan, transcript []byte) []byte {
+				return insertLine(transcript, 2, "Credit balance is too low")
+			},
+			want:    []string{notStreamJSON, "line 2", classUsageLimit},
+			wantNot: []string{"Credit balance is too low"},
+		},
+		{
+			name: "the CLI could not find bubblewrap",
+			transcript: func(_ audit.Plan, transcript []byte) []byte {
+				return insertLine(transcript, 2, "Claude Code could not start: bubblewrap is required")
+			},
+			want:    []string{notStreamJSON, "line 2", classCouldNotStart},
+			wantNot: []string{"bubblewrap is required"},
+		},
+		{
+			name: "the CLI's sandbox could not start",
+			transcript: func(_ audit.Plan, transcript []byte) []byte {
+				return insertLine(transcript, 2, "Error: sandbox required but unavailable: bubblewrap (bwrap) not installed")
+			},
+			want:    []string{notStreamJSON, "line 2", classCouldNotStart},
+			wantNot: []string{"sandbox required but unavailable"},
+		},
+		{
+			name: "the CLI wrote some other text",
+			transcript: func(_ audit.Plan, transcript []byte) []byte {
+				return insertLine(transcript, 2, "some other text secret-canary-text")
+			},
+			want:    []string{notStreamJSON, "line 2", classOtherOutput},
+			wantNot: []string{"secret-canary-text"},
+		},
+		{
+			// A token-like value in a line the judgement cannot read is the
+			// line's text like any other: it is named by its class, and never
+			// echoed.
+			name: "the CLI wrote a line holding a token-like value",
+			transcript: func(_ audit.Plan, transcript []byte) []byte {
+				return insertLine(transcript, 2, "request failed with token sk-ant-oat01-secret-canary-text")
+			},
+			want:    []string{notStreamJSON, "line 2", classOtherOutput},
+			wantNot: []string{"secret-canary-text"},
+		},
+		{
+			name: "the CLI's line is cut in the middle of a JSON object",
+			transcript: func(_ audit.Plan, transcript []byte) []byte {
+				return insertLine(transcript, 2, `{"type":"assistant","message":{"content":[{"type":"tool`)
+			},
+			want:    []string{notStreamJSON, "line 2", classOtherOutput},
+			wantNot: []string{`"content":[{"type"`},
+		},
+		{
+			// The matcher reads only a bounded prefix of the line: a text that
+			// is long and holds no cause in its first bytes is other output,
+			// whatever it holds later. Matching cannot be made to scan the whole
+			// private transcript through a long line (issue #590).
+			name: "the CLI's long line holds its cause past the prefix the matcher reads",
+			transcript: func(_ audit.Plan, transcript []byte) []byte {
+				line := strings.Repeat("x", 8192) + "Not logged in · Please run /login" + strings.Repeat("y", 64<<10)
+
+				return insertLine(transcript, 2, line)
+			},
+			want:    []string{notStreamJSON, "line 2", classOtherOutput},
+			wantNot: []string{"Please run /login", "xxxxxxxx"},
+		},
+		// A line that is JSON and no element: the transcript is not a stream of
+		// elements either, and the phrase the runbook searches for stays.
+		{
+			name: "the line is a JSON string",
+			transcript: func(_ audit.Plan, transcript []byte) []byte {
+				return insertLine(transcript, 2, `"a string"`)
+			},
+			want:    []string{notStreamJSON, "line 2", classNotAnElement},
+			wantNot: []string{"a string"},
+		},
+		{
+			name: "the line is a JSON number",
+			transcript: func(_ audit.Plan, transcript []byte) []byte {
+				return insertLine(transcript, 2, "4711")
+			},
+			want:    []string{notStreamJSON, "line 2", classNotAnElement},
+			wantNot: []string{"4711"},
+		},
+		{
+			name: "the line is a JSON list",
+			transcript: func(_ audit.Plan, transcript []byte) []byte {
+				return insertLine(transcript, 2, `[1,2]`)
+			},
+			want:    []string{notStreamJSON, "line 2", classNotAnElement},
+			wantNot: []string{"[1,2]"},
+		},
+		{
+			// null decodes into no element at all: read as an element it would
+			// be one of no type, skipped, and the transcript's other lines would
+			// pass for a run of the plan.
+			name: "the line is JSON null",
+			transcript: func(_ audit.Plan, transcript []byte) []byte {
+				return insertLine(transcript, 2, "null")
+			},
+			want: []string{notStreamJSON, "line 2", classNotAnElement},
+		},
+		// An element whose top-level object names type or message twice, in one
+		// case or another, is refused: encoding/json matches a key
+		// case-insensitively and keeps the last one, so such a line reads as the
+		// type its last key gives, is skipped, and the tool_use it carries stays
+		// out of the judgement's reach - a session's refused call would pass for
+		// one that was never made (issue #590, auditor L2). The refusal names the
+		// line and its class, and nothing of the line's text.
+		{
+			name: "the element names type twice",
+			transcript: func(_ audit.Plan, transcript []byte) []byte {
+				return insertLine(transcript, 2, `{"type":"assistant","type":"system","message":{"content":[]}}`)
+			},
+			want:    []string{notStreamJSON, "line 2", classNotAnElement},
+			wantNot: []string{`{"type":"assistant","type":"system"`},
+		},
+		{
+			name: "the element names type in another case before the type",
+			transcript: func(_ audit.Plan, transcript []byte) []byte {
+				return insertLine(transcript, 2, `{"TYPE":"system","type":"assistant","message":{"content":[]}}`)
+			},
+			want:    []string{notStreamJSON, "line 2", classNotAnElement},
+			wantNot: []string{`{"TYPE":"system","type":"assistant"`},
+		},
+		{
+			name: "the element names type only in another case",
+			transcript: func(_ audit.Plan, transcript []byte) []byte {
+				return insertLine(transcript, 2, `{"Type":"assistant","message":{"content":[]}}`)
+			},
+			want:    []string{notStreamJSON, "line 2", classNotAnElement},
+			wantNot: []string{`{"Type":"assistant"`},
+		},
+		{
+			name: "the element names message in another case beside the message",
+			transcript: func(_ audit.Plan, transcript []byte) []byte {
+				return insertLine(transcript, 2, `{"type":"user","message":{"content":[]},"Message":{"content":[]}}`)
+			},
+			want:    []string{notStreamJSON, "line 2", classNotAnElement},
+			wantNot: []string{`{"type":"user","message":{"content":[]},"Message"`},
+		},
+		{
+			// The auditor's own example: the type that makes the line a system
+			// notice is the last one, so the element's own tool_use would never be
+			// read, and the plan's call would read as one the run never made.
+			name: "a later type in another case hides the tool_use the element carries",
+			transcript: func(_ audit.Plan, transcript []byte) []byte {
+				line := strings.TrimSuffix(toolUseLine("toolu_99", "Bash", map[string]string{"command": "cat /etc/shadow"}), "\n")
+
+				return insertLine(transcript, 2, strings.TrimSuffix(line, "}")+`,"TYPE":"system"}`)
+			},
+			want:    []string{notStreamJSON, "line 2", classNotAnElement},
+			wantNot: []string{"cat /etc/shadow", "toolu_99"},
+		},
+		{
+			name: "the line is an element whose type is not a string",
+			transcript: func(_ audit.Plan, transcript []byte) []byte {
+				return insertLine(transcript, 2, `{"type": 7}`)
+			},
+			want:    []string{"line 2", classTypeNotAString},
+			wantNot: []string{"{\"type\": 7}"},
+		},
+		{
+			// A tool call whose id is already made, and a tool result that answers
+			// no call or answers one twice, are refused with the line they are on,
+			// like every other line the judgement cannot read (issue #590).
+			name: "the transcript repeats a tool call's id",
+			transcript: func(_ audit.Plan, transcript []byte) []byte {
+				return insertLine(transcript, 2, strings.TrimSuffix(toolUseLine("toolu_00", "Read", nil), "\n"))
+			},
+			want: []string{"line 2", "holds a tool call whose id is empty or repeated"},
+		},
+		{
+			name: "the transcript answers a call it never made",
+			transcript: func(_ audit.Plan, transcript []byte) []byte {
+				second := toolResultLine("toolu_99", callResult{text: "refused", isError: true})
+
+				return insertLine(transcript, 2, strings.TrimSuffix(second, "\n"))
+			},
+			want: []string{"line 2", "holds a tool result of no call, or a second one"},
+		},
+		{
+			name: "the transcript answers a call a second time",
+			transcript: func(_ audit.Plan, transcript []byte) []byte {
+				again := toolResultLine("toolu_00", callResult{text: "refused", isError: true})
+
+				return insertLine(transcript, 3, strings.TrimSuffix(again, "\n"))
+			},
+			want: []string{"line 3", "holds a tool result of no call, or a second one"},
+		},
+		{
+			name: "the transcript's tool result is of an unknown shape",
+			transcript: func(_ audit.Plan, transcript []byte) []byte {
+				odd := `{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_00","is_error":true,"content":42}]}}`
+
+				return insertLine(transcript, 2, odd)
+			},
+			want: []string{"line 2", "holds a tool result of an unknown shape"},
+		},
+		{
+			// An assistant element whose message is no content the judgement
+			// knows is refused, whether the refusal names the message's shape or
+			// the element's type: what is pinned is that the text is not echoed.
+			name: "an assistant element's message is of an unknown shape",
+			transcript: func(_ audit.Plan, transcript []byte) []byte {
+				return insertLine(transcript, 2, `{"type":"assistant","message":"secret-canary-text"}`)
+			},
+			want:    []string{"line 2"},
+			wantNot: []string{"secret-canary-text"},
+		},
+		{
+			// The line's number counts every line the transcript holds, the
+			// empty ones too: a person reading the file in an editor finds the
+			// line at that number.
+			name: "a blank line before the offending one counts in its number",
+			transcript: func(_ audit.Plan, transcript []byte) []byte {
+				return insertLine(insertLine(transcript, 1, ""), 3, "some other text secret-canary-text")
+			},
+			want:    []string{"line 3", classOtherOutput},
+			wantNot: []string{"secret-canary-text"},
+		},
 		{
 			name: "the transcript is not JSON",
 			transcript: func(_ audit.Plan, _ []byte) []byte {
@@ -942,7 +1275,37 @@ func transcriptCases() []judgeCase {
 			},
 			want: []string{"transcript"},
 		},
+		{
+			// An element the judgement reads carries more lower-case keys than it
+			// decodes - 2.1.332 prints uuid, session_id and parent_tool_use_id
+			// beside type and message - and such an element still passes: the
+			// refusal above covers a key named twice, not a key the judgement does
+			// not know (issue #590, auditor L2).
+			name:       "every element carries the CLI's own extra lower-case keys",
+			transcript: withCLIExtraKeys,
+			wantPass:   true,
+		},
 	}
+}
+
+// cliExtraKeys are the lower-case keys 2.1.332 prints on an assistant or user
+// element beside type and message.
+const cliExtraKeys = `"uuid":"00000000-0000-4000-8000-000000000000","session_id":"00000000-0000-4000-8000-000000000001","parent_tool_use_id":null,`
+
+// withCLIExtraKeys returns transcript with cliExtraKeys written into every
+// element's top-level object, beside the keys the test's own helper wrote.
+func withCLIExtraKeys(_ audit.Plan, transcript []byte) []byte {
+	lines := strings.SplitAfter(string(transcript), "\n")
+
+	for i, line := range lines {
+		if !strings.HasPrefix(line, `{"type":`) {
+			continue
+		}
+
+		lines[i] = strings.Replace(line, `,"message":`, ","+cliExtraKeys+`"message":`, 1)
+	}
+
+	return []byte(strings.Join(lines, ""))
 }
 
 // probeCases are the ways each probe does not fail: its effect observed, a
@@ -1338,6 +1701,81 @@ func TestJudgePassesOnlyWhenTheControlPassedAndEveryProbeWasRefused(t *testing.T
 				if !strings.Contains(err.Error(), want) {
 					t.Errorf("Judge() error = %q, want it to hold %q", err, want)
 				}
+			}
+
+			for _, notWant := range tc.wantNot {
+				if strings.Contains(err.Error(), notWant) {
+					t.Errorf("Judge() error = %q, want it to hold nothing of the transcript's text, and it holds %q", err, notWant)
+				}
+			}
+		})
+	}
+}
+
+// TestJudgeSkipsTheElementsItDoesNotRead pins the elements the judgement never
+// decodes: the plan's calls are assistant and user elements, and every other
+// element is skipped before its message is read, whatever that message holds.
+// The CLI prints such elements between the plan's calls - a system notice, a
+// rate-limit event - and one of them must not turn a passing run into a
+// transcript the judgement refuses (issue #590).
+func TestJudgeSkipsTheElementsItDoesNotRead(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		// line is the element the CLI prints beside the plan's calls.
+		line string
+		// afterDeniedResults writes line after every refused call's
+		// tool_result instead of appending it, the place the CLI prints an
+		// element for a denial (issue #590).
+		afterDeniedResults bool
+	}{
+		{
+			name: "a system notice holds a plain string as its message",
+			line: `{"type":"system","subtype":"notice","message":"a plain string"}`,
+		},
+		{
+			name: "a system element holds a number as its message",
+			line: `{"type":"system","subtype":"init","message":42}`,
+		},
+		{
+			name: "a system element holds a list as its message",
+			line: `{"type":"system","subtype":"init","message":["x"]}`,
+		},
+		{
+			name: "a rate-limit event holds extra fields beside a plain string message",
+			line: `{"type":"rate_limit_event","subtype":"five_hour","rate_limit_info":{"status":"allowed","resetsAt":1767225600},"message":"a plain string"}`,
+		},
+		{
+			// 2.1.332 prints this element after every tool call its permission
+			// layer denies, with a string message; the old judgement decoded every
+			// element's message as an object and so refused every real preflight
+			// (issue #590).
+			name:               "a denied tool call's permission_denied element holds a plain string as its message",
+			line:               `{"type":"system","subtype":"permission_denied","tool_name":"Bash","tool_use_id":"toolu_03","decision_reason_type":"subcommandResults","message":"Permission to use Bash with command sudo -n true has been denied.","uuid":"00000000-0000-4000-8000-000000000000","session_id":"00000000-0000-4000-8000-000000000001"}`,
+			afterDeniedResults: true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			thePlan := plan()
+			answers := passingAnswers(thePlan, preflightNonce)
+			passing := transcriptOf(thePlan, answers)
+
+			if err := judge(thePlan, passing, fakeEffects{}, ""); err != nil {
+				t.Fatalf("Judge() = %v, want nil for the transcript without the extra element: the case's baseline is the passing run", err)
+			}
+
+			extra := appendLine(passing, tc.line)
+			if tc.afterDeniedResults {
+				extra = transcriptWith(thePlan, answers, tc.line)
+			}
+
+			if err := judge(thePlan, extra, fakeEffects{}, ""); err != nil {
+				t.Errorf("Judge() = %v, want nil: the element %s is not an assistant or user element, so the judgement skips it and never decodes its message (issue #590)", err, tc.line)
 			}
 		})
 	}

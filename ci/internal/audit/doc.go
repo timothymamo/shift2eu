@@ -28,7 +28,14 @@
 //     two reads the wrapper never sees are shell redirections, `cat <
 //     /proc/{pid}/envir?n` and `cat < /dev/fd/../../{pid}/environ` (issue
 //     #277 round H), so the sandbox, not the wrapper's path rule, is what
-//     must refuse them on every run.
+//     must refuse them on every run. Judge decodes the message of assistant
+//     and user elements only and skips every other element, whatever it
+//     holds; a line it cannot read is refused with its 1-based number and a
+//     class from a fixed list, matched on the line's first 4 KiB, never with
+//     any of its bytes (issue #590). It walks each element's top-level object
+//     once, token by token, and refuses one that names a key twice or names
+//     type or message in another case, which encoding/json would read
+//     case-insensitively, keeping the last.
 //  6. Audit checks that the work area again holds only its empty tmp/, asks
 //     the model once through a Launch, with the skill from the checkout copy as
 //     the appended system prompt, and wants a result file in the work area -
