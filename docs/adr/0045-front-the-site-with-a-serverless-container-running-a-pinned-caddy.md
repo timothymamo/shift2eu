@@ -397,7 +397,13 @@ TLS stage*.
   `min_scale` (another value, `self["min_scale"]`), and `[container-https-only-postcondition-missing]`
   requires the `self.https_connections_only == false` postcondition, of which
   `[container-https-only-postcondition]` refuses a second, even an identical one. `[container-image-pin]`
-  refuses an `image` other than exactly `local.caddy_image`, the local the Renovate comment pins. The rules read a condition as its
+  refuses an `image` other than exactly `local.caddy_image`, the local the Renovate comment pins.
+  `[container-environment]` holds `environment_variables` to an object literal whose one key is `UPSTREAM`
+  and refuses `secret_environment_variables`, since another variable (`HTTPS_PROXY`, which Caddy's
+  `reverse_proxy` honours, `GODEBUG`, `SSL_CERT_FILE`) would change what the front does while the
+  behaviour test runs only its own environment. `[container-lifecycle]` refuses a non-empty
+  `ignore_changes` and any `replace_triggered_by` on the container or its namespace, either of which lets
+  a plan pass over a tested change or a console change to a cost pin. The rules read a condition as its
   tokens: either side of `==`, and one outer pair of parentheses, are the same comparison; any other
   spelling of these two checks is refused, not read.
 - **The escaped path.** Caddy v2.11.9 has no placeholder for Go's `URL.EscapedPath()` alone:

@@ -331,8 +331,9 @@ function tok(t, v, lit, esc,   i, ok, n) {
   if (broken) {
     return
   }
-  # A condition's value is kept as its tokens, joined by one space (a string quoted), until the newline,
-  # comma or } that ends it at the depth it began: [container-min-scale-postcondition] reads it.
+  # A condition's value, and an ignore_changes value, is kept as its tokens, joined by one space (a string
+  # quoted), until the newline, comma or } that ends it at the depth it began:
+  # [container-min-scale-postcondition] reads a condition, [container-lifecycle] an ignore_changes.
   recend = rec && sp == recsp && (t == "N" || (t == "P" && (v == "," || v == "}")))
   if (rec && !recend && t != "N") {
     rectext = rectext " " (t == "S" ? "\"" v "\"" : v)
@@ -407,6 +408,12 @@ function tok(t, v, lit, esc,   i, ok, n) {
     }
   }
 
+  # An object entry these rules cannot read as one key = value (a key in parentheses, a for expression,
+  # tokens left over at a newline, a comma or the closing brace) marks the object unread, so a rule that
+  # judges an object's keys ([container-environment]) fails closed on it instead of missing a key.
+  if (kind[sp] == "obj" && !skip && ((t == "P" && (v == "{" || v == "(" || v == "[")) || (bn > 0 && (t == "N" || (t == "P" && (v == "," || v == "}")))))) {
+    objUnread[FILENAME SUBSEP path()] = 1
+  }
   if (t == "P" && (v == "{" || v == "(" || v == "[")) {
     if (v == "{" && kind[sp] == "body" && !skip) { # a block header: <type> <label>... {
       if (bn < 1 || bt[1] != "I") {
@@ -468,7 +475,7 @@ function tok(t, v, lit, esc,   i, ok, n) {
     pa = bv[1]
     pstate = 1
     skip = 1
-    if (pa == "condition") { # keep its tokens (above)
+    if (pa == "condition" || pa == "ignore_changes") { # keep its tokens (above)
       rec = 1
       recsp = sp
       recattr = 0
@@ -790,6 +797,10 @@ END {
         problem("resource-type", f, bline[b], typ " " quoted(unescaped(lab[2])) " is no resource type infra/site uses (and no data or ephemeral type is allowed): a new type extends the allow list in dev/infra-rules.awk in the same PR, so its review sees both")
       }
     }
+    # The environment is an attribute; written as a block it is a shape [container-environment] does not read.
+    if (m == 2 && el[1] ~ "^resource:scaleway_container:" && (typ == "environment_variables" || typ == "secret_environment_variables")) {
+      problem("container-environment", f, bline[b], shownpath(el[1]) " holds an " typ " block: the environment is the attribute environment_variables = { UPSTREAM = ... } alone (ADR 0045)")
+    }
     if (m == 2 && el[1] == "terraform" && !(typ in terraformSetting)) {
       problem("terraform-setting", f, bline[b], "the terraform block holds " typ ": it may hold only " TERRAFORM_SETTINGS_TEXT ", since anything else (an encryption key provider, provider_meta, experiments) changes how tofu runs on the admin machine")
     }
@@ -897,6 +908,19 @@ END {
       containerVal[ck] = aval[a]
       containerAt[ck] = aline[a]
     }
+    # The keys of the site container's environment_variables object, for [container-environment].
+    if ((ablk[a] in containerBlock) && p == bpath[ablk[a]] "/environment_variables") {
+      envKeys[ablk[a]]++
+      if (n == "UPSTREAM") {
+        envUpstream[ablk[a]]++
+      }
+    }
+    # A lifecycle setting that lets a plan pass over a change, on the container or its namespace (ADR 0045):
+    # ignore_changes holding anything (a list or all) or replace_triggered_by. An empty ignore_changes = []
+    # ignores nothing and stays accepted.
+    if (p ~ "^resource:scaleway_container(_namespace)?:[^/]+/lifecycle$" && (n == "replace_triggered_by" || (n == "ignore_changes" && atext[a] != "[ ]"))) {
+      problem("container-lifecycle", f, aline[a], n " in the lifecycle block of " shownpath(substr(p, 1, length(p) - 10)) ": a plan would pass over a change to it, so a tested image, command or Caddyfile is never applied, or a console change to a cost pin never reverted (ADR 0045)")
+    }
     # A configuration's locals, by directory (a module's scope), for the min_scale pin that may read one.
     if (p == "locals") {
       lk = dirof(f) SUBSEP n
@@ -955,6 +979,21 @@ END {
         problem("container-image-pin", bfile[b], bline[b], shownres " sets no image: it must set image = local.caddy_image, the local the Renovate comment pins (ADR 0045)")
       } else if (containerSet[ck] != 1 || containerKind[ck] != "R" || containerVal[ck] != "caddy_image") {
         problem("container-image-pin", bfile[b], containerAt[ck], shownres " sets image to something other than exactly local.caddy_image: a literal or another local is a reference the Renovate comment does not move, so the platform could run an image nobody pinned (ADR 0045)")
+      }
+      # The environment (ADR 0045): environment_variables, when set, set once, as an object literal whose one
+      # key is the UPSTREAM the Caddyfile reads, and no secret_environment_variables. Another variable
+      # (HTTPS_PROXY, which Caddy's reverse_proxy honours, GODEBUG, SSL_CERT_FILE) changes what the front does
+      # while the behaviour test runs only its own environment; an object the reader cannot read is refused
+      # too. A container without environment_variables runs no variable at all, which this rule leaves be.
+      ck = b SUBSEP "environment_variables"
+      if ((ck in containerSet) && (containerSet[ck] != 1 || containerKind[ck] != "O" || ((bfile[b] SUBSEP bpath[b] "/environment_variables") in objUnread))) {
+        problem("container-environment", bfile[b], containerAt[ck], shownres " sets environment_variables other than once as an object literal of key = value entries: the rules must read every variable the container runs with (ADR 0045)")
+      } else if ((ck in containerSet) && (envKeys[b] != 1 || envUpstream[b] != 1)) {
+        problem("container-environment", bfile[b], containerAt[ck], shownres " sets environment_variables with keys other than exactly UPSTREAM: another variable (a proxy, GODEBUG, SSL_CERT_FILE) changes what the front does while every other rule holds (ADR 0045)")
+      }
+      ck = b SUBSEP "secret_environment_variables"
+      if (ck in containerSet) {
+        problem("container-environment", bfile[b], containerAt[ck], shownres " sets secret_environment_variables: the front needs no secret, and one would sit in the plan and the state (ADR 0045)")
       }
       # min_scale may also read a local set once, in the container's own directory, to the literal 0 or 1:
       # the value is then written once and read by the pin and its postcondition alike.

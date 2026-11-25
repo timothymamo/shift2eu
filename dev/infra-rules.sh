@@ -94,6 +94,15 @@
 #   [container-repeat] count or for_each on a scaleway_container or a scaleway_container_namespace, or
 #                    more than one scaleway_container under the root: the front is one container in one
 #                    namespace (ADR 0045), and a repeat multiplies the cost pins' ceiling
+#   [container-environment] a scaleway_container whose environment_variables, when set, is not set once as
+#                    an object literal whose one key is UPSTREAM (a key in parentheses, a for expression or a
+#                    function call fails closed), an environment block, or any secret_environment_variables:
+#                    another variable (HTTPS_PROXY, GODEBUG, SSL_CERT_FILE) changes what the front does
+#                    while the behaviour test runs only its own environment
+#   [container-lifecycle] ignore_changes (a non-empty list, or all) or replace_triggered_by in the
+#                    lifecycle block of a scaleway_container or a scaleway_container_namespace: a plan would
+#                    pass over a tested image, command or Caddyfile, or a console change to a cost pin;
+#                    ignore_changes = [] and the postconditions stay accepted
 #   [provider-type]  a resource, data source or provider block of any provider but scaleway
 #   [provider-source] a required_providers entry whose source is not exactly "scaleway/scaleway"
 #   [lock-file]      a .terraform.lock.hcl with a line of a shape tofu init does not write: only blank and
