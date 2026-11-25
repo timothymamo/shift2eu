@@ -2398,7 +2398,10 @@ scope above should allow is a finding, and a scope no read used is dropped.
 - **Row 8**: `docker pull --platform linux/amd64` by digest, anonymous, then `docker save` for trivy.
 - **Row 9**: each archive's `shift2eu` binary streamed out alone (`tar -xOzf`, `unzip -p`) through a
   128 MiB size cap (`head -c`), so no owner, mode or link of the archive's is written, and `govulncheck
-  -mode=binary`: read, never run.
+  -mode=binary`: read, never run. An archive whose unpack exits non-zero (141, the cap; 124, the 2-minute
+  timeout; or a `tar` or `unzip` failure) is recorded as `binary-vulnerabilities timed-out` (124) or
+  `tool-failed`, named in the limits (`binary-vulnerabilities: <archive> was not scanned: its unpack
+  exited <rc> ...`) and skipped, so the part of a member `head` wrote is never scanned (review round N).
 - **Row 10**: `trivy image --input` on the saved image and `trivy sbom` on the attested SBOM, offline at
   scan time (`--skip-db-update --skip-java-db-update --skip-check-update --offline-scan
   --skip-version-check --disable-telemetry`).
@@ -2413,7 +2416,10 @@ scope above should allow is a finding, and a scope no read used is dropped.
   each environment's settings, branch policies and secret and variable names, the repository's secret
   and variable names, as the `release-tag` skill's step 2 reads them, names only: the secrets endpoints
   return no value, but the variables endpoints return each variable's value, so every names read keeps
-  the names alone through `gh api --jq` (`[.variables[].name]`, `[.secrets[].name]`, review round D); Renovate's Dependency Dashboard and its open pull requests; and `git diff` of the
+  the names alone through `gh api --jq` (`[.variables[].name]`, `[.secrets[].name]`, review round D); Renovate's open Dependency Dashboard issue (`issues?state=open&creator=renovate[bot]`,
+  its pull requests filtered out with `select(.pull_request == null)`, so the dashboard cannot fall off a
+  first page of 100 items; a read that succeeded with no such issue writes the limits line `supply-chain:
+  no open Renovate Dependency Dashboard issue was found`, review round N) and its open pull requests; and `git diff` of the
   dependency files (`go.mod`, `go.sum`, `tools/`, `Dockerfile`, the workflows, the Claude Code pin,
   `dev/lima.yaml`, `infra/tofu.yaml`) from the commit of the last report under `docs/security/audits/`.
 
@@ -2844,6 +2850,33 @@ scoped to that line and explained on it: shellcheck reads `results-missing` as a
 variable `results`, and quoting the three ids instead would need another change to the check's
 `why=<id>` shape. Quoting them is a later option. The numbers are unchanged: the job's steps add up to 348
 of its 355 minutes.
+
+**Review round N of PR 5c (2026-11-25): the AI review of PR #565.** The reviewer and the auditor weighed
+the AI reviewer's ten points. Each fix on the test side is held by `check.AuditWorkflow`, whole-line in
+its step, and by a case of its test:
+
+- **Point 4, row 15's dashboard read.** `issues?state=all&creator=renovate[bot]` read one page of 100
+  items, pull requests included, and the dashboard, the oldest item, would fall off that page silently
+  once there were more than 100. The read is now `state=open` through `[.[] | select(.pull_request ==
+  null)]`, and a read that exited 0 with an empty array writes `supply-chain: no open Renovate Dependency
+  Dashboard issue was found` to the limits.
+- **Point 10, row 9's failed unpack.** After a non-zero unpack the loop still counted and scanned the part
+  of a member `head -c` had written, and a 124 was recorded as `tool-failed`. The branch now records 124
+  as `timed-out` and any other exit as `tool-failed`, writes `binary-vulnerabilities: ${name} was not
+  scanned: its unpack exited ${rc} (141: the 128 MiB cap, 124: the 2-minute timeout)` to the limits and
+  goes on to the next archive (`continue`). An archive set that all failed still leaves `found` at 0 and
+  adds `results-missing`. Row 9 stays in K5's residual list.
+- **Point 2.** The PRD's sum of the checks job's steps is 348 of 355, not 345. The comments found false
+  or stale (the corpus test's regular-file reason, the round E sums, `fit`'s doc comment, which now states
+  that a literal-word loop counts once per word only in a step that holds a budget and only when its body
+  starts no loop, and row 7's step comment, `max(11, 20 + 2) + 18 = 40` of 50) are corrected.
+
+*Kept as advice:* point 3 (a white-box test in `writeartifact_internal_test.go`, a convention point) and
+point 9 (doc comments that chronicle the review rounds). *Text-tripwire residual*, besides round L's:
+point 5, `containerStarts` trusts the variable name a `docker start` names (today every start follows a
+hardened create), and the auditor's note that `fit`'s shell-function branch never runs `innerLoops` on a
+function's body. The numbers are unchanged: no timeout moved, and the job's steps add up to 348 of its 355
+minutes.
 
 ## Alternatives considered
 

@@ -459,7 +459,7 @@ Time and failures:
   The ADR gives the budget (for example checks 180 minutes, with 10 per fuzz target and 60 for dynamic
   testing; model 120; publish 30). A check that times out is recorded in the report's limits, and the run
   still publishes what it has. *(Unticked in PR 5c's review round D, ticked in round F: the checks job's
-  budget is 355 minutes (its steps add up to 345, plus 5 of set-up), every step's own timeouts and loop
+  budget is 355 minutes (its steps add up to 348, plus 5 of set-up), every step's own timeouts and loop
   budget stay below its `timeout-minutes`, and since round F every tool run of the checks job, rows 3 to
   5's included, is under a timeout of its own that records the check as timed out, which the check
   holds; ADR 0040, Review round F of PR 5c.)*

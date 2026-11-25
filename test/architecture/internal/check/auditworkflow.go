@@ -514,6 +514,42 @@ var (
 		`bin="$(find "${dir}" -maxdepth 1 -type f -size +0 \( -name shift2eu -o -name shift2eu.exe \) -print -quit)", on a line of its own: `+
 			`the binary counts only when it holds bytes (-size +0), so an archive whose member is missing leaves head's empty file, which is results-missing, never a scan (PRD #175 milestone 2, ADR 0040)`)
 
+	// Round N (the AI review of PR #565, point 10): row 9's branch for an
+	// archive whose unpack failed. A 124 is the check timed out, any other exit
+	// one that did not run; a limits line names the archive and its exit; and
+	// continue goes on to the next archive, so the part of a member head -c
+	// wrote before the 128 MiB cap (141) or the 2-minute timeout (124) is never
+	// counted or scanned.
+	unpackFailure = command(`(?m)^[ \t]*`+wholeLines(
+		`if [ "${rc}" -ne 0 ]; then`,
+		`if [ "${rc}" -eq 124 ]; then`,
+		`echo "binary-vulnerabilities timed-out" >> "${results}/not-run.txt"`,
+		`else`,
+		`echo "binary-vulnerabilities tool-failed" >> "${results}/not-run.txt"`,
+		`fi`,
+		`echo "binary-vulnerabilities: ${name} was not scanned: its unpack exited ${rc} (141: the 128 MiB cap, 124: the 2-minute timeout)" >> "${results}/limits.txt"`,
+		`continue`,
+		`fi`)+`$`,
+		`the failed unpack's branch, each on a line of its own: if [ "${rc}" -ne 0 ]; then, if [ "${rc}" -eq 124 ]; then, echo "binary-vulnerabilities timed-out" >> "${results}/not-run.txt", else, `+
+			`echo "binary-vulnerabilities tool-failed" >> "${results}/not-run.txt", fi, `+
+			`echo "binary-vulnerabilities: ${name} was not scanned: its unpack exited ${rc} (141: the 128 MiB cap, 124: the 2-minute timeout)" >> "${results}/limits.txt", continue and fi: `+
+			`an archive whose unpack failed is named in the limits and never scanned, so the part of a member head wrote is no binary (PRD #175 milestone 2, ADR 0040)`)
+
+	// Round N (the AI review of PR #565, point 4): row 15 reads Renovate's open
+	// Dependency Dashboard issue alone, its pull requests filtered out, so the
+	// dashboard never falls off a first page of 100 items; and a read that
+	// answered with no such issue is a limits line, never a clean answer.
+	renovateDashboardRead = command(wholeLine(`read_api renovate-dashboard "repos/${GH_REPO}/issues?state=open&creator=renovate%5Bbot%5D&per_page=100" '[.[] | select(.pull_request == null)]'`),
+		`read_api renovate-dashboard "repos/${GH_REPO}/issues?state=open&creator=renovate%5Bbot%5D&per_page=100" '[.[] | select(.pull_request == null)]', on a line of its own: `+
+			`the open issues alone (state=open) with the pull requests filtered out (select(.pull_request == null)), so the dashboard cannot fall off the first page (PRD #175 milestone 2, ADR 0040)`)
+	renovateDashboardMissing = command(`(?m)^[ \t]*`+wholeLines(
+		`if [ -f "${out}/api/renovate-dashboard.exit" ] && [ "$(cat "${out}/api/renovate-dashboard.exit")" = 0 ] && [ "$(jq 'length' "${out}/api/renovate-dashboard.json")" = 0 ]; then`,
+		`echo "supply-chain: no open Renovate Dependency Dashboard issue was found" >> "${results}/limits.txt"`,
+		`fi`)+`$`,
+		`the record for a dashboard read that found no issue, each on a line of its own: `+
+			`if [ -f "${out}/api/renovate-dashboard.exit" ] && [ "$(cat "${out}/api/renovate-dashboard.exit")" = 0 ] && [ "$(jq 'length' "${out}/api/renovate-dashboard.json")" = 0 ]; then, `+
+			`echo "supply-chain: no open Renovate Dependency Dashboard issue was found" >> "${results}/limits.txt" and fi: an empty answer is said in the limits, never read as a clean one (PRD #175 milestone 2, ADR 0040)`)
+
 	// L3: rows 6, 8 and 10's tool runs, each followed by its outcome branch.
 	scorecardOutcome = command(`^[ \t]*timeout \S+ scorecard `, "scorecard's run (timeout 15m scorecard ...)")
 	pullOutcome      = command(`^[ \t]*timeout \S+ docker pull `, "the image's pull (timeout 8m docker pull ...)")
@@ -714,8 +750,8 @@ var auditJobs = []auditJob{
 				name:   "govulncheck on the release binaries",
 				check:  "binary-vulnerabilities",
 				budget: true,
-				runs:   []auditCommand{binaryGovulncheck, unpackTar, unpackZip, binaryFind},
-				order:  []auditCommand{binaryFind, binaryGovulncheck},
+				runs:   []auditCommand{binaryGovulncheck, unpackTar, unpackZip, unpackFailure, binaryFind},
+				order:  []auditCommand{unpackFailure, binaryFind, binaryGovulncheck},
 			},
 			{
 				name: "trivy on the image and its SBOM", runs: trivyScans,
@@ -755,8 +791,11 @@ var auditJobs = []auditJob{
 			},
 			{
 				name: "Supply-chain reads", githubToken: true,
-				runs:  append([]auditCommand{readAPIFilter, readAPIBudget, readAPIJq, rulesetShape, rulesetRead, readSkippedLimits}, namesReads...),
-				order: []auditCommand{readAPIFilter, readAPIBudget, readAPIJq, rulesetShape, rulesetRead, readSkippedLimits},
+				runs: append([]auditCommand{
+					readAPIFilter, readAPIBudget, readAPIJq, rulesetShape, rulesetRead,
+					renovateDashboardRead, renovateDashboardMissing, readSkippedLimits,
+				}, namesReads...),
+				order: []auditCommand{readAPIFilter, readAPIBudget, readAPIJq, rulesetShape, rulesetRead, renovateDashboardRead, renovateDashboardMissing, readSkippedLimits},
 			},
 			{
 				name: "Encrypt the checks' results to the model key",
@@ -3047,9 +3086,12 @@ func loopEnd(lines []string, i int) int {
 // runs to its timeouts; a shell function with a timeout holds a budget B at
 // the head of its body and counts as max(T, B + one call's timeouts), never per
 // call, or is refused; a loop over literal words with no budget inside counts
-// its timeouts once per word. A loop that holds a timeout and is none of these
-// is refused (review round I, M1): nothing bounds how often it runs, so
-// nothing bounds the step.
+// its timeouts once per word, but only when the step holds a budget somewhere
+// (a loop's or a function's, maxBudget over the whole script is above 0) and
+// the loop's body starts no loop of its own. A loop that holds a timeout and is
+// none of these is refused (review round I, M1): nothing bounds how often it
+// runs, so nothing bounds the step. Only a budgeted loop's body is searched for
+// inner loops (innerLoops); a function's body is not.
 func (a *auditReader) fit(code, path string, minutes int) {
 	if minutes <= 0 {
 		return
