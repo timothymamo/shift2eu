@@ -446,7 +446,12 @@ page), <https://docs.ovhcloud.com/en/guides/public-cloud/databases/faq>, and the
   automatically backed up every 12 hours. Backup retention is 1 day." (Valkey capabilities page); the
   backups page gives Valkey "Backup on object storage", twice a day. **Needs:** the advanced parameter
   `valkey_persistence` at `rdb`: at `off` "no RDB snapshot is written. Backups and forks are unavailable"
-  (Valkey capabilities page). No page states which value is the default.
+  (Valkey capabilities page). No page states which value is the default: the advanced parameters page
+  (<https://docs.ovhcloud.com/en/guides/public-cloud/databases/valkey-advanced-parameters-references>)
+  lists `valkey_persistence` with "values: off , rdb" and no default. But the Valkey capabilities page
+  (<https://docs.ovhcloud.com/en/guides/public-cloud/databases/valkey-capabilities>) says, with no
+  setting named, that "Discovery plan clusters are automatically backed up every 12 hours", and backups
+  need `rdb`, so `rdb` is the default in practice; keep the capability unless a page says otherwise.
 - No `node-high-availability` and no `zone-high-availability`: the plan runs one node ("Discovery: 1 node",
   Valkey capabilities page). See *Left out on purpose*.
 - Regions `GRA`, `LIM`, `RBX`, `SBG`, `WAW`: the regions page ticks Valkey in each, and the Valkey
@@ -1636,7 +1641,13 @@ Active Archive, and Cold Archive in Paris only). Pages: <https://www.ovhcloud.co
     Capabilities `encryption-at-rest` ("shares can be encrypted at rest using OVHcloud Managed Keys (OMK)";
     "use the standard-1az-luks type instead of standard-1az", set at creation only, getting started page;
     released per roadmap issue #1194, "Feature released, available through API", 2026-09-29; **Needs:**
-    the `standard-1az-luks` share type) and `snapshots` ("Snapshots capture a point-in-time state of a File
+    the `standard-1az-luks` share type; **the pages disagree:** on 2026-10-12 an OVHcloud comment on
+    #1194 says "Feature is available now on the console !", yet #1194 is still open and the product page,
+    read 2026-11-25, still says "It will soon be enhanced with encryption via OVHcloud Managed Keys". The
+    getting started page documents the `standard-1az-luks` type and the API's `encryption.encrypted`
+    request field with no "coming soon" mark; the pages do not say whether the product page is merely out
+    of date or whether OMK encryption differs from the released luks share type. The
+    refresh that adds the offering re-checks this before it lists the capability) and `snapshots` ("Snapshots capture a point-in-time state of a File
     Storage NFS share", snapshots page, for any available share). No `node-high-availability` and no
     `zone-high-availability`: the product page says it will "soon" gain "deployment across multiple
     availability zones", and an OVHcloud comment on issue #54 (2025-10-13) says "The service is not yet
