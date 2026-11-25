@@ -21,10 +21,33 @@
 #   {"kind": "storage#bucket"}                storage buckets list --raw
 #   {"selfLink": "https://container..."}      container clusters list
 #   {"name": "projects/.../subscriptions/.."} pubsub subscriptions list
+#   {"selfLink": ".../urlMaps/..."}           compute url-maps list
+#   {"selfLink": ".../backendServices/..."}   compute backend-services list
+#   {"selfLink": ".../forwardingRules/..."}   compute forwarding-rules list
+#   {"selfLink": ".../targetPools/..."}       compute target-pools list
+#   {"selfLink": ".../targetHttpsProxies/.."} compute target-https-proxies list
+#   {"name": ".../instances/..", "memorySizeGb"} redis instances list
+#   {"name": ".../clusters/..", "shardCount"} redis clusters list
+#   {"name": ".../instances/..", "nodeConfig"} memorystore instances list
+#   {"name": ".../instances/..", "fileShares"} filestore instances list
+#   {"name": ".../repositories/..", "format"} artifacts repositories list
+#   {"name": ".../functions/..", "serviceConfig"} functions list
 #
 # Resource IDs are short (the last part of the resource name), never the full name,
 # which carries the project. Anything it cannot classify is "unclassified" with its
 # rawType (a Cloud Asset Inventory asset type), so it shows up as a blocker.
+#
+# A load balancer is one URL map, one backend service no URL map names, or one
+# target pool, and those three come from the compute lists, not from the asset
+# listing, which may not hold a regional URL map: the asset rows of URL maps,
+# backend services, target pools, forwarding rules and target proxies are left
+# out, so nothing is listed twice. The forwarding rules and target proxies are
+# the load balancer's frontends: they are read for its protocol and IP version,
+# then left out. A backend service of scheme INTERNAL_SELF_MANAGED (a service
+# mesh: no load balancer runs in front of its backends) is no load balancer, nor
+# is a URL map that names only such services. A load balancer Kubernetes created
+# is kept: URL maps and backend services carry no labels, and no documented rule
+# tells them apart.
 #
 # The nodes of a GKE cluster are left out, the cluster stands for them: the
 # managed instance groups its node pools name (instanceGroupUrls), and instances
@@ -40,8 +63,13 @@
 # a custom one (db-custom-<vCPU>-<memory MiB>; any other tier gives neither) and
 # a count of 1 when it is a single-node instance (availabilityType ZONAL; a
 # REGIONAL one with a standby gets no count, how many nodes a target bills for
-# a standby is the target's to say). A number no call gives is left out,
-# never guessed. The workload, relations and monthlyCost fields are the user's to
+# a standby is the target's to say). A Memorystore cache's memory is per node
+# (a Redis instance's memorySizeGb, a Valkey instance's nodeConfig.sizeGb) and its
+# count its nodes (a Redis instance's nodes, a cluster's or Valkey instance's
+# shards times one plus their replicas); a Redis cluster names only its whole
+# memory (sizeGb), so it gets a count and no memory. A Filestore instance's
+# storage is the sum of its shares' capacityGb (a string). The GB of these APIs
+# are taken as GiB. A number no call gives is left out, never guessed. The workload, relations and monthlyCost fields are the user's to
 # add by hand; this program never writes them.
 
 # A key that names the same resource in an asset name
@@ -99,6 +127,32 @@ def inventory($source):
 # The details of one kind, by key.
 def details(f; k): map(select(f)) | INDEX(k);
 
+# A compute object of a collection, recognised by its selfLink path: the
+# url-maps list writes no kind.
+def compute_of($collection): (.selfLink? // "") | test("/" + $collection + "/[^/]+$");
+
+# A resource name of the API calls (projects/p/locations/l/<collection>/n).
+def named_in($collection): (.name? // "") | test("^projects/[^/]+/locations/[^/]+/" + $collection + "/[^/]+$");
+
+# The region of a compute selfLink: none for a global resource.
+def link_region: (capture("/regions/(?<r>[^/]+)/") // {r: null}).r;
+
+# A number the API writes as a string (int64) or a number.
+def number: if . == null then null else tonumber end;
+
+# The keys of the backend services a URL map names, in any of its routes, its
+# route actions' weighted services and mirror policies included. A backend
+# bucket is not a backend service.
+def named_services: [.. | strings | select(test("/backendServices/[^/]+$")) | key] | unique;
+
+# The key of the load balancer a forwarding rule reaches: its backend service,
+# its target pool, or the URL map or backend service of its target proxy.
+def reaches($proxies):
+  if .backendService then .backendService | key
+  elif (.target // "") | test("/targetPools/") then .target | key
+  elif .target then ($proxies[.target | key] // {}) | (.urlMap // .service // empty) | key
+  else empty end;
+
 [inputs | if type == "array" then .[] else . end | objects] as $all
 | ($all | details(.kind? == "compute#instance"; .selfLink | key)) as $instances
 | ($all | details(.kind? == "compute#instanceGroupManager"; .selfLink | key)) as $groups
@@ -114,6 +168,34 @@ def details(f; k): map(select(f)) | INDEX(k);
 # boot disks or not: the group stands for them.
 | ([$instances[] | select([.metadata.items[]?.key] | index("created-by"))
     | .disks[]? | select(.autoDelete == true) | .source // empty | key] | unique) as $groupdisks
+| ($all | details(named_in("instances") and (has("memorySizeGb") or (.tier? | IN("BASIC", "STANDARD_HA"))); .name | key)) as $redis
+| ($all | details(named_in("clusters") and (has("shardCount") or has("nodeType")); .name | key)) as $redisclusters
+| ($all | details(named_in("instances") and (has("nodeConfig") or has("shardCount"))
+    and (has("memorySizeGb") or has("fileShares") | not); .name | key)) as $valkey
+| ($all | details(named_in("instances") and has("fileShares"); .name | key)) as $filestore
+| ($all | details(named_in("repositories") and has("format"); .name | key)) as $repositories
+# A Filestore instance has snapshots when a snapshot asset is named under it.
+| ([$all[] | select(.assetType? == "file.googleapis.com/Snapshot") | .name | key
+    | sub("/snapshots/[^/]+$"; "")] | unique) as $filesnapshotted
+# The Cloud Run services 2nd gen Cloud Functions run on.
+| ([$all[] | select(named_in("functions")) | .serviceConfig.service? // empty | key] | unique) as $functionservices
+| ($all | details(compute_of("urlMaps"); .selfLink | key)) as $urlmaps
+| ($all | details(compute_of("backendServices"); .selfLink | key)) as $backends
+| ($all | details(compute_of("targetPools"); .selfLink | key)) as $pools
+| ($all | details(compute_of("target(Https?|Grpc|Tcp|Ssl)Proxies"); .selfLink | key)) as $proxies
+| [$all[] | select(compute_of("forwardingRules"))] as $frontends
+| ([$urlmaps[] | named_services[]] | unique) as $named
+| (def mesh: $backends[.].loadBalancingScheme? == "INTERNAL_SELF_MANAGED";
+   [$urlmaps | to_entries[]
+     | {key, link: .value.selfLink, rawType: "compute.googleapis.com/UrlMap", services: (.value | named_services)}
+     # A URL map of a service mesh names only mesh services.
+     | select((.services | length) == 0 or any(.services[]; mesh | not))]
+   + [$backends | to_entries[]
+     | select((.key | IN($named[]) | not) and (.key | mesh | not))
+     | {key, link: .value.selfLink, rawType: "compute.googleapis.com/BackendService", services: [.key]}]
+   + [$pools | to_entries[]
+     | {key, link: .value.selfLink, rawType: "compute.googleapis.com/TargetPool", services: []}]
+  ) as $loadbalancers
 | [
     $all[] | select(.assetType? and ((.name? // "") | startswith("//")))
     # A GKE node or its disk: the cluster stands for it.
@@ -201,22 +283,115 @@ def details(f; k): map(select(f)) | INDEX(k);
         or .assetType == "cloudfunctions.googleapis.com/CloudFunction" then
         $base + {category: "serverless.function"}
       elif .assetType == "run.googleapis.com/Service" then
-        # A 2nd gen Cloud Function runs on a Cloud Run service of its own: the
-        # function stands for it. Any other Cloud Run service is unclassified.
-        select(.labels["goog-managed-by"]? != "cloudfunctions")
-        | $base + {category: "unclassified"}
+        # A 2nd gen Cloud Function runs on a Cloud Run service of its own, the
+        # one its serviceConfig.service names: the function stands for it. Any
+        # other Cloud Run service is a container the provider runs and scales.
+        select($key | IN($functionservices[]) | not)
+        | $base + {category: "serverless.container"}
       elif .assetType == "pubsub.googleapis.com/Topic" then
-        $base + {category: "messaging.queue"}
+        # A topic copies each message to every subscription; Google Cloud
+        # encrypts it at rest. A dead-letter topic is set on a subscription,
+        # never on a topic, so the subscription carries dead-letter-queue.
+        $base + {category: "messaging.topic", capabilities: ["encryption-at-rest"]}
       elif .assetType == "pubsub.googleapis.com/Subscription" then
         $base + {category: "messaging.queue", capabilities: [
           cap("dead-letter-queue"; $subscriptions[$key].deadLetterPolicy.deadLetterTopic? != null)
         ]}
+      elif .assetType == "redis.googleapis.com/Instance" then
+        # Memorystore for Redis: STANDARD_HA has a replica that takes over, and
+        # its nodes in two or more zones make it zone redundant. Each node holds
+        # the whole data set.
+        $redis[$key] as $d
+        | ($d.tier? == "STANDARD_HA") as $ha
+        | $base + {category: "cache.redis", capabilities: [
+            "encryption-at-rest",
+            cap("node-high-availability"; $ha),
+            cap("zone-high-availability"; $ha and (([$d.nodes[]?.zone] | unique | length) >= 2
+              or ($d.alternativeLocationId? != null and $d.alternativeLocationId != $d.locationId))),
+            cap("snapshots"; $d.persistenceConfig.persistenceMode? == "RDB")
+          ],
+          size: (if $d == null then null else size_of({
+            memoryGiB: $d.memorySizeGb,
+            count: ((($d.nodes // []) | length) as $n
+              | if $n > 0 then $n elif $d.tier == "BASIC" then 1 else null end)
+          }) end)}
+      elif .assetType == "redis.googleapis.com/Cluster"
+        or .assetType == "memorystore.googleapis.com/Instance" then
+        # Memorystore for Redis Cluster and for Valkey: a replica per shard
+        # takes over, and with one the cluster survives a zone unless all of it
+        # is in one zone (MULTI_ZONE is the default). A Redis cluster is
+        # sharded; a Valkey instance is when its mode is CLUSTER.
+        (.assetType == "redis.googleapis.com/Cluster") as $cluster
+        | (if $cluster then $redisclusters[$key] else $valkey[$key] end) as $d
+        | (($d.replicaCount? // 0) >= 1) as $replicas
+        | $base + {category: "cache.redis", capabilities: [
+            "encryption-at-rest",
+            cap("node-high-availability"; $replicas),
+            cap("zone-high-availability"; $replicas
+              and ($d.zoneDistributionConfig.mode? // "MULTI_ZONE") != "SINGLE_ZONE"),
+            cap("sharding"; $cluster or $d.mode? == "CLUSTER"),
+            cap("snapshots"; $d.persistenceConfig.mode? == "RDB")
+          ],
+          size: (if $d == null then null else size_of({
+            memoryGiB: (if $cluster then null else $d.nodeConfig.sizeGb? end),
+            count: (if $d.shardCount == null then null else $d.shardCount * (($d.replicaCount // 0) + 1) end)
+          }) end)}
+      elif .assetType == "artifactregistry.googleapis.com/Repository" then
+        # A Docker repository is a container registry. A remote repository only
+        # pulls through from an upstream and a virtual one only aggregates
+        # others: neither stores an image of its own, so both are left out.
+        # Without the repositories list the format is unknown: unclassified.
+        $repositories[$key] as $d
+        | select($d.mode? | IN("REMOTE_REPOSITORY", "VIRTUAL_REPOSITORY") | not)
+        | if $d.format? == "DOCKER" then
+            $base + {category: "registry.container", capabilities: ["encryption-at-rest"]}
+          else $base + {category: "unclassified"} end
+      elif .assetType == "file.googleapis.com/Instance" then
+        # Filestore is NFS. The REGIONAL and ENTERPRISE tiers keep serving
+        # through the loss of a zone.
+        $filestore[$key] as $d
+        | $base + {category: "storage.file", capabilities: [
+            "encryption-at-rest",
+            cap("zone-high-availability"; $d.tier? | IN("REGIONAL", "ENTERPRISE")),
+            cap("snapshots"; $key | IN($filesnapshotted[]))
+          ],
+          size: (if $d == null then null else
+            size_of({storageGiB: ([$d.fileShares[]?.capacityGb | number] | if . == [] then null else add end)}) end)}
+      elif .assetType | test("^compute\\.googleapis\\.com/(Region)?(UrlMap|BackendService|TargetPool|TargetInstance|Target[A-Za-z]*Proxy|(Global)?ForwardingRule)$") then
+        # A load balancer comes from the compute lists, below; its frontends are
+        # left out.
+        empty
       elif .assetType == "compute.googleapis.com/Snapshot"
-        or .assetType == "compute.googleapis.com/Autoscaler" then
-        # Part of a disk's or a group's capabilities, not a resource to move.
+        or .assetType == "compute.googleapis.com/Autoscaler"
+        or .assetType == "file.googleapis.com/Snapshot" then
+        # Part of a disk's, a group's or a file share's capabilities, not a
+        # resource to move.
         empty
       else
         $base + {category: "unclassified"}
       end
+  ]
+  + [
+    # One network.loadbalancer per URL map, backend service no URL map names
+    # and target pool. A regional or global load balancer is zone redundant
+    # within a region. It forwards UDP when one of its backend services or a
+    # forwarding rule that reaches it is UDP, and it is ipv6 only when an IPv6
+    # forwarding rule reaches it and one of its backend services sends to IPv6
+    # backends (IPV6_ONLY or PREFER_IPV6; absent is IPV4_ONLY). A target pool
+    # has no protocol and no IP selection policy of its own.
+    $loadbalancers[] as $lb
+    | [$frontends[] | select(any(reaches($proxies); . == $lb.key))] as $fronts
+    | {
+        id: ($lb.link | split("/") | last),
+        rawType: $lb.rawType,
+        category: "network.loadbalancer",
+        region: ($lb.link | link_region),
+        capabilities: [
+          "zone-high-availability",
+          cap("udp"; any($lb.services[]; $backends[.].protocol? == "UDP") or any($fronts[]; .IPProtocol? == "UDP")),
+          cap("ipv6"; any($fronts[]; .ipVersion? == "IPV6")
+            and any($lb.services[]; $backends[.].ipAddressSelectionPolicy? | IN("IPV6_ONLY", "PREFER_IPV6")))
+        ]
+      }
   ]
 | inventory("gcp")
