@@ -500,13 +500,16 @@ const initCanary = "canary-in-the-init-element"
 // TestAskRefusesASessionWhoseInitReportsAnotherPermissionMode pins the check
 // issue #592 adds. With CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1, Claude Code 2.1.332
 // forces the permission mode to default whatever the launch asks for, so the
-// launcher reads the session's system/init element and refuses one that reports
-// a mode other than the one it asked for - before the CLI makes a tool call. The
-// error wraps ErrModel and a *PermissionModeError whose Expected is the mode the
-// config asked for and whose Reported is one of the CLI's known modes as it is,
-// or the class of a report that names none: missing (no init element before the
-// first assistant element or the end, or one without permissionMode), not a
-// string, another mode, two init lines. The error never quotes the element.
+// launcher reads the session's system/init element and stops the run at the line
+// of one that reports a mode other than the one it asked for. The check is a
+// backstop, not a barrier: the cancel is asynchronous, so the stop lands at that
+// refused line, which in practice is before the first model turn, not before
+// every tool call. The error wraps ErrModel and a *PermissionModeError whose
+// Expected is the mode the config asked for and whose Reported is one of the
+// CLI's known modes as it is, or the class of a report that names none: missing
+// (no init element before the first assistant element or the end, or one without
+// permissionMode), not a string, another mode, two init lines. The error never
+// quotes the element.
 func TestAskRefusesASessionWhoseInitReportsAnotherPermissionMode(t *testing.T) {
 	t.Parallel()
 
