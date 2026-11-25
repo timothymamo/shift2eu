@@ -1980,6 +1980,27 @@ func absenceCases() []judgeCase {
 			wantPass: true,
 		},
 		{
+			// The runner's GNU form (Ubuntu 24.04, GNU coreutils 9.4):
+			// glibc's error() prints the full argv[0], so cat's line opens with
+			// /usr/bin/cat: rather than cat:, and the pass must keep reading it
+			// as the variable's absence (issue #613).
+			name:     "the replacement call's result shows the variable absent as GNU cat prints it",
+			command:  replacementTokenAbsenceCommand,
+			answers:  theCall(callResult{text: "Exit code 1\n/usr/bin/cat: /srv/audit/work/nonexistent/: No such file or directory", isError: true}),
+			wantPass: true,
+		},
+		{
+			// The same GNU form with the first branch run: its line names
+			// tokenset, so the variable was set and the result proves nothing
+			// about its absence, whether cat prints cat: or /usr/bin/cat:
+			// (issue #613).
+			name:    "the replacement call's result holds the variable's expansion as GNU cat prints it",
+			command: replacementTokenAbsenceCommand,
+			answers: theCall(callResult{text: "Exit code 1\n/usr/bin/cat: /srv/audit/work/nonexistent/tokenset: No such file or directory", isError: true}),
+			want:    forAnotherReason(reasonTokenSet),
+			wantNot: []string{"No such file or directory"},
+		},
+		{
 			name:    "the replacement call's result holds the variable's expansion",
 			command: replacementTokenAbsenceCommand,
 			answers: theCall(callResult{text: "Exit code 1\n" + absenceSetText, isError: true}),
