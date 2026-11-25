@@ -1192,8 +1192,9 @@ const (
 
 	// auditHostileRunCreateFixed and auditFuzzTargetCreateFixed are rows 13 and
 	// 14's create outcome as the accepted shape writes it (K2): the exit recorded,
-	// its limits lines, the continue that skips the run, and only then the line
-	// that counts it as a part of the check that ran.
+	// its limits lines, and the continue that skips the run, which is the only
+	// count a create has (round M's M5: the started run's own ran_any=1 is the
+	// one that counts it).
 	auditHostileRunCreateFixed = "              echo \"${rc}\" > \"${out}/${run}.create.exit\"\n" +
 		"              if [ \"${rc}\" -eq 124 ]; then\n" +
 		"                echo \"hostile-inventories: the create for ${run} timed out after 2 minutes\" >> \"${results}/limits.txt\"\n" +
@@ -1202,8 +1203,7 @@ const (
 		"              fi\n" +
 		"              if [ \"${rc}\" -ne 0 ]; then\n" +
 		"                continue\n" +
-		"              fi\n" +
-		"              ran_any=1\n"
+		"              fi\n"
 	auditFuzzTargetCreateFixed = "            echo \"${rc}\" > \"${out}/targets/${n}-${name}.create.exit\"\n" +
 		"            if [ \"${rc}\" -eq 124 ]; then\n" +
 		"              echo \"fuzzing: the create for ${pkg} ${name} timed out after 2 minutes\" >> \"${results}/limits.txt\"\n" +
@@ -1212,8 +1212,7 @@ const (
 		"            fi\n" +
 		"            if [ \"${rc}\" -ne 0 ]; then\n" +
 		"              continue\n" +
-		"            fi\n" +
-		"            ran_any=1\n"
+		"            fi\n"
 
 	// auditHostileRunCreateFailed and auditFuzzTargetCreateFailed are those
 	// outcomes as K2 finds them: ran_any=1 right after the create's exit, before
@@ -1258,6 +1257,41 @@ const (
 	// auditHostileRunFindingCandidate is row 13's finding-candidate limits line,
 	// the one the run's own timeout writes (K6).
 	auditHostileRunFindingCandidate = "echo \"hostile-inventories: ${run} timed out after 60 seconds, a finding candidate of the run\" >> \"${results}/limits.txt\""
+)
+
+// Round M's anchors (the reviewer's S1 and S2 and the auditor's L-1 and L-2 on
+// PR 5c, round M): the two step ends the check accepts between a not-run record
+// and the exit 0 that follows it, and the shell words that reach the why one of
+// them writes.
+const (
+	// auditHostileStagingCreateEnd is row 13's staging create's own failure
+	// record through the copy the step goes on to: the record in its elif, the
+	// branch's fi, then the step's own guard, echo "finished" and the exit 0 that
+	// ends it, and then the next part. It is the shape M1 breaks, one line at a
+	// time, and the copy after it is what tells a record the step went on from.
+	auditHostileStagingCreateEnd = "            echo \"hostile-inventories tool-failed\" >> \"${results}/not-run.txt\"\n" +
+		"          fi\n" +
+		"          if [ \"${rc}\" -ne 0 ]; then\n" +
+		"            echo \"finished\"\n" +
+		"            exit 0\n" +
+		"          fi\n" +
+		"          rc=0\n" +
+		"          timeout 1m docker cp \"${stage}\" \"${staging}:/work/\""
+	// auditFuzzStagingCreateEnd is row 14's, the same shape in another step, so
+	// that a rule the check applies to one row alone is caught.
+	auditFuzzStagingCreateEnd = "            echo \"fuzzing tool-failed\" >> \"${results}/not-run.txt\"\n" +
+		"          fi\n" +
+		"          if [ \"${rc}\" -ne 0 ]; then\n" +
+		"            echo \"finished\"\n" +
+		"            exit 0\n" +
+		"          fi\n" +
+		"          rc=0\n" +
+		"          timeout 2m docker cp \"${src}\" \"${staging}:/src\""
+	// auditHostileVerificationFailed is the finding one of row 13's parts writes,
+	// which no not-run line may stand beside at the step's end (M1's (a)).
+	auditHostileVerificationFailed = "            echo \"hostile-inventories verification-failed\" >> \"${results}/verification-failed.txt\"\n"
+	// auditFuzzVerificationFailed is its row 14 counterpart.
+	auditFuzzVerificationFailed = "            echo \"fuzzing verification-failed\" >> \"${results}/verification-failed.txt\"\n"
 )
 
 // auditWhyNotRunLiteral matches the publish core's whyNotRun map: its
@@ -3786,6 +3820,92 @@ func TestAuditWorkflow(t *testing.T) {
 			name:     "row 13's finding-candidate limits line without its text",
 			workflow: mutate(t, acceptedWorkflow, auditHostileRunFindingCandidate, "echo \"hostile-inventories: ${run} timed out after 60 seconds\" >> \"${results}/limits.txt\""),
 			wantIn:   "a finding candidate of the run",
+		},
+
+		// Round M: the reviewer's S1 and S2 and the auditor's L-1 and L-2. A step's
+		// not-run record ends the step only in one of the two shapes the accepted
+		// shape writes (M1): the record, its branch's fi and then the step's own
+		// if [ "${rc}" -ne 0 ]; then, echo "finished" and exit 0, with no other line
+		// but a message to the limits or the log between them; and the why such an
+		// end writes is a why id the step assigns in why=<why id> and nowhere else
+		// (M2).
+		{
+			name: "row 13's finding beside the staging's not-run line",
+			workflow: mutate(t, acceptedWorkflow, auditHostileStagingCreateEnd,
+				strings.Replace(auditHostileStagingCreateEnd,
+					"            echo \"hostile-inventories tool-failed\" >> \"${results}/not-run.txt\"\n",
+					"            echo \"hostile-inventories tool-failed\" >> \"${results}/not-run.txt\"\n"+auditHostileVerificationFailed, 1)),
+			wantIn: "verification-failed.txt",
+		},
+		{
+			name: "row 14's finding beside the staging's not-run line",
+			workflow: mutate(t, acceptedWorkflow, auditFuzzStagingCreateEnd,
+				strings.Replace(auditFuzzStagingCreateEnd,
+					"            echo \"fuzzing tool-failed\" >> \"${results}/not-run.txt\"\n",
+					"            echo \"fuzzing tool-failed\" >> \"${results}/not-run.txt\"\n"+auditFuzzVerificationFailed, 1)),
+			wantIn: "verification-failed.txt",
+		},
+		{
+			name: "row 13's staging guard narrowed to the timeout",
+			workflow: mutate(t, acceptedWorkflow, auditHostileStagingCreateEnd,
+				strings.Replace(auditHostileStagingCreateEnd,
+					"          if [ \"${rc}\" -ne 0 ]; then",
+					"          if [ \"${rc}\" -eq 124 ]; then", 1)),
+			wantIn: "-eq 124",
+		},
+		{
+			name: "row 13's staging record ending the step in another branch",
+			workflow: mutate(t, acceptedWorkflow, auditHostileStagingCreateEnd,
+				strings.Replace(auditHostileStagingCreateEnd,
+					"          fi\n          if [ \"${rc}\" -ne 0 ]; then",
+					"          else\n            exit 0\n          fi\n          if [ \"${rc}\" -ne 0 ]; then", 1)),
+			wantIn: "else",
+		},
+		{
+			name: "row 13's staging with a never-taken branch before the step's guard",
+			workflow: mutate(t, acceptedWorkflow, auditHostileStagingCreateEnd,
+				strings.Replace(auditHostileStagingCreateEnd,
+					"          fi\n          if [ \"${rc}\" -ne 0 ]; then",
+					"          fi\n          if [ \"${rc}\" -eq 999 ]; then\n            exit 0\n          fi\n          if [ \"${rc}\" -ne 0 ]; then", 1)),
+			wantIn: "-eq 999",
+		},
+		{
+			name: "row 13's step guard with a command substitution",
+			workflow: mutate(t, acceptedWorkflow, auditHostileStagingCreateEnd,
+				strings.Replace(auditHostileStagingCreateEnd,
+					"          if [ \"${rc}\" -ne 0 ]; then\n            echo \"finished\"\n            exit 0",
+					"          if [ \"${rc}\" -ne \"$(printf 0)\" ]; then\n            echo \"finished\"\n            exit 0", 1)),
+			wantIn: "$(printf 0)",
+		},
+		{
+			name:     "row 7's download's stderr read into why",
+			workflow: mutate(t, acceptedWorkflow, auditReleaseFileGate, "          read -r why < \"${out}/download.stderr\" || true\n"+auditReleaseFileGate),
+			wantIn:   "read -r why",
+		},
+		{
+			name:     "row 7's why set by printf -v",
+			workflow: mutate(t, acceptedWorkflow, auditReleaseFileGate, "          printf -v why '%s' x\n"+auditReleaseFileGate),
+			wantIn:   "printf -v why",
+		},
+		{
+			name: "row 7's why taken as a loop's variable",
+			workflow: mutate(t, acceptedWorkflow, auditReleaseFileGate,
+				"          for why in a; do\n"+
+					"            echo \"a part that did not run\"\n"+
+					"          done\n"+
+					auditReleaseFileGate),
+			wantIn: "for why in a",
+		},
+		{
+			name:     "row 7's why set by an assignment expansion",
+			workflow: mutate(t, acceptedWorkflow, auditReleaseFileGate, "          : \"${why:=tool-failed}\"\n"+auditReleaseFileGate),
+			wantIn:   "${why:=tool-failed}",
+		},
+		{
+			name: "row 7's step-level env setting why",
+			workflow: mutate(t, acceptedWorkflow, auditReleaseStepEnv,
+				strings.Replace(auditReleaseStepEnv, "        run: |\n", "          why: tool-failed\n        run: |\n", 1)),
+			wantIn: "is not one variable this reader understands",
 		},
 
 		// A document the reader cannot follow tells the check nothing, so it is
