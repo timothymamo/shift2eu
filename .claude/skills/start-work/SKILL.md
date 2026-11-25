@@ -17,7 +17,9 @@ has its own branch, and every branch its own worktree under `.worktrees/`
    - `<issue>`: the GitHub issue number; for a PRD milestone, the PRD's issue.
    - `<slug>`: a few kebab-case words, for example `feat/12-aws-ec2-discovery`.
 
-   One branch per PR, so a PRD gets one branch per milestone.
+   One branch per PR, so a PRD gets one branch per milestone. The one exception is a Renovate PR's
+   branch, `renovate/<name>`, for a manual step such as its "Before merging" note: it is never created,
+   only resumed (step 2).
 2. Run `make worktree BRANCH=<branch>` from the checkout you started in: the repository root, or the
    dispatch worktree of a dispatched unit. It fetches `origin`, creates `.worktrees/<type>-<issue>-<slug>`
    in that checkout on a new branch cut from the latest `origin/main`, and prints the worktree's absolute
@@ -26,6 +28,9 @@ has its own branch, and every branch its own worktree under `.worktrees/`
    It refuses a branch that is checked out anywhere else, such as the main checkout, which stays on
    `main`, or a dispatch worktree. It also refuses when a worktree on a detached HEAD sits at
    `.worktrees/<type>-<issue>-<slug>` in any checkout, which may be the branch in the middle of a rebase.
+   For `BRANCH=renovate/<name>` it creates no branch: it resumes `origin/renovate/<name>` in
+   `.worktrees/renovate-<name>`, tracking origin (or prints the existing worktree's path), and refuses
+   when origin has no such branch or cannot be fetched, even if a local `renovate/<name>` exists.
    When it refuses, do what its message says; most say to leave the worktree where it is and report it.
 3. Work only in that worktree: run every non-git command from it (`cd <path> && ...`), and read and edit
    files only under it. Run git as `git -C <path> ...`, never `cd <path> && git ...`. Write the

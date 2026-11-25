@@ -120,7 +120,9 @@ provider (checked against `infra/site/.terraform.lock.hcl`); it fetches nothing 
    environment and in `~/.config/dot-agent-deck/daemon.env`: never print the environment (`env`,
    `printenv`, `set`), never read that file, and never copy either into files, output or tests.
 4. **Never work on `main`.** Every PRD milestone or issue gets its own branch, `<type>/<issue>-<slug>`, in
-   its own worktree under `.worktrees/` (`make worktree BRANCH=...`, skill: `start-work`). Work only
+   its own worktree under `.worktrees/` (`make worktree BRANCH=...`, skill: `start-work`); a Renovate
+   PR's existing `renovate/<name>` branch is resumed with `make worktree BRANCH=renovate/<name>`, never
+   created. Work only
    inside that worktree; the repository root stays on `main` and is never edited. Never commit or push to
    `main`, and never pass `--no-verify` to get past the hooks that refuse it. Commit messages are
    Conventional Commits (`feat(mapping): ...`, `fix(aws): ...`, `test(...)`, `docs(...)`).
