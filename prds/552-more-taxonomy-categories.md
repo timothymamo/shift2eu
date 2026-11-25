@@ -690,9 +690,10 @@ text as the decision)
     `locations[].isZoneRedundant` is per region,
     <https://learn.microsoft.com/en-us/rest/api/cosmos-db-resource-provider/database-accounts/get>;
     node high availability always, read replicas with two or more locations. Azure DocumentDB
-    (`mongoClusters`): `highAvailability.targetMode` not `Disabled` gives a standby per shard, zone
-    redundant where the region has zones,
-    <https://learn.microsoft.com/en-us/azure/documentdb/high-availability>.
+    (`mongoClusters`): `highAvailability.targetMode` not `Disabled` gives a standby per shard (node
+    high availability); only `ZoneRedundantPreferred` is zone redundant, where the region has zones,
+    while `SameZone` "protects against node failures but doesn't protect against an availability zone
+    outage", <https://learn.microsoft.com/en-us/azure/documentdb/high-availability>.
   - Load balancer IPv6: a backend pool member is IPv6 when the network interface IP configuration it
     names is `IPv6`,
     <https://learn.microsoft.com/en-us/azure/load-balancer/virtual-network-ipv4-ipv6-dual-stack-standard-load-balancer-cli>;
@@ -703,7 +704,10 @@ text as the decision)
   - Retirements: Basic Load Balancer on 30 September 2025 (still running, unsupported; classified),
     <https://learn.microsoft.com/en-us/azure/load-balancer/load-balancer-basic-upgrade-guidance>;
     Azure Database for MariaDB on 19 September 2025,
-    <https://learn.microsoft.com/en-us/lifecycle/products/azure-database-for-mariadb>.
+    <https://learn.microsoft.com/en-us/lifecycle/products/azure-database-for-mariadb>; Azure Cache
+    for Redis Basic, Standard and Premium on 30 September 2028, Enterprise and Enterprise Flash on
+    31 March 2027 (both still classified),
+    <https://learn.microsoft.com/en-us/azure/azure-cache-for-redis/retirement-faq>.
   - Service Bus: every queue and subscription has a dead-letter subqueue, a topic none ("messages
     don't sit at the topic level"),
     <https://learn.microsoft.com/en-us/azure/service-bus-messaging/service-bus-dead-letter-queues>;
