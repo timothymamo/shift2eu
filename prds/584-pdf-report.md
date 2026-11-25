@@ -177,7 +177,7 @@ table.
   estimates were off.
 - How values are shown: Courier, and the escapes above.
 
-shift2eu has no readiness score today (PRD #2 left it open; PRDs #89 and #190 kept it out of scope). This
+shift2eu has no readiness score today (PRD #2 left it open; PRDs #89, #190 and #297 keep it out of scope). This
 section says so in one sentence, and explains the fits instead (*Open questions*, 6).
 
 **About this report.** What a reader needs to check what produced the report:
@@ -186,7 +186,7 @@ section says so in one sentence, and explains the fits instead (*Open questions*
   (`internal/version.String()`: "shift2eu <version> (commit <commit>, built <date>)"). In a release,
   `<version>` is GoReleaser's `{{ .Version }}`, the tag without its leading `v` (`0.15.0`). The site's
   pages show the tag itself (`v0.15.0`), which `ci/sitebuild` writes from its `-version` flag. Both come
-  from the same tag; the PDF shows the version line, and the footer the tag;
+  from the same tag; the PDF shows the version line, and the site's page footer shows the tag;
 - every catalog snapshot used: the target's display name, the snapshot's source URL (`sourceURL`), its
   retrieval date as a UTC calendar date, and its default region for estimates;
 - the options the report reflects: the targets, the region per target (chosen with `--region`, or the
@@ -569,9 +569,14 @@ Test levels:
   the same bytes, version line included.
 - [ ] *Release:* on every release, `release.yml`'s `verify` job, which already runs the signed image's
   `shift2eu version`, also runs the `linux/amd64` archive's binary from the `goreleaser` job's `archives`
-  artifact, and fails unless the two lines are identical, version, commit and date included. To download
-  that artifact, `verify` gains `contents: read`, with a comment saying why, and `test/architecture`'s pin
-  of its permissions, if it has one, is amended to match. The archive's binary runs in a step of its own
+  artifact, and fails unless the two lines are identical, version, commit and date included. Downloading
+  that artifact needs no new permission: `actions/download-artifact` reads an artifact of the same run
+  with the runner's runtime token, not `GITHUB_TOKEN`, as the `sign` job already downloads the same-run
+  `sbom` artifact with neither `contents` nor `actions` permission. `verify`'s permissions stay exactly
+  `packages: read` and `attestations: read`, and `test/architecture`'s exact pin of them
+  (`releaseworkflow.go`) stays unchanged. Only if the release run shows the download refused does
+  milestone 2's PR grant the one permission the failure names, with a comment saying why, and amend that
+  pin to match. The archive's binary runs in a step of its own
   with no token in its `env`, after the archive is checked against the artifact's `checksums.txt`
   (`sha256sum -c --ignore-missing`), as the `goreleaser` job checks the site bundle. This holds for every
   option of *Open questions* 7, and its step is pinned in `test/architecture` with the others.
@@ -615,7 +620,7 @@ Test levels:
 ## Amendments to PRD #297
 
 This PRD **lists** the amendments; milestone 2's PR **edits PRD #297's text in place**, each change marked
-"*Amended 2026-11-25 (PRD #584):*" as PRD #297 already marks its hosting amendments. The reason: until
+"*Amended <date of the milestone 2 PR> (PRD #584, decided 2026-11-25):*" as PRD #297 already marks its hosting amendments. The reason: until
 milestone 2 ships, the site does offer the Markdown and JSON downloads, and PRD #297 must keep describing
 what runs. Item 1 of PRD #297's milestone list (milestone 1, done) keeps its text as history. The
 criteria that milestone ticked and this list amends (3 to 5) are edited in place like the rest, each with
@@ -691,7 +696,7 @@ Milestones 1 and 2 touch the handling of hostile text and the site's trust model
      - no links, JavaScript, forms or embedded files;
      - the string escaping, and the printable-ASCII file;
      - the version line passed by the constructor;
-     - the answers to *Open questions* 1 to 5, 8, 10 and 12.
+     - the answers to *Open questions* 2 to 6, 8 and 10 to 12.
    - The site does not change in this milestone.
 2. [ ] **The site's switch to the PDF download.** Depends on 1.
    - `internal/web`'s `Deps`, `Options` and `Result`, and `wire` constructing `pdfreport` and
@@ -712,7 +717,7 @@ Milestones 1 and 2 touch the handling of hostile text and the site's trust model
    - The privacy, verification and inventory guide pages, the README and the guides.
    - PRD #297 amended in place (*Amendments to PRD #297*).
    - ADRs 0018, 0035, 0036, 0040 and 0043 (and 0015 under option (a) or (b) of *Open questions* 7) and the
-     doc.go files amended.
+     doc.go files amended. ADR 0036's amendment records the download's file name (*Open questions* 1).
    - Ships on PRD #297's site track. It does not depend on PRD #297 milestone 4, and the first deploy does
      not wait for it.
 3. [ ] **Polish round on layout and the detail sections.** Planned on PRD #297's site track **after the
@@ -755,8 +760,12 @@ Milestones 1 and 2 touch the handling of hostile text and the site's trust model
 5. **The PDF has more detail than the page.**
    - Per resource: every candidate offering with its fit and missing capabilities, its blockers and
      required changes, and its estimate's breakdown.
-   - For the whole report: the catalog snapshots' retrieval dates and sources, how the report is worked
-     out, and the shift2eu version with its build and commit.
+   - For the whole report: the catalog snapshots' retrieval dates and sources, "how the readiness score
+     is worked out" (the maintainer's words), and the shift2eu version with its build and commit.
+   - *Note:* shift2eu has no readiness score today (PRD #2 left it open; PRDs #89, #190 and #297 keep it
+     out of scope). This PRD reads the decision as how the report is worked out: the PDF explains the
+     fits, blockers, required changes and estimates, and says in one sentence that there is no readiness
+     score (*Open questions*, 6).
 6. **Milestones:**
    - (1) the writer, `pdfreport`, `--format pdf`, the ADR;
    - (2) the site's switch;
