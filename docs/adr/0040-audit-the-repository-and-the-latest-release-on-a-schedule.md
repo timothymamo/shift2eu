@@ -4,8 +4,9 @@
   the maintainer confirmed both on 2026-11-21 at PR #444's review (see Context).
   PRD #175 milestone 2 amends this record with the workflow's implementation (below); its first
   amendment, how Claude Code runs in the model job, is dated 2026-11-22, its second, the publish
-  program's core, 2026-11-23
-- Date: 2026-11-21, amended 2026-11-22 to 2026-11-23
+  program's core, 2026-11-23. Issue #568 amends it with the plan for the runner image's move to
+  `ubuntu-26.04` (2026-11-25)
+- Date: 2026-11-21, amended 2026-11-22 to 2026-11-25
 
 ## Context
 
@@ -2098,6 +2099,192 @@ runs under a personal plan's token instead.
   unsandboxed.
 - **Bash rules are text patterns** and easy to step around; they are defence in depth. The containment
   is the sandbox, the wrapper and the read deny list, which the probes test on every run.
+
+### The runner image: the move to ubuntu-26.04 (issue #568, amended 2026-11-25)
+
+Renovate's PR #561 moves the workflow's three jobs from `ubuntu-24.04` to `ubuntu-26.04`. Its CI fails
+by design, on three jobs: **Test**, where `TestScheduledSecurityAuditWorkflow` reports for each job
+`runs-on is "ubuntu-26.04", want ubuntu-24.04, never a moving image: the wrapper's option analysis
+assumes its GNU coreutils (ADR 0040)`; **Lint shell scripts and workflows**, where actionlint reports
+`label "ubuntu-26.04" is unknown` on lines 34, 217 and 463 (`[runner-label]`); and **Lint**, which only
+reports that `lint-shell` failed (run 45504245044 of 2026-11-24). The maintainer decided on 2026-11-25
+to plan the move with this amendment rather than close the PR outright.
+
+**Decision.** The audit **stays on `ubuntu-24.04` until two conditions hold**, and then moves in **one
+pull request** that changes the image, the GNU coreutils it relies on, the Ubuntu packages and their
+pins, and the pin test together:
+
+1. **actionlint knows the label.** A release of actionlint that lists `ubuntu-26.04` is pinned in
+   `tools/go.mod`. ADR 0022 refuses an actionlint configuration file (`dev/actionlint.sh`, `test/lint`,
+   `test/architecture`'s make-lint test), so declaring the label in `.github/actionlint.yaml` is no way
+   around it without an amendment to ADR 0022, which is the maintainer's choice (below).
+2. **The image probe has run** (below) and settled every fact this section marks *unconfirmed*.
+
+On the new image, **every job switches the image to GNU coreutils before anything else runs**, with the
+switch Ubuntu documents, and the GNU check holds in every job, so the wrapper's option analysis, its
+command paths under `/usr/bin` and the workflow's own guards (`sha256sum --check --strict`, `stat -c`,
+`od`, `tr`, `ls -A`, `install`) keep running the implementation they were written and reviewed against.
+PR #561 is then **closed, replaced** by that pull request: the image cannot move alone, since the
+pinned `.deb`s are noble's and the pin test wants `ubuntu-24.04`, and nobody pushes to Renovate's branch.
+Until then `ubuntu-24.04` is safe: the runner-images README lists it as available, with no deprecation
+notice (read 2026-11-25), and the workflow does not merge its schedule before milestone 3 anyway.
+
+**The facts** (public sources, each read 2026-11-25):
+
+- **`ubuntu-26.04` is generally available.** The runner-images README lists `ubuntu-26.04` (and
+  `ubuntu-latest`) for Ubuntu 26.04 x64; its preview label was removed on 2026-09-17 (commit `a99056ad72`,
+  "Preview label for ubuntu26 removal", PR actions/runner-images#14739), and `ubuntu-latest` was
+  associated with it on 2026-11-24 (commit `e015a08e76`, PR actions/runner-images#15381). The
+  announcement actions/runner-images#14748 says "Ubuntu 26.04 has completed its public preview period and
+  is generally available for production workloads", with the `ubuntu-latest` migration rolled out from
+  2026-10-19 to 2026-11-19. Sources: <https://github.com/actions/runner-images/blob/main/README.md>,
+  <https://github.com/actions/runner-images/issues/14748>. (So every workflow of ours on
+  `ubuntu-latest` already runs on 26.04: the pin test's "never a moving image" is borne out.)
+- **The image** (`images/ubuntu/Ubuntu2604-Readme.md`, blob `58bb856f8f`, image version
+  `20261116.202.1`; <https://github.com/actions/runner-images/blob/main/images/ubuntu/Ubuntu2604-Readme.md>),
+  beside 24.04's (`Ubuntu2404-Readme.md`, image `20261116.376.1`):
+
+  | Tool | `ubuntu-24.04` | `ubuntu-26.04` |
+  |---|---|---|
+  | OS | 24.04.5 LTS | 26.04.1 LTS |
+  | Kernel | 7.0.0-1017-azure | 7.0.0-1020-azure |
+  | `coreutils` package | 9.4-3ubuntu6.3 (GNU) | 9.5-1ubuntu2+0.0.0~ubuntu25, the **meta package** (below) |
+  | Bash | 5.2.21 | 5.3.9 |
+  | Docker server and client | 28.0.4 | 29.4.2 |
+  | Git | 2.56.1 | 2.56.1 |
+  | jq | 1.7 | 1.8.1 |
+  | GitHub CLI | 2.104.0 | 2.104.0 |
+  | sudo package | 1.9.15p5 | 1.9.17p2 (classic sudo) |
+  | Go in the tool cache | 1.25.14, 1.26.11, 1.27.4; default 1.26 (`toolset-2404.json`) | 1.25.14, 1.26.11, 1.27.4; default 1.26 (`toolset-2604.json`) |
+
+- **Coreutils: uutils by default, GNU beside it.** On 26.04 (resolute) the `coreutils` package is the
+  `coreutils-from` source's meta package, version `9.5-1ubuntu2+0.0.0~ubuntu25`, which depends on
+  `coreutils-from-uutils | coreutils-from-gnu`
+  (<https://packages.ubuntu.com/resolute/coreutils>, <https://launchpad.net/ubuntu/+source/coreutils-from>).
+  `coreutils-from-uutils` (0.0.0~ubuntu25) depends on `rust-coreutils` and on `gnu-coreutils`
+  (<https://packages.ubuntu.com/resolute/coreutils-from-uutils>); `rust-coreutils` is 0.8.0-0ubuntu3
+  (<https://packages.ubuntu.com/resolute/rust-coreutils>); GNU coreutils is the `gnu-coreutils` binary
+  of the `coreutils` source, 9.7-3ubuntu2.1 in resolute's updates
+  (<https://launchpad.net/ubuntu/+source/coreutils>), and installs every tool the wrapper runs as
+  `/usr/bin/gnu<tool>` only (`/usr/bin/gnucat`, `/usr/bin/gnusort`, ...;
+  <https://packages.ubuntu.com/resolute/amd64/gnu-coreutils/filelist>), while `coreutils-from-gnu`
+  installs the plain `/usr/bin/<tool>` names (<https://packages.ubuntu.com/resolute/amd64/coreutils-from-gnu/filelist>).
+  The 26.04 release notes: "The core utilities of the operating system are now provided by the
+  `rust-coreutils` package", "Because `rust-coreutils` are not fully compatible yet, we continue to
+  provide the classic GNU utilities as well", the switch `sudo apt install coreutils-from-gnu
+  coreutils-from-uutils- --allow-remove-essential`, and "the `cp`, `mv`, and `rm` utilities are still from
+  GNU in `rust-coreutils`" (<https://documentation.ubuntu.com/release-notes/26.04/summary-for-lts-users/>).
+  **Unconfirmed:** which alternative the runner image installs (its README names the meta package
+  alone; apt's default is the first, uutils), and what `/usr/bin/<tool> --version` prints there.
+- **sudo.** The release notes say "The `sudo-rs` tool is now the default `sudo` provider" (since
+  25.10); the image lists the classic `sudo` package, 1.9.17p2-1ubuntu3.2, which only recommends
+  `sudo-rs` (<https://packages.ubuntu.com/resolute/sudo>). **Unconfirmed:** which program `/usr/bin/sudo`
+  is on the runner, and whether the runner user's rule is still `/etc/sudoers.d/runner` alone. Related:
+  actions/runner-images#15004 (open), confirmed by its maintainers on 26.04 and not on 24.04, where a
+  privilege drop by ACL on `/run/dbus/system_bus_socket` no longer applies
+  (<https://github.com/actions/runner-images/issues/15004>).
+- **bubblewrap and socat** are not in the image's package table; resolute ships bubblewrap
+  `0.11.1-1ubuntu0.3` and socat `1.8.1.1-1ubuntu0.1` on amd64, both in the security pocket
+  (<https://packages.ubuntu.com/search?keywords=bubblewrap&searchon=names&suite=resolute&section=all>,
+  <https://packages.ubuntu.com/search?keywords=socat&searchon=names&suite=resolute&section=all>); the pins
+  today are noble-updates' 0.9.0-1ubuntu0.3 and 1.8.0.0-4ubuntu0.1.
+- **AppArmor** in resolute is `5.0.0~beta1-0ubuntu7`
+  (<https://packages.ubuntu.com/search?keywords=apparmor&searchon=names&exact=1&suite=resolute&section=all>).
+  **Unconfirmed:** whether the runner still sets `kernel.apparmor_restrict_unprivileged_userns=1`;
+  whether `abi <abi/4.0>` still loads under AppArmor 5; and whether an Ubuntu profile already attaches
+  to `/usr/bin/bwrap` (the release notes say only that AppArmor "now includes many new profiles for
+  applications", since 25.04).
+- **actionlint knows no `ubuntu-26.04`.** The pin is `github.com/rhysd/actionlint v1.7.12` in
+  `tools/go.mod`, which is also its latest release (2026-03-30;
+  <https://github.com/rhysd/actionlint/releases>). `rule_runner_label.go` on its `main` lists
+  `ubuntu-24.04`, `ubuntu-24.04-arm`, `ubuntu-22.04`, `ubuntu-22.04-arm`, `ubuntu-slim` and the
+  `ubuntu-latest` sizes, and maps `ubuntu-latest` to 24.04's compatibility set
+  (<https://github.com/rhysd/actionlint/blob/main/rule_runner_label.go>). Pull requests adding the label
+  are open and unmerged (rhysd/actionlint#682, #723, #743), and rhysd/actionlint#719 asks whether the
+  project is still maintained. **No release that knows the label exists; when one will is unknown.**
+
+**What assumes the 24.04 image, and what the move changes:**
+
+| Place | Assumption | On 26.04 |
+|---|---|---|
+| `ci/auditexec`'s command table | `/usr/bin/{sha256sum,base64,od,cat,head,tail,wc,sort,uniq,cut,tr}` are GNU coreutils 9.4 | Unchanged paths after the switch to `coreutils-from-gnu`; GNU becomes 9.7. **Re-verify** GNU's NEWS from 9.5 to 9.7 for each of the 11 tools: no new option that writes a file, reads file names or a program from a file, or runs a program (the deny lists of `wc`, `sha256sum` and `uniq`; `sort`'s allow list is unaffected by a new option, which it refuses) |
+| `ci/auditexec`, jq | jq 1.7's module system (`import`, `include`, `-L`, `--library-path`, `-f`, `--from-file`, `modulemeta`, `get_search_list`) is the whole of what reads a file the line does not name | jq 1.8.1. **Re-verify** jq 1.8's changelog for any new option or builtin that reads a file or the environment; add each to the refusals |
+| `ci/auditexec`, git | `/usr/bin/git` 2.56.1 | Same version on both images; nothing to re-verify beyond the path |
+| The GNU check (model job, round J) | `(GNU coreutils)` on the first line of `/usr/bin/<tool> --version` | Stays, and fails closed on uutils. Runs **after** the switch, and in **all three jobs** |
+| The workflow's own steps | GNU `sha256sum --check --strict -`, `stat -c '%U:%G %a %n'`, `od -An -N32 -tx1`, `tr -d`, `ls -A`, `install`, `base64 -w0` (the installer) | The switch makes them GNU again; without it they would run uutils, whose option parsing differs |
+| `ci/internal/audit`'s bubblewrap check | `/usr/bin/bwrap --unshare-all --die-with-parent --ro-bind / / /bin/true` | bubblewrap 0.11.1; `/bin/true` is a coreutil (GNU after the switch). The check itself is unchanged; the first run shows it starts |
+| The sandbox preflight | bash 5.2's `/dev/tcp` redirection and `${VAR:+word}` expansion (probes 2 and 5); `sudo -n true` (probe 4); the Docker socket at `/var/run/docker.sock` (probe 3) | bash 5.3, Docker 29, sudo **unconfirmed**. The probes judge the effects themselves, so a change fails closed; the first run must show "all six fail" |
+| `Install the pinned tools` | bubblewrap and socat `.deb`s from noble-updates, digests from its `Packages` index | Resolute's versions and digests, from resolute's signed index (the suite that carries each, `resolute-updates` or `resolute-security`); `dpkg -i` must still find their libraries on the image |
+| `.github/renovate.json5`'s deb rule | `suite=noble-updates`, `bubblewrap` and `socat` | Resolute's suites, and `coreutils-from-gnu` added to the rule (its `.deb`'s digest also by hand) |
+| `bwrap.apparmor` and `TestBwrapAppArmorProfile` | AppArmor 4 (`abi <abi/4.0>`), the runner's userns restriction, no other profile for `/usr/bin/bwrap` | **Re-verify** all three; the comment's "Ubuntu 24.04 runners" changes; the profile's rules change only by a reviewed amendment here |
+| The hardening step | `docker.service` and `docker.socket`, `/etc/sudoers.d/runner`, `sudo -n true` failing after its removal, `stat -c` | Docker 29's unit names, the sudo provider and the runner's sudo rule: **re-verify** (#15004 shows the privilege layout changed) |
+| Go | No setup-go; the image's `go` switches to go.mod's toolchain (`GOTOOLCHAIN`) in `go mod download`; `go env GOVERSION` checked | The same tool cache on both images (1.27.4, go.mod's, among them; default 1.26), so the same mechanism; the check holds |
+| `gh` | `/usr/bin/gh` (the artifact listing, the image check, the publish) | 2.104.0 on both; **re-verify** the path |
+| `check.AuditWorkflow` (`auditRunner`) and its tests, `testdata/auditworkflow/valid.yml` | `ubuntu-24.04` on every job | `ubuntu-26.04`; still exact, still never `ubuntu-latest`; the switch step and the GNU check in every job join the jobs' closed step lists |
+| actionlint (`tools/go.mod`, CI's lint-shell job, the checks job's row 5) | Knows the label | Blocked until a release knows it (condition 1) |
+
+**The switch to GNU coreutils.** A model-free step, the first after checkout in each job and while sudo
+works, installs `coreutils-from-gnu` from a `.deb` pinned by version and by the SHA-256 of resolute's
+signed `Packages` index (as bubblewrap's is), removing `coreutils-from-uutils` as the release notes
+show (`--allow-remove-essential`), without fetching anything else: `gnu-coreutils`, its one dependency,
+is on the image already, since `coreutils-from-uutils` depends on it (to be confirmed by the probe). The
+GNU check then runs. A switch that fails, or a tool that is not GNU after it, fails the job before the
+first tool runs. *Why not point the wrapper at `/usr/bin/gnu<tool>`:* it needs no switch, but covers only
+the wrapper; every guard of the workflow's own steps would run uutils, and the wrapper's table would
+name paths only Ubuntu 25.10 and later have. *Why not adopt uutils:* the wrapper's option analysis
+would have to be redone against a parser Ubuntu itself calls "not fully compatible yet", and redone
+again as it moves; the GNU one is the one issue #277's review rounds read.
+
+**The image probe** (before the move). A pull request, closed unmerged, adds one job to a CI workflow
+of its own on `ubuntu-26.04` with `permissions: {}`, no secret, no environment and no third-party
+action, which prints, and fails on none of: `dpkg-query` for `coreutils`, `coreutils-from-uutils`,
+`coreutils-from-gnu`, `gnu-coreutils`, `rust-coreutils`, `bubblewrap`, `socat`, `apparmor`, `sudo` and
+`sudo-rs`; `readlink -f` and the first line of `--version` of each of the 11 coreutils and of
+`/usr/bin/sudo`; the same after the switch command above; `sysctl
+kernel.apparmor_restrict_unprivileged_userns`; `sudo aa-status` filtered to profiles naming `bwrap`;
+`apparmor_parser --version` and a dry load of `bwrap.apparmor` (`apparmor_parser -QK`); the sudoers
+files' names (`sudo ls /etc/sudoers.d`, never their contents); `systemctl list-unit-files 'docker*'`;
+`command -v gh git jq go` and `go version`; and `dpkg -i` of resolute's bubblewrap and socat `.deb`s
+followed by the bubblewrap check's own invocation. Its log is the source the move's pull request cites
+for every fact marked unconfirmed above; a fact that would change a decision here comes back as an
+amendment first.
+
+**The order:**
+
+1. This amendment (issue #568).
+2. The image probe (its pull request, closed unmerged), and an actionlint release that knows
+   `ubuntu-26.04` pinned in `tools/go.mod` (Renovate's pull request), in either order.
+3. The move: one pull request, test first (the tester's red tests on `check.AuditWorkflow`, then the
+   change), that sets `runs-on: ubuntu-26.04` on the three jobs and its comment, moves `auditRunner` to
+   `ubuntu-26.04` with the check's message (`want ubuntu-26.04, never a moving image: the wrapper's
+   option analysis assumes the GNU coreutils the switch installs (ADR 0040)`), adds the switch step and
+   the GNU check to every job's closed step list (each before the job's first download), replaces the
+   bubblewrap and socat pins and digests with resolute's, adds the `coreutils-from-gnu` pin, moves the
+   Renovate deb rule to resolute's suites, updates `bwrap.apparmor`'s comment (and its rules only if the
+   probe shows they must change), and amends this record with the probe's facts and the GNU and jq
+   changelog review. It names PR #561, which is then closed unmerged. PR #565 merges before it.
+4. The first run on 26.04: runbook step 8 as for any first run, plus, from that run's log and summary:
+   the switch step's and the GNU check's success in all three jobs; bubblewrap's check and "all six
+   fail" in the preflight's line; the hardening step's three checks; `go env GOVERSION` equal to go.mod's;
+   the round C, D and E notes above ("Risks for the first workflow run"), read again on the new image.
+   Its result is recorded here as an amendment.
+
+**How the pin test changes:** only its value and its message. `auditRunner` stays one exact label for
+every job, a moving label (`ubuntu-latest`) stays refused, and its test cases that mutate the label move
+from `ubuntu-24.04` to `ubuntu-26.04`. The new steps are held as every other step is: by name, in order,
+with the commands their scripts must run.
+
+**Alternatives considered for the label (condition 1):**
+
+- **An actionlint configuration declaring `ubuntu-26.04`** (`self-hosted-runner: labels:`), as the
+  error message suggests. ADR 0022 refuses any actionlint configuration file because one can silence
+  actionlint's checks, and three checks hold that rule; declaring the label would also make actionlint
+  treat it as a self-hosted label in every workflow. It needs an amendment of ADR 0022, which the
+  maintainer may choose if no release comes; it is not taken here.
+- **actionlint from an unreleased commit or a fork.** A pseudo-version of an unmerged pull request, or a
+  fork of a project whose maintenance is in question, is a supply-chain change to a tool that runs on
+  every workflow; rejected.
+- **Skipping actionlint for the audit workflow.** It is the workflow that most needs it; rejected.
 
 ### The workflow (milestone 2, PR 5b, amended 2026-11-24)
 
