@@ -1058,6 +1058,12 @@ func TestNewRejectsVersion2FieldsPerCategory(t *testing.T) {
 			wantPath: "resources[1].size.storageGiB",
 		},
 		{
+			name: "memoryGiB on network.dns",
+			resources: second(sized("aa-zone", taxonomy.NetworkDNS,
+				inventory.Size{MemoryGiB: ptr(1.0)}, nil)),
+			wantPath: "resources[1].size.memoryGiB",
+		},
+		{
 			name: "hoursPerMonth on network.dns",
 			resources: second(sized("aa-zone", taxonomy.NetworkDNS,
 				inventory.Size{}, &inventory.Usage{HoursPerMonth: ptr(730.0)})),
