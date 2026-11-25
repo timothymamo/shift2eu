@@ -391,9 +391,13 @@ TLS stage*.
   `lifecycle` asserts `self.https_connections_only == false` and
   `self.min_scale == local.container_min_scale` after the apply. `min_scale` is written once, as the
   local `container_min_scale` (0), which the attribute and the postcondition both read, so the check
-  follows the pin: `[container-min-scale]` accepts the local only when it is the literal 0 or 1, and
-  `[container-min-scale-postcondition]` refuses a postcondition comparing `self.min_scale` with anything
-  but the expression the attribute sets.
+  follows the pin: `[container-min-scale]` accepts the local only when it is the literal 0 or 1,
+  `[container-min-scale-postcondition]` requires exactly one postcondition comparing `self.min_scale` with
+  the expression the attribute sets, and refuses one missing or any other condition on `self` and
+  `min_scale` (another value, `self["min_scale"]`), and `[container-https-only-postcondition-missing]`
+  requires the `self.https_connections_only == false` postcondition. The rules read a condition as its
+  tokens: either side of `==`, and one outer pair of parentheses, are the same comparison; any other
+  spelling of these two checks is refused, not read.
 - **The escaped path.** Caddy v2.11.9 has no placeholder for Go's `URL.EscapedPath()` alone:
   `{http.request.uri.path_escaped}` is `url.QueryEscape` of the path, which escapes every `/`.
   `{http.request.uri}` is Go's `URL.RequestURI()`, the escaped path plus `?` and the raw query when there

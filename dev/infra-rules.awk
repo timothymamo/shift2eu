@@ -237,6 +237,27 @@ function shownpath(p) {
   return shown(p, "{}[(", "a block path with an unprintable label")
 }
 
+# A condition's tokens (joined by one space) without one outer pair of parentheses around them all, when
+# the first token's ( is closed by the last token's ): (a == b) is the comparison a == b.
+function unparen(s,   n, t, i, d) {
+  if (substr(s, 1, 2) != "( " || substr(s, length(s) - 1) != " )") {
+    return s
+  }
+  n = split(s, t, " ")
+  d = 0
+  for (i = 1; i <= n; i++) {
+    if (t[i] == "(") {
+      d++
+    } else if (t[i] == ")") {
+      d--
+    }
+    if (d == 0 && i < n) {
+      return s
+    }
+  }
+  return substr(s, 3, length(s) - 4)
+}
+
 # An attribute's or object's key as a message prints it.
 function shownkey(n) {
   return shown(n, "", "an unprintable name")
@@ -945,24 +966,49 @@ END {
       } else {
         problem("container-min-scale", bfile[b], containerAt[ck], shownres " sets min_scale to something other than the literal 0 or 1, or a local set to one: more instances kept warm are a cost nobody decided")
       }
-      # The check after an apply must compare the platform's min_scale with what the pin sets, so the two
-      # cannot drift: a hard-coded 0 beside a local would still pass once the local is raised.
-      if (msexpr != "") {
-        for (j = 1; j <= nconds; j++) {
-          a = condAttr[j]
-          if (afile[a] != bfile[b] || apath[a] != bpath[b] "/lifecycle/postcondition") {
-            continue
-          }
-          ct = atext[a]
-          if (index(" " ct " ", " self . min_scale ") == 0) {
-            continue
-          }
-          if (ct != "self . min_scale == " msexpr && ct != msexpr " == self . min_scale") {
-            msshown = msexpr
-            sub(/ [.] /, ".", msshown)
-            problem("container-min-scale-postcondition", afile[a], aline[a], shownres " has a postcondition comparing self.min_scale with something other than what min_scale sets (" shownkey(msshown) "): the condition must be self.min_scale == the same expression, so the check after an apply follows the pin")
-          }
+      # The checks after an apply (the provider leaves false and 0 out of the create request): the container
+      # must assert that the platform kept plain HTTP, and, for a min_scale pin accepted above, compare the
+      # platform's min_scale with what the pin sets, so the two cannot drift (a hard-coded 0 beside a local
+      # would still pass once the local is raised). A condition is read as its tokens, one outer pair of
+      # parentheses dropped; any condition naming self and min_scale, in any spelling (self["min_scale"]
+      # too), must be that one comparison, and exactly one must be.
+      httpsOk = 0
+      msOk = 0
+      msBad = 0
+      msshown = msexpr
+      sub(/ [.] /, ".", msshown)
+      for (j = 1; j <= nconds; j++) {
+        a = condAttr[j]
+        if (afile[a] != bfile[b] || apath[a] != bpath[b] "/lifecycle/postcondition") {
+          continue
         }
+        ct = unparen(atext[a])
+        if (ct == "self . https_connections_only == false" || ct == "false == self . https_connections_only") {
+          httpsOk++
+        }
+        if (msexpr == "") {
+          continue
+        }
+        cs = " " ct " "
+        if (index(cs, " self ") == 0 || (index(cs, " min_scale ") == 0 && index(cs, " \"min_scale\" ") == 0)) {
+          continue
+        }
+        if (ct == "self . min_scale == " msexpr || ct == msexpr " == self . min_scale") {
+          msOk++
+          if (msOk > 1) {
+            msBad++
+            problem("container-min-scale-postcondition", afile[a], aline[a], shownres " has a second postcondition on self.min_scale: exactly one condition, self.min_scale == " shownkey(msshown) ", checks the pin after an apply")
+          }
+        } else {
+          msBad++
+          problem("container-min-scale-postcondition", afile[a], aline[a], shownres " has a postcondition on self.min_scale other than a comparison with what min_scale sets (" shownkey(msshown) "): the condition must be self.min_scale == the same expression, so the check after an apply follows the pin")
+        }
+      }
+      if (msexpr != "" && msOk == 0 && msBad == 0) {
+        problem("container-min-scale-postcondition", bfile[b], bline[b], shownres " has no postcondition comparing self.min_scale with what min_scale sets (" shownkey(msshown) "): the provider leaves 0 out of the create request, so only that check after an apply says what the platform kept warm")
+      }
+      if (httpsOk == 0) {
+        problem("container-https-only-postcondition-missing", bfile[b], bline[b], shownres " has no postcondition self.https_connections_only == false: the provider leaves false out of the create request, so only that check after an apply says whether the platform kept plain HTTP for Caddy's own redirect (ADR 0045)")
       }
     }
   }

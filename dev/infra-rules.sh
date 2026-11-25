@@ -74,10 +74,17 @@
 #                    literal 0 or 1 or as local.<name> where that local, in the same directory, is set once
 #                    to the literal 0 or 1
 #   [container-min-scale-postcondition]
-#                    for a min_scale the rule above accepts, a postcondition of that container whose
-#                    condition compares self.min_scale with anything but the same expression min_scale
-#                    sets (self.min_scale == <it>, either side): a hard-coded 0 beside a local would pass
+#                    for a min_scale the rule above accepts, a container without exactly one postcondition
+#                    whose condition is self.min_scale == the same expression min_scale sets (either
+#                    side, one outer pair of parentheses and line breaks inside them allowed): missing,
+#                    a second one, or a condition naming self and min_scale in any other way (another
+#                    value, self["min_scale"]) is refused, since a hard-coded 0 beside a local would pass
 #                    once the local is raised
+#   [container-https-only-postcondition-missing]
+#                    a scaleway_container without a postcondition whose condition is
+#                    self.https_connections_only == false (either side, one outer pair of parentheses):
+#                    the provider leaves false out of the create request, so only that check after an
+#                    apply says whether the platform kept plain HTTP for Caddy's own redirect
 #   [container-repeat] count or for_each on a scaleway_container or a scaleway_container_namespace, or
 #                    more than one scaleway_container under the root: the front is one container in one
 #                    namespace (ADR 0045), and a repeat multiplies the cost pins' ceiling
