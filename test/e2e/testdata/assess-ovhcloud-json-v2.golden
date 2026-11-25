@@ -7,7 +7,7 @@
     "name": "OVHcloud",
     "snapshot": {
       "source": "https://www.ovhcloud.com/en-ie/public-cloud/prices/",
-      "retrieved": "2026-11-14"
+      "retrieved": "2026-11-25"
     }
   },
   "summary": {
@@ -373,7 +373,7 @@
   "estimate": {
     "region": "GRA",
     "regionChosen": false,
-    "priceDate": "2026-11-14",
+    "priceDate": "2026-11-25",
     "currency": "EUR",
     "excluded": [
       "VAT",
