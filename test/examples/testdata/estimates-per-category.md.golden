@@ -12,18 +12,26 @@ bare-metal server is 4 vCPU and 32 GiB, the smallest plan OVHcloud's and Scalewa
 offerings cover (UpCloud offers none); Kubernetes counts 3 nodes of the virtual-machine size; a
 managed database is 2 vCPU, 4 GiB of memory and 50 GiB of storage; block storage is one 100 GiB
 volume and object storage 100 GiB stored; a function is 1 GiB of memory; a queue takes no size.
+A MongoDB database is 2 vCPU, 8 GiB of memory, 100 GiB of storage and count 3, the nodes of a
+replica set; a cache is 6 GiB of memory per node, count 2 and `node-high-availability`, so it is
+priced on the multi-node tier a replicated cache is served by, and its capability is shown after
+its size; a load balancer and a container registry take no size and are not priced.
 
-- `OVHcloud`: prices retrieved 2026-11-14 from `https://www.ovhcloud.com/en-ie/public-cloud/prices/`, estimated in `GRA` (its default region)
+- `OVHcloud`: prices retrieved 2026-11-25 from `https://www.ovhcloud.com/en-ie/public-cloud/prices/`, estimated in `GRA` (its default region)
 - `Scaleway`: prices retrieved 2026-11-13 from `https://www.scaleway.com/en/pricing/`, estimated in `fr-par` (its default region)
 - `UpCloud`: prices retrieved 2026-11-13 from `https://upcloud.com/pricing/`, estimated in `de-fra1` (its default region)
 
 | Target | Category | Size | Offering | Plan | Monthly estimate | Reason |
 |---|---|---|---|---|---|---|
+| `OVHcloud` | `cache.redis` | 6 GiB memory, count 2, 730 h/month, `node-high-availability` | `Databases for Valkey Multi-node` | `Production B3-8` | €215.50 |  |
 | `OVHcloud` | `compute.baremetal` | 4 vCPU, 32 GiB memory, count 1, 730 h/month | `Metal Instances` | `bm-s1` | €365.00 |  |
 | `OVHcloud` | `compute.vm` | 2 vCPU, 4 GiB memory, count 1, 730 h/month | `Instances` | `c3-4` | €33.36 |  |
+| `OVHcloud` | `database.mongodb` | 2 vCPU, 8 GiB memory, 100 GiB storage, count 3, 730 h/month | `Managed MongoDB` | `Production B3-8` | €283.39 |  |
 | `OVHcloud` | `database.mysql` | 2 vCPU, 4 GiB memory, 50 GiB storage, count 1, 730 h/month | `Managed MySQL` | `Essential DB1-4` | €54.46 |  |
 | `OVHcloud` | `database.postgresql` | 2 vCPU, 4 GiB memory, 50 GiB storage, count 1, 730 h/month | `Managed PostgreSQL` | `Essential DB1-4` | €54.46 |  |
 | `OVHcloud` | `kubernetes.managed` | 2 vCPU, 4 GiB memory, count 3, 730 h/month | `Managed Kubernetes Service` | `c3-4` | €100.08 |  |
+| `OVHcloud` | `network.loadbalancer` | none | none | none | — | `not-priced` |
+| `OVHcloud` | `registry.container` | none | none | none | — | `not-priced` |
 | `OVHcloud` | `storage.block` | 100 GiB storage, count 1 | `Block Storage` | none | €4.31 |  |
 | `OVHcloud` | `storage.object` | 100 GiB storage | `Object Storage` | none | €0.71 |  |
 | `Scaleway` | `compute.baremetal` | 4 vCPU, 32 GiB memory, count 1, 730 h/month | `Elastic Metal` | `EM-A116X-SSD` | €56.21 |  |

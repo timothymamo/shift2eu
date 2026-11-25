@@ -22,6 +22,8 @@
 // (ADR 0011): a plan or class that adds a capability is a variant named after
 // it, such as the Multi-node and Multi-node Advanced database plans (read
 // replicas only on the Advanced one) and Block Storage 3-AZ Regional Classic.
+// The load balancer and private registry offerings record no plan or price,
+// since OVHcloud sells them by a size no inventory records (PRD 552).
 //
 // catalog.json is a target catalog snapshot of schema version 2, the format
 // every target with an embedded snapshot shares (ADR 0007, ADR 0024).
