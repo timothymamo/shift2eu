@@ -125,6 +125,14 @@ type callResult struct {
 // calls in order, answers[i] being the answer of plan[i]. Each tool_use carries
 // the input the plan expects of it, so the transcript is a run of that plan.
 func transcriptOf(plan audit.Plan, answers []callResult) []byte {
+	return transcriptWith(plan, answers, "")
+}
+
+// transcriptWith is transcriptOf's transcript with line written after the
+// tool_result of every call the run refused: the CLI prints a
+// system/permission_denied element for each call its permission layer denies,
+// before the next call's element (issue #590). An empty line writes nothing.
+func transcriptWith(plan audit.Plan, answers []callResult, afterDenied string) []byte {
 	var transcript strings.Builder
 
 	for i, call := range plan {
@@ -141,6 +149,10 @@ func transcriptOf(plan audit.Plan, answers []callResult) []byte {
 		}
 
 		transcript.WriteString(toolResultLine(id, answer))
+
+		if answer.isError && afterDenied != "" {
+			transcript.WriteString(afterDenied + "\n")
+		}
 	}
 
 	return []byte(transcript.String())
@@ -1586,6 +1598,10 @@ func TestJudgeSkipsTheElementsItDoesNotRead(t *testing.T) {
 		name string
 		// line is the element the CLI prints beside the plan's calls.
 		line string
+		// afterDeniedResults writes line after every refused call's
+		// tool_result instead of appending it, the place the CLI prints an
+		// element for a denial (issue #590).
+		afterDeniedResults bool
 	}{
 		{
 			name: "a system notice holds a plain string as its message",
@@ -1603,6 +1619,15 @@ func TestJudgeSkipsTheElementsItDoesNotRead(t *testing.T) {
 			name: "a rate-limit event holds extra fields beside a plain string message",
 			line: `{"type":"rate_limit_event","subtype":"five_hour","rate_limit_info":{"status":"allowed","resetsAt":1767225600},"message":"a plain string"}`,
 		},
+		{
+			// 2.1.332 prints this element after every tool call its permission
+			// layer denies, with a string message; the old judgement decoded every
+			// element's message as an object and so refused every real preflight
+			// (issue #590).
+			name:               "a denied tool call's permission_denied element holds a plain string as its message",
+			line:               `{"type":"system","subtype":"permission_denied","tool_name":"Bash","tool_use_id":"toolu_03","decision_reason_type":"subcommandResults","message":"Permission to use Bash with command sudo -n true has been denied.","uuid":"00000000-0000-4000-8000-000000000000","session_id":"00000000-0000-4000-8000-000000000001"}`,
+			afterDeniedResults: true,
+		},
 	}
 
 	for _, tc := range cases {
@@ -1610,13 +1635,19 @@ func TestJudgeSkipsTheElementsItDoesNotRead(t *testing.T) {
 			t.Parallel()
 
 			thePlan := plan()
-			passing := transcriptOf(thePlan, passingAnswers(thePlan, preflightNonce))
+			answers := passingAnswers(thePlan, preflightNonce)
+			passing := transcriptOf(thePlan, answers)
 
 			if err := judge(thePlan, passing, fakeEffects{}, ""); err != nil {
 				t.Fatalf("Judge() = %v, want nil for the transcript without the extra element: the case's baseline is the passing run", err)
 			}
 
-			if err := judge(thePlan, appendLine(passing, tc.line), fakeEffects{}, ""); err != nil {
+			extra := appendLine(passing, tc.line)
+			if tc.afterDeniedResults {
+				extra = transcriptWith(thePlan, answers, tc.line)
+			}
+
+			if err := judge(thePlan, extra, fakeEffects{}, ""); err != nil {
 				t.Errorf("Judge() = %v, want nil: the element %s is not an assistant or user element, so the judgement skips it and never decodes its message (issue #590)", err, tc.line)
 			}
 		})
