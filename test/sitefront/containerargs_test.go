@@ -120,47 +120,37 @@ func hclElementValue(element string) (string, error) {
 		return "", err
 	}
 
+	for _, escape := range []string{"$${", "%%{"} {
+		if strings.Contains(element, escape) {
+			return "", fmt.Errorf("the element holds %s, HCL's escape for a literal %s: this reader refuses it in a start command, fail closed, rather than compare the value it would run with the one the platform gets (docs/adr/0045)", escape, escape[1:])
+		}
+	}
+
 	value, err := strconv.Unquote(element)
 	if err != nil {
 		return "", err
 	}
 
-	var out strings.Builder
-
-	for i := 0; i < len(value); i++ {
-		c := value[i]
-		if c != '$' && c != '%' {
-			out.WriteByte(c)
-
-			continue
-		}
-
-		if i+2 < len(value) && value[i+1] == c && value[i+2] == '{' { // $${ and %%{ are HCL's literal ${ and %{
-			out.WriteByte(c)
-			out.WriteByte('{')
-			i += 2
-
-			continue
-		}
-
-		if i+1 < len(value) && value[i+1] == '{' {
+	// A second guard: hclStringEnd already refuses a raw ${ and %{, and the refusals above every escape of
+	// them, but a raw $ or % before an escape that decodes to { ("a${") still decodes to one here.
+	for _, c := range []byte{'$', '%'} {
+		if strings.Contains(value, string(c)+"{") {
 			what := "interpolation"
 			if c == '%' {
 				what = "directive"
 			}
 
-			return "", fmt.Errorf("%c{ starts an HCL template (%s), which this reader does not run: write %c%c{ for a literal %c{", c, what, c, c, c)
+			return "", fmt.Errorf("the element decodes to %c{, which starts an HCL template (%s): this reader does not run templates (docs/adr/0045)", c, what)
 		}
-
-		out.WriteByte(c)
 	}
 
-	return out.String(), nil
+	return value, nil
 }
 
 // checkHCLEscapes refuses a backslash escape in a quoted element that HCL does not have: HCL's are \n \r \t
 // \" \\ \uNNNN and \UNNNNNNNN, while strconv.Unquote also decodes Go's \x41, \a, \b, \f, \v and the octal
-// \101, which tofu would refuse.
+// \101, which tofu would refuse. A \u or \U escape that decodes to a $ or a % is refused too, fail closed: it
+// spells the start of a template, or of its escape, in a way this reader would read one way and HCL another.
 func checkHCLEscapes(element string) error {
 	for i := 0; i < len(element); i++ {
 		if element[i] != '\\' {
@@ -174,10 +164,22 @@ func checkHCLEscapes(element string) error {
 		switch c := element[i+1]; {
 		case c == 'n', c == 'r', c == 't', c == '"', c == '\\':
 			i++
-		case c == 'u' && hexDigits(element, i+2, 4):
-			i += 5
-		case c == 'U' && hexDigits(element, i+2, 8):
-			i += 9
+		case c == 'u' && hexDigits(element, i+2, 4), c == 'U' && hexDigits(element, i+2, 8):
+			n := 4
+			if c == 'U' {
+				n = 8
+			}
+
+			code, err := strconv.ParseUint(element[i+2:i+2+n], 16, 32)
+			if err != nil {
+				return err
+			}
+
+			if code == '$' || code == '%' {
+				return fmt.Errorf("%s decodes to %c, which this reader refuses in a start command, fail closed: write no escape of $ or %% there (docs/adr/0045)", element[i:i+2+n], rune(code))
+			}
+
+			i += 1 + n
 		default:
 			end := i + 2
 			if c == 'x' || c >= '0' && c <= '7' {
@@ -212,45 +214,133 @@ func hexDigits(s string, i, n int) bool {
 // immutable image (docs/adr/0045). A pin a /* */ comment holds is no pin: a commented-out line is no line the
 // platform reads.
 func imageReference(src string) (string, error) {
-	lines := strings.Split(src, "\n")
-
-	for i, line := range lines {
-		if !strings.HasPrefix(strings.TrimSpace(line), "#") || !strings.Contains(line, imagePinComment) {
-			continue
-		}
-
-		for j, next := range lines[i+1:] {
-			trimmed := strings.TrimSpace(next)
-			if trimmed == "" || strings.HasPrefix(trimmed, "#") {
-				continue
-			}
-
-			_, value, ok := strings.Cut(trimmed, "=")
-			if !ok {
-				return "", fmt.Errorf("%s: line %d is %q, want an image assignment below the Renovate comment (CLAUDE.md rule 7)", containerPath, i+j+2, trimmed)
-			}
-
-			image, err := strconv.Unquote(strings.TrimSpace(value))
-			if err != nil {
-				return "", fmt.Errorf("%s: unquote the image on line %d: %w", containerPath, i+j+2, err)
-			}
-
-			_, digest, ok := strings.Cut(image, "@sha256:")
-			if !ok {
-				return "", fmt.Errorf("%s: the image is %q, want a reference pinned by digest (name:tag@sha256:...): a tag alone can be moved under the platform (docs/adr/0045)", containerPath, image)
-			}
-
-			if !isImageDigest(digest) {
-				return "", fmt.Errorf("%s: the image is %q, want @sha256: followed by exactly 64 lower-case hex characters and nothing after them: the digest names the one immutable image the platform runs (docs/adr/0045)", containerPath, image)
-			}
-
-			return image, nil
-		}
-
-		return "", fmt.Errorf("%s: the Renovate comment on line %d has no image assignment below it (CLAUDE.md rule 7)", containerPath, i+1)
+	tokens, comments, err := hclScan(src)
+	if err != nil {
+		return "", err
 	}
 
-	return "", fmt.Errorf("%s: no line carries %q, the comment that pins the image (CLAUDE.md rule 7, docs/adr/0045)", containerPath, imagePinComment)
+	if err := checkContainerImage(containerBody(tokens)); err != nil {
+		return "", err
+	}
+
+	pin, err := caddyImagePin(tokens)
+	if err != nil {
+		return "", err
+	}
+
+	if !renovatePinned(src, comments, tokens[pin-2].start) {
+		return "", fmt.Errorf("%s: caddy_image on line %d has no Renovate comment on the line above it: no line carries %q directly above the local, outside a /* */ comment (CLAUDE.md rule 7, docs/adr/0045)", containerPath, lineOf(src, tokens[pin-2].start), renovateComment)
+	}
+
+	text := tokens[pin].text
+	if strings.Contains(text, `\`) {
+		return "", fmt.Errorf("%s: the image %s holds an escape: an image reference is written plainly (docs/adr/0045)", containerPath, text)
+	}
+
+	image, err := strconv.Unquote(text)
+	if err != nil {
+		return "", fmt.Errorf("%s: unquote the image %s: %w", containerPath, text, err)
+	}
+
+	_, digest, ok := strings.Cut(image, "@sha256:")
+	if !ok {
+		return "", fmt.Errorf("%s: the image is %q, want a reference pinned by digest (name:tag@sha256:...): a tag alone can be moved under the platform (docs/adr/0045)", containerPath, image)
+	}
+
+	if !isImageDigest(digest) {
+		return "", fmt.Errorf("%s: the image is %q, want @sha256: followed by exactly 64 lower-case hex characters and nothing after them: the digest names the one immutable image the platform runs (docs/adr/0045)", containerPath, image)
+	}
+
+	return image, nil
+}
+
+// checkContainerImage holds the site container's image attribute, in its body, to exactly the tokens
+// local . caddy_image, and nothing after them.
+func checkContainerImage(body []hclToken) error {
+	j, err := attrValue(body, "image")
+	if err != nil {
+		return fmt.Errorf("%s: %w", containerPath, err)
+	}
+
+	want := []string{"local", ".", "caddy_image"}
+	for k, text := range want {
+		if j+k >= len(body) || body[j+k].text != text {
+			return fmt.Errorf("%s: the site container's image is not exactly %s: a literal or another local is a reference the Renovate comment does not move (docs/adr/0045)", containerPath, caddyImageLocal)
+		}
+	}
+
+	if !valueEnds(body, j+len(want)) {
+		return fmt.Errorf("%s: an expression follows %s in the site container's image: the platform runs the expression's value (docs/adr/0045)", containerPath, caddyImageLocal)
+	}
+
+	return nil
+}
+
+// caddyImagePin returns the index in tokens of the string a top-level locals block sets caddy_image to: set
+// once across every locals block, as one quoted string and nothing after it. The tokens two and one before it
+// are the name caddy_image and its =.
+func caddyImagePin(tokens []hclToken) (int, error) {
+	pin, found := -1, 0
+
+	for i, depth := 0, 0; i < len(tokens); i++ {
+		tok := tokens[i]
+
+		switch {
+		case tok.kind == tokPunct && tok.text == "{":
+			depth++
+		case tok.kind == tokPunct && tok.text == "}":
+			depth--
+		case depth == 0 && tok.kind == tokIdent && tok.text == "locals" &&
+			i+1 < len(tokens) && tokens[i+1].kind == tokPunct && tokens[i+1].text == "{":
+			body, end := blockBody(tokens, i+1)
+
+			for _, j := range attrValues(body, "caddy_image") {
+				found++
+				pin = i + 2 + j
+				if j >= len(body) || body[j].kind != tokString || !valueEnds(body, j+1) {
+					return 0, fmt.Errorf("%s: caddy_image is not one quoted image reference: the Renovate comment pins one string (docs/adr/0045)", containerPath)
+				}
+			}
+
+			i = end
+		}
+	}
+
+	switch found {
+	case 0:
+		return 0, fmt.Errorf("%s: no top-level locals block sets caddy_image, the image the Renovate comment pins: no line carries %q above it (CLAUDE.md rule 7, docs/adr/0045)", containerPath, renovateComment)
+	case 1:
+		return pin, nil
+	default:
+		return 0, fmt.Errorf("%s: caddy_image is set twice: the reader cannot tell which image the platform runs (docs/adr/0045)", containerPath)
+	}
+}
+
+// renovatePinned reports whether the line above the one at offset holds nothing but the Renovate comment, a #
+// comment the scan read as one (so not inside a /* */ comment or a string), and whether offset is the first
+// thing on its own line.
+func renovatePinned(src string, comments []hclToken, offset int) bool {
+	lineStart := strings.LastIndexByte(src[:offset], '\n') + 1
+	if strings.TrimSpace(src[lineStart:offset]) != "" || lineStart == 0 {
+		return false
+	}
+
+	prevStart := strings.LastIndexByte(src[:lineStart-1], '\n') + 1
+	prev := src[prevStart : lineStart-1]
+	at := prevStart + len(prev) - len(strings.TrimLeft(prev, " \t"))
+
+	for _, c := range comments {
+		if c.start == at {
+			return strings.TrimRight(c.text, " \t\r") == renovateComment
+		}
+	}
+
+	return false
+}
+
+// lineOf returns the 1-based line of the offset in src.
+func lineOf(src string, offset int) int {
+	return strings.Count(src[:offset], "\n") + 1
 }
 
 // isImageDigest reports whether s is exactly the 64 lower-case hex characters of a sha256 digest, and nothing
@@ -325,6 +415,10 @@ func hclList(src, attribute string) ([]string, error) {
 			case tok.text == "]":
 				flush()
 
+				if !valueEnds(body, k+1) {
+					return nil, fmt.Errorf("%s: an expression follows the list: the platform runs the expression's value, not the list (docs/adr/0045)", attribute)
+				}
+
 				return elements, checkElements(attribute, elements)
 			case tok.text == "," && depth == 0:
 				flush()
@@ -372,7 +466,22 @@ func checkElements(attribute string, elements []string) error {
 // neither. Only the block's own attributes count, not those of a block or object
 // nested in it.
 func attrValue(body []hclToken, attribute string) (int, error) {
-	value, found := -1, false
+	values := attrValues(body, attribute)
+
+	switch len(values) {
+	case 0:
+		return 0, fmt.Errorf("no %s attribute in the site container: the reader runs what the platform runs (docs/adr/0045)", attribute)
+	case 1:
+		return values[0], nil
+	default:
+		return 0, fmt.Errorf("%s is set twice in the container: the reader cannot tell which one the platform reads, so it runs neither (docs/adr/0045)", attribute)
+	}
+}
+
+// attrValues returns, for every setting of the attribute among body's own attributes (not those of a block or
+// object nested in it), the index of the first token of its value, just past `attribute =`.
+func attrValues(body []hclToken, attribute string) []int {
+	var values []int
 
 	for j, depth := 0, 0; j < len(body); j++ {
 		tok := body[j]
@@ -382,23 +491,57 @@ func attrValue(body []hclToken, attribute string) (int, error) {
 			depth++
 		case tok.kind == tokPunct && (tok.text == "}" || tok.text == "]" || tok.text == ")"):
 			depth--
-		case depth == 0 && tok.kind == tokIdent && tok.text == attribute &&
-			j+1 < len(body) && body[j+1].kind == tokPunct && body[j+1].text == "=" &&
-			(j+2 >= len(body) || body[j+2].kind != tokPunct || body[j+2].text != "="):
-			if found {
-				return 0, fmt.Errorf("%s is set twice in the container: the reader cannot tell which one the platform reads, so it runs neither (docs/adr/0045)", attribute)
-			}
-
-			found = true
-			value = j + 2
+		case depth == 0 && tok.kind == tokIdent && tok.text == attribute && isAssignment(body, j+1):
+			values = append(values, j+2)
 		}
 	}
 
-	if !found {
-		return 0, fmt.Errorf("no %s attribute: the container's start command is what the platform runs (docs/adr/0045)", attribute)
+	return values
+}
+
+// isAssignment reports whether body[k] is an attribute's = (and not the first = of an ==).
+func isAssignment(body []hclToken, k int) bool {
+	return k < len(body) && body[k].kind == tokPunct && body[k].text == "=" &&
+		(k+1 >= len(body) || body[k+1].kind != tokPunct || body[k+1].text != "=")
+}
+
+// valueEnds reports whether an attribute's value may end just before body[k]: nothing is left in the body, or
+// the next attribute (a name and its =, not ==) or block (a name and its { or string label) starts there.
+// Anything else continues the expression, whose value is what the platform reads.
+func valueEnds(body []hclToken, k int) bool {
+	if k >= len(body) {
+		return true
 	}
 
-	return value, nil
+	if body[k].kind != tokIdent || k+1 >= len(body) {
+		return false
+	}
+
+	next := body[k+1]
+
+	return next.kind == tokString || next.kind == tokPunct && next.text == "{" || isAssignment(body, k+1)
+}
+
+// blockBody returns the tokens between the { at tokens[open] and its closing }, and the index of that }, or
+// the rest of the tokens and len(tokens) when none closes it.
+func blockBody(tokens []hclToken, open int) ([]hclToken, int) {
+	for j, inner := open+1, 0; j < len(tokens); j++ {
+		if tokens[j].kind != tokPunct {
+			continue
+		}
+
+		switch tokens[j].text {
+		case "{":
+			inner++
+		case "}":
+			if inner == 0 {
+				return tokens[open+1 : j], j
+			}
+			inner--
+		}
+	}
+
+	return tokens[open+1:], len(tokens)
 }
 
 // The kinds of token hclTokens reads.
@@ -426,7 +569,15 @@ type hclToken struct {
 // covers the whole file, so no string anywhere can shift what the reader takes
 // for code.
 func hclTokens(src string) ([]hclToken, error) {
-	var tokens []hclToken
+	tokens, _, err := hclScan(src)
+
+	return tokens, err
+}
+
+// hclScan reads src as hclTokens does, and also returns its # and // comments, each a token from its marker
+// to the end of its line, so a reader can tell a live comment line from one a /* */ comment holds.
+func hclScan(src string) ([]hclToken, []hclToken, error) {
+	var tokens, comments []hclToken
 
 	for i := 0; i < len(src); {
 		c := src[i]
@@ -435,19 +586,23 @@ func hclTokens(src string) ([]hclToken, error) {
 		case c == ' ' || c == '\t' || c == '\r' || c == '\n':
 			i++
 		case c == '#' || c == '/' && i+1 < len(src) && src[i+1] == '/':
+			start := i
 			for i < len(src) && src[i] != '\n' {
 				i++
 			}
+			comments = append(comments, hclToken{kind: tokPunct, text: src[start:i], start: start})
+		case c == '<' && i+1 < len(src) && src[i+1] == '<':
+			return nil, nil, fmt.Errorf("%s: line %d opens a heredoc (<<), whose body HCL reads as one string and this reader would read as code: write a quoted string (docs/adr/0045)", containerPath, lineOf(src, i))
 		case c == '/' && i+1 < len(src) && src[i+1] == '*':
 			end := strings.Index(src[i+2:], "*/")
 			if end < 0 {
-				return nil, fmt.Errorf("%s: a /* comment is not closed by */", containerPath)
+				return nil, nil, fmt.Errorf("%s: a /* comment is not closed by */", containerPath)
 			}
 			i += 2 + end + 2
 		case c == '"':
 			end, err := hclStringEnd(src, i, tokens)
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			tokens = append(tokens, hclToken{kind: tokString, text: src[i:end], start: i})
 			i = end
@@ -464,7 +619,7 @@ func hclTokens(src string) ([]hclToken, error) {
 		}
 	}
 
-	return tokens, nil
+	return tokens, comments, nil
 }
 
 // caddyfileArg is the one template string the reader accepts: file()'s argument,
@@ -555,23 +710,9 @@ func containerBody(tokens []hclToken) []hclToken {
 			continue
 		}
 
-		for j, inner := i+4, 0; j < len(tokens); j++ {
-			if tokens[j].kind != tokPunct {
-				continue
-			}
+		body, _ := blockBody(tokens, i+3)
 
-			switch tokens[j].text {
-			case "{":
-				inner++
-			case "}":
-				if inner == 0 {
-					return tokens[i+4 : j]
-				}
-				inner--
-			}
-		}
-
-		return tokens[i+4:]
+		return body
 	}
 
 	return tokens
