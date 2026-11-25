@@ -77,9 +77,9 @@ func TestDowngradeRiskIsShown(t *testing.T) {
 // says met with preload false, so the default build, which reads that record from
 // the repository, must not show the hsts-waived statement; a build of a fixture
 // copy whose record says waived must show it on the privacy page and on the
-// verification page. The builder reads a missing record as not waived too
-// (ci/sitebuild), a branch the repository's own build no longer exercises now
-// that the record is committed, and for which this package has no fixture.
+// verification page; and a build of a fixture copy with no records directory at
+// all must show it on neither, because the builder reads a missing record as not
+// waived (ci/sitebuild's readHSTSWaived, ADR 0042).
 func TestHSTSStatementFollowsTheRecord(t *testing.T) {
 	t.Parallel()
 
@@ -105,6 +105,19 @@ func TestHSTSStatementFollowsTheRecord(t *testing.T) {
 		checkMarker(t, waived, "verify.html", "hsts-waived", true,
 			"the HSTS waiver statement",
 			"the HSTS record says waived, so the verification page states it too")
+	})
+
+	t.Run("a missing record is not waived", func(t *testing.T) {
+		t.Parallel()
+
+		unrecorded := theUnrecordedBundle(t)
+
+		checkMarker(t, unrecorded, "privacy.html", "hsts-waived", false,
+			"the HSTS waiver statement",
+			"the fixture holds no site/records/hsts.json, and the builder reads a missing record as not waived (ADR 0042), so the page states no waiver")
+		checkMarker(t, unrecorded, "verify.html", "hsts-waived", false,
+			"the HSTS waiver statement",
+			"the fixture holds no site/records/hsts.json, and the builder reads a missing record as not waived (ADR 0042), so the page states no waiver")
 	})
 }
 
