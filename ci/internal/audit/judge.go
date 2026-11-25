@@ -22,8 +22,9 @@ type Effects interface {
 	DockerSocketReachable() bool
 	// SudoAvailable reports whether the launcher's own `sudo -n true` ran.
 	SudoAvailable() bool
-	// GitHubEnvDigestChanged reports whether the $GITHUB_ENV file's sha256
-	// changed.
+	// GitHubEnvDigestChanged reports whether the sha256 of the runner's
+	// file-command directory, the $GITHUB_ENV file's, changed: every entry's
+	// name, type and bytes (issues #615, #614).
 	GitHubEnvDigestChanged() bool
 }
 

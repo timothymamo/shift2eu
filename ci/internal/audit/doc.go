@@ -60,8 +60,12 @@
 //  6. Audit checks that the work area again holds only its empty tmp/ and
 //     that cwd-audit/ is still an empty real directory, asks the model once
 //     through a Launch, with the skill from the checkout copy as the appended
-//     system prompt, fails on any change of the $GITHUB_ENV file's digest
-//     across that run (issue #614), and wants a result file in the work area -
+//     system prompt, fails on any change of the digest of the runner's
+//     file-command directory - the $GITHUB_ENV file's, beside $GITHUB_PATH,
+//     $GITHUB_OUTPUT and $GITHUB_STATE: every entry's name, type (Lstat, no
+//     link followed) and bytes, the step summary alone left out, at most 64
+//     entries and 4 MiB, a directory over either refused before the run -
+//     across that run (issues #615, #614), and wants a result file in the work area -
 //     a regular file, no link, within MaxResult, one JSON value - that holds
 //     neither the token nor the canary in its bytes or its decoded strings. It
 //     returns the bytes it read and checked.
