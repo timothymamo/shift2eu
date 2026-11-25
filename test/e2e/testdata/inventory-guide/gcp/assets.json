@@ -261,6 +261,21 @@
     "location": "europe-west1"
   },
   {
+    "name": "//memorystore.googleapis.com/projects/example-project/locations/europe-west1/instances/valkey-default",
+    "assetType": "memorystore.googleapis.com/Instance",
+    "location": "europe-west1"
+  },
+  {
+    "name": "//memorystore.googleapis.com/projects/example-project/locations/europe-west1/instances/valkey-legacy",
+    "assetType": "memorystore.googleapis.com/Instance",
+    "location": "europe-west1"
+  },
+  {
+    "name": "//memorystore.googleapis.com/projects/example-project/locations/europe-west1/instances/valkey-archive",
+    "assetType": "memorystore.googleapis.com/Instance",
+    "location": "europe-west1"
+  },
+  {
     "name": "//memcache.googleapis.com/projects/example-project/locations/europe-west1/instances/shop-cache",
     "assetType": "memcache.googleapis.com/Instance",
     "location": "europe-west1"

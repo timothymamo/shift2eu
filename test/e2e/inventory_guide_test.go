@@ -521,6 +521,27 @@ func inventoryGuides() []inventoryGuideCase {
 					id: "valkey-sessions", rawType: "memorystore.googleapis.com/Instance", category: "cache.redis",
 					capabilities: []string{"encryption-at-rest", "node-high-availability", "sharding", "snapshots", "zone-high-availability"},
 				},
+				// A Valkey instance created without a mode runs with Cluster Mode
+				// Enabled: only CLUSTER_DISABLED turns sharding off, so an absent
+				// mode is sharding. It is valkey-sessions without its mode, so it
+				// carries the same capabilities.
+				{
+					id: "valkey-default", rawType: "memorystore.googleapis.com/Instance", category: "cache.redis",
+					capabilities: []string{"encryption-at-rest", "node-high-availability", "sharding", "snapshots", "zone-high-availability"},
+				},
+				// STANDALONE is the deprecated spelling of CLUSTER_DISABLED, so this
+				// instance is valkey-1's: no sharding, and the same capabilities.
+				{
+					id: "valkey-legacy", rawType: "memorystore.googleapis.com/Instance", category: "cache.redis",
+					capabilities: []string{"encryption-at-rest", "snapshots"},
+				},
+				// An instance the assets listing holds and the instances list does
+				// not is no instance the program has read: no call gives its mode,
+				// so it is not sharded, and it has no size either (unsized).
+				{
+					id: "valkey-archive", rawType: "memorystore.googleapis.com/Instance", category: "cache.redis",
+					capabilities: []string{"encryption-at-rest"},
+				},
 				// Every node of a single-zone Valkey instance is in one zone, so the
 				// replica in each shard survives a node's loss but not a zone's.
 				{
@@ -626,9 +647,12 @@ func inventoryGuides() []inventoryGuideCase {
 				// rather than a number divided on a guess. Its nodes are its shards
 				// and their replicas.
 				{id: "sessions", count: 6, noMemoryGiB: true},
-				// A Valkey node's sizeGb is its own node's memory.
+				// A Valkey node's sizeGb is its own node's memory, and its shards
+				// times one plus their replicas are its nodes.
 				{id: "valkey-1", memoryGiB: 6.5, count: 1},
 				{id: "valkey-sessions", memoryGiB: 6.5, count: 4},
+				{id: "valkey-default", memoryGiB: 6.5, count: 4},
+				{id: "valkey-legacy", memoryGiB: 6.5, count: 1},
 				{id: "valkey-single", memoryGiB: 6.5, count: 2},
 				// A Filestore instance's capacityGb is a string in the API's JSON.
 				{id: "shared", storageGiB: 1024},
@@ -636,8 +660,9 @@ func inventoryGuides() []inventoryGuideCase {
 			},
 			// An engine the program cannot classify gets no size at all, even
 			// though the sql instances list records the instance's disk and
-			// tier.
-			unsized: []string{"shop-reports-sqlserver"},
+			// tier. So does a Valkey instance the instances list does not hold: no
+			// call gives its shards, its replicas or its node's memory.
+			unsized: []string{"shop-reports-sqlserver", "valkey-archive"},
 			// A node pool's managed instance group, a node with its disk,
 			// labelled goog-gke-node, and the boot and data disks of the group's
 			// member: the group stands for its instances.

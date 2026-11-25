@@ -107,5 +107,36 @@
     "persistenceConfig": {
       "mode": "DISABLED"
     }
+  },
+  {
+    "name": "projects/example-project/locations/europe-west1/instances/valkey-default",
+    "shardCount": 2,
+    "replicaCount": 1,
+    "nodeType": "STANDARD_SMALL",
+    "nodeConfig": {
+      "sizeGb": 6.5
+    },
+    "zoneDistributionConfig": {
+      "mode": "MULTI_ZONE"
+    },
+    "persistenceConfig": {
+      "mode": "RDB"
+    }
+  },
+  {
+    "name": "projects/example-project/locations/europe-west1/instances/valkey-legacy",
+    "mode": "STANDALONE",
+    "shardCount": 1,
+    "replicaCount": 0,
+    "nodeType": "STANDARD_SMALL",
+    "nodeConfig": {
+      "sizeGb": 6.5
+    },
+    "zoneDistributionConfig": {
+      "mode": "SINGLE_ZONE"
+    },
+    "persistenceConfig": {
+      "mode": "RDB"
+    }
   }
 ]
