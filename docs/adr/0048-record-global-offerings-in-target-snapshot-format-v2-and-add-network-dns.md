@@ -165,8 +165,22 @@ Every report marks the same offerings, the best offering and each of its ties:
   `bestOffering` when it is global, and an optional `globalTies`, the names of the global ties in the
   order of `ties`; each key is absent when it would be false or empty.
 
+The note's words are, in Markdown, "`(global)` means not bound to a region you choose: the provider
+serves the offering from its own locations, which the target's `SOURCES.md` names." and the same
+sentence as one paragraph in HTML. It follows the first table that shows a global offering, once per
+report: in a single-target report the Resources table; in a Markdown comparison the comparison's
+Resources table when it shows a global best offering, else the first target section's Resources table
+that shows one (a global tie the comparison table does not name); in an HTML comparison, which has no
+comparison table, the first target section's Resources table that shows one. In JSON the keys sit
+right after the key they qualify: `bestOfferingGlobal` after `bestOffering`, `globalTies` after `ties`.
+The assessment carries the flag (`assessment.Verdict.BestOfferingGlobal` and `GlobalTies`, read from
+the candidates' `catalog.Offering.Global`), so the three renderers read the same thing.
+
 The blockers' "no offering in the <target> catalog for <category>" names no offering, and an estimate
 names a plan whose offering is the marked best offering of the same resource, so neither is marked.
+The reasons' "`X` offers every capability ..." and "`X` does not offer ..." (and JSON's
+`reasons[].offering`) name the best offering of the same row, already marked in its own cell, so they
+stay unmarked too.
 
 ### The category `network.dns`
 

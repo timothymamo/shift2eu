@@ -39,7 +39,13 @@
 //
 // A resource carries its ID, raw type, category, region, fit, best offering,
 // the tied offerings and the required changes, the same ones the Markdown
-// report shows (assessment.Verdict.Ties and ChangesToList), and its reasons. A
+// report shows (assessment.Verdict.Ties and ChangesToList), and its reasons. In
+// version 3 only, a resource whose best offering is global (ADR 0048: not
+// bound to a region the user chooses) carries "bestOfferingGlobal": true right
+// after "bestOffering", and one with global ties carries "globalTies", their
+// names in the order of "ties", right after "ties"; each key is absent when it
+// would be false or empty (assessment.Verdict.BestOfferingGlobal, GlobalTies),
+// and version 2 writes neither. A
 // reason carries its code, its plain sentence (mapping.Reason.String, no
 // Markdown) and the target, category, offering and capability it mentions,
 // each only when set. A resource always carries its relations and its

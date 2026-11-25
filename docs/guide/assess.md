@@ -55,10 +55,14 @@ quantity that can be fractional, such as a plan's `memoryGiB` (`"0.5"`, `"1.875"
 strings, so a script never reads a rounded float. Parse them as decimals, not as floating point.
 
 `--schema-version` chooses the JSON report's version: `3`, the default, or `2`, the document earlier
-releases wrote, byte for byte. The two differ in one rule: in version 3 a total that estimated nothing
+releases wrote, byte for byte. The two differ in two rules: in version 3 a total that estimated nothing
 (`"estimated": 0`), the report's, a workload's or a compared target's, has no `amount` key at all,
 where version 2 writes `"0.00"`; its counts stay. Test for the key, or for `estimated` above 0, before
-you read an amount. Its schemas are `assessment-v3.schema.json` and `comparison-v3.schema.json`
+you read an amount. And version 3 marks a global offering, one not bound to a region you choose (see
+[Global offerings](#global-offerings)): a resource carries `"bestOfferingGlobal": true` after
+`bestOffering` when its best offering is global, and `globalTies`, the global ties' names in the
+order of `ties`, after `ties`; each key is absent when it would be false or empty, and version 2
+writes neither. Its schemas are `assessment-v3.schema.json` and `comparison-v3.schema.json`
 beside the version 2 ones ([ADR 0018](../adr/0018-version-the-json-report-format-for-the-cli-and-the-api.md),
 issue #307). `--schema-version` with any format but `json`, or a version other than 2 or 3, is a usage
 error (exit code 2).
@@ -151,6 +155,19 @@ text:
 ```text
 shift2eu: --region: target "scaleway": region "xx" is not one of the target's regions: "fr-par", "it-mil", "nl-ams", "pl-waw"
 ```
+
+### Global offerings
+
+Some offerings, such as a public DNS zone (`network.dns`), are global: not bound to a region you
+choose, the provider serves them from its own locations, which the target's `SOURCES.md` names. A
+global offering is a candidate whatever `--region` says, and the reports mark it "(global)" after its
+name wherever they name it as an offering: the best offering and each tie, a comparison's best-offering
+cell, and a required change's "(not offered by X)". The Markdown and HTML reports say what the mark
+means once, under the first table that shows one; the JSON report, version 3, carries
+`bestOfferingGlobal` and `globalTies` instead
+([ADR 0048](../adr/0048-record-global-offerings-in-target-snapshot-format-v2-and-add-network-dns.md)).
+A report that shows no global offering has neither the mark nor the note. The report's region line is
+unchanged.
 
 ### `--no-estimate`
 

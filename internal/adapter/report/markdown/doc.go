@@ -27,9 +27,14 @@
 //     resource has a relation, its relations, and last the reasons. The best
 //     offering is followed by "(tie: ...)" naming, in candidate order, the other
 //     candidates with the best one's fit and as many missing capabilities;
+//     a global offering (catalog.Offering.Global, ADR 0048), the best one or a
+//     tie, is marked "(global)" after its name, and the table that shows the
+//     report's first global offering is followed by the one note that says
+//     what the mark means and points to the target's SOURCES.md;
 //   - "## Required changes": one list item per partial verdict with required
 //     changes, in the assessment's order, "ID: capabilities (not offered by
-//     offering)", or "None." when there is none;
+//     offering)", the offering marked "(global)" when it is global, or "None."
+//     when there is none;
 //   - "## Blockers": one list item per blocker, "ID: reason", then one item per
 //     "affected by a blocker on ID" note (assessment.Verdict.AffectedBy), or
 //     "None." when there is no blocker;
@@ -79,7 +84,10 @@
 //     one column per target; "### Resources", one table row per resource in the
 //     first target's verdict order, which is the inventory's, with the ID, the
 //     category and each target's fit and best offering, without the tie note,
-//     and, for a target with estimates, its monthly estimate; the summary gains
+//     a global best offering marked "(global)", and, for a target with
+//     estimates, its monthly estimate, the table followed by the global note
+//     when it shows a global offering (else the note goes under the first
+//     target section's Resources table that shows one); the summary gains
 //     one estimate row per target with estimates, its total in its own column,
 //     and the basis of the totals; and "### Blockers on every target", one list item per shared blocker with
 //     a nested item per target naming it by display name, never by key, and

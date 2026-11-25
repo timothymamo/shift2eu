@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -54,7 +55,7 @@ func (*Reporter) Report(ctx context.Context, w io.Writer, a assessment.Assessmen
 	var b strings.Builder
 
 	writeHeader(&b, a, meta)
-	writeBody(&b, a, sectionHeading)
+	writeBody(&b, a, sectionHeading, new(bool))
 
 	if _, err := io.WriteString(w, b.String()); err != nil {
 		return fmt.Errorf("write markdown report: %w", err)
@@ -89,9 +90,13 @@ func writeHeader(b *strings.Builder, a assessment.Assessment, meta analysis.Repo
 // required changes and blockers, then the per-workload section when
 // a.ShowWorkloads and the cost summary when a has estimates, each headed by the
 // heading marker heading and the section's name. It ends with a single newline.
-func writeBody(b *strings.Builder, a assessment.Assessment, heading string) {
+// noted says whether the report has written the global note (writeGlobalNote)
+// yet; writeBody writes it under the Resources table when that table is the
+// first to show a global offering.
+func writeBody(b *strings.Builder, a assessment.Assessment, heading string, noted *bool) {
 	writeSummary(b, a.Summary, heading)
 	writeResources(b, a, heading)
+	writeGlobalNote(b, a.Verdicts, noted)
 	writeRequiredChanges(b, a.Verdicts, heading)
 	writeBlockers(b, a.Blockers, a.Verdicts, heading)
 
@@ -183,7 +188,7 @@ func writeRequiredChanges(b *strings.Builder, verdicts []assessment.Verdict, hea
 		}
 
 		b.WriteString("- " + codeSpan(v.Resource.ID, false) + ": " + strings.Join(changes, nameSeparator) +
-			" (not offered by " + codeSpan(v.BestOffering, false) + ")\n")
+			" (not offered by " + codeSpan(v.BestOffering, false) + globalMark(v.BestOfferingGlobal()) + ")\n")
 
 		items++
 	}
@@ -240,9 +245,10 @@ func writeSeparator(b *strings.Builder, columns int) {
 // renderBestOffering renders the best-offering cell of v: the best offering's
 // name, followed by "(tie: ...)" with the other candidates a reader could take
 // for it, those with the best candidate's fit and as many missing capabilities,
-// in candidate order. The best candidate is the first one.
+// in candidate order. The best candidate is the first one. A global offering,
+// the best one or a tie, is marked " (global)" after its name.
 func renderBestOffering(v assessment.Verdict) string {
-	best := codeSpan(v.BestOffering, true)
+	best := codeSpan(v.BestOffering, true) + globalMark(v.BestOfferingGlobal())
 
 	names := v.Ties()
 	if len(names) == 0 {
@@ -251,10 +257,39 @@ func renderBestOffering(v assessment.Verdict) string {
 
 	ties := make([]string, 0, len(names))
 	for _, name := range names {
-		ties = append(ties, codeSpan(name, true))
+		ties = append(ties, codeSpan(name, true)+globalMark(v.IsGlobalTie(name)))
 	}
 
 	return best + " (tie: " + strings.Join(ties, nameSeparator) + ")"
+}
+
+// globalNoteText says once per report what the global mark means (PRD #581,
+// ADR 0048).
+const globalNoteText = "`(global)` means not bound to a region you choose: the provider serves the " +
+	"offering from its own locations, which the target's `SOURCES.md` names."
+
+// globalMark returns what a report writes after the name of an offering:
+// " (global)" when global is true, and nothing otherwise.
+func globalMark(global bool) string {
+	if global {
+		return " (global)"
+	}
+
+	return ""
+}
+
+// writeGlobalNote writes the global note, followed by a blank line, when the
+// table just written shows a global offering of verdicts and *noted is false,
+// and then sets *noted, so a report writes it once, under the first table that
+// shows a global offering.
+func writeGlobalNote(b *strings.Builder, verdicts []assessment.Verdict, noted *bool) {
+	if *noted || !slices.ContainsFunc(verdicts, assessment.Verdict.ShowsGlobal) {
+		return
+	}
+
+	b.WriteString(globalNoteText + "\n\n")
+
+	*noted = true
 }
 
 // renderReasons renders reasons one after the other, separated by "; ".

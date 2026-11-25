@@ -24,7 +24,13 @@
 //     Required changes and Blockers, both in one box; Workloads, one box per
 //     workload (its h4 name, a bubble per fit showing its count, whose fit a
 //     screen reader reads, and its estimate in euros); and Cost estimate, the
-//     total and one closing line. The fragment names the source's cost
+//     total and one closing line. A global offering is marked "(global)" in
+//     the Resources table's best-offering cell (the best one and each tie)
+//     and in a required change's "(not offered by X)", as in the Markdown
+//     report, and the first Resources table that shows one is followed by
+//     the one paragraph that says what the mark means (ADR 0048), also in a
+//     comparison, under the first target section that shows one. The
+//     fragment names the source's cost
 //     nowhere (round 3, item 04): the Markdown and JSON reports keep it;
 //   - for a comparison, the title naming every target, the header line with
 //     one catalog link per target, then one h3 section per target holding its
