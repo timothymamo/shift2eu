@@ -516,12 +516,12 @@ func TestMapNoOfferingForKafka(t *testing.T) {
 		Category: taxonomy.MessagingKafka,
 	}}
 
-	if diff := cmp.Diff(want, got.Reasons); diff != "" {
-		t.Errorf("Reasons mismatch (-want +got):\n%s", diff)
-	}
-
 	if len(got.Reasons) != 1 {
 		t.Fatalf("Reasons = %v, want exactly one", got.Reasons)
+	}
+
+	if diff := cmp.Diff(want, got.Reasons); diff != "" {
+		t.Errorf("Reasons mismatch (-want +got):\n%s", diff)
 	}
 
 	const wantSentence = "no offering in the UpCloud catalog for messaging.kafka"

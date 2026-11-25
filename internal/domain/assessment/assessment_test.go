@@ -373,12 +373,12 @@ func TestAssessBlockerForKafkaOnUpCloud(t *testing.T) {
 		Reason:     mapping.Reason{Code: mapping.NoOffering, Target: "UpCloud", Category: kafka},
 	}}
 
-	if diff := cmp.Diff(wantBlockers, got.Blockers); diff != "" {
-		t.Errorf("Blockers mismatch (-want +got):\n%s", diff)
-	}
-
 	if len(got.Blockers) != 1 {
 		t.Fatalf("Blockers = %v, want exactly one", got.Blockers)
+	}
+
+	if diff := cmp.Diff(wantBlockers, got.Blockers); diff != "" {
+		t.Errorf("Blockers mismatch (-want +got):\n%s", diff)
 	}
 
 	const wantReason = "no offering in the UpCloud catalog for messaging.kafka"
