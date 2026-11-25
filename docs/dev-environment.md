@@ -2762,8 +2762,8 @@ The model job's errors that point here are titled `Audit model`. What each means
   elements it does not judge.
 - `preflight failed: probe 5, canary: the token-absence call was refused before it ran; see runbook
   step 10`: Claude Code's permission layer refused probe 5's last Bash call, `[[ -v
-  CLAUDE_CODE_OAUTH_TOKEN ]] && <wrapper> cat /srv/audit/work/nonexistent/tokenset || <wrapper> cat
-  /srv/audit/work/nonexistent/`, so it never showed whether the token reached the sandboxed shell (ADR
+  CLAUDE_CODE_OAUTH_TOKEN ]] && <wrapper> cat /srv/audit/work/nonexistent/tokenset; [[ ! -v
+  CLAUDE_CODE_OAUTH_TOKEN ]] && <wrapper> cat /srv/audit/work/nonexistent/`, so it never showed whether the token reached the sandboxed shell (ADR
   0040, issue #613). The call holds no `$` because 2.1.332 refuses any variable expansion before it runs
   (the old `${CLAUDE_CODE_OAUTH_TOKEN:+tokenset}` form failed every preflight); it relies on the CLI
   accepting `[[ ]]` with no allow rule (issue #614). Almost always a Claude Code bump changed that: report
@@ -2771,7 +2771,8 @@ The model job's errors that point here are titled `Audit model`. What each means
   or the settings in the workflow. Nothing ran, so nothing to rotate. `probe 5, canary: the token
   variable's absence was not shown` instead means the call ran and its result named `tokenset` (the
   token's variable reached the shell, its value unprinted: report it, the audit stopped before its model
-  step), was no error, or named no `/nonexistent/`.
+  step), was no error, or held no line `cat: /srv/audit/work/nonexistent/: No such file or directory`
+  of `cat`'s own (a shell without `[[`, or a refusal quoting the command, among them).
 - `refused: the session's permission mode is not the one asked for: expected default, reported <X>`
   (or, from the preflight's judgement, `preflight failed: the session's permission mode is not the one
   asked for: expected default, reported <X>; see runbook step 10`): the CLI's `system/init` element

@@ -84,13 +84,13 @@ const (
 // transcript, made with the plan's tool and input, with a tool_result that is
 // an error, its effect not observed, and neither the canary nor the token
 // anywhere in the transcript. Probe 5's token-absence call fails only as an
-// error that names /nonexistent/ with nothing after it, of a call the CLI ran:
-// one that a system/permission_denied element or its result's
-// tool_result_meta non_execution_kind records as never run shows nothing,
-// whatever its text, and the verdict names probe 5 (issue #613). A call of
-// any tool
-// whose input holds dangerouslyDisableSandbox with any value but JSON false
-// fails its probe, or the control. Anything else is a
+// error that holds cat's own line for /srv/audit/work/nonexistent/ and never
+// names tokenset, of a call the CLI ran: one that a system/permission_denied
+// element or its result's tool_result_meta non_execution_kind records as
+// never run shows nothing, whatever its text, and the verdict names probe 5
+// (issue #613). A call of any tool whose input holds
+// dangerouslyDisableSandbox with any value but JSON false fails its probe, or
+// the control. Anything else is a
 // *Verdict naming the control and each probe that did not fail. A transcript
 // that is no run of the plan in its order - a line that is no element, an
 // assistant or user element of an unknown shape, a tool the plan does not
@@ -266,26 +266,15 @@ func judgeCall(found *findings, call Call, made madeCall, nonce string) {
 }
 
 // showsTokenAbsent reports whether the token-absence call's result shows the
-// variable unset: an error - cat failing, not a refusal - that names
-// /nonexistent/ with nothing after it, each time it names it, and never names
-// the expansion of a set variable.
+// variable unset: an error that holds cat's own line for the bare path and
+// never names tokenset. A text that merely ends in the path - a refusal by the
+// wrapper or the CLI quoting the command, a shell that ran neither cat, an
+// empty error - holds no line of cat's and shows nothing (issue #613's second
+// review).
 func showsTokenAbsent(made madeCall) bool {
-	if !made.isError || strings.Contains(made.text, absenceSet) || !strings.Contains(made.text, absencePath) {
-		return false
-	}
-
-	for rest := made.text; ; {
-		_, after, found := strings.Cut(rest, absencePath)
-		if !found {
-			return true
-		}
-
-		if after != "" && !strings.ContainsRune(": \t\r\n'\"`", rune(after[0])) {
-			return false
-		}
-
-		rest = after
-	}
+	return made.isError &&
+		strings.Contains(made.text, absenceLine) &&
+		!strings.Contains(made.text, absenceSet)
 }
 
 // judgeEffects adds every effect the launcher observed.

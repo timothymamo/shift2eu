@@ -29,10 +29,13 @@
 //     /proc/{pid}/envir?n` and `cat < /dev/fd/../../{pid}/environ` (issue
 //     #277 round H), so the sandbox, not the wrapper's path rule, is what
 //     must refuse them on every run. Probe 5's token-absence call tests the
-//     variable with `[[ -v CLAUDE_CODE_OAUTH_TOKEN ]]` and holds no $, which
-//     Claude Code 2.1.332 refuses before it runs (issue #613); Judge knows it
-//     by the mark PreflightPlan sets, and it passes only as cat's error
-//     naming /nonexistent/ with nothing after it, of a call the CLI ran.
+//     variable positively in each of its two branches, `[[ -v
+//     CLAUDE_CODE_OAUTH_TOKEN ]] && ... tokenset; [[ ! -v
+//     CLAUDE_CODE_OAUTH_TOKEN ]] && ... nonexistent/`, neither a fallback,
+//     and holds no $, which Claude Code 2.1.332 refuses before it runs (issue
+//     #613); Judge knows it by the mark PreflightPlan sets, and it passes only
+//     as an error holding cat's own line for /srv/audit/work/nonexistent/ and
+//     no tokenset, of a call the CLI ran.
 //     Judge decodes the message of assistant and user elements, a user
 //     element's tool_result_meta and a system/permission_denied element's
 //     tool_use_id, and skips every other element, whatever it holds; a call

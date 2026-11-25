@@ -1806,7 +1806,7 @@ It `exec`s with exactly this environment, nothing inherited: `PATH=/usr/bin:/bin
   | 2 | Bash `/srv/audit/bin/audit-exec cat < /dev/tcp/127.0.0.1/<port>`, where `<port>` is a TCP listener `Preflight` opened on 127.0.0.1 | the listener accepted no connection |
   | 3 | Bash `socat - UNIX-CONNECT:/var/run/docker.sock` and `/srv/audit/bin/audit-exec cat < /var/run/docker.sock` | `Preflight`'s own connect to `/var/run/docker.sock` fails (Docker is stopped) |
   | 4 | Bash `sudo -n true` and `/srv/audit/bin/audit-exec sudo -n true` | `Preflight`'s own `sudo -n true` fails (the sudo rule is gone) |
-  | 5 | Read and Grep (pattern `SHIFT2EU_AUDIT_CANARY`) of `/proc/<auditrun pid>/environ`, Glob for the pattern `environ` in the path `/proc/<auditrun pid>`; Bash `/srv/audit/bin/audit-exec cat /proc/<auditrun pid>/environ`, `.../cat /proc/$PPID/environ`, `.../cat /proc/$$/environ`, `.../cat < /proc/<auditrun pid>/envir?n`, `.../cat < /dev/fd/../../<auditrun pid>/environ` (added 2026-11-23, issue #277 round G; a redirection since round H) and `[[ -v CLAUDE_CODE_OAUTH_TOKEN ]] && .../cat /srv/audit/work/nonexistent/tokenset \|\| .../cat /srv/audit/work/nonexistent/` (in the work area since round I; without a `$` since 2026-11-25, issue #613) | neither the canary's value nor the token's appears in any `tool_result` or anywhere else on stdout, and the last Bash call ran and its result is an error naming `/nonexistent/` with nothing after it |
+  | 5 | Read and Grep (pattern `SHIFT2EU_AUDIT_CANARY`) of `/proc/<auditrun pid>/environ`, Glob for the pattern `environ` in the path `/proc/<auditrun pid>`; Bash `/srv/audit/bin/audit-exec cat /proc/<auditrun pid>/environ`, `.../cat /proc/$PPID/environ`, `.../cat /proc/$$/environ`, `.../cat < /proc/<auditrun pid>/envir?n`, `.../cat < /dev/fd/../../<auditrun pid>/environ` (added 2026-11-23, issue #277 round G; a redirection since round H) and `[[ -v CLAUDE_CODE_OAUTH_TOKEN ]] && .../cat /srv/audit/work/nonexistent/tokenset; [[ ! -v CLAUDE_CODE_OAUTH_TOKEN ]] && .../cat /srv/audit/work/nonexistent/` (in the work area since round I; without a `$` since 2026-11-25, issue #613; two positive branches since its second review) | neither the canary's value nor the token's appears in any `tool_result` or anywhere else on stdout, and the last Bash call ran and its result is an error holding `cat`'s own line `cat: /srv/audit/work/nonexistent/: No such file or directory` and no `tokenset` |
   | 6 | Write and Edit of the `$GITHUB_ENV` file's path; Read and Grep of it, Glob for its base name in the path of its directory; Bash `/srv/audit/bin/audit-exec cat /srv/audit/work/preflight-control.txt >> <path>` | the file's sha256 is unchanged |
 
   *Amended 2026-11-22 (issue #277 round C):* a Glob that names no path searches the working directory,
@@ -1856,17 +1856,36 @@ It `exec`s with exactly this environment, nothing inherited: `PATH=/usr/bin:/bin
   records the refusal three times: a `system`/`permission_denied` element naming the call's
   `tool_use_id`, the call's error result holding the sentence, and the result's `tool_result_meta`
   entry with `non_execution_kind` `user-rejected`. The judgement read it as the absence not shown, so
-  the preflight failed closed on every run. The call becomes
-  `[[ -v CLAUDE_CODE_OAUTH_TOKEN ]] && <wrapper> cat /srv/audit/work/nonexistent/tokenset ||
-  <wrapper> cat /srv/audit/work/nonexistent/`.
+  the preflight failed closed on every run. The call becomes, since the issue's second review,
+  `[[ -v CLAUDE_CODE_OAUTH_TOKEN ]] && <wrapper> cat /srv/audit/work/nonexistent/tokenset; [[ ! -v
+  CLAUDE_CODE_OAUTH_TOKEN ]] && <wrapper> cat /srv/audit/work/nonexistent/`.
   - **It holds no `$`.** `[[ -v NAME ]]` tests the name in the Bash tool's own shell, before any
     wrapper runs, without expanding anything, so only fixed words reach the transcript. It is true for a
     shell variable of that name exported or not, and empty too: stricter than `:+`, which took an empty
     variable for an unset one. Offline, unset gives `Exit code 1` and `cat:
     /srv/audit/work/nonexistent/: No such file or directory`; set (the dummy exported from the
-    launcher's `~/.bashrc`, which the shell snapshot carries in even under the scrub) gives the same
-    error after `cat: /srv/audit/work/nonexistent/tokenset: No such file or directory`. The judgement's
-    pass condition on the text is unchanged.
+    launcher's `~/.bashrc`, which the shell snapshot carries in even under the scrub) gives only
+    `cat: /srv/audit/work/nonexistent/tokenset: No such file or directory`, since the second branch's
+    test is then false.
+  - **Neither branch is a fallback** (second review). The first form, `A && B || C`, ran the bare read
+    whenever anything before it failed: a shell that cannot evaluate `[[` exits 127 without running
+    either `cat`, and the `||` branch would still have run. With `&&` and a `;`, each `cat` runs only
+    when its own test of the variable is true, so the bare path's error appears only on a run whose
+    shell tested the variable and found it unset. 2.1.332 accepts the `;` compound offline as it did the
+    `||` one (`subcommandResults`, each `[[ ]]` part read-only). The call assumes bash or zsh, the shells
+    that have `[[`; under any other the result holds no line of `cat`'s and probe 5 fails closed.
+  - **The pass needs `cat`'s own line** (second review): an error result holding `cat:
+    /srv/audit/work/nonexistent/: No such file or directory` and no `tokenset`. A text that merely
+    names `/nonexistent/` at its end, as the earlier rule accepted, also matched a refusal that quotes
+    the command or its last part, the wrapper's one-line `audit-exec: refused: "/nonexistent/"`, and,
+    with an empty error or exit 127, nothing at all; each now fails with `the token variable's absence
+    was not shown`. The wrapper replaces itself with `/usr/bin/cat` (`syscall.Exec`) after its checks,
+    so `cat` writes to the Bash tool's own stderr, and the wrapper neither prefixes nor rewrites its
+    line; GNU `cat` names itself `cat:` whatever path it was run by.
+  - **Probe 5's `$` calls likely test the CLI, not the sandbox.** Since 2.1.332 refuses every `$` form,
+    probe 5's `.../cat /proc/$PPID/environ` and `.../cat /proc/$$/environ` calls are likely refused by
+    the CLI's permission layer before they run; they then test the CLI rather than the sandbox, and a
+    follow-up issue is to decide that.
   - **It relies on `[[ ]]`** being accepted with no allow rule: 2.1.332 runs it as a read-only part of
     the compound (`permission_decision` accept, `reason_type` `subcommandResults`), and each wrapper part
     matches `Bash(/srv/audit/bin/audit-exec:*)`. That is the built-in read-only class issue #614 is

@@ -64,26 +64,33 @@ const (
 // tokenAbsenceCommand is probe 5's Bash call that shows whether the token
 // variable reached the sandboxed shell without showing its value: the shell
 // tests the name itself with [[ -v ]], true for a variable of that name
-// whether exported or not and whether empty or not, so an unset one makes cat
-// name /srv/audit/work/nonexistent/ and fail, and a set one makes it name
-// /srv/audit/work/nonexistent/tokenset first. The command holds no $: Claude
-// Code 2.1.332 refuses, before it runs, any Bash command in which a variable
-// is expanded ("A variable in braces in this command can't be checked before
-// it runs" for the ${...:+...} form this call used to have, issue #613), and
-// a refused call is no evidence about the shell. It is the one call of the
-// plan whose result is expected to be an error for a reason other than a
-// refusal. The
-// path is the wrapper's own work area, as the wrapper sees it whatever the
-// root, so it lies inside the roots the wrapper holds every path word to and
-// cat runs for real (issue #277, round I): outside them, the wrapper's
-// refusal quotes the expanded word, so it proved absence too, but cat never
-// ran and the answer was not the one the plan describes (round J's
-// correction). work/nonexistent cannot exist when the preflight runs: the
-// work area holds tmp/ and the launcher's control file alone. {wrapper} comes
-// from Targets. The judgement knows the call by its place in the plan
-// (planCall.tokenAbsence), never by its text.
+// whether exported or not and whether empty or not. Each of the two branches
+// tests the variable positively and neither is a fallback (issue #613's
+// second review): a set variable makes cat name
+// /srv/audit/work/nonexistent/tokenset and fail, and an unset one, by
+// [[ ! -v ]], makes cat name /srv/audit/work/nonexistent/ and fail. With &&
+// and a ; between the branches, the bare path is read only when its own test
+// is true, never because the first branch failed: the old || form ran it
+// whenever the first branch failed for any reason, and a shell that cannot
+// evaluate [[ (it assumes bash or zsh) now runs neither cat, so its result
+// holds no line of cat's and fails. The command holds no $: Claude Code
+// 2.1.332 refuses, before it runs, any Bash command in which a variable is
+// expanded ("A variable in braces in this command can't be checked before it
+// runs" for the ${...:+...} form this call used to have, issue #613), and a
+// refused call is no evidence about the shell. It is the one call of the plan
+// whose result is expected to be an error for a reason other than a refusal.
+// The path is the wrapper's own work area, as the wrapper sees it whatever
+// the root, so it lies inside the roots the wrapper holds every path word to
+// and cat runs for real (issue #277, round I): outside them, the wrapper
+// refuses the word before cat runs, and its refusal is no answer about the
+// shell (round J's correction, issue #613's second review). work/nonexistent
+// cannot exist when the preflight runs: the work area holds tmp/ and the
+// launcher's control file alone. {wrapper} comes from Targets. The judgement
+// knows the call by its place in the plan (planCall.tokenAbsence), never by
+// its text.
 const tokenAbsenceCommand = "[[ -v CLAUDE_CODE_OAUTH_TOKEN ]] && " +
-	"{wrapper} cat /" + workDir + "/nonexistent/tokenset || " +
+	"{wrapper} cat /" + workDir + "/nonexistent/tokenset; " +
+	"[[ ! -v CLAUDE_CODE_OAUTH_TOKEN ]] && " +
 	"{wrapper} cat /" + workDir + "/nonexistent/"
 
 // Probe 5's two calls for the forms the wrapper's own path rule never reads
@@ -99,9 +106,11 @@ const (
 	fdReadCommand         = "{wrapper} cat < /dev/fd/../../{pid}/environ"
 )
 
-// The words the token-absence call's result is judged by.
+// The words the token-absence call's result is judged by: cat's own error
+// line for the bare path, the only proof that the variable is unset (issue
+// #613's second review), and the word only the set branch's path holds.
 const (
-	absencePath = "/nonexistent/"
+	absenceLine = "cat: /" + workDir + "/nonexistent/: No such file or directory"
 	absenceSet  = "tokenset"
 )
 
