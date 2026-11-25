@@ -1673,10 +1673,10 @@ func TestInventoryReadsSchemaVersion2(t *testing.T) {
 
 // TestInventoryReadsEveryTaxonomyCategory pins that a file of schema version 1
 // or 2 may hold a resource of every category of the taxonomy, the seven PRD #552
-// adds included (ADR 0046), and that a version 2 file gives each of them the size
-// fields the format allows it. A value the taxonomy does not know is still
-// refused: cache.memcached, the mistake a Redis cache invites, since Memcached is
-// not the Redis protocol and no target serves it.
+// adds and the two PRD #571 adds included, and that a version 2 file gives each
+// of them the size fields the format allows it. A value the taxonomy does not
+// know is still refused: cache.memcached, the mistake a Redis cache invites,
+// since Memcached is not the Redis protocol and no target serves it.
 func TestInventoryReadsEveryTaxonomyCategory(t *testing.T) {
 	t.Parallel()
 
@@ -1730,6 +1730,23 @@ func TestInventoryReadsEveryTaxonomyCategory(t *testing.T) {
 			rawType:  "AWS::EFS::FileSystem",
 			size:     `"storageGiB": 500`,
 			wantSize: &inventory.Size{StorageGiB: ptr(500.0)},
+		},
+		// PRD #571's two categories are sized per node, as a database is, and
+		// written as values for the reason the taxonomy's tests give: this file must
+		// compile before their constants exist.
+		{
+			name:     "search.opensearch",
+			category: taxonomy.Category("search.opensearch"),
+			rawType:  "AWS::OpenSearchService::Domain",
+			size:     `"vcpus": 2, "memoryGiB": 8, "storageGiB": 100, "count": 3`,
+			wantSize: &inventory.Size{VCPUs: ptr(2.0), MemoryGiB: ptr(8.0), StorageGiB: ptr(100.0), Count: ptr(3)},
+		},
+		{
+			name:     "messaging.kafka",
+			category: taxonomy.Category("messaging.kafka"),
+			rawType:  "AWS::MSK::Cluster",
+			size:     `"vcpus": 2, "memoryGiB": 8, "storageGiB": 1000, "count": 3`,
+			wantSize: &inventory.Size{VCPUs: ptr(2.0), MemoryGiB: ptr(8.0), StorageGiB: ptr(1000.0), Count: ptr(3)},
 		},
 	}
 

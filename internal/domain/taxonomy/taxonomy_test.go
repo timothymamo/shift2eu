@@ -77,6 +77,12 @@ func TestParseCategory(t *testing.T) {
 		{name: "serverless container", in: "serverless.container", want: taxonomy.ServerlessContainer},
 		{name: "registry container", in: "registry.container", want: taxonomy.RegistryContainer},
 		{name: "storage file", in: "storage.file", want: taxonomy.StorageFile},
+		// The two categories PRD #571 adds. They are written as the value, the name
+		// the inventory file and the report spell, and not as the package's
+		// constants, so this file compiles while those constants do not exist yet:
+		// what a file or a report spells is the whole behaviour here.
+		{name: "search opensearch", in: "search.opensearch", want: taxonomy.Category("search.opensearch")},
+		{name: "messaging kafka", in: "messaging.kafka", want: taxonomy.Category("messaging.kafka")},
 		{name: "unclassified", in: "unclassified", want: taxonomy.Unclassified},
 	}
 
@@ -117,6 +123,12 @@ func TestParseCategoryRejectsUnknown(t *testing.T) {
 		{name: "memcached", in: "cache.memcached"},
 		{name: "cache without a kind", in: "cache"},
 		{name: "load balancer under the compute family", in: "compute.loadbalancer"},
+		// Elasticsearch is not OpenSearch: none of the three targets runs it, and
+		// from 7.14 its own clients refuse a server that is not Elasticsearch
+		// (PRD #571, Names). Kinesis speaks its own protocol and no target
+		// equivalent exists (PRD #552, Left out).
+		{name: "elasticsearch", in: "search.elasticsearch"},
+		{name: "kinesis", in: "messaging.kinesis"},
 	}
 
 	for _, tc := range tests {
@@ -192,8 +204,9 @@ func TestParseErrorsAreBounded(t *testing.T) {
 func TestCategories(t *testing.T) {
 	t.Parallel()
 
-	// The whole vocabulary, sorted by value: the ten categories of ADR 0011 and 0023
-	// and the seven PRD #552 adds. Unclassified is one of them.
+	// The whole vocabulary, sorted by value: the ten categories of ADR 0011 and 0023,
+	// the seven PRD #552 adds and the two PRD #571 adds. Unclassified is one of
+	// them.
 	want := []taxonomy.Category{
 		taxonomy.CacheRedis,
 		taxonomy.ComputeBareMetal,
@@ -202,10 +215,15 @@ func TestCategories(t *testing.T) {
 		taxonomy.DatabaseMySQL,
 		taxonomy.DatabasePostgreSQL,
 		taxonomy.KubernetesManaged,
+		// PRD #571's two categories, written as values for the reason
+		// TestParseCategory gives: this test must compile before their constants
+		// exist, and what it pins is the value, at its place in the order.
+		taxonomy.Category("messaging.kafka"),
 		taxonomy.MessagingQueue,
 		taxonomy.MessagingTopic,
 		taxonomy.NetworkLoadBalancer,
 		taxonomy.RegistryContainer,
+		taxonomy.Category("search.opensearch"),
 		taxonomy.ServerlessContainer,
 		taxonomy.ServerlessFunction,
 		taxonomy.StorageBlock,

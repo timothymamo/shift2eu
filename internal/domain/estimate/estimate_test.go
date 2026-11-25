@@ -131,6 +131,10 @@ func TestPricingOf(t *testing.T) {
 		{name: "serverless.container", category: taxonomy.ServerlessContainer, want: estimate.ByUsage},
 		{name: "network.loadbalancer", category: taxonomy.NetworkLoadBalancer, want: estimate.NotPriced},
 		{name: "registry.container", category: taxonomy.RegistryContainer, want: estimate.NotPriced},
+		// PRD #571's two categories are priced by plan, on vCPUs and memory, as
+		// every plan-priced category but cache.redis is.
+		{name: "search.opensearch", category: searchCategory, want: estimate.ByPlan},
+		{name: "messaging.kafka", category: kafkaCategory, want: estimate.ByPlan},
 		{name: "unclassified", category: taxonomy.Unclassified, want: estimate.NotPriced},
 		{name: "a category the taxonomy does not know", category: taxonomy.Category("quantum.widget"), want: estimate.NotPriced},
 	}
@@ -1754,6 +1758,140 @@ func TestFor(t *testing.T) {
 			wantExact:     "50",
 			wantPlanExact: "40",
 		},
+		// PRD #571's two categories are plan-priced as a database is, but their
+		// storage is per node: a search cluster and a Kafka broker set split their
+		// data across their nodes, and each source sizes storage per node (PRD #571,
+		// Estimates).
+		{
+			name: "search.opensearch: the cheapest covering plan per data node, and storage per node",
+			resource: searchResource(&inventory.Size{
+				VCPUs:      f(2),
+				MemoryGiB:  f(8),
+				StorageGiB: f(200),
+				Count:      n(3),
+			}, &inventory.Usage{HoursPerMonth: f(365)}),
+			offerings: []catalog.Offering{searchOffering("Example Search",
+				nodePlan("SEARCH-4x16", 4, 16, 120, 500000),
+				nodePlan("SEARCH-2x8", 2, 8, 60, 300000))},
+			region: testutil.PricedDefaultRegion,
+			want: estimate.Estimate{
+				Region:    testutil.PricedDefaultRegion,
+				Estimated: true,
+				Offering:  "Example Search",
+				Plan:      pricedPlan("SEARCH-2x8", 2, 8000, 60, 300000),
+				// 30 × 3 × 365/730 = 45; (200 − 60) × 0.10 × 3 = 42.
+				Monthly: estimate.FromAmount(870000),
+				Breakdown: estimate.Breakdown{
+					Plan:    estimate.FromAmount(450000),
+					Storage: estimate.FromAmount(420000),
+				},
+			},
+			wantMonthly:   "87.00",
+			wantExact:     "87",
+			wantPlanExact: "45",
+		},
+		{
+			// The plans are given out of price order, so the cheapest covering one
+			// wins rather than the first.
+			name:     "messaging.kafka: the cheapest covering broker plan, per broker",
+			resource: kafkaResource(&inventory.Size{VCPUs: f(2), MemoryGiB: f(8), Count: n(3)}, nil),
+			offerings: []catalog.Offering{kafkaOffering("Example Kafka",
+				nodePlan("KAFKA-4x16", 4, 16, 120, 350000),
+				nodePlan("KAFKA-2x8", 2, 8, 60, 200000))},
+			region: testutil.PricedDefaultRegion,
+			want: estimate.Estimate{
+				Region:       testutil.PricedDefaultRegion,
+				Estimated:    true,
+				Offering:     "Example Kafka",
+				Plan:         pricedPlan("KAFKA-2x8", 2, 8000, 60, 200000),
+				Monthly:      estimate.FromAmount(600000),
+				Breakdown:    estimate.Breakdown{Plan: estimate.FromAmount(600000)},
+				HoursAssumed: true,
+			},
+			wantMonthly: "60.00",
+			wantExact:   "60",
+		},
+		{
+			// No count: one node, and the estimate says the count was assumed.
+			name: "search.opensearch: no count is one data node, with the count assumed",
+			resource: searchResource(&inventory.Size{
+				VCPUs:      f(2),
+				MemoryGiB:  f(8),
+				StorageGiB: f(200),
+			}, nil),
+			offerings: []catalog.Offering{searchOffering("Example Search",
+				nodePlan("SEARCH-2x8", 2, 8, 60, 300000))},
+			region: testutil.PricedDefaultRegion,
+			want: estimate.Estimate{
+				Region:    testutil.PricedDefaultRegion,
+				Estimated: true,
+				Offering:  "Example Search",
+				Plan:      pricedPlan("SEARCH-2x8", 2, 8000, 60, 300000),
+				// 30 × 1; (200 − 60) × 0.10 × 1 = 14.
+				Monthly: estimate.FromAmount(440000),
+				Breakdown: estimate.Breakdown{
+					Plan:    estimate.FromAmount(300000),
+					Storage: estimate.FromAmount(140000),
+				},
+				CountAssumed: true,
+				HoursAssumed: true,
+			},
+			wantMonthly: "44.00",
+			wantExact:   "44",
+		},
+		{
+			// A plan is matched on vCPUs and memory together, so either alone is no
+			// size, whatever the storage and the count say.
+			name: "search.opensearch: no vcpus is no size",
+			resource: searchResource(&inventory.Size{
+				MemoryGiB:  f(8),
+				StorageGiB: f(200),
+				Count:      n(3),
+			}, nil),
+			offerings: []catalog.Offering{searchOffering("Example Search",
+				nodePlan("SEARCH-2x8", 2, 8, 60, 300000))},
+			region: testutil.PricedDefaultRegion,
+			want:   estimate.Estimate{Region: testutil.PricedDefaultRegion, Reason: estimate.NoSize},
+		},
+		{
+			name:     "messaging.kafka: no memory is no size",
+			resource: kafkaResource(&inventory.Size{VCPUs: f(2), Count: n(3)}, nil),
+			offerings: []catalog.Offering{kafkaOffering("Example Kafka",
+				nodePlan("KAFKA-2x8", 2, 8, 60, 200000))},
+			region: testutil.PricedDefaultRegion,
+			want:   estimate.Estimate{Region: testutil.PricedDefaultRegion, Reason: estimate.NoSize},
+		},
+		{
+			// The same size as database.postgresql's "storage once, not per node"
+			// case above: there the 80 GiB above what the plan includes are 8.00 for
+			// the service, here they are 8.00 for each of the cluster's 3 nodes.
+			name: "search.opensearch: a database's size, with its storage per node",
+			resource: searchResource(&inventory.Size{
+				VCPUs:      f(2),
+				MemoryGiB:  f(4),
+				StorageGiB: f(100),
+				Count:      n(3),
+			}, nil),
+			offerings: []catalog.Offering{searchOffering("Example Search",
+				nodePlan("SEARCH-1", 2, 4, 20, 200000))},
+			region: testutil.PricedDefaultRegion,
+			want: estimate.Estimate{
+				Region:    testutil.PricedDefaultRegion,
+				Estimated: true,
+				Offering:  "Example Search",
+				Plan:      pricedPlan("SEARCH-1", 2, 4000, 20, 200000),
+				// 20 × 3 = 60; (100 − 20) × 0.10 × 3 = 24.
+				Monthly: estimate.FromAmount(840000),
+				Breakdown: estimate.Breakdown{
+					Plan:    estimate.FromAmount(600000),
+					Storage: estimate.FromAmount(240000),
+				},
+				HoursAssumed: true,
+			},
+			wantMonthly:   "84.00",
+			wantExact:     "84",
+			wantPlanExact: "60",
+		},
 		{
 			name:      "storage.file: the provisioned GiB, once",
 			resource:  fileResource(&inventory.Size{StorageGiB: f(500)}),
@@ -2380,6 +2518,71 @@ func queueResource() inventory.Resource {
 // none (ADR 0046).
 func cachePlan(name string, vcpus, memoryGiB int64, amount catalog.Amount) catalog.Plan {
 	return plan(name, vcpus, memoryGiB*1000, 0, amount)
+}
+
+// searchCategory and kafkaCategory are PRD #571's two categories, as the values
+// the taxonomy, the inventory file and the report share. They are written as
+// values, not as the package's constants, so this file compiles while those
+// constants do not exist yet.
+const (
+	searchCategory = taxonomy.Category("search.opensearch")
+	kafkaCategory  = taxonomy.Category("messaging.kafka")
+)
+
+// nodePlan is one plan of a search.opensearch or messaging.kafka offering: the
+// vCPUs and memory of one node, the storage it includes per node and its monthly
+// price per node.
+func nodePlan(name string, vcpus, memoryGiB, includedStorageGiB int64, amount catalog.Amount) catalog.Plan {
+	return plan(name, vcpus, memoryGiB*1000, includedStorageGiB, amount)
+}
+
+// nodeOffering sells the plans given for category c, each the price of one node,
+// and prices the GiB above what a plan includes at storageAmount a GiB.
+func nodeOffering(name string, c taxonomy.Category, storageAmount catalog.Amount, plans ...catalog.Plan) catalog.Offering {
+	return catalog.Offering{
+		Name:          name,
+		Categories:    []taxonomy.Category{c},
+		Regions:       []string{testutil.PricedDefaultRegion},
+		Plans:         plans,
+		StoragePrices: []catalog.Price{price(storageAmount)},
+	}
+}
+
+// searchOffering sells the search.opensearch plans given, each the price of one
+// data node, and prices the GiB above what a plan includes at 0.10 EUR a GiB.
+func searchOffering(name string, plans ...catalog.Plan) catalog.Offering {
+	return nodeOffering(name, searchCategory, 1000, plans...)
+}
+
+// kafkaOffering sells the messaging.kafka plans given, priced as a search
+// cluster is: per broker, and the GiB above what a plan includes a GiB.
+func kafkaOffering(name string, plans ...catalog.Plan) catalog.Offering {
+	return nodeOffering(name, kafkaCategory, 1000, plans...)
+}
+
+// searchResource is a search.opensearch resource: the size of one data node, the
+// data nodes and how much of a month the cluster runs.
+func searchResource(size *inventory.Size, usage *inventory.Usage) inventory.Resource {
+	return inventory.Resource{
+		ID:       "search-example",
+		RawType:  "AWS::OpenSearchService::Domain",
+		Category: searchCategory,
+		Region:   "eu-west-1",
+		Size:     size,
+		Usage:    usage,
+	}
+}
+
+// kafkaResource is a messaging.kafka resource, sized per broker.
+func kafkaResource(size *inventory.Size, usage *inventory.Usage) inventory.Resource {
+	return inventory.Resource{
+		ID:       "kafka-example",
+		RawType:  "AWS::MSK::Cluster",
+		Category: kafkaCategory,
+		Region:   "eu-west-1",
+		Size:     size,
+		Usage:    usage,
+	}
 }
 
 // cacheOffering sells the cache plans given, all of them matched on memory alone,

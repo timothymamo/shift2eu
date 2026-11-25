@@ -484,6 +484,53 @@ func TestMapDoesNotMutateInputs(t *testing.T) {
 	}
 }
 
+// TestMapNoOfferingForKafka pins what a target that runs no Kafka tells a
+// messaging.kafka resource (PRD #571, Mapping and report): UpCloud's product
+// list has no broker, so the category has no offering there, the fit is none,
+// there is no candidate, and the reason names the target and the category in the
+// sentence the report shows. The sentence's shape is pinned by TestReasonString;
+// here it is the one a report carries for the new category.
+func TestMapNoOfferingForKafka(t *testing.T) {
+	t.Parallel()
+
+	resource := newResource(t, inventory.Resource{
+		ID:       "kafka-example",
+		RawType:  "AWS::MSK::Cluster",
+		Category: taxonomy.Category("messaging.kafka"),
+		Region:   "eu-west-1",
+	})
+
+	got := mapping.Map(resource, testutil.UpCloudCatalog(t))
+
+	if got.Fit != mapping.None {
+		t.Errorf("Fit = %q, want %q", got.Fit, mapping.None)
+	}
+
+	if len(got.Candidates) != 0 {
+		t.Errorf("Candidates = %v, want none", got.Candidates)
+	}
+
+	want := []mapping.Reason{{
+		Code:     mapping.NoOffering,
+		Target:   "UpCloud",
+		Category: taxonomy.Category("messaging.kafka"),
+	}}
+
+	if diff := cmp.Diff(want, got.Reasons); diff != "" {
+		t.Errorf("Reasons mismatch (-want +got):\n%s", diff)
+	}
+
+	if len(got.Reasons) != 1 {
+		t.Fatalf("Reasons = %v, want exactly one", got.Reasons)
+	}
+
+	const wantSentence = "no offering in the UpCloud catalog for messaging.kafka"
+
+	if sentence := got.Reasons[0].String(); sentence != wantSentence {
+		t.Errorf("reason = %q, want %q", sentence, wantSentence)
+	}
+}
+
 // Best is the first candidate: Map has already ordered them best first, so Best
 // must not search again.
 func TestResultBest(t *testing.T) {
