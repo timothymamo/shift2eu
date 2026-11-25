@@ -1,6 +1,7 @@
 package check
 
 import (
+	"errors"
 	"fmt"
 	"regexp"
 	"slices"
@@ -27,11 +28,17 @@ const (
 	// the check take the version from the read step's output.
 	nodeVersionExpr = "${{ steps." + nodeStepID + ".outputs.version }}"
 
+	// nodeVersionPattern is the form of dev/lima.yaml's nodeVersion line, the
+	// one pin of the Node the VM installs for pi: two spaces and the double
+	// quotes, the version in the one group. It is written so that sed -E and
+	// Go's regexp read it alike, and both the workflows' sed (nodeVersionRead)
+	// and PinnedNodeVersion, through which pienvdenyload_test.go's
+	// piNodeVersionPin parses the same line, are built from it.
+	nodeVersionPattern = `^  nodeVersion: "([^"]*)"$`
+
 	// nodeVersionRead is the line that makes a step the read of dev/lima.yaml's
-	// nodeVersion, the one pin of the Node the VM installs for pi: two spaces
-	// and the double quotes, exactly as pienvdenyload_test.go's
-	// piNodeVersionPin parses the same line.
-	nodeVersionRead = `version="$(sed -nE 's/^  nodeVersion: "([^"]*)"$/\1/p' dev/lima.yaml)"`
+	// nodeVersion.
+	nodeVersionRead = `version="$(sed -nE 's/` + nodeVersionPattern + `/\1/p' dev/lima.yaml)"`
 
 	// nodeVersionRange is the strict check that what the sed read is one X.Y.Z
 	// release and nothing else.
@@ -55,6 +62,28 @@ const (
 	requiredNodeName  = "SHIFT2EU_REQUIRE_NODE"
 	requiredNodeValue = `"1"`
 )
+
+// nodeVersionLine reads dev/lima.yaml's nodeVersion line as the workflows' sed
+// does, from the same pattern.
+var nodeVersionLine = regexp.MustCompile(`(?m)` + nodeVersionPattern)
+
+// PinnedNodeVersion returns the Node release the dev/lima.yaml document lima
+// pins, read from its nodeVersion line as ci.yml's and release.yml's Test jobs
+// read it (issue #554), and an error when it holds no such line or pins an
+// empty version. It does not check the X.Y.Z form: the workflows' read step
+// does that before it installs the version.
+func PinnedNodeVersion(lima []byte) (string, error) {
+	match := nodeVersionLine.FindSubmatch(lima)
+	if match == nil {
+		return "", errors.New(`dev/lima.yaml holds no line   nodeVersion: "X", two spaces and the double quotes`)
+	}
+
+	if len(match[1]) == 0 {
+		return "", errors.New("dev/lima.yaml's nodeVersion is empty")
+	}
+
+	return string(match[1]), nil
+}
 
 // nodeSteps returns the four Node steps of the Test job of the workflow file,
 // whose check names that file in its error, and whose tests run in the step

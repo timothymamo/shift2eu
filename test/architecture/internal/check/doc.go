@@ -119,7 +119,9 @@
 // workflow's top level to name, on, permissions, concurrency and jobs, so no
 // if:, needs:, continue-on-error:, defaults: or env: can skip the job or make
 // its run: steps no-ops; each part an edit could break is also named on its
-// own.
+// own. PinnedNodeVersion reads dev/lima.yaml's nodeVersion from the same
+// pattern as the workflows' sed line, for TestPiEnvDenyExtensionLoads to name
+// the Node it needs.
 //
 // AuditWorkflow holds the scheduled security audit's workflow,
 // .github/workflows/scheduled-security-audit.yml, to PRD #175 milestone 2 and
