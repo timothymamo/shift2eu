@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.14.0](https://github.com/timothymamo/shift2eu/compare/v0.13.0...v0.14.0) (2026-11-25)
+
+
+### Features
+
+* **ci:** the scheduled security audit's checks job (PRD [#175](https://github.com/timothymamo/shift2eu/issues/175) M2, 5c) ([#565](https://github.com/timothymamo/shift2eu/issues/565)) ([5121caa](https://github.com/timothymamo/shift2eu/commit/5121caa904bd81979f27762b18d80547bb3c2bdd))
+* **taxonomy:** seven new categories, sharding and udp, memory-matched cache plans (PRD [#552](https://github.com/timothymamo/shift2eu/issues/552) M1) ([#559](https://github.com/timothymamo/shift2eu/issues/559)) ([f63c360](https://github.com/timothymamo/shift2eu/commit/f63c360afefc9f914039d6de973d0d232f9c6960))
+
+
+### Bug Fixes
+
+* **deps:** update module github.com/chromedp/cdproto to v0.160.9 ([#560](https://github.com/timothymamo/shift2eu/issues/560)) ([08f57b5](https://github.com/timothymamo/shift2eu/commit/08f57b55481873f7b8c5ebde4dd17f736ffa9410))
+* **infra:** the TLS stage is created before it is destroyed, R8 recreates it (issue [#541](https://github.com/timothymamo/shift2eu/issues/541)) ([#543](https://github.com/timothymamo/shift2eu/issues/543)) ([61126bd](https://github.com/timothymamo/shift2eu/commit/61126bd838ed54e491917606eada3bdd2da8dbfd))
+
 ## [0.13.0](https://github.com/timothymamo/shift2eu/compare/v0.12.0...v0.13.0) (2026-11-24)
 
 
