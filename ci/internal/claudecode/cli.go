@@ -300,9 +300,13 @@ func (c *CLI) Ask(ctx context.Context, p Prompt) (string, error) {
 		stdout = stream
 
 		// A streamed run of a config that asks for a permission mode is checked
-		// against the session's init element as it arrives, and stopped at the
-		// line that refuses it: before the CLI acts on a turn run under another
-		// mode (issue #592).
+		// against the session's init element as it arrives, and cancelled at the
+		// line that refuses it (issue #592). A backstop, not a barrier: the check
+		// runs on exec's stdout-copy goroutine, the cancel is asynchronous and the
+		// kill reaches only the CLI's process, not its children. A refusal at the
+		// init element lands before the first model turn in practice; a later one
+		// may come after tool calls ran. The CLI's permission layer, the sandbox
+		// and the preflight's probes and judge stay the fail-closed gate.
 		if c.cfg.PermissionMode != "" {
 			stream.mode = NewModeCheck(c.cfg.PermissionMode)
 			stream.stop = cancel

@@ -2760,7 +2760,9 @@ The model job's errors that point here are titled `Audit model`. What each means
   (or, from the preflight's judgement, `preflight failed: the session's permission mode is not the one
   asked for: expected default, reported <X>; see runbook step 10`): the CLI's `system/init` element
   reported another permission mode than the launch's `--permission-mode default`, and the run was
-  stopped at that line, before the model acted (ADR 0040, issue #592). `<X>` is one of Claude Code's
+  stopped at that line (ADR 0040, issue #592). The stop is a backstop, not a barrier: a refusal at the
+  first init element comes, in practice, before the model's first turn; any other (`two init lines`, a
+  key named twice or in another case in a later element) may come after the run made calls. `<X>` is one of Claude Code's
   own modes (`dontAsk`, `plan`, `auto`, `acceptEdits`, `bypassPermissions`) or a class: `missing` (no
   init element before the session's turn or the run's end, or one without `permissionMode`), `not a
   string`, `another mode` (a string Claude Code does not name, compared case and all) or `two init
@@ -2768,7 +2770,9 @@ The model job's errors that point here are titled `Audit model`. What each means
   case). Almost always a Claude Code bump changed how it resolves the mode: read the new version's
   resolver for `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB` (ADR 0040's issue #592 amendment says what 2.1.332
   does), report it as an issue with the line and the CLI version pinned in `.github/claude-code.yaml`,
-  and do not change the launch or the scrub in the workflow. Nothing leaked, so nothing to rotate.
+  and do not change the launch or the scrub in the workflow. For a refusal at the first init element,
+  nothing ran in practice, so nothing to rotate; for `two init lines`, or any refusal after the init
+  element, read the run's transcript for tool calls before concluding nothing leaked.
 - `the runner could not be hardened: see runbook step 10`: stopping or disabling Docker, removing the
   stale socket file `/var/run/docker.sock` or removing `/etc/sudoers.d/runner` failed; `sudo still
   works`, `the Docker socket is still there` and `the audit directory's owners or modes are not as laid

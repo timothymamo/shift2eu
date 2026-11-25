@@ -2097,8 +2097,16 @@ of milestone 2), and the constraints PR 5 must keep:
     name `permissionMode` exactly as asked. Its top-level object is walked once, token by token, as
     the judge's is (issue #590); `type`, `subtype` or `permissionMode` named twice or in another case
     is refused. It refuses an init element of another mode, a second init element, and any element
-    other than a `system` one before the init element, and **cancels the run at that line**, before the
-    CLI makes a tool call; a run that answers with no init element at all is refused at its end. The
+    other than a `system` one before the init element, and **cancels the run at that line**; a run that
+    answers with no init element at all is refused at its end. The check is a detective backstop, not a
+    barrier: it reads the line on the goroutine that copies the CLI's stdout, the cancel is
+    asynchronous, and the kill (`exec.CommandContext`'s SIGKILL) stops only the CLI's process, not its
+    children (the runner VM is discarded after the job). A refusal at the init element lands, in
+    practice, before the first model turn: 2.1.332 prints that element before its first API request,
+    and an API round trip is slower than the pipe read and the kill. That is a race, not a guarantee,
+    and a later refusal (`two init lines`, or a key named twice or in another case in a later element)
+    comes after tool calls may already have run. The fail-closed gate stays the CLI's own permission
+    layer, the sandbox and the preflight's probes and judge. The
     error wraps `ErrModel` and a `*claudecode.PermissionModeError` whose text is fixed words: `the
     session's permission mode is not the one asked for: expected default, reported <X>`, `<X>` one of
     the CLI's modes (`default`, `acceptEdits`, `plan`, `dontAsk`, `bypassPermissions`, `auto`) as it is,

@@ -27,8 +27,10 @@
 // issue #592): an element of another mode, none before the session's turn, a
 // second one, or one naming type, subtype or permissionMode twice or in
 // another case stops the run at that line and fails it with a
-// *PermissionModeError of fixed words, never a byte of the line. The audit's
-// judgement runs the same ModeCheck over the preflight's transcript.
+// *PermissionModeError of fixed words, never a byte of the line. The stop is a
+// backstop, not a barrier: it is asynchronous, so a later line's refusal may
+// come after tool calls ran. The audit's judgement runs the same ModeCheck
+// over the preflight's transcript.
 //
 // It is no part of the product: it sits under ci/internal, so Go's internal
 // rule lets only packages under ci/ import it, and the depguard rule
