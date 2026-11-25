@@ -19,7 +19,9 @@ Lima VM (ADR 0002) mounts only this repository, so a directory next to it is out
 Every PRD milestone or issue is built on its own branch, `<type>/<issue>-<slug>`, checked out in its own
 worktree at `.worktrees/<type>-<issue>-<slug>`: inside the repository, so the VM can see it, and
 git-ignored. `make worktree BRANCH=...` (`dev/worktree.sh`) creates it from the latest `origin/main`, or
-reopens it for an existing branch.
+reopens it for an existing branch. A Renovate PR's branch, `renovate/<name>`, is the one other name it
+accepts, and only to resume `origin/renovate/<name>` in `.worktrees/renovate-<name>`, never to create it;
+a local `renovate/<name>` is resumed only at origin's commit and tracking it (issue #573).
 
 - The repository root stays on `main`. Agents read from it but never change files or commit there.
 - The orchestrator creates the worktree and names it on the first line of every task; workers run every
