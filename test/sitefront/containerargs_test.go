@@ -114,6 +114,10 @@ func containerRunFrom(src, caddyfile string) (containerRun, error) {
 // refused as well: tofu would refuse the configuration, and a reader that decoded them would run a command
 // line the configuration does not hold.
 func hclElementValue(element string) (string, error) {
+	if err := checkHCLEscapes(element); err != nil {
+		return "", err
+	}
+
 	value, err := strconv.Unquote(element)
 	if err != nil {
 		return "", err
@@ -150,6 +154,54 @@ func hclElementValue(element string) (string, error) {
 	}
 
 	return out.String(), nil
+}
+
+// checkHCLEscapes refuses a backslash escape in a quoted element that HCL does not have: HCL's are \n \r \t
+// \" \\ \uNNNN and \UNNNNNNNN, while strconv.Unquote also decodes Go's \x41, \a, \b, \f, \v and the octal
+// \101, which tofu would refuse.
+func checkHCLEscapes(element string) error {
+	for i := 0; i < len(element); i++ {
+		if element[i] != '\\' {
+			continue
+		}
+
+		if i+1 >= len(element) {
+			return fmt.Errorf("a \\ ends the element: HCL's escapes are \\n \\r \\t \\\" \\\\ \\uNNNN and \\UNNNNNNNN")
+		}
+
+		switch c := element[i+1]; {
+		case c == 'n', c == 'r', c == 't', c == '"', c == '\\':
+			i++
+		case c == 'u' && hexDigits(element, i+2, 4):
+			i += 5
+		case c == 'U' && hexDigits(element, i+2, 8):
+			i += 9
+		default:
+			end := i + 2
+			if c == 'x' || c >= '0' && c <= '7' {
+				end = min(i+4, len(element))
+			}
+
+			return fmt.Errorf("%s is no HCL escape (HCL's are \\n \\r \\t \\\" \\\\ \\uNNNN and \\UNNNNNNNN): tofu would refuse it, and decoding it as Go does would run a command line the configuration does not hold (docs/adr/0045)", element[i:end])
+		}
+	}
+
+	return nil
+}
+
+// hexDigits reports whether s holds n hex digits from offset i.
+func hexDigits(s string, i, n int) bool {
+	if i+n > len(s) {
+		return false
+	}
+
+	for _, c := range []byte(s[i : i+n]) {
+		if !strings.ContainsRune("0123456789abcdefABCDEF", rune(c)) {
+			return false
+		}
+	}
+
+	return true
 }
 
 // imageReference returns the image reference src pins: the string on the line
@@ -312,61 +364,156 @@ func checkElements(attribute string, elements []string) error {
 // `# args = [...]` and a description holding `args = [` are skipped. Two settings
 // of the attribute in that block are refused: the reader cannot tell which one
 // the platform reads, so it runs neither.
+//
+// The scan reads src once into tokens (hclTokens), so comments and strings are
+// skipped wherever they stand. A src with no such resource block (a fragment)
+// is read as one block body. Only the block's own attributes count, not those of
+// a block or object nested in it.
 func attrValueStart(src, attribute string) (int, error) {
-	for i := 0; i < len(src); i++ {
-		if i > 0 && isIdent(src[i-1]) {
-			continue // the end of a longer name
-		}
-		if !strings.HasPrefix(src[i:], attribute) {
-			continue
-		}
-		if inLineComment(src, i) {
-			continue
-		}
-		if i+len(attribute) < len(src) && isIdent(src[i+len(attribute)]) {
-			continue // the start of a longer name
-		}
-
-		rest := src[i+len(attribute):]
-		value := len(rest) - len(strings.TrimLeft(rest, " \t"))
-
-		if value >= len(rest) || rest[value] != '=' {
-			continue
-		}
-
-		value++
-		value += len(rest[value:]) - len(strings.TrimLeft(rest[value:], " \t"))
-
-		return i + len(attribute) + value, nil
+	tokens, err := hclTokens(src)
+	if err != nil {
+		return 0, err
 	}
 
-	return 0, fmt.Errorf("no %s attribute: the container's start command is what the platform runs (docs/adr/0045)", attribute)
-}
+	body := containerBody(tokens)
 
-// inLineComment reports whether offset i of src lies in a # or // comment: one
-// of them starts earlier on i's line, outside a quoted string.
-func inLineComment(src string, i int) bool {
-	lineStart := strings.LastIndexByte(src[:i], '\n') + 1
+	value, found := -1, false
 
-	quoted, escaped := false, false
-
-	for j := lineStart; j < i; j++ {
-		c := src[j]
+	for j, depth := 0, 0; j < len(body); j++ {
+		tok := body[j]
 
 		switch {
-		case escaped:
-			escaped = false
-		case quoted && c == '\\':
-			escaped = true
-		case c == '"':
-			quoted = !quoted
-		case quoted:
-		case c == '#', c == '/' && j+1 < len(src) && src[j+1] == '/':
-			return true
+		case tok.kind == tokPunct && (tok.text == "{" || tok.text == "[" || tok.text == "("):
+			depth++
+		case tok.kind == tokPunct && (tok.text == "}" || tok.text == "]" || tok.text == ")"):
+			depth--
+		case depth == 0 && tok.kind == tokIdent && tok.text == attribute &&
+			j+1 < len(body) && body[j+1].kind == tokPunct && body[j+1].text == "=" &&
+			(j+2 >= len(body) || body[j+2].kind != tokPunct || body[j+2].text != "="):
+			if found {
+				return 0, fmt.Errorf("%s is set twice in the container: the reader cannot tell which one the platform reads, so it runs neither (docs/adr/0045)", attribute)
+			}
+
+			found = true
+			value = len(src)
+			if j+2 < len(body) {
+				value = body[j+2].start
+			}
 		}
 	}
 
-	return false
+	if !found {
+		return 0, fmt.Errorf("no %s attribute: the container's start command is what the platform runs (docs/adr/0045)", attribute)
+	}
+
+	return value, nil
+}
+
+// The kinds of token hclTokens reads.
+const (
+	tokIdent  = iota // a name, or a number
+	tokString        // a quoted string, its text with the quotes
+	tokPunct         // any other one character
+)
+
+// hclToken is one token of a .tf file and its offset in it.
+type hclToken struct {
+	kind  int
+	text  string
+	start int
+}
+
+// hclTokens reads src into its tokens, skipping white space, # and // comments
+// up to the end of their line, /* */ comments across lines and the inside of
+// quoted strings, so that nothing a comment or a string holds is read as code. An
+// unclosed /* */ comment or string is refused.
+func hclTokens(src string) ([]hclToken, error) {
+	var tokens []hclToken
+
+	for i := 0; i < len(src); {
+		c := src[i]
+
+		switch {
+		case c == ' ' || c == '\t' || c == '\r' || c == '\n':
+			i++
+		case c == '#' || c == '/' && i+1 < len(src) && src[i+1] == '/':
+			for i < len(src) && src[i] != '\n' {
+				i++
+			}
+		case c == '/' && i+1 < len(src) && src[i+1] == '*':
+			end := strings.Index(src[i+2:], "*/")
+			if end < 0 {
+				return nil, fmt.Errorf("%s: a /* comment is not closed by */", containerPath)
+			}
+			i += 2 + end + 2
+		case c == '"':
+			j := i + 1
+			for j < len(src) && src[j] != '"' {
+				if src[j] == '\\' {
+					j++
+				}
+				j++
+			}
+			if j >= len(src) {
+				return nil, fmt.Errorf("%s: a quoted string is not closed", containerPath)
+			}
+			tokens = append(tokens, hclToken{kind: tokString, text: src[i : j+1], start: i})
+			i = j + 1
+		case isIdent(c):
+			j := i
+			for j < len(src) && (isIdent(src[j]) || src[j] == '-') {
+				j++
+			}
+			tokens = append(tokens, hclToken{kind: tokIdent, text: src[i:j], start: i})
+			i = j
+		default:
+			tokens = append(tokens, hclToken{kind: tokPunct, text: src[i : i+1], start: i})
+			i++
+		}
+	}
+
+	return tokens, nil
+}
+
+// containerBody returns the tokens inside resource "scaleway_container" "site"
+// { ... }, the block the start command lives in, or all of them when no such
+// block stands at the top level.
+func containerBody(tokens []hclToken) []hclToken {
+	for i, depth := 0, 0; i < len(tokens); i++ {
+		tok := tokens[i]
+
+		if tok.kind == tokPunct && tok.text == "{" {
+			depth++
+		}
+		if tok.kind == tokPunct && tok.text == "}" {
+			depth--
+		}
+
+		if depth != 0 || i+3 >= len(tokens) || tok.kind != tokIdent || tok.text != "resource" ||
+			tokens[i+1].text != `"scaleway_container"` || tokens[i+2].text != `"site"` || tokens[i+3].text != "{" {
+			continue
+		}
+
+		for j, inner := i+4, 0; j < len(tokens); j++ {
+			if tokens[j].kind != tokPunct {
+				continue
+			}
+
+			switch tokens[j].text {
+			case "{":
+				inner++
+			case "}":
+				if inner == 0 {
+					return tokens[i+4 : j]
+				}
+				inner--
+			}
+		}
+
+		return tokens[i+4:]
+	}
+
+	return tokens
 }
 
 // isIdent reports whether b may be part of a name in a .tf file.
