@@ -288,9 +288,10 @@ def inventory($source):
         }),
 
     # ElastiCache replication groups: one cache each, its member clusters its
-    # nodes. Failover is node high availability only with a replica to promote
-    # (more member clusters than shards): a cluster-mode group must turn
-    # failover on even with none. StorageEncryptionType is the effective
+    # nodes. Failover is node high availability only when every shard has a
+    # replica to promote (two or more NodeGroupMembers in each node group): a
+    # cluster-mode group must turn failover on even with none, and a shard
+    # with a primary only loses its data with its node. StorageEncryptionType is the effective
     # encryption state; AtRestEncryptionEnabled can be false while it is on.
     ($docs[] | .ReplicationGroups? // empty | .[]
       | ((.Engine // "") | is_redis) as $redis
@@ -301,7 +302,8 @@ def inventory($source):
           category: (if $redis then "cache.redis" else "unclassified" end),
           region: (.ARN | arn_region),
           capabilities: (if $redis then [
-            cap("node-high-availability"; .AutomaticFailover == "enabled" and $nodes > ((.NodeGroups // []) | length)),
+            cap("node-high-availability"; .AutomaticFailover == "enabled"
+              and ((.NodeGroups // []) | length >= 1 and all(.[]; (.NodeGroupMembers // []) | length >= 2))),
             cap("zone-high-availability"; .MultiAZ == "enabled"),
             cap("sharding"; .ClusterEnabled == true),
             cap("snapshots"; (.SnapshotRetentionLimit // 0) > 0),

@@ -322,7 +322,8 @@ aws elasticache describe-replication-groups --output json --query '{ReplicationG
   ReplicationGroupId: ReplicationGroupId, ARN: ARN, Engine: Engine, AutomaticFailover: AutomaticFailover,
   MultiAZ: MultiAZ, ClusterEnabled: ClusterEnabled, SnapshotRetentionLimit: SnapshotRetentionLimit,
   AtRestEncryptionEnabled: AtRestEncryptionEnabled, StorageEncryptionType: StorageEncryptionType,
-  MemberClusters: MemberClusters, NodeGroups: NodeGroups[].{NodeGroupId: NodeGroupId},
+  MemberClusters: MemberClusters, NodeGroups: NodeGroups[].{
+  NodeGroupMembers: NodeGroupMembers[].{CacheClusterId: CacheClusterId}},
   CacheNodeType: CacheNodeType}}' > "$out/elasticache-replication-groups.json"
 aws elasticache describe-cache-clusters --output json --query '{CacheClusters: CacheClusters[].{
   CacheClusterId: CacheClusterId, ARN: ARN, ReplicationGroupId: ReplicationGroupId, Engine: Engine,
@@ -551,7 +552,7 @@ another region gets none of their capabilities.
 | `database.mongodb` (DocumentDB) | `encryption-at-rest` | every instance's `StorageEncrypted` is true |
 | `database.mongodb` (DocumentDB) | `read-replicas`, `node-high-availability` | it has two or more instances |
 | `database.mongodb` (DocumentDB) | `zone-high-availability` | its instances are in two or more `AvailabilityZone`s |
-| `cache.redis` (replication group) | `node-high-availability` | `AutomaticFailover` is `enabled` and it has more `MemberClusters` than `NodeGroups` (a replica to fail over to: a cluster-mode group must turn failover on even with none) |
+| `cache.redis` (replication group) | `node-high-availability` | `AutomaticFailover` is `enabled` and every one of its `NodeGroups` (shards) has two or more `NodeGroupMembers` (a replica to fail over to in every shard: a cluster-mode group must turn failover on even with none, and a shard with a primary only loses its data with its node) |
 | `cache.redis` (replication group) | `zone-high-availability` | `MultiAZ` is `enabled` |
 | `cache.redis` (replication group) | `sharding` | `ClusterEnabled` is true (cluster mode) |
 | `cache.redis` (replication group or cluster) | `snapshots` | `SnapshotRetentionLimit` is above 0 |

@@ -206,7 +206,7 @@ Capabilities the programs derive, from settings the calls above return:
 
 | Category | Capability | When (examples; each milestone pins the exact rule) |
 |---|---|---|
-| `cache.redis` | `node-high-availability` | ElastiCache automatic failover on with a replica (more member clusters than shards; failover alone is not enough, a cluster-mode group must enable it with no replica), always on ElastiCache Serverless; Memorystore tier `STANDARD_HA` or a cluster with replicas; Azure Standard or Premium tier |
+| `cache.redis` | `node-high-availability` | ElastiCache automatic failover on with a replica in every shard (two or more members in each node group; failover alone is not enough, a cluster-mode group must enable it with no replica), always on ElastiCache Serverless; Memorystore tier `STANDARD_HA` or a cluster with replicas; Azure Standard or Premium tier |
 | `cache.redis` | `zone-high-availability` | ElastiCache Multi-AZ on, always on ElastiCache Serverless (three zones); Azure zones set on a Premium cache; Memorystore per its placement (to be checked) |
 | `cache.redis` | `sharding` | ElastiCache cluster mode on (`ClusterEnabled`), always on ElastiCache Serverless (cluster mode only); `redis.googleapis.com/Cluster` or a sharded Valkey instance; Azure Premium with `shardCount`, or Azure Managed Redis in cluster policy `OSSCluster` |
 | `cache.redis` | `snapshots` | ElastiCache snapshot retention above 0; Azure Premium RDB persistence; Memorystore RDB persistence |
@@ -675,7 +675,8 @@ text as the decision)
     `node-high-availability`, `zone-high-availability`, `encryption-at-rest` and `sharding`, `snapshots`
     from `SnapshotRetentionLimit` above 0. Node-based groups: `AutomaticFailover` `enabled` alone is not
     a replica (<https://docs.aws.amazon.com/AmazonElastiCache/latest/dg/AutoFailover.html>), so
-    `node-high-availability` also needs more member clusters than shards; `StorageEncryptionType` is the
+    `node-high-availability` also needs a replica in every shard (two or more `NodeGroupMembers` in each
+    node group); `StorageEncryptionType` is the
     effective encryption state, not `AtRestEncryptionEnabled`
     (<https://docs.aws.amazon.com/AmazonElastiCache/latest/APIReference/API_ReplicationGroup.html>).
     Node-based Valkey 9.0+ `Durability` (a Multi-AZ transaction log) gets no rule; the guide notes it.
