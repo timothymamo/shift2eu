@@ -114,6 +114,21 @@ const (
 	classOtherOutput    = "the CLI wrote other non-JSON output"
 	classNotAnElement   = "a JSON value that is not an element"
 	classTypeNotAString = "an element whose type is not a string"
+
+	// The classes of the two records by which 2.1.332 says it never ran a
+	// call: its system/permission_denied element and a tool_result_meta entry
+	// (issue #613). A shape the judgement cannot read is refused by its class
+	// and the line's number, like every other line it cannot read.
+	classDenialShape = "holds a permission denial of an unknown shape"
+	classMetaShape   = "holds a tool result meta of an unknown shape"
+)
+
+// The reasons the verdict gives for probe 5's token-absence call: the CLI's own
+// record that it never ran it, and a result whose text does not show the
+// variable absent (issue #613).
+const (
+	reasonNotRun   = "the token-absence call was refused before it ran"
+	reasonTokenSet = "the token variable's absence was not shown"
 )
 
 // probeShortName is the short name each probe's refusal uses, as the ADR's
@@ -865,22 +880,47 @@ func deniedTheAbsenceCall(reason string) func(plan audit.Plan, transcript []byte
 // non_execution_kind, and the element's text alone can then read as absence
 // (issue #613).
 func metaOnTheAbsenceResult(kind string) func(plan audit.Plan, transcript []byte) []byte {
+	return resultMetaOnTheAbsenceResult(func(id string) string {
+		return fmt.Sprintf(
+			`[{"id":%q,"non_execution_kind":%q,"permission_decision":{"decision":"reject","source":"config"}}]`,
+			id, kind,
+		)
+	})
+}
+
+// resultMetaOnTheAbsenceResult returns the transcript of a run that wrote meta,
+// built from the token-absence call's tool_use id, as that call's
+// tool_result_meta: the record by which the CLI says whether the call ran, and
+// the shape the judgement either reads or refuses (issue #613).
+func resultMetaOnTheAbsenceResult(meta func(id string) string) func(plan audit.Plan, transcript []byte) []byte {
 	return func(plan audit.Plan, transcript []byte) []byte {
 		i := tokenAbsenceCall(plan)
 		if i < 0 {
 			return transcript
 		}
 
-		meta := fmt.Sprintf(
-			`"tool_result_meta":[{"id":%q,"non_execution_kind":%q,"permission_decision":{"decision":"reject","source":"config"}}],`,
-			absenceCallID(i), kind,
-		)
+		field := fmt.Sprintf(`"tool_result_meta":%s,`, meta(absenceCallID(i)))
 
 		lines := strings.SplitAfter(string(transcript), "\n")
-		lines[2*i+1] = strings.Replace(lines[2*i+1], `{"type":"user",`, `{"type":"user",`+meta, 1)
+		lines[2*i+1] = strings.Replace(lines[2*i+1], `{"type":"user",`, `{"type":"user",`+field, 1)
 
 		return []byte(strings.Join(lines, ""))
 	}
+}
+
+// preflightMetaCanary is a value a line the judgement cannot read carries, in a
+// key it never reads or in an id whose shape is wrong: the verdict names the
+// line's class and number, never a byte of it (ADR 0040, issue #613).
+const preflightMetaCanary = "canary-in-a-tool-result-meta"
+
+// userElementWithMeta is the user element 2.1.332 prints for a call it never
+// ran, carrying meta as its raw tool_result_meta beside a message the judgement
+// never reads (issue #613).
+func userElementWithMeta(meta string) string {
+	return fmt.Sprintf(
+		`{"type":"user","message":{"content":%q},"tool_result_meta":%s,"decision_reason":%q}`,
+		preflightMetaCanary, meta, preflightMetaCanary,
+	)
 }
 
 // TestJudgeFailsProbeFiveForTheRecordedRefusal pins probe 5 against the refusal
@@ -908,15 +948,21 @@ func TestJudgeFailsProbeFiveForTheRecordedRefusal(t *testing.T) {
 		answer *callResult
 		// transcript writes the refusal's record beside the result.
 		transcript func(plan audit.Plan, transcript []byte) []byte
+		// reason is the judgement's fixed phrase the verdict must give for the
+		// call: the record that it never ran, or a result that does not show
+		// the variable absent.
+		reason string
 	}{
 		{
 			name:       "the refusal is the call's error result and a permission_denied element",
 			answer:     &callResult{text: bracedVariableRefusal, isError: true},
 			transcript: deniedTheAbsenceCall(bracedVariableRefusal),
+			reason:     reasonNotRun,
 		},
 		{
 			name:   "the refusal is the call's error result alone",
 			answer: &callResult{text: bracedVariableRefusal, isError: true},
+			reason: reasonTokenSet,
 		},
 		{
 			// The hardening: the result's text reads as an absent token, and the
@@ -924,11 +970,13 @@ func TestJudgeFailsProbeFiveForTheRecordedRefusal(t *testing.T) {
 			// ran.
 			name:       "the permission_denied element denies a call whose result reads as an absent token",
 			transcript: deniedTheAbsenceCall(bracedVariableRefusal),
+			reason:     reasonNotRun,
 		},
 		{
 			// The same record in the other place the CLI writes it.
 			name:       "the call's tool_result_meta says it never ran",
 			transcript: metaOnTheAbsenceResult("user-rejected"),
+			reason:     reasonNotRun,
 		},
 	}
 
@@ -937,6 +985,10 @@ func TestJudgeFailsProbeFiveForTheRecordedRefusal(t *testing.T) {
 			t.Parallel()
 
 			thePlan := plan()
+
+			if tc.reason == "" {
+				t.Fatal("the case names no reason: the verdict's own phrase for the call is what it pins (issue #613)")
+			}
 
 			index := tokenAbsenceCall(thePlan)
 			if index < 0 {
@@ -963,6 +1015,14 @@ func TestJudgeFailsProbeFiveForTheRecordedRefusal(t *testing.T) {
 				if !strings.Contains(err.Error(), want) {
 					t.Errorf("Judge() error = %q, want it to hold %q", err, want)
 				}
+			}
+
+			// The verdict names the reason in probe 5's own sentence, so a run
+			// shows whether the CLI refused the call or its result does not prove
+			// the variable absent: the two need different repairs.
+			want := fmt.Sprintf("probe 5, %s: %s", probeShortName[5], tc.reason)
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("Judge() error = %q, want it to hold %q", err, want)
 			}
 
 			if strings.Contains(err.Error(), bracedVariableRefusal) {
@@ -1466,6 +1526,135 @@ func transcriptCases() []judgeCase {
 			want: []string{"transcript"},
 		},
 		{
+			// Issue #613: a system/permission_denied element is the CLI's own
+			// record that it never ran the call it names, so an element whose
+			// tool_use_id the judgement cannot read fails closed, as a line it
+			// cannot read: missing, not a string and empty are the three shapes.
+			name: "a permission_denied element names no tool_use_id",
+			transcript: func(_ audit.Plan, transcript []byte) []byte {
+				return insertLine(transcript, 2, fmt.Sprintf(
+					`{"type":"system","subtype":"permission_denied","tool_name":"Bash","decision_reason":%q}`,
+					preflightMetaCanary,
+				))
+			},
+			want:    []string{"the transcript at line 2", classDenialShape},
+			wantNot: []string{preflightMetaCanary},
+		},
+		{
+			name: "a permission_denied element's tool_use_id is not a string",
+			transcript: func(_ audit.Plan, transcript []byte) []byte {
+				return insertLine(transcript, 2, fmt.Sprintf(
+					`{"type":"system","subtype":"permission_denied","tool_use_id":7,"decision_reason":%q}`,
+					preflightMetaCanary,
+				))
+			},
+			want:    []string{"the transcript at line 2", classDenialShape},
+			wantNot: []string{preflightMetaCanary},
+		},
+		{
+			name: "a permission_denied element's tool_use_id is empty",
+			transcript: func(_ audit.Plan, transcript []byte) []byte {
+				return insertLine(transcript, 2, fmt.Sprintf(
+					`{"type":"system","subtype":"permission_denied","tool_use_id":"","decision_reason":%q}`,
+					preflightMetaCanary,
+				))
+			},
+			want:    []string{"the transcript at line 2", classDenialShape},
+			wantNot: []string{preflightMetaCanary},
+		},
+		// Issue #613: a tool_result_meta the judgement cannot read is refused
+		// with its line and a fixed class, like every other line: a record that
+		// says a call never ran must not hide behind a shape the judgement
+		// reads as one that ran, and a non_execution_kind whose call it cannot
+		// name fails closed too. The meta is the CLI's list of entries, one per
+		// call it never ran, each naming the call by id and a kind.
+		{
+			name: "the tool_result_meta is not a list",
+			transcript: func(_ audit.Plan, transcript []byte) []byte {
+				return insertLine(transcript, 2, userElementWithMeta(strconv.Quote(preflightMetaCanary)))
+			},
+			want:    []string{"the transcript at line 2", classMetaShape},
+			wantNot: []string{preflightMetaCanary},
+		},
+		{
+			name: "the tool_result_meta's entry is not an object",
+			transcript: func(_ audit.Plan, transcript []byte) []byte {
+				return insertLine(transcript, 2, userElementWithMeta("["+strconv.Quote(preflightMetaCanary)+"]"))
+			},
+			want:    []string{"the transcript at line 2", classMetaShape},
+			wantNot: []string{preflightMetaCanary},
+		},
+		{
+			name: "the tool_result_meta's entry names id twice",
+			transcript: func(_ audit.Plan, transcript []byte) []byte {
+				return insertLine(transcript, 2, userElementWithMeta(fmt.Sprintf(
+					`[{"id":%q,"id":%q,"non_execution_kind":"user-rejected"}]`,
+					preflightMetaCanary, preflightMetaCanary,
+				)))
+			},
+			want:    []string{"the transcript at line 2", classMetaShape},
+			wantNot: []string{preflightMetaCanary},
+		},
+		{
+			name: "the tool_result_meta's entry spells id in another case",
+			transcript: func(_ audit.Plan, transcript []byte) []byte {
+				return insertLine(transcript, 2, userElementWithMeta(fmt.Sprintf(
+					`[{"ID":%q,"non_execution_kind":"user-rejected"}]`,
+					preflightMetaCanary,
+				)))
+			},
+			want:    []string{"the transcript at line 2", classMetaShape},
+			wantNot: []string{preflightMetaCanary},
+		},
+		{
+			// The kind is the key that decides whether the call never ran, so an
+			// entry that spells it in another case is refused too: read
+			// case-insensitively, such a line would decide a call's run by a key
+			// the CLI does not print.
+			name: "the tool_result_meta's entry spells non_execution_kind in another case",
+			transcript: func(_ audit.Plan, transcript []byte) []byte {
+				return insertLine(transcript, 2, userElementWithMeta(fmt.Sprintf(
+					`[{"id":%q,"NON_EXECUTION_KIND":"user-rejected"}]`,
+					preflightMetaCanary,
+				)))
+			},
+			want:    []string{"the transcript at line 2", classMetaShape},
+			wantNot: []string{preflightMetaCanary},
+		},
+		{
+			name: "the tool_result_meta's entry names no id for its non_execution_kind",
+			transcript: func(_ audit.Plan, transcript []byte) []byte {
+				return insertLine(transcript, 2, userElementWithMeta(fmt.Sprintf(
+					`[{"non_execution_kind":"user-rejected","decision_reason":%q}]`,
+					preflightMetaCanary,
+				)))
+			},
+			want:    []string{"the transcript at line 2", classMetaShape},
+			wantNot: []string{preflightMetaCanary},
+		},
+		{
+			name: "the tool_result_meta's entry names an empty id",
+			transcript: func(_ audit.Plan, transcript []byte) []byte {
+				return insertLine(transcript, 2, userElementWithMeta(fmt.Sprintf(
+					`[{"id":"","non_execution_kind":"user-rejected","decision_reason":%q}]`,
+					preflightMetaCanary,
+				)))
+			},
+			want:    []string{"the transcript at line 2", classMetaShape},
+			wantNot: []string{preflightMetaCanary},
+		},
+		{
+			name: "the tool_result_meta's entry names an id that is not a string",
+			transcript: func(_ audit.Plan, transcript []byte) []byte {
+				return insertLine(transcript, 2, userElementWithMeta(fmt.Sprintf(
+					`[{"id":7,"non_execution_kind":"user-rejected","decision_reason":%q}]`,
+					preflightMetaCanary,
+				)))
+			},
+			want:    []string{"the transcript at line 2", classMetaShape},
+			wantNot: []string{preflightMetaCanary},
+		},
+		{
 			// An element the judgement reads carries more lower-case keys than it
 			// decodes - 2.1.332 prints uuid, session_id and parent_tool_use_id
 			// beside type and message - and such an element still passes: the
@@ -1769,6 +1958,26 @@ func absenceCases() []judgeCase {
 			command: replacementTokenAbsenceCommand,
 			answers: theCall(callResult{noResult: true}),
 			want:    refusal,
+		},
+
+		// Issue #613: a tool_result_meta entry whose non_execution_kind is null,
+		// and one that holds no such key at all, say nothing about whether the
+		// call ran. Neither may count the call as never run: the passing run's
+		// absent-token result must still pass, or a meta the CLI prints for
+		// another reason would fail probe 5 on every run.
+		{
+			name: "the token-absence call's meta holds a null non_execution_kind",
+			transcript: resultMetaOnTheAbsenceResult(func(id string) string {
+				return fmt.Sprintf(`[{"id":%q,"non_execution_kind":null}]`, id)
+			}),
+			wantPass: true,
+		},
+		{
+			name: "the token-absence call's meta entry holds no non_execution_kind",
+			transcript: resultMetaOnTheAbsenceResult(func(id string) string {
+				return fmt.Sprintf(`[{"id":%q,"permission_decision":{"decision":"accept","source":"config"}}]`, id)
+			}),
+			wantPass: true,
 		},
 	}
 }
