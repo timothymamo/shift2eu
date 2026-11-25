@@ -306,7 +306,7 @@ release), *live* (checked against the live site) or *review*.
   deployed files are the attested ones (layer 3); no cookies, storage, analytics or third-party resources.
   It also says what the site cannot promise: the hosting provider (Scaleway) sees the usual request
   metadata of any web server (IP address, user agent, the files requested) and nothing of the inventory,
-  and the maintainer reads only its aggregate request counts (no IP address, no user agent, no cookie,
+  and the maintainer reads its aggregate request counts (no IP address, no user agent, no cookie,
   kept 31 days; milestone 4, ADR 0039's *Amendment: log retention*, pinned by `test/site`'s
   `TestPrivacyPageNamesTheAggregateRequestCounts`); browser extensions can read any page; a released page served from a poisoned cache can stay in a
   browser's own cache for up to its `max-age` (300 seconds) after the site is repaired, but a page

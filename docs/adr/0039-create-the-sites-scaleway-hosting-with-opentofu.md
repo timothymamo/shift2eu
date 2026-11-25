@@ -426,7 +426,7 @@ CNAME's target.
 - **Postconditions for what the provider leaves out.** The provider reads `https_connections_only` and
   `min_scale` with `GetOk`, so `false` and `0` are not sent on create and the platform's default would
   decide them. A `lifecycle { postcondition }` checks `self.https_connections_only == false` and
-  `self.min_scale == local.container_min_scale` (the local `min_scale` is set from, 0) after the apply,
+  `self.min_scale == local.container_min_scale` (`local.container_min_scale`, 0) after the apply,
   so a platform default of a redirect or a warm instance fails the apply instead of passing silently
   (ADR 0045, *Postconditions*). A `precondition` refuses the container while the DNS stage's
   `default_fqdn` is still empty, as it may be on a first setup; R4 then creates it in a second pass

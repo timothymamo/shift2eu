@@ -228,7 +228,7 @@ test's local upstream asserts that it receives none of them. The configuration t
 (no `log` directive in a site block), and the front writes nothing about a visitor to its output: see
 *Amendment: the front writes nothing about a visitor to its output* below. What the platform itself logs
 is Scaleway's, as for Edge Services; the privacy page already names Scaleway, and says that the
-maintainer reads only the hosting provider's aggregate request counts (no IP address, no user agent, no
+maintainer reads the hosting provider's aggregate request counts (no IP address, no user agent, no
 cookie, kept 31 days; ADR 0039, *Amendment: log retention*).
 
 ### The image and its configuration
