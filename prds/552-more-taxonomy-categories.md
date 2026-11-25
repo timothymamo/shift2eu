@@ -187,13 +187,13 @@ setting).
 Left out on the source side, as the guide leaves out an EKS cluster's nodes today: load balancers that
 a Kubernetes cluster created (AWS tags `elbv2.k8s.aws/cluster` or `kubernetes.io/cluster/<name>`,
 everything in an AKS node resource group, which the guide already drops; GCP keeps them, as URL maps
-and backend services carry no labels, see *To be checked*), a GCP
-forwarding rule and target proxy (the frontends of a load balancer the URL map or backend service stands
-for), a GCP backend service of scheme `INTERNAL_SELF_MANAGED` (a service mesh) and a URL map naming only
-such services, Artifact Registry repositories of mode `REMOTE_REPOSITORY` or `VIRTUAL_REPOSITORY` (they
-store no image of their own), Filestore backups (they belong to their instance), the member clusters of an ElastiCache replication group (the group stands for them), the member
-instances of a DocumentDB cluster (the cluster stands for them), and the Cloud Run service behind a 2nd
-gen Cloud Function (already dropped).
+and backend services carry no labels, see *To be checked*), a GCP forwarding rule and target proxy (the
+frontends of a load balancer the URL map or backend service stands for), a GCP backend service of scheme
+`INTERNAL_SELF_MANAGED` (a service mesh) and a URL map naming only such services, Artifact Registry
+repositories of mode `REMOTE_REPOSITORY` or `VIRTUAL_REPOSITORY` (they store no image of their own),
+Filestore backups (they belong to their instance), the member clusters of an ElastiCache replication
+group (the group stands for them), the member instances of a DocumentDB cluster (the cluster stands for
+them), and the Cloud Run service behind a 2nd gen Cloud Function (already dropped).
 
 A DocumentDB cluster moves away from today's `AWS::RDS::DBInstance` on purpose. Every target sells
 MongoDB as a replica set of three nodes or more, one service; classified per instance, a three-instance
