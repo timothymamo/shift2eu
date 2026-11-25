@@ -512,7 +512,8 @@ func inventoryGuides() []inventoryGuideCase {
 					id: "sessions", rawType: "redis.googleapis.com/Cluster", category: "cache.redis",
 					capabilities: []string{"encryption-at-rest", "node-high-availability", "sharding", "zone-high-availability"},
 				},
-				// A sharded Valkey instance is the same kind of cache.
+				// A Valkey instance is the same kind of cache: sharded unless its mode
+				// is CLUSTER_DISABLED (or STANDALONE).
 				{
 					id: "valkey-1", rawType: "memorystore.googleapis.com/Instance", category: "cache.redis",
 					capabilities: []string{"encryption-at-rest", "snapshots"},
