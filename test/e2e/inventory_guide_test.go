@@ -94,6 +94,10 @@ type resourceFact struct {
 	id       string
 	rawType  string
 	category string
+	// capabilities are the capabilities the resource has to have, checked as a
+	// set: no order, and an empty (non-nil) slice for a resource with none. A
+	// nil slice does not check them.
+	capabilities []string
 }
 
 // sizeFact is the size the inventory has to give one resource, by ID. A zero
@@ -245,10 +249,57 @@ func inventoryGuides() []inventoryGuideCase {
 				{id: "shop-hana-1", rawType: "Microsoft.AzureLargeInstance/azureLargeInstances"},
 			},
 			present: []resourceFact{
-				// A storage queue is a queue; a Service Bus topic publishes and
-				// subscribes, which no taxonomy category covers.
+				// A storage queue is a queue, and so is a topic subscription, which
+				// has a dead-letter subqueue of its own. A topic publishes and
+				// subscribes, and Azure encrypts every Service Bus namespace at rest.
 				{id: "shop-thumbnail-jobs", rawType: "Microsoft.Storage/storageAccounts/queueServices/queues", category: "messaging.queue"},
-				{id: "sb-shop-order-events", rawType: "Microsoft.ServiceBus/namespaces/topics", category: "unclassified"},
+				{id: "sb-shop-order-events", rawType: "Microsoft.ServiceBus/namespaces/topics", category: "messaging.topic", capabilities: []string{"encryption-at-rest"}},
+				{id: "sb-shop-order-events/billing", rawType: "Microsoft.ServiceBus/namespaces/topics/subscriptions", category: "messaging.queue", capabilities: []string{"dead-letter-queue"}},
+				{id: "sb-shop-order-events/shipping", rawType: "Microsoft.ServiceBus/namespaces/topics/subscriptions", category: "messaging.queue", capabilities: []string{"dead-letter-queue"}},
+				// A Premium cache is a cluster of shards with a replica each, spread
+				// over zones, snapshotting its data with RDB persistence, and encrypted
+				// at rest. A Basic C0 cache is one node, in no zone, and one of the two
+				// SKUs Azure does not encrypt its disks for.
+				{id: "redis-shop-cart", rawType: "Microsoft.Cache/redis", category: "cache.redis", capabilities: []string{"encryption-at-rest", "node-high-availability", "sharding", "snapshots", "zone-high-availability"}},
+				{id: "redis-shop-dev", rawType: "Microsoft.Cache/redis", category: "cache.redis", capabilities: []string{}},
+				// Azure Managed Redis: a primary and a replica, zone redundant, and
+				// clustered and persisted as its database says.
+				{id: "amr-shop-session", rawType: "Microsoft.Cache/redisEnterprise", category: "cache.redis", capabilities: []string{"encryption-at-rest", "node-high-availability", "sharding", "snapshots", "zone-high-availability"}},
+				// A Cosmos DB account for MongoDB: replicas within a region, zone
+				// redundancy and continuous backup; one region serves no read replica.
+				// An account of any other kind stays unclassified.
+				{id: "cosmos-shop-catalog", rawType: "Microsoft.DocumentDB/databaseAccounts", category: "database.mongodb", capabilities: []string{"encryption-at-rest", "node-high-availability", "point-in-time-restore", "zone-high-availability"}},
+				{id: "cosmos-shop-events", rawType: "Microsoft.DocumentDB/databaseAccounts", category: "unclassified"},
+				// Azure DocumentDB: two shards, each with a standby, 128 GiB each.
+				{id: "docdb-shop-orders", rawType: "Microsoft.DocumentDB/mongoClusters", category: "database.mongodb", capabilities: []string{"encryption-at-rest", "node-high-availability", "point-in-time-restore", "zone-high-availability"}},
+				// A Standard load balancer with a UDP rule from an IPv6 frontend to an
+				// IPv6 backend pool is IPv6 end to end. One with an IPv6 frontend over
+				// IPv4-only backends is not IPv6 at all, and one in no zone is not zone
+				// redundant. A Basic load balancer claims neither.
+				{id: "lb-shop-dns", rawType: "Microsoft.Network/loadBalancers", category: "network.loadbalancer", capabilities: []string{"ipv6", "udp", "zone-high-availability"}},
+				{id: "lb-shop-web-v6front", rawType: "Microsoft.Network/loadBalancers", category: "network.loadbalancer", capabilities: []string{}},
+				{id: "lb-shop-legacy", rawType: "Microsoft.Network/loadBalancers", category: "network.loadbalancer", capabilities: []string{}},
+				// An Application Gateway in three zones is zone redundant, and is
+				// neither an IPv6 nor a UDP load balancer.
+				{id: "agw-shop", rawType: "Microsoft.Network/applicationGateways", category: "network.loadbalancer", capabilities: []string{"zone-high-availability"}},
+				// A container app scales with requests. Of kind functionapp it is a
+				// function, of kind workflowapp a Logic App, which stays unclassified.
+				{id: "ca-shop-api", rawType: "Microsoft.App/containerApps", category: "serverless.container"},
+				{id: "ca-shop-fn", rawType: "Microsoft.App/containerApps", category: "serverless.function"},
+				{id: "ca-shop-flows", rawType: "Microsoft.App/containerApps", category: "unclassified"},
+				// A registry encrypts every image it holds at rest.
+				{id: "acrshop", rawType: "Microsoft.ContainerRegistry/registries", category: "registry.container", capabilities: []string{"encryption-at-rest"}},
+				// An NFS share of a zone-redundant FileStorage account has a snapshot
+				// and keeps serving through the loss of a zone; its SMB sibling stays
+				// unclassified, as an SMB share has no target equivalent.
+				{id: "shop-media", rawType: "Microsoft.Storage/storageAccounts/fileServices/shares", category: "storage.file", capabilities: []string{"encryption-at-rest", "snapshots", "zone-high-availability"}},
+				{id: "shop-reports", rawType: "Microsoft.Storage/storageAccounts/fileServices/shares", category: "unclassified"},
+				// A Microsoft.FileShares share is NFS only; one deployed across zones
+				// keeps serving through the loss of a zone, a local one cannot.
+				{id: "fs-shop-build", rawType: "Microsoft.FileShares/fileShares", category: "storage.file", capabilities: []string{"encryption-at-rest", "zone-high-availability"}},
+				{id: "fs-shop-archive", rawType: "Microsoft.FileShares/fileShares", category: "storage.file", capabilities: []string{"encryption-at-rest"}},
+				// No target runs MariaDB as a public cloud managed database.
+				{id: "mariadb-shop-legacy", rawType: "Microsoft.DBforMariaDB/servers", category: "unclassified"},
 				// A persistent volume in the node resource group holds data and
 				// stays: only what AKS manages for the cluster is left out.
 				{id: "pvc-00000000-0000-0000-0000-000000000000", rawType: "Microsoft.Compute/disks", category: "storage.block"},
@@ -273,15 +324,32 @@ func inventoryGuides() []inventoryGuideCase {
 				{id: "mysql-shop-catalog", storageGiB: 64, noCount: true},
 				{id: "psql-shop-replica", storageGiB: 128, count: 1},
 				{id: "mysql-shop-reports", storageGiB: 32, count: 1},
+				// A cache's nodes: one per shard, a replica on each for a Premium
+				// cache (two shards are four nodes), one for a Basic cache, and the
+				// primary and replica of an Azure Managed Redis cluster.
+				{id: "redis-shop-cart", count: 4},
+				{id: "redis-shop-dev", count: 1},
+				{id: "amr-shop-session", count: 2},
+				// Azure DocumentDB: a primary and a standby per shard, 128 GiB each.
+				{id: "docdb-shop-orders", count: 4, storageGiB: 256},
+				// The quota of an NFS share, from the shares list, and the
+				// provisioned GiB of a Microsoft.FileShares share.
+				{id: "shop-media", storageGiB: 1024},
+				{id: "fs-shop-build", storageGiB: 256},
+				{id: "fs-shop-archive", storageGiB: 512},
 			},
 			// The cluster's node scale set and its load balancer, the OS disk
 			// of a scale set member, and a member's data disk its member deletes
-			// with it: the member's scale set stands for all of them.
+			// with it: the member's scale set stands for all of them. So does a
+			// FileStorage account for its shares, and a Redis Enterprise cluster for
+			// its database.
 			absent: []string{
 				"aks-system-12345678-vmss",
 				"kubernetes",
 				"vmss-shop-web_0abc_OsDisk_1",
 				"vmss-shop-web_0abc_DataDisk_0",
+				"stshopfiles",
+				"default",
 			},
 		},
 	}
@@ -327,11 +395,18 @@ func taxonomyCategories(source string) []string {
 			"compute.vm",
 			"storage.block",
 			"storage.object",
+			"storage.file",
 			"database.postgresql",
 			"database.mysql",
+			"database.mongodb",
+			"cache.redis",
 			"kubernetes.managed",
 			"serverless.function",
+			"serverless.container",
 			"messaging.queue",
+			"messaging.topic",
+			"network.loadbalancer",
+			"registry.container",
 		}
 	default:
 		return nil
@@ -352,7 +427,10 @@ type inventoryResource struct {
 	ID       string `json:"id"`
 	RawType  string `json:"rawType"`
 	Category string `json:"category"`
-	Region   string `json:"region"`
+	// Capabilities are the capabilities the program derives from the recorded
+	// settings of the resource.
+	Capabilities []string `json:"capabilities"`
+	Region       string   `json:"region"`
 	// Size is the resource's size, filled from the recorded read-only calls.
 	Size *sizeSpec `json:"size"`
 	// Workload, Relations and MonthlyCost are added by hand: no recorded call
@@ -590,6 +668,30 @@ func assertPresent(t *testing.T, source string, doc inventoryDoc, wants []resour
 			t.Errorf("%s: resource %q has rawType %q, want %q",
 				source, want.id, resource.RawType, want.rawType)
 		}
+
+		if want.capabilities != nil {
+			assertCapabilities(t, source, want.id, want.capabilities, resource.Capabilities)
+		}
+	}
+}
+
+// assertCapabilities fails unless the resource's capabilities are exactly want,
+// in any order. A capability the program dropped, added or guessed shows up
+// here, which the golden file alone cannot catch after an -update; an empty want
+// pins a resource with no capability at all.
+func assertCapabilities(t *testing.T, source, id string, want, got []string) {
+	t.Helper()
+
+	wantSorted := slices.Clone(want)
+	slices.Sort(wantSorted)
+
+	// An inventory without capabilities decodes as nil: an empty slice on both
+	// sides compares equal, whether the program wrote none or an empty array.
+	gotSorted := append([]string{}, got...)
+	slices.Sort(gotSorted)
+
+	if diff := cmp.Diff(wantSorted, gotSorted); diff != "" {
+		t.Errorf("%s: resource %q has other capabilities than it should (-want +got):\n%s", source, id, diff)
 	}
 }
 

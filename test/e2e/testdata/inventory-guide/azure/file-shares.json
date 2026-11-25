@@ -1,0 +1,32 @@
+[
+  {
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shop/providers/Microsoft.Storage/storageAccounts/stshopfiles/fileServices/default/shares/shop-media",
+    "name": "shop-media",
+    "type": "Microsoft.Storage/storageAccounts/fileServices/shares",
+    "properties": {
+      "enabledProtocols": "NFS",
+      "shareQuota": 1024,
+      "snapshotTime": null
+    }
+  },
+  {
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shop/providers/Microsoft.Storage/storageAccounts/stshopfiles/fileServices/default/shares/shop-media",
+    "name": "shop-media",
+    "type": "Microsoft.Storage/storageAccounts/fileServices/shares",
+    "properties": {
+      "enabledProtocols": "NFS",
+      "shareQuota": 1024,
+      "snapshotTime": "2026-10-26T05:48:07.0000000Z"
+    }
+  },
+  {
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shop/providers/Microsoft.Storage/storageAccounts/stshopfiles/fileServices/default/shares/shop-reports",
+    "name": "shop-reports",
+    "type": "Microsoft.Storage/storageAccounts/fileServices/shares",
+    "properties": {
+      "enabledProtocols": "SMB",
+      "shareQuota": 100,
+      "snapshotTime": null
+    }
+  }
+]

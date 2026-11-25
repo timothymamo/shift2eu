@@ -79,6 +79,11 @@ var realDataAllowList = []allowListEntry{
 		why:   "the synthetic storage account of the guide's sample shop, named the way Azure's naming guide (st prefix) spells one; it names no one's account",
 	},
 	{
+		file:  "test/e2e/testdata/inventory-guide/azure/file-shares.json",
+		value: "storageAccounts/stshopfiles",
+		why:   "the shares of the guide's sample shop's synthetic FileStorage account, whose row the Resource Graph export holds; it names no one's account",
+	},
+	{
 		file:  "test/e2e/testdata/inventory-guide/azure/graph-1.json",
 		value: "storageAccounts/stshopassets",
 		why:   "the guide's sample shop's synthetic asset storage account in the Resource Graph export; it names no one's account",
@@ -122,6 +127,26 @@ var realDataAllowList = []allowListEntry{
 		file:  "test/e2e/testdata/inventory-guide/azure/graph-2.json",
 		value: "namespaces/sb-shop",
 		why:   "the synthetic Service Bus namespace of the inventory guide's sample shop in the Resource Graph export; it names no one's namespace",
+	},
+	{
+		file:  "test/e2e/testdata/inventory-guide/azure/graph-2.json",
+		value: "microsoft.app",
+		why:   "the Resource Manager provider namespace of Container Apps, whose segment reads as a domain name because .app is a TLD; it names no host",
+	},
+	{
+		file:  "test/e2e/testdata/inventory-guide/azure/graph-2.json",
+		value: "databaseAccounts/cosmos-shop-catalog",
+		why:   "the synthetic Cosmos DB account of the inventory guide's sample shop's catalog; it names no one's account",
+	},
+	{
+		file:  "test/e2e/testdata/inventory-guide/azure/graph-2.json",
+		value: "databaseAccounts/cosmos-shop-events",
+		why:   "the synthetic Cosmos DB account of the inventory guide's sample shop's events; it names no one's account",
+	},
+	{
+		file:  "test/e2e/testdata/inventory-guide/azure/graph-2.json",
+		value: "registries/acrshop",
+		why:   "the synthetic container registry of the inventory guide's sample shop; it names no one's registry",
 	},
 	{
 		file:  "test/e2e/testdata/inventory-guide/azure/servicebus.json",

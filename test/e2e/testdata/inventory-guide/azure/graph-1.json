@@ -223,6 +223,10 @@
       "kind": "FileStorage",
       "location": "westeurope",
       "zones": null,
+      "sku": {
+        "name": "Premium_ZRS",
+        "tier": "Premium"
+      },
       "properties": null
     }
   ],
