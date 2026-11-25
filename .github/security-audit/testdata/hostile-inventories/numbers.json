@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 2,
+  "source": "aws",
+  "resources": [
+    {
+      "id": "huge",
+      "rawType": "AWS::EC2::Instance",
+      "category": "compute.vm",
+      "region": "eu-central-1",
+      "size": { "vcpus": 1e308, "memoryGiB": 1.7976931348623157e308, "count": 9223372036854775807 },
+      "usage": { "hoursPerMonth": 1e308 },
+      "monthlyCost": { "amount": 1e308, "currency": "USD" }
+    },
+    {
+      "id": "negative",
+      "rawType": "AWS::EC2::Instance",
+      "category": "compute.vm",
+      "region": "eu-central-1",
+      "size": { "vcpus": -1, "memoryGiB": -0, "count": -1 },
+      "monthlyCost": { "amount": -0.000001, "currency": "usd" }
+    },
+    {
+      "id": "tiny",
+      "rawType": "AWS::EC2::Instance",
+      "category": "compute.vm",
+      "region": "eu-central-1",
+      "size": { "vcpus": 5e-324, "memoryGiB": 0.1, "count": 1 },
+      "monthlyCost": { "amount": 0.30000000000000004, "currency": "XXX" }
+    }
+  ]
+}

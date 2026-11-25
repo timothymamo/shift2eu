@@ -159,7 +159,7 @@ subscription usage of a weekly one, and a run by hand covers a release or an adv
 | 11 | The image runs as non-root, with a read-only root filesystem and no shell where none is expected | checks, containers | no |
 | 12 | Dropped: the server is no longer released (ADR 0037) | none | no |
 | 13 | The CLI on hostile inventory files | checks, container, `--network none` | no |
-| 14 | Time-boxed `go test -fuzz` of the committed `Fuzz*` targets (none yet: Decision 5) | checks, container, `--network none`, `GOPROXY=off` | no |
+| 14 | Time-boxed `go test -fuzz` of the committed `Fuzz*` targets (`internal/adapter/report/htmlreport`'s `FuzzReportEscaping` today, Decision 5) | checks, container, `--network none`, `GOPROXY=off` | no |
 | 15 | Supply-chain reads: action pins and workflow `permissions`, rulesets and environments as the `release-tag` skill reads them, Renovate's state, dependencies changed since the last report | checks, workflow step | GitHub reads |
 | 16 | Encrypt the raw results to the model key, upload `checks-result` | checks, workflow step | artifact upload |
 | 17 | Check the artifacts, download and decrypt `checks-result` into the audit directory, copy the checkout; stop Docker and remove the runner user's sudo rule; the sandbox preflight | model, workflow steps | tools, artifact download |
@@ -169,7 +169,9 @@ subscription usage of a weekly one, and a run by hand covers a release or an adv
 
 Scorecard's checks that need admin read are reported "not run (needs admin read)"; crash inputs and PoCs
 go only into the encrypted results or an advisory, never into `testdata/`. Fuzzing is "not run (no
-`Fuzz*` targets)" until a separate issue adds committed fuzz targets that CI runs too (Decision 5).
+`Fuzz*` targets)" only when the tree holds no committed fuzz target that CI runs too (Decision 5); it
+holds `internal/adapter/report/htmlreport`'s `FuzzReportEscaping`, so the first run fuzzes it for 10
+minutes.
 
 ### The disclosure rules the publish script enforces
 
@@ -346,8 +348,9 @@ publish program's GitHub side" (2026-11-23), settles the publish program's entry
 side: the package split, the `gh` calling contract and its endpoint table, the fake `gh` its tests run
 against, and the subcommands. A fourth, "The workflow" (2026-11-24, PR 5b), settles the encryption tool
 and the artifact handling, the jobs' read scopes, the App token's `permission-*` inputs, the time budget
-and the Actions-cache residual risk. The other items of the list above (the container flags, the checks
-job's final scopes) come with PR 5c.
+and the Actions-cache residual risk. A fifth, "The checks job's rows 6 to 15" (2026-11-24, PR 5c),
+settles the other items of the list above: the container flags, the one tmpfs, the hostile corpus, the
+checks job's read scopes and the checks that are not run.
 
 ### The publish program's core (milestone 2, amended 2026-11-23)
 
@@ -2344,10 +2347,10 @@ attestation step's `if ! digest="$(jq -er ...)"` read, and in both download step
 artifact's ID and digest (`if [[ ! "${id}" =~ ^[0-9]+$ ]] || [[ ! "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]]`,
 between the digest's read and the zip's download) and the single-file `ls -A` check, each with that
 branch; the empty digest's branch is held whole as `then`, `echo "image not pulled: ..."`, `exit 0` and
-`fi`, each a line of its own, so none of them can be run together onto one line. In today's workflow the verification is the only
-command continued over lines; the check does not require that, it only matches the verification as one
-contiguous command. An order broken is reported for every pair out of order, the command that
-must come first named first.
+`fi`, each a line of its own, so none of them can be run together onto one line. In today's workflow
+the verification is the only command continued over lines; the check does not require that, it only
+matches the verification as one contiguous command. An order broken is reported for every pair out of
+order, the command that must come first named first.
 
 **The workflow check's residual risk (accepted, review round 5).** The check is a structural tripwire
 over the workflow's text, not a shell parser. It refuses the edits that make a guard look present and
@@ -2360,10 +2363,8 @@ calls or in a heredoc. Each such edit is explicit in the diff, and reaches `main
 request the maintainer reviews (CODEOWNERS and `Protect main`'s required code-owner review); the check
 does not try to read shell semantics to refuse them.
 
-**Job permissions** (`GITHUB_TOKEN`, each read): the checks job `contents` alone (no row PR 5b runs reads
-an attestation: PR 5c adds `attestations` with its release-integrity rows, and scorecard and row 15 may
-add `actions` or `issues` after the first run); the
-model job `contents` and `actions`, the artifact listing and download; the publish job `contents`,
+**Job permissions** (`GITHUB_TOKEN`, each read): the checks job `contents`, `attestations`, `actions`
+and `issues` (PR 5c: The checks job's rows 6 to 15, below, says which row needs which); the model job `contents` and `actions`, the artifact listing and download; the publish job `contents`,
 `actions` and `attestations`, the listing, the download and the image check. No `packages`: the image is
 public.
 
@@ -2461,7 +2462,7 @@ result it refuses has no write token minted for it; the App token step has exact
 `permission-*` inputs of Decision 1 (`contents`, `pull-requests`, `issues`, `security-events`, each
 `write`); the publish step alone holds the App's token and `AUDIT_FINGERPRINT_KEY`.
 
-**Time budget:** checks 180 minutes, model 120 (its model step 90, around the preflight's 10-minute and
+**Time budget:** checks 180 minutes (340 since review round D of PR 5c, 355 since round E, below), model 120 (its model step 90, around the preflight's 10-minute and
 the audit's 40-minute deadlines), publish 30; every step has its own `timeout-minutes`.
 
 **The Actions cache (residual risk).** Anything in the checks job runs as the runner's user and could read
@@ -2472,21 +2473,599 @@ Actions cache**: `release.yml`'s setup-go steps set `cache: false`, which `test/
 none (no `actions/cache`, no setup-go; the check refuses the first). CI workflows on `main` that do
 restore a cache could read a poisoned entry; their results are checks, not releases, and that is accepted.
 
-**Left to PR 5c:** rows 6 to 11 and 13 to 15 and their containers and flags; the trivy, cosign and
-scorecard pins; the checks job's final read scopes after the first run; a check that times out recorded in
-the report's limits while the run still publishes (today a step timeout fails the job); and failure
-summaries that name the runbook step for every cause (today the programs' one lines and the workflow's
-own errors do; a tool download whose checksum differs fails with sha256sum's line alone, the hardening
-step's commands that fail under `set -e` before its own checks, such as `systemctl stop`, fail with their
-own lines, the errors that point at runbook step 11 name none of their causes there yet, and the hardening
-step's three own errors, wrong owners or modes of the audit directory, `sudo -n true` still succeeding
-and the Docker socket still there, point at runbook step 10, which names only preflight and bubblewrap
-failures). **To be checked
+**Left to PR 5c**, and settled in The checks job's rows 6 to 15 below: rows 6 to 11 and 13 to 15 and
+their containers and flags; the trivy, cosign and scorecard pins; the checks job's read scopes (to be
+confirmed on the first run); and a check that times out recorded in the report's limits while the run
+still publishes. **Still open after PR 5c:** failure
+summaries that tell an expired or revoked subscription token from the subscription's usage limit. Since
+review round E of PR 5c (below) the hardening step, the model step, both artifact steps and the publish
+step end their failure with an `::error` that names the kind and runbook step 10 or 11, and since round F
+the install step does too, around `.github/scripts/install-claude-code.sh`'s own lines; but the launcher
+prints one constant class for a failed model run, so the model step's one line covers both causes, and
+runbook step 10 says what each means. **To be checked
 on the first run** (runbook step 8): that `socat`'s and `bubblewrap`'s `.deb`s install with the image's
 libraries (`dpkg -i` does not fetch a missing dependency) and that the pinned versions are still in the
 archive's pool; that the runner's sudo rule is `/etc/sudoers.d/runner`; that the runner's preinstalled
 Go switches to go.mod's toolchain; that govulncheck runs offline on what `go mod download` fetched; and
 the round E note on an empty section header in the checkout copy's `.git/config`.
+
+### The checks job's rows 6 to 15 (milestone 2, PR 5c, amended 2026-11-24)
+
+PR 5c completes the checks job: one step per row, between actionlint and the encryption, each with its
+own `timeout-minutes`. Every row writes its raw output, stderr and exit codes under
+`$RUNNER_TEMP/results/<check id>/` (the coverage vocabulary's ids), never to the log, which shows only
+the commit, the tag and that a step finished. A finding is data for the model, not a failure of the job.
+
+**Not run and limits.** Row 1 now creates two empty files instead of naming rows 6 to 15 as not run:
+`results/not-run.txt`, one line `<check id> <why id>` (the why vocabulary above) per check that did not
+run, and `results/limits.txt`, one line per check, or part of one, that timed out or ran in part. *Amended
+in review round K:* a check **did not run** only when no part of it produced a result: its step-level
+download, pull or staging failed before any part ran, or every part failed. A part of a check that timed
+out or failed (one release file's attestation, one hostile run, one fuzz target) is a `limits.txt` line
+of that check with its `.exit` file, never a `not-run.txt` line, since the publish core refuses a finding
+of a check recorded with `ran: false`. Rows 7, 13 and 14, whose checks have several parts, count them in
+shell (`ran_any`) and write `<check> tool-failed` at the step's end only when none ran (*amended in
+review round L:* row 7 writes `release-integrity ${why:-tool-failed}`, the why its download set, since
+the image half runs after a failed download; a run or a fuzz target counts only once it started, never
+after a failed create); every why id is
+one of the publish core's `whyNotRun`, which `check.AuditWorkflow` holds. Each row
+appends its own: `scorecard-admin needs-admin-read` on every run; `image-pull`, `image-runtime`,
+`hostile-inventories` and `image-scan` `image-not-pulled` when row 7 resolved no digest or row 8 pulled
+none; `image-scan tool-failed` when row 2's database download failed; `binary-vulnerabilities
+results-missing` when no archive gave up a binary; `fuzzing no-fuzz-targets` or `fuzzing tool-failed`;
+and `<check id> timed-out` for a whole check its inner deadline stopped, or `<check id> tool-failed` for
+one whose command failed (review round D, below). **A check that times out is recorded, and the run
+still publishes**: each tool runs under its own `timeout` (coreutils), shorter than its step's
+`timeout-minutes`, so the step records the timeout and goes on; the step's time-out is the backstop, and
+a step it stops fails the job, which then skips the encryption and publishes nothing. Review round D
+keeps the release's content from reaching that backstop (below), and round E holds every checks step's
+own timeouts outside its loops, plus its loop budget, below its `timeout-minutes`, so in rows 6 to 15 a
+read that hangs to its limit is recorded before the step's backstop fires. Since round F rows 3 to 5
+(govulncheck, osv-scanner, gitleaks, zizmor, actionlint) run under timeouts of their own too, so no
+check of the job reaches the backstop (Review round F of PR 5c, below). **A verification that fails is a finding**
+(round E): row 7 writes a third file at the results' root, `results/verification-failed.txt`, one line
+`release-integrity verification-failed` per checksum mismatch, refused attestation or refused
+signature, which the model reads as a finding against the release (the run's skill, row 7), never as
+"not run".
+
+**Time budget** (within the checks job's 355 minutes, amended in review round D from 180 to 340 and in
+round E to 355): row 2's download 25 minutes (trivy's database included), scorecard 20 (its run 15), the
+release's verification 50 (11 minutes of timeouts before the loop and 18 after it, counted as fit counts them:
+max(11, 20 + 2) + 18 = 40 of 50; the timeouts are the
+download 5, the filter 1, the checksum check 5, three registry and API reads of 2, `cosign verify` 3,
+the two `cosign verify-attestation` runs 3 each and the SBOM's attestation 3), the pull 15 (the pull 8,
+the inspect 2, the save 4), the binaries' govulncheck 20 (5 per binary), trivy 15 (the image 8, the SBOM
+4), the runtime check 13 (its timeouts 12, every docker command bounded since review round I), the
+hostile inventories 20 (its staging, then a 12-minute budget after which no run starts, plus the 6
+minutes of the last run begun and the image's removal: 19 minutes), fuzzing 45 (10 minutes of fuzzing
+and 16 of timeouts in all per target, at most three targets, the others recorded in the limits, no target
+started after its 25-minute budget, and the 5-minute pull), the supply-chain reads 15 (`read_api`'s
+12-minute function budget plus one read's 2 minutes; the reads it did not reach go to
+`read-skipped.txt`). Rounds I and J give each step's bound in seconds (below). The job's steps add up to
+348 minutes, which with 5 minutes for the job's set-up and post steps stays within its 355
+(`test/architecture` holds that sum), and GitHub's own limit is 360.
+
+**Pins.** scorecard v5.6.0 (`scorecard_<version>_linux_amd64.tar.gz`), cosign v3.1.5
+(`cosign-linux-amd64`, the version and digest `release.yml` and `dev/lima.yaml` pin, so Renovate's
+cosign group moves them together) and trivy v0.76.2 (`trivy_<version>_Linux-64bit.tar.gz`), each by
+version and SHA-256 with its `# renovate:` comments, downloaded and checked in row 2 as 5b's tools are;
+each digest was checked against its release's checksum file, and trivy's also against its Sigstore
+bundle, when the pin was taken. trivy's database moves every few hours, so it has no pin: row 2
+downloads it (`--download-db-only`) and trivy checks the OCI manifest's digest as it pulls. The fuzzing
+image is the Dockerfile's builder, `golang:1.27.4-alpine@sha256:...`, annotated for Renovate's docker
+datasource, whose Go toolchain group moves it with go.mod's go line.
+
+**Read scopes**, each `read`, the token only in the step-level `env:` of rows 1, 5 (zizmor), 6, 7 and
+15, and never in a step that runs release code or a container: `contents` (the checkout, the latest
+release's tag, the release download), `attestations` (`gh attestation verify`, row 7), `actions`
+(scorecard's reads of the workflows' runs, row 6) and `issues` (Renovate's Dependency Dashboard, row 15).
+No `packages` scope: the image is public, and rows 7 and 8 read the registry anonymously, with
+`DOCKER_CONFIG` an empty directory of the job's own. No read needs admin: scorecard's `Branch-Protection`
+and `Webhooks` checks are left out of its run (`scorecard-admin`, "not run (needs admin read)"), and row
+15's reads the token is refused (the secret and variable name listings at least, which need admin, and
+whatever the first run shows) are listed in `supply-chain/read-refused.txt` and the limits, "not run
+(read refused)"; the reads its budget ran out on are listed apart, in `supply-chain/read-skipped.txt`
+and a limits line of their own (review round K), since nothing refused them. The scopes are confirmed on the first run (runbook step 8): a read refused that a
+scope above should allow is a finding, and a scope no read used is dropped.
+
+**The rows.**
+
+- **Row 6**: the scorecard CLI, not its action, so nothing is published and no `id-token` is asked for;
+  its checks but the two admin ones, `--format json --show-details`, with the job's token as `GH_TOKEN`.
+- **Row 7**: `gh release download` of the recorded tag; `sha256sum --check --strict` of `checksums.txt`'s
+  well-formed lines alone (`checksums.filtered`, below) and a comparison of the files it lists with the
+  release's (a file outside the list is data too); `gh attestation verify` of every release file,
+  `checksums.txt` included, bound to `release.yml` at `refs/tags/<tag>` with `--deny-self-hosted-runners`,
+  within a 20-minute budget; the tag's and `latest`'s digests from the registry
+  (`docker buildx imagetools inspect`), a digest of any other shape recorded as none; `cosign verify` of
+  the image by digest and `cosign verify-attestation` of its SLSA provenance (`slsaprovenance1`) and its
+  SPDX SBOM (`https://spdx.dev/Document/v2.3`), keyless, with `--certificate-identity
+  https://github.com/<owner>/<name>/.github/workflows/release.yml@refs/tags/<tag>`, GitHub's OIDC issuer
+  and the `push` trigger; the SBOM itself as the predicate `gh attestation verify --format json`
+  returns, for row 10; and the latest release's tag beside both digests.
+- **Row 8**: `docker pull --platform linux/amd64` by digest, anonymous, then `docker save` for trivy.
+- **Row 9**: each archive's `shift2eu` binary streamed out alone (`tar -xOzf`, `unzip -p`) through a
+  128 MiB size cap (`head -c`), so no owner, mode or link of the archive's is written, and `govulncheck
+  -mode=binary`: read, never run. An archive whose unpack exits non-zero (141, the cap; 124, the 2-minute
+  timeout; or a `tar` or `unzip` failure) is recorded as `binary-vulnerabilities timed-out` (124) or
+  `tool-failed`, named in the limits (`binary-vulnerabilities: <archive> was not scanned: its unpack
+  exited <rc> ...`) and skipped, so the part of a member `head` wrote is never scanned (review round N).
+- **Row 10**: `trivy image --input` on the saved image and `trivy sbom` on the attested SBOM, offline at
+  scan time (`--skip-db-update --skip-java-db-update --skip-check-update --offline-scan
+  --skip-version-check --disable-telemetry`).
+- **Row 11**: from `docker image inspect` (the user, the configuration) and `docker export` of a created
+  container, listed by `tar -tvf` (the shells and setuid files the filesystem holds), never by a shell in
+  it, tar's own warnings in `filesystem.stderr`; and one start of `version` with row 13's flags and
+  limits, which shows the image runs with a read-only root filesystem.
+- **Row 13**: below.
+- **Row 14**: below.
+- **Row 15**: the workflows' `uses:` lines, those not pinned to a 40-hex commit and their `permissions:`
+  blocks from the checkout, as text; the rulesets and each ruleset by ID (a number, or the step fails),
+  each environment's settings, branch policies and secret and variable names, the repository's secret
+  and variable names, as the `release-tag` skill's step 2 reads them, names only: the secrets endpoints
+  return no value, but the variables endpoints return each variable's value, so every names read keeps
+  the names alone through `gh api --jq` (`[.variables[].name]`, `[.secrets[].name]`, review round D); Renovate's open Dependency Dashboard issue (`issues?state=open&creator=renovate[bot]`,
+  its pull requests filtered out with `select(.pull_request == null)` on the client, after one page of
+  100 items, newest first: the open Renovate pull requests share that page, so the dashboard is missed only
+  past 99 of them, and the limits line below then says no dashboard was found; a read that succeeded with no such issue writes the limits line `supply-chain:
+  no open Renovate Dependency Dashboard issue was found`, review round N) and its open pull requests; and `git diff` of the
+  dependency files (`go.mod`, `go.sum`, `tools/`, `Dockerfile`, the workflows, the Claude Code pin,
+  `dev/lima.yaml`, `infra/tofu.yaml`) from the commit of the last report under `docs/security/audits/`.
+
+**The containers.** No release binary and no fuzz target runs outside a container. Every container that
+runs one has `--read-only --network none --cap-drop ALL --security-opt no-new-privileges`, no bind mount,
+no volume and no Docker socket. **Inputs reach a container one way**: `docker cp` into a container that is
+created and never started (a staging container), which `docker commit` turns into the image the run's
+container is created from. Docker refuses a `docker cp` into a container whose root filesystem is
+read-only, unless the path is a volume, and a volume is a mount, so the copy cannot go into the run's
+container itself; the staging container never runs, so nothing in it can change what was copied. **Results
+leave one way**: on the run's stdout and stderr, from `docker start --attach`, under a `timeout` after
+which the container is killed and removed.
+
+- **Row 13, the CLI on hostile inventory files.** The corpus is committed under
+  **`.github/security-audit/testdata/hostile-inventories/`**: a `testdata` directory, so `test/examples`'
+  sanitisation check holds it to CLAUDE.md rule 2. Its files are terminal escape sequences, path-like and
+  shell-like names, markup injection, Unicode tricks, a relations graph with cycles and a duplicate ID,
+  extreme and overflowing numbers, and one schema confusion each (duplicate and escaped keys, a string and
+  a fractional version, a version 2 key in version 1, wrong types, nulls, prototype keys, a trailing
+  document, lone surrogates, unknown values). The step generates what no committed text file holds: a
+  file one byte over the 10 MiB cap, one resource over the 50 000 cap, arrays nested 100 000 deep, a
+  1 MiB ID, malformed UTF-8, a byte order mark, a NUL byte, an empty file, a directory, and links to
+  `/proc/self/environ`, `/dev/zero`, `/dev/urandom`, a missing file and themselves. Each file runs as
+  `assess --inventory <file> --target all`, as Markdown and as JSON, in a container of its own from the
+  release image (by the digest row 7 resolved) with `--memory 512m --pids-limit 64` too. **No tmpfs**:
+  the CLI writes nothing but its stdout and stderr.
+- **Row 14, fuzzing.** The targets are found by reading the tracked `*_test.go` files outside `testdata`
+  as text, by their signature alone (`^func Fuzz[A-Z0-9_][A-Za-z0-9_]*\(f \*testing\.F\)`, so a helper
+  such as `Fuzzy` is none): nothing is built or run to list them. A target whose package or name has
+  another shape is recorded in the limits (`fuzzing: a target of an unexpected shape was not run`, since
+  review round K) and skipped, never a reason to end the step.
+  Each target runs `go test -run '^$'
+  -fuzz '^<name>$' -fuzztime 10m` in a container of its own from the pinned Go image, with
+  `GOFLAGS=-mod=readonly`, `GOPROXY=off` and `GOTOOLCHAIN=local`, as user 65534, with
+  `--memory 10g --pids-limit 512`, the tree at the audited
+  commit (`git archive`) and the module cache row 2's download filled copied in through the staging
+  container. **Its one tmpfs**, `/scratch` (`rw,exec,nosuid,size=4g,mode=1777`), is needed because `go
+  test -fuzz` writes: a crash input into the package's `testdata/fuzz/`, so the tree is copied there
+  first, the build cache (`GOCACHE`) and the test binaries it builds and runs (`GOTMPDIR`, hence `exec`).
+  The crash inputs leave on stdout as a tar stream, the log on stderr. *Decision 5 said no target exists
+  yet; `internal/adapter/report/htmlreport`'s `FuzzReportEscaping` does, so the first run fuzzes it for
+  10 minutes.*
+
+**To be checked on the first run** (runbook step 8), besides 5b's list: that cosign v3's
+`verify-attestation` reads the attestations `actions/attest` pushed as OCI referrers (`gh attestation
+verify` reads them, as `release.yml`'s `verify` job shows); that scorecard reads with these scopes and
+which row 15 reads are refused; that trivy runs offline with these flags; that `docker commit` keeps the
+release image's user, working directory and entry point; that `go test -fuzz` builds offline from
+the copied module cache without writing to it; and that `gh attestation verify` exits 1 for a refused
+verification and another code for a network failure (round E, below). If it exits 1 for both, a network
+failure reads as a finding the maintainer confirms, never a refusal read as a limit: the model
+downgrades on the recorded exit code alone, never on stderr (review round I, below). cosign's codes are
+no longer to be checked: round I read them from its source.
+
+**Review round D of PR 5c (2026-11-24).** The review's and the audit's findings, each held by
+`check.AuditWorkflow` and a case of its test:
+
+- **Release content never stops the report.** The release's files, archives and image are the untrusted
+  party: a `checksums.txt` that lists `/dev/zero`, an archive whose member decompresses to gigabytes, an
+  image layer GNU tar refuses or a `docker cp` the image makes fail ended rows 7 to 13 under `set -e`,
+  or ran into the step's timeout, and the run then published nothing. In rows 7, 8, 9, 11 and 13 every
+  `sha256sum`, `tar`, `unzip`, `docker export|create|cp|commit|image inspect|save`, `cosign` and `gh
+  attestation verify` now runs under a `timeout` of its own with `|| rc=$?`, its exit recorded, and each
+  of those steps records a failure as `<check> tool-failed` and a timeout as `<check> timed-out` in
+  `not-run.txt` (`release-integrity`, `image-pull`, `binary-vulnerabilities`, `image-runtime`,
+  `hostile-inventories`). A command whose container or image the rest of the step needs, row 11's and
+  row 13's creates, copy and commit, ends the step with `finished` and exit 0 once it is recorded.
+- **The checksums filter.** Only `checksums.txt`'s lines of the shape `^[0-9a-f]{64}  [A-Za-z0-9._+-]+$`
+  reach `sha256sum` (`checksums.filtered`, under `timeout 1m grep -E`): a name with a `/`, such as
+  `/dev/zero`, is never an argument, and the release's whole `checksums.txt` stays data for the model.
+  `checksums.filtered` is the step's own file, so the release's listing and the attestation loop leave
+  it out.
+- **The size cap.** Row 9 streams the archive's one member to stdout (`tar -xOzf`, `unzip -p`) through
+  `head -c 134217728`: at most 128 MiB is written, and no owner, mode or link of the archive's.
+- **The time budget sums.** Row 7's attestation loop stops at 20 minutes from the step's start (`if [
+  "${SECONDS}" -ge 1200 ]`), recording the files it did not reach, as row 13's runs stop at 15; the check
+  holds every such budget below its step's `timeout-minutes`. The checks job's timeout rises from 180 to
+  340 minutes, because its steps' own timeouts added up to 330: the check holds the steps' sum plus 5
+  minutes for the job's set-up and post steps within the job's timeout, so a step's timeout, not the
+  job's, is what fires.
+- **The docker refusals.** The check reads a docker command's subcommand after its global flags and its
+  `container` or `image` word, and refuses `run`, `exec` and `login` in every spelling (`docker
+  container run`, `docker --context x run`, `docker exec`, `docker container exec`). On every line
+  outside the model job it refuses `--security-opt` with any value but `no-new-privileges` (so no
+  `seccomp=unconfined`, `apparmor=unconfined`, `label=disable` or `systempaths=unconfined`), `--network`
+  with any value but `none` (`container:<id>` included), `--user` or a docker line's `-u` with any value
+  but `65534:65534`, `--env-file`, `--cgroupns` and `--sysctl`. Every `docker start` names a container a
+  `docker create` made with the four flags first; a staging container is never started. Row 14's create
+  is held whole, from its first line to its `sh -c` command, so no flag can follow the pinned ones.
+- **The resource limits.** Row 11's container has row 13's `--memory 512m --pids-limit 64`, and row 14's
+  `--memory 10g --pids-limit 512`, room for its 4 GiB tmpfs and the fuzzer's workers within a hosted
+  runner's memory, so a hungry target meets its own limit before the runner's out-of-memory killer.
+- **The corpus regular-file rule.** Row 13 copies the corpus with `cp -P`, so a committed link is copied
+  as a link and never followed on the runner, and `test/architecture`'s
+  `TestAuditHostileCorpusIsRegularFiles` holds every corpus entry to a regular file (mode 100644).
+- **Names only.** The variables endpoints return values; `read_api` takes a jq filter as its third
+  argument (`.` by default) and passes it to `gh api --jq`, and the four names reads pass
+  `[.variables[].name]` and `[.secrets[].name]`. Row 11's `tar -tvf` writes its warnings, which name the
+  image's entries, to `filesystem.stderr`, never to the public log.
+- **Fuzz discovery and an unexpected target.** Discovery matches the `Fuzz` signature alone, so
+  `func Fuzzy(` and helpers are no target; a target of another shape is recorded `fuzzing
+  unexpected-target` ("not run") and skipped, where it ended the job with no report before. *Amended in
+  review round K:* `unexpected-target` is no why id, so the target is now a limits line.
+- **trivy offline.** The check holds row 10's `offline=(...)` flags `--skip-db-update
+  --skip-java-db-update --skip-check-update --offline-scan --disable-telemetry`, which both scans use:
+  without them trivy would send the image's package identifiers to third-party services.
+- **The checksum guards** (round C). Every tool download's checksum check, in all three jobs, is `if !
+  echo "${<TOOL>_SHA256}  <file>" | sha256sum --check --strict -; then`, an `::error` naming the tool,
+  its job and runbook step 11, and `exit 1`: a failed run names its cause.
+
+**Review round E of PR 5c (2026-11-24).** The rest of PRD #175's "A failed run is visible" and the
+checks job's own time budget, each held by `check.AuditWorkflow` and a case of its test:
+
+- **A failed verification is a finding.** Row 7's five verifications, the checksum check, each release
+  file's `gh attestation verify`, `cosign verify`, the two `cosign verify-attestation` runs and the
+  SBOM's `gh attestation verify`, each end in one branch: rc 124 is `release-integrity timed-out` in
+  `not-run.txt` with its `limits.txt` line, rc 1 (a mismatch, a refused attestation, a refused signature)
+  is `release-integrity verification-failed` in `results/verification-failed.txt`, any other failure is
+  `release-integrity tool-failed`. Before, a mismatch was recorded as `tool-failed`, so a tampered
+  release read as a check that did not run. `results/` is what the encrypt step archives, so the file
+  reaches the model, whose skill (row 7) reads it as a finding. *Residual:* rc 1 is also the exit of a
+  `cosign` or `gh` that could not reach Sigstore or GitHub, and of a `sha256sum` that could not read a
+  listed file, so a `verification-failed` line can be a tool failure; the skill has the model confirm
+  each from the command's stderr in the check's folder and report a tool failure as a limit. A false
+  finding is the safe side of that ambiguity.
+- **The filtered checksum list is the results'.** `checksums.filtered` is written to
+  `results/release-integrity/`, not into the release's directory, and `sha256sum` reads it from there
+  while it resolves the listed names in the release's directory: the release's listing and the
+  attestation loop never see it, so they no longer leave a file of that name out (`! -name
+  checksums.filtered` is gone), and a release asset of that name is checked like any other.
+- **Each step's inner timeouts fit its own.** A step's timeout firing ends the job and skips every later
+  step, the encrypt step included, so the run publishes nothing. For every step of the checks job the
+  check adds the `timeout <N>m`, `<N>s` and bare `<N>` (seconds) values outside its `while`, `until` and
+  `for` loops, and its `${SECONDS}` loop budget, which bounds the loop's own timeouts; the sum must be
+  below the step's `timeout-minutes`. To fit, row 7 rises from 30 to 50 minutes and its inner timeouts
+  fall (the download and the checksum check 10 to 5, the three Sigstore reads 5 to 3), and rows 8, 10,
+  11 and 13 lower theirs (Time budget, above) instead of raising their step's.
+- **The job's time budget is 355.** The steps' sum rises by row 7's 20 and falls by fuzzing's 5 (50 to
+  45: three targets of 12 and the 5-minute pull fit), from 330 to 345, which with the 5 minutes of set-up
+  and post steps is past round D's 340: the job's timeout is now 355, the highest value that keeps 5
+  minutes below GitHub's 360.
+- **Which failures are named.** Each step that can fail with one of the box's causes ends its failure
+  branch with `::error title=Audit <job>::<kind>: see runbook step <N>`, no secret and no finding's detail:
+  the hardening step's three commands record their failure (`|| rc=$?`) and end in `the runner could not
+  be hardened: see runbook step 10`, and its three own errors are retitled from `Sandbox` to `Audit
+  model`; both artifact steps end in `the run's artifacts are unexpected: see runbook step 11`; the
+  publish step in `the publish was refused: see runbook step 11`. The model step's line is one generic
+  `the audit did not run: see runbook step 10`, because the launcher prints one constant class per run:
+  an expired or revoked token and the subscription's usage limit both read `the audit failed: the
+  model's run or its result file`, so the step cannot tell them, a failed preflight or a managed-settings
+  path apart; the launcher's own line above it in the summary names what it can, and runbook step 10
+  says what each means. *Residual:* `.github/scripts/install-claude-code.sh`'s own `::error title=Claude
+  Code CLI::...` lines (the tarball against its pin, a managed policy on the runner) name no runbook
+  step; the runbook's step 11 names them. The script is shared with the AI reviewer's workflow, so
+  naming the audit's runbook step there is a change of its own. *Settled in round F, below.*
+
+**Review round F of PR 5c (2026-11-25).** Round E's two residuals, each held by `check.AuditWorkflow`
+and cases of its test:
+
+- **Every tool run of the checks job is under a timeout of its own.** Rows 3 to 5 now run as rows 6 to
+  15 do: each run of govulncheck (8 minutes, the module and `tools/` each), osv-scanner (8), gitleaks (15),
+  zizmor (4) and actionlint (5) is `timeout <N>m <tool> ... || rc=$?`, records its exit in
+  `<name>.exit` beside its JSON output and stderr, and then records rc 124 as `<check> timed-out` in
+  `not-run.txt` with its `limits.txt` line, and any other non-zero exit that is no finding as `<check>
+  tool-failed`. The check ids are `dependencies` (rows 3 and 4), `history-secrets` (gitleaks) and
+  `workflows` (zizmor and actionlint). The check holds every run of govulncheck, osv-scanner, gitleaks,
+  zizmor, actionlint, scorecard, trivy, cosign, `gh attestation verify` and `go test` in every checks
+  step but the tool download: `timeout <N>m` or `<N>s` before the tool and `|| rc=$?` after it on its
+  logical line. A tool the go command runs (`go -C tools run .../actionlint`, `go tool ... actionlint`) is
+  matched by its last path element; row 14's `go test`, inside its container's `sh -c`, is bounded by the
+  `timeout 12m docker start ... || rc=$?` line of a step that must hold one; a line that only echoes a
+  quoted text runs no tool. The steps' `timeout-minutes` are unchanged: each row's own timeouts fit its
+  step's 20 or 10 (the fit rule), and the job's steps still add up to 345 of its 355.
+- **The exit codes that are findings**, read from each tool's pinned source: govulncheck v1.10.0 exits 0
+  with `-format json` whatever it finds (`cmd/govulncheck/doc.go`, Exit codes; only the text handler
+  returns the exit-3 error), and 2 on bad usage, so every non-zero exit of it is tool-failed; osv-scanner v2.7.1
+  exits 1 when it finds a vulnerability and 127 to 130 on a failure (`cmd/osv-scanner/internal/cmd/run.go`);
+  actionlint v1.7.12 exits 1 on a problem found, 2 on a bad option and 3 on a fatal error
+  (`command.go`); zizmor v1.33.1 exits 11 to 14 by the highest finding's severity and 1, 2 or 3 on an
+  error, bad arguments or no inputs (`docs/usage.md`, Exit codes; only SARIF, `--no-exit-codes` and
+  `--fix` drop the finding codes); gitleaks v8.30.1 exits `--exit-code` (default 1) when it finds a leak
+  and 1 on every error (`cmd/root.go`, its fatal log), so the workflow passes `--exit-code 2` and a leak is
+  2, an error 1. Without that, a gitleaks that failed before writing its report would read as a finding
+  with no report, and so as clean. *Residual:* a hang inside a tool's own subprocess that ignores
+  `SIGTERM` outlives `timeout`'s signal; coreutils' `timeout` sends no `SIGKILL` unless asked
+  (`--kill-after`), so such a run still reaches the step's backstop. None of the five tools is known to
+  ignore it.
+- **The install step names its runbook step.** The model job's call of the shared install script is
+  `if ! .github/scripts/install-claude-code.sh "..." "..." "..."; then`, `echo "::error title=Audit
+  model::the Claude Code CLI did not install: see runbook step 11"`, `exit 1` and `fi`, each on a line of
+  its own; the script's own two lines stay above it in the summary and the script is unchanged, so the AI
+  reviewer's workflow is not touched. The check holds the branch whole: removed, without its `exit 1`, or
+  run together onto the echo's line, it is refused.
+- **What stays open.** An expired or revoked subscription token and the usage limit still share the model
+  step's one line (round E): the launcher prints one constant class, so PRD #175's "A failed run is
+  visible" box stays open on that alone.
+
+**Review round H of PR 5c (2026-11-25).** `check.AuditWorkflow` holds rows 3 and 5's exit codes as
+round F reads them from the pinned sources: gitleaks's `gitleaks git` run carries `--exit-code 2` and its
+tool-failed branch is `elif [ "${rc}" -ne 0 ] && [ "${rc}" -ne 2 ]; then`; zizmor's is `elif [ "${rc}"
+-ne 0 ] && { [ "${rc}" -lt 11 ] || [ "${rc}" -gt 14 ]; }; then`; govulncheck's two are `elif [ "${rc}"
+-ne 0 ]; then`, and any govulncheck branch that excuses a further exit (`-ne 0 ] && ...`, such as text
+mode's 3) is refused, so neither of its two runs can read an error as a finding. Each branch is a whole
+line, and each message names its tool.
+
+**Review round I of PR 5c (2026-11-25).** The reviewer's and the auditor's findings on the whole branch.
+The invariant behind them: nothing in the checks job ends the job before the encrypt step, a check that
+did not run is recorded in `not-run.txt`, never reported clean, and a real verification failure is a
+finding, never a limit. Each is held by `check.AuditWorkflow` and a case of its test:
+
+- **B1, cosign's refusal exits.** cosign v3.1.5 maps `verify`'s errors to exit codes in
+  `cmd/cosign/errors/exit_code_lookup.go`, with the constants in `cmd/cosign/errors/exit_codes.go`:
+  `ErrNoSignaturesFound` 10, `ErrImageTagNotFound` 11, `ErrNoMatchingSignatures` 12,
+  `ErrNoCertificateFoundOnSignature` 13; `cmd/cosign/cli/verify/verify.go` wraps the error it returns
+  with that lookup, and every other error, a network failure included, is 1. Row 7 read only 1 as a
+  finding, so a missing or non-matching signature read as `tool-failed`. Its `cosign verify` branch is now
+  `elif [ "${rc}" -eq 1 ] || { [ "${rc}" -ge 10 ] && [ "${rc}" -le 13 ]; }; then`, whole on its line.
+  `cosign verify-attestation` does not wrap its error, so 1 stays its one finding exit; `gh attestation
+  verify` keeps 1 too. A network failure of either cosign command is 1 as well: it reads as a finding
+  the maintainer confirms, which fails closed.
+- **M1, every loop with a timeout has a budget.** Row 9's archive loop had none: six archives of up to
+  2 + 5 minutes against the step's 20. It now stops new archives at `if [ "${SECONDS}" -ge 720 ]; then`
+  with a limits line, and the check holds rows 9 and 14 to the budget rule rows 7 and 13 had. `fit`
+  refuses a loop that holds a `timeout` and has no budget at the head of its body; the one exception is
+  a `for` over literal words (row 7's two cosign attestations) in a step that has a budget, whose
+  timeouts it counts once per word.
+- **M2, row 14's staging is bounded.** The tree's extraction, the staging create, both `docker cp`s and
+  the commit each run under a `timeout` of their own with `|| rc=$?`, record `fuzzing timed-out` or
+  `fuzzing tool-failed`, and end the step with `finished` and `exit 0` when the rest needs what failed;
+  each target's create is under `timeout 2m` and records its own exit; the pull's timeout is
+  `fuzzing timed-out`; and no target starts after the step's 25th minute. The check holds the step under
+  the `bounded` rule (check `fuzzing`) and the loop budget, and pins the create through its `|| rc=$?`.
+- **L1, every docker command is bounded.** Rows 11, 13 and 14's post-run `docker kill`, `inspect`,
+  `rm`, `rm -f` and `image rm` ran with no timeout. Each now runs right after `timeout <N>` and ends in
+  `|| rc=$?`, or in `|| true` for a command that only cleans up; row 11's exit-state read records its
+  exit and branch. The check refuses any docker command of the checks job without both. Row 11's
+  timeout-minutes is 13 (its own timeouts are 12), and the job's steps now add up to 348 of its 355.
+- **L2, a failed download is no checksum finding.** A failed or empty download left `checksums.txt`
+  absent, the filtered list empty and `sha256sum` exiting 1, a false `verification-failed`. The download
+  now sets `rel_ok`: 0 on a timeout, a failure or a missing `checksums.txt` (`release-integrity
+  results-missing` with its limits line), and the filter, the checksum check, the listing and the
+  per-file attestations run only inside `if [ "${rel_ok}" -eq 1 ]; then`. The checksum finding needs a
+  non-empty list: `elif [ "${rc}" -eq 1 ] && [ -s "${out}/checksums.filtered" ]; then`.
+- **L3, a tool that failed is a check that did not run.** scorecard, trivy (default `--exit-code 0`)
+  and `docker pull` exit non-zero only on an error, and only 124 was branched. Each run is now followed by
+  `elif [ "${rc}" -ne 0 ]; then` recording `scorecard`, `image-pull` or `image-scan tool-failed`, and
+  trivy's timeouts are `image-scan timed-out` in `not-run.txt` as well as their limits line.
+- **L4, an archive without its binary is no scan.** `head` creates the binary's file whatever `tar`
+  gives it, so row 9's `find` counts a member only with `-size +0`, and an archive with none is
+  `results-missing`.
+- **L5, latest.txt is shape-checked.** `latest_release` and `latest_digest` are blanked unless they are
+  `^v[0-9]+\.[0-9]+\.[0-9]+$` and `^sha256:[0-9a-f]{64}$`, as `tag_digest` is.
+- **L6, an unexpected ruleset ID does not end the step.** Row 15 records `supply-chain
+  unexpected-ruleset` in `not-run.txt` and goes on with `continue`, never `exit 1`. *Amended in review
+  round K:* `unexpected-ruleset` is no why id, so the ID is now the limits line `supply-chain: a ruleset ID
+  that is no number was not read`.
+- **S4, an unresolved digest is recorded.** The `else` of `if [ -n "${tag_digest}" ]` records
+  `release-integrity tool-failed` and a limits line naming the signature and attestations it did not
+  verify. *Amended in review round K:* the limits line alone, since the file checks may have run.
+- **S5, the model downgrades on the exit code alone.** The `security-audit-run` skill lets the model
+  report a `verification-failed` as a limit only when the command's `.exit` file records a code other
+  than the refusal codes above; stderr is context, never a reason, because the registry's, Sigstore's and
+  GitHub's text in it can be shaped in part by whoever tampered with the image. Its rows 6, 8 and 10 name
+  their new `tool-failed` records. *Amended in review round K:* never downgraded (N3).
+- **N1.** The fixture's cosign pin is v3.1.5's, as the workflow's.
+
+*Accepted residual (N3, unchanged):* `timeout` sends no `SIGKILL` (`--kill-after`), as round F records:
+the host tools are Go programs that exit on `SIGTERM`, and a container whose `docker start` times out is
+followed by `docker kill`.
+
+*Loop budgets and their last iteration.* A `${SECONDS}` budget at the head of a loop's body stops only new
+iterations, so a step's worst case is the later of the time before its loop and the budget plus one
+whole iteration, plus the timeouts after the loop. In the workflow: row 7, max(11, 20 + 2) + 18 = 40 of
+50 minutes; row 9, 12 + 7 = 19 of 20; row 13, max(4.5, 12 + 6) + 1 = 19 of 20 (its budget is 12
+minutes, not 15, for this); row 14, max(18.5, 25 + 16) + 1 = 42 of 45. `fit` counts the budget and every
+timeout outside the loop, not the last iteration, so it does not yet hold this bound; review round J
+does.
+
+**Review round J of PR 5c (2026-11-25).** Round I's own record left two holes in `fit`: it counted a
+loop's budget but not the iteration begun just before it, and a shell function's timeout once, however
+often the step called it. Row 15's `read_api` holds `timeout 2m gh api` and runs more than 25 times in a
+15-minute step. Each is held by `check.AuditWorkflow` and a case of its test:
+
+- **The sound bound.** `fit` walks the step's script in order as one sum `T` of its timeouts. A
+  timeout outside its loops and functions adds once; a `case` adds its longest arm, since one arm runs
+  (row 9's `tar` or `unzip`). A loop whose body holds a budget `B`, with its body's timeouts `T_iter`,
+  sets `T` to `max(T, B + T_iter)`: everything before the loop's last iteration ended before that
+  iteration began, below `B`, and the iteration runs to its own timeouts at most. What follows the loop
+  adds to `T`, so a second budgeted loop is bounded the same way. A literal-word loop with no budget
+  still counts `n * T_iter`, and any other loop with a timeout is still refused. The bound is strictly
+  below the step's `timeout-minutes` or the check names it in seconds, with its parts.
+- **The function budget.** A shell function whose body holds a `timeout` holds its own budget, `if [
+  "${SECONDS}" -ge <seconds> ]; then` on a line of its own at the head of its body (past its `local`
+  lines), or the check refuses it, by name, as `with no function budget`. A budgeted function counts
+  once as `max(T, B + one call's timeouts)`, never per call. That is sound because the budget is tested
+  before the call's timeout: the last call that reads begins below `B` and ends within its timeouts, every
+  later call returns at once, and every timeout outside the function that runs between calls ran before
+  that last call or adds after it.
+- **Row 15's fix.** `read_api` stops at `if [ "${SECONDS}" -ge 720 ]; then`, records the endpoint it did
+  not read in `read-refused.txt` and returns 0; the step's end already names `read-refused.txt` in the
+  limits as "not run (read refused)". Its bound is 12 + 2 = 14 of 15 minutes: the step's other commands
+  (`grep`, `jq`, `git`) run under no timeout, as before.
+
+The checks job's bounds, in seconds, the fixture's and the workflow's alike: row 7, max(660, 1200 + 120)
++ 1080 = 2400 of 3000 (40 of 50 minutes); row 8, 840 of 900; row 9, 0 + 720 + 420 = 1140 of 1200; row 13,
+max(270, 720 + 360) + 60 = 1140 of 1200; row 14, max(1110, 1500 + 960) + 60 = 2520 of 2700; row 15, 720
++ 120 = 840 of 900. The job's steps still add up to 348 of its 355 minutes.
+
+**Review round K of PR 5c (2026-11-25).** The reviewer's and the auditor's findings on round J. The
+invariant: `not-run.txt` means the check did not run, and every line of it is one the publish core can
+render, since a result it refuses publishes no report. Each is held by `check.AuditWorkflow` and a case
+of its test:
+
+- **B1, a part is no whole verdict.** Rows 7, 13 and 14 wrote a part that timed out or failed (one
+  file's attestation, the image's signature, one hostile run, one fuzz target) as the whole check not
+  run, so a tampered archive with a deleted image tag gave a finding of a check recorded `ran: false`,
+  which the core refuses. Each step now sets `ran_any=0` before its first part and `ran_any=1` right
+  after each part's exit, records each part's timeout or failure as a limits line of the check, and ends
+  with `if [ "${ran_any}" -eq 0 ]; then echo "<check> tool-failed" >> "${results}/not-run.txt"; fi`. The
+  step-level download, pull and staging records before any part ran keep their not-run lines. The check
+  refuses, in those three steps, a not-run line inside a loop, one outside the loops after the first
+  `ran_any=1` (the end record aside), a part's exit inside a loop with no `ran_any=1` after it, and a
+  step with no end record after its last `ran_any=1`. *Corrected in review round L:* this left row 7's
+  download writing its not-run line in its own branch while the image half still ran, and rows 13 and 14
+  counting a failed create as a part that ran. Since round L a step writes a not-run line only at its end,
+  when no part ran, or right before the `exit 0` of a failure before any part ran (rows 13 and 14's pull
+  and staging); row 7's download writes a limits line and the why (round L, below). Row 13's run that hangs the CLI is the limits line
+  `<run> timed out after 60 seconds, a finding candidate of the run`, with exit 124 in its `.exit` file,
+  which the skill reads as a finding candidate. The skill adds the belt and braces: a check with any
+  finding, or any `verification-failed.txt` line, ran, and any not-run line of it goes to the limits.
+- **B2, why ids outside the vocabulary.** `fuzzing unexpected-target` and `supply-chain
+  unexpected-ruleset` are no why id of `whyNotRun`, so the core refused the result. Both are limits lines
+  now, and the check holds every not-run line of the checks job to the shape `echo "<check id> <why id>"`
+  and its why id to a list its test pins equal to `whyNotRun` in
+  `ci/auditpublish/internal/publish/vocabulary.go`.
+- **L4, a malformed checksums.txt.** A non-empty `checksums.txt` with no well-formed line filtered to an
+  empty list and read as `tool-failed`. It is now `release-integrity verification-failed` with the limits
+  line `release-integrity: checksums.txt holds no well-formed line`, right after the filter.
+- **S2, budget skips are no refused reads.** `read_api`'s budget wrote the reads it did not reach to
+  `read-refused.txt`, which sends the maintainer to a permission that is fine. They go to
+  `read-skipped.txt`, which the step's end names in a limits line of its own.
+- **N3, the skill's row 7.** Its downgrade condition was vacuous (the workflow writes
+  `verification-failed` only on the refusal codes); the skill now says never to downgrade one, and to use
+  the `.exit` files to name the command that refused.
+- **The fit tripwire's holes (auditor L2, reviewer S1).** `fit` now refuses: (a) a `timeout` whose
+  duration is no `<N>`, `<N>s` or `<N>m` before its command (`timeout 1h`, `1.5m`, `-k 5 50m`, which it
+  counted as 0 or as the flag's 5 seconds); (b) a loop on one line, a loop with `do` on a line of its own,
+  and any other loop header that is no `auditLoopStart`; (c) inside a budgeted loop's body, an inner loop
+  with a timeout that is neither budgeted nor over literal words, and a literal-word inner loop with no
+  budget counts its timeouts once per word; (d) a `timeout` that `xargs` or `find -exec` runs once per
+  argument. *Corrected in review round L:* (b) and (d) are closed only for the shapes round L refuses: a
+  loop header after `&&` or `;`, and `xargs timeout ...` or `find ... -exec timeout ... {} +` with nothing
+  between, passed round K's check (K3, K4).
+
+*Accepted residuals of the text tripwire*, which `fit` does not hold: an outer loop's timeouts around a
+budgeted inner loop (counted once, not per outer iteration); a budget that is not at the head of a loop
+body; commands under no timeout, counted as zero; loops inside a `case` arm; nested budgeted loops, and
+budgeted functions, beyond round J's rule; and a timeout reached through anything but its own command
+line (a variable that holds the command, `eval`, a script file). The numbers are unchanged: every
+step's bound is round J's, and the job's steps add up to 348 of its 355 minutes. The PRD's box "A failed
+run is visible" stays unticked, for milestone 3, and rows 9 and 10, which also write a part's failure to
+`not-run.txt`, are left as they are: the B1 rule is scoped to rows 7, 13 and 14. *Amended in review
+round L:* rows 3, 5 and 11 do so too (round L, below).
+
+**Review round L of PR 5c (2026-11-25).** The reviewer's and the auditor's findings on round K. Each is
+held by `check.AuditWorkflow` and a case of its test:
+
+- **K1 (auditor M1), row 7's download is no whole verdict.** Its three branches wrote `release-integrity
+  timed-out`, `tool-failed` or `results-missing` to `not-run.txt`, and the image half ran after them, so a
+  release with no `checksums.txt` and a tampered image signature gave a not-run line beside a
+  `verification-failed.txt` line of the same check, which the core refuses. Each branch now sets
+  `why=timed-out`, `why=tool-failed` or `why=results-missing` and writes a limits line (the failed
+  download one of its own, `release-integrity: the release download failed with exit ${rc}`, the
+  auditor's N1), and the step's end writes `release-integrity ${why:-tool-failed}` only when `ran_any` is
+  still 0. The check refuses, in rows 7, 13 and 14, a not-run line anywhere but the step's end record
+  unless it ends the step in one of round M's two shapes (M1, below: round L's own rule let any message
+  and any `if`, `elif`, `else` or `fi` line stand between the record and an `exit 0`); it accepts a
+  `${why:-<id>}` record only when its default and every line of the step that names `why` as a shell word
+  (since round M, M2; round L saw only assignments), each `why=<why id>` on a line of its own, are why ids
+  of `whyNotRun`.
+- **K2, a failed create is no run.** Rows 13 and 14 set `ran_any=1` right after the create's exit, so a
+  step whose every create failed read as a check that ran clean. `ran_any=1` now follows the start's
+  exit, after the create's `continue` guard (round M, M5, dropped a second one right after that guard);
+  the check refuses it right after a `.create.exit` and still demands it right after the start's.
+- **K3, a loop header after `&&` or `;`.** A loop word after a blank or an operator is a loop header
+  `fit` must follow, and it refuses one that is no `auditLoopStart`.
+- **K4 (auditor L1), a timeout per argument or in a quoted string.** `fit` refuses a `timeout` that
+  `xargs` or `find -exec`/`-execdir` runs, whatever stands between the runner and the timeout, and a
+  `timeout` inside a quoted string (`sh -c 'timeout 50m true'`), which a shell the step starts would run.
+- **K6.** Row 13's limits line `hostile-inventories: ${run} timed out after 60 seconds, a finding
+  candidate of the run` is held whole.
+- **K7.** The check's list of why ids and `whyNotRun` are pinned equal in both directions.
+
+*Accepted residuals*, besides round K's: a `timeout` invoked by its path (`/usr/bin/timeout`), and other
+runners that run a command once per argument, such as `parallel`, which `fit` does not see. **K5:** rows
+3 (`dependencies`: govulncheck on the module and the tools, osv-scanner), 5 (`workflows`: zizmor,
+actionlint), 9 (`binary-vulnerabilities`), 10 (`image-scan`) and 11 (`image-runtime`) can still write a
+part's failure as the whole check's not-run line while another part of the check has a finding; the
+skill's paragraph "A check that ran, and one that did not" is the only guard there. Applying `ran_any` to
+those rows is a milestone 3 follow-up. The numbers are unchanged: no timeout moved, every step's bound is
+round J's, and the job's steps add up to 348 of its 355 minutes.
+
+**Review round M of PR 5c (2026-11-25).** The reviewer's suggestions and the auditor's low findings on
+round L; nothing blocked. Each test-side one is held by `check.AuditWorkflow` and a case of its test:
+
+- **M1 (reviewer S1, auditor L-1), a step's end is one of two shapes.** Round L's rule took any `exit 0`
+  it reached as the step's end, so a finding written beside the not-run line, a guard narrowed to
+  `-eq 124`, an `exit 0` in an `else` and a never-taken branch before the guard all passed. In rows 7, 13
+  and 14 a not-run line other than the end record now stands either (i) in one branch with only messages
+  after it, then `echo "finished"` and `exit 0` (row 13's `image-not-pulled`, row 14's `no-fuzz-targets`
+  and pull), or (ii) in an `if [ "${rc}" -eq 124 ]` or `elif [ "${rc}" -ne 0 ]` branch, with messages,
+  records and that `elif` up to the branches' `fi`, then exactly `if [ "${rc}" -ne 0 ]; then`,
+  `echo "finished"` and `exit 0` (rows 13 and 14's staging). A message there is a limits line
+  (`>> "${results}/limits.txt"`) or an `echo "::error ..."`; a line with `$(` or a backtick, an `else`,
+  any other guard or file is refused, and the message quotes it.
+- **M2 (auditor L-2), every word `why`.** Round L saw only assignments: `read -r why <
+  "${out}/download.stderr"` would have made gh's stderr the why id the core refuses. In a step with a
+  `${why:-<id>}` record, every line that names `why` as a shell word, outside comments, messages and that
+  record, must be `why=<why id>` on a line of its own (no `read`, `printf -v`, `for why in`, `mapfile` or
+  `${why:=...}`). A step or job `env:` key `why` was already refused, as a variable the env reader does
+  not understand.
+- **M3 (reviewer S2).** The test's why-id list is a copy, so sorting it races with no parallel case.
+- **M4.** Row 7 sets `why=tool-failed` before its first part, so no inherited value reaches the end record.
+- **M5.** Rows 13 and 14 set `ran_any=1` once per started run, right after the start's exit.
+
+*Kept as is:* the `# shellcheck disable=SC2100` directive above `why=results-missing` (added in round L),
+scoped to that line and explained on it: shellcheck reads `results-missing` as a subtraction of the
+variable `results`, and quoting the three ids instead would need another change to the check's
+`why=<id>` shape. Quoting them is a later option. The numbers are unchanged: the job's steps add up to 348
+of its 355 minutes.
+
+**Review round N of PR 5c (2026-11-25): the AI review of PR #565.** The reviewer and the auditor weighed
+the AI reviewer's ten points. Each fix on the test side is held by `check.AuditWorkflow`, whole-line in
+its step, and by a case of its test:
+
+- **Point 4, row 15's dashboard read.** `issues?state=all&creator=renovate[bot]` read one page of 100
+  items, pull requests included, and the dashboard, the oldest item, would fall off that page silently
+  once there were more than 100. The read is now `state=open` through `[.[] | select(.pull_request ==
+  null)]`, and a read that exited 0 with an empty array writes `supply-chain: no open Renovate Dependency
+  Dashboard issue was found` to the limits.
+- **Point 10, row 9's failed unpack.** After a non-zero unpack the loop still counted and scanned the part
+  of a member `head -c` had written, and a 124 was recorded as `tool-failed`. The branch now records 124
+  as `timed-out` and any other exit as `tool-failed`, writes `binary-vulnerabilities: ${name} was not
+  scanned: its unpack exited ${rc} (141: the 128 MiB cap, 124: the 2-minute timeout)` to the limits and
+  goes on to the next archive (`continue`). An archive set that all failed still leaves `found` at 0 and
+  adds `results-missing`. Row 9 stays in K5's residual list.
+- **Point 2.** The PRD's sum of the checks job's steps is 348 of 355, not 345. The comments found false
+  or stale (the corpus test's regular-file reason, the round E sums, `fit`'s doc comment, which now states
+  that a literal-word loop counts once per word only in a step that holds a budget and only when its body
+  starts no loop, and row 7's step comment, `max(11, 20 + 2) + 18 = 40` of 50) are corrected.
+
+*Kept as advice:* point 3 (a white-box test in `writeartifact_internal_test.go`, a convention point) and
+point 9 (doc comments that chronicle the review rounds). *Text-tripwire residual*, besides round L's:
+point 5, `containerStarts` trusts the variable name a `docker start` names (today every start follows a
+hardened create), and the auditor's note that `fit`'s shell-function branch never runs `innerLoops` on a
+function's body. The numbers are unchanged: no timeout moved, and the job's steps add up to 348 of its 355
+minutes.
 
 ## Alternatives considered
 

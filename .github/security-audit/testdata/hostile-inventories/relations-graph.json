@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 2,
+  "source": "aws",
+  "resources": [
+    {
+      "id": "a",
+      "rawType": "AWS::EC2::Instance",
+      "category": "compute.vm",
+      "region": "eu-central-1",
+      "workload": "loop",
+      "relations": [
+        { "type": "depends-on", "target": "a" },
+        { "type": "depends-on", "target": "b" },
+        { "type": "depends-on", "target": "missing" }
+      ]
+    },
+    {
+      "id": "b",
+      "rawType": "AWS::EC2::Instance",
+      "category": "compute.vm",
+      "region": "eu-central-1",
+      "workload": "loop",
+      "relations": [{ "type": "depends-on", "target": "a" }]
+    },
+    {
+      "id": "a",
+      "rawType": "AWS::EC2::Instance",
+      "category": "compute.vm",
+      "region": "eu-central-1",
+      "workload": "duplicate id"
+    }
+  ]
+}
