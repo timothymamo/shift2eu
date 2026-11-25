@@ -490,7 +490,7 @@ out=inventories/gcp
 mkdir -p "$out"
 
 # Keep only the one label gcp.jq reads, not the values of any other label.
-gcloud asset search-all-resources --scope="projects/$project" \
+gcloud asset search-all-resources --scope="projects/$project" --quiet \
   --format='json(name,assetType,location,labels)' |
   jq '[.[] | if .labels then .labels |= with_entries(select(.key == "goog-gke-node")) else . end]' \
   > "$out/assets.json"
@@ -501,34 +501,34 @@ has() { jq -e --arg t "$1" --arg r "${2:-}" \
   'any(.[]; .assetType == $t and ($r == "" or (.name | contains("/locations/" + $r + "/"))))' \
   "$out/assets.json" > /dev/null; }
 
-gcloud compute instances list --project="$project" \
+gcloud compute instances list --project="$project" --quiet \
   --format='json(kind,selfLink,machineType,metadata.items[].key,disks[].source,disks[].boot,disks[].autoDelete,networkInterfaces[].stackType,networkInterfaces[].ipv6AccessConfigs[].type)' \
   > "$out/compute-instances.json"
 # The vCPU and memory of the machine types in use, and every disk's size.
 types="$(jq -r '[.[].machineType // empty | split("/") | last] | unique | join(" ")' "$out/compute-instances.json")"
 # With no instances there are no types to ask for: write an empty list instead.
 if [ -n "$types" ]; then
-  gcloud compute machine-types list --project="$project" --filter="name:($types)" \
+  gcloud compute machine-types list --project="$project" --filter="name:($types)" --quiet \
     --format='json(kind,selfLink,name,zone,guestCpus,memoryMb)' > "$out/compute-machine-types.json"
 else
   echo '[]' > "$out/compute-machine-types.json"
 fi
 
-gcloud compute disks list --project="$project" \
+gcloud compute disks list --project="$project" --quiet \
   --format='json(kind,name,zone,region,sizeGb)' > "$out/compute-disks.json"
-gcloud compute instance-groups managed list --project="$project" \
+gcloud compute instance-groups managed list --project="$project" --quiet \
   --format='json(kind,selfLink,status.autoscaler)' > "$out/compute-instance-groups.json"
-gcloud compute snapshots list --project="$project" \
+gcloud compute snapshots list --project="$project" --quiet \
   --format='json(kind,sourceDisk)' > "$out/compute-snapshots.json"
-gcloud sql instances list --project="$project" \
+gcloud sql instances list --project="$project" --quiet \
   --format='json(kind,selfLink,region,databaseVersion,replicaNames,settings.availabilityType,settings.tier,settings.dataDiskSizeGb,settings.backupConfiguration.pointInTimeRecoveryEnabled,settings.backupConfiguration.binaryLogEnabled)' \
   > "$out/sql-instances.json"
-gcloud storage buckets list --project="$project" --raw \
+gcloud storage buckets list --project="$project" --raw --quiet \
   --format='json(kind,name,versioning)' > "$out/storage-buckets.json"
-gcloud container clusters list --project="$project" \
+gcloud container clusters list --project="$project" --quiet \
   --format='json(selfLink,location,currentNodeCount,autopilot.enabled,nodePools[].autoscaling.enabled,nodePools[].instanceGroupUrls)' \
   > "$out/container-clusters.json"
-gcloud pubsub subscriptions list --project="$project" \
+gcloud pubsub subscriptions list --project="$project" --quiet \
   --format='json(name,deadLetterPolicy.deadLetterTopic)' > "$out/pubsub-subscriptions.json"
 
 # Load balancers: global and every region's, each list by default.
@@ -588,8 +588,9 @@ done > "$out/functions.json"
 
 The Memorystore, Filestore, Artifact Registry and Cloud Functions lists run only when the asset
 listing holds a resource of theirs, so a project that does not use a service never calls its API,
-which may not be enabled. `--quiet` makes `gcloud` take the default answer, No, when it offers to
-enable an API; if a call still asks to enable one, answer N: enabling an API writes to the project.
+which may not be enabled. Every `gcloud` call above carries `--quiet`, which makes it take the
+default answer, No, when it offers to enable an API, as it does on a project with that API disabled;
+if any call still asks to enable one, answer N: enabling an API writes to the project.
 
 The `--format` projections keep only what the program reads: an instance's metadata keys, for
 example, but not their values, which hold startup scripts and SSH keys, and of its disks only the
