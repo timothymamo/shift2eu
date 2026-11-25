@@ -55,6 +55,21 @@
       ]
     },
     {
+      "LoadBalancerName": "shop-inspection-gwlb",
+      "LoadBalancerArn": "arn:aws:elasticloadbalancing:eu-central-1:123456789012:loadbalancer/gwy/shop-inspection-gwlb/0123456789abcdef",
+      "Type": "gateway",
+      "Scheme": "internet-facing",
+      "IpAddressType": "ipv4",
+      "AvailabilityZones": [
+        {
+          "ZoneName": "eu-central-1a"
+        },
+        {
+          "ZoneName": "eu-central-1b"
+        }
+      ]
+    },
+    {
       "LoadBalancerName": "k8s-shop-ingress",
       "LoadBalancerArn": "arn:aws:elasticloadbalancing:eu-central-1:123456789012:loadbalancer/app/k8s-shop-ingress/0123456789abcdef",
       "Type": "application",

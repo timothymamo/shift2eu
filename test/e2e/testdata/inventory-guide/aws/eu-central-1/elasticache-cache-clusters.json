@@ -63,8 +63,30 @@
       "NumCacheNodes": 1,
       "PreferredAvailabilityZone": "eu-central-1a",
       "SnapshotRetentionLimit": 0,
-      "AtRestEncryptionEnabled": false,
+      "AtRestEncryptionEnabled": true,
       "CacheNodeType": "cache.t4g.small"
+    },
+    {
+      "CacheClusterId": "shop-cart-redis-001",
+      "ARN": "arn:aws:elasticache:eu-central-1:123456789012:cluster:shop-cart-redis-001",
+      "ReplicationGroupId": "shop-cart-redis",
+      "Engine": "redis",
+      "NumCacheNodes": 1,
+      "PreferredAvailabilityZone": "eu-central-1a",
+      "SnapshotRetentionLimit": 0,
+      "AtRestEncryptionEnabled": true,
+      "CacheNodeType": "cache.m6g.large"
+    },
+    {
+      "CacheClusterId": "shop-cart-redis-002",
+      "ARN": "arn:aws:elasticache:eu-central-1:123456789012:cluster:shop-cart-redis-002",
+      "ReplicationGroupId": "shop-cart-redis",
+      "Engine": "redis",
+      "NumCacheNodes": 1,
+      "PreferredAvailabilityZone": "eu-central-1b",
+      "SnapshotRetentionLimit": 0,
+      "AtRestEncryptionEnabled": true,
+      "CacheNodeType": "cache.m6g.large"
     },
     {
       "CacheClusterId": "shop-reports-memcached",

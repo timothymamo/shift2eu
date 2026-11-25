@@ -97,6 +97,9 @@
       "rawType": "AWS::ElastiCache::CacheCluster",
       "category": "cache.redis",
       "region": "eu-central-1",
+      "capabilities": [
+        "encryption-at-rest"
+      ],
       "size": {
         "count": 1
       }
@@ -105,6 +108,12 @@
       "id": "shop-api",
       "rawType": "AWS::AppRunner::Service",
       "category": "serverless.container",
+      "region": "eu-central-1"
+    },
+    {
+      "id": "shop-apps",
+      "rawType": "AWS::ECR::RepositoryCreationTemplate",
+      "category": "unclassified",
       "region": "eu-central-1"
     },
     {
@@ -136,6 +145,19 @@
         "encryption-at-rest",
         "point-in-time-restore"
       ]
+    },
+    {
+      "id": "shop-cart-redis",
+      "rawType": "AWS::ElastiCache::ReplicationGroup",
+      "category": "cache.redis",
+      "region": "eu-central-1",
+      "capabilities": [
+        "encryption-at-rest",
+        "node-high-availability"
+      ],
+      "size": {
+        "count": 2
+      }
     },
     {
       "id": "shop-carts",
@@ -208,6 +230,19 @@
       }
     },
     {
+      "id": "shop-docs-dev",
+      "rawType": "AWS::DocDB::DBCluster",
+      "category": "database.mongodb",
+      "region": "eu-central-1",
+      "capabilities": [
+        "node-high-availability",
+        "read-replicas"
+      ],
+      "size": {
+        "count": 2
+      }
+    },
+    {
       "id": "shop-edge-memcached",
       "rawType": "AWS::ElastiCache::ServerlessCache",
       "category": "unclassified",
@@ -262,6 +297,12 @@
       "capabilities": [
         "encryption-at-rest"
       ]
+    },
+    {
+      "id": "shop-inspection-gwlb",
+      "rawType": "AWS::ElasticLoadBalancingV2::LoadBalancer",
+      "category": "unclassified",
+      "region": "eu-central-1"
     },
     {
       "id": "shop-legacy-mysql",
@@ -338,6 +379,12 @@
       "size": {
         "count": 4
       }
+    },
+    {
+      "id": "shop-public-gallery",
+      "rawType": "AWS::ECR::PublicRepository",
+      "category": "unclassified",
+      "region": "eu-central-1"
     },
     {
       "id": "shop-quic-nlb",

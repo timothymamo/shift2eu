@@ -94,6 +94,12 @@ type resourceFact struct {
 	id       string
 	rawType  string
 	category string
+	// region is the region the inventory has to give the resource; "" does not
+	// check it. A recorded call names a resource's region in more than one way
+	// (an ARN, an availability zone, or the instances a cluster is made of), so
+	// the sources whose calls disagree pin it here rather than in the golden
+	// file, which a careless -update could accept away.
+	region string
 	// capabilities is the exact capability set the inventory has to give the
 	// resource, sorted or not. A nil slice does not check it; an empty, non-nil
 	// slice says the resource has none, so a capability the program over-claims
@@ -171,7 +177,16 @@ func inventoryGuides() []inventoryGuideCase {
 				// group's member clusters, its nodes.
 				{
 					id: "shop-orders-redis", rawType: "AWS::ElastiCache::ReplicationGroup", category: "cache.redis",
+					region:       "eu-central-1",
 					capabilities: []string{"encryption-at-rest", "node-high-availability", "sharding", "snapshots", "zone-high-availability"},
+				},
+				// A non-cluster-mode group with a replica in its one shard has node
+				// high availability, but no sharding, no snapshot and no zone high
+				// availability: MultiAZ is off. StorageEncryptionType is null here,
+				// so the at-rest flag is what says the cache encrypts.
+				{
+					id: "shop-cart-redis", rawType: "AWS::ElastiCache::ReplicationGroup", category: "cache.redis",
+					capabilities: []string{"encryption-at-rest", "node-high-availability"},
 				},
 				// Failover on with no replica to promote keeps serving through
 				// no node loss, so only cluster mode is left.
@@ -180,12 +195,17 @@ func inventoryGuides() []inventoryGuideCase {
 					capabilities: []string{"sharding"},
 				},
 				// A cache cluster outside a group is a resource of its own, one
-				// node, with neither failover nor sharding nor a snapshot.
+				// node, with neither failover nor sharding nor a snapshot. It
+				// encrypts at rest: a standalone cluster has no
+				// StorageEncryptionType, so its AtRestEncryptionEnabled is the
+				// effective state.
 				{
 					id: "shop-analytics-redis", rawType: "AWS::ElastiCache::CacheCluster", category: "cache.redis",
-					capabilities: []string{},
+					capabilities: []string{"encryption-at-rest"},
 				},
-				// Memcached is not the Redis protocol, so no target runs it.
+				// Memcached is not the Redis protocol, so no target runs it. Its
+				// NumCacheNodes is the nodes of a cache no category takes, not a
+				// size: the program writes none.
 				{
 					id: "shop-reports-memcached", rawType: "AWS::ElastiCache::CacheCluster", category: "unclassified",
 					capabilities: []string{},
@@ -195,6 +215,7 @@ func inventoryGuides() []inventoryGuideCase {
 				// always; snapshots follow the retention.
 				{
 					id: "shop-edge-valkey", rawType: "AWS::ElastiCache::ServerlessCache", category: "cache.redis",
+					region:       "eu-central-1",
 					capabilities: []string{"encryption-at-rest", "node-high-availability", "sharding", "snapshots", "zone-high-availability"},
 				},
 				{
@@ -206,13 +227,31 @@ func inventoryGuides() []inventoryGuideCase {
 				// set, so per instance the cluster would be counted three times.
 				{
 					id: "shop-docs", rawType: "AWS::DocDB::DBCluster", category: "database.mongodb",
+					region:       "eu-central-1",
 					capabilities: []string{"encryption-at-rest", "node-high-availability", "point-in-time-restore", "read-replicas", "zone-high-availability"},
+				},
+				// The cluster settings are per instance in the only call the guide
+				// makes, so a capability holds only when every instance reports it:
+				// one instance without backups or encryption loses both for the
+				// cluster, and two instances in one zone are no zone high
+				// availability. Two instances still replicate and survive a node.
+				{
+					id: "shop-docs-dev", rawType: "AWS::DocDB::DBCluster", category: "database.mongodb",
+					capabilities: []string{"node-high-availability", "read-replicas"},
 				},
 				// An ALB whose target group is IPv6 reaches clients and backends
 				// over IPv6; two zones are zone high availability.
 				{
 					id: "shop-alb", rawType: "AWS::ElasticLoadBalancingV2::LoadBalancer", category: "network.loadbalancer",
+					region:       "eu-central-1",
 					capabilities: []string{"ipv6", "zone-high-availability"},
+				},
+				// A Gateway Load Balancer inspects traffic for appliances through
+				// a gateway endpoint: no target sells one, so it carries no
+				// capability, whatever its zones and listeners say.
+				{
+					id: "shop-inspection-gwlb", rawType: "AWS::ElasticLoadBalancingV2::LoadBalancer", category: "unclassified",
+					capabilities: []string{},
 				},
 				// A dualstack NLB whose only target group is IPv4 is not reached
 				// over IPv6 at both ends; its UDP listener is the udp capability.
@@ -233,15 +272,18 @@ func inventoryGuides() []inventoryGuideCase {
 					capabilities: []string{},
 				},
 				// A Classic Load Balancer is a load balancer as well, with no
-				// IPv6 address type and no UDP listener to read.
+				// IPv6 address type and no UDP listener to read. It has no ARN, so
+				// its region comes from its zones.
 				{
 					id: "shop-classic", rawType: "AWS::ElasticLoadBalancing::LoadBalancer", category: "network.loadbalancer",
+					region:       "eu-central-1",
 					capabilities: []string{"zone-high-availability"},
 				},
 				// An SNS topic is a topic, never a queue: its dead-letter queue
 				// is per subscription, which no topic attribute says.
 				{
 					id: "shop-alerts", rawType: "AWS::SNS::Topic", category: "messaging.topic",
+					region:       "eu-central-1",
 					capabilities: []string{"encryption-at-rest"},
 				},
 				{
@@ -252,6 +294,7 @@ func inventoryGuides() []inventoryGuideCase {
 				// Zone one stays in a single zone.
 				{
 					id: "fs-shop-regional", rawType: "AWS::EFS::FileSystem", category: "storage.file",
+					region:       "eu-central-1",
 					capabilities: []string{"encryption-at-rest", "zone-high-availability"},
 				},
 				{
@@ -267,6 +310,13 @@ func inventoryGuides() []inventoryGuideCase {
 				{
 					id: "shop-images", rawType: "AWS::ECR::Repository", category: "registry.container",
 					capabilities: []string{"encryption-at-rest"},
+				},
+				// A public gallery is not a private registry a workload pulls
+				// from, and no category covers it: it keeps its type and no
+				// capability, unlike the private repository beside it.
+				{
+					id: "shop-public-gallery", rawType: "AWS::ECR::PublicRepository", category: "unclassified",
+					capabilities: []string{},
 				},
 				// No target runs a key-value table.
 				{
@@ -289,6 +339,9 @@ func inventoryGuides() []inventoryGuideCase {
 				// DataStorage limit is not a size.
 				"shop-edge-valkey",
 				"shop-edge-memcached",
+				// The NumCacheNodes of a Memcached cluster is the nodes of a cache
+				// the program cannot classify, not a size.
+				"shop-reports-memcached",
 			},
 			sized: []sizeFact{
 				// An m5.large is 2 vCPU and 8 GiB, from ec2 describe-instance-types.
@@ -313,11 +366,13 @@ func inventoryGuides() []inventoryGuideCase {
 				// add memoryGiB by hand.
 				{id: "shop-orders-redis", count: 4, noMemoryGiB: true},
 				{id: "shop-sessions-valkey", count: 1, noMemoryGiB: true},
+				{id: "shop-cart-redis", count: 2, noMemoryGiB: true},
 				{id: "shop-analytics-redis", count: 1, noMemoryGiB: true},
 				// A DocumentDB cluster's instances are its nodes. Its
 				// AllocatedStorage describes nothing: the storage is the
 				// cluster's volume, so the cluster gets no storageGiB.
 				{id: "shop-docs", count: 3, noStorageGiB: true},
+				{id: "shop-docs-dev", count: 2, noStorageGiB: true},
 				// The metered size of an EFS file system, in GiB: 5 GiB for the
 				// Regional one and 1 GiB for the One Zone one.
 				{id: "fs-shop-regional", storageGiB: 5},
@@ -341,11 +396,15 @@ func inventoryGuides() []inventoryGuideCase {
 				"shop-orders-redis-003",
 				"shop-orders-redis-004",
 				"shop-sessions-valkey-001",
+				"shop-cart-redis-001",
+				"shop-cart-redis-002",
 				// A DocumentDB cluster's member instances: the cluster stands
 				// for them.
 				"shop-docs-1",
 				"shop-docs-2",
 				"shop-docs-3",
+				"shop-docs-dev-1",
+				"shop-docs-dev-2",
 				// A load balancer a Kubernetes cluster created: it goes with
 				// the cluster, as its nodes do.
 				"k8s-shop-ingress",
@@ -356,7 +415,15 @@ func inventoryGuides() []inventoryGuideCase {
 				// balancer stands for them, so they are not resources of their
 				// own.
 				"AWS::ElasticLoadBalancingV2::Listener",
+				"AWS::ElasticLoadBalancingV2::ListenerRule",
 				"AWS::ElasticLoadBalancingV2::TargetGroup",
+				// So are a file system's access points and a registry's settings:
+				// parts and settings of the resource that stands for them.
+				"AWS::EFS::AccessPoint",
+				"AWS::ECR::RegistryPolicy",
+				"AWS::ECR::ReplicationConfiguration",
+				"AWS::ECR::PullThroughCacheRule",
+				"AWS::ECR::RepositoryCreationTemplate",
 			},
 		},
 		{
@@ -749,7 +816,7 @@ func assertBareMetal(t *testing.T, source string, doc inventoryDoc, wants []bare
 }
 
 // assertPresent fails unless the inventory holds each fact's resource, by ID,
-// with its category and raw type.
+// with its category, raw type and (when the fact names one) region.
 func assertPresent(t *testing.T, source string, doc inventoryDoc, wants []resourceFact) {
 	t.Helper()
 
@@ -769,6 +836,11 @@ func assertPresent(t *testing.T, source string, doc inventoryDoc, wants []resour
 		if resource.RawType != want.rawType {
 			t.Errorf("%s: resource %q has rawType %q, want %q",
 				source, want.id, resource.RawType, want.rawType)
+		}
+
+		if want.region != "" && resource.Region != want.region {
+			t.Errorf("%s: resource %q has region %q, want %q",
+				source, want.id, resource.Region, want.region)
 		}
 
 		if want.capabilities == nil {

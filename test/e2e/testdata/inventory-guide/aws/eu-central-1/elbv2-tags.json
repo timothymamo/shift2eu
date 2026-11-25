@@ -33,6 +33,14 @@
       ]
     },
     {
+      "ResourceArn": "arn:aws:elasticloadbalancing:eu-central-1:123456789012:loadbalancer/gwy/shop-inspection-gwlb/0123456789abcdef",
+      "Tags": [
+        {
+          "Key": "Name"
+        }
+      ]
+    },
+    {
       "ResourceArn": "arn:aws:elasticloadbalancing:eu-central-1:123456789012:loadbalancer/app/k8s-shop-ingress/0123456789abcdef",
       "Tags": [
         {

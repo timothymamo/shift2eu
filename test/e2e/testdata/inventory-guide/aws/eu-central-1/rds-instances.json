@@ -114,6 +114,30 @@
       "MultiAZ": false,
       "StorageEncrypted": true,
       "ReadReplicaDBInstanceIdentifiers": []
+    },
+    {
+      "DBInstanceIdentifier": "shop-docs-dev-1",
+      "AllocatedStorage": 1,
+      "DBInstanceArn": "arn:aws:rds:eu-central-1:123456789012:db:shop-docs-dev-1",
+      "DBClusterIdentifier": "shop-docs-dev",
+      "Engine": "docdb",
+      "AvailabilityZone": "eu-central-1a",
+      "BackupRetentionPeriod": 0,
+      "MultiAZ": false,
+      "StorageEncrypted": false,
+      "ReadReplicaDBInstanceIdentifiers": []
+    },
+    {
+      "DBInstanceIdentifier": "shop-docs-dev-2",
+      "AllocatedStorage": 1,
+      "DBInstanceArn": "arn:aws:rds:eu-central-1:123456789012:db:shop-docs-dev-2",
+      "DBClusterIdentifier": "shop-docs-dev",
+      "Engine": "docdb",
+      "AvailabilityZone": "eu-central-1a",
+      "BackupRetentionPeriod": 7,
+      "MultiAZ": false,
+      "StorageEncrypted": true,
+      "ReadReplicaDBInstanceIdentifiers": []
     }
   ]
 }

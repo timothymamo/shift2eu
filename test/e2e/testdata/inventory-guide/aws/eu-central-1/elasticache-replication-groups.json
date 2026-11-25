@@ -45,6 +45,27 @@
         }
       ],
       "CacheNodeType": "cache.t4g.micro"
+    },
+    {
+      "ReplicationGroupId": "shop-cart-redis",
+      "ARN": "arn:aws:elasticache:eu-central-1:123456789012:replicationgroup:shop-cart-redis",
+      "Engine": "redis",
+      "AutomaticFailover": "enabled",
+      "MultiAZ": "disabled",
+      "ClusterEnabled": false,
+      "SnapshotRetentionLimit": 0,
+      "AtRestEncryptionEnabled": true,
+      "StorageEncryptionType": null,
+      "MemberClusters": [
+        "shop-cart-redis-001",
+        "shop-cart-redis-002"
+      ],
+      "NodeGroups": [
+        {
+          "NodeGroupId": "0001"
+        }
+      ],
+      "CacheNodeType": "cache.m6g.large"
     }
   ]
 }
