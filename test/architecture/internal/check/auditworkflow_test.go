@@ -160,12 +160,12 @@ import (
 //     so the step's bound is the larger of the timeouts before the loop and the
 //     budget plus one iteration's own timeouts, plus the timeouts after the
 //     loop, and a step with no loop holds the sum of its `timeout <N>` values.
-//     Row 7's max(11 minutes before the loop, its 20-minute budget plus the 2
-//     minutes of one iteration) plus the 18 minutes after it are 40 of its 50,
-//     row 8's three timeouts 14 of its 15, row 9's 12-minute budget plus one
-//     scan's 7 minutes 19 of its 20, row 13's 12-minute budget plus one run's 6
-//     minutes and the image's removal 19 of its 20, and row 14's 25-minute
-//     budget plus one target's 16 minutes and the image's removal 42 of its 45.
+//     Row 7's 20-minute budget and the 29 minutes of timeouts outside its loop
+//     add up to 49 of its 50, row 8's three timeouts 14 of its 15, row 9's
+//     12-minute budget plus one scan's 7 minutes 19 of its 20, row 13's
+//     12-minute budget plus one run's 6 minutes and the image's removal 19 of
+//     its 20, and row 14's 25-minute budget plus one target's 16 minutes and the
+//     image's removal 42 of its 45.
 //     A shell function's timeout counts once per call, so a function the step
 //     calls many times must hold a budget of its own, and then the step's bound
 //     is that budget plus one call's timeouts: row 15's read_api is 12 minutes
@@ -871,6 +871,39 @@ var (
 	auditModelArtifactError   = "            echo \"::error title=Audit model::the run's artifacts are unexpected: see runbook step 11\"\n"
 	auditPublishArtifactError = "            echo \"::error title=Audit publish::the run's artifacts are unexpected: see runbook step 11\"\n"
 	auditPublishError         = "            echo \"::error title=Audit publish::the publish was refused: see runbook step 11\"\n"
+)
+
+// Round N's anchors (the AI review's points 4 and 10 on PR #565): row 15's
+// Dependency Dashboard read and the limits line it writes when no such issue
+// answered, and row 9's branch for an archive whose unpack failed. Each is
+// exactly as the fixture writes it, so a case that mistypes one fails in
+// mutate.
+const (
+	// auditRenovateDashboardRead is row 15's read of Renovate's Dependency
+	// Dashboard: the open issues alone, with the pull requests filtered out, so
+	// the dashboard - the oldest item creator=renovate[bot] answers with - cannot
+	// fall off a first page of pull requests.
+	auditRenovateDashboardRead = "          read_api renovate-dashboard \"repos/${GH_REPO}/issues?state=open&creator=renovate%5Bbot%5D&per_page=100\" '[.[] | select(.pull_request == null)]'\n"
+	// auditRenovateDashboardMissing is row 15's limits line for a read that
+	// succeeded and found no open dashboard issue at all: a silent empty answer
+	// is said out loud, never read as a clean one.
+	auditRenovateDashboardMissing = "          if [ -f \"${out}/api/renovate-dashboard.exit\" ] && [ \"$(cat \"${out}/api/renovate-dashboard.exit\")\" = 0 ] && [ \"$(jq 'length' \"${out}/api/renovate-dashboard.json\")\" = 0 ]; then\n" +
+		"            echo \"supply-chain: no open Renovate Dependency Dashboard issue was found\" >> \"${results}/limits.txt\"\n" +
+		"          fi\n"
+	// auditBinaryUnpackFailure is row 9's branch for an archive whose unpack
+	// failed: the timeout recorded as the check that timed out and any other
+	// failure as one that did not run, a limits line naming the exit and what 141
+	// (the 128 MiB cap) and 124 (the 2-minute timeout) stand for, and the continue
+	// that keeps the part of a member head wrote out of the scan.
+	auditBinaryUnpackFailure = "            if [ \"${rc}\" -ne 0 ]; then\n" +
+		"              if [ \"${rc}\" -eq 124 ]; then\n" +
+		"                echo \"binary-vulnerabilities timed-out\" >> \"${results}/not-run.txt\"\n" +
+		"              else\n" +
+		"                echo \"binary-vulnerabilities tool-failed\" >> \"${results}/not-run.txt\"\n" +
+		"              fi\n" +
+		"              echo \"binary-vulnerabilities: ${name} was not scanned: its unpack exited ${rc} (141: the 128 MiB cap, 124: the 2-minute timeout)\" >> \"${results}/limits.txt\"\n" +
+		"              continue\n" +
+		"            fi\n"
 )
 
 // Round F's anchors (PRD #175, the box's last two causes): rows 3 to 5's tool
@@ -3076,7 +3109,7 @@ func TestAuditWorkflow(t *testing.T) {
 		{
 			// The checks job's steps add up to 348 minutes: with the job's 5 minutes
 			// of set-up and post steps they stay within its 355, and a step raised by
-			// 20 puts them past it.
+			// 17 puts them past it.
 			name:     "a checks step adding up past the job's timeout",
 			workflow: mutate(t, acceptedWorkflow, "      - name: Check the image's runtime settings\n        timeout-minutes: 13\n", "      - name: Check the image's runtime settings\n        timeout-minutes: 30\n"),
 			wantIn:   "timeout-minutes",
@@ -3906,6 +3939,40 @@ func TestAuditWorkflow(t *testing.T) {
 			workflow: mutate(t, acceptedWorkflow, auditReleaseStepEnv,
 				strings.Replace(auditReleaseStepEnv, "        run: |\n", "          why: tool-failed\n        run: |\n", 1)),
 			wantIn: "is not one variable this reader understands",
+		},
+
+		// Round N: the AI review's points 4 and 10 on PR #565. Row 15 reads the open
+		// Dependency Dashboard issue alone, its pull requests filtered out, and says
+		// so in the limits when only pull requests answered; and row 9 records an
+		// archive whose unpack failed as the check that timed out or did not run,
+		// names the exit (141, the 128 MiB cap; 124, the 2-minute timeout) in the
+		// limits, and goes on to the next archive without scanning a member that was
+		// only partly written.
+		{
+			name:     "row 15's Dependency Dashboard read without state=open",
+			workflow: mutate(t, acceptedWorkflow, auditRenovateDashboardRead, strings.Replace(auditRenovateDashboardRead, "issues?state=open&", "issues?state=all&", 1)),
+			wantIn:   "state=open",
+		},
+		{
+			name:     "row 15's Dependency Dashboard read without its pull-request filter",
+			workflow: mutate(t, acceptedWorkflow, auditRenovateDashboardRead, strings.Replace(auditRenovateDashboardRead, " '[.[] | select(.pull_request == null)]'", "", 1)),
+			wantIn:   "select(.pull_request == null)",
+		},
+		{
+			name:     "row 15's Dependency Dashboard read that found no issue recorded nowhere",
+			workflow: mutate(t, acceptedWorkflow, auditRenovateDashboardMissing, ""),
+			wantIn:   "no open Renovate Dependency Dashboard issue was found",
+		},
+		{
+			name:     "row 9's failed unpack scanning the member it partly wrote",
+			workflow: mutate(t, acceptedWorkflow, auditBinaryUnpackFailure, strings.Replace(auditBinaryUnpackFailure, "              continue\n", "", 1)),
+			wantIn:   "continue",
+		},
+		{
+			name: "row 9's failed unpack named in no limits line",
+			workflow: mutate(t, acceptedWorkflow, auditBinaryUnpackFailure,
+				strings.Replace(auditBinaryUnpackFailure, "              echo \"binary-vulnerabilities: ${name} was not scanned: its unpack exited ${rc} (141: the 128 MiB cap, 124: the 2-minute timeout)\" >> \"${results}/limits.txt\"\n", "", 1)),
+			wantIn: "was not scanned: its unpack exited",
 		},
 
 		// A document the reader cannot follow tells the check nothing, so it is

@@ -596,7 +596,13 @@ jobs:
             esac
             echo "${rc}" > "${out}/${name}.unpack.exit"
             if [ "${rc}" -ne 0 ]; then
-              echo "binary-vulnerabilities tool-failed" >> "${results}/not-run.txt"
+              if [ "${rc}" -eq 124 ]; then
+                echo "binary-vulnerabilities timed-out" >> "${results}/not-run.txt"
+              else
+                echo "binary-vulnerabilities tool-failed" >> "${results}/not-run.txt"
+              fi
+              echo "binary-vulnerabilities: ${name} was not scanned: its unpack exited ${rc} (141: the 128 MiB cap, 124: the 2-minute timeout)" >> "${results}/limits.txt"
+              continue
             fi
             # An archive that gives up no binary at all is no binary scanned: the find counts a member
             # only when it holds bytes, so head's empty file is results-missing, never a scan.
@@ -1084,8 +1090,9 @@ jobs:
           echo "finished"
       # Row 15. Supply-chain reads: the workflows' action pins and permissions from the checkout, as
       # text; the rulesets, the environments and their branch policies, and the secret and variable
-      # names, as the release-tag skill's step 2 reads them; Renovate's Dependency Dashboard and open pull
-      # requests; and the dependency files changed since the last report. Reads only, with the job's
+      # names, as the release-tag skill's step 2 reads them; Renovate's open Dependency Dashboard issue,
+      # its pull requests filtered out, and the open pull requests; and the dependency files changed since
+      # the last report. Reads only, with the job's
       # token: a read it is refused is recorded in read-refused.txt and the limits, "not run (read
       # refused)" for that read, and a read the step's budget ran out on in read-skipped.txt and the
       # limits, so that a permission that is fine is never chased for it.
@@ -1138,8 +1145,11 @@ jobs:
           done
           read_api repository-secret-names "repos/${GH_REPO}/actions/secrets" '[.secrets[].name]'
           read_api repository-variable-names "repos/${GH_REPO}/actions/variables" '[.variables[].name]'
-          read_api renovate-dashboard "repos/${GH_REPO}/issues?state=all&creator=renovate%5Bbot%5D&per_page=100"
+          read_api renovate-dashboard "repos/${GH_REPO}/issues?state=open&creator=renovate%5Bbot%5D&per_page=100" '[.[] | select(.pull_request == null)]'
           read_api renovate-pull-requests "search/issues?q=repo:${GH_REPO}+is:pr+is:open+author:app/renovate&per_page=100"
+          if [ -f "${out}/api/renovate-dashboard.exit" ] && [ "$(cat "${out}/api/renovate-dashboard.exit")" = 0 ] && [ "$(jq 'length' "${out}/api/renovate-dashboard.json")" = 0 ]; then
+            echo "supply-chain: no open Renovate Dependency Dashboard issue was found" >> "${results}/limits.txt"
+          fi
           last="$(git ls-files 'docs/security/audits/[0-9]*.md' | LC_ALL=C sort | tail -n 1)"
           if [ -n "${last}" ]; then
             base="$(git log -1 --format=%H -- "${last}")"

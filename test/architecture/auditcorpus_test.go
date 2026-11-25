@@ -19,11 +19,11 @@ const auditRegularFile = "100644"
 
 // TestAuditHostileCorpusIsRegularFiles pins that every entry of the audit's
 // hostile corpus is a regular file in the git index. The corpus is copied into
-// the image row 13's containers read, and a committed symlink there would be
-// followed on the runner as the copy is made (cp -P is no defence against an
-// entry that is a link in the index): the CLI's own report would then carry a
-// runner file into a public artifact. The test also refuses an empty corpus, so
-// a directory that loses its files is not read as "nothing to check".
+// the image row 13's containers read, and a committed link would make it depend
+// on paths outside it and on the checkout's settings: what the image received
+// would then be whatever the runner's checkout happened to put there, never the
+// file the corpus holds. The test also refuses an empty corpus, so a directory
+// that loses its files is not read as "nothing to check".
 //
 // The mode is read with git ls-files -s, from the index, never from the
 // checkout's file system: the index is what a commit records.
@@ -55,7 +55,7 @@ func TestAuditHostileCorpusIsRegularFiles(t *testing.T) {
 		entries++
 
 		if mode := fields[0]; mode != auditRegularFile {
-			t.Errorf("%s is mode %s in the git index, want %s: the audit's hostile corpus holds regular files alone, so no link or directory of the runner's is copied into the container row 13 reads it in (ADR 0040)", path, mode, auditRegularFile)
+			t.Errorf("%s is mode %s in the git index, want %s: the audit's hostile corpus holds regular files alone, so nothing it holds depends on paths outside it or on the checkout's settings (ADR 0040)", path, mode, auditRegularFile)
 		}
 	}
 
