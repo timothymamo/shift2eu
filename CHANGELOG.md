@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.16.0](https://github.com/timothymamo/shift2eu/compare/v0.15.0...v0.16.0) (2026-11-25)
+
+
+### Features
+
+* **guide:** classify AWS caches, MongoDB, load balancers, topics, file shares and registries (PRD [#552](https://github.com/timothymamo/shift2eu/issues/552) M2) ([#569](https://github.com/timothymamo/shift2eu/issues/569)) ([8e18dc4](https://github.com/timothymamo/shift2eu/commit/8e18dc450131c6db61c8ae82cea578cba6899d81))
+* **guide:** classify the new Azure categories (PRD [#552](https://github.com/timothymamo/shift2eu/issues/552) M4) ([#609](https://github.com/timothymamo/shift2eu/issues/609)) ([f9e7319](https://github.com/timothymamo/shift2eu/commit/f9e7319256432ebe6700e3fa4c1a72a7c64b1d1d))
+* **guide:** classify the new GCP categories (PRD [#552](https://github.com/timothymamo/shift2eu/issues/552) M3) ([#591](https://github.com/timothymamo/shift2eu/issues/591)) ([58add03](https://github.com/timothymamo/shift2eu/commit/58add03c3f0c9cfb91b014f47c78089712cfe3c4))
+* **taxonomy:** add search.opensearch and messaging.kafka (PRD [#571](https://github.com/timothymamo/shift2eu/issues/571) milestone 1) ([#593](https://github.com/timothymamo/shift2eu/issues/593)) ([ee2941a](https://github.com/timothymamo/shift2eu/commit/ee2941acc9f3440645a1c2ffdd330c2ac437daaf))
+
+
+### Bug Fixes
+
+* **audit:** the hardening step removes the stale Docker socket file ([#574](https://github.com/timothymamo/shift2eu/issues/574)) ([#586](https://github.com/timothymamo/shift2eu/issues/586)) ([de628a5](https://github.com/timothymamo/shift2eu/commit/de628a526e6a8ac8acd351bcf8e56ceabd92f3e7))
+* **audit:** the preflight reads Claude Code 2.1.332's permission_denied elements and names an unreadable line (issue [#590](https://github.com/timothymamo/shift2eu/issues/590)) ([#594](https://github.com/timothymamo/shift2eu/issues/594)) ([4240cd0](https://github.com/timothymamo/shift2eu/commit/4240cd0387ccc602caf2c84003b51be0b287786f))
+* **infra:** the site container asks for the memory Scaleway keeps, and R4 checks the TLS stage's state before removing it (issues [#595](https://github.com/timothymamo/shift2eu/issues/595), [#596](https://github.com/timothymamo/shift2eu/issues/596)) ([#603](https://github.com/timothymamo/shift2eu/issues/603)) ([b441547](https://github.com/timothymamo/shift2eu/commit/b441547c0903e182afbf408617c2fb6f4499a14a))
+* **infra:** the site front refuses an empty upstream on a first apply, and PR [#562](https://github.com/timothymamo/shift2eu/issues/562)'s review follow-ups (issue [#566](https://github.com/timothymamo/shift2eu/issues/566)) ([#582](https://github.com/timothymamo/shift2eu/issues/582)) ([d9434c3](https://github.com/timothymamo/shift2eu/commit/d9434c36860104245da678dfacd36f193310d453))
+
 ## [0.15.0](https://github.com/timothymamo/shift2eu/compare/v0.14.0...v0.15.0) (2026-11-25)
 
 
