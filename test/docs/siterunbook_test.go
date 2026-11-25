@@ -373,7 +373,7 @@ func TestSiteRunbookHostingWaitLoopNamesARefreshOnlyFailure(t *testing.T) {
 		}
 
 		if len(removing) == 0 {
-			t.Errorf("%s: %s: no FAIL outcome that names the state backup %q says to remove it once the cause is explained, want one that does, as `# FAIL exit 2: read the diff, and keep \"$T/state-backup.json\" until it is explained, then rm -r \"$T\"` does: the backup is the only copy of the state the state rm fallback left, so a maintainer who has explained the diff has no line to remove it and the file outlives its reason (issue #607)\n  read:\n    %s",
+			t.Errorf("%s: %s: no FAIL outcome that names the state backup %q says to remove it once the cause is explained, want one that does, as `# FAIL exit 2: read the diff, and keep \"$T/state-backup.json\" until it is explained, then [ -f \"$T/state-backup.json\" ] && rm -r \"$T\"` does: the backup is the only copy of the state the state rm fallback left, so a maintainer who has explained the diff has no line to remove it and the file outlives its reason (issue #607)\n  read:\n    %s",
 				siteRunbookPath, hostingHeading, backup, strings.Join(naming, "\n    "))
 		}
 	})
@@ -410,7 +410,8 @@ func failOutcomes(line string) []string {
 }
 
 // removesTheBackupOnceExplained reports whether a FAIL outcome that names the state backup tells the maintainer to remove
-// it once the cause is explained, as `keep "$T/state-backup.json" until it is explained, then rm -r "$T"` does. The
+// it once the cause is explained, as `keep "$T/state-backup.json" until it is explained, then
+// [ -f "$T/state-backup.json" ] && rm -r "$T"` does. The
 // removal has to come after the explanation: an outcome that explains the diff and then says "do not remove it" names
 // both and still leaves the backup where it is, which is the state the check reports missing (issue #607).
 func removesTheBackupOnceExplained(outcome string) bool {
@@ -654,7 +655,12 @@ func TestRemovesTheBackupOnceExplained(t *testing.T) {
 		want    bool
 	}{
 		{
-			name:    "the runbook's wording",
+			name:    "the runbook's guarded wording",
+			outcome: `FAIL exit 2: read the diff, and keep "$T/` + backup + `" until it is explained, then [ -f "$T/` + backup + `" ] && rm -r "$T"`,
+			want:    true,
+		},
+		{
+			name:    "an unguarded removal after the explanation",
 			outcome: `FAIL exit 2: read the diff, and keep "$T/` + backup + `" until it is explained, then rm -r "$T"`,
 			want:    true,
 		},
@@ -672,7 +678,7 @@ func TestRemovesTheBackupOnceExplained(t *testing.T) {
 		},
 		{
 			name:    "no explanation at all",
-			outcome: `FAIL exit 2: keep "$T/` + backup + `", then rm -r "$T"`,
+			outcome: `FAIL exit 2: keep "$T/` + backup + `", then [ -f "$T/` + backup + `" ] && rm -r "$T"`,
 		},
 	}
 
