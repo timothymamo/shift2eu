@@ -171,6 +171,11 @@
     "location": "global"
   },
   {
+    "name": "//compute.googleapis.com/projects/example-project/global/backendServices/shop-errors-be",
+    "assetType": "compute.googleapis.com/BackendService",
+    "location": "global"
+  },
+  {
     "name": "//compute.googleapis.com/projects/example-project/regions/europe-west1/backendServices/shop-dns-be",
     "assetType": "compute.googleapis.com/BackendService",
     "location": "europe-west1"

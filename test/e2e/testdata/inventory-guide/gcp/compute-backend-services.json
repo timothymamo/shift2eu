@@ -27,6 +27,12 @@
   },
   {
     "kind": "compute#backendService",
+    "selfLink": "https://www.googleapis.com/compute/v1/projects/example-project/global/backendServices/shop-errors-be",
+    "protocol": "HTTP",
+    "loadBalancingScheme": "EXTERNAL_MANAGED"
+  },
+  {
+    "kind": "compute#backendService",
     "selfLink": "https://www.googleapis.com/compute/v1/projects/example-project/regions/europe-west1/backendServices/shop-int-be",
     "region": "https://www.googleapis.com/compute/v1/projects/example-project/regions/europe-west1",
     "protocol": "HTTP",

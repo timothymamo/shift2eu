@@ -2,26 +2,26 @@
   {
     "selfLink": "https://www.googleapis.com/compute/v1/projects/example-project/global/urlMaps/shop-web-map",
     "defaultService": "https://www.googleapis.com/compute/v1/projects/example-project/global/backendServices/shop-web-be",
+    "defaultCustomErrorResponsePolicy": {
+      "errorService": "https://www.googleapis.com/compute/v1/projects/example-project/global/backendServices/shop-errors-be"
+    },
     "pathMatchers": [
       {
-        "name": "api",
         "defaultService": "https://www.googleapis.com/compute/v1/projects/example-project/global/backendServices/shop-api-be",
+        "defaultCustomErrorResponsePolicy": {
+          "errorService": "https://www.googleapis.com/compute/v1/projects/example-project/global/backendServices/shop-errors-be"
+        },
         "pathRules": [
           {
-            "paths": [
-              "/api/*"
-            ],
             "service": "https://www.googleapis.com/compute/v1/projects/example-project/global/backendServices/shop-api-be"
           }
         ],
         "routeRules": [
           {
-            "priority": 1,
             "routeAction": {
               "weightedBackendServices": [
                 {
-                  "backendService": "https://www.googleapis.com/compute/v1/projects/example-project/global/backendServices/shop-canary-be",
-                  "weight": 10
+                  "backendService": "https://www.googleapis.com/compute/v1/projects/example-project/global/backendServices/shop-canary-be"
                 }
               ]
             }

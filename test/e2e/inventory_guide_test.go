@@ -394,6 +394,10 @@ func inventoryGuides() []inventoryGuideCase {
 				"shop-int-be",
 				"shop-legacy-be",
 				"shop-mesh-be",
+				// The error service a URL map links as its custom error page, at the
+				// URL map and at one of its path matchers: the URL map stands for it,
+				// as it does for the backends in its routes.
+				"shop-errors-be",
 				// A URL map that names only that mesh's services fronts no load
 				// balancer either: the mesh's backends are reached directly.
 				"shop-mesh-map",
