@@ -11,6 +11,8 @@
 // it destroys (so a replacement repoints the DNS stage first, issue #541), the site container's cost pins (one
 // instance, 140 mvCPU and 0.25 GB of memory at most, and no pin set twice or only in a nested block, ADR 0045),
 // the one front container in its one namespace (no count, no for_each, no second container, ADR 0045),
+// the environment that container runs with (the one UPSTREAM the Caddyfile reads, and no secret), no lifecycle
+// block ignoring a change on the container or on its namespace (ADR 0045),
 // the one file() call the Caddyfile is read with and no other (ADR 0045), and so on (the script lists them). With
 // every rule holding it prints nothing and exits 0; a usage error exits 2.
 //
@@ -1732,6 +1734,13 @@ resource "scaleway_container_cron" "nightly" {
 // Every case edits site/container.tf, the file the pins live in, by the attribute's name, so the cases do not
 // depend on how the configuration aligns its = signs; a copy whose container.tf sets the attribute no line of,
 // or two, fails here as a test failure, never as a silent pass.
+//
+// The table also pins what the container runs with and what a plan may pass over: [container-environment] holds
+// environment_variables to the one UPSTREAM the Caddyfile reads and refuses secret_environment_variables, so a
+// variable set beside it - a proxy, which would route every visitor's traffic while every other rule held -
+// cannot pass unnoticed, and [container-lifecycle] refuses an ignore_changes or a replace_triggered_by on the
+// container or on its namespace, since either stops a plan applying what a test pins (the image, the command,
+// the Caddyfile's bytes) or reverting a console change to a cost pin.
 var containerCostPinCases = []infraRuleCase{
 	{
 		name:   "container-max-scale-two",
@@ -2176,6 +2185,82 @@ resource "scaleway_container" "second" {
 			insertContainerLines(t, site, "  scaling_option {", "    max_scale = 1", "  }")
 		},
 	},
+	// The environment the container runs with is the one variable the Caddyfile reads: a second one is a setting
+	// nobody decided, and one the provider sets on every instance reaches every visitor.
+	{
+		name:   "container-environment-second-key",
+		why:    `HTTPS_PROXY = "http://proxy.example.com:3128" added beside UPSTREAM in the site container's environment_variables, so every visitor's traffic leaves through a proxy`,
+		want:   "container-environment",
+		wantIn: map[string]string{"container-environment": "{site}/container.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			addContainerEnvironmentVariable(t, site, `    HTTPS_PROXY = "http://proxy.example.com:3128"`)
+		},
+	},
+	{
+		name:   "container-environment-secret",
+		why:    `secret_environment_variables = { X = "y" } added to the site's container, a secret in the plan and in the state`,
+		want:   "container-environment",
+		wantIn: map[string]string{"container-environment": "{site}/container.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			addContainerAttribute(t, site, `  secret_environment_variables = { X = "y" }`)
+		},
+	},
+	{
+		name:   "container-environment-without-upstream",
+		why:    `the site container's environment_variables holding only ANOTHER = "x", so the Caddyfile's {$UPSTREAM} reads an empty upstream`,
+		want:   "container-environment",
+		wantIn: map[string]string{"container-environment": "{site}/container.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			dropContainerEnvironmentVariable(t, site, "UPSTREAM")
+			addContainerEnvironmentVariable(t, site, `    ANOTHER = "x"`)
+		},
+	},
+	// A lifecycle block that ignores a change stops a plan from applying it: the image a test reads by digest,
+	// the command and args that write the Caddyfile byte for byte, and a cost pin a console change raised would
+	// all stay as the platform holds them while every rule still held.
+	{
+		name:   "container-lifecycle-ignores-image",
+		why:    "ignore_changes = [image] added inside the site container's lifecycle block, beside its two postconditions, so the tested image is never applied",
+		want:   "container-lifecycle",
+		wantIn: map[string]string{"container-lifecycle": "{site}/container.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			addContainerLifecycleSetting(t, site, "    ignore_changes = [image]")
+		},
+	},
+	{
+		name:   "container-lifecycle-ignores-everything",
+		why:    "ignore_changes = all added inside the site container's lifecycle block, which passes over every change to it",
+		want:   "container-lifecycle",
+		wantIn: map[string]string{"container-lifecycle": "{site}/container.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			addContainerLifecycleSetting(t, site, "    ignore_changes = all")
+		},
+	},
+	{
+		name:   "container-lifecycle-replace-triggered-by",
+		why:    "replace_triggered_by = [scaleway_container_namespace.site.id] added inside the site container's lifecycle block, a replacement no change to the container asks for",
+		want:   "container-lifecycle",
+		wantIn: map[string]string{"container-lifecycle": "{site}/container.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			addContainerLifecycleSetting(t, site, "    replace_triggered_by = [scaleway_container_namespace.site.id]")
+		},
+	},
+	{
+		name:   "container-namespace-lifecycle-ignores-description",
+		why:    "a lifecycle block with ignore_changes = [description] added to the site's container namespace, a change a plan would never apply",
+		want:   "container-lifecycle",
+		wantIn: map[string]string{"container-lifecycle": "{site}/container.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			setNamespaceLifecycle(t, site, "    ignore_changes = [description]")
+		},
+	},
 }
 
 // containerRepeatCases pin [container-repeat] (PRD #297 milestone 4, ADR 0045): the site runs one front
@@ -2559,6 +2644,189 @@ func insertContainerLines(t *testing.T, site string, lines ...string) {
 	out := append([]string{}, fileLines[:found+1]...)
 	out = append(out, lines...)
 	out = append(out, fileLines[found+1:]...)
+
+	writeInfraText(t, path, strings.Join(out, "\n"))
+}
+
+// findContainerBlock returns a copy's site/container.tf, the file's lines and the range of the one block a line
+// of it opens with header: opening is that line, closing the line whose closing brace takes the depth back to
+// zero. A file with no such block, or with two, fails the case loudly instead of passing without breaking
+// anything.
+func findContainerBlock(t *testing.T, site, header string) (string, []string, int, int) {
+	t.Helper()
+
+	path := filepath.Join(site, containerFileName)
+
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v: the site's front lives there (ADR 0045), and this case breaks one of its rules", path, err)
+	}
+
+	lines := strings.Split(string(body), "\n")
+
+	opening := -1
+
+	for i, text := range lines {
+		if !strings.HasPrefix(strings.TrimSpace(text), header) {
+			continue
+		}
+
+		if opening >= 0 {
+			t.Fatalf("%s:%d and %s:%d both open %q, want exactly one: the case does not name one breakage", path, opening+1, path, i+1, header)
+		}
+
+		opening = i
+	}
+
+	if opening < 0 {
+		t.Fatalf("%s holds no line opening %q, want one: the case does not name one breakage", path, header)
+	}
+
+	return path, lines, opening, infraBlockEnd(t, path, lines, opening)
+}
+
+// findNestedBlock returns the range of the one block named name opened between the lines from and to, the inside
+// of an enclosing block: opening is the line that opens it, closing the line whose brace closes it. A range that
+// opens no such block, or two, fails the case loudly instead of passing without breaking anything.
+func findNestedBlock(t *testing.T, path string, lines []string, from, to int, name string) (int, int) {
+	t.Helper()
+
+	opening := -1
+
+	for i := from; i < to; i++ {
+		if !infraOpensBlock(lines[i], name) {
+			continue
+		}
+
+		if opening >= 0 {
+			t.Fatalf("%s:%d and %s:%d both open a %s block, want exactly one: the case does not name one breakage", path, opening+1, path, i+1, name)
+		}
+
+		opening = i
+	}
+
+	if opening < 0 {
+		t.Fatalf("%s opens no %s block in the block this case edits, want one: the case does not name one breakage", path, name)
+	}
+
+	return opening, infraBlockEnd(t, path, lines, opening)
+}
+
+// containerEnvironmentVariables returns a copy's site/container.tf, its lines and the range of the container's
+// one environment_variables map: opening is the line that starts it, closing the line whose brace ends it. The
+// map is an attribute written as a value, so it opens with environment_variables = {, not as a block.
+func containerEnvironmentVariables(t *testing.T, site string) (string, []string, int, int) {
+	t.Helper()
+
+	path, lines, start, end := findContainerBlock(t, site, containerResourceHeader)
+
+	opening := -1
+
+	for i := start + 1; i < end; i++ {
+		fields := strings.Fields(lines[i])
+		if len(fields) < 2 || fields[0] != "environment_variables" || !strings.HasPrefix(fields[1], "=") {
+			continue
+		}
+
+		if opening >= 0 {
+			t.Fatalf("%s:%d and %s:%d both set environment_variables, want exactly one: the case does not name one breakage", path, opening+1, path, i+1)
+		}
+
+		opening = i
+	}
+
+	if opening < 0 {
+		t.Fatalf("%s's container sets no environment_variables, want one: the case does not name one breakage", path)
+	}
+
+	closing := infraBlockEnd(t, path, lines, opening)
+	if closing <= opening {
+		t.Fatalf("%s:%d holds the whole environment_variables map on one line: the case cannot add an entry to it", path, opening+1)
+	}
+
+	return path, lines, opening, closing
+}
+
+// addContainerEnvironmentVariable writes line as the last entry of the container's environment_variables map,
+// where the provider reads it: beside the UPSTREAM the Caddyfile reads, or in the place of it.
+func addContainerEnvironmentVariable(t *testing.T, site, line string) {
+	t.Helper()
+
+	path, lines, _, closing := containerEnvironmentVariables(t, site)
+
+	insertInfraLines(t, path, lines, closing-1, line)
+}
+
+// dropContainerEnvironmentVariable removes the one line of the container's environment_variables map that sets
+// name, so a case can leave the map without the variable the Caddyfile reads. A map that sets it on no line, or
+// on two, fails the case loudly instead of passing without breaking anything.
+func dropContainerEnvironmentVariable(t *testing.T, site, name string) {
+	t.Helper()
+
+	path, lines, opening, closing := containerEnvironmentVariables(t, site)
+
+	found := -1
+
+	for i := opening + 1; i < closing; i++ {
+		fields := strings.Fields(lines[i])
+		if len(fields) < 2 || fields[0] != name || !strings.HasPrefix(fields[1], "=") {
+			continue
+		}
+
+		if found >= 0 {
+			t.Fatalf("%s:%d and %s:%d both set %s in environment_variables, want exactly one line: the case does not name one breakage", path, found+1, path, i+1, name)
+		}
+
+		found = i
+	}
+
+	if found < 0 {
+		t.Fatalf("%s's environment_variables sets %s on no line, want exactly one: the case does not name one breakage", path, name)
+	}
+
+	out := append([]string{}, lines[:found]...)
+	out = append(out, lines[found+1:]...)
+
+	writeInfraText(t, path, strings.Join(out, "\n"))
+}
+
+// addContainerLifecycleSetting writes line as the first setting of the container's lifecycle block, beside the
+// postconditions it keeps: the block the rules judge is the one a case adds an ignore_changes or a
+// replace_triggered_by to.
+func addContainerLifecycleSetting(t *testing.T, site, line string) {
+	t.Helper()
+
+	path, lines, start, end := findContainerBlock(t, site, containerResourceHeader)
+	opening, _ := findNestedBlock(t, path, lines, start+1, end, "lifecycle")
+
+	insertInfraLines(t, path, lines, opening, line)
+}
+
+// containerNamespaceResourceHeader is the one line of a copy's site/container.tf that opens the namespace
+// resource: the container's own header reads scaleway_container, which this prefix does not.
+const containerNamespaceResourceHeader = `resource "scaleway_container_namespace" "`
+
+// setNamespaceLifecycle writes a lifecycle block holding body as the last thing in the site's container
+// namespace, where a case adds the setting a plan must not pass over.
+func setNamespaceLifecycle(t *testing.T, site string, body ...string) {
+	t.Helper()
+
+	path, lines, _, end := findContainerBlock(t, site, containerNamespaceResourceHeader)
+
+	added := append([]string{"", "  lifecycle {"}, body...)
+	added = append(added, "  }")
+
+	insertInfraLines(t, path, lines, end-1, added...)
+}
+
+// insertInfraLines writes added into a copy's configuration file after the line at, leaving every other line as
+// it was.
+func insertInfraLines(t *testing.T, path string, lines []string, at int, added ...string) {
+	t.Helper()
+
+	out := append([]string{}, lines[:at+1]...)
+	out = append(out, added...)
+	out = append(out, lines[at+1:]...)
 
 	writeInfraText(t, path, strings.Join(out, "\n"))
 }
