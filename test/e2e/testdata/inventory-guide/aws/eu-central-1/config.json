@@ -5,7 +5,18 @@
     "{\"resourceId\":\"arn:aws:elasticloadbalancing:eu-central-1:123456789012:loadbalancer/app/shop-alb/0123456789abcdef\",\"resourceName\":\"shop-alb\",\"resourceType\":\"AWS::ElasticLoadBalancingV2::LoadBalancer\",\"awsRegion\":\"eu-central-1\"}",
     "{\"resourceId\":\"i-0123456789abcdef0\",\"resourceType\":\"AWS::EC2::Instance\",\"awsRegion\":\"eu-central-1\"}",
     "{\"resourceId\":\"shop-assets-example\",\"resourceName\":\"shop-assets-example\",\"resourceType\":\"AWS::S3::Bucket\",\"awsRegion\":\"eu-central-1\"}",
-    "{\"resourceId\":\"cluster-0123456789ABCDEFGHIJKLMNOP\",\"resourceName\":\"shop-aurora\",\"resourceType\":\"AWS::RDS::DBCluster\",\"awsRegion\":\"eu-central-1\"}"
+    "{\"resourceId\":\"cluster-0123456789ABCDEFGHIJKLMNOP\",\"resourceName\":\"shop-aurora\",\"resourceType\":\"AWS::RDS::DBCluster\",\"awsRegion\":\"eu-central-1\"}",
+    "{\"resourceId\":\"cluster-0123456789ABCDEFGHIJKLMO\",\"resourceName\":\"shop-docs\",\"resourceType\":\"AWS::RDS::DBCluster\",\"awsRegion\":\"eu-central-1\"}",
+    "{\"resourceId\":\"arn:aws:elasticloadbalancing:eu-central-1:123456789012:loadbalancer/shop-classic\",\"resourceName\":\"shop-classic\",\"resourceType\":\"AWS::ElasticLoadBalancing::LoadBalancer\",\"awsRegion\":\"eu-central-1\"}",
+    "{\"resourceId\":\"arn:aws:elasticloadbalancing:eu-central-1:123456789012:listener/app/shop-alb/0123456789abcdef/0123456789abcdef\",\"resourceType\":\"AWS::ElasticLoadBalancingV2::Listener\",\"awsRegion\":\"eu-central-1\"}",
+    "{\"resourceId\":\"arn:aws:elasticloadbalancing:eu-central-1:123456789012:targetgroup/tg-shop-alb/0123456789abcdef\",\"resourceType\":\"AWS::ElasticLoadBalancingV2::TargetGroup\",\"awsRegion\":\"eu-central-1\"}",
+    "{\"resourceId\":\"arn:aws:elasticfilesystem:eu-central-1:123456789012:file-system/fs-shop-regional\",\"resourceName\":\"fs-shop-regional\",\"resourceType\":\"AWS::EFS::FileSystem\",\"awsRegion\":\"eu-central-1\"}",
+    "{\"resourceId\":\"arn:aws:elasticfilesystem:eu-central-1:123456789012:file-system/fs-shop-onezone\",\"resourceName\":\"fs-shop-onezone\",\"resourceType\":\"AWS::EFS::FileSystem\",\"awsRegion\":\"eu-central-1\"}",
+    "{\"resourceId\":\"arn:aws:sns:eu-central-1:123456789012:shop-alerts\",\"resourceName\":\"shop-alerts\",\"resourceType\":\"AWS::SNS::Topic\",\"awsRegion\":\"eu-central-1\"}",
+    "{\"resourceId\":\"arn:aws:sns:eu-central-1:123456789012:shop-events\",\"resourceName\":\"shop-events\",\"resourceType\":\"AWS::SNS::Topic\",\"awsRegion\":\"eu-central-1\"}",
+    "{\"resourceId\":\"arn:aws:apprunner:eu-central-1:123456789012:service/shop-api/0123456789abcdef\",\"resourceName\":\"shop-api\",\"resourceType\":\"AWS::AppRunner::Service\",\"awsRegion\":\"eu-central-1\"}",
+    "{\"resourceId\":\"arn:aws:ecr:eu-central-1:123456789012:repository/shop-images\",\"resourceName\":\"shop-images\",\"resourceType\":\"AWS::ECR::Repository\",\"awsRegion\":\"eu-central-1\"}",
+    "{\"resourceId\":\"arn:aws:dynamodb:eu-central-1:123456789012:table/shop-carts\",\"resourceName\":\"shop-carts\",\"resourceType\":\"AWS::DynamoDB::Table\",\"awsRegion\":\"eu-central-1\"}"
   ],
   "QueryInfo": {
     "SelectFields": [

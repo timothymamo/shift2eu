@@ -1,0 +1,25 @@
+{
+  "TargetGroups": [
+    {
+      "TargetGroupArn": "arn:aws:elasticloadbalancing:eu-central-1:123456789012:targetgroup/tg-shop-alb/0123456789abcdef",
+      "IpAddressType": "ipv6",
+      "LoadBalancerArns": [
+        "arn:aws:elasticloadbalancing:eu-central-1:123456789012:loadbalancer/app/shop-alb/0123456789abcdef"
+      ]
+    },
+    {
+      "TargetGroupArn": "arn:aws:elasticloadbalancing:eu-central-1:123456789012:targetgroup/tg-shop-nlb/0123456789abcdef",
+      "IpAddressType": "ipv4",
+      "LoadBalancerArns": [
+        "arn:aws:elasticloadbalancing:eu-central-1:123456789012:loadbalancer/net/shop-nlb/0123456789abcdef"
+      ]
+    },
+    {
+      "TargetGroupArn": "arn:aws:elasticloadbalancing:eu-central-1:123456789012:targetgroup/tg-k8s-shop-ingress/0123456789abcdef",
+      "IpAddressType": "ipv4",
+      "LoadBalancerArns": [
+        "arn:aws:elasticloadbalancing:eu-central-1:123456789012:loadbalancer/app/k8s-shop-ingress/0123456789abcdef"
+      ]
+    }
+  ]
+}

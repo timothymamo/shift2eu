@@ -1,0 +1,31 @@
+{
+  "TagDescriptions": [
+    {
+      "ResourceArn": "arn:aws:elasticloadbalancing:eu-central-1:123456789012:loadbalancer/app/shop-alb/0123456789abcdef",
+      "Tags": [
+        {
+          "Key": "Name"
+        }
+      ]
+    },
+    {
+      "ResourceArn": "arn:aws:elasticloadbalancing:eu-central-1:123456789012:loadbalancer/net/shop-nlb/0123456789abcdef",
+      "Tags": [
+        {
+          "Key": "Name"
+        }
+      ]
+    },
+    {
+      "ResourceArn": "arn:aws:elasticloadbalancing:eu-central-1:123456789012:loadbalancer/app/k8s-shop-ingress/0123456789abcdef",
+      "Tags": [
+        {
+          "Key": "elbv2.k8s.aws/cluster"
+        },
+        {
+          "Key": "service.k8s.aws/stack"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "LoadBalancerDescriptions": [
+    {
+      "LoadBalancerName": "shop-classic",
+      "AvailabilityZones": [
+        "eu-central-1a",
+        "eu-central-1b"
+      ]
+    }
+  ]
+}

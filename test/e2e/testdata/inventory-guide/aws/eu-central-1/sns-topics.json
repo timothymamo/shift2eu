@@ -1,0 +1,12 @@
+{
+  "Attributes": {
+    "TopicArn": "arn:aws:sns:eu-central-1:123456789012:shop-alerts",
+    "KmsMasterKeyId": "alias/aws/sns"
+  }
+}
+{
+  "Attributes": {
+    "TopicArn": "arn:aws:sns:eu-central-1:123456789012:shop-events",
+    "KmsMasterKeyId": null
+  }
+}

@@ -1,0 +1,50 @@
+{
+  "ReplicationGroups": [
+    {
+      "ReplicationGroupId": "shop-orders-redis",
+      "ARN": "arn:aws:elasticache:eu-central-1:123456789012:replicationgroup:shop-orders-redis",
+      "Engine": "redis",
+      "AutomaticFailover": "enabled",
+      "MultiAZ": "enabled",
+      "ClusterEnabled": true,
+      "SnapshotRetentionLimit": 7,
+      "AtRestEncryptionEnabled": false,
+      "StorageEncryptionType": "sse-kms",
+      "MemberClusters": [
+        "shop-orders-redis-001",
+        "shop-orders-redis-002",
+        "shop-orders-redis-003",
+        "shop-orders-redis-004"
+      ],
+      "NodeGroups": [
+        {
+          "NodeGroupId": "0001"
+        },
+        {
+          "NodeGroupId": "0002"
+        }
+      ],
+      "CacheNodeType": "cache.m6g.large"
+    },
+    {
+      "ReplicationGroupId": "shop-sessions-valkey",
+      "ARN": "arn:aws:elasticache:eu-central-1:123456789012:replicationgroup:shop-sessions-valkey",
+      "Engine": "valkey",
+      "AutomaticFailover": "enabled",
+      "MultiAZ": "disabled",
+      "ClusterEnabled": true,
+      "SnapshotRetentionLimit": 0,
+      "AtRestEncryptionEnabled": false,
+      "StorageEncryptionType": "none",
+      "MemberClusters": [
+        "shop-sessions-valkey-001"
+      ],
+      "NodeGroups": [
+        {
+          "NodeGroupId": "0001"
+        }
+      ],
+      "CacheNodeType": "cache.t4g.micro"
+    }
+  ]
+}

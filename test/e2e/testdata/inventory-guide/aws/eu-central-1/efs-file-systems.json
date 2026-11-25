@@ -1,0 +1,22 @@
+{
+  "FileSystems": [
+    {
+      "FileSystemId": "fs-shop-regional",
+      "FileSystemArn": "arn:aws:elasticfilesystem:eu-central-1:123456789012:file-system/fs-shop-regional",
+      "Encrypted": true,
+      "AvailabilityZoneName": null,
+      "SizeInBytes": {
+        "Value": 5368709120
+      }
+    },
+    {
+      "FileSystemId": "fs-shop-onezone",
+      "FileSystemArn": "arn:aws:elasticfilesystem:eu-central-1:123456789012:file-system/fs-shop-onezone",
+      "Encrypted": false,
+      "AvailabilityZoneName": "eu-central-1a",
+      "SizeInBytes": {
+        "Value": 1073741824
+      }
+    }
+  ]
+}
