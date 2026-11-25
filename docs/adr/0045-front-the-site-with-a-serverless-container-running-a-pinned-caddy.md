@@ -395,7 +395,9 @@ TLS stage*.
   `[container-min-scale-postcondition]` requires exactly one postcondition comparing `self.min_scale` with
   the expression the attribute sets, and refuses one missing or any other condition on `self` and
   `min_scale` (another value, `self["min_scale"]`), and `[container-https-only-postcondition-missing]`
-  requires the `self.https_connections_only == false` postcondition. The rules read a condition as its
+  requires the `self.https_connections_only == false` postcondition, of which
+  `[container-https-only-postcondition]` refuses a second, even an identical one. `[container-image-pin]`
+  refuses an `image` other than exactly `local.caddy_image`, the local the Renovate comment pins. The rules read a condition as its
   tokens: either side of `==`, and one outer pair of parentheses, are the same comparison; any other
   spelling of these two checks is refused, not read.
 - **The escaped path.** Caddy v2.11.9 has no placeholder for Go's `URL.EscapedPath()` alone:

@@ -948,6 +948,14 @@ END {
           problem("container-deprecated-attribute", bfile[b], containerAt[ck], shownres " sets " n ", the deprecated spelling of " containerDeprecated[n] ": the pins judge " containerDeprecated[n] " alone, so " n " could set what they do not see")
         }
       }
+      # The image is the one local the Renovate comment pins (ADR 0045): image = local.caddy_image, set once,
+      # so the line Renovate moves is the line the container reads. Its digest is the sitefront reader's.
+      ck = b SUBSEP "image"
+      if (!(ck in containerSet)) {
+        problem("container-image-pin", bfile[b], bline[b], shownres " sets no image: it must set image = local.caddy_image, the local the Renovate comment pins (ADR 0045)")
+      } else if (containerSet[ck] != 1 || containerKind[ck] != "R" || containerVal[ck] != "caddy_image") {
+        problem("container-image-pin", bfile[b], containerAt[ck], shownres " sets image to something other than exactly local.caddy_image: a literal or another local is a reference the Renovate comment does not move, so the platform could run an image nobody pinned (ADR 0045)")
+      }
       # min_scale may also read a local set once, in the container's own directory, to the literal 0 or 1:
       # the value is then written once and read by the pin and its postcondition alike.
       ck = b SUBSEP "min_scale"
@@ -985,6 +993,9 @@ END {
         ct = unparen(atext[a])
         if (ct == "self . https_connections_only == false" || ct == "false == self . https_connections_only") {
           httpsOk++
+          if (httpsOk > 1) {
+            problem("container-https-only-postcondition", afile[a], aline[a], shownres " has a second postcondition self.https_connections_only == false: exactly one checks plain HTTP after an apply, so no copy can be edited alone")
+          }
         }
         if (msexpr == "") {
           continue

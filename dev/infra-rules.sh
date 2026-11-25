@@ -70,6 +70,9 @@
 #   [container-deprecated-attribute]
 #                    memory_limit or http_option on a scaleway_container, the deprecated spellings of
 #                    memory_limit_bytes and https_connections_only (that attribute gets this tag alone)
+#   [container-image-pin] a scaleway_container whose image is missing, or set other than once as exactly
+#                    local.caddy_image, the local the Renovate comment pins (ADR 0045): a literal or another
+#                    local is a reference Renovate does not move (its digest is test/sitefront's to read)
 #   [container-min-scale] a scaleway_container whose min_scale is missing, or set other than once as the
 #                    literal 0 or 1 or as local.<name> where that local, in the same directory, is set once
 #                    to the literal 0 or 1
@@ -85,6 +88,9 @@
 #                    self.https_connections_only == false (either side, one outer pair of parentheses):
 #                    the provider leaves false out of the create request, so only that check after an
 #                    apply says whether the platform kept plain HTTP for Caddy's own redirect
+#   [container-https-only-postcondition]
+#                    a second postcondition self.https_connections_only == false on a scaleway_container,
+#                    even an identical one: exactly one checks plain HTTP after an apply
 #   [container-repeat] count or for_each on a scaleway_container or a scaleway_container_namespace, or
 #                    more than one scaleway_container under the root: the front is one container in one
 #                    namespace (ADR 0045), and a repeat multiplies the cost pins' ceiling
