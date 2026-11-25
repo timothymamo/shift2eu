@@ -28,13 +28,21 @@
 //     two reads the wrapper never sees are shell redirections, `cat <
 //     /proc/{pid}/envir?n` and `cat < /dev/fd/../../{pid}/environ` (issue
 //     #277 round H), so the sandbox, not the wrapper's path rule, is what
-//     must refuse them on every run. Judge decodes the message of assistant
-//     and user elements only and skips every other element, whatever it
-//     holds; a line it cannot read is refused with its 1-based number and a
-//     class from a fixed list, matched on the line's first 4 KiB, never with
-//     any of its bytes (issue #590). It walks each element's top-level object
-//     once, token by token, and refuses one that names a key twice or names
-//     type or message in another case, which encoding/json would read
+//     must refuse them on every run. Probe 5's token-absence call tests the
+//     variable with `[[ -v CLAUDE_CODE_OAUTH_TOKEN ]]` and holds no $, which
+//     Claude Code 2.1.332 refuses before it runs (issue #613); Judge knows it
+//     by the mark PreflightPlan sets, and it passes only as cat's error
+//     naming /nonexistent/ with nothing after it, of a call the CLI ran.
+//     Judge decodes the message of assistant and user elements, a user
+//     element's tool_result_meta and a system/permission_denied element's
+//     tool_use_id, and skips every other element, whatever it holds; a call
+//     that a permission_denied element or a non_execution_kind records as
+//     never run fails probe 5's token-absence call. A line it cannot read is
+//     refused with its 1-based number and a class from a fixed list, matched
+//     on the line's first 4 KiB, never with any of its bytes (issue #590). It
+//     walks each element's top-level object, and each tool_result_meta entry,
+//     once, token by token, and refuses one that names a key twice or names a
+//     key it reads in another case, which encoding/json would read
 //     case-insensitively, keeping the last. Told the launch's permission mode
 //     (default, which Claude Code 2.1.332 runs under the subprocess
 //     environment scrub, issue #592), it first reads the transcript's

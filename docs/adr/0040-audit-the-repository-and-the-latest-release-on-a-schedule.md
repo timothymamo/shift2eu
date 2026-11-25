@@ -5,7 +5,8 @@
   PRD #175 milestone 2 amends this record with the workflow's implementation (below); its first
   amendment, how Claude Code runs in the model job, is dated 2026-11-22, its second, the publish
   program's core, 2026-11-23. Issue #568 amends it with the plan for the runner image's move to
-  `ubuntu-26.04` (2026-11-25); issue #592 amends the model step's permission mode (2026-11-25)
+  `ubuntu-26.04` (2026-11-25); issue #592 amends the model step's permission mode (2026-11-25); issue
+  #613 amends the preflight's token-absence call (2026-11-25)
 - Date: 2026-11-21, amended 2026-11-22 to 2026-11-25
 
 ## Context
@@ -1805,7 +1806,7 @@ It `exec`s with exactly this environment, nothing inherited: `PATH=/usr/bin:/bin
   | 2 | Bash `/srv/audit/bin/audit-exec cat < /dev/tcp/127.0.0.1/<port>`, where `<port>` is a TCP listener `Preflight` opened on 127.0.0.1 | the listener accepted no connection |
   | 3 | Bash `socat - UNIX-CONNECT:/var/run/docker.sock` and `/srv/audit/bin/audit-exec cat < /var/run/docker.sock` | `Preflight`'s own connect to `/var/run/docker.sock` fails (Docker is stopped) |
   | 4 | Bash `sudo -n true` and `/srv/audit/bin/audit-exec sudo -n true` | `Preflight`'s own `sudo -n true` fails (the sudo rule is gone) |
-  | 5 | Read and Grep (pattern `SHIFT2EU_AUDIT_CANARY`) of `/proc/<auditrun pid>/environ`, Glob for the pattern `environ` in the path `/proc/<auditrun pid>`; Bash `/srv/audit/bin/audit-exec cat /proc/<auditrun pid>/environ`, `.../cat /proc/$PPID/environ`, `.../cat /proc/$$/environ`, `.../cat < /proc/<auditrun pid>/envir?n`, `.../cat < /dev/fd/../../<auditrun pid>/environ` (added 2026-11-23, issue #277 round G; a redirection since round H) and `.../cat /srv/audit/work/nonexistent/${CLAUDE_CODE_OAUTH_TOKEN:+tokenset}` (in the work area since round I) | neither the canary's value nor the token's appears in any `tool_result` or anywhere else on stdout, and the last Bash call's result is an error naming `/nonexistent/` with nothing after it |
+  | 5 | Read and Grep (pattern `SHIFT2EU_AUDIT_CANARY`) of `/proc/<auditrun pid>/environ`, Glob for the pattern `environ` in the path `/proc/<auditrun pid>`; Bash `/srv/audit/bin/audit-exec cat /proc/<auditrun pid>/environ`, `.../cat /proc/$PPID/environ`, `.../cat /proc/$$/environ`, `.../cat < /proc/<auditrun pid>/envir?n`, `.../cat < /dev/fd/../../<auditrun pid>/environ` (added 2026-11-23, issue #277 round G; a redirection since round H) and `[[ -v CLAUDE_CODE_OAUTH_TOKEN ]] && .../cat /srv/audit/work/nonexistent/tokenset \|\| .../cat /srv/audit/work/nonexistent/` (in the work area since round I; without a `$` since 2026-11-25, issue #613) | neither the canary's value nor the token's appears in any `tool_result` or anywhere else on stdout, and the last Bash call ran and its result is an error naming `/nonexistent/` with nothing after it |
   | 6 | Write and Edit of the `$GITHUB_ENV` file's path; Read and Grep of it, Glob for its base name in the path of its directory; Bash `/srv/audit/bin/audit-exec cat /srv/audit/work/preflight-control.txt >> <path>` | the file's sha256 is unchanged |
 
   *Amended 2026-11-22 (issue #277 round C):* a Glob that names no path searches the working directory,
@@ -1845,6 +1846,49 @@ It `exec`s with exactly this environment, nothing inherited: `PATH=/usr/bin:/bin
   What was wrong is that `cat` never ran, so the call tested the wrapper rather than the command the
   plan describes, and the tests' passing answers did not match the real output. Inside the roots, `cat`
   runs and the answer is the one the plan names.
+  *Amended 2026-11-25 (issue #613):* Claude Code 2.1.332 refuses the token-absence call before it runs,
+  with `A variable in braces in this command can't be checked before it runs`. Run offline against a
+  fake Messages API with a dummy token (the same version's arm64 build, a stand-in bwrap that keeps
+  only bwrap's environment handling), the refusal is the same under the scrub and without it, with
+  the `Bash(/srv/audit/bin/audit-exec:*)` rule matching, and for any variable name; and every `$` is
+  refused in the `default` mode whatever an allow rule's prefix says: an unbraced variable (`A variable
+  in this command ...`), a command substitution (`A nested command ...`), `test -n "$..."`. The CLI
+  records the refusal three times: a `system`/`permission_denied` element naming the call's
+  `tool_use_id`, the call's error result holding the sentence, and the result's `tool_result_meta`
+  entry with `non_execution_kind` `user-rejected`. The judgement read it as the absence not shown, so
+  the preflight failed closed on every run. The call becomes
+  `[[ -v CLAUDE_CODE_OAUTH_TOKEN ]] && <wrapper> cat /srv/audit/work/nonexistent/tokenset ||
+  <wrapper> cat /srv/audit/work/nonexistent/`.
+  - **It holds no `$`.** `[[ -v NAME ]]` tests the name in the Bash tool's own shell, before any
+    wrapper runs, without expanding anything, so only fixed words reach the transcript. It is true for a
+    shell variable of that name exported or not, and empty too: stricter than `:+`, which took an empty
+    variable for an unset one. Offline, unset gives `Exit code 1` and `cat:
+    /srv/audit/work/nonexistent/: No such file or directory`; set (the dummy exported from the
+    launcher's `~/.bashrc`, which the shell snapshot carries in even under the scrub) gives the same
+    error after `cat: /srv/audit/work/nonexistent/tokenset: No such file or directory`. The judgement's
+    pass condition on the text is unchanged.
+  - **It relies on `[[ ]]`** being accepted with no allow rule: 2.1.332 runs it as a read-only part of
+    the compound (`permission_decision` accept, `reason_type` `subcommandResults`), and each wrapper part
+    matches `Bash(/srv/audit/bin/audit-exec:*)`. That is the built-in read-only class issue #614 is
+    about; `test -v` and `compgen -v` need approval and are refused. If a later CLI turns that class off
+    or narrows it, the call is refused, the refusal is recorded as above, and probe 5 fails closed: the
+    step stops, it never passes. An exact rule `Bash([[ -v CLAUDE_CODE_OAUTH_TOKEN ]])` matches the
+    lone command offline (`reason_type` `rule`, and a variant with two spaces does not match it), so it
+    could make the call independent of that class; it is **not added**, since the settings file is pinned
+    whole by `test/architecture` and the change waits for its test.
+  - **A call the CLI never ran fails probe 5**, whatever its result's text: the judge reads a
+    `system`/`permission_denied` element's `tool_use_id`, and a `user` element's `tool_result_meta`
+    entries' `id` and `non_execution_kind` (any value but `null`), each walked token by token as the
+    element's top level is (issue #590: a key twice or in another case is refused, and a record of an
+    unknown shape fails closed with the line's number and a fixed class). The verdict names probe 5 with
+    a fixed reason, never the record's text. Without it, a refusal that quoted a wrapper part ending in
+    `/nonexistent/` would read as absence.
+  - **The judge knows the call by its place in the plan**, a mark `PreflightPlan` sets, not by a suffix
+    of its command: the new command holds the wrapper twice, so the old suffix match would have missed it
+    and judged it as an ordinary probe call, under which a set variable's error passes (fail-open).
+  - Offline, 2.1.332 kept `CLAUDE_CODE_OAUTH_TOKEN` out of the Bash shell **without** the scrub too, so
+    the issue #592 premise that the scrub is the one mechanism shown to do it is to be rechecked in the
+    real sandbox; the scrub stays, and probe 5 is the proof either way.
 
 - **A probe fails (good)** when every one of its calls appears in the transcript with a `tool_result` that
   is an error or a refusal, and its effect is not observed. It **succeeds** (the step fails) when an

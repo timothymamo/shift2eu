@@ -2745,7 +2745,11 @@ The model job's errors that point here are titled `Audit model`. What each means
     - `holds a message of an unknown shape` (an assistant or user element the judge cannot read);
     - `holds a tool call whose id is empty or repeated`;
     - `holds a tool result of no call, or a second one`;
-    - `holds a tool result of an unknown shape`.
+    - `holds a tool result of an unknown shape`;
+    - `holds a permission denial of an unknown shape` (a `system`/`permission_denied` element whose
+      `tool_use_id` is no non-empty string, issue #613);
+    - `holds a tool result meta of an unknown shape` (a user element's `tool_result_meta` that is no
+      list of objects, or an entry with a `non_execution_kind` and no string `id`, issue #613).
 
   The login, usage-limit and could-not-start classes appear only when such a line reaches a run that
   still ended in a successful result: a run that is not logged in, over its limit or unable to start
@@ -2756,6 +2760,18 @@ The model job's errors that point here are titled `Audit model`. What each means
   and no class, was issue #590: Claude Code 2.1.332's `system/permission_denied` element, whose
   `message` is a string, made the judge refuse every real preflight. Since the fix the judge skips the
   elements it does not judge.
+- `preflight failed: probe 5, canary: the token-absence call was refused before it ran; see runbook
+  step 10`: Claude Code's permission layer refused probe 5's last Bash call, `[[ -v
+  CLAUDE_CODE_OAUTH_TOKEN ]] && <wrapper> cat /srv/audit/work/nonexistent/tokenset || <wrapper> cat
+  /srv/audit/work/nonexistent/`, so it never showed whether the token reached the sandboxed shell (ADR
+  0040, issue #613). The call holds no `$` because 2.1.332 refuses any variable expansion before it runs
+  (the old `${CLAUDE_CODE_OAUTH_TOKEN:+tokenset}` form failed every preflight); it relies on the CLI
+  accepting `[[ ]]` with no allow rule (issue #614). Almost always a Claude Code bump changed that: report
+  it as an issue with the CLI version pinned in `.github/claude-code.yaml`, and do not change the probe
+  or the settings in the workflow. Nothing ran, so nothing to rotate. `probe 5, canary: the token
+  variable's absence was not shown` instead means the call ran and its result named `tokenset` (the
+  token's variable reached the shell, its value unprinted: report it, the audit stopped before its model
+  step), was no error, or named no `/nonexistent/`.
 - `refused: the session's permission mode is not the one asked for: expected default, reported <X>`
   (or, from the preflight's judgement, `preflight failed: the session's permission mode is not the one
   asked for: expected default, reported <X>; see runbook step 10`): the CLI's `system/init` element
