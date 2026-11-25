@@ -546,16 +546,18 @@ TLS stage*.
 
 - **Why.** The first apply asked for 268435456 (256 MiB); Scaleway's Serverless Containers kept
   268000000, so every later plan showed `memory_limit_bytes = 268000000 -> 268435456` and never reached
-  "No changes": a standing drift the maintainer could not tell from a real one. The platform keeps
-  whole decimal megabytes. Neither Scaleway's documentation nor the provider states that rounding:
+  "No changes": a standing drift the maintainer could not tell from a real one (observed 2026-11-25).
+  Why the platform kept 268000000 is not known: neither Scaleway's documentation nor the provider
+  states a rounding rule:
   terraform-provider-scaleway v2.93.0 sends the bytes unchanged
   (`internal/services/container/helpers_container.go`, `setCreateContainerRequest`) and reads back the
   platform's value (`container.go`, `ResourceContainerRead`), and its `docs/resources/container.md`
   example is `2048000000`, whole decimal megabytes (scaleway-sdk-go's `scw.MB` is 1000 x 1000 bytes).
   The pin is the value observed on the platform.
-- **The cost.** The pin still means the 0.25 GB size above; the scaleway/scaleway memory table names
-  it 256 MB for 140 mvCPU. The worst case above, about EUR 2.12 a month, prices 0.25 GB of memory;
-  billed at 0.268 GB per second, which 268435456 was as well, it would be about EUR 2.22. The choice
+- **The cost.** The pin is 268000000 bytes, 268 MB (about 0.268 GB), not 0.25 GB (250000000 bytes),
+  and is not to be "corrected" to that; the scaleway/scaleway memory table lists 256 MB for 140
+  mvCPU. The worst case above, about EUR 2.12 a month, prices 0.25 GB of memory; billed at 0.268 GB
+  per second, which 268435456 was as well, it would be about EUR 2.22. The choice
   between the two values moves it by less than one cent, so no figure here or in PRD #297 changes.
 - **What holds it.** `dev/infra-rules.sh`'s `[container-memory]` accepts only the literal 268000000 and
   refuses 268435456 like any other value; `infra/site/tests/container.tftest.hcl` asserts it.

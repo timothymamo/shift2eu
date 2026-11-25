@@ -56,7 +56,7 @@ BEGIN { # explicit character sets, the same in every awk and locale (no [A-Z] ra
   containerPinTag["memory_limit_bytes"] = "container-memory"
   containerPinWhy["max_scale"] = "one instance at most, the worst case ADR 0045 prices at about EUR 2.12 a month"
   containerPinWhy["cpu_limit"] = "140 mvCPU, the size ADR 0045 prices"
-  containerPinWhy["memory_limit_bytes"] = "0.25 GB, the size ADR 0045 prices, in the whole decimal megabytes the platform keeps: 268435456 would come back as 268000000, issue #596"
+  containerPinWhy["memory_limit_bytes"] = "268 MB, about 0.268 GB: the value the platform kept when asked for 268435456 (observed 2026-11-25, issue #596), so 268435456 would show as a change in every plan"
   # The deprecated spellings beside the pinned ones: memory_limit (MB) beside memory_limit_bytes, and
   # http_option beside https_connections_only. Either could set what the pin does not see.
   ndeprecated = split("memory_limit http_option", containerDeprecatedName, " ")
@@ -964,9 +964,9 @@ END {
     if ((b in tlsStage) && !(tlsStage[b] in createFirst)) {
       problem("tls-stage-lifecycle", bfile[b], bline[b], "resource scaleway_edge_services_tls_stage \"site\" has no lifecycle block with create_before_destroy = true: a replacement would delete the stage first, which Scaleway refuses while the DNS stage references it")
     }
-    # The site container's cost pins (ADR 0045, The container): one instance of 140 mvCPU and 0.25 GB at
-    # most, each a literal in the file, never a provider default or a value a tfvars file could raise; no
-    # deprecated spelling beside them; and at most one instance kept warm.
+    # The site container's cost pins (ADR 0045, The container): one instance of 140 mvCPU and 268 MB
+    # (268000000 bytes) at most, each a literal in the file, never a provider default or a value a
+    # tfvars file could raise; no deprecated spelling beside them; and at most one instance kept warm.
     if (b in containerBlock) {
       shownres = shownpath(bpath[b])
       for (j = 1; j <= npins; j++) {
