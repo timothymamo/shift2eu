@@ -305,6 +305,25 @@ func TestCITestJobNode(t *testing.T) {
 			workflow: in("        id: node\n        run: |\n", "        id: node\n        run: |-\n"),
 		},
 		{
+			name:     "the read whose script keeps its trailing line ends",
+			workflow: in("        id: node\n        run: |\n", "        id: node\n        run: |+\n"),
+		},
+		{
+			// A folded scalar is not a literal block: YAML joins its lines into
+			// one, which the shell would run as a single command, so the reader
+			// refuses it rather than comparing the script it stands for.
+			name:     "the read whose script is folded",
+			workflow: in("        id: node\n        run: |\n", "        id: node\n        run: >\n"),
+			wantIn:   "want the read of dev/lima.yaml's nodeVersion: run",
+			wantAlso: "has lines below it, want one value on its line",
+		},
+		{
+			name:     "the read whose script is folded and chomped",
+			workflow: in("        id: node\n        run: |\n", "        id: node\n        run: >-\n"),
+			wantIn:   "want the read of dev/lima.yaml's nodeVersion: run",
+			wantAlso: "has lines below it, want one value on its line",
+		},
+		{
 			name:     "the read with a key the pin does not read",
 			workflow: inStep(ciNodeVersionSed, "timeout-minutes", "5"),
 			wantIn:   `holds the key "timeout-minutes", want exactly name, id, run`,
