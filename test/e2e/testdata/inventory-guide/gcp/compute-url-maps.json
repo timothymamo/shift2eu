@@ -38,5 +38,10 @@
   {
     "selfLink": "https://www.googleapis.com/compute/v1/projects/example-project/global/urlMaps/shop-legacy-map",
     "defaultService": "https://www.googleapis.com/compute/v1/projects/example-project/global/backendServices/shop-legacy-be"
+  },
+  {
+    "selfLink": "https://www.googleapis.com/compute/v1/projects/example-project/regions/europe-west1/urlMaps/shop-mesh-map",
+    "region": "https://www.googleapis.com/compute/v1/projects/example-project/regions/europe-west1",
+    "defaultService": "https://www.googleapis.com/compute/v1/projects/example-project/regions/europe-west1/backendServices/shop-mesh-be"
   }
 ]

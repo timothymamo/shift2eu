@@ -161,6 +161,11 @@
     "location": "global"
   },
   {
+    "name": "//compute.googleapis.com/projects/example-project/regions/europe-west1/urlMaps/shop-mesh-map",
+    "assetType": "compute.googleapis.com/UrlMap",
+    "location": "europe-west1"
+  },
+  {
     "name": "//compute.googleapis.com/projects/example-project/global/backendServices/shop-web-be",
     "assetType": "compute.googleapis.com/BackendService",
     "location": "global"
@@ -172,6 +177,11 @@
   },
   {
     "name": "//compute.googleapis.com/projects/example-project/regions/europe-west1/backendServices/shop-mesh-be",
+    "assetType": "compute.googleapis.com/BackendService",
+    "location": "europe-west1"
+  },
+  {
+    "name": "//compute.googleapis.com/projects/example-project/regions/europe-west1/backendServices/shop-metrics-be",
     "assetType": "compute.googleapis.com/BackendService",
     "location": "europe-west1"
   },
@@ -221,6 +231,11 @@
     "location": "europe-west1"
   },
   {
+    "name": "//redis.googleapis.com/projects/example-project/locations/europe-west1/instances/cache-alt",
+    "assetType": "redis.googleapis.com/Instance",
+    "location": "europe-west1"
+  },
+  {
     "name": "//redis.googleapis.com/projects/example-project/locations/europe-west1/clusters/sessions",
     "assetType": "redis.googleapis.com/Cluster",
     "location": "europe-west1"
@@ -232,6 +247,11 @@
   },
   {
     "name": "//memorystore.googleapis.com/projects/example-project/locations/europe-west1/instances/valkey-sessions",
+    "assetType": "memorystore.googleapis.com/Instance",
+    "location": "europe-west1"
+  },
+  {
+    "name": "//memorystore.googleapis.com/projects/example-project/locations/europe-west1/instances/valkey-single",
     "assetType": "memorystore.googleapis.com/Instance",
     "location": "europe-west1"
   },
@@ -273,6 +293,11 @@
   {
     "name": "//file.googleapis.com/projects/example-project/locations/europe-west1/instances/shared/snapshots/daily",
     "assetType": "file.googleapis.com/Snapshot",
+    "location": "europe-west1"
+  },
+  {
+    "name": "//file.googleapis.com/projects/example-project/locations/europe-west1/backups/shared-backup",
+    "assetType": "file.googleapis.com/Backup",
     "location": "europe-west1"
   }
 ]

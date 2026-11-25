@@ -3,6 +3,21 @@
   "source": "gcp",
   "resources": [
     {
+      "id": "cache-alt",
+      "rawType": "redis.googleapis.com/Instance",
+      "category": "cache.redis",
+      "region": "europe-west1",
+      "capabilities": [
+        "encryption-at-rest",
+        "node-high-availability",
+        "zone-high-availability"
+      ],
+      "size": {
+        "memoryGiB": 5,
+        "count": 2
+      }
+    },
+    {
       "id": "cache-basic",
       "rawType": "redis.googleapis.com/Instance",
       "category": "cache.redis",
@@ -205,6 +220,16 @@
       ]
     },
     {
+      "id": "shop-metrics-be",
+      "rawType": "compute.googleapis.com/BackendService",
+      "category": "network.loadbalancer",
+      "region": "europe-west1",
+      "capabilities": [
+        "udp",
+        "zone-high-availability"
+      ]
+    },
+    {
       "id": "shop-orders",
       "rawType": "pubsub.googleapis.com/Topic",
       "category": "messaging.topic",
@@ -347,6 +372,20 @@
       "size": {
         "memoryGiB": 6.5,
         "count": 4
+      }
+    },
+    {
+      "id": "valkey-single",
+      "rawType": "memorystore.googleapis.com/Instance",
+      "category": "cache.redis",
+      "region": "europe-west1",
+      "capabilities": [
+        "encryption-at-rest",
+        "node-high-availability"
+      ],
+      "size": {
+        "memoryGiB": 6.5,
+        "count": 2
       }
     }
   ]

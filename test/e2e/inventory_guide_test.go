@@ -246,6 +246,13 @@ func inventoryGuides() []inventoryGuideCase {
 					id: "cache-basic", rawType: "redis.googleapis.com/Instance", category: "cache.redis",
 					capabilities: []string{"encryption-at-rest"},
 				},
+				// An instance that lists no nodes of its own is zone redundant when
+				// its alternative location is another zone: the replica it takes over
+				// with lives there.
+				{
+					id: "cache-alt", rawType: "redis.googleapis.com/Instance", category: "cache.redis",
+					capabilities: []string{"encryption-at-rest", "node-high-availability", "zone-high-availability"},
+				},
 				// A cluster is sharded by definition, and a shard's replica is what
 				// makes it highly available per node and per zone.
 				{
@@ -260,6 +267,12 @@ func inventoryGuides() []inventoryGuideCase {
 				{
 					id: "valkey-sessions", rawType: "memorystore.googleapis.com/Instance", category: "cache.redis",
 					capabilities: []string{"encryption-at-rest", "node-high-availability", "sharding", "snapshots", "zone-high-availability"},
+				},
+				// Every node of a single-zone Valkey instance is in one zone, so the
+				// replica in each shard survives a node's loss but not a zone's.
+				{
+					id: "valkey-single", rawType: "memorystore.googleapis.com/Instance", category: "cache.redis",
+					capabilities: []string{"encryption-at-rest", "node-high-availability"},
 				},
 				// A Memcached instance speaks another protocol, so no cache
 				// category serves it and it stays unclassified with its rawType.
@@ -294,6 +307,13 @@ func inventoryGuides() []inventoryGuideCase {
 				},
 				{
 					id: "shop-syslog-pool", rawType: "compute.googleapis.com/TargetPool", category: "network.loadbalancer",
+					capabilities: []string{"udp", "zone-high-availability"},
+				},
+				// A backend service no URL map names and no forwarding rule reaches
+				// is a load balancer too, and its own UDP protocol is what proves it
+				// forwards UDP: there is no frontend to read it from.
+				{
+					id: "shop-metrics-be", rawType: "compute.googleapis.com/BackendService", category: "network.loadbalancer",
 					capabilities: []string{"udp", "zone-high-availability"},
 				},
 				// A Docker repository is a registry, and Artifact Registry
@@ -337,6 +357,9 @@ func inventoryGuides() []inventoryGuideCase {
 				// which holds the whole data set, and nodes are the instance's.
 				{id: "cache-ha", memoryGiB: 5, count: 2},
 				{id: "cache-basic", memoryGiB: 1, count: 1},
+				// An instance that lists no nodes names them through its replica
+				// count: one replica next to the primary is two nodes.
+				{id: "cache-alt", memoryGiB: 5, count: 2},
 				// A cluster's sizeGb is the whole cluster, and no page read says
 				// whether it counts replicas, so the program writes no memoryGiB
 				// rather than a number divided on a guess. Its nodes are its shards
@@ -345,6 +368,7 @@ func inventoryGuides() []inventoryGuideCase {
 				// A Valkey node's sizeGb is its own node's memory.
 				{id: "valkey-1", memoryGiB: 6.5, count: 1},
 				{id: "valkey-sessions", memoryGiB: 6.5, count: 4},
+				{id: "valkey-single", memoryGiB: 6.5, count: 2},
 				// A Filestore instance's capacityGb is a string in the API's JSON.
 				{id: "shared", storageGiB: 1024},
 				{id: "scratch", storageGiB: 1024},
@@ -370,6 +394,9 @@ func inventoryGuides() []inventoryGuideCase {
 				"shop-int-be",
 				"shop-legacy-be",
 				"shop-mesh-be",
+				// A URL map that names only that mesh's services fronts no load
+				// balancer either: the mesh's backends are reached directly.
+				"shop-mesh-map",
 				// A load balancer's frontends, the forwarding rules and the target
 				// proxies they reach: the URL map, backend service or target pool
 				// behind them stands for the load balancer.
@@ -386,6 +413,9 @@ func inventoryGuides() []inventoryGuideCase {
 				// A Filestore snapshot is a capability of its instance, as a
 				// compute snapshot is of its disk.
 				"daily",
+				// So is a Filestore backup: it belongs to its instance, which is
+				// the resource to move.
+				"shared-backup",
 			},
 		},
 		{
