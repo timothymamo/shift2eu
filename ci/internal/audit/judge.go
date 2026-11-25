@@ -3,6 +3,7 @@ package audit
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"strings"
 )
 
@@ -40,9 +41,9 @@ type Judgement struct {
 }
 
 // Verdict is the preflight's refusal. Its text is made of constants alone -
-// the control, the probes' numbers and short names, what each did and runbook
-// step 10 - and holds nothing of the transcript, so a run prints it as its
-// summary.
+// the control, the probes' numbers and short names, what each did, the class
+// and number of a transcript line it cannot read, and runbook step 10 - and
+// holds nothing of the transcript, so a run prints it as its summary.
 type Verdict struct {
 	problems []string
 }
@@ -81,8 +82,10 @@ const (
 // whose input holds dangerouslyDisableSandbox with any value but JSON false
 // fails its probe, or the control. Anything else is a
 // *Verdict naming the control and each probe that did not fail. A transcript
-// that is no run of the plan in its order - not JSON, a tool the plan does not
-// list, a call out of order, a result of no call - fails closed; a call of the
+// that is no run of the plan in its order - a line that is no element, an
+// assistant or user element of an unknown shape, a tool the plan does not
+// list, a call out of order, a result of no call - fails closed, a line it
+// cannot read named by its number and the class of its cause; a call of the
 // plan's tool in its place, made with another input, fails its probe.
 func Judge(j Judgement) error {
 	if len(j.Plan) == 0 || j.Effects == nil || j.Nonce == "" {
@@ -326,12 +329,20 @@ type madeCall struct {
 	text     string
 }
 
-// element is one line of the CLI's stream-json.
+// element is one line of the CLI's stream-json, read in two steps: its shape
+// first, its type and its message as raw JSON, and its message's content only
+// when the type is one the judgement reads (assistant or user). The CLI prints
+// other elements whose message is a string or anything else - 2.1.332's
+// system/permission_denied element is one (issue #590) - and those are skipped
+// whatever they hold.
 type element struct {
-	Type    string `json:"type"`
-	Message struct {
-		Content json.RawMessage `json:"content"`
-	} `json:"message"`
+	Type    json.RawMessage `json:"type"`
+	Message json.RawMessage `json:"message"`
+}
+
+// message is the message of an assistant or user element.
+type message struct {
+	Content json.RawMessage `json:"content"`
 }
 
 // block is one content block of an assistant or user element.
@@ -346,47 +357,149 @@ type block struct {
 	Text      string          `json:"text"`
 }
 
-// transcriptVerdict is a transcript the judgement cannot read.
-func transcriptVerdict(why string) *Verdict {
-	return &Verdict{problems: []string{"the transcript " + why}}
+// transcriptVerdict is a transcript the judgement cannot read at its 1-based
+// line number n. why is a constant: nothing of the line reaches the verdict.
+func transcriptVerdict(n int, why string) *Verdict {
+	return &Verdict{problems: []string{fmt.Sprintf("the transcript at line %d %s", n, why)}}
+}
+
+// The classes of a line that is no stream-json element, each a constant the
+// runbook's step 10 matches (issue #590). The verdict names the class and the
+// line's number, never the line's bytes: the transcript stays private (ADR
+// 0040).
+const (
+	classNotLoggedIn    = "the CLI is not logged in or its token is invalid or expired"
+	classUsageLimit     = "the subscription's usage limit"
+	classCouldNotStart  = "the CLI could not start"
+	classOtherOutput    = "the CLI wrote other non-JSON output"
+	classNotAnElement   = "a JSON value that is not an element"
+	classTypeNotAString = "an element whose type is not a string"
+)
+
+// causePrefix is how many of a non-JSON line's first bytes the cause table is
+// matched on, so matching never scans the private transcript through a long
+// line.
+const causePrefix = 4 << 10
+
+// causes are the classes of a non-JSON line the CLI writes before its session
+// starts, each with the lower-cased substrings of its messages, in the order
+// they are tried.
+var causes = []struct {
+	class   string
+	phrases []string
+}{
+	{classNotLoggedIn, []string{
+		"not logged in",
+		"invalid api key",
+		"oauth token has expired",
+		"access token is invalid",
+		"authentication_failed",
+		"failed to authenticate",
+	}},
+	{classUsageLimit, []string{
+		"usage limit",
+		"credit balance is too low",
+	}},
+	{classCouldNotStart, []string{
+		"claude code could not start",
+		"sandbox required but unavailable",
+	}},
+}
+
+// nonJSONClass is the class of a line that is not JSON, matched on its first
+// causePrefix bytes: a cause of the table, or other output.
+func nonJSONClass(line []byte) string {
+	prefix := bytes.ToLower(line[:min(len(line), causePrefix)])
+
+	for _, c := range causes {
+		for _, p := range c.phrases {
+			if bytes.Contains(prefix, []byte(p)) {
+				return c.class
+			}
+		}
+	}
+
+	return classOtherOutput
+}
+
+// notStreamJSON is the refusal of line n, a line that is no element, of
+// class class.
+func notStreamJSON(n int, class string) *Verdict {
+	return &Verdict{problems: []string{fmt.Sprintf("the transcript is not stream-json at line %d: %s", n, class)}}
+}
+
+// readElement reads line n's shape: a JSON object whose type is a JSON
+// string. It returns the type and the raw message, or the refusal naming the
+// line's class.
+func readElement(n int, line []byte) (string, json.RawMessage, error) {
+	if !json.Valid(line) {
+		return "", nil, notStreamJSON(n, nonJSONClass(line))
+	}
+
+	// Valid JSON that is no object - null, a string, a number, a list - is no
+	// element. null would decode into an element of no type without error, and
+	// be skipped.
+	if line[0] != '{' {
+		return "", nil, notStreamJSON(n, classNotAnElement)
+	}
+
+	var el element
+	if err := json.Unmarshal(line, &el); err != nil {
+		return "", nil, notStreamJSON(n, classNotAnElement)
+	}
+
+	var elementType string
+	if len(el.Type) == 0 || el.Type[0] != '"' || json.Unmarshal(el.Type, &elementType) != nil {
+		return "", nil, notStreamJSON(n, classTypeNotAString)
+	}
+
+	return elementType, el.Message, nil
 }
 
 // parseTranscript returns the transcript's tool calls in order, each with its
-// result.
+// result. Lines are counted from 1, the empty ones too. Only the message of an
+// assistant or user element is decoded; every other element is skipped,
+// whatever its message holds.
 func parseTranscript(transcript []byte) ([]madeCall, error) {
 	var (
 		calls    []madeCall
 		elements int
+		n        int
 	)
 
 	index := map[string]int{}
 
 	for line := range bytes.Lines(transcript) {
+		n++
+
 		line = bytes.TrimSpace(line)
 		if len(line) == 0 {
 			continue
 		}
 
-		var el element
-		if err := json.Unmarshal(line, &el); err != nil {
-			return nil, transcriptVerdict("is not stream-json")
+		elementType, raw, err := readElement(n, line)
+		if err != nil {
+			return nil, err
 		}
 
 		elements++
 
-		if el.Type != "assistant" && el.Type != "user" {
+		if elementType != "assistant" && elementType != "user" {
 			continue
 		}
 
-		blocks, ok := contentBlocks(el.Message.Content)
+		var msg message
+		if len(raw) > 0 && json.Unmarshal(raw, &msg) != nil {
+			return nil, transcriptVerdict(n, "holds a message of an unknown shape")
+		}
+
+		blocks, ok := contentBlocks(msg.Content)
 		if !ok {
-			return nil, transcriptVerdict("holds a message of an unknown shape")
+			return nil, transcriptVerdict(n, "holds a message of an unknown shape")
 		}
 
 		for _, b := range blocks {
-			var err error
-
-			calls, err = takeBlock(calls, index, el.Type, b)
+			calls, err = takeBlock(calls, index, n, elementType, b)
 			if err != nil {
 				return nil, err
 			}
@@ -401,12 +514,12 @@ func parseTranscript(transcript []byte) ([]madeCall, error) {
 }
 
 // takeBlock adds a tool_use of an assistant element, or a tool_result of a
-// user element, to calls.
-func takeBlock(calls []madeCall, index map[string]int, elementType string, b block) ([]madeCall, error) {
+// user element on line n, to calls.
+func takeBlock(calls []madeCall, index map[string]int, n int, elementType string, b block) ([]madeCall, error) {
 	switch {
 	case elementType == "assistant" && b.Type == "tool_use":
 		if _, seen := index[b.ID]; seen || b.ID == "" {
-			return nil, transcriptVerdict("holds a tool call whose id is empty or repeated")
+			return nil, transcriptVerdict(n, "holds a tool call whose id is empty or repeated")
 		}
 
 		index[b.ID] = len(calls)
@@ -422,12 +535,12 @@ func takeBlock(calls []madeCall, index map[string]int, elementType string, b blo
 	case elementType == "user" && b.Type == "tool_result":
 		k, seen := index[b.ToolUseID]
 		if !seen || calls[k].answered {
-			return nil, transcriptVerdict("holds a tool result of no call, or a second one")
+			return nil, transcriptVerdict(n, "holds a tool result of no call, or a second one")
 		}
 
 		text, ok := resultText(b.Content)
 		if !ok {
-			return nil, transcriptVerdict("holds a tool result of an unknown shape")
+			return nil, transcriptVerdict(n, "holds a tool result of an unknown shape")
 		}
 
 		calls[k].answered = true
