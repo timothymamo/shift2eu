@@ -69,6 +69,29 @@ func underRoot(rel string) string {
 	return filepath.Join(preflightRoot, filepath.FromSlash(rel))
 }
 
+// replacementTokenAbsenceCommand is probe 5's token-absence command as issue
+// #613 fixes it: the sandboxed shell tests the variable's presence itself, with
+// `[[ -v NAME ]]`, which expands nothing, so the command holds no $ - Claude
+// Code 2.1.332 refuses to run a Bash command in which a variable is expanded,
+// before it runs it - and each of the two paths still ends in cat's own error,
+// which names the work area's nonexistent/ path, with tokenset after it when
+// the variable is set. The wrapper is Targets' own; the paths are the work
+// area's as the wrapper sees it, inside the roots it holds every path word to
+// (issue #277, round I).
+var replacementTokenAbsenceCommand = "[[ -v CLAUDE_CODE_OAUTH_TOKEN ]] && " +
+	underRoot("srv/audit/bin/audit-exec") + " cat /srv/audit/work/nonexistent/tokenset || " +
+	underRoot("srv/audit/bin/audit-exec") + " cat /srv/audit/work/nonexistent/"
+
+// The two results probe 5's token-absence call can print, as 2.1.332 records
+// them (issue #613): cat's error for the work area's nonexistent/ path when the
+// variable is absent, and, when it is set, the same run's two errors, the first
+// naming tokenset, so what the transcript shows is whether the variable
+// reached the sandboxed shell.
+const (
+	absenceUnsetText = "cat: /srv/audit/work/nonexistent/: No such file or directory"
+	absenceSetText   = "cat: /srv/audit/work/nonexistent/tokenset: No such file or directory\n" + absenceUnsetText
+)
+
 // stepCanary is a canary with no run of 64 hex characters, so the judgement can
 // find it nowhere but in the value the step gives it (Judgement.Canary): the
 // hex heuristic cannot see it.
@@ -245,7 +268,7 @@ func passingAnswers(plan audit.Plan, nonce string) []callResult {
 		case call.Probe == 0:
 			answers[i] = callResult{text: "the file holds:\n" + nonce + "\n"}
 		case tokenAbsenceCallOf(call):
-			answers[i] = callResult{text: "cat: /srv/audit/work/nonexistent/: No such file or directory", isError: true}
+			answers[i] = callResult{text: absenceUnsetText, isError: true}
 		case bypassCallOf(call):
 			_, target, _ := strings.Cut(call.Input["command"], "< ")
 			answers[i] = callResult{text: "bash: " + target + ": Permission denied", isError: true}
@@ -259,8 +282,8 @@ func passingAnswers(plan audit.Plan, nonce string) []callResult {
 
 // tokenAbsenceCallOf reports whether call is probe 5's call that proves the
 // token variable is absent from the sandboxed shell without showing it: its
-// command reads the work area's nonexistent/ path with the variable's expansion
-// appended.
+// command tests the variable's presence and reads the work area's nonexistent/
+// path, naming tokenset there when the variable is set (issue #613).
 func tokenAbsenceCallOf(call audit.Call) bool {
 	return call.Tool == "Bash" && strings.Contains(call.Input["command"], "/nonexistent/")
 }
@@ -685,8 +708,9 @@ func TestPreflightPlanPassesThePathsItsGlobsSearch(t *testing.T) {
 }
 
 // TestPreflightPlanProvesTheTokenVariableIsAbsent pins probe 5's last call
-// (issue #277, audit A4): a Bash command that reads the work area's nonexistent/
-// path with the token variable's expansion appended, so the file the shell names
+// (issue #277, audit A4): a Bash command that tests the token variable's
+// presence with `[[ -v NAME ]]` and reads the work area's nonexistent/ path,
+// naming tokenset there when the variable is set, so the file the shell names
 // shows whether the variable survived the subprocess scrub - without the
 // transcript ever holding the token. The path lies inside the audit's roots,
 // which the wrapper holds every path word to (issue #277, round I): a path
@@ -694,6 +718,13 @@ func TestPreflightPlanPassesThePathsItsGlobsSearch(t *testing.T) {
 // unexpanded word reads as absence too, but it tests the wrapper rather than
 // cat, so the answer is not the one the plan describes. Inside the roots cat
 // itself runs, and its failure is the absent token.
+//
+// The command holds no $ (issue #613): Claude Code 2.1.332 refuses a Bash
+// command in which a variable is expanded - "A variable in braces in this
+// command can't be checked before it runs" - so the call it was asked to make
+// never ran, and probe 5 tested the permission layer instead of the scrubbed
+// shell on every run. `[[ -v NAME ]]` is the shell's own test, which the CLI
+// runs, and it expands nothing.
 func TestPreflightPlanProvesTheTokenVariableIsAbsent(t *testing.T) {
 	t.Parallel()
 
@@ -704,10 +735,14 @@ func TestPreflightPlanProvesTheTokenVariableIsAbsent(t *testing.T) {
 		t.Fatalf("probe 5's calls %v hold no Bash call that reads nonexistent/ with the token variable in it: the preflight proves the scrubbed variable is absent from the sandboxed shell (issue #277)", toolsOf(thePlan, 5))
 	}
 
-	want := underRoot("srv/audit/bin/audit-exec") + " cat /srv/audit/work/nonexistent/${CLAUDE_CODE_OAUTH_TOKEN:+tokenset}"
+	want := replacementTokenAbsenceCommand
 
 	if got := thePlan[index].Input["command"]; got != want {
-		t.Errorf("probe 5's token-absence call carries the command %q, want %q: the path is the work area's, inside the roots the wrapper holds every path word to, and the shell names it with the variable's expansion and nothing else, so the token itself never reaches the transcript (issue #277)", got, want)
+		t.Errorf("probe 5's token-absence call carries the command %q, want %q: the path is the work area's, inside the roots the wrapper holds every path word to, and the shell tests the variable's presence itself, so the token itself never reaches the transcript (issue #277)", got, want)
+	}
+
+	if got := thePlan[index].Input["command"]; strings.Contains(got, "$") {
+		t.Errorf("probe 5's token-absence call carries the command %q, which holds a $: Claude Code 2.1.332 refuses a Bash command in which a variable is expanded, before the command runs, so the call would never run and probe 5 would test the permission layer instead of the scrubbed shell (issue #613)", got)
 	}
 
 	if thePlan[index].Probe != 5 {
@@ -787,12 +822,166 @@ func TestJudgeFailsProbeFiveForTheFormsTheWrapperCannotSee(t *testing.T) {
 	}
 }
 
+// bracedVariableRefusal is Claude Code 2.1.332's text for a Bash command in
+// which a variable is expanded: it refuses the command before it runs and
+// records this sentence, in the permission_denied element and as the call's
+// result (issue #613).
+const bracedVariableRefusal = "A variable in braces in this command can't be checked before it runs"
+
+// permissionDeniedLine is the system element 2.1.332 prints for a call its
+// permission layer denies, right after the call's assistant element and before
+// its result: it names the call's tool_use_id and carries reason as both its
+// decision_reason and its message (issue #590).
+func permissionDeniedLine(toolUseID, reason string) string {
+	return fmt.Sprintf(
+		`{"type":"system","subtype":"permission_denied","tool_name":"Bash","tool_use_id":%q,"decision_reason_type":"other","decision_reason":%q,"message":%q}`+"\n",
+		toolUseID, reason, reason,
+	)
+}
+
+// absenceCallID is the tool_use id transcriptOf gives the plan's call i.
+func absenceCallID(i int) string {
+	return fmt.Sprintf("toolu_%02d", i)
+}
+
+// deniedTheAbsenceCall returns the transcript of a run that recorded reason,
+// with the CLI's permission_denied element for probe 5's token-absence call
+// inserted where the CLI prints it: after that call's assistant element and
+// before its result.
+func deniedTheAbsenceCall(reason string) func(plan audit.Plan, transcript []byte) []byte {
+	return func(plan audit.Plan, transcript []byte) []byte {
+		i := tokenAbsenceCall(plan)
+		if i < 0 {
+			return transcript
+		}
+
+		return insertLine(transcript, 2*i+2, strings.TrimSuffix(permissionDeniedLine(absenceCallID(i), reason), "\n"))
+	}
+}
+
+// metaOnTheAbsenceResult returns the transcript of a run that recorded kind in
+// the tool_result_meta of probe 5's token-absence call's result: 2.1.332 prints
+// that list beside the user element's message for a call it never ran, with a
+// non_execution_kind, and the element's text alone can then read as absence
+// (issue #613).
+func metaOnTheAbsenceResult(kind string) func(plan audit.Plan, transcript []byte) []byte {
+	return func(plan audit.Plan, transcript []byte) []byte {
+		i := tokenAbsenceCall(plan)
+		if i < 0 {
+			return transcript
+		}
+
+		meta := fmt.Sprintf(
+			`"tool_result_meta":[{"id":%q,"non_execution_kind":%q,"permission_decision":{"decision":"reject","source":"config"}}],`,
+			absenceCallID(i), kind,
+		)
+
+		lines := strings.SplitAfter(string(transcript), "\n")
+		lines[2*i+1] = strings.Replace(lines[2*i+1], `{"type":"user",`, `{"type":"user",`+meta, 1)
+
+		return []byte(strings.Join(lines, ""))
+	}
+}
+
+// TestJudgeFailsProbeFiveForTheRecordedRefusal pins probe 5 against the refusal
+// Claude Code 2.1.332 records for a Bash command in which a variable is
+// expanded (issue #613): the CLI decides that refusal before it runs anything,
+// so the call never reaches cat and its result is no evidence about the
+// sandboxed shell. The refusal is recorded in a system/permission_denied
+// element naming the call's tool_use_id, in the call's own error result, and in
+// its tool_result_meta's non_execution_kind - and any one of them must fail
+// probe 5, even when the result's text would otherwise read as an absent token:
+// a judgement that reads such a refusal as absence passes a probe that never
+// ran.
+func TestJudgeFailsProbeFiveForTheRecordedRefusal(t *testing.T) {
+	t.Parallel()
+
+	refusal := []string{
+		fmt.Sprintf("probe 5, %s", probeShortName[5]),
+		"runbook step 10",
+	}
+
+	cases := []struct {
+		name string
+		// answer, when set, is what the token-absence call's result becomes;
+		// nil leaves the passing run's absent-token result.
+		answer *callResult
+		// transcript writes the refusal's record beside the result.
+		transcript func(plan audit.Plan, transcript []byte) []byte
+	}{
+		{
+			name:       "the refusal is the call's error result and a permission_denied element",
+			answer:     &callResult{text: bracedVariableRefusal, isError: true},
+			transcript: deniedTheAbsenceCall(bracedVariableRefusal),
+		},
+		{
+			name:   "the refusal is the call's error result alone",
+			answer: &callResult{text: bracedVariableRefusal, isError: true},
+		},
+		{
+			// The hardening: the result's text reads as an absent token, and the
+			// permission layer's own record says the call was denied, so it never
+			// ran.
+			name:       "the permission_denied element denies a call whose result reads as an absent token",
+			transcript: deniedTheAbsenceCall(bracedVariableRefusal),
+		},
+		{
+			// The same record in the other place the CLI writes it.
+			name:       "the call's tool_result_meta says it never ran",
+			transcript: metaOnTheAbsenceResult("user-rejected"),
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			thePlan := plan()
+
+			index := tokenAbsenceCall(thePlan)
+			if index < 0 {
+				t.Fatalf("the plan asks for no token-absence call (its probe 5 calls are %v)", toolsOf(thePlan, 5))
+			}
+
+			answers := passingAnswers(thePlan, preflightNonce)
+
+			if tc.answer != nil {
+				answers[index] = *tc.answer
+			}
+
+			transcript := transcriptOf(thePlan, answers)
+			if tc.transcript != nil {
+				transcript = tc.transcript(thePlan, transcript)
+			}
+
+			err := judge(thePlan, transcript, fakeEffects{}, "")
+			if err == nil {
+				t.Fatal("Judge() = nil, want a refusal: the CLI refused probe 5's token-absence call before it ran, so its result is no evidence about the sandboxed shell (issue #613)")
+			}
+
+			for _, want := range refusal {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("Judge() error = %q, want it to hold %q", err, want)
+				}
+			}
+
+			if strings.Contains(err.Error(), bracedVariableRefusal) {
+				t.Errorf("Judge() error = %q, want it to hold nothing of the refusal's text: a verdict is made of fixed words, never of the transcript's bytes (ADR 0040)", err)
+			}
+		})
+	}
+}
+
 // judgeCase is one row of the judgement's table.
 type judgeCase struct {
 	// name says what the case does.
 	name string
 	// answers turns the passing transcript's answers into the case's.
 	answers func(plan audit.Plan, answers []callResult)
+	// command, when set, is the command probe 5's token-absence call is made
+	// with instead of the plan's, so the judgement is pinned against the call it
+	// must recognise whatever PreflightPlan lists (issue #613).
+	command string
 	// effects turns the passing observations into the case's.
 	effects func(effects *fakeEffects)
 	// canary, when set, is the step's canary the judgement is given.
@@ -1549,6 +1738,38 @@ func absenceCases() []judgeCase {
 			answers:  theCall(callResult{text: `audit-exec: refused: "/nonexistent/"`, isError: true}),
 			wantPass: true,
 		},
+
+		// Issue #613: 2.1.332 refuses the call the plan used to ask for, so the
+		// plan asks for `[[ -v CLAUDE_CODE_OAUTH_TOKEN ]]` instead, which expands
+		// nothing. The judgement must recognise that call by what it runs - a
+		// suffix of the old command would no longer match - or a set variable's
+		// error, which is an ordinary error naming tokenset, would pass as a
+		// refusal: fail-open, on the one result that proves the token reached the
+		// sandboxed shell.
+		{
+			name:     "the replacement call's result shows the variable absent",
+			command:  replacementTokenAbsenceCommand,
+			answers:  theCall(callResult{text: "Exit code 1\n" + absenceUnsetText, isError: true}),
+			wantPass: true,
+		},
+		{
+			name:    "the replacement call's result holds the variable's expansion",
+			command: replacementTokenAbsenceCommand,
+			answers: theCall(callResult{text: "Exit code 1\n" + absenceSetText, isError: true}),
+			want:    refusal,
+		},
+		{
+			name:    "the replacement call's result is not an error",
+			command: replacementTokenAbsenceCommand,
+			answers: theCall(callResult{text: "(Bash completed with no output)"}),
+			want:    refusal,
+		},
+		{
+			name:    "the replacement call's result is missing",
+			command: replacementTokenAbsenceCommand,
+			answers: theCall(callResult{noResult: true}),
+			want:    refusal,
+		},
 	}
 }
 
@@ -1673,6 +1894,15 @@ func TestJudgePassesOnlyWhenTheControlPassedAndEveryProbeWasRefused(t *testing.T
 
 			if tc.answers != nil {
 				tc.answers(thePlan, answers)
+			}
+
+			if tc.command != "" {
+				i := tokenAbsenceCall(thePlan)
+				if i < 0 {
+					t.Fatalf("the plan asks for no token-absence call (its probe 5 calls are %v)", toolsOf(thePlan, 5))
+				}
+
+				thePlan[i].Input["command"] = tc.command
 			}
 
 			if tc.effects != nil {
