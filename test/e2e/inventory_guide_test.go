@@ -262,6 +262,17 @@ func inventoryGuides() []inventoryGuideCase {
 				// SKUs Azure does not encrypt its disks for.
 				{id: "redis-shop-cart", rawType: "Microsoft.Cache/redis", category: "cache.redis", capabilities: []string{"encryption-at-rest", "node-high-availability", "sharding", "snapshots", "zone-high-availability"}},
 				{id: "redis-shop-dev", rawType: "Microsoft.Cache/redis", category: "cache.redis", capabilities: []string{}},
+				// A Standard cache is a primary and a replica, in no zone, and one of the
+				// SKUs Azure encrypts the disks of. So is a Premium cache that names
+				// neither shards nor replicas: two nodes, not four.
+				{id: "redis-shop-sessions", rawType: "Microsoft.Cache/redis", category: "cache.redis", capabilities: []string{"encryption-at-rest", "node-high-availability"}},
+				{id: "redis-shop-catalog", rawType: "Microsoft.Cache/redis", category: "cache.redis", capabilities: []string{"encryption-at-rest", "node-high-availability"}},
+				// A legacy Redis Enterprise cluster spread over three zones keeps serving
+				// through the loss of a zone, and the nodes that needs: one per zone is a
+				// primary and its failover replicas. It names no redundancy mode, so only
+				// its zones make it zone redundant. Without a database row it claims
+				// neither clustering nor persistence.
+				{id: "redis-shop-enterprise", rawType: "Microsoft.Cache/redisEnterprise", category: "cache.redis", capabilities: []string{"encryption-at-rest", "node-high-availability", "zone-high-availability"}},
 				// Azure Managed Redis: a primary and a replica, zone redundant, and
 				// clustered and persisted as its database says.
 				{id: "amr-shop-session", rawType: "Microsoft.Cache/redisEnterprise", category: "cache.redis", capabilities: []string{"encryption-at-rest", "node-high-availability", "sharding", "snapshots", "zone-high-availability"}},
@@ -270,8 +281,19 @@ func inventoryGuides() []inventoryGuideCase {
 				// An account of any other kind stays unclassified.
 				{id: "cosmos-shop-catalog", rawType: "Microsoft.DocumentDB/databaseAccounts", category: "database.mongodb", capabilities: []string{"encryption-at-rest", "node-high-availability", "point-in-time-restore", "zone-high-availability"}},
 				{id: "cosmos-shop-events", rawType: "Microsoft.DocumentDB/databaseAccounts", category: "unclassified"},
+				// An account served from two regions serves reads from both.
+				{id: "cosmos-shop-history", rawType: "Microsoft.DocumentDB/databaseAccounts", category: "database.mongodb", capabilities: []string{"encryption-at-rest", "node-high-availability", "read-replicas"}},
 				// Azure DocumentDB: two shards, each with a standby, 128 GiB each.
 				{id: "docdb-shop-orders", rawType: "Microsoft.DocumentDB/mongoClusters", category: "database.mongodb", capabilities: []string{"encryption-at-rest", "node-high-availability", "point-in-time-restore", "zone-high-availability"}},
+				// A cluster in the same zone keeps a standby per shard against a node
+				// failure, not against the loss of an availability zone: Microsoft,
+				// "Same-zone HA protects against node failures but doesn't protect against
+				// an availability zone outage"
+				// (https://learn.microsoft.com/en-us/azure/documentdb/high-availability), so
+				// it is not zone redundant.
+				{id: "docdb-shop-samezone", rawType: "Microsoft.DocumentDB/mongoClusters", category: "database.mongodb", capabilities: []string{"encryption-at-rest", "node-high-availability", "point-in-time-restore"}},
+				// A cluster another cluster replicates from serves read replicas.
+				{id: "docdb-shop-events", rawType: "Microsoft.DocumentDB/mongoClusters", category: "database.mongodb", capabilities: []string{"encryption-at-rest", "node-high-availability", "point-in-time-restore", "read-replicas", "zone-high-availability"}},
 				// A Standard load balancer with a UDP rule from an IPv6 frontend to an
 				// IPv6 backend pool is IPv6 end to end. One with an IPv6 frontend over
 				// IPv4-only backends is not IPv6 at all, and one in no zone is not zone
@@ -279,6 +301,16 @@ func inventoryGuides() []inventoryGuideCase {
 				{id: "lb-shop-dns", rawType: "Microsoft.Network/loadBalancers", category: "network.loadbalancer", capabilities: []string{"ipv6", "udp", "zone-high-availability"}},
 				{id: "lb-shop-web-v6front", rawType: "Microsoft.Network/loadBalancers", category: "network.loadbalancer", capabilities: []string{}},
 				{id: "lb-shop-legacy", rawType: "Microsoft.Network/loadBalancers", category: "network.loadbalancer", capabilities: []string{}},
+				// An IPv6 frontend is IPv6 end to end with an IPv6 member of its pool,
+				// whether the member is a scale set's IPv6 IP configuration or an IPv6
+				// address the pool names itself. A rule of protocol All or Quic carries UDP.
+				// A Gateway load balancer inserts a firewall appliance into a flow, and is
+				// no load balancer to move.
+				{id: "lb-shop-api", rawType: "Microsoft.Network/loadBalancers", category: "network.loadbalancer", capabilities: []string{"ipv6"}},
+				{id: "lb-shop-mesh", rawType: "Microsoft.Network/loadBalancers", category: "network.loadbalancer", capabilities: []string{"ipv6"}},
+				{id: "lb-shop-quic", rawType: "Microsoft.Network/loadBalancers", category: "network.loadbalancer", capabilities: []string{"udp"}},
+				{id: "lb-shop-all", rawType: "Microsoft.Network/loadBalancers", category: "network.loadbalancer", capabilities: []string{"udp"}},
+				{id: "lb-shop-gateway", rawType: "Microsoft.Network/loadBalancers", category: "unclassified"},
 				// An Application Gateway in three zones is zone redundant, and is
 				// neither an IPv6 nor a UDP load balancer.
 				{id: "agw-shop", rawType: "Microsoft.Network/applicationGateways", category: "network.loadbalancer", capabilities: []string{"zone-high-availability"}},
@@ -329,9 +361,17 @@ func inventoryGuides() []inventoryGuideCase {
 				// primary and replica of an Azure Managed Redis cluster.
 				{id: "redis-shop-cart", count: 4},
 				{id: "redis-shop-dev", count: 1},
+				// A Standard or Premium cache that names no shard and no replica.
+				{id: "redis-shop-sessions", count: 2},
+				{id: "redis-shop-catalog", count: 2},
 				{id: "amr-shop-session", count: 2},
 				// Azure DocumentDB: a primary and a standby per shard, 128 GiB each.
 				{id: "docdb-shop-orders", count: 4, storageGiB: 256},
+				// A cluster in the same zone runs the same standby per shard.
+				{id: "docdb-shop-samezone", count: 2},
+				// A cluster and the replica another cluster replicates from it.
+				{id: "docdb-shop-events", count: 4},
+				{id: "docdb-shop-events-replica", count: 4},
 				// The quota of an NFS share, from the shares list, and the
 				// provisioned GiB of a Microsoft.FileShares share.
 				{id: "shop-media", storageGiB: 1024},
@@ -350,6 +390,7 @@ func inventoryGuides() []inventoryGuideCase {
 				"vmss-shop-web_0abc_DataDisk_0",
 				"stshopfiles",
 				"default",
+				"amr-shop-session/default",
 			},
 		},
 	}

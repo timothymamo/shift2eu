@@ -155,6 +155,11 @@ var realDataAllowList = []allowListEntry{
 	},
 	{
 		file:  "test/e2e/testdata/inventory-guide/azure/graph-2.json",
+		value: "databaseAccounts/cosmos-shop-history",
+		why:   "the synthetic two-region Cosmos DB account of the inventory guide's sample shop's history; it names no one's account",
+	},
+	{
+		file:  "test/e2e/testdata/inventory-guide/azure/graph-2.json",
 		value: "registries/acrshop",
 		why:   "the synthetic container registry of the inventory guide's sample shop; it names no one's registry",
 	},

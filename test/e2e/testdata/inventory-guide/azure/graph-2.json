@@ -1,5 +1,5 @@
 {
-  "count": 36,
+  "count": 48,
   "data": [
     {
       "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shop/providers/Microsoft.DBforPostgreSQL/flexibleServers/psql-shop",
@@ -248,6 +248,68 @@
       }
     },
     {
+      "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shop/providers/Microsoft.Cache/redis/redis-shop-sessions",
+      "name": "redis-shop-sessions",
+      "type": "microsoft.cache/redis",
+      "kind": "",
+      "location": "westeurope",
+      "zones": null,
+      "sku": null,
+      "properties": {
+        "sku": {
+          "name": "Standard",
+          "family": "C",
+          "capacity": 2
+        },
+        "shardCount": null,
+        "replicasPerMaster": null,
+        "replicasPerPrimary": null,
+        "zonalAllocationPolicy": "NoZones",
+        "redisConfiguration": {
+          "rdb-backup-enabled": null
+        }
+      }
+    },
+    {
+      "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shop/providers/Microsoft.Cache/redis/redis-shop-catalog",
+      "name": "redis-shop-catalog",
+      "type": "microsoft.cache/redis",
+      "kind": "",
+      "location": "westeurope",
+      "zones": null,
+      "sku": null,
+      "properties": {
+        "sku": {
+          "name": "Premium",
+          "family": "P",
+          "capacity": 1
+        },
+        "shardCount": null,
+        "replicasPerMaster": null,
+        "replicasPerPrimary": null,
+        "zonalAllocationPolicy": "NoZones",
+        "redisConfiguration": {
+          "rdb-backup-enabled": null
+        }
+      }
+    },
+    {
+      "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shop/providers/Microsoft.Cache/redisEnterprise/redis-shop-enterprise",
+      "name": "redis-shop-enterprise",
+      "type": "microsoft.cache/redisenterprise",
+      "kind": "",
+      "location": "westeurope",
+      "zones": [
+        "1",
+        "2",
+        "3"
+      ],
+      "sku": {
+        "name": "Enterprise_E10"
+      },
+      "properties": null
+    },
+    {
       "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shop/providers/Microsoft.Cache/redisEnterprise/amr-shop-session",
       "name": "amr-shop-session",
       "type": "microsoft.cache/redisenterprise",
@@ -309,6 +371,32 @@
       }
     },
     {
+      "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shop/providers/Microsoft.DocumentDB/databaseAccounts/cosmos-shop-history",
+      "name": "cosmos-shop-history",
+      "type": "microsoft.documentdb/databaseaccounts",
+      "kind": "MongoDB",
+      "location": "westeurope",
+      "zones": null,
+      "sku": null,
+      "properties": {
+        "backupPolicy": {
+          "type": "Periodic"
+        },
+        "locations": [
+          {
+            "locationName": "West Europe",
+            "failoverPriority": 0,
+            "isZoneRedundant": false
+          },
+          {
+            "locationName": "North Europe",
+            "failoverPriority": 1,
+            "isZoneRedundant": false
+          }
+        ]
+      }
+    },
+    {
       "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shop/providers/Microsoft.DocumentDB/mongoClusters/docdb-shop-orders",
       "name": "docdb-shop-orders",
       "type": "microsoft.documentdb/mongoclusters",
@@ -331,6 +419,84 @@
         },
         "replicaParameters": {
           "sourceResourceId": null
+        }
+      }
+    },
+    {
+      "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shop/providers/Microsoft.DocumentDB/mongoClusters/docdb-shop-samezone",
+      "name": "docdb-shop-samezone",
+      "type": "microsoft.documentdb/mongoclusters",
+      "kind": "",
+      "location": "westeurope",
+      "zones": null,
+      "sku": null,
+      "properties": {
+        "highAvailability": {
+          "targetMode": "SameZone"
+        },
+        "sharding": {
+          "shardCount": 1
+        },
+        "storage": {
+          "sizeGb": 128
+        },
+        "compute": {
+          "tier": "M30"
+        },
+        "replicaParameters": {
+          "sourceResourceId": null
+        }
+      }
+    },
+    {
+      "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shop/providers/Microsoft.DocumentDB/mongoClusters/docdb-shop-events",
+      "name": "docdb-shop-events",
+      "type": "microsoft.documentdb/mongoclusters",
+      "kind": "",
+      "location": "westeurope",
+      "zones": null,
+      "sku": null,
+      "properties": {
+        "highAvailability": {
+          "targetMode": "ZoneRedundantPreferred"
+        },
+        "sharding": {
+          "shardCount": 2
+        },
+        "storage": {
+          "sizeGb": 64
+        },
+        "compute": {
+          "tier": "M30"
+        },
+        "replicaParameters": {
+          "sourceResourceId": null
+        }
+      }
+    },
+    {
+      "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shop/providers/Microsoft.DocumentDB/mongoClusters/docdb-shop-events-replica",
+      "name": "docdb-shop-events-replica",
+      "type": "microsoft.documentdb/mongoclusters",
+      "kind": "",
+      "location": "westeurope",
+      "zones": null,
+      "sku": null,
+      "properties": {
+        "highAvailability": {
+          "targetMode": "ZoneRedundantPreferred"
+        },
+        "sharding": {
+          "shardCount": 2
+        },
+        "storage": {
+          "sizeGb": 64
+        },
+        "compute": {
+          "tier": "M30"
+        },
+        "replicaParameters": {
+          "sourceResourceId": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shop/providers/Microsoft.DocumentDB/mongoClusters/docdb-shop-events"
         }
       }
     },
@@ -573,6 +739,222 @@
           }
         ]
       }
+    },
+    {
+      "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shop/providers/Microsoft.Network/loadBalancers/lb-shop-api",
+      "name": "lb-shop-api",
+      "type": "microsoft.network/loadbalancers",
+      "kind": "",
+      "location": "westeurope",
+      "zones": null,
+      "sku": {
+        "name": "Standard",
+        "tier": "Regional"
+      },
+      "properties": {
+        "frontendIPConfigurations": [
+          {
+            "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shop/providers/Microsoft.Network/loadBalancers/lb-shop-api/frontendIPConfigurations/fe-v6",
+            "name": "fe-v6",
+            "properties": {
+              "privateIPAddressVersion": "IPv6"
+            }
+          }
+        ],
+        "backendAddressPools": [
+          {
+            "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shop/providers/Microsoft.Network/loadBalancers/lb-shop-api/backendAddressPools/pool-vmss-v6",
+            "name": "pool-vmss-v6",
+            "properties": {
+              "backendIPConfigurations": [
+                {
+                  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shop/providers/Microsoft.Compute/virtualMachineScaleSets/vmss-shop-web/virtualMachines/0/networkInterfaces/nic-shop-web/ipConfigurations/ipconfig-v6"
+                }
+              ]
+            }
+          }
+        ],
+        "loadBalancingRules": [
+          {
+            "name": "api-https",
+            "properties": {
+              "protocol": "Tcp",
+              "frontendIPConfiguration": {
+                "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shop/providers/Microsoft.Network/loadBalancers/lb-shop-api/frontendIPConfigurations/fe-v6"
+              },
+              "backendAddressPool": {
+                "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shop/providers/Microsoft.Network/loadBalancers/lb-shop-api/backendAddressPools/pool-vmss-v6"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shop/providers/Microsoft.Network/loadBalancers/lb-shop-mesh",
+      "name": "lb-shop-mesh",
+      "type": "microsoft.network/loadbalancers",
+      "kind": "",
+      "location": "westeurope",
+      "zones": null,
+      "sku": {
+        "name": "Standard",
+        "tier": "Regional"
+      },
+      "properties": {
+        "frontendIPConfigurations": [
+          {
+            "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shop/providers/Microsoft.Network/loadBalancers/lb-shop-mesh/frontendIPConfigurations/fe-v6",
+            "name": "fe-v6",
+            "properties": {
+              "privateIPAddressVersion": "IPv6"
+            }
+          }
+        ],
+        "backendAddressPools": [
+          {
+            "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shop/providers/Microsoft.Network/loadBalancers/lb-shop-mesh/backendAddressPools/pool-mesh-v6",
+            "name": "pool-mesh-v6",
+            "properties": {
+              "loadBalancerBackendAddresses": [
+                {
+                  "name": "mesh-1",
+                  "properties": {
+                    "ipAddress": "2001:db8::61"
+                  }
+                }
+              ]
+            }
+          }
+        ],
+        "loadBalancingRules": [
+          {
+            "name": "mesh-sync",
+            "properties": {
+              "protocol": "Tcp",
+              "frontendIPConfiguration": {
+                "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shop/providers/Microsoft.Network/loadBalancers/lb-shop-mesh/frontendIPConfigurations/fe-v6"
+              },
+              "backendAddressPool": {
+                "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shop/providers/Microsoft.Network/loadBalancers/lb-shop-mesh/backendAddressPools/pool-mesh-v6"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shop/providers/Microsoft.Network/loadBalancers/lb-shop-quic",
+      "name": "lb-shop-quic",
+      "type": "microsoft.network/loadbalancers",
+      "kind": "",
+      "location": "westeurope",
+      "zones": null,
+      "sku": {
+        "name": "Standard",
+        "tier": "Regional"
+      },
+      "properties": {
+        "frontendIPConfigurations": [
+          {
+            "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shop/providers/Microsoft.Network/loadBalancers/lb-shop-quic/frontendIPConfigurations/fe-v4",
+            "name": "fe-v4",
+            "properties": {
+              "privateIPAddressVersion": "IPv4"
+            }
+          }
+        ],
+        "backendAddressPools": [
+          {
+            "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shop/providers/Microsoft.Network/loadBalancers/lb-shop-quic/backendAddressPools/pool-v4",
+            "name": "pool-v4",
+            "properties": {
+              "backendIPConfigurations": [
+                {
+                  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shop/providers/Microsoft.Network/networkInterfaces/nic-shop-web-2/ipConfigurations/ipconfig-v4"
+                }
+              ]
+            }
+          }
+        ],
+        "loadBalancingRules": [
+          {
+            "name": "quic-media",
+            "properties": {
+              "protocol": "Quic",
+              "frontendIPConfiguration": {
+                "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shop/providers/Microsoft.Network/loadBalancers/lb-shop-quic/frontendIPConfigurations/fe-v4"
+              },
+              "backendAddressPool": {
+                "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shop/providers/Microsoft.Network/loadBalancers/lb-shop-quic/backendAddressPools/pool-v4"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shop/providers/Microsoft.Network/loadBalancers/lb-shop-all",
+      "name": "lb-shop-all",
+      "type": "microsoft.network/loadbalancers",
+      "kind": "",
+      "location": "westeurope",
+      "zones": null,
+      "sku": {
+        "name": "Standard",
+        "tier": "Regional"
+      },
+      "properties": {
+        "frontendIPConfigurations": [
+          {
+            "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shop/providers/Microsoft.Network/loadBalancers/lb-shop-all/frontendIPConfigurations/fe-v4",
+            "name": "fe-v4",
+            "properties": {
+              "privateIPAddressVersion": "IPv4"
+            }
+          }
+        ],
+        "backendAddressPools": [
+          {
+            "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shop/providers/Microsoft.Network/loadBalancers/lb-shop-all/backendAddressPools/pool-v4",
+            "name": "pool-v4",
+            "properties": {
+              "backendIPConfigurations": [
+                {
+                  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shop/providers/Microsoft.Network/networkInterfaces/nic-shop-web-2/ipConfigurations/ipconfig-v4"
+                }
+              ]
+            }
+          }
+        ],
+        "loadBalancingRules": [
+          {
+            "name": "ha-ports",
+            "properties": {
+              "protocol": "All",
+              "frontendIPConfiguration": {
+                "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shop/providers/Microsoft.Network/loadBalancers/lb-shop-all/frontendIPConfigurations/fe-v4"
+              },
+              "backendAddressPool": {
+                "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shop/providers/Microsoft.Network/loadBalancers/lb-shop-all/backendAddressPools/pool-v4"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shop/providers/Microsoft.Network/loadBalancers/lb-shop-gateway",
+      "name": "lb-shop-gateway",
+      "type": "microsoft.network/loadbalancers",
+      "kind": "",
+      "location": "westeurope",
+      "zones": null,
+      "sku": {
+        "name": "Gateway",
+        "tier": "Regional"
+      },
+      "properties": null
     },
     {
       "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shop/providers/Microsoft.Network/applicationGateways/agw-shop",
