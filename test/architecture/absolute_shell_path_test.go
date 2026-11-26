@@ -45,6 +45,11 @@ func TestAbsoluteShellPath(t *testing.T) {
 		{name: "a quoted dot segment under the root", value: `"/a/../b"`, want: false},
 		{name: "a current-directory segment under the root", value: "/a/./b", want: false},
 		{name: "a trailing slash under the root", value: "/tmp/x/", want: false},
+		// The root alone is stricter than the core on purpose: the core accepts
+		// it, an absolute and clean path, but no result or reports path is the
+		// root, so the check refuses the empty tail after / as it refuses any
+		// other.
+		{name: "the root alone", value: "/", want: false},
 		{name: "a dot segment under the runner's temporary directory", value: "${RUNNER_TEMP}/../x", want: false},
 		{name: "an empty segment under the runner's temporary directory", value: "${RUNNER_TEMP}//result.json", want: false},
 		{name: "a trailing slash under the runner's temporary directory", value: "${RUNNER_TEMP}/dir/", want: false},
