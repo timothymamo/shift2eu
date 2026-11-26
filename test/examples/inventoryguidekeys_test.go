@@ -7,8 +7,10 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -107,8 +109,8 @@ type excludedFixtureKeys struct {
 	prefixes []string
 }
 
-// holdInFixture reports whether the key is one the shared list excludes.
-func (e excludedFixtureKeys) holdInFixture(key string) bool {
+// excludes reports whether the key is one the shared list excludes.
+func (e excludedFixtureKeys) excludes(key string) bool {
 	return slices.Contains(e.names, key) ||
 		slices.ContainsFunc(e.prefixes, func(prefix string) bool { return strings.HasPrefix(key, prefix) })
 }
@@ -116,9 +118,12 @@ func (e excludedFixtureKeys) holdInFixture(key string) bool {
 // readExcludedFixtureKeys reads the shared list of the fields every projection
 // and fixture of the guide's search and messaging calls leaves out (PRD #571),
 // which test/site's check of the guide's --query reads too (review finding on PR
-// #639). A record is `key: <field>` or `prefix: <field prefix>`; comments and
-// blank lines are no record. A malformed record fails the test: a list this
-// reader skipped would let a field the PRD excludes through both checks.
+// #639); the two read it the same way, record by record, so a record either
+// accepts or rejects in both. A record is `key: <field>` or `prefix: <field
+// prefix>`; comments and blank lines are no record. A malformed record, a record
+// line that carries a comment (which would become part of the field's name) or a
+// record repeated fails the test: a list this reader skipped would let a field
+// the PRD excludes through both checks, and a repeat would hide its first copy.
 func readExcludedFixtureKeys(t *testing.T) excludedFixtureKeys {
 	t.Helper()
 
@@ -129,10 +134,18 @@ func readExcludedFixtureKeys(t *testing.T) excludedFixtureKeys {
 
 	var excluded excludedFixtureKeys
 
+	// seen maps a record to the line that wrote it, so a repeat names both lines.
+	seen := map[string]int{}
+
 	for number, line := range strings.Split(string(document), "\n") {
 		trimmed := strings.TrimSpace(line)
 		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
 			continue
+		}
+
+		if strings.Contains(trimmed, "#") {
+			t.Fatalf("%s line %d reads %q, a record with a comment on it: write the comment on a line of its own, or the comment is part of the field's name and no field matches it",
+				excludedFixtureKeysPath, number+1, trimmed)
 		}
 
 		kind, name, ok := strings.Cut(trimmed, ": ")
@@ -140,6 +153,13 @@ func readExcludedFixtureKeys(t *testing.T) excludedFixtureKeys {
 			t.Fatalf("%s line %d reads %q, want `key: <field>` or `prefix: <prefix>`",
 				excludedFixtureKeysPath, number+1, trimmed)
 		}
+
+		if first, repeated := seen[trimmed]; repeated {
+			t.Fatalf("%s line %d repeats line %d's record %q, want one record per field: a second copy hides the first and makes the reader wonder which one the two checks read",
+				excludedFixtureKeysPath, number+1, first, trimmed)
+		}
+
+		seen[trimmed] = number + 1
 
 		switch kind {
 		case "key":
@@ -185,19 +205,44 @@ func TestInventoryGuideSearchAndKafkaFixturesCarryOnlyTheFieldsTheProgramReads(t
 	}
 }
 
-// describeDomainsBatch is the number of domain names the guide asks
-// `aws opensearch describe-domains` for at a time (`xargs -r -n 5`), which is why
-// a region of more than five domains records several JSON values in the one file
-// the command redirects every batch to.
-const describeDomainsBatch = 5
+// describeDomainsBatchLine finds the guide's `xargs -r -n <n>` line that hands
+// `aws opensearch describe-domains` the names of one batch.
+var describeDomainsBatchLine = regexp.MustCompile(`xargs -r -n ([0-9]+) aws opensearch describe-domains `)
+
+// describeDomainsBatch returns the number of domain names the guide asks
+// `aws opensearch describe-domains` for at a time, read from the guide's own
+// `xargs -r -n <n>` line (docs/guide/inventory.md) rather than written out here:
+// the recording holds one JSON value per batch, so a change of -n in the guide
+// must break this check with it instead of leaving a fixture the guide no longer
+// writes (PRD #571, review finding on PR #639).
+func describeDomainsBatch(t *testing.T) int {
+	t.Helper()
+
+	const guidePath = "docs/guide/inventory.md"
+
+	matches := describeDomainsBatchLine.FindAllStringSubmatch(readFile(t, filepath.Join(repoRoot, guidePath)), -1)
+	if len(matches) != 1 {
+		t.Fatalf("%s holds %d line(s) of `xargs -r -n <n> aws opensearch describe-domains`, want exactly one: this check reads the batch size the guide asks describe-domains for, and a second line would leave which one is unclear",
+			guidePath, len(matches))
+	}
+
+	batch, err := strconv.Atoi(matches[0][1])
+	if err != nil || batch < 1 {
+		t.Fatalf("%s asks describe-domains for %q domain(s) at a time, want a positive number: %v",
+			guidePath, matches[0][1], err)
+	}
+
+	return batch
+}
 
 // TestInventoryGuideDescribeDomainsFixtureRecordsEveryBatch pins the shape of a
 // describe-domains recording (PRD #571, review finding on PR #639): the guide
-// hands the call five names at a time with `xargs -r -n 5` and redirects every
-// batch to `opensearch-domains.json`, so a region of more than five domains
-// holds one JSON value per batch. A fixture of one value would record a command
-// the guide does not run, and a check that read only the first value would miss
-// every domain of every later batch.
+// hands the call the names list-domain-names returned, the number of names its
+// `xargs -r -n` line names at a time, and redirects every batch to
+// `opensearch-domains.json`, so the file holds one JSON value per batch of those
+// names, in order, and each value holds exactly that batch. A fixture of one
+// value would record a command the guide does not run, and a check that read
+// only the first value would miss every domain of every later batch.
 func TestInventoryGuideDescribeDomainsFixtureRecordsEveryBatch(t *testing.T) {
 	t.Parallel()
 
@@ -212,13 +257,15 @@ func TestInventoryGuideDescribeDomainsFixtureRecordsEveryBatch(t *testing.T) {
 
 	slices.Sort(names)
 
+	batch := describeDomainsBatch(t)
+
 	batches := 0
 
 	for _, namesPath := range names {
 		listed := readRecordedDomainNames(t, namesPath)
 
 		// One value per batch of names the guide asked the call for.
-		want := (len(listed) + describeDomainsBatch - 1) / describeDomainsBatch
+		want := (len(listed) + batch - 1) / batch
 
 		batches += want
 
@@ -231,35 +278,26 @@ func TestInventoryGuideDescribeDomainsFixtureRecordsEveryBatch(t *testing.T) {
 
 			if len(pages) != want {
 				t.Errorf("%s holds %d JSON value(s), want %d: %s names %d domain(s) and the guide asks describe-domains for %d at a time, so it runs the call %d time(s) and every batch is a value of its own in the file",
-					domainsPath, len(pages), want, namesPath, len(listed), describeDomainsBatch, want)
+					domainsPath, len(pages), want, namesPath, len(listed), batch, want)
 			}
 
-			described := 0
-
+			// The batches keep the names in the order list-domain-names returned them:
+			// value i holds names i*batch to the next batch's first name.
 			for i, page := range pages {
-				if len(page) == 0 {
-					t.Errorf("%s value %d holds no domain, want at least one: the guide writes a value per batch of names it asked for, so an empty value records a call the guide never made",
-						domainsPath, i+1)
+				start := min(i*batch, len(listed))
+				end := min(start+batch, len(listed))
+
+				if !slices.Equal(page, listed[start:end]) {
+					t.Errorf("%s value %d describes the domain(s) %q, want %q: the guide hands describe-domains the names list-domain-names returned, %d at a time, in that order, so the value of batch %d is names %d to %d",
+						domainsPath, i+1, page, listed[start:end], batch, i+1, start+1, end)
 				}
-
-				if len(page) > describeDomainsBatch {
-					t.Errorf("%s value %d holds %d domain(s), want at most %d: the guide asks the call for %d names at a time",
-						domainsPath, i+1, len(page), describeDomainsBatch, describeDomainsBatch)
-				}
-
-				described += len(page)
-			}
-
-			if described != len(listed) {
-				t.Errorf("%s describes %d domain(s) over its %d value(s) and %s names %d: the guide asks describe-domains for the names list-domain-names returned, so every batch is described once",
-					domainsPath, described, len(pages), namesPath, len(listed))
 			}
 		})
 	}
 
 	if batches < 2 {
 		t.Errorf("the recorded describe-domains output holds %d value(s) over every region, want at least 2: the guide's `xargs -r -n %d` writes one value per batch, and a fixture of one value cannot show that the program reads more than the first (review finding on PR #639)",
-			batches, describeDomainsBatch)
+			batches, batch)
 	}
 }
 
@@ -277,7 +315,12 @@ func readRecordedDomainNames(t *testing.T, path string) []string {
 		}
 
 		for _, field := range asSlice(document["DomainNames"]) {
-			name, ok := field.(map[string]any)["DomainName"].(string)
+			entry, ok := field.(map[string]any)
+			if !ok {
+				t.Fatalf("%s holds a DomainNames entry that is no object: %T", path, field)
+			}
+
+			name, ok := entry["DomainName"].(string)
 			if !ok {
 				t.Fatalf("%s holds a DomainNames entry without a DomainName: %v", path, field)
 			}
@@ -309,7 +352,12 @@ func readRecordedDomainPages(t *testing.T, path string) [][]string {
 		var page []string
 
 		for _, field := range asSlice(document["DomainStatusList"]) {
-			name, ok := field.(map[string]any)["DomainName"].(string)
+			entry, ok := field.(map[string]any)
+			if !ok {
+				t.Fatalf("%s holds a DomainStatusList entry that is no object: %T", path, field)
+			}
+
+			name, ok := entry["DomainName"].(string)
 			if !ok {
 				t.Fatalf("%s holds a DomainStatusList entry without a DomainName: %v", path, field)
 			}
@@ -421,7 +469,7 @@ func fixtureKeyProblems(value any, allowed []string, excluded excludedFixtureKey
 		switch typed := value.(type) {
 		case map[string]any:
 			for key, child := range typed {
-				if excluded.holdInFixture(key) {
+				if excluded.excludes(key) {
 					problems = append(problems, "the fixture holds the key "+quotedKey(key)+", which PRD #571 excludes from every projection")
 				}
 

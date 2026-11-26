@@ -1314,12 +1314,18 @@ type awsExcludedFields struct {
 // test/examples' fixture check reads too. A record is `key: <field>` or
 // `prefix: <prefix>`; comments and blank lines are no record. This package cannot
 // import the other's reader, so it has one of its own, as the two readers of
-// test/examples/testdata/namespace_may_follow_delimiters.txt do (issue #630). A
-// malformed record fails the test rather than shrinking the list.
+// test/examples/testdata/namespace_may_follow_delimiters.txt do (issue #630); the
+// two read this file the same way, record by record, so a record either accepts
+// or rejects in both. A malformed record, a record line that carries a comment
+// (which would become part of the field's name) or a record repeated fails the
+// test rather than shrinking the list or hiding its first copy.
 func readAWSExcludedFields(t *testing.T) awsExcludedFields {
 	t.Helper()
 
 	var excluded awsExcludedFields
+
+	// seen maps a record to the line that wrote it, so a repeat names both lines.
+	seen := map[string]int{}
 
 	for number, line := range strings.Split(string(readRepositoryFile(t, awsExcludedKeysPath)), "\n") {
 		trimmed := strings.TrimSpace(line)
@@ -1327,11 +1333,23 @@ func readAWSExcludedFields(t *testing.T) awsExcludedFields {
 			continue
 		}
 
+		if strings.Contains(trimmed, "#") {
+			t.Fatalf("%s line %d reads %q, a record with a comment on it: write the comment on a line of its own, or the comment is part of the field's name and no field matches it",
+				awsExcludedKeysPath, number+1, trimmed)
+		}
+
 		kind, name, ok := strings.Cut(trimmed, ": ")
 		if !ok || name == "" {
 			t.Fatalf("%s line %d reads %q, want `key: <field>` or `prefix: <prefix>`",
 				awsExcludedKeysPath, number+1, trimmed)
 		}
+
+		if first, repeated := seen[trimmed]; repeated {
+			t.Fatalf("%s line %d repeats line %d's record %q, want one record per field: a second copy hides the first and makes the reader wonder which one the two checks read",
+				awsExcludedKeysPath, number+1, first, trimmed)
+		}
+
+		seen[trimmed] = number + 1
 
 		switch kind {
 		case "key":
@@ -1696,13 +1714,15 @@ type awsIAMCall struct {
 // lists the action.
 //
 // The action is written out, never derived from the call's name, because a call's
-// action is often not its operation in PascalCase: `aws eks list-nodegroups`
-// needs eks:ListNodegroups (not eks:Listnodegroups), `aws eks describe-nodegroup`
-// needs eks:DescribeNodegroup, `aws rds describe-db-instances` needs
-// rds:DescribeDBInstances and `aws s3api list-buckets` needs
-// s3:ListAllMyBuckets. A derived name is often no action IAM knows at all, so a
-// policy written to match the derivation grants nothing and the reader who
-// follows the guide meets AccessDenied (review finding on PR #639).
+// action is not always its operation in PascalCase: `aws rds describe-db-instances`
+// needs rds:DescribeDBInstances (not rds:DescribeDbInstances), and `aws s3api
+// list-buckets` needs s3:ListAllMyBuckets. No call of the guide differs today
+// beyond those two, but the next one may: `aws s3api get-bucket-encryption`,
+// which the guide does not make, needs s3:GetEncryptionConfiguration, a name the
+// operation's own spelling does not hold. A derived name can be no action IAM
+// knows at all, so a policy written to match the derivation grants nothing and
+// the reader who follows the guide meets AccessDenied (review finding on PR
+// #639).
 type awsCollectCall struct {
 	service   string
 	operation string
@@ -1730,68 +1750,72 @@ const awsServiceAuthorizationReference = "https://docs.aws.amazon.com/service-au
 // (elasticloadbalancing), `aws opensearch` OpenSearch Service (es), `aws
 // opensearchserverless` OpenSearch Serverless (aoss) and `aws s3api` S3 (s3).
 var awsCollectCalls = []awsCollectCall{
-	// https://docs.aws.amazon.com/service-authorization/latest/reference/list_autoscaling.html
+	// Every page below is the reference's current short name for its service. The
+	// long names (`list_amazonelasticcontainerserviceforkubernetes.html` and its
+	// like) either redirect to the index or, for EC2, EKS, MSK, RDS, S3, SQS and
+	// SNS, answered 302 to it, so a citation of one led the reader nowhere
+	// (review finding on PR #639).
+	// list_autoscaling.html.
 	{service: "autoscaling", operation: "describe-auto-scaling-groups", action: "autoscaling:DescribeAutoScalingGroups", page: "list_autoscaling.html"},
-	// list_awsconfig.html: AWS Config's page. `aws configservice select-resource-config`
+	// list_config.html: AWS Config's page. `aws configservice select-resource-config`
 	// is the optional call that lists everything else a region holds.
-	{service: "configservice", operation: "select-resource-config", action: "config:SelectResourceConfig", page: "list_awsconfig.html"},
-	// list_amazonec2.html. The four describe calls need one action each, and
+	{service: "configservice", operation: "select-resource-config", action: "config:SelectResourceConfig", page: "list_config.html"},
+	// list_ec2.html. The four describe calls need one action each, and
 	// describe-instance-types is the one the audit found the policy missing: the
 	// domain and broker sizes are read from it.
-	{service: "ec2", operation: "describe-instances", action: "ec2:DescribeInstances", page: "list_amazonec2.html"},
-	{service: "ec2", operation: "describe-instance-types", action: "ec2:DescribeInstanceTypes", page: "list_amazonec2.html"},
-	{service: "ec2", operation: "describe-volumes", action: "ec2:DescribeVolumes", page: "list_amazonec2.html"},
-	{service: "ec2", operation: "describe-snapshots", action: "ec2:DescribeSnapshots", page: "list_amazonec2.html"},
-	// list_amazonelasticfilesystem.html: `aws efs` drives Elastic File System,
-	// whose IAM prefix is elasticfilesystem.
-	{service: "efs", operation: "describe-file-systems", action: "elasticfilesystem:DescribeFileSystems", page: "list_amazonelasticfilesystem.html"},
-	// list_amazonelasticcontainerserviceforkubernetes.html: EKS spells two of its
-	// four actions unlike its operations, nodegroups with a lower-case g
-	// (ListNodegroups, DescribeNodegroup), which the PascalCase rule got wrong.
-	{service: "eks", operation: "list-clusters", action: "eks:ListClusters", page: "list_amazonelasticcontainerserviceforkubernetes.html"},
-	{service: "eks", operation: "describe-cluster", action: "eks:DescribeCluster", page: "list_amazonelasticcontainerserviceforkubernetes.html"},
-	{service: "eks", operation: "list-nodegroups", action: "eks:ListNodegroups", page: "list_amazonelasticcontainerserviceforkubernetes.html"},
-	{service: "eks", operation: "describe-nodegroup", action: "eks:DescribeNodegroup", page: "list_amazonelasticcontainerserviceforkubernetes.html"},
-	// list_amazonelasticache.html: the three calls read the caches of the region.
-	{service: "elasticache", operation: "describe-replication-groups", action: "elasticache:DescribeReplicationGroups", page: "list_amazonelasticache.html"},
-	{service: "elasticache", operation: "describe-cache-clusters", action: "elasticache:DescribeCacheClusters", page: "list_amazonelasticache.html"},
-	{service: "elasticache", operation: "describe-serverless-caches", action: "elasticache:DescribeServerlessCaches", page: "list_amazonelasticache.html"},
-	// list_elasticloadbalancing.html (Classic) and list_elasticloadbalancingv2.html:
-	// both APIs' actions carry the elasticloadbalancing prefix, and Classic's
-	// describe-load-balancers is the v2 call's action too.
-	{service: "elb", operation: "describe-load-balancers", action: "elasticloadbalancing:DescribeLoadBalancers", page: "list_elasticloadbalancing.html"},
-	{service: "elbv2", operation: "describe-load-balancers", action: "elasticloadbalancing:DescribeLoadBalancers", page: "list_elasticloadbalancingv2.html"},
-	{service: "elbv2", operation: "describe-listeners", action: "elasticloadbalancing:DescribeListeners", page: "list_elasticloadbalancingv2.html"},
-	{service: "elbv2", operation: "describe-target-groups", action: "elasticloadbalancing:DescribeTargetGroups", page: "list_elasticloadbalancingv2.html"},
-	{service: "elbv2", operation: "describe-tags", action: "elasticloadbalancing:DescribeTags", page: "list_elasticloadbalancingv2.html"},
-	// list_amazonmanagedstreamingforkafka.html: MSK's prefix is kafka, and the
-	// CLI's list-clusters-v2 is the API's ListClustersV2.
-	{service: "kafka", operation: "list-clusters-v2", action: "kafka:ListClustersV2", page: "list_amazonmanagedstreamingforkafka.html"},
-	// list_awslambda.html.
-	{service: "lambda", operation: "list-functions", action: "lambda:ListFunctions", page: "list_awslambda.html"},
-	// list_amazonopensearchservice.html: `aws opensearch` drives OpenSearch
-	// Service, whose actions IAM spells with the es prefix.
-	{service: "opensearch", operation: "list-domain-names", action: "es:ListDomainNames", page: "list_amazonopensearchservice.html"},
-	{service: "opensearch", operation: "describe-domains", action: "es:DescribeDomains", page: "list_amazonopensearchservice.html"},
-	// list_amazonopensearchserverless.html: OpenSearch Serverless's prefix is aoss.
-	{service: "opensearchserverless", operation: "list-collections", action: "aoss:ListCollections", page: "list_amazonopensearchserverless.html"},
-	{service: "opensearchserverless", operation: "batch-get-collection", action: "aoss:BatchGetCollection", page: "list_amazonopensearchserverless.html"},
-	// list_amazonrelationaldatabaseservice.html: the RDS API calls the identifier
-	// DBInstance, so its action spells the acronym in caps rather than the
-	// operation's DescribeDbInstances.
-	{service: "rds", operation: "describe-db-instances", action: "rds:DescribeDBInstances", page: "list_amazonrelationaldatabaseservice.html"},
-	// list_amazons3.html: `aws s3api` calls the S3 API, whose prefix is s3. The
-	// CLI's list-buckets returns the buckets of the account, which is why IAM names
-	// the action for the buckets (ListAllMyBuckets) rather than for the call.
-	{service: "s3api", operation: "list-buckets", action: "s3:ListAllMyBuckets", page: "list_amazons3.html"},
-	{service: "s3api", operation: "get-bucket-versioning", action: "s3:GetBucketVersioning", page: "list_amazons3.html"},
-	// list_amazonsimplequeueservice.html: the policy needs the account's queue
-	// list and one queue's attributes.
-	{service: "sqs", operation: "list-queues", action: "sqs:ListQueues", page: "list_amazonsimplequeueservice.html"},
-	{service: "sqs", operation: "get-queue-attributes", action: "sqs:GetQueueAttributes", page: "list_amazonsimplequeueservice.html"},
-	// list_amazonsimplenotificationservice.html: the same for a topic.
-	{service: "sns", operation: "list-topics", action: "sns:ListTopics", page: "list_amazonsimplenotificationservice.html"},
-	{service: "sns", operation: "get-topic-attributes", action: "sns:GetTopicAttributes", page: "list_amazonsimplenotificationservice.html"},
+	{service: "ec2", operation: "describe-instances", action: "ec2:DescribeInstances", page: "list_ec2.html"},
+	{service: "ec2", operation: "describe-instance-types", action: "ec2:DescribeInstanceTypes", page: "list_ec2.html"},
+	{service: "ec2", operation: "describe-volumes", action: "ec2:DescribeVolumes", page: "list_ec2.html"},
+	{service: "ec2", operation: "describe-snapshots", action: "ec2:DescribeSnapshots", page: "list_ec2.html"},
+	// list_efs.html: `aws efs` drives Elastic File System, whose IAM prefix is
+	// elasticfilesystem.
+	{service: "efs", operation: "describe-file-systems", action: "elasticfilesystem:DescribeFileSystems", page: "list_efs.html"},
+	// list_eks.html: the four calls read the region's clusters and their
+	// nodegroups, and their actions keep the API's spelling of both
+	// (ListNodegroups, DescribeNodegroup).
+	{service: "eks", operation: "list-clusters", action: "eks:ListClusters", page: "list_eks.html"},
+	{service: "eks", operation: "describe-cluster", action: "eks:DescribeCluster", page: "list_eks.html"},
+	{service: "eks", operation: "list-nodegroups", action: "eks:ListNodegroups", page: "list_eks.html"},
+	{service: "eks", operation: "describe-nodegroup", action: "eks:DescribeNodegroup", page: "list_eks.html"},
+	// list_elasticache.html: the three calls read the caches of the region.
+	{service: "elasticache", operation: "describe-replication-groups", action: "elasticache:DescribeReplicationGroups", page: "list_elasticache.html"},
+	{service: "elasticache", operation: "describe-cache-clusters", action: "elasticache:DescribeCacheClusters", page: "list_elasticache.html"},
+	{service: "elasticache", operation: "describe-serverless-caches", action: "elasticache:DescribeServerlessCaches", page: "list_elasticache.html"},
+	// list_elb.html (Classic) and list_elbv2.html: both APIs' actions carry the
+	// elasticloadbalancing prefix, and Classic's describe-load-balancers is the v2
+	// call's action too.
+	{service: "elb", operation: "describe-load-balancers", action: "elasticloadbalancing:DescribeLoadBalancers", page: "list_elb.html"},
+	{service: "elbv2", operation: "describe-load-balancers", action: "elasticloadbalancing:DescribeLoadBalancers", page: "list_elbv2.html"},
+	{service: "elbv2", operation: "describe-listeners", action: "elasticloadbalancing:DescribeListeners", page: "list_elbv2.html"},
+	{service: "elbv2", operation: "describe-target-groups", action: "elasticloadbalancing:DescribeTargetGroups", page: "list_elbv2.html"},
+	{service: "elbv2", operation: "describe-tags", action: "elasticloadbalancing:DescribeTags", page: "list_elbv2.html"},
+	// list_kafka.html: MSK's prefix is kafka, and the CLI's list-clusters-v2 is
+	// the API's ListClustersV2.
+	{service: "kafka", operation: "list-clusters-v2", action: "kafka:ListClustersV2", page: "list_kafka.html"},
+	// list_lambda.html.
+	{service: "lambda", operation: "list-functions", action: "lambda:ListFunctions", page: "list_lambda.html"},
+	// list_es.html: `aws opensearch` drives OpenSearch Service, whose actions IAM
+	// spells with the es prefix.
+	{service: "opensearch", operation: "list-domain-names", action: "es:ListDomainNames", page: "list_es.html"},
+	{service: "opensearch", operation: "describe-domains", action: "es:DescribeDomains", page: "list_es.html"},
+	// list_opensearchserverless.html: OpenSearch Serverless's prefix is aoss.
+	{service: "opensearchserverless", operation: "list-collections", action: "aoss:ListCollections", page: "list_opensearchserverless.html"},
+	{service: "opensearchserverless", operation: "batch-get-collection", action: "aoss:BatchGetCollection", page: "list_opensearchserverless.html"},
+	// list_rds.html: the RDS API calls the identifier DBInstance, so its action
+	// spells the acronym in caps rather than the operation's DescribeDbInstances.
+	{service: "rds", operation: "describe-db-instances", action: "rds:DescribeDBInstances", page: "list_rds.html"},
+	// list_s3.html: `aws s3api` calls the S3 API, whose prefix is s3. The CLI's
+	// list-buckets returns the buckets of the account, which is why IAM names the
+	// action for the buckets (ListAllMyBuckets) rather than for the call.
+	{service: "s3api", operation: "list-buckets", action: "s3:ListAllMyBuckets", page: "list_s3.html"},
+	{service: "s3api", operation: "get-bucket-versioning", action: "s3:GetBucketVersioning", page: "list_s3.html"},
+	// list_sqs.html: the policy needs the account's queue list and one queue's
+	// attributes.
+	{service: "sqs", operation: "list-queues", action: "sqs:ListQueues", page: "list_sqs.html"},
+	{service: "sqs", operation: "get-queue-attributes", action: "sqs:GetQueueAttributes", page: "list_sqs.html"},
+	// list_sns.html: the same for a topic.
+	{service: "sns", operation: "list-topics", action: "sns:ListTopics", page: "list_sns.html"},
+	{service: "sns", operation: "get-topic-attributes", action: "sns:GetTopicAttributes", page: "list_sns.html"},
 }
 
 // awsCollectCallRows indexes awsCollectCalls by the call each row names, and

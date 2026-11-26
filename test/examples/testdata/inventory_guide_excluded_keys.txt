@@ -18,6 +18,10 @@
 # `prefix: <prefix>`, a field no name may start with (MSK's ZooKeeper connection
 # strings and its broker addresses are one entry each with a prefix, since each
 # has a suffix: BootstrapBrokerStringTls, BootstrapBrokerStringSaslScram, ...).
+# A record line holds its record and nothing else: a comment goes on a line of its
+# own, and no record appears twice. Both readers reject either, since a trailing
+# comment would become part of the field's name and a repeat would hide its first
+# copy.
 # Add a key only with the reason PRD #571 excludes it, as the file's first
 # paragraph gives for these.
 key: AccessPolicies
