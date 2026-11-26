@@ -56,8 +56,9 @@
 // repeats its header row; a row stays on one page unless it is taller than a
 // page, and is then split between two lines. A heading never ends a page: it
 // moves to the next page with the block that follows it when that block does
-// not fit under it, and a heading taller than a page, which only a very long
-// value makes it, is drawn at the body size as a paragraph.
+// not fit under it, and a heading too tall to fit a page with the room kept
+// under it and the headings kept above it, which only a very long value makes
+// it, is drawn at the body size as a paragraph.
 //
 // A single-target report is: the title "Migration assessment: " and the
 // target, the header facts (inventory file, left out when the metadata names

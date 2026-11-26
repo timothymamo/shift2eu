@@ -332,7 +332,13 @@ func (d *document) newPage() {
 
 // ensure starts a new page unless height points fit above the bottom. Headings
 // that no body line has followed yet move to the new page with what follows
-// them, so a heading never ends a page.
+// them, so a heading never ends a page. heading makes sure the moved chain and
+// the heading that asks leave room under them on the new page.
+//
+// The move assumes onNewPage is nil whenever headings are pending: a table
+// sets it only after drawing its header row, a body line that ends the chain,
+// and no heading is drawn inside a table, so nothing newPage draws lands
+// above the moved chain.
 func (d *document) ensure(height int) {
 	if d.atTop || d.y-height >= d.bottom {
 		return
@@ -431,18 +437,28 @@ func (d *document) heading(size, leading, before int, segs ...seg) {
 
 	d.space(before)
 
-	if len(lines)*leading+keepWithHeading > d.top-d.bottom {
-		// A heading taller than a page, which only a very long value makes
-		// it, would end the page it runs over whatever is done: it is drawn
-		// at the body size as a paragraph instead, so no page ends with
-		// heading lines.
+	need := len(lines)*leading + keepWithHeading
+
+	chain := 0
+	if d.kept.active {
+		chain = d.kept.y - d.y
+	}
+
+	if chain+need > d.top-d.bottom {
+		// A heading too tall to fit a page with the room kept under it and
+		// the headings kept above it, which only a very long value makes it,
+		// would end a page whatever is done: moving the chain to a new page
+		// leaves no room for it either. It is drawn at the body size as a
+		// paragraph instead, where it stands, so no page ends with heading
+		// lines; its first line follows the chain, and moves it along once
+		// when the page has no room for that line.
 		d.body(resized(bodySize, segs)...)
 		d.y -= 2
 
 		return
 	}
 
-	d.ensure(len(lines)*leading + keepWithHeading)
+	d.ensure(need)
 
 	if !d.kept.active {
 		d.kept = keptHeadings{active: true, run: len(d.page().runs), y: d.y}
