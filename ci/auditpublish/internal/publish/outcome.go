@@ -28,6 +28,9 @@ type Outcome struct {
 	counted bool
 	public  int
 	private PrivateState
+	// phrase is the fixed words of the check that refused the run, from
+	// checkPhrases alone; empty when no check of the class marks the error.
+	phrase string
 }
 
 // classes maps each error class to its outcome, in the order OutcomeOf tests
@@ -45,9 +48,10 @@ var classes = []struct {
 	{ErrConfig, outcomeConfig},
 }
 
-// OutcomeOf classifies a run's error by its class alone, never its text: nil
-// is a published run, whose counts WithCounts sets; an error of no class is a
-// failed one.
+// OutcomeOf classifies a run's error by its class and the check that refused
+// it, never its text: nil is a published run, whose counts WithCounts sets; an
+// error of no class is a failed one. The check is the first Refuse mark of the
+// error's class (phraseOf), and its words come from the fixed checkPhrases.
 func OutcomeOf(err error) Outcome {
 	if err == nil {
 		return Outcome{kind: outcomePublished}
@@ -55,7 +59,9 @@ func OutcomeOf(err error) Outcome {
 
 	for _, c := range classes {
 		if errors.Is(err, c.err) {
-			return Outcome{kind: c.kind}
+			phrase, _ := phraseOf(err, c.err)
+
+			return Outcome{kind: c.kind, phrase: phrase}
 		}
 	}
 
@@ -119,7 +125,9 @@ func (o Outcome) Code() int {
 	}
 }
 
-// Summary is the one line the entry point prints.
+// Summary is the one line the entry point prints: "<class line>: <check
+// phrase>: see runbook" for a refusal a check marks, the class's line alone
+// otherwise. The phrase is checkPhrases' fixed words, never an error's text.
 func (o Outcome) Summary() string {
 	if line, ok := o.published(); ok {
 		return "audit published: public findings " + strconv.Itoa(o.public) + ", " + line
@@ -127,22 +135,32 @@ func (o Outcome) Summary() string {
 
 	switch o.kind {
 	case outcomeResultInvalid:
-		return "result refused: see runbook"
+		return o.refused("result refused")
 	case outcomeScanRefused:
-		return "publish refused: see runbook"
+		return o.refused("publish refused")
 	case outcomePrivateNotFiled:
 		return "private findings not filed: see runbook"
 	case outcomeDuplicateDrafts:
 		return "publish refused: duplicate draft advisories: see runbook step 11"
 	case outcomePreviousReport:
-		return "previous report unreadable: see runbook"
+		return o.refused("previous report unreadable")
 	case outcomeGitHub:
-		return "GitHub call failed: see runbook"
+		return o.refused("GitHub call failed")
 	case outcomeConfig:
-		return "configuration invalid: see runbook"
+		return o.refused("configuration invalid")
 	case outcomeFailed, outcomePublished:
 		return "publish failed: see runbook"
 	default:
 		return "publish failed: see runbook"
 	}
+}
+
+// refused is a refusal's line: the class's words, the check's when one marks
+// the error, and the runbook.
+func (o Outcome) refused(class string) string {
+	if o.phrase == "" {
+		return class + ": see runbook"
+	}
+
+	return class + ": " + o.phrase + ": see runbook"
 }

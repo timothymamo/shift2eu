@@ -101,7 +101,7 @@ func (p *Previous) row(fp Fingerprint) (previousRow, bool) {
 // previousError is a previous report the core cannot read, for the rule it
 // broke. It names no text of the report.
 func previousError(rule string) error {
-	return fmt.Errorf("previous report: %s: %w", rule, ErrPreviousReport)
+	return Refuse(CheckPreviousNotRendered, fmt.Errorf("previous report: %s: %w", rule, ErrPreviousReport))
 }
 
 // ParsePreviousReport reads the previous merged report, name being its file

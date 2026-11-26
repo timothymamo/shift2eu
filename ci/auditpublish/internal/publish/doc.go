@@ -21,7 +21,10 @@
 // (ParseAdvisoryStatus, SetAdvisoryStatus, AdvisoryFingerprint),
 // flags a gap in the schedule against GapThresholdDays, scans every text it
 // would publish for tokens, keys and encoded runs, and maps each outcome to an
-// exit code and one summary line that holds no finding's text.
+// exit code and one summary line that holds no finding's text: the class's
+// words and the failed check's, from the fixed list of checks (FailedCheck,
+// Refuse) the core, the GitHub side and the entry point mark their refusals
+// with (issue #640).
 //
 // The package opens no file and no connection, reads no environment variable
 // and no clock, and starts no process: ci/auditpublish, its entry point, reads

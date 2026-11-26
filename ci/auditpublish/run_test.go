@@ -43,11 +43,12 @@ const (
 	summaryExisting   = "the summary's own first line\n"
 
 	// The four lines the run prints, of the four outcomes PR 4a has (ADR 0040;
-	// the artifact check's line and code come from ArtifactsOutcome).
+	// the artifact check's line and code come from ArtifactsOutcome). The
+	// configuration's line names the check that refused the run: checkphrase_test.go
+	// holds that fixed list.
 	lineAsExpected     = "artifacts: as expected"
 	lineUnexpected     = "artifacts: unexpected: see runbook step 11"
-	lineGitHubFailed   = "GitHub call failed: see runbook"
-	lineConfigInvalid  = "configuration invalid: see runbook"
+	lineGitHubFailed   = "GitHub call failed: listing the run's artifacts: see runbook"
 	codeAsExpected     = 0
 	codeUnexpected     = 3
 	codeGitHubFailed   = 8
@@ -307,11 +308,11 @@ func TestRunRefusesASecretInItsEnvironment(t *testing.T) {
 				result := runProgram(t, artifactArgs(jobModel, fake.Path, t.TempDir()), env)
 
 				if result.code != codeConfigInvalid {
-					t.Errorf("the run's exit code is %d, want %d: %s", result.code, codeConfigInvalid, lineConfigInvalid)
+					t.Errorf("the run's exit code is %d, want %d: %s", result.code, codeConfigInvalid, lineConfigSecret)
 				}
 
-				if want := lineConfigInvalid + "\n"; result.stdout != want {
-					t.Errorf("the run's stdout is %q, want %q: a refused configuration is the run's one line", result.stdout, want)
+				if want := lineConfigSecret + "\n"; result.stdout != want {
+					t.Errorf("the run's stdout is %q, want %q: a refused configuration is the run's one line, naming the check", result.stdout, want)
 				}
 
 				if result.stderr != "" {
@@ -341,24 +342,32 @@ func TestRunRefusesAConfigurationItCannotUse(t *testing.T) {
 		args    func(ghPath, tempDir string) []string
 		env     func(env map[string]string)
 		refused []string
+		// want is the run's one line: the phrase names the check that refused
+		// it (issue #640).
+		want string
 	}{
 		{
-			name:    "no GH_TOKEN",
-			env:     func(env map[string]string) { delete(env, "GH_TOKEN") },
-			refused: []string{"GH_TOKEN"},
+			// The token's name is a fixed word of the line, not a value: only
+			// what the run reads is refused (issue #640).
+			name: "no GH_TOKEN",
+			env:  func(env map[string]string) { delete(env, "GH_TOKEN") },
+			want: lineConfigToken,
 		},
 		{
 			name:    "an empty GH_TOKEN",
 			env:     func(env map[string]string) { env["GH_TOKEN"] = "" },
 			refused: []string{},
+			want:    lineConfigToken,
 		},
 		{
 			name: "no GITHUB_REPOSITORY",
 			env:  func(env map[string]string) { delete(env, "GITHUB_REPOSITORY") },
+			want: lineConfigRepo,
 		},
 		{
 			name: "no GITHUB_RUN_ID",
 			env:  func(env map[string]string) { delete(env, "GITHUB_RUN_ID") },
+			want: lineConfigRunID,
 		},
 		{
 			name: "a relative gh path",
@@ -366,6 +375,7 @@ func TestRunRefusesAConfigurationItCannotUse(t *testing.T) {
 				return artifactArgs(jobModel, "bin/"+valueMarker, "")
 			},
 			refused: []string{"bin/" + valueMarker},
+			want:    lineConfigGHP,
 		},
 		{
 			name: "a relative temporary directory",
@@ -373,6 +383,7 @@ func TestRunRefusesAConfigurationItCannotUse(t *testing.T) {
 				return artifactArgs(jobModel, ghPath, "tmp/"+valueMarker)
 			},
 			refused: []string{"tmp/" + valueMarker},
+			want:    lineConfigTempDir,
 		},
 		{
 			name: "a temporary directory that does not exist",
@@ -380,6 +391,7 @@ func TestRunRefusesAConfigurationItCannotUse(t *testing.T) {
 				return artifactArgs(jobModel, ghPath, tempDir+"/"+valueMarker)
 			},
 			refused: []string{valueMarker},
+			want:    lineConfigTempDir,
 		},
 		{
 			name: "an unknown job",
@@ -387,6 +399,7 @@ func TestRunRefusesAConfigurationItCannotUse(t *testing.T) {
 				return artifactArgs(valueMarker, ghPath, tempDir)
 			},
 			refused: []string{valueMarker},
+			want:    lineConfigUsage,
 		},
 		{
 			name: "a repository without an owner",
@@ -394,6 +407,7 @@ func TestRunRefusesAConfigurationItCannotUse(t *testing.T) {
 				env["GITHUB_REPOSITORY"] = valueMarker
 			},
 			refused: []string{valueMarker},
+			want:    lineConfigRepo,
 		},
 		{
 			name: "a run ID that is not a number",
@@ -401,21 +415,25 @@ func TestRunRefusesAConfigurationItCannotUse(t *testing.T) {
 				env["GITHUB_RUN_ID"] = "12" + valueMarker
 			},
 			refused: []string{"12" + valueMarker},
+			want:    lineConfigRunID,
 		},
 		{
 			name: "no subcommand",
 			args: func(_, _ string) []string { return nil },
+			want: lineConfigUsage,
 		},
 		{
 			name: "the publish subcommand, which is PR 4b's",
 			args: func(ghPath, tempDir string) []string {
 				return []string{jobPublish, "-gh", ghPath, "-tmp", tempDir}
 			},
+			want: lineConfigUsage,
 		},
 		{
 			name:    "an unknown subcommand",
 			args:    func(_, _ string) []string { return []string{valueMarker} },
 			refused: []string{valueMarker},
+			want:    lineConfigUsage,
 		},
 		{
 			name: "an extra argument",
@@ -423,6 +441,7 @@ func TestRunRefusesAConfigurationItCannotUse(t *testing.T) {
 				return append(artifactArgs(jobModel, ghPath, tempDir), valueMarker)
 			},
 			refused: []string{valueMarker},
+			want:    lineConfigUsage,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -445,12 +464,11 @@ func TestRunRefusesAConfigurationItCannotUse(t *testing.T) {
 
 			if result.code != codeConfigInvalid {
 				t.Errorf("the run's exit code is %d, want %d: %s\nstdout: %s\nstderr: %s",
-					result.code, codeConfigInvalid, lineConfigInvalid, result.stdout, result.stderr)
+					result.code, codeConfigInvalid, tc.want, result.stdout, result.stderr)
 			}
 
-			if !strings.Contains(result.output(), lineConfigInvalid) {
-				t.Errorf("the run printed %q, want it to name %q: the runbook's step 11 is what a refused run points at",
-					result.output(), lineConfigInvalid)
+			if want := tc.want + "\n"; result.stdout != want {
+				t.Errorf("the run's stdout is %q, want exactly %q: the line names the check that refused the run", result.stdout, want)
 			}
 
 			if calls := fake.Calls(t); len(calls) != 0 {
@@ -639,7 +657,7 @@ func TestRunArtifactsWritesNothingWhenTheCheckRefusesOrThePathExists(t *testing.
 
 		if result.code != codeConfigInvalid {
 			t.Errorf("the run's exit code is %d, want %d (%q): the artifact file is opened O_EXCL\nstdout: %s\nstderr: %s",
-				result.code, codeConfigInvalid, lineConfigInvalid, result.stdout, result.stderr)
+				result.code, codeConfigInvalid, lineConfigArtifact, result.stdout, result.stderr)
 		}
 
 		body, err := os.ReadFile(path)
@@ -866,7 +884,7 @@ func TestRunFailsClosedOnASummaryItCannotUse(t *testing.T) {
 			{
 				name:   "a passing listing",
 				answer: fakeAnswer{Status: 200, Body: artifactListing(1, artifactChecksName)},
-				want:   lineConfigInvalid,
+				want:   lineConfigSummary,
 				code:   codeConfigInvalid,
 			},
 			{
@@ -963,10 +981,10 @@ func TestRunPublishAndImageFailClosedOnASummaryTheyCannotUse(t *testing.T) {
 
 				if code != codeConfigInvalid {
 					t.Errorf("the run's exit code is %d, want %d: %s\nstdout: %s\nstderr: %s",
-						code, codeConfigInvalid, lineConfigInvalid, stdout.String(), stderr.String())
+						code, codeConfigInvalid, lineConfigSummary, stdout.String(), stderr.String())
 				}
 
-				if want := lineConfigInvalid + "\n"; stdout.String() != want {
+				if want := lineConfigSummary + "\n"; stdout.String() != want {
 					t.Errorf("the run's stdout is %q, want exactly %q: the run prints its one line and nothing else", stdout.String(), want)
 				}
 
@@ -1492,9 +1510,13 @@ func TestRunPublishAndImageRefuseAConfigurationTheyCannotUse(t *testing.T) {
 		env     func(env map[string]string)
 		args    func(ghPath, gitleaksPath, resultPath, reportsDir string) []string
 		refused []string
+		// want is the run's one line, which names the check that refused it
+		// (issue #640).
+		want string
 	}{
 		{
 			name:    "an image of another server",
+			want:    lineConfigServerURL,
 			sub:     "image",
 			env:     func(env map[string]string) { env["GITHUB_SERVER_URL"] = "https://github.example.com" },
 			refused: []string{"https://github.example.com"},
@@ -1503,77 +1525,91 @@ func TestRunPublishAndImageRefuseAConfigurationTheyCannotUse(t *testing.T) {
 			// An empty token names no token at all: it is the configuration's
 			// error, never a GitHub call that fails.
 			name: "an image with an empty GH_TOKEN",
+			want: lineConfigToken,
 			sub:  "image",
 			env:  func(env map[string]string) { env["GH_TOKEN"] = "" },
 		},
 		{
 			name: "a publish with an empty GH_TOKEN",
+			want: lineConfigToken,
 			sub:  "publish",
 			env:  func(env map[string]string) { env["GH_TOKEN"] = "" },
 		},
 		{
 			name:    "a publish of another server",
+			want:    lineConfigServerURL,
 			sub:     "publish",
 			env:     func(env map[string]string) { env["GITHUB_SERVER_URL"] = "https://github.example.com" },
 			refused: []string{"https://github.example.com"},
 		},
 		{
 			name:    "an image of a plain http server",
+			want:    lineConfigServerURL,
 			sub:     "image",
 			env:     func(env map[string]string) { env["GITHUB_SERVER_URL"] = "http://github.com" },
 			refused: []string{"http://github.com"},
 		},
 		{
 			name:    "a publish of a server URL with a trailing slash",
+			want:    lineConfigServerURL,
 			sub:     "publish",
 			env:     func(env map[string]string) { env["GITHUB_SERVER_URL"] = "https://github.com/" },
 			refused: []string{"https://github.com/"},
 		},
 		{
 			name: "an image without GITHUB_SERVER_URL",
+			want: lineConfigServerURL,
 			sub:  "image",
 			env:  func(env map[string]string) { delete(env, "GITHUB_SERVER_URL") },
 		},
 		{
 			name: "a publish without GITHUB_SERVER_URL",
+			want: lineConfigServerURL,
 			sub:  "publish",
 			env:  func(env map[string]string) { delete(env, "GITHUB_SERVER_URL") },
 		},
 		{
 			name:    "an image with a short GITHUB_SHA",
+			want:    lineConfigSHA,
 			sub:     "image",
 			env:     func(env map[string]string) { env["GITHUB_SHA"] = "0123456" },
 			refused: []string{"0123456"},
 		},
 		{
 			name:    "a publish with an upper-case GITHUB_SHA",
+			want:    lineConfigSHA,
 			sub:     "publish",
 			env:     func(env map[string]string) { env["GITHUB_SHA"] = strings.ToUpper(fixtureCommit) },
 			refused: []string{strings.ToUpper(fixtureCommit)},
 		},
 		{
 			name: "a publish without GITHUB_SHA",
+			want: lineConfigSHA,
 			sub:  "publish",
 			env:  func(env map[string]string) { delete(env, "GITHUB_SHA") },
 		},
 		{
 			name: "a publish without AUDIT_FINGERPRINT_KEY",
+			want: lineConfigKey,
 			sub:  "publish",
 			env:  func(env map[string]string) { delete(env, "AUDIT_FINGERPRINT_KEY") },
 		},
 		{
 			name:    "a publish with a short AUDIT_FINGERPRINT_KEY",
+			want:    lineConfigKey,
 			sub:     "publish",
 			env:     func(env map[string]string) { env["AUDIT_FINGERPRINT_KEY"] = "short-key" },
 			refused: []string{"short-key"},
 		},
 		{
 			name: "an image without its result flag",
+			want: lineConfigUsage,
 			sub:  "image",
 			args: func(ghPath, _, _, _ string) []string { return []string{"image", "-gh", ghPath, "-tmp", "TMP"} },
 		},
 		{
 			name: "a publish without its reports flag",
+			want: lineConfigUsage,
 			sub:  "publish",
 			args: func(ghPath, gitleaksPath, resultPath, _ string) []string {
 				return []string{"publish", "-result", resultPath, "-gh", ghPath, "-gitleaks", gitleaksPath, "-tmp", "TMP"}
@@ -1581,6 +1617,7 @@ func TestRunPublishAndImageRefuseAConfigurationTheyCannotUse(t *testing.T) {
 		},
 		{
 			name: "a publish without its gitleaks flag",
+			want: lineConfigUsage,
 			sub:  "publish",
 			args: func(ghPath, _, resultPath, reportsDir string) []string {
 				return []string{"publish", "-result", resultPath, "-reports", reportsDir, "-gh", ghPath, "-tmp", "TMP"}
@@ -1614,15 +1651,11 @@ func TestRunPublishAndImageRefuseAConfigurationTheyCannotUse(t *testing.T) {
 
 			if result.code != codeConfigInvalid {
 				t.Errorf("the run's exit code is %d, want %d: %s\nstdout: %s\nstderr: %s",
-					result.code, codeConfigInvalid, lineConfigInvalid, result.stdout, result.stderr)
+					result.code, codeConfigInvalid, tc.want, result.stdout, result.stderr)
 			}
 
-			if !strings.Contains(result.output(), lineConfigInvalid) {
-				t.Errorf("the run printed %q, want it to name %q", result.output(), lineConfigInvalid)
-			}
-
-			if want := lineConfigInvalid + "\n"; result.stdout != want {
-				t.Errorf("the run's stdout is %q, want exactly %q: a refused configuration is the run's one line", result.stdout, want)
+			if want := tc.want + "\n"; result.stdout != want {
+				t.Errorf("the run's stdout is %q, want exactly %q: a refused configuration is the run's one line, naming the check", result.stdout, want)
 			}
 
 			if calls := fake.Calls(t); len(calls) != 0 {

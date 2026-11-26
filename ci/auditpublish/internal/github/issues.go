@@ -54,34 +54,34 @@ type issueEntry struct {
 // error names an issue.
 func ListAuditIssues(ctx context.Context, c *Client) ([]Issue, error) {
 	if c == nil {
-		return nil, fmt.Errorf("issue listing: no client: %w", publish.ErrConfig)
+		return nil, refuse(publish.CheckNoClient, "issue listing: no client", publish.ErrConfig)
 	}
 
 	var out []Issue
 
 	for page := 1; ; page++ {
 		if page > MaxIssuePages {
-			return nil, fmt.Errorf("issue listing: more than %d pages: %w", MaxIssuePages, publish.ErrGitHub)
+			return nil, refuse(publish.CheckListIssues, "issue listing: more than "+strconv.Itoa(MaxIssuePages)+" pages", publish.ErrGitHub)
 		}
 
 		resp, err := read(ctx, c, "repos/"+c.scope.Repository+
 			"/issues?creator=shift2eu-audit%5Bbot%5D&state=all&per_page=100&page="+strconv.Itoa(page))
 		if err != nil {
-			return nil, fmt.Errorf("issue listing: %w", err)
+			return nil, publish.Refuse(publish.CheckListIssues, fmt.Errorf("issue listing: %w", err))
 		}
 
 		if resp.Status/100 != 2 {
-			return nil, fmt.Errorf("issue listing: the status is not 2xx: %w", publish.ErrGitHub)
+			return nil, refuse(publish.CheckListIssues, "issue listing: the status is not 2xx", publish.ErrGitHub)
 		}
 
 		var entries []issueEntry
 		if json.Unmarshal(resp.Body, &entries) != nil || entries == nil {
-			return nil, fmt.Errorf("issue listing: the answer is not the listing: %w", publish.ErrGitHub)
+			return nil, refuse(publish.CheckListIssues, "issue listing: the answer is not the listing", publish.ErrGitHub)
 		}
 
 		for _, e := range entries {
 			if e.Title == nil || e.User == nil || e.User.Login == nil || e.User.Type == nil {
-				return nil, fmt.Errorf("issue listing: an entry that is no issue: %w", publish.ErrGitHub)
+				return nil, refuse(publish.CheckListIssues, "issue listing: an entry that is no issue", publish.ErrGitHub)
 			}
 
 			out = append(out, Issue{
@@ -181,7 +181,7 @@ func isHex(b byte) bool {
 // wraps publish.ErrGitHub, and the call is never retried.
 func CreateIssue(ctx context.Context, c *Client, issue publish.IssueText) error {
 	if c == nil {
-		return fmt.Errorf("issue: no client: %w", publish.ErrConfig)
+		return refuse(publish.CheckNoClient, "issue: no client", publish.ErrConfig)
 	}
 
 	if _, err := write(ctx, c, "repos/"+c.scope.Repository+"/issues", map[string]any{
@@ -189,7 +189,7 @@ func CreateIssue(ctx context.Context, c *Client, issue publish.IssueText) error 
 		"body":   issue.Body,
 		"labels": []string{"security"},
 	}); err != nil {
-		return fmt.Errorf("issue: %w", err)
+		return publish.Refuse(publish.CheckCreateIssue, fmt.Errorf("issue: %w", err))
 	}
 
 	return nil

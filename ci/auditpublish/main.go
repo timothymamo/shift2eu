@@ -51,6 +51,16 @@ const publishServerURL = "https://github.com"
 // with usageText on stderr.
 var errUsage = errors.New("usage")
 
+// errSummary is a step summary the run cannot append its line to: the
+// configuration's outcome, which a run that would have passed prints instead.
+var errSummary = configError(publish.CheckStepSummary)
+
+// configError is a configuration the entry point refuses, named by check, one
+// of the core's fixed list: the run's line names the check, never a value.
+func configError(check publish.FailedCheck) error {
+	return publish.Refuse(check, publish.ErrConfig)
+}
+
 // outcomeFunc maps a subcommand's error to its one line and exit code.
 type outcomeFunc func(error) (string, int)
 
@@ -69,7 +79,7 @@ type outcomeFunc func(error) (string, int)
 func run(ctx context.Context, args []string, lookup func(string) (string, bool), now func() time.Time, stdout, stderr io.Writer) int {
 	for _, name := range secretVariables {
 		if _, set := lookup(name); set {
-			return finish(stdout, openSummary(lookup), github.ArtifactsOutcome, publish.ErrConfig)
+			return finish(stdout, openSummary(lookup), github.ArtifactsOutcome, configError(publish.CheckSecretSet))
 		}
 	}
 
@@ -86,14 +96,14 @@ func run(ctx context.Context, args []string, lookup func(string) (string, bool),
 	case len(args) > 0 && args[0] == "image" && summary == nil:
 		// A report subcommand refuses a summary it cannot append its line to
 		// before it starts, so it makes no gh call at all.
-		outcome, err = github.ImageOutcome, publish.ErrConfig
+		outcome, err = github.ImageOutcome, errSummary
 	case len(args) > 0 && args[0] == "image":
 		outcome = github.ImageOutcome
 		err = image(ctx, args[1:], lookup, now)
 	case len(args) > 0 && args[0] == "publish" && summary == nil:
 		// The same refusal: a publish that could not report its outcome would
 		// leave a pull request and issues behind a configuration line.
-		outcome, err = publishOutcome(github.Published{}), publish.ErrConfig
+		outcome, err = publishOutcome(github.Published{}), errSummary
 	case len(args) > 0 && args[0] == "publish":
 		var p github.Published
 
@@ -105,7 +115,7 @@ func run(ctx context.Context, args []string, lookup func(string) (string, bool),
 
 	if errors.Is(err, errUsage) {
 		_, _ = io.WriteString(stderr, usageText)
-		err = publish.ErrConfig
+		err = configError(publish.CheckUsage)
 	}
 
 	return finish(stdout, summary, outcome, err)
@@ -179,7 +189,7 @@ func artifacts(ctx context.Context, args []string, lookup func(string) (string, 
 
 	token, ok := lookup("GH_TOKEN")
 	if !ok {
-		return publish.ErrConfig
+		return configError(publish.CheckToken)
 	}
 
 	serverURL, _ := lookup("GITHUB_SERVER_URL")
@@ -188,8 +198,9 @@ func artifacts(ctx context.Context, args []string, lookup func(string) (string, 
 
 	date := now().UTC().Format(time.DateOnly)
 
+	// NewRun's refusal names its own check, in the core's fixed words.
 	if _, err := publish.NewRun(serverURL, repository, runID, date); err != nil {
-		return publish.ErrConfig
+		return err
 	}
 
 	// The artifact check reads one listing: its client is read-only by
@@ -233,13 +244,19 @@ func readReportEnv(lookup func(string) (string, bool), now func() time.Time) (re
 	runID, _ := lookup("GITHUB_RUN_ID")
 	commit, _ := lookup("GITHUB_SHA")
 
-	if !ok || serverURL != publishServerURL || !isCommit(commit) {
-		return reportEnv{}, publish.ErrConfig
+	switch {
+	case !ok || token == "":
+		return reportEnv{}, configError(publish.CheckToken)
+	case serverURL != publishServerURL:
+		return reportEnv{}, configError(publish.CheckServerURLGitHub)
+	case !isCommit(commit):
+		return reportEnv{}, configError(publish.CheckSHA)
 	}
 
+	// NewRun's refusal names its own check, in the core's fixed words.
 	r, err := publish.NewRun(serverURL, repository, runID, now().UTC().Format(time.DateOnly))
 	if err != nil {
-		return reportEnv{}, publish.ErrConfig
+		return reportEnv{}, err
 	}
 
 	return reportEnv{token: github.NewToken(token), run: r, commit: commit}, nil
@@ -322,7 +339,7 @@ func publishRun(ctx context.Context, args []string, lookup func(string) (string,
 
 	key, err := publish.NewFingerprintKey([]byte(keyText))
 	if err != nil {
-		return github.Published{}, publish.ErrConfig
+		return github.Published{}, configError(publish.CheckFingerprintKey)
 	}
 
 	client, err := github.NewPublishClient(github.ClientConfig{
@@ -385,7 +402,7 @@ func finish(stdout io.Writer, summary *os.File, outcome outcomeFunc, err error) 
 
 	if summary == nil {
 		if code == 0 {
-			line, code = outcome(publish.ErrConfig)
+			line, code = outcome(errSummary)
 		}
 
 		_, _ = io.WriteString(stdout, line+"\n")
@@ -397,7 +414,7 @@ func finish(stdout io.Writer, summary *os.File, outcome outcomeFunc, err error) 
 	closeErr := summary.Close()
 
 	if (writeErr != nil || closeErr != nil) && code == 0 {
-		line, code = outcome(publish.ErrConfig)
+		line, code = outcome(errSummary)
 	}
 
 	_, _ = io.WriteString(stdout, line+"\n")

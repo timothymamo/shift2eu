@@ -39,7 +39,7 @@ const waitDelay = time.Second
 func timeoutOf(d time.Duration) (time.Duration, error) {
 	switch {
 	case d < 0:
-		return 0, fmt.Errorf("a negative timeout: %w", publish.ErrConfig)
+		return 0, refuse(publish.CheckTimeout, "a negative timeout", publish.ErrConfig)
 	case d == 0:
 		return defaultTimeout, nil
 	default:
@@ -78,7 +78,7 @@ type Gitleaks struct {
 // under the temporary directory; Close removes it.
 func NewGitleaks(cfg GitleaksConfig) (*Gitleaks, error) {
 	if cfg.Path == "" || !filepath.IsAbs(cfg.Path) || filepath.Clean(cfg.Path) != cfg.Path {
-		return nil, fmt.Errorf("gitleaks: the path is not absolute: %w", publish.ErrConfig)
+		return nil, refuse(publish.CheckGitleaksPath, "gitleaks: the path is not absolute", publish.ErrConfig)
 	}
 
 	if err := checkTempDir(cfg.TempDir); err != nil {
@@ -92,7 +92,7 @@ func NewGitleaks(cfg GitleaksConfig) (*Gitleaks, error) {
 
 	home, err := os.MkdirTemp(cfg.TempDir, "gitleaks-")
 	if err != nil {
-		return nil, fmt.Errorf("gitleaks: its home directory not made: %w", publish.ErrConfig)
+		return nil, refuse(publish.CheckGitleaksHome, "gitleaks: its home directory not made", publish.ErrConfig)
 	}
 
 	return &Gitleaks{path: cfg.Path, home: home, timeout: timeout}, nil
@@ -150,7 +150,7 @@ func (g *Gitleaks) Close() error {
 	}
 
 	if err := os.RemoveAll(g.home); err != nil {
-		return fmt.Errorf("gitleaks: its home directory not removed: %w", publish.ErrConfig)
+		return refuse(publish.CheckGitleaksHomeRemoved, "gitleaks: its home directory not removed", publish.ErrConfig)
 	}
 
 	g.home = ""

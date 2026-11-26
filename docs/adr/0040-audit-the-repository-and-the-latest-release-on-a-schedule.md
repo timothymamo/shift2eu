@@ -879,17 +879,64 @@ outcome names below are the core's internal kinds:
 |---|---|---|
 | `OutcomePublished` | 0 | `audit published: public findings <total>, <private-findings line>` |
 | `OutcomeFailed` (any other error) | 1 | `publish failed: see runbook` |
-| `OutcomeResultInvalid` (`ErrResultInvalid`, a result that does not decrypt included) | 3 | `result refused: see runbook` |
-| `OutcomeScanRefused` (`ErrScanRefused`) | 4 | `publish refused: see runbook` |
+| `OutcomeResultInvalid` (`ErrResultInvalid`, a result that does not decrypt included) | 3 | `result refused: <check>: see runbook` |
+| `OutcomeScanRefused` (`ErrScanRefused`) | 4 | `publish refused: <check>: see runbook` |
 | `OutcomePrivateNotFiled` (`ErrPrivateNotFiled`, or a published run whose private findings were not filed) | 5 | `private findings not filed: see runbook` |
 | `OutcomeDuplicateDrafts` | 6 | `publish refused: duplicate draft advisories: see runbook step 11` |
-| `OutcomePreviousReport` (`ErrPreviousReport`: a previous report that is unreadable or not before the run) | 7 | `previous report unreadable: see runbook` |
-| `OutcomeGitHub` | 8 | `GitHub call failed: see runbook` |
-| `OutcomeConfig` (`ErrConfig`) | 9 | `configuration invalid: see runbook` |
+| `OutcomePreviousReport` (`ErrPreviousReport`: a previous report that is unreadable or not before the run) | 7 | `previous report unreadable: <check>: see runbook` |
+| `OutcomeGitHub` | 8 | `GitHub call failed: <check>: see runbook` |
+| `OutcomeConfig` (`ErrConfig`) | 9 | `configuration invalid: <check>: see runbook` |
 
-Outcome 7's summary names the class, never which case broke it, so the fourth pull request's runbook
-step for outcome 7 lists both cases, the unreadable previous report and the one not before the run
-(dated after it, or on its date with a run ID not below its own).
+`<check>` is the fixed phrase of the check that refused the run (issue #640, below); a refusal no check
+names prints the class's words and `: see runbook` alone.
+
+A refusal line may reveal *that* a private finding exists, never how many there are and never their
+kind: the private-state checks (`the private state none, but a finding is private`), the one phrase of
+the six checks of a private finding's draft advisory (`a private finding could not be filed as a
+draft`) and the advisory scan's `publish refused: an advisory`. That is the disclosure a published run's
+`private findings: handled privately` already makes; `publish refused: an advisory` is kept because it
+tells the maintainer which text to triage.
+
+Outcome 7's summary names the class and the check, and its two cases have checks of their own: the
+unreadable previous report (`the newest report not as the core renders one` and the others of cause 1)
+and the one not before the run (`the previous report dated after the run`, `the previous report not
+before the run`: dated after it, or on its date with a run ID not below its own). Runbook step 11 lists
+which check is which case.
+
+*Changed by issue #640 (2026-11-26).* Two runs (45802249904 and 45808432244) printed only
+`configuration invalid: see runbook`, a line about thirty refusals shared, and the maintainer could not
+tell which. A refusal's line is now `<class line>: <check>: see runbook` for outcomes 3, 4, 7, 8 and 9
+(5 and 6 keep their lines), e.g. `configuration invalid: AUDIT_FINGERPRINT_KEY unset or shorter than 32
+bytes: see runbook`; outcome 7's check now tells its two cases apart. The check is named in the form of
+what is wrong, from one closed list: the core's `FailedCheck` constants and their fixed table
+(`check.go`), each check bound to one class. A refusal site marks its error with `publish.Refuse(check,
+err)`; `OutcomeOf` takes the first mark of the outcome's class in the order `errors.As` walks the error
+tree, so an outer mark wins over an inner one and a mark of another class is passed over (a GitHub call
+that marks whatever it returns is named only when GitHub's failure is the outcome); an error no mark of
+its class names keeps the class's line alone. The line still holds no finding's text, no value, no API
+response and no error message: a caller can pass only a constant, whose words the table holds, and
+`Summary` never reads an error's text. Runbook step 11 lists every check with its fix. In the same
+change the private-state checks of `RenderReport` and the advisory checks of `RenderAdvisory` and
+`SetAdvisoryStatus` (a finding not private, a fingerprint that is none, a status outside the rule, a
+description without its status line) move from `ErrConfig` to `ErrResultInvalid` (`result refused`,
+exit 3): under `configuration invalid` they sent the maintainer to the step's secrets and variables,
+which none of them reads. Of these, only two private findings with one fingerprint is the model's
+result itself; the private-state checks and `RenderAdvisory`'s are internal invariants a result that
+matches the schema should never trip, and `SetAdvisoryStatus`'s two (a status none of the four, a
+description without a status line) check an existing GitHub draft, not the result, and cannot fire as
+the program stands: its one caller, the advisory plan, calls it only after `ParseAdvisoryStatus` read
+the draft's status, and with the constant `AdvisoryNotReproduced`. The runbook says to report any of
+these invariants if it appears. The six checks of a private finding's draft advisory share one phrase,
+`a private finding could not be filed as a draft`, since `two findings with one fingerprint` would tell
+the public log there are at least two private findings. `ci/internal/audit`'s lines (`run.go`'s
+constant lines, the preflight verdict's `judge.go`) already name their cause, so `auditrun` and the
+model step need no change. The two runs printed no check, so their logs do not name the cause; the
+workflow and the program do: the publish step's `-reports docs/security/audits` was its only relative
+path flag, and `LoadPrevious` refuses a directory that is not absolute and clean on every run that gets
+as far as loading the result. The workflow now passes `"${GITHUB_WORKSPACE}/docs/security/audits"` (the
+checkout's root, and the step's working directory), and `test/architecture` holds every path flag of
+`auditpublish` absolute.
+
 Code 2 is left to the Go runtime's panic exit. Only `OutcomePublished` and `OutcomePrivateNotFiled` have
 published anything; the second still fails the job, so GitHub notifies the maintainer. The errors the
 core returns name a field's path (`findings[3].scenario`) and the rule it broke, never a value, and the

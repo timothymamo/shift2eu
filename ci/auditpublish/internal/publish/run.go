@@ -1,7 +1,6 @@
 package publish
 
 import (
-	"fmt"
 	"regexp"
 	"strconv"
 	"strings"
@@ -33,25 +32,25 @@ var (
 // leading zero, and a date other than a real YYYY-MM-DD.
 func NewRun(serverURL, repository, runID, date string) (Run, error) {
 	if !serverPattern.MatchString(serverURL) {
-		return Run{}, fmt.Errorf("GITHUB_SERVER_URL: not https:// and a host name: %w", ErrConfig)
+		return Run{}, refusal(CheckServerURL, "GITHUB_SERVER_URL: not https:// and a host name")
 	}
 
 	if !repositoryPattern.MatchString(repository) {
-		return Run{}, fmt.Errorf("GITHUB_REPOSITORY: not owner/name: %w", ErrConfig)
+		return Run{}, refusal(CheckRepository, "GITHUB_REPOSITORY: not owner/name")
 	}
 
 	for _, part := range strings.Split(repository, "/") {
 		if part == "." || part == ".." {
-			return Run{}, fmt.Errorf("GITHUB_REPOSITORY: a dot segment: %w", ErrConfig)
+			return Run{}, refusal(CheckRepositoryDot, "GITHUB_REPOSITORY: a dot segment")
 		}
 	}
 
 	if !runIDPattern.MatchString(runID) {
-		return Run{}, fmt.Errorf("GITHUB_RUN_ID: not a decimal of up to 20 digits: %w", ErrConfig)
+		return Run{}, refusal(CheckRunID, "GITHUB_RUN_ID: not a decimal of up to 20 digits")
 	}
 
 	if _, ok := parseDate(date); !ok {
-		return Run{}, fmt.Errorf("the run's date: not a real YYYY-MM-DD: %w", ErrConfig)
+		return Run{}, refusal(CheckRunDate, "the run's date: not a real YYYY-MM-DD")
 	}
 
 	return Run{ServerURL: serverURL, Repository: repository, ID: runID, Date: date}, nil
