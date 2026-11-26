@@ -510,6 +510,14 @@ func TestCILintMatrixCoversEveryReleaseTarget(t *testing.T) {
 // TestBranchCoAuthorTrailers alone with an env: of exactly the pull request's
 // base..head range and SHIFT2EU_COAUTHOR_CHECK=require on a pull request, so a
 // range the run cannot read fails the check rather than skipping it.
+//
+// The base SHA the check reads the allow list at (issue #672) reaches it in the
+// range's env: value alone, where it comes from the pull request's own base
+// commit: that one value names the commits to check and the revision the list is
+// read at, so the two can never disagree, and no expression is ever spliced into
+// a run: line, where a shell would read it as a word of the event's author. The
+// checkout keeps fetch-depth: 0, without which the base commit is no object of
+// the run and the list cannot be read at all.
 func checkCoAuthorTrailersJob(t *testing.T, jobs map[string][]ciLine) {
 	t.Helper()
 
@@ -546,6 +554,23 @@ func checkCoAuthorTrailersJob(t *testing.T, jobs map[string][]ciLine) {
 			}
 		}
 
+		// Every value a step hands the check reaches it through that step's env:
+		// (issue #672): an expression spliced into a run: line is a shell word of
+		// the event's author.
+		envLines := map[int]bool{}
+
+		if env, ok := ciBlock(item.lines, "env"); ok {
+			for _, l := range env {
+				envLines[l.num] = true
+			}
+		}
+
+		for _, l := range item.lines {
+			if strings.Contains(l.text, "${{") && !envLines[l.num] {
+				t.Errorf("line %d: %q holds a ${{ }} expression outside the step's env:, want every value the step hands the coauthor-trailers check in env: (issue #672)", l.num, l.text)
+			}
+		}
+
 		if _, uses, ok := ciScalar(item.lines, "uses"); ok && strings.HasPrefix(uses, "actions/checkout@") {
 			checkout = true
 
@@ -574,6 +599,23 @@ func checkCoAuthorTrailersJob(t *testing.T, jobs map[string][]ciLine) {
 				t.Errorf("line %d: the coauthor-trailers step holds no env:, so it names no range and requires none", item.num)
 
 				continue
+			}
+
+			// The job names no base of its own: the range's env: value carries the
+			// pull request's base SHA, the revision the check reads the allow list
+			// at, and its head SHA, the commits it checks (issue #672).
+			var rangeSpec string
+
+			for _, l := range env {
+				if spec, ok := strings.CutPrefix(l.text, "SHIFT2EU_COAUTHOR_RANGE: "); ok {
+					rangeSpec = spec
+				}
+			}
+
+			for _, want := range []string{"github.event.pull_request.base.sha", "github.event.pull_request.head.sha"} {
+				if !strings.Contains(rangeSpec, want) {
+					t.Errorf("line %d: the coauthor-trailers env: hands the check the range %q, which names no %s: the check reads .github/co-author-addresses.txt at the pull request's base commit (issue #672)", item.num, rangeSpec, want)
+				}
 			}
 
 			wantExactLines(t, fmt.Sprintf("env: block of the coauthor-trailers step on line %d", item.num), env, []string{
