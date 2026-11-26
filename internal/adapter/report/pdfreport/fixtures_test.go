@@ -289,6 +289,58 @@ func longResources() []inventory.Resource {
 	return resources
 }
 
+// paddedResources is the inventory of the heading-near-the-page-bottom fixtures:
+// count resources of one compute category, all of them in one workload, so the
+// report holds a resources table whose every row is one line and the sections
+// under it, Workloads and Resource details included, move down the page by one
+// table line (13 pt) per resource. A sweep over count walks each of those
+// headings through every position above the bottom margin, the last thirty-six
+// points of a page included.
+func paddedResources(count int) []inventory.Resource {
+	resources := make([]inventory.Resource, 0, count)
+
+	for i := range count {
+		resources = append(resources, inventory.Resource{
+			ID:           fmt.Sprintf("instance-%04d", i),
+			RawType:      "AWS::EC2::Instance",
+			Category:     taxonomy.ComputeVM,
+			Region:       "eu-west-1",
+			Capabilities: []taxonomy.Capability{taxonomy.IPv6},
+			Workload:     "shop",
+		})
+	}
+
+	return resources
+}
+
+// deepRowResources is the inventory of the heading-near-the-page-bottom fixture's
+// table variant: one resource whose ID wraps the resources table's first row onto
+// three lines, so the table asks for its header row and three lines (43 pt) where
+// the writer reserves 36 pt under the heading above it. Padding the inventory file
+// name then moves that heading down towards the foot of the first page.
+func deepRowResources() []inventory.Resource {
+	return []inventory.Resource{{
+		ID:           "instance-" + strings.Repeat("x", 72),
+		RawType:      "AWS::EC2::Instance",
+		Category:     taxonomy.ComputeVM,
+		Region:       "eu-west-1",
+		Capabilities: []taxonomy.Capability{taxonomy.IPv6},
+	}}
+}
+
+// paddedInventoryName returns an inventory file name of length bytes: the report
+// shows it on the facts line under the title, in Courier, which wraps the name
+// into one more line about every ninety-one characters, twelve points of body
+// leading each. A sweep over lengths that adds a line at a time therefore moves
+// the Summary and Resources headings below it down the page twelve points a step,
+// and twelve shares no factor with the nine points a level-1 heading followed by a
+// table needs over what the writer reserves for it.
+func paddedInventoryName(length int) string {
+	const suffix = ".json"
+
+	return "inv-" + strings.Repeat("x", length-len("inv-")-len(suffix)) + suffix
+}
+
 // hostileResources is an inventory whose every text field spells PDF syntax:
 // resource IDs, raw types, regions and workloads with unbalanced parentheses, a
 // backslash, an operator that would close a text run, a stream end, an end of

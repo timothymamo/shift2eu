@@ -92,6 +92,7 @@ func checkPDFStructure(tb testing.TB, data []byte) *testPDF {
 	checkInfo(tb, file)
 	checkBannedNames(tb, file)
 	checkRunsStayInsideTheirBoxes(tb, file)
+	checkNoHeadingEndsAPage(tb, file)
 
 	return file
 }
@@ -698,6 +699,226 @@ func checkPageRunsStayInsideTheirBoxes(tb testing.TB, pageIndex int, page *pdfPa
 			}
 		}
 	}
+}
+
+// headingSizes are the type sizes the writer draws a heading at: a level-1
+// heading at 13 pt, a level-2 heading at 11 and a level-3 heading at 10
+// (layout.go's sectionSize, subsectionSize and blockSize). Every other line of
+// a report is smaller: body text at 9 pt, a table cell and the page furniture at
+// 8. The size alone therefore tells a heading line from a line of text, whatever
+// font it is drawn in, which matters because a heading made of a value is drawn
+// in Courier and a section's own title in Helvetica-Bold.
+var headingSizes = map[int]bool{13: true, 11: true, 10: true}
+
+// checkNoHeadingEndsAPage checks the PRD's rule that a heading never ends a page
+// (Tables and page breaks): the last line of a page's body is text, never a
+// heading. A page's furniture, its header above the top rule and its footer below
+// the bottom rule, is no body, so it is left out.
+func checkNoHeadingEndsAPage(tb testing.TB, file *testPDF) {
+	tb.Helper()
+
+	for index, page := range file.pages {
+		checkPageDoesNotEndWithAHeading(tb, index, page)
+	}
+}
+
+// checkPageDoesNotEndWithAHeading fails the test when the lowest body line of one
+// page is a heading.
+func checkPageDoesNotEndWithAHeading(tb testing.TB, pageIndex int, page *pdfPage) {
+	tb.Helper()
+
+	lowest, highest, ok := pageBand(page)
+	if !ok {
+		// A page that draws no rule, such as the tests' own hand-built minimal
+		// PDF, has no body to measure.
+		return
+	}
+
+	var (
+		last  pdfRunLine
+		found bool
+	)
+
+	for _, line := range pageRunLines(page) {
+		if line.Y <= lowest || line.Y >= highest {
+			// The page's furniture.
+			continue
+		}
+
+		if !found || line.Y < last.Y {
+			last, found = line, true
+		}
+	}
+
+	if !found || !isHeadingLine(last) {
+		return
+	}
+
+	tb.Errorf("pdf: page %d ends its body with the heading %s at y %d pt, so the heading alone sits at the foot of the page: a heading never ends a page (PRD, Tables and page breaks)",
+		pageIndex+1, shortened(lineText(last)), last.Y)
+}
+
+// isHeadingLine reports whether a line is a heading: every run of it is drawn at
+// one of the heading sizes.
+func isHeadingLine(line pdfRunLine) bool {
+	if len(line.runs) == 0 {
+		return false
+	}
+
+	for _, run := range line.runs {
+		if !headingSizes[run.Size] {
+			return false
+		}
+	}
+
+	return true
+}
+
+// lineText returns the text of a line, its runs in x order.
+func lineText(line pdfRunLine) string {
+	runs := slices.Clone(line.runs)
+	slices.SortStableFunc(runs, func(a, b pdfTextRun) int { return a.X - b.X })
+
+	texts := make([]string, 0, len(runs))
+	for _, run := range runs {
+		texts = append(texts, run.Text)
+	}
+
+	return strings.Join(texts, "")
+}
+
+// The sweeps of the heading-near-the-page-bottom fixtures. One more padded
+// resource moves the sections under the resources table down one table line (13
+// pt), and one more line of the inventory file name moves the sections under the
+// facts block down one body line (12 pt). A sweep of either walks a heading
+// through every position in a page's last sixty points several times over.
+const (
+	resourceSweepCount = 60
+	nameSweepCount     = 20
+)
+
+// paddedNameStart and paddedNameStep are the inventory file name lengths the table
+// sweep tries: a step of 91 characters is one more line of the name in Courier's
+// advance, and the sweep starts where that line count first pushes the Resources
+// heading down towards the foot of the first page.
+const (
+	paddedNameStart = 3400
+	paddedNameStep  = 91
+)
+
+// TestNoHeadingEndsAPage pins the PRD's rule that a heading never ends a page
+// (Tables and page breaks) on reports built to leave one there. The writer
+// reserves keepWithHeading (36 pt) under a heading, and what follows may need
+// more:
+//
+//   - a level-2 heading asks for 8 pt of space and, with its own 36 pt, 50 pt of
+//     the page, which is what a comparison's level-1 target heading is followed
+//     by;
+//   - a table asks for its header row and the lines of its first row, up to three
+//     of them (43 pt), as the resources table does when the first resource's ID
+//     wraps onto three lines.
+//
+// A heading that lands in that gap is drawn at the foot of the page and its block
+// starts the next one. Each fixture sweeps a step that moves the heading down the
+// page a little, so at least one step puts a heading in the gap, and the invariant
+// has to catch it.
+func TestNoHeadingEndsAPage(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		sweep  int
+		render func(tb testing.TB, step int) []byte
+	}{
+		{
+			name:  "a Workloads heading followed by a workload heading",
+			sweep: resourceSweepCount,
+			render: func(tb testing.TB, step int) []byte {
+				tb.Helper()
+
+				a := assessment.Assess(newInventory(tb, sourceName, paddedResources(step)), testutil.ReportCatalog(tb))
+
+				return renderReport(tb, a, analysis.ReportMeta{InventoryName: inventoryFileName})
+			},
+		},
+		{
+			name:  "a comparison's target heading followed by the level-2 Summary",
+			sweep: resourceSweepCount,
+			render: func(tb testing.TB, step int) []byte {
+				tb.Helper()
+
+				inv := newInventory(tb, sourceName, paddedResources(step))
+				c := assessment.Compare(assessTargets(tb, inv, []string{ovhcloudKey, scalewayKey}))
+
+				return renderComparison(tb, c, analysis.ReportMeta{InventoryName: inventoryFileName})
+			},
+		},
+		{
+			name:  "a Resources heading followed by a table whose first row wraps onto three lines",
+			sweep: nameSweepCount,
+			render: func(tb testing.TB, step int) []byte {
+				tb.Helper()
+
+				a := assessment.Assess(newInventory(tb, sourceName, deepRowResources()), testutil.ReportCatalog(tb))
+				name := paddedInventoryName(paddedNameStart + paddedNameStep*step)
+
+				return renderReport(tb, a, analysis.ReportMeta{InventoryName: name})
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			atBoundary := 0
+
+			for step := 1; step <= test.sweep; step++ {
+				t.Logf("sweep step %d", step)
+
+				atBoundary += countHeadingsAtAPageBoundary(checkPDFStructure(t, test.render(t, step)))
+			}
+
+			if atBoundary == 0 {
+				t.Fatalf("no heading of the %d reports of the sweep sits within %d pt of a page's own rule, so the sweep never reached the gap the invariant is about",
+					test.sweep, headingBand)
+			}
+		})
+	}
+}
+
+// headingBand is how far from a page's own rule a heading may sit and still be
+// the one the sweep is looking for. A page's body ends bodyGap + ruleGap above
+// its bottom rule and starts bodyGap + ruleGap below its top rule, so a heading
+// that ends a page, or that a kept heading moves to the next page's top, sits
+// within fifty points of one of them.
+const headingBand = 50
+
+// countHeadingsAtAPageBoundary returns how many heading lines of the document
+// sit within headingBand of one of a page's own two rules, above the bottom one
+// or below the top one: the positions from which a heading can end a page before
+// it is kept, and to which a kept heading is moved after.
+func countHeadingsAtAPageBoundary(file *testPDF) int {
+	found := 0
+
+	for _, page := range file.pages {
+		lowest, highest, ok := pageBand(page)
+		if !ok {
+			continue
+		}
+
+		for _, line := range pageRunLines(page) {
+			if line.Y <= lowest || line.Y >= highest || !isHeadingLine(line) {
+				continue
+			}
+
+			if line.Y-headingBand <= lowest || line.Y+headingBand >= highest {
+				found++
+			}
+		}
+	}
+
+	return found
 }
 
 // TestReportValueWrapsInsideItsColumn pins a value's wrap against the narrowest
