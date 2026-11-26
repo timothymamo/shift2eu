@@ -68,7 +68,7 @@ var (
 	errWorkArea       = errors.New("the work area is not as laid out before the audit")
 	errPreflightSetup = errors.New("the preflight could not be set up")
 	errAuditCwd       = errors.New("the audit's working directory is not an empty real directory before the audit")
-	errGitHubEnv      = errors.New("the file-command directory of the $GITHUB_ENV file could not be read, is over its cap, or changed across the audit's run")
+	errFileCommands   = errors.New("the file-command directory of the $GITHUB_ENV file could not be read, is over a cap, or changed across the audit's run")
 )
 
 // Prober runs the CLI once with the preflight's prompt and returns its
@@ -79,8 +79,9 @@ type Prober interface {
 
 // Observer makes the launcher's own observations after the preflight's run:
 // probe 1's files under root, Docker's socket, sudo, and the digest of the
-// file-command directory holding the $GITHUB_ENV file against before; accepted is whether probe 2's listener took a
-// connection. Preflight calls it once, after the listener is closed, under a
+// file-command directory holding the $GITHUB_ENV file against before;
+// accepted is whether probe 2's listener took a connection. Preflight calls
+// it once, after the listener is closed, under a
 // context detached from the run's cancellation with a deadline of its own.
 type Observer func(ctx context.Context, root, gitHubEnv string, before [32]byte, accepted bool) Effects
 
@@ -121,8 +122,8 @@ func SystemSteps(pid int, observer Observer) Steps {
 
 // Preflight runs the sandbox preflight (ADR 0040, "The sandbox preflight"):
 // it writes the control's nonce, opens probe 2's listener, records the
-// digest of the $GITHUB_ENV file's directory, has prober run the CLI with the plan's prompt,
-// has observer make the launcher's own observations once the listener is
+// digest of the $GITHUB_ENV file's directory, has prober run the CLI with
+// the plan's prompt, has observer make the launcher's own observations once the listener is
 // closed - under a context detached from ctx's cancellation, so a run that
 // was cancelled or timed out is still observed - and judges the transcript
 // with the step's nonce, token and canary. The control file is removed
@@ -141,10 +142,10 @@ func Preflight(ctx context.Context, root string, in Inputs, prober Prober, obser
 	// the guard, and refuses a work area that still holds the control file.
 	defer func() { _ = os.Remove(control) }()
 
-	// Nothing writes the step summary while the preflight runs - Run prints
-	// its one line after the last step - so the preflight's digest, and
-	// Observe's, leave no entry out.
-	before, err := digest(in.GitHubEnv, "")
+	// The preflight's digest, and Observe's, leave no entry out: nothing
+	// legitimate writes the step summary while the preflight runs, since Run
+	// prints its one line after the last step.
+	before, err := digest(in.GitHubEnv)
 	if err != nil {
 		return errPreflightSetup
 	}
@@ -198,11 +199,11 @@ func Preflight(ctx context.Context, root string, in Inputs, prober Prober, obser
 // run - and that its own working directory cwd-audit/ is still an empty real
 // directory, then has launch make one CLI run with the skill and the fixed
 // user prompt, the digest of the runner's file-command directory (the
-// $GITHUB_ENV file's, the step summary aside) taken before the run and after
-// it and any change, or a directory over its caps, failing the run, and takes the result file the run must leave
-// in the work area only
-// when it is a regular file, no link, within MaxResult, one JSON value, and
-// holds neither the token nor the canary in its bytes or in any of its decoded
+// $GITHUB_ENV file's, every entry, the step summary included) taken before the
+// run and after it and any change, or a directory over a cap, failing the run,
+// and takes the result file the run must leave in the work area only when it
+// is a regular file, no link, within MaxResult, one JSON value, and holds
+// neither the token nor the canary in its bytes or in any of its decoded
 // strings. It returns the bytes it read and checked: the publication works
 // from them, never from the path. No 64-hex rule applies to them: the audit's
 // findings may quote SHA-256 pins.
@@ -220,11 +221,12 @@ func Audit(ctx context.Context, root string, in Inputs, launch Launch) ([]byte, 
 		return nil, err
 	}
 
-	// The step summary is the launcher's own to write, and may not exist
-	// before the run: it alone is left out of the digest.
-	before, err := digest(in.GitHubEnv, in.StepSummary)
+	// The step summary is digested like every other entry: auditrun creates
+	// it before the run, and writes the run's line only after the last step
+	// returns, so nothing legitimate writes it between the two digests.
+	before, err := digest(in.GitHubEnv)
 	if err != nil {
-		return nil, errGitHubEnv
+		return nil, errFileCommands
 	}
 
 	runErr := launch(ctx, root, LaunchConfig(root, in), prompt)
@@ -232,9 +234,9 @@ func Audit(ctx context.Context, root string, in Inputs, launch Launch) ([]byte, 
 	// The runner's file commands decide what a later step of the job runs
 	// with: any change to their directory across the audit's run fails it,
 	// whatever the run did (issues #615, #614).
-	after, err := digest(in.GitHubEnv, in.StepSummary)
+	after, err := digest(in.GitHubEnv)
 	if err != nil || after != before {
-		return nil, errGitHubEnv
+		return nil, errFileCommands
 	}
 
 	if runErr != nil {
@@ -492,26 +494,39 @@ const (
 	maxFileCommandBytes   = 4 << 20
 )
 
-// errFileCommandsCap is a file-command directory over one of its caps.
-var errFileCommandsCap = errors.New("the file-command directory is over its cap")
+// The caps' failures, each naming its cap. Neither reaches a printed line:
+// Audit and Preflight report their own constant class.
+var (
+	errFileCommandEntries = fmt.Errorf("the file-command directory holds more than %d entries", maxFileCommandEntries)
+	errFileCommandBytes   = fmt.Errorf("the file-command directory holds more than %d bytes", maxFileCommandBytes)
+)
+
+// FileCommandDir returns the directory a file command's path names,
+// filepath.Dir of the cleaned path: the runner's file-command directory when
+// path is $GITHUB_ENV's. auditrun refuses a step whose $GITHUB_PATH,
+// $GITHUB_OUTPUT, $GITHUB_STATE or step summary is in another directory than
+// $GITHUB_ENV's, one the digest would not cover (issues #615, #614).
+func FileCommandDir(path string) string {
+	return filepath.Dir(filepath.Clean(path))
+}
 
 // digest returns the sha256 of the runner's file-command directory, the one
-// holding the $GITHUB_ENV file at gitHubEnv beside $GITHUB_PATH, $GITHUB_OUTPUT,
-// $GITHUB_STATE and the step summary: every entry's name, its type and, for a
-// regular file, its bytes, the entries in name order (issues #615, #614). An
-// entry is taken as it is (Lstat): a link is its type and its own target's
-// text, never what it points at, so a file replaced by a link to the same bytes
-// is a change. exclude, when set, is one path left out by its exact name - the
-// step summary the launcher writes itself. A directory of more than
-// maxFileCommandEntries entries, or more than maxFileCommandBytes of content,
-// is an error, as is any entry that cannot be read.
-func digest(gitHubEnv, exclude string) ([32]byte, error) {
+// holding the $GITHUB_ENV file at gitHubEnv beside $GITHUB_PATH,
+// $GITHUB_OUTPUT, $GITHUB_STATE and the step summary: every entry's name, its
+// type and, for a regular file, its bytes, the entries in name order, none
+// left out (issues #615, #614). An entry is taken as it is (Lstat): a link is
+// its type and its own target's text, never what it points at, so a file
+// replaced by a link to the same bytes is a change. Mode bits and link counts
+// are not hashed: the runner reads only a file command's bytes. A directory of
+// more than maxFileCommandEntries entries, or more than maxFileCommandBytes of
+// content, is an error naming that cap, as is any entry that cannot be read.
+func digest(gitHubEnv string) ([32]byte, error) {
 	// The $GITHUB_ENV file itself must be there, a regular file.
 	if info, err := os.Lstat(gitHubEnv); err != nil || !info.Mode().IsRegular() {
 		return [32]byte{}, errors.New("the $GITHUB_ENV file is no regular file")
 	}
 
-	dir := filepath.Dir(gitHubEnv)
+	dir := FileCommandDir(gitHubEnv)
 
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -519,7 +534,7 @@ func digest(gitHubEnv, exclude string) ([32]byte, error) {
 	}
 
 	if len(entries) > maxFileCommandEntries {
-		return [32]byte{}, errFileCommandsCap
+		return [32]byte{}, errFileCommandEntries
 	}
 
 	hash := sha256.New()
@@ -527,9 +542,6 @@ func digest(gitHubEnv, exclude string) ([32]byte, error) {
 
 	for _, entry := range entries {
 		path := filepath.Join(dir, entry.Name())
-		if exclude != "" && path == filepath.Clean(exclude) {
-			continue
-		}
 
 		info, err := os.Lstat(path)
 		if err != nil {
@@ -553,7 +565,7 @@ func digest(gitHubEnv, exclude string) ([32]byte, error) {
 
 		total += len(body)
 		if total > maxFileCommandBytes {
-			return [32]byte{}, errFileCommandsCap
+			return [32]byte{}, errFileCommandBytes
 		}
 
 		// Each field is length-prefixed, so no two directories hash alike.
@@ -572,7 +584,7 @@ func digest(gitHubEnv, exclude string) ([32]byte, error) {
 
 // readEntry reads the regular file at path that Lstat saw as entry, from one
 // descriptor that must be that same file (os.SameFile), never a link's target,
-// and fails past limit bytes with errFileCommandsCap.
+// and fails past limit bytes with errFileCommandBytes.
 func readEntry(path string, entry fs.FileInfo, limit int) ([]byte, error) {
 	file, err := os.Open(path) //nolint:gosec // G304: an entry of the runner's file-command directory, checked as the regular file Lstat saw
 	if err != nil {
@@ -591,7 +603,7 @@ func readEntry(path string, entry fs.FileInfo, limit int) ([]byte, error) {
 	}
 
 	if len(body) > limit {
-		return nil, errFileCommandsCap
+		return nil, errFileCommandBytes
 	}
 
 	return body, nil
@@ -641,8 +653,8 @@ func Observe(ctx context.Context, root, gitHubEnv string, before [32]byte, accep
 
 	effects.sudo = ExecRunner{}.Check(ctx, []string{sudoPath, "-n", "true"}) == nil
 
-	after, err := digest(gitHubEnv, "")
-	effects.envDigest = err != nil || after != before
+	after, err := digest(gitHubEnv)
+	effects.fileCommands = err != nil || after != before
 
 	return effects
 }
@@ -657,11 +669,11 @@ func exists(path string) bool {
 
 // observedEffects are a real run's observations.
 type observedEffects struct {
-	probeFiles bool
-	listener   bool
-	docker     bool
-	sudo       bool
-	envDigest  bool
+	probeFiles   bool
+	listener     bool
+	docker       bool
+	sudo         bool
+	fileCommands bool
 }
 
 // ProbeFilesExist reports whether either of probe 1's files exists.
@@ -676,6 +688,6 @@ func (e observedEffects) DockerSocketReachable() bool { return e.docker }
 // SudoAvailable reports whether `sudo -n true` ran.
 func (e observedEffects) SudoAvailable() bool { return e.sudo }
 
-// GitHubEnvDigestChanged reports whether the $GITHUB_ENV file's directory
-// changed.
-func (e observedEffects) GitHubEnvDigestChanged() bool { return e.envDigest }
+// FileCommandsChanged reports whether the runner's file-command directory, the
+// $GITHUB_ENV file's, changed.
+func (e observedEffects) FileCommandsChanged() bool { return e.fileCommands }

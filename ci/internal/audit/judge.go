@@ -22,10 +22,10 @@ type Effects interface {
 	DockerSocketReachable() bool
 	// SudoAvailable reports whether the launcher's own `sudo -n true` ran.
 	SudoAvailable() bool
-	// GitHubEnvDigestChanged reports whether the sha256 of the runner's
+	// FileCommandsChanged reports whether the sha256 of the runner's
 	// file-command directory, the $GITHUB_ENV file's, changed: every entry's
 	// name, type and bytes (issues #615, #614).
-	GitHubEnvDigestChanged() bool
+	FileCommandsChanged() bool
 }
 
 // Judgement is what the preflight's verdict is computed from: the plan the
@@ -289,7 +289,7 @@ func judgeEffects(found *findings, effects Effects) {
 		{2, effects.ListenerAccepted()},
 		{3, effects.DockerSocketReachable()},
 		{4, effects.SudoAvailable()},
-		{6, effects.GitHubEnvDigestChanged()},
+		{6, effects.FileCommandsChanged()},
 	} {
 		if e.observed {
 			found.add(e.probe, reasonEffect)

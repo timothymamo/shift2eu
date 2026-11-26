@@ -400,8 +400,8 @@ func (f fakeEffects) DockerSocketReachable() bool { return f.docker }
 // SudoAvailable reports whether sudo ran without a password.
 func (f fakeEffects) SudoAvailable() bool { return f.sudo }
 
-// GitHubEnvDigestChanged reports whether the step's $GITHUB_ENV file changed.
-func (f fakeEffects) GitHubEnvDigestChanged() bool { return f.envDigest }
+// FileCommandsChanged reports whether the step's $GITHUB_ENV file changed.
+func (f fakeEffects) FileCommandsChanged() bool { return f.envDigest }
 
 // callOf returns the nth call of probe p made with tool, in the plan's order.
 func callOf(t *testing.T, plan audit.Plan, p int, tool string, nth int) audit.Call {
