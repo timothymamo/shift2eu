@@ -972,7 +972,7 @@ func checkNoVia(f *caddyfile) []string {
 	}
 
 	if !down {
-		problems = append(problems, "the proxy does not remove the upstream's Via from the response (header_down -Via): Edge Services' own copy would reach the client beside Caddy's, and no answer of the front carries a Via at all (issue #626, docs/adr/0045)")
+		problems = append(problems, "the proxy does not remove the upstream's Via from the response (header_down -Via): www's `header -Via` already removes every Via from the answer, so the line is defence in depth rather than the one that does the work, and this static check pins it (issue #626, issue #650, docs/adr/0045)")
 	}
 
 	return problems
