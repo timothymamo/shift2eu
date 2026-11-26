@@ -159,11 +159,12 @@ func TestInventoryGuideListCollectionsBlock(t *testing.T) {
 		}
 	})
 
-	// The guide says its commands are for a POSIX shell (bash, zsh). The block
-	// reads an array of the CLI arguments still to pass, and an empty array
-	// expanded as "${next[@]}" is not POSIX: under set -u a bash before 4.4
-	// takes it for an unset variable and stops the whole command (review
-	// finding N-a). So the block has to run in each of these.
+	// The guide says its commands are for a POSIX shell (bash, zsh). A bash
+	// array, such as one holding the CLI arguments still to pass and expanded
+	// as "${next[@]}", is not POSIX: under set -u a bash before 4.4 takes its
+	// empty expansion for an unset variable and stops the whole command (review
+	// finding N-a). So the block has to run in each of these, whatever words it
+	// pages with.
 	shells := []struct {
 		name     string
 		shell    string
@@ -249,13 +250,15 @@ func inventoryGuideListCollectionsBlock(t *testing.T) string {
 
 	block := strings.Join(lines[start:end+1], "\n") + "\n"
 
-	// Guard the extraction itself: a block that lost the loop, the argument
-	// array or the token it grows would make every check below pass over
-	// something that is not the command the guide documents.
+	// Guard the extraction itself: a block that lost the call, the token it
+	// pages with or the loop that repeats it would make every check below pass
+	// over something that is not the command the guide documents. Only what any
+	// correct hand-paged loop keeps is named here, so the block stays free to
+	// pass the token in the shape its shells can run.
 	for _, want := range []string{
 		"aws opensearchserverless list-collections",
-		`"${next[@]}"`,
-		"next=(--next-token",
+		"--next-token",
+		"nextToken",
 	} {
 		if !strings.Contains(block, want) {
 			t.Fatalf("%s lines %d-%d hold no %q, so they are not the list-collections block this test runs:\n%s",
