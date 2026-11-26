@@ -2697,7 +2697,8 @@ what the token inherits, so no check of the App itself is needed; there is none 
 `release-tag` skill records for the two release Apps).
 
 ```bash
-# Mac (admin), as yourself, read-only: the installation: its permissions and repository selection, the <installation id>
+# Mac (admin), as yourself, read-only
+# The installation: its permissions and repository selection, the <installation id>
 gh api /user/installations --paginate --jq '.installations[] | select(.app_slug == "shift2eu-audit") | [.id, .repository_selection, (.permissions == {"contents":"write","issues":"write","metadata":"read","pull_requests":"write","repository_advisories":"write"})] | @tsv'
 # PASS: one row, <installation id>  selected  true
 # FAIL: no row, more than one, "all" (every repository of the account), or false (the installation's
