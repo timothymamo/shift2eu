@@ -2522,7 +2522,10 @@ arguments; git's read-only subcommands), and changes between versions. The deny 
     (a directory, a symlink, a FIFO) **is refused with exit 2 before any step**: every path is
     `Lstat`ed first (`CheckFileCommands`), before the summary is opened, and the summary is opened
     without following a link (`OpenAppend`: `O_EXCL` to create one, an `os.SameFile`-checked
-    descriptor for an existing regular file; the `os` package has no `O_NOFOLLOW`). It replaces the
+    descriptor for an existing regular file; the `os` package has no `O_NOFOLLOW`). An existing
+    summary is opened `O_RDWR|O_APPEND`, so a FIFO swapped in between the `Lstat` and the open cannot
+    hang the step (on Linux an `O_RDWR` open of a FIFO never blocks); `os.SameFile` then refuses
+    it. It replaces the
     first rule, that such a file command was noted, checked by its identity alone and left as it was:
     the run opened the summary with `O_APPEND|O_CREATE`, which follows a link, and could not compare an
     entry whose content it never recorded. It also supersedes, for the five file commands, "Links found

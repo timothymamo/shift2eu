@@ -59,7 +59,9 @@
 // auditor's round-4 L1): the run could not record its content. The runner
 // lays only regular files down, so a real step loses nothing; a path absent
 // before the run is allowed and recorded as absent. The summary is opened
-// without following a link (audit.OpenAppend). The API key's refusal, which
+// without following a link (audit.OpenAppend); when it was absent, auditrun
+// creates it, so a refusal after that (audit.RecordFileCommands) leaves an
+// empty summary file behind, which is harmless. The API key's refusal, which
 // comes first, writes its line to the summary only when OpenAppend takes it,
 // and to stdout always.
 //
