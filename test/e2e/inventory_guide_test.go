@@ -967,8 +967,8 @@ func inventoryGuides() []inventoryGuideCase {
 				// floored the division does not write. 46 vCPU is the boundary of
 				// the ceiling: 46 / 15 is 3.07, so the cluster has 4 brokers and
 				// each gets 11.5 vCPU and 11.5 GiB, while a program that floored the
-				// division writes 3 brokers and one that divided by a flat 15 writes
-				// 46/15 vCPU and memory.
+				// division writes 3 brokers and one that took the count as vCPU / 15
+				// without the ceiling writes 3.07 brokers and a 46/15 vCPU share.
 				// <https://cloud.google.com/managed-service-for-apache-kafka/docs/brokers>
 				// The cluster gives no storageGiB: its capacityConfig holds only
 				// vcpuCount and memoryBytes, so the list call reports no broker disk
