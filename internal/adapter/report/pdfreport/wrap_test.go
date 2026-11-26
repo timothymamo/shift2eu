@@ -110,7 +110,7 @@ func TestReportDrawsAnOverTallHeadingValueAsAParagraph(t *testing.T) {
 		}
 
 		if headingSizes[run.Size] {
-			t.Errorf("page %d draws the value %s at %d pt, one of the heading sizes, so a heading too tall for a page was drawn as a heading: the sketch runs over the page's foot whatever is done, and the value is drawn at the body size as a paragraph instead",
+			t.Errorf("page %d draws the value %s at %d pt, one of the heading sizes, so a heading too tall for a page was drawn as a heading: the heading runs over the page's foot whatever is done, and the value is drawn at the body size as a paragraph instead",
 				run.Page+1, shortened(run.Text), run.Size)
 		}
 
