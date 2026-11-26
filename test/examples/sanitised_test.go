@@ -128,7 +128,9 @@ var allowedHostnamesHint = strings.Join(allowedHostnames, ", ") +
 // subscription, so they identify no customer, and an Azure rawType is written
 // with one. They are matched with their exact case on purpose: Azure documents
 // them capitalised (Microsoft.Compute), while a lowercase name of the same
-// shape (microsoft.com) is the real public domain and must fail.
+// shape (microsoft.com) is the real public domain and must fail in a sample
+// (a fixture is checked after maskAzureNamespaces, as the AI reviewer's scan
+// reads a line).
 var allowedResourceTypeNamespaces = []string{
 	"Microsoft.Cdn",
 	"Microsoft.Compute",
@@ -450,15 +452,16 @@ func numeric(candidate string) bool {
 // insidePath reports whether the candidate starting at start is a segment of a
 // path rather than a host name: it directly follows a slash that is not the
 // authority marker of a URL. A URL's host follows "//" (https://shop.acme.io,
-// //shop.acme.io), so it is checked; the file names a README's link target or
-// command carries (../docs/guide/try-it.md, examples/aws/inventory.json) follow
-// a path separator and are not domain names.
+// //shop.acme.io) or, in a scheme written with a single slash, ":/"
+// (http:/shop.acme.io, issue #610), so it is checked; the file names a README's
+// link target or command carries (../docs/guide/try-it.md,
+// examples/aws/inventory.json) follow a path separator and are not domain names.
 func insidePath(text string, start int) bool {
 	if start == 0 || text[start-1] != '/' {
 		return false
 	}
 
-	return !strings.HasSuffix(text[:start], "//")
+	return !strings.HasSuffix(text[:start], "//") && !strings.HasSuffix(text[:start], ":/")
 }
 
 // allowedHostname reports whether candidate, a name shaped like a domain name,
