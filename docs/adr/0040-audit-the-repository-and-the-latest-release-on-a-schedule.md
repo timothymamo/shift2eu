@@ -3113,11 +3113,12 @@ which the container is killed and removed.
   *Amended 2026-11-26 (issue #671):* the inventory file's name reaches all three reports too, so
   `TestHostileInventoryNames` there pins it: hostile names a run accepts (Markdown and HTML
   metacharacters, look-alike Unicode, a 2048-byte name, a backtick at both ends, a leading backtick, a
-  run of three backticks) are held escaped to goldens under `testdata/hostile-inventory-names/`, the
+  run of three backticks, `x<b>y.json`, a name that forms a known tag) are held escaped to goldens under `testdata/hostile-inventory-names/`, the
   three single-target reports and the comparison of the three embedded targets in Markdown, JSON and
   HTML (`*.comparison.{markdown,json,html}.golden`), and each report's name is parsed back and must be
   the name exactly: the Markdown code span as CommonMark reads it, the JSON `inventoryName`, the HTML
-  header's `<code>` element unescaped. After rendering the document is decoded again and its source and
+  inventory-file item's own `<code>` element, which as written holds no raw `<` or `>` and no `&`
+  that does not start a character reference, unescaped. After rendering the document is decoded again and its source and
   resources compared, so no render mutates the inventory. Names it refuses (a line break, a bidi
   override, a zero-width character, a line separator U+2028, a space at both ends, an overlong name,
   path separators, a `</script>` name) fail with `analysis.ErrInvalidReportMeta` in every single-target
