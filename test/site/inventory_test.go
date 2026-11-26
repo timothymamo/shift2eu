@@ -1830,11 +1830,12 @@ func gcpRoleBullets(t *testing.T, guide string) []string {
 // TestInventoryGuideGCPRolesCoverTheManagedKafkaCall pins the GCP permission
 // PRD #571's milestone 3 adds, and the one it forbids: the Managed Service for
 // Apache Kafka call reads a cluster's capacity with `roles/managedkafka.viewer`,
-// which grants its configuration alone, while `roles/managedkafka.client` grants
-// the data plane - topics, messages and consumer groups - which the guide never
-// touches. The guide's list is the only permission it asks a reader to hold, so
-// a missing viewer role leaves the call unanswered and a client role would give
-// its holder more access than the move needs.
+// which lacks `managedkafka.clusters.connect` and so reaches no broker and no
+// message, while `roles/managedkafka.client` grants the data plane - topics,
+// messages and consumer groups - which the guide never touches. The guide's list
+// is the only permission it asks a reader to hold, so a missing viewer role
+// leaves the call unanswered and a client role would give its holder more access
+// than the move needs.
 func TestInventoryGuideGCPRolesCoverTheManagedKafkaCall(t *testing.T) {
 	t.Parallel()
 
