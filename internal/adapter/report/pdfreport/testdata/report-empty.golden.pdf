@@ -1,0 +1,365 @@
+%PDF-1.7
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [7 0 R 9 0 R] /Count 2 >>
+endobj
+3 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>
+endobj
+4 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>
+endobj
+5 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Courier /Encoding /WinAnsiEncoding >>
+endobj
+6 0 obj
+<< /Title (shift2eu migration assessment) >>
+endobj
+7 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R /F2 4 0 R /F3 5 0 R >> >> /Contents 8 0 R >>
+endobj
+8 0 obj
+<< /Length 5384 >>
+stream
+q
+0 G
+0 w
+50 680 200 0 re
+S
+50 805 495 0 re
+S
+50 51 495 0 re
+S
+Q
+BT
+/F2 12 Tf
+1 0 0 1 50 776 Tm
+(Migration assessment: ) Tj
+/F3 12 Tf
+1 0 0 1 184 776 Tm
+(Example Cloud) Tj
+/F1 9 Tf
+1 0 0 1 50 759 Tm
+(Inventory file: ) Tj
+/F3 9 Tf
+1 0 0 1 107 759 Tm
+(inventory.json) Tj
+/F1 9 Tf
+1 0 0 1 50 747 Tm
+(Source: ) Tj
+/F3 9 Tf
+1 0 0 1 84 747 Tm
+(aws) Tj
+/F1 9 Tf
+1 0 0 1 50 735 Tm
+(Catalog: ) Tj
+/F3 9 Tf
+1 0 0 1 87 735 Tm
+(Example Cloud) Tj
+/F1 9 Tf
+1 0 0 1 158 735 Tm
+( snapshot from ) Tj
+/F3 9 Tf
+1 0 0 1 221 735 Tm
+(https://www.example.com/pricing/) Tj
+/F1 9 Tf
+1 0 0 1 394 735 Tm
+(, retrieved 2026-11-13) Tj
+1 0 0 1 50 723 Tm
+(Region: ) Tj
+/F3 9 Tf
+1 0 0 1 84 723 Tm
+(xx-par) Tj
+/F1 9 Tf
+1 0 0 1 117 723 Tm
+( \(the target's default for estimates\)) Tj
+/F2 13 Tf
+1 0 0 1 50 697 Tm
+(Summary) Tj
+/F2 8 Tf
+1 0 0 1 53 683 Tm
+(Fit) Tj
+1 0 0 1 173 683 Tm
+(Resources) Tj
+/F1 8 Tf
+1 0 0 1 53 670 Tm
+(direct) Tj
+1 0 0 1 173 670 Tm
+(0) Tj
+1 0 0 1 53 657 Tm
+(partial) Tj
+1 0 0 1 173 657 Tm
+(0) Tj
+1 0 0 1 53 644 Tm
+(none) Tj
+1 0 0 1 173 644 Tm
+(0) Tj
+1 0 0 1 53 631 Tm
+(total) Tj
+1 0 0 1 173 631 Tm
+(0) Tj
+/F1 9 Tf
+1 0 0 1 50 617 Tm
+(Monthly estimate: \2000.00 per month for 0 of 0 resources) Tj
+/F2 13 Tf
+1 0 0 1 50 591 Tm
+(Resources) Tj
+/F1 9 Tf
+1 0 0 1 50 576 Tm
+(None.) Tj
+/F2 13 Tf
+1 0 0 1 50 550 Tm
+(Required changes) Tj
+/F1 9 Tf
+1 0 0 1 50 535 Tm
+(None.) Tj
+/F2 13 Tf
+1 0 0 1 50 509 Tm
+(Blockers) Tj
+/F1 9 Tf
+1 0 0 1 50 494 Tm
+(None.) Tj
+/F2 13 Tf
+1 0 0 1 50 468 Tm
+(Cost estimate) Tj
+/F1 9 Tf
+1 0 0 1 50 453 Tm
+(\225) Tj
+1 0 0 1 60 453 Tm
+(Total: \2000.00 per month for 0 of 0 resources) Tj
+1 0 0 1 50 441 Tm
+(\225) Tj
+1 0 0 1 60 441 Tm
+(Estimate: list prices on 2026-11-13, excluding VAT and discounts; a fixed fee is the offering's listed fee) Tj
+1 0 0 1 50 429 Tm
+(\225) Tj
+1 0 0 1 60 429 Tm
+(Prices in ) Tj
+/F3 9 Tf
+1 0 0 1 98 429 Tm
+(xx-par) Tj
+/F1 9 Tf
+1 0 0 1 50 417 Tm
+(\225) Tj
+1 0 0 1 60 417 Tm
+(Hours: plan price \327 count \327 hours / 730, 730 hours for a resource that gives none) Tj
+1 0 0 1 50 405 Tm
+(\225) Tj
+1 0 0 1 60 405 Tm
+(Source cost: none in the inventory) Tj
+/F2 13 Tf
+1 0 0 1 50 379 Tm
+(Resource details) Tj
+/F1 9 Tf
+1 0 0 1 50 364 Tm
+(None.) Tj
+/F2 13 Tf
+1 0 0 1 50 338 Tm
+(How this report is worked out) Tj
+/F2 9 Tf
+1 0 0 1 50 320 Tm
+(Fits. ) Tj
+/F1 9 Tf
+1 0 0 1 72 320 Tm
+(A resource's fit is direct when an offering of the target serves its taxonomy category and offers every capability the ) Tj
+1 0 0 1 50 308 Tm
+(resource uses, partial when the offering serving the category lacks some of them, and none when no offering serves the ) Tj
+1 0 0 1 50 296 Tm
+(category or the resource is not classified.) Tj
+/F2 9 Tf
+1 0 0 1 50 281 Tm
+(Best offering. ) Tj
+/F1 9 Tf
+1 0 0 1 111 281 Tm
+(Every offering that serves the category is a candidate. Candidates are ordered direct before partial, then by ) Tj
+1 0 0 1 50 269 Tm
+(how few capabilities they lack, then by name; the first is the best offering. A tie names the other candidates with the same fit ) Tj
+1 0 0 1 50 257 Tm
+(and as many missing capabilities, which would serve as well.) Tj
+/F2 9 Tf
+1 0 0 1 50 242 Tm
+(Required changes and blockers. ) Tj
+/F1 9 Tf
+1 0 0 1 192 242 Tm
+(A required change is a capability the resource uses that its best offering does not offer: ) Tj
+1 0 0 1 50 230 Tm
+(the resource moves once it no longer depends on it. A blocker is a resource with fit none: nothing in the catalog serves it. A ) Tj
+1 0 0 1 50 218 Tm
+(resource that depends on or is a replica of a blocked resource is affected by a blocker on it; the note is not transitive.) Tj
+/F2 9 Tf
+1 0 0 1 50 203 Tm
+(Workloads. ) Tj
+/F1 9 Tf
+1 0 0 1 102 203 Tm
+(Resources are grouped by the workload the inventory names, and those that name none form the No workload ) Tj
+1 0 0 1 50 191 Tm
+(group. A workload's counts and blockers are those of its resources.) Tj
+/F2 9 Tf
+1 0 0 1 50 176 Tm
+(Estimates. ) Tj
+/F1 9 Tf
+1 0 0 1 98 176 Tm
+(A resource is matched to the cheapest plan of its best offering that covers its vCPUs and memory. Its monthly ) Tj
+1 0 0 1 50 164 Tm
+(estimate is plan price \327 count \327 hours / 730, with 730 hours for a resource that gives none and a count of 1 when it gives no ) Tj
+1 0 0 1 50 152 Tm
+(count; a plan billed for at most a number of hours a month costs plan price \327 count \327 min\(hours, cap\) / cap. Storage above ) Tj
+1 0 0 1 50 140 Tm
+(what the plan includes is priced per GiB, and a fixed fee is the offering's listed fee. Amounts are rounded to the cent, half ) Tj
+1 0 0 1 50 128 Tm
+(away from zero. Prices are list prices on the catalog's retrieval date, excluding VAT and discounts: an estimate is not a ) Tj
+1 0 0 1 50 116 Tm
+(quote.) Tj
+/F2 9 Tf
+1 0 0 1 50 101 Tm
+(Values. ) Tj
+/F1 9 Tf
+1 0 0 1 85 101 Tm
+(Every value from the inventory or a catalog is shown in Courier, as it is stored. A character the PDF's core fonts ) Tj
+1 0 0 1 50 89 Tm
+(cannot show is written as a visible escape in Go's style: \\u and four hex digits up to U+FFFF \(\\u0416 is the Cyrillic letter ) Tj
+1 0 0 1 50 77 Tm
+(Zhe\), \\U and eight hex digits above it, \\x and two hex digits for a byte that is not valid UTF-8, and \\\\ for a backslash, so an ) Tj
+/F1 8 Tf
+1 0 0 1 50 810 Tm
+(shift2eu migration assessment: ) Tj
+/F3 8 Tf
+1 0 0 1 163 810 Tm
+(Example Cloud) Tj
+1 0 0 1 50 40 Tm
+(shift2eu 0.15.0 \(commit 1a2b3c4d5e6f, built 2026-11-25T00:00:00Z\)) Tj
+/F1 8 Tf
+1 0 0 1 50 30 Tm
+(Page 1 of 2) Tj
+ET
+endstream
+endobj
+9 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R /F2 4 0 R /F3 5 0 R >> >> /Contents 10 0 R >>
+endobj
+10 0 obj
+<< /Length 1839 >>
+stream
+q
+0 G
+0 w
+50 805 495 0 re
+S
+50 51 495 0 re
+S
+Q
+BT
+/F1 9 Tf
+1 0 0 1 50 779 Tm
+(escape never looks like a value's own text. A no-break space and a soft hyphen are escaped too, so they never pass for a ) Tj
+1 0 0 1 50 767 Tm
+(space or for nothing.) Tj
+/F2 9 Tf
+1 0 0 1 50 752 Tm
+(Readiness score. ) Tj
+/F1 9 Tf
+1 0 0 1 127 752 Tm
+(shift2eu gives no readiness score: the fits, blockers, required changes and estimates above are the ) Tj
+1 0 0 1 50 740 Tm
+(assessment.) Tj
+/F2 13 Tf
+1 0 0 1 50 714 Tm
+(About this report) Tj
+/F1 9 Tf
+1 0 0 1 50 699 Tm
+(Version: ) Tj
+/F3 9 Tf
+1 0 0 1 86 699 Tm
+(shift2eu 0.15.0 \(commit 1a2b3c4d5e6f, built 2026-11-25T00:00:00Z\)) Tj
+/F1 9 Tf
+1 0 0 1 50 687 Tm
+(\225) Tj
+1 0 0 1 60 687 Tm
+(Catalog: ) Tj
+/F3 9 Tf
+1 0 0 1 97 687 Tm
+(Example Cloud) Tj
+/F1 9 Tf
+1 0 0 1 168 687 Tm
+( snapshot from ) Tj
+/F3 9 Tf
+1 0 0 1 231 687 Tm
+(https://www.example.com/pricing/) Tj
+/F1 9 Tf
+1 0 0 1 404 687 Tm
+(, retrieved 2026-11-13, default ) Tj
+1 0 0 1 60 675 Tm
+(region for estimates ) Tj
+/F3 9 Tf
+1 0 0 1 142 675 Tm
+(xx-par) Tj
+/F1 9 Tf
+1 0 0 1 50 663 Tm
+(\225) Tj
+1 0 0 1 60 663 Tm
+(Region: ) Tj
+/F3 9 Tf
+1 0 0 1 94 663 Tm
+(Example Cloud) Tj
+/F1 9 Tf
+1 0 0 1 165 663 Tm
+(: ) Tj
+/F3 9 Tf
+1 0 0 1 171 663 Tm
+(xx-par) Tj
+/F1 9 Tf
+1 0 0 1 204 663 Tm
+( \(the target's default for estimates\)) Tj
+1 0 0 1 50 651 Tm
+(\225) Tj
+1 0 0 1 60 651 Tm
+(Estimates: on) Tj
+1 0 0 1 50 639 Tm
+(\225) Tj
+1 0 0 1 60 639 Tm
+(Inventory file: ) Tj
+/F3 9 Tf
+1 0 0 1 117 639 Tm
+(inventory.json) Tj
+/F1 9 Tf
+1 0 0 1 50 627 Tm
+(\225) Tj
+1 0 0 1 60 627 Tm
+(Source: ) Tj
+/F3 9 Tf
+1 0 0 1 94 627 Tm
+(aws) Tj
+/F1 8 Tf
+1 0 0 1 50 810 Tm
+(shift2eu migration assessment: ) Tj
+/F3 8 Tf
+1 0 0 1 163 810 Tm
+(Example Cloud) Tj
+1 0 0 1 50 40 Tm
+(shift2eu 0.15.0 \(commit 1a2b3c4d5e6f, built 2026-11-25T00:00:00Z\)) Tj
+/F1 8 Tf
+1 0 0 1 50 30 Tm
+(Page 2 of 2) Tj
+ET
+endstream
+endobj
+xref
+0 11
+0000000000 65535 f 
+0000000009 00000 n 
+0000000058 00000 n 
+0000000121 00000 n 
+0000000218 00000 n 
+0000000320 00000 n 
+0000000415 00000 n 
+0000000475 00000 n 
+0000000621 00000 n 
+0000006057 00000 n 
+0000006204 00000 n 
+trailer
+<< /Size 11 /Root 1 0 R /Info 6 0 R >>
+startxref
+8096
+%%EOF

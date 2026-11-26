@@ -1,0 +1,1432 @@
+%PDF-1.7
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [7 0 R 9 0 R 11 0 R 13 0 R 15 0 R] /Count 5 >>
+endobj
+3 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>
+endobj
+4 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>
+endobj
+5 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Courier /Encoding /WinAnsiEncoding >>
+endobj
+6 0 obj
+<< /Title (shift2eu migration assessment) >>
+endobj
+7 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R /F2 4 0 R /F3 5 0 R >> >> /Contents 8 0 R >>
+endobj
+8 0 obj
+<< /Length 6456 >>
+stream
+q
+0 G
+0 w
+50 680 200 0 re
+S
+50 574 495 0 re
+S
+50 805 495 0 re
+S
+50 51 495 0 re
+S
+Q
+BT
+/F2 12 Tf
+1 0 0 1 50 776 Tm
+(Migration assessment: ) Tj
+/F3 12 Tf
+1 0 0 1 184 776 Tm
+(Example Cloud) Tj
+/F1 9 Tf
+1 0 0 1 50 759 Tm
+(Inventory file: ) Tj
+/F3 9 Tf
+1 0 0 1 107 759 Tm
+(inventory.json) Tj
+/F1 9 Tf
+1 0 0 1 50 747 Tm
+(Source: ) Tj
+/F3 9 Tf
+1 0 0 1 84 747 Tm
+(aws) Tj
+/F1 9 Tf
+1 0 0 1 50 735 Tm
+(Catalog: ) Tj
+/F3 9 Tf
+1 0 0 1 87 735 Tm
+(Example Cloud) Tj
+/F1 9 Tf
+1 0 0 1 158 735 Tm
+( snapshot from ) Tj
+/F3 9 Tf
+1 0 0 1 221 735 Tm
+(https://www.example.com/pricing/) Tj
+/F1 9 Tf
+1 0 0 1 394 735 Tm
+(, retrieved 2026-11-13) Tj
+1 0 0 1 50 723 Tm
+(Region: ) Tj
+/F3 9 Tf
+1 0 0 1 84 723 Tm
+(xx-par) Tj
+/F1 9 Tf
+1 0 0 1 117 723 Tm
+( \(the target's default for estimates\)) Tj
+/F2 13 Tf
+1 0 0 1 50 697 Tm
+(Summary) Tj
+/F2 8 Tf
+1 0 0 1 53 683 Tm
+(Fit) Tj
+1 0 0 1 173 683 Tm
+(Resources) Tj
+/F1 8 Tf
+1 0 0 1 53 670 Tm
+(direct) Tj
+1 0 0 1 173 670 Tm
+(7) Tj
+1 0 0 1 53 657 Tm
+(partial) Tj
+1 0 0 1 173 657 Tm
+(0) Tj
+1 0 0 1 53 644 Tm
+(none) Tj
+1 0 0 1 173 644 Tm
+(1) Tj
+1 0 0 1 53 631 Tm
+(total) Tj
+1 0 0 1 173 631 Tm
+(8) Tj
+/F1 9 Tf
+1 0 0 1 50 617 Tm
+(Monthly estimate: \2002,535.00 per month for 4 of 8 resources) Tj
+/F2 13 Tf
+1 0 0 1 50 591 Tm
+(Resources) Tj
+/F2 8 Tf
+1 0 0 1 53 577 Tm
+(ID) Tj
+1 0 0 1 138 577 Tm
+(Category) Tj
+1 0 0 1 223 577 Tm
+(Fit) Tj
+1 0 0 1 258 577 Tm
+(Best offering) Tj
+1 0 0 1 368 577 Tm
+(Plan) Tj
+1 0 0 1 448 577 Tm
+(Monthly estimate) Tj
+/F3 8 Tf
+1 0 0 1 53 564 Tm
+(bucket-storage) Tj
+1 0 0 1 138 564 Tm
+(storage.object) Tj
+/F1 8 Tf
+1 0 0 1 223 564 Tm
+(direct) Tj
+/F3 8 Tf
+1 0 0 1 258 564 Tm
+(Example Object ) Tj
+/F1 8 Tf
+1 0 0 1 448 564 Tm
+(\2002,500.00) Tj
+/F3 8 Tf
+1 0 0 1 258 554 Tm
+(Storage) Tj
+1 0 0 1 53 541 Tm
+(cluster-small) Tj
+1 0 0 1 138 541 Tm
+(kubernetes.manag) Tj
+/F1 8 Tf
+1 0 0 1 223 541 Tm
+(direct) Tj
+/F3 8 Tf
+1 0 0 1 258 541 Tm
+(Example Kubernetes) Tj
+1 0 0 1 368 541 Tm
+(KN-S) Tj
+/F1 8 Tf
+1 0 0 1 388 541 Tm
+( \(1 vCPU, 2 ) Tj
+1 0 0 1 448 541 Tm
+(\20015.00 \(includes a fixed ) Tj
+/F3 8 Tf
+1 0 0 1 138 531 Tm
+(ed) Tj
+/F1 8 Tf
+1 0 0 1 368 531 Tm
+(GiB\)) Tj
+1 0 0 1 448 531 Tm
+(fee of \2005.00\) \(count ) Tj
+1 0 0 1 448 521 Tm
+(assumed 1\) \(730 hours ) Tj
+1 0 0 1 448 511 Tm
+(assumed\)) Tj
+/F3 8 Tf
+1 0 0 1 53 498 Tm
+(function-orders) Tj
+1 0 0 1 138 498 Tm
+(serverless.funct) Tj
+/F1 8 Tf
+1 0 0 1 223 498 Tm
+(direct) Tj
+/F3 8 Tf
+1 0 0 1 258 498 Tm
+(Example Functions) Tj
+/F1 8 Tf
+1 0 0 1 448 498 Tm
+(not estimated: ) Tj
+/F3 8 Tf
+1 0 0 1 138 488 Tm
+(ion) Tj
+/F1 8 Tf
+1 0 0 1 448 488 Tm
+(usage-priced) Tj
+/F3 8 Tf
+1 0 0 1 53 475 Tm
+(legacy-nosize) Tj
+1 0 0 1 138 475 Tm
+(compute.vm) Tj
+/F1 8 Tf
+1 0 0 1 223 475 Tm
+(direct) Tj
+/F3 8 Tf
+1 0 0 1 258 475 Tm
+(Example Virtual ) Tj
+/F1 8 Tf
+1 0 0 1 448 475 Tm
+(not estimated: size ) Tj
+/F3 8 Tf
+1 0 0 1 258 465 Tm
+(Machines) Tj
+/F1 8 Tf
+1 0 0 1 448 465 Tm
+(unknown) Tj
+/F3 8 Tf
+1 0 0 1 53 452 Tm
+(queue-jobs) Tj
+1 0 0 1 138 452 Tm
+(messaging.queue) Tj
+/F1 8 Tf
+1 0 0 1 223 452 Tm
+(none) Tj
+1 0 0 1 448 452 Tm
+(not estimated: no fit) Tj
+/F3 8 Tf
+1 0 0 1 53 439 Tm
+(server-huge) Tj
+1 0 0 1 138 439 Tm
+(compute.vm) Tj
+/F1 8 Tf
+1 0 0 1 223 439 Tm
+(direct) Tj
+/F3 8 Tf
+1 0 0 1 258 439 Tm
+(Example Virtual ) Tj
+/F1 8 Tf
+1 0 0 1 368 439 Tm
+(no plan large ) Tj
+1 0 0 1 448 439 Tm
+(not estimated: no plan ) Tj
+/F3 8 Tf
+1 0 0 1 258 429 Tm
+(Machines) Tj
+/F1 8 Tf
+1 0 0 1 368 429 Tm
+(enough \(largest: ) Tj
+1 0 0 1 448 429 Tm
+(large enough) Tj
+/F3 8 Tf
+1 0 0 1 368 419 Tm
+(EX-L) Tj
+/F1 8 Tf
+1 0 0 1 388 419 Tm
+(, 4 vCPU, 8 ) Tj
+1 0 0 1 368 409 Tm
+(GiB\)) Tj
+/F3 8 Tf
+1 0 0 1 53 396 Tm
+(server-small) Tj
+1 0 0 1 138 396 Tm
+(compute.vm) Tj
+/F1 8 Tf
+1 0 0 1 223 396 Tm
+(direct) Tj
+/F3 8 Tf
+1 0 0 1 258 396 Tm
+(Example Virtual ) Tj
+1 0 0 1 368 396 Tm
+(EX-S) Tj
+/F1 8 Tf
+1 0 0 1 388 396 Tm
+( \(1 vCPU, 2 ) Tj
+1 0 0 1 448 396 Tm
+(\20010.00 \(count assumed 1\) ) Tj
+/F3 8 Tf
+1 0 0 1 258 386 Tm
+(Machines) Tj
+/F1 8 Tf
+1 0 0 1 368 386 Tm
+(GiB\)) Tj
+1 0 0 1 448 386 Tm
+(\(730 hours assumed\)) Tj
+/F3 8 Tf
+1 0 0 1 53 373 Tm
+(worker-jobs) Tj
+1 0 0 1 138 373 Tm
+(compute.vm) Tj
+/F1 8 Tf
+1 0 0 1 223 373 Tm
+(direct) Tj
+/F3 8 Tf
+1 0 0 1 258 373 Tm
+(Example Virtual ) Tj
+1 0 0 1 368 373 Tm
+(EX-S) Tj
+/F1 8 Tf
+1 0 0 1 388 373 Tm
+( \(1 vCPU, 2 ) Tj
+1 0 0 1 448 373 Tm
+(\20010.00 \(count assumed 1\) ) Tj
+/F3 8 Tf
+1 0 0 1 258 363 Tm
+(Machines) Tj
+/F1 8 Tf
+1 0 0 1 368 363 Tm
+(GiB\)) Tj
+1 0 0 1 448 363 Tm
+(\(730 hours assumed\)) Tj
+/F2 13 Tf
+1 0 0 1 50 335 Tm
+(Required changes) Tj
+/F1 9 Tf
+1 0 0 1 50 320 Tm
+(None.) Tj
+/F2 13 Tf
+1 0 0 1 50 294 Tm
+(Blockers) Tj
+/F1 9 Tf
+1 0 0 1 50 279 Tm
+(\225) Tj
+/F3 9 Tf
+1 0 0 1 60 279 Tm
+(queue-jobs) Tj
+/F1 9 Tf
+1 0 0 1 114 279 Tm
+(: no offering in the ) Tj
+/F3 9 Tf
+1 0 0 1 189 279 Tm
+(Example Cloud) Tj
+/F1 9 Tf
+1 0 0 1 260 279 Tm
+( catalog for ) Tj
+/F3 9 Tf
+1 0 0 1 308 279 Tm
+(messaging.queue) Tj
+/F1 9 Tf
+1 0 0 1 50 267 Tm
+(\225) Tj
+/F3 9 Tf
+1 0 0 1 60 267 Tm
+(worker-jobs) Tj
+/F1 9 Tf
+1 0 0 1 120 267 Tm
+(: affected by a blocker on ) Tj
+/F3 9 Tf
+1 0 0 1 224 267 Tm
+(queue-jobs) Tj
+/F2 13 Tf
+1 0 0 1 50 241 Tm
+(Workloads) Tj
+/F3 11 Tf
+1 0 0 1 50 216 Tm
+(orders) Tj
+/F1 9 Tf
+1 0 0 1 50 202 Tm
+(Fit: 3 direct, 0 partial, 1 none) Tj
+1 0 0 1 50 190 Tm
+(Monthly estimate: \20010.00 per month for 1 of 4 resources, list prices on 2026-11-13, excluding VAT and discounts) Tj
+1 0 0 1 50 178 Tm
+(Source cost: ) Tj
+/F3 9 Tf
+1 0 0 1 103 178 Tm
+(USD) Tj
+/F1 9 Tf
+1 0 0 1 120 178 Tm
+( $1,200.00 for 1 of 4 resources) Tj
+1 0 0 1 50 166 Tm
+(Blockers:) Tj
+1 0 0 1 60 154 Tm
+(\225) Tj
+/F3 9 Tf
+1 0 0 1 70 154 Tm
+(queue-jobs) Tj
+/F1 9 Tf
+1 0 0 1 124 154 Tm
+(: no offering in the ) Tj
+/F3 9 Tf
+1 0 0 1 199 154 Tm
+(Example Cloud) Tj
+/F1 9 Tf
+1 0 0 1 270 154 Tm
+( catalog for ) Tj
+/F3 9 Tf
+1 0 0 1 318 154 Tm
+(messaging.queue) Tj
+/F3 11 Tf
+1 0 0 1 50 132 Tm
+(shop) Tj
+/F1 9 Tf
+1 0 0 1 50 118 Tm
+(Fit: 3 direct, 0 partial, 0 none) Tj
+1 0 0 1 50 106 Tm
+(Monthly estimate: \2002,525.00 per month for 3 of 3 resources, list prices on 2026-11-13, excluding VAT and discounts) Tj
+1 0 0 1 50 94 Tm
+(Source cost: ) Tj
+/F3 9 Tf
+1 0 0 1 103 94 Tm
+(EUR) Tj
+/F1 9 Tf
+1 0 0 1 120 94 Tm
+( \2002,415.00 for 2 of 3 resources) Tj
+1 0 0 1 50 82 Tm
+(Source cost: ) Tj
+/F3 9 Tf
+1 0 0 1 103 82 Tm
+(USD) Tj
+/F1 9 Tf
+1 0 0 1 120 82 Tm
+( $40.00 for 1 of 3 resources) Tj
+/F1 8 Tf
+1 0 0 1 50 810 Tm
+(shift2eu migration assessment: ) Tj
+/F3 8 Tf
+1 0 0 1 163 810 Tm
+(Example Cloud) Tj
+1 0 0 1 50 40 Tm
+(shift2eu 0.15.0 \(commit 1a2b3c4d5e6f, built 2026-11-25T00:00:00Z\)) Tj
+/F1 8 Tf
+1 0 0 1 50 30 Tm
+(Page 1 of 5) Tj
+ET
+endstream
+endobj
+9 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R /F2 4 0 R /F3 5 0 R >> >> /Contents 10 0 R >>
+endobj
+10 0 obj
+<< /Length 4839 >>
+stream
+q
+0 G
+0 w
+50 455 495 0 re
+S
+50 237 495 0 re
+S
+50 805 495 0 re
+S
+50 51 495 0 re
+S
+Q
+BT
+/F1 9 Tf
+1 0 0 1 50 779 Tm
+(Blockers: none) Tj
+/F2 11 Tf
+1 0 0 1 50 757 Tm
+(No workload) Tj
+/F1 9 Tf
+1 0 0 1 50 743 Tm
+(Fit: 1 direct, 0 partial, 0 none) Tj
+1 0 0 1 50 731 Tm
+(Monthly estimate: none of 1 resource could be estimated \(no plan large enough\), list prices on 2026-11-13, excluding VAT ) Tj
+1 0 0 1 50 719 Tm
+(and discounts) Tj
+1 0 0 1 50 707 Tm
+(Source cost: ) Tj
+/F3 9 Tf
+1 0 0 1 103 707 Tm
+(USD) Tj
+/F1 9 Tf
+1 0 0 1 120 707 Tm
+( $200.00) Tj
+1 0 0 1 50 695 Tm
+(Blockers: none) Tj
+/F2 13 Tf
+1 0 0 1 50 669 Tm
+(Cost estimate) Tj
+/F1 9 Tf
+1 0 0 1 50 654 Tm
+(\225) Tj
+1 0 0 1 60 654 Tm
+(Total: \2002,535.00 per month for 4 of 8 resources) Tj
+1 0 0 1 50 642 Tm
+(\225) Tj
+1 0 0 1 60 642 Tm
+(Estimate: list prices on 2026-11-13, excluding VAT and discounts; a fixed fee is the offering's listed fee) Tj
+1 0 0 1 50 630 Tm
+(\225) Tj
+1 0 0 1 60 630 Tm
+(Prices in ) Tj
+/F3 9 Tf
+1 0 0 1 98 630 Tm
+(xx-par) Tj
+/F1 9 Tf
+1 0 0 1 50 618 Tm
+(\225) Tj
+1 0 0 1 60 618 Tm
+(Hours: plan price \327 count \327 hours / 730, 730 hours for a resource that gives none) Tj
+1 0 0 1 50 606 Tm
+(\225) Tj
+1 0 0 1 60 606 Tm
+(Source cost: ) Tj
+/F3 9 Tf
+1 0 0 1 113 606 Tm
+(EUR) Tj
+/F1 9 Tf
+1 0 0 1 130 606 Tm
+( \2002,415.00 for 2 of 8 resources) Tj
+1 0 0 1 50 594 Tm
+(\225) Tj
+1 0 0 1 60 594 Tm
+(Source cost: ) Tj
+/F3 9 Tf
+1 0 0 1 113 594 Tm
+(USD) Tj
+/F1 9 Tf
+1 0 0 1 130 594 Tm
+( $1,440.00 for 3 of 8 resources) Tj
+/F2 13 Tf
+1 0 0 1 50 568 Tm
+(Resource details) Tj
+/F3 11 Tf
+1 0 0 1 50 543 Tm
+(bucket-storage) Tj
+/F1 9 Tf
+1 0 0 1 50 529 Tm
+(Raw type: ) Tj
+/F3 9 Tf
+1 0 0 1 93 529 Tm
+(AWS::S3::Bucket) Tj
+/F1 9 Tf
+1 0 0 1 50 517 Tm
+(Category: ) Tj
+/F3 9 Tf
+1 0 0 1 92 517 Tm
+(storage.object) Tj
+/F1 9 Tf
+1 0 0 1 50 505 Tm
+(Region: ) Tj
+/F3 9 Tf
+1 0 0 1 84 505 Tm
+(eu-west-1) Tj
+/F1 9 Tf
+1 0 0 1 50 493 Tm
+(Workload: ) Tj
+/F3 9 Tf
+1 0 0 1 94 493 Tm
+(shop) Tj
+/F1 9 Tf
+1 0 0 1 50 481 Tm
+(Fit: direct) Tj
+1 0 0 1 50 469 Tm
+(Best offering: ) Tj
+/F3 9 Tf
+1 0 0 1 106 469 Tm
+(Example Object Storage) Tj
+/F2 8 Tf
+1 0 0 1 53 458 Tm
+(Offering) Tj
+1 0 0 1 253 458 Tm
+(Fit) Tj
+1 0 0 1 313 458 Tm
+(Missing capabilities) Tj
+/F3 8 Tf
+1 0 0 1 53 445 Tm
+(Example Object Storage) Tj
+/F1 8 Tf
+1 0 0 1 253 445 Tm
+(direct) Tj
+1 0 0 1 313 445 Tm
+(none) Tj
+/F1 9 Tf
+1 0 0 1 50 431 Tm
+(Reasons: ) Tj
+/F3 9 Tf
+1 0 0 1 91 431 Tm
+(Example Object Storage) Tj
+/F1 9 Tf
+1 0 0 1 210 431 Tm
+( offers every capability the resource uses) Tj
+1 0 0 1 50 419 Tm
+(Required changes: none) Tj
+1 0 0 1 50 407 Tm
+(Blockers: none) Tj
+1 0 0 1 50 395 Tm
+(Estimate: \2002,500.00 a month) Tj
+1 0 0 1 50 383 Tm
+(\225) Tj
+1 0 0 1 60 383 Tm
+(Plan part: \2000.00) Tj
+1 0 0 1 50 371 Tm
+(\225) Tj
+1 0 0 1 60 371 Tm
+(Storage part: \2002,500.00) Tj
+1 0 0 1 50 359 Tm
+(\225) Tj
+1 0 0 1 60 359 Tm
+(Fixed fee: \2000.00) Tj
+1 0 0 1 50 347 Tm
+(\225) Tj
+1 0 0 1 60 347 Tm
+(Hours: as the inventory gives them) Tj
+/F3 11 Tf
+1 0 0 1 50 325 Tm
+(cluster-small) Tj
+/F1 9 Tf
+1 0 0 1 50 311 Tm
+(Raw type: ) Tj
+/F3 9 Tf
+1 0 0 1 93 311 Tm
+(Scaleway::Kubernetes::Cluster) Tj
+/F1 9 Tf
+1 0 0 1 50 299 Tm
+(Category: ) Tj
+/F3 9 Tf
+1 0 0 1 92 299 Tm
+(kubernetes.managed) Tj
+/F1 9 Tf
+1 0 0 1 50 287 Tm
+(Region: ) Tj
+/F3 9 Tf
+1 0 0 1 84 287 Tm
+(eu-west-1) Tj
+/F1 9 Tf
+1 0 0 1 50 275 Tm
+(Workload: ) Tj
+/F3 9 Tf
+1 0 0 1 94 275 Tm
+(shop) Tj
+/F1 9 Tf
+1 0 0 1 50 263 Tm
+(Fit: direct) Tj
+1 0 0 1 50 251 Tm
+(Best offering: ) Tj
+/F3 9 Tf
+1 0 0 1 106 251 Tm
+(Example Kubernetes) Tj
+/F2 8 Tf
+1 0 0 1 53 240 Tm
+(Offering) Tj
+1 0 0 1 253 240 Tm
+(Fit) Tj
+1 0 0 1 313 240 Tm
+(Missing capabilities) Tj
+/F3 8 Tf
+1 0 0 1 53 227 Tm
+(Example Kubernetes) Tj
+/F1 8 Tf
+1 0 0 1 253 227 Tm
+(direct) Tj
+1 0 0 1 313 227 Tm
+(none) Tj
+/F1 9 Tf
+1 0 0 1 50 213 Tm
+(Reasons: ) Tj
+/F3 9 Tf
+1 0 0 1 91 213 Tm
+(Example Kubernetes) Tj
+/F1 9 Tf
+1 0 0 1 189 213 Tm
+( offers every capability the resource uses) Tj
+1 0 0 1 50 201 Tm
+(Required changes: none) Tj
+1 0 0 1 50 189 Tm
+(Blockers: none) Tj
+1 0 0 1 50 177 Tm
+(Estimate: \20015.00 a month) Tj
+1 0 0 1 50 165 Tm
+(\225) Tj
+1 0 0 1 60 165 Tm
+(Plan: ) Tj
+/F3 9 Tf
+1 0 0 1 84 165 Tm
+(KN-S) Tj
+/F1 9 Tf
+1 0 0 1 106 165 Tm
+( \(1 vCPU, 2 GiB\), plan price \20010.00 a month) Tj
+1 0 0 1 50 153 Tm
+(\225) Tj
+1 0 0 1 60 153 Tm
+(Plan part: \20010.00) Tj
+1 0 0 1 50 141 Tm
+(\225) Tj
+1 0 0 1 60 141 Tm
+(Storage part: \2000.00) Tj
+1 0 0 1 50 129 Tm
+(\225) Tj
+1 0 0 1 60 129 Tm
+(Fixed fee: \2005.00) Tj
+1 0 0 1 50 117 Tm
+(\225) Tj
+1 0 0 1 60 117 Tm
+(Count: 1, assumed: the resource gives none) Tj
+1 0 0 1 50 105 Tm
+(\225) Tj
+1 0 0 1 60 105 Tm
+(Hours: 730 a month, assumed: the resource gives none) Tj
+/F1 8 Tf
+1 0 0 1 50 810 Tm
+(shift2eu migration assessment: ) Tj
+/F3 8 Tf
+1 0 0 1 163 810 Tm
+(Example Cloud) Tj
+1 0 0 1 50 40 Tm
+(shift2eu 0.15.0 \(commit 1a2b3c4d5e6f, built 2026-11-25T00:00:00Z\)) Tj
+/F1 8 Tf
+1 0 0 1 50 30 Tm
+(Page 2 of 5) Tj
+ET
+endstream
+endobj
+11 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R /F2 4 0 R /F3 5 0 R >> >> /Contents 12 0 R >>
+endobj
+12 0 obj
+<< /Length 5035 >>
+stream
+q
+0 G
+0 w
+50 689 495 0 re
+S
+50 519 495 0 re
+S
+50 205 495 0 re
+S
+50 805 495 0 re
+S
+50 51 495 0 re
+S
+Q
+BT
+/F3 11 Tf
+1 0 0 1 50 777 Tm
+(function-orders) Tj
+/F1 9 Tf
+1 0 0 1 50 763 Tm
+(Raw type: ) Tj
+/F3 9 Tf
+1 0 0 1 93 763 Tm
+(AWS::Lambda::Function) Tj
+/F1 9 Tf
+1 0 0 1 50 751 Tm
+(Category: ) Tj
+/F3 9 Tf
+1 0 0 1 92 751 Tm
+(serverless.function) Tj
+/F1 9 Tf
+1 0 0 1 50 739 Tm
+(Region: ) Tj
+/F3 9 Tf
+1 0 0 1 84 739 Tm
+(eu-west-1) Tj
+/F1 9 Tf
+1 0 0 1 50 727 Tm
+(Workload: ) Tj
+/F3 9 Tf
+1 0 0 1 94 727 Tm
+(orders) Tj
+/F1 9 Tf
+1 0 0 1 50 715 Tm
+(Fit: direct) Tj
+1 0 0 1 50 703 Tm
+(Best offering: ) Tj
+/F3 9 Tf
+1 0 0 1 106 703 Tm
+(Example Functions) Tj
+/F2 8 Tf
+1 0 0 1 53 692 Tm
+(Offering) Tj
+1 0 0 1 253 692 Tm
+(Fit) Tj
+1 0 0 1 313 692 Tm
+(Missing capabilities) Tj
+/F3 8 Tf
+1 0 0 1 53 679 Tm
+(Example Functions) Tj
+/F1 8 Tf
+1 0 0 1 253 679 Tm
+(direct) Tj
+1 0 0 1 313 679 Tm
+(none) Tj
+/F1 9 Tf
+1 0 0 1 50 665 Tm
+(Reasons: ) Tj
+/F3 9 Tf
+1 0 0 1 91 665 Tm
+(Example Functions) Tj
+/F1 9 Tf
+1 0 0 1 183 665 Tm
+( offers every capability the resource uses) Tj
+1 0 0 1 50 653 Tm
+(Required changes: none) Tj
+1 0 0 1 50 641 Tm
+(Blockers: none) Tj
+1 0 0 1 50 629 Tm
+(Estimate: not estimated: usage-priced) Tj
+/F3 11 Tf
+1 0 0 1 50 607 Tm
+(legacy-nosize) Tj
+/F1 9 Tf
+1 0 0 1 50 593 Tm
+(Raw type: ) Tj
+/F3 9 Tf
+1 0 0 1 93 593 Tm
+(AWS::EC2::Instance) Tj
+/F1 9 Tf
+1 0 0 1 50 581 Tm
+(Category: ) Tj
+/F3 9 Tf
+1 0 0 1 92 581 Tm
+(compute.vm) Tj
+/F1 9 Tf
+1 0 0 1 50 569 Tm
+(Region: ) Tj
+/F3 9 Tf
+1 0 0 1 84 569 Tm
+(eu-west-1) Tj
+/F1 9 Tf
+1 0 0 1 50 557 Tm
+(Workload: ) Tj
+/F3 9 Tf
+1 0 0 1 94 557 Tm
+(orders) Tj
+/F1 9 Tf
+1 0 0 1 50 545 Tm
+(Fit: direct) Tj
+1 0 0 1 50 533 Tm
+(Best offering: ) Tj
+/F3 9 Tf
+1 0 0 1 106 533 Tm
+(Example Virtual Machines) Tj
+/F2 8 Tf
+1 0 0 1 53 522 Tm
+(Offering) Tj
+1 0 0 1 253 522 Tm
+(Fit) Tj
+1 0 0 1 313 522 Tm
+(Missing capabilities) Tj
+/F3 8 Tf
+1 0 0 1 53 509 Tm
+(Example Virtual Machines) Tj
+/F1 8 Tf
+1 0 0 1 253 509 Tm
+(direct) Tj
+1 0 0 1 313 509 Tm
+(none) Tj
+/F1 9 Tf
+1 0 0 1 50 495 Tm
+(Reasons: ) Tj
+/F3 9 Tf
+1 0 0 1 91 495 Tm
+(Example Virtual Machines) Tj
+/F1 9 Tf
+1 0 0 1 221 495 Tm
+( offers every capability the resource uses) Tj
+1 0 0 1 50 483 Tm
+(Required changes: none) Tj
+1 0 0 1 50 471 Tm
+(Blockers: none) Tj
+1 0 0 1 50 459 Tm
+(Estimate: not estimated: size unknown) Tj
+/F3 11 Tf
+1 0 0 1 50 437 Tm
+(queue-jobs) Tj
+/F1 9 Tf
+1 0 0 1 50 423 Tm
+(Raw type: ) Tj
+/F3 9 Tf
+1 0 0 1 93 423 Tm
+(AWS::SQS::Queue) Tj
+/F1 9 Tf
+1 0 0 1 50 411 Tm
+(Category: ) Tj
+/F3 9 Tf
+1 0 0 1 92 411 Tm
+(messaging.queue) Tj
+/F1 9 Tf
+1 0 0 1 50 399 Tm
+(Region: ) Tj
+/F3 9 Tf
+1 0 0 1 84 399 Tm
+(eu-west-1) Tj
+/F1 9 Tf
+1 0 0 1 50 387 Tm
+(Workload: ) Tj
+/F3 9 Tf
+1 0 0 1 94 387 Tm
+(orders) Tj
+/F1 9 Tf
+1 0 0 1 50 375 Tm
+(Fit: none) Tj
+1 0 0 1 50 363 Tm
+(Best offering: none) Tj
+1 0 0 1 50 351 Tm
+(No offering in the catalog serves this category.) Tj
+1 0 0 1 50 339 Tm
+(Reasons: no offering in the ) Tj
+/F3 9 Tf
+1 0 0 1 161 339 Tm
+(Example Cloud) Tj
+/F1 9 Tf
+1 0 0 1 232 339 Tm
+( catalog for ) Tj
+/F3 9 Tf
+1 0 0 1 280 339 Tm
+(messaging.queue) Tj
+/F1 9 Tf
+1 0 0 1 50 327 Tm
+(Required changes: none) Tj
+1 0 0 1 50 315 Tm
+(Blockers: no offering in the ) Tj
+/F3 9 Tf
+1 0 0 1 160 315 Tm
+(Example Cloud) Tj
+/F1 9 Tf
+1 0 0 1 231 315 Tm
+( catalog for ) Tj
+/F3 9 Tf
+1 0 0 1 279 315 Tm
+(messaging.queue) Tj
+/F1 9 Tf
+1 0 0 1 50 303 Tm
+(Estimate: not estimated: no fit) Tj
+/F3 11 Tf
+1 0 0 1 50 281 Tm
+(server-huge) Tj
+/F1 9 Tf
+1 0 0 1 50 267 Tm
+(Raw type: ) Tj
+/F3 9 Tf
+1 0 0 1 93 267 Tm
+(AWS::EC2::Instance) Tj
+/F1 9 Tf
+1 0 0 1 50 255 Tm
+(Category: ) Tj
+/F3 9 Tf
+1 0 0 1 92 255 Tm
+(compute.vm) Tj
+/F1 9 Tf
+1 0 0 1 50 243 Tm
+(Region: ) Tj
+/F3 9 Tf
+1 0 0 1 84 243 Tm
+(eu-west-1) Tj
+/F1 9 Tf
+1 0 0 1 50 231 Tm
+(Fit: direct) Tj
+1 0 0 1 50 219 Tm
+(Best offering: ) Tj
+/F3 9 Tf
+1 0 0 1 106 219 Tm
+(Example Virtual Machines) Tj
+/F2 8 Tf
+1 0 0 1 53 208 Tm
+(Offering) Tj
+1 0 0 1 253 208 Tm
+(Fit) Tj
+1 0 0 1 313 208 Tm
+(Missing capabilities) Tj
+/F3 8 Tf
+1 0 0 1 53 195 Tm
+(Example Virtual Machines) Tj
+/F1 8 Tf
+1 0 0 1 253 195 Tm
+(direct) Tj
+1 0 0 1 313 195 Tm
+(none) Tj
+/F1 9 Tf
+1 0 0 1 50 181 Tm
+(Reasons: ) Tj
+/F3 9 Tf
+1 0 0 1 91 181 Tm
+(Example Virtual Machines) Tj
+/F1 9 Tf
+1 0 0 1 221 181 Tm
+( offers every capability the resource uses) Tj
+1 0 0 1 50 169 Tm
+(Required changes: none) Tj
+1 0 0 1 50 157 Tm
+(Blockers: none) Tj
+1 0 0 1 50 145 Tm
+(Estimate: not estimated: no plan large enough) Tj
+1 0 0 1 50 133 Tm
+(Largest plan: ) Tj
+/F3 9 Tf
+1 0 0 1 105 133 Tm
+(EX-L) Tj
+/F1 9 Tf
+1 0 0 1 127 133 Tm
+( \(4 vCPU, 8 GiB\)) Tj
+/F3 11 Tf
+1 0 0 1 50 111 Tm
+(server-small) Tj
+/F1 9 Tf
+1 0 0 1 50 97 Tm
+(Raw type: ) Tj
+/F3 9 Tf
+1 0 0 1 93 97 Tm
+(AWS::EC2::Instance) Tj
+/F1 9 Tf
+1 0 0 1 50 85 Tm
+(Category: ) Tj
+/F3 9 Tf
+1 0 0 1 92 85 Tm
+(compute.vm) Tj
+/F1 9 Tf
+1 0 0 1 50 73 Tm
+(Region: ) Tj
+/F3 9 Tf
+1 0 0 1 84 73 Tm
+(eu-west-1) Tj
+/F1 8 Tf
+1 0 0 1 50 810 Tm
+(shift2eu migration assessment: ) Tj
+/F3 8 Tf
+1 0 0 1 163 810 Tm
+(Example Cloud) Tj
+1 0 0 1 50 40 Tm
+(shift2eu 0.15.0 \(commit 1a2b3c4d5e6f, built 2026-11-25T00:00:00Z\)) Tj
+/F1 8 Tf
+1 0 0 1 50 30 Tm
+(Page 3 of 5) Tj
+ET
+endstream
+endobj
+13 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R /F2 4 0 R /F3 5 0 R >> >> /Contents 14 0 R >>
+endobj
+14 0 obj
+<< /Length 6375 >>
+stream
+q
+0 G
+0 w
+50 741 495 0 re
+S
+50 475 495 0 re
+S
+50 805 495 0 re
+S
+50 51 495 0 re
+S
+Q
+BT
+/F1 9 Tf
+1 0 0 1 50 779 Tm
+(Workload: ) Tj
+/F3 9 Tf
+1 0 0 1 94 779 Tm
+(shop) Tj
+/F1 9 Tf
+1 0 0 1 50 767 Tm
+(Fit: direct) Tj
+1 0 0 1 50 755 Tm
+(Best offering: ) Tj
+/F3 9 Tf
+1 0 0 1 106 755 Tm
+(Example Virtual Machines) Tj
+/F2 8 Tf
+1 0 0 1 53 744 Tm
+(Offering) Tj
+1 0 0 1 253 744 Tm
+(Fit) Tj
+1 0 0 1 313 744 Tm
+(Missing capabilities) Tj
+/F3 8 Tf
+1 0 0 1 53 731 Tm
+(Example Virtual Machines) Tj
+/F1 8 Tf
+1 0 0 1 253 731 Tm
+(direct) Tj
+1 0 0 1 313 731 Tm
+(none) Tj
+/F1 9 Tf
+1 0 0 1 50 717 Tm
+(Reasons: ) Tj
+/F3 9 Tf
+1 0 0 1 91 717 Tm
+(Example Virtual Machines) Tj
+/F1 9 Tf
+1 0 0 1 221 717 Tm
+( offers every capability the resource uses) Tj
+1 0 0 1 50 705 Tm
+(Required changes: none) Tj
+1 0 0 1 50 693 Tm
+(Blockers: none) Tj
+1 0 0 1 50 681 Tm
+(Estimate: \20010.00 a month) Tj
+1 0 0 1 50 669 Tm
+(\225) Tj
+1 0 0 1 60 669 Tm
+(Plan: ) Tj
+/F3 9 Tf
+1 0 0 1 84 669 Tm
+(EX-S) Tj
+/F1 9 Tf
+1 0 0 1 106 669 Tm
+( \(1 vCPU, 2 GiB, 20 GiB storage included\), plan price \20010.00 a month) Tj
+1 0 0 1 50 657 Tm
+(\225) Tj
+1 0 0 1 60 657 Tm
+(Plan part: \20010.00) Tj
+1 0 0 1 50 645 Tm
+(\225) Tj
+1 0 0 1 60 645 Tm
+(Storage part: \2000.00) Tj
+1 0 0 1 50 633 Tm
+(\225) Tj
+1 0 0 1 60 633 Tm
+(Fixed fee: \2000.00) Tj
+1 0 0 1 50 621 Tm
+(\225) Tj
+1 0 0 1 60 621 Tm
+(Count: 1, assumed: the resource gives none) Tj
+1 0 0 1 50 609 Tm
+(\225) Tj
+1 0 0 1 60 609 Tm
+(Hours: 730 a month, assumed: the resource gives none) Tj
+/F3 11 Tf
+1 0 0 1 50 587 Tm
+(worker-jobs) Tj
+/F1 9 Tf
+1 0 0 1 50 573 Tm
+(Raw type: ) Tj
+/F3 9 Tf
+1 0 0 1 93 573 Tm
+(AWS::EC2::Instance) Tj
+/F1 9 Tf
+1 0 0 1 50 561 Tm
+(Category: ) Tj
+/F3 9 Tf
+1 0 0 1 92 561 Tm
+(compute.vm) Tj
+/F1 9 Tf
+1 0 0 1 50 549 Tm
+(Region: ) Tj
+/F3 9 Tf
+1 0 0 1 84 549 Tm
+(eu-west-1) Tj
+/F1 9 Tf
+1 0 0 1 50 537 Tm
+(Workload: ) Tj
+/F3 9 Tf
+1 0 0 1 94 537 Tm
+(orders) Tj
+/F1 9 Tf
+1 0 0 1 50 525 Tm
+(Fit: direct) Tj
+1 0 0 1 50 513 Tm
+(Best offering: ) Tj
+/F3 9 Tf
+1 0 0 1 106 513 Tm
+(Example Virtual Machines) Tj
+/F1 9 Tf
+1 0 0 1 50 501 Tm
+(Relations: depends-on ) Tj
+/F3 9 Tf
+1 0 0 1 143 501 Tm
+(queue-jobs) Tj
+/F1 9 Tf
+1 0 0 1 197 501 Tm
+(, replica-of ) Tj
+/F3 9 Tf
+1 0 0 1 242 501 Tm
+(server-small) Tj
+/F1 9 Tf
+1 0 0 1 50 489 Tm
+(Affected by a blocker on ) Tj
+/F3 9 Tf
+1 0 0 1 150 489 Tm
+(queue-jobs) Tj
+/F2 8 Tf
+1 0 0 1 53 478 Tm
+(Offering) Tj
+1 0 0 1 253 478 Tm
+(Fit) Tj
+1 0 0 1 313 478 Tm
+(Missing capabilities) Tj
+/F3 8 Tf
+1 0 0 1 53 465 Tm
+(Example Virtual Machines) Tj
+/F1 8 Tf
+1 0 0 1 253 465 Tm
+(direct) Tj
+1 0 0 1 313 465 Tm
+(none) Tj
+/F1 9 Tf
+1 0 0 1 50 451 Tm
+(Reasons: ) Tj
+/F3 9 Tf
+1 0 0 1 91 451 Tm
+(Example Virtual Machines) Tj
+/F1 9 Tf
+1 0 0 1 221 451 Tm
+( offers every capability the resource uses) Tj
+1 0 0 1 50 439 Tm
+(Required changes: none) Tj
+1 0 0 1 50 427 Tm
+(Blockers: none) Tj
+1 0 0 1 50 415 Tm
+(Estimate: \20010.00 a month) Tj
+1 0 0 1 50 403 Tm
+(\225) Tj
+1 0 0 1 60 403 Tm
+(Plan: ) Tj
+/F3 9 Tf
+1 0 0 1 84 403 Tm
+(EX-S) Tj
+/F1 9 Tf
+1 0 0 1 106 403 Tm
+( \(1 vCPU, 2 GiB, 20 GiB storage included\), plan price \20010.00 a month) Tj
+1 0 0 1 50 391 Tm
+(\225) Tj
+1 0 0 1 60 391 Tm
+(Plan part: \20010.00) Tj
+1 0 0 1 50 379 Tm
+(\225) Tj
+1 0 0 1 60 379 Tm
+(Storage part: \2000.00) Tj
+1 0 0 1 50 367 Tm
+(\225) Tj
+1 0 0 1 60 367 Tm
+(Fixed fee: \2000.00) Tj
+1 0 0 1 50 355 Tm
+(\225) Tj
+1 0 0 1 60 355 Tm
+(Count: 1, assumed: the resource gives none) Tj
+1 0 0 1 50 343 Tm
+(\225) Tj
+1 0 0 1 60 343 Tm
+(Hours: 730 a month, assumed: the resource gives none) Tj
+/F2 13 Tf
+1 0 0 1 50 317 Tm
+(How this report is worked out) Tj
+/F2 9 Tf
+1 0 0 1 50 299 Tm
+(Fits. ) Tj
+/F1 9 Tf
+1 0 0 1 72 299 Tm
+(A resource's fit is direct when an offering of the target serves its taxonomy category and offers every capability the ) Tj
+1 0 0 1 50 287 Tm
+(resource uses, partial when the offering serving the category lacks some of them, and none when no offering serves the ) Tj
+1 0 0 1 50 275 Tm
+(category or the resource is not classified.) Tj
+/F2 9 Tf
+1 0 0 1 50 260 Tm
+(Best offering. ) Tj
+/F1 9 Tf
+1 0 0 1 111 260 Tm
+(Every offering that serves the category is a candidate. Candidates are ordered direct before partial, then by ) Tj
+1 0 0 1 50 248 Tm
+(how few capabilities they lack, then by name; the first is the best offering. A tie names the other candidates with the same fit ) Tj
+1 0 0 1 50 236 Tm
+(and as many missing capabilities, which would serve as well.) Tj
+/F2 9 Tf
+1 0 0 1 50 221 Tm
+(Required changes and blockers. ) Tj
+/F1 9 Tf
+1 0 0 1 192 221 Tm
+(A required change is a capability the resource uses that its best offering does not offer: ) Tj
+1 0 0 1 50 209 Tm
+(the resource moves once it no longer depends on it. A blocker is a resource with fit none: nothing in the catalog serves it. A ) Tj
+1 0 0 1 50 197 Tm
+(resource that depends on or is a replica of a blocked resource is affected by a blocker on it; the note is not transitive.) Tj
+/F2 9 Tf
+1 0 0 1 50 182 Tm
+(Workloads. ) Tj
+/F1 9 Tf
+1 0 0 1 102 182 Tm
+(Resources are grouped by the workload the inventory names, and those that name none form the No workload ) Tj
+1 0 0 1 50 170 Tm
+(group. A workload's counts and blockers are those of its resources.) Tj
+/F2 9 Tf
+1 0 0 1 50 155 Tm
+(Estimates. ) Tj
+/F1 9 Tf
+1 0 0 1 98 155 Tm
+(A resource is matched to the cheapest plan of its best offering that covers its vCPUs and memory. Its monthly ) Tj
+1 0 0 1 50 143 Tm
+(estimate is plan price \327 count \327 hours / 730, with 730 hours for a resource that gives none and a count of 1 when it gives no ) Tj
+1 0 0 1 50 131 Tm
+(count; a plan billed for at most a number of hours a month costs plan price \327 count \327 min\(hours, cap\) / cap. Storage above ) Tj
+1 0 0 1 50 119 Tm
+(what the plan includes is priced per GiB, and a fixed fee is the offering's listed fee. Amounts are rounded to the cent, half ) Tj
+1 0 0 1 50 107 Tm
+(away from zero. Prices are list prices on the catalog's retrieval date, excluding VAT and discounts: an estimate is not a ) Tj
+1 0 0 1 50 95 Tm
+(quote.) Tj
+/F2 9 Tf
+1 0 0 1 50 80 Tm
+(Values. ) Tj
+/F1 9 Tf
+1 0 0 1 85 80 Tm
+(Every value from the inventory or a catalog is shown in Courier, as it is stored. A character the PDF's core fonts ) Tj
+/F1 8 Tf
+1 0 0 1 50 810 Tm
+(shift2eu migration assessment: ) Tj
+/F3 8 Tf
+1 0 0 1 163 810 Tm
+(Example Cloud) Tj
+1 0 0 1 50 40 Tm
+(shift2eu 0.15.0 \(commit 1a2b3c4d5e6f, built 2026-11-25T00:00:00Z\)) Tj
+/F1 8 Tf
+1 0 0 1 50 30 Tm
+(Page 4 of 5) Tj
+ET
+endstream
+endobj
+15 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R /F2 4 0 R /F3 5 0 R >> >> /Contents 16 0 R >>
+endobj
+16 0 obj
+<< /Length 2148 >>
+stream
+q
+0 G
+0 w
+50 805 495 0 re
+S
+50 51 495 0 re
+S
+Q
+BT
+/F1 9 Tf
+1 0 0 1 50 779 Tm
+(cannot show is written as a visible escape in Go's style: \\u and four hex digits up to U+FFFF \(\\u0416 is the Cyrillic letter ) Tj
+1 0 0 1 50 767 Tm
+(Zhe\), \\U and eight hex digits above it, \\x and two hex digits for a byte that is not valid UTF-8, and \\\\ for a backslash, so an ) Tj
+1 0 0 1 50 755 Tm
+(escape never looks like a value's own text. A no-break space and a soft hyphen are escaped too, so they never pass for a ) Tj
+1 0 0 1 50 743 Tm
+(space or for nothing.) Tj
+/F2 9 Tf
+1 0 0 1 50 728 Tm
+(Readiness score. ) Tj
+/F1 9 Tf
+1 0 0 1 127 728 Tm
+(shift2eu gives no readiness score: the fits, blockers, required changes and estimates above are the ) Tj
+1 0 0 1 50 716 Tm
+(assessment.) Tj
+/F2 13 Tf
+1 0 0 1 50 690 Tm
+(About this report) Tj
+/F1 9 Tf
+1 0 0 1 50 675 Tm
+(Version: ) Tj
+/F3 9 Tf
+1 0 0 1 86 675 Tm
+(shift2eu 0.15.0 \(commit 1a2b3c4d5e6f, built 2026-11-25T00:00:00Z\)) Tj
+/F1 9 Tf
+1 0 0 1 50 663 Tm
+(\225) Tj
+1 0 0 1 60 663 Tm
+(Catalog: ) Tj
+/F3 9 Tf
+1 0 0 1 97 663 Tm
+(Example Cloud) Tj
+/F1 9 Tf
+1 0 0 1 168 663 Tm
+( snapshot from ) Tj
+/F3 9 Tf
+1 0 0 1 231 663 Tm
+(https://www.example.com/pricing/) Tj
+/F1 9 Tf
+1 0 0 1 404 663 Tm
+(, retrieved 2026-11-13, default ) Tj
+1 0 0 1 60 651 Tm
+(region for estimates ) Tj
+/F3 9 Tf
+1 0 0 1 142 651 Tm
+(xx-par) Tj
+/F1 9 Tf
+1 0 0 1 50 639 Tm
+(\225) Tj
+1 0 0 1 60 639 Tm
+(Region: ) Tj
+/F3 9 Tf
+1 0 0 1 94 639 Tm
+(Example Cloud) Tj
+/F1 9 Tf
+1 0 0 1 165 639 Tm
+(: ) Tj
+/F3 9 Tf
+1 0 0 1 171 639 Tm
+(xx-par) Tj
+/F1 9 Tf
+1 0 0 1 204 639 Tm
+( \(the target's default for estimates\)) Tj
+1 0 0 1 50 627 Tm
+(\225) Tj
+1 0 0 1 60 627 Tm
+(Estimates: on) Tj
+1 0 0 1 50 615 Tm
+(\225) Tj
+1 0 0 1 60 615 Tm
+(Inventory file: ) Tj
+/F3 9 Tf
+1 0 0 1 117 615 Tm
+(inventory.json) Tj
+/F1 9 Tf
+1 0 0 1 50 603 Tm
+(\225) Tj
+1 0 0 1 60 603 Tm
+(Source: ) Tj
+/F3 9 Tf
+1 0 0 1 94 603 Tm
+(aws) Tj
+/F1 8 Tf
+1 0 0 1 50 810 Tm
+(shift2eu migration assessment: ) Tj
+/F3 8 Tf
+1 0 0 1 163 810 Tm
+(Example Cloud) Tj
+1 0 0 1 50 40 Tm
+(shift2eu 0.15.0 \(commit 1a2b3c4d5e6f, built 2026-11-25T00:00:00Z\)) Tj
+/F1 8 Tf
+1 0 0 1 50 30 Tm
+(Page 5 of 5) Tj
+ET
+endstream
+endobj
+xref
+0 17
+0000000000 65535 f 
+0000000009 00000 n 
+0000000058 00000 n 
+0000000142 00000 n 
+0000000239 00000 n 
+0000000341 00000 n 
+0000000436 00000 n 
+0000000496 00000 n 
+0000000642 00000 n 
+0000007150 00000 n 
+0000007297 00000 n 
+0000012189 00000 n 
+0000012337 00000 n 
+0000017425 00000 n 
+0000017573 00000 n 
+0000024001 00000 n 
+0000024149 00000 n 
+trailer
+<< /Size 17 /Root 1 0 R /Info 6 0 R >>
+startxref
+26350
+%%EOF
