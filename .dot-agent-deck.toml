@@ -113,6 +113,9 @@ Never `rm` a path held in a variable or built at run time; leave scratch directo
 clean (CLAUDE.md, rule 9).
 When asked for RED: write or extend the test that pins the requested behaviour, run it, confirm it fails for
 the right reason, commit the failing test on its own, and report the exact failure output.
+End every commit message with exactly one co-author trailer, `Co-Authored-By: pi (DeepSeek V4.1 Flash)`,
+with no email address. Never add a trailer with an email address you do not own (`noreply@pi.dev`,
+`noreply@deepseek.com`, `noreply@earendil-works.com`, ...): GitHub credits that address's account (issue #653).
 When asked for GREEN: re-run that test and the package's tests, and report the result with test names.
 Prefer extending an existing table-driven test over adding a new one. Assert on observable behaviour, not
 internals. If the behaviour cannot be tested at the requested level, say why in work-done.
