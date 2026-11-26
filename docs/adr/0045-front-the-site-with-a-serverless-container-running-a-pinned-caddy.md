@@ -477,7 +477,11 @@ TLS stage*.
 - **Headers.** The immediate `header` directive (one line per header), and `header_down` deleting the
   upstream's `Strict-Transport-Security`, `Content-Security-Policy`, `Permissions-Policy`,
   `X-Content-Type-Options` and `Referrer-Policy`, and its `Set-Cookie` and `X-Amz-*` (the amendment
-  below). The local run with no upstream answered Caddy's 502
+  below). **The front sends no `Via`** (issue #626): `header -Via` in `www`'s block removes the
+  `Via: 2.0 Caddy` that `reverse_proxy` writes on the answer (a `header_down` alone cannot, since the
+  proxy adds its own after the upstream's is gone); deferred, it removes the upstream's own copy too, so
+  `header_down -Via` is defence in depth, not the line that does the work; the 308s carry none. It named the front's software, which no other header does. The local run
+  with no upstream answered Caddy's 502
   with every header. `Permissions-Policy` turns off by name `accelerometer`, `ambient-light-sensor`,
   `autoplay`, `bluetooth`, `browsing-topics`, `camera`, `compute-pressure`, `display-capture`,
   `encrypted-media`, `fullscreen`, `gamepad`, `geolocation`, `gyroscope`, `hid`,
@@ -532,7 +536,8 @@ TLS stage*.
   - **The headers: settled.** On `www` each of the five Caddyfile headers comes once with its exact
     value (HSTS `max-age=31536000; includeSubDomains`), before and after the deploy, beside the
     platform's `server: envoy` and `x-envoy-upstream-service-time`, with no `set-cookie` and no
-    `x-amz-*` header. A `via: 2.0 Caddy` header is removed by issue #626.
+    `x-amz-*` header. The `via: 2.0 Caddy` header seen there is removed by issue #626 (*Headers*, above), live
+    with the maintainer's next `infra/site` apply.
   - **The apex's HSTS: settled.** Before issue #601's change was applied the apex sent no HSTS: 0
     headers on every answer. After PR #618 and its apply (2026-11-26, a plan of "No changes" once
     applied), `https://shift2eu.com/` answers HTTP/2 308 to `https://www.shift2eu.com/` with exactly one

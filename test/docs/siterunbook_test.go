@@ -420,17 +420,19 @@ func removesTheBackupOnceExplained(outcome string) bool {
 	return explained && saysToRemoveAFile(after)
 }
 
+// removalInstruction matches a word that tells the maintainer to remove a file: the command rm, or the imperative
+// remove or delete. Only the bare word counts, so a past tense or a third person - "the backup was removed earlier",
+// "the earlier run deleted the backup", "it removes" - describes a removal and tells nobody to make one (issue #626).
+var removalInstruction = regexp.MustCompile(`\b(rm|remove|delete)\b`)
+
 // saysToRemoveAFile reports whether the runbook text tells the maintainer to remove a file, as R4's state backup's FAIL
-// path must once the cause is explained: the spelling is the maintainer's choice, so rm, remove and delete all count. A
-// clause that negates its verb - "do not remove it", "remove nothing" - tells the maintainer to keep the file, so it is
-// no removal, and each comma-separated clause is read on its own: a negation in one says nothing about another's.
+// path must once the cause is explained: the spelling is the maintainer's choice, so rm, remove and delete all count,
+// as words of their own (removalInstruction). A clause that negates its verb - "do not remove it", "remove nothing" -
+// tells the maintainer to keep the file, so it is no removal, and each comma-separated clause is read on its own: a
+// negation in one says nothing about another's.
 func saysToRemoveAFile(text string) bool {
 	for _, clause := range strings.Split(text, ",") {
-		verb, negated := false, false
-
-		for _, spelling := range []string{"rm ", "rm -r", "remove", "delete"} {
-			verb = verb || strings.Contains(clause, spelling)
-		}
+		verb, negated := removalInstruction.MatchString(clause), false
 
 		for _, negation := range []string{"not ", "nothing", "never"} {
 			negated = negated || strings.Contains(clause, negation)
@@ -679,6 +681,14 @@ func TestRemovesTheBackupOnceExplained(t *testing.T) {
 		{
 			name:    "no explanation at all",
 			outcome: `FAIL exit 2: keep "$T/` + backup + `", then [ -f "$T/` + backup + `" ] && rm -r "$T"`,
+		},
+		{
+			name:    "the removal described rather than told: nothing says the maintainer removes the file",
+			outcome: `FAIL exit 2: read the diff, which is explained above: the backup was removed earlier`,
+		},
+		{
+			name:    "a deletion the outcome remembers rather than tells",
+			outcome: `FAIL exit 2: the cause is explained, and the earlier run deleted the backup`,
 		},
 	}
 

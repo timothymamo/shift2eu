@@ -2357,9 +2357,8 @@ every run.
 ```bash
 # GitHub, the installation's settings page: by hand
 # PASS: "Only select repositories" with only this one
-# Mac (admin), as yourself
-gh api /apps/shift2eu-audit --jq '.permissions | tojson'
-# PASS: contents, pull_requests, issues, repository_advisories write, metadata read, and nothing else
+# GitHub, the App's settings page, Permissions & events: by hand
+# PASS: Contents, Pull requests, Issues and Repository security advisories write, Metadata read, and nothing else
 ```
 
 **2. Create the `security-audit` environment.** *Done 2026-11-22.* Deployment branches `main` only, no
@@ -2692,11 +2691,13 @@ own and inherits the App's installation grants (issue #632, ADR 0040's Decision 
 repository added to the App later reaches the token at once. Step 1 checked them once; these lines check
 them each time. A FAIL is a finding: stop the schedule (`gh workflow disable`) until the App is back to
 step 1's settings (`gh workflow disable scheduled-security-audit.yml --repo timothymamo/shift2eu`).
+The installation line compares the installation's permissions with the expected five, which are exactly
+what the token inherits, so no check of the App itself is needed; there is none here because
+`gh api /apps/shift2eu-audit` answers 404 for this private App to your own login (issue #636, as the
+`release-tag` skill records for the two release Apps).
 
 ```bash
-# Mac (admin), as yourself, read-only: the App's grants
-gh api /apps/shift2eu-audit --jq '.permissions == {"contents":"write","issues":"write","metadata":"read","pull_requests":"write","repository_advisories":"write"}'
-# PASS: true; FAIL: false (a permission added, removed or changed: compare with --jq '.permissions | tojson')
+# Mac (admin), as yourself, read-only
 # The installation: its permissions and repository selection, the <installation id>
 gh api /user/installations --paginate --jq '.installations[] | select(.app_slug == "shift2eu-audit") | [.id, .repository_selection, (.permissions == {"contents":"write","issues":"write","metadata":"read","pull_requests":"write","repository_advisories":"write"})] | @tsv'
 # PASS: one row, <installation id>  selected  true

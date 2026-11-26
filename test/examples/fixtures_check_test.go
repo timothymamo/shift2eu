@@ -857,6 +857,18 @@ func maskAzureNamespaces(text string) string {
 // https://microsoft.app/orders, http:/microsoft.corp/x), "\" (a UNC or a
 // mistyped authority, \\Microsoft.corp/share) and "@" (a URL's userinfo,
 // https://svc-user@microsoft.corp/share).
+//
+// This is a second, hand-written copy of the reviewer's rule
+// (ci/aireview/internal/review/scan.go), since this package cannot import the
+// reviewer's library: the two must accept the same delimiters, this copy also
+// "\n" (issue #630). The shared case list
+// test/examples/testdata/namespace_may_follow_delimiters.txt guards both: a
+// delimiter added to or dropped from one copy must be added to or dropped
+// from that list and the other copy too.
+//
+// The "/" branch is kept to stay in step with the scan, although
+// hostnameProblems (insidePath) already skips a name right after a single
+// "/", so the fixture check never shows it; TestNamespaceMayFollow guards it.
 func namespaceMayFollow(before string) bool {
 	if before == "" {
 		return true

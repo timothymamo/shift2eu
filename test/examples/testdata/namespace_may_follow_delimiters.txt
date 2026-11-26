@@ -1,0 +1,42 @@
+# The bytes namespaceMayFollow accepts right before an Azure Resource Manager
+# provider namespace (issue #610): one case per delimiter, shared by the two
+# hand-written copies of the rule, so a copy that drops one fails a test of its
+# own (issue #630).
+#
+# The rule is written twice: in the AI reviewer's host scan
+# (ci/aireview/internal/review/scan.go) and in the fixture check
+# (test/examples/fixtures_check_test.go), which cannot import the reviewer's
+# library. Each copy's tests read this one list: scan_test.go by
+# ../../../../test/examples/testdata/namespace_may_follow_delimiters.txt, and
+# fixtures_hostrule_test.go by testdata/namespace_may_follow_delimiters.txt,
+# both through their check, and fixtures_hostrule_test.go's
+# TestNamespaceMayFollow also calls the fixture copy directly. A delimiter
+# added to or dropped from one copy must be added to or dropped from this list
+# and the other copy too.
+#
+# A record is a case name, ": " and the text the case runs. Every text holds a
+# resource type whose provider namespace sits directly after the delimiter of
+# its case (a real tab byte for the tab case, an empty text before it for the
+# start of the text), so the namespace reads as a host name the moment a copy
+# stops accepting that delimiter. A blank line and a line starting with "#" are
+# no record.
+#
+# The fixture check reads a whole text, so a namespace that starts a line
+# follows a newline there; a line of this file cannot carry one, so
+# fixtures_hostrule_test.go pins that delimiter in a case of its own.
+#
+# This file sits under a testdata directory, so the fixture check reads it too:
+# every namespace in it follows a delimiter the rule accepts, which is what
+# keeps the file itself clean.
+the start of the text: Microsoft.App/containerApps is the type
+a double quote: "type": "Microsoft.App/containerApps"
+an apostrophe: the type is 'Microsoft.App/containerApps' in the guide
+a backtick: the type is `Microsoft.App/containerApps` in the guide
+a space: the API returns Microsoft.App/containerApps for the app
+a tab: the type is	Microsoft.App/containerApps in the export
+an equals sign: type=Microsoft.App/containerApps
+a vertical bar: |Microsoft.App/containerApps|
+an opening parenthesis: list(Microsoft.App/containerApps)
+an opening bracket: [Microsoft.App/containerApps]
+a comma: resources: [app-a,Microsoft.App/containerApps]
+a slash: /providers/Microsoft.App/containerApps
