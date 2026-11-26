@@ -3194,7 +3194,9 @@ no longer to be checked: round I read them from its source.
   review round K:* `unexpected-target` is no why id, so the target is now a limits line.
 - **trivy offline.** The check holds row 10's `offline=(...)` flags `--skip-db-update
   --skip-java-db-update --skip-check-update --offline-scan --disable-telemetry`, which both scans use:
-  without them trivy would send the image's package identifiers to third-party services.
+  without them trivy would send the image's package identifiers to third-party services. *Amended for
+  issue #658:* `--skip-check-update` is the image scan's alone (row 10's amendment, below), and the
+  check also holds `--skip-version-check`, so no scan asks for trivy's latest version.
 - **The checksum guards** (round C). Every tool download's checksum check, in all three jobs, is `if !
   echo "${<TOOL>_SHA256}  <file>" | sha256sum --check --strict -; then`, an `::error` naming the tool,
   its job and runbook step 11, and `exit 1`: a failed run names its cause.
