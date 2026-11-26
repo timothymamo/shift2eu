@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 2,
+  "source": "\u0430ws",
+  "resources": [
+    {
+      "id": "\u0430dmin",
+      "rawType": "combining-e\u0301\u0301\u0301\u0301",
+      "category": "compute.vm",
+      "region": "eu\u00a0west\u00a01",
+      "workload": "\u05e9\u05dc\u05d5\u05dd \u05e2\u05d5\u05dc\u05dd"
+    },
+    {
+      "id": "\ud83d\ude00-astral",
+      "rawType": "\ue000-private-use",
+      "category": "storage.object",
+      "region": "\u0435\u0432\u0440\u043e\u043f\u0430",
+      "workload": "\uff1cscript\uff1e-alert(1)\uff1c/script\uff1e"
+    },
+    {
+      "id": "p\u0430ypal-\u0440\u0430u",
+      "rawType": "roman-\u2160\u2161\u2162",
+      "category": "compute.vm",
+      "region": "eu-central-1",
+      "workload": "\u0130stanbul-\u0131I-\u00df-\u1e9e",
+      "relations": [{ "type": "depends-on", "target": "\ud83d\ude00-astral" }]
+    },
+    {
+      "id": "id\u0338-combining",
+      "rawType": "raw\u3000type",
+      "category": "compute.baremetal",
+      "region": "eu-central-1",
+      "workload": "\u0430\u0431\u0432-\u05d0\u05d1\u05d2"
+    }
+  ]
+}
