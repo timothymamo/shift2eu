@@ -65,6 +65,28 @@
           }
         }
       }
+    },
+    {
+      "ClusterName": "shop-broken-kafka",
+      "ClusterType": "PROVISIONED",
+      "ClusterArn": "arn:aws:kafka:eu-central-1:123456789012:cluster/shop-broken-kafka/00000000-0000-0000-0000-000000000004-1",
+      "State": "FAILED",
+      "Provisioned": {
+        "NumberOfBrokerNodes": 3,
+        "BrokerNodeGroupInfo": {
+          "InstanceType": "kafka.m5.large",
+          "ClientSubnets": [
+            "subnet-0123456789abcdef0",
+            "subnet-0123456789abcdef1",
+            "subnet-0123456789abcdef2"
+          ],
+          "StorageInfo": {
+            "EbsStorageInfo": {
+              "VolumeSize": 100
+            }
+          }
+        }
+      }
     }
   ]
 }

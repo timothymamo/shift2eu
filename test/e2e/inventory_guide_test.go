@@ -625,10 +625,14 @@ func inventoryGuides() []inventoryGuideCase {
 				// Resources on their way out or never made are no infrastructure to
 				// move, as an instance whose state is terminated is none: a domain AWS
 				// reports deleted, a collection whose deletion is in progress or whose
-				// creation failed, and a cluster AWS is deleting (review finding N2).
+				// creation failed, and a cluster AWS is deleting or that failed
+				// (review findings N2 and N-c: each of the two statuses of each of
+				// the two services is recorded).
 				"shop-old-search",
 				"shop-purge",
+				"shop-draining",
 				"shop-retired-kafka",
+				"shop-broken-kafka",
 			},
 			absentRawTypes: []string{
 				"AWS::RDS::DBCluster",

@@ -27,6 +27,13 @@
       "type": "SEARCH",
       "standbyReplicas": "ENABLED",
       "status": "FAILED"
+    },
+    {
+      "name": "shop-draining",
+      "arn": "arn:aws:aoss:eu-central-1:123456789012:collection/cccccccccccccccccccccccccccccccc",
+      "type": "SEARCH",
+      "standbyReplicas": "DISABLED",
+      "status": "DELETING"
     }
   ]
 }
