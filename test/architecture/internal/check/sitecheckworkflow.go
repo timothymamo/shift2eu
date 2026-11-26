@@ -18,10 +18,17 @@ import (
 // run the workflows allow, with a margin.
 const SiteCheckWindow = 180 * time.Minute
 
-// siteCheckHTMLMaxAge is the HTML's max-age, ci/sitecheck/internal/livecheck's
+// SiteCheckHTMLMaxAge is the HTML's max-age, ci/sitecheck/internal/livecheck's
 // MaxHTMLAge: a page deployed at the end of the release run may be served
-// from a cache that long.
-const siteCheckHTMLMaxAge = 5 * time.Minute
+// from a cache that long, so MinSiteCheckWindow adds it. The live check's
+// constant sits behind ci/sitecheck's internal directory, out of this
+// package's reach; a test compares the two from its source.
+const SiteCheckHTMLMaxAge = 5 * time.Minute
+
+// siteCheckAlertIf is the alert job's if:: any result of the check but
+// success, a cancelled one included, since a job past its timeout-minutes
+// concludes cancelled and failure() is false then.
+const siteCheckAlertIf = "${{ always() && needs.check.result != 'success' }}"
 
 // siteCheckCron matches a cron entry that runs once a day: a fixed minute and
 // hour, every day of every month.
@@ -36,7 +43,6 @@ var (
 		`expected="${tags[-1]}"`,
 		`printf '%s\n' "${tags[@]}" > "${RUNNER_TEMP}/tags.txt"`,
 		`anchor="$(git log -1 --format=%cI "${expected}")"`,
-		`echo "tag=${expected}" >> "${GITHUB_OUTPUT}"`,
 		`echo "anchor=${anchor}" >> "${GITHUB_OUTPUT}"`,
 	}, "\n")
 
@@ -48,17 +54,25 @@ var (
 		`echo "tag=${live}" >> "${GITHUB_OUTPUT}"`,
 	}, "\n")
 
+	siteCheckCommitRun = strings.Join([]string{
+		"set -euo pipefail",
+		`digest="$(git rev-parse "refs/tags/${TAG}^{commit}")"`,
+		`echo "digest=${digest}" >> "${GITHUB_OUTPUT}"`,
+	}, "\n")
+
 	siteCheckAttestationRun = strings.Join([]string{
 		"set -euo pipefail",
 		`mkdir -p "${RUNNER_TEMP}/bundle"`,
 		`gh release download "${TAG}" --repo timothymamo/shift2eu --pattern "shift2eu-site_${TAG}.tar.gz" --dir "${RUNNER_TEMP}/bundle"`,
-		`gh attestation verify "${RUNNER_TEMP}/bundle/shift2eu-site_${TAG}.tar.gz" --repo timothymamo/shift2eu --signer-workflow timothymamo/shift2eu/.github/workflows/release.yml --source-ref "refs/tags/${TAG}" --deny-self-hosted-runners`,
+		`gh attestation verify "${RUNNER_TEMP}/bundle/shift2eu-site_${TAG}.tar.gz" --repo timothymamo/shift2eu --signer-workflow timothymamo/shift2eu/.github/workflows/release.yml --source-ref "refs/tags/${TAG}" --source-digest "${DIGEST}" --deny-self-hosted-runners`,
 		`tar -xzf "${RUNNER_TEMP}/bundle/shift2eu-site_${TAG}.tar.gz" -C "${RUNNER_TEMP}/bundle"`,
 	}, "\n")
 
 	siteCheckFullRun = strings.Join([]string{
 		"set -euo pipefail",
-		`go run ./ci/sitecheck -manifest "${RUNNER_TEMP}/bundle/manifest.json" -tags "${RUNNER_TEMP}/tags.txt"`,
+		`git show "refs/tags/${TAG}:site/records/hsts.json" > "${RUNNER_TEMP}/hsts.json"`,
+		`git show "refs/tags/${TAG}:site/records/preload.json" > "${RUNNER_TEMP}/preload.json"`,
+		`go run ./ci/sitecheck -manifest "${RUNNER_TEMP}/bundle/manifest.json" -tags "${RUNNER_TEMP}/tags.txt" -hsts-record "${RUNNER_TEMP}/hsts.json" -preload-record "${RUNNER_TEMP}/preload.json"`,
 	}, "\n")
 
 	siteCheckAlertRun = strings.Join([]string{
@@ -89,18 +103,28 @@ var siteCheckJobs = []releaseJob{
 				run: siteCheckLiveRun,
 			},
 			{
+				what: "the release's commit", name: "The release's commit", id: "commit",
+				env: []string{"TAG: ${{ steps.live.outputs.tag }}"},
+				run: siteCheckCommitRun,
+			},
+			{
 				what: "the attestation's check", name: "Verify the release's attestation",
 				env: []string{
 					"GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}",
 					"TAG: ${{ steps.live.outputs.tag }}",
+					"DIGEST: ${{ steps.commit.outputs.digest }}",
 				},
 				run: siteCheckAttestationRun,
 			},
-			{what: "the live check", name: "Check the live site", run: siteCheckFullRun},
+			{
+				what: "the live check", name: "Check the live site",
+				env: []string{"TAG: ${{ steps.live.outputs.tag }}"},
+				run: siteCheckFullRun,
+			},
 		},
 	},
 	{
-		key: "alert", name: "Alert", timeout: "10", needs: []string{"check"}, ifCond: "failure()",
+		key: "alert", name: "Alert", timeout: "10", needs: []string{"check"}, ifCond: siteCheckAlertIf,
 		permissions: map[string]string{"issues": "write"},
 		steps: []releaseStep{{
 			what: "the alert issue", name: "Open or comment on the alert issue",
@@ -134,11 +158,17 @@ var siteCheckJobs = []releaseJob{
 //     site-check job lists them (--merged refs/remotes/origin/main, vX.Y.Z
 //     alone), and the committer date (%cI) of the highest tag's commit;
 //     ci/sitecheck live-version with that anchor, passed through env:, and the bound
-//     SiteCheckWindow, its output re-checked against the tag list; the
-//     release download and gh attestation verify with the signer workflow,
-//     the tag's ref and no self-hosted runner, through GITHUB_TOKEN alone;
-//     and the full check against the bundle's manifest and the tag list;
-//   - alert needs check, runs if: failure(), holds issues: write alone, checks
+//     SiteCheckWindow, its output re-checked against the tag list; the tag's
+//     commit read with git rev-parse; the release download and gh
+//     attestation verify with the signer workflow, the tag's ref, that
+//     commit as --source-digest and no self-hosted runner, through
+//     GITHUB_TOKEN alone; and the full check against the bundle's manifest,
+//     the tag list and the HSTS and preload records read at the tag with
+//     git show, the tag passed through env:;
+//   - alert needs check, runs whenever the check did not succeed
+//     (always() && needs.check.result != 'success': a check past its
+//     timeout concludes cancelled, where failure() is false), holds
+//     issues: write alone, checks
 //     nothing out, creates the label "live site check" with --force, so a
 //     repository that lacks it still gets the issue, and then opens or
 //     comments on the one issue so labelled, assigned to timothymamo, with
@@ -275,7 +305,7 @@ func MinSiteCheckWindow(releasePlease, release []byte) (time.Duration, error) {
 		return 0, fmt.Errorf("release.yml: %w", err)
 	}
 
-	return total + chain + siteCheckHTMLMaxAge, nil
+	return total + chain + SiteCheckHTMLMaxAge, nil
 }
 
 // timedJob is a job's timeout and the jobs it needs.

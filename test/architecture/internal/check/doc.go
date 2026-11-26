@@ -129,19 +129,22 @@
 // closed schema read with the release workflow's reader: one daily schedule
 // and no other trigger, permissions: {} at the top, exactly a check job
 // (contents: read and attestations: read alone, no environment) and an alert
-// job (issues: write alone, if: failure()), every action pinned by commit and
-// every run: compared exactly and holding no ${{ }} expression. The check job
-// reads main's release tags as release.yml's site-check job reads them and
-// the committer date of the highest tag's commit, asks ci/sitecheck
-// live-version with that anchor, passed through env:, and the bound
-// SiteCheckWindow, verifies that release's attestation with the deploy's
-// flags and runs the full check against its manifest; the alert job creates
+// job (issues: write alone, run whenever the check did not succeed, a
+// cancelled check included), every action pinned by commit and every run:
+// compared exactly and holding no ${{ }} expression. The check job reads
+// main's release tags as release.yml's site-check job reads them and the
+// committer date of the highest tag's commit, asks ci/sitecheck live-version
+// with that anchor, passed through env:, and the bound SiteCheckWindow,
+// verifies that release's attestation with the deploy's flags and the tag's
+// commit as --source-digest, and runs the full check against its manifest
+// and the HSTS and preload records read at the tag; the alert job creates
 // the "live site check" label idempotently (--force), then opens or comments
 // on the one issue it labels with fixed text and the run's URL.
 // MinSiteCheckWindow derives the bound's floor from the workflows themselves:
 // release-please.yml's release-please and tag jobs, the longest needs: chain
 // of release.yml's jobs that ends at site-check, each at its timeout-minutes,
-// and the HTML's max-age.
+// and the HTML's max-age, SiteCheckHTMLMaxAge, which a test holds to
+// ci/sitecheck/internal/livecheck's MaxHTMLAge.
 //
 // AuditWorkflow holds the scheduled security audit's workflow,
 // .github/workflows/scheduled-security-audit.yml, to PRD #175 milestone 2 and
