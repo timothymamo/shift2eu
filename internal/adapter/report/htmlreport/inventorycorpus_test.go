@@ -14,13 +14,16 @@
 // They are also the corpus's regression test: TestHostileCorpusDecisions pins
 // which files load and which are refused, and why, so a new file cannot become
 // a refused one without a decision here; TestHostileCorpusReports pins what the
-// Markdown, JSON and HTML reports do with hostile text; and
-// FuzzInventoryDecoding runs the same path on arbitrary bytes, seeded with the
-// corpus, so the scheduled audit's fuzz step finds the decoder (ADR 0040).
+// Markdown, JSON and HTML reports do with hostile text; TestHostileInventoryNames
+// pins what they do with a hostile inventory file name, which is user-controlled
+// too (issue #671); and FuzzInventoryDecoding runs the same path on arbitrary
+// bytes and an arbitrary name, seeded with the corpus and with hostile names, so
+// the scheduled audit's fuzz step finds the decoder and the renderers (ADR 0040).
 package htmlreport_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
@@ -98,7 +101,7 @@ var corpusDecisions = []corpusDecision{
 	},
 	{
 		file: "length-limits.json",
-		why:  "every free-text value exactly text.MaxLen (2048) bytes, of markup characters: < in a raw type, | in a region, ` in a workload",
+		why:  "every free-text value exactly text.MaxLen (2048) bytes, five of them: the source a run of s, the ID a run of i, the raw type a run of <, the region a run of | and the workload a run of backticks",
 	},
 	{
 		file: "markdown-metacharacters.json",
@@ -203,6 +206,132 @@ var corpusDecisions = []corpusDecision{
 	},
 }
 
+// nameInventory is the inventory the file-name cases assess: one sized and used
+// compute instance, so a report shows every section beside the name it shows, and
+// no hostility of its own, so a golden's only difference from its neighbour is the
+// name line. Every value is sanitised (CLAUDE.md rule 2).
+const nameInventory = `{
+  "schemaVersion": 2,
+  "source": "aws",
+  "resources": [
+    {
+      "id": "i-0123456789abcdef0",
+      "rawType": "AWS::EC2::Instance",
+      "category": "compute.vm",
+      "region": "eu-west-1",
+      "size": { "vcpus": 2, "memoryGiB": 8, "storageGiB": 100, "count": 1 },
+      "usage": { "hoursPerMonth": 730 }
+    }
+  ]
+}`
+
+// inventoryNameCase is one inventory file name a run is asked to report on,
+// and what it holds.
+type inventoryNameCase struct {
+	// slug names the case's golden files; it is never the name itself, which
+	// holds characters a file path does not.
+	slug string
+	// name is the file name as the CLI hands it on: filepath.Base of the path it
+	// was given, so a name that is not a base name reaches a run through another
+	// caller alone.
+	name string
+	// why says what the name holds and, for a name a run refuses, which check
+	// stops it.
+	why string
+	// wantErr is the sentinel a run must refuse the name with; nil for a name a
+	// report must show.
+	wantErr error
+}
+
+// hostileInventoryNames are the inventory file names the three reports are held
+// to. The name is user-controlled, it is whatever the file a run is given is
+// called, and every report shows it: the Markdown and HTML reports as a code
+// span and a code element in their header, the JSON document as its
+// "inventoryName" string.
+//
+// A name a report must show is one analysis.ReportMeta accepts: valid free text
+// (text.Validate) of at most text.MaxLen bytes that is a base name, with no '/'
+// and no '\' and not "." or "..". The goldens under
+// testdata/hostile-inventory-names/ show what each format does with it.
+//
+// A name a run refuses is refused by ReportMeta's checks before any port is
+// called, so it never reaches a renderer, an assessment or a file: the line
+// breaks, control, format and separator characters, and the lengths text.Validate
+// refuses, and the paths, separators, "." and ".." the base-name rule refuses.
+// The Markdown reporter's and the HTML reporter's escaping of what does reach
+// them is pinned by the goldens above and by FuzzInventoryDecoding, which fuzzes
+// the name too.
+var hostileInventoryNames = []inventoryNameCase{
+	{
+		slug: "markdown-metacharacters",
+		name: "| a | *b* _c_ `d` #e [f](g) ~h~ !.json",
+		why:  "Markdown metacharacters (| * _ ` # [ ] ( ) ~ !) in a name the Markdown report shows as a code span",
+	},
+	{
+		slug: "html-metacharacters",
+		name: `<img src=x onerror=alert("example.com")>&'"&.json`,
+		why:  "HTML metacharacters (< > & \" ') and an attribute-injection payload in a name the HTML report shows in a code element",
+	},
+	{
+		slug: "unicode-lookalikes",
+		name: "\u0430ws-\u0435\u0301\u0432\u0440\u043e\u043f\u0430\u00a0.json",
+		why:  "Cyrillic homoglyphs, a combining mark and a no-break space: Unicode that only looks hostile and that text.Validate accepts",
+	},
+	{
+		slug: "longest",
+		name: strings.Repeat("a", text.MaxLen-len(".json")) + ".json",
+		why:  "a name of exactly text.MaxLen (2048) bytes, the longest text.Validate accepts",
+	},
+	{
+		slug:    "line-break",
+		name:    "a\nb.json",
+		why:     "a line break, a control character text.Validate refuses, so no name can start a line of a report",
+		wantErr: analysis.ErrInvalidReportMeta,
+	},
+	{
+		slug:    "bidi-override",
+		name:    "inv\u202enosj.json",
+		why:     "a right-to-left override (U+202E), a format character text.Validate refuses",
+		wantErr: analysis.ErrInvalidReportMeta,
+	},
+	{
+		slug:    "zero-width",
+		name:    "inv\u200bentory.json",
+		why:     "a zero-width space (U+200B), a format character text.Validate refuses",
+		wantErr: analysis.ErrInvalidReportMeta,
+	},
+	{
+		slug:    "too-long",
+		name:    strings.Repeat("a", text.MaxLen) + ".json",
+		why:     "a name longer than text.MaxLen, refused by text.Validate",
+		wantErr: analysis.ErrInvalidReportMeta,
+	},
+	{
+		slug:    "parent-directory",
+		name:    "../inventory.json",
+		why:     "a relative path, refused by the base-name rule",
+		wantErr: analysis.ErrInvalidReportMeta,
+	},
+	{
+		slug:    "absolute-path",
+		name:    "/etc/inventory.json",
+		why:     "an absolute path, refused by the base-name rule",
+		wantErr: analysis.ErrInvalidReportMeta,
+	},
+	{
+		slug:    "windows-path",
+		name:    `C:\data\inventory.json`,
+		why:     "a Windows path, refused by the base-name rule on every OS, so a report shows no directory whatever built the name",
+		wantErr: analysis.ErrInvalidReportMeta,
+	},
+	{
+		slug:    "closing-tag",
+		name:    "<script>alert(1)</script>.json",
+		why:     "a script element's closing tag, refused by the base-name rule because its '/' is a path separator: a file whose name holds one cannot reach a report, whatever the report would do with it",
+		wantErr: analysis.ErrInvalidReportMeta,
+	},
+}
+
 // TestHostileCorpusDecisions pins what the decoder does with every file of the
 // audit's hostile corpus: the files that load, and the sentinel each refusal
 // wraps. It also pins that corpusDecisions lists every JSON file the corpus
@@ -259,6 +388,10 @@ func TestHostileCorpusDecisions(t *testing.T) {
 // of it reaches a report as markup. checkReport holds each report to its
 // format's rule besides the golden, so a golden updated over unescaped output
 // fails here too.
+//
+// Each file is decoded once and its inventory rendered three times: the decoder's
+// output is the same on every call (the inventory-file adapter's contract), so
+// the one decode is the decode each of the three runs would have made.
 func TestHostileCorpusReports(t *testing.T) {
 	t.Parallel()
 
@@ -272,11 +405,16 @@ func TestHostileCorpusReports(t *testing.T) {
 
 			data := readHostileCorpus(t, tc.file)
 
+			inv, err := inventoryfile.FromBytes(data).Inventory(t.Context())
+			if err != nil {
+				t.Fatalf("Inventory() refused a corpus file that must load: %v (%s)", err, tc.why)
+			}
+
 			for _, format := range reportFormats() {
 				t.Run(format.name, func(t *testing.T) {
 					t.Parallel()
 
-					got, err := renderedReport(t, tc.file, data, scaleway.New(), format.newReporter())
+					got, err := renderedReport(t, tc.file, inv, scaleway.New(), format.newReporter())
 					if err != nil {
 						t.Fatalf("%s report of an inventory that loads returned unexpected error: %v", format.name, err)
 					}
@@ -290,21 +428,76 @@ func TestHostileCorpusReports(t *testing.T) {
 	}
 }
 
-// FuzzInventoryDecoding runs the decoder on arbitrary bytes: whatever it is
-// given, it never panics, and a refusal is a controlled error, one line that
-// wraps a sentinel. Every inventory it accepts is assessed against all three
-// embedded targets, with estimates on, and rendered by all three reporters
-// without an error, and what they write is valid UTF-8: the HTML fragment opens
-// no element no reporter writes, the Markdown tables stay whole, and the JSON
-// document is valid and holds no raw markup character.
+// TestHostileInventoryNames pins what the three reports do with the inventory
+// file's base name, which is user-controlled too: every name a run accepts is
+// rendered by all three reporters, against the Scaleway target with estimates
+// on, and held to its golden under testdata/hostile-inventory-names/ (run the
+// test with -update to accept a change); every name a run refuses is refused
+// with the report metadata's sentinel before anything is written.
+//
+// The goldens are where the escaping of a name shows: Markdown and HTML must
+// escape it where they write it as a value, and the JSON document must encode
+// it, so no name a caller can give a run reaches a report as markup.
+func TestHostileInventoryNames(t *testing.T) {
+	t.Parallel()
+
+	inv, err := inventoryfile.FromBytes([]byte(nameInventory)).Inventory(t.Context())
+	if err != nil {
+		t.Fatalf("Inventory() refused the inventory the file-name cases assess: %v", err)
+	}
+
+	for _, tc := range hostileInventoryNames {
+		t.Run(tc.slug, func(t *testing.T) {
+			t.Parallel()
+
+			for _, format := range reportFormats() {
+				t.Run(format.name, func(t *testing.T) {
+					t.Parallel()
+
+					got, err := renderedReport(t, tc.name, inv, scaleway.New(), format.newReporter())
+					if tc.wantErr != nil {
+						checkRefusedName(t, tc.name, got, err)
+
+						return
+					}
+
+					if err != nil {
+						t.Fatalf("%s report of the inventory name %q returned unexpected error: %v (%s)",
+							format.name, tc.name, err, tc.why)
+					}
+
+					checkReport(t, format.name, got)
+
+					if format.name == "markdown" {
+						checkNameLine(t, tc.name, got)
+					}
+
+					testutil.Golden(t, filepath.Join("testdata", "hostile-inventory-names", tc.slug+"."+format.name+".golden"), got)
+				})
+			}
+		})
+	}
+}
+
+// FuzzInventoryDecoding runs the decoder on arbitrary bytes and the reporters on
+// an arbitrary inventory file name: whatever it is given, the decoder never
+// panics, and a refusal is a controlled error, one line that wraps a sentinel.
+// Every inventory it accepts is assessed against all three embedded targets,
+// with estimates on, and rendered by all three reporters without an error, and
+// what they write is valid UTF-8: the HTML fragment opens no element no reporter
+// writes, the Markdown tables stay whole and the Markdown report shows the name
+// in a code span, and the JSON document is valid and holds no raw markup
+// character. A name a run refuses is refused with the report metadata's
+// sentinel, in one line and before anything is written.
 //
 // Its seed corpus is the audit's hostile corpus and the inventory-file adapter's
-// version 1 and version 2 fixtures, so a plain run of this package's tests runs
-// them all as subtests, and the scheduled audit's fuzz step fuzzes the decoder
+// version 1 and version 2 fixtures, under a plain file name, and the name cases
+// under their own names, so a plain run of this package's tests runs them all as
+// subtests, and the scheduled audit's fuzz step fuzzes the decoder and the name
 // from them (ADR 0040, row 14).
 func FuzzInventoryDecoding(f *testing.F) {
 	for _, name := range hostileCorpusFiles(f) {
-		f.Add(readHostileCorpus(f, name))
+		f.Add(readHostileCorpus(f, name), "inventory.json")
 	}
 
 	for _, name := range []string{"valid.json", "valid-v2.json"} {
@@ -313,11 +506,21 @@ func FuzzInventoryDecoding(f *testing.F) {
 			f.Fatalf("read the inventory fixture %s: %v", name, err)
 		}
 
-		f.Add(data)
+		f.Add(data, "inventory.json")
 	}
 
-	f.Fuzz(func(t *testing.T, data []byte) {
-		if _, err := inventoryfile.FromBytes(data).Inventory(t.Context()); err != nil {
+	for _, tc := range hostileInventoryNames {
+		f.Add([]byte(nameInventory), tc.name)
+	}
+
+	f.Fuzz(func(t *testing.T, data []byte, name string) {
+		// The inventory is decoded once and the one inventory rendered nine times,
+		// once per target and format, as the CLI's nine runs would have decoded it
+		// once each: the decoder's output is the same on every call (the
+		// inventory-file adapter's contract), and assess and render, the other two
+		// stages of every run, run here as often as the CLI runs them.
+		inv, err := inventoryfile.FromBytes(data).Inventory(t.Context())
+		if err != nil {
 			checkControlledRefusal(t, err)
 
 			return
@@ -325,13 +528,18 @@ func FuzzInventoryDecoding(f *testing.F) {
 
 		for _, target := range embeddedTargets() {
 			for _, format := range reportFormats() {
-				got, err := renderedReport(t, "inventory.json", data, target.source, format.newReporter())
+				got, err := renderedReport(t, name, inv, target.source, format.newReporter())
 				if err != nil {
-					t.Fatalf("%s: the %s report of an inventory the decoder accepted returned unexpected error: %v",
-						target.key, format.name, err)
+					checkRefusedName(t, name, got, err)
+
+					return
 				}
 
 				checkReport(t, format.name, got)
+
+				if format.name == "markdown" {
+					checkNameLine(t, name, got)
+				}
 			}
 		}
 	})
@@ -372,25 +580,91 @@ func reportFormats() []reportFormat {
 	}
 }
 
-// renderedReport runs the whole assess path of one target on data, an inventory
-// document the decoder accepts, and returns what rep wrote: the inventory is
-// read by the inventory-file adapter, the catalog is the target's embedded
-// snapshot, and estimates are on, as they are by default. The error is whatever
-// RunWith returned.
-func renderedReport(tb testing.TB, name string, data []byte, cat analysis.CatalogSource, rep analysis.Reporter) ([]byte, error) {
+// decodedInventory is an analysis.InventorySource over an inventory already
+// decoded, so the decoder runs once for a document assessed and rendered many
+// times over. The CLI's run reads it through inventoryfile, which decodes on
+// every call; the adapter's contract fixes that the same document decodes to the
+// same inventory, so the nine runs of one fuzz input share the one decode the
+// CLI would have made for each of them.
+type decodedInventory struct{ inv inventory.Inventory }
+
+// Inventory returns the decoded inventory: it is the decoder's own result, and
+// a document the decoder refused never reaches a run.
+func (d decodedInventory) Inventory(context.Context) (inventory.Inventory, error) {
+	return d.inv, nil
+}
+
+// renderedReport runs the whole assess path of one target on inv, the inventory
+// of a document the decoder accepted, and returns what rep wrote with name as the
+// report's inventory name: the inventory source is the decoded inventory
+// (decodedInventory), the catalog is the target's embedded snapshot, and
+// estimates are on, as they are by default. The bytes are what rep wrote before
+// an error, if it returned one; the error is whatever RunWith returned.
+func renderedReport(tb testing.TB, name string, inv inventory.Inventory, cat analysis.CatalogSource, rep analysis.Reporter) ([]byte, error) {
 	tb.Helper()
 
-	a, err := analysis.New(inventoryfile.FromBytes(data), cat, rep)
+	a, err := analysis.New(decodedInventory{inv: inv}, cat, rep)
 	if err != nil {
-		tb.Fatalf("analysis.New() with the inventory %s returned unexpected error: %v", name, err)
+		tb.Fatalf("analysis.New() with the inventory name %q returned unexpected error: %v", name, err)
 	}
 
 	var out bytes.Buffer
 	if err := a.RunWith(tb.Context(), &out, analysis.ReportMeta{InventoryName: name}, analysis.Options{Estimate: true}); err != nil {
-		return nil, err
+		return out.Bytes(), err
 	}
 
 	return out.Bytes(), nil
+}
+
+// checkRefusedName fails unless err is a run's refusal of the inventory name
+// name, and the run wrote nothing: a name that is not valid free text, is a path
+// rather than a base name or is longer than text.MaxLen is refused by the report
+// metadata's check before any port is called, in one line, so no reporter,
+// assessment or file ever sees it. Any other error, or a refusal that leaves part
+// of a report behind, is the failure.
+func checkRefusedName(t *testing.T, name string, got []byte, err error) {
+	t.Helper()
+
+	if !errors.Is(err, analysis.ErrInvalidReportMeta) {
+		t.Fatalf("a run with the inventory name %q returned the error %v, want a refusal wrapping %v",
+			name, err, analysis.ErrInvalidReportMeta)
+	}
+
+	if msg := err.Error(); strings.ContainsAny(msg, "\r\n") {
+		t.Fatalf("the refusal of the inventory name %q is more than one line: %q", name, msg)
+	}
+
+	if len(got) != 0 {
+		t.Fatalf("a run refused the inventory name %q and wrote %d bytes of report anyway:\n%s", name, len(got), got)
+	}
+}
+
+// checkNameLine fails unless a Markdown report shows name, a name the run
+// accepted, as a code span on its inventory line: the third line of the report,
+// after the title and the blank line under it, which is where the reporter writes
+// the name and the only place it writes it. The code span is the reporter's
+// escaping of a value; a name that is valid free text cannot end the line or the
+// span, since text.Validate refuses the line breaks and separators a renderer
+// reads as one. An empty name has no line at all, so it is not checked.
+func checkNameLine(t *testing.T, name string, got []byte) {
+	t.Helper()
+
+	if name == "" {
+		return
+	}
+
+	const prefix = "- Inventory file: `"
+
+	lines := strings.Split(string(got), "\n")
+	if len(lines) < 3 {
+		t.Fatalf("the Markdown report of the inventory name %q has %d lines, want at least a title, a blank line and the inventory line:\n%s",
+			name, len(lines), got)
+	}
+
+	if line := lines[2]; !strings.HasPrefix(line, prefix) || !strings.HasSuffix(line, "`") || len(line) <= len(prefix) {
+		t.Fatalf("line 3 of the Markdown report of the inventory name %q is %q, want the name shown in a code span on the inventory line:\n%s",
+			name, line, got)
+	}
 }
 
 // checkReport fails unless a report of an inventory that loads is text a reader

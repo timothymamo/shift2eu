@@ -32,7 +32,12 @@ as Markdown, as the version 3 JSON document and as the site's HTML fragment, and
 goldens under `internal/adapter/report/htmlreport/testdata/hostile-corpus/` (update them with `-update`).
 `FuzzInventoryDecoding`, in the same package, seeds its corpus from these files and the inventory-file
 adapter's version 1 and version 2 fixtures, and holds the same path for arbitrary bytes: no panic, a
-refusal that is controlled, and an accepted inventory that assesses and renders without an error.
+refusal that is controlled, and an accepted inventory that assesses and renders without an error. The
+inventory file's name is user-controlled too, so it fuzzes that as well (issue #671): a name a run
+accepts is escaped by each report, and a name it refuses is refused with the report metadata's sentinel
+before anything is written. `TestHostileInventoryNames`, in the same package, pins both halves, the
+accepted one against the goldens under
+`internal/adapter/report/htmlreport/testdata/hostile-inventory-names/`.
 
 Two kinds of hostility are refused wherever they appear, so no file can carry them and load: any
 character `text.Validate` refuses (control characters, the bidi overrides and other format characters,
@@ -46,7 +51,7 @@ checked, not read as free text: three upper-case ASCII letters. The format has n
 | File | Hostility |
 |---|---|
 | `html-metacharacters.json` | `<`, `>`, `&`, `"` and `'` in the source and in every free-text field: script, style and attribute-injection payloads |
-| `length-limits.json` | every free-text value exactly 2048 (`text.MaxLen`) bytes, of markup characters: `<` in a raw type, `\|` in a region, a backtick in a workload |
+| `length-limits.json` | every free-text value exactly 2048 (`text.MaxLen`) bytes, five of them: the source a run of `s`, the ID a run of `i`, the raw type a run of `<`, the region a run of `\|` and the workload a run of `` ` `` |
 | `markdown-metacharacters.json` | `\|`, `*`, `_`, backtick, `#`, `[`, `]`, `(`, `)`, `~`, `\`, `!` in the source and in every free-text field: table rows, code fences, links, images, headings, blockquotes, lists, footnotes and reference definitions |
 | `markup-injection.json` | Markdown and HTML syntax in IDs, raw types, workloads and a relation's target |
 | `number-limits.json` | version 2 numbers at the ends of every range the domain accepts, from 0 and 1e-9 to the maxima of a size, a usage and a monthly cost |
