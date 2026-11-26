@@ -63,6 +63,7 @@ AP="$(sed -n 's/^admin_principal *= *"\(.*\)".*/\1/p' infra/site/terraform.tfvar
 [ -n "$ME" ] && [ -n "$AP" ] && [ "$AP" = "$ME" ] && echo "PASS admin_principal is $ME" || echo "FAIL admin_principal is '$AP', \$ME is '$ME'"
 # FAIL: an empty $ME: R0's scw lines again; an empty admin_principal (or no terraform.tfvars): set admin_principal = "<the value of $ME>" in infra/site/terraform.tfvars (R2) before any plan; a wrong one locks you out of the bucket
 # R7's throwaway project left by an earlier shell: the project and its bucket are both named shift2eu-r7-probe-*
+# Not yet run in this form, so checked against --help on first use: the scw account project list line below
 scw account project list -o json | jq -r '.[] | select(.name | startswith("shift2eu-r7-probe-")) | .id + " " + .name'   # PASS: no line
 # FAIL a line "<project ID> shift2eu-r7-probe-...": a leftover; the leftover-project block below, then R0 again
 ```
@@ -72,6 +73,7 @@ a new shell runs it straight after R0, with your key's default project usually s
 
 ```bash
 own() { AWS_ACCESS_KEY_ID="$SCW_ACCESS_KEY" AWS_SECRET_ACCESS_KEY="$SCW_SECRET_KEY" aws "$@"; }   # as in R7 step 7
+# Not yet run in this form, so checked against --help on first use: both scw account project list lines, the scw iam api-key get ... default_project_id check and scw account project delete
 read -r XP XB < <(scw account project list -o json | jq -r '.[] | select(.name | startswith("shift2eu-r7-probe-")) | .id + " " + .name')
 echo "$XP $XB"                                    # PASS: R0's listing's first line; with more than one, this block once per line (R0 again lists the next)
 # FAIL empty: no leftover; nothing to do here
@@ -364,6 +366,7 @@ probe s3api put-bucket-encryption --bucket "$CB" --server-side-encryption-config
 # 7. Outside the project
 # A throwaway project with one empty bucket, made with your own key (own; the deploy key stays in AWS_*). Your key's S3 calls go to its default project, so it reaches that bucket only with its default project switched there
 own() { AWS_ACCESS_KEY_ID="$SCW_ACCESS_KEY" AWS_SECRET_ACCESS_KEY="$SCW_SECRET_KEY" aws "$@"; }
+# Not yet run in this form, so checked against --help on first use: scw account project create, the scw iam api-key get ... default_project_id check, scw account project delete and the scw account project list after it, and get-bucket-location
 XB="shift2eu-r7-probe-$(date -u +%Y%m%d%H%M)"; XP="$(scw account project create name="$XB" -o json | jq -r '.id')"; echo "$XB $XP"   # PASS: the name and a project ID (a UUID), not empty and not null
 # FAIL an empty value or "null": the project was not made (or scw's JSON changed shape); stop, switch nothing, and look for a project named shift2eu-r7-probe-* (R0's last listing and its leftover-project block) before you run step 7 again
 [[ $XP =~ ^[0-9a-f-]{36}$ ]] && scw iam api-key update "$SCW_ACCESS_KEY" default-project-id="$XP"
@@ -378,7 +381,7 @@ own s3api create-bucket --bucket "$XB"            # PASS: prints its Location
 own s3api get-bucket-location --bucket "$XB" --query LocationConstraint --output text   # PASS: the value of $REGION (checked against --help on first use)
 # FAIL another region: do not probe; run the cleanup lines from own s3api list-objects-v2 --bucket "$XB" (below "The throwaway project, your own key still switched to it") on, with the key still on "$XP"
 own s3api list-buckets --query 'Buckets[].Name'   # PASS: exactly ["<the value of $XB>"]
-# FAIL [], or the site's bucket, "$CB" or another bucket next to "$XB": "$XB" landed in another project; do not probe. Switch back to "$P" (the switch-back lines below), run own s3api delete-bucket --bucket "$XB" there, check that step's listing, then delete the project (its delete lines below)
+# FAIL [], or the site's bucket, "$CB" or another bucket next to "$XB": "$XB" landed in another project, and which one is not known yet; do not probe. Search for it: switch back to "$P" (the switch-back lines below, with their bounded wait), and their listing shows whether "$XB" is in the site's project (listed: its FAIL line deletes it there). Not listed there: delete the project (its delete lines below), then step 8, and once step 8's switch to the admin project has applied, look in that project's listing (own s3api list-buckets --query 'Buckets[].Name'; "$XB" listed: own s3api delete-bucket --bucket "$XB", it is empty); not there either, or the project delete refused: R0 and its leftover-project block
 xprobe s3api put-object --bucket "$XB" --key canary/probe.txt --body "$W/probe.txt"   # PASS: "PASS 403" or "PASS NoSuchBucket"
 probe s3api list-buckets
 # The state bucket (your admin project): the deploy key may neither read, list nor write it
