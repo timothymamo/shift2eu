@@ -13,10 +13,17 @@
 //
 // It reads its other inputs from the step's environment through one
 // os.LookupEnv: CLAUDE_CODE_OAUTH_TOKEN, SHIFT2EU_AUDIT_CANARY (64 lower-case
-// hex characters), GITHUB_ENV and GITHUB_STEP_SUMMARY, and ANTHROPIC_API_KEY
-// only to refuse a step that holds it, which it checks first, before the
-// command line and the other inputs, so such a step exits 3 whatever else is
-// wrong. It reads no other variable. It then
+// hex characters), GITHUB_ENV, GITHUB_PATH, GITHUB_OUTPUT, GITHUB_STATE and
+// GITHUB_STEP_SUMMARY, and ANTHROPIC_API_KEY only to refuse a step that holds
+// it, which it checks first, before the command line and the other inputs, so
+// such a step exits 3 whatever else is wrong. It reads no other variable. Of
+// the runner's file commands it reads the paths only, never their content, and
+// refuses with the usage exit a step where GITHUB_ENV, GITHUB_PATH,
+// GITHUB_OUTPUT or GITHUB_STATE is unset, or where any of them, or the step
+// summary when set, is not in the GITHUB_ENV file's own directory
+// (filepath.Dir of the cleaned path): the audit digests that one directory
+// across its run (ADR 0040, issues #615, #614), so a file command elsewhere
+// would fall outside the digest. It then
 // takes ci/internal/audit's six steps, the real ones with audit.Observe, under
 // the root / (its run function takes the root, so a test runs the whole
 // launcher under a temporary directory), prints the run's one

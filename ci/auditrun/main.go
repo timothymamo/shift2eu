@@ -16,6 +16,9 @@ const (
 	envToken       = "CLAUDE_CODE_OAUTH_TOKEN" //nolint:gosec // G101: the variable's name, not a credential
 	envCanary      = "SHIFT2EU_AUDIT_CANARY"
 	envGitHubEnv   = "GITHUB_ENV"
+	envGitHubPath  = "GITHUB_PATH"
+	envGitHubOut   = "GITHUB_OUTPUT"
+	envGitHubState = "GITHUB_STATE"
 	envStepSummary = "GITHUB_STEP_SUMMARY"
 	envAPIKey      = "ANTHROPIC_API_KEY" //nolint:gosec // G101: the variable's name, not a credential
 )
@@ -166,6 +169,10 @@ func inputs(args []string, getenv func(string) (string, bool), stderr io.Writer)
 		return audit.Inputs{}, "", fmt.Errorf("%s is not set", envGitHubEnv)
 	}
 
+	if err := checkFileCommands(getenv, gitHubEnv, stepSummary); err != nil {
+		return audit.Inputs{}, "", err
+	}
+
 	return audit.Inputs{
 		Token:       token,
 		Canary:      canary,
@@ -174,6 +181,33 @@ func inputs(args []string, getenv func(string) (string, bool), stderr io.Writer)
 		Tarball:     *tarball,
 		Integrity:   *integrity,
 	}, *resultOut, nil
+}
+
+// checkFileCommands refuses a step whose $GITHUB_PATH, $GITHUB_OUTPUT or
+// $GITHUB_STATE is unset, or whose file commands - those three and the step
+// summary, when set - are not all in the $GITHUB_ENV file's own directory
+// (audit.FileCommandDir): the audit digests that directory alone, so a file
+// command elsewhere would fall outside the digest (issues #615, #614). It reads
+// the paths only, never the files' content.
+func checkFileCommands(getenv func(string) (string, bool), gitHubEnv, stepSummary string) error {
+	dir := audit.FileCommandDir(gitHubEnv)
+
+	for _, name := range []string{envGitHubPath, envGitHubOut, envGitHubState} {
+		path, _ := getenv(name)
+		if path == "" {
+			return fmt.Errorf("%s is not set", name)
+		}
+
+		if audit.FileCommandDir(path) != dir {
+			return fmt.Errorf("%s is not in the %s file's directory", name, envGitHubEnv)
+		}
+	}
+
+	if stepSummary != "" && audit.FileCommandDir(stepSummary) != dir {
+		return fmt.Errorf("%s is not in the %s file's directory", envStepSummary, envGitHubEnv)
+	}
+
+	return nil
 }
 
 // isCanary reports whether s is 64 lower-case hex characters.
