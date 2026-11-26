@@ -246,8 +246,10 @@ func TestNamespaceMayFollow(t *testing.T) {
 		// Each byte runs twice: after another byte, where the rule's "/" branch
 		// sees a preceding byte that is no "/", "\\" or ":", and as the first
 		// byte of the text, where it sees none. The byte is a byte of the text,
-		// not a rune: string(b) of a value above 0x7f is the UTF-8 encoding of a
-		// rune, whose last byte is a control byte or another one.
+		// not a rune, which is why the span is string([]byte{b}) and not
+		// string(b): string(b) is the UTF-8 encoding of the rune b, two bytes
+		// for a value above 0x7f, while the rule reads the bytes of before and
+		// the byte before them.
 		for _, before := range []string{"x" + span, span} {
 			if got := review.NamespaceMayFollow(before); got != accepted[b] {
 				t.Errorf("NamespaceMayFollow(%q) = %t, want %t, from the shared list's bytes a namespace may follow (byte %#02x)",
