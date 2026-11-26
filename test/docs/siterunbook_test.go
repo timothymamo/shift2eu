@@ -990,8 +990,10 @@ type r7Step7Command struct {
 // 5 on PR #645): the maintainer's own key is switched to the throwaway project and the switch waited for before the
 // listing that shows the project's bucket empty, the bucket is created only after that listing - created earlier it
 // could land in the site's project - and the cleanup that deletes the bucket and switches the key back to the site's
-// project runs before step 8's switch to the admin project, which pays for both: the delete needs a key still on the
-// throwaway project, and the restore that follows needs the site's.
+// project runs before step 8's restores, which need it back there: the delete needs a key still on the throwaway
+// project, and the restores that follow need the site's. The step is anchored on step 8's first restore rather than on
+// step 8's last command (the switch to the admin project), so a switch back moved below the restores but still above
+// that last command is reported too (issue #650's review): the restores run before the switch to the admin project.
 var r7Step7Order = []r7Step7Command{
 	{
 		name:      "the key switched to the throwaway project",
@@ -1018,17 +1020,23 @@ var r7Step7Order = []r7Step7Command{
 		fragments: []string{"scw iam api-key update", `default-project-id="$P"`},
 	},
 	{
-		name:      "the switch to the admin project step 8's restore needs",
+		name:      "step 8's first restore, which needs the key back on the site's project",
+		fragments: []string{"aws s3api put-bucket-acl", `--bucket "$B"`},
+	},
+	{
+		name:      "the switch to the admin project, after step 8's restores",
 		fragments: []string{"scw iam api-key update", `default-project-id="$ADMIN_PROJECT"`},
 	},
 }
 
 // TestSiteRunbookR7Step7Order pins the order of R7's step 7 (issue #650): the key is switched to the throwaway project
 // and the switch waited for before the empty listing, the bucket is created after that listing, and the cleanup - the
-// bucket's deletion and the switch back to the site's project - comes before the switch to the admin project. Each step
-// is found by a fragment of its own command line, so the maintainer's wording and the surrounding comments may change;
-// the failures name the pair that is out of order. The swapped cases run the same check on a copy of the section whose
-// two steps are exchanged, so the check is shown to fail on an order the runbook must not have.
+// bucket's deletion and the switch back to the site's project - comes before step 8's restores, the first of which (the
+// site bucket's ACL) is the last step anchored, and step 8's switch to the admin project comes after them. Each step is
+// found by a fragment of its own command line, so the maintainer's wording and the surrounding comments may change; the
+// failures name the pair that is out of order. The swapped cases run the same check on a copy of the section whose two
+// steps are exchanged, so the check is shown to fail on an order the runbook must not have - a switch back moved below
+// step 8's first restore included, which an anchor on step 8's last command would let pass (issue #650's review).
 func TestSiteRunbookR7Step7Order(t *testing.T) {
 	t.Parallel()
 
@@ -1043,6 +1051,11 @@ func TestSiteRunbookR7Step7Order(t *testing.T) {
 			name: "the runbook's own order",
 		},
 		{
+			name:    "the wait moved after the empty listing",
+			swapped: [2]int{2, 3},
+			want:    []string{"(3) the throwaway project's bucket listing, shown empty comes before (2) the wait for the switch to apply"},
+		},
+		{
 			name:    "create-bucket moved before the empty listing",
 			swapped: [2]int{3, 4},
 			want:    []string{"(4) create-bucket in the throwaway project comes before (3) the throwaway project's bucket listing, shown empty"},
@@ -1053,9 +1066,14 @@ func TestSiteRunbookR7Step7Order(t *testing.T) {
 			want:    []string{"(6) the switch back to the site's project comes before (5) delete-bucket, the cleanup"},
 		},
 		{
-			name:    "the switch to the admin project moved before the switch back",
+			name:    "the switch back moved below step 8's first restore",
 			swapped: [2]int{6, 7},
-			want:    []string{"(7) the switch to the admin project step 8's restore needs comes before (6) the switch back to the site's project"},
+			want:    []string{"(7) step 8's first restore, which needs the key back on the site's project comes before (6) the switch back to the site's project"},
+		},
+		{
+			name:    "the switch to the admin project moved before step 8's first restore",
+			swapped: [2]int{7, 8},
+			want:    []string{"(8) the switch to the admin project, after step 8's restores comes before (7) step 8's first restore, which needs the key back on the site's project"},
 		},
 	}
 
@@ -1074,7 +1092,7 @@ func TestSiteRunbookR7Step7Order(t *testing.T) {
 			}
 
 			if got := r7Step7OutOfOrder(numbers, r7Step7Order); !slices.Equal(got, tc.want) {
-				t.Errorf("%s: %s: the steps out of order are %q, want %q: the key is switched to the throwaway project and the switch waited for before the empty listing, the bucket is created only after it, and the cleanup - the bucket's deletion and the switch back to the site's project - runs before the switch to the admin project step 8's restore needs (issue #650, docs/adr/0042)",
+				t.Errorf("%s: %s: the steps out of order are %q, want %q: the key is switched to the throwaway project and the switch waited for before the empty listing, the bucket is created only after it, and the cleanup - the bucket's deletion and the switch back to the site's project - runs before step 8's restores, whose first command is the site bucket's ACL, and before step 8's switch to the admin project (issue #650, docs/adr/0042)",
 					siteRunbookPath, deployKeyHeading, got, tc.want)
 			}
 		})
