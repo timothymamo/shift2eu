@@ -278,13 +278,21 @@ both now (options 1 and 3 of the issue). The decision above stands; this adds a 
 - **The refusal covers the App's token folder and the marker.** The extension's file tools refuse
   `~/.config/shift2eu`, the folder of the agents App's token file `agents-app-token` (ADR 0031), as they
   refuse the deck's key directory: by resolved path (`~/`, absolute, `file://`) and anything under it, as an
-  ancestor of a `grep` or `find` (`~`, `~/.config`), by its spellings in any field, and a `glob` or
-  `pattern` naming the App's files (`agents-app`). The repository's `dev/agents-app-token.sh`, which mints
+  ancestor of a `grep` or `find` (`~`, `~/.config`), by its spellings in a `path` or `glob`, and a `glob`
+  naming the App's files (`agents-app`). A `grep` or `find` *pattern* may name the folder or the files: a
+  pattern is text the walk looks for, never a place it goes, and where the walk goes is its `path`, which
+  stays checked (round 3's review, finding S1). The repository's `dev/agents-app-token.sh`, which mints
   the token and holds none, stays readable. The list refuses any bash command naming the folder
-  (`\.config[/.]*/shift2eu\b`: the file, a glob, a `cd`, an `ls`) and any command naming the marker
-  `SHIFT2EU_PI_TESTER` (an `unset`, an empty assignment, `env -u`), since clearing it before a `bash -l`
-  would source `daemon.env` again. `test/architecture/pienvdenytoolcall_test.go` runs the extension's
-  `tool_call` handler in node against those calls.
+  (`\.config[/.]*/shift2eu\b`: the file, a glob, a `cd`, an `ls`), naming the token or identity file other
+  than as the script (`agents-app-(token|identity)($|[^.a-z])`: `find ~ -name agents-app-token`, a globbed
+  or quoted folder spelling, while `sed` or `shellcheck` of `dev/agents-app-token.sh` stays allowed), and
+  any command naming the marker `SHIFT2EU_PI_TESTER` (an `unset`, an empty assignment, `env -u`), since
+  clearing it before a `bash -l` would source `daemon.env` again. It also refuses starting a command with a
+  cleared or fresh environment, which drops the marker without naming it: `env -i`,
+  `env --ignore-environment`, `env -`, `exec` with an option holding `c`, `sudo -i` (also `-iu`,
+  `--login`) and `su -l`, `su -`, `su --login` (round 3's audit, finding SF-1).
+  `test/architecture/pienvdenytoolcall_test.go` runs the extension's `tool_call` handler in node against
+  those calls.
 - **The wrapper is project code.** `dev/pi-tester.sh` is reviewed and audited as such, like `.pi/`: a
   change to it changes what reaches the tester.
 
@@ -310,6 +318,18 @@ Consequences of the amendment:
   clearing the marker. A program the tester writes and runs can bypass both, and can clear the marker
   itself, since nothing but those patterns protects it. Separating them needs a separate uid or the egress
   stage.
+- The patterns are lexical, and a single bash command can still get past them: by quoting or globbing a
+  folder name the patterns do not foresee (`~/.conf''ig/shi*`), or through a symlink, since the file tools'
+  checks resolve `~`, `..` and the working directory but not symlinks (no `realpath`, round 3's audit,
+  finding N-2; left as is, a second layer). A login shell with a fresh environment drops the marker without
+  naming it (`exec -c bash -l`, `sudo -i`, `su -l`, `ssh localhost`): the common spellings are refused,
+  others (`ssh localhost`, an option order the patterns do not read) are not. The boundary is the separate
+  uid or the egress stage, not these patterns.
+- The refusal costs some work. A bash command that names `SHIFT2EU_PI_TESTER` at all is refused, even as
+  text: a bash `grep` for it, or a `git commit -m` whose message names it; the tester uses the grep tool and
+  `git commit -F` instead. The grep and find tools may search the repository for `agents-app` or the folder,
+  but not with a glob naming them or a path under, or above, the folder. The folder pattern's `\b` also
+  refuses a name such as `~/.config/shift2eu-other`, which is harmless.
 - The tester still reaches GitHub: the VM's `gh` (ADR 0031) reads the agents App's token from its file
   under `HOME`, not from the environment, so `gh` and `git push` keep working for it.
 - A variable the tester's tools turn out to need and the list lacks is absent until the script names it;
