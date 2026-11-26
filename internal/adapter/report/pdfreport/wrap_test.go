@@ -12,6 +12,7 @@ package pdfreport_test
 
 import (
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -114,34 +115,66 @@ func collectWrappedValue(tb testing.TB, file *testPDF, escaped string) wrappedVa
 		lineOf[i] = line
 	}
 
-	// The value's first line is the longest run that starts its escaped form: a
-	// short run that happens to start the same way is no evidence.
-	best, bestLen := -1, 0
+	// A drawing of the value starts at a run whose text starts its escaped form
+	// and ends where the escaped form ends. Several runs start the same way: a
+	// wrapped chunk that repeats the escaped form's first atoms starts it too,
+	// and a value drawn twice (in the title block and in About this report, say)
+	// starts twice. Only a whole drawing follows the escaped form to its end, so
+	// every such run is tried, the longest first because a value's first line is
+	// usually its longest, and the first drawing that reaches the end is the
+	// value.
+	var starts []int
 
 	for i, run := range runs {
-		if run.Text == "" {
-			continue
-		}
-
-		if strings.HasPrefix(escaped, run.Text) && len(run.Text) > bestLen {
-			best, bestLen = i, len(run.Text)
+		if run.Text != "" && strings.HasPrefix(escaped, run.Text) {
+			starts = append(starts, i)
 		}
 	}
 
-	if best < 0 {
+	if len(starts) == 0 {
 		tb.Fatalf("the PDF draws no run that starts the escaped value %q; its runs are:\n%s",
 			escaped, renderRuns(runs))
 	}
 
-	chunks := []string{runs[best].Text}
-	position := len(runs[best].Text)
-	lastLine := lineOf[best]
-	startX := runs[best].X
+	slices.SortStableFunc(starts, func(a, b int) int {
+		if longer := len(runs[b].Text) - len(runs[a].Text); longer != 0 {
+			return longer
+		}
+
+		return a - b
+	})
+
+	firstFailure := ""
+
+	for _, start := range starts {
+		chunks, followed, why := followValue(runs, lineOf, firstOfLine, escaped, start)
+		if followed {
+			return wrappedValue{chunks: chunks, joined: strings.Join(chunks, "")}
+		}
+
+		if firstFailure == "" {
+			firstFailure = why
+		}
+	}
+
+	tb.Fatalf("%s", firstFailure)
+
+	return wrappedValue{}
+}
+
+// followValue follows the drawing of escaped from the run at start, and reports
+// its lines and true, or false and why the drawing does not reach the value's
+// end.
+func followValue(runs []pdfTextRun, lineOf []int, firstOfLine []bool, escaped string, start int) ([]string, bool, string) {
+	chunks := []string{runs[start].Text}
+	position := len(runs[start].Text)
+	lastLine := lineOf[start]
+	startX := runs[start].X
 
 	for position < len(escaped) {
 		found := -1
 
-		for j := best + 1; j < len(runs); j++ {
+		for j := start + 1; j < len(runs); j++ {
 			if lineOf[j] <= lastLine {
 				continue
 			}
@@ -165,7 +198,7 @@ func collectWrappedValue(tb testing.TB, file *testPDF, escaped string) wrappedVa
 		}
 
 		if found < 0 {
-			tb.Fatalf("the value %q is drawn as %q on line %d and stops there: no later line at its column or at a line's start continues it; its runs are:\n%s",
+			return nil, false, fmt.Sprintf("the value %q is drawn as %q on line %d and stops there: no later line at its column or at a line's start continues it; its runs are:\n%s",
 				escaped, strings.Join(chunks, ""), lastLine+1, renderRuns(runs))
 		}
 
@@ -174,7 +207,7 @@ func collectWrappedValue(tb testing.TB, file *testPDF, escaped string) wrappedVa
 		lastLine = lineOf[found]
 	}
 
-	return wrappedValue{chunks: chunks, joined: strings.Join(chunks, "")}
+	return chunks, true, ""
 }
 
 // renderRuns renders the text runs for a failure, one per line.

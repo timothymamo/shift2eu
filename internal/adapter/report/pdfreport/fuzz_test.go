@@ -201,12 +201,21 @@ func FuzzReport(f *testing.F) {
 			file := checkPDFStructure(t, out)
 
 			escaped := pdfreport.EscapeValue(value)
-			if !strings.Contains(file.squashed(), squash(escaped)) {
+
+			// checkWrappedValue is the check for any value, wrapped or not: the
+			// text extracted for it, joined across its lines, is exactly its
+			// escaped form.
+			wrapped := checkWrappedValue(t, file, value)
+
+			// A value that fits one line is drawn as one run, so the document's
+			// squashed text holds its escaped form whole. A wider value wraps, as
+			// the PRD's Tables and page breaks requires, and squashing then puts
+			// a space between its lines: checkWrappedValue has already checked it
+			// line by line, so there is nothing left to look for here.
+			if len(wrapped.chunks) == 1 && !strings.Contains(file.squashed(), squash(escaped)) {
 				t.Fatalf("the %s field is not shown; the value's escaped form is %q and the report's text is:\n%s",
 					field.name, escaped, file.squashed())
 			}
-
-			checkWrappedValue(t, file, value)
 		}
 	})
 }
@@ -235,5 +244,9 @@ func fuzzSeeds() []string {
 		strings.Repeat("\u0416", 100),
 		strings.Repeat(`\`, 100),
 		strings.Repeat("😀", 40),
+		// Found by go test -fuzz: a value of several escape classes whose chunks
+		// differ in length, so a chunk after the first starts the escaped form
+		// and is the longest run that does.
+		"ЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖ\x960\x96ЖЖЖЖЖЖЖЖЖЖЖ\xd0 ЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖ\xd0 ЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖ000000000000000000000000",
 	}
 }
