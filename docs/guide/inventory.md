@@ -94,9 +94,12 @@ zones, resolvers, health checks and domain registrations are not one;
 DNS zone is a global resource: write it with no `region`. A
 resource that fits none of these categories is `unclassified` and keeps its `rawType`: it then shows
 up in the report as a blocker on every target, instead of disappearing from the assessment. The
-programs below do not classify into the seven categories ADR 0046 adds yet, nor into the two ADR 0047
-adds, nor into `network.dns` (they list those resources as `unclassified`, or not at all): until they
-do, set such a resource's category by hand.
+programs below classify into the seven categories ADR 0046 adds, on every source that has such a
+service: AWS and Azure into all seven, GCP into all but `database.mongodb` (its program classifies no
+GCP service as one; Firestore stays `unclassified`, PRD #552); each source's *classification* table
+names the types. They do not classify into the two ADR 0047 adds yet, nor into `network.dns`: an
+OpenSearch domain, a Kafka cluster or a DNS zone is listed as `unclassified`, or not at all, so set its
+category (`search.opensearch`, `messaging.kafka` or `network.dns`) by hand.
 
 The **capabilities** are features a resource depends on:
 
@@ -1113,7 +1116,7 @@ Review `inventories/azure.inventory.json`, then delete the raw output: `rm -r in
 | PostgreSQL or MySQL flexible server, single-node | `count`: 1 | `properties.highAvailability.mode` `Disabled` or not set |
 | AKS cluster | `count` | the sum of its agent pools' `count` |
 | Azure Cache for Redis | `count` | Basic 1; Standard 2; Premium (1 + `properties.replicasPerPrimary`, or `replicasPerMaster`, 1 when neither is set) × `properties.shardCount` (at least 1) |
-| Azure Managed Redis (Redis Enterprise) | `count` | 2 (a primary and a replica) with high availability (for a legacy Enterprise or Enterprise Flash cluster only, two or more `zones`), else 1 |
+| Azure Managed Redis (Redis Enterprise) | `count` | 2 (a primary and a replica) with high availability (a legacy Enterprise or Enterprise Flash cluster always has it), else 1 |
 | Azure DocumentDB (`mongoClusters`) | `count` | `properties.sharding.shardCount` (at least 1), × 2 with high availability (a standby per shard) |
 | Azure DocumentDB (`mongoClusters`) | `storageGiB` | `properties.storage.sizeGb` (per shard) × the shard count |
 | NFS file share of a FileStorage account | `storageGiB` | `properties.shareQuota` |
@@ -1140,7 +1143,7 @@ An Azure DocumentDB cluster's vCPU and memory per shard follow its `properties.c
 An Azure Managed Redis cluster's memory is its `sku.name`'s size, which the program does not look up.
 A legacy Enterprise or Enterprise Flash cluster (`sku.name` such as `Enterprise_E10`) runs
 `sku.capacity` nodes (its scale), which the program does not read either: its count
-of 2 (or 1) may understate it, so set the `count` by hand from `sku.capacity`.
+of 2 may understate it, so set the `count` by hand from `sku.capacity`.
 
 A flexible server with high availability has a standby, and how many nodes a standby counts as depends
 on how a target prices high availability: the program does not guess, so the estimate says "(count
@@ -1197,10 +1200,14 @@ share, a Cosmos DB account of another kind than `MongoDB`, a Logic App and a Mar
 September 2025, and Basic Load Balancer on 30 September 2025; a Basic load balancer still running is
 classified, with no capability. Azure Cache for Redis Basic, Standard and Premium retire on 30
 September 2028, its Enterprise and Enterprise Flash tiers on 31 March 2027 (Microsoft Learn,
-*Frequently asked questions on the retirement of Azure Cache for Redis*). The `zones` rule of a Redis
-Enterprise cluster holds only for those legacy tiers (an `Enterprise_*` or `EnterpriseFlash_*` SKU):
-an Azure Managed Redis cluster reads its `highAvailability` and `redundancyMode`, whatever its
-`zones`. Redis modules of an Azure Managed Redis cluster are no capability.
+*Frequently asked questions on the retirement of Azure Cache for Redis*). A cluster in those legacy
+tiers (an `Enterprise_*` or `EnterpriseFlash_*` SKU) is always `node-high-availability`, with or
+without `zones`: it runs on a Redis Enterprise cluster of three nodes by default (always an odd
+number) that never puts a partition's primary and replica on the same node (Microsoft Learn, *High
+availability for Azure Cache for Redis*, Enterprise and Enterprise Flash tiers); two or more `zones`
+decide only its `zone-high-availability`. The `zones` rule holds only for those legacy tiers: an Azure
+Managed Redis cluster reads its `highAvailability` and `redundancyMode`, whatever its `zones`. Redis
+modules of an Azure Managed Redis cluster are no capability.
 
 Left out: virtual machines of a scale set, their OS disks (`storageProfile.osDisk`) and their data
 disks created with `deleteOption: Delete` (the scale set stands for them), snapshots and autoscale
@@ -1242,7 +1249,7 @@ holds data, and stays; so does a share of such a FileStorage account, a persiste
 | `cache.redis` (Azure Cache for Redis) | `snapshots` | tier Premium with `rdb-backup-enabled` `true` (RDB persistence; AOF alone is no snapshot) |
 | `cache.redis` (Azure Cache for Redis) | `encryption-at-rest` | any SKU but C0 and C1, whose disks Azure does not encrypt |
 | `cache.redis` (Azure Managed Redis) | `encryption-at-rest` | always |
-| `cache.redis` (Azure Managed Redis) | `node-high-availability` | `highAvailability` `Enabled`, `redundancyMode` `LR` or `ZR`, or two or more `zones` (a legacy Enterprise or Enterprise Flash cluster only) |
+| `cache.redis` (Azure Managed Redis) | `node-high-availability` | `highAvailability` `Enabled`, `redundancyMode` `LR` or `ZR`, or a legacy Enterprise or Enterprise Flash cluster (always, `zones` or not) |
 | `cache.redis` (Azure Managed Redis) | `zone-high-availability` | `redundancyMode` `ZR`, or two or more `zones` (a legacy Enterprise or Enterprise Flash cluster only) |
 | `cache.redis` (Azure Managed Redis) | `sharding` | a database's `clusteringPolicy` is `OSSCluster` |
 | `cache.redis` (Azure Managed Redis) | `snapshots` | a database has RDB persistence (`persistence.rdbEnabled`) |

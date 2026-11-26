@@ -368,15 +368,17 @@ def zone_count: (.zones // []) | length;
           # Azure Managed Redis: a primary and a replica with high availability;
           # its zones never override highAvailability and redundancyMode.
           # Only a legacy Enterprise or Enterprise Flash cluster (an Enterprise*
-          # SKU) names its zones in zones instead; over two or more it runs two
-          # or more nodes. Clustering and persistence are its databases'
-          # settings, from the databases call; without it neither is claimed.
-          # Disks are always encrypted.
+          # SKU) names its zones in zones instead. Such a cluster always runs
+          # a primary and a replica of every partition on different nodes, so
+          # it is always highly available; its zones (two or more) decide only
+          # zone high availability. Clustering and persistence are its
+          # databases' settings, from the databases call; without it neither
+          # is claimed. Disks are always encrypted.
           [$redisdatabases[] | select(.id | lid | startswith($id + "/databases/"))] as $dbs
-          | (((.sku.name? // "") | ascii_downcase | startswith("enterprise"))
-              and zone_count >= 2) as $zonal
+          | ((.sku.name? // "") | ascii_downcase | startswith("enterprise")) as $legacy
+          | ($legacy and zone_count >= 2) as $zonal
           | (.properties.highAvailability? == "Enabled"
-              or (.properties.redundancyMode? | IN("LR", "ZR")) or $zonal) as $ha
+              or (.properties.redundancyMode? | IN("LR", "ZR")) or $legacy) as $ha
           | $base + {category: "cache.redis", capabilities: [
               "encryption-at-rest",
               cap("node-high-availability"; $ha),
