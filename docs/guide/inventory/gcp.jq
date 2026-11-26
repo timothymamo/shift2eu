@@ -73,10 +73,14 @@
 # (sizeGb), so it gets a count and no memory. A Filestore instance's storage is
 # the sum of its shares' capacityGb (a string). A Managed Service for Apache
 # Kafka cluster's capacityConfig is its total vCPU and memory over the brokers
-# Google provisions, max(3, ceiling(vCPU / 15)) of them, each with an equal share
+# Google provisions, max(3, ceiling(vCPU / 15)) of them, all with the same vCPU
 # (https://cloud.google.com/managed-service-for-apache-kafka/docs/brokers): the
-# count is that number and the vCPU and memory are one broker's share; storage
-# is billed by use and gets no size. The GB of these APIs are taken
+# count is that number and the vCPU one broker's share. The memory share is
+# inferred: memory is provisioned per cluster at a fixed vCPU:GiB ratio
+# (https://cloud.google.com/managed-service-for-apache-kafka/docs/reference/rest/v1/CapacityConfig),
+# so each broker gets an equal share of it. The brokers have a disk, but the list
+# gives no disk size (capacityConfig holds only vcpuCount and memoryBytes), so
+# no storageGiB is written. The GB of these APIs are taken
 # as GiB. A number no call gives is left out, never guessed. The workload,
 # relations and monthlyCost fields are the user's to add by hand; this program
 # never writes them.

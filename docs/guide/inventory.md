@@ -824,9 +824,12 @@ Prefer these roles on the project, each of which reads configuration only:
 - `roles/memorystore.viewer` (Memorystore for Valkey instances);
 - `roles/file.viewer` (Filestore instances);
 - `roles/cloudfunctions.viewer` (Cloud Functions, for the Cloud Run service each one runs on);
-- `roles/managedkafka.viewer` (Managed Service for Apache Kafka clusters: cluster configuration only,
-  no topic data or messages; it lacks `managedkafka.clusters.connect`, the permission that connects a
-  client to a cluster's brokers);
+- `roles/managedkafka.viewer` (Managed Service for Apache Kafka clusters). It is read-only and lacks
+  `managedkafka.clusters.connect`, so it reaches no broker and no message, but it can also read the
+  topics, the consumer groups and their offsets, the ACLs, the schemas and the connector
+  configurations, which can hold credentials in plain text; the listing needs none of them. If that
+  is too much, grant a custom role with only `managedkafka.clusters.list` instead (and
+  `managedkafka.locations.list` if your setup needs it);
 - `roles/artifactregistry.reader` (Artifact Registry repositories). It is read-only, but it can also
   download the artifacts in the repositories (`artifactregistry.repositories.downloadArtifacts`), which
   the listing does not need; no predefined Artifact Registry role lists repositories without it. If
@@ -935,14 +938,13 @@ else
   echo '[]' > "$out/artifacts-repositories.json"
 fi
 
-# Managed Service for Apache Kafka, in every region, when the asset listing holds a cluster:
-# only each cluster's name and capacity, never its bootstrap address or network access.
-if has managedkafka.googleapis.com/Cluster; then
-  gcloud managed-kafka clusters list --project="$project" --location=- --quiet \
-    --format='json(name,capacityConfig)' > "$out/managed-kafka-clusters.json"
-else
-  echo '[]' > "$out/managed-kafka-clusters.json"
-fi
+# Managed Service for Apache Kafka, per region the asset listing names a cluster in,
+# merged into one list (an empty one when there is none): only each cluster's name
+# and capacity, never its bootstrap address or network access.
+for region in $(jq -r '[.[] | select(.assetType == "managedkafka.googleapis.com/Cluster") | .name | capture("/locations/(?<r>[^/]+)/").r] | unique | .[]' "$out/assets.json"); do
+  gcloud managed-kafka clusters list --project="$project" --location="$region" --quiet \
+    --format='json(name,capacityConfig)'
+done | jq -s 'add // []' > "$out/managed-kafka-clusters.json"
 
 # The Cloud Run service each 2nd gen function runs on, per region with functions.
 for region in $(jq -r '[.[] | select(.assetType == "cloudfunctions.googleapis.com/Function") | .name | capture("/locations/(?<r>[^/]+)/").r] | unique | .[]' "$out/assets.json"); do
@@ -951,9 +953,9 @@ for region in $(jq -r '[.[] | select(.assetType == "cloudfunctions.googleapis.co
 done > "$out/functions.json"
 ```
 
-The Memorystore, Filestore, Artifact Registry, Managed Kafka and Cloud Functions lists run only when the asset
-listing holds a resource of theirs, so a project that does not use a service never calls its API,
-which may not be enabled. Every `gcloud` call above carries `--quiet`, which makes it take the
+The Memorystore, Filestore, Artifact Registry, Managed Kafka and Cloud Functions lists run only
+when the asset listing holds a resource of theirs, so a project that does not use a service never
+calls its API, which may not be enabled. Every `gcloud` call above carries `--quiet`, which makes it take the
 default answer, No, when it offers to enable an API, as it does on a project with that API disabled;
 if any call still asks to enable one, answer N: enabling an API writes to the project.
 
@@ -986,8 +988,8 @@ reach it.
 
 The load balancer lists read only the HTTP and HTTPS target proxies, the frontends of an Application
 Load Balancer; a TCP, SSL or gRPC proxy is not listed, so a load balancer behind one gets no `ipv6`.
-The Memorystore lists run once per region the asset listing names: the gcloud pages document no
-"all regions" value for them. Every call above lists or describes; none changes anything.
+The Memorystore and Managed Kafka lists run once per region the asset listing names: the gcloud
+pages document no "all regions" value for them. Every call above lists or describes; none changes anything.
 
 The Cloud Asset Inventory listing is the list of resources, but for load balancers, which come from
 the compute lists; the other calls add the settings the capabilities and sizes need. A resource the
@@ -1027,8 +1029,14 @@ A Managed Kafka cluster names its total vCPU and memory, not its brokers. Google
 [broker provisioning](https://cloud.google.com/managed-service-for-apache-kafka/docs/brokers) page
 says "number of brokers = max(3, ceiling(vCPUs / 15))" and that "all brokers have the same number of
 vCPUs, which might be a fractional value", so the program writes that count and each broker's equal
-share of the vCPU and memory, which may be fractional. It writes no `storageGiB`: Managed Kafka bills
-storage by use, not as a disk of the brokers. A cluster the list does not hold gets no size.
+share of the vCPU, which may be fractional. The memory split is inferred, not stated: memory is
+provisioned per cluster at a fixed vCPU:GiB ratio between 1:1 and 1:8
+([`CapacityConfig`](https://cloud.google.com/managed-service-for-apache-kafka/docs/reference/rest/v1/CapacityConfig)),
+and all brokers have the same vCPUs, so the program gives each broker an equal share of the memory
+too. The brokers do have a disk, which Google provisions by itself, but the list call gives no disk
+size (`capacityConfig` holds only `vcpuCount` and `memoryBytes`), so the program writes no
+`storageGiB`: add each broker's disk by hand for a storage estimate. A cluster the list does not
+hold gets no size.
 
 Not filled in: the vCPU and memory of a Cloud SQL instance whose tier is not a custom one (such as
 `db-n1-standard-2` or `db-f1-micro`), the count of a `REGIONAL` Cloud SQL instance, a GKE cluster's
