@@ -818,6 +818,19 @@ func TestPiEnvDenyListRefusesPrintingTheEnvironment(t *testing.T) {
 		"sudo -iu someone true",
 		"su -l someone",
 		"su - someone",
+		// The same clearing and the same login shell behind the syntax that hides a command word from a
+		// matcher anchored on a separator: a quoted `bash -c` argument, a keyword's body (`if`, `for`), a
+		// wrapper (`command`, `eval`), an option of `exec` itself, and `su -` ended by a separator rather
+		// than by the end of the command. Each still starts the login shell the marker never reached.
+		"bash -c 'exec -c bash -l'",
+		`sh -c "exec -c bash -l"`,
+		"if true; then exec -c bash -l; fi",
+		"for x in 1; do exec -c bash; done",
+		"command exec -c bash -l",
+		"eval exec -c bash -l",
+		"exec -a name -c bash -l",
+		"su -;true",
+		"su -\ntrue",
 		// A single key, expanded by name.
 		"echo $DEEPSEEK_API_KEY",
 		`printf %s "$GH_TOKEN"`,
@@ -1020,10 +1033,25 @@ func TestPiEnvDenyListAllowsTheWork(t *testing.T) {
 		// of the credential helper must not reach them.
 		"git config --global credential.helper",
 		"git push origin chore/540-deny-env-printing",
-		// A diff and a test run in the repository, and a login shell that keeps the marker: the empty
-		// environment and the login shell are refused together, never apart (issue #662, round 3's audit).
+		// A diff and a test run in the repository.
 		"git diff --stat",
 		"go test -run TestX ./test/devenv/",
+		// A command word after an option that takes a value, in the wrappers the agents type: `find`'s
+		// `-exec` predicate and its placeholders, the wrapper's own option and the value it takes, the
+		// remote command of `docker exec` and of `ssh`, and a program run through `exec` itself. None of
+		// them clears the environment or starts a login shell, so none of them may be refused.
+		"find . -exec grep -l foo {} +",
+		"find . -name '*.go' -exec gofumpt -l {} \\;",
+		"env -u X go test ./...",
+		"env -C sub make test",
+		"nice -n 10 make test",
+		"xargs -0 -I{} ls {}",
+		"sudo apt-get install jq",
+		"docker exec -it c sh",
+		"ssh -i key host true",
+		"sudo -E make",
+		"su -c id root",
+		"exec ./bin/shift2eu --help",
 	}
 
 	for _, command := range cases {
