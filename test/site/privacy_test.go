@@ -1,6 +1,8 @@
 package site_test
 
 import (
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -201,16 +203,17 @@ const apexHSTSSentence = "at www.shift2eu.com or at https://shift2eu.com, whose 
 const frameAncestorsSentence = "Every HTTPS response from www.shift2eu.com carries frame-ancestors 'none' in its Content-Security-Policy header, so a browser refuses to show the site inside another page. A meta Content Security Policy cannot carry frame-ancestors, so the page script also stops, and says why, when another page frames it: that guard travels with the bundle to any other origin."
 
 // logsSentence is the privacy page's paragraph on what is logged (issue #567,
-// item 5): the front keeps no access log and passes neither the visitor's
-// address nor their cookies on, while Scaleway's platform - the layer that ends
-// the encrypted connection and so receives every request before the front - can
-// log the visitor's address, path and country, kept 1 day once the maintainer
-// has set it and 7 until then. The page says what holds until the runbook's
-// log-retention step runs, because that step can run only after Scaleway has
-// logged a request; and it names the platform, not the front, as the layer that
-// answers first, since the front sees only what the platform forwards (ADR 0045,
-// What the server answers).
-const logsSentence = "The site's front keeps no access log and passes neither your IP address nor your cookies on to the rest of the hosting. Scaleway's platform, which ends the encrypted connection and receives your request before the front does, can log your IP address, the path you request and your country. The maintainer sets Scaleway's logs to be kept 1 day, the shortest Scaleway allows, once the site has served its first requests (Scaleway creates its log store only then); until that is done, Scaleway's default of 7 days applies."
+// item 5; PRD #297 milestone 4): the front keeps no access log and passes
+// neither the visitor's address nor their cookies on, while Scaleway's platform
+// - the layer that ends the encrypted connection and so receives every request
+// before the front - can log the visitor's address, path and country, which
+// Scaleway keeps 1 day, the shortest it allows. The page names the platform,
+// not the front, as the layer that answers first, since the front sees only what
+// the platform forwards (ADR 0045, What the server answers). It states the
+// provider's own retention, not a step the maintainer still has to take: the
+// hosting holds the logs at that retention, so the page no longer describes a
+// default of 7 days the maintainer would shorten later.
+const logsSentence = "The site's front keeps no access log and passes neither your IP address nor your cookies on to the rest of the hosting. Scaleway's platform, which ends the encrypted connection and receives your request before the front does, can log your IP address, the path you request and your country. Scaleway keeps those logs 1 day, the shortest it allows."
 
 // oldPrivacyClaims are the claims the page made before issue #567 and must not
 // make again, each with why it is gone: the site cannot send Clear-Site-Data and
@@ -290,7 +293,7 @@ func TestPrivacyPageStatesWhatTheFrontAndTheLogsDo(t *testing.T) {
 		{
 			name:     "the front and Scaleway's logs",
 			sentence: logsSentence,
-			expected: "the \"What the site cannot promise\" list must say, after the hosting-provider paragraph, that the front keeps no access log and passes no IP address and no cookie on, that Scaleway's platform, which ends the connection before the front, can log the IP address, the path and the country, and that the maintainer sets those logs to 1 day once the site has served its first requests, Scaleway's default of 7 until then (issue #567, item 5)",
+			expected: "the \"What the site cannot promise\" list must say, after the hosting-provider paragraph, that the front keeps no access log and passes no IP address and no cookie on, that Scaleway's platform, which ends the connection before the front, can log the IP address, the path and the country, and that Scaleway keeps those logs 1 day, the shortest it allows (issue #567, item 5; PRD #297 milestone 4)",
 		},
 	}
 
@@ -323,5 +326,27 @@ func TestPrivacyPageDropsTheOldClaims(t *testing.T) {
 				t.Errorf("the privacy page still says %q, want it gone: %s", tc.claim, tc.reason)
 			}
 		})
+	}
+}
+
+// TestPrivacyPageDropsTheLogRetentionDefault pins that the page no longer
+// describes a retention it does not keep: it states the 1 day Scaleway keeps
+// the logs, the shortest it allows, and neither the provider's default of 7
+// days nor a step the maintainer would still have to take to shorten it. The
+// page's source is what is read, so the stale words cannot survive in a
+// sentence the bundle test's white-space collapse would match (PRD #297
+// milestone 4).
+func TestPrivacyPageDropsTheLogRetentionDefault(t *testing.T) {
+	t.Parallel()
+
+	source, err := os.ReadFile(filepath.Join(theRepositoryRoot(t), "site", "privacy.html"))
+	if err != nil {
+		t.Fatalf("read site/privacy.html: %v", err)
+	}
+
+	for _, stale := range []string{"7 days", "until that is done"} {
+		if strings.Contains(string(source), stale) {
+			t.Errorf("site/privacy.html still says %q, want it gone: the page states that Scaleway keeps the logs 1 day, the shortest it allows, and says nothing of a default it would shorten later (PRD #297 milestone 4)", stale)
+		}
 	}
 }

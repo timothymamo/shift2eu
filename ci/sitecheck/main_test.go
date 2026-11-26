@@ -963,3 +963,284 @@ func TestRunEscapesResponseTextInTheReport(t *testing.T) {
 		t.Errorf("the report does not print the hostile header as %q: response text reaches the report only through Quote:\n%s", strconv.Quote(hostile), stdout)
 	}
 }
+
+// The scheduled live check's version window (PRD #297 milestone 4, ADR 0043),
+// which the live-version subcommand applies: mainLiveAnchor is an hour before
+// the fixture's clock, mainTestNow, and mainLiveWindow a bound the clock is
+// inside of.
+const (
+	// mainLiveAnchor is the -anchor the cases pass, as the workflow reads it
+	// with git log -1 --format=%cI.
+	mainLiveAnchor = "2026-03-01T11:00:00Z"
+
+	// mainLiveWindow is the -window they pass.
+	mainLiveWindow = "2h"
+)
+
+// TestRunLiveVersionRefusesACommandLineItCannotUse pins exit code 2 and one
+// line on stderr for a usage error of the live-version subcommand: a missing
+// tag list, a missing or unparseable anchor, a missing, zero or negative
+// window, an unknown flag and a positional argument. None of them fetches the
+// page.
+func TestRunLiveVersionRefusesACommandLineItCannotUse(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		wantInErr string
+		args      []string
+	}{
+		{
+			name:      "no tag list",
+			wantInErr: "-tags",
+			args:      []string{"live-version", "-anchor", mainLiveAnchor, "-window", mainLiveWindow},
+		},
+		{
+			name:      "no anchor",
+			wantInErr: "-anchor",
+			args:      []string{"live-version", "-tags", "-", "-window", mainLiveWindow},
+		},
+		{
+			name:      "an anchor that is not RFC 3339",
+			wantInErr: "-anchor",
+			args:      []string{"live-version", "-tags", "-", "-anchor", "2026-03-01", "-window", mainLiveWindow},
+		},
+		{
+			name:      "no window",
+			wantInErr: "-window",
+			args:      []string{"live-version", "-tags", "-", "-anchor", mainLiveAnchor},
+		},
+		{
+			name:      "a window of zero",
+			wantInErr: "-window",
+			args:      []string{"live-version", "-tags", "-", "-anchor", mainLiveAnchor, "-window", "0s"},
+		},
+		{
+			name:      "a negative window",
+			wantInErr: "-window",
+			args:      []string{"live-version", "-tags", "-", "-anchor", mainLiveAnchor, "-window", "-1h"},
+		},
+		{
+			name:      "an unknown flag",
+			wantInErr: "-unknown",
+			args:      []string{"live-version", "-tags", "-", "-anchor", mainLiveAnchor, "-window", mainLiveWindow, "-unknown"},
+		},
+		{
+			name:      "an extra argument",
+			wantInErr: "extra",
+			args:      []string{"live-version", "-tags", "-", "-anchor", mainLiveAnchor, "-window", mainLiveWindow, "extra"},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			base, dialer := mainRefusingBase()
+
+			code, stdout, stderr := mainRun(t, tc.args, "", base)
+
+			if code != exitConfig {
+				t.Errorf("exit code %d, want %d for %s", code, exitConfig, tc.name)
+			}
+
+			if stdout != "" {
+				t.Errorf("stdout is %q, want nothing: a usage error prints no version", stdout)
+			}
+
+			if stderr == "" {
+				t.Fatalf("stderr is empty, want one line naming the usage error: %s", tc.name)
+			}
+
+			if !strings.HasSuffix(stderr, "\n") || strings.Count(stderr, "\n") != 1 {
+				t.Errorf("stderr is %q, want one line ending in a line break", stderr)
+			}
+
+			if !strings.Contains(stderr, tc.wantInErr) {
+				t.Errorf("stderr is %q, want it to name %q: the line says what is wrong", stderr, tc.wantInErr)
+			}
+
+			if dialCount := dialer.dialCount(); dialCount != 0 {
+				t.Errorf("the run dialled %d times, want no connection for a usage error: %s", dialCount, tc.name)
+			}
+		})
+	}
+}
+
+// TestRunLiveVersionAcceptsOrRefusesTheLiveVersion pins the live-version
+// subcommand (PRD #297 milestone 4, ADR 0043): it fetches https://<host>/
+// once, reads id="site-version" as the check does, matches that untrusted text
+// against the tag list and applies the version window with the injected clock.
+// A live version the window accepts prints the tag list's own entry and exits
+// 0; an unknown, unparseable or missing version, a version the window refuses
+// and a root that does not answer 200 exit 1 with one line on stderr and
+// nothing on stdout.
+func TestRunLiveVersionAcceptsOrRefusesTheLiveVersion(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		// page is the root page's body; nil serves the fixture's own
+		// mainVersion page.
+		page []byte
+		// status is the root's status; 0 serves 200.
+		status int
+		// tags is the tag list read from stdin; nil reads the fixture's own.
+		tags []string
+		// tagsFile reads the tag list from the fixture's file instead.
+		tagsFile bool
+		// anchor and window are the flags the case passes.
+		anchor string
+		window string
+		// wantCode is the exit code the run ends with.
+		wantCode int
+		// wantStdout is the exact stdout a passing run writes: the tag list's
+		// entry and a line break.
+		wantStdout string
+	}{
+		{
+			name:       "the live version is the highest tag",
+			anchor:     mainLiveAnchor,
+			window:     mainLiveWindow,
+			wantCode:   exitPassed,
+			wantStdout: mainVersion + "\n",
+		},
+		{
+			name:       "the highest tag, long after the window",
+			anchor:     "2025-01-01T00:00:00Z",
+			window:     mainLiveWindow,
+			wantCode:   exitPassed,
+			wantStdout: mainVersion + "\n",
+		},
+		{
+			name:       "the tag immediately below, inside the window, from the tag file",
+			page:       mainIndex("v1.2.2"),
+			tagsFile:   true,
+			anchor:     mainLiveAnchor,
+			window:     mainLiveWindow,
+			wantCode:   exitPassed,
+			wantStdout: "v1.2.2\n",
+		},
+		{
+			name:     "the tag immediately below, at the end of the window",
+			page:     mainIndex("v1.2.2"),
+			anchor:   "2026-03-01T10:00:00Z",
+			window:   mainLiveWindow,
+			wantCode: exitFailed,
+		},
+		{
+			name:     "the tag immediately below, after the window",
+			page:     mainIndex("v1.2.2"),
+			anchor:   "2026-03-01T09:00:00Z",
+			window:   mainLiveWindow,
+			wantCode: exitFailed,
+		},
+		{
+			name:     "two tags below the highest, inside the window",
+			page:     mainIndex("v1.2.1"),
+			tags:     []string{"v1.2.3", "v1.2.2", "v1.2.1"},
+			anchor:   mainLiveAnchor,
+			window:   mainLiveWindow,
+			wantCode: exitFailed,
+		},
+		{
+			name:     "a version that is not a release",
+			page:     mainIndex("v1.2"),
+			anchor:   mainLiveAnchor,
+			window:   mainLiveWindow,
+			wantCode: exitFailed,
+		},
+		{
+			name:     "a version that is no tag of the repository",
+			page:     mainIndex("v9.9.9"),
+			anchor:   mainLiveAnchor,
+			window:   mainLiveWindow,
+			wantCode: exitFailed,
+		},
+		{
+			name:     "a hidden version element",
+			page:     []byte(`<span id="site-version" hidden>v1.2.3</span>`),
+			anchor:   mainLiveAnchor,
+			window:   mainLiveWindow,
+			wantCode: exitFailed,
+		},
+		{
+			name:     "no version element",
+			page:     []byte(`<!DOCTYPE html><html lang="en"><body><p>no footer</p></body></html>`),
+			anchor:   mainLiveAnchor,
+			window:   mainLiveWindow,
+			wantCode: exitFailed,
+		},
+		{
+			name:     "a root that does not answer 200",
+			status:   http.StatusInternalServerError,
+			anchor:   mainLiveAnchor,
+			window:   mainLiveWindow,
+			wantCode: exitFailed,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			fixture := mainNewFixture(t, t.TempDir())
+
+			page := mainIndex(mainVersion)
+			if tc.page != nil {
+				page = tc.page
+			}
+
+			fixture.host.mainSet("/", mainResponse{status: tc.status, body: page})
+
+			stdin := mainVersion + "\nv1.2.2\n"
+			if tc.tags != nil {
+				stdin = strings.Join(tc.tags, "\n") + "\n"
+			}
+
+			tags := "-"
+			if tc.tagsFile {
+				tags = fixture.tags
+			}
+
+			code, stdout, stderr := mainRun(t, []string{
+				"live-version",
+				"-tags", tags,
+				"-anchor", tc.anchor,
+				"-window", tc.window,
+			}, stdin, fixture.base)
+
+			if code != tc.wantCode {
+				t.Fatalf("exit code %d, want %d: stderr %q\nstdout %q", code, tc.wantCode, stderr, stdout)
+			}
+
+			if tc.wantCode == exitPassed {
+				if stdout != tc.wantStdout {
+					t.Errorf("stdout is %q, want %q: the subcommand prints the tag list's own entry", stdout, tc.wantStdout)
+				}
+
+				if stderr != "" {
+					t.Errorf("stderr is %q, want nothing for an accepted live version", stderr)
+				}
+			} else {
+				if stdout != "" {
+					t.Errorf("stdout is %q, want nothing on a failure", stdout)
+				}
+
+				if stderr == "" {
+					t.Fatalf("stderr is empty, want one line saying why the live version was refused")
+				}
+
+				if !strings.HasSuffix(stderr, "\n") || strings.Count(stderr, "\n") != 1 {
+					t.Errorf("stderr is %q, want one line ending in a line break", stderr)
+				}
+			}
+
+			// The subcommand reads the root once, and no other path: the version
+			// is the one the page shows, and nothing else is fetched.
+			if len(fixture.host.requests) != 1 || fixture.host.requests[0] != "/" {
+				t.Errorf("the run requested %q, want exactly [\"/\"]: the subcommand fetches the root once", fixture.host.requests)
+			}
+		})
+	}
+}
