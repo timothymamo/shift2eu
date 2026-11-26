@@ -59,54 +59,149 @@ type summer interface {
 // errNotRecorded is a regular file whose content could not be read.
 var errNotRecorded = errors.New("the file command's content could not be read")
 
+// errNotRegular is a file command that exists but is no regular file: a
+// directory, a link, a FIFO or a device, which the runner never lays down.
+var errNotRegular = errors.New("it exists and is no regular file")
+
+// CheckFileCommands refuses file commands that exist but are no regular file
+// (issues #615, #614, the auditor's round-4 L1): each path is Lstat'ed, so no
+// link is followed and nothing is opened, and a directory, a link, a FIFO or a
+// device fails the check, as does a path Lstat cannot read. A path that does
+// not exist passes: the run records it as absent. ci/auditrun runs it before
+// it opens the step summary and before any step, so a run that cannot record a
+// file command's content never starts.
+func CheckFileCommands(paths []FileCommandPath) error {
+	for _, path := range paths {
+		if err := checkFileCommandEntry(path.Path); err != nil {
+			return fmt.Errorf("the file command %s: %w", path.Name, err)
+		}
+	}
+
+	return nil
+}
+
+// checkFileCommandEntry checks that path is a regular file or does not exist.
+func checkFileCommandEntry(path string) error {
+	info, err := os.Lstat(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+
+	if err != nil {
+		return errors.New("its path cannot be checked")
+	}
+
+	if !info.Mode().IsRegular() {
+		return errNotRegular
+	}
+
+	return nil
+}
+
+// OpenAppend opens the file command at path for appending without following a
+// link, and creates it, with mode, when it does not exist. A path that does
+// not exist is created with O_CREATE|O_EXCL, which refuses any entry there, a
+// dangling link included; an existing path must be a regular file (Lstat), and
+// the descriptor opened must be that same file (os.SameFile), never a link's
+// target. Anything else is refused. It is not O_NOFOLLOW, which the os
+// package lacks and syscall is outside the library's allow list for; the
+// Lstat comes first, so a FIFO is never opened, and ci/auditrun calls it
+// before any step runs.
+func OpenAppend(path string, mode fs.FileMode) (*os.File, error) {
+	info, err := os.Lstat(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		file, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_EXCL|os.O_WRONLY, mode) //nolint:gosec // G304: one of the runner's file commands, created new
+		if err != nil {
+			return nil, fmt.Errorf("create the file command: %w", err)
+		}
+
+		return file, nil
+	}
+
+	if err != nil {
+		return nil, errors.New("check the file command: its path cannot be checked")
+	}
+
+	if !info.Mode().IsRegular() {
+		return nil, errNotRegular
+	}
+
+	file, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0) //nolint:gosec // G304: one of the runner's file commands, checked as the regular file Lstat saw
+	if err != nil {
+		return nil, fmt.Errorf("open the file command: %w", err)
+	}
+
+	opened, err := file.Stat()
+	if err != nil || !opened.Mode().IsRegular() || !os.SameFile(info, opened) {
+		_ = file.Close()
+
+		return nil, errors.New("open the file command: it is not the entry it was")
+	}
+
+	return file, nil
+}
+
 // RecordFileCommands records the file commands at paths before the steps. It
 // follows no link: each path is Lstat'ed, and only a regular file is opened,
 // its descriptor checked to be the file Lstat saw. A path that does not exist
-// is recorded as absent; one that is no regular file, or cannot be opened or
-// read, is recorded by its identity alone and named by Unopened.
-func RecordFileCommands(paths []FileCommandPath) *FileCommands {
+// is recorded as absent. One that exists but is no regular file, or that
+// cannot be opened or read, fails the record (fail closed, the auditor's
+// round-4 L1): the run could not tell after the steps whether they changed
+// it. On an error it closes what it opened and returns no FileCommands.
+func RecordFileCommands(paths []FileCommandPath) (*FileCommands, error) {
 	commands := &FileCommands{commands: make([]*fileCommand, 0, len(paths))}
 
 	for _, path := range paths {
-		commands.commands = append(commands.commands, record(path))
+		command, err := record(path)
+		if err != nil {
+			commands.Close()
+
+			return nil, fmt.Errorf("record the file command %s: %w", path.Name, err)
+		}
+
+		commands.commands = append(commands.commands, command)
 	}
 
-	return commands
+	return commands, nil
 }
 
 // record records one file command.
-func record(path FileCommandPath) *fileCommand {
+func record(path FileCommandPath) (*fileCommand, error) {
 	command := &fileCommand{FileCommandPath: path, expected: sha256.New()}
 
 	info, err := os.Lstat(path.Path)
-	if err != nil {
-		command.absent = errors.Is(err, fs.ErrNotExist)
+	if errors.Is(err, fs.ErrNotExist) {
+		command.absent = true
 
-		return command
+		return command, nil
+	}
+
+	if err != nil {
+		return nil, errors.New("its path cannot be checked")
+	}
+
+	if !info.Mode().IsRegular() {
+		return nil, errNotRegular
 	}
 
 	command.before = info
 
-	if !info.Mode().IsRegular() {
-		return command
-	}
-
 	file, err := openRegular(path.Path, info)
 	if err != nil {
-		return command
+		return nil, err
 	}
 
 	size, err := hashContent(command.expected, file)
 	if err != nil {
 		_ = file.Close()
 
-		return command
+		return nil, err
 	}
 
 	command.file = file
 	command.overCap = size > maxFileCommandBytes
 
-	return command
+	return command, nil
 }
 
 // openRegular opens the regular file Lstat saw as info at path, for reading
@@ -143,21 +238,6 @@ func hashContent(h io.Writer, file *os.File) (int64, error) {
 	return size, nil
 }
 
-// Unopened names the file commands that existed before the steps but are no
-// regular file the run could open and read: their content is not compared,
-// only whether their path still names the same entry.
-func (f *FileCommands) Unopened() []string {
-	var names []string
-
-	for _, command := range f.commands {
-		if command.before != nil && command.file == nil {
-			names = append(names, command.Name)
-		}
-	}
-
-	return names
-}
-
 // Appended returns the writer the run's own bytes to the file command name go
 // through as well: what it is handed is what the file must hold after its
 // recorded content. A name that was not recorded with its content takes
@@ -181,11 +261,27 @@ func (f *FileCommands) Appended(name string) io.Writer {
 // place is truncated through its descriptor; a path swapped, removed or
 // replaced gets a new empty file, written in the same directory and renamed
 // over it, so the swap is atomic and no link is followed. Each repair is
-// verified with an Lstat of the path. Repair returns the names it emptied, in
-// order, and an error when a repair failed or could not be verified; the
-// names then hold those emptied before it.
+// verified with an Lstat of the path. A path a directory replaced is removed
+// first when that directory is empty; a non-empty one is left as it is, and
+// its repair fails.
+//
+// The run's own summary bytes reach Appended only after the summary file took
+// them whole (ci/auditrun's io.MultiWriter stops at the first writer that
+// fails): a write that failed partway, or was short, leaves bytes in the file
+// Appended never got, so it counts as a change too and the summary is emptied
+// (fail closed); the note then names the steps as what changed it, though the
+// run's own write did. A write that left nothing leaves the file as recorded.
+//
+// Repair tries every changed file command, whatever failed before it (the
+// round-4 should-fix): one it cannot empty never leaves another, such as a
+// $GITHUB_PATH line, for the runner to apply. It returns the names it emptied,
+// in order, and an error joining (errors.Join) one *RepairError per file
+// command it could not empty or verify; RepairFailures lists them.
 func (f *FileCommands) Repair() ([]string, error) {
-	var emptied []string
+	var (
+		emptied  []string
+		failures []error
+	)
 
 	for _, command := range f.commands {
 		changed, inPlace := command.changed()
@@ -194,13 +290,58 @@ func (f *FileCommands) Repair() ([]string, error) {
 		}
 
 		if err := command.empty(inPlace); err != nil {
-			return emptied, fmt.Errorf("empty %s: %w", command.Name, err)
+			failures = append(failures, &RepairError{Name: command.Name, Err: err})
+
+			continue
 		}
 
 		emptied = append(emptied, command.Name)
 	}
 
-	return emptied, nil
+	return emptied, errors.Join(failures...)
+}
+
+// RepairError is one file command Repair could not empty: the variable that
+// names it and why.
+type RepairError struct {
+	Name string
+	Err  error
+}
+
+// Error names the file command and the failure.
+func (e *RepairError) Error() string {
+	return fmt.Sprintf("empty %s: %v", e.Name, e.Err)
+}
+
+// Unwrap returns the failure.
+func (e *RepairError) Unwrap() error {
+	return e.Err
+}
+
+// RepairFailures lists the *RepairError values in the error Repair returned,
+// in the order Repair met them; none for nil.
+func RepairFailures(err error) []*RepairError {
+	if err == nil {
+		return nil
+	}
+
+	var errs []error
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		errs = joined.Unwrap()
+	} else {
+		errs = []error{err}
+	}
+
+	failures := make([]*RepairError, 0, len(errs))
+
+	for _, e := range errs {
+		var failure *RepairError
+		if errors.As(e, &failure) {
+			failures = append(failures, failure)
+		}
+	}
+
+	return failures
 }
 
 // changed reports whether the steps changed the file command, and whether its
@@ -214,10 +355,6 @@ func (c *fileCommand) changed() (changed, inPlace bool) {
 
 	if c.before == nil || !os.SameFile(c.before, now) || c.before.Mode().Type() != now.Mode().Type() {
 		return true, false
-	}
-
-	if c.file == nil {
-		return false, false
 	}
 
 	opened, err := c.file.Stat()
@@ -262,9 +399,15 @@ func (c *fileCommand) empty(inPlace bool) error {
 
 // replaceWithEmpty writes a new empty file in path's directory and renames it
 // over path: rename replaces the entry itself, a link included, never what it
-// points at. No temporary file is left behind, and the result is verified to
+// points at. A directory at path is removed first, which works only when it is
+// empty: rename cannot put a file over a directory, and a non-empty one is left
+// untouched. No temporary file is left behind, and the result is verified to
 // be that empty regular file.
 func replaceWithEmpty(path string) error {
+	if info, err := os.Lstat(path); err == nil && info.IsDir() {
+		_ = os.Remove(path)
+	}
+
 	temp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".auditrun-*")
 	if err != nil {
 		return fmt.Errorf("create the empty file: %w", err)

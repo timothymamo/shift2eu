@@ -80,18 +80,37 @@ func runContext(ctx context.Context, args []string, getenv func(string) (string,
 		return audit.ExitUsage
 	}
 
-	summary, closeSummary := openSummary(stderr, in.StepSummary)
-	defer closeSummary()
+	// A file command that exists but is no regular file - a directory, a
+	// link, a FIFO - is refused before the summary is opened and before any
+	// step: the run could not record its content, nor tell after the steps
+	// whether they changed it (issues #615, #614, the auditor's round-4 L1).
+	if err := audit.CheckFileCommands(opts.fileCommands); err != nil {
+		_, _ = fmt.Fprintln(stderr, "auditrun:", err)
+
+		return audit.ExitUsage
+	}
+
+	summary, err := openSummary(in.StepSummary)
+	if err != nil {
+		_, _ = fmt.Fprintln(stderr, "auditrun:", err)
+
+		return audit.ExitUsage
+	}
+
+	if summary != nil {
+		defer func() { _ = summary.Close() }()
+	}
 
 	// The file commands are recorded once the summary exists, before any step
 	// runs: auditrun is their only legitimate writer, and it writes only its
 	// summary line, through out (issues #615, #614).
-	commands := audit.RecordFileCommands(opts.fileCommands)
-	defer commands.Close()
+	commands, err := audit.RecordFileCommands(opts.fileCommands)
+	if err != nil {
+		_, _ = fmt.Fprintln(stderr, "auditrun:", err)
 
-	for _, name := range commands.Unopened() {
-		_, _ = fmt.Fprintf(stderr, "auditrun: the file command %s is no regular file the run can open; only its path is checked after the steps\n", name)
+		return audit.ExitUsage
 	}
+	defer commands.Close()
 
 	out := stdout
 	if summary != nil {
@@ -110,8 +129,9 @@ func runContext(ctx context.Context, args []string, getenv func(string) (string,
 // the files it emptied on stderr and fails a passing run with the audit's
 // exit, removing the result file that run wrote, so the encrypt step gets
 // nothing; a run that already failed keeps its exit code and wrote no result
-// file. A repair that fails says the posted summary or the job's environment
-// may be hostile, and fails the run.
+// file. The repair tries every file command, whatever failed before it: each
+// one it could not empty gets its own line, naming the variable and saying the
+// posted summary or the job's environment may be hostile, and fails the run.
 func repairFileCommands(code int, commands *audit.FileCommands, resultOut string, stderr io.Writer) int {
 	emptied, err := commands.Repair()
 	if len(emptied) == 0 && err == nil {
@@ -122,8 +142,8 @@ func repairFileCommands(code int, commands *audit.FileCommands, resultOut string
 		_, _ = fmt.Fprintf(stderr, "auditrun: the steps changed the file command %s; it is left as an empty file\n", name)
 	}
 
-	if err != nil {
-		_, _ = fmt.Fprintln(stderr, "auditrun: a file command the steps changed could not be emptied; the posted step summary or the job's environment may be hostile:", err)
+	for _, failure := range audit.RepairFailures(err) {
+		_, _ = fmt.Fprintf(stderr, "auditrun: the steps changed the file command %s and it could not be emptied; the posted step summary or the job's environment may be hostile: %v\n", failure.Name, failure.Err)
 	}
 
 	if code == audit.ExitOK {
@@ -313,31 +333,38 @@ func isCanary(s string) bool {
 }
 
 // summaryWriter returns stdout and, when the step has a summary file, that
-// file too, appended to, and a function that closes it. A summary that cannot
-// be opened leaves stdout alone, with a note on stderr.
+// file too, appended to, and a function that closes it: the API key's refusal
+// alone uses it, before any other input is read. A summary that cannot be
+// opened - a directory, a link or a FIFO among them, as openSummary refuses
+// them - leaves stdout alone, with a note on stderr.
 func summaryWriter(stdout, stderr io.Writer, path string) (io.Writer, func()) {
-	file, closeFile := openSummary(stderr, path)
-	if file == nil {
-		return stdout, closeFile
-	}
-
-	return io.MultiWriter(stdout, file), closeFile
-}
-
-// openSummary opens the step summary at path for appending, creating it, and
-// returns it with a function that closes it; nil when the step has no summary,
-// or, with a note on stderr, when it cannot be opened.
-func openSummary(stderr io.Writer, path string) (*os.File, func()) {
-	if path == "" {
-		return nil, func() {}
-	}
-
-	file, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, summaryMode) //nolint:gosec // G304: the runner's own step-summary path
+	file, err := openSummary(path)
 	if err != nil {
 		_, _ = fmt.Fprintln(stderr, "auditrun: the step summary cannot be opened; the run's line is on stdout alone")
 
-		return nil, func() {}
+		return stdout, func() {}
 	}
 
-	return file, func() { _ = file.Close() }
+	if file == nil {
+		return stdout, func() {}
+	}
+
+	return io.MultiWriter(stdout, file), func() { _ = file.Close() }
+}
+
+// openSummary opens the step summary at path for appending, creating it when
+// it does not exist, without following a link (audit.OpenAppend): an entry
+// that exists and is no regular file is refused. It returns nil and no error
+// when the step has no summary.
+func openSummary(path string) (*os.File, error) {
+	if path == "" {
+		return nil, nil
+	}
+
+	file, err := audit.OpenAppend(path, summaryMode)
+	if err != nil {
+		return nil, fmt.Errorf("open the step summary: %w", err)
+	}
+
+	return file, nil
 }
