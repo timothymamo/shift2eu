@@ -2475,13 +2475,11 @@ arguments; git's read-only subcommands), and changes between versions. The deny 
   removed, retyped or rewritten entry, fails the run whatever the run did, and is the failure reported
   over a failed launch.
   *Amended 2026-11-26 (security findings round 2, issues #615, #614):*
-  - **The summary is repaired, not only checked.** After `audit.Run` returns, `auditrun` `Lstat`s the
-    summary's path and compares it (`os.SameFile`) with the `Stat` of the descriptor it opened. A path
-    that is no longer that regular file (a link, another file, or gone) is removed without being
-    followed and replaced with a new, empty regular file (`O_EXCL`, mode 0600); nothing is written
-    through a link. A run that had passed then exits 1 and its result file is removed; one that had
-    already failed keeps its exit code. This repair, not the digest, is what keeps the runner from
-    posting a swapped-in link's target.
+  - **The summary is repaired, not only checked.** *Superseded by round 3, below:* round 2 replaced
+    only a summary whose path had been swapped (`Lstat` against the opened descriptor, `os.SameFile`),
+    by removing the path and creating an empty file; a summary written to in its own inode was still
+    posted, the other four file commands were not repaired at all, and the gap between the remove and
+    the create let a racer put a link back.
   - **File-command paths must be clean and absolute.** `auditrun` refuses with the usage exit any of
     `$GITHUB_ENV`, `$GITHUB_PATH`, `$GITHUB_OUTPUT`, `$GITHUB_STATE` and the step summary (when set)
     that is relative or not already its own `filepath.Clean` form (the library's `IsCleanAbsolute`). The
@@ -2494,13 +2492,37 @@ arguments; git's read-only subcommands), and changes between versions. The deny 
     runner never creates links in the file-command directory, so a link there before the run is not the
     runner's and was not the run's; it is taken as it stands, and a link created, removed or retargeted
     during the run is still a change.
+  *Amended 2026-11-26 (security findings round 3, issues #615, #614):*
+  - **Every changed file command is emptied.** `auditrun` is the only legitimate writer of the step's
+    file commands, and it writes only its summary line, after the steps. So before `audit.Run` it
+    records each of `$GITHUB_ENV`, `$GITHUB_PATH`, `$GITHUB_OUTPUT`, `$GITHUB_STATE` and the step
+    summary (when set) (the library's `RecordFileCommands`): its identity (`Lstat`, and for a regular
+    file a descriptor checked with `os.SameFile`) and the sha256 of its content read through that
+    descriptor, capped at the digest's 4 MiB. After the run a file command is changed when its path no
+    longer names that same entry (swapped, removed, replaced, or created where there was none), or when
+    its content differs: the summary must hold its recorded content followed by exactly the bytes
+    `auditrun` wrote to it, the other four exactly their recorded content; a file over the cap counts as
+    changed. Each changed file command is left as an **empty regular file**: one changed in place is
+    truncated through its descriptor; a swapped, removed or replaced path gets an empty temporary file
+    written in the same directory and `os.Rename`d over it, so the swap is atomic, no link is followed and
+    no temporary file is left; the path is then `Lstat`ed again to verify the repair. Any repair names
+    the emptied file commands on stderr, fails a passing run with exit 1 and removes its result file; a
+    run that already failed keeps its exit code. A repair that itself fails says on stderr that the
+    posted summary or the job's environment may be hostile, and fails the run. A file command that is no
+    regular file the run can open (a directory at the summary's path, say) is noted on stderr, checked by
+    its identity alone and, while nothing changed it, left alone: the run still passes. **This repair,
+    not the digest, is what keeps a step's change from reaching the runner, the post steps and the public
+    summary**: the runner applies `$GITHUB_ENV` and `$GITHUB_PATH` after a failed step too, and posts the
+    summary by its path.
   **The cap of 64 entries was not checked on a real runner.** To our understanding actions/runner
   removes the previous step's file-command files, which leaves about 5 or 6 entries in the directory; a
   runner that kept every earlier step's files there could pass 64 in a long job, and the run would then
   fail closed. Record the entry count from the first real run.
-  **A detected change fails the step but is not undone.** The runner still applies the step's file
-  commands after a failed step, and post steps run anyway: the model job's `actions/checkout` post step
-  runs `git` through `PATH`, with the job's token and the network open, after the model step.
+  **A detected change fails the step, and since round 3 it is undone.** The runner still applies the
+  step's file commands after a failed step, and post steps run anyway: the model job's
+  `actions/checkout` post step runs `git` through `PATH`, with the job's token and the network open,
+  after the model step. Emptying every changed file command before `auditrun` exits leaves that post
+  step nothing of the steps' to apply.
   **The digest is the control.** The steps after the model session also run `age` by its absolute path
   (see "The encryption tool is `age`"), but that is an extra layer on top of the digest, not an
   independent one: the step's own `bash` is resolved through `PATH`, and a `BASH_ENV` line in
@@ -2509,11 +2531,19 @@ arguments; git's read-only subcommands), and changes between versions. The deny 
   fetch by absolute path, so that no action with a `post:` runs after the model step, held by
   `check.AuditWorkflow`. And a process that outlives the CLI's process tree (one detached from a
   built-in read-only command that runs without the wrapper) could write to the directory after the
-  after-digest; this has not been shown to be possible. The `actions/checkout` replacement is deferred
-  on the auditor's condition that no workflow restores an Actions cache (`setup-go` runs with
-  `cache: false`) and that the model job's token is read-only: if either stops being true, a post
-  step run after a model step that changed `$GITHUB_PATH` could reach a writable token or poison a
-  cache, and the deferral becomes should-fix.
+  after-digest, and after `auditrun`'s repair; this has not been shown to be possible, and it is the
+  case the `actions/checkout` replacement still covers. *Corrected 2026-11-26 (round 3):* the deferral
+  first rested on "no workflow restores an Actions cache (`setup-go` runs with `cache: false`)", which
+  is false: `ci.yml`'s test job and `security.yml`'s two setup-go steps run setup-go with its default,
+  which restores a Go cache. That fits "The Actions cache (residual risk)" below: no release-relevant
+  workflow restores a cache, and CI's caches are accepted. The model job's `GITHUB_TOKEN` is read-only,
+  but that is not enough on its own: every action the job runs, `actions/checkout`'s post step included,
+  is handed `ACTIONS_RUNTIME_TOKEN`, which can write the Actions cache. What keeps a model step's change
+  from reaching that post step is round 3's repair, which empties every changed file command before
+  `auditrun` exits; the replacement of `actions/checkout` stays a follow-up for a process that outlives
+  the CLI. **Open option for the maintainer:** set `cache: false` on those three setup-go steps, held by
+  a check in `test/architecture` as `release.yml`'s are, so that no workflow on `main` restores a cache
+  a post step could have poisoned.
 - **Follow-up, not done here:** recheck the scrub's mounts with a real bwrap on the x64 runner, the
   `.claude` `denyWrite` and the empty directory bound onto `.git` included; and a preflight probe that
   holds the class's boundary, a bare `cat` of a state path and a bare `>` into `/tmp`, both expected
