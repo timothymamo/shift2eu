@@ -968,11 +968,11 @@ var auditJobs = []auditJob{
 	},
 }
 
-// auditAppPermissions are the App token step's permission-* inputs, exactly
-// ADR 0040's Decision 1: the audit App's four write permissions, nothing else.
-var auditAppPermissions = []string{
-	"permission-contents", "permission-pull-requests", "permission-issues", "permission-security-events",
-}
+// auditAppPermissionPrefix starts every permission-* input of
+// actions/create-github-app-token. The App token step holds none: the token
+// inherits exactly the App's installation permissions (ADR 0040, Decision 1;
+// issue #632).
+const auditAppPermissionPrefix = "permission-"
 
 // auditReadWhere says, for each credential and variable, where the workflow
 // reads it: the one place a message names.
@@ -2126,14 +2126,43 @@ func (a *auditReader) upload(with yamlread.Entry, path, artifact string) {
 }
 
 // appToken checks the App token step's with:: the App's client ID and key, and
-// exactly the four permission-* inputs of Decision 1, each write.
+// no permission-* input, so the token inherits exactly the App's installation
+// permissions (ADR 0040, Decision 1; issue #632).
 func (a *auditReader) appToken(with yamlread.Entry, path string, want *auditStep) {
 	if want == nil {
 		return
 	}
 
-	keys := a.withKeys(with, path, append([]string{"client-id", "private-key"}, auditAppPermissions...),
-		append([]string{"client-id", "private-key"}, auditAppPermissions...))
+	inputs := []string{"client-id", "private-key"}
+
+	if with.Num == 0 {
+		a.r.fail("%s has no with:, want %s", path, strings.Join(inputs, ", "))
+
+		return
+	}
+
+	lines := a.r.block(with, path+": with")
+
+	// A permission-* input is refused below with its own reason, not as an
+	// unknown key.
+	allowed := slices.Clone(inputs)
+
+	if entries, err := yamlread.Mapping(lines); err == nil {
+		for _, e := range entries {
+			if strings.HasPrefix(e.Key, auditAppPermissionPrefix) {
+				allowed = append(allowed, e.Key)
+				a.r.fail("line %d: %s: with: holds %s: the step asks for no permission-* input, so the token inherits exactly the App's installation permissions; a permission the App does not hold fails the mint (run 45780739586), and the App's own setup bounds what the token can do (ADR 0040, Decision 1)", e.Num, path, e.Key)
+			}
+		}
+	}
+
+	keys := a.keys(lines, path+": with", allowed, nil)
+
+	for _, key := range inputs {
+		if _, ok := keys[key]; !ok {
+			a.r.fail("%s: with: holds no %s", path, key)
+		}
+	}
 
 	for _, read := range want.with {
 		e, ok := keys[read.key]
@@ -2143,12 +2172,6 @@ func (a *auditReader) appToken(with yamlread.Entry, path string, want *auditStep
 
 		a.exact(e, path+": with: "+read.key, read.value, "")
 		a.allow(e.Num, e.Value)
-	}
-
-	for _, p := range auditAppPermissions {
-		if e, ok := keys[p]; ok {
-			a.exact(e, path+": with: "+p, "write", "")
-		}
 	}
 }
 

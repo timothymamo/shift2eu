@@ -2347,7 +2347,11 @@ Fill both in when you make or renew it.
 **1. Create the audit App** `shift2eu-audit`. *Done 2026-11-22.* Install it on this repository only, with
 the permissions Decision 1 settled (Contents, Pull requests, Issues and Repository security advisories
 write, nothing else: no Actions, Attestations, Workflows or Administration), no webhook, and no other
-repository. Make its private key on the App's page and keep it for step 2.
+repository. Make its private key on the App's page and keep it for step 2. These grants are the whole
+bound of the publish job's token: the workflow's mint step asks for no `permission-*` input, so the token
+inherits exactly the installation's permissions (contents, pull_requests, issues, repository_advisories
+write, metadata read), for this repository alone (issue #632, ADR 0040's Decision 1). Grant the App
+nothing more than the check below names.
 
 ```bash
 # GitHub, the installation's settings page: by hand
@@ -2877,6 +2881,13 @@ gh api repos/timothymamo/shift2eu/rulesets/<audit branches id> --jq '[.bypass_ac
 # PASS: [["Integration",5875190,"always"]], the audit App only
 # FAIL: any other actor, the admin role included, or another mode
 ```
+
+If the publish job failed at `Mint the audit App's token` with `The permissions requested are not granted
+to this installation` (run 45780739586, 2026-11-26, issue #632), the step asked for a permission the App
+does not hold. The step asks for none since issue #632: the token inherits exactly the App's grants
+(contents, pull_requests, issues, repository_advisories write, metadata read; step 1's check), and
+`test/architecture` refuses any `permission-*` input on it. Check step 1's grants, then start the new run.
+A run that fails there with another error, such as a wrong client ID or key, is step 10's key rotation.
 
 If the publish job failed because it found two App-authored draft advisories with one fingerprint (its
 summary names this step), read both drafts, close the duplicate (keep the older one), then start the new
