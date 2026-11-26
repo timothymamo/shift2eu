@@ -22,7 +22,7 @@ and `gcloud asset export` report them.
 | `shop-checkout` | `run.googleapis.com/Service` | `serverless.container` |  |  | `shop` | depends-on `shop-orders` |  |
 | `shop-uploads` | `file.googleapis.com/Instance` | `storage.file` | `encryption-at-rest`, `snapshots` | 1024 GiB provisioned | `shop` |  |  |
 | `shop-cdn-backend` | `compute.googleapis.com/BackendBucket` | `unclassified` |  |  | `shop` | depends-on `shop-assets` |  |
-| `shop-zone` | `dns.googleapis.com/ManagedZone` | `unclassified` |  |  | `shop` |  |  |
+| `shop-zone` | `dns.googleapis.com/ManagedZone` | `network.dns` | `dnssec`, `dns-routing` |  | `shop` |  |  |
 
 The sample is inventory format version 2
 ([ADR 0025](../../docs/adr/0025-json-inventory-file-format-v2.md)): **Size** is what the estimate prices

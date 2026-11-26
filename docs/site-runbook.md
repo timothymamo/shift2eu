@@ -131,7 +131,7 @@ dev/tofu.sh -chdir=infra/site state pull | jq -c '[.resources[] | select(.type =
 # FAIL [null] or [false]: the stage's state predates the flag, and the apply would destroy it before updating the DNS stage; apply nothing, rm infra/site/site.tfplan, write the flag into the state with the stage still in the configuration, then plan again from the plan line above:
 dev/tofu.sh -chdir=infra/site apply -var=pipeline_www=true -refresh-only   # only after that FAIL; it changes no resource, only the state (answer "yes" if it asks); -var sets pipeline_www = true for this run alone and terraform.tfvars keeps false, so the plan after it removes the stage again
 # PASS: the state check line above, run again, reads [true]; FAIL still [null] or [false]: apply nothing, and take the route under the apply line's second 500 FAIL below
-dev/tofu.sh -chdir=infra/site show site.tfplan | less      # PASS: the bucket policy's three statements, four with public_read (ADR 0039), the IAM rule's two permission sets in one project; the container's image "docker.io/library/caddy:<tag>@sha256:...", max_scale 1, cpu_limit 140, memory_limit_bytes 268000000 (the 0.25 GB the platform keeps; issue #596), min_scale 0, its UPSTREAM the DNS stage's default_fqdn
+dev/tofu.sh -chdir=infra/site show site.tfplan | less      # PASS: the bucket policy's three statements, four with public_read (ADR 0039), the IAM rule's two permission sets in one project; the container's image "docker.io/library/caddy:<tag>@sha256:...", max_scale 1, cpu_limit 140, memory_limit_bytes 268000000 (268 MB, about 0.268 GB: the value the platform kept when asked for 268435456, observed 2026-11-25, issue #596), min_scale 0, its UPSTREAM the DNS stage's default_fqdn
 dev/tofu.sh -chdir=infra/site apply site.tfplan            # PASS: "Apply complete"
 # FAIL (expected on a first setup, or when the DNS stage is replaced) "Resource precondition failed" on scaleway_container.site, "default_fqdn is still empty": the rest is applied; go on with the wait loop, then the second pass below
 # FAIL "Resource postcondition failed" on scaleway_container.site: the platform kept a redirect or a warm instance the provider did not send; set plain HTTP "enabled" and min scale 0 in the console (Serverless Containers, the namespace shift2eu-site, front, Settings), then plan again: PASS "No changes."
@@ -146,7 +146,7 @@ dev/tofu.sh -chdir=infra/site apply site.tfplan            # PASS: "Apply comple
 PL="$(dev/tofu.sh -chdir=infra/site output -raw pipeline_id)"; scw edge-services tls-stage list pipeline-id="$PL" -o json | jq -c '[.[].id]'   # PASS: ["<the $TLS value>"], the orphan alone; FAIL anything else: stop, do not delete
 scw edge-services tls-stage delete "$TLS"                  # PASS: no error (or delete it in the console: Edge Services, the pipeline, its TLS stage)
 scw edge-services tls-stage list pipeline-id="$PL" -o json | jq -c '[.[].id]'   # PASS: []
-dev/tofu.sh -chdir=infra/site plan -detailed-exitcode && rm -r "$T"   # PASS: exit 0, "No changes." (the backup removed); then go on with the wait loop below; FAIL exit 2: read the diff, and keep "$T/state-backup.json" until it is explained
+dev/tofu.sh -chdir=infra/site plan -detailed-exitcode && rm -r "$T"   # PASS: exit 0, "No changes." (the backup removed); then go on with the wait loop below; FAIL exit 2: read the diff, and keep "$T/state-backup.json" until it is explained, then [ -f "$T/state-backup.json" ] && rm -r "$T"
 # Scaleway assigns the DNS stage's default_fqdn after creating it: edge_endpoint is empty right after apply, so refresh the state (no resource change) until it is set, 20 tries 30 s apart
 # Watch the first iteration: with the container absent, refresh-only should not trip the precondition, and the container_endpoint output reads "" (try()) rather than failing (not verifiable offline)
 n=0; refresh_failed=0; until [ -n "$(dev/tofu.sh -chdir=infra/site output -raw edge_endpoint 2>/dev/null)" ] || [ "$n" -ge 20 ]; do sleep 30; dev/tofu.sh -chdir=infra/site apply -refresh-only -auto-approve || { refresh_failed=1; break; }; n=$((n + 1)); done
@@ -398,7 +398,9 @@ for u in http://www.shift2eu.com/ http://shift2eu.com/ https://shift2eu.com/ "ht
 # PASS: every line "308 https://www.shift2eu.com/" (the last "308 https://www.shift2eu.com/a?b=1"); never a 200, never a 301 or 302
 curl -sS -D - -o /dev/null https://www.shift2eu.com/ | grep -i -E '^(HTTP|strict-transport-security|content-security-policy|x-content-type-options|referrer-policy|permissions-policy|server|x-envoy)'
 # PASS: "HTTP/2 200" (or 1.1), exactly one of each of the five headers with infra/site/Caddyfile's values, "server: envoy" and x-envoy-upstream-service-time from the platform, nothing else of theirs
-curl -sS -D - -o /dev/null https://shift2eu.com/ | grep -ic '^strict-transport-security'   # PASS: 0 (the apex's 308 carries no HSTS while preload is not pursued)
+curl -sS -D - -o /dev/null https://shift2eu.com/ | grep -i '^strict-transport-security' | tr -d '\r'   # PASS: exactly one line "strict-transport-security: max-age=31536000", the name in any case (HTTP/1.1 prints "Strict-Transport-Security:"; grep -i matches both), no includeSubDomains, no preload (ADR 0045, issue #601)
+# FAIL no line: infra/site's apply with the apex's HSTS (issue #601) has not run; apply it (R4) before the release that carries the privacy page saying so (R10)
+curl -sS -D - -o /dev/null http://shift2eu.com/ | grep -ic '^strict-transport-security'   # PASS: 0 (the plain-HTTP 308 carries no HSTS)
 ```
 
 **4. The live probes ADR 0045 requires before the site goes live.** Record every answer in ADR 0045's
@@ -517,6 +519,13 @@ gh run view <that release's release.yml run ID> -R <owner>/shift2eu --json jobs 
 Milestone 4, last; the release's live check reads the records at its tag. The deploy runs with
 `-list-bucket` off and the live check with `-plain-http-www` at its default, `redirect`, until milestone 4
 sets them (R7's ListBucket answer, R8's plain-HTTP answer).
+
+*The apex's HSTS first (issue #601):* the privacy page says the apex's HTTPS redirect carries HSTS, but
+the release deploys only the bundle; the Caddyfile that sends the header reaches the live site only
+through infra/site's apply. So, once issue #601's change (the Caddyfile's apex HSTS) is merged to
+`main`, apply `infra/site` (R4) and pass R8's block 3 apex line
+(`strict-transport-security: max-age=31536000` on `https://shift2eu.com/`) before merging the release
+PR of the first release that carries that privacy page.
 
 ```bash
 # The HSTS and preload records PR merged, its squash commit with "Release-As: <version>", and release-please's release PR for it merged

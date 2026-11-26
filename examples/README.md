@@ -12,15 +12,16 @@ describes the same small web shop as it might run on one source:
 The shop has web VMs (one of them a scaling group), on GCP a bare-metal search server, a data
 volume, an object storage bucket with versioning, a PostgreSQL database with point-in-time restore,
 read replicas and node or zone high availability, a MySQL database, a managed Kubernetes cluster, a
-function, an order queue with a dead-letter queue, and a CDN and a DNS zone that `shift2eu` does
-not classify (`unclassified`, with their `rawType`). On AWS it also has a sharded Redis cache, a
-DocumentDB (MongoDB) cluster, an SNS topic, a container registry and an OpenSearch product search
-domain; on GCP a Cloud Run service and a Filestore file share; on Azure a load balancer with UDP rules
-and an HDInsight Kafka cluster for the shop's events. No target's catalog snapshot serves these nine
-categories yet (PRD #552, PRD #571), so every target shows them as fit `none`, "no offering in the
-`<target>` catalog". Together the samples use every taxonomy
-category and every capability, and give every fit (direct, partial, none) on at least one target,
-so a report shows all its sections.
+function, an order queue with a dead-letter queue, and a CDN (and on AWS and Azure a DNS zone) that
+`shift2eu` does not classify (`unclassified`, with its `rawType`). On AWS it also has a sharded Redis
+cache, a DocumentDB (MongoDB) cluster, an SNS topic, a container registry and an OpenSearch product
+search domain; on GCP a Cloud Run service, a Filestore file share and a public DNS zone with DNSSEC
+and routing policies (`network.dns`, global: no region); on Azure a load balancer with UDP rules and
+an HDInsight Kafka cluster for the shop's events. No target's catalog snapshot serves these ten
+categories yet (PRD #552, PRD #571, PRD #581), so every target shows them as fit `none`,
+"no offering in the `<target>` catalog". Together the samples use every taxonomy category and every
+capability, and give every fit (direct, partial, none) on at least one target, so a report shows all
+its sections.
 
 Each resource that a target prices has a size (vCPU and memory, or stored GiB, and a count of
 instances or nodes), so the reports show a plan and a monthly estimate per resource and a cost summary.

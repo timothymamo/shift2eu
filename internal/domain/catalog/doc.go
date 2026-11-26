@@ -48,6 +48,13 @@
 // give a plan's and a GiB's price in a region. Regions are compared exactly,
 // byte for byte, never ignoring case or white space.
 //
+// A global offering (Offering.Global, PRD #581) is served from the provider's
+// own locations, bound to no region the user chooses. New accepts one only for
+// categories taxonomy.IsGlobal names, with no region of its own and prices and
+// fixed fees that name none. It is available in every non-empty region, its
+// prices and fixed fees apply in every one (AvailableIn, PlanPrice,
+// StoragePrice, FixedFee), and it adds no region to Catalog.Regions.
+//
 // The target is the display name reports show (for example Scaleway), not a CLI
 // key: choosing an adapter from a key is the composition root's job.
 //

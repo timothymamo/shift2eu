@@ -16,6 +16,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/go-cmp/cmp"
+
 	"github.com/timothymamo/shift2eu/internal/adapter/report/jsonreport"
 )
 
@@ -851,6 +853,10 @@ var optionalProperties = []string{
 	// comparison target, only when --region chose one; sourceCost is written
 	// only with estimates on.
 	"region", "sourceCost",
+	// The two global-services keys of a resource (PRD #581): a document writes
+	// bestOfferingGlobal only when the best offering is global, and globalTies
+	// only when one of its ties is. Both are absent when there is nothing to say.
+	"bestOfferingGlobal", "globalTies",
 }
 
 // TestSchemaObjectsAreClosed pins that every schema of this package describes
@@ -1243,6 +1249,56 @@ func TestSchemaV3NamesTheNeverPricedReasonAndTheOptionalVCPUs(t *testing.T) {
 			if !strings.Contains(vcpus.description, "no vCPU count") {
 				t.Errorf("the description of $defs/plan.vcpus in %s is\n%q\nwant it to say that 0 means the "+
 					"target gives no vCPU count", name, vcpus.description)
+			}
+		})
+	}
+}
+
+// TestSchemaV3MarksGlobalOfferings pins the two keys schemaVersion 3 declares
+// beside bestOffering and ties (PRD #581, The region model, Reports):
+// bestOfferingGlobal is a boolean and globalTies an array of strings, each
+// optional, and their descriptions say what global means for a reader checking
+// data residency, pointing to the target's SOURCES.md. The frozen version 1 and
+// version 2 schema files keep their own bytes (TestFrozenSchemaFilesAreUnchanged).
+func TestSchemaV3MarksGlobalOfferings(t *testing.T) {
+	t.Parallel()
+
+	for _, name := range []string{"assessment-v3.schema.json", "comparison-v3.schema.json"} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			s := readSchema(t, filepath.Join("schema", name))
+
+			global := schemaAt(t, s, "/$defs/resource/properties/bestOfferingGlobal")
+			if diff := cmp.Diff([]string{"boolean"}, global.types); diff != "" {
+				t.Errorf("$defs/resource.bestOfferingGlobal types mismatch (-want +got):\n%s", diff)
+			}
+
+			ties := schemaAt(t, s, "/$defs/resource/properties/globalTies")
+			if diff := cmp.Diff([]string{"array"}, ties.types); diff != "" {
+				t.Errorf("$defs/resource.globalTies types mismatch (-want +got):\n%s", diff)
+			}
+
+			if ties.items == nil {
+				t.Fatalf("$defs/resource.globalTies in %s declares no items", name)
+			}
+
+			if diff := cmp.Diff([]string{"string"}, ties.items.types); diff != "" {
+				t.Errorf("$defs/resource.globalTies items mismatch (-want +got):\n%s", diff)
+			}
+
+			// A reader who checked what global means finds the same sentence the
+			// reports say, including where the offering is served, and where the target
+			// lists its sources.
+			for pointer, description := range map[string]string{
+				"$defs/resource.bestOfferingGlobal": global.description,
+				"$defs/resource.globalTies":         ties.description,
+			} {
+				for _, phrase := range []string{"not bound to a region you choose", "outside the EU", "SOURCES.md"} {
+					if !strings.Contains(description, phrase) {
+						t.Errorf("the description of %s in %s is\n%q\nwant it to say %q", pointer, name, description, phrase)
+					}
+				}
 			}
 		})
 	}

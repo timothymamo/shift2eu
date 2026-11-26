@@ -224,6 +224,145 @@ func TestRunWithUnknownRegion(t *testing.T) {
 	}
 }
 
+// globalDNSInventory is an inventory with one public DNS zone, which uses DNS
+// routing, the capability only the fixture catalog's global offerings provide
+// (testutil.DNSOfferings): the zone is bound to no region (PRD #581).
+func globalDNSInventory(t *testing.T) inventory.Inventory {
+	t.Helper()
+
+	inv, err := inventory.New(sourceName, []inventory.Resource{
+		{
+			ID:           "zone-example",
+			RawType:      "AWS::Route53::HostedZone",
+			Category:     taxonomy.NetworkDNS,
+			Capabilities: []taxonomy.Capability{taxonomy.DNSRouting},
+		},
+	})
+	if err != nil {
+		t.Fatalf("inventory.New() returned unexpected error: %v", err)
+	}
+
+	return inv
+}
+
+// TestRunWithRegionAndGlobalOffering pins what a chosen region does to a global
+// offering end to end (PRD #581, The region model): the CLI's
+// `--region ovhcloud=gra` reaches a single-target run as Options.Region "gra"
+// (internal/cli, newRunner), a region the catalog declares, so the region-scoped
+// assessment keeps the global "DNS Zone" as the best offering of a DNS zone, fit
+// direct and with no "not offered in <region>" reason. `--region
+// ovhcloud=global` names no region the catalog declares, so the run is refused
+// with an error wrapping ErrUnknownRegion before anything is assessed.
+func TestRunWithRegionAndGlobalOffering(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a declared region keeps the global offering", func(t *testing.T) {
+		t.Parallel()
+
+		// "gra" is a region the fixture catalog declares, both as its snapshot's
+		// default region and as a region of the regional "Apex DNS Zone".
+		const declared = "gra"
+
+		inv := globalDNSInventory(t)
+		cat := testutil.DNSCatalog(t)
+		rep := &fakeReporter{body: reportBody}
+
+		useCase, err := analysis.New(&fakeInventory{inv: inv}, &fakeCatalog{cat: cat}, rep)
+		if err != nil {
+			t.Fatalf("New() returned unexpected error: %v", err)
+		}
+
+		var buf bytes.Buffer
+
+		if err := useCase.RunWith(context.Background(), &buf,
+			analysis.ReportMeta{InventoryName: inventoryName}, analysis.Options{Region: declared}); err != nil {
+			t.Fatalf("RunWith() returned unexpected error: %v", err)
+		}
+
+		if rep.calls != 1 {
+			t.Fatalf("Report() called %d times, want 1", rep.calls)
+		}
+
+		if got := rep.gotAssessment.Region; got != declared {
+			t.Errorf("Assessment.Region = %q, want %q", got, declared)
+		}
+
+		v := verdictOf(t, rep.gotAssessment.Verdicts, "zone-example")
+
+		if v.Fit != mapping.Direct {
+			t.Errorf("the DNS zone's fit = %q, want %q: a global offering is available in every region",
+				v.Fit, mapping.Direct)
+		}
+
+		if v.BestOffering != "DNS Zone" {
+			t.Errorf("the DNS zone's best offering = %q, want the global %q", v.BestOffering, "DNS Zone")
+		}
+
+		if !v.BestOfferingGlobal() {
+			t.Errorf("BestOfferingGlobal() = false for the best offering %q, want true", v.BestOffering)
+		}
+
+		for _, reason := range v.Reasons {
+			if reason.Code == mapping.NotOfferedInRegion {
+				t.Errorf("the DNS zone's reason = %q, want none: the global %q is offered in %q",
+					reason, "DNS Zone", declared)
+			}
+		}
+
+		if diff := cmp.Diff(reportBody, buf.String()); diff != "" {
+			t.Errorf("RunWith() wrote %q, want the reporter's output %q", buf.String(), reportBody)
+		}
+	})
+
+	t.Run("global is no region the catalog declares", func(t *testing.T) {
+		t.Parallel()
+
+		const notARegion = "global"
+
+		invFake := &fakeInventory{inv: globalDNSInventory(t)}
+		rep := &fakeReporter{body: reportBody}
+
+		useCase, err := analysis.New(invFake, &fakeCatalog{cat: testutil.DNSCatalog(t)}, rep)
+		if err != nil {
+			t.Fatalf("New() returned unexpected error: %v", err)
+		}
+
+		var buf bytes.Buffer
+
+		err = useCase.RunWith(context.Background(), &buf,
+			analysis.ReportMeta{InventoryName: inventoryName}, analysis.Options{Region: notARegion})
+		if err == nil {
+			t.Fatal("RunWith() returned no error for the region \"global\", which the catalog does not declare")
+		}
+
+		if !errors.Is(err, analysis.ErrUnknownRegion) {
+			t.Errorf("RunWith() error = %v, want one wrapping analysis.ErrUnknownRegion", err)
+		}
+
+		var regionErr *analysis.RegionError
+		if !errors.As(err, &regionErr) {
+			t.Fatalf("RunWith() error = %v, want a *analysis.RegionError", err)
+		}
+
+		if diff := cmp.Diff([]string{"gra", "sbg"}, regionErr.Regions); diff != "" {
+			t.Errorf("RegionError.Regions mismatch (-want +got):\n%s", diff)
+		}
+
+		if rep.calls != 0 {
+			t.Errorf("Report() called %d times, want 0: a bad region is refused before anything is assessed", rep.calls)
+		}
+
+		if invFake.calls != 0 {
+			t.Errorf("Inventory() called %d times, want 0: a bad region is refused before the inventory is read",
+				invFake.calls)
+		}
+
+		if got := buf.String(); got != "" {
+			t.Errorf("RunWith() wrote %q, want nothing for a bad region", got)
+		}
+	})
+}
+
 // TestComparisonRunWith pins that each target is assessed and estimated in its own
 // region: the comparison holds a total per target, and the two targets that
 // differ only in their region agree on every resource but the one whose offering
