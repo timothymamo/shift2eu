@@ -84,6 +84,8 @@ func TestCaddyfileRedirects(t *testing.T) {
 // headers*): HSTS as site/records/hsts.json implies it, the pages'
 // Content-Security-Policy plus frame-ancestors 'none', nosniff, no referrer,
 // and a Permissions-Policy that turns every feature off (the site uses none).
+// It pins the apex's one header too: its HTTPS 308 carries exactly
+// max-age=31536000, and no plain-HTTP answer carries HSTS at all (issue #601).
 func TestCaddyfileHeaders(t *testing.T) {
 	t.Parallel()
 
@@ -170,17 +172,28 @@ const designedCaddyfile = `{
 		}
 	}
 
-	@path expression {http.request.uri.path}.startsWith("/")
-	handle @path {
-		redir https://www.shift2eu.com{http.request.uri} 308
+	@apex @https
+	handle @apex {
+		header Strict-Transport-Security "max-age=31536000"
+		@path expression {http.request.uri.path}.startsWith("/")
+		handle @path {
+			redir https://www.shift2eu.com{http.request.uri} 308
+		}
+		redir https://www.shift2eu.com/ 308
 	}
-	redir https://www.shift2eu.com/ 308
 }
 `
 
 // designedCSP is the policy the designed configuration repeats from a page,
 // with frame-ancestors added.
 var designedCSP = []string{"default-src 'none'", "frame-ancestors 'none'"}
+
+// apexHSTS is the one Strict-Transport-Security value the apex's HTTPS 308
+// carries (docs/adr/0045, *The headers*; issue #601): the minimum, without the
+// includeSubDomains www sends and without preload, which site/records/hsts.json
+// does not pursue (docs/adr/0042). It holds a returning visitor who types
+// shift2eu.com to HTTPS, and promises nothing about any other host.
+const apexHSTS = "max-age=31536000"
 
 // TestChecksAcceptTheDesignedConfiguration fails when a check refuses the
 // configuration docs/adr/0045 describes: the checks would then refuse the
@@ -375,10 +388,11 @@ func TestChecksRefuseBrokenConfigurations(t *testing.T) {
 	}
 }
 
-// TestCheckHeadersRefuses pins the header check on the three values that decide
-// it, which the table above cannot state in a Caddyfile alone: an HSTS value
-// the record does not imply, a header the record waives, and a policy missing
-// the framing guard.
+// TestCheckHeadersRefuses pins the header check on the values that decide it,
+// which the table above cannot state in a Caddyfile alone: an HSTS value the
+// record does not imply, a header the record waives, the apex's header missing,
+// doubled or another value, an HSTS header on a plain-HTTP answer, and a policy
+// missing the framing guard.
 func TestCheckHeadersRefuses(t *testing.T) {
 	t.Parallel()
 
@@ -406,6 +420,38 @@ func TestCheckHeadersRefuses(t *testing.T) {
 			sendHSTS: false,
 			wantCSP:  designedCSP,
 			want:     "waives it",
+		},
+		{
+			name:     "no HSTS on the apex's HTTPS answer",
+			src:      strings.Replace(designedCaddyfile, "\t\theader Strict-Transport-Security \""+apexHSTS+"\"\n", "", 1),
+			wantHSTS: hsts,
+			sendHSTS: true,
+			wantCSP:  designedCSP,
+			want:     "on the apex's HTTPS answers",
+		},
+		{
+			name:     "the apex's HSTS with includeSubDomains",
+			src:      strings.Replace(designedCaddyfile, "\theader Strict-Transport-Security \""+apexHSTS+"\"", "\theader Strict-Transport-Security \"max-age=31536000; includeSubDomains\"", 1),
+			wantHSTS: hsts,
+			sendHSTS: true,
+			wantCSP:  designedCSP,
+			want:     "on the apex's HTTPS answers",
+		},
+		{
+			name:     "an HSTS header set twice on the apex's HTTPS answer",
+			src:      strings.Replace(designedCaddyfile, "\t\theader Strict-Transport-Security \""+apexHSTS+"\"\n", "\t\theader Strict-Transport-Security \""+apexHSTS+"\"\n\t\theader Strict-Transport-Security \""+apexHSTS+"\"\n", 1),
+			wantHSTS: hsts,
+			sendHSTS: true,
+			wantCSP:  designedCSP,
+			want:     "on the apex's HTTPS answers",
+		},
+		{
+			name:     "an HSTS header on a plain-HTTP answer",
+			src:      withLine("\theader Strict-Transport-Security \"" + apexHSTS + "\""),
+			wantHSTS: hsts,
+			sendHSTS: true,
+			wantCSP:  designedCSP,
+			want:     "on a plain-HTTP answer",
 		},
 		{
 			name:     "a policy without the framing guard",
@@ -708,20 +754,36 @@ func checkRedirects(f *caddyfile) []string {
 }
 
 // checkHeaders holds the five response headers of www against the values the
-// record, the pages and docs/adr/0045 imply.
+// record, the pages and docs/adr/0045 imply, and the apex's one header against
+// the decision issue #601 records: the apex's HTTPS 308 carries
+// max-age=31536000 alone, and no plain-HTTP answer carries the header.
 func checkHeaders(f *caddyfile, wantHSTS string, sendHSTS bool, wantCSP []string) []string {
 	var problems []string
 
 	headers := headerValues(f.all())
 
-	gotHSTS := headers["strict-transport-security"]
+	// HSTS is per route: www's is site/records/hsts.json's, the apex's is the
+	// minimum, and a plain-HTTP answer's is none (docs/adr/0045, *The headers*).
+	gotHSTS := f.headersOf(wwwRoute)["strict-transport-security"]
 	switch {
 	case !sendHSTS && len(gotHSTS) > 0:
-		problems = append(problems, fmt.Sprintf("the Caddyfile sends Strict-Transport-Security %q, but site/records/hsts.json waives it: a header the record does not claim is held to nothing (docs/adr/0042, docs/adr/0045)", gotHSTS))
+		problems = append(problems, fmt.Sprintf("the Caddyfile sends Strict-Transport-Security %q to www, but site/records/hsts.json waives it: a header the record does not claim is held to nothing (docs/adr/0042, docs/adr/0045)", gotHSTS))
 	case sendHSTS && len(gotHSTS) != 1:
-		problems = append(problems, fmt.Sprintf("the Caddyfile sends %d Strict-Transport-Security headers, want exactly one %q: it is the header site/records/hsts.json implies (docs/adr/0042, docs/adr/0045)", len(gotHSTS), wantHSTS))
+		problems = append(problems, fmt.Sprintf("the Caddyfile sends %d Strict-Transport-Security headers to www, want exactly one %q: it is the header site/records/hsts.json implies (docs/adr/0042, docs/adr/0045)", len(gotHSTS), wantHSTS))
 	case sendHSTS && gotHSTS[0] != wantHSTS:
-		problems = append(problems, fmt.Sprintf("the Caddyfile sends Strict-Transport-Security %q, want %q: it is the header site/records/hsts.json implies (docs/adr/0042, docs/adr/0045)", gotHSTS[0], wantHSTS))
+		problems = append(problems, fmt.Sprintf("the Caddyfile sends Strict-Transport-Security %q to www, want %q: it is the header site/records/hsts.json implies (docs/adr/0042, docs/adr/0045)", gotHSTS[0], wantHSTS))
+	}
+
+	gotApexHSTS := f.headersOf(apexRoute)["strict-transport-security"]
+	switch {
+	case len(gotApexHSTS) != 1:
+		problems = append(problems, fmt.Sprintf("the Caddyfile sends %d Strict-Transport-Security headers on the apex's HTTPS answers, want exactly one %q: the apex's 308 is the answer that holds a visitor who types shift2eu.com to HTTPS (docs/adr/0045, *The headers*)", len(gotApexHSTS), apexHSTS))
+	case gotApexHSTS[0] != apexHSTS:
+		problems = append(problems, fmt.Sprintf("the Caddyfile sends Strict-Transport-Security %q on the apex's HTTPS answers, want %q: the apex carries the minimum, without includeSubDomains (which www alone sends) and without preload, which site/records/hsts.json does not pursue (docs/adr/0042, docs/adr/0045)", gotApexHSTS[0], apexHSTS))
+	}
+
+	if gotPlainHSTS := f.headersOf(plainRoute)["strict-transport-security"]; len(gotPlainHSTS) > 0 {
+		problems = append(problems, fmt.Sprintf("the Caddyfile sends Strict-Transport-Security %q on a plain-HTTP answer, want none: a browser reads the header from the connection that carried it, and one a visitor's network could have added decides nothing (docs/adr/0045, *The headers*)", gotPlainHSTS))
 	}
 
 	gotCSP := headers["content-security-policy"]
@@ -1249,12 +1311,17 @@ func (f *caddyfile) all() []*node {
 }
 
 // matchers returns the matcher definitions the file holds, by their name with
-// the @: a line whose first token is @name defines it.
+// the @: a line whose first token is @name defines it, with the tokens that
+// follow it, or - when it opens a block - the tokens of the block's one line.
 func (f *caddyfile) matchers() map[string][]string {
 	defs := map[string][]string{}
 	for _, n := range f.all() {
 		if len(n.tokens) > 0 && strings.HasPrefix(n.tokens[0], "@") {
-			defs[n.tokens[0]] = n.tokens[1:]
+			toks := n.tokens[1:]
+			if len(toks) == 0 && len(n.children) > 0 {
+				toks = n.children[0].tokens
+			}
+			defs[n.tokens[0]] = toks
 		}
 	}
 
@@ -1334,6 +1401,93 @@ func withoutMatchers(toks []string) []string {
 	}
 
 	return out
+}
+
+// route is the class of request a directive of the Caddyfile answers, from the
+// matchers of the blocks it sits in: the site's own answers to www, the HTTPS
+// answers to every other host (the apex's 308 among them), or a plain-HTTP
+// answer.
+type route int
+
+const (
+	// plainRoute holds the answers to a request whose joined X-Forwarded-Proto is
+	// not exactly https: the 308 that sends the visitor to
+	// https://www.shift2eu.com.
+	plainRoute route = iota
+	// wwwRoute holds the site's own answers: HTTPS for exactly www.shift2eu.com,
+	// proxied to Edge Services.
+	wwwRoute
+	// apexRoute holds the HTTPS answers to every other host, the apex's 308
+	// among them (docs/adr/0045, *What the server answers*).
+	apexRoute
+)
+
+// routeOf returns the route n answers: the matchers its own line names, and
+// the ones of every block it sits in, decide it, the named matchers resolved to
+// the expressions they hold.
+func (f *caddyfile) routeOf(n *node) route {
+	defs := f.matchers()
+
+	var https, www bool
+
+	var defines func(name string, seen map[string]bool)
+	defines = func(name string, seen map[string]bool) {
+		if seen[name] {
+			return
+		}
+		seen[name] = true
+
+		toks, ok := defs[name]
+		if !ok {
+			return
+		}
+
+		joined := strings.Join(toks, " ")
+		if strings.Contains(joined, "X-Forwarded-Proto") {
+			https = true
+		}
+		if strings.Contains(joined, "hostport") {
+			www = true
+		}
+
+		for _, tok := range toks {
+			if strings.HasPrefix(tok, "@") {
+				defines(tok, seen)
+			}
+		}
+	}
+
+	for cur := n; cur != nil; cur = cur.parent {
+		for _, tok := range cur.tokens {
+			if strings.HasPrefix(tok, "@") {
+				defines(tok, map[string]bool{})
+			}
+		}
+	}
+
+	switch {
+	case https && www:
+		return wwwRoute
+	case https:
+		return apexRoute
+	default:
+		return plainRoute
+	}
+}
+
+// headersOf returns the response headers the file's header directives set on
+// one route of the site, by their lower-case name: the ones the blocks that
+// answer that route hold, and no other route's.
+func (f *caddyfile) headersOf(r route) map[string][]string {
+	var nodes []*node
+
+	for _, n := range f.all() {
+		if f.routeOf(n) == r {
+			nodes = append(nodes, n)
+		}
+	}
+
+	return headerValues(nodes)
 }
 
 // headerValues returns the response headers the file's header directives set,

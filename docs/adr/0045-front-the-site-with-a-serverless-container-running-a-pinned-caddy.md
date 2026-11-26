@@ -189,12 +189,32 @@ the site's files and every other path alike:
 | `Permissions-Policy` | every feature the site does not use turned off (`()`); the exact list is *for the infra unit*, pinned by the configuration test |
 
 The `<meta>` policy and the framing guard in the page script stay: they travel with the bundle to every
-other origin (Hosting decision 11). The apex's 308 carries no HSTS while preload is not pursued: the
-live check only records the apex's header then (ADR 0043), so nothing would hold a value sent there, and
-the apex's header changes together with the preload record, in one change (above). The alternative,
-`max-age=31536000` without `includeSubDomains` on the apex's HTTPS 308 while preload is not pursued,
-would protect a returning visitor who types `shift2eu.com`; it is left open as the maintainer's decision
-at milestone 4 (it changes neither the PRD's HSTS decision nor the record). No other header is decided
+other origin (Hosting decision 11).
+
+**The apex's HTTPS 308 carries `Strict-Transport-Security: max-age=31536000`** (decided by the maintainer
+on 2026-11-25, PRD #297 milestone 4, issue #601), exactly once, on every HTTPS answer to a host other than
+`www.shift2eu.com` (the apex, the container's own endpoint, `www` with a port, a trailing dot or
+capitals), none of which is proxied:
+
+- **Why:** it protects a returning visitor who types `shift2eu.com`: a browser that has once been to
+  `https://shift2eu.com` goes there over HTTPS from then on, and its 308 takes it to `www` over HTTPS.
+- **No `includeSubDomains`:** the apex's HSTS with `includeSubDomains` would bind every present and
+  future subdomain of `shift2eu.com` to HTTPS from one redirect, which is preload's commitment without
+  preload; `www` sends its own `includeSubDomains` for itself. **No `preload`:** preload is not pursued
+  (`site/records/hsts.json`, `preload: false`, ADR 0042).
+- **Never on plain HTTP:** the plain-HTTP 308, for any name, carries no HSTS. A browser ignores the
+  header over plain HTTP (RFC 6797, section 8.1), and one sent there is one a visitor's network could
+  have added.
+
+The live check still only records the apex's header while preload is not pursued (ADR 0043, its
+amendment of 2026-11-25): the value is pinned by `test/sitefront` (the static test under `make test`,
+the behaviour test under `make test-sitefront`) and read live by `docs/site-runbook.md` R8 after the
+maintainer applies `infra/site`. The release ships the privacy page that states this header but not the
+Caddyfile, so the maintainer applies `infra/site` and passes R8's apex line before merging the first
+release that carries that page (`docs/site-runbook.md` R10). Pursuing preload changes the apex's header (to the same minimum with
+`includeSubDomains` and `preload`) together with the preload record, in one change (above). This
+replaces the earlier wording that left the apex's header to the maintainer at milestone 4; it changes
+neither the PRD's HSTS decision nor the record. No other header is decided
 here; `Clear-Site-Data` and `Cross-Origin-Opener-Policy` are now possible and are proposed follow-ups.
 
 Guidance for the infra unit (the behaviour tests below decide): Caddy's response `header` directive
@@ -339,7 +359,8 @@ found.
   - the sentences that the site "cannot send" `Clear-Site-Data` (line 55) or
     `Cross-Origin-Opener-Policy` (line 66) become "does not send";
   - line 38, the downgrade risk: the apex redirect's provider is now Scaleway's container, which sends no
-    HSTS while preload is not pursued;
+    HSTS while preload is not pursued (since 2026-11-25, issue #601: its plain-HTTP 308 sends none, its
+    HTTPS 308 sends `max-age=31536000`, *The headers*);
   - line 67, the framing guard: `www` now sends `frame-ancestors 'none'` as a header; the script's guard
     stays for the other origins.
 - Scaleway now also serves the apex: the apex redirect's provider (Hosting decision 3) is Scaleway, which
@@ -494,7 +515,9 @@ TLS stage*.
   - **The front.** A warm request answered 404 in 0.34 s. All six redirect URLs answer 308 to
     `https://www.shift2eu.com/`, the query kept. On `www` each of the five Caddyfile headers comes once
     with its exact value, beside `server: envoy` and `x-envoy-upstream-service-time`, with no
-    `set-cookie` and no `x-amz-*` header. The apex sends no HSTS: it only redirects.
+    `set-cookie` and no `x-amz-*` header. The apex sends no HSTS: it only redirects. (Since
+    2026-11-25, issue #601, the apex's HTTPS 308 carries `max-age=31536000` once `infra/site` is
+    applied: *The headers*, above.)
   - **Spoofed and repeated `X-Forwarded-Proto` over plain HTTP:** one `https`; `https` + `http`;
     `http` + `https`; `https` + `https`; the one field `https, https`. All five answer the 308. The rule
     fails closed, and the platform does not pass a client's own header through to Caddy as `https`.

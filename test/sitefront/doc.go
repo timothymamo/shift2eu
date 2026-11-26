@@ -9,7 +9,10 @@
 // hostport expressions the scheme and www are matched by (and no other matcher
 // for either), every 308's target and the path guard the escaped request URI
 // hides behind, the response headers against site/records/hsts.json and the
-// policies every page carries in its <meta> element, the reverse proxy to
+// policies every page carries in its <meta> element, each header attributed to
+// the route its block answers (www over HTTPS, any other host over HTTPS, plain
+// HTTP), so the apex's HTTPS 308 carries exactly one Strict-Transport-Security:
+// max-age=31536000 and no plain-HTTP answer carries one (issue #601), the reverse proxy to
 // {$UPSTREAM} and the request and response headers it removes, the one global
 // log that keeps Caddy's request loggers out of the container's output, and
 // the directives the design refuses: a log outside the global options, encode,
