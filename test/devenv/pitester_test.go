@@ -134,12 +134,22 @@ const fakePiScript = `#!/bin/sh
 
 // fakeNodeScript stands in for node in every case that does not exercise the wrapper's load of the refusal's
 // files: the wrapper reads node's exit status alone, so a node that exits 0 at once says the files are fine
-// without loading one. A case that pins what the wrapper does when node refuses writes its own node instead
-// (TestPiTesterChecksTheDenyFilesWithNode runs the machine's real node).
+// without loading one. It records the NAMES of the variables of its environment - never a value, which these
+// tests invent anyway (CLAUDE.md rule 3) - one run per piNodeRecordRunEnd line, since the wrapper runs node once
+// for the extension's load and once for the list's patterns, and what a run inherits is the audit's finding L-A
+// (issue #662). The record's path is written into the script, and the marker line is piNodeRecordRunEnd. A case
+// that pins what the wrapper does when node refuses writes its own node instead (TestPiTesterChecksTheDenyFilesWithNode
+// runs the machine's real node).
 const fakeNodeScript = `#!/bin/sh
 # Stands in for node in the tests of the tester's launch wrapper (issue #662).
-exit 0
+{
+	env | cut -d= -f1 | sort
+	printf 'run-end\n'
+} >> '%s'
 `
+
+// piNodeRecordRunEnd ends one run's names in the fake node's record.
+const piNodeRecordRunEnd = "run-end"
 
 // piRecordEnvMarker separates the fake pi's argv and the marker from the names of the variables it saw.
 const piRecordEnvMarker = "env-names:"
@@ -317,13 +327,27 @@ func writeFakePi(t *testing.T, binDir, record string) {
 	writeFileMode(t, filepath.Join(binDir, "pi"), []byte(script), 0o700)
 }
 
+// writeFakeNode writes the stand-in for node first on the wrapper's PATH, recording the names of each run's
+// environment into record.
+func writeFakeNode(t *testing.T, binDir, record string) {
+	t.Helper()
+
+	writeFileMode(t, filepath.Join(binDir, "node"), []byte(fmt.Sprintf(fakeNodeScript, record)), 0o700)
+}
+
+// piTesterNodeRecord is where the fake node records the names of its environment, beside the fake pi's own record
+// so that a case names one path.
+func piTesterNodeRecord(piRecord string) string {
+	return piRecord + "-node-env"
+}
+
 // writePiTesterBin writes the stand-ins a case that does not exercise the node load needs: the fake pi, and a
-// node that exits 0 at once (fakeNodeScript).
+// node that records the names of its environment and exits 0 at once (fakeNodeScript).
 func writePiTesterBin(t *testing.T, binDir, record string) {
 	t.Helper()
 
 	writeFakePi(t, binDir, record)
-	writeFileMode(t, filepath.Join(binDir, "node"), []byte(fakeNodeScript), 0o700)
+	writeFakeNode(t, binDir, piTesterNodeRecord(record))
 }
 
 // piTesterEnv is the environment the wrapper is handed, and so the only one pi could inherit: the parent values
@@ -492,6 +516,218 @@ func TestPiTesterHandsPiAnAllowListedEnvironment(t *testing.T) {
 
 	assertNoSecrets(t, "the wrapper's stdout", stdout, secrets)
 	assertNoSecrets(t, "the wrapper's stderr", stderr, secrets)
+}
+
+// readPiNodeRecord parses what the fake node recorded: the names of the variables of each of its runs, one run per
+// piNodeRecordRunEnd line. It fails the test when the wrapper never ran node, since a case that pins what node's
+// environment holds has to see a run.
+func readPiNodeRecord(t *testing.T, path string) [][]string {
+	t.Helper()
+
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("the wrapper did not run node, although it loads the env-printing refusal's two files with it before pi starts (issue #662): %v", err)
+	}
+
+	var (
+		runs    [][]string
+		current []string
+	)
+
+	for _, line := range strings.Split(strings.TrimSuffix(string(body), "\n"), "\n") {
+		switch line {
+		case piNodeRecordRunEnd:
+			runs = append(runs, current)
+			current = nil
+		case "":
+		default:
+			current = append(current, line)
+		}
+	}
+
+	if len(current) > 0 {
+		runs = append(runs, current)
+	}
+
+	return runs
+}
+
+// piTesterAllowedNames returns the variables the wrapper's allow list names, read from dev/pi-tester.sh: the block
+// between `allowed="` and its closing quote, one name to a line. It fails the test when the script holds no such
+// block, since then nothing here can tell an inherited variable from an allow-listed one.
+func piTesterAllowedNames(t *testing.T) []string {
+	t.Helper()
+
+	const open = `allowed="`
+
+	text := readRepoFile(t, piTesterScript)
+
+	start := strings.Index(text, open)
+	if start < 0 {
+		t.Fatalf("%s declares no allow list (`%s`), so nothing here can tell an inherited variable from an allow-listed one (issue #662)", piTesterScript, open)
+	}
+
+	rest := text[start+len(open):]
+
+	end := strings.Index(rest, "\"\n")
+	if end < 0 {
+		t.Fatalf("%s opens its allow list with `%s` and never closes it, so no name of it can be read (issue #662)", piTesterScript, open)
+	}
+
+	names := strings.Fields(rest[:end])
+
+	if len(names) == 0 {
+		t.Fatalf("%s declares an empty allow list, so the wrapper hands pi and node nothing at all (issue #662)", piTesterScript)
+	}
+
+	return names
+}
+
+// TestPiTesterHandsNodeAnAllowListedEnvironment pins the audit's finding L-A (issue #662, ADR 0044): before pi
+// starts, the wrapper loads the refusal's extension and compiles its patterns with node, and that run must not be
+// handed the environment the wrapper was handed either. A node that inherits GH_TOKEN or another agent's key puts
+// it one `process.env` away from the pane, which is the leak the wrapper exists to close; the marker is what a
+// 'bash -l' from that same pane reads, so node gets it too.
+//
+// The names are pinned rather than the values: a record of values would write the credentials these tests invent
+// into a temporary file for no reason, and absence is what the wrapper's allow list decides (CLAUDE.md rule 3).
+func TestPiTesterHandsNodeAnAllowListedEnvironment(t *testing.T) {
+	t.Parallel()
+
+	script := scriptPath(t, piTesterScript)
+	root := t.TempDir()
+
+	binDir := filepath.Join(root, "bin")
+	homeDir := filepath.Join(root, "home")
+	record := filepath.Join(root, "pi-record")
+
+	for _, dir := range []string{binDir, homeDir} {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatalf("create %s: %v", dir, err)
+		}
+	}
+
+	writePiTesterBin(t, binDir, record)
+
+	project := writePiTesterProject(t, root,
+		piFile{present: true, content: readRepoFile(t, denyExtensionFile)},
+		piFile{present: true, content: readRepoFile(t, denyListFile)})
+
+	stdout, stderr, err := runPiTester(t, script, project, piTesterArgs, piTesterEnv(binDir, homeDir, piTesterBasePath(t)))
+	if err != nil {
+		t.Fatalf("the wrapper exited non-zero with the env-printing refusal's two files in place: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+	}
+
+	runs := readPiNodeRecord(t, piTesterNodeRecord(record))
+
+	// pi's own record is what the test above pins against the allow list, and the shell both stand-ins run under
+	// adds a name or two of its own to a command's environment (PWD, and `_` or SHLVL on some shells), which says
+	// nothing about what the wrapper handed them: a name pi saw too is therefore no finding here, and every other
+	// name has to be one the wrapper's allow list holds, plus the marker the wrapper sets itself.
+	pi := readPiRecord(t, record)
+	allowed := append(piTesterAllowedNames(t), piTesterMarker)
+
+	for i, names := range runs {
+		for _, name := range names {
+			if slices.Contains(allowed, name) || slices.Contains(pi.envNames, name) {
+				continue
+			}
+
+			t.Errorf("run %d of node saw %s in its environment, which the wrapper's allow list does not name and pi's own run never saw: node loads the env-printing refusal before pi starts, and a variable the list does not hold must not reach it (issue #662, CLAUDE.md rule 3)", i+1, name)
+		}
+
+		for _, name := range piTesterDropped {
+			if slices.Contains(names, name) {
+				t.Errorf("run %d of node saw %s, although the wrapper was handed it: the load of the refusal runs under the same allow list as pi, so no GitHub token, no other agent's key, no telemetry header and no variable the wrapper does not know reaches it (issue #662, CLAUDE.md rule 3)", i+1, name)
+			}
+		}
+
+		// The marker has to reach node as well: the wrapper sets it for every command it runs, and a login shell
+		// started from anything the load leaves behind reads it (issue #662).
+		if !slices.Contains(names, piTesterMarker) {
+			t.Errorf("run %d of node saw no %s, which the wrapper sets itself: the marker is what the VM's login profile reads to leave the agents' keys file unsourced, and node is started under the same environment pi is (issue #662, CLAUDE.md rule 3)", i+1, piTesterMarker)
+		}
+	}
+
+	assertNoSecrets(t, "the wrapper's stdout", stdout, piTesterSecrets())
+	assertNoSecrets(t, "the wrapper's stderr", stderr, piTesterSecrets())
+}
+
+// TestPiTesterRefusesAPathWithAnEmptyOrRelativeEntry pins the audit's finding N-1 (issue #662): the wrapper copies
+// PATH as it is, and an empty entry or a relative one is the working directory, which is the unit's folder. A
+// command the wrapper or pi looks up then runs one from the folder the tester reads tasks from, whatever the VM's
+// own PATH holds, so the wrapper refuses such a PATH before pi or node starts instead of running with it.
+//
+// Each case's PATH keeps the fake tools' directory, so the wrapper would find jq, node and pi and start the tester
+// without the refusal: finding them is what makes a missing refusal visible, rather than a run that stops on a
+// tool it could not find.
+func TestPiTesterRefusesAPathWithAnEmptyOrRelativeEntry(t *testing.T) {
+	t.Parallel()
+
+	script := scriptPath(t, piTesterScript)
+
+	// path builds the case's PATH from the fake tools' directory and the base the wrapper's other tools come from,
+	// inserting the entry the case is about.
+	cases := []struct {
+		name string
+		path func(binDir, base string) string
+	}{
+		{name: "an empty entry first", path: func(binDir, base string) string { return ":" + binDir + ":" + base }},
+		{name: "an empty entry in the middle", path: func(binDir, base string) string { return binDir + "::" + base }},
+		{name: "an empty entry last", path: func(binDir, base string) string { return binDir + ":" + base + ":" }},
+		{name: "a dot entry", path: func(binDir, base string) string { return binDir + ":.:" + base }},
+		{name: "a relative entry", path: func(binDir, base string) string { return binDir + ":bin:" + base }},
+	}
+
+	base := piTesterBasePath(t)
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			root := t.TempDir()
+
+			binDir := filepath.Join(root, "bin")
+			homeDir := filepath.Join(root, "home")
+			record := filepath.Join(root, "pi-record")
+
+			for _, dir := range []string{binDir, homeDir} {
+				if err := os.MkdirAll(dir, 0o700); err != nil {
+					t.Fatalf("create %s: %v", dir, err)
+				}
+			}
+
+			writePiTesterBin(t, binDir, record)
+
+			project := writePiTesterProject(t, root,
+				piFile{present: true, content: readRepoFile(t, denyExtensionFile)},
+				piFile{present: true, content: readRepoFile(t, denyListFile)})
+
+			env := piTesterEnv(binDir, homeDir, base)
+			env["PATH"] = tc.path(binDir, base)
+
+			stdout, stderr, err := runPiTester(t, script, project, piTesterArgs, env)
+
+			if err == nil {
+				t.Fatalf("the wrapper exited 0 with PATH %q, which holds an entry the shell resolves to the working directory: a command it starts is then one from the unit's folder, so pi must not start and node must not run (issue #662)\nstdout: %s\nstderr: %s", env["PATH"], stdout, stderr)
+			}
+
+			if !strings.Contains(stderr, "PATH") {
+				t.Errorf("the wrapper's stderr does not name PATH, the variable it refused, so a maintainer whose pane stopped cannot tell which one to fix (issue #662): %s", stderr)
+			}
+
+			if _, statErr := os.Stat(record); statErr == nil {
+				t.Errorf("the wrapper started pi with PATH %q: the refusal is meant to stop the tester before pi runs, since pi's own bash tool would find the folder's commands on such a PATH (issue #662)\nstdout: %s\nstderr: %s", env["PATH"], stdout, stderr)
+			}
+
+			if _, statErr := os.Stat(piTesterNodeRecord(record)); statErr == nil {
+				t.Errorf("the wrapper ran node with PATH %q: node loads the env-printing refusal, and a command found in the unit's folder is no part of that load (issue #662)\nstdout: %s\nstderr: %s", env["PATH"], stdout, stderr)
+			}
+
+			assertNoSecrets(t, "the wrapper's stdout", stdout, piTesterSecrets())
+			assertNoSecrets(t, "the wrapper's stderr", stderr, piTesterSecrets())
+		})
+	}
 }
 
 // TestPiTesterPassesAwkwardArgumentsUnchanged pins that the words the deck's command passes reach pi as they are:

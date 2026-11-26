@@ -788,6 +788,18 @@ func TestPiEnvDenyListRefusesPrintingTheEnvironment(t *testing.T) {
 		"cat /home/x/.config/shift2eu/agents-app-token",
 		"head -c 32 ~/.config/shift2eu/agents-app-token",
 		`printf '%s' "$(cat ~/.config/shift2eu/agents-app-token)"`,
+		// The folder, rather than the one file in it: `make agents-token` writes the token and the identity
+		// beside it, and a glob, a listing or a cd reads whichever file is there now, so the whole folder is
+		// refused as the deck's key directory is.
+		"cat ~/.config/shift2eu/agents-app-t*",
+		"cd ~/.config/shift2eu && cat agents-app-token",
+		"ls ~/.config/shift2eu",
+		// The tester's own marker (issue #662): the VM's login profile leaves the agents' keys file unsourced for
+		// the tester only while SHIFT2EU_PI_TESTER is set and non-empty, so a command that unsets it and starts a
+		// login shell puts every key back in the pane, which is the round trip the marker exists to close.
+		"unset SHIFT2EU_PI_TESTER; bash -l",
+		"SHIFT2EU_PI_TESTER= bash -l -c true",
+		"env -u SHIFT2EU_PI_TESTER bash -l",
 		// A single key, expanded by name.
 		"echo $DEEPSEEK_API_KEY",
 		`printf %s "$GH_TOKEN"`,
