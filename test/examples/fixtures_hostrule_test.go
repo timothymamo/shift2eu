@@ -612,8 +612,9 @@ func TestSanitisationProblemsHostNameRule(t *testing.T) {
 
 // namespaceMayFollowDelimitersPath is the shared case list of the two copies of
 // namespaceMayFollow (issue #630): this package's copy, and the AI reviewer's in
-// ci/aireview/internal/review/scan.go, whose test reads the same file. From this
-// package's directory.
+// ci/aireview/internal/review/scan.go, whose test,
+// ci/aireview/internal/review/scan_test.go, reads the same file through its own
+// parser. From this package's directory.
 const namespaceMayFollowDelimitersPath = "testdata/namespace_may_follow_delimiters.txt"
 
 // namespaceMarker is the resource type every record of the shared list holds:
@@ -662,6 +663,30 @@ func namespaceMayFollowDelimiters(t *testing.T) []namespaceMayFollowDelimiter {
 	return records
 }
 
+// namespaceMayFollowAcceptedBytes returns the bytes the rule accepts right
+// before a namespace, from the shared list: the byte each record's text puts
+// directly before the namespace, and the newline, which a line of the list
+// cannot carry, since the fixture check reads a whole text. The start-of-text
+// record names no byte, the empty text TestNamespaceMayFollow's table takes.
+func namespaceMayFollowAcceptedBytes(t *testing.T) map[byte]bool {
+	t.Helper()
+
+	accepted := map[byte]bool{'\n': true}
+
+	for _, record := range namespaceMayFollowDelimiters(t) {
+		before, _, ok := strings.Cut(record.text, namespaceMarker)
+		if !ok {
+			t.Fatalf("%s: the record %q names no %s, so no case reads its delimiter", namespaceMayFollowDelimitersPath, record.text, namespaceMarker)
+		}
+
+		if before != "" {
+			accepted[before[len(before)-1]] = true
+		}
+	}
+
+	return accepted
+}
+
 // namespaceMayFollowDelimiterCases returns one case per delimiter the shared
 // list names, in its order: the text of the record, which the fixture check must
 // report nothing in, and no reported value, since a copy that stops accepting a
@@ -694,11 +719,17 @@ type namespaceMayFollowCase struct {
 // cases of TestSanitisationProblemsHostNameRule cover every delimiter but one:
 // a name right after a single "/" is no host name to hostnameProblems whatever
 // the rule says (insidePath), so the fixture check cannot see whether the copy
-// still accepts the resource id's separator. This table can, and its accepted
-// entries come from the shared list both copies' tests read, so the file is the
-// one list of the bytes the rule takes and a copy that drops or widens one fails
-// here. The copy has the reviewer's set plus the newline, the one byte a line of
-// that list cannot carry, since the fixture check reads a whole text.
+// still accepts the resource id's separator. This test can.
+//
+// Its accepted entries come from the shared list both copies' tests read, so the
+// file is the one list of the bytes the rule takes, and the loop after the table
+// pins that set exactly: every one of the 256 single-byte values before a
+// namespace, after another byte and as the first of the text, is accepted
+// exactly when the list names it. A copy that drops a delimiter the list names
+// therefore fails a case of the table, and a copy that widens the rule to a byte
+// the list does not name fails the loop, so neither can happen unseen. The copy
+// has the reviewer's set plus the newline, the one byte a line of that list
+// cannot carry, since the fixture check reads a whole text.
 func TestNamespaceMayFollow(t *testing.T) {
 	t.Parallel()
 
@@ -735,6 +766,23 @@ func TestNamespaceMayFollow(t *testing.T) {
 				t.Errorf("namespaceMayFollow(%q) = %t, want %t", tc.before, got, tc.want)
 			}
 		})
+	}
+
+	// The table names the delimiters the list names; the loop makes that set the
+	// whole of what the copy accepts. Each byte runs twice: after another byte,
+	// where the copy's "/" branch sees a preceding byte that is no "/", "\" or
+	// ":", and as the first byte of the text, where it sees none.
+	accepted := namespaceMayFollowAcceptedBytes(t)
+
+	for value := range 256 {
+		b := byte(value)
+
+		for _, before := range []string{"x" + string(b), string(b)} {
+			if got := namespaceMayFollow(before); got != accepted[b] {
+				t.Errorf("namespaceMayFollow(%q) = %t, want %t, from the shared list's bytes a namespace may follow (byte %#02x)",
+					before, got, accepted[b], b)
+			}
+		}
 	}
 }
 
