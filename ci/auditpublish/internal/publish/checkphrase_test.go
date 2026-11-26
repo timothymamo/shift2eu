@@ -15,6 +15,15 @@ package publish_test
 // about the result's content is the result's class, "result refused" (exit 3),
 // never "configuration invalid" (exit 9), which is the run's configuration
 // alone.
+//
+// The six checks of a private-only advisory (its finding not private, its
+// fingerprint, its status twice, its description's status line, and two
+// findings with one fingerprint) share one neutral phrase, "a private finding
+// could not be filed as a draft". The run log is public, so it may say that no
+// draft advisory was filed, never which private finding's check refused it
+// (ADR 0040: the line holds no count of private findings). The three
+// private-state checks keep their own words: they are the run's state, not a
+// finding's.
 
 import (
 	"errors"
@@ -256,7 +265,7 @@ func TestCoreRefusalNamesTheFailedCheck(t *testing.T) {
 			name:   "the finding is not private",
 			source: "advisory.go: RenderAdvisory",
 			class:  publish.ErrResultInvalid,
-			want:   "result refused: an advisory for a finding that is not private: see runbook",
+			want:   "result refused: a private finding could not be filed as a draft: see runbook",
 			code:   3,
 			drive: func(t *testing.T) error {
 				t.Helper()
@@ -277,7 +286,7 @@ func TestCoreRefusalNamesTheFailedCheck(t *testing.T) {
 			name:   "the fingerprint is no fingerprint",
 			source: "advisory.go: RenderAdvisory",
 			class:  publish.ErrResultInvalid,
-			want:   "result refused: an advisory fingerprint that is no fingerprint: see runbook",
+			want:   "result refused: a private finding could not be filed as a draft: see runbook",
 			code:   3,
 			drive: func(t *testing.T) error {
 				t.Helper()
@@ -295,7 +304,7 @@ func TestCoreRefusalNamesTheFailedCheck(t *testing.T) {
 			name:   "the advisory status is not new, open or regressed",
 			source: "advisory.go: RenderAdvisory",
 			class:  publish.ErrResultInvalid,
-			want:   "result refused: an advisory status not new, open or regressed: see runbook",
+			want:   "result refused: a private finding could not be filed as a draft: see runbook",
 			code:   3,
 			drive: func(t *testing.T) error {
 				t.Helper()
@@ -313,7 +322,7 @@ func TestCoreRefusalNamesTheFailedCheck(t *testing.T) {
 			name:   "the advisory status is none of the four",
 			source: "advisory.go: SetAdvisoryStatus",
 			class:  publish.ErrResultInvalid,
-			want:   "result refused: an advisory status none of the four: see runbook",
+			want:   "result refused: a private finding could not be filed as a draft: see runbook",
 			code:   3,
 			drive: func(t *testing.T) error {
 				t.Helper()
@@ -327,7 +336,7 @@ func TestCoreRefusalNamesTheFailedCheck(t *testing.T) {
 			name:   "the advisory description holds no status line",
 			source: "advisory.go: SetAdvisoryStatus",
 			class:  publish.ErrResultInvalid,
-			want:   "result refused: an advisory description without a status line: see runbook",
+			want:   "result refused: a private finding could not be filed as a draft: see runbook",
 			code:   3,
 			drive: func(t *testing.T) error {
 				t.Helper()
@@ -341,7 +350,7 @@ func TestCoreRefusalNamesTheFailedCheck(t *testing.T) {
 			name:   "two findings with one fingerprint",
 			source: "advisory.go: PrivateFindings",
 			class:  publish.ErrResultInvalid,
-			want:   "result refused: two findings with one fingerprint: see runbook",
+			want:   "result refused: a private finding could not be filed as a draft: see runbook",
 			code:   3,
 			drive: func(t *testing.T) error {
 				t.Helper()

@@ -154,6 +154,103 @@ func TestOutcomeOf(t *testing.T) {
 	}
 }
 
+// TestOutcomeOfTakesTheMarkOfItsOwnClass pins the rules of the walk that finds
+// the check naming a refused run (publish.Refuse and OutcomeOf): the class
+// decides the line, and only a mark of that class names it. An error's marks
+// are walked depth first, each wrapper before what it wraps, and a joined
+// error's parts in order (ADR 0040: the class order is scan, result, not
+// filed, duplicates, previous, GitHub, configuration).
+func TestOutcomeOfTakesTheMarkOfItsOwnClass(t *testing.T) {
+	t.Parallel()
+
+	// marked is a class sentinel refused by check c, as a call of the core or
+	// of its GitHub side refuses one.
+	marked := func(c publish.FailedCheck, class error) error {
+		return publish.Refuse(c, fmt.Errorf("the call's own text: %w", class))
+	}
+
+	t.Run("a mark, over no error at all, refuses nothing", func(t *testing.T) {
+		t.Parallel()
+
+		if err := publish.Refuse(publish.CheckToken, nil); err != nil {
+			t.Fatalf("Refuse(%v, nil) = %v, want nil", publish.CheckToken, err)
+		}
+	})
+
+	for _, tc := range []struct {
+		name string
+		err  error
+		// want is the one line the entry point prints, and code its exit code.
+		want string
+		code int
+	}{
+		{
+			// The class order lists GitHub before configuration, so the joined
+			// error is GitHub's and its own mark names the call, not the
+			// configuration's mark beside it.
+			name: "a GitHub mark joined with a configuration mark",
+			err: errors.Join(
+				marked(publish.CheckCreateIssue, publish.ErrGitHub),
+				marked(publish.CheckRunID, publish.ErrConfig),
+			),
+			want: "GitHub call failed: creating the audit issue: see runbook",
+			code: 8,
+		},
+		{
+			name: "two joined marks of one class",
+			err: errors.Join(
+				marked(publish.CheckResultPath, publish.ErrConfig),
+				marked(publish.CheckReportsPath, publish.ErrConfig),
+			),
+			want: "configuration invalid: the result's path not absolute and clean: see runbook",
+			code: 9,
+		},
+		{
+			// A mark adds no class of its own: the run is GitHub's, and the
+			// outer mark, whose class is the scan's, is passed over for the
+			// inner mark of the class the run does have.
+			name: "an outer mark of another class over an inner mark",
+			err: publish.Refuse(
+				publish.CheckScanReport,
+				marked(publish.CheckListIssues, publish.ErrGitHub),
+			),
+			want: "GitHub call failed: listing the audit issues: see runbook",
+			code: 8,
+		},
+		{
+			name: "an outer mark of the class over an inner mark of it",
+			err: publish.Refuse(
+				publish.CheckCreateIssue,
+				marked(publish.CheckListIssues, publish.ErrGitHub),
+			),
+			want: "GitHub call failed: creating the audit issue: see runbook",
+			code: 8,
+		},
+		{
+			// A check the table does not name has no phrase: the line is the
+			// class's alone.
+			name: "a mark outside the check table",
+			err:  publish.Refuse(publish.FailedCheck(200), publish.ErrConfig),
+			want: "configuration invalid: see runbook",
+			code: 9,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			outcome := publish.OutcomeOf(tc.err)
+
+			if got := outcome.Summary(); got != tc.want {
+				t.Errorf("OutcomeOf(%v).Summary() = %q, want %q", tc.err, got, tc.want)
+			}
+
+			if got := outcome.Code(); got != tc.code {
+				t.Errorf("OutcomeOf(%v).Code() = %d, want %d (%q)", tc.err, got, tc.code, tc.want)
+			}
+		})
+	}
+}
+
 // TestOutcomeSummaryNamesNoText pins that the one line the entry point prints
 // holds no error's text and no finding's text, whatever the error carries.
 func TestOutcomeSummaryNamesNoText(t *testing.T) {
