@@ -247,6 +247,10 @@ layer, and an ingest key can only write data, not read it, so a leak costs junk 
   (`Bash(*otelcol* print-config*)`), which can print a resolved configuration; and
   `Bash(*systemctl show otelcol*)` style reads of the unit's environment. CLAUDE.md rule 3 names the new
   file beside `daemon.env`.
+- **The journal stays free of the key.** The runbook's check reads `journalctl -u otelcol`, so the key
+  must never reach it: `test/devenv` fails when the Collector's configuration has a `debug` exporter or
+  `service.telemetry.logs.level` below `info`, or names the header's value anywhere but
+  `${env:HONEYCOMB_API_KEY}`.
 
 ## Privacy and data minimisation
 
@@ -310,11 +314,13 @@ does not reach resource attributes or span events). `test/devenv` checks both le
   appears in the provisioning, or when the deny rules stop covering the key file in either agent.
 - [ ] Given an agent in a deck pane, when it tries to read the key file or print the Collector's
   configuration or environment, then the deny rules refuse it.
-- [ ] Given the runbook's "turn it off" (remove the key file, then `make deck-restart`, which removes the
-  `telemetry.conf` drop-in and restarts the daemon; decision 4), when the maintainer follows it, then the
-  Collector is stopped, nothing leaves the VM, and the agents start without `OTEL_*` variables.
+- [ ] Given the runbook's "turn it off" (remove the key file, then `make deck-restart`, which stops the
+  `otelcol` service, removes the `telemetry.conf` drop-in and restarts the daemon, and with it every
+  agent; decision 4), when the maintainer follows it, then the Collector is stopped, nothing leaves the
+  VM, and the agents start without `OTEL_*` variables. (`ConditionPathExists` alone only keeps a stopped
+  Collector from starting; it does not stop a running one.)
 - [ ] Given a month of data, then Honeycomb's usage page shows events and data points under the daily
-  targets, and the trigger of milestone 5 has not fired.
+  targets, and the trigger of milestone 5 has not fired since it was set to 80 % of the daily target.
 
 ## Milestones
 
@@ -382,11 +388,12 @@ For the maintainer to answer; each has a recommendation.
    GitHub, and no workflow gets a Honeycomb secret.
 4. **Where the non-secret settings go.** A provisioned drop-in `telemetry.conf` (endpoint
    `http://127.0.0.1:4318`, `OTEL_METRICS_INCLUDE_ACCOUNT_UUID=false`, the metric interval), written
-   always, or only once the maintainer turns telemetry on. *Recommended: written by provisioning whenever
+   (a) always, (b) by hand once the maintainer turns telemetry on, or (c) by provisioning and
+   `make deck-restart` while the key file exists, removed while it does not. *Recommended: (c), written by provisioning whenever
    the key file exists, and removed when it does not*, with the Collector starting only when its key file
    exists: one switch, the key file, re-read by provisioning and by `make deck-restart`, the two steps
    that write the daemon's drop-ins. "Off" is removing the key file, then `make deck-restart`, which
-   removes the drop-in and restarts the daemon, so the agents get no `OTEL_*` variables at all; a
+   stops the `otelcol` service, removes the drop-in and restarts the daemon (and so every agent), so the agents get no `OTEL_*` variables at all; a
    drop-in left without a key would keep switching on Claude Code's telemetry with nowhere to send it.
 5. **How the key reaches the VM.** By hand in the VM (a `read -rs` prompt into `sudo install`), or a
    `make vm-telemetry-key` target on the Mac's host clone that reads one variable from the host clone's
