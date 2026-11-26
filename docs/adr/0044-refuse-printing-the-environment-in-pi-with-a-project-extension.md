@@ -252,17 +252,27 @@ both now (options 1 and 3 of the issue). The decision above stands; this adds a 
 - **It fails closed.** Before pi starts, the wrapper checks, relative to that directory,
   `.pi/extensions/deny-env-printing.ts` (a non-empty regular file) and `.pi/deny-env-printing.json` (a JSON
   object whose `patterns` is a non-empty array, checked with `jq`, which `dev/lima.yaml` installs). Anything
-  else exits 1 with a message naming the file, and pi is not started. pi 1.6.1 has no option that makes a
-  failed extension load fatal, so the wrapper is what does it. The check is of the files, not of pi's
-  load: an extension that is present but throws while pi loads it still fails open, and
-  `TestPiEnvDenyExtensionLoads` stays the guard against that.
+  else exits 1 with a message naming the file, and pi is not started. Then node (from `PATH`, the one
+  `dev/lima.yaml` pins, which strips TypeScript types on import by default, under the allow list below)
+  makes the load pi makes: it imports the extension and requires a function as its default export, and
+  compiles every pattern of the list with `new RegExp`, as `TestPiEnvDenyExtensionLoads`'s load script
+  does. A load that throws, a pattern that is no regular expression, and a `PATH` without node each refuse
+  the same way. Only node's exit status is read; its output is discarded. pi 1.6.1 has no option that makes
+  a failed extension load fatal, so the wrapper is what does it.
+- **It marks the tester's process tree.** The wrapper sets `SHIFT2EU_PI_TESTER=1` in pi's environment, and
+  the VM's login profile (`/etc/profile.d/shift2eu.sh`, written by `dev/lima.yaml`) leaves `daemon.env`
+  unsourced when that marker is set and non-empty, so a `bash -l` from the tester's bash tool does not put
+  the other agents' keys back into its pane. It takes effect at the maintainer's next VM rebuild.
 - **It hands pi an allow list.** pi runs under `env -i` with only the variables the script names, each
   copied when set and each with its reason in the script: `DEEPSEEK_API_KEY`, the basics (`HOME`, `PATH`,
   `USER`, `LOGNAME`, `SHELL`, `TERM`, `COLORTERM`, the locale, `TMPDIR`, the `XDG_*` directories) and the
   deck's pane variables its pi extension and `work-done` need (`DOT_AGENT_DECK_PANE_ID`,
   `DOT_AGENT_DECK_PANE_CAPABILITY`, the socket, the deck executable's path and the like). No GitHub token,
   no other agent's key, no `OTEL_*` (its headers carry a telemetry backend's key), and no name the list does
-  not know. `test/devenv/pitester_test.go` pins the list's effect, the fail-closed start and the wiring.
+  not know. `test/devenv/pitester_test.go` pins the list's effect, the marker, the fail-closed start, the
+  profile's guard and the wiring.
+- **The wrapper is project code.** `dev/pi-tester.sh` is reviewed and audited as such, like `.pi/`: a
+  change to it changes what reaches the tester.
 
 Alternatives considered for the amendment:
 
@@ -270,16 +280,22 @@ Alternatives considered for the amendment:
   later would reach the tester. The allow list keeps out every name it does not know.
 - **Narrowing the VM's egress** (option 2 of the issue: the tester reaches only DeepSeek and the module
   proxy). Out of scope now by the maintainer's decision of 2026-11-26; it stays a possible later stage,
-  and would make a printed or exfiltrated key harder to use from the VM.
+  and would make a printed or exfiltrated key harder to use from the VM. It, or running the tester as a
+  separate uid, is also what would keep the files and other processes' environments below from the tester,
+  which the allow list cannot.
 
 Consequences of the amendment:
 
-- A printing form the patterns miss now shows the tester its own DeepSeek key and the deck's pane
-  variables, not the Claude token or another agent's key.
-- The tester still reaches GitHub: the VM's `gh` (ADR 0031) reads the agents App's token from a file under
-  `HOME`, not from the environment, so `gh` and `git push` keep working for it, and the token is not in its
-  environment to print. Keeping it from that file is a separate decision (it is the egress stage's
-  question, or the token file's).
+- The wrapper keeps the other agents' keys out of pi's environment and, with the marker, out of the login
+  shells it starts: printing pi's own environment shows only the DeepSeek key and the deck's pane
+  variables.
+- It does not separate the tester from the other agents. The tester still runs as the VM's one user, so
+  `daemon.env`, the agents App's token file (`~/.config/shift2eu/agents-app-token`) and other processes'
+  `/proc/<pid>/environ` stay readable to it, guarded only by the deny patterns, which also refuse a command
+  naming the App token file; a program the tester writes and runs can bypass them. Separating them needs a
+  separate uid or the egress stage.
+- The tester still reaches GitHub: the VM's `gh` (ADR 0031) reads the agents App's token from its file
+  under `HOME`, not from the environment, so `gh` and `git push` keep working for it.
 - A variable the tester's tools turn out to need and the list lacks is absent until the script names it;
   the fix is one line and a reason in `dev/pi-tester.sh`. The deck's own telemetry of pi (its
   `DOT_AGENT_DECK_PI_TELEMETRY` and `OTEL_*`) does not reach the tester's pane.

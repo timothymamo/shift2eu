@@ -795,9 +795,13 @@ GitHub token of yours enters the VM (PRD #161 milestone 3).
   only ends in one (a `MY_` prefix).
 - **Every Claude Code agent gets every variable.** The Claude roles hold the DeepSeek key too. The tester
   does not: `dev/pi-tester.sh` starts pi with an allow list (its DeepSeek key, the basics and the deck's
-  pane variables) and no other variable of `daemon.env`, so no GitHub token and no other agent's key reach
-  it (issue #662, [ADR 0044](adr/0044-refuse-printing-the-environment-in-pi-with-a-project-extension.md)).
-  A new variable the tester needs goes into that script's list with a reason. Scope each credential
+  pane variables) and no other variable of `daemon.env`, and marks it with `SHIFT2EU_PI_TESTER=1`, which
+  makes the login profile skip `daemon.env`. So printing pi's environment shows only the DeepSeek key and
+  the pane variables (issue #662,
+  [ADR 0044](adr/0044-refuse-printing-the-environment-in-pi-with-a-project-extension.md)). This is not a
+  separation: the tester runs as the same user, so `daemon.env`, the App token file and other processes'
+  `/proc/<pid>/environ` stay readable to it, guarded only by the deny patterns, which a program it writes
+  can bypass; only a separate uid or narrowed egress would change that. A new variable the tester needs goes into that script's list with a reason. Scope each credential
   narrowly so it is cheap to revoke. The file stays on the VM's disk
   (under `~/.lima` on the Mac) until `make vm-delete`.
 - **Cloud accounts (for integration tests and real analyses, later):** read-only identities only
@@ -3203,14 +3207,20 @@ The deck does not start pi directly: the tester's `command` in `.dot-agent-deck.
 
 - refuses to start pi, exiting 1 with a message naming the file, unless `.pi/extensions/deny-env-printing.ts`
   is a non-empty file and `.pi/deny-env-printing.json` is a JSON object with a non-empty `patterns` array
-  (checked with `jq`). A tester pane that stops with `pi-tester: ... the tester is not started` has a broken
-  or missing refusal: fix the file it names, never start pi by hand around it;
+  (checked with `jq`), and unless node, found on `PATH`, imports the extension with a function as its
+  default export and compiles every pattern of the list with `new RegExp` (no node refuses too). A tester
+  pane that stops with `pi-tester: ... the tester is not started` has a broken or missing refusal, or no
+  node: fix what it names, never start pi by hand around it;
 - starts pi under `env -i` with only the variables it lists, each with its reason: `DEEPSEEK_API_KEY`,
   `HOME`, `PATH`, the terminal, locale, `TMPDIR` and `XDG_*` variables, and the deck's pane variables
   (`DOT_AGENT_DECK_PANE_ID`, `DOT_AGENT_DECK_PANE_CAPABILITY`, the socket and the like) that its pi
-  extension and `dot-agent-deck work-done` need. No GitHub token, no Claude token and no telemetry headers
-  reach the tester. Its `gh` and `git push` still work: the VM's gh wrapper reads the agents App token
-  from its file under `HOME`, not from the environment.
+  extension and `dot-agent-deck work-done` need, plus the marker `SHIFT2EU_PI_TESTER=1`, which makes
+  `/etc/profile.d/shift2eu.sh` leave `daemon.env` unsourced in the tester's login shells (from the next VM
+  rebuild). The other agents' keys, the GitHub token variables and the telemetry headers are not in pi's
+  environment, so printing it shows only the DeepSeek key and the pane variables. They are not out of the
+  tester's reach: it runs as the same user, so `daemon.env`, the App token file and other processes'
+  `/proc/<pid>/environ` stay readable, guarded only by the deny patterns. Its `gh` and `git push` keep
+  working through the App token file under `HOME` (ADR 0031), not the environment.
 
 A changed tester command needs the maintainer's approval in the deck (`dot-agent-deck trust`) before a
 tester pane starts with it.
