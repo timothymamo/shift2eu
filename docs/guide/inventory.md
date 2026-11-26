@@ -314,7 +314,7 @@ aws opensearch list-domain-names --output json \
   --query '{DomainNames: DomainNames[].{DomainName: DomainName}}' > "$out/opensearch-domain-names.json"
 jq -r '.DomainNames[].DomainName' "$out/opensearch-domain-names.json" |
   xargs -r -n 5 aws opensearch describe-domains --output json --query '{DomainStatusList: DomainStatusList[].{
-    DomainName: DomainName, ARN: ARN, EngineVersion: EngineVersion,
+    DomainName: DomainName, ARN: ARN, EngineVersion: EngineVersion, Deleted: Deleted,
     ClusterConfig: {InstanceType: ClusterConfig.InstanceType, InstanceCount: ClusterConfig.InstanceCount,
     ZoneAwarenessEnabled: ClusterConfig.ZoneAwarenessEnabled,
     MultiAZWithStandbyEnabled: ClusterConfig.MultiAZWithStandbyEnabled},
@@ -322,16 +322,23 @@ jq -r '.DomainNames[].DomainName' "$out/opensearch-domain-names.json" |
     EncryptionAtRestOptions: {Enabled: EncryptionAtRestOptions.Enabled}}}' --domain-names \
   > "$out/opensearch-domains.json"
 
-aws opensearchserverless list-collections --output json \
-  --query '{collectionSummaries: collectionSummaries[].{id: id, name: name}}' \
-  > "$out/opensearchserverless-collections.json"
-jq -r '.collectionSummaries[].id' "$out/opensearchserverless-collections.json" |
+: > "$out/opensearchserverless-collections.json"
+next=()
+while page=$(aws opensearchserverless list-collections --output json --max-results 100 "${next[@]}" \
+    --query '{collectionSummaries: collectionSummaries[].{id: id, name: name}, nextToken: nextToken}'); do
+  printf '%s\n' "$page" >> "$out/opensearchserverless-collections.json"
+  token=$(printf '%s' "$page" | jq -r '.nextToken // empty')
+  [ -n "$token" ] || break
+  next=(--next-token "$token")
+done
+jq -rn '[inputs | .collectionSummaries[]?.id] | .[]' "$out/opensearchserverless-collections.json" |
   xargs -r -n 100 aws opensearchserverless batch-get-collection --output json --query '{collectionDetails:
-    collectionDetails[].{name: name, arn: arn, type: type, standbyReplicas: standbyReplicas}}' --ids \
+    collectionDetails[].{name: name, arn: arn, type: type, standbyReplicas: standbyReplicas,
+    status: status}}' --ids \
   > "$out/opensearchserverless-batch-collections.json"
 
 aws kafka list-clusters-v2 --output json --query '{ClusterInfoList: ClusterInfoList[].{
-  ClusterName: ClusterName, ClusterType: ClusterType, ClusterArn: ClusterArn,
+  ClusterName: ClusterName, ClusterType: ClusterType, ClusterArn: ClusterArn, State: State,
   Provisioned: Provisioned.{NumberOfBrokerNodes: NumberOfBrokerNodes,
   BrokerNodeGroupInfo: BrokerNodeGroupInfo.{InstanceType: InstanceType, ClientSubnets: ClientSubnets,
   StorageInfo: {EbsStorageInfo: {VolumeSize: StorageInfo.EbsStorageInfo.VolumeSize}}}}}}' \
@@ -454,7 +461,12 @@ aws configservice select-resource-config \
 
 Every list and describe call above, `select-resource-config` included, is paginated by AWS, and the
 AWS CLI version 2 fetches every page and merges them before it applies `--query`, so each file holds
-the whole region. Do not pass `--no-paginate` or `--max-items`.
+the whole region. Do not pass `--no-paginate` or `--max-items`. The one exception is
+`opensearchserverless list-collections`: the AWS CLI has no paginator for it and answers with one page
+(20 collections by default), so the guide pages it by hand. Its loop asks for 100 collections a page,
+the documented maximum, passes each page's `nextToken` back as `--next-token` until a page returns
+none, and appends every page to `opensearchserverless-collections.json` as a JSON value of its own;
+the `batch-get-collection` call reads the IDs of every page.
 
 `describe-instance-types` takes at most 100 instance types per call; `xargs -n 100` splits a longer list
 into several calls, and the program reads each. `elbv2 describe-tags` takes at most 20 load balancers per
@@ -577,7 +589,7 @@ The `rawType` is the resource's AWS CloudFormation type.
 | `AWS::MSK::Cluster` (provisioned) | `messaging.kafka` | `kafka list-clusters-v2` |
 | `AWS::MSK::ServerlessCluster` | `messaging.kafka` | `kafka list-clusters-v2` |
 | `AWS::OpenSearch::Domain`, `AWS::Elasticsearch::Domain` | none: AWS Config's types for a domain, which `describe-domains` lists | `configservice select-resource-config` |
-| `AWS::MSK::Cluster`, `AWS::MSK::ServerlessCluster` or `AWS::OpenSearchServerless::Collection` that the service call lists by the same name in the same region | none: the call lists it | `configservice select-resource-config` |
+| `AWS::MSK::Cluster`, `AWS::MSK::ServerlessCluster` or `AWS::OpenSearchServerless::Collection` that the service call lists by the same name or ID in the same region | none: the call lists it | `configservice select-resource-config` |
 | `AWS::MSK::Configuration`, `::ClusterPolicy`, `::BatchScramSecret`, `::VpcConnection`, `AWS::OpenSearchServerless::AccessPolicy`, `::SecurityPolicy`, `::SecurityConfig`, `::LifecyclePolicy`, `::VpcEndpoint` | none: settings and parts of a cluster or collection, which stands for them | `configservice select-resource-config` |
 | `AWS::KafkaConnect::Connector`, `AWS::KafkaConnect::CustomPlugin`, `AWS::OSIS::Pipeline` | `unclassified`: MSK Connect and OpenSearch Ingestion are integration runtimes, not clusters | `configservice select-resource-config` |
 | `AWS::AppRunner::Service` | `serverless.container` | `configservice select-resource-config` |
@@ -647,7 +659,11 @@ Left out:
 - the AWS Config rows of what the search and Kafka calls list: a domain's `AWS::OpenSearch::Domain` and
   `AWS::Elasticsearch::Domain` rows, which name it under AWS Config's own types rather than its
   CloudFormation type, and the rows of an MSK cluster or an OpenSearch Serverless collection the call
-  lists by the same name;
+  lists by the same name or ID (AWS Config may record a collection by its ID alone, and a cluster by
+  its ARN, whose last segment is the cluster's ID);
+- search domains, collections and Kafka clusters being deleted or that failed, as terminated
+  instances are: a domain whose `Deleted` is true, a collection whose `status` is `DELETING` or
+  `FAILED`, and a cluster whose `State` is `DELETING` or `FAILED`;
 - the parts and settings of a Kafka cluster or a collection, which AWS Config records as types of
   their own: an MSK cluster's configurations, cluster policy, SCRAM secrets and VPC connections, and a
   collection's access, security (encryption and network) and lifecycle policies, security

@@ -666,6 +666,20 @@ text as the decision)
   - **`batch-get-collection` batch.** `ids` and `names` take "Maximum number of 100 items" each; the
     guide passes ids, 100 at a time.
     <https://docs.aws.amazon.com/opensearch-service/latest/ServerlessAPIReference/API_BatchGetCollection.html>
+  - **`list-collections` paging.** The AWS CLI has no paginator for the call: it answers with one page
+    (20 by default, `maxResults` at most 100) and a `nextToken`. Decided in milestone 2 (review
+    finding B1): the guide pages it by hand, in one loop that asks for 100 a page, passes `nextToken`
+    back as `--next-token` until a page has none, and appends each page to the collections file as a
+    JSON value of its own; `batch-get-collection` reads the IDs of every page. No new IAM action.
+    <https://docs.aws.amazon.com/opensearch-service/latest/ServerlessAPIReference/API_ListCollections.html>
+  - **Config rows by name or ID.** Decided in milestone 2 (review finding S1): AWS Config may record a
+    collection by its ID alone and an MSK cluster by its ARN alone, so the program drops the Config
+    row of a collection or cluster the call lists when its `resourceName` or its `resourceId` (an
+    ARN's last segment) matches the name, the ID or the ARN's last segment of a listed one.
+  - **Deleted and failed resources.** Decided in milestone 2 (review finding N2): a domain whose
+    `Deleted` is true, a collection whose `status` is `DELETING` or `FAILED`, and an MSK cluster whose
+    `State` is `DELETING` or `FAILED` are left out, as a terminated EC2 instance is; the guide's
+    queries keep those three fields.
   - **`list-clusters-v2`.** Paginated (the CLI fetches every page); `ClusterType` is `PROVISIONED` or
     `SERVERLESS`; `Provisioned` gives `NumberOfBrokerNodes`, `BrokerNodeGroupInfo.InstanceType` ("The
     type of Amazon EC2 instances to use for Apache Kafka brokers"), `ClientSubnets`,

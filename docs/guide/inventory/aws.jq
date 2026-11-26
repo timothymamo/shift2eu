@@ -98,7 +98,8 @@ def covered_types:
 # opensearch describe-domains lists every domain. An MSK cluster and an
 # OpenSearch Serverless collection are recorded under their CloudFormation
 # types; their Config rows are dropped when the service call lists a resource
-# of that type, name and region ($listed below).
+# of that type and region with the same name or ID ($listed below): Config may
+# record a collection by its ID alone, and a cluster by its ARN alone.
 def listed_by_call_types:
   ["AWS::MSK::Cluster", "AWS::MSK::ServerlessCluster", "AWS::OpenSearchServerless::Collection"];
 
@@ -219,10 +220,14 @@ def inventory($source):
    | . + {cluster: (.DBClusterIdentifier // .DBInstanceIdentifier), region: (.DBInstanceArn | arn_region)}]
   as $docdb
 | ([$docs[] | .ClusterInfoList? // empty | .[]
-    | [(if .ClusterType == "SERVERLESS" then "AWS::MSK::ServerlessCluster" else "AWS::MSK::Cluster" end),
-       .ClusterName, (.ClusterArn | arn_region)]]
+    | (if .ClusterType == "SERVERLESS" then "AWS::MSK::ServerlessCluster" else "AWS::MSK::Cluster" end) as $type
+    | (.ClusterArn | arn_region) as $region
+    | (.ClusterName, (.ClusterArn | short_id)) | [$type, ., $region]]
    + [$docs[] | .collectionDetails? // empty | .[]
-      | ["AWS::OpenSearchServerless::Collection", .name, (.arn | arn_region)]])
+      | (.arn | arn_region) as $region
+      | (.name, (.arn | short_id), (.id // empty))
+      | ["AWS::OpenSearchServerless::Collection", ., $region]]
+   | unique)
   as $listed
 | [
     # EC2 instances. One launched by an Auto Scaling group is left out: the group
@@ -481,8 +486,10 @@ def inventory($source):
     # later). Its data nodes are its size: InstanceCount nodes (the dedicated
     # masters are not data nodes) of the EC2 type its instance type is built
     # on, each with an EBS volume of VolumeSize GiB; a domain on instance
-    # storage (EBSEnabled false) gets no storageGiB.
+    # storage (EBSEnabled false) gets no storageGiB. A domain being deleted
+    # (Deleted true) is left out, as a terminated EC2 instance is.
     ($docs[] | .DomainStatusList? // empty | .[]
+      | select(.Deleted != true)
       | ((.EngineVersion // "") | is_opensearch_api) as $search
       | (.ClusterConfig // {}) as $cluster
       | {
@@ -506,8 +513,10 @@ def inventory($source):
     # OpenSearch Serverless collections: always encrypted at rest, and
     # snapshotted every hour into restorable snapshots; standby replicas in
     # another zone are their node and zone high availability. No size: a
-    # collection is billed by OCUs, not nodes.
+    # collection is billed by OCUs, not nodes. A collection being deleted or
+    # that failed (status DELETING or FAILED) is left out.
     ($docs[] | .collectionDetails? // empty | .[]
+      | select(.status != "DELETING" and .status != "FAILED")
       | {
           id: .name,
           rawType: "AWS::OpenSearchServerless::Collection",
@@ -527,8 +536,10 @@ def inventory($source):
     # NumberOfBrokerNodes brokers of the EC2 type its broker type is built on,
     # each with an EBS volume of VolumeSize GiB (Express brokers have no EC2
     # twin and no volume, so they stay unsized). A serverless cluster has no
-    # broker to size and replicates across zones.
+    # broker to size and replicates across zones. A cluster being deleted or
+    # that failed (State DELETING or FAILED) is left out.
     ($docs[] | .ClusterInfoList? // empty | .[]
+      | select(.State != "DELETING" and .State != "FAILED")
       | if .ClusterType == "SERVERLESS" then {
           id: .ClusterName,
           rawType: "AWS::MSK::ServerlessCluster",
@@ -592,13 +603,14 @@ def inventory($source):
     # Everything else AWS Config recorded. App Runner services and ECR
     # repositories need no call: the type is enough, and ECR encrypts every
     # repository at rest. The row of an MSK cluster or an OpenSearch Serverless
-    # collection the service calls list, by type, name and region, is dropped.
-    # Any other type is unclassified.
+    # collection the service calls list, by type, region and either name or ID
+    # (an ARN's last segment), is dropped. Any other type is unclassified.
     ($docs[] | .Results? // empty | .[]
       | if type == "string" then fromjson else . end
       | select(.resourceType | IN(covered_types[], part_types[]) | not)
       | select((.resourceType | IN(listed_by_call_types[]))
-          and ([.resourceType, ((.resourceName // .resourceId) | short_id), .awsRegion] | IN($listed[])) | not)
+          and (. as $row | any((.resourceName, .resourceId) | strings | short_id;
+                 [$row.resourceType, ., $row.awsRegion] | IN($listed[]))) | not)
       | (.resourceType | config_category) as $category
       | {
           id: ((.resourceName // .resourceId) | short_id),
