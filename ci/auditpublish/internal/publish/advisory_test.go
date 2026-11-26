@@ -310,7 +310,9 @@ func TestRenderAdvisoryHistorySecret(t *testing.T) {
 // TestRenderAdvisoryStatus pins the three statuses a run renders, the run's URL
 // below the status line, and every refusal: not reproduced (SetAdvisoryStatus
 // writes it), no status at all, one beyond the four, a public finding, a
-// needs-investigation one, a fingerprint that is none, and a run NewRun refuses.
+// needs-investigation one and a fingerprint that is none are the result's own
+// content, ErrResultInvalid (issue #640: exit 3, never the configuration's 9),
+// and a run NewRun refuses is the configuration's.
 func TestRenderAdvisoryStatus(t *testing.T) {
 	t.Parallel()
 
@@ -350,7 +352,7 @@ func TestRenderAdvisoryStatus(t *testing.T) {
 			fp:        advisoryFingerprint,
 			status:    publish.AdvisoryNotReproduced,
 			run:       testRun(t, testDate, testRunID),
-			wantError: publish.ErrConfig,
+			wantError: publish.ErrResultInvalid,
 		},
 		{
 			name:      "no status at all",
@@ -358,7 +360,7 @@ func TestRenderAdvisoryStatus(t *testing.T) {
 			fp:        advisoryFingerprint,
 			status:    0,
 			run:       testRun(t, testDate, testRunID),
-			wantError: publish.ErrConfig,
+			wantError: publish.ErrResultInvalid,
 		},
 		{
 			name:      "one beyond the four",
@@ -366,7 +368,7 @@ func TestRenderAdvisoryStatus(t *testing.T) {
 			fp:        advisoryFingerprint,
 			status:    publish.AdvisoryRegressed + 1,
 			run:       testRun(t, testDate, testRunID),
-			wantError: publish.ErrConfig,
+			wantError: publish.ErrResultInvalid,
 		},
 		{
 			name:      "a public finding",
@@ -374,7 +376,7 @@ func TestRenderAdvisoryStatus(t *testing.T) {
 			fp:        advisoryFingerprint,
 			status:    publish.AdvisoryNew,
 			run:       testRun(t, testDate, testRunID),
-			wantError: publish.ErrConfig,
+			wantError: publish.ErrResultInvalid,
 		},
 		{
 			name:      "a needs-investigation finding",
@@ -382,7 +384,7 @@ func TestRenderAdvisoryStatus(t *testing.T) {
 			fp:        advisoryFingerprint,
 			status:    publish.AdvisoryNew,
 			run:       testRun(t, testDate, testRunID),
-			wantError: publish.ErrConfig,
+			wantError: publish.ErrResultInvalid,
 		},
 		{
 			name:      "a fingerprint that is none",
@@ -390,7 +392,7 @@ func TestRenderAdvisoryStatus(t *testing.T) {
 			fp:        "fp-0123456789ab00",
 			status:    publish.AdvisoryNew,
 			run:       testRun(t, testDate, testRunID),
-			wantError: publish.ErrConfig,
+			wantError: publish.ErrResultInvalid,
 		},
 		{
 			name:      "a run NewRun refuses",
@@ -732,7 +734,8 @@ func TestParseAdvisoryStatus(t *testing.T) {
 
 // TestSetAdvisoryStatus pins the one text a run has for a draft it did not
 // reproduce: the listing's description with its last status line replaced, and
-// every refusal (a status outside the four, a description with no status line).
+// every refusal (a status outside the four, a description with no status line),
+// each the draft's own content: ErrResultInvalid, exit 3 (issue #640).
 func TestSetAdvisoryStatus(t *testing.T) {
 	t.Parallel()
 
@@ -766,8 +769,8 @@ func TestSetAdvisoryStatus(t *testing.T) {
 
 			got, err := publish.SetAdvisoryStatus(tc.description, tc.status)
 
-			if !errors.Is(err, publish.ErrConfig) {
-				t.Fatalf("SetAdvisoryStatus = %q, %v, want an error wrapping ErrConfig", got, err)
+			if !errors.Is(err, publish.ErrResultInvalid) {
+				t.Fatalf("SetAdvisoryStatus = %q, %v, want an error wrapping ErrResultInvalid", got, err)
 			}
 
 			if got != "" {
