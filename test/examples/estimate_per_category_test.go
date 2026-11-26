@@ -148,8 +148,10 @@ func TestEstimatePerTargetAndCategory(t *testing.T) {
 	out.WriteString("serverless container take no size.\n")
 	out.WriteString("A MongoDB database is 2 vCPU, 8 GiB of memory, 100 GiB of storage and count 3, the nodes of a\n")
 	out.WriteString("replica set; a cache is 6 GiB of memory per node, count 2 and `node-high-availability`, so it is\n")
-	out.WriteString("priced on the multi-node tier a replicated cache is served by, and its capability is shown after\n")
-	out.WriteString("its size; a load balancer and a container registry take no size and are not priced.\n\n")
+	out.WriteString("priced on the multi-node tier's per-node price, where that tier serves the cache or ties with the\n")
+	out.WriteString("base offering (Scaleway's Redis Cluster lists no `node-high-availability`: see its SOURCES.md,\n")
+	out.WriteString("*Estimate effect*), and its capability is shown after its size; a load balancer and a container\n")
+	out.WriteString("registry take no size and are not priced.\n\n")
 
 	for _, target := range targets {
 		cat, err := target.catalog().Catalog(t.Context())
