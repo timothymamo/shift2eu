@@ -74,6 +74,10 @@ func main() {
 // report's text (Report.WriteText) to stdout and returns exitPassed when the
 // report passed, exitFailed otherwise.
 func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, base livecheck.Config) int {
+	if len(args) > 0 && args[0] == liveVersionCommand {
+		return runLiveVersion(ctx, args[1:], stdin, stdout, stderr, base)
+	}
+
 	cfg, err := configure(args, stdin, base)
 	if err != nil {
 		fmt.Fprintf(stderr, "sitecheck: %v\n", err)
@@ -138,16 +142,9 @@ func configure(args []string, stdin io.Reader, base livecheck.Config) (livecheck
 		return livecheck.Config{}, fmt.Errorf("-manifest %s: %w", *manifestPath, err)
 	}
 
-	var tags []string
-
-	if *tagsPath == "-" {
-		tags, err = livecheck.ReadTagList(stdin)
-	} else {
-		tags, err = readFile(*tagsPath, livecheck.ReadTagList)
-	}
-
+	tags, err := readTags(*tagsPath, stdin)
 	if err != nil {
-		return livecheck.Config{}, fmt.Errorf("-tags %s: %w", *tagsPath, err)
+		return livecheck.Config{}, err
 	}
 
 	cfg := base
@@ -164,6 +161,125 @@ func configure(args []string, stdin io.Reader, base livecheck.Config) (livecheck
 
 	if err := cfg.Validate(); err != nil {
 		return livecheck.Config{}, err
+	}
+
+	return cfg, nil
+}
+
+// readTags reads the tag list -tags names: the file at path, or stdin for "-".
+func readTags(path string, stdin io.Reader) ([]string, error) {
+	var (
+		tags []string
+		err  error
+	)
+
+	if path == "-" {
+		tags, err = livecheck.ReadTagList(stdin)
+	} else {
+		tags, err = readFile(path, livecheck.ReadTagList)
+	}
+
+	if err != nil {
+		return nil, fmt.Errorf("-tags %s: %w", path, err)
+	}
+
+	return tags, nil
+}
+
+// liveVersionCommand is the subcommand of the scheduled check (PRD #297
+// milestone 4, ADR 0043): which release does the live site serve, and may it?
+const liveVersionCommand = "live-version"
+
+// runLiveVersion is the live-version subcommand. args are the arguments after
+// its name:
+//
+//	sitecheck live-version -tags <file or -> -anchor <RFC 3339 time> -window <duration> [-host <host>]
+//
+// -tags (required) is the repository's tag list, "-" for stdin; -anchor
+// (required) the committer date of the commit the highest release tag points
+// to (git log -1 --format=%cI <tag>); -window (required, positive) the version
+// window's bound; -host defaults to livecheck.DefaultHost. It fetches
+// https://<host>/ once (livecheck.LiveVersion, with base's Dial, Roots, Now,
+// MaxBodyBytes and RequestTimeout) and, when the window accepts the live
+// version, writes the tag list's own entry and a line break to stdout and
+// returns exitPassed. A refused version, a root that does not answer 200 and
+// a missing, hidden or malformed version are one line on stderr and
+// exitFailed; a usage error is one line on stderr and exitConfig, before any
+// connection.
+func runLiveVersion(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, base livecheck.Config) int {
+	cfg, err := configureLiveVersion(args, stdin, base)
+	if err != nil {
+		fmt.Fprintf(stderr, "sitecheck %s: %v\n", liveVersionCommand, err)
+
+		return exitConfig
+	}
+
+	tag, err := livecheck.LiveVersion(ctx, cfg)
+	if err != nil {
+		fmt.Fprintf(stderr, "sitecheck %s: %v\n", liveVersionCommand, err)
+
+		return exitFailed
+	}
+
+	if _, err := fmt.Fprintln(stdout, tag.String()); err != nil {
+		fmt.Fprintf(stderr, "sitecheck %s: write the version: %v\n", liveVersionCommand, err)
+
+		return exitFailed
+	}
+
+	return exitPassed
+}
+
+// configureLiveVersion parses the live-version subcommand's args, reads the
+// tag list and returns the subcommand's configuration.
+func configureLiveVersion(args []string, stdin io.Reader, base livecheck.Config) (livecheck.LiveVersionConfig, error) {
+	flags := flag.NewFlagSet(liveVersionCommand, flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+
+	tagsPath := flags.String("tags", "", `the repository's tag list, one tag per line, "-" for stdin (required)`)
+	anchor := flags.String("anchor", "", "the committer date of the highest release tag's commit, RFC 3339 (required)")
+	window := flags.Duration("window", 0, "the version window's bound after the anchor (required, positive)")
+	host := flags.String("host", livecheck.DefaultHost, "the canonical host")
+
+	if err := flags.Parse(args); err != nil {
+		return livecheck.LiveVersionConfig{}, err
+	}
+
+	switch {
+	case flags.NArg() > 0:
+		return livecheck.LiveVersionConfig{}, fmt.Errorf("unexpected argument %q", flags.Arg(0))
+	case *tagsPath == "":
+		return livecheck.LiveVersionConfig{}, errors.New("-tags is required")
+	case *anchor == "":
+		return livecheck.LiveVersionConfig{}, errors.New("-anchor is required")
+	case *window <= 0:
+		return livecheck.LiveVersionConfig{}, fmt.Errorf("-window %v is missing or not positive", *window)
+	}
+
+	anchorTime, err := time.Parse(time.RFC3339, *anchor)
+	if err != nil {
+		return livecheck.LiveVersionConfig{}, fmt.Errorf("-anchor %q is not an RFC 3339 time", *anchor)
+	}
+
+	tags, err := readTags(*tagsPath, stdin)
+	if err != nil {
+		return livecheck.LiveVersionConfig{}, err
+	}
+
+	cfg := livecheck.LiveVersionConfig{
+		Host:           *host,
+		Tags:           tags,
+		Anchor:         anchorTime,
+		Bound:          *window,
+		Dial:           base.Dial,
+		Roots:          base.Roots,
+		Now:            base.Now,
+		MaxBodyBytes:   base.MaxBodyBytes,
+		RequestTimeout: base.RequestTimeout,
+	}
+
+	if err := cfg.Validate(); err != nil {
+		return livecheck.LiveVersionConfig{}, err
 	}
 
 	return cfg, nil

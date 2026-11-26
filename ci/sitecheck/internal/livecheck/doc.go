@@ -53,6 +53,13 @@
 //   - the module script's transferred and decoded size and its Content-Type
 //     (KindModuleScriptSize).
 //
+// The scheduled check (PRD #297 milestone 4) asks first which release is live:
+// LiveVersion fetches the root once through the same client, reads the
+// version as KindVersion does and judges it with AcceptLive, the version
+// window: the highest tag of the list (by version, never lexically) is always
+// accepted, the tag immediately below it only while Now is before the
+// Window's Anchor plus its Bound, everything else is refused.
+//
 // Every request goes over HTTP/1.1 only: the transport dials through the
 // injected Dialer with a TLS configuration of its own, which turns HTTP/2 off,
 // so headers, compression and size are judged as the edge serves them over
