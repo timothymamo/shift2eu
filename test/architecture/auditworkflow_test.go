@@ -496,7 +496,7 @@ func TestScheduledSecurityAuditWorkflowNamesPublishPathsAbsolutely(t *testing.T)
 			}
 
 			if !absoluteShellPath(value) {
-				t.Errorf("%s line %d: %s gives %s the value %q, want an absolute path: one that starts with /, ${RUNNER_TEMP}/ or ${GITHUB_WORKSPACE}/, quoted or not (issue #640: the core refuses a relative path, so the run fails before it reads or publishes anything)\n  %s",
+				t.Errorf("%s line %d: %s gives %s the value %q, want an absolute and clean path: one that starts with /, ${RUNNER_TEMP}/ or ${GITHUB_WORKSPACE}/ with no empty, . or .. segment and no trailing / after it, unquoted or in one matching pair of quotes (issues #640 and #655: the core refuses a path that is not absolute and clean, so the run fails before it reads or publishes anything)\n  %s",
 					auditWorkflow, inv.line, inv.sub, flag, value, inv.source)
 			}
 		}
@@ -579,19 +579,63 @@ func shellWordsUntilEnd(command string) []string {
 	return out
 }
 
-// absoluteShellPath reports whether value is an absolute shell path, quoted or
-// not: one that starts with /, ${RUNNER_TEMP}/ or ${GITHUB_WORKSPACE}/, or is one
-// of the two variables whole (its own directory). The two variables are the
-// runner's own absolute directories.
+// absoluteShellPath reports whether value is an absolute and clean shell path,
+// unquoted or in one matching pair of double or single quotes: one that starts
+// with /, ${RUNNER_TEMP}/ or ${GITHUB_WORKSPACE}/ followed by a clean tail, or
+// is one of the two variables whole (its own directory). The two variables are
+// the runner's own absolute directories. The tail after each of the three
+// roots has no empty, . or .. segment and no trailing /, since the core
+// refuses a result or reports path that is not absolute and clean (issue
+// #655). A value whose quotes do not pair up is refused.
 func absoluteShellPath(value string) bool {
-	unquoted := strings.TrimSuffix(strings.TrimPrefix(value, `"`), `"`)
-	unquoted = strings.TrimSuffix(strings.TrimPrefix(unquoted, `'`), `'`)
+	unquoted, ok := unquoteShellValue(value)
+	if !ok {
+		return false
+	}
 
-	for _, prefix := range []string{"/", "${RUNNER_TEMP}/", "${GITHUB_WORKSPACE}/"} {
-		if strings.HasPrefix(unquoted, prefix) {
-			return true
+	if unquoted == "${RUNNER_TEMP}" || unquoted == "${GITHUB_WORKSPACE}" {
+		return true
+	}
+
+	for _, root := range []string{"/", "${RUNNER_TEMP}/", "${GITHUB_WORKSPACE}/"} {
+		if tail, ok := strings.CutPrefix(unquoted, root); ok {
+			return cleanPathTail(tail)
 		}
 	}
 
-	return unquoted == "${RUNNER_TEMP}" || unquoted == "${GITHUB_WORKSPACE}"
+	return false
+}
+
+// unquoteShellValue strips one matching pair of double or single quotes from
+// value. It reports false when a quote at either end has no matching quote at
+// the other end.
+func unquoteShellValue(value string) (string, bool) {
+	isQuote := func(b byte) bool { return b == '"' || b == '\'' }
+
+	if value == "" {
+		return value, true
+	}
+
+	first, last := value[0], value[len(value)-1]
+
+	switch {
+	case isQuote(first) && len(value) >= 2 && first == last:
+		return value[1 : len(value)-1], true
+	case isQuote(first) || isQuote(last):
+		return "", false
+	default:
+		return value, true
+	}
+}
+
+// cleanPathTail reports whether tail, the part of a path after its root, has
+// no empty, . or .. segment, which also refuses an empty tail and a trailing /.
+func cleanPathTail(tail string) bool {
+	for segment := range strings.SplitSeq(tail, "/") {
+		if segment == "" || segment == "." || segment == ".." {
+			return false
+		}
+	}
+
+	return true
 }

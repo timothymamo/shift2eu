@@ -58,7 +58,7 @@ const (
 	lineResultNoRelease    = "result refused: no release of the tag: see runbook"
 	lineResultNoLatest     = "result refused: no latest release: see runbook"
 	lineResultNotLatest    = "result refused: the tag not the latest release's: see runbook"
-	lineResultDigest       = "result refused: the image digest not sha256: and 64 lowercase hex: see runbook"
+	lineResultDigest       = "result refused: the image digest not sha256 with 64 lowercase hex: see runbook"
 	lineResultNoAttesting  = "result refused: no attestation of the digest: see runbook"
 	lineResultNoProvenance = "result refused: no provenance attestation names the digest: see runbook"
 
@@ -92,7 +92,12 @@ const (
 	lineGitHubCompare        = "GitHub call failed: comparing the audited commit with the report's: see runbook"
 	lineGitHubRef            = "GitHub call failed: writing the report's branch: see runbook"
 	lineGitHubPull           = "GitHub call failed: opening the report's pull request: see runbook"
-	lineGitHubGH             = "GitHub call failed: running gh: see runbook"
+
+	// lineGitHubAlone is the class's line with no check's words: a gh that
+	// failed in a call no caller's check marks, so gh's own failure has no
+	// phrase of its own (issue #655: "running gh" is dropped, and a gh
+	// failure is named by the call it failed).
+	lineGitHubAlone = "GitHub call failed: see runbook"
 )
 
 // TestGitHubRefusalNamesTheFailedCheck pins the GitHub side's fixed list:
@@ -1393,11 +1398,76 @@ func TestGitHubRefusalNamesTheFailedCheck(t *testing.T) {
 				return reportRefusal(t, fixturePullsEndpoint)
 			},
 		},
+		// gh's own failures, driven through real calls: the call that failed
+		// names it, never a phrase for gh itself (issue #655).
 		{
-			name:   "a gh that answers no status line",
+			name:   "a gh that answers no status line, in the issue listing",
+			source: "issues.go: ListAuditIssues",
+			class:  publish.ErrGitHub,
+			want:   lineGitHubIssues,
+			code:   8,
+			leaks:  []string{fakeOutputMarker},
+			drive: func(t *testing.T) error {
+				t.Helper()
+
+				client := newFixtureClient(t, newFakeGitleaksExit(t, 1).Path)
+
+				_, err := github.ListAuditIssues(t.Context(), client)
+
+				return err
+			},
+		},
+		{
+			name:   "a gh that does not run to its end, in the issue listing",
+			source: "issues.go: ListAuditIssues",
+			class:  publish.ErrGitHub,
+			want:   lineGitHubIssues,
+			code:   8,
+			drive: func(t *testing.T) error {
+				t.Helper()
+
+				client := newFixtureClient(t, notExecutable(t))
+
+				_, err := github.ListAuditIssues(t.Context(), client)
+
+				return err
+			},
+		},
+		{
+			name:   "a gh past the call's deadline, in the issue listing",
+			source: "issues.go: ListAuditIssues",
+			class:  publish.ErrGitHub,
+			want:   lineGitHubIssues,
+			code:   8,
+			drive: func(t *testing.T) error {
+				t.Helper()
+
+				fake := newFakeGH(t, Route{
+					Method:   "GET",
+					Endpoint: fixtureIssuesQuery + "page=1",
+					Status:   200,
+					Body:     []any{},
+					Delay:    10 * time.Second,
+				})
+
+				client := newTestClient(t, github.ClientConfig{
+					GHPath:      fake.Path,
+					Token:       github.NewToken(fixtureToken(t)),
+					TempDir:     t.TempDir(),
+					Scope:       testScope(),
+					CallTimeout: 200 * time.Millisecond,
+				})
+
+				_, err := github.ListAuditIssues(t.Context(), client)
+
+				return err
+			},
+		},
+		{
+			name:   "a gh that answers no status line, in a call of its own",
 			source: "client.go: Client.Call",
 			class:  publish.ErrGitHub,
-			want:   lineGitHubGH,
+			want:   lineGitHubAlone,
 			code:   8,
 			leaks:  []string{fakeOutputMarker},
 			drive: func(t *testing.T) error {
@@ -1542,6 +1612,21 @@ func advisoryUpdatePlan(t *testing.T) github.AdvisoryPlan {
 	}
 
 	return plan
+}
+
+// notExecutable returns the path of a regular file that is no program: the
+// client's gh check accepts it (gh's absolute path, naming a regular file), and
+// running it fails before it writes anything, which is a gh that did not run to
+// its end, never an answer.
+func notExecutable(t *testing.T) string {
+	t.Helper()
+
+	path := filepath.Join(t.TempDir(), "gh")
+	if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0o600); err != nil {
+		t.Fatalf("write %s: %v", path, err)
+	}
+
+	return path
 }
 
 // valueMarker is text only an invented value of a test holds, so a test can

@@ -61,7 +61,7 @@ const (
 	lineConfigSummary   = "configuration invalid: the step summary not appendable: see runbook"
 	lineConfigUsage     = "configuration invalid: a bad flag or subcommand: see runbook"
 	lineConfigToken     = "configuration invalid: GH_TOKEN unset or empty: see runbook"
-	lineConfigServerURL = "configuration invalid: GITHUB_SERVER_URL not https://github.com: see runbook"
+	lineConfigServerURL = "configuration invalid: GITHUB_SERVER_URL not github.com over https: see runbook"
 	lineConfigSHA       = "configuration invalid: GITHUB_SHA not 40 lowercase hex: see runbook"
 	lineConfigKey       = "configuration invalid: AUDIT_FINGERPRINT_KEY unset or shorter than 32 bytes: see runbook"
 	lineConfigRepo      = "configuration invalid: GITHUB_REPOSITORY not owner/name: see runbook"
@@ -517,7 +517,7 @@ func TestEntryPointSummaryHoldsNoInputValue(t *testing.T) {
 	t.Parallel()
 
 	const (
-		// fakeKey is a key of 31 bytes: the shortest length the run refuses.
+		// fakeKey is a key of 31 bytes: the longest length the run refuses.
 		fakeKey = "fake-key-0123456789abcdef012345"
 		// fakeToken is a token of the shape GitHub's installation tokens have. It
 		// is invented: no credential, and no value a line may hold.
