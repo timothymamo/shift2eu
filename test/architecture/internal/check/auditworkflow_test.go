@@ -2078,6 +2078,22 @@ func TestAuditWorkflow(t *testing.T) {
 			wantIn:   "permission-issues",
 		},
 		{
+			// GitHub Actions reads an input's name without regard to case, and the
+			// action upper-cases it into INPUT_PERMISSION-CONTENTS, so this key asks
+			// for the permission just as permission-contents does: it must stay
+			// refused even if yamlread ever takes an upper-case key as written.
+			name:     "an upper-case contents permission on the App token",
+			workflow: mutate(t, acceptedWorkflow, auditAppPrivateKey, auditAppPrivateKey+"          PERMISSION-CONTENTS: write\n"),
+			wantIn:   "PERMISSION-CONTENTS",
+		},
+		{
+			// The same input in another case: the name is read without regard to
+			// case, so Permission-contents asks for the permission too.
+			name:     "a mixed-case contents permission on the App token",
+			workflow: mutate(t, acceptedWorkflow, auditAppPrivateKey, auditAppPrivateKey+"          Permission-contents: write\n"),
+			wantIn:   "Permission-contents",
+		},
+		{
 			name:     "the App token step in the model job",
 			workflow: moveStep(auditModelUpload, auditAppTokenStep),
 			wantIn:   "audit App's token",
