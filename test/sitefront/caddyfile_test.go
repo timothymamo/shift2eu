@@ -110,6 +110,18 @@ func TestCaddyfileReverseProxy(t *testing.T) {
 	report(t, checkReverseProxy(readCaddyfile(t)))
 }
 
+// TestCaddyfileNoVia pins that no answer of the front names its software in a
+// Via header (issue #626): Caddy's reverse_proxy writes `Via: 2.0 Caddy` on
+// every answer it proxies, which no other header of the front does, so www's
+// block deletes it from the answer (`header -Via`: a header_down cannot, since
+// the proxy writes its own copy after the upstream's is gone) and the proxy
+// drops the upstream's own copy on the way down (`header_down -Via`).
+func TestCaddyfileNoVia(t *testing.T) {
+	t.Parallel()
+
+	report(t, checkNoVia(readCaddyfile(t)))
+}
+
 // TestCaddyfileRefusedDirectives pins the directives the design refuses
 // (docs/adr/0045, docs/adr/0043): no access log in a site block (the visitor's
 // address, request line and headers are nobody's to keep, and the platform ships
@@ -149,6 +161,7 @@ const designedCaddyfile = `{
 			Referrer-Policy "no-referrer"
 			Permissions-Policy "browsing-topics=(), camera=(), geolocation=(), microphone=(), payment=(), usb=()"
 		}
+		header -Via
 		reverse_proxy https://{$UPSTREAM} {
 			header_up Host {upstream_hostport}
 			header_up -X-Forwarded-For
@@ -167,6 +180,7 @@ const designedCaddyfile = `{
 			header_down -X-Content-Type-Options
 			header_down -Referrer-Policy
 			header_down -Permissions-Policy
+			header_down -Via
 			header_down -Set-Cookie
 			header_down -X-Amz-*
 		}
@@ -209,6 +223,7 @@ func TestChecksAcceptTheDesignedConfiguration(t *testing.T) {
 	report(t, checkRedirects(f))
 	report(t, checkHeaders(f, "max-age=31536000; includeSubDomains", true, designedCSP))
 	report(t, checkReverseProxy(f))
+	report(t, checkNoVia(f))
 	report(t, checkRefusedDirectives(f))
 }
 
@@ -355,6 +370,18 @@ func TestChecksRefuseBrokenConfigurations(t *testing.T) {
 			src:   strings.Replace(designedCaddyfile, "\t\t\theader_down -X-Amz-*\n", "\t\t\theader_down -X-Amz-Request-Id\n\t\t\theader_down -X-Amz-Id-2\n\t\t\theader_down -X-Amz-Meta-Foo\n", 1),
 			check: checkReverseProxy,
 			want:  "open set",
+		},
+		{
+			name:  "the answer's own Via not deleted",
+			src:   strings.Replace(designedCaddyfile, "\t\theader -Via\n", "", 1),
+			check: checkNoVia,
+			want:  "header -Via",
+		},
+		{
+			name:  "the upstream's Via not removed",
+			src:   strings.Replace(designedCaddyfile, "\t\t\theader_down -Via\n", "", 1),
+			check: checkNoVia,
+			want:  "header_down -Via",
 		},
 		{
 			name:  "no auto_https off",
@@ -888,6 +915,60 @@ func checkReverseProxy(f *caddyfile) []string {
 	}
 
 	return problems
+}
+
+// checkNoVia holds that no answer of the front carries a Via header (issue
+// #626): Caddy's reverse_proxy writes its own copy on every answer it proxies,
+// which names the front's software where no other header does. www's block
+// deletes it from the answer with `header -Via` - a header_down alone cannot,
+// since the proxy writes its copy after the upstream's is gone - and the proxy
+// drops the upstream's own copy on the way down with `header_down -Via`. The
+// redirects carry no Via: only a proxied answer gets one.
+func checkNoVia(f *caddyfile) []string {
+	var problems []string
+
+	route, down := false, false
+
+	for _, n := range f.all() {
+		if len(n.tokens) == 0 {
+			continue
+		}
+
+		switch n.tokens[0] {
+		case "header":
+			// The one-line form (`header -Via`) and the block form (`header { -Via }`).
+			deletes := len(n.tokens) == 2 && isViaDeletion(n.tokens[1])
+			for _, child := range n.children {
+				deletes = deletes || (len(child.tokens) == 1 && isViaDeletion(child.tokens[0]))
+			}
+			if deletes && f.routeOf(n) == wwwRoute {
+				route = true
+			}
+		case "reverse_proxy":
+			for _, child := range n.children {
+				if len(child.tokens) == 2 && child.tokens[0] == "header_down" && isViaDeletion(child.tokens[1]) {
+					down = true
+				}
+			}
+		}
+	}
+
+	if !route {
+		problems = append(problems, "www's block does not delete Via from the answer (header -Via): Caddy's reverse_proxy writes `Via: 2.0 Caddy` on every answer it proxies, and the header names the front's software where no other one does (issue #626, docs/adr/0045)")
+	}
+
+	if !down {
+		problems = append(problems, "the proxy does not remove the upstream's Via from the response (header_down -Via): Edge Services' own copy would reach the client beside Caddy's, and no answer of the front carries a Via at all (issue #626, docs/adr/0045)")
+	}
+
+	return problems
+}
+
+// isViaDeletion reports whether tok deletes the Via header, which a header or
+// header_down line writes as -Via: Caddy compares a field's name without regard
+// to its case.
+func isViaDeletion(tok string) bool {
+	return strings.HasPrefix(tok, "-") && strings.EqualFold(tok[1:], "Via")
 }
 
 // deletesPrefix reports whether deleted holds the prefix deletion prefix*, or, instead, every one of the
