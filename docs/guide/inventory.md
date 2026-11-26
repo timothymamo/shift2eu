@@ -828,8 +828,7 @@ Prefer these roles on the project, each of which reads configuration only:
   `managedkafka.clusters.connect`, so it reaches no broker and no message, but it can also read the
   topics, the consumer groups and their offsets, the ACLs, the schemas and the connector
   configurations, which can hold credentials in plain text; the listing needs none of them. If that
-  is too much, grant a custom role with only `managedkafka.clusters.list` instead (and
-  `managedkafka.locations.list` if your setup needs it);
+  is too much, grant a custom role with only `managedkafka.clusters.list` instead;
 - `roles/artifactregistry.reader` (Artifact Registry repositories). It is read-only, but it can also
   download the artifacts in the repositories (`artifactregistry.repositories.downloadArtifacts`), which
   the listing does not need; no predefined Artifact Registry role lists repositories without it. If
