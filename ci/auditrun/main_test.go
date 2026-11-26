@@ -15,6 +15,11 @@
 // the file as an io.WriteCloser this file's fake answers, so that a test can
 // fail the write after part of the body or the close and see that the file is
 // gone (doc.go: a failed run writes no file).
+//
+// The five file commands the step's environment names are pinned as the runner
+// leaves them: a table drives every way a step can change one - in place, by a
+// link, by another file, by removal - from inside a fake step, and reads back
+// what the run left at each path (issues #615, #614).
 package main
 
 import (
@@ -80,13 +85,16 @@ func (e *environ) lookup(name string) (string, bool) {
 // stepRecorder is the fake Steps: each step records that it ran, and the audit
 // step answers with the result body and error the test gives it. duringAudit,
 // when set, runs inside that step, before it answers: the seam a test swaps a
-// file the run opened - the step summary - through, as a step that writes one
-// could.
+// file the run opened - one of the step's file commands - through, as a step
+// that writes one could. duringChecksum and checksumErr do the same one step
+// earlier, for a run the checksum step refuses, so the audit step never runs.
 type stepRecorder struct {
-	ran         []string
-	result      []byte
-	auditErr    error
-	duringAudit func()
+	ran            []string
+	result         []byte
+	auditErr       error
+	duringAudit    func()
+	checksumErr    error
+	duringChecksum func()
 }
 
 // steps is the recorder as the run's six steps.
@@ -99,10 +107,18 @@ func (r *stepRecorder) steps() audit.Steps {
 
 	return audit.Steps{
 		ManagedSettings: func(string) error { return record("managed settings") },
-		Checksum:        func(string, audit.Inputs) error { return record("checksum") },
-		Layout:          func(string) error { return record("audit directory") },
-		Bubblewrap:      func(context.Context) error { return record("bubblewrap") },
-		Preflight:       func(context.Context, string) error { return record("preflight") },
+		Checksum: func(string, audit.Inputs) error {
+			r.ran = append(r.ran, "checksum")
+
+			if r.duringChecksum != nil {
+				r.duringChecksum()
+			}
+
+			return r.checksumErr
+		},
+		Layout:     func(string) error { return record("audit directory") },
+		Bubblewrap: func(context.Context) error { return record("bubblewrap") },
+		Preflight:  func(context.Context, string) error { return record("preflight") },
 		Audit: func(context.Context, string) ([]byte, error) {
 			r.ran = append(r.ran, "audit")
 
@@ -201,116 +217,529 @@ func TestRunTakesTheStepsInputs(t *testing.T) {
 	assertOnlyTheListedVariables(t, result.asked)
 }
 
-// TestRunReplacesAStepSummarySwappedForALink pins the repair a run makes after
-// its steps (issue #615, the auditor's round-2 Low 1): the step summary is
-// digested like every other file command, but a digest only detects a swap; it
-// undoes nothing. A run whose steps replace the summary's path with a link to
-// another readable file would leave the runner to follow that link after the
-// step and publish the other file as the job's summary. So after the steps
-// auditrun Lstats the summary's path: one that is no longer the regular file it
-// opened is replaced with an empty regular file, never written through the link,
-// and the run fails with the audit's exit. An untouched summary still holds the
-// run's one line.
-//
-// The repair also decides the result file: a run that the repair turns into a
-// failure hands the encrypt step nothing, so its -result-out path is gone,
-// while an untouched run leaves the bytes the audit step checked.
-func TestRunReplacesAStepSummarySwappedForALink(t *testing.T) {
-	t.Parallel()
+// elsewhere is what a file a step swaps a file command for holds: a byte of it
+// in one of the runner's files would prove the run followed a link, and a byte
+// of it in the job's summary would publish a file the audit never wrote.
+const elsewhere = "a file the audit's step must never publish\n"
 
-	// elsewhere is what the file the summary is swapped for holds: a byte of it
-	// in the job's summary would prove the link was followed.
-	const elsewhere = "a file the step's summary must never publish\n"
+// fileCommandNames are the step's five file commands, named by the variables
+// that hold their paths: the one directory the audit digests, and the files
+// auditrun is the only legitimate writer of (issues #615, #614).
+var fileCommandNames = []string{"GITHUB_ENV", "GITHUB_PATH", "GITHUB_OUTPUT", "GITHUB_STATE", "GITHUB_STEP_SUMMARY"}
+
+// TestRunEmptiesAFileCommandItsStepsChanged pins the repair a run makes after
+// its steps (issues #615, #614, the auditor's round-3 findings). The step's
+// five file commands - $GITHUB_ENV, $GITHUB_PATH, $GITHUB_OUTPUT, $GITHUB_STATE
+// and the step summary - are digested as part of the runner's file-command
+// directory, but a digest only detects a change; it undoes nothing. The runner
+// applies $GITHUB_ENV and $GITHUB_PATH after a step that failed too, and it
+// reads the summary by its path after the step and publishes it, so whatever a
+// step left in one of those files outlives the run: a step could hand the
+// job's post step - actions/checkout's, holding the runtime token that writes
+// the Actions cache - a BASH_ENV, and could publish bytes of its own choosing
+// as the job's summary.
+//
+// auditrun is the only legitimate writer of these five files, and the only line
+// it writes is the run's own, after the steps. So the run records their
+// identity and their content before the steps and compares them with the paths
+// after: a file whose path no longer names the regular file the run opened, a
+// summary that no longer holds its recorded content followed by exactly the
+// line the run printed, or one of the other four that holds any other bytes, is
+// a file command the steps changed - and its path is left as an EMPTY regular
+// file, a path the steps swapped is replaced without the link ever being
+// followed, and a passing run becomes a failure with no result file for the
+// encrypt step. A file the steps left alone keeps exactly its bytes, and the
+// summary keeps the run's own line.
+//
+// The table drives each change from inside a fake step, so nothing here starts a
+// sandbox, runs a model or writes a real step's files.
+func TestRunEmptiesAFileCommandItsStepsChanged(t *testing.T) {
+	t.Parallel()
 
 	cases := []struct {
 		name string
-		// swap, when set, replaces the summary's path with a link to a file
-		// holding elsewhere, from inside the audit step.
-		swap bool
+		// before, when set, fills the file commands as the step finds them:
+		// what the runner's four files or an earlier step's summary already
+		// held when the run started.
+		before func(*testing.T, *stepFiles)
+		// change, when set, is what a step does to the file commands while the
+		// run is under way.
+		change func(*testing.T, *stepFiles)
+		// refusedBeforeAudit makes the checksum step refuse the run, so that a
+		// change made there happens on a run that already has an exit code of
+		// its own and never reaches the audit.
+		refusedBeforeAudit bool
 		// wantCode is the run's exit code.
 		wantCode int
-		// wantResult is whether the run leaves its -result-out file holding
-		// the audit step's bytes.
+		// wantResult is whether the run leaves its -result-out file holding the
+		// audit step's bytes.
 		wantResult bool
+		// wantEmpty names the file commands the run must leave as empty regular
+		// files; every other one must keep exactly what it held.
+		wantEmpty []string
 	}{
-		{name: "a summary left as the run opened it", wantCode: audit.ExitOK, wantResult: true},
-		{name: "a summary swapped for a link to another file", swap: true, wantCode: audit.ExitFailed, wantResult: false},
+		{
+			name:       "no file command the steps changed",
+			before:     writePreExistingLines,
+			wantCode:   audit.ExitOK,
+			wantResult: true,
+		},
+		{
+			// The round-3 finding: a step appends to the summary's own inode,
+			// so its path is still the file the run opened and only a content
+			// check can tell - and the runner would publish the step's line.
+			name:      "a step summary appended to in place",
+			change:    appendTo("GITHUB_STEP_SUMMARY", "a line the step added\n"),
+			wantCode:  audit.ExitFailed,
+			wantEmpty: []string{"GITHUB_STEP_SUMMARY"},
+		},
+		{
+			// The same inode and the same size, other bytes: a check that
+			// compared sizes would pass this one.
+			name: "a step summary overwritten in place with the same size",
+			before: func(t *testing.T, f *stepFiles) {
+				t.Helper()
+
+				writeEnvFile(t, f.path("GITHUB_STEP_SUMMARY"), "the job's own summary line\n")
+			},
+			change: func(t *testing.T, f *stepFiles) {
+				t.Helper()
+
+				path := f.path("GITHUB_STEP_SUMMARY")
+
+				body, err := os.ReadFile(path)
+				if err != nil {
+					t.Fatalf("read the summary %s to overwrite it: %v", path, err)
+				}
+
+				overwriteInPlace(t, path, strings.ToUpper(string(body)))
+			},
+			wantCode:  audit.ExitFailed,
+			wantEmpty: []string{"GITHUB_STEP_SUMMARY"},
+		},
+		{
+			name: "a step summary renamed over with another regular file",
+			change: func(t *testing.T, f *stepFiles) {
+				t.Helper()
+
+				swapForRegularFile(t, f.path("GITHUB_STEP_SUMMARY"))
+			},
+			wantCode:  audit.ExitFailed,
+			wantEmpty: []string{"GITHUB_STEP_SUMMARY"},
+		},
+		{
+			name: "a step summary removed during the run",
+			change: func(t *testing.T, f *stepFiles) {
+				t.Helper()
+
+				if err := os.Remove(f.path("GITHUB_STEP_SUMMARY")); err != nil {
+					t.Fatalf("remove the summary %s the run opened: %v", f.path("GITHUB_STEP_SUMMARY"), err)
+				}
+			},
+			wantCode:  audit.ExitFailed,
+			wantEmpty: []string{"GITHUB_STEP_SUMMARY"},
+		},
+		{
+			// A line in $GITHUB_PATH is a directory later steps and the
+			// job's post step take their programs from.
+			name:      "$GITHUB_PATH appended to in place",
+			change:    appendTo("GITHUB_PATH", "/tmp/evil\n"),
+			wantCode:  audit.ExitFailed,
+			wantEmpty: []string{"GITHUB_PATH"},
+		},
+		{
+			name: "$GITHUB_PATH swapped for a link to another file",
+			change: func(t *testing.T, f *stepFiles) {
+				t.Helper()
+
+				swapForLink(t, f.path("GITHUB_PATH"), f.target)
+			},
+			wantCode:  audit.ExitFailed,
+			wantEmpty: []string{"GITHUB_PATH"},
+		},
+		{
+			// A line in $GITHUB_ENV is a variable every later command of the
+			// job runs with.
+			name:      "$GITHUB_ENV appended to in place",
+			change:    appendTo("GITHUB_ENV", "BASH_ENV=/tmp/x\n"),
+			wantCode:  audit.ExitFailed,
+			wantEmpty: []string{"GITHUB_ENV"},
+		},
+		{
+			name: "$GITHUB_OUTPUT swapped for a link to another file",
+			change: func(t *testing.T, f *stepFiles) {
+				t.Helper()
+
+				swapForLink(t, f.path("GITHUB_OUTPUT"), f.target)
+			},
+			wantCode:  audit.ExitFailed,
+			wantEmpty: []string{"GITHUB_OUTPUT"},
+		},
+		{
+			name:      "$GITHUB_STATE appended to in place",
+			change:    appendTo("GITHUB_STATE", "state=the step's own\n"),
+			wantCode:  audit.ExitFailed,
+			wantEmpty: []string{"GITHUB_STATE"},
+		},
+		{
+			// A run that already failed keeps its own exit code: the repair
+			// empties the file the steps changed, it does not reclassify the
+			// failure.
+			name:               "a step summary appended to in place on a run the checksum refused",
+			refusedBeforeAudit: true,
+			change:             appendTo("GITHUB_STEP_SUMMARY", "a line the step added\n"),
+			wantCode:           audit.ExitRefused,
+			wantEmpty:          []string{"GITHUB_STEP_SUMMARY"},
+		},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			dir := t.TempDir()
-			env := stepEnvironment(t, dir)
-			summary := env["GITHUB_STEP_SUMMARY"]
-			target := filepath.Join(t.TempDir(), "elsewhere.md")
-			writeEnvFile(t, target, elsewhere)
+			f := newStepFiles(t)
+
+			if tc.before != nil {
+				tc.before(t, f)
+			}
+
+			pre := f.contents(t)
 
 			recorder := &stepRecorder{result: []byte(auditResult)}
 
-			if tc.swap {
-				recorder.duringAudit = func() {
-					if err := os.Remove(summary); err != nil {
-						t.Fatalf("remove the summary %s the run opened: %v", summary, err)
-					}
-
-					if err := os.Symlink(target, summary); err != nil {
-						t.Fatalf("swap the summary %s for a link to %s: %v", summary, target, err)
-					}
+			if tc.change != nil {
+				if tc.refusedBeforeAudit {
+					recorder.duringChecksum = func() { tc.change(t, f) }
+					recorder.checksumErr = errTestChecksum
+				} else {
+					recorder.duringAudit = func() { tc.change(t, f) }
 				}
 			}
 
-			result := runAuditrunWith(t, stepArgs(dir), env, recorder)
+			result := runAuditrunWith(t, stepArgs(f.dir), f.env, recorder)
 
 			if result.code != tc.wantCode {
-				t.Errorf("the run's exit code is %d, want %d: a summary swapped for a link fails the run, an untouched one does not\nstdout: %s\nstderr: %s",
+				t.Errorf("the run's exit code is %d, want %d: a file command the steps changed fails the run with the audit's exit, and a run that had already failed keeps its own (issues #615, #614)\nstdout: %s\nstderr: %s",
 					result.code, tc.wantCode, result.stdout, result.stderr)
 			}
 
-			info, err := os.Lstat(summary)
-			if err != nil {
-				t.Fatalf("lstat the summary %s after the run: %v", summary, err)
-			}
-
-			if !info.Mode().IsRegular() {
-				t.Errorf("the summary %s is %s after the run, want a regular file: a path the steps swapped for a link is replaced, never left for the runner to follow (issue #615)",
-					summary, info.Mode())
-			}
-
-			body, err := os.ReadFile(summary)
-			if err != nil {
-				t.Fatalf("read the summary %s after the run: %v", summary, err)
-			}
-
-			if tc.swap {
-				if strings.Contains(string(body), elsewhere) {
-					t.Errorf("the summary holds %q, want nothing of the file its path was swapped for: the run never writes through the link (issue #615)", body)
+			if len(tc.wantEmpty) > 0 {
+				if strings.TrimSpace(result.stderr) == "" {
+					t.Errorf("the run printed nothing on stderr, want a note that it emptied %v: the step's log says what the run did to the runner's files (ADR 0040, issues #615, #614)",
+						tc.wantEmpty)
 				}
+			} else if result.stderr != "" {
+				t.Errorf("the run printed %q on stderr, want nothing: no file command changed, so there is nothing to report", result.stderr)
+			}
 
-				if len(body) != 0 {
-					t.Errorf("the summary holds %q, want an empty regular file: the path is replaced with a new file, nothing is written through the link (issue #615)", body)
-				}
-			} else if !strings.Contains(string(body), "finished") {
-				t.Errorf("the summary holds %q, want the run's one line: an untouched summary is the job's summary (ADR 0040)", body)
+			for _, name := range fileCommandNames {
+				assertFileCommand(t, f, name, pre, tc.wantEmpty, result)
 			}
 
 			if tc.wantResult {
-				assertResultFile(t, resultOutPath(dir), auditResult)
-			} else if _, err := os.Stat(resultOutPath(dir)); !errors.Is(err, os.ErrNotExist) {
-				t.Errorf("the result file at %s is still there (stat: %v), want it removed: the summary's repair failed the run, and a failed run hands the encrypt step no result (doc.go, issue #615)",
-					resultOutPath(dir), err)
+				assertResultFile(t, resultOutPath(f.dir), auditResult)
+			} else if _, err := os.Stat(resultOutPath(f.dir)); !errors.Is(err, os.ErrNotExist) {
+				t.Errorf("the result file at %s is still there (stat: %v), want it removed: a repair fails the run, and a failed run hands the encrypt step no result (doc.go, issues #615, #614)",
+					resultOutPath(f.dir), err)
 			}
 
-			kept, err := os.ReadFile(target)
+			// The file a swap pointed a link at is the step's, not the run's:
+			// the run replaces the file command's path only.
+			kept, err := os.ReadFile(f.target)
 			if err != nil {
-				t.Fatalf("read the file the summary was swapped for, %s: %v", target, err)
+				t.Fatalf("read the file a link pointed at, %s: %v", f.target, err)
 			}
 
 			if string(kept) != elsewhere {
-				t.Errorf("the file the summary was swapped for holds %q, want %q untouched: the run replaces the summary's path only", kept, elsewhere)
+				t.Errorf("the file a link pointed at holds %q, want %q untouched: the run replaces the file command's path, never its target (issues #615, #614)", kept, elsewhere)
 			}
+
+			assertOnlyTheFileCommands(t, f)
+			assertNoSecret(t, result)
 		})
+	}
+}
+
+// TestRunLeavesAFileCommandItCannotOpenAlone pins what a run does when the step
+// summary cannot be opened at the start (issue #615): the run's line goes to
+// stdout alone, the summary's path - here a directory - is left exactly as it
+// was, no other file is touched, and the run still finishes, with its result
+// file. Nothing is repaired and nothing panics: a file the run never opened is
+// one it cannot have recorded, and the summary it could not open holds no line
+// of its own to compare.
+func TestRunLeavesAFileCommandItCannotOpenAlone(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	env := stepEnvironment(t, dir)
+
+	summary := env["GITHUB_STEP_SUMMARY"]
+	if err := os.Mkdir(summary, 0o700); err != nil {
+		t.Fatalf("make the summary's path %s a directory: %v", summary, err)
+	}
+
+	result := runAuditrun(t, stepArgs(dir), env)
+
+	if result.code != audit.ExitOK {
+		t.Errorf("the run's exit code is %d, want %d (audit.ExitOK): a summary that cannot be opened is the step's problem, not the run's\nstdout: %s\nstderr: %s",
+			result.code, audit.ExitOK, result.stdout, result.stderr)
+	}
+
+	if result.stderr == "" {
+		t.Error("the run printed nothing on stderr, want the note that the step summary cannot be opened")
+	}
+
+	info, err := os.Lstat(summary)
+	if err != nil {
+		t.Fatalf("lstat the summary %s after the run: %v", summary, err)
+	}
+
+	if !info.IsDir() {
+		t.Errorf("the summary's path %s is %s after the run, want the directory the step found: a file the run never opened is not one it repairs (issues #615, #614)",
+			summary, info.Mode())
+	}
+
+	entries, err := os.ReadDir(summary)
+	if err != nil {
+		t.Fatalf("read the summary's directory %s: %v", summary, err)
+	}
+
+	if len(entries) != 0 {
+		t.Errorf("the summary's directory holds %v, want nothing: the run writes no summary line it could not open", entries)
+	}
+
+	assertResultFile(t, resultOutPath(dir), auditResult)
+	assertNoSecret(t, result)
+}
+
+// stepFiles is one model step's file commands as the run finds them: the
+// environment that names them, the one directory they share, and a file
+// elsewhere, holding elsewhere, for a case that swaps one of them for a link.
+type stepFiles struct {
+	env    map[string]string
+	dir    string
+	target string
+}
+
+// newStepFiles returns the file commands of a fresh model step, with the file a
+// swap can point at.
+func newStepFiles(t *testing.T) *stepFiles {
+	t.Helper()
+
+	dir := t.TempDir()
+	target := filepath.Join(t.TempDir(), "elsewhere.md")
+	writeEnvFile(t, target, elsewhere)
+
+	return &stepFiles{env: stepEnvironment(t, dir), dir: dir, target: target}
+}
+
+// path is the path of the file command the variable names.
+func (f *stepFiles) path(name string) string {
+	return f.env[name]
+}
+
+// contents returns what each of the five file commands holds now, and "" for
+// one that does not exist yet: the record the run takes before its steps.
+func (f *stepFiles) contents(t *testing.T) map[string]string {
+	t.Helper()
+
+	held := make(map[string]string, len(fileCommandNames))
+
+	for _, name := range fileCommandNames {
+		body, err := os.ReadFile(f.path(name))
+		if err != nil {
+			if !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("read the file command %s at %s: %v", name, f.path(name), err)
+			}
+
+			held[name] = ""
+
+			continue
+		}
+
+		held[name] = string(body)
+	}
+
+	return held
+}
+
+// assertFileCommand fails unless the file command name is left as the run must
+// leave it: a regular file that is empty when the steps changed it, and one
+// that holds exactly what it held before the run - plus, for the summary, the
+// line the run printed - when they did not.
+func assertFileCommand(t *testing.T, f *stepFiles, name string, pre map[string]string, wantEmpty []string, result runResult) {
+	t.Helper()
+
+	path := f.path(name)
+
+	info, err := os.Lstat(path)
+	if err != nil {
+		t.Fatalf("the file command %s's path %s is gone after the run: %v; a file command the steps changed is left as an empty regular file (issues #615, #614)",
+			name, path, err)
+	}
+
+	if !info.Mode().IsRegular() {
+		t.Errorf("the file command %s's path %s is %s after the run, want a regular file: a path the steps swapped is replaced, the link never followed (issues #615, #614)",
+			name, path, info.Mode())
+
+		return
+	}
+
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read the file command %s at %s after the run: %v", name, path, err)
+	}
+
+	want := pre[name]
+	if name == "GITHUB_STEP_SUMMARY" {
+		// The run's Out is stdout and the summary: the summary gets the run's
+		// line and nothing else, appended to what it held.
+		want += result.stdout
+	}
+
+	if slices.Contains(wantEmpty, name) {
+		want = ""
+	}
+
+	if string(body) != want {
+		t.Errorf("the file command %s holds %q after the run, want %q: a file the steps changed - another file at its path, other bytes in it, or a summary that is not the recorded content and the run's own line - is emptied, and one they left alone keeps exactly its bytes (issues #615, #614)",
+			name, body, want)
+	}
+}
+
+// assertOnlyTheFileCommands fails unless the file-command directory holds
+// exactly the five file commands and the result file, when the run left one:
+// no temporary file of a repair is left behind (issue #615).
+func assertOnlyTheFileCommands(t *testing.T, f *stepFiles) {
+	t.Helper()
+
+	entries, err := os.ReadDir(f.dir)
+	if err != nil {
+		t.Fatalf("read the file commands' directory %s: %v", f.dir, err)
+	}
+
+	got := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		got = append(got, entry.Name())
+	}
+
+	want := make([]string, 0, len(fileCommandNames)+1)
+	for _, name := range fileCommandNames {
+		want = append(want, filepath.Base(f.path(name)))
+	}
+
+	if _, err := os.Lstat(resultOutPath(f.dir)); err == nil {
+		want = append(want, filepath.Base(resultOutPath(f.dir)))
+	}
+
+	slices.Sort(want)
+
+	if !slices.Equal(got, want) {
+		t.Errorf("the file commands' directory holds %v, want %v: a repair leaves no temporary file behind (issues #615, #614)", got, want)
+	}
+}
+
+// writePreExistingLines fills the five file commands as a step finds them: a
+// line each, what the runner's four files and an earlier step's summary already
+// held when the run started.
+func writePreExistingLines(t *testing.T, f *stepFiles) {
+	t.Helper()
+
+	for _, name := range fileCommandNames {
+		writeEnvFile(t, f.path(name), "a line the step already had\n")
+	}
+}
+
+// appendTo returns the change that appends line to the file command the
+// variable names, in place: the file's own inode, the very file the run opened,
+// so nothing but its content can tell the step wrote to it.
+func appendTo(name, line string) func(*testing.T, *stepFiles) {
+	return func(t *testing.T, f *stepFiles) {
+		t.Helper()
+
+		path := f.path(name)
+
+		before, err := os.Lstat(path)
+		if err != nil {
+			t.Fatalf("lstat the file command %s at %s before the step appends to it: %v", name, path, err)
+		}
+
+		file, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
+		if err != nil {
+			t.Fatalf("open the file command %s at %s to append to it: %v", name, path, err)
+		}
+
+		if _, err := file.WriteString(line); err != nil {
+			t.Fatalf("append %q to the file command %s at %s: %v", line, name, path, err)
+		}
+
+		if err := file.Close(); err != nil {
+			t.Fatalf("close the file command %s at %s: %v", name, path, err)
+		}
+
+		after, err := os.Lstat(path)
+		if err != nil {
+			t.Fatalf("lstat the file command %s at %s after the step appended to it: %v", name, path, err)
+		}
+
+		if !os.SameFile(before, after) {
+			t.Fatalf("the file command %s at %s is another file after the append, want the one the run opened: the change is in place (issues #615, #614)", name, path)
+		}
+	}
+}
+
+// overwriteInPlace rewrites path's bytes with text in place: the same inode,
+// no truncation, so the file holds other bytes of the same size.
+func overwriteInPlace(t *testing.T, path, text string) {
+	t.Helper()
+
+	file, err := os.OpenFile(path, os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatalf("open %s to overwrite it in place: %v", path, err)
+	}
+
+	info, err := file.Stat()
+	if err != nil {
+		t.Fatalf("stat %s: %v", path, err)
+	}
+
+	if int(info.Size()) != len(text) {
+		t.Fatalf("the replacement is %d bytes, want the file's own %d: the change keeps the size and changes the bytes", len(text), info.Size())
+	}
+
+	if _, err := file.WriteAt([]byte(text), 0); err != nil {
+		t.Fatalf("overwrite %s in place: %v", path, err)
+	}
+
+	if err := file.Close(); err != nil {
+		t.Fatalf("close %s: %v", path, err)
+	}
+}
+
+// swapForLink removes path and puts a link to target, a file elsewhere holding
+// elsewhere, in its place: what a step wanting its bytes published does.
+func swapForLink(t *testing.T, path, target string) {
+	t.Helper()
+
+	if err := os.Remove(path); err != nil {
+		t.Fatalf("remove %s the run opened: %v", path, err)
+	}
+
+	if err := os.Symlink(target, path); err != nil {
+		t.Fatalf("swap %s for a link to %s: %v", path, target, err)
+	}
+}
+
+// swapForRegularFile renames a file holding elsewhere over path: the path is
+// then a regular file that is not the one the run opened.
+func swapForRegularFile(t *testing.T, path string) {
+	t.Helper()
+
+	other := filepath.Join(t.TempDir(), "other.md")
+	writeEnvFile(t, other, elsewhere)
+
+	if err := os.Rename(other, path); err != nil {
+		t.Fatalf("rename %s over %s: %v", other, path, err)
 	}
 }
 
@@ -704,9 +1133,12 @@ func TestResultWriteLeavesNoFileWhenTheWriteOrCloseFails(t *testing.T) {
 
 // errTestWrite and errTestClose are the failures the fake result file answers:
 // a write that stops after part of the body, and a close that fails.
+// errTestChecksum is the checksum step's refusal - a tarball that does not
+// match its pin - which ends a run before its audit step.
 var (
-	errTestWrite = errors.New("the write failed after part of the body")
-	errTestClose = errors.New("the close failed")
+	errTestWrite    = errors.New("the write failed after part of the body")
+	errTestClose    = errors.New("the close failed")
+	errTestChecksum = errors.New("the tarball does not match its pin")
 )
 
 // failingFile is the open result file writeResult is handed, as a failing disk
