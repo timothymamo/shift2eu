@@ -18,30 +18,7 @@
   },
   "resources": [
     {
-      "id": "id̸-combining",
-      "rawType": "raw　type",
-      "category": "compute.baremetal",
-      "region": "eu-central-1",
-      "fit": "direct",
-      "bestOffering": "Elastic Metal",
-      "ties": [],
-      "reasons": [
-        {
-          "code": "all-capabilities",
-          "text": "Elastic Metal offers every capability the resource uses",
-          "offering": "Elastic Metal"
-        }
-      ],
-      "requiredChanges": [],
-      "relations": [],
-      "affectedBy": [],
-      "estimate": {
-        "estimated": false,
-        "reason": "no-size"
-      }
-    },
-    {
-      "id": "pаypal-раu",
+      "id": "exаmple-раu",
       "rawType": "roman-ⅠⅡⅢ",
       "category": "compute.vm",
       "region": "eu-central-1",
@@ -62,6 +39,29 @@
           "target": "😀-astral"
         }
       ],
+      "affectedBy": [],
+      "estimate": {
+        "estimated": false,
+        "reason": "no-size"
+      }
+    },
+    {
+      "id": "id̸-combining",
+      "rawType": "raw　type",
+      "category": "compute.baremetal",
+      "region": "eu-central-1",
+      "fit": "direct",
+      "bestOffering": "Elastic Metal",
+      "ties": [],
+      "reasons": [
+        {
+          "code": "all-capabilities",
+          "text": "Elastic Metal offers every capability the resource uses",
+          "offering": "Elastic Metal"
+        }
+      ],
+      "requiredChanges": [],
+      "relations": [],
       "affectedBy": [],
       "estimate": {
         "estimated": false,

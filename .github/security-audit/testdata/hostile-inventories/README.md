@@ -38,7 +38,8 @@ Two kinds of hostility are refused wherever they appear, so no file can carry th
 character `text.Validate` refuses (control characters, the bidi overrides and other format characters,
 U+2028 and U+2029, variation selectors, noncharacters, invalid UTF-8) in a free-text field, and a
 document that is not strict JSON. The format's free-text fields are the source, a resource's `id`,
-`rawType`, `region` and `workload`, a relation's `target` and a cost's three letters; it has no tags.
+`rawType`, `region` and `workload`, and a relation's `target`; a cost also has a currency, which is shape
+checked, not read as free text: three upper-case ASCII letters. The format has no tags.
 
 ### The files that load
 

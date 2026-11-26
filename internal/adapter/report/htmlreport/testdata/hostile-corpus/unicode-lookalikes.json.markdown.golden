@@ -18,8 +18,8 @@
 
 | ID | Raw type | Category | Fit | Best offering | Plan | Monthly estimate | Relations | Reasons |
 |---|---|---|---|---|---|---|---|---|
+| `exаmple-раu` | `roman-ⅠⅡⅢ` | `compute.vm` | direct | `Instances` |  | not estimated: size unknown | depends-on `😀-astral` | `Instances` offers every capability the resource uses |
 | `id̸-combining` | `raw　type` | `compute.baremetal` | direct | `Elastic Metal` |  | not estimated: size unknown |  | `Elastic Metal` offers every capability the resource uses |
-| `pаypal-раu` | `roman-ⅠⅡⅢ` | `compute.vm` | direct | `Instances` |  | not estimated: size unknown | depends-on `😀-astral` | `Instances` offers every capability the resource uses |
 | `аdmin` | `combining-é́́́` | `compute.vm` | direct | `Instances` |  | not estimated: size unknown |  | `Instances` offers every capability the resource uses |
 | `😀-astral` | `-private-use` | `storage.object` | direct | `Object Storage` |  | not estimated: size unknown |  | `Object Storage` offers every capability the resource uses |
 

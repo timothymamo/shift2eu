@@ -86,11 +86,11 @@ type corpusDecision struct {
 // that loads: any character text.Validate refuses (control characters, the bidi
 // overrides and other format characters, the line and paragraph separators,
 // variation selectors, noncharacters, invalid UTF-8) in a free-text field, and a
-// document that is not strict JSON. The decoder accepts no field but the
-// free-text ones inventory.New validates (source, id, rawType, region, workload,
-// a relation's target, three upper-case letters of a currency), and the format
-// has no tags, so an inventory that passes loading cannot carry such a character
-// anywhere.
+// document that is not strict JSON. The decoder accepts no field but the ones
+// inventory.New validates: the free-text fields text.Validate reads (source, id,
+// rawType, region, workload, a relation's target) and a currency, which must be
+// three upper-case ASCII letters, not free text. The format has no tags, so an
+// inventory that passes loading cannot carry such a character anywhere.
 var corpusDecisions = []corpusDecision{
 	{
 		file: "html-metacharacters.json",
@@ -256,7 +256,9 @@ func TestHostileCorpusDecisions(t *testing.T) {
 // fragment, byte for byte against the goldens under testdata (run the test with
 // -update to accept a change). The goldens are where the escaping shows: every
 // value of the corpus that loads is hostile text that no rule refuses, and none
-// of it reaches a report as markup.
+// of it reaches a report as markup. checkReport holds each report to its
+// format's rule besides the golden, so a golden updated over unescaped output
+// fails here too.
 func TestHostileCorpusReports(t *testing.T) {
 	t.Parallel()
 
@@ -292,8 +294,9 @@ func TestHostileCorpusReports(t *testing.T) {
 // given, it never panics, and a refusal is a controlled error, one line that
 // wraps a sentinel. Every inventory it accepts is assessed against all three
 // embedded targets, with estimates on, and rendered by all three reporters
-// without an error, and what they write is valid UTF-8 (valid JSON, for the JSON
-// reporter).
+// without an error, and what they write is valid UTF-8: the HTML fragment opens
+// no element no reporter writes, the Markdown tables stay whole, and the JSON
+// document is valid and holds no raw markup character.
 //
 // Its seed corpus is the audit's hostile corpus and the inventory-file adapter's
 // version 1 and version 2 fixtures, so a plain run of this package's tests runs
@@ -391,8 +394,13 @@ func renderedReport(tb testing.TB, name string, data []byte, cat analysis.Catalo
 }
 
 // checkReport fails unless a report of an inventory that loads is text a reader
-// can show: valid UTF-8, and, for JSON, one valid document holding no raw <, >
-// or &, which a JSON encoder escapes so the document cannot be read as markup.
+// can show: valid UTF-8 for all three, and, for each format, what it must never
+// let through. The HTML fragment opens no element and holds no attribute no
+// reporter writes, so no value reached it as markup (checkNoInjectedMarkup, this
+// package's own check, so neither a fuzz run nor the goldens can accept
+// unescaped output). The Markdown report keeps every table row whole. The JSON
+// document is one valid document holding no raw <, > or &, which a JSON encoder
+// escapes so the document cannot be read as markup.
 func checkReport(t *testing.T, format string, got []byte) {
 	t.Helper()
 
@@ -400,8 +408,18 @@ func checkReport(t *testing.T, format string, got []byte) {
 		t.Fatalf("the %s report is not valid UTF-8:\n%q", format, got)
 	}
 
-	if format != "json" {
+	switch format {
+	case "html":
+		checkNoInjectedMarkup(t, got)
+
 		return
+	case "markdown":
+		checkTableIntegrity(t, got)
+
+		return
+	case "json":
+	default:
+		t.Fatalf("no check for the report format %q", format)
 	}
 
 	if !json.Valid(got) {
@@ -411,6 +429,176 @@ func checkReport(t *testing.T, format string, got []byte) {
 	if i := strings.IndexAny(string(got), "<>&"); i >= 0 {
 		t.Fatalf("the JSON report holds the raw character %q at byte %d, want it escaped, so the document cannot be read as markup:\n%s",
 			string(got)[i], i, got)
+	}
+}
+
+// tableRowCounts is where a Markdown table row and its table's header disagree
+// on how many cell boundaries they have.
+type tableRowCounts struct {
+	// line is the row's 1-based line number in the report.
+	line int
+	// row is the number of cell boundaries the row has.
+	row int
+	// header is the number of cell boundaries the table's header has.
+	header int
+}
+
+// firstBrokenTableRow returns where the first broken table row of a Markdown
+// report is, and false when every table row has as many cell boundaries as its
+// header. A cell boundary is a pipe no backslash escapes, which is what the
+// renderer writes for every pipe in a cell, in running text and in a code span
+// alike (markdown/codeSpan and markdown/escapeText), and what the table
+// extension of CommonMark reads as one. A line that does not start with a pipe
+// ends the table it was in: every table row of the renderer starts and ends with
+// one, and no value can start a line, since line endings become character
+// references in running text and spaces in a code span.
+func firstBrokenTableRow(report []byte) (tableRowCounts, bool) {
+	header := -1
+
+	for i, line := range strings.Split(string(report), "\n") {
+		if !strings.HasPrefix(line, "|") {
+			header = -1
+
+			continue
+		}
+
+		boundaries := cellBoundaries(line)
+
+		if header < 0 {
+			header = boundaries
+
+			continue
+		}
+
+		if boundaries != header {
+			return tableRowCounts{line: i + 1, row: boundaries, header: header}, true
+		}
+	}
+
+	return tableRowCounts{}, false
+}
+
+// cellBoundaries returns the number of pipes of a table row that bound a cell:
+// every pipe of it that no backslash escapes. A backslash byte cannot be part of
+// another character's encoding, so looking at the byte before the pipe is the
+// whole rule.
+func cellBoundaries(line string) int {
+	boundaries := 0
+
+	for i := range len(line) {
+		if line[i] == '|' && (i == 0 || line[i-1] != '\\') {
+			boundaries++
+		}
+	}
+
+	return boundaries
+}
+
+// checkTableIntegrity fails unless every table row of a Markdown report has as
+// many cell boundaries as its table's header, so no value reached a row as a
+// cell boundary and no row gained or lost a cell.
+func checkTableIntegrity(t *testing.T, got []byte) {
+	t.Helper()
+
+	broken, ok := firstBrokenTableRow(got)
+	if !ok {
+		return
+	}
+
+	t.Fatalf("line %d of the Markdown report has %d cell boundaries, its table's header has %d, so a value reached the table as a cell boundary:\n%s",
+		broken.line, broken.row, broken.header, got)
+}
+
+// TestFirstBrokenTableRow pins the Markdown table check the corpus reports and
+// the fuzz hold: every table shape the renderer writes passes it, a table after
+// a table is a table of its own, and a value that reached a row as a raw cell
+// boundary, the regression this check exists for, is what it reports and where.
+func TestFirstBrokenTableRow(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		report string
+		// broken is the row the check must report; the zero value for a report
+		// whose every table is whole.
+		broken tableRowCounts
+	}{
+		{
+			name: "a table the renderer writes",
+			report: "| ID | Raw type | Category |\n" +
+				"|---|---|---|\n" +
+				"| `i-1` | `AWS::EC2::Instance` | `compute.vm` |\n" +
+				"| `i-2` | `AWS::S3::Bucket` | `storage.object` |\n",
+		},
+		{
+			name: "a pipe a code span escapes",
+			report: "| ID | Fit |\n" +
+				"|---|---|\n" +
+				"| `a\\|b` | direct |\n",
+		},
+		{
+			name: "a pipe running text escapes",
+			report: "| ID | Fit |\n" +
+				"|---|---|\n" +
+				"| `x` | `Instances` offers `a\\|b` |\n",
+		},
+		{
+			name: "a cell whose code span is fenced with backticks",
+			report: "| ID | Fit |\n" +
+				"|---|---|\n" +
+				"| ````` ```` a run of backticks ```` ````` | direct |\n",
+		},
+		{
+			name: "a cell that ends with a backslash",
+			report: "| ID | Fit |\n" +
+				"|---|---|\n" +
+				"| `a\\` | `b` |\n",
+		},
+		{
+			name: "two tables of different widths",
+			report: "| Fit | Resources |\n" +
+				"|---|---|\n" +
+				"| direct | 4 |\n" +
+				"\n" +
+				"| ID | Raw type | Category |\n" +
+				"|---|---|---|\n" +
+				"| `i-1` | `x` | `compute.vm` |\n",
+		},
+		{
+			name:   "a report without a table",
+			report: "# Migration assessment: `Scaleway`\n\nNone.\n",
+		},
+		{
+			name: "a value that reached a row as a cell boundary",
+			report: "| ID | Raw type | Category |\n" +
+				"|---|---|---|\n" +
+				"| `a|b` | `AWS::X` | `compute.vm` |\n",
+			broken: tableRowCounts{line: 3, row: 5, header: 4},
+		},
+		{
+			name: "a row that lost a cell",
+			report: "| ID | Raw type | Category |\n" +
+				"|---|---|---|\n" +
+				"| `i-1` | `AWS::X` |\n",
+			broken: tableRowCounts{line: 3, row: 3, header: 4},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, ok := firstBrokenTableRow([]byte(tc.report))
+
+			want := tc.broken != (tableRowCounts{})
+			if ok != want {
+				t.Fatalf("firstBrokenTableRow() = %+v, %t, want a broken row: %t (%q)", got, ok, want, tc.report)
+			}
+
+			if ok && got != tc.broken {
+				t.Errorf("firstBrokenTableRow() = %+v, want %+v", got, tc.broken)
+			}
+		})
 	}
 }
 

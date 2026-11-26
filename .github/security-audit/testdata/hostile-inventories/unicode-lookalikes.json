@@ -17,7 +17,7 @@
       "workload": "\uff1cscript\uff1e-alert(1)\uff1c/script\uff1e"
     },
     {
-      "id": "p\u0430ypal-\u0440\u0430u",
+      "id": "ex\u0430mple-\u0440\u0430u",
       "rawType": "roman-\u2160\u2161\u2162",
       "category": "compute.vm",
       "region": "eu-central-1",

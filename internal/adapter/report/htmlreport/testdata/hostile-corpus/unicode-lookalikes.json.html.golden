@@ -21,8 +21,8 @@
 <tr><th scope="col">ID</th><th scope="col">Raw type</th><th scope="col">Category</th><th scope="col">Fit</th><th scope="col">Best offering</th><th scope="col">Plan</th><th scope="col">Monthly estimate</th><th scope="col">Relations</th><th scope="col">Reasons</th></tr>
 </thead>
 <tbody>
+<tr><td><code>exаmple-раu</code></td><td><code>roman-ⅠⅡⅢ</code></td><td><code>compute.vm</code></td><td class="fit fit-direct"><span>direct</span></td><td><code>Instances</code></td><td></td><td>not estimated</td><td>depends-on <code>😀-astral</code></td><td><code>Instances</code> offers every capability the resource uses</td></tr>
 <tr><td><code>id̸-combining</code></td><td><code>raw　type</code></td><td><code>compute.baremetal</code></td><td class="fit fit-direct"><span>direct</span></td><td><code>Elastic Metal</code></td><td></td><td>not estimated</td><td></td><td><code>Elastic Metal</code> offers every capability the resource uses</td></tr>
-<tr><td><code>pаypal-раu</code></td><td><code>roman-ⅠⅡⅢ</code></td><td><code>compute.vm</code></td><td class="fit fit-direct"><span>direct</span></td><td><code>Instances</code></td><td></td><td>not estimated</td><td>depends-on <code>😀-astral</code></td><td><code>Instances</code> offers every capability the resource uses</td></tr>
 <tr><td><code>аdmin</code></td><td><code>combining-é́́́</code></td><td><code>compute.vm</code></td><td class="fit fit-direct"><span>direct</span></td><td><code>Instances</code></td><td></td><td>not estimated</td><td></td><td><code>Instances</code> offers every capability the resource uses</td></tr>
 <tr><td><code>😀-astral</code></td><td><code>-private-use</code></td><td><code>storage.object</code></td><td class="fit fit-direct"><span>direct</span></td><td><code>Object Storage</code></td><td></td><td>not estimated</td><td></td><td><code>Object Storage</code> offers every capability the resource uses</td></tr>
 </tbody>
