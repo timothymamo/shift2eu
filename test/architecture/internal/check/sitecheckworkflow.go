@@ -31,8 +31,8 @@ var siteCheckCron = regexp.MustCompile(`^[1-5]?[0-9] (?:1?[0-9]|2[0-3]) \* \* \*
 var (
 	siteCheckExpectedRun = strings.Join([]string{
 		"set -euo pipefail",
-		"git fetch --quiet --force --tags origin",
-		"mapfile -t tags < <(git tag --list 'v*.*.*' | sort -V)",
+		"git fetch --quiet --force origin '+refs/heads/main:refs/remotes/origin/main' '+refs/tags/v*:refs/tags/v*'",
+		`mapfile -t tags < <(git tag -l 'v*.*.*' --merged refs/remotes/origin/main | sed -nE '/^v[0-9]+\.[0-9]+\.[0-9]+$/p' | sort -V)`,
 		`expected="${tags[-1]}"`,
 		`printf '%s\n' "${tags[@]}" > "${RUNNER_TEMP}/tags.txt"`,
 		`anchor="$(git log -1 --format=%cI "${expected}")"`,
@@ -42,7 +42,7 @@ var (
 
 	siteCheckLiveRun = strings.Join([]string{
 		"set -euo pipefail",
-		fmt.Sprintf(`live="$(go run ./ci/sitecheck live-version -tags "${RUNNER_TEMP}/tags.txt" -anchor "${{ steps.expected.outputs.anchor }}" -window %dm)"`,
+		fmt.Sprintf(`live="$(go run ./ci/sitecheck live-version -tags "${RUNNER_TEMP}/tags.txt" -anchor "${ANCHOR}" -window %dm)"`,
 			int(SiteCheckWindow/time.Minute)),
 		`grep -qxF "${live}" "${RUNNER_TEMP}/tags.txt"`,
 		`echo "tag=${live}" >> "${GITHUB_OUTPUT}"`,
@@ -64,6 +64,7 @@ var (
 	siteCheckAlertRun = strings.Join([]string{
 		"set -euo pipefail",
 		`body="$(printf 'The scheduled live site check failed: %s\n' "${RUN_URL}")"`,
+		`gh label create "${LABEL}" --repo "${GH_REPO}" --force --color ededed --description "The scheduled live site check"`,
 		`existing="$(gh issue list --repo "${GH_REPO}" --label "${LABEL}" --state open --json number --jq '.[0].number // empty')"`,
 		`if [ -n "${existing}" ]; then`,
 		`  gh issue comment "${existing}" --repo "${GH_REPO}" --body "${body}"`,
@@ -82,7 +83,11 @@ var siteCheckJobs = []releaseJob{
 			fullCheckoutStep,
 			setupGoStep,
 			{what: "the expected release", name: "The expected release", id: "expected", run: siteCheckExpectedRun},
-			{what: "the live version", name: "The live version", id: "live", run: siteCheckLiveRun, runExpressions: true},
+			{
+				what: "the live version", name: "The live version", id: "live",
+				env: []string{"ANCHOR: ${{ steps.expected.outputs.anchor }}"},
+				run: siteCheckLiveRun,
+			},
 			{
 				what: "the attestation's check", name: "Verify the release's attestation",
 				env: []string{
@@ -125,20 +130,24 @@ var siteCheckJobs = []releaseJob{
 //   - check holds contents: read and attestations: read alone, and runs
 //     exactly: the whole history checked out without keeping the credential;
 //     setup-go from go.mod with its cache off, every action pinned by commit;
-//     the tag list and the committer date (%cI) of the highest tag's commit;
-//     ci/sitecheck live-version with that anchor and the bound
+//     main's release tags, fetched and listed exactly as release.yml's
+//     site-check job lists them (--merged refs/remotes/origin/main, vX.Y.Z
+//     alone), and the committer date (%cI) of the highest tag's commit;
+//     ci/sitecheck live-version with that anchor, passed through env:, and the bound
 //     SiteCheckWindow, its output re-checked against the tag list; the
 //     release download and gh attestation verify with the signer workflow,
 //     the tag's ref and no self-hosted runner, through GITHUB_TOKEN alone;
 //     and the full check against the bundle's manifest and the tag list;
 //   - alert needs check, runs if: failure(), holds issues: write alone, checks
-//     nothing out, and opens or comments on the one issue labelled "live site
-//     check", assigned to timothymamo, with fixed text and the run's URL: no
-//     expression but GITHUB_TOKEN, the repository, the server's URL and the
-//     run's id, and no output of the check job.
+//     nothing out, creates the label "live site check" with --force, so a
+//     repository that lacks it still gets the issue, and then opens or
+//     comments on the one issue so labelled, assigned to timothymamo, with
+//     fixed text and the run's URL: no expression but GITHUB_TOKEN, the
+//     repository, the server's URL and the run's id, and no output of the
+//     check job.
 //
-// Every run: is compared exactly; only the live-version step may hold a ${{ }}
-// expression, exactly its own job's anchor output. Like ReleaseWorkflow, every
+// Every run: is compared exactly and holds no ${{ }} expression: a value a
+// step needs reaches it through env:. Like ReleaseWorkflow, every
 // line is also read for a secrets context in a form other than secrets.NAME.
 func SiteCheckWorkflow(data []byte) error {
 	raw := strings.Split(string(data), "\n")

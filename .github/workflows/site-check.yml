@@ -35,15 +35,16 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false # see the comment on the release's test job
-      # The highest release tag on main and the committer date of its commit,
-      # which contents: read can read and actions: read cannot. The window is
+      # The release tags on main, read exactly as release.yml's site-check job
+      # reads them, and the committer date of the highest one's commit, which
+      # contents: read can read and actions: read cannot. The window is
       # anchored there.
       - name: The expected release
         id: expected
         run: |
           set -euo pipefail
-          git fetch --quiet --force --tags origin
-          mapfile -t tags < <(git tag --list 'v*.*.*' | sort -V)
+          git fetch --quiet --force origin '+refs/heads/main:refs/remotes/origin/main' '+refs/tags/v*:refs/tags/v*'
+          mapfile -t tags < <(git tag -l 'v*.*.*' --merged refs/remotes/origin/main | sed -nE '/^v[0-9]+\.[0-9]+\.[0-9]+$/p' | sort -V)
           expected="${tags[-1]}"
           printf '%s\n' "${tags[@]}" > "${RUNNER_TEMP}/tags.txt"
           anchor="$(git log -1 --format=%cI "${expected}")"
@@ -54,12 +55,15 @@ jobs:
       # that is below the highest tag outside the window, and prints the tag
       # list's own entry. The grep re-checks that entry against the tag list, so
       # every command after it takes its tag from the repository, never from
-      # the page.
+      # the page. The anchor reaches the script through env: and is never pasted
+      # into it: a ${{ }} in a run: is the runner pasting text as code.
       - name: The live version
         id: live
+        env:
+          ANCHOR: ${{ steps.expected.outputs.anchor }}
         run: |
           set -euo pipefail
-          live="$(go run ./ci/sitecheck live-version -tags "${RUNNER_TEMP}/tags.txt" -anchor "${{ steps.expected.outputs.anchor }}" -window 180m)"
+          live="$(go run ./ci/sitecheck live-version -tags "${RUNNER_TEMP}/tags.txt" -anchor "${ANCHOR}" -window 180m)"
           grep -qxF "${live}" "${RUNNER_TEMP}/tags.txt"
           echo "tag=${live}" >> "${GITHUB_OUTPUT}"
       # The release the page names, downloaded and its build provenance verified
@@ -92,9 +96,11 @@ jobs:
       issues: write
     steps:
       # One issue with a fixed label, assigned to the maintainer, commented on
-      # when it is already open: editing an issue notifies no one. The issue
-      # holds fixed text and the failed run's URL only, never an output of the
-      # check job and never site content.
+      # when it is already open: editing an issue notifies no one. The label is
+      # created first, idempotently (--force): an issue takes a label the
+      # repository does not have yet from no run, and no run but this one could
+      # create it. The issue holds fixed text and the failed run's URL only,
+      # never an output of the check job and never site content.
       - name: Open or comment on the alert issue
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -105,6 +111,7 @@ jobs:
         run: |
           set -euo pipefail
           body="$(printf 'The scheduled live site check failed: %s\n' "${RUN_URL}")"
+          gh label create "${LABEL}" --repo "${GH_REPO}" --force --color ededed --description "The scheduled live site check"
           existing="$(gh issue list --repo "${GH_REPO}" --label "${LABEL}" --state open --json number --jq '.[0].number // empty')"
           if [ -n "${existing}" ]; then
             gh issue comment "${existing}" --repo "${GH_REPO}" --body "${body}"

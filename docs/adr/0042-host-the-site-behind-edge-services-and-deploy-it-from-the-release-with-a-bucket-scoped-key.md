@@ -277,8 +277,12 @@ digest and the SRI hash are of the decoded file). The level is the highest becau
 is the budget's (3 MiB, ADR 0035) and the size test's default-level measurement is then an upper bound
 of what is served. Browsers decode it before SRI and before the page script reads it. Whether Edge
 Services serves it with `Content-Encoding: gzip` and `Content-Type: text/javascript` unchanged, and
-whether it compresses the other files itself, is *to be checked in milestone 4*; PR B's live check
-records the transferred size and the decoded size of what the edge serves (issue #346, item 2).
+whether it compresses the other files itself, was left *to be checked in milestone 4*. **Checked by
+v0.16.1's release live check** (run 45692962040, `result: PASS`, 2026-11-25): it measured the module
+script's transferred and decoded size and its `Content-Type` as `www` serves them (ADR 0043's size
+check) and held every manifest file's decoded digest, so both budgets and `Content-Type:
+text/javascript` held as served, and no file came with an encoding the check refuses. The sizes and
+the encoding it saw are in that run's report, not recorded here (issue #346, item 2).
 
 **The uncompressed budget: the decoded module script at most 10 MiB (10,485,760 bytes)** (*proposed, for
 the maintainer to confirm*; PR B holds it). Decision 4 as amended has the live check hold both the

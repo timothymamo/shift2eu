@@ -64,11 +64,6 @@ type releaseStep struct {
 	// GITHUB_TOKEN or GH_TOKEN, in any case: the step that holds the site's
 	// key holds nothing that could write to the repository.
 	noToken bool
-	// runExpressions lets run hold the ${{ }} expressions it lists, compared
-	// exactly like the rest of it; false refuses every expression in run.
-	// Only the scheduled live check sets it (SiteCheckWorkflow), never the
-	// release workflow.
-	runExpressions bool
 }
 
 // exactly matches value and nothing else.
@@ -2107,27 +2102,7 @@ func (r *schemaReader) step(it yamlread.Item, path string, want releaseStep) {
 	}
 
 	if want.run != "" {
-		if want.runExpressions {
-			r.exactRun(step["run"], path+": run", want.run)
-		} else {
-			r.run(step["run"], path+": run", want.run)
-		}
-	}
-}
-
-// exactRun checks that e's value is exactly the command want, which may hold
-// the ${{ }} expressions want itself holds and no other: the scheduled live
-// check's one step that pastes its own job's output (SiteCheckWorkflow).
-func (r *schemaReader) exactRun(e yamlread.Entry, path, want string) {
-	value, err := r.value(e)
-	if err != nil {
-		r.fail("%s: %v", path, err)
-
-		return
-	}
-
-	if value != want {
-		r.fail("line %d: %s is %q, want exactly %q", e.Num, path, value, want)
+		r.run(step["run"], path+": run", want.run)
 	}
 }
 

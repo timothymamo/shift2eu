@@ -807,14 +807,11 @@ runs the release's live check every day at 05:23 UTC against the release the pag
 if it is the highest release tag, or the one before it within 180 minutes of the highest tag's commit
 (ADR 0043, *Amendment: the scheduled check*). A failure opens one issue labelled `live site check`,
 assigned to you, or comments on the open one; GitHub notifies you of the assignment and of each comment.
-The alert job's `gh issue create --label` fails on a label the repository lacks, and the job does not
-create it: create it once, here. GitHub disables a schedule after 60 days without activity in the
-repository, and says so only in the Actions tab.
+The alert job creates that label itself before it opens the issue (`gh label create --force`, which
+also resets its colour and description), so there is nothing to create here. GitHub disables a
+schedule after 60 days without activity in the repository, and says so only in the Actions tab.
 
 ```bash
-# Once: the alert issue's label
-gh label create "live site check" --repo <owner>/shift2eu --description "The scheduled live site check failed" --color B60205
-gh label list --repo <owner>/shift2eu --search "live site check" --json name --jq '.[].name'   # PASS: live site check
 # The schedule's state; after 60 days without repository activity GitHub disables it
 gh workflow list --all --repo <owner>/shift2eu --json path,state --jq '.[] | select(.path == ".github/workflows/site-check.yml") | .state'   # PASS: active
 # FAIL disabled_inactivity (or disabled_manually): re-enable it, here or in the Actions tab (Live site check, Enable workflow), then the line above again

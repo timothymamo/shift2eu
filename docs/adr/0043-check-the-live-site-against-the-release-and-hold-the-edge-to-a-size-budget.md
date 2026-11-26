@@ -304,7 +304,11 @@ unchanged. This amendment adds a subcommand, a rule and a workflow.
 - **Two jobs, no default permission.** The workflow has one daily `schedule`, no other trigger, and
   `permissions: {}`. The `check` job holds `contents: read` and `attestations: read` alone. Its checkout
   keeps no credential (`persist-credentials: false`, the whole history for the tags), and it pins every
-  action by commit. It reads the tag list and the anchor, runs `live-version`, and re-checks the printed
+  action by commit. Its tag list is main's release tags, fetched and listed exactly as release.yml's
+  `site-check` job reads them (main and the `v*` tags fetched, `git tag -l 'v*.*.*' --merged
+  refs/remotes/origin/main`, `vX.Y.Z` alone, version-sorted), so a tag that is not on main is never
+  the expected release. It reads that list and the anchor, runs `live-version` with the anchor passed
+  through the step's `env:` (`ANCHOR`), never pasted into the script, and re-checks the printed
   tag against the tag list with `grep -qxF`. It downloads that release's site bundle and verifies its
   attestation with `GITHUB_TOKEN` alone, using the deploy's and the guide's flags (`--signer-workflow`
   release.yml, `--source-ref refs/tags/<tag>`, `--deny-self-hosted-runners`). It then runs the full
@@ -319,11 +323,13 @@ unchanged. This amendment adds a subcommand, a rule and a workflow.
   assignee and each comment, but not an edit, and it notifies a failed scheduled run only to whoever last
   changed its cron line. The title and body are fixed text plus the failed run's URL. The job uses no
   output of the `check` job, no site content and no expression but the token, the repository, the
-  server's URL and the run's id. `issues: write` lets the token create a label, but the job does not:
-  the maintainer creates the label once (`docs/site-runbook.md` R15). GitHub also disables a schedule
+  server's URL and the run's id. Before it lists or opens the issue, the job creates the label with
+  `gh label create --force`, which `issues: write` allows and which succeeds whether or not the label
+  exists (it resets its colour and description), so the first failure is not lost to a missing label
+  and no one creates it by hand. GitHub also disables a schedule
   after 60 days without repository activity, and R15 says how to re-enable it.
 - **The workflow test.** `check.SiteCheckWorkflow` reads the workflow as a closed schema, through the
   release workflow's reader. `test/architecture` holds the repository's file to it, and the check's own
-  test holds a fixture that is the file byte for byte. Every `run:` is compared exactly. Only the
-  `live-version` step may paste an expression into its script, and only its own job's anchor output,
-  which is git's `%cI` date.
+  test holds a fixture that is the file byte for byte. Every `run:` is compared exactly, and none may
+  hold a `${{ }}` expression: the runner pastes its value into the script as code, so every value a
+  step needs, the anchor included, reaches it through `env:`.
