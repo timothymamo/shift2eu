@@ -1537,6 +1537,193 @@ func TestInventoryGuideAWSPolicyCoversTheSearchAndKafkaCalls(t *testing.T) {
 	}
 }
 
+// awsIAMCall is one `aws <service> <operation>` call of the guide's AWS collect
+// commands, which the policy check maps to an IAM action.
+type awsIAMCall struct {
+	service   string
+	operation string
+}
+
+// awsIAMServicePrefixes maps the service of every `aws <service> <operation>`
+// call the guide's collect commands make to the prefix of the IAM actions that
+// permit it. A CLI service whose name is not its IAM prefix has an entry of its
+// own, and the map is the whole allow list: a call of a service nobody mapped
+// fails the check, so the guide cannot gain a call the policy check would skip.
+var awsIAMServicePrefixes = map[string]string{
+	"autoscaling":          "autoscaling",
+	"configservice":        "config", // `aws configservice` drives AWS Config, whose IAM prefix is config.
+	"ec2":                  "ec2",
+	"efs":                  "elasticfilesystem", // `aws efs` drives Elastic File System, whose IAM prefix is elasticfilesystem.
+	"eks":                  "eks",
+	"elasticache":          "elasticache",
+	"elb":                  "elasticloadbalancing", // `aws elb` and `aws elbv2` both call the Elastic Load Balancing API, which IAM calls elasticloadbalancing.
+	"elbv2":                "elasticloadbalancing",
+	"kafka":                "kafka",
+	"lambda":               "lambda",
+	"opensearch":           "es",   // `aws opensearch` drives the search service IAM calls es.
+	"opensearchserverless": "aoss", // `aws opensearchserverless` drives the serverless search service IAM calls aoss.
+	"rds":                  "rds",
+	"s3api":                "s3", // `aws s3api` calls the S3 API, whose IAM prefix is s3.
+	"sns":                  "sns",
+	"sqs":                  "sqs",
+}
+
+// awsIAMActionExceptions maps a call whose IAM action is not the service prefix
+// and the operation's PascalCase name to the action it is, with the reason.
+var awsIAMActionExceptions = map[awsIAMCall]string{
+	// The RDS API calls the identifier DBInstance, so its IAM action spells the
+	// acronym in caps; the PascalCase rule would give rds:DescribeDbInstances,
+	// which IAM does not know.
+	{service: "rds", operation: "describe-db-instances"}: "rds:DescribeDBInstances",
+	// The CLI's list-buckets returns the buckets of the account, which is why IAM
+	// names the action for the buckets rather than for the call itself.
+	{service: "s3api", operation: "list-buckets"}: "s3:ListAllMyBuckets",
+}
+
+// TestInventoryGuideAWSPolicyCoversEveryCollectCall pins that the minimal policy
+// the guide tells a reader to create grants every call the guide's AWS collect
+// commands make (PRD #571, milestone 2): a reader who follows the guide with that
+// policy and no other permission must not meet AccessDenied, which would leave
+// the resources of the call out of the inventory unsized. The audit found the
+// policy missing ec2:DescribeInstanceTypes, the only call the policy lacked.
+func TestInventoryGuideAWSPolicyCoversEveryCollectCall(t *testing.T) {
+	t.Parallel()
+
+	guide := string(readRepositoryFile(t, filepath.Join("docs", "guide", "inventory.md")))
+	actions := guideAWSPolicyActions(t, guide)
+
+	source := guideSourceByKey(t, "aws")
+
+	var commands []string
+
+	for _, block := range fencedBashBlocks(t, guide, source.collect) {
+		commands = append(commands, splitCommands(block)...)
+	}
+
+	if len(commands) == 0 {
+		t.Fatalf("docs/guide/inventory.md holds no bash block under %q, so this check read nothing", source.collect)
+	}
+
+	calls := guideAWSCalls(t, commands)
+	if len(calls) == 0 {
+		t.Fatalf("the guide's %q commands hold no `aws <service> <operation>` call, so this check read nothing:\n%s",
+			source.collect, describeCommands(commands))
+	}
+
+	var missing []string
+
+	for _, call := range calls {
+		action := awsIAMAction(t, call)
+
+		if slices.Contains(actions, action) {
+			continue
+		}
+
+		missing = append(missing, fmt.Sprintf("%s (aws %s %s)", action, call.service, call.operation))
+	}
+
+	if len(missing) > 0 {
+		t.Errorf("the guide's AWS collect commands make %d call(s) whose IAM action the guide's minimal policy does not allow, want every one of them allowed:\n  %s\nThe policy is the only permission the guide asks a reader to hold, so each of these calls meets AccessDenied and the resource it describes or sizes stays out of the inventory (PRD #571, milestone 2, audit finding)",
+			len(missing), strings.Join(missing, "\n  "))
+	}
+}
+
+// guideAWSCalls returns every `aws <service> <operation>` call the commands
+// make, in the guide's order and once each. A call counts wherever it stands,
+// including after an `xargs`, and a comment's words never do: the guide's
+// comments name services and operations in prose.
+func guideAWSCalls(t *testing.T, commands []string) []awsIAMCall {
+	t.Helper()
+
+	var calls []awsIAMCall
+
+	for _, command := range commands {
+		words := guideCallWords(command)
+
+		for i, word := range words {
+			if word != "aws" {
+				continue
+			}
+
+			if i+2 >= len(words) || strings.HasPrefix(words[i+1], "-") || strings.HasPrefix(words[i+2], "-") {
+				t.Fatalf("the guide's AWS collect command holds `aws` with no service and operation after it, so this check cannot map the call to an IAM action:\n%s", command)
+			}
+
+			call := awsIAMCall{service: words[i+1], operation: words[i+2]}
+
+			if !slices.Contains(calls, call) {
+				calls = append(calls, call)
+			}
+		}
+	}
+
+	return calls
+}
+
+// shellPunctuation matches the punctuation that can glue a word to the `aws` of
+// a call: a command substitution keeps `aws` inside `page=$(aws`, and a pipe or
+// a redirect can hold the words apart with no space at all.
+var shellPunctuation = strings.NewReplacer(
+	"$(", " ", "(", " ", ")", " ", "`", " ",
+	"{", " ", "}", " ", ";", " ", "|", " ", "&", " ", "=", " ",
+)
+
+// guideCallWords returns the words of a command's code, without the comment lines
+// the guide uses to describe the call a comment heads, and with the shell's
+// punctuation split off, so a call the guide writes inside a substitution or
+// after a pipe yields the words `aws`, its service and its operation like any
+// other.
+func guideCallWords(command string) []string {
+	var code []string
+
+	for _, line := range strings.Split(command, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "#") {
+			continue
+		}
+
+		code = append(code, line)
+	}
+
+	return strings.Fields(shellPunctuation.Replace(strings.Join(code, "\n")))
+}
+
+// awsIAMAction returns the IAM action that permits a call: the service's IAM
+// prefix and the operation's PascalCase name, or the action the exception table
+// names where IAM spells it differently.
+func awsIAMAction(t *testing.T, call awsIAMCall) string {
+	t.Helper()
+
+	if action, ok := awsIAMActionExceptions[call]; ok {
+		return action
+	}
+
+	prefix, ok := awsIAMServicePrefixes[call.service]
+	if !ok {
+		t.Fatalf("the guide's AWS collect commands call `aws %s %s`, and no IAM prefix is mapped for the service %q: add it to awsIAMServicePrefixes so this check covers the call",
+			call.service, call.operation, call.service)
+	}
+
+	return prefix + ":" + awsIAMActionName(call.operation)
+}
+
+// awsIAMActionName returns the IAM action name of a CLI operation: every word
+// of its kebab-case name capitalised and joined (describe-instance-types ->
+// DescribeInstanceTypes, list-clusters-v2 -> ListClustersV2).
+func awsIAMActionName(operation string) string {
+	var name strings.Builder
+
+	for _, word := range strings.Split(operation, "-") {
+		if word == "" {
+			continue
+		}
+
+		name.WriteString(strings.ToUpper(word[:1]))
+		name.WriteString(word[1:])
+	}
+
+	return name.String()
+}
+
 // guideAWSPolicyActions returns the actions of the AWS permissions policy the
 // guide tells a reader to create.
 func guideAWSPolicyActions(t *testing.T, guide string) []string {
