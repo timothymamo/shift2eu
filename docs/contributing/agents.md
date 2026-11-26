@@ -27,7 +27,9 @@ email address, so GitHub credits no account for it (the `go-tdd` skill, issue #6
 `coauthor-trailers` job refuses a pull request whose commits carry a co-author address
 `.github/co-author-addresses.txt` does not list, with or without spaces before the trailer's colon, or
 whose author or committer address it does not list, since a squash merge credits every distinct author
-(issue #663).
+(issue #663). The check reads the list from the pull request's base commit, never from its own checkout
+(issue #672), so a fork's or a new contributor's pull request fails Lint until their address is on
+`.github/co-author-addresses.txt`: the address is added by a separate pull request, merged first.
 
 The agents run inside a [Lima](https://lima-vm.io) VM that can see this repository's workspace (the
 directory you clone it into, which holds only the repository and the worktrees dot-agent-deck's
