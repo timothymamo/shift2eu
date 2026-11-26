@@ -133,6 +133,7 @@ jobs:
   # checkout of a pull request is its merge commit at depth 1, with no base to compare against, so every
   # other run of test/lint skips the check; this job alone fetches the whole history and names the range,
   # base..head, and on a pull request requires one, so a range it cannot read fails rather than skips.
+  # A fork's pull request works too: fetch-depth: 0 fetches the merge ref and both its parents, base and head.
   # On a push to main both variables are empty and the check reads origin/main..HEAD, no commit. The SHAs
   # reach the step through env: only, never interpolated into run:.
   coauthor-trailers:

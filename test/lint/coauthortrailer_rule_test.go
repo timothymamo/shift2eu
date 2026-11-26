@@ -26,34 +26,41 @@ const (
 )
 
 // coAuthorTrailerKey is the lower-cased key of a co-author trailer, colon
-// included.
-const coAuthorTrailerKey = "co-authored-by:"
+// excluded: git accepts spaces and tabs between the key and its colon.
+const coAuthorTrailerKey = "co-authored-by"
 
 // coAuthorAdvice ends every failure of the repository check.
 const coAuthorAdvice = "Name the co-author without an address (Co-Authored-By: pi (DeepSeek V4.1 Flash)), " +
 	"or with one " + coAuthorAllowListPath + " lists; see the Commits section of .claude/skills/go-tdd/SKILL.md."
 
-// commitMessage is one commit the check reads: its full SHA and its whole
-// message, subject and body.
+// commitMessage is one commit the check reads: its full SHA, its author's and
+// committer's email addresses ("" when not checked), and its whole message,
+// subject and body.
 type commitMessage struct {
-	SHA     string
-	Message string
+	SHA       string
+	Author    string
+	Committer string
+	Message   string
 }
 
-// coAuthorFinding is one co-author trailer the check refuses: the commit that
-// holds it, the whole trailer line, trimmed, and why it is refused.
+// coAuthorFinding is one co-author trailer or commit identity the check
+// refuses: the commit that holds it, the whole trailer line, trimmed, or
+// "author <addr>" / "committer <addr>", and why it is refused.
 type coAuthorFinding struct {
 	SHA     string
 	Trailer string
 	Reason  string
 }
 
-// coAuthorFindings returns the co-author trailers of commits that carry an
-// address allowed does not hold, or a malformed one, in commit order, then in
-// line order. A trailer is a line whose trimmed form starts with
-// Co-Authored-By: in any letter case; one with no @ names nobody's account and
-// passes. Any other must end in exactly one <address>, with no @ outside it,
-// whose lower-cased form allowed (lower-cased addresses) holds.
+// coAuthorFindings returns, in commit order, each commit's author and
+// committer address that allowed does not hold, then its co-author trailers
+// that carry such an address, or a malformed one, in line order. A squash merge
+// credits every distinct author of a pull request's commits, so the author and
+// committer count as trailers do. A trailer is a line whose trimmed form starts
+// with Co-Authored-By in any letter case, then optional spaces or tabs, then a
+// colon; one with no @ names nobody's account and passes. Any other must end in
+// exactly one <address>, with no @ outside it, whose lower-cased form allowed
+// (lower-cased addresses) holds.
 func coAuthorFindings(commits []commitMessage, allowed []string) []coAuthorFinding {
 	allow := make(map[string]bool, len(allowed))
 	for _, addr := range allowed {
@@ -62,17 +69,42 @@ func coAuthorFindings(commits []commitMessage, allowed []string) []coAuthorFindi
 
 	var findings []coAuthorFinding
 	for _, c := range commits {
-		for line := range strings.SplitSeq(c.Message, "\n") {
-			trailer := strings.TrimSpace(line)
-			if !strings.HasPrefix(strings.ToLower(trailer), coAuthorTrailerKey) {
+		for _, id := range []struct{ role, addr string }{{"author", c.Author}, {"committer", c.Committer}} {
+			if id.addr == "" || allow[strings.ToLower(id.addr)] {
 				continue
 			}
-			if reason := coAuthorProblem(trailer[len(coAuthorTrailerKey):], allow); reason != "" {
+			findings = append(findings, coAuthorFinding{
+				SHA:     c.SHA,
+				Trailer: id.role + " " + id.addr,
+				Reason: fmt.Sprintf("the commit's %s, %s, is not an address of the project (%s): "+
+					"a squash merge credits that address's account", id.role, id.addr, coAuthorAllowListPath),
+			})
+		}
+		for line := range strings.SplitSeq(c.Message, "\n") {
+			trailer := strings.TrimSpace(line)
+			value, ok := coAuthorTrailerValue(trailer)
+			if !ok {
+				continue
+			}
+			if reason := coAuthorProblem(value, allow); reason != "" {
 				findings = append(findings, coAuthorFinding{SHA: c.SHA, Trailer: trailer, Reason: reason})
 			}
 		}
 	}
 	return findings
+}
+
+// coAuthorTrailerValue returns the text after the colon of a trimmed line that
+// is a co-author trailer, the key in any letter case followed by optional
+// spaces or tabs and a colon, and false for any other line, a longer key
+// included.
+func coAuthorTrailerValue(trailer string) (string, bool) {
+	if len(trailer) < len(coAuthorTrailerKey) || !strings.EqualFold(trailer[:len(coAuthorTrailerKey)], coAuthorTrailerKey) {
+		return "", false
+	}
+	rest := strings.TrimLeft(trailer[len(coAuthorTrailerKey):], " \t")
+	value, ok := strings.CutPrefix(rest, ":")
+	return value, ok
 }
 
 // coAuthorProblem returns why the value of a co-author trailer, the text after
@@ -208,6 +240,9 @@ func TestBranchCoAuthorTrailers(t *testing.T) {
 
 	commits := branchCommits(t, root, spec)
 	t.Logf("read %d commits of %s", len(commits), spec)
+	if err := coAuthorCommitCount(os.Getenv, len(commits)); err != nil {
+		t.Fatalf("%s: %v", spec, err)
+	}
 
 	for _, f := range coAuthorFindings(commits, allowed) {
 		t.Errorf("commit %s: %q: %s", f.SHA, f.Trailer, f.Reason)
@@ -217,29 +252,67 @@ func TestBranchCoAuthorTrailers(t *testing.T) {
 	}
 }
 
+// coAuthorCommitCount returns an error when SHIFT2EU_COAUTHOR_CHECK is
+// exactly require and the range read n == 0 commits: a pull request always has
+// one, so a required check that read none must fail rather than pass.
+func coAuthorCommitCount(getenv func(string) string, n int) error {
+	if n == 0 && getenv(coAuthorCheckEnv) == "require" {
+		return fmt.Errorf("%s=require, but the range holds no commit: the check read nothing", coAuthorCheckEnv)
+	}
+	return nil
+}
+
 // branchCommits returns the commits of the range spec, newest first, as git
-// log writes them: each commit's full SHA and raw message, NUL-separated.
+// log writes them: each commit's full SHA, author and committer address and
+// raw message, NUL-separated, with git's -z NUL after each commit.
 func branchCommits(t *testing.T, root, spec string) []commitMessage {
 	t.Helper()
 
-	out, err := gitOutput(t, root, "log", "-z", "--no-color", "--format=%H%x00%B", "--end-of-options", spec)
+	out, err := gitOutput(t, root, "log", "-z", "--no-color", "--format=%H%x00%ae%x00%ce%x00%B", "--end-of-options", spec)
 	if err != nil {
 		t.Fatalf("git log %s: %v", spec, err)
 	}
 
-	fields := strings.Split(strings.TrimSuffix(string(out), "\x00"), "\x00")
-	if len(fields) == 1 && fields[0] == "" {
-		return nil
-	}
-	if len(fields)%2 != 0 {
-		t.Fatalf("git log %s: %d NUL-separated fields, want a SHA and a message per commit", spec, len(fields))
-	}
-
-	commits := make([]commitMessage, 0, len(fields)/2)
-	for i := 0; i < len(fields); i += 2 {
-		commits = append(commits, commitMessage{SHA: fields[i], Message: fields[i+1]})
+	commits, err := parseBranchCommits(out)
+	if err != nil {
+		t.Fatalf("git log %s: %v", spec, err)
 	}
 	return commits
+}
+
+// parseBranchCommits splits git log -z --format=%H%x00%ae%x00%ce%x00%B output
+// into commits. Every record is four NUL-separated fields, the last record
+// closed by -z's NUL or not; a SHA that is not 40 or 64 lower-case hex digits,
+// or a field count that is no multiple of four, is an error, never a pass. A
+// message cannot hold a NUL (git refuses one), so the split is exact.
+func parseBranchCommits(out []byte) ([]commitMessage, error) {
+	if len(out) == 0 {
+		return nil, nil
+	}
+	fields := strings.Split(strings.TrimSuffix(string(out), "\x00"), "\x00")
+	if len(fields)%4 != 0 {
+		return nil, fmt.Errorf("%d NUL-separated fields, want a SHA, an author, a committer and a message per commit",
+			len(fields))
+	}
+
+	commits := make([]commitMessage, 0, len(fields)/4)
+	for i := 0; i < len(fields); i += 4 {
+		sha := fields[i]
+		if !isCommitSHA(sha) {
+			return nil, fmt.Errorf("record %d starts with %q, want a full commit SHA", i/4+1, sha)
+		}
+		commits = append(commits, commitMessage{SHA: sha, Author: fields[i+1], Committer: fields[i+2], Message: fields[i+3]})
+	}
+	return commits, nil
+}
+
+// isCommitSHA reports whether s is a full SHA-1 or SHA-256 commit name in
+// lower-case hex.
+func isCommitSHA(s string) bool {
+	if len(s) != 40 && len(s) != 64 {
+		return false
+	}
+	return !strings.ContainsFunc(s, func(c rune) bool { return (c < '0' || c > '9') && (c < 'a' || c > 'f') })
 }
 
 // gitIn runs git with args in root and returns its error, if any.

@@ -3,7 +3,8 @@
 # onto main, so a trailer that carries an address must carry one the project owns or uses.
 #
 # Read by test/lint (TestBranchCoAuthorTrailers, coauthortrailer_rule_test.go), which checks the branch's
-# own commits against this list; a trailer with no address at all, such as
+# own commits against this list, their author and committer addresses too (a squash merge credits every
+# distinct author of a pull request's commits); a trailer with no address at all, such as
 # "Co-Authored-By: pi (DeepSeek V4.1 Flash)", needs no entry. One address per line, compared in any
 # letter case, no angle brackets; # starts a comment line. See the Commits section of
 # .claude/skills/go-tdd/SKILL.md.
@@ -22,6 +23,11 @@ noreply@anthropic.com
 # Renovate.
 29139614+renovate[bot]@users.noreply.github.com
 
+# GitHub itself: the committer of every commit made through its API or web interface, such as the
+# release App's and Renovate's commits on their pull request branches and every squash merge on main.
+noreply@github.com
+
 # The maintainer.
 tim@themamo.com
 github@timothymamo.com
+65859835+timothymamo@users.noreply.github.com

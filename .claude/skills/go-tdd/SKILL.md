@@ -56,9 +56,11 @@ Never add a trailer with an email address you do not own (`noreply@pi.dev`, `nor
 a PR's commits, so a wrong one reaches `main`.
 
 `test/lint`'s `TestBranchCoAuthorTrailers` (issue #663) enforces this on a branch's own commits, in CI's
-`coauthor-trailers` job: every line of a commit message that starts with `Co-Authored-By:`, in any case
-and in prose too, must carry no address or one `.github/co-author-addresses.txt` lists, so never start a
-wrapped body line with the key. To allow a new address the project owns, add it to that file on a line
+`coauthor-trailers` job: every line of a commit message that starts with `Co-Authored-By:`, in any case,
+with or without spaces before the colon (`Co-Authored-By :`), and in prose too, must carry no address or
+one `.github/co-author-addresses.txt` lists, so never start a wrapped body line with the key. The commit's
+author and committer addresses must be on that list too: a squash merge credits every distinct author of
+a PR's commits, so a commit authored with a third-party address fails even with no trailer. To allow a new address the project owns, add it to that file on a line
 of its own, with a comment saying whose it is.
 
 ## Conventions
