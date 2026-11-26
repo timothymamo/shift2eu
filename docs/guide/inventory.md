@@ -955,15 +955,15 @@ done > "$out/functions.json"
 
 The Memorystore, Filestore, Artifact Registry, Managed Kafka and Cloud Functions lists run only
 when the asset listing holds a resource of theirs, so a project that does not use a service never
-calls its API, which may not be enabled. Every `gcloud` call above carries `--quiet`, which makes it take the
-default answer, No, when it offers to enable an API, as it does on a project with that API disabled;
-if any call still asks to enable one, answer N: enabling an API writes to the project.
+calls its API, which may not be enabled. Every `gcloud` call above carries `--quiet`, which makes
+it take the default answer, No, when it offers to enable an API, as it does on a project with that
+API disabled; if any call still asks to enable one, answer N: enabling an API writes to the project.
 
 Check that a list is not empty when the asset listing holds its resources: a failed list (a
-missing role or an interrupted run) writes nothing and stops nothing. With Cloud
-Functions, check `functions.json`: without it each function's Cloud Run service is counted a second
-time, as a `serverless.container` (`roles/cloudfunctions.viewer`). With load balancers, check the
-compute lists (`roles/compute.viewer`). A failed `compute-target-pools.json` leaves every target
+missing role or an interrupted run) stops nothing, and its error on stderr is the only sign. With
+Cloud Functions, check `functions.json`: without it each function's Cloud Run service is counted a
+second time, as a `serverless.container` (`roles/cloudfunctions.viewer`). With load balancers, check
+the compute lists (`roles/compute.viewer`). A failed `compute-target-pools.json` leaves every target
 pool out, with nothing in its place. A failed `compute-url-maps.json` puts, in place of each URL
 map, one load balancer per backend service it names. A failed `compute-backend-services.json`
 leaves out every load balancer that is a backend service alone, gives the URL maps no `udp` or
@@ -972,8 +972,9 @@ leaves out every load balancer that is a backend service alone, gives the URL ma
 `compute-target-http-proxies.json` leaves the load balancers in, but without the `ipv6` or `udp`
 their forwarding rules prove. A failed Valkey list in `memorystore.json`
 leaves every Valkey instance without `sharding` and without its size (`roles/memorystore.viewer`).
-A failed `managed-kafka-clusters.json` leaves every Kafka cluster without its size
-(`roles/managedkafka.viewer`).
+A failed Managed Kafka list in a region leaves that region's clusters without their size
+(`roles/managedkafka.viewer`); check that `managed-kafka-clusters.json` holds every cluster the
+asset listing names.
 
 The `--format` projections keep only what the program reads: an instance's metadata keys, for
 example, but not their values, which hold startup scripts and SSH keys, and of its disks only the
@@ -989,7 +990,8 @@ reach it.
 The load balancer lists read only the HTTP and HTTPS target proxies, the frontends of an Application
 Load Balancer; a TCP, SSL or gRPC proxy is not listed, so a load balancer behind one gets no `ipv6`.
 The Memorystore and Managed Kafka lists run once per region the asset listing names: the gcloud
-pages document no "all regions" value for them. Every call above lists or describes; none changes anything.
+pages document no "all regions" value for them. Every call above lists or describes; none changes
+anything.
 
 The Cloud Asset Inventory listing is the list of resources, but for load balancers, which come from
 the compute lists; the other calls add the settings the capabilities and sizes need. A resource the
