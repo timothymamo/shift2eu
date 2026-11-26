@@ -53,10 +53,11 @@
 			header Referrer-Policy no-referrer
 			# Every feature the site does not use, off. clipboard-write is left to the browser's default
 			# (self): the page's copy buttons write the command to the clipboard on a click.
-			# No Via: it names the front's software, which no other header does. This removes the copy
-			# reverse_proxy writes on the answer; header_down -Via below drops the upstream's own (issue #626).
-			header -Via
 			header Permissions-Policy "accelerometer=(), ambient-light-sensor=(), autoplay=(), bluetooth=(), browsing-topics=(), camera=(), compute-pressure=(), display-capture=(), encrypted-media=(), fullscreen=(), gamepad=(), geolocation=(), gyroscope=(), hid=(), identity-credentials-get=(), idle-detection=(), local-fonts=(), magnetometer=(), microphone=(), midi=(), otp-credentials=(), payment=(), picture-in-picture=(), publickey-credentials-create=(), publickey-credentials-get=(), screen-wake-lock=(), serial=(), storage-access=(), usb=(), web-share=(), window-management=(), xr-spatial-tracking=()"
+			# No Via: it names the front's software, which no other header does. This is the line that
+			# does the work: deferred until the answer is written, it removes every Via on it, the copy
+			# reverse_proxy writes and the upstream's own alike (issue #626).
+			header -Via
 
 			reverse_proxy https://{$UPSTREAM} {
 				# Edge Services selects the pipeline by the name it is asked for; the certificate is
@@ -85,7 +86,8 @@
 				# visitor, nor the store's S3 headers.
 				header_down -Set-Cookie
 				header_down -X-Amz-*
-				# Nor the upstream's Via: the client sees no Via at all (header -Via above).
+				# Nor the upstream's Via. Defence in depth only: header -Via above already removes every
+				# Via, the upstream's too, so this line is not load-bearing (the static test alone pins it).
 				header_down -Via
 			}
 		}

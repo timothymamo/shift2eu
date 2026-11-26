@@ -479,8 +479,8 @@ TLS stage*.
   `X-Content-Type-Options` and `Referrer-Policy`, and its `Set-Cookie` and `X-Amz-*` (the amendment
   below). **The front sends no `Via`** (issue #626): `header -Via` in `www`'s block removes the
   `Via: 2.0 Caddy` that `reverse_proxy` writes on the answer (a `header_down` alone cannot, since the
-  proxy adds its own after the upstream's is gone), and `header_down -Via` drops the upstream's own
-  copy; the 308s carry none. It named the front's software, which no other header does. The local run
+  proxy adds its own after the upstream's is gone); deferred, it removes the upstream's own copy too, so
+  `header_down -Via` is defence in depth, not the line that does the work; the 308s carry none. It named the front's software, which no other header does. The local run
   with no upstream answered Caddy's 502
   with every header. `Permissions-Policy` turns off by name `accelerometer`, `ambient-light-sensor`,
   `autoplay`, `bluetooth`, `browsing-topics`, `camera`, `compute-pressure`, `display-capture`,
