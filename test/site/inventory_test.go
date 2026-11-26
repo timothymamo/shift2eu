@@ -1751,9 +1751,8 @@ const awsServiceAuthorizationReference = "https://docs.aws.amazon.com/service-au
 // opensearchserverless` OpenSearch Serverless (aoss) and `aws s3api` S3 (s3).
 var awsCollectCalls = []awsCollectCall{
 	// Every page below is the reference's current short name for its service. The
-	// long names (`list_amazonelasticcontainerserviceforkubernetes.html` and its
-	// like) either redirect to the index or, for EC2, EKS, MSK, RDS, S3, SQS and
-	// SNS, answered 302 to it, so a citation of one led the reader nowhere
+	// long names answer 301 to these pages or, for EKS, MSK, RDS, SQS and SNS, 302
+	// to the reference index, so a citation of one of those led the reader nowhere
 	// (review finding on PR #639).
 	// list_autoscaling.html.
 	{service: "autoscaling", operation: "describe-auto-scaling-groups", action: "autoscaling:DescribeAutoScalingGroups", page: "list_autoscaling.html"},

@@ -240,9 +240,15 @@ func describeDomainsBatch(t *testing.T) int {
 // hands the call the names list-domain-names returned, the number of names its
 // `xargs -r -n` line names at a time, and redirects every batch to
 // `opensearch-domains.json`, so the file holds one JSON value per batch of those
-// names, in order, and each value holds exactly that batch. A fixture of one
-// value would record a command the guide does not run, and a check that read
-// only the first value would miss every domain of every later batch.
+// names, in order, and each value holds exactly the names of that batch. A
+// fixture of one value would record a command the guide does not run, and a
+// check that read only the first value would miss every domain of every later
+// batch.
+//
+// A value's membership is what this check pins, not the order inside it: the
+// guide fixes the batches and their order, but AWS documents no order for
+// DescribeDomains' DomainStatusList, so a recording may hold a batch's names in
+// any order.
 func TestInventoryGuideDescribeDomainsFixtureRecordsEveryBatch(t *testing.T) {
 	t.Parallel()
 
@@ -282,13 +288,14 @@ func TestInventoryGuideDescribeDomainsFixtureRecordsEveryBatch(t *testing.T) {
 			}
 
 			// The batches keep the names in the order list-domain-names returned them:
-			// value i holds names i*batch to the next batch's first name.
+			// value i holds names i*batch to the next batch's first name, and none
+			// other, whatever order the call answered them in.
 			for i, page := range pages {
 				start := min(i*batch, len(listed))
 				end := min(start+batch, len(listed))
 
-				if !slices.Equal(page, listed[start:end]) {
-					t.Errorf("%s value %d describes the domain(s) %q, want %q: the guide hands describe-domains the names list-domain-names returned, %d at a time, in that order, so the value of batch %d is names %d to %d",
+				if !sameDomainBatch(page, listed[start:end]) {
+					t.Errorf("%s value %d describes the domain(s) %q, want the names %q: the guide hands describe-domains the names list-domain-names returned, %d at a time, in that order, so the value of batch %d is names %d to %d, each of them once",
 						domainsPath, i+1, page, listed[start:end], batch, i+1, start+1, end)
 				}
 			}
@@ -299,6 +306,14 @@ func TestInventoryGuideDescribeDomainsFixtureRecordsEveryBatch(t *testing.T) {
 		t.Errorf("the recorded describe-domains output holds %d value(s) over every region, want at least 2: the guide's `xargs -r -n %d` writes one value per batch, and a fixture of one value cannot show that the program reads more than the first (review finding on PR #639)",
 			batches, batch)
 	}
+}
+
+// sameDomainBatch reports whether two batches of domain names hold the same
+// names, each once, whatever their order: the guide fixes which names a batch
+// carries, but AWS documents no order for DescribeDomains' DomainStatusList, so
+// the order inside a batch is the call's to choose.
+func sameDomainBatch(got, want []string) bool {
+	return slices.Equal(slices.Sorted(slices.Values(got)), slices.Sorted(slices.Values(want)))
 }
 
 // readRecordedDomainNames returns the names a recorded list-domain-names output
