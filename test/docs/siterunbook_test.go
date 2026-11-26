@@ -979,21 +979,29 @@ func runbookContinuesOutcome(line string) bool {
 // project, and the order of whose commands the test below pins.
 const deployKeyHeading = "## R7. The deploy key's limits"
 
-// r7Step7Command is one command of R7's step 7: the name a failure gives it, and the fragments its own command line
-// carries - all of them - which tell it from the step's sibling commands.
+// r7Step7Command is one step of the order below: the name a failure gives it, and the fragments its own command line
+// carries - all of them - which tell it from the section's sibling commands.
 type r7Step7Command struct {
 	name      string   // how the failure message names the step
 	fragments []string // every fragment the step's own command line carries
 }
 
-// r7Step7Order is R7's step 7 in the order it must run (issue #650, the auditor's finding 4 and the AI reviewer's point
-// 5 on PR #645): the maintainer's own key is switched to the throwaway project and the switch waited for before the
-// listing that shows the project's bucket empty, the bucket is created only after that listing - created earlier it
-// could land in the site's project - and the cleanup that deletes the bucket and switches the key back to the site's
-// project runs before step 8's restores, which need it back there: the delete needs a key still on the throwaway
-// project, and the restores that follow need the site's. The step is anchored on step 8's first restore rather than on
-// step 8's last command (the switch to the admin project), so a switch back moved below the restores but still above
-// that last command is reported too (issue #650's review): the restores run before the switch to the admin project.
+// r7Step7Order is R7's step 7, its probes, its cleanup and step 8 in the order they must run (issue #650, the auditor's
+// finding 4 and the AI reviewer's point 5 on PR #645; issue #666, PR #664's reviewer nit N1'): the maintainer's own key is
+// switched to the throwaway project and the switch waited for before the listing that shows the project's bucket empty,
+// and the bucket is created only after that listing - created earlier it could land in the site's project. The three step
+// 7 probes that need the bucket to exist come next, still with the key on the throwaway project - the bucket's location,
+// the project's listing showing only that bucket, and the deploy key's put-object -: below the cleanup they would print a
+// false PASS, the bucket gone. Then every line of the cleanup that empties and deletes that bucket runs while the key is
+// still on the throwaway project, before the switch back to the site's project: the delete needs a key still there.
+// Everything from the switch back on needs the site's project - the wait for the switch back, the listing that shows the
+// site's buckets, the throwaway project's deletion and the listing that shows it gone. Step 8 then runs: its restores and
+// its canary work need the site's project, and its scratch directory's removal has to follow the restore that reads
+// "$W/saved-acl.json"; its first command, the owner key into the AWS variables, is local and needs nothing of the site's
+// project, and the scratch removal needs only that one restore before it. Those two are local, so the runbook's own order
+// pins them rather than a need of the site's project, and the switch to the admin project comes after all of step 8.
+// Every step of the cleanup and of step 8 is anchored, not only step 8's first restore as PR #664 had it: a later step-8
+// command, the canary bucket's deletion for one, moved above the switch back was let pass.
 var r7Step7Order = []r7Step7Command{
 	{
 		name:      "the key switched to the throwaway project",
@@ -1012,6 +1020,22 @@ var r7Step7Order = []r7Step7Command{
 		fragments: []string{`own s3api create-bucket --bucket "$XB"`},
 	},
 	{
+		name:      "the throwaway bucket's location, confirmed the throwaway region",
+		fragments: []string{`own s3api get-bucket-location --bucket "$XB"`},
+	},
+	{
+		name:      "the throwaway project's bucket listing, showing only that bucket",
+		fragments: []string{"own s3api list-buckets", "# PASS: exactly"},
+	},
+	{
+		name:      "the deploy key's probe in the throwaway bucket, denied",
+		fragments: []string{`xprobe s3api put-object --bucket "$XB"`},
+	},
+	{
+		name:      "the throwaway bucket's empty-object listing, the cleanup's first line",
+		fragments: []string{`own s3api list-objects-v2 --bucket "$XB"`, "# PASS: []"},
+	},
+	{
 		name:      "delete-bucket, the cleanup",
 		fragments: []string{`own s3api delete-bucket --bucket "$XB"`},
 	},
@@ -1020,8 +1044,40 @@ var r7Step7Order = []r7Step7Command{
 		fragments: []string{"scw iam api-key update", `default-project-id="$P"`},
 	},
 	{
+		name:      "the wait for the switch back to apply",
+		fragments: []string{`head-bucket --bucket "$B"`, "&& break"},
+	},
+	{
+		name:      "the listing after the switch back, showing the site's buckets",
+		fragments: []string{"own s3api list-buckets", "# PASS: the site's bucket"},
+	},
+	{
+		name:      "the throwaway project's deletion",
+		fragments: []string{`scw account project delete project-id="$XP"`},
+	},
+	{
+		name:      "the listing that shows the project gone",
+		fragments: []string{"scw account project list", "# PASS: 0"},
+	},
+	{
+		name:      "step 8's first command, the owner key into the AWS variables",
+		fragments: []string{`export AWS_ACCESS_KEY_ID="$SCW_ACCESS_KEY"`},
+	},
+	{
 		name:      "step 8's first restore, which needs the key back on the site's project",
 		fragments: []string{"aws s3api put-bucket-acl", `--bucket "$B"`},
+	},
+	{
+		name:      "step 8's canary-object version listing",
+		fragments: []string{`aws s3api list-object-versions --bucket "$B"`, "--prefix canary/"},
+	},
+	{
+		name:      "step 8's canary bucket deletion",
+		fragments: []string{`aws s3api delete-bucket --bucket "$CB"`},
+	},
+	{
+		name:      "step 8's scratch directory removal, after the restores that read it",
+		fragments: []string{`rm -r "$W"`},
 	},
 	{
 		name:      "the switch to the admin project, after step 8's restores",
@@ -1029,14 +1085,20 @@ var r7Step7Order = []r7Step7Command{
 	},
 }
 
-// TestSiteRunbookR7Step7Order pins the order of R7's step 7 (issue #650): the key is switched to the throwaway project
-// and the switch waited for before the empty listing, the bucket is created after that listing, and the cleanup - the
-// bucket's deletion and the switch back to the site's project - comes before step 8's restores, the first of which (the
-// site bucket's ACL) is the last step anchored, and step 8's switch to the admin project comes after them. Each step is
-// found by a fragment of its own command line, so the maintainer's wording and the surrounding comments may change; the
-// failures name the pair that is out of order. The swapped cases run the same check on a copy of the section whose two
-// steps are exchanged, so the check is shown to fail on an order the runbook must not have - a switch back moved below
-// step 8's first restore included, which an anchor on step 8's last command would let pass (issue #650's review).
+// TestSiteRunbookR7Step7Order pins the order of R7's step 7, its cleanup and step 8 (issues #650 and #666): the key is
+// switched to the throwaway project and the switch waited for before the empty listing, the bucket is created after that
+// listing, then the three probes that need that bucket - its location, the listing showing only it and the deploy key's
+// put-object - still with the key on the throwaway project, and the whole cleanup - the empty-object listing of that
+// bucket and its deletion - runs while the key is still on the throwaway project, before the switch back to the site's
+// project. Everything after the switch back needs the site's project: the wait for the switch back, the listing of the
+// site's buckets, the throwaway project's deletion and the listing that shows it gone, then step 8 from its first
+// command (the owner key into the AWS variables, local), its restores (the site bucket's ACL first) and its scratch
+// directory's removal, which only has to follow the restore that reads "$W/saved-acl.json", before the switch to the
+// admin project. Each step is found by a fragment of its own command line, so the maintainer's wording and the
+// surrounding comments may change; the failures name the pair that is out of order. Every pair of neighbours gets a
+// swapped case, and a later step-8 command moved above the switch back - not a pair of neighbours, so not a swap - gets
+// a move case: on the copy the check must fail on, so the check is shown to catch what an anchor on step 8's first
+// restore alone let pass (PR #664's reviewer nit N1', issue #666).
 func TestSiteRunbookR7Step7Order(t *testing.T) {
 	t.Parallel()
 
@@ -1045,10 +1107,16 @@ func TestSiteRunbookR7Step7Order(t *testing.T) {
 	tests := []struct {
 		name    string
 		swapped [2]int // the two steps, 1-based in r7Step7Order, whose lines the case exchanges; zero exchanges none
+		moved   [2]int // the two steps, 1-based in r7Step7Order: the case lifts the first's line out and puts it just above the second's; zero moves none
 		want    []string
 	}{
 		{
 			name: "the runbook's own order",
+		},
+		{
+			name:    "the wait moved above the switch to the throwaway project",
+			swapped: [2]int{1, 2},
+			want:    []string{"(2) the wait for the switch to apply comes before (1) the key switched to the throwaway project"},
 		},
 		{
 			name:    "the wait moved after the empty listing",
@@ -1061,19 +1129,98 @@ func TestSiteRunbookR7Step7Order(t *testing.T) {
 			want:    []string{"(4) create-bucket in the throwaway project comes before (3) the throwaway project's bucket listing, shown empty"},
 		},
 		{
-			name:    "the switch back moved before the bucket's deletion",
+			name:    "the location check moved above create-bucket",
+			swapped: [2]int{4, 5},
+			want:    []string{"(5) the throwaway bucket's location, confirmed the throwaway region comes before (4) create-bucket in the throwaway project"},
+		},
+		{
+			name:    "the bucket listing moved above the location check",
 			swapped: [2]int{5, 6},
-			want:    []string{"(6) the switch back to the site's project comes before (5) delete-bucket, the cleanup"},
+			want:    []string{"(6) the throwaway project's bucket listing, showing only that bucket comes before (5) the throwaway bucket's location, confirmed the throwaway region"},
 		},
 		{
-			name:    "the switch back moved below step 8's first restore",
+			name:    "the deploy key's probe moved above the bucket listing",
 			swapped: [2]int{6, 7},
-			want:    []string{"(7) step 8's first restore, which needs the key back on the site's project comes before (6) the switch back to the site's project"},
+			want:    []string{"(7) the deploy key's probe in the throwaway bucket, denied comes before (6) the throwaway project's bucket listing, showing only that bucket"},
 		},
 		{
-			name:    "the switch to the admin project moved before step 8's first restore",
+			name:    "the empty-object listing moved above the probe",
 			swapped: [2]int{7, 8},
-			want:    []string{"(8) the switch to the admin project, after step 8's restores comes before (7) step 8's first restore, which needs the key back on the site's project"},
+			want:    []string{"(8) the throwaway bucket's empty-object listing, the cleanup's first line comes before (7) the deploy key's probe in the throwaway bucket, denied"},
+		},
+		{
+			name:    "delete-bucket moved before the empty-object listing",
+			swapped: [2]int{8, 9},
+			want:    []string{"(9) delete-bucket, the cleanup comes before (8) the throwaway bucket's empty-object listing, the cleanup's first line"},
+		},
+		{
+			name:    "the switch back moved before the bucket's deletion",
+			swapped: [2]int{9, 10},
+			want:    []string{"(10) the switch back to the site's project comes before (9) delete-bucket, the cleanup"},
+		},
+		{
+			name:    "the wait for the switch back moved above the switch back",
+			swapped: [2]int{10, 11},
+			want:    []string{"(11) the wait for the switch back to apply comes before (10) the switch back to the site's project"},
+		},
+		{
+			name:    "the listing after the switch back moved above the wait for it",
+			swapped: [2]int{11, 12},
+			want:    []string{"(12) the listing after the switch back, showing the site's buckets comes before (11) the wait for the switch back to apply"},
+		},
+		{
+			name:    "the project's deletion moved above the listing after the switch back",
+			swapped: [2]int{12, 13},
+			want:    []string{"(13) the throwaway project's deletion comes before (12) the listing after the switch back, showing the site's buckets"},
+		},
+		{
+			name:    "the listing that shows the project gone moved above its deletion",
+			swapped: [2]int{13, 14},
+			want:    []string{"(14) the listing that shows the project gone comes before (13) the throwaway project's deletion"},
+		},
+		{
+			name:    "step 8's first command moved above the listing that shows the project gone",
+			swapped: [2]int{14, 15},
+			want:    []string{"(15) step 8's first command, the owner key into the AWS variables comes before (14) the listing that shows the project gone"},
+		},
+		{
+			name:    "step 8's first restore moved above its first command",
+			swapped: [2]int{15, 16},
+			want:    []string{"(16) step 8's first restore, which needs the key back on the site's project comes before (15) step 8's first command, the owner key into the AWS variables"},
+		},
+		{
+			name:    "the version listing moved above step 8's first restore",
+			swapped: [2]int{16, 17},
+			want:    []string{"(17) step 8's canary-object version listing comes before (16) step 8's first restore, which needs the key back on the site's project"},
+		},
+		{
+			name:    "the canary bucket's deletion moved above the version listing",
+			swapped: [2]int{17, 18},
+			want:    []string{"(18) step 8's canary bucket deletion comes before (17) step 8's canary-object version listing"},
+		},
+		{
+			name:    "the scratch directory's removal moved above the canary bucket's deletion",
+			swapped: [2]int{18, 19},
+			want:    []string{"(19) step 8's scratch directory removal, after the restores that read it comes before (18) step 8's canary bucket deletion"},
+		},
+		{
+			name:    "the switch to the admin project moved above scratch's removal",
+			swapped: [2]int{19, 20},
+			want:    []string{"(20) the switch to the admin project, after step 8's restores comes before (19) step 8's scratch directory removal, after the restores that read it"},
+		},
+		{
+			name:  "the canary bucket's deletion moved above the switch back",
+			moved: [2]int{18, 10},
+			want: []string{
+				"(18) step 8's canary bucket deletion comes before (10) the switch back to the site's project",
+				"(18) step 8's canary bucket deletion comes before (11) the wait for the switch back to apply",
+				"(18) step 8's canary bucket deletion comes before (12) the listing after the switch back, showing the site's buckets",
+				"(18) step 8's canary bucket deletion comes before (13) the throwaway project's deletion",
+				"(18) step 8's canary bucket deletion comes before (14) the listing that shows the project gone",
+				"(18) step 8's canary bucket deletion comes before (15) step 8's first command, the owner key into the AWS variables",
+				"(18) step 8's canary bucket deletion comes before (16) step 8's first restore, which needs the key back on the site's project",
+				"(18) step 8's canary bucket deletion comes before (17) step 8's canary-object version listing",
+			},
 		},
 	}
 
@@ -1083,7 +1230,11 @@ func TestSiteRunbookR7Step7Order(t *testing.T) {
 
 			lines := section
 			if tc.swapped != [2]int{} {
-				lines = r7Step7Swap(t, section, r7Step7Order[tc.swapped[0]-1], r7Step7Order[tc.swapped[1]-1])
+				lines = r7Step7Swap(t, lines, r7Step7Order[tc.swapped[0]-1], r7Step7Order[tc.swapped[1]-1])
+			}
+
+			if tc.moved != [2]int{} {
+				lines = r7Step7Move(t, lines, r7Step7Order[tc.moved[0]-1], r7Step7Order[tc.moved[1]-1])
 			}
 
 			numbers := make([]int, len(r7Step7Order))
@@ -1092,7 +1243,7 @@ func TestSiteRunbookR7Step7Order(t *testing.T) {
 			}
 
 			if got := r7Step7OutOfOrder(numbers, r7Step7Order); !slices.Equal(got, tc.want) {
-				t.Errorf("%s: %s: the steps out of order are %q, want %q: the key is switched to the throwaway project and the switch waited for before the empty listing, the bucket is created only after it, and the cleanup - the bucket's deletion and the switch back to the site's project - runs before step 8's restores, whose first command is the site bucket's ACL, and before step 8's switch to the admin project (issue #650, docs/adr/0042)",
+				t.Errorf("%s: %s: the steps out of order are %q, want %q: the key is switched to the throwaway project and the switch waited for before the empty listing, the bucket is created only after it, and the three probes that need that bucket come next, still with the key on the throwaway project. Then the whole cleanup - the empty-object listing of that bucket and its deletion - runs while the key is still on the throwaway project, before the switch back to the site's project. After the switch back come the wait for it, the listing of the site's buckets, the throwaway project's deletion and the listing that shows it gone, then step 8 from its first command through the removal of its scratch directory - whose restores and canary work need the site's project, while its first command is local and the scratch removal only has to follow the restore that reads it, so the runbook's own order pins those two - and then the switch to the admin project (issues #650 and #666, docs/adr/0042)",
 					siteRunbookPath, deployKeyHeading, got, tc.want)
 			}
 		})
@@ -1155,4 +1306,25 @@ func r7Step7Swap(t *testing.T, section []string, a, b r7Step7Command) []string {
 	swapped[first], swapped[second] = swapped[second], swapped[first]
 
 	return swapped
+}
+
+// r7Step7Move returns a copy of section with the first step's command line lifted out and inserted just above the second's:
+// the order the runbook must not have, when the two steps are not neighbours - a later step-8 command moved above the
+// switch back, say - which a swap of neighbours cannot express. The check rejects it pair by pair, so the failure names
+// the moved step against every step it now precedes.
+func r7Step7Move(t *testing.T, section []string, a, b r7Step7Command) []string {
+	t.Helper()
+
+	moved, before := r7Step7Line(t, section, a), r7Step7Line(t, section, b)
+	if moved == before {
+		t.Fatalf("%s: %s: the steps %q and %q are one line, so there is nothing to move (issue #666)",
+			siteRunbookPath, deployKeyHeading, a.name, b.name)
+	}
+
+	at := before
+	if moved < before {
+		at = before - 1
+	}
+
+	return slices.Insert(slices.Delete(slices.Clone(section), moved, moved+1), at, section[moved])
 }
