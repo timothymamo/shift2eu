@@ -62,22 +62,28 @@
 //     through a Launch, with the skill from the checkout copy as the appended
 //     system prompt, fails on any change of the digest of the runner's
 //     file-command directory - the $GITHUB_ENV file's, beside $GITHUB_PATH,
-//     $GITHUB_OUTPUT and $GITHUB_STATE: every entry's name, type (Lstat, no
-//     link followed) and bytes, the step summary alone left out, at most 64
-//     entries and 4 MiB, a directory over either refused before the run -
-//     across that run (issues #615, #614), and wants a result file in the work area -
-//     a regular file, no link, within MaxResult, one JSON value - that holds
-//     neither the token nor the canary in its bytes or its decoded strings. It
-//     returns the bytes it read and checked.
+//     $GITHUB_OUTPUT, $GITHUB_STATE and the step summary: every entry's
+//     name, type (Lstat, no link followed) and bytes, every entry digested,
+//     the step summary included, at most 64 entries and 4 MiB, a directory
+//     over either refused before the run - across that run (issues #615,
+//     #614), and wants a result file in the work area - a regular file, no
+//     link, within MaxResult, one JSON value - that holds neither the token
+//     nor the canary in its bytes or its decoded strings. It returns the
+//     bytes it read and checked. ci/auditrun holds the directory's paths
+//     before the steps: it refuses a file command that is unset, outside the
+//     $GITHUB_ENV file's directory (FileCommandDir), relative or not already
+//     clean (IsCleanAbsolute); after them it replaces a step summary whose
+//     path no longer names the file it opened with an empty regular file,
+//     never following a link, and fails the run.
 //
 // Run takes the steps and prints one line: "finished", a constant class, the
 // preflight's Verdict, whose text is made of constants alone, or, when the
 // preflight's or the audit's CLI run was stopped by the launcher's
 // permission-mode check, "refused: " and the *claudecode.PermissionModeError's
-// fixed sentence (issue #592), which the steps keep through their wrapping. No step's
-// error text is printed: it can hold the CLI's output, the token or the canary.
-// Once every step passed, Run hands the audit's bytes to its Result, the seam
-// the publication works from.
+// fixed sentence (issue #592), which the steps keep through their wrapping. No
+// step's error text is printed: it can hold the CLI's output, the token or the
+// canary. Once every step passed, Run hands the audit's bytes to its Result,
+// the seam the publication works from.
 // The CLI runs through the shared launcher ci/internal/claudecode with
 // LaunchConfig, built from the run's Inputs alone, so nothing of the caller's
 // environment reaches it. Every path is taken under a root that stands in for
