@@ -121,10 +121,10 @@ func SystemSteps(pid int, observer Observer) Steps {
 }
 
 // Preflight runs the sandbox preflight (ADR 0040, "The sandbox preflight"):
-// it writes the control's nonce, opens probe 2's listener, records the
-// digest of the $GITHUB_ENV file's directory, has prober run the CLI with
-// the plan's prompt, has observer make the launcher's own observations once the listener is
-// closed - under a context detached from ctx's cancellation, so a run that
+// it writes the control's nonce, opens probe 2's listener, records the digest
+// of the $GITHUB_ENV file's directory, has prober run the CLI with the plan's
+// prompt, has observer make the launcher's own observations once the listener
+// is closed - under a context detached from ctx's cancellation, so a run that
 // was cancelled or timed out is still observed - and judges the transcript
 // with the step's nonce, token and canary. The control file is removed
 // afterwards, so the audit finds the work area as laid out.
@@ -508,6 +508,16 @@ var (
 // $GITHUB_ENV's, one the digest would not cover (issues #615, #614).
 func FileCommandDir(path string) string {
 	return filepath.Dir(filepath.Clean(path))
+}
+
+// IsCleanAbsolute reports whether path is absolute and already its own
+// cleaned form, as the runner sets every file command's path. auditrun
+// refuses any other (issue #614): FileCommandDir's comparison is lexical, so a
+// path that names its directory only after Clean - a . or .. element, a
+// redundant separator - or a relative one, which names whatever directory the
+// step runs in, could pass it while the runner reads another file.
+func IsCleanAbsolute(path string) bool {
+	return filepath.IsAbs(path) && path == filepath.Clean(path)
 }
 
 // digest returns the sha256 of the runner's file-command directory, the one

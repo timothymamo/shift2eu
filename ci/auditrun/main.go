@@ -83,7 +83,64 @@ func runContext(ctx context.Context, args []string, getenv func(string) (string,
 	out, closeSummary := summaryWriter(stdout, stderr, in.StepSummary)
 	defer closeSummary()
 
-	return audit.Run{Root: root, Inputs: in, Steps: steps, Out: out, Result: resultWriter(resultOut)}.Run(ctx)
+	code := audit.Run{Root: root, Inputs: in, Steps: steps, Out: out, Result: resultWriter(resultOut)}.Run(ctx)
+
+	if !repairSummary(out, in.StepSummary) {
+		_, _ = fmt.Fprintln(stderr, "auditrun: the step summary's path changed during the run; it is replaced with an empty file")
+
+		if code == audit.ExitOK {
+			// A failed run leaves no result file for the encrypt step.
+			_ = os.Remove(resultOut)
+
+			return audit.ExitFailed
+		}
+	}
+
+	return code
+}
+
+// repairSummary checks, after the steps, that the step summary's path is still
+// the regular file summaryWriter opened (issue #615): it Lstats the path, so a
+// link is never followed, and compares it with the open descriptor's Stat. A
+// path that is no longer that file - a link, another file, or gone - is removed
+// without being followed and replaced with a new, empty regular file, so the
+// runner, which reads the summary by its path after the step, publishes
+// nothing the steps put there. It reports whether the summary was left as
+// opened; a step with no summary, or one that could not be opened, has nothing
+// to repair.
+func repairSummary(out io.Writer, path string) bool {
+	opened, ok := out.(*summaryOut)
+	if !ok {
+		return true
+	}
+
+	want, err := opened.file.Stat()
+	if err == nil {
+		got, lerr := os.Lstat(path)
+		if lerr == nil && got.Mode().IsRegular() && os.SameFile(want, got) {
+			return true
+		}
+	}
+
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return false
+	}
+
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, summaryMode) //nolint:gosec // G304: the runner's own step-summary path
+	if err == nil {
+		_ = file.Close()
+	}
+
+	return false
+}
+
+// summaryOut is the run's Out when the step has a summary: stdout and the
+// summary file summaryWriter opened, kept so repairSummary can compare it with
+// the path after the steps.
+type summaryOut struct {
+	io.Writer
+
+	file *os.File
 }
 
 // resultWriter is the run's Result: it writes the bytes the audit step read
@@ -184,12 +241,17 @@ func inputs(args []string, getenv func(string) (string, bool), stderr io.Writer)
 }
 
 // checkFileCommands refuses a step whose $GITHUB_PATH, $GITHUB_OUTPUT or
-// $GITHUB_STATE is unset, or whose file commands - those three and the step
-// summary, when set - are not all in the $GITHUB_ENV file's own directory
+// $GITHUB_STATE is unset, or whose file commands - $GITHUB_ENV, those three
+// and the step summary, when set - are not all clean absolute paths
+// (audit.IsCleanAbsolute) in the $GITHUB_ENV file's own directory
 // (audit.FileCommandDir): the audit digests that directory alone, so a file
 // command elsewhere would fall outside the digest (issues #615, #614). It reads
 // the paths only, never the files' content.
 func checkFileCommands(getenv func(string) (string, bool), gitHubEnv, stepSummary string) error {
+	if !audit.IsCleanAbsolute(gitHubEnv) {
+		return fmt.Errorf("%s is not a clean absolute path", envGitHubEnv)
+	}
+
 	dir := audit.FileCommandDir(gitHubEnv)
 
 	for _, name := range []string{envGitHubPath, envGitHubOut, envGitHubState} {
@@ -198,13 +260,27 @@ func checkFileCommands(getenv func(string) (string, bool), gitHubEnv, stepSummar
 			return fmt.Errorf("%s is not set", name)
 		}
 
-		if audit.FileCommandDir(path) != dir {
-			return fmt.Errorf("%s is not in the %s file's directory", name, envGitHubEnv)
+		if err := checkFileCommand(name, path, dir); err != nil {
+			return err
 		}
 	}
 
-	if stepSummary != "" && audit.FileCommandDir(stepSummary) != dir {
-		return fmt.Errorf("%s is not in the %s file's directory", envStepSummary, envGitHubEnv)
+	if stepSummary != "" {
+		return checkFileCommand(envStepSummary, stepSummary, dir)
+	}
+
+	return nil
+}
+
+// checkFileCommand refuses the file command name's path unless it is a clean
+// absolute path (audit.IsCleanAbsolute, issue #614) in the directory dir.
+func checkFileCommand(name, path, dir string) error {
+	if !audit.IsCleanAbsolute(path) {
+		return fmt.Errorf("%s is not a clean absolute path", name)
+	}
+
+	if audit.FileCommandDir(path) != dir {
+		return fmt.Errorf("%s is not in the %s file's directory", name, envGitHubEnv)
 	}
 
 	return nil
@@ -241,5 +317,5 @@ func summaryWriter(stdout, stderr io.Writer, path string) (io.Writer, func()) {
 		return stdout, func() {}
 	}
 
-	return io.MultiWriter(stdout, file), func() { _ = file.Close() }
+	return &summaryOut{Writer: io.MultiWriter(stdout, file), file: file}, func() { _ = file.Close() }
 }
