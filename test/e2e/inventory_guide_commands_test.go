@@ -4,6 +4,7 @@ package e2e_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,6 +15,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 // This file runs a command docs/guide/inventory.md documents, not just reads
@@ -39,9 +41,9 @@ const inventoryGuidePath = "../../docs/guide/inventory.md"
 // of the call's output per JSON value, and what the inventory program reads.
 const listCollectionsFile = "opensearchserverless-collections.json"
 
-// listCollectionsBlockStart is the guide's first line of the block: it empties
-// the file the pages are appended to.
-const listCollectionsBlockStart = `: > "$out/` + listCollectionsFile + `"`
+// listCollectionsBlockStart is the guide's first line of the block: it names the
+// file the pages are appended to, which the rest of the block writes through.
+const listCollectionsBlockStart = `f="$out/` + listCollectionsFile + `"`
 
 // fakeAWSCallSeparator is the line the fake aws program writes before each
 // call's arguments, so a call's words stay apart from the next call's.
@@ -89,6 +91,21 @@ var twoPages = []fakeAWSResponse{
 var failingSecondPage = []fakeAWSResponse{
 	twoPages[0],
 	{stderr: "the fake aws refused page 2", status: 254},
+}
+
+// failingFirstPage is a run whose very first page fails: no page was written, so
+// the collections file has to stay empty and the block has to say why, rather
+// than hand the program a file with nothing in it and no word about it.
+var failingFirstPage = []fakeAWSResponse{
+	{stderr: "the fake aws refused page 1", status: 254},
+}
+
+// repeatingToken is two pages that name the same continuation token, which a
+// region whose collections are being reindexed can do: a loop that trusts the
+// token asks for the same page for ever, and the guide's run never ends.
+var repeatingToken = []fakeAWSResponse{
+	{stdout: `{"collectionSummaries": [{"id": "0123456789abcdef0123456789abcdef", "name": "shop-vectors"}], "nextToken": "t2"}`},
+	{stdout: `{"collectionSummaries": [{"id": "fedcba9876543210fedcba9876543210", "name": "shop-thumbnails"}], "nextToken": "t2"}`},
 }
 
 // TestInventoryGuideListCollectionsBlock runs the guide's own list-collections
@@ -156,6 +173,53 @@ func TestInventoryGuideListCollectionsBlock(t *testing.T) {
 		if !strings.Contains(strings.ToLower(run.stderr), "incomplete") {
 			t.Errorf("the block's stderr does not say the collections file is incomplete, so the truncation is silent; stderr = %q",
 				run.stderr)
+		}
+	})
+
+	t.Run("says the file is empty when the first page fails", func(t *testing.T) {
+		t.Parallel()
+
+		run := runInventoryGuideBlock(t, "bash", "", block, failingFirstPage)
+
+		if run.exitStatus != 0 {
+			t.Errorf("the block exited %d, want 0, so the run stops before it reports the failure; stderr = %q",
+				run.exitStatus, run.stderr)
+		}
+
+		if len(run.calls) != 1 {
+			t.Errorf("the block called aws %d times, want 1: the first page is the one that fails, and there is no token to ask a second page with\n%s",
+				len(run.calls), formatFakeAWSCalls(run.calls))
+		}
+
+		if len(run.collections) != 0 {
+			t.Errorf("%s holds %d JSON values after the first page failed, want 0: the block has no page to write, and an empty file it does not report reads as a region without collections",
+				listCollectionsFile, len(run.collections))
+		}
+
+		if !strings.Contains(run.stderr, listCollectionsFile) {
+			t.Errorf("the block wrote no message to stderr naming %s after the first page failed, so a run that collected nothing leaves a file that looks complete; stderr = %q",
+				listCollectionsFile, run.stderr)
+		}
+	})
+
+	t.Run("stops when a page repeats its token", func(t *testing.T) {
+		t.Parallel()
+
+		run := runInventoryGuideBlock(t, "bash", "", block, repeatingToken)
+
+		if run.exitStatus != 0 {
+			t.Errorf("the block exited %d, want 0, so the run stops before it reports the repeated token; stderr = %q",
+				run.exitStatus, run.stderr)
+		}
+
+		if len(run.calls) != 2 {
+			t.Errorf("the block called aws %d times, want 2: the second page names the token the first one named, so a loop that trusts the token asks the same page for ever\n%s",
+				len(run.calls), formatFakeAWSCalls(run.calls))
+		}
+
+		if !strings.Contains(run.stderr, listCollectionsFile) {
+			t.Errorf("the block wrote no message to stderr naming %s after a page repeated its token, so a run that keeps asking for the same page says nothing about the file it leaves; stderr = %q",
+				listCollectionsFile, run.stderr)
 		}
 	})
 
@@ -269,6 +333,11 @@ func inventoryGuideListCollectionsBlock(t *testing.T) string {
 	return block
 }
 
+// blockRunTimeout bounds one run of the guide's block. A block that never reaches
+// its last page, or that waits for something a visitor's shell never gives it,
+// fails the check here instead of hanging the test.
+const blockRunTimeout = 20 * time.Second
+
 // runInventoryGuideBlock runs block under shellName with preamble prepended,
 // against a fake aws program that answers with pages, one per call, and returns
 // what the run did. out is a temporary directory, so the guide's own "$out"
@@ -308,8 +377,13 @@ func runInventoryGuideBlock(t *testing.T, shellName, preamble, block string, pag
 	// The block calls jq and aws by name, so the PATH it runs with names their
 	// directories and nothing of the test process's environment goes with it:
 	// there are no credentials in it to hand a visitor's command (CLAUDE.md
-	// rule 3), and the fake aws stands where a real one would.
-	cmd := exec.Command(shell, script)
+	// rule 3), and the fake aws stands where a real one would. The deadline is
+	// the run's, not the test's: a block that asks the same page for ever is
+	// stopped here and reported below.
+	ctx, cancel := context.WithTimeout(t.Context(), blockRunTimeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, shell, script)
 	cmd.Env = []string{
 		"PATH=" + fakeDir + ":" + filepath.Dir(jq) + ":" + filepath.Dir(shell),
 		"out=" + outDir,
@@ -322,6 +396,11 @@ func runInventoryGuideBlock(t *testing.T, shellName, preamble, block string, pag
 	exitStatus := 0
 
 	if err := cmd.Run(); err != nil {
+		if ctx.Err() != nil {
+			t.Fatalf("the block was still running after %s, so it never reaches its last page: %v; stderr = %q",
+				blockRunTimeout, ctx.Err(), stderr.String())
+		}
+
 		var exitErr *exec.ExitError
 		if !errors.As(err, &exitErr) {
 			t.Fatalf("run %s %s: %v", shell, script, err)

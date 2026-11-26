@@ -653,6 +653,11 @@ func TestInventoryCommandsAreTheGuides(t *testing.T) {
 // ci/sitebuild fills with the guide's commands, and no command text of its own.
 // The placeholder is a Go template action whose body names the commands field, so
 // the page cannot carry a copy of the guide that would drift from it.
+//
+// A command copied into the page by hand shows up line for line, so a whole line
+// is what the last check compares: a substring match would flag any page that is
+// laid out conventionally, since a block's `fi` sits inside "first", its `}`
+// inside a template action's `}}`, and its `do` inside "download".
 func TestInventoryPageHasNoHandTypedCommand(t *testing.T) {
 	t.Parallel()
 
@@ -680,19 +685,119 @@ func TestInventoryPageHasNoHandTypedCommand(t *testing.T) {
 
 	guide := string(readRepositoryFile(t, filepath.Join("docs", "guide", "inventory.md")))
 
-	for _, command := range guideCommands(t, guide, guideSources[0]) {
-		for _, line := range strings.Split(command, "\n") {
-			line = strings.TrimSpace(line)
-			if line == "" || strings.HasPrefix(line, "#") {
-				continue
-			}
+	for _, line := range pastedCommandLines(guideCommands(t, guide, guideSources[0]), pageLines(doc, source)) {
+		t.Errorf("site/%s holds the guide's command line %q on a line of its own, want a placeholder instead: the commands come from docs/guide/inventory.md at build time (issue #373, item 15)",
+			inventoryPageName, line)
+	}
 
-			if strings.Contains(string(source), line) {
-				t.Errorf("site/%s holds the guide's command line %q, want a placeholder instead: the commands come from docs/guide/inventory.md at build time (issue #373, item 15)",
-					inventoryPageName, line)
+	t.Run("flags a pasted command line and nothing else", func(t *testing.T) {
+		t.Parallel()
+
+		tests := []struct {
+			name     string
+			commands []string
+			page     string
+			want     []string
+		}{{
+			name:     "a one-line command pasted as it is",
+			commands: []string{"aws opensearchserverless list-collections --output json --max-results 100"},
+			page:     "<pre><code>aws opensearchserverless list-collections --output json --max-results 100</code></pre>\n",
+			want:     []string{"aws opensearchserverless list-collections --output json --max-results 100"},
+		}, {
+			name:     "one line of a multi-line command pasted as it is",
+			commands: []string{"f=\"$out/opensearchserverless-collections.json\"\n: > \"$f\"\ntoken=\nwhile :; do\ndone"},
+			page:     "<pre><code>: &gt; &quot;$f&quot;\n</code></pre>\n",
+			want:     []string{`: > "$f"`},
+		}, {
+			name:     "a conventionally laid-out block whose short lines stand inside other words",
+			commands: []string{"if ! page=$(aws opensearch list-domain-names); then\n  fi\n}\ndo\ndone\n;;\nesac"},
+			page:     "<p>The first page</p>\n<meta content=\"{{.Ref}}\">\n<p>elsewhere</p>\n",
+		}, {
+			name:     "a line the page holds only as part of a longer line",
+			commands: []string{"aws ec2 describe-volumes"},
+			page:     "<pre><code>aws ec2 describe-volumes --output json</code></pre>\n",
+		}, {
+			name:     "a line of three words the page holds only inside another line",
+			commands: []string{"printf '%s\\n' \"$page\""},
+			page:     "<pre><code>printf '%s\\n' &quot;$page&quot; &gt;&gt; &quot;$out/opensearchserverless-collections.json&quot;</code></pre>\n",
+		}}
+
+		for _, tc := range tests {
+			t.Run(tc.name, func(t *testing.T) {
+				t.Parallel()
+
+				source := []byte(tc.page)
+
+				got := pastedCommandLines(tc.commands, pageLines(parseHTML(t, tc.name, source), source))
+				if diff := cmp.Diff(tc.want, got); diff != "" {
+					t.Errorf("pastedCommandLines() differs from the lines the page holds (-want +got):\n%s", diff)
+				}
+			})
+		}
+	})
+}
+
+// pageLines returns the lines of the page a hand-typed command could land on:
+// the trimmed lines of its source, and the trimmed lines of the text of each
+// <pre> and <code> element, which is where a command is written. A line of fewer
+// than two words is kept here, since whole-line comparison makes a short line
+// harmless, and the shell reserved words are skipped by pastedCommandLines.
+func pageLines(doc *document, source []byte) map[string]bool {
+	lines := map[string]bool{}
+
+	add := func(text string) {
+		for _, line := range strings.Split(text, "\n") {
+			if trimmed := strings.TrimSpace(line); trimmed != "" {
+				lines[trimmed] = true
 			}
 		}
 	}
+
+	add(string(source))
+
+	for _, tag := range []string{"pre", "code"} {
+		for _, el := range doc.find(tag) {
+			add(el.textContent())
+		}
+	}
+
+	return lines
+}
+
+// shellReservedWords are the lines of a shell block that run no command of their
+// own. They are the shortest lines a block has, so a substring match on one flags
+// any page at all: not compared whole, they are skipped, and a command a visitor
+// could paste is never one of them.
+var shellReservedWords = map[string]bool{
+	"do": true, "done": true, "then": true, "else": true, "elif": true,
+	"fi": true, "{": true, "}": true, ";;": true, "esac": true,
+}
+
+// pastedCommandLines returns the lines of commands that the page holds as lines
+// of its own, in the guide's order: a command copied into the page by hand shows
+// up line for line, so a whole line is what this compares and a line the page
+// holds only as part of a longer one is no copy. A line of fewer than two words,
+// and a shell reserved word, names no command a visitor would paste, and skipping
+// them keeps a conventionally laid-out block from being flagged.
+func pastedCommandLines(commands []string, lines map[string]bool) []string {
+	var pasted []string
+
+	for _, command := range commands {
+		for _, line := range strings.Split(command, "\n") {
+			trimmed := strings.TrimSpace(line)
+
+			switch {
+			case trimmed == "", strings.HasPrefix(trimmed, "#"):
+				continue
+			case len(strings.Fields(trimmed)) < 2, shellReservedWords[trimmed]:
+				continue
+			case lines[trimmed]:
+				pasted = append(pasted, trimmed)
+			}
+		}
+	}
+
+	return pasted
 }
 
 // TestInventoryCommandsHaveACopyButton pins the copy control (issue #373, item
@@ -1625,6 +1730,47 @@ func TestInventoryGuideAWSPolicyCoversEveryCollectCall(t *testing.T) {
 	if len(missing) > 0 {
 		t.Errorf("the guide's AWS collect commands make %d call(s) whose IAM action the guide's minimal policy does not allow, want every one of them allowed:\n  %s\nThe policy is the only permission the guide asks a reader to hold, so each of these calls meets AccessDenied and the resource it describes or sizes stays out of the inventory (PRD #571, milestone 2, audit finding)",
 			len(missing), strings.Join(missing, "\n  "))
+	}
+}
+
+// awsReadActionPrefixes are the operation-name prefixes of the IAM actions that
+// only read: a Describe, List, Get, BatchGet or Select action says what a resource
+// is or which resources there are, and changes nothing.
+var awsReadActionPrefixes = []string{"Describe", "List", "Get", "BatchGet", "Select"}
+
+// TestInventoryGuideAWSPolicyGrantsOnlyReadActions pins the read-only rule of the
+// policy the guide tells a reader to create (CLAUDE.md rule 1, PRD #571,
+// milestone 2): every action it lists is a read, its operation starting with
+// Describe, List, Get, BatchGet or Select, and no action holds a wildcard, which
+// would grant whatever AWS adds to the same prefix later. The policy is the one
+// permission the guide asks a reader to hold, so an action that changed
+// something would break the inventory's single promise.
+func TestInventoryGuideAWSPolicyGrantsOnlyReadActions(t *testing.T) {
+	t.Parallel()
+
+	guide := string(readRepositoryFile(t, filepath.Join("docs", "guide", "inventory.md")))
+	actions := guideAWSPolicyActions(t, guide)
+
+	for _, action := range actions {
+		if strings.Contains(action, "*") {
+			t.Errorf("the guide's AWS policy allows %q, want no wildcard: the policy grants the reads the page's calls make, and a wildcard grants whatever AWS adds to the same prefix later",
+				action)
+
+			continue
+		}
+
+		service, operation, ok := strings.Cut(action, ":")
+		if !ok || service == "" || operation == "" {
+			t.Errorf("the guide's AWS policy allows %q, want `service:Operation`, so this check can read the operation the action names",
+				action)
+
+			continue
+		}
+
+		if !slices.ContainsFunc(awsReadActionPrefixes, func(prefix string) bool { return strings.HasPrefix(operation, prefix) }) {
+			t.Errorf("the guide's AWS policy allows %q, want a read: its operation starts with one of %s, and %q starts with none of them",
+				action, strings.Join(awsReadActionPrefixes, ", "), operation)
+		}
 	}
 }
 
