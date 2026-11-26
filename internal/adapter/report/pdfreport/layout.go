@@ -1,6 +1,9 @@
 package pdfreport
 
-import "strings"
+import (
+	"slices"
+	"strings"
+)
 
 // The page geometry, in points. Text runs from the left margin over the content
 // width; the header sits at the top of every page and the footer at its foot.
@@ -286,6 +289,20 @@ type document struct {
 	// onNewPage, when set, draws something at the top of every new page, such
 	// as the header row of a table that continues there.
 	onNewPage func()
+	// kept holds the headings drawn since the last body line: they are kept
+	// with the block that follows them, so a page break before that block
+	// moves them to the new page too.
+	kept keptHeadings
+	// inHeading is true while a heading's own lines are drawn.
+	inHeading bool
+}
+
+// keptHeadings marks the headings at the foot of the current page that no
+// body line has followed yet: they start at run index run of the page, at y.
+type keptHeadings struct {
+	active bool
+	run    int
+	y      int
 }
 
 // newDocument returns a document whose body runs from top down to bottom.
@@ -313,11 +330,36 @@ func (d *document) newPage() {
 	}
 }
 
-// ensure starts a new page unless height points fit above the bottom.
+// ensure starts a new page unless height points fit above the bottom. Headings
+// that no body line has followed yet move to the new page with what follows
+// them, so a heading never ends a page.
 func (d *document) ensure(height int) {
-	if !d.atTop && d.y-height < d.bottom {
-		d.newPage()
+	if d.atTop || d.y-height >= d.bottom {
+		return
 	}
+
+	if !d.kept.active || d.inHeading || d.kept.y >= d.top {
+		d.newPage()
+
+		return
+	}
+
+	old := d.page()
+	moved := slices.Clone(old.runs[d.kept.run:])
+	old.runs = old.runs[:d.kept.run]
+	shift := d.top - d.kept.y
+	y := d.y + shift
+
+	d.newPage()
+
+	for _, run := range moved {
+		run.y += shift
+		d.page().runs = append(d.page().runs, run)
+	}
+
+	d.kept = keptHeadings{active: true, run: 0, y: d.top}
+	d.y = y
+	d.atTop = false
 }
 
 // space moves down by points, unless the page is still empty.
@@ -345,6 +387,10 @@ func (d *document) drawLineHere(line textLine, x, size int) {
 	}
 
 	d.atTop = false
+
+	if !d.inHeading {
+		d.kept = keptHeadings{}
+	}
 }
 
 // paragraph lays out segs at the left edge plus indent and draws them.
@@ -376,18 +422,53 @@ func (d *document) item(indent int, segs ...seg) {
 }
 
 // heading draws a heading of the given size and leading, kept on one page with
-// the lines that follow it: a heading never ends a page.
+// the block that follows it: a heading never ends a page. It asks for room for
+// itself and keepWithHeading more; when the block that follows needs more than
+// that, the page break that block's ensure makes moves the heading along
+// (document.ensure).
 func (d *document) heading(size, leading, before int, segs ...seg) {
 	lines := layoutSegs(contentWidth, segs...)
 
 	d.space(before)
+
+	if len(lines)*leading+keepWithHeading > d.top-d.bottom {
+		// A heading taller than a page, which only a very long value makes
+		// it, would end the page it runs over whatever is done: it is drawn
+		// at the body size as a paragraph instead, so no page ends with
+		// heading lines.
+		d.body(resized(bodySize, segs)...)
+		d.y -= 2
+
+		return
+	}
+
 	d.ensure(len(lines)*leading + keepWithHeading)
+
+	if !d.kept.active {
+		d.kept = keptHeadings{active: true, run: len(d.page().runs), y: d.y}
+	}
+
+	// The ensure above left room for every line, so none of them breaks the
+	// page.
+	d.inHeading = true
 
 	for _, line := range lines {
 		d.drawLine(line, marginLeft, size, leading)
 	}
 
+	d.inHeading = false
 	d.y -= 2
+}
+
+// resized returns segs drawn at size, in their own fonts.
+func resized(size int, segs []seg) []seg {
+	out := make([]seg, len(segs))
+	for i, s := range segs {
+		s.size = size
+		out[i] = s
+	}
+
+	return out
 }
 
 // headingSize returns the type size of a heading of level 1, 2 or 3.

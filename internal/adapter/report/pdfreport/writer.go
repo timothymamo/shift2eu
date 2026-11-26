@@ -6,12 +6,10 @@ import (
 )
 
 // The file's fixed frame: the header, which names PDF 1.7 (ISO 32000-1), and
-// the end-of-file marker. The marker is split so that no string literal of the
-// package holds a percent sign before a letter a float verb would use: that is
-// what TestNoFloatingPoint's holdsFloatVerb looks for, and "%%EOF" holds "%E".
+// the end-of-file marker.
 const (
 	fileHeader = "%PDF-1.7\n"
-	fileEnd    = "%%" + "EOF\n"
+	fileEnd    = "%%EOF\n"
 )
 
 // infoTitle is the one entry of the /Info dictionary: a constant, never a value.
