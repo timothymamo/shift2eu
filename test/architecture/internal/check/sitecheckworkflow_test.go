@@ -26,11 +26,14 @@ import (
 // The pins are the ones milestone 4's Layer 3 lists: one schedule and no other
 // trigger, no permission by default and exactly two jobs, the checking job with
 // contents: read and attestations: read and no actions: read, its checkout
-// keeping no credential, every action pinned by commit SHA, the live version
-// matched against the tag list and accepted only within the version window
-// whose anchor is the highest tag's committer date and whose bound is
-// check.SiteCheckWindow, the attestation verified with the deploy's and the
-// guide's flags, and an alert job that holds issues: write alone and writes
+// keeping no credential, every action pinned by commit SHA, the tag list read
+// exactly as release.yml's site-check job reads it, the release tags merged into
+// main and nothing else, the live version matched against that list and accepted
+// only within the version window whose anchor is the highest tag's committer
+// date and whose bound is check.SiteCheckWindow, the anchor passed to the
+// script through env: and never pasted into it, the attestation verified with
+// the deploy's and the guide's flags, and an alert job that holds issues: write
+// alone, creates its label idempotently before it opens the issue, and writes
 // fixed text plus the failed run's URL, never an output of the checking job.
 
 // siteCheckWorkflow is .github/workflows/site-check.yml.
@@ -71,15 +74,16 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false # see the comment on the release's test job
-      # The highest release tag on main and the committer date of its commit,
-      # which contents: read can read and actions: read cannot. The window is
+      # The release tags on main, read exactly as release.yml's site-check job
+      # reads them, and the committer date of the highest one's commit, which
+      # contents: read can read and actions: read cannot. The window is
       # anchored there.
       - name: The expected release
         id: expected
         run: |
           set -euo pipefail
-          git fetch --quiet --force --tags origin
-          mapfile -t tags < <(git tag --list 'v*.*.*' | sort -V)
+          git fetch --quiet --force origin '+refs/heads/main:refs/remotes/origin/main' '+refs/tags/v*:refs/tags/v*'
+          mapfile -t tags < <(git tag -l 'v*.*.*' --merged refs/remotes/origin/main | sed -nE '/^v[0-9]+\.[0-9]+\.[0-9]+$/p' | sort -V)
           expected="${tags[-1]}"
           printf '%s\n' "${tags[@]}" > "${RUNNER_TEMP}/tags.txt"
           anchor="$(git log -1 --format=%cI "${expected}")"
@@ -90,12 +94,15 @@ jobs:
       # that is below the highest tag outside the window, and prints the tag
       # list's own entry. The grep re-checks that entry against the tag list, so
       # every command after it takes its tag from the repository, never from
-      # the page.
+      # the page. The anchor reaches the script through env: and is never pasted
+      # into it: a ${{ }} in a run: is the runner pasting text as code.
       - name: The live version
         id: live
+        env:
+          ANCHOR: ${{ steps.expected.outputs.anchor }}
         run: |
           set -euo pipefail
-          live="$(go run ./ci/sitecheck live-version -tags "${RUNNER_TEMP}/tags.txt" -anchor "${{ steps.expected.outputs.anchor }}" -window 180m)"
+          live="$(go run ./ci/sitecheck live-version -tags "${RUNNER_TEMP}/tags.txt" -anchor "${ANCHOR}" -window 180m)"
           grep -qxF "${live}" "${RUNNER_TEMP}/tags.txt"
           echo "tag=${live}" >> "${GITHUB_OUTPUT}"
       # The release the page names, downloaded and its build provenance verified
@@ -128,9 +135,11 @@ jobs:
       issues: write
     steps:
       # One issue with a fixed label, assigned to the maintainer, commented on
-      # when it is already open: editing an issue notifies no one. The issue
-      # holds fixed text and the failed run's URL only, never an output of the
-      # check job and never site content.
+      # when it is already open: editing an issue notifies no one. The label is
+      # created first, idempotently (--force): an issue takes a label the
+      # repository does not have yet from no run, and no run but this one could
+      # create it. The issue holds fixed text and the failed run's URL only,
+      # never an output of the check job and never site content.
       - name: Open or comment on the alert issue
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -141,6 +150,7 @@ jobs:
         run: |
           set -euo pipefail
           body="$(printf 'The scheduled live site check failed: %s\n' "${RUN_URL}")"
+          gh label create "${LABEL}" --repo "${GH_REPO}" --force --color ededed --description "The scheduled live site check"
           existing="$(gh issue list --repo "${GH_REPO}" --label "${LABEL}" --state open --json number --jq '.[0].number // empty')"
           if [ -n "${existing}" ]; then
             gh issue comment "${existing}" --repo "${GH_REPO}" --body "${body}"
@@ -281,9 +291,40 @@ func TestSiteCheckWorkflow(t *testing.T) {
 			new:  "-window 60m",
 		},
 		{
+			name: "a tag list that is not the release tags on main",
+			old:  "git tag -l 'v*.*.*' --merged refs/remotes/origin/main",
+			new:  "git tag -l 'v*.*.*'",
+		},
+		{
+			name: "a tag list without its vX.Y.Z filter",
+			old:  " | sed -nE '/^v[0-9]+\\.[0-9]+\\.[0-9]+$/p' | sort -V",
+			new:  " | sort -V",
+		},
+		{
+			name: "a fetch that takes neither main nor a release tag",
+			old:  "git fetch --quiet --force origin '+refs/heads/main:refs/remotes/origin/main' '+refs/tags/v*:refs/tags/v*'",
+			new:  "git fetch --quiet --force --tags origin",
+		},
+		{
 			name: "an anchor that is not the committer date",
 			old:  "git log -1 --format=%cI",
 			new:  "git log -1 --format=%aI",
+		},
+		{
+			name: "the anchor pasted into the run instead of passed through env",
+			old: `        env:
+          ANCHOR: ${{ steps.expected.outputs.anchor }}
+        run: |
+          set -euo pipefail
+          live="$(go run ./ci/sitecheck live-version -tags "${RUNNER_TEMP}/tags.txt" -anchor "${ANCHOR}" -window 180m)"`,
+			new: `        run: |
+          set -euo pipefail
+          live="$(go run ./ci/sitecheck live-version -tags "${RUNNER_TEMP}/tags.txt" -anchor "${{ steps.expected.outputs.anchor }}" -window 180m)"`,
+		},
+		{
+			name: "an expression pasted into the live version's run script",
+			old:  `-anchor "${ANCHOR}"`,
+			new:  `-anchor "${{ steps.expected.outputs.anchor }}"`,
 		},
 		{
 			name: "another signer workflow",
@@ -334,6 +375,16 @@ func TestSiteCheckWorkflow(t *testing.T) {
 			name: "an alert job that checks the repository out",
 			old:  "    permissions:\n      issues: write\n    steps:",
 			new:  "    permissions:\n      issues: write\n    steps:\n      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+		},
+		{
+			name: "an alert whose label is not created first",
+			old:  "          gh label create \"${LABEL}\" --repo \"${GH_REPO}\" --force --color ededed --description \"The scheduled live site check\"\n",
+			new:  "",
+		},
+		{
+			name: "a label created without --force",
+			old:  "--force --color ededed",
+			new:  "--color ededed",
 		},
 		{
 			name: "an alert that writes an output of the checking job",
