@@ -23,7 +23,9 @@ The tester runs [pi](https://pi.dev) on DeepSeek V4.1 Flash; every other role ru
 the code they check come from different model families, so one model's blind spots are less likely to
 end up in both ([ADR 0003](../adr/0003-pi-with-deepseek-for-the-tester-role.md)).
 The tester signs its commits with one trailer, `Co-Authored-By: pi (DeepSeek V4.1 Flash)`, without an
-email address, so GitHub credits no account for it (the `go-tdd` skill, issue #653).
+email address, so GitHub credits no account for it (the `go-tdd` skill, issue #653); CI's
+`coauthor-trailers` job refuses a pull request whose commits carry a co-author address
+`.github/co-author-addresses.txt` does not list (issue #663).
 
 The agents run inside a [Lima](https://lima-vm.io) VM that can see this repository's workspace (the
 directory you clone it into, which holds only the repository and the worktrees dot-agent-deck's

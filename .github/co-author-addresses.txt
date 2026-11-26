@@ -1,0 +1,27 @@
+# The addresses a Co-Authored-By trailer may carry (issue #663). GitHub credits the account an address
+# belongs to with every commit whose trailer names it, and a squash merge copies a pull request's trailers
+# onto main, so a trailer that carries an address must carry one the project owns or uses.
+#
+# Read by test/lint (TestBranchCoAuthorTrailers, coauthortrailer_rule_test.go), which checks the branch's
+# own commits against this list; a trailer with no address at all, such as
+# "Co-Authored-By: pi (DeepSeek V4.1 Flash)", needs no entry. One address per line, compared in any
+# letter case, no angle brackets; # starts a comment line. See the Commits section of
+# .claude/skills/go-tdd/SKILL.md.
+#
+# Never add noreply@pi.dev, noreply@deepseek.com, noreply@earendil-works.com or pi@earendil-works.com:
+# they belong to third-party accounts, which the tester's old trailers credited.
+
+# Claude Code's commits.
+noreply@anthropic.com
+
+# The agents' App, the release App and the scheduled audit's App.
+357791782+shift2eu-agents[bot]@users.noreply.github.com
+355849575+shift2eu-release[bot]@users.noreply.github.com
+359886496+shift2eu-audit[bot]@users.noreply.github.com
+
+# Renovate.
+29139614+renovate[bot]@users.noreply.github.com
+
+# The maintainer.
+tim@themamo.com
+github@timothymamo.com

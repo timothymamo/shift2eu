@@ -299,6 +299,18 @@
 // TestWriteVerbsMatchForbidigo keeps the write verbs the same here and in
 // .golangci.yml.
 //
+// TestBranchCoAuthorTrailers (coauthortrailer_rule_test.go, issue #663) reads
+// the branch's own commits with git log, the range coAuthorRange picks
+// (SHIFT2EU_COAUTHOR_RANGE, or origin/main..HEAD, or a skip), and fails on
+// every line that starts with Co-Authored-By: and carries an address
+// .github/co-author-addresses.txt does not list, or a malformed one: GitHub
+// credits that address's account, and a squash merge copies the trailers onto
+// main. CI's coauthor-trailers job, part of the Lint check, passes the pull
+// request's base..head over a full clone with SHIFT2EU_COAUTHOR_CHECK=require,
+// so it never skips there; every other run on a pull request's shallow
+// checkout skips. TestCoAuthorFindings, TestParseCoAuthorAllowList,
+// TestCoAuthorRange and TestCoAuthorAllowListFile pin its helpers and the list.
+//
 // TestOpenTofuRequiredVersionRuleStripsTheV (renovateopentofu_test.go, issue
 // #434) reads .github/renovate.json5 as JSON5, with the reader of
 // aireviewrenovate_test.go, and pins that the packageRule pointing

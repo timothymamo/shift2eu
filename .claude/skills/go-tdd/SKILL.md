@@ -55,6 +55,12 @@ Never add a trailer with an email address you do not own (`noreply@pi.dev`, `nor
 `noreply@pi.dev` belongs to a third-party account (issue #653). The squash merge copies the trailers of
 a PR's commits, so a wrong one reaches `main`.
 
+`test/lint`'s `TestBranchCoAuthorTrailers` (issue #663) enforces this on a branch's own commits, in CI's
+`coauthor-trailers` job: every line of a commit message that starts with `Co-Authored-By:`, in any case
+and in prose too, must carry no address or one `.github/co-author-addresses.txt` lists, so never start a
+wrapped body line with the key. To allow a new address the project owns, add it to that file on a line
+of its own, with a comment saying whose it is.
+
 ## Conventions
 
 - Table-driven tests with `t.Run(tc.name, ...)`; call `t.Parallel()` in the test and each subtest unless
