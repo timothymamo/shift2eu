@@ -229,18 +229,21 @@ layer, and an ingest key can only write data, not read it, so a leak costs junk 
 - **How it gets there** (decision 5): either by hand in the VM (a `read -rs` prompt piped into
   `sudo install -m 0640 -o root -g otelcol /dev/stdin /etc/shift2eu/otelcol.env`, never on a command
   line), or by a new make target on the Mac's host clone, `make vm-telemetry-key`, which, like
-  `make vm-env`, reads one named variable from the host clone's environment and writes it over standard
-  input. The make target survives `make vm-delete` and a rebuild, as the Keychain keeps the key.
+  `make vm-env`, reads one named variable (`HONEYCOMB_API_KEY`) from the environment the host clone's
+  `.envrc` sets (where that `.envrc` takes it from, a Keychain lookup or a value, is the maintainer's
+  choice, as for `VM_ENV`'s credentials; `docs/dev-environment.md`, The host clone) and writes it over
+  standard input. It survives `make vm-delete` and a rebuild, as the key stays on the Mac.
 - `dot-agent-deck-collector` runs as the VM user (it must see the agents' processes) and sends to the
   local Collector, so it needs no key either; its `EnvironmentFile` holds only the endpoint and is
   written by provisioning.
 - **Provisioning** (`dev/lima.yaml`) installs and pins `otelcol-contrib` and `dot-agent-deck-collector`,
   creates the `otelcol` user, the config, the units and the drop-in, and leaves the key file absent. The
   Collector's unit has `ConditionPathExists=/etc/shift2eu/otelcol.env`, so without the key it does not
-  start, and the deck's export failures are logged at most once a minute.
+  start, and the daemon's `telemetry.conf` is absent too (decision 4), so the deck sends nothing.
 - **Rule 3's deny rules** gain, in both `.claude/settings.json` and `.pi/deny-env-printing.json`:
-  `Read(//etc/shift2eu/**)` and `Bash(*/etc/shift2eu*)`; `Bash(*otelcol.env*)`; `Bash(*HONEYCOMB*)` (a
-  `$HONEYCOMB_API_KEY` expansion or a `grep` for the name); the Collector's `print-config` subcommand
+  `Read(//etc/shift2eu/**)` and `Bash(*/etc/shift2eu*)`; `Bash(*otelcol.env*)`; the expansions
+  `Bash(*$HONEYCOMB*)` and `Bash(*${HONEYCOMB*)` (only these, so an agent writing M1's tests can still
+  name the variable in a command); the Collector's `print-config` subcommand
   (`Bash(*otelcol* print-config*)`), which can print a resolved configuration; and
   `Bash(*systemctl show otelcol*)` style reads of the unit's environment. CLAUDE.md rule 3 names the new
   file beside `daemon.env`.
@@ -256,7 +259,8 @@ does not reach resource attributes or span events). `test/devenv` checks both le
 |---|---|---|---|
 | Prompts, responses, tool input and output, raw API bodies | Claude Code (content switches) | Never sent: the switches stay unset; the Collector also deletes `prompt`, `prompt_text`, `response`, `tool_parameters`, `tool_input`, `error`, `body` should one ever be set | Second fence |
 | `user.email`, `user.account_uuid`, `user.account_id`, `organization.id` | Every Claude Code metric and event | Dropped in the Collector; `OTEL_METRICS_INCLUDE_ACCOUNT_UUID=false` in the drop-in too | Identifies the maintainer's account; no question needs it |
-| `user.id`, `session.id` | Claude Code | Kept | Random ids; `session.id` joins events within a session |
+| `user.id` | Claude Code | Dropped in the Collector | A stable per-installation id (kept in `~/.claude.json`), so a pseudonymous id of the maintainer's install; no question needs it |
+| `session.id` | Claude Code | Kept | Per session; joins events within a session, beside `deck.run.id` |
 | `vcs.ref.head.name` (branch), `vcs.repository.name`, `deck.skill.name`, `deck.orchestration.name`, `deck.dispatch.name`, role names | Deck | Kept | The repository is public, so its branches, skills and roles are public; they are how a run is joined to a PR (decision 7) |
 | `deck.operation.program`, `.word`, `.commands`, `.wrapped.*` | Deck `agent.operation` | Kept | The "where does shell time go" question needs them; the deck's rules already drop paths, quotes and the arguments of `curl`, `grep`, `ssh` and the like |
 | `host.name` | Everything | Replaced by a fixed name (`vm-shift2eu`, `mac-host`) | A Mac's hostname can carry the owner's name |
@@ -271,7 +275,8 @@ does not reach resource attributes or span events). `test/devenv` checks both le
   and `github-release-attachments` for the digests, as for `cli/cli` and `cosign`); `dot-agent-deck-collector`
   from the same pinned deck release, checked against the same `checksums.txt`; the `otelcol` user,
   `/etc/shift2eu/otelcol.yaml`, the system unit, the user unit `dot-agent-deck-collector.service` and its
-  endpoint-only env file, and a drop-in `telemetry.conf` for the daemon. No key.
+  endpoint-only env file, and the daemon's drop-in `telemetry.conf`, written only while the key file
+  exists and removed while it does not (decision 4). No key.
 - `dev/otelcol.yaml` (or inline in `dev/lima.yaml`): the Collector's configuration, reviewed like code.
 - `docs/dev-environment.md`: a section **Observability** with the runbook: create the Honeycomb account
   (EU region) and environment, create an ingest key, put it on the VM, restart, check (the daemon's log
@@ -289,7 +294,8 @@ does not reach resource attributes or span events). `test/devenv` checks both le
 ## Acceptance criteria
 
 - [ ] Given the VM provisioned from `dev/lima.yaml` without a key file, when it boots, then the deck runs
-  as before, the Collector is installed but not started, and nothing is sent anywhere.
+  as before (no `telemetry.conf` drop-in, so no `OTEL_*` variable reaches the daemon or an agent), the
+  Collector is installed but not started, and nothing is sent anywhere.
 - [ ] Given the key file in place, when the maintainer follows the runbook's check, then an `agent.run`
   span, a `claude_code.api_request` event, a `pi.model_usage` record, a `deck.run.cpu.time` point and a
   `system.cpu.time` point for the VM appear in Honeycomb, all joined by `deck.run.id` where they belong
@@ -304,9 +310,9 @@ does not reach resource attributes or span events). `test/devenv` checks both le
   appears in the provisioning, or when the deny rules stop covering the key file in either agent.
 - [ ] Given an agent in a deck pane, when it tries to read the key file or print the Collector's
   configuration or environment, then the deny rules refuse it.
-- [ ] Given the runbook's "turn it off" (remove the key file and the `telemetry.conf` drop-in, restart the
-  daemon; decision 4), when the maintainer follows it, then the Collector is stopped, nothing leaves the
-  VM, and the agents start without `OTEL_*` variables.
+- [ ] Given the runbook's "turn it off" (remove the key file, then `make deck-restart`, which removes the
+  `telemetry.conf` drop-in and restarts the daemon; decision 4), when the maintainer follows it, then the
+  Collector is stopped, nothing leaves the VM, and the agents start without `OTEL_*` variables.
 - [ ] Given a month of data, then Honeycomb's usage page shows events and data points under the daily
   targets, and the trigger of milestone 5 has not fired.
 
@@ -317,10 +323,11 @@ Each ships as one PR, smallest first. Milestones 2 to 4 each add a signal, so ea
 1. [ ] **M1: the local Collector, the deck and the agents.** ADR; `otelcol-contrib` pinned and
    provisioned as the `otelcol` system service with the OTLP receiver, the trim, batching and the
    Honeycomb exporter; the daemon's `telemetry.conf` drop-in pointing the daemon (and so Claude Code and
-   Pi) at `http://127.0.0.1:4318` with `OTEL_METRICS_INCLUDE_ACCOUNT_UUID=false`; the deny rules;
+   Pi) at `http://127.0.0.1:4318` with `OTEL_METRICS_INCLUDE_ACCOUNT_UUID=false`, which provisioning
+   and `make deck-restart` write while the key file exists and remove while it does not; the deny rules;
    the runbook; `test/devenv` tests.
-   - M1.1 Without the key file the Collector does not start and the deck logs at most one export failure
-     a minute; agents are unaffected.
+   - M1.1 Without the key file the Collector does not start, the drop-in is absent and the deck and the
+     agents run exactly as before.
    - M1.2 With it, the runbook's check finds the deck's spans and logs, Claude Code's events and metrics
      and Pi's records in Honeycomb.
    - M1.3 The trim holds: no `user.email`, account id, content attribute or real `host.name` arrives,
@@ -377,13 +384,13 @@ For the maintainer to answer; each has a recommendation.
    `http://127.0.0.1:4318`, `OTEL_METRICS_INCLUDE_ACCOUNT_UUID=false`, the metric interval), written
    always, or only once the maintainer turns telemetry on. *Recommended: written by provisioning whenever
    the key file exists, and removed when it does not*, with the Collector starting only when its key file
-   exists: one switch, the key file. "Off" is removing the key file, then `make deck-restart` (or the
-   provisioning step) removing the drop-in and restarting the daemon, so the agents get no `OTEL_*`
-   variables at all; without that, the daemon would keep switching on Claude Code's telemetry with
-   nowhere to send it.
+   exists: one switch, the key file, re-read by provisioning and by `make deck-restart`, the two steps
+   that write the daemon's drop-ins. "Off" is removing the key file, then `make deck-restart`, which
+   removes the drop-in and restarts the daemon, so the agents get no `OTEL_*` variables at all; a
+   drop-in left without a key would keep switching on Claude Code's telemetry with nowhere to send it.
 5. **How the key reaches the VM.** By hand in the VM (a `read -rs` prompt into `sudo install`), or a
    `make vm-telemetry-key` target on the Mac's host clone that reads one variable from the host clone's
-   `.envrc` or Keychain and writes it over standard input, like `make vm-env`. *Recommended: the make
+   environment its `.envrc` sets and writes it over standard input, like `make vm-env`. *Recommended: the make
    target*: it survives a VM rebuild and reuses `make vm-env`'s checks; never `daemon.env`.
 6. **Drop whole spans?** `agent.operation` (the deck's only command-line-derived data) and
    `agent.status` (a third of the events). *Recommended: keep both* at first: the volume is far under
