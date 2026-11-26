@@ -230,7 +230,7 @@ GCP resource name or an Azure resource ID, which carry the account, project or s
 resources with the same short name, such as a function and a queue both called `orders`, get their
 type and region appended (`orders (AWS::SQS::Queue, eu-central-1)`) so every ID stays unique.
 
-The commands are written for a POSIX shell (bash, zsh).
+The commands are written for a POSIX shell (sh, dash, bash, zsh).
 
 ## AWS
 
@@ -248,6 +248,7 @@ only the calls this page makes:
       "Effect": "Allow",
       "Action": [
         "ec2:DescribeInstances",
+        "ec2:DescribeInstanceTypes",
         "ec2:DescribeVolumes",
         "ec2:DescribeSnapshots",
         "autoscaling:DescribeAutoScalingGroups",
@@ -323,15 +324,21 @@ jq -r '.DomainNames[].DomainName' "$out/opensearch-domain-names.json" |
   > "$out/opensearch-domains.json"
 
 : > "$out/opensearchserverless-collections.json"
-next=()
-while page=$(aws opensearchserverless list-collections --output json --max-results 100 "${next[@]}" \
-    --query '{collectionSummaries: collectionSummaries[].{id: id, name: name}, nextToken: nextToken}'); do
+token=
+while :; do
+  page=$(aws opensearchserverless list-collections --output json --max-results 100 \
+    ${token:+--next-token} ${token:+"$token"} \
+    --query '{collectionSummaries: collectionSummaries[].{id: id, name: name}, nextToken: nextToken}') || {
+    if [ -n "$token" ]; then echo "list-collections failed: $out/opensearchserverless-collections.json is incomplete, collect $out again" >&2
+    else echo "list-collections failed: $out/opensearchserverless-collections.json is empty; unless the region has no OpenSearch Serverless, it is incomplete, collect $out again" >&2; fi
+    break; }
   printf '%s\n' "$page" >> "$out/opensearchserverless-collections.json"
+  last=$token
   token=$(printf '%s' "$page" | jq -r '.nextToken // empty')
   [ -n "$token" ] || break
-  next=(--next-token "$token")
+  [ "$token" != "$last" ] || { echo "list-collections repeated its nextToken: $out/opensearchserverless-collections.json may be incomplete, collect $out again" >&2; break; }
 done
-jq -rn '[inputs | .collectionSummaries[]?.id] | .[]' "$out/opensearchserverless-collections.json" |
+jq -r '.collectionSummaries[]?.id' "$out/opensearchserverless-collections.json" |
   xargs -r -n 100 aws opensearchserverless batch-get-collection --output json --query '{collectionDetails:
     collectionDetails[].{name: name, arn: arn, type: type, standbyReplicas: standbyReplicas,
     status: status}}' --ids \
@@ -466,7 +473,11 @@ the whole region. Do not pass `--no-paginate` or `--max-items`. The one exceptio
 (20 collections by default), so the guide pages it by hand. Its loop asks for 100 collections a page,
 the documented maximum, passes each page's `nextToken` back as `--next-token` until a page returns
 none, and appends every page to `opensearchserverless-collections.json` as a JSON value of its own;
-the `batch-get-collection` call reads the IDs of every page.
+the `batch-get-collection` call reads the IDs of every page. A page that fails leaves the file
+incomplete: the loop stops, says so on stderr, and the region must be collected again. It also stops,
+with a message, if AWS hands back the token it was just given, rather than ask for the same page
+forever. A failed first page in a region without OpenSearch Serverless leaves an empty file, as
+below.
 
 `describe-instance-types` takes at most 100 instance types per call; `xargs -n 100` splits a longer list
 into several calls, and the program reads each. `elbv2 describe-tags` takes at most 20 load balancers per

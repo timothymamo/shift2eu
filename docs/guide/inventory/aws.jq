@@ -225,7 +225,7 @@ def inventory($source):
     | (.ClusterName, (.ClusterArn | short_id)) | [$type, ., $region]]
    + [$docs[] | .collectionDetails? // empty | .[]
       | (.arn | arn_region) as $region
-      | (.name, (.arn | short_id), (.id // empty))
+      | (.name, (.arn | short_id))
       | ["AWS::OpenSearchServerless::Collection", ., $region]]
    | unique)
   as $listed

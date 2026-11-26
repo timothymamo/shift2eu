@@ -671,7 +671,19 @@ text as the decision)
     finding B1): the guide pages it by hand, in one loop that asks for 100 a page, passes `nextToken`
     back as `--next-token` until a page has none, and appends each page to the collections file as a
     JSON value of its own; `batch-get-collection` reads the IDs of every page. No new IAM action.
+    Decided in milestone 2, review round 3 and the audit: the loop holds no shell array, so it runs in
+    POSIX sh, dash, bash 3.2 (also under `set -u`) and zsh; it passes the token as
+    `${token:+--next-token} ${token:+"$token"}`, two words or none in every one of them (finding N-a). A
+    failed page after the first stops the loop with a message on stderr that names the collections
+    file, says it is incomplete and that the region must be collected again; a failed first page says
+    the file is empty and incomplete unless the region has no OpenSearch Serverless, since the two
+    cannot be told apart from the exit status alone (finding S-B). A page that hands back the token it
+    was given stops the loop with a message, rather than loop forever (audit nit).
     <https://docs.aws.amazon.com/opensearch-service/latest/ServerlessAPIReference/API_ListCollections.html>
+  - **`ec2:DescribeInstanceTypes` in the policy.** Decided in milestone 2 (audit, low): the guide's
+    minimal policy lacked the action `ec2 describe-instance-types` needs, a gap older than this PRD that
+    milestone 2 widened, as the call now also sizes OpenSearch domains and MSK brokers. The policy now
+    grants it, next to `ec2:DescribeInstances`, and a test checks every collect call against the policy.
   - **Config rows by name or ID.** Decided in milestone 2 (review finding S1): AWS Config may record a
     collection by its ID alone and an MSK cluster by its ARN alone, so the program drops the Config
     row of a collection or cluster the call lists when its `resourceName` or its `resourceId` (an
