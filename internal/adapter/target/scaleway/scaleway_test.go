@@ -117,7 +117,7 @@ func TestCatalogSnapshotHeader(t *testing.T) {
 		t.Errorf("Snapshot().SourceURL = %s, want %s", text.Quote(snapshot.SourceURL), text.Quote(wantSourceURL))
 	}
 
-	wantRetrievedOn := time.Date(2026, time.November, 13, 0, 0, 0, 0, time.UTC)
+	wantRetrievedOn := time.Date(2026, time.November, 26, 0, 0, 0, 0, time.UTC)
 	if !snapshot.RetrievedOn.Equal(wantRetrievedOn) {
 		t.Errorf("Snapshot().RetrievedOn = %s, want %s",
 			snapshot.RetrievedOn.Format(time.RFC3339), wantRetrievedOn.Format(time.RFC3339))
@@ -636,6 +636,7 @@ func planNamed(t *testing.T, o catalog.Offering, name string) catalog.Plan {
 	return catalog.Plan{}
 }
 
+// TestKapsuleDedicatedInMilan pins issue #211: Scaleway's Containers price page,
 // first read 2026-11-13 and re-checked in Milan on 2026-11-19, lists the dedicated
 // Kapsule control plane there, so the offering is available and billed in it-mil as
 // it is in Paris. Its worker-node plans are the mutualized offering's: the POP2
@@ -1527,6 +1528,16 @@ func TestNewCategoryBestOfferingAndFit(t *testing.T) {
 			},
 		},
 		{
+			name:         "cache.redis/sharding and node-high-availability",
+			category:     taxonomy.CacheRedis,
+			capabilities: []taxonomy.Capability{taxonomy.Sharding, taxonomy.NodeHighAvailability},
+			wantFit:      mapping.Partial,
+			want: []candidateExpectation{
+				{Name: redisCluster, Fit: mapping.Partial, Missing: []taxonomy.Capability{taxonomy.NodeHighAvailability}},
+				{Name: redis, Fit: mapping.Partial, Missing: []taxonomy.Capability{taxonomy.NodeHighAvailability, taxonomy.Sharding}},
+			},
+		},
+		{
 			name:     "database.mongodb/no capabilities",
 			category: taxonomy.DatabaseMongoDB,
 			wantFit:  mapping.Direct,
@@ -1562,6 +1573,13 @@ func TestNewCategoryBestOfferingAndFit(t *testing.T) {
 			want:     []candidateExpectation{{Name: loadBalancer, Fit: mapping.Direct}},
 		},
 		{
+			name:         "network.loadbalancer/ipv6",
+			category:     taxonomy.NetworkLoadBalancer,
+			capabilities: []taxonomy.Capability{taxonomy.IPv6},
+			wantFit:      mapping.Direct,
+			want:         []candidateExpectation{{Name: loadBalancer, Fit: mapping.Direct}},
+		},
+		{
 			name:         "network.loadbalancer/udp",
 			category:     taxonomy.NetworkLoadBalancer,
 			capabilities: []taxonomy.Capability{taxonomy.UDP},
@@ -1590,6 +1608,13 @@ func TestNewCategoryBestOfferingAndFit(t *testing.T) {
 			category: taxonomy.ServerlessContainer,
 			wantFit:  mapping.Direct,
 			want:     []candidateExpectation{{Name: serverlessContainers, Fit: mapping.Direct}},
+		},
+		{
+			name:         "serverless.container/autoscaling",
+			category:     taxonomy.ServerlessContainer,
+			capabilities: []taxonomy.Capability{taxonomy.Autoscaling},
+			wantFit:      mapping.Direct,
+			want:         []candidateExpectation{{Name: serverlessContainers, Fit: mapping.Direct}},
 		},
 		{
 			name:     "registry.container/no capabilities",
