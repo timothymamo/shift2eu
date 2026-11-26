@@ -34,8 +34,9 @@ const coAuthorAdvice = "Name the co-author without an address (Co-Authored-By: p
 	"or with one " + coAuthorAllowListPath + " lists; see the Commits section of .claude/skills/go-tdd/SKILL.md."
 
 // commitMessage is one commit the check reads: its full SHA, its author's and
-// committer's email addresses ("" when not checked), and its whole message,
-// subject and body.
+// committer's email addresses, and its whole message, subject and body. An
+// empty address passes: git accepts an empty user.email, and an empty address
+// credits no GitHub account; a test that checks only messages leaves both "".
 type commitMessage struct {
 	SHA       string
 	Author    string
@@ -70,6 +71,8 @@ func coAuthorFindings(commits []commitMessage, allowed []string) []coAuthorFindi
 	var findings []coAuthorFinding
 	for _, c := range commits {
 		for _, id := range []struct{ role, addr string }{{"author", c.Author}, {"committer", c.Committer}} {
+			// An empty address (git accepts user.email=) credits no GitHub
+			// account, so it passes like an allowed one.
 			if id.addr == "" || allow[strings.ToLower(id.addr)] {
 				continue
 			}
@@ -268,7 +271,9 @@ func coAuthorCommitCount(getenv func(string) string, n int) error {
 func branchCommits(t *testing.T, root, spec string) []commitMessage {
 	t.Helper()
 
-	out, err := gitOutput(t, root, "log", "-z", "--no-color", "--format=%H%x00%ae%x00%ce%x00%B", "--end-of-options", spec)
+	// --no-show-signature and --no-notes keep a developer's log.showSignature
+	// or notes from putting extra text into the -z output.
+	out, err := gitOutput(t, root, "log", "-z", "--no-color", "--no-show-signature", "--no-notes", "--format=%H%x00%ae%x00%ce%x00%B", "--end-of-options", spec)
 	if err != nil {
 		t.Fatalf("git log %s: %v", spec, err)
 	}
@@ -281,8 +286,9 @@ func branchCommits(t *testing.T, root, spec string) []commitMessage {
 }
 
 // parseBranchCommits splits git log -z --format=%H%x00%ae%x00%ce%x00%B output
-// into commits. Every record is four NUL-separated fields, the last record
-// closed by -z's NUL or not; a SHA that is not 40 or 64 lower-case hex digits,
+// into commits. Every record is four NUL-separated fields, and -z's NUL closes
+// every record but the last, which is accepted with or without one closing
+// NUL (one trailing NUL is dropped before the split); a SHA that is not 40 or 64 lower-case hex digits,
 // or a field count that is no multiple of four, is an error, never a pass. A
 // message cannot hold a NUL (git refuses one), so the split is exact.
 func parseBranchCommits(out []byte) ([]commitMessage, error) {

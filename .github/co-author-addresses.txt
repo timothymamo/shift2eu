@@ -1,6 +1,7 @@
-# The addresses a Co-Authored-By trailer may carry (issue #663). GitHub credits the account an address
-# belongs to with every commit whose trailer names it, and a squash merge copies a pull request's trailers
-# onto main, so a trailer that carries an address must carry one the project owns or uses.
+# The addresses a commit's author, committer or Co-Authored-By trailer may carry (issue #663). GitHub
+# credits the account an address belongs to with every commit whose trailer names it, and a squash merge
+# copies a pull request's trailers onto main, so a trailer that carries an address must carry one the
+# project owns or uses.
 #
 # Read by test/lint (TestBranchCoAuthorTrailers, coauthortrailer_rule_test.go), which checks the branch's
 # own commits against this list, their author and committer addresses too (a squash merge credits every
