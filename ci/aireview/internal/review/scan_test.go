@@ -123,15 +123,14 @@ func namespaceMayFollowDelimiters(t *testing.T) []namespaceMayFollowDelimiter {
 	return records
 }
 
-// namespaceMayFollowAcceptedBytes returns the bytes the rule accepts right
-// before a namespace, from the shared list: the byte each record's text puts
-// directly before the namespace, and the newline, which a line of the list
-// cannot carry. The start-of-text record names no byte, the empty text no line
-// of a scan holds before its first run.
+// namespaceMayFollowAcceptedBytes returns the bytes the scan's rule accepts
+// right before a namespace, from the shared list: the byte each record's text
+// puts directly before the namespace. The start-of-text record names no byte:
+// it is the empty prefix, which the rule accepts without looking at a byte.
 func namespaceMayFollowAcceptedBytes(t *testing.T) map[byte]bool {
 	t.Helper()
 
-	accepted := map[byte]bool{'\n': true}
+	accepted := map[byte]bool{}
 
 	for _, record := range namespaceMayFollowDelimiters(t) {
 		before, _, ok := strings.Cut(record.text, namespaceMarker)
