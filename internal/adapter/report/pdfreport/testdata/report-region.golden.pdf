@@ -1014,7 +1014,7 @@ endobj
 << /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R /F2 4 0 R /F3 5 0 R >> >> /Contents 14 0 R >>
 endobj
 14 0 obj
-<< /Length 6375 >>
+<< /Length 6528 >>
 stream
 q
 0 G
@@ -1262,23 +1262,21 @@ BT
 (Estimates. ) Tj
 /F1 9 Tf
 1 0 0 1 98 155 Tm
-(A resource is matched to the cheapest plan of its best offering that covers its vCPUs and memory. Its monthly ) Tj
+(A resource is matched to the cheapest plan, among its best offering and the offerings tied with it, that covers its ) Tj
 1 0 0 1 50 143 Tm
-(estimate is plan price \327 count \327 hours / 730, with 730 hours for a resource that gives none and a count of 1 when it gives no ) Tj
+(vCPUs and memory; a Redis cache is matched on memory alone, and block, object and file storage have no plan: they cost ) Tj
 1 0 0 1 50 131 Tm
-(count; a plan billed for at most a number of hours a month costs plan price \327 count \327 min\(hours, cap\) / cap. Storage above ) Tj
+(the stored GiB \327 the price per GiB. A monthly estimate is plan price \327 count \327 hours / 730, with 730 hours for a resource that ) Tj
 1 0 0 1 50 119 Tm
-(what the plan includes is priced per GiB, and a fixed fee is the offering's listed fee. Amounts are rounded to the cent, half ) Tj
+(gives none and a count of 1 when it gives no count; a plan billed for at most a number of hours a month costs plan price \327 ) Tj
 1 0 0 1 50 107 Tm
-(away from zero. Prices are list prices on the catalog's retrieval date, excluding VAT and discounts: an estimate is not a ) Tj
+(count \327 min\(hours, cap\) / cap. Storage above what the plan includes is priced per GiB, per node \327 count except for a ) Tj
 1 0 0 1 50 95 Tm
-(quote.) Tj
-/F2 9 Tf
-1 0 0 1 50 80 Tm
-(Values. ) Tj
-/F1 9 Tf
-1 0 0 1 85 80 Tm
-(Every value from the inventory or a catalog is shown in Courier, as it is stored. A character the PDF's core fonts ) Tj
+(managed database, whose storage is counted once. A fixed fee is the offering's fee once per resource \327 hours / 730, never ) Tj
+1 0 0 1 50 83 Tm
+(capped. Amounts are rounded to the cent, half away from zero. Prices are list prices on the catalog's retrieval date, ) Tj
+1 0 0 1 50 71 Tm
+(excluding VAT and discounts: an estimate is not a quote.) Tj
 /F1 8 Tf
 1 0 0 1 50 810 Tm
 (shift2eu migration assessment: ) Tj
@@ -1297,7 +1295,7 @@ endobj
 << /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R /F2 4 0 R /F3 5 0 R >> >> /Contents 16 0 R >>
 endobj
 16 0 obj
-<< /Length 2134 >>
+<< /Length 2314 >>
 stream
 q
 0 G
@@ -1308,89 +1306,94 @@ S
 S
 Q
 BT
-/F1 9 Tf
+/F2 9 Tf
 1 0 0 1 50 779 Tm
-(cannot show is written as a visible escape in Go's style: \\u and four hex digits up to U+FFFF \(\\u0416 is the Cyrillic letter ) Tj
+(Values. ) Tj
+/F1 9 Tf
+1 0 0 1 85 779 Tm
+(Every value from the inventory or a catalog is shown in Courier, as it is stored. A character the PDF's core fonts ) Tj
 1 0 0 1 50 767 Tm
-(Zhe\), \\U and eight hex digits above it, \\x and two hex digits for a byte that is not valid UTF-8, and \\\\ for a backslash, so an ) Tj
+(cannot show is written as a visible escape in Go's style: \\u and four hex digits up to U+FFFF \(\\u0416 is the Cyrillic letter ) Tj
 1 0 0 1 50 755 Tm
-(escape never looks like a value's own text. A no-break space and a soft hyphen are escaped too, so they never pass for a ) Tj
+(Zhe\), \\U and eight hex digits above it, \\x and two hex digits for a byte that is not valid UTF-8, and \\\\ for a backslash, so an ) Tj
 1 0 0 1 50 743 Tm
+(escape never looks like a value's own text. A no-break space and a soft hyphen are escaped too, so they never pass for a ) Tj
+1 0 0 1 50 731 Tm
 (space or for nothing.) Tj
 /F2 9 Tf
-1 0 0 1 50 728 Tm
+1 0 0 1 50 716 Tm
 (Readiness score. ) Tj
 /F1 9 Tf
-1 0 0 1 127 728 Tm
+1 0 0 1 127 716 Tm
 (shift2eu gives no readiness score: the fits, blockers, required changes and estimates above are the ) Tj
-1 0 0 1 50 716 Tm
+1 0 0 1 50 704 Tm
 (assessment.) Tj
 /F2 13 Tf
-1 0 0 1 50 690 Tm
+1 0 0 1 50 678 Tm
 (About this report) Tj
 /F1 9 Tf
-1 0 0 1 50 675 Tm
+1 0 0 1 50 663 Tm
 (Version: ) Tj
 /F3 9 Tf
-1 0 0 1 86 675 Tm
+1 0 0 1 86 663 Tm
 (shift2eu 0.15.0 \(commit 1a2b3c4d5e6f, built 2026-11-25T00:00:00Z\)) Tj
 /F1 9 Tf
-1 0 0 1 50 663 Tm
+1 0 0 1 50 651 Tm
 (\225) Tj
-1 0 0 1 60 663 Tm
+1 0 0 1 60 651 Tm
 (Catalog: ) Tj
 /F3 9 Tf
-1 0 0 1 97 663 Tm
+1 0 0 1 97 651 Tm
 (Example Cloud) Tj
 /F1 9 Tf
-1 0 0 1 168 663 Tm
+1 0 0 1 168 651 Tm
 ( snapshot from ) Tj
 /F3 9 Tf
-1 0 0 1 231 663 Tm
+1 0 0 1 231 651 Tm
 (https://www.example.com/pricing/) Tj
 /F1 9 Tf
-1 0 0 1 404 663 Tm
+1 0 0 1 404 651 Tm
 (, retrieved 2026-11-13, default ) Tj
-1 0 0 1 60 651 Tm
+1 0 0 1 60 639 Tm
 (region for estimates ) Tj
 /F3 9 Tf
-1 0 0 1 142 651 Tm
+1 0 0 1 142 639 Tm
 (xx-par) Tj
 /F1 9 Tf
-1 0 0 1 50 639 Tm
-(\225) Tj
-1 0 0 1 60 639 Tm
-(Region: ) Tj
-/F3 9 Tf
-1 0 0 1 94 639 Tm
-(Example Cloud) Tj
-/F1 9 Tf
-1 0 0 1 165 639 Tm
-(: ) Tj
-/F3 9 Tf
-1 0 0 1 171 639 Tm
-(xx-ams) Tj
-/F1 9 Tf
-1 0 0 1 204 639 Tm
-( \(chosen with --region\)) Tj
 1 0 0 1 50 627 Tm
 (\225) Tj
 1 0 0 1 60 627 Tm
-(Estimates: on) Tj
+(Region: ) Tj
+/F3 9 Tf
+1 0 0 1 94 627 Tm
+(Example Cloud) Tj
+/F1 9 Tf
+1 0 0 1 165 627 Tm
+(: ) Tj
+/F3 9 Tf
+1 0 0 1 171 627 Tm
+(xx-ams) Tj
+/F1 9 Tf
+1 0 0 1 204 627 Tm
+( \(chosen with --region\)) Tj
 1 0 0 1 50 615 Tm
 (\225) Tj
 1 0 0 1 60 615 Tm
-(Inventory file: ) Tj
-/F3 9 Tf
-1 0 0 1 117 615 Tm
-(inventory.json) Tj
-/F1 9 Tf
+(Estimates: on) Tj
 1 0 0 1 50 603 Tm
 (\225) Tj
 1 0 0 1 60 603 Tm
+(Inventory file: ) Tj
+/F3 9 Tf
+1 0 0 1 117 603 Tm
+(inventory.json) Tj
+/F1 9 Tf
+1 0 0 1 50 591 Tm
+(\225) Tj
+1 0 0 1 60 591 Tm
 (Source: ) Tj
 /F3 9 Tf
-1 0 0 1 94 603 Tm
+1 0 0 1 94 591 Tm
 (aws) Tj
 /F1 8 Tf
 1 0 0 1 50 810 Tm
@@ -1423,10 +1426,10 @@ xref
 0000012323 00000 n 
 0000017411 00000 n 
 0000017559 00000 n 
-0000023987 00000 n 
-0000024135 00000 n 
+0000024140 00000 n 
+0000024288 00000 n 
 trailer
 << /Size 17 /Root 1 0 R /Info 6 0 R >>
 startxref
-26322
+26655
 %%EOF

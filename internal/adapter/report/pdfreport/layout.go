@@ -211,7 +211,10 @@ func (lb *lineBuilder) addValue(s seg) {
 
 	place := func(unit string) {
 		w := textWidth(s.font, s.size, unit)
-		if x+width+w > lb.limit && (width > 0 || x > 0) {
+		// The units carried after a space may still leave no room for this
+		// one: they then go on a line of their own, so the loop runs at most
+		// twice before the unit starts an empty line.
+		for x+width+w > lb.limit && (width > 0 || x > 0) {
 			upTo := len(units)
 			if space := lastSpace(units); space >= 0 {
 				upTo = space + 1

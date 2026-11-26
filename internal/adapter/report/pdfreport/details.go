@@ -47,7 +47,11 @@ func writeVerdictDetails(d *document, a assessment.Assessment, v assessment.Verd
 
 	d.body(label("Raw type"), value(bodySize, r.RawType))
 	d.body(label("Category"), value(bodySize, string(r.Category)))
-	d.body(label("Region"), value(bodySize, r.Region))
+	if r.Region != "" {
+		d.body(label("Region"), value(bodySize, r.Region))
+	} else {
+		d.body(label("Region"), plain("none"))
+	}
 
 	if r.Workload != "" {
 		d.body(label("Workload"), value(bodySize, r.Workload))
@@ -219,11 +223,15 @@ func writeHow(d *document, estimates bool) {
 		"none form the No workload group. A workload's counts and blockers are those of its resources.")
 
 	if estimates {
-		paragraph("Estimates.", "A resource is matched to the cheapest plan of its best offering that covers "+
-			"its vCPUs and memory. Its monthly estimate is plan price × count × hours / 730, with 730 "+
+		paragraph("Estimates.", "A resource is matched to the cheapest plan, among its best offering and the "+
+			"offerings tied with it, that covers its vCPUs and memory; a Redis cache is matched on memory "+
+			"alone, and block, object and file storage have no plan: they cost the stored GiB × the price "+
+			"per GiB. A monthly estimate is plan price × count × hours / 730, with 730 "+
 			"hours for a resource that gives none and a count of 1 when it gives no count; a plan billed for at "+
 			"most a number of hours a month costs plan price × count × min(hours, cap) / cap. Storage "+
-			"above what the plan includes is priced per GiB, and a fixed fee is the offering's listed fee. "+
+			"above what the plan includes is priced per GiB, per node × count except for a managed database, "+
+			"whose storage is counted once. A fixed fee is the offering's fee once per resource × hours / 730, "+
+			"never capped. "+
 			"Amounts are rounded to the cent, half away from zero. Prices are list prices on the catalog's "+
 			"retrieval date, excluding VAT and discounts: an estimate is not a quote.")
 	} else {
