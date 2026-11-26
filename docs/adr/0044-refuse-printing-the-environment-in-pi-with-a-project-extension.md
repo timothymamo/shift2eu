@@ -290,7 +290,11 @@ both now (options 1 and 3 of the issue). The decision above stands; this adds a 
   clearing it before a `bash -l` would source `daemon.env` again. It also refuses starting a command with a
   cleared or fresh environment, which drops the marker without naming it: `env -i`,
   `env --ignore-environment`, `env -`, `exec` with an option holding `c`, `sudo -i` (also `-iu`,
-  `--login`) and `su -l`, `su -`, `su --login` (round 3's audit, finding SF-1).
+  `--login`) and `su -l`, `su -`, `su --login` (round 3's audit, finding SF-1). `exec -c` is refused
+  behind the same prefix as the printers (a quote, `then`/`do`/`else`/`elif`/`!`, a wrapper such as
+  `command`, `builtin`, `eval` or `time`) and after an option with a value (`exec -a name -c`), while
+  `exec ./bin/shift2eu`, `find -exec` and `docker exec` stay allowed; a bare `-` of `env` or `su` counts
+  before an operator or a newline as before a space (`su -;true`, round 4's review and audit).
   `test/architecture/pienvdenytoolcall_test.go` runs the extension's `tool_call` handler in node against
   those calls.
 - **The wrapper is project code.** `dev/pi-tester.sh` is reviewed and audited as such, like `.pi/`: a
@@ -323,11 +327,14 @@ Consequences of the amendment:
   checks resolve `~`, `..` and the working directory but not symlinks (no `realpath`, round 3's audit,
   finding N-2; left as is, a second layer). A login shell with a fresh environment drops the marker without
   naming it (`exec -c bash -l`, `sudo -i`, `su -l`, `ssh localhost`): the common spellings are refused,
-  others (`ssh localhost`, an option order the patterns do not read) are not. The boundary is the separate
-  uid or the egress stage, not these patterns.
-- The refusal costs some work. A bash command that names `SHIFT2EU_PI_TESTER` at all is refused, even as
-  text: a bash `grep` for it, or a `git commit -m` whose message names it; the tester uses the grep tool and
-  `git commit -F` instead. The grep and find tools may search the repository for `agents-app` or the folder,
+  others are not: `ssh localhost`, `sudo -u <the same user> bash -l`, a GNU long-option abbreviation
+  (`env --ignore`, `su --log`), an option after the operand (`su x -l`) or after an option with a value
+  (`env -P dir -i`, `env --unset=X -i`). The boundary is the separate uid or the egress stage, not these
+  patterns.
+- The refusal costs some work. A bash command whose text holds the marker `SHIFT2EU_PI_TESTER`,
+  `agents-app-token` or `agents-app-identity` (not followed by `.` or a letter), `env -i`, `env -`,
+  `sudo -i`, `su -l`, `su -` or `exec -c` is refused, even as text: a bash `grep` for it, or a
+  `git commit -m` whose message names it; the tester uses the grep tool and `git commit -F` instead. The grep and find tools may search the repository for `agents-app` or the folder,
   but not with a glob naming them or a path under, or above, the folder. The folder pattern's `\b` also
   refuses a name such as `~/.config/shift2eu-other`, which is harmless.
 - The tester still reaches GitHub: the VM's `gh` (ADR 0031) reads the agents App's token from its file

@@ -3236,10 +3236,14 @@ The refusal's limits and costs (ADR 0044, the amendment's consequences):
 
 - It is lexical. A single bash command can still get past it by quoting or globbing a folder name, or
   through a symlink (the file tools resolve `~` and `..`, not symlinks); a login shell with a fresh
-  environment that the patterns do not spell (`ssh localhost`) drops the marker without naming it. Only a
-  separate uid or narrowed egress is a boundary.
-- A bash command naming `SHIFT2EU_PI_TESTER` is refused even as text (a bash `grep`, a `git commit -m`):
-  use the grep tool and `git commit -F`. The grep and find tools may search the repository with a pattern
+  environment that the patterns do not spell drops the marker without naming it: `ssh localhost`,
+  `sudo -u <the same user> bash -l`, a GNU long-option abbreviation (`env --ignore`, `su --log`), an option
+  after the operand (`su x -l`) or after an option with a value (`env -P dir -i`, `env --unset=X -i`).
+  Only a separate uid or narrowed egress is a boundary.
+- A bash command whose text holds the marker `SHIFT2EU_PI_TESTER`, `agents-app-token` or
+  `agents-app-identity` (not followed by `.` or a letter), `env -i`, `env -`, `sudo -i`, `su -l`, `su -`
+  or `exec -c` is refused even as text (a bash `grep`, a `git commit -m`): use the grep tool and
+  `git commit -F`. The grep and find tools may search the repository with a pattern
   naming `agents-app` or the folder, but not with a glob naming them, nor with a path under or above
   `~/.config/shift2eu`.
 
