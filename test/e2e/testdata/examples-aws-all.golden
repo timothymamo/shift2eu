@@ -3,7 +3,7 @@
 - Inventory file: `inventory.json`
 - Source: `aws`
 - Catalog: `OVHcloud` snapshot from `https://www.ovhcloud.com/en-ie/public-cloud/prices/`, retrieved 2026-11-25
-- Catalog: `Scaleway` snapshot from `https://www.scaleway.com/en/pricing/`, retrieved 2026-11-13
+- Catalog: `Scaleway` snapshot from `https://www.scaleway.com/en/pricing/`, retrieved 2026-11-26
 - Catalog: `UpCloud` snapshot from `https://upcloud.com/pricing/`, retrieved 2026-11-13
 - Region: `OVHcloud`: `GRA` (the target's default for estimates)
 - Region: `Scaleway`: `fr-par` (the target's default for estimates)
@@ -210,7 +210,7 @@ Estimates are list prices on each catalog's retrieval date, excluding VAT and di
 #### `media`
 
 - Fit: 2 direct, 0 partial, 1 none
-- Monthly estimate: €4.03 per month for 1 of 3 resources, list prices on 2026-11-13, excluding VAT and discounts
+- Monthly estimate: €4.03 per month for 1 of 3 resources, list prices on 2026-11-26, excluding VAT and discounts
 - Source cost: none in the inventory
 - Blockers:
   - `shop-cdn`: not classified
@@ -218,7 +218,7 @@ Estimates are list prices on each catalog's retrieval date, excluding VAT and di
 #### `shop`
 
 - Fit: 4 direct, 8 partial, 2 none
-- Monthly estimate: €1,627.68 per month for 8 of 14 resources (storage not included in 5 estimates), list prices on 2026-11-13, excluding VAT and discounts
+- Monthly estimate: €1,627.68 per month for 8 of 14 resources (storage not included in 5 estimates), list prices on 2026-11-26, excluding VAT and discounts
 - Source cost: `USD` $518.92 for 4 of 14 resources
 - Blockers:
   - `shop-product-search`: no offering in the `Scaleway` catalog for `search.opensearch`
@@ -227,14 +227,14 @@ Estimates are list prices on each catalog's retrieval date, excluding VAT and di
 #### No workload
 
 - Fit: 0 direct, 1 partial, 0 none
-- Monthly estimate: €66.39 per month for 1 of 1 resource, list prices on 2026-11-13, excluding VAT and discounts
+- Monthly estimate: €66.39 per month for 1 of 1 resource, list prices on 2026-11-26, excluding VAT and discounts
 - Source cost: none in the inventory
 - Blockers: none
 
 ### Cost estimate
 
 - Total: €1,698.10 per month for 10 of 18 resources (storage not included in 5 estimates)
-- Estimate: list prices on 2026-11-13, excluding VAT and discounts; a fixed fee is the offering's listed fee
+- Estimate: list prices on 2026-11-26, excluding VAT and discounts; a fixed fee is the offering's listed fee
 - Prices in `fr-par`
 - Hours: plan price × count × hours / 730, 730 hours for a resource that gives none
 - Source cost: `USD` $518.92 for 4 of 18 resources

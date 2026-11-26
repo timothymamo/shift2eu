@@ -5,12 +5,13 @@ records where each fact comes from, so the snapshot can be checked and refreshed
 
 ## How it was compiled
 
-- **Retrieved on:** 2026-11-13, the date the plans and prices were read (PRD #190 milestone 4, ADR 0024).
-  The snapshot's `retrievedOn` and `sourceURL` now name the prices, the facts most likely to change. The
-  regions and capabilities were compiled and verified on 2026-11-10 and re-verified on 2026-11-11 for
-  PRD #14 (below); the prices changed no offering, capability or region. *Kubernetes Kapsule
-  Dedicated*'s regions, and its plans' price regions, were last re-checked on 2026-11-19 for issue #211
-  (below), which added `it-mil`. `retrievedOn` stays 2026-11-13, for the reason that bullet gives.
+- **Retrieved on:** 2026-11-26, the date every plan and price was last read (PRD #552 milestone 6,
+  below; first read on 2026-11-13 for PRD #190 milestone 4, ADR 0024). The snapshot's `retrievedOn` and
+  `sourceURL` name the prices, the facts most likely to change. The regions and capabilities were
+  compiled and verified on 2026-11-10 and re-verified on 2026-11-11 for PRD #14 (below); the prices
+  changed no offering, capability or region. *Kubernetes Kapsule Dedicated*'s regions, and its plans'
+  price regions, were re-checked on 2026-11-19 for issue #211 (below), which added `it-mil`, and again on
+  2026-11-26. The availability page was last read in full on 2026-11-26.
 - **Compiled, then verified against the live pages.** The snapshot was first compiled from Scaleway's
   documentation source and Go SDK at the commits below, because `www.scaleway.com` then answered HTTP 403.
   On the same date every region and capability was checked against the live public pages cited below
@@ -94,19 +95,37 @@ records where each fact comes from, so the snapshot can be checked and refreshed
     file and the commit that last changed it), and `scaleway/scaleway-sdk-js` at commit
     `766d0b1d2d387731b12fd80c64ff7a2d110554a1`, as a cross-check.
 
-  **What was re-read, and the date.** The two price pages hold the prices of *Managed Database for
-  PostgreSQL and MySQL* (both offerings), their storage, *Block Storage* and *Object Storage*. Every
-  one of those existing plans and prices was compared with the re-read pages and **none changed**
-  (plans, vCPU, memory, hourly prices and regions), so no existing amount in `catalog.json` changed.
-  The availability page was re-read **in full** for the first time since 2026-11-11, and every existing
-  offering's regions still hold (Milan is still not declared by SDK `api/rdb/v1`, so the database
-  offerings still leave it out); this closes the "a full re-read waits" note of 2026-11-21 below. The
-  prices of *Instances*, *Elastic Metal* and the Kapsule control planes were **not** re-read from
-  their own pages (they were not saved this time) and keep their 2026-11-13 reading.
-  **`retrievedOn` stays 2026-11-13** (ADR 0007, one date per snapshot): it names the date every plan
-  and price was read, and this re-read covered the prices of some pages only, as the Kapsule
-  Dedicated re-check of 2026-11-19 did. The new offerings' prices were read on 2026-11-26, which each
-  of their sections says.
+  **What was re-read, and the date.** The two price pages show the prices of *Managed Database for
+  PostgreSQL and MySQL* (both offerings), their storage, *Block Storage* and *Object Storage* in their
+  visible tables, and their embedded data carries Scaleway's **whole price catalogue**
+  (`catalogProducts`: `instanceRanges`, `elasticMetalRanges`, `kubernetes`,
+  `managedRelationalDatabase`, `blockStorage`, `objectStorage` and the rest), identical in both pages.
+  So **every existing price in `catalog.json` was re-read on 2026-11-26** from that embedded catalogue,
+  in both pages, by the rules under *Prices* (hourly × 730, half up to 4 digits, the first zones'
+  price):
+  - *Instances*, *Kubernetes Kapsule* and *Kubernetes Kapsule Dedicated*: all 18 worker plans, vCPU,
+    memory and hourly price in the first and second zone of every region each price lists
+    (`instanceRanges`); the PLAY2 and PRO2 plans are still not priced in Milan;
+  - *Elastic Metal*: the eight servers, threads, memory, disks and hourly price in every zone that
+    sells them (`elasticMetalRanges`, all in `fr-par`, `nl-ams` and `pl-waw`, every one
+    `general_availability`);
+  - the Kapsule control planes (`kubernetes.kapsuleProducts`): "Kapsule" €0 and Dedicated-4 €0.11 an
+    hour in all four regions, so the fixed fees `0.00` and `80.30` hold;
+  - *Managed Database for PostgreSQL and MySQL* and its High Availability variant: the 12 node types,
+    management fee plus one or two nodes, in the first two zones of each region, and the Block Storage
+    5K database storage price;
+  - *Block Storage* 5K (the storage price of *Block Storage*, *Instances* and both Kapsule offerings) in
+    every zone, and *Object Storage* Standard Multi-AZ in every region.
+
+  **None changed** (plans, vCPU, memory, hourly prices and regions), so no existing amount in
+  `catalog.json` changed. The availability page was re-read **in full** for the first time since
+  2026-11-11, and every existing offering's regions still hold (Milan is still not declared by SDK
+  `api/rdb/v1`, so the database offerings still leave it out); this closes the "a full re-read waits"
+  note of 2026-11-21 above. Because the new offerings' prices were read and every existing price was
+  re-read that day, **`retrievedOn` is 2026-11-26** (ADR 0007, one date per snapshot, as the OVHcloud
+  snapshot moved for PRD #552 milestone 5). The *Instances*, *Elastic Metal* and *Containers* pages
+  themselves were not saved this time; their prices were read from the catalogue the two saved pages
+  embed, not from those pages' visible tables.
 - **Availability page:** <https://www.scaleway.com/en/product-availability-by-region/>, where every
   offering's regions come from, subject to the API check under *Rules applied*. It has one column per
   region (Paris, Amsterdam, Warsaw, Milan). For a zonal product it gives one mark per zone, and for a
@@ -190,9 +209,9 @@ records where each fact comes from, so the snapshot can be checked and refreshed
 ## Prices
 
 Every plan price, storage price and fixed fee in `catalog.json` is a monthly list price in EUR, excluding
-VAT (ADR 0024, ADR 0026),
-read on 2026-11-13 over HTTPS without credentials and without calling any Scaleway API. The price pages
-are the per-product pages linked from <https://www.scaleway.com/en/pricing/>:
+VAT (ADR 0024, ADR 0026), first read on 2026-11-13 over HTTPS without credentials and without calling
+any Scaleway API, and every one re-read on 2026-11-26 (below). The price pages are the per-product pages
+linked from <https://www.scaleway.com/en/pricing/>:
 
 - *Instances*: <https://www.scaleway.com/en/pricing/virtual-instances/>
 - *Elastic Metal*: <https://www.scaleway.com/en/pricing/elastic-metal/>
@@ -201,9 +220,10 @@ are the per-product pages linked from <https://www.scaleway.com/en/pricing/>:
 - *Containers* (Kubernetes Kapsule control planes): <https://www.scaleway.com/en/pricing/containers/>
 
 The Redis and MongoDB plans and the MongoDB storage price (PRD #552 milestone 6) were read on
-2026-11-26 from the maintainer's saved copy of the *Managed Databases* page, which also re-read the
-existing database and storage prices (*How it was compiled*); the hourly × 730 rule below applies to
-them unchanged.
+2026-11-26 from the maintainer's saved copy of the *Managed Databases* page. The same day every
+existing price was re-read, unchanged, from the full price catalogue that page and the saved *Storage*
+page embed (*How it was compiled*), so the 2026-11-13 readings below still hold as amounts; the hourly
+× 730 rule below applies to the new prices unchanged.
 
 - **How the pages were read.** `www.scaleway.com` has answered HTTP 403 to plain clients before (*How it
   was compiled*). On 2026-11-13 the pages answered HTTP 200 to a plain HTTPS client (curl, with no
@@ -908,7 +928,9 @@ Cluster*. High Availability (2 nodes) is in public beta and gets no offering (*L
   AMS1, AMS2, WAW1 and WAW2." The price data prices every node type in exactly those six zones.
 - **Node count** (decided question 10 of PRD #552, issue #558): a Standalone database is exactly **1
   node** (create page). An estimate multiplies the plan by the resource's count, so a count above 1 is
-  priced as that many Standalone databases.
+  priced as that many Standalone databases. A cache without `sharding` ties this offering with *Managed
+  Database for Redis Cluster*, and the estimate then takes the Cluster's lower per-node price (that
+  section, **Estimate effect**).
 
 - **Prices** (saved copy of <https://www.scaleway.com/en/pricing/managed-databases/>, table "Managed
   Database for Redis™", read 2026-11-26; its embedded data `managedRedisDatabase.nodeTypes`): seven RED1
@@ -934,7 +956,7 @@ Cluster*. High Availability (2 nodes) is in public beta and gets no offering (*L
 | `RED1-XL` | 16 | 64 GB | 1.096 | 0.658 | `800.08` |
 
 - **Second-zone prices, not recorded.** The second zones of Amsterdam and Warsaw (`nl-ams-2`,
-  `pl-waw-2`) charge slightly different prices for some types, for example RED1-MICRO main €0.0479 and
+  `pl-waw-2`) charge slightly different prices for every type (main, additional or both), for example RED1-MICRO main €0.0479 and
   additional €0.0274, RED1-2XS main €0.0753 and additional €0.0411, RED1-XS additional €0.0822, RED1-L
   main €0.5479 and additional €0.3288 an hour. Zones are not modelled and a region's price is its first
   zones' (*Prices*), so a cache placed in one of those zones may cost slightly more (or less) than the
@@ -989,6 +1011,16 @@ mode as an addition, not a replacement).
   and M differ by €0.0001 at count 3). A **4- to 6-node cluster** is then priced a little high: each node
   beyond the third at the per-node average instead of the additional-node price (RED1-M: €146.4867
   against €119.72 a month). vCPU, memory, storage and regions as the base offering; no storage price.
+- **Estimate effect: an under-estimate for a cache that does not need `sharding`.** Such a cache fits
+  both Redis offerings equally (both `direct`, or both `partial` for the same missing capability, such as
+  `node-high-availability`), so the mapping reports a tie, and the estimate takes the cheapest plan across
+  the tied offerings (`internal/domain/estimate`): this offering's per-node average, which is below the
+  Standalone main-node price for every node type. A 6 GiB cache with count 1 is priced on `RED1-XS` at
+  €73.24 a month (Cluster pricing) against €100.01 for the Standalone `RED1-XS` it can actually buy, and
+  a count of 1 or 2 is a cluster Scaleway does not sell (3 to 6 nodes, above). The report names the base
+  offering, with this one as the tie, beside the Cluster price. Decided question 10 of PRD #552 accepts
+  this under-estimate until issue #558 bounds tier node counts; the same mechanism already prices a
+  PostgreSQL or MySQL database on the High Availability per-node price.
 
 | Plan | vCPU | Memory | Main EUR/hour | Additional EUR/hour | 3 nodes EUR/hour (main + 2 × additional) | Per node EUR/month (3 nodes × 730 ÷ 3) |
 |---|---|---|---|---|---|---|
@@ -1036,7 +1068,9 @@ default, so the base offering is the lowest tier, the **1-node** replica set; th
 - **Node count and volume** (decided question 10 of PRD #552, issue #558): this tier is exactly **1
   node** (create page). The volume can grow "up to 15 TB" and "Block volume sizes cannot be decreased."
   (*Increase volume* page); no minimum volume is stated on the MongoDB pages, and the price data carries
-  none.
+  none. A database without `node-high-availability` ties this offering with *Managed MongoDB Replica
+  Set*, and the estimate then takes the Replica Set's lower per-node price (that section, **Estimate
+  effect**).
 
 - **Prices** (saved copy of <https://www.scaleway.com/en/pricing/managed-databases/>, tables "Managed
   MongoDB® - Cost Optimized" and "Managed MongoDB® - Production Optimized", read 2026-11-26; its embedded
@@ -1088,7 +1122,17 @@ pages. Its `snapshots` is the base offering's, and holds on this tier too.
 - **Node count** (decided question 10 of PRD #552, issue #558): exactly **3 nodes** (create page: "a
   group of 3 MongoDB® servers (1 primary and 2 standby nodes)"). A DocumentDB cluster of 2 or more
   instances, which lists `node-high-availability`, maps here; one with count 3 is priced at the set's
-  price, and one with another count at that many thirds of it.
+  price (to within the rounding: the per-node price is rounded to 4 fractional digits, so count 3 can
+  differ from the set's price by up to €0.0001, `MGDB-PLAY2-NANO`: 3 × 45.6737 = 137.0211 against
+  137.021), and one with another count at that many thirds of it.
+- **Estimate effect: an under-estimate for a database without `node-high-availability`.** Such a
+  database (a 1-instance DocumentDB cluster, for example) fits both MongoDB offerings `direct`, so the
+  mapping reports a tie, and the estimate takes the cheapest plan across the tied offerings
+  (`internal/domain/estimate`): this offering's per-node third of the set, which is below the 1-node
+  price for every plan. A 1-instance database of 2 vCPU, 8 GiB and 100 GiB is priced at €97.80 a month
+  (Replica Set per node plus storage) against €137.75 for the 1-node *Managed MongoDB* it would buy, and
+  a count other than 3 is a set Scaleway does not sell. Decided question 10 of PRD #552 accepts this
+  under-estimate until issue #558, which already lists the DocumentDB-to-replica-set case.
 
 - **Prices** (the same page, tables and data, read 2026-11-26): the visible "Price for 3 Nodes" is the
   management fee plus three nodes in every row (POP2-16C-64G: 0.1675 + 3 × 0.962 = "€3.0535 / HOUR").
@@ -1395,3 +1439,9 @@ Prices and plans left out (PRD #552 milestone 6, read 2026-11-26):
 - **MongoDB storage on the 3-node set's other nodes:** not added; see *Managed MongoDB Replica Set*.
 - **Redis Cluster nodes beyond the third:** priced at the per-node average of the 3-node cluster, not at
   the additional-node price (*Managed Database for Redis Cluster*).
+- **No price floor for the multi-node tiers.** Nothing keeps a resource the base and variant fit equally
+  from being priced on the variant's lower per-node average: a cache without `sharding` is priced on
+  Redis Cluster pricing (6 GiB, count 1: €73.24 against the Standalone `RED1-XS` €100.01), and a MongoDB
+  database without `node-high-availability` on Replica Set pricing (2 vCPU, 8 GiB, 100 GiB, count 1:
+  €97.80 against €137.75). Decided question 10 of PRD #552 accepts the under-estimate until issue #558
+  (*Managed Database for Redis Cluster* and *Managed MongoDB Replica Set*, **Estimate effect**).

@@ -2,7 +2,7 @@
   "schemaVersion": 2,
   "target": "Scaleway",
   "sourceURL": "https://www.scaleway.com/en/pricing/",
-  "retrievedOn": "2026-11-13",
+  "retrievedOn": "2026-11-26",
   "regions": ["fr-par", "it-mil", "nl-ams", "pl-waw"],
   "defaultRegion": "fr-par",
   "offerings": [

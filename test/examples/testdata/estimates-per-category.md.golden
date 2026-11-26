@@ -19,7 +19,7 @@ priced on the multi-node tier a replicated cache is served by, and its capabilit
 its size; a load balancer and a container registry take no size and are not priced.
 
 - `OVHcloud`: prices retrieved 2026-11-25 from `https://www.ovhcloud.com/en-ie/public-cloud/prices/`, estimated in `GRA` (its default region)
-- `Scaleway`: prices retrieved 2026-11-13 from `https://www.scaleway.com/en/pricing/`, estimated in `fr-par` (its default region)
+- `Scaleway`: prices retrieved 2026-11-26 from `https://www.scaleway.com/en/pricing/`, estimated in `fr-par` (its default region)
 - `UpCloud`: prices retrieved 2026-11-13 from `https://upcloud.com/pricing/`, estimated in `de-fra1` (its default region)
 
 | Target | Category | Size | Offering | Plan | Monthly estimate | Reason |

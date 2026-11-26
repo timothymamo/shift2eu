@@ -49,7 +49,7 @@ starts with its inputs, the region its prices are for, and the fits counted:
 
 - Inventory file: `inventory.json`
 - Source: `aws`
-- Catalog: `Scaleway` snapshot from `https://www.scaleway.com/en/pricing/`, retrieved 2026-11-13
+- Catalog: `Scaleway` snapshot from `https://www.scaleway.com/en/pricing/`, retrieved 2026-11-26
 - Region: `fr-par` (the target's default for estimates)
 
 ## Summary
@@ -131,7 +131,7 @@ Every total in it estimated something, so `--schema-version 2` writes the same d
     "name": "Scaleway",
     "snapshot": {
       "source": "https://www.scaleway.com/en/pricing/",
-      "retrieved": "2026-11-13"
+      "retrieved": "2026-11-26"
     }
   },
   "summary": {
@@ -143,7 +143,7 @@ Every total in it estimated something, so `--schema-version 2` writes the same d
   "estimate": {
     "region": "fr-par",
     "regionChosen": false,
-    "priceDate": "2026-11-13",
+    "priceDate": "2026-11-26",
     "currency": "EUR",
     "excluded": [
       "VAT",
@@ -315,7 +315,7 @@ database belongs to no workload:
 ### `media`
 
 - Fit: 2 direct, 0 partial, 1 none
-- Monthly estimate: €4.03 per month for 1 of 3 resources, list prices on 2026-11-13, excluding VAT and discounts
+- Monthly estimate: €4.03 per month for 1 of 3 resources, list prices on 2026-11-26, excluding VAT and discounts
 - Source cost: none in the inventory
 - Blockers:
   - `shop-cdn`: not classified
@@ -323,7 +323,7 @@ database belongs to no workload:
 ### `shop`
 
 - Fit: 4 direct, 8 partial, 2 none
-- Monthly estimate: €1,627.68 per month for 8 of 14 resources (storage not included in 5 estimates), list prices on 2026-11-13, excluding VAT and discounts
+- Monthly estimate: €1,627.68 per month for 8 of 14 resources (storage not included in 5 estimates), list prices on 2026-11-26, excluding VAT and discounts
 - Source cost: `USD` $518.92 for 4 of 14 resources
 - Blockers:
   - `shop-product-search`: no offering in the `Scaleway` catalog for `search.opensearch`
@@ -332,7 +332,7 @@ database belongs to no workload:
 ### No workload
 
 - Fit: 0 direct, 1 partial, 0 none
-- Monthly estimate: €66.39 per month for 1 of 1 resource, list prices on 2026-11-13, excluding VAT and discounts
+- Monthly estimate: €66.39 per month for 1 of 1 resource, list prices on 2026-11-26, excluding VAT and discounts
 ```
 
 The **cost estimate** ends the report: the total of the estimated resources, how many of them there
@@ -343,7 +343,7 @@ the source's cost is shown beside it per currency, never converted, with how man
 ## Cost estimate
 
 - Total: €1,698.10 per month for 10 of 18 resources (storage not included in 5 estimates)
-- Estimate: list prices on 2026-11-13, excluding VAT and discounts; a fixed fee is the offering's listed fee
+- Estimate: list prices on 2026-11-26, excluding VAT and discounts; a fixed fee is the offering's listed fee
 - Prices in `fr-par`
 - Hours: plan price × count × hours / 730, 730 hours for a resource that gives none
 - Source cost: `USD` $518.92 for 4 of 18 resources

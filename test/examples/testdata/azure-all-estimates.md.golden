@@ -3,7 +3,7 @@
 - Inventory file: `inventory.json`
 - Source: `azure`
 - Catalog: `OVHcloud` snapshot from `https://www.ovhcloud.com/en-ie/public-cloud/prices/`, retrieved 2026-11-25
-- Catalog: `Scaleway` snapshot from `https://www.scaleway.com/en/pricing/`, retrieved 2026-11-13
+- Catalog: `Scaleway` snapshot from `https://www.scaleway.com/en/pricing/`, retrieved 2026-11-26
 - Catalog: `UpCloud` snapshot from `https://upcloud.com/pricing/`, retrieved 2026-11-13
 - Region: `OVHcloud`: `GRA` (the target's default for estimates)
 - Region: `Scaleway`: `fr-par` (the target's default for estimates)
@@ -176,14 +176,14 @@ Estimates are list prices on each catalog's retrieval date, excluding VAT and di
 #### `catalog`
 
 - Fit: 0 direct, 1 partial, 0 none
-- Monthly estimate: €67.78 per month for 1 of 1 resource, list prices on 2026-11-13, excluding VAT and discounts
+- Monthly estimate: €67.78 per month for 1 of 1 resource, list prices on 2026-11-26, excluding VAT and discounts
 - Source cost: none in the inventory
 - Blockers: none
 
 #### `shop`
 
 - Fit: 6 direct, 3 partial, 3 none
-- Monthly estimate: €462.49 per month for 6 of 12 resources (storage not included in 3 estimates), list prices on 2026-11-13, excluding VAT and discounts
+- Monthly estimate: €462.49 per month for 6 of 12 resources (storage not included in 3 estimates), list prices on 2026-11-26, excluding VAT and discounts
 - Source cost: `EUR` €379.97 for 3 of 12 resources
 - Blockers:
   - `cdn-shop`: not classified
@@ -193,7 +193,7 @@ Estimates are list prices on each catalog's retrieval date, excluding VAT and di
 ### Cost estimate
 
 - Total: €530.27 per month for 7 of 13 resources (storage not included in 3 estimates)
-- Estimate: list prices on 2026-11-13, excluding VAT and discounts; a fixed fee is the offering's listed fee
+- Estimate: list prices on 2026-11-26, excluding VAT and discounts; a fixed fee is the offering's listed fee
 - Prices in `fr-par`
 - Hours: plan price × count × hours / 730, 730 hours for a resource that gives none
 - Source cost: `EUR` €379.97 for 3 of 13 resources

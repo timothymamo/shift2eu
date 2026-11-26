@@ -2,7 +2,7 @@
 
 - Inventory file: `inventory-hostile.json`
 - Source: `aws`
-- Catalog: `Scaleway` snapshot from `https://www.scaleway.com/en/pricing/`, retrieved 2026-11-13
+- Catalog: `Scaleway` snapshot from `https://www.scaleway.com/en/pricing/`, retrieved 2026-11-26
 - Region: `fr-par` (the target's default for estimates)
 
 ## Summary
@@ -36,21 +36,21 @@ None.
 ### ``ws|`x`[a](b) # h``
 
 - Fit: 1 direct, 0 partial, 0 none
-- Monthly estimate: none of 1 resource could be estimated (size unknown), list prices on 2026-11-13, excluding VAT and discounts
+- Monthly estimate: none of 1 resource could be estimated (size unknown), list prices on 2026-11-26, excluding VAT and discounts
 - Source cost: none in the inventory
 - Blockers: none
 
 ### No workload
 
 - Fit: 2 direct, 1 partial, 0 none
-- Monthly estimate: none of 3 resources could be estimated (size unknown), list prices on 2026-11-13, excluding VAT and discounts
+- Monthly estimate: none of 3 resources could be estimated (size unknown), list prices on 2026-11-26, excluding VAT and discounts
 - Source cost: none in the inventory
 - Blockers: none
 
 ## Cost estimate
 
 - Total: none of 4 resources could be estimated (size unknown)
-- Estimate: list prices on 2026-11-13, excluding VAT and discounts; a fixed fee is the offering's listed fee
+- Estimate: list prices on 2026-11-26, excluding VAT and discounts; a fixed fee is the offering's listed fee
 - Prices in `fr-par`
 - Hours: plan price × count × hours / 730, 730 hours for a resource that gives none
 - Source cost: none in the inventory

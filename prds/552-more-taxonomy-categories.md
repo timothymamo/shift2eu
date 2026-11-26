@@ -518,8 +518,13 @@ fit `none` with "no offering in the <target> catalog", which is already more pre
    lists `sharding` but not `node-high-availability`, decided question 11's fallback, since the
    snapshot cannot say that Cluster mode needs a cluster-aware client; and MongoDB is two tiers, a
    1-node *Managed MongoDB* and a 3-node *Managed MongoDB Replica Set*. Load Balancer and Container
-   Registry leave Milan out (their SDKs do not declare it). The re-read pages changed no existing price
-   or plan, and the snapshot's retrieved date stays 2026-11-13 (Scaleway's `SOURCES.md`).
+   Registry leave Milan out (their SDKs do not declare it). The two saved price pages embed Scaleway's
+   whole price catalogue, so every existing price (Instances, Elastic Metal, the Kapsule control
+   planes, PostgreSQL and MySQL, Block and Object Storage) was re-read from it the same day; none
+   changed, and the snapshot's retrieved date moves to 2026-11-26 (Scaleway's `SOURCES.md`). A cache
+   without `sharding` and a MongoDB database without `node-high-availability` tie the base and the
+   multi-node tier, so the estimate takes the tier's lower per-node price; decided question 10 accepts
+   that under-estimate until issue #558, and `SOURCES.md` records it.
 7. [ ] **UpCloud catalog.** Offerings for `cache.redis` (Managed Valkey: 1 node, and a multi-node
    variant with `node-high-availability`), `network.loadbalancer` (Managed Load Balancer, and a
    Production variant if its failover is confirmed; `udp` only if a page states it) and `storage.file` (File Storage),

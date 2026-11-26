@@ -1,6 +1,6 @@
 target: Scaleway
 sourceURL: https://www.scaleway.com/en/pricing/
-retrievedOn: 2026-11-13
+retrievedOn: 2026-11-26
 defaultRegion: fr-par
 Block Storage | storage.block | snapshots | fr-par, it-mil, nl-ams, pl-waw
   plans: -
