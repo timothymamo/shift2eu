@@ -32,14 +32,25 @@
 // for a usage or input error, 3 for a run refused before the CLI ran. Neither
 // secret is ever printed.
 //
-// After the steps it repairs the step summary (issue #615): the digest only
-// detects a swap, and the runner reads the summary by its path after the step
-// and publishes it as the job's summary. A path that is no longer the regular
-// file the run opened (Lstat against the open descriptor, os.SameFile) - a
-// link, another file, or gone - is removed without being followed and
-// replaced with an empty regular file; nothing is written through a link. A
-// run that had passed then fails with the audit's exit, 1, and its result file
-// is removed; a run that had already failed keeps its exit code.
+// It is the only legitimate writer of the step's five file commands -
+// GITHUB_ENV, GITHUB_PATH, GITHUB_OUTPUT, GITHUB_STATE and the step summary
+// when set - and it writes only its summary line, after the steps. So before
+// the steps it records each one (audit.RecordFileCommands: its identity and
+// the sha256 of its content), and after them it empties every one the steps
+// changed (audit.FileCommands.Repair, issues #615, #614): the digest only
+// detects a change, while the runner applies GITHUB_ENV and GITHUB_PATH after
+// a failed step too and publishes the summary by its path. A file command is
+// changed when its path no longer names the entry recorded, or when it no
+// longer holds its recorded content - followed, for the summary, by exactly
+// the bytes the run wrote to it. It is left as an empty regular file:
+// truncated in place, or replaced by an empty file renamed over its path, so
+// no link is followed. Any repair names the emptied file commands on stderr; a
+// run that had passed then fails with the audit's exit, 1, and its result
+// file is removed; a run that had already failed keeps its exit code. A repair
+// that itself fails says the posted summary or the job's environment may be
+// hostile, and fails the run. A file command that is no regular file the run
+// can open is noted on stderr, checked by its identity alone and, while
+// nothing changed it, left as it is.
 //
 // It is no part of the product: a main package, which Go refuses to import,
 // held by the strict depguard rule audit-main to the standard packages it
