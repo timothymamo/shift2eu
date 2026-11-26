@@ -2351,7 +2351,8 @@ repository. Make its private key on the App's page and keep it for step 2. These
 bound of the publish job's token: the workflow's mint step asks for no `permission-*` input, so the token
 inherits exactly the installation's permissions (contents, pull_requests, issues, repository_advisories
 write, metadata read), for this repository alone (issue #632, ADR 0040's Decision 1). Grant the App
-nothing more than the check below names.
+nothing more than the check below names; step 9 re-checks the grants and the installation's scope on
+every run.
 
 ```bash
 # GitHub, the installation's settings page: by hand
@@ -2684,6 +2685,26 @@ gh workflow enable scheduled-security-audit.yml --repo timothymamo/shift2eu
 gh api repos/timothymamo/shift2eu/actions/workflows/scheduled-security-audit.yml --jq .state
 # PASS: active; FAIL: disabled_inactivity or disabled_manually (run the action above)
 # PASS, later: the next scheduled run appears at the next date the cron names (ADR 0040 records it)
+```
+
+On every run, also re-check the audit App's bound: the publish job's token asks for no permission of its
+own and inherits the App's installation grants (issue #632, ADR 0040's Decision 1), so a grant or a
+repository added to the App later reaches the token at once. Step 1 checked them once; these lines check
+them each time. A FAIL is a finding: stop the schedule (`gh workflow disable`) until the App is back to
+step 1's settings (`gh workflow disable scheduled-security-audit.yml --repo timothymamo/shift2eu`).
+
+```bash
+# Mac (admin), as yourself, read-only: the App's grants
+gh api /apps/shift2eu-audit --jq '.permissions == {"contents":"write","issues":"write","metadata":"read","pull_requests":"write","repository_advisories":"write"}'
+# PASS: true; FAIL: false (a permission added, removed or changed: compare with --jq '.permissions | tojson')
+# The installation: its permissions and repository selection, the <installation id>
+gh api /user/installations --paginate --jq '.installations[] | select(.app_slug == "shift2eu-audit") | [.id, .repository_selection, (.permissions == {"contents":"write","issues":"write","metadata":"read","pull_requests":"write","repository_advisories":"write"})] | @tsv'
+# PASS: one row, <installation id>  selected  true
+# FAIL: no row, more than one, "all" (every repository of the account), or false (the installation's
+#   permissions differ from the App's: an update not yet accepted, or one changed)
+# The installation's repositories
+gh api /user/installations/<installation id>/repositories --paginate --jq '.repositories[].full_name'
+# PASS: exactly one line, timothymamo/shift2eu; FAIL: any other or further line
 ```
 
 To **run an audit outside the schedule**, start a `workflow_dispatch` run on `main` at any time, with no

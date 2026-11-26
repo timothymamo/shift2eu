@@ -256,8 +256,18 @@ which the publish program needs for its draft advisories: the action declares no
 schema, which has no `repository_advisories` key), and whether the installation-token API accepts the
 undeclared value the action would still forward cannot be checked offline, while a wrong guess costs
 another failed run. **The trade-off:** the token no longer narrows the App's grants, so the App's
-installation permissions (`docs/dev-environment.md`, the scheduled audit's step 1, whose check pins them)
-are the token's whole bound; a permission added to the App later reaches the token at once.
+installation permissions are the token's whole bound; a permission added to the App later reaches the
+token at once. Two bounds hold it instead. The first is the App's grants and installation scope, which
+the maintainer re-checks on every run (`docs/dev-environment.md`, the scheduled audit's step 9: the App's
+and the installation's permissions exactly contents, issues, pull_requests and repository_advisories
+write and metadata read, the installation's repository selection `selected` with this one repository),
+not only once at setup (step 1). The second is the publish program's fixed endpoint table
+(`ci/auditpublish/internal/github/endpoints.go`), which every GitHub call of the token's one holder, the
+publish step, is checked against, so a grant the App holds beyond the table's endpoints is never used.
+A possible follow-up, not decided here: once one run can test it, the token could be narrowed again by
+passing `permission-repository-advisories: write` (which the action forwards although it declares no
+such input) with `permission-contents`, `permission-pull-requests` and `permission-issues`, each
+`write`, and the check could go back to an exact allow list of those four inputs.
 
 What those permissions also allow, beyond what the audit needs, and what narrows each:
 

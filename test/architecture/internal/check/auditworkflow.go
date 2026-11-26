@@ -2134,35 +2134,8 @@ func (a *auditReader) appToken(with yamlread.Entry, path string, want *auditStep
 	}
 
 	inputs := []string{"client-id", "private-key"}
-
-	if with.Num == 0 {
-		a.r.fail("%s has no with:, want %s", path, strings.Join(inputs, ", "))
-
-		return
-	}
-
-	lines := a.r.block(with, path+": with")
-
-	// A permission-* input is refused below with its own reason, not as an
-	// unknown key.
-	allowed := slices.Clone(inputs)
-
-	if entries, err := yamlread.Mapping(lines); err == nil {
-		for _, e := range entries {
-			if strings.HasPrefix(e.Key, auditAppPermissionPrefix) {
-				allowed = append(allowed, e.Key)
-				a.r.fail("line %d: %s: with: holds %s: the step asks for no permission-* input, so the token inherits exactly the App's installation permissions; a permission the App does not hold fails the mint (run 45780739586), and the App's own setup bounds what the token can do (ADR 0040, Decision 1)", e.Num, path, e.Key)
-			}
-		}
-	}
-
-	keys := a.keys(lines, path+": with", allowed, nil)
-
-	for _, key := range inputs {
-		if _, ok := keys[key]; !ok {
-			a.r.fail("%s: with: holds no %s", path, key)
-		}
-	}
+	allowed := append(slices.Clone(inputs), a.appPermissions(with, path)...)
+	keys := a.withKeys(with, path, allowed, inputs)
 
 	for _, read := range want.with {
 		e, ok := keys[read.key]
@@ -2173,6 +2146,37 @@ func (a *auditReader) appToken(with yamlread.Entry, path string, want *auditStep
 		a.exact(e, path+": with: "+read.key, read.value, "")
 		a.allow(e.Num, e.Value)
 	}
+}
+
+// appPermissions refuses every permission-* input of the App token step's
+// with:, each with its own reason, and returns their keys, so that withKeys
+// does not refuse them a second time as unknown keys. A with: that is missing
+// or no mapping is left to withKeys to report.
+func (a *auditReader) appPermissions(with yamlread.Entry, path string) []string {
+	if with.Num == 0 {
+		return nil
+	}
+
+	lines, err := yamlread.BlockValue(with, path+": with")
+	if err != nil {
+		return nil
+	}
+
+	entries, err := yamlread.Mapping(lines)
+	if err != nil {
+		return nil
+	}
+
+	var found []string
+
+	for _, e := range entries {
+		if strings.HasPrefix(e.Key, auditAppPermissionPrefix) {
+			found = append(found, e.Key)
+			a.r.fail("line %d: %s: with: holds %s: the step asks for no permission-* input, so the token inherits exactly the App's installation permissions; a permission the App does not hold fails the mint (run 45780739586), and the App's own setup bounds what the token can do (ADR 0040, Decision 1)", e.Num, path, e.Key)
+		}
+	}
+
+	return found
 }
 
 // run checks a run: step's script; minutes is the step's timeout-minutes, 0
