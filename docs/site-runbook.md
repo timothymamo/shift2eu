@@ -68,7 +68,7 @@ scw account project list -o json | jq -r '.[] | select(.name | startswith("shift
 ```
 
 **A leftover throwaway project** (R0's last listing printed a line). It needs neither `$P` nor `$B`, so
-a new shell runs it straight after R0, with your key's default project still the throwaway one.
+a new shell runs it straight after R0, with your key's default project usually still the throwaway one; the check below says.
 
 ```bash
 own() { AWS_ACCESS_KEY_ID="$SCW_ACCESS_KEY" AWS_SECRET_ACCESS_KEY="$SCW_SECRET_KEY" aws "$@"; }   # as in R7 step 7
@@ -77,10 +77,13 @@ echo "$XP $XB"                                    # PASS: R0's listing's first l
 # FAIL empty: no leftover; nothing to do here
 [ "$(scw iam api-key get "$SCW_ACCESS_KEY" -o json | jq -r '(.APIKey // .) | .default_project_id')" = "$XP" ] && echo "PASS default project is $XP" || echo "FAIL default project is not $XP"
 # FAIL: scw iam api-key update "$SCW_ACCESS_KEY" default-project-id="$XP", wait a minute and check again, at most five times; then stop, the key on "$XP" or not, and touch no bucket
+# After a switch to "$XP" the change takes a moment to apply at Scaleway: wait until your own key reaches "$XB" (it passes at once when the key was already there)
+for i in $(seq 1 12); do own s3api head-bucket --bucket "$XB" >/dev/null 2>&1 && break; sleep 10; done
 # The bucket empty, then gone, with the key still on "$XP"
 own s3api list-objects-v2 --bucket "$XB" --output json | jq -c '[.Contents[]?.Key]'   # PASS: []
 # FAIL ["canary/probe.txt"]: own s3api delete-object --bucket "$XB" --key canary/probe.txt, then list again
-# FAIL "NoSuchBucket": "$XB" is not in "$XP" (never made, or made elsewhere); skip delete-bucket, and the listing after the switch below looks for it
+# FAIL "NoSuchBucket" right after a switch to "$XP": the switch may not have applied yet; wait a minute and list again, at most five times, before you treat the bucket as missing
+# FAIL "NoSuchBucket" still after that: "$XB" is not in "$XP" (never made, or made elsewhere); skip delete-bucket, and the listing after the switch below looks for it
 own s3api delete-bucket --bucket "$XB"            # PASS: no output
 # FAIL "BucketNotEmpty": own s3api delete-object --bucket "$XB" --key canary/probe.txt, then delete-bucket again
 # FAIL any other error: stop before switching; the key stays on "$XP" until the bucket is gone
@@ -365,15 +368,15 @@ XB="shift2eu-r7-probe-$(date -u +%Y%m%d%H%M)"; XP="$(scw account project create 
 # FAIL an empty value or "null": the project was not made (or scw's JSON changed shape); stop, switch nothing, and look for a project named shift2eu-r7-probe-* (R0's last listing and its leftover-project block) before you run step 7 again
 [[ $XP =~ ^[0-9a-f-]{36}$ ]] && scw iam api-key update "$SCW_ACCESS_KEY" default-project-id="$XP"
 [ "$(scw iam api-key get "$SCW_ACCESS_KEY" -o json | jq -r '(.APIKey // .) | .default_project_id')" = "$XP" ] && echo "PASS default project is $XP" || echo "FAIL default project is not $XP"
-# FAIL: the switch did not happen; create nothing, run the switch line once more and this check again; FAIL again: stop, and delete the project (its delete lines below; the key never left "$P")
+# FAIL: the switch did not happen; create nothing, run the switch line once more and this check again; FAIL again: create nothing, delete the project (its delete lines below; the key never left "$P"), then step 8, and stop
 # The switch takes a moment to apply at Scaleway: wait until your own key no longer reaches the site's bucket, and create nothing before the listing below passes (the bucket would land in the site's project)
 for i in $(seq 1 12); do own s3api head-bucket --bucket "$B" >/dev/null 2>&1 || break; sleep 10; done
 own s3api list-buckets --query 'Buckets[].Name'   # PASS: [] (the throwaway project holds no bucket yet)
 # FAIL any bucket listed (the site's bucket, "$CB" or another): the switch has not applied yet; wait a minute and list again, at most five times
-# FAIL still not [] after five minutes: stop; create nothing, switch back to "$P" (the switch-back lines below), then delete the project (its delete lines below)
+# FAIL still not [] after five minutes: create nothing, switch back to "$P" (the switch-back lines below), delete the project (its delete lines below), then step 8, and stop
 own s3api create-bucket --bucket "$XB"            # PASS: prints its Location
 own s3api get-bucket-location --bucket "$XB" --query LocationConstraint --output text   # PASS: the value of $REGION (checked against --help on first use)
-# FAIL another region: do not probe; run the cleanup lines from the list-objects-v2 line on, with the key still on "$XP"
+# FAIL another region: do not probe; run the cleanup lines from own s3api list-objects-v2 --bucket "$XB" (below "The throwaway project, your own key still switched to it") on, with the key still on "$XP"
 own s3api list-buckets --query 'Buckets[].Name'   # PASS: exactly ["<the value of $XB>"]
 # FAIL [], or the site's bucket, "$CB" or another bucket next to "$XB": "$XB" landed in another project; do not probe. Switch back to "$P" (the switch-back lines below), run own s3api delete-bucket --bucket "$XB" there, check that step's listing, then delete the project (its delete lines below)
 xprobe s3api put-object --bucket "$XB" --key canary/probe.txt --body "$W/probe.txt"   # PASS: "PASS 403" or "PASS NoSuchBucket"
