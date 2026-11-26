@@ -361,7 +361,8 @@ release), *live* (checked against the live site) or *review*.
     enforces `hsts-waived` on both deployed pages when the record says waived and `downgrade-risk` on the
     privacy page unless the site counts as preloaded, and fails safe on a missing or unreadable record.
   - [x] Milestone 4: the scheduled live check doing the same (`.github/workflows/site-check.yml` runs
-    the same `ci/sitecheck` against the live release's manifest and the records at `main`).
+    the same `ci/sitecheck` against the live release's manifest and the records at the live release's
+    tag, ADR 0043's *Amendment: the scheduled check*).
   - [x] Milestone 4: the record itself: `site/records/hsts.json` (`met`, preload not pursued) and
     `site/records/preload.json` (not listed, not submitted), 2026-11-25 (ADR 0042, *The HSTS and preload
     records*).
@@ -544,7 +545,7 @@ release), *live* (checked against the live site) or *review*.
   reads the deploy needs. The key has an expiry date, and the runbook has a rotation step. *Review:* the
   runbook's policies are checked against Scaleway's permission sets.
   *Met (R7, 2026-11-24, ADR 0042's R7 table):* every bucket-configuration, policy, ACL and object probe
-  but `PutObject`, `ListBuckets` and the three state-bucket probes answered 403. The probe to a bucket
+  but `PutObject` and `ListObjectsV2` answered 403. The probe to a bucket
   in a third project was skipped (no bucket given); the state bucket's `put-object`, a write to the
   admin project's bucket, was denied, so a write outside the site's project was shown refused for that
   project. A re-run with a third project's bucket closes that gap.
