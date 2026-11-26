@@ -1,0 +1,35 @@
+# The record documents both readers of inventory_guide_excluded_keys.txt are
+# given, and the outcome each expects of them (review finding on PR #654). The
+# readers are test/examples' readExcludedFixtureKeys, through parseExcludedKeys,
+# and test/site's readAWSExcludedFields, through parseAWSExcludedFields: neither
+# test package may import the other, so each holds its own copy of the parser, and
+# this one table is what says the two accept and reject the same documents for the
+# same reasons. Both run it, each against its own copy. A case added here is
+# therefore a promise both readers keep, and a copy that grew to accept a document
+# the other rejects fails on the spot instead of letting one half of PRD #571's
+# promise hold while the other lets a field through.
+#
+# A case is one line of `<outcome> | <document>`, and `\n` in the document is a
+# newline. The outcome is either the records the document holds, each spelled as
+# the list spells it (`key: <field>` or `prefix: <prefix>`) and joined by ` ; `,
+# or `rejected: <reason>`, the reason being the one the reader's error names:
+# `malformed` (no `: ` or no name), `unknown kind`, `comment` (a `#` on a record
+# line), `duplicate` (a record an earlier line already wrote) or `empty half` (a
+# list with no key, or no prefix, which would leave one half of the checks
+# excluding nothing).
+#
+# A document accepted here holds both halves, since a list of keys alone is
+# rejected as an empty half: that is why every accepted case below writes a key
+# and a prefix.
+key: AccessPolicies ; prefix: ZookeeperConnectString | key: AccessPolicies\nprefix: ZookeeperConnectString
+key: AccessPolicies ; prefix: ZookeeperConnectString | # the account's principals\n\nkey: AccessPolicies\n\n# a cluster's hosts\nprefix: ZookeeperConnectString\n
+key: Endpoints ; prefix: BootstrapBroker |   key: Endpoints\n\n   prefix: BootstrapBroker
+rejected: malformed | Endpoint
+rejected: malformed | key:
+rejected: malformed | prefix:
+rejected: unknown kind | field: AccessPolicies\nprefix: ZookeeperConnectString
+rejected: comment | key: AccessPolicies # the account's principals\nprefix: ZookeeperConnectString
+rejected: duplicate | key: Endpoint\nprefix: BootstrapBroker\nkey: Endpoint
+rejected: empty half | key: AccessPolicies
+rejected: empty half | prefix: ZookeeperConnectString
+rejected: empty half | # a list of nothing but a comment

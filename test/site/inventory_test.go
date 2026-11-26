@@ -2,6 +2,7 @@ package site_test
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -1297,6 +1298,16 @@ var awsSearchAndMessagingCalls = map[string][]string{
 // drift apart (review finding on PR #639).
 const awsExcludedKeysPath = "test/examples/testdata/inventory_guide_excluded_keys.txt"
 
+// awsExcludedKeysRecordTablePath is the table of record documents both readers of
+// that list are given, with the records or the rejection each expects of them
+// (review finding on PR #654). The readers are this package's
+// readAWSExcludedFields and test/examples' readExcludedFixtureKeys, in
+// test/examples/inventoryguidekeys_test.go: neither test package may import the
+// other, so each holds its own copy of the parser, and this table is what holds
+// the two to the same documents. Both run it, each against its own copy, through
+// TestTheTwoExcludedKeyReadersAcceptAndRejectTheSameRecords.
+const awsExcludedKeysRecordTablePath = "test/examples/testdata/inventory_guide_excluded_key_records.txt"
+
 // awsExcludedFields are the fields PRD #571 excludes from every projection of
 // the search and messaging calls: an access policy carries the account's
 // principals, a security option its settings, an endpoint or a bootstrap address
@@ -1309,65 +1320,297 @@ type awsExcludedFields struct {
 	prefixes []string
 }
 
-// readAWSExcludedFields reads the shared list of the fields every projection and
-// fixture of the guide's search and messaging calls leaves out (PRD #571), which
-// test/examples' fixture check reads too. A record is `key: <field>` or
-// `prefix: <prefix>`; comments and blank lines are no record. This package cannot
-// import the other's reader, so it has one of its own, as the two readers of
-// test/examples/testdata/namespace_may_follow_delimiters.txt do (issue #630); the
-// two read this file the same way, record by record, so a record either accepts
-// or rejects in both. A malformed record, a record line that carries a comment
-// (which would become part of the field's name) or a record repeated fails the
-// test rather than shrinking the list or hiding its first copy.
-func readAWSExcludedFields(t *testing.T) awsExcludedFields {
-	t.Helper()
+// The two kinds a record of the shared excluded-key list may have.
+const (
+	// awsRecordKindKey is the kind of a record naming one field a projection of
+	// the guide's search and messaging calls may not name.
+	awsRecordKindKey = "key"
+	// awsRecordKindPrefix is the kind of a record naming a prefix no field may
+	// start with.
+	awsRecordKindPrefix = "prefix"
+)
 
-	var excluded awsExcludedFields
+// The reasons the shared excluded-key list, and the table of its record
+// documents, reject a document: one error each, so a case of the table can name
+// the reason it expects and both copies of the parser can be held to it (review
+// finding on PR #654).
+var (
+	// errAWSRecordMalformed rejects a record that is neither `key: <field>` nor
+	// `prefix: <prefix>`.
+	errAWSRecordMalformed = errors.New("a record is neither `key: <field>` nor `prefix: <prefix>`")
+	// errAWSRecordKind rejects a record of a kind the list does not know.
+	errAWSRecordKind = errors.New("a record's kind is neither `key` nor `prefix`")
+	// errAWSRecordComment rejects a record line that carries a comment, which
+	// would become part of the field's name.
+	errAWSRecordComment = errors.New("a record line carries a comment")
+	// errAWSRecordRepeat rejects a record an earlier line already wrote, which
+	// would hide that first copy.
+	errAWSRecordRepeat = errors.New("a record repeats an earlier one")
+	// errAWSRecordEmptyHalf rejects a list that holds no key or no prefix.
+	errAWSRecordEmptyHalf = errors.New("the list holds no key or no prefix")
+)
 
-	// seen maps a record to the line that wrote it, so a repeat names both lines.
-	seen := map[string]int{}
+// awsExcludedKeyRecord is one record of the shared excluded-key list: a field a
+// projection of the guide's search and messaging calls may not name, or a prefix
+// no field may start with (PRD #571).
+type awsExcludedKeyRecord struct {
+	// kind is awsRecordKindKey or awsRecordKindPrefix.
+	kind string
+	// name is the field, or the prefix a field may not start with.
+	name string
+}
 
-	for number, line := range strings.Split(string(readRepositoryFile(t, awsExcludedKeysPath)), "\n") {
+// spelling renders the record as the shared list writes it.
+func (r awsExcludedKeyRecord) spelling() string {
+	return r.kind + ": " + r.name
+}
+
+// parseAWSExcludedFields reads the records of the shared excluded-key list (PRD
+// #571). A record is `key: <field>` or `prefix: <prefix>`; a comment and a blank
+// line are no record. A malformed record, a record line that carries a comment
+// (which would become part of the field's name), a record of an unknown kind or a
+// record repeated is an error, and so is a list with an empty half: a list this
+// parser skipped or shrank would let a field the PRD excludes through both
+// checks, and a repeat would hide its first copy.
+//
+// The same parser, kept by hand, is test/examples' parseExcludedKeys in
+// test/examples/inventoryguidekeys_test.go, behind its readExcludedFixtureKeys
+// (the twin of this package's readAWSExcludedFields). Neither test package may
+// import the other, so awsExcludedKeysRecordTablePath is what holds the two copies
+// to the same documents, and
+// TestTheTwoExcludedKeyReadersAcceptAndRejectTheSameRecords runs it against this
+// one (review finding on PR #654).
+func parseAWSExcludedFields(document string) ([]awsExcludedKeyRecord, error) {
+	var (
+		records  []awsExcludedKeyRecord
+		keys     int
+		prefixes int
+		// seen maps a record to the line that wrote it, so a repeat names both
+		// lines.
+		seen = map[string]int{}
+	)
+
+	for number, line := range strings.Split(document, "\n") {
 		trimmed := strings.TrimSpace(line)
 		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
 			continue
 		}
 
 		if strings.Contains(trimmed, "#") {
-			t.Fatalf("%s line %d reads %q, a record with a comment on it: write the comment on a line of its own, or the comment is part of the field's name and no field matches it",
-				awsExcludedKeysPath, number+1, trimmed)
+			return nil, fmt.Errorf("%w: line %d reads %q, want the comment on a line of its own, or the comment is part of the field's name and no field matches it",
+				errAWSRecordComment, number+1, trimmed)
 		}
 
 		kind, name, ok := strings.Cut(trimmed, ": ")
 		if !ok || name == "" {
-			t.Fatalf("%s line %d reads %q, want `key: <field>` or `prefix: <prefix>`",
-				awsExcludedKeysPath, number+1, trimmed)
+			return nil, fmt.Errorf("%w: line %d reads %q, want `key: <field>` or `prefix: <prefix>`",
+				errAWSRecordMalformed, number+1, trimmed)
 		}
 
 		if first, repeated := seen[trimmed]; repeated {
-			t.Fatalf("%s line %d repeats line %d's record %q, want one record per field: a second copy hides the first and makes the reader wonder which one the two checks read",
-				awsExcludedKeysPath, number+1, first, trimmed)
+			return nil, fmt.Errorf("%w: line %d repeats line %d's record %q, want one record per field, since a second copy hides the first and leaves unclear which one the two checks read",
+				errAWSRecordRepeat, number+1, first, trimmed)
 		}
 
 		seen[trimmed] = number + 1
 
 		switch kind {
-		case "key":
-			excluded.names = append(excluded.names, name)
-		case "prefix":
-			excluded.prefixes = append(excluded.prefixes, name)
+		case awsRecordKindKey:
+			keys++
+		case awsRecordKindPrefix:
+			prefixes++
 		default:
-			t.Fatalf("%s line %d reads %q, a record of kind %q: want `key: <field>` or `prefix: <prefix>`",
-				awsExcludedKeysPath, number+1, trimmed, kind)
+			return nil, fmt.Errorf("%w: line %d reads %q, a record of kind %q, want `key: <field>` or `prefix: <prefix>`",
+				errAWSRecordKind, number+1, trimmed, kind)
+		}
+
+		records = append(records, awsExcludedKeyRecord{kind: kind, name: name})
+	}
+
+	if keys == 0 || prefixes == 0 {
+		return nil, fmt.Errorf("%w: it holds %d key(s) and %d prefix(es), want both, since the list is the whole of what both checks exclude and an empty half would let a field the PRD excludes through",
+			errAWSRecordEmptyHalf, keys, prefixes)
+	}
+
+	return records, nil
+}
+
+// readAWSExcludedFields reads the shared list of the fields every projection and
+// fixture of the guide's search and messaging calls leaves out (PRD #571), and
+// hands it to parseAWSExcludedFields. Its twin is test/examples'
+// readExcludedFixtureKeys in test/examples/inventoryguidekeys_test.go, which
+// reads the same file for the recorded fixtures with a copy of that parser. This
+// package cannot import the other's reader, so it has one of its own, as the two
+// readers of test/examples/testdata/namespace_may_follow_delimiters.txt do (issue
+// #630); awsExcludedKeysRecordTablePath is the table both run, so a document
+// either copy accepted or rejected differently from the other fails both (review
+// findings on PRs #639 and #654).
+func readAWSExcludedFields(t *testing.T) awsExcludedFields {
+	t.Helper()
+
+	records, err := parseAWSExcludedFields(string(readRepositoryFile(t, awsExcludedKeysPath)))
+	if err != nil {
+		t.Fatalf("%s: %v", awsExcludedKeysPath, err)
+	}
+
+	var excluded awsExcludedFields
+
+	for _, record := range records {
+		switch record.kind {
+		case awsRecordKindKey:
+			excluded.names = append(excluded.names, record.name)
+		case awsRecordKindPrefix:
+			excluded.prefixes = append(excluded.prefixes, record.name)
 		}
 	}
 
-	if len(excluded.names) == 0 || len(excluded.prefixes) == 0 {
-		t.Fatalf("%s holds %d key(s) and %d prefix(es), want both: the list is the whole of what both checks exclude, so an empty half would let a field the PRD excludes through",
-			awsExcludedKeysPath, len(excluded.names), len(excluded.prefixes))
+	return excluded
+}
+
+// awsExcludedKeyRecordRejections maps a rejection reason the shared table names to
+// the error parseAWSExcludedFields returns for it: a document the table rejects as
+// "duplicate" is one this parser and test/examples' must both reject as
+// errAWSRecordRepeat, and so on. A table case naming a reason this map does not
+// hold fails the table's test rather than shrinking what the two parsers are held
+// to.
+var awsExcludedKeyRecordRejections = map[string]error{
+	"malformed":    errAWSRecordMalformed,
+	"unknown kind": errAWSRecordKind,
+	"comment":      errAWSRecordComment,
+	"duplicate":    errAWSRecordRepeat,
+	"empty half":   errAWSRecordEmptyHalf,
+}
+
+// awsExcludedKeyRecordCase is one case of the shared table of record documents: a
+// list both copies of the parser are given, and the outcome each expects of it.
+type awsExcludedKeyRecordCase struct {
+	// document is the list text both parsers are given.
+	document string
+	// want is the records the document holds, each spelled as the list spells it
+	// and joined by " ; ", or "" for a document both parsers reject.
+	want string
+	// rejection is the reason both parsers reject the document, one of
+	// awsExcludedKeyRecordRejections' keys, or "" for a document both accept.
+	rejection string
+}
+
+// name names the case for a subtest.
+func (tc awsExcludedKeyRecordCase) name() string {
+	outcome := "accepted as " + tc.want
+	if tc.rejection != "" {
+		outcome = "rejected as " + tc.rejection
 	}
 
-	return excluded
+	return outcome + ": " + strings.ReplaceAll(tc.document, "\n", ", ")
+}
+
+// awsExcludedKeyRecordCases returns the shared table of record documents,
+// awsExcludedKeysRecordTablePath: a case per line, `<outcome> | <document>`, with
+// `\n` for a newline in the document and the outcome being the records the
+// document holds or `rejected: <reason>`. It fails when the table holds no case,
+// no accepted document, or no document rejected for one of the reasons above, so
+// that a reason the two parsers agree on cannot lose its pin silently.
+func awsExcludedKeyRecordCases(t *testing.T) []awsExcludedKeyRecordCase {
+	t.Helper()
+
+	var cases []awsExcludedKeyRecordCase
+
+	reasons := map[string]bool{}
+
+	for number, line := range strings.Split(string(readRepositoryFile(t, awsExcludedKeysRecordTablePath)), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+
+		outcome, document, ok := strings.Cut(trimmed, " | ")
+		if !ok {
+			t.Fatalf("%s line %d reads %q, want `<outcome> | <document>`",
+				awsExcludedKeysRecordTablePath, number+1, trimmed)
+		}
+
+		tc := awsExcludedKeyRecordCase{document: strings.ReplaceAll(document, `\n`, "\n")}
+
+		if reason, rejected := strings.CutPrefix(outcome, "rejected: "); rejected {
+			tc.rejection = reason
+			reasons[reason] = true
+		} else {
+			tc.want = outcome
+		}
+
+		cases = append(cases, tc)
+	}
+
+	if len(cases) == 0 {
+		t.Fatalf("%s holds no case, want one per record document the two parsers are held to",
+			awsExcludedKeysRecordTablePath)
+	}
+
+	if !slices.ContainsFunc(cases, func(tc awsExcludedKeyRecordCase) bool { return tc.rejection == "" }) {
+		t.Errorf("%s holds no accepted document, want one: a table of rejected documents alone says nothing about what the two parsers accept",
+			awsExcludedKeysRecordTablePath)
+	}
+
+	for reason := range awsExcludedKeyRecordRejections {
+		if !reasons[reason] {
+			t.Errorf("%s holds no document rejected as %q, want one: a reason no case exercises leaves the two parsers' agreement on it unpinned",
+				awsExcludedKeysRecordTablePath, reason)
+		}
+	}
+
+	return cases
+}
+
+// TestTheTwoExcludedKeyReadersAcceptAndRejectTheSameRecords pins that this
+// package's reader of the shared excluded-key list and test/examples' agree
+// (review finding on PR #654). parseAWSExcludedFields and test/examples'
+// parseExcludedKeys, in test/examples/inventoryguidekeys_test.go, are hand-kept
+// copies of one parser, since neither test package may import the other, and one
+// copy that grew to accept a document the other rejects would let one half of PRD
+// #571's promise hold while the other let a field through. Both run
+// awsExcludedKeysRecordTablePath, each against its own copy, and a document the
+// table holds is accepted as the records it lists, or rejected for the reason it
+// names, in both.
+func TestTheTwoExcludedKeyReadersAcceptAndRejectTheSameRecords(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range awsExcludedKeyRecordCases(t) {
+		t.Run(tc.name(), func(t *testing.T) {
+			t.Parallel()
+
+			records, err := parseAWSExcludedFields(tc.document)
+
+			if tc.rejection != "" {
+				reason, known := awsExcludedKeyRecordRejections[tc.rejection]
+				if !known {
+					t.Fatalf("%s rejects a document as %q, a reason this test does not know: add it to awsExcludedKeyRecordRejections, and to test/examples' copy of that map",
+						awsExcludedKeysRecordTablePath, tc.rejection)
+				}
+
+				if !errors.Is(err, reason) {
+					t.Fatalf("parseAWSExcludedFields reads %q as %v, want it rejected as %q (%v): the shared table's document is one both parsers must reject, and for the same reason",
+						tc.document, err, tc.rejection, reason)
+				}
+
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("parseAWSExcludedFields rejects %q as %v, want the records %q: the shared table's document is one both parsers must accept",
+					tc.document, err, tc.want)
+			}
+
+			spellings := make([]string, 0, len(records))
+			for _, record := range records {
+				spellings = append(spellings, record.spelling())
+			}
+
+			if got := strings.Join(spellings, " ; "); got != tc.want {
+				t.Errorf("parseAWSExcludedFields reads %q as %q, want %q: the records the document holds, in the list's order",
+					tc.document, got, tc.want)
+			}
+		})
+	}
 }
 
 // awsSearchAndMessagingCall finds one search or messaging call of an AWS

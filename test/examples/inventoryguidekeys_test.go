@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -96,6 +97,16 @@ var searchAndKafkaFixtures = []guideCallFixture{
 // by the same repository-relative path.
 const excludedFixtureKeysPath = "test/examples/testdata/inventory_guide_excluded_keys.txt"
 
+// excludedFixtureKeysRecordTablePath is the table of record documents both
+// readers of that list are given, with the records or the rejection each expects
+// of them (review finding on PR #654). The readers are this package's
+// readExcludedFixtureKeys and test/site's readAWSExcludedFields, in
+// test/site/inventory_test.go: neither test package may import the other, so each
+// holds its own copy of the parser, and this table is what holds the two to the
+// same documents. Both run it, each against its own copy of the parser, through
+// TestTheTwoExcludedKeyReadersAcceptAndRejectTheSameRecords.
+const excludedFixtureKeysRecordTablePath = "test/examples/testdata/inventory_guide_excluded_key_records.txt"
+
 // excludedFixtureKeys is the shared list of the fields no fixture of a new call
 // may carry (PRD #571, *Only the fields the program reads*): an access policy
 // names the account's principals, a security option its settings, and an endpoint
@@ -115,69 +126,292 @@ func (e excludedFixtureKeys) excludes(key string) bool {
 		slices.ContainsFunc(e.prefixes, func(prefix string) bool { return strings.HasPrefix(key, prefix) })
 }
 
-// readExcludedFixtureKeys reads the shared list of the fields every projection
-// and fixture of the guide's search and messaging calls leaves out (PRD #571),
-// which test/site's check of the guide's --query reads too (review finding on PR
-// #639); the two read it the same way, record by record, so a record either
-// accepts or rejects in both. A record is `key: <field>` or `prefix: <field
-// prefix>`; comments and blank lines are no record. A malformed record, a record
-// line that carries a comment (which would become part of the field's name) or a
-// record repeated fails the test: a list this reader skipped would let a field
-// the PRD excludes through both checks, and a repeat would hide its first copy.
-func readExcludedFixtureKeys(t *testing.T) excludedFixtureKeys {
-	t.Helper()
+// The two kinds a record of the shared excluded-key list may have.
+const (
+	// recordKindKey is the kind of a record naming one field the guide's search
+	// and messaging calls may not carry.
+	recordKindKey = "key"
+	// recordKindPrefix is the kind of a record naming a prefix no field may start
+	// with.
+	recordKindPrefix = "prefix"
+)
 
-	document, err := os.ReadFile(filepath.Join(repoRoot, filepath.FromSlash(excludedFixtureKeysPath)))
-	if err != nil {
-		t.Fatalf("read the shared excluded-key list: %v", err)
-	}
+// The reasons the shared excluded-key list, and the table of its record
+// documents, reject a document: one error each, so a case of the table can name
+// the reason it expects and both copies of the parser can be held to it (review
+// finding on PR #654).
+var (
+	// errRecordMalformed rejects a record that is neither `key: <field>` nor
+	// `prefix: <prefix>`.
+	errRecordMalformed = errors.New("a record is neither `key: <field>` nor `prefix: <prefix>`")
+	// errRecordKind rejects a record of a kind the list does not know.
+	errRecordKind = errors.New("a record's kind is neither `key` nor `prefix`")
+	// errRecordComment rejects a record line that carries a comment, which would
+	// become part of the field's name.
+	errRecordComment = errors.New("a record line carries a comment")
+	// errRecordRepeat rejects a record an earlier line already wrote, which would
+	// hide that first copy.
+	errRecordRepeat = errors.New("a record repeats an earlier one")
+	// errRecordEmptyHalf rejects a list that holds no key or no prefix.
+	errRecordEmptyHalf = errors.New("the list holds no key or no prefix")
+)
 
-	var excluded excludedFixtureKeys
+// excludedKeyRecord is one record of the shared excluded-key list: a field the
+// guide's search and messaging calls may not carry, or a prefix no field may
+// start with (PRD #571).
+type excludedKeyRecord struct {
+	// kind is recordKindKey or recordKindPrefix.
+	kind string
+	// name is the field, or the prefix a field may not start with.
+	name string
+}
 
-	// seen maps a record to the line that wrote it, so a repeat names both lines.
-	seen := map[string]int{}
+// spelling renders the record as the shared list writes it.
+func (r excludedKeyRecord) spelling() string {
+	return r.kind + ": " + r.name
+}
 
-	for number, line := range strings.Split(string(document), "\n") {
+// parseExcludedKeys reads the records of the shared excluded-key list (PRD
+// #571). A record is `key: <field>` or `prefix: <prefix>`; a comment and a blank
+// line are no record. A malformed record, a record line that carries a comment
+// (which would become part of the field's name), a record of an unknown kind or a
+// record repeated is an error, and so is a list with an empty half: a list this
+// parser skipped or shrank would let a field the PRD excludes through both
+// checks, and a repeat would hide its first copy.
+//
+// The same parser, kept by hand, is test/site's parseAWSExcludedFields in
+// test/site/inventory_test.go, behind its readAWSExcludedFields (the twin of this
+// package's readExcludedFixtureKeys). Neither test package may import the other,
+// so excludedFixtureKeysRecordTablePath is what holds the two copies to the same
+// documents, and TestTheTwoExcludedKeyReadersAcceptAndRejectTheSameRecords runs
+// it against this one (review finding on PR #654).
+func parseExcludedKeys(document string) ([]excludedKeyRecord, error) {
+	var (
+		records  []excludedKeyRecord
+		keys     int
+		prefixes int
+		// seen maps a record to the line that wrote it, so a repeat names both
+		// lines.
+		seen = map[string]int{}
+	)
+
+	for number, line := range strings.Split(document, "\n") {
 		trimmed := strings.TrimSpace(line)
 		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
 			continue
 		}
 
 		if strings.Contains(trimmed, "#") {
-			t.Fatalf("%s line %d reads %q, a record with a comment on it: write the comment on a line of its own, or the comment is part of the field's name and no field matches it",
-				excludedFixtureKeysPath, number+1, trimmed)
+			return nil, fmt.Errorf("%w: line %d reads %q, want the comment on a line of its own, or the comment is part of the field's name and no field matches it",
+				errRecordComment, number+1, trimmed)
 		}
 
 		kind, name, ok := strings.Cut(trimmed, ": ")
 		if !ok || name == "" {
-			t.Fatalf("%s line %d reads %q, want `key: <field>` or `prefix: <prefix>`",
-				excludedFixtureKeysPath, number+1, trimmed)
+			return nil, fmt.Errorf("%w: line %d reads %q, want `key: <field>` or `prefix: <prefix>`",
+				errRecordMalformed, number+1, trimmed)
 		}
 
 		if first, repeated := seen[trimmed]; repeated {
-			t.Fatalf("%s line %d repeats line %d's record %q, want one record per field: a second copy hides the first and makes the reader wonder which one the two checks read",
-				excludedFixtureKeysPath, number+1, first, trimmed)
+			return nil, fmt.Errorf("%w: line %d repeats line %d's record %q, want one record per field, since a second copy hides the first and leaves unclear which one the two checks read",
+				errRecordRepeat, number+1, first, trimmed)
 		}
 
 		seen[trimmed] = number + 1
 
 		switch kind {
-		case "key":
-			excluded.names = append(excluded.names, name)
-		case "prefix":
-			excluded.prefixes = append(excluded.prefixes, name)
+		case recordKindKey:
+			keys++
+		case recordKindPrefix:
+			prefixes++
 		default:
-			t.Fatalf("%s line %d reads %q, a record of kind %q: want `key: <field>` or `prefix: <prefix>`",
-				excludedFixtureKeysPath, number+1, trimmed, kind)
+			return nil, fmt.Errorf("%w: line %d reads %q, a record of kind %q, want `key: <field>` or `prefix: <prefix>`",
+				errRecordKind, number+1, trimmed, kind)
+		}
+
+		records = append(records, excludedKeyRecord{kind: kind, name: name})
+	}
+
+	if keys == 0 || prefixes == 0 {
+		return nil, fmt.Errorf("%w: it holds %d key(s) and %d prefix(es), want both, since the list is the whole of what both checks exclude and an empty half would let a field the PRD excludes through",
+			errRecordEmptyHalf, keys, prefixes)
+	}
+
+	return records, nil
+}
+
+// readExcludedFixtureKeys reads the shared list of the fields every projection
+// and fixture of the guide's search and messaging calls leaves out (PRD #571),
+// and hands it to parseExcludedKeys. Its twin is test/site's readAWSExcludedFields
+// in test/site/inventory_test.go, which reads the same file for the guide's
+// --query with a copy of that parser (review finding on PR #639), and
+// excludedFixtureKeysRecordTablePath is the table both run so a document either
+// copy accepted or rejected differently from the other fails both (review finding
+// on PR #654).
+func readExcludedFixtureKeys(t *testing.T) excludedFixtureKeys {
+	t.Helper()
+
+	records, err := parseExcludedKeys(readFile(t, filepath.Join(repoRoot, filepath.FromSlash(excludedFixtureKeysPath))))
+	if err != nil {
+		t.Fatalf("%s: %v", excludedFixtureKeysPath, err)
+	}
+
+	var excluded excludedFixtureKeys
+
+	for _, record := range records {
+		switch record.kind {
+		case recordKindKey:
+			excluded.names = append(excluded.names, record.name)
+		case recordKindPrefix:
+			excluded.prefixes = append(excluded.prefixes, record.name)
 		}
 	}
 
-	if len(excluded.names) == 0 || len(excluded.prefixes) == 0 {
-		t.Fatalf("%s holds %d key(s) and %d prefix(es), want both: the list is the whole of what both checks exclude, so an empty half would let a field the PRD excludes through",
-			excludedFixtureKeysPath, len(excluded.names), len(excluded.prefixes))
+	return excluded
+}
+
+// excludedKeyRecordRejections maps a rejection reason the shared table names to
+// the error parseExcludedKeys returns for it: a document the table rejects as
+// "duplicate" is one this parser and test/site's must both reject as
+// errRecordRepeat, and so on. A table case naming a reason this map does not hold
+// fails the table's test rather than shrinking what the two parsers are held to.
+var excludedKeyRecordRejections = map[string]error{
+	"malformed":    errRecordMalformed,
+	"unknown kind": errRecordKind,
+	"comment":      errRecordComment,
+	"duplicate":    errRecordRepeat,
+	"empty half":   errRecordEmptyHalf,
+}
+
+// excludedKeyRecordCase is one case of the shared table of record documents: a
+// list both copies of the parser are given, and the outcome each expects of it.
+type excludedKeyRecordCase struct {
+	// document is the list text both parsers are given.
+	document string
+	// want is the records the document holds, each spelled as the list spells it
+	// and joined by " ; ", or "" for a document both parsers reject.
+	want string
+	// rejection is the reason both parsers reject the document, one of
+	// excludedKeyRecordRejections' keys, or "" for a document both accept.
+	rejection string
+}
+
+// name names the case for a subtest.
+func (tc excludedKeyRecordCase) name() string {
+	outcome := "accepted as " + tc.want
+	if tc.rejection != "" {
+		outcome = "rejected as " + tc.rejection
 	}
 
-	return excluded
+	return outcome + ": " + strings.ReplaceAll(tc.document, "\n", ", ")
+}
+
+// excludedKeyRecordCases returns the shared table of record documents,
+// excludedFixtureKeysRecordTablePath: a case per line, `<outcome> | <document>`,
+// with `\n` for a newline in the document and the outcome being the records the
+// document holds or `rejected: <reason>`. It fails when the table holds no case,
+// no accepted document, or no document rejected for one of the reasons above, so
+// that a reason the two parsers agree on cannot lose its pin silently.
+func excludedKeyRecordCases(t *testing.T) []excludedKeyRecordCase {
+	t.Helper()
+
+	var cases []excludedKeyRecordCase
+
+	reasons := map[string]bool{}
+
+	for number, line := range strings.Split(readFile(t, filepath.Join(repoRoot, filepath.FromSlash(excludedFixtureKeysRecordTablePath))), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+
+		outcome, document, ok := strings.Cut(trimmed, " | ")
+		if !ok {
+			t.Fatalf("%s line %d reads %q, want `<outcome> | <document>`",
+				excludedFixtureKeysRecordTablePath, number+1, trimmed)
+		}
+
+		tc := excludedKeyRecordCase{document: strings.ReplaceAll(document, `\n`, "\n")}
+
+		if reason, rejected := strings.CutPrefix(outcome, "rejected: "); rejected {
+			tc.rejection = reason
+			reasons[reason] = true
+		} else {
+			tc.want = outcome
+		}
+
+		cases = append(cases, tc)
+	}
+
+	if len(cases) == 0 {
+		t.Fatalf("%s holds no case, want one per record document the two parsers are held to",
+			excludedFixtureKeysRecordTablePath)
+	}
+
+	if !slices.ContainsFunc(cases, func(tc excludedKeyRecordCase) bool { return tc.rejection == "" }) {
+		t.Errorf("%s holds no accepted document, want one: a table of rejected documents alone says nothing about what the two parsers accept",
+			excludedFixtureKeysRecordTablePath)
+	}
+
+	for reason := range excludedKeyRecordRejections {
+		if !reasons[reason] {
+			t.Errorf("%s holds no document rejected as %q, want one: a reason no case exercises leaves the two parsers' agreement on it unpinned",
+				excludedFixtureKeysRecordTablePath, reason)
+		}
+	}
+
+	return cases
+}
+
+// TestTheTwoExcludedKeyReadersAcceptAndRejectTheSameRecords pins that this
+// package's reader of the shared excluded-key list and test/site's agree (review
+// finding on PR #654). parseExcludedKeys and test/site's parseAWSExcludedFields,
+// in test/site/inventory_test.go, are hand-kept copies of one parser, since
+// neither test package may import the other, and one copy that grew to accept a
+// document the other rejects would let one half of PRD #571's promise hold while
+// the other let a field through. Both run excludedFixtureKeysRecordTablePath,
+// each against its own copy, and a document the table holds is accepted as the
+// records it lists, or rejected for the reason it names, in both.
+func TestTheTwoExcludedKeyReadersAcceptAndRejectTheSameRecords(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range excludedKeyRecordCases(t) {
+		t.Run(tc.name(), func(t *testing.T) {
+			t.Parallel()
+
+			records, err := parseExcludedKeys(tc.document)
+
+			if tc.rejection != "" {
+				reason, known := excludedKeyRecordRejections[tc.rejection]
+				if !known {
+					t.Fatalf("%s rejects a document as %q, a reason this test does not know: add it to excludedKeyRecordRejections, and to test/site's copy of that map",
+						excludedFixtureKeysRecordTablePath, tc.rejection)
+				}
+
+				if !errors.Is(err, reason) {
+					t.Fatalf("parseExcludedKeys reads %q as %v, want it rejected as %q (%v): the shared table's document is one both parsers must reject, and for the same reason",
+						tc.document, err, tc.rejection, reason)
+				}
+
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("parseExcludedKeys rejects %q as %v, want the records %q: the shared table's document is one both parsers must accept",
+					tc.document, err, tc.want)
+			}
+
+			spellings := make([]string, 0, len(records))
+			for _, record := range records {
+				spellings = append(spellings, record.spelling())
+			}
+
+			if got := strings.Join(spellings, " ; "); got != tc.want {
+				t.Errorf("parseExcludedKeys reads %q as %q, want %q: the records the document holds, in the list's order",
+					tc.document, got, tc.want)
+			}
+		})
+	}
 }
 
 // TestInventoryGuideSearchAndKafkaFixturesCarryOnlyTheFieldsTheProgramReads pins
@@ -186,13 +420,16 @@ func readExcludedFixtureKeys(t *testing.T) excludedFixtureKeys {
 func TestInventoryGuideSearchAndKafkaFixturesCarryOnlyTheFieldsTheProgramReads(t *testing.T) {
 	t.Parallel()
 
+	// The list is read once, before the subtests: a malformed one is the list's
+	// failure, not each fixture's, and reading it per subtest would fail every
+	// one of them for the same reason.
+	excluded := readExcludedFixtureKeys(t)
+
 	for _, tc := range searchAndKafkaFixtures {
 		t.Run(tc.call, func(t *testing.T) {
 			t.Parallel()
 
 			path := filepath.Join(repoRoot, filepath.FromSlash(tc.file))
-
-			excluded := readExcludedFixtureKeys(t)
 
 			// A call the AWS CLI does not page writes one JSON value per page into the
 			// file, so every value the fixture holds is checked, not the first alone.
@@ -227,9 +464,14 @@ func describeDomainsBatch(t *testing.T) int {
 	}
 
 	batch, err := strconv.Atoi(matches[0][1])
-	if err != nil || batch < 1 {
-		t.Fatalf("%s asks describe-domains for %q domain(s) at a time, want a positive number: %v",
+	if err != nil {
+		t.Fatalf("%s asks describe-domains for %q domain(s) at a time, want a number: %v",
 			guidePath, matches[0][1], err)
+	}
+
+	if batch < 1 {
+		t.Fatalf("%s asks describe-domains for %d domain(s) at a time, want at least 1: a batch of none asks the call for no domain and writes no value of the recording",
+			guidePath, batch)
 	}
 
 	return batch
