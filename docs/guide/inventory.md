@@ -97,9 +97,10 @@ up in the report as a blocker on every target, instead of disappearing from the 
 programs below classify into the seven categories ADR 0046 adds, on every source that has such a
 service: AWS and Azure into all seven, GCP into all but `database.mongodb` (its program classifies no
 GCP service as one; Firestore stays `unclassified`, PRD #552); each source's *classification* table
-names the types. They do not classify into the two ADR 0047 adds yet, nor into `network.dns`: an
-OpenSearch domain, a Kafka cluster or a DNS zone is listed as `unclassified`, or not at all, so set its
-category (`search.opensearch`, `messaging.kafka` or `network.dns`) by hand.
+names the types. Into the two ADR 0047 adds only the AWS program classifies yet (PRD #571), and none
+into `network.dns`: an Azure or GCP search or Kafka cluster, or a DNS zone on any source, is listed as
+`unclassified`, or not at all, so set its category (`search.opensearch`, `messaging.kafka` or
+`network.dns`) by hand.
 
 The **capabilities** are features a resource depends on:
 
