@@ -87,28 +87,78 @@ var searchAndKafkaFixtures = []guideCallFixture{
 	},
 }
 
-// excludedFixtureKeys are the fields no fixture of a new call may carry (PRD
-// #571, *Only the fields the program reads*): an access policy names the
-// account's principals, a security option its settings, and an endpoint or a
-// bootstrap address a host with the account's name in it.
-var excludedFixtureKeys = []string{
-	"AccessPolicies",
-	"AdvancedSecurityOptions",
-	"CognitoOptions",
-	"Endpoint",
-	"Endpoints",
-	"DomainEndpointOptions",
-	"collectionEndpoint",
-	"dashboardEndpoint",
-	"bootstrapAddress",
-	"osProfile",
-	"connectivityEndpoints",
+// excludedFixtureKeysPath is the one list of the fields PRD #571 excludes from
+// every projection and fixture of the guide's search and messaging calls, shared
+// with test/site's projection check so the two cannot drift apart (review finding
+// on PR #639). It sits in this package's testdata directory, and test/site reads it
+// by the same repository-relative path.
+const excludedFixtureKeysPath = "test/examples/testdata/inventory_guide_excluded_keys.txt"
+
+// excludedFixtureKeys is the shared list of the fields no fixture of a new call
+// may carry (PRD #571, *Only the fields the program reads*): an access policy
+// names the account's principals, a security option its settings, and an endpoint
+// or a bootstrap address a host with the account's name in it.
+type excludedFixtureKeys struct {
+	// names are the fields a fixture may not hold at any depth.
+	names []string
+	// prefixes are the fields a fixture may not hold whatever their suffix: a
+	// cluster's ZooKeeper connection strings and its broker addresses, which name
+	// the cluster's hosts.
+	prefixes []string
 }
 
-// excludedFixtureKeyPrefixes are the fields no fixture may carry whatever their
-// suffix: a cluster's ZooKeeper connection strings and its broker addresses,
-// which name the cluster's hosts.
-var excludedFixtureKeyPrefixes = []string{"ZookeeperConnectString", "BootstrapBroker"}
+// holdInFixture reports whether the key is one the shared list excludes.
+func (e excludedFixtureKeys) holdInFixture(key string) bool {
+	return slices.Contains(e.names, key) ||
+		slices.ContainsFunc(e.prefixes, func(prefix string) bool { return strings.HasPrefix(key, prefix) })
+}
+
+// readExcludedFixtureKeys reads the shared list of the fields every projection
+// and fixture of the guide's search and messaging calls leaves out (PRD #571),
+// which test/site's check of the guide's --query reads too (review finding on PR
+// #639). A record is `key: <field>` or `prefix: <field prefix>`; comments and
+// blank lines are no record. A malformed record fails the test: a list this
+// reader skipped would let a field the PRD excludes through both checks.
+func readExcludedFixtureKeys(t *testing.T) excludedFixtureKeys {
+	t.Helper()
+
+	document, err := os.ReadFile(filepath.Join(repoRoot, filepath.FromSlash(excludedFixtureKeysPath)))
+	if err != nil {
+		t.Fatalf("read the shared excluded-key list: %v", err)
+	}
+
+	var excluded excludedFixtureKeys
+
+	for number, line := range strings.Split(string(document), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+
+		kind, name, ok := strings.Cut(trimmed, ": ")
+		if !ok || name == "" {
+			t.Fatalf("%s line %d reads %q, want `key: <field>` or `prefix: <prefix>`",
+				excludedFixtureKeysPath, number+1, trimmed)
+		}
+
+		switch kind {
+		case "key":
+			excluded.names = append(excluded.names, name)
+		case "prefix":
+			excluded.prefixes = append(excluded.prefixes, name)
+		default:
+			t.Fatalf("%s line %d reads %q, a record of kind %q: want `key: <field>` or `prefix: <prefix>`",
+				excludedFixtureKeysPath, number+1, trimmed, kind)
+		}
+	}
+
+	if len(excluded.names) == 0 || len(excluded.prefixes) == 0 {
+		t.Fatalf("%s holds %d key(s) and %d prefix(es), want both: the list is the whole of what both checks exclude, so an empty half would let a field the PRD excludes through",
+			excludedFixtureKeysPath, len(excluded.names), len(excluded.prefixes))
+	}
+
+	return excluded
+}
 
 // TestInventoryGuideSearchAndKafkaFixturesCarryOnlyTheFieldsTheProgramReads pins
 // that each new call's recorded output holds the fields its jq program reads and
@@ -122,15 +172,163 @@ func TestInventoryGuideSearchAndKafkaFixturesCarryOnlyTheFieldsTheProgramReads(t
 
 			path := filepath.Join(repoRoot, filepath.FromSlash(tc.file))
 
+			excluded := readExcludedFixtureKeys(t)
+
 			// A call the AWS CLI does not page writes one JSON value per page into the
 			// file, so every value the fixture holds is checked, not the first alone.
 			for _, value := range readFixtureValues(t, path, tc.call) {
-				for _, problem := range fixtureKeyProblems(value, tc.keys) {
+				for _, problem := range fixtureKeyProblems(value, tc.keys, excluded) {
 					t.Errorf("%s: %s", tc.file, problem)
 				}
 			}
 		})
 	}
+}
+
+// describeDomainsBatch is the number of domain names the guide asks
+// `aws opensearch describe-domains` for at a time (`xargs -r -n 5`), which is why
+// a region of more than five domains records several JSON values in the one file
+// the command redirects every batch to.
+const describeDomainsBatch = 5
+
+// TestInventoryGuideDescribeDomainsFixtureRecordsEveryBatch pins the shape of a
+// describe-domains recording (PRD #571, review finding on PR #639): the guide
+// hands the call five names at a time with `xargs -r -n 5` and redirects every
+// batch to `opensearch-domains.json`, so a region of more than five domains
+// holds one JSON value per batch. A fixture of one value would record a command
+// the guide does not run, and a check that read only the first value would miss
+// every domain of every later batch.
+func TestInventoryGuideDescribeDomainsFixtureRecordsEveryBatch(t *testing.T) {
+	t.Parallel()
+
+	names, err := filepath.Glob(filepath.Join(repoRoot, "test/e2e/testdata/inventory-guide/aws/*/opensearch-domain-names.json"))
+	if err != nil {
+		t.Fatalf("glob the recorded list-domain-names output: %v", err)
+	}
+
+	if len(names) == 0 {
+		t.Fatalf("test/e2e/testdata/inventory-guide/aws/*/opensearch-domain-names.json matched no recorded output; the fixtures are missing")
+	}
+
+	slices.Sort(names)
+
+	batches := 0
+
+	for _, namesPath := range names {
+		listed := readRecordedDomainNames(t, namesPath)
+
+		// One value per batch of names the guide asked the call for.
+		want := (len(listed) + describeDomainsBatch - 1) / describeDomainsBatch
+
+		batches += want
+
+		t.Run(filepath.Base(filepath.Dir(namesPath)), func(t *testing.T) {
+			t.Parallel()
+
+			domainsPath := filepath.Join(filepath.Dir(namesPath), "opensearch-domains.json")
+
+			pages := readRecordedDomainPages(t, domainsPath)
+
+			if len(pages) != want {
+				t.Errorf("%s holds %d JSON value(s), want %d: %s names %d domain(s) and the guide asks describe-domains for %d at a time, so it runs the call %d time(s) and every batch is a value of its own in the file",
+					domainsPath, len(pages), want, namesPath, len(listed), describeDomainsBatch, want)
+			}
+
+			described := 0
+
+			for i, page := range pages {
+				if len(page) == 0 {
+					t.Errorf("%s value %d holds no domain, want at least one: the guide writes a value per batch of names it asked for, so an empty value records a call the guide never made",
+						domainsPath, i+1)
+				}
+
+				if len(page) > describeDomainsBatch {
+					t.Errorf("%s value %d holds %d domain(s), want at most %d: the guide asks the call for %d names at a time",
+						domainsPath, i+1, len(page), describeDomainsBatch, describeDomainsBatch)
+				}
+
+				described += len(page)
+			}
+
+			if described != len(listed) {
+				t.Errorf("%s describes %d domain(s) over its %d value(s) and %s names %d: the guide asks describe-domains for the names list-domain-names returned, so every batch is described once",
+					domainsPath, described, len(pages), namesPath, len(listed))
+			}
+		})
+	}
+
+	if batches < 2 {
+		t.Errorf("the recorded describe-domains output holds %d value(s) over every region, want at least 2: the guide's `xargs -r -n %d` writes one value per batch, and a fixture of one value cannot show that the program reads more than the first (review finding on PR #639)",
+			batches, describeDomainsBatch)
+	}
+}
+
+// readRecordedDomainNames returns the names a recorded list-domain-names output
+// holds, over every JSON value of the file.
+func readRecordedDomainNames(t *testing.T, path string) []string {
+	t.Helper()
+
+	var names []string
+
+	for _, value := range readFixtureValues(t, path, "aws opensearch list-domain-names") {
+		document, ok := value.(map[string]any)
+		if !ok {
+			t.Fatalf("%s holds a value that is not a list-domain-names response: %T", path, value)
+		}
+
+		for _, field := range asSlice(document["DomainNames"]) {
+			name, ok := field.(map[string]any)["DomainName"].(string)
+			if !ok {
+				t.Fatalf("%s holds a DomainNames entry without a DomainName: %v", path, field)
+			}
+
+			names = append(names, name)
+		}
+	}
+
+	if len(names) == 0 {
+		t.Fatalf("%s names no domain, so this check read nothing", path)
+	}
+
+	return names
+}
+
+// readRecordedDomainPages returns the domain names of each JSON value of a
+// recorded describe-domains output, one slice per value, in the file's order.
+func readRecordedDomainPages(t *testing.T, path string) [][]string {
+	t.Helper()
+
+	var pages [][]string
+
+	for _, value := range readFixtureValues(t, path, "aws opensearch describe-domains") {
+		document, ok := value.(map[string]any)
+		if !ok {
+			t.Fatalf("%s holds a value that is not a describe-domains response: %T", path, value)
+		}
+
+		var page []string
+
+		for _, field := range asSlice(document["DomainStatusList"]) {
+			name, ok := field.(map[string]any)["DomainName"].(string)
+			if !ok {
+				t.Fatalf("%s holds a DomainStatusList entry without a DomainName: %v", path, field)
+			}
+
+			page = append(page, name)
+		}
+
+		pages = append(pages, page)
+	}
+
+	return pages
+}
+
+// asSlice returns the entries of a decoded JSON array, and none of a field the
+// document does not hold.
+func asSlice(value any) []any {
+	entries, _ := value.([]any)
+
+	return entries
 }
 
 // readFixtureValues decodes every JSON value a recorded fixture holds. The guide
@@ -190,7 +388,7 @@ func TestInventoryGuideSearchAndKafkaFixtureCheckFindsAPlantedKey(t *testing.T) 
 		},
 	}
 
-	problems := fixtureKeyProblems(planted, []string{"DomainStatusList", "DomainName"})
+	problems := fixtureKeyProblems(planted, []string{"DomainStatusList", "DomainName"}, readExcludedFixtureKeys(t))
 
 	want := []string{
 		"the fixture holds the key \"AccessPolicies\", which PRD #571 excludes from every projection",
@@ -213,8 +411,8 @@ func TestInventoryGuideSearchAndKafkaFixtureCheckFindsAPlantedKey(t *testing.T) 
 
 // fixtureKeyProblems returns, sorted and without duplicates, what is wrong with
 // the keys of a recorded fixture: a key no jq program of the call reads, and a
-// key PRD #571 excludes, at any depth.
-func fixtureKeyProblems(value any, allowed []string) []string {
+// key the shared list excludes, at any depth.
+func fixtureKeyProblems(value any, allowed []string, excluded excludedFixtureKeys) []string {
 	var problems []string
 
 	var walk func(value any)
@@ -223,11 +421,7 @@ func fixtureKeyProblems(value any, allowed []string) []string {
 		switch typed := value.(type) {
 		case map[string]any:
 			for key, child := range typed {
-				if slices.ContainsFunc(excludedFixtureKeys, func(excluded string) bool {
-					return key == excluded
-				}) || slices.ContainsFunc(excludedFixtureKeyPrefixes, func(prefix string) bool {
-					return strings.HasPrefix(key, prefix)
-				}) {
+				if excluded.holdInFixture(key) {
 					problems = append(problems, "the fixture holds the key "+quotedKey(key)+", which PRD #571 excludes from every projection")
 				}
 
