@@ -21,7 +21,13 @@
 // link, by another file, by removal, and by creating a path the run recorded as
 // absent - and the two a run cannot compare, one still absent after the steps and
 // one over the digest's cap; it reads back what the run left at each path, and a
-// repair that itself fails has a test of its own (issues #615, #614).
+// repair that itself fails has a test of its own, whichever file command of the
+// five it fails on, before or after one the run does empty (issues #615, #614).
+//
+// A file command whose path exists before the run but is no regular file the run
+// can open is refused with the usage exit, before any step, and one that does not
+// exist at all stays allowed: the run records it as absent (issues #615, #614,
+// the auditor's round-4 L1).
 package main
 
 import (
@@ -419,6 +425,28 @@ func TestRunEmptiesAFileCommandItsStepsChanged(t *testing.T) {
 			wantAbsent: []string{"GITHUB_STATE"},
 		},
 		{
+			// Absent is not a refusal: a path that does not exist before the run
+			// is recorded as absent, and nothing more (issues #615, #614, the
+			// auditor's round-4 L1's other half). The runner lays its four files
+			// down before the step, so this is what an earlier step of the job
+			// that removed one leaves; the run creates only the summary it appends
+			// to, and the run passes with its result.
+			name: "every file command absent before the run",
+			before: func(t *testing.T, f *stepFiles) {
+				t.Helper()
+
+				// The summary is absent already: no earlier step wrote one, so the
+				// run creates it. The runner's four files are removed, as an
+				// earlier step of the job that cleaned them up leaves them.
+				for _, name := range []string{"GITHUB_ENV", "GITHUB_PATH", "GITHUB_OUTPUT", "GITHUB_STATE"} {
+					removeEntry(t, f.path(name))
+				}
+			},
+			wantCode:   audit.ExitOK,
+			wantResult: true,
+			wantAbsent: []string{"GITHUB_ENV", "GITHUB_PATH", "GITHUB_OUTPUT", "GITHUB_STATE"},
+		},
+		{
 			// A file over the digest's 4 MiB cap cannot be compared with what the
 			// run recorded, so it counts as changed and is emptied (fail closed)
 			// even though no step wrote to it.
@@ -513,130 +541,255 @@ func TestRunEmptiesAFileCommandItsStepsChanged(t *testing.T) {
 }
 
 // TestRunFailsWhenAChangedFileCommandCannotBeEmptied pins the repair's own
-// failure, the one outcome the table above cannot express (issues #615, #614):
-// a file command the steps changed that the run cannot leave empty. A step that
+// failure, the one outcome the table above cannot express (issues #615, #614): a
+// file command the steps changed that the run cannot leave empty. A step that
 // replaces the path with a directory makes it deterministic and needs no
-// permission trick, because os.Rename cannot put a file over a directory. The
-// run must then fail - the changed file command was not emptied, so the runner
-// may still apply it - with its own line on stderr, distinct from the note a
-// successful repair prints, and with no file command named as emptied; it names
-// neither the step's token nor its canary, and leaves the path as the step made
-// it, with no temporary file behind.
+// permission trick, because os.Rename cannot put a file over a directory. The run
+// must then fail - the changed file command was not emptied, so the runner may
+// still apply it - with its own line on stderr, naming that file command and
+// distinct from the note a successful repair prints; it names neither the step's
+// token nor its canary, and leaves the path as the step made it, with no
+// temporary file behind.
+//
+// One file command the run cannot empty stops neither the repair of the ones
+// after it nor the report of the ones it did empty (the reviewer's and the
+// auditor's round-4 should-fix): a repair that returned at its first failure
+// would leave a step that made $GITHUB_ENV a directory early in the five with its
+// $GITHUB_PATH line and its summary text for the runner to apply and publish. The
+// table pins the failure first, with $GITHUB_PATH and the summary emptied after
+// it, and the failure last, with $GITHUB_PATH emptied before it.
 func TestRunFailsWhenAChangedFileCommandCannotBeEmptied(t *testing.T) {
 	t.Parallel()
 
-	f := newStepFiles(t)
+	cases := []struct {
+		name string
+		// change is what a step does to the file commands while the run is under
+		// way.
+		change func(*testing.T, *stepFiles)
+		// wantHostile names the one file command whose path the step replaced
+		// with a non-empty directory, which no repair can put an empty file
+		// over: the run cannot empty it.
+		wantHostile string
+		// wantEmpty names the file commands the run must still leave as empty
+		// regular files, whether the step changed them before or after the one
+		// it could not empty.
+		wantEmpty []string
+	}{
+		{
+			name: "a file command the run cannot empty and nothing else changed",
+			change: func(t *testing.T, f *stepFiles) {
+				t.Helper()
 
-	recorder := &stepRecorder{
-		result: []byte(auditResult),
-		duringAudit: func() {
-			swapForDirectory(t, f.path("GITHUB_PATH"))
+				swapForDirectory(t, f.path("GITHUB_PATH"))
+			},
+			wantHostile: "GITHUB_PATH",
+		},
+		{
+			name: "a file command the run cannot empty before two it must empty",
+			change: func(t *testing.T, f *stepFiles) {
+				t.Helper()
+
+				swapForDirectory(t, f.path("GITHUB_ENV"))
+				appendTo("GITHUB_PATH", "/tmp/evil\n")(t, f)
+				appendTo("GITHUB_STEP_SUMMARY", "a line the step added\n")(t, f)
+			},
+			wantHostile: "GITHUB_ENV",
+			wantEmpty:   []string{"GITHUB_PATH", "GITHUB_STEP_SUMMARY"},
+		},
+		{
+			name: "a file command the run cannot empty after one it must empty",
+			change: func(t *testing.T, f *stepFiles) {
+				t.Helper()
+
+				appendTo("GITHUB_PATH", "/tmp/evil\n")(t, f)
+				swapForDirectory(t, f.path("GITHUB_STEP_SUMMARY"))
+			},
+			wantHostile: "GITHUB_STEP_SUMMARY",
+			wantEmpty:   []string{"GITHUB_PATH"},
 		},
 	}
 
-	result := runAuditrunWith(t, stepArgs(f.dir), f.env, recorder)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 
-	if result.code != audit.ExitFailed {
-		t.Errorf("the run's exit code is %d, want %d (audit.ExitFailed): a changed file command the run could not empty leaves the runner its bytes, so the run must not pass\nstdout: %s\nstderr: %s",
-			result.code, audit.ExitFailed, result.stdout, result.stderr)
+			f := newStepFiles(t)
+			pre := f.contents(t)
+
+			recorder := &stepRecorder{
+				result:      []byte(auditResult),
+				duringAudit: func() { tc.change(t, f) },
+			}
+
+			result := runAuditrunWith(t, stepArgs(f.dir), f.env, recorder)
+
+			if result.code != audit.ExitFailed {
+				t.Errorf("the run's exit code is %d, want %d (audit.ExitFailed): a changed file command the run could not empty leaves the runner its bytes, so the run must not pass\nstdout: %s\nstderr: %s",
+					result.code, audit.ExitFailed, result.stdout, result.stderr)
+			}
+
+			for _, line := range []string{"could not be emptied", "may be hostile"} {
+				if !strings.Contains(result.stderr, line) {
+					t.Errorf("the run printed %q on stderr, want a line holding %q: a repair that itself fails says the posted summary or the job's environment may be hostile (ADR 0040, issues #615, #614)",
+						result.stderr, line)
+				}
+			}
+
+			assertRepairNotes(t, result.stderr, tc.wantEmpty, tc.wantHostile)
+
+			if _, err := os.Stat(resultOutPath(f.dir)); !errors.Is(err, os.ErrNotExist) {
+				t.Errorf("the result file at %s is still there (stat: %v), want it removed: a repair that fails fails a passing run and hands the encrypt step no result (doc.go, issues #615, #614)",
+					resultOutPath(f.dir), err)
+			}
+
+			for _, name := range fileCommandNames {
+				if name == tc.wantHostile {
+					continue
+				}
+
+				assertFileCommand(t, f, name, pre, tc.wantEmpty, result)
+			}
+
+			assertHostileDirectory(t, f.path(tc.wantHostile))
+
+			assertOnlyTheFileCommands(t, f, nil)
+			assertNoSecret(t, result)
+		})
 	}
-
-	for _, line := range []string{"could not be emptied", "may be hostile"} {
-		if !strings.Contains(result.stderr, line) {
-			t.Errorf("the run printed %q on stderr, want a line holding %q: a repair that itself fails says the posted summary or the job's environment may be hostile (ADR 0040, issues #615, #614)",
-				result.stderr, line)
-		}
-	}
-
-	if strings.Contains(result.stderr, "it is left as an empty file") {
-		t.Errorf("the run printed %q on stderr, want no note that it emptied a file command: the repair failed, so it emptied none (ADR 0040, issues #615, #614)",
-			result.stderr)
-	}
-
-	if _, err := os.Stat(resultOutPath(f.dir)); !errors.Is(err, os.ErrNotExist) {
-		t.Errorf("the result file at %s is still there (stat: %v), want it removed: a repair that fails fails a passing run and hands the encrypt step no result (doc.go, issues #615, #614)",
-			resultOutPath(f.dir), err)
-	}
-
-	info, err := os.Lstat(f.path("GITHUB_PATH"))
-	if err != nil {
-		t.Fatalf("lstat the file command $GITHUB_PATH's path %s after the run: %v", f.path("GITHUB_PATH"), err)
-	}
-
-	if !info.IsDir() {
-		t.Errorf("$GITHUB_PATH's path %s is %s after the run, want the directory the step made: a repair that failed emptied nothing there",
-			f.path("GITHUB_PATH"), info.Mode())
-	}
-
-	entries, err := os.ReadDir(f.path("GITHUB_PATH"))
-	if err != nil {
-		t.Fatalf("read the directory $GITHUB_PATH's path names, %s: %v", f.path("GITHUB_PATH"), err)
-	}
-
-	held := make([]string, 0, len(entries))
-	for _, entry := range entries {
-		held = append(held, entry.Name())
-	}
-
-	if want := []string{"evil"}; !slices.Equal(held, want) {
-		t.Errorf("the directory at $GITHUB_PATH's path holds %v, want %v: the run leaves the path the step made as it is, and no temporary file of its repair behind (issues #615, #614)",
-			held, want)
-	}
-
-	assertOnlyTheFileCommands(t, f, nil)
-	assertNoSecret(t, result)
 }
 
-// TestRunLeavesAFileCommandItCannotOpenAlone pins what a run does when the step
-// summary cannot be opened at the start (issue #615): the run's line goes to
-// stdout alone, the summary's path - here a directory - is left exactly as it
-// was, no other file is touched, and the run still finishes, with its result
-// file. Nothing is repaired and nothing panics: a file the run never opened is
-// one it cannot have recorded, and the summary it could not open holds no line
-// of its own to compare.
-func TestRunLeavesAFileCommandItCannotOpenAlone(t *testing.T) {
+// TestRunRefusesAFileCommandItCannotOpen pins the auditor's round-4 L1 (issues
+// #615, #614): a file command whose path exists before any step but is no regular
+// file the run can open - a directory, a symlink - is refused with the usage exit,
+// before the first step. It reverses the earlier expectation that a summary the
+// run cannot open is left alone and the run finishes: the run opened the summary
+// with O_APPEND|O_CREATE|O_WRONLY, which follows a link, so a step could name a
+// file of its own there and have the run append to it, and a path the run cannot
+// record is one it cannot compare after the steps either. Fail closed instead: the
+// runner only ever creates regular files, so the refusal costs a real run
+// nothing. A path that does not exist at all stays allowed, recorded as absent
+// (TestRunTakesTheStepsInputs, and the absent rows of the table above).
+//
+// The entry the step left at the path is left exactly as it is - the run refuses
+// before it writes anything, so the directory the step made keeps its file and the
+// link's target keeps every byte it held - and no result file is written. The
+// runner's other four files are the refusal table's rows
+// (TestRunRefusesEveryUsageAndInputError): the summary is the one of the five the
+// run opens by itself, which is where following a link would publish a file the
+// audit never wrote.
+func TestRunRefusesAFileCommandItCannotOpen(t *testing.T) {
 	t.Parallel()
 
-	dir := t.TempDir()
-	env := stepEnvironment(t, dir)
+	cases := []struct {
+		name string
+		// entry replaces the summary's path, which does not exist before the
+		// run, with an entry that is no regular file the run can open.
+		entry func(t *testing.T, summary, target string)
+	}{
+		{
+			name: "a step summary that is a directory",
+			entry: func(t *testing.T, summary, _ string) {
+				t.Helper()
 
-	summary := env["GITHUB_STEP_SUMMARY"]
-	if err := os.Mkdir(summary, 0o700); err != nil {
-		t.Fatalf("make the summary's path %s a directory: %v", summary, err)
+				if err := os.Mkdir(summary, 0o700); err != nil {
+					t.Fatalf("make the summary's path %s a directory: %v", summary, err)
+				}
+
+				writeEnvFile(t, filepath.Join(summary, "evil"), "/tmp/evil\n")
+			},
+		},
+		{
+			name: "a step summary that is a symlink to a regular file",
+			entry: func(t *testing.T, summary, target string) {
+				t.Helper()
+
+				if err := os.Symlink(target, summary); err != nil {
+					t.Fatalf("make the summary's path %s a link to %s: %v", summary, target, err)
+				}
+			},
+		},
 	}
 
-	result := runAuditrun(t, stepArgs(dir), env)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 
-	if result.code != audit.ExitOK {
-		t.Errorf("the run's exit code is %d, want %d (audit.ExitOK): a summary that cannot be opened is the step's problem, not the run's\nstdout: %s\nstderr: %s",
-			result.code, audit.ExitOK, result.stdout, result.stderr)
+			f := newStepFiles(t)
+			pre := f.contents(t)
+
+			summary := f.path("GITHUB_STEP_SUMMARY")
+
+			tc.entry(t, summary, f.target)
+
+			before, err := os.Lstat(summary)
+			if err != nil {
+				t.Fatalf("lstat the file command $GITHUB_STEP_SUMMARY's path %s before the run: %v", summary, err)
+			}
+
+			result := runAuditrun(t, stepArgs(f.dir), f.env)
+
+			if result.code != audit.ExitUsage {
+				t.Errorf("the run's exit code is %d, want %d (audit.ExitUsage): a file command that exists but is no regular file the run can open is refused before any step (issues #615, #614, the auditor's round-4 L1)\nstdout: %s\nstderr: %s",
+					result.code, audit.ExitUsage, result.stdout, result.stderr)
+			}
+
+			if len(result.ran) != 0 {
+				t.Errorf("the steps %v ran; the refusal comes before the first step (issues #615, #614)", result.ran)
+			}
+
+			if result.stderr == "" {
+				t.Error("the run printed nothing on stderr, want the refusal's line: the step's log says which of its file commands the run would not take")
+			}
+
+			after, err := os.Lstat(summary)
+			if err != nil {
+				t.Fatalf("lstat the file command $GITHUB_STEP_SUMMARY's path %s after the run: %v", summary, err)
+			}
+
+			if !os.SameFile(before, after) || before.Mode().Type() != after.Mode().Type() {
+				t.Errorf("the file command $GITHUB_STEP_SUMMARY's path %s is another entry after the run (%s, was %s), want the one the step left: the run refuses before it writes anything there (issues #615, #614)",
+					summary, after.Mode(), before.Mode())
+			}
+
+			if after.IsDir() {
+				entries, err := os.ReadDir(summary)
+				if err != nil {
+					t.Fatalf("read the summary's directory %s after the run: %v", summary, err)
+				}
+
+				held := make([]string, 0, len(entries))
+				for _, entry := range entries {
+					held = append(held, entry.Name())
+				}
+
+				if want := []string{"evil"}; !slices.Equal(held, want) {
+					t.Errorf("the summary's directory holds %v after the run, want %v: the run writes no summary line there (issues #615, #614)", held, want)
+				}
+			}
+
+			// The file a link pointed at is the step's, not the run's: nothing the
+			// run does follows a file command's link.
+			kept, err := os.ReadFile(f.target)
+			if err != nil {
+				t.Fatalf("read the file a link pointed at, %s: %v", f.target, err)
+			}
+
+			if string(kept) != elsewhere {
+				t.Errorf("the file a link pointed at holds %q, want %q untouched: the run never follows a file command's link (issues #615, #614)", kept, elsewhere)
+			}
+
+			if _, err := os.Lstat(resultOutPath(f.dir)); !errors.Is(err, os.ErrNotExist) {
+				t.Errorf("the result file at %s exists (lstat: %v), want none: the refusal ends the run before the steps, so nothing was checked to write", resultOutPath(f.dir), err)
+			}
+
+			for _, name := range []string{"GITHUB_ENV", "GITHUB_PATH", "GITHUB_OUTPUT", "GITHUB_STATE"} {
+				assertFileCommand(t, f, name, pre, nil, result)
+			}
+
+			assertOnlyTheFileCommands(t, f, nil)
+			assertNoSecret(t, result)
+		})
 	}
-
-	if result.stderr == "" {
-		t.Error("the run printed nothing on stderr, want the note that the step summary cannot be opened")
-	}
-
-	info, err := os.Lstat(summary)
-	if err != nil {
-		t.Fatalf("lstat the summary %s after the run: %v", summary, err)
-	}
-
-	if !info.IsDir() {
-		t.Errorf("the summary's path %s is %s after the run, want the directory the step found: a file the run never opened is not one it repairs (issues #615, #614)",
-			summary, info.Mode())
-	}
-
-	entries, err := os.ReadDir(summary)
-	if err != nil {
-		t.Fatalf("read the summary's directory %s: %v", summary, err)
-	}
-
-	if len(entries) != 0 {
-		t.Errorf("the summary's directory holds %v, want nothing: the run writes no summary line it could not open", entries)
-	}
-
-	assertResultFile(t, resultOutPath(dir), auditResult)
-	assertNoSecret(t, result)
 }
 
 // stepFiles is one model step's file commands as the run finds them: the
@@ -762,6 +915,89 @@ func assertFileCommandAbsent(t *testing.T, f *stepFiles, name string) {
 	}
 }
 
+// assertRepairNotes fails unless the run's stderr notes exactly the file commands
+// in wantEmpty as left an empty file, and the one in wantFailed as a file command
+// it could not empty (issues #615, #614): one file command the run cannot empty
+// must neither hide the note of one it did empty nor the failure of another, and
+// a note names the one the runner may still apply.
+func assertRepairNotes(t *testing.T, stderr string, wantEmpty []string, wantFailed string) {
+	t.Helper()
+
+	const emptiedNote = "it is left as an empty file"
+
+	emptied := make([]string, 0, len(wantEmpty))
+	failed := make([]string, 0, 1)
+
+	for _, line := range strings.Split(stderr, "\n") {
+		for _, name := range fileCommandNames {
+			if !strings.Contains(line, name) {
+				continue
+			}
+
+			if strings.Contains(line, emptiedNote) && !slices.Contains(emptied, name) {
+				emptied = append(emptied, name)
+			}
+
+			if strings.Contains(line, "could not be emptied") && !slices.Contains(failed, name) {
+				failed = append(failed, name)
+			}
+		}
+	}
+
+	// Only the set is what the run must report; the lines' order is the repair's
+	// own business.
+	slices.Sort(emptied)
+	slices.Sort(failed)
+
+	want := slices.Clone(wantEmpty)
+	slices.Sort(want)
+
+	if !slices.Equal(emptied, want) {
+		t.Errorf("the run noted %v as left an empty file, want exactly %v: a file command the run cannot empty stops neither the repair of the ones after it nor the note of the ones it emptied (issues #615, #614, the round-4 should-fix)\nstderr: %s",
+			emptied, want, stderr)
+	}
+
+	if wantFailedName := []string{wantFailed}; !slices.Equal(failed, wantFailedName) {
+		t.Errorf("the run noted %v as a file command it could not empty, want exactly %v: the failure's line names the file command the runner may still apply (ADR 0040, issues #615, #614)\nstderr: %s",
+			failed, wantFailedName, stderr)
+	}
+}
+
+// assertHostileDirectory fails unless path is still the directory the step made
+// in a file command's place, holding the step's one file and nothing else: a
+// repair that fails leaves the path as the step made it, and no temporary file
+// of its own behind (issues #615, #614).
+func assertHostileDirectory(t *testing.T, path string) {
+	t.Helper()
+
+	info, err := os.Lstat(path)
+	if err != nil {
+		t.Fatalf("lstat the file command's path %s after the run: %v", path, err)
+	}
+
+	if !info.IsDir() {
+		t.Errorf("the file command's path %s is %s after the run, want the directory the step made: a repair that failed emptied nothing there",
+			path, info.Mode())
+
+		return
+	}
+
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		t.Fatalf("read the directory the file command's path names, %s: %v", path, err)
+	}
+
+	held := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		held = append(held, entry.Name())
+	}
+
+	if want := []string{"evil"}; !slices.Equal(held, want) {
+		t.Errorf("the directory at the file command's path holds %v, want %v: the run leaves the path the step made as it is, and no temporary file of its repair behind (issues #615, #614)",
+			held, want)
+	}
+}
+
 // assertOnlyTheFileCommands fails unless the file-command directory holds
 // exactly the five file commands and the result file, when the run left one:
 // no temporary file of a repair is left behind (issue #615). The file commands
@@ -827,6 +1063,67 @@ func absentBefore(name string) func(*testing.T, *stepFiles) {
 		if err := os.Remove(path); err != nil {
 			t.Fatalf("remove the file command %s at %s before the run records it: %v", name, path, err)
 		}
+	}
+}
+
+// removeEntry removes the entry at path, failing the test when it cannot.
+func removeEntry(t *testing.T, path string) {
+	t.Helper()
+
+	if err := os.Remove(path); err != nil {
+		t.Fatalf("remove %s: %v", path, err)
+	}
+}
+
+// replaceWithDirectory returns the entry that removes the file command the
+// variable names and makes a directory in its place, holding a file of the
+// step's own.
+func replaceWithDirectory(name string) func(*testing.T, map[string]string) {
+	return func(t *testing.T, env map[string]string) {
+		t.Helper()
+
+		path := env[name]
+
+		removeEntry(t, path)
+
+		if err := os.Mkdir(path, 0o700); err != nil {
+			t.Fatalf("make the file command %s's path %s a directory: %v", name, path, err)
+		}
+
+		writeEnvFile(t, filepath.Join(path, "evil"), "/tmp/evil\n")
+	}
+}
+
+// replaceWithSymlink returns the entry that removes the file command the
+// variable names and puts a link to a file elsewhere in its place: the path
+// exists, and what it leads to is the step's own file.
+func replaceWithSymlink(name string) func(*testing.T, map[string]string) {
+	return func(t *testing.T, env map[string]string) {
+		t.Helper()
+
+		path := env[name]
+		target := filepath.Join(t.TempDir(), "elsewhere.md")
+
+		writeEnvFile(t, target, elsewhere)
+		removeEntry(t, path)
+
+		if err := os.Symlink(target, path); err != nil {
+			t.Fatalf("swap the file command %s's path %s for a link to %s: %v", name, path, target, err)
+		}
+	}
+}
+
+// replaceWithFIFO returns the entry that removes the file command the variable
+// names and puts a named pipe in its place: an entry that exists, is no regular
+// file, and that nothing opens, so no test waits for a writer.
+func replaceWithFIFO(name string) func(*testing.T, map[string]string) {
+	return func(t *testing.T, env map[string]string) {
+		t.Helper()
+
+		path := env[name]
+
+		removeEntry(t, path)
+		makeFIFO(t, path)
 	}
 }
 
@@ -965,6 +1262,10 @@ func TestRunRefusesEveryUsageAndInputError(t *testing.T) {
 		name string
 		// env changes the whole environment, when set.
 		env func(env map[string]string)
+		// entry, when set, replaces the entry the file command the variable
+		// names holds - one of the runner's four files - with an entry that is
+		// no regular file the run can open.
+		entry func(*testing.T, map[string]string)
 		// args changes the whole command line, when set.
 		args func(dir string, args []string) []string
 	}{
@@ -1082,6 +1383,30 @@ func TestRunRefusesEveryUsageAndInputError(t *testing.T) {
 			name: "a step summary outside the $GITHUB_ENV file's directory",
 			env:  func(env map[string]string) { env["GITHUB_STEP_SUMMARY"] = anotherDirectoryOf(env, "step-summary.md") },
 		},
+		// A file command whose path exists before any step but is no regular file
+		// the run can open - a directory, a symlink, a FIFO - is refused too, with
+		// the same usage exit, before the first step (issues #615, #614, the
+		// auditor's round-4 L1): the run cannot record such an entry's content, so
+		// it cannot tell after the steps whether anything changed it. The runner
+		// only ever lays regular files down, so a real step loses nothing. One row
+		// per entry type over the runner's four files; the step summary's own two
+		// entries are in TestRunRefusesAFileCommandItCannotOpen.
+		{
+			name:  "a $GITHUB_ENV that is a directory",
+			entry: replaceWithDirectory("GITHUB_ENV"),
+		},
+		{
+			name:  "a $GITHUB_PATH that is a symlink to another file",
+			entry: replaceWithSymlink("GITHUB_PATH"),
+		},
+		{
+			name:  "a $GITHUB_OUTPUT that is a FIFO",
+			entry: replaceWithFIFO("GITHUB_OUTPUT"),
+		},
+		{
+			name:  "a $GITHUB_STATE that is a directory",
+			entry: replaceWithDirectory("GITHUB_STATE"),
+		},
 		// The runner always sets clean absolute paths, so a run takes nothing
 		// else (issue #614, the auditor's round-2 Low 2): a path that is not
 		// absolute, or that is not already its own cleaned form, names its
@@ -1147,6 +1472,10 @@ func TestRunRefusesEveryUsageAndInputError(t *testing.T) {
 
 			if tc.env != nil {
 				tc.env(env)
+			}
+
+			if tc.entry != nil {
+				tc.entry(t, env)
 			}
 
 			if tc.args != nil {
