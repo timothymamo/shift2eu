@@ -430,9 +430,10 @@ var removalInstruction = regexp.MustCompile(`\b(rm|remove|delete)\b`)
 // path must once the cause is explained: the spelling is the maintainer's choice, so rm, remove and delete all count,
 // as words of their own (removalInstruction). A clause that negates its verb - "do not remove it", "remove nothing" -
 // tells the maintainer to keep the file, so it is no removal, and each comma-separated clause is read on its own: a
-// negation in one says nothing about another's.
+// negation in one says nothing about another's. The clause is read in lower case, so a verb opening a sentence
+// ("Remove the backup") counts, and a capitalised past tense ("Removed") still does not (issue #650).
 func saysToRemoveAFile(text string) bool {
-	for _, clause := range strings.Split(text, ",") {
+	for _, clause := range strings.Split(strings.ToLower(text), ",") {
 		verb, negated := removalInstruction.MatchString(clause), false
 
 		for _, negation := range []string{"not ", "nothing", "never"} {
