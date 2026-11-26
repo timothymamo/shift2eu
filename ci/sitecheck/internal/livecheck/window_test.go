@@ -158,6 +158,20 @@ func TestAcceptLive(t *testing.T) {
 			wantErr:   true,
 		},
 		{
+			// A live version higher than the highest tag is refused. The live tag is matched against a list
+			// that holds it and judged against one whose highest tag is below it, since MatchVersion returns
+			// no tag the list does not hold: the refusal that fires first is that the judged list holds no
+			// such release tag, and the window's own rule - neither the highest nor the one immediately below
+			// it - refuses it too.
+			name:      "a version higher than the highest tag",
+			text:      "v0.17.0",
+			matchTags: []string{"v0.16.0", "v0.16.1", "v0.17.0"},
+			judged:    []string{"v0.16.0", "v0.16.1"},
+			bound:     windowBound,
+			at:        time.Hour,
+			wantErr:   true,
+		},
+		{
 			name:      "a two-digit minor is higher than a one-digit one",
 			text:      "v0.10.0",
 			matchTags: []string{"v0.9.0", "v0.10.0"},
