@@ -59,6 +59,63 @@ func hasScanFinding(body string, f review.ScanFinding) bool {
 	return regexp.MustCompile(pattern).MatchString(body)
 }
 
+// leftOutCase is one case of TestScanLeftOutFindsRealDataInTheFilesLeftOut: the
+// diff the scan reads, the files of it the review leaves out with the lines each
+// adds, and what the scan finds in them.
+type leftOutCase struct {
+	name         string
+	diff         string
+	wantFiles    []review.LeftOutFile
+	wantFindings []review.ScanFinding
+}
+
+// namespaceMayFollowDelimitersPath is the shared case list of the two copies of
+// namespaceMayFollow (issue #630): the AI reviewer's, in this package, and the
+// fixture check's, in test/examples/fixtures_check_test.go, which cannot import
+// it. The file sits in the fixture check's testdata directory, where its own
+// test reads it, and this one reads it from this package's directory.
+const namespaceMayFollowDelimitersPath = "../../../../test/examples/testdata/namespace_may_follow_delimiters.txt"
+
+// namespaceMayFollowDelimiterCases returns one case per delimiter the shared
+// list names, in its order: a golden that adds the record's text alone, which
+// the scan must find nothing in, no host name and no other real data. A copy of
+// the rule that stops accepting a delimiter reads the namespace of the resource
+// type as a host name and fails the case, whose name carries the delimiter, so
+// the failure says which one the copy lost.
+func namespaceMayFollowDelimiterCases(t *testing.T, golden string) []leftOutCase {
+	t.Helper()
+
+	data, err := os.ReadFile(namespaceMayFollowDelimitersPath)
+	if err != nil {
+		t.Fatalf("read the shared namespace delimiter cases: %v", err)
+	}
+
+	var cases []leftOutCase
+
+	for _, line := range strings.Split(string(data), "\n") {
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+
+		name, text, ok := strings.Cut(line, ": ")
+		if !ok {
+			t.Fatalf("%s: %q is no record of a case name, \": \" and a text", namespaceMayFollowDelimitersPath, line)
+		}
+
+		cases = append(cases, leftOutCase{
+			name:      "an Azure resource type after " + name + " is no host name",
+			diff:      goldenAdds(golden, text),
+			wantFiles: []review.LeftOutFile{{Path: golden, Added: 1}},
+		})
+	}
+
+	if len(cases) == 0 {
+		t.Fatalf("%s: the shared list names no delimiter, so no case guards the rule", namespaceMayFollowDelimitersPath)
+	}
+
+	return cases
+}
+
 // TestScanLeftOutFindsRealDataInTheFilesLeftOut pins the model-free scan of
 // issue #342: since the golden files of testdata directories are left out of
 // the diff the model reads, a real account ID, IP address, host name or
@@ -83,12 +140,7 @@ func TestScanLeftOutFindsRealDataInTheFilesLeftOut(t *testing.T) {
 		awsLikeID  = "AKIAIOSFODNN7EXAMPLE"
 	)
 
-	cases := []struct {
-		name         string
-		diff         string
-		wantFiles    []review.LeftOutFile
-		wantFindings []review.ScanFinding
-	}{
+	cases := []leftOutCase{
 		{
 			name:         "a real-looking account ID in a left-out golden is found",
 			diff:         goldenAdds(golden, `"account_id": "987654321098"`),
@@ -593,6 +645,11 @@ func TestScanLeftOutFindsRealDataInTheFilesLeftOut(t *testing.T) {
 			wantFiles: []review.LeftOutFile{{Path: "testdata/logo.golden", Added: 0, Binary: true}},
 		},
 	}
+
+	// Issue #630: one case per delimiter the rule accepts, from the list both
+	// copies of it read, so a copy that drops a delimiter fails here as well as
+	// in the fixture check's host rule test.
+	cases = append(cases, namespaceMayFollowDelimiterCases(t, golden)...)
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

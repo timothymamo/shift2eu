@@ -1,10 +1,20 @@
 package examples_test
 
 import (
+	"os"
+	"strings"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
 )
+
+// hostRuleCase is one case of TestSanitisationProblemsHostNameRule: the text the
+// fixture check reads and the values it reports in it.
+type hostRuleCase struct {
+	name string
+	text string
+	want []string
+}
 
 // TestSanitisationProblemsHostNameRule pins which dotted names the real-data
 // check (issue #249) reads as a host name. Over examples/ every dotted name
@@ -43,11 +53,7 @@ import (
 func TestSanitisationProblemsHostNameRule(t *testing.T) {
 	t.Parallel()
 
-	tests := []struct {
-		name string
-		text string
-		want []string
-	}{
+	tests := []hostRuleCase{
 		// Reported: a dotted name whose last label is a public top-level
 		// domain, so it stands for a customer's own host.
 		{
@@ -576,7 +582,22 @@ func TestSanitisationProblemsHostNameRule(t *testing.T) {
 			text: "the inventory.json sample pins v0.2.0 and clones github.com/timothymamo/shift2eu",
 			want: nil,
 		},
+		{
+			// The fixture check reads a whole text rather than a line, so a
+			// namespace that starts a line follows a newline, the one delimiter
+			// this copy of the rule accepts besides the shared list's (issue
+			// #630). The reviewer's scan needs no such case: it reads a diff one
+			// line at a time, and the start of a line is the start of its text.
+			name: "Azure resource type at the start of a line",
+			text: "the types are:\nMicrosoft.App/containerApps",
+			want: nil,
+		},
 	}
+
+	// Issue #630: one case per delimiter the rule accepts, from the list both
+	// copies of it read, so a copy that drops a delimiter fails here as well as
+	// in the AI reviewer's scan test.
+	tests = append(tests, namespaceMayFollowDelimiterCases(t)...)
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -584,6 +605,134 @@ func TestSanitisationProblemsHostNameRule(t *testing.T) {
 
 			if diff := cmp.Diff(tc.want, values(sanitisationProblems(tc.text))); diff != "" {
 				t.Errorf("sanitisationProblems(%q) mismatch (-want +got):\n%s", tc.text, diff)
+			}
+		})
+	}
+}
+
+// namespaceMayFollowDelimitersPath is the shared case list of the two copies of
+// namespaceMayFollow (issue #630): this package's copy, and the AI reviewer's in
+// ci/aireview/internal/review/scan.go, whose test reads the same file. From this
+// package's directory.
+const namespaceMayFollowDelimitersPath = "testdata/namespace_may_follow_delimiters.txt"
+
+// namespaceMarker is the resource type every record of the shared list holds:
+// the provider namespace sits directly after the delimiter the record's case
+// names, so a case reads the text as a checked file does.
+const namespaceMarker = "Microsoft.App/containerApps"
+
+// namespaceMayFollowDelimiter is one record of the shared list: the name of the
+// case and the text it runs.
+type namespaceMayFollowDelimiter struct {
+	name string
+	text string
+}
+
+// namespaceMayFollowDelimiters returns the records of the shared list, in its
+// order. It fails the test when the file cannot be read, when a line is no
+// record, and when the list names no delimiter, so no case passes by checking
+// nothing.
+func namespaceMayFollowDelimiters(t *testing.T) []namespaceMayFollowDelimiter {
+	t.Helper()
+
+	data, err := os.ReadFile(namespaceMayFollowDelimitersPath)
+	if err != nil {
+		t.Fatalf("read the shared namespace delimiter cases: %v", err)
+	}
+
+	var records []namespaceMayFollowDelimiter
+
+	for _, line := range strings.Split(string(data), "\n") {
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+
+		name, text, ok := strings.Cut(line, ": ")
+		if !ok {
+			t.Fatalf("%s: %q is no record of a case name, \": \" and a text", namespaceMayFollowDelimitersPath, line)
+		}
+
+		records = append(records, namespaceMayFollowDelimiter{name: name, text: text})
+	}
+
+	if len(records) == 0 {
+		t.Fatalf("%s: the shared list names no delimiter, so no case guards the rule", namespaceMayFollowDelimitersPath)
+	}
+
+	return records
+}
+
+// namespaceMayFollowDelimiterCases returns one case per delimiter the shared
+// list names, in its order: the text of the record, which the fixture check must
+// report nothing in, and no reported value, since a copy that stops accepting a
+// delimiter reads the namespace of the resource type as a host name and fails
+// the case. A record's name carries its delimiter, so the failing case says
+// which one the copy lost.
+func namespaceMayFollowDelimiterCases(t *testing.T) []hostRuleCase {
+	t.Helper()
+
+	records := namespaceMayFollowDelimiters(t)
+
+	cases := make([]hostRuleCase, 0, len(records))
+	for _, record := range records {
+		cases = append(cases, hostRuleCase{name: "Azure resource type after " + record.name, text: record.text})
+	}
+
+	return cases
+}
+
+// namespaceMayFollowCase is one case of TestNamespaceMayFollow: the text before
+// an Azure provider namespace and whether the rule accepts it.
+type namespaceMayFollowCase struct {
+	name   string
+	before string
+	want   bool
+}
+
+// TestNamespaceMayFollow pins this package's copy of the delimiter rule itself,
+// byte by byte, not only through a checked text (issue #630). The behavioural
+// cases of TestSanitisationProblemsHostNameRule cover every delimiter but one:
+// a name right after a single "/" is no host name to hostnameProblems whatever
+// the rule says (insidePath), so the fixture check cannot see whether the copy
+// still accepts the resource id's separator. This table can, and its accepted
+// entries come from the shared list both copies' tests read, so the file is the
+// one list of the bytes the rule takes and a copy that drops or widens one fails
+// here. The copy has the reviewer's set plus the newline, the one byte a line of
+// that list cannot carry, since the fixture check reads a whole text.
+func TestNamespaceMayFollow(t *testing.T) {
+	t.Parallel()
+
+	tests := []namespaceMayFollowCase{
+		{name: "a newline", before: "the types are:\n", want: true},
+		// Everything else keeps the run a host name: a URL's authority marker,
+		// the mistyped one a request line writes, a scheme written with a single
+		// slash, userinfo, the tail of an internationalised host and a letter the
+		// run continues.
+		{name: "a URL's authority marker", before: "https://", want: false},
+		{name: "a protocol-relative URL's authority marker", before: "//", want: false},
+		{name: "a single-slash scheme", before: "http:/", want: false},
+		{name: "a backslash authority marker", before: `https:\\`, want: false},
+		{name: "a single backslash", before: `\`, want: false},
+		{name: "a URL's userinfo", before: "https://svc-user@", want: false},
+		{name: "the tail of an internationalised host", before: "https://shopém", want: false},
+		{name: "a letter the run continues", before: "x", want: false},
+	}
+
+	for _, record := range namespaceMayFollowDelimiters(t) {
+		before, _, ok := strings.Cut(record.text, namespaceMarker)
+		if !ok {
+			t.Fatalf("%s: the record %q names no %s, so no case reads its delimiter", namespaceMayFollowDelimitersPath, record.text, namespaceMarker)
+		}
+
+		tests = append(tests, namespaceMayFollowCase{name: record.name, before: before, want: true})
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := namespaceMayFollow(tc.before); got != tc.want {
+				t.Errorf("namespaceMayFollow(%q) = %t, want %t", tc.before, got, tc.want)
 			}
 		})
 	}
