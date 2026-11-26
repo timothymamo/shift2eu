@@ -1,0 +1,225 @@
+{
+  "schemaVersion": 3,
+  "kind": "assessment",
+  "inventoryName": "unicode-lookalikes.json",
+  "source": "аws",
+  "target": {
+    "name": "Scaleway",
+    "snapshot": {
+      "source": "https://www.scaleway.com/en/pricing/",
+      "retrieved": "2026-11-13"
+    }
+  },
+  "summary": {
+    "direct": 4,
+    "partial": 0,
+    "none": 0,
+    "total": 4
+  },
+  "resources": [
+    {
+      "id": "id̸-combining",
+      "rawType": "raw　type",
+      "category": "compute.baremetal",
+      "region": "eu-central-1",
+      "fit": "direct",
+      "bestOffering": "Elastic Metal",
+      "ties": [],
+      "reasons": [
+        {
+          "code": "all-capabilities",
+          "text": "Elastic Metal offers every capability the resource uses",
+          "offering": "Elastic Metal"
+        }
+      ],
+      "requiredChanges": [],
+      "relations": [],
+      "affectedBy": [],
+      "estimate": {
+        "estimated": false,
+        "reason": "no-size"
+      }
+    },
+    {
+      "id": "pаypal-раu",
+      "rawType": "roman-ⅠⅡⅢ",
+      "category": "compute.vm",
+      "region": "eu-central-1",
+      "fit": "direct",
+      "bestOffering": "Instances",
+      "ties": [],
+      "reasons": [
+        {
+          "code": "all-capabilities",
+          "text": "Instances offers every capability the resource uses",
+          "offering": "Instances"
+        }
+      ],
+      "requiredChanges": [],
+      "relations": [
+        {
+          "type": "depends-on",
+          "target": "😀-astral"
+        }
+      ],
+      "affectedBy": [],
+      "estimate": {
+        "estimated": false,
+        "reason": "no-size"
+      }
+    },
+    {
+      "id": "аdmin",
+      "rawType": "combining-é́́́",
+      "category": "compute.vm",
+      "region": "eu west 1",
+      "fit": "direct",
+      "bestOffering": "Instances",
+      "ties": [],
+      "reasons": [
+        {
+          "code": "all-capabilities",
+          "text": "Instances offers every capability the resource uses",
+          "offering": "Instances"
+        }
+      ],
+      "requiredChanges": [],
+      "relations": [],
+      "affectedBy": [],
+      "estimate": {
+        "estimated": false,
+        "reason": "no-size"
+      }
+    },
+    {
+      "id": "😀-astral",
+      "rawType": "-private-use",
+      "category": "storage.object",
+      "region": "европа",
+      "fit": "direct",
+      "bestOffering": "Object Storage",
+      "ties": [],
+      "reasons": [
+        {
+          "code": "all-capabilities",
+          "text": "Object Storage offers every capability the resource uses",
+          "offering": "Object Storage"
+        }
+      ],
+      "requiredChanges": [],
+      "relations": [],
+      "affectedBy": [],
+      "estimate": {
+        "estimated": false,
+        "reason": "no-size"
+      }
+    }
+  ],
+  "blockers": [],
+  "workloads": [
+    {
+      "name": "İstanbul-ıI-ß-ẞ",
+      "noWorkload": false,
+      "resources": 1,
+      "summary": {
+        "direct": 1,
+        "partial": 0,
+        "none": 0,
+        "total": 1
+      },
+      "blockers": [],
+      "estimate": {
+        "estimated": 0,
+        "resources": 1
+      },
+      "sourceCost": {
+        "covered": 0,
+        "resources": 1,
+        "currencies": []
+      }
+    },
+    {
+      "name": "абв-אבג",
+      "noWorkload": false,
+      "resources": 1,
+      "summary": {
+        "direct": 1,
+        "partial": 0,
+        "none": 0,
+        "total": 1
+      },
+      "blockers": [],
+      "estimate": {
+        "estimated": 0,
+        "resources": 1
+      },
+      "sourceCost": {
+        "covered": 0,
+        "resources": 1,
+        "currencies": []
+      }
+    },
+    {
+      "name": "שלום עולם",
+      "noWorkload": false,
+      "resources": 1,
+      "summary": {
+        "direct": 1,
+        "partial": 0,
+        "none": 0,
+        "total": 1
+      },
+      "blockers": [],
+      "estimate": {
+        "estimated": 0,
+        "resources": 1
+      },
+      "sourceCost": {
+        "covered": 0,
+        "resources": 1,
+        "currencies": []
+      }
+    },
+    {
+      "name": "＜script＞-alert(1)＜/script＞",
+      "noWorkload": false,
+      "resources": 1,
+      "summary": {
+        "direct": 1,
+        "partial": 0,
+        "none": 0,
+        "total": 1
+      },
+      "blockers": [],
+      "estimate": {
+        "estimated": 0,
+        "resources": 1
+      },
+      "sourceCost": {
+        "covered": 0,
+        "resources": 1,
+        "currencies": []
+      }
+    }
+  ],
+  "estimate": {
+    "region": "fr-par",
+    "regionChosen": false,
+    "priceDate": "2026-11-13",
+    "currency": "EUR",
+    "excluded": [
+      "VAT",
+      "discounts"
+    ],
+    "hoursBasis": 730,
+    "total": {
+      "estimated": 0,
+      "resources": 4
+    }
+  },
+  "sourceCost": {
+    "covered": 0,
+    "resources": 4,
+    "currencies": []
+  }
+}

@@ -1,0 +1,277 @@
+{
+  "schemaVersion": 3,
+  "kind": "assessment",
+  "inventoryName": "number-limits.json",
+  "source": "aws",
+  "target": {
+    "name": "Scaleway",
+    "snapshot": {
+      "source": "https://www.scaleway.com/en/pricing/",
+      "retrieved": "2026-11-13"
+    }
+  },
+  "summary": {
+    "direct": 5,
+    "partial": 0,
+    "none": 0,
+    "total": 5
+  },
+  "resources": [
+    {
+      "id": "largest-function",
+      "rawType": "AWS::Lambda::Function",
+      "category": "serverless.function",
+      "region": "eu-central-1",
+      "fit": "direct",
+      "bestOffering": "Serverless Functions",
+      "ties": [],
+      "reasons": [
+        {
+          "code": "all-capabilities",
+          "text": "Serverless Functions offers every capability the resource uses",
+          "offering": "Serverless Functions"
+        }
+      ],
+      "requiredChanges": [],
+      "relations": [],
+      "affectedBy": [],
+      "estimate": {
+        "estimated": false,
+        "reason": "usage-priced"
+      }
+    },
+    {
+      "id": "largest-object-store",
+      "rawType": "AWS::S3::Bucket",
+      "category": "storage.object",
+      "region": "eu-central-1",
+      "fit": "direct",
+      "bestOffering": "Object Storage",
+      "ties": [],
+      "reasons": [
+        {
+          "code": "all-capabilities",
+          "text": "Object Storage offers every capability the resource uses",
+          "offering": "Object Storage"
+        }
+      ],
+      "requiredChanges": [],
+      "relations": [],
+      "affectedBy": [],
+      "estimate": {
+        "estimated": true,
+        "amount": "16100000.00",
+        "countAssumed": false,
+        "hoursAssumed": false,
+        "breakdown": {
+          "plan": "0.00",
+          "storage": "16100000.00",
+          "fixedFee": "0.00"
+        }
+      }
+    },
+    {
+      "id": "largest-size",
+      "rawType": "AWS::EC2::Instance",
+      "category": "compute.vm",
+      "region": "eu-central-1",
+      "fit": "direct",
+      "bestOffering": "Instances",
+      "ties": [],
+      "reasons": [
+        {
+          "code": "all-capabilities",
+          "text": "Instances offers every capability the resource uses",
+          "offering": "Instances"
+        }
+      ],
+      "requiredChanges": [],
+      "relations": [],
+      "affectedBy": [],
+      "plan": {
+        "name": "POP2-64C-256G",
+        "vcpus": 64,
+        "memoryGiB": "256",
+        "includedStorageGiB": 0,
+        "price": "1715.50"
+      },
+      "estimate": {
+        "estimated": false,
+        "reason": "no-plan-large-enough"
+      }
+    },
+    {
+      "id": "largest-volume",
+      "rawType": "AWS::EC2::Volume",
+      "category": "storage.block",
+      "region": "eu-central-1",
+      "fit": "direct",
+      "bestOffering": "Block Storage",
+      "ties": [],
+      "reasons": [
+        {
+          "code": "all-capabilities",
+          "text": "Block Storage offers every capability the resource uses",
+          "offering": "Block Storage"
+        }
+      ],
+      "requiredChanges": [],
+      "relations": [],
+      "affectedBy": [],
+      "estimate": {
+        "estimated": true,
+        "amount": "9490000000000.00",
+        "countAssumed": false,
+        "hoursAssumed": false,
+        "breakdown": {
+          "plan": "0.00",
+          "storage": "9490000000000.00",
+          "fixedFee": "0.00"
+        }
+      }
+    },
+    {
+      "id": "smallest-size",
+      "rawType": "AWS::EC2::Instance",
+      "category": "compute.vm",
+      "region": "eu-central-1",
+      "fit": "direct",
+      "bestOffering": "Instances",
+      "ties": [],
+      "reasons": [
+        {
+          "code": "all-capabilities",
+          "text": "Instances offers every capability the resource uses",
+          "offering": "Instances"
+        }
+      ],
+      "requiredChanges": [],
+      "relations": [],
+      "affectedBy": [],
+      "plan": {
+        "name": "PLAY2-PICO",
+        "vcpus": 1,
+        "memoryGiB": "2",
+        "includedStorageGiB": 0,
+        "price": "10.42"
+      },
+      "estimate": {
+        "estimated": true,
+        "amount": "0.00",
+        "countAssumed": false,
+        "hoursAssumed": false,
+        "breakdown": {
+          "plan": "0.00",
+          "storage": "0.00",
+          "fixedFee": "0.00"
+        }
+      }
+    }
+  ],
+  "blockers": [],
+  "workloads": [
+    {
+      "name": "no-storage-price",
+      "noWorkload": false,
+      "resources": 1,
+      "summary": {
+        "direct": 1,
+        "partial": 0,
+        "none": 0,
+        "total": 1
+      },
+      "blockers": [],
+      "estimate": {
+        "amount": "16100000.00",
+        "estimated": 1,
+        "resources": 1
+      },
+      "sourceCost": {
+        "covered": 1,
+        "resources": 1,
+        "currencies": [
+          {
+            "currency": "EUR",
+            "amount": "99999999999.99",
+            "resources": 1
+          }
+        ]
+      }
+    },
+    {
+      "name": "",
+      "noWorkload": true,
+      "resources": 4,
+      "summary": {
+        "direct": 4,
+        "partial": 0,
+        "none": 0,
+        "total": 4
+      },
+      "blockers": [],
+      "estimate": {
+        "amount": "9490000000000.00",
+        "estimated": 2,
+        "resources": 4
+      },
+      "sourceCost": {
+        "covered": 3,
+        "resources": 4,
+        "currencies": [
+          {
+            "currency": "EUR",
+            "amount": "1000000000000.00",
+            "resources": 1
+          },
+          {
+            "currency": "GBP",
+            "amount": "0.00",
+            "resources": 1
+          },
+          {
+            "currency": "USD",
+            "amount": "0.00",
+            "resources": 1
+          }
+        ]
+      }
+    }
+  ],
+  "estimate": {
+    "region": "fr-par",
+    "regionChosen": false,
+    "priceDate": "2026-11-13",
+    "currency": "EUR",
+    "excluded": [
+      "VAT",
+      "discounts"
+    ],
+    "hoursBasis": 730,
+    "total": {
+      "amount": "9490016100000.00",
+      "estimated": 3,
+      "resources": 5
+    }
+  },
+  "sourceCost": {
+    "covered": 4,
+    "resources": 5,
+    "currencies": [
+      {
+        "currency": "EUR",
+        "amount": "1099999999999.99",
+        "resources": 2
+      },
+      {
+        "currency": "GBP",
+        "amount": "0.00",
+        "resources": 1
+      },
+      {
+        "currency": "USD",
+        "amount": "0.00",
+        "resources": 1
+      }
+    ]
+  }
+}
