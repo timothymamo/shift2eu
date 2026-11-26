@@ -48,7 +48,7 @@ const (
 	// holds that fixed list.
 	lineAsExpected     = "artifacts: as expected"
 	lineUnexpected     = "artifacts: unexpected: see runbook step 11"
-	lineGitHubFailed   = "GitHub call failed: see runbook"
+	lineGitHubFailed   = "GitHub call failed: listing the run's artifacts: see runbook"
 	codeAsExpected     = 0
 	codeUnexpected     = 3
 	codeGitHubFailed   = 8

@@ -708,8 +708,11 @@ const (
 		"          } >> \"${GITHUB_OUTPUT}\"\n"
 	// auditPublishCommand is the publish step's own command line, the line the
 	// step that must come before it is inserted at, wrapped in round E's guard
-	// that names the runbook step a refused publish is recovered by.
-	auditPublishCommand = "          if ! ci/auditpublish publish -result \"${RUNNER_TEMP}/result.json\" -reports docs/security/audits -gh \"$(command -v gh)\" -gitleaks \"$(command -v gitleaks)\" -tmp \"${RUNNER_TEMP}\"; then\n"
+	// that names the runbook step a refused publish is recovered by. Every path
+	// flag is absolute, the reports directory included: the core refuses a
+	// relative one on every run (issue #640), so the checkout's own docs
+	// directory is named through $GITHUB_WORKSPACE.
+	auditPublishCommand = "          if ! ci/auditpublish publish -result \"${RUNNER_TEMP}/result.json\" -reports \"${GITHUB_WORKSPACE}/docs/security/audits\" -gh \"$(command -v gh)\" -gitleaks \"$(command -v gitleaks)\" -tmp \"${RUNNER_TEMP}\"; then\n"
 	// auditScorecardStep is the checks job's row 6 step, the shortest of the nine
 	// PR 5c adds and the one the cases that remove, rename and reorder a step
 	// anchor on.

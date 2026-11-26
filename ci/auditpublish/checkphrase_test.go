@@ -7,15 +7,18 @@ package main
 // environment, a token, a key, a path, a number the run read or a finding's
 // text.
 //
-// This file is the entry point's half of that fixed list: every configuration
-// refusal ci/auditpublish's main.go makes, driven through run exactly as the
-// workflow runs it, with the one line it prints, its exit code, and the same
-// line in the step's summary. The core's and the GitHub side's rows are their
-// own packages' tests; this one also pins the result's class change end to end:
-// a result the schema refuses is "result refused" (exit 3), never
-// "configuration invalid" (exit 9).
+// This file is the entry point's half of that fixed list: the refusals
+// ci/auditpublish's main.go makes, driven through run exactly as the workflow
+// runs it, with the one line it prints, its exit code, and the same line in
+// the step's summary. The core's and the GitHub side's rows are their own
+// packages' tests; this one also pins the classes end to end: a result the
+// schema refuses is "result refused" (exit 3), never "configuration invalid"
+// (exit 9), and a scan, an unreadable previous report and a failed GitHub call
+// print their own class's line with the check that failed.
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -29,6 +32,10 @@ type runPaths struct {
 	reports  string
 	tempDir  string
 }
+
+// modelToken returns a token the core's scan refuses, invented here: the shape
+// of a GitHub token, in a model field.
+func modelToken() string { return "ghp_" + strings.Repeat("z9Y8x7W6", 6) }
 
 // standardArgs returns a subcommand's whole, valid command line for the run's
 // paths; an empty subcommand is a run with no command line at all.
@@ -50,20 +57,23 @@ func standardArgs(sub string, p runPaths) []string {
 // the check that failed. This is the entry point's fixed list; run_test.go's
 // refusal tests read the same lines.
 const (
-	lineConfigSecret    = "configuration invalid: no secret is in the step's environment: see runbook"
-	lineConfigSummary   = "configuration invalid: the step summary is appendable: see runbook"
-	lineConfigUsage     = "configuration invalid: the command line is one the program knows: see runbook"
-	lineConfigToken     = "configuration invalid: GH_TOKEN is set and not empty: see runbook"
-	lineConfigServerURL = "configuration invalid: GITHUB_SERVER_URL is https://github.com: see runbook"
-	lineConfigSHA       = "configuration invalid: GITHUB_SHA is 40 lowercase hex: see runbook"
+	lineConfigSecret    = "configuration invalid: a secret that must not be in this step is set: see runbook"
+	lineConfigSummary   = "configuration invalid: the step summary not appendable: see runbook"
+	lineConfigUsage     = "configuration invalid: a bad flag or subcommand: see runbook"
+	lineConfigToken     = "configuration invalid: GH_TOKEN unset or empty: see runbook"
+	lineConfigServerURL = "configuration invalid: GITHUB_SERVER_URL not https://github.com: see runbook"
+	lineConfigSHA       = "configuration invalid: GITHUB_SHA not 40 lowercase hex: see runbook"
 	lineConfigKey       = "configuration invalid: AUDIT_FINGERPRINT_KEY unset or shorter than 32 bytes: see runbook"
-	lineConfigRepo      = "configuration invalid: GITHUB_REPOSITORY is owner/name: see runbook"
+	lineConfigRepo      = "configuration invalid: GITHUB_REPOSITORY not owner/name: see runbook"
 	lineConfigDot       = "configuration invalid: GITHUB_REPOSITORY holds a dot segment: see runbook"
-	lineConfigRunID     = "configuration invalid: GITHUB_RUN_ID is a decimal of up to 20 digits: see runbook"
-	lineConfigGHP       = "configuration invalid: the gh path is absolute: see runbook"
-	lineConfigTempDir   = "configuration invalid: the temporary directory is absolute and an existing directory: see runbook"
-	lineConfigArtifact  = "configuration invalid: the artifact file is created: see runbook"
+	lineConfigRunID     = "configuration invalid: GITHUB_RUN_ID not a decimal of up to 20 digits: see runbook"
+	lineConfigGHP       = "configuration invalid: the gh path not absolute: see runbook"
+	lineConfigTempDir   = "configuration invalid: the temporary directory not absolute or no directory: see runbook"
+	lineConfigArtifact  = "configuration invalid: the artifact file not created: see runbook"
 	lineResultSchema    = "result refused: the result does not match the schema: see runbook"
+	lineScanReport      = "publish refused: the report: see runbook"
+	linePreviousReport  = "previous report unreadable: the newest report not as the core renders one: see runbook"
+	lineGitHubTag       = "GitHub call failed: reading the tag's release: see runbook"
 
 	// codeResultRefused is the exit code of the result's class (ADR 0040).
 	codeResultRefused = 3
@@ -82,11 +92,17 @@ type refusal struct {
 	env func(t *testing.T, env map[string]string)
 	// result is the result file the run reads, the whole one when it is nil.
 	result func(t *testing.T) string
+	// reports is the reports directory the run reads, an empty one when it is
+	// nil.
+	reports func(t *testing.T) string
 	// answers are the fake gh's, on top of a publish run's own.
 	answers []fakeAnswer
 	// want is the one line the run prints, and code its exit code.
 	want string
 	code int
+	// leaks are values the case plants in its input, which the line must not
+	// hold.
+	leaks []string
 	// usage says the run also writes the usage text to stderr, the one thing a
 	// usage error writes there (ADR 0040).
 	usage bool
@@ -345,6 +361,59 @@ func TestEntryPointRefusalNamesTheFailedCheck(t *testing.T) {
 			want: lineResultSchema,
 			code: codeResultRefused,
 		},
+
+		// The classes beyond the result's: a scan, the previous report and
+		// GitHub's own failure, named by the check that failed.
+		{
+			name:   "a publish whose previous report the core cannot read",
+			source: "main.go: publishRun",
+			sub:    "publish",
+			reports: func(t *testing.T) string {
+				t.Helper()
+
+				dir := t.TempDir()
+				path := filepath.Join(dir, "2026-12-01-1.md")
+
+				if err := os.WriteFile(path, []byte("not a report "+valueMarker+"\n"), 0o600); err != nil {
+					t.Fatalf("write %s: %v", path, err)
+				}
+
+				return dir
+			},
+			want:  linePreviousReport,
+			code:  7,
+			leaks: []string{valueMarker},
+		},
+		{
+			name:   "a publish whose report holds a token",
+			source: "main.go: publishRun",
+			sub:    "publish",
+			result: func(t *testing.T) string {
+				t.Helper()
+
+				finding := publicFinding()
+				finding["scenario"] = "a scenario holding " + modelToken()
+
+				return writeResultOf(t, resultDocumentWith(finding))
+			},
+			want:  lineScanReport,
+			code:  4,
+			leaks: []string{modelToken()},
+		},
+		{
+			name:   "a publish whose release read GitHub fails",
+			source: "main.go: publishRun",
+			sub:    "publish",
+			answers: []fakeAnswer{{
+				Method:   "GET",
+				Endpoint: fixtureRepoPrefix + "/releases/tags/" + fixtureTag,
+				Status:   500,
+				Body:     map[string]string{"message": valueMarker},
+			}},
+			want:  lineGitHubTag,
+			code:  8,
+			leaks: []string{valueMarker},
+		},
 	}
 
 	// The four secrets refuse the whole run by being set at all.
@@ -365,7 +434,7 @@ func TestEntryPointRefusalNamesTheFailedCheck(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			fake := newRoutedFakeGH(t, append(publishAnswers(), tc.answers...)...)
+			fake := newRoutedFakeGH(t, append(tc.answers, publishAnswers()...)...)
 			p := runPaths{
 				gh:       fake.Path,
 				gitleaks: newFakeGitleaks(t),
@@ -386,6 +455,11 @@ func TestEntryPointRefusalNamesTheFailedCheck(t *testing.T) {
 
 			if tc.result != nil {
 				p.result = tc.result(t)
+				args = standardArgs(tc.sub, p)
+			}
+
+			if tc.reports != nil {
+				p.reports = tc.reports(t)
 				args = standardArgs(tc.sub, p)
 			}
 
@@ -415,6 +489,21 @@ func TestEntryPointRefusalNamesTheFailedCheck(t *testing.T) {
 			if strings.Contains(result.output(), valueMarker) {
 				t.Errorf("the run printed %q, want it to hold no value of the step: an error names a check, never a value",
 					result.output())
+			}
+
+			for _, leak := range tc.leaks {
+				for _, written := range []struct {
+					where string
+					text  string
+				}{
+					{"stdout", result.stdout},
+					{"the step summary", result.summary},
+				} {
+					if strings.Contains(written.text, leak) {
+						t.Errorf("the run's %s holds the value %q, want the check's own fixed words:\n%s",
+							written.where, leak, written.text)
+					}
+				}
 			}
 		})
 	}

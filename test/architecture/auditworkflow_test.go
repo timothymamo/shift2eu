@@ -428,3 +428,170 @@ func TestScheduledSecurityAuditWorkflowDecryptsTheModelResultWithTheInstalledAge
 			auditWorkflow, command, word, auditInstalledAge)
 	}
 }
+
+// auditPublishPathFlags are the flags of an auditpublish invocation whose value is
+// a path: the result, the reports directory, the two programs the step runs and
+// the run's temporary directory. -job is the one flag whose value is no path.
+var auditPublishPathFlags = map[string]bool{
+	"-result":   true,
+	"-reports":  true,
+	"-gh":       true,
+	"-gitleaks": true,
+	"-tmp":      true,
+}
+
+// auditInvocation is one auditpublish invocation of the workflow: the line it
+// runs on, its subcommand, and its command line's words after the subcommand,
+// each as the shell splits it, its quotes kept.
+type auditInvocation struct {
+	line   int
+	sub    string
+	words  []string
+	source string
+}
+
+// TestScheduledSecurityAuditWorkflowNamesPublishPathsAbsolutely pins that every
+// path flag of every auditpublish invocation of the workflow is absolute: a
+// value that starts with /, ${RUNNER_TEMP}/ or ${GITHUB_WORKSPACE}/, quoted or
+// not (issue #640).
+//
+// The reports directory is the one that matters: LoadPrevious refuses a
+// directory that is not absolute and clean (publish.ErrConfig), so a relative
+// -reports docs/security/audits fails every scheduled run before it reads a
+// report, and the run's one line names the configuration alone. The step runs
+// in the checkout, so the absolute form of that directory is the checkout's own,
+// ${GITHUB_WORKSPACE}/docs/security/audits.
+func TestScheduledSecurityAuditWorkflowNamesPublishPathsAbsolutely(t *testing.T) {
+	t.Parallel()
+
+	invocations := auditPublishInvocations(string(readRepositoryFile(t, auditWorkflow)))
+	if len(invocations) == 0 {
+		t.Fatalf("%s holds no auditpublish invocation: the workflow runs the publish program in its three jobs", auditWorkflow)
+	}
+
+	seen := map[string]bool{}
+
+	for _, inv := range invocations {
+		seen[inv.sub] = true
+
+		if len(inv.words)%2 != 0 {
+			t.Errorf("%s line %d: %s holds the words %q after its subcommand, want a flag and a value each: the line is %q",
+				auditWorkflow, inv.line, inv.sub, inv.words, inv.source)
+
+			continue
+		}
+
+		for i := 0; i < len(inv.words); i += 2 {
+			flag, value := inv.words[i], inv.words[i+1]
+
+			if flag == "-job" {
+				continue
+			}
+
+			if !auditPublishPathFlags[flag] {
+				t.Errorf("%s line %d: %s holds the flag %q, which this check does not know: the path flags are %v, so a new flag is classified here as a path or as no path",
+					auditWorkflow, inv.line, inv.sub, flag, auditPublishPathFlags)
+
+				continue
+			}
+
+			if !absoluteShellPath(value) {
+				t.Errorf("%s line %d: %s gives %s the value %q, want an absolute path: one that starts with /, ${RUNNER_TEMP}/ or ${GITHUB_WORKSPACE}/, quoted or not (issue #640: the core refuses a relative path, so the run fails before it reads or publishes anything)\n  %s",
+					auditWorkflow, inv.line, inv.sub, flag, value, inv.source)
+			}
+		}
+	}
+
+	if !seen["publish"] {
+		t.Errorf("%s's auditpublish invocations %v hold no publish one: the publish job's step is the one -reports belongs to", auditWorkflow, invocations)
+	}
+}
+
+// auditPublishRun matches one auditpublish invocation: the program, whose path
+// may be quoted, then the subcommand, then its command line.
+var auditPublishRun = regexp.MustCompile(`auditpublish"?\s+(artifacts|image|publish)\b(.*)$`)
+
+// auditPublishInvocations returns every auditpublish invocation of the
+// document, in its order. A comment line runs nothing, and a word that ends the
+// command (a pipe, &&, ||, ; or a shell keyword) ends the invocation's words.
+func auditPublishInvocations(document string) []auditInvocation {
+	var out []auditInvocation
+
+	for i, line := range strings.Split(document, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+
+		m := auditPublishRun.FindStringSubmatch(trimmed)
+		if m == nil {
+			continue
+		}
+
+		out = append(out, auditInvocation{
+			line:   i + 1,
+			sub:    m[1],
+			words:  shellWordsUntilEnd(m[2]),
+			source: trimmed,
+		})
+	}
+
+	return out
+}
+
+// shellWordsUntilEnd splits a shell command's words at its spaces, keeping a
+// double-quoted run together and its quotes, and stops at the word that ends
+// the command: a pipe, &&, ||, ; or one of the shell's keywords.
+func shellWordsUntilEnd(command string) []string {
+	var (
+		out    []string
+		word   strings.Builder
+		quoted bool
+	)
+
+	flush := func() {
+		if word.Len() == 0 {
+			return
+		}
+
+		out = append(out, word.String())
+		word.Reset()
+	}
+
+	for _, r := range command {
+		switch {
+		case r == '"':
+			quoted = !quoted
+			word.WriteRune(r)
+		case (r == ' ' || r == '\t') && !quoted:
+			flush()
+		case !quoted && (r == ';' || r == '|' || r == '&'):
+			flush()
+
+			return out
+		default:
+			word.WriteRune(r)
+		}
+	}
+
+	flush()
+
+	return out
+}
+
+// absoluteShellPath reports whether value is an absolute shell path, quoted or
+// not: one that starts with /, ${RUNNER_TEMP}/ or ${GITHUB_WORKSPACE}/, or is one
+// of the two variables whole (its own directory). The two variables are the
+// runner's own absolute directories.
+func absoluteShellPath(value string) bool {
+	unquoted := strings.TrimSuffix(strings.TrimPrefix(value, `"`), `"`)
+	unquoted = strings.TrimSuffix(strings.TrimPrefix(unquoted, `'`), `'`)
+
+	for _, prefix := range []string{"/", "${RUNNER_TEMP}/", "${GITHUB_WORKSPACE}/"} {
+		if strings.HasPrefix(unquoted, prefix) {
+			return true
+		}
+	}
+
+	return unquoted == "${RUNNER_TEMP}" || unquoted == "${GITHUB_WORKSPACE}"
+}

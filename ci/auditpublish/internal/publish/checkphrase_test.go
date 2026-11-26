@@ -33,6 +33,10 @@ func TestCoreRefusalNamesTheFailedCheck(t *testing.T) {
 	// holds no value, so no line below may hold it.
 	const leakedFingerprint = publish.Fingerprint("fp-ffffffffffff00")
 
+	// previousValueMarker is the text only the broken previous report of a case
+	// holds, so a case can show that no value of it reaches the line.
+	const previousValueMarker = "MARKER-VALUE-NEVER-PRINTED-PREVIOUS"
+
 	zeroKey := publish.FingerprintKey{}
 
 	for _, tc := range []struct {
@@ -45,6 +49,9 @@ func TestCoreRefusalNamesTheFailedCheck(t *testing.T) {
 		// want is the one line the entry point prints, and code its exit code.
 		want string
 		code int
+		// leaks are values the case plants in its input, which the line must not
+		// hold: a phrase is fixed words, never a value.
+		leaks []string
 		// drive makes the refusal through the real function and returns its
 		// error.
 		drive func(t *testing.T) error
@@ -55,7 +62,7 @@ func TestCoreRefusalNamesTheFailedCheck(t *testing.T) {
 			name:   "the server URL is not https and a host name",
 			source: "run.go: NewRun",
 			class:  publish.ErrConfig,
-			want:   "configuration invalid: GITHUB_SERVER_URL is https:// and a host name: see runbook",
+			want:   "configuration invalid: GITHUB_SERVER_URL not https:// and a host name: see runbook",
 			code:   9,
 			drive: func(t *testing.T) error {
 				t.Helper()
@@ -69,7 +76,7 @@ func TestCoreRefusalNamesTheFailedCheck(t *testing.T) {
 			name:   "the repository is not owner/name",
 			source: "run.go: NewRun",
 			class:  publish.ErrConfig,
-			want:   "configuration invalid: GITHUB_REPOSITORY is owner/name: see runbook",
+			want:   "configuration invalid: GITHUB_REPOSITORY not owner/name: see runbook",
 			code:   9,
 			drive: func(t *testing.T) error {
 				t.Helper()
@@ -97,7 +104,7 @@ func TestCoreRefusalNamesTheFailedCheck(t *testing.T) {
 			name:   "the run ID is not a decimal of up to 20 digits",
 			source: "run.go: NewRun",
 			class:  publish.ErrConfig,
-			want:   "configuration invalid: GITHUB_RUN_ID is a decimal of up to 20 digits: see runbook",
+			want:   "configuration invalid: GITHUB_RUN_ID not a decimal of up to 20 digits: see runbook",
 			code:   9,
 			drive: func(t *testing.T) error {
 				t.Helper()
@@ -111,7 +118,7 @@ func TestCoreRefusalNamesTheFailedCheck(t *testing.T) {
 			name:   "the run's date is not a real date",
 			source: "run.go: NewRun",
 			class:  publish.ErrConfig,
-			want:   "configuration invalid: the run's date is a real YYYY-MM-DD: see runbook",
+			want:   "configuration invalid: the run's date not a real YYYY-MM-DD: see runbook",
 			code:   9,
 			drive: func(t *testing.T) error {
 				t.Helper()
@@ -125,7 +132,7 @@ func TestCoreRefusalNamesTheFailedCheck(t *testing.T) {
 			name:   "the commit argument is no commit",
 			source: "result.go: ParseResult",
 			class:  publish.ErrConfig,
-			want:   "configuration invalid: the commit argument is 40 lowercase hex characters: see runbook",
+			want:   "configuration invalid: the commit argument not 40 lowercase hex: see runbook",
 			code:   9,
 			drive: func(t *testing.T) error {
 				t.Helper()
@@ -195,7 +202,7 @@ func TestCoreRefusalNamesTheFailedCheck(t *testing.T) {
 			name:   "the private state is none of the three",
 			source: "plan.go: RenderReport",
 			class:  publish.ErrResultInvalid,
-			want:   "result refused: the private state is none of the three: see runbook",
+			want:   "result refused: the private state none of the three: see runbook",
 			code:   3,
 			drive: func(t *testing.T) error {
 				t.Helper()
@@ -213,7 +220,7 @@ func TestCoreRefusalNamesTheFailedCheck(t *testing.T) {
 			name:   "a finding is private but the private state is none",
 			source: "plan.go: RenderReport",
 			class:  publish.ErrResultInvalid,
-			want:   "result refused: a finding is private but the private state is none: see runbook",
+			want:   "result refused: the private state none, but a finding is private: see runbook",
 			code:   3,
 			drive: func(t *testing.T) error {
 				t.Helper()
@@ -231,7 +238,7 @@ func TestCoreRefusalNamesTheFailedCheck(t *testing.T) {
 			name:   "the private state is set but no finding is private",
 			source: "plan.go: RenderReport",
 			class:  publish.ErrResultInvalid,
-			want:   "result refused: the private state is set but no finding is private: see runbook",
+			want:   "result refused: the private state set, but no finding is private: see runbook",
 			code:   3,
 			drive: func(t *testing.T) error {
 				t.Helper()
@@ -249,7 +256,7 @@ func TestCoreRefusalNamesTheFailedCheck(t *testing.T) {
 			name:   "the finding is not private",
 			source: "advisory.go: RenderAdvisory",
 			class:  publish.ErrResultInvalid,
-			want:   "result refused: the finding is not private: see runbook",
+			want:   "result refused: an advisory for a finding that is not private: see runbook",
 			code:   3,
 			drive: func(t *testing.T) error {
 				t.Helper()
@@ -270,7 +277,7 @@ func TestCoreRefusalNamesTheFailedCheck(t *testing.T) {
 			name:   "the fingerprint is no fingerprint",
 			source: "advisory.go: RenderAdvisory",
 			class:  publish.ErrResultInvalid,
-			want:   "result refused: the fingerprint is no fingerprint: see runbook",
+			want:   "result refused: an advisory fingerprint that is no fingerprint: see runbook",
 			code:   3,
 			drive: func(t *testing.T) error {
 				t.Helper()
@@ -288,7 +295,7 @@ func TestCoreRefusalNamesTheFailedCheck(t *testing.T) {
 			name:   "the advisory status is not new, open or regressed",
 			source: "advisory.go: RenderAdvisory",
 			class:  publish.ErrResultInvalid,
-			want:   "result refused: the advisory status is new, open or regressed: see runbook",
+			want:   "result refused: an advisory status not new, open or regressed: see runbook",
 			code:   3,
 			drive: func(t *testing.T) error {
 				t.Helper()
@@ -306,7 +313,7 @@ func TestCoreRefusalNamesTheFailedCheck(t *testing.T) {
 			name:   "the advisory status is none of the four",
 			source: "advisory.go: SetAdvisoryStatus",
 			class:  publish.ErrResultInvalid,
-			want:   "result refused: the advisory status is one of the four: see runbook",
+			want:   "result refused: an advisory status none of the four: see runbook",
 			code:   3,
 			drive: func(t *testing.T) error {
 				t.Helper()
@@ -320,12 +327,174 @@ func TestCoreRefusalNamesTheFailedCheck(t *testing.T) {
 			name:   "the advisory description holds no status line",
 			source: "advisory.go: SetAdvisoryStatus",
 			class:  publish.ErrResultInvalid,
-			want:   "result refused: the advisory description holds a status line: see runbook",
+			want:   "result refused: an advisory description without a status line: see runbook",
 			code:   3,
 			drive: func(t *testing.T) error {
 				t.Helper()
 
 				_, err := publish.SetAdvisoryStatus("a body with no status line", publish.AdvisoryNotReproduced)
+
+				return err
+			},
+		},
+		{
+			name:   "two findings with one fingerprint",
+			source: "advisory.go: PrivateFindings",
+			class:  publish.ErrResultInvalid,
+			want:   "result refused: two findings with one fingerprint: see runbook",
+			code:   3,
+			drive: func(t *testing.T) error {
+				t.Helper()
+
+				_, err := publish.PrivateFindings(fixtureResult(advisoryFinding(), advisoryFinding()), testKey(t))
+
+				return err
+			},
+		},
+
+		// The previous report: the newest report the core reads, the Previous a
+		// renderer is handed, and the rows an issue is rendered from.
+		{
+			name:   "the newest report is not one the core renders",
+			source: "previous.go: ParsePreviousReport",
+			class:  publish.ErrPreviousReport,
+			want:   "previous report unreadable: the newest report not as the core renders one: see runbook",
+			code:   7,
+			leaks:  []string{previousValueMarker},
+			drive: func(t *testing.T) error {
+				t.Helper()
+
+				_, err := publish.ParsePreviousReport("2026-11-01-1.md", []byte("not a report "+previousValueMarker+"\n"))
+
+				return err
+			},
+		},
+		{
+			name:   "the previous report was not read by the core",
+			source: "plan.go: RenderReport",
+			class:  publish.ErrPreviousReport,
+			want:   "previous report unreadable: the previous report not read by the core: see runbook",
+			code:   7,
+			drive: func(t *testing.T) error {
+				t.Helper()
+
+				_, err := publish.RenderReport(publish.ReportInput{
+					Result:   fixtureResult(),
+					Run:      testRun(t, testDate, testRunID),
+					Private:  publish.PrivateNone,
+					Previous: &publish.Previous{},
+				})
+
+				return err
+			},
+		},
+		{
+			name:   "the previous report is dated after the run",
+			source: "plan.go: RenderReport",
+			class:  publish.ErrPreviousReport,
+			want:   "previous report unreadable: the previous report dated after the run: see runbook",
+			code:   7,
+			leaks:  []string{"2026-11-24"},
+			drive: func(t *testing.T) error {
+				t.Helper()
+
+				_, err := publish.RenderReport(publish.ReportInput{
+					Result:   fixtureResult(),
+					Run:      testRun(t, testDate, testRunID),
+					Private:  publish.PrivateNone,
+					Previous: previousReport(t, fixtureResult(), publish.PrivateNone, "2026-11-24", "1"),
+				})
+
+				return err
+			},
+		},
+		{
+			name:   "the previous report is not before the run",
+			source: "plan.go: RenderReport",
+			class:  publish.ErrPreviousReport,
+			want:   "previous report unreadable: the previous report not before the run: see runbook",
+			code:   7,
+			leaks:  []string{testDate, testRunID},
+			drive: func(t *testing.T) error {
+				t.Helper()
+
+				_, err := publish.RenderReport(publish.ReportInput{
+					Result:   fixtureResult(),
+					Run:      testRun(t, testDate, testRunID),
+					Private:  publish.PrivateNone,
+					Previous: previousReport(t, fixtureResult(), publish.PrivateNone, testDate, testRunID),
+				})
+
+				return err
+			},
+		},
+		{
+			name:   "the previous report's fingerprint is no fingerprint",
+			source: "issue.go: RenderIssue",
+			class:  publish.ErrPreviousReport,
+			want:   "previous report unreadable: the previous report's fingerprint not a fingerprint: see runbook",
+			code:   7,
+			leaks:  []string{"fp-0123"},
+			drive: func(t *testing.T) error {
+				t.Helper()
+
+				finding := issueFinding()
+				finding.Fingerprint = "fp-0123"
+
+				_, err := publish.RenderIssue(finding, testRun(t, testDate, testRunID))
+
+				return err
+			},
+		},
+		{
+			name:   "the previous report's severity is outside the public severities",
+			source: "issue.go: RenderIssue",
+			class:  publish.ErrPreviousReport,
+			want:   "previous report unreadable: the previous report's severity outside the public severities: see runbook",
+			code:   7,
+			leaks:  []string{"medium"},
+			drive: func(t *testing.T) error {
+				t.Helper()
+
+				finding := issueFinding()
+				finding.Severity = "medium"
+
+				_, err := publish.RenderIssue(finding, testRun(t, testDate, testRunID))
+
+				return err
+			},
+		},
+		{
+			name:   "the previous report's category is outside the public categories",
+			source: "issue.go: RenderIssue",
+			class:  publish.ErrPreviousReport,
+			want:   "previous report unreadable: the previous report's category outside the public categories: see runbook",
+			code:   7,
+			leaks:  []string{catInjection},
+			drive: func(t *testing.T) error {
+				t.Helper()
+
+				finding := issueFinding()
+				finding.Category = catInjection
+
+				_, err := publish.RenderIssue(finding, testRun(t, testDate, testRunID))
+
+				return err
+			},
+		},
+		{
+			name:   "the previous report's status is not new or open",
+			source: "issue.go: RenderIssue",
+			class:  publish.ErrPreviousReport,
+			want:   "previous report unreadable: the previous report's status not new or open: see runbook",
+			code:   7,
+			drive: func(t *testing.T) error {
+				t.Helper()
+
+				finding := issueFinding()
+				finding.Status = "fixed"
+
+				_, err := publish.RenderIssue(finding, testRun(t, testDate, testRunID))
 
 				return err
 			},
@@ -357,6 +526,13 @@ func TestCoreRefusalNamesTheFailedCheck(t *testing.T) {
 				t.Errorf("%s: the summary %q holds a value, want the check's own fixed words", tc.source, outcome.Summary())
 			}
 
+			for _, leak := range tc.leaks {
+				if strings.Contains(outcome.Summary(), leak) {
+					t.Errorf("%s: the summary %q holds the value %q, want the check's own fixed words",
+						tc.source, outcome.Summary(), leak)
+				}
+			}
+
 			if !strings.HasSuffix(outcome.Summary(), ": see runbook") {
 				t.Errorf("%s: the summary %q does not end with %q: every line points at the runbook",
 					tc.source, outcome.Summary(), ": see runbook")
@@ -380,6 +556,8 @@ func classLine(t *testing.T, class error) string {
 		return "configuration invalid"
 	case errors.Is(class, publish.ErrResultInvalid):
 		return "result refused"
+	case errors.Is(class, publish.ErrPreviousReport):
+		return "previous report unreadable"
 	}
 
 	t.Fatalf("no class line is pinned for %v", class)
