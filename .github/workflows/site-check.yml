@@ -1,0 +1,113 @@
+name: Live site check
+
+# The release's live check, repeated at least daily: a page changed between
+# releases is noticed within a day (PRD #297 milestone 4, ADR 0043). The live
+# version is untrusted page text, matched against the repository's own tag list
+# and accepted only within the window after the highest release tag's commit,
+# so a release whose run was queued past the window fails the check once. The
+# alert job opens or comments on one issue because GitHub notifies no one of a
+# failed scheduled run, and disables a schedule after 60 days without
+# repository activity; the runbook says how to re-enable it.
+on:
+  schedule:
+    - cron: '23 5 * * *'
+
+# No permission by default; each job asks for its own.
+permissions: {}
+
+jobs:
+  check:
+    name: Check the live site
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      attestations: read
+    steps:
+      # The whole history, so the tag list and the highest tag's commit are read
+      # from the repository itself, and the checkout keeps no credential: no
+      # step here needs one.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: go.mod
+          cache: false # see the comment on the release's test job
+      # The highest release tag on main and the committer date of its commit,
+      # which contents: read can read and actions: read cannot. The window is
+      # anchored there.
+      - name: The expected release
+        id: expected
+        run: |
+          set -euo pipefail
+          git fetch --quiet --force --tags origin
+          mapfile -t tags < <(git tag --list 'v*.*.*' | sort -V)
+          expected="${tags[-1]}"
+          printf '%s\n' "${tags[@]}" > "${RUNNER_TEMP}/tags.txt"
+          anchor="$(git log -1 --format=%cI "${expected}")"
+          echo "tag=${expected}" >> "${GITHUB_OUTPUT}"
+          echo "anchor=${anchor}" >> "${GITHUB_OUTPUT}"
+      # The live version is read from the page and never trusted: the program
+      # refuses one that is not vX.Y.Z, that is no tag of the repository, or
+      # that is below the highest tag outside the window, and prints the tag
+      # list's own entry. The grep re-checks that entry against the tag list, so
+      # every command after it takes its tag from the repository, never from
+      # the page.
+      - name: The live version
+        id: live
+        run: |
+          set -euo pipefail
+          live="$(go run ./ci/sitecheck live-version -tags "${RUNNER_TEMP}/tags.txt" -anchor "${{ steps.expected.outputs.anchor }}" -window 180m)"
+          grep -qxF "${live}" "${RUNNER_TEMP}/tags.txt"
+          echo "tag=${live}" >> "${GITHUB_OUTPUT}"
+      # The release the page names, downloaded and its build provenance verified
+      # with the workflow's token alone, the signer workflow, the tag's own ref
+      # and no self-hosted runner: the deploy's and the guide's flags.
+      - name: Verify the release's attestation
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.live.outputs.tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/bundle"
+          gh release download "${TAG}" --repo timothymamo/shift2eu --pattern "shift2eu-site_${TAG}.tar.gz" --dir "${RUNNER_TEMP}/bundle"
+          gh attestation verify "${RUNNER_TEMP}/bundle/shift2eu-site_${TAG}.tar.gz" --repo timothymamo/shift2eu --signer-workflow timothymamo/shift2eu/.github/workflows/release.yml --source-ref "refs/tags/${TAG}" --deny-self-hosted-runners
+          tar -xzf "${RUNNER_TEMP}/bundle/shift2eu-site_${TAG}.tar.gz" -C "${RUNNER_TEMP}/bundle"
+      # The whole check against the release's own manifest: the files, /, the
+      # service-worker paths, the headers, the redirects, both certificates and
+      # HSTS against the recorded state.
+      - name: Check the live site
+        run: |
+          set -euo pipefail
+          go run ./ci/sitecheck -manifest "${RUNNER_TEMP}/bundle/manifest.json" -tags "${RUNNER_TEMP}/tags.txt"
+  alert:
+    name: Alert
+    needs: check
+    if: failure()
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      issues: write
+    steps:
+      # One issue with a fixed label, assigned to the maintainer, commented on
+      # when it is already open: editing an issue notifies no one. The issue
+      # holds fixed text and the failed run's URL only, never an output of the
+      # check job and never site content.
+      - name: Open or comment on the alert issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          LABEL: live site check
+          TITLE: The live site check failed
+        run: |
+          set -euo pipefail
+          body="$(printf 'The scheduled live site check failed: %s\n' "${RUN_URL}")"
+          existing="$(gh issue list --repo "${GH_REPO}" --label "${LABEL}" --state open --json number --jq '.[0].number // empty')"
+          if [ -n "${existing}" ]; then
+            gh issue comment "${existing}" --repo "${GH_REPO}" --body "${body}"
+          else
+            gh issue create --repo "${GH_REPO}" --title "${TITLE}" --body "${body}" --label "${LABEL}" --assignee timothymamo
+          fi

@@ -64,6 +64,11 @@ type releaseStep struct {
 	// GITHUB_TOKEN or GH_TOKEN, in any case: the step that holds the site's
 	// key holds nothing that could write to the repository.
 	noToken bool
+	// runExpressions lets run hold the ${{ }} expressions it lists, compared
+	// exactly like the rest of it; false refuses every expression in run.
+	// Only the scheduled live check sets it (SiteCheckWorkflow), never the
+	// release workflow.
+	runExpressions bool
 }
 
 // exactly matches value and nothing else.
@@ -1673,7 +1678,7 @@ func releaseSchema(raw []string, lines []yamlread.Line) []string {
 	}
 
 	r.scalar(top["name"], "the release workflow's name", exactly("Release"))
-	r.rawValue(top["permissions"], "the release workflow's permissions", "{}")
+	r.emptyMapping(top["permissions"], "the release workflow's permissions")
 
 	if c := r.exactKeys(r.block(top["concurrency"], "concurrency"), "concurrency", "group", "cancel-in-progress"); c != nil {
 		r.scalar(c["group"], "concurrency: group", exactly("release"))
@@ -1958,7 +1963,7 @@ func (r *schemaReader) job(e yamlread.Entry, path string, want releaseJob) {
 	}
 
 	if want.emptyPermissions {
-		r.rawValue(job["permissions"], path+": permissions", "{}")
+		r.emptyMapping(job["permissions"], path+": permissions")
 	} else {
 		r.exactMapping(job["permissions"], path+": permissions", want.permissions)
 	}
@@ -2102,7 +2107,27 @@ func (r *schemaReader) step(it yamlread.Item, path string, want releaseStep) {
 	}
 
 	if want.run != "" {
-		r.run(step["run"], path+": run", want.run)
+		if want.runExpressions {
+			r.exactRun(step["run"], path+": run", want.run)
+		} else {
+			r.run(step["run"], path+": run", want.run)
+		}
+	}
+}
+
+// exactRun checks that e's value is exactly the command want, which may hold
+// the ${{ }} expressions want itself holds and no other: the scheduled live
+// check's one step that pastes its own job's output (SiteCheckWorkflow).
+func (r *schemaReader) exactRun(e yamlread.Entry, path, want string) {
+	value, err := r.value(e)
+	if err != nil {
+		r.fail("%s: %v", path, err)
+
+		return
+	}
+
+	if value != want {
+		r.fail("line %d: %s is %q, want exactly %q", e.Num, path, value, want)
 	}
 }
 
@@ -2241,8 +2266,11 @@ func (r *schemaReader) value(e yamlread.Entry) (string, error) {
 	return yamlread.Single(e)
 }
 
-// rawValue checks that e's value is exactly want, as written on its line.
-func (r *schemaReader) rawValue(e yamlread.Entry, path, want string) {
+// emptyMapping checks that e's value is exactly {}, as written on its line:
+// the one raw value the workflows' schemas hold a key to (permissions: {}).
+func (r *schemaReader) emptyMapping(e yamlread.Entry, path string) {
+	const want = "{}"
+
 	if e.Value != want || len(e.Block) != 0 {
 		r.fail("line %d: %s is %q, want exactly %q", e.Num, path, e.Value, want)
 	}
