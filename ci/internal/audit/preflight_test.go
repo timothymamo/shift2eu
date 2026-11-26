@@ -69,6 +69,39 @@ func underRoot(rel string) string {
 	return filepath.Join(preflightRoot, filepath.FromSlash(rel))
 }
 
+// replacementTokenAbsenceCommand is probe 5's token-absence command as issue
+// #613's second review fixes it: the sandboxed shell tests the variable's
+// presence itself, with `[[ -v NAME ]]` and `[[ ! -v NAME ]]`, which expand
+// nothing, so the command holds no $ - Claude Code 2.1.332 refuses to run a Bash
+// command in which a variable is expanded, before it runs it - and each of the
+// two paths still ends in cat's own error, which names the work area's
+// nonexistent/ path, with tokenset after it when the variable is set. Both
+// branches are positive tests of the variable: the first reads tokenset when it
+// is set, the second reads the bare path when it is not, and neither path is
+// read because a test or a branch failed instead. The old `||` form ran its
+// second branch whenever the first one failed for any reason - a shell that
+// cannot evaluate `[[` exits 127 without running either cat - so the bare
+// path's absence text could appear without the variable's presence having been
+// tested. The wrapper is Targets' own; the paths are the work area's as the
+// wrapper sees it, inside the roots it holds every path word to (issue #277,
+// round I).
+var replacementTokenAbsenceCommand = "[[ -v CLAUDE_CODE_OAUTH_TOKEN ]] && " +
+	underRoot("srv/audit/bin/audit-exec") + " cat /srv/audit/work/nonexistent/tokenset; " +
+	"[[ ! -v CLAUDE_CODE_OAUTH_TOKEN ]] && " +
+	underRoot("srv/audit/bin/audit-exec") + " cat /srv/audit/work/nonexistent/"
+
+// The two results probe 5's token-absence call can print, as 2.1.332 records
+// them (issue #613): cat's error for the work area's nonexistent/ path when the
+// variable is absent, and, when it is set, the first branch's error alone,
+// naming tokenset - the second branch's test is false then, so the bare read
+// never runs and its line never stands beside the set one. What the transcript
+// shows is whether the variable reached the sandboxed shell, and cat's own line
+// for the bare path is the only proof that it did not.
+const (
+	absenceUnsetText = "cat: /srv/audit/work/nonexistent/: No such file or directory"
+	absenceSetText   = "cat: /srv/audit/work/nonexistent/tokenset: No such file or directory"
+)
+
 // stepCanary is a canary with no run of 64 hex characters, so the judgement can
 // find it nowhere but in the value the step gives it (Judgement.Canary): the
 // hex heuristic cannot see it.
@@ -91,6 +124,21 @@ const (
 	classOtherOutput    = "the CLI wrote other non-JSON output"
 	classNotAnElement   = "a JSON value that is not an element"
 	classTypeNotAString = "an element whose type is not a string"
+
+	// The classes of the two records by which 2.1.332 says it never ran a
+	// call: its system/permission_denied element and a tool_result_meta entry
+	// (issue #613). A shape the judgement cannot read is refused by its class
+	// and the line's number, like every other line it cannot read.
+	classDenialShape = "holds a permission denial of an unknown shape"
+	classMetaShape   = "holds a tool result meta of an unknown shape"
+)
+
+// The reasons the verdict gives for probe 5's token-absence call: the CLI's own
+// record that it never ran it, and a result whose text does not show the
+// variable absent (issue #613).
+const (
+	reasonNotRun   = "the token-absence call was refused before it ran"
+	reasonTokenSet = "the token variable's absence was not shown"
 )
 
 // probeShortName is the short name each probe's refusal uses, as the ADR's
@@ -245,7 +293,7 @@ func passingAnswers(plan audit.Plan, nonce string) []callResult {
 		case call.Probe == 0:
 			answers[i] = callResult{text: "the file holds:\n" + nonce + "\n"}
 		case tokenAbsenceCallOf(call):
-			answers[i] = callResult{text: "cat: /srv/audit/work/nonexistent/: No such file or directory", isError: true}
+			answers[i] = callResult{text: absenceUnsetText, isError: true}
 		case bypassCallOf(call):
 			_, target, _ := strings.Cut(call.Input["command"], "< ")
 			answers[i] = callResult{text: "bash: " + target + ": Permission denied", isError: true}
@@ -259,8 +307,8 @@ func passingAnswers(plan audit.Plan, nonce string) []callResult {
 
 // tokenAbsenceCallOf reports whether call is probe 5's call that proves the
 // token variable is absent from the sandboxed shell without showing it: its
-// command reads the work area's nonexistent/ path with the variable's expansion
-// appended.
+// command tests the variable's presence and reads the work area's nonexistent/
+// path, naming tokenset there when the variable is set (issue #613).
 func tokenAbsenceCallOf(call audit.Call) bool {
 	return call.Tool == "Bash" && strings.Contains(call.Input["command"], "/nonexistent/")
 }
@@ -685,8 +733,9 @@ func TestPreflightPlanPassesThePathsItsGlobsSearch(t *testing.T) {
 }
 
 // TestPreflightPlanProvesTheTokenVariableIsAbsent pins probe 5's last call
-// (issue #277, audit A4): a Bash command that reads the work area's nonexistent/
-// path with the token variable's expansion appended, so the file the shell names
+// (issue #277, audit A4): a Bash command that tests the token variable's
+// presence with `[[ -v NAME ]]` and reads the work area's nonexistent/ path,
+// naming tokenset there when the variable is set, so the file the shell names
 // shows whether the variable survived the subprocess scrub - without the
 // transcript ever holding the token. The path lies inside the audit's roots,
 // which the wrapper holds every path word to (issue #277, round I): a path
@@ -694,6 +743,20 @@ func TestPreflightPlanPassesThePathsItsGlobsSearch(t *testing.T) {
 // unexpanded word reads as absence too, but it tests the wrapper rather than
 // cat, so the answer is not the one the plan describes. Inside the roots cat
 // itself runs, and its failure is the absent token.
+//
+// The command holds no $ (issue #613): Claude Code 2.1.332 refuses a Bash
+// command in which a variable is expanded - "A variable in braces in this
+// command can't be checked before it runs" - so the call it was asked to make
+// never ran, and probe 5 tested the permission layer instead of the scrubbed
+// shell on every run. `[[ -v NAME ]]` is the shell's own test, which the CLI
+// runs, and it expands nothing.
+//
+// Both of the command's branches test the variable positively, and neither is a
+// fallback (issue #613's second review): with `&&` and a `;` between them, a
+// shell that cannot evaluate `[[`, or the first branch's own failure, cannot
+// make the second branch run, so the bare path's error never appears on a run
+// that did not test the variable. A `||` between them did exactly that: an exit
+// 127 took the fallback and the absence text appeared untested.
 func TestPreflightPlanProvesTheTokenVariableIsAbsent(t *testing.T) {
 	t.Parallel()
 
@@ -704,10 +767,14 @@ func TestPreflightPlanProvesTheTokenVariableIsAbsent(t *testing.T) {
 		t.Fatalf("probe 5's calls %v hold no Bash call that reads nonexistent/ with the token variable in it: the preflight proves the scrubbed variable is absent from the sandboxed shell (issue #277)", toolsOf(thePlan, 5))
 	}
 
-	want := underRoot("srv/audit/bin/audit-exec") + " cat /srv/audit/work/nonexistent/${CLAUDE_CODE_OAUTH_TOKEN:+tokenset}"
+	want := replacementTokenAbsenceCommand
 
 	if got := thePlan[index].Input["command"]; got != want {
-		t.Errorf("probe 5's token-absence call carries the command %q, want %q: the path is the work area's, inside the roots the wrapper holds every path word to, and the shell names it with the variable's expansion and nothing else, so the token itself never reaches the transcript (issue #277)", got, want)
+		t.Errorf("probe 5's token-absence call carries the command %q, want %q: the path is the work area's, inside the roots the wrapper holds every path word to, and the shell tests the variable's presence itself, so the token itself never reaches the transcript (issue #277)", got, want)
+	}
+
+	if got := thePlan[index].Input["command"]; strings.Contains(got, "$") {
+		t.Errorf("probe 5's token-absence call carries the command %q, which holds a $: Claude Code 2.1.332 refuses a Bash command in which a variable is expanded, before the command runs, so the call would never run and probe 5 would test the permission layer instead of the scrubbed shell (issue #613)", got)
 	}
 
 	if thePlan[index].Probe != 5 {
@@ -787,12 +854,211 @@ func TestJudgeFailsProbeFiveForTheFormsTheWrapperCannotSee(t *testing.T) {
 	}
 }
 
+// bracedVariableRefusal is Claude Code 2.1.332's text for a Bash command in
+// which a variable is expanded: it refuses the command before it runs and
+// records this sentence, in the permission_denied element and as the call's
+// result (issue #613).
+const bracedVariableRefusal = "A variable in braces in this command can't be checked before it runs"
+
+// permissionDeniedLine is the system element 2.1.332 prints for a call its
+// permission layer denies, right after the call's assistant element and before
+// its result: it names the call's tool_use_id and carries reason as both its
+// decision_reason and its message (issue #590).
+func permissionDeniedLine(toolUseID, reason string) string {
+	return fmt.Sprintf(
+		`{"type":"system","subtype":"permission_denied","tool_name":"Bash","tool_use_id":%q,"decision_reason_type":"other","decision_reason":%q,"message":%q}`+"\n",
+		toolUseID, reason, reason,
+	)
+}
+
+// absenceCallID is the tool_use id transcriptOf gives the plan's call i.
+func absenceCallID(i int) string {
+	return fmt.Sprintf("toolu_%02d", i)
+}
+
+// deniedTheAbsenceCall returns the transcript of a run that recorded reason,
+// with the CLI's permission_denied element for probe 5's token-absence call
+// inserted where the CLI prints it: after that call's assistant element and
+// before its result.
+func deniedTheAbsenceCall(reason string) func(plan audit.Plan, transcript []byte) []byte {
+	return func(plan audit.Plan, transcript []byte) []byte {
+		i := tokenAbsenceCall(plan)
+		if i < 0 {
+			return transcript
+		}
+
+		return insertLine(transcript, 2*i+2, strings.TrimSuffix(permissionDeniedLine(absenceCallID(i), reason), "\n"))
+	}
+}
+
+// metaOnTheAbsenceResult returns the transcript of a run that recorded kind in
+// the tool_result_meta of probe 5's token-absence call's result: 2.1.332 prints
+// that list beside the user element's message for a call it never ran, with a
+// non_execution_kind, and the element's text alone can then read as absence
+// (issue #613).
+func metaOnTheAbsenceResult(kind string) func(plan audit.Plan, transcript []byte) []byte {
+	return resultMetaOnTheAbsenceResult(func(id string) string {
+		return fmt.Sprintf(
+			`[{"id":%q,"non_execution_kind":%q,"permission_decision":{"decision":"reject","source":"config"}}]`,
+			id, kind,
+		)
+	})
+}
+
+// resultMetaOnTheAbsenceResult returns the transcript of a run that wrote meta,
+// built from the token-absence call's tool_use id, as that call's
+// tool_result_meta: the record by which the CLI says whether the call ran, and
+// the shape the judgement either reads or refuses (issue #613).
+func resultMetaOnTheAbsenceResult(meta func(id string) string) func(plan audit.Plan, transcript []byte) []byte {
+	return func(plan audit.Plan, transcript []byte) []byte {
+		i := tokenAbsenceCall(plan)
+		if i < 0 {
+			return transcript
+		}
+
+		field := fmt.Sprintf(`"tool_result_meta":%s,`, meta(absenceCallID(i)))
+
+		lines := strings.SplitAfter(string(transcript), "\n")
+		lines[2*i+1] = strings.Replace(lines[2*i+1], `{"type":"user",`, `{"type":"user",`+field, 1)
+
+		return []byte(strings.Join(lines, ""))
+	}
+}
+
+// preflightMetaCanary is a value a line the judgement cannot read carries, in a
+// key it never reads or in an id whose shape is wrong: the verdict names the
+// line's class and number, never a byte of it (ADR 0040, issue #613).
+const preflightMetaCanary = "canary-in-a-tool-result-meta"
+
+// userElementWithMeta is the user element 2.1.332 prints for a call it never
+// ran, carrying meta as its raw tool_result_meta beside a message the judgement
+// never reads (issue #613).
+func userElementWithMeta(meta string) string {
+	return fmt.Sprintf(
+		`{"type":"user","message":{"content":%q},"tool_result_meta":%s,"decision_reason":%q}`,
+		preflightMetaCanary, meta, preflightMetaCanary,
+	)
+}
+
+// TestJudgeFailsProbeFiveForTheRecordedRefusal pins probe 5 against the refusal
+// Claude Code 2.1.332 records for a Bash command in which a variable is
+// expanded (issue #613): the CLI decides that refusal before it runs anything,
+// so the call never reaches cat and its result is no evidence about the
+// sandboxed shell. The refusal is recorded in a system/permission_denied
+// element naming the call's tool_use_id, in the call's own error result, and in
+// its tool_result_meta's non_execution_kind - and any one of them must fail
+// probe 5, even when the result's text would otherwise read as an absent token:
+// a judgement that reads such a refusal as absence passes a probe that never
+// ran.
+func TestJudgeFailsProbeFiveForTheRecordedRefusal(t *testing.T) {
+	t.Parallel()
+
+	refusal := []string{
+		fmt.Sprintf("probe 5, %s", probeShortName[5]),
+		"runbook step 10",
+	}
+
+	cases := []struct {
+		name string
+		// answer, when set, is what the token-absence call's result becomes;
+		// nil leaves the passing run's absent-token result.
+		answer *callResult
+		// transcript writes the refusal's record beside the result.
+		transcript func(plan audit.Plan, transcript []byte) []byte
+		// reason is the judgement's fixed phrase the verdict must give for the
+		// call: the record that it never ran, or a result that does not show
+		// the variable absent.
+		reason string
+	}{
+		{
+			name:       "the refusal is the call's error result and a permission_denied element",
+			answer:     &callResult{text: bracedVariableRefusal, isError: true},
+			transcript: deniedTheAbsenceCall(bracedVariableRefusal),
+			reason:     reasonNotRun,
+		},
+		{
+			name:   "the refusal is the call's error result alone",
+			answer: &callResult{text: bracedVariableRefusal, isError: true},
+			reason: reasonTokenSet,
+		},
+		{
+			// The hardening: the result's text reads as an absent token, and the
+			// permission layer's own record says the call was denied, so it never
+			// ran.
+			name:       "the permission_denied element denies a call whose result reads as an absent token",
+			transcript: deniedTheAbsenceCall(bracedVariableRefusal),
+			reason:     reasonNotRun,
+		},
+		{
+			// The same record in the other place the CLI writes it.
+			name:       "the call's tool_result_meta says it never ran",
+			transcript: metaOnTheAbsenceResult("user-rejected"),
+			reason:     reasonNotRun,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			thePlan := plan()
+
+			if tc.reason == "" {
+				t.Fatal("the case names no reason: the verdict's own phrase for the call is what it pins (issue #613)")
+			}
+
+			index := tokenAbsenceCall(thePlan)
+			if index < 0 {
+				t.Fatalf("the plan asks for no token-absence call (its probe 5 calls are %v)", toolsOf(thePlan, 5))
+			}
+
+			answers := passingAnswers(thePlan, preflightNonce)
+
+			if tc.answer != nil {
+				answers[index] = *tc.answer
+			}
+
+			transcript := transcriptOf(thePlan, answers)
+			if tc.transcript != nil {
+				transcript = tc.transcript(thePlan, transcript)
+			}
+
+			err := judge(thePlan, transcript, fakeEffects{}, "")
+			if err == nil {
+				t.Fatal("Judge() = nil, want a refusal: the CLI refused probe 5's token-absence call before it ran, so its result is no evidence about the sandboxed shell (issue #613)")
+			}
+
+			for _, want := range refusal {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("Judge() error = %q, want it to hold %q", err, want)
+				}
+			}
+
+			// The verdict names the reason in probe 5's own sentence, so a run
+			// shows whether the CLI refused the call or its result does not prove
+			// the variable absent: the two need different repairs.
+			want := fmt.Sprintf("probe 5, %s: %s", probeShortName[5], tc.reason)
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("Judge() error = %q, want it to hold %q", err, want)
+			}
+
+			if strings.Contains(err.Error(), bracedVariableRefusal) {
+				t.Errorf("Judge() error = %q, want it to hold nothing of the refusal's text: a verdict is made of fixed words, never of the transcript's bytes (ADR 0040)", err)
+			}
+		})
+	}
+}
+
 // judgeCase is one row of the judgement's table.
 type judgeCase struct {
 	// name says what the case does.
 	name string
 	// answers turns the passing transcript's answers into the case's.
 	answers func(plan audit.Plan, answers []callResult)
+	// command, when set, is the command probe 5's token-absence call is made
+	// with instead of the plan's, so the judgement is pinned against the call it
+	// must recognise whatever PreflightPlan lists (issue #613).
+	command string
 	// effects turns the passing observations into the case's.
 	effects func(effects *fakeEffects)
 	// canary, when set, is the step's canary the judgement is given.
@@ -1277,6 +1543,135 @@ func transcriptCases() []judgeCase {
 			want: []string{"transcript"},
 		},
 		{
+			// Issue #613: a system/permission_denied element is the CLI's own
+			// record that it never ran the call it names, so an element whose
+			// tool_use_id the judgement cannot read fails closed, as a line it
+			// cannot read: missing, not a string and empty are the three shapes.
+			name: "a permission_denied element names no tool_use_id",
+			transcript: func(_ audit.Plan, transcript []byte) []byte {
+				return insertLine(transcript, 2, fmt.Sprintf(
+					`{"type":"system","subtype":"permission_denied","tool_name":"Bash","decision_reason":%q}`,
+					preflightMetaCanary,
+				))
+			},
+			want:    []string{"the transcript at line 2", classDenialShape},
+			wantNot: []string{preflightMetaCanary},
+		},
+		{
+			name: "a permission_denied element's tool_use_id is not a string",
+			transcript: func(_ audit.Plan, transcript []byte) []byte {
+				return insertLine(transcript, 2, fmt.Sprintf(
+					`{"type":"system","subtype":"permission_denied","tool_use_id":7,"decision_reason":%q}`,
+					preflightMetaCanary,
+				))
+			},
+			want:    []string{"the transcript at line 2", classDenialShape},
+			wantNot: []string{preflightMetaCanary},
+		},
+		{
+			name: "a permission_denied element's tool_use_id is empty",
+			transcript: func(_ audit.Plan, transcript []byte) []byte {
+				return insertLine(transcript, 2, fmt.Sprintf(
+					`{"type":"system","subtype":"permission_denied","tool_use_id":"","decision_reason":%q}`,
+					preflightMetaCanary,
+				))
+			},
+			want:    []string{"the transcript at line 2", classDenialShape},
+			wantNot: []string{preflightMetaCanary},
+		},
+		// Issue #613: a tool_result_meta the judgement cannot read is refused
+		// with its line and a fixed class, like every other line: a record that
+		// says a call never ran must not hide behind a shape the judgement
+		// reads as one that ran, and a non_execution_kind whose call it cannot
+		// name fails closed too. The meta is the CLI's list of entries, one per
+		// call it never ran, each naming the call by id and a kind.
+		{
+			name: "the tool_result_meta is not a list",
+			transcript: func(_ audit.Plan, transcript []byte) []byte {
+				return insertLine(transcript, 2, userElementWithMeta(strconv.Quote(preflightMetaCanary)))
+			},
+			want:    []string{"the transcript at line 2", classMetaShape},
+			wantNot: []string{preflightMetaCanary},
+		},
+		{
+			name: "the tool_result_meta's entry is not an object",
+			transcript: func(_ audit.Plan, transcript []byte) []byte {
+				return insertLine(transcript, 2, userElementWithMeta("["+strconv.Quote(preflightMetaCanary)+"]"))
+			},
+			want:    []string{"the transcript at line 2", classMetaShape},
+			wantNot: []string{preflightMetaCanary},
+		},
+		{
+			name: "the tool_result_meta's entry names id twice",
+			transcript: func(_ audit.Plan, transcript []byte) []byte {
+				return insertLine(transcript, 2, userElementWithMeta(fmt.Sprintf(
+					`[{"id":%q,"id":%q,"non_execution_kind":"user-rejected"}]`,
+					preflightMetaCanary, preflightMetaCanary,
+				)))
+			},
+			want:    []string{"the transcript at line 2", classMetaShape},
+			wantNot: []string{preflightMetaCanary},
+		},
+		{
+			name: "the tool_result_meta's entry spells id in another case",
+			transcript: func(_ audit.Plan, transcript []byte) []byte {
+				return insertLine(transcript, 2, userElementWithMeta(fmt.Sprintf(
+					`[{"ID":%q,"non_execution_kind":"user-rejected"}]`,
+					preflightMetaCanary,
+				)))
+			},
+			want:    []string{"the transcript at line 2", classMetaShape},
+			wantNot: []string{preflightMetaCanary},
+		},
+		{
+			// The kind is the key that decides whether the call never ran, so an
+			// entry that spells it in another case is refused too: read
+			// case-insensitively, such a line would decide a call's run by a key
+			// the CLI does not print.
+			name: "the tool_result_meta's entry spells non_execution_kind in another case",
+			transcript: func(_ audit.Plan, transcript []byte) []byte {
+				return insertLine(transcript, 2, userElementWithMeta(fmt.Sprintf(
+					`[{"id":%q,"NON_EXECUTION_KIND":"user-rejected"}]`,
+					preflightMetaCanary,
+				)))
+			},
+			want:    []string{"the transcript at line 2", classMetaShape},
+			wantNot: []string{preflightMetaCanary},
+		},
+		{
+			name: "the tool_result_meta's entry names no id for its non_execution_kind",
+			transcript: func(_ audit.Plan, transcript []byte) []byte {
+				return insertLine(transcript, 2, userElementWithMeta(fmt.Sprintf(
+					`[{"non_execution_kind":"user-rejected","decision_reason":%q}]`,
+					preflightMetaCanary,
+				)))
+			},
+			want:    []string{"the transcript at line 2", classMetaShape},
+			wantNot: []string{preflightMetaCanary},
+		},
+		{
+			name: "the tool_result_meta's entry names an empty id",
+			transcript: func(_ audit.Plan, transcript []byte) []byte {
+				return insertLine(transcript, 2, userElementWithMeta(fmt.Sprintf(
+					`[{"id":"","non_execution_kind":"user-rejected","decision_reason":%q}]`,
+					preflightMetaCanary,
+				)))
+			},
+			want:    []string{"the transcript at line 2", classMetaShape},
+			wantNot: []string{preflightMetaCanary},
+		},
+		{
+			name: "the tool_result_meta's entry names an id that is not a string",
+			transcript: func(_ audit.Plan, transcript []byte) []byte {
+				return insertLine(transcript, 2, userElementWithMeta(fmt.Sprintf(
+					`[{"id":7,"non_execution_kind":"user-rejected","decision_reason":%q}]`,
+					preflightMetaCanary,
+				)))
+			},
+			want:    []string{"the transcript at line 2", classMetaShape},
+			wantNot: []string{preflightMetaCanary},
+		},
+		{
 			// An element the judgement reads carries more lower-case keys than it
 			// decodes - 2.1.332 prints uuid, session_id and parent_tool_use_id
 			// beside type and message - and such an element still passes: the
@@ -1501,14 +1896,28 @@ func tokenCases() []judgeCase {
 
 // absenceCases are the ways probe 5's token-absence call fails to prove the
 // scrubbed shell lacks the token variable (issue #277, audit A4): a result that
-// holds the variable's own expansion, one that is not an error, and one that is
-// an error for another reason - a refusal by the settings file among them, which
-// is what every other call of the plan expects and this one must not accept.
+// holds the variable's own expansion, one that is not an error, one that is an
+// error for another reason - a refusal by the settings file among them, which
+// is what every other call of the plan expects and this one must not accept -
+// and, since issue #613's second review, any result whose text holds no line of
+// cat's own, which is what an approval refusal quoting the command and a shell
+// that cannot evaluate `[[` print.
 func absenceCases() []judgeCase {
 	refusal := []string{
 		fmt.Sprintf("probe 5, %s", probeShortName[5]),
 		"runbook step 10",
 	}
+
+	// forAnotherReason is the refusal plus probe 5's own sentence with reason
+	// after it: the rows that pin cat's own line as the only proof assert why
+	// the call did not fail, not only that it did not (issue #613).
+	forAnotherReason := func(reason string) []string {
+		return append(slices.Clone(refusal), fmt.Sprintf("probe 5, %s: %s", probeShortName[5], reason))
+	}
+
+	// wrapper is the launcher's wrapper as the plan renders it, for the rows
+	// whose result is a refusal quoting the command.
+	wrapper := underRoot("srv/audit/bin/audit-exec")
 
 	// theCall answers the token-absence call with result.
 	theCall := func(result callResult) func(plan audit.Plan, answers []callResult) {
@@ -1522,8 +1931,8 @@ func absenceCases() []judgeCase {
 	return []judgeCase{
 		{
 			name:    "the token-absence call's result holds the variable's expansion",
-			answers: theCall(callResult{text: "cat: /srv/audit/work/nonexistent/tokenset: No such file or directory", isError: true}),
-			want:    refusal,
+			answers: theCall(callResult{text: absenceSetText, isError: true}),
+			want:    forAnotherReason(reasonTokenSet),
 		},
 		{
 			name:    "the token-absence call's result is not an error",
@@ -1536,17 +1945,138 @@ func absenceCases() []judgeCase {
 			want:    refusal,
 		},
 		{
-			// Round I moved the call to a path inside the roots, and this row is
-			// why (issue #277): the wrapper refuses a path outside them before
-			// cat runs, and its one-line refusal of the unexpanded path -
-			// /nonexistent/ with a quote after it - is exactly what cat's own
-			// error reads, so the judgement accepts it. The old call showed
-			// absence too, since a refusal of the expanded word carries tokenset
-			// and is refused (round J's correction), but it tested the wrapper
-			// and not cat: only a path the wrapper passes makes cat run and its
-			// failure an absent token.
-			name:     "the wrapper's refusal of the unexpanded path outside the roots reads as an absent token",
-			answers:  theCall(callResult{text: `audit-exec: refused: "/nonexistent/"`, isError: true}),
+			// Round I moved the call to a path inside the roots (issue #277), and
+			// issue #613's second review turned this row round: the wrapper
+			// refuses a path outside them before cat runs, and its one-line
+			// refusal of the unexpanded word ends in the path cat's own error
+			// names, so an earlier judgement read it as absence. No cat ran, so
+			// it says nothing about the sandboxed shell.
+			name:    "the wrapper's refusal of the unexpanded path reads as an absent token",
+			answers: theCall(callResult{text: `audit-exec: refused: "/nonexistent/"`, isError: true}),
+			want:    forAnotherReason(reasonTokenSet),
+			wantNot: []string{"audit-exec: refused"},
+		},
+
+		// Issue #613: 2.1.332 refuses the call the plan used to ask for, so the
+		// plan asks for `[[ -v CLAUDE_CODE_OAUTH_TOKEN ]]` instead, which expands
+		// nothing. The judgement must recognise that call by what it runs - a
+		// suffix of the old command would no longer match - or a set variable's
+		// error, which is an ordinary error naming tokenset, would pass as a
+		// refusal: fail-open, on the one result that proves the token reached the
+		// sandboxed shell.
+		//
+		// Issue #613's second review: the pass needs cat's own line for the bare
+		// path, the one absenceUnsetText holds, and not merely a text that ends
+		// in .../nonexistent/. A branch that never ran prints no line of cat's:
+		// the shell that cannot evaluate `[[` exits 127, and the CLI's approval
+		// refusal quotes the command or one part of it. The rows below pin both
+		// sides, the same call with the same command: the bare line passes, and
+		// every text without it fails with the token-set reason, whether it ends
+		// in the path or quotes the whole command.
+		{
+			name:     "the replacement call's result shows the variable absent",
+			command:  replacementTokenAbsenceCommand,
+			answers:  theCall(callResult{text: "Exit code 1\n" + absenceUnsetText, isError: true}),
+			wantPass: true,
+		},
+		{
+			// The runner's GNU form (Ubuntu 24.04, GNU coreutils 9.4):
+			// glibc's error() prints the full argv[0], so cat's line opens with
+			// /usr/bin/cat: rather than cat:, and the pass must keep reading it
+			// as the variable's absence (issue #613).
+			name:     "the replacement call's result shows the variable absent as GNU cat prints it",
+			command:  replacementTokenAbsenceCommand,
+			answers:  theCall(callResult{text: "Exit code 1\n/usr/bin/cat: /srv/audit/work/nonexistent/: No such file or directory", isError: true}),
+			wantPass: true,
+		},
+		{
+			// The same GNU form with the first branch run: its line names
+			// tokenset, so the variable was set and the result proves nothing
+			// about its absence, whether cat prints cat: or /usr/bin/cat:
+			// (issue #613).
+			name:    "the replacement call's result holds the variable's expansion as GNU cat prints it",
+			command: replacementTokenAbsenceCommand,
+			answers: theCall(callResult{text: "Exit code 1\n/usr/bin/cat: /srv/audit/work/nonexistent/tokenset: No such file or directory", isError: true}),
+			want:    forAnotherReason(reasonTokenSet),
+			wantNot: []string{"No such file or directory"},
+		},
+		{
+			name:    "the replacement call's result holds the variable's expansion",
+			command: replacementTokenAbsenceCommand,
+			answers: theCall(callResult{text: "Exit code 1\n" + absenceSetText, isError: true}),
+			want:    forAnotherReason(reasonTokenSet),
+			wantNot: []string{"No such file or directory"},
+		},
+		{
+			name:    "the replacement call's result is not an error",
+			command: replacementTokenAbsenceCommand,
+			answers: theCall(callResult{text: "(Bash completed with no output)"}),
+			want:    refusal,
+		},
+		{
+			name:    "the replacement call's result is missing",
+			command: replacementTokenAbsenceCommand,
+			answers: theCall(callResult{noResult: true}),
+			want:    refusal,
+		},
+		{
+			// A shell that cannot evaluate `[[` runs neither cat, and the old
+			// `||` form ran its fallback on this exit 127: the result holds no
+			// line of cat's, so the variable's absence was not shown (issue
+			// #613's second review).
+			name:    "the token-absence call's result holds no cat line",
+			command: replacementTokenAbsenceCommand,
+			answers: theCall(callResult{text: "Exit code 127\nbash: [[: command not found", isError: true}),
+			want:    forAnotherReason(reasonTokenSet),
+			wantNot: []string{"command not found"},
+		},
+		{
+			name:    "the token-absence call's error result is empty",
+			command: replacementTokenAbsenceCommand,
+			answers: theCall(callResult{isError: true}),
+			want:    forAnotherReason(reasonTokenSet),
+		},
+		{
+			// The CLI's approval refusal quotes the part of the compound it would
+			// run - here the bare read - and records no refusal the judgement
+			// reads. Its text ends in the path the judgement looks for, so an
+			// earlier judgement read it as cat's error (issue #613's second
+			// review).
+			name:    "the CLI's refusal of the command's last part names the bare path alone",
+			command: replacementTokenAbsenceCommand,
+			answers: theCall(callResult{text: "The following part requires approval: " + wrapper + " cat /srv/audit/work/nonexistent/", isError: true}),
+			want:    forAnotherReason(reasonTokenSet),
+			wantNot: []string{"requires approval"},
+		},
+		{
+			// The same refusal quoting the whole command: it holds the literal
+			// tokenset, so the set-variable reason is what it draws, and the row
+			// above passes for cat's line alone, not for the phrase a refusal
+			// opens with (issue #613's second review).
+			name:    "the CLI's refusal quotes the whole command",
+			command: replacementTokenAbsenceCommand,
+			answers: theCall(callResult{text: "This command requires approval: " + replacementTokenAbsenceCommand, isError: true}),
+			want:    forAnotherReason(reasonTokenSet),
+			wantNot: []string{"requires approval"},
+		},
+
+		// Issue #613: a tool_result_meta entry whose non_execution_kind is null,
+		// and one that holds no such key at all, say nothing about whether the
+		// call ran. Neither may count the call as never run: the passing run's
+		// absent-token result must still pass, or a meta the CLI prints for
+		// another reason would fail probe 5 on every run.
+		{
+			name: "the token-absence call's meta holds a null non_execution_kind",
+			transcript: resultMetaOnTheAbsenceResult(func(id string) string {
+				return fmt.Sprintf(`[{"id":%q,"non_execution_kind":null}]`, id)
+			}),
+			wantPass: true,
+		},
+		{
+			name: "the token-absence call's meta entry holds no non_execution_kind",
+			transcript: resultMetaOnTheAbsenceResult(func(id string) string {
+				return fmt.Sprintf(`[{"id":%q,"permission_decision":{"decision":"accept","source":"config"}}]`, id)
+			}),
 			wantPass: true,
 		},
 	}
@@ -1673,6 +2203,15 @@ func TestJudgePassesOnlyWhenTheControlPassedAndEveryProbeWasRefused(t *testing.T
 
 			if tc.answers != nil {
 				tc.answers(thePlan, answers)
+			}
+
+			if tc.command != "" {
+				i := tokenAbsenceCall(thePlan)
+				if i < 0 {
+					t.Fatalf("the plan asks for no token-absence call (its probe 5 calls are %v)", toolsOf(thePlan, 5))
+				}
+
+				thePlan[i].Input["command"] = tc.command
 			}
 
 			if tc.effects != nil {

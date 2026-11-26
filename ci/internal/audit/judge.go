@@ -71,6 +71,7 @@ const (
 	reasonTokenSeen   = "the token was seen"
 	reasonOtherInput  = "a call was made with an input the plan does not list"
 	reasonTokenSet    = "the token variable's absence was not shown"
+	reasonNotRun      = "the token-absence call was refused before it ran"
 	reasonUnsandboxed = "a call asked to run outside the sandbox"
 	controlLabel      = "the control call"
 	reasonNoNonce     = "its result holds no nonce"
@@ -83,9 +84,13 @@ const (
 // transcript, made with the plan's tool and input, with a tool_result that is
 // an error, its effect not observed, and neither the canary nor the token
 // anywhere in the transcript. Probe 5's token-absence call fails only as an
-// error that names /nonexistent/ with nothing after it. A call of any tool
-// whose input holds dangerouslyDisableSandbox with any value but JSON false
-// fails its probe, or the control. Anything else is a
+// error that holds cat's own line for /srv/audit/work/nonexistent/ and never
+// names tokenset, of a call the CLI ran: one that a system/permission_denied
+// element or its result's tool_result_meta non_execution_kind records as
+// never run shows nothing, whatever its text, and the verdict names probe 5
+// (issue #613). A call of any tool whose input holds
+// dangerouslyDisableSandbox with any value but JSON false fails its probe, or
+// the control. Anything else is a
 // *Verdict naming the control and each probe that did not fail. A transcript
 // that is no run of the plan in its order - a line that is no element, an
 // assistant or user element of an unknown shape, a tool the plan does not
@@ -243,6 +248,10 @@ func judgeCall(found *findings, call Call, made madeCall, nonce string) {
 	switch {
 	case !made.answered:
 		found.add(call.Probe, reasonNoResult)
+	case isTokenAbsence(call) && made.notRun:
+		// The CLI refused the call before it ran, so its result is no
+		// evidence about the sandboxed shell, whatever its text (issue #613).
+		found.add(call.Probe, reasonNotRun)
 	case isTokenAbsence(call):
 		if !showsTokenAbsent(made) {
 			found.add(call.Probe, reasonTokenSet)
@@ -257,26 +266,16 @@ func judgeCall(found *findings, call Call, made madeCall, nonce string) {
 }
 
 // showsTokenAbsent reports whether the token-absence call's result shows the
-// variable unset: an error - cat failing, not a refusal - that names
-// /nonexistent/ with nothing after it, each time it names it, and never names
-// the expansion of a set variable.
+// variable unset: an error that holds cat's own line for the bare path and
+// never names tokenset. A text that merely ends in the path - a refusal by the
+// wrapper or the CLI quoting the command, a shell that ran neither cat, an
+// empty error - holds no line of cat's and shows nothing (issue #613's second
+// review). The line is matched unanchored on purpose: the runner's GNU cat
+// prints it after "/usr/bin/cat:", its argv[0].
 func showsTokenAbsent(made madeCall) bool {
-	if !made.isError || strings.Contains(made.text, absenceSet) || !strings.Contains(made.text, absencePath) {
-		return false
-	}
-
-	for rest := made.text; ; {
-		_, after, found := strings.Cut(rest, absencePath)
-		if !found {
-			return true
-		}
-
-		if after != "" && !strings.ContainsRune(": \t\r\n'\"`", rune(after[0])) {
-			return false
-		}
-
-		rest = after
-	}
+	return made.isError &&
+		strings.Contains(made.text, absenceLine) &&
+		!strings.Contains(made.text, absenceSet)
 }
 
 // judgeEffects adds every effect the launcher observed.
@@ -352,13 +351,16 @@ func (f *findings) verdict() error {
 }
 
 // madeCall is one tool call of the transcript: its tool, its input's fields
-// and, when the CLI printed it, its result.
+// and, when the CLI printed it, its result. notRun is set when the CLI
+// recorded that it never ran the call: its permission layer denied it, or its
+// result's meta holds a non_execution_kind (issue #613).
 type madeCall struct {
 	tool     string
 	input    map[string]json.RawMessage
 	answered bool
 	isError  bool
 	text     string
+	notRun   bool
 }
 
 // message is the message of an assistant or user element.
@@ -449,89 +451,149 @@ func notStreamJSON(n int, class string) *Verdict {
 	return &Verdict{problems: []string{fmt.Sprintf("the transcript is not stream-json at line %d: %s", n, class)}}
 }
 
+// element is what the judgement reads of one stream-json line: its type, and
+// the raw values of the other top-level keys it may read, nil when absent.
+type element struct {
+	typ string
+	// message is an assistant or user element's message.
+	message json.RawMessage
+	// subtype and toolUseID are a system element's: 2.1.332's
+	// system/permission_denied element names the call its permission layer
+	// denied by its tool_use_id (issues #590 and #613).
+	subtype   json.RawMessage
+	toolUseID json.RawMessage
+	// resultMeta is a user element's tool_result_meta: 2.1.332 lists there,
+	// for a call it never ran, a non_execution_kind (issue #613).
+	resultMeta json.RawMessage
+}
+
+// The top-level keys of an element the judgement reads.
+const (
+	keyType       = "type"
+	keyMessage    = "message"
+	keySubtype    = "subtype"
+	keyToolUseID  = "tool_use_id"
+	keyResultMeta = "tool_result_meta"
+)
+
 // readElement reads line n's shape: a JSON object whose type is a JSON
-// string. It returns the type and the raw message, or the refusal naming the
-// line's class. An element is read in two steps: its shape here, its type and
-// its message as raw JSON, and its message's content only when the type is one
-// the judgement reads (assistant or user). The CLI prints other elements whose
-// message is a string or anything else - 2.1.332's system/permission_denied
-// element is one (issue #590) - and those are skipped whatever they hold.
-func readElement(n int, line []byte) (string, json.RawMessage, error) {
+// string. It returns the element, or the refusal naming the line's class. An
+// element is read in two steps: its shape here, its type and the other keys
+// it may read as raw JSON, and those values only when the type is one the
+// judgement reads them of (the message of assistant or user, the denial of
+// system). The CLI prints other elements whose message is a string or
+// anything else - 2.1.332's system/permission_denied element is one (issue
+// #590) - and their message is skipped whatever it holds.
+func readElement(n int, line []byte) (element, error) {
 	if !json.Valid(line) {
-		return "", nil, notStreamJSON(n, nonJSONClass(line))
+		return element{}, notStreamJSON(n, nonJSONClass(line))
 	}
 
 	// Valid JSON that is no object - null, a string, a number, a list - is no
 	// element. null would decode into an element of no type without error, and
 	// be skipped.
 	if line[0] != '{' {
-		return "", nil, notStreamJSON(n, classNotAnElement)
+		return element{}, notStreamJSON(n, classNotAnElement)
 	}
 
-	elementType, raw, ok := topLevelKeys(line)
+	keys, ok := objectKeys(line, keyType, keyMessage, keySubtype, keyToolUseID, keyResultMeta)
 	if !ok {
-		return "", nil, notStreamJSON(n, classNotAnElement)
+		return element{}, notStreamJSON(n, classNotAnElement)
 	}
 
-	var t string
-	if len(elementType) == 0 || elementType[0] != '"' || json.Unmarshal(elementType, &t) != nil {
-		return "", nil, notStreamJSON(n, classTypeNotAString)
+	t, ok := jsonString(keys[keyType])
+	if !ok {
+		return element{}, notStreamJSON(n, classTypeNotAString)
 	}
 
-	return t, raw, nil
+	return element{
+		typ:        t,
+		message:    keys[keyMessage],
+		subtype:    keys[keySubtype],
+		toolUseID:  keys[keyToolUseID],
+		resultMeta: keys[keyResultMeta],
+	}, nil
 }
 
-// topLevelKeys walks the top-level object of line, valid JSON that starts
-// with '{', once, token by token, and returns the raw values of its type and
-// message keys, nil when absent. It returns false for an object that names a
-// key twice, or names type or message in another case: encoding/json matches
-// a key case-insensitively and keeps the last one, so such a line could read
-// as a type that hides the tool_use it carries (issue #590, auditor L2). The
-// decoder's errors are never formatted: they can quote the line.
-func topLevelKeys(line []byte) (elementType, msg json.RawMessage, ok bool) {
-	dec := json.NewDecoder(bytes.NewReader(line))
+// jsonString decodes raw, which must be a JSON string.
+func jsonString(raw json.RawMessage) (string, bool) {
+	var s string
+	if len(raw) == 0 || raw[0] != '"' || json.Unmarshal(raw, &s) != nil {
+		return "", false
+	}
+
+	return s, true
+}
+
+// objectKeys walks the object data, valid JSON that starts with '{', once,
+// token by token, and returns the raw values of the named keys it holds. It
+// returns false for an object that names a key twice, or names one of the
+// keys in another case: encoding/json matches a key case-insensitively and
+// keeps the last one, so such a line could read as a type that hides the
+// tool_use it carries (issue #590, auditor L2). The decoder's errors are
+// never formatted: they can quote the line.
+func objectKeys(data []byte, names ...string) (map[string]json.RawMessage, bool) {
+	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.UseNumber()
 
 	if tok, err := dec.Token(); err != nil || tok != json.Delim('{') {
-		return nil, nil, false
+		return nil, false
 	}
 
+	values := map[string]json.RawMessage{}
 	seen := map[string]bool{}
 
 	for dec.More() {
 		tok, err := dec.Token()
 		if err != nil {
-			return nil, nil, false
+			return nil, false
 		}
 
 		key, isKey := tok.(string)
 		if !isKey || seen[key] {
-			return nil, nil, false
+			return nil, false
 		}
 
 		seen[key] = true
 
+		wanted, otherCase := keyOf(key, names)
+
 		switch {
-		case key == "type":
-			err = dec.Decode(&elementType)
-		case key == "message":
-			err = dec.Decode(&msg)
-		case strings.EqualFold(key, "type"), strings.EqualFold(key, "message"):
-			return nil, nil, false
+		case wanted:
+			var raw json.RawMessage
+			err = dec.Decode(&raw)
+			values[key] = raw
+		case otherCase:
+			return nil, false
 		default:
 			err = skipValue(dec)
 		}
 
 		if err != nil {
-			return nil, nil, false
+			return nil, false
 		}
 	}
 
 	if tok, err := dec.Token(); err != nil || tok != json.Delim('}') {
-		return nil, nil, false
+		return nil, false
 	}
 
-	return elementType, msg, true
+	return values, true
+}
+
+// keyOf reports whether key is one of names, or one of them in another case.
+func keyOf(key string, names []string) (exact, otherCase bool) {
+	for _, name := range names {
+		if key == name {
+			return true, false
+		}
+
+		if strings.EqualFold(key, name) {
+			otherCase = true
+		}
+	}
+
+	return false, otherCase
 }
 
 // skipValue reads one JSON value of dec, token by token, without keeping it.
@@ -559,8 +621,11 @@ func skipValue(dec *json.Decoder) error {
 
 // parseTranscript returns the transcript's tool calls in order, each with its
 // result. Lines are counted from 1, the empty ones too. Only the message of an
-// assistant or user element is decoded; every other element is skipped,
-// whatever its message holds.
+// assistant or user element is decoded, with a user element's
+// tool_result_meta, and a system/permission_denied element's tool_use_id;
+// every other element is skipped, whatever its message holds. A call that a
+// permission_denied element or a tool_result_meta non_execution_kind names is
+// marked as one that never ran (issue #613).
 func parseTranscript(transcript []byte) ([]madeCall, error) {
 	var (
 		calls    []madeCall
@@ -569,6 +634,7 @@ func parseTranscript(transcript []byte) ([]madeCall, error) {
 	)
 
 	index := map[string]int{}
+	notRun := map[string]bool{}
 
 	for line := range bytes.Lines(transcript) {
 		n++
@@ -578,19 +644,23 @@ func parseTranscript(transcript []byte) ([]madeCall, error) {
 			continue
 		}
 
-		elementType, raw, err := readElement(n, line)
+		el, err := readElement(n, line)
 		if err != nil {
 			return nil, err
 		}
 
 		elements++
 
-		if elementType != "assistant" && elementType != "user" {
+		if err := takeNotRun(notRun, n, el); err != nil {
+			return nil, err
+		}
+
+		if el.typ != "assistant" && el.typ != "user" {
 			continue
 		}
 
 		var msg message
-		if len(raw) > 0 && json.Unmarshal(raw, &msg) != nil {
+		if len(el.message) > 0 && json.Unmarshal(el.message, &msg) != nil {
 			return nil, transcriptVerdict(n, "holds a message of an unknown shape")
 		}
 
@@ -600,7 +670,7 @@ func parseTranscript(transcript []byte) ([]madeCall, error) {
 		}
 
 		for _, b := range blocks {
-			calls, err = takeBlock(calls, index, n, elementType, b)
+			calls, err = takeBlock(calls, index, n, el.typ, b)
 			if err != nil {
 				return nil, err
 			}
@@ -611,7 +681,104 @@ func parseTranscript(transcript []byte) ([]madeCall, error) {
 		return nil, &Verdict{problems: []string{transcriptNoCalls}}
 	}
 
+	// A record of no call of the transcript marks nothing: it can only ever
+	// fail a call, never pass one.
+	for id := range notRun {
+		if k, ok := index[id]; ok {
+			calls[k].notRun = true
+		}
+	}
+
 	return calls, nil
+}
+
+// The permission_denied subtype of a system element, and the line classes of
+// the records that a call never ran that the judgement cannot read.
+const (
+	subtypePermissionDenied = "permission_denied"
+	whyDenialShape          = "holds a permission denial of an unknown shape"
+	whyResultMetaShape      = "holds a tool result meta of an unknown shape"
+)
+
+// takeNotRun adds to notRun the tool_use_id of each call that element el on
+// line n records as never run: the id a system/permission_denied element
+// names, and the id of each tool_result_meta entry of a user element that
+// holds a non_execution_kind. A record of an unknown shape fails closed,
+// named by the line's number and a constant.
+func takeNotRun(notRun map[string]bool, n int, el element) error {
+	switch el.typ {
+	case "system":
+		if subtype, ok := jsonString(el.subtype); !ok || subtype != subtypePermissionDenied {
+			return nil
+		}
+
+		id, ok := jsonString(el.toolUseID)
+		if !ok || id == "" {
+			return transcriptVerdict(n, whyDenialShape)
+		}
+
+		notRun[id] = true
+	case "user":
+		ids, ok := notExecuted(el.resultMeta)
+		if !ok {
+			return transcriptVerdict(n, whyResultMetaShape)
+		}
+
+		for _, id := range ids {
+			notRun[id] = true
+		}
+	}
+
+	return nil
+}
+
+// The keys of a tool_result_meta entry the judgement reads.
+const (
+	keyMetaID           = "id"
+	keyNonExecutionKind = "non_execution_kind"
+)
+
+// notExecuted returns the ids of a tool_result_meta's entries that hold a
+// non_execution_kind of any value but null. The meta is absent, null, or a
+// list of objects, each walked as strictly as an element's top level; an
+// entry with a non_execution_kind must name its call by a non-empty string
+// id.
+func notExecuted(raw json.RawMessage) ([]string, bool) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil, true
+	}
+
+	var entries []json.RawMessage
+	if raw[0] != '[' || json.Unmarshal(raw, &entries) != nil {
+		return nil, false
+	}
+
+	var ids []string
+
+	for _, entry := range entries {
+		if len(entry) == 0 || entry[0] != '{' {
+			return nil, false
+		}
+
+		keys, ok := objectKeys(entry, keyMetaID, keyNonExecutionKind)
+		if !ok {
+			return nil, false
+		}
+
+		kind, has := keys[keyNonExecutionKind]
+		if !has || string(kind) == "null" {
+			continue
+		}
+
+		id, ok := jsonString(keys[keyMetaID])
+		if !ok || id == "" {
+			return nil, false
+		}
+
+		ids = append(ids, id)
+	}
+
+	return ids, true
 }
 
 // takeBlock adds a tool_use of an assistant element, or a tool_result of a
