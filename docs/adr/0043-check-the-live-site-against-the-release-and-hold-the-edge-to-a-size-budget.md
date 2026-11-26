@@ -309,11 +309,30 @@ unchanged. This amendment adds a subcommand, a rule and a workflow.
   refs/remotes/origin/main`, `vX.Y.Z` alone, version-sorted), so a tag that is not on main is never
   the expected release. It reads that list and the anchor, runs `live-version` with the anchor passed
   through the step's `env:` (`ANCHOR`), never pasted into the script, and re-checks the printed
-  tag against the tag list with `grep -qxF`. It downloads that release's site bundle and verifies its
-  attestation with `GITHUB_TOKEN` alone, using the deploy's and the guide's flags (`--signer-workflow`
-  release.yml, `--source-ref refs/tags/<tag>`, `--deny-self-hosted-runners`). It then runs the full
-  check against the bundle's `manifest.json` and the tag list, at the default `-plain-http-www`. The
-  `alert` job runs `if: failure()`, `needs: check`, holds `issues: write` alone and checks nothing out.
+  tag against the tag list with `grep -qxF`. It reads the commit that tag names
+  (`git rev-parse "refs/tags/<tag>^{commit}"`, the tag passed through `env:`), downloads that release's
+  site bundle and verifies its attestation with `GITHUB_TOKEN` alone, using the deploy's and the guide's
+  flags (`--signer-workflow` release.yml, `--source-ref refs/tags/<tag>`, `--deny-self-hosted-runners`)
+  and that commit as `--source-digest`: the provenance must bind the release's commit, not only its
+  ref, so a tag moved after the release fails the check. It then runs the full check against the
+  bundle's `manifest.json` and the tag list, at the default `-plain-http-www`, with the HSTS and preload
+  records read at the live release's tag (`git show "refs/tags/<tag>:site/records/hsts.json"` and
+  `preload.json`, passed as `-hsts-record` and `-preload-record`), never the working tree's. The
+  `expected` step's fetch has no `--filter`, so the tags' trees arrive with them and `git show` resolves.
+  The `alert` job runs `if: ${{ always() && needs.check.result != 'success' }}`, `needs: check`, holds
+  `issues: write` alone and checks nothing out.
+- **The alert fires on any non-success, a deliberate deviation from the PRD.** PRD #297's *Layer 3* asks
+  for `if: failure()`. A job that runs past its `timeout-minutes` concludes `cancelled`, and `failure()`
+  is false then, so a hung check would open no issue. The alert's condition is widened to every result
+  of `check` but `success`; the PRD records the change as an amendment.
+- **The records are the live release's, the check code is main's.** The scheduled run checks out main,
+  so `ci/sitecheck` is main's code, while the manifest and the HSTS and preload records are the live
+  release's. A release's records describe what that release deployed; main's may already describe the
+  next one. The cost: a check kind added on main after the live release can fail that older release
+  until the next release deploys, and the alert reports it like any other failure.
+- **The deploy race.** A release that deploys while the scheduled run checks can fail it once: the page
+  may name the new release while the files are still the old one's, or the other way round. Like a
+  release queued past the window, it fails once and passes on the next run.
 - **No environment.** Neither job names one. The workflow holds no secret but `GITHUB_TOKEN`, so the
   environments the release-tag skill's step 2 checks (`site`, `release-please`, `release-tag`,
   `ai-review`, `security-audit`) play no part in it. The site's Scaleway key stays in `site`, which only

@@ -457,7 +457,9 @@ release), *live* (checked against the live site) or *review*.
   Services setting) is noticed within a day, not at the next release. The workflow has two jobs: the
   checking job, with `contents: read` (and `attestations: read`) only and no secret, whose checkout sets
   `persist-credentials: false`, which runs no action that is not pinned by commit SHA and fails on any
-  mismatch; and an alert job, `if: failure()` and `needs` the checking job, with `issues: write` only,
+  mismatch; and an alert job, `if: failure()` (*Amended (milestone 4):* `if: ${{ always() &&
+  needs.check.result != 'success' }}`, since a check past its timeout concludes `cancelled`, where
+  `failure()` is false; ADR 0043, *Amendment: the scheduled check*) and `needs` the checking job, with `issues: write` only,
   which opens one issue with a fixed label, assigned to the maintainer, or, when one is open, adds a
   comment to it on each new failure (editing an issue notifies no one). The issue's title, body and
   comments are fixed text plus the failed run's URL only: no `${{ needs.*.outputs.* }}`, no site content
