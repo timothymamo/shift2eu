@@ -1,0 +1,92 @@
+{
+  "ClusterInfoList": [
+    {
+      "ClusterName": "shop-events-kafka",
+      "ClusterType": "PROVISIONED",
+      "ClusterArn": "arn:aws:kafka:eu-central-1:123456789012:cluster/shop-events-kafka/00000000-0000-0000-0000-000000000000-1",
+      "State": "ACTIVE",
+      "Provisioned": {
+        "NumberOfBrokerNodes": 3,
+        "BrokerNodeGroupInfo": {
+          "InstanceType": "kafka.m5.large",
+          "ClientSubnets": [
+            "subnet-0123456789abcdef0",
+            "subnet-0123456789abcdef1",
+            "subnet-0123456789abcdef2"
+          ],
+          "StorageInfo": {
+            "EbsStorageInfo": {
+              "VolumeSize": 100
+            }
+          }
+        }
+      }
+    },
+    {
+      "ClusterName": "shop-events-kafka-serverless",
+      "ClusterType": "SERVERLESS",
+      "ClusterArn": "arn:aws:kafka:eu-central-1:123456789012:cluster/shop-events-kafka-serverless/00000000-0000-0000-0000-000000000001-1",
+      "State": "ACTIVE"
+    },
+    {
+      "ClusterName": "shop-streams-kafka",
+      "ClusterType": "PROVISIONED",
+      "ClusterArn": "arn:aws:kafka:eu-central-1:123456789012:cluster/shop-streams-kafka/00000000-0000-0000-0000-000000000002-1",
+      "State": "ACTIVE",
+      "Provisioned": {
+        "NumberOfBrokerNodes": 3,
+        "BrokerNodeGroupInfo": {
+          "InstanceType": "express.m7g.large",
+          "ClientSubnets": [
+            "subnet-0123456789abcdef0",
+            "subnet-0123456789abcdef1",
+            "subnet-0123456789abcdef2"
+          ]
+        }
+      }
+    },
+    {
+      "ClusterName": "shop-retired-kafka",
+      "ClusterType": "PROVISIONED",
+      "ClusterArn": "arn:aws:kafka:eu-central-1:123456789012:cluster/shop-retired-kafka/00000000-0000-0000-0000-000000000003-1",
+      "State": "DELETING",
+      "Provisioned": {
+        "NumberOfBrokerNodes": 2,
+        "BrokerNodeGroupInfo": {
+          "InstanceType": "kafka.m5.large",
+          "ClientSubnets": [
+            "subnet-0123456789abcdef0",
+            "subnet-0123456789abcdef1"
+          ],
+          "StorageInfo": {
+            "EbsStorageInfo": {
+              "VolumeSize": 100
+            }
+          }
+        }
+      }
+    },
+    {
+      "ClusterName": "shop-broken-kafka",
+      "ClusterType": "PROVISIONED",
+      "ClusterArn": "arn:aws:kafka:eu-central-1:123456789012:cluster/shop-broken-kafka/00000000-0000-0000-0000-000000000004-1",
+      "State": "FAILED",
+      "Provisioned": {
+        "NumberOfBrokerNodes": 3,
+        "BrokerNodeGroupInfo": {
+          "InstanceType": "kafka.m5.large",
+          "ClientSubnets": [
+            "subnet-0123456789abcdef0",
+            "subnet-0123456789abcdef1",
+            "subnet-0123456789abcdef2"
+          ],
+          "StorageInfo": {
+            "EbsStorageInfo": {
+              "VolumeSize": 100
+            }
+          }
+        }
+      }
+    }
+  ]
+}

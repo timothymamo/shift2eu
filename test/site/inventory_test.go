@@ -1,6 +1,7 @@
 package site_test
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -261,7 +262,13 @@ func TestInventoryPickerIsHiddenWithoutScript(t *testing.T) {
 // silently lost a command to a truncated extraction fails a check of its own and
 // not only the parity check both sides share. The counts are what the guide holds
 // once a comment heads only the command it describes (review finding 12): the
-// page shows one <pre><code> per command, in the guide's order.
+// page shows one <pre><code> per command, in the guide's order. AWS gained three
+// commands with PRD #571's classification: `opensearch list-domain-names` with the
+// `describe-domains` loop it feeds, `opensearchserverless list-collections` with
+// the `batch-get-collection` loop it feeds, and `kafka list-clusters-v2` (the
+// shape S3's and EKS's list-with-follow-up commands already take). The search and
+// Kafka instance types join the existing "The vCPU and memory of the instance
+// types in use" command, whose jq list reads their calls' output too.
 func TestInventoryCommandsPerStep(t *testing.T) {
 	t.Parallel()
 
@@ -270,7 +277,7 @@ func TestInventoryCommandsPerStep(t *testing.T) {
 		collect int
 		build   int
 	}{
-		{key: "aws", collect: 15, build: 1},
+		{key: "aws", collect: 18, build: 1},
 		{key: "gcp", collect: 11, build: 1},
 		{key: "azure", collect: 8, build: 1},
 	}
@@ -646,6 +653,11 @@ func TestInventoryCommandsAreTheGuides(t *testing.T) {
 // ci/sitebuild fills with the guide's commands, and no command text of its own.
 // The placeholder is a Go template action whose body names the commands field, so
 // the page cannot carry a copy of the guide that would drift from it.
+//
+// A command copied into the page by hand shows up line for line, so a whole line
+// is what the last check compares: a substring match would flag any page that is
+// laid out conventionally, since a block's `fi` sits inside "first", its `}`
+// inside a template action's `}}`, and its `do` inside "download".
 func TestInventoryPageHasNoHandTypedCommand(t *testing.T) {
 	t.Parallel()
 
@@ -673,19 +685,119 @@ func TestInventoryPageHasNoHandTypedCommand(t *testing.T) {
 
 	guide := string(readRepositoryFile(t, filepath.Join("docs", "guide", "inventory.md")))
 
-	for _, command := range guideCommands(t, guide, guideSources[0]) {
-		for _, line := range strings.Split(command, "\n") {
-			line = strings.TrimSpace(line)
-			if line == "" || strings.HasPrefix(line, "#") {
-				continue
-			}
+	for _, line := range pastedCommandLines(guideCommands(t, guide, guideSources[0]), pageLines(doc, source)) {
+		t.Errorf("site/%s holds the guide's command line %q on a line of its own, want a placeholder instead: the commands come from docs/guide/inventory.md at build time (issue #373, item 15)",
+			inventoryPageName, line)
+	}
 
-			if strings.Contains(string(source), line) {
-				t.Errorf("site/%s holds the guide's command line %q, want a placeholder instead: the commands come from docs/guide/inventory.md at build time (issue #373, item 15)",
-					inventoryPageName, line)
+	t.Run("flags a pasted command line and nothing else", func(t *testing.T) {
+		t.Parallel()
+
+		tests := []struct {
+			name     string
+			commands []string
+			page     string
+			want     []string
+		}{{
+			name:     "a one-line command pasted as it is",
+			commands: []string{"aws opensearchserverless list-collections --output json --max-results 100"},
+			page:     "<pre><code>aws opensearchserverless list-collections --output json --max-results 100</code></pre>\n",
+			want:     []string{"aws opensearchserverless list-collections --output json --max-results 100"},
+		}, {
+			name:     "one line of a multi-line command pasted as it is",
+			commands: []string{"f=\"$out/opensearchserverless-collections.json\"\n: > \"$f\"\ntoken=\nwhile :; do\ndone"},
+			page:     "<pre><code>: &gt; &quot;$f&quot;\n</code></pre>\n",
+			want:     []string{`: > "$f"`},
+		}, {
+			name:     "a conventionally laid-out block whose short lines stand inside other words",
+			commands: []string{"if ! page=$(aws opensearch list-domain-names); then\n  fi\n}\ndo\ndone\n;;\nesac"},
+			page:     "<p>The first page</p>\n<meta content=\"{{.Ref}}\">\n<p>elsewhere</p>\n",
+		}, {
+			name:     "a line the page holds only as part of a longer line",
+			commands: []string{"aws ec2 describe-volumes"},
+			page:     "<pre><code>aws ec2 describe-volumes --output json</code></pre>\n",
+		}, {
+			name:     "a line of three words the page holds only inside another line",
+			commands: []string{"printf '%s\\n' \"$page\""},
+			page:     "<pre><code>printf '%s\\n' &quot;$page&quot; &gt;&gt; &quot;$out/opensearchserverless-collections.json&quot;</code></pre>\n",
+		}}
+
+		for _, tc := range tests {
+			t.Run(tc.name, func(t *testing.T) {
+				t.Parallel()
+
+				source := []byte(tc.page)
+
+				got := pastedCommandLines(tc.commands, pageLines(parseHTML(t, tc.name, source), source))
+				if diff := cmp.Diff(tc.want, got); diff != "" {
+					t.Errorf("pastedCommandLines() differs from the lines the page holds (-want +got):\n%s", diff)
+				}
+			})
+		}
+	})
+}
+
+// pageLines returns the lines of the page a hand-typed command could land on:
+// the trimmed lines of its source, and the trimmed lines of the text of each
+// <pre> and <code> element, which is where a command is written. A line of fewer
+// than two words is kept here, since whole-line comparison makes a short line
+// harmless, and the shell reserved words are skipped by pastedCommandLines.
+func pageLines(doc *document, source []byte) map[string]bool {
+	lines := map[string]bool{}
+
+	add := func(text string) {
+		for _, line := range strings.Split(text, "\n") {
+			if trimmed := strings.TrimSpace(line); trimmed != "" {
+				lines[trimmed] = true
 			}
 		}
 	}
+
+	add(string(source))
+
+	for _, tag := range []string{"pre", "code"} {
+		for _, el := range doc.find(tag) {
+			add(el.textContent())
+		}
+	}
+
+	return lines
+}
+
+// shellReservedWords are the lines of a shell block that run no command of their
+// own. They are the shortest lines a block has, so a substring match on one flags
+// any page at all: not compared whole, they are skipped, and a command a visitor
+// could paste is never one of them.
+var shellReservedWords = map[string]bool{
+	"do": true, "done": true, "then": true, "else": true, "elif": true,
+	"fi": true, "{": true, "}": true, ";;": true, "esac": true,
+}
+
+// pastedCommandLines returns the lines of commands that the page holds as lines
+// of its own, in the guide's order: a command copied into the page by hand shows
+// up line for line, so a whole line is what this compares and a line the page
+// holds only as part of a longer one is no copy. A line of fewer than two words,
+// and a shell reserved word, names no command a visitor would paste, and skipping
+// them keeps a conventionally laid-out block from being flagged.
+func pastedCommandLines(commands []string, lines map[string]bool) []string {
+	var pasted []string
+
+	for _, command := range commands {
+		for _, line := range strings.Split(command, "\n") {
+			trimmed := strings.TrimSpace(line)
+
+			switch {
+			case trimmed == "", strings.HasPrefix(trimmed, "#"):
+				continue
+			case len(strings.Fields(trimmed)) < 2, shellReservedWords[trimmed]:
+				continue
+			case lines[trimmed]:
+				pasted = append(pasted, trimmed)
+			}
+		}
+	}
+
+	return pasted
 }
 
 // TestInventoryCommandsHaveACopyButton pins the copy control (issue #373, item
@@ -1109,4 +1221,726 @@ func unescapedMarkup(text string) []string {
 	}
 
 	return problems
+}
+
+// awsSearchAndMessagingCalls are the calls the guide's AWS section makes to
+// classify the search and messaging resources of PRD #571, and the only keys
+// each call's --query may name: the list under *Only the fields the program
+// reads*. A key outside its call's list is a field neither the program nor the
+// report reads, which the raw output would then keep in the scratch directory
+// the guide tells the reader to delete.
+var awsSearchAndMessagingCalls = map[string][]string{
+	"aws opensearch list-domain-names": {
+		"DomainNames",
+		"DomainName",
+	},
+	"aws opensearch describe-domains": {
+		"DomainStatusList",
+		"DomainName",
+		"ARN",
+		"EngineVersion",
+		"ClusterConfig",
+		"InstanceType",
+		"InstanceCount",
+		"ZoneAwarenessEnabled",
+		"MultiAZWithStandbyEnabled",
+		"EBSOptions",
+		"EBSEnabled",
+		"VolumeSize",
+		"EncryptionAtRestOptions",
+		"Enabled",
+		// Deleted: a domain AWS is deleting is no resource to move, as a
+		// terminated instance is none.
+		"Deleted",
+	},
+	"aws opensearchserverless list-collections": {
+		"collectionSummaries",
+		"id",
+		"name",
+		// nextToken: the call has no CLI paginator, so the guide's loop keeps the
+		// token of each page to ask for the next one.
+		"nextToken",
+	},
+	"aws opensearchserverless batch-get-collection": {
+		"collectionDetails",
+		"name",
+		"arn",
+		"type",
+		"standbyReplicas",
+		// status: a collection AWS is deleting, or whose creation failed, is no
+		// resource to move.
+		"status",
+	},
+	"aws kafka list-clusters-v2": {
+		"ClusterInfoList",
+		"ClusterName",
+		"ClusterType",
+		"ClusterArn",
+		// State: a cluster AWS is deleting, or whose creation failed, is no
+		// resource to move.
+		"State",
+		"Provisioned",
+		"NumberOfBrokerNodes",
+		"BrokerNodeGroupInfo",
+		"InstanceType",
+		"ClientSubnets",
+		"StorageInfo",
+		"EbsStorageInfo",
+		"VolumeSize",
+	},
+}
+
+// awsExcludedKeys are the fields no projection of the search and messaging
+// calls may name (PRD #571, *Only the fields the program reads*): an access
+// policy carries the account's principals, a security option its settings, an
+// endpoint or a bootstrap address a host with the account's name in it.
+var awsExcludedKeys = []string{
+	"AccessPolicies",
+	"AdvancedSecurityOptions",
+	"CognitoOptions",
+	"Endpoint",
+	"Endpoints",
+	"DomainEndpointOptions",
+	"collectionEndpoint",
+	"dashboardEndpoint",
+	"bootstrapAddress",
+	"osProfile",
+	"connectivityEndpoints",
+}
+
+// awsExcludedKeyPrefixes are the fields no projection may name whatever its
+// suffix: a cluster's ZooKeeper connection strings and its broker addresses.
+var awsExcludedKeyPrefixes = []string{"ZookeeperConnectString", "BootstrapBroker"}
+
+// awsSearchAndMessagingCall finds one search or messaging call of an AWS
+// command: `aws <service> <operation>` in the guide's spelling.
+var awsSearchAndMessagingCall = regexp.MustCompile(`aws (?:opensearchserverless|opensearch|kafka) [a-z0-9-]+`)
+
+// quotedString finds a double-quoted string, the only kind a jq projection can
+// hold: the projection itself is the shell's single-quoted argument.
+var quotedString = regexp.MustCompile(`"[^"]*"`)
+
+// identifier finds an identifier of a jq projection.
+var identifier = regexp.MustCompile(`[A-Za-z_][A-Za-z0-9_]*`)
+
+// jqWords are jq's own words, which a projection may use beside the fields it
+// reads: functions and literals are no field of the raw output.
+var jqWords = map[string]bool{
+	"add": true, "and": true, "ascii_downcase": true, "ascii_upcase": true,
+	"del": true, "elif": true, "else": true, "empty": true, "end": true,
+	"endswith": true, "false": true, "first": true, "floor": true,
+	"from_entries": true, "getpath": true, "group_by": true, "gsub": true,
+	"has": true, "if": true, "index": true, "join": true, "keys": true,
+	"last": true, "length": true, "map": true, "map_values": true,
+	"max": true, "min": true, "not": true, "null": true, "or": true,
+	"paths": true, "select": true, "sort": true, "sort_by": true,
+	"split": true, "startswith": true, "sub": true, "test": true,
+	"then": true, "to_entries": true, "tonumber": true, "tostring": true,
+	"true": true, "type": true, "unique": true, "values": true,
+}
+
+// TestInventoryGuideSearchAndKafkaCallsKeepOnlyTheFieldsTheyRead pins the other
+// half of PRD #571's *Only the fields the program reads*: the recorded fixtures
+// hold only that call's fields (`test/examples`, which a fixture cannot pass
+// while the guide's command kept the whole response), and this check reads the
+// guide's own command text, so a command that dropped its projection cannot
+// hide behind a fixture that never held the keys. Every `aws opensearch`,
+// `aws opensearchserverless` and `aws kafka` command has a --query, that
+// --query is a single-quoted projection, and the projection names only the
+// fields the PRD lists.
+func TestInventoryGuideSearchAndKafkaCallsKeepOnlyTheFieldsTheyRead(t *testing.T) {
+	t.Parallel()
+
+	guide := string(readRepositoryFile(t, filepath.Join("docs", "guide", "inventory.md")))
+	seen := map[string]bool{}
+
+	for _, command := range guideCommands(t, guide, guideSources[0]) {
+		for _, call := range awsSearchAndMessagingCallsIn(t, command) {
+			seen[call.name] = true
+
+			allowed := awsSearchAndMessagingCalls[call.name]
+			if allowed == nil {
+				t.Errorf("docs/guide/inventory.md runs %q, a call PRD #571 does not list: the search and Kafka classification is `aws opensearch list-domain-names` and `describe-domains`, `aws opensearchserverless list-collections` and `batch-get-collection`, and `aws kafka list-clusters-v2`\n%s",
+					call.name, command)
+
+				continue
+			}
+
+			for _, key := range projectionKeys(call.query) {
+				if !slices.Contains(allowed, key) {
+					t.Errorf("%q's --query names %q, want only the fields PRD #571 reads of that call (%s): a key the program does not read would keep a field the guide's raw output should drop\n%s",
+						call.name, key, strings.Join(allowed, ", "), command)
+				}
+			}
+
+			for _, excluded := range awsExcludedKeys {
+				if strings.Contains(call.query, excluded) {
+					t.Errorf("%q's --query names %q, want no such field: PRD #571's *Only the fields the program reads* leaves it out of every projection\n%s",
+						call.name, excluded, command)
+				}
+			}
+
+			for _, prefix := range awsExcludedKeyPrefixes {
+				if strings.Contains(call.query, prefix) {
+					t.Errorf("%q's --query names a %s* field, want none: PRD #571's *Only the fields the program reads* leaves ZooKeeper connection strings and broker addresses out of every projection\n%s",
+						call.name, prefix, command)
+				}
+			}
+		}
+	}
+
+	for name := range awsSearchAndMessagingCalls {
+		if !seen[name] {
+			t.Errorf("docs/guide/inventory.md runs no %q, want one: PRD #571's AWS classification reads the search domains, the collections and the Kafka clusters from those five calls", name)
+		}
+	}
+}
+
+// TestInventoryGuidePagesListCollectionsByHand pins the page limit the guide has
+// to work around (review finding B1): `opensearchserverless list-collections`
+// has no AWS CLI paginator, so the CLI answers with one page of at most 100
+// collections and nothing tells the reader another page is waiting. A guide that
+// passes no `--max-results` gets the default page of 20, and one that keeps no
+// `nextToken` loses every collection past the first page: the inventory holds
+// two of five collections, and the move looks smaller than it is. The guide's
+// command therefore asks for the largest page, keeps the token and asks again
+// until the token is null, writing every page to the collections file.
+func TestInventoryGuidePagesListCollectionsByHand(t *testing.T) {
+	t.Parallel()
+
+	guide := string(readRepositoryFile(t, filepath.Join("docs", "guide", "inventory.md")))
+	command := awsListCollectionsCommand(t, guide)
+
+	if !strings.Contains(command, "--max-results 100") && !strings.Contains(command, "--max-results=100") {
+		t.Errorf("the guide's `aws opensearchserverless list-collections` command passes no `--max-results 100`: the call has no CLI paginator and answers with one page of 20 by default, so a guide that does not ask for its documented maximum of 100 sees fewer collections than the region holds\n%s", command)
+	}
+
+	if !strings.Contains(command, "--next-token") {
+		t.Errorf("the guide's `aws opensearchserverless list-collections` command passes no `--next-token`: the second page of a region's collections is asked for with the token the first page returned, and a command that never passes it lists the first page only\n%s", command)
+	}
+
+	if !strings.Contains(command, "nextToken") {
+		t.Errorf("the guide's `aws opensearchserverless list-collections` command never reads `nextToken`, so it cannot tell whether the page it holds is the last one: keep the token in the collections file and stop when it is null\n%s", command)
+	}
+
+	if !strings.Contains(command, "while") && !strings.Contains(command, "until") {
+		t.Errorf("the guide's `aws opensearchserverless list-collections` command holds no `while` or `until` loop: the CLI has no paginator for the call, so the command itself repeats it page by page and writes each page to the collections file\n%s", command)
+	}
+}
+
+// unpagedPhrases are the ways the guide may say that the AWS CLI does not page
+// `list-collections` for the reader. The check below accepts any of them rather
+// than pinning one wording, and names them in its failure, so the sentence only
+// has to say that one call is the exception and which one it is.
+var unpagedPhrases = []string{"no paginator", "not paginated", "not paginate", "no CLI pagination", "by hand"}
+
+// TestInventoryGuideNamesTheOneCallTheCLIDoesNotPage pins the other half of
+// review finding B1: the guide's sentence that tells the reader the AWS CLI
+// fetches every page of every call above has to name `list-collections` as the
+// one call it does not, and say that the reader pages it. Otherwise the sentence
+// it does read promises pages the CLI never fetches, and the collections past
+// the first page are missing from the inventory with nothing to show for it.
+func TestInventoryGuideNamesTheOneCallTheCLIDoesNotPage(t *testing.T) {
+	t.Parallel()
+
+	guide := string(readRepositoryFile(t, filepath.Join("docs", "guide", "inventory.md")))
+
+	var paragraphs []string
+
+	for _, paragraph := range strings.Split(guide, "\n\n") {
+		if strings.Contains(paragraph, "paginat") || strings.Contains(paragraph, "every page") {
+			paragraphs = append(paragraphs, paragraph)
+		}
+	}
+
+	if len(paragraphs) == 0 {
+		t.Fatalf("docs/guide/inventory.md holds no paragraph about pagination, so this check read nothing: the guide tells the reader the AWS CLI fetches every page of its calls, and names the one call it does not")
+	}
+
+	named := make([]string, 0, len(paragraphs))
+
+	for _, paragraph := range paragraphs {
+		if strings.Contains(paragraph, "list-collections") {
+			named = append(named, paragraph)
+		}
+	}
+
+	if len(named) == 0 {
+		t.Errorf("docs/guide/inventory.md's pagination paragraph does not name `opensearchserverless list-collections`, want it as the exception: `list-collections` has no AWS CLI paginator, so the CLI fetches no second page of collections and the guide's loop does, and a reader told that every call is paged for them loses every collection past the first page\n%s",
+			strings.Join(paragraphs, "\n\n"))
+
+		return
+	}
+
+	for _, paragraph := range named {
+		for _, phrase := range unpagedPhrases {
+			if strings.Contains(paragraph, phrase) {
+				return
+			}
+		}
+	}
+
+	t.Errorf("docs/guide/inventory.md names `list-collections` in its pagination paragraph but never says the CLI does not page it, want one of %q: the sentence that promises every call above is paginated would still cover the one call without a paginator\n%s",
+		unpagedPhrases, strings.Join(named, "\n\n"))
+}
+
+// awsListCollectionsCommand returns the guide's `opensearchserverless
+// list-collections` command: the lines the visitor copies for it, with the calls
+// it feeds. Exactly one command makes the call, so a second one that listed the
+// collections again fails here rather than being checked in place of the first.
+func awsListCollectionsCommand(t *testing.T, guide string) string {
+	t.Helper()
+
+	var commands []string
+
+	for _, command := range guideCommands(t, guide, guideSources[0]) {
+		if strings.Contains(command, "aws opensearchserverless list-collections") {
+			commands = append(commands, command)
+		}
+	}
+
+	if len(commands) != 1 {
+		t.Fatalf("docs/guide/inventory.md runs `aws opensearchserverless list-collections` in %d commands, want exactly one, so this check read %s",
+			len(commands), describeCommands(commands))
+	}
+
+	return commands[0]
+}
+
+// awsCall is one search or messaging call of an AWS command, with the --query
+// projection it passes; the projection is empty when the command passes none.
+//
+// A command is one run of lines, and a call in a pipeline (a list feeding an
+// xargs describe) is a call of its own, so both are read here.
+type awsCall struct {
+	name  string
+	query string
+}
+
+// awsSearchAndMessagingCallsIn returns the search and messaging calls of one
+// AWS command, failing the test when a call passes no --query or passes one
+// that is no single-quoted projection: the page shows the command whole, so a
+// call that kept the whole response would put the response in the scratch
+// directory the guide deletes.
+func awsSearchAndMessagingCallsIn(t *testing.T, command string) []awsCall {
+	t.Helper()
+
+	var calls []awsCall
+
+	for _, location := range awsSearchAndMessagingCall.FindAllStringIndex(command, -1) {
+		name := strings.Join(strings.Fields(command[location[0]:location[1]]), " ")
+
+		rest := command[location[1]:]
+
+		at := strings.Index(rest, "--query")
+		if at < 0 {
+			t.Errorf("%q passes no --query, want an explicit projection that keeps only the fields PRD #571 reads\n%s",
+				name, command)
+
+			calls = append(calls, awsCall{name: name})
+
+			continue
+		}
+
+		projection := strings.TrimLeft(rest[at+len("--query"):], " ")
+
+		if projection == "" || projection[0] != '\'' {
+			t.Errorf("%q's --query is %q, want a single-quoted jq projection such as --query '{...}'\n%s",
+				name, firstLine(projection), command)
+
+			calls = append(calls, awsCall{name: name})
+
+			continue
+		}
+
+		end := strings.Index(projection[1:], "'")
+		if end < 0 {
+			t.Errorf("%q's --query leaves its single quote open, so the check cannot read the projection\n%s", name, command)
+
+			calls = append(calls, awsCall{name: name})
+
+			continue
+		}
+
+		calls = append(calls, awsCall{name: name, query: projection[1 : 1+end]})
+	}
+
+	return calls
+}
+
+// projectionKeys returns the field names a jq projection names: its
+// identifiers, without its double-quoted strings and without jq's own words.
+func projectionKeys(projection string) []string {
+	var keys []string
+
+	for _, key := range identifier.FindAllString(quotedString.ReplaceAllString(projection, ""), -1) {
+		if !jqWords[key] {
+			keys = append(keys, key)
+		}
+	}
+
+	return keys
+}
+
+// firstLine returns the first line of text, for a failure message.
+func firstLine(text string) string {
+	if i := strings.IndexByte(text, '\n'); i >= 0 {
+		return text[:i]
+	}
+
+	return text
+}
+
+// TestInventoryGuideAWSPolicyCoversTheSearchAndKafkaCalls pins the policy the
+// guide tells a reader to create (PRD #571, milestone 2): the search and Kafka
+// calls need their list and describe actions, and the policy names no
+// data-plane or configuration action, which would let its holder read the
+// cluster's data or its credentials instead of its configuration.
+func TestInventoryGuideAWSPolicyCoversTheSearchAndKafkaCalls(t *testing.T) {
+	t.Parallel()
+
+	guide := string(readRepositoryFile(t, filepath.Join("docs", "guide", "inventory.md")))
+	actions := guideAWSPolicyActions(t, guide)
+
+	for _, action := range []string{
+		"es:ListDomainNames",
+		"es:DescribeDomains",
+		"aoss:ListCollections",
+		"aoss:BatchGetCollection",
+		"kafka:ListClustersV2",
+	} {
+		if !slices.Contains(actions, action) {
+			t.Errorf("the guide's AWS policy does not allow %q, want it: PRD #571's classification makes the call that action permits, and the policy is the only permission the guide asks for",
+				action)
+		}
+	}
+
+	for _, action := range actions {
+		if strings.HasPrefix(action, "es:ESHttp") {
+			t.Errorf("the guide's AWS policy allows %q, want no data-plane action: PRD #571 makes no data-plane call, and the action would let its holder read the domain's documents",
+				action)
+		}
+
+		if strings.HasPrefix(action, "kafka-cluster:") {
+			t.Errorf("the guide's AWS policy allows %q, want no data-plane action: PRD #571 makes no data-plane call, and the action would let its holder read and write the cluster's topics",
+				action)
+		}
+
+		if action == "aoss:APIAccessAll" {
+			t.Errorf("the guide's AWS policy allows %q, want no data-plane action: PRD #571 makes no data-plane call", action)
+		}
+
+		if action == "kafka:GetBootstrapBrokers" {
+			t.Errorf("the guide's AWS policy allows %q, want no connection-string action: the program reads no broker address, and PRD #571 keeps one out of every projection",
+				action)
+		}
+
+		if action == "kafka:ListScramSecrets" {
+			t.Errorf("the guide's AWS policy allows %q, want no credentials action: the guide reads no secret, and the program needs none",
+				action)
+		}
+	}
+}
+
+// awsIAMCall is one `aws <service> <operation>` call of the guide's AWS collect
+// commands, which the policy check maps to an IAM action.
+type awsIAMCall struct {
+	service   string
+	operation string
+}
+
+// awsIAMServicePrefixes maps the service of every `aws <service> <operation>`
+// call the guide's collect commands make to the prefix of the IAM actions that
+// permit it. A CLI service whose name is not its IAM prefix has an entry of its
+// own, and the map is the whole allow list: a call of a service nobody mapped
+// fails the check, so the guide cannot gain a call the policy check would skip.
+var awsIAMServicePrefixes = map[string]string{
+	"autoscaling":          "autoscaling",
+	"configservice":        "config", // `aws configservice` drives AWS Config, whose IAM prefix is config.
+	"ec2":                  "ec2",
+	"efs":                  "elasticfilesystem", // `aws efs` drives Elastic File System, whose IAM prefix is elasticfilesystem.
+	"eks":                  "eks",
+	"elasticache":          "elasticache",
+	"elb":                  "elasticloadbalancing", // `aws elb` and `aws elbv2` both call the Elastic Load Balancing API, which IAM calls elasticloadbalancing.
+	"elbv2":                "elasticloadbalancing",
+	"kafka":                "kafka",
+	"lambda":               "lambda",
+	"opensearch":           "es",   // `aws opensearch` drives the search service IAM calls es.
+	"opensearchserverless": "aoss", // `aws opensearchserverless` drives the serverless search service IAM calls aoss.
+	"rds":                  "rds",
+	"s3api":                "s3", // `aws s3api` calls the S3 API, whose IAM prefix is s3.
+	"sns":                  "sns",
+	"sqs":                  "sqs",
+}
+
+// awsIAMActionExceptions maps a call whose IAM action is not the service prefix
+// and the operation's PascalCase name to the action it is, with the reason.
+var awsIAMActionExceptions = map[awsIAMCall]string{
+	// The RDS API calls the identifier DBInstance, so its IAM action spells the
+	// acronym in caps; the PascalCase rule would give rds:DescribeDbInstances,
+	// which IAM does not know.
+	{service: "rds", operation: "describe-db-instances"}: "rds:DescribeDBInstances",
+	// The CLI's list-buckets returns the buckets of the account, which is why IAM
+	// names the action for the buckets rather than for the call itself.
+	{service: "s3api", operation: "list-buckets"}: "s3:ListAllMyBuckets",
+}
+
+// TestInventoryGuideAWSPolicyCoversEveryCollectCall pins that the minimal policy
+// the guide tells a reader to create grants every call the guide's AWS collect
+// commands make (PRD #571, milestone 2): a reader who follows the guide with that
+// policy and no other permission must not meet AccessDenied, which would leave
+// the resources of the call out of the inventory unsized. The audit found the
+// policy missing ec2:DescribeInstanceTypes, the only call the policy lacked.
+func TestInventoryGuideAWSPolicyCoversEveryCollectCall(t *testing.T) {
+	t.Parallel()
+
+	guide := string(readRepositoryFile(t, filepath.Join("docs", "guide", "inventory.md")))
+	actions := guideAWSPolicyActions(t, guide)
+
+	source := guideSourceByKey(t, "aws")
+
+	var commands []string
+
+	for _, block := range fencedBashBlocks(t, guide, source.collect) {
+		commands = append(commands, splitCommands(block)...)
+	}
+
+	if len(commands) == 0 {
+		t.Fatalf("docs/guide/inventory.md holds no bash block under %q, so this check read nothing", source.collect)
+	}
+
+	calls := guideAWSCalls(t, commands)
+	if len(calls) == 0 {
+		t.Fatalf("the guide's %q commands hold no `aws <service> <operation>` call, so this check read nothing:\n%s",
+			source.collect, describeCommands(commands))
+	}
+
+	var missing []string
+
+	for _, call := range calls {
+		action := awsIAMAction(t, call)
+
+		if slices.Contains(actions, action) {
+			continue
+		}
+
+		missing = append(missing, fmt.Sprintf("%s (aws %s %s)", action, call.service, call.operation))
+	}
+
+	if len(missing) > 0 {
+		t.Errorf("the guide's AWS collect commands make %d call(s) whose IAM action the guide's minimal policy does not allow, want every one of them allowed:\n  %s\nThe policy is the only permission the guide asks a reader to hold, so each of these calls meets AccessDenied and the resource it describes or sizes stays out of the inventory (PRD #571, milestone 2, audit finding)",
+			len(missing), strings.Join(missing, "\n  "))
+	}
+}
+
+// awsReadActionPrefixes are the operation-name prefixes of the IAM actions that
+// only read: a Describe, List, Get, BatchGet or Select action says what a resource
+// is or which resources there are, and changes nothing.
+var awsReadActionPrefixes = []string{"Describe", "List", "Get", "BatchGet", "Select"}
+
+// TestInventoryGuideAWSPolicyGrantsOnlyReadActions pins the read-only rule of the
+// policy the guide tells a reader to create (CLAUDE.md rule 1, PRD #571,
+// milestone 2): every action it lists is a read, its operation starting with
+// Describe, List, Get, BatchGet or Select, and no action holds a wildcard, which
+// would grant whatever AWS adds to the same prefix later. The policy is the one
+// permission the guide asks a reader to hold, so an action that changed
+// something would break the inventory's single promise.
+func TestInventoryGuideAWSPolicyGrantsOnlyReadActions(t *testing.T) {
+	t.Parallel()
+
+	guide := string(readRepositoryFile(t, filepath.Join("docs", "guide", "inventory.md")))
+	actions := guideAWSPolicyActions(t, guide)
+
+	for _, action := range actions {
+		if strings.Contains(action, "*") {
+			t.Errorf("the guide's AWS policy allows %q, want no wildcard: the policy grants the reads the page's calls make, and a wildcard grants whatever AWS adds to the same prefix later",
+				action)
+
+			continue
+		}
+
+		service, operation, ok := strings.Cut(action, ":")
+		if !ok || service == "" || operation == "" {
+			t.Errorf("the guide's AWS policy allows %q, want `service:Operation`, so this check can read the operation the action names",
+				action)
+
+			continue
+		}
+
+		if !slices.ContainsFunc(awsReadActionPrefixes, func(prefix string) bool { return strings.HasPrefix(operation, prefix) }) {
+			t.Errorf("the guide's AWS policy allows %q, want a read: its operation starts with one of %s, and %q starts with none of them",
+				action, strings.Join(awsReadActionPrefixes, ", "), operation)
+		}
+	}
+}
+
+// guideAWSCalls returns every `aws <service> <operation>` call the commands
+// make, in the guide's order and once each. A call counts wherever it stands,
+// including after an `xargs`, and a comment's words never do: the guide's
+// comments name services and operations in prose.
+func guideAWSCalls(t *testing.T, commands []string) []awsIAMCall {
+	t.Helper()
+
+	var calls []awsIAMCall
+
+	for _, command := range commands {
+		words := guideCallWords(command)
+
+		for i, word := range words {
+			if word != "aws" {
+				continue
+			}
+
+			if i+2 >= len(words) || strings.HasPrefix(words[i+1], "-") || strings.HasPrefix(words[i+2], "-") {
+				t.Fatalf("the guide's AWS collect command holds `aws` with no service and operation after it, so this check cannot map the call to an IAM action:\n%s", command)
+			}
+
+			call := awsIAMCall{service: words[i+1], operation: words[i+2]}
+
+			if !slices.Contains(calls, call) {
+				calls = append(calls, call)
+			}
+		}
+	}
+
+	return calls
+}
+
+// shellPunctuation matches the punctuation that can glue a word to the `aws` of
+// a call: a command substitution keeps `aws` inside `page=$(aws`, and a pipe or
+// a redirect can hold the words apart with no space at all.
+var shellPunctuation = strings.NewReplacer(
+	"$(", " ", "(", " ", ")", " ", "`", " ",
+	"{", " ", "}", " ", ";", " ", "|", " ", "&", " ", "=", " ",
+)
+
+// guideCallWords returns the words of a command's code, without the comment lines
+// the guide uses to describe the call a comment heads, and with the shell's
+// punctuation split off, so a call the guide writes inside a substitution or
+// after a pipe yields the words `aws`, its service and its operation like any
+// other.
+func guideCallWords(command string) []string {
+	var code []string
+
+	for _, line := range strings.Split(command, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "#") {
+			continue
+		}
+
+		code = append(code, line)
+	}
+
+	return strings.Fields(shellPunctuation.Replace(strings.Join(code, "\n")))
+}
+
+// awsIAMAction returns the IAM action that permits a call: the service's IAM
+// prefix and the operation's PascalCase name, or the action the exception table
+// names where IAM spells it differently.
+func awsIAMAction(t *testing.T, call awsIAMCall) string {
+	t.Helper()
+
+	if action, ok := awsIAMActionExceptions[call]; ok {
+		return action
+	}
+
+	prefix, ok := awsIAMServicePrefixes[call.service]
+	if !ok {
+		t.Fatalf("the guide's AWS collect commands call `aws %s %s`, and no IAM prefix is mapped for the service %q: add it to awsIAMServicePrefixes so this check covers the call",
+			call.service, call.operation, call.service)
+	}
+
+	return prefix + ":" + awsIAMActionName(call.operation)
+}
+
+// awsIAMActionName returns the IAM action name of a CLI operation: every word
+// of its kebab-case name capitalised and joined (describe-instance-types ->
+// DescribeInstanceTypes, list-clusters-v2 -> ListClustersV2).
+func awsIAMActionName(operation string) string {
+	var name strings.Builder
+
+	for _, word := range strings.Split(operation, "-") {
+		if word == "" {
+			continue
+		}
+
+		name.WriteString(strings.ToUpper(word[:1]))
+		name.WriteString(word[1:])
+	}
+
+	return name.String()
+}
+
+// guideAWSPolicyActions returns the actions of the AWS permissions policy the
+// guide tells a reader to create.
+func guideAWSPolicyActions(t *testing.T, guide string) []string {
+	t.Helper()
+
+	block := fencedBlockAfter(t, guide, "AWS permissions", "json")
+
+	var policy struct {
+		Statement []struct {
+			Action []string `json:"Action"`
+		} `json:"Statement"`
+	}
+
+	if err := json.Unmarshal([]byte(block), &policy); err != nil {
+		t.Fatalf("the guide's AWS permissions policy is not JSON: %v\n%s", err, block)
+	}
+
+	var actions []string
+
+	for _, statement := range policy.Statement {
+		actions = append(actions, statement.Action...)
+	}
+
+	if len(actions) == 0 {
+		t.Fatalf("the guide's AWS permissions policy lists no action, so this check read nothing\n%s", block)
+	}
+
+	return actions
+}
+
+// fencedBlockAfter returns the body of the first fenced block written in the
+// language, under the heading, of a Markdown document.
+func fencedBlockAfter(t *testing.T, document, heading, language string) string {
+	t.Helper()
+
+	lines := strings.Split(document, "\n")
+
+	start := -1
+
+	for i, line := range lines {
+		if headingText(line) == heading {
+			start = i + 1
+
+			break
+		}
+	}
+
+	if start < 0 {
+		t.Fatalf("docs/guide/inventory.md holds no heading %q, so this check read nothing", heading)
+	}
+
+	fence := "```" + language
+
+	var block []string
+
+	inBlock := false
+
+	for _, line := range lines[start:] {
+		trimmed := strings.TrimSpace(line)
+
+		switch {
+		case !inBlock && trimmed == fence:
+			inBlock = true
+		case inBlock && trimmed == "```":
+			return strings.Join(block, "\n")
+		case inBlock:
+			block = append(block, line)
+		}
+	}
+
+	t.Fatalf("docs/guide/inventory.md's %q section holds no closed %s block, so this check read nothing", heading, fence)
+
+	return ""
 }

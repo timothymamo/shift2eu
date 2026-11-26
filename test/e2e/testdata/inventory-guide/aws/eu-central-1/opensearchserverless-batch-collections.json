@@ -1,0 +1,39 @@
+{
+  "collectionDetails": [
+    {
+      "name": "shop-vectors",
+      "arn": "arn:aws:aoss:eu-central-1:123456789012:collection/0123456789abcdef0123456789abcdef",
+      "type": "SEARCH",
+      "standbyReplicas": "ENABLED",
+      "status": "ACTIVE"
+    },
+    {
+      "name": "shop-thumbnails",
+      "arn": "arn:aws:aoss:eu-central-1:123456789012:collection/fedcba9876543210fedcba9876543210",
+      "type": "VECTORSEARCH",
+      "standbyReplicas": "DISABLED",
+      "status": "ACTIVE"
+    },
+    {
+      "name": "shop-archive",
+      "arn": "arn:aws:aoss:eu-central-1:123456789012:collection/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "type": "SEARCH",
+      "standbyReplicas": "DISABLED",
+      "status": "ACTIVE"
+    },
+    {
+      "name": "shop-purge",
+      "arn": "arn:aws:aoss:eu-central-1:123456789012:collection/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "type": "SEARCH",
+      "standbyReplicas": "ENABLED",
+      "status": "FAILED"
+    },
+    {
+      "name": "shop-draining",
+      "arn": "arn:aws:aoss:eu-central-1:123456789012:collection/cccccccccccccccccccccccccccccccc",
+      "type": "SEARCH",
+      "standbyReplicas": "DISABLED",
+      "status": "DELETING"
+    }
+  ]
+}

@@ -1,0 +1,25 @@
+{
+  "DomainNames": [
+    {
+      "DomainName": "shop-search"
+    },
+    {
+      "DomainName": "shop-logs"
+    },
+    {
+      "DomainName": "shop-legacy-search"
+    },
+    {
+      "DomainName": "shop-mirror"
+    },
+    {
+      "DomainName": "shop-metrics"
+    },
+    {
+      "DomainName": "shop-cold-logs"
+    },
+    {
+      "DomainName": "shop-old-search"
+    }
+  ]
+}

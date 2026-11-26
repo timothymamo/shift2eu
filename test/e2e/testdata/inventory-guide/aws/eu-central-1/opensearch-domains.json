@@ -1,0 +1,137 @@
+{
+  "DomainStatusList": [
+    {
+      "DomainName": "shop-search",
+      "ARN": "arn:aws:es:eu-central-1:123456789012:domain/shop-search",
+      "EngineVersion": "OpenSearch_2.11",
+      "ClusterConfig": {
+        "InstanceType": "r6g.large.search",
+        "InstanceCount": 3,
+        "ZoneAwarenessEnabled": true,
+        "MultiAZWithStandbyEnabled": false
+      },
+      "EBSOptions": {
+        "EBSEnabled": true,
+        "VolumeSize": 100
+      },
+      "EncryptionAtRestOptions": {
+        "Enabled": true
+      },
+      "Deleted": false
+    },
+    {
+      "DomainName": "shop-logs",
+      "ARN": "arn:aws:es:eu-central-1:123456789012:domain/shop-logs",
+      "EngineVersion": "Elasticsearch_7.10",
+      "ClusterConfig": {
+        "InstanceType": "r6g.large.search",
+        "InstanceCount": 1,
+        "ZoneAwarenessEnabled": false,
+        "MultiAZWithStandbyEnabled": false
+      },
+      "EBSOptions": {
+        "EBSEnabled": true,
+        "VolumeSize": 50
+      },
+      "EncryptionAtRestOptions": {
+        "Enabled": false
+      },
+      "Deleted": false
+    },
+    {
+      "DomainName": "shop-legacy-search",
+      "ARN": "arn:aws:es:eu-central-1:123456789012:domain/shop-legacy-search",
+      "EngineVersion": "Elasticsearch_6.8",
+      "ClusterConfig": {
+        "InstanceType": "m5.large.search",
+        "InstanceCount": 2,
+        "ZoneAwarenessEnabled": true,
+        "MultiAZWithStandbyEnabled": false
+      },
+      "EBSOptions": {
+        "EBSEnabled": true,
+        "VolumeSize": 50
+      },
+      "EncryptionAtRestOptions": {
+        "Enabled": true
+      },
+      "Deleted": false
+    },
+    {
+      "DomainName": "shop-mirror",
+      "ARN": "arn:aws:es:eu-central-1:123456789012:domain/shop-mirror",
+      "EngineVersion": "OpenSearch_2.11",
+      "ClusterConfig": {
+        "InstanceType": "r6g.large.search",
+        "InstanceCount": 2,
+        "ZoneAwarenessEnabled": true,
+        "MultiAZWithStandbyEnabled": false
+      },
+      "EBSOptions": {
+        "EBSEnabled": true,
+        "VolumeSize": 50
+      },
+      "EncryptionAtRestOptions": {
+        "Enabled": true
+      },
+      "Deleted": false
+    },
+    {
+      "DomainName": "shop-metrics",
+      "ARN": "arn:aws:es:eu-central-1:123456789012:domain/shop-metrics",
+      "EngineVersion": "OpenSearch_2.11",
+      "ClusterConfig": {
+        "InstanceType": "or1.large.search",
+        "InstanceCount": 2,
+        "ZoneAwarenessEnabled": true,
+        "MultiAZWithStandbyEnabled": false
+      },
+      "EBSOptions": {
+        "EBSEnabled": true,
+        "VolumeSize": 100
+      },
+      "EncryptionAtRestOptions": {
+        "Enabled": true
+      },
+      "Deleted": false
+    },
+    {
+      "DomainName": "shop-cold-logs",
+      "ARN": "arn:aws:es:eu-central-1:123456789012:domain/shop-cold-logs",
+      "EngineVersion": "OpenSearch_2.11",
+      "ClusterConfig": {
+        "InstanceType": "r6g.large.search",
+        "InstanceCount": 1,
+        "ZoneAwarenessEnabled": false,
+        "MultiAZWithStandbyEnabled": false
+      },
+      "EBSOptions": {
+        "EBSEnabled": false,
+        "VolumeSize": 100
+      },
+      "EncryptionAtRestOptions": {
+        "Enabled": true
+      },
+      "Deleted": false
+    },
+    {
+      "DomainName": "shop-old-search",
+      "ARN": "arn:aws:es:eu-central-1:123456789012:domain/shop-old-search",
+      "EngineVersion": "OpenSearch_2.11",
+      "ClusterConfig": {
+        "InstanceType": "r6g.large.search",
+        "InstanceCount": 1,
+        "ZoneAwarenessEnabled": false,
+        "MultiAZWithStandbyEnabled": false
+      },
+      "EBSOptions": {
+        "EBSEnabled": true,
+        "VolumeSize": 50
+      },
+      "EncryptionAtRestOptions": {
+        "Enabled": true
+      },
+      "Deleted": true
+    }
+  ]
+}

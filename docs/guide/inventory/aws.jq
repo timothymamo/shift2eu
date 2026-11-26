@@ -31,8 +31,15 @@
 #   {"TagDescriptions": ...}       elbv2 describe-tags
 #   {"LoadBalancerDescriptions"}   elb describe-load-balancers (Classic)
 #   {"FileSystems": ...}           efs describe-file-systems
+#   {"DomainStatusList": ...}      opensearch describe-domains
+#   {"collectionDetails": ...}     opensearchserverless batch-get-collection
+#   {"ClusterInfoList": ...}       kafka list-clusters-v2
 #   {"Results": [...]}             configservice select-resource-config (optional;
 #                                  one value per page if you page by hand)
+#
+# The outputs of opensearch list-domain-names and opensearchserverless
+# list-collections only feed the calls that describe them; the program reads
+# neither.
 #
 # Resource IDs are short (an instance ID, a bucket or queue name), never an ARN,
 # which would carry the account ID. Anything it cannot classify is "unclassified"
@@ -58,7 +65,11 @@
 # standby is the target's to say), an EKS cluster's node count (the desired
 # sizes of its managed node groups), a cache's node count (a replication
 # group's member clusters, a standalone cluster's NumCacheNodes), a DocumentDB
-# cluster's instance count and an EFS file system's metered size. A number no
+# cluster's instance count, an EFS file system's metered size, and a search
+# domain's or a Kafka cluster's data nodes or brokers (their count, their
+# per-node volume, and the vCPU and memory of the EC2 type their instance type
+# is built on: r6g.large.search and kafka.m5.large are r6g.large and m5.large,
+# which ec2 describe-instance-types sizes). A number no
 # call gives is left out, never guessed. The workload, relations and monthlyCost
 # fields are the user's to add by hand; this program never writes them.
 
@@ -76,20 +87,41 @@ def covered_types:
     "AWS::EC2::Instance", "AWS::EC2::Volume", "AWS::AutoScaling::AutoScalingGroup",
     "AWS::S3::Bucket", "AWS::RDS::DBInstance", "AWS::RDS::DBCluster", "AWS::EKS::Cluster",
     "AWS::Lambda::Function", "AWS::SQS::Queue", "AWS::SNS::Topic", "AWS::EFS::FileSystem",
-    "AWS::ElasticLoadBalancingV2::LoadBalancer", "AWS::ElasticLoadBalancing::LoadBalancer"
+    "AWS::ElasticLoadBalancingV2::LoadBalancer", "AWS::ElasticLoadBalancing::LoadBalancer",
+    "AWS::OpenSearch::Domain", "AWS::Elasticsearch::Domain"
   ];
+
+# AWS Config records an OpenSearch Service domain as AWS::OpenSearch::Domain, or
+# the legacy AWS::Elasticsearch::Domain, not as its CloudFormation type
+# AWS::OpenSearchService::Domain (its developer guide's "Supported Resource
+# Types" reference, checked 2026-11-26): both are in covered_types above, since
+# opensearch describe-domains lists every domain. An MSK cluster and an
+# OpenSearch Serverless collection are recorded under their CloudFormation
+# types; their Config rows are dropped when the service call lists a resource
+# of that type and region with the same name or ID ($listed below): Config may
+# record a collection by its ID alone, and a cluster by its ARN alone.
+def listed_by_call_types:
+  ["AWS::MSK::Cluster", "AWS::MSK::ServerlessCluster", "AWS::OpenSearchServerless::Collection"];
 
 # The parts and settings of a classified resource that AWS Config records as
 # types of their own: a load balancer's listeners, rules and target groups, an
-# EFS file system's access points, and an ECR registry's settings and repository
-# creation templates. The resource stands for them, so they are dropped, not
-# listed as unclassified.
+# EFS file system's access points, an ECR registry's settings and repository
+# creation templates, an MSK cluster's configurations, policy, SCRAM secrets and
+# VPC connections, and an OpenSearch Serverless collection's access, security,
+# lifecycle and encryption policies, security configurations and VPC endpoints.
+# The resource stands for them, so they are dropped, not listed as
+# unclassified.
 def part_types:
   [
     "AWS::ElasticLoadBalancingV2::Listener", "AWS::ElasticLoadBalancingV2::ListenerRule",
     "AWS::ElasticLoadBalancingV2::TargetGroup", "AWS::EFS::AccessPoint",
     "AWS::ECR::RegistryPolicy", "AWS::ECR::ReplicationConfiguration", "AWS::ECR::PullThroughCacheRule",
-    "AWS::ECR::RepositoryCreationTemplate"
+    "AWS::ECR::RepositoryCreationTemplate",
+    "AWS::MSK::Configuration", "AWS::MSK::ClusterPolicy", "AWS::MSK::BatchScramSecret",
+    "AWS::MSK::VpcConnection",
+    "AWS::OpenSearchServerless::AccessPolicy", "AWS::OpenSearchServerless::SecurityPolicy",
+    "AWS::OpenSearchServerless::SecurityConfig", "AWS::OpenSearchServerless::LifecyclePolicy",
+    "AWS::OpenSearchServerless::VpcEndpoint"
   ];
 
 # The category of an AWS Config type that needs no service call: the type is
@@ -101,6 +133,21 @@ def config_category:
 
 # True for an ElastiCache engine that speaks the Redis protocol.
 def is_redis: . == "redis" or . == "valkey";
+
+# True for an OpenSearch Service engine version that speaks the OpenSearch REST
+# API: OpenSearch, or Elasticsearch 7.x, from whose 7.10.2 OpenSearch was
+# forked. Elasticsearch before 7.0 still has mapping types, so a client of it
+# needs a change before it runs on OpenSearch.
+def is_opensearch_api: test("^OpenSearch_") or test("^Elasticsearch_7\\.");
+
+# The EC2 instance type a search or Kafka instance type is built on:
+# r6g.large.search -> r6g.large, kafka.m5.large -> m5.large. A type with no EC2
+# twin (or1.large.search, express.m7g.large) is not in ec2 describe-instance-types,
+# so its lookup finds nothing and the resource stays unsized.
+def ec2_twin:
+  if endswith(".search") then sub("\\.search$"; "")
+  elif startswith("kafka.") then sub("^kafka\\."; "")
+  else . end;
 
 # True for an instance or an Auto Scaling group that is a Kubernetes node, by its
 # tag keys.
@@ -172,6 +219,16 @@ def inventory($source):
 | [$docs[] | .DBInstances? // empty | .[] | select(.Engine == "docdb")
    | . + {cluster: (.DBClusterIdentifier // .DBInstanceIdentifier), region: (.DBInstanceArn | arn_region)}]
   as $docdb
+| ([$docs[] | .ClusterInfoList? // empty | .[]
+    | (if .ClusterType == "SERVERLESS" then "AWS::MSK::ServerlessCluster" else "AWS::MSK::Cluster" end) as $type
+    | (.ClusterArn | arn_region) as $region
+    | (.ClusterName, (.ClusterArn | short_id)) | [$type, ., $region]]
+   + [$docs[] | .collectionDetails? // empty | .[]
+      | (.arn | arn_region) as $region
+      | (.name, (.arn | short_id))
+      | ["AWS::OpenSearchServerless::Collection", ., $region]]
+   | unique)
+  as $listed
 | [
     # EC2 instances. One launched by an Auto Scaling group is left out: the group
     # stands for it. A Kubernetes node is left out: its cluster stands for it.
@@ -423,6 +480,91 @@ def inventory($source):
                                  | if . >= 1 then . else null end)})
         }),
 
+    # Amazon OpenSearch Service domains. One on OpenSearch or Elasticsearch 7.x
+    # is search.opensearch; one before 7.0 is unclassified, with no capability
+    # and no size. Every domain takes automated snapshots (hourly on 5.3 and
+    # later). Its data nodes are its size: InstanceCount nodes (the dedicated
+    # masters are not data nodes) of the EC2 type its instance type is built
+    # on, each with an EBS volume of VolumeSize GiB; a domain on instance
+    # storage (EBSEnabled false) gets no storageGiB. A domain being deleted
+    # (Deleted true) is left out, as a terminated EC2 instance is.
+    ($docs[] | .DomainStatusList? // empty | .[]
+      | select(.Deleted != true)
+      | ((.EngineVersion // "") | is_opensearch_api) as $search
+      | (.ClusterConfig // {}) as $cluster
+      | {
+          id: .DomainName,
+          rawType: "AWS::OpenSearchService::Domain",
+          category: (if $search then "search.opensearch" else "unclassified" end),
+          region: (.ARN | arn_region),
+          capabilities: (if $search then [
+            cap("node-high-availability"; ($cluster.InstanceCount // 0) >= 2),
+            cap("zone-high-availability"; $cluster.ZoneAwarenessEnabled == true
+              or $cluster.MultiAZWithStandbyEnabled == true),
+            cap("encryption-at-rest"; .EncryptionAtRestOptions.Enabled == true),
+            "snapshots"
+          ] else [] end),
+          size: (if $search then size_of(($types[$cluster.InstanceType // "" | ec2_twin] // {}) + {
+                   storageGiB: (if .EBSOptions.EBSEnabled == true then .EBSOptions.VolumeSize else null end),
+                   count: $cluster.InstanceCount})
+                 else null end)
+        }),
+
+    # OpenSearch Serverless collections: always encrypted at rest, and
+    # snapshotted every hour into restorable snapshots; standby replicas in
+    # another zone are their node and zone high availability. No size: a
+    # collection is billed by OCUs, not nodes. A collection being deleted or
+    # that failed (status DELETING or FAILED) is left out.
+    ($docs[] | .collectionDetails? // empty | .[]
+      | select(.status != "DELETING" and .status != "FAILED")
+      | {
+          id: .name,
+          rawType: "AWS::OpenSearchServerless::Collection",
+          category: "search.opensearch",
+          region: (.arn | arn_region),
+          capabilities: [
+            "encryption-at-rest",
+            "snapshots",
+            cap("node-high-availability"; .standbyReplicas == "ENABLED"),
+            cap("zone-high-availability"; .standbyReplicas == "ENABLED")
+          ]
+        }),
+
+    # Amazon MSK clusters, provisioned and serverless. MSK always encrypts data
+    # at rest. A provisioned cluster's brokers are spread evenly over the zones
+    # of its client subnets, one subnet per zone (two or three); its size is
+    # NumberOfBrokerNodes brokers of the EC2 type its broker type is built on,
+    # each with an EBS volume of VolumeSize GiB (Express brokers have no EC2
+    # twin and no volume, so they stay unsized). A serverless cluster has no
+    # broker to size and replicates across zones. A cluster being deleted or
+    # that failed (State DELETING or FAILED) is left out.
+    ($docs[] | .ClusterInfoList? // empty | .[]
+      | select(.State != "DELETING" and .State != "FAILED")
+      | if .ClusterType == "SERVERLESS" then {
+          id: .ClusterName,
+          rawType: "AWS::MSK::ServerlessCluster",
+          category: "messaging.kafka",
+          region: (.ClusterArn | arn_region),
+          capabilities: ["node-high-availability", "zone-high-availability", "encryption-at-rest"]
+        } else
+          (.Provisioned // {}) as $cluster
+          | ($cluster.BrokerNodeGroupInfo // {}) as $brokers
+          | {
+              id: .ClusterName,
+              rawType: "AWS::MSK::Cluster",
+              category: "messaging.kafka",
+              region: (.ClusterArn | arn_region),
+              capabilities: [
+                "encryption-at-rest",
+                cap("node-high-availability"; ($cluster.NumberOfBrokerNodes // 0) >= 2),
+                cap("zone-high-availability"; ($brokers.ClientSubnets // []) | length >= 2)
+              ],
+              size: size_of(($types[$brokers.InstanceType // "" | ec2_twin] // {}) + {
+                      storageGiB: $brokers.StorageInfo.EbsStorageInfo.VolumeSize,
+                      count: $cluster.NumberOfBrokerNodes})
+            }
+        end),
+
     # Lambda functions.
     ($docs[] | .Functions? // empty | .[]
       | {
@@ -460,10 +602,15 @@ def inventory($source):
 
     # Everything else AWS Config recorded. App Runner services and ECR
     # repositories need no call: the type is enough, and ECR encrypts every
-    # repository at rest. Any other type is unclassified.
+    # repository at rest. The row of an MSK cluster or an OpenSearch Serverless
+    # collection the service calls list, by type, region and either name or ID
+    # (an ARN's last segment), is dropped. Any other type is unclassified.
     ($docs[] | .Results? // empty | .[]
       | if type == "string" then fromjson else . end
       | select(.resourceType | IN(covered_types[], part_types[]) | not)
+      | select((.resourceType | IN(listed_by_call_types[]))
+          and (. as $row | any((.resourceName, .resourceId) | strings | short_id;
+                 [$row.resourceType, ., $row.awsRegion] | IN($listed[]))) | not)
       | (.resourceType | config_category) as $category
       | {
           id: ((.resourceName // .resourceId) | short_id),

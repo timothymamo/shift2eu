@@ -1,0 +1,30 @@
+{
+  "collectionSummaries": [
+    {
+      "id": "0123456789abcdef0123456789abcdef",
+      "name": "shop-vectors"
+    }
+  ],
+  "nextToken": "cGFnZS0y"
+}
+{
+  "collectionSummaries": [
+    {
+      "id": "fedcba9876543210fedcba9876543210",
+      "name": "shop-thumbnails"
+    },
+    {
+      "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "name": "shop-archive"
+    },
+    {
+      "id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "name": "shop-purge"
+    },
+    {
+      "id": "cccccccccccccccccccccccccccccccc",
+      "name": "shop-draining"
+    }
+  ],
+  "nextToken": null
+}

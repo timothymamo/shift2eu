@@ -19,6 +19,15 @@
       }
     },
     {
+      "InstanceType": "r6g.large",
+      "VCpuInfo": {
+        "DefaultVCpus": 2
+      },
+      "MemoryInfo": {
+        "SizeInMiB": 16384
+      }
+    },
+    {
       "InstanceType": "c7i.metal-24xl",
       "VCpuInfo": {
         "DefaultVCpus": 96

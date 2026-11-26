@@ -3,9 +3,12 @@
 package e2e_test
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -70,7 +73,8 @@ type inventoryGuideCase struct {
 	// program has to write none rather than that number.
 	unsized []string
 	// absent are resource IDs the program has to leave out altogether: another
-	// recorded resource stands for them.
+	// recorded resource stands for them, or they are no infrastructure to move (an
+	// instance AWS terminated, a domain AWS is deleting).
 	absent []string
 	// absentRawTypes are raw types no resource of this source may carry.
 	absentRawTypes []string
@@ -342,6 +346,124 @@ func inventoryGuides() []inventoryGuideCase {
 					id: "shop-carts", rawType: "AWS::DynamoDB::Table", category: "unclassified",
 					capabilities: []string{},
 				},
+				// An OpenSearch Service domain on OpenSearch 2.x: three data nodes,
+				// zone awareness, EBS storage and encryption at rest. OpenSearch
+				// Service takes automated snapshots of every domain, so snapshots
+				// holds whatever the settings say (PRD #571). Its region is the
+				// region of its ARN, as every other AWS resource's is.
+				{
+					id: "shop-search", rawType: "AWS::OpenSearchService::Domain", category: "search.opensearch",
+					region:       "eu-central-1",
+					capabilities: []string{"encryption-at-rest", "node-high-availability", "snapshots", "zone-high-availability"},
+				},
+				// OpenSearch is a fork of Elasticsearch 7.10.2 and keeps its REST
+				// API, so a domain on Elasticsearch_7.* is search.opensearch too.
+				// One node in one zone, unencrypted, keeps only the snapshots every
+				// domain takes.
+				{
+					id: "shop-logs", rawType: "AWS::OpenSearchService::Domain", category: "search.opensearch",
+					region:       "eu-central-1",
+					capabilities: []string{"snapshots"},
+				},
+				// An OpenSearch-optimized instance type (or1, or2, om2, oi2) has no EC2
+				// twin, so ec2 describe-instance-types sizes no such domain: it keeps
+				// the count and the EBS volume its own call gives it and no vcpus or
+				// memoryGiB (review finding S2).
+				{
+					id: "shop-metrics", rawType: "AWS::OpenSearchService::Domain", category: "search.opensearch",
+					region:       "eu-central-1",
+					capabilities: []string{"encryption-at-rest", "node-high-availability", "snapshots", "zone-high-availability"},
+				},
+				// A domain on instance storage (EBSEnabled false) has no EBS volume per
+				// data node, so it gets no storageGiB: the VolumeSize recorded beside
+				// the flag describes nothing (review finding S2).
+				{
+					id: "shop-cold-logs", rawType: "AWS::OpenSearchService::Domain", category: "search.opensearch",
+					region:       "eu-central-1",
+					capabilities: []string{"encryption-at-rest", "snapshots"},
+				},
+				// 7.0 removed mapping types, so a client written against the 6.x API
+				// needs a change before it runs on OpenSearch: a domain before 7.0
+				// stays unclassified, with its own rawType and no capability (PRD
+				// #571, *What counts, and what does not*).
+				{
+					id: "shop-legacy-search", rawType: "AWS::OpenSearchService::Domain", category: "unclassified",
+					region:       "eu-central-1",
+					capabilities: []string{},
+				},
+				// Two domains of the same name in two regions are two resources, not
+				// one: each is named after the ARN's region, and the two differ by
+				// nothing else in the recorded output. Without the region the program
+				// would list one of them twice, or once, and a workload of either
+				// region would be assessed against the other's domain (PRD #571).
+				{
+					id: "shop-mirror (AWS::OpenSearchService::Domain, eu-central-1)", rawType: "AWS::OpenSearchService::Domain",
+					category:     "search.opensearch",
+					region:       "eu-central-1",
+					capabilities: []string{"encryption-at-rest", "node-high-availability", "snapshots", "zone-high-availability"},
+				},
+				{
+					id: "shop-mirror (AWS::OpenSearchService::Domain, eu-west-1)", rawType: "AWS::OpenSearchService::Domain",
+					category:     "search.opensearch",
+					region:       "eu-west-1",
+					capabilities: []string{"encryption-at-rest", "node-high-availability", "snapshots", "zone-high-availability"},
+				},
+				// An OpenSearch Serverless collection speaks the OpenSearch API. A
+				// collection always encrypts, and standby replicas are the node and
+				// zone high availability of a collection with no node the guide can
+				// read. Serverless takes a snapshot every hour and the snapshot is
+				// restorable, so every collection has snapshots too (PRD #571).
+				{
+					id: "shop-vectors", rawType: "AWS::OpenSearchServerless::Collection", category: "search.opensearch",
+					region:       "eu-central-1",
+					capabilities: []string{"encryption-at-rest", "node-high-availability", "snapshots", "zone-high-availability"},
+				},
+				{
+					id: "shop-thumbnails", rawType: "AWS::OpenSearchServerless::Collection", category: "search.opensearch",
+					region:       "eu-central-1",
+					capabilities: []string{"encryption-at-rest", "snapshots"},
+				},
+				// A collection the second page of list-collections names is a resource
+				// like any other: the call has no CLI paginator, so the guide's loop
+				// writes either page to the collections file and batch-get-collection
+				// describes what both listed (review finding B1).
+				{
+					id: "shop-archive", rawType: "AWS::OpenSearchServerless::Collection", category: "search.opensearch",
+					region:       "eu-central-1",
+					capabilities: []string{"encryption-at-rest", "snapshots"},
+				},
+				// A provisioned MSK cluster is Apache Kafka: three brokers in three
+				// client subnets (one subnet per zone), encrypted at rest. Kafka has
+				// no snapshot the capability means, so it carries none. Its region is
+				// the region of its ARN.
+				{
+					id: "shop-events-kafka", rawType: "AWS::MSK::Cluster", category: "messaging.kafka",
+					region:       "eu-central-1",
+					capabilities: []string{"encryption-at-rest", "node-high-availability", "zone-high-availability"},
+				},
+				// An MSK Serverless cluster speaks the Kafka protocol with no broker
+				// the guide can size; it always replicates across zones and always
+				// encrypts.
+				{
+					id: "shop-events-kafka-serverless", rawType: "AWS::MSK::ServerlessCluster", category: "messaging.kafka",
+					region:       "eu-central-1",
+					capabilities: []string{"encryption-at-rest", "node-high-availability", "zone-high-availability"},
+				},
+				// An MSK Express cluster's brokers (express.m7g.large) have no EC2 twin
+				// and no EBS volume, which MSK manages itself: the cluster keeps the
+				// count of its brokers and none of vcpus, memoryGiB or storageGiB
+				// (review finding S2).
+				{
+					id: "shop-streams-kafka", rawType: "AWS::MSK::Cluster", category: "messaging.kafka",
+					region:       "eu-central-1",
+					capabilities: []string{"encryption-at-rest", "node-high-availability", "zone-high-availability"},
+				},
+				// A Kafka Connect connector is an integration runtime, not a cluster
+				// (PRD #571, *Left out*).
+				{
+					id: "shop-events-connect", rawType: "AWS::KafkaConnect::Connector", category: "unclassified",
+					capabilities: []string{},
+				},
 			},
 			// The storage of an Aurora instance belongs to its cluster, so
 			// rds describe-db-instances gives every Aurora instance
@@ -361,6 +483,20 @@ func inventoryGuides() []inventoryGuideCase {
 				// The NumCacheNodes of a Memcached cluster is the nodes of a cache
 				// the program cannot classify, not a size.
 				"shop-reports-memcached",
+				// A domain before 7.0 stays unclassified, as an instance of an
+				// engine no category serves: the numbers of describe-domains are the
+				// settings of a domain no target serves, not its size.
+				"shop-legacy-search",
+				// An OpenSearch Serverless collection and an MSK Serverless cluster
+				// name no node and no broker: they are billed by usage (OCUs,
+				// partitions and throughput), and a plan-priced category has no
+				// usage path (PRD #571, decided question 3).
+				"shop-vectors",
+				"shop-thumbnails",
+				"shop-archive",
+				"shop-events-kafka-serverless",
+				// A Kafka Connect connector is no cluster, so no call sizes it.
+				"shop-events-connect",
 			},
 			sized: []sizeFact{
 				// An m5.large is 2 vCPU and 8 GiB, from ec2 describe-instance-types.
@@ -398,6 +534,46 @@ func inventoryGuides() []inventoryGuideCase {
 				// Regional one and 1 GiB for the One Zone one.
 				{id: "fs-shop-regional", storageGiB: 5},
 				{id: "fs-shop-onezone", storageGiB: 1},
+				// A search domain's data nodes: AWS names an instance type, not a
+				// size, so the guide asks ec2 describe-instance-types for the EC2
+				// type the search type is built on (r6g.large.search -> r6g.large,
+				// 2 vCPU and 16 GiB), and takes count and storage per node from
+				// describe-domains (InstanceCount, EBSOptions.VolumeSize).
+				{id: "shop-search", vcpus: 2, memoryGiB: 16, storageGiB: 100, count: 3},
+				{id: "shop-logs", vcpus: 2, memoryGiB: 16, storageGiB: 50, count: 1},
+				// The two domains of one name are sized alike, and the eu-west-1 one is
+				// sized from the type ec2 describe-instance-types recorded in
+				// eu-central-1: the program reads the instance types of every recorded
+				// region as one lookup, so a type no region of its own recorded still
+				// sizes the domain (review finding N3).
+				{
+					id:    "shop-mirror (AWS::OpenSearchService::Domain, eu-central-1)",
+					vcpus: 2, memoryGiB: 16, storageGiB: 50, count: 2,
+				},
+				{
+					id:    "shop-mirror (AWS::OpenSearchService::Domain, eu-west-1)",
+					vcpus: 2, memoryGiB: 16, storageGiB: 50, count: 2,
+				},
+				// An OpenSearch-optimized type has no EC2 twin to look up: the domain's
+				// count and per-node volume are its size, and vcpus and memoryGiB stay
+				// out rather than being guessed (review finding S2).
+				{id: "shop-metrics", storageGiB: 100, count: 2, noVCPUs: true, noMemoryGiB: true},
+				// A domain on instance storage keeps its data nodes and their type, and
+				// gets no storageGiB although EBSOptions.VolumeSize is recorded: the
+				// volume is the one the instance type has, which no call gives
+				// (review finding S2).
+				{id: "shop-cold-logs", vcpus: 2, memoryGiB: 16, count: 1, noStorageGiB: true},
+				// A provisioned MSK cluster's brokers: kafka.m5.large is the EC2
+				// type m5.large (2 vCPU and 8 GiB), NumberOfBrokerNodes brokers and
+				// the per-broker EBS volume.
+				{id: "shop-events-kafka", vcpus: 2, memoryGiB: 8, storageGiB: 100, count: 3},
+				// An Express cluster's brokers are express.m7g.large: no EC2 type of
+				// that name and no volume of its own, so the cluster's count of brokers
+				// is its whole size (review finding S2).
+				{
+					id:    "shop-streams-kafka",
+					count: 3, noVCPUs: true, noMemoryGiB: true, noStorageGiB: true,
+				},
 			},
 			// The EKS nodes, the Auto Scaling groups that run them and their
 			// root volumes, and the root volume of an Auto Scaling group's
@@ -432,6 +608,31 @@ func inventoryGuides() []inventoryGuideCase {
 				// A load balancer a Kubernetes cluster created: it goes with
 				// the cluster, as its nodes do.
 				"k8s-shop-ingress",
+				// The AWS Config row of the MSK cluster is no second resource: the
+				// kafka list-clusters-v2 call lists the cluster, under its name and in
+				// the same region (the Config row's awsRegion is the region of the
+				// cluster's ARN), and the program drops the Config row. Its Config
+				// resource ID is the cluster's ARN, whose last segment is the
+				// cluster's UUID.
+				"00000000-0000-0000-0000-000000000000",
+				// A Config row that names no resource, identified by its ID or its ARN
+				// alone, is the same one resource: the rows below are the serverless
+				// cluster's ARN and the vectors collection's ID, and each has to be
+				// dropped as the row matched by name is (review finding S1). One left in
+				// would be an unclassified resource listed a second time.
+				"00000000-0000-0000-0000-000000000001-1",
+				"0123456789abcdef0123456789abcdef",
+				// Resources on their way out or never made are no infrastructure to
+				// move, as an instance whose state is terminated is none: a domain AWS
+				// reports deleted, a collection whose deletion is in progress or whose
+				// creation failed, and a cluster AWS is deleting or that failed
+				// (review findings N2 and N-c: each of the two statuses of each of
+				// the two services is recorded).
+				"shop-old-search",
+				"shop-purge",
+				"shop-draining",
+				"shop-retired-kafka",
+				"shop-broken-kafka",
 			},
 			absentRawTypes: []string{
 				"AWS::RDS::DBCluster",
@@ -448,6 +649,19 @@ func inventoryGuides() []inventoryGuideCase {
 				"AWS::ECR::ReplicationConfiguration",
 				"AWS::ECR::PullThroughCacheRule",
 				"AWS::ECR::RepositoryCreationTemplate",
+				// AWS Config records a search domain under its own types
+				// (AWS::OpenSearch::Domain and the legacy AWS::Elasticsearch::Domain),
+				// not under the CloudFormation type the service call gives it: the
+				// call classifies the domain, so the Config row is no second
+				// resource (PRD #571, milestone 2).
+				"AWS::OpenSearch::Domain",
+				"AWS::Elasticsearch::Domain",
+				// The parts of a Kafka cluster and of an OpenSearch Serverless
+				// collection are no resources of their own: a configuration is a
+				// setting of a cluster, and a security policy a setting of a
+				// collection (PRD #571, *Left out on the source side*).
+				"AWS::MSK::Configuration",
+				"AWS::OpenSearchServerless::SecurityPolicy",
 			},
 		},
 		{
@@ -955,6 +1169,10 @@ func taxonomyCategories(source string) []string {
 			"serverless.container",
 			"registry.container",
 			"storage.file",
+			// PRD #571's AWS classification: the search domain and collection,
+			// and the Kafka cluster its fixtures record.
+			"search.opensearch",
+			"messaging.kafka",
 		}
 	case "gcp":
 		return []string{
@@ -1117,6 +1335,214 @@ func TestInventoryGuidePrograms(t *testing.T) {
 
 			assertAssessAccepts(t, tc, stdout)
 		})
+	}
+}
+
+// TestInventoryGuideDomainNamesListEveryDomainOnRecord pins what the guide's two
+// OpenSearch calls promise about each other (review finding N1): the guide asks
+// opensearch describe-domains for the names list-domain-names returned, so a
+// region's recorded describe output holds exactly the domains the recorded list
+// names. A domain the describe output holds and the list does not is output the
+// guide's command never produced, and a name the list holds and the describe
+// output does not is a domain the program never reads: either way the two files
+// describe different regions, and a fixture cannot show a call the guide makes.
+func TestInventoryGuideDomainNamesListEveryDomainOnRecord(t *testing.T) {
+	t.Parallel()
+
+	recorded, err := filepath.Glob(inventoryGuideDir + "/aws/*/opensearch-domains.json")
+	if err != nil {
+		t.Fatalf("glob the recorded describe-domains output: %v", err)
+	}
+
+	if len(recorded) == 0 {
+		t.Fatalf("%s/aws/*/opensearch-domains.json matched no recorded output; the fixtures are missing", inventoryGuideDir)
+	}
+
+	slices.Sort(recorded)
+
+	for _, domainsPath := range recorded {
+		region := filepath.Base(filepath.Dir(domainsPath))
+
+		t.Run(region, func(t *testing.T) {
+			t.Parallel()
+
+			var domains struct {
+				DomainStatusList []struct {
+					DomainName string `json:"DomainName"`
+				} `json:"DomainStatusList"`
+			}
+
+			decodeFixture(t, domainsPath, &domains)
+
+			namesPath := filepath.Join(filepath.Dir(domainsPath), "opensearch-domain-names.json")
+
+			var names struct {
+				DomainNames []struct {
+					DomainName string `json:"DomainName"`
+				} `json:"DomainNames"`
+			}
+
+			decodeFixture(t, namesPath, &names)
+
+			described := make([]string, 0, len(domains.DomainStatusList))
+			for _, domain := range domains.DomainStatusList {
+				described = append(described, domain.DomainName)
+			}
+
+			listed := make([]string, 0, len(names.DomainNames))
+			for _, name := range names.DomainNames {
+				listed = append(listed, name.DomainName)
+			}
+
+			slices.Sort(described)
+			slices.Sort(listed)
+
+			if diff := cmp.Diff(described, listed); diff != "" {
+				t.Errorf("%s and %s name different domains (-described +listed): the guide asks describe-domains for the names list-domain-names returned, so a region's two files hold the same domains\n%s",
+					domainsPath, namesPath, diff)
+			}
+		})
+	}
+}
+
+// TestInventoryGuideCollectionPagesAreAllDescribed pins the fixtures' half of
+// review finding B1: `opensearchserverless list-collections` has no AWS CLI
+// paginator, so its command writes one JSON value per page into the collections
+// file and asks batch-get-collection for the IDs of every page. A collection a
+// later page names without an entry in the batch-get-collection output is a
+// collection the program never lists: the inventory then holds fewer search
+// collections than the region does, and nothing in it says so.
+func TestInventoryGuideCollectionPagesAreAllDescribed(t *testing.T) {
+	t.Parallel()
+
+	recorded, err := filepath.Glob(inventoryGuideDir + "/aws/*/opensearchserverless-collections.json")
+	if err != nil {
+		t.Fatalf("glob the recorded list-collections output: %v", err)
+	}
+
+	if len(recorded) == 0 {
+		t.Fatalf("%s/aws/*/opensearchserverless-collections.json matched no recorded output; the fixtures are missing", inventoryGuideDir)
+	}
+
+	slices.Sort(recorded)
+
+	for _, collectionsPath := range recorded {
+		region := filepath.Base(filepath.Dir(collectionsPath))
+
+		t.Run(region, func(t *testing.T) {
+			t.Parallel()
+
+			// Every page the call's loop wrote, one JSON value after another.
+			listed := map[string]string{}
+
+			for _, page := range decodeJSONValues(t, collectionsPath) {
+				var summaries struct {
+					CollectionSummaries []struct {
+						ID   string `json:"id"`
+						Name string `json:"name"`
+					} `json:"collectionSummaries"`
+				}
+
+				if err := json.Unmarshal(page, &summaries); err != nil {
+					t.Fatalf("%s holds a page that is not a list-collections response: %v", collectionsPath, err)
+				}
+
+				for _, summary := range summaries.CollectionSummaries {
+					listed[summary.ID] = summary.Name
+				}
+			}
+
+			if len(listed) == 0 {
+				t.Fatalf("%s names no collection, so this check read nothing", collectionsPath)
+			}
+
+			batchPath := filepath.Join(filepath.Dir(collectionsPath), "opensearchserverless-batch-collections.json")
+
+			described := map[string]string{}
+
+			for _, page := range decodeJSONValues(t, batchPath) {
+				var details struct {
+					CollectionDetails []struct {
+						Name string `json:"name"`
+						Arn  string `json:"arn"`
+					} `json:"collectionDetails"`
+				}
+
+				if err := json.Unmarshal(page, &details); err != nil {
+					t.Fatalf("%s holds a page that is not a batch-get-collection response: %v", batchPath, err)
+				}
+
+				for _, detail := range details.CollectionDetails {
+					described[detail.Arn[strings.LastIndex(detail.Arn, "/")+1:]] = detail.Name
+				}
+			}
+
+			for _, id := range slices.Sorted(maps.Keys(listed)) {
+				name, ok := described[id]
+				if !ok {
+					t.Errorf("%s lists the collection %q (%s) but %s holds no entry for it: batch-get-collection is asked for the IDs of every page the loop wrote, and a collection without an entry is one the program never lists\n",
+						collectionsPath, name, id, batchPath)
+
+					continue
+				}
+
+				if name != listed[id] {
+					t.Errorf("%s names the collection %s %q and %s names it %q: the two read the same collection\n",
+						collectionsPath, id, listed[id], batchPath, name)
+				}
+			}
+		})
+	}
+}
+
+// decodeJSONValues decodes every JSON value a recorded fixture holds: the guide
+// appends one value per page to the files of a call the AWS CLI does not page
+// itself.
+func decodeJSONValues(t *testing.T, path string) []json.RawMessage {
+	t.Helper()
+
+	document, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+
+	decoder := json.NewDecoder(bytes.NewReader(document))
+
+	var values []json.RawMessage
+
+	for {
+		var value json.RawMessage
+
+		err := decoder.Decode(&value)
+		if errors.Is(err, io.EOF) {
+			break
+		}
+
+		if err != nil {
+			t.Fatalf("%s is not a file of JSON values: %v", path, err)
+		}
+
+		values = append(values, value)
+	}
+
+	if len(values) == 0 {
+		t.Fatalf("%s holds no JSON value, so this check read nothing", path)
+	}
+
+	return values
+}
+
+// decodeFixture decodes the one JSON value a recorded fixture holds into into.
+func decodeFixture(t *testing.T, path string, into any) {
+	t.Helper()
+
+	document, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+
+	if err := json.Unmarshal(document, into); err != nil {
+		t.Fatalf("%s is not JSON: %v", path, err)
 	}
 }
 
@@ -1484,7 +1910,10 @@ func assertNoUserFields(t *testing.T, source string, doc inventoryDoc) {
 // assertAbsent fails when the inventory holds any of the IDs. The nodes of a
 // managed Kubernetes cluster are left out, the cluster stands for them, and so
 // is what the cluster or a group manages for them: an inventory that lists them
-// assesses every node as a machine of its own.
+// assesses every node as a machine of its own. A resource on its way out is left
+// out too: an instance AWS terminated, a domain it is deleting, a collection
+// whose deletion is in progress or whose creation failed, and a cluster AWS is
+// deleting are no infrastructure anyone moves.
 func assertAbsent(t *testing.T, source string, doc inventoryDoc, ids []string) {
 	t.Helper()
 
@@ -1494,7 +1923,7 @@ func assertAbsent(t *testing.T, source string, doc inventoryDoc, ids []string) {
 			continue
 		}
 
-		t.Errorf("%s: the inventory holds %q (%s, %s), want it left out: another recorded resource stands for it",
+		t.Errorf("%s: the inventory holds %q (%s, %s), want it left out: another recorded resource stands for it, or it is no resource to move",
 			source, id, resource.RawType, resource.Category)
 	}
 }
