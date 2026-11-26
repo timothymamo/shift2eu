@@ -1,0 +1,39 @@
+# The fields no projection or fixture of the inventory guide's search and
+# messaging calls may carry (PRD #571, *Only the fields the program reads*): an
+# access policy names the account's principals, a security option its settings,
+# and an endpoint or a bootstrap address a host with the account's name in it.
+#
+# One list, two checks, which used to keep a hand-written copy each and could
+# drift apart silently (review finding on PR #639): test/examples'
+# TestInventoryGuideSearchAndKafkaFixturesCarryOnlyTheFieldsTheProgramReads, which
+# reads every recorded fixture's keys at any depth, and test/site's
+# TestInventoryGuideSearchAndKafkaCallsKeepOnlyTheFieldsTheyRead, which reads the
+# --query of every `aws opensearch`, `aws opensearchserverless` and `aws kafka`
+# command. Both read this file, test/examples through
+# inventoryguidekeys_test.go and test/site through inventory_test.go, by relative
+# path. A field added here is excluded from both, and must be, or one half of the
+# promise holds while the other lets the field through.
+#
+# A record is `key: <field>`, one field the calls must not name, or
+# `prefix: <prefix>`, a field no name may start with (MSK's ZooKeeper connection
+# strings and its broker addresses are one entry each with a prefix, since each
+# has a suffix: BootstrapBrokerStringTls, BootstrapBrokerStringSaslScram, ...).
+# A record line holds its record and nothing else: a comment goes on a line of its
+# own, and no record appears twice. Both readers reject either, since a trailing
+# comment would become part of the field's name and a repeat would hide its first
+# copy.
+# Add a key only with the reason PRD #571 excludes it, as the file's first
+# paragraph gives for these.
+key: AccessPolicies
+key: AdvancedSecurityOptions
+key: CognitoOptions
+key: Endpoint
+key: Endpoints
+key: DomainEndpointOptions
+key: collectionEndpoint
+key: dashboardEndpoint
+key: bootstrapAddress
+key: osProfile
+key: connectivityEndpoints
+prefix: ZookeeperConnectString
+prefix: BootstrapBroker

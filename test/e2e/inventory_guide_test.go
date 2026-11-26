@@ -609,12 +609,14 @@ func inventoryGuides() []inventoryGuideCase {
 				// the cluster, as its nodes do.
 				"k8s-shop-ingress",
 				// The AWS Config row of the MSK cluster is no second resource: the
-				// kafka list-clusters-v2 call lists the cluster, under its name and in
-				// the same region (the Config row's awsRegion is the region of the
-				// cluster's ARN), and the program drops the Config row. Its Config
-				// resource ID is the cluster's ARN, whose last segment is the
-				// cluster's UUID.
-				"00000000-0000-0000-0000-000000000000",
+				// kafka list-clusters-v2 call lists the cluster, and the program drops
+				// the Config row by the type, region and either name or ID the two
+				// share. This row names no resource, so only the ID can drop it: it is
+				// the cluster's ARN, whose last segment is the cluster's UUID, and the
+				// last segment is the ID a row left in would be listed under (review
+				// finding on PR #639: a row with a name is dropped by the name, and
+				// this ID would assert nothing).
+				"00000000-0000-0000-0000-000000000000-1",
 				// A Config row that names no resource, identified by its ID or its ARN
 				// alone, is the same one resource: the rows below are the serverless
 				// cluster's ARN and the vectors collection's ID, and each has to be
@@ -1346,6 +1348,10 @@ func TestInventoryGuidePrograms(t *testing.T) {
 // guide's command never produced, and a name the list holds and the describe
 // output does not is a domain the program never reads: either way the two files
 // describe different regions, and a fixture cannot show a call the guide makes.
+//
+// The describe file holds one JSON value per batch of names the guide asked for
+// (`xargs -r -n 5`), so a region of more than five domains holds several, and
+// every one of them is read here (review finding on PR #639).
 func TestInventoryGuideDomainNamesListEveryDomainOnRecord(t *testing.T) {
 	t.Parallel()
 
@@ -1366,32 +1372,50 @@ func TestInventoryGuideDomainNamesListEveryDomainOnRecord(t *testing.T) {
 		t.Run(region, func(t *testing.T) {
 			t.Parallel()
 
-			var domains struct {
-				DomainStatusList []struct {
-					DomainName string `json:"DomainName"`
-				} `json:"DomainStatusList"`
-			}
+			var pages []describeDomainsPage
 
-			decodeFixture(t, domainsPath, &domains)
+			decodeFixtureValues(t, domainsPath, func(value []byte) error {
+				var page describeDomainsPage
+
+				if err := json.Unmarshal(value, &page); err != nil {
+					return err
+				}
+
+				pages = append(pages, page)
+
+				return nil
+			})
+
+			var described []string
+
+			for _, page := range pages {
+				for _, domain := range page.DomainStatusList {
+					described = append(described, domain.DomainName)
+				}
+			}
 
 			namesPath := filepath.Join(filepath.Dir(domainsPath), "opensearch-domain-names.json")
 
-			var names struct {
-				DomainNames []struct {
-					DomainName string `json:"DomainName"`
-				} `json:"DomainNames"`
-			}
+			var namePages []listDomainNamesPage
 
-			decodeFixture(t, namesPath, &names)
+			decodeFixtureValues(t, namesPath, func(value []byte) error {
+				var page listDomainNamesPage
 
-			described := make([]string, 0, len(domains.DomainStatusList))
-			for _, domain := range domains.DomainStatusList {
-				described = append(described, domain.DomainName)
-			}
+				if err := json.Unmarshal(value, &page); err != nil {
+					return err
+				}
 
-			listed := make([]string, 0, len(names.DomainNames))
-			for _, name := range names.DomainNames {
-				listed = append(listed, name.DomainName)
+				namePages = append(namePages, page)
+
+				return nil
+			})
+
+			var listed []string
+
+			for _, page := range namePages {
+				for _, name := range page.DomainNames {
+					listed = append(listed, name.DomainName)
+				}
 			}
 
 			slices.Sort(described)
@@ -1532,17 +1556,36 @@ func decodeJSONValues(t *testing.T, path string) []json.RawMessage {
 	return values
 }
 
-// decodeFixture decodes the one JSON value a recorded fixture holds into into.
-func decodeFixture(t *testing.T, path string, into any) {
+// describeDomainsPage is one JSON value of a recorded opensearch
+// describe-domains output. The guide asks the call for 5 domain names at a time
+// (`xargs -r -n 5`) and redirects every batch to the same file, so a region of
+// more than 5 domains holds several values (review finding on PR #639).
+type describeDomainsPage struct {
+	DomainStatusList []struct {
+		DomainName string `json:"DomainName"`
+	} `json:"DomainStatusList"`
+}
+
+// listDomainNamesPage is one JSON value of a recorded opensearch
+// list-domain-names output.
+type listDomainNamesPage struct {
+	DomainNames []struct {
+		DomainName string `json:"DomainName"`
+	} `json:"DomainNames"`
+}
+
+// decodeFixtureValues decodes every JSON value a recorded fixture holds, calling
+// decode on each value's bytes in the file's order: the guide redirects a call it
+// runs once per batch (`opensearch describe-domains` under `xargs -r -n 5`) to one
+// file, which then holds as many values as batches. Decoding only the first would
+// leave the later batches out of every check built on it.
+func decodeFixtureValues(t *testing.T, path string, decode func(value []byte) error) {
 	t.Helper()
 
-	document, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read %s: %v", path, err)
-	}
-
-	if err := json.Unmarshal(document, into); err != nil {
-		t.Fatalf("%s is not JSON: %v", path, err)
+	for _, value := range decodeJSONValues(t, path) {
+		if err := decode(value); err != nil {
+			t.Fatalf("%s holds a value that is not the response of the call it records: %v", path, err)
+		}
 	}
 }
 
