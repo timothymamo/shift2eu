@@ -72,15 +72,21 @@
 //     bytes it read and checked. ci/auditrun holds the directory's paths
 //     before the steps: it refuses a file command that is unset, outside the
 //     $GITHUB_ENV file's directory (FileCommandDir), relative or not already
-//     clean (IsCleanAbsolute). It also records the five file commands before
-//     the steps (RecordFileCommands: each one's identity, Lstat and an
-//     os.SameFile-checked descriptor, and the sha256 of its content, capped
-//     as the digest is), and after them FileCommands.Repair leaves every one
-//     the steps changed - another entry at its path, or content other than
-//     the recorded one followed by what the run appended (Appended) - as an
-//     empty regular file: truncated through its descriptor, or replaced by an
-//     empty file renamed over the path, never following a link, each repair
-//     verified with an Lstat (issues #615, #614).
+//     clean (IsCleanAbsolute), and one that exists but is no regular file - a
+//     directory, a link, a FIFO - (CheckFileCommands, Lstat alone, before it
+//     opens the summary with OpenAppend, which follows no link). It also
+//     records the five file commands before the steps (RecordFileCommands:
+//     each one's identity, Lstat and an os.SameFile-checked descriptor, and
+//     the sha256 of its content, capped as the digest is; an existing entry
+//     it cannot open and read fails the record), and after them
+//     FileCommands.Repair leaves every one the steps changed - another entry
+//     at its path, or content other than the recorded one followed by what
+//     the run appended (Appended) - as an empty regular file: truncated
+//     through its descriptor, or replaced by an empty file renamed over the
+//     path, an empty directory there removed first, never following a link,
+//     each repair verified with an Lstat. It tries every changed file
+//     command, whatever failed before it, and joins one RepairError per
+//     failure (issues #615, #614).
 //
 // Run takes the steps and prints one line: "finished", a constant class, the
 // preflight's Verdict, whose text is made of constants alone, or, when the

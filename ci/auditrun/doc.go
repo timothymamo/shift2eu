@@ -46,11 +46,22 @@
 // truncated in place, or replaced by an empty file renamed over its path, so
 // no link is followed. Any repair names the emptied file commands on stderr; a
 // run that had passed then fails with the audit's exit, 1, and its result
-// file is removed; a run that had already failed keeps its exit code. A repair
-// that itself fails says the posted summary or the job's environment may be
-// hostile, and fails the run. A file command that is no regular file the run
-// can open is noted on stderr, checked by its identity alone and, while
-// nothing changed it, left as it is.
+// file is removed; a run that had already failed keeps its exit code. The
+// repair tries every changed file command, whatever failed before it, so one
+// it cannot empty (a non-empty directory over its path) never leaves another's
+// bytes for the runner; each one it could not empty gets its own line naming
+// it and saying the posted summary or the job's environment may be hostile,
+// and fails the run.
+//
+// A file command that exists before the run but is no regular file - a
+// directory, a link, a FIFO - is refused with exit 2 before any step
+// (audit.CheckFileCommands, Lstat alone, before the summary is opened; the
+// auditor's round-4 L1): the run could not record its content. The runner
+// lays only regular files down, so a real step loses nothing; a path absent
+// before the run is allowed and recorded as absent. The summary is opened
+// without following a link (audit.OpenAppend). The API key's refusal, which
+// comes first, writes its line to the summary only when OpenAppend takes it,
+// and to stdout always.
 //
 // It is no part of the product: a main package, which Go refuses to import,
 // held by the strict depguard rule audit-main to the standard packages it

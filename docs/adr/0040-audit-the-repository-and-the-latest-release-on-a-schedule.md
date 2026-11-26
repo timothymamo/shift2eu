@@ -2508,9 +2508,28 @@ arguments; git's read-only subcommands), and changes between versions. The deny 
     no temporary file is left; the path is then `Lstat`ed again to verify the repair. Any repair names
     the emptied file commands on stderr, fails a passing run with exit 1 and removes its result file; a
     run that already failed keeps its exit code. A repair that itself fails says on stderr that the
-    posted summary or the job's environment may be hostile, and fails the run. A file command that is no
-    regular file the run can open (a directory at the summary's path, say) is noted on stderr, checked by
-    its identity alone and, while nothing changed it, left alone: the run still passes. **This repair,
+    posted summary or the job's environment may be hostile, and fails the run. *Amended 2026-11-26
+    (round 4, the reviewer's and the auditor's should-fix):* the repair **tries every changed file
+    command**, whatever failed before it, and joins the failures (`errors.Join`): it first stopped at
+    the first file command it could not empty, so a step that put a non-empty directory over
+    `$GITHUB_ENV` kept its `$GITHUB_PATH` line for `actions/checkout`'s post step, which holds
+    `ACTIONS_RUNTIME_TOKEN`. Each emptied file command gets its note, and each one the run could not
+    empty its own "could not be emptied ... may be hostile" line naming it; an empty directory over a
+    path is removed before the rename, a non-empty one is left as it is. A write of the run's own
+    summary line that failed partway or was short leaves bytes the record never got, so it counts as a
+    change and the summary is emptied (fail closed), its note naming the steps. *Amended 2026-11-26
+    (round 4, the auditor's L1):* a file command that **exists before the run but is no regular file**
+    (a directory, a symlink, a FIFO) **is refused with exit 2 before any step**: every path is
+    `Lstat`ed first (`CheckFileCommands`), before the summary is opened, and the summary is opened
+    without following a link (`OpenAppend`: `O_EXCL` to create one, an `os.SameFile`-checked
+    descriptor for an existing regular file; the `os` package has no `O_NOFOLLOW`). It replaces the
+    first rule, that such a file command was noted, checked by its identity alone and left as it was:
+    the run opened the summary with `O_APPEND|O_CREATE`, which follows a link, and could not compare an
+    entry whose content it never recorded. It also supersedes, for the five file commands, "Links found
+    before the run are trusted as they stand" above. The runner lays down only regular files, so a real
+    step loses nothing; a path absent before the run stays allowed, recorded as absent. **Residual:** a
+    process that outlives the CLI's process tree could still write to a file command after the repair;
+    the `actions/checkout` replacement below stays the follow-up for that. **This repair,
     not the digest, is what keeps a step's change from reaching the runner, the post steps and the public
     summary**: the runner applies `$GITHUB_ENV` and `$GITHUB_PATH` after a failed step too, and posts the
     summary by its path.
