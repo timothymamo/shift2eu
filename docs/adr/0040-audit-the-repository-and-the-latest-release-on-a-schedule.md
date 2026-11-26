@@ -1319,8 +1319,10 @@ test of ours (Decision 3's reason).
   install step and the one pin (below). Its inputs from the step's environment, read through one
   `os.LookupEnv` passed to the library as the reviewer's `SettingsFromEnv` does: `CLAUDE_CODE_OAUTH_TOKEN`,
   `SHIFT2EU_AUDIT_CANARY` (64 lower-case hex characters), `GITHUB_ENV` (its path, for probe 6) and
-  `GITHUB_STEP_SUMMARY`. It reads no other variable, and refuses to run when `ANTHROPIC_API_KEY` is set,
-  as the reviewer does.
+  `GITHUB_STEP_SUMMARY`, and (*amended 2026-11-26*) the paths of `GITHUB_PATH`, `GITHUB_OUTPUT` and
+  `GITHUB_STATE`, never their content, which must all be in the `GITHUB_ENV` file's directory (see "The
+  `$GITHUB_ENV` digest spans both launches"). It reads no other variable, and refuses to run when
+  `ANTHROPIC_API_KEY` is set, as the reviewer does.
 - **In order**, each step failing the run before the next:
   1. **Managed settings.** It fails if any of these exists, checked with `Lstat`, so a symbolic link
      counts: `/etc/claude-code` (the directory itself, which holds `managed-settings.json`,
@@ -2458,15 +2460,35 @@ arguments; git's read-only subcommands), and changes between versions. The deny 
   its bytes, read from the descriptor of the entry `Lstat` saw (`os.SameFile`); a link counts as its own
   target's text, so a file replaced by a link to the same bytes is a change. The directory is capped at
   64 entries and 4 MiB of content; a directory over either fails closed before the launch, never
-  digested in part. The audit's digest leaves out exactly one path, the step summary's
-  (`$GITHUB_STEP_SUMMARY`, when set), which the launcher writes itself and which may not exist before
-  the run; the preflight's digest and the observer's leave out nothing, since nothing writes the summary
-  while the preflight runs (`Run` prints its one line after the last step). Any change, a created,
+  digested in part, with an error naming the cap. Mode bits and link counts are not hashed: the runner
+  reads only a file command's bytes.
+  *Amended 2026-11-26 (review of the L1 fix):* no digest leaves anything out, the step summary
+  included. `auditrun` creates the summary before `audit.Run` and writes the run's line only after the
+  steps return, so nothing legitimate writes it between the two digests; the earlier exclusion let a
+  link swapped in at the summary's path pass unseen, and the runner would have posted the link's target
+  as the public job summary. `auditrun` also reads the paths of `$GITHUB_PATH`, `$GITHUB_OUTPUT` and
+  `$GITHUB_STATE` (never their content) and refuses with the usage exit, before any step, a step where
+  one of them is unset, or where one of them or the step summary (when set) is not in the `$GITHUB_ENV`
+  file's own directory (`filepath.Dir(filepath.Clean(p))`, the library's `FileCommandDir`): a runner that
+  put a file command elsewhere would otherwise quietly fall outside the digest. Any change, a created,
   removed, retyped or rewritten entry, fails the run whatever the run did, and is the failure reported
-  over a failed launch. The caps assume the runner keeps few file-command files per job; a runner that
-  keeps every earlier step's files there could pass 64 in a long job, and the run would then fail closed.
-  The steps after the model session do not rely on the digest alone: each runs `age` by its absolute
-  path (see "The encryption tool is `age`").
+  over a failed launch.
+  **The cap of 64 entries was not checked on a real runner.** To our understanding actions/runner
+  removes the previous step's file-command files, which leaves about 5 or 6 entries in the directory; a
+  runner that kept every earlier step's files there could pass 64 in a long job, and the run would then
+  fail closed. Record the entry count from the first real run.
+  **A detected change fails the step but is not undone.** The runner still applies the step's file
+  commands after a failed step, and post steps run anyway: the model job's `actions/checkout` post step
+  runs `git` through `PATH`, with the job's token and the network open, after the model step.
+  **The digest is the control.** The steps after the model session also run `age` by its absolute path
+  (see "The encryption tool is `age`"), but that is an extra layer on top of the digest, not an
+  independent one: the step's own `bash` is resolved through `PATH`, and a `BASH_ENV` line in
+  `$GITHUB_ENV` is sourced by it.
+- **Follow-up, not done here (file commands):** replace `actions/checkout` in the model job with a `git`
+  fetch by absolute path, so that no action with a `post:` runs after the model step, held by
+  `check.AuditWorkflow`. And a process that outlives the CLI's process tree (one detached from a
+  built-in read-only command that runs without the wrapper) could write to the directory after the
+  after-digest; this has not been shown to be possible.
 - **Follow-up, not done here:** recheck the scrub's mounts with a real bwrap on the x64 runner, the
   `.claude` `denyWrite` and the empty directory bound onto `.git` included; and a preflight probe that
   holds the class's boundary, a bare `cat` of a state path and a bare `>` into `/tmp`, both expected
