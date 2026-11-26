@@ -2533,7 +2533,14 @@ arguments; git's read-only subcommands), and changes between versions. The deny 
     is also truncated by an in-place repair). So **no open of the file-command directory can hang on a
     swapped-in FIFO.** An entry the run cannot open `O_RDWR`, a file command it may read but not write,
     is refused: `RecordFileCommands` fails and the step exits 2 before any step, and the digest fails
-    closed. The round-4 refusal replaces the first rule, that such a file command was noted, checked by
+    closed. **Residual, a symlink swapped in after the `Lstat`:** the `O_RDWR` opens in `openRegular`
+    (`filecommand.go`) and `readEntry` (`system.go`) still follow a symlink swapped in between the
+    `Lstat` and the open, as the `O_RDONLY` open did before this change. `os.SameFile` refuses such a
+    link before anything is read or written, so the only possible effect is a side effect of opening a
+    device the runner's user may open read-write, such as a tty opened without `O_NOCTTY`. The race
+    needs a process that outlives the CLI, the residual this ADR already accepts (below). The remedy,
+    if `syscall` is ever admitted to the library's allow list, is `O_NOFOLLOW|O_NONBLOCK|O_NOCTTY`.
+    The round-4 refusal replaces the first rule, that such a file command was noted, checked by
     its identity alone and left as it was: the run opened the summary with `O_APPEND|O_CREATE`, which
     follows a link, and could not compare an entry whose content it never recorded. It also supersedes,
     for the five file commands, "Links found before the run are trusted as they stand" above. The

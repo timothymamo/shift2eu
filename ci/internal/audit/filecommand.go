@@ -150,7 +150,8 @@ func OpenAppend(path string, mode fs.FileMode) (*os.File, error) {
 // exist is recorded as absent. One that exists but is no regular file, or that
 // cannot be opened O_RDWR or read, fails the record (fail closed, the auditor's
 // round-4 L1, issues #615, #614): the run could not tell after the steps
-// whether they changed it, nor empty it in place. On an error it closes what it opened and returns no FileCommands.
+// whether they changed it, nor empty it in place. On an error it closes what
+// it opened and returns no FileCommands.
 func RecordFileCommands(paths []FileCommandPath) (*FileCommands, error) {
 	commands := &FileCommands{commands: make([]*fileCommand, 0, len(paths))}
 
