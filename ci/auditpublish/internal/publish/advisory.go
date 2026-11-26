@@ -1,7 +1,6 @@
 package publish
 
 import (
-	"fmt"
 	"regexp"
 	"strconv"
 	"strings"
@@ -100,7 +99,7 @@ func PrivateFindings(r Result, key FingerprintKey) ([]PrivateFinding, error) {
 		}
 
 		if seen[fp] {
-			return nil, fmt.Errorf("findings: two private findings with one fingerprint: %w", ErrResultInvalid)
+			return nil, refusal(CheckFingerprintTwice, "findings: two private findings with one fingerprint")
 		}
 
 		seen[fp] = true
@@ -124,8 +123,9 @@ func PrivateFindings(r Result, key FingerprintKey) ([]PrivateFinding, error) {
 // regressed>" and the run's URL. The evidence goes into an advisory only,
 // never into a report or an issue.
 //
-// It refuses (ErrConfig) a Run NewRun would refuse, a finding Place does not
-// put in an advisory, a fingerprint that is no fingerprint, and the status
+// It refuses (ErrConfig) a Run NewRun would refuse, and (ErrResultInvalid,
+// the result's own content, issue #640) a finding Place does not put in an
+// advisory, a fingerprint that is no fingerprint, and the status
 // AdvisoryNotReproduced or one that is none of the four (SetAdvisoryStatus
 // marks a draft not reproduced).
 func RenderAdvisory(f PrivateFinding, status AdvisoryStatus, run Run) (AdvisoryText, error) {
@@ -135,16 +135,16 @@ func RenderAdvisory(f PrivateFinding, status AdvisoryStatus, run Run) (AdvisoryT
 
 	placement := Place(f.Finding)
 	if placement != PlacementAdvisory && placement != PlacementAdvisoryUnconfirmed && placement != PlacementAdvisoryHistorySecret {
-		return AdvisoryText{}, fmt.Errorf("advisory: the finding is not private: %w", ErrConfig)
+		return AdvisoryText{}, refusal(CheckAdvisoryNotPrivate, "advisory: the finding is not private")
 	}
 
 	if !fingerprintPattern.MatchString(string(f.Fingerprint)) {
-		return AdvisoryText{}, fmt.Errorf("advisory: the fingerprint is no fingerprint: %w", ErrConfig)
+		return AdvisoryText{}, refusal(CheckAdvisoryFingerprint, "advisory: the fingerprint is no fingerprint")
 	}
 
 	word, ok := statusWords[status]
 	if !ok || status == AdvisoryNotReproduced {
-		return AdvisoryText{}, fmt.Errorf("advisory: the status is not new, open or regressed: %w", ErrConfig)
+		return AdvisoryText{}, refusal(CheckAdvisoryRenderStatus, "advisory: the status is not new, open or regressed")
 	}
 
 	severity := vocabularyWord(f.Finding.Severity, severityRank)
@@ -287,17 +287,17 @@ func ParseAdvisoryStatus(description string) (AdvisoryStatus, bool) {
 // SetAdvisoryStatus returns description with its last status line replaced by
 // "Audit status: <status>": the text of a draft whose finding this run did not
 // reproduce, which the run has no finding to render afresh from. It refuses
-// (ErrConfig) a status that is none of the four, and a description with no
+// (ErrResultInvalid) a status that is none of the four, and a description with no
 // status line (ParseAdvisoryStatus reports false).
 func SetAdvisoryStatus(description string, status AdvisoryStatus) (string, error) {
 	word, known := statusWords[status]
 	if !known {
-		return "", fmt.Errorf("advisory: the status is none of the four: %w", ErrConfig)
+		return "", refusal(CheckAdvisorySetStatus, "advisory: the status is none of the four")
 	}
 
 	start, end, _, ok := lastStatusLine(description)
 	if !ok {
-		return "", fmt.Errorf("advisory: the description holds no status line: %w", ErrConfig)
+		return "", refusal(CheckAdvisoryStatusLine, "advisory: the description holds no status line")
 	}
 
 	return description[:start] + statusPrefix + word + description[end:], nil

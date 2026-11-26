@@ -100,7 +100,7 @@ var (
 // ErrConfig.
 func ParseResult(data []byte, commit string) (Result, error) {
 	if !commitPattern.MatchString(commit) {
-		return Result{}, fmt.Errorf("commit argument: not 40 lowercase hex characters: %w", ErrConfig)
+		return Result{}, refusal(CheckCommitArgument, "commit argument: not 40 lowercase hex characters")
 	}
 
 	if len(data) > MaxResultBytes {
@@ -130,7 +130,7 @@ func ParseResult(data []byte, commit string) (Result, error) {
 
 // invalid is a refusal of the field at path for the rule it broke.
 func invalid(path, rule string) error {
-	return fmt.Errorf("%s: %s: %w", path, rule, ErrResultInvalid)
+	return Refuse(CheckResultSchema, fmt.Errorf("%s: %s: %w", path, rule, ErrResultInvalid))
 }
 
 // fields returns an object's members by name, and refuses a value that is no

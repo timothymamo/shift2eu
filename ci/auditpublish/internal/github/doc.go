@@ -20,6 +20,12 @@
 // status means. Only a gh that fails without a status line, or whose output is
 // over the 8 MiB cap, is publish.ErrGitHub.
 //
+// Every refusal it returns is marked with the check that failed, one of the
+// core's fixed list (publish.Refuse): GitHub's failure by the call it failed
+// ("listing the audit issues", "writing the report's tree"), a refused scan by
+// the text, a configuration by the input, so the run's one line names it in
+// fixed words (issue #640).
+//
 // It checks the run's artifacts before a job downloads them (CheckArtifacts),
 // refusing an answer with anything after the one listing, and returns the
 // artifact the job downloads with the listing's ID and digest, which

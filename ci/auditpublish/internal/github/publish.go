@@ -3,7 +3,6 @@ package github
 import (
 	"context"
 	"errors"
-	"fmt"
 
 	"github.com/timothymamo/shift2eu/ci/auditpublish/internal/publish"
 )
@@ -41,6 +40,9 @@ type Published struct {
 type scanned struct {
 	text   string
 	fields []string
+	// check names the text a refused scan names: the report (its body, pull
+	// request and commit message) or an issue.
+	check publish.FailedCheck
 }
 
 // rendering is the report and the templates of one private state.
@@ -88,11 +90,11 @@ func Publish(ctx context.Context, cfg PublishConfig) (Published, error) {
 
 	switch {
 	case c == nil || c.scope.Commit == "":
-		return Published{}, fmt.Errorf("publish: no publish client: %w", publish.ErrConfig)
+		return Published{}, refuse(publish.CheckNoClient, "publish: no publish client", publish.ErrConfig)
 	case cfg.Gitleaks == nil:
-		return Published{}, fmt.Errorf("publish: no scanner: %w", publish.ErrConfig)
+		return Published{}, refuse(publish.CheckNoScanner, "publish: no scanner", publish.ErrConfig)
 	case cfg.Run.Repository != c.scope.Repository || cfg.Run.ID != c.scope.RunID || cfg.Run.Date != c.scope.Date:
-		return Published{}, fmt.Errorf("publish: the run is not the client's: %w", publish.ErrConfig)
+		return Published{}, refuse(publish.CheckRunNotClients, "publish: the run is not the client's", publish.ErrConfig)
 	}
 
 	result, err := LoadResult(cfg.ResultPath, c.scope.Commit)
@@ -212,10 +214,10 @@ func scanAll(ctx context.Context, cfg PublishConfig, variants []rendering, issue
 
 	for _, v := range variants {
 		texts = append(texts,
-			scanned{text: v.report.Body, fields: v.report.ModelFields},
-			scanned{text: v.templates.PRTitle},
-			scanned{text: v.templates.PRBody},
-			scanned{text: v.templates.CommitMessage},
+			scanned{text: v.report.Body, fields: v.report.ModelFields, check: publish.CheckScanReport},
+			scanned{text: v.templates.PRTitle, check: publish.CheckScanReport},
+			scanned{text: v.templates.PRBody, check: publish.CheckScanReport},
+			scanned{text: v.templates.CommitMessage, check: publish.CheckScanReport},
 		)
 	}
 
@@ -224,31 +226,36 @@ func scanAll(ctx context.Context, cfg PublishConfig, variants []rendering, issue
 	fields := append([]string(nil), variants[0].report.ModelFields...)
 
 	for _, issue := range issues {
-		texts = append(texts, scanned{text: issue.Title}, scanned{text: issue.Body, fields: issue.ModelFields})
+		texts = append(texts,
+			scanned{text: issue.Title, check: publish.CheckScanIssue},
+			scanned{text: issue.Body, fields: issue.ModelFields, check: publish.CheckScanIssue},
+		)
 		fields = append(fields, issue.ModelFields...)
 	}
 
 	for _, s := range texts {
 		if err := publish.ScanPublic(s.text, s.fields, cfg.Key); err != nil {
-			return err
+			return publish.Refuse(s.check, err)
 		}
 
 		if err := cfg.Gitleaks.Scan(ctx, s.text); err != nil {
-			return err
+			return publish.Refuse(s.check, err)
 		}
 	}
 
 	for _, w := range plan.writes {
 		for _, text := range []string{w.Text.Summary, w.Text.Description} {
 			if err := publish.ScanAdvisory(text, cfg.Key); err != nil {
-				return err
+				return publish.Refuse(publish.CheckScanAdvisory, err)
 			}
 
 			if err := cfg.Gitleaks.Scan(ctx, text); err != nil {
-				return err
+				return publish.Refuse(publish.CheckScanAdvisory, err)
 			}
 		}
 	}
 
-	return CheckCommitRuns(ctx, cfg.Client, fields)
+	// A refused commit-run check names the model fields; GitHub's failure of
+	// a lookup keeps the lookup's own check.
+	return publish.Refuse(publish.CheckScanModelFields, CheckCommitRuns(ctx, cfg.Client, fields))
 }

@@ -85,14 +85,21 @@ type artifactListing struct {
 func CheckArtifacts(ctx context.Context, c *Client, job Job) (Artifact, error) {
 	want, download, ok := job.expected()
 	if !ok {
-		return Artifact{}, fmt.Errorf("artifact check: an unknown job: %w", publish.ErrConfig)
+		return Artifact{}, refuse(publish.CheckJob, "artifact check: an unknown job", publish.ErrConfig)
 	}
 
 	if c == nil {
-		return Artifact{}, fmt.Errorf("artifact check: no client: %w", publish.ErrConfig)
+		return Artifact{}, refuse(publish.CheckNoClient, "artifact check: no client", publish.ErrConfig)
 	}
 
-	return checkListing(ctx, c, want, download)
+	artifact, err := checkListing(ctx, c, want, download)
+	if err != nil {
+		// GitHub's failure of the listing names the listing; any other class
+		// names its own check.
+		return Artifact{}, publish.Refuse(publish.CheckListArtifacts, err)
+	}
+
+	return artifact, nil
 }
 
 // checkListing is CheckArtifacts' call and check, for the job's names and the
@@ -178,19 +185,19 @@ func checkListing(ctx context.Context, c *Client, want []string, download string
 // of listing the run's artifacts again (review round 1 of PR 5b, finding A4).
 func WriteArtifact(dir string, a Artifact) error {
 	if dir == "" || !filepath.IsAbs(dir) {
-		return fmt.Errorf("artifact file: the directory is not absolute: %w", publish.ErrConfig)
+		return refuse(publish.CheckArtifactDir, "artifact file: the directory is not absolute", publish.ErrConfig)
 	}
 
 	body, err := json.Marshal(a)
 	if err != nil {
-		return fmt.Errorf("artifact file: %w", publish.ErrConfig)
+		return refuse(publish.CheckArtifactFile, "artifact file", publish.ErrConfig)
 	}
 
 	path := filepath.Join(dir, ArtifactFile)
 
 	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, artifactFileMode) //nolint:gosec // G304: the fixed file name under the step's own -tmp directory
 	if err != nil {
-		return fmt.Errorf("artifact file: cannot create it: %w", publish.ErrConfig)
+		return refuse(publish.CheckArtifactFile, "artifact file: cannot create it", publish.ErrConfig)
 	}
 
 	return writeArtifact(path, file, append(body, '\n'))
@@ -206,7 +213,7 @@ func writeArtifact(path string, file io.WriteCloser, body []byte) error {
 	if writeErr != nil || closeErr != nil {
 		_ = os.Remove(path)
 
-		return fmt.Errorf("artifact file: cannot write it: %w", publish.ErrConfig)
+		return refuse(publish.CheckArtifactFile, "artifact file: cannot write it", publish.ErrConfig)
 	}
 
 	return nil

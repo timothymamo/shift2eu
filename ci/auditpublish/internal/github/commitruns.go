@@ -29,7 +29,7 @@ const commitRunLength = 40
 // up once, in the order of its first appearance.
 func CheckCommitRuns(ctx context.Context, c *Client, fields []string) error {
 	if c == nil {
-		return fmt.Errorf("commit runs: no client: %w", publish.ErrConfig)
+		return refuse(publish.CheckNoClient, "commit runs: no client", publish.ErrConfig)
 	}
 
 	var runs []string
@@ -49,14 +49,14 @@ func CheckCommitRuns(ctx context.Context, c *Client, fields []string) error {
 	for _, run := range runs {
 		resp, err := read(ctx, c, "repos/"+c.scope.Repository+"/git/commits/"+run)
 		if err != nil {
-			return fmt.Errorf("commit runs: %w", err)
+			return publish.Refuse(publish.CheckCommitRuns, fmt.Errorf("commit runs: %w", err))
 		}
 
 		switch {
 		case resp.Status == 404:
 			return fmt.Errorf("commit runs: a 40-hex run that is no commit: %w", publish.ErrScanRefused)
 		case resp.Status/100 != 2:
-			return fmt.Errorf("commit runs: the lookup's status is not 2xx: %w", publish.ErrGitHub)
+			return refuse(publish.CheckCommitRuns, "commit runs: the lookup's status is not 2xx", publish.ErrGitHub)
 		}
 
 		var commit struct {

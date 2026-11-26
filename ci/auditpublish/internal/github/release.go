@@ -56,39 +56,39 @@ func NewImageClient(cfg ClientConfig) (*Client, error) {
 // no release and a failed call wrap publish.ErrGitHub.
 func CheckRelease(ctx context.Context, c *Client, tag string) error {
 	if c == nil {
-		return fmt.Errorf("release check: no client: %w", publish.ErrConfig)
+		return refuse(publish.CheckNoClient, "release check: no client", publish.ErrConfig)
 	}
 
 	if !releaseTag.MatchString(tag) {
-		return fmt.Errorf("release check: the tag is no release tag: %w", publish.ErrResultInvalid)
+		return refuse(publish.CheckReleaseTag, "release check: the tag is no release tag", publish.ErrResultInvalid)
 	}
 
-	got, err := releaseTagAt(ctx, c, "releases/tags/"+tag)
+	got, err := releaseTagAt(ctx, c, "releases/tags/"+tag, publish.CheckNoTagRelease)
 	if err != nil {
-		return fmt.Errorf("release check: the tag's release: %w", err)
+		return publish.Refuse(publish.CheckReadTagRelease, fmt.Errorf("release check: the tag's release: %w", err))
 	}
 
 	if got != tag {
-		return fmt.Errorf("release check: the answer is not the tag's release: %w", publish.ErrGitHub)
+		return refuse(publish.CheckReadTagRelease, "release check: the answer is not the tag's release", publish.ErrGitHub)
 	}
 
-	latest, err := releaseTagAt(ctx, c, "releases/latest")
+	latest, err := releaseTagAt(ctx, c, "releases/latest", publish.CheckNoLatestRelease)
 	if err != nil {
-		return fmt.Errorf("release check: the latest release: %w", err)
+		return publish.Refuse(publish.CheckReadLatestRelease, fmt.Errorf("release check: the latest release: %w", err))
 	}
 
 	if latest != tag {
-		return fmt.Errorf("release check: the tag is not the latest release's: %w", publish.ErrResultInvalid)
+		return refuse(publish.CheckNotLatestRelease, "release check: the tag is not the latest release's", publish.ErrResultInvalid)
 	}
 
 	return nil
 }
 
 // releaseTagAt reads one release, R/<path>, and returns its tag_name. A 404
-// wraps publish.ErrResultInvalid; any other non-2xx status, an answer without
-// a tag_name string and a failed call wrap publish.ErrGitHub. No error holds
-// any of the answer.
-func releaseTagAt(ctx context.Context, c *Client, path string) (string, error) {
+// wraps publish.ErrResultInvalid, marked with missing; any other non-2xx
+// status, an answer without a tag_name string and a failed call wrap
+// publish.ErrGitHub. No error holds any of the answer.
+func releaseTagAt(ctx context.Context, c *Client, path string, missing publish.FailedCheck) (string, error) {
 	resp, err := c.Call(ctx, Request{Method: "GET", Endpoint: "repos/" + c.scope.Repository + "/" + path})
 	if err != nil {
 		return "", err
@@ -96,7 +96,7 @@ func releaseTagAt(ctx context.Context, c *Client, path string) (string, error) {
 
 	switch {
 	case resp.Status == 404:
-		return "", fmt.Errorf("no such release: %w", publish.ErrResultInvalid)
+		return "", refuse(missing, "no such release", publish.ErrResultInvalid)
 	case resp.Status/100 != 2:
 		return "", fmt.Errorf("the lookup's status is not 2xx: %w", publish.ErrGitHub)
 	}
@@ -178,28 +178,28 @@ func CheckImageDigest(ctx context.Context, c *Client, tag, digest string) error 
 	}
 
 	if c == nil {
-		return fmt.Errorf("image check: no client: %w", publish.ErrConfig)
+		return refuse(publish.CheckNoClient, "image check: no client", publish.ErrConfig)
 	}
 
 	if !imageDigest.MatchString(digest) || !releaseTag.MatchString(tag) {
-		return fmt.Errorf("image check: the digest or the tag is outside its pattern: %w", publish.ErrResultInvalid)
+		return refuse(publish.CheckImageDigest, "image check: the digest or the tag is outside its pattern", publish.ErrResultInvalid)
 	}
 
 	resp, err := c.Call(ctx, Request{Method: "GET", Endpoint: "repos/" + c.scope.Repository + "/attestations/" + digest + "?per_page=100"})
 	if err != nil {
-		return fmt.Errorf("image check: %w", err)
+		return publish.Refuse(publish.CheckListAttestations, fmt.Errorf("image check: %w", err))
 	}
 
 	switch {
 	case resp.Status == 404:
-		return fmt.Errorf("image check: the digest has no attestation: %w", publish.ErrResultInvalid)
+		return refuse(publish.CheckNoAttestation, "image check: the digest has no attestation", publish.ErrResultInvalid)
 	case resp.Status/100 != 2:
-		return fmt.Errorf("image check: the listing's status is not 2xx: %w", publish.ErrGitHub)
+		return refuse(publish.CheckListAttestations, "image check: the listing's status is not 2xx", publish.ErrGitHub)
 	}
 
 	var listing attestationListing
 	if json.Unmarshal(resp.Body, &listing) != nil || listing.Attestations == nil {
-		return fmt.Errorf("image check: the answer is not the attestation listing: %w", publish.ErrGitHub)
+		return refuse(publish.CheckListAttestations, "image check: the answer is not the attestation listing", publish.ErrGitHub)
 	}
 
 	hexDigest := strings.TrimPrefix(digest, "sha256:")
@@ -221,7 +221,7 @@ func CheckImageDigest(ctx context.Context, c *Client, tag, digest string) error 
 		}
 	}
 
-	return fmt.Errorf("image check: no provenance attestation of the release names the digest: %w", publish.ErrResultInvalid)
+	return refuse(publish.CheckNoProvenance, "image check: no provenance attestation of the release names the digest", publish.ErrResultInvalid)
 }
 
 // provenanceMatches reports whether payload is an in-toto v1 statement of

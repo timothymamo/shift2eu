@@ -97,9 +97,22 @@ type advisoryEntry struct {
 // writes repositories/<id>/...): every page's endpoint is the fixed one.
 func ListAuditAdvisories(ctx context.Context, c *Client) ([]Advisory, error) {
 	if c == nil {
-		return nil, fmt.Errorf("advisory listing: no client: %w", publish.ErrConfig)
+		return nil, refuse(publish.CheckNoClient, "advisory listing: no client", publish.ErrConfig)
 	}
 
+	advisories, err := listAuditAdvisories(ctx, c)
+	if err != nil {
+		// Every failure of the listing, its pages, cursors and entries, is
+		// named as the listing.
+		return nil, publish.Refuse(publish.CheckListAdvisories, err)
+	}
+
+	return advisories, nil
+}
+
+// listAuditAdvisories is ListAuditAdvisories' pages, on a client that is not
+// nil.
+func listAuditAdvisories(ctx context.Context, c *Client) ([]Advisory, error) {
 	base := "repos/" + c.scope.Repository + "/security-advisories?per_page=100"
 	endpoint := base
 
@@ -443,7 +456,7 @@ func planFinding(f publish.PrivateFinding, drafts map[publish.Fingerprint]Adviso
 // is never read.
 func FileAdvisories(ctx context.Context, c *Client, plan AdvisoryPlan) error {
 	if c == nil {
-		return fmt.Errorf("advisories: no client: %w", publish.ErrConfig)
+		return refuse(publish.CheckNoClient, "advisories: no client", publish.ErrConfig)
 	}
 
 	endpoint := "repos/" + c.scope.Repository + "/security-advisories"
@@ -461,13 +474,13 @@ func FileAdvisories(ctx context.Context, c *Client, plan AdvisoryPlan) error {
 					return fmt.Errorf("advisories: GitHub refused the creation: %w", publish.ErrPrivateNotFiled)
 				}
 
-				return fmt.Errorf("advisories: the create: %w", err)
+				return publish.Refuse(publish.CheckCreateAdvisory, fmt.Errorf("advisories: the create: %w", err))
 			}
 
 			wrote = true
 		case AdvisoryUpdate:
 			if _, err := send(ctx, c, "PATCH", endpoint+"/"+w.GHSAID, updateBody(w)); err != nil {
-				return fmt.Errorf("advisories: the update: %w", err)
+				return publish.Refuse(publish.CheckUpdateAdvisory, fmt.Errorf("advisories: the update: %w", err))
 			}
 
 			wrote = true

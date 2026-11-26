@@ -1729,7 +1729,7 @@ jobs:
           set -euo pipefail
           # A refused publish names the class the runbook lists and no finding's detail: the report's
           # public and private finds are the report's own, not the annotation's.
-          if ! "${RUNNER_TEMP}/bin/auditpublish" publish -result "${RUNNER_TEMP}/result.json" -reports docs/security/audits -gh /usr/bin/gh -gitleaks "${RUNNER_TEMP}/bin/gitleaks" -tmp "${RUNNER_TEMP}"; then
+          if ! "${RUNNER_TEMP}/bin/auditpublish" publish -result "${RUNNER_TEMP}/result.json" -reports "${GITHUB_WORKSPACE}/docs/security/audits" -gh /usr/bin/gh -gitleaks "${RUNNER_TEMP}/bin/gitleaks" -tmp "${RUNNER_TEMP}"; then
             echo "::error title=Audit publish::the publish was refused: see runbook step 11"
             exit 1
           fi

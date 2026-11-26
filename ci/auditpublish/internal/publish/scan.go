@@ -72,7 +72,7 @@ func ScanPublic(body string, modelFields []string, key FingerprintKey) error {
 // than 32 bytes is ErrConfig.
 func ScanAdvisory(text string, key FingerprintKey) error {
 	if len(key.bytes) < minKeyBytes {
-		return fmt.Errorf("AUDIT_FINGERPRINT_KEY: not set or shorter than %d bytes: %w", minKeyBytes, ErrConfig)
+		return refusal(CheckFingerprintKey, "AUDIT_FINGERPRINT_KEY: not set or shorter than 32 bytes")
 	}
 
 	if holdsToken([]byte(text), key) {

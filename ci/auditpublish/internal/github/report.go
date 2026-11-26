@@ -50,7 +50,7 @@ type ReportPlan struct {
 // endpoint table refuses wraps ErrEndpointRefused, before gh runs.
 func PublishReport(ctx context.Context, c *Client, plan ReportPlan) error {
 	if c == nil || c.scope.Commit == "" {
-		return fmt.Errorf("report: no publish client: %w", publish.ErrConfig)
+		return refuse(publish.CheckNoClient, "report: no publish client", publish.ErrConfig)
 	}
 
 	repo := "repos/" + c.scope.Repository
@@ -61,17 +61,17 @@ func PublishReport(ctx context.Context, c *Client, plan ReportPlan) error {
 	}
 
 	if err := checkBranchAbsent(ctx, c, repo+"/git/ref/heads/"+branch); err != nil {
-		return err
+		return publish.Refuse(publish.CheckReadReportBranch, err)
 	}
 
 	baseTree, err := auditedTree(ctx, c, repo+"/git/commits/"+c.scope.Commit)
 	if err != nil {
-		return err
+		return publish.Refuse(publish.CheckReadAuditedCommit, err)
 	}
 
 	blob, err := writeSHA(ctx, c, repo+"/git/blobs", map[string]any{"content": plan.Report.Body, "encoding": "utf-8"})
 	if err != nil {
-		return fmt.Errorf("report: the blob: %w", err)
+		return publish.Refuse(publish.CheckWriteBlob, fmt.Errorf("report: the blob: %w", err))
 	}
 
 	tree, err := writeSHA(ctx, c, repo+"/git/trees", map[string]any{
@@ -79,7 +79,7 @@ func PublishReport(ctx context.Context, c *Client, plan ReportPlan) error {
 		"tree":      []any{map[string]any{"path": plan.Report.Path, "mode": "100644", "type": "blob", "sha": blob}},
 	})
 	if err != nil {
-		return fmt.Errorf("report: the tree: %w", err)
+		return publish.Refuse(publish.CheckWriteTree, fmt.Errorf("report: the tree: %w", err))
 	}
 
 	commit, err := writeSHA(ctx, c, repo+"/git/commits", map[string]any{
@@ -88,15 +88,15 @@ func PublishReport(ctx context.Context, c *Client, plan ReportPlan) error {
 		"parents": []string{c.scope.Commit},
 	})
 	if err != nil {
-		return fmt.Errorf("report: the commit: %w", err)
+		return publish.Refuse(publish.CheckWriteCommit, fmt.Errorf("report: the commit: %w", err))
 	}
 
 	if err := checkReportDiff(ctx, c, repo+"/compare/"+c.scope.Commit+"..."+commit, c.scope.Commit, plan.Report.Path); err != nil {
-		return err
+		return publish.Refuse(publish.CheckCompare, err)
 	}
 
 	if _, err := write(ctx, c, repo+"/git/refs", map[string]any{"ref": "refs/heads/" + branch, "sha": commit}); err != nil {
-		return fmt.Errorf("report: the ref: %w", err)
+		return publish.Refuse(publish.CheckWriteBranch, fmt.Errorf("report: the ref: %w", err))
 	}
 
 	if _, err := write(ctx, c, repo+"/pulls", map[string]any{
@@ -107,7 +107,7 @@ func PublishReport(ctx context.Context, c *Client, plan ReportPlan) error {
 		"maintainer_can_modify": false,
 		"draft":                 false,
 	}); err != nil {
-		return fmt.Errorf("report: the pull request: %w", err)
+		return publish.Refuse(publish.CheckOpenPull, fmt.Errorf("report: the pull request: %w", err))
 	}
 
 	return nil

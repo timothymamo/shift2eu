@@ -1,7 +1,6 @@
 package publish
 
 import (
-	"fmt"
 	"slices"
 	"strconv"
 	"strings"
@@ -121,7 +120,7 @@ func newPlan(in ReportInput) (plan, error) {
 
 	if p.previous != nil {
 		if !p.previous.parsed {
-			return plan{}, fmt.Errorf("previous report: not read by ParsePreviousReport: %w", ErrPreviousReport)
+			return plan{}, refusal(CheckPreviousNotRead, "previous report: not read by ParsePreviousReport")
 		}
 
 		// Unix seconds, not time.Time.Sub, which saturates at about 292
@@ -131,7 +130,7 @@ func newPlan(in ReportInput) (plan, error) {
 		// A previous report dated after the run is refused: NewestReport
 		// would pick it on every later run and suppress the gap check.
 		if gap < 0 {
-			return plan{}, fmt.Errorf("previous report: dated after the run: %w", ErrPreviousReport)
+			return plan{}, refusal(CheckPreviousAfterRun, "previous report: dated after the run")
 		}
 
 		// A previous report from the run's own date is refused unless its
@@ -139,7 +138,7 @@ func newPlan(in ReportInput) (plan, error) {
 		// or greater one is this run or a later one, a hand-made or a later
 		// run's report merged first.
 		if gap == 0 && !longerOrGreater(in.Run.ID, p.previous.runID) {
-			return plan{}, fmt.Errorf("previous report: not before the run: %w", ErrPreviousReport)
+			return plan{}, refusal(CheckPreviousNotBefore, "previous report: not before the run")
 		}
 
 		p.gapDays = int(gap / secondsPerDay)
@@ -154,11 +153,11 @@ func newPlan(in ReportInput) (plan, error) {
 
 	switch {
 	case !ok:
-		return plan{}, fmt.Errorf("private state: not one of the three: %w", ErrConfig)
+		return plan{}, refusal(CheckPrivateStateUnknown, "private state: not one of the three")
 	case len(private) > 0 && in.Private == PrivateNone:
-		return plan{}, fmt.Errorf("private state: none, but a finding is private: %w", ErrConfig)
+		return plan{}, refusal(CheckPrivateStateNone, "private state: none, but a finding is private")
 	case len(private) == 0 && in.Private != PrivateNone:
-		return plan{}, fmt.Errorf("private state: set, but no finding is private: %w", ErrConfig)
+		return plan{}, refusal(CheckPrivateStateSet, "private state: set, but no finding is private")
 	}
 
 	p.privateLine = line

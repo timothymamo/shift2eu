@@ -1,6 +1,18 @@
 package github
 
-import "errors"
+import (
+	"errors"
+	"fmt"
+
+	"github.com/timothymamo/shift2eu/ci/auditpublish/internal/publish"
+)
+
+// refuse is a refusal of class whose text is detail, marked with check: the
+// run's summary line names the check's fixed words from the core's list
+// (publish.Refuse), never detail. detail names a rule, never a value.
+func refuse(check publish.FailedCheck, detail string, class error) error {
+	return publish.Refuse(check, fmt.Errorf("%s: %w", detail, class))
+}
 
 // The library's own error classes, beside the core's (publish.ErrGitHub,
 // publish.ErrConfig and the others), which it wraps where a class of the core

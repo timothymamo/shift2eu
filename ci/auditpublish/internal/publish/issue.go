@@ -1,7 +1,6 @@
 package publish
 
 import (
-	"fmt"
 	"strings"
 )
 
@@ -102,13 +101,13 @@ func RenderIssue(f PreviousFinding, run Run) (IssueText, error) {
 
 	switch {
 	case !fingerprintPattern.MatchString(string(f.Fingerprint)):
-		return IssueText{}, fmt.Errorf("issue: a fingerprint that is no fingerprint: %w", ErrPreviousReport)
+		return IssueText{}, refusal(CheckPreviousFingerprint, "issue: a fingerprint that is no fingerprint")
 	case f.Severity != "low" && f.Severity != "informational":
-		return IssueText{}, fmt.Errorf("issue: a severity outside the public severities: %w", ErrPreviousReport)
+		return IssueText{}, refusal(CheckPreviousSeverity, "issue: a severity outside the public severities")
 	case !publicCategories[f.Category]:
-		return IssueText{}, fmt.Errorf("issue: a category outside the public categories: %w", ErrPreviousReport)
+		return IssueText{}, refusal(CheckPreviousCategory, "issue: a category outside the public categories")
 	case f.Status != statusNew && f.Status != statusOpen:
-		return IssueText{}, fmt.Errorf("issue: a status other than new or open: %w", ErrPreviousReport)
+		return IssueText{}, refusal(CheckPreviousStatus, "issue: a status other than new or open")
 	}
 
 	fields := []string{CodeBlock(f.Location), CodeBlock(f.Scenario), CodeBlock(f.Fix)}

@@ -142,7 +142,7 @@ func NewClient(cfg ClientConfig) (*Client, error) {
 	}
 
 	if cfg.Token.value == "" {
-		return nil, fmt.Errorf("github client: an empty token: %w", publish.ErrConfig)
+		return nil, refuse(publish.CheckToken, "github client: an empty token", publish.ErrConfig)
 	}
 
 	if err := validateScope(cfg.Scope); err != nil {
@@ -156,7 +156,7 @@ func NewClient(cfg ClientConfig) (*Client, error) {
 
 	dir, err := os.MkdirTemp(cfg.TempDir, "gh-")
 	if err != nil {
-		return nil, fmt.Errorf("github client: gh's configuration directory not made: %w", publish.ErrConfig)
+		return nil, refuse(publish.CheckGHConfigDir, "github client: gh's configuration directory not made", publish.ErrConfig)
 	}
 
 	return &Client{ghPath: cfg.GHPath, token: cfg.Token, dir: dir, scope: cfg.Scope, timeout: timeout, readOnly: cfg.ReadOnly}, nil
@@ -179,7 +179,7 @@ func NewArtifactsClient(cfg ClientConfig) (*Client, error) {
 // need. Its writes are the endpoint table's alone.
 func NewPublishClient(cfg ClientConfig) (*Client, error) {
 	if cfg.Scope.Commit == "" {
-		return nil, fmt.Errorf("github client: a publish scope without its commit: %w", publish.ErrConfig)
+		return nil, refuse(publish.CheckPublishScope, "github client: a publish scope without its commit", publish.ErrConfig)
 	}
 
 	cfg.ReadOnly = false
@@ -191,12 +191,12 @@ func NewPublishClient(cfg ClientConfig) (*Client, error) {
 // not name an existing file.
 func checkProgram(path string) error {
 	if path == "" || !filepath.IsAbs(path) || filepath.Clean(path) != path {
-		return fmt.Errorf("the path is not absolute: %w", publish.ErrConfig)
+		return refuse(publish.CheckGHPath, "the path is not absolute", publish.ErrConfig)
 	}
 
 	info, err := os.Stat(path)
 	if err != nil || !info.Mode().IsRegular() {
-		return fmt.Errorf("the path names no file: %w", publish.ErrConfig)
+		return refuse(publish.CheckGHFile, "the path names no file", publish.ErrConfig)
 	}
 
 	return nil
@@ -206,12 +206,12 @@ func checkProgram(path string) error {
 // existing directory.
 func checkTempDir(dir string) error {
 	if dir == "" || !filepath.IsAbs(dir) {
-		return fmt.Errorf("the temporary directory is not absolute: %w", publish.ErrConfig)
+		return refuse(publish.CheckTempDir, "the temporary directory is not absolute", publish.ErrConfig)
 	}
 
 	info, err := os.Stat(dir)
 	if err != nil || !info.IsDir() {
-		return fmt.Errorf("the temporary directory is no directory: %w", publish.ErrConfig)
+		return refuse(publish.CheckTempDir, "the temporary directory is no directory", publish.ErrConfig)
 	}
 
 	return nil
@@ -226,7 +226,7 @@ func validateScope(s Scope) error {
 	}
 
 	if s.Commit != "" && !commitHex.MatchString(s.Commit) {
-		return fmt.Errorf("the scope: the commit is not 40 lowercase hex: %w", publish.ErrConfig)
+		return refuse(publish.CheckScopeCommit, "the scope: the commit is not 40 lowercase hex", publish.ErrConfig)
 	}
 
 	return nil
@@ -249,7 +249,7 @@ func validateScope(s Scope) error {
 // gh: only a gh that ran to its end can answer 404.
 func (c *Client) Call(ctx context.Context, req Request) (Response, error) {
 	if c == nil || c.dir == "" {
-		return Response{}, fmt.Errorf("github call: no open client: %w", publish.ErrConfig)
+		return Response{}, refuse(publish.CheckNoClient, "github call: no open client", publish.ErrConfig)
 	}
 
 	if c.readOnly && req.Method != "GET" {
@@ -272,7 +272,7 @@ func (c *Client) Call(ctx context.Context, req Request) (Response, error) {
 	}
 
 	if ctx.Err() != nil {
-		return Response{}, fmt.Errorf("github call: the call's context ended before gh ran: %w", publish.ErrGitHub)
+		return Response{}, refuse(publish.CheckRunGH, "github call: the call's context ended before gh ran", publish.ErrGitHub)
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
@@ -302,25 +302,25 @@ func (c *Client) Call(ctx context.Context, req Request) (Response, error) {
 	runErr := cmd.Run()
 
 	if ctx.Err() != nil {
-		return Response{}, fmt.Errorf("github call: the call's context ended: %w", publish.ErrGitHub)
+		return Response{}, refuse(publish.CheckRunGH, "github call: the call's context ended", publish.ErrGitHub)
 	}
 
 	if out.over {
-		return Response{}, fmt.Errorf("github call: gh's output is over the cap: %w", publish.ErrGitHub)
+		return Response{}, refuse(publish.CheckRunGH, "github call: gh's output is over the cap", publish.ErrGitHub)
 	}
 
 	var exitErr *exec.ExitError
 	if runErr != nil && !errors.As(runErr, &exitErr) {
-		return Response{}, fmt.Errorf("github call: gh did not run to its end: %w", publish.ErrGitHub)
+		return Response{}, refuse(publish.CheckRunGH, "github call: gh did not run to its end", publish.ErrGitHub)
 	}
 
 	resp, ok := parseInclude(out.buf.Bytes())
 	if !ok {
-		return Response{}, fmt.Errorf("github call: gh's output has no status line: %w", publish.ErrGitHub)
+		return Response{}, refuse(publish.CheckRunGH, "github call: gh's output has no status line", publish.ErrGitHub)
 	}
 
 	if runErr != nil && resp.Status/100 == 2 {
-		return Response{}, fmt.Errorf("github call: gh failed on a success status: %w", publish.ErrGitHub)
+		return Response{}, refuse(publish.CheckRunGH, "github call: gh failed on a success status", publish.ErrGitHub)
 	}
 
 	return resp, nil
@@ -419,7 +419,7 @@ func (c *Client) Close() error {
 	}
 
 	if err := os.RemoveAll(c.dir); err != nil {
-		return fmt.Errorf("github client: gh's configuration directory not removed: %w", publish.ErrConfig)
+		return refuse(publish.CheckGHConfigDirRemoved, "github client: gh's configuration directory not removed", publish.ErrConfig)
 	}
 
 	c.dir = ""

@@ -30,7 +30,9 @@
 // age private key or the Claude Code token is set in its environment at all.
 //
 // It prints exactly one line, to standard output and appended to the step
-// summary, and exits with that line's code; a usage error also writes one
+// summary, and exits with that line's code. A refusal's line is
+// "<class line>: <check>: see runbook", the check's words from the core's
+// fixed list (issue #640); a usage error also writes one
 // constant usage text to standard error. A step summary that is unset, not
 // absolute or cannot be opened, written or closed fails the run closed: a run
 // that would have passed prints the configuration line and exits 9 instead,
