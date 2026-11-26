@@ -125,6 +125,17 @@
       ]
     },
     {
+      "id": "shop-audit",
+      "rawType": "managedkafka.googleapis.com/Cluster",
+      "category": "messaging.kafka",
+      "region": "europe-west4",
+      "capabilities": [
+        "encryption-at-rest",
+        "node-high-availability",
+        "zone-high-availability"
+      ]
+    },
+    {
       "id": "shop-backups-example",
       "rawType": "storage.googleapis.com/Bucket",
       "category": "storage.object",
@@ -199,6 +210,23 @@
         "ipv6",
         "zone-high-availability"
       ]
+    },
+    {
+      "id": "shop-events",
+      "rawType": "managedkafka.googleapis.com/Cluster",
+      "category": "messaging.kafka",
+      "region": "europe-west1",
+      "capabilities": [
+        "encryption-at-rest",
+        "node-high-availability",
+        "zone-high-availability"
+      ]
+    },
+    {
+      "id": "shop-events-connect",
+      "rawType": "managedkafka.googleapis.com/ConnectCluster",
+      "category": "unclassified",
+      "region": "europe-west1"
     },
     {
       "id": "shop-gke",

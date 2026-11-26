@@ -25,8 +25,8 @@ import (
 // held the extra keys.
 
 // guideCallFixture is one recorded call of the guide's search and Kafka
-// classification: the call as the guide spells it, the fixture its --query
-// output is recorded in, and the keys its jq program reads.
+// classification: the call as the guide spells it, the fixture its --query or
+// --format output is recorded in, and the keys its jq program reads.
 type guideCallFixture struct {
 	// call names the CLI call, for a failure message.
 	call string
@@ -37,12 +37,12 @@ type guideCallFixture struct {
 	keys []string
 }
 
-// searchAndKafkaFixtures are the guide's new AWS calls of PRD #571, with the
+// searchAndKafkaFixtures are the guide's new calls of PRD #571, with the
 // fixture of each and the fields its program reads. The fixtures hold the
-// --query output, so a key here is a field the guide's operator saw in the raw
-// output before deleting it. The guide runs a call once per region, so a call
-// recorded in two regions has an entry per region, and the two must read the
-// same fields.
+// --query or --format output, so a key here is a field the guide's operator saw
+// in the raw output before deleting it. The guide runs an AWS call once per
+// region, so a call recorded in two regions has an entry per region, and the two
+// must read the same fields.
 var searchAndKafkaFixtures = []guideCallFixture{
 	{
 		call: "aws opensearch list-domain-names",
@@ -87,6 +87,16 @@ var searchAndKafkaFixtures = []guideCallFixture{
 			"NumberOfBrokerNodes", "BrokerNodeGroupInfo", "InstanceType", "ClientSubnets", "StorageInfo",
 			"EbsStorageInfo", "VolumeSize",
 		},
+	},
+	{
+		// GCP's one call for its Kafka clusters (PRD #571, milestone 3): the
+		// cluster's name and its capacity, and nothing else. The two numbers of
+		// the capacity are the cluster's totals over its brokers, so the program
+		// reads them and writes no size, and no bootstrap address, TLS config or
+		// access config reaches the file.
+		call: "gcloud managed-kafka clusters list",
+		file: "test/e2e/testdata/inventory-guide/gcp/managed-kafka-clusters.json",
+		keys: []string{"name", "capacityConfig", "vcpuCount", "memoryBytes"},
 	},
 }
 

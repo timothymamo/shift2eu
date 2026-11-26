@@ -868,6 +868,29 @@ func inventoryGuides() []inventoryGuideCase {
 					id: "scratch", rawType: "file.googleapis.com/Instance", category: "storage.file",
 					capabilities: []string{"encryption-at-rest"},
 				},
+				// A Managed Service for Apache Kafka cluster is Kafka, and Google
+				// provisions every cluster in three zones with its replicas spread
+				// across them and encrypts it at rest by default, so the three
+				// capabilities hold of every cluster, whatever its settings say
+				// (PRD #571). The region is the one its asset names, so the two
+				// clusters of two regions are two resources and not one.
+				{
+					id: "shop-events", rawType: "managedkafka.googleapis.com/Cluster", category: "messaging.kafka",
+					region:       "europe-west1",
+					capabilities: []string{"encryption-at-rest", "node-high-availability", "zone-high-availability"},
+				},
+				{
+					id: "shop-audit", rawType: "managedkafka.googleapis.com/Cluster", category: "messaging.kafka",
+					region:       "europe-west4",
+					capabilities: []string{"encryption-at-rest", "node-high-availability", "zone-high-availability"},
+				},
+				// A Kafka Connect cluster is the integration around a Kafka cluster,
+				// not a cluster to move, so it stays unclassified under its own name,
+				// as Kafka Connect does on AWS (PRD #571, *Left out*).
+				{
+					id: "shop-events-connect", rawType: "managedkafka.googleapis.com/ConnectCluster", category: "unclassified",
+					capabilities: []string{},
+				},
 			},
 			sized: []sizeFact{
 				// An e2-standard-2 is 2 vCPU and 8192 MB, from compute machine-types list.
@@ -912,8 +935,13 @@ func inventoryGuides() []inventoryGuideCase {
 			// An engine the program cannot classify gets no size at all, even
 			// though the sql instances list records the instance's disk and
 			// tier. So does a Valkey instance the instances list does not hold: no
-			// call gives its shards, its replicas or its node's memory.
-			unsized: []string{"shop-reports-sqlserver", "valkey-archive"},
+			// call gives its shards, its replicas or its node's memory. And so
+			// does a Managed Kafka cluster: its capacity is a total of vCPU and
+			// memory over the brokers the service provisions, never one node's,
+			// so a resource sized from it would price a cluster as a single
+			// broker (PRD #571, *Estimates*). The report says "not estimated: size
+			// unknown" for it instead.
+			unsized: []string{"shop-reports-sqlserver", "valkey-archive", "shop-events", "shop-audit"},
 			// A node pool's managed instance group, a node with its disk,
 			// labelled goog-gke-node, and the boot and data disks of the group's
 			// member: the group stands for its instances.
@@ -1184,6 +1212,9 @@ func taxonomyCategories(source string) []string {
 			"database.mysql",
 			"database.postgresql",
 			"kubernetes.managed",
+			// PRD #571's GCP classification: GCP runs no managed OpenSearch, so
+			// only the Kafka cluster its fixtures record is new here.
+			"messaging.kafka",
 			"messaging.queue",
 			"messaging.topic",
 			"network.loadbalancer",
