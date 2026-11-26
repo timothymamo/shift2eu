@@ -462,7 +462,7 @@ lands, its report shows the new categories as fit `none` with "no offering in th
    the documented response shape (never captured from a real account), the test that they carry no
    excluded key, the e2e golden and the AWS entries of the e2e category list. Depends on 1 and PRD #552
    milestone 2.
-3. [ ] **GCP classification in the guide.** `managedkafka.googleapis.com/Cluster` from the existing asset
+3. [x] **GCP classification in the guide.** `managedkafka.googleapis.com/Cluster` from the existing asset
    search, the Managed Kafka list call for its settings and sizes, with an explicit `--format` that
    keeps only the fields read, and `roles/managedkafka.viewer` added to the guide's list of narrow GCP
    roles, saying what it covers (cluster configuration only, no topic data or messages; milestone 3

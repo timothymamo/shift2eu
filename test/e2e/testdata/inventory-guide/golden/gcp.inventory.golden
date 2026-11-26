@@ -115,6 +115,22 @@
       }
     },
     {
+      "id": "shop-analytics",
+      "rawType": "managedkafka.googleapis.com/Cluster",
+      "category": "messaging.kafka",
+      "region": "europe-west4",
+      "capabilities": [
+        "encryption-at-rest",
+        "node-high-availability",
+        "zone-high-availability"
+      ],
+      "size": {
+        "vcpus": 12,
+        "memoryGiB": 12,
+        "count": 4
+      }
+    },
+    {
       "id": "shop-assets-example",
       "rawType": "storage.googleapis.com/Bucket",
       "category": "storage.object",
@@ -123,6 +139,22 @@
         "encryption-at-rest",
         "object-versioning"
       ]
+    },
+    {
+      "id": "shop-audit",
+      "rawType": "managedkafka.googleapis.com/Cluster",
+      "category": "messaging.kafka",
+      "region": "europe-west4",
+      "capabilities": [
+        "encryption-at-rest",
+        "node-high-availability",
+        "zone-high-availability"
+      ],
+      "size": {
+        "vcpus": 3,
+        "memoryGiB": 24,
+        "count": 3
+      }
     },
     {
       "id": "shop-backups-example",
@@ -201,6 +233,28 @@
       ]
     },
     {
+      "id": "shop-events",
+      "rawType": "managedkafka.googleapis.com/Cluster",
+      "category": "messaging.kafka",
+      "region": "europe-west1",
+      "capabilities": [
+        "encryption-at-rest",
+        "node-high-availability",
+        "zone-high-availability"
+      ],
+      "size": {
+        "vcpus": 1,
+        "memoryGiB": 4,
+        "count": 3
+      }
+    },
+    {
+      "id": "shop-events-connect",
+      "rawType": "managedkafka.googleapis.com/ConnectCluster",
+      "category": "unclassified",
+      "region": "europe-west1"
+    },
+    {
       "id": "shop-gke",
       "rawType": "container.googleapis.com/Cluster",
       "category": "kubernetes.managed",
@@ -217,6 +271,49 @@
       "category": "network.loadbalancer",
       "region": "europe-west1",
       "capabilities": [
+        "zone-high-availability"
+      ]
+    },
+    {
+      "id": "shop-invoices",
+      "rawType": "managedkafka.googleapis.com/Cluster",
+      "category": "messaging.kafka",
+      "region": "europe-west1",
+      "capabilities": [
+        "encryption-at-rest",
+        "node-high-availability",
+        "zone-high-availability"
+      ],
+      "size": {
+        "vcpus": 5.333333333333333,
+        "memoryGiB": 10.666666666666666,
+        "count": 3
+      }
+    },
+    {
+      "id": "shop-ledger",
+      "rawType": "managedkafka.googleapis.com/Cluster",
+      "category": "messaging.kafka",
+      "region": "europe-west1",
+      "capabilities": [
+        "encryption-at-rest",
+        "node-high-availability",
+        "zone-high-availability"
+      ],
+      "size": {
+        "vcpus": 11.5,
+        "memoryGiB": 11.5,
+        "count": 4
+      }
+    },
+    {
+      "id": "shop-legacy-events",
+      "rawType": "managedkafka.googleapis.com/Cluster",
+      "category": "messaging.kafka",
+      "region": "europe-west1",
+      "capabilities": [
+        "encryption-at-rest",
+        "node-high-availability",
         "zone-high-availability"
       ]
     },

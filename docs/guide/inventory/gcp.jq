@@ -33,6 +33,7 @@
 #   {"name": ".../instances/..", "fileShares"} filestore instances list
 #   {"name": ".../repositories/..", "format"} artifacts repositories list
 #   {"name": ".../functions/..", "serviceConfig"} functions list
+#   {"name": ".../clusters/..", "capacityConfig"} managed-kafka clusters list
 #
 # Resource IDs are short (the last part of the resource name), never the full name,
 # which carries the project. Anything it cannot classify is "unclassified" with its
@@ -70,7 +71,16 @@
 # none its replicaCount plus one; a cluster's or Valkey instance's shards times
 # one plus their replicas); a Redis cluster names only its whole memory
 # (sizeGb), so it gets a count and no memory. A Filestore instance's storage is
-# the sum of its shares' capacityGb (a string). The GB of these APIs are taken
+# the sum of its shares' capacityGb (a string). A Managed Service for Apache
+# Kafka cluster's capacityConfig is its total vCPU and memory over the brokers
+# Google provisions, max(3, ceiling(vCPU / 15)) of them, all with the same vCPU
+# (https://cloud.google.com/managed-service-for-apache-kafka/docs/brokers): the
+# count is that number and the vCPU one broker's share. The memory share is
+# inferred: memory is provisioned per cluster at a fixed vCPU:GiB ratio
+# (https://cloud.google.com/managed-service-for-apache-kafka/docs/reference/rest/v1/CapacityConfig),
+# so each broker gets an equal share of it. The brokers have a disk, but the list
+# gives no disk size (capacityConfig holds only vcpuCount and memoryBytes), so
+# no storageGiB is written. The GB of these APIs are taken
 # as GiB. A number no call gives is left out, never guessed. The workload,
 # relations and monthlyCost fields are the user's to add by hand; this program
 # never writes them.
@@ -177,6 +187,7 @@ def reaches($proxies):
     and (has("memorySizeGb") or has("fileShares") | not); .name | key)) as $valkey
 | ($all | details(named_in("instances") and has("fileShares"); .name | key)) as $filestore
 | ($all | details(named_in("repositories") and has("format"); .name | key)) as $repositories
+| ($all | details(named_in("clusters") and has("capacityConfig"); .name | key)) as $kafka
 # A Filestore instance has snapshots when a snapshot asset is named under it.
 | ([$all[] | select(.assetType? == "file.googleapis.com/Snapshot") | .name | key
     | sub("/snapshots/[^/]+$"; "")] | unique) as $filesnapshotted
@@ -369,6 +380,25 @@ def reaches($proxies):
           ],
           size: (if $d == null then null else
             size_of({storageGiB: ([$d.fileShares[]?.capacityGb | number] | if . == [] then null else add end)}) end)}
+      elif .assetType == "managedkafka.googleapis.com/Cluster" then
+        # Managed Service for Apache Kafka: Google runs every cluster in three
+        # zones, its replicas spread across them, and encrypts it at rest. Its
+        # capacity is the cluster's total over its brokers, so each broker gets
+        # an equal share of it. A cluster the list does not hold gets no size.
+        # A Kafka Connect cluster (ConnectCluster) is an integration runtime,
+        # not a cluster to move: it stays unclassified, below.
+        $kafka[$key].capacityConfig as $c
+        | $base + {category: "messaging.kafka", capabilities: [
+            "encryption-at-rest", "node-high-availability", "zone-high-availability"
+          ],
+          size: (if $c.vcpuCount? == null then null else
+            ($c.vcpuCount | number) as $vcpus
+            | ([3, ($vcpus / 15 | ceil)] | max) as $brokers
+            | size_of({
+                vcpus: ($vcpus / $brokers),
+                memoryGiB: ($c.memoryBytes | number | if . == null then null else . / 1073741824 / $brokers end),
+                count: $brokers
+              }) end)}
       elif .assetType | test("^compute\\.googleapis\\.com/(Region)?(UrlMap|BackendService|TargetPool|TargetInstance|Target[A-Za-z]*Proxy|(Global)?ForwardingRule)$") then
         # A load balancer comes from the compute lists, below; its frontends are
         # left out.
