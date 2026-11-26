@@ -70,6 +70,43 @@ records where each fact comes from, so the snapshot can be checked and refreshed
   saved copy. A full re-read waits for the maintainer's saved copy of the page. The API reference pages
   were not read again either. No offering, capability or price was read, so `retrievedOn` stays
   2026-11-13.
+- **Eight offerings added on 2026-11-26 for PRD #552 milestone 6.** *Container Registry*, *Load
+  Balancer*, *Managed Database for Redis*, *Managed Database for Redis Cluster*, *Managed MongoDB*,
+  *Managed MongoDB Replica Set*, *Serverless Containers* and *Topics and Events*, for the categories
+  `registry.container`, `network.loadbalancer`, `cache.redis`, `database.mongodb`,
+  `serverless.container` and `messaging.topic`; each has its own section below. No `storage.file`
+  offering (*Left out on purpose*, File Storage). The sources read that day:
+  - three pages the maintainer saved from a logged-out browser (`www.scaleway.com` refuses automated
+    clients), read as data from a scratch directory outside the repository and never committed: the
+    saved copy of <https://www.scaleway.com/en/pricing/managed-databases/>, the saved copy of
+    <https://www.scaleway.com/en/pricing/storage/> and the saved copy of
+    <https://www.scaleway.com/en/product-availability-by-region/>, all read 2026-11-26. Each was read
+    twice, as its visible tables (Paris selected) and as its embedded data (`__NEXT_DATA__`); no price
+    or region disagreed between the two. The two price pages embed the same full price catalogue
+    (every product key identical), so a price below cites the page whose visible table shows it. The
+    availability page's embedded record is dated `updatedAt` 2026-10-30T10:47:34Z;
+  - `scaleway/docs-content`, branch `main` at commit `13ef235ee5926d0a675e9b87cc421df5105762b1`
+    (committed 2026-11-26), read through the GitHub API without credentials; a file
+    `pages/<product>/<page>.mdx` is published at `https://www.scaleway.com/en/docs/<product>/<page>/`,
+    the URL each section cites;
+  - `scaleway/scaleway-sdk-go`, branch `main` at commit `d5b724367ac9d6a0e9b39f91a9aabf0b55216360`
+    (2026-11-26), for the regions and zones each new product's API declares (each section names its
+    file and the commit that last changed it), and `scaleway/scaleway-sdk-js` at commit
+    `766d0b1d2d387731b12fd80c64ff7a2d110554a1`, as a cross-check.
+
+  **What was re-read, and the date.** The two price pages hold the prices of *Managed Database for
+  PostgreSQL and MySQL* (both offerings), their storage, *Block Storage* and *Object Storage*. Every
+  one of those existing plans and prices was compared with the re-read pages and **none changed**
+  (plans, vCPU, memory, hourly prices and regions), so no existing amount in `catalog.json` changed.
+  The availability page was re-read **in full** for the first time since 2026-11-11, and every existing
+  offering's regions still hold (Milan is still not declared by SDK `api/rdb/v1`, so the database
+  offerings still leave it out); this closes the "a full re-read waits" note of 2026-11-21 below. The
+  prices of *Instances*, *Elastic Metal* and the Kapsule control planes were **not** re-read from
+  their own pages (they were not saved this time) and keep their 2026-11-13 reading.
+  **`retrievedOn` stays 2026-11-13** (ADR 0007, one date per snapshot): it names the date every plan
+  and price was read, and this re-read covered the prices of some pages only, as the Kapsule
+  Dedicated re-check of 2026-11-19 did. The new offerings' prices were read on 2026-11-26, which each
+  of their sections says.
 - **Availability page:** <https://www.scaleway.com/en/product-availability-by-region/>, where every
   offering's regions come from, subject to the API check under *Rules applied*. It has one column per
   region (Paris, Amsterdam, Warsaw, Milan). For a zonal product it gives one mark per zone, and for a
@@ -123,6 +160,25 @@ records where each fact comes from, so the snapshot can be checked and refreshed
     pl-waw and it-mil.
 
   The API reference pages and their schemas were not read again (`www.scaleway.com`).
+  **Read on 2026-11-26 (PRD #552 milestone 6)** at `scaleway-sdk-go` commit
+  `d5b724367ac9d6a0e9b39f91a9aabf0b55216360`, for the new offerings, with the commit that last changed
+  each file:
+  - `api/registry/v1/registry_sdk.go` (`d9b5685d2d`, 2026-06-15), *Container Registry*: `Regions()` is
+    fr-par, nl-ams and pl-waw, so no Milan.
+  - `api/lb/v1/lb_sdk.go` (`f7f6cc2eea`, 2026-11-06), *Load Balancer*: `ZonedAPI.Zones()` is fr-par-1,
+    fr-par-2, nl-ams-1 to nl-ams-3 and pl-waw-1 to pl-waw-3, and `API.Regions()` fr-par, nl-ams and
+    pl-waw, so no Milan.
+  - `api/redis/v1/redis_sdk.go` (`e521727b25`, 2026-10-08), both Redis offerings: `Zones()` is fr-par-1,
+    fr-par-2, nl-ams-1, nl-ams-2, pl-waw-1 and pl-waw-2.
+  - `api/mongodb/v1/mongodb_sdk.go` (`07ad86c4e6`, 2026-10-13), both MongoDB offerings: `Regions()` is
+    fr-par.
+  - `api/container/v1/container_sdk.go` (`2a42febf50`, 2026-11-06), *Serverless Containers*:
+    `Regions()` is fr-par, nl-ams, pl-waw and it-mil (the deprecated `v1beta1` lacks it-mil).
+  - `api/mnq/v1beta1/mnq_sdk.go` (`84e9d4d533`, 2025-11-04), *Topics and Events*: `SnsAPI.Regions()` is
+    fr-par and nl-ams.
+  - `api/file/v1alpha1/file_sdk.go` (`bd5114c353`, 2026-11-03), File Storage, not in the snapshot
+    (*Left out on purpose*): `Regions()` is fr-par.
+  - `api/rdb/v1/rdb_sdk.go` at the same commit still declares fr-par, nl-ams and pl-waw only.
 - **`sourceURL`** is Scaleway's pricing page, <https://www.scaleway.com/en/pricing/>, the index of the
   per-product price pages every plan and storage price comes from (*Prices*). Until the prices were added
   it was the documentation root, <https://www.scaleway.com/en/docs/>, where the capabilities still come
@@ -143,6 +199,11 @@ are the per-product pages linked from <https://www.scaleway.com/en/pricing/>:
 - *Managed Databases*: <https://www.scaleway.com/en/pricing/managed-databases/>
 - *Storage* (Block Storage and Object Storage): <https://www.scaleway.com/en/pricing/storage/>
 - *Containers* (Kubernetes Kapsule control planes): <https://www.scaleway.com/en/pricing/containers/>
+
+The Redis and MongoDB plans and the MongoDB storage price (PRD #552 milestone 6) were read on
+2026-11-26 from the maintainer's saved copy of the *Managed Databases* page, which also re-read the
+existing database and storage prices (*How it was compiled*); the hourly × 730 rule below applies to
+them unchanged.
 
 - **How the pages were read.** `www.scaleway.com` has answered HTTP 403 to plain clients before (*How it
   was compiled*). On 2026-11-13 the pages answered HTTP 200 to a plain HTTPS client (curl, with no
@@ -180,7 +241,9 @@ are the per-product pages linked from <https://www.scaleway.com/en/pricing/>:
   prices are the same in every region of its offering, the snapshot has one price with an empty `regions`
   list; where the plan is offered only in some regions, its price lists them, and an estimate elsewhere
   says there is no price (ADR 0024). No recorded plan price, storage price or fixed fee differs between
-  regions, only between zones of Paris.
+  regions, only between zones: of Paris for Instances, and, since PRD #552 milestone 6, the second zones
+  of Amsterdam and Warsaw for Redis (*Managed Database for Redis*, the `nl-ams-2` and `pl-waw-2`
+  prices, not recorded).
 - **Units.** The pages give memory in "GB" and storage prices per "GB"; the snapshot records them as GiB,
   unconverted, as the OVHcloud snapshot does. The database page's storage size limits are binary
   (the embedded data gives a minimum volume of 10737418240 bytes, 10 GiB), but its prices say "GB".
@@ -230,7 +293,9 @@ are the per-product pages linked from <https://www.scaleway.com/en/pricing/>:
   recorded as numbers, and brief quotations in quotation marks.
 - **Documentation and changelog** (`www.scaleway.com/en/docs/`): built from `scaleway/docs-content`, which
   is licensed CC BY-NC-SA 4.0 (Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International),
-  as its `LICENSE.md` states at the commit above. GitHub's licence detection reports it only as "Other".
+  as its `LICENSE.md` states at the commit above, and still states at commit
+  `13ef235ee5926d0a675e9b87cc421df5105762b1`, read for PRD #552 milestone 6 on 2026-11-26. GitHub's
+  licence detection reports it only as "Other".
   The site's footer reads "© 2023-2026 – Scaleway".
 - **Availability page and API reference** (`www.scaleway.com/en/product-availability-by-region/`,
   `www.scaleway.com/en/developers/api/`): under Scaleway's copyright, with no open licence stated. The
@@ -240,7 +305,8 @@ are the per-product pages linked from <https://www.scaleway.com/en/pricing/>:
 - **OpenAPI schemas** published with the API reference: they fall under the API reference's terms, so
   all rights reserved. Only facts are taken from them: the regions and zones each schema declares.
 - `scaleway/scaleway-sdk-go` and `scaleway/scaleway-sdk-js` are licensed Apache-2.0, as the `LICENSE`
-  file of each states at the commit cited. Only facts are taken from them: the regions and zones each
+  file of each states at the commit cited (GitHub's licence API reports `Apache-2.0` for both at the
+  commits read on 2026-11-26). Only facts are taken from them: the regions and zones each
   API declares.
 - **Rule for this file and `catalog.json`:** take facts only (which product exists, in which regions, with
   which feature) and brief quotations, each in quotation marks and attributed to the page it comes from.
@@ -273,7 +339,9 @@ are the per-product pages linked from <https://www.scaleway.com/en/pricing/>:
   Standard Multi-AZ (Object Storage, its stated default), and Standalone (Managed Database) and
   Mutualized (Kubernetes Kapsule), their products' lowest tiers, since no page names a default for
   either. The variants are *Managed Database for PostgreSQL and MySQL High Availability* and
-  *Kubernetes Kapsule Dedicated*. A **Needs:** line names the tier its offering is named after, or the
+  *Kubernetes Kapsule Dedicated*. Since PRD #552 milestone 6 the same reading gives Standalone (Managed
+  Database for Redis) and the 1-node replica set (Managed MongoDB) as base tiers, and the variants
+  *Managed Database for Redis Cluster* and *Managed MongoDB Replica Set*. A **Needs:** line names the tier its offering is named after, or the
   base tier.
 - **Tier-variant regions:** a tier variant lists only the regions where a source states that tier, or
   where the tier's general availability predates the region's opening; the product's availability row
@@ -326,12 +394,14 @@ Poland).
 
 `fr-par` (Paris, France) is the snapshot's `defaultRegion`: the region a cost estimate uses when the user names
 none (PRD #190, ADR 0024). Chosen provisionally in milestone 2, it was **confirmed in milestone 4**, when the
-prices were added, because it hosts the most offerings: all 10 of the snapshot. `nl-ams` hosts the same 10,
-`pl-waw` 9 (no Queues) and `it-mil` 5 (Block Storage, Instances, Kubernetes Kapsule, Kubernetes Kapsule
-Dedicated, since issue #211, and Object Storage).
-`fr-par` and `nl-ams` also tie on prices: every plan and storage price of the snapshot applies in both, at
-the same amount (*Prices*). `fr-par` is kept over `nl-ams` because it was already the default and is the
-first of the declared codes, kept in code order: no price makes either one a better default.
+prices were added, because it hosts the most offerings: all 10 of the snapshot. Since PRD #552 milestone 6
+it hosts all 18. `nl-ams` hosts 16 (not the two MongoDB offerings), `pl-waw` 14 (no Queues, Topics and
+Events or MongoDB) and `it-mil` 6 (Block Storage, Instances, Kubernetes Kapsule, Kubernetes Kapsule
+Dedicated, since issue #211, Object Storage and, since milestone 6, Serverless Containers).
+`fr-par` and `nl-ams` tie on prices for every offering both host: each plan and storage price they share
+applies in both at the same amount (*Prices*). `fr-par` was kept over `nl-ams` because it was already the
+default and is the first of the declared codes, kept in code order; since milestone 6 it is also the only
+region with MongoDB, so it is the better default for an estate with a MongoDB database.
 
 The choice says nothing about which region is cheapest or best. A Paris estimate prices a server in the
 `fr-par-1` and `fr-par-2` zones; `fr-par-3` charges more for PRO2 and POP2 Instances (*Prices*, *Which
@@ -356,6 +426,34 @@ Category `storage.block`. Pages: <https://www.scaleway.com/en/docs/block-storage
   Block Storage 15K (€0.000177, × 730 = 0.12921, would be 0.1292); an offering has one storage price per
   region, and 5K, the lower-performance class, is the one recorded. The data's hourly figure for 5K is
   0.000129999, which × 730 = 0.09489927 also rounds half up to `0.0949`.
+
+### Container Registry
+
+Category `registry.container` (PRD #552 milestone 6, read 2026-11-26). Pages:
+<https://www.scaleway.com/en/docs/container-registry/faq/>; the changelog entry *Container Registry is
+now available in the Milan region* (2026-08-31,
+`changelog/august2026/2026-08-31-container-registry-added-container-registry-available-i.mdx`), all from
+`scaleway/docs-content` at commit `13ef235ee5926d0a675e9b87cc421df5105762b1`.
+
+- Category fit: private OCI image storage. The FAQ: "You can store any docker container image on the
+  Namespace and it is possible to set the visibility of each image towards your needs. It can either be
+  private or public."
+- No capability. No Container Registry page mentions encryption (none in any of its pages at that
+  commit), so `encryption-at-rest` is not listed (target rule), and nothing states a zone-level
+  continuity, so no `zone-high-availability`. Every ECR, Artifact Registry and ACR resource the guide
+  writes lists `encryption-at-rest`, so **every source registry is `partial` on Scaleway**, missing
+  `encryption-at-rest` (*Left out on purpose*).
+- Regions `fr-par`, `nl-ams`, `pl-waw`: the availability page (saved copy of
+  <https://www.scaleway.com/en/product-availability-by-region/>, read 2026-11-26) marks Container
+  Registry "Available across the region" in all four regions, and its embedded data agrees. SDK
+  `api/registry/v1` declares fr-par, nl-ams and pl-waw (*API reference and SDK*), and the JavaScript SDK's
+  `registry/src/v1` agrees. **Milan is left out under the regions rule**: the availability page and the
+  changelog entry ("Container Registry is now available in the Milan region (`it-mil`).") say yes, but
+  no SDK declares it, and the FAQ's traffic note names only "AMS ↔ PAR, WAW ↔ PAR, or AMS ↔ WAW". Add
+  `it-mil` once the SDK or the API reference's schema declares it.
+- **Not priced** (decided question 6 of PRD #552: a registry is not estimated, reason `not-priced`): no
+  plan, storage price or fixed fee. For the record, the FAQ gives "Private images | €0.027/GB/month";
+  it is not recorded.
 
 ### Elastic Metal
 
@@ -617,6 +715,41 @@ Dedicated control plane, Dedicated 4, 8 or 16, which share the same availability
 | `POP2-48C-192G` | 48 | 192 GB | 1.77 | `1292.10` | all |
 | `POP2-64C-256G` | 64 | 256 GB | 2.35 | `1715.50` | all |
 
+### Load Balancer
+
+Category `network.loadbalancer` (PRD #552 milestone 6, read 2026-11-26). Pages:
+<https://www.scaleway.com/en/docs/load-balancer/faq/>,
+<https://www.scaleway.com/en/docs/load-balancer/reference-content/load-balancers-limitations/>,
+<https://www.scaleway.com/en/docs/ipam/reference-content/ipv6/>, all from `scaleway/docs-content` at
+commit `13ef235ee5926d0a675e9b87cc421df5105762b1`.
+
+- `ipv6`. **Needs:** nothing (no tier). The FAQ, *Do Load Balancers support external IPv6
+  connections?*: "Yes, Load Balancer supports both IPv4 and IPv6 addresses at the frontend. IPv6 can
+  also be used to communicate between the Load Balancer and your backend servers." The limitations page:
+  "IPv6 is also supported between your Load Balancer and backend servers." The page *IPv6 and the
+  Scaleway ecosystem* lists Load Balancer ("Scaleway Load Balancers are compatible with IPv6"). Both
+  directions are stated, so `ipv6` holds in its strict meaning (ADR 0011). Caveat on the same pages: "A
+  public Load Balancer must have an IPv4 address, it cannot have only an IPv6 address."
+- No `udp`: the FAQ says "Scaleway Load Balancer does not currently support `UDP`." and "All protocols
+  based on `TCP` are supported." A source load balancer with a UDP listener is `partial` here.
+- No `node-high-availability` (PRD #552 milestone 6's decision 3). The FAQ says "In case of a failure
+  of the Load Balancer, a replica Load Balancer is immediately spawned and deployed, and the IP address
+  is automatically rerouted to this replica." The failover is automatic, but it is a replica built after
+  the failure, not a standing one: recovery, not continuity, as PRD #14 decided for Object Storage's
+  rebuilt data (*Left out on purpose*). No `zone-high-availability` either: a load balancer lives in
+  one zone.
+- Regions `fr-par`, `nl-ams`, `pl-waw`: the availability page (saved copy of
+  <https://www.scaleway.com/en/product-availability-by-region/>, read 2026-11-26) marks Load Balancer
+  "Available" in all twelve zones, Milan's three included, and its embedded data agrees. SDK
+  `api/lb/v1` declares zones in Paris (fr-par-1 and fr-par-2), Amsterdam and Warsaw and the regions
+  fr-par, nl-ams and pl-waw (*API reference and SDK*); the JavaScript SDK agrees. **Milan is left out
+  under the regions rule**: the availability page and the price page's data (an `it-mil-1` price for
+  every size) say yes, no SDK declares it. Add `it-mil` once the SDK or the API reference's schema
+  declares it.
+- **Not priced** (decided question 6 of PRD #552): Scaleway sells sizes LB-S, LB-M, LB-L and LB-XL
+  (200 Mbps to 4 Gbps, limitations page), a size no inventory records, so the offering has no plan,
+  storage price or fixed fee, and a load balancer resource is not estimated, reason `not-priced`.
+
 ### Managed Database for PostgreSQL and MySQL
 
 Categories `database.mysql` and `database.postgresql`: one product for both engines, with the same
@@ -736,6 +869,253 @@ Its `encryption-at-rest`, `read-replicas` and
   standby's copy of the data: no page read says whether that volume is billed (*Prices*, *Database
   storage*).
 
+### Managed Database for Redis
+
+Category `cache.redis` (PRD #552 milestone 6, read 2026-11-26). Pages:
+<https://www.scaleway.com/en/docs/managed-databases-for-redis/how-to/create-a-database-for-redis/>,
+<https://www.scaleway.com/en/docs/managed-databases-for-redis/concepts/>,
+<https://www.scaleway.com/en/docs/managed-databases-for-redis/faq/>,
+<https://www.scaleway.com/en/docs/managed-databases-for-redis/reference-content/ensuring-data-persistence/>,
+<https://www.scaleway.com/en/docs/ipam/reference-content/ipv6/>, all from `scaleway/docs-content` at
+commit `13ef235ee5926d0a675e9b87cc421df5105762b1`; the changelog entry *Redis v8.4 is now supported*
+(2026-02-19). The engine is Redis 8.4.
+
+The create page offers three node configurations: "**Cluster mode**: creates the database as a Cluster
+composed of three or more nodes", "**High Availability**: creates a secondary node with an up-to-date
+replica" and "**Standalone**: creates a standalone database provisioned on a single node". No page names
+a default, so the base offering is the lowest tier, **Standalone**, the tier that adds no capability
+(tier-variant rule). Cluster mode adds `sharding` and is the variant *Managed Database for Redis
+Cluster*. High Availability (2 nodes) is in public beta and gets no offering (*Left out on purpose*).
+
+- `snapshots`. **Needs:** nothing beyond the base tier, Standalone. The persistence page: "Snapshots are
+  available by default with a fixed configuration." and "a Redis™ snapshot is also automatically created
+  within specified intervals". This follows the reading of OVHcloud's Valkey, which lists `snapshots`
+  for its RDB persistence (PRD #552 milestone 5). **Caveat**, on the same page: "Scaleway Managed
+  Database for Redis™ is currently best suited for caching use cases. The data persistence mechanism
+  presented on this page do not guarantee data recovery in case of incident.", and the snapshots can be
+  turned off. The maintainer may weigh it.
+- No high availability: "a standalone database provisioned on a single node" (create page).
+- No `encryption-at-rest`: no Redis page states it (the only encryption mentioned is TLS in transit,
+  concepts page), so it is not listed (target rule). An ElastiCache, Memorystore or Azure cache that
+  lists it is `partial` on Scaleway.
+- No `ipv6`: the IPv6 page does not list Redis among the products that support it.
+- Regions `fr-par`, `nl-ams`, `pl-waw` (both Redis offerings): the availability page (saved copy of
+  <https://www.scaleway.com/en/product-availability-by-region/>, read 2026-11-26) marks Redis™
+  "Available" in `fr-par-1`, `fr-par-2`, `nl-ams-1`, `nl-ams-2`, `pl-waw-1` and `pl-waw-2`, "Not
+  available" in the third zones and `it-mil-2`/`it-mil-3`, and "Available soon" in `it-mil-1`, so Milan
+  is not listed; its embedded data agrees. SDK `api/redis/v1` declares the same six zones (*API
+  reference and SDK*), and the create page says "Managed Database for Redis™ is available in PAR1, PAR2,
+  AMS1, AMS2, WAW1 and WAW2." The price data prices every node type in exactly those six zones.
+- **Node count** (decided question 10 of PRD #552, issue #558): a Standalone database is exactly **1
+  node** (create page). An estimate multiplies the plan by the resource's count, so a count above 1 is
+  priced as that many Standalone databases.
+
+- **Prices** (saved copy of <https://www.scaleway.com/en/pricing/managed-databases/>, table "Managed
+  Database for Redis™", read 2026-11-26; its embedded data `managedRedisDatabase.nodeTypes`): seven RED1
+  node types, every one `general_availability`. The table has two per-node columns, "Main node" and
+  "Additional nodes", each an hourly SKU per zone; a Standalone database runs one node, the main node, so
+  the plan's price is the "Main node" price × 730, per node. vCPU is the table's "vCPU" column (the data's
+  `hardware.cpu.virtual.count`, every type `sharedCpu: true`), and memory its "GB", recorded as GiB (the
+  data's `ram.size` is binary, RED1-MICRO 2147483648 bytes). No plan includes storage, and the offering
+  has **no storage price**: the data shows local SSD storage, no billed volume, and the table has no
+  storage column. The price of `fr-par-1`, `fr-par-2`, `nl-ams-1` and `pl-waw-1` (the first zones,
+  *Prices*, *Which region, and zones*) applies in every region, so one price with an empty `regions`
+  list. No value needed rounding. The node classes, by the FAQ's image text: "Development: RED1-S,
+  RED1-XS, RED1-2XS, RED1-micro and Production: RED1-XL, RED1-L, RED1-M".
+
+| Plan | vCPU | Memory | Main node EUR/hour | Additional node EUR/hour | EUR/month (main × 730) |
+|---|---|---|---|---|---|
+| `RED1-MICRO` | 2 | 2 GB | 0.048 | 0.027 | `35.04` |
+| `RED1-2XS` | 3 | 4 GB | 0.075 | 0.041 | `54.75` |
+| `RED1-XS` | 4 | 8 GB | 0.137 | 0.082 | `100.01` |
+| `RED1-S` | 4 | 12 GB | 0.205 | 0.123 | `149.65` |
+| `RED1-M` | 4 | 16 GB | 0.274 | 0.164 | `200.02` |
+| `RED1-L` | 8 | 32 GB | 0.548 | 0.329 | `400.04` |
+| `RED1-XL` | 16 | 64 GB | 1.096 | 0.658 | `800.08` |
+
+- **Second-zone prices, not recorded.** The second zones of Amsterdam and Warsaw (`nl-ams-2`,
+  `pl-waw-2`) charge slightly different prices for some types, for example RED1-MICRO main €0.0479 and
+  additional €0.0274, RED1-2XS main €0.0753 and additional €0.0411, RED1-XS additional €0.0822, RED1-L
+  main €0.5479 and additional €0.3288 an hour. Zones are not modelled and a region's price is its first
+  zones' (*Prices*), so a cache placed in one of those zones may cost slightly more (or less) than the
+  estimate. The table's visible prices read "From €… / HOUR" for that reason.
+
+### Managed Database for Redis Cluster
+
+Category `cache.redis`. A variant of *Managed Database for Redis* (tier-variant rule): a database created
+in **Cluster mode**. Pages: as the base offering, and
+<https://www.scaleway.com/en/docs/managed-databases-for-redis/how-to/scale-up-a-database-for-redis/>.
+Its `snapshots` is the base offering's, and holds on this tier too (the persistence page names cluster
+mode as an addition, not a replacement).
+
+- `sharding`. **Needs:** Cluster mode. The FAQ, *What is the logic behind the cluster mode?*: "The
+  cluster nodes use hash partitioning to split the keyspace into 16,384 key slots. Each source of the
+  cluster is responsible for a subset of those slots."
+- **No `node-high-availability`** (decided question 11 of PRD #552, and milestone 6's decision 1).
+  Cluster mode does survive the loss of a node: the same FAQ section says "If one of the sources fails,
+  the remaining nodes hold a vote and elect the replica that will be promoted as the new source.", and
+  *How is the Redis™ Database's failover IP managed?* says "In case of unavailability of one of the
+  cluster nodes, no downtime is to be expected." But a cluster needs a cluster-aware client. The FAQ,
+  *How can I access my Managed Database for Redis™ once it is provisioned?*: "If you are in cluster mode
+  (3 nodes or more), you have to use a cluster-specific connector cable to connect to multiple
+  endpoints." and "There are as many `IP:port` endpoints as nodes in your cluster (one if standalone)."
+  Decided question 11 asks the report to say so wherever it points a cache at this tier for its high
+  availability; the snapshot format has no field for an offering's note, and no capability says "needs a
+  cluster-aware client", so the decision's fallback applies: Scaleway Redis lists no
+  `node-high-availability` until the 2-node High Availability topology leaves public beta (*Left out
+  on purpose*). A cache that needs node-level high availability is therefore `partial` on both Redis
+  offerings. If it were listed, a non-sharded cache would be pointed at this tier as `direct`, a tier its
+  client may not be able to use.
+- No `zone-high-availability`: the product is zonal ("Choose an Availability Zone", create page), and no
+  page says a cluster spans zones.
+- Regions `fr-par`, `nl-ams`, `pl-waw` (tier-variant regions rule): the base offering's regions. The
+  create page offers Cluster mode with no regional restriction, and no page limits the tier to some
+  regions or zones, the reading used for the PostgreSQL High Availability variant.
+- **Node count** (decided question 10 of PRD #552, issue #558): **3 to 6 nodes**. The concepts page,
+  *Cluster mode*: "minimum three and maximum six compute Instances"; the price page's table: "Databases
+  for Redis™ are available in high availability, with clusters from 3 to 6 nodes."; the scaling page:
+  "You can add up to 6 nodes.", and scaling only goes up ("The new total number of nodes has to be bigger
+  than your current number of nodes."). The snapshot format cannot hold the bounds, so an inventory count
+  below 3 is priced as given, below what Scaleway bills.
+
+- **Prices** (saved copy of <https://www.scaleway.com/en/pricing/managed-databases/>, the same table and
+  data, read 2026-11-26): the same seven node types. **Per-node price, an inference.** The page gives a
+  "Main node" and an "Additional nodes" price per node type, and says nothing about how a cluster
+  combines them. The snapshot reads a cluster as one main node plus additional nodes, by analogy with the
+  PostgreSQL and MySQL table's note "Additional node could be another node from the same type, a Read
+  Replica or a HA node." (which the Redis table does not carry). The plan's price is the 3-node minimum's
+  price, (main + 2 × additional) × 730, divided by its 3 nodes, rounded half up to 4 fractional digits,
+  so that an estimate for count 3 returns the 3-node cluster's price (to within the rounding: 2XS, XS, S
+  and M differ by €0.0001 at count 3). A **4- to 6-node cluster** is then priced a little high: each node
+  beyond the third at the per-node average instead of the additional-node price (RED1-M: €146.4867
+  against €119.72 a month). vCPU, memory, storage and regions as the base offering; no storage price.
+
+| Plan | vCPU | Memory | Main EUR/hour | Additional EUR/hour | 3 nodes EUR/hour (main + 2 × additional) | Per node EUR/month (3 nodes × 730 ÷ 3) |
+|---|---|---|---|---|---|---|
+| `RED1-MICRO` | 2 | 2 GB | 0.048 | 0.027 | 0.102 | `24.82` |
+| `RED1-2XS` | 3 | 4 GB | 0.075 | 0.041 | 0.157 | `38.2033` (38.20333…) |
+| `RED1-XS` | 4 | 8 GB | 0.137 | 0.082 | 0.301 | `73.2433` (73.24333…) |
+| `RED1-S` | 4 | 12 GB | 0.205 | 0.123 | 0.451 | `109.7433` (109.74333…) |
+| `RED1-M` | 4 | 16 GB | 0.274 | 0.164 | 0.602 | `146.4867` (146.48666…) |
+| `RED1-L` | 8 | 32 GB | 0.548 | 0.329 | 1.206 | `293.46` |
+| `RED1-XL` | 16 | 64 GB | 1.096 | 0.658 | 2.412 | `586.92` |
+
+### Managed MongoDB
+
+Category `database.mongodb` (PRD #552 milestone 6, read 2026-11-26). Pages:
+<https://www.scaleway.com/en/docs/managed-mongodb-databases/how-to/create-a-database-instance/>,
+<https://www.scaleway.com/en/docs/managed-mongodb-databases/concepts/>,
+<https://www.scaleway.com/en/docs/managed-mongodb-databases/how-to/manage-snapshots/>,
+<https://www.scaleway.com/en/docs/managed-mongodb-databases/how-to/increase-volume/>,
+<https://www.scaleway.com/en/docs/ipam/reference-content/ipv6/>, all from `scaleway/docs-content` at
+commit `13ef235ee5926d0a675e9b87cc421df5105762b1`; the changelog entries *Managed MongoDB is now in
+General availability* (2025-06-10) and *MongoDB v8.0 is now supported* (2026-07-20). The concepts page's
+"Currently, MongoDB® 7.0.11 and 7.0.12 are available" predates the 8.0 entry and is stale.
+
+The create page offers two node configurations: "**Replica-set 1-node** - an instance of MongoDB® that
+runs as a single server and does not provide redundancy or high availability." and "**Replica-set
+3-nodes** - a group of 3 MongoDB® servers (1 primary and 2 standby nodes) that maintain the same data
+set.", and the price page prices both ("Price for 1 Node", "Price for 3 Nodes"). No page names a
+default, so the base offering is the lowest tier, the **1-node** replica set; the 3-node set adds
+`node-high-availability` and is the variant *Managed MongoDB Replica Set*.
+
+- `snapshots`. **Needs:** nothing beyond the base tier. The concepts page, *Database snapshot*: "A
+  Snapshot is a consistent, instantaneous copy of the Block Storage volume of your Database Instance at a
+  certain point in time." (also the *Manage snapshots* page).
+- No `encryption-at-rest`: no MongoDB page mentions encryption, so it is not listed (target rule). A
+  DocumentDB or Cosmos DB resource that lists it is `partial` on Scaleway.
+- No `point-in-time-restore` and no `read-replicas`: neither is documented (the endpoints are
+  read-write; no read-only node or replica endpoint is described).
+- No `ipv6`: the IPv6 page does not list MongoDB, and the concepts page gives an endpoint "associated
+  with an IPv4 address and a port".
+- Regions `fr-par` only (both MongoDB offerings): the availability page (saved copy of
+  <https://www.scaleway.com/en/product-availability-by-region/>, read 2026-11-26) marks MongoDB®
+  "Available across the region" in Paris, "Not available" in Amsterdam and Warsaw and "Available soon"
+  in Milan; its embedded data agrees. SDK `api/mongodb/v1` declares fr-par (*API reference and SDK*),
+  and the price data prices only `fr-par`.
+- **Node count and volume** (decided question 10 of PRD #552, issue #558): this tier is exactly **1
+  node** (create page). The volume can grow "up to 15 TB" and "Block volume sizes cannot be decreased."
+  (*Increase volume* page); no minimum volume is stated on the MongoDB pages, and the price data carries
+  none.
+
+- **Prices** (saved copy of <https://www.scaleway.com/en/pricing/managed-databases/>, tables "Managed
+  MongoDB® - Cost Optimized" and "Managed MongoDB® - Production Optimized", read 2026-11-26; its embedded
+  data `managedMongodb.ranges`): twelve node types, every one `general_availability`. A Database
+  Instance costs a management fee per instance (`/storage/mgdb/instance/<type>/fr-par`) plus a price per
+  node (`/storage/mgdb/node/<type>/<zone>`); the visible "Price for 1 Node" is the fee plus one node, in
+  every row (POP2-16C-64G: 0.1675 + 0.962 = "€1.1295 / HOUR"). The plan's price is "Price for 1 Node" ×
+  730. All three Paris zones agree (PLAY2-NANO is offered in `fr-par-1` and `fr-par-2` only), so one
+  price with an empty `regions` list. vCPU and memory as the tables give them (memory binary in the
+  data, recorded as GiB); Cost Optimized types are shared-CPU, Production Optimized are not. No plan
+  includes storage.
+
+| Plan | vCPU | Memory | Management EUR/hour | Node EUR/hour | 1 node EUR/hour | EUR/month (× 730) |
+|---|---|---|---|---|---|---|
+| `MGDB-PLAY2-NANO` | 2 | 4 GB | 0.0677 | 0.04 | 0.1077 | `78.621` |
+| `MGDB-PRO2-XXS` | 2 | 8 GB | 0.0821 | 0.093 | 0.1751 | `127.823` |
+| `MGDB-PRO2-XS` | 4 | 16 GB | 0.0976 | 0.207 | 0.3046 | `222.358` |
+| `MGDB-PRO2-S` | 8 | 32 GB | 0.1554 | 0.409 | 0.5644 | `412.012` |
+| `MGDB-PRO2-M` | 16 | 64 GB | 0.2712 | 0.811 | 1.0822 | `790.006` |
+| `MGDB-PRO2-L` | 32 | 128 GB | 0.5043 | 1.608 | 2.1123 | `1541.979` |
+| `MGDB-POP2-2C-8G` | 2 | 8 GB | 0.0699 | 0.111 | 0.1809 | `132.057` |
+| `MGDB-POP2-4C-16G` | 4 | 16 GB | 0.07 | 0.247 | 0.317 | `231.41` |
+| `MGDB-POP2-8C-32G` | 8 | 32 GB | 0.1025 | 0.485 | 0.5875 | `428.875` |
+| `MGDB-POP2-16C-64G` | 16 | 64 GB | 0.1675 | 0.962 | 1.1295 | `824.535` |
+| `MGDB-POP2-32C-128G` | 32 | 128 GB | 0.2985 | 1.908 | 2.2065 | `1610.745` |
+| `MGDB-POP2-64C-256G` | 64 | 256 GB | 0.5595 | 3.807 | 4.3665 | `3187.545` |
+
+- **Storage price:** the tables' "Block Storage 5K: €0.0993/GB/month", whose hourly price in the data is
+  €0.000136 per GB in every Paris zone, × 730 = 0.09928, rounded half up to `0.0993` per GiB a month,
+  the value and class rule of the PostgreSQL and MySQL offerings. Block Storage 15k (€0.1489) and
+  "Backups/Snapshots: €0.03/GB/month" are not recorded (*Left out on purpose*). Each plan's data gives a
+  block volume only, priced apart, so no plan includes storage and every GiB is priced.
+
+### Managed MongoDB Replica Set
+
+Category `database.mongodb`. A variant of *Managed MongoDB* (tier-variant rule): a Database Instance
+created as a **Replica-set 3-nodes**. Pages:
+<https://www.scaleway.com/en/docs/managed-mongodb-databases/how-to/create-a-database-instance/>,
+<https://www.scaleway.com/en/docs/managed-mongodb-databases/concepts/>, and the base offering's other
+pages. Its `snapshots` is the base offering's, and holds on this tier too.
+
+- `node-high-availability`. **Needs:** Replica-set 3-nodes. The concepts page, *Replica-set 3-nodes*:
+  "If the main node fails for any reason, one of the remaining standby nodes is assigned and can take
+  over requests, reducing downtime." **Scope: node level only**: no page says the three nodes are in
+  different zones, so `zone-high-availability` is not claimed. The standby nodes are failover targets,
+  not read endpoints, so no `read-replicas`.
+- Regions `fr-par` only: the base offering's single region (tier-variant regions rule: the price page
+  prices the 3-node set there).
+- **Node count** (decided question 10 of PRD #552, issue #558): exactly **3 nodes** (create page: "a
+  group of 3 MongoDB® servers (1 primary and 2 standby nodes)"). A DocumentDB cluster of 2 or more
+  instances, which lists `node-high-availability`, maps here; one with count 3 is priced at the set's
+  price, and one with another count at that many thirds of it.
+
+- **Prices** (the same page, tables and data, read 2026-11-26): the visible "Price for 3 Nodes" is the
+  management fee plus three nodes in every row (POP2-16C-64G: 0.1675 + 3 × 0.962 = "€3.0535 / HOUR").
+  The plan's price is **per node**: "Price for 3 Nodes" × 730 ÷ 3, rounded half up to 4 fractional
+  digits, so that an estimate for count 3 is the set's price (as the PostgreSQL HA pair is divided by
+  its two nodes). Regions, vCPU and memory as the base offering.
+
+| Plan | vCPU | Memory | 3 nodes EUR/hour | Per node EUR/month (× 730 ÷ 3) |
+|---|---|---|---|---|
+| `MGDB-PLAY2-NANO` | 2 | 4 GB | 0.1877 | `45.6737` (45.67366…) |
+| `MGDB-PRO2-XXS` | 2 | 8 GB | 0.3611 | `87.8677` (87.86766…) |
+| `MGDB-PRO2-XS` | 4 | 16 GB | 0.7186 | `174.8593` (174.85933…) |
+| `MGDB-PRO2-S` | 8 | 32 GB | 1.3824 | `336.384` |
+| `MGDB-PRO2-M` | 16 | 64 GB | 2.7042 | `658.022` |
+| `MGDB-PRO2-L` | 32 | 128 GB | 5.3283 | `1296.553` |
+| `MGDB-POP2-2C-8G` | 2 | 8 GB | 0.4029 | `98.039` |
+| `MGDB-POP2-4C-16G` | 4 | 16 GB | 0.811 | `197.3433` (197.34333…) |
+| `MGDB-POP2-8C-32G` | 8 | 32 GB | 1.5575 | `378.9917` (378.99166…) |
+| `MGDB-POP2-16C-64G` | 16 | 64 GB | 3.0535 | `743.0183` (743.01833…) |
+| `MGDB-POP2-32C-128G` | 32 | 128 GB | 6.0225 | `1465.475` |
+| `MGDB-POP2-64C-256G` | 64 | 256 GB | 11.9805 | `2915.255` |
+
+- **Storage price:** `0.0993` per GiB a month, as for the base offering. The page gives one per-GB price
+  per Database Instance with no "per node" wording, and no page says whether each of the three nodes'
+  volumes is billed, so the price is **not** tripled; an estimate may be low by up to that much (as for
+  PostgreSQL HA, *Prices*, *Database storage*).
+
 ### Object Storage
 
 Category `storage.object`. Pages: <https://www.scaleway.com/en/docs/object-storage/concepts/>,
@@ -785,6 +1165,32 @@ Category `messaging.queue`. Pages: <https://www.scaleway.com/en/docs/queues/conc
 - Regions `fr-par`, `nl-ams`: the availability page marks Queues available in Paris and Amsterdam, and
   "Not available" in Warsaw and Milan. SDK `api/mnq/v1beta1` `SqsAPI` serves the same two regions.
 
+### Serverless Containers
+
+Category `serverless.container` (PRD #552 milestone 6, read 2026-11-26). Pages:
+<https://www.scaleway.com/en/docs/serverless-containers/concepts/>,
+<https://www.scaleway.com/en/docs/serverless-containers/faq/>,
+<https://www.scaleway.com/en/docs/ipam/reference-content/ipv6/>, all from `scaleway/docs-content` at
+commit `13ef235ee5926d0a675e9b87cc421df5105762b1`; the changelog entry deprecating the `v1beta1` API
+(2026-07-13; `v1` is current).
+
+- Category fit: a container image Scaleway runs and scales with requests. The concepts page, *Scale to
+  zero*: "When provisioned with a minimum scale of `0`, Serverless Containers scale down to zero active
+  instances as long as they are not triggered."
+- `autoscaling`. **Needs:** nothing (no tier). The concepts page, *Autoscaling*: "Autoscaling parameters
+  are min-scale and max-scale". Listed as *Serverless Functions* lists it; the guide gives source
+  resources of this category no capability, so it changes no fit today.
+- No `ipv6`: as for *Serverless Functions* (*Left out on purpose*): the IPv6 page says "A function or
+  container endpoint resolves to both IPv4 and IPv6 addresses (dual stack)", inbound traffic only.
+- Regions `fr-par`, `it-mil`, `nl-ams`, `pl-waw`: the availability page (saved copy of
+  <https://www.scaleway.com/en/product-availability-by-region/>, read 2026-11-26) marks Serverless
+  Containers "Available across the region" in all four regions; its embedded data agrees. SDK
+  `api/container/v1` declares the four (*API reference and SDK*), and the changelog entry of 2026-08-31
+  brought the product to Milan (*Declared EU regions*).
+- **Usage-priced**: the FAQ says it is "billed on a pay-as-you-go basis, strictly on resource
+  consumption (Memory and CPU)", per GB-second and vCPU-second, so the offering has no plan, storage
+  price or fixed fee, and a resource of the category is "not estimated: usage-priced" (PRD #190).
+
 ### Serverless Functions
 
 Category `serverless.function`. Pages: <https://www.scaleway.com/en/docs/serverless-functions/faq/>,
@@ -797,6 +1203,34 @@ Category `serverless.function`. Pages: <https://www.scaleway.com/en/docs/serverl
 - Regions `fr-par`, `nl-ams`, `pl-waw`: the availability page marks Serverless Functions available in
   Paris, Amsterdam and Warsaw, and "Available soon" in Milan, so `it-mil` is not listed. SDK
   `api/function/v1beta1` serves the same three regions.
+
+### Topics and Events
+
+Category `messaging.topic` (PRD #552 milestone 6, read 2026-11-26). Pages:
+<https://www.scaleway.com/en/docs/topics-and-events/faq/>,
+<https://www.scaleway.com/en/docs/topics-and-events/concepts/>,
+<https://www.scaleway.com/en/docs/topics-and-events/reference-content/topics-and-events-support/>,
+<https://www.scaleway.com/en/docs/topics-and-events/reference-content/verifying-webhooks/>, all from
+`scaleway/docs-content` at commit `13ef235ee5926d0a675e9b87cc421df5105762b1`; the changelog entry of
+2024-06-25, which says "It is now in General Availability, ready for your production use cases."
+
+- Category fit: publish and subscribe. The FAQ calls it "an in-house implementation of AWS SNS
+  protocol", and the concepts page defines a *Subscriber* as "the entity (e.g. a queue, function, or
+  URL) that messages from topics are pushed to".
+- No capability. The SNS support page marks `RedrivePolicy` **N** (not supported) among the
+  subscription attributes, and `DeliveryPolicy` N on topics and subscriptions, so there is no
+  dead-letter setting and `dead-letter-queue` is not listed. It marks `KmsMasterKeyId` N on topics, and
+  no page states encryption at rest, so `encryption-at-rest` is not listed either (target rule). Other
+  limits the page records: `Subscribe` supports "Only http, sqs and lambda protocols", `FilterPolicy`
+  and `RawMessageDelivery` are not supported, and FIFO topics are (`FifoTopic` Y).
+- Regions `fr-par`, `nl-ams`: the availability page (saved copy of
+  <https://www.scaleway.com/en/product-availability-by-region/>, read 2026-11-26) marks Topics & Events
+  "Available across the region" in Paris and Amsterdam and "Not available" in Warsaw and Milan; its
+  embedded data agrees. SDK `api/mnq/v1beta1` `SnsAPI` declares fr-par and nl-ams (*API reference and
+  SDK*), and the webhook page gives trust chains for those two regions only.
+- **Usage-priced**: the FAQ says "Billing is based on topic volume", the size of the messages a topic
+  delivers, so the offering has no plan, storage price or fixed fee, and a resource of the category is
+  "not estimated: usage-priced" (PRD #190).
 
 ## Left out on purpose
 
@@ -816,16 +1250,69 @@ Category `serverless.function`. Pages: <https://www.scaleway.com/en/docs/serverl
 - **Managed Database `point-in-time-restore` and `ipv6`:** no point-in-time restore is documented (backups
   are restored as taken; snapshots and clones copy the current state), and the FAQ says IPv6 is not
   supported.
-- **`ipv6` on Kubernetes Kapsule (both tiers), Object Storage and Queues:** the page *IPv6 and
+- **`ipv6` on Kubernetes Kapsule (both tiers), Object Storage, Queues, and both Redis and both MongoDB
+  offerings:** the page *IPv6 and
   the Scaleway ecosystem* (<https://www.scaleway.com/en/docs/ipam/reference-content/ipv6/>) lists the
   products that support IPv6, and none of these is among them. It says that "Products other than those
   listed here do not officially support IPv6", and names Managed Databases and Kubernetes Kapsule among
   them.
 - **Products not in the snapshot:** Kubernetes Kosmos (multi-cloud Kubernetes whose nodes may run
-  outside Scaleway; Kapsule already serves the category); Serverless Containers and Serverless Jobs
-  (containers and batch jobs, not per-invocation functions); NATS and Topics and Events (streams and
-  pub/sub, not queues); Managed Database for Redis and Document Database (no matching taxonomy category);
-  Serverless SQL Database (see below).
+  outside Scaleway; Kapsule already serves the category); Serverless Jobs (batch jobs, no taxonomy
+  category); NATS (streams, not queues or topics); Document Database (FerretDB on PostgreSQL, which has
+  no product pages left, PRD #552; Managed MongoDB serves `database.mongodb`); File Storage (see below);
+  Serverless SQL Database (see below). Serverless Containers, Topics and Events and Managed Database for
+  Redis were in this list until PRD #552 milestone 6 gave them their categories (their sections above).
+- **File Storage, so no `storage.file` offering (PRD #552 milestone 6, decision 4; flagged for the
+  maintainer).** The category is "a shared file system the provider runs, mounted by several machines
+  over NFS". Scaleway's File Storage is a shared file system, but it is not mounted over NFS: the FAQ
+  (<https://www.scaleway.com/en/docs/file-storage/faq/>), *Is File Storage compatible with NFS?*, says
+  "You do not need to manually configure or connect via the NFS protocol", the mount page
+  (<https://www.scaleway.com/en/docs/file-storage/how-to/mount-file-system/>) mounts it with
+  "`mount -t virtiofs -o nodev,nosuid <FILE_SYSTEM_ID> /mnt/my_fs`", and the FAQ says it is "designed to
+  be used in conjunction with Scaleway Instances and Kubernetes Kapsule" (only compatible Instance types,
+  <https://www.scaleway.com/en/docs/file-storage/reference-content/file-system-instance-selection/>). It
+  does not fully serve the category, so it is left out (target rule), and a `storage.file` resource on
+  Scaleway is fit `none`, "no offering in the Scaleway catalog for `storage.file`". The facts read, for a
+  later decision (all `scaleway/docs-content` at commit `13ef235ee5926d0a675e9b87cc421df5105762b1`, the
+  saved copy of <https://www.scaleway.com/en/pricing/storage/> and the saved copy of
+  <https://www.scaleway.com/en/product-availability-by-region/>, read 2026-11-26):
+  - general availability in Paris on 2026-07-16 and in Amsterdam on 2026-10-21 (changelog); the FAQ's
+    "The AMS region will be available soon" predates the second entry;
+  - regions: the availability page marks File Storage Standard "Available across the region" in Paris
+    and Amsterdam, and the price data prices both, but SDK `api/file/v1alpha1`, the only File Storage
+    package, declares fr-par only, so under the regions rule an offering would list `fr-par` alone;
+  - price: the *File Storage* table's "File System | 25 GB up to 50 TB* | €0.000221 /GB / HOUR |
+    €0.16133 /GB / MONTH", billed on "the provisioned size of the file system"; × 730 = 0.16133, rounded
+    half up to `0.1613` per GiB a month, the same in both regions;
+  - sizes: 25 GB minimum, 50 TB maximum per file system, in 1 GB steps (FAQ; resize page: "File system
+    size must be at least 25 GB."), and at most 10 file systems per Organization;
+  - capabilities: `encryption-at-rest` ("Scaleway automatically encrypts all data at rest on physical
+    disks", FAQ); **no `snapshots`** (no File Storage page mentions them, so PRD #552's "snapshots" is not
+    confirmed); no `zone-high-availability` ("triple replication" "within one Availability Zone", FAQ).
+
+  A decision to accept virtiofs mounts by Scaleway's own machines as `storage.file` would add one
+  offering, *File Storage*, category `storage.file`, capability `encryption-at-rest`, region `fr-par`
+  (and `nl-ams` once its SDK declares it), no plans and a storage price of `0.1613` per GiB a month,
+  with the 25 GB minimum recorded here (decided question 10).
+- **Redis High Availability (2 nodes):** in public beta. The changelog entry of 2024-12-03 says "Our
+  2-node High Availability offer is now in Public Beta.", and no later Redis entry announces general
+  availability (the create page and FAQ describe the option without a beta label). Under decided
+  question 11 of PRD #552 it is no offering or tier, and Scaleway Redis lists no
+  `node-high-availability` until it is GA (*Managed Database for Redis Cluster*).
+- **Redis `node-high-availability` on Cluster mode:** stated (the cluster survives a node's loss), but
+  not listed, because a cluster needs a cluster-aware client and the snapshot cannot say so (*Managed
+  Database for Redis Cluster*; decided question 11's fallback).
+- **`encryption-at-rest` on Redis, MongoDB, Topics and Events and Container Registry:** no page of any
+  of them states it (Redis names TLS in transit only; Topics and Events marks `KmsMasterKeyId` not
+  supported). Their sections say so. Every source registry lists it, so every registry resource is
+  `partial` on Scaleway.
+- **Topics and Events `dead-letter-queue`:** `RedrivePolicy` is not supported (*Topics and Events*).
+- **Load Balancer `node-high-availability`:** a failed load balancer is replaced by a replica
+  "immediately spawned and deployed", with its IP rerouted automatically (FAQ). That is a rebuild after
+  the failure, recovery rather than continuity, as for Object Storage below (milestone 6's decision 3).
+  **Load Balancer `udp`:** not supported (FAQ).
+- **Milan for Load Balancer and Container Registry:** the availability page marks both available there,
+  but their SDKs do not declare `it-mil` (regions rule; each offering's section).
 - **Serverless SQL Database, removed from the snapshot (PRD #14, target rule).** It is a
   PostgreSQL-compatible database with documented differences from standard PostgreSQL: the
   known-differences page
@@ -892,5 +1379,19 @@ Prices and plans left out (PRD #190 milestone 4, read 2026-11-13):
 - **Elastic Metal storage beyond a server's disks** (issue #219, read 2026-11-14): not priced, because
   Elastic Metal is not compatible with Block Storage and sells no other storage option (*Elastic Metal*,
   *No storage price*).
-- **Usage-priced offerings:** Queues and Serverless Functions are priced by use (PRD #190) and have no
-  plans or storage prices.
+- **Usage-priced offerings:** Queues, Serverless Functions and, since PRD #552 milestone 6, Serverless
+  Containers and Topics and Events are priced by use (PRD #190) and have no plans or storage prices.
+- **Unpriced offerings** (PRD #552 milestone 6, decided question 6): Load Balancer (sizes LB-S to LB-XL)
+  and Container Registry (€0.027 per GB and month of private images) record no plan, storage price or
+  fixed fee; a resource of either category is not estimated, reason `not-priced`.
+
+Prices and plans left out (PRD #552 milestone 6, read 2026-11-26):
+
+- **The Redis prices of `nl-ams-2` and `pl-waw-2`**, which differ slightly from the first zones'
+  (*Managed Database for Redis*): one price per region, its first zones'.
+- **MongoDB Block Storage 15k** (€0.000204 per GB and hour, €0.1489 a month) and **MongoDB backups and
+  snapshots** (€0.03 per GB and month; €0.000044 an hour in the data): one storage price per region, the
+  5K class, as for the PostgreSQL and MySQL offerings.
+- **MongoDB storage on the 3-node set's other nodes:** not added; see *Managed MongoDB Replica Set*.
+- **Redis Cluster nodes beyond the third:** priced at the per-node average of the 3-node cluster, not at
+  the additional-node price (*Managed Database for Redis Cluster*).

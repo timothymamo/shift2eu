@@ -15,6 +15,14 @@
       "storagePrices": [{ "amount": 0.0949, "currency": "EUR", "regions": [] }]
     },
     {
+      "name": "Container Registry",
+      "categories": ["registry.container"],
+      "capabilities": [],
+      "regions": ["fr-par", "nl-ams", "pl-waw"],
+      "plans": [],
+      "storagePrices": []
+    },
+    {
       "name": "Elastic Metal",
       "categories": ["compute.baremetal"],
       "capabilities": ["ipv6"],
@@ -115,6 +123,14 @@
       "fixedFees": [{ "amount": 80.3, "currency": "EUR", "regions": [] }]
     },
     {
+      "name": "Load Balancer",
+      "categories": ["network.loadbalancer"],
+      "capabilities": ["ipv6"],
+      "regions": ["fr-par", "nl-ams", "pl-waw"],
+      "plans": [],
+      "storagePrices": []
+    },
+    {
       "name": "Managed Database for PostgreSQL and MySQL",
       "categories": ["database.mysql", "database.postgresql"],
       "capabilities": ["encryption-at-rest", "read-replicas", "snapshots"],
@@ -157,6 +173,80 @@
       "storagePrices": [{ "amount": 0.0993, "currency": "EUR", "regions": [] }]
     },
     {
+      "name": "Managed Database for Redis",
+      "categories": ["cache.redis"],
+      "capabilities": ["snapshots"],
+      "regions": ["fr-par", "nl-ams", "pl-waw"],
+      "plans": [
+        { "name": "RED1-MICRO", "vcpus": 2, "memoryGiB": 2, "storageGiB": 0, "prices": [{ "amount": 35.04, "currency": "EUR", "regions": [] }] },
+        { "name": "RED1-2XS", "vcpus": 3, "memoryGiB": 4, "storageGiB": 0, "prices": [{ "amount": 54.75, "currency": "EUR", "regions": [] }] },
+        { "name": "RED1-XS", "vcpus": 4, "memoryGiB": 8, "storageGiB": 0, "prices": [{ "amount": 100.01, "currency": "EUR", "regions": [] }] },
+        { "name": "RED1-S", "vcpus": 4, "memoryGiB": 12, "storageGiB": 0, "prices": [{ "amount": 149.65, "currency": "EUR", "regions": [] }] },
+        { "name": "RED1-M", "vcpus": 4, "memoryGiB": 16, "storageGiB": 0, "prices": [{ "amount": 200.02, "currency": "EUR", "regions": [] }] },
+        { "name": "RED1-L", "vcpus": 8, "memoryGiB": 32, "storageGiB": 0, "prices": [{ "amount": 400.04, "currency": "EUR", "regions": [] }] },
+        { "name": "RED1-XL", "vcpus": 16, "memoryGiB": 64, "storageGiB": 0, "prices": [{ "amount": 800.08, "currency": "EUR", "regions": [] }] }
+      ],
+      "storagePrices": []
+    },
+    {
+      "name": "Managed Database for Redis Cluster",
+      "categories": ["cache.redis"],
+      "capabilities": ["sharding", "snapshots"],
+      "regions": ["fr-par", "nl-ams", "pl-waw"],
+      "plans": [
+        { "name": "RED1-MICRO", "vcpus": 2, "memoryGiB": 2, "storageGiB": 0, "prices": [{ "amount": 24.82, "currency": "EUR", "regions": [] }] },
+        { "name": "RED1-2XS", "vcpus": 3, "memoryGiB": 4, "storageGiB": 0, "prices": [{ "amount": 38.2033, "currency": "EUR", "regions": [] }] },
+        { "name": "RED1-XS", "vcpus": 4, "memoryGiB": 8, "storageGiB": 0, "prices": [{ "amount": 73.2433, "currency": "EUR", "regions": [] }] },
+        { "name": "RED1-S", "vcpus": 4, "memoryGiB": 12, "storageGiB": 0, "prices": [{ "amount": 109.7433, "currency": "EUR", "regions": [] }] },
+        { "name": "RED1-M", "vcpus": 4, "memoryGiB": 16, "storageGiB": 0, "prices": [{ "amount": 146.4867, "currency": "EUR", "regions": [] }] },
+        { "name": "RED1-L", "vcpus": 8, "memoryGiB": 32, "storageGiB": 0, "prices": [{ "amount": 293.46, "currency": "EUR", "regions": [] }] },
+        { "name": "RED1-XL", "vcpus": 16, "memoryGiB": 64, "storageGiB": 0, "prices": [{ "amount": 586.92, "currency": "EUR", "regions": [] }] }
+      ],
+      "storagePrices": []
+    },
+    {
+      "name": "Managed MongoDB",
+      "categories": ["database.mongodb"],
+      "capabilities": ["snapshots"],
+      "regions": ["fr-par"],
+      "plans": [
+        { "name": "MGDB-PLAY2-NANO", "vcpus": 2, "memoryGiB": 4, "storageGiB": 0, "prices": [{ "amount": 78.621, "currency": "EUR", "regions": [] }] },
+        { "name": "MGDB-PRO2-XXS", "vcpus": 2, "memoryGiB": 8, "storageGiB": 0, "prices": [{ "amount": 127.823, "currency": "EUR", "regions": [] }] },
+        { "name": "MGDB-PRO2-XS", "vcpus": 4, "memoryGiB": 16, "storageGiB": 0, "prices": [{ "amount": 222.358, "currency": "EUR", "regions": [] }] },
+        { "name": "MGDB-PRO2-S", "vcpus": 8, "memoryGiB": 32, "storageGiB": 0, "prices": [{ "amount": 412.012, "currency": "EUR", "regions": [] }] },
+        { "name": "MGDB-PRO2-M", "vcpus": 16, "memoryGiB": 64, "storageGiB": 0, "prices": [{ "amount": 790.006, "currency": "EUR", "regions": [] }] },
+        { "name": "MGDB-PRO2-L", "vcpus": 32, "memoryGiB": 128, "storageGiB": 0, "prices": [{ "amount": 1541.979, "currency": "EUR", "regions": [] }] },
+        { "name": "MGDB-POP2-2C-8G", "vcpus": 2, "memoryGiB": 8, "storageGiB": 0, "prices": [{ "amount": 132.057, "currency": "EUR", "regions": [] }] },
+        { "name": "MGDB-POP2-4C-16G", "vcpus": 4, "memoryGiB": 16, "storageGiB": 0, "prices": [{ "amount": 231.41, "currency": "EUR", "regions": [] }] },
+        { "name": "MGDB-POP2-8C-32G", "vcpus": 8, "memoryGiB": 32, "storageGiB": 0, "prices": [{ "amount": 428.875, "currency": "EUR", "regions": [] }] },
+        { "name": "MGDB-POP2-16C-64G", "vcpus": 16, "memoryGiB": 64, "storageGiB": 0, "prices": [{ "amount": 824.535, "currency": "EUR", "regions": [] }] },
+        { "name": "MGDB-POP2-32C-128G", "vcpus": 32, "memoryGiB": 128, "storageGiB": 0, "prices": [{ "amount": 1610.745, "currency": "EUR", "regions": [] }] },
+        { "name": "MGDB-POP2-64C-256G", "vcpus": 64, "memoryGiB": 256, "storageGiB": 0, "prices": [{ "amount": 3187.545, "currency": "EUR", "regions": [] }] }
+      ],
+      "storagePrices": [{ "amount": 0.0993, "currency": "EUR", "regions": [] }]
+    },
+    {
+      "name": "Managed MongoDB Replica Set",
+      "categories": ["database.mongodb"],
+      "capabilities": ["node-high-availability", "snapshots"],
+      "regions": ["fr-par"],
+      "plans": [
+        { "name": "MGDB-PLAY2-NANO", "vcpus": 2, "memoryGiB": 4, "storageGiB": 0, "prices": [{ "amount": 45.6737, "currency": "EUR", "regions": [] }] },
+        { "name": "MGDB-PRO2-XXS", "vcpus": 2, "memoryGiB": 8, "storageGiB": 0, "prices": [{ "amount": 87.8677, "currency": "EUR", "regions": [] }] },
+        { "name": "MGDB-PRO2-XS", "vcpus": 4, "memoryGiB": 16, "storageGiB": 0, "prices": [{ "amount": 174.8593, "currency": "EUR", "regions": [] }] },
+        { "name": "MGDB-PRO2-S", "vcpus": 8, "memoryGiB": 32, "storageGiB": 0, "prices": [{ "amount": 336.384, "currency": "EUR", "regions": [] }] },
+        { "name": "MGDB-PRO2-M", "vcpus": 16, "memoryGiB": 64, "storageGiB": 0, "prices": [{ "amount": 658.022, "currency": "EUR", "regions": [] }] },
+        { "name": "MGDB-PRO2-L", "vcpus": 32, "memoryGiB": 128, "storageGiB": 0, "prices": [{ "amount": 1296.553, "currency": "EUR", "regions": [] }] },
+        { "name": "MGDB-POP2-2C-8G", "vcpus": 2, "memoryGiB": 8, "storageGiB": 0, "prices": [{ "amount": 98.039, "currency": "EUR", "regions": [] }] },
+        { "name": "MGDB-POP2-4C-16G", "vcpus": 4, "memoryGiB": 16, "storageGiB": 0, "prices": [{ "amount": 197.3433, "currency": "EUR", "regions": [] }] },
+        { "name": "MGDB-POP2-8C-32G", "vcpus": 8, "memoryGiB": 32, "storageGiB": 0, "prices": [{ "amount": 378.9917, "currency": "EUR", "regions": [] }] },
+        { "name": "MGDB-POP2-16C-64G", "vcpus": 16, "memoryGiB": 64, "storageGiB": 0, "prices": [{ "amount": 743.0183, "currency": "EUR", "regions": [] }] },
+        { "name": "MGDB-POP2-32C-128G", "vcpus": 32, "memoryGiB": 128, "storageGiB": 0, "prices": [{ "amount": 1465.475, "currency": "EUR", "regions": [] }] },
+        { "name": "MGDB-POP2-64C-256G", "vcpus": 64, "memoryGiB": 256, "storageGiB": 0, "prices": [{ "amount": 2915.255, "currency": "EUR", "regions": [] }] }
+      ],
+      "storagePrices": [{ "amount": 0.0993, "currency": "EUR", "regions": [] }]
+    },
+    {
       "name": "Object Storage",
       "categories": ["storage.object"],
       "capabilities": ["encryption-at-rest", "object-versioning"],
@@ -173,10 +263,26 @@
       "storagePrices": []
     },
     {
+      "name": "Serverless Containers",
+      "categories": ["serverless.container"],
+      "capabilities": ["autoscaling"],
+      "regions": ["fr-par", "it-mil", "nl-ams", "pl-waw"],
+      "plans": [],
+      "storagePrices": []
+    },
+    {
       "name": "Serverless Functions",
       "categories": ["serverless.function"],
       "capabilities": ["autoscaling"],
       "regions": ["fr-par", "nl-ams", "pl-waw"],
+      "plans": [],
+      "storagePrices": []
+    },
+    {
+      "name": "Topics and Events",
+      "categories": ["messaging.topic"],
+      "capabilities": [],
+      "regions": ["fr-par", "nl-ams"],
       "plans": [],
       "storagePrices": []
     }

@@ -12,8 +12,8 @@
   },
   "summary": {
     "direct": 6,
-    "partial": 5,
-    "none": 7,
+    "partial": 9,
+    "none": 3,
     "total": 18
   },
   "resources": [
@@ -52,23 +52,54 @@
       "rawType": "AWS::DocDB::DBCluster",
       "category": "database.mongodb",
       "region": "eu-central-1",
-      "fit": "none",
-      "bestOffering": "",
+      "fit": "partial",
+      "bestOffering": "Managed MongoDB Replica Set",
       "ties": [],
       "reasons": [
         {
-          "code": "no-offering",
-          "text": "no offering in the Scaleway catalog for database.mongodb",
-          "target": "Scaleway",
-          "category": "database.mongodb"
+          "code": "missing-capability",
+          "text": "Managed MongoDB Replica Set does not offer encryption-at-rest",
+          "offering": "Managed MongoDB Replica Set",
+          "capability": "encryption-at-rest"
+        },
+        {
+          "code": "missing-capability",
+          "text": "Managed MongoDB Replica Set does not offer point-in-time-restore",
+          "offering": "Managed MongoDB Replica Set",
+          "capability": "point-in-time-restore"
+        },
+        {
+          "code": "missing-capability",
+          "text": "Managed MongoDB Replica Set does not offer read-replicas",
+          "offering": "Managed MongoDB Replica Set",
+          "capability": "read-replicas"
         }
       ],
-      "requiredChanges": [],
+      "requiredChanges": [
+        "encryption-at-rest",
+        "point-in-time-restore",
+        "read-replicas"
+      ],
       "relations": [],
       "affectedBy": [],
+      "plan": {
+        "name": "MGDB-PRO2-XS",
+        "vcpus": 4,
+        "memoryGiB": "16",
+        "includedStorageGiB": 0,
+        "price": "174.86"
+      },
       "estimate": {
-        "estimated": false,
-        "reason": "no-fit"
+        "estimated": true,
+        "amount": "524.58",
+        "countAssumed": false,
+        "hoursAssumed": true,
+        "storageNotIncluded": "data-storage",
+        "breakdown": {
+          "plan": "524.58",
+          "storage": "0.00",
+          "fixedFee": "0.00"
+        }
       }
     },
     {
@@ -188,23 +219,25 @@
       "rawType": "AWS::ECR::Repository",
       "category": "registry.container",
       "region": "eu-central-1",
-      "fit": "none",
-      "bestOffering": "",
+      "fit": "partial",
+      "bestOffering": "Container Registry",
       "ties": [],
       "reasons": [
         {
-          "code": "no-offering",
-          "text": "no offering in the Scaleway catalog for registry.container",
-          "target": "Scaleway",
-          "category": "registry.container"
+          "code": "missing-capability",
+          "text": "Container Registry does not offer encryption-at-rest",
+          "offering": "Container Registry",
+          "capability": "encryption-at-rest"
         }
       ],
-      "requiredChanges": [],
+      "requiredChanges": [
+        "encryption-at-rest"
+      ],
       "relations": [],
       "affectedBy": [],
       "estimate": {
         "estimated": false,
-        "reason": "no-fit"
+        "reason": "not-priced"
       }
     },
     {
@@ -252,18 +285,20 @@
       "rawType": "AWS::SNS::Topic",
       "category": "messaging.topic",
       "region": "eu-central-1",
-      "fit": "none",
-      "bestOffering": "",
+      "fit": "partial",
+      "bestOffering": "Topics and Events",
       "ties": [],
       "reasons": [
         {
-          "code": "no-offering",
-          "text": "no offering in the Scaleway catalog for messaging.topic",
-          "target": "Scaleway",
-          "category": "messaging.topic"
+          "code": "missing-capability",
+          "text": "Topics and Events does not offer encryption-at-rest",
+          "offering": "Topics and Events",
+          "capability": "encryption-at-rest"
         }
       ],
-      "requiredChanges": [],
+      "requiredChanges": [
+        "encryption-at-rest"
+      ],
       "relations": [
         {
           "type": "depends-on",
@@ -273,7 +308,7 @@
       "affectedBy": [],
       "estimate": {
         "estimated": false,
-        "reason": "no-fit"
+        "reason": "usage-priced"
       }
     },
     {
@@ -362,23 +397,46 @@
       "rawType": "AWS::ElastiCache::ReplicationGroup",
       "category": "cache.redis",
       "region": "eu-central-1",
-      "fit": "none",
-      "bestOffering": "",
+      "fit": "partial",
+      "bestOffering": "Managed Database for Redis Cluster",
       "ties": [],
       "reasons": [
         {
-          "code": "no-offering",
-          "text": "no offering in the Scaleway catalog for cache.redis",
-          "target": "Scaleway",
-          "category": "cache.redis"
+          "code": "missing-capability",
+          "text": "Managed Database for Redis Cluster does not offer encryption-at-rest",
+          "offering": "Managed Database for Redis Cluster",
+          "capability": "encryption-at-rest"
+        },
+        {
+          "code": "missing-capability",
+          "text": "Managed Database for Redis Cluster does not offer node-high-availability",
+          "offering": "Managed Database for Redis Cluster",
+          "capability": "node-high-availability"
         }
       ],
-      "requiredChanges": [],
+      "requiredChanges": [
+        "encryption-at-rest",
+        "node-high-availability"
+      ],
       "relations": [],
       "affectedBy": [],
+      "plan": {
+        "name": "RED1-M",
+        "vcpus": 4,
+        "memoryGiB": "16",
+        "includedStorageGiB": 0,
+        "price": "146.49"
+      },
       "estimate": {
-        "estimated": false,
-        "reason": "no-fit"
+        "estimated": true,
+        "amount": "585.95",
+        "countAssumed": false,
+        "hoursAssumed": true,
+        "breakdown": {
+          "plan": "585.95",
+          "storage": "0.00",
+          "fixedFee": "0.00"
+        }
       }
     },
     {
@@ -598,37 +656,10 @@
   ],
   "blockers": [
     {
-      "resourceId": "shop-catalog-docs",
-      "reason": {
-        "code": "no-offering",
-        "text": "no offering in the Scaleway catalog for database.mongodb",
-        "target": "Scaleway",
-        "category": "database.mongodb"
-      }
-    },
-    {
       "resourceId": "shop-cdn",
       "reason": {
         "code": "not-classified",
         "text": "not classified"
-      }
-    },
-    {
-      "resourceId": "shop-images",
-      "reason": {
-        "code": "no-offering",
-        "text": "no offering in the Scaleway catalog for registry.container",
-        "target": "Scaleway",
-        "category": "registry.container"
-      }
-    },
-    {
-      "resourceId": "shop-order-events",
-      "reason": {
-        "code": "no-offering",
-        "text": "no offering in the Scaleway catalog for messaging.topic",
-        "target": "Scaleway",
-        "category": "messaging.topic"
       }
     },
     {
@@ -638,15 +669,6 @@
         "text": "no offering in the Scaleway catalog for search.opensearch",
         "target": "Scaleway",
         "category": "search.opensearch"
-      }
-    },
-    {
-      "resourceId": "shop-sessions",
-      "reason": {
-        "code": "no-offering",
-        "text": "no offering in the Scaleway catalog for cache.redis",
-        "target": "Scaleway",
-        "category": "cache.redis"
       }
     },
     {
@@ -694,38 +716,11 @@
       "resources": 14,
       "summary": {
         "direct": 4,
-        "partial": 4,
-        "none": 6,
+        "partial": 8,
+        "none": 2,
         "total": 14
       },
       "blockers": [
-        {
-          "resourceId": "shop-catalog-docs",
-          "reason": {
-            "code": "no-offering",
-            "text": "no offering in the Scaleway catalog for database.mongodb",
-            "target": "Scaleway",
-            "category": "database.mongodb"
-          }
-        },
-        {
-          "resourceId": "shop-images",
-          "reason": {
-            "code": "no-offering",
-            "text": "no offering in the Scaleway catalog for registry.container",
-            "target": "Scaleway",
-            "category": "registry.container"
-          }
-        },
-        {
-          "resourceId": "shop-order-events",
-          "reason": {
-            "code": "no-offering",
-            "text": "no offering in the Scaleway catalog for messaging.topic",
-            "target": "Scaleway",
-            "category": "messaging.topic"
-          }
-        },
         {
           "resourceId": "shop-product-search",
           "reason": {
@@ -733,15 +728,6 @@
             "text": "no offering in the Scaleway catalog for search.opensearch",
             "target": "Scaleway",
             "category": "search.opensearch"
-          }
-        },
-        {
-          "resourceId": "shop-sessions",
-          "reason": {
-            "code": "no-offering",
-            "text": "no offering in the Scaleway catalog for cache.redis",
-            "target": "Scaleway",
-            "category": "cache.redis"
           }
         },
         {
@@ -753,10 +739,10 @@
         }
       ],
       "estimate": {
-        "amount": "517.16",
-        "estimated": 6,
+        "amount": "1627.68",
+        "estimated": 8,
         "resources": 14,
-        "storageNotIncluded": 4
+        "storageNotIncluded": 5
       },
       "sourceCost": {
         "covered": 4,
@@ -804,10 +790,10 @@
     ],
     "hoursBasis": 730,
     "total": {
-      "amount": "587.58",
-      "estimated": 8,
+      "amount": "1698.10",
+      "estimated": 10,
       "resources": 18,
-      "storageNotIncluded": 4
+      "storageNotIncluded": 5
     }
   },
   "sourceCost": {
