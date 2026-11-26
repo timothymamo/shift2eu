@@ -1346,6 +1346,29 @@ func replaceWithFIFO(name string) func(*testing.T, map[string]string) {
 	}
 }
 
+// replaceWithReadOnly returns the entry that leaves the file command the
+// variable names a regular file the run may read but not write: one the run
+// cannot open O_RDWR, the open it records and appends to its own file commands
+// with (issues #615, #614). The mode is the case's premise, so a root test - one
+// that opens the file whatever its bits say - skips rather than pass without
+// exercising it.
+func replaceWithReadOnly(name string) func(*testing.T, map[string]string) {
+	return func(t *testing.T, env map[string]string) {
+		t.Helper()
+
+		if os.Geteuid() == 0 {
+			t.Skip("root opens a mode 0444 file O_RDWR, so it cannot stand in for a file command the run may read but not write")
+		}
+
+		path := env[name]
+		writeEnvFile(t, path, "")
+
+		if err := os.Chmod(path, 0o444); err != nil { //nolint:gosec // G302: the read-only mode is the case's premise
+			t.Fatalf("make the file command %s's path %s read-only: %v", name, path, err)
+		}
+	}
+}
+
 // writeOverCapEnvFile returns the change that fills the file command the
 // variable names with one byte more than the run caps a file command's content
 // at: a file the run cannot compare, which ADR 0040 counts as changed (issues
@@ -1641,6 +1664,24 @@ func TestRunRefusesEveryUsageAndInputError(t *testing.T) {
 		{
 			name:  "a $GITHUB_STATE that is a directory",
 			entry: replaceWithDirectory("GITHUB_STATE"),
+		},
+		// A file command the run may read but not write is refused too, with the
+		// same usage exit and before the first step (issues #615, #614): the run
+		// opens every regular file command it records O_RDWR, which on Linux never
+		// blocks on a named pipe a concurrent process swapped in between its Lstat
+		// and its open, and an entry it cannot open that way is one it cannot tell
+		// after the steps whether anything changed. The runner's file commands are
+		// its own and writable, so a real run loses nothing. The step summary is
+		// the fifth file command, the one the run opens by itself before the
+		// steps; the rows are skipped under root, which opens a mode 0444 file
+		// O_RDWR whatever its bits say.
+		{
+			name:  "a $GITHUB_OUTPUT the run can read but not write",
+			entry: replaceWithReadOnly("GITHUB_OUTPUT"),
+		},
+		{
+			name:  "a step summary the run can read but not write",
+			entry: replaceWithReadOnly("GITHUB_STEP_SUMMARY"),
 		},
 		// The runner always sets clean absolute paths, so a run takes nothing
 		// else (issue #614, the auditor's round-2 Low 2): a path that is not

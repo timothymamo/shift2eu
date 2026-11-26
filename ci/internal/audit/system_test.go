@@ -1288,6 +1288,28 @@ func TestAuditTakesOnlyAResultFileTheRunWrote(t *testing.T) {
 			wantLaunched: false,
 			wantRefused:  true,
 		},
+		// The digest opens every regular entry of that directory O_RDWR, the open
+		// that never blocks on a named pipe a concurrent process swapped in between
+		// its Lstat and its open, and an entry it cannot open that way fails closed:
+		// the audit refuses the directory before its run rather than read an entry
+		// it could not also write (issues #615, #614). The runner's file commands
+		// are its own and writable, so a real run loses nothing. The case is skipped
+		// under root, which opens a mode 0444 file O_RDWR whatever its bits say.
+		{
+			name: "the $GITHUB_ENV file's directory holds a file the run can read but not write",
+			before: func(t *testing.T, root string) {
+				t.Helper()
+
+				if os.Geteuid() == 0 {
+					t.Skip("root opens a mode 0444 file O_RDWR, so it cannot stand in for an entry of the file-command directory the run may read but not write")
+				}
+
+				writeFile(t, fileCommandPath(root, "github-output"), "", 0o444)
+			},
+			write:        func(root string) error { return os.WriteFile(workPath(root, "result.json"), []byte(resultFile), 0o600) },
+			wantLaunched: false,
+			wantRefused:  true,
+		},
 		// The step summary lies in the runner's file-command directory beside
 		// $GITHUB_ENV, and it is digested with every other entry of it: no entry is
 		// left out (issues #615, #614). The exclusion this test used to grant it was
