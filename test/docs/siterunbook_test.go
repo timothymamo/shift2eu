@@ -14,6 +14,12 @@
 // container uncreated. The R4 loop is read as text too and pinned on the property rather than on one shell spelling:
 // the branch after `apply -refresh-only` must assign a variable before it breaks, and the variable name is the
 // maintainer's choice.
+//
+// It pins issue #607's two points on R4 as well: the section runs `apply -refresh-only` on two lines for two reasons,
+// and each command is pinned on its own line - the state check's route with `-var=pipeline_www=true`, the wait loop's
+// refresh with -auto-approve - so a loose match on the command cannot read one for the other; and the exit 2 FAIL that
+// keeps the state backup until its cause is explained also says to remove it, so the copy R4 takes before its state rm
+// fallback does not outlive the explanation.
 package docs_test
 
 import (
@@ -274,6 +280,168 @@ func TestSiteRunbookHostingWaitLoopNamesARefreshOnlyFailure(t *testing.T) {
 				siteRunbookPath, hostingHeading, check+1, read+1)
 		}
 	})
+
+	// R4 runs `apply -refresh-only` on two lines, for two different reasons (issue #607): the state check's FAIL route
+	// re-reads the state with pipeline_www = true for that run alone, so the TLS stage's create_before_destroy reaches
+	// the state and the plan after it removes the stage again (issue #595), while the wait loop's refresh repeats with
+	// -auto-approve until Scaleway has assigned edge_endpoint. Both commands are pinned, so a reader of the match above
+	// knows which line it read and a change that swaps the flags shows as a failure rather than as another line.
+	const (
+		stateCheckRefresh = "dev/tofu.sh -chdir=infra/site apply -var=pipeline_www=true -refresh-only"
+		waitLoopRefresh   = "dev/tofu.sh -chdir=infra/site apply -refresh-only -auto-approve"
+	)
+
+	t.Run("R4 gives each refresh-only command on a line of its own", func(t *testing.T) {
+		t.Parallel()
+
+		cases := []struct {
+			name       string // the subtest's name
+			command    string // the command R4 gives on one line
+			followedBy string // what must follow the command there: an outcome comment after the state check's route, the failure branch after the loop's refresh
+			expected   string // the command's reason, for the failure message
+		}{
+			{
+				name:       "the state check's refresh-only route",
+				command:    stateCheckRefresh,
+				followedBy: "#",
+				expected:   "R4's state check routes its FAIL through one command, `" + stateCheckRefresh + "`, and then only the outcome comment: it re-reads the state with pipeline_www = true for that run alone, and -auto-approve belongs to the wait loop's refresh, not to this route (issues #595, #607)",
+			},
+			{
+				name:       "the wait loop's refresh",
+				command:    waitLoopRefresh,
+				followedBy: "||",
+				expected:   "the wait loop's one refresh is `" + waitLoopRefresh + "` followed by its `||` branch, which records the failure before it breaks: the loop repeats the refresh until Scaleway has assigned edge_endpoint, and no other line of R4 may read as that loop (issues #567, #607)",
+			},
+		}
+
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				t.Parallel()
+
+				given := runbookLinesContaining(section, tc.command)
+				if len(given) != 1 {
+					t.Errorf("%s: %s holds %d lines that run %q, want exactly one: %s\n  read:\n    %s",
+						siteRunbookPath, hostingHeading, len(given), tc.command, tc.expected, strings.Join(given, "\n    "))
+
+					return
+				}
+
+				if _, rest, _ := strings.Cut(given[0], tc.command); !strings.HasPrefix(strings.TrimSpace(rest), tc.followedBy) {
+					t.Errorf("%s: %s: the line that runs %q goes on with %q, want it to go on with %q: %s\n  read: %q",
+						siteRunbookPath, hostingHeading, tc.command, strings.TrimSpace(rest), tc.followedBy, tc.expected, given[0])
+				}
+			})
+		}
+
+		if len(loops) != 1 || !strings.Contains(loops[0], waitLoopRefresh) {
+			t.Errorf("%s: %s: the `apply -refresh-only` match this test reads the loop with reads %q, want the wait loop's one line, the one that runs %q: the state check's route is no wait loop, and reading it there would take pipeline_www = true for the loop's refresh (issue #607)\n  read:\n    %s",
+				siteRunbookPath, hostingHeading, loops, waitLoopRefresh, strings.Join(loops, "\n    "))
+		}
+	})
+
+	t.Run("the exit 2 FAIL says to remove the state backup once the cause is explained", func(t *testing.T) {
+		t.Parallel()
+
+		// R4 backs the state up before its state rm fallback (`T="$(mktemp -d)"` and `state pull > "$T/state-backup.json"`)
+		// and keeps the file until the fallback's last line. That line's PASS removes the temporary directory, but its
+		// FAIL path only says to keep the backup until the diff is explained, so a maintainer who explains the cause is
+		// left holding the only copy of the state the state rm took the TLS stage out of, with no line that removes it
+		// (issue #607).
+		const backup = "state-backup.json"
+
+		// naming collects the outcomes that name the backup; removing, those of them that go on to say to remove it
+		// once the cause is explained.
+		var naming, removing []string
+
+		for _, line := range section {
+			for _, outcome := range failOutcomes(strings.TrimSpace(line)) {
+				if !strings.Contains(outcome, backup) {
+					continue
+				}
+
+				naming = append(naming, outcome)
+
+				if removesTheBackupOnceExplained(outcome) {
+					removing = append(removing, outcome)
+				}
+			}
+		}
+
+		if len(naming) == 0 {
+			t.Fatalf("%s: %s holds no FAIL outcome that names the state backup %q, so this check pins nothing: R4 takes the backup before the state rm fallback and its FAIL path keeps it until the cause is explained (issue #607)\n  read:\n    %s",
+				siteRunbookPath, hostingHeading, backup, strings.Join(section, "\n    "))
+		}
+
+		if len(removing) == 0 {
+			t.Errorf("%s: %s: no FAIL outcome that names the state backup %q says to remove it once the cause is explained, want one that does, as `# FAIL exit 2: read the diff, and keep \"$T/state-backup.json\" until it is explained, then [ -f \"$T/state-backup.json\" ] && rm -r \"$T\"` does: the backup is the only copy of the state the state rm fallback left, so a maintainer who has explained the diff has no line to remove it and the file outlives its reason (issue #607)\n  read:\n    %s",
+				siteRunbookPath, hostingHeading, backup, strings.Join(naming, "\n    "))
+		}
+	})
+}
+
+// failOutcomes returns the FAIL outcomes a runbook line states: for each "FAIL" of the line, the text from there to the
+// next PASS or FAIL marker of the line, or to its end. R4 writes an outcome as a trailing comment on the command line it
+// belongs to, so a rule an outcome states is read from that outcome's own words and not from the PASS beside it: the
+// line that removes the temporary directory is the PASS of an exit 2 plan, not a step of its FAIL path.
+func failOutcomes(line string) []string {
+	const marker = "FAIL"
+
+	var outcomes []string
+
+	for rest := line; ; {
+		at := strings.Index(rest, marker)
+		if at < 0 {
+			return outcomes
+		}
+
+		rest = rest[at:]
+
+		end := len(rest)
+		for _, other := range []string{"PASS", marker} {
+			if i := strings.Index(rest[len(marker):], other); i >= 0 && len(marker)+i < end {
+				end = len(marker) + i
+			}
+		}
+
+		outcomes = append(outcomes, strings.TrimSpace(rest[:end]))
+
+		rest = rest[end:]
+	}
+}
+
+// removesTheBackupOnceExplained reports whether a FAIL outcome that names the state backup tells the maintainer to remove
+// it once the cause is explained, as `keep "$T/state-backup.json" until it is explained, then
+// [ -f "$T/state-backup.json" ] && rm -r "$T"` does. The
+// removal has to come after the explanation: an outcome that explains the diff and then says "do not remove it" names
+// both and still leaves the backup where it is, which is the state the check reports missing (issue #607).
+func removesTheBackupOnceExplained(outcome string) bool {
+	_, after, explained := strings.Cut(outcome, "explain")
+
+	return explained && saysToRemoveAFile(after)
+}
+
+// saysToRemoveAFile reports whether the runbook text tells the maintainer to remove a file, as R4's state backup's FAIL
+// path must once the cause is explained: the spelling is the maintainer's choice, so rm, remove and delete all count. A
+// clause that negates its verb - "do not remove it", "remove nothing" - tells the maintainer to keep the file, so it is
+// no removal, and each comma-separated clause is read on its own: a negation in one says nothing about another's.
+func saysToRemoveAFile(text string) bool {
+	for _, clause := range strings.Split(text, ",") {
+		verb, negated := false, false
+
+		for _, spelling := range []string{"rm ", "rm -r", "remove", "delete"} {
+			verb = verb || strings.Contains(clause, spelling)
+		}
+
+		for _, negation := range []string{"not ", "nothing", "never"} {
+			negated = negated || strings.Contains(clause, negation)
+		}
+
+		if verb && !negated {
+			return true
+		}
+	}
+
+	return false
 }
 
 // refreshOnlyRecordedVariables returns the names of the shell variables the line's `||` branch assigns before it breaks:
@@ -468,6 +636,58 @@ func TestRefreshOnlyFAILLines(t *testing.T) {
 
 			if got := refreshOnlyFAILLines(tc.section, timeoutFAIL); !slices.Equal(got, tc.want) {
 				t.Errorf("refreshOnlyFAILLines(%q, %q) = %q, want %q", tc.section, timeoutFAIL, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestRemovesTheBackupOnceExplained pins how R4's exit 2 FAIL is read (issue #607): the outcome has to say to remove the
+// backup after it says to explain the diff, because a wording that negates the removal leaves the file where it is just
+// as the old wording did.
+func TestRemovesTheBackupOnceExplained(t *testing.T) {
+	t.Parallel()
+
+	const backup = "state-backup.json"
+
+	tests := []struct {
+		name    string
+		outcome string
+		want    bool
+	}{
+		{
+			name:    "the runbook's guarded wording",
+			outcome: `FAIL exit 2: read the diff, and keep "$T/` + backup + `" until it is explained, then [ -f "$T/` + backup + `" ] && rm -r "$T"`,
+			want:    true,
+		},
+		{
+			name:    "an unguarded removal after the explanation",
+			outcome: `FAIL exit 2: read the diff, and keep "$T/` + backup + `" until it is explained, then rm -r "$T"`,
+			want:    true,
+		},
+		{
+			name:    "a negated removal after the explanation",
+			outcome: `FAIL exit 2: read the diff, and keep "$T/` + backup + `" until it is explained, do not remove it`,
+		},
+		{
+			name:    "a removal of nothing after the explanation",
+			outcome: `FAIL exit 2: keep "$T/` + backup + `" until it is explained, remove nothing`,
+		},
+		{
+			name:    "the removal dropped",
+			outcome: `FAIL exit 2: read the diff, and keep "$T/` + backup + `" until it is explained`,
+		},
+		{
+			name:    "no explanation at all",
+			outcome: `FAIL exit 2: keep "$T/` + backup + `", then [ -f "$T/` + backup + `" ] && rm -r "$T"`,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := removesTheBackupOnceExplained(tc.outcome); got != tc.want {
+				t.Errorf("removesTheBackupOnceExplained(%q) = %t, want %t", tc.outcome, got, tc.want)
 			}
 		})
 	}

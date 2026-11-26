@@ -144,7 +144,8 @@
     {
       "id": "shop-zone",
       "rawType": "dns.googleapis.com/ManagedZone",
-      "category": "unclassified",
+      "category": "network.dns",
+      "capabilities": ["dnssec", "dns-routing"],
       "workload": "shop"
     }
   ]

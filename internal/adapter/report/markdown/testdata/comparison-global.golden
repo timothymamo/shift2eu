@@ -1,0 +1,87 @@
+# Migration assessment: `OVHcloud`, `UpCloud`
+
+- Inventory file: `inventory.json`
+- Source: `aws`
+- Catalog: `OVHcloud` snapshot from `https://www.ovhcloud.com/en/public-cloud/prices/`, retrieved 2026-11-08
+- Catalog: `UpCloud` snapshot from `https://upcloud.com/pricing/`, retrieved 2026-10-25
+
+## Comparison
+
+### Summary
+
+| Fit | `OVHcloud` | `UpCloud` |
+|---|---|---|
+| direct | 2 | 0 |
+| partial | 1 | 0 |
+| none | 0 | 3 |
+| total | 3 | 3 |
+
+### Resources
+
+| ID | Category | `OVHcloud` fit | `OVHcloud` best offering | `UpCloud` fit | `UpCloud` best offering |
+|---|---|---|---|---|---|
+| `zone-dnssec` | `network.dns` | direct | `Apex DNS Zone` | none |  |
+| `zone-example` | `network.dns` | direct | `DNS Zone` (global) | none |  |
+| `zone-ipv6` | `network.dns` | partial | `DNS Zone` (global) | none |  |
+
+`(global)` means not bound to a region you choose, including the one `--region` names: the provider serves the offering from its own locations, which may be outside the EU and which the target's `SOURCES.md` names.
+
+### Blockers on every target
+
+None.
+
+## `OVHcloud`
+
+### Summary
+
+| Fit | Resources |
+|---|---|
+| direct | 2 |
+| partial | 1 |
+| none | 0 |
+| total | 3 |
+
+### Resources
+
+| ID | Raw type | Category | Fit | Best offering | Reasons |
+|---|---|---|---|---|---|
+| `zone-dnssec` | `AWS::Route53::HostedZone` | `network.dns` | direct | `Apex DNS Zone` (tie: `DNS Zone` (global), `DNS Zone Premium` (global)) | `Apex DNS Zone` offers every capability the resource uses |
+| `zone-example` | `AWS::Route53::HostedZone` | `network.dns` | direct | `DNS Zone` (global) (tie: `DNS Zone Premium` (global)) | `DNS Zone` offers every capability the resource uses |
+| `zone-ipv6` | `AWS::Route53::HostedZone` | `network.dns` | partial | `DNS Zone` (global) (tie: `DNS Zone Premium` (global)) | `DNS Zone` does not offer `ipv6` |
+
+### Required changes
+
+- `zone-ipv6`: `ipv6` (not offered by `DNS Zone` (global))
+
+### Blockers
+
+None.
+
+## `UpCloud`
+
+### Summary
+
+| Fit | Resources |
+|---|---|
+| direct | 0 |
+| partial | 0 |
+| none | 3 |
+| total | 3 |
+
+### Resources
+
+| ID | Raw type | Category | Fit | Best offering | Reasons |
+|---|---|---|---|---|---|
+| `zone-dnssec` | `AWS::Route53::HostedZone` | `network.dns` | none |  | no offering in the `UpCloud` catalog for `network.dns` |
+| `zone-example` | `AWS::Route53::HostedZone` | `network.dns` | none |  | no offering in the `UpCloud` catalog for `network.dns` |
+| `zone-ipv6` | `AWS::Route53::HostedZone` | `network.dns` | none |  | no offering in the `UpCloud` catalog for `network.dns` |
+
+### Required changes
+
+None.
+
+### Blockers
+
+- `zone-dnssec`: no offering in the `UpCloud` catalog for `network.dns`
+- `zone-example`: no offering in the `UpCloud` catalog for `network.dns`
+- `zone-ipv6`: no offering in the `UpCloud` catalog for `network.dns`

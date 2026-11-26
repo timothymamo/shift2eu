@@ -47,8 +47,16 @@ type Offering struct {
 	// sorted and free of duplicates, and nil when there are none.
 	Capabilities []taxonomy.Capability
 	// Regions lists the EU regions the offering is available in, as the target
-	// names them. In a Catalog they are sorted and free of duplicates.
+	// names them. In a Catalog they are sorted and free of duplicates. A global
+	// offering lists none.
 	Regions []string
+	// Global marks an offering the provider serves from its own locations,
+	// bound to no region the user chooses (PRD #581, The region model): it
+	// lists no region, is available in every non-empty region, and its prices
+	// and fixed fees, which name no region, apply in every one. Only an
+	// offering whose every category taxonomy.IsGlobal accepts may be global.
+	// false is the regional default.
+	Global bool
 	// Plans lists the plans the offering sells, with their monthly prices. In a
 	// Catalog they are sorted by name, and nil when there are none.
 	Plans []Plan
@@ -72,12 +80,13 @@ type Offering struct {
 
 // FixedFee returns the fixed monthly fee the offering charges per instance in
 // region, and true. It returns 0 and false when the offering charges no fixed
-// fee (FixedFees is nil) or region is not one of its regions. region is
-// compared exactly with the offering's regions and the fees' regions, as plan
-// prices are: no case folding, no trimming. A fee whose Regions is nil applies
-// to every region of the offering.
+// fee (FixedFees is nil) or the offering is not available in region
+// (AvailableIn). region is compared exactly with the offering's regions and the
+// fees' regions, as plan prices are: no case folding, no trimming. A fee whose
+// Regions is nil applies to every region of the offering; a global offering's
+// fees name no region, so they apply in every non-empty region.
 func (o Offering) FixedFee(region string) (Amount, bool) {
-	if len(o.FixedFees) == 0 || !slices.Contains(o.Regions, region) {
+	if len(o.FixedFees) == 0 || !o.AvailableIn(region) {
 		return 0, false
 	}
 
@@ -127,6 +136,13 @@ var (
 	// ErrNoRegion is returned for an offering that lists no region, or lists a
 	// region whose name is empty or only whitespace.
 	ErrNoRegion = errors.New("offering is available in no region")
+	// ErrGlobalCategory is returned for a global offering that serves a
+	// category taxonomy.IsGlobal does not accept: a regional product recorded
+	// as global would dodge the region rule.
+	ErrGlobalCategory = errors.New("global offering serves a category that is not global")
+	// ErrGlobalRegion is returned for a global offering that lists a region: a
+	// global offering is in no declared region and available in every one.
+	ErrGlobalRegion = errors.New("global offering lists a region")
 )
 
 // New validates offerings and returns them as the catalog of target, taken from
@@ -152,7 +168,10 @@ var (
 // snapshot.RetrievedOn must be set; the catalog keeps it in UTC.
 //
 // Every offering needs a unique name that is not blank, at least one category and
-// at least one region. Names are unique when compared with every run of white
+// at least one region, unless it is global (Offering.Global): a global offering
+// serves only categories taxonomy.IsGlobal accepts (ErrGlobalCategory), lists no
+// region (ErrGlobalRegion), and its prices and fixed fees name no region
+// (ErrPriceRegion). Names are unique when compared with every run of white
 // space treated as a single space, so "Object Storage" and "Object  Storage" are
 // duplicates; look-alike letters (homoglyphs) and Unicode normalisation (NFC and
 // NFD) are not compared. Names and regions must be valid free text and are stored
@@ -649,7 +668,11 @@ func normalise(o Offering) (Offering, error) {
 		}
 	}
 
-	if len(o.Regions) == 0 {
+	if err := checkGlobal(o); err != nil {
+		return Offering{}, err
+	}
+
+	if len(o.Regions) == 0 && !o.Global {
 		return Offering{}, ErrNoRegion
 	}
 
@@ -694,6 +717,29 @@ func normalise(o Offering) (Offering, error) {
 	o.FixedFees = fixedFees
 
 	return o, nil
+}
+
+// checkGlobal checks the region model of a global offering (PRD #581): every
+// category it serves is global, and it lists no region. A regional offering
+// passes unchecked. Its prices and fixed fees are checked against the
+// offering's regions as on any offering, so on a global offering, which has
+// none, a price that names a region is ErrPriceRegion.
+func checkGlobal(o Offering) error {
+	if !o.Global {
+		return nil
+	}
+
+	for _, cat := range o.Categories {
+		if !taxonomy.IsGlobal(cat) {
+			return fmt.Errorf("%w: %s", ErrGlobalCategory, text.Quote(string(cat)))
+		}
+	}
+
+	if len(o.Regions) > 0 {
+		return fmt.Errorf("%w: %s", ErrGlobalRegion, text.Quote(o.Regions[0]))
+	}
+
+	return nil
 }
 
 // withImplied returns caps followed by every capability they imply,

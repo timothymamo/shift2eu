@@ -174,10 +174,11 @@ if [[ -e "${dir}" ]]; then
   refuse_detached "${dir}"
 fi
 
-base=main
+# main's full ref, never its short name: a tag named main or origin/main makes the short name ambiguous.
+base=refs/heads/main
 fetched=''
 if git remote get-url origin >/dev/null 2>&1 && git fetch --quiet --prune origin; then
-  base=origin/main
+  base=refs/remotes/origin/main
   fetched=1
 fi
 
@@ -199,8 +200,12 @@ if [[ -n "${renovate}" ]]; then
   if git show-ref --verify --quiet "refs/heads/${branch}"; then
     at="$(git rev-parse "refs/heads/${branch}")"
     origin_at="$(git rev-parse "refs/remotes/origin/${branch}")"
-    upstream="$(git rev-parse --abbrev-ref "${branch}@{upstream}" 2>/dev/null || true)"
-    if [[ "${at}" != "${origin_at}" || "${upstream}" != "origin/${branch}" ]]; then
+    # The upstream as a full ref, read by the branch's full ref: a short name on either side is
+    # ambiguous beside a same-named tag. git rejects refs/heads/<branch>@{upstream}, hence for-each-ref.
+    # %(upstream:short) widens to remotes/origin/<branch> beside a tag origin/<branch>, hence the full
+    # ref. Empty when the branch tracks nothing.
+    upstream="$(git for-each-ref --format='%(upstream)' "refs/heads/${branch}")"
+    if [[ "${at}" != "${origin_at}" || "${upstream}" != "refs/remotes/origin/${branch}" ]]; then
       refuse "the local branch '${branch}' differs from origin/${branch}: it is at another commit or does" \
         "not track it, so it is no base to work on; leave it where it is and report it (only the" \
         "maintainer removes local branches)"
@@ -209,11 +214,12 @@ if [[ -n "${renovate}" ]]; then
 fi
 
 if git show-ref --verify --quiet "refs/heads/${branch}"; then
-  # Resume a local branch.
+  # Resume a local branch. The short name, since refs/heads/<branch> would detach HEAD; it is unambiguous:
+  # git worktree add checks out the local branch of that name even beside a same-named tag.
   git worktree add --quiet "${dir}" "${branch}"
 elif git show-ref --verify --quiet "refs/remotes/origin/${branch}"; then
   # Resume a branch that was pushed from elsewhere.
-  git worktree add --quiet --track -b "${branch}" "${dir}" "origin/${branch}"
+  git worktree add --quiet --track -b "${branch}" "${dir}" "refs/remotes/origin/${branch}"
 else
   # New work, cut from the latest main (never a Renovate branch, refused above without its remote one).
   # --no-track: the branch must never push to main.

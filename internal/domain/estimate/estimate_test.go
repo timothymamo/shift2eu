@@ -131,6 +131,10 @@ func TestPricingOf(t *testing.T) {
 		{name: "serverless.container", category: taxonomy.ServerlessContainer, want: estimate.ByUsage},
 		{name: "network.loadbalancer", category: taxonomy.NetworkLoadBalancer, want: estimate.NotPriced},
 		{name: "registry.container", category: taxonomy.RegistryContainer, want: estimate.NotPriced},
+		// PRD #581's public DNS zone is not priced either: a target bills a zone
+		// yearly and the sources bill per zone and per query, which no inventory
+		// field records.
+		{name: "network.dns", category: taxonomy.NetworkDNS, want: estimate.NotPriced},
 		// PRD #571's two categories are priced by plan, on vCPUs and memory, as
 		// every plan-priced category but cache.redis is.
 		{name: "search.opensearch", category: taxonomy.SearchOpenSearch, want: estimate.ByPlan},
@@ -1941,6 +1945,17 @@ func TestFor(t *testing.T) {
 			want:      estimate.Estimate{Region: testutil.PricedDefaultRegion, Reason: estimate.NeverPriced},
 		},
 		{
+			// A public DNS zone is billed yearly per zone, and the sources bill per
+			// zone and per query: no inventory field records that, so a zone with a
+			// fit is not estimated (PRD #581, Estimates). The region is the case's
+			// own: the rule is the category's, not the region's.
+			name:      "not-priced: a network.dns with a fit",
+			resource:  dnsResource(),
+			offerings: []catalog.Offering{dnsOffering()},
+			region:    testutil.PricedDefaultRegion,
+			want:      estimate.Estimate{Region: testutil.PricedDefaultRegion, Reason: estimate.NeverPriced},
+		},
+		{
 			// NoFit still comes first, whatever a category is priced by.
 			name:      "no-fit: a cache the catalog does not serve anywhere",
 			resource:  cacheResource(&inventory.Size{MemoryGiB: f(8)}, nil),
@@ -2801,6 +2816,25 @@ func registryResource() inventory.Resource {
 		RawType:  "AWS::ECR::Repository",
 		Category: taxonomy.RegistryContainer,
 		Region:   "eu-west-1",
+	}
+}
+
+// dnsOffering serves network.dns and sells no plan: a zone is billed yearly, and
+// the estimate does not price it (PRD #581, Estimates).
+func dnsOffering() catalog.Offering {
+	return catalog.Offering{
+		Name:       "Example DNS Zone",
+		Categories: []taxonomy.Category{taxonomy.NetworkDNS},
+		Regions:    []string{testutil.PricedDefaultRegion},
+	}
+}
+
+// dnsResource is a network.dns resource: a public zone, written with no region.
+func dnsResource() inventory.Resource {
+	return inventory.Resource{
+		ID:       "zone-example",
+		RawType:  "AWS::Route53::HostedZone",
+		Category: taxonomy.NetworkDNS,
 	}
 }
 

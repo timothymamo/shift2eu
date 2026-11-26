@@ -11,7 +11,11 @@
   region, by [0024](0024-add-plans-prices-and-a-default-region-in-target-snapshot-format-v2.md), and
   the reader no longer reads version 1; one optional offering key, `fixedFees`, is added within
   version 2 by [0026](0026-add-an-optional-fixed-monthly-fee-per-offering-to-snapshot-format-v2.md), a
-  recorded exception to the schema version policy and to "every key required"
+  recorded exception to the schema version policy and to "every key required"; a second,
+  `planBillingCapHours`, by
+  [0029](0029-cap-the-billed-hours-of-an-offerings-plans-in-target-snapshot-format-v2.md); a third,
+  `global`, by [0048](0048-record-global-offerings-in-target-snapshot-format-v2-and-add-network-dns.md),
+  whose global offering's `regions` is empty, an exception to "at least one" region per offering
 - Date: 2026-11-10
 
 ## Context

@@ -70,6 +70,58 @@ func (v Verdict) Ties() []string {
 	return ties
 }
 
+// BestOfferingGlobal reports whether the best offering is global
+// (catalog.Offering.Global): not bound to a region the user chooses (PRD #581,
+// ADR 0048). It is false when there is no candidate. Every report format marks
+// the same offerings.
+func (v Verdict) BestOfferingGlobal() bool {
+	return v.BestOffering != "" && len(v.Candidates) > 0 && v.Candidates[0].Offering.Global
+}
+
+// GlobalTies returns the names of the ties (Ties) whose offering is global, in
+// the order of Ties, and nil when there is none or when there is no best
+// offering (BestOffering is empty).
+func (v Verdict) GlobalTies() []string {
+	if v.BestOffering == "" {
+		return nil
+	}
+
+	ties := v.Ties()
+	if len(ties) == 0 {
+		return nil
+	}
+
+	var global []string
+
+	// Ties are a subsequence of Candidates[1:], in candidate order: walk both
+	// in step so that each tie is matched to its own candidate.
+	rest := v.Candidates[1:]
+
+	for _, name := range ties {
+		for len(rest) > 0 && rest[0].Offering.Name != name {
+			rest = rest[1:]
+		}
+
+		if len(rest) == 0 {
+			break
+		}
+
+		if rest[0].Offering.Global {
+			global = append(global, name)
+		}
+
+		rest = rest[1:]
+	}
+
+	return global
+}
+
+// ShowsGlobal reports whether a report that shows v's best offering and its
+// ties names a global offering.
+func (v Verdict) ShowsGlobal() bool {
+	return v.BestOfferingGlobal() || len(v.GlobalTies()) > 0
+}
+
 // ChangesToList returns the required changes a report lists for the verdict:
 // RequiredChanges for a partial fit, and nil for any other fit. Every report
 // format lists the same changes.

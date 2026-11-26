@@ -2462,3 +2462,177 @@ func TestPlansAndPricesAreCopied(t *testing.T) {
 		check(t, cat)
 	})
 }
+
+// TestNewGlobalOffering pins the region model of a global offering (PRD #581,
+// option A): an offering marked Global is available in no declared region, and
+// only a category the taxonomy marks global may carry it. A global offering
+// keeps the price and fee rule of every other offering: a price that names a
+// region belongs to an offering available there, so a global offering, which is
+// in none, refuses one (catalog.ErrPriceRegion). A category marked global may
+// still have regional offerings, and an offering that lists no region without
+// being global is still available in no region (catalog.ErrNoRegion).
+func TestNewGlobalOffering(t *testing.T) {
+	t.Parallel()
+
+	// dnsOffering is a network.dns offering, the one global category today, with
+	// mutate applied: every case starts from an offering that is valid but for the
+	// one thing it changes.
+	dnsOffering := func(mutate func(*catalog.Offering)) catalog.Offering {
+		o := catalog.Offering{
+			Name:       "DNS Zone",
+			Categories: []taxonomy.Category{taxonomy.NetworkDNS},
+			Global:     true,
+		}
+
+		if mutate != nil {
+			mutate(&o)
+		}
+
+		return o
+	}
+
+	tests := []struct {
+		name     string
+		offering catalog.Offering
+		wantErr  error
+		// wantMsg lists the substrings the error must hold: the offering name and
+		// the field or value at fault.
+		wantMsg []string
+		// wantGlobal and wantRegions are the canonical form New must give an
+		// accepted offering.
+		wantGlobal  bool
+		wantRegions []string
+	}{
+		{
+			name:       "a global offering of a global category",
+			offering:   dnsOffering(nil),
+			wantGlobal: true,
+		},
+		{
+			// A global offering still carries prices and fees, and each applies to
+			// every region: no price names one, as no region is one of the
+			// offering's.
+			name: "a global offering with prices and a fixed fee in every region",
+			offering: dnsOffering(func(o *catalog.Offering) {
+				o.Plans = []catalog.Plan{{
+					Name:           "Zone",
+					VCPUs:          1,
+					MemoryMilliGiB: 1000,
+					Prices:         []catalog.Price{{Amount: 1000, Currency: catalog.EUR}},
+				}}
+				o.StoragePrices = []catalog.Price{{Amount: 40, Currency: catalog.EUR}}
+				o.FixedFees = []catalog.Price{{Amount: 500, Currency: catalog.EUR}}
+			}),
+			wantGlobal: true,
+		},
+		{
+			// A regional product recorded as global would claim, in every region, a
+			// residency it does not have, and dodge the region rule.
+			name: "a global offering of a category that is not global",
+			offering: dnsOffering(func(o *catalog.Offering) {
+				o.Categories = []taxonomy.Category{taxonomy.ComputeVM}
+			}),
+			wantErr: catalog.ErrGlobalCategory,
+			wantMsg: []string{"DNS Zone", "compute.vm"},
+		},
+		{
+			name: "a global offering that lists a region",
+			offering: dnsOffering(func(o *catalog.Offering) {
+				o.Regions = []string{"fr-par"}
+			}),
+			wantErr: catalog.ErrGlobalRegion,
+			wantMsg: []string{"DNS Zone", "fr-par"},
+		},
+		{
+			name: "a global offering with a plan price in a region",
+			offering: dnsOffering(func(o *catalog.Offering) {
+				o.Plans = []catalog.Plan{{
+					Name:           "Zone",
+					VCPUs:          1,
+					MemoryMilliGiB: 1000,
+					Prices: []catalog.Price{
+						{Amount: 1000, Currency: catalog.EUR, Regions: []string{"fr-par"}},
+					},
+				}}
+			}),
+			wantErr: catalog.ErrPriceRegion,
+			wantMsg: []string{"DNS Zone", "fr-par"},
+		},
+		{
+			name: "a global offering with a fixed fee in a region",
+			offering: dnsOffering(func(o *catalog.Offering) {
+				o.FixedFees = []catalog.Price{
+					{Amount: 500, Currency: catalog.EUR, Regions: []string{"fr-par"}},
+				}
+			}),
+			wantErr: catalog.ErrPriceRegion,
+			wantMsg: []string{"DNS Zone", "fr-par"},
+		},
+		{
+			// A category marked global may still have a regional offering: a
+			// target that serves one only in some regions says so.
+			name: "a regional offering of a global category",
+			offering: dnsOffering(func(o *catalog.Offering) {
+				o.Global = false
+				o.Regions = []string{"fr-par"}
+			}),
+			wantRegions: []string{"fr-par"},
+		},
+		{
+			// Global false is the regional default, and a regional offering is
+			// available in at least one region.
+			name: "a regional offering of a global category with no region",
+			offering: dnsOffering(func(o *catalog.Offering) {
+				o.Global = false
+			}),
+			wantErr: catalog.ErrNoRegion,
+			wantMsg: []string{"DNS Zone"},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			cat, err := catalog.New(targetName, validSnapshot(), []catalog.Offering{tc.offering})
+			if tc.wantErr != nil {
+				if !errors.Is(err, tc.wantErr) {
+					t.Fatalf("catalog.New() error = %v, want an error wrapping %v", err, tc.wantErr)
+				}
+
+				for _, want := range tc.wantMsg {
+					if msg := err.Error(); !strings.Contains(msg, want) {
+						t.Errorf("catalog.New() error = %q, want it to mention %q", msg, want)
+					}
+				}
+
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("catalog.New() returned unexpected error: %v", err)
+			}
+
+			got := cat.Offerings()
+			if len(got) != 1 {
+				t.Fatalf("Offerings() returned %d offerings, want 1", len(got))
+			}
+
+			if got[0].Global != tc.wantGlobal {
+				t.Errorf("Offerings()[0].Global = %t, want %t", got[0].Global, tc.wantGlobal)
+			}
+
+			if diff := cmp.Diff(tc.wantRegions, got[0].Regions); diff != "" {
+				t.Errorf("Offerings()[0].Regions mismatch (-want +got):\n%s", diff)
+			}
+
+			if diff := cmp.Diff(tc.offering.Plans, got[0].Plans); diff != "" {
+				t.Errorf("Offerings()[0].Plans changed (-want +got):\n%s", diff)
+			}
+
+			if diff := cmp.Diff(tc.offering.FixedFees, got[0].FixedFees); diff != "" {
+				t.Errorf("Offerings()[0].FixedFees changed (-want +got):\n%s", diff)
+			}
+		})
+	}
+}

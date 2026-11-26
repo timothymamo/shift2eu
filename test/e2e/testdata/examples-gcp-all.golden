@@ -44,7 +44,7 @@ Estimates are list prices on each catalog's retrieval date, excluding VAT and di
 | `shop-web-1` | `compute.vm` | direct | `Instances` | €37.38 (count assumed 1) (730 hours assumed) (boot volume not included) | direct | `Instances` | €40.21 (count assumed 1) (730 hours assumed) (boot volume not included) | direct | `Cloud Servers` | €18.00 (count assumed 1) (730 hours assumed) |
 | `shop-web-1-data` | `storage.block` | direct | `Block Storage` | €4.31 (count assumed 1) | direct | `Block Storage` | €9.49 (count assumed 1) | direct | `Block Storage` | €22.31 (count assumed 1) |
 | `shop-web-mig` | `compute.vm` | partial | `Instances` | €74.75 (730 hours assumed) (boot volume not included) | partial | `Instances` | €80.42 (730 hours assumed) (boot volume not included) | partial | `Cloud Servers` | €36.00 (730 hours assumed) |
-| `shop-zone` | `unclassified` | none |  | not estimated: no fit | none |  | not estimated: no fit | none |  | not estimated: no fit |
+| `shop-zone` | `network.dns` | none |  | not estimated: no fit | none |  | not estimated: no fit | none |  | not estimated: no fit |
 
 ### Blockers on every target
 
@@ -61,9 +61,9 @@ Estimates are list prices on each catalog's retrieval date, excluding VAT and di
   - `Scaleway`: no offering in the `Scaleway` catalog for `storage.file`
   - `UpCloud`: no offering in the `UpCloud` catalog for `storage.file`
 - `shop-zone`
-  - `OVHcloud`: not classified
-  - `Scaleway`: not classified
-  - `UpCloud`: not classified
+  - `OVHcloud`: no offering in the `OVHcloud` catalog for `network.dns`
+  - `Scaleway`: no offering in the `Scaleway` catalog for `network.dns`
+  - `UpCloud`: no offering in the `UpCloud` catalog for `network.dns`
 
 ## `OVHcloud`
 
@@ -95,7 +95,7 @@ Estimates are list prices on each catalog's retrieval date, excluding VAT and di
 | `shop-web-1` | `compute.googleapis.com/Instance` | `compute.vm` | direct | `Instances` | `b3-8` (2 vCPU, 8 GiB) | €37.38 (count assumed 1) (730 hours assumed) (boot volume not included) | depends-on `shop-orders` | `Instances` offers every capability the resource uses |
 | `shop-web-1-data` | `compute.googleapis.com/Disk` | `storage.block` | direct | `Block Storage` (tie: `Block Storage LUKS`) |  | €4.31 (count assumed 1) | attached-to `shop-web-1` | `Block Storage` offers every capability the resource uses |
 | `shop-web-mig` | `compute.googleapis.com/InstanceGroupManager` | `compute.vm` | partial | `Instances` | `b3-8` (2 vCPU, 8 GiB) | €74.75 (730 hours assumed) (boot volume not included) |  | `Instances` does not offer `autoscaling`; `Instances` does not offer `zone-high-availability` |
-| `shop-zone` | `dns.googleapis.com/ManagedZone` | `unclassified` | none |  |  | not estimated: no fit |  | not classified |
+| `shop-zone` | `dns.googleapis.com/ManagedZone` | `network.dns` | none |  |  | not estimated: no fit |  | no offering in the `OVHcloud` catalog for `network.dns` |
 
 ### Required changes
 
@@ -109,7 +109,7 @@ Estimates are list prices on each catalog's retrieval date, excluding VAT and di
 - `shop-orders-dlq`: no offering in the `OVHcloud` catalog for `messaging.queue`
 - `shop-resize-images`: no offering in the `OVHcloud` catalog for `serverless.function`
 - `shop-uploads`: no offering in the `OVHcloud` catalog for `storage.file`
-- `shop-zone`: not classified
+- `shop-zone`: no offering in the `OVHcloud` catalog for `network.dns`
 - `shop-checkout`: affected by a blocker on `shop-orders`
 - `shop-web-1`: affected by a blocker on `shop-orders`
 
@@ -134,7 +134,7 @@ Estimates are list prices on each catalog's retrieval date, excluding VAT and di
   - `shop-orders-dlq`: no offering in the `OVHcloud` catalog for `messaging.queue`
   - `shop-resize-images`: no offering in the `OVHcloud` catalog for `serverless.function`
   - `shop-uploads`: no offering in the `OVHcloud` catalog for `storage.file`
-  - `shop-zone`: not classified
+  - `shop-zone`: no offering in the `OVHcloud` catalog for `network.dns`
 
 ### Cost estimate
 
@@ -174,7 +174,7 @@ Estimates are list prices on each catalog's retrieval date, excluding VAT and di
 | `shop-web-1` | `compute.googleapis.com/Instance` | `compute.vm` | direct | `Instances` | `PLAY2-MICRO` (4 vCPU, 8 GiB) | €40.21 (count assumed 1) (730 hours assumed) (boot volume not included) | depends-on `shop-orders` | `Instances` offers every capability the resource uses |
 | `shop-web-1-data` | `compute.googleapis.com/Disk` | `storage.block` | direct | `Block Storage` |  | €9.49 (count assumed 1) | attached-to `shop-web-1` | `Block Storage` offers every capability the resource uses |
 | `shop-web-mig` | `compute.googleapis.com/InstanceGroupManager` | `compute.vm` | partial | `Instances` | `PLAY2-MICRO` (4 vCPU, 8 GiB) | €80.42 (730 hours assumed) (boot volume not included) |  | `Instances` does not offer `autoscaling`; `Instances` does not offer `zone-high-availability` |
-| `shop-zone` | `dns.googleapis.com/ManagedZone` | `unclassified` | none |  |  | not estimated: no fit |  | not classified |
+| `shop-zone` | `dns.googleapis.com/ManagedZone` | `network.dns` | none |  |  | not estimated: no fit |  | no offering in the `Scaleway` catalog for `network.dns` |
 
 ### Required changes
 
@@ -187,7 +187,7 @@ Estimates are list prices on each catalog's retrieval date, excluding VAT and di
 - `shop-cdn-backend`: not classified
 - `shop-checkout`: no offering in the `Scaleway` catalog for `serverless.container`
 - `shop-uploads`: no offering in the `Scaleway` catalog for `storage.file`
-- `shop-zone`: not classified
+- `shop-zone`: no offering in the `Scaleway` catalog for `network.dns`
 
 ### Workloads
 
@@ -207,7 +207,7 @@ Estimates are list prices on each catalog's retrieval date, excluding VAT and di
   - `shop-cdn-backend`: not classified
   - `shop-checkout`: no offering in the `Scaleway` catalog for `serverless.container`
   - `shop-uploads`: no offering in the `Scaleway` catalog for `storage.file`
-  - `shop-zone`: not classified
+  - `shop-zone`: no offering in the `Scaleway` catalog for `network.dns`
 
 ### Cost estimate
 
@@ -247,7 +247,7 @@ Estimates are list prices on each catalog's retrieval date, excluding VAT and di
 | `shop-web-1` | `compute.googleapis.com/Instance` | `compute.vm` | direct | `Cloud Servers` | `STARTER-2xCPU-8GB` (2 vCPU, 8 GiB) | €18.00 (count assumed 1) (730 hours assumed) | depends-on `shop-orders` | `Cloud Servers` offers every capability the resource uses |
 | `shop-web-1-data` | `compute.googleapis.com/Disk` | `storage.block` | direct | `Block Storage` (tie: `Block Storage Encrypted`) |  | €22.31 (count assumed 1) | attached-to `shop-web-1` | `Block Storage` offers every capability the resource uses |
 | `shop-web-mig` | `compute.googleapis.com/InstanceGroupManager` | `compute.vm` | partial | `Cloud Servers` | `STARTER-2xCPU-8GB` (2 vCPU, 8 GiB) | €36.00 (730 hours assumed) |  | `Cloud Servers` does not offer `autoscaling`; `Cloud Servers` does not offer `zone-high-availability` |
-| `shop-zone` | `dns.googleapis.com/ManagedZone` | `unclassified` | none |  |  | not estimated: no fit |  | not classified |
+| `shop-zone` | `dns.googleapis.com/ManagedZone` | `network.dns` | none |  |  | not estimated: no fit |  | no offering in the `UpCloud` catalog for `network.dns` |
 
 ### Required changes
 
@@ -264,7 +264,7 @@ Estimates are list prices on each catalog's retrieval date, excluding VAT and di
 - `shop-resize-images`: no offering in the `UpCloud` catalog for `serverless.function`
 - `shop-search-bms`: no offering in the `UpCloud` catalog for `compute.baremetal`
 - `shop-uploads`: no offering in the `UpCloud` catalog for `storage.file`
-- `shop-zone`: not classified
+- `shop-zone`: no offering in the `UpCloud` catalog for `network.dns`
 - `shop-checkout`: affected by a blocker on `shop-orders`
 - `shop-web-1`: affected by a blocker on `shop-orders`
 
@@ -290,7 +290,7 @@ Estimates are list prices on each catalog's retrieval date, excluding VAT and di
   - `shop-orders-dlq`: no offering in the `UpCloud` catalog for `messaging.queue`
   - `shop-resize-images`: no offering in the `UpCloud` catalog for `serverless.function`
   - `shop-uploads`: no offering in the `UpCloud` catalog for `storage.file`
-  - `shop-zone`: not classified
+  - `shop-zone`: no offering in the `UpCloud` catalog for `network.dns`
 
 ### Cost estimate
 

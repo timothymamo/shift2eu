@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -46,11 +47,21 @@ func (*Reporter) ReportComparison(ctx context.Context, w io.Writer, c assessment
 	b.WriteString(sectionHeading + " Comparison\n\n")
 	writeComparisonSummary(&b, c.Targets)
 	writeComparisonResources(&b, c.Targets)
+
+	noted := new(bool)
+	if slices.ContainsFunc(c.Targets, func(t assessment.TargetAssessment) bool {
+		return slices.ContainsFunc(t.Assessment.Verdicts, assessment.Verdict.BestOfferingGlobal)
+	}) {
+		b.WriteString(globalNoteText + "\n\n")
+
+		*noted = true
+	}
+
 	writeSharedBlockers(&b, c)
 
 	for _, t := range c.Targets {
 		b.WriteString("\n" + sectionHeading + " " + codeSpan(t.Assessment.Target, false) + "\n\n")
-		writeBody(&b, t.Assessment, subsectionHeading)
+		writeBody(&b, t.Assessment, subsectionHeading, noted)
 	}
 
 	if _, err := io.WriteString(w, b.String()); err != nil {
@@ -173,7 +184,8 @@ func writeComparisonResources(b *strings.Builder, targets []assessment.TargetAss
 
 		for _, t := range targets {
 			v := t.Assessment.Verdicts[i]
-			row = append(row, escapeText(string(v.Fit)), codeSpan(v.BestOffering, true))
+			row = append(row, escapeText(string(v.Fit)),
+				codeSpan(v.BestOffering, true)+globalMark(v.BestOfferingGlobal()))
 
 			if hasEstimates(t.Assessment) {
 				row = append(row, renderEstimate(v.Estimate))

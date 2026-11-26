@@ -1,0 +1,115 @@
+{
+  "schemaVersion": 3,
+  "kind": "assessment",
+  "inventoryName": "inventory.json",
+  "source": "aws",
+  "target": {
+    "name": "OVHcloud",
+    "snapshot": {
+      "source": "https://www.ovhcloud.com/en/public-cloud/prices/",
+      "retrieved": "2026-11-08"
+    }
+  },
+  "summary": {
+    "direct": 2,
+    "partial": 1,
+    "none": 0,
+    "total": 3
+  },
+  "resources": [
+    {
+      "id": "zone-dnssec",
+      "rawType": "AWS::Route53::HostedZone",
+      "category": "network.dns",
+      "region": "",
+      "fit": "direct",
+      "bestOffering": "Apex DNS Zone",
+      "ties": [
+        "DNS Zone",
+        "DNS Zone Premium"
+      ],
+      "globalTies": [
+        "DNS Zone",
+        "DNS Zone Premium"
+      ],
+      "reasons": [
+        {
+          "code": "all-capabilities",
+          "text": "Apex DNS Zone offers every capability the resource uses",
+          "offering": "Apex DNS Zone"
+        }
+      ],
+      "requiredChanges": [],
+      "relations": [],
+      "affectedBy": []
+    },
+    {
+      "id": "zone-example",
+      "rawType": "AWS::Route53::HostedZone",
+      "category": "network.dns",
+      "region": "",
+      "fit": "direct",
+      "bestOffering": "DNS Zone",
+      "bestOfferingGlobal": true,
+      "ties": [
+        "DNS Zone Premium"
+      ],
+      "globalTies": [
+        "DNS Zone Premium"
+      ],
+      "reasons": [
+        {
+          "code": "all-capabilities",
+          "text": "DNS Zone offers every capability the resource uses",
+          "offering": "DNS Zone"
+        }
+      ],
+      "requiredChanges": [],
+      "relations": [],
+      "affectedBy": []
+    },
+    {
+      "id": "zone-ipv6",
+      "rawType": "AWS::Route53::HostedZone",
+      "category": "network.dns",
+      "region": "",
+      "fit": "partial",
+      "bestOffering": "DNS Zone",
+      "bestOfferingGlobal": true,
+      "ties": [
+        "DNS Zone Premium"
+      ],
+      "globalTies": [
+        "DNS Zone Premium"
+      ],
+      "reasons": [
+        {
+          "code": "missing-capability",
+          "text": "DNS Zone does not offer ipv6",
+          "offering": "DNS Zone",
+          "capability": "ipv6"
+        }
+      ],
+      "requiredChanges": [
+        "ipv6"
+      ],
+      "relations": [],
+      "affectedBy": []
+    }
+  ],
+  "blockers": [],
+  "workloads": [
+    {
+      "name": "",
+      "noWorkload": true,
+      "resources": 3,
+      "summary": {
+        "direct": 2,
+        "partial": 1,
+        "none": 0,
+        "total": 3
+      },
+      "blockers": []
+    }
+  ]
+}

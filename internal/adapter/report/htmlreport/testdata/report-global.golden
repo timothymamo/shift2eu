@@ -1,0 +1,42 @@
+<section class="shift2eu-report">
+<h2><span>Migration assessment</span> <code>OVHcloud</code></h2>
+<ul role="list">
+<li>source <code>aws</code></li>
+<li><span aria-hidden="true">·</span> <code>inventory.json</code></li>
+<li><span aria-hidden="true">·</span> <a href="https://www.ovhcloud.com/en/public-cloud/prices/" target="_blank" rel="noopener noreferrer">catalog retrieved 2026-11-08</a></li>
+</ul>
+<section class="part part-summary">
+<h3>Summary</h3>
+<p><span class="fit fit-direct"><span aria-hidden="true">✓</span> direct</span> <strong>2</strong> <span>of 3 resources</span></p>
+<p><span class="fit fit-partial"><span aria-hidden="true">◐</span> partial</span> <strong>1</strong> <span>needs changes</span></p>
+<p><span class="fit fit-none"><span aria-hidden="true">✕</span> none</span> <strong>0</strong> <span>blocked</span></p>
+</section>
+<section class="part part-resources">
+<h3>Resources</h3>
+<section class="table-scroll" tabindex="0" role="region" aria-label="Resources table">
+<table>
+<thead>
+<tr><th scope="col">ID</th><th scope="col">Raw type</th><th scope="col">Category</th><th scope="col">Fit</th><th scope="col">Best offering</th><th scope="col">Reasons</th></tr>
+</thead>
+<tbody>
+<tr><td><code>zone-dnssec</code></td><td><code>AWS::Route53::HostedZone</code></td><td><code>network.dns</code></td><td class="fit fit-direct"><span>direct</span></td><td><code>Apex DNS Zone</code> (tie: <code>DNS Zone</code> (global), <code>DNS Zone Premium</code> (global))</td><td><code>Apex DNS Zone</code> offers every capability the resource uses</td></tr>
+<tr><td><code>zone-example</code></td><td><code>AWS::Route53::HostedZone</code></td><td><code>network.dns</code></td><td class="fit fit-direct"><span>direct</span></td><td><code>DNS Zone</code> (global) (tie: <code>DNS Zone Premium</code> (global))</td><td><code>DNS Zone</code> offers every capability the resource uses</td></tr>
+<tr><td><code>zone-ipv6</code></td><td><code>AWS::Route53::HostedZone</code></td><td><code>network.dns</code></td><td class="fit fit-partial"><span>partial</span></td><td><code>DNS Zone</code> (global) (tie: <code>DNS Zone Premium</code> (global))</td><td><code>DNS Zone</code> does not offer <code>ipv6</code></td></tr>
+</tbody>
+</table>
+</section>
+<p><code>(global)</code> means not bound to a region you choose, including the one <code>--region</code> names: the provider serves the offering from its own locations, which may be outside the EU and which the target&#39;s <code>SOURCES.md</code> names.</p>
+</section>
+<section>
+<section class="part part-changes">
+<h3>Required changes</h3>
+<ul>
+<li><code>zone-ipv6</code>: <code>ipv6</code> (not offered by <code>DNS Zone</code> (global))</li>
+</ul>
+</section>
+<section class="part part-blockers">
+<h3>Blockers</h3>
+<p>None.</p>
+</section>
+</section>
+</section>

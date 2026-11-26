@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -56,7 +57,7 @@ func (*Reporter) Report(ctx context.Context, w io.Writer, a assessment.Assessmen
 	var f fragment
 
 	writeHeader(&f, a, meta)
-	writeBody(&f, a, sectionLevel)
+	writeBody(&f, a, sectionLevel, new(bool))
 
 	return write(w, &f, "html report")
 }
@@ -90,10 +91,12 @@ func (*Reporter) ReportComparison(ctx context.Context, w io.Writer, c assessment
 
 	writeComparisonHeader(&f, c.Targets, meta)
 
+	noted := new(bool)
+
 	for _, t := range c.Targets {
 		f.part(partTarget, func() {
 			f.heading(sectionLevel, code(t.Assessment.Target))
-			writeBody(&f, t.Assessment, sectionLevel+1)
+			writeBody(&f, t.Assessment, sectionLevel+1, noted)
 		})
 	}
 
@@ -171,10 +174,15 @@ func catalogLink(a assessment.Assessment) rich {
 // each in its part section: its summary, resources, required changes and
 // blockers, the last two in one box so the stylesheet sets them side by side
 // (issue #373, item 12), then the workloads when a.ShowWorkloads and the cost
-// estimate when a has estimates.
-func writeBody(f *fragment, a assessment.Assessment, level int) {
+// estimate when a has estimates. noted says whether the fragment has written
+// the global note (writeGlobalNote) yet; writeBody writes it under the
+// Resources table when that table is the first to show a global offering.
+func writeBody(f *fragment, a assessment.Assessment, level int, noted *bool) {
 	f.part(partSummary, func() { writeSummary(f, a, level) })
-	f.part(partResources, func() { writeResources(f, a, level) })
+	f.part(partResources, func() {
+		writeResources(f, a, level)
+		writeGlobalNote(f, a.Verdicts, noted)
+	})
 	f.box(func() {
 		f.part(partChanges, func() { writeRequiredChanges(f, a.Verdicts, level) })
 		f.part(partBlockers, func() { writeBlockers(f, a.Blockers, a.Verdicts, level) })
@@ -301,7 +309,7 @@ func writeRequiredChanges(f *fragment, verdicts []assessment.Verdict, level int)
 		}
 
 		items = append(items, item{Text: code(v.Resource.ID).words(": ").join(changes, nameSeparator).
-			words(" (not offered by ").code(v.BestOffering).words(")")})
+			words(" (not offered by ").code(v.BestOffering).words(globalMark(v.BestOfferingGlobal()) + ")")})
 	}
 
 	if len(items) == 0 {
@@ -349,21 +357,50 @@ func blockerItems(blockers []assessment.Blocker) []item {
 
 // renderBestOffering renders the best-offering cell of v: the best offering's
 // name, followed by "(tie: ...)" with the other candidates a reader could take
-// for it, in candidate order.
+// for it, in candidate order. A global offering, the best one or a tie, is
+// marked " (global)" after its name.
 func renderBestOffering(v assessment.Verdict) rich {
-	best := code(v.BestOffering)
+	best := code(v.BestOffering).words(globalMark(v.BestOfferingGlobal()))
 
 	names := v.Ties()
 	if len(names) == 0 {
 		return best
 	}
 
+	global := v.GlobalTies()
+
 	ties := make([]rich, 0, len(names))
 	for _, name := range names {
-		ties = append(ties, code(name))
+		ties = append(ties, code(name).words(globalMark(slices.Contains(global, name))))
 	}
 
 	return best.words(" (tie: ").join(ties, nameSeparator).words(")")
+}
+
+// globalMark returns what a report writes after the name of an offering:
+// " (global)" when global is true, and nothing otherwise.
+func globalMark(global bool) string {
+	if global {
+		return " (global)"
+	}
+
+	return ""
+}
+
+// writeGlobalNote writes the paragraph that says what the global mark means
+// (PRD #581, ADR 0048) when the table just written shows a global offering of
+// verdicts and *noted is false, and then sets *noted, so a fragment writes it
+// once, under the first table that shows a global offering.
+func writeGlobalNote(f *fragment, verdicts []assessment.Verdict, noted *bool) {
+	if *noted || !slices.ContainsFunc(verdicts, assessment.Verdict.ShowsGlobal) {
+		return
+	}
+
+	f.paragraph(code("(global)").words(" means not bound to a region you choose, including the one ").
+		code("--region").words(" names: the provider serves the offering from its own locations, which may be " +
+		"outside the EU and which the target's ").code("SOURCES.md").words(" names."))
+
+	*noted = true
 }
 
 // renderReasons renders reasons one after the other, separated by "; ".
