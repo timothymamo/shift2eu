@@ -8,7 +8,11 @@
 # (test/examples/fixtures_check_test.go), which cannot import the reviewer's
 # library. Each copy's tests read this one list: scan_test.go by
 # ../../../../test/examples/testdata/namespace_may_follow_delimiters.txt, and
-# fixtures_hostrule_test.go by testdata/namespace_may_follow_delimiters.txt.
+# fixtures_hostrule_test.go by testdata/namespace_may_follow_delimiters.txt,
+# both through their check, and fixtures_hostrule_test.go's
+# TestNamespaceMayFollow also calls the fixture copy directly. A delimiter
+# added to or dropped from one copy must be added to or dropped from this list
+# and the other copy too.
 #
 # A record is a case name, ": " and the text the case runs. Every text holds a
 # resource type whose provider namespace sits directly after the delimiter of
