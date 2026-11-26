@@ -230,11 +230,15 @@ func auditComparesVariables(line string, names ...string) bool {
 // -version lacks to hold the tool to go.mod's Go: the step reads the wanted
 // version from go.mod, runs go version on the govulncheck binary itself, holds
 // what that prints in a variable of its own, compares that variable with
-// go.mod's, and fails the run - exit 1, after an ::error naming govulncheck that
-// the run's log names the cause with - on a mismatch, so a govulncheck built
-// with another Go than go.mod's stops the run instead of scanning with it (issue
-// #658). A comparison that reads go.mod's Go alone holds the built tool to
-// nothing, so the comparison must name both variables.
+// go.mod's in the if that is the first code line after the assignment, and
+// fails the run inside that block - exit 1, after an ::error naming govulncheck
+// that the run's log names the cause with - on a mismatch, so a govulncheck
+// built with another Go than go.mod's stops the run instead of scanning with it
+// (issue #658). A comparison that reads go.mod's Go alone holds the built tool
+// to nothing, so the comparison must name both variables. The block's own
+// bounds decide what the ::error and the exit 1 are: an ::error or an exit 1
+// after the block's fi is another check's line, and a guard that lost its own
+// would then only warn (issue #658).
 //
 // go version on the binary is what catches a tool built with another Go:
 // govulncheck -version's "Go:" line is the go command's own go env GOVERSION,
@@ -289,49 +293,81 @@ func auditGovulncheckVersionGuard(step auditJobStep, want string) []string {
 			builtVar = m[1]
 		}
 
-		compared := false
+		// The comparison is the first code line after the assignment, blank and
+		// comment lines aside: that if block, and no line further down the step,
+		// is the guard (issue #658).
+		first := -1
 
-		for _, line := range lines[goVersion:] {
-			if auditComparesVariables(line, modVar, builtVar) {
-				compared = true
+		for i := goVersion + 1; i < len(lines); i++ {
+			if strings.TrimSpace(lines[i]) != "" {
+				first = i
 
 				break
 			}
+		}
+
+		compared, guard := false, -1
+
+		if first >= 0 && strings.HasPrefix(strings.TrimSpace(lines[first]), "if ") {
+			guard = first
+			compared = auditComparesVariables(lines[first], modVar, builtVar)
 		}
 
 		switch {
 		case builtVar == "":
 			problems = append(problems, fmt.Sprintf("%s runs go version on the govulncheck binary (%q) without holding what it prints in a variable of its own (an assignment such as built=\"$(go version %s)\"): no comparison then reads the built tool's Go, so any line that reads go.mod's %q passes for holding it there (issue #658)", where, strings.TrimSpace(lines[goVersion]), builtBy, want))
+		case first < 0:
+			problems = append(problems, fmt.Sprintf("%s runs go version on the govulncheck binary into %q but holds no line after it at all, so no comparison names both it and go.mod's Go (%q, the variable %q the step reads go.mod into): the step must compare what the binary prints with go.mod's Go, right after it (issue #658)", where, builtVar, "go"+want, modVar))
+		case guard < 0:
+			problems = append(problems, fmt.Sprintf("%s runs go version on the govulncheck binary into %q and then runs %q before any if that compares the two: the comparison must be the first code line after the go version line, blank and comment lines aside, or the ::error and exit 1 this guard needs are lines of another check further down the step and a mismatch only warns (issue #658)", where, builtVar, strings.TrimSpace(lines[first])))
 		case !compared:
 			problems = append(problems, fmt.Sprintf("%s runs go version on the govulncheck binary into %q but holds no comparison that names both it and go.mod's Go (%q, the variable %q the step reads go.mod into): the comparison must read both, or a line such as [ \"${%s}\" != \"\" ] reads go.mod's Go alone and holds the built tool to nothing, so a govulncheck built with another Go than go.mod's %q scans anyway (issue #658)", where, builtVar, "go"+want, modVar, modVar, want))
 		}
 
-		// The failure after it: an ::error that names govulncheck, then exit 1.
-		namesCause, causeAt := false, -1
+		// The failure the block holds: an ::error naming govulncheck, then exit
+		// 1, both inside the block that if opens and before its fi. One after
+		// the fi is whatever the step runs next, so the guard's own lines must
+		// be the ones inside the block (issue #658).
+		if guard >= 0 {
+			// The block runs to its fi: the first line after the if that is a
+			// lone fi, which is the end of a block that opens no if of its own.
+			end := len(lines)
 
-		for i, line := range lines[goVersion+1:] {
-			if strings.Contains(line, "::error") && strings.Contains(line, "govulncheck") {
-				namesCause, causeAt = true, goVersion+1+i
-
-				break
-			}
-		}
-
-		if !namesCause {
-			problems = append(problems, fmt.Sprintf("%s runs go version on the govulncheck binary but holds no ::error after that line naming govulncheck: the run's log names the cause, so a govulncheck built with another Go is a failure that says so, not a bare non-zero exit (issue #658)", where))
-		} else {
-			fails := false
-
-			for _, line := range lines[causeAt+1:] {
-				if strings.Contains(line, "exit 1") {
-					fails = true
+			for i := guard + 1; i < len(lines); i++ {
+				if strings.TrimSpace(lines[i]) == "fi" {
+					end = i
 
 					break
 				}
 			}
 
-			if !fails {
-				problems = append(problems, fmt.Sprintf("%s names the govulncheck cause in an ::error but no exit 1 follows it: the run must fail when the built tool's Go is not go.mod's, never scan with it (issue #658)", where))
+			cause := -1
+
+			for i := guard + 1; i < end; i++ {
+				if strings.Contains(lines[i], "::error") && strings.Contains(lines[i], "govulncheck") {
+					cause = i
+
+					break
+				}
+			}
+
+			fails := false
+
+			if cause >= 0 {
+				for i := cause + 1; i < end; i++ {
+					if strings.Contains(lines[i], "exit 1") {
+						fails = true
+
+						break
+					}
+				}
+			}
+
+			switch {
+			case cause < 0:
+				problems = append(problems, fmt.Sprintf("%s runs go version on the govulncheck binary but holds no ::error naming govulncheck inside the if block that compares the two (between that if and its fi): the run's log names the cause, and an ::error after the block's fi is another check's, so a mismatch would only warn instead of failing the run (issue #658)", where))
+			case !fails:
+				problems = append(problems, fmt.Sprintf("%s names the govulncheck cause in an ::error inside the if block but no exit 1 follows it before the block's fi: an exit 1 after the fi is another check's, so the run would not fail on a mismatch and would scan with a govulncheck built with another Go than go.mod's %q (issue #658)", where, want))
 			}
 		}
 	}
