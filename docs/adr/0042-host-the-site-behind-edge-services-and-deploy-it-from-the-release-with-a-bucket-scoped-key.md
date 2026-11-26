@@ -592,7 +592,8 @@ state, and `plan -detailed-exitcode` then exited 0. Nothing in the probes' answe
 The third-project probe (2026-11-26) showed two things about the maintainer's own key, now in R7's step
 7: it reaches a bucket in another project only with its default project switched to that project (its
 S3 calls go to its default project), and `scw object bucket delete` answered 403 on the throwaway
-bucket where `aws s3api delete-bucket` with the same key is the command to use.
+bucket, which `aws s3api delete-bucket` with the same key then deleted (confirmed by the maintainer on
+2026-11-26): it is the command R7 uses.
 
 ## Alternatives considered
 

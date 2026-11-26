@@ -6,7 +6,7 @@
 #
 # The cost pins (ADR 0045, *The container*): max_scale 1, 140 mvCPU and 268 MB (about 0.268 GB) of memory bound the
 # worst case to one instance; min_scale 0 keeps the site in the free tier, at the price of a cold start on the first
-# visit after an idle period. The memory pin is 268000000 bytes, the value the platform kept (observed 2026-11-25), not 268435456 (256 MiB):
+# visit after an idle period. The memory pin is 268000000 bytes, the value the platform kept, not 268435456 (256 MiB):
 # asked for 268435456, the platform kept 268000000 (observed 2026-11-25, issue #596), so every plan after an apply
 # would show that change. That the platform keeps whole decimal megabytes is no documented rule, and the pin holds the
 # answer an apply gave rather than that rule. The deprecated spellings stay out:

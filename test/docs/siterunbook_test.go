@@ -23,6 +23,7 @@
 package docs_test
 
 import (
+	"fmt"
 	"os"
 	"regexp"
 	"slices"
@@ -429,9 +430,10 @@ var removalInstruction = regexp.MustCompile(`\b(rm|remove|delete)\b`)
 // path must once the cause is explained: the spelling is the maintainer's choice, so rm, remove and delete all count,
 // as words of their own (removalInstruction). A clause that negates its verb - "do not remove it", "remove nothing" -
 // tells the maintainer to keep the file, so it is no removal, and each comma-separated clause is read on its own: a
-// negation in one says nothing about another's.
+// negation in one says nothing about another's. The clause is read in lower case, so a verb opening a sentence
+// ("Remove the backup") counts, and a capitalised past tense ("Removed") still does not (issue #650).
 func saysToRemoveAFile(text string) bool {
-	for _, clause := range strings.Split(text, ",") {
+	for _, clause := range strings.Split(strings.ToLower(text), ",") {
 		verb, negated := removalInstruction.MatchString(clause), false
 
 		for _, negation := range []string{"not ", "nothing", "never"} {
@@ -703,6 +705,59 @@ func TestRemovesTheBackupOnceExplained(t *testing.T) {
 	}
 }
 
+// TestSaysToRemoveAFile pins the helper R4's outcome pins rest on, in both directions of the spelling (issue #650, the
+// AI reviewer's point 2 on PR #643): the runbook tells the maintainer to remove a file in the imperative, and a sentence's
+// first word is capitalised, so "Remove the backup once the diff is explained" tells what "remove the backup" tells. A
+// capitalised removal that only describes one - past tense, or a negation - still tells nobody to make it.
+func TestSaysToRemoveAFile(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		text string
+		want bool
+	}{
+		{
+			name: "the rm command",
+			text: `then [ -f "$T/state-backup.json" ] && rm -r "$T"`,
+			want: true,
+		},
+		{
+			name: "the imperative in lower case",
+			text: "then remove the backup",
+			want: true,
+		},
+		{
+			name: "the imperative opening a sentence with a capital R",
+			text: "Remove the backup once the diff is explained",
+			want: true,
+		},
+		{
+			name: "the imperative opening a sentence with a capital D",
+			text: "Delete the backup once the diff is explained",
+			want: true,
+		},
+		{
+			name: "a capitalised removal that is described rather than told",
+			text: "The earlier run Removed the backup",
+		},
+		{
+			name: "a capitalised negation of the imperative",
+			text: "Do not remove the backup until it is explained",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := saysToRemoveAFile(tc.text); got != tc.want {
+				t.Errorf("saysToRemoveAFile(%q) = %t, want %t: the runbook's wording is the maintainer's, so the check reads the verb whatever its case, and a removal it only describes or negates tells nobody to make one (issue #650)", tc.text, got, tc.want)
+			}
+		})
+	}
+}
+
 // TestContainerEndpointOutputToleratesAnAbsentContainer pins the other half of the same follow-up (issue #567): R4's
 // refresh-only reads every output of infra/site, and the first apply can leave scaleway_container.site uncreated (its
 // precondition fails while the pipeline's default_fqdn is still empty), so the container_endpoint output must read the
@@ -918,4 +973,186 @@ func runbookContinuesOutcome(line string) bool {
 	rest := strings.TrimPrefix(trimmed, "#")
 
 	return strings.HasPrefix(rest, "  ") && strings.TrimSpace(rest) != ""
+}
+
+// deployKeyHeading is R7 of siteRunbookPath (issue #650): the canary step whose step 7 runs the deploy key outside its
+// project, and the order of whose commands the test below pins.
+const deployKeyHeading = "## R7. The deploy key's limits"
+
+// r7Step7Command is one command of R7's step 7: the name a failure gives it, and the fragments its own command line
+// carries - all of them - which tell it from the step's sibling commands.
+type r7Step7Command struct {
+	name      string   // how the failure message names the step
+	fragments []string // every fragment the step's own command line carries
+}
+
+// r7Step7Order is R7's step 7 in the order it must run (issue #650, the auditor's finding 4 and the AI reviewer's point
+// 5 on PR #645): the maintainer's own key is switched to the throwaway project and the switch waited for before the
+// listing that shows the project's bucket empty, the bucket is created only after that listing - created earlier it
+// could land in the site's project - and the cleanup that deletes the bucket and switches the key back to the site's
+// project runs before step 8's restores, which need it back there: the delete needs a key still on the throwaway
+// project, and the restores that follow need the site's. The step is anchored on step 8's first restore rather than on
+// step 8's last command (the switch to the admin project), so a switch back moved below the restores but still above
+// that last command is reported too (issue #650's review): the restores run before the switch to the admin project.
+var r7Step7Order = []r7Step7Command{
+	{
+		name:      "the key switched to the throwaway project",
+		fragments: []string{"scw iam api-key update", `default-project-id="$XP"`},
+	},
+	{
+		name:      "the wait for the switch to apply",
+		fragments: []string{`head-bucket --bucket "$B"`, "|| break"},
+	},
+	{
+		name:      "the throwaway project's bucket listing, shown empty",
+		fragments: []string{"own s3api list-buckets", "# PASS: []"},
+	},
+	{
+		name:      "create-bucket in the throwaway project",
+		fragments: []string{`own s3api create-bucket --bucket "$XB"`},
+	},
+	{
+		name:      "delete-bucket, the cleanup",
+		fragments: []string{`own s3api delete-bucket --bucket "$XB"`},
+	},
+	{
+		name:      "the switch back to the site's project",
+		fragments: []string{"scw iam api-key update", `default-project-id="$P"`},
+	},
+	{
+		name:      "step 8's first restore, which needs the key back on the site's project",
+		fragments: []string{"aws s3api put-bucket-acl", `--bucket "$B"`},
+	},
+	{
+		name:      "the switch to the admin project, after step 8's restores",
+		fragments: []string{"scw iam api-key update", `default-project-id="$ADMIN_PROJECT"`},
+	},
+}
+
+// TestSiteRunbookR7Step7Order pins the order of R7's step 7 (issue #650): the key is switched to the throwaway project
+// and the switch waited for before the empty listing, the bucket is created after that listing, and the cleanup - the
+// bucket's deletion and the switch back to the site's project - comes before step 8's restores, the first of which (the
+// site bucket's ACL) is the last step anchored, and step 8's switch to the admin project comes after them. Each step is
+// found by a fragment of its own command line, so the maintainer's wording and the surrounding comments may change; the
+// failures name the pair that is out of order. The swapped cases run the same check on a copy of the section whose two
+// steps are exchanged, so the check is shown to fail on an order the runbook must not have - a switch back moved below
+// step 8's first restore included, which an anchor on step 8's last command would let pass (issue #650's review).
+func TestSiteRunbookR7Step7Order(t *testing.T) {
+	t.Parallel()
+
+	section := runbookSectionOf(t, deployKeyHeading)
+
+	tests := []struct {
+		name    string
+		swapped [2]int // the two steps, 1-based in r7Step7Order, whose lines the case exchanges; zero exchanges none
+		want    []string
+	}{
+		{
+			name: "the runbook's own order",
+		},
+		{
+			name:    "the wait moved after the empty listing",
+			swapped: [2]int{2, 3},
+			want:    []string{"(3) the throwaway project's bucket listing, shown empty comes before (2) the wait for the switch to apply"},
+		},
+		{
+			name:    "create-bucket moved before the empty listing",
+			swapped: [2]int{3, 4},
+			want:    []string{"(4) create-bucket in the throwaway project comes before (3) the throwaway project's bucket listing, shown empty"},
+		},
+		{
+			name:    "the switch back moved before the bucket's deletion",
+			swapped: [2]int{5, 6},
+			want:    []string{"(6) the switch back to the site's project comes before (5) delete-bucket, the cleanup"},
+		},
+		{
+			name:    "the switch back moved below step 8's first restore",
+			swapped: [2]int{6, 7},
+			want:    []string{"(7) step 8's first restore, which needs the key back on the site's project comes before (6) the switch back to the site's project"},
+		},
+		{
+			name:    "the switch to the admin project moved before step 8's first restore",
+			swapped: [2]int{7, 8},
+			want:    []string{"(8) the switch to the admin project, after step 8's restores comes before (7) step 8's first restore, which needs the key back on the site's project"},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			lines := section
+			if tc.swapped != [2]int{} {
+				lines = r7Step7Swap(t, section, r7Step7Order[tc.swapped[0]-1], r7Step7Order[tc.swapped[1]-1])
+			}
+
+			numbers := make([]int, len(r7Step7Order))
+			for i, step := range r7Step7Order {
+				numbers[i] = r7Step7Line(t, lines, step)
+			}
+
+			if got := r7Step7OutOfOrder(numbers, r7Step7Order); !slices.Equal(got, tc.want) {
+				t.Errorf("%s: %s: the steps out of order are %q, want %q: the key is switched to the throwaway project and the switch waited for before the empty listing, the bucket is created only after it, and the cleanup - the bucket's deletion and the switch back to the site's project - runs before step 8's restores, whose first command is the site bucket's ACL, and before step 8's switch to the admin project (issue #650, docs/adr/0042)",
+					siteRunbookPath, deployKeyHeading, got, tc.want)
+			}
+		})
+	}
+}
+
+// r7Step7Line returns the index in section of the one line that runs the step's command: a line carrying every fragment
+// of the step, whose trimmed text does not start the comment that states an outcome instead.
+func r7Step7Line(t *testing.T, section []string, step r7Step7Command) int {
+	t.Helper()
+
+	found := -1
+
+	for i, line := range section {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "#") || !carriesAll(trimmed, step.fragments) {
+			continue
+		}
+
+		if found >= 0 {
+			t.Fatalf("%s: %s holds two command lines for the step %q, on lines %d and %d of the section: the check cannot tell which one the order holds, so pin its one command line (issue #650)",
+				siteRunbookPath, deployKeyHeading, step.name, found+1, i+1)
+		}
+
+		found = i
+	}
+
+	if found < 0 {
+		t.Fatalf("%s: %s holds no command line carrying %q, so the order this test pins lost the step %q (issue #650)",
+			siteRunbookPath, deployKeyHeading, step.fragments, step.name)
+	}
+
+	return found
+}
+
+// r7Step7OutOfOrder returns one problem for each pair of steps whose lines the section holds in the other order; it is
+// empty when every step's line comes after the line of every step before it.
+func r7Step7OutOfOrder(numbers []int, steps []r7Step7Command) []string {
+	var problems []string
+
+	for i := range steps {
+		for j := i + 1; j < len(steps); j++ {
+			if numbers[j] < numbers[i] {
+				problems = append(problems, fmt.Sprintf("(%d) %s comes before (%d) %s", j+1, steps[j].name, i+1, steps[i].name))
+			}
+		}
+	}
+
+	return problems
+}
+
+// r7Step7Swap returns a copy of section with the two steps' command lines exchanged: the order the runbook must not
+// have, which the check above has to reject.
+func r7Step7Swap(t *testing.T, section []string, a, b r7Step7Command) []string {
+	t.Helper()
+
+	first, second := r7Step7Line(t, section, a), r7Step7Line(t, section, b)
+
+	swapped := slices.Clone(section)
+	swapped[first], swapped[second] = swapped[second], swapped[first]
+
+	return swapped
 }

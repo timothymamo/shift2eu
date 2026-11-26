@@ -602,13 +602,18 @@ func testRequestHeaders(t *testing.T, front *harness) {
 		t.Fatalf("GET %s answers %d, want the upstream's 200", path, resp.status)
 	}
 
-	// The client's own Via reaches neither the upstream nor the answer the front gives it (issue #626):
-	// the proxy sends none up and the front answers with none.
+	// The client's own Via reaches neither the upstream nor the answer the front gives it (issue #626): the proxy
+	// sends none up and the front answers with none. The answer is asserted here, the upstream just below by the check
+	// that names the Via and by the loop over the headers the client sent, which holds it too (issue #650).
 	assertNoVia(t, resp)
 
 	seen, ok := front.upstream.request(path)
 	if !ok {
 		t.Fatalf("the upstream recorded no request for %q: the request was not proxied", path)
+	}
+
+	if got := seen.header.Values("Via"); len(got) > 0 {
+		t.Errorf("the upstream receives Via: %q, want none: the header would be the client's own copy, and Edge Services reads none of it (issue #626, docs/adr/0045)", got)
 	}
 
 	for _, header := range sent {
