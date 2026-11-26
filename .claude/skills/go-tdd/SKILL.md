@@ -33,6 +33,16 @@ clean (CLAUDE.md, rule 9).
    **for the right reason** (an assertion on the missing behaviour, not a compile error in an unrelated
    file). A compile failure because the new function does not exist yet is acceptable RED.
 4. Commit the failing test alone: `test(<pkg>): pin <behaviour>`. Report the exact failure output.
+   End the message with exactly one co-author trailer, this line, with no email address:
+
+   ```text
+   Co-Authored-By: pi (DeepSeek V4.1 Flash)
+   ```
+
+   Never add a trailer with an email address you do not own (`noreply@pi.dev`, `noreply@deepseek.com`,
+   `noreply@earendil-works.com`, ...): GitHub credits the account that verified the address, and
+   `noreply@pi.dev` belongs to a third-party account (issue #653). The squash merge copies the trailers
+   of a PR's commits, so a wrong one reaches `main`.
 
 ## GREEN: confirm
 
