@@ -36,9 +36,10 @@ const (
 	headingLineChars = 82
 	// fillerLines is how many body lines the sweep draws before the chain: it
 	// walks the chain from just under the top of the page down to its foot. The
-	// sweep starts at one line, because a chain that starts at the very top of a
-	// page is the page break ensure makes when moving it could not help, not the
-	// one this test is about.
+	// sweep counts from one line, because a chain that starts at the very top of
+	// a page is the other side of the page break: document.ensure moves it
+	// nowhere (kept.y >= d.top), and the sweep of the test's second subtest, with
+	// no filler line at all, is the one that walks it.
 	fillerLines = 56
 	// blockLines is how many heading lines the block after the chain holds. The
 	// sweep covers a block that fits under the chain, one that does not fit on a
@@ -63,17 +64,63 @@ var chainValue = strings.Repeat("c", headingLineChars*chainLines)
 // heading chain that leaves no room for the block it is kept with: every page of
 // the document must end with a body line, never with a heading, and every
 // character drawn must be there exactly once.
+//
+// Two sweeps reach that break from both sides of document.ensure: a chain the
+// break moves to a new page, walked down the page by the filler, and a chain
+// that starts at the very top of a page already, so the break moves it nowhere.
 func TestLayoutKeepsAHeadingOffTheFootOfAPage(t *testing.T) {
 	t.Parallel()
 
-	moved := 0
+	t.Run("chain walked down the page", func(t *testing.T) {
+		t.Parallel()
 
-	// The sweep walks every body line of the filler and every second heading line
-	// of the block: the page break the block asks for spans several lines, so a
-	// step of two still walks it.
-	for filler := 1; filler <= fillerLines; filler++ {
+		fillers := make([]int, 0, fillerLines)
+		for filler := 1; filler <= fillerLines; filler++ {
+			fillers = append(fillers, filler)
+		}
+
+		moved, _ := sweepLayout(t, fillers)
+
+		if moved == 0 {
+			t.Fatalf("no case of the sweep of %d filler line counts and %d block line counts moved a kept heading chain to a new page, so the sweep never reached the page break this test is about",
+				fillerLines, (blockLines+1)/2)
+		}
+
+		t.Logf("%d cases of the sweep moved a kept heading chain to a new page", moved)
+	})
+
+	t.Run("chain at the top of a page", func(t *testing.T) {
+		t.Parallel()
+
+		// No filler line at all: the chain is the first thing drawn, so it sits
+		// at the top of the first page and the block after it reaches the page
+		// break with kept.y >= d.top, where document.ensure moves it nowhere.
+		_, breaks := sweepLayout(t, []int{0})
+
+		if breaks == 0 {
+			t.Fatalf("no case of the sweep of a chain at the top of a page and %d block line counts drew a second page, so the sweep never reached a page break",
+				(blockLines+1)/2)
+		}
+
+		t.Logf("%d cases of the sweep drew a second page under a chain at the top of a page", breaks)
+	})
+}
+
+// sweepLayout runs the sweep for every filler line count in fillers and every
+// second heading line of the block, which still walks a page break that spans
+// several lines. It fails the test for the layout's invariants of its own and
+// returns how many cases moved a kept heading chain to a new page and how many
+// drew more than one page.
+func sweepLayout(t *testing.T, fillers []int) (moved, breaks int) {
+	t.Helper()
+
+	for _, filler := range fillers {
 		for lines := 1; lines <= blockLines; lines += 2 {
 			pages := drawLayout(filler, lines)
+
+			if len(pages) > 1 {
+				breaks++
+			}
 
 			if len(pages) > 1 && !pageDrawsTheChain(pages[0]) && pageDrawsTheChain(pages[1]) {
 				moved++
@@ -84,12 +131,7 @@ func TestLayoutKeepsAHeadingOffTheFootOfAPage(t *testing.T) {
 		}
 	}
 
-	if moved == 0 {
-		t.Fatalf("no case of the sweep of %d filler line counts and %d block line counts moved a kept heading chain to a new page, so the sweep never reached the page break this test is about",
-			fillerLines, (blockLines+1)/2)
-	}
-
-	t.Logf("%d cases of the sweep moved a kept heading chain to a new page", moved)
+	return moved, breaks
 }
 
 // drawLayout draws the test's document: filler body lines, a chain of kept
