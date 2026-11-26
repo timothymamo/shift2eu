@@ -345,9 +345,11 @@ func inventoryGuides() []inventoryGuideCase {
 				// An OpenSearch Service domain on OpenSearch 2.x: three data nodes,
 				// zone awareness, EBS storage and encryption at rest. OpenSearch
 				// Service takes automated snapshots of every domain, so snapshots
-				// holds whatever the settings say (PRD #571).
+				// holds whatever the settings say (PRD #571). Its region is the
+				// region of its ARN, as every other AWS resource's is.
 				{
 					id: "shop-search", rawType: "AWS::OpenSearchService::Domain", category: "search.opensearch",
+					region:       "eu-central-1",
 					capabilities: []string{"encryption-at-rest", "node-high-availability", "snapshots", "zone-high-availability"},
 				},
 				// OpenSearch is a fork of Elasticsearch 7.10.2 and keeps its REST
@@ -356,6 +358,7 @@ func inventoryGuides() []inventoryGuideCase {
 				// domain takes.
 				{
 					id: "shop-logs", rawType: "AWS::OpenSearchService::Domain", category: "search.opensearch",
+					region:       "eu-central-1",
 					capabilities: []string{"snapshots"},
 				},
 				// 7.0 removed mapping types, so a client written against the 6.x API
@@ -364,25 +367,48 @@ func inventoryGuides() []inventoryGuideCase {
 				// #571, *What counts, and what does not*).
 				{
 					id: "shop-legacy-search", rawType: "AWS::OpenSearchService::Domain", category: "unclassified",
+					region:       "eu-central-1",
 					capabilities: []string{},
+				},
+				// Two domains of the same name in two regions are two resources, not
+				// one: each is named after the ARN's region, and the two differ by
+				// nothing else in the recorded output. Without the region the program
+				// would list one of them twice, or once, and a workload of either
+				// region would be assessed against the other's domain (PRD #571).
+				{
+					id: "shop-mirror (AWS::OpenSearchService::Domain, eu-central-1)", rawType: "AWS::OpenSearchService::Domain",
+					category:     "search.opensearch",
+					region:       "eu-central-1",
+					capabilities: []string{"encryption-at-rest", "node-high-availability", "snapshots", "zone-high-availability"},
+				},
+				{
+					id: "shop-mirror (AWS::OpenSearchService::Domain, eu-west-1)", rawType: "AWS::OpenSearchService::Domain",
+					category:     "search.opensearch",
+					region:       "eu-west-1",
+					capabilities: []string{"encryption-at-rest", "node-high-availability", "snapshots", "zone-high-availability"},
 				},
 				// An OpenSearch Serverless collection speaks the OpenSearch API. A
 				// collection always encrypts, and standby replicas are the node and
 				// zone high availability of a collection with no node the guide can
-				// read; the one without them keeps encryption alone.
+				// read. Serverless takes a snapshot every hour and the snapshot is
+				// restorable, so every collection has snapshots too (PRD #571).
 				{
 					id: "shop-vectors", rawType: "AWS::OpenSearchServerless::Collection", category: "search.opensearch",
-					capabilities: []string{"encryption-at-rest", "node-high-availability", "zone-high-availability"},
+					region:       "eu-central-1",
+					capabilities: []string{"encryption-at-rest", "node-high-availability", "snapshots", "zone-high-availability"},
 				},
 				{
 					id: "shop-thumbnails", rawType: "AWS::OpenSearchServerless::Collection", category: "search.opensearch",
-					capabilities: []string{"encryption-at-rest"},
+					region:       "eu-central-1",
+					capabilities: []string{"encryption-at-rest", "snapshots"},
 				},
 				// A provisioned MSK cluster is Apache Kafka: three brokers in three
 				// client subnets (one subnet per zone), encrypted at rest. Kafka has
-				// no snapshot the capability means, so it carries none.
+				// no snapshot the capability means, so it carries none. Its region is
+				// the region of its ARN.
 				{
 					id: "shop-events-kafka", rawType: "AWS::MSK::Cluster", category: "messaging.kafka",
+					region:       "eu-central-1",
 					capabilities: []string{"encryption-at-rest", "node-high-availability", "zone-high-availability"},
 				},
 				// An MSK Serverless cluster speaks the Kafka protocol with no broker
@@ -390,6 +416,7 @@ func inventoryGuides() []inventoryGuideCase {
 				// encrypts.
 				{
 					id: "shop-events-kafka-serverless", rawType: "AWS::MSK::ServerlessCluster", category: "messaging.kafka",
+					region:       "eu-central-1",
 					capabilities: []string{"encryption-at-rest", "node-high-availability", "zone-high-availability"},
 				},
 				// A Kafka Connect connector is an integration runtime, not a cluster
@@ -513,9 +540,11 @@ func inventoryGuides() []inventoryGuideCase {
 				// the cluster, as its nodes do.
 				"k8s-shop-ingress",
 				// The AWS Config row of the MSK cluster is no second resource: the
-				// kafka list-clusters-v2 call lists the cluster, under its name, and
-				// the program drops the Config row. Its Config resource ID is the
-				// cluster's ARN, whose last segment is the cluster's UUID.
+				// kafka list-clusters-v2 call lists the cluster, under its name and in
+				// the same region (the Config row's awsRegion is the region of the
+				// cluster's ARN), and the program drops the Config row. Its Config
+				// resource ID is the cluster's ARN, whose last segment is the
+				// cluster's UUID.
 				"00000000-0000-0000-0000-000000000000",
 			},
 			absentRawTypes: []string{

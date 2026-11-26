@@ -34,7 +34,9 @@ type guideCallFixture struct {
 // searchAndKafkaFixtures are the guide's new AWS calls of PRD #571, with the
 // fixture of each and the fields its program reads. The fixtures hold the
 // --query output, so a key here is a field the guide's operator saw in the raw
-// output before deleting it.
+// output before deleting it. The guide runs a call once per region, so a call
+// recorded in two regions has an entry per region, and the two must read the
+// same fields.
 var searchAndKafkaFixtures = []guideCallFixture{
 	{
 		call: "aws opensearch list-domain-names",
@@ -45,7 +47,16 @@ var searchAndKafkaFixtures = []guideCallFixture{
 		call: "aws opensearch describe-domains",
 		file: "test/e2e/testdata/inventory-guide/aws/eu-central-1/opensearch-domains.json",
 		keys: []string{
-			"DomainStatusList", "DomainName", "EngineVersion", "ClusterConfig",
+			"DomainStatusList", "DomainName", "ARN", "EngineVersion", "ClusterConfig",
+			"InstanceType", "InstanceCount", "ZoneAwarenessEnabled", "MultiAZWithStandbyEnabled",
+			"EBSOptions", "EBSEnabled", "VolumeSize", "EncryptionAtRestOptions", "Enabled",
+		},
+	},
+	{
+		call: "aws opensearch describe-domains in eu-west-1",
+		file: "test/e2e/testdata/inventory-guide/aws/eu-west-1/opensearch-domains.json",
+		keys: []string{
+			"DomainStatusList", "DomainName", "ARN", "EngineVersion", "ClusterConfig",
 			"InstanceType", "InstanceCount", "ZoneAwarenessEnabled", "MultiAZWithStandbyEnabled",
 			"EBSOptions", "EBSEnabled", "VolumeSize", "EncryptionAtRestOptions", "Enabled",
 		},
@@ -58,16 +69,15 @@ var searchAndKafkaFixtures = []guideCallFixture{
 	{
 		call: "aws opensearchserverless batch-get-collection",
 		file: "test/e2e/testdata/inventory-guide/aws/eu-central-1/opensearchserverless-batch-collections.json",
-		keys: []string{"collectionDetails", "name", "type", "standbyReplicas"},
+		keys: []string{"collectionDetails", "name", "arn", "type", "standbyReplicas"},
 	},
 	{
 		call: "aws kafka list-clusters-v2",
 		file: "test/e2e/testdata/inventory-guide/aws/eu-central-1/kafka-clusters-v2.json",
 		keys: []string{
-			"ClusterInfoList", "ClusterName", "ClusterType", "Provisioned", "NumberOfBrokerNodes",
+			"ClusterInfoList", "ClusterName", "ClusterType", "ClusterArn", "Provisioned", "NumberOfBrokerNodes",
 			"BrokerNodeGroupInfo", "InstanceType", "ClientSubnets", "StorageInfo", "EbsStorageInfo",
-			"VolumeSize", "EncryptionInfo", "EncryptionAtRest", "DataVolumeKMSKeyId",
-			"Serverless", "VpcConfigs", "SubnetIds",
+			"VolumeSize",
 		},
 	},
 }

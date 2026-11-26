@@ -1,0 +1,22 @@
+{
+  "DomainStatusList": [
+    {
+      "DomainName": "shop-mirror",
+      "ARN": "arn:aws:es:eu-west-1:123456789012:domain/shop-mirror",
+      "EngineVersion": "OpenSearch_2.11",
+      "ClusterConfig": {
+        "InstanceType": "r6g.large.search",
+        "InstanceCount": 2,
+        "ZoneAwarenessEnabled": true,
+        "MultiAZWithStandbyEnabled": false
+      },
+      "EBSOptions": {
+        "EBSEnabled": true,
+        "VolumeSize": 50
+      },
+      "EncryptionAtRestOptions": {
+        "Enabled": true
+      }
+    }
+  ]
+}

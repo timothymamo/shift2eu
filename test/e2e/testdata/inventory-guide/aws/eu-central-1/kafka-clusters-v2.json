@@ -3,6 +3,7 @@
     {
       "ClusterName": "shop-events-kafka",
       "ClusterType": "PROVISIONED",
+      "ClusterArn": "arn:aws:kafka:eu-central-1:123456789012:cluster/shop-events-kafka/00000000-0000-0000-0000-000000000000-1",
       "Provisioned": {
         "NumberOfBrokerNodes": 3,
         "BrokerNodeGroupInfo": {
@@ -17,28 +18,13 @@
               "VolumeSize": 100
             }
           }
-        },
-        "EncryptionInfo": {
-          "EncryptionAtRest": {
-            "DataVolumeKMSKeyId": "arn:aws:kms:eu-central-1:123456789012:key/00000000-0000-0000-0000-000000000000"
-          }
         }
       }
     },
     {
       "ClusterName": "shop-events-kafka-serverless",
       "ClusterType": "SERVERLESS",
-      "Serverless": {
-        "VpcConfigs": [
-          {
-            "SubnetIds": [
-              "subnet-0123456789abcdef3",
-              "subnet-0123456789abcdef4",
-              "subnet-0123456789abcdef5"
-            ]
-          }
-        ]
-      }
+      "ClusterArn": "arn:aws:kafka:eu-central-1:123456789012:cluster/shop-events-kafka-serverless/00000000-0000-0000-0000-000000000001-1"
     }
   ]
 }

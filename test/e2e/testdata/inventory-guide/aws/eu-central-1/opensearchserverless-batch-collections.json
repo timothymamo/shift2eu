@@ -2,11 +2,13 @@
   "collectionDetails": [
     {
       "name": "shop-vectors",
+      "arn": "arn:aws:aoss:eu-central-1:123456789012:collection/0123456789abcdef0123456789abcdef",
       "type": "SEARCH",
       "standbyReplicas": "ENABLED"
     },
     {
       "name": "shop-thumbnails",
+      "arn": "arn:aws:aoss:eu-central-1:123456789012:collection/fedcba9876543210fedcba9876543210",
       "type": "VECTORSEARCH",
       "standbyReplicas": "DISABLED"
     }

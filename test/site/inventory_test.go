@@ -1132,6 +1132,7 @@ var awsSearchAndMessagingCalls = map[string][]string{
 	"aws opensearch describe-domains": {
 		"DomainStatusList",
 		"DomainName",
+		"ARN",
 		"EngineVersion",
 		"ClusterConfig",
 		"InstanceType",
@@ -1152,6 +1153,7 @@ var awsSearchAndMessagingCalls = map[string][]string{
 	"aws opensearchserverless batch-get-collection": {
 		"collectionDetails",
 		"name",
+		"arn",
 		"type",
 		"standbyReplicas",
 	},
@@ -1159,6 +1161,7 @@ var awsSearchAndMessagingCalls = map[string][]string{
 		"ClusterInfoList",
 		"ClusterName",
 		"ClusterType",
+		"ClusterArn",
 		"Provisioned",
 		"NumberOfBrokerNodes",
 		"BrokerNodeGroupInfo",
@@ -1167,12 +1170,6 @@ var awsSearchAndMessagingCalls = map[string][]string{
 		"StorageInfo",
 		"EbsStorageInfo",
 		"VolumeSize",
-		"EncryptionInfo",
-		"EncryptionAtRest",
-		"DataVolumeKMSKeyId",
-		"Serverless",
-		"VpcConfigs",
-		"SubnetIds",
 	},
 }
 
