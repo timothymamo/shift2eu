@@ -1,8 +1,8 @@
 # PRD #297: shift2eu in the browser at www.shift2eu.com
 
 **Status:** Complete (milestones 1 to 4 done; the first deploy was v0.16.1, 2026-11-25). Every
-acceptance criterion is met; the runbook's key-limit step (R7) is recorded in ADR 0042, with one probe
-skipped (a bucket in a third project) and named there as a gap for its next run.
+acceptance criterion is met; the runbook's key-limit step (R7) is recorded in ADR 0042, its probe to a
+bucket in a third project run on 2026-11-26 (issue #637).
 **Issue:** #297
 
 ## Problem
@@ -545,10 +545,9 @@ release), *live* (checked against the live site) or *review*.
   reads the deploy needs. The key has an expiry date, and the runbook has a rotation step. *Review:* the
   runbook's policies are checked against Scaleway's permission sets.
   *Met (R7, 2026-11-24, ADR 0042's R7 table):* every bucket-configuration, policy, ACL and object probe
-  but `PutObject` and `ListObjectsV2` answered 403. The probe to a bucket
-  in a third project was skipped (no bucket given); the state bucket's `put-object`, a write to the
-  admin project's bucket, was denied, so a write outside the site's project was shown refused for that
-  project. A re-run with a third project's bucket closes that gap.
+  but `PutObject` and `ListObjectsV2` answered 403. A write outside the site's project is refused:
+  the state bucket's `put-object`, a write to the admin project's bucket, was denied, and so was the
+  `put-object` to the empty bucket of a throwaway third project (`PASS 403`, 2026-11-26, issue #637).
 - [x] The `release-tag` skill's step 2 checks the `site` environment: `custom_branch_policies` `true` and
   `protected_branches` `false`; `deployment-branch-policies` lists exactly `tag v*.*.*` (type `tag`, so a
   branch named like a tag is not allowed); its secrets are `SCW_ACCESS_KEY` and `SCW_SECRET_KEY`; and
@@ -770,8 +769,8 @@ release), *live* (checked against the live site) or *review*.
   - [x] Milestone 3: the step written (R7).
   - [x] Milestone 4: run (2026-11-24), its result in ADR 0042's R7 table: `PutObject` and
     `ListObjectsV2` allowed (`-list-bucket` kept off), every other probe 403, the probe to a third
-    project's bucket skipped (the state bucket's denied `put-object` is the outside-the-project write
-    that ran), and the state lock the closing plan left (issue #537), force-unlocked.
+    project's bucket run on 2026-11-26 (`PASS 403`, issue #637), and the state lock the closing plan
+    left (issue #537), force-unlocked.
 
 ## Milestones
 

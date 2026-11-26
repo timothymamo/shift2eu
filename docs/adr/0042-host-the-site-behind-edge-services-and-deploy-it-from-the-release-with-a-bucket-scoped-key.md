@@ -567,7 +567,8 @@ Services pipeline. What bounds the rest:
 
 ### The key-limit step (R7): result
 
-*Recorded in milestone 4: R7 ran on 2026-11-24* (and runs again after every key rotation and every
+*Recorded in milestone 4: R7 ran on 2026-11-24, its probe to a third project's bucket on 2026-11-26*
+(issue #637; and R7 runs again after every key rotation and every
 change to the IAM rule or the bucket policy). Per probe, the answer and, for anything but
 `403 AccessDenied` (or `NoSuchBucket` for a bucket outside the key's project), the reason it was
 accepted; and whether `ListBucket` was allowed, which decides `-list-bucket` above:
@@ -580,13 +581,18 @@ accepted; and whether `ListBucket` was allowed, which decides `-list-bucket` abo
 | the eleven object probes on `canary/probe.txt` (`delete-object` with and without a version, `delete-object-tagging` and `put-object-tagging` with and without a version, `put-object-acl`, `put-object-retention`, `put-object-legal-hold`, `abort-multipart-upload`, `restore-object`) | `PASS 403`, each |
 | the nine canary-bucket probes (`delete-bucket-website`, `delete-bucket-policy`, `delete-bucket`, `put-bucket-versioning` to `Suspended`, `put-object-lock-configuration`, `put-bucket-cors`, `put-bucket-lifecycle`, `put-bucket-tagging`, `put-bucket-encryption`) | `PASS 403`, each |
 | the two probes outside the project: `list-buckets` | `PASS 403` |
-| the two probes outside the project: `put-object` to a bucket in another project | **Not run**: skipped, no bucket in another project was given. A gap in R7's run: this probe's own answer is missing. The state bucket's `put-object` below is a write to a bucket in another project (the admin project) and was denied, so the key was shown unable to write outside the site's project for that one project; a re-run with a bucket in a third project closes the gap |
+| the two probes outside the project: `put-object` to a bucket in another project | `PASS 403` (2026-11-26, issue #637): `canary/probe.txt` to the one empty bucket of a throwaway third project, made for the probe with the maintainer's own key; the bucket held nothing afterwards, and the bucket and the project were deleted. Skipped on 2026-11-24 (no bucket in another project was given); with the state bucket's denied `put-object` below, a write to the admin project, the key is shown unable to write outside the site's project for two other projects |
 | the three on the state bucket (`get-object` of the state, `list-objects-v2`, `put-object`) | `PASS 403`, each |
 
 After the probes, the step's closing `tofu plan` (the maintainer's own key) failed to release its state
 lock (`DeleteObject` 403), right after the script switched the key's default project back to the admin
 project: most likely the switch had not taken effect yet (issue #537). The maintainer force-unlocked the
 state, and `plan -detailed-exitcode` then exited 0. Nothing in the probes' answers depends on it.
+
+The third-project probe (2026-11-26) showed two things about the maintainer's own key, now in R7's step
+7: it reaches a bucket in another project only with its default project switched to that project (its
+S3 calls go to its default project), and `scw object bucket delete` answered 403 on the throwaway
+bucket where `aws s3api delete-bucket` with the same key is the command to use.
 
 ## Alternatives considered
 
