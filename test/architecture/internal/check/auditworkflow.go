@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"github.com/timothymamo/shift2eu/test/internal/yamlread"
 )
@@ -625,11 +626,11 @@ var (
 	// alike here: the step's line names what the maintainer recovers from.
 	// The model job runs its launcher and its artifact check from the
 	// root-owned /srv/audit/tools, never from ${RUNNER_TEMP}, which the runner's
-	// user can write (finding M1 of issue #614's review); ci/ is the fixture's
-	// spelling of a program built from main.
-	runError = failureBranch(`(?m)^[ \t]*if ! (?:ci/|/srv/audit/tools/)auditrun -claude-tarball [^\n]*`, `if ! <auditrun> -claude-tarball ...`,
+	// user can write, nor from the checkout (findings M1 of issue #614's review,
+	// rounds 1 and 2).
+	runError = failureBranch(`(?m)^[ \t]*if ! /srv/audit/tools/auditrun -claude-tarball [^\n]*`, `if ! /srv/audit/tools/auditrun -claude-tarball ...`,
 		"::error title=Audit model::the audit did not run: see runbook step 10")
-	modelArtifactError = failureBranch(`(?m)^[ \t]*if ! (?:ci/|/srv/audit/tools/)auditpublish artifacts -job model [^\n]*`, `if ! <auditpublish> artifacts -job model ...`,
+	modelArtifactError = failureBranch(`(?m)^[ \t]*if ! /srv/audit/tools/auditpublish artifacts -job model [^\n]*`, `if ! /srv/audit/tools/auditpublish artifacts -job model ...`,
 		"::error title=Audit model::the run's artifacts are unexpected: see runbook step 11")
 	publishArtifactError = failureBranch(`(?m)^[ \t]*if ! (?:ci/|"\$\{RUNNER_TEMP\}/bin/)auditpublish"? artifacts -job publish [^\n]*`, `if ! <auditpublish> artifacts -job publish ...`,
 		"::error title=Audit publish::the run's artifacts are unexpected: see runbook step 11")
@@ -841,7 +842,9 @@ var auditJobs = []auditJob{
 		permissions:      []string{"contents", "actions"},
 		downloadsModules: "Download the Go modules",
 		steps: []auditStep{
-			{name: "Check out the audited commit", uses: auditCheckout},
+			// Its post step runs git after the model session, with the run's
+			// token in its environment.
+			{name: "Check out the audited commit", uses: auditCheckout, env: []auditRead{auditRootPath}},
 			{name: "Download the Go modules", runs: []auditCommand{modDownload}},
 			// The step that reads the Claude Code pin file into its outputs, for
 			// the install step's env: (test/lint, issue #277 round J).
@@ -914,7 +917,7 @@ var auditJobs = []auditJob{
 			},
 			{
 				name: "Encrypt the audit's result to the publish key",
-				env:  []auditRead{{key: "AUDIT_PUBLISH_PUBLIC_KEY", value: varValue("AUDIT_PUBLISH_PUBLIC_KEY")}},
+				env:  []auditRead{auditRootPath, {key: "AUDIT_PUBLISH_PUBLIC_KEY", value: varValue("AUDIT_PUBLISH_PUBLIC_KEY")}},
 				runs: []auditCommand{
 					command(`(?m)^[ \t]*/srv/audit/tools/age --encrypt --recipient "\$\{AUDIT_PUBLISH_PUBLIC_KEY\}" --output "\$\{RUNNER_TEMP\}/model-result\.age" "\$\{RUNNER_TEMP\}/result\.json"`,
 						`/srv/audit/tools/age --encrypt --recipient "${AUDIT_PUBLISH_PUBLIC_KEY}" --output "${RUNNER_TEMP}/model-result.age" "${RUNNER_TEMP}/result.json", the root-owned age and the launcher's checked bytes`),
@@ -922,7 +925,7 @@ var auditJobs = []auditJob{
 				refuses: []auditCommand{command(`/srv/audit/work/result\.json`,
 					"/srv/audit/work/result.json, the work area's result read again by its path, want ${RUNNER_TEMP}/result.json, the bytes the launcher checked (-result-out)")},
 			},
-			{name: "Upload the model's ciphertext", uses: auditUpload, artifact: auditModelArtifact},
+			{name: "Upload the model's ciphertext", uses: auditUpload, artifact: auditModelArtifact, env: []auditRead{auditRootPath}},
 		},
 	},
 	{
@@ -1185,6 +1188,52 @@ var auditToolsInstalled = []string{"age", "auditrun", "auditpublish"}
 // auditToolInstallPrefix is the one form of a tool's installation.
 const auditToolInstallPrefix = "sudo install -o root -g root -m 0555 "
 
+// auditToolSources are the one file each tool is installed from, as the
+// workflow writes it: age from the checksummed tarball's binary, the launcher
+// and the artifact check from their go build -o outputs (round 2 of issue
+// #614's review).
+var auditToolSources = map[string]string{
+	"age":          `"${RUNNER_TEMP}/downloads/age/age"`,
+	"auditrun":     `"${RUNNER_TEMP}/auditrun"`,
+	"auditpublish": `"${RUNNER_TEMP}/auditpublish"`,
+}
+
+// auditToolsDirLines are the only lines of the model job that write into
+// auditToolsDir: its creation and the three installs.
+var auditToolsDirLines = []string{
+	"sudo install -d -o root -g root -m 0555 " + auditToolsDir,
+	auditToolInstallPrefix + auditToolSources["age"] + " " + auditToolsDir + "/age",
+	auditToolInstallPrefix + auditToolSources["auditrun"] + " " + auditToolsDir + "/auditrun",
+	auditToolInstallPrefix + auditToolSources["auditpublish"] + " " + auditToolsDir + "/auditpublish",
+}
+
+// auditModelPath is the root-only PATH the model job's checkout step and every
+// step after its model step carry: the hosted image's own PATH holds
+// directories the runner's user can write (round 2 of issue #614's review).
+const auditModelPath = "/usr/sbin:/usr/bin:/sbin:/bin"
+
+// auditRootPath is that PATH as a step-level env: entry.
+var auditRootPath = auditRead{key: "PATH", value: auditModelPath}
+
+// auditWriteWords are the commands that write a path they are given.
+var auditWriteWords = []string{"cp", "mv", "ln", "chmod", "chown", "rm", "tee", "install"}
+
+// auditToolsRedirect matches a redirect into auditToolsDir.
+var auditToolsRedirect = regexp.MustCompile(`>>?\s*["']?` + regexp.QuoteMeta(auditToolsDir) + `(?:/|["'\s]|$)`)
+
+// auditBuildLine matches a whole go build line of the model job: an output
+// under ${RUNNER_TEMP} and one package of ci/, nothing run.
+var auditBuildLine = regexp.MustCompile(`^(?:[A-Z]+=[^\s;&|<>()$` + "`" + `]+ )*go build -trimpath -o "\$\{RUNNER_TEMP\}/[a-z-]+" \./ci/[a-z]+$`)
+
+// shellWords splits a line on whitespace, quotes and the shell's command and
+// assignment punctuation, so a tool after ;, &, |, a subshell's (, a redirect,
+// a backtick or an = is a word of its own.
+func shellWords(line string) []string {
+	return strings.FieldsFunc(line, func(r rune) bool {
+		return unicode.IsSpace(r) || strings.ContainsRune("\"';&|()<>`=", r)
+	})
+}
+
 // toolInstall returns the command that installs tool root-owned with mode 0555
 // into auditToolsDir.
 func toolInstall(tool string) auditCommand {
@@ -1201,12 +1250,19 @@ var auditInstallLine = regexp.MustCompile(`^(?:sudo\s+)?install\s`)
 // form, each of age, auditrun and auditpublish installed only as
 // "sudo install -o root -g root -m 0555 <source> /srv/audit/tools/<tool>", and
 // each run by that absolute path, never by the word the shell resolves through
-// PATH or by a path in a directory the runner's user can write. ci/<tool> is
-// the fixture's spelling of a program built from main and is no absolute path.
+// PATH, by a path of the checkout's or by a path in a directory the runner's
+// user can write. The line is read word by word through the shell's
+// punctuation (shellWords), so a tool after a ;, in a $(...), between
+// backticks or as an assignment's value is a word like any other. Only the
+// directory's creation and the three installs write into /srv/audit/tools.
 func (a *auditReader) modelToolRules(num int, line, trimmed string) {
 	if strings.Contains(line, "GITHUB_PATH") {
 		a.r.fail("line %d: the model job names $GITHUB_PATH (%q): want no PATH entry at all, every tool run by its path in %s, so no later step, actions/checkout's post step included, resolves a program the model session could plant (ADR 0040, issue #614)", num, trimmed, auditToolsDir)
 	}
+
+	words := shellWords(line)
+
+	a.toolsDirWrites(num, trimmed, words)
 
 	if auditInstallLine.MatchString(trimmed) && !strings.Contains(trimmed, " -d ") {
 		a.toolInstallLine(num, trimmed)
@@ -1214,30 +1270,45 @@ func (a *auditReader) modelToolRules(num int, line, trimmed string) {
 		return
 	}
 
-	if strings.HasPrefix(trimmed, "tar ") {
+	// A tar line unpacks age/age, and a build line names a ci/ package and the
+	// output a binary is made at: neither runs a tool.
+	if strings.HasPrefix(trimmed, "tar ") || auditBuildLine.MatchString(trimmed) {
 		return
 	}
 
-	fields := strings.Fields(line)
-
-	for i, field := range fields {
-		// A build's output is where a binary is made, not a program run.
-		if i > 0 && fields[i-1] == "-o" {
-			continue
-		}
-
-		word := strings.Trim(field, `"'`)
-
+	for _, word := range words {
 		for _, tool := range auditToolsInstalled {
 			want := auditToolsDir + "/" + tool
 			if word == want {
 				continue
 			}
 
-			if word == tool || (strings.HasSuffix(word, "/"+tool) && (strings.HasPrefix(word, "$") || strings.HasPrefix(word, "/"))) {
+			if word == tool || strings.HasSuffix(word, "/"+tool) {
 				a.r.fail("line %d: the model job runs %s as %q (%q): want %s, the tool installed root-owned where the model session cannot write it (ADR 0040, issue #614)", num, tool, word, trimmed, want)
 			}
 		}
+	}
+}
+
+// toolsDirWrites refuses a line of the model job that writes into
+// auditToolsDir, by a command that writes the path it is given or by a
+// redirect, unless it is the directory's creation or one of the three
+// installs (round 2 of issue #614's review).
+func (a *auditReader) toolsDirWrites(num int, trimmed string, words []string) {
+	if !strings.Contains(trimmed, auditToolsDir) || slices.Contains(auditToolsDirLines, trimmed) {
+		return
+	}
+
+	writes := auditToolsRedirect.MatchString(trimmed)
+
+	for _, word := range words {
+		if slices.Contains(auditWriteWords, word) {
+			writes = true
+		}
+	}
+
+	if writes {
+		a.r.fail("line %d: the model job writes into %s (%q): want only its creation and the three installs %s, so no file the model session could reach stands in for a tool (ADR 0040, issue #614)", num, auditToolsDir, trimmed, strings.Join(auditToolsDirLines, "; "))
 	}
 }
 
@@ -1255,6 +1326,12 @@ func (a *auditReader) toolInstallLine(num int, trimmed string) {
 		want := auditToolsDir + "/" + tool
 		if !strings.HasPrefix(trimmed, auditToolInstallPrefix) || dest != want || len(fields) != len(strings.Fields(auditToolInstallPrefix))+2 {
 			a.r.fail("line %d: the model job installs %s as %q: want %q<source> %s, root-owned with mode 0555 where the model session cannot write it (ADR 0040, issue #614)", num, tool, trimmed, auditToolInstallPrefix, want)
+
+			continue
+		}
+
+		if source := fields[len(fields)-2]; source != auditToolSources[tool] {
+			a.r.fail("line %d: the model job installs %s from %q: want %s, the one file it is built or unpacked to (ADR 0040, issue #614)", num, tool, strings.Trim(source, `"'`), auditToolSources[tool])
 		}
 	}
 }

@@ -1269,6 +1269,10 @@ jobs:
           # The audit's copy holds the history its findings quote.
           fetch-depth: 0
         timeout-minutes: 5
+        # The root-only PATH: this step's post step runs git after the model session (issue #614). Whether
+        # the post step runs with its step's env: is to confirm on the first real run (ADR 0040).
+        env:
+          PATH: /usr/sbin:/usr/bin:/sbin:/bin
       # Fetches go.mod's Go (GOTOOLCHAIN, checksum-verified) and the modules: every Go command after this
       # step runs offline.
       - name: Download the Go modules
@@ -1341,7 +1345,7 @@ jobs:
             exit 1
           fi
           # Unpacked here and installed root-owned into /srv/audit/tools by the wrapper's step, once
-          # /srv/audit is made: no directory the runner's user can write holds a tool a later step runs.
+          # /srv/audit is made: every later step runs age from there, by its path.
           tar -C "${dl}" -xzf "${dl}/age.tar.gz" age/age
           # The script is shared with the AI reviewer and its own errors name no runbook step, so the
           # workflow wraps it: a CLI that does not install is a pin the pin check holds to the registry's
@@ -1379,9 +1383,10 @@ jobs:
       # areas and cwd-preflight/ and cwd-audit/, each CLI session's own working directory (issues #615,
       # #614), the runner's, as the launcher and the CLI write them. The job's own tools, age, the
       # launcher and the artifact check, go root-owned with mode 0555 into tools/, and every later step
-      # runs them by that path: the job adds no $GITHUB_PATH entry, and ${RUNNER_TEMP} is the runner
-      # user's, so a write past the sandbox could replace a tool there or plant a git for
-      # actions/checkout's post step (ADR 0040, issue #614).
+      # runs them by that path, never from ${RUNNER_TEMP}, which is the runner user's. The job adds no
+      # $GITHUB_PATH entry, and the checkout step and the steps after the model step run with a root-only
+      # PATH. The image's default PATH, on the other steps, still holds directories the runner's user
+      # can write (ADR 0040, issue #614).
       - name: Build and install the audit's command wrapper
         timeout-minutes: 10
         run: |
@@ -1467,9 +1472,10 @@ jobs:
           chmod -R a-w /srv/audit/checkout
       # Model-free, while sudo still works and before the sandbox preflight: no Docker daemon, no stale
       # socket file (stopping docker.socket leaves it on the runner image, issue #574), no sudo rule for the
-      # runner's user, and the owners the launcher cannot check itself (rounds H and L). The four hardening
-      # commands record their own failure, so the step names the cause instead of ending on set -e's own
-      # line. It then refuses a sudo that still works, a socket still there and, since the step removes
+      # runner's user, and the owners and modes the launcher cannot check itself, /srv, /srv/audit, bin/,
+      # checks/ and tools/ with the wrapper and the job's three tools (rounds H and L, issue #614). The
+      # four hardening commands record their own failure, so the step names the cause instead of ending
+      # on set -e's own line. It then refuses a sudo that still works, a socket still there and, since the step removes
       # the file itself, a docker.service or docker.socket systemd still reports active.
       - name: Stop Docker and remove the runner user's sudo rule
         timeout-minutes: 5
@@ -1527,9 +1533,12 @@ jobs:
             echo "::error title=Audit model::the audit did not run: see runbook step 10"
             exit 1
           fi
+      # The steps after the model step run with a root-only PATH: the image's default one holds directories
+      # the runner's user can write (issue #614, ADR 0040).
       - name: Encrypt the audit's result to the publish key
         timeout-minutes: 5
         env:
+          PATH: /usr/sbin:/usr/bin:/sbin:/bin
           AUDIT_PUBLISH_PUBLIC_KEY: ${{ vars.AUDIT_PUBLISH_PUBLIC_KEY }}
         run: |
           set -euo pipefail
@@ -1537,6 +1546,8 @@ jobs:
           echo "finished"
       - name: Upload the model's ciphertext
         timeout-minutes: 5
+        env:
+          PATH: /usr/sbin:/usr/bin:/sbin:/bin
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: model-result
