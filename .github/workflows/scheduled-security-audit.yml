@@ -119,9 +119,9 @@ jobs:
           # Same version as release.yml's cosign-release and cosignVersion in dev/lima.yaml, whose amd64
           # SHA-256 this is: Renovate's cosign group moves all of them in one PR.
           # renovate: datasource=github-releases depName=sigstore/cosign
-          COSIGN_VERSION: v3.1.5
-          # renovate: datasource=github-release-attachments depName=sigstore/cosign digestVersion=v3.1.5
-          COSIGN_SHA256: "912502def4baf810eaf36b210a4f51e1da214f9f6d664e2a9a2154cfc67ee0d6"
+          COSIGN_VERSION: v3.1.6
+          # renovate: datasource=github-release-attachments depName=sigstore/cosign digestVersion=v3.1.6
+          COSIGN_SHA256: "318a99ade4156a0c4113aa983b46c0a0830fa7896a096c63121ee47b610a94c6"
           # renovate: datasource=github-releases depName=aquasecurity/trivy
           TRIVY_VERSION: v0.76.2
           # renovate: datasource=github-release-attachments depName=aquasecurity/trivy digestVersion=v0.76.2

@@ -56,15 +56,15 @@ param:
   ghSha256Arm64: "b1278c75107423d818f1937fd92cafc9e5e9b606631568f68d7fb816f5885a02"
   # cosign v3 or later reads the release's signature bundles (docs/guide/verify-releases.md).
   # renovate: datasource=github-releases depName=sigstore/cosign
-  cosignVersion: "v3.1.5"
+  cosignVersion: "v3.1.6"
   # SHA-256 of cosign-linux-<arch>, per architecture: what authenticates cosign in provisioning, where no
   # trusted cosign exists yet to verify it (ADR 0017). The vm-tools workflow checks it against
   # sigstore/cosign's keyless signature with an independently installed cosign on every PR: merge a
   # change only when that check is green (not yet a required status). Updated like the gh digests.
-  # renovate: datasource=github-release-attachments depName=sigstore/cosign digestVersion=v3.1.5
-  cosignSha256Amd64: "912502def4baf810eaf36b210a4f51e1da214f9f6d664e2a9a2154cfc67ee0d6"
-  # renovate: datasource=github-release-attachments depName=sigstore/cosign digestVersion=v3.1.5
-  cosignSha256Arm64: "516893301e9ec0f2594edfcf8f943ec3b3ba96f3aad2b507eff2b71e644e5fca"
+  # renovate: datasource=github-release-attachments depName=sigstore/cosign digestVersion=v3.1.6
+  cosignSha256Amd64: "318a99ade4156a0c4113aa983b46c0a0830fa7896a096c63121ee47b610a94c6"
+  # renovate: datasource=github-release-attachments depName=sigstore/cosign digestVersion=v3.1.6
+  cosignSha256Arm64: "bbb2ebc765f483cf9fac42da8763dddc2b55b350ee12ea0c44a520a6d6d52334"
   # nerdctl-full: nerdctl, containerd, BuildKit, RootlessKit, runc and CNI plugins, run rootless.
   # renovate: datasource=github-releases depName=containerd/nerdctl
   nerdctlVersion: "v2.4.2"
