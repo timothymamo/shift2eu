@@ -438,8 +438,11 @@ func pageBand(page *pdfPage) (lowest, highest int, ok bool) {
 // their x positions are the columns' inner left edges. The rule spans the whole
 // table, from its left edge to its right, and the padding a cell leaves before
 // its column's edge is the distance from the rule's left edge to the first
-// column's inner left edge.
-func pageTables(page *pdfPage) []pdfPageTable {
+// column's inner left edge. checkHeaderSpansTheColumns fails the test when that
+// recovery could have missed a column.
+func pageTables(tb testing.TB, page *pdfPage) []pdfPageTable {
+	tb.Helper()
+
 	lowest, highest, ok := pageBand(page)
 	if !ok {
 		return nil
@@ -474,7 +477,76 @@ func pageTables(page *pdfPage) []pdfPageTable {
 		})
 	}
 
+	checkHeaderSpansTheColumns(tb, lines, tables, lowest)
+
 	return tables
+}
+
+// checkHeaderSpansTheColumns checks that no table's header cell wrapped onto a
+// second line. The columns are recovered from the nearest line above the rule,
+// which is a table's only header line today; a wrapped header would put its
+// second line there, naming only the wrapped columns' inner left edges, and
+// columnBound would silently loosen over the columns that line does not name.
+// Every row of the table draws a cell at every column's inner left edge, so a
+// table whose widest row names more columns than its header line does fails
+// here, loudly, instead.
+func checkHeaderSpansTheColumns(tb testing.TB, lines []pdfRunLine, tables []pdfPageTable, lowest int) {
+	tb.Helper()
+
+	for i, table := range tables {
+		// The table's rows lie below its rule and above the next table's header
+		// row, which is drawn above that table's rule, and above the page's own
+		// footer below the lowest rule.
+		floor := lowest
+		if i+1 < len(tables) {
+			floor = max(floor, tables[i+1].headerY)
+		}
+
+		widest := 0
+
+		for _, line := range lines {
+			if line.Y >= table.rule.Y || line.Y <= floor {
+				continue
+			}
+
+			widest = max(widest, lineColumns(line, table.size))
+		}
+
+		if widest > len(table.columns) {
+			tb.Fatalf("pdf: the table whose rule is at y %d pt draws %d columns, but its header line names %d: a header cell wrapped onto a second line, so that line alone does not name every column's inner left edge",
+				table.rule.Y, widest, len(table.columns))
+		}
+	}
+}
+
+// cellGap is how far past the end of the run before it, in thousandths of a
+// point, a run may start and still continue the same cell. A cell's pieces are
+// drawn one after another, each rounded up to a whole point, so a piece of the
+// same cell starts less than a point past the end of the one before it; the
+// report's own words are measured in Courier's advance here, which the metrics
+// of Helvetica, their font, may miss by more than that, so the gap allows for
+// two points. A cell's text ends at least one cell padding before the next
+// column's inner left edge, where the next column's cell begins, which is two
+// paddings, six points, away.
+const cellGap = 2 * milli
+
+// lineColumns returns the number of table columns a line draws a cell in: its
+// runs of the table's size, every run that does not continue the run before it
+// on the line starting a cell of its own.
+func lineColumns(line pdfRunLine, size int) int {
+	columns := 0
+
+	for i, run := range line.runs {
+		if run.Size != size {
+			continue
+		}
+
+		if i == 0 || run.X*milli-valueRight(line.runs[i-1]) >= cellGap {
+			columns++
+		}
+	}
+
+	return columns
 }
 
 // headerLineAbove returns the header row of the table whose rule is at ruleY: the
@@ -521,8 +593,12 @@ func tableAt(tables []pdfPageTable, y int) (pdfPageTable, bool) {
 }
 
 // columnBound returns the right edge of the table column that holds x, in points:
-// the next column's inner left edge less the cell padding, or the table's right
-// edge less the padding for the last column.
+// the next column's inner left edge less the cell padding, which is where the
+// layout stops a cell's text, or the table's right edge less the padding for the
+// last column. A cell is laid out width-2*cellPad wide from its column's inner
+// left edge (layoutCell), so its last point sits one padding inside the next
+// column's inner left edge, which is itself one padding inside the column's
+// outer edge.
 func (t pdfPageTable) columnBound(x int) int {
 	right := t.rule.X + t.rule.W
 
@@ -538,7 +614,7 @@ func (t pdfPageTable) columnBound(x int) int {
 		}
 
 		if i+1 < len(t.columns) {
-			return t.columns[i+1] - pad
+			return t.columns[i+1] - 2*pad
 		}
 
 		return right - pad
@@ -593,7 +669,7 @@ func checkPageRunsStayInsideTheirBoxes(tb testing.TB, pageIndex int, page *pdfPa
 		return
 	}
 
-	tables := pageTables(page)
+	tables := pageTables(tb, page)
 
 	contentRight := 0
 	for _, rule := range page.rules {
@@ -678,7 +754,7 @@ func checkValueInsideItsColumn(tb testing.TB, file *testPDF, value string) {
 	checked := 0
 
 	for index, page := range file.pages {
-		tables := pageTables(page)
+		tables := pageTables(tb, page)
 
 		for _, line := range pageRunLines(page) {
 			table, inTable := tableAt(tables, line.Y)
