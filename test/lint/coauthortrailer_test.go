@@ -36,6 +36,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -380,6 +381,172 @@ func TestCoAuthorFindings(t *testing.T) {
 	}
 }
 
+// TestParseBranchCommits pins how the check splits git log's output back into
+// commits. It runs
+//
+//	git log -z --format=%H%x00%ae%x00%ce%x00%B
+//
+// which writes, per commit, the full SHA, the author's and committer's
+// addresses and the whole message, each closed by a NUL, and with -z one more
+// NUL after the record, so a record is SHA\0author\0committer\0message\0. The
+// last record closes the output and arrives with its NUL or, read another way,
+// without it. A message holds no NUL (git refuses one), so the split is exact
+// and an empty message is the fourth field and nothing more, in the middle of
+// the output as at its end; a message that holds a blank line and a trailer
+// survives byte for byte.
+//
+// Output the check cannot read exactly is an error, never a pass: a field count
+// that is no multiple of four, and a record whose first field is no full commit
+// name. git writes a commit name as 40 lower-case hex digits, or 64 in a
+// SHA-256 repository, so a short, upper-case or non-hex name is refused rather
+// than turned into a commit the report could not name.
+func TestParseBranchCommits(t *testing.T) {
+	t.Parallel()
+
+	const (
+		first  = "1111111111111111111111111111111111111111"
+		second = "2222222222222222222222222222222222222222"
+
+		sha256Name = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+
+		author    = "author@example.com"
+		committer = "committer@example.com"
+	)
+
+	// record returns one commit as git log -z writes it, its closing NUL included.
+	record := func(sha, a, c, msg string) string {
+		return sha + "\x00" + a + "\x00" + c + "\x00" + msg + "\x00"
+	}
+
+	// trailerMessage is a message with a subject, a body whose paragraph is
+	// followed by a blank line and a co-author trailer: the shape the check
+	// reads, and one no field split may touch.
+	const trailerMessage = "feat(lint): a subject\n\nA body.\n\nCo-Authored-By: pi <pi@example.com>\n"
+
+	tests := []struct {
+		name    string
+		out     string
+		want    []commitMessage
+		wantErr bool
+	}{
+		{
+			name: "no output",
+			out:  "",
+			want: nil,
+		},
+		{
+			name: "one record",
+			out:  record(first, author, committer, "feat(lint): a subject\n"),
+			want: []commitMessage{{SHA: first, Author: author, Committer: committer, Message: "feat(lint): a subject\n"}},
+		},
+		{
+			name: "the last record without its closing NUL",
+			out:  first + "\x00" + author + "\x00" + committer + "\x00feat(lint): a subject\n",
+			want: []commitMessage{{SHA: first, Author: author, Committer: committer, Message: "feat(lint): a subject\n"}},
+		},
+		{
+			name: "two records, in the log's order",
+			out: record(first, author, committer, "feat(lint): a subject\n") +
+				record(second, "author2@example.com", "committer2@example.com", "docs(lint): another\n"),
+			want: []commitMessage{
+				{SHA: first, Author: author, Committer: committer, Message: "feat(lint): a subject\n"},
+				{
+					SHA:       second,
+					Author:    "author2@example.com",
+					Committer: "committer2@example.com",
+					Message:   "docs(lint): another\n",
+				},
+			},
+		},
+		{
+			name: "an empty message in the last record",
+			out:  first + "\x00" + author + "\x00" + committer + "\x00\x00",
+			want: []commitMessage{{SHA: first, Author: author, Committer: committer, Message: ""}},
+		},
+		{
+			// The record's own NUL follows the empty message's NUL, so the bytes
+			// between the committer and the second SHA are two NULs, not one.
+			name: "an empty message in the middle record",
+			out: record(first, author, committer, "") +
+				record(second, "author2@example.com", "committer2@example.com", "docs(lint): another\n"),
+			want: []commitMessage{
+				{SHA: first, Author: author, Committer: committer, Message: ""},
+				{
+					SHA:       second,
+					Author:    "author2@example.com",
+					Committer: "committer2@example.com",
+					Message:   "docs(lint): another\n",
+				},
+			},
+		},
+		{
+			name: "a message with a blank line and a trailer",
+			out:  record(first, author, committer, trailerMessage),
+			want: []commitMessage{{SHA: first, Author: author, Committer: committer, Message: trailerMessage}},
+		},
+		{
+			name:    "three fields",
+			out:     first + "\x00" + author + "\x00" + committer + "\x00",
+			wantErr: true,
+		},
+		{
+			name:    "five fields",
+			out:     record(first, author, committer, "feat(lint): a subject\n") + "extra\x00",
+			wantErr: true,
+		},
+		{
+			name:    "seven fields",
+			out:     record(first, author, committer, "feat(lint): a subject\n") + "extra\x00more\x00",
+			wantErr: true,
+		},
+		{
+			name:    "a short SHA",
+			out:     record("abc1234", author, committer, "feat(lint): a subject\n"),
+			wantErr: true,
+		},
+		{
+			name:    "an upper-case SHA",
+			out:     record(strings.Repeat("A", 40), author, committer, "feat(lint): a subject\n"),
+			wantErr: true,
+		},
+		{
+			name:    "a SHA that is not hex",
+			out:     record(strings.Repeat("g", 40), author, committer, "feat(lint): a subject\n"),
+			wantErr: true,
+		},
+		{
+			name: "a 64-hex SHA, as a SHA-256 repository writes it",
+			out:  record(sha256Name, author, committer, "feat(lint): a subject\n"),
+			want: []commitMessage{{SHA: sha256Name, Author: author, Committer: committer, Message: "feat(lint): a subject\n"}},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := parseBranchCommits([]byte(tc.out))
+
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("parseBranchCommits(%q) = %v, want an error", tc.out, got)
+				}
+				if got != nil {
+					t.Errorf("parseBranchCommits(%q) = %v with the error %v; want no commit", tc.out, got, err)
+				}
+
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("parseBranchCommits(%q): %v", tc.out, err)
+			}
+			if diff := cmp.Diff(tc.want, got, cmpopts.EquateEmpty()); diff != "" {
+				t.Errorf("parseBranchCommits(%q) mismatch (-want +got):\n%s", tc.out, diff)
+			}
+		})
+	}
+}
+
 // TestParseCoAuthorAllowList pins how .github/co-author-addresses.txt is read:
 // one address per line, lower-cased, with blank lines and comment lines skipped,
 // so the file may say why each address is there. A line that is not an address
@@ -696,14 +863,20 @@ func TestCoAuthorAllowListFile(t *testing.T) {
 	}
 
 	// The addresses the project uses: the agents' Claude Code commits, the
-	// agents' App, the release App, the audit App, Renovate's commits and the
-	// maintainer's GitHub noreply address.
+	// agents' App, the release App, the audit App, Renovate's commits, GitHub
+	// itself and the maintainer's GitHub noreply address.
+	//
+	// noreply@github.com is there because GitHub is the committer of every
+	// commit made through its API or web interface: release-please's and
+	// Renovate's commits on their pull request branches, and every "Update
+	// branch". Without it every such pull request fails the check.
 	for _, addr := range []string{
 		"noreply@anthropic.com",
 		"357791782+shift2eu-agents[bot]@users.noreply.github.com",
 		"355849575+shift2eu-release[bot]@users.noreply.github.com",
 		"359886496+shift2eu-audit[bot]@users.noreply.github.com",
 		"29139614+renovate[bot]@users.noreply.github.com",
+		"noreply@github.com",
 		"65859835+timothymamo@users.noreply.github.com",
 	} {
 		if !slices.Contains(got, addr) {
