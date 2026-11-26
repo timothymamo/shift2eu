@@ -303,6 +303,85 @@ func auditGovulncheckVersionGuard(step auditJobStep, want string) []string {
 	return problems
 }
 
+// auditGovulncheckGuardStep returns a checks job step shaped like the workflow's
+// own "Download the Go modules" step, with its go version line and the
+// comparison after it written as a case asks: every other line is what the guard
+// needs to find, so a problem it reports is about those two lines (issue #658).
+func auditGovulncheckGuardStep(goVersion, comparison string) auditJobStep {
+	return auditJobStep{
+		index: 1,
+		name:  "Download the Go modules",
+		lines: []string{
+			"      - name: Download the Go modules",
+			"        run: |",
+			"          set -euo pipefail",
+			`          want="go$(go list -m -f '{{.GoVersion}}')"`,
+			"          " + goVersion,
+			"          " + comparison,
+			`            echo "::error title=Audit checks::govulncheck was not built with go.mod's ${want}: see runbook step 11"`,
+			"            exit 1",
+			"          fi",
+		},
+	}
+}
+
+// TestAuditGovulncheckVersionGuardHoldsTheBuiltGoItself pins the guard's
+// comparison to go version's own output (round 2 of issue #658's review): a line
+// that compared go.mod's Go with anything at all - the empty string above all -
+// passed for holding the built tool to it, so the version check's three lines
+// could be weakened to nothing and the test stay green. The go version line must
+// assign what it prints to a variable of its own, and the comparison must name
+// both that variable and go.mod's.
+func TestAuditGovulncheckVersionGuardHoldsTheBuiltGoItself(t *testing.T) {
+	t.Parallel()
+
+	const (
+		builtLine = `built="$(go version "${RUNNER_TEMP}/bin/govulncheck")"`
+		bothLine  = `if [ "${built##* }" != "${want}" ]; then`
+	)
+
+	for _, tc := range []struct {
+		name       string
+		goVersion  string
+		comparison string
+		want       int
+	}{
+		{
+			name:       "the comparison names the built tool's Go and go.mod's",
+			goVersion:  builtLine,
+			comparison: bothLine,
+		},
+		{
+			name:       "the comparison names go.mod's Go alone",
+			goVersion:  builtLine,
+			comparison: `if [ "${want}" != "" ]; then`,
+			want:       1,
+		},
+		{
+			name:       "the comparison names the built tool's Go alone",
+			goVersion:  builtLine,
+			comparison: `if [ "${built##* }" != "" ]; then`,
+			want:       1,
+		},
+		{
+			name:       "go version's output is held in no variable",
+			goVersion:  `go version "${RUNNER_TEMP}/bin/govulncheck"`,
+			comparison: bothLine,
+			want:       1,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			problems := auditGovulncheckVersionGuard(auditGovulncheckGuardStep(tc.goVersion, tc.comparison), "1.25.0")
+			if len(problems) != tc.want {
+				t.Errorf("auditGovulncheckVersionGuard(%q, %q) reported %d problem(s), want %d:\n%s",
+					tc.goVersion, tc.comparison, len(problems), tc.want, strings.Join(problems, "\n"))
+			}
+		})
+	}
+}
+
 // TestScheduledSecurityAuditWorkflowBuildsGovulncheckWithGoModsGo pins issue
 // #658's first fix: the checks job installs govulncheck as a Go module, and the
 // go command that builds it decides which standard library its findings are
