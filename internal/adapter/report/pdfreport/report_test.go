@@ -277,8 +277,6 @@ func assertEstimateShown(tb testing.TB, file *testPDF, e *estimate.Estimate) {
 
 // plainReason is why an estimate was not made, in the plain words the Markdown
 // report uses (internal/adapter/report/markdown/estimate.go), which the PDF
-// plainReason is why an estimate was not made, in the plain words the Markdown
-// report uses (internal/adapter/report/markdown/estimate.go), which the PDF
 // follows.
 func plainReason(e *estimate.Estimate) string {
 	switch e.Reason {

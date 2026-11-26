@@ -873,13 +873,6 @@ func parseContentStream(tb testing.TB, page int, stream []byte) ([]pdfTextRun, [
 				}
 
 				font, size = operands[0].name, operands[1].num
-			case "Td":
-				if !inText {
-					lexer.fail("the content stream moves the text position outside BT and ET")
-				}
-
-				x += operands[0].num
-				y += operands[1].num
 			case "Tm":
 				if !inText {
 					lexer.fail("the content stream sets the text matrix outside BT and ET")
@@ -1006,7 +999,7 @@ func TestReaderParsesAMinimalPDF(t *testing.T) {
 func buildMinimalPDF(tb testing.TB) []byte {
 	tb.Helper()
 
-	content := "BT /F1 10 Tf 50 700 Td (Hello \\(x\\) \\351) Tj ET\n"
+	content := "BT /F1 10 Tf 1 0 0 1 50 700 Tm (Hello \\(x\\) \\351) Tj ET\n"
 
 	// Object 6 is the info dictionary; the trailer names it too, so the file
 	// covers every object type of the writer's set.

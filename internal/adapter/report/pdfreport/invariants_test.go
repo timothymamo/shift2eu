@@ -27,9 +27,10 @@ const (
 )
 
 // pdfContentOperators is the writer's fixed content-stream operator table: each
-// operator with the operands it takes. The tests pin it so that a writer cannot
-// slip in an operator of its own: no graphics state dictionary (gs), no XObject
-// (Do) and no inline image is in it.
+// operator with the operands it takes, exactly the set contentStream emits (q Q
+// G w re S BT ET Tf Tm Tj). The tests pin it so that a writer cannot slip in an
+// operator of its own: no graphics state dictionary (gs), no XObject (Do), no
+// inline image, and no fill or colour operator (f, g, rg, RG) is in it.
 //
 // Operands are integers, literal strings and font resource names; the reader
 // checks each operator's operands against its row here, and that the font
@@ -38,19 +39,14 @@ var pdfContentOperators = map[string][]pdfValueKind{
 	"BT": {},
 	"ET": {},
 	"Tf": {pdfValueName, pdfValueNumber},
-	"Td": {pdfValueNumber, pdfValueNumber},
 	"Tm": {pdfValueNumber, pdfValueNumber, pdfValueNumber, pdfValueNumber, pdfValueNumber, pdfValueNumber},
 	"Tj": {pdfValueString},
 	"re": {pdfValueNumber, pdfValueNumber, pdfValueNumber, pdfValueNumber},
-	"f":  {},
 	"S":  {},
 	"w":  {pdfValueNumber},
 	"q":  {},
 	"Q":  {},
-	"g":  {pdfValueNumber},
 	"G":  {pdfValueNumber},
-	"rg": {pdfValueNumber, pdfValueNumber, pdfValueNumber},
-	"RG": {pdfValueNumber, pdfValueNumber, pdfValueNumber},
 }
 
 // pdfBannedNames are the names a file must never hold, outside a string: each

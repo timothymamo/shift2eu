@@ -10,6 +10,7 @@ import (
 	"go/parser"
 	"go/token"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -107,9 +108,10 @@ func firstDifference(first, second []byte) int {
 
 // TestNoFloatingPoint fails when a non-test file of pdfreport imports math,
 // declares a floating-point type, holds a floating-point literal, calls
-// strconv.FormatFloat or strconv.ParseFloat, or uses a %f, %F, %g, %G, %e or %E
-// verb: integer layout arithmetic keeps the bytes identical on every release
-// target (ADR 0049).
+// strconv.FormatFloat or strconv.ParseFloat, or uses a floating-point format
+// verb (e, E, f, F, g, G, x or X, with any argument index, flags, width or
+// precision): integer layout arithmetic keeps the bytes identical on every
+// release target (ADR 0049).
 func TestNoFloatingPoint(t *testing.T) {
 	t.Parallel()
 
@@ -201,19 +203,154 @@ func checkNoFloatingPoint(t *testing.T, files *token.FileSet, file *ast.File) {
 	})
 }
 
-// holdsFloatVerb reports whether a quoted Go string literal holds a %f, %F, %g,
-// %G, %e or %E verb.
+// holdsFloatVerb reports whether a quoted Go string literal holds a format
+// directive that prints a floating-point number: the verbs e, E, f, F, g, G, x
+// and X, whatever explicit argument indexes, flags, width and precision are
+// written before them. A %% is a literal percent sign, never a verb, so a
+// literal holding "%%EOF" holds no directive at all.
+//
+// It reads the literal's source text and nothing else: it cannot see the type
+// of the operand a %v (or %+v, %#v) directive prints, so it cannot tell a %v of
+// a float from a %v of an error. That blind spot is covered by the rest of
+// checkNoFloatingPoint: a package that names no float type, holds no
+// floating-point literal, calls neither strconv.FormatFloat nor
+// strconv.ParseFloat and imports no math package has no float to show.
 func holdsFloatVerb(literal string) bool {
-	for i := 0; i+1 < len(literal); i++ {
+	for i := 0; i < len(literal); i++ {
 		if literal[i] != '%' {
 			continue
 		}
 
-		switch literal[i+1] {
-		case 'f', 'F', 'g', 'G', 'e', 'E':
+		if i+1 < len(literal) && literal[i+1] == '%' {
+			// A literal percent sign: what follows it is text, never a verb.
+			i++
+
+			continue
+		}
+
+		if verb, ok := formatVerb(literal[i+1:]); ok && isFloatVerb(verb) {
 			return true
 		}
 	}
 
 	return false
+}
+
+// isFloatVerb reports whether a format verb prints a floating-point number: e,
+// E, f, F, g and G print it as one, and x and X print its bits.
+func isFloatVerb(verb byte) bool {
+	switch verb {
+	case 'e', 'E', 'f', 'F', 'g', 'G', 'x', 'X':
+		return true
+	default:
+		return false
+	}
+}
+
+// formatVerb returns the verb of the format directive that starts rest, the
+// text after a '%', and whether rest holds one at all. It skips what Go's fmt
+// package allows between the percent sign and the verb: an explicit argument
+// index (%[1]f), the flags +, -, #, space and 0, then the width and the
+// precision, either of which may be a * (with an argument index of its own,
+// %[2]*.[1]f) instead of digits.
+func formatVerb(rest string) (byte, bool) {
+	i := skipArgIndex(rest, 0)
+
+	for i < len(rest) && strings.IndexByte("+-# 0", rest[i]) >= 0 {
+		i++
+	}
+
+	i = skipWidth(rest, i)
+
+	if i < len(rest) && rest[i] == '.' {
+		i = skipWidth(rest, i+1)
+	}
+
+	if i >= len(rest) {
+		return 0, false
+	}
+
+	return rest[i], true
+}
+
+// skipWidth skips the width or the precision written at i: digits, or a * that
+// takes its value from an operand, each with an argument index of its own after
+// it.
+func skipWidth(rest string, i int) int {
+	for i < len(rest) {
+		switch {
+		case rest[i] >= '0' && rest[i] <= '9':
+			i++
+		case rest[i] == '*':
+			i = skipArgIndex(rest, i+1)
+		case rest[i] == '[':
+			i = skipArgIndex(rest, i)
+		default:
+			return i
+		}
+	}
+
+	return i
+}
+
+// skipArgIndex skips the explicit argument index [n] written at i, and a
+// truncated index to the end of rest.
+func skipArgIndex(rest string, i int) int {
+	if i >= len(rest) || rest[i] != '[' {
+		return i
+	}
+
+	end := strings.IndexByte(rest[i:], ']')
+	if end < 0 {
+		return len(rest)
+	}
+
+	return i + end + 1
+}
+
+// TestHoldsFloatVerb pins the guard's reading of a format directive: every verb
+// that prints a float, however its argument indexes, flags, width and precision
+// are written, and no directive that prints something else.
+func TestHoldsFloatVerb(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		format string
+		want   bool
+	}{
+		{name: "a literal percent sign", format: "%%"},
+		{name: "a literal percent sign before an E", format: "%%E"},
+		{name: "a literal percent sign before an f", format: "%%f"},
+		{name: "the end-of-file marker with no directive", format: "%%EOF\n"},
+		{name: "a string without a percent sign", format: "EOF"},
+		{name: "a percent sign in the middle of a sentence", format: "100% of the report"},
+		{name: "the f verb", format: "%f", want: true},
+		{name: "the E verb", format: "%E", want: true},
+		{name: "the F verb", format: "%F", want: true},
+		{name: "the G verb", format: "%G", want: true},
+		{name: "the x verb", format: "%x", want: true},
+		{name: "the X verb", format: "%X", want: true},
+		{name: "a precision", format: "%.2f", want: true},
+		{name: "a width and a precision", format: "%8.3f", want: true},
+		{name: "the plus flag", format: "%+e", want: true},
+		{name: "a left-justified width and a precision", format: "%-10.4g", want: true},
+		{name: "an argument index", format: "%[1]f", want: true},
+		{name: "an indexed width and an indexed precision", format: "%[2]*.[1]f", want: true},
+		{name: "the d verb", format: "%d"},
+		{name: "the s verb", format: "%s"},
+		{name: "the q verb", format: "%q"},
+		{name: "the v verb, whose operand the guard cannot see", format: "%v"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			literal := strconv.Quote(test.format)
+			if got := holdsFloatVerb(literal); got != test.want {
+				t.Errorf("holdsFloatVerb(%s) = %t, want %t", literal, got, test.want)
+			}
+		})
+	}
 }
