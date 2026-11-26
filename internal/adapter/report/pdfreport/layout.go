@@ -336,9 +336,9 @@ func (d *document) newPage() {
 // the heading that asks leave room under them on the new page.
 //
 // The move assumes onNewPage is nil whenever headings are pending: a table
-// sets it only after drawing its header row, a body line that ends the chain,
-// and no heading is drawn inside a table, so nothing newPage draws lands
-// above the moved chain.
+// sets it only after drawing its header row (a body line, which ends the
+// chain) and clears it when the table ends; no heading is drawn inside a
+// table, so nothing newPage draws lands above the moved chain.
 func (d *document) ensure(height int) {
 	if d.atTop || d.y-height >= d.bottom {
 		return
@@ -451,7 +451,8 @@ func (d *document) heading(size, leading, before int, segs ...seg) {
 		// leaves no room for it either. It is drawn at the body size as a
 		// paragraph instead, where it stands, so no page ends with heading
 		// lines; its first line follows the chain, and moves it along once
-		// when the page has no room for that line.
+		// when the page has no room for that line (a chain at the top of a
+		// page always leaves room for it).
 		d.body(resized(bodySize, segs)...)
 		d.y -= 2
 
