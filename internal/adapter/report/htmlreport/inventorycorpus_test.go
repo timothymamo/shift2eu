@@ -29,6 +29,7 @@ import (
 	"html"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -276,6 +277,11 @@ var hostileInventoryNames = []inventoryNameCase{
 		why:  "HTML metacharacters (< > & \" ') and an attribute-injection payload in a name the HTML report shows in a code element",
 	},
 	{
+		slug: "known-tag",
+		name: "x<b>y.json",
+		why:  "a name that forms a known HTML tag (<b>), which text.Validate accepts and the base-name rule does not refuse: written raw it would open an element, and an unescape of the raw write is the name itself, so only a check of the element's own escaping catches it",
+	},
+	{
 		slug: "unicode-lookalikes",
 		name: "\u0430ws-\u0435\u0301\u0432\u0440\u043e\u043f\u0430\u00a0.json",
 		why:  "Cyrillic homoglyphs, a combining mark and a no-break space: Unicode that only looks hostile and that text.Validate accepts",
@@ -506,6 +512,8 @@ func TestHostileInventoryNames(t *testing.T) {
 					checkName(t, format.name, tc.name, got)
 
 					testutil.Golden(t, filepath.Join("testdata", "hostile-inventory-names", tc.slug+"."+format.name+".golden"), got)
+
+					checkInventoryUnchanged(t, []byte(nameInventory), inv)
 				})
 			}
 
@@ -529,6 +537,8 @@ func TestHostileInventoryNames(t *testing.T) {
 					checkName(t, format.name, tc.name, got)
 
 					testutil.Golden(t, filepath.Join("testdata", "hostile-inventory-names", tc.slug+".comparison."+format.name+".golden"), got)
+
+					checkInventoryUnchanged(t, []byte(nameInventory), inv)
 				})
 			}
 		})
@@ -551,6 +561,11 @@ func TestHostileInventoryNames(t *testing.T) {
 // under their own names, so a plain run of this package's tests runs them all as
 // subtests, and the scheduled audit's fuzz step fuzzes the decoder and the name
 // from them (ADR 0040, row 14).
+//
+// The three comparison reports are held to the same checks, every report's name
+// is parsed back out of it as the CLI hands it on, and the document is decoded
+// once more after the renders, so no render may have changed the inventory it
+// was given.
 func FuzzInventoryDecoding(f *testing.F) {
 	for _, name := range hostileCorpusFiles(f) {
 		f.Add(readHostileCorpus(f, name), "inventory.json")
@@ -570,10 +585,10 @@ func FuzzInventoryDecoding(f *testing.F) {
 	}
 
 	f.Fuzz(func(t *testing.T, data []byte, name string) {
-		// The inventory is decoded once and the one inventory rendered nine times,
-		// once per target and format, then three times more, once per comparison
-		// format, as the CLI's nine runs would have decoded it once each: the
-		// decoder's output is the same on every call (the inventory-file adapter's
+		// The inventory is decoded once and the one inventory rendered twelve times,
+		// nine times once per target and format, then three times more, once per
+		// comparison format, as the CLI's twelve runs would have decoded it once each:
+		// the decoder's output is the same on every call (the inventory-file adapter's
 		// contract), and assess and render, the other two stages of every run, run
 		// here as often as the CLI runs them. At the end the document is decoded
 		// again, so no render may have changed the inventory they were given.
@@ -600,11 +615,9 @@ func FuzzInventoryDecoding(f *testing.F) {
 		}
 
 		for _, format := range comparisonFormats() {
-			got, calls, err := renderedComparison(t, name, inv, embeddedAnalysisTargets(), format.newReporter())
+			got, _, err := renderedComparison(t, name, inv, embeddedAnalysisTargets(), format.newReporter())
 			if err != nil {
-				checkRefusedName(t, name, got, calls, err)
-
-				return
+				t.Fatalf("comparison refused the inventory name %q that every single-target run accepted: %v", name, err)
 			}
 
 			checkReport(t, format.name, got)
@@ -685,8 +698,9 @@ func embeddedAnalysisTargets() []analysis.Target {
 // decoded, so the decoder runs once for a document assessed and rendered many
 // times over. The CLI's run reads it through inventoryfile, which decodes on
 // every call; the adapter's contract fixes that the same document decodes to the
-// same inventory, so the nine runs of one fuzz input share the one decode the
-// CLI would have made for each of them. calls counts the port's calls, so a name
+// same inventory, so the twelve runs of one fuzz input share the one decode the
+// CLI would have made for each of them: nine single-target runs and three
+// `--target all` runs. calls counts the port's calls, so a name
 // a run refuses can be held to calling it not at all.
 type decodedInventory struct {
 	inv   inventory.Inventory
@@ -950,12 +964,20 @@ func checkNameJSON(t *testing.T, name string, got []byte) {
 	}
 }
 
-// checkNameHTML fails unless a code element of the HTML fragment's header line
-// holds name, a name the run accepted, read as a browser reads it: the header
-// line is the fragment's first list element carrying role="list", and
-// html.UnescapeString turns its code elements' character references back into
-// the text a reader sees, so a name escaped once too often or not at all is not
-// the name it shows. An empty name has no element at all, so it is not checked.
+// checkNameHTML fails unless the inventory file item of the HTML fragment's
+// header line holds name, a name the run accepted, in its one code element: the
+// header line is the fragment's first list element carrying role="list", its
+// first item is the source, and the item right after it is the inventory file,
+// which the reporter writes for a name that is not empty alone (report.go's
+// headerStart, in both the single-target and the comparison header). The code
+// element is read both as the reporter wrote it and as a browser reads it: as
+// written it must hold no raw markup, and html.UnescapeString must turn its
+// character references back into the name exactly, so a name escaped not at all,
+// once too often or in an encoding no browser reads is not the name it shows.
+// Holding the item to its own escaping, not to a browser's reading alone, is what
+// a name that forms a known tag needs: for x<b>y.json an unescaped write unescapes
+// to the name itself and would open an element in the page. An empty name has no
+// item at all, so it is not checked.
 func checkNameHTML(t *testing.T, name string, got []byte) {
 	t.Helper()
 
@@ -963,22 +985,80 @@ func checkNameHTML(t *testing.T, name string, got []byte) {
 		return
 	}
 
-	shown := headerCodeContents(string(got))
-
-	for _, content := range shown {
-		if content == name {
-			return
-		}
+	items := headerItems(string(got))
+	if len(items) < 2 {
+		t.Fatalf("the HTML report of the inventory name %q has %d header items, want the source item and the inventory file item after it:\n%s",
+			name, len(items), got)
 	}
 
-	t.Fatalf("the HTML report of the inventory name %q shows the header code elements %q, want one holding the name exactly:\n%s",
-		name, shown, got)
+	const prefix = `<span aria-hidden="true">·</span> <code>`
+
+	item := items[1]
+	if !strings.HasPrefix(item, prefix) {
+		t.Fatalf("the inventory file item of the HTML report of the inventory name %q is %q, want it to start with %q, the separator and the start of its code element:\n%s",
+			name, item, prefix, got)
+	}
+
+	rest := item[len(prefix):]
+
+	end := strings.Index(rest, "</code>")
+	if end < 0 {
+		t.Fatalf("the inventory file item of the HTML report of the inventory name %q holds no code element that closes: %q\n%s",
+			name, item, got)
+	}
+
+	raw := rest[:end]
+	if tail := rest[end+len("</code>"):]; tail != "" {
+		t.Fatalf("the inventory file item of the HTML report of the inventory name %q holds %q after its code element, want the code element to end the item:\n%s",
+			name, tail, got)
+	}
+
+	checkCodeEscaped(t, name, raw)
+
+	if shown := html.UnescapeString(raw); shown != name {
+		t.Fatalf("the inventory file item of the HTML report of the inventory name %q shows %q in its code element, want the name exactly:\n%s",
+			name, shown, got)
+	}
 }
 
-// headerCodeContents returns the content of every code element of a fragment's
-// header line, its first list element carrying role="list", with the character
-// references decoded as a browser decodes them.
-func headerCodeContents(fragment string) []string {
+// checkCodeEscaped fails unless raw, the content of the code element that holds
+// name as the reporter wrote it, escaped it: no raw < or >, which a browser
+// would read as an element's start or end, and every & starting a character
+// reference, so no value opens an element, closes one, or begins a reference a
+// browser reads as something else than the text html.UnescapeString reads. The
+// reporter escapes both quotes and + besides the markup characters (its
+// textEscaper), so the check is on what a browser may read as markup rather than
+// on one expected spelling of html.EscapeString's.
+func checkCodeEscaped(t *testing.T, name, raw string) {
+	t.Helper()
+
+	for i := 0; i < len(raw); i++ {
+		switch raw[i] {
+		case '<', '>':
+			t.Fatalf("the code element of the HTML report of the inventory name %q holds the raw markup character %q at byte %d, want it escaped:\n%s",
+				name, string(raw[i]), i, raw)
+		case '&':
+			ref := characterReference.FindStringIndex(raw[i:])
+			if ref == nil {
+				t.Fatalf("the code element of the HTML report of the inventory name %q holds a & at byte %d that starts no character reference, want every & escaped:\n%s",
+					name, i, raw)
+			}
+
+			i += ref[1] - 1
+		}
+	}
+}
+
+// characterReference matches a character reference as HTML reads one, from the &
+// at the start of the string it is matched against: a numeric reference (&#34; or
+// &#x22;) or a named one (&amp;), each closed by a semicolon.
+var characterReference = regexp.MustCompile(`^&(?:#[0-9]+|#[xX][0-9a-fA-F]+|[a-zA-Z][a-zA-Z0-9]*);`)
+
+// headerItems returns the content of every item of a fragment's header line, its
+// first list element carrying role="list", each as written: a value's character
+// references are still encoded, so a caller can hold the item to both what the
+// reporter wrote and the text a browser reads of it.
+func headerItems(fragment string) []string {
 	const open = `<ul role="list">`
 
 	start := strings.Index(fragment, open)
@@ -998,21 +1078,21 @@ func headerCodeContents(fragment string) []string {
 	var contents []string
 
 	for {
-		i := strings.Index(items, "<code>")
+		i := strings.Index(items, "<li>")
 		if i < 0 {
 			return contents
 		}
 
-		rest := items[i+len("<code>"):]
+		rest := items[i+len("<li>"):]
 
-		j := strings.Index(rest, "</code>")
+		j := strings.Index(rest, "</li>")
 		if j < 0 {
 			return contents
 		}
 
-		contents = append(contents, html.UnescapeString(rest[:j]))
+		contents = append(contents, rest[:j])
 
-		items = rest[j+len("</code>"):]
+		items = rest[j+len("</li>"):]
 	}
 }
 
