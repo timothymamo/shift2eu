@@ -1087,17 +1087,18 @@ var r7Step7Order = []r7Step7Command{
 
 // TestSiteRunbookR7Step7Order pins the order of R7's step 7, its cleanup and step 8 (issues #650 and #666): the key is
 // switched to the throwaway project and the switch waited for before the empty listing, the bucket is created after that
-// listing, and the whole cleanup - the empty-object listing of that bucket and its deletion - runs while the key is still
-// on the throwaway project, before the switch back to the site's project. Everything after the switch back needs the
-// site's project: the wait for the switch back, the listing of the site's buckets, the throwaway project's deletion and
-// the listing that shows it gone, then step 8 from its first command (the owner key into the AWS variables, local), its
-// restores (the site bucket's ACL first) and its scratch directory's removal, which only has to follow the restore that
-// reads "$W/saved-acl.json", before the switch to the admin project. Each step is
-// found by a fragment of its own command line, so the maintainer's wording and the surrounding comments may change; the
-// failures name the pair that is out of order. Every pair of neighbours gets a swapped case, and a later step-8 command
-// moved above the switch back - not a pair of neighbours, so not a swap - gets a move case: on the copy the check must
-// fail on, so the check is shown to catch what an anchor on step 8's first restore alone let pass (PR #664's reviewer nit
-// N1', issue #666).
+// listing, then the three probes that need that bucket - its location, the listing showing only it and the deploy key's
+// put-object - still with the key on the throwaway project, and the whole cleanup - the empty-object listing of that
+// bucket and its deletion - runs while the key is still on the throwaway project, before the switch back to the site's
+// project. Everything after the switch back needs the site's project: the wait for the switch back, the listing of the
+// site's buckets, the throwaway project's deletion and the listing that shows it gone, then step 8 from its first
+// command (the owner key into the AWS variables, local), its restores (the site bucket's ACL first) and its scratch
+// directory's removal, which only has to follow the restore that reads "$W/saved-acl.json", before the switch to the
+// admin project. Each step is found by a fragment of its own command line, so the maintainer's wording and the
+// surrounding comments may change; the failures name the pair that is out of order. Every pair of neighbours gets a
+// swapped case, and a later step-8 command moved above the switch back - not a pair of neighbours, so not a swap - gets
+// a move case: on the copy the check must fail on, so the check is shown to catch what an anchor on step 8's first
+// restore alone let pass (PR #664's reviewer nit N1', issue #666).
 func TestSiteRunbookR7Step7Order(t *testing.T) {
 	t.Parallel()
 
