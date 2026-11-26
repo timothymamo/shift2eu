@@ -275,6 +275,38 @@
       ]
     },
     {
+      "id": "shop-invoices",
+      "rawType": "managedkafka.googleapis.com/Cluster",
+      "category": "messaging.kafka",
+      "region": "europe-west1",
+      "capabilities": [
+        "encryption-at-rest",
+        "node-high-availability",
+        "zone-high-availability"
+      ],
+      "size": {
+        "vcpus": 5.333333333333333,
+        "memoryGiB": 10.666666666666666,
+        "count": 3
+      }
+    },
+    {
+      "id": "shop-ledger",
+      "rawType": "managedkafka.googleapis.com/Cluster",
+      "category": "messaging.kafka",
+      "region": "europe-west1",
+      "capabilities": [
+        "encryption-at-rest",
+        "node-high-availability",
+        "zone-high-availability"
+      ],
+      "size": {
+        "vcpus": 11.5,
+        "memoryGiB": 11.5,
+        "count": 4
+      }
+    },
+    {
       "id": "shop-legacy-events",
       "rawType": "managedkafka.googleapis.com/Cluster",
       "category": "messaging.kafka",

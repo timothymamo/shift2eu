@@ -889,6 +889,16 @@ func inventoryGuides() []inventoryGuideCase {
 					region:       "europe-west4",
 					capabilities: []string{"encryption-at-rest", "node-high-availability", "zone-high-availability"},
 				},
+				{
+					id: "shop-invoices", rawType: "managedkafka.googleapis.com/Cluster", category: "messaging.kafka",
+					region:       "europe-west1",
+					capabilities: []string{"encryption-at-rest", "node-high-availability", "zone-high-availability"},
+				},
+				{
+					id: "shop-ledger", rawType: "managedkafka.googleapis.com/Cluster", category: "messaging.kafka",
+					region:       "europe-west1",
+					capabilities: []string{"encryption-at-rest", "node-high-availability", "zone-high-availability"},
+				},
 				// A cluster the asset listing holds and the capacity call does not:
 				// the program lists it all the same, with no size, rather than
 				// dropping it or sizing it from a default (PRD #571, *Estimates*).
@@ -952,13 +962,23 @@ func inventoryGuides() []inventoryGuideCase {
 				// 4 is 12 and 12. A cluster of no more than 45 vCPU has the three
 				// brokers a cluster always has, so a program that wrote the total as
 				// one broker's size fails on the first two.
+				// A share that is no whole number stays a fraction: 16 vCPU over 3
+				// brokers is 16/3 vCPU and 32/3 GiB, which a program that rounded or
+				// floored the division does not write. 46 vCPU is the boundary of
+				// the ceiling: 46 / 15 is 3.07, so the cluster has 4 brokers and
+				// each gets 11.5 vCPU and 11.5 GiB, while a program that floored the
+				// division writes 3 brokers and one that divided by a flat 15 writes
+				// 46/15 vCPU and memory.
 				// <https://cloud.google.com/managed-service-for-apache-kafka/docs/brokers>
-				// Managed Kafka prices storage by usage and not as a disk of the
-				// cluster's brokers, so the cluster gives none (PRD #571,
+				// The cluster gives no storageGiB: its capacityConfig holds only
+				// vcpuCount and memoryBytes, so the list call reports no broker disk
+				// size, and the program writes none rather than a guess (PRD #571,
 				// *Estimates*).
 				{id: "shop-events", vcpus: 1, memoryGiB: 4, count: 3, noStorageGiB: true},
 				{id: "shop-audit", vcpus: 3, memoryGiB: 24, count: 3, noStorageGiB: true},
 				{id: "shop-analytics", vcpus: 12, memoryGiB: 12, count: 4, noStorageGiB: true},
+				{id: "shop-invoices", vcpus: 16.0 / 3.0, memoryGiB: 32.0 / 3.0, count: 3, noStorageGiB: true},
+				{id: "shop-ledger", vcpus: 11.5, memoryGiB: 11.5, count: 4, noStorageGiB: true},
 			},
 			// An engine the program cannot classify gets no size at all, even
 			// though the sql instances list records the instance's disk and

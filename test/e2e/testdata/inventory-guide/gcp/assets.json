@@ -351,6 +351,16 @@
     "location": "europe-west4"
   },
   {
+    "name": "//managedkafka.googleapis.com/projects/example-project/locations/europe-west1/clusters/shop-invoices",
+    "assetType": "managedkafka.googleapis.com/Cluster",
+    "location": "europe-west1"
+  },
+  {
+    "name": "//managedkafka.googleapis.com/projects/example-project/locations/europe-west1/clusters/shop-ledger",
+    "assetType": "managedkafka.googleapis.com/Cluster",
+    "location": "europe-west1"
+  },
+  {
     "name": "//managedkafka.googleapis.com/projects/example-project/locations/europe-west1/clusters/shop-legacy-events",
     "assetType": "managedkafka.googleapis.com/Cluster",
     "location": "europe-west1"

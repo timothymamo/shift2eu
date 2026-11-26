@@ -19,5 +19,19 @@
       "vcpuCount": "48",
       "memoryBytes": "51539607552"
     }
+  },
+  {
+    "name": "projects/example-project/locations/europe-west1/clusters/shop-invoices",
+    "capacityConfig": {
+      "vcpuCount": "16",
+      "memoryBytes": "34359738368"
+    }
+  },
+  {
+    "name": "projects/example-project/locations/europe-west1/clusters/shop-ledger",
+    "capacityConfig": {
+      "vcpuCount": "46",
+      "memoryBytes": "49392123904"
+    }
   }
 ]
