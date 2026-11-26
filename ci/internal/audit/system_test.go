@@ -412,8 +412,8 @@ func TestPreflightJudgesAFailedRunsEffects(t *testing.T) {
 			wantProbe: 4,
 		},
 		{
-			name:      "the $GITHUB_ENV file changed",
-			effects:   fakeEffects{envDigest: true},
+			name:      "the file-command directory changed",
+			effects:   fakeEffects{fileCommands: true},
 			wantProbe: 6,
 		},
 	}

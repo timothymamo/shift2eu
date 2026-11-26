@@ -78,11 +78,15 @@ func (e *environ) lookup(name string) (string, bool) {
 }
 
 // stepRecorder is the fake Steps: each step records that it ran, and the audit
-// step answers with the result body and error the test gives it.
+// step answers with the result body and error the test gives it. duringAudit,
+// when set, runs inside that step, before it answers: the seam a test swaps a
+// file the run opened - the step summary - through, as a step that writes one
+// could.
 type stepRecorder struct {
-	ran      []string
-	result   []byte
-	auditErr error
+	ran         []string
+	result      []byte
+	auditErr    error
+	duringAudit func()
 }
 
 // steps is the recorder as the run's six steps.
@@ -101,6 +105,10 @@ func (r *stepRecorder) steps() audit.Steps {
 		Preflight:       func(context.Context, string) error { return record("preflight") },
 		Audit: func(context.Context, string) ([]byte, error) {
 			r.ran = append(r.ran, "audit")
+
+			if r.duringAudit != nil {
+				r.duringAudit()
+			}
 
 			if r.auditErr != nil {
 				return nil, r.auditErr
@@ -193,28 +201,33 @@ func TestRunTakesTheStepsInputs(t *testing.T) {
 	assertOnlyTheListedVariables(t, result.asked)
 }
 
-// TestRunTakesTheFileCommandPathsOfOneDirectoryWrittenAnotherWay pins the
-// comparison the file commands' check makes (issues #615, #614, the auditor's
-// N1): the paths are compared as the directories filepath.Clean names, so a
-// $GITHUB_PATH or a step summary that names the $GITHUB_ENV file's own directory
-// with a redundant separator is the same directory, and the run passes.
-func TestRunTakesTheFileCommandPathsOfOneDirectoryWrittenAnotherWay(t *testing.T) {
+// TestRunReplacesAStepSummarySwappedForALink pins the repair a run makes after
+// its steps (issue #615, the auditor's round-2 Low 1): the step summary is
+// digested like every other file command, but a digest only detects a swap; it
+// undoes nothing. A run whose steps replace the summary's path with a link to
+// another readable file would leave the runner to follow that link after the
+// step and publish the other file as the job's summary. So after the steps
+// auditrun Lstats the summary's path: one that is no longer the regular file it
+// opened is replaced with an empty regular file, never written through the link,
+// and the run fails with the audit's exit. An untouched summary still holds the
+// run's one line.
+func TestRunReplacesAStepSummarySwappedForALink(t *testing.T) {
 	t.Parallel()
+
+	// elsewhere is what the file the summary is swapped for holds: a byte of it
+	// in the job's summary would prove the link was followed.
+	const elsewhere = "a file the step's summary must never publish\n"
 
 	cases := []struct {
 		name string
-		// pathOf writes the path of name in the directory dir, the way the case
-		// spells the same directory.
-		pathOf func(dir, name string) string
+		// swap, when set, replaces the summary's path with a link to a file
+		// holding elsewhere, from inside the audit step.
+		swap bool
+		// wantCode is the run's exit code.
+		wantCode int
 	}{
-		{
-			name:   "the directory with a redundant separator",
-			pathOf: func(dir, name string) string { return dir + "//" + name },
-		},
-		{
-			name:   "the directory with a . element",
-			pathOf: func(dir, name string) string { return dir + "/./" + name },
-		},
+		{name: "a summary left as the run opened it", wantCode: audit.ExitOK},
+		{name: "a summary swapped for a link to another file", swap: true, wantCode: audit.ExitFailed},
 	}
 
 	for _, tc := range cases {
@@ -223,14 +236,65 @@ func TestRunTakesTheFileCommandPathsOfOneDirectoryWrittenAnotherWay(t *testing.T
 
 			dir := t.TempDir()
 			env := stepEnvironment(t, dir)
-			env["GITHUB_PATH"] = tc.pathOf(dir, "github-path")
-			env["GITHUB_STEP_SUMMARY"] = tc.pathOf(dir, "step-summary.md")
+			summary := env["GITHUB_STEP_SUMMARY"]
+			target := filepath.Join(t.TempDir(), "elsewhere.md")
+			writeEnvFile(t, target, elsewhere)
 
-			result := runAuditrun(t, stepArgs(dir), env)
+			recorder := &stepRecorder{result: []byte(auditResult)}
 
-			if result.code != audit.ExitOK {
-				t.Errorf("the run's exit code is %d, want %d (audit.ExitOK): every file command's path names the $GITHUB_ENV file's own directory, written another way\nstdout: %s\nstderr: %s",
-					result.code, audit.ExitOK, result.stdout, result.stderr)
+			if tc.swap {
+				recorder.duringAudit = func() {
+					if err := os.Remove(summary); err != nil {
+						t.Fatalf("remove the summary %s the run opened: %v", summary, err)
+					}
+
+					if err := os.Symlink(target, summary); err != nil {
+						t.Fatalf("swap the summary %s for a link to %s: %v", summary, target, err)
+					}
+				}
+			}
+
+			result := runAuditrunWith(t, stepArgs(dir), env, recorder)
+
+			if result.code != tc.wantCode {
+				t.Errorf("the run's exit code is %d, want %d: a summary swapped for a link fails the run, an untouched one does not\nstdout: %s\nstderr: %s",
+					result.code, tc.wantCode, result.stdout, result.stderr)
+			}
+
+			info, err := os.Lstat(summary)
+			if err != nil {
+				t.Fatalf("lstat the summary %s after the run: %v", summary, err)
+			}
+
+			if !info.Mode().IsRegular() {
+				t.Errorf("the summary %s is %s after the run, want a regular file: a path the steps swapped for a link is replaced, never left for the runner to follow (issue #615)",
+					summary, info.Mode())
+			}
+
+			body, err := os.ReadFile(summary)
+			if err != nil {
+				t.Fatalf("read the summary %s after the run: %v", summary, err)
+			}
+
+			if tc.swap {
+				if strings.Contains(string(body), elsewhere) {
+					t.Errorf("the summary holds %q, want nothing of the file its path was swapped for: the run never writes through the link (issue #615)", body)
+				}
+
+				if len(body) != 0 {
+					t.Errorf("the summary holds %q, want an empty regular file: the path is replaced with a new file, nothing is written through the link (issue #615)", body)
+				}
+			} else if !strings.Contains(string(body), "finished") {
+				t.Errorf("the summary holds %q, want the run's one line: an untouched summary is the job's summary (ADR 0040)", body)
+			}
+
+			kept, err := os.ReadFile(target)
+			if err != nil {
+				t.Fatalf("read the file the summary was swapped for, %s: %v", target, err)
+			}
+
+			if string(kept) != elsewhere {
+				t.Errorf("the file the summary was swapped for holds %q, want %q untouched: the run replaces the summary's path only", kept, elsewhere)
 			}
 		})
 	}
@@ -364,6 +428,59 @@ func TestRunRefusesEveryUsageAndInputError(t *testing.T) {
 		{
 			name: "a step summary outside the $GITHUB_ENV file's directory",
 			env:  func(env map[string]string) { env["GITHUB_STEP_SUMMARY"] = anotherDirectoryOf(env, "step-summary.md") },
+		},
+		// The runner always sets clean absolute paths, so a run takes nothing
+		// else (issue #614, the auditor's round-2 Low 2): a path that is not
+		// absolute, or that is not already its own cleaned form, names its
+		// directory only after Clean - the very comparison the check makes - so
+		// the digest and the runner could read two different files of one
+		// spelling. It is refused as every other file-command error is, before
+		// any step.
+		{
+			name: "a $GITHUB_ENV path with a . element",
+			env:  func(env map[string]string) { env["GITHUB_ENV"] = filepath.Dir(env["GITHUB_ENV"]) + "/./github-env" },
+		},
+		{
+			name: "a $GITHUB_PATH path with a redundant separator",
+			env:  func(env map[string]string) { env["GITHUB_PATH"] = filepath.Dir(env["GITHUB_PATH"]) + "//github-path" },
+		},
+		{
+			name: "a $GITHUB_PATH path with a .. element",
+			env: func(env map[string]string) {
+				env["GITHUB_PATH"] = filepath.Dir(env["GITHUB_PATH"]) + "/invented/../github-path"
+			},
+		},
+		{
+			name: "a $GITHUB_OUTPUT path with a . element",
+			env: func(env map[string]string) {
+				env["GITHUB_OUTPUT"] = filepath.Dir(env["GITHUB_OUTPUT"]) + "/./github-output"
+			},
+		},
+		{
+			name: "a $GITHUB_STATE path with a .. element",
+			env: func(env map[string]string) {
+				env["GITHUB_STATE"] = filepath.Dir(env["GITHUB_STATE"]) + "/invented/../github-state"
+			},
+		},
+		{
+			name: "a step summary with a . element",
+			env: func(env map[string]string) {
+				env["GITHUB_STEP_SUMMARY"] = filepath.Dir(env["GITHUB_STEP_SUMMARY"]) + "/./step-summary.md"
+			},
+		},
+		// A relative path is refused too, the other half of the rule: the
+		// runner sets absolute paths, and a relative one (clean, not absolute)
+		// names whatever directory the step happens to run in. The paths name
+		// one invented directory of the step's own, so the check's comparison
+		// of their directories agrees and only the absolute rule is left to
+		// refuse them.
+		{
+			name: "file-command paths that are relative",
+			env: func(env map[string]string) {
+				for _, name := range []string{"GITHUB_ENV", "GITHUB_PATH", "GITHUB_OUTPUT", "GITHUB_STATE", "GITHUB_STEP_SUMMARY"} {
+					env[name] = "invented/" + filepath.Base(env[name])
+				}
+			},
 		},
 	}
 
