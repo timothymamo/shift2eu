@@ -29,7 +29,9 @@
     "{\"resourceId\":\"arn:aws:kafka:eu-central-1:123456789012:configuration/shop-events-config/00000000-0000-0000-0000-000000000000\",\"resourceName\":\"shop-events-config\",\"resourceType\":\"AWS::MSK::Configuration\",\"awsRegion\":\"eu-central-1\"}",
     "{\"resourceId\":\"arn:aws:aoss:eu-central-1:123456789012:security-policy/shop-vectors-access\",\"resourceName\":\"shop-vectors-access\",\"resourceType\":\"AWS::OpenSearchServerless::SecurityPolicy\",\"awsRegion\":\"eu-central-1\"}",
     "{\"resourceId\":\"arn:aws:kafkaconnect:eu-central-1:123456789012:connector/shop-events-connect/00000000-0000-0000-0000-000000000000\",\"resourceName\":\"shop-events-connect\",\"resourceType\":\"AWS::KafkaConnect::Connector\",\"awsRegion\":\"eu-central-1\"}",
-    "{\"resourceId\":\"arn:aws:dynamodb:eu-central-1:123456789012:table/shop-carts\",\"resourceName\":\"shop-carts\",\"resourceType\":\"AWS::DynamoDB::Table\",\"awsRegion\":\"eu-central-1\"}"
+    "{\"resourceId\":\"arn:aws:dynamodb:eu-central-1:123456789012:table/shop-carts\",\"resourceName\":\"shop-carts\",\"resourceType\":\"AWS::DynamoDB::Table\",\"awsRegion\":\"eu-central-1\"}",
+    "{\"resourceId\":\"0123456789abcdef0123456789abcdef\",\"resourceType\":\"AWS::OpenSearchServerless::Collection\",\"awsRegion\":\"eu-central-1\"}",
+    "{\"resourceId\":\"arn:aws:kafka:eu-central-1:123456789012:cluster/shop-events-kafka-serverless/00000000-0000-0000-0000-000000000001-1\",\"resourceType\":\"AWS::MSK::ServerlessCluster\",\"awsRegion\":\"eu-central-1\"}"
   ],
   "QueryInfo": {
     "SelectFields": [

@@ -1,7 +1,10 @@
 package examples_test
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -50,6 +53,7 @@ var searchAndKafkaFixtures = []guideCallFixture{
 			"DomainStatusList", "DomainName", "ARN", "EngineVersion", "ClusterConfig",
 			"InstanceType", "InstanceCount", "ZoneAwarenessEnabled", "MultiAZWithStandbyEnabled",
 			"EBSOptions", "EBSEnabled", "VolumeSize", "EncryptionAtRestOptions", "Enabled",
+			"Deleted",
 		},
 	},
 	{
@@ -59,25 +63,26 @@ var searchAndKafkaFixtures = []guideCallFixture{
 			"DomainStatusList", "DomainName", "ARN", "EngineVersion", "ClusterConfig",
 			"InstanceType", "InstanceCount", "ZoneAwarenessEnabled", "MultiAZWithStandbyEnabled",
 			"EBSOptions", "EBSEnabled", "VolumeSize", "EncryptionAtRestOptions", "Enabled",
+			"Deleted",
 		},
 	},
 	{
 		call: "aws opensearchserverless list-collections",
 		file: "test/e2e/testdata/inventory-guide/aws/eu-central-1/opensearchserverless-collections.json",
-		keys: []string{"collectionSummaries", "id", "name"},
+		keys: []string{"collectionSummaries", "id", "name", "nextToken"},
 	},
 	{
 		call: "aws opensearchserverless batch-get-collection",
 		file: "test/e2e/testdata/inventory-guide/aws/eu-central-1/opensearchserverless-batch-collections.json",
-		keys: []string{"collectionDetails", "name", "arn", "type", "standbyReplicas"},
+		keys: []string{"collectionDetails", "name", "arn", "type", "standbyReplicas", "status"},
 	},
 	{
 		call: "aws kafka list-clusters-v2",
 		file: "test/e2e/testdata/inventory-guide/aws/eu-central-1/kafka-clusters-v2.json",
 		keys: []string{
-			"ClusterInfoList", "ClusterName", "ClusterType", "ClusterArn", "Provisioned", "NumberOfBrokerNodes",
-			"BrokerNodeGroupInfo", "InstanceType", "ClientSubnets", "StorageInfo", "EbsStorageInfo",
-			"VolumeSize",
+			"ClusterInfoList", "ClusterName", "ClusterType", "ClusterArn", "State", "Provisioned",
+			"NumberOfBrokerNodes", "BrokerNodeGroupInfo", "InstanceType", "ClientSubnets", "StorageInfo",
+			"EbsStorageInfo", "VolumeSize",
 		},
 	},
 }
@@ -117,23 +122,53 @@ func TestInventoryGuideSearchAndKafkaFixturesCarryOnlyTheFieldsTheProgramReads(t
 
 			path := filepath.Join(repoRoot, filepath.FromSlash(tc.file))
 
-			document, err := os.ReadFile(path)
-			if err != nil {
-				t.Fatalf("read the %s fixture: %v", tc.call, err)
-			}
-
-			var value any
-			if err := json.Unmarshal(document, &value); err != nil {
-				t.Fatalf("the %s fixture is not JSON: %v", tc.call, err)
-			}
-
-			problems := fixtureKeyProblems(value, tc.keys)
-
-			for _, problem := range problems {
-				t.Errorf("%s: %s", tc.file, problem)
+			// A call the AWS CLI does not page writes one JSON value per page into the
+			// file, so every value the fixture holds is checked, not the first alone.
+			for _, value := range readFixtureValues(t, path, tc.call) {
+				for _, problem := range fixtureKeyProblems(value, tc.keys) {
+					t.Errorf("%s: %s", tc.file, problem)
+				}
 			}
 		})
 	}
+}
+
+// readFixtureValues decodes every JSON value a recorded fixture holds. The guide
+// has no CLI paginator for `opensearchserverless list-collections`, so its
+// command appends each page to the file as a value of its own: a fixture the
+// command wrote holds as many values as pages the call took.
+func readFixtureValues(t *testing.T, path, call string) []any {
+	t.Helper()
+
+	document, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read the %s fixture: %v", call, err)
+	}
+
+	decoder := json.NewDecoder(bytes.NewReader(document))
+
+	var values []any
+
+	for {
+		var value any
+
+		err := decoder.Decode(&value)
+		if errors.Is(err, io.EOF) {
+			break
+		}
+
+		if err != nil {
+			t.Fatalf("the %s fixture %s is not JSON: %v", call, path, err)
+		}
+
+		values = append(values, value)
+	}
+
+	if len(values) == 0 {
+		t.Fatalf("the %s fixture %s holds no JSON value, so this check read nothing", call, path)
+	}
+
+	return values
 }
 
 // TestInventoryGuideSearchAndKafkaFixtureCheckFindsAPlantedKey pins that the

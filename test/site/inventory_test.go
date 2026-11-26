@@ -1144,11 +1144,17 @@ var awsSearchAndMessagingCalls = map[string][]string{
 		"VolumeSize",
 		"EncryptionAtRestOptions",
 		"Enabled",
+		// Deleted: a domain AWS is deleting is no resource to move, as a
+		// terminated instance is none.
+		"Deleted",
 	},
 	"aws opensearchserverless list-collections": {
 		"collectionSummaries",
 		"id",
 		"name",
+		// nextToken: the call has no CLI paginator, so the guide's loop keeps the
+		// token of each page to ask for the next one.
+		"nextToken",
 	},
 	"aws opensearchserverless batch-get-collection": {
 		"collectionDetails",
@@ -1156,12 +1162,18 @@ var awsSearchAndMessagingCalls = map[string][]string{
 		"arn",
 		"type",
 		"standbyReplicas",
+		// status: a collection AWS is deleting, or whose creation failed, is no
+		// resource to move.
+		"status",
 	},
 	"aws kafka list-clusters-v2": {
 		"ClusterInfoList",
 		"ClusterName",
 		"ClusterType",
 		"ClusterArn",
+		// State: a cluster AWS is deleting, or whose creation failed, is no
+		// resource to move.
+		"State",
 		"Provisioned",
 		"NumberOfBrokerNodes",
 		"BrokerNodeGroupInfo",
@@ -1277,6 +1289,117 @@ func TestInventoryGuideSearchAndKafkaCallsKeepOnlyTheFieldsTheyRead(t *testing.T
 			t.Errorf("docs/guide/inventory.md runs no %q, want one: PRD #571's AWS classification reads the search domains, the collections and the Kafka clusters from those five calls", name)
 		}
 	}
+}
+
+// TestInventoryGuidePagesListCollectionsByHand pins the page limit the guide has
+// to work around (review finding B1): `opensearchserverless list-collections`
+// has no AWS CLI paginator, so the CLI answers with one page of at most 100
+// collections and nothing tells the reader another page is waiting. A guide that
+// passes no `--max-results` gets the default page of 20, and one that keeps no
+// `nextToken` loses every collection past the first page: the inventory holds
+// two of five collections, and the move looks smaller than it is. The guide's
+// command therefore asks for the largest page, keeps the token and asks again
+// until the token is null, writing every page to the collections file.
+func TestInventoryGuidePagesListCollectionsByHand(t *testing.T) {
+	t.Parallel()
+
+	guide := string(readRepositoryFile(t, filepath.Join("docs", "guide", "inventory.md")))
+	command := awsListCollectionsCommand(t, guide)
+
+	if !strings.Contains(command, "--max-results 100") && !strings.Contains(command, "--max-results=100") {
+		t.Errorf("the guide's `aws opensearchserverless list-collections` command passes no `--max-results 100`: the call has no CLI paginator and answers with one page of 20 by default, so a guide that does not ask for its documented maximum of 100 sees fewer collections than the region holds\n%s", command)
+	}
+
+	if !strings.Contains(command, "--next-token") {
+		t.Errorf("the guide's `aws opensearchserverless list-collections` command passes no `--next-token`: the second page of a region's collections is asked for with the token the first page returned, and a command that never passes it lists the first page only\n%s", command)
+	}
+
+	if !strings.Contains(command, "nextToken") {
+		t.Errorf("the guide's `aws opensearchserverless list-collections` command never reads `nextToken`, so it cannot tell whether the page it holds is the last one: keep the token in the collections file and stop when it is null\n%s", command)
+	}
+
+	if !strings.Contains(command, "while") && !strings.Contains(command, "until") {
+		t.Errorf("the guide's `aws opensearchserverless list-collections` command holds no `while` or `until` loop: the CLI has no paginator for the call, so the command itself repeats it page by page and writes each page to the collections file\n%s", command)
+	}
+}
+
+// unpagedPhrases are the ways the guide may say that the AWS CLI does not page
+// `list-collections` for the reader. The check below accepts any of them rather
+// than pinning one wording, and names them in its failure, so the sentence only
+// has to say that one call is the exception and which one it is.
+var unpagedPhrases = []string{"no paginator", "not paginated", "not paginate", "no CLI pagination", "by hand"}
+
+// TestInventoryGuideNamesTheOneCallTheCLIDoesNotPage pins the other half of
+// review finding B1: the guide's sentence that tells the reader the AWS CLI
+// fetches every page of every call above has to name `list-collections` as the
+// one call it does not, and say that the reader pages it. Otherwise the sentence
+// it does read promises pages the CLI never fetches, and the collections past
+// the first page are missing from the inventory with nothing to show for it.
+func TestInventoryGuideNamesTheOneCallTheCLIDoesNotPage(t *testing.T) {
+	t.Parallel()
+
+	guide := string(readRepositoryFile(t, filepath.Join("docs", "guide", "inventory.md")))
+
+	var paragraphs []string
+
+	for _, paragraph := range strings.Split(guide, "\n\n") {
+		if strings.Contains(paragraph, "paginat") || strings.Contains(paragraph, "every page") {
+			paragraphs = append(paragraphs, paragraph)
+		}
+	}
+
+	if len(paragraphs) == 0 {
+		t.Fatalf("docs/guide/inventory.md holds no paragraph about pagination, so this check read nothing: the guide tells the reader the AWS CLI fetches every page of its calls, and names the one call it does not")
+	}
+
+	named := make([]string, 0, len(paragraphs))
+
+	for _, paragraph := range paragraphs {
+		if strings.Contains(paragraph, "list-collections") {
+			named = append(named, paragraph)
+		}
+	}
+
+	if len(named) == 0 {
+		t.Errorf("docs/guide/inventory.md's pagination paragraph does not name `opensearchserverless list-collections`, want it as the exception: `list-collections` has no AWS CLI paginator, so the CLI fetches no second page of collections and the guide's loop does, and a reader told that every call is paged for them loses every collection past the first page\n%s",
+			strings.Join(paragraphs, "\n\n"))
+
+		return
+	}
+
+	for _, paragraph := range named {
+		for _, phrase := range unpagedPhrases {
+			if strings.Contains(paragraph, phrase) {
+				return
+			}
+		}
+	}
+
+	t.Errorf("docs/guide/inventory.md names `list-collections` in its pagination paragraph but never says the CLI does not page it, want one of %q: the sentence that promises every call above is paginated would still cover the one call without a paginator\n%s",
+		unpagedPhrases, strings.Join(named, "\n\n"))
+}
+
+// awsListCollectionsCommand returns the guide's `opensearchserverless
+// list-collections` command: the lines the visitor copies for it, with the calls
+// it feeds. Exactly one command makes the call, so a second one that listed the
+// collections again fails here rather than being checked in place of the first.
+func awsListCollectionsCommand(t *testing.T, guide string) string {
+	t.Helper()
+
+	var commands []string
+
+	for _, command := range guideCommands(t, guide, guideSources[0]) {
+		if strings.Contains(command, "aws opensearchserverless list-collections") {
+			commands = append(commands, command)
+		}
+	}
+
+	if len(commands) != 1 {
+		t.Fatalf("docs/guide/inventory.md runs `aws opensearchserverless list-collections` in %d commands, want exactly one, so this check read %s",
+			len(commands), describeCommands(commands))
+	}
+
+	return commands[0]
 }
 
 // awsCall is one search or messaging call of an AWS command, with the --query

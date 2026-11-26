@@ -8,6 +8,18 @@
     },
     {
       "DomainName": "shop-legacy-search"
+    },
+    {
+      "DomainName": "shop-mirror"
+    },
+    {
+      "DomainName": "shop-metrics"
+    },
+    {
+      "DomainName": "shop-cold-logs"
+    },
+    {
+      "DomainName": "shop-old-search"
     }
   ]
 }

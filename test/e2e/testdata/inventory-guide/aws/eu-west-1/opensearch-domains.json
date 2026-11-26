@@ -16,7 +16,8 @@
       },
       "EncryptionAtRestOptions": {
         "Enabled": true
-      }
+      },
+      "Deleted": false
     }
   ]
 }
