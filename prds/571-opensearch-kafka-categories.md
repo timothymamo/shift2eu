@@ -203,11 +203,14 @@ milestone 2).
 explicit `--query` (AWS), `--format` (gcloud) or Resource Graph `project` (Azure), so nothing else
 reaches the raw output the guide keeps in its scratch directory (*Privacy*, `docs/guide/inventory.md`):
 
-- OpenSearch Service: `DomainName`, `EngineVersion`, `ClusterConfig`, `EBSOptions`,
+- OpenSearch Service: `DomainName`, `ARN`, `EngineVersion`, `ClusterConfig`, `EBSOptions`,
   `EncryptionAtRestOptions`;
-- OpenSearch Serverless: `name`, `type`, `standbyReplicas`;
-- MSK: `ClusterName`, `ClusterType`, the broker instance type, the broker count, the per-broker storage,
-  the client subnets and encryption at rest;
+- OpenSearch Serverless: `name`, `arn`, `type`, `standbyReplicas`;
+- MSK: `ClusterName`, `ClusterType`, `ClusterArn`, the broker instance type, the broker count, the
+  per-broker storage and the client subnets (MSK always encrypts at rest, so no encryption field is
+  kept);
+- the three ARNs (decided in milestone 2) for the region alone, as every other AWS resource's: the
+  program keeps the ARN's region and never the ARN, whose account ID stays in the raw output;
 - HDInsight: `clusterDefinition.kind`, the worker role's `targetInstanceCount` and
   `hardwareProfile.vmSize`, the zones and, if milestone 4 confirms they give `storageGiB`, the worker
   role's `dataDisksGroups` (disks per node, disk size);
@@ -239,7 +242,7 @@ Capabilities the programs derive (each milestone pins the exact rule):
 | `search.opensearch` | `node-high-availability` | AWS: `ClusterConfig.InstanceCount` 2 or more (to be checked: whether replicas per index, which no domain setting gives, must be stated by hand); a Serverless collection with standby replicas `ENABLED` |
 | `search.opensearch` | `zone-high-availability` | AWS: `ClusterConfig.ZoneAwarenessEnabled` true, or `MultiAZWithStandbyEnabled` true; a Serverless collection with standby replicas `ENABLED` (to be checked: AWS says it places them in another zone) |
 | `search.opensearch` | `encryption-at-rest` | AWS: `EncryptionAtRestOptions.Enabled` true; always for a Serverless collection |
-| `search.opensearch` | `snapshots` | AWS: always for a domain (OpenSearch Service takes automated snapshots of every domain; to be checked) |
+| `search.opensearch` | `snapshots` | AWS: always for a domain (OpenSearch Service takes automated snapshots of every domain; to be checked); always for a Serverless collection (hourly automated snapshots, restorable; decided in milestone 2) |
 | `messaging.kafka` | `node-high-availability` | MSK: `NumberOfBrokerNodes` 2 or more (to be checked: whether a topic's replication factor, 2 or more for a topic to survive the loss of a broker, which no cluster setting gives, must be stated by hand); MSK Serverless: always; GCP Managed Kafka: always (to be checked); HDInsight: 3 or more worker nodes (to be checked: its minimum, and the replication factor, as for MSK) |
 | `messaging.kafka` | `zone-high-availability` | MSK: brokers in two or more zones (`BrokerNodeGroupInfo.ClientSubnets`, one subnet per zone; to be checked); MSK Serverless: always (to be checked); GCP: to be checked; HDInsight: zones set on the cluster |
 | `messaging.kafka` | `encryption-at-rest` | MSK and MSK Serverless: always (`EncryptionInfo.EncryptionAtRest`); GCP: always (Google default encryption); HDInsight: always (Azure managed disks, encrypted by default; to be checked) |
@@ -657,8 +660,8 @@ text as the decision)
     Found, and not in the capability table above: "By default, when you create a new collection,
     OpenSearch Serverless automatically creates snapshots every hour", restorable to the original
     collection (<https://docs.aws.amazon.com/opensearch-service/latest/developerguide/serverless-snapshots.html>).
-    Milestone 2 does not derive `snapshots` for a collection, as the table and its test say; whether it
-    should is left to the maintainer. Serverless clients "must be compatible with OpenSearch 3.x"
+    Decided in milestone 2: every collection gets `snapshots`, since an hourly, restorable snapshot
+    meets the taxonomy's definition; the capability table above says so. Serverless clients "must be compatible with OpenSearch 3.x"
     (<https://docs.aws.amazon.com/opensearch-service/latest/developerguide/serverless-overview.html>).
   - **`batch-get-collection` batch.** `ids` and `names` take "Maximum number of 100 items" each; the
     guide passes ids, 100 at a time.
@@ -702,9 +705,11 @@ text as the decision)
     `kafka.`, sizes the result with `ec2 describe-instance-types` one type per call (so an unknown type
     fails alone), never asks for the families without a twin, and says to add `vcpus` and `memoryGiB`
     by hand for those.
-  - **Region.** Decided here, not foreseen: no call keeps an ARN, so a domain, collection or Kafka
-    cluster gets no `region`, and the guide says to add it by hand (two of the same name and settings
-    in two regions would otherwise be one entry).
+  - **Region.** Decided in milestone 2, not foreseen: each call keeps the resource's ARN (`ARN`,
+    `arn`, `ClusterArn`) and the program takes the region from it, as for every other AWS resource;
+    the ARN, which carries the account ID, never reaches the inventory. Two domains of the same name in
+    two regions are two entries, and an MSK cluster's or a collection's AWS Config row is dropped only
+    when the call lists one of the same type, name and region.
 - Milestone 3: the `gcloud managed-kafka clusters list` call and its fields (`capacityConfig`, zones,
   encryption), the `--format` that keeps only those, whether a broker count can be derived, GCP Managed
   Kafka's zone layout (whether every cluster spans several zones of its region), and

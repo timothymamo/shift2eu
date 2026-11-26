@@ -98,7 +98,7 @@ def covered_types:
 # opensearch describe-domains lists every domain. An MSK cluster and an
 # OpenSearch Serverless collection are recorded under their CloudFormation
 # types; their Config rows are dropped when the service call lists a resource
-# of that type and name ($listed below).
+# of that type, name and region ($listed below).
 def listed_by_call_types:
   ["AWS::MSK::Cluster", "AWS::MSK::ServerlessCluster", "AWS::OpenSearchServerless::Collection"];
 
@@ -219,8 +219,10 @@ def inventory($source):
    | . + {cluster: (.DBClusterIdentifier // .DBInstanceIdentifier), region: (.DBInstanceArn | arn_region)}]
   as $docdb
 | ([$docs[] | .ClusterInfoList? // empty | .[]
-    | [(if .ClusterType == "SERVERLESS" then "AWS::MSK::ServerlessCluster" else "AWS::MSK::Cluster" end), .ClusterName]]
-   + [$docs[] | .collectionDetails? // empty | .[] | ["AWS::OpenSearchServerless::Collection", .name]])
+    | [(if .ClusterType == "SERVERLESS" then "AWS::MSK::ServerlessCluster" else "AWS::MSK::Cluster" end),
+       .ClusterName, (.ClusterArn | arn_region)]]
+   + [$docs[] | .collectionDetails? // empty | .[]
+      | ["AWS::OpenSearchServerless::Collection", .name, (.arn | arn_region)]])
   as $listed
 | [
     # EC2 instances. One launched by an Auto Scaling group is left out: the group
@@ -487,6 +489,7 @@ def inventory($source):
           id: .DomainName,
           rawType: "AWS::OpenSearchService::Domain",
           category: (if $search then "search.opensearch" else "unclassified" end),
+          region: (.ARN | arn_region),
           capabilities: (if $search then [
             cap("node-high-availability"; ($cluster.InstanceCount // 0) >= 2),
             cap("zone-high-availability"; $cluster.ZoneAwarenessEnabled == true
@@ -500,16 +503,19 @@ def inventory($source):
                  else null end)
         }),
 
-    # OpenSearch Serverless collections: always encrypted at rest; standby
-    # replicas in another zone are their node and zone high availability. No
-    # size: a collection is billed by OCUs, not nodes.
+    # OpenSearch Serverless collections: always encrypted at rest, and
+    # snapshotted every hour into restorable snapshots; standby replicas in
+    # another zone are their node and zone high availability. No size: a
+    # collection is billed by OCUs, not nodes.
     ($docs[] | .collectionDetails? // empty | .[]
       | {
           id: .name,
           rawType: "AWS::OpenSearchServerless::Collection",
           category: "search.opensearch",
+          region: (.arn | arn_region),
           capabilities: [
             "encryption-at-rest",
+            "snapshots",
             cap("node-high-availability"; .standbyReplicas == "ENABLED"),
             cap("zone-high-availability"; .standbyReplicas == "ENABLED")
           ]
@@ -527,6 +533,7 @@ def inventory($source):
           id: .ClusterName,
           rawType: "AWS::MSK::ServerlessCluster",
           category: "messaging.kafka",
+          region: (.ClusterArn | arn_region),
           capabilities: ["node-high-availability", "zone-high-availability", "encryption-at-rest"]
         } else
           (.Provisioned // {}) as $cluster
@@ -535,6 +542,7 @@ def inventory($source):
               id: .ClusterName,
               rawType: "AWS::MSK::Cluster",
               category: "messaging.kafka",
+              region: (.ClusterArn | arn_region),
               capabilities: [
                 "encryption-at-rest",
                 cap("node-high-availability"; ($cluster.NumberOfBrokerNodes // 0) >= 2),
@@ -584,13 +592,13 @@ def inventory($source):
     # Everything else AWS Config recorded. App Runner services and ECR
     # repositories need no call: the type is enough, and ECR encrypts every
     # repository at rest. The row of an MSK cluster or an OpenSearch Serverless
-    # collection the service calls list, by type and name, is dropped. Any
-    # other type is unclassified.
+    # collection the service calls list, by type, name and region, is dropped.
+    # Any other type is unclassified.
     ($docs[] | .Results? // empty | .[]
       | if type == "string" then fromjson else . end
       | select(.resourceType | IN(covered_types[], part_types[]) | not)
       | select((.resourceType | IN(listed_by_call_types[]))
-          and ([.resourceType, ((.resourceName // .resourceId) | short_id)] | IN($listed[])) | not)
+          and ([.resourceType, ((.resourceName // .resourceId) | short_id), .awsRegion] | IN($listed[])) | not)
       | (.resourceType | config_category) as $category
       | {
           id: ((.resourceName // .resourceId) | short_id),

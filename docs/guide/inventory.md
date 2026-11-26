@@ -314,7 +314,7 @@ aws opensearch list-domain-names --output json \
   --query '{DomainNames: DomainNames[].{DomainName: DomainName}}' > "$out/opensearch-domain-names.json"
 jq -r '.DomainNames[].DomainName' "$out/opensearch-domain-names.json" |
   xargs -r -n 5 aws opensearch describe-domains --output json --query '{DomainStatusList: DomainStatusList[].{
-    DomainName: DomainName, EngineVersion: EngineVersion,
+    DomainName: DomainName, ARN: ARN, EngineVersion: EngineVersion,
     ClusterConfig: {InstanceType: ClusterConfig.InstanceType, InstanceCount: ClusterConfig.InstanceCount,
     ZoneAwarenessEnabled: ClusterConfig.ZoneAwarenessEnabled,
     MultiAZWithStandbyEnabled: ClusterConfig.MultiAZWithStandbyEnabled},
@@ -327,11 +327,11 @@ aws opensearchserverless list-collections --output json \
   > "$out/opensearchserverless-collections.json"
 jq -r '.collectionSummaries[].id' "$out/opensearchserverless-collections.json" |
   xargs -r -n 100 aws opensearchserverless batch-get-collection --output json --query '{collectionDetails:
-    collectionDetails[].{name: name, type: type, standbyReplicas: standbyReplicas}}' --ids \
+    collectionDetails[].{name: name, arn: arn, type: type, standbyReplicas: standbyReplicas}}' --ids \
   > "$out/opensearchserverless-batch-collections.json"
 
 aws kafka list-clusters-v2 --output json --query '{ClusterInfoList: ClusterInfoList[].{
-  ClusterName: ClusterName, ClusterType: ClusterType,
+  ClusterName: ClusterName, ClusterType: ClusterType, ClusterArn: ClusterArn,
   Provisioned: Provisioned.{NumberOfBrokerNodes: NumberOfBrokerNodes,
   BrokerNodeGroupInfo: BrokerNodeGroupInfo.{InstanceType: InstanceType, ClientSubnets: ClientSubnets,
   StorageInfo: {EbsStorageInfo: {VolumeSize: StorageInfo.EbsStorageInfo.VolumeSize}}}}}}' \
@@ -577,7 +577,7 @@ The `rawType` is the resource's AWS CloudFormation type.
 | `AWS::MSK::Cluster` (provisioned) | `messaging.kafka` | `kafka list-clusters-v2` |
 | `AWS::MSK::ServerlessCluster` | `messaging.kafka` | `kafka list-clusters-v2` |
 | `AWS::OpenSearch::Domain`, `AWS::Elasticsearch::Domain` | none: AWS Config's types for a domain, which `describe-domains` lists | `configservice select-resource-config` |
-| `AWS::MSK::Cluster`, `AWS::MSK::ServerlessCluster` or `AWS::OpenSearchServerless::Collection` that the service call lists by the same name | none: the call lists it | `configservice select-resource-config` |
+| `AWS::MSK::Cluster`, `AWS::MSK::ServerlessCluster` or `AWS::OpenSearchServerless::Collection` that the service call lists by the same name in the same region | none: the call lists it | `configservice select-resource-config` |
 | `AWS::MSK::Configuration`, `::ClusterPolicy`, `::BatchScramSecret`, `::VpcConnection`, `AWS::OpenSearchServerless::AccessPolicy`, `::SecurityPolicy`, `::SecurityConfig`, `::LifecyclePolicy`, `::VpcEndpoint` | none: settings and parts of a cluster or collection, which stands for them | `configservice select-resource-config` |
 | `AWS::KafkaConnect::Connector`, `AWS::KafkaConnect::CustomPlugin`, `AWS::OSIS::Pipeline` | `unclassified`: MSK Connect and OpenSearch Ingestion are integration runtimes, not clusters | `configservice select-resource-config` |
 | `AWS::AppRunner::Service` | `serverless.container` | `configservice select-resource-config` |
@@ -615,10 +615,9 @@ compatible with OpenSearch 3.x, so they work against a provisioned OpenSearch cl
 MSK Serverless accepts IAM authentication only, which a move replaces with the target's own; check
 each client's authentication before you rely on the fit.
 
-A search domain, a collection and a Kafka cluster get no `region`: their calls keep no ARN, which
-would carry the account ID. Add it by hand where you want it. Two of the same type, name and settings
-in two regions are then one entry: give each its region by hand, or build each region's inventory on
-its own.
+A search domain, a collection and a Kafka cluster get the region of their ARN, as every other AWS
+resource; the ARN itself, which carries the account ID, stays out of the inventory. Two of the same
+name in two regions are two entries, each with its region.
 
 Left out:
 
@@ -705,6 +704,7 @@ another region gets none of their capabilities.
 | `search.opensearch` (domain) | `snapshots` | always: OpenSearch Service takes automated snapshots of every domain (hourly from Elasticsearch 5.3 on) |
 | `search.opensearch` (serverless collection) | `node-high-availability`, `zone-high-availability` | `standbyReplicas` is `ENABLED` |
 | `search.opensearch` (serverless collection) | `encryption-at-rest` | always: OpenSearch Serverless requires encryption at rest for every collection |
+| `search.opensearch` (serverless collection) | `snapshots` | always: OpenSearch Serverless takes an automated snapshot of every collection every hour, and a snapshot can be restored |
 | `messaging.kafka` (provisioned) | `node-high-availability` | `NumberOfBrokerNodes` is 2 or more |
 | `messaging.kafka` (provisioned) | `zone-high-availability` | two or more `ClientSubnets`: MSK spreads the brokers evenly over the subnets' zones, one subnet per zone |
 | `messaging.kafka` (provisioned or serverless) | `encryption-at-rest` | always: MSK always encrypts data at rest |

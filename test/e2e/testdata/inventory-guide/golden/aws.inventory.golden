@@ -293,6 +293,7 @@
       "id": "shop-events-kafka",
       "rawType": "AWS::MSK::Cluster",
       "category": "messaging.kafka",
+      "region": "eu-central-1",
       "capabilities": [
         "encryption-at-rest",
         "node-high-availability",
@@ -309,6 +310,7 @@
       "id": "shop-events-kafka-serverless",
       "rawType": "AWS::MSK::ServerlessCluster",
       "category": "messaging.kafka",
+      "region": "eu-central-1",
       "capabilities": [
         "encryption-at-rest",
         "node-high-availability",
@@ -346,12 +348,14 @@
     {
       "id": "shop-legacy-search",
       "rawType": "AWS::OpenSearchService::Domain",
-      "category": "unclassified"
+      "category": "unclassified",
+      "region": "eu-central-1"
     },
     {
       "id": "shop-logs",
       "rawType": "AWS::OpenSearchService::Domain",
       "category": "search.opensearch",
+      "region": "eu-central-1",
       "capabilities": [
         "snapshots"
       ],
@@ -370,6 +374,42 @@
       "capabilities": [
         "encryption-at-rest"
       ]
+    },
+    {
+      "id": "shop-mirror (AWS::OpenSearchService::Domain, eu-central-1)",
+      "rawType": "AWS::OpenSearchService::Domain",
+      "category": "search.opensearch",
+      "region": "eu-central-1",
+      "capabilities": [
+        "encryption-at-rest",
+        "node-high-availability",
+        "snapshots",
+        "zone-high-availability"
+      ],
+      "size": {
+        "vcpus": 2,
+        "memoryGiB": 16,
+        "storageGiB": 50,
+        "count": 2
+      }
+    },
+    {
+      "id": "shop-mirror (AWS::OpenSearchService::Domain, eu-west-1)",
+      "rawType": "AWS::OpenSearchService::Domain",
+      "category": "search.opensearch",
+      "region": "eu-west-1",
+      "capabilities": [
+        "encryption-at-rest",
+        "node-high-availability",
+        "snapshots",
+        "zone-high-availability"
+      ],
+      "size": {
+        "vcpus": 2,
+        "memoryGiB": 16,
+        "storageGiB": 50,
+        "count": 2
+      }
     },
     {
       "id": "shop-nlb",
@@ -465,6 +505,7 @@
       "id": "shop-search",
       "rawType": "AWS::OpenSearchService::Domain",
       "category": "search.opensearch",
+      "region": "eu-central-1",
       "capabilities": [
         "encryption-at-rest",
         "node-high-availability",
@@ -518,17 +559,21 @@
       "id": "shop-thumbnails",
       "rawType": "AWS::OpenSearchServerless::Collection",
       "category": "search.opensearch",
+      "region": "eu-central-1",
       "capabilities": [
-        "encryption-at-rest"
+        "encryption-at-rest",
+        "snapshots"
       ]
     },
     {
       "id": "shop-vectors",
       "rawType": "AWS::OpenSearchServerless::Collection",
       "category": "search.opensearch",
+      "region": "eu-central-1",
       "capabilities": [
         "encryption-at-rest",
         "node-high-availability",
+        "snapshots",
         "zone-high-availability"
       ]
     },
