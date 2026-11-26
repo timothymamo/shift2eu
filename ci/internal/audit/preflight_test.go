@@ -381,11 +381,11 @@ func toolsOf(plan audit.Plan, p int) []string {
 // fakeEffects is the fake Effects: the observations the launcher makes itself,
 // each false when the sandbox held, which is what a passing run sees.
 type fakeEffects struct {
-	probeFiles bool
-	listener   bool
-	docker     bool
-	sudo       bool
-	envDigest  bool
+	probeFiles   bool
+	listener     bool
+	docker       bool
+	sudo         bool
+	fileCommands bool
 }
 
 // ProbeFilesExist reports whether either file probe 1 writes was written.
@@ -400,8 +400,9 @@ func (f fakeEffects) DockerSocketReachable() bool { return f.docker }
 // SudoAvailable reports whether sudo ran without a password.
 func (f fakeEffects) SudoAvailable() bool { return f.sudo }
 
-// GitHubEnvDigestChanged reports whether the step's $GITHUB_ENV file changed.
-func (f fakeEffects) GitHubEnvDigestChanged() bool { return f.envDigest }
+// FileCommandsChanged reports whether the runner's file-command directory, the
+// $GITHUB_ENV file's, changed.
+func (f fakeEffects) FileCommandsChanged() bool { return f.fileCommands }
 
 // callOf returns the nth call of probe p made with tool, in the plan's order.
 func callOf(t *testing.T, plan audit.Plan, p int, tool string, nth int) audit.Call {
@@ -1736,7 +1737,7 @@ func probeCases() []judgeCase {
 					case 4:
 						effects.sudo = true
 					case 6:
-						effects.envDigest = true
+						effects.fileCommands = true
 					}
 				},
 				want: refusal,

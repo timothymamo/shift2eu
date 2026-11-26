@@ -1348,8 +1348,10 @@ test of ours (Decision 3's reason).
   install step and the one pin (below). Its inputs from the step's environment, read through one
   `os.LookupEnv` passed to the library as the reviewer's `SettingsFromEnv` does: `CLAUDE_CODE_OAUTH_TOKEN`,
   `SHIFT2EU_AUDIT_CANARY` (64 lower-case hex characters), `GITHUB_ENV` (its path, for probe 6) and
-  `GITHUB_STEP_SUMMARY`. It reads no other variable, and refuses to run when `ANTHROPIC_API_KEY` is set,
-  as the reviewer does.
+  `GITHUB_STEP_SUMMARY`, and (*amended 2026-11-26*) the paths of `GITHUB_PATH`, `GITHUB_OUTPUT` and
+  `GITHUB_STATE`, never their content, which must all be in the `GITHUB_ENV` file's directory (see "The
+  `$GITHUB_ENV` digest spans both launches"). It reads no other variable, and refuses to run when
+  `ANTHROPIC_API_KEY` is set, as the reviewer does.
 - **In order**, each step failing the run before the next:
   1. **Managed settings.** It fails if any of these exists, checked with `Lstat`, so a symbolic link
      counts: `/etc/claude-code` (the directory itself, which holds `managed-settings.json`,
@@ -1370,6 +1372,12 @@ test of ours (Decision 3's reason).
      installs it with `sudo install -o root -m 0555`; amended 2026-11-23, issue #277 round H).
      *Amended 2026-11-23 (issue #277 round J):* `bin/` itself has no write bit and holds `audit-exec`
      alone: a second file or a link beside the wrapper is refused.
+     *Amended 2026-11-26 (issues #615 and #614):* the layout `CheckLayout` holds (`layoutDirs`, parents
+     first, each checked with `Lstat`, no link) is now `/srv`, `/srv/audit`, `checkout` and `checks`
+     (no write bit), `work` holding only `tmp`, `work/tmp` empty, `/srv/audit/cwd-preflight` and
+     `/srv/audit/cwd-audit` empty, `state`, `state/home` and `state/tmp` empty, `state/bin`,
+     `state/out`, and `bin` (no write bit) holding only `audit-exec`; the work area itself is no longer
+     a session's working directory.
      *Amended 2026-11-23 (issue #277 round L):* read-only here means read-only **by mode**, and that is
      defence in depth: the runner's user owns `checkout/` and `checks/` and could add a write bit back.
      What holds both trees against their owner is the sandbox's write allow list, which names neither;
@@ -1440,7 +1448,8 @@ test of ours (Decision 3's reason).
      `cwd-audit` must still be an empty real directory (`Lstat`, no link), and the `$GITHUB_ENV` file is
      digested before and after the audit's launch as around the preflight's; any change fails the run
      with exit 1 and the audit's constant line (see "The CLI's working directory and its built-in
-     read-only commands" below).
+     read-only commands" below). *Amended 2026-11-26 (security finding L1):* what is digested is the
+     runner's whole file-command directory, the `$GITHUB_ENV` file's (see there).
      *Amended 2026-11-23 (issue #277 round D):* the result file is read from one descriptor and never
      through a link: its entry must be a regular file (`Lstat`, so neither a link nor a FIFO is
      opened), and the descriptor opened must be that same file (`os.SameFile` on its `Stat`). That gives
@@ -1479,7 +1488,7 @@ test of ours (Decision 3's reason).
   | Variable | Value | Why |
   |---|---|---|
   | `CLAUDE_CODE_OAUTH_TOKEN` | the token | the subscription |
-  | `HOME` | `/srv/audit/state/home` | fresh, inside the state area, which the tools cannot read |
+  | `HOME` | `/srv/audit/state/home` | inside the state area, which the tools cannot read; empty before the preflight (`CheckLayout`), but not fresh for the audit's session, which gets the `HOME` the preflight's CLI already wrote (*amended 2026-11-26*, see below) |
   | `PATH` | `/usr/bin:/bin` | fixed; the sandbox's `bwrap` and `socat` are in `/usr/bin` |
   | `TMPDIR` | `/srv/audit/state/tmp` | the CLI's own temporary files stay in the state area |
   | `DISABLE_AUTOUPDATER` | `1` | no update of the pinned binary |
@@ -1496,6 +1505,16 @@ test of ours (Decision 3's reason).
   nothing. *Why not made by the launcher itself:* a variable a process sets after it starts never shows
   in its `/proc/<pid>/environ`, which is the file the probe must show unreadable.
 
+  **`HOME` is shared by the two sessions** (*amended 2026-11-26, issues #615 and #614, security
+  finding L2*). Earlier text called it fresh; that holds for the preflight's session only. `CheckLayout`
+  wants `state/home` empty before the preflight, and nothing empties or checks it again: the audit's
+  session starts with the `HOME` the preflight's CLI already wrote (its configuration, its session
+  state). The state area is denied to every tool, so neither session's tools can plant anything there;
+  what the audit's CLI reads from it is what the same pinned CLI wrote itself. *Follow-up:* `HOME` is a
+  candidate for a later boundary probe - the audit's launch checking `state/home` against what the
+  preflight's CLI is known to leave there, or giving each session a `HOME` of its own, as it already gets
+  a working directory of its own.
+
 #### The audit directory
 
 Outside `/home`, made by a model-free step with `sudo install -d -o runner` before the hardening step
@@ -1508,7 +1527,7 @@ removes sudo, and never under `$RUNNER_TEMP` or the workspace (both under `/home
 | `/srv/audit/work` | the result file `result.json`; `tmp/`, the commands' `TMPDIR` | Read, Grep, Glob, Write, Edit; Bash writes here (and, by redirection, into the session's working directory; amended 2026-11-25, issue #614) |
 | `/srv/audit/cwd-preflight` | the preflight session's working directory (*added 2026-11-25, issues #615 and #614*): empty before the preflight, made by the same `install -d` as `work` (the runner's, mode 0755); under the scrub the CLI leaves its placeholders here; checked by `CheckLayout` only, never read by the launcher after the session | no rule names it; as the working directory, the CLI's built-in read-only Bash commands list and read it, and a Bash redirection may write into it (issue #614) |
 | `/srv/audit/cwd-audit` | the audit session's working directory (*added 2026-11-25, issues #615 and #614*): made like `cwd-preflight`, checked by `CheckLayout` and again by `Audit` before its launch, which refuses it unless it is still an empty real directory; the CLI leaves its placeholders here; never read by the launcher after the session | as `cwd-preflight`, for the audit's session |
-| `/srv/audit/state` | `home/` (the fresh `HOME`, with Claude Code's configuration and transcripts), `tmp/` (the CLI's `TMPDIR`), `bin/claude`, `out/` (transcripts and stderr) | none: denied to every tool |
+| `/srv/audit/state` | `home/` (the sessions' shared `HOME`, empty before the preflight, with Claude Code's configuration and transcripts), `tmp/` (the CLI's `TMPDIR`), `bin/claude`, `out/` (transcripts and stderr) | none: denied to every tool |
 | `/srv/audit/bin/audit-exec` | the wrapper, built from `ci/auditexec`, owned by root, mode 0555 | Bash runs it, nothing else |
 
 The working directory is `/srv/audit/cwd-preflight` for the preflight's session and
@@ -1897,10 +1916,13 @@ It `exec`s with exactly this environment, nothing inherited: `PATH=/usr/bin:/bin
   with `A variable in braces in this command can't be checked before it runs`. Run offline against a
   fake Messages API with a dummy token (the same version's arm64 build, a stand-in bwrap that keeps
   only bwrap's environment handling), the refusal is the same under the scrub and without it, with
-  the `Bash(/srv/audit/bin/audit-exec:*)` rule matching, and for any variable name; and every `$` is
-  refused in the `default` mode whatever an allow rule's prefix says: an unbraced variable (`A variable
-  in this command ...`), a command substitution (`A nested command ...`), `test -n "$..."` (*corrected
-  2026-11-25, issue #614:* not every `$`; `echo $HOME` ran, while `$PPID` and `$$` are refused). The CLI
+  the `Bash(/srv/audit/bin/audit-exec:*)` rule matching, and for any variable name. *Narrowed
+  2026-11-26 (issue #614):* what is refused in the `default` mode whatever an allow rule's prefix says
+  is the braced form `${...}`, for any variable name, which is why probe 5 holds none; also seen
+  refused were the unbraced `$PPID` and `$$` in probe 5's `/proc` calls (`A variable in this command
+  ...`), a command substitution (`A nested command ...`) and `test -n "$..."`. Not every `$` form is
+  refused: a bare `$VAR` was seen to run (`echo $HOME`), so no rule here may rest on the CLI refusing
+  every `$`. The CLI
   records the refusal three times: a `system`/`permission_denied` element naming the call's
   `tool_use_id`, the call's error result holding the sentence, and the result's `tool_result_meta`
   entry with `non_execution_kind` `user-rejected`. The judgement read it as the absence not shown, so
@@ -1933,8 +1955,8 @@ It `exec`s with exactly this environment, nothing inherited: `PATH=/usr/bin:/bin
     offline run's uutils `cat` prints `cat:`; the judgement looks for `cat:
     /srv/audit/work/nonexistent/: No such file or directory` anywhere in the text, so either prefix
     passes, and that match must stay unanchored.
-  - **Probe 5's `$` calls likely test the CLI, not the sandbox.** Since 2.1.332 refuses every `$` form,
-    probe 5's `.../cat /proc/$PPID/environ` and `.../cat /proc/$$/environ` calls are likely refused by
+  - **Probe 5's `$` calls likely test the CLI, not the sandbox.** Since 2.1.332 refuses some `$` forms
+    (above; a bare `$HOME` ran), probe 5's `.../cat /proc/$PPID/environ` and `.../cat /proc/$$/environ` calls are likely refused by
     the CLI's permission layer before they run; they then test the CLI rather than the sandbox, and a
     follow-up issue is to decide that. *Observed 2026-11-25 (issue #614):* they are refused in the
     `default` mode, by the deny rule `Bash(*/proc/*/environ*)` first and, with that rule removed, by
@@ -2462,6 +2484,155 @@ arguments; git's read-only subcommands), and changes between versions. The deny 
   before and after the audit's launch as around the preflight's, and any change fails the run. Under the
   scrub the sandbox no longer holds `/home`, where the file lives, and the class runs without the
   wrapper, so the preflight's probe 6 alone no longer shows the audit's session cannot write it.
+  *Amended 2026-11-26 (security finding L1):* the digest covers the **runner's file-command directory**,
+  `filepath.Dir` of the `$GITHUB_ENV` path, not the one file: beside `$GITHUB_ENV` it holds
+  `$GITHUB_PATH`, `$GITHUB_OUTPUT`, `$GITHUB_STATE` and the step summary, and a line appended to
+  `$GITHUB_PATH` changes what a later step's bare command word resolves to. Every entry is taken as it
+  is (`Lstat`, no link followed, never opened through one): its name, its type and, for a regular file,
+  its bytes, read from the descriptor of the entry `Lstat` saw (`os.SameFile`); a link counts as its own
+  target's text, so a file replaced by a link to the same bytes is a change. The directory is capped at
+  64 entries and 4 MiB of content; a directory over either fails closed before the launch, never
+  digested in part, with an error naming the cap. *Amended 2026-11-26 (review of issue #614, finding
+  L1):* the entry cap is **256**, not 64, so a runner that keeps earlier steps' file commands in the
+  directory does not fail a long job closed; the 4 MiB content cap stays. Mode bits and link counts are not hashed: the runner
+  reads only a file command's bytes.
+  *Amended 2026-11-26 (review of the L1 fix):* no digest leaves anything out, the step summary
+  included. `auditrun` creates the summary before `audit.Run` and writes the run's line only after the
+  steps return, so nothing legitimate writes it between the two digests; the earlier exclusion let a
+  link swapped in at the summary's path pass unseen. Detection alone does not stop the post, though:
+  the runner reads the summary by its path after the step, failed or not, and publishes what it finds
+  as the public job summary. `auditrun` also reads the paths of `$GITHUB_PATH`, `$GITHUB_OUTPUT` and
+  `$GITHUB_STATE` (never their content) and refuses with the usage exit, before any step, a step where
+  one of them is unset, or where one of them or the step summary (when set) is not in the `$GITHUB_ENV`
+  file's own directory (`filepath.Dir(filepath.Clean(p))`, the library's `FileCommandDir`): a runner that
+  put a file command elsewhere would otherwise quietly fall outside the digest. Any change, a created,
+  removed, retyped or rewritten entry, fails the run whatever the run did, and is the failure reported
+  over a failed launch.
+  *Amended 2026-11-26 (security findings round 2, issues #615, #614):*
+  - **The summary is repaired, not only checked.** *Superseded by round 3, below:* round 2 replaced
+    only a summary whose path had been swapped (`Lstat` against the opened descriptor, `os.SameFile`),
+    by removing the path and creating an empty file; a summary written to in its own inode was still
+    posted, the other four file commands were not repaired at all, and the gap between the remove and
+    the create let a racer put a link back.
+  - **File-command paths must be clean and absolute.** `auditrun` refuses with the usage exit any of
+    `$GITHUB_ENV`, `$GITHUB_PATH`, `$GITHUB_OUTPUT`, `$GITHUB_STATE` and the step summary (when set)
+    that is relative or not already its own `filepath.Clean` form (the library's `IsCleanAbsolute`). The
+    directory check is lexical: it compares names and resolves no link, so a `..` element, or a relative
+    path read from wherever the step runs, could name the digested directory to the check while the
+    runner reads a file elsewhere, and a symlinked path component would pass it. The runner sets clean
+    absolute paths, so the rule refuses nothing it writes.
+  - **Links found before the run are trusted as they stand.** An entry that is already a symlink
+    before the run is hashed by its link text, so a write to its target during the run is not seen. The
+    runner never creates links in the file-command directory, so a link there before the run is not the
+    runner's and was not the run's; it is taken as it stands, and a link created, removed or retargeted
+    during the run is still a change.
+  *Amended 2026-11-26 (security findings round 3, issues #615, #614):*
+  - **Every changed file command is emptied.** `auditrun` is the only legitimate writer of the step's
+    file commands, and it writes only its summary line, after the steps. So before `audit.Run` it
+    records each of `$GITHUB_ENV`, `$GITHUB_PATH`, `$GITHUB_OUTPUT`, `$GITHUB_STATE` and the step
+    summary (when set) (the library's `RecordFileCommands`): its identity (`Lstat`, and for a regular
+    file a descriptor checked with `os.SameFile`) and the sha256 of its content read through that
+    descriptor, capped at the digest's 4 MiB. After the run a file command is changed when its path no
+    longer names that same entry (swapped, removed, replaced, or created where there was none), or when
+    its content differs: the summary must hold its recorded content followed by exactly the bytes
+    `auditrun` wrote to it, the other four exactly their recorded content; a file over the cap counts as
+    changed. Each changed file command is left as an **empty regular file**: one changed in place is
+    truncated through its descriptor; a swapped, removed or replaced path gets an empty temporary file
+    written in the same directory and `os.Rename`d over it, so the swap is atomic, no link is followed and
+    no temporary file is left; the path is then `Lstat`ed again to verify the repair. Any repair names
+    the emptied file commands on stderr, fails a passing run with exit 1 and removes its result file; a
+    run that already failed keeps its exit code. A repair that itself fails says on stderr that the
+    posted summary or the job's environment may be hostile, and fails the run. *Amended 2026-11-26
+    (round 4, the reviewer's and the auditor's should-fix):* the repair **tries every changed file
+    command**, whatever failed before it, and joins the failures (`errors.Join`): it first stopped at
+    the first file command it could not empty, so a step that put a non-empty directory over
+    `$GITHUB_ENV` kept its `$GITHUB_PATH` line for `actions/checkout`'s post step, which holds
+    `ACTIONS_RUNTIME_TOKEN`. Each emptied file command gets its note, and each one the run could not
+    empty its own "could not be emptied ... may be hostile" line naming it; an empty directory over a
+    path is removed before the rename, a non-empty one is left as it is. A write of the run's own
+    summary line that failed partway or was short leaves bytes the record never got, so it counts as a
+    change and the summary is emptied (fail closed), its note naming the steps. *Amended 2026-11-26
+    (round 4, the auditor's L1):* a file command that **exists before the run but is no regular file**
+    (a directory, a symlink, a FIFO) **is refused with exit 2 before any step**: every path is
+    `Lstat`ed first (`CheckFileCommands`), before the summary is opened, and the summary is opened
+    without following a link (`OpenAppend`: `O_EXCL` to create one, an `os.SameFile`-checked
+    descriptor for an existing regular file; the `os` package has no `O_NOFOLLOW`). An existing
+    summary is opened `O_RDWR|O_APPEND`, so a FIFO swapped in between the `Lstat` and the open cannot
+    hang the step (on Linux an `O_RDWR` open of a FIFO never blocks); `os.SameFile` then refuses it.
+    *Amended 2026-11-26 (round 6, the reviewer's S1 and the auditor's L1):* **every open of a file
+    command or of a digested entry is `O_RDWR` and fails closed.** The record's open fell back to
+    `O_RDONLY` and the digest opened each entry `O_RDONLY`, and an `O_RDONLY` open of a FIFO with no
+    writer waits for one; both now open `O_RDWR` only, keep the `Lstat` before the open and the
+    regular-file and `os.SameFile` checks after it, and only read through the descriptor (the record's
+    is also truncated by an in-place repair). So **no open of the file-command directory can hang on a
+    swapped-in FIFO.** An entry the run cannot open `O_RDWR`, a file command it may read but not write,
+    is refused: `RecordFileCommands` fails and the step exits 2 before any step, and the digest fails
+    closed. **Residual, a symlink swapped in after the `Lstat`:** the `O_RDWR` opens in `openRegular`
+    (`filecommand.go`) and `readEntry` (`system.go`) still follow a symlink swapped in between the
+    `Lstat` and the open, as the `O_RDONLY` open did before this change. `os.SameFile` refuses such a
+    link before anything is read or written, so the only possible effect is a side effect of opening a
+    device the runner's user may open read-write, such as a tty opened without `O_NOCTTY`. The race
+    needs a process that outlives the CLI, the residual this ADR already accepts (below). The remedy,
+    if `syscall` is ever admitted to the library's allow list, is `O_NOFOLLOW|O_NONBLOCK|O_NOCTTY`.
+    The round-4 refusal replaces the first rule, that such a file command was noted, checked by
+    its identity alone and left as it was: the run opened the summary with `O_APPEND|O_CREATE`, which
+    follows a link, and could not compare an entry whose content it never recorded. It also supersedes,
+    for the five file commands, "Links found before the run are trusted as they stand" above. The
+    runner lays down only regular, writable files, so a real step loses nothing; a path absent before
+    the run stays allowed, recorded as absent. **Residual:** a process that outlives the CLI's process
+    tree could still write to a file command after the repair; the `actions/checkout` replacement below
+    stays the follow-up for that. **This repair, not the digest, is what keeps a step's change from
+    reaching the runner, the post steps and the public summary**: the runner applies `$GITHUB_ENV` and
+    `$GITHUB_PATH` after a failed step too, and posts the summary by its path. *Amended 2026-11-26
+    (review of issue #614, should-fix):* the repair runs **only if `auditrun` returns**. A step
+    cancelled or timed out before it returns (the runner sends SIGINT, then kills after a grace period;
+    `auditrun` handles only SIGINT, and SIGTERM would need `syscall`, which its allow list does not
+    admit) gets no repair, and the runner then applies whatever the step's file commands hold. The
+    CLI's own deadlines, the preflight's 10 minutes and the audit's 40, below the model step's 90-minute
+    `timeout-minutes`, keep that unlikely; replacing `actions/checkout` in the model job (issue #627,
+    below) is the follow-up that covers it.
+  **The cap of 256 entries (64 until the review of issue #614) was not checked on a real runner.** To
+  our understanding actions/runner removes the previous step's file-command files, which leaves about 5
+  or 6 entries in the directory; a runner that kept every earlier step's files there could pass the cap
+  in a long job, and the run would then fail closed. Record the entry count from the first real run,
+  and on that run also record the real `PATH` of the model job's steps and its directories' owners and
+  modes (`stat -c '%U %a %n'`), to confirm which of them the runner's user can write (see "The
+  encryption tool is `age`", amended for round 2 of issue #614's review).
+  **A detected change fails the step, and since round 3 it is undone.** The runner still applies the
+  step's file commands after a failed step, and post steps run anyway: the model job's
+  `actions/checkout` post step runs `git` through `PATH`, with the job's token and the network open,
+  after the model step. Emptying every changed file command before `auditrun` exits leaves that post
+  step nothing of the steps' to apply.
+  **The digest is the control.** The steps after the model session also run `age` by its absolute path
+  (see "The encryption tool is `age`"), but that is an extra layer on top of the digest, not an
+  independent one: the step's own `bash` is resolved through `PATH`, and a `BASH_ENV` line in
+  `$GITHUB_ENV` is sourced by it.
+- **Follow-up, not done here (file commands):** replace `actions/checkout` in the model job with a `git`
+  fetch by absolute path, so that no action with a `post:` runs after the model step, held by
+  `check.AuditWorkflow`. And a process that outlives the CLI's process tree (one detached from a
+  built-in read-only command that runs without the wrapper) could write to the directory after the
+  after-digest, and after `auditrun`'s repair; this has not been shown to be possible, and it is the
+  case the `actions/checkout` replacement still covers. *Corrected 2026-11-26 (round 3):* the deferral
+  first rested on "no workflow restores an Actions cache (`setup-go` runs with `cache: false`)", which
+  is false: `ci.yml`'s test job and `security.yml`'s two setup-go steps run setup-go with its default,
+  which restores a Go cache. That fits "The Actions cache (residual risk)" below: no release-relevant
+  workflow restores a cache, and CI's caches are accepted. The model job's `GITHUB_TOKEN` is read-only,
+  but that is not enough on its own: every action the job runs, `actions/checkout`'s post step included,
+  is handed `ACTIONS_RUNTIME_TOKEN`, which can write the Actions cache. What keeps a model step's change
+  from reaching that post step is round 3's repair, which empties every changed file command before
+  `auditrun` exits; the replacement of `actions/checkout` stays a follow-up for a process that outlives
+  the CLI. *Amended 2026-11-26 (review of issue #614):* the follow-up is issue #627, and it also
+  covers a model step cancelled or timed out before `auditrun` returns, which gets no repair (above).
+  *Widened 2026-11-26 (review round 2 of issue #614):* issue #627 covers **every step and post step
+  after the model step**, not `actions/checkout`'s post step alone: `actions/upload-artifact` also runs
+  after the session, from `/home/runner/work/_actions/`, which the runner's user owns, with
+  `ACTIONS_RUNTIME_TOKEN`, and the root-only `PATH` of those steps does not cover that code. Options:
+  upload the ciphertext from a separate job, or end the model job with the encrypt step and hand the
+  ciphertext over by a root-owned path, alongside the `git` fetch by absolute path that replaces
+  `actions/checkout`.
+  **Open option for the maintainer:** set `cache: false` on those three setup-go steps, held by
+  a check in `test/architecture` as `release.yml`'s are, so that no workflow on `main` restores a cache
+  a post step could have poisoned.
 - **Follow-up, not done here:** recheck the scrub's mounts with a real bwrap on the x64 runner, the
   `.claude` `denyWrite` and the empty directory bound onto `.git` included; and a preflight probe that
   holds the class's boundary, a bare `cat` of a state path and a bare `>` into `/tmp`, both expected
@@ -2562,6 +2733,52 @@ go.mod's.
 `AUDIT_MODEL_PUBLIC_KEY` and `AUDIT_PUBLISH_PUBLIC_KEY`, read only in the step that encrypts to them. Each
 private half reaches `age --decrypt --identity -` on stdin, from that one step's `env:`, and is never
 written to a file. A ciphertext that does not decrypt fails the step, and `age` writes no output.
+*Amended 2026-11-26 (issues #615 and #614, security finding L1):* the checks job's encrypt step, the
+model job's decrypt step and the model job's encrypt step, the one after the model session, run
+`"${RUNNER_TEMP}/bin/age"`, the binary the job's install step downloaded and checked against its pin,
+never the bare word `age` the step's shell resolves through `PATH`, which an earlier step's
+`$GITHUB_PATH` line decides. `check.AuditWorkflow` recognises those three steps by the absolute form
+only, so a bare `age` there is refused.
+*Amended 2026-11-26 (review of issue #614, security finding M1):* the model job's tools come from the
+**root-owned `/srv/audit/tools`**, not from `${RUNNER_TEMP}/bin`, and the model job adds **no `PATH`
+entry**: no line of it names `$GITHUB_PATH`. While sudo still works, the wrapper's step makes the
+directory with `sudo install -d -o root -g root -m 0555 /srv/audit/tools`, beside `/srv/audit/bin`, and
+installs `age` (downloaded and checked by the install step), `auditrun` and `auditpublish` (built from
+main) with `sudo install -o root -g root -m 0555 <source> /srv/audit/tools/<tool>`; the hardening step
+checks their owners and modes with the rest of the layout. The decrypt and the encrypt run
+`/srv/audit/tools/age`, the artifact check `/srv/audit/tools/auditpublish` and the model step
+`/srv/audit/tools/auditrun`. Why: `${RUNNER_TEMP}` and its `bin/` belong to the runner's user, and
+`bin/` was first on `PATH`, so a write during the model session that got past the CLI's permission
+rules could replace the `age` that encrypts the result, or plant a `git` that `actions/checkout`'s post
+step runs through `PATH` holding `ACTIONS_RUNTIME_TOKEN`; the file-command digest and repair cover only
+the file-command directory. The layer meant is **the CLI's permission rules**, not the bubblewrap
+sandbox: under the scrub, bubblewrap binds `/home`, `/tmp` and the other areas the sandbox section
+lists read-write, so the permission rules alone keep Bash's writes to the allowed areas there (see
+"The settings file", its **Sandbox** entry, amended 2026-11-25). An absolute path into
+`${RUNNER_TEMP}/bin` would only move the trust, and a `chown` of `bin/` alone is not enough, because
+the runner's user owns `_temp` and can rename `bin/` away and put its own in its place.
+*Amended 2026-11-26 (review round 2 of issue #614):* what holds is exactly this, no more: the model job
+adds no `PATH` entry; its own tools are root-owned, mode 0555, in `/srv/audit/tools`, installed from
+one pinned source each (`"${RUNNER_TEMP}/downloads/age/age"`, unpacked from the checksummed tarball, and
+the go build outputs `"${RUNNER_TEMP}/auditrun"` and `"${RUNNER_TEMP}/auditpublish"`), and run by that
+path alone; nothing else in the job writes into the directory; and the model job's checkout step and
+every step after the model step (today the encrypt step and the upload of the ciphertext) carry
+`env: PATH: /usr/sbin:/usr/bin:/sbin:/bin`, a `PATH` of root-owned directories only. The model step
+itself keeps the image's `PATH`: the launcher hands the CLI an environment of its own. **Residual:**
+the hosted image's default `PATH` holds directories the runner's user can write (`/home/runner/.local/bin`,
+`/opt/pipx_bin`, `~/.cargo/bin`, `~/.dotnet/tools` and others; to confirm on the first real run), and
+the root-only `PATH` covers only the steps that set it; whether `actions/checkout`'s post step runs
+with its step's `env:` is also to confirm on the first real run. And no `PATH` pin covers what the
+runner's user owns outside it: `/home/runner/work/_actions/`, where the actions' code is unpacked, is
+the runner user's, and the checkout's post step and `actions/upload-artifact` both run that code with
+`ACTIONS_RUNTIME_TOKEN`. Issue #627 is the follow-up for those (below). The publish job, on its own
+fresh runner with no model step before its decrypt, runs its `age` by the absolute path its install
+step put in place, `"${RUNNER_TEMP}/bin/age"`, never the bare word. `check.AuditWorkflow` holds all of
+it: the tools' directory and installs and their sources, each tool run by its `/srv/audit/tools` path
+in the model job (read word by word through the shell's `;`, `&`, `|`, `(`, `)`, `<`, `>`, backticks,
+quotes and `=`), any other install, write or run of them refused, any `GITHUB_PATH` in the model job
+refused, the root-only `PATH` on the checkout step and the steps after the model step, and the publish
+job's absolute decrypt.
 
 **The artifact hand-off.** Each downloading job first runs `auditpublish artifacts -job model|publish`,
 which fails closed on an extra, a duplicate, a missing or an expired artifact, and writes the artifact

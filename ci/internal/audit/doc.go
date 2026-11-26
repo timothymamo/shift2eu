@@ -60,20 +60,50 @@
 //  6. Audit checks that the work area again holds only its empty tmp/ and
 //     that cwd-audit/ is still an empty real directory, asks the model once
 //     through a Launch, with the skill from the checkout copy as the appended
-//     system prompt, fails on any change of the $GITHUB_ENV file's digest
-//     across that run (issue #614), and wants a result file in the work area -
-//     a regular file, no link, within MaxResult, one JSON value - that holds
-//     neither the token nor the canary in its bytes or its decoded strings. It
-//     returns the bytes it read and checked.
+//     system prompt, fails on any change of the digest of the runner's
+//     file-command directory - the $GITHUB_ENV file's, beside $GITHUB_PATH,
+//     $GITHUB_OUTPUT, $GITHUB_STATE and the step summary: every entry's
+//     name, type (Lstat, no link followed) and bytes, every entry digested,
+//     the step summary included, at most 256 entries and 4 MiB, a directory
+//     over either refused before the run - across that run (issues #615,
+//     #614), and wants a result file in the work area - a regular file, no
+//     link, within MaxResult, one JSON value - that holds neither the token
+//     nor the canary in its bytes or its decoded strings. It returns the
+//     bytes it read and checked. ci/auditrun holds the directory's paths
+//     before the steps: it refuses a file command that is unset, outside the
+//     $GITHUB_ENV file's directory (FileCommandDir), relative or not already
+//     clean (IsCleanAbsolute), and one that exists but is no regular file - a
+//     directory, a link, a FIFO - (CheckFileCommands, Lstat alone, before it
+//     opens the summary with OpenAppend, which follows no link). It also
+//     records the five file commands before the steps (RecordFileCommands:
+//     each one's identity, Lstat and an os.SameFile-checked descriptor, and
+//     the sha256 of its content, capped as the digest is; an existing entry
+//     it cannot open O_RDWR and read fails the record, so a file command the
+//     run may read but not write is refused), and after them
+//     FileCommands.Repair leaves every one the steps changed - another entry
+//     at its path, or content other than the recorded one followed by what
+//     the run appended (Appended) - as an empty regular file: truncated
+//     through its descriptor, or replaced by an empty file renamed over the
+//     path, an empty directory there removed first, never following a link,
+//     each repair verified with an Lstat. It tries every changed file
+//     command, whatever failed before it, and joins one RepairError per
+//     failure (issues #615, #614). Every open of a file command or of a
+//     digested entry is O_RDWR, never O_RDONLY, and fails closed: on Linux
+//     an O_RDWR open never blocks on a FIFO a concurrent process swapped in
+//     between the Lstat and the open, where an O_RDONLY one waits for a
+//     writer, and the descriptor is then refused by its regular-file and
+//     os.SameFile checks. An entry the run cannot open O_RDWR fails the
+//     record or the digest; the runner's file commands are its own and
+//     writable, so a real run loses nothing.
 //
 // Run takes the steps and prints one line: "finished", a constant class, the
 // preflight's Verdict, whose text is made of constants alone, or, when the
 // preflight's or the audit's CLI run was stopped by the launcher's
 // permission-mode check, "refused: " and the *claudecode.PermissionModeError's
-// fixed sentence (issue #592), which the steps keep through their wrapping. No step's
-// error text is printed: it can hold the CLI's output, the token or the canary.
-// Once every step passed, Run hands the audit's bytes to its Result, the seam
-// the publication works from.
+// fixed sentence (issue #592), which the steps keep through their wrapping. No
+// step's error text is printed: it can hold the CLI's output, the token or the
+// canary. Once every step passed, Run hands the audit's bytes to its Result,
+// the seam the publication works from.
 // The CLI runs through the shared launcher ci/internal/claudecode with
 // LaunchConfig, built from the run's Inputs alone, so nothing of the caller's
 // environment reaches it. Every path is taken under a root that stands in for

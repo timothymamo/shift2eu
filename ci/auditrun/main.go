@@ -16,6 +16,9 @@ const (
 	envToken       = "CLAUDE_CODE_OAUTH_TOKEN" //nolint:gosec // G101: the variable's name, not a credential
 	envCanary      = "SHIFT2EU_AUDIT_CANARY"
 	envGitHubEnv   = "GITHUB_ENV"
+	envGitHubPath  = "GITHUB_PATH"
+	envGitHubOut   = "GITHUB_OUTPUT"
+	envGitHubState = "GITHUB_STATE"
 	envStepSummary = "GITHUB_STEP_SUMMARY"
 	envAPIKey      = "ANTHROPIC_API_KEY" //nolint:gosec // G101: the variable's name, not a credential
 )
@@ -70,17 +73,87 @@ func runContext(ctx context.Context, args []string, getenv func(string) (string,
 		return audit.ExitRefused
 	}
 
-	in, resultOut, err := inputs(args, getenv, stderr)
+	in, opts, err := inputs(args, getenv, stderr)
 	if err != nil {
 		_, _ = fmt.Fprintln(stderr, "auditrun:", err)
 
 		return audit.ExitUsage
 	}
 
-	out, closeSummary := summaryWriter(stdout, stderr, in.StepSummary)
-	defer closeSummary()
+	// A file command that exists but is no regular file - a directory, a
+	// link, a FIFO - is refused before the summary is opened and before any
+	// step: the run could not record its content, nor tell after the steps
+	// whether they changed it (issues #615, #614, the auditor's round-4 L1).
+	if err := audit.CheckFileCommands(opts.fileCommands); err != nil {
+		_, _ = fmt.Fprintln(stderr, "auditrun:", err)
 
-	return audit.Run{Root: root, Inputs: in, Steps: steps, Out: out, Result: resultWriter(resultOut)}.Run(ctx)
+		return audit.ExitUsage
+	}
+
+	summary, err := openSummary(in.StepSummary)
+	if err != nil {
+		_, _ = fmt.Fprintln(stderr, "auditrun:", err)
+
+		return audit.ExitUsage
+	}
+
+	if summary != nil {
+		defer func() { _ = summary.Close() }()
+	}
+
+	// The file commands are recorded once the summary exists, before any step
+	// runs: auditrun is their only legitimate writer, and it writes only its
+	// summary line, through out (issues #615, #614).
+	commands, err := audit.RecordFileCommands(opts.fileCommands)
+	if err != nil {
+		_, _ = fmt.Fprintln(stderr, "auditrun:", err)
+
+		return audit.ExitUsage
+	}
+	defer commands.Close()
+
+	out := stdout
+	if summary != nil {
+		out = io.MultiWriter(stdout, summary, commands.Appended(envStepSummary))
+	}
+
+	code := audit.Run{Root: root, Inputs: in, Steps: steps, Out: out, Result: resultWriter(opts.resultOut)}.Run(ctx)
+
+	return repairFileCommands(code, commands, opts.resultOut, stderr)
+}
+
+// repairFileCommands empties every file command the steps changed
+// (audit.FileCommands.Repair, issues #615, #614): the runner applies
+// $GITHUB_ENV and $GITHUB_PATH after a failed step too, and publishes the step
+// summary, so nothing a step wrote there may outlive the run. A repair names
+// the files it emptied on stderr and fails a passing run with the audit's
+// exit, removing the result file that run wrote, so the encrypt step gets
+// nothing; a run that already failed keeps its exit code and wrote no result
+// file. The repair tries every file command, whatever failed before it: each
+// one it could not empty gets its own line, naming the variable and saying the
+// posted summary or the job's environment may be hostile, and fails the run.
+func repairFileCommands(code int, commands *audit.FileCommands, resultOut string, stderr io.Writer) int {
+	emptied, err := commands.Repair()
+	if len(emptied) == 0 && err == nil {
+		return code
+	}
+
+	for _, name := range emptied {
+		_, _ = fmt.Fprintf(stderr, "auditrun: the steps changed the file command %s; it is left as an empty file\n", name)
+	}
+
+	for _, failure := range audit.RepairFailures(err) {
+		_, _ = fmt.Fprintf(stderr, "auditrun: the steps changed the file command %s and it could not be emptied; the posted step summary or the job's environment may be hostile: %v\n", failure.Name, failure.Err)
+	}
+
+	if code == audit.ExitOK {
+		// A failed run leaves no result file for the encrypt step.
+		_ = os.Remove(resultOut)
+
+		return audit.ExitFailed
+	}
+
+	return code
 }
 
 // resultWriter is the run's Result: it writes the bytes the audit step read
@@ -121,10 +194,18 @@ func writeResult(path string, file io.WriteCloser, body []byte) error {
 	return nil
 }
 
+// options is what the run takes besides its Inputs: the -result-out path, and
+// the step's file commands, set and checked, which it records before the
+// steps and repairs after them.
+type options struct {
+	resultOut    string
+	fileCommands []audit.FileCommandPath
+}
+
 // inputs reads the command line and the step's environment, and returns the
-// run's inputs and the -result-out path. Its errors name what is wrong, never
-// a value of the environment's.
-func inputs(args []string, getenv func(string) (string, bool), stderr io.Writer) (audit.Inputs, string, error) {
+// run's inputs and its options. Its errors name what is wrong, never a value
+// of the environment's.
+func inputs(args []string, getenv func(string) (string, bool), stderr io.Writer) (audit.Inputs, options, error) {
 	flags := flag.NewFlagSet("auditrun", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 
@@ -133,23 +214,23 @@ func inputs(args []string, getenv func(string) (string, bool), stderr io.Writer)
 	resultOut := flags.String("result-out", "", "where the checked result is written, a new file under the step's $RUNNER_TEMP")
 
 	if err := flags.Parse(args); err != nil {
-		return audit.Inputs{}, "", fmt.Errorf("usage: %w", err)
+		return audit.Inputs{}, options{}, fmt.Errorf("usage: %w", err)
 	}
 
 	if flags.NArg() != 0 {
-		return audit.Inputs{}, "", fmt.Errorf("usage: auditrun takes no arguments, got %d", flags.NArg())
+		return audit.Inputs{}, options{}, fmt.Errorf("usage: auditrun takes no arguments, got %d", flags.NArg())
 	}
 
 	if *tarball == "" {
-		return audit.Inputs{}, "", fmt.Errorf("usage: -claude-tarball is required")
+		return audit.Inputs{}, options{}, fmt.Errorf("usage: -claude-tarball is required")
 	}
 
 	if _, err := audit.ParseIntegrity(*integrity); err != nil {
-		return audit.Inputs{}, "", fmt.Errorf("usage: -claude-integrity: %w", err)
+		return audit.Inputs{}, options{}, fmt.Errorf("usage: -claude-integrity: %w", err)
 	}
 
 	if *resultOut == "" {
-		return audit.Inputs{}, "", fmt.Errorf("usage: -result-out is required")
+		return audit.Inputs{}, options{}, fmt.Errorf("usage: -result-out is required")
 	}
 
 	token, _ := getenv(envToken)
@@ -159,11 +240,16 @@ func inputs(args []string, getenv func(string) (string, bool), stderr io.Writer)
 
 	switch {
 	case token == "":
-		return audit.Inputs{}, "", fmt.Errorf("%s is not set", envToken)
+		return audit.Inputs{}, options{}, fmt.Errorf("%s is not set", envToken)
 	case !isCanary(canary):
-		return audit.Inputs{}, "", fmt.Errorf("%s is not %d lower-case hex characters", envCanary, canaryLength)
+		return audit.Inputs{}, options{}, fmt.Errorf("%s is not %d lower-case hex characters", envCanary, canaryLength)
 	case gitHubEnv == "":
-		return audit.Inputs{}, "", fmt.Errorf("%s is not set", envGitHubEnv)
+		return audit.Inputs{}, options{}, fmt.Errorf("%s is not set", envGitHubEnv)
+	}
+
+	fileCommands, err := checkFileCommands(getenv, gitHubEnv, stepSummary)
+	if err != nil {
+		return audit.Inputs{}, options{}, err
 	}
 
 	return audit.Inputs{
@@ -173,7 +259,61 @@ func inputs(args []string, getenv func(string) (string, bool), stderr io.Writer)
 		StepSummary: stepSummary,
 		Tarball:     *tarball,
 		Integrity:   *integrity,
-	}, *resultOut, nil
+	}, options{resultOut: *resultOut, fileCommands: fileCommands}, nil
+}
+
+// checkFileCommands refuses a step whose $GITHUB_PATH, $GITHUB_OUTPUT or
+// $GITHUB_STATE is unset, or whose file commands - $GITHUB_ENV, those three
+// and the step summary, when set - are not all clean absolute paths
+// (audit.IsCleanAbsolute) in the $GITHUB_ENV file's own directory
+// (audit.FileCommandDir): the audit digests that directory alone, so a file
+// command elsewhere would fall outside the digest (issues #615, #614). It reads
+// the paths only, never the files' content, and returns the file commands it
+// checked, the step summary last when set.
+func checkFileCommands(getenv func(string) (string, bool), gitHubEnv, stepSummary string) ([]audit.FileCommandPath, error) {
+	if !audit.IsCleanAbsolute(gitHubEnv) {
+		return nil, fmt.Errorf("%s is not a clean absolute path", envGitHubEnv)
+	}
+
+	dir := audit.FileCommandDir(gitHubEnv)
+	commands := []audit.FileCommandPath{{Name: envGitHubEnv, Path: gitHubEnv}}
+
+	for _, name := range []string{envGitHubPath, envGitHubOut, envGitHubState} {
+		path, _ := getenv(name)
+		if path == "" {
+			return nil, fmt.Errorf("%s is not set", name)
+		}
+
+		if err := checkFileCommand(name, path, dir); err != nil {
+			return nil, err
+		}
+
+		commands = append(commands, audit.FileCommandPath{Name: name, Path: path})
+	}
+
+	if stepSummary != "" {
+		if err := checkFileCommand(envStepSummary, stepSummary, dir); err != nil {
+			return nil, err
+		}
+
+		commands = append(commands, audit.FileCommandPath{Name: envStepSummary, Path: stepSummary})
+	}
+
+	return commands, nil
+}
+
+// checkFileCommand refuses the file command name's path unless it is a clean
+// absolute path (audit.IsCleanAbsolute, issue #614) in the directory dir.
+func checkFileCommand(name, path, dir string) error {
+	if !audit.IsCleanAbsolute(path) {
+		return fmt.Errorf("%s is not a clean absolute path", name)
+	}
+
+	if audit.FileCommandDir(path) != dir {
+		return fmt.Errorf("%s is not in the %s file's directory", name, envGitHubEnv)
+	}
+
+	return nil
 }
 
 // isCanary reports whether s is 64 lower-case hex characters.
@@ -193,19 +333,38 @@ func isCanary(s string) bool {
 }
 
 // summaryWriter returns stdout and, when the step has a summary file, that
-// file too, appended to, and a function that closes it. A summary that cannot
-// be opened leaves stdout alone, with a note on stderr.
+// file too, appended to, and a function that closes it: the API key's refusal
+// alone uses it, before any other input is read. A summary that cannot be
+// opened - a directory, a link or a FIFO among them, as openSummary refuses
+// them - leaves stdout alone, with a note on stderr.
 func summaryWriter(stdout, stderr io.Writer, path string) (io.Writer, func()) {
-	if path == "" {
-		return stdout, func() {}
-	}
-
-	file, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, summaryMode) //nolint:gosec // G304: the runner's own step-summary path
+	file, err := openSummary(path)
 	if err != nil {
 		_, _ = fmt.Fprintln(stderr, "auditrun: the step summary cannot be opened; the run's line is on stdout alone")
 
 		return stdout, func() {}
 	}
 
+	if file == nil {
+		return stdout, func() {}
+	}
+
 	return io.MultiWriter(stdout, file), func() { _ = file.Close() }
+}
+
+// openSummary opens the step summary at path for appending, creating it when
+// it does not exist, without following a link (audit.OpenAppend): an entry
+// that exists and is no regular file is refused. It returns nil and no error
+// when the step has no summary.
+func openSummary(path string) (*os.File, error) {
+	if path == "" {
+		return nil, nil
+	}
+
+	file, err := audit.OpenAppend(path, summaryMode)
+	if err != nil {
+		return nil, fmt.Errorf("open the step summary: %w", err)
+	}
+
+	return file, nil
 }

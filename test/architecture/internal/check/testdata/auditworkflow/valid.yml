@@ -1174,7 +1174,7 @@ jobs:
         run: |
           set -euo pipefail
           tar -C "${RUNNER_TEMP}" -cf "${RUNNER_TEMP}/checks.tar" results
-          age --encrypt --recipient "${AUDIT_MODEL_PUBLIC_KEY}" --output "${RUNNER_TEMP}/checks-result.age" "${RUNNER_TEMP}/checks.tar"
+          "${RUNNER_TEMP}/bin/age" --encrypt --recipient "${AUDIT_MODEL_PUBLIC_KEY}" --output "${RUNNER_TEMP}/checks-result.age" "${RUNNER_TEMP}/checks.tar"
       - name: Upload the checks' ciphertext
         timeout-minutes: 5
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -1206,6 +1206,11 @@ jobs:
           # The audit's copy holds the history its findings quote.
           fetch-depth: 0
         timeout-minutes: 5
+        # The root-only PATH: the checkout's post step runs git by PATH after the
+        # model session, with the run's token in its environment (issue #614's
+        # review round 2).
+        env:
+          PATH: /usr/sbin:/usr/bin:/sbin:/bin
       - name: Download the Go modules
         timeout-minutes: 10
         run: |
@@ -1249,9 +1254,6 @@ jobs:
           CLAUDE_CODE_PIN_INTEGRITY: ${{ steps.claude-code-pin.outputs.integrity }}
         run: |
           set -euo pipefail
-          bin="${RUNNER_TEMP}/bin"
-          mkdir -p "${bin}"
-          echo "${bin}" >> "${GITHUB_PATH}"
           curl -fsSLo "${RUNNER_TEMP}/bubblewrap.deb" "http://archive.ubuntu.com/ubuntu/pool/main/b/bubblewrap/bubblewrap_${BUBBLEWRAP_VERSION}_amd64.deb"
           if ! echo "${BUBBLEWRAP_DEB_SHA256}  ${RUNNER_TEMP}/bubblewrap.deb" | sha256sum --check --strict -; then
             echo "::error title=Audit model::bubblewrap's checksum differs from its pin: see runbook step 11"
@@ -1264,13 +1266,13 @@ jobs:
             exit 1
           fi
           sudo dpkg -i "${RUNNER_TEMP}/socat.deb"
+          mkdir -p "${RUNNER_TEMP}/downloads"
           curl -fsSLo "${RUNNER_TEMP}/age.tar.gz" "https://github.com/FiloSottile/age/releases/download/${AGE_VERSION}/age-${AGE_VERSION#v}-linux-amd64.tar.gz"
           if ! echo "${AGE_SHA256}  ${RUNNER_TEMP}/age.tar.gz" | sha256sum --check --strict -; then
             echo "::error title=Audit model::age's checksum differs from its pin: see runbook step 11"
             exit 1
           fi
-          tar -C "${RUNNER_TEMP}" -xzf "${RUNNER_TEMP}/age.tar.gz"
-          install -m 0755 "${RUNNER_TEMP}/age/age" "${bin}/age"
+          tar -C "${RUNNER_TEMP}/downloads" -xzf "${RUNNER_TEMP}/age.tar.gz" age/age
           # The CLI's version and integrity are read from the one pin file, never
           # written here (ADR 0040): a bump moves that file, which the pin check
           # holds to the registry's integrity, and this step fails until it does.
@@ -1299,7 +1301,13 @@ jobs:
         run: |
           set -euo pipefail
           GOFLAGS=-mod=readonly GOPROXY=off go build -trimpath -o "${RUNNER_TEMP}/audit-exec" ./ci/auditexec
+          GOFLAGS=-mod=readonly GOPROXY=off go build -trimpath -o "${RUNNER_TEMP}/auditrun" ./ci/auditrun
+          GOFLAGS=-mod=readonly GOPROXY=off go build -trimpath -o "${RUNNER_TEMP}/auditpublish" ./ci/auditpublish
           sudo install -o root -g root -m 0555 "${RUNNER_TEMP}/audit-exec" /srv/audit/bin/audit-exec
+          sudo install -d -o root -g root -m 0555 /srv/audit/tools
+          sudo install -o root -g root -m 0555 "${RUNNER_TEMP}/downloads/age/age" /srv/audit/tools/age
+          sudo install -o root -g root -m 0555 "${RUNNER_TEMP}/auditrun" /srv/audit/tools/auditrun
+          sudo install -o root -g root -m 0555 "${RUNNER_TEMP}/auditpublish" /srv/audit/tools/auditpublish
       - name: List the run's artifacts and download the checks' ciphertext
         timeout-minutes: 5
         env:
@@ -1308,7 +1316,7 @@ jobs:
           set -euo pipefail
           # The artifact check refuses an artifact the job does not expect, a name twice, one missing, one
           # expired or a second page: the step names that kind and no artifact's name or content.
-          if ! ci/auditpublish artifacts -job model -gh "$(command -v gh)" -tmp "${RUNNER_TEMP}"; then
+          if ! /srv/audit/tools/auditpublish artifacts -job model -gh "$(command -v gh)" -tmp "${RUNNER_TEMP}"; then
             echo "::error title=Audit model::the run's artifacts are unexpected: see runbook step 11"
             exit 1
           fi
@@ -1337,7 +1345,7 @@ jobs:
         run: |
           set -euo pipefail
           sudo install -d -o root -g root -m 0755 /srv/audit/checks
-          printf '%s\n' "${AUDIT_MODEL_PRIVATE_KEY}" | age --decrypt --identity - --output "${RUNNER_TEMP}/checks.tar" "${RUNNER_TEMP}/checks-result/checks-result.age"
+          printf '%s\n' "${AUDIT_MODEL_PRIVATE_KEY}" | /srv/audit/tools/age --decrypt --identity - --output "${RUNNER_TEMP}/checks.tar" "${RUNNER_TEMP}/checks-result/checks-result.age"
           tar -tvf "${RUNNER_TEMP}/checks.tar" > "${RUNNER_TEMP}/checks.types"
           tar -tf "${RUNNER_TEMP}/checks.tar" > "${RUNNER_TEMP}/checks.names"
           if cut -c1 "${RUNNER_TEMP}/checks.types" | grep -v '^[-d]$' > /dev/null ||
@@ -1400,19 +1408,25 @@ jobs:
           # The launcher prints one line, a constant class: an expired or revoked token, the subscription's
           # usage limit, a failed preflight or a managed-settings path read alike here, so the step names
           # what the maintainer recovers from and names no secret and no finding.
-          if ! ci/auditrun -claude-tarball "${RUNNER_TEMP}/claude-code/claude-code.tgz" -claude-integrity "${CLAUDE_CODE_PIN_INTEGRITY}" -result-out "${RUNNER_TEMP}/result.json"; then
+          if ! /srv/audit/tools/auditrun -claude-tarball "${RUNNER_TEMP}/claude-code/claude-code.tgz" -claude-integrity "${CLAUDE_CODE_PIN_INTEGRITY}" -result-out "${RUNNER_TEMP}/result.json"; then
             echo "::error title=Audit model::the audit did not run: see runbook step 10"
             exit 1
           fi
       - name: Encrypt the audit's result to the publish key
         timeout-minutes: 5
         env:
+          # The root-only PATH a step of this job carries once the model session has
+          # run: the image's own PATH puts directories the runner's user can write
+          # ahead of /usr/bin (issue #614's review round 2).
+          PATH: /usr/sbin:/usr/bin:/sbin:/bin
           AUDIT_PUBLISH_PUBLIC_KEY: ${{ vars.AUDIT_PUBLISH_PUBLIC_KEY }}
         run: |
           set -euo pipefail
-          age --encrypt --recipient "${AUDIT_PUBLISH_PUBLIC_KEY}" --output "${RUNNER_TEMP}/model-result.age" "${RUNNER_TEMP}/result.json"
+          /srv/audit/tools/age --encrypt --recipient "${AUDIT_PUBLISH_PUBLIC_KEY}" --output "${RUNNER_TEMP}/model-result.age" "${RUNNER_TEMP}/result.json"
       - name: Upload the model's ciphertext
         timeout-minutes: 5
+        env:
+          PATH: /usr/sbin:/usr/bin:/sbin:/bin
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: model-result
@@ -1493,7 +1507,7 @@ jobs:
           AUDIT_PUBLISH_PRIVATE_KEY: ${{ secrets.AUDIT_PUBLISH_PRIVATE_KEY }}
         run: |
           set -euo pipefail
-          printf '%s\n' "${AUDIT_PUBLISH_PRIVATE_KEY}" | age --decrypt --identity - --output "${RUNNER_TEMP}/result.json" "${RUNNER_TEMP}/model-result/model-result.age"
+          printf '%s\n' "${AUDIT_PUBLISH_PRIVATE_KEY}" | "${RUNNER_TEMP}/bin/age" --decrypt --identity - --output "${RUNNER_TEMP}/result.json" "${RUNNER_TEMP}/model-result/model-result.age"
       - name: Check the image digest and its release
         timeout-minutes: 10
         env:

@@ -115,8 +115,9 @@ func (observed) DockerSocketReachable() bool { return false }
 // SudoAvailable reports whether `sudo -n true` ran.
 func (observed) SudoAvailable() bool { return false }
 
-// GitHubEnvDigestChanged reports whether the $GITHUB_ENV file changed.
-func (observed) GitHubEnvDigestChanged() bool { return false }
+// FileCommandsChanged reports whether the runner's file-command directory, the
+// $GITHUB_ENV file's, changed.
+func (observed) FileCommandsChanged() bool { return false }
 
 // observe is the Observer the run's preflight takes: it starts no sudo and dials
 // no socket, so a default test runs neither.
