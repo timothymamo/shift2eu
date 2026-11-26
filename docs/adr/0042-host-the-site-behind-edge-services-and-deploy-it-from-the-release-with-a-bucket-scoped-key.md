@@ -556,7 +556,10 @@ Services pipeline. What bounds the rest:
   the listing is on, milestone 4 may add that the next release's deploy fails on any object outside
   every release's manifest.
 - **ListBucket**, if R7 shows IAM grants it and the deploy then passes `-list-bucket`: a path outside
-  the manifests is found at the next release, not by the daily check.
+  the manifests is found at the next release, not by the daily check. *Amended 2026-11-26:* the
+  maintainer decided to keep `-list-bucket` off (the amendment *The first deploy*, below), so this
+  bound does not hold: a path outside every manifest stays undetected by the deploy as well as by the
+  live checks.
 
 ### The key-limit step (R7): result
 
@@ -710,3 +713,44 @@ unchanged; only *Hosting*, *The origins* and *Recovery* change, as follows.
   and preload records*). Once the header CSP is live, it also binds
   a page or script a leaked key uploads at any path (`connect-src 'none'`, `worker-src 'none'`), which
   narrows the residuals above; that amendment says so with the live result.
+
+## Amendment: the first deploy (PRD #297 milestone 4)
+
+2026-11-26. The maintainer's live answers at the first deploy (2026-11-24 to 2026-11-26), read through
+the first-deploy runbook; ADR 0045's amendment *Settled live* holds the front's own answers. The
+decision above stands; this records what milestone 4 was to record.
+
+- **The origins (R5, `public_read = true`), with the container's endpoint.** Answers per URL, the same
+  as on 2026-11-24:
+
+  | Origin | HTTPS | Plain HTTP |
+  |---|---|---|
+  | The pipeline's endpoint `https://<pipeline id>.svc.edge.scw.cloud` | 200 | 302 to HTTPS |
+  | The bucket website endpoint `https://<bucket>.s3-website.<region>.scw.cloud` | 200 | 200 |
+  | The bucket's S3 endpoints | 200 | 200 |
+  | The container's endpoint `https://<namespace>-<name>.functions.fnc.<region>.scw.cloud` | `308 https://www.shift2eu.com/<key>` | `308 https://www.shift2eu.com/<key>` |
+  | `https://www.shift2eu.com` and `https://shift2eu.com` | ADR 0045, *Settled live* | 308 to `https://www.shift2eu.com/`, the path and query kept |
+
+  The plain-HTTP 200s of the bucket's endpoints are recorded, not a no-go (*The origins*, above): only
+  `https://www.shift2eu.com` is attested and checked. This answers every *to be checked* cell of both
+  origins tables.
+- **R7's ListBucket: `-list-bucket` stays off.** The maintainer decided (2026-11-25/26) to keep the
+  deploy's `-list-bucket` off; the deploy works without it (v0.16.1, below). So a path outside every
+  manifest, such as a look-alike page a leaked key plants, is detected neither by the deploy nor by the
+  live checks (*The leaked-key residuals*, amended above); the privacy page's statement that such a path
+  is not part of the site stays the bound, and the "next release's deploy fails on any object outside
+  every release's manifest" sentence is not added.
+- **HSTS: met; preload: not pursued.** The records shipped in v0.16.0: `site/records/hsts.json` with
+  `"outcome": "met"`, `"preload": false`, `"date": "2026-11-25"`; `site/records/preload.json` with
+  `"listed": false`. v0.16.0's site jobs ran with the deploy still off (Site programs succeeded, the
+  deploy and the live check skipped). The apex's HTTPS 308 sends `max-age=31536000` without
+  `includeSubDomains` since PR #618 was applied (2026-11-26; ADR 0045, *Settled live*).
+- **The first deploying release: v0.16.1.** With `SITE_DEPLOY_ENABLED=true` (set 2026-11-25) and the
+  `site` environment complete (its deployment policy `tag v*.*.*`), v0.16.1's run deployed the site
+  (*Deploy the site* succeeded) and its live check passed (*Check the live site*, `result: PASS`),
+  with notices only in the run's summary. `www` then served v0.16.1's `manifest.json` with the
+  container's headers.
+- **The header CSP is live.** Every answer of `www` carries the header CSP with `frame-ancestors 'none'`
+  (ADR 0045, *Settled live*), so a page or script a leaked key uploads at any path is held to
+  `connect-src 'none'` and `worker-src 'none'` on `www`. The pipeline's default endpoint stays the
+  residual ADR 0045 records: it serves every object without the header policy.
