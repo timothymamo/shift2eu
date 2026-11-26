@@ -6,9 +6,9 @@
 // read from the working tree is a list the pull request itself could widen: a
 // branch that adds an address to the list and commits with that address would
 // pass its own check, leaving the maintainer's review as the only gate. The base
-// commit's list is the list main holds until the change is merged, so a change
-// to the list counts only after it lands (issue #672, follow-up to #663 and PR
-// #670).
+// commit's list is the base branch's list, main's for a pull request to main, so
+// a change to the list counts only after it lands (issue #672, follow-up to #663
+// and PR #670).
 //
 // Each case builds its own repository below its t.TempDir(): git init on branch
 // main, a base commit that holds the list, then head commits that widen the list
@@ -109,7 +109,7 @@ func TestCoAuthorRangeFindingsReadTheBaseAllowList(t *testing.T) {
 	if diff != "" {
 		t.Errorf("coAuthorRangeFindings(%s) mismatch (-want +got):\n%s\n"+
 			"Want .github/co-author-addresses.txt as of the range's base commit read, never the working tree's: "+
-			"a pull request cannot widen the list it is checked against (issue #672)", spec, diff)
+			"a pull request that changes only the list is checked against the base's list (issue #672)", spec, diff)
 	}
 }
 
