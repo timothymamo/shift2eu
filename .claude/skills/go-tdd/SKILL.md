@@ -32,23 +32,28 @@ clean (CLAUDE.md, rule 9).
 3. Write the test, run only it (`go test ./internal/... -run 'TestName/case'`) and confirm it fails
    **for the right reason** (an assertion on the missing behaviour, not a compile error in an unrelated
    file). A compile failure because the new function does not exist yet is acceptable RED.
-4. Commit the failing test alone: `test(<pkg>): pin <behaviour>`. Report the exact failure output.
-   End the message with exactly one co-author trailer, this line, with no email address:
-
-   ```text
-   Co-Authored-By: pi (DeepSeek V4.1 Flash)
-   ```
-
-   Never add a trailer with an email address you do not own (`noreply@pi.dev`, `noreply@deepseek.com`,
-   `noreply@earendil-works.com`, ...): GitHub credits the account that verified the address, and
-   `noreply@pi.dev` belongs to a third-party account (issue #653). The squash merge copies the trailers
-   of a PR's commits, so a wrong one reaches `main`.
+4. Commit the failing test alone: `test(<pkg>): pin <behaviour>` (trailer: see Commits below). Report
+   the exact failure output.
 
 ## GREEN: confirm
 
 Re-run the test, then `go test -race ./<pkg>/...`, and report the test names and results.
 Never edit production code in this role.
 Signal only what you started (CLAUDE.md rule 10): stop a run of your own only through your agent's tool or by the pid and start time you noted; never a process found by name, never a group yourself.
+
+## Commits
+
+Every commit you make in this role ends with exactly one co-author trailer, this line, with no email
+address (the model is the tester's in CLAUDE.md's role table):
+
+```text
+Co-Authored-By: pi (DeepSeek V4.1 Flash)
+```
+
+Never add a trailer with an email address you do not own (`noreply@pi.dev`, `noreply@deepseek.com`,
+`noreply@earendil-works.com`, ...): GitHub credits the account that verified the address, and
+`noreply@pi.dev` belongs to a third-party account (issue #653). The squash merge copies the trailers of
+a PR's commits, so a wrong one reaches `main`.
 
 ## Conventions
 
