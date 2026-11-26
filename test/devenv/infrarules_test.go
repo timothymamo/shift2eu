@@ -1704,7 +1704,7 @@ resource "scaleway_container_cron" "nightly" {
 // The memory pin is the value the platform keeps at the pinned size, not the size in bytes the pin means: asked for
 // 268435456 (256 MiB), Scaleway kept 268000000 (268 MB, about 0.268 GB), observed 2026-11-25 (issue #596), and every
 // plan after an apply shows the change back. That the platform keeps whole decimal megabytes is no documented rule
-// and none of the texts state one; the pin holds the value an apply answered rather than a guess at the rule.
+// and no Scaleway documentation states one; the pin holds the value an apply answered rather than a guess at the rule.
 // [container-memory] pins 268000000, the value the platform holds, and refuses 268435456 beside every other literal:
 // a plan that never reaches "No changes" is a drift the maintainer cannot tell from a real one, while 268000000 is the
 // pin ADR 0045 bounds the cost with (priced at 0.25 GB; about EUR 2.22 billed at 268 MB).

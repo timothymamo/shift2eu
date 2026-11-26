@@ -196,6 +196,10 @@ func testTableRows(t *testing.T, front *harness) {
 				t.Fatalf("%q answers %d, want %d", firstLine(tc.raw), resp.status, tc.status)
 			}
 
+			// Every answer here is one the front writes, proxied or redirected: none of them may name
+			// its software in a Via header (issue #626).
+			assertNoVia(t, resp)
+
 			if tc.status == http.StatusOK {
 				if got := string(resp.body); got != homeBody {
 					t.Errorf("%q answers the body %q, want the upstream's %q: www over HTTPS is proxied", firstLine(tc.raw), got, homeBody)
@@ -435,6 +439,8 @@ func testApexHSTS(t *testing.T, front *harness) {
 				t.Fatalf("%q answers %d, want 308", firstLine(tc.raw), resp.status)
 			}
 
+			assertNoVia(t, resp)
+
 			got := resp.header.Values("Strict-Transport-Security")
 
 			switch {
@@ -595,6 +601,10 @@ func testRequestHeaders(t *testing.T, front *harness) {
 	if resp.status != http.StatusOK {
 		t.Fatalf("GET %s answers %d, want the upstream's 200", path, resp.status)
 	}
+
+	// The client's own Via reaches neither the upstream nor the answer the front gives it (issue #626):
+	// the proxy sends none up and the front answers with none.
+	assertNoVia(t, resp)
 
 	seen, ok := front.upstream.request(path)
 	if !ok {
@@ -803,6 +813,20 @@ func assertSiteHeaders(t *testing.T, resp *response) {
 		t.Errorf("the answer carries %d Permissions-Policy headers, want exactly one (docs/adr/0045)", len(got))
 	} else if err := checkPermissionsPolicy(got[0]); err != nil {
 		t.Errorf("the answer's Permissions-Policy %q: %v", got[0], err)
+	}
+
+	assertNoVia(t, resp)
+}
+
+// assertNoVia holds that the answer carries no Via header (issue #626): Caddy's reverse_proxy writes
+// `Via: 2.0 Caddy` on every answer it proxies, which names the front's software where no other header does,
+// and the upstream's own copy is nobody's but Edge Services'. www's block deletes the front's copy and the
+// proxy drops the upstream's, so no answer the front writes carries one.
+func assertNoVia(t *testing.T, resp *response) {
+	t.Helper()
+
+	if got := resp.header.Values("Via"); len(got) > 0 {
+		t.Errorf("the answer carries Via %q, want none: the header names the front's software, which no other header of the site does, and the upstream's own copy is Edge Services' (issue #626, docs/adr/0045)", got)
 	}
 }
 
@@ -1207,12 +1231,14 @@ func (u *upstream) handle(w http.ResponseWriter, r *http.Request) {
 	case platformHeadersPath:
 		// The headers the store and the platform answer with, which are nobody's but theirs: a cookie and
 		// four of the bucket's S3 headers, one of them a name no static example lists, since the bucket's
-		// names are an open set. Caddy's one site sets none of them.
+		// names are an open set, and a Via of its own, as Edge Services sends one. Caddy's one site sets
+		// none of them.
 		w.Header().Set("Set-Cookie", "s=1")
 		w.Header().Set("X-Amz-Request-Id", "x")
 		w.Header().Set("X-Amz-Id-2", "y")
 		w.Header().Set("X-Amz-Meta-Foo", "z")
 		w.Header().Set("X-Amz-Version-Id", "v")
+		w.Header().Set("Via", "1.1 upstream.example")
 		fmt.Fprint(w, "the platform's own headers")
 	case missingPath:
 		http.Error(w, "not found upstream", http.StatusNotFound)

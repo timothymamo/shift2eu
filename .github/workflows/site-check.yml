@@ -7,8 +7,9 @@ name: Live site check
 # so a release whose run was queued past the window fails the check once. A
 # release deploying while this runs can fail it once, like a release queued
 # past the window. The alert job opens or comments on one issue because GitHub
-# notifies no one of a failed scheduled run, and disables a schedule after 60
-# days without repository activity; the runbook says how to re-enable it.
+# notifies a failed scheduled run only to whoever last changed its cron line,
+# and disables a schedule after 60 days without repository activity; the
+# runbook says how to re-enable it.
 on:
   schedule:
     - cron: '23 5 * * *'

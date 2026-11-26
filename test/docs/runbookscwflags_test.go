@@ -48,6 +48,10 @@ const (
 // it passes.
 var scwMemoryLimit = regexp.MustCompile(`(?:^|\s)memory-limit-bytes=([^\s]+)`)
 
+// scwImageFlag matches a create line's image= flag, after a blank or at the
+// start, so registry-image= is not it.
+var scwImageFlag = regexp.MustCompile(`(?:^|\s)image=`)
+
 // scwContainerCreateLines returns the runbook's lines that run
 // `scw container container create`, with their line numbers. A line that names
 // the command only to point at its --help runs nothing and is not one.
@@ -93,7 +97,7 @@ func TestRunbookScwContainerCreateFlags(t *testing.T) {
 				siteRunbookPath, number, scwContainerCreate, line)
 		}
 
-		if !regexp.MustCompile(`(?:^|\s)image=`).MatchString(line) {
+		if !scwImageFlag.MatchString(line) {
 			t.Errorf("%s:%d runs `%s` without image=, want the image passed with image= (PRD #297 milestone 4):\n\t%s",
 				siteRunbookPath, number, scwContainerCreate, line)
 		}
