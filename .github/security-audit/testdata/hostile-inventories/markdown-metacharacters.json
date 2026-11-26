@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 2,
+  "source": "aws *not* _italics_ ~~strike~~ #tag",
+  "resources": [
+    {
+      "id": "| a | b |",
+      "rawType": "*bold* _italic_ ~~struck~~",
+      "category": "compute.vm",
+      "region": "# heading in a cell",
+      "workload": "[link](https://example.com/x) ![image](https://example.com/y.png)"
+    },
+    {
+      "id": "```` a run of backticks ````",
+      "rawType": "> a blockquote",
+      "category": "storage.object",
+      "region": "- a list item",
+      "workload": "1. an ordered item"
+    },
+    {
+      "id": "[^1] footnote",
+      "rawType": "[a]: https://example.com",
+      "category": "compute.vm",
+      "region": "&amp; &lt; &gt;",
+      "workload": "\\* escaped \\` and \\| in a cell",
+      "relations": [{ "type": "depends-on", "target": "| a | b |" }]
+    },
+    {
+      "id": "- [x] a task list item",
+      "rawType": "<!-- an HTML comment -->",
+      "category": "storage.block",
+      "region": "~~~~",
+      "workload": "$\\Huge X$ and @everyone and :x:",
+      "size": { "storageGiB": 1, "count": 1 }
+    }
+  ]
+}

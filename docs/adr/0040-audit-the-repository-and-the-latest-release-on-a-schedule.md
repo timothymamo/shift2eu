@@ -8,7 +8,8 @@
   `ubuntu-26.04` (2026-11-25); issue #592 amends the model step's permission mode (2026-11-25); issue
   #613 amends the preflight's token-absence call (2026-11-25); issue #615 moves the CLI's working
   directory out of the work area, and issue #614 accepts the CLI's built-in read-only Bash commands
-  (2026-11-25); issue #632 mints the publish job's App token with no `permission-*` input (2026-11-26)
+  (2026-11-25); issue #632 mints the publish job's App token with no `permission-*` input (2026-11-26);
+  issue #661 adds row 13's inputs that pass loading and row 14's second fuzz target (2026-11-26)
 - Date: 2026-11-21, amended 2026-11-22 to 2026-11-26
 
 ## Context
@@ -162,7 +163,7 @@ subscription usage of a weekly one, and a run by hand covers a release or an adv
 | 11 | The image runs as non-root, with a read-only root filesystem and no shell where none is expected | checks, containers | no |
 | 12 | Dropped: the server is no longer released (ADR 0037) | none | no |
 | 13 | The CLI on hostile inventory files | checks, container, `--network none` | no |
-| 14 | Time-boxed `go test -fuzz` of the committed `Fuzz*` targets (`internal/adapter/report/htmlreport`'s `FuzzReportEscaping` today, Decision 5) | checks, container, `--network none`, `GOPROXY=off` | no |
+| 14 | Time-boxed `go test -fuzz` of the committed `Fuzz*` targets (`internal/adapter/report/htmlreport`'s `FuzzReportEscaping` and `FuzzInventoryDecoding` today, Decision 5; issue #661) | checks, container, `--network none`, `GOPROXY=off` | no |
 | 15 | Supply-chain reads: action pins and workflow `permissions`, rulesets and environments as the `release-tag` skill reads them, Renovate's state, dependencies changed since the last report | checks, workflow step | GitHub reads |
 | 16 | Encrypt the raw results to the model key, upload `checks-result` | checks, workflow step | artifact upload |
 | 17 | Check the artifacts, download and decrypt `checks-result` into the audit directory, copy the checkout; stop Docker and remove the runner user's sudo rule; the sandbox preflight | model, workflow steps | tools, artifact download |
@@ -173,8 +174,10 @@ subscription usage of a weekly one, and a run by hand covers a release or an adv
 Scorecard's checks that need admin read are reported "not run (needs admin read)"; crash inputs and PoCs
 go only into the encrypted results or an advisory, never into `testdata/`. Fuzzing is "not run (no
 `Fuzz*` targets)" only when the tree holds no committed fuzz target that CI runs too (Decision 5); it
-holds `internal/adapter/report/htmlreport`'s `FuzzReportEscaping`, so the first run fuzzes it for 10
-minutes.
+holds two, both in `internal/adapter/report/htmlreport`'s tests: `FuzzReportEscaping`, the HTML
+reporter's escaping, and, since issue #661, `FuzzInventoryDecoding`, the inventory decoder and every
+accepted inventory's assessment and three reports. Each run fuzzes each for 10 minutes, within the
+step's at most three targets.
 
 ### The disclosure rules the publish script enforces
 
@@ -3089,6 +3092,22 @@ which the container is killed and removed.
   `assess --inventory <file> --target all`, as Markdown and as JSON, in a container of its own from the
   release image (by the digest row 7 resolved) with `--memory 512m --pids-limit 64` too. **No tmpfs**:
   the CLI writes nothing but its stdout and stderr.
+  *Amended 2026-11-26 (issue #661):* the corpus also holds inputs that **pass** loading and are hostile
+  all the same, so the assessment and the renderers are exercised: HTML and Markdown metacharacters in
+  the source and in every free-text field (`html-metacharacters.json`, `markdown-metacharacters.json`,
+  beside `markup-injection.json`), every free-text value at `text.MaxLen`, 2048 bytes
+  (`length-limits.json`), look-alike Unicode that `text.Validate` accepts (`unicode-lookalikes.json`)
+  and version 2 numbers at the ends of every range the domain accepts (`number-limits.json`). The first
+  audit, run 45844850567 (PR #657), found 31 of its 32 inputs refused at load, so the Markdown and JSON
+  renderers had been exercised by one input only; 6 of the 23 committed files now load. Control
+  characters, bidi overrides and other format characters, and invalid UTF-8 cannot pass loading in any
+  free-text field, by design (`text.Validate` and the shared JSON decoder refuse them), and the format
+  has no tags, so those stay in the refused half. `TestHostileCorpusDecisions` in
+  `internal/adapter/report/htmlreport/inventorycorpus_test.go` pins which files load and the sentinel
+  each refusal wraps, and `TestHostileCorpusReports` there holds the Markdown, JSON and HTML reports of
+  each file that loads to goldens under `internal/adapter/report/htmlreport/testdata/hostile-corpus/`,
+  which show the escaping. They live in the HTML reporter's tests because
+  `web-imported-only-by-the-web-root` refuses an import of it elsewhere outside the web root.
 - **Row 14, fuzzing.** The targets are found by reading the tracked `*_test.go` files outside `testdata`
   as text, by their signature alone (`^func Fuzz[A-Z0-9_][A-Za-z0-9_]*\(f \*testing\.F\)`, so a helper
   such as `Fuzzy` is none): nothing is built or run to list them. A target whose package or name has
@@ -3104,7 +3123,13 @@ which the container is killed and removed.
   first, the build cache (`GOCACHE`) and the test binaries it builds and runs (`GOTMPDIR`, hence `exec`).
   The crash inputs leave on stdout as a tar stream, the log on stderr. *Decision 5 said no target exists
   yet; `internal/adapter/report/htmlreport`'s `FuzzReportEscaping` does, so the first run fuzzes it for
-  10 minutes.*
+  10 minutes.* *Amended 2026-11-26 (issue #661):* the first audit fuzzed `FuzzReportEscaping` alone, and
+  the inventory decoder, which reads untrusted input first, had no target. `FuzzInventoryDecoding`, in
+  the same package's tests (`inventorycorpus_test.go`), now fuzzes it, seeded with row 13's corpus and
+  the inventory-file adapter's version 1 and version 2 fixtures, which the `git archive` of the tree
+  carries into the container: no panic, a controlled refusal, and an accepted inventory that assesses
+  against all three targets and renders as Markdown, JSON and HTML without an error. Each run fuzzes the
+  two targets for 10 minutes each, within the step's at most three and its 25-minute budget.
 
 **To be checked on the first run** (runbook step 8), besides 5b's list: that cosign v3's
 `verify-attestation` reads the attestations `actions/attest` pushed as OCI referrers (`gh attestation

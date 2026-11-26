@@ -1,0 +1,234 @@
+{
+  "schemaVersion": 3,
+  "kind": "assessment",
+  "inventoryName": "markdown-metacharacters.json",
+  "source": "aws *not* _italics_ ~~strike~~ #tag",
+  "target": {
+    "name": "Scaleway",
+    "snapshot": {
+      "source": "https://www.scaleway.com/en/pricing/",
+      "retrieved": "2026-11-13"
+    }
+  },
+  "summary": {
+    "direct": 4,
+    "partial": 0,
+    "none": 0,
+    "total": 4
+  },
+  "resources": [
+    {
+      "id": "- [x] a task list item",
+      "rawType": "\u003c!-- an HTML comment --\u003e",
+      "category": "storage.block",
+      "region": "~~~~",
+      "fit": "direct",
+      "bestOffering": "Block Storage",
+      "ties": [],
+      "reasons": [
+        {
+          "code": "all-capabilities",
+          "text": "Block Storage offers every capability the resource uses",
+          "offering": "Block Storage"
+        }
+      ],
+      "requiredChanges": [],
+      "relations": [],
+      "affectedBy": [],
+      "estimate": {
+        "estimated": true,
+        "amount": "0.09",
+        "countAssumed": false,
+        "hoursAssumed": false,
+        "breakdown": {
+          "plan": "0.00",
+          "storage": "0.09",
+          "fixedFee": "0.00"
+        }
+      }
+    },
+    {
+      "id": "[^1] footnote",
+      "rawType": "[a]: https://example.com",
+      "category": "compute.vm",
+      "region": "\u0026amp; \u0026lt; \u0026gt;",
+      "fit": "direct",
+      "bestOffering": "Instances",
+      "ties": [],
+      "reasons": [
+        {
+          "code": "all-capabilities",
+          "text": "Instances offers every capability the resource uses",
+          "offering": "Instances"
+        }
+      ],
+      "requiredChanges": [],
+      "relations": [
+        {
+          "type": "depends-on",
+          "target": "| a | b |"
+        }
+      ],
+      "affectedBy": [],
+      "estimate": {
+        "estimated": false,
+        "reason": "no-size"
+      }
+    },
+    {
+      "id": "```` a run of backticks ````",
+      "rawType": "\u003e a blockquote",
+      "category": "storage.object",
+      "region": "- a list item",
+      "fit": "direct",
+      "bestOffering": "Object Storage",
+      "ties": [],
+      "reasons": [
+        {
+          "code": "all-capabilities",
+          "text": "Object Storage offers every capability the resource uses",
+          "offering": "Object Storage"
+        }
+      ],
+      "requiredChanges": [],
+      "relations": [],
+      "affectedBy": [],
+      "estimate": {
+        "estimated": false,
+        "reason": "no-size"
+      }
+    },
+    {
+      "id": "| a | b |",
+      "rawType": "*bold* _italic_ ~~struck~~",
+      "category": "compute.vm",
+      "region": "# heading in a cell",
+      "fit": "direct",
+      "bestOffering": "Instances",
+      "ties": [],
+      "reasons": [
+        {
+          "code": "all-capabilities",
+          "text": "Instances offers every capability the resource uses",
+          "offering": "Instances"
+        }
+      ],
+      "requiredChanges": [],
+      "relations": [],
+      "affectedBy": [],
+      "estimate": {
+        "estimated": false,
+        "reason": "no-size"
+      }
+    }
+  ],
+  "blockers": [],
+  "workloads": [
+    {
+      "name": "$\\Huge X$ and @everyone and :x:",
+      "noWorkload": false,
+      "resources": 1,
+      "summary": {
+        "direct": 1,
+        "partial": 0,
+        "none": 0,
+        "total": 1
+      },
+      "blockers": [],
+      "estimate": {
+        "amount": "0.09",
+        "estimated": 1,
+        "resources": 1
+      },
+      "sourceCost": {
+        "covered": 0,
+        "resources": 1,
+        "currencies": []
+      }
+    },
+    {
+      "name": "1. an ordered item",
+      "noWorkload": false,
+      "resources": 1,
+      "summary": {
+        "direct": 1,
+        "partial": 0,
+        "none": 0,
+        "total": 1
+      },
+      "blockers": [],
+      "estimate": {
+        "estimated": 0,
+        "resources": 1
+      },
+      "sourceCost": {
+        "covered": 0,
+        "resources": 1,
+        "currencies": []
+      }
+    },
+    {
+      "name": "[link](https://example.com/x) ![image](https://example.com/y.png)",
+      "noWorkload": false,
+      "resources": 1,
+      "summary": {
+        "direct": 1,
+        "partial": 0,
+        "none": 0,
+        "total": 1
+      },
+      "blockers": [],
+      "estimate": {
+        "estimated": 0,
+        "resources": 1
+      },
+      "sourceCost": {
+        "covered": 0,
+        "resources": 1,
+        "currencies": []
+      }
+    },
+    {
+      "name": "\\* escaped \\` and \\| in a cell",
+      "noWorkload": false,
+      "resources": 1,
+      "summary": {
+        "direct": 1,
+        "partial": 0,
+        "none": 0,
+        "total": 1
+      },
+      "blockers": [],
+      "estimate": {
+        "estimated": 0,
+        "resources": 1
+      },
+      "sourceCost": {
+        "covered": 0,
+        "resources": 1,
+        "currencies": []
+      }
+    }
+  ],
+  "estimate": {
+    "region": "fr-par",
+    "regionChosen": false,
+    "priceDate": "2026-11-13",
+    "currency": "EUR",
+    "excluded": [
+      "VAT",
+      "discounts"
+    ],
+    "hoursBasis": 730,
+    "total": {
+      "amount": "0.09",
+      "estimated": 1,
+      "resources": 4
+    }
+  },
+  "sourceCost": {
+    "covered": 0,
+    "resources": 4,
+    "currencies": []
+  }
+}

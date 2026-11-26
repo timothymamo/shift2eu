@@ -1,0 +1,70 @@
+# Migration assessment: `Scaleway`
+
+- Inventory file: `html-metacharacters.json`
+- Source: `<script>alert(1)</script>&"'`
+- Catalog: `Scaleway` snapshot from `https://www.scaleway.com/en/pricing/`, retrieved 2026-11-13
+- Region: `fr-par` (the target's default for estimates)
+
+## Summary
+
+| Fit | Resources |
+|---|---|
+| direct | 4 |
+| partial | 0 |
+| none | 0 |
+| total | 4 |
+
+## Resources
+
+| ID | Raw type | Category | Fit | Best offering | Plan | Monthly estimate | Relations | Reasons |
+|---|---|---|---|---|---|---|---|---|
+| `&lt;a href=&quot;https://example.com&quot;&gt;` | `</td><td>` | `storage.object` | direct | `Object Storage` |  | not estimated: size unknown |  | `Object Storage` offers every capability the resource uses |
+| `<iframe srcdoc=&quot;<script>alert(3)</script>&quot;>` | `&#60;script&#62;` | `compute.baremetal` | direct | `Elastic Metal` |  | not estimated: size unknown |  | `Elastic Metal` offers every capability the resource uses |
+| `<script>alert(1)</script>` | `<img src=x onerror=alert(1)>` | `compute.vm` | direct | `Instances` |  | not estimated: size unknown |  | `Instances` offers every capability the resource uses |
+| `a'b"c<d>e&f` | `<!-- comment -->` | `compute.vm` | direct | `Instances` |  | not estimated: size unknown | depends-on `<script>alert(1)</script>` | `Instances` offers every capability the resource uses |
+
+## Required changes
+
+None.
+
+## Blockers
+
+None.
+
+## Workloads
+
+### `" onmouseover="alert(1)`
+
+- Fit: 1 direct, 0 partial, 0 none
+- Monthly estimate: none of 1 resource could be estimated (size unknown), list prices on 2026-11-13, excluding VAT and discounts
+- Source cost: none in the inventory
+- Blockers: none
+
+### `</script><script>alert(2)</script>`
+
+- Fit: 1 direct, 0 partial, 0 none
+- Monthly estimate: none of 1 resource could be estimated (size unknown), list prices on 2026-11-13, excluding VAT and discounts
+- Source cost: none in the inventory
+- Blockers: none
+
+### `<svg onload=alert(1)>`
+
+- Fit: 1 direct, 0 partial, 0 none
+- Monthly estimate: none of 1 resource could be estimated (size unknown), list prices on 2026-11-13, excluding VAT and discounts
+- Source cost: none in the inventory
+- Blockers: none
+
+### No workload
+
+- Fit: 1 direct, 0 partial, 0 none
+- Monthly estimate: none of 1 resource could be estimated (size unknown), list prices on 2026-11-13, excluding VAT and discounts
+- Source cost: `EUR` €1.00
+- Blockers: none
+
+## Cost estimate
+
+- Total: none of 4 resources could be estimated (size unknown)
+- Estimate: list prices on 2026-11-13, excluding VAT and discounts; a fixed fee is the offering's listed fee
+- Prices in `fr-par`
+- Hours: plan price × count × hours / 730, 730 hours for a resource that gives none
+- Source cost: `EUR` €1.00 for 1 of 4 resources

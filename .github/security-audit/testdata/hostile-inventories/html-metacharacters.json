@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 2,
+  "source": "<script>alert(1)</script>&\"'",
+  "resources": [
+    {
+      "id": "<script>alert(1)</script>",
+      "rawType": "<img src=x onerror=alert(1)>",
+      "category": "compute.vm",
+      "region": "<b>&amp;</b>",
+      "workload": "\" onmouseover=\"alert(1)"
+    },
+    {
+      "id": "&lt;a href=&quot;https://example.com&quot;&gt;",
+      "rawType": "</td><td>",
+      "category": "storage.object",
+      "region": "a&b",
+      "workload": "<svg onload=alert(1)>"
+    },
+    {
+      "id": "a'b\"c<d>e&f",
+      "rawType": "<!-- comment -->",
+      "category": "compute.vm",
+      "region": "eu-central-1",
+      "workload": "</script><script>alert(2)</script>",
+      "relations": [{ "type": "depends-on", "target": "<script>alert(1)</script>" }]
+    },
+    {
+      "id": "<iframe srcdoc=&quot;<script>alert(3)</script>&quot;>",
+      "rawType": "&#60;script&#62;",
+      "category": "compute.baremetal",
+      "region": "<style>body{display:none}</style>",
+      "capabilities": ["ipv6"],
+      "monthlyCost": { "amount": 1, "currency": "EUR" }
+    }
+  ]
+}

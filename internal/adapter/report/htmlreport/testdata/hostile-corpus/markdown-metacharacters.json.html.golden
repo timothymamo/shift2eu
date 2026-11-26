@@ -1,0 +1,74 @@
+<section class="shift2eu-report">
+<h2><span>Migration assessment</span> <code>Scaleway</code></h2>
+<ul role="list">
+<li>source <code>aws *not* _italics_ ~~strike~~ #tag</code></li>
+<li><span aria-hidden="true">·</span> <code>markdown-metacharacters.json</code></li>
+<li><span aria-hidden="true">·</span> <a href="https://www.scaleway.com/en/pricing/" target="_blank" rel="noopener noreferrer">catalog retrieved 2026-11-13</a></li>
+<li><span aria-hidden="true">·</span> region <code>fr-par</code></li>
+</ul>
+<section class="part part-summary">
+<h3>Summary</h3>
+<p><span class="fit fit-direct"><span aria-hidden="true">✓</span> direct</span> <strong>4</strong> <span>of 4 resources</span></p>
+<p><span class="fit fit-partial"><span aria-hidden="true">◐</span> partial</span> <strong>0</strong> <span>needs changes</span></p>
+<p><span class="fit fit-none"><span aria-hidden="true">✕</span> none</span> <strong>0</strong> <span>blocked</span></p>
+<p><span>Monthly estimate</span> <strong>€0.09</strong> <span>1 of 4 priced · excl. VAT</span></p>
+</section>
+<section class="part part-resources">
+<h3>Resources</h3>
+<section class="table-scroll" tabindex="0" role="region" aria-label="Resources table">
+<table>
+<thead>
+<tr><th scope="col">ID</th><th scope="col">Raw type</th><th scope="col">Category</th><th scope="col">Fit</th><th scope="col">Best offering</th><th scope="col">Plan</th><th scope="col">Monthly estimate</th><th scope="col">Relations</th><th scope="col">Reasons</th></tr>
+</thead>
+<tbody>
+<tr><td><code>- [x] a task list item</code></td><td><code>&lt;!-- an HTML comment --&gt;</code></td><td><code>storage.block</code></td><td class="fit fit-direct"><span>direct</span></td><td><code>Block Storage</code></td><td></td><td>€0.09</td><td></td><td><code>Block Storage</code> offers every capability the resource uses</td></tr>
+<tr><td><code>[^1] footnote</code></td><td><code>[a]: https://example.com</code></td><td><code>compute.vm</code></td><td class="fit fit-direct"><span>direct</span></td><td><code>Instances</code></td><td></td><td>not estimated</td><td>depends-on <code>| a | b |</code></td><td><code>Instances</code> offers every capability the resource uses</td></tr>
+<tr><td><code>```` a run of backticks ````</code></td><td><code>&gt; a blockquote</code></td><td><code>storage.object</code></td><td class="fit fit-direct"><span>direct</span></td><td><code>Object Storage</code></td><td></td><td>not estimated</td><td></td><td><code>Object Storage</code> offers every capability the resource uses</td></tr>
+<tr><td><code>| a | b |</code></td><td><code>*bold* _italic_ ~~struck~~</code></td><td><code>compute.vm</code></td><td class="fit fit-direct"><span>direct</span></td><td><code>Instances</code></td><td></td><td>not estimated</td><td></td><td><code>Instances</code> offers every capability the resource uses</td></tr>
+</tbody>
+</table>
+</section>
+</section>
+<section>
+<section class="part part-changes">
+<h3>Required changes</h3>
+<p>None.</p>
+</section>
+<section class="part part-blockers">
+<h3>Blockers</h3>
+<p>None.</p>
+</section>
+</section>
+<section class="part part-workloads">
+<h3>Workloads</h3>
+<section>
+<h4><code>$\Huge X$ and @everyone and :x:</code></h4>
+<p><span class="fit fit-direct"><span aria-hidden="true">✓</span> 1<span class="visually-hidden"> direct</span></span> <span class="fit fit-partial"><span aria-hidden="true">◐</span> 0<span class="visually-hidden"> partial</span></span> <span class="fit fit-none"><span aria-hidden="true">✕</span> 0<span class="visually-hidden"> none</span></span></p>
+<p><strong>€0.09</strong> <span>/ month</span></p>
+<p>1 of 1 priced</p>
+</section>
+<section>
+<h4><code>1. an ordered item</code></h4>
+<p><span class="fit fit-direct"><span aria-hidden="true">✓</span> 1<span class="visually-hidden"> direct</span></span> <span class="fit fit-partial"><span aria-hidden="true">◐</span> 0<span class="visually-hidden"> partial</span></span> <span class="fit fit-none"><span aria-hidden="true">✕</span> 0<span class="visually-hidden"> none</span></span></p>
+<p><strong>not estimated</strong></p>
+<p>0 of 1 priced</p>
+</section>
+<section>
+<h4><code>[link](https://example.com/x) ![image](https://example.com/y.png)</code></h4>
+<p><span class="fit fit-direct"><span aria-hidden="true">✓</span> 1<span class="visually-hidden"> direct</span></span> <span class="fit fit-partial"><span aria-hidden="true">◐</span> 0<span class="visually-hidden"> partial</span></span> <span class="fit fit-none"><span aria-hidden="true">✕</span> 0<span class="visually-hidden"> none</span></span></p>
+<p><strong>not estimated</strong></p>
+<p>0 of 1 priced</p>
+</section>
+<section>
+<h4><code>\* escaped \` and \| in a cell</code></h4>
+<p><span class="fit fit-direct"><span aria-hidden="true">✓</span> 1<span class="visually-hidden"> direct</span></span> <span class="fit fit-partial"><span aria-hidden="true">◐</span> 0<span class="visually-hidden"> partial</span></span> <span class="fit fit-none"><span aria-hidden="true">✕</span> 0<span class="visually-hidden"> none</span></span></p>
+<p><strong>not estimated</strong></p>
+<p>0 of 1 priced</p>
+</section>
+</section>
+<section class="part part-cost">
+<h3>Cost estimate</h3>
+<p><strong class="total">€0.09</strong> <span>per month, 1 of 4 resources</span></p>
+<p>List prices in <code>fr-par</code> on 2026-11-13, excluding VAT and discounts.</p>
+</section>
+</section>

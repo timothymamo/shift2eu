@@ -1,0 +1,70 @@
+# Migration assessment: `Scaleway`
+
+- Inventory file: `markdown-metacharacters.json`
+- Source: `aws *not* _italics_ ~~strike~~ #tag`
+- Catalog: `Scaleway` snapshot from `https://www.scaleway.com/en/pricing/`, retrieved 2026-11-13
+- Region: `fr-par` (the target's default for estimates)
+
+## Summary
+
+| Fit | Resources |
+|---|---|
+| direct | 4 |
+| partial | 0 |
+| none | 0 |
+| total | 4 |
+
+## Resources
+
+| ID | Raw type | Category | Fit | Best offering | Plan | Monthly estimate | Relations | Reasons |
+|---|---|---|---|---|---|---|---|---|
+| `- [x] a task list item` | `<!-- an HTML comment -->` | `storage.block` | direct | `Block Storage` |  | €0.09 |  | `Block Storage` offers every capability the resource uses |
+| `[^1] footnote` | `[a]: https://example.com` | `compute.vm` | direct | `Instances` |  | not estimated: size unknown | depends-on `\| a \| b \|` | `Instances` offers every capability the resource uses |
+| ````` ```` a run of backticks ```` ````` | `> a blockquote` | `storage.object` | direct | `Object Storage` |  | not estimated: size unknown |  | `Object Storage` offers every capability the resource uses |
+| `\| a \| b \|` | `*bold* _italic_ ~~struck~~` | `compute.vm` | direct | `Instances` |  | not estimated: size unknown |  | `Instances` offers every capability the resource uses |
+
+## Required changes
+
+None.
+
+## Blockers
+
+None.
+
+## Workloads
+
+### `$\Huge X$ and @everyone and :x:`
+
+- Fit: 1 direct, 0 partial, 0 none
+- Monthly estimate: €0.09 per month for 1 of 1 resource, list prices on 2026-11-13, excluding VAT and discounts
+- Source cost: none in the inventory
+- Blockers: none
+
+### `1. an ordered item`
+
+- Fit: 1 direct, 0 partial, 0 none
+- Monthly estimate: none of 1 resource could be estimated (size unknown), list prices on 2026-11-13, excluding VAT and discounts
+- Source cost: none in the inventory
+- Blockers: none
+
+### `[link](https://example.com/x) ![image](https://example.com/y.png)`
+
+- Fit: 1 direct, 0 partial, 0 none
+- Monthly estimate: none of 1 resource could be estimated (size unknown), list prices on 2026-11-13, excluding VAT and discounts
+- Source cost: none in the inventory
+- Blockers: none
+
+### ``\* escaped \` and \| in a cell``
+
+- Fit: 1 direct, 0 partial, 0 none
+- Monthly estimate: none of 1 resource could be estimated (size unknown), list prices on 2026-11-13, excluding VAT and discounts
+- Source cost: none in the inventory
+- Blockers: none
+
+## Cost estimate
+
+- Total: €0.09 per month for 1 of 4 resources
+- Estimate: list prices on 2026-11-13, excluding VAT and discounts; a fixed fee is the offering's listed fee
+- Prices in `fr-par`
+- Hours: plan price × count × hours / 730, 730 hours for a resource that gives none
+- Source cost: none in the inventory

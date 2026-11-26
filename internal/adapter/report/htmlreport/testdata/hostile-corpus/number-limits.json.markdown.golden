@@ -1,0 +1,61 @@
+# Migration assessment: `Scaleway`
+
+- Inventory file: `number-limits.json`
+- Source: `aws`
+- Catalog: `Scaleway` snapshot from `https://www.scaleway.com/en/pricing/`, retrieved 2026-11-13
+- Region: `fr-par` (the target's default for estimates)
+
+## Summary
+
+| Fit | Resources |
+|---|---|
+| direct | 5 |
+| partial | 0 |
+| none | 0 |
+| total | 5 |
+
+## Resources
+
+| ID | Raw type | Category | Fit | Best offering | Plan | Monthly estimate | Reasons |
+|---|---|---|---|---|---|---|---|
+| `largest-function` | `AWS::Lambda::Function` | `serverless.function` | direct | `Serverless Functions` |  | not estimated: usage-priced | `Serverless Functions` offers every capability the resource uses |
+| `largest-object-store` | `AWS::S3::Bucket` | `storage.object` | direct | `Object Storage` |  | €16,100,000.00 | `Object Storage` offers every capability the resource uses |
+| `largest-size` | `AWS::EC2::Instance` | `compute.vm` | direct | `Instances` | no plan large enough (largest: `POP2-64C-256G`, 64 vCPU, 256 GiB) | not estimated: no plan large enough | `Instances` offers every capability the resource uses |
+| `largest-volume` | `AWS::EC2::Volume` | `storage.block` | direct | `Block Storage` |  | €9,490,000,000,000.00 | `Block Storage` offers every capability the resource uses |
+| `smallest-size` | `AWS::EC2::Instance` | `compute.vm` | direct | `Instances` | `PLAY2-PICO` (1 vCPU, 2 GiB) | €0.00 | `Instances` offers every capability the resource uses |
+
+## Required changes
+
+None.
+
+## Blockers
+
+None.
+
+## Workloads
+
+### `no-storage-price`
+
+- Fit: 1 direct, 0 partial, 0 none
+- Monthly estimate: €16,100,000.00 per month for 1 of 1 resource, list prices on 2026-11-13, excluding VAT and discounts
+- Source cost: `EUR` €99,999,999,999.99
+- Blockers: none
+
+### No workload
+
+- Fit: 4 direct, 0 partial, 0 none
+- Monthly estimate: €9,490,000,000,000.00 per month for 2 of 4 resources, list prices on 2026-11-13, excluding VAT and discounts
+- Source cost: `EUR` €1,000,000,000,000.00 for 1 of 4 resources
+- Source cost: `GBP` £0.00 for 1 of 4 resources
+- Source cost: `USD` $0.00 for 1 of 4 resources
+- Blockers: none
+
+## Cost estimate
+
+- Total: €9,490,016,100,000.00 per month for 3 of 5 resources
+- Estimate: list prices on 2026-11-13, excluding VAT and discounts; a fixed fee is the offering's listed fee
+- Prices in `fr-par`
+- Hours: plan price × count × hours / 730, 730 hours for a resource that gives none
+- Source cost: `EUR` €1,099,999,999,999.99 for 2 of 5 resources
+- Source cost: `GBP` £0.00 for 1 of 5 resources
+- Source cost: `USD` $0.00 for 1 of 5 resources

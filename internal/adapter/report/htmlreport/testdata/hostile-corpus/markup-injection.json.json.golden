@@ -1,0 +1,225 @@
+{
+  "schemaVersion": 3,
+  "kind": "assessment",
+  "inventoryName": "markup-injection.json",
+  "source": "aws",
+  "target": {
+    "name": "Scaleway",
+    "snapshot": {
+      "source": "https://www.scaleway.com/en/pricing/",
+      "retrieved": "2026-11-13"
+    }
+  },
+  "summary": {
+    "direct": 4,
+    "partial": 0,
+    "none": 0,
+    "total": 4
+  },
+  "resources": [
+    {
+      "id": "\u003cscript\u003ealert(1)\u003c/script\u003e",
+      "rawType": "\u003cimg src=x onerror=alert(1)\u003e",
+      "category": "compute.vm",
+      "region": "eu-central-1",
+      "fit": "direct",
+      "bestOffering": "Instances",
+      "ties": [],
+      "reasons": [
+        {
+          "code": "all-capabilities",
+          "text": "Instances offers every capability the resource uses",
+          "offering": "Instances"
+        }
+      ],
+      "requiredChanges": [],
+      "relations": [],
+      "affectedBy": [],
+      "estimate": {
+        "estimated": false,
+        "reason": "no-size"
+      }
+    },
+    {
+      "id": "@everyone #1 :x:",
+      "rawType": "\u0026lt;b\u0026gt;\u0026amp;",
+      "category": "storage.object",
+      "region": "eu-central-1",
+      "fit": "direct",
+      "bestOffering": "Object Storage",
+      "ties": [],
+      "reasons": [
+        {
+          "code": "all-capabilities",
+          "text": "Object Storage offers every capability the resource uses",
+          "offering": "Object Storage"
+        }
+      ],
+      "requiredChanges": [],
+      "relations": [],
+      "affectedBy": [],
+      "estimate": {
+        "estimated": false,
+        "reason": "no-size"
+      }
+    },
+    {
+      "id": "``` fenced ```",
+      "rawType": "\"},{\"injected\":true,\"x\":\"",
+      "category": "compute.vm",
+      "region": "eu-central-1",
+      "fit": "direct",
+      "bestOffering": "Instances",
+      "ties": [],
+      "reasons": [
+        {
+          "code": "all-capabilities",
+          "text": "Instances offers every capability the resource uses",
+          "offering": "Instances"
+        }
+      ],
+      "requiredChanges": [],
+      "relations": [
+        {
+          "type": "depends-on",
+          "target": "\u003cscript\u003ealert(1)\u003c/script\u003e"
+        }
+      ],
+      "affectedBy": [],
+      "estimate": {
+        "estimated": false,
+        "reason": "no-size"
+      }
+    },
+    {
+      "id": "| cell | cell | |---|---|",
+      "rawType": "\u003c!-- comment",
+      "category": "storage.object",
+      "region": "eu-central-1",
+      "fit": "direct",
+      "bestOffering": "Object Storage",
+      "ties": [],
+      "reasons": [
+        {
+          "code": "all-capabilities",
+          "text": "Object Storage offers every capability the resource uses",
+          "offering": "Object Storage"
+        }
+      ],
+      "requiredChanges": [],
+      "relations": [],
+      "affectedBy": [],
+      "estimate": {
+        "estimated": false,
+        "reason": "no-size"
+      }
+    }
+  ],
+  "blockers": [],
+  "workloads": [
+    {
+      "name": "![image](https://example.com/x.png)",
+      "noWorkload": false,
+      "resources": 1,
+      "summary": {
+        "direct": 1,
+        "partial": 0,
+        "none": 0,
+        "total": 1
+      },
+      "blockers": [],
+      "estimate": {
+        "estimated": 0,
+        "resources": 1
+      },
+      "sourceCost": {
+        "covered": 0,
+        "resources": 1,
+        "currencies": []
+      }
+    },
+    {
+      "name": "\u003ca href=\"https://example.com\"\u003elink\u003c/a\u003e",
+      "noWorkload": false,
+      "resources": 1,
+      "summary": {
+        "direct": 1,
+        "partial": 0,
+        "none": 0,
+        "total": 1
+      },
+      "blockers": [],
+      "estimate": {
+        "estimated": 0,
+        "resources": 1
+      },
+      "sourceCost": {
+        "covered": 0,
+        "resources": 1,
+        "currencies": []
+      }
+    },
+    {
+      "name": "[click](javascript:alert(1))",
+      "noWorkload": false,
+      "resources": 1,
+      "summary": {
+        "direct": 1,
+        "partial": 0,
+        "none": 0,
+        "total": 1
+      },
+      "blockers": [],
+      "estimate": {
+        "estimated": 0,
+        "resources": 1
+      },
+      "sourceCost": {
+        "covered": 0,
+        "resources": 1,
+        "currencies": []
+      }
+    },
+    {
+      "name": "",
+      "noWorkload": true,
+      "resources": 1,
+      "summary": {
+        "direct": 1,
+        "partial": 0,
+        "none": 0,
+        "total": 1
+      },
+      "blockers": [],
+      "estimate": {
+        "estimated": 0,
+        "resources": 1
+      },
+      "sourceCost": {
+        "covered": 0,
+        "resources": 1,
+        "currencies": []
+      }
+    }
+  ],
+  "estimate": {
+    "region": "fr-par",
+    "regionChosen": false,
+    "priceDate": "2026-11-13",
+    "currency": "EUR",
+    "excluded": [
+      "VAT",
+      "discounts"
+    ],
+    "hoursBasis": 730,
+    "total": {
+      "estimated": 0,
+      "resources": 4
+    }
+  },
+  "sourceCost": {
+    "covered": 0,
+    "resources": 4,
+    "currencies": []
+  }
+}
