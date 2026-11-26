@@ -2565,7 +2565,10 @@ arguments; git's read-only subcommands), and changes between versions. The deny 
   **The cap of 256 entries (64 until the review of issue #614) was not checked on a real runner.** To
   our understanding actions/runner removes the previous step's file-command files, which leaves about 5
   or 6 entries in the directory; a runner that kept every earlier step's files there could pass the cap
-  in a long job, and the run would then fail closed. Record the entry count from the first real run.
+  in a long job, and the run would then fail closed. Record the entry count from the first real run,
+  and on that run also record the real `PATH` of the model job's steps and its directories' owners and
+  modes (`stat -c '%U %a %n'`), to confirm which of them the runner's user can write (see "The
+  encryption tool is `age`", amended for round 2 of issue #614's review).
   **A detected change fails the step, and since round 3 it is undone.** The runner still applies the
   step's file commands after a failed step, and post steps run anyway: the model job's
   `actions/checkout` post step runs `git` through `PATH`, with the job's token and the network open,
@@ -2591,6 +2594,13 @@ arguments; git's read-only subcommands), and changes between versions. The deny 
   `auditrun` exits; the replacement of `actions/checkout` stays a follow-up for a process that outlives
   the CLI. *Amended 2026-11-26 (review of issue #614):* the follow-up is issue #627, and it also
   covers a model step cancelled or timed out before `auditrun` returns, which gets no repair (above).
+  *Widened 2026-11-26 (review round 2 of issue #614):* issue #627 covers **every step and post step
+  after the model step**, not `actions/checkout`'s post step alone: `actions/upload-artifact` also runs
+  after the session, from `/home/runner/work/_actions/`, which the runner's user owns, with
+  `ACTIONS_RUNTIME_TOKEN`, and the root-only `PATH` of those steps does not cover that code. Options:
+  upload the ciphertext from a separate job, or end the model job with the encrypt step and hand the
+  ciphertext over by a root-owned path, alongside the `git` fetch by absolute path that replaces
+  `actions/checkout`.
   **Open option for the maintainer:** set `cache: false` on those three setup-go steps, held by
   a check in `test/architecture` as `release.yml`'s are, so that no workflow on `main` restores a cache
   a post step could have poisoned.
@@ -2709,16 +2719,37 @@ main) with `sudo install -o root -g root -m 0555 <source> /srv/audit/tools/<tool
 checks their owners and modes with the rest of the layout. The decrypt and the encrypt run
 `/srv/audit/tools/age`, the artifact check `/srv/audit/tools/auditpublish` and the model step
 `/srv/audit/tools/auditrun`. Why: `${RUNNER_TEMP}` and its `bin/` belong to the runner's user, and
-`bin/` was first on `PATH`, so a write past the permission layer during the model session could replace
-the `age` that encrypts the result, or plant a `git` that `actions/checkout`'s post step runs through
-`PATH` holding `ACTIONS_RUNTIME_TOKEN`; the file-command digest and repair cover only the file-command
-directory. An absolute path into `${RUNNER_TEMP}/bin` would only move the trust, and a `chown` of
-`bin/` alone is not enough, because the runner's user owns `_temp` and can rename `bin/` away and put
-its own in its place. The publish job, on its own fresh runner with no model step before its decrypt,
-runs its `age` by the absolute path its install step put in place, `"${RUNNER_TEMP}/bin/age"`, never
-the bare word. `check.AuditWorkflow` holds all of it: the tools' directory and installs, each tool run
-by its `/srv/audit/tools` path in the model job, any other install or run of them refused, any
-`GITHUB_PATH` in the model job refused, and the publish job's absolute decrypt.
+`bin/` was first on `PATH`, so a write during the model session that got past the CLI's permission
+rules could replace the `age` that encrypts the result, or plant a `git` that `actions/checkout`'s post
+step runs through `PATH` holding `ACTIONS_RUNTIME_TOKEN`; the file-command digest and repair cover only
+the file-command directory. The layer meant is **the CLI's permission rules**, not the bubblewrap
+sandbox: under the scrub, bubblewrap binds `/home`, `/tmp` and the other areas the sandbox section
+lists read-write, so the permission rules alone keep Bash's writes to the allowed areas there (see
+"The settings file", its **Sandbox** entry, amended 2026-11-25). An absolute path into
+`${RUNNER_TEMP}/bin` would only move the trust, and a `chown` of `bin/` alone is not enough, because
+the runner's user owns `_temp` and can rename `bin/` away and put its own in its place.
+*Amended 2026-11-26 (review round 2 of issue #614):* what holds is exactly this, no more: the model job
+adds no `PATH` entry; its own tools are root-owned, mode 0555, in `/srv/audit/tools`, installed from
+one pinned source each (`"${RUNNER_TEMP}/downloads/age/age"`, unpacked from the checksummed tarball, and
+the go build outputs `"${RUNNER_TEMP}/auditrun"` and `"${RUNNER_TEMP}/auditpublish"`), and run by that
+path alone; nothing else in the job writes into the directory; and the model job's checkout step and
+every step after the model step (today the encrypt step and the upload of the ciphertext) carry
+`env: PATH: /usr/sbin:/usr/bin:/sbin:/bin`, a `PATH` of root-owned directories only. The model step
+itself keeps the image's `PATH`: the launcher hands the CLI an environment of its own. **Residual:**
+the hosted image's default `PATH` holds directories the runner's user can write (`/home/runner/.local/bin`,
+`/opt/pipx_bin`, `~/.cargo/bin`, `~/.dotnet/tools` and others; to confirm on the first real run), and
+the root-only `PATH` covers only the steps that set it; whether `actions/checkout`'s post step runs
+with its step's `env:` is also to confirm on the first real run. And no `PATH` pin covers what the
+runner's user owns outside it: `/home/runner/work/_actions/`, where the actions' code is unpacked, is
+the runner user's, and the checkout's post step and `actions/upload-artifact` both run that code with
+`ACTIONS_RUNTIME_TOKEN`. Issue #627 is the follow-up for those (below). The publish job, on its own
+fresh runner with no model step before its decrypt, runs its `age` by the absolute path its install
+step put in place, `"${RUNNER_TEMP}/bin/age"`, never the bare word. `check.AuditWorkflow` holds all of
+it: the tools' directory and installs and their sources, each tool run by its `/srv/audit/tools` path
+in the model job (read word by word through the shell's `;`, `&`, `|`, `(`, `)`, `<`, `>`, backticks,
+quotes and `=`), any other install, write or run of them refused, any `GITHUB_PATH` in the model job
+refused, the root-only `PATH` on the checkout step and the steps after the model step, and the publish
+job's absolute decrypt.
 
 **The artifact hand-off.** Each downloading job first runs `auditpublish artifacts -job model|publish`,
 which fails closed on an extra, a duplicate, a missing or an expired artifact, and writes the artifact
