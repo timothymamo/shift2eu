@@ -1,0 +1,44 @@
+<section class="shift2eu-report">
+<h2><span>Migration assessment</span> <code>Scaleway</code></h2>
+<ul role="list">
+<li>source <code>aws</code></li>
+<li><span aria-hidden="true">·</span> <code>`inventory.json</code></li>
+<li><span aria-hidden="true">·</span> <a href="https://www.scaleway.com/en/pricing/" target="_blank" rel="noopener noreferrer">catalog retrieved 2026-11-13</a></li>
+<li><span aria-hidden="true">·</span> region <code>fr-par</code></li>
+</ul>
+<section class="part part-summary">
+<h3>Summary</h3>
+<p><span class="fit fit-direct"><span aria-hidden="true">✓</span> direct</span> <strong>1</strong> <span>of 1 resource</span></p>
+<p><span class="fit fit-partial"><span aria-hidden="true">◐</span> partial</span> <strong>0</strong> <span>needs changes</span></p>
+<p><span class="fit fit-none"><span aria-hidden="true">✕</span> none</span> <strong>0</strong> <span>blocked</span></p>
+<p><span>Monthly estimate</span> <strong>€49.70</strong> <span>1 of 1 priced · excl. VAT</span></p>
+</section>
+<section class="part part-resources">
+<h3>Resources</h3>
+<section class="table-scroll" tabindex="0" role="region" aria-label="Resources table">
+<table>
+<thead>
+<tr><th scope="col">ID</th><th scope="col">Raw type</th><th scope="col">Category</th><th scope="col">Fit</th><th scope="col">Best offering</th><th scope="col">Plan</th><th scope="col">Monthly estimate</th><th scope="col">Reasons</th></tr>
+</thead>
+<tbody>
+<tr><td><code>i-0123456789abcdef0</code></td><td><code>AWS::EC2::Instance</code></td><td><code>compute.vm</code></td><td class="fit fit-direct"><span>direct</span></td><td><code>Instances</code></td><td><code>PLAY2-MICRO</code></td><td>€49.70</td><td><code>Instances</code> offers every capability the resource uses</td></tr>
+</tbody>
+</table>
+</section>
+</section>
+<section>
+<section class="part part-changes">
+<h3>Required changes</h3>
+<p>None.</p>
+</section>
+<section class="part part-blockers">
+<h3>Blockers</h3>
+<p>None.</p>
+</section>
+</section>
+<section class="part part-cost">
+<h3>Cost estimate</h3>
+<p><strong class="total">€49.70</strong> <span>per month, 1 of 1 resource</span></p>
+<p>List prices in <code>fr-par</code> on 2026-11-13, excluding VAT and discounts.</p>
+</section>
+</section>

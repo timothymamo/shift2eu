@@ -32,11 +32,13 @@ as Markdown, as the version 3 JSON document and as the site's HTML fragment, and
 goldens under `internal/adapter/report/htmlreport/testdata/hostile-corpus/` (update them with `-update`).
 `FuzzInventoryDecoding`, in the same package, seeds its corpus from these files and the inventory-file
 adapter's version 1 and version 2 fixtures, and holds the same path for arbitrary bytes: no panic, a
-refusal that is controlled, and an accepted inventory that assesses and renders without an error. The
-inventory file's name is user-controlled too, so it fuzzes that as well (issue #671): a name a run
-accepts is escaped by each report, and a name it refuses is refused with the report metadata's sentinel
-before anything is written. `TestHostileInventoryNames`, in the same package, pins both halves, the
-accepted one against the goldens under
+refusal that is controlled, and an accepted inventory that assesses and renders without an error, as
+the single-target reports and as the comparison report of all three embedded targets. The inventory
+file's name is user-controlled too, so it fuzzes that as well (issue #671): a name a run accepts is
+escaped by each report and by each comparison report, its Markdown code span, its HTML code element and
+its JSON `inventoryName` field parsed back to the name, and a name it refuses is refused with the
+report metadata's sentinel before anything is written or read. `TestHostileInventoryNames`, in the same
+package, pins both halves, the accepted one against the goldens under
 `internal/adapter/report/htmlreport/testdata/hostile-inventory-names/`.
 
 Two kinds of hostility are refused wherever they appear, so no file can carry them and load: any

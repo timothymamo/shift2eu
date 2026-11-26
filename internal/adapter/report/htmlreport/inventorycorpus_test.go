@@ -26,6 +26,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"html"
 	"os"
 	"path/filepath"
 	"slices"
@@ -258,9 +259,11 @@ type inventoryNameCase struct {
 // called, so it never reaches a renderer, an assessment or a file: the line
 // breaks, control, format and separator characters, and the lengths text.Validate
 // refuses, and the paths, separators, "." and ".." the base-name rule refuses.
-// The Markdown reporter's and the HTML reporter's escaping of what does reach
-// them is pinned by the goldens above and by FuzzInventoryDecoding, which fuzzes
-// the name too.
+// The last two have no case here: internal/app/analysis/analysis_test.go's
+// TestRunReportMeta covers them (the "current directory" and "parent
+// directory" cases). The Markdown reporter's and the HTML reporter's escaping
+// of what does reach them is pinned by the goldens above and by
+// FuzzInventoryDecoding, which fuzzes the name too.
 var hostileInventoryNames = []inventoryNameCase{
 	{
 		slug: "markdown-metacharacters",
@@ -301,9 +304,36 @@ var hostileInventoryNames = []inventoryNameCase{
 		wantErr: analysis.ErrInvalidReportMeta,
 	},
 	{
+		slug: "backticks-both-ends",
+		name: "`inventory.json`",
+		why:  "a name fenced the way CommonMark would read it without padding: it starts and ends with a backtick, so the reporter pads the code span with a space on each side",
+	},
+	{
+		slug: "leading-backtick",
+		name: "`inventory.json",
+		why:  "a name that starts with a backtick and ends with none, so the reporter pads only the side the fence would otherwise merge with",
+	},
+	{
+		slug: "backtick-run",
+		name: "inventory```name.json",
+		why:  "a run of three backticks inside a name, so the reporter fences the code span with four",
+	},
+	{
 		slug:    "too-long",
 		name:    strings.Repeat("a", text.MaxLen) + ".json",
 		why:     "a name longer than text.MaxLen, refused by text.Validate",
+		wantErr: analysis.ErrInvalidReportMeta,
+	},
+	{
+		slug:    "surrounding-spaces",
+		name:    " inventory.json ",
+		why:     "a name with a space at both ends, refused by text.Validate (leading or trailing white space), so the reporter's space padding is reached by a backtick alone",
+		wantErr: analysis.ErrInvalidReportMeta,
+	},
+	{
+		slug:    "line-separator",
+		name:    "inv\u2028entory.json",
+		why:     "a line separator (U+2028), a separator character text.Validate refuses",
 		wantErr: analysis.ErrInvalidReportMeta,
 	},
 	{
@@ -414,7 +444,7 @@ func TestHostileCorpusReports(t *testing.T) {
 				t.Run(format.name, func(t *testing.T) {
 					t.Parallel()
 
-					got, err := renderedReport(t, tc.file, inv, scaleway.New(), format.newReporter())
+					got, _, err := renderedReport(t, tc.file, inv, scaleway.New(), format.newReporter())
 					if err != nil {
 						t.Fatalf("%s report of an inventory that loads returned unexpected error: %v", format.name, err)
 					}
@@ -422,6 +452,8 @@ func TestHostileCorpusReports(t *testing.T) {
 					checkReport(t, format.name, got)
 
 					testutil.Golden(t, filepath.Join("testdata", "hostile-corpus", tc.file+"."+format.name+".golden"), got)
+
+					checkInventoryUnchanged(t, data, inv)
 				})
 			}
 		})
@@ -430,14 +462,18 @@ func TestHostileCorpusReports(t *testing.T) {
 
 // TestHostileInventoryNames pins what the three reports do with the inventory
 // file's base name, which is user-controlled too: every name a run accepts is
-// rendered by all three reporters, against the Scaleway target with estimates
-// on, and held to its golden under testdata/hostile-inventory-names/ (run the
-// test with -update to accept a change); every name a run refuses is refused
-// with the report metadata's sentinel before anything is written.
+// rendered by all three reporters, and by the comparison report of all three
+// embedded targets, against the Scaleway target with estimates on, and held to
+// its golden under testdata/hostile-inventory-names/ (run the test with -update
+// to accept a change); every name a run refuses is refused with the report
+// metadata's sentinel before anything is written or read.
 //
 // The goldens are where the escaping of a name shows: Markdown and HTML must
 // escape it where they write it as a value, and the JSON document must encode
-// it, so no name a caller can give a run reaches a report as markup.
+// it, so no name a caller can give a run reaches a report as markup. The name
+// line, the code element and the inventoryName field are parsed back, not only
+// matched by the golden, so a golden updated over an escaped-once-too-often
+// name fails here too.
 func TestHostileInventoryNames(t *testing.T) {
 	t.Parallel()
 
@@ -454,9 +490,9 @@ func TestHostileInventoryNames(t *testing.T) {
 				t.Run(format.name, func(t *testing.T) {
 					t.Parallel()
 
-					got, err := renderedReport(t, tc.name, inv, scaleway.New(), format.newReporter())
+					got, calls, err := renderedReport(t, tc.name, inv, scaleway.New(), format.newReporter())
 					if tc.wantErr != nil {
-						checkRefusedName(t, tc.name, got, err)
+						checkRefusedName(t, tc.name, got, calls, err)
 
 						return
 					}
@@ -467,12 +503,32 @@ func TestHostileInventoryNames(t *testing.T) {
 					}
 
 					checkReport(t, format.name, got)
-
-					if format.name == "markdown" {
-						checkNameLine(t, tc.name, got)
-					}
+					checkName(t, format.name, tc.name, got)
 
 					testutil.Golden(t, filepath.Join("testdata", "hostile-inventory-names", tc.slug+"."+format.name+".golden"), got)
+				})
+			}
+
+			for _, format := range comparisonFormats() {
+				t.Run("comparison/"+format.name, func(t *testing.T) {
+					t.Parallel()
+
+					got, calls, err := renderedComparison(t, tc.name, inv, embeddedAnalysisTargets(), format.newReporter())
+					if tc.wantErr != nil {
+						checkRefusedName(t, tc.name, got, calls, err)
+
+						return
+					}
+
+					if err != nil {
+						t.Fatalf("%s comparison report of the inventory name %q returned unexpected error: %v (%s)",
+							format.name, tc.name, err, tc.why)
+					}
+
+					checkReport(t, format.name, got)
+					checkName(t, format.name, tc.name, got)
+
+					testutil.Golden(t, filepath.Join("testdata", "hostile-inventory-names", tc.slug+".comparison."+format.name+".golden"), got)
 				})
 			}
 		})
@@ -515,10 +571,12 @@ func FuzzInventoryDecoding(f *testing.F) {
 
 	f.Fuzz(func(t *testing.T, data []byte, name string) {
 		// The inventory is decoded once and the one inventory rendered nine times,
-		// once per target and format, as the CLI's nine runs would have decoded it
-		// once each: the decoder's output is the same on every call (the
-		// inventory-file adapter's contract), and assess and render, the other two
-		// stages of every run, run here as often as the CLI runs them.
+		// once per target and format, then three times more, once per comparison
+		// format, as the CLI's nine runs would have decoded it once each: the
+		// decoder's output is the same on every call (the inventory-file adapter's
+		// contract), and assess and render, the other two stages of every run, run
+		// here as often as the CLI runs them. At the end the document is decoded
+		// again, so no render may have changed the inventory they were given.
 		inv, err := inventoryfile.FromBytes(data).Inventory(t.Context())
 		if err != nil {
 			checkControlledRefusal(t, err)
@@ -528,20 +586,32 @@ func FuzzInventoryDecoding(f *testing.F) {
 
 		for _, target := range embeddedTargets() {
 			for _, format := range reportFormats() {
-				got, err := renderedReport(t, name, inv, target.source, format.newReporter())
+				got, calls, err := renderedReport(t, name, inv, target.source, format.newReporter())
 				if err != nil {
-					checkRefusedName(t, name, got, err)
+					checkRefusedName(t, name, got, calls, err)
+					checkComparisonRefusals(t, name, inv)
 
 					return
 				}
 
 				checkReport(t, format.name, got)
-
-				if format.name == "markdown" {
-					checkNameLine(t, name, got)
-				}
+				checkName(t, format.name, name, got)
 			}
 		}
+
+		for _, format := range comparisonFormats() {
+			got, calls, err := renderedComparison(t, name, inv, embeddedAnalysisTargets(), format.newReporter())
+			if err != nil {
+				checkRefusedName(t, name, got, calls, err)
+
+				return
+			}
+
+			checkReport(t, format.name, got)
+			checkName(t, format.name, name, got)
+		}
+
+		checkInventoryUnchanged(t, data, inv)
 	})
 }
 
@@ -580,49 +650,148 @@ func reportFormats() []reportFormat {
 	}
 }
 
+// comparisonFormat is one of the three reporters' comparison renderings, with
+// the name its golden files take. The CLI wires the Markdown and JSON ones for
+// --target all, and the site's module wires the HTML one beside them; all three
+// show the inventory file's name.
+type comparisonFormat struct {
+	name        string
+	newReporter func() analysis.ComparisonReporter
+}
+
+// comparisonFormats returns the comparison renderings of the three reports the
+// package's reportFormats names, over the same three embedded targets.
+func comparisonFormats() []comparisonFormat {
+	return []comparisonFormat{
+		{name: "markdown", newReporter: func() analysis.ComparisonReporter { return markdown.New() }},
+		{name: "json", newReporter: func() analysis.ComparisonReporter { return jsonreport.New(analysis.DefaultSchemaVersion) }},
+		{name: "html", newReporter: func() analysis.ComparisonReporter { return htmlreport.New() }},
+	}
+}
+
+// embeddedAnalysisTargets returns the three embedded catalog targets as the
+// comparison use case takes them, keyed as cmd/shift2eu keys them.
+func embeddedAnalysisTargets() []analysis.Target {
+	targets := make([]analysis.Target, 0, len(embeddedTargets()))
+
+	for _, target := range embeddedTargets() {
+		targets = append(targets, analysis.Target{Key: target.key, Catalog: target.source})
+	}
+
+	return targets
+}
+
 // decodedInventory is an analysis.InventorySource over an inventory already
 // decoded, so the decoder runs once for a document assessed and rendered many
 // times over. The CLI's run reads it through inventoryfile, which decodes on
 // every call; the adapter's contract fixes that the same document decodes to the
 // same inventory, so the nine runs of one fuzz input share the one decode the
-// CLI would have made for each of them.
-type decodedInventory struct{ inv inventory.Inventory }
+// CLI would have made for each of them. calls counts the port's calls, so a name
+// a run refuses can be held to calling it not at all.
+type decodedInventory struct {
+	inv   inventory.Inventory
+	calls int
+}
 
 // Inventory returns the decoded inventory: it is the decoder's own result, and
-// a document the decoder refused never reaches a run.
-func (d decodedInventory) Inventory(context.Context) (inventory.Inventory, error) {
+// a document the decoder refused never reaches a run. It counts the call.
+func (d *decodedInventory) Inventory(context.Context) (inventory.Inventory, error) {
+	d.calls++
+
 	return d.inv, nil
 }
 
 // renderedReport runs the whole assess path of one target on inv, the inventory
 // of a document the decoder accepted, and returns what rep wrote with name as the
-// report's inventory name: the inventory source is the decoded inventory
-// (decodedInventory), the catalog is the target's embedded snapshot, and
-// estimates are on, as they are by default. The bytes are what rep wrote before
-// an error, if it returned one; the error is whatever RunWith returned.
-func renderedReport(tb testing.TB, name string, inv inventory.Inventory, cat analysis.CatalogSource, rep analysis.Reporter) ([]byte, error) {
+// report's inventory name, and how often the run called its inventory source:
+// the inventory source is the decoded inventory (decodedInventory), the catalog
+// is the target's embedded snapshot, and estimates are on, as they are by
+// default. The bytes are what rep wrote before an error, if it returned one; the
+// error is whatever RunWith returned.
+func renderedReport(tb testing.TB, name string, inv inventory.Inventory, cat analysis.CatalogSource, rep analysis.Reporter) ([]byte, int, error) {
 	tb.Helper()
 
-	a, err := analysis.New(decodedInventory{inv: inv}, cat, rep)
+	source := &decodedInventory{inv: inv}
+
+	a, err := analysis.New(source, cat, rep)
 	if err != nil {
 		tb.Fatalf("analysis.New() with the inventory name %q returned unexpected error: %v", name, err)
 	}
 
 	var out bytes.Buffer
-	if err := a.RunWith(tb.Context(), &out, analysis.ReportMeta{InventoryName: name}, analysis.Options{Estimate: true}); err != nil {
-		return out.Bytes(), err
+
+	err = a.RunWith(tb.Context(), &out, analysis.ReportMeta{InventoryName: name}, analysis.Options{Estimate: true})
+
+	return out.Bytes(), source.calls, err
+}
+
+// renderedComparison runs the whole comparison path of the three embedded
+// targets on inv and returns what rep wrote with name as the comparison's
+// inventory name, and how often the run called its inventory source: the
+// inventory source is the decoded inventory (decodedInventory), the catalogs are
+// the targets' embedded snapshots, and estimates are on, as they are by default.
+// The bytes are what rep wrote before an error, if it returned one; the error is
+// whatever RunWith returned.
+func renderedComparison(tb testing.TB, name string, inv inventory.Inventory, targets []analysis.Target, rep analysis.ComparisonReporter) ([]byte, int, error) {
+	tb.Helper()
+
+	source := &decodedInventory{inv: inv}
+
+	c, err := analysis.NewComparison(source, targets, rep)
+	if err != nil {
+		tb.Fatalf("analysis.NewComparison() with the inventory name %q returned unexpected error: %v", name, err)
 	}
 
-	return out.Bytes(), nil
+	var out bytes.Buffer
+
+	err = c.RunWith(tb.Context(), &out, analysis.ReportMeta{InventoryName: name}, analysis.ComparisonOptions{Estimate: true})
+
+	return out.Bytes(), source.calls, err
+}
+
+// checkComparisonRefusals fails unless every comparison format refuses the
+// inventory name a single-target run just refused, and calls no inventory
+// source to do it.
+func checkComparisonRefusals(t *testing.T, name string, inv inventory.Inventory) {
+	t.Helper()
+
+	for _, format := range comparisonFormats() {
+		got, calls, err := renderedComparison(t, name, inv, embeddedAnalysisTargets(), format.newReporter())
+		checkRefusedName(t, name, got, calls, err)
+	}
+}
+
+// checkInventoryUnchanged fails when rendering changed the inventory a run was
+// given: the document is decoded again and both of the inventory's observable
+// parts, its source and its resources, must still be what the first decode
+// returned. The inventory is opaque outside its domain package, so the two
+// accessors are what a render could change visibly; the adapter's own contract
+// tests compare them the same way.
+func checkInventoryUnchanged(t *testing.T, data []byte, inv inventory.Inventory) {
+	t.Helper()
+
+	again, err := inventoryfile.FromBytes(data).Inventory(t.Context())
+	if err != nil {
+		t.Fatalf("Inventory() refused a document it accepted before rendering: %v", err)
+	}
+
+	if diff := cmp.Diff(inv.Source(), again.Source()); diff != "" {
+		t.Fatalf("rendering changed the inventory's source (-before +after):\n%s", diff)
+	}
+
+	if diff := cmp.Diff(inv.Resources(), again.Resources()); diff != "" {
+		t.Fatalf("rendering changed the inventory's resources (-before +after):\n%s", diff)
+	}
 }
 
 // checkRefusedName fails unless err is a run's refusal of the inventory name
-// name, and the run wrote nothing: a name that is not valid free text, is a path
-// rather than a base name or is longer than text.MaxLen is refused by the report
-// metadata's check before any port is called, in one line, so no reporter,
-// assessment or file ever sees it. Any other error, or a refusal that leaves part
-// of a report behind, is the failure.
-func checkRefusedName(t *testing.T, name string, got []byte, err error) {
+// name, the run wrote nothing, and it called its inventory source not at all: a
+// name that is not valid free text, is a path rather than a base name or is
+// longer than text.MaxLen is refused by the report metadata's check before any
+// port is called, in one line, so no reporter, assessment or file ever sees it.
+// Any other error, a refusal that leaves part of a report behind, or a run that
+// read the inventory anyway, is the failure.
+func checkRefusedName(t *testing.T, name string, got []byte, calls int, err error) {
 	t.Helper()
 
 	if !errors.Is(err, analysis.ErrInvalidReportMeta) {
@@ -634,18 +803,48 @@ func checkRefusedName(t *testing.T, name string, got []byte, err error) {
 		t.Fatalf("the refusal of the inventory name %q is more than one line: %q", name, msg)
 	}
 
+	if calls != 0 {
+		t.Fatalf("a run refused the inventory name %q after calling the inventory source %d times, want none: the name is checked before any port is called",
+			name, calls)
+	}
+
 	if len(got) != 0 {
 		t.Fatalf("a run refused the inventory name %q and wrote %d bytes of report anyway:\n%s", name, len(got), got)
 	}
 }
 
-// checkNameLine fails unless a Markdown report shows name, a name the run
-// accepted, as a code span on its inventory line: the third line of the report,
-// after the title and the blank line under it, which is where the reporter writes
-// the name and the only place it writes it. The code span is the reporter's
-// escaping of a value; a name that is valid free text cannot end the line or the
-// span, since text.Validate refuses the line breaks and separators a renderer
-// reads as one. An empty name has no line at all, so it is not checked.
+// checkName fails unless a report of format shows name, a name the run
+// accepted, as the value it is: Markdown in a code span on its inventory line,
+// JSON in the document's "inventoryName" field and HTML in a code element of
+// its header line. Each is parsed back to the name it shows, not only matched
+// by the golden, so a golden updated over a name escaped once too often fails
+// here too.
+func checkName(t *testing.T, format, name string, got []byte) {
+	t.Helper()
+
+	switch format {
+	case "markdown":
+		checkNameLine(t, name, got)
+	case "json":
+		checkNameJSON(t, name, got)
+	case "html":
+		checkNameHTML(t, name, got)
+	default:
+		t.Fatalf("no name check for the report format %q", format)
+	}
+}
+
+// checkNameLine fails unless the Markdown report shows name, a name the run
+// accepted, as a CommonMark code span on its inventory line: the third line of
+// the report, after the title and the blank line under it, which is where the
+// reporter writes the name and the only place it writes it. The span is parsed
+// as CommonMark reads one: a fence of n backticks, content, and a closing run of
+// exactly n backticks that ends the line, n being one more than the longest run
+// of backticks in the name (markdown/codeSpan, which the package cannot import);
+// one padding space is stripped from each side of the content when it has one on
+// both and is not all spaces. What is left must be the name exactly, so no
+// escaping that changes a character and no missing or doubled padding passes.
+// An empty name has no line at all, so it is not checked.
 func checkNameLine(t *testing.T, name string, got []byte) {
 	t.Helper()
 
@@ -653,7 +852,7 @@ func checkNameLine(t *testing.T, name string, got []byte) {
 		return
 	}
 
-	const prefix = "- Inventory file: `"
+	const prefix = "- Inventory file: "
 
 	lines := strings.Split(string(got), "\n")
 	if len(lines) < 3 {
@@ -661,9 +860,159 @@ func checkNameLine(t *testing.T, name string, got []byte) {
 			name, len(lines), got)
 	}
 
-	if line := lines[2]; !strings.HasPrefix(line, prefix) || !strings.HasSuffix(line, "`") || len(line) <= len(prefix) {
-		t.Fatalf("line 3 of the Markdown report of the inventory name %q is %q, want the name shown in a code span on the inventory line:\n%s",
-			name, line, got)
+	line := lines[2]
+	if !strings.HasPrefix(line, prefix) {
+		t.Fatalf("line 3 of the Markdown report of the inventory name %q is %q, want it to start with %q:\n%s",
+			name, line, prefix, got)
+	}
+
+	span := line[len(prefix):]
+
+	opening := 0
+	for opening < len(span) && span[opening] == '`' {
+		opening++
+	}
+
+	if opening == 0 {
+		t.Fatalf("line 3 of the Markdown report of the inventory name %q holds %q, want the name in a code span:\n%s",
+			name, span, got)
+	}
+
+	closing := 0
+	for closing < len(span) && span[len(span)-1-closing] == '`' {
+		closing++
+	}
+
+	if closing != opening || len(span) < 2*opening {
+		t.Fatalf("line 3 of the Markdown report of the inventory name %q fences the value with %d backticks and closes it with a run of %d, want a closing run of exactly %d ending the line:\n%s",
+			name, opening, closing, opening, got)
+	}
+
+	content := span[opening : len(span)-opening]
+	if len(content) > 2 && strings.HasPrefix(content, " ") && strings.HasSuffix(content, " ") &&
+		strings.Trim(content, " ") != "" {
+		content = content[1 : len(content)-1]
+	}
+
+	if want := longestBacktickRun(name) + 1; opening != want {
+		t.Fatalf("line 3 of the Markdown report of the inventory name %q fences the name with %d backticks, want %d, one more than the longest run of backticks in the name:\n%s",
+			name, opening, want, got)
+	}
+
+	if content != name {
+		t.Fatalf("line 3 of the Markdown report of the inventory name %q shows %q in its code span, want the name exactly:\n%s",
+			name, content, got)
+	}
+}
+
+// longestBacktickRun returns the length of the longest run of backticks in s,
+// which is what CommonMark's fence for a code span has to be one longer than.
+func longestBacktickRun(s string) int {
+	longest, run := 0, 0
+
+	for i := range len(s) {
+		if s[i] != '`' {
+			run = 0
+
+			continue
+		}
+
+		run++
+		longest = max(longest, run)
+	}
+
+	return longest
+}
+
+// checkNameJSON fails unless the JSON document's "inventoryName" field is name,
+// a name the run accepted: the field every single-target and comparison
+// document writes, decoded as a JSON string, so the name reaches the document
+// as its value and not as markup or an escaped variant of itself. An empty name
+// is the document's empty field, which has no name to check.
+func checkNameJSON(t *testing.T, name string, got []byte) {
+	t.Helper()
+
+	if name == "" {
+		return
+	}
+
+	var doc struct {
+		InventoryName string `json:"inventoryName"`
+	}
+
+	if err := json.Unmarshal(got, &doc); err != nil {
+		t.Fatalf("the JSON report of the inventory name %q is not one JSON document: %v:\n%s", name, err, got)
+	}
+
+	if doc.InventoryName != name {
+		t.Fatalf("the JSON report of the inventory name %q shows the inventoryName %q, want the name exactly:\n%s",
+			name, doc.InventoryName, got)
+	}
+}
+
+// checkNameHTML fails unless a code element of the HTML fragment's header line
+// holds name, a name the run accepted, read as a browser reads it: the header
+// line is the fragment's first list element carrying role="list", and
+// html.UnescapeString turns its code elements' character references back into
+// the text a reader sees, so a name escaped once too often or not at all is not
+// the name it shows. An empty name has no element at all, so it is not checked.
+func checkNameHTML(t *testing.T, name string, got []byte) {
+	t.Helper()
+
+	if name == "" {
+		return
+	}
+
+	shown := headerCodeContents(string(got))
+
+	for _, content := range shown {
+		if content == name {
+			return
+		}
+	}
+
+	t.Fatalf("the HTML report of the inventory name %q shows the header code elements %q, want one holding the name exactly:\n%s",
+		name, shown, got)
+}
+
+// headerCodeContents returns the content of every code element of a fragment's
+// header line, its first list element carrying role="list", with the character
+// references decoded as a browser decodes them.
+func headerCodeContents(fragment string) []string {
+	const open = `<ul role="list">`
+
+	start := strings.Index(fragment, open)
+	if start < 0 {
+		return nil
+	}
+
+	start += len(open)
+
+	end := strings.Index(fragment[start:], "</ul>")
+	if end < 0 {
+		return nil
+	}
+
+	items := fragment[start : start+end]
+
+	var contents []string
+
+	for {
+		i := strings.Index(items, "<code>")
+		if i < 0 {
+			return contents
+		}
+
+		rest := items[i+len("<code>"):]
+
+		j := strings.Index(rest, "</code>")
+		if j < 0 {
+			return contents
+		}
+
+		contents = append(contents, html.UnescapeString(rest[:j]))
+
+		items = rest[j+len("</code>"):]
 	}
 }
 
