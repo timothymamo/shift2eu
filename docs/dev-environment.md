@@ -2661,7 +2661,7 @@ in its credits once it is no longer the App's to update (any credit makes the Ap
 credited advisory is unmatchable, so a run that reproduces its finding files a new draft. A reworded
 summary no longer matches, so the next run creates a new draft. Text of yours in a draft's description
 that the token scan hits (a pasted example token, say) makes every later run that marks it not reproduced
-fail with `publish refused: see runbook` (exit 4) until you remove it. A draft marked not reproduced keeps
+fail with `publish refused: an advisory: see runbook` (exit 4) until you remove it. A draft marked not reproduced keeps
 its `Run:` line, which names the run that last reproduced the finding: that is intended.
 
 ```bash
@@ -2968,8 +2968,14 @@ line, just above, is one of the items below.
 The publish job's summary line names the class of a failure and the check that failed, in fixed words,
 never a value or its detail: `<class line>: <check>: see runbook` (ADR 0040, "Exit codes and the summary
 line"; issue #640). The class decides what to do, below; the check, listed after the classes, says where
-to look. A line with no check between the class and `see runbook` is a refusal no check names: read the
-class's item. What to do for each class, before the new run:
+to look. A line with no check between the class and `see runbook` (e.g. `configuration invalid: see
+runbook`) is a refusal no check names, an internal invariant of the program (an advisory write that is
+neither a creation nor an update, a previous report's read error outside the three it names): read the
+class's item, start the new run, and report it if it repeats, since the program needs a fix. A refusal
+line may say that a private finding exists (the private-state checks, `a private finding could not be
+filed as a draft`, `publish refused: an advisory`), never how many there are or what kind: the same
+disclosure a published run's `private findings: handled privately` makes (ADR 0040). What to do for each
+class, before the new run:
 
 - `artifacts: unexpected: see runbook step 11` (the artifact check of the model or the publish job):
   exit 3 of the artifact check, not the core's outcome 3 (`result refused`, below). The check refuses
@@ -3045,9 +3051,12 @@ class's item. What to do for each class, before the new run:
   request.
 
 The checks, by class line and exit code, each with its fix (`ci/auditpublish/internal/publish/check.go`
-holds the list; no other words can appear). Runs 45802249904 and 45808432244 were `configuration invalid:
-the reports directory not absolute and clean`: the workflow passed `-reports docs/security/audits`, a
-relative path, which the program refuses on every run; it now passes
+holds the list; no other words can appear). Runs 45802249904 and 45808432244 printed `configuration
+invalid: see runbook`, before the line named a check, so their logs do not name it; the workflow and the
+program do. The publish step passed `-reports docs/security/audits`, a relative path, the only relative
+one of its flags, and `LoadPrevious` refuses a reports directory that is not absolute and clean on every
+run that gets as far as loading the result. Under today's line that refusal reads `configuration
+invalid: the reports directory not absolute and clean: see runbook`. The step now passes
 `"${GITHUB_WORKSPACE}/docs/security/audits"` (issue #640).
 
 `configuration invalid` (exit 9):
@@ -3077,14 +3086,12 @@ relative path, which the program refuses on every run; it now passes
 
 - `the result does not match the schema`: the model's result; start the new run, and read the model job's preflight line if it repeats.
 - `the result not one regular file under the cap`: the decrypt step's output; start the new run.
-- `the private state none of the three` / `the private state none, but a finding is private` / `the private state set, but no finding is private`: the program's placement of the result's findings; it needs a fix if it repeats.
-- `an advisory for a finding that is not private` / `an advisory fingerprint that is no fingerprint` / `an advisory status not new, open or regressed` / `an advisory status none of the four`: as the private state.
-- `an advisory description without a status line`: an audit draft's status line was edited away; restore `Audit status: <status>` as its last such line.
-- `two findings with one fingerprint`: the model reported one private finding twice; start the new run.
+- `the private state none of the three` / `the private state none, but a finding is private` / `the private state set, but no finding is private`: an internal invariant of the program's placement of the result's findings, which a result that matches the schema should never trip; start the new run, and report it if it appears, since the program needs a fix.
+- `a private finding could not be filed as a draft`: the one phrase of six checks, so the public log never says which one or how many private findings there are. Its causes: two private findings of the result with one fingerprint (start the new run: the model writes the result afresh); and five internal invariants a valid result should never trip, report any of them: the draft rendered for a finding that is not private, with a fingerprint that is none or a status not new, open or regressed (`RenderAdvisory`), and the not-reproduced status set on an existing draft with a status none of the four or a description without a status line (`SetAdvisoryStatus`, called only after the draft's status line was read and with the constant not-reproduced status, so it cannot fire as the program stands).
 - `the release tag not vX.Y.Z` / `no release of the tag` / `no latest release` / `the tag not the latest release's`: the release the result names; see the item above on a release published while the run was under way.
 - `the image digest not sha256: and 64 lowercase hex` / `no attestation of the digest` / `no provenance attestation names the digest`: the image check; confirm the release's attestation (`gh attestation verify`), then start the new run.
 
-`publish refused` (exit 4): `the report`, `an issue`, `an advisory`: the text the scan refused, as the item above; `the report's model fields`: a 40-hex run in a model field that is no commit of the repository, cause (1).
+`publish refused` (exit 4): `the report`, `an issue`, `an advisory`: the text the scan refused, or the text whose gitleaks run did not start, timed out or did not finish, causes (1) to (3) of the item above; `the report's model fields`: a 40-hex run in a model field that is no commit of the repository, cause (1).
 
 `previous report unreadable` (exit 7):
 

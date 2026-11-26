@@ -890,9 +890,18 @@ outcome names below are the core's internal kinds:
 `<check>` is the fixed phrase of the check that refused the run (issue #640, below); a refusal no check
 names prints the class's words and `: see runbook` alone.
 
-Outcome 7's summary names the class, never which case broke it, so the fourth pull request's runbook
-step for outcome 7 lists both cases, the unreadable previous report and the one not before the run
-(dated after it, or on its date with a run ID not below its own).
+A refusal line may reveal *that* a private finding exists, never how many there are and never their
+kind: the private-state checks (`the private state none, but a finding is private`), the one phrase of
+the six checks of a private finding's draft advisory (`a private finding could not be filed as a
+draft`) and the advisory scan's `publish refused: an advisory`. That is the disclosure a published run's
+`private findings: handled privately` already makes; `publish refused: an advisory` is kept because it
+tells the maintainer which text to triage.
+
+Outcome 7's summary names the class and the check, and its two cases have checks of their own: the
+unreadable previous report (`the newest report not as the core renders one` and the others of cause 1)
+and the one not before the run (`the previous report dated after the run`, `the previous report not
+before the run`: dated after it, or on its date with a run ID not below its own). Runbook step 11 lists
+which check is which case.
 
 *Changed by issue #640 (2026-11-26).* Two runs (45802249904 and 45808432244) printed only
 `configuration invalid: see runbook`, a line about thirty refusals shared, and the maintainer could not
@@ -910,12 +919,23 @@ response and no error message: a caller can pass only a constant, whose words th
 change the private-state checks of `RenderReport` and the advisory checks of `RenderAdvisory` and
 `SetAdvisoryStatus` (a finding not private, a fingerprint that is none, a status outside the rule, a
 description without its status line) move from `ErrConfig` to `ErrResultInvalid` (`result refused`,
-exit 3): they refuse what the model's result leads to, not the run's configuration, and under
-`configuration invalid` they sent the maintainer to the step's secrets and variables. The two runs'
-real cause was the workflow's relative `-reports docs/security/audits`, which `LoadPrevious` refuses on
-every run; the workflow now passes `"${GITHUB_WORKSPACE}/docs/security/audits"` (the checkout's root,
-and the step's working directory), and `test/architecture` holds every path flag of `auditpublish`
-absolute.
+exit 3): under `configuration invalid` they sent the maintainer to the step's secrets and variables,
+which none of them reads. Of these, only two private findings with one fingerprint is the model's
+result itself; the private-state checks and `RenderAdvisory`'s are internal invariants a result that
+matches the schema should never trip, and `SetAdvisoryStatus`'s two (a status none of the four, a
+description without a status line) check an existing GitHub draft, not the result, and cannot fire as
+the program stands: its one caller, the advisory plan, calls it only after `ParseAdvisoryStatus` read
+the draft's status, and with the constant `AdvisoryNotReproduced`. The runbook says to report any of
+these invariants if it appears. The six checks of a private finding's draft advisory share one phrase,
+`a private finding could not be filed as a draft`, since `two findings with one fingerprint` would tell
+the public log there are at least two private findings. `ci/internal/audit`'s lines (`run.go`'s
+constant lines, the preflight verdict's `judge.go`) already name their cause, so `auditrun` and the
+model step need no change. The two runs printed no check, so their logs do not name the cause; the
+workflow and the program do: the publish step's `-reports docs/security/audits` was its only relative
+path flag, and `LoadPrevious` refuses a directory that is not absolute and clean on every run that gets
+as far as loading the result. The workflow now passes `"${GITHUB_WORKSPACE}/docs/security/audits"` (the
+checkout's root, and the step's working directory), and `test/architecture` holds every path flag of
+`auditpublish` absolute.
 
 Code 2 is left to the Go runtime's panic exit. Only `OutcomePublished` and `OutcomePrivateNotFiled` have
 published anything; the second still fails the job, so GitHub notifies the maintainer. The errors the
