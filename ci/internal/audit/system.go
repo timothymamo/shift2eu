@@ -594,11 +594,17 @@ func digest(gitHubEnv string) ([32]byte, error) {
 
 // readEntry reads the regular file at path that Lstat saw as entry, from one
 // descriptor that must be that same file (os.SameFile), never a link's target,
-// and fails past limit bytes with errFileCommandBytes.
+// and fails past limit bytes with errFileCommandBytes. The open is O_RDWR,
+// never O_RDONLY, because on Linux an O_RDWR open never blocks on a FIFO a
+// concurrent process swapped in between the Lstat and the open, where an
+// O_RDONLY one waits for a writer (issues #615, #614); the descriptor is only
+// read through. An entry it cannot open O_RDWR - one the run may read but not
+// write - fails the digest (fail closed): the runner's file commands are its
+// own and writable.
 func readEntry(path string, entry fs.FileInfo, limit int) ([]byte, error) {
-	file, err := os.Open(path) //nolint:gosec // G304: an entry of the runner's file-command directory, checked as the regular file Lstat saw
+	file, err := os.OpenFile(path, os.O_RDWR, 0) //nolint:gosec // G304: an entry of the runner's file-command directory, checked as the regular file Lstat saw
 	if err != nil {
-		return nil, fmt.Errorf("open a file command: %w", err)
+		return nil, fmt.Errorf("open a file command for reading and writing: %w", err)
 	}
 	defer file.Close()
 

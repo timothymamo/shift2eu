@@ -38,10 +38,10 @@ type fileCommand struct {
 	absent bool
 	// before is the path's Lstat before the steps, nil when absent.
 	before fs.FileInfo
-	// file is the regular file's descriptor, opened for reading and, when
-	// the run may, writing. It is nil only for a path absent before the
-	// steps; every other recorded path has its descriptor, since one that is
-	// no regular file or cannot be opened fails the record.
+	// file is the regular file's descriptor, opened O_RDWR. It is nil only
+	// for a path absent before the steps; every other recorded path has its
+	// descriptor, since one that is no regular file or cannot be opened O_RDWR
+	// fails the record.
 	file *os.File
 	// expected is the sha256 state of what the file must hold after the
 	// steps: what it held, and what the run appended through Appended.
@@ -146,11 +146,11 @@ func OpenAppend(path string, mode fs.FileMode) (*os.File, error) {
 
 // RecordFileCommands records the file commands at paths before the steps. It
 // follows no link: each path is Lstat'ed, and only a regular file is opened,
-// its descriptor checked to be the file Lstat saw. A path that does not exist
-// is recorded as absent. One that exists but is no regular file, or that
-// cannot be opened or read, fails the record (fail closed, the auditor's
-// round-4 L1): the run could not tell after the steps whether they changed
-// it. On an error it closes what it opened and returns no FileCommands.
+// O_RDWR, its descriptor checked to be the file Lstat saw. A path that does not
+// exist is recorded as absent. One that exists but is no regular file, or that
+// cannot be opened O_RDWR or read, fails the record (fail closed, the auditor's
+// round-4 L1, issues #615, #614): the run could not tell after the steps
+// whether they changed it, nor empty it in place. On an error it closes what it opened and returns no FileCommands.
 func RecordFileCommands(paths []FileCommandPath) (*FileCommands, error) {
 	commands := &FileCommands{commands: make([]*fileCommand, 0, len(paths))}
 
@@ -207,16 +207,19 @@ func record(path FileCommandPath) (*fileCommand, error) {
 	return command, nil
 }
 
-// openRegular opens the regular file Lstat saw as info at path, for reading
-// and writing when it may, else for reading, and checks the descriptor is
-// that same file (os.SameFile), never a link's target.
+// openRegular opens the regular file Lstat saw as info at path O_RDWR and
+// checks the descriptor is that same file (os.SameFile), never a link's target.
+// The open is O_RDWR, never O_RDONLY, because on Linux an O_RDWR open never
+// blocks on a FIFO a concurrent process swapped in between the Lstat and the
+// open, where an O_RDONLY one waits for a writer (issues #615, #614); the
+// descriptor is read through to record the content and written through only by
+// Repair's in-place truncate. A file command it cannot open O_RDWR - one the run
+// may read but not write - is refused (fail closed): there is no read-only
+// fallback, and the runner's own file commands are always writable.
 func openRegular(path string, info fs.FileInfo) (*os.File, error) {
 	file, err := os.OpenFile(path, os.O_RDWR, 0) //nolint:gosec // G304: one of the runner's file commands, checked as the regular file Lstat saw
 	if err != nil {
-		file, err = os.Open(path) //nolint:gosec // G304: as above, for reading only
-		if err != nil {
-			return nil, fmt.Errorf("open a file command: %w", err)
-		}
+		return nil, fmt.Errorf("open a file command for reading and writing: %w", err)
 	}
 
 	opened, err := file.Stat()
@@ -380,8 +383,10 @@ func (c *fileCommand) changed() (changed, inPlace bool) {
 }
 
 // empty leaves the file command's path an empty regular file: truncated
-// through its descriptor when inPlace, which falls back to the rename when the
-// descriptor cannot truncate, and else replaced.
+// through its descriptor when inPlace, and else replaced. Every recorded
+// descriptor is O_RDWR, so a truncate fails only on an I/O error; the rename
+// then still leaves the path empty, rather than leave the steps' bytes for the
+// runner to apply.
 func (c *fileCommand) empty(inPlace bool) error {
 	if inPlace && c.file.Truncate(0) == nil {
 		now, err := os.Lstat(c.Path)
