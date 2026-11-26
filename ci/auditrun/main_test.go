@@ -211,6 +211,10 @@ func TestRunTakesTheStepsInputs(t *testing.T) {
 // opened is replaced with an empty regular file, never written through the link,
 // and the run fails with the audit's exit. An untouched summary still holds the
 // run's one line.
+//
+// The repair also decides the result file: a run that the repair turns into a
+// failure hands the encrypt step nothing, so its -result-out path is gone,
+// while an untouched run leaves the bytes the audit step checked.
 func TestRunReplacesAStepSummarySwappedForALink(t *testing.T) {
 	t.Parallel()
 
@@ -225,9 +229,12 @@ func TestRunReplacesAStepSummarySwappedForALink(t *testing.T) {
 		swap bool
 		// wantCode is the run's exit code.
 		wantCode int
+		// wantResult is whether the run leaves its -result-out file holding
+		// the audit step's bytes.
+		wantResult bool
 	}{
-		{name: "a summary left as the run opened it", wantCode: audit.ExitOK},
-		{name: "a summary swapped for a link to another file", swap: true, wantCode: audit.ExitFailed},
+		{name: "a summary left as the run opened it", wantCode: audit.ExitOK, wantResult: true},
+		{name: "a summary swapped for a link to another file", swap: true, wantCode: audit.ExitFailed, wantResult: false},
 	}
 
 	for _, tc := range cases {
@@ -286,6 +293,13 @@ func TestRunReplacesAStepSummarySwappedForALink(t *testing.T) {
 				}
 			} else if !strings.Contains(string(body), "finished") {
 				t.Errorf("the summary holds %q, want the run's one line: an untouched summary is the job's summary (ADR 0040)", body)
+			}
+
+			if tc.wantResult {
+				assertResultFile(t, resultOutPath(dir), auditResult)
+			} else if _, err := os.Stat(resultOutPath(dir)); !errors.Is(err, os.ErrNotExist) {
+				t.Errorf("the result file at %s is still there (stat: %v), want it removed: the summary's repair failed the run, and a failed run hands the encrypt step no result (doc.go, issue #615)",
+					resultOutPath(dir), err)
 			}
 
 			kept, err := os.ReadFile(target)
