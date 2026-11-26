@@ -39,8 +39,9 @@ type fileCommand struct {
 	// before is the path's Lstat before the steps, nil when absent.
 	before fs.FileInfo
 	// file is the regular file's descriptor, opened for reading and, when
-	// the run may, writing; nil for a path that is no regular file or could
-	// not be opened, which is checked by its identity alone.
+	// the run may, writing. It is nil only for a path absent before the
+	// steps; every other recorded path has its descriptor, since one that is
+	// no regular file or cannot be opened fails the record.
 	file *os.File
 	// expected is the sha256 state of what the file must hold after the
 	// steps: what it held, and what the run appended through Appended.
@@ -104,9 +105,11 @@ func checkFileCommandEntry(path string) error {
 // dangling link included; an existing path must be a regular file (Lstat), and
 // the descriptor opened must be that same file (os.SameFile), never a link's
 // target. Anything else is refused. It is not O_NOFOLLOW, which the os
-// package lacks and syscall is outside the library's allow list for; the
-// Lstat comes first, so a FIFO is never opened, and ci/auditrun calls it
-// before any step runs.
+// package lacks and syscall is outside the library's allow list for. A FIFO
+// already at path is refused by the Lstat, before any open; one a concurrent
+// process swaps in between the Lstat and the open is opened O_RDWR, which on
+// Linux never blocks on a FIFO without a reader, and then refused by the
+// os.SameFile check. ci/auditrun calls it before any step runs.
 func OpenAppend(path string, mode fs.FileMode) (*os.File, error) {
 	info, err := os.Lstat(path)
 	if errors.Is(err, fs.ErrNotExist) {
@@ -126,7 +129,7 @@ func OpenAppend(path string, mode fs.FileMode) (*os.File, error) {
 		return nil, errNotRegular
 	}
 
-	file, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0) //nolint:gosec // G304: one of the runner's file commands, checked as the regular file Lstat saw
+	file, err := os.OpenFile(path, os.O_RDWR|os.O_APPEND, 0) //nolint:gosec // G304: one of the runner's file commands, checked as the regular file Lstat saw
 	if err != nil {
 		return nil, fmt.Errorf("open the file command: %w", err)
 	}
