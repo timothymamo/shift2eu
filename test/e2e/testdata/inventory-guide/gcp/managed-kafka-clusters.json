@@ -12,5 +12,12 @@
       "vcpuCount": "9",
       "memoryBytes": "77309411328"
     }
+  },
+  {
+    "name": "projects/example-project/locations/europe-west4/clusters/shop-analytics",
+    "capacityConfig": {
+      "vcpuCount": "48",
+      "memoryBytes": "51539607552"
+    }
   }
 ]

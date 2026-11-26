@@ -92,8 +92,8 @@ var searchAndKafkaFixtures = []guideCallFixture{
 		// GCP's one call for its Kafka clusters (PRD #571, milestone 3): the
 		// cluster's name and its capacity, and nothing else. The two numbers of
 		// the capacity are the cluster's totals over its brokers, so the program
-		// reads them and writes no size, and no bootstrap address, TLS config or
-		// access config reaches the file.
+		// reads them to derive the broker count and one broker's size, and no
+		// bootstrap address, TLS config or access config reaches the file.
 		call: "gcloud managed-kafka clusters list",
 		file: "test/e2e/testdata/inventory-guide/gcp/managed-kafka-clusters.json",
 		keys: []string{"name", "capacityConfig", "vcpuCount", "memoryBytes"},

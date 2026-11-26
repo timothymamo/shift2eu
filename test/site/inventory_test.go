@@ -1703,14 +1703,14 @@ func TestInventoryGuideSearchAndKafkaCallsKeepOnlyTheFieldsTheyRead(t *testing.T
 // gcpManagedKafkaCall is the call the guide's GCP section reads the settings of
 // its Managed Service for Apache Kafka clusters from (PRD #571, milestone 3).
 // The clusters themselves come from the asset listing the guide already runs;
-// this call adds the capacity the program has to see to know that no size can
-// be written from it.
+// this call adds the capacity the program divides by the cluster's brokers, the
+// count Google derives from that capacity.
 const gcpManagedKafkaCall = "gcloud managed-kafka clusters list"
 
 // gcpManagedKafkaFields are the fields the guide's call may keep: the cluster's
 // name and its capacity, or the two numbers of that capacity (PRD #571, *Only
 // the fields the program reads*). The capacity is the cluster's total over its
-// brokers, so the program reads it and writes no size from it.
+// brokers, so the program reads it to give each broker its share.
 var gcpManagedKafkaFields = []string{"name", "capacityConfig", "vcpuCount", "memoryBytes"}
 
 // gcloudFormatProjection matches the object projection of a gcloud `--format`:

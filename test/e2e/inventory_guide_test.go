@@ -872,8 +872,8 @@ func inventoryGuides() []inventoryGuideCase {
 				// provisions every cluster in three zones with its replicas spread
 				// across them and encrypts it at rest by default, so the three
 				// capabilities hold of every cluster, whatever its settings say
-				// (PRD #571). The region is the one its asset names, so the two
-				// clusters of two regions are two resources and not one.
+				// (PRD #571). The region is the one its asset names, so the
+				// clusters of the two regions are several resources and not one.
 				{
 					id: "shop-events", rawType: "managedkafka.googleapis.com/Cluster", category: "messaging.kafka",
 					region:       "europe-west1",
@@ -882,6 +882,19 @@ func inventoryGuides() []inventoryGuideCase {
 				{
 					id: "shop-audit", rawType: "managedkafka.googleapis.com/Cluster", category: "messaging.kafka",
 					region:       "europe-west4",
+					capabilities: []string{"encryption-at-rest", "node-high-availability", "zone-high-availability"},
+				},
+				{
+					id: "shop-analytics", rawType: "managedkafka.googleapis.com/Cluster", category: "messaging.kafka",
+					region:       "europe-west4",
+					capabilities: []string{"encryption-at-rest", "node-high-availability", "zone-high-availability"},
+				},
+				// A cluster the asset listing holds and the capacity call does not:
+				// the program lists it all the same, with no size, rather than
+				// dropping it or sizing it from a default (PRD #571, *Estimates*).
+				{
+					id: "shop-legacy-events", rawType: "managedkafka.googleapis.com/Cluster", category: "messaging.kafka",
+					region:       "europe-west1",
 					capabilities: []string{"encryption-at-rest", "node-high-availability", "zone-high-availability"},
 				},
 				// A Kafka Connect cluster is the integration around a Kafka cluster,
@@ -931,17 +944,31 @@ func inventoryGuides() []inventoryGuideCase {
 				// A Filestore instance's capacityGb is a string in the API's JSON.
 				{id: "shared", storageGiB: 1024},
 				{id: "scratch", storageGiB: 1024},
+				// A Managed Kafka cluster's capacityConfig is the cluster's total
+				// vCPU and memory over the brokers Google provisions for it, so the
+				// program takes the broker count from Google's formula, max(3,
+				// ceiling(vCPU / 15)), and divides both totals by it: 3 vCPU over 3
+				// brokers is 1 vCPU and 4 GiB each, 9 over 3 is 3 and 24, and 48 over
+				// 4 is 12 and 12. A cluster of no more than 45 vCPU has the three
+				// brokers a cluster always has, so a program that wrote the total as
+				// one broker's size fails on the first two.
+				// <https://cloud.google.com/managed-service-for-apache-kafka/docs/brokers>
+				// Managed Kafka prices storage by usage and not as a disk of the
+				// cluster's brokers, so the cluster gives none (PRD #571,
+				// *Estimates*).
+				{id: "shop-events", vcpus: 1, memoryGiB: 4, count: 3, noStorageGiB: true},
+				{id: "shop-audit", vcpus: 3, memoryGiB: 24, count: 3, noStorageGiB: true},
+				{id: "shop-analytics", vcpus: 12, memoryGiB: 12, count: 4, noStorageGiB: true},
 			},
 			// An engine the program cannot classify gets no size at all, even
 			// though the sql instances list records the instance's disk and
 			// tier. So does a Valkey instance the instances list does not hold: no
 			// call gives its shards, its replicas or its node's memory. And so
-			// does a Managed Kafka cluster: its capacity is a total of vCPU and
-			// memory over the brokers the service provisions, never one node's,
-			// so a resource sized from it would price a cluster as a single
-			// broker (PRD #571, *Estimates*). The report says "not estimated: size
-			// unknown" for it instead.
-			unsized: []string{"shop-reports-sqlserver", "valkey-archive", "shop-events", "shop-audit"},
+			// does a Managed Kafka cluster the capacity call does not list: no call
+			// gives its vCPU or memory, so the program writes no size rather than
+			// one from a default, and the report says "not estimated: size
+			// unknown" for it (PRD #571, *Estimates*).
+			unsized: []string{"shop-reports-sqlserver", "valkey-archive", "shop-legacy-events"},
 			// A node pool's managed instance group, a node with its disk,
 			// labelled goog-gke-node, and the boot and data disks of the group's
 			// member: the group stands for its instances.
