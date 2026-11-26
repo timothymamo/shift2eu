@@ -267,6 +267,11 @@ var fileCommandNames = []string{"GITHUB_ENV", "GITHUB_PATH", "GITHUB_OUTPUT", "G
 // closed); a real launch's preflight digest refuses such a directory before any
 // step, so this pins what the repair does on its own.
 //
+// A step can also swap a file command's path for a directory: rename cannot put a
+// file over a directory, so the repair removes an EMPTY one first and the path is
+// still left an empty regular file (issues #615, #614). Only a non-empty
+// directory, the failure table's rows below, defeats it.
+//
 // The table drives each change from inside a fake step, so nothing here starts a
 // sandbox, runs a model or writes a real step's files.
 func TestRunEmptiesAFileCommandItsStepsChanged(t *testing.T) {
@@ -382,6 +387,21 @@ func TestRunEmptiesAFileCommandItsStepsChanged(t *testing.T) {
 			// job runs with.
 			name:      "$GITHUB_ENV appended to in place",
 			change:    appendTo("GITHUB_ENV", "BASH_ENV=/tmp/x\n"),
+			wantCode:  audit.ExitFailed,
+			wantEmpty: []string{"GITHUB_ENV"},
+		},
+		{
+			// An EMPTY directory over a file command's path: a rename cannot put
+			// a file over a directory, so the repair removes the empty one first
+			// and still leaves an empty regular file, where the failure table's
+			// non-empty directory leaves the path the step made (issues #615,
+			// #614).
+			name: "$GITHUB_ENV replaced with an empty directory",
+			change: func(t *testing.T, f *stepFiles) {
+				t.Helper()
+
+				swapForEmptyDirectory(t, f.path("GITHUB_ENV"))
+			},
 			wantCode:  audit.ExitFailed,
 			wantEmpty: []string{"GITHUB_ENV"},
 		},
@@ -502,6 +522,11 @@ func TestRunEmptiesAFileCommandItsStepsChanged(t *testing.T) {
 					t.Errorf("the run printed nothing on stderr, want a note that it emptied %v: the step's log says what the run did to the runner's files (ADR 0040, issues #615, #614)",
 						tc.wantEmpty)
 				}
+
+				// Every file command the steps changed is emptied here, so the run
+				// notes exactly those, and nothing hostile is left for the runner to
+				// apply or publish (issues #615, #614).
+				assertRepairNotes(t, result.stderr, tc.wantEmpty, "")
 			} else if result.stderr != "" {
 				t.Errorf("the run printed %q on stderr, want nothing: no file command changed, so there is nothing to report", result.stderr)
 			}
@@ -1146,9 +1171,14 @@ func assertRepairNotes(t *testing.T, stderr string, wantEmpty []string, wantFail
 			emptied, want, stderr)
 	}
 
-	if wantFailedName := []string{wantFailed}; !slices.Equal(failed, wantFailedName) {
+	wantFailedNames := make([]string, 0, 1)
+	if wantFailed != "" {
+		wantFailedNames = append(wantFailedNames, wantFailed)
+	}
+
+	if !slices.Equal(failed, wantFailedNames) {
 		t.Errorf("the run noted %v as a file command it could not empty, want exactly %v: the failure's line names the file command the runner may still apply (ADR 0040, issues #615, #614)\nstderr: %s",
-			failed, wantFailedName, stderr)
+			failed, wantFailedNames, stderr)
 	}
 }
 
@@ -1418,6 +1448,22 @@ func swapForRegularFile(t *testing.T, path string) {
 
 	if err := os.Rename(other, path); err != nil {
 		t.Fatalf("rename %s over %s: %v", other, path, err)
+	}
+}
+
+// swapForEmptyDirectory removes path and makes an empty directory in its place:
+// a rename cannot put a file over a directory, so the repair removes the empty
+// directory first and still leaves the path an empty regular file (issues #615,
+// #614).
+func swapForEmptyDirectory(t *testing.T, path string) {
+	t.Helper()
+
+	if err := os.Remove(path); err != nil {
+		t.Fatalf("remove %s the run opened: %v", path, err)
+	}
+
+	if err := os.Mkdir(path, 0o700); err != nil {
+		t.Fatalf("make %s an empty directory: %v", path, err)
 	}
 }
 
