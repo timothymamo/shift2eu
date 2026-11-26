@@ -256,11 +256,15 @@ func TestBranchCoAuthorTrailers(t *testing.T) {
 // their authors, committers and co-author trailers checked against
 // .github/co-author-addresses.txt as of the range's base revision, read with
 // git show <base>:<path>, never from the working tree (issue #672). A pull
-// request therefore cannot widen the list it is checked against: a change to
-// the list counts once it is merged. spec must be a range validCoAuthorRange
-// accepts, a..b, whose left side is the base; the base is first resolved to a
-// full commit SHA with git rev-parse --verify --end-of-options, so git show
-// reads exactly that commit and no part of spec can be read as an option. A
+// request that changes only the list is therefore checked against the old one:
+// a change to the list counts once it is merged. The run is the pull request's
+// own copy of this check, so a change to the check itself is for the
+// maintainer's code-owner review to catch. spec must be a range
+// validCoAuthorRange accepts, a..b, whose left side is the base; the base is
+// first resolved to a full commit SHA with git rev-parse --verify
+// --end-of-options, so git show reads exactly that commit and no part of spec
+// can be read as an option. Every git call runs with --no-replace-objects, so a
+// replace ref cannot change the commit, the list or the history it reads. A
 // base revision or a list the run cannot read is an error, never an empty
 // list.
 func coAuthorRangeFindings(root, spec string) ([]commitMessage, []coAuthorFinding, error) {
@@ -271,7 +275,7 @@ func coAuthorRangeFindings(root, spec string) ([]commitMessage, []coAuthorFindin
 	}
 	base, _, _ := strings.Cut(spec, "..")
 
-	out, err := runGit(ctx, root, "rev-parse", "--verify", "--quiet", "--end-of-options", base+"^{commit}")
+	out, err := runGit(ctx, root, "--no-replace-objects", "rev-parse", "--verify", "--quiet", "--end-of-options", base+"^{commit}")
 	if err != nil {
 		return nil, nil, fmt.Errorf("resolve the base %q of %s: %w", base, spec, err)
 	}
@@ -281,7 +285,7 @@ func coAuthorRangeFindings(root, spec string) ([]commitMessage, []coAuthorFindin
 			base, spec, baseSHA)
 	}
 
-	data, err := runGit(ctx, root, "show", "--no-textconv", "--end-of-options", baseSHA+":"+coAuthorAllowListPath)
+	data, err := runGit(ctx, root, "--no-replace-objects", "show", "--no-textconv", "--end-of-options", baseSHA+":"+coAuthorAllowListPath)
 	if err != nil {
 		return nil, nil, fmt.Errorf("read %s at the base %s (%s): %w", coAuthorAllowListPath, base, baseSHA, err)
 	}
@@ -312,8 +316,9 @@ func coAuthorCommitCount(getenv func(string) string, n int) error {
 // raw message, NUL-separated, with git's -z NUL after each commit.
 func rangeCommits(ctx context.Context, root, spec string) ([]commitMessage, error) {
 	// --no-show-signature and --no-notes keep a developer's log.showSignature
-	// or notes from putting extra text into the -z output.
-	out, err := runGit(ctx, root, "log", "-z", "--no-color", "--no-show-signature", "--no-notes", "--format=%H%x00%ae%x00%ce%x00%B", "--end-of-options", spec)
+	// or notes from putting extra text into the -z output; --no-replace-objects
+	// keeps a replace ref from swapping in other commits (issue #672).
+	out, err := runGit(ctx, root, "--no-replace-objects", "log", "-z", "--no-color", "--no-show-signature", "--no-notes", "--format=%H%x00%ae%x00%ce%x00%B", "--end-of-options", spec)
 	if err != nil {
 		return nil, fmt.Errorf("git log %s: %w", spec, err)
 	}

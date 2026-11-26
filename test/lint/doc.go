@@ -306,7 +306,9 @@
 // the colon, as git accepts them) and carries an address
 // .github/co-author-addresses.txt does not list, or a malformed one, the list
 // read with git show from the range's base commit, never from the working tree,
-// so a pull request cannot widen the list it is checked against, and a base
+// so a pull request that changes only the list is checked against the old one
+// (a change to the check itself is for the maintainer's code-owner review to
+// catch), git runs with --no-replace-objects, and a base
 // without a readable list is an error (coAuthorRangeFindings, issue #672): GitHub
 // credits that address's account, and a squash merge copies the trailers onto
 // main. A commit's author and committer address must be on the list too, since

@@ -556,7 +556,9 @@ func checkCoAuthorTrailersJob(t *testing.T, jobs map[string][]ciLine) {
 
 		// Every value a step hands the check reaches it through that step's env:
 		// (issue #672): an expression spliced into a run: line is a shell word of
-		// the event's author.
+		// the event's author. Refusing ${{ anywhere else in the step, if: and
+		// with: included, is deliberate: the job's steps need no expression
+		// there, and a narrower rule would be one more place to get wrong.
 		envLines := map[int]bool{}
 
 		if env, ok := ciBlock(item.lines, "env"); ok {

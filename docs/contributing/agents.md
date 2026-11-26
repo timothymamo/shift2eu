@@ -28,7 +28,11 @@ email address, so GitHub credits no account for it (the `go-tdd` skill, issue #6
 `.github/co-author-addresses.txt` does not list, with or without spaces before the trailer's colon, or
 whose author or committer address it does not list, since a squash merge credits every distinct author
 (issue #663). The check reads the list from the pull request's base commit, never from its own checkout
-(issue #672), so a fork's or a new contributor's pull request fails Lint until their address is on
+(issue #672): the base branch's list, main's for every pull request to main. A pull request into another
+branch is checked against that branch's list, and its commits again against main's when that branch is
+merged into main. A pull request that changes only the list is checked against the old one; a change to
+the check itself is for the maintainer's code-owner review to catch. A fork's or a new contributor's pull
+request therefore fails Lint until their address is on the base branch's
 `.github/co-author-addresses.txt`: the address is added by a separate pull request, merged first.
 
 The agents run inside a [Lima](https://lima-vm.io) VM that can see this repository's workspace (the
