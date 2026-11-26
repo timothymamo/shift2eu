@@ -78,7 +78,8 @@
 //     records the five file commands before the steps (RecordFileCommands:
 //     each one's identity, Lstat and an os.SameFile-checked descriptor, and
 //     the sha256 of its content, capped as the digest is; an existing entry
-//     it cannot open and read fails the record), and after them
+//     it cannot open O_RDWR and read fails the record, so a file command the
+//     run may read but not write is refused), and after them
 //     FileCommands.Repair leaves every one the steps changed - another entry
 //     at its path, or content other than the recorded one followed by what
 //     the run appended (Appended) - as an empty regular file: truncated
@@ -86,7 +87,14 @@
 //     path, an empty directory there removed first, never following a link,
 //     each repair verified with an Lstat. It tries every changed file
 //     command, whatever failed before it, and joins one RepairError per
-//     failure (issues #615, #614).
+//     failure (issues #615, #614). Every open of a file command or of a
+//     digested entry is O_RDWR, never O_RDONLY, and fails closed: on Linux
+//     an O_RDWR open never blocks on a FIFO a concurrent process swapped in
+//     between the Lstat and the open, where an O_RDONLY one waits for a
+//     writer, and the descriptor is then refused by its regular-file and
+//     os.SameFile checks. An entry the run cannot open O_RDWR fails the
+//     record or the digest; the runner's file commands are its own and
+//     writable, so a real run loses nothing.
 //
 // Run takes the steps and prints one line: "finished", a constant class, the
 // preflight's Verdict, whose text is made of constants alone, or, when the

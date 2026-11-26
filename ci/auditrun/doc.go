@@ -61,7 +61,12 @@
 // before the run is allowed and recorded as absent. The summary is opened
 // without following a link (audit.OpenAppend); when it was absent, auditrun
 // creates it, so a refusal after that (audit.RecordFileCommands) leaves an
-// empty summary file behind, which is harmless. The API key's refusal, which
+// empty summary file behind, which is harmless. Every open of an existing file
+// command, the summary's included, is O_RDWR and fails closed (issues #615,
+// #614): on Linux an O_RDWR open never blocks on a FIFO swapped in between the
+// Lstat and the open, so a file command the run may read but not write is
+// refused with exit 2 before any step too, and the audit's digest of the
+// directory fails on such an entry. The API key's refusal, which
 // comes first, writes its line to the summary only when OpenAppend takes it,
 // and to stdout always.
 //

@@ -2524,18 +2524,25 @@ arguments; git's read-only subcommands), and changes between versions. The deny 
     without following a link (`OpenAppend`: `O_EXCL` to create one, an `os.SameFile`-checked
     descriptor for an existing regular file; the `os` package has no `O_NOFOLLOW`). An existing
     summary is opened `O_RDWR|O_APPEND`, so a FIFO swapped in between the `Lstat` and the open cannot
-    hang the step (on Linux an `O_RDWR` open of a FIFO never blocks); `os.SameFile` then refuses
-    it. It replaces the
-    first rule, that such a file command was noted, checked by its identity alone and left as it was:
-    the run opened the summary with `O_APPEND|O_CREATE`, which follows a link, and could not compare an
-    entry whose content it never recorded. It also supersedes, for the five file commands, "Links found
-    before the run are trusted as they stand" above. The runner lays down only regular files, so a real
-    step loses nothing; a path absent before the run stays allowed, recorded as absent. **Residual:** a
-    process that outlives the CLI's process tree could still write to a file command after the repair;
-    the `actions/checkout` replacement below stays the follow-up for that. **This repair,
-    not the digest, is what keeps a step's change from reaching the runner, the post steps and the public
-    summary**: the runner applies `$GITHUB_ENV` and `$GITHUB_PATH` after a failed step too, and posts the
-    summary by its path.
+    hang the step (on Linux an `O_RDWR` open of a FIFO never blocks); `os.SameFile` then refuses it.
+    *Amended 2026-11-26 (round 6, the reviewer's S1 and the auditor's L1):* **every open of a file
+    command or of a digested entry is `O_RDWR` and fails closed.** The record's open fell back to
+    `O_RDONLY` and the digest opened each entry `O_RDONLY`, and an `O_RDONLY` open of a FIFO with no
+    writer waits for one; both now open `O_RDWR` only, keep the `Lstat` before the open and the
+    regular-file and `os.SameFile` checks after it, and only read through the descriptor (the record's
+    is also truncated by an in-place repair). So **no open of the file-command directory can hang on a
+    swapped-in FIFO.** An entry the run cannot open `O_RDWR`, a file command it may read but not write,
+    is refused: `RecordFileCommands` fails and the step exits 2 before any step, and the digest fails
+    closed. The round-4 refusal replaces the first rule, that such a file command was noted, checked by
+    its identity alone and left as it was: the run opened the summary with `O_APPEND|O_CREATE`, which
+    follows a link, and could not compare an entry whose content it never recorded. It also supersedes,
+    for the five file commands, "Links found before the run are trusted as they stand" above. The
+    runner lays down only regular, writable files, so a real step loses nothing; a path absent before
+    the run stays allowed, recorded as absent. **Residual:** a process that outlives the CLI's process
+    tree could still write to a file command after the repair; the `actions/checkout` replacement below
+    stays the follow-up for that. **This repair, not the digest, is what keeps a step's change from
+    reaching the runner, the post steps and the public summary**: the runner applies `$GITHUB_ENV` and
+    `$GITHUB_PATH` after a failed step too, and posts the summary by its path.
   **The cap of 64 entries was not checked on a real runner.** To our understanding actions/runner
   removes the previous step's file-command files, which leaves about 5 or 6 entries in the directory; a
   runner that kept every earlier step's files there could pass 64 in a long job, and the run would then
