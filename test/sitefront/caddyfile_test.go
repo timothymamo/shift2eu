@@ -384,6 +384,18 @@ func TestChecksRefuseBrokenConfigurations(t *testing.T) {
 			want:  "header_down -Via",
 		},
 		{
+			// www's proxy removes no Via, and another handle's proxy does: the check must judge the proxy of
+			// www's route, since only its answers carry Caddy's copy of the header.
+			name: "the upstream's Via removed only in a proxy outside www's route",
+			src: strings.Replace(
+				broken("\t\t@path expression {http.request.uri.path}.startsWith(\"/\")",
+					"\t\treverse_proxy https://{$UPSTREAM} {\n\t\t\theader_down -Via\n\t\t}\n\t\t@path expression {http.request.uri.path}.startsWith(\"/\")"),
+				"\t\t\theader_down -Via\n", "", 1),
+			check:   checkNoVia,
+			want:    "header_down -Via",
+			exactly: 1,
+		},
+		{
 			name:  "no auto_https off",
 			src:   strings.Replace(designedCaddyfile, "\tauto_https off\n", "", 1),
 			check: checkGlobalOptions,
@@ -921,9 +933,11 @@ func checkReverseProxy(f *caddyfile) []string {
 // #626): Caddy's reverse_proxy writes its own copy on every answer it proxies,
 // which names the front's software where no other header does. www's block
 // deletes it from the answer with `header -Via` - a header_down alone cannot,
-// since the proxy writes its copy after the upstream's is gone - and the proxy
-// drops the upstream's own copy on the way down with `header_down -Via`. The
-// redirects carry no Via: only a proxied answer gets one.
+// since the proxy writes its copy after the upstream's is gone - and www's own
+// proxy drops the upstream's copy on the way down with `header_down -Via`. Both
+// directives count only in www's route: another handle's proxy removes nothing
+// www's answers carry, and its own answer gets no Via to delete. The redirects
+// carry no Via: only a proxied answer gets one.
 func checkNoVia(f *caddyfile) []string {
 	var problems []string
 
@@ -946,7 +960,7 @@ func checkNoVia(f *caddyfile) []string {
 			}
 		case "reverse_proxy":
 			for _, child := range n.children {
-				if len(child.tokens) == 2 && child.tokens[0] == "header_down" && isViaDeletion(child.tokens[1]) {
+				if len(child.tokens) == 2 && child.tokens[0] == "header_down" && isViaDeletion(child.tokens[1]) && f.routeOf(n) == wwwRoute {
 					down = true
 				}
 			}
