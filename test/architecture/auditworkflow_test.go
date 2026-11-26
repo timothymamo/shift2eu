@@ -152,3 +152,229 @@ func auditStepEnd(lines []string, start int) int {
 
 	return len(lines)
 }
+
+// auditModelToolsDir is the directory the model job's own tools live in: root-owned
+// and mode 0555, beside the /srv/audit/bin wrapper and outside every directory the
+// runner's user can write. The model's session runs between the step that installs
+// those tools and the steps that run them, so a program in a directory the runner's
+// user can write - ${RUNNER_TEMP}/bin, which the install step appended to
+// $GITHUB_PATH, first on the PATH - is a program the session could plant: git, which
+// actions/checkout's post step runs by PATH while its token is in the environment,
+// or the age that encrypts the result, or the artifact check before it (finding M1
+// of issue #614's review, ADR 0040).
+const auditModelToolsDir = "/srv/audit/tools"
+
+// auditModelTools are the programs the model job installs there and runs by that
+// absolute path: the age that decrypts the checks' results and encrypts the result
+// after the session, and main's launcher and artifact check.
+var auditModelTools = []string{"age", "auditrun", "auditpublish"}
+
+// TestScheduledSecurityAuditWorkflowRunsTheModelToolsFromTheRootOwnedDirectory
+// pins the model job's half of finding M1 of issue #614's review: the step that
+// installs the job's tools is a step the model session does not control, and the
+// directory it installs them into is one the session cannot write. Every tool is
+// installed with `sudo install -o root -g root -m 0555 <source> /srv/audit/tools/<tool>`
+// after the directory itself is made root-owned with mode 0555, is never installed
+// from a directory the runner's user can write, and is run by that absolute path
+// alone: not by the word the shell resolves through PATH, and not by a path under
+// $RUNNER_TEMP, whose bin directory the steps before the model session appended to
+// $GITHUB_PATH. The model job holds no $GITHUB_PATH write at all, in any form.
+func TestScheduledSecurityAuditWorkflowRunsTheModelToolsFromTheRootOwnedDirectory(t *testing.T) {
+	t.Parallel()
+
+	lines := auditCodeLines(auditJobLines(t, "model"))
+
+	t.Run("the tools' directory is root-owned and read-only", func(t *testing.T) {
+		t.Parallel()
+
+		want := "sudo install -d -o root -g root -m 0555 " + auditModelToolsDir
+
+		for _, line := range lines {
+			if strings.TrimSpace(line) == want {
+				return
+			}
+		}
+
+		t.Errorf("%s's model job holds no %q line: the directory its tools live in is made root-owned and mode 0555 before anything is installed there, or the session between them could replace a tool (ADR 0040, issue #614)", auditWorkflow, want)
+	})
+
+	for _, tool := range auditModelTools {
+		t.Run("installed: "+tool, func(t *testing.T) {
+			t.Parallel()
+
+			target := auditModelToolsDir + "/" + tool
+
+			for _, line := range lines {
+				trimmed := strings.TrimSpace(line)
+				if strings.HasPrefix(trimmed, "sudo install -o root -g root -m 0555 ") && strings.HasSuffix(trimmed, " "+target) {
+					return
+				}
+			}
+
+			t.Errorf("%s's model job holds no \"sudo install -o root -g root -m 0555 <source> %s\" line: %s is installed root-owned with mode 0555 there, never into a directory the runner's user can write (ADR 0040, issue #614)", auditWorkflow, target, tool)
+		})
+
+		t.Run("run by its installed path: "+tool, func(t *testing.T) {
+			t.Parallel()
+
+			want := auditModelToolsDir + "/" + tool
+			ran := false
+
+			for _, line := range lines {
+				for _, offender := range auditToolUses(line, tool, want) {
+					t.Errorf("%s's model job runs %s as %q: want %q, the tool installed root-owned in a directory the model session cannot write, never a word or a path its shell resolves (ADR 0040, issue #614)", auditWorkflow, tool, offender, want)
+				}
+
+				if strings.Contains(line, want) && !strings.Contains(line, "install ") {
+					ran = true
+				}
+			}
+
+			if !ran {
+				t.Errorf("%s's model job runs no %s: want it run by %q, the tool the install step put there (ADR 0040, issue #614)", auditWorkflow, tool, want)
+			}
+		})
+	}
+
+	t.Run("no $GITHUB_PATH write", func(t *testing.T) {
+		t.Parallel()
+
+		for _, line := range lines {
+			if strings.Contains(line, "GITHUB_PATH") {
+				t.Errorf("%s's model job holds %q: want no $GITHUB_PATH write at all, so no step of the session's own PATH names a program the steps after it run (ADR 0040, issue #614)", auditWorkflow, strings.TrimSpace(line))
+			}
+		}
+	})
+}
+
+// auditToolUses returns, for tool, every word of line that runs it as something
+// other than want: the bare word, which the step's shell resolves through PATH,
+// and any other path that names it, ${RUNNER_TEMP}/bin's included. A line that
+// installs or unpacks the tool is no use of it, and neither is the output of a
+// build or a copy it is installed from.
+func auditToolUses(line, tool, want string) []string {
+	trimmed := strings.TrimSpace(line)
+	if strings.HasPrefix(trimmed, "#") || strings.HasPrefix(trimmed, "sudo install ") || strings.HasPrefix(trimmed, "install ") || strings.HasPrefix(trimmed, "tar ") {
+		return nil
+	}
+
+	fields := strings.Fields(line)
+
+	var uses []string
+
+	for i, field := range fields {
+		// A build's output is where the binary is made, not a program the
+		// step runs.
+		if i > 0 && fields[i-1] == "-o" {
+			continue
+		}
+
+		word := strings.Trim(field, `"'`)
+
+		switch {
+		case word == want:
+			continue
+		case word == tool:
+			uses = append(uses, word)
+		case !strings.HasSuffix(word, "/"+tool):
+			continue
+		case strings.HasPrefix(word, "$") || strings.HasPrefix(word, "/"):
+			uses = append(uses, word)
+		}
+	}
+
+	return uses
+}
+
+// auditJobLines returns the lines of the job key, from its own "  <key>:" line to
+// the line before the next job.
+func auditJobLines(t *testing.T, key string) []string {
+	t.Helper()
+
+	lines := strings.Split(string(readRepositoryFile(t, auditWorkflow)), "\n")
+
+	start := auditStepStart(lines, "  "+key+":")
+	if start < 0 {
+		t.Fatalf("%s holds no %s job: the job's own lines are what this check reads", auditWorkflow, key)
+	}
+
+	end := len(lines)
+
+	for i := start + 1; i < len(lines); i++ {
+		trimmed := strings.TrimSpace(lines[i])
+		indent := len(lines[i]) - len(strings.TrimLeft(lines[i], " \t"))
+
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+
+		if indent <= 2 {
+			end = i
+
+			break
+		}
+	}
+
+	return lines[start:end]
+}
+
+// auditCodeLines returns the lines that are no comment line: a comment names no
+// command, and what a job's comments say about a tool is documentation.
+func auditCodeLines(lines []string) []string {
+	out := make([]string, 0, len(lines))
+
+	for _, line := range lines {
+		if !strings.HasPrefix(strings.TrimSpace(line), "#") {
+			out = append(out, line)
+		}
+	}
+
+	return out
+}
+
+// TestScheduledSecurityAuditWorkflowDecryptsTheModelResultWithTheInstalledAge
+// pins the publish job's half of the same finding: its decrypt step runs age too,
+// and a bare age is whatever the first age on the PATH is. The publish job is a
+// fresh runner with no untrusted step before that decrypt, so the install step's
+// own bin directory in $RUNNER_TEMP is where its age goes, and the decrypt step
+// runs that binary by its absolute path.
+func TestScheduledSecurityAuditWorkflowDecryptsTheModelResultWithTheInstalledAge(t *testing.T) {
+	t.Parallel()
+
+	lines := strings.Split(string(readRepositoryFile(t, auditWorkflow)), "\n")
+
+	start := auditStepStart(lines, `      - name: Decrypt the model's result`)
+	if start < 0 {
+		t.Fatalf("%s holds no publish job decrypt step: the step is the one this case reads", auditWorkflow)
+	}
+
+	step := lines[start+1 : auditStepEnd(lines, start)]
+
+	var decrypts []string
+
+	for _, line := range step {
+		trimmed := strings.TrimSpace(line)
+
+		if strings.HasPrefix(trimmed, "#") || !strings.Contains(trimmed, "--decrypt") {
+			continue
+		}
+
+		decrypts = append(decrypts, trimmed)
+	}
+
+	if len(decrypts) != 1 {
+		t.Fatalf("%s's publish job holds %d lines that decrypt in its decrypt step (%q), want the one age command that decrypts the model's result", auditWorkflow, len(decrypts), decrypts)
+	}
+
+	// The command word: the first word after the last pipe, which is where the
+	// private key on stdin comes from. A bare name is resolved through PATH and
+	// is refused, as is a variable the step does not set.
+	command := decrypts[0]
+	piped := command[strings.LastIndex(command, "|")+1:]
+	word := strings.Trim(strings.Fields(piped)[0], `"'`)
+
+	if word != auditInstalledAge && !strings.HasPrefix(word, "/") {
+		t.Errorf("%s's publish job decrypts with %q, whose command word is %q: want age by its absolute path, %q, the binary the install step downloaded and checked against its pin, never a bare age the step's shell resolves through PATH (ADR 0040, issues #615, #614)",
+			auditWorkflow, command, word, auditInstalledAge)
+	}
+}

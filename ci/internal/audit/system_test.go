@@ -1256,18 +1256,53 @@ func TestAuditTakesOnlyAResultFileTheRunWrote(t *testing.T) {
 			wantRefused:  true,
 		},
 		// The directory the launcher digests is capped, in entries and in bytes
-		// (issues #615, #614). The caps are the launcher's to pick: this case
-		// assumes a cap of 64 entries and 4 MiB of content, and holds the launcher
-		// to refusing, before its run, a directory well past them - 1024 entries,
-		// and 32 MiB over 8 files - rather than digesting it whole. Both
-		// directories are built before the run, so a launcher that digests them
-		// anyway meets no change and would take the result file.
+		// (issues #615, #614). The caps are the launcher's to pick: it is 256
+		// entries and 4 MiB of content (finding L1 of issue #614's review: the
+		// runner keeps every earlier step's file-command files in this directory,
+		// so the model step's own files are near 64 entries and a cap that low
+		// would refuse every run), and the launcher refuses, before its run, a
+		// directory well past it - 1024 entries, and 32 MiB over 8 files - rather
+		// than digesting it whole. Both directories are built before the run, so a
+		// launcher that digests them anyway meets no change and would take the
+		// result file.
 		{
 			name: "the $GITHUB_ENV file's directory holds more entries than its cap",
 			before: func(t *testing.T, root string) {
 				t.Helper()
 
 				for i := range 1024 {
+					writeFile(t, fileCommandPath(root, fmt.Sprintf("github-file-%d", i)), "", 0o600)
+				}
+			},
+			write:        func(root string) error { return os.WriteFile(workPath(root, "result.json"), []byte(resultFile), 0o600) },
+			wantLaunched: false,
+			wantRefused:  true,
+		},
+		{
+			// The cap itself is no refusal: the run takes the directory of exactly
+			// 256 entries, the $GITHUB_ENV file it digests among them, so the model
+			// step's directory of every earlier step's file commands is digested and
+			// the run goes on.
+			name: "the $GITHUB_ENV file's directory holds its cap's 256 entries",
+			before: func(t *testing.T, root string) {
+				t.Helper()
+
+				for i := range 255 {
+					writeFile(t, fileCommandPath(root, fmt.Sprintf("github-file-%d", i)), "", 0o600)
+				}
+			},
+			write:        func(root string) error { return os.WriteFile(workPath(root, "result.json"), []byte(resultFile), 0o600) },
+			wantLaunched: true,
+			wantResult:   resultFile,
+		},
+		{
+			// One entry past the cap is refused, before the run: the cap is a cap,
+			// not a target.
+			name: "the $GITHUB_ENV file's directory holds one entry past its cap's 256",
+			before: func(t *testing.T, root string) {
+				t.Helper()
+
+				for i := range 256 {
 					writeFile(t, fileCommandPath(root, fmt.Sprintf("github-file-%d", i)), "", 0o600)
 				}
 			},

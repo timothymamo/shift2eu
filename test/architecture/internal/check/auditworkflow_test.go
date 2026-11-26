@@ -338,6 +338,19 @@ const (
 	auditActionlint = "GOFLAGS=-mod=readonly GOPROXY=off timeout 5m go -C tools run github.com/rhysd/actionlint/cmd/actionlint ../.github/workflows > \"${out}/actionlint.json\" 2> \"${out}/actionlint.stderr\" || rc=$?\n"
 	// auditWrapperBuild is the model job's own Go command, the wrapper's build.
 	auditWrapperBuild = "GOFLAGS=-mod=readonly GOPROXY=off go build -trimpath -o \"${RUNNER_TEMP}/audit-exec\" ./ci/auditexec\n"
+	// auditWrapperInstall is the model job's installation of the wrapper, root-owned
+	// with mode 0555 beside the /srv/audit/tools directory its other tools live in
+	// (finding M1 of issue #614's review): the anchor of the cases that install a
+	// tool somewhere the runner's user can write.
+	auditWrapperInstall = "          sudo install -o root -g root -m 0555 \"${RUNNER_TEMP}/audit-exec\" /srv/audit/bin/audit-exec\n"
+	// auditModelSocat is the model job's own dpkg line, the anchor of the case that
+	// writes a $GITHUB_PATH entry in the model job: the install step's lines are
+	// shared with the checks job, and this one is the model job's alone.
+	auditModelSocat = "          sudo dpkg -i \"${RUNNER_TEMP}/socat.deb\"\n"
+	// auditModelArtifactsCommand is the model job's artifact check, the one command
+	// of the job that runs a program built from main before the model session: the
+	// anchor of the cases that run it through a path the shell resolves.
+	auditModelArtifactsCommand = "          if ! ci/auditpublish artifacts -job model -gh \"$(command -v gh)\" -tmp \"${RUNNER_TEMP}\"; then\n"
 	// auditHardeningStep is the model-free step that hardens the runner: it must
 	// run before the sandbox preflight, which is inside the model step, and it
 	// records each of its own commands' failure, so that a run fails with an
@@ -2108,6 +2121,42 @@ func TestAuditWorkflow(t *testing.T) {
 			wantIn:   "set -x",
 		},
 
+		// The model job's tools live in a directory the runner's user cannot write
+		// (finding M1 of issue #614's review, ADR 0040): the model session runs
+		// between the steps that install the tools and the steps that run them, so
+		// the tools are installed root-owned with mode 0555 into /srv/audit/tools
+		// and run by that absolute path, never from the job's own bin directory in
+		// $RUNNER_TEMP - which the steps appended to $GITHUB_PATH, first on the
+		// PATH - and never by a word or a relative path the shell resolves.
+		{
+			name: "a write to $GITHUB_PATH in the model job",
+			workflow: mutate(t, acceptedWorkflow, auditModelSocat,
+				auditModelSocat+"          echo \"${RUNNER_TEMP}/bin\" >> \"${GITHUB_PATH}\"\n"),
+			wantIn: "GITHUB_PATH",
+		},
+		{
+			name:     "the model job's launcher run from the runner's own bin directory",
+			workflow: mutate(t, acceptedWorkflow, auditRunCommand, strings.Replace(auditRunCommand, "ci/auditrun", "\"${RUNNER_TEMP}/bin/auditrun\"", 1)),
+			wantIn:   "auditrun",
+		},
+		{
+			name:     "the model job's artifact check run from the runner's own bin directory",
+			workflow: mutate(t, acceptedWorkflow, auditModelArtifactsCommand, strings.Replace(auditModelArtifactsCommand, "ci/auditpublish", "\"${RUNNER_TEMP}/bin/auditpublish\"", 1)),
+			wantIn:   "auditpublish",
+		},
+		{
+			name: "the model job's launcher installed by a plain install into the runner's own bin directory",
+			workflow: mutate(t, acceptedWorkflow, auditWrapperInstall,
+				auditWrapperInstall+"          install -m 0755 \"${RUNNER_TEMP}/auditrun\" \"${RUNNER_TEMP}/bin/auditrun\"\n"),
+			wantIn: "auditrun",
+		},
+		{
+			name: "the model job's artifact check installed without the root-owned mode",
+			workflow: mutate(t, acceptedWorkflow, auditWrapperInstall,
+				auditWrapperInstall+"          sudo install -o root -g root -m 0755 \"${RUNNER_TEMP}/auditpublish\" /srv/audit/tools/auditpublish\n"),
+			wantIn: "/srv/audit/tools/auditpublish",
+		},
+
 		// The model job runs no check, no container and no release code: what it
 		// downloads is its checksum-pinned tools, and the model-free hardening
 		// step runs while sudo still works, before the sandbox preflight inside
@@ -2442,12 +2491,12 @@ func TestAuditWorkflow(t *testing.T) {
 		},
 		{
 			name: "the checked artifact's file under another name",
-			workflow: mutate(t, acceptedWorkflow, "          if ! ci/auditpublish artifacts -job model -gh \"$(command -v gh)\" -tmp \"${RUNNER_TEMP}\"; then\n"+
+			workflow: mutate(t, acceptedWorkflow, auditModelArtifactsCommand+
 				auditModelArtifactError+
 				"            exit 1\n"+
 				"          fi\n"+
 				"          artifact=\"${RUNNER_TEMP}/artifact.json\"\n",
-				"          if ! ci/auditpublish artifacts -job model -gh \"$(command -v gh)\" -tmp \"${RUNNER_TEMP}\"; then\n"+
+				auditModelArtifactsCommand+
 					auditModelArtifactError+
 					"            exit 1\n"+
 					"          fi\n"+
