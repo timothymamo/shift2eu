@@ -584,6 +584,13 @@ func FuzzInventoryDecoding(f *testing.F) {
 		f.Add([]byte(nameInventory), tc.name)
 	}
 
+	// A name no report has an item for, and a name whose & is followed by text a
+	// browser reads as a named reference: the header's empty case and the
+	// reference check's, which no hostile-name case reaches. Written raw, the
+	// second would unescape to itself, so only the reference check refuses it.
+	f.Add([]byte(nameInventory), "")
+	f.Add([]byte(nameInventory), "a&foo;.json")
+
 	f.Fuzz(func(t *testing.T, data []byte, name string) {
 		// The inventory is decoded once and the one inventory rendered twelve times,
 		// nine times once per target and format, then three times more, once per
@@ -599,19 +606,61 @@ func FuzzInventoryDecoding(f *testing.F) {
 			return
 		}
 
+		// The name's verdict is the report metadata's, which checks the name before
+		// any port is called, so all nine single-target runs must reach the same
+		// one: the first run's verdict stands for every later run's, and a run that
+		// accepts what the first refused, or refuses what it accepted, fails here
+		// instead of passing as one more report or one more refusal. All nine run
+		// before a refusal ends the input, so a verdict only some of the targets and
+		// formats reach is not hidden by the one that reached it first.
+		runs := make([]singleTargetRun, 0, len(embeddedTargets())*len(reportFormats()))
+
 		for _, target := range embeddedTargets() {
 			for _, format := range reportFormats() {
 				got, calls, err := renderedReport(t, name, inv, target.source, format.newReporter())
-				if err != nil {
-					checkRefusedName(t, name, got, calls, err)
-					checkComparisonRefusals(t, name, inv)
-
-					return
-				}
-
-				checkReport(t, format.name, got)
-				checkName(t, format.name, name, got)
+				runs = append(runs, singleTargetRun{
+					run:    target.key + "/" + format.name,
+					format: format.name,
+					got:    got,
+					calls:  calls,
+					err:    err,
+				})
 			}
+		}
+
+		first := runs[0]
+		for _, later := range runs[1:] {
+			switch {
+			case first.err == nil && later.err != nil:
+				t.Fatalf("the single-target run of %s refused the inventory name %q that the run of %s accepted: %v",
+					later.run, name, first.run, later.err)
+			case first.err != nil && later.err == nil:
+				t.Fatalf("the single-target run of %s accepted the inventory name %q that the run of %s refused: %v",
+					later.run, name, first.run, first.err)
+			}
+		}
+
+		refused := false
+
+		for _, run := range runs {
+			if run.err == nil {
+				continue
+			}
+
+			refused = true
+
+			checkRefusedName(t, name, run.got, run.calls, run.err)
+		}
+
+		if refused {
+			checkComparisonRefusals(t, name, inv)
+
+			return
+		}
+
+		for _, run := range runs {
+			checkReport(t, run.format, run.got)
+			checkName(t, run.format, name, run.got)
 		}
 
 		for _, format := range comparisonFormats() {
@@ -713,6 +762,18 @@ func (d *decodedInventory) Inventory(context.Context) (inventory.Inventory, erro
 	d.calls++
 
 	return d.inv, nil
+}
+
+// singleTargetRun is one single-target run of the fuzz: the target and format it
+// ran, with the key and name they are named by, and what it wrote with name as
+// the report's inventory name, how often it called its inventory source, and the
+// error it returned, if it refused the name.
+type singleTargetRun struct {
+	run    string
+	format string
+	got    []byte
+	calls  int
+	err    error
 }
 
 // renderedReport runs the whole assess path of one target on inv, the inventory
@@ -977,21 +1038,39 @@ func checkNameJSON(t *testing.T, name string, got []byte) {
 // Holding the item to its own escaping, not to a browser's reading alone, is what
 // a name that forms a known tag needs: for x<b>y.json an unescaped write unescapes
 // to the name itself and would open an element in the page. An empty name has no
-// item at all, so it is not checked.
+// item at all, which is checked too: the item right after the source must then
+// not be an inventory file item.
 func checkNameHTML(t *testing.T, name string, got []byte) {
 	t.Helper()
 
+	const prefix = `<span aria-hidden="true">·</span> <code>`
+
+	items := headerItems(string(got))
+
 	if name == "" {
+		// A report with no name to show has no inventory file item: item 2, the one
+		// right after the source, must not be the shape the check above requires of
+		// it, the separator, one code element and nothing after it. A comparison's
+		// item 2 is its first target and a single-target report's is its catalog,
+		// both of whose code elements a link and a region follow, so only an item
+		// written for the empty name itself fails here.
+		if len(items) > 1 {
+			rest, ok := strings.CutPrefix(items[1], prefix)
+			content, ends := strings.CutSuffix(rest, "</code>")
+
+			if ok && ends && !strings.Contains(content, "</code>") {
+				t.Fatalf("the HTML report of an empty inventory name has the inventory file item %q, want no item for a name the report has none for:\n%s",
+					items[1], got)
+			}
+		}
+
 		return
 	}
 
-	items := headerItems(string(got))
 	if len(items) < 2 {
 		t.Fatalf("the HTML report of the inventory name %q has %d header items, want the source item and the inventory file item after it:\n%s",
 			name, len(items), got)
 	}
-
-	const prefix = `<span aria-hidden="true">·</span> <code>`
 
 	item := items[1]
 	if !strings.HasPrefix(item, prefix) {
@@ -1023,12 +1102,13 @@ func checkNameHTML(t *testing.T, name string, got []byte) {
 
 // checkCodeEscaped fails unless raw, the content of the code element that holds
 // name as the reporter wrote it, escaped it: no raw < or >, which a browser
-// would read as an element's start or end, and every & starting a character
-// reference, so no value opens an element, closes one, or begins a reference a
-// browser reads as something else than the text html.UnescapeString reads. The
-// reporter escapes both quotes and + besides the markup characters (its
-// textEscaper), so the check is on what a browser may read as markup rather than
-// on one expected spelling of html.EscapeString's.
+// would read as an element's start or end, and every & starting one of the six
+// character references the reporter's own escaping writes (its textEscaper's
+// &amp;, &lt;, &gt;, &#34;, &#39; and &#43;), so no value opens an element, closes
+// one, or begins a reference a browser reads as something else than the text
+// html.UnescapeString reads. The check is on what a browser may read as markup
+// rather than on one expected spelling of html.EscapeString's, but a reference
+// the reporter never writes, a named one like &foo; too, is not one it may emit.
 func checkCodeEscaped(t *testing.T, name, raw string) {
 	t.Helper()
 
@@ -1049,10 +1129,12 @@ func checkCodeEscaped(t *testing.T, name, raw string) {
 	}
 }
 
-// characterReference matches a character reference as HTML reads one, from the &
-// at the start of the string it is matched against: a numeric reference (&#34; or
-// &#x22;) or a named one (&amp;), each closed by a semicolon.
-var characterReference = regexp.MustCompile(`^&(?:#[0-9]+|#[xX][0-9a-fA-F]+|[a-zA-Z][a-zA-Z0-9]*);`)
+// characterReference matches one of the six character references the reporter's
+// textEscaper writes, from the & at the start of the string it is matched
+// against: &amp;, &lt;, &gt;, &#34;, &#39; and &#43;. Any other reference a browser
+// knows, a named one like &foo; too, is not one a name may be written as: a raw &
+// followed by readable text would otherwise pass as that text's reference.
+var characterReference = regexp.MustCompile(`^&(?:amp|lt|gt|#34|#39|#43);`)
 
 // headerItems returns the content of every item of a fragment's header line, its
 // first list element carrying role="list", each as written: a value's character
@@ -1300,6 +1382,46 @@ func TestFirstBrokenTableRow(t *testing.T) {
 
 			if ok && got != tc.broken {
 				t.Errorf("firstBrokenTableRow() = %+v, want %+v", got, tc.broken)
+			}
+		})
+	}
+}
+
+// TestCharacterReference pins the references the HTML code element's check
+// accepts as the ones the reporter's own escaping writes, and no other: a raw &
+// write of a name like &foo;.json unescapes to the name itself, so a reference
+// check that accepted any name a browser knows would let it pass as markup-free.
+func TestCharacterReference(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		raw  string
+		// want is the reference the check must read at the start of raw, the empty
+		// string for a raw that starts no reference the reporter writes.
+		want string
+	}{
+		{name: "the & of a name, as textEscaper writes it", raw: "&amp;foo;.json", want: "&amp;"},
+		{name: "a < as textEscaper writes it", raw: "&lt;b&gt;", want: "&lt;"},
+		{name: "a > as textEscaper writes it", raw: "&gt;", want: "&gt;"},
+		{name: "a quote as textEscaper writes it", raw: `&#34;`, want: "&#34;"},
+		{name: "an apostrophe as textEscaper writes it", raw: "&#39;", want: "&#39;"},
+		{name: "a + as textEscaper writes it", raw: "&#43;.json", want: "&#43;"},
+		{name: "a raw & written for a name like &foo;.json", raw: "&foo;.json"},
+		{name: "a named reference html reads", raw: "&nbsp;"},
+		{name: "a named reference in another case", raw: "&AMP;"},
+		{name: "a reference without its semicolon", raw: "&amp"},
+		{name: "a hex numeric reference", raw: "&#x22;"},
+		{name: "a numeric reference for the &", raw: "&#38;"},
+		{name: "a numeric reference with a leading zero", raw: "&#034;"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := characterReference.FindString(tc.raw); got != tc.want {
+				t.Fatalf("characterReference matches %q at the start of %q, want %q", got, tc.raw, tc.want)
 			}
 		})
 	}
