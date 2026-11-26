@@ -339,26 +339,64 @@ func auditGovulncheckVersionGuard(step auditJobStep, want string) []string {
 	return problems
 }
 
+// auditGovulncheckGuardCase is one case of
+// TestAuditGovulncheckVersionGuardHoldsTheBuiltGoItself: the go version line a
+// step holds, the comparison the case puts after it, an unrelated code line a
+// case slips between the two when it has one, whether the case leaves the
+// guard's ::error or its exit 1 to after the block's fi, and the count of
+// problems the guard must then report (issue #658).
+type auditGovulncheckGuardCase struct {
+	name         string
+	goVersion    string
+	comparison   string
+	between      string
+	errorAfterFi bool
+	exitAfterFi  bool
+	want         int
+}
+
 // auditGovulncheckGuardStep returns a checks job step shaped like the workflow's
-// own "Download the Go modules" step, with its go version line and the
-// comparison after it written as a case asks: every other line is what the guard
-// needs to find, so a problem it reports is about those two lines (issue #658).
-func auditGovulncheckGuardStep(goVersion, comparison string) auditJobStep {
-	return auditJobStep{
-		index: 1,
-		name:  "Download the Go modules",
-		lines: []string{
-			"      - name: Download the Go modules",
-			"        run: |",
-			"          set -euo pipefail",
-			`          want="go$(go list -m -f '{{.GoVersion}}')"`,
-			"          " + goVersion,
-			"          " + comparison,
-			`            echo "::error title=Audit checks::govulncheck was not built with go.mod's ${want}: see runbook step 11"`,
-			"            exit 1",
-			"          fi",
-		},
+// own "Download the Go modules" step, with its go version line, the comparison
+// after it and the guard's block written as a case asks: every other line is
+// what the guard needs to find inside that block, so a problem it reports is
+// about the lines the case moved (issue #658).
+func auditGovulncheckGuardStep(c auditGovulncheckGuardCase) auditJobStep {
+	lines := []string{
+		"      - name: Download the Go modules",
+		"        run: |",
+		"          set -euo pipefail",
+		`          want="go$(go list -m -f '{{.GoVersion}}')"`,
+		"          " + c.goVersion,
 	}
+
+	if c.between != "" {
+		lines = append(lines, "          "+c.between)
+	}
+
+	lines = append(lines, "          "+c.comparison)
+
+	// The block's failure, each line where the case puts it: inside the if
+	// block that compares the two, or after its fi, where it belongs to
+	// whatever comes next in the step instead (issue #658).
+	if !c.errorAfterFi {
+		lines = append(lines, `            echo "::error title=Audit checks::govulncheck was not built with go.mod's ${want}: see runbook step 11"`)
+	}
+
+	if !c.exitAfterFi {
+		lines = append(lines, "            exit 1")
+	}
+
+	lines = append(lines, "          fi")
+
+	if c.errorAfterFi {
+		lines = append(lines, `          echo "::error title=Audit checks::govulncheck was not built with go.mod's ${want}: see runbook step 11"`)
+	}
+
+	if c.exitAfterFi {
+		lines = append(lines, "          exit 1")
+	}
+
+	return auditJobStep{index: 1, name: "Download the Go modules", lines: lines}
 }
 
 // TestAuditGovulncheckVersionGuardHoldsTheBuiltGoItself pins the guard's
@@ -368,6 +406,13 @@ func auditGovulncheckGuardStep(goVersion, comparison string) auditJobStep {
 // could be weakened to nothing and the test stay green. The go version line must
 // assign what it prints to a variable of its own, and the comparison must name
 // both that variable and go.mod's.
+//
+// It also pins the guard's block itself (round 3 of issue #658's review): the
+// comparison must be the first code line after the go version line, and the
+// ::error naming govulncheck and the exit 1 after it must be inside the block
+// that if opens, before its fi. A guard checked against any later line of the
+// step passed with its own exit 1 dropped: an unrelated exit 1 further down the
+// same step stood in for it, and a mismatch only warned.
 func TestAuditGovulncheckVersionGuardHoldsTheBuiltGoItself(t *testing.T) {
 	t.Parallel()
 
@@ -376,12 +421,7 @@ func TestAuditGovulncheckVersionGuardHoldsTheBuiltGoItself(t *testing.T) {
 		bothLine  = `if [ "${built##* }" != "${want}" ]; then`
 	)
 
-	for _, tc := range []struct {
-		name       string
-		goVersion  string
-		comparison string
-		want       int
-	}{
+	for _, tc := range []auditGovulncheckGuardCase{
 		{
 			name:       "the comparison names the built tool's Go and go.mod's",
 			goVersion:  builtLine,
@@ -405,14 +445,36 @@ func TestAuditGovulncheckVersionGuardHoldsTheBuiltGoItself(t *testing.T) {
 			comparison: bothLine,
 			want:       1,
 		},
+		{
+			name:       "an unrelated code line sits between the go version line and the comparison",
+			goVersion:  builtLine,
+			comparison: bothLine,
+			between:    `echo "checking the built govulncheck"`,
+			want:       1,
+		},
+		{
+			name:         "the ::error sits after the block's fi, with an exit 1 after it",
+			goVersion:    builtLine,
+			comparison:   bothLine,
+			errorAfterFi: true,
+			exitAfterFi:  true,
+			want:         1,
+		},
+		{
+			name:        "the exit 1 sits after the block's fi",
+			goVersion:   builtLine,
+			comparison:  bothLine,
+			exitAfterFi: true,
+			want:        1,
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			problems := auditGovulncheckVersionGuard(auditGovulncheckGuardStep(tc.goVersion, tc.comparison), "1.25.0")
+			problems := auditGovulncheckVersionGuard(auditGovulncheckGuardStep(tc), "1.25.0")
 			if len(problems) != tc.want {
-				t.Errorf("auditGovulncheckVersionGuard(%q, %q) reported %d problem(s), want %d:\n%s",
-					tc.goVersion, tc.comparison, len(problems), tc.want, strings.Join(problems, "\n"))
+				t.Errorf("auditGovulncheckVersionGuard(%q, %q, between %q, ::error after fi %t, exit 1 after fi %t) reported %d problem(s), want %d:\n%s",
+					tc.goVersion, tc.comparison, tc.between, tc.errorAfterFi, tc.exitAfterFi, len(problems), tc.want, strings.Join(problems, "\n"))
 			}
 		})
 	}
