@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -32,9 +33,13 @@ import (
 // only within the version window whose anchor is the highest tag's committer
 // date and whose bound is check.SiteCheckWindow, the anchor passed to the
 // script through env: and never pasted into it, the attestation verified with
-// the deploy's and the guide's flags, and an alert job that holds issues: write
-// alone, creates its label idempotently before it opens the issue, and writes
-// fixed text plus the failed run's URL, never an output of the checking job.
+// the deploy's and the guide's flags and bound to the tag's commit, the full
+// check's HSTS and preload records read at the release's tag and passed
+// through env:, the window covering the HTML's max-age, and an alert job that
+// holds issues: write alone, fires whenever the check did not succeed (a job
+// past its timeout concludes cancelled, where failure() is false), creates its
+// label idempotently before it opens the issue, and writes fixed text plus the
+// failed run's URL, never an output of the checking job.
 
 // siteCheckWorkflow is .github/workflows/site-check.yml.
 const siteCheckWorkflow = `name: Live site check
@@ -43,10 +48,11 @@ const siteCheckWorkflow = `name: Live site check
 # releases is noticed within a day (PRD #297 milestone 4, ADR 0043). The live
 # version is untrusted page text, matched against the repository's own tag list
 # and accepted only within the window after the highest release tag's commit,
-# so a release whose run was queued past the window fails the check once. The
-# alert job opens or comments on one issue because GitHub notifies no one of a
-# failed scheduled run, and disables a schedule after 60 days without
-# repository activity; the runbook says how to re-enable it.
+# so a release whose run was queued past the window fails the check once. A
+# release deploying while this runs can fail it once, like a release queued
+# past the window. The alert job opens or comments on one issue because GitHub
+# notifies no one of a failed scheduled run, and disables a schedule after 60
+# days without repository activity; the runbook says how to re-enable it.
 on:
   schedule:
     - cron: '23 5 * * *'
@@ -87,7 +93,6 @@ jobs:
           expected="${tags[-1]}"
           printf '%s\n' "${tags[@]}" > "${RUNNER_TEMP}/tags.txt"
           anchor="$(git log -1 --format=%cI "${expected}")"
-          echo "tag=${expected}" >> "${GITHUB_OUTPUT}"
           echo "anchor=${anchor}" >> "${GITHUB_OUTPUT}"
       # The live version is read from the page and never trusted: the program
       # refuses one that is not vX.Y.Z, that is no tag of the repository, or
@@ -105,30 +110,52 @@ jobs:
           live="$(go run ./ci/sitecheck live-version -tags "${RUNNER_TEMP}/tags.txt" -anchor "${ANCHOR}" -window 180m)"
           grep -qxF "${live}" "${RUNNER_TEMP}/tags.txt"
           echo "tag=${live}" >> "${GITHUB_OUTPUT}"
+      # The commit the tag names, read from the repository itself and handed to
+      # the attestation through env: as --source-digest: the provenance must
+      # bind the release's commit, not only its ref, so a tag that moved after
+      # the release fails the check.
+      - name: The release's commit
+        id: commit
+        env:
+          TAG: ${{ steps.live.outputs.tag }}
+        run: |
+          set -euo pipefail
+          digest="$(git rev-parse "refs/tags/${TAG}^{commit}")"
+          echo "digest=${digest}" >> "${GITHUB_OUTPUT}"
       # The release the page names, downloaded and its build provenance verified
       # with the workflow's token alone, the signer workflow, the tag's own ref
-      # and no self-hosted runner: the deploy's and the guide's flags.
+      # and commit, and no self-hosted runner: the deploy's and the guide's
+      # flags.
       - name: Verify the release's attestation
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ steps.live.outputs.tag }}
+          DIGEST: ${{ steps.commit.outputs.digest }}
         run: |
           set -euo pipefail
           mkdir -p "${RUNNER_TEMP}/bundle"
           gh release download "${TAG}" --repo timothymamo/shift2eu --pattern "shift2eu-site_${TAG}.tar.gz" --dir "${RUNNER_TEMP}/bundle"
-          gh attestation verify "${RUNNER_TEMP}/bundle/shift2eu-site_${TAG}.tar.gz" --repo timothymamo/shift2eu --signer-workflow timothymamo/shift2eu/.github/workflows/release.yml --source-ref "refs/tags/${TAG}" --deny-self-hosted-runners
+          gh attestation verify "${RUNNER_TEMP}/bundle/shift2eu-site_${TAG}.tar.gz" --repo timothymamo/shift2eu --signer-workflow timothymamo/shift2eu/.github/workflows/release.yml --source-ref "refs/tags/${TAG}" --source-digest "${DIGEST}" --deny-self-hosted-runners
           tar -xzf "${RUNNER_TEMP}/bundle/shift2eu-site_${TAG}.tar.gz" -C "${RUNNER_TEMP}/bundle"
-      # The whole check against the release's own manifest: the files, /, the
+      # The whole check against the release's own manifest, and HSTS and the
+      # preload list against the records the release's tag holds, read from the
+      # repository and never from the working tree: the files, /, the
       # service-worker paths, the headers, the redirects, both certificates and
       # HSTS against the recorded state.
       - name: Check the live site
+        env:
+          TAG: ${{ steps.live.outputs.tag }}
         run: |
           set -euo pipefail
-          go run ./ci/sitecheck -manifest "${RUNNER_TEMP}/bundle/manifest.json" -tags "${RUNNER_TEMP}/tags.txt"
+          git show "refs/tags/${TAG}:site/records/hsts.json" > "${RUNNER_TEMP}/hsts.json"
+          git show "refs/tags/${TAG}:site/records/preload.json" > "${RUNNER_TEMP}/preload.json"
+          go run ./ci/sitecheck -manifest "${RUNNER_TEMP}/bundle/manifest.json" -tags "${RUNNER_TEMP}/tags.txt" -hsts-record "${RUNNER_TEMP}/hsts.json" -preload-record "${RUNNER_TEMP}/preload.json"
   alert:
     name: Alert
     needs: check
-    if: failure()
+    # A job that exceeds its timeout-minutes concludes cancelled, and failure()
+    # is false then: the alert fires whenever the check did not succeed.
+    if: ${{ always() && needs.check.result != 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -186,9 +213,17 @@ func siteCheckWindowLiteral(t *testing.T, workflow string) time.Duration {
 func siteCheckWorkflowFile(t *testing.T, name string) []byte {
 	t.Helper()
 
-	data, err := os.ReadFile(filepath.FromSlash("../../../../.github/workflows/" + name))
+	return siteCheckRepositoryFile(t, ".github/workflows/"+name)
+}
+
+// siteCheckRepositoryFile reads one file of the repository, as it holds it,
+// from this package's directory.
+func siteCheckRepositoryFile(t *testing.T, path string) []byte {
+	t.Helper()
+
+	data, err := os.ReadFile(filepath.FromSlash("../../../../" + path))
 	if err != nil {
-		t.Fatalf("read .github/workflows/%s: %v", name, err)
+		t.Fatalf("read %s: %v", path, err)
 	}
 
 	return data
@@ -357,14 +392,64 @@ func TestSiteCheckWorkflow(t *testing.T) {
 			new:  "go run ./ci/sitecheck -tags \"${RUNNER_TEMP}/tags.txt\"",
 		},
 		{
+			name: "the full check without the HSTS record",
+			old:  ` -hsts-record "${RUNNER_TEMP}/hsts.json"`,
+			new:  "",
+		},
+		{
+			name: "the full check without the preload record",
+			old:  ` -preload-record "${RUNNER_TEMP}/preload.json"`,
+			new:  "",
+		},
+		{
+			name: "the full check with the working tree's HSTS record instead of the tag's",
+			old:  `git show "refs/tags/${TAG}:site/records/hsts.json" > "${RUNNER_TEMP}/hsts.json"`,
+			new:  `cp site/records/hsts.json "${RUNNER_TEMP}/hsts.json"`,
+		},
+		{
+			name: "the full check with HEAD's preload record instead of the tag's",
+			old:  `git show "refs/tags/${TAG}:site/records/preload.json" > "${RUNNER_TEMP}/preload.json"`,
+			new:  `git show "HEAD:site/records/preload.json" > "${RUNNER_TEMP}/preload.json"`,
+		},
+		{
+			name: "a full check without the tag it reads the records at",
+			old:  "        env:\n          TAG: ${{ steps.live.outputs.tag }}\n        run: |\n          set -euo pipefail\n          git show",
+			new:  "        run: |\n          set -euo pipefail\n          git show",
+		},
+		{
+			name: "an attestation verified without --source-digest",
+			old:  ` --source-digest "${DIGEST}"`,
+			new:  "",
+		},
+		{
+			name: "a source digest read from HEAD instead of the tag's commit",
+			old:  `git rev-parse "refs/tags/${TAG}^{commit}"`,
+			new:  "git rev-parse HEAD",
+		},
+		{
+			name: "an expected release step that writes an output no step reads",
+			old:  `          anchor="$(git log -1 --format=%cI "${expected}")"`,
+			new:  `          anchor="$(git log -1 --format=%cI "${expected}")"` + "\n" + `          echo "tag=${expected}" >> "${GITHUB_OUTPUT}"`,
+		},
+		{
 			name: "an alert job that does not need the check",
 			old:  "    needs: check",
 			new:  "    needs: []",
 		},
 		{
+			name: "an alert job that runs only on failure and not on a timeout",
+			old:  "    if: ${{ always() && needs.check.result != 'success' }}",
+			new:  "    if: failure()",
+		},
+		{
 			name: "an alert job that runs on success",
-			old:  "    if: failure()",
+			old:  "    if: ${{ always() && needs.check.result != 'success' }}",
 			new:  "    if: always()",
+		},
+		{
+			name: "an alert job that skips a cancelled check",
+			old:  "    if: ${{ always() && needs.check.result != 'success' }}",
+			new:  "    if: ${{ !cancelled() && needs.check.result != 'success' }}",
 		},
 		{
 			name: "an alert job with another permission",
@@ -497,5 +582,33 @@ func TestSiteCheckWindowCoversTheRelease(t *testing.T) {
 	if check.SiteCheckWindow < minimum {
 		t.Errorf("check.SiteCheckWindow is %v, want at least %v: release-please's two jobs, release.yml's longest chain to site-check and the HTML's max-age (PRD #297 milestone 4, ADR 0043)",
 			check.SiteCheckWindow, minimum)
+	}
+}
+
+// livecheckMaxHTMLAgeConst matches the live check's MaxHTMLAge declaration.
+var livecheckMaxHTMLAgeConst = regexp.MustCompile(`(?m)^const MaxHTMLAge = ([0-9]+)$`)
+
+// TestSiteCheckHTMLMaxAgeIsTheLivechecks pins that the HTML's max-age the
+// window's bound covers, check.SiteCheckHTMLMaxAge, is the live check's own
+// MaxHTMLAge: two constants that must move together. The live check's is
+// ci/sitecheck/internal/livecheck's, behind ci/sitecheck's internal directory,
+// which Go's internal rule keeps out of reach of test/architecture, so its
+// value is read from its source.
+func TestSiteCheckHTMLMaxAgeIsTheLivechecks(t *testing.T) {
+	t.Parallel()
+
+	match := livecheckMaxHTMLAgeConst.FindSubmatch(siteCheckRepositoryFile(t, "ci/sitecheck/internal/livecheck/headers.go"))
+	if match == nil {
+		t.Fatalf("ci/sitecheck/internal/livecheck/headers.go holds no `const MaxHTMLAge = <seconds>` line: the scheduled check's window covers the HTML's max-age (PRD #297 milestone 4, ADR 0043)")
+	}
+
+	seconds, err := strconv.Atoi(string(match[1]))
+	if err != nil {
+		t.Fatalf("parse ci/sitecheck/internal/livecheck's MaxHTMLAge %q: %v", match[1], err)
+	}
+
+	if want := time.Duration(seconds) * time.Second; check.SiteCheckHTMLMaxAge != want {
+		t.Errorf("check.SiteCheckHTMLMaxAge is %v, and ci/sitecheck/internal/livecheck's MaxHTMLAge is %v, want the same: the window's bound covers the HTML's max-age (PRD #297 milestone 4, ADR 0043)",
+			check.SiteCheckHTMLMaxAge, want)
 	}
 }
