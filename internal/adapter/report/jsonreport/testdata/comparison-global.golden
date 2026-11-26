@@ -1,0 +1,258 @@
+{
+  "schemaVersion": 2,
+  "kind": "comparison",
+  "inventoryName": "inventory.json",
+  "source": "aws",
+  "targets": [
+    {
+      "key": "ovhcloud",
+      "target": {
+        "name": "OVHcloud",
+        "snapshot": {
+          "source": "https://www.ovhcloud.com/en/public-cloud/prices/",
+          "retrieved": "2026-11-08"
+        }
+      },
+      "summary": {
+        "direct": 2,
+        "partial": 1,
+        "none": 0,
+        "total": 3
+      },
+      "resources": [
+        {
+          "id": "zone-dnssec",
+          "rawType": "AWS::Route53::HostedZone",
+          "category": "network.dns",
+          "region": "",
+          "fit": "direct",
+          "bestOffering": "Apex DNS Zone",
+          "ties": [
+            "DNS Zone",
+            "DNS Zone Premium"
+          ],
+          "reasons": [
+            {
+              "code": "all-capabilities",
+              "text": "Apex DNS Zone offers every capability the resource uses",
+              "offering": "Apex DNS Zone"
+            }
+          ],
+          "requiredChanges": [],
+          "relations": [],
+          "affectedBy": []
+        },
+        {
+          "id": "zone-example",
+          "rawType": "AWS::Route53::HostedZone",
+          "category": "network.dns",
+          "region": "",
+          "fit": "direct",
+          "bestOffering": "DNS Zone",
+          "ties": [
+            "DNS Zone Premium"
+          ],
+          "reasons": [
+            {
+              "code": "all-capabilities",
+              "text": "DNS Zone offers every capability the resource uses",
+              "offering": "DNS Zone"
+            }
+          ],
+          "requiredChanges": [],
+          "relations": [],
+          "affectedBy": []
+        },
+        {
+          "id": "zone-ipv6",
+          "rawType": "AWS::Route53::HostedZone",
+          "category": "network.dns",
+          "region": "",
+          "fit": "partial",
+          "bestOffering": "DNS Zone",
+          "ties": [
+            "DNS Zone Premium"
+          ],
+          "reasons": [
+            {
+              "code": "missing-capability",
+              "text": "DNS Zone does not offer ipv6",
+              "offering": "DNS Zone",
+              "capability": "ipv6"
+            }
+          ],
+          "requiredChanges": [
+            "ipv6"
+          ],
+          "relations": [],
+          "affectedBy": []
+        }
+      ],
+      "blockers": [],
+      "workloads": [
+        {
+          "name": "",
+          "noWorkload": true,
+          "resources": 3,
+          "summary": {
+            "direct": 2,
+            "partial": 1,
+            "none": 0,
+            "total": 3
+          },
+          "blockers": []
+        }
+      ]
+    },
+    {
+      "key": "upcloud",
+      "target": {
+        "name": "UpCloud",
+        "snapshot": {
+          "source": "https://upcloud.com/pricing/",
+          "retrieved": "2026-10-25"
+        }
+      },
+      "summary": {
+        "direct": 0,
+        "partial": 0,
+        "none": 3,
+        "total": 3
+      },
+      "resources": [
+        {
+          "id": "zone-dnssec",
+          "rawType": "AWS::Route53::HostedZone",
+          "category": "network.dns",
+          "region": "",
+          "fit": "none",
+          "bestOffering": "",
+          "ties": [],
+          "reasons": [
+            {
+              "code": "no-offering",
+              "text": "no offering in the UpCloud catalog for network.dns",
+              "target": "UpCloud",
+              "category": "network.dns"
+            }
+          ],
+          "requiredChanges": [],
+          "relations": [],
+          "affectedBy": []
+        },
+        {
+          "id": "zone-example",
+          "rawType": "AWS::Route53::HostedZone",
+          "category": "network.dns",
+          "region": "",
+          "fit": "none",
+          "bestOffering": "",
+          "ties": [],
+          "reasons": [
+            {
+              "code": "no-offering",
+              "text": "no offering in the UpCloud catalog for network.dns",
+              "target": "UpCloud",
+              "category": "network.dns"
+            }
+          ],
+          "requiredChanges": [],
+          "relations": [],
+          "affectedBy": []
+        },
+        {
+          "id": "zone-ipv6",
+          "rawType": "AWS::Route53::HostedZone",
+          "category": "network.dns",
+          "region": "",
+          "fit": "none",
+          "bestOffering": "",
+          "ties": [],
+          "reasons": [
+            {
+              "code": "no-offering",
+              "text": "no offering in the UpCloud catalog for network.dns",
+              "target": "UpCloud",
+              "category": "network.dns"
+            }
+          ],
+          "requiredChanges": [],
+          "relations": [],
+          "affectedBy": []
+        }
+      ],
+      "blockers": [
+        {
+          "resourceId": "zone-dnssec",
+          "reason": {
+            "code": "no-offering",
+            "text": "no offering in the UpCloud catalog for network.dns",
+            "target": "UpCloud",
+            "category": "network.dns"
+          }
+        },
+        {
+          "resourceId": "zone-example",
+          "reason": {
+            "code": "no-offering",
+            "text": "no offering in the UpCloud catalog for network.dns",
+            "target": "UpCloud",
+            "category": "network.dns"
+          }
+        },
+        {
+          "resourceId": "zone-ipv6",
+          "reason": {
+            "code": "no-offering",
+            "text": "no offering in the UpCloud catalog for network.dns",
+            "target": "UpCloud",
+            "category": "network.dns"
+          }
+        }
+      ],
+      "workloads": [
+        {
+          "name": "",
+          "noWorkload": true,
+          "resources": 3,
+          "summary": {
+            "direct": 0,
+            "partial": 0,
+            "none": 3,
+            "total": 3
+          },
+          "blockers": [
+            {
+              "resourceId": "zone-dnssec",
+              "reason": {
+                "code": "no-offering",
+                "text": "no offering in the UpCloud catalog for network.dns",
+                "target": "UpCloud",
+                "category": "network.dns"
+              }
+            },
+            {
+              "resourceId": "zone-example",
+              "reason": {
+                "code": "no-offering",
+                "text": "no offering in the UpCloud catalog for network.dns",
+                "target": "UpCloud",
+                "category": "network.dns"
+              }
+            },
+            {
+              "resourceId": "zone-ipv6",
+              "reason": {
+                "code": "no-offering",
+                "text": "no offering in the UpCloud catalog for network.dns",
+                "target": "UpCloud",
+                "category": "network.dns"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "sharedBlockers": []
+}

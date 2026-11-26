@@ -34,7 +34,9 @@ const (
 	// messaging.queue and messaging.topic.
 	ByUsage Method = "usage"
 	// NotPriced is a category that is never priced: network.loadbalancer and
-	// registry.container (ADR 0046), taxonomy.Unclassified, and any category
+	// registry.container (ADR 0046), network.dns (PRD #581, ADR 0048: a zone
+	// is billed per zone and per query, which no inventory field records),
+	// taxonomy.Unclassified, and any category
 	// this package does not know.
 	NotPriced Method = "not-priced"
 )

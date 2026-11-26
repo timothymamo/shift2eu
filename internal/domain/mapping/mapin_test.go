@@ -164,6 +164,37 @@ func TestMapIn(t *testing.T) {
 				{Code: mapping.AllCapabilities, Offering: "Alpha Compute"},
 			},
 		},
+		{
+			// A global offering is a candidate in every region: a zone is served by
+			// the provider's own name servers, so a chosen region never makes it
+			// "not offered in <region>" (PRD #581, The region model).
+			name:      "a global offering is a candidate in a declared region",
+			resource:  dnsResource("zone-1"),
+			offerings: []catalog.Offering{globalDNSOffering()},
+			region:    "fr-par",
+			wantFit:   mapping.Direct,
+			wantCands: []string{"DNS Zone"},
+			wantBest:  "DNS Zone",
+			wantReason: []mapping.Reason{
+				{Code: mapping.AllCapabilities, Offering: "DNS Zone"},
+			},
+		},
+		{
+			// A region no offering lists is MapIn's to judge, never the map's to
+			// invent: a global offering is still offered there, so the fit is the
+			// one its capabilities give, not NotOfferedInRegion.
+			name:      "a global offering is a candidate in a region no offering lists",
+			resource:  dnsResource("zone-1", taxonomy.DNSSEC),
+			offerings: []catalog.Offering{globalDNSOffering()},
+			region:    "zz-zzz",
+			wantFit:   mapping.Partial,
+			wantCands: []string{"DNS Zone"},
+			wantBest:  "DNS Zone",
+			wantMiss:  []taxonomy.Capability{taxonomy.DNSSEC},
+			wantReason: []mapping.Reason{
+				{Code: mapping.MissingCapability, Offering: "DNS Zone", Capability: taxonomy.DNSSEC},
+			},
+		},
 	}
 
 	for _, tc := range tests {
@@ -234,4 +265,25 @@ func candidateNames(candidates []mapping.Candidate) []string {
 	}
 
 	return names
+}
+
+// dnsResource is a network.dns resource using the capabilities given: a public
+// zone, written with no region, as a source writes a global resource.
+func dnsResource(id string, capabilities ...taxonomy.Capability) inventory.Resource {
+	return inventory.Resource{
+		ID:           id,
+		RawType:      "AWS::Route53::HostedZone",
+		Category:     taxonomy.NetworkDNS,
+		Capabilities: capabilities,
+	}
+}
+
+// globalDNSOffering is the one global category's offering: a DNS zone, in no
+// declared region, available in every one.
+func globalDNSOffering() catalog.Offering {
+	return catalog.Offering{
+		Name:       "DNS Zone",
+		Categories: []taxonomy.Category{taxonomy.NetworkDNS},
+		Global:     true,
+	}
 }

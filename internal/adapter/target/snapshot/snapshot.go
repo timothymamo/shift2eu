@@ -105,6 +105,7 @@ func Parse(data []byte) (Document, error) {
 			Categories:          o.categories,
 			Capabilities:        o.capabilities,
 			Regions:             o.regions,
+			Global:              o.global,
 			Plans:               o.plans,
 			StoragePrices:       o.storagePrices,
 			FixedFees:           o.fixedFees,
@@ -127,8 +128,9 @@ func Parse(data []byte) (Document, error) {
 }
 
 // document is a snapshot of schema version 2 as the walk reads it, before its
-// values are checked. Every field but an offering's fixedFees and
-// planBillingCapHours is required by the format (ADR 0026, ADR 0029); the walk
+// values are checked. Every field but an offering's fixedFees,
+// planBillingCapHours and global is required by the format (ADR 0026, ADR 0029,
+// PRD #581); the walk
 // refuses a document that leaves one out or gives any field, the optional ones
 // included, as null.
 type document struct {
@@ -143,10 +145,13 @@ type document struct {
 // offering is one offering of a document. Its values are checked by catalog.New,
 // not here.
 type offering struct {
-	name          string
-	categories    []taxonomy.Category
-	capabilities  []taxonomy.Capability
-	regions       []string
+	name         string
+	categories   []taxonomy.Category
+	capabilities []taxonomy.Capability
+	regions      []string
+	// global is false when the offering has no global key (PRD #581); the
+	// walk refuses a global key of false.
+	global        bool
 	plans         []catalog.Plan
 	storagePrices []catalog.Price
 	// fixedFees is nil when the offering has no fixedFees key (ADR 0026).
@@ -157,7 +162,7 @@ type offering struct {
 }
 
 // The keys of schema version 2, spelt exactly as ADR 0007, ADR 0024, ADR 0026
-// and ADR 0029 record them.
+// and ADR 0029 record them, and global (PRD #581).
 const (
 	keySchemaVersion       = "schemaVersion"
 	keyTarget              = "target"
@@ -173,6 +178,7 @@ const (
 	keyStoragePrices       = "storagePrices"
 	keyFixedFees           = "fixedFees"
 	keyPlanBillingCapHours = "planBillingCapHours"
+	keyGlobal              = "global"
 	keyVCPUs               = "vcpus"
 	keyMemoryGiB           = "memoryGiB"
 	keyStorageGiB          = "storageGiB"
@@ -183,8 +189,9 @@ const (
 
 // documentKeys, offeringKeys, planKeys and priceKeys list the keys of the
 // document object, an offering, a plan and a price, every one of them required
-// but two: an offering's fixedFees (ADR 0026) and planBillingCapHours
-// (ADR 0029), the format's only optional keys, recorded exceptions to ADR 0007.
+// but three: an offering's fixedFees (ADR 0026), planBillingCapHours
+// (ADR 0029) and global (PRD #581), the format's only optional keys, recorded
+// exceptions to ADR 0007. A plan's vcpus is optional too (ADR 0046).
 // They are never modified.
 var (
 	documentKeys = []jsondoc.Key{
@@ -201,6 +208,7 @@ var (
 		{Name: keyCategories, Required: true},
 		{Name: keyCapabilities, Required: true},
 		{Name: keyRegions, Required: true},
+		{Name: keyGlobal, Required: false},
 		{Name: keyPlans, Required: true},
 		{Name: keyStoragePrices, Required: true},
 		{Name: keyFixedFees, Required: false},

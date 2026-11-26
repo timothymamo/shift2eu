@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.16.1](https://github.com/timothymamo/shift2eu/compare/v0.16.0...v0.16.1) (2026-11-25)
+
+
+### Bug Fixes
+
+* **audit:** ask for the permission mode the scrub runs and check the session's init element (issue [#592](https://github.com/timothymamo/shift2eu/issues/592)) ([#604](https://github.com/timothymamo/shift2eu/issues/604)) ([f546f1e](https://github.com/timothymamo/shift2eu/commit/f546f1e957997b090c8c5ca8c68160375eb3bed8))
+
 ## [0.16.0](https://github.com/timothymamo/shift2eu/compare/v0.15.0...v0.16.0) (2026-11-25)
 
 

@@ -9,21 +9,35 @@
 // (retrievedOn, YYYY-MM-DD) of its data, the EU regions it declares, its
 // default region (the one estimates use when the user names none), and its
 // offerings, each with a name, taxonomy categories, capabilities, regions,
-// plans and storage prices, and optionally fixed fees and a plan billing cap. A
+// plans and storage prices, and optionally fixed fees, a plan billing cap and
+// the global mark. A
 // plan has a name, vcpus, memoryGiB, storageGiB and prices; a price an amount,
 // a currency and regions. Every field is required, at every level, and a list
-// may be empty, with three exceptions. A plan's vcpus (ADR 0046) may be left
+// may be empty, with four exceptions. A plan's vcpus (ADR 0046) may be left
 // out when the target gives no vCPU count, which reads as VCPUs 0 and which
 // catalog.New accepts only on an offering matched on memory alone (cache.redis);
 // when present it is an integer of at least 1, and 0 is refused, so "not given"
 // has one spelling. An offering's fixedFees (ADR 0026), the
 // fixed monthly fee per instance (one Kubernetes cluster), may be left out,
 // which means no fixed fee; when present it is a non-empty array of prices
-// covering every region of the offering once, and an empty array or null is
-// refused. An offering's planBillingCapHours (ADR 0029), the most hours a
+// covering every region of the offering once (on a global offering, one fee
+// with "regions": [], which applies in every region), and an empty array or
+// null is refused. An offering's planBillingCapHours (ADR 0029), the most hours a
 // month the target bills one instance of one of its plans, whose prices are
 // what that many hours cost, may be left out, which means uncapped; when
-// present it is an integer from 1 to 744, and 0 or null is refused.
+// present it is an integer from 1 to 744, and 0 or null is refused. An
+// offering's global (PRD #581, The region model) may be left out, which means
+// regional; when present it is true, and false or null is refused, so
+// "regional" has one spelling. A global offering is served from the
+// provider's own locations, bound to no region the user chooses: its regions
+// key stays, as an empty list (catalog.ErrGlobalRegion refuses a region
+// there), every one of its prices and fixed fees has "regions": [] and so
+// applies in every region, and catalog.New accepts it only for a category
+// taxonomy.IsGlobal names (catalog.ErrGlobalCategory). The key is optional
+// within schema version 2, the third recorded exception to ADR 0007's
+// version policy after fixedFees and planBillingCapHours: every existing
+// snapshot reads unchanged, and snapshots are embedded in the binary that
+// reads them.
 //
 // Numbers are read from their JSON text, never through float64 (number.go):
 // vcpus, storageGiB and planBillingCapHours are integers without a fraction or
@@ -37,7 +51,7 @@
 // share (ADR 0009), which holds the rules of the first five items below, worded
 // as it words them for the inventory file reader too. This package keeps the
 // format's own decisions: its keys, every one required but a plan's vcpus,
-// fixedFees and planBillingCapHours; null refused
+// fixedFees, planBillingCapHours and global; null refused
 // everywhere; the size cap; the schema version it reads, 2; the number
 // grammar; the checks after the walk; and its sentinels. Parse refuses a
 // document, with an error, unless all of these hold, checked in this order:
@@ -65,10 +79,11 @@
 //     be read;
 //   - every offering region is a declared one, spelt as declared;
 //   - catalog.New accepts its target, its source URL, its default region and
-//     every offering's name, categories, capabilities, regions, plans, prices
-//     fixed fees and plan billing cap. A price or fee region is checked
-//     there, against its offering's regions, and so is that fixed fees cover
-//     every region and that a plan billing cap is at most 744.
+//     every offering's name, categories, capabilities, regions, global mark,
+//     plans, prices, fixed fees and plan billing cap. A price or fee region is
+//     checked there, against its offering's regions, and so is that fixed fees
+//     cover every region, that a plan billing cap is at most 744, and that a
+//     global offering lists no region and serves only global categories.
 //
 // The token walk is what encoding/json alone does not give: it matches keys
 // without regard to case, keeps the last of a repeated key, reads null and a

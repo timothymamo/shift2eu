@@ -5,7 +5,8 @@
 #   joined X-Forwarded-Proto not exactly https, any name  -> 308 to https://www.shift2eu.com + the URI
 #   https, Host exactly www.shift2eu.com                   -> the site, from the Edge Services pipeline
 #   https, any other Host (the apex, the container's own
-#   endpoint, www with a port, a trailing dot or capitals) -> 308 to https://www.shift2eu.com + the URI
+#   endpoint, www with a port, a trailing dot or capitals) -> 308 to https://www.shift2eu.com + the URI,
+#                                                             with Strict-Transport-Security: max-age=31536000
 #
 # "The URI" is {http.request.uri}, Go's URL.RequestURI(): the escaped path (URL.EscapedPath(), so %3F,
 # %23 and %0A stay encoded) and ?raw query when there is one. Caddy 2.11.9 has no placeholder for the
@@ -83,13 +84,20 @@
 				header_down -X-Amz-*
 			}
 		}
-		handle @rooted {
-			redir https://www.shift2eu.com{http.request.uri} 308
-		}
+		# Any other host over HTTPS, the apex among them: the 308 carries the minimum HSTS, so a returning
+		# visitor who types shift2eu.com is held to HTTPS. No includeSubDomains (www alone sends it) and no
+		# preload, which site/records/hsts.json does not pursue (ADR 0045, *The headers*; issue #601).
 		handle {
-			redir https://www.shift2eu.com/ 308
+			header Strict-Transport-Security "max-age=31536000"
+			handle @rooted {
+				redir https://www.shift2eu.com{http.request.uri} 308
+			}
+			handle {
+				redir https://www.shift2eu.com/ 308
+			}
 		}
 	}
+	# Plain HTTP, any name: the 308 carries no HSTS, which a browser ignores over plain HTTP anyway.
 	handle @rooted {
 		redir https://www.shift2eu.com{http.request.uri} 308
 	}

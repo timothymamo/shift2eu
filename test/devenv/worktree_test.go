@@ -203,11 +203,22 @@ func (f *worktreeFixture) branchAt(t *testing.T, branch string) string {
 	return f.mustGitIn(t, f.checkout, "rev-parse", "refs/heads/"+branch)
 }
 
-// upstreamOf returns the upstream of the checkout's local branch as git names it, or "" without one.
+// upstreamOf returns the upstream of the checkout's local branch as git names it, or "" without one. Only the
+// feat/ cases read it: the Renovate cases use trackingRefOf, since beside a tag named origin/<branch> the short
+// name widens to remotes/origin/<branch> and no longer says which ref is tracked.
 func (f *worktreeFixture) upstreamOf(t *testing.T, branch string) string {
 	t.Helper()
 
 	return f.mustGitIn(t, f.checkout, "for-each-ref", "--format=%(upstream:short)", "refs/heads/"+branch)
+}
+
+// trackingRefOf returns the ref the checkout's local branch tracks, in full, or "" without one: the short
+// form %(upstream:short) grows to remotes/origin/<branch> beside a tag of that name, so only the full ref
+// says which ref is tracked.
+func (f *worktreeFixture) trackingRefOf(t *testing.T, branch string) string {
+	t.Helper()
+
+	return f.mustGitIn(t, f.checkout, "for-each-ref", "--format=%(upstream)", "refs/heads/"+branch)
 }
 
 // hasBranch reports whether the checkout has the local branch.
@@ -308,35 +319,121 @@ func TestWorktreeRefusesANameThatIsNoPullRequestBranch(t *testing.T) {
 }
 
 // TestWorktreeCreatesANewBranch pins a new branch's worktree: the path the script prints, the branch checked out
-// there, and that it is cut from the latest origin/main, which the script fetches, without an upstream, so it
-// can never push to main (issue #573).
+// there, and that it is cut from the latest main - origin's after the script's fetch, or the checkout's own when
+// origin cannot be fetched - without an upstream, so it can never push to main (issue #573).
+//
+// A tag of the base's short name must change none of that (issue #602). Git's own ref lookup tries a tag before a
+// branch or a remote-tracking ref, so a tag named origin/main would win over the short name origin/main, and one
+// named main over the checkout's own main without an origin: the cases put such a tag at an older commit, so a new
+// branch cut from the tag is told apart from one cut from the latest main.
 func TestWorktreeCreatesANewBranch(t *testing.T) {
 	t.Parallel()
 
-	f := newWorktreeFixture(t)
-	main := f.advanceMain(t)
+	cases := []struct {
+		name string
+		// beside leaves origin and the checkout as the case needs them beside the new branch's base, and returns
+		// the commit the new branch must be cut from.
+		beside func(t *testing.T, f *worktreeFixture) (base string)
+		// after, when set, checks the state the case's base depends on once the script has run.
+		after func(t *testing.T, f *worktreeFixture)
+	}{
+		{
+			name: "origin's main alone",
+			beside: func(t *testing.T, f *worktreeFixture) string {
+				t.Helper()
 
-	got := f.run(t, "feat/12-x")
+				return f.advanceMain(t)
+			},
+		},
+		{
+			name: "a tag named origin/main at an older commit",
+			beside: func(t *testing.T, f *worktreeFixture) string {
+				t.Helper()
 
-	if got.code != 0 {
-		t.Fatalf("dev/worktree.sh feat/12-x exited %d, want 0 (issue #573)\nstdout: %s\nstderr: %s", got.code, got.stdout, got.stderr)
+				// The tag is at the commit origin's main had before the script's fetch, and the branch is cut from
+				// the one that fetch brings: a tag named origin/main would win over that short name, so a new branch
+				// at the tag's commit is told apart from one cut from the fetched origin's main only when the two
+				// differ.
+				older := f.mustGitIn(t, f.checkout, "rev-parse", "refs/remotes/origin/main")
+				mainSHA := f.advanceMain(t)
+				if older == mainSHA {
+					t.Fatalf("the tag's commit is origin's main %s: move main on, or the case cannot tell which of the two the script cut from (issue #602)", mainSHA)
+				}
+
+				// In origin, so that the script's own fetch brings it into the checkout: a tag only the checkout holds
+				// would say nothing about the fetch a maintainer's checkout gets.
+				f.mustGitIn(t, f.origin, "tag", "origin/main", older)
+
+				return mainSHA
+			},
+			after: func(t *testing.T, f *worktreeFixture) {
+				t.Helper()
+
+				// The state the case needs: were the tag absent, the short name origin/main would name one ref and the
+				// case would pin nothing.
+				tagged := f.mustGitIn(t, f.checkout, "rev-parse", "--verify", "--quiet", "refs/tags/origin/main")
+				if at := f.mustGitIn(t, f.checkout, "rev-parse", "refs/remotes/origin/main"); tagged == at {
+					t.Fatalf("the fetched tag origin/main is at %s, origin's main itself: point it at another commit, or the case cannot tell which of the two the script cut from (issue #602)", at)
+				}
+			},
+		},
+		{
+			name: "no origin, a tag named main at an older commit",
+			beside: func(t *testing.T, f *worktreeFixture) string {
+				t.Helper()
+
+				// Without origin the script cuts from the checkout's own main; a tag named main would win over the
+				// short name, so the tag is put at the commit that branch had before, and a new branch at the tag's
+				// commit is told apart from one cut from the checkout's own latest main.
+				f.mustGitIn(t, f.checkout, "remote", "remove", "origin")
+				older := f.branchAt(t, "main")
+				f.mustGitIn(t, f.checkout, "commit", "--quiet", "--allow-empty", "-m", "a further commit of the checkout's own main")
+				mainSHA := f.branchAt(t, "main")
+				if older == mainSHA {
+					t.Fatalf("the tag's commit is the main branch %s: commit on main, or the case cannot tell which of the two the script cut from (issue #602)", mainSHA)
+				}
+
+				f.mustGitIn(t, f.checkout, "tag", "main", older)
+
+				return mainSHA
+			},
+		},
 	}
 
-	dir := f.worktreeDir("feat/12-x")
-	if got.path() != dir {
-		t.Errorf("dev/worktree.sh feat/12-x printed %q, want %q (issue #573)", got.path(), dir)
-	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 
-	if on := f.mustGitIn(t, dir, "rev-parse", "--abbrev-ref", "HEAD"); on != "feat/12-x" {
-		t.Errorf("the worktree %s is on %q, want the branch feat/12-x (issue #573)", dir, on)
-	}
+			f := newWorktreeFixture(t)
+			mainSHA := tc.beside(t, f)
 
-	if at := f.branchAt(t, "feat/12-x"); at != main {
-		t.Errorf("the new branch feat/12-x is at %s, want origin/main's %s, the commit the script fetched: a new branch is cut from the latest main, not from the checkout's older one (issue #573)", at, main)
-	}
+			got := f.run(t, "feat/12-x")
 
-	if upstream := f.upstreamOf(t, "feat/12-x"); upstream != "" {
-		t.Errorf("the new branch feat/12-x tracks %q, want no upstream: it must never push to main (issue #573)", upstream)
+			if got.code != 0 {
+				t.Fatalf("dev/worktree.sh feat/12-x exited %d, want 0 (issue #573, issue #602)\nstdout: %s\nstderr: %s", got.code, got.stdout, got.stderr)
+			}
+
+			if tc.after != nil {
+				tc.after(t, f)
+			}
+
+			dir := f.worktreeDir("feat/12-x")
+			if got.path() != dir {
+				t.Errorf("dev/worktree.sh feat/12-x printed %q, want %q (issue #573, issue #602)", got.path(), dir)
+			}
+
+			if on := f.mustGitIn(t, dir, "rev-parse", "--abbrev-ref", "HEAD"); on != "feat/12-x" {
+				t.Errorf("the worktree %s is on %q, want the branch feat/12-x (issue #573)", dir, on)
+			}
+
+			if at := f.branchAt(t, "feat/12-x"); at != mainSHA {
+				t.Errorf("the new branch feat/12-x is at %s, want main's %s, the commit the script cut from: a new branch is cut from the latest main, not from a tag of the base's name and not from the checkout's older one (issue #573, issue #602)", at, mainSHA)
+			}
+
+			if upstream := f.upstreamOf(t, "feat/12-x"); upstream != "" {
+				t.Errorf("the new branch feat/12-x tracks %q, want no upstream: it must never push to main (issue #573, issue #602)", upstream)
+			}
+		})
 	}
 }
 
@@ -472,57 +569,95 @@ func TestWorktreeRefusesAWorktreeInTheBranchsWay(t *testing.T) {
 // TestWorktreeResumesARenovateBranch pins that an existing remote Renovate branch is resumed as any other
 // existing branch is, the second run printing the same path, and that the worktree is the remote branch's
 // commit, not a new branch from main (issue #573).
+//
+// A tag named origin/renovate/<name> must change none of that (issue #602): git's own ref lookup tries a tag
+// before a remote-tracking ref, so such a tag hands the script the tag wherever it asks git about the short name
+// origin/renovate/<name>. The remote branch is still what is resumed, at its own commit, not the tag's.
 func TestWorktreeResumesARenovateBranch(t *testing.T) {
 	t.Parallel()
 
-	f := newWorktreeFixture(t)
-	sha := f.publishBranch(t, worktreeRenovateBranch)
+	cases := []struct {
+		name string
+		// beside leaves the checkout in the state the case needs beside the remote branch to resume.
+		beside func(t *testing.T, f *worktreeFixture, sha string)
+	}{
+		{
+			name:   "the remote branch alone",
+			beside: func(*testing.T, *worktreeFixture, string) {},
+		},
+		{
+			name: "a tag of origin's name at main's commit",
+			beside: func(t *testing.T, f *worktreeFixture, sha string) {
+				t.Helper()
 
-	got := f.run(t, worktreeRenovateBranch)
+				// The tag is at main's commit, origin's branch at its own: git's answer about either name tells
+				// which of the two the script resumed, so the two must differ for the case to say anything.
+				mainSHA := f.mustGitIn(t, f.checkout, "rev-parse", "origin/main")
+				if mainSHA == sha {
+					t.Fatalf("origin/main is at %s, the same commit as origin/%s: point the branch at another commit, or the case cannot tell which of the two the script resumed (issue #602)", mainSHA, worktreeRenovateBranch)
+				}
 
-	if got.code != 0 {
-		t.Fatalf("dev/worktree.sh %s exited %d, want 0: an existing remote Renovate branch is resumed (issue #573)\nstdout: %s\nstderr: %s", worktreeRenovateBranch, got.code, got.stdout, got.stderr)
+				f.mustGitIn(t, f.checkout, "tag", "origin/"+worktreeRenovateBranch, mainSHA)
+			},
+		},
 	}
 
-	dir := f.worktreeDir(worktreeRenovateBranch)
-	if got.path() != dir {
-		t.Errorf("dev/worktree.sh %s printed %q, want %q (issue #573)", worktreeRenovateBranch, got.path(), dir)
-	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 
-	if on := f.mustGitIn(t, dir, "rev-parse", "--abbrev-ref", "HEAD"); on != worktreeRenovateBranch {
-		t.Errorf("the worktree %s is on %q, want the branch %s (issue #573)", dir, on, worktreeRenovateBranch)
-	}
+			f := newWorktreeFixture(t)
+			sha := f.publishBranch(t, worktreeRenovateBranch)
+			tc.beside(t, f, sha)
 
-	if upstream := f.mustGitIn(t, f.checkout, "rev-parse", "--abbrev-ref", worktreeRenovateBranch+"@{upstream}"); upstream != "origin/"+worktreeRenovateBranch {
-		t.Errorf("the branch %s tracks %q, want origin/%s: a resumed branch tracks the remote it was pushed to (issue #573)", worktreeRenovateBranch, upstream, worktreeRenovateBranch)
-	}
+			got := f.run(t, worktreeRenovateBranch)
 
-	if head := f.mustGitIn(t, dir, "rev-parse", "HEAD"); head != sha {
-		t.Errorf("the worktree %s is at %s, want the remote branch's commit %s: the script resumes that branch, it does not cut a new one from main (issue #573)", dir, head, sha)
-	}
+			if got.code != 0 {
+				t.Fatalf("dev/worktree.sh %s exited %d, want 0: an existing remote Renovate branch is resumed (issue #573, issue #602)\nstdout: %s\nstderr: %s", worktreeRenovateBranch, got.code, got.stdout, got.stderr)
+			}
 
-	again := f.run(t, worktreeRenovateBranch)
+			dir := f.worktreeDir(worktreeRenovateBranch)
+			if got.path() != dir {
+				t.Errorf("dev/worktree.sh %s printed %q, want %q (issue #573, issue #602)", worktreeRenovateBranch, got.path(), dir)
+			}
 
-	if again.code != 0 {
-		t.Fatalf("the second run of dev/worktree.sh %s exited %d, want the resume's 0 (issue #573)\nstdout: %s\nstderr: %s", worktreeRenovateBranch, again.code, again.stdout, again.stderr)
-	}
+			// The symbolic ref, not --abbrev-ref's name: that one is the ambiguous short name a tag shares.
+			if on := f.mustGitIn(t, dir, "symbolic-ref", "HEAD"); on != "refs/heads/"+worktreeRenovateBranch {
+				t.Errorf("the worktree %s is on %q, want the branch ref refs/heads/%s (issue #573, issue #602)", dir, on, worktreeRenovateBranch)
+			}
 
-	if again.path() != dir {
-		t.Errorf("the second run printed %q, want the same worktree %q: a branch that has its worktree gets that worktree's path (issue #573)", again.path(), dir)
-	}
+			if tracking := f.trackingRefOf(t, worktreeRenovateBranch); tracking != "refs/remotes/origin/"+worktreeRenovateBranch {
+				t.Errorf("the branch %s tracks %q, want refs/remotes/origin/%s: a resumed branch tracks the remote it was pushed to (issue #573, issue #602)", worktreeRenovateBranch, tracking, worktreeRenovateBranch)
+			}
 
-	// An existing worktree is resumed before the script looks at origin, so a rerun still prints its path once
-	// origin is gone: the work a unit did after the first run stays reachable (issue #573).
-	f.mustGitIn(t, f.checkout, "remote", "remove", "origin")
+			if head := f.mustGitIn(t, dir, "rev-parse", "HEAD"); head != sha {
+				t.Errorf("the worktree %s is at %s, want the remote branch's commit %s: the script resumes that branch, it does not cut a new one from main and not the tag's commit (issue #573, issue #602)", dir, head, sha)
+			}
 
-	withoutOrigin := f.run(t, worktreeRenovateBranch)
+			again := f.run(t, worktreeRenovateBranch)
 
-	if withoutOrigin.code != 0 {
-		t.Fatalf("dev/worktree.sh %s exited %d with origin removed, want 0: an existing worktree is resumed without looking at origin (issue #573)\nstdout: %s\nstderr: %s", worktreeRenovateBranch, withoutOrigin.code, withoutOrigin.stdout, withoutOrigin.stderr)
-	}
+			if again.code != 0 {
+				t.Fatalf("the second run of dev/worktree.sh %s exited %d, want the resume's 0 (issue #573, issue #602)\nstdout: %s\nstderr: %s", worktreeRenovateBranch, again.code, again.stdout, again.stderr)
+			}
 
-	if withoutOrigin.path() != dir {
-		t.Errorf("the run with origin removed printed %q, want the same worktree %q (issue #573)", withoutOrigin.path(), dir)
+			if again.path() != dir {
+				t.Errorf("the second run printed %q, want the same worktree %q: a branch that has its worktree gets that worktree's path (issue #573, issue #602)", again.path(), dir)
+			}
+
+			// An existing worktree is resumed before the script looks at origin, so a rerun still prints its path
+			// once origin is gone: the work a unit did after the first run stays reachable (issue #573).
+			f.mustGitIn(t, f.checkout, "remote", "remove", "origin")
+
+			withoutOrigin := f.run(t, worktreeRenovateBranch)
+
+			if withoutOrigin.code != 0 {
+				t.Fatalf("dev/worktree.sh %s exited %d with origin removed, want 0: an existing worktree is resumed without looking at origin (issue #573)\nstdout: %s\nstderr: %s", worktreeRenovateBranch, withoutOrigin.code, withoutOrigin.stdout, withoutOrigin.stderr)
+			}
+
+			if withoutOrigin.path() != dir {
+				t.Errorf("the run with origin removed printed %q, want the same worktree %q (issue #573)", withoutOrigin.path(), dir)
+			}
+		})
 	}
 }
 
@@ -691,6 +826,10 @@ func TestWorktreeRefusesALocalRenovateBranchWithoutTheRemoteOne(t *testing.T) {
 // tracking it, the script refuses the name as differing from origin, prints nothing on stdout, makes no worktree
 // and leaves the local branch at its own commit, so a unit is never handed a stale base it would have to force
 // (issue #573).
+//
+// Tracking a ref whose name only looks like origin's is no tracking of origin (issue #602): a local branch
+// origin/renovate/<name> is another ref than the remote-tracking refs/remotes/origin/renovate/<name>, so the
+// comparison of the full upstream ref is what refuses it, where a short name would read as origin's.
 func TestWorktreeRefusesALocalRenovateBranchThatDiffersFromOrigin(t *testing.T) {
 	t.Parallel()
 
@@ -749,6 +888,31 @@ func TestWorktreeRefusesALocalRenovateBranchThatDiffersFromOrigin(t *testing.T) 
 				return sha
 			},
 		},
+		{
+			name: "the local branch is at origin's commit and tracks a local branch named origin's",
+			setup: func(t *testing.T, f *worktreeFixture) string {
+				t.Helper()
+
+				sha := f.publishBranch(t, worktreeRenovateBranch)
+				f.mustGitIn(t, f.checkout, "fetch", "--quiet", "origin")
+				f.mustGitIn(t, f.checkout, "branch", "--no-track", worktreeRenovateBranch, "origin/"+worktreeRenovateBranch)
+
+				// A local branch of origin's name at the same commit, tracked through git config: its short name
+				// reads as origin/renovate/<name>, but it is refs/heads/origin/renovate/<name>, no remote-tracking
+				// ref, and no base a unit may work on.
+				f.mustGitIn(t, f.checkout, "branch", "--no-track", "origin/"+worktreeRenovateBranch, sha)
+				f.mustGitIn(t, f.checkout, "config", "branch."+worktreeRenovateBranch+".remote", ".")
+				f.mustGitIn(t, f.checkout, "config", "branch."+worktreeRenovateBranch+".merge", "refs/heads/origin/"+worktreeRenovateBranch)
+
+				// The case says nothing unless the branch really tracks that local ref, not origin's.
+				want := "refs/heads/origin/" + worktreeRenovateBranch
+				if got := f.trackingRefOf(t, worktreeRenovateBranch); got != want {
+					t.Fatalf("the local branch %s tracks %q, want the local ref %s: the case cannot tell the two refs apart (issue #602)", worktreeRenovateBranch, got, want)
+				}
+
+				return sha
+			},
+		},
 	}
 
 	for _, tc := range cases {
@@ -795,40 +959,110 @@ func TestWorktreeRefusesALocalRenovateBranchThatDiffersFromOrigin(t *testing.T) 
 
 // TestWorktreeResumesALocalRenovateBranchTrackingOrigin pins the state an earlier run leaves once its worktree is
 // removed: a local renovate/<name> at origin's commit and tracking it is resumed as it is - the path the script
-// prints, the worktree on the branch at that commit, and the branch still tracking origin/renovate/<name>, never
-// a new branch from main (issue #573).
+// prints, the worktree on that branch ref at that commit, and the branch still tracking origin/renovate/<name>,
+// never a new branch from main, and never moved (issue #573).
+//
+// A tag of the branch's own name must change none of that (issue #602): git's own ref lookup tries a tag before
+// a branch, so a tag left beside the branch hands the script the tag wherever it asks git about the short name
+// renovate/<name>. The branch is still what is resumed, at its own commit, not the tag's.
+//
+// A tag of origin's name, origin/renovate/<name>, must change none of that either (issue #602): beside such a tag
+// git widens the branch's %(upstream:short) from origin/renovate/<name> to remotes/origin/renovate/<name>, so a
+// check of the short name refuses a branch that does track origin/renovate/<name> at its commit. The branch is
+// still what is resumed, at its own commit, still tracking the remote-tracking ref.
+//
+// The tag case is a regression pin, and it passed before the fix too: git resolves the branch's @{upstream} by the
+// branch itself, whatever tag shares its name, so what it catches is a short-name commit lookup (git rev-parse
+// renovate/<name>, which names the tag) and a checkout left on that tag, a detached HEAD.
 func TestWorktreeResumesALocalRenovateBranchTrackingOrigin(t *testing.T) {
 	t.Parallel()
 
-	f := newWorktreeFixture(t)
-	sha := f.publishBranch(t, worktreeRenovateBranch)
+	cases := []struct {
+		name string
+		// beside leaves the checkout in the state the case needs beside the branch to resume.
+		beside func(t *testing.T, f *worktreeFixture)
+	}{
+		{
+			name:   "the branch alone",
+			beside: func(*testing.T, *worktreeFixture) {},
+		},
+		{
+			name: "a tag of the branch's name at main's commit",
+			beside: func(t *testing.T, f *worktreeFixture) {
+				t.Helper()
 
-	// A worktree of the branch, tracking origin's, removed again: what a finished unit leaves behind.
-	dir := f.worktreeDir(worktreeRenovateBranch)
-	f.mustGitIn(t, f.checkout, "fetch", "--quiet", "origin")
-	f.mustGitIn(t, f.checkout, "worktree", "add", "--quiet", "--track", "-b", worktreeRenovateBranch, dir, "origin/"+worktreeRenovateBranch)
-	f.mustGitIn(t, f.checkout, "worktree", "remove", dir)
+				// The tag is at main's commit, the branch at its own: git's answer about either name tells
+				// which of the two the script resumed, so the two must differ for the case to say anything.
+				f.mustGitIn(t, f.checkout, "tag", worktreeRenovateBranch, f.mustGitIn(t, f.checkout, "rev-parse", "origin/main"))
 
-	got := f.run(t, worktreeRenovateBranch)
+				tagAt := f.mustGitIn(t, f.checkout, "rev-parse", "refs/tags/"+worktreeRenovateBranch)
+				if at := f.branchAt(t, worktreeRenovateBranch); tagAt == at {
+					t.Fatalf("the tag %s is at %s, the same commit as the branch: point it at another commit, or the case cannot tell which of the two the script resumed (issue #602)", worktreeRenovateBranch, tagAt)
+				}
+			},
+		},
+		{
+			name: "a tag of origin's name at main's commit beside the branch tracking origin's",
+			beside: func(t *testing.T, f *worktreeFixture) {
+				t.Helper()
 
-	if got.code != 0 {
-		t.Fatalf("dev/worktree.sh %s exited %d, want 0: a local branch at origin's commit and tracking it is resumed (issue #573)\nstdout: %s\nstderr: %s", worktreeRenovateBranch, got.code, got.stdout, got.stderr)
+				// The tag is at main's commit, origin's branch that the local one tracks at its own: git's answer
+				// about either name tells which of the two the script resumed, so the two must differ for the case
+				// to say anything.
+				mainSHA := f.mustGitIn(t, f.checkout, "rev-parse", "origin/main")
+				if at := f.branchAt(t, worktreeRenovateBranch); mainSHA == at {
+					t.Fatalf("origin/main is at %s, the same commit as the branch %s: point the branch at another commit, or the case cannot tell which of the two the script resumed (issue #602)", mainSHA, worktreeRenovateBranch)
+				}
+
+				f.mustGitIn(t, f.checkout, "tag", "origin/"+worktreeRenovateBranch, mainSHA)
+			},
+		},
 	}
 
-	if got.path() != dir {
-		t.Errorf("dev/worktree.sh %s printed %q, want %q (issue #573)", worktreeRenovateBranch, got.path(), dir)
-	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 
-	if on := f.mustGitIn(t, dir, "rev-parse", "--abbrev-ref", "HEAD"); on != worktreeRenovateBranch {
-		t.Errorf("the worktree %s is on %q, want the branch %s (issue #573)", dir, on, worktreeRenovateBranch)
-	}
+			f := newWorktreeFixture(t)
+			sha := f.publishBranch(t, worktreeRenovateBranch)
 
-	if head := f.mustGitIn(t, dir, "rev-parse", "HEAD"); head != sha {
-		t.Errorf("the worktree %s is at %s, want origin's commit %s: the resumed branch is not rewritten (issue #573)", dir, head, sha)
-	}
+			// A worktree of the branch, tracking origin's, removed again: what a finished unit leaves behind.
+			dir := f.worktreeDir(worktreeRenovateBranch)
+			f.mustGitIn(t, f.checkout, "fetch", "--quiet", "origin")
+			f.mustGitIn(t, f.checkout, "worktree", "add", "--quiet", "--track", "-b", worktreeRenovateBranch, dir, "origin/"+worktreeRenovateBranch)
+			f.mustGitIn(t, f.checkout, "worktree", "remove", dir)
+			tc.beside(t, f)
 
-	if upstream := f.upstreamOf(t, worktreeRenovateBranch); upstream != "origin/"+worktreeRenovateBranch {
-		t.Errorf("the resumed branch %s tracks %q, want origin/%s (issue #573)", worktreeRenovateBranch, upstream, worktreeRenovateBranch)
+			got := f.run(t, worktreeRenovateBranch)
+
+			if got.code != 0 {
+				t.Fatalf("dev/worktree.sh %s exited %d, want 0: a local branch at origin's commit and tracking it is resumed (issue #573, issue #602)\nstdout: %s\nstderr: %s", worktreeRenovateBranch, got.code, got.stdout, got.stderr)
+			}
+
+			if got.path() != dir {
+				t.Errorf("dev/worktree.sh %s printed %q, want %q (issue #573, issue #602)", worktreeRenovateBranch, got.path(), dir)
+			}
+
+			// The symbolic ref, not --abbrev-ref's name: that one is the ambiguous short name a tag shares, and
+			// the branch ref is what the resumed worktree must be on.
+			if on := f.mustGitIn(t, dir, "symbolic-ref", "HEAD"); on != "refs/heads/"+worktreeRenovateBranch {
+				t.Errorf("the worktree %s is on %q, want the branch ref refs/heads/%s (issue #573, issue #602)", dir, on, worktreeRenovateBranch)
+			}
+
+			if head := f.mustGitIn(t, dir, "rev-parse", "HEAD"); head != sha {
+				t.Errorf("the worktree %s is at %s, want origin's commit %s: the resumed branch is not rewritten (issue #573, issue #602)", dir, head, sha)
+			}
+
+			// The full ref, not %(upstream:short): beside a tag named origin/renovate/<name> that short name widens
+			// to remotes/origin/renovate/<name>, and the remote-tracking ref is what must stay tracked.
+			if tracking := f.trackingRefOf(t, worktreeRenovateBranch); tracking != "refs/remotes/origin/"+worktreeRenovateBranch {
+				t.Errorf("the resumed branch %s tracks %q, want refs/remotes/origin/%s (issue #573, issue #602)", worktreeRenovateBranch, tracking, worktreeRenovateBranch)
+			}
+
+			if at := f.branchAt(t, worktreeRenovateBranch); at != sha {
+				t.Errorf("the local branch %s is at %s, want it left at origin's commit %s: the script creates, moves and deletes no branch (issue #602)", worktreeRenovateBranch, at, sha)
+			}
+		})
 	}
 }
 

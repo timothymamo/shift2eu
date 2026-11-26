@@ -1120,8 +1120,10 @@ it. Decision 4 is amended by the orchestrator's decision above.
    includeSubDomains` and the four headers `Content-Security-Policy` (the `<meta>` policy plus
    `frame-ancestors 'none'`), `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer` and
    `Permissions-Policy`. The `<meta>` CSP and the script's framing guard stay, for the other origins
-   (decision 11). The apex's HTTPS redirect, served by the same container, sends no HSTS while preload
-   is not pursued. The preload decision is unchanged: it is still milestone 4's, and pursued only by
+   (decision 11). The apex's HTTPS redirect, served by the same container, sent no HSTS; decided
+   2026-11-25 (issue #601), it sends `Strict-Transport-Security: max-age=31536000`, without
+   `includeSubDomains` or `preload`, once `infra/site` is applied, and the plain-HTTP redirect sends none (ADR 0045,
+   *The headers*). The preload decision is unchanged: it is still milestone 4's, and pursued only by
    recording it in `site/records/hsts.json`; the container can then meet the list's requirements (the
    apex's HTTPS answer with `preload` and `http://shift2eu.com` first to `https://shift2eu.com`, and
    `www`'s header with `preload` too), by a change to its configuration made with the record. Where

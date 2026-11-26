@@ -72,6 +72,12 @@ func (r *Reporter) omitsZeroAmount() bool {
 	return r.version >= Version3
 }
 
+// marksGlobal reports whether r's version marks a global best offering and
+// global ties (Version3, PRD #581, ADR 0048).
+func (r *Reporter) marksGlobal() bool {
+	return r.version >= Version3
+}
+
 // assessmentDocument is the single-target document, kind "assessment".
 type assessmentDocument struct {
 	SchemaVersion int    `json:"schemaVersion"`
@@ -114,17 +120,21 @@ type summary struct {
 
 // resource is the verdict on one resource.
 type resource struct {
-	ID              string     `json:"id"`
-	RawType         string     `json:"rawType"`
-	Category        string     `json:"category"`
-	Region          string     `json:"region"`
-	Fit             string     `json:"fit"`
-	BestOffering    string     `json:"bestOffering"`
-	Ties            []string   `json:"ties"`
-	Reasons         []reason   `json:"reasons"`
-	RequiredChanges []string   `json:"requiredChanges"`
-	Relations       []relation `json:"relations"`
-	AffectedBy      []string   `json:"affectedBy"`
+	ID           string `json:"id"`
+	RawType      string `json:"rawType"`
+	Category     string `json:"category"`
+	Region       string `json:"region"`
+	Fit          string `json:"fit"`
+	BestOffering string `json:"bestOffering"`
+	// BestOfferingGlobal and GlobalTies are written in Version3 only, and
+	// only when the best offering is global or some tie is (PRD #581).
+	BestOfferingGlobal bool       `json:"bestOfferingGlobal,omitempty"`
+	Ties               []string   `json:"ties"`
+	GlobalTies         []string   `json:"globalTies,omitempty"`
+	Reasons            []reason   `json:"reasons"`
+	RequiredChanges    []string   `json:"requiredChanges"`
+	Relations          []relation `json:"relations"`
+	AffectedBy         []string   `json:"affectedBy"`
 	// Plan is written when the estimate names a plan, and Estimate whenever
 	// the assessment has estimates.
 	Plan     *plan             `json:"plan,omitempty"`
@@ -173,7 +183,7 @@ func (r *Reporter) Report(ctx context.Context, w io.Writer, a assessment.Assessm
 		Target:        newTarget(a),
 		Region:        a.Region,
 		Summary:       newSummary(a.Summary),
-		Resources:     newResources(a.Verdicts),
+		Resources:     r.newResources(a.Verdicts),
 		Blockers:      newBlockers(a.Blockers),
 		Workloads:     r.newWorkloads(a.Workloads),
 		Estimate:      r.newEstimateBasis(a),
@@ -217,7 +227,9 @@ func newSummary(s assessment.Summary) summary {
 }
 
 // newResources returns one resource per verdict, in the order given, never nil.
-func newResources(verdicts []assessment.Verdict) []resource {
+// In Version3 a resource whose best offering or ties are global says so
+// (bestOfferingGlobal, globalTies); Version2 writes neither key.
+func (r *Reporter) newResources(verdicts []assessment.Verdict) []resource {
 	out := make([]resource, 0, len(verdicts))
 
 	for _, v := range verdicts {
@@ -233,7 +245,7 @@ func newResources(verdicts []assessment.Verdict) []resource {
 			changes = append(changes, string(c))
 		}
 
-		out = append(out, resource{
+		res := resource{
 			ID:              v.Resource.ID,
 			RawType:         v.Resource.RawType,
 			Category:        string(v.Resource.Category),
@@ -247,7 +259,14 @@ func newResources(verdicts []assessment.Verdict) []resource {
 			AffectedBy:      orEmpty(v.AffectedBy),
 			Plan:            newPlan(v.Estimate),
 			Estimate:        newResourceEstimate(v.Estimate),
-		})
+		}
+
+		if r.marksGlobal() {
+			res.BestOfferingGlobal = v.BestOfferingGlobal()
+			res.GlobalTies = v.GlobalTies()
+		}
+
+		out = append(out, res)
 	}
 
 	return out

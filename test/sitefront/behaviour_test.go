@@ -126,6 +126,7 @@ func TestSiteFront(t *testing.T) {
 	t.Run("the four rows of the table", func(t *testing.T) { testTableRows(t, front) })
 	t.Run("the joined X-Forwarded-Proto", func(t *testing.T) { testJoinedForwardedProto(t, front) })
 	t.Run("the Location of every redirect", func(t *testing.T) { testLocations(t, front) })
+	t.Run("the Strict-Transport-Security of the two names", func(t *testing.T) { testApexHSTS(t, front) })
 	t.Run("the headers against the upstream's own", func(t *testing.T) { testHeaders(t, front) })
 	t.Run("a 404 from the upstream", func(t *testing.T) { testUpstreamNotFound(t, front) })
 	t.Run("a gzip object passes byte for byte", func(t *testing.T) { testGzip(t, front) })
@@ -207,13 +208,9 @@ func testTableRows(t *testing.T, front *harness) {
 				t.Errorf("%q redirects to %q, want %q", firstLine(tc.raw), got, tc.loc)
 			}
 
-			// This row is a redirect, and a redirect carries no
-			// Strict-Transport-Security: the header is the site's HTTPS answer's
-			// alone, and nothing holds a value sent on a 308 (docs/adr/0043,
-			// docs/adr/0045).
-			if got := resp.header.Values("Strict-Transport-Security"); len(got) > 0 {
-				t.Errorf("%q answers Strict-Transport-Security %q, want none: the header belongs to the site's HTTPS answers (docs/adr/0045)", firstLine(tc.raw), got)
-			}
+			// The Strict-Transport-Security of these answers is testApexHSTS's: the
+			// apex's HTTPS 308 is the one that carries the header, and every
+			// plain-HTTP answer carries none (docs/adr/0045, *The headers*).
 		})
 	}
 
@@ -379,6 +376,80 @@ func testLocations(t *testing.T, front *harness) {
 				t.Errorf("%q redirects to %q, which holds a line break", firstLine(tc.raw), location)
 			}
 		})
+	}
+}
+
+// testApexHSTS holds the Strict-Transport-Security of the answers the front
+// gives a visitor who types the site's name (docs/adr/0045, *The headers*;
+// issue #601): the apex's HTTPS 308 carries exactly one header, with the
+// minimum's exact value, so a returning visitor who types shift2eu.com is held
+// to HTTPS; and no answer over plain HTTP carries one at all, on the apex's name
+// or on www's, since a browser reads the header from the connection that
+// carried it and one a visitor's network added decides nothing. The root and a
+// page are driven for each, so it is the answer's header and not one path's.
+// www over HTTPS is unchanged, and that is testHeaders's and assertSiteHeaders's:
+// the value site/records/hsts.json implies, sent exactly once.
+func testApexHSTS(t *testing.T, front *harness) {
+	t.Helper()
+
+	proxies := front.upstream.count()
+
+	tests := []struct {
+		name string
+		raw  string
+		want string // the one header value the answer must carry; "" when it must carry none
+	}{
+		{
+			name: "the apex over HTTPS, the root",
+			raw:  request("GET / HTTP/1.1", "Host: shift2eu.com", "X-Forwarded-Proto: https"),
+			want: apexHSTS,
+		},
+		{
+			name: "the apex over HTTPS, a page",
+			raw:  request("GET /privacy.html HTTP/1.1", "Host: shift2eu.com", "X-Forwarded-Proto: https"),
+			want: apexHSTS,
+		},
+		{
+			name: "the apex over plain HTTP, the root",
+			raw:  request("GET / HTTP/1.1", "Host: shift2eu.com"),
+		},
+		{
+			name: "the apex over plain HTTP, a page",
+			raw:  request("GET /privacy.html HTTP/1.1", "Host: shift2eu.com"),
+		},
+		{
+			name: "www over plain HTTP, the root",
+			raw:  request("GET / HTTP/1.1", "Host: www.shift2eu.com"),
+		},
+		{
+			name: "www over plain HTTP, a page",
+			raw:  request("GET /privacy.html HTTP/1.1", "Host: www.shift2eu.com"),
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			resp := front.do(t, tc.raw)
+
+			if resp.status != http.StatusPermanentRedirect {
+				t.Fatalf("%q answers %d, want 308", firstLine(tc.raw), resp.status)
+			}
+
+			got := resp.header.Values("Strict-Transport-Security")
+
+			switch {
+			case tc.want == "" && len(got) > 0:
+				t.Errorf("%q answers Strict-Transport-Security %q, want none: a browser reads the header from the connection that carried it, and one sent over plain HTTP is one a visitor's network could have added (docs/adr/0045, *The headers*)", firstLine(tc.raw), got)
+			case tc.want != "" && len(got) != 1:
+				t.Errorf("%q answers %d Strict-Transport-Security headers, want exactly one %q: the apex's HTTPS 308 carries the one value, so a second copy fails here (docs/adr/0045, *The headers*)", firstLine(tc.raw), len(got), tc.want)
+			case tc.want != "" && got[0] != tc.want:
+				t.Errorf("%q answers Strict-Transport-Security %q, want %q: the apex carries the minimum, without includeSubDomains (which www alone sends) and without preload, which site/records/hsts.json does not pursue (docs/adr/0042, docs/adr/0045)", firstLine(tc.raw), got[0], tc.want)
+			}
+		})
+	}
+
+	if got := front.upstream.count(); got != proxies {
+		t.Errorf("the upstream received %d requests for the answers the two names get over plain HTTP and HTTPS, want none: each of them is a 308 (docs/adr/0045)", got-proxies)
 	}
 }
 
