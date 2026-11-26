@@ -45,15 +45,15 @@ param:
   piVersion: "1.6.1"
   # gh from its release, not Ubuntu's package: `gh attestation verify` needs gh 2.49 or later.
   # renovate: datasource=github-releases depName=cli/cli
-  ghVersion: "v2.105.0"
+  ghVersion: "v2.106.0"
   # SHA-256 of gh_<version>_linux_<arch>.tar.gz, per architecture: what authenticates gh in provisioning
   # (ADR 0017). The vm-tools workflow checks it against gh's build attestation on every PR: merge a change
   # only when that check is green (not yet a required status). Renovate moves each digestVersion and
   # digest together with ghVersion, in one PR; a digest left behind fails provisioning.
-  # renovate: datasource=github-release-attachments depName=cli/cli digestVersion=v2.105.0
-  ghSha256Amd64: "79e7ab5db738c48777b696e374f8b428f0647debfb424f44d2f426370407fe2f"
-  # renovate: datasource=github-release-attachments depName=cli/cli digestVersion=v2.105.0
-  ghSha256Arm64: "b1278c75107423d818f1937fd92cafc9e5e9b606631568f68d7fb816f5885a02"
+  # renovate: datasource=github-release-attachments depName=cli/cli digestVersion=v2.106.0
+  ghSha256Amd64: "a476449fa9625413c54a3734eded62e9e480e49f421ff08e7f3b3879c059a033"
+  # renovate: datasource=github-release-attachments depName=cli/cli digestVersion=v2.106.0
+  ghSha256Arm64: "5e8a0c51e1a8345f36bd0b8bb88604b6a5388df16f3ab3e3b9b6d794fa223a67"
   # cosign v3 or later reads the release's signature bundles (docs/guide/verify-releases.md).
   # renovate: datasource=github-releases depName=sigstore/cosign
   cosignVersion: "v3.1.5"
