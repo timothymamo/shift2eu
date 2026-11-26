@@ -3,7 +3,7 @@
 The maintainer's runbook for the site's hosting: the Scaleway side OpenTofu creates from `infra/site/`
 and the steps that stay by hand (the state bucket, the deploy key and its limits, the origin checks, the
 Namecheap records, the GitHub `site` environment, the deploy switch), with the key's rotation, the
-recovery and the teardown ([PRD #297](../prds/297-web-assessment-site.md), *Runbook*;
+recovery and the teardown ([PRD #297](../prds/done/297-web-assessment-site.md), *Runbook*;
 [ADR 0039](adr/0039-create-the-sites-scaleway-hosting-with-opentofu.md),
 [ADR 0042](adr/0042-host-the-site-behind-edge-services-and-deploy-it-from-the-release-with-a-bucket-scoped-key.md),
 the hosting ADR the steps record their results in). Written in milestone 3, followed in milestone 4, on
@@ -166,7 +166,7 @@ rm infra/site/site.tfplan
 P="$(dev/tofu.sh -chdir=infra/site output -raw project_id)"; A="$(dev/tofu.sh -chdir=infra/site output -raw deploy_application_id)"
 B="$(dev/tofu.sh -chdir=infra/site output -raw bucket_name)"; E="$(dev/tofu.sh -chdir=infra/site output -raw edge_endpoint)"
 PL="$(dev/tofu.sh -chdir=infra/site output -raw pipeline_id)"; echo "$P $A $B $E $PL"   # PASS: five values, none empty
-NS="$(dev/tofu.sh -chdir=infra/site output -raw container_namespace_id)"; CE="$(dev/tofu.sh -chdir=infra/site output -raw container_endpoint)"; CE="${CE#https://}"; CE="${CE%/}"
+NS="$(dev/tofu.sh -chdir=infra/site output -raw container_namespace_id)"; NS="${NS##*/}"; CE="$(dev/tofu.sh -chdir=infra/site output -raw container_endpoint)"; CE="${CE#https://}"; CE="${CE%/}"
 echo "$NS $CE"                                             # PASS: the namespace ID and "shift2eu-site-<...>-front.functions.fnc.$REGION.scw.cloud" (or the like), none empty
 [ -n "$CE" ] && echo "PASS container_endpoint is set" || echo "FAIL container_endpoint is empty: the container does not exist yet; run R4's second pass"
 [ -n "$P" ] && [ "$P" != "$ADMIN_PROJECT" ] && echo "PASS the site's project is not the admin project" || echo "FAIL the site's project is the admin project"
@@ -199,7 +199,7 @@ flags against `scw container container create --help` first (ADR 0039, open poin
 
 ```bash
 BAD="docker.io/library/caddy:2.11.9-alpine@sha256:$(printf '0%.0s' $(seq 1 64))"; echo "$BAD"   # PASS: the tag, then 64 zeros
-PR="$(scw container container create namespace-id="$NS" region="$REGION" name=digest-probe registry-image="$BAD" min-scale=0 max-scale=1 cpu-limit=140 memory-limit-bytes=268000000 -o json | jq -r '.id')"; echo "$PR"   # PASS: an ID
+PR="$(scw container container create namespace-id="$NS" region="$REGION" name=digest-probe image="$BAD" min-scale=0 max-scale=1 mvcpu-limit=140 memory-limit-bytes=0.25GB -o json | jq -r '.id')"; echo "$PR"   # PASS: an ID
 scw container container deploy "$PR" region="$REGION" >/dev/null   # PASS: no error (a create that deploys by itself may answer that it is already deploying: fine)
 n=0; until scw container container list namespace-id="$NS" region="$REGION" name=digest-probe -o json | jq -e '.[0].status | IN("error","ready")' >/dev/null || [ "$n" -ge 30 ]; do sleep 20; n=$((n + 1)); done
 scw container container list namespace-id="$NS" region="$REGION" name=digest-probe -o json | jq -r '.[0] | "\(.status) \(.error_message)"'   # PASS: "error" with a pull or manifest error: the platform pulls by digest; record it in ADR 0045
@@ -273,7 +273,7 @@ scw iam api-key list bearer-id="$A"   # PASS: one key, with its expires_at
 ## R7. The deploy key's limits
 
 The canary step; after R6, every rotation and every change to the IAM or bucket policy. What it must
-verify is the PRD's acceptance criterion ([PRD #297](../prds/297-web-assessment-site.md), *Runbook*,
+verify is the PRD's acceptance criterion ([PRD #297](../prds/done/297-web-assessment-site.md), *Runbook*,
 the R7 box); its result goes in the hosting ADR, with the ListBucket answer that decides the deploy's
 `-list-bucket` in milestone 4.
 
@@ -434,7 +434,7 @@ ECHO=':8080 {
 	header X-Content-Type-Options nosniff
 	respond "xfp=[{http.request.header.X-Forwarded-Proto}] host=[{http.request.hostport}] xfh=[{http.request.header.X-Forwarded-Host}] fwd=[{http.request.header.Forwarded}]" 200
 }'
-PR="$(scw container container create namespace-id="$NS" region="$REGION" name=header-probe registry-image="$IMG" port=8080 privacy=public min-scale=0 max-scale=1 cpu-limit=140 memory-limit-bytes=268000000 https-connections-only=false command.0=/bin/sh command.1=-c args.0='printf "%s" "$1" > /tmp/Caddyfile && exec caddy run --adapter caddyfile --config /tmp/Caddyfile' args.1=caddy args.2="$ECHO" -o json | jq -r '.id')"; echo "$PR"   # PASS: an ID
+PR="$(scw container container create namespace-id="$NS" region="$REGION" name=header-probe image="$IMG" port=8080 privacy=public min-scale=0 max-scale=1 mvcpu-limit=140 memory-limit-bytes=0.25GB https-connections-only=false command.0=/bin/sh command.1=-c args.0='printf "%s" "$1" > /tmp/Caddyfile && exec caddy run --adapter caddyfile --config /tmp/Caddyfile' args.1=caddy args.2="$ECHO" -o json | jq -r '.id')"; echo "$PR"   # PASS: an ID
 scw container container deploy "$PR" region="$REGION" >/dev/null; n=0; until scw container container get "$PR" region="$REGION" -o json | jq -e '.status == "ready"' >/dev/null || [ "$n" -ge 30 ]; do sleep 20; n=$((n + 1)); done
 PE="$(scw container container get "$PR" region="$REGION" -o json | jq -r '.domain_name // .public_endpoint' | sed 's,^https://,,')"; echo "$PE"   # PASS: the probe's endpoint
 for u in "http://$PE/" "https://$PE/"; do printf '%s ' "$u"; curl -s "$u"; echo; done
@@ -798,4 +798,26 @@ scw cockpit data-source update <id> retention-days=1 region=<region>   # PASS: p
 # The check, every source at once
 scw cockpit data-source list project-id="$P" origin=scaleway region=all -o json | jq -e 'type == "array" and ([.[] | select(.type == "logs")] | length > 0 and all(.retention_days == 1)) and ([.[] | select(.type == "metrics")] | all(.retention_days == 31))' >/dev/null && echo "PASS logs 1 day, metrics 31 days" || echo "FAIL a logs source above 1 day, a metrics source not at 31 days, no logs source, or an error"
 # FAIL a logs source: the update above for it; a metrics source: set it back to 31 (its minimum), or change the privacy page's "kept 31 days" first; an error: run the list line alone and read it
+```
+
+## R15. The scheduled live check
+
+After R10, once; then whenever its issue opens or GitHub disables it. `.github/workflows/site-check.yml`
+runs the release's live check every day at 05:23 UTC against the release the page names, accepted only
+if it is the highest release tag, or the one before it within 180 minutes of the highest tag's commit
+(ADR 0043, *Amendment: the scheduled check*). A failure opens one issue labelled `live site check`,
+assigned to you, or comments on the open one; GitHub notifies you of the assignment and of each comment.
+The alert job creates that label itself before it opens the issue (`gh label create --force`, which
+also resets its colour and description), so there is nothing to create here. GitHub disables a
+schedule after 60 days without activity in the repository, and says so only in the Actions tab.
+
+```bash
+# The schedule's state; after 60 days without repository activity GitHub disables it
+gh workflow list --all --repo <owner>/shift2eu --json path,state --jq '.[] | select(.path == ".github/workflows/site-check.yml") | .state'   # PASS: active
+# FAIL disabled_inactivity (or disabled_manually): re-enable it, here or in the Actions tab (Live site check, Enable workflow), then the line above again
+gh workflow enable site-check.yml --repo <owner>/shift2eu
+# The last scheduled runs
+gh run list --workflow site-check.yml --repo <owner>/shift2eu --limit 5 --json conclusion,createdAt --jq '.[] | .createdAt + " " + .conclusion'
+# PASS: one run a day, "success"
+# FAIL "failure" or "cancelled": the issue labelled "live site check" names the run; a run you cancelled by hand comments on the issue too: ignore that comment; gh run view <run ID> --repo <owner>/shift2eu --log-failed; a version refused outside the window right after a release whose run was queued long, or any failure of a run that overlapped a release's deploy (the deploy race: the page and the files from two releases), is expected once: re-check after the next run; anything else: R12. Close the issue once a scheduled run passes again
 ```

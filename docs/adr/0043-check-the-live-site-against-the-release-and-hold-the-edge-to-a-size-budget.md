@@ -211,8 +211,10 @@ The edge serves the bytes the deploy uploads; the live check measures them as se
 
 - The release's check (PR C of milestone 3) runs the `site-programs` job's `bin/sitecheck -manifest
   <manifest.json> -tags <file>` (amended in PR C2, see Shape), and milestone 4's scheduled workflow runs
-  `go run ./ci/sitecheck -manifest <manifest.json> -tags <file or ->`; both get a report and an exit code; the scheduled workflow
-  builds `gh` argv from the matched `Tag` only.
+  `go run ./ci/sitecheck live-version -tags <file> -anchor <time> -window 180m`, then
+  `go run ./ci/sitecheck -manifest <manifest.json> -tags <file>`; both get a report and an exit code; the
+  scheduled workflow's `gh` commands take their tag from the tag list's entry that `live-version` prints,
+  never from the page (*Amendment: the scheduled check*).
 - The pages carry `id="site-version"` on the footer's version span; `test/site` pins it in both builds.
 - The records' format follows ADR 0042: a change to it there changes `livecheck`'s parsers and their tests
   with it. The plain-HTTP www mode stays the program's flag, so a change of the edge's answer is a
@@ -262,3 +264,93 @@ pursued, `ci/sitecheck` still only records the apex's header, and its code is un
   apply, `docs/site-runbook.md` R8 reads it live.
 - **When preload is pursued,** the apex's header is judged as the Decision says (`max-age` at least
   31536000, `includeSubDomains`, `preload`), and the apex's header and the preload record change in one change.
+
+## Amendment: the scheduled check (PRD #297 milestone 4)
+
+2026-11-26. The release's check runs once, right after a deploy. PRD #297's *Layer 3* also asks for the
+same check every day, so that a page changed between releases (a leaked key, a changed bucket or
+front) is noticed within a day. `.github/workflows/site-check.yml` runs it. The Decision above is
+unchanged. This amendment adds a subcommand, a rule and a workflow.
+
+- **Which release to check: `sitecheck live-version`.** The scheduled check has no release of its own,
+  so it first asks the live site which release it serves:
+  `sitecheck live-version -tags <file|-> -anchor <RFC 3339> -window <duration> [-host <host>]` makes one
+  GET of `https://<host>/` with the check's own client (`livecheck.LiveVersion`). It reads the
+  `id="site-version"` text with the same scanner and rules as `KindVersion` (`VersionText`,
+  `MatchVersion`), judges it with the window rule below, and prints the tag list's own entry. It exits 1
+  with one line on stderr for a refused version, a root that does not answer 200, or a version that is
+  missing, hidden or malformed. It exits 2 on a usage error, before any connection. Response text
+  reaches stderr only through `Quote`. Unlike `Run`, it compares no manifest, because which manifest to
+  fetch is exactly what it answers. The full check that follows compares `/` with that release's
+  `index.html`. The default command (`-manifest`/`-tags`) is unchanged.
+- **The window rule (`livecheck.AcceptLive`).** The highest release tag in the list is always accepted.
+  Tags are compared as versions, never as strings, so v0.10.0 is above v0.9.0, and entries that are not
+  `vX.Y.Z` are ignored. The tag immediately below the highest is accepted only while the clock is before
+  the anchor plus the bound. Everything else is refused: a release two behind, a version above the
+  highest, one outside the list, the zero `Tag`, an empty list and a bound that is not positive.
+- **The anchor** is the committer date of the commit the highest tag points to
+  (`git log -1 --format=%cI <tag>`). The job can read it with `contents: read`, and it needs no
+  `actions: read` to look at release runs.
+- **The bound, 180 minutes** (`check.SiteCheckWindow`). It must cover the time from that commit to the
+  end of the release's deploy. `check.MinSiteCheckWindow` computes that floor from the workflows
+  themselves: release-please.yml's `release-please` and `tag` jobs (15 + 15 minutes), plus the longest
+  `needs:` chain of release.yml's jobs ending at `site-check`, each job at its `timeout-minutes`
+  (130 minutes today: test 20, site 15, goreleaser 15, image 20, sbom 10, sign 10, verify 10,
+  site-deploy 15, site-check 15), plus the
+  HTML's `max-age` (5 minutes). That is 165 minutes today. 180 leaves a 15-minute margin, and
+  `TestSiteCheckWindowCoversTheRelease` fails once a timeout grows past it. No timeout bounds the time a
+  run spends queued. A release queued past the bound fails the scheduled check once, which the alert
+  reports like any other failure.
+- **Two jobs, no default permission.** The workflow has one daily `schedule`, no other trigger, and
+  `permissions: {}`. The `check` job holds `contents: read` and `attestations: read` alone. Its checkout
+  keeps no credential (`persist-credentials: false`, the whole history for the tags), and it pins every
+  action by commit. Its tag list is main's release tags, fetched and listed exactly as release.yml's
+  `site-check` job reads them (main and the `v*` tags fetched, `git tag -l 'v*.*.*' --merged
+  refs/remotes/origin/main`, `vX.Y.Z` alone, version-sorted), so a tag that is not on main is never
+  the expected release. It reads that list and the anchor, runs `live-version` with the anchor passed
+  through the step's `env:` (`ANCHOR`), never pasted into the script, and re-checks the printed
+  tag against the tag list with `grep -qxF`. It reads the commit that tag names
+  (`git rev-parse "refs/tags/<tag>^{commit}"`, the tag passed through `env:`), downloads that release's
+  site bundle and verifies its attestation with `GITHUB_TOKEN` alone, using the deploy's and the guide's
+  flags (`--signer-workflow` release.yml, `--source-ref refs/tags/<tag>`, `--deny-self-hosted-runners`)
+  and that commit as `--source-digest`: the provenance must bind the release's commit, not only its
+  ref, so a tag moved after the release fails the check. It then runs the full check against the
+  bundle's `manifest.json` and the tag list, at the default `-plain-http-www`, with the HSTS and preload
+  records read at the live release's tag (`git show "refs/tags/<tag>:site/records/hsts.json"` and
+  `preload.json`, passed as `-hsts-record` and `-preload-record`), never the working tree's. The
+  `expected` step's fetch has no `--filter`, so the tags' trees arrive with them and `git show` resolves.
+  The `alert` job runs `if: ${{ always() && needs.check.result != 'success' }}`, `needs: check`, holds
+  `issues: write` alone and checks nothing out.
+- **The alert fires on any non-success, a deliberate deviation from the PRD.** PRD #297's *Layer 3* asks
+  for `if: failure()`. A job that runs past its `timeout-minutes` concludes `cancelled`, and `failure()`
+  is false then, so a hung check would open no issue. The alert's condition is widened to every result
+  of `check` but `success`; the PRD records the change as an amendment. A run a user cancels concludes
+  `cancelled` too and alerts like a timeout: the alert cannot tell the two apart, and an alert on a
+  cancel the maintainer made is accepted as the price of never missing a hung check.
+- **The records are the live release's, the check code is main's.** The scheduled run checks out main,
+  so `ci/sitecheck` is main's code, while the manifest and the HSTS and preload records are the live
+  release's. A release's records describe what that release deployed; main's may already describe the
+  next one. The cost: a check kind added on main after the live release can fail that older release
+  until the next release deploys, and the alert reports it like any other failure.
+- **The deploy race.** A release that deploys while the scheduled run checks can fail it once: the page
+  may name the new release while the files are still the old one's, or the other way round. Like a
+  release queued past the window, it fails once and passes on the next run.
+- **No environment.** Neither job names one. The workflow holds no secret but `GITHUB_TOKEN`, so the
+  environments the release-tag skill's step 2 checks (`site`, `release-please`, `release-tag`,
+  `ai-review`, `security-audit`) play no part in it. The site's Scaleway key stays in `site`, which only
+  release.yml's `site-deploy` uses.
+- **The alert issue, fixed text only.** On a failure, the alert job comments on the one open issue
+  labelled `live site check`, or opens one assigned to the maintainer, `timothymamo`. GitHub notifies the
+  assignee and each comment, but not an edit, and it notifies a failed scheduled run only to whoever last
+  changed its cron line. The title and body are fixed text plus the failed run's URL. The job uses no
+  output of the `check` job, no site content and no expression but the token, the repository, the
+  server's URL and the run's id. Before it lists or opens the issue, the job creates the label with
+  `gh label create --force`, which `issues: write` allows and which succeeds whether or not the label
+  exists (it resets its colour and description), so the first failure is not lost to a missing label
+  and no one creates it by hand. GitHub also disables a schedule
+  after 60 days without repository activity, and R15 says how to re-enable it.
+- **The workflow test.** `check.SiteCheckWorkflow` reads the workflow as a closed schema, through the
+  release workflow's reader. `test/architecture` holds the repository's file to it, and the check's own
+  test holds a fixture that is the file byte for byte. Every `run:` is compared exactly, and none may
+  hold a `${{ }}` expression: the runner pastes its value into the script as code, so every value a
+  step needs, the anchor included, reaches it through `env:`.

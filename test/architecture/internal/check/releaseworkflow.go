@@ -1673,7 +1673,7 @@ func releaseSchema(raw []string, lines []yamlread.Line) []string {
 	}
 
 	r.scalar(top["name"], "the release workflow's name", exactly("Release"))
-	r.rawValue(top["permissions"], "the release workflow's permissions", "{}")
+	r.emptyMapping(top["permissions"], "the release workflow's permissions")
 
 	if c := r.exactKeys(r.block(top["concurrency"], "concurrency"), "concurrency", "group", "cancel-in-progress"); c != nil {
 		r.scalar(c["group"], "concurrency: group", exactly("release"))
@@ -1958,7 +1958,7 @@ func (r *schemaReader) job(e yamlread.Entry, path string, want releaseJob) {
 	}
 
 	if want.emptyPermissions {
-		r.rawValue(job["permissions"], path+": permissions", "{}")
+		r.emptyMapping(job["permissions"], path+": permissions")
 	} else {
 		r.exactMapping(job["permissions"], path+": permissions", want.permissions)
 	}
@@ -2241,8 +2241,11 @@ func (r *schemaReader) value(e yamlread.Entry) (string, error) {
 	return yamlread.Single(e)
 }
 
-// rawValue checks that e's value is exactly want, as written on its line.
-func (r *schemaReader) rawValue(e yamlread.Entry, path, want string) {
+// emptyMapping checks that e's value is exactly {}, as written on its line:
+// the one raw value the workflows' schemas hold a key to (permissions: {}).
+func (r *schemaReader) emptyMapping(e yamlread.Entry, path string) {
+	const want = "{}"
+
 	if e.Value != want || len(e.Block) != 0 {
 		r.fail("line %d: %s is %q, want exactly %q", e.Num, path, e.Value, want)
 	}

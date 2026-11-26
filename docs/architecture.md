@@ -200,7 +200,9 @@ Arrows are imports. They point inwards only:
   `site-deploy-env` allows only the one `os.LookupEnv` its `main.go` passes on and package `os/exec` in
   `ci/sitedeploy/internal/deploy/livepage_test.go` alone, which builds the real bundle offline (issue #514).
 - **`ci/sitecheck`** is the live site check (PRD #297 milestone 3, issue #346, ADR 0043), which the release's `site-check` job runs, built by its `site-programs` job, and
-  milestone 4's scheduled workflow will run: it fetches every file of a release's manifest from the canonical
+  the scheduled workflow `.github/workflows/site-check.yml` runs daily with `go run` (milestone 4), first
+  through its `live-version` subcommand, which reads the live version once and accepts it only within the
+  version window after the highest release tag's commit (`livecheck.AcceptLive`): it fetches every file of a release's manifest from the canonical
   host and judges the edge's digests, redirects, certificates, caching, HSTS against `site/records/`, the
   live version against the repository's tag list and the module script's transferred and decoded size.
   Its entry point reads the files its flags name (`site-check-main`, no `os/exec` or `net`); its library

@@ -301,63 +301,12 @@ func TestVerificationGuideAgreesWithThePage(t *testing.T) {
 	t.Run("the page and the section carry the site's URL and the first-visit advice", func(t *testing.T) {
 		t.Parallel()
 
-		// The page's notice: type https://www.shift2eu.com yourself rather than
-		// following an http:// link, because on a first visit a network attacker
-		// can strip HTTPS. The page and the guide may word the advice in their own
-		// style, so only these two phrases are pinned besides the URL: the
-		// occasion, and the attack. They are matched without case, so the advice
-		// may open a sentence.
-		phrases := []struct {
-			phrase string
-			why    string
-		}{
-			{
-				phrase: "first visit",
-				why:    "the advice is about a first visit, when a browser has seen no HSTS for the site and an attacker on the network can still replace the page",
-			},
-			{
-				phrase: "strip https",
-				why:    "the attack the advice names: an http:// link lets a network attacker strip HTTPS and serve a look-alike page",
-			},
+		for _, problem := range firstVisitAdviceProblems(verifyPagePath, pageNotice) {
+			t.Error(problem)
 		}
 
-		// noticeProblems returns what a document fails to carry of the notice: the
-		// site's exact URL, and the two phrases of the advice. The page's
-		// unconditional notice carries the advice and so does the section that
-		// repeats it, and both are checked: a notice that lost the advice fails as
-		// the section that lost it does, and neither is read and left unasserted.
-		noticeProblems := func(docPath, doc string) []string {
-			text := collapsed(doc)
-
-			var found []string
-
-			if !strings.Contains(text, siteURL) {
-				found = append(found, fmt.Sprintf("%s does not carry the exact URL %s: the first-visit advice is to type that URL, so %s spells it out (PRD #297 milestone 3)",
-					docPath, siteURL, docPath))
-			}
-
-			lower := strings.ToLower(text)
-
-			for _, want := range phrases {
-				if !strings.Contains(lower, want.phrase) {
-					found = append(found, fmt.Sprintf("%s does not carry the first-visit advice: it says no %q, though the page and the guide's %q section carry the advice (PRD #297 milestone 3): %s",
-						docPath, want.phrase, verifyGuideSection, want.why))
-				}
-			}
-
-			return found
-		}
-
-		for _, doc := range []struct {
-			docPath string
-			text    string
-		}{
-			{docPath: verifyPagePath, text: pageNotice},
-			{docPath: verifyGuidePath, text: section},
-		} {
-			for _, problem := range noticeProblems(doc.docPath, doc.text) {
-				t.Error(problem)
-			}
+		for _, problem := range firstVisitAdviceProblems(verifyGuidePath, section) {
+			t.Error(problem)
 		}
 
 		// The notice's side is worth its claims only while a notice that lost the
@@ -387,7 +336,7 @@ func TestVerificationGuideAgreesWithThePage(t *testing.T) {
 				t.Run(tc.name, func(t *testing.T) {
 					t.Parallel()
 
-					got := strings.Join(noticeProblems(verifyPagePath, tc.notice), "\n")
+					got := strings.Join(firstVisitAdviceProblems(verifyPagePath, tc.notice), "\n")
 
 					if !strings.Contains(got, tc.want) {
 						t.Errorf("%s reports no problem with %q, though its unconditional notice no longer carries it: the check reads that notice, so %s must fail it (PRD #297 milestone 3)\nproblems: %s",

@@ -3,7 +3,7 @@
 - Status: Proposed
 - Date: 2026-11-21
 
-Part of [PRD #297](../../prds/297-web-assessment-site.md) milestone 3, issue #422. It records how the
+Part of [PRD #297](../../prds/done/297-web-assessment-site.md) milestone 3, issue #422. It records how the
 hosting is created; the deploy job, the attestation and the live check get milestone 3's hosting ADR
 ([ADR 0042](0042-host-the-site-behind-edge-services-and-deploy-it-from-the-release-with-a-bucket-scoped-key.md),
 amended in milestone 4), which this one does not replace.
@@ -392,6 +392,11 @@ A hand step changes nothing on its own and is checked by a read-only line. It is
 that puts a product of the site in a new region (R14 says so). If a later provider version can set a
 managed source's retention without adopting it, this is revisited.
 
+**Done at the first deploy (2026-11-25), PASS.** The project had four sources: the Scaleway logs
+sources of `fr-par` and `nl-ams`, each lowered by hand from 7 days to 1, and the Scaleway metrics
+sources of `fr-par` and `nl-ams`, both at 31 days. R14's check then read every logs source at 1 day and
+every metrics source at 31 days.
+
 ## Amendment: the container front, and no TLS stage (PRD #297 milestone 4)
 
 2026-11-24. [ADR 0045](0045-front-the-site-with-a-serverless-container-running-a-pinned-caddy.md) puts a
@@ -454,6 +459,27 @@ CNAME's target.
   that rule judges, may stand. The three container types join the allow list, and
   `[container-repeat]` refuses `count` or `for_each` on the container or its namespace and a second
   `scaleway_container`, even when that container's cost pins fail too: one refusal never hides another.
-- **Unverified until R4:** whether the pipeline's default endpoint serves HTTPS with no TLS stage. R4
-  checks it right after the apply that removes the stage; the rollback is `pipeline_www = true` and R4
-  again (Runbook, R8).
+- **Settled at R4 (2026-11-25):** the pipeline's default endpoint serves HTTPS with no TLS stage. R4's
+  check right after the apply that removed the stage answered (ADR 0045, *Settled live*), so the
+  rollback (`pipeline_www = true` and R4 again, Runbook, R8) was not needed.
+
+### The first apply (2026-11-24 to 2026-11-25)
+
+The pipeline of milestone 3 had a TLS stage whose state held no `create_before_destroy`, so the first
+apply after this amendment met issue #595 as described above:
+
+- **The plan** was "2 to add, 1 to change, 1 to destroy": the namespace and the container added, the
+  DNS stage updated, the TLS stage destroyed. The apply destroyed the TLS stage before updating the DNS
+  stage that still referenced it, and Scaleway answered a bare 500 (issue #595). Neither `-target` nor
+  `-exclude` separated the two changes.
+- **The route that worked:** a `state pull` backup of the state; `state rm` of the TLS stage
+  (`scaleway_edge_services_tls_stage.site[0]`); a plan of "1 to add, 1 to change, 0 to destroy" and its
+  apply ("1 added, 1 changed, 0 destroyed"), after which the DNS stage had `cache_stage_id`, no
+  `tls_stage_id` and `fqdns = []`; then the orphaned TLS stage, no longer in the state, deleted by hand.
+  The DNS stage was updated in place, not replaced, so the pipeline's default endpoint, the container's
+  upstream, did not change.
+- **What was left:** a later plan showed only the memory line, `268000000 -> 268435456` (issue #596).
+  PR #603 fixed both: R4's check of the state's `create_before_destroy` before such an apply, and the
+  memory pin at 268000000 (ADR 0045's amendment *The memory the platform keeps*). The custom domains'
+  apply (a plan of "2 to add" plus the memory line, applied as "2 added, 1 changed") then made both domains
+  *ready* at the first check.

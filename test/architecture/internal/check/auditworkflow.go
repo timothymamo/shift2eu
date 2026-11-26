@@ -1484,7 +1484,7 @@ func (a *auditReader) schema(lines []yamlread.Line) {
 	}
 
 	if e, ok := top["permissions"]; ok {
-		a.r.rawValue(e, "the audit workflow's top-level permissions", "{}")
+		a.r.emptyMapping(e, "the audit workflow's top-level permissions")
 	}
 
 	if e, ok := top["concurrency"]; ok {

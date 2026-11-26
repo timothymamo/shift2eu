@@ -10,6 +10,11 @@ Analyse what you run on a hyperscaler today, and find out what can move to a Eur
 > one region (`--region scaleway=nl-ams`). Live discovery from AWS, Azure and GCP
 > is not implemented yet.
 
+The same assessment runs in your browser at [https://www.shift2eu.com](https://www.shift2eu.com): the
+inventory never leaves your browser. Type https://www.shift2eu.com yourself rather than following an
+http:// link: on a first visit a network attacker can strip HTTPS and serve a look-alike page. To check
+the page you were served, see [Verify the site](docs/guide/verify-releases.md#verify-the-site).
+
 ## What it will do
 
 `shift2eu` reads your current infrastructure **read-only** from a source hyperscaler, compares it with the

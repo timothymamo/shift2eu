@@ -3,7 +3,7 @@
 - Status: Proposed
 - Date: 2026-11-23
 
-Part of [PRD #297](../../prds/297-web-assessment-site.md) milestone 3. It records the hosting, the deploy,
+Part of [PRD #297](../../prds/done/297-web-assessment-site.md) milestone 3. It records the hosting, the deploy,
 the bundle's attestation, the HSTS and preload records' format, the origins and the leaked-key residuals.
 [ADR 0039](0039-create-the-sites-scaleway-hosting-with-opentofu.md) records how the hosting is created;
 this one records how the site is served and deployed on it. Milestone 4 amends it with what only the live
@@ -277,8 +277,12 @@ digest and the SRI hash are of the decoded file). The level is the highest becau
 is the budget's (3 MiB, ADR 0035) and the size test's default-level measurement is then an upper bound
 of what is served. Browsers decode it before SRI and before the page script reads it. Whether Edge
 Services serves it with `Content-Encoding: gzip` and `Content-Type: text/javascript` unchanged, and
-whether it compresses the other files itself, is *to be checked in milestone 4*; PR B's live check
-records the transferred size and the decoded size of what the edge serves (issue #346, item 2).
+whether it compresses the other files itself, was left *to be checked in milestone 4*. **Checked by
+v0.16.1's release live check** (run 45692962040, `result: PASS`, 2026-11-25): it measured the module
+script's transferred and decoded size and its `Content-Type` as `www` serves them (ADR 0043's size
+check) and held every manifest file's decoded digest, so both budgets and `Content-Type:
+text/javascript` held as served, and no file came with an encoding the check refuses. The sizes and
+the encoding it saw are in that run's report, not recorded here (issue #346, item 2).
 
 **The uncompressed budget: the decoded module script at most 10 MiB (10,485,760 bytes)** (*proposed, for
 the maintainer to confirm*; PR B holds it). Decision 4 as amended has the live check hold both the
@@ -556,20 +560,33 @@ Services pipeline. What bounds the rest:
   the listing is on, milestone 4 may add that the next release's deploy fails on any object outside
   every release's manifest.
 - **ListBucket**, if R7 shows IAM grants it and the deploy then passes `-list-bucket`: a path outside
-  the manifests is found at the next release, not by the daily check.
+  the manifests is found at the next release, not by the daily check. *Amended 2026-11-26:* the
+  maintainer decided to keep `-list-bucket` off (the amendment *The first deploy*, below), so this
+  bound does not hold: a path outside every manifest stays undetected by the deploy as well as by the
+  live checks.
 
 ### The key-limit step (R7): result
 
-*Open, recorded in milestone 4* (and again after every key rotation and every change to the IAM rule or
-the bucket policy). Milestone 4 records here, per probe, the answer and, for anything but
+*Recorded in milestone 4: R7 ran on 2026-11-24* (and runs again after every key rotation and every
+change to the IAM rule or the bucket policy). Per probe, the answer and, for anything but
 `403 AccessDenied` (or `NoSuchBucket` for a bucket outside the key's project), the reason it was
 accepted; and whether `ListBucket` was allowed, which decides `-list-bucket` above:
 
 | Probe | Answer |
 |---|---|
-| `PutObject` on `canary/probe.txt` | *to be recorded (expected: allowed)* |
-| `ListObjectsV2` on the site's bucket | *to be recorded (decides `-list-bucket`)* |
-| the four re-submissions on the site's bucket, the eleven object probes, the nine canary-bucket probes, the two probes outside the project and the three on the state bucket (*Runbook*, R7) | *to be recorded (expected: each `PASS 403` or `PASS NoSuchBucket`)* |
+| `PutObject` on `canary/probe.txt` | Allowed (the deploy key's job) |
+| `ListObjectsV2` on the site's bucket | Allowed. The maintainer kept `-list-bucket` off all the same (2026-11-26; the amendment *The first deploy*, below): the deploy works without it |
+| the four re-submissions on the site's bucket (`put-bucket-website`, `put-bucket-versioning`, `put-bucket-acl`, `put-bucket-policy`) | `PASS 403`, each |
+| the eleven object probes on `canary/probe.txt` (`delete-object` with and without a version, `delete-object-tagging` and `put-object-tagging` with and without a version, `put-object-acl`, `put-object-retention`, `put-object-legal-hold`, `abort-multipart-upload`, `restore-object`) | `PASS 403`, each |
+| the nine canary-bucket probes (`delete-bucket-website`, `delete-bucket-policy`, `delete-bucket`, `put-bucket-versioning` to `Suspended`, `put-object-lock-configuration`, `put-bucket-cors`, `put-bucket-lifecycle`, `put-bucket-tagging`, `put-bucket-encryption`) | `PASS 403`, each |
+| the two probes outside the project: `list-buckets` | `PASS 403` |
+| the two probes outside the project: `put-object` to a bucket in another project | **Not run**: skipped, no bucket in another project was given. A gap in R7's run: this probe's own answer is missing. The state bucket's `put-object` below is a write to a bucket in another project (the admin project) and was denied, so the key was shown unable to write outside the site's project for that one project; a re-run with a bucket in a third project closes the gap |
+| the three on the state bucket (`get-object` of the state, `list-objects-v2`, `put-object`) | `PASS 403`, each |
+
+After the probes, the step's closing `tofu plan` (the maintainer's own key) failed to release its state
+lock (`DeleteObject` 403), right after the script switched the key's default project back to the admin
+project: most likely the switch had not taken effect yet (issue #537). The maintainer force-unlocked the
+state, and `plan -detailed-exitcode` then exited 0. Nothing in the probes' answers depends on it.
 
 ## Alternatives considered
 
@@ -710,3 +727,62 @@ unchanged; only *Hosting*, *The origins* and *Recovery* change, as follows.
   and preload records*). Once the header CSP is live, it also binds
   a page or script a leaked key uploads at any path (`connect-src 'none'`, `worker-src 'none'`), which
   narrows the residuals above; that amendment says so with the live result.
+
+## Amendment: the first deploy (PRD #297 milestone 4)
+
+2026-11-26. The maintainer's live answers at the first deploy (2026-11-24 to 2026-11-26), read through
+the first-deploy runbook; ADR 0045's amendment *Settled live* holds the front's own answers. The
+decision above stands; this records what milestone 4 was to record.
+
+- **The origins (R5, `public_read = true`), with the container's endpoint.** Answers per URL, the same
+  as on 2026-11-24:
+
+  | Origin | HTTPS | Plain HTTP |
+  |---|---|---|
+  | The pipeline's endpoint `https://<pipeline id>.svc.edge.scw.cloud` | 200 | 302 to HTTPS |
+  | The bucket website endpoint `https://<bucket>.s3-website.<region>.scw.cloud` | 200 | 200 |
+  | The bucket's S3 endpoints | 200 | 200 |
+  | The container's endpoint `https://<namespace>-<name>.functions.fnc.<region>.scw.cloud` | `308 https://www.shift2eu.com/<key>` | `308 https://www.shift2eu.com/<key>` |
+  | `https://www.shift2eu.com` and `https://shift2eu.com` | ADR 0045, *Settled live* | 308 to `https://www.shift2eu.com/`, the path and query kept |
+
+  The plain-HTTP 200s of the bucket's endpoints are recorded, not a no-go (*The origins*, above): only
+  `https://www.shift2eu.com` is attested and checked. This answers every *to be checked* cell of both
+  origins tables.
+- **R7's ListBucket: `-list-bucket` stays off.** The maintainer decided (2026-11-25/26) to keep the
+  deploy's `-list-bucket` off; the deploy works without it (v0.16.1, below). So a path outside every
+  manifest, such as a look-alike page a leaked key plants, is detected neither by the deploy nor by the
+  live checks (*The leaked-key residuals*, amended above); the privacy page's statement that such a path
+  is not part of the site stays the bound, and the "next release's deploy fails on any object outside
+  every release's manifest" sentence is not added.
+- **HSTS: met; preload: not pursued.** The records shipped in v0.16.0: `site/records/hsts.json` with
+  `"outcome": "met"`, `"preload": false`, `"date": "2026-11-25"`; `site/records/preload.json` with
+  `"listed": false`. v0.16.0's site jobs ran with the deploy still off (Site programs succeeded, the
+  deploy and the live check skipped). The apex's HTTPS 308 sends `max-age=31536000` without
+  `includeSubDomains` since PR #618 was applied (2026-11-26; ADR 0045, *Settled live*).
+- **The first deploying release: v0.16.1.** With `SITE_DEPLOY_ENABLED=true` (set 2026-11-25) and the
+  `site` environment complete (its deployment policy `tag v*.*.*`), v0.16.1's run deployed the site
+  (*Deploy the site* succeeded) and its live check passed (*Check the live site*, `result: PASS`),
+  with notices only in the run's summary. `www` then served v0.16.1's `manifest.json` with the
+  container's headers.
+- **The header CSP is live.** Every answer of `www` carries the header CSP with `frame-ancestors 'none'`
+  (ADR 0045, *Settled live*), so a page or script a leaked key uploads at any path is held to
+  `connect-src 'none'` and `worker-src 'none'` on `www`. The pipeline's default endpoint stays the
+  residual ADR 0045 records: it serves every object without the header policy.
+- **The read rule (R5, 2026-11-24): `public_read = true`.** With `public_read` false, Edge Services
+  answered 403 with the bucket's own access-denied page in the website endpoint's HTML form
+  (`Code: AccessDenied`, an S3 request ID), on the first try: it cannot read private objects through the
+  website endpoint. So `public_read = true`, Hosting decision 11's fallback; R4 applied the bucket-policy
+  change and the next plan showed no changes. With it, Edge Services answered 200 (`x-cache: miss`, the
+  bucket's `x-amz-request-id`, the body as written). The runbook's R5 recognised only the S3 XML form of
+  `AccessDenied`; it now recognises the HTML form too (issue #535).
+- **R8 on Edge Services alone (2026-11-24): the no-go.** The `www` CNAME, the CAA records (exactly
+  `0 issue "letsencrypt.org"` and `0 issuewild ";"`) and the DS record passed, but
+  `http://www.shift2eu.com/` answered 302, which the go/no-go refuses, and Scaleway support's answer
+  (ticket #1639626, the amendment *A Serverless Container in front of Edge Services*, above) closed every
+  way around it. That no-go led to ADR 0045's container front; R8's answers on the front are ADR 0045's
+  *Settled live*.
+- **R9 (2026-11-24): the `site` environment, PASS.** Every check passed: a custom branch policy only, the
+  deployment policy exactly tag `v*.*.*`, the environment's secrets exactly `SCW_ACCESS_KEY` and
+  `SCW_SECRET_KEY` (none at repository level), its variables `SITE_BUCKET` and `SITE_REGION`
+  (`nl-ams`), the `v*` tag rulesets with no bypass for the release-please App, and the skipped site jobs
+  of a release run before the switch.

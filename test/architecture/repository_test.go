@@ -1236,6 +1236,23 @@ func TestReleaseWorkflowIsClosed(t *testing.T) {
 	}
 }
 
+// TestSiteCheckWorkflowIsClosed pins the scheduled live check (PRD #297
+// milestone 4, ADR 0043): .github/workflows/site-check.yml repeats the
+// release's live check at least daily, with one schedule and no other trigger,
+// no permission by default, a checking job with contents: read and
+// attestations: read alone, every action pinned by commit SHA, its checkout
+// keeping no credential, the live version accepted only within the version
+// window, the attestation verified with the deploy's flags, and an alert job
+// with issues: write alone that writes fixed text and the failed run's URL
+// only (check.SiteCheckWorkflow).
+func TestSiteCheckWorkflowIsClosed(t *testing.T) {
+	t.Parallel()
+
+	if err := check.SiteCheckWorkflow(readRepositoryFile(t, ".github/workflows/site-check.yml")); err != nil {
+		t.Errorf("SiteCheckWorkflow(.github/workflows/site-check.yml) = %v, want no error: the scheduled live check repeats the release's live check at least daily, with the window's bound and the alert job's fixed text (PRD #297 milestone 4, ADR 0043)", err)
+	}
+}
+
 // TestReleaseArchivesHoldOneBinary pins issue #147 as issue #393 leaves it:
 // the release ships the CLI's binary in one archive of its own.
 // .goreleaser.yaml holds one archive entry, limited by ids: to the CLI's
