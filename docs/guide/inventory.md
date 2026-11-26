@@ -97,10 +97,10 @@ up in the report as a blocker on every target, instead of disappearing from the 
 programs below classify into the seven categories ADR 0046 adds, on every source that has such a
 service: AWS and Azure into all seven, GCP into all but `database.mongodb` (its program classifies no
 GCP service as one; Firestore stays `unclassified`, PRD #552); each source's *classification* table
-names the types. Into the two ADR 0047 adds only the AWS program classifies yet (PRD #571), and none
-into `network.dns`: an Azure or GCP search or Kafka cluster, or a DNS zone on any source, is listed as
-`unclassified`, or not at all, so set its category (`search.opensearch`, `messaging.kafka` or
-`network.dns`) by hand.
+names the types. Only the AWS program classifies into the two categories ADR 0047 adds yet
+(PRD #571), and no program into `network.dns`: a search service or Kafka cluster on Azure or GCP, or a
+DNS zone on any source, is listed as `unclassified`, or not at all, so set its category
+(`search.opensearch`, `messaging.kafka` or `network.dns`) by hand.
 
 The **capabilities** are features a resource depends on:
 
@@ -327,22 +327,33 @@ jq -r '.DomainNames[].DomainName' "$out/opensearch-domain-names.json" |
     EncryptionAtRestOptions: {Enabled: EncryptionAtRestOptions.Enabled}}}' --domain-names \
   > "$out/opensearch-domains.json"
 
-: > "$out/opensearchserverless-collections.json"
+f="$out/opensearchserverless-collections.json"
+: > "$f"
 token=
 while :; do
-  page=$(aws opensearchserverless list-collections --output json --max-results 100 \
-    ${token:+--next-token} ${token:+"$token"} \
-    --query '{collectionSummaries: collectionSummaries[].{id: id, name: name}, nextToken: nextToken}') || {
-    if [ -n "$token" ]; then echo "list-collections failed: $out/opensearchserverless-collections.json is incomplete, collect $out again" >&2
-    else echo "list-collections failed: $out/opensearchserverless-collections.json is empty; unless the region has no OpenSearch Serverless, it is incomplete, collect $out again" >&2; fi
-    break; }
-  printf '%s\n' "$page" >> "$out/opensearchserverless-collections.json"
+  if ! page=$(aws opensearchserverless list-collections --output json --max-results 100 \
+      ${token:+--next-token} ${token:+"$token"} \
+      --query '{collectionSummaries: collectionSummaries[].{id: id, name: name}, nextToken: nextToken}'); then
+    if [ -n "$token" ]; then
+      echo "list-collections failed: $f is incomplete; collect $out again" >&2
+    else
+      echo "list-collections failed on its first page: $f is empty;" \
+        "if the region runs OpenSearch Serverless, collect $out again" >&2
+    fi
+    break
+  fi
+  printf '%s\n' "$page" >> "$f"
   last=$token
   token=$(printf '%s' "$page" | jq -r '.nextToken // empty')
-  [ -n "$token" ] || break
-  [ "$token" != "$last" ] || { echo "list-collections repeated its nextToken: $out/opensearchserverless-collections.json may be incomplete, collect $out again" >&2; break; }
+  if [ -z "$token" ]; then
+    break
+  fi
+  if [ "$token" = "$last" ]; then
+    echo "list-collections repeated its nextToken: $f may be incomplete; collect $out again" >&2
+    break
+  fi
 done
-jq -r '.collectionSummaries[]?.id' "$out/opensearchserverless-collections.json" |
+jq -r '.collectionSummaries[]?.id' "$f" |
   xargs -r -n 100 aws opensearchserverless batch-get-collection --output json --query '{collectionDetails:
     collectionDetails[].{name: name, arn: arn, type: type, standbyReplicas: standbyReplicas,
     status: status}}' --ids \
@@ -480,8 +491,7 @@ none, and appends every page to `opensearchserverless-collections.json` as a JSO
 the `batch-get-collection` call reads the IDs of every page. A page that fails leaves the file
 incomplete: the loop stops, says so on stderr, and the region must be collected again. It also stops,
 with a message, if AWS hands back the token it was just given, rather than ask for the same page
-forever. A failed first page in a region without OpenSearch Serverless leaves an empty file, as
-below.
+forever.
 
 `describe-instance-types` takes at most 100 instance types per call; `xargs -n 100` splits a longer list
 into several calls, and the program reads each. `elbv2 describe-tags` takes at most 20 load balancers per

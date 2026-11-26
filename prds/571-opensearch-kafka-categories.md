@@ -676,9 +676,12 @@ text as the decision)
     `${token:+--next-token} ${token:+"$token"}`, two words or none in every one of them (finding N-a). A
     failed page after the first stops the loop with a message on stderr that names the collections
     file, says it is incomplete and that the region must be collected again; a failed first page says
-    the file is empty and incomplete unless the region has no OpenSearch Serverless, since the two
-    cannot be told apart from the exit status alone (finding S-B). A page that hands back the token it
-    was given stops the loop with a message, rather than loop forever (audit nit).
+    the file is empty and that the region must be collected again if it runs OpenSearch Serverless,
+    since the two cannot be told apart from the exit status alone (finding S-B). A page that hands back
+    the token it was given stops the loop with a message, rather than loop forever (audit nit).
+    Decided in milestone 2, review round 4 (finding F1): the block names the collections file once,
+    as `f`, and is laid out conventionally (`if ...; then`, `fi` on lines of their own), with every
+    line short enough to read on the page.
     <https://docs.aws.amazon.com/opensearch-service/latest/ServerlessAPIReference/API_ListCollections.html>
   - **`ec2:DescribeInstanceTypes` in the policy.** Decided in milestone 2 (audit, low): the guide's
     minimal policy lacked the action `ec2 describe-instance-types` needs, a gap older than this PRD that
