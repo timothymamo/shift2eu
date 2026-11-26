@@ -271,6 +271,11 @@ only the calls this page makes:
         "elasticloadbalancing:DescribeTargetGroups",
         "elasticloadbalancing:DescribeTags",
         "elasticfilesystem:DescribeFileSystems",
+        "es:ListDomainNames",
+        "es:DescribeDomains",
+        "aoss:ListCollections",
+        "aoss:BatchGetCollection",
+        "kafka:ListClustersV2",
         "config:SelectResourceConfig"
       ],
       "Resource": "*"
@@ -278,6 +283,11 @@ only the calls this page makes:
   ]
 }
 ```
+
+The search and Kafka actions read only how a domain, collection or cluster is set up. The policy
+grants no data-plane action (no `es:ESHttp*`, `aoss:APIAccessAll` or `kafka-cluster:*`, which would
+read or write the documents and topics) and no connection or credentials call (no
+`kafka:GetBootstrapBrokers` or `kafka:ListScramSecrets`).
 
 `ViewOnlyAccess` is narrower than `ReadOnlyAccess`: it lists and describes resources and grants no
 reads of your data. It may lack some of the actions above, though, so check it against this list with
@@ -300,11 +310,49 @@ aws ec2 describe-instances --output json --query '{Reservations: Reservations[].
   NetworkInterfaces: NetworkInterfaces[].{Ipv6AddressCount: length(Ipv6Addresses || `[]`)},
   Tags: Tags[].{Key: Key}}}}' > "$out/ec2-instances.json"
 
+aws opensearch list-domain-names --output json \
+  --query '{DomainNames: DomainNames[].{DomainName: DomainName}}' > "$out/opensearch-domain-names.json"
+jq -r '.DomainNames[].DomainName' "$out/opensearch-domain-names.json" |
+  xargs -r -n 5 aws opensearch describe-domains --output json --query '{DomainStatusList: DomainStatusList[].{
+    DomainName: DomainName, EngineVersion: EngineVersion,
+    ClusterConfig: {InstanceType: ClusterConfig.InstanceType, InstanceCount: ClusterConfig.InstanceCount,
+    ZoneAwarenessEnabled: ClusterConfig.ZoneAwarenessEnabled,
+    MultiAZWithStandbyEnabled: ClusterConfig.MultiAZWithStandbyEnabled},
+    EBSOptions: {EBSEnabled: EBSOptions.EBSEnabled, VolumeSize: EBSOptions.VolumeSize},
+    EncryptionAtRestOptions: {Enabled: EncryptionAtRestOptions.Enabled}}}' --domain-names \
+  > "$out/opensearch-domains.json"
+
+aws opensearchserverless list-collections --output json \
+  --query '{collectionSummaries: collectionSummaries[].{id: id, name: name}}' \
+  > "$out/opensearchserverless-collections.json"
+jq -r '.collectionSummaries[].id' "$out/opensearchserverless-collections.json" |
+  xargs -r -n 100 aws opensearchserverless batch-get-collection --output json --query '{collectionDetails:
+    collectionDetails[].{name: name, type: type, standbyReplicas: standbyReplicas}}' --ids \
+  > "$out/opensearchserverless-batch-collections.json"
+
+aws kafka list-clusters-v2 --output json --query '{ClusterInfoList: ClusterInfoList[].{
+  ClusterName: ClusterName, ClusterType: ClusterType,
+  Provisioned: Provisioned.{NumberOfBrokerNodes: NumberOfBrokerNodes,
+  BrokerNodeGroupInfo: BrokerNodeGroupInfo.{InstanceType: InstanceType, ClientSubnets: ClientSubnets,
+  StorageInfo: {EbsStorageInfo: {VolumeSize: StorageInfo.EbsStorageInfo.VolumeSize}}}}}}' \
+  > "$out/kafka-clusters-v2.json"
+
 # The vCPU and memory of the instance types in use.
-jq -r '[.Reservations[].Instances[].InstanceType] | unique[]' "$out/ec2-instances.json" |
-  xargs -r -n 100 aws ec2 describe-instance-types --output json --query '{InstanceTypes: InstanceTypes[].{
-    InstanceType: InstanceType, VCpuInfo: {DefaultVCpus: VCpuInfo.DefaultVCpus},
-    MemoryInfo: {SizeInMiB: MemoryInfo.SizeInMiB}}}' --instance-types > "$out/ec2-instance-types.json"
+# A search domain's and a Kafka broker's instance type is built on an EC2 type
+# (r6g.large.search and kafka.m5.large are r6g.large and m5.large), asked for one
+# at a time: a type with no EC2 twin fails alone and its resource stays unsized.
+{ jq -r '[.Reservations[].Instances[].InstanceType] | unique[]' "$out/ec2-instances.json" |
+    xargs -r -n 100 aws ec2 describe-instance-types --output json --query '{InstanceTypes: InstanceTypes[].{
+      InstanceType: InstanceType, VCpuInfo: {DefaultVCpus: VCpuInfo.DefaultVCpus},
+      MemoryInfo: {SizeInMiB: MemoryInfo.SizeInMiB}}}' --instance-types
+  jq -rn '[inputs | (.DomainStatusList[]?.ClusterConfig.InstanceType // empty | select(endswith(".search"))
+      | sub("\\.search$"; "")), (.ClusterInfoList[]?.Provisioned.BrokerNodeGroupInfo.InstanceType // empty
+      | select(startswith("kafka.")) | sub("^kafka\\."; ""))] | unique[] | select(test("^o[a-z][0-9]") | not)' \
+    "$out/opensearch-domains.json" "$out/kafka-clusters-v2.json" |
+    xargs -r -n 1 aws ec2 describe-instance-types --output json --query '{InstanceTypes: InstanceTypes[].{
+      InstanceType: InstanceType, VCpuInfo: {DefaultVCpus: VCpuInfo.DefaultVCpus},
+      MemoryInfo: {SizeInMiB: MemoryInfo.SizeInMiB}}}' --instance-types
+} > "$out/ec2-instance-types.json"
 
 aws ec2 describe-volumes --output json --query '{Volumes: Volumes[].{
   VolumeId: VolumeId, AvailabilityZone: AvailabilityZone, Encrypted: Encrypted, Size: Size,
@@ -410,7 +458,13 @@ the whole region. Do not pass `--no-paginate` or `--max-items`.
 
 `describe-instance-types` takes at most 100 instance types per call; `xargs -n 100` splits a longer list
 into several calls, and the program reads each. `elbv2 describe-tags` takes at most 20 load balancers per
-call, so `xargs -n 20` splits the same way.
+call, so `xargs -n 20` splits the same way. `opensearch describe-domains` is asked for 5 domains at a
+time and `opensearchserverless batch-get-collection` for 100 collections, its documented maximum.
+
+The search and Kafka calls keep only how each domain, collection or cluster is set up: never a domain's
+access policy, security or Cognito options or endpoints, a collection's endpoints, or a cluster's broker
+addresses or ZooKeeper connection strings. A region where OpenSearch Serverless or MSK does not run
+answers with an error on stderr and an empty file, which the program reads as no resources.
 
 `sns get-topic-attributes` keeps only the topic's ARN and its KMS key: the attributes it leaves out
 include the owner's account ID and the topic's access policy.
@@ -440,6 +494,11 @@ Review `inventories/aws.inventory.json`, then delete the raw output: `rm -r inve
 | ElastiCache cluster outside a group | `count` | `elasticache describe-cache-clusters`, `NumCacheNodes` |
 | DocumentDB cluster | `count` | its instances: the `rds describe-db-instances` entries of engine `docdb` with its `DBClusterIdentifier` |
 | EFS file system | `storageGiB` | `efs describe-file-systems`, `SizeInBytes.Value` / 1073741824 |
+| OpenSearch Service domain (OpenSearch or Elasticsearch 7.x) | `vcpus`, `memoryGiB` per data node | its `ClusterConfig.InstanceType` without `.search` (`r6g.large.search` is `r6g.large`), looked up in `ec2 describe-instance-types` |
+| OpenSearch Service domain | `count` | `opensearch describe-domains`, `ClusterConfig.InstanceCount` (the data nodes; dedicated master and warm nodes are not counted) |
+| OpenSearch Service domain on EBS | `storageGiB` per data node | `opensearch describe-domains`, `EBSOptions.VolumeSize` when `EBSOptions.EBSEnabled` is true |
+| MSK provisioned cluster | `vcpus`, `memoryGiB` per broker | its `BrokerNodeGroupInfo.InstanceType` without `kafka.` (`kafka.m5.large` is `m5.large`), looked up in `ec2 describe-instance-types` |
+| MSK provisioned cluster | `count`, `storageGiB` per broker | `kafka list-clusters-v2`, `Provisioned.NumberOfBrokerNodes` and `BrokerNodeGroupInfo.StorageInfo.EbsStorageInfo.VolumeSize` |
 
 A cache's and a DocumentDB cluster's memory is not filled in: ElastiCache names a node type
 (`CacheNodeType`, such as `cache.m6g.large`) and DocumentDB an instance class (`DBInstanceClass`, such as
@@ -451,6 +510,21 @@ Aurora. An ElastiCache Serverless cache gets no size at all: it names no node ty
 setting is a limit, not a size. EFS has no provisioned size: `SizeInBytes` is the metered size of the
 data stored (AWS says it is exact only when the file system has not changed for a couple of hours), and
 the targets bill provisioned space, so set `storageGiB` to the size you will provision if it differs.
+
+AWS names a search data node's or a Kafka broker's instance type, not its size. The program takes the
+vCPU and memory of the EC2 type of the same name without the `.search` suffix or the `kafka.` prefix,
+which `ec2 describe-instance-types` gives; AWS's API references call a broker type "the type of Amazon
+EC2 instances to use for brokers", and its MSK broker-size page points to the EC2 instance types for
+their sizes. A type with no EC2 twin is not looked up and its resource gets no `vcpus` or `memoryGiB`:
+the OpenSearch-optimized families (`or1`, `or2`, `om2`, `oi2`) and MSK Express brokers
+(`express.m7g.large`, which also have no volume to size, since MSK manages their storage). Add
+`vcpus` and `memoryGiB` by hand for them from AWS's pricing pages, as for an RDS instance class. A
+domain on instance storage (such as `i3` or `r6gd`, `EBSEnabled` false) gets no `storageGiB`: add the
+instance's storage by hand.
+
+An OpenSearch Serverless collection and an MSK Serverless cluster get no size: they name no node or
+broker, and are billed by usage (OCUs, partitions and throughput), so the estimate says "not
+estimated: size unknown".
 
 Some target tiers have a minimum billed size or a fixed node count, which the estimate does not apply
 yet: a share smaller than a target's smallest file share, a 1-node cache on a 2-node tier, or a
@@ -497,6 +571,15 @@ The `rawType` is the resource's AWS CloudFormation type.
 | `AWS::Lambda::Function` | `serverless.function` | `lambda list-functions` |
 | `AWS::SQS::Queue` | `messaging.queue` | `sqs get-queue-attributes` |
 | `AWS::SNS::Topic` | `messaging.topic` | `sns get-topic-attributes` |
+| `AWS::OpenSearchService::Domain`, engine `OpenSearch_*` or `Elasticsearch_7.*` | `search.opensearch` | `opensearch describe-domains` |
+| `AWS::OpenSearchService::Domain`, engine `Elasticsearch_1.5` to `Elasticsearch_6.8` | `unclassified` | `opensearch describe-domains` |
+| `AWS::OpenSearchServerless::Collection` | `search.opensearch` | `opensearchserverless batch-get-collection` |
+| `AWS::MSK::Cluster` (provisioned) | `messaging.kafka` | `kafka list-clusters-v2` |
+| `AWS::MSK::ServerlessCluster` | `messaging.kafka` | `kafka list-clusters-v2` |
+| `AWS::OpenSearch::Domain`, `AWS::Elasticsearch::Domain` | none: AWS Config's types for a domain, which `describe-domains` lists | `configservice select-resource-config` |
+| `AWS::MSK::Cluster`, `AWS::MSK::ServerlessCluster` or `AWS::OpenSearchServerless::Collection` that the service call lists by the same name | none: the call lists it | `configservice select-resource-config` |
+| `AWS::MSK::Configuration`, `::ClusterPolicy`, `::BatchScramSecret`, `::VpcConnection`, `AWS::OpenSearchServerless::AccessPolicy`, `::SecurityPolicy`, `::SecurityConfig`, `::LifecyclePolicy`, `::VpcEndpoint` | none: settings and parts of a cluster or collection, which stands for them | `configservice select-resource-config` |
+| `AWS::KafkaConnect::Connector`, `AWS::KafkaConnect::CustomPlugin`, `AWS::OSIS::Pipeline` | `unclassified`: MSK Connect and OpenSearch Ingestion are integration runtimes, not clusters | `configservice select-resource-config` |
 | `AWS::AppRunner::Service` | `serverless.container` | `configservice select-resource-config` |
 | `AWS::ECR::Repository` | `registry.container` | `configservice select-resource-config` |
 | `AWS::ElasticLoadBalancingV2::Listener`, `::ListenerRule`, `::TargetGroup`, `AWS::EFS::AccessPoint`, `AWS::ECR::RegistryPolicy`, `::ReplicationConfiguration`, `::PullThroughCacheRule`, `::RepositoryCreationTemplate` | none: parts or settings of a load balancer, file system or registry, which stands for them | `configservice select-resource-config` |
@@ -513,6 +596,29 @@ that durability. Likewise a node-based Valkey 9.0 or later cache with durability
 primary database: the program still classifies it as `cache.redis`, and a target cache that snapshots
 from time to time would lose that durability, so check such a cache by hand. Memcached is not the Redis
 protocol and stays `unclassified`.
+
+A domain on `Elasticsearch_7.*` is `search.opensearch` because OpenSearch is a fork of Elasticsearch
+7.10.2 and keeps its REST API: a client of the typeless 7.x API speaks to OpenSearch unchanged. Check
+two things by hand before you rely on its `direct` fit:
+
+- a 7.x client that still uses typed endpoints or `include_type_name` (deprecated in 7.x, removed in
+  OpenSearch 2.x and 3.x) needs a change for OpenSearch 2.x and 3.x;
+- the official Elastic clients from 7.14 on refuse to talk to a server that is not Elasticsearch, so an
+  application on such a client changes its client library (to an OpenSearch client, or an earlier
+  Elastic one) to move.
+
+A domain before 7.0 stays `unclassified`: 7.0 removed mapping types, so a client written against the
+6.x API needs a change before it runs on OpenSearch. Beyond that boundary the engine version is not
+assessed. OpenSearch Serverless speaks a subset of the OpenSearch API, and its clients must be
+compatible with OpenSearch 3.x, so they work against a provisioned OpenSearch cluster too.
+
+MSK Serverless accepts IAM authentication only, which a move replaces with the target's own; check
+each client's authentication before you rely on the fit.
+
+A search domain, a collection and a Kafka cluster get no `region`: their calls keep no ARN, which
+would carry the account ID. Add it by hand where you want it. Two of the same type, name and settings
+in two regions are then one entry: give each its region by hand, or build each region's inventory on
+its own.
 
 Left out:
 
@@ -538,7 +644,15 @@ Left out:
   and each instance of the cluster is a `database.postgresql` or `database.mysql` resource. Its
   capabilities come from the instance's settings, and Aurora keeps replicas and zone redundancy at the
   cluster level, as more instances in other zones, which the instance does not report: add
-  `read-replicas` or `zone-high-availability` by hand when the cluster has them.
+  `read-replicas` or `zone-high-availability` by hand when the cluster has them;
+- the AWS Config rows of what the search and Kafka calls list: a domain's `AWS::OpenSearch::Domain` and
+  `AWS::Elasticsearch::Domain` rows, which name it under AWS Config's own types rather than its
+  CloudFormation type, and the rows of an MSK cluster or an OpenSearch Serverless collection the call
+  lists by the same name;
+- the parts and settings of a Kafka cluster or a collection, which AWS Config records as types of
+  their own: an MSK cluster's configurations, cluster policy, SCRAM secrets and VPC connections, and a
+  collection's access, security (encryption and network) and lifecycle policies, security
+  configurations and VPC endpoints. The cluster or collection stands for them.
 
 An Auto Scaling group is always `compute.vm`: the guide does not read its launch template, so a
 group of `*.metal` instances is classified as a group of virtual machines. Change its category to
@@ -585,6 +699,43 @@ another region gets none of their capabilities.
 | `messaging.topic` | `encryption-at-rest` | it has a `KmsMasterKeyId` |
 | `messaging.topic` | `dead-letter-queue` | never: SNS sets a dead-letter queue per subscription, which no topic attribute says; add it by hand if every subscription has one |
 | `registry.container` | `encryption-at-rest` | always: ECR encrypts every repository at rest |
+| `search.opensearch` (domain) | `node-high-availability` | `ClusterConfig.InstanceCount` is 2 or more |
+| `search.opensearch` (domain) | `zone-high-availability` | `ClusterConfig.ZoneAwarenessEnabled` or `MultiAZWithStandbyEnabled` is true |
+| `search.opensearch` (domain) | `encryption-at-rest` | `EncryptionAtRestOptions.Enabled` is true |
+| `search.opensearch` (domain) | `snapshots` | always: OpenSearch Service takes automated snapshots of every domain (hourly from Elasticsearch 5.3 on) |
+| `search.opensearch` (serverless collection) | `node-high-availability`, `zone-high-availability` | `standbyReplicas` is `ENABLED` |
+| `search.opensearch` (serverless collection) | `encryption-at-rest` | always: OpenSearch Serverless requires encryption at rest for every collection |
+| `messaging.kafka` (provisioned) | `node-high-availability` | `NumberOfBrokerNodes` is 2 or more |
+| `messaging.kafka` (provisioned) | `zone-high-availability` | two or more `ClientSubnets`: MSK spreads the brokers evenly over the subnets' zones, one subnet per zone |
+| `messaging.kafka` (provisioned or serverless) | `encryption-at-rest` | always: MSK always encrypts data at rest |
+| `messaging.kafka` (serverless) | `node-high-availability`, `zone-high-availability` | always: MSK manages a serverless cluster's partitions itself, and asks for at least two subnets per VPC "to help client applications switch over to another Availability Zone in the event of an outage" |
+
+A search domain's or a Kafka cluster's high availability holds only for data that is replicated, and
+no read-only call says how indexes or topics are: change it by hand when it is not.
+
+- **Search domain:** two or more data nodes keep serving through the loss of one only for indexes with
+  at least one replica, and zone awareness keeps a copy in another zone only for those too (AWS: "Without
+  replicas, OpenSearch Service can't distribute copies of your data to other Availability Zones"). The
+  default is one replica per index; remove `node-high-availability` and `zone-high-availability` when
+  your indexes have none.
+- **Kafka cluster:** a topic survives the loss of a broker only with a replication factor of 2 or more,
+  and of a zone only with its replicas in several zones. MSK's default replication factor for topics
+  created automatically is 3 in three zones and 2 in two; AWS recommends at least 3. Remove
+  `node-high-availability` and `zone-high-availability` when your topics have a replication factor of
+  1.
+- **Kafka zones:** MSK takes two or three client subnets in distinct zones (exactly two in US West
+  (N. California)), so a provisioned cluster always spans two or more zones and always gets
+  `zone-high-availability`. It then maps `partial` to a target's single-zone Kafka plan, missing
+  `zone-high-availability`, which is the intended reading: the source keeps serving through the loss of
+  a zone and that plan does not.
+- **Serverless collection:** AWS offers standby replicas "for high availability" and does not say in
+  which zone they run; the program reads them as both capabilities, and a collection without them gets
+  neither. Remove `zone-high-availability` by hand if you know your collection's replicas share a zone.
+
+Not capabilities, and so never derived: shards and partitions (what both categories are), UltraWarm and
+cold storage, dedicated master nodes, fine-grained access control, Kafka tiered storage, MSK Connect and
+the schema registry. No source or target offers `point-in-time-restore` for either category. A Kafka
+cluster gets no `snapshots`: MSK takes no backup of a topic's data.
 
 A Classic Load Balancer never gets `udp` or `ipv6`: its listeners are HTTP, HTTPS, TCP or SSL, and it
 has no IP address type. DocumentDB keeps backups and encryption per cluster, and AWS does not say that

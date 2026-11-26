@@ -1,6 +1,6 @@
 # PRD #571: OpenSearch and Kafka as taxonomy categories
 
-**Status:** In progress, milestone 1 done. The maintainer decided all six questions under *Decisions and
+**Status:** In progress, milestones 1 and 2 done. The maintainer decided all six questions under *Decisions and
 decided questions* on 2026-11-25, as recommended. Milestone 1's ADR is
 [0047](../docs/adr/0047-add-search-opensearch-and-messaging-kafka-and-price-their-storage-per-node.md).
 **Issue:** #571
@@ -196,7 +196,8 @@ AWS Config lists OpenSearch domains as `AWS::OpenSearch::Domain` and `AWS::Elast
 ([resource type list](https://docs.aws.amazon.com/config/latest/developerguide/resource-config-reference.html)),
 not as the CloudFormation type `AWS::OpenSearchService::Domain`. The service call is what classifies the
 domain and gives it its CloudFormation `rawType`; `aws.jq` drops both Config types, as it drops the
-types the service calls already list (milestone 2 checks the exact Config strings).
+types the service calls already list. Milestone 2 checked the strings on 2026-11-26 (*To be checked*,
+milestone 2).
 
 **Only the fields the program reads.** Each new call keeps only the fields its jq program reads, with an
 explicit `--query` (AWS), `--format` (gcloud) or Resource Graph `project` (Azure), so nothing else
@@ -446,7 +447,7 @@ lands, its report shows the new categories as fit `none` with "no offering in th
    category, and their goldens change. The guide's lists of categories and its *Sizes* table name the
    new ones. No JSON schema file changes: `category` has no `enum`, no reason is added, and no
    description lists categories (only `$defs/plan.vcpus` names `cache.redis`, unchanged).
-2. [ ] **AWS classification in the guide.** `opensearch list-domain-names` and `describe-domains`,
+2. [x] **AWS classification in the guide.** `opensearch list-domain-names` and `describe-domains`,
    `opensearchserverless list-collections` and `batch-get-collection`, `kafka list-clusters-v2`, with
    `es:ListDomainNames`, `es:DescribeDomains`, `aoss:ListCollections`, `aoss:BatchGetCollection` and
    `kafka:ListClustersV2` in the guide's policy; `aws.jq` classifies the AWS column, derives the
@@ -610,6 +611,100 @@ text as the decision)
   whether `zone-high-availability` is ever false on MSK; that `opensearch describe-domains` takes at
   most 5 domain names per call and `opensearchserverless batch-get-collection` up to 100 ids, so the
   guide batches the names and ids it lists; the `--query` expressions that keep only the fields read.
+
+  *Checked in milestone 2 (2026-11-26), on docs.aws.amazon.com, anonymously, no AWS API called:*
+  - **Config types.** AWS Config records `AWS::OpenSearch::Domain` and `AWS::Elasticsearch::Domain`
+    (listed under "Amazon OpenSearch Service (legacy Elasticsearch)"); `AWS::OpenSearchServerless::Collection`,
+    `::VpcEndpoint`, `::SecurityConfig`, `::SecurityPolicy`, `::AccessPolicy`, `::LifecyclePolicy`;
+    `AWS::MSK::Cluster`, `::Configuration`, `::BatchScramSecret`, `::ClusterPolicy`,
+    `::ServerlessCluster`, `::VpcConnection`; `AWS::KafkaConnect::Connector` and `::CustomPlugin`; and
+    `AWS::OSIS::Pipeline` (OpenSearch Ingestion). So Config lists collections and MSK Serverless clusters
+    too, and `aws.jq` drops their rows, and the provisioned clusters', when the service call lists one of
+    the same type and name. <https://docs.aws.amazon.com/config/latest/developerguide/resource-config-reference.html>
+  - **`describe-domains` fields.** `DomainStatus` has `EngineVersion` ("in the format
+    `Elasticsearch_X.Y` or `OpenSearch_X.Y`"), `ClusterConfig.InstanceType`, `InstanceCount` ("Number of
+    data nodes"), `ZoneAwarenessEnabled`, `MultiAZWithStandbyEnabled`, `EBSOptions.EBSEnabled` and
+    `VolumeSize` ("the size (in GiB) of EBS volumes attached to data nodes") and
+    `EncryptionAtRestOptions.Enabled`. Neither the API nor the CLI reference states a maximum number of
+    domain names per call; the guide asks for 5 at a time, which is safe either way.
+    <https://docs.aws.amazon.com/opensearch-service/latest/APIReference/API_DescribeDomains.html>,
+    <https://docs.aws.amazon.com/cli/latest/reference/opensearch/describe-domains.html>
+  - **Automated snapshots, every domain.** "All OpenSearch Service domains take automated snapshots";
+    hourly, kept 14 days, from Elasticsearch 5.3 on, daily before; they restore the domain. So
+    `snapshots` always holds for a domain.
+    <https://docs.aws.amazon.com/opensearch-service/latest/developerguide/managedomains-snapshots.html>
+  - **Node and zone high availability need replicas.** "If you enable multi-AZ without Standby, you
+    should create at least one replica for each index in your cluster. Without replicas, OpenSearch
+    Service can't distribute copies of your data to other Availability Zones. Fortunately, the default
+    configuration for any index is a replica count of 1." Multi-AZ with Standby spreads the domain over
+    three zones, "each zone containing a complete copy of data". No domain setting gives the replica
+    count, so the guide derives both capabilities from the settings and says to remove them by hand for
+    indexes with no replica.
+    <https://docs.aws.amazon.com/opensearch-service/latest/developerguide/managedomains-multiaz.html>
+  - **OpenSearch Serverless standby replicas.** Not confirmed as another zone: the console's
+    *Standby replicas* option is "for high availability"
+    (<https://docs.aws.amazon.com/opensearch-service/latest/developerguide/serverless-create.html>), the
+    API says only "Indicates whether standby replicas should be used for a collection"
+    (<https://docs.aws.amazon.com/opensearch-service/latest/ServerlessAPIReference/API_CreateCollection.html>),
+    and the capacity page now says "OpenSearch Serverless offers high availability by default without
+    requiring standby nodes or redundancy configuration"
+    (<https://docs.aws.amazon.com/opensearch-service/latest/developerguide/serverless-scaling.html>). The
+    program keeps the planned rule (both capabilities when `standbyReplicas` is `ENABLED`), and the guide
+    says AWS does not name the zone and to remove `zone-high-availability` by hand where it does not
+    hold.
+  - **OpenSearch Serverless encryption and snapshots.** "Encryption at rest is *required* for all
+    serverless collections" (<https://docs.aws.amazon.com/opensearch-service/latest/developerguide/serverless-encryption.html>).
+    Found, and not in the capability table above: "By default, when you create a new collection,
+    OpenSearch Serverless automatically creates snapshots every hour", restorable to the original
+    collection (<https://docs.aws.amazon.com/opensearch-service/latest/developerguide/serverless-snapshots.html>).
+    Milestone 2 does not derive `snapshots` for a collection, as the table and its test say; whether it
+    should is left to the maintainer. Serverless clients "must be compatible with OpenSearch 3.x"
+    (<https://docs.aws.amazon.com/opensearch-service/latest/developerguide/serverless-overview.html>).
+  - **`batch-get-collection` batch.** `ids` and `names` take "Maximum number of 100 items" each; the
+    guide passes ids, 100 at a time.
+    <https://docs.aws.amazon.com/opensearch-service/latest/ServerlessAPIReference/API_BatchGetCollection.html>
+  - **`list-clusters-v2`.** Paginated (the CLI fetches every page); `ClusterType` is `PROVISIONED` or
+    `SERVERLESS`; `Provisioned` gives `NumberOfBrokerNodes`, `BrokerNodeGroupInfo.InstanceType` ("The
+    type of Amazon EC2 instances to use for Apache Kafka brokers"), `ClientSubnets`,
+    `StorageInfo.EbsStorageInfo.VolumeSize` ("The size in GiB of the EBS volume for the data drive on
+    each broker node") and `EncryptionInfo.EncryptionAtRest.DataVolumeKMSKeyId`.
+    <https://docs.aws.amazon.com/cli/latest/reference/kafka/list-clusters-v2.html>
+  - **MSK encryption at rest.** "Amazon MSK always encrypts your data at rest." So the guide's query
+    does not keep `DataVolumeKMSKeyId`, a key ARN with the account ID in it, which the rule does not
+    need. <https://docs.aws.amazon.com/msk/latest/developerguide/msk-encryption.html>
+  - **One subnet per zone; no single-zone MSK cluster.** "If you use the US West (N. California)
+    Region, specify exactly two subnets. For other Regions where Amazon MSK is available, you can
+    specify either two or three subnets. The subnets that you specify must be in distinct Availability
+    Zones. When you create a cluster, Amazon MSK distributes the broker nodes evenly across the subnets
+    that you specify." So a provisioned cluster always spans 2 or 3 zones and always gets
+    `zone-high-availability`. <https://docs.aws.amazon.com/msk/1.0/apireference/clusters.html>
+  - **MSK node high availability needs a replication factor.** "Ensure that the replication factor
+    (RF) is at least 3. Note that a RF of 1 can lead to offline partitions during a rolling update; and
+    a RF of 2 may lead to data loss" (<https://docs.aws.amazon.com/msk/latest/developerguide/bestpractices.html>);
+    `default.replication.factor` is "3 for clusters in 3 Availability Zones, and 2 for clusters in 2
+    Availability Zones" (<https://docs.aws.amazon.com/msk/latest/developerguide/msk-default-configuration.html>).
+    No cluster setting gives a topic's factor, so the guide says to remove both capabilities by hand
+    for topics with a factor of 1.
+  - **MSK Serverless zones.** Not stated as replication: the pages say only "To help client
+    applications switch over to another Availability Zone in the event of an outage, you must specify
+    at least two subnets in each VPC"
+    (<https://docs.aws.amazon.com/msk/latest/developerguide/create-serverless-cluster.html>) and that
+    Amazon MSK sets the broker configuration, which cannot be changed
+    (<https://docs.aws.amazon.com/msk/latest/developerguide/serverless-config.html>). The program keeps
+    the planned "always" for both capabilities, and the guide quotes the subnet sentence.
+  - **Instance types and EC2.** No AWS documentation page gives a `.search` or `kafka.` type's vCPU and
+    memory, or says they equal the EC2 type's; the MSK API calls a broker type "the type of Amazon EC2
+    instances to use for brokers", and the broker-size page sends readers to the EC2 instance types
+    for M5, M7g and T3 sizes (<https://docs.aws.amazon.com/msk/latest/developerguide/broker-instance-sizes.html>).
+    OpenSearch Service also runs families with no EC2 twin, `or1`, `or2`, `om2` and `oi2`
+    (<https://docs.aws.amazon.com/opensearch-service/latest/developerguide/supported-instance-types.html>),
+    and MSK Express brokers (`express.m7g.large`) have none either. The guide strips `.search` and
+    `kafka.`, sizes the result with `ec2 describe-instance-types` one type per call (so an unknown type
+    fails alone), never asks for the families without a twin, and says to add `vcpus` and `memoryGiB`
+    by hand for those.
+  - **Region.** Decided here, not foreseen: no call keeps an ARN, so a domain, collection or Kafka
+    cluster gets no `region`, and the guide says to add it by hand (two of the same name and settings
+    in two regions would otherwise be one entry).
 - Milestone 3: the `gcloud managed-kafka clusters list` call and its fields (`capacityConfig`, zones,
   encryption), the `--format` that keeps only those, whether a broker count can be derived, GCP Managed
   Kafka's zone layout (whether every cluster spans several zones of its region), and

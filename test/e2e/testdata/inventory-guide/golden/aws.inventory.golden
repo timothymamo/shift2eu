@@ -284,6 +284,38 @@
       "region": "eu-central-1"
     },
     {
+      "id": "shop-events-connect",
+      "rawType": "AWS::KafkaConnect::Connector",
+      "category": "unclassified",
+      "region": "eu-central-1"
+    },
+    {
+      "id": "shop-events-kafka",
+      "rawType": "AWS::MSK::Cluster",
+      "category": "messaging.kafka",
+      "capabilities": [
+        "encryption-at-rest",
+        "node-high-availability",
+        "zone-high-availability"
+      ],
+      "size": {
+        "vcpus": 2,
+        "memoryGiB": 8,
+        "storageGiB": 100,
+        "count": 3
+      }
+    },
+    {
+      "id": "shop-events-kafka-serverless",
+      "rawType": "AWS::MSK::ServerlessCluster",
+      "category": "messaging.kafka",
+      "capabilities": [
+        "encryption-at-rest",
+        "node-high-availability",
+        "zone-high-availability"
+      ]
+    },
+    {
       "id": "shop-images",
       "rawType": "AWS::ECR::Repository",
       "category": "registry.container",
@@ -308,6 +340,25 @@
       ],
       "size": {
         "storageGiB": 20,
+        "count": 1
+      }
+    },
+    {
+      "id": "shop-legacy-search",
+      "rawType": "AWS::OpenSearchService::Domain",
+      "category": "unclassified"
+    },
+    {
+      "id": "shop-logs",
+      "rawType": "AWS::OpenSearchService::Domain",
+      "category": "search.opensearch",
+      "capabilities": [
+        "snapshots"
+      ],
+      "size": {
+        "vcpus": 2,
+        "memoryGiB": 16,
+        "storageGiB": 50,
         "count": 1
       }
     },
@@ -411,6 +462,23 @@
       "region": "eu-central-1"
     },
     {
+      "id": "shop-search",
+      "rawType": "AWS::OpenSearchService::Domain",
+      "category": "search.opensearch",
+      "capabilities": [
+        "encryption-at-rest",
+        "node-high-availability",
+        "snapshots",
+        "zone-high-availability"
+      ],
+      "size": {
+        "vcpus": 2,
+        "memoryGiB": 16,
+        "storageGiB": 100,
+        "count": 3
+      }
+    },
+    {
       "id": "shop-search-redis",
       "rawType": "AWS::ElastiCache::ReplicationGroup",
       "category": "cache.redis",
@@ -445,6 +513,24 @@
       "rawType": "AWS::Lambda::Function",
       "category": "serverless.function",
       "region": "eu-central-1"
+    },
+    {
+      "id": "shop-thumbnails",
+      "rawType": "AWS::OpenSearchServerless::Collection",
+      "category": "search.opensearch",
+      "capabilities": [
+        "encryption-at-rest"
+      ]
+    },
+    {
+      "id": "shop-vectors",
+      "rawType": "AWS::OpenSearchServerless::Collection",
+      "category": "search.opensearch",
+      "capabilities": [
+        "encryption-at-rest",
+        "node-high-availability",
+        "zone-high-availability"
+      ]
     },
     {
       "id": "shop-web-asg",
