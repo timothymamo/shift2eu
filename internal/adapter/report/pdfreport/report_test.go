@@ -11,6 +11,8 @@ import (
 	"github.com/timothymamo/shift2eu/internal/app/analysis"
 	"github.com/timothymamo/shift2eu/internal/domain/assessment"
 	"github.com/timothymamo/shift2eu/internal/domain/estimate"
+	"github.com/timothymamo/shift2eu/internal/domain/inventory"
+	"github.com/timothymamo/shift2eu/internal/domain/taxonomy"
 	"github.com/timothymamo/shift2eu/internal/testutil"
 )
 
@@ -481,4 +483,26 @@ func TestReportNoInventoryName(t *testing.T) {
 
 	assertNotShown(t, file, "Inventory file:")
 	assertShown(t, file, "Source:", sourceName)
+}
+
+// TestReportResourceWithNoRegion checks the region line of Resource details for a
+// resource whose inventory gives no region: like the best offering line when there
+// is none, it shows the plain word none, never a label with nothing after it.
+func TestReportResourceWithNoRegion(t *testing.T) {
+	t.Parallel()
+
+	a := assessment.Assess(newInventory(t, sourceName, []inventory.Resource{{
+		ID:           "instance-example",
+		RawType:      "AWS::EC2::Instance",
+		Category:     taxonomy.ComputeVM,
+		Capabilities: []taxonomy.Capability{taxonomy.IPv6},
+	}}), testutil.ReportCatalog(t))
+
+	file := checkPDFStructure(t, renderReport(t, a, analysis.ReportMeta{InventoryName: inventoryFileName}))
+
+	details := sectionText(t, file, "Resource details", "How this report is worked out")
+	if !strings.Contains(details, "Region: none") {
+		t.Errorf("Resource details does not show the plain word none for a resource whose inventory gives no region; the section is:\n%s",
+			details)
+	}
 }

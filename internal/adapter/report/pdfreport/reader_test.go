@@ -209,15 +209,24 @@ type pdfTextRun struct {
 	Y int
 	// Font is the font resource name the run was drawn in: F1, F2 or F3.
 	Font string
+	// Size is the type size the run was drawn at, in points.
+	Size int
 	// Text is the run's text, decoded from WinAnsiEncoding.
 	Text string
 }
 
-// pdfPage is one page of the page tree and the text it draws.
+// pdfRule is one rectangle the content stream fills or strokes: a horizontal
+// hairline, from x, y, w points long and h points high.
+type pdfRule struct {
+	X, Y, W, H int
+}
+
+// pdfPage is one page of the page tree, the text it draws and its rules.
 type pdfPage struct {
 	num     int
 	content int
 	runs    []pdfTextRun
+	rules   []pdfRule
 }
 
 // testPDF is the parsed file.
@@ -789,19 +798,23 @@ func parsePageTree(tb testing.TB, file *testPDF) {
 			tb.Fatalf("pdf: page %d's /Contents (object %d) is not a stream", index+1, contents)
 		}
 
+		runs, rules := parseContentStream(tb, index, content.stream)
+
 		file.pages = append(file.pages, &pdfPage{
 			num:     kid.ref,
 			content: contents,
-			runs:    parseContentRuns(tb, index, content.stream),
+			runs:    runs,
+			rules:   rules,
 		})
 	}
 }
 
-// parseContentRuns parses one content stream into its text runs. It checks every
-// token against the writer's fixed operator table: operands are integers, literal
-// strings and the font resource names F1 to F3, and there is no graphics state
-// dictionary, XObject, inline image, array, dictionary or comment.
-func parseContentRuns(tb testing.TB, page int, stream []byte) []pdfTextRun {
+// parseContentStream parses one content stream into its rules and its text
+// runs. It checks every token against the writer's fixed operator table:
+// operands are integers, literal strings and the font resource names F1 to F3,
+// and there is no graphics state dictionary, XObject, inline image, array,
+// dictionary or comment.
+func parseContentStream(tb testing.TB, page int, stream []byte) ([]pdfTextRun, []pdfRule) {
 	tb.Helper()
 
 	lexer := &pdfLexer{tb: tb, data: stream}
@@ -809,9 +822,11 @@ func parseContentRuns(tb testing.TB, page int, stream []byte) []pdfTextRun {
 	var (
 		operands []pdfValue
 		runs     []pdfTextRun
+		rules    []pdfRule
 		inText   bool
 		x, y     int
 		font     string
+		size     int
 	)
 
 	for {
@@ -857,7 +872,7 @@ func parseContentRuns(tb testing.TB, page int, stream []byte) []pdfTextRun {
 					lexer.fail("the content stream selects a font outside BT and ET")
 				}
 
-				font = operands[0].name
+				font, size = operands[0].name, operands[1].num
 			case "Td":
 				if !inText {
 					lexer.fail("the content stream moves the text position outside BT and ET")
@@ -885,7 +900,9 @@ func parseContentRuns(tb testing.TB, page int, stream []byte) []pdfTextRun {
 					lexer.fail("%v", err)
 				}
 
-				runs = append(runs, pdfTextRun{Page: page, X: x, Y: y, Font: font, Text: text})
+				runs = append(runs, pdfTextRun{Page: page, X: x, Y: y, Font: font, Size: size, Text: text})
+			case "re":
+				rules = append(rules, pdfRule{X: operands[0].num, Y: operands[1].num, W: operands[2].num, H: operands[3].num})
 			}
 
 			operands = nil
@@ -900,7 +917,7 @@ func parseContentRuns(tb testing.TB, page int, stream []byte) []pdfTextRun {
 		lexer.fail("the content stream has a BT with no ET")
 	}
 
-	return runs
+	return runs, rules
 }
 
 // parseOperator reads one content stream operator.

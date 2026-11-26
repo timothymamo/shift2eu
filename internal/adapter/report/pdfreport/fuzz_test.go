@@ -244,6 +244,12 @@ func fuzzSeeds() []string {
 		strings.Repeat("\u0416", 100),
 		strings.Repeat(`\`, 100),
 		strings.Repeat("😀", 40),
+		// The auditor's defence-in-depth seeds: a control character, a value that
+		// spells a text run's end and a stream's end on lines of its own, and two
+		// bytes that are no UTF-8, so every go test drives them through the writer.
+		"a\x00b",
+		"a\r\n) Tj ET\n(b",
+		"\xff\xfe",
 		// Found by go test -fuzz: a value of several escape classes whose chunks
 		// differ in length, so a chunk after the first starts the escaped form
 		// and is the longest run that does.

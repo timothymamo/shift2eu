@@ -6,7 +6,17 @@ package pdfreport_test
 
 import (
 	"fmt"
+	"slices"
+	"strings"
 	"testing"
+	"unicode/utf8"
+
+	"github.com/timothymamo/shift2eu/internal/adapter/report/pdfreport"
+	"github.com/timothymamo/shift2eu/internal/app/analysis"
+	"github.com/timothymamo/shift2eu/internal/domain/assessment"
+	"github.com/timothymamo/shift2eu/internal/domain/inventory"
+	"github.com/timothymamo/shift2eu/internal/domain/taxonomy"
+	"github.com/timothymamo/shift2eu/internal/testutil"
 )
 
 // The page size the PRD fixes: A4 portrait, 595 × 842 pt (Decided, as
@@ -85,6 +95,7 @@ func checkPDFStructure(tb testing.TB, data []byte) *testPDF {
 	checkFonts(tb, file)
 	checkInfo(tb, file)
 	checkBannedNames(tb, file)
+	checkRunsStayInsideTheirBoxes(tb, file)
 
 	return file
 }
@@ -339,5 +350,359 @@ func collectValueNames(value pdfValue, names map[string]bool) {
 	case pdfValueNumber, pdfValueString, pdfValueRef:
 		// A number, a string and a reference hold no name; a value that spells
 		// one inside a string is text, never a name.
+	}
+}
+
+// courierAdvance is Courier's advance width of every character, in thousandths
+// of the type size (ISO 32000-1, 9.6.2.2: the standard 14 fonts' metrics). Every
+// value the report shows is drawn in Courier at one size, so the tests measure a
+// value's drawing without the writer's own metrics table.
+const courierAdvance = 600
+
+// headerRuleGap bounds how far above its rule a table's header row may sit. The
+// writer draws the rule just under the header row's baseline and the table's
+// first row further below it, so a rule with no line within this gap above it is
+// no table's.
+const headerRuleGap = 9
+
+// checkRunsStayInsideTheirBoxes checks that no value the report draws ends past
+// the right edge of its box: a value drawn in a table cell stays inside its
+// column, and a value drawn anywhere else inside the content area. A value whose
+// wrapping lets a line run past its column overlaps the next column's text.
+func checkRunsStayInsideTheirBoxes(tb testing.TB, file *testPDF) {
+	tb.Helper()
+
+	for index, page := range file.pages {
+		checkPageRunsStayInsideTheirBoxes(tb, index, page)
+	}
+}
+
+// pdfRunLine is one baseline of one page: the runs drawn on it, in the order
+// drawn.
+type pdfRunLine struct {
+	Y    int
+	runs []pdfTextRun
+}
+
+// pdfPageTable is one table a page draws, recovered from the page's rules and
+// lines: the hairline under its header row, the type size of its cells, the
+// inner left edge of each of its columns and its header row's baseline.
+type pdfPageTable struct {
+	rule    pdfRule
+	size    int
+	columns []int
+	headerY int
+}
+
+// pageRunLines returns the page's runs grouped by baseline, in drawing order. The
+// writer draws one line's runs together, so its runs are consecutive in the
+// content stream.
+func pageRunLines(page *pdfPage) []pdfRunLine {
+	var lines []pdfRunLine
+
+	for _, run := range page.runs {
+		if n := len(lines); n > 0 && lines[n-1].Y == run.Y {
+			lines[n-1].runs = append(lines[n-1].runs, run)
+
+			continue
+		}
+
+		lines = append(lines, pdfRunLine{Y: run.Y, runs: []pdfTextRun{run}})
+	}
+
+	return lines
+}
+
+// pageBand returns the baselines of the page's own two rules, the header's at the
+// top and the footer's at the foot, and true: the page's furniture is above the
+// first and below the second, and every table's rule lies between them. It
+// reports false for a page that draws no rule, such as the tests' own hand-built
+// minimal PDF, which has no box to measure text against.
+func pageBand(page *pdfPage) (lowest, highest int, ok bool) {
+	if len(page.rules) == 0 {
+		return 0, 0, false
+	}
+
+	lowest, highest = page.rules[0].Y, page.rules[0].Y
+
+	for _, rule := range page.rules {
+		lowest, highest = min(lowest, rule.Y), max(highest, rule.Y)
+	}
+
+	return lowest, highest, true
+}
+
+// pageTables recovers the tables a page draws. Each table has a hairline rule
+// under its header row; the header row is the nearest line above that rule, and
+// its runs are its cells, one run each at the inner left edge of the column, so
+// their x positions are the columns' inner left edges. The rule spans the whole
+// table, from its left edge to its right, and the padding a cell leaves before
+// its column's edge is the distance from the rule's left edge to the first
+// column's inner left edge.
+func pageTables(page *pdfPage) []pdfPageTable {
+	lowest, highest, ok := pageBand(page)
+	if !ok {
+		return nil
+	}
+
+	lines := pageRunLines(page)
+
+	var tables []pdfPageTable
+
+	for _, rule := range page.rules {
+		if rule.Y <= lowest || rule.Y >= highest || rule.H != 0 {
+			continue
+		}
+
+		header, found := headerLineAbove(lines, rule.Y)
+		if !found || len(header.runs) == 0 {
+			continue
+		}
+
+		columns := make([]int, 0, len(header.runs))
+		for _, run := range header.runs {
+			columns = append(columns, run.X)
+		}
+
+		slices.Sort(columns)
+
+		tables = append(tables, pdfPageTable{
+			rule:    rule,
+			size:    header.runs[0].Size,
+			columns: slices.Compact(columns),
+			headerY: header.Y,
+		})
+	}
+
+	return tables
+}
+
+// headerLineAbove returns the header row of the table whose rule is at ruleY: the
+// nearest line above the rule, when its baseline is close enough above it.
+func headerLineAbove(lines []pdfRunLine, ruleY int) (pdfRunLine, bool) {
+	best, found := pdfRunLine{}, false
+
+	for _, line := range lines {
+		if line.Y <= ruleY || line.Y-ruleY > headerRuleGap {
+			continue
+		}
+
+		if !found || line.Y < best.Y {
+			best, found = line, true
+		}
+	}
+
+	return best, found
+}
+
+// tableAt returns the table a line of the page at y belongs to: the table whose
+// header row it is, or else the table whose rule sits above it, the nearest one
+// when several do.
+func tableAt(tables []pdfPageTable, y int) (pdfPageTable, bool) {
+	for _, table := range tables {
+		if table.headerY == y {
+			return table, true
+		}
+	}
+
+	best, found := pdfPageTable{}, false
+
+	for _, table := range tables {
+		if table.rule.Y <= y {
+			continue
+		}
+
+		if !found || table.rule.Y < best.rule.Y {
+			best, found = table, true
+		}
+	}
+
+	return best, found
+}
+
+// columnBound returns the right edge of the table column that holds x, in points:
+// the next column's inner left edge less the cell padding, or the table's right
+// edge less the padding for the last column.
+func (t pdfPageTable) columnBound(x int) int {
+	right := t.rule.X + t.rule.W
+
+	if len(t.columns) == 0 {
+		return right
+	}
+
+	pad := t.columns[0] - t.rule.X
+
+	for i := len(t.columns) - 1; i >= 0; i-- {
+		if x < t.columns[i] {
+			continue
+		}
+
+		if i+1 < len(t.columns) {
+			return t.columns[i+1] - pad
+		}
+
+		return right - pad
+	}
+
+	return right - pad
+}
+
+// valueRight returns where the run's text ends, in thousandths of a point.
+func valueRight(run pdfTextRun) int {
+	return run.X*milli + courierAdvance*run.Size*utf8.RuneCountInString(run.Text)
+}
+
+// milli is the number of thousandths of a point in a point, the unit the widths
+// are measured in (ADR 0049).
+const milli = 1000
+
+// points renders thousandths of a point for a failure message.
+func points(milli int) string { return fmt.Sprintf("%d.%03d", milli/1000, milli%1000) }
+
+// shortened quotes a run's text for a failure message, cut short when it is long.
+func shortened(text string) string {
+	const limit = 40
+
+	if utf8.RuneCountInString(text) <= limit {
+		return fmt.Sprintf("%q", text)
+	}
+
+	cut := 0
+	for i := range text {
+		if cut == limit {
+			return fmt.Sprintf("%q...", text[:i])
+		}
+
+		cut++
+	}
+
+	return fmt.Sprintf("%q", text)
+}
+
+// checkPageRunsStayInsideTheirBoxes checks one page's values: every value drawn
+// in a table cell ends inside its column, and every value ends inside the
+// content area. Only values are measured: the report draws every value in
+// Courier, whose characters all have the same advance, while the reader carries
+// no metrics for the report's own words, and the wrap that can run past a column
+// is the value's.
+func checkPageRunsStayInsideTheirBoxes(tb testing.TB, pageIndex int, page *pdfPage) {
+	tb.Helper()
+
+	lowest, highest, ok := pageBand(page)
+	if !ok {
+		return
+	}
+
+	tables := pageTables(page)
+
+	contentRight := 0
+	for _, rule := range page.rules {
+		contentRight = max(contentRight, rule.X+rule.W)
+	}
+
+	for _, line := range pageRunLines(page) {
+		if line.Y <= lowest || line.Y >= highest {
+			// The page's furniture: its header above the topmost rule and its
+			// footer below the bottommost one.
+			continue
+		}
+
+		table, inTable := tableAt(tables, line.Y)
+
+		for _, run := range line.runs {
+			if run.Font != "F3" {
+				continue
+			}
+
+			bound, box := contentRight, "the content area"
+			if inTable && run.Size == table.size {
+				bound, box = table.columnBound(run.X), fmt.Sprintf("the column from x %d pt of the table whose rule is at y %d pt",
+					table.columns[0], table.rule.Y)
+			}
+
+			if right := valueRight(run); right > bound*milli {
+				tb.Errorf("pdf: page %d draws the value %s at x %d pt in the %d pt font, which ends at %s pt, past the right edge of %s at %s pt: a wrapped value ran past its box and overlaps what is next to it",
+					pageIndex+1, shortened(run.Text), run.X, run.Size, points(right), box, points(bound*milli))
+			}
+		}
+	}
+}
+
+// TestReportValueWrapsInsideItsColumn pins a value's wrap against the narrowest
+// column a report has, the resources table's ID cell with estimates on: a value
+// of a short word, a space and escapes six characters wide wraps between its
+// escapes, and every line still ends inside the column, so no line of it runs
+// into the next column.
+func TestReportValueWrapsInsideItsColumn(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		value string
+	}{
+		{name: "a space after a short word, then 60 escapes of six characters", value: "a " + strings.Repeat("\u0416", 60)},
+		{name: "a space before a full line's worth of characters, then an escape", value: "x " + strings.Repeat("a", 14) + strings.Repeat("\u0416", 20)},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			inv := newInventory(t, sourceName, []inventory.Resource{{
+				ID:           test.value,
+				RawType:      "AWS::EC2::Instance",
+				Category:     taxonomy.ComputeVM,
+				Region:       "eu-west-1",
+				Capabilities: []taxonomy.Capability{taxonomy.IPv6},
+			}})
+
+			a := assessment.AssessWith(inv, testutil.ReportCatalog(t), assessment.Options{Estimate: true})
+			file := openTestPDF(t, renderReport(t, a, analysis.ReportMeta{InventoryName: inventoryFileName}))
+
+			wrapped := checkWrappedValue(t, file, test.value)
+			if len(wrapped.chunks) < 2 {
+				t.Fatalf("the value is drawn on %d line, so it never reached the wrap width of its column", len(wrapped.chunks))
+			}
+
+			checkValueInsideItsColumn(t, file, test.value)
+		})
+	}
+}
+
+// checkValueInsideItsColumn checks that every line of the drawing of value that
+// the report draws in a table cell ends inside that cell's column.
+func checkValueInsideItsColumn(tb testing.TB, file *testPDF, value string) {
+	tb.Helper()
+
+	escaped := pdfreport.EscapeValue(value)
+	checked := 0
+
+	for index, page := range file.pages {
+		tables := pageTables(page)
+
+		for _, line := range pageRunLines(page) {
+			table, inTable := tableAt(tables, line.Y)
+
+			for _, run := range line.runs {
+				if run.Font != "F3" || !inTable || run.Size != table.size {
+					continue
+				}
+
+				if run.Text == "" || !strings.Contains(escaped, run.Text) {
+					continue
+				}
+
+				checked++
+
+				if right, bound := valueRight(run), table.columnBound(run.X); right > bound*milli {
+					tb.Errorf("pdf: page %d draws the value's line %s at x %d pt, which ends at %s pt, past its column's right edge at %s pt",
+						index+1, shortened(run.Text), run.X, points(right), points(bound*milli))
+				}
+			}
+		}
+	}
+
+	if checked == 0 {
+		tb.Fatalf("the report draws no table cell holding the value %q", value)
 	}
 }
