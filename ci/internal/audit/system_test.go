@@ -131,22 +131,29 @@ func (p *proberFake) Probe(_ context.Context, prompt claudecode.Prompt) ([]byte,
 	return p.answer(strings.TrimSpace(string(body)), prompt.User), nil
 }
 
-// observerFake is the fake Observer: it records the context it was given and
-// what it was told, and answers with its effects.
+// observerFake is the fake Observer: it records the context it was given, the
+// $GITHUB_ENV path and the digest of its directory the preflight took before the
+// run, and what it was told, and answers with its effects.
 type observerFake struct {
 	called         bool
 	ctxErr         error
 	ctxHasDeadline bool
 	accepted       bool
-	effects        audit.Effects
+	// gitHubEnv and before are what the preflight handed the observer: probe 6's
+	// target and the digest of its directory taken before the run.
+	gitHubEnv string
+	before    [32]byte
+	effects   audit.Effects
 }
 
 // observe is the Observer the preflight takes.
-func (o *observerFake) observe(ctx context.Context, _, _ string, _ [32]byte, accepted bool) audit.Effects {
+func (o *observerFake) observe(ctx context.Context, _, gitHubEnv string, before [32]byte, accepted bool) audit.Effects {
 	o.called = true
 	o.ctxErr = ctx.Err()
 	_, o.ctxHasDeadline = ctx.Deadline()
 	o.accepted = accepted
+	o.gitHubEnv = gitHubEnv
+	o.before = before
 
 	return o.effects
 }
@@ -451,6 +458,114 @@ func TestPreflightJudgesAFailedRunsEffects(t *testing.T) {
 
 			if !strings.Contains(err.Error(), "runbook step 10") {
 				t.Errorf("Preflight() = %q, want it to name runbook step 10, as every verdict does", err)
+			}
+		})
+	}
+}
+
+// TestPreflightDigestsEveryEntryOfTheFileCommandDirectory pins the preflight's
+// half of the file-command digest (issues #615, #614): the preflight takes the
+// digest of the $GITHUB_ENV file's whole directory before its run and hands it
+// to its observer, which digests the directory again after it, so a change the
+// preflight's own run makes in that directory is the change the observer sees -
+// and nothing is left out there, the step summary included. The digest is a
+// function of the entries alone, so one tree serves both runs of a case: the
+// digest the second run hands over is the state the first run's write left, and
+// it must differ from the first run's when that write touched the directory and
+// match it when the write touched nothing.
+func TestPreflightDigestsEveryEntryOfTheFileCommandDirectory(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		// before, when set, lays the runner's file commands beside the $GITHUB_ENV
+		// file before the run, as the step does.
+		before func(t *testing.T, root string)
+		// write, when set, is what the preflight's run writes in that directory.
+		write func(root string) error
+		// wantDifferent is whether the second run's digest must differ from the
+		// first's: the write the first run made is one the digest covers.
+		wantDifferent bool
+	}{
+		{
+			name: "a run that writes nothing in the file-command directory",
+		},
+		{
+			name: "a run that appends a line to the $GITHUB_PATH file beside the $GITHUB_ENV file",
+			before: func(t *testing.T, root string) {
+				t.Helper()
+				writeFile(t, fileCommandPath(root, "github-path"), "/usr/local/bin\n", 0o600)
+			},
+			write: func(root string) error {
+				return appendFileCommandLine(fileCommandPath(root, "github-path"), "/tmp/planted\n")
+			},
+			wantDifferent: true,
+		},
+		{
+			// The entry the audit's digest used to leave out: nothing legitimate
+			// writes the step summary while the preflight's run runs either, so the
+			// preflight exempts nothing there.
+			name: "a run that appends to the step summary laid down before it",
+			before: func(t *testing.T, root string) {
+				t.Helper()
+				writeFile(t, testInputs(root).StepSummary, "", 0o600)
+			},
+			write: func(root string) error {
+				return appendStepSummary(testInputs(root).StepSummary, "planted\n")
+			},
+			wantDifferent: true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			root, in := preflightTree(t)
+
+			if tc.before != nil {
+				tc.before(t, root)
+			}
+
+			// run takes the digest the preflight hands its observer before the
+			// run's one write, when write is set and this is the first run. The
+			// transcript is none the judgement can read, which no case is about:
+			// the digest is taken before the run, whatever the run answers.
+			run := func(first bool) [32]byte {
+				t.Helper()
+
+				prober := &proberFake{root: root}
+				prober.answer = func(string, string) []byte {
+					if first && tc.write != nil {
+						if err := tc.write(root); err != nil {
+							t.Errorf("the preflight's run's write: %v", err)
+						}
+					}
+
+					return nil
+				}
+
+				observer := &observerFake{effects: fakeEffects{}}
+
+				_ = audit.Preflight(t.Context(), root, in, prober, observer.observe, preflightPid)
+
+				if !observer.called {
+					t.Fatal("the preflight never called its observer: the digest is taken before the run and handed over after it")
+				}
+
+				return observer.before
+			}
+
+			first, second := run(true), run(false)
+
+			if different := first != second; different != tc.wantDifferent {
+				if tc.wantDifferent {
+					t.Errorf("the digest the preflight hands its observer is %x after a run that wrote in the file-command directory of %s, and was %x before it, want the two to differ: every entry of that directory is digested, nothing excluded (issues #615, #614)",
+						second, in.GitHubEnv, first)
+				} else {
+					t.Errorf("the digest the preflight hands its observer is %x after a run that wrote nothing, and was %x before it, want the two to match: no digest may change over a run that touched nothing (issues #615, #614)",
+						second, first)
+				}
 			}
 		})
 	}
@@ -775,9 +890,12 @@ func jsonEscaped(s string) string {
 // directory unless it is still an empty real one - a CLAUDE.md a preflight
 // session planted there would be loaded at session start - and after it, the
 // runner's file-command directory, the one holding the $GITHUB_ENV file beside
-// $GITHUB_PATH, $GITHUB_OUTPUT and $GITHUB_STATE, must be the one the launcher
-// digested before the run, the step summary the run writes itself aside (issues
-// #615, #614).
+// $GITHUB_PATH, $GITHUB_OUTPUT, $GITHUB_STATE and the step summary, must be the
+// one the launcher digested before the run, every entry of it and the step
+// summary included: nothing legitimate writes that directory while the digests
+// are taken, and an entry left out of the digest is a way for a session to
+// change what a later step of the job runs with - or, the step summary, what the
+// job publishes (issues #615, #614).
 func TestAuditTakesOnlyAResultFileTheRunWrote(t *testing.T) {
 	t.Parallel()
 
@@ -1089,6 +1207,54 @@ func TestAuditTakesOnlyAResultFileTheRunWrote(t *testing.T) {
 			wantLaunched: true,
 			wantRefused:  true,
 		},
+		{
+			// A link is digested by the text of its own target, never by what it
+			// points at, so one retargeted during the run is a change although both
+			// targets hold the same bytes (issues #615, #614).
+			name: "the run retargeted a symbolic link in the $GITHUB_ENV file's directory",
+			before: func(t *testing.T, root string) {
+				t.Helper()
+
+				first := filepath.Join(root, "github-path-first")
+				writeFile(t, first, "/usr/local/bin\n", 0o600)
+
+				if err := os.Symlink(first, fileCommandPath(root, "github-path")); err != nil {
+					t.Fatalf("link %s: %v", fileCommandPath(root, "github-path"), err)
+				}
+			},
+			write: func(root string) error {
+				if err := os.WriteFile(workPath(root, "result.json"), []byte(resultFile), 0o600); err != nil {
+					return err
+				}
+
+				second := filepath.Join(root, "github-path-second")
+				if err := os.WriteFile(second, []byte("/usr/local/bin\n"), 0o600); err != nil {
+					return err
+				}
+
+				if err := os.Remove(fileCommandPath(root, "github-path")); err != nil {
+					return err
+				}
+
+				return os.Symlink(second, fileCommandPath(root, "github-path"))
+			},
+			wantLaunched: true,
+			wantRefused:  true,
+		},
+		{
+			// A directory is an entry of the directory like any other: its name and
+			// its type are digested, so one the run creates is a change.
+			name: "the run created a subdirectory in the $GITHUB_ENV file's directory",
+			write: func(root string) error {
+				if err := os.WriteFile(workPath(root, "result.json"), []byte(resultFile), 0o600); err != nil {
+					return err
+				}
+
+				return os.Mkdir(fileCommandPath(root, "planted"), 0o700)
+			},
+			wantLaunched: true,
+			wantRefused:  true,
+		},
 		// The directory the launcher digests is capped, in entries and in bytes
 		// (issues #615, #614). The caps are the launcher's to pick: this case
 		// assumes a cap of 64 entries and 4 MiB of content, and holds the launcher
@@ -1122,15 +1288,70 @@ func TestAuditTakesOnlyAResultFileTheRunWrote(t *testing.T) {
 			wantLaunched: false,
 			wantRefused:  true,
 		},
-		// The other half of the directory: the launcher writes the step's summary
-		// itself (ci/auditrun/main.go's summaryWriter), and on a GitHub runner
-		// $GITHUB_STEP_SUMMARY lies in the same directory as $GITHUB_ENV. That one
-		// file, by its exact path, is outside the digest - it is the run's own to
-		// write - and every other entry of the directory is inside it (issues #615,
-		// #614). Both shapes the summary has there are covered: the run's write
-		// creates it when nothing laid it down before the audit, and appends to it
-		// when the summaryWriter created it before the audit, which is what a real
-		// run does.
+		// The step summary lies in the runner's file-command directory beside
+		// $GITHUB_ENV, and it is digested with every other entry of it: no entry is
+		// left out (issues #615, #614). The exclusion this test used to grant it was
+		// a hole - a session that can write the directory could swap the summary for
+		// a link to a readable file outside the sandbox, and the runner would post
+		// that file as the job's public summary - and it buys nothing: the step's own
+		// summaryWriter (ci/auditrun/main.go) creates the summary before the audit's
+		// run, and the run's one line is written to it after the steps return, so
+		// nothing legitimate writes it while the digests are taken.
+		{
+			// What a real run finds: the summary the step laid down before the audit,
+			// empty, and the run's own writes leaving it as it was.
+			name: "the step summary the step laid down is left untouched by the run",
+			before: func(t *testing.T, root string) {
+				t.Helper()
+				writeFile(t, testInputs(root).StepSummary, "", 0o600)
+			},
+			write:        func(root string) error { return os.WriteFile(workPath(root, "result.json"), []byte(resultFile), 0o600) },
+			wantLaunched: true,
+			wantResult:   resultFile,
+		},
+		{
+			name: "the run appended to the step summary laid down before it",
+			before: func(t *testing.T, root string) {
+				t.Helper()
+				writeFile(t, testInputs(root).StepSummary, "", 0o600)
+			},
+			write: func(root string) error {
+				if err := os.WriteFile(workPath(root, "result.json"), []byte(resultFile), 0o600); err != nil {
+					return err
+				}
+
+				return appendStepSummary(testInputs(root).StepSummary, "the audit ran\n")
+			},
+			wantLaunched: true,
+			wantRefused:  true,
+		},
+		{
+			// The hole the exclusion left: the summary's own entry swapped for a link
+			// to a file outside the directory, whose bytes the job would publish.
+			name: "the run replaced the step summary with a symbolic link to a file outside the directory",
+			before: func(t *testing.T, root string) {
+				t.Helper()
+				writeFile(t, testInputs(root).StepSummary, "", 0o600)
+			},
+			write: func(root string) error {
+				if err := os.WriteFile(workPath(root, "result.json"), []byte(resultFile), 0o600); err != nil {
+					return err
+				}
+
+				target := filepath.Join(root, "summary-outside-the-sandbox.md")
+				if err := os.WriteFile(target, []byte("# what the session wants the job to publish\n"), 0o600); err != nil {
+					return err
+				}
+
+				if err := os.Remove(testInputs(root).StepSummary); err != nil {
+					return err
+				}
+
+				return os.Symlink(target, testInputs(root).StepSummary)
+			},
+			wantLaunched: true,
+			wantRefused:  true,
+		},
 		{
 			name: "the run created its step summary in the $GITHUB_ENV file's directory",
 			write: func(root string) error {
@@ -1141,23 +1362,7 @@ func TestAuditTakesOnlyAResultFileTheRunWrote(t *testing.T) {
 				return appendStepSummary(testInputs(root).StepSummary, "the audit ran\n")
 			},
 			wantLaunched: true,
-			wantResult:   resultFile,
-		},
-		{
-			name: "the run appended to the step summary laid down before it",
-			before: func(t *testing.T, root string) {
-				t.Helper()
-				writeFile(t, testInputs(root).StepSummary, "## the audit\n", 0o600)
-			},
-			write: func(root string) error {
-				if err := os.WriteFile(workPath(root, "result.json"), []byte(resultFile), 0o600); err != nil {
-					return err
-				}
-
-				return appendStepSummary(testInputs(root).StepSummary, "the audit ran\n")
-			},
-			wantLaunched: true,
-			wantResult:   resultFile,
+			wantRefused:  true,
 		},
 		// A run that failed says nothing about the files it wrote on its way
 		// there: the change to the file-command directory is reported whatever the

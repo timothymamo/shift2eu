@@ -47,11 +47,17 @@ const (
 )
 
 // allowedVariables are the variables the run may read: the two secrets, the
-// two paths it is given, and the API key it refuses.
+// paths of the runner's file commands and the step's summary, and the API key it
+// refuses. The file commands' paths are read, never their content: a path that
+// is not the $GITHUB_ENV file's own directory is a step whose later steps read a
+// directory the audit's launch does not digest (issues #615, #614).
 var allowedVariables = []string{
 	"ANTHROPIC_API_KEY",
 	"CLAUDE_CODE_OAUTH_TOKEN",
 	"GITHUB_ENV",
+	"GITHUB_OUTPUT",
+	"GITHUB_PATH",
+	"GITHUB_STATE",
 	"GITHUB_STEP_SUMMARY",
 	"SHIFT2EU_AUDIT_CANARY",
 }
@@ -187,6 +193,49 @@ func TestRunTakesTheStepsInputs(t *testing.T) {
 	assertOnlyTheListedVariables(t, result.asked)
 }
 
+// TestRunTakesTheFileCommandPathsOfOneDirectoryWrittenAnotherWay pins the
+// comparison the file commands' check makes (issues #615, #614, the auditor's
+// N1): the paths are compared as the directories filepath.Clean names, so a
+// $GITHUB_PATH or a step summary that names the $GITHUB_ENV file's own directory
+// with a redundant separator is the same directory, and the run passes.
+func TestRunTakesTheFileCommandPathsOfOneDirectoryWrittenAnotherWay(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		// pathOf writes the path of name in the directory dir, the way the case
+		// spells the same directory.
+		pathOf func(dir, name string) string
+	}{
+		{
+			name:   "the directory with a redundant separator",
+			pathOf: func(dir, name string) string { return dir + "//" + name },
+		},
+		{
+			name:   "the directory with a . element",
+			pathOf: func(dir, name string) string { return dir + "/./" + name },
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			dir := t.TempDir()
+			env := stepEnvironment(t, dir)
+			env["GITHUB_PATH"] = tc.pathOf(dir, "github-path")
+			env["GITHUB_STEP_SUMMARY"] = tc.pathOf(dir, "step-summary.md")
+
+			result := runAuditrun(t, stepArgs(dir), env)
+
+			if result.code != audit.ExitOK {
+				t.Errorf("the run's exit code is %d, want %d (audit.ExitOK): every file command's path names the $GITHUB_ENV file's own directory, written another way\nstdout: %s\nstderr: %s",
+					result.code, audit.ExitOK, result.stdout, result.stderr)
+			}
+		})
+	}
+}
+
 // TestRunRefusesEveryUsageAndInputError pins the refusals that end a run before
 // any step: a missing or unknown flag, a flag without its value, an integrity
 // that is no npm sha512 of the tarball, and a missing token, canary or
@@ -279,6 +328,42 @@ func TestRunRefusesEveryUsageAndInputError(t *testing.T) {
 		{
 			name: "no $GITHUB_ENV",
 			env:  func(env map[string]string) { delete(env, "GITHUB_ENV") },
+		},
+		// The runner's file commands of a step are all paths of the one directory
+		// the launch digests (issues #615, #614, the auditor's N1): $GITHUB_ENV,
+		// $GITHUB_PATH, $GITHUB_OUTPUT, $GITHUB_STATE and the step summary. A step
+		// that writes any of them decides what the job's later steps run with and
+		// what it publishes, so a file command outside that directory is one the
+		// digest never covers: the run refuses it as it refuses a missing
+		// $GITHUB_ENV, before any step. Every one of the four is set on a runner, so
+		// one left unset is refused too.
+		{
+			name: "no $GITHUB_PATH",
+			env:  func(env map[string]string) { delete(env, "GITHUB_PATH") },
+		},
+		{
+			name: "a $GITHUB_PATH outside the $GITHUB_ENV file's directory",
+			env:  func(env map[string]string) { env["GITHUB_PATH"] = anotherDirectoryOf(env, "github-path") },
+		},
+		{
+			name: "no $GITHUB_OUTPUT",
+			env:  func(env map[string]string) { delete(env, "GITHUB_OUTPUT") },
+		},
+		{
+			name: "a $GITHUB_OUTPUT outside the $GITHUB_ENV file's directory",
+			env:  func(env map[string]string) { env["GITHUB_OUTPUT"] = anotherDirectoryOf(env, "github-output") },
+		},
+		{
+			name: "no $GITHUB_STATE",
+			env:  func(env map[string]string) { delete(env, "GITHUB_STATE") },
+		},
+		{
+			name: "a $GITHUB_STATE outside the $GITHUB_ENV file's directory",
+			env:  func(env map[string]string) { env["GITHUB_STATE"] = anotherDirectoryOf(env, "github-state") },
+		},
+		{
+			name: "a step summary outside the $GITHUB_ENV file's directory",
+			env:  func(env map[string]string) { env["GITHUB_STEP_SUMMARY"] = anotherDirectoryOf(env, "step-summary.md") },
 		},
 	}
 
@@ -549,18 +634,41 @@ func TestRunPrintsNoSecret(t *testing.T) {
 	assertNoSecret(t, runAuditrun(t, stepArgs(dir), refused))
 }
 
-// stepEnvironment is the model step's environment: the two secrets, the
-// $GITHUB_ENV file probe 6 watches and the step summary, under dir.
+// anotherDirectoryOf returns the path of name in a directory that is not the
+// runner's file-command directory of env: a sibling directory nothing else of
+// the step's names, so the file command's path is one the digest never covers.
+func anotherDirectoryOf(env map[string]string, name string) string {
+	return filepath.Join(filepath.Dir(filepath.Dir(env["GITHUB_ENV"])), "another-directory", name)
+}
+
+// stepEnvironment is the model step's environment: the two secrets, the paths of
+// the runner's file commands - $GITHUB_ENV, $GITHUB_PATH, $GITHUB_OUTPUT,
+// $GITHUB_STATE - and the step summary, all of them in the one directory of dir
+// the launch digests (issues #615, #614).
 func stepEnvironment(t *testing.T, dir string) map[string]string {
 	t.Helper()
 
 	githubEnv := filepath.Join(dir, "github-env")
 	writeEnvFile(t, githubEnv, "SOMETHING=else\n")
 
+	commands := map[string]string{
+		"GITHUB_ENV":    githubEnv,
+		"GITHUB_PATH":   filepath.Join(dir, "github-path"),
+		"GITHUB_OUTPUT": filepath.Join(dir, "github-output"),
+		"GITHUB_STATE":  filepath.Join(dir, "github-state"),
+	}
+
+	for _, name := range []string{"GITHUB_PATH", "GITHUB_OUTPUT", "GITHUB_STATE"} {
+		writeEnvFile(t, commands[name], "")
+	}
+
 	return map[string]string{
 		"CLAUDE_CODE_OAUTH_TOKEN": auditToken,
 		"SHIFT2EU_AUDIT_CANARY":   auditCanary,
 		"GITHUB_ENV":              githubEnv,
+		"GITHUB_PATH":             commands["GITHUB_PATH"],
+		"GITHUB_OUTPUT":           commands["GITHUB_OUTPUT"],
+		"GITHUB_STATE":            commands["GITHUB_STATE"],
 		"GITHUB_STEP_SUMMARY":     filepath.Join(dir, "step-summary.md"),
 	}
 }
@@ -632,13 +740,13 @@ func assertOnlyTheListedVariables(t *testing.T, asked []string) {
 
 	for _, name := range unique {
 		if !slices.Contains(allowedVariables, name) {
-			t.Errorf("the run read %s, which ADR 0040 does not list: its inputs are CLAUDE_CODE_OAUTH_TOKEN, SHIFT2EU_AUDIT_CANARY, GITHUB_ENV and GITHUB_STEP_SUMMARY, and ANTHROPIC_API_KEY alone to refuse it", name)
+			t.Errorf("the run read %s, which ADR 0040 does not list: its inputs are CLAUDE_CODE_OAUTH_TOKEN, SHIFT2EU_AUDIT_CANARY, GITHUB_ENV, GITHUB_PATH, GITHUB_OUTPUT, GITHUB_STATE and GITHUB_STEP_SUMMARY, and ANTHROPIC_API_KEY alone to refuse it (issues #615, #614)", name)
 		}
 	}
 
-	for _, name := range []string{"CLAUDE_CODE_OAUTH_TOKEN", "SHIFT2EU_AUDIT_CANARY", "GITHUB_ENV", "GITHUB_STEP_SUMMARY", "ANTHROPIC_API_KEY"} {
+	for _, name := range []string{"CLAUDE_CODE_OAUTH_TOKEN", "SHIFT2EU_AUDIT_CANARY", "GITHUB_ENV", "GITHUB_PATH", "GITHUB_OUTPUT", "GITHUB_STATE", "GITHUB_STEP_SUMMARY", "ANTHROPIC_API_KEY"} {
 		if !slices.Contains(unique, name) {
-			t.Errorf("the run never read %s; it is one of the step's inputs (ADR 0040)", name)
+			t.Errorf("the run never read %s; it is one of the step's inputs, and the runner's file commands are refused when their path is not the $GITHUB_ENV file's own directory (ADR 0040, issues #615, #614)", name)
 		}
 	}
 }
