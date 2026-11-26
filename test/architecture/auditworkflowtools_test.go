@@ -102,34 +102,29 @@ func auditCommand(line, tool string) ([]string, bool) {
 // standard library its findings are about (issue #658).
 const auditGovulncheckModule = "golang.org/x/vuln/cmd/govulncheck"
 
+// auditGovulncheckToolchainAnnotation is the Renovate comment the install line
+// must sit under (CLAUDE.md, rule 7): the generic customManager's matchString
+// that reads a GOTOOLCHAIN=go<version> line names the golang-version datasource
+// and the depName go, so it moves the pin with go.mod's go line (issue #658).
+const auditGovulncheckToolchainAnnotation = "# renovate: datasource=golang-version depName=go"
+
 // auditGovulncheckInstall returns the step that installs govulncheck in a job,
-// the line that installs it, and whether the job installs it at all.
-func auditGovulncheckInstall(steps []auditJobStep) (auditJobStep, string, bool) {
+// the index of the line that installs it among that step's lines, the line
+// itself trimmed, and whether the job installs it at all.
+func auditGovulncheckInstall(steps []auditJobStep) (auditJobStep, int, string, bool) {
 	for _, step := range steps {
-		for _, line := range auditCodeLines(step.lines) {
-			if strings.Contains(line, "go install") && strings.Contains(line, auditGovulncheckModule) {
-				return step, strings.TrimSpace(line), true
+		for i, line := range step.lines {
+			if strings.HasPrefix(strings.TrimSpace(line), "#") {
+				continue
+			}
+
+			if strings.Contains(line, "go install") && strings.Contains(line, auditGovulncheckModule+"@") {
+				return step, i, strings.TrimSpace(line), true
 			}
 		}
 	}
 
-	return auditJobStep{}, "", false
-}
-
-// auditGoModDownloadStep returns the first step of a job that fetches go.mod's
-// Go: the step that runs go mod download in the checkout, which is what switches
-// the job's go command to go.mod's toolchain, since the workflow runs no
-// actions/setup-go, which would restore an Actions cache.
-func auditGoModDownloadStep(steps []auditJobStep) (auditJobStep, bool) {
-	for _, step := range steps {
-		for _, line := range auditCodeLines(step.lines) {
-			if strings.Contains(line, "go mod download") {
-				return step, true
-			}
-		}
-	}
-
-	return auditJobStep{}, false
+	return auditJobStep{}, 0, "", false
 }
 
 // auditGovulncheckScanStep returns the first step of a job that scans with
@@ -158,44 +153,151 @@ func auditRunsGovulncheckVersion(step auditJobStep) bool {
 	return false
 }
 
+// auditGoModGoAssignment matches a shell assignment's name: the variable a
+// step's line gives the value it reads.
+var auditGoModGoAssignment = regexp.MustCompile(`^([A-Za-z_][A-Za-z0-9_]*)=`)
+
+// auditGoModGoVariable returns the name of the shell variable a step holds
+// go.mod's Go in, and whether it holds one: the name an assignment that reads
+// go.mod's go line - naming go.mod, GoVersion or go mod edit - gives its value.
+// The version guard compares the built tool's Go with that variable, never with
+// a version written into the workflow (issue #658).
+func auditGoModGoVariable(lines []string) (string, bool) {
+	for _, line := range auditCodeLines(lines) {
+		if !strings.Contains(line, "go.mod") && !strings.Contains(line, "GoVersion") && !strings.Contains(line, "go mod edit") {
+			continue
+		}
+
+		if m := auditGoModGoAssignment.FindStringSubmatch(strings.TrimSpace(line)); m != nil {
+			return m[1], true
+		}
+	}
+
+	return "", false
+}
+
+// auditNamesVariable reports whether line reads the shell variable name, in
+// either of the shell's forms: "${name}" and "$name".
+func auditNamesVariable(line, name string) bool {
+	return strings.Contains(line, "${"+name+"}") || strings.Contains(line, "$"+name+" ") ||
+		strings.Contains(line, "$"+name+"\"") || strings.Contains(line, "$"+name+"\t") ||
+		strings.HasSuffix(strings.TrimSpace(line), "$"+name)
+}
+
+// auditComparisons are the shell's ways of comparing two words: the [ ] and
+// [[ ]] operators of strings and of numbers. A line that only prints the built
+// Go, or that assigns it, holds none of them.
+var auditComparisons = []string{"!=", "-ne", "==", "-eq"}
+
+// auditComparesVariable reports whether line compares something with the shell
+// variable name: a comparison operator, and a read of the variable.
+func auditComparesVariable(line, name string) bool {
+	if !auditNamesVariable(line, name) {
+		return false
+	}
+
+	for _, op := range auditComparisons {
+		if strings.Contains(line, op) {
+			return true
+		}
+	}
+
+	return false
+}
+
 // auditGovulncheckVersionGuard returns what a step that runs govulncheck
 // -version lacks to hold the tool to go.mod's Go: the step reads the wanted
-// version from go.mod, and fails the run - exit 1, with an ::error the run's log
-// names the cause with - on a mismatch, so a govulncheck built with another Go
-// than go.mod's stops the run instead of scanning with it (issue #658).
-func auditGovulncheckVersionGuard(step auditJobStep) []string {
+// version from go.mod, runs go version on the govulncheck binary itself, compares
+// what that prints with go.mod's Go, and fails the run - exit 1, after an ::error
+// naming govulncheck that the run's log names the cause with - on a mismatch, so
+// a govulncheck built with another Go than go.mod's stops the run instead of
+// scanning with it (issue #658).
+//
+// go version on the binary is what catches a tool built with another Go:
+// govulncheck -version's "Go:" line is the go command's own go env GOVERSION,
+// which says which Go the tool would scan for, never which Go the go command
+// that built it used, and only the binary's build information tells the two
+// apart.
+func auditGovulncheckVersionGuard(step auditJobStep, want string) []string {
 	var (
-		problems   []string
-		namesGoMod bool
-		fails      bool
-		namesCause bool
-		where      = fmt.Sprintf("%s's checks job, step %q", auditWorkflow, step.name)
+		problems []string
+		where    = fmt.Sprintf("%s's checks job, step %q", auditWorkflow, step.name)
 	)
 
-	for _, line := range auditCodeLines(step.lines) {
-		if strings.Contains(line, "go.mod") || strings.Contains(line, "GoVersion") || strings.Contains(line, "go mod edit") {
-			namesGoMod = true
-		}
+	lines := auditCodeLines(step.lines)
 
-		if strings.Contains(line, "exit 1") {
-			fails = true
-		}
-
-		if strings.Contains(line, "::error") {
-			namesCause = true
-		}
-	}
-
+	modVar, namesGoMod := auditGoModGoVariable(step.lines)
 	if !namesGoMod {
-		problems = append(problems, fmt.Sprintf("%s runs govulncheck -version but holds no line that reads go.mod's go line (one naming go.mod, GoVersion or go mod edit): the wanted Go is go.mod's own, never a version written into the workflow (issue #658)", where))
+		problems = append(problems, fmt.Sprintf("%s runs govulncheck -version but holds no line that reads go.mod's go line into a variable (one naming go.mod, GoVersion or go mod edit): the wanted Go is go.mod's own, never a version written into the workflow (issue #658)", where))
 	}
 
-	if !fails {
-		problems = append(problems, fmt.Sprintf("%s runs govulncheck -version but holds no exit 1: the run must fail when govulncheck's Go is not go.mod's, never scan with it (issue #658)", where))
+	// go version on the govulncheck binary: a path that ends in /govulncheck.
+	goVersion, builtBy := -1, ""
+
+	for i, line := range lines {
+		args, ok := auditCommand(line, "go")
+		if !ok || len(args) == 0 || args[0] != "version" {
+			continue
+		}
+
+		for _, arg := range args[1:] {
+			if strings.HasSuffix(strings.TrimRight(arg, `"')`), "/govulncheck") {
+				goVersion, builtBy = i, arg
+
+				break
+			}
+		}
+
+		if goVersion >= 0 {
+			break
+		}
 	}
 
-	if !namesCause {
-		problems = append(problems, fmt.Sprintf("%s runs govulncheck -version but holds no ::error: the run's log names the cause, so a govulncheck built with another Go is a failure that says so, not a bare non-zero exit (issue #658)", where))
+	if goVersion < 0 {
+		problems = append(problems, fmt.Sprintf("%s runs govulncheck -version but holds no line that runs go version on the govulncheck binary itself (a path ending in /govulncheck): govulncheck -version names the Go the go command reports for it, not the Go that built it, so only go version on the binary shows a tool built with another Go than go.mod's %q, and a govulncheck built with an older Go cannot load the module at all (issue #658)", where, want))
+	} else {
+		compared := false
+
+		for _, line := range lines[goVersion:] {
+			if auditComparesVariable(line, modVar) {
+				compared = true
+
+				break
+			}
+		}
+
+		if !compared {
+			problems = append(problems, fmt.Sprintf("%s runs %q but no line after it compares what it prints with go.mod's Go (%q, the variable %q the step reads go.mod into): without that comparison the built tool's Go is never held to go.mod's %q, so a govulncheck built with another Go scans anyway (issue #658)", where, builtBy, "go"+want, modVar, want))
+		}
+
+		// The failure after it: an ::error that names govulncheck, then exit 1.
+		namesCause, causeAt := false, -1
+
+		for i, line := range lines[goVersion+1:] {
+			if strings.Contains(line, "::error") && strings.Contains(line, "govulncheck") {
+				namesCause, causeAt = true, goVersion+1+i
+
+				break
+			}
+		}
+
+		if !namesCause {
+			problems = append(problems, fmt.Sprintf("%s runs go version on the govulncheck binary but holds no ::error after that line naming govulncheck: the run's log names the cause, so a govulncheck built with another Go is a failure that says so, not a bare non-zero exit (issue #658)", where))
+		} else {
+			fails := false
+
+			for _, line := range lines[causeAt+1:] {
+				if strings.Contains(line, "exit 1") {
+					fails = true
+
+					break
+				}
+			}
+
+			if !fails {
+				problems = append(problems, fmt.Sprintf("%s names the govulncheck cause in an ::error but no exit 1 follows it: the run must fail when the built tool's Go is not go.mod's, never scan with it (issue #658)", where))
+			}
+		}
 	}
 
 	return problems
@@ -206,46 +308,58 @@ func auditGovulncheckVersionGuard(step auditJobStep) []string {
 // go command that builds it decides which standard library its findings are
 // about. The install ran before the step that switches the job to go.mod's
 // toolchain, so the tool was built with an older Go and could not load the
-// module at all. The install must run after that switch, or carry go.mod's Go
-// itself as GOTOOLCHAIN=go<version>, and a step before the scan must hold
-// govulncheck -version to go.mod's go line and fail the run when the two
-// differ, so a build that slipped back to another Go is a failure and not a scan
-// whose findings are about a standard library the module does not use (ADR
-// 0040).
+// module at all. The install must carry go.mod's Go itself as
+// GOTOOLCHAIN=go<version> on its own line, under the Renovate comment that reads
+// it, and a step before the scan must hold the built tool to go.mod's Go and fail
+// the run when the two differ, so a build that slipped back to another Go is a
+// failure and not a scan whose findings are about a standard library the module
+// does not use (ADR 0040).
 func TestScheduledSecurityAuditWorkflowBuildsGovulncheckWithGoModsGo(t *testing.T) {
 	t.Parallel()
 
 	steps := auditJobSteps(auditJobLines(t, "checks"))
-	wantToolchain := "GOTOOLCHAIN=go" + auditGoModGo(t)
+	wantGo := auditGoModGo(t)
+	wantToolchain := "GOTOOLCHAIN=go" + wantGo
 
-	t.Run("the install follows the switch to go.mod's Go, or names it", func(t *testing.T) {
+	// The install line itself names go.mod's Go: a GOTOOLCHAIN anywhere else in
+	// the step, an echo of it or a longer version such as go1.27.40, is no
+	// toolchain the install runs with (issue #658).
+	t.Run("the install names go.mod's Go on its own line, under its Renovate comment", func(t *testing.T) {
 		t.Parallel()
 
-		install, line, ok := auditGovulncheckInstall(steps)
+		install, at, line, ok := auditGovulncheckInstall(steps)
 		if !ok {
-			t.Fatalf("%s's checks job holds no go install of %s: the job builds the tool its govulncheck rows run", auditWorkflow, auditGovulncheckModule)
+			t.Fatalf("%s's checks job holds no go install of %s@: the job builds the tool its govulncheck rows run", auditWorkflow, auditGovulncheckModule)
 		}
 
-		for _, stepLine := range auditCodeLines(install.lines) {
-			if strings.Contains(stepLine, wantToolchain) {
-				return
+		if rest, found := strings.CutPrefix(line, wantToolchain); !found || rest == "" || (rest[0] != ' ' && rest[0] != '\t') {
+			t.Errorf("%s's checks job installs govulncheck on %q, which does not start with %s followed by a space or tab: govulncheck is a Go program, so the go command that builds it decides which standard library its findings are about, and a govulncheck built with another Go cannot load the module at all. Give the install line itself %s, the Go go.mod's go line names, never a GOTOOLCHAIN elsewhere in the step and never a longer version (issue #658)",
+				auditWorkflow, line, wantToolchain, wantToolchain)
+		}
+
+		above := ""
+
+		for i := at - 1; i >= 0; i-- {
+			if trimmed := strings.TrimSpace(install.lines[i]); trimmed != "" {
+				above = trimmed
+
+				break
 			}
 		}
 
-		download, ok := auditGoModDownloadStep(steps)
-		if !ok {
-			t.Fatalf("%s's checks job runs no go mod download: that step is what switches the job's go command to go.mod's Go, and nothing can build govulncheck with it without one", auditWorkflow)
+		if above != auditGovulncheckToolchainAnnotation {
+			t.Errorf("%s's checks job installs govulncheck under the line %q, want the Renovate annotation %q directly above it: the pin is a pinned version like any other, so a comment Renovate reads as the golang-version pin of depName go is what moves it with go.mod's go line, and a pin without one stays where it is while go.mod moves (CLAUDE.md rule 7, issue #658)",
+				auditWorkflow, above, auditGovulncheckToolchainAnnotation)
 		}
-
-		if install.index > download.index {
-			return
-		}
-
-		t.Errorf("%s's checks job runs %q in step %q, before the step that switches the job to go.mod's Go (%q): govulncheck is a Go program, so the go command that builds it decides which standard library its findings are about, and a govulncheck built with another Go cannot load the module at all (issue #658). Run the go install after that step, or give it %s (issue #658)",
-			auditWorkflow, line, install.name, download.name, wantToolchain)
 	})
 
-	t.Run("govulncheck -version is held to go.mod's Go before the scan", func(t *testing.T) {
+	// The step before the scan holds the built tool to go.mod's Go. Its
+	// govulncheck -version line names the Go the go command reports for the tool,
+	// never the Go that built it, so the step runs go version on the binary
+	// itself, compares what that prints with go.mod's value, and fails the run
+	// with an ::error naming govulncheck and an exit 1 when the two differ (issue
+	// #658).
+	t.Run("govulncheck's built Go is held to go.mod's Go before the scan", func(t *testing.T) {
 		t.Parallel()
 
 		scan, ok := auditGovulncheckScanStep(steps)
@@ -262,7 +376,7 @@ func TestScheduledSecurityAuditWorkflowBuildsGovulncheckWithGoModsGo(t *testing.
 				continue
 			}
 
-			for _, problem := range auditGovulncheckVersionGuard(step) {
+			for _, problem := range auditGovulncheckVersionGuard(step, wantGo) {
 				t.Error(problem)
 			}
 
