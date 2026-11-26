@@ -819,5 +819,5 @@ gh workflow enable site-check.yml --repo <owner>/shift2eu
 # The last scheduled runs
 gh run list --workflow site-check.yml --repo <owner>/shift2eu --limit 5 --json conclusion,createdAt --jq '.[] | .createdAt + " " + .conclusion'
 # PASS: one run a day, "success"
-# FAIL "failure": the issue labelled "live site check" names the run; gh run view <run ID> --repo <owner>/shift2eu --log-failed; a version refused outside the window right after a release whose run was queued long, or any failure of a run that overlapped a release's deploy (the deploy race: the page and the files from two releases), is expected once: re-check after the next run; anything else: R12. Close the issue once a scheduled run passes again
+# FAIL "failure" or "cancelled": the issue labelled "live site check" names the run; a run you cancelled by hand comments on the issue too: ignore that comment; gh run view <run ID> --repo <owner>/shift2eu --log-failed; a version refused outside the window right after a release whose run was queued long, or any failure of a run that overlapped a release's deploy (the deploy race: the page and the files from two releases), is expected once: re-check after the next run; anything else: R12. Close the issue once a scheduled run passes again
 ```

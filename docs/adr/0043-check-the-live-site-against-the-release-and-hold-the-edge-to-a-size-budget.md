@@ -324,7 +324,9 @@ unchanged. This amendment adds a subcommand, a rule and a workflow.
 - **The alert fires on any non-success, a deliberate deviation from the PRD.** PRD #297's *Layer 3* asks
   for `if: failure()`. A job that runs past its `timeout-minutes` concludes `cancelled`, and `failure()`
   is false then, so a hung check would open no issue. The alert's condition is widened to every result
-  of `check` but `success`; the PRD records the change as an amendment.
+  of `check` but `success`; the PRD records the change as an amendment. A run a user cancels concludes
+  `cancelled` too and alerts like a timeout: the alert cannot tell the two apart, and an alert on a
+  cancel the maintainer made is accepted as the price of never missing a hung check.
 - **The records are the live release's, the check code is main's.** The scheduled run checks out main,
   so `ci/sitecheck` is main's code, while the manifest and the HSTS and preload records are the live
   release's. A release's records describe what that release deployed; main's may already describe the
