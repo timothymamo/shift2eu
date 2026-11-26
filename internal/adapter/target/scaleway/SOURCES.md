@@ -109,8 +109,8 @@ records where each fact comes from, so the snapshot can be checked and refreshed
   - *Elastic Metal*: the eight servers, threads, memory, disks and hourly price in every zone that
     sells them (`elasticMetalRanges`, all in `fr-par`, `nl-ams` and `pl-waw`, every one
     `general_availability`);
-  - the Kapsule control planes (`kubernetes.kapsuleProducts`): "Kapsule" €0 and Dedicated-4 €0.11 an
-    hour in all four regions, so the fixed fees `0.00` and `80.30` hold;
+  - the Kapsule control planes (`kubernetes.kapsuleProducts`): "Kapsule Mutualized" €0 and Dedicated-4
+    €0.11 an hour in all four regions, so the fixed fees `0.00` and `80.30` hold;
   - *Managed Database for PostgreSQL and MySQL* and its High Availability variant: the 12 node types,
     management fee plus one or two nodes, in the first two zones of each region, and the Block Storage
     5K database storage price;
