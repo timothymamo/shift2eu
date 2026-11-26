@@ -1,4 +1,4 @@
-# History hits of the scheduled audit's full-history gitleaks scan (ADR 0040, row 2) that the
+# History hits of the scheduled audit's full-history gitleaks scan (ADR 0040, row 4) that the
 # maintainer read and closed as no secret (issue #658). History cannot change, so without these
 # lines every run would raise them again. Each entry is one full fingerprint,
 # <commit>:<path>:<rule>:<line>, never a path, a rule or a commit alone, and each says why it is no
