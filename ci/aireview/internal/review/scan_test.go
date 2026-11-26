@@ -252,7 +252,7 @@ func TestNamespaceMayFollow(t *testing.T) {
 		// the byte before them.
 		for _, before := range []string{"x" + span, span} {
 			if got := review.NamespaceMayFollow(before); got != accepted[b] {
-				t.Errorf("NamespaceMayFollow(%q) = %t, want %t, from the shared list's bytes a namespace may follow (byte %#02x)",
+				t.Errorf("NamespaceMayFollow(%q) = %t, want %t, from the shared list's bytes a namespace may follow (byte %#04x)",
 					before, got, accepted[b], b)
 			}
 		}
