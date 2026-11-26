@@ -207,7 +207,11 @@ endpoint goes in a new drop-in written by provisioning, not in `daemon.env` (dec
 holds the key, it is the one place to trim, and it buffers and retries when Honeycomb is down.
 
 Its cost is one more pinned binary and one more service; its risk is that a Collector stopped or
-misconfigured loses data silently, which the runbook's check and milestone 5's trigger cover.
+misconfigured loses data silently, which the runbook's check and milestone 5's trigger cover. Its
+receiver has no authentication: any process on the VM, an agent or a tool it runs, can push data through
+it with the maintainer's key and spend the free plan's quota (the 10-day throttling above). Agents could
+do the same with the key under option A, so B adds no new writer; the usage trigger of milestone 5 is
+what catches it, and the Collector's `memory_limiter` and batch limits cap the rate.
 
 **Recommendation: B**, run as a **system** service under a dedicated system user (`otelcol`), with the key
 in a root-owned file only that user can read (`/etc/shift2eu/otelcol.env`, `root:otelcol`, mode 0640).
@@ -241,7 +245,9 @@ layer, and an ingest key can only write data, not read it, so a leak costs junk 
   Collector's unit has `ConditionPathExists=/etc/shift2eu/otelcol.env`, so without the key it does not
   start, and the daemon's `telemetry.conf` is absent too (decision 4), so the deck sends nothing.
 - **Rule 3's deny rules** gain, in both `.claude/settings.json` and `.pi/deny-env-printing.json`:
-  `Read(//etc/shift2eu/**)` and `Bash(*/etc/shift2eu*)`; `Bash(*otelcol.env*)`; the expansions
+  `Read(//etc/shift2eu/**)`; shell reads of the key file itself, `Bash(*cat */etc/shift2eu/otelcol.env*)`
+  and the like for `less`, `head`, `tail`, `grep` and `sudo` (not every command naming the path, which
+  M1's own tests and provisioning need to name); the expansions
   `Bash(*$HONEYCOMB*)` and `Bash(*${HONEYCOMB*)` (only these, so an agent writing M1's tests can still
   name the variable in a command); the Collector's `print-config` subcommand
   (`Bash(*otelcol* print-config*)`), which can print a resolved configuration; and
@@ -269,7 +275,7 @@ does not reach resource attributes or span events). `test/devenv` checks both le
 | `deck.operation.program`, `.word`, `.commands`, `.wrapped.*` | Deck `agent.operation` | Kept | The "where does shell time go" question needs them; the deck's rules already drop paths, quotes and the arguments of `curl`, `grep`, `ssh` and the like |
 | `host.name` | Everything | Replaced by a fixed name (`vm-shift2eu`, `mac-host`) | A Mac's hostname can carry the owner's name |
 | Mount points, device and interface names | Host metrics | Limited to the included filesystems and interface; the workspace mount point replaced by a fixed label | The workspace path holds the maintainer's user name |
-| Process names and command lines | Host metrics' `process` scraper | Not enabled | Command lines can hold anything |
+| Process names and command lines | Host metrics' `process` scraper | Not enabled on the VM; on the Mac (M4) only for `limactl`'s process names, never command lines, pinned by M4's tests | Command lines can hold anything |
 | Worktree paths | `dot-agent-deck-collector` | Not sent (no `--send-worktree-paths`) | Paths hold the user name; `deck.worktree.id` is enough |
 
 ## Repository changes (for the milestones)
@@ -389,12 +395,13 @@ For the maintainer to answer; each has a recommendation.
 4. **Where the non-secret settings go.** A provisioned drop-in `telemetry.conf` (endpoint
    `http://127.0.0.1:4318`, `OTEL_METRICS_INCLUDE_ACCOUNT_UUID=false`, the metric interval), written
    (a) always, (b) by hand once the maintainer turns telemetry on, or (c) by provisioning and
-   `make deck-restart` while the key file exists, removed while it does not. *Recommended: (c), written by provisioning whenever
-   the key file exists, and removed when it does not*, with the Collector starting only when its key file
-   exists: one switch, the key file, re-read by provisioning and by `make deck-restart`, the two steps
-   that write the daemon's drop-ins. "Off" is removing the key file, then `make deck-restart`, which
-   stops the `otelcol` service, removes the drop-in and restarts the daemon (and so every agent), so the agents get no `OTEL_*` variables at all; a
-   drop-in left without a key would keep switching on Claude Code's telemetry with nowhere to send it.
+   `make deck-restart` while the key file exists, removed while it does not. *Recommended: (c)*: one switch, the key file,
+   re-read by provisioning and by `make deck-restart`, the two steps that write the daemon's drop-ins.
+   "On" is putting the key file in place, then `make deck-restart`, which starts (or restarts) the
+   `otelcol` service, writes the drop-in and restarts the daemon. "Off" is removing the key file, then
+   `make deck-restart`, which stops `otelcol`, removes the drop-in and restarts the daemon. Each restart
+   also restarts every agent, so none keeps old `OTEL_*` variables; a drop-in left without a key would
+   keep switching on Claude Code's telemetry with nowhere to send it.
 5. **How the key reaches the VM.** By hand in the VM (a `read -rs` prompt into `sudo install`), or a
    `make vm-telemetry-key` target on the Mac's host clone that reads one variable from the host clone's
    environment its `.envrc` sets and writes it over standard input, like `make vm-env`. *Recommended: the make
