@@ -191,7 +191,8 @@ Skills live only in `.claude/skills`: Claude Code finds them there, and pi loads
 `.pi/settings.json` (which needs `pi --approve`). Keep skills agent-neutral: refer to files and shell
 commands, never to one agent's built-in tools. Rule 3 has a second layer in both agents: the deny rules of
 `.claude/settings.json`, and pi's project extension `.pi/extensions/deny-env-printing.ts`, which refuses
-the commands `.pi/deny-env-printing.json` lists (ADR 0044).
+the commands `.pi/deny-env-printing.json` lists (ADR 0044). The tester starts through `dev/pi-tester.sh`,
+which hands pi only its own key and the basics, and refuses to start it without that extension (issue #662).
 
 Workers start with no memory of earlier tasks: everything needed is in the task text, the PRD, this file
 and the skills. The first line of every task, `Worktree: <path>`, names the worktree to work in. Workers report only to their orchestrator via `dot-agent-deck work-done`; units report

@@ -2,6 +2,9 @@
 
 - Status: Accepted
 - Date: 2026-11-24
+- Amended: 2026-11-26, the tester starts through `dev/pi-tester.sh` with only its own credential, and does
+  not start when the refusal's files are not in place (issue #662; see "Amendment: the tester starts with
+  only its model credential, and fails closed")
 
 ## Context
 
@@ -163,7 +166,8 @@ Claude Code rules, which ADR 0003 does not cover.
   is not tested by `make check`; the project extension is, and `--approve` loads it already.
 - **Keep the keys out of the tester's environment** (a key helper or a wrapper that passes the key only to
   pi's provider). Out of scope (issue #540: how the deck passes keys); it would remove the value rather than
-  the command, and stays worth doing.
+  the command, and stays worth doing. Taken on 2026-11-26 for everything but the tester's own key (the
+  amendment below).
 - **Parse the command line in the extension.** A shell parser would tell more forms apart, but it is code
   the Go tests could not run; pattern data both sides read is testable here.
 
@@ -195,7 +199,9 @@ Claude Code rules, which ADR 0003 does not cover.
   checked offline: its rules are prefix rules on the command it parses, and no rule names that form. pi's
   patterns refuse it.
 - A load failure of the extension (a syntax error, a module that cannot be resolved) fails open: pi logs
-  it and runs the tester without the refusal. Only the paths after load fail closed. The `session_start`
+  it and runs the tester without the refusal. Only the paths after load fail closed (since issue #662 the
+  launch wrapper refuses to start pi when the refusal's files are missing, empty or malformed; see the
+  amendment below). The `session_start`
   notice shows a TUI pane whether the refusal loaded. Since issue #548, `TestPiEnvDenyExtensionLoads`
   loads the extension with Node's own type stripping, a stricter stand-in for pi's jiti loader: a top
   level that throws fails both, and the check also fails when the default export is no function. It skips
@@ -231,3 +237,51 @@ Claude Code rules, which ADR 0003 does not cover.
   a branch cut before the merge does not ignore `.scratch/` (its `.gitignore` predates the line).
 - pi now executes project code (`.pi/extensions/`) under `--approve`. A change to `.pi/` is reviewed like
   any other code, and the auditor reads it.
+
+## Amendment: the tester starts with only its model credential, and fails closed
+
+Issue #662 named the two gaps the decision above left: every agent in the VM got every variable of
+`daemon.env`, so a printing form the patterns miss (see Consequences) still shows the tester the other
+agents' keys; and a load failure of the extension fails open. The maintainer decided on 2026-11-26 to close
+both now (options 1 and 3 of the issue). The decision above stands; this adds a layer in front of it.
+
+- **`dev/pi-tester.sh` starts the tester.** `.dot-agent-deck.toml`'s tester `command` is
+  `dev/pi-tester.sh --provider deepseek --model deepseek-flash --thinking high --approve`, with
+  `agent = "pi"` (the deck identifies the agent from the command's start and cannot see behind a launcher).
+  The path is relative to the pane's working directory, the unit's folder, where the deck starts it.
+- **It fails closed.** Before pi starts, the wrapper checks, relative to that directory,
+  `.pi/extensions/deny-env-printing.ts` (a non-empty regular file) and `.pi/deny-env-printing.json` (a JSON
+  object whose `patterns` is a non-empty array, checked with `jq`, which `dev/lima.yaml` installs). Anything
+  else exits 1 with a message naming the file, and pi is not started. pi 1.6.1 has no option that makes a
+  failed extension load fatal, so the wrapper is what does it. The check is of the files, not of pi's
+  load: an extension that is present but throws while pi loads it still fails open, and
+  `TestPiEnvDenyExtensionLoads` stays the guard against that.
+- **It hands pi an allow list.** pi runs under `env -i` with only the variables the script names, each
+  copied when set and each with its reason in the script: `DEEPSEEK_API_KEY`, the basics (`HOME`, `PATH`,
+  `USER`, `LOGNAME`, `SHELL`, `TERM`, `COLORTERM`, the locale, `TMPDIR`, the `XDG_*` directories) and the
+  deck's pane variables its pi extension and `work-done` need (`DOT_AGENT_DECK_PANE_ID`,
+  `DOT_AGENT_DECK_PANE_CAPABILITY`, the socket, the deck executable's path and the like). No GitHub token,
+  no other agent's key, no `OTEL_*` (its headers carry a telemetry backend's key), and no name the list does
+  not know. `test/devenv/pitester_test.go` pins the list's effect, the fail-closed start and the wiring.
+
+Alternatives considered for the amendment:
+
+- **A deny list** (unset the known keys). It keeps out only the names it knows; a key added to `VM_ENV`
+  later would reach the tester. The allow list keeps out every name it does not know.
+- **Narrowing the VM's egress** (option 2 of the issue: the tester reaches only DeepSeek and the module
+  proxy). Out of scope now by the maintainer's decision of 2026-11-26; it stays a possible later stage,
+  and would make a printed or exfiltrated key harder to use from the VM.
+
+Consequences of the amendment:
+
+- A printing form the patterns miss now shows the tester its own DeepSeek key and the deck's pane
+  variables, not the Claude token or another agent's key.
+- The tester still reaches GitHub: the VM's `gh` (ADR 0031) reads the agents App's token from a file under
+  `HOME`, not from the environment, so `gh` and `git push` keep working for it, and the token is not in its
+  environment to print. Keeping it from that file is a separate decision (it is the egress stage's
+  question, or the token file's).
+- A variable the tester's tools turn out to need and the list lacks is absent until the script names it;
+  the fix is one line and a reason in `dev/pi-tester.sh`. The deck's own telemetry of pi (its
+  `DOT_AGENT_DECK_PI_TELEMETRY` and `OTEL_*`) does not reach the tester's pane.
+- The change reaches only tester panes started from a unit folder that has the script, after the
+  maintainer approved the changed orchestration in the deck (`dot-agent-deck trust`).

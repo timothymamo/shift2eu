@@ -793,8 +793,12 @@ GitHub token of yours enters the VM (PRD #161 milestone 3).
   that token at GitHub, as every agent in the VM could read it. The warning covers any line that assigns
   one of those names (spaces around the `=`, behind `export` or `declare -x`), not a longer name that
   only ends in one (a `MY_` prefix).
-- **Every agent gets every variable.** The tester holds the Claude token and the App's token, the Claude
-  roles the DeepSeek key. Scope each one narrowly so it is cheap to revoke. The file stays on the VM's disk
+- **Every Claude Code agent gets every variable.** The Claude roles hold the DeepSeek key too. The tester
+  does not: `dev/pi-tester.sh` starts pi with an allow list (its DeepSeek key, the basics and the deck's
+  pane variables) and no other variable of `daemon.env`, so no GitHub token and no other agent's key reach
+  it (issue #662, [ADR 0044](adr/0044-refuse-printing-the-environment-in-pi-with-a-project-extension.md)).
+  A new variable the tester needs goes into that script's list with a reason. Scope each credential
+  narrowly so it is cheap to revoke. The file stays on the VM's disk
   (under `~/.lima` on the Mac) until `make vm-delete`.
 - **Cloud accounts (for integration tests and real analyses, later):** read-only identities only
   (`ReadOnlyAccess` or narrower on AWS, `Reader` on Azure, `roles/viewer` or narrower on GCP). Do not
@@ -3192,6 +3196,24 @@ is a second layer beside CLAUDE.md rule 3, not a boundary: for the tester the VM
 never start the deck outside it. An extension that fails to load is logged and skipped, so the refusal
 then fails open; a TUI pane shows "env-printing refusal loaded" when it is in place. Only tester panes
 started from a dispatch worktree created after the change was merged load it.
+
+The deck does not start pi directly: the tester's `command` in `.dot-agent-deck.toml` is
+`dev/pi-tester.sh` with pi's arguments, relative to the pane's working directory (the unit's folder), and
+`agent = "pi"` tells the deck which agent runs behind it (issue #662). The script:
+
+- refuses to start pi, exiting 1 with a message naming the file, unless `.pi/extensions/deny-env-printing.ts`
+  is a non-empty file and `.pi/deny-env-printing.json` is a JSON object with a non-empty `patterns` array
+  (checked with `jq`). A tester pane that stops with `pi-tester: ... the tester is not started` has a broken
+  or missing refusal: fix the file it names, never start pi by hand around it;
+- starts pi under `env -i` with only the variables it lists, each with its reason: `DEEPSEEK_API_KEY`,
+  `HOME`, `PATH`, the terminal, locale, `TMPDIR` and `XDG_*` variables, and the deck's pane variables
+  (`DOT_AGENT_DECK_PANE_ID`, `DOT_AGENT_DECK_PANE_CAPABILITY`, the socket and the like) that its pi
+  extension and `dot-agent-deck work-done` need. No GitHub token, no Claude token and no telemetry headers
+  reach the tester. Its `gh` and `git push` still work: the VM's gh wrapper reads the agents App token
+  from its file under `HOME`, not from the environment.
+
+A changed tester command needs the maintainer's approval in the deck (`dot-agent-deck trust`) before a
+tester pane starts with it.
 
 ## Containers and image verification
 
