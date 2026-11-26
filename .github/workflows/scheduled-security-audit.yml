@@ -32,7 +32,7 @@ jobs:
     name: Checks
     # ubuntu-24.04, never ubuntu-latest: the runner image's GNU coreutils and bubblewrap are what ADR 0040
     # recorded, and a newer image would change them unseen.
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     # GitHub ends a job at 360 minutes. The job's own timeout is the ceiling the run's steps stay under:
     # their timeout-minutes add up to 348, and with the job's 5 minutes of set-up and post steps they stay
     # within its 355 (test/architecture holds the sum), so a step's own timeout always fires before the
@@ -1251,7 +1251,7 @@ jobs:
   model:
     name: Model
     needs: checks
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 120
     if: ${{ github.ref == 'refs/heads/main' && github.run_attempt == 1 && (github.event_name == 'schedule' || github.triggering_actor == github.repository_owner) }}
     environment: security-audit
@@ -1558,7 +1558,7 @@ jobs:
   publish:
     name: Publish
     needs: model
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
     if: ${{ github.ref == 'refs/heads/main' && github.run_attempt == 1 && (github.event_name == 'schedule' || github.triggering_actor == github.repository_owner) }}
     environment: security-audit
