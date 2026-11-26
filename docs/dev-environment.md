@@ -2965,8 +2965,11 @@ Two more errors point here, each naming its job: `the run's artifacts are unexpe
 was refused: see runbook step 11` (`Audit publish`) means the publish program failed, and its own summary
 line, just above, is one of the items below.
 
-The publish job's summary line names the class of a failure, never its detail (ADR 0040, "Exit codes and
-the summary line"). What to do for each, before the new run:
+The publish job's summary line names the class of a failure and the check that failed, in fixed words,
+never a value or its detail: `<class line>: <check>: see runbook` (ADR 0040, "Exit codes and the summary
+line"; issue #640). The class decides what to do, below; the check, listed after the classes, says where
+to look. A line with no check between the class and `see runbook` is a refusal no check names: read the
+class's item. What to do for each class, before the new run:
 
 - `artifacts: unexpected: see runbook step 11` (the artifact check of the model or the publish job):
   exit 3 of the artifact check, not the core's outcome 3 (`result refused`, below). The check refuses
@@ -2976,14 +2979,16 @@ the summary line"). What to do for each, before the new run:
   (`gh api repos/timothymamo/shift2eu/actions/runs/<run_id>/artifacts --jq '[.artifacts[] | [.name, .expired]]'`);
   do not download an unexpected one. Check: the new run's list is exactly `checks-result` at the model
   job's check, and `checks-result` and `model-result` at the publish job's.
-- `result refused: see runbook` (exit 3): the model's result did not decrypt or broke the schema, or the
-  release tag or image digest it named did not check out against GitHub. Start the new run; if it
+- `result refused: <check>: see runbook` (exit 3): the model's result did not decrypt or broke the
+  schema, what it holds could not be published as it stands (the private state or a draft advisory it
+  leads to; these were `configuration invalid` before issue #640), or the release tag or image digest it
+  named did not check out against GitHub. Start the new run; if it
   repeats, read the model job's preflight line and the skill before changing anything. A release
   published or marked latest while the run was under way fails it this way too (the result names the
   release the checks job read, no longer the latest; ADR 0040, The workflow): the new run audits the new
   release.
-- `publish refused: see runbook` (exit 4): a text about to be published did not pass the scans. Nothing
-  was published. The line does not say which of three causes it was: (1) a scan found a token, a key or
+- `publish refused: <check>: see runbook` (exit 4): a text about to be published did not pass the scans;
+  the check names which text. Nothing was published. The line does not say which of three causes it was: (1) a scan found a token, a key or
   an encoded run; (2) the text held gitleaks' inline allow comment, which the program refuses before
   gitleaks runs, in any letter case; (3) gitleaks did not start or did not finish within its deadline (2
   minutes when unset). Look for (3) first, then (2): a publish step that ran for about a scan deadline
@@ -3000,15 +3005,16 @@ the summary line"). What to do for each, before the new run:
   advisory write of the run is `GitHub call failed` (exit 8) instead, before the report: that run's
   earlier drafts stand, and the next run's listing reconciles them.
 - `publish refused: duplicate draft advisories: see runbook step 11` (exit 6): the paragraph above.
-- `previous report unreadable: see runbook` (exit 7) has **two causes**, and the line does not say
-  which: (1) the newest report in `docs/security/audits/` is unreadable as the publish script renders
+- `previous report unreadable: <check>: see runbook` (exit 7) has **two causes**, which the check tells
+  apart: (1) the newest report in `docs/security/audits/` is unreadable as the publish script renders
   one (a hand edit, a merge that changed a table, a cell outside printable ASCII); (2) the newest report
   is dated **after the run**, or on the run's own date with a run ID **not below the run's own** (a
   hand-made report, or a later run's report merged first). Check: list the directory
   (`ls docs/security/audits/` on `main`) and compare the newest name's date and run ID with the failed
   run's; for (1), diff the newest report against what the publish script wrote in its PR. Fix it through
   a pull request to `main` (for (2), rename or remove the misdated report), then start the new run.
-- `GitHub call failed: see runbook` (exit 8): a GitHub call failed or answered unexpectedly (a write that
+- `GitHub call failed: <check>: see runbook` (exit 8): a GitHub call failed or answered unexpectedly; the
+  check names the call by what it does (a write that
   answered anything but 2xx or ran past its deadline included: no write is retried). Check GitHub's
   status. Then first look for this run's `security-audit/<date>-<run_id>` branch and pull request. If
   the report PR is open (an issue write failed after it), review it and merge or close it: the next run
@@ -3020,7 +3026,7 @@ the summary line"). What to do for each, before the new run:
   being an App that can still update its drafts but can no longer create one: that run's earlier drafts
   stand, and before the next run repeat step 3's advisory check to confirm the App's advisory
   permission.
-- `configuration invalid: see runbook` (exit 9): a variable, flag or secret of the publish step is
+- `configuration invalid: <check>: see runbook` (exit 9): a variable, flag or secret of the publish step is
   missing or malformed (a `GITHUB_SHA` that is not 40 lowercase hex, an `AUDIT_FINGERPRINT_KEY` unset or
   shorter than 32 bytes, and, for `image` and `publish`, a `GITHUB_SERVER_URL` other than exactly
   `https://github.com` included), or a secret that must not be in the step is set there; the program was
@@ -3038,6 +3044,58 @@ the summary line"). What to do for each, before the new run:
   collects it). Start the new run; if it repeats, the publish program needs a fix through a pull
   request.
 
+The checks, by class line and exit code, each with its fix (`ci/auditpublish/internal/publish/check.go`
+holds the list; no other words can appear). Runs 45802249904 and 45808432244 were `configuration invalid:
+the reports directory not absolute and clean`: the workflow passed `-reports docs/security/audits`, a
+relative path, which the program refuses on every run; it now passes
+`"${GITHUB_WORKSPACE}/docs/security/audits"` (issue #640).
+
+`configuration invalid` (exit 9):
+
+- `a secret that must not be in this step is set`: remove the App key, an age key or the Claude Code token from the step's `env:`.
+- `the step summary not appendable`: `GITHUB_STEP_SUMMARY` unset, relative or unwritable; check the runner and its disk.
+- `a bad flag or subcommand`: compare the step's command line with the workflow on `main`.
+- `GH_TOKEN unset or empty`: check the step's `GH_TOKEN:` line and, for publish, the App token step's output.
+- `GITHUB_SERVER_URL not https://github.com` / `GITHUB_SERVER_URL not https:// and a host name`: the run is not on github.com; run it there.
+- `GITHUB_SHA not 40 lowercase hex`: the run's commit variable is overridden; remove the override.
+- `GITHUB_REPOSITORY not owner/name` / `GITHUB_REPOSITORY holds a dot segment`: the repository variable is overridden; remove the override.
+- `GITHUB_RUN_ID not a decimal of up to 20 digits`: the run ID variable is overridden; remove the override.
+- `the run's date not a real YYYY-MM-DD`: the runner's clock; start the new run.
+- `the commit argument not 40 lowercase hex` / `the scope's commit not 40 lowercase hex`: as `GITHUB_SHA`.
+- `a publish scope without its commit`: as `GITHUB_SHA`; the program needs a fix if `GITHUB_SHA` is set.
+- `AUDIT_FINGERPRINT_KEY unset or shorter than 32 bytes`: set the secret (step 2, `openssl rand -hex 32`).
+- `the gh path not absolute` / `the gh path names no file`: the `-gh` flag; check `gh` is at that path on the runner.
+- `the gitleaks path not absolute and clean`: the `-gitleaks` flag; compare with the workflow on `main`.
+- `the temporary directory not absolute or no directory`: the `-tmp` flag; it must be `"${RUNNER_TEMP}"`.
+- `the result's path not absolute and clean`: the `-result` flag; it must be `"${RUNNER_TEMP}/result.json"`.
+- `the reports directory not absolute and clean` / `the reports directory no directory` / `the reports directory not listable`: the `-reports` flag; it must be `"${GITHUB_WORKSPACE}/docs/security/audits"` and the checkout must hold it.
+- `gh's configuration directory not made` / `gh's configuration directory not removed` / `gitleaks' home directory not made` / `gitleaks' home directory not removed`: the runner's temporary directory (full disk, permissions); start the new run.
+- `the artifact's directory not absolute` / `the artifact file not created`: the artifact step's `-tmp`; an `artifact.json` left there from an earlier step of the job is refused, never overwritten.
+- `the job neither model nor publish`, `a negative timeout`, `no open client`, `no open scanner`, `the run is not the client's`: the program itself; it needs a fix through a pull request.
+
+`result refused` (exit 3):
+
+- `the result does not match the schema`: the model's result; start the new run, and read the model job's preflight line if it repeats.
+- `the result not one regular file under the cap`: the decrypt step's output; start the new run.
+- `the private state none of the three` / `the private state none, but a finding is private` / `the private state set, but no finding is private`: the program's placement of the result's findings; it needs a fix if it repeats.
+- `an advisory for a finding that is not private` / `an advisory fingerprint that is no fingerprint` / `an advisory status not new, open or regressed` / `an advisory status none of the four`: as the private state.
+- `an advisory description without a status line`: an audit draft's status line was edited away; restore `Audit status: <status>` as its last such line.
+- `two findings with one fingerprint`: the model reported one private finding twice; start the new run.
+- `the release tag not vX.Y.Z` / `no release of the tag` / `no latest release` / `the tag not the latest release's`: the release the result names; see the item above on a release published while the run was under way.
+- `the image digest not sha256: and 64 lowercase hex` / `no attestation of the digest` / `no provenance attestation names the digest`: the image check; confirm the release's attestation (`gh attestation verify`), then start the new run.
+
+`publish refused` (exit 4): `the report`, `an issue`, `an advisory`: the text the scan refused, as the item above; `the report's model fields`: a 40-hex run in a model field that is no commit of the repository, cause (1).
+
+`previous report unreadable` (exit 7):
+
+- `the newest report not as the core renders one` / `the previous report not read by the core`: cause (1).
+- `the previous report dated after the run` / `the previous report not before the run`: cause (2).
+- `the previous report's fingerprint not a fingerprint` / `... severity outside the public severities` / `... category outside the public categories` / `... status not new or open`: a findings row edited by hand, cause (1).
+- `the newest report not a regular file` / `the newest report over the cap` / `the newest report not readable`: the newest name in `docs/security/audits/` is a link or no file, over 8 MiB, or unreadable in the checkout; fix it through a pull request.
+
+`GitHub call failed` (exit 8), the call by what it does, each as the item above:
+`listing the audit issues`, `creating the audit issue`, `listing the audit advisories`, `creating an advisory`, `updating an advisory`, `reading the tag's release`, `reading the latest release`, `listing the image's attestations`, `listing the run's artifacts`, `looking up the commit's runs`, `reading the report's branch`, `reading the audited commit`, `writing the report's blob`, `writing the report's tree`, `writing the report's commit`, `comparing the audited commit with the report's`, `writing the report's branch`, `opening the report's pull request`, `running gh` (gh gave no answer: its path, the runner's network, a call past its deadline).
+
 The image subcommand (`auditpublish image`, its own step before `publish`, with the job's `github.token`
 and `attestations: read`) prints one of these lines:
 
@@ -3045,10 +3103,10 @@ and `attestations: read`) prints one of these lines:
   this repository's attestation listing for it holds an inline in-toto v1 statement of SLSA provenance
   whose subject digest is the digest and whose workflow is `.github/workflows/release.yml` of this
   repository at `refs/tags/<tag>`. The check reads the statement only, not its signature.
-- `result refused: see runbook` (exit 3): the tag names no release, or the digest has no such statement
-  (an attestation that carries only a `bundle_url`, no inline bundle, counts as none). Treat it as the
-  `result refused` line above.
-- `GitHub call failed: see runbook` (exit 8), `configuration invalid: see runbook` (exit 9) and
+- `result refused: <check>: see runbook` (exit 3): the tag names no release, or the digest has no such
+  statement (an attestation that carries only a `bundle_url`, no inline bundle, counts as none). Treat it
+  as the `result refused` line above.
+- `GitHub call failed: <check>: see runbook` (exit 8), `configuration invalid: <check>: see runbook` (exit 9) and
   `publish failed: see runbook` (exit 1): as above.
 
 ## Agent permissions

@@ -879,17 +879,44 @@ outcome names below are the core's internal kinds:
 |---|---|---|
 | `OutcomePublished` | 0 | `audit published: public findings <total>, <private-findings line>` |
 | `OutcomeFailed` (any other error) | 1 | `publish failed: see runbook` |
-| `OutcomeResultInvalid` (`ErrResultInvalid`, a result that does not decrypt included) | 3 | `result refused: see runbook` |
-| `OutcomeScanRefused` (`ErrScanRefused`) | 4 | `publish refused: see runbook` |
+| `OutcomeResultInvalid` (`ErrResultInvalid`, a result that does not decrypt included) | 3 | `result refused: <check>: see runbook` |
+| `OutcomeScanRefused` (`ErrScanRefused`) | 4 | `publish refused: <check>: see runbook` |
 | `OutcomePrivateNotFiled` (`ErrPrivateNotFiled`, or a published run whose private findings were not filed) | 5 | `private findings not filed: see runbook` |
 | `OutcomeDuplicateDrafts` | 6 | `publish refused: duplicate draft advisories: see runbook step 11` |
-| `OutcomePreviousReport` (`ErrPreviousReport`: a previous report that is unreadable or not before the run) | 7 | `previous report unreadable: see runbook` |
-| `OutcomeGitHub` | 8 | `GitHub call failed: see runbook` |
-| `OutcomeConfig` (`ErrConfig`) | 9 | `configuration invalid: see runbook` |
+| `OutcomePreviousReport` (`ErrPreviousReport`: a previous report that is unreadable or not before the run) | 7 | `previous report unreadable: <check>: see runbook` |
+| `OutcomeGitHub` | 8 | `GitHub call failed: <check>: see runbook` |
+| `OutcomeConfig` (`ErrConfig`) | 9 | `configuration invalid: <check>: see runbook` |
+
+`<check>` is the fixed phrase of the check that refused the run (issue #640, below); a refusal no check
+names prints the class's words and `: see runbook` alone.
 
 Outcome 7's summary names the class, never which case broke it, so the fourth pull request's runbook
 step for outcome 7 lists both cases, the unreadable previous report and the one not before the run
 (dated after it, or on its date with a run ID not below its own).
+
+*Changed by issue #640 (2026-11-26).* Two runs (45802249904 and 45808432244) printed only
+`configuration invalid: see runbook`, a line about thirty refusals shared, and the maintainer could not
+tell which. A refusal's line is now `<class line>: <check>: see runbook` for outcomes 3, 4, 7, 8 and 9
+(5 and 6 keep their lines), e.g. `configuration invalid: AUDIT_FINGERPRINT_KEY unset or shorter than 32
+bytes: see runbook`; outcome 7's check now tells its two cases apart. The check is named in the form of
+what is wrong, from one closed list: the core's `FailedCheck` constants and their fixed table
+(`check.go`), each check bound to one class. A refusal site marks its error with `publish.Refuse(check,
+err)`; `OutcomeOf` takes the first mark of the outcome's class in the order `errors.As` walks the error
+tree, so an outer mark wins over an inner one and a mark of another class is passed over (a GitHub call
+that marks whatever it returns is named only when GitHub's failure is the outcome); an error no mark of
+its class names keeps the class's line alone. The line still holds no finding's text, no value, no API
+response and no error message: a caller can pass only a constant, whose words the table holds, and
+`Summary` never reads an error's text. Runbook step 11 lists every check with its fix. In the same
+change the private-state checks of `RenderReport` and the advisory checks of `RenderAdvisory` and
+`SetAdvisoryStatus` (a finding not private, a fingerprint that is none, a status outside the rule, a
+description without its status line) move from `ErrConfig` to `ErrResultInvalid` (`result refused`,
+exit 3): they refuse what the model's result leads to, not the run's configuration, and under
+`configuration invalid` they sent the maintainer to the step's secrets and variables. The two runs'
+real cause was the workflow's relative `-reports docs/security/audits`, which `LoadPrevious` refuses on
+every run; the workflow now passes `"${GITHUB_WORKSPACE}/docs/security/audits"` (the checkout's root,
+and the step's working directory), and `test/architecture` holds every path flag of `auditpublish`
+absolute.
+
 Code 2 is left to the Go runtime's panic exit. Only `OutcomePublished` and `OutcomePrivateNotFiled` have
 published anything; the second still fails the job, so GitHub notifies the maintainer. The errors the
 core returns name a field's path (`findings[3].scenario`) and the rule it broke, never a value, and the
