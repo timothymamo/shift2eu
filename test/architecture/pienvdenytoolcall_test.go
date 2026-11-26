@@ -17,6 +17,15 @@
 // dev/agents-app-token.sh mints the file and holds no credential, so reading it
 // stays allowed.
 //
+// A search *pattern* is not a way in, and refusing one stops real work (round 3's
+// review, finding S1): `grep` with a pattern names text to look for in the tree it is
+// pointed at, never a file to open, and `find` with a pattern names the names the walk
+// under its path reports. From the repository, both read the repository's own
+// dev/agents-app-token.sh and nothing under the home directory, so a pattern naming
+// the App's files is allowed there; a `glob` still selects files wherever the walk
+// goes, and a path that is the folder, under it, or an ancestor of it is still
+// refused.
+//
 // The extension reads the home directory with node's homedir(), which is the HOME
 // this test hands node: the fake home is an empty directory of this test's own, so
 // nothing here opens a real token file (CLAUDE.md rule 3). node's own environment is
@@ -88,6 +97,14 @@ process.stdout.write(JSON.stringify(decisions));
 const (
 	shift2euConfigFolder = ".config/shift2eu"
 	shift2euAppFile      = "agents-app-token"
+
+	// appTokenFileStem is the prefix both files of that folder share, as a search pattern
+	// writes it to find either of them.
+	appTokenFileStem = "agents-app"
+
+	// appTokenFolderPattern is the folder as a pattern names it: the escaped dot a regular
+	// expression needs. A pattern is text to look for, so this is not a path to refuse.
+	appTokenFolderPattern = `\.config/shift2eu`
 )
 
 // piToolCall is one call handed to the extension: the tool's name and the input pi
@@ -107,10 +124,10 @@ type piToolCallDecision struct {
 
 // TestPiEnvDenyExtensionRefusesTheAppTokenFolderOfFileTools pins the App's token
 // file against pi's file tools: the file itself, the folder under the home directory
-// that holds it, anything else in that folder, and a grep or find pointed at the
-// folder, at an ancestor of it, or naming it in a glob or pattern are all refused;
-// the repository's own script of that name is not, since it mints the token and
-// holds none (issue #662, finding S1).
+// that holds it, anything else in that folder, a grep or find pointed at the folder or
+// at an ancestor of it, and a glob that names the folder's files are all refused; a
+// search pattern that names them is not, and neither is the repository's own script of
+// that name, since it mints the token and holds none (issue #662, finding S1).
 func TestPiEnvDenyExtensionRefusesTheAppTokenFolderOfFileTools(t *testing.T) {
 	t.Parallel()
 
@@ -181,23 +198,55 @@ func TestPiEnvDenyExtensionRefusesTheAppTokenFolderOfFileTools(t *testing.T) {
 			refused: true,
 		},
 		{
-			name:    "grep of the repository with a pattern naming the token file",
-			call:    piToolCall{ToolName: "grep", Input: map[string]string{"path": root, "pattern": shift2euAppFile}},
-			refused: true,
+			// A pattern is text the walk looks for, not a file it opens, and the
+			// repository holds only dev/agents-app-token.sh under that name: refusing
+			// the search would stop an agent reading what the script does.
+			name: "grep of the repository with a pattern naming the token file",
+			call: piToolCall{ToolName: "grep", Input: map[string]string{"path": root, "pattern": shift2euAppFile}},
+		},
+		{
+			name: "grep of the repository, with no path, with a pattern naming the token file",
+			call: piToolCall{ToolName: "grep", Input: map[string]string{"pattern": shift2euAppFile}},
+		},
+		{
+			name: "grep of the repository with the App's file-name stem as its pattern",
+			call: piToolCall{ToolName: "grep", Input: map[string]string{"path": root, "pattern": appTokenFileStem}},
+		},
+		{
+			name: "grep of the repository with the App's folder as its pattern",
+			call: piToolCall{ToolName: "grep", Input: map[string]string{"path": root, "pattern": appTokenFolderPattern}},
 		},
 		{
 			name:    "grep of the repository with a glob naming the token file",
 			call:    piToolCall{ToolName: "grep", Input: map[string]string{"path": root, "glob": "agents-app-t*"}},
 			refused: true,
 		},
+		// A find's pattern is a name the walk reports, not a file it opens, and a walk of
+		// the repository reports the script that mints the token and nothing else.
 		{
-			name:    "find of the repository with a pattern naming the token file",
-			call:    piToolCall{ToolName: "find", Input: map[string]string{"path": root, "pattern": shift2euAppFile}},
-			refused: true,
+			name: "find of the repository with a pattern naming the token file",
+			call: piToolCall{ToolName: "find", Input: map[string]string{"path": root, "pattern": shift2euAppFile}},
 		},
+		{
+			name: "find of the repository, with no path, with a pattern naming the token file",
+			call: piToolCall{ToolName: "find", Input: map[string]string{"pattern": shift2euAppFile}},
+		},
+		{
+			// The command an agent runs to find the script: the pattern names it, the walk
+			// stays in the repository, and no credential is read.
+			name: "find of the repository with the token-minting script as its pattern",
+			call: piToolCall{ToolName: "find", Input: map[string]string{"path": root, "pattern": shift2euAppFile + ".sh"}},
+		},
+		// A walk of the home directory reaches the folder itself, whatever its pattern
+		// says, so the pattern changes nothing about the refusal there.
 		{
 			name:    "find of the home directory, an ancestor of that folder",
 			call:    piToolCall{ToolName: "find", Input: map[string]string{"path": "~", "pattern": "*.token"}},
+			refused: true,
+		},
+		{
+			name:    "find of the home directory with a pattern naming the token file",
+			call:    piToolCall{ToolName: "find", Input: map[string]string{"path": "~", "pattern": shift2euAppFile}},
 			refused: true,
 		},
 		// What the refusal must leave alone: the script that mints the token holds no
@@ -244,7 +293,7 @@ func TestPiEnvDenyExtensionRefusesTheAppTokenFolderOfFileTools(t *testing.T) {
 
 			if tc.refused {
 				if !decision.Blocked {
-					t.Errorf("the extension allows %s of %v, which reaches the App's token file %s under the home directory: that one GitHub credential is what every agent pushes with, so a file tool pointed at the token, at the folder that holds it, at an ancestor a walk passes through or at a pattern naming it has to be refused as a read of the deck's %s is (issue #662, ADR 0031, CLAUDE.md rule 3)",
+					t.Errorf("the extension allows %s of %v, which reaches the App's token file %s under the home directory: that one GitHub credential is what every agent pushes with, so a file tool pointed at the token, at the folder that holds it, at an ancestor a walk passes through or at a glob naming it has to be refused as a read of the deck's %s is (issue #662, ADR 0031, CLAUDE.md rule 3)",
 						tc.call.ToolName, tc.call.Input, "~/.config/shift2eu/agents-app-token", "daemon.env")
 				}
 
@@ -252,7 +301,7 @@ func TestPiEnvDenyExtensionRefusesTheAppTokenFolderOfFileTools(t *testing.T) {
 			}
 
 			if decision.Blocked {
-				t.Errorf("the extension refuses %s of %v, which reads no credential: the script that mints the token holds none, and a refusal here stops the agents' work (issue #662, CLAUDE.md rule 3); it said: %s",
+				t.Errorf("the extension refuses %s of %v, which reads no credential: a walk of the repository finds the script that mints the token and holds none, a pattern names text to look for rather than a file to open, and a refusal here stops the agents' work (issue #662, CLAUDE.md rule 3); it said: %s",
 					tc.call.ToolName, tc.call.Input, decision.Reason)
 			}
 		})

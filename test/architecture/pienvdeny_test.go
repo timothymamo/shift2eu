@@ -788,6 +788,12 @@ func TestPiEnvDenyListRefusesPrintingTheEnvironment(t *testing.T) {
 		"cat /home/x/.config/shift2eu/agents-app-token",
 		"head -c 32 ~/.config/shift2eu/agents-app-token",
 		`printf '%s' "$(cat ~/.config/shift2eu/agents-app-token)"`,
+		// The file named without its folder, which is how a search or a quoted path reaches it: a walk of the
+		// home directory that prints what its name matches reads the token, and so does a spelling of the folder
+		// a glob or quoted segment builds (`~/.con*/shift2eu`, `~/.config/'shift2eu'`).
+		"find ~ -name agents-app-token -exec cat {} +",
+		"cat ~/.con*/shift2eu/agents-app-token",
+		"cat ~/.config/'shift2eu'/agents-app-token",
 		// The folder, rather than the one file in it: `make agents-token` writes the token and the identity
 		// beside it, and a glob, a listing or a cd reads whichever file is there now, so the whole folder is
 		// refused as the deck's key directory is.
@@ -800,6 +806,18 @@ func TestPiEnvDenyListRefusesPrintingTheEnvironment(t *testing.T) {
 		"unset SHIFT2EU_PI_TESTER; bash -l",
 		"SHIFT2EU_PI_TESTER= bash -l -c true",
 		"env -u SHIFT2EU_PI_TESTER bash -l",
+		// A login shell started with no environment at all: `env -i`, `--ignore-environment`, `env -`,
+		// `exec -c`, `sudo -i` and `su -` each either clear the marker or start a login shell that never saw it,
+		// and the VM's login profile then sources the agents' keys file, which is the round trip the marker exists
+		// to close (issue #662, round 3's audit, finding SF-1).
+		"env -i HOME=/home/x bash -l -c true",
+		"env --ignore-environment bash -l",
+		"env - bash -l",
+		"exec -c bash -l",
+		"sudo -i",
+		"sudo -iu someone true",
+		"su -l someone",
+		"su - someone",
 		// A single key, expanded by name.
 		"echo $DEEPSEEK_API_KEY",
 		`printf %s "$GH_TOKEN"`,
@@ -996,11 +1014,16 @@ func TestPiEnvDenyListAllowsTheWork(t *testing.T) {
 		// The program that mints the agents App's token, named beside the file it mints into: reading the
 		// script hands over no credential, so the refusal of the token file must not reach it.
 		"sed -n '1,20p' dev/agents-app-token.sh",
+		"shellcheck dev/agents-app-token.sh",
 		// The git commands that read configuration or push a branch: the
 		// helper's own name and the branch's name hold no token, so the refusal
 		// of the credential helper must not reach them.
 		"git config --global credential.helper",
 		"git push origin chore/540-deny-env-printing",
+		// A diff and a test run in the repository, and a login shell that keeps the marker: the empty
+		// environment and the login shell are refused together, never apart (issue #662, round 3's audit).
+		"git diff --stat",
+		"go test -run TestX ./test/devenv/",
 	}
 
 	for _, command := range cases {
