@@ -792,6 +792,195 @@ func TestRunRefusesAFileCommandItCannotOpen(t *testing.T) {
 	}
 }
 
+// TestRunRefusesASummaryItCannotCreate pins a step summary the run may not go
+// on past (issues #615, #614). A summary that is absent is the ordinary case - no
+// earlier step wrote one, so the run creates it - but an absent one it cannot
+// create is a summary nothing would publish: the run would print its line to
+// stdout alone, and the job would show no summary line at all. The run fails
+// closed instead, with the usage exit, before the first step and with no result
+// file, so the encrypt step gets nothing.
+//
+// The case is a step whose whole file-command directory is absent: every one of
+// the five paths is then Lstat'ed as absent, which the run allows and records,
+// and the summary's creation is the first thing that fails (ENOENT, as a
+// directory that cannot be written would). Nothing here depends on the test's
+// user: a permission-based case would not fail under root.
+func TestRunRefusesASummaryItCannotCreate(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	env := stepEnvironment(t, dir)
+
+	// The five file commands move into one directory that does not exist, and
+	// that nothing creates: the summary's parent is there, so its creation fails.
+	absent := filepath.Join(t.TempDir(), "absent")
+
+	for _, name := range fileCommandNames {
+		env[name] = filepath.Join(absent, filepath.Base(env[name]))
+	}
+
+	result := runAuditrun(t, stepArgs(dir), env)
+
+	if result.code != audit.ExitUsage {
+		t.Errorf("the run's exit code is %d, want %d (audit.ExitUsage): a step summary that is absent and cannot be created is refused, not printed to stdout alone (issues #615, #614)\nstdout: %s\nstderr: %s",
+			result.code, audit.ExitUsage, result.stdout, result.stderr)
+	}
+
+	if len(result.ran) != 0 {
+		t.Errorf("the steps %v ran; the refusal comes before the first step (issues #615, #614)", result.ran)
+	}
+
+	if result.stdout != "" {
+		t.Errorf("the run printed %q on stdout, want nothing: a run with no summary to publish never starts, so it has no line (issues #615, #614)", result.stdout)
+	}
+
+	if !strings.Contains(result.stderr, "auditrun:") || !strings.Contains(result.stderr, "step summary") {
+		t.Errorf("the run printed %q on stderr, want a line holding %q and %q: the step's log says which of its file commands the run could not open (issues #615, #614)",
+			result.stderr, "auditrun:", "step summary")
+	}
+
+	for _, name := range fileCommandNames {
+		if _, err := os.Lstat(env[name]); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("the file command %s's path %s exists after the run (lstat: %v), want none: the run created nothing before it refused the summary (issues #615, #614)",
+				name, env[name], err)
+		}
+	}
+
+	if _, err := os.Lstat(absent); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the file commands' directory %s exists after the run (lstat: %v), want none: the run creates no directory of its own (issues #615, #614)", absent, err)
+	}
+
+	if _, err := os.Lstat(resultOutPath(dir)); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the result file at %s exists (lstat: %v), want none: the refusal ends the run before the steps, so nothing was checked to write", resultOutPath(dir), err)
+	}
+
+	assertNoSecret(t, result)
+}
+
+// TestRunRefusesAnAPIKeyWithASummaryItCannotOpen pins the API key's refusal when
+// the step's summary is an entry the run may not open (issues #615, #614): the
+// refusal is still the run's first act, so its exit stays 3, its line still goes
+// to stdout, and stderr carries a note that the summary could not be opened. The
+// entry the step left at the summary's path is left as it is - a directory keeps
+// what it holds, and the file a link points at keeps every byte, which the run
+// must never append to - and no result file is written.
+//
+// This is the one path that writes before the inputs are read, so it is the one
+// that cannot fail the run for an unopenable summary: the refusal's line is all
+// the step has to show, and silence on the stderr would hide that the job's
+// summary is missing it.
+func TestRunRefusesAnAPIKeyWithASummaryItCannotOpen(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		// entry replaces the summary's path, which does not exist before the
+		// run, with an entry the run may not open.
+		entry func(t *testing.T, summary, target string)
+	}{
+		{
+			name: "a step summary that is a directory",
+			entry: func(t *testing.T, summary, _ string) {
+				t.Helper()
+
+				if err := os.Mkdir(summary, 0o700); err != nil {
+					t.Fatalf("make the summary's path %s a directory: %v", summary, err)
+				}
+			},
+		},
+		{
+			name: "a step summary that is a symlink to a regular file",
+			entry: func(t *testing.T, summary, target string) {
+				t.Helper()
+
+				if err := os.Symlink(target, summary); err != nil {
+					t.Fatalf("make the summary's path %s a link to %s: %v", summary, target, err)
+				}
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newStepFiles(t)
+			summary := f.path("GITHUB_STEP_SUMMARY")
+
+			tc.entry(t, summary, f.target)
+
+			before, err := os.Lstat(summary)
+			if err != nil {
+				t.Fatalf("lstat the file command $GITHUB_STEP_SUMMARY's path %s before the run: %v", summary, err)
+			}
+
+			f.env["ANTHROPIC_API_KEY"] = "sk-ant-invented"
+
+			result := runAuditrun(t, stepArgs(f.dir), f.env)
+
+			if result.code != audit.ExitRefused {
+				t.Errorf("the run's exit code is %d, want %d (audit.ExitRefused): a step that holds the key is refused before anything else, whatever its summary's state\nstdout: %s\nstderr: %s",
+					result.code, audit.ExitRefused, result.stdout, result.stderr)
+			}
+
+			if !strings.Contains(result.stdout, lineAPIKey) {
+				t.Errorf("the run printed %q, want the refusal's own line %q: the line goes to stdout even when the summary cannot be opened", result.stdout, lineAPIKey)
+			}
+
+			if !strings.Contains(result.stderr, "the step summary cannot be opened") {
+				t.Errorf("the run printed %q on stderr, want a note holding %q: the step's log says the job's summary is missing the line (issues #615, #614)",
+					result.stderr, "the step summary cannot be opened")
+			}
+
+			if strings.Contains(result.summary, lineAPIKey) {
+				t.Errorf("the step's summary holds %q, want no line of the run: the run never writes into a summary it could not open (issues #615, #614)", result.summary)
+			}
+
+			if len(result.ran) != 0 {
+				t.Errorf("the steps %v ran; the API key refuses the run before the CLI starts", result.ran)
+			}
+
+			after, err := os.Lstat(summary)
+			if err != nil {
+				t.Fatalf("lstat the file command $GITHUB_STEP_SUMMARY's path %s after the run: %v", summary, err)
+			}
+
+			if !os.SameFile(before, after) || before.Mode().Type() != after.Mode().Type() {
+				t.Errorf("the file command $GITHUB_STEP_SUMMARY's path %s is another entry after the run (%s, was %s), want the one the step left (issues #615, #614)",
+					summary, after.Mode(), before.Mode())
+			}
+
+			if after.IsDir() {
+				entries, err := os.ReadDir(summary)
+				if err != nil {
+					t.Fatalf("read the summary's directory %s after the run: %v", summary, err)
+				}
+
+				if len(entries) != 0 {
+					t.Errorf("the summary's directory holds %d entries after the run, want none: the run writes no line there (issues #615, #614)", len(entries))
+				}
+			}
+
+			// The file a link pointed at is the step's, not the run's: nothing the
+			// run does follows a file command's link.
+			kept, err := os.ReadFile(f.target)
+			if err != nil {
+				t.Fatalf("read the file a link pointed at, %s: %v", f.target, err)
+			}
+
+			if string(kept) != elsewhere {
+				t.Errorf("the file a link pointed at holds %q, want %q untouched: the run appends to no file through a file command's link (issues #615, #614)", kept, elsewhere)
+			}
+
+			if _, err := os.Lstat(resultOutPath(f.dir)); !errors.Is(err, os.ErrNotExist) {
+				t.Errorf("the result file at %s exists (lstat: %v), want none: the refusal ends the run before the steps, so nothing was checked to write", resultOutPath(f.dir), err)
+			}
+
+			assertNoSecret(t, result)
+		})
+	}
+}
+
 // stepFiles is one model step's file commands as the run finds them: the
 // environment that names them, the one directory they share, and a file
 // elsewhere, holding elsewhere, for a case that swaps one of them for a link.
