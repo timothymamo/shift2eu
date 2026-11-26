@@ -39,6 +39,8 @@ func TestCategoryValues(t *testing.T) {
 		{name: "serverless container", got: taxonomy.ServerlessContainer, want: "serverless.container"},
 		{name: "registry container", got: taxonomy.RegistryContainer, want: "registry.container"},
 		{name: "storage file", got: taxonomy.StorageFile, want: "storage.file"},
+		// The public DNS zone category PRD #581 adds.
+		{name: "network dns", got: taxonomy.NetworkDNS, want: "network.dns"},
 		{name: "unclassified", got: taxonomy.Unclassified, want: "unclassified"},
 	}
 
@@ -79,6 +81,7 @@ func TestParseCategory(t *testing.T) {
 		{name: "storage file", in: "storage.file", want: taxonomy.StorageFile},
 		{name: "search opensearch", in: "search.opensearch", want: taxonomy.SearchOpenSearch},
 		{name: "messaging kafka", in: "messaging.kafka", want: taxonomy.MessagingKafka},
+		{name: "network dns", in: "network.dns", want: taxonomy.NetworkDNS},
 		{name: "unclassified", in: "unclassified", want: taxonomy.Unclassified},
 	}
 
@@ -125,6 +128,11 @@ func TestParseCategoryRejectsUnknown(t *testing.T) {
 		// equivalent exists (PRD #552, Left out).
 		{name: "elasticsearch", in: "search.elasticsearch"},
 		{name: "kinesis", in: "messaging.kinesis"},
+		// A private zone, a resolver and a CDN are not public zones and no target
+		// sells them as a product (PRD #581, What does not, and why): they stay
+		// unclassified, and no category names them.
+		{name: "private dns zones", in: "network.privatedns"},
+		{name: "cdn", in: "network.cdn"},
 	}
 
 	for _, tc := range tests {
@@ -201,8 +209,8 @@ func TestCategories(t *testing.T) {
 	t.Parallel()
 
 	// The whole vocabulary, sorted by value: the ten categories of ADR 0011 and 0023,
-	// the seven PRD #552 adds and the two PRD #571 adds. Unclassified is one of
-	// them.
+	// the seven PRD #552 adds, the two PRD #571 adds and the one PRD #581 adds.
+	// Unclassified is one of them.
 	want := []taxonomy.Category{
 		taxonomy.CacheRedis,
 		taxonomy.ComputeBareMetal,
@@ -214,6 +222,7 @@ func TestCategories(t *testing.T) {
 		taxonomy.MessagingKafka,
 		taxonomy.MessagingQueue,
 		taxonomy.MessagingTopic,
+		taxonomy.NetworkDNS,
 		taxonomy.NetworkLoadBalancer,
 		taxonomy.RegistryContainer,
 		taxonomy.SearchOpenSearch,
@@ -260,6 +269,9 @@ func TestCapabilityValues(t *testing.T) {
 		// The two capabilities PRD #552 adds (ADR 0046).
 		{name: "sharding", got: taxonomy.Sharding, want: "sharding"},
 		{name: "udp", got: taxonomy.UDP, want: "udp"},
+		// The two capabilities PRD #581 adds (open questions 3 and 4).
+		{name: "dnssec", got: taxonomy.DNSSEC, want: "dnssec"},
+		{name: "dns routing", got: taxonomy.DNSRouting, want: "dns-routing"},
 	}
 
 	for _, tc := range tests {
@@ -293,6 +305,8 @@ func TestParseCapability(t *testing.T) {
 		{name: "dead letter queue", in: "dead-letter-queue", want: taxonomy.DeadLetterQueue},
 		{name: "sharding", in: "sharding", want: taxonomy.Sharding},
 		{name: "udp", in: "udp", want: taxonomy.UDP},
+		{name: "dnssec", in: "dnssec", want: taxonomy.DNSSEC},
+		{name: "dns routing", in: "dns-routing", want: taxonomy.DNSRouting},
 	}
 
 	for _, tc := range tests {
@@ -455,11 +469,13 @@ func TestCapabilityImplicationInvariants(t *testing.T) {
 func TestCapabilities(t *testing.T) {
 	t.Parallel()
 
-	// The whole vocabulary, sorted by value: the ten capabilities of ADR 0011 and
-	// the two PRD #552 adds.
+	// The whole vocabulary, sorted by value: the ten capabilities of ADR 0011, the
+	// two PRD #552 adds and the two PRD #581 adds.
 	want := []taxonomy.Capability{
 		taxonomy.Autoscaling,
 		taxonomy.DeadLetterQueue,
+		taxonomy.DNSRouting,
+		taxonomy.DNSSEC,
 		taxonomy.EncryptionAtRest,
 		taxonomy.IPv6,
 		taxonomy.NodeHighAvailability,
@@ -482,5 +498,57 @@ func TestCapabilities(t *testing.T) {
 
 	if diff := cmp.Diff(want, taxonomy.Capabilities()); diff != "" {
 		t.Errorf("Capabilities() after mutating a previous result (-want +got):\n%s", diff)
+	}
+}
+
+// TestIsGlobal pins which categories may have global offerings (PRD #581, The
+// region model): a global offering is available in every region and is listed
+// in none, so only a category whose product no user-chosen region binds may be
+// recorded as global. catalog.New refuses a global offering of any other
+// category, so a regional product cannot be recorded as global to dodge the
+// region rule. network.dns is the only such category today, and a category the
+// taxonomy does not know is not global either.
+func TestIsGlobal(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		category taxonomy.Category
+		want     bool
+	}{
+		{name: "network.dns is global", category: taxonomy.NetworkDNS, want: true},
+		{name: "compute.vm is not global", category: taxonomy.ComputeVM, want: false},
+		{name: "compute.baremetal is not global", category: taxonomy.ComputeBareMetal, want: false},
+		{name: "kubernetes.managed is not global", category: taxonomy.KubernetesManaged, want: false},
+		{name: "storage.object is not global", category: taxonomy.StorageObject, want: false},
+		{name: "database.postgresql is not global", category: taxonomy.DatabasePostgreSQL, want: false},
+		{name: "network.loadbalancer is not global", category: taxonomy.NetworkLoadBalancer, want: false},
+		{name: "unclassified is not global", category: taxonomy.Unclassified, want: false},
+		{name: "a category outside the vocabulary is not global", category: taxonomy.Category("network.cdn"), want: false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := taxonomy.IsGlobal(tc.category); got != tc.want {
+				t.Errorf("IsGlobal(%q) = %t, want %t", tc.category, got, tc.want)
+			}
+		})
+	}
+
+	// network.dns is the only global category: a category added later is regional
+	// until its own PRD decides otherwise, and a set that grew by accident would
+	// let that category break the region rule.
+	var global []taxonomy.Category
+
+	for _, c := range taxonomy.Categories() {
+		if taxonomy.IsGlobal(c) {
+			global = append(global, c)
+		}
+	}
+
+	if diff := cmp.Diff([]taxonomy.Category{taxonomy.NetworkDNS}, global); diff != "" {
+		t.Errorf("the global categories mismatch (-want +got):\n%s", diff)
 	}
 }

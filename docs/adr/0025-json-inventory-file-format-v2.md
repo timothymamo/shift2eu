@@ -4,7 +4,9 @@
   amended by [0046](0046-add-seven-taxonomy-categories-and-match-cache-plans-on-memory.md): the size-field
   rows of seven new categories; amended by
   [0047](0047-add-search-opensearch-and-messaging-kafka-and-price-their-storage-per-node.md): the size-field
-  rows of `search.opensearch` and `messaging.kafka`
+  rows of `search.opensearch` and `messaging.kafka`; amended by
+  [0048](0048-record-global-offerings-in-target-snapshot-format-v2-and-add-network-dns.md): the size-field
+  row of `network.dns`
 - Date: 2026-11-13
 
 ## Context

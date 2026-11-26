@@ -76,6 +76,19 @@ func TestRegions(t *testing.T) {
 			}},
 			want: []string{"a", "z"},
 		},
+		{
+			// A global offering adds no region: it is available in every region
+			// and in none of its own, so --region keeps accepting exactly the
+			// regions the target declares (PRD #581, The region model).
+			name:     "a global offering adds no region",
+			snapshot: snapshotWith("z"),
+			offerings: append(slices.Clone(zoneCatalog), catalog.Offering{
+				Name:       "DNS Zone",
+				Categories: []taxonomy.Category{taxonomy.NetworkDNS},
+				Global:     true,
+			}),
+			want: []string{"a", "b", "c", "z"},
+		},
 	}
 
 	for _, tc := range tests {
@@ -295,4 +308,121 @@ func offeringNamed(t *testing.T, offerings []catalog.Offering, name string) cata
 	}
 
 	return offerings[i]
+}
+
+// globalOffering is a network.dns offering recorded as global, the one category
+// the taxonomy marks global (PRD #581, The region model): it is in no declared
+// region and is available in every non-empty one.
+func globalOffering() catalog.Offering {
+	return catalog.Offering{
+		Name:       "DNS Zone",
+		Categories: []taxonomy.Category{taxonomy.NetworkDNS},
+		Global:     true,
+	}
+}
+
+// TestOfferingAvailableInGlobal pins availability on a global offering: true for
+// every non-empty region, the target's declared ones and any other, and false for
+// "", as for a regional offering (no region asked, no availability claimed).
+func TestOfferingAvailableInGlobal(t *testing.T) {
+	t.Parallel()
+
+	cat := newCatalog(t, targetName, validSnapshot(), []catalog.Offering{globalOffering()})
+	offering := cat.Offerings()[0]
+
+	tests := []struct {
+		name   string
+		region string
+		want   bool
+	}{
+		{name: "a declared region", region: "fr-par", want: true},
+		{name: "another declared region", region: "nl-ams", want: true},
+		{name: "a region the target declares nowhere", region: "de-fra", want: true},
+		{name: "a region in another case", region: "FR-PAR", want: true},
+		{name: "the empty region", region: "", want: false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := offering.AvailableIn(tc.region); got != tc.want {
+				t.Errorf("AvailableIn(%s) = %t, want %t", text.Quote(tc.region), got, tc.want)
+			}
+		})
+	}
+}
+
+// TestOfferingGlobalPrices pins the prices and the fixed fee of a global
+// offering (PRD #581, Estimates): they apply in the estimate region, whatever it
+// is, because the offering is offered there; and "" gets none of them, as on a
+// regional offering.
+func TestOfferingGlobalPrices(t *testing.T) {
+	t.Parallel()
+
+	// Amounts are ten-thousandths of a euro: 1200 is 0.12 EUR.
+	const (
+		planPrice    catalog.Amount = 1200
+		storagePrice catalog.Amount = 40
+		fixedFee     catalog.Amount = 500
+	)
+
+	offering := globalOffering()
+	offering.Plans = []catalog.Plan{{
+		Name:           "Zone",
+		VCPUs:          1,
+		MemoryMilliGiB: 1000,
+		Prices:         []catalog.Price{{Amount: planPrice, Currency: catalog.EUR}},
+	}}
+	offering.StoragePrices = []catalog.Price{{Amount: storagePrice, Currency: catalog.EUR}}
+	offering.FixedFees = []catalog.Price{{Amount: fixedFee, Currency: catalog.EUR}}
+
+	cat := newCatalog(t, targetName, validSnapshot(), []catalog.Offering{offering})
+
+	got := cat.Offerings()[0]
+
+	t.Run("every non-empty region", func(t *testing.T) {
+		t.Parallel()
+
+		for _, region := range []string{"fr-par", "nl-ams", "de-fra", "FR-PAR"} {
+			if amount, ok := got.PlanPrice("Zone", region); !ok || amount != planPrice {
+				t.Errorf("PlanPrice(\"Zone\", %s) = (%s, %t), want (%s, true)",
+					text.Quote(region), amount, ok, planPrice)
+			}
+
+			if amount, ok := got.StoragePrice(region); !ok || amount != storagePrice {
+				t.Errorf("StoragePrice(%s) = (%s, %t), want (%s, true)",
+					text.Quote(region), amount, ok, storagePrice)
+			}
+
+			if amount, ok := got.FixedFee(region); !ok || amount != fixedFee {
+				t.Errorf("FixedFee(%s) = (%s, %t), want (%s, true)",
+					text.Quote(region), amount, ok, fixedFee)
+			}
+		}
+	})
+
+	t.Run("the empty region", func(t *testing.T) {
+		t.Parallel()
+
+		if amount, ok := got.PlanPrice("Zone", ""); ok {
+			t.Errorf("PlanPrice(\"Zone\", \"\") = (%s, true), want no price", amount)
+		}
+
+		if amount, ok := got.StoragePrice(""); ok {
+			t.Errorf("StoragePrice(\"\") = (%s, true), want no price", amount)
+		}
+
+		if amount, ok := got.FixedFee(""); ok {
+			t.Errorf("FixedFee(\"\") = (%s, true), want no fee", amount)
+		}
+	})
+
+	t.Run("a plan the offering does not sell", func(t *testing.T) {
+		t.Parallel()
+
+		if amount, ok := got.PlanPrice("Missing", "fr-par"); ok {
+			t.Errorf("PlanPrice(\"Missing\", \"fr-par\") = (%s, true), want no price", amount)
+		}
+	})
 }

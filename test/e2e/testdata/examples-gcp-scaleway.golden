@@ -33,7 +33,7 @@
 | `shop-web-1` | `compute.googleapis.com/Instance` | `compute.vm` | direct | `Instances` | `PLAY2-MICRO` (4 vCPU, 8 GiB) | €40.21 (count assumed 1) (730 hours assumed) (boot volume not included) | depends-on `shop-orders` | `Instances` offers every capability the resource uses |
 | `shop-web-1-data` | `compute.googleapis.com/Disk` | `storage.block` | direct | `Block Storage` |  | €9.49 (count assumed 1) | attached-to `shop-web-1` | `Block Storage` offers every capability the resource uses |
 | `shop-web-mig` | `compute.googleapis.com/InstanceGroupManager` | `compute.vm` | partial | `Instances` | `PLAY2-MICRO` (4 vCPU, 8 GiB) | €80.42 (730 hours assumed) (boot volume not included) |  | `Instances` does not offer `autoscaling`; `Instances` does not offer `zone-high-availability` |
-| `shop-zone` | `dns.googleapis.com/ManagedZone` | `unclassified` | none |  |  | not estimated: no fit |  | not classified |
+| `shop-zone` | `dns.googleapis.com/ManagedZone` | `network.dns` | none |  |  | not estimated: no fit |  | no offering in the `Scaleway` catalog for `network.dns` |
 
 ## Required changes
 
@@ -46,7 +46,7 @@
 - `shop-cdn-backend`: not classified
 - `shop-checkout`: no offering in the `Scaleway` catalog for `serverless.container`
 - `shop-uploads`: no offering in the `Scaleway` catalog for `storage.file`
-- `shop-zone`: not classified
+- `shop-zone`: no offering in the `Scaleway` catalog for `network.dns`
 
 ## Workloads
 
@@ -66,7 +66,7 @@
   - `shop-cdn-backend`: not classified
   - `shop-checkout`: no offering in the `Scaleway` catalog for `serverless.container`
   - `shop-uploads`: no offering in the `Scaleway` catalog for `storage.file`
-  - `shop-zone`: not classified
+  - `shop-zone`: no offering in the `Scaleway` catalog for `network.dns`
 
 ## Cost estimate
 

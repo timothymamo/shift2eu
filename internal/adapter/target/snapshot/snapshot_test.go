@@ -22,6 +22,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -2446,4 +2448,227 @@ func BenchmarkParseRepeatedRegionMention(b *testing.B) {
 				len(data), err)
 		}
 	}
+}
+
+// globalDocument is the snapshot under testdata/global.json: one network.dns
+// offering marked global, with no region of its own and every price and fixed fee
+// written as applying to every region (PRD #581, The region model, option A). It
+// is this package's own document, not an embedded catalog: no embedded catalog
+// gains a global offering in this milestone.
+func globalDocument(t *testing.T) string {
+	t.Helper()
+
+	data, err := os.ReadFile(filepath.Join("testdata", "global.json"))
+	if err != nil {
+		t.Fatalf("reading testdata/global.json: %v", err)
+	}
+
+	return string(data)
+}
+
+// globalDocumentWith is globalDocument with edit applied to its one offering, so a
+// case breaks exactly one key and leaves every other value as written.
+func globalDocumentWith(t *testing.T, edit func(map[string]json.RawMessage)) string {
+	t.Helper()
+
+	return editAt(t, globalDocument(t), []any{"offerings", 0}, edit)
+}
+
+// TestParseGlobalOffering pins the one optional offering key of the region model
+// (PRD #581, The region model, option A): "global": true with "regions": [] reads
+// into a global offering, whose prices and fixed fees apply to every region. The
+// snapshot format stays at version 2, and a global offering adds no declared
+// region: the document declares the same two regions it did before.
+func TestParseGlobalOffering(t *testing.T) {
+	t.Parallel()
+
+	doc, err := snapshot.Parse([]byte(globalDocument(t)))
+	if err != nil {
+		t.Fatalf("Parse() returned unexpected error: %v", err)
+	}
+
+	if diff := cmp.Diff([]string{"fr-par", "nl-ams"}, doc.Regions); diff != "" {
+		t.Errorf("Parse() regions mismatch (-want +got):\n%s", diff)
+	}
+
+	want := catalog.Offering{
+		Name:         "Example DNS",
+		Categories:   []taxonomy.Category{taxonomy.NetworkDNS},
+		Capabilities: []taxonomy.Capability{taxonomy.DNSRouting, taxonomy.DNSSEC},
+		Global:       true,
+		Plans: []catalog.Plan{{
+			Name:           "Zone",
+			VCPUs:          1,
+			MemoryMilliGiB: 1000,
+			Prices:         []catalog.Price{{Amount: 120000, Currency: catalog.EUR}},
+		}},
+		StoragePrices: []catalog.Price{{Amount: 400, Currency: catalog.EUR}},
+		FixedFees:     []catalog.Price{{Amount: 50000, Currency: catalog.EUR}},
+	}
+
+	got := doc.Catalog.Offerings()
+	if len(got) != 1 {
+		t.Fatalf("Offerings() returned %d offerings, want 1", len(got))
+	}
+
+	if diff := cmp.Diff(want, got[0]); diff != "" {
+		t.Errorf("the parsed offering mismatch (-want +got):\n%s", diff)
+	}
+
+	// A global offering adds no region to the target's list: Catalog.Regions is
+	// the union of the offerings' regions and the default region (ADR 0024), and
+	// the only offering here is global, so it is the default region alone (PRD
+	// #581, The region model). The document's own regions stay as declared.
+	if diff := cmp.Diff([]string{"fr-par"}, doc.Catalog.Regions()); diff != "" {
+		t.Errorf("the catalog's Regions() mismatch (-want +got):\n%s", diff)
+	}
+
+	for _, region := range []string{"fr-par", "nl-ams", "de-fra"} {
+		if !got[0].AvailableIn(region) {
+			t.Errorf("AvailableIn(%s) = false, want true for a global offering", text.Quote(region))
+		}
+
+		if amount, ok := got[0].PlanPrice("Zone", region); !ok || amount != 120000 {
+			t.Errorf("PlanPrice(\"Zone\", %s) = (%s, %t), want (12.00, true)", text.Quote(region), amount, ok)
+		}
+
+		if amount, ok := got[0].FixedFee(region); !ok || amount != 50000 {
+			t.Errorf("FixedFee(%s) = (%s, %t), want (5.00, true)", text.Quote(region), amount, ok)
+		}
+	}
+
+	if got[0].AvailableIn("") {
+		t.Error("AvailableIn(\"\") = true, want false: no region asked, no availability claimed")
+	}
+}
+
+// TestParseGlobalOfferingErrors pins what the reader refuses about the global key
+// (PRD #581, The region model): "global": false is meaningless, because an absent
+// key is the regional default, and a global offering that lists a region claims a
+// residency it does not have. regions stays a required key beside global, and a
+// global offering of a category the taxonomy does not mark global is refused by
+// catalog.New, as it would be without the document. Every error names the
+// offering, so a snapshot with many offerings says which one to fix.
+func TestParseGlobalOfferingErrors(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		data    func(t *testing.T) string
+		wantErr error
+		// wantMsg lists the substrings the error must hold: the offering name and
+		// the field or value at fault.
+		wantMsg []string
+	}{
+		{
+			name: "global false",
+			data: func(t *testing.T) string {
+				t.Helper()
+
+				return globalDocumentWith(t, func(offering map[string]json.RawMessage) {
+					offering["global"] = json.RawMessage("false")
+				})
+			},
+			wantErr: snapshot.ErrDecode,
+			wantMsg: []string{"Example DNS", "global"},
+		},
+		{
+			name: "global true with a region",
+			data: func(t *testing.T) string {
+				t.Helper()
+
+				return globalWithNested(t, "regions", `["fr-par"]`)
+			},
+			wantErr: catalog.ErrGlobalRegion,
+			wantMsg: []string{"Example DNS", "fr-par"},
+		},
+		{
+			// Null is a value, not an absent key: the reader never defaults it, and
+			// its error names the key at fault.
+			name: "global null",
+			data: func(t *testing.T) string {
+				t.Helper()
+
+				return globalWithNested(t, "global", "null")
+			},
+			wantErr: snapshot.ErrDecode,
+			wantMsg: []string{"global"},
+		},
+		{
+			// regions is required beside global: the key stays, and only an empty
+			// list makes an offering global.
+			name: "a global offering without a regions key",
+			data: func(t *testing.T) string {
+				t.Helper()
+
+				return globalDocumentWith(t, func(offering map[string]json.RawMessage) {
+					delete(offering, "regions")
+				})
+			},
+			wantErr: snapshot.ErrDecode,
+			wantMsg: []string{"regions"},
+		},
+		{
+			// Only a global category may be global, in a document as in the domain:
+			// a regional product recorded as global would dodge the region rule.
+			name: "global true on a category that is not global",
+			data: func(t *testing.T) string {
+				t.Helper()
+
+				return globalWithNested(t, "categories", `["compute.vm"]`)
+			},
+			wantErr: catalog.ErrGlobalCategory,
+			wantMsg: []string{"Example DNS", "compute.vm"},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			data := tc.data(t)
+
+			// The edit helpers re-encode the document compactly, so the version is
+			// read back as a value, never matched as bytes.
+			var header struct {
+				SchemaVersion int `json:"schemaVersion"`
+			}
+			if err := json.Unmarshal([]byte(data), &header); err != nil {
+				t.Fatalf("the edited document is not JSON: %v", err)
+			}
+
+			if header.SchemaVersion != 2 {
+				t.Fatalf("the document declares schema version %d, want 2, the only version this reader reads", header.SchemaVersion)
+			}
+
+			_, err := snapshot.Parse([]byte(data))
+			if !errors.Is(err, tc.wantErr) {
+				t.Fatalf("Parse() error = %v, want an error wrapping %v", err, tc.wantErr)
+			}
+
+			if strings.Contains(err.Error(), "\n") {
+				t.Errorf("Parse() error = %q, want one line", err)
+			}
+
+			for _, want := range tc.wantMsg {
+				if msg := err.Error(); !strings.Contains(msg, want) {
+					t.Errorf("Parse() error = %q, want it to mention %q", msg, want)
+				}
+			}
+		})
+	}
+}
+
+// globalWithNested is globalDocument with the offering's key set to the raw JSON
+// value, so a case pins a value the whole key takes, such as null.
+func globalWithNested(t *testing.T, key, raw string) string {
+	t.Helper()
+
+	return globalDocumentWith(t, func(offering map[string]json.RawMessage) {
+		if _, ok := offering[key]; !ok {
+			t.Fatalf("globalWithNested(): the offering has no %s key", text.Quote(key))
+		}
+
+		offering[key] = json.RawMessage(raw)
+	})
 }

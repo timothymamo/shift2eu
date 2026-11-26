@@ -46,6 +46,12 @@ const (
 	Sharding Capability = "sharding"
 	// UDP is forwarding UDP datagrams, as a layer 4 load balancer may.
 	UDP Capability = "udp"
+	// DNSSEC is the provider signing a DNS zone with DNSSEC and publishing the
+	// keys the parent's DS record points at.
+	DNSSEC Capability = "dnssec"
+	// DNSRouting is a DNS zone whose answers depend on the client's location,
+	// on weights or on the health of the endpoints, rather than plain records.
+	DNSRouting Capability = "dns-routing"
 )
 
 // ErrUnknownCapability is returned for a value that is not in the capability
@@ -63,6 +69,8 @@ var retired = map[Capability][]Capability{
 var capabilities = []Capability{
 	Autoscaling,
 	DeadLetterQueue,
+	DNSRouting,
+	DNSSEC,
 	EncryptionAtRest,
 	IPv6,
 	NodeHighAvailability,

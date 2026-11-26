@@ -86,12 +86,17 @@ subscription getting its own copy of each message;
 [ADR 0046](../adr/0046-add-seven-taxonomy-categories-and-match-cache-plans-on-memory.md)),
 `search.opensearch` (a search engine that speaks the OpenSearch REST API: OpenSearch, or Elasticsearch
 up to 7.10) and `messaging.kafka` (a cluster of brokers that speaks the Apache Kafka protocol;
-[ADR 0047](../adr/0047-add-search-opensearch-and-messaging-kafka-and-price-their-storage-per-node.md)). A
+[ADR 0047](../adr/0047-add-search-opensearch-and-messaging-kafka-and-price-their-storage-per-node.md)),
+and `network.dns` (a public DNS zone the provider's authoritative name servers serve on the internet:
+the records of one domain or subdomain, delegated to the provider by NS records at the parent; private
+zones, resolvers, health checks and domain registrations are not one;
+[ADR 0048](../adr/0048-record-global-offerings-in-target-snapshot-format-v2-and-add-network-dns.md)). A
+DNS zone is a global resource: write it with no `region`. A
 resource that fits none of these categories is `unclassified` and keeps its `rawType`: it then shows
 up in the report as a blocker on every target, instead of disappearing from the assessment. The
 programs below do not classify into the seven categories ADR 0046 adds yet, nor into the two ADR 0047
-adds (they list those resources as `unclassified`, or not at all): until they do, set such a
-resource's category by hand.
+adds, nor into `network.dns` (they list those resources as `unclassified`, or not at all): until they
+do, set such a resource's category by hand.
 
 The **capabilities** are features a resource depends on:
 
@@ -109,6 +114,8 @@ The **capabilities** are features a resource depends on:
 | `dead-letter-queue` | Messages that keep failing are set aside |
 | `sharding` | Data is partitioned across several primary nodes that clients address (a Redis Cluster) |
 | `udp` | UDP datagrams are forwarded (a layer 4 load balancer) |
+| `dnssec` | The provider signs the DNS zone with DNSSEC and publishes the keys the parent's DS record points at |
+| `dns-routing` | The DNS zone's answers depend on the client's location, on weights or on the health of the endpoints |
 
 A capability changes the verdict: an offering that serves the category but lacks a capability the
 resource lists is a partial fit, not a direct one, and the report names the missing capability. A
@@ -133,7 +140,7 @@ memory cover the resource's (memory alone for `cache.redis`), times the `count`,
 | `storage.file` | no | provisioned GiB | no | GiB |
 | `serverless.function` | `memoryGiB` only | no | no | not estimated (priced by usage) |
 | `messaging.queue`, `messaging.topic`, `serverless.container` | no | no | no | not estimated (priced by usage) |
-| `network.loadbalancer`, `registry.container` | no | no | no | not estimated (not priced) |
+| `network.loadbalancer`, `registry.container`, `network.dns` | no | no | no | not estimated (not priced) |
 | `unclassified` | no | no | no | not estimated |
 
 A field a category does not take is an error that names it. A resource without the fields its category

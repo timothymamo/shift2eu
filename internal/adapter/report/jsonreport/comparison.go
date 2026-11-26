@@ -85,7 +85,7 @@ func (r *Reporter) ReportComparison(ctx context.Context, w io.Writer, c assessme
 			Target:     newTarget(t.Assessment),
 			Region:     t.Assessment.Region,
 			Summary:    newSummary(t.Assessment.Summary),
-			Resources:  newResources(t.Assessment.Verdicts),
+			Resources:  r.newResources(t.Assessment.Verdicts),
 			Blockers:   newBlockers(t.Assessment.Blockers),
 			Workloads:  r.newWorkloads(t.Assessment.Workloads),
 			Estimate:   r.newEstimateBasis(t.Assessment),

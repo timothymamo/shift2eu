@@ -58,6 +58,23 @@ func computeOffering(name string, regions ...string) catalog.Offering {
 	}
 }
 
+// dnsOffering is a network.dns offering, the one category the taxonomy marks
+// global (PRD #581): global when global is true, and a regional offering in
+// fr-par otherwise, so a catalog can differ in the global flag between calls.
+func dnsOffering(global bool) catalog.Offering {
+	o := catalog.Offering{
+		Name:       "DNS Zone",
+		Categories: []taxonomy.Category{taxonomy.NetworkDNS},
+		Global:     global,
+	}
+
+	if !global {
+		o.Regions = []string{"fr-par"}
+	}
+
+	return o
+}
+
 // variantCatalog is the Scaleway fixture catalog with offering i changed by
 // mutate. It keeps the target, the snapshot and every offering name and count, so
 // the only difference Check can report is the changed offering.
@@ -501,6 +518,25 @@ func TestCheck(t *testing.T) {
 		{
 			name: "conforming target with plans and prices",
 			tgt:  &fakeTarget{catalogs: []catalog.Catalog{priced}},
+		},
+		{
+			// A global offering conforms: it is available in every region and in
+			// none the target declares, so the regions check has nothing to refuse
+			// (PRD #581, The region model).
+			name: "conforming target with a global offering",
+			tgt:  &fakeTarget{catalogs: []catalog.Catalog{catalogWithOffering(t, dnsOffering(true))}},
+		},
+		{
+			// The global flag is part of an offering, so an adapter that rewrites
+			// it alone between calls is not stable, and the violation shows the
+			// flag of both answers.
+			name: "changes one offering's global flag between calls",
+			tgt: &fakeTarget{catalogs: []catalog.Catalog{
+				catalogWithOffering(t, dnsOffering(true)),
+				catalogWithOffering(t, dnsOffering(false)),
+			}},
+			wantErr:      true,
+			wantMentions: [][]string{{"repeat"}, {"Global: true"}, {"Global: false"}},
 		},
 		{
 			// Estimates use the default region when the user names none, so an

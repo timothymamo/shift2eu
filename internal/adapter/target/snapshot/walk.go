@@ -14,7 +14,8 @@ import (
 // has found to be 2. jsondoc refuses an unknown, inexact or repeated key, a
 // value of the wrong JSON type, a missing key and a string that escapes a lone
 // surrogate; walk decides the keys, all of them required but an offering's
-// fixedFees (ADR 0026) and planBillingCapHours (ADR 0029), and reads every
+// fixedFees (ADR 0026), planBillingCapHours (ADR 0029) and global (PRD #581),
+// and reads every
 // value without jsondoc.Walker.Null, so null is refused like any other value of
 // the wrong type, and is never read as an absent optional key.
 func walk(w *jsondoc.Walker) (document, error) {
@@ -97,6 +98,9 @@ func readOffering(w *jsondoc.Walker) (offering, error) {
 		emptyFees error
 		// zeroCap refuses a planBillingCapHours of 0, once the object is read.
 		zeroCap error
+		// globalFalse holds where a "global": false was read, once the object
+		// is read, so its error can name the offering.
+		globalFalse string
 	)
 
 	err := w.Object(offeringKeys, func(key string) error {
@@ -111,6 +115,8 @@ func readOffering(w *jsondoc.Walker) (offering, error) {
 			o.capabilities, err = list[taxonomy.Capability](w)
 		case keyRegions:
 			o.regions, err = list[string](w)
+		case keyGlobal:
+			o.global, globalFalse, err = global(w)
 		case keyPlans:
 			o.plans, err = plans(w)
 		case keyStoragePrices:
@@ -135,7 +141,32 @@ func readOffering(w *jsondoc.Walker) (offering, error) {
 		return offering{}, zeroCap
 	}
 
+	if globalFalse != "" {
+		return offering{}, fmt.Errorf("%w: offering %s: %s is false, want true (leave the key out for a regional offering)",
+			ErrDecode, text.Quote(o.name), globalFalse)
+	}
+
 	return o, nil
+}
+
+// global reads the next value: a boolean, whether the offering is global
+// (PRD #581). For false it returns, besides the value, where the value was read
+// (its quoted path and position), so the caller refuses it once the offering's
+// object is read, naming the offering: "regional" has one spelling, the key
+// left out. null is refused as a value of the wrong type.
+func global(w *jsondoc.Walker) (value bool, falseAt string, err error) {
+	path, at := w.Path(), w.Position()
+
+	value, err = w.Bool()
+	if err != nil {
+		return false, "", err
+	}
+
+	if !value {
+		falseAt = text.Quote(path) + " at " + at
+	}
+
+	return value, falseAt, nil
 }
 
 // planBillingCapHours reads the next value: an integer, the most hours a month

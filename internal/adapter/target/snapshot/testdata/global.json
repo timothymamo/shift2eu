@@ -1,0 +1,34 @@
+{
+  "schemaVersion": 2,
+  "target": "Example Cloud",
+  "sourceURL": "https://www.example.com/docs/",
+  "retrievedOn": "2026-11-10",
+  "regions": ["fr-par", "nl-ams"],
+  "defaultRegion": "fr-par",
+  "offerings": [
+    {
+      "name": "Example DNS",
+      "categories": ["network.dns"],
+      "capabilities": ["dnssec", "dns-routing"],
+      "global": true,
+      "regions": [],
+      "plans": [
+        {
+          "name": "Zone",
+          "vcpus": 1,
+          "memoryGiB": 1,
+          "storageGiB": 0,
+          "prices": [
+            { "amount": 12, "currency": "EUR", "regions": [] }
+          ]
+        }
+      ],
+      "storagePrices": [
+        { "amount": 0.04, "currency": "EUR", "regions": [] }
+      ],
+      "fixedFees": [
+        { "amount": 5, "currency": "EUR", "regions": [] }
+      ]
+    }
+  ]
+}
