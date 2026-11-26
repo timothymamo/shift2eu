@@ -226,10 +226,11 @@ func writeHow(d *document, estimates bool) {
 		paragraph("Estimates.", "A resource is matched to the cheapest plan, among its best offering and the "+
 			"offerings tied with it, that covers its vCPUs and memory; a Redis cache is matched on memory "+
 			"alone, and block, object and file storage have no plan: they cost the stored GiB × the price "+
-			"per GiB. A monthly estimate is plan price × count × hours / 730, with 730 "+
-			"hours for a resource that gives none and a count of 1 when it gives no count; a plan billed for at "+
-			"most a number of hours a month costs plan price × count × min(hours, cap) / cap. Storage "+
-			"above what the plan includes is priced per GiB, per node × count except for a managed database, "+
+			"per GiB, × count for block volumes. A plan's monthly estimate is plan price × count × hours / 730, "+
+			"with 730 hours for a resource that gives none and a count of 1 when it gives no count; a plan "+
+			"billed for at most a number of hours a month costs plan price × count × min(hours, cap) / cap. "+
+			"Storage is never scaled by hours. Storage above what the plan includes (none for a Redis cache) "+
+			"is priced per GiB, per node × count except for a managed database, "+
 			"whose storage is counted once. A fixed fee is the offering's fee once per resource × hours / 730, "+
 			"never capped. "+
 			"Amounts are rounded to the cent, half away from zero. Prices are list prices on the catalog's "+
