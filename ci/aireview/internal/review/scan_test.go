@@ -210,6 +210,55 @@ func namespaceMayFollowByteCases(t *testing.T, golden string) []leftOutCase {
 	return cases
 }
 
+// TestNamespaceMayFollow pins this package's copy of the delimiter rule
+// itself, byte by byte (issue #649), as the fixture check's TestNamespaceMayFollow
+// does its copy: the behavioural cases of
+// TestScanLeftOutFindsRealDataInTheFilesLeftOut cover only the printable ASCII
+// bytes that are no part of a host name, so a copy widened to a control byte
+// ("\r", "\v", "\f") or to a non-ASCII one would pass every test of this
+// package. This one calls the rule directly, so it sees them all.
+//
+// Its accepted entries come from the shared list both copies' tests read, so
+// that file is the one list of the bytes the rule takes, and the loop pins that
+// set exactly: every one of the 256 single-byte values before a namespace,
+// after another byte and as the first byte of the text, is accepted exactly
+// when the list names it. A copy that drops a delimiter the list names fails a
+// case of TestScanLeftOutFindsRealDataInTheFilesLeftOut, and a copy that widens
+// the rule to a byte the list does not name fails the loop here. The newline is
+// no delimiter of this copy: the scan reads a diff one line at a time, so the
+// text before a namespace never carries one (the fixture check's copy, which
+// reads a whole text, also takes it, issue #630).
+func TestNamespaceMayFollow(t *testing.T) {
+	t.Parallel()
+
+	// The start of the text is the empty prefix, which the rule accepts without
+	// looking at a byte: the shared list's first record names a namespace there.
+	if !review.NamespaceMayFollow("") {
+		t.Error(`NamespaceMayFollow("") = false, want true: a namespace that starts the text may be one`)
+	}
+
+	accepted := namespaceMayFollowAcceptedBytes(t)
+
+	for value := range 256 {
+		b := byte(value)
+		span := string([]byte{b})
+
+		// Each byte runs twice: after another byte, where the rule's "/" branch
+		// sees a preceding byte that is no "/", "\\" or ":", and as the first
+		// byte of the text, where it sees none. The byte is a byte of the text,
+		// not a rune, which is why the span is string([]byte{b}) and not
+		// string(b): string(b) is the UTF-8 encoding of the rune b, two bytes
+		// for a value above 0x7f, while the rule reads the bytes of before and
+		// the byte before them.
+		for _, before := range []string{"x" + span, span} {
+			if got := review.NamespaceMayFollow(before); got != accepted[b] {
+				t.Errorf("NamespaceMayFollow(%q) = %t, want %t, from the shared list's bytes a namespace may follow (byte %#04x)",
+					before, got, accepted[b], b)
+			}
+		}
+	}
+}
+
 // TestScanLeftOutFindsRealDataInTheFilesLeftOut pins the model-free scan of
 // issue #342: since the golden files of testdata directories are left out of
 // the diff the model reads, a real account ID, IP address, host name or
