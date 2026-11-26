@@ -1259,12 +1259,13 @@ func TestAuditTakesOnlyAResultFileTheRunWrote(t *testing.T) {
 		// (issues #615, #614). The caps are the launcher's to pick: it is 256
 		// entries and 4 MiB of content (finding L1 of issue #614's review: the
 		// runner keeps every earlier step's file-command files in this directory,
-		// so the model step's own files are near 64 entries and a cap that low
-		// would refuse every run), and the launcher refuses, before its run, a
-		// directory well past it - 1024 entries, and 32 MiB over 8 files - rather
-		// than digesting it whole. Both directories are built before the run, so a
-		// launcher that digests them anyway meets no change and would take the
-		// result file.
+		// and how many that is on a real runner is unverified - by our
+		// understanding a handful, about 5 or 6 (ADR 0040) - so the cap was raised
+		// for headroom rather than set from a count), and the launcher refuses,
+		// before its run, a directory well past it - 1024 entries, and 32 MiB over
+		// 8 files - rather than digesting it whole. Both directories are built
+		// before the run, so a launcher that digests them anyway meets no change and
+		// would take the result file.
 		{
 			name: "the $GITHUB_ENV file's directory holds more entries than its cap",
 			before: func(t *testing.T, root string) {

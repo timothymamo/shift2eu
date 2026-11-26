@@ -1,6 +1,7 @@
 package architecture_test
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 
@@ -169,6 +170,44 @@ const auditModelToolsDir = "/srv/audit/tools"
 // after the session, and main's launcher and artifact check.
 var auditModelTools = []string{"age", "auditrun", "auditpublish"}
 
+// auditModelToolRun is one run of a model-job tool as the job must write it: run
+// matches the line whose command word is that tool's path in auditModelToolsDir,
+// and its name is what the subtest and the message that reports it call the run.
+type auditModelToolRun struct {
+	name string
+	run  *regexp.Regexp
+}
+
+// auditModelToolRuns are the model job's four runs of its three tools, each by its
+// path in the root-owned directory and by no other word: the artifact check before
+// the model session, the launcher in the model step, and age's decrypt and encrypt
+// around it (round 2 of issue #614's review, ADR 0040). A line that names the
+// installed path without running it - the hardening step's stat line, the strings
+// it compares to - meets none of them, so a run that lost its path is reported
+// here rather than held up by a name in a check.
+var auditModelToolRuns = []auditModelToolRun{
+	{
+		name: "the artifact check, before the model session",
+		run: regexp.MustCompile(`(?m)^[ \t]*if ! ` + regexp.QuoteMeta(auditModelToolsDir) +
+			`/auditpublish artifacts -job model `),
+	},
+	{
+		name: "the launcher, in the model step",
+		run: regexp.MustCompile(`(?m)^[ \t]*if ! ` + regexp.QuoteMeta(auditModelToolsDir) +
+			`/auditrun -claude-tarball `),
+	},
+	{
+		name: "age's decrypt, before the model session",
+		run: regexp.MustCompile(`\| ` + regexp.QuoteMeta(auditModelToolsDir) +
+			`/age --decrypt --identity - `),
+	},
+	{
+		name: "age's encrypt, after the model session",
+		run: regexp.MustCompile(`(?m)^[ \t]*` + regexp.QuoteMeta(auditModelToolsDir) +
+			`/age --encrypt --recipient "`),
+	},
+}
+
 // TestScheduledSecurityAuditWorkflowRunsTheModelToolsFromTheRootOwnedDirectory
 // pins the model job's half of finding M1 of issue #614's review: the step that
 // installs the job's tools is a step the model session does not control, and the
@@ -218,21 +257,26 @@ func TestScheduledSecurityAuditWorkflowRunsTheModelToolsFromTheRootOwnedDirector
 			t.Parallel()
 
 			want := auditModelToolsDir + "/" + tool
-			ran := false
 
 			for _, line := range lines {
 				for _, offender := range auditToolUses(line, tool, want) {
 					t.Errorf("%s's model job runs %s as %q: want %q, the tool installed root-owned in a directory the model session cannot write, never a word or a path its shell resolves (ADR 0040, issue #614)", auditWorkflow, tool, offender, want)
 				}
+			}
+		})
+	}
 
-				if strings.Contains(line, want) && !strings.Contains(line, "install ") {
-					ran = true
+	for _, r := range auditModelToolRuns {
+		t.Run("run line: "+r.name, func(t *testing.T) {
+			t.Parallel()
+
+			for _, line := range lines {
+				if r.run.MatchString(line) {
+					return
 				}
 			}
 
-			if !ran {
-				t.Errorf("%s's model job runs no %s: want it run by %q, the tool the install step put there (ADR 0040, issue #614)", auditWorkflow, tool, want)
-			}
+			t.Errorf("%s's model job holds no line that runs %s by its path in %s %q: the install step puts it there and the steps that run it use that path alone, never a word, a relative path or a path under $RUNNER_TEMP the shell resolves (ADR 0040, issue #614)", auditWorkflow, r.name, auditModelToolsDir, r.run)
 		})
 	}
 
@@ -247,38 +291,44 @@ func TestScheduledSecurityAuditWorkflowRunsTheModelToolsFromTheRootOwnedDirector
 	})
 }
 
+// auditToolSeparators are the shell's punctuation besides whitespace, and its
+// quotes: a word ends at each of them, so a tool named after a ; or a |, as the
+// right side of an &&, in a $(...) or between backticks, and a tool named in an
+// assignment's value are each read as the word they are (round 2 of issue #614's
+// review).
+const auditToolSeparators = " \t\n\"';&|()<>=`"
+
 // auditToolUses returns, for tool, every word of line that runs it as something
-// other than want: the bare word, which the step's shell resolves through PATH,
-// and any other path that names it, ${RUNNER_TEMP}/bin's included. A line that
-// installs or unpacks the tool is no use of it, and neither is the output of a
-// build or a copy it is installed from.
+// other than want: the bare word, which the step's shell resolves through PATH, a
+// relative path such as ci/auditrun or bin/age, which it resolves against the
+// checkout, and any absolute path that names it, ${RUNNER_TEMP}/bin's and an
+// assignment's value included. A line that installs, unpacks or builds the tool is
+// no use of it: the install moves a file and the build names the package it
+// compiles, and neither runs the tool.
 func auditToolUses(line, tool, want string) []string {
 	trimmed := strings.TrimSpace(line)
-	if strings.HasPrefix(trimmed, "#") || strings.HasPrefix(trimmed, "sudo install ") || strings.HasPrefix(trimmed, "install ") || strings.HasPrefix(trimmed, "tar ") {
+	if strings.HasPrefix(trimmed, "#") || strings.HasPrefix(trimmed, "sudo install ") || strings.HasPrefix(trimmed, "install ") ||
+		strings.HasPrefix(trimmed, "tar ") || strings.Contains(trimmed, "go build ") {
 		return nil
 	}
 
-	fields := strings.Fields(line)
+	fields := strings.FieldsFunc(line, func(r rune) bool { return strings.ContainsRune(auditToolSeparators, r) })
 
 	var uses []string
 
-	for i, field := range fields {
+	for i, word := range fields {
 		// A build's output is where the binary is made, not a program the
 		// step runs.
 		if i > 0 && fields[i-1] == "-o" {
 			continue
 		}
 
-		word := strings.Trim(field, `"'`)
-
 		switch {
 		case word == want:
 			continue
 		case word == tool:
 			uses = append(uses, word)
-		case !strings.HasSuffix(word, "/"+tool):
-			continue
-		case strings.HasPrefix(word, "$") || strings.HasPrefix(word, "/"):
+		case strings.HasSuffix(word, "/"+tool):
 			uses = append(uses, word)
 		}
 	}

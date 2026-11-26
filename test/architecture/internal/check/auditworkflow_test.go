@@ -350,7 +350,25 @@ const (
 	// auditModelArtifactsCommand is the model job's artifact check, the one command
 	// of the job that runs a program built from main before the model session: the
 	// anchor of the cases that run it through a path the shell resolves.
-	auditModelArtifactsCommand = "          if ! ci/auditpublish artifacts -job model -gh \"$(command -v gh)\" -tmp \"${RUNNER_TEMP}\"; then\n"
+	auditModelArtifactsCommand = "          if ! /srv/audit/tools/auditpublish artifacts -job model -gh \"$(command -v gh)\" -tmp \"${RUNNER_TEMP}\"; then\n"
+	// auditAgeInstall is the model job's installation of age, the line that puts
+	// the checksummed tarball's binary into the root-owned directory: the anchor of
+	// the cases that install it from anywhere else.
+	auditAgeInstall = "          sudo install -o root -g root -m 0555 \"${RUNNER_TEMP}/downloads/age/age\" /srv/audit/tools/age\n"
+	// auditRunnerInstall and auditPublisherInstall are that line for the two
+	// programs built from main, the go build -o outputs.
+	auditRunnerInstall    = "          sudo install -o root -g root -m 0555 \"${RUNNER_TEMP}/auditrun\" /srv/audit/tools/auditrun\n"
+	auditPublisherInstall = "          sudo install -o root -g root -m 0555 \"${RUNNER_TEMP}/auditpublish\" /srv/audit/tools/auditpublish\n"
+	// auditModelPath is the one PATH a step of the model job carries once the model
+	// session has run, the checkout step included: the image's own PATH puts
+	// directories the runner's user can write (~/.local/bin, ~/.cargo/bin) ahead of
+	// /usr/bin, so a write during the session could plant a git for
+	// actions/checkout's post step to run with the run's token, or a bash (issue
+	// #614's review round 2).
+	auditModelPath = "/usr/sbin:/usr/bin:/sbin:/bin"
+	// auditModelPathEnv is the step-level env: head the model job's later steps and
+	// its checkout step carry that PATH in, as the accepted fixture writes them.
+	auditModelPathEnv = "        env:\n          PATH: " + auditModelPath + "\n"
 	// auditHardeningStep is the model-free step that hardens the runner: it must
 	// run before the sandbox preflight, which is inside the model step, and it
 	// records each of its own commands' failure, so that a run fails with an
@@ -652,10 +670,11 @@ const (
 		"          zizmor .github/workflows\n" +
 		"          " + auditActionlint
 	// auditRunCommand is the model step's own command, the one that writes the
-	// checked result under $RUNNER_TEMP. Round E wraps it in the guard that
+	// checked result under $RUNNER_TEMP, run by the launcher's path in the
+	// root-owned /srv/audit/tools. Round E wraps it in the guard that
 	// names the runbook step a failed run is recovered by, so the case that
 	// reads the line is the guard's condition, which holds the command.
-	auditRunCommand = "          if ! ci/auditrun -claude-tarball \"${RUNNER_TEMP}/claude-code/claude-code.tgz\" -claude-integrity \"${CLAUDE_CODE_PIN_INTEGRITY}\" -result-out \"${RUNNER_TEMP}/result.json\"; then\n"
+	auditRunCommand = "          if ! /srv/audit/tools/auditrun -claude-tarball \"${RUNNER_TEMP}/claude-code/claude-code.tgz\" -claude-integrity \"${CLAUDE_CODE_PIN_INTEGRITY}\" -result-out \"${RUNNER_TEMP}/result.json\"; then\n"
 	// auditEncryptResultCommand is the encrypt step's age command: it reads the
 	// file the launcher wrote, never the result's path under /srv/audit.
 	auditEncryptResultCommand = "          /srv/audit/tools/age --encrypt --recipient \"${AUDIT_PUBLISH_PUBLIC_KEY}\" --output \"${RUNNER_TEMP}/model-result.age\" \"${RUNNER_TEMP}/result.json\"\n"
@@ -2136,13 +2155,43 @@ func TestAuditWorkflow(t *testing.T) {
 		},
 		{
 			name:     "the model job's launcher run from the runner's own bin directory",
-			workflow: mutate(t, acceptedWorkflow, auditRunCommand, strings.Replace(auditRunCommand, "ci/auditrun", "\"${RUNNER_TEMP}/bin/auditrun\"", 1)),
+			workflow: mutate(t, acceptedWorkflow, auditRunCommand, strings.Replace(auditRunCommand, "/srv/audit/tools/auditrun", "\"${RUNNER_TEMP}/bin/auditrun\"", 1)),
 			wantIn:   "auditrun",
 		},
 		{
 			name:     "the model job's artifact check run from the runner's own bin directory",
-			workflow: mutate(t, acceptedWorkflow, auditModelArtifactsCommand, strings.Replace(auditModelArtifactsCommand, "ci/auditpublish", "\"${RUNNER_TEMP}/bin/auditpublish\"", 1)),
+			workflow: mutate(t, acceptedWorkflow, auditModelArtifactsCommand, strings.Replace(auditModelArtifactsCommand, "/srv/audit/tools/auditpublish", "\"${RUNNER_TEMP}/bin/auditpublish\"", 1)),
 			wantIn:   "auditpublish",
+		},
+		// No word of the model job names a tool but by the path it was installed
+		// to: a bare age, a path of the checkout's and a path under $RUNNER_TEMP
+		// are each a program the model session could have planted, and the shell
+		// resolves the first two where the checkout is (round 2 of issue #614's
+		// review, ADR 0040).
+		{
+			name:     "the model job's launcher run from the checkout by a checkout-relative path",
+			workflow: mutate(t, acceptedWorkflow, auditRunCommand, strings.Replace(auditRunCommand, "/srv/audit/tools/auditrun", "ci/auditrun", 1)),
+			wantIn:   `runs auditrun as "ci/auditrun"`,
+		},
+		{
+			name:     "the model job's launcher run from the checkout by ./ci",
+			workflow: mutate(t, acceptedWorkflow, auditRunCommand, strings.Replace(auditRunCommand, "/srv/audit/tools/auditrun", "./ci/auditrun", 1)),
+			wantIn:   `runs auditrun as "./ci/auditrun"`,
+		},
+		{
+			name:     "the model job's artifact check run from the checkout by a checkout-relative path",
+			workflow: mutate(t, acceptedWorkflow, auditModelArtifactsCommand, strings.Replace(auditModelArtifactsCommand, "/srv/audit/tools/auditpublish", "ci/auditpublish", 1)),
+			wantIn:   `runs auditpublish as "ci/auditpublish"`,
+		},
+		{
+			name:     "the model job's encrypt step runs age from a relative bin",
+			workflow: mutate(t, acceptedWorkflow, auditEncryptResultCommand, strings.Replace(auditEncryptResultCommand, "/srv/audit/tools/age", "bin/age", 1)),
+			wantIn:   `runs age as "bin/age"`,
+		},
+		{
+			name:     "the model job's encrypt step runs age from ./bin",
+			workflow: mutate(t, acceptedWorkflow, auditEncryptResultCommand, strings.Replace(auditEncryptResultCommand, "/srv/audit/tools/age", "./bin/age", 1)),
+			wantIn:   `runs age as "./bin/age"`,
 		},
 		{
 			name: "the model job's launcher installed by a plain install into the runner's own bin directory",
@@ -2155,6 +2204,126 @@ func TestAuditWorkflow(t *testing.T) {
 			workflow: mutate(t, acceptedWorkflow, auditWrapperInstall,
 				auditWrapperInstall+"          sudo install -o root -g root -m 0755 \"${RUNNER_TEMP}/auditpublish\" /srv/audit/tools/auditpublish\n"),
 			wantIn: "/srv/audit/tools/auditpublish",
+		},
+		// The scan reads a word, not a line: a tool named after a ;, a |, a &&, a
+		// subshell's ( or between backticks is a command of the job like any other,
+		// and so is the value of an assignment the steps after it would run (round 2
+		// of issue #614's review, ADR 0040).
+		{
+			name:     "the model job runs age after a semicolon",
+			workflow: mutate(t, acceptedWorkflow, auditModelSocat, auditModelSocat+"          true;age --version\n"),
+			wantIn:   `runs age as "age"`,
+		},
+		{
+			name:     "the model job runs age as the right side of a pipe",
+			workflow: mutate(t, acceptedWorkflow, auditModelSocat, auditModelSocat+"          echo x |age --version\n"),
+			wantIn:   `runs age as "age"`,
+		},
+		{
+			name:     "the model job runs age after &&",
+			workflow: mutate(t, acceptedWorkflow, auditModelSocat, auditModelSocat+"          true &&age --version\n"),
+			wantIn:   `runs age as "age"`,
+		},
+		{
+			name:     "the model job runs age in a command substitution",
+			workflow: mutate(t, acceptedWorkflow, auditModelSocat, auditModelSocat+"          out=\"$(age --version)\"\n"),
+			wantIn:   `runs age as "age"`,
+		},
+		{
+			name:     "the model job runs age between backticks",
+			workflow: mutate(t, acceptedWorkflow, auditModelSocat, auditModelSocat+"          out=`age --version`\n"),
+			wantIn:   `runs age as "age"`,
+		},
+		{
+			name:     "the model job runs age in a subshell",
+			workflow: mutate(t, acceptedWorkflow, auditModelSocat, auditModelSocat+"          (age --version)\n"),
+			wantIn:   `runs age as "age"`,
+		},
+		{
+			name:     "the model job assigns the runner's own age to a variable",
+			workflow: mutate(t, acceptedWorkflow, auditModelSocat, auditModelSocat+"          a=\"${RUNNER_TEMP}/bin/age\"\n"),
+			wantIn:   `runs age as "${RUNNER_TEMP}/bin/age"`,
+		},
+		{
+			name:     "the model job assigns the runner's own launcher to a variable",
+			workflow: mutate(t, acceptedWorkflow, auditModelSocat, auditModelSocat+"          a=\"${RUNNER_TEMP}/bin/auditrun\"\n"),
+			wantIn:   `runs auditrun as "${RUNNER_TEMP}/bin/auditrun"`,
+		},
+		{
+			name:     "the model job assigns the runner's own artifact check to a variable",
+			workflow: mutate(t, acceptedWorkflow, auditModelSocat, auditModelSocat+"          a=\"${RUNNER_TEMP}/bin/auditpublish\"\n"),
+			wantIn:   `runs auditpublish as "${RUNNER_TEMP}/bin/auditpublish"`,
+		},
+		// Nothing but the three installs and the directory's own creation writes
+		// into /srv/audit/tools: a copy, a redirection or a mode change there is a
+		// tool the model session's own files could stand in for (round 2 of issue
+		// #614's review, ADR 0040).
+		{
+			name:     "the model job copies a file into its tools' directory",
+			workflow: mutate(t, acceptedWorkflow, auditModelSocat, auditModelSocat+"          sudo cp \"${RUNNER_TEMP}/x\" /srv/audit/tools/age\n"),
+			wantIn:   "writes into /srv/audit/tools",
+		},
+		{
+			name:     "the model job redirects into its tools' directory",
+			workflow: mutate(t, acceptedWorkflow, auditModelSocat, auditModelSocat+"          echo x > /srv/audit/tools/auditrun\n"),
+			wantIn:   "writes into /srv/audit/tools",
+		},
+		{
+			name:     "the model job changes a tool's mode in its tools' directory",
+			workflow: mutate(t, acceptedWorkflow, auditModelSocat, auditModelSocat+"          sudo chmod 0755 /srv/audit/tools/auditrun\n"),
+			wantIn:   "writes into /srv/audit/tools",
+		},
+		// The sources are pinned too: age comes from the checksummed tarball's
+		// binary and the two programs main builds from the go build -o outputs, so
+		// no install of a tool reads a file another step, or the session, chose
+		// (round 2 of issue #614's review, ADR 0040).
+		{
+			name:     "the model job's age installed from the runner's own temporary directory",
+			workflow: mutate(t, acceptedWorkflow, auditAgeInstall, "          sudo install -o root -g root -m 0555 \"${RUNNER_TEMP}/age/age\" /srv/audit/tools/age\n"),
+			wantIn:   `installs age from "${RUNNER_TEMP}/age/age"`,
+		},
+		{
+			name:     "the model job's launcher installed from the runner's own bin directory",
+			workflow: mutate(t, acceptedWorkflow, auditRunnerInstall, "          sudo install -o root -g root -m 0555 \"${RUNNER_TEMP}/bin/auditrun\" /srv/audit/tools/auditrun\n"),
+			wantIn:   `installs auditrun from "${RUNNER_TEMP}/bin/auditrun"`,
+		},
+		{
+			name:     "the model job's artifact check installed from the checkout",
+			workflow: mutate(t, acceptedWorkflow, auditPublisherInstall, "          sudo install -o root -g root -m 0555 ci/auditpublish /srv/audit/tools/auditpublish\n"),
+			wantIn:   `installs auditpublish from "ci/auditpublish"`,
+		},
+		// After the model session the job's steps carry the root-only PATH: the
+		// image's own PATH puts directories the runner's user can write ahead of
+		// /usr/bin, so a write during the session could plant a git for
+		// actions/checkout's post step to run with the run's token, or a bash (round
+		// 2 of issue #614's review, ADR 0040).
+		{
+			name: "the encrypt step after the model step without the root-only PATH",
+			workflow: mutate(t, acceptedWorkflow,
+				"          PATH: "+auditModelPath+"\n          AUDIT_PUBLISH_PUBLIC_KEY:",
+				"          AUDIT_PUBLISH_PUBLIC_KEY:"),
+			wantIn: auditModelPath,
+		},
+		{
+			name: "the encrypt step after the model step with the image's own PATH",
+			workflow: mutate(t, acceptedWorkflow,
+				"          PATH: "+auditModelPath+"\n          AUDIT_PUBLISH_PUBLIC_KEY:",
+				"          PATH: /usr/local/sbin:/usr/local/bin:"+auditModelPath+"\n          AUDIT_PUBLISH_PUBLIC_KEY:"),
+			wantIn: auditModelPath,
+		},
+		{
+			name: "the upload step after the model step without the root-only PATH",
+			workflow: mutate(t, acceptedWorkflow,
+				auditModelPathEnv+"        uses: actions/upload-artifact@",
+				"        uses: actions/upload-artifact@"),
+			wantIn: auditModelPath,
+		},
+		{
+			name: "the model job's checkout step without the root-only PATH",
+			workflow: mutate(t, acceptedWorkflow,
+				auditModelPathEnv+"      - name: Download the Go modules\n",
+				"      - name: Download the Go modules\n"),
+			wantIn: auditModelPath,
 		},
 
 		// The model job runs no check, no container and no release code: what it
