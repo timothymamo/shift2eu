@@ -1,6 +1,7 @@
 package site_test
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -261,7 +262,13 @@ func TestInventoryPickerIsHiddenWithoutScript(t *testing.T) {
 // silently lost a command to a truncated extraction fails a check of its own and
 // not only the parity check both sides share. The counts are what the guide holds
 // once a comment heads only the command it describes (review finding 12): the
-// page shows one <pre><code> per command, in the guide's order.
+// page shows one <pre><code> per command, in the guide's order. AWS gained three
+// commands with PRD #571's classification: `opensearch list-domain-names` with the
+// `describe-domains` loop it feeds, `opensearchserverless list-collections` with
+// the `batch-get-collection` loop it feeds, and `kafka list-clusters-v2` (the
+// shape S3's and EKS's list-with-follow-up commands already take). The search and
+// Kafka instance types join the existing "The vCPU and memory of the instance
+// types in use" command, whose jq list reads their calls' output too.
 func TestInventoryCommandsPerStep(t *testing.T) {
 	t.Parallel()
 
@@ -270,7 +277,7 @@ func TestInventoryCommandsPerStep(t *testing.T) {
 		collect int
 		build   int
 	}{
-		{key: "aws", collect: 15, build: 1},
+		{key: "aws", collect: 18, build: 1},
 		{key: "gcp", collect: 11, build: 1},
 		{key: "azure", collect: 8, build: 1},
 	}
@@ -1109,4 +1116,378 @@ func unescapedMarkup(text string) []string {
 	}
 
 	return problems
+}
+
+// awsSearchAndMessagingCalls are the calls the guide's AWS section makes to
+// classify the search and messaging resources of PRD #571, and the only keys
+// each call's --query may name: the list under *Only the fields the program
+// reads*. A key outside its call's list is a field neither the program nor the
+// report reads, which the raw output would then keep in the scratch directory
+// the guide tells the reader to delete.
+var awsSearchAndMessagingCalls = map[string][]string{
+	"aws opensearch list-domain-names": {
+		"DomainNames",
+		"DomainName",
+	},
+	"aws opensearch describe-domains": {
+		"DomainStatusList",
+		"DomainName",
+		"EngineVersion",
+		"ClusterConfig",
+		"InstanceType",
+		"InstanceCount",
+		"ZoneAwarenessEnabled",
+		"MultiAZWithStandbyEnabled",
+		"EBSOptions",
+		"EBSEnabled",
+		"VolumeSize",
+		"EncryptionAtRestOptions",
+		"Enabled",
+	},
+	"aws opensearchserverless list-collections": {
+		"collectionSummaries",
+		"id",
+		"name",
+	},
+	"aws opensearchserverless batch-get-collection": {
+		"collectionDetails",
+		"name",
+		"type",
+		"standbyReplicas",
+	},
+	"aws kafka list-clusters-v2": {
+		"ClusterInfoList",
+		"ClusterName",
+		"ClusterType",
+		"Provisioned",
+		"NumberOfBrokerNodes",
+		"BrokerNodeGroupInfo",
+		"InstanceType",
+		"ClientSubnets",
+		"StorageInfo",
+		"EbsStorageInfo",
+		"VolumeSize",
+		"EncryptionInfo",
+		"EncryptionAtRest",
+		"DataVolumeKMSKeyId",
+		"Serverless",
+		"VpcConfigs",
+		"SubnetIds",
+	},
+}
+
+// awsExcludedKeys are the fields no projection of the search and messaging
+// calls may name (PRD #571, *Only the fields the program reads*): an access
+// policy carries the account's principals, a security option its settings, an
+// endpoint or a bootstrap address a host with the account's name in it.
+var awsExcludedKeys = []string{
+	"AccessPolicies",
+	"AdvancedSecurityOptions",
+	"CognitoOptions",
+	"Endpoint",
+	"Endpoints",
+	"DomainEndpointOptions",
+	"collectionEndpoint",
+	"dashboardEndpoint",
+	"bootstrapAddress",
+	"osProfile",
+	"connectivityEndpoints",
+}
+
+// awsExcludedKeyPrefixes are the fields no projection may name whatever its
+// suffix: a cluster's ZooKeeper connection strings and its broker addresses.
+var awsExcludedKeyPrefixes = []string{"ZookeeperConnectString", "BootstrapBroker"}
+
+// awsSearchAndMessagingCall finds one search or messaging call of an AWS
+// command: `aws <service> <operation>` in the guide's spelling.
+var awsSearchAndMessagingCall = regexp.MustCompile(`aws (?:opensearchserverless|opensearch|kafka) [a-z0-9-]+`)
+
+// quotedString finds a double-quoted string, the only kind a jq projection can
+// hold: the projection itself is the shell's single-quoted argument.
+var quotedString = regexp.MustCompile(`"[^"]*"`)
+
+// identifier finds an identifier of a jq projection.
+var identifier = regexp.MustCompile(`[A-Za-z_][A-Za-z0-9_]*`)
+
+// jqWords are jq's own words, which a projection may use beside the fields it
+// reads: functions and literals are no field of the raw output.
+var jqWords = map[string]bool{
+	"add": true, "and": true, "ascii_downcase": true, "ascii_upcase": true,
+	"del": true, "elif": true, "else": true, "empty": true, "end": true,
+	"endswith": true, "false": true, "first": true, "floor": true,
+	"from_entries": true, "getpath": true, "group_by": true, "gsub": true,
+	"has": true, "if": true, "index": true, "join": true, "keys": true,
+	"last": true, "length": true, "map": true, "map_values": true,
+	"max": true, "min": true, "not": true, "null": true, "or": true,
+	"paths": true, "select": true, "sort": true, "sort_by": true,
+	"split": true, "startswith": true, "sub": true, "test": true,
+	"then": true, "to_entries": true, "tonumber": true, "tostring": true,
+	"true": true, "type": true, "unique": true, "values": true,
+}
+
+// TestInventoryGuideSearchAndKafkaCallsKeepOnlyTheFieldsTheyRead pins the other
+// half of PRD #571's *Only the fields the program reads*: the recorded fixtures
+// hold only that call's fields (`test/examples`, which a fixture cannot pass
+// while the guide's command kept the whole response), and this check reads the
+// guide's own command text, so a command that dropped its projection cannot
+// hide behind a fixture that never held the keys. Every `aws opensearch`,
+// `aws opensearchserverless` and `aws kafka` command has a --query, that
+// --query is a single-quoted projection, and the projection names only the
+// fields the PRD lists.
+func TestInventoryGuideSearchAndKafkaCallsKeepOnlyTheFieldsTheyRead(t *testing.T) {
+	t.Parallel()
+
+	guide := string(readRepositoryFile(t, filepath.Join("docs", "guide", "inventory.md")))
+	seen := map[string]bool{}
+
+	for _, command := range guideCommands(t, guide, guideSources[0]) {
+		for _, call := range awsSearchAndMessagingCallsIn(t, command) {
+			seen[call.name] = true
+
+			allowed := awsSearchAndMessagingCalls[call.name]
+			if allowed == nil {
+				t.Errorf("docs/guide/inventory.md runs %q, a call PRD #571 does not list: the search and Kafka classification is `aws opensearch list-domain-names` and `describe-domains`, `aws opensearchserverless list-collections` and `batch-get-collection`, and `aws kafka list-clusters-v2`\n%s",
+					call.name, command)
+
+				continue
+			}
+
+			for _, key := range projectionKeys(call.query) {
+				if !slices.Contains(allowed, key) {
+					t.Errorf("%q's --query names %q, want only the fields PRD #571 reads of that call (%s): a key the program does not read would keep a field the guide's raw output should drop\n%s",
+						call.name, key, strings.Join(allowed, ", "), command)
+				}
+			}
+
+			for _, excluded := range awsExcludedKeys {
+				if strings.Contains(call.query, excluded) {
+					t.Errorf("%q's --query names %q, want no such field: PRD #571's *Only the fields the program reads* leaves it out of every projection\n%s",
+						call.name, excluded, command)
+				}
+			}
+
+			for _, prefix := range awsExcludedKeyPrefixes {
+				if strings.Contains(call.query, prefix) {
+					t.Errorf("%q's --query names a %s* field, want none: PRD #571's *Only the fields the program reads* leaves ZooKeeper connection strings and broker addresses out of every projection\n%s",
+						call.name, prefix, command)
+				}
+			}
+		}
+	}
+
+	for name := range awsSearchAndMessagingCalls {
+		if !seen[name] {
+			t.Errorf("docs/guide/inventory.md runs no %q, want one: PRD #571's AWS classification reads the search domains, the collections and the Kafka clusters from those five calls", name)
+		}
+	}
+}
+
+// awsCall is one search or messaging call of an AWS command, with the --query
+// projection it passes; the projection is empty when the command passes none.
+//
+// A command is one run of lines, and a call in a pipeline (a list feeding an
+// xargs describe) is a call of its own, so both are read here.
+type awsCall struct {
+	name  string
+	query string
+}
+
+// awsSearchAndMessagingCallsIn returns the search and messaging calls of one
+// AWS command, failing the test when a call passes no --query or passes one
+// that is no single-quoted projection: the page shows the command whole, so a
+// call that kept the whole response would put the response in the scratch
+// directory the guide deletes.
+func awsSearchAndMessagingCallsIn(t *testing.T, command string) []awsCall {
+	t.Helper()
+
+	var calls []awsCall
+
+	for _, location := range awsSearchAndMessagingCall.FindAllStringIndex(command, -1) {
+		name := strings.Join(strings.Fields(command[location[0]:location[1]]), " ")
+
+		rest := command[location[1]:]
+
+		at := strings.Index(rest, "--query")
+		if at < 0 {
+			t.Errorf("%q passes no --query, want an explicit projection that keeps only the fields PRD #571 reads\n%s",
+				name, command)
+
+			calls = append(calls, awsCall{name: name})
+
+			continue
+		}
+
+		projection := strings.TrimLeft(rest[at+len("--query"):], " ")
+
+		if projection == "" || projection[0] != '\'' {
+			t.Errorf("%q's --query is %q, want a single-quoted jq projection such as --query '{...}'\n%s",
+				name, firstLine(projection), command)
+
+			calls = append(calls, awsCall{name: name})
+
+			continue
+		}
+
+		end := strings.Index(projection[1:], "'")
+		if end < 0 {
+			t.Errorf("%q's --query leaves its single quote open, so the check cannot read the projection\n%s", name, command)
+
+			calls = append(calls, awsCall{name: name})
+
+			continue
+		}
+
+		calls = append(calls, awsCall{name: name, query: projection[1 : 1+end]})
+	}
+
+	return calls
+}
+
+// projectionKeys returns the field names a jq projection names: its
+// identifiers, without its double-quoted strings and without jq's own words.
+func projectionKeys(projection string) []string {
+	var keys []string
+
+	for _, key := range identifier.FindAllString(quotedString.ReplaceAllString(projection, ""), -1) {
+		if !jqWords[key] {
+			keys = append(keys, key)
+		}
+	}
+
+	return keys
+}
+
+// firstLine returns the first line of text, for a failure message.
+func firstLine(text string) string {
+	if i := strings.IndexByte(text, '\n'); i >= 0 {
+		return text[:i]
+	}
+
+	return text
+}
+
+// TestInventoryGuideAWSPolicyCoversTheSearchAndKafkaCalls pins the policy the
+// guide tells a reader to create (PRD #571, milestone 2): the search and Kafka
+// calls need their list and describe actions, and the policy names no
+// data-plane or configuration action, which would let its holder read the
+// cluster's data or its credentials instead of its configuration.
+func TestInventoryGuideAWSPolicyCoversTheSearchAndKafkaCalls(t *testing.T) {
+	t.Parallel()
+
+	guide := string(readRepositoryFile(t, filepath.Join("docs", "guide", "inventory.md")))
+	actions := guideAWSPolicyActions(t, guide)
+
+	for _, action := range []string{
+		"es:ListDomainNames",
+		"es:DescribeDomains",
+		"aoss:ListCollections",
+		"aoss:BatchGetCollection",
+		"kafka:ListClustersV2",
+	} {
+		if !slices.Contains(actions, action) {
+			t.Errorf("the guide's AWS policy does not allow %q, want it: PRD #571's classification makes the call that action permits, and the policy is the only permission the guide asks for",
+				action)
+		}
+	}
+
+	for _, action := range actions {
+		if strings.HasPrefix(action, "es:ESHttp") {
+			t.Errorf("the guide's AWS policy allows %q, want no data-plane action: PRD #571 makes no data-plane call, and the action would let its holder read the domain's documents",
+				action)
+		}
+
+		if strings.HasPrefix(action, "kafka-cluster:") {
+			t.Errorf("the guide's AWS policy allows %q, want no data-plane action: PRD #571 makes no data-plane call, and the action would let its holder read and write the cluster's topics",
+				action)
+		}
+
+		if action == "aoss:APIAccessAll" {
+			t.Errorf("the guide's AWS policy allows %q, want no data-plane action: PRD #571 makes no data-plane call", action)
+		}
+
+		if action == "kafka:GetBootstrapBrokers" {
+			t.Errorf("the guide's AWS policy allows %q, want no connection-string action: the program reads no broker address, and PRD #571 keeps one out of every projection",
+				action)
+		}
+
+		if action == "kafka:ListScramSecrets" {
+			t.Errorf("the guide's AWS policy allows %q, want no credentials action: the guide reads no secret, and the program needs none",
+				action)
+		}
+	}
+}
+
+// guideAWSPolicyActions returns the actions of the AWS permissions policy the
+// guide tells a reader to create.
+func guideAWSPolicyActions(t *testing.T, guide string) []string {
+	t.Helper()
+
+	block := fencedBlockAfter(t, guide, "AWS permissions", "json")
+
+	var policy struct {
+		Statement []struct {
+			Action []string `json:"Action"`
+		} `json:"Statement"`
+	}
+
+	if err := json.Unmarshal([]byte(block), &policy); err != nil {
+		t.Fatalf("the guide's AWS permissions policy is not JSON: %v\n%s", err, block)
+	}
+
+	var actions []string
+
+	for _, statement := range policy.Statement {
+		actions = append(actions, statement.Action...)
+	}
+
+	if len(actions) == 0 {
+		t.Fatalf("the guide's AWS permissions policy lists no action, so this check read nothing\n%s", block)
+	}
+
+	return actions
+}
+
+// fencedBlockAfter returns the body of the first fenced block written in the
+// language, under the heading, of a Markdown document.
+func fencedBlockAfter(t *testing.T, document, heading, language string) string {
+	t.Helper()
+
+	lines := strings.Split(document, "\n")
+
+	start := -1
+
+	for i, line := range lines {
+		if headingText(line) == heading {
+			start = i + 1
+
+			break
+		}
+	}
+
+	if start < 0 {
+		t.Fatalf("docs/guide/inventory.md holds no heading %q, so this check read nothing", heading)
+	}
+
+	fence := "```" + language
+
+	var block []string
+
+	inBlock := false
+
+	for _, line := range lines[start:] {
+		trimmed := strings.TrimSpace(line)
+
+		switch {
+		case !inBlock && trimmed == fence:
+			inBlock = true
+		case inBlock && trimmed == "```":
+			return strings.Join(block, "\n")
+		case inBlock:
+			block = append(block, line)
+		}
+	}
+
+	t.Fatalf("docs/guide/inventory.md's %q section holds no closed %s block, so this check read nothing", heading, fence)
+
+	return ""
 }

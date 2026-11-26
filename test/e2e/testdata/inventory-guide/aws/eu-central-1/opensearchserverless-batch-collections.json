@@ -1,0 +1,14 @@
+{
+  "collectionDetails": [
+    {
+      "name": "shop-vectors",
+      "type": "SEARCH",
+      "standbyReplicas": "ENABLED"
+    },
+    {
+      "name": "shop-thumbnails",
+      "type": "VECTORSEARCH",
+      "standbyReplicas": "DISABLED"
+    }
+  ]
+}

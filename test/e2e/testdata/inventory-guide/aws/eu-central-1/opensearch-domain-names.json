@@ -1,0 +1,13 @@
+{
+  "DomainNames": [
+    {
+      "DomainName": "shop-search"
+    },
+    {
+      "DomainName": "shop-logs"
+    },
+    {
+      "DomainName": "shop-legacy-search"
+    }
+  ]
+}

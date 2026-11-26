@@ -342,6 +342,62 @@ func inventoryGuides() []inventoryGuideCase {
 					id: "shop-carts", rawType: "AWS::DynamoDB::Table", category: "unclassified",
 					capabilities: []string{},
 				},
+				// An OpenSearch Service domain on OpenSearch 2.x: three data nodes,
+				// zone awareness, EBS storage and encryption at rest. OpenSearch
+				// Service takes automated snapshots of every domain, so snapshots
+				// holds whatever the settings say (PRD #571).
+				{
+					id: "shop-search", rawType: "AWS::OpenSearchService::Domain", category: "search.opensearch",
+					capabilities: []string{"encryption-at-rest", "node-high-availability", "snapshots", "zone-high-availability"},
+				},
+				// OpenSearch is a fork of Elasticsearch 7.10.2 and keeps its REST
+				// API, so a domain on Elasticsearch_7.* is search.opensearch too.
+				// One node in one zone, unencrypted, keeps only the snapshots every
+				// domain takes.
+				{
+					id: "shop-logs", rawType: "AWS::OpenSearchService::Domain", category: "search.opensearch",
+					capabilities: []string{"snapshots"},
+				},
+				// 7.0 removed mapping types, so a client written against the 6.x API
+				// needs a change before it runs on OpenSearch: a domain before 7.0
+				// stays unclassified, with its own rawType and no capability (PRD
+				// #571, *What counts, and what does not*).
+				{
+					id: "shop-legacy-search", rawType: "AWS::OpenSearchService::Domain", category: "unclassified",
+					capabilities: []string{},
+				},
+				// An OpenSearch Serverless collection speaks the OpenSearch API. A
+				// collection always encrypts, and standby replicas are the node and
+				// zone high availability of a collection with no node the guide can
+				// read; the one without them keeps encryption alone.
+				{
+					id: "shop-vectors", rawType: "AWS::OpenSearchServerless::Collection", category: "search.opensearch",
+					capabilities: []string{"encryption-at-rest", "node-high-availability", "zone-high-availability"},
+				},
+				{
+					id: "shop-thumbnails", rawType: "AWS::OpenSearchServerless::Collection", category: "search.opensearch",
+					capabilities: []string{"encryption-at-rest"},
+				},
+				// A provisioned MSK cluster is Apache Kafka: three brokers in three
+				// client subnets (one subnet per zone), encrypted at rest. Kafka has
+				// no snapshot the capability means, so it carries none.
+				{
+					id: "shop-events-kafka", rawType: "AWS::MSK::Cluster", category: "messaging.kafka",
+					capabilities: []string{"encryption-at-rest", "node-high-availability", "zone-high-availability"},
+				},
+				// An MSK Serverless cluster speaks the Kafka protocol with no broker
+				// the guide can size; it always replicates across zones and always
+				// encrypts.
+				{
+					id: "shop-events-kafka-serverless", rawType: "AWS::MSK::ServerlessCluster", category: "messaging.kafka",
+					capabilities: []string{"encryption-at-rest", "node-high-availability", "zone-high-availability"},
+				},
+				// A Kafka Connect connector is an integration runtime, not a cluster
+				// (PRD #571, *Left out*).
+				{
+					id: "shop-events-connect", rawType: "AWS::KafkaConnect::Connector", category: "unclassified",
+					capabilities: []string{},
+				},
 			},
 			// The storage of an Aurora instance belongs to its cluster, so
 			// rds describe-db-instances gives every Aurora instance
@@ -361,6 +417,19 @@ func inventoryGuides() []inventoryGuideCase {
 				// The NumCacheNodes of a Memcached cluster is the nodes of a cache
 				// the program cannot classify, not a size.
 				"shop-reports-memcached",
+				// A domain before 7.0 stays unclassified, as an instance of an
+				// engine no category serves: the numbers of describe-domains are the
+				// settings of a domain no target serves, not its size.
+				"shop-legacy-search",
+				// An OpenSearch Serverless collection and an MSK Serverless cluster
+				// name no node and no broker: they are billed by usage (OCUs,
+				// partitions and throughput), and a plan-priced category has no
+				// usage path (PRD #571, decided question 3).
+				"shop-vectors",
+				"shop-thumbnails",
+				"shop-events-kafka-serverless",
+				// A Kafka Connect connector is no cluster, so no call sizes it.
+				"shop-events-connect",
 			},
 			sized: []sizeFact{
 				// An m5.large is 2 vCPU and 8 GiB, from ec2 describe-instance-types.
@@ -398,6 +467,17 @@ func inventoryGuides() []inventoryGuideCase {
 				// Regional one and 1 GiB for the One Zone one.
 				{id: "fs-shop-regional", storageGiB: 5},
 				{id: "fs-shop-onezone", storageGiB: 1},
+				// A search domain's data nodes: AWS names an instance type, not a
+				// size, so the guide asks ec2 describe-instance-types for the EC2
+				// type the search type is built on (r6g.large.search -> r6g.large,
+				// 2 vCPU and 16 GiB), and takes count and storage per node from
+				// describe-domains (InstanceCount, EBSOptions.VolumeSize).
+				{id: "shop-search", vcpus: 2, memoryGiB: 16, storageGiB: 100, count: 3},
+				{id: "shop-logs", vcpus: 2, memoryGiB: 16, storageGiB: 50, count: 1},
+				// A provisioned MSK cluster's brokers: kafka.m5.large is the EC2
+				// type m5.large (2 vCPU and 8 GiB), NumberOfBrokerNodes brokers and
+				// the per-broker EBS volume.
+				{id: "shop-events-kafka", vcpus: 2, memoryGiB: 8, storageGiB: 100, count: 3},
 			},
 			// The EKS nodes, the Auto Scaling groups that run them and their
 			// root volumes, and the root volume of an Auto Scaling group's
@@ -432,6 +512,11 @@ func inventoryGuides() []inventoryGuideCase {
 				// A load balancer a Kubernetes cluster created: it goes with
 				// the cluster, as its nodes do.
 				"k8s-shop-ingress",
+				// The AWS Config row of the MSK cluster is no second resource: the
+				// kafka list-clusters-v2 call lists the cluster, under its name, and
+				// the program drops the Config row. Its Config resource ID is the
+				// cluster's ARN, whose last segment is the cluster's UUID.
+				"00000000-0000-0000-0000-000000000000",
 			},
 			absentRawTypes: []string{
 				"AWS::RDS::DBCluster",
@@ -448,6 +533,19 @@ func inventoryGuides() []inventoryGuideCase {
 				"AWS::ECR::ReplicationConfiguration",
 				"AWS::ECR::PullThroughCacheRule",
 				"AWS::ECR::RepositoryCreationTemplate",
+				// AWS Config records a search domain under its own types
+				// (AWS::OpenSearch::Domain and the legacy AWS::Elasticsearch::Domain),
+				// not under the CloudFormation type the service call gives it: the
+				// call classifies the domain, so the Config row is no second
+				// resource (PRD #571, milestone 2).
+				"AWS::OpenSearch::Domain",
+				"AWS::Elasticsearch::Domain",
+				// The parts of a Kafka cluster and of an OpenSearch Serverless
+				// collection are no resources of their own: a configuration is a
+				// setting of a cluster, and a security policy a setting of a
+				// collection (PRD #571, *Left out on the source side*).
+				"AWS::MSK::Configuration",
+				"AWS::OpenSearchServerless::SecurityPolicy",
 			},
 		},
 		{
@@ -946,6 +1044,10 @@ func taxonomyCategories(source string) []string {
 			"serverless.container",
 			"registry.container",
 			"storage.file",
+			// PRD #571's AWS classification: the search domain and collection,
+			// and the Kafka cluster its fixtures record.
+			"search.opensearch",
+			"messaging.kafka",
 		}
 	case "gcp":
 		return []string{
