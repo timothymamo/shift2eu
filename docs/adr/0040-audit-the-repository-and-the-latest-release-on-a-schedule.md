@@ -176,7 +176,8 @@ go only into the encrypted results or an advisory, never into `testdata/`. Fuzzi
 `Fuzz*` targets)" only when the tree holds no committed fuzz target that CI runs too (Decision 5); it
 holds two, both in `internal/adapter/report/htmlreport`'s tests: `FuzzReportEscaping`, the HTML
 reporter's escaping, and, since issue #661, `FuzzInventoryDecoding`, the inventory decoder and every
-accepted inventory's assessment and three reports. Each run fuzzes each for 10 minutes, within the
+accepted inventory's assessment and three reports, with the inventory file's name fuzzed too (issue
+#671). Each run fuzzes each for 10 minutes, within the
 step's at most three targets.
 
 ### The disclosure rules the publish script enforces
@@ -3095,8 +3096,9 @@ which the container is killed and removed.
   *Amended 2026-11-26 (issue #661):* the corpus also holds inputs that **pass** loading and are hostile
   all the same, so the assessment and the renderers are exercised: HTML and Markdown metacharacters in
   the source and in every free-text field (`html-metacharacters.json`, `markdown-metacharacters.json`,
-  beside `markup-injection.json`), every free-text value at `text.MaxLen`, 2048 bytes
-  (`length-limits.json`), look-alike Unicode that `text.Validate` accepts (`unicode-lookalikes.json`)
+  beside `markup-injection.json`), every free-text value exactly `text.MaxLen` (2048) bytes, five of
+  them: the source a run of `s`, the ID a run of `i`, the raw type a run of `<`, the region a run of `|`
+  and the workload a run of backticks (`length-limits.json`), look-alike Unicode that `text.Validate` accepts (`unicode-lookalikes.json`)
   and version 2 numbers at the ends of every range the domain accepts (`number-limits.json`). The first
   audit, run 45844850567 (PR #657), found 31 of its 32 inputs refused at load, so the Markdown and JSON
   renderers had been exercised by one input only; 6 of the 23 committed files now load. Control
@@ -3108,6 +3110,12 @@ which the container is killed and removed.
   each file that loads to goldens under `internal/adapter/report/htmlreport/testdata/hostile-corpus/`,
   which show the escaping. They live in the HTML reporter's tests because
   `web-imported-only-by-the-web-root` refuses an import of it elsewhere outside the web root.
+  *Amended 2026-11-26 (issue #671):* the inventory file's name reaches all three reports too, so
+  `TestHostileInventoryNames` there pins it: hostile names a run accepts (Markdown and HTML
+  metacharacters, look-alike Unicode, a 2048-byte name) are held escaped to goldens under
+  `testdata/hostile-inventory-names/`, and names it refuses (a line break, a bidi override, a zero-width
+  character, an overlong name, path separators, a `</script>` name) fail with
+  `analysis.ErrInvalidReportMeta` before any report byte is written.
 - **Row 14, fuzzing.** The targets are found by reading the tracked `*_test.go` files outside `testdata`
   as text, by their signature alone (`^func Fuzz[A-Z0-9_][A-Za-z0-9_]*\(f \*testing\.F\)`, so a helper
   such as `Fuzzy` is none): nothing is built or run to list them. A target whose package or name has
@@ -3128,7 +3136,10 @@ which the container is killed and removed.
   the same package's tests (`inventorycorpus_test.go`), now fuzzes it, seeded with row 13's corpus and
   the inventory-file adapter's version 1 and version 2 fixtures, which the `git archive` of the tree
   carries into the container: no panic, a controlled refusal, and an accepted inventory that assesses
-  against all three targets and renders as Markdown, JSON and HTML without an error. Each run fuzzes the
+  against all three targets and renders as Markdown, JSON and HTML without an error. *Amended 2026-11-26
+  (issue #671):* it fuzzes the inventory file's name too, seeded with `TestHostileInventoryNames`'
+  names, and decodes each accepted input once, then renders that inventory nine times (three targets,
+  three formats), so a run covers more inputs (363,170 to 1,384,634 executions in 60 seconds). Each run fuzzes the
   two targets for 10 minutes each, within the step's at most three and its 25-minute budget.
 
 **To be checked on the first run** (runbook step 8), besides 5b's list: that cosign v3's

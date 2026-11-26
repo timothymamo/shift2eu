@@ -111,8 +111,10 @@
 //
 // The package's tests also hold the whole assess path against the scheduled
 // security audit's hostile-inventory corpus (docs/adr/0040, issue #661): the
-// inventory decoder's fuzz target FuzzInventoryDecoding, and the corpus's
-// decisions and Markdown, JSON and HTML goldens under testdata/hostile-corpus/.
+// inventory decoder's fuzz target FuzzInventoryDecoding, which fuzzes the
+// inventory file's name too (issue #671), the corpus's decisions and Markdown,
+// JSON and HTML goldens under testdata/hostile-corpus/, and the hostile file
+// names' goldens under testdata/hostile-inventory-names/.
 // They live here because depguard lets no other package's tests import this
 // reporter outside the web root.
 package htmlreport
