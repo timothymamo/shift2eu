@@ -349,6 +349,165 @@ func TestSanitisationProblemsHostNameRule(t *testing.T) {
 			want: nil,
 		},
 		{
+			// A resource type names a kind of resource, never a host: the
+			// provider namespace of Container Apps with "/" and its type
+			// directly after it is Azure's own vocabulary (PRD #552, issue
+			// #610), whatever case it is written in. The rule is the AI
+			// reviewer's scan's (ci/aireview/internal/review/scan.go,
+			// isAzureNamespace), so the fixture check needs no allow list
+			// entry for it.
+			name: "Azure Container Apps resource types",
+			text: `{"type": "Microsoft.App/containerApps", "managed": "microsoft.app/managedenvironments"}`,
+			want: nil,
+		},
+		{
+			// A customer's own host under the .app TLD is still reported: the
+			// rule excuses microsoft.<namespace>/ alone.
+			name: "planted customer host under the app TLD",
+			text: "the storefront answers at shop-corp.app",
+			want: []string{"shop-corp.app"},
+		},
+		{
+			// The rule needs "/" and a resource type right after the
+			// namespace: a bare microsoft.app is the public host of the
+			// provider namespace's owner, and stays reported.
+			name: "Azure namespace with no resource type after it",
+			text: "the type is written microsoft.app in prose",
+			want: []string{"microsoft.app"},
+		},
+		{
+			// So does a deeper name: only a name that is exactly
+			// microsoft.<namespace> is no host, never a name below one.
+			name: "name below the Azure namespace",
+			text: "the type shop.microsoft.app/containerApps is no namespace",
+			want: []string{"shop.microsoft.app"},
+		},
+		{
+			// And so does a name that only ends in the namespace's shape.
+			name: "name that only ends in the Azure namespace",
+			text: "the host xmicrosoft.app/x is no namespace",
+			want: []string{"xmicrosoft.app"},
+		},
+		{
+			// A byte that is no part of a namespace's run right before the run
+			// means the run is the tail of a name that byte belongs to (issue
+			// #610): é is two UTF-8 bytes the run never holds, so
+			// shopémicrosoft.app is a customer's own internationalised host and
+			// the microsoft.app after é is its last labels, not a resource type.
+			name: "Unicode host whose tail reads as an Azure namespace",
+			text: "the orders are at https://shopémicrosoft.app/orders",
+			want: []string{"microsoft.app"},
+		},
+		{
+			// The "//" right before the run is a URL's authority marker, the
+			// one a scheme and a protocol-relative URL write alike, so the name
+			// after it is the URL's host and is reported (issue #610).
+			name: "customer host right after a scheme's authority marker",
+			text: "the payroll rules are at https://microsoft.internal/share/payroll",
+			want: []string{"microsoft.internal"},
+		},
+		{
+			name: "customer host right after a protocol-relative URL's authority marker",
+			text: "the policy is at //Microsoft.corp/wiki",
+			want: []string{"Microsoft.corp"},
+		},
+		{
+			// The "@" right before the run ends a URL's userinfo, so the name
+			// after it is the URL's host and is reported: userinfo is no
+			// delimiter that introduces a resource type (issue #610).
+			name: "customer host right after a URL's userinfo",
+			text: "the payroll rules are at https://svc-user@microsoft.corp/share/payroll",
+			want: []string{"microsoft.corp"},
+		},
+		{
+			// An authority is written with a backslash as well as with a slash
+			// (a request line, a path a Windows tool takes): the name after the
+			// two backslashes is the host, not a resource type (issue #610).
+			name: "customer host right after a backslash authority marker",
+			text: `the wiki is at https:\\microsoft.corp/wiki`,
+			want: []string{"microsoft.corp"},
+		},
+		{
+			name: "customer host right after a bare backslash authority marker",
+			text: `the share is at \\Microsoft.corp/share`,
+			want: []string{"Microsoft.corp"},
+		},
+		{
+			// A scheme the text writes with a single "/" still marks the name
+			// after it as a URL's host: the slash follows the scheme's colon, so
+			// it is no resource id's segment separator (issue #610).
+			name: "customer host right after a single-slash scheme",
+			text: "the payroll is at http:/microsoft.corp/x",
+			want: []string{"microsoft.corp"},
+		},
+		{
+			// A single "/" before the namespace is the separator of an ARM
+			// resource id's segments, not a URL's authority marker, and the
+			// namespace there still starts a resource type: nothing is
+			// reported (issue #610).
+			name: "Azure resource type inside an ARM resource id",
+			text: "/subscriptions/" + dummyGUID + "/resourceGroups/rg-shop/providers/Microsoft.App/containerApps/app-shop",
+			want: nil,
+		},
+		{
+			// A resource type directly after its namespace in an inventory's
+			// JSON is the form PRD #552 added the rule for, and the narrowing
+			// leaves it quiet (issue #610).
+			name: "Azure managed-environment resource type",
+			text: `"type": "microsoft.app/managedenvironments"`,
+			want: nil,
+		},
+		// Regression guards for the allow list of what may come right before
+		// the run (issue #610): every delimiter that introduces a resource type
+		// leaves the namespace quiet, in a guide page, a fixture and an
+		// inventory's JSON alike.
+		{
+			// Start of the text: no delimiter at all before the namespace.
+			name: "Azure resource type at the start of the text",
+			text: "Microsoft.App/containerApps is the type",
+			want: nil,
+		},
+		{
+			// A JSON value's quote.
+			name: "Azure resource type after a JSON value's quote",
+			text: `"type": "Microsoft.App/containerApps"`,
+			want: nil,
+		},
+		{
+			// A Markdown code span's backtick.
+			name: "Azure resource type in a Markdown code span",
+			text: "the type is `Microsoft.App/containerApps` in the guide",
+			want: nil,
+		},
+		{
+			// A Markdown table cell's delimiters.
+			name: "Azure resource type in a Markdown table cell",
+			text: "| Microsoft.App/containerApps |",
+			want: nil,
+		},
+		{
+			// A settings assignment's "=".
+			name: "Azure resource type after an assignment",
+			text: "type=microsoft.app/managedenvironments",
+			want: nil,
+		},
+		{
+			// A single "/" after a path segment separates an ARM resource
+			// id's segments, so the namespace after it still starts a resource
+			// type and is no host name (issue #610).
+			name: "Azure resource type after an ARM id's segment separator",
+			text: "/providers/Microsoft.App/containerApps/app-shop",
+			want: nil,
+		},
+		{
+			// The namespace rule reads only a run that neither starts nor ends
+			// with "." or "-": a run that does is no provider namespace, so the
+			// name inside it is a host and stays reported (issue #610).
+			name: "name that only reads as an Azure namespace after a trim",
+			text: "the host -microsoft.app/x and the dotted Microsoft.App./x are no namespaces",
+			want: []string{"microsoft.app", "Microsoft.App"},
+		},
+		{
 			name: "Go selector in a Go-source fixture",
 			text: "the test calls testing.T",
 			want: nil,

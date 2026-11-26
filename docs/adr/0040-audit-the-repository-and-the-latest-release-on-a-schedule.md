@@ -8,8 +8,8 @@
   `ubuntu-26.04` (2026-11-25); issue #592 amends the model step's permission mode (2026-11-25); issue
   #613 amends the preflight's token-absence call (2026-11-25); issue #615 moves the CLI's working
   directory out of the work area, and issue #614 accepts the CLI's built-in read-only Bash commands
-  (2026-11-25)
-- Date: 2026-11-21, amended 2026-11-22 to 2026-11-25
+  (2026-11-25); issue #632 mints the publish job's App token with no `permission-*` input (2026-11-26)
+- Date: 2026-11-21, amended 2026-11-22 to 2026-11-26
 
 ## Context
 
@@ -239,6 +239,35 @@ write, Issues write and Repository security advisories write**, nothing else: no
 read (the jobs' read-only `GITHUB_TOKEN` reads), no Workflows permission (it can never change
 `.github/workflows/`), no Administration read (scorecard's admin checks are "not run" instead, so no App
 credential reaches the checks job). Its token is minted only in the publish job.
+
+**The token asks for no permission of its own** (issue #632, amended 2026-11-26). The publish job's mint
+step (`actions/create-github-app-token`) passes no `permission-*` input, so the installation token
+inherits exactly the App's grants above (and Metadata read, which every App holds), and no `owner` or
+`repositories` input, so the action scopes it to the current repository alone (its README at the pinned
+commit: "If `owner` and `repositories` are empty, access will be scoped to only the current repository").
+`test/architecture` refuses any `permission-*` input on the step, and any other key but `client-id` and
+`private-key`. The step used to ask for four, `contents`, `pull-requests`, `issues` and `security-events`,
+each `write`; the App has never held Code scanning alerts (`security_events`), and no endpoint of the
+publish program needs it, so the first full run, 45780739586 on 2026-11-26, passed the checks and model
+jobs and failed only at this step ("The permissions requested are not granted to this installation").
+Dropping `security-events` alone would have left the token without Repository security advisories write,
+which the publish program needs for its draft advisories: the action declares no
+`permission-repository-advisories` input (its inputs are generated from GitHub's `app-permissions`
+schema, which has no `repository_advisories` key), and whether the installation-token API accepts the
+undeclared value the action would still forward cannot be checked offline, while a wrong guess costs
+another failed run. **The trade-off:** the token no longer narrows the App's grants, so the App's
+installation permissions are the token's whole bound; a permission added to the App later reaches the
+token at once. Two bounds hold it instead. The first is the App's grants and installation scope, which
+the maintainer re-checks on every run (`docs/dev-environment.md`, the scheduled audit's step 9: the App's
+and the installation's permissions exactly contents, issues, pull_requests and repository_advisories
+write and metadata read, the installation's repository selection `selected` with this one repository),
+not only once at setup (step 1). The second is the publish program's fixed endpoint table
+(`ci/auditpublish/internal/github/endpoints.go`), which every GitHub call of the token's one holder, the
+publish step, is checked against, so a grant the App holds beyond the table's endpoints is never used.
+A possible follow-up, not decided here: once one run can test it, the token could be narrowed again by
+passing `permission-repository-advisories: write` (which the action forwards although it declares no
+such input) with `permission-contents`, `permission-pull-requests` and `permission-issues`, each
+`write`, and the check could go back to an exact allow list of those four inputs.
 
 What those permissions also allow, beyond what the audit needs, and what narrows each:
 
@@ -2830,9 +2859,11 @@ marked latest while the run is under way: the checks job read the tag before it,
 older one and the run fails closed (`ErrResultInvalid`), publishing nothing; the maintainer starts a new
 run, which audits the new release (runbook step 11). gitleaks runs `stdin
 --ignore-gitleaks-allow --redact` over the decrypted result **before** the App token is minted, so a
-result it refuses has no write token minted for it; the App token step has exactly the four
-`permission-*` inputs of Decision 1 (`contents`, `pull-requests`, `issues`, `security-events`, each
-`write`); the publish step alone holds the App's token and `AUDIT_FINGERPRINT_KEY`.
+result it refuses has no write token minted for it; the App token step asks for no `permission-*`
+input, so the token inherits exactly the App's grants of Decision 1, and holds no `owner` or
+`repositories` input, so it is scoped to this repository alone (issue #632, amended 2026-11-26; it held
+four, `contents`, `pull-requests`, `issues` and `security-events`, until the first full run failed on the
+last); the publish step alone holds the App's token and `AUDIT_FINGERPRINT_KEY`.
 
 **Time budget:** checks 180 minutes (340 since review round D of PR 5c, 355 since round E, below), model 120 (its model step 90, around the preflight's 10-minute and
 the audit's 40-minute deadlines), publish 30; every step has its own `timeout-minutes`.
@@ -4051,7 +4082,8 @@ re-reads both on the image it moves to, and the route's guards fail closed if ei
   schedule** (the issue's first plan). Dropped by the maintainer on 2026-11-18. A long-lived VM keeps
   state between runs, and a hostile input that compromised one run could persist into the next; a fresh
   hosted runner per job starts clean. A personal token acts as the maintainer, with the maintainer's
-  reach; an App token minted in the publish job alone has four write permissions and a fixed script.
+  reach; an App token minted in the publish job alone has the App's four write permissions and a fixed
+  script.
   The VM's schedule depends on the Mac and the VM being up; GitHub's does not. And the AI reviewer had
   already built the pattern needed: a `main`-only environment, an App token minted in the workflow, and
   the Claude Code CLI on the subscription. Self-hosted runners were out for the same reason as the VM.

@@ -1,5 +1,5 @@
 {
-  "count": 49,
+  "count": 50,
   "data": [
     {
       "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shop/providers/Microsoft.DBforPostgreSQL/flexibleServers/psql-shop",
@@ -306,6 +306,19 @@
       ],
       "sku": {
         "name": "Enterprise_E10"
+      },
+      "properties": null
+    },
+    {
+      "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shop/providers/Microsoft.Cache/redisEnterprise/redis-shop-enterprise-nozone",
+      "name": "redis-shop-enterprise-nozone",
+      "type": "microsoft.cache/redisenterprise",
+      "kind": "",
+      "location": "westeurope",
+      "zones": null,
+      "sku": {
+        "name": "Enterprise_E10",
+        "capacity": 2
       },
       "properties": null
     },

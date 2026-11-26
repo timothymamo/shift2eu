@@ -451,6 +451,19 @@
       }
     },
     {
+      "id": "redis-shop-enterprise-nozone",
+      "rawType": "Microsoft.Cache/redisEnterprise",
+      "category": "cache.redis",
+      "region": "westeurope",
+      "capabilities": [
+        "encryption-at-rest",
+        "node-high-availability"
+      ],
+      "size": {
+        "count": 2
+      }
+    },
+    {
       "id": "redis-shop-sessions",
       "rawType": "Microsoft.Cache/redis",
       "category": "cache.redis",

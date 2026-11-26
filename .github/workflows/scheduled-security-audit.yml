@@ -1709,7 +1709,10 @@ jobs:
             echo "::error title=Audit publish::gitleaks refused the result: see runbook step 11"
             exit 1
           fi
-      # The audit App's token, minted here alone and narrowed to Decision 1's four permissions.
+      # The audit App's token, minted here alone, for this repository alone (no
+      # owner: or repositories: input). It asks for no permission-* input: the
+      # token inherits exactly the App's installation permissions, which the
+      # App's own setup bounds (ADR 0040, Decision 1; issue #632).
       - name: Mint the audit App's token
         timeout-minutes: 5
         id: app
@@ -1717,10 +1720,6 @@ jobs:
         with:
           client-id: ${{ vars.AUDIT_APP_CLIENT_ID }}
           private-key: ${{ secrets.AUDIT_APP_PRIVATE_KEY }}
-          permission-contents: write
-          permission-pull-requests: write
-          permission-issues: write
-          permission-security-events: write
       - name: Publish the report
         timeout-minutes: 20
         env:

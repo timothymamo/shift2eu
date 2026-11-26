@@ -85,8 +85,10 @@ import (
 //   - Every Go command after the step that runs go mod download carries
 //     GOFLAGS=-mod=readonly GOPROXY=off.
 //   - The generate GitHub App token step is in the publish job alone, pinned to
-//     a commit, with exactly the four permission-* inputs the accepted shape
-//     holds. It runs after the checks job and before the publish step.
+//     a commit, with no permission-* input at all: the installation token
+//     inherits exactly the App's installation permissions, which the App's own
+//     setup pins, and a permission the App does not hold fails the mint (issue
+//     #632). It runs after the checks job and before the publish step.
 //   - The publish job verifies the image's provenance attestation with
 //     gh attestation verify, its --signer-workflow release.yml and its
 //     --source-ref refs/tags/<tag>, before the step that trusts the digest, and
@@ -595,6 +597,10 @@ const (
 		"            --signer-workflow \"${GITHUB_REPOSITORY}/.github/workflows/release.yml\" \\\n" +
 		"            --source-ref \"refs/tags/${tag}\" \\\n" +
 		"            --deny-self-hosted-runners\n"
+	// auditAppPrivateKey is the App token step's private-key input line, the line
+	// the cases that give the step a permission-* input append to: the step asks
+	// for none of its own (issue #632).
+	auditAppPrivateKey = "          private-key: ${{ secrets.AUDIT_APP_PRIVATE_KEY }}\n"
 	// auditAppTokenStep is the publish job's App token step.
 	auditAppTokenStep = "      - name: Mint the audit App's token\n" +
 		"        timeout-minutes: 5\n" +
@@ -602,13 +608,10 @@ const (
 		"        uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3.4.0\n" +
 		"        with:\n" +
 		"          client-id: ${{ vars.AUDIT_APP_CLIENT_ID }}\n" +
-		"          # The App's key, read from the environment alone, and narrowed here to\n" +
-		"          # what ADR 0040's Decision 1 lists.\n" +
-		"          private-key: ${{ secrets.AUDIT_APP_PRIVATE_KEY }}\n" +
-		"          permission-contents: write\n" +
-		"          permission-pull-requests: write\n" +
-		"          permission-issues: write\n" +
-		"          permission-security-events: write\n"
+		"          # The App's key, read from the environment alone. The step asks for no\n" +
+		"          # permission-* input: the token inherits exactly the App's installation\n" +
+		"          # permissions, which the App's own setup pins (issue #632).\n" +
+		auditAppPrivateKey
 	// auditGitleaksStdin is the publish job's second guard: gitleaks over the text
 	// it is about to send, through the stdin subcommand.
 	auditGitleaksStdin = "          gitleaks stdin --ignore-gitleaks-allow --redact --no-banner < \"${RUNNER_TEMP}/result.json\"\n"
@@ -2060,7 +2063,10 @@ func TestAuditWorkflow(t *testing.T) {
 		},
 
 		// The App's token is minted in the publish job alone, from its own client
-		// ID and key, narrowed to exactly the four permissions the ADR lists.
+		// ID and key, and asks for no permission-* input at all: the installation
+		// token inherits exactly the App's installation permissions, which the
+		// App's own setup pins. A permission the App does not hold fails the mint
+		// (run 45780739586), so no permission is asked for here (issue #632).
 		{
 			name:     "no App token step",
 			workflow: withoutStep(auditAppTokenStep),
@@ -2072,14 +2078,52 @@ func TestAuditWorkflow(t *testing.T) {
 			wantIn:   "create-github-app-token@v3.4.0",
 		},
 		{
-			name:     "an extra permission input on the App token",
-			workflow: mutate(t, acceptedWorkflow, "          permission-security-events: write\n", "          permission-security-events: write\n          permission-metadata: read\n"),
-			wantIn:   "permission-metadata",
+			name:     "a security-events permission on the App token",
+			workflow: mutate(t, acceptedWorkflow, auditAppPrivateKey, auditAppPrivateKey+"          permission-security-events: write\n"),
+			wantIn:   "permission-security-events",
 		},
 		{
-			name:     "a missing permission input on the App token",
-			workflow: mutate(t, acceptedWorkflow, "          permission-issues: write\n", ""),
+			// Any value: the permission is refused for being asked for, not for
+			// how much of it the step asks.
+			name:     "a read security-events permission on the App token",
+			workflow: mutate(t, acceptedWorkflow, auditAppPrivateKey, auditAppPrivateKey+"          permission-security-events: read\n"),
+			wantIn:   "permission-security-events",
+		},
+		{
+			name:     "a repository-advisories permission on the App token",
+			workflow: mutate(t, acceptedWorkflow, auditAppPrivateKey, auditAppPrivateKey+"          permission-repository-advisories: write\n"),
+			wantIn:   "permission-repository-advisories",
+		},
+		{
+			name:     "a contents permission on the App token",
+			workflow: mutate(t, acceptedWorkflow, auditAppPrivateKey, auditAppPrivateKey+"          permission-contents: write\n"),
+			wantIn:   "permission-contents",
+		},
+		{
+			name:     "a pull-requests permission on the App token",
+			workflow: mutate(t, acceptedWorkflow, auditAppPrivateKey, auditAppPrivateKey+"          permission-pull-requests: write\n"),
+			wantIn:   "permission-pull-requests",
+		},
+		{
+			name:     "an issues permission on the App token",
+			workflow: mutate(t, acceptedWorkflow, auditAppPrivateKey, auditAppPrivateKey+"          permission-issues: write\n"),
 			wantIn:   "permission-issues",
+		},
+		{
+			// GitHub Actions reads an input's name without regard to case, and the
+			// action upper-cases it into INPUT_PERMISSION-CONTENTS, so this key asks
+			// for the permission just as permission-contents does: it must stay
+			// refused even if yamlread ever takes an upper-case key as written.
+			name:     "an upper-case contents permission on the App token",
+			workflow: mutate(t, acceptedWorkflow, auditAppPrivateKey, auditAppPrivateKey+"          PERMISSION-CONTENTS: write\n"),
+			wantIn:   "PERMISSION-CONTENTS",
+		},
+		{
+			// The same input in another case: the name is read without regard to
+			// case, so Permission-contents asks for the permission too.
+			name:     "a mixed-case contents permission on the App token",
+			workflow: mutate(t, acceptedWorkflow, auditAppPrivateKey, auditAppPrivateKey+"          Permission-contents: write\n"),
+			wantIn:   "Permission-contents",
 		},
 		{
 			name:     "the App token step in the model job",
