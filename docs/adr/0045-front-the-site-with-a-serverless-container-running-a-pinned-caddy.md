@@ -3,7 +3,7 @@
 - Status: Accepted
 - Date: 2026-11-25
 
-Part of [PRD #297](../../prds/297-web-assessment-site.md) milestone 4 (Hosting decisions 1 to 3, as
+Part of [PRD #297](../../prds/done/297-web-assessment-site.md) milestone 4 (Hosting decisions 1 to 3, as
 amended on 2026-11-24). It amends the front of
 [ADR 0042](0042-host-the-site-behind-edge-services-and-deploy-it-from-the-release-with-a-bucket-scoped-key.md)
 (its amendment *A Serverless Container in front of Edge Services* says what changes there) and leaves the

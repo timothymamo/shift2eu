@@ -3,7 +3,7 @@
 - Status: Proposed
 - Date: 2026-11-21
 
-Part of [PRD #297](../../prds/297-web-assessment-site.md) milestone 3, issue #422. It records how the
+Part of [PRD #297](../../prds/done/297-web-assessment-site.md) milestone 3, issue #422. It records how the
 hosting is created; the deploy job, the attestation and the live check get milestone 3's hosting ADR
 ([ADR 0042](0042-host-the-site-behind-edge-services-and-deploy-it-from-the-release-with-a-bucket-scoped-key.md),
 amended in milestone 4), which this one does not replace.

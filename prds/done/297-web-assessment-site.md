@@ -1,6 +1,8 @@
 # PRD #297: shift2eu in the browser at www.shift2eu.com
 
-**Status:** Draft
+**Status:** Complete (milestones 1 to 4 done; the first deploy was v0.16.1, 2026-11-25). Three
+acceptance criteria stay open, each with its reason below: they all wait for the result of the runbook's
+key-limit step (R7), which ADR 0042 does not record yet.
 **Issue:** #297
 
 ## Problem
@@ -164,7 +166,7 @@ release), *live* (checked against the live site) or *review*.
 
 **Layer 2, the browser.**
 
-- [ ] Every page carries a Content Security Policy in a `<meta http-equiv>` element, the first child of
+- [x] Every page carries a Content Security Policy in a `<meta http-equiv>` element, the first child of
   `<head>` (before any `<link>` or `<script>`), with at least: `default-src 'none'`; `script-src 'self'
   'wasm-unsafe-eval'` and nothing else (no `'unsafe-inline'`, no `'unsafe-eval'`, no other host);
   `style-src 'self'`; `img-src 'none'`; `connect-src 'none'` from the first byte; `form-action 'none'`;
@@ -190,9 +192,11 @@ release), *live* (checked against the live site) or *review*.
   `frame-ancestors 'none'`.
   - [x] Milestone 2: the `<meta>` policy of every built page and its static test
     (`test/site`'s `TestContentSecurityPolicyIsExact` and `TestContentSecurityPolicyCheckRejects`).
-  - [ ] Milestone 3: the policy as a header with `frame-ancestors 'none'`, where the host can send it.
+  - [x] Milestone 3: the policy as a header with `frame-ancestors 'none'`, where the host can send it.
     *Amended 2026-11-24:* the host can (Hosting decision 2 as amended); the header comes from the
-    container's server configuration, in milestone 4 (ADR 0045).
+    container's server configuration, in milestone 4 (ADR 0045). *Done in milestone 4:*
+    `infra/site/Caddyfile` sends it, `test/sitefront` pins it, and `www` served it exactly once per
+    response after v0.16.1's deploy (2026-11-25).
 - [x] The site loads no image (*Decided by the orchestrator in review*). `img-src 'none'`, not `'self'`:
   an own-origin image GET carries data in its path or query to the host's logs, the same channel for
   which `connect-src 'self'` is rejected, and a CSP host-source that pins exact paths needs a host,
@@ -296,11 +300,14 @@ release), *live* (checked against the live site) or *review*.
 - [x] No page, stylesheet or script references another origin as a loaded resource (no fonts, images,
   scripts or styles from a third party); links to other sites are plain `<a href>` navigations. A static
   test lists every URL in the built files and fails on a loaded resource that is not the site's own.
-- [ ] *Live:* no response from the site carries `Set-Cookie`.
+- [x] *Live:* no response from the site carries `Set-Cookie`. *Checked live by the maintainer* before
+  the first deploy (runbook R8) and after v0.16.1's (2026-11-25): no `Set-Cookie` on `www`, the apex
+  or a redirect. The automated live checks do not read `Set-Cookie`. The Caddyfile sets none, and
+  `test/sitefront` holds what it sends.
 
 **Privacy statement.**
 
-- [ ] A privacy page, linked from every page, says what the site is built to do and what checks it: the
+- [x] A privacy page, linked from every page, says what the site is built to do and what checks it: the
   assessment runs in the browser and the page's code sends nothing (layer 1, with its static test); the
   browser refuses connections and third-party resources (layer 2, with its CSP test and smoke test); the
   deployed files are the attested ones (layer 3); no cookies, storage, analytics or third-party resources.
@@ -318,7 +325,7 @@ release), *live* (checked against the live site) or *review*.
   uploaded at a new path with a leaked key is not detected by them (*Layer 3*); a user who must not
   trust the host can run the attested bundle locally (layer 3), which runs unchanged on any origin.
   *Review:* each statement names the tested criterion that backs it, and none rests on review alone.
-- [ ] The privacy page states the first-visit downgrade risk next to its "nothing leaves the browser"
+- [x] The privacy page states the first-visit downgrade risk next to its "nothing leaves the browser"
   statement, not only on the verification page, until `shift2eu.com` is on the HSTS preload list in
   shipping browsers: HSTS on `www.shift2eu.com` protects only a browser that has already visited it over
   HTTPS, so on a first visit, or a visit that starts at `http://shift2eu.com` (answered by the apex
@@ -335,8 +342,10 @@ release), *live* (checked against the live site) or *review*.
   in the same commit; the live check (*Layer 3* and milestone 4) refuses the removal before then.
   - [x] Milestone 2: the statement, its static test (`test/site`'s `TestDowngradeRiskIsShown`) and the
     browser test (`test/browser`'s `TestPrivacyAndVerificationPages`).
-  - [ ] Milestone 4: the live check that refuses the statement's removal before preload is live.
-- [ ] If milestone 4's HSTS outcome is recorded as `waived` (*Layer 3*, the HSTS record
+  - [x] Milestone 4: the live check that refuses the statement's removal before preload is live
+    (`KindStatement`, in the release's check since milestone 3, passed after v0.16.1's deploy, and in the
+    scheduled check, `.github/workflows/site-check.yml`).
+- [x] If milestone 4's HSTS outcome is recorded as `waived` (*Layer 3*, the HSTS record
   `site/records/hsts.json`), the privacy page and the site's verification page also carry a statement
   with the marker `id="hsts-waived"`, shown by default, saying that without HSTS the downgrade risk also
   covers returning visitors, not only a first visit. A static test reads the HSTS record and fails when
@@ -351,11 +360,12 @@ release), *live* (checked against the live site) or *review*.
   - [x] Milestone 3: the release's live check (`ci/sitecheck/internal/livecheck`, `KindStatement`)
     enforces `hsts-waived` on both deployed pages when the record says waived and `downgrade-risk` on the
     privacy page unless the site counts as preloaded, and fails safe on a missing or unreadable record.
-  - [ ] Milestone 4: the scheduled live check doing the same.
+  - [x] Milestone 4: the scheduled live check doing the same (`.github/workflows/site-check.yml` runs
+    the same `ci/sitecheck` against the live release's manifest and the records at `main`).
   - [x] Milestone 4: the record itself: `site/records/hsts.json` (`met`, preload not pursued) and
     `site/records/preload.json` (not listed, not submitted), 2026-11-25 (ADR 0042, *The HSTS and preload
     records*).
-- [ ] The privacy page names the apex redirect's provider (chosen in milestone 4), says what it sees of a
+- [x] The privacy page names the apex redirect's provider (chosen in milestone 4), says what it sees of a
   visitor who enters through `shift2eu.com` (IP address, user agent, the requested path and the
   `Referer`), and that it only serves the redirect and never the site or the inventory. *Review* at
   milestone 4, when the provider is known. *Amended 2026-11-24:* the provider is Scaleway, whose
@@ -419,7 +429,7 @@ release), *live* (checked against the live site) or *review*.
     privacy page lacks the `downgrade-risk` statement while the domain is not on the preload list in
     shipping browsers; without a preload record saying it is, the check assumes it is not, so it fails
     safe.
-- [ ] *Live:* a scheduled workflow repeats that check (the manifest including the HTML, `/` against
+- [x] *Live:* a scheduled workflow repeats that check (the manifest including the HTML, `/` against
   `index.html`, the service-worker paths, the HTML's `Cache-Control`, the redirects, both certificates'
   validity and expiry, and HSTS against the recorded state) at least daily. Its expected version is the
   highest release tag on `main` (the deploy's `latest` rule, *Deploy*). The live version, read from the
@@ -461,15 +471,20 @@ release), *live* (checked against the live site) or *review*.
   listed tag, and a failure on a missing, unparseable or unknown version). The check's program,
   shared by the release's check and the scheduled one, is CI tooling under `ci/`, standard library only,
   with depguard rules of its own, like `ci/aireview` (ADR 0033).
-- [ ] The checks compare only what the manifests name, `/`, and the service-worker paths: a path added
+  *Done in milestone 4:* `.github/workflows/site-check.yml` runs daily, the window's bound is 180
+  minutes, pinned by `check.SiteCheckWindow` against `check.MinSiteCheckWindow` (165 minutes today),
+  and `check.SiteCheckWorkflow` holds the workflow (ADR 0043, *Amendment: the scheduled check*).
+- [x] The checks compare only what the manifests name, `/`, and the service-worker paths: a path added
   outside every release's manifest (such as a look-alike page at a new path, uploaded with a leaked key)
   is not detected by them. Milestone 3's hosting ADR
-  ([ADR 0042](../docs/adr/0042-host-the-site-behind-edge-services-and-deploy-it-from-the-release-with-a-bucket-scoped-key.md))
+  ([ADR 0042](../../docs/adr/0042-host-the-site-behind-edge-services-and-deploy-it-from-the-release-with-a-bucket-scoped-key.md))
   and the privacy page say so. Milestone 3 checks
   whether the deploy job's key can hold `ListBucket` on the site's bucket (*To be checked by the
   maintainer*); if it can, the deploy program lists the bucket before it uploads and fails on any key
   that is in no release's manifest, so such a path is found at the next release (the scheduled check
   holds no secret and does not list).
+  *Decided 2026-11-25/26 (ADR 0042):* the maintainer keeps `-list-bucket` off, so the deploy does not
+  list the bucket. ADR 0042 and the privacy page state the residual.
 - [x] The release verification guide (`docs/guide/verify-releases.md`) documents the same check as
   commands a user can run (`gh attestation verify` on the bundle with `--signer-workflow`,
   `--source-ref refs/tags/<tag>` and `--deny-self-hosted-runners`, then fetching each file of its manifest
@@ -517,7 +532,7 @@ release), *live* (checked against the live site) or *review*.
   a forged higher version cannot block the redeploy that repairs the site (Hosting decision 5). The
   fake-object-store test (below) pins both cases: the refusal for a genuine higher release, and the
   overwrite with its warning for each untrusted case.
-- [ ] The `site` environment holds the Scaleway API key as the environment secrets `SCW_ACCESS_KEY` and
+- [x] The `site` environment holds the Scaleway API key as the environment secrets `SCW_ACCESS_KEY` and
   `SCW_SECRET_KEY`, never at repository level or in another environment. Its deployment policy is exactly
   one custom policy of type `tag`, named `v*.*.*`; the `v*` tag rulesets that the `release-tag` skill
   already checks are what let only the release-tag App create such a tag (ADR 0021).
@@ -526,6 +541,8 @@ release), *live* (checked against the live site) or *review*.
   (runbook and Hosting decision 5). The bucket policy allows that application only the object writes and
   reads the deploy needs. The key has an expiry date, and the runbook has a rotation step. *Review:* the
   runbook's policies are checked against Scaleway's permission sets.
+  *Open:* the key works for the deploy (v0.16.1), but only R7's probes show that it can do nothing
+  more, and ADR 0042's R7 table still reads "to be recorded".
 - [x] The `release-tag` skill's step 2 checks the `site` environment: `custom_branch_policies` `true` and
   `protected_branches` `false`; `deployment-branch-policies` lists exactly `tag v*.*.*` (type `tag`, so a
   branch named like a tag is not allowed); its secrets are `SCW_ACCESS_KEY` and `SCW_SECRET_KEY`; and
@@ -564,14 +581,14 @@ release), *live* (checked against the live site) or *review*.
   marker (the element id `loading-notice`); a static test of the built assessment page fails when it is
   missing, empty or hidden (*Hidden* as the *Privacy statement* defines it). *Browser:* the notice is
   replaced after instantiation.
-- [ ] The module script, the page script, `wasm_exec.js` and the stylesheet are served under
+- [x] The module script, the page script, `wasm_exec.js` and the stylesheet are served under
   content-addressed names with `Cache-Control: public, max-age=31536000, immutable`; the HTML pages with
   `max-age=300` or less, so a release shows within minutes without a cache purge. Scaleway's
   documentation says an object's caching directive takes precedence over the pipeline's cache lifetime
   ([cache](https://www.scaleway.com/en/docs/edge-services/how-to/configure-cache/)); *live:* the release's
   site check and the scheduled one read these headers and the `Age` of the HTML, and fail on an HTML
   `max-age` above 300 (*Layer 3*).
-- [ ] *Live:* the module script is served with `Content-Type: text/javascript` and, if Scaleway serves
+- [x] *Live:* the module script is served with `Content-Type: text/javascript` and, if Scaleway serves
   it so (Hosting decision 4), `Content-Encoding: gzip`. If it cannot, a second test also holds the
   uncompressed module script to a budget set in milestone 3's ADR.
 - [x] *Browser:* once loaded, the page runs an assessment with the network disabled.
@@ -630,10 +647,13 @@ release), *live* (checked against the live site) or *review*.
   fails on `net`, `net/http`, `os/exec` or a cloud SDK in its dependency tree.
 - [x] CLAUDE.md's layer table names `internal/web` among the driving adapters, `cmd/shift2eu-web` among
   the composition roots and `htmlreport` among the adapters, and `docs/architecture.md` describes them.
-- [ ] *Review:* the use cases, the target adapters, the inventory reader and the Markdown and JSON
+- [x] *Review:* the use cases, the target adapters, the inventory reader and the Markdown and JSON
   reporters are reused unchanged; the CLI's and the HTTP API's output do not change. Option parsing that
   the CLI and the web share moves out of `internal/cli` only into a layer both may import (the
-  application layer), with the CLI's output unchanged.
+  application layer), with the CLI's output unchanged. *Reviewed:* the shared option rules are in
+  `internal/app/analysis` (`options.go`, `choices.go`), and `internal/web` and `internal/cli` import
+  only it, the domain and `internal/version`. Wire's parity tests pin the CLI's output, and the HTTP API
+  is retired (ADR 0037).
 
 ### Testing and tooling
 
@@ -655,7 +675,7 @@ release), *live* (checked against the live site) or *review*.
 ### Runbook
 
 - [ ] A one-time runbook for the maintainer, written in milestone 3 and followed in milestone 4
-  ([docs/site-runbook.md](../docs/site-runbook.md), [ADR 0039](../docs/adr/0039-create-the-sites-scaleway-hosting-with-opentofu.md), issue #422).
+  ([docs/site-runbook.md](../../docs/site-runbook.md), [ADR 0039](../../docs/adr/0039-create-the-sites-scaleway-hosting-with-opentofu.md), issue #422).
   **OpenTofu creates** the Scaleway side from `infra/site/`: the project that holds only the site's
   bucket, the bucket with versioning, its website setting and its bucket policy, the IAM application and
   its policy, the Edge Services Starter plan, its one pipeline, its cache and `www.shift2eu.com` with a
@@ -689,11 +709,13 @@ release), *live* (checked against the live site) or *review*.
   Services cache purge by the maintainer (Hosting decision 5); and how to re-enable the scheduled live
   check's workflow if GitHub has disabled its schedule (*Layer 3*).
 
-  The runbook is in [docs/site-runbook.md](../docs/site-runbook.md): steps R0 to R14, each a command
-  block with its `PASS` and `FAIL` lines.
-  - [x] Milestone 3: written ([docs/site-runbook.md](../docs/site-runbook.md)).
-  - [ ] Milestone 4: followed.
-- [ ] The runbook has a step (R7, [docs/site-runbook.md](../docs/site-runbook.md)), run once the key exists, that verifies the key's limits rather than only
+  The runbook is in [docs/site-runbook.md](../../docs/site-runbook.md): steps R0 to R15, each a command
+  block with its `PASS` and `FAIL` lines (R15, the scheduled check's label and re-enabling, added in
+  milestone 4).
+  - [x] Milestone 3: written ([docs/site-runbook.md](../../docs/site-runbook.md)).
+  - [ ] Milestone 4: followed. *Open:* every step was followed for the first deploy (2026-11-24 to 26)
+    except R7, whose result is not recorded (below). R15 runs once this workflow is on `main`.
+- [ ] The runbook has a step (R7, [docs/site-runbook.md](../../docs/site-runbook.md)), run once the key exists, that verifies the key's limits rather than only
   reviewing them. With the deploy key, against a canary object under a prefix the site never serves,
   every write action in Scaleway's bucket-policy action list
   ([bucket policies](https://www.scaleway.com/en/docs/object-storage/api-cli/bucket-policy/)) and every
@@ -740,7 +762,8 @@ release), *live* (checked against the live site) or *review*.
   step; the maintainer runs it in milestone 4 and again after every key rotation and every change to the IAM or bucket policy, and its result is
   recorded in milestone 3's hosting ADR (amended in milestone 4).
   - [x] Milestone 3: the step written (R7).
-  - [ ] Milestone 4: run, its result in ADR 0042.
+  - [ ] Milestone 4: run, its result in ADR 0042. *Open:* ADR 0042's R7 table still reads "to be
+    recorded"; the per-probe results are not in the first deploy's notes.
 
 ## Milestones
 
@@ -773,7 +796,7 @@ security audit (`security-audit` skill), since every one of them touches the tru
    HSTS record read as not waived) and `loading-notice` markers, links resolve, the verification
    page's link to the guide's path, no third-party resource, contrast), the reproducibility test, and
    the `chromedp` smoke test with `make test-browser` and its CI job. `chromedp` is a new dependency with its reason in the commit
-   message (CLAUDE.md rule 6). An ADR ([0036](../docs/adr/0036-hold-the-site-to-three-trust-layers-and-test-them-in-a-headless-browser.md)) records the site's trust model (its three layers and how each of
+   message (CLAUDE.md rule 6). An ADR ([0036](../../docs/adr/0036-hold-the-site-to-three-trust-layers-and-test-them-in-a-headless-browser.md)) records the site's trust model (its three layers and how each of
    the three scripts is held, the CSP with `connect-src 'none'` and `img-src 'none'` (no image, no CSS
    `url()`, icons as inline SVG, no favicon, and the browser's own `/favicon.ico` request as a fixed URL
    that carries no page data), `worker-src 'none'` and why the fallback matters (without it CSP Level 3
@@ -789,13 +812,13 @@ security audit (`security-audit` skill), since every one of them touches the tru
    and the browsers that do not enforce `require-trusted-types-for`, no storage, the one download path,
    the service-worker unregister, how the report is inserted and why it carries no inventory-derived
    `id` or `name`) and the headless-browser test. Depends on 1.
-3. [ ] **Release, attestation and deploy.** The bundle built, tested in the browser, attested and
+3. [x] **Release, attestation and deploy.** The bundle built, tested in the browser, attested and
    published by `release.yml`; the deploy program and the `site` deploy job behind `SITE_DEPLOY_ENABLED`
    and `latest`; the live site check and its program under `ci/`; `check.ReleaseWorkflow` and the CI dry
    run; the `release-tag` skill's step 2 for the `site` environment and its post-release check;
    `docs/guide/verify-releases.md`; `infra/site/`, the OpenTofu configuration of the site's Scaleway
    hosting, with its offline checks (`make infra-check`; ADR 0039, issue #422); the runbook. An ADR
-   ([ADR 0042](../docs/adr/0042-host-the-site-behind-edge-services-and-deploy-it-from-the-release-with-a-bucket-scoped-key.md))
+   ([ADR 0042](../../docs/adr/0042-host-the-site-behind-edge-services-and-deploy-it-from-the-release-with-a-bucket-scoped-key.md))
    records the hosting, the deploy (environment, key
    scope, upload order, cache headers, the rollback guard that trusts only a genuine higher release,
    recovery by a redeploy of the last good release or a version rollback plus a manual cache purge,
@@ -812,7 +835,7 @@ security audit (`security-audit` skill), since every one of them touches the tru
    hold `ListBucket`, the deploy's listing of the bucket); and the result of the runbook's key-limit
    step. Releases cut after this merge skip the deploy, and its live check, visibly until the variable
    is set. Depends on 2.
-4. [ ] **First deploy and the privacy statement live.** After the maintainer has followed the runbook and
+4. [x] **First deploy and the privacy statement live.** After the maintainer has followed the runbook and
    settled the items left to check for this milestone (*To be checked by the maintainer*: how the apex
    redirect is served over valid HTTPS, Edge Services' response headers and redirects, HSTS and preload;
    the first two answered on 2026-11-24 by Hosting decisions 1 to 3 as amended),
@@ -1079,7 +1102,7 @@ it. Decision 4 is amended by the orchestrator's decision above.
    (*Decided by the maintainer*). Asking Scaleway support about an apex on Edge Services is no longer
    needed. Milestones 1 to 3 do not depend on how the apex redirect is served; milestone 4 does.
    *Amended 2026-11-24 by the maintainer (Option 1a,
-   [ADR 0045](../docs/adr/0045-front-the-site-with-a-serverless-container-running-a-pinned-caddy.md)):*
+   [ADR 0045](../../docs/adr/0045-front-the-site-with-a-serverless-container-running-a-pinned-caddy.md)):*
    Scaleway support (ticket #1639626) answered that Edge Services always answers plain HTTP with a 302,
    cannot turn plain HTTP off and cannot set response headers, so it cannot meet decision 3 or the HSTS
    go/no-go. **Both `www.shift2eu.com` and `shift2eu.com` are now served by one public Scaleway Serverless
@@ -1109,7 +1132,7 @@ it. Decision 4 is amended by the orchestrator's decision above.
    then to `https://www.shift2eu.com`. `includeSubDomains` binds every present and future subdomain of
    `shift2eu.com` to HTTPS, and pursuing preload is effectively irreversible (removal takes months to
    reach shipping browsers); milestone 3's hosting ADR
-   ([ADR 0042](../docs/adr/0042-host-the-site-behind-edge-services-and-deploy-it-from-the-release-with-a-bucket-scoped-key.md),
+   ([ADR 0042](../../docs/adr/0042-host-the-site-behind-edge-services-and-deploy-it-from-the-release-with-a-bucket-scoped-key.md),
    as amended in milestone 4) records that and the
    subdomains that exist when preload is submitted. Milestone 4 records the HSTS outcome (`met` or
    `waived`) and whether preload is pursued in `site/records/hsts.json`, which the live checks read
@@ -1154,7 +1177,7 @@ it. Decision 4 is amended by the orchestrator's decision above.
 4. **Decided: the module script is uploaded pre-compressed with `Content-Encoding: gzip`** if Edge
    Services serves it with that header and `Content-Type: text/javascript`; otherwise it is served
    uncompressed, the uncompressed size is held to a budget too (milestone 3's ADR,
-   [ADR 0042](../docs/adr/0042-host-the-site-behind-edge-services-and-deploy-it-from-the-release-with-a-bucket-scoped-key.md)), and TinyGo is
+   [ADR 0042](../../docs/adr/0042-host-the-site-behind-edge-services-and-deploy-it-from-the-release-with-a-bucket-scoped-key.md)), and TinyGo is
    reconsidered only if that budget fails. *Amended 2026-11-19 by the orchestrator's decision above:*
    this decision first named the module itself, served with `Content-Type: application/wasm`; the module
    is now embedded in a script, so no file is served as `application/wasm` and nothing compiles while
@@ -1180,7 +1203,7 @@ it. Decision 4 is amended by the orchestrator's decision above.
    whatever version it claims, is overwritten with a warning, *Deploy*) or, with versioning, a version
    rollback of the four pages, `LICENSE`, `NOTICE` and `manifest.json` with the maintainer's own key,
    which after the window is the way back to the last good release unless a new release is cut with a
-   `Release-As:` footer ([docs/site-runbook.md](../docs/site-runbook.md), R12), either followed by a manual Edge Services cache purge by the maintainer, whose own
+   `Release-As:` footer ([docs/site-runbook.md](../../docs/site-runbook.md), R12), either followed by a manual Edge Services cache purge by the maintainer, whose own
    credentials hold the Edge Services permission the deploy key lacks. Browsers may keep a
    released page served from a poisoned cache for up to its `max-age` (300 seconds) after that. A page
    uploaded with the leaked key is not bound by that: it sets its own caching (up to a year) and can
@@ -1191,7 +1214,7 @@ it. Decision 4 is amended by the orchestrator's decision above.
    answers 200 (*Layer 3*). A page uploaded at a path outside every manifest is not detected by the live
    checks; if the key can hold `ListBucket`, the deploy fails on such a key at the next release. The
    privacy page, the verification guide and milestone 3's hosting ADR
-   ([ADR 0042](../docs/adr/0042-host-the-site-behind-edge-services-and-deploy-it-from-the-release-with-a-bucket-scoped-key.md))
+   ([ADR 0042](../../docs/adr/0042-host-the-site-behind-edge-services-and-deploy-it-from-the-release-with-a-bucket-scoped-key.md))
    say so.
 6. **Decided: Chromium for the smoke test is the `chromedp/headless-shell` container image, pinned by
    digest** with a `# renovate: datasource=docker` comment, run by the CI job and in the Lima VM's
@@ -1260,7 +1283,7 @@ it. Decision 4 is amended by the orchestrator's decision above.
     enabling bucket website applies a default policy that makes every object public
     ([bucket website](https://www.scaleway.com/en/docs/object-storage/how-to/use-bucket-website/)); what
     the backend needs is to be checked for milestone 3, and the ADR records which rule applies.
-    *Outcome (2026-11-21, [ADR 0039](../docs/adr/0039-create-the-sites-scaleway-hosting-with-opentofu.md)):*
+    *Outcome (2026-11-21, [ADR 0039](../../docs/adr/0039-create-the-sites-scaleway-hosting-with-opentofu.md)):*
     no principal stands for Edge Services, so no grant can name it; the backend reads the bucket in
     website mode, where the documentation says the objects can stay private. The private rule is tried
     first: `infra/site`'s `public_read` defaults to `false`, so the bucket policy grants `*` nothing, and
@@ -1269,7 +1292,7 @@ it. Decision 4 is amended by the orchestrator's decision above.
     grant on the site's objects only, and the bucket website endpoint and the bucket's S3 endpoints
     serve the site's files too. R5 checks each origin over HTTPS and plain HTTP, and its result is
     recorded in milestone 3's hosting ADR
-    ([ADR 0042](../docs/adr/0042-host-the-site-behind-edge-services-and-deploy-it-from-the-release-with-a-bucket-scoped-key.md);
+    ([ADR 0042](../../docs/adr/0042-host-the-site-behind-edge-services-and-deploy-it-from-the-release-with-a-bucket-scoped-key.md);
     ADR 0039, open point 8).
     *Amended 2026-11-24 (decision 1 as amended):* the container's own endpoint
     `<namespace>-<name>.functions.fnc.<region>.scw.cloud` is a further origin, but it serves no site: its
@@ -1358,7 +1381,8 @@ Facts still unknown, each with the milestone that needs it. None blocks mileston
   - The scheduled check's version window (*Layer 3*): its bound, from the tagged commit's committer
     date, at least release-please's merge-to-tag delay (its `release-please` and `tag` jobs' timeouts)
     plus `release.yml`'s timeout (set in milestone 3) plus the HTML's `max-age`, with a margin for
-    queueing.
+    queueing. *Set 2026-11-26:* 180 minutes, against a floor of 165 today (30 + 130 + 5; ADR 0043,
+    *Amendment: the scheduled check*).
   - The records' release (*Runbook*): the version the records PR's `Release-As` footer names, picked
     when approving it and written into its squash commit's message when merging.
   - CAA and DNSSEC (decision 10): that Scaleway's managed issuance passes with the CAA record, and that

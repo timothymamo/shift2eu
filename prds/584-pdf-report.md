@@ -5,7 +5,7 @@
 
 ## Problem
 
-The site (PRD #297, [prds/297-web-assessment-site.md](297-web-assessment-site.md)) shows the assessment in
+The site (PRD #297, [prds/done/297-web-assessment-site.md](done/297-web-assessment-site.md)) shows the assessment in
 the page and offers two downloads: the Markdown report and the versioned JSON report, byte for byte what
 `shift2eu assess --format markdown` and `--format json` write. Neither works well for the person the site
 is for: someone evaluating a move from AWS, Azure or GCP to OVHcloud, Scaleway or UpCloud. They want a

@@ -3,7 +3,7 @@
 - Status: Proposed
 - Date: 2026-11-23
 
-Part of [PRD #297](../../prds/297-web-assessment-site.md) milestone 3. It records the hosting, the deploy,
+Part of [PRD #297](../../prds/done/297-web-assessment-site.md) milestone 3. It records the hosting, the deploy,
 the bundle's attestation, the HSTS and preload records' format, the origins and the leaked-key residuals.
 [ADR 0039](0039-create-the-sites-scaleway-hosting-with-opentofu.md) records how the hosting is created;
 this one records how the site is served and deployed on it. Milestone 4 amends it with what only the live
