@@ -27,6 +27,9 @@ func TestBuildPromptKeepsThePullRequestsDataUntrusted(t *testing.T) {
 		SecurityAuditSkill: "SECURITY-AUDIT-MARKER: what to audit",
 	}
 
+	// The body's closing tag is a planted injection for the prompt-injection
+	// tests (ADR 0033), never an instruction to the reader: it tries to end the
+	// untrusted section early.
 	pr := review.PullRequest{
 		Number:  7,
 		Title:   "PR-TITLE-MARKER: add x",
