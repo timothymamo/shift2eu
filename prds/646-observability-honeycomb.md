@@ -1,6 +1,6 @@
 # PRD #646: Observability of the agent setup with Honeycomb
 
-**Status:** Draft
+**Status:** Draft; all 12 decisions accepted by the maintainer, 2026-11-26
 **Issue:** #646
 
 ## Problem
@@ -45,7 +45,7 @@ prompt, file content, tool argument, e-mail address or local path leaves the mac
 | Taxonomy categories | None | All |
 | Machines | The Lima VM `shift2eu`; as an option, its Mac host (the Mini) and Lima's own processes | The admin machine (`mac-mini-home`), the maintainer's other Macs, Scaleway's site hosting (`infra/site`) |
 | Signals | The deck's traces and warning logs; Claude Code's metrics and events; Pi's usage logs; `dot-agent-deck-collector`'s per-run metrics; host metrics of the VM (and, optional, the Mac) | Claude Code's beta tracing; any content switch; the deck's local debug log |
-| CI | The deck's own `agent.ci` spans (CI time as the deck sees it) | GitHub Actions traces, and anything sent from the scheduled audit, the release or any other workflow: the CI's data stays in GitHub (decision 3) |
+| CI | The deck's own `agent.ci` spans (CI time as the deck sees it); as an option (M6), job and step timings pulled from GitHub's Actions API by a job on the VM | Anything sent from GitHub Actions, the scheduled audit, the release or any other workflow, and any change to a workflow file (decision 3) |
 | Backend | Honeycomb, free plan, one environment | Paid plans, a self-hosted backend, a second vendor |
 
 The product (`shift2eu` and the site) gains no telemetry: nothing here touches `cmd/`, `internal/` or
@@ -190,7 +190,7 @@ tools can read it (`/proc/self/environ` is denied, a child's `env` is denied, bu
 process all the same). Nothing can drop an attribute, so `user.email` and the account ids reach
 Honeycomb. Host metrics need a collector anyway.
 
-**Option B: a local OpenTelemetry Collector (recommended).** `otelcol-contrib`, pinned by version and
+**Option B: a local OpenTelemetry Collector (accepted, decision 2).** `otelcol-contrib`, pinned by version and
 SHA-256 with a Renovate comment like every other pin in `dev/lima.yaml`, runs on the VM and:
 
 - receives OTLP over HTTP on `127.0.0.1:4318` only (traces, metrics and logs, protobuf and JSON);
@@ -213,7 +213,7 @@ it with the maintainer's key and spend the free plan's quota (the 10-day throttl
 do the same with the key under option A, so B adds no new writer; the usage trigger of milestone 5 is
 what catches it, and the Collector's `memory_limiter` and batch limits cap the rate.
 
-**Recommendation: B**, run as a **system** service under a dedicated system user (`otelcol`), with the key
+**Accepted by the maintainer, 2026-11-26: B**, run as a **system** service under a dedicated system user (`otelcol`), with the key
 in a root-owned file only that user can read (`/etc/shift2eu/otelcol.env`, `root:otelcol`, mode 0640).
 The agents run as the VM user, so the key is outside their files and their processes' environment. The VM
 user's passwordless sudo means this keeps an agent from the key by rule and by accident, not against an
@@ -300,6 +300,8 @@ does not reach resource attributes or span events). `test/devenv` checks both le
   Collector's config, that the deny rules cover the new file in both agents.
 - `.claude/settings.json`, `.pi/deny-env-printing.json`, `CLAUDE.md` rule 3: the new deny rules.
 - `docs/observability-queries.md` (milestone 5): the saved queries and boards.
+- Milestone 6 (optional): the VM job that pulls the Actions API's run, job and step timings, its unit and
+  its read-only token's place on the VM, settled in an ADR of its own. No workflow file changes.
 
 ## Acceptance criteria
 
@@ -330,7 +332,8 @@ does not reach resource attributes or span events). `test/devenv` checks both le
 
 ## Milestones
 
-Each ships as one PR, smallest first. Milestones 2 to 4 each add a signal, so each can be stopped after.
+Each ships as one PR, smallest first. Milestones 2 to 4 and 6 each add a signal, so each can be stopped
+after.
 
 1. [ ] **M1: the local Collector, the deck and the agents.** ADR; `otelcol-contrib` pinned and
    provisioned as the `otelcol` system service with the OTLP receiver, the trim, batching and the
@@ -379,23 +382,50 @@ Each ships as one PR, smallest first. Milestones 2 to 4 each add a signal, so ea
    - M5.1 Each query in the doc runs as written against a week of data.
    - M5.2 The trigger fires in a test (a threshold set low for a minute) and is then set to 80 % of the
      daily target.
+6. [ ] **M6 (optional): CI job and step timings, pulled from GitHub's API on the VM.** Pull, not push
+   (decision 3): a small job on the VM reads the Actions API with a read-only token, turns each finished
+   run's jobs and steps into spans (per-job and per-step durations, the runner's queue time, re-runs of a
+   flaky job as attempts of the same run) and sends them through the VM's Collector. No secret in GitHub,
+   no new action in any workflow, no change to any workflow file. It starts only after M1 has a measured
+   week behind it (M1.6).
+   - M6.1 For each workflow run on the repository, a run span with one child per job and one grandchild
+     per step arrives, with durations, the queue time and the attempt number, joined to the PR by its
+     number where the run has one.
+   - M6.2 The token is read-only (Actions and metadata read, nothing else), lives on the VM outside every
+     agent's environment like the ingest key, and the deny rules cover it in both agents.
+   - M6.3 `git diff` of `.github/workflows/` across the milestone is empty, and `test/devenv` pins the
+     job's unit, interval and the Collector endpoint.
+   - M6.4 The added events stay inside the daily target, measured after a week and recorded in this PRD.
 
-## Decisions and open questions
+## Decisions
 
-For the maintainer to answer; each has a recommendation.
+All twelve were answered by the maintainer on 2026-11-26: each recommendation below is accepted as
+written, and none is open.
 
 1. **Vendor and region.** Honeycomb, free plan, in the **EU region** (`api.eu1.honeycomb.io`), one new
-   team and environment for the agents. *Recommended: EU*, as the project is about moving to EU
+   team and environment for the agents. *Accepted by the maintainer, 2026-11-26: EU*, as the project is about moving to EU
    providers and the free plan offers it; the region cannot be changed later without a new sign-up.
-2. **Pipeline.** Direct export (A) or a local Collector (B). *Recommended: B*, as a system service under
+2. **Pipeline.** Direct export (A) or a local Collector (B). *Accepted by the maintainer, 2026-11-26: B*, as a system service under
    its own user: the only way to keep the key out of every agent's environment and to drop `user.email`.
 3. **CI and workflows.** Send GitHub Actions traces, or anything from the scheduled audit or the release?
-   *Recommended: no.* The deck's `agent.ci` spans answer "CI time per PR"; the CI's own data stays in
-   GitHub, and no workflow gets a Honeycomb secret.
+   *Accepted by the maintainer, 2026-11-26: no. Nothing is sent from GitHub Actions, the audit or the
+   releases.* The reasons:
+   - the deck's `agent.ci` spans already measure CI time, outcome and rounds per PR, tied to the unit and
+     the PR;
+   - sending from a workflow would put the Honeycomb key into GitHub secrets, readable by every workflow
+     that may read it and by a compromised action inside one; the key stays on the VM (and, with M4, the
+     Mac) only;
+   - it would add a third-party exporter action, or code of our own, to every workflow: more supply-chain
+     surface, where the actions stay few and SHA-pinned;
+   - GitHub's API already keeps every run's, job's and step's timings.
+
+   What the API keeps can still reach Honeycomb by pull, not push: optional milestone M6, a job on the VM
+   with a read-only token, sending through the VM's Collector, with no secret in GitHub and no workflow
+   change.
 4. **Where the non-secret settings go.** A provisioned drop-in `telemetry.conf` (endpoint
    `http://127.0.0.1:4318`, `OTEL_METRICS_INCLUDE_ACCOUNT_UUID=false`, the metric interval), written
    (a) always, (b) by hand once the maintainer turns telemetry on, or (c) by provisioning and
-   `make deck-restart` while the key file exists, removed while it does not. *Recommended: (c)*: one switch, the key file,
+   `make deck-restart` while the key file exists, removed while it does not. *Accepted by the maintainer, 2026-11-26: (c)*: one switch, the key file,
    re-read by provisioning and by `make deck-restart`, the two steps that write the daemon's drop-ins.
    "On" is putting the key file in place, then `make deck-restart`, which starts (or restarts) the
    `otelcol` service, writes the drop-in and restarts the daemon. "Off" is removing the key file, then
@@ -404,30 +434,30 @@ For the maintainer to answer; each has a recommendation.
    keep switching on Claude Code's telemetry with nowhere to send it.
 5. **How the key reaches the VM.** By hand in the VM (a `read -rs` prompt into `sudo install`), or a
    `make vm-telemetry-key` target on the Mac's host clone that reads one variable from the host clone's
-   environment its `.envrc` sets and writes it over standard input, like `make vm-env`. *Recommended: the make
+   environment its `.envrc` sets and writes it over standard input, like `make vm-env`. *Accepted by the maintainer, 2026-11-26: the make
    target*: it survives a VM rebuild and reuses `make vm-env`'s checks; never `daemon.env`.
 6. **Drop whole spans?** `agent.operation` (the deck's only command-line-derived data) and
-   `agent.status` (a third of the events). *Recommended: keep both* at first: the volume is far under
+   `agent.status` (a third of the events). *Accepted by the maintainer, 2026-11-26: keep both* at first: the volume is far under
    the limit and both answer a question; revisit after M1.6.
 7. **Branch and unit names.** Keep `vcs.ref.head.name`, `deck.dispatch.name` and the orchestration name, or
-   delete them. *Recommended: keep*: the repository and its branches are public, and they join runs to
+   delete them. *Accepted by the maintainer, 2026-11-26: keep*: the repository and its branches are public, and they join runs to
    PRs. Delete if the repository ever goes private.
 8. **The per-run collector's interval.** 15 s (default, ~576,000 points a day, 1.4 % of a core on a busy
-   machine per the deck's docs) or 60 s (~144,000). *Recommended: 60 s*: questions are about units that
+   machine per the deck's docs) or 60 s (~144,000). *Accepted by the maintainer, 2026-11-26: 60 s*: questions are about units that
    run for hours, and it leaves room for the Mac.
 9. **The Mac host.** Leave out, send directly with a second copy of the key, or send through the VM's
-   Collector over Lima's default forward of `127.0.0.1:4318`. *Recommended: through the VM's Collector*,
-   so there is one key; or leave out until the VM's figures show a need. Either way, **M1** adds a
+   Collector over Lima's default forward of `127.0.0.1:4318`. *Accepted by the maintainer, 2026-11-26: through the VM's Collector*,
+   so there is one key; M4 stays optional, so the Mac stays out until the VM's figures show a need. Either way, **M1** adds a
    `portForwards` rule to `dev/lima.yaml` that ignores guest port 4318, pinned by `test/devenv`, so from
    the Collector's first day no process on the Mac can write into the Honeycomb environment through the
    VM's key; only M4, if the maintainer picks this option, lifts it for that port.
 10. **The Collector distribution.** `otelcol-contrib` (every component, larger) or a build of our own with
     the OpenTelemetry Collector Builder holding only `otlp`, `hostmetrics`, `attributes`, `transform`,
-    `filter`, `resource`, `batch` and `otlphttp`. *Recommended: `otelcol-contrib`*, pinned and
+    `filter`, `resource`, `batch` and `otlphttp`. *Accepted by the maintainer, 2026-11-26: `otelcol-contrib`*, pinned and
     checksum-checked: no build to maintain; revisit if its size or its CVEs become a burden. Pin a release
     at least two weeks old (v0.166.0 was published on 2026-11-24).
 11. **Deck version.** v0.51.3 is out; let Renovate's PR bring it before M1 or pin M1 to v0.51.2.
-    *Recommended: whichever is on `main` when M1 starts*; the telemetry described here is in v0.51.2.
+    *Accepted by the maintainer, 2026-11-26: whichever is on `main` when M1 starts*; the telemetry described here is in v0.51.2.
 12. **Who reads Honeycomb.** The maintainer alone, or also agents (a Honeycomb MCP server or API key with
-    query rights for the dispatcher). *Recommended: the maintainer alone* for this PRD; an agent with read
+    query rights for the dispatcher). *Accepted by the maintainer, 2026-11-26: the maintainer alone* for this PRD; an agent with read
     access is a separate decision with its own key and ADR.
