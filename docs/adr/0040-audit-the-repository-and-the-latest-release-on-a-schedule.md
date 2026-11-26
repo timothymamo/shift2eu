@@ -2465,7 +2465,8 @@ arguments; git's read-only subcommands), and changes between versions. The deny 
   *Amended 2026-11-26 (review of the L1 fix):* no digest leaves anything out, the step summary
   included. `auditrun` creates the summary before `audit.Run` and writes the run's line only after the
   steps return, so nothing legitimate writes it between the two digests; the earlier exclusion let a
-  link swapped in at the summary's path pass unseen, and the runner would have posted the link's target
+  link swapped in at the summary's path pass unseen. Detection alone does not stop the post, though:
+  the runner reads the summary by its path after the step, failed or not, and publishes what it finds
   as the public job summary. `auditrun` also reads the paths of `$GITHUB_PATH`, `$GITHUB_OUTPUT` and
   `$GITHUB_STATE` (never their content) and refuses with the usage exit, before any step, a step where
   one of them is unset, or where one of them or the step summary (when set) is not in the `$GITHUB_ENV`
@@ -2473,6 +2474,26 @@ arguments; git's read-only subcommands), and changes between versions. The deny 
   put a file command elsewhere would otherwise quietly fall outside the digest. Any change, a created,
   removed, retyped or rewritten entry, fails the run whatever the run did, and is the failure reported
   over a failed launch.
+  *Amended 2026-11-26 (security findings round 2, issues #615, #614):*
+  - **The summary is repaired, not only checked.** After `audit.Run` returns, `auditrun` `Lstat`s the
+    summary's path and compares it (`os.SameFile`) with the `Stat` of the descriptor it opened. A path
+    that is no longer that regular file (a link, another file, or gone) is removed without being
+    followed and replaced with a new, empty regular file (`O_EXCL`, mode 0600); nothing is written
+    through a link. A run that had passed then exits 1 and its result file is removed; one that had
+    already failed keeps its exit code. This repair, not the digest, is what keeps the runner from
+    posting a swapped-in link's target.
+  - **File-command paths must be clean and absolute.** `auditrun` refuses with the usage exit any of
+    `$GITHUB_ENV`, `$GITHUB_PATH`, `$GITHUB_OUTPUT`, `$GITHUB_STATE` and the step summary (when set)
+    that is relative or not already its own `filepath.Clean` form (the library's `IsCleanAbsolute`). The
+    directory check is lexical: it compares names and resolves no link, so a `..` element, or a relative
+    path read from wherever the step runs, could name the digested directory to the check while the
+    runner reads a file elsewhere, and a symlinked path component would pass it. The runner sets clean
+    absolute paths, so the rule refuses nothing it writes.
+  - **Links found before the run are trusted as they stand.** An entry that is already a symlink
+    before the run is hashed by its link text, so a write to its target during the run is not seen. The
+    runner never creates links in the file-command directory, so a link there before the run is not the
+    runner's and was not the run's; it is taken as it stands, and a link created, removed or retargeted
+    during the run is still a change.
   **The cap of 64 entries was not checked on a real runner.** To our understanding actions/runner
   removes the previous step's file-command files, which leaves about 5 or 6 entries in the directory; a
   runner that kept every earlier step's files there could pass 64 in a long job, and the run would then
@@ -2488,7 +2509,11 @@ arguments; git's read-only subcommands), and changes between versions. The deny 
   fetch by absolute path, so that no action with a `post:` runs after the model step, held by
   `check.AuditWorkflow`. And a process that outlives the CLI's process tree (one detached from a
   built-in read-only command that runs without the wrapper) could write to the directory after the
-  after-digest; this has not been shown to be possible.
+  after-digest; this has not been shown to be possible. The `actions/checkout` replacement is deferred
+  on the auditor's condition that no workflow restores an Actions cache (`setup-go` runs with
+  `cache: false`) and that the model job's token is read-only: if either stops being true, a post
+  step run after a model step that changed `$GITHUB_PATH` could reach a writable token or poison a
+  cache, and the deferral becomes should-fix.
 - **Follow-up, not done here:** recheck the scrub's mounts with a real bwrap on the x64 runner, the
   `.claude` `denyWrite` and the empty directory bound onto `.git` included; and a preflight probe that
   holds the class's boundary, a bare `cat` of a state path and a bare `>` into `/tmp`, both expected
