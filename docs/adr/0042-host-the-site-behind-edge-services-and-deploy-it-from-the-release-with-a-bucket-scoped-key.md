@@ -563,16 +563,26 @@ Services pipeline. What bounds the rest:
 
 ### The key-limit step (R7): result
 
-*Open, recorded in milestone 4* (and again after every key rotation and every change to the IAM rule or
-the bucket policy). Milestone 4 records here, per probe, the answer and, for anything but
+*Recorded in milestone 4: R7 ran on 2026-11-24* (and runs again after every key rotation and every
+change to the IAM rule or the bucket policy). Per probe, the answer and, for anything but
 `403 AccessDenied` (or `NoSuchBucket` for a bucket outside the key's project), the reason it was
 accepted; and whether `ListBucket` was allowed, which decides `-list-bucket` above:
 
 | Probe | Answer |
 |---|---|
-| `PutObject` on `canary/probe.txt` | *to be recorded (expected: allowed)* |
-| `ListObjectsV2` on the site's bucket | *to be recorded (decides `-list-bucket`)* |
-| the four re-submissions on the site's bucket, the eleven object probes, the nine canary-bucket probes, the two probes outside the project and the three on the state bucket (*Runbook*, R7) | *to be recorded (expected: each `PASS 403` or `PASS NoSuchBucket`)* |
+| `PutObject` on `canary/probe.txt` | Allowed (the deploy key's job) |
+| `ListObjectsV2` on the site's bucket | Allowed. The maintainer kept `-list-bucket` off all the same (2026-11-26; the amendment *The first deploy*, below): the deploy works without it |
+| the four re-submissions on the site's bucket (`put-bucket-website`, `put-bucket-versioning`, `put-bucket-acl`, `put-bucket-policy`) | `PASS 403`, each |
+| the eleven object probes on `canary/probe.txt` (`delete-object` with and without a version, `delete-object-tagging` and `put-object-tagging` with and without a version, `put-object-acl`, `put-object-retention`, `put-object-legal-hold`, `abort-multipart-upload`, `restore-object`) | `PASS 403`, each |
+| the nine canary-bucket probes (`delete-bucket-website`, `delete-bucket-policy`, `delete-bucket`, `put-bucket-versioning` to `Suspended`, `put-object-lock-configuration`, `put-bucket-cors`, `put-bucket-lifecycle`, `put-bucket-tagging`, `put-bucket-encryption`) | `PASS 403`, each |
+| the two probes outside the project: `list-buckets` | `PASS 403` |
+| the two probes outside the project: `put-object` to a bucket in another project | **Not run**: skipped, no bucket in another project was given. A gap in R7's run: this probe's own answer is missing. The state bucket's `put-object` below is a write to a bucket in another project (the admin project) and was denied, so the key was shown unable to write outside the site's project for that one project; a re-run with a bucket in a third project closes the gap |
+| the three on the state bucket (`get-object` of the state, `list-objects-v2`, `put-object`) | `PASS 403`, each |
+
+After the probes, the step's closing `tofu plan` (the maintainer's own key) failed to release its state
+lock (`DeleteObject` 403), right after the script switched the key's default project back to the admin
+project: most likely the switch had not taken effect yet (issue #537). The maintainer force-unlocked the
+state, and `plan -detailed-exitcode` then exited 0. Nothing in the probes' answers depends on it.
 
 ## Alternatives considered
 
@@ -754,3 +764,21 @@ decision above stands; this records what milestone 4 was to record.
   (ADR 0045, *Settled live*), so a page or script a leaked key uploads at any path is held to
   `connect-src 'none'` and `worker-src 'none'` on `www`. The pipeline's default endpoint stays the
   residual ADR 0045 records: it serves every object without the header policy.
+- **The read rule (R5, 2026-11-24): `public_read = true`.** With `public_read` false, Edge Services
+  answered 403 with the bucket's own access-denied page in the website endpoint's HTML form
+  (`Code: AccessDenied`, an S3 request ID), on the first try: it cannot read private objects through the
+  website endpoint. So `public_read = true`, Hosting decision 11's fallback; R4 applied the bucket-policy
+  change and the next plan showed no changes. With it, Edge Services answered 200 (`x-cache: miss`, the
+  bucket's `x-amz-request-id`, the body as written). The runbook's R5 recognised only the S3 XML form of
+  `AccessDenied`; it now recognises the HTML form too (issue #535).
+- **R8 on Edge Services alone (2026-11-24): the no-go.** The `www` CNAME, the CAA records (exactly
+  `0 issue "letsencrypt.org"` and `0 issuewild ";"`) and the DS record passed, but
+  `http://www.shift2eu.com/` answered 302, which the go/no-go refuses, and Scaleway support's answer
+  (ticket #1639626, the amendment *A Serverless Container in front of Edge Services*, above) closed every
+  way around it. That no-go led to ADR 0045's container front; R8's answers on the front are ADR 0045's
+  *Settled live*.
+- **R9 (2026-11-24): the `site` environment, PASS.** Every check passed: a custom branch policy only, the
+  deployment policy exactly tag `v*.*.*`, the environment's secrets exactly `SCW_ACCESS_KEY` and
+  `SCW_SECRET_KEY` (none at repository level), its variables `SITE_BUCKET` and `SITE_REGION`
+  (`nl-ams`), the `v*` tag rulesets with no bypass for the release-please App, and the skipped site jobs
+  of a release run before the switch.

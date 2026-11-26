@@ -1,8 +1,8 @@
 # PRD #297: shift2eu in the browser at www.shift2eu.com
 
-**Status:** Complete (milestones 1 to 4 done; the first deploy was v0.16.1, 2026-11-25). Three
-acceptance criteria stay open, each with its reason below: they all wait for the result of the runbook's
-key-limit step (R7), which ADR 0042 does not record yet.
+**Status:** Complete (milestones 1 to 4 done; the first deploy was v0.16.1, 2026-11-25). Every
+acceptance criterion is met; the runbook's key-limit step (R7) is recorded in ADR 0042, with one probe
+skipped (a bucket in a third project) and named there as a gap for its next run.
 **Issue:** #297
 
 ## Problem
@@ -536,13 +536,16 @@ release), *live* (checked against the live site) or *review*.
   `SCW_SECRET_KEY`, never at repository level or in another environment. Its deployment policy is exactly
   one custom policy of type `tag`, named `v*.*.*`; the `v*` tag rulesets that the `release-tag` skill
   already checks are what let only the release-tag App create such a tag (ADR 0021).
-- [ ] The key belongs to a Scaleway IAM application that can write objects **only to the site's bucket**:
+- [x] The key belongs to a Scaleway IAM application that can write objects **only to the site's bucket**:
   no other bucket, project or product, and no bucket-configuration, bucket-policy or ACL permission
   (runbook and Hosting decision 5). The bucket policy allows that application only the object writes and
   reads the deploy needs. The key has an expiry date, and the runbook has a rotation step. *Review:* the
   runbook's policies are checked against Scaleway's permission sets.
-  *Open:* the key works for the deploy (v0.16.1), but only R7's probes show that it can do nothing
-  more, and ADR 0042's R7 table still reads "to be recorded".
+  *Met (R7, 2026-11-24, ADR 0042's R7 table):* every bucket-configuration, policy, ACL and object probe
+  but `PutObject`, `ListBuckets` and the three state-bucket probes answered 403. The probe to a bucket
+  in a third project was skipped (no bucket given); the state bucket's `put-object`, a write to the
+  admin project's bucket, was denied, so a write outside the site's project was shown refused for that
+  project. A re-run with a third project's bucket closes that gap.
 - [x] The `release-tag` skill's step 2 checks the `site` environment: `custom_branch_policies` `true` and
   `protected_branches` `false`; `deployment-branch-policies` lists exactly `tag v*.*.*` (type `tag`, so a
   branch named like a tag is not allowed); its secrets are `SCW_ACCESS_KEY` and `SCW_SECRET_KEY`; and
@@ -674,7 +677,7 @@ release), *live* (checked against the live site) or *review*.
 
 ### Runbook
 
-- [ ] A one-time runbook for the maintainer, written in milestone 3 and followed in milestone 4
+- [x] A one-time runbook for the maintainer, written in milestone 3 and followed in milestone 4
   ([docs/site-runbook.md](../../docs/site-runbook.md), [ADR 0039](../../docs/adr/0039-create-the-sites-scaleway-hosting-with-opentofu.md), issue #422).
   **OpenTofu creates** the Scaleway side from `infra/site/`: the project that holds only the site's
   bucket, the bucket with versioning, its website setting and its bucket policy, the IAM application and
@@ -713,9 +716,9 @@ release), *live* (checked against the live site) or *review*.
   block with its `PASS` and `FAIL` lines (R15, the scheduled check's label and re-enabling, added in
   milestone 4).
   - [x] Milestone 3: written ([docs/site-runbook.md](../../docs/site-runbook.md)).
-  - [ ] Milestone 4: followed. *Open:* every step was followed for the first deploy (2026-11-24 to 26)
-    except R7, whose result is not recorded (below). R15 runs once this workflow is on `main`.
-- [ ] The runbook has a step (R7, [docs/site-runbook.md](../../docs/site-runbook.md)), run once the key exists, that verifies the key's limits rather than only
+  - [x] Milestone 4: followed, for the first deploy (2026-11-24 to 26), R7 included (below). R15 runs
+    once this workflow is on `main`, as the step itself says.
+- [x] The runbook has a step (R7, [docs/site-runbook.md](../../docs/site-runbook.md)), run once the key exists, that verifies the key's limits rather than only
   reviewing them. With the deploy key, against a canary object under a prefix the site never serves,
   every write action in Scaleway's bucket-policy action list
   ([bucket policies](https://www.scaleway.com/en/docs/object-storage/api-cli/bucket-policy/)) and every
@@ -762,8 +765,10 @@ release), *live* (checked against the live site) or *review*.
   step; the maintainer runs it in milestone 4 and again after every key rotation and every change to the IAM or bucket policy, and its result is
   recorded in milestone 3's hosting ADR (amended in milestone 4).
   - [x] Milestone 3: the step written (R7).
-  - [ ] Milestone 4: run, its result in ADR 0042. *Open:* ADR 0042's R7 table still reads "to be
-    recorded"; the per-probe results are not in the first deploy's notes.
+  - [x] Milestone 4: run (2026-11-24), its result in ADR 0042's R7 table: `PutObject` and
+    `ListObjectsV2` allowed (`-list-bucket` kept off), every other probe 403, the probe to a third
+    project's bucket skipped (the state bucket's denied `put-object` is the outside-the-project write
+    that ran), and the state lock the closing plan left (issue #537), force-unlocked.
 
 ## Milestones
 
