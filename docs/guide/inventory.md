@@ -97,10 +97,11 @@ up in the report as a blocker on every target, instead of disappearing from the 
 programs below classify into the seven categories ADR 0046 adds, on every source that has such a
 service: AWS and Azure into all seven, GCP into all but `database.mongodb` (its program classifies no
 GCP service as one; Firestore stays `unclassified`, PRD #552); each source's *classification* table
-names the types. Only the AWS program classifies into the two categories ADR 0047 adds yet
-(PRD #571), and no program into `network.dns`: a search service or Kafka cluster on Azure or GCP, or a
-DNS zone on any source, is listed as `unclassified`, or not at all, so set its category
-(`search.opensearch`, `messaging.kafka` or `network.dns`) by hand.
+names the types. Of the two categories ADR 0047 adds (PRD #571), the AWS program classifies into
+both and the GCP program into `messaging.kafka` (GCP runs no managed OpenSearch), and no program into
+`network.dns`: a search service or Kafka cluster on Azure, or a DNS zone on any source, is listed as
+`unclassified`, or not at all, so set its category (`search.opensearch`, `messaging.kafka` or
+`network.dns`) by hand.
 
 The **capabilities** are features a resource depends on:
 
@@ -823,6 +824,9 @@ Prefer these roles on the project, each of which reads configuration only:
 - `roles/memorystore.viewer` (Memorystore for Valkey instances);
 - `roles/file.viewer` (Filestore instances);
 - `roles/cloudfunctions.viewer` (Cloud Functions, for the Cloud Run service each one runs on);
+- `roles/managedkafka.viewer` (Managed Service for Apache Kafka clusters: cluster configuration only,
+  no topic data or messages; it lacks `managedkafka.clusters.connect`, the permission that connects a
+  client to a cluster's brokers);
 - `roles/artifactregistry.reader` (Artifact Registry repositories). It is read-only, but it can also
   download the artifacts in the repositories (`artifactregistry.repositories.downloadArtifacts`), which
   the listing does not need; no predefined Artifact Registry role lists repositories without it. If
@@ -931,6 +935,15 @@ else
   echo '[]' > "$out/artifacts-repositories.json"
 fi
 
+# Managed Service for Apache Kafka, in every region, when the asset listing holds a cluster:
+# only each cluster's name and capacity, never its bootstrap address or network access.
+if has managedkafka.googleapis.com/Cluster; then
+  gcloud managed-kafka clusters list --project="$project" --location=- --quiet \
+    --format='json(name,capacityConfig)' > "$out/managed-kafka-clusters.json"
+else
+  echo '[]' > "$out/managed-kafka-clusters.json"
+fi
+
 # The Cloud Run service each 2nd gen function runs on, per region with functions.
 for region in $(jq -r '[.[] | select(.assetType == "cloudfunctions.googleapis.com/Function") | .name | capture("/locations/(?<r>[^/]+)/").r] | unique | .[]' "$out/assets.json"); do
   gcloud functions list --project="$project" --v2 --regions="$region" --quiet \
@@ -938,7 +951,7 @@ for region in $(jq -r '[.[] | select(.assetType == "cloudfunctions.googleapis.co
 done > "$out/functions.json"
 ```
 
-The Memorystore, Filestore, Artifact Registry and Cloud Functions lists run only when the asset
+The Memorystore, Filestore, Artifact Registry, Managed Kafka and Cloud Functions lists run only when the asset
 listing holds a resource of theirs, so a project that does not use a service never calls its API,
 which may not be enabled. Every `gcloud` call above carries `--quiet`, which makes it take the
 default answer, No, when it offers to enable an API, as it does on a project with that API disabled;
@@ -957,6 +970,8 @@ leaves out every load balancer that is a backend service alone, gives the URL ma
 `compute-target-http-proxies.json` leaves the load balancers in, but without the `ipv6` or `udp`
 their forwarding rules prove. A failed Valkey list in `memorystore.json`
 leaves every Valkey instance without `sharding` and without its size (`roles/memorystore.viewer`).
+A failed `managed-kafka-clusters.json` leaves every Kafka cluster without its size
+(`roles/managedkafka.viewer`).
 
 The `--format` projections keep only what the program reads: an instance's metadata keys, for
 example, but not their values, which hold startup scripts and SSH keys, and of its disks only the
@@ -965,7 +980,9 @@ labels, `jq` keeps only `goog-gke-node`, the one the program reads; the Cloud Ru
 each function comes from `functions list`, not from a label. Of a URL map, only the links to its
 backend services are kept (its default, path and route services, the weighted and mirrored backends
 of its route actions, and the error services of its custom error response policies), not its route
-actions' header values.
+actions' header values. Of a Managed Kafka cluster, only its name and its capacity
+(`capacityConfig`) are kept, never its bootstrap address, TLS settings or the networks allowed to
+reach it.
 
 The load balancer lists read only the HTTP and HTTPS target proxies, the frontends of an Application
 Load Balancer; a TCP, SSL or gRPC proxy is not listed, so a load balancer behind one gets no `ipv6`.
@@ -998,12 +1015,20 @@ Review `inventories/gcp.inventory.json`, then delete the raw output: `rm -r inve
 | Memorystore for Redis Cluster | `count` | `redis clusters list`, `shardCount` × (`replicaCount` + 1) |
 | Memorystore for Valkey instance | `memoryGiB` (per node), `count` | `memorystore instances list`, `nodeConfig.sizeGb` and `shardCount` × (`replicaCount` + 1) |
 | Filestore instance | `storageGiB` | `filestore instances list`, the sum of `fileShares[].capacityGb` (a string in the API's JSON) |
+| Managed Service for Apache Kafka cluster | `count`, `vcpus` and `memoryGiB` per broker | `managed-kafka clusters list`, `capacityConfig`: `count` is max(3, ceiling(`vcpuCount` / 15)), and `vcpus` and `memoryGiB` are `vcpuCount` and `memoryBytes` / 1024³ divided by `count` (both strings in the API's JSON) |
 
 The Memorystore and Filestore APIs write GB; Filestore defines a GB as 1024³ bytes, and the program
 takes every one of these GB as GiB. A Redis cluster names only the memory of the whole cluster
 (`sizeGb`), and no page says whether it counts the replicas, so the program writes no `memoryGiB` for
 it: add the memory of one node by hand (its `nodeType`, from Google's node specification) for an
 estimate.
+
+A Managed Kafka cluster names its total vCPU and memory, not its brokers. Google's
+[broker provisioning](https://cloud.google.com/managed-service-for-apache-kafka/docs/brokers) page
+says "number of brokers = max(3, ceiling(vCPUs / 15))" and that "all brokers have the same number of
+vCPUs, which might be a fractional value", so the program writes that count and each broker's equal
+share of the vCPU and memory, which may be fractional. It writes no `storageGiB`: Managed Kafka bills
+storage by use, not as a disk of the brokers. A cluster the list does not hold gets no size.
 
 Not filled in: the vCPU and memory of a Cloud SQL instance whose tier is not a custom one (such as
 `db-n1-standard-2` or `db-f1-micro`), the count of a `REGIONAL` Cloud SQL instance, a GKE cluster's
@@ -1041,12 +1066,15 @@ The `rawType` is the resource's Cloud Asset Inventory asset type.
 | `artifactregistry.googleapis.com/Repository`, `format` `DOCKER` | `registry.container` |
 | `artifactregistry.googleapis.com/Repository`, any other format, or not in `artifacts repositories list` | `unclassified` |
 | `file.googleapis.com/Instance` (Filestore) | `storage.file` |
+| `managedkafka.googleapis.com/Cluster` (Managed Service for Apache Kafka) | `messaging.kafka` |
+| `managedkafka.googleapis.com/ConnectCluster` (Kafka Connect) | `unclassified` |
 | `memcache.googleapis.com/Instance` (Memorystore for Memcached) | `unclassified` |
 | any other asset type | `unclassified` |
 
 A Pub/Sub topic (where publishers write, and every subscription gets its own copy of each message) and
 a subscription (where consumers read) are both listed, as both have to move. Memcached speaks another
-protocol than Redis, so it stays `unclassified`.
+protocol than Redis, so it stays `unclassified`. A Kafka Connect cluster is an integration runtime
+around a Kafka cluster, not a cluster to move, so it stays `unclassified` too.
 
 A load balancer is one URL map (an Application Load Balancer), one backend service no URL map names (a
 passthrough Network Load Balancer, or a proxy Network Load Balancer) or one target pool. These come
@@ -1104,6 +1132,13 @@ which belong to their instance.
 | `storage.file` | `encryption-at-rest` | always |
 | `storage.file` | `zone-high-availability` | tier `REGIONAL` or `ENTERPRISE` |
 | `storage.file` | `snapshots` | a Filestore snapshot of the instance is in the asset listing |
+| `messaging.kafka` | `encryption-at-rest` | always: Google Cloud encrypts all data at rest |
+| `messaging.kafka` | `node-high-availability`, `zone-high-availability` | always: Google runs every cluster's brokers in three zones of its region, with the replicas spread across them |
+
+A Kafka cluster's high availability holds only for topics with a replication factor of 2 or more, which
+no read-only call gives: remove `node-high-availability` and `zone-high-availability` by hand when your
+topics have a replication factor of 1. It then maps `partial` to a target's single-zone Kafka plan,
+missing `zone-high-availability`, which is the intended reading.
 
 A forwarding rule of `IPProtocol` `L3_DEFAULT` forwards every protocol, but no page read says so in
 as many words, so it does not count as UDP: add `udp` by hand for such a load balancer that carries
