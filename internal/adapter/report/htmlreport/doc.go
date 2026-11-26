@@ -114,7 +114,11 @@
 // inventory decoder's fuzz target FuzzInventoryDecoding, which fuzzes the
 // inventory file's name too (issue #671), the corpus's decisions and Markdown,
 // JSON and HTML goldens under testdata/hostile-corpus/, and the hostile file
-// names' goldens under testdata/hostile-inventory-names/.
+// names' goldens under testdata/hostile-inventory-names/, of the single-target
+// reports and of the comparison of the three embedded targets. Both the fuzz
+// target and TestHostileInventoryNames parse the name back out of every report
+// and comparison, and decode the document again after rendering, so no render
+// may change the inventory it was given.
 // They live here because depguard lets no other package's tests import this
 // reporter outside the web root.
 package htmlreport

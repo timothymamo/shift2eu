@@ -176,8 +176,8 @@ go only into the encrypted results or an advisory, never into `testdata/`. Fuzzi
 `Fuzz*` targets)" only when the tree holds no committed fuzz target that CI runs too (Decision 5); it
 holds two, both in `internal/adapter/report/htmlreport`'s tests: `FuzzReportEscaping`, the HTML
 reporter's escaping, and, since issue #661, `FuzzInventoryDecoding`, the inventory decoder and every
-accepted inventory's assessment and three reports, with the inventory file's name fuzzed too (issue
-#671). Each run fuzzes each for 10 minutes, within the
+accepted inventory's assessment, three reports and three comparison reports, with the inventory file's
+name fuzzed too (issue #671). Each run fuzzes each for 10 minutes, within the
 step's at most three targets.
 
 ### The disclosure rules the publish script enforces
@@ -3112,10 +3112,16 @@ which the container is killed and removed.
   `web-imported-only-by-the-web-root` refuses an import of it elsewhere outside the web root.
   *Amended 2026-11-26 (issue #671):* the inventory file's name reaches all three reports too, so
   `TestHostileInventoryNames` there pins it: hostile names a run accepts (Markdown and HTML
-  metacharacters, look-alike Unicode, a 2048-byte name) are held escaped to goldens under
-  `testdata/hostile-inventory-names/`, and names it refuses (a line break, a bidi override, a zero-width
-  character, an overlong name, path separators, a `</script>` name) fail with
-  `analysis.ErrInvalidReportMeta` before any report byte is written.
+  metacharacters, look-alike Unicode, a 2048-byte name, a backtick at both ends, a leading backtick, a
+  run of three backticks) are held escaped to goldens under `testdata/hostile-inventory-names/`, the
+  three single-target reports and the comparison of the three embedded targets in Markdown, JSON and
+  HTML (`*.comparison.{markdown,json,html}.golden`), and each report's name is parsed back and must be
+  the name exactly: the Markdown code span as CommonMark reads it, the JSON `inventoryName`, the HTML
+  header's `<code>` element unescaped. After rendering the document is decoded again and its source and
+  resources compared, so no render mutates the inventory. Names it refuses (a line break, a bidi
+  override, a zero-width character, a line separator U+2028, a space at both ends, an overlong name,
+  path separators, a `</script>` name) fail with `analysis.ErrInvalidReportMeta` in every single-target
+  and comparison run before any report byte is written or the inventory is read.
 - **Row 14, fuzzing.** The targets are found by reading the tracked `*_test.go` files outside `testdata`
   as text, by their signature alone (`^func Fuzz[A-Z0-9_][A-Za-z0-9_]*\(f \*testing\.F\)`, so a helper
   such as `Fuzzy` is none): nothing is built or run to list them. A target whose package or name has
@@ -3138,8 +3144,10 @@ which the container is killed and removed.
   carries into the container: no panic, a controlled refusal, and an accepted inventory that assesses
   against all three targets and renders as Markdown, JSON and HTML without an error. *Amended 2026-11-26
   (issue #671):* it fuzzes the inventory file's name too, seeded with `TestHostileInventoryNames`'
-  names, and decodes each accepted input once, then renders that inventory nine times (three targets,
-  three formats), so a run covers more inputs (363,170 to 1,384,634 executions in 60 seconds). Each run fuzzes the
+  names, and decodes each accepted input once, then renders that inventory twelve times (three targets
+  in three formats, and the comparison of the three in three formats) with row 13's checks, and decodes
+  it once more to check no render changed it, so a run still covers more inputs than before the issue
+  (363,170 to 679,863 executions in 60 seconds). Each run fuzzes the
   two targets for 10 minutes each, within the step's at most three and its 25-minute budget.
 
 **To be checked on the first run** (runbook step 8), besides 5b's list: that cosign v3's
