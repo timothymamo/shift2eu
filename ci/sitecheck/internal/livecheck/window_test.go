@@ -12,8 +12,9 @@ import (
 // accepted only for the release immediately before it, and only while the
 // clock is before the anchor taken from the highest tag's commit plus the
 // window's fixed bound. Everything else is refused: a version two releases
-// behind, a version higher than the highest tag, the zero Tag, an empty tag
-// list, and a bound that is not positive.
+// behind, a version higher than the highest tag (first because the judged tag
+// list holds no such release tag, and by the window's rule as well), the zero
+// Tag, an empty tag list, and a bound that is not positive.
 //
 // The tags are compared by version, never lexically: git's own order puts
 // v0.9.0 after v0.10.0, and a comparison that read the strings would take the
