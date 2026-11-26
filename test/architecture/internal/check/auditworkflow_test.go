@@ -3683,6 +3683,11 @@ func TestAuditWorkflow(t *testing.T) {
 			wantIn:   "--skip-check-update",
 		},
 		{
+			name:     "trivy offline array without --skip-version-check",
+			workflow: mutate(t, acceptedWorkflow, auditTrivyOffline, strings.Replace(auditTrivyOffline, " --skip-version-check", "", 1)),
+			wantIn:   "--skip-version-check",
+		},
+		{
 			name:     "trivy without --offline-scan",
 			workflow: mutate(t, acceptedWorkflow, auditTrivyOffline, strings.Replace(auditTrivyOffline, " --offline-scan", "", 1)),
 			wantIn:   "--offline-scan",
