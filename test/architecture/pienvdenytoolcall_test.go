@@ -102,9 +102,9 @@ const (
 	// writes it to find either of them.
 	appTokenFileStem = "agents-app"
 
-	// appTokenFolderPattern is the folder as a pattern names it: the escaped dot a regular
+	// appFolderPattern is the folder as a pattern names it: the escaped dot a regular
 	// expression needs. A pattern is text to look for, so this is not a path to refuse.
-	appTokenFolderPattern = `\.config/shift2eu`
+	appFolderPattern = `\.config/shift2eu`
 )
 
 // piToolCall is one call handed to the extension: the tool's name and the input pi
@@ -214,7 +214,7 @@ func TestPiEnvDenyExtensionRefusesTheAppTokenFolderOfFileTools(t *testing.T) {
 		},
 		{
 			name: "grep of the repository with the App's folder as its pattern",
-			call: piToolCall{ToolName: "grep", Input: map[string]string{"path": root, "pattern": appTokenFolderPattern}},
+			call: piToolCall{ToolName: "grep", Input: map[string]string{"path": root, "pattern": appFolderPattern}},
 		},
 		{
 			name:    "grep of the repository with a glob naming the token file",
