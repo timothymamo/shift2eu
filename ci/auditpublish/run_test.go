@@ -347,10 +347,11 @@ func TestRunRefusesAConfigurationItCannotUse(t *testing.T) {
 		want string
 	}{
 		{
-			name:    "no GH_TOKEN",
-			env:     func(env map[string]string) { delete(env, "GH_TOKEN") },
-			refused: []string{"GH_TOKEN"},
-			want:    lineConfigToken,
+			// The token's name is a fixed word of the line, not a value: only
+			// what the run reads is refused (issue #640).
+			name: "no GH_TOKEN",
+			env:  func(env map[string]string) { delete(env, "GH_TOKEN") },
+			want: lineConfigToken,
 		},
 		{
 			name:    "an empty GH_TOKEN",
