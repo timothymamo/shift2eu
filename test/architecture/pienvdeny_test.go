@@ -781,6 +781,13 @@ func TestPiEnvDenyListRefusesPrintingTheEnvironment(t *testing.T) {
 		// The file the deck keeps the agents' keys in.
 		"cat ~/.config/dot-agent-deck/daemon.env",
 		"grep KEY /home/u/.config/dot-agent-deck/daemon.env",
+		// The agents App's token file, which `make agents-token` writes under the VM user's home and the gh
+		// wrapper reads (ADR 0031, docs/dev-environment.md): printing it hands over the one GitHub credential
+		// every agent pushes with, so every spelling of its path is refused, as the deck's keys file is.
+		"cat ~/.config/shift2eu/agents-app-token",
+		"cat /home/x/.config/shift2eu/agents-app-token",
+		"head -c 32 ~/.config/shift2eu/agents-app-token",
+		`printf '%s' "$(cat ~/.config/shift2eu/agents-app-token)"`,
 		// A single key, expanded by name.
 		"echo $DEEPSEEK_API_KEY",
 		`printf %s "$GH_TOKEN"`,
@@ -974,6 +981,9 @@ func TestPiEnvDenyListAllowsTheWork(t *testing.T) {
 		// deck writes a task and a report into.
 		"cat .dot-agent-deck.toml",
 		"ls .dot-agent-deck/",
+		// The program that mints the agents App's token, named beside the file it mints into: reading the
+		// script hands over no credential, so the refusal of the token file must not reach it.
+		"sed -n '1,20p' dev/agents-app-token.sh",
 		// The git commands that read configuration or push a branch: the
 		// helper's own name and the branch's name hold no token, so the refusal
 		// of the credential helper must not reach them.
