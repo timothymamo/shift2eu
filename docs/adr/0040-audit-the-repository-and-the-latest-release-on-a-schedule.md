@@ -1887,10 +1887,13 @@ It `exec`s with exactly this environment, nothing inherited: `PATH=/usr/bin:/bin
   with `A variable in braces in this command can't be checked before it runs`. Run offline against a
   fake Messages API with a dummy token (the same version's arm64 build, a stand-in bwrap that keeps
   only bwrap's environment handling), the refusal is the same under the scrub and without it, with
-  the `Bash(/srv/audit/bin/audit-exec:*)` rule matching, and for any variable name; and every `$` is
-  refused in the `default` mode whatever an allow rule's prefix says: an unbraced variable (`A variable
-  in this command ...`), a command substitution (`A nested command ...`), `test -n "$..."` (*corrected
-  2026-11-25, issue #614:* not every `$`; `echo $HOME` ran, while `$PPID` and `$$` are refused). The CLI
+  the `Bash(/srv/audit/bin/audit-exec:*)` rule matching, and for any variable name. *Narrowed
+  2026-11-26 (issue #614):* what is refused in the `default` mode whatever an allow rule's prefix says
+  is the braced form `${...}`, for any variable name, which is why probe 5 holds none; also seen
+  refused were the unbraced `$PPID` and `$$` in probe 5's `/proc` calls (`A variable in this command
+  ...`), a command substitution (`A nested command ...`) and `test -n "$..."`. Not every `$` form is
+  refused: a bare `$VAR` was seen to run (`echo $HOME`), so no rule here may rest on the CLI refusing
+  every `$`. The CLI
   records the refusal three times: a `system`/`permission_denied` element naming the call's
   `tool_use_id`, the call's error result holding the sentence, and the result's `tool_result_meta`
   entry with `non_execution_kind` `user-rejected`. The judgement read it as the absence not shown, so
@@ -1923,8 +1926,8 @@ It `exec`s with exactly this environment, nothing inherited: `PATH=/usr/bin:/bin
     offline run's uutils `cat` prints `cat:`; the judgement looks for `cat:
     /srv/audit/work/nonexistent/: No such file or directory` anywhere in the text, so either prefix
     passes, and that match must stay unanchored.
-  - **Probe 5's `$` calls likely test the CLI, not the sandbox.** Since 2.1.332 refuses every `$` form,
-    probe 5's `.../cat /proc/$PPID/environ` and `.../cat /proc/$$/environ` calls are likely refused by
+  - **Probe 5's `$` calls likely test the CLI, not the sandbox.** Since 2.1.332 refuses some `$` forms
+    (above; a bare `$HOME` ran), probe 5's `.../cat /proc/$PPID/environ` and `.../cat /proc/$$/environ` calls are likely refused by
     the CLI's permission layer before they run; they then test the CLI rather than the sandbox, and a
     follow-up issue is to decide that. *Observed 2026-11-25 (issue #614):* they are refused in the
     `default` mode, by the deny rule `Bash(*/proc/*/environ*)` first and, with that rule removed, by
