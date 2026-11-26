@@ -115,6 +115,13 @@ const (
 	checkEnd
 )
 
+// privateFindingNotFiled is the one phrase of the six checks of a private
+// finding's draft advisory. The run log is public: it may say that a private
+// finding exists and was not filed, never which check refused it, how many
+// private findings there are or what kind (ADR 0040, "Exit codes and the
+// summary line"). The checks stay distinct for the error's own text.
+const privateFindingNotFiled = "a private finding could not be filed as a draft"
+
 // checkPhrases is the fixed list: each check's class and the words the summary
 // line names it by. The words are the form of what is wrong, and runbook step
 // 11 lists each with its fix.
@@ -161,12 +168,12 @@ var checkPhrases = [checkEnd]struct {
 	CheckPrivateStateUnknown:  {ErrResultInvalid, "the private state none of the three"},
 	CheckPrivateStateNone:     {ErrResultInvalid, "the private state none, but a finding is private"},
 	CheckPrivateStateSet:      {ErrResultInvalid, "the private state set, but no finding is private"},
-	CheckAdvisoryNotPrivate:   {ErrResultInvalid, "an advisory for a finding that is not private"},
-	CheckAdvisoryFingerprint:  {ErrResultInvalid, "an advisory fingerprint that is no fingerprint"},
-	CheckAdvisoryRenderStatus: {ErrResultInvalid, "an advisory status not new, open or regressed"},
-	CheckAdvisorySetStatus:    {ErrResultInvalid, "an advisory status none of the four"},
-	CheckAdvisoryStatusLine:   {ErrResultInvalid, "an advisory description without a status line"},
-	CheckFingerprintTwice:     {ErrResultInvalid, "two findings with one fingerprint"},
+	CheckAdvisoryNotPrivate:   {ErrResultInvalid, privateFindingNotFiled},
+	CheckAdvisoryFingerprint:  {ErrResultInvalid, privateFindingNotFiled},
+	CheckAdvisoryRenderStatus: {ErrResultInvalid, privateFindingNotFiled},
+	CheckAdvisorySetStatus:    {ErrResultInvalid, privateFindingNotFiled},
+	CheckAdvisoryStatusLine:   {ErrResultInvalid, privateFindingNotFiled},
+	CheckFingerprintTwice:     {ErrResultInvalid, privateFindingNotFiled},
 	CheckResultFile:           {ErrResultInvalid, "the result not one regular file under the cap"},
 	CheckReleaseTag:           {ErrResultInvalid, "the release tag not vX.Y.Z"},
 	CheckNoTagRelease:         {ErrResultInvalid, "no release of the tag"},
