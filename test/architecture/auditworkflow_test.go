@@ -582,12 +582,24 @@ func shellWordsUntilEnd(command string) []string {
 // absoluteShellPath reports whether value is an absolute shell path, quoted or
 // not: one that starts with /, ${RUNNER_TEMP}/ or ${GITHUB_WORKSPACE}/, or is one
 // of the two variables whole (its own directory). The two variables are the
-// runner's own absolute directories.
+// runner's own absolute directories. After ${GITHUB_WORKSPACE}/ the path must
+// be clean: no empty, . or .. segment and no trailing /, since the core
+// refuses a result or reports path that is not absolute and clean (issue #655).
 func absoluteShellPath(value string) bool {
 	unquoted := strings.TrimSuffix(strings.TrimPrefix(value, `"`), `"`)
 	unquoted = strings.TrimSuffix(strings.TrimPrefix(unquoted, `'`), `'`)
 
-	for _, prefix := range []string{"/", "${RUNNER_TEMP}/", "${GITHUB_WORKSPACE}/"} {
+	if rest, ok := strings.CutPrefix(unquoted, "${GITHUB_WORKSPACE}/"); ok {
+		for segment := range strings.SplitSeq(rest, "/") {
+			if segment == "" || segment == "." || segment == ".." {
+				return false
+			}
+		}
+
+		return true
+	}
+
+	for _, prefix := range []string{"/", "${RUNNER_TEMP}/"} {
 		if strings.HasPrefix(unquoted, prefix) {
 			return true
 		}

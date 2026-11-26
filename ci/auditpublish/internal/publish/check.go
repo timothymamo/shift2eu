@@ -110,7 +110,6 @@ const (
 	CheckCompare
 	CheckWriteBranch
 	CheckOpenPull
-	CheckRunGH
 
 	checkEnd
 )
@@ -133,8 +132,8 @@ var checkPhrases = [checkEnd]struct {
 	CheckStepSummary:         {ErrConfig, "the step summary not appendable"},
 	CheckUsage:               {ErrConfig, "a bad flag or subcommand"},
 	CheckToken:               {ErrConfig, "GH_TOKEN unset or empty"},
-	CheckServerURL:           {ErrConfig, "GITHUB_SERVER_URL not https:// and a host name"},
-	CheckServerURLGitHub:     {ErrConfig, "GITHUB_SERVER_URL not https://github.com"},
+	CheckServerURL:           {ErrConfig, "GITHUB_SERVER_URL not an https URL with a host name"},
+	CheckServerURLGitHub:     {ErrConfig, "GITHUB_SERVER_URL not github.com over https"},
 	CheckSHA:                 {ErrConfig, "GITHUB_SHA not 40 lowercase hex"},
 	CheckRepository:          {ErrConfig, "GITHUB_REPOSITORY not owner/name"},
 	CheckRepositoryDot:       {ErrConfig, "GITHUB_REPOSITORY holds a dot segment"},
@@ -179,7 +178,7 @@ var checkPhrases = [checkEnd]struct {
 	CheckNoTagRelease:         {ErrResultInvalid, "no release of the tag"},
 	CheckNoLatestRelease:      {ErrResultInvalid, "no latest release"},
 	CheckNotLatestRelease:     {ErrResultInvalid, "the tag not the latest release's"},
-	CheckImageDigest:          {ErrResultInvalid, "the image digest not sha256: and 64 lowercase hex"},
+	CheckImageDigest:          {ErrResultInvalid, "the image digest not sha256 with 64 lowercase hex"},
 	CheckNoAttestation:        {ErrResultInvalid, "no attestation of the digest"},
 	CheckNoProvenance:         {ErrResultInvalid, "no provenance attestation names the digest"},
 
@@ -218,7 +217,6 @@ var checkPhrases = [checkEnd]struct {
 	CheckCompare:           {ErrGitHub, "comparing the audited commit with the report's"},
 	CheckWriteBranch:       {ErrGitHub, "writing the report's branch"},
 	CheckOpenPull:          {ErrGitHub, "opening the report's pull request"},
-	CheckRunGH:             {ErrGitHub, "running gh"},
 }
 
 // checkError is an error marked with the check that refused it. Its text and
