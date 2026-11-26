@@ -603,7 +603,7 @@ jobs:
       - uses: sigstore/cosign-installer@881c63bd87e38389154debd8331404ce7ca8a3ab # v4.1.4
         with:
           # renovate: datasource=github-releases depName=sigstore/cosign
-          cosign-release: v3.1.5
+          cosign-release: v3.1.6
       # cosign writes the registry credential where actions/attest reads it.
       - name: Log in to ghcr.io
         env:
@@ -655,7 +655,7 @@ jobs:
       - uses: sigstore/cosign-installer@881c63bd87e38389154debd8331404ce7ca8a3ab # v4.1.4
         with:
           # renovate: datasource=github-releases depName=sigstore/cosign
-          cosign-release: v3.1.5
+          cosign-release: v3.1.6
       # cosign writes the registry credential where docker and buildx read it,
       # so the checks below pull what the job may read with its own token.
       - name: Log in to ghcr.io
