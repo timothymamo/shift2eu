@@ -1249,9 +1249,6 @@ jobs:
           CLAUDE_CODE_PIN_INTEGRITY: ${{ steps.claude-code-pin.outputs.integrity }}
         run: |
           set -euo pipefail
-          bin="${RUNNER_TEMP}/bin"
-          mkdir -p "${bin}"
-          echo "${bin}" >> "${GITHUB_PATH}"
           curl -fsSLo "${RUNNER_TEMP}/bubblewrap.deb" "http://archive.ubuntu.com/ubuntu/pool/main/b/bubblewrap/bubblewrap_${BUBBLEWRAP_VERSION}_amd64.deb"
           if ! echo "${BUBBLEWRAP_DEB_SHA256}  ${RUNNER_TEMP}/bubblewrap.deb" | sha256sum --check --strict -; then
             echo "::error title=Audit model::bubblewrap's checksum differs from its pin: see runbook step 11"
@@ -1270,7 +1267,6 @@ jobs:
             exit 1
           fi
           tar -C "${RUNNER_TEMP}" -xzf "${RUNNER_TEMP}/age.tar.gz"
-          install -m 0755 "${RUNNER_TEMP}/age/age" "${bin}/age"
           # The CLI's version and integrity are read from the one pin file, never
           # written here (ADR 0040): a bump moves that file, which the pin check
           # holds to the registry's integrity, and this step fails until it does.
@@ -1300,6 +1296,10 @@ jobs:
           set -euo pipefail
           GOFLAGS=-mod=readonly GOPROXY=off go build -trimpath -o "${RUNNER_TEMP}/audit-exec" ./ci/auditexec
           sudo install -o root -g root -m 0555 "${RUNNER_TEMP}/audit-exec" /srv/audit/bin/audit-exec
+          sudo install -d -o root -g root -m 0555 /srv/audit/tools
+          sudo install -o root -g root -m 0555 "${RUNNER_TEMP}/age/age" /srv/audit/tools/age
+          sudo install -o root -g root -m 0555 ci/auditrun /srv/audit/tools/auditrun
+          sudo install -o root -g root -m 0555 ci/auditpublish /srv/audit/tools/auditpublish
       - name: List the run's artifacts and download the checks' ciphertext
         timeout-minutes: 5
         env:
@@ -1337,7 +1337,7 @@ jobs:
         run: |
           set -euo pipefail
           sudo install -d -o root -g root -m 0755 /srv/audit/checks
-          printf '%s\n' "${AUDIT_MODEL_PRIVATE_KEY}" | "${RUNNER_TEMP}/bin/age" --decrypt --identity - --output "${RUNNER_TEMP}/checks.tar" "${RUNNER_TEMP}/checks-result/checks-result.age"
+          printf '%s\n' "${AUDIT_MODEL_PRIVATE_KEY}" | /srv/audit/tools/age --decrypt --identity - --output "${RUNNER_TEMP}/checks.tar" "${RUNNER_TEMP}/checks-result/checks-result.age"
           tar -tvf "${RUNNER_TEMP}/checks.tar" > "${RUNNER_TEMP}/checks.types"
           tar -tf "${RUNNER_TEMP}/checks.tar" > "${RUNNER_TEMP}/checks.names"
           if cut -c1 "${RUNNER_TEMP}/checks.types" | grep -v '^[-d]$' > /dev/null ||
@@ -1410,7 +1410,7 @@ jobs:
           AUDIT_PUBLISH_PUBLIC_KEY: ${{ vars.AUDIT_PUBLISH_PUBLIC_KEY }}
         run: |
           set -euo pipefail
-          "${RUNNER_TEMP}/bin/age" --encrypt --recipient "${AUDIT_PUBLISH_PUBLIC_KEY}" --output "${RUNNER_TEMP}/model-result.age" "${RUNNER_TEMP}/result.json"
+          /srv/audit/tools/age --encrypt --recipient "${AUDIT_PUBLISH_PUBLIC_KEY}" --output "${RUNNER_TEMP}/model-result.age" "${RUNNER_TEMP}/result.json"
       - name: Upload the model's ciphertext
         timeout-minutes: 5
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -1493,7 +1493,7 @@ jobs:
           AUDIT_PUBLISH_PRIVATE_KEY: ${{ secrets.AUDIT_PUBLISH_PRIVATE_KEY }}
         run: |
           set -euo pipefail
-          printf '%s\n' "${AUDIT_PUBLISH_PRIVATE_KEY}" | age --decrypt --identity - --output "${RUNNER_TEMP}/result.json" "${RUNNER_TEMP}/model-result/model-result.age"
+          printf '%s\n' "${AUDIT_PUBLISH_PRIVATE_KEY}" | "${RUNNER_TEMP}/bin/age" --decrypt --identity - --output "${RUNNER_TEMP}/result.json" "${RUNNER_TEMP}/model-result/model-result.age"
       - name: Check the image digest and its release
         timeout-minutes: 10
         env:

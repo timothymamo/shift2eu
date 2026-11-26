@@ -658,7 +658,7 @@ const (
 	auditRunCommand = "          if ! ci/auditrun -claude-tarball \"${RUNNER_TEMP}/claude-code/claude-code.tgz\" -claude-integrity \"${CLAUDE_CODE_PIN_INTEGRITY}\" -result-out \"${RUNNER_TEMP}/result.json\"; then\n"
 	// auditEncryptResultCommand is the encrypt step's age command: it reads the
 	// file the launcher wrote, never the result's path under /srv/audit.
-	auditEncryptResultCommand = "          \"${RUNNER_TEMP}/bin/age\" --encrypt --recipient \"${AUDIT_PUBLISH_PUBLIC_KEY}\" --output \"${RUNNER_TEMP}/model-result.age\" \"${RUNNER_TEMP}/result.json\"\n"
+	auditEncryptResultCommand = "          /srv/audit/tools/age --encrypt --recipient \"${AUDIT_PUBLISH_PUBLIC_KEY}\" --output \"${RUNNER_TEMP}/model-result.age\" \"${RUNNER_TEMP}/result.json\"\n"
 	// auditModelResultHead is the model job's encryption step, the step that
 	// runs right after the model step: the head the case that moves the hardening
 	// step past the model step inserts it at.
@@ -2325,14 +2325,14 @@ func TestAuditWorkflow(t *testing.T) {
 		// denied to it.
 		{
 			name: "the model key under /tmp",
-			workflow: mutate(t, acceptedWorkflow, "          printf '%s\\n' \"${AUDIT_MODEL_PRIVATE_KEY}\" | \"${RUNNER_TEMP}/bin/age\" --decrypt",
-				"          printf '%s\\n' \"${AUDIT_MODEL_PRIVATE_KEY}\" > /tmp/age.key\n          printf '%s\\n' \"${AUDIT_MODEL_PRIVATE_KEY}\" | \"${RUNNER_TEMP}/bin/age\" --decrypt"),
+			workflow: mutate(t, acceptedWorkflow, "          printf '%s\\n' \"${AUDIT_MODEL_PRIVATE_KEY}\" | /srv/audit/tools/age --decrypt",
+				"          printf '%s\\n' \"${AUDIT_MODEL_PRIVATE_KEY}\" > /tmp/age.key\n          printf '%s\\n' \"${AUDIT_MODEL_PRIVATE_KEY}\" | /srv/audit/tools/age --decrypt"),
 			wantIn: "/tmp",
 		},
 		{
 			name: "the publish key under /run",
-			workflow: mutate(t, acceptedWorkflow, "          printf '%s\\n' \"${AUDIT_PUBLISH_PRIVATE_KEY}\" | age --decrypt",
-				"          printf '%s\\n' \"${AUDIT_PUBLISH_PRIVATE_KEY}\" > /run/age.key\n          printf '%s\\n' \"${AUDIT_PUBLISH_PRIVATE_KEY}\" | age --decrypt"),
+			workflow: mutate(t, acceptedWorkflow, "          printf '%s\\n' \"${AUDIT_PUBLISH_PRIVATE_KEY}\" | \"${RUNNER_TEMP}/bin/age\" --decrypt",
+				"          printf '%s\\n' \"${AUDIT_PUBLISH_PRIVATE_KEY}\" > /run/age.key\n          printf '%s\\n' \"${AUDIT_PUBLISH_PRIVATE_KEY}\" | \"${RUNNER_TEMP}/bin/age\" --decrypt"),
 			wantIn: "/run",
 		},
 
@@ -2407,7 +2407,7 @@ func TestAuditWorkflow(t *testing.T) {
 			// nothing reads /srv/audit/work/result.json again by its path.
 			name: "the encrypt step reading the result under /srv/audit",
 			workflow: mutate(t, acceptedWorkflow, auditEncryptResultCommand,
-				"          \"${RUNNER_TEMP}/bin/age\" --encrypt --recipient \"${AUDIT_PUBLISH_PUBLIC_KEY}\" --output \"${RUNNER_TEMP}/model-result.age\" /srv/audit/work/result.json\n"),
+				"          /srv/audit/tools/age --encrypt --recipient \"${AUDIT_PUBLISH_PUBLIC_KEY}\" --output \"${RUNNER_TEMP}/model-result.age\" /srv/audit/work/result.json\n"),
 			wantIn: "RUNNER_TEMP",
 		},
 		{

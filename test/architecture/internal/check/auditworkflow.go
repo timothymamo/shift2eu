@@ -169,10 +169,14 @@ func varValue(name string) string { return "${{ vars." + name + " }}" }
 var (
 	checksumCheck = command(`sha256sum --check --strict`, "sha256sum --check --strict")
 	modDownload   = command(`(?m)(?:^|[\s;&|])go mod download(?:$|\s)`, "go mod download")
-	stdinIdentity = command(`age --decrypt --identity - `, "age --decrypt --identity - (the private key on stdin)")
-	// modelIdentity is the model job's decrypt: age by the absolute path its
-	// install step put in place, as its encrypt step runs it (issues #615, #614).
-	modelIdentity   = command(`"\$\{RUNNER_TEMP\}/bin/age" --decrypt --identity - `, `"${RUNNER_TEMP}/bin/age" --decrypt --identity - (the private key on stdin, the age the install step checked)`)
+	// publishIdentity is the publish job's decrypt: age by the absolute path
+	// that job's own install step put in place on its fresh runner, never the
+	// bare word the step's shell resolves through PATH (issues #615, #614).
+	publishIdentity = command(`"\$\{RUNNER_TEMP\}/bin/age" --decrypt --identity - `, `"${RUNNER_TEMP}/bin/age" --decrypt --identity - (the private key on stdin, the age the install step checked)`)
+	// modelIdentity is the model job's decrypt: age by its path in the
+	// root-owned /srv/audit/tools, as its encrypt step runs it (finding M1 of
+	// issue #614's review).
+	modelIdentity   = command(`(?:^|[|\s])/srv/audit/tools/age --decrypt --identity - `, `/srv/audit/tools/age --decrypt --identity - (the private key on stdin, the age installed root-owned in /srv/audit/tools)`)
 	artifactsModel  = command(`auditpublish"? artifacts -job model `, "auditpublish artifacts -job model")
 	artifactsPublic = command(`auditpublish"? artifacts -job publish `, "auditpublish artifacts -job publish")
 
@@ -619,9 +623,13 @@ var (
 	// The launcher prints one constant class, so an expired or revoked token,
 	// the usage limit, a failed preflight and a managed-settings path read
 	// alike here: the step's line names what the maintainer recovers from.
-	runError = failureBranch(`(?m)^[ \t]*if ! (?:ci/|"\$\{RUNNER_TEMP\}/bin/)auditrun"? -claude-tarball [^\n]*`, `if ! <auditrun> -claude-tarball ...`,
+	// The model job runs its launcher and its artifact check from the
+	// root-owned /srv/audit/tools, never from ${RUNNER_TEMP}, which the runner's
+	// user can write (finding M1 of issue #614's review); ci/ is the fixture's
+	// spelling of a program built from main.
+	runError = failureBranch(`(?m)^[ \t]*if ! (?:ci/|/srv/audit/tools/)auditrun -claude-tarball [^\n]*`, `if ! <auditrun> -claude-tarball ...`,
 		"::error title=Audit model::the audit did not run: see runbook step 10")
-	modelArtifactError = failureBranch(`(?m)^[ \t]*if ! (?:ci/|"\$\{RUNNER_TEMP\}/bin/)auditpublish"? artifacts -job model [^\n]*`, `if ! <auditpublish> artifacts -job model ...`,
+	modelArtifactError = failureBranch(`(?m)^[ \t]*if ! (?:ci/|/srv/audit/tools/)auditpublish artifacts -job model [^\n]*`, `if ! <auditpublish> artifacts -job model ...`,
 		"::error title=Audit model::the run's artifacts are unexpected: see runbook step 11")
 	publishArtifactError = failureBranch(`(?m)^[ \t]*if ! (?:ci/|"\$\{RUNNER_TEMP\}/bin/)auditpublish"? artifacts -job publish [^\n]*`, `if ! <auditpublish> artifacts -job publish ...`,
 		"::error title=Audit publish::the run's artifacts are unexpected: see runbook step 11")
@@ -853,6 +861,10 @@ var auditJobs = []auditJob{
 				runs: []auditCommand{
 					command(`go build -trimpath .*\./ci/auditexec`, "go build -trimpath ./ci/auditexec"),
 					command(`install -o root -g root -m 0555 .*/srv/audit/bin/audit-exec`, "install -o root -g root -m 0555 ... /srv/audit/bin/audit-exec"),
+					// The job's own tools, root-owned in a directory the runner's
+					// user cannot write (finding M1 of issue #614's review).
+					command(wholeLine(`sudo install -d -o root -g root -m 0555 `+auditToolsDir), `sudo install -d -o root -g root -m 0555 `+auditToolsDir+`, on a line of its own`),
+					toolInstall("age"), toolInstall("auditrun"), toolInstall("auditpublish"),
 				},
 			},
 			{
@@ -904,8 +916,8 @@ var auditJobs = []auditJob{
 				name: "Encrypt the audit's result to the publish key",
 				env:  []auditRead{{key: "AUDIT_PUBLISH_PUBLIC_KEY", value: varValue("AUDIT_PUBLISH_PUBLIC_KEY")}},
 				runs: []auditCommand{
-					command(`"\$\{RUNNER_TEMP\}/bin/age" --encrypt --recipient "\$\{AUDIT_PUBLISH_PUBLIC_KEY\}" --output "\$\{RUNNER_TEMP\}/model-result\.age" "\$\{RUNNER_TEMP\}/result\.json"`,
-						`"${RUNNER_TEMP}/bin/age" --encrypt --recipient "${AUDIT_PUBLISH_PUBLIC_KEY}" --output "${RUNNER_TEMP}/model-result.age" "${RUNNER_TEMP}/result.json", the launcher's checked bytes`),
+					command(`(?m)^[ \t]*/srv/audit/tools/age --encrypt --recipient "\$\{AUDIT_PUBLISH_PUBLIC_KEY\}" --output "\$\{RUNNER_TEMP\}/model-result\.age" "\$\{RUNNER_TEMP\}/result\.json"`,
+						`/srv/audit/tools/age --encrypt --recipient "${AUDIT_PUBLISH_PUBLIC_KEY}" --output "${RUNNER_TEMP}/model-result.age" "${RUNNER_TEMP}/result.json", the root-owned age and the launcher's checked bytes`),
 				},
 				refuses: []auditCommand{command(`/srv/audit/work/result\.json`,
 					"/srv/audit/work/result.json, the work area's result read again by its path, want ${RUNNER_TEMP}/result.json, the bytes the launcher checked (-result-out)")},
@@ -930,7 +942,7 @@ var auditJobs = []auditJob{
 			{
 				name: "Decrypt the model's result",
 				env:  []auditRead{{key: "AUDIT_PUBLISH_PRIVATE_KEY", value: secretValue("AUDIT_PUBLISH_PRIVATE_KEY")}},
-				runs: []auditCommand{stdinIdentity},
+				runs: []auditCommand{publishIdentity},
 			},
 			{name: "Check the image digest and its release", githubToken: true, runs: []auditCommand{command(`auditpublish"? image `, "auditpublish image")}},
 			{
@@ -1147,6 +1159,8 @@ func (a *auditReader) lineRules() {
 				a.r.fail("line %d: the model job runs %s (%q): it runs no check, no container and no release code, which are the checks job's (ADR 0040)", num, m[1], trimmed)
 			}
 
+			a.modelToolRules(num, line, trimmed)
+
 			// The model job runs no container at all; its own rule refuses one.
 			inDocker = false
 
@@ -1154,6 +1168,94 @@ func (a *auditReader) lineRules() {
 		}
 
 		inDocker = a.containerRules(num, line, inDocker)
+	}
+}
+
+// auditToolsDir is the root-owned, mode 0555 directory the model job's own
+// tools live in, beside /srv/audit/bin (finding M1 of issue #614's review, ADR
+// 0040): ${RUNNER_TEMP} and its bin/ are the runner's user's, so a write past
+// the sandbox during the model session could replace a tool there, or plant a
+// git that actions/checkout's post step runs by PATH with its token.
+const auditToolsDir = "/srv/audit/tools"
+
+// auditToolsInstalled are the programs the model job installs into
+// auditToolsDir and runs by that path alone.
+var auditToolsInstalled = []string{"age", "auditrun", "auditpublish"}
+
+// auditToolInstallPrefix is the one form of a tool's installation.
+const auditToolInstallPrefix = "sudo install -o root -g root -m 0555 "
+
+// toolInstall returns the command that installs tool root-owned with mode 0555
+// into auditToolsDir.
+func toolInstall(tool string) auditCommand {
+	return command(`(?m)^[ \t]*`+regexp.QuoteMeta(auditToolInstallPrefix)+`\S+ `+regexp.QuoteMeta(auditToolsDir+"/"+tool)+`$`,
+		auditToolInstallPrefix+"<source> "+auditToolsDir+"/"+tool+", on a line of its own")
+}
+
+// auditInstallLine matches an install of a file, plain or under sudo, never
+// install -d, which makes a directory.
+var auditInstallLine = regexp.MustCompile(`^(?:sudo\s+)?install\s`)
+
+// modelToolRules holds one code line of the model job to its tools' rules
+// (finding M1 of issue #614's review, ADR 0040): no $GITHUB_PATH entry in any
+// form, each of age, auditrun and auditpublish installed only as
+// "sudo install -o root -g root -m 0555 <source> /srv/audit/tools/<tool>", and
+// each run by that absolute path, never by the word the shell resolves through
+// PATH or by a path in a directory the runner's user can write. ci/<tool> is
+// the fixture's spelling of a program built from main and is no absolute path.
+func (a *auditReader) modelToolRules(num int, line, trimmed string) {
+	if strings.Contains(line, "GITHUB_PATH") {
+		a.r.fail("line %d: the model job names $GITHUB_PATH (%q): want no PATH entry at all, every tool run by its path in %s, so no later step, actions/checkout's post step included, resolves a program the model session could plant (ADR 0040, issue #614)", num, trimmed, auditToolsDir)
+	}
+
+	if auditInstallLine.MatchString(trimmed) && !strings.Contains(trimmed, " -d ") {
+		a.toolInstallLine(num, trimmed)
+
+		return
+	}
+
+	if strings.HasPrefix(trimmed, "tar ") {
+		return
+	}
+
+	fields := strings.Fields(line)
+
+	for i, field := range fields {
+		// A build's output is where a binary is made, not a program run.
+		if i > 0 && fields[i-1] == "-o" {
+			continue
+		}
+
+		word := strings.Trim(field, `"'`)
+
+		for _, tool := range auditToolsInstalled {
+			want := auditToolsDir + "/" + tool
+			if word == want {
+				continue
+			}
+
+			if word == tool || (strings.HasSuffix(word, "/"+tool) && (strings.HasPrefix(word, "$") || strings.HasPrefix(word, "/"))) {
+				a.r.fail("line %d: the model job runs %s as %q (%q): want %s, the tool installed root-owned where the model session cannot write it (ADR 0040, issue #614)", num, tool, word, trimmed, want)
+			}
+		}
+	}
+}
+
+// toolInstallLine refuses an installation of one of the model job's tools in
+// any form but the root-owned one into auditToolsDir.
+func (a *auditReader) toolInstallLine(num int, trimmed string) {
+	fields := strings.Fields(trimmed)
+	dest := strings.Trim(fields[len(fields)-1], `"'`)
+
+	for _, tool := range auditToolsInstalled {
+		if dest != tool && !strings.HasSuffix(dest, "/"+tool) {
+			continue
+		}
+
+		want := auditToolsDir + "/" + tool
+		if !strings.HasPrefix(trimmed, auditToolInstallPrefix) || dest != want || len(fields) != len(strings.Fields(auditToolInstallPrefix))+2 {
+			a.r.fail("line %d: the model job installs %s as %q: want %q<source> %s, root-owned with mode 0555 where the model session cannot write it (ADR 0040, issue #614)", num, tool, trimmed, auditToolInstallPrefix, want)
+		}
 	}
 }
 

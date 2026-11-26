@@ -1319,9 +1319,8 @@ jobs:
           CLAUDE_CODE_PIN_INTEGRITY: ${{ steps.claude-code-pin.outputs.integrity }}
         run: |
           set -euo pipefail
-          bin="${RUNNER_TEMP}/bin"
           dl="${RUNNER_TEMP}/downloads"
-          mkdir -p "${bin}" "${dl}"
+          mkdir -p "${dl}"
           curl -fsSLo "${dl}/bubblewrap.deb" "https://archive.ubuntu.com/ubuntu/pool/main/b/bubblewrap/bubblewrap_${BUBBLEWRAP_VERSION}_amd64.deb"
           # Each download's checksum check names the tool whose pin it fails and the runbook step that
           # puts it right, so a failed run says why: sha256sum's own line names no cause.
@@ -1341,9 +1340,9 @@ jobs:
             echo "::error title=Audit model::age's checksum differs from its pin: see runbook step 11"
             exit 1
           fi
+          # Unpacked here and installed root-owned into /srv/audit/tools by the wrapper's step, once
+          # /srv/audit is made: no directory the runner's user can write holds a tool a later step runs.
           tar -C "${dl}" -xzf "${dl}/age.tar.gz" age/age
-          install -m 0755 "${dl}/age/age" "${bin}/age"
-          echo "${bin}" >> "${GITHUB_PATH}"
           # The script is shared with the AI reviewer and its own errors name no runbook step, so the
           # workflow wraps it: a CLI that does not install is a pin the pin check holds to the registry's
           # integrity, or a managed policy on the runner image (runbook step 11, the CLI's two lines).
@@ -1378,18 +1377,26 @@ jobs:
       # 0555 (rounds H and L), the launcher and the artifact check. The audit directory is made here,
       # outside /home, while sudo still works: /srv and /srv/audit and bin/ root-owned, the work and state
       # areas and cwd-preflight/ and cwd-audit/, each CLI session's own working directory (issues #615,
-      # #614), the runner's, as the launcher and the CLI write them.
+      # #614), the runner's, as the launcher and the CLI write them. The job's own tools, age, the
+      # launcher and the artifact check, go root-owned with mode 0555 into tools/, and every later step
+      # runs them by that path: the job adds no $GITHUB_PATH entry, and ${RUNNER_TEMP} is the runner
+      # user's, so a write past the sandbox could replace a tool there or plant a git for
+      # actions/checkout's post step (ADR 0040, issue #614).
       - name: Build and install the audit's command wrapper
         timeout-minutes: 10
         run: |
           set -euo pipefail
           GOFLAGS=-mod=readonly GOPROXY=off go build -trimpath -o "${RUNNER_TEMP}/audit-exec" ./ci/auditexec
-          GOFLAGS=-mod=readonly GOPROXY=off go build -trimpath -o "${RUNNER_TEMP}/bin/auditrun" ./ci/auditrun
-          GOFLAGS=-mod=readonly GOPROXY=off go build -trimpath -o "${RUNNER_TEMP}/bin/auditpublish" ./ci/auditpublish
+          GOFLAGS=-mod=readonly GOPROXY=off go build -trimpath -o "${RUNNER_TEMP}/auditrun" ./ci/auditrun
+          GOFLAGS=-mod=readonly GOPROXY=off go build -trimpath -o "${RUNNER_TEMP}/auditpublish" ./ci/auditpublish
           sudo install -d -o root -g root -m 0755 /srv /srv/audit
           sudo install -d -o root -g root -m 0755 /srv/audit/bin
           sudo install -o root -g root -m 0555 "${RUNNER_TEMP}/audit-exec" /srv/audit/bin/audit-exec
           sudo chmod 0555 /srv/audit/bin
+          sudo install -d -o root -g root -m 0555 /srv/audit/tools
+          sudo install -o root -g root -m 0555 "${RUNNER_TEMP}/downloads/age/age" /srv/audit/tools/age
+          sudo install -o root -g root -m 0555 "${RUNNER_TEMP}/auditrun" /srv/audit/tools/auditrun
+          sudo install -o root -g root -m 0555 "${RUNNER_TEMP}/auditpublish" /srv/audit/tools/auditpublish
           sudo install -d -o "$(id -u)" -g "$(id -g)" -m 0755 /srv/audit/work /srv/audit/work/tmp /srv/audit/cwd-preflight /srv/audit/cwd-audit /srv/audit/state
           sudo install -d -o "$(id -u)" -g "$(id -g)" -m 0700 /srv/audit/state/home /srv/audit/state/tmp /srv/audit/state/bin /srv/audit/state/out
       # The artifact check fails closed on an extra, a duplicate, a missing or an expired artifact, and
@@ -1403,7 +1410,7 @@ jobs:
           set -euo pipefail
           # The artifact check refuses an artifact the job does not expect, a name twice, one missing, one
           # expired or a second page: the step names that kind and no artifact's name or content.
-          if ! "${RUNNER_TEMP}/bin/auditpublish" artifacts -job model -gh /usr/bin/gh -tmp "${RUNNER_TEMP}"; then
+          if ! /srv/audit/tools/auditpublish artifacts -job model -gh /usr/bin/gh -tmp "${RUNNER_TEMP}"; then
             echo "::error title=Audit model::the run's artifacts are unexpected: see runbook step 11"
             exit 1
           fi
@@ -1431,7 +1438,7 @@ jobs:
           AUDIT_MODEL_PRIVATE_KEY: ${{ secrets.AUDIT_MODEL_PRIVATE_KEY }}
         run: |
           set -euo pipefail
-          printf '%s\n' "${AUDIT_MODEL_PRIVATE_KEY}" | "${RUNNER_TEMP}/bin/age" --decrypt --identity - --output "${RUNNER_TEMP}/checks.tar" "${RUNNER_TEMP}/checks-result/checks-result.age"
+          printf '%s\n' "${AUDIT_MODEL_PRIVATE_KEY}" | /srv/audit/tools/age --decrypt --identity - --output "${RUNNER_TEMP}/checks.tar" "${RUNNER_TEMP}/checks-result/checks-result.age"
           # Listed into files first: a grep -q that stops reading early would end tar with SIGPIPE, which
           # pipefail would read as no match.
           tar -tvf "${RUNNER_TEMP}/checks.tar" > "${RUNNER_TEMP}/checks.types"
@@ -1472,8 +1479,8 @@ jobs:
           sudo systemctl stop docker.service docker.socket || rc=$?
           sudo systemctl disable docker.service docker.socket || rc=$?
           sudo rm -f /var/run/docker.sock || rc=$?
-          owners="$(stat -c '%U:%G %a %n' /srv /srv/audit /srv/audit/bin /srv/audit/bin/audit-exec /srv/audit/checks)"
-          want="$(printf '%s\n' 'root:root 755 /srv' 'root:root 755 /srv/audit' 'root:root 555 /srv/audit/bin' 'root:root 555 /srv/audit/bin/audit-exec' 'root:root 555 /srv/audit/checks')"
+          owners="$(stat -c '%U:%G %a %n' /srv /srv/audit /srv/audit/bin /srv/audit/bin/audit-exec /srv/audit/checks /srv/audit/tools /srv/audit/tools/age /srv/audit/tools/auditrun /srv/audit/tools/auditpublish)"
+          want="$(printf '%s\n' 'root:root 755 /srv' 'root:root 755 /srv/audit' 'root:root 555 /srv/audit/bin' 'root:root 555 /srv/audit/bin/audit-exec' 'root:root 555 /srv/audit/checks' 'root:root 555 /srv/audit/tools' 'root:root 555 /srv/audit/tools/age' 'root:root 555 /srv/audit/tools/auditrun' 'root:root 555 /srv/audit/tools/auditpublish')"
           if [ "${owners}" != "${want}" ]; then
             echo "::error title=Audit model::the audit directory's owners or modes are not as laid out: see runbook step 10"
             exit 1
@@ -1516,7 +1523,7 @@ jobs:
           # The launcher prints one line, a constant class: an expired or revoked token, the subscription's
           # usage limit, a failed preflight or a managed-settings path read alike here, so the step names
           # what the maintainer recovers from and names no secret and no finding.
-          if ! "${RUNNER_TEMP}/bin/auditrun" -claude-tarball "${RUNNER_TEMP}/claude-code/claude-code.tgz" -claude-integrity "${CLAUDE_CODE_PIN_INTEGRITY}" -result-out "${RUNNER_TEMP}/result.json"; then
+          if ! /srv/audit/tools/auditrun -claude-tarball "${RUNNER_TEMP}/claude-code/claude-code.tgz" -claude-integrity "${CLAUDE_CODE_PIN_INTEGRITY}" -result-out "${RUNNER_TEMP}/result.json"; then
             echo "::error title=Audit model::the audit did not run: see runbook step 10"
             exit 1
           fi
@@ -1526,7 +1533,7 @@ jobs:
           AUDIT_PUBLISH_PUBLIC_KEY: ${{ vars.AUDIT_PUBLISH_PUBLIC_KEY }}
         run: |
           set -euo pipefail
-          "${RUNNER_TEMP}/bin/age" --encrypt --recipient "${AUDIT_PUBLISH_PUBLIC_KEY}" --output "${RUNNER_TEMP}/model-result.age" "${RUNNER_TEMP}/result.json"
+          /srv/audit/tools/age --encrypt --recipient "${AUDIT_PUBLISH_PUBLIC_KEY}" --output "${RUNNER_TEMP}/model-result.age" "${RUNNER_TEMP}/result.json"
           echo "finished"
       - name: Upload the model's ciphertext
         timeout-minutes: 5
@@ -1629,7 +1636,7 @@ jobs:
           AUDIT_PUBLISH_PRIVATE_KEY: ${{ secrets.AUDIT_PUBLISH_PRIVATE_KEY }}
         run: |
           set -euo pipefail
-          printf '%s\n' "${AUDIT_PUBLISH_PRIVATE_KEY}" | age --decrypt --identity - --output "${RUNNER_TEMP}/result.json" "${RUNNER_TEMP}/model-result/model-result.age"
+          printf '%s\n' "${AUDIT_PUBLISH_PRIVATE_KEY}" | "${RUNNER_TEMP}/bin/age" --decrypt --identity - --output "${RUNNER_TEMP}/result.json" "${RUNNER_TEMP}/model-result/model-result.age"
           echo "finished"
       - name: Check the image digest and its release
         timeout-minutes: 10

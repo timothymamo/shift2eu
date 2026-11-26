@@ -64,7 +64,7 @@
 //     file-command directory - the $GITHUB_ENV file's, beside $GITHUB_PATH,
 //     $GITHUB_OUTPUT, $GITHUB_STATE and the step summary: every entry's
 //     name, type (Lstat, no link followed) and bytes, every entry digested,
-//     the step summary included, at most 64 entries and 4 MiB, a directory
+//     the step summary included, at most 256 entries and 4 MiB, a directory
 //     over either refused before the run - across that run (issues #615,
 //     #614), and wants a result file in the work area - a regular file, no
 //     link, within MaxResult, one JSON value - that holds neither the token

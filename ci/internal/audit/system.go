@@ -490,7 +490,7 @@ func newNonce() (string, error) {
 // The caps of the runner's file-command directory the launch digests (issues
 // #615, #614): a directory over either is refused, never digested in part.
 const (
-	maxFileCommandEntries = 64
+	maxFileCommandEntries = 256
 	maxFileCommandBytes   = 4 << 20
 )
 
