@@ -344,8 +344,11 @@ var (
 
 	// Row 10: trivy scans offline, from the database row 2 downloaded: no
 	// database, Java database, check bundle or version download, no telemetry.
-	trivyScans = append(trivyFlags("--skip-db-update", "--skip-java-db-update", "--skip-check-update", "--offline-scan", "--disable-telemetry"),
-		command(regexp.QuoteMeta(`trivy image "${offline[@]}" `), `trivy image "${offline[@]}", the image scan with the offline flags`),
+	// --skip-check-update is trivy image's alone: trivy sbom rejects it at the
+	// pinned release, so the image scan passes it after the shared flags (issue
+	// #658).
+	trivyScans = append(trivyFlags("--skip-db-update", "--skip-java-db-update", "--offline-scan", "--disable-telemetry"),
+		command(regexp.QuoteMeta(`trivy image "${offline[@]}" --skip-check-update `), `trivy image "${offline[@]}" --skip-check-update, the image scan with the offline flags and no check bundle download`),
 		command(regexp.QuoteMeta(`trivy sbom "${offline[@]}" `), `trivy sbom "${offline[@]}", the SBOM scan with the offline flags`))
 
 	// Row 11: the version command, in a container with the four flags and
