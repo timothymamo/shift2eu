@@ -14,7 +14,13 @@
 //     and checks, and a checkout .git that is no directory, that holds a
 //     commondir or gitdir, or whose config or config.worktree is no regular
 //     file or holds a key off that file's allow list or a line its strict
-//     parser cannot place.
+//     parser cannot place, and wanting the sessions' working directories
+//     cwd-preflight/ and cwd-audit/, siblings of the work area, empty real
+//     directories: under the subprocess environment scrub, Claude Code
+//     2.1.332 leaves empty placeholder files and directories in the directory
+//     it starts in, so it never starts in the work area, and it reads that
+//     directory at session start (a CLAUDE.md there is loaded), so each
+//     session has its own (issues #615, #614).
 //  4. CheckBubblewrap starts `bwrap --unshare-all --die-with-parent --ro-bind /
 //     / /bin/true` once.
 //  5. Preflight has the model make PreflightPlan's calls - a control that reads
@@ -51,9 +57,11 @@
 //     environment scrub, issue #592), it first reads the transcript's
 //     system/init element through the launcher's ModeCheck and refuses one
 //     that reports another mode, or none.
-//  6. Audit checks that the work area again holds only its empty tmp/, asks
-//     the model once through a Launch, with the skill from the checkout copy as
-//     the appended system prompt, and wants a result file in the work area -
+//  6. Audit checks that the work area again holds only its empty tmp/ and
+//     that cwd-audit/ is still an empty real directory, asks the model once
+//     through a Launch, with the skill from the checkout copy as the appended
+//     system prompt, fails on any change of the $GITHUB_ENV file's digest
+//     across that run (issue #614), and wants a result file in the work area -
 //     a regular file, no link, within MaxResult, one JSON value - that holds
 //     neither the token nor the canary in its bytes or its decoded strings. It
 //     returns the bytes it read and checked.

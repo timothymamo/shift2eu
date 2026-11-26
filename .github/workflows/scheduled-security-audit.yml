@@ -1377,7 +1377,8 @@ jobs:
       # main's programs, built offline from the checkout: the wrapper, installed root-owned with mode
       # 0555 (rounds H and L), the launcher and the artifact check. The audit directory is made here,
       # outside /home, while sudo still works: /srv and /srv/audit and bin/ root-owned, the work and state
-      # areas the runner's, as the launcher writes them.
+      # areas and cwd-preflight/ and cwd-audit/, each CLI session's own working directory (issues #615,
+      # #614), the runner's, as the launcher and the CLI write them.
       - name: Build and install the audit's command wrapper
         timeout-minutes: 10
         run: |
@@ -1389,7 +1390,7 @@ jobs:
           sudo install -d -o root -g root -m 0755 /srv/audit/bin
           sudo install -o root -g root -m 0555 "${RUNNER_TEMP}/audit-exec" /srv/audit/bin/audit-exec
           sudo chmod 0555 /srv/audit/bin
-          sudo install -d -o "$(id -u)" -g "$(id -g)" -m 0755 /srv/audit/work /srv/audit/work/tmp /srv/audit/state
+          sudo install -d -o "$(id -u)" -g "$(id -g)" -m 0755 /srv/audit/work /srv/audit/work/tmp /srv/audit/cwd-preflight /srv/audit/cwd-audit /srv/audit/state
           sudo install -d -o "$(id -u)" -g "$(id -g)" -m 0700 /srv/audit/state/home /srv/audit/state/tmp /srv/audit/state/bin /srv/audit/state/out
       # The artifact check fails closed on an extra, a duplicate, a missing or an expired artifact, and
       # writes the checked artifact's ID and SHA-256 digest to artifact.json: the download is bound to

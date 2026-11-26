@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.17.0](https://github.com/timothymamo/shift2eu/compare/v0.16.1...v0.17.0) (2026-11-26)
+
+
+### Features
+
+* **catalog:** record global offerings and add network.dns (PRD [#581](https://github.com/timothymamo/shift2eu/issues/581) M1) ([#621](https://github.com/timothymamo/shift2eu/issues/621)) ([8afaa14](https://github.com/timothymamo/shift2eu/commit/8afaa14a7987092cd36f34af41181a79cbb65c0e))
+* **site:** HSTS on the apex's HTTPS redirect ([#601](https://github.com/timothymamo/shift2eu/issues/601)) ([#618](https://github.com/timothymamo/shift2eu/issues/618)) ([59d19bf](https://github.com/timothymamo/shift2eu/commit/59d19bfb00dce217a1fe5992267041d905f9a265))
+
+
+### Bug Fixes
+
+* **audit:** probe 5 proves the token's absence without a braced variable (issue [#613](https://github.com/timothymamo/shift2eu/issues/613)) ([#623](https://github.com/timothymamo/shift2eu/issues/623)) ([67be95e](https://github.com/timothymamo/shift2eu/commit/67be95e1e53f45d77ce05f7678b99697d71884dc))
+* **make:** dev/worktree.sh resolves branches and main by their full refs (issue [#602](https://github.com/timothymamo/shift2eu/issues/602)) ([#611](https://github.com/timothymamo/shift2eu/issues/611)) ([896864c](https://github.com/timothymamo/shift2eu/commit/896864cdee95ad64aac508f7ebef0b1bdb05be59))
+
 ## [0.16.1](https://github.com/timothymamo/shift2eu/compare/v0.16.0...v0.16.1) (2026-11-25)
 
 

@@ -18,15 +18,25 @@ const (
 	checksDir   = auditDir + "/checks"
 	workDir     = auditDir + "/work"
 	workTmpDir  = workDir + "/tmp"
-	stateDir    = auditDir + "/state"
-	homeDir     = stateDir + "/home"
-	stateTmpDir = stateDir + "/tmp"
-	stateBinDir = stateDir + "/bin"
-	stateOutDir = stateDir + "/out"
-	binDir      = auditDir + "/bin"
-	wrapperPath = binDir + "/audit-exec"
-	claudePath  = stateBinDir + "/claude"
-	resultPath  = workDir + "/result.json"
+	// preflightCwdDir and auditCwdDir are the working directories of the
+	// preflight's session and of the audit's, siblings of the work area:
+	// under the subprocess environment scrub, Claude Code 2.1.332 creates
+	// empty placeholder files and directories in the directory it starts in
+	// and leaves them there, so they stay out of the checked work area, and
+	// the CLI reads its working directory at session start (a CLAUDE.md
+	// there is loaded), so nothing the preflight's session leaves reaches
+	// the audit's (issues #615, #614).
+	preflightCwdDir = auditDir + "/cwd-preflight"
+	auditCwdDir     = auditDir + "/cwd-audit"
+	stateDir        = auditDir + "/state"
+	homeDir         = stateDir + "/home"
+	stateTmpDir     = stateDir + "/tmp"
+	stateBinDir     = stateDir + "/bin"
+	stateOutDir     = stateDir + "/out"
+	binDir          = auditDir + "/bin"
+	wrapperPath     = binDir + "/audit-exec"
+	claudePath      = stateBinDir + "/claude"
+	resultPath      = workDir + "/result.json"
 )
 
 // wrapperMode is the wrapper's one mode: runnable and readable by all,
@@ -60,6 +70,8 @@ var layoutDirs = []dirRule{
 	{path: checksDir, readOnly: true},
 	{path: workDir, entries: []string{"tmp"}},
 	{path: workTmpDir, entries: []string{}},
+	{path: preflightCwdDir, entries: []string{}},
+	{path: auditCwdDir, entries: []string{}},
 	{path: stateDir},
 	{path: homeDir, entries: []string{}},
 	{path: stateTmpDir, entries: []string{}},
@@ -76,7 +88,9 @@ var layoutDirs = []dirRule{
 // directory whose config and config.worktree, each if there, hold only the
 // keys of their allow lists in lines of the forms git writes (checkGitConfig)
 // and which holds no commondir or gitdir, the work area
-// holding only its empty tmp/, the state area's home/ and tmp/ empty, bin/
+// holding only its empty tmp/, the sessions' working directories
+// cwd-preflight/ and cwd-audit/ empty, the state area's home/ and tmp/ empty,
+// bin/
 // without a write bit and holding the wrapper alone, and the wrapper a
 // regular file of mode 0555. It creates nothing: a missing path is
 // the model-free step that did not run. The wrapper's owner (root) is the
