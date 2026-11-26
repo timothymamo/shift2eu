@@ -71,7 +71,7 @@ func TestCoreRefusalNamesTheFailedCheck(t *testing.T) {
 			name:   "the server URL is not https and a host name",
 			source: "run.go: NewRun",
 			class:  publish.ErrConfig,
-			want:   "configuration invalid: GITHUB_SERVER_URL not https:// and a host name: see runbook",
+			want:   "configuration invalid: GITHUB_SERVER_URL not an https URL with a host name: see runbook",
 			code:   9,
 			drive: func(t *testing.T) error {
 				t.Helper()
