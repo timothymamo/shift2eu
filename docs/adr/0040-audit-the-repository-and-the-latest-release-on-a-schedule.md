@@ -2463,7 +2463,9 @@ arguments; git's read-only subcommands), and changes between versions. The deny 
   its bytes, read from the descriptor of the entry `Lstat` saw (`os.SameFile`); a link counts as its own
   target's text, so a file replaced by a link to the same bytes is a change. The directory is capped at
   64 entries and 4 MiB of content; a directory over either fails closed before the launch, never
-  digested in part, with an error naming the cap. Mode bits and link counts are not hashed: the runner
+  digested in part, with an error naming the cap. *Amended 2026-11-26 (review of issue #614, finding
+  L1):* the entry cap is **256**, not 64, so a runner that keeps earlier steps' file commands in the
+  directory does not fail a long job closed; the 4 MiB content cap stays. Mode bits and link counts are not hashed: the runner
   reads only a file command's bytes.
   *Amended 2026-11-26 (review of the L1 fix):* no digest leaves anything out, the step summary
   included. `auditrun` creates the summary before `audit.Run` and writes the run's line only after the
@@ -2552,11 +2554,18 @@ arguments; git's read-only subcommands), and changes between versions. The deny 
     tree could still write to a file command after the repair; the `actions/checkout` replacement below
     stays the follow-up for that. **This repair, not the digest, is what keeps a step's change from
     reaching the runner, the post steps and the public summary**: the runner applies `$GITHUB_ENV` and
-    `$GITHUB_PATH` after a failed step too, and posts the summary by its path.
-  **The cap of 64 entries was not checked on a real runner.** To our understanding actions/runner
-  removes the previous step's file-command files, which leaves about 5 or 6 entries in the directory; a
-  runner that kept every earlier step's files there could pass 64 in a long job, and the run would then
-  fail closed. Record the entry count from the first real run.
+    `$GITHUB_PATH` after a failed step too, and posts the summary by its path. *Amended 2026-11-26
+    (review of issue #614, should-fix):* the repair runs **only if `auditrun` returns**. A step
+    cancelled or timed out before it returns (the runner sends SIGINT, then kills after a grace period;
+    `auditrun` handles only SIGINT, and SIGTERM would need `syscall`, which its allow list does not
+    admit) gets no repair, and the runner then applies whatever the step's file commands hold. The
+    CLI's own deadlines, the preflight's 10 minutes and the audit's 40, below the model step's 90-minute
+    `timeout-minutes`, keep that unlikely; replacing `actions/checkout` in the model job (issue #627,
+    below) is the follow-up that covers it.
+  **The cap of 256 entries (64 until the review of issue #614) was not checked on a real runner.** To
+  our understanding actions/runner removes the previous step's file-command files, which leaves about 5
+  or 6 entries in the directory; a runner that kept every earlier step's files there could pass the cap
+  in a long job, and the run would then fail closed. Record the entry count from the first real run.
   **A detected change fails the step, and since round 3 it is undone.** The runner still applies the
   step's file commands after a failed step, and post steps run anyway: the model job's
   `actions/checkout` post step runs `git` through `PATH`, with the job's token and the network open,
@@ -2580,7 +2589,9 @@ arguments; git's read-only subcommands), and changes between versions. The deny 
   is handed `ACTIONS_RUNTIME_TOKEN`, which can write the Actions cache. What keeps a model step's change
   from reaching that post step is round 3's repair, which empties every changed file command before
   `auditrun` exits; the replacement of `actions/checkout` stays a follow-up for a process that outlives
-  the CLI. **Open option for the maintainer:** set `cache: false` on those three setup-go steps, held by
+  the CLI. *Amended 2026-11-26 (review of issue #614):* the follow-up is issue #627, and it also
+  covers a model step cancelled or timed out before `auditrun` returns, which gets no repair (above).
+  **Open option for the maintainer:** set `cache: false` on those three setup-go steps, held by
   a check in `test/architecture` as `release.yml`'s are, so that no workflow on `main` restores a cache
   a post step could have poisoned.
 - **Follow-up, not done here:** recheck the scrub's mounts with a real bwrap on the x64 runner, the
@@ -2689,6 +2700,25 @@ model job's decrypt step and the model job's encrypt step, the one after the mod
 never the bare word `age` the step's shell resolves through `PATH`, which an earlier step's
 `$GITHUB_PATH` line decides. `check.AuditWorkflow` recognises those three steps by the absolute form
 only, so a bare `age` there is refused.
+*Amended 2026-11-26 (review of issue #614, security finding M1):* the model job's tools come from the
+**root-owned `/srv/audit/tools`**, not from `${RUNNER_TEMP}/bin`, and the model job adds **no `PATH`
+entry**: no line of it names `$GITHUB_PATH`. While sudo still works, the wrapper's step makes the
+directory with `sudo install -d -o root -g root -m 0555 /srv/audit/tools`, beside `/srv/audit/bin`, and
+installs `age` (downloaded and checked by the install step), `auditrun` and `auditpublish` (built from
+main) with `sudo install -o root -g root -m 0555 <source> /srv/audit/tools/<tool>`; the hardening step
+checks their owners and modes with the rest of the layout. The decrypt and the encrypt run
+`/srv/audit/tools/age`, the artifact check `/srv/audit/tools/auditpublish` and the model step
+`/srv/audit/tools/auditrun`. Why: `${RUNNER_TEMP}` and its `bin/` belong to the runner's user, and
+`bin/` was first on `PATH`, so a write past the permission layer during the model session could replace
+the `age` that encrypts the result, or plant a `git` that `actions/checkout`'s post step runs through
+`PATH` holding `ACTIONS_RUNTIME_TOKEN`; the file-command digest and repair cover only the file-command
+directory. An absolute path into `${RUNNER_TEMP}/bin` would only move the trust, and a `chown` of
+`bin/` alone is not enough, because the runner's user owns `_temp` and can rename `bin/` away and put
+its own in its place. The publish job, on its own fresh runner with no model step before its decrypt,
+runs its `age` by the absolute path its install step put in place, `"${RUNNER_TEMP}/bin/age"`, never
+the bare word. `check.AuditWorkflow` holds all of it: the tools' directory and installs, each tool run
+by its `/srv/audit/tools` path in the model job, any other install or run of them refused, any
+`GITHUB_PATH` in the model job refused, and the publish job's absolute decrypt.
 
 **The artifact hand-off.** Each downloading job first runs `auditpublish artifacts -job model|publish`,
 which fails closed on an extra, a duplicate, a missing or an expired artifact, and writes the artifact
