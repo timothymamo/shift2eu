@@ -68,6 +68,61 @@ func TestReportWrapsOnEscapeBoundaries(t *testing.T) {
 	}
 }
 
+// TestReportDrawsAnOverTallHeadingValueAsAParagraph pins the layout's fallback
+// for a heading taller than a page: a resource's ID of text.MaxLen bytes makes
+// one, and it is drawn at the body size in Courier, whole and escaped, as a
+// paragraph rather than at a heading's size, so the lines a heading would need
+// never run over a page's foot. The resources table's cell and the resource's
+// own heading both show the value, and neither is cut, so its drawn pieces join
+// to its escaped form twice over.
+func TestReportDrawsAnOverTallHeadingValueAsAParagraph(t *testing.T) {
+	t.Parallel()
+
+	value := strings.Repeat("\u0416", textMaxLen/2)
+
+	inv := newInventory(t, sourceName, []inventory.Resource{{
+		ID:           value,
+		RawType:      "AWS::EC2::Instance",
+		Category:     taxonomy.ComputeVM,
+		Region:       "eu-west-1",
+		Capabilities: []taxonomy.Capability{taxonomy.IPv6},
+	}})
+
+	a := assessment.AssessWith(inv, testutil.ReportCatalog(t), assessment.Options{Estimate: true})
+	file := checkPDFStructure(t, renderReport(t, a, analysis.ReportMeta{InventoryName: inventoryFileName}))
+
+	escaped := pdfreport.EscapeValue(value)
+
+	// A piece of the value starts at an atom of its escaped form, so each starts
+	// with its first escape, \u0416: the report's own words never do.
+	const atom = `\u0416`
+
+	var drawn []string
+
+	for _, run := range file.allRuns() {
+		if !strings.HasPrefix(run.Text, atom) || !strings.Contains(escaped, run.Text) {
+			continue
+		}
+
+		if run.Font != "F3" {
+			t.Errorf("page %d draws the value %s in the font resource /%s, want /F3, Courier, which every value from the inventory is drawn in",
+				run.Page+1, shortened(run.Text), run.Font)
+		}
+
+		if headingSizes[run.Size] {
+			t.Errorf("page %d draws the value %s at %d pt, one of the heading sizes, so a heading too tall for a page was drawn as a heading: the sketch runs over the page's foot whatever is done, and the value is drawn at the body size as a paragraph instead",
+				run.Page+1, shortened(run.Text), run.Size)
+		}
+
+		drawn = append(drawn, run.Text)
+	}
+
+	if got := strings.Join(drawn, ""); got != escaped+escaped {
+		t.Fatalf("the document draws %d characters of the value in full, so its drawings do not join to its %d-character escaped form twice over: the resources table's cell and the resource's own heading each show the value, and neither is cut",
+			len(got), len(escaped))
+	}
+}
+
 // wrappedValue is one value as the writer drew it.
 type wrappedValue struct {
 	// chunks is one line of the value per Tj, in the order drawn.
