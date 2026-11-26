@@ -680,6 +680,14 @@ func TestRemovesTheBackupOnceExplained(t *testing.T) {
 			name:    "no explanation at all",
 			outcome: `FAIL exit 2: keep "$T/` + backup + `", then [ -f "$T/` + backup + `" ] && rm -r "$T"`,
 		},
+		{
+			name:    "the removal described rather than told: nothing says the maintainer removes the file",
+			outcome: `FAIL exit 2: read the diff, which is explained above: the backup was removed earlier`,
+		},
+		{
+			name:    "a deletion the outcome remembers rather than tells",
+			outcome: `FAIL exit 2: the cause is explained, and the earlier run deleted the backup`,
+		},
 	}
 
 	for _, tc := range tests {
