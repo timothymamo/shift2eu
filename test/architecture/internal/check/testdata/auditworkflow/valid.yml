@@ -1545,13 +1545,10 @@ jobs:
         uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3.4.0
         with:
           client-id: ${{ vars.AUDIT_APP_CLIENT_ID }}
-          # The App's key, read from the environment alone, and narrowed here to
-          # what ADR 0040's Decision 1 lists.
+          # The App's key, read from the environment alone. The step asks for no
+          # permission-* input: the token inherits exactly the App's installation
+          # permissions, which the App's own setup pins (issue #632).
           private-key: ${{ secrets.AUDIT_APP_PRIVATE_KEY }}
-          permission-contents: write
-          permission-pull-requests: write
-          permission-issues: write
-          permission-security-events: write
       - name: Publish the report
         timeout-minutes: 20
         env:
