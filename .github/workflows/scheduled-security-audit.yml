@@ -113,15 +113,15 @@ jobs:
           # renovate: datasource=github-release-attachments depName=FiloSottile/age digestVersion=v1.3.2
           AGE_SHA256: "cbe24006683f8eb669266162894b9a522a1af52f2665fbc63a4bb032ed26ac10"
           # renovate: datasource=github-releases depName=ossf/scorecard
-          SCORECARD_VERSION: v5.6.0
-          # renovate: datasource=github-release-attachments depName=ossf/scorecard digestVersion=v5.6.0
-          SCORECARD_SHA256: "19bde07129450cb65a95c6e3b9f34e034341579e6f0e241546ec3ae6efb2dd9a"
+          SCORECARD_VERSION: v5.7.0
+          # renovate: datasource=github-release-attachments depName=ossf/scorecard digestVersion=v5.7.0
+          SCORECARD_SHA256: "3b08ec0a8681806c3e744ec9210742a502c7d66f06f25523b70f7128738235d3"
           # Same version as release.yml's cosign-release and cosignVersion in dev/lima.yaml, whose amd64
           # SHA-256 this is: Renovate's cosign group moves all of them in one PR.
           # renovate: datasource=github-releases depName=sigstore/cosign
-          COSIGN_VERSION: v3.1.5
-          # renovate: datasource=github-release-attachments depName=sigstore/cosign digestVersion=v3.1.5
-          COSIGN_SHA256: "912502def4baf810eaf36b210a4f51e1da214f9f6d664e2a9a2154cfc67ee0d6"
+          COSIGN_VERSION: v3.1.6
+          # renovate: datasource=github-release-attachments depName=sigstore/cosign digestVersion=v3.1.6
+          COSIGN_SHA256: "318a99ade4156a0c4113aa983b46c0a0830fa7896a096c63121ee47b610a94c6"
           # renovate: datasource=github-releases depName=aquasecurity/trivy
           TRIVY_VERSION: v0.76.2
           # renovate: datasource=github-release-attachments depName=aquasecurity/trivy digestVersion=v0.76.2

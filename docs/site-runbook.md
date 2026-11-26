@@ -90,6 +90,7 @@ own s3api delete-bucket --bucket "$XB"            # PASS: no output
 # FAIL "BucketNotEmpty": own s3api delete-object --bucket "$XB" --key canary/probe.txt, then delete-bucket again
 # FAIL any other error: stop before switching; the key stays on "$XP" until the bucket is gone
 own s3api list-buckets --query 'Buckets[].Name'   # PASS: []
+# FAIL "$XB" still listed: delete-bucket again; any other bucket: stop, the key is not on "$XP"
 # Back to the admin project, as R0's FAIL line says
 scw iam api-key update "$SCW_ACCESS_KEY" default-project-id=<admin project ID>
 # The switch takes a moment to apply at Scaleway: wait until your own key lists the state bucket again (as R7 step 8 does)

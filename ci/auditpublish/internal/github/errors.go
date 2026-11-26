@@ -14,6 +14,15 @@ func refuse(check publish.FailedCheck, detail string, class error) error {
 	return publish.Refuse(check, fmt.Errorf("%s: %w", detail, class))
 }
 
+// ghFailed is gh's own failure in a call (its path, the runner's network, a
+// call past its deadline): publish.ErrGitHub whose text is detail, marked with
+// no check. The caller's mark names the call that failed; a call no caller
+// marks prints the class's line alone (issue #655). detail names a rule, never
+// a value.
+func ghFailed(detail string) error {
+	return fmt.Errorf("%s: %w", detail, publish.ErrGitHub)
+}
+
 // The library's own error classes, beside the core's (publish.ErrGitHub,
 // publish.ErrConfig and the others), which it wraps where a class of the core
 // fits. Like the core's, an error names a rule, never a value.

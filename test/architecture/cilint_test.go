@@ -398,7 +398,7 @@ func TestCILintMatrixCoversEveryReleaseTarget(t *testing.T) {
 
 	wantAggregateLines := []string{
 		"name: Lint",
-		"needs: [lint-target, lint-shell]",
+		"needs: [lint-target, lint-shell, coauthor-trailers]",
 		"if: ${{ !cancelled() }}",
 	}
 
@@ -416,8 +416,9 @@ func TestCILintMatrixCoversEveryReleaseTarget(t *testing.T) {
 	for _, want := range []struct{ key, value string }{
 		{"name", "Lint"},
 		// lint-shell runs shellcheck and actionlint once (issue #164): the
-		// Lint check gates it as it gates the matrix.
-		{"needs", "[lint-target, lint-shell]"},
+		// Lint check gates it as it gates the matrix, and coauthor-trailers
+		// (issue #663) too, so the required check needs no new name.
+		{"needs", "[lint-target, lint-shell, coauthor-trailers]"},
 		// Not always(): a run cancelled by a newer push must not report a red
 		// Lint, and a failed or skipped entry still runs this job, which fails.
 		{"if", "${{ !cancelled() }}"},
@@ -460,6 +461,7 @@ func TestCILintMatrixCoversEveryReleaseTarget(t *testing.T) {
 	wantExactLines(t, fmt.Sprintf("env: block of the lint job's step on line %d", step.num), stepEnv, []string{
 		"RESULT: ${{ needs.lint-target.result }}",
 		"SHELL_RESULT: ${{ needs.lint-shell.result }}",
+		"COAUTHOR_RESULT: ${{ needs.coauthor-trailers.result }}",
 	})
 
 	run, ok := ciBlock(step.lines, "run")
@@ -487,6 +489,10 @@ func TestCILintMatrixCoversEveryReleaseTarget(t *testing.T) {
 		`echo "lint-shell finished with result '$SHELL_RESULT', want 'success'" >&2`,
 		`exit 1`,
 		`fi`,
+		`if [ "$COAUTHOR_RESULT" != "success" ]; then`,
+		`echo "coauthor-trailers finished with result '$COAUTHOR_RESULT', want 'success'" >&2`,
+		`exit 1`,
+		`fi`,
 	}
 
 	if diff := cmp.Diff(wantScript, script); diff != "" {
@@ -495,6 +501,96 @@ func TestCILintMatrixCoversEveryReleaseTarget(t *testing.T) {
 	}
 
 	checkLintShellJob(t, jobs)
+	checkCoAuthorTrailersJob(t, jobs)
+}
+
+// checkCoAuthorTrailersJob pins the coauthor-trailers job the Lint check needs
+// (issue #663), read as a closed schema: it is never skipped or excused, it
+// checks out the whole history with no credentials, and its one test step runs
+// TestBranchCoAuthorTrailers alone with an env: of exactly the pull request's
+// base..head range and SHIFT2EU_COAUTHOR_CHECK=require on a pull request, so a
+// range the run cannot read fails the check rather than skipping it.
+func checkCoAuthorTrailersJob(t *testing.T, jobs map[string][]ciLine) {
+	t.Helper()
+
+	job, ok := jobs["coauthor-trailers"]
+	if !ok {
+		t.Fatalf(".github/workflows/ci.yml has no coauthor-trailers job under jobs:, so CI never checks a pull request's co-author trailers")
+	}
+
+	wantKeys(t, "coauthor-trailers job", job, "name", "runs-on", "steps")
+
+	steps, ok := ciBlock(job, "steps")
+	if !ok {
+		t.Fatalf("the coauthor-trailers job holds no steps: list, so it checks nothing")
+	}
+
+	items, err := ciItems(steps)
+	if err != nil {
+		t.Fatalf("the coauthor-trailers job's steps: %v", err)
+	}
+
+	var checkout, test bool
+
+	for _, item := range items {
+		keys, err := ciKeys(item.lines)
+		if err != nil {
+			t.Errorf("the coauthor-trailers job's steps: %v", err)
+
+			continue
+		}
+
+		for _, key := range keys {
+			if key.name == "continue-on-error" || key.name == "if" {
+				t.Errorf("line %d: a step of the coauthor-trailers job holds %q, want no step skipped or excused", key.num, key.name)
+			}
+		}
+
+		if _, uses, ok := ciScalar(item.lines, "uses"); ok && strings.HasPrefix(uses, "actions/checkout@") {
+			checkout = true
+
+			with, ok := ciBlock(item.lines, "with")
+			if !ok {
+				t.Errorf("line %d: the coauthor-trailers checkout holds no with:, want the whole history and no credentials", item.num)
+
+				continue
+			}
+
+			wantExactLines(t, fmt.Sprintf("with: block of the coauthor-trailers checkout on line %d", item.num), with, []string{
+				"persist-credentials: false",
+				"fetch-depth: 0",
+			})
+		}
+
+		if _, run, ok := ciScalar(item.lines, "run"); ok && strings.Contains(run, "TestBranchCoAuthorTrailers") {
+			test = true
+
+			if want := `go test -count=1 -v -run '^TestBranchCoAuthorTrailers$' ./test/lint/`; run != want {
+				t.Errorf("line %d: the coauthor-trailers step runs %q, want %q", item.num, run, want)
+			}
+
+			env, ok := ciBlock(item.lines, "env")
+			if !ok {
+				t.Errorf("line %d: the coauthor-trailers step holds no env:, so it names no range and requires none", item.num)
+
+				continue
+			}
+
+			wantExactLines(t, fmt.Sprintf("env: block of the coauthor-trailers step on line %d", item.num), env, []string{
+				"SHIFT2EU_COAUTHOR_RANGE: ${{ github.event_name == 'pull_request' && " +
+					"format('{0}..{1}', github.event.pull_request.base.sha, github.event.pull_request.head.sha) || '' }}",
+				"SHIFT2EU_COAUTHOR_CHECK: ${{ github.event_name == 'pull_request' && 'require' || '' }}",
+			})
+		}
+	}
+
+	if !checkout {
+		t.Errorf("no step of the coauthor-trailers job uses actions/checkout@…, so it reads no commit")
+	}
+
+	if !test {
+		t.Errorf("no step of the coauthor-trailers job runs TestBranchCoAuthorTrailers, so CI checks no co-author trailer")
+	}
 }
 
 // checkLintShellJob pins the lint-shell job the Lint check needs (issue #164):

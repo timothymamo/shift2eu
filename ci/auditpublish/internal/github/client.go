@@ -272,7 +272,7 @@ func (c *Client) Call(ctx context.Context, req Request) (Response, error) {
 	}
 
 	if ctx.Err() != nil {
-		return Response{}, refuse(publish.CheckRunGH, "github call: the call's context ended before gh ran", publish.ErrGitHub)
+		return Response{}, ghFailed("github call: the call's context ended before gh ran")
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
@@ -302,25 +302,25 @@ func (c *Client) Call(ctx context.Context, req Request) (Response, error) {
 	runErr := cmd.Run()
 
 	if ctx.Err() != nil {
-		return Response{}, refuse(publish.CheckRunGH, "github call: the call's context ended", publish.ErrGitHub)
+		return Response{}, ghFailed("github call: the call's context ended")
 	}
 
 	if out.over {
-		return Response{}, refuse(publish.CheckRunGH, "github call: gh's output is over the cap", publish.ErrGitHub)
+		return Response{}, ghFailed("github call: gh's output is over the cap")
 	}
 
 	var exitErr *exec.ExitError
 	if runErr != nil && !errors.As(runErr, &exitErr) {
-		return Response{}, refuse(publish.CheckRunGH, "github call: gh did not run to its end", publish.ErrGitHub)
+		return Response{}, ghFailed("github call: gh did not run to its end")
 	}
 
 	resp, ok := parseInclude(out.buf.Bytes())
 	if !ok {
-		return Response{}, refuse(publish.CheckRunGH, "github call: gh's output has no status line", publish.ErrGitHub)
+		return Response{}, ghFailed("github call: gh's output has no status line")
 	}
 
 	if runErr != nil && resp.Status/100 == 2 {
-		return Response{}, refuse(publish.CheckRunGH, "github call: gh failed on a success status", publish.ErrGitHub)
+		return Response{}, ghFailed("github call: gh failed on a success status")
 	}
 
 	return resp, nil

@@ -3066,7 +3066,7 @@ invalid: the reports directory not absolute and clean: see runbook`. The step no
 - `the step summary not appendable`: `GITHUB_STEP_SUMMARY` unset, relative or unwritable; check the runner and its disk.
 - `a bad flag or subcommand`: compare the step's command line with the workflow on `main`.
 - `GH_TOKEN unset or empty`: check the step's `GH_TOKEN:` line and, for publish, the App token step's output.
-- `GITHUB_SERVER_URL not https://github.com` / `GITHUB_SERVER_URL not https:// and a host name`: the run is not on github.com; run it there.
+- `GITHUB_SERVER_URL not github.com over https` / `GITHUB_SERVER_URL not an https URL with a host name`: the run is not on github.com; run it there.
 - `GITHUB_SHA not 40 lowercase hex`: the run's commit variable is overridden; remove the override.
 - `GITHUB_REPOSITORY not owner/name` / `GITHUB_REPOSITORY holds a dot segment`: the repository variable is overridden; remove the override.
 - `GITHUB_RUN_ID not a decimal of up to 20 digits`: the run ID variable is overridden; remove the override.
@@ -3090,7 +3090,7 @@ invalid: the reports directory not absolute and clean: see runbook`. The step no
 - `the private state none of the three` / `the private state none, but a finding is private` / `the private state set, but no finding is private`: an internal invariant of the program's placement of the result's findings, which a result that matches the schema should never trip; start the new run, and report it if it appears, since the program needs a fix.
 - `a private finding could not be filed as a draft`: the one phrase of six checks, so the public log never says which one or how many private findings there are. Its causes: two private findings of the result with one fingerprint (start the new run: the model writes the result afresh); and five internal invariants a valid result should never trip, report any of them: the draft rendered for a finding that is not private, with a fingerprint that is none or a status not new, open or regressed (`RenderAdvisory`), and the not-reproduced status set on an existing draft with a status none of the four or a description without a status line (`SetAdvisoryStatus`, called only after the draft's status line was read and with the constant not-reproduced status, so it cannot fire as the program stands).
 - `the release tag not vX.Y.Z` / `no release of the tag` / `no latest release` / `the tag not the latest release's`: the release the result names; see the item above on a release published while the run was under way.
-- `the image digest not sha256: and 64 lowercase hex` / `no attestation of the digest` / `no provenance attestation names the digest`: the image check; confirm the release's attestation (`gh attestation verify`), then start the new run.
+- `the image digest not sha256 with 64 lowercase hex` / `no attestation of the digest` / `no provenance attestation names the digest`: the image check; confirm the release's attestation (`gh attestation verify`), then start the new run.
 
 `publish refused` (exit 4): `the report`, `an issue`, `an advisory`: the text the scan refused, or the text whose gitleaks run did not start, timed out or did not finish, causes (1) to (3) of the item above; `the report's model fields`: a 40-hex run in a model field that is no commit of the repository, cause (1).
 
@@ -3102,7 +3102,7 @@ invalid: the reports directory not absolute and clean: see runbook`. The step no
 - `the newest report not a regular file` / `the newest report over the cap` / `the newest report not readable`: the newest name in `docs/security/audits/` is a link or no file, over 8 MiB, or unreadable in the checkout; fix it through a pull request.
 
 `GitHub call failed` (exit 8), the call by what it does, each as the item above:
-`listing the audit issues`, `creating the audit issue`, `listing the audit advisories`, `creating an advisory`, `updating an advisory`, `reading the tag's release`, `reading the latest release`, `listing the image's attestations`, `listing the run's artifacts`, `looking up the commit's runs`, `reading the report's branch`, `reading the audited commit`, `writing the report's blob`, `writing the report's tree`, `writing the report's commit`, `comparing the audited commit with the report's`, `writing the report's branch`, `opening the report's pull request`, `running gh` (gh gave no answer: its path, the runner's network, a call past its deadline).
+`listing the audit issues`, `creating the audit issue`, `listing the audit advisories`, `creating an advisory`, `updating an advisory`, `reading the tag's release`, `reading the latest release`, `listing the image's attestations`, `listing the run's artifacts`, `looking up the commit's runs`, `reading the report's branch`, `reading the audited commit`, `writing the report's blob`, `writing the report's tree`, `writing the report's commit`, `comparing the audited commit with the report's`, `writing the report's branch`, `opening the report's pull request`. gh's own failure (its path, the runner's network, a call past its deadline) is named by the call it failed, and a gh failure outside any named call prints the class's line alone, `GitHub call failed: see runbook`.
 
 The image subcommand (`auditpublish image`, its own step before `publish`, with the job's `github.token`
 and `attestations: read`) prints one of these lines:

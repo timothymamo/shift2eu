@@ -106,4 +106,13 @@
 //
 // The fragment's bytes depend only on the assessment and the report metadata:
 // never on the clock, the environment or map iteration.
+//
+// # Tests beyond this package
+//
+// The package's tests also hold the whole assess path against the scheduled
+// security audit's hostile-inventory corpus (docs/adr/0040, issue #661): the
+// inventory decoder's fuzz target FuzzInventoryDecoding, and the corpus's
+// decisions and Markdown, JSON and HTML goldens under testdata/hostile-corpus/.
+// They live here because depguard lets no other package's tests import this
+// reporter outside the web root.
 package htmlreport

@@ -1,0 +1,48 @@
+{
+  "schemaVersion": 2,
+  "source": "aws",
+  "resources": [
+    {
+      "id": "largest-size",
+      "rawType": "AWS::EC2::Instance",
+      "category": "compute.vm",
+      "region": "eu-central-1",
+      "size": { "vcpus": 1000000, "memoryGiB": 1000000, "storageGiB": 1000000000, "count": 100000 },
+      "usage": { "hoursPerMonth": 744 },
+      "monthlyCost": { "amount": 1000000000000, "currency": "EUR" }
+    },
+    {
+      "id": "smallest-size",
+      "rawType": "AWS::EC2::Instance",
+      "category": "compute.vm",
+      "region": "eu-central-1",
+      "size": { "vcpus": 1e-9, "memoryGiB": 1e-9, "storageGiB": 0, "count": 1 },
+      "usage": { "hoursPerMonth": 1e-9 },
+      "monthlyCost": { "amount": 0, "currency": "USD" }
+    },
+    {
+      "id": "largest-volume",
+      "rawType": "AWS::EC2::Volume",
+      "category": "storage.block",
+      "region": "eu-central-1",
+      "size": { "storageGiB": 1000000000, "count": 100000 },
+      "monthlyCost": { "amount": 0.000001, "currency": "GBP" }
+    },
+    {
+      "id": "largest-object-store",
+      "rawType": "AWS::S3::Bucket",
+      "category": "storage.object",
+      "region": "eu-central-1",
+      "size": { "storageGiB": 1000000000 },
+      "workload": "no-storage-price",
+      "monthlyCost": { "amount": 99999999999.99, "currency": "EUR" }
+    },
+    {
+      "id": "largest-function",
+      "rawType": "AWS::Lambda::Function",
+      "category": "serverless.function",
+      "region": "eu-central-1",
+      "size": { "memoryGiB": 1000000 }
+    }
+  ]
+}

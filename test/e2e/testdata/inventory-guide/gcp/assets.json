@@ -334,5 +334,40 @@
     "name": "//file.googleapis.com/projects/example-project/locations/europe-west1/backups/shared-backup",
     "assetType": "file.googleapis.com/Backup",
     "location": "europe-west1"
+  },
+  {
+    "name": "//managedkafka.googleapis.com/projects/example-project/locations/europe-west1/clusters/shop-events",
+    "assetType": "managedkafka.googleapis.com/Cluster",
+    "location": "europe-west1"
+  },
+  {
+    "name": "//managedkafka.googleapis.com/projects/example-project/locations/europe-west4/clusters/shop-audit",
+    "assetType": "managedkafka.googleapis.com/Cluster",
+    "location": "europe-west4"
+  },
+  {
+    "name": "//managedkafka.googleapis.com/projects/example-project/locations/europe-west4/clusters/shop-analytics",
+    "assetType": "managedkafka.googleapis.com/Cluster",
+    "location": "europe-west4"
+  },
+  {
+    "name": "//managedkafka.googleapis.com/projects/example-project/locations/europe-west1/clusters/shop-invoices",
+    "assetType": "managedkafka.googleapis.com/Cluster",
+    "location": "europe-west1"
+  },
+  {
+    "name": "//managedkafka.googleapis.com/projects/example-project/locations/europe-west1/clusters/shop-ledger",
+    "assetType": "managedkafka.googleapis.com/Cluster",
+    "location": "europe-west1"
+  },
+  {
+    "name": "//managedkafka.googleapis.com/projects/example-project/locations/europe-west1/clusters/shop-legacy-events",
+    "assetType": "managedkafka.googleapis.com/Cluster",
+    "location": "europe-west1"
+  },
+  {
+    "name": "//managedkafka.googleapis.com/projects/example-project/locations/europe-west1/connectClusters/shop-events-connect",
+    "assetType": "managedkafka.googleapis.com/ConnectCluster",
+    "location": "europe-west1"
   }
 ]

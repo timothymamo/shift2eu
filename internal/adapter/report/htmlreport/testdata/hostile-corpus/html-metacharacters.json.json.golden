@@ -1,0 +1,237 @@
+{
+  "schemaVersion": 3,
+  "kind": "assessment",
+  "inventoryName": "html-metacharacters.json",
+  "source": "\u003cscript\u003ealert(1)\u003c/script\u003e\u0026\"'",
+  "target": {
+    "name": "Scaleway",
+    "snapshot": {
+      "source": "https://www.scaleway.com/en/pricing/",
+      "retrieved": "2026-11-13"
+    }
+  },
+  "summary": {
+    "direct": 4,
+    "partial": 0,
+    "none": 0,
+    "total": 4
+  },
+  "resources": [
+    {
+      "id": "\u0026lt;a href=\u0026quot;https://example.com\u0026quot;\u0026gt;",
+      "rawType": "\u003c/td\u003e\u003ctd\u003e",
+      "category": "storage.object",
+      "region": "a\u0026b",
+      "fit": "direct",
+      "bestOffering": "Object Storage",
+      "ties": [],
+      "reasons": [
+        {
+          "code": "all-capabilities",
+          "text": "Object Storage offers every capability the resource uses",
+          "offering": "Object Storage"
+        }
+      ],
+      "requiredChanges": [],
+      "relations": [],
+      "affectedBy": [],
+      "estimate": {
+        "estimated": false,
+        "reason": "no-size"
+      }
+    },
+    {
+      "id": "\u003ciframe srcdoc=\u0026quot;\u003cscript\u003ealert(3)\u003c/script\u003e\u0026quot;\u003e",
+      "rawType": "\u0026#60;script\u0026#62;",
+      "category": "compute.baremetal",
+      "region": "\u003cstyle\u003ebody{display:none}\u003c/style\u003e",
+      "fit": "direct",
+      "bestOffering": "Elastic Metal",
+      "ties": [],
+      "reasons": [
+        {
+          "code": "all-capabilities",
+          "text": "Elastic Metal offers every capability the resource uses",
+          "offering": "Elastic Metal"
+        }
+      ],
+      "requiredChanges": [],
+      "relations": [],
+      "affectedBy": [],
+      "estimate": {
+        "estimated": false,
+        "reason": "no-size"
+      }
+    },
+    {
+      "id": "\u003cscript\u003ealert(1)\u003c/script\u003e",
+      "rawType": "\u003cimg src=x onerror=alert(1)\u003e",
+      "category": "compute.vm",
+      "region": "\u003cb\u003e\u0026amp;\u003c/b\u003e",
+      "fit": "direct",
+      "bestOffering": "Instances",
+      "ties": [],
+      "reasons": [
+        {
+          "code": "all-capabilities",
+          "text": "Instances offers every capability the resource uses",
+          "offering": "Instances"
+        }
+      ],
+      "requiredChanges": [],
+      "relations": [],
+      "affectedBy": [],
+      "estimate": {
+        "estimated": false,
+        "reason": "no-size"
+      }
+    },
+    {
+      "id": "a'b\"c\u003cd\u003ee\u0026f",
+      "rawType": "\u003c!-- comment --\u003e",
+      "category": "compute.vm",
+      "region": "eu-central-1",
+      "fit": "direct",
+      "bestOffering": "Instances",
+      "ties": [],
+      "reasons": [
+        {
+          "code": "all-capabilities",
+          "text": "Instances offers every capability the resource uses",
+          "offering": "Instances"
+        }
+      ],
+      "requiredChanges": [],
+      "relations": [
+        {
+          "type": "depends-on",
+          "target": "\u003cscript\u003ealert(1)\u003c/script\u003e"
+        }
+      ],
+      "affectedBy": [],
+      "estimate": {
+        "estimated": false,
+        "reason": "no-size"
+      }
+    }
+  ],
+  "blockers": [],
+  "workloads": [
+    {
+      "name": "\" onmouseover=\"alert(1)",
+      "noWorkload": false,
+      "resources": 1,
+      "summary": {
+        "direct": 1,
+        "partial": 0,
+        "none": 0,
+        "total": 1
+      },
+      "blockers": [],
+      "estimate": {
+        "estimated": 0,
+        "resources": 1
+      },
+      "sourceCost": {
+        "covered": 0,
+        "resources": 1,
+        "currencies": []
+      }
+    },
+    {
+      "name": "\u003c/script\u003e\u003cscript\u003ealert(2)\u003c/script\u003e",
+      "noWorkload": false,
+      "resources": 1,
+      "summary": {
+        "direct": 1,
+        "partial": 0,
+        "none": 0,
+        "total": 1
+      },
+      "blockers": [],
+      "estimate": {
+        "estimated": 0,
+        "resources": 1
+      },
+      "sourceCost": {
+        "covered": 0,
+        "resources": 1,
+        "currencies": []
+      }
+    },
+    {
+      "name": "\u003csvg onload=alert(1)\u003e",
+      "noWorkload": false,
+      "resources": 1,
+      "summary": {
+        "direct": 1,
+        "partial": 0,
+        "none": 0,
+        "total": 1
+      },
+      "blockers": [],
+      "estimate": {
+        "estimated": 0,
+        "resources": 1
+      },
+      "sourceCost": {
+        "covered": 0,
+        "resources": 1,
+        "currencies": []
+      }
+    },
+    {
+      "name": "",
+      "noWorkload": true,
+      "resources": 1,
+      "summary": {
+        "direct": 1,
+        "partial": 0,
+        "none": 0,
+        "total": 1
+      },
+      "blockers": [],
+      "estimate": {
+        "estimated": 0,
+        "resources": 1
+      },
+      "sourceCost": {
+        "covered": 1,
+        "resources": 1,
+        "currencies": [
+          {
+            "currency": "EUR",
+            "amount": "1.00",
+            "resources": 1
+          }
+        ]
+      }
+    }
+  ],
+  "estimate": {
+    "region": "fr-par",
+    "regionChosen": false,
+    "priceDate": "2026-11-13",
+    "currency": "EUR",
+    "excluded": [
+      "VAT",
+      "discounts"
+    ],
+    "hoursBasis": 730,
+    "total": {
+      "estimated": 0,
+      "resources": 4
+    }
+  },
+  "sourceCost": {
+    "covered": 1,
+    "resources": 4,
+    "currencies": [
+      {
+        "currency": "EUR",
+        "amount": "1.00",
+        "resources": 1
+      }
+    ]
+  }
+}

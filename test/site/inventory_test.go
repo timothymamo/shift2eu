@@ -279,7 +279,9 @@ func TestInventoryCommandsPerStep(t *testing.T) {
 		build   int
 	}{
 		{key: "aws", collect: 18, build: 1},
-		{key: "gcp", collect: 11, build: 1},
+		// GCP's collect step gains PRD #571's Managed Service for Apache Kafka
+		// list, one command of its own as its other service lists are.
+		{key: "gcp", collect: 12, build: 1},
 		{key: "azure", collect: 8, build: 1},
 	}
 
@@ -1696,6 +1698,175 @@ func TestInventoryGuideSearchAndKafkaCallsKeepOnlyTheFieldsTheyRead(t *testing.T
 			t.Errorf("docs/guide/inventory.md runs no %q, want one: PRD #571's AWS classification reads the search domains, the collections and the Kafka clusters from those five calls", name)
 		}
 	}
+}
+
+// gcpManagedKafkaCall is the call the guide's GCP section reads the settings of
+// its Managed Service for Apache Kafka clusters from (PRD #571, milestone 3).
+// The clusters themselves come from the asset listing the guide already runs;
+// this call adds the capacity the program divides by the cluster's brokers, the
+// count Google derives from that capacity.
+const gcpManagedKafkaCall = "gcloud managed-kafka clusters list"
+
+// gcpManagedKafkaFields are the fields the guide's call may keep: the cluster's
+// name and its capacity, or the two numbers of that capacity (PRD #571, *Only
+// the fields the program reads*). The capacity is the cluster's total over its
+// brokers, so the program reads it to give each broker its share.
+var gcpManagedKafkaFields = []string{"name", "capacityConfig", "vcpuCount", "memoryBytes"}
+
+// gcloudFormatProjection matches the object projection of a gcloud `--format`:
+// `json(...)`. A projection that formats the output some other way (a table, a
+// value alone) keeps no field of its own, and this check cannot read it.
+var gcloudFormatProjection = regexp.MustCompile(`--format='?json\(([^)]*)\)'?`)
+
+// roleName matches a predefined role a guide names: roles/managedkafka.viewer.
+var roleName = regexp.MustCompile(`roles/[A-Za-z0-9._-]+`)
+
+// TestInventoryGuideGCPManagedKafkaCallKeepsOnlyTheFieldsItReads pins the GCP
+// half of PRD #571's *Only the fields the program reads*, on the guide's command
+// text: the Managed Service for Apache Kafka call has an explicit `--format`
+// whose projection names the cluster's name and its capacity and nothing else.
+// The recorded fixture cannot pin it on its own, since a fixture written after
+// the fact could leave out the fields a command without a projection writes.
+// The bootstrap address, the TLS settings and the access config a cluster's full
+// output holds name the cluster's hosts and the networks allowed to reach them.
+func TestInventoryGuideGCPManagedKafkaCallKeepsOnlyTheFieldsItReads(t *testing.T) {
+	t.Parallel()
+
+	const guidePath = "docs/guide/inventory.md"
+
+	guide := string(readRepositoryFile(t, filepath.Join("docs", "guide", "inventory.md")))
+	gcp := guideSourceByKey(t, "gcp")
+	commands := guideCommands(t, guide, gcp)
+
+	var calls []string
+
+	for _, command := range commands {
+		if strings.Contains(command, gcpManagedKafkaCall) {
+			calls = append(calls, command)
+		}
+	}
+
+	if len(calls) != 1 {
+		t.Fatalf("%s's %s section runs %d `%s` command(s), want exactly one: PRD #571 reads a Managed Service for Apache Kafka cluster's capacity there, and a second call would leave which output the program reads unclear\n%s",
+			guidePath, gcp.name, len(calls), gcpManagedKafkaCall, describeCommands(commands))
+	}
+
+	match := gcloudFormatProjection.FindStringSubmatch(calls[0])
+	if match == nil {
+		t.Fatalf("%s's `%s` command passes no `--format='json(...)'` projection, want one naming only %s: without it the call writes the cluster's whole configuration to the file, bootstrap address, TLS config and access config included, and the guide has nothing to read the capacity from\n%s",
+			guidePath, gcpManagedKafkaCall, strings.Join(gcpManagedKafkaFields, ", "), calls[0])
+	}
+
+	keys := projectionKeys(match[1])
+
+	for _, key := range keys {
+		if !slices.Contains(gcpManagedKafkaFields, key) {
+			t.Errorf("%s's `%s` --format names %q, want only the fields PRD #571 reads of a cluster (%s): a key the program does not read would keep a field the guide's raw output should drop\n%s",
+				guidePath, gcpManagedKafkaCall, key, strings.Join(gcpManagedKafkaFields, ", "), calls[0])
+		}
+	}
+
+	// A projection that named none of the fields would pass the check above and
+	// keep nothing the program reads, so the two the program needs are required by
+	// name: the cluster's own, and its capacity or the two numbers of it.
+	if !slices.Contains(keys, "name") {
+		t.Errorf("%s's `%s` --format names no `name`, want the cluster's own: the program writes the resource's short ID and its region from that name, and a cluster it cannot name is a resource it cannot list\n%s",
+			guidePath, gcpManagedKafkaCall, calls[0])
+	}
+
+	capacity := slices.Contains(keys, "capacityConfig") ||
+		(slices.Contains(keys, "vcpuCount") && slices.Contains(keys, "memoryBytes"))
+
+	if !capacity {
+		t.Errorf("%s's `%s` --format names no `capacityConfig` and no both of `vcpuCount` and `memoryBytes`, want one of the two: PRD #571 keeps a cluster's capacity to see that its total is no node's size, and a projection without it leaves the call reading nothing the program uses\n%s",
+			guidePath, gcpManagedKafkaCall, calls[0])
+	}
+}
+
+// gcpRoleBullets returns the predefined roles the guide's "GCP permissions"
+// section lists as the narrow ones to prefer, in the guide's order. The roles of
+// the fallback paragraph below the list are not bullets of it: they are the
+// broad alternative the section recommends against.
+func gcpRoleBullets(t *testing.T, guide string) []string {
+	t.Helper()
+
+	lines := strings.Split(guide, "\n")
+
+	start := -1
+
+	for i, line := range lines {
+		if headingText(line) == "GCP permissions" {
+			start = i + 1
+
+			break
+		}
+	}
+
+	if start < 0 {
+		t.Fatalf("docs/guide/inventory.md holds no \"GCP permissions\" heading, so this check read nothing: the section lists the narrow roles the guide's calls need")
+	}
+
+	var roles []string
+
+	for _, line := range lines[start:] {
+		if headingText(line) != "" {
+			break
+		}
+
+		if !strings.HasPrefix(strings.TrimSpace(line), "- ") {
+			continue
+		}
+
+		roles = append(roles, roleName.FindAllString(line, -1)...)
+	}
+
+	if len(roles) == 0 {
+		t.Fatalf("docs/guide/inventory.md's \"GCP permissions\" section lists no `roles/...` bullet, so this check read nothing: PRD #571 adds the role its Managed Service for Apache Kafka call needs to that list")
+	}
+
+	return roles
+}
+
+// TestInventoryGuideGCPRolesCoverTheManagedKafkaCall pins the GCP permission
+// PRD #571's milestone 3 adds, and the one it forbids: the Managed Service for
+// Apache Kafka call reads a cluster's capacity with `roles/managedkafka.viewer`,
+// which lacks `managedkafka.clusters.connect` and so reaches no broker and no
+// message, while `roles/managedkafka.client` grants the data plane - topics,
+// messages and consumer groups - which the guide never touches. The guide's list
+// is the only permission it asks a reader to hold, so a missing viewer role
+// leaves the call unanswered and a client role would give its holder more access
+// than the move needs.
+func TestInventoryGuideGCPRolesCoverTheManagedKafkaCall(t *testing.T) {
+	t.Parallel()
+
+	const guidePath = "docs/guide/inventory.md"
+
+	guide := string(readRepositoryFile(t, filepath.Join("docs", "guide", "inventory.md")))
+	roles := gcpRoleBullets(t, guide)
+
+	if !slices.Contains(roles, "roles/managedkafka.viewer") {
+		t.Errorf("%s's GCP permissions list names %v, want `roles/managedkafka.viewer` among them: the guide's `%s` call reads a cluster's configuration with that role, and a reader on the list without it gets no answer from the call and loses every cluster's capacity",
+			guidePath, roles, gcpManagedKafkaCall)
+	}
+
+	if strings.Contains(guide, "roles/managedkafka.client") {
+		t.Errorf("%s names `roles/managedkafka.client`, want it nowhere: that role grants the Kafka data plane (topics, messages and consumer groups), which the guide's read-only calls never touch, and PRD #571 forbids granting it\n%s",
+			guidePath, guideRoleParagraphs(guide))
+	}
+}
+
+// guideRoleParagraphs returns the paragraphs of the guide that name a
+// `roles/managedkafka` role, for a failure message.
+func guideRoleParagraphs(guide string) string {
+	var paragraphs []string
+
+	for _, paragraph := range strings.Split(guide, "\n\n") {
+		if strings.Contains(paragraph, "roles/managedkafka") {
+			paragraphs = append(paragraphs, paragraph)
+		}
+	}
+
+	return strings.Join(paragraphs, "\n\n")
 }
 
 // TestInventoryGuidePagesListCollectionsByHand pins the page limit the guide has

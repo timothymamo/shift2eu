@@ -1,0 +1,37 @@
+[
+  {
+    "name": "projects/example-project/locations/europe-west1/clusters/shop-events",
+    "capacityConfig": {
+      "vcpuCount": "3",
+      "memoryBytes": "12884901888"
+    }
+  },
+  {
+    "name": "projects/example-project/locations/europe-west4/clusters/shop-audit",
+    "capacityConfig": {
+      "vcpuCount": "9",
+      "memoryBytes": "77309411328"
+    }
+  },
+  {
+    "name": "projects/example-project/locations/europe-west4/clusters/shop-analytics",
+    "capacityConfig": {
+      "vcpuCount": "48",
+      "memoryBytes": "51539607552"
+    }
+  },
+  {
+    "name": "projects/example-project/locations/europe-west1/clusters/shop-invoices",
+    "capacityConfig": {
+      "vcpuCount": "16",
+      "memoryBytes": "34359738368"
+    }
+  },
+  {
+    "name": "projects/example-project/locations/europe-west1/clusters/shop-ledger",
+    "capacityConfig": {
+      "vcpuCount": "46",
+      "memoryBytes": "49392123904"
+    }
+  }
+]

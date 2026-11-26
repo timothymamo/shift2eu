@@ -868,6 +868,52 @@ func inventoryGuides() []inventoryGuideCase {
 					id: "scratch", rawType: "file.googleapis.com/Instance", category: "storage.file",
 					capabilities: []string{"encryption-at-rest"},
 				},
+				// A Managed Service for Apache Kafka cluster is Kafka, and Google
+				// provisions every cluster in three zones with its replicas spread
+				// across them and encrypts it at rest by default, so the three
+				// capabilities hold of every cluster, whatever its settings say
+				// (PRD #571). The region is the one its asset names, so the
+				// clusters of the two regions are several resources and not one.
+				{
+					id: "shop-events", rawType: "managedkafka.googleapis.com/Cluster", category: "messaging.kafka",
+					region:       "europe-west1",
+					capabilities: []string{"encryption-at-rest", "node-high-availability", "zone-high-availability"},
+				},
+				{
+					id: "shop-audit", rawType: "managedkafka.googleapis.com/Cluster", category: "messaging.kafka",
+					region:       "europe-west4",
+					capabilities: []string{"encryption-at-rest", "node-high-availability", "zone-high-availability"},
+				},
+				{
+					id: "shop-analytics", rawType: "managedkafka.googleapis.com/Cluster", category: "messaging.kafka",
+					region:       "europe-west4",
+					capabilities: []string{"encryption-at-rest", "node-high-availability", "zone-high-availability"},
+				},
+				{
+					id: "shop-invoices", rawType: "managedkafka.googleapis.com/Cluster", category: "messaging.kafka",
+					region:       "europe-west1",
+					capabilities: []string{"encryption-at-rest", "node-high-availability", "zone-high-availability"},
+				},
+				{
+					id: "shop-ledger", rawType: "managedkafka.googleapis.com/Cluster", category: "messaging.kafka",
+					region:       "europe-west1",
+					capabilities: []string{"encryption-at-rest", "node-high-availability", "zone-high-availability"},
+				},
+				// A cluster the asset listing holds and the capacity call does not:
+				// the program lists it all the same, with no size, rather than
+				// dropping it or sizing it from a default (PRD #571, *Estimates*).
+				{
+					id: "shop-legacy-events", rawType: "managedkafka.googleapis.com/Cluster", category: "messaging.kafka",
+					region:       "europe-west1",
+					capabilities: []string{"encryption-at-rest", "node-high-availability", "zone-high-availability"},
+				},
+				// A Kafka Connect cluster is the integration around a Kafka cluster,
+				// not a cluster to move, so it stays unclassified under its own name,
+				// as Kafka Connect does on AWS (PRD #571, *Left out*).
+				{
+					id: "shop-events-connect", rawType: "managedkafka.googleapis.com/ConnectCluster", category: "unclassified",
+					capabilities: []string{},
+				},
 			},
 			sized: []sizeFact{
 				// An e2-standard-2 is 2 vCPU and 8192 MB, from compute machine-types list.
@@ -908,12 +954,41 @@ func inventoryGuides() []inventoryGuideCase {
 				// A Filestore instance's capacityGb is a string in the API's JSON.
 				{id: "shared", storageGiB: 1024},
 				{id: "scratch", storageGiB: 1024},
+				// A Managed Kafka cluster's capacityConfig is the cluster's total
+				// vCPU and memory over the brokers Google provisions for it, so the
+				// program takes the broker count from Google's formula, max(3,
+				// ceiling(vCPU / 15)), and divides both totals by it: 3 vCPU over 3
+				// brokers is 1 vCPU and 4 GiB each, 9 over 3 is 3 and 24, and 48 over
+				// 4 is 12 and 12. A cluster of no more than 45 vCPU has the three
+				// brokers a cluster always has, so a program that wrote the total as
+				// one broker's size fails on the first two.
+				// A share that is no whole number stays a fraction: 16 vCPU over 3
+				// brokers is 16/3 vCPU and 32/3 GiB, which a program that rounded or
+				// floored the division does not write. 46 vCPU is the boundary of
+				// the ceiling: 46 / 15 is 3.07, so the cluster has 4 brokers and
+				// each gets 11.5 vCPU and 11.5 GiB, while a program that floored the
+				// division writes 3 brokers and one that took the count as vCPU / 15
+				// without the ceiling writes 3.07 brokers and a 15 vCPU share.
+				// <https://cloud.google.com/managed-service-for-apache-kafka/docs/brokers>
+				// The cluster gives no storageGiB: its capacityConfig holds only
+				// vcpuCount and memoryBytes, so the list call reports no broker disk
+				// size, and the program writes none rather than a guess (PRD #571,
+				// *Estimates*).
+				{id: "shop-events", vcpus: 1, memoryGiB: 4, count: 3, noStorageGiB: true},
+				{id: "shop-audit", vcpus: 3, memoryGiB: 24, count: 3, noStorageGiB: true},
+				{id: "shop-analytics", vcpus: 12, memoryGiB: 12, count: 4, noStorageGiB: true},
+				{id: "shop-invoices", vcpus: 16.0 / 3.0, memoryGiB: 32.0 / 3.0, count: 3, noStorageGiB: true},
+				{id: "shop-ledger", vcpus: 11.5, memoryGiB: 11.5, count: 4, noStorageGiB: true},
 			},
 			// An engine the program cannot classify gets no size at all, even
 			// though the sql instances list records the instance's disk and
 			// tier. So does a Valkey instance the instances list does not hold: no
-			// call gives its shards, its replicas or its node's memory.
-			unsized: []string{"shop-reports-sqlserver", "valkey-archive"},
+			// call gives its shards, its replicas or its node's memory. And so
+			// does a Managed Kafka cluster the capacity call does not list: no call
+			// gives its vCPU or memory, so the program writes no size rather than
+			// one from a default, and the report says "not estimated: size
+			// unknown" for it (PRD #571, *Estimates*).
+			unsized: []string{"shop-reports-sqlserver", "valkey-archive", "shop-legacy-events"},
 			// A node pool's managed instance group, a node with its disk,
 			// labelled goog-gke-node, and the boot and data disks of the group's
 			// member: the group stands for its instances.
@@ -1184,6 +1259,9 @@ func taxonomyCategories(source string) []string {
 			"database.mysql",
 			"database.postgresql",
 			"kubernetes.managed",
+			// PRD #571's GCP classification: GCP runs no managed OpenSearch, so
+			// only the Kafka cluster its fixtures record is new here.
+			"messaging.kafka",
 			"messaging.queue",
 			"messaging.topic",
 			"network.loadbalancer",
