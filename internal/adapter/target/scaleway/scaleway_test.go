@@ -4,7 +4,11 @@
 // they estimate in, a golden change detector for the parsed catalog, the declared
 // EU regions, that a cancelled run reads nothing, and the verdicts PRD 14 asks of
 // the data: high availability scoped to a node or a zone, one offering per tier,
-// and a capability claimed only when the documentation meets it in full. The
+// and a capability claimed only when the documentation meets it in full. Since
+// PRD #552 milestone 6 the snapshot also serves the cache, MongoDB, load
+// balancer, topic, serverless container and registry categories, prices the
+// cache and MongoDB offerings by plan, records no price for the other four and
+// serves no file share. The
 // storage an offering charges beyond what a plan includes is pinned against the
 // embedded snapshot too (issue #219): every offering in scope carries a per-GiB
 // storage price, or says in SOURCES.md why it has none, and a bare-metal server
@@ -31,6 +35,7 @@ import (
 	"github.com/timothymamo/shift2eu/internal/adapter/target/snapshot"
 	"github.com/timothymamo/shift2eu/internal/adapter/target/targettest"
 	"github.com/timothymamo/shift2eu/internal/app/analysis"
+	"github.com/timothymamo/shift2eu/internal/domain/assessment"
 	"github.com/timothymamo/shift2eu/internal/domain/catalog"
 	"github.com/timothymamo/shift2eu/internal/domain/estimate"
 	"github.com/timothymamo/shift2eu/internal/domain/inventory"
@@ -61,7 +66,8 @@ func wantRegions() []string {
 
 // TestCatalogContract runs the target contract suite every target adapter must
 // pass: the display name, every offering only in a declared EU region, the four
-// categories PRD 2 requires, the same catalog on every call, and cancellation.
+// categories PRD 2 requires and the six PRD #552 milestone 6 adds, the same
+// catalog on every call, and cancellation.
 func TestCatalogContract(t *testing.T) {
 	t.Parallel()
 
@@ -74,6 +80,12 @@ func TestCatalogContract(t *testing.T) {
 			taxonomy.KubernetesManaged,
 			taxonomy.StorageObject,
 			taxonomy.DatabasePostgreSQL,
+			taxonomy.CacheRedis,
+			taxonomy.DatabaseMongoDB,
+			taxonomy.NetworkLoadBalancer,
+			taxonomy.MessagingTopic,
+			taxonomy.ServerlessContainer,
+			taxonomy.RegistryContainer,
 		},
 	})
 }
@@ -146,6 +158,8 @@ func TestCatalogPlansAndPrices(t *testing.T) {
 		taxonomy.KubernetesManaged,
 		taxonomy.DatabasePostgreSQL,
 		taxonomy.DatabaseMySQL,
+		taxonomy.CacheRedis,
+		taxonomy.DatabaseMongoDB,
 	}
 
 	// storageCategories are the categories PRD #190 prices per GiB of storage
@@ -155,12 +169,21 @@ func TestCatalogPlansAndPrices(t *testing.T) {
 		taxonomy.StorageObject,
 		taxonomy.DatabasePostgreSQL,
 		taxonomy.DatabaseMySQL,
+		taxonomy.DatabaseMongoDB,
 	}
 
 	// leftOut exempts an offering from the two coverage rules, never from the
 	// price rules, and gives the reason. An entry is a finding to explain in this
 	// test and in SOURCES.md, not a way past a refresh.
-	leftOut := map[string]string{}
+	// Redis bills no storage volume: its data lives on the node's local SSD,
+	// which the price page prices in no column, so the snapshot records no
+	// per-GiB storage price and the offering has none to cover the rule with. Its
+	// plans are pinned by TestNewCategoryOfferingsAndPrices, which is what makes
+	// the exemption harmless here.
+	leftOut := map[string]string{
+		"Managed Database for Redis":         "Scaleway bills no storage volume for Redis: the local SSD is priced in no column",
+		"Managed Database for Redis Cluster": "Scaleway bills no storage volume for Redis: the local SSD is priced in no column",
+	}
 
 	for _, o := range cat.Offerings() {
 		reason, exempt := leftOut[o.Name]
@@ -313,7 +336,306 @@ func TestCatalogFixedFees(t *testing.T) {
 	}
 }
 
-// TestKapsuleDedicatedInMilan pins issue #211: Scaleway's Containers price page,
+// TestNewCategoryOfferingsAndPrices pins PRD #552 milestone 6 on the embedded
+// snapshot: the offerings the new categories gain, the regions each is available
+// in, and the plans and prices of the two categories Scaleway prices by plan.
+//
+// The Redis plans are the price page's node types, priced per node: a Standalone
+// offering at the page's main-node price × 730, and a Cluster offering at
+// (main node + 2 × additional node) × 730 / 3, the 3-node minimum the page's
+// two columns imply, which a 4- to 6-node cluster prices a little high
+// (milestone 6's decision 1, SOURCES.md). The MongoDB plans are the page's
+// "Price for 1 Node" × 730 on the 1-node offering and "Price for 3 Nodes" × 730
+// / 3 per node on the Replica Set, and both price the Block Storage the plans do
+// not include at 0.0993 a GiB a month. The load balancer, Topics and Events,
+// Serverless Containers and Container Registry are not sold by plan, so they
+// list none: their categories are never priced or usage-priced.
+func TestNewCategoryOfferingsAndPrices(t *testing.T) {
+	t.Parallel()
+
+	cat := catalogOf(t)
+
+	const (
+		redis             = "Managed Database for Redis"
+		redisCluster      = "Managed Database for Redis Cluster"
+		mongodb           = "Managed MongoDB"
+		mongodbReplicaSet = "Managed MongoDB Replica Set"
+	)
+
+	t.Run("regions", func(t *testing.T) {
+		t.Parallel()
+
+		// The availability page and the SDKs agree on these; Milan is left out of
+		// the load balancer and the registry because their SDKs do not declare it,
+		// and of Redis and MongoDB because both are coming soon there.
+		tests := []struct {
+			offering string
+			want     []string
+		}{
+			{offering: redis, want: []string{"fr-par", "nl-ams", "pl-waw"}},
+			{offering: redisCluster, want: []string{"fr-par", "nl-ams", "pl-waw"}},
+			{offering: mongodb, want: []string{"fr-par"}},
+			{offering: mongodbReplicaSet, want: []string{"fr-par"}},
+			{offering: "Load Balancer", want: []string{"fr-par", "nl-ams", "pl-waw"}},
+			{offering: "Topics and Events", want: []string{"fr-par", "nl-ams"}},
+			{offering: "Serverless Containers", want: []string{"fr-par", "it-mil", "nl-ams", "pl-waw"}},
+			{offering: "Container Registry", want: []string{"fr-par", "nl-ams", "pl-waw"}},
+		}
+
+		for _, tc := range tests {
+			t.Run(tc.offering, func(t *testing.T) {
+				t.Parallel()
+
+				o := offeringNamed(t, cat, tc.offering)
+
+				if diff := cmp.Diff(tc.want, o.Regions); diff != "" {
+					t.Errorf("offering %s regions mismatch (-want +got):\n%s", text.Quote(o.Name), diff)
+				}
+			})
+		}
+	})
+
+	t.Run("plans", func(t *testing.T) {
+		t.Parallel()
+
+		tests := []struct {
+			name               string
+			offering           string
+			plan               string
+			wantVCPUs          int64
+			wantMemoryMilliGiB int64
+			wantIncludedGiB    int64
+			wantAmount         catalog.Amount
+		}{
+			// Standalone: the main node's hourly price × 730.
+			{name: "redis/red1-micro", offering: redis, plan: "RED1-MICRO", wantVCPUs: 2, wantMemoryMilliGiB: 2_000, wantAmount: catalog.Amount(350_400)},
+			{name: "redis/red1-2xs", offering: redis, plan: "RED1-2XS", wantVCPUs: 3, wantMemoryMilliGiB: 4_000, wantAmount: catalog.Amount(547_500)},
+			{name: "redis/red1-xs", offering: redis, plan: "RED1-XS", wantVCPUs: 4, wantMemoryMilliGiB: 8_000, wantAmount: catalog.Amount(1_000_100)},
+			{name: "redis/red1-s", offering: redis, plan: "RED1-S", wantVCPUs: 4, wantMemoryMilliGiB: 12_000, wantAmount: catalog.Amount(1_496_500)},
+			{name: "redis/red1-m", offering: redis, plan: "RED1-M", wantVCPUs: 4, wantMemoryMilliGiB: 16_000, wantAmount: catalog.Amount(2_000_200)},
+			{name: "redis/red1-l", offering: redis, plan: "RED1-L", wantVCPUs: 8, wantMemoryMilliGiB: 32_000, wantAmount: catalog.Amount(4_000_400)},
+			{name: "redis/red1-xl", offering: redis, plan: "RED1-XL", wantVCPUs: 16, wantMemoryMilliGiB: 64_000, wantAmount: catalog.Amount(8_000_800)},
+			// Cluster: (main node + 2 × additional node) × 730 / 3, per node.
+			{name: "redis-cluster/red1-micro", offering: redisCluster, plan: "RED1-MICRO", wantVCPUs: 2, wantMemoryMilliGiB: 2_000, wantAmount: catalog.Amount(248_200)},
+			{name: "redis-cluster/red1-2xs", offering: redisCluster, plan: "RED1-2XS", wantVCPUs: 3, wantMemoryMilliGiB: 4_000, wantAmount: catalog.Amount(382_033)},
+			{name: "redis-cluster/red1-xs", offering: redisCluster, plan: "RED1-XS", wantVCPUs: 4, wantMemoryMilliGiB: 8_000, wantAmount: catalog.Amount(732_433)},
+			{name: "redis-cluster/red1-s", offering: redisCluster, plan: "RED1-S", wantVCPUs: 4, wantMemoryMilliGiB: 12_000, wantAmount: catalog.Amount(1_097_433)},
+			{name: "redis-cluster/red1-m", offering: redisCluster, plan: "RED1-M", wantVCPUs: 4, wantMemoryMilliGiB: 16_000, wantAmount: catalog.Amount(1_464_867)},
+			{name: "redis-cluster/red1-l", offering: redisCluster, plan: "RED1-L", wantVCPUs: 8, wantMemoryMilliGiB: 32_000, wantAmount: catalog.Amount(2_934_600)},
+			{name: "redis-cluster/red1-xl", offering: redisCluster, plan: "RED1-XL", wantVCPUs: 16, wantMemoryMilliGiB: 64_000, wantAmount: catalog.Amount(5_869_200)},
+			// MongoDB, 1 node: the page's "Price for 1 Node" × 730.
+			{name: "mongodb/play2-nano", offering: mongodb, plan: "MGDB-PLAY2-NANO", wantVCPUs: 2, wantMemoryMilliGiB: 4_000, wantAmount: catalog.Amount(786_210)},
+			{name: "mongodb/pro2-xxs", offering: mongodb, plan: "MGDB-PRO2-XXS", wantVCPUs: 2, wantMemoryMilliGiB: 8_000, wantAmount: catalog.Amount(1_278_230)},
+			{name: "mongodb/pro2-xs", offering: mongodb, plan: "MGDB-PRO2-XS", wantVCPUs: 4, wantMemoryMilliGiB: 16_000, wantAmount: catalog.Amount(2_223_580)},
+			{name: "mongodb/pro2-s", offering: mongodb, plan: "MGDB-PRO2-S", wantVCPUs: 8, wantMemoryMilliGiB: 32_000, wantAmount: catalog.Amount(4_120_120)},
+			{name: "mongodb/pro2-m", offering: mongodb, plan: "MGDB-PRO2-M", wantVCPUs: 16, wantMemoryMilliGiB: 64_000, wantAmount: catalog.Amount(7_900_060)},
+			{name: "mongodb/pro2-l", offering: mongodb, plan: "MGDB-PRO2-L", wantVCPUs: 32, wantMemoryMilliGiB: 128_000, wantAmount: catalog.Amount(15_419_790)},
+			{name: "mongodb/pop2-2c-8g", offering: mongodb, plan: "MGDB-POP2-2C-8G", wantVCPUs: 2, wantMemoryMilliGiB: 8_000, wantAmount: catalog.Amount(1_320_570)},
+			{name: "mongodb/pop2-4c-16g", offering: mongodb, plan: "MGDB-POP2-4C-16G", wantVCPUs: 4, wantMemoryMilliGiB: 16_000, wantAmount: catalog.Amount(2_314_100)},
+			{name: "mongodb/pop2-8c-32g", offering: mongodb, plan: "MGDB-POP2-8C-32G", wantVCPUs: 8, wantMemoryMilliGiB: 32_000, wantAmount: catalog.Amount(4_288_750)},
+			{name: "mongodb/pop2-16c-64g", offering: mongodb, plan: "MGDB-POP2-16C-64G", wantVCPUs: 16, wantMemoryMilliGiB: 64_000, wantAmount: catalog.Amount(8_245_350)},
+			{name: "mongodb/pop2-32c-128g", offering: mongodb, plan: "MGDB-POP2-32C-128G", wantVCPUs: 32, wantMemoryMilliGiB: 128_000, wantAmount: catalog.Amount(16_107_450)},
+			{name: "mongodb/pop2-64c-256g", offering: mongodb, plan: "MGDB-POP2-64C-256G", wantVCPUs: 64, wantMemoryMilliGiB: 256_000, wantAmount: catalog.Amount(31_875_450)},
+			// Replica Set: the page's "Price for 3 Nodes" × 730 / 3, per node.
+			{name: "mongodb-replica-set/play2-nano", offering: mongodbReplicaSet, plan: "MGDB-PLAY2-NANO", wantVCPUs: 2, wantMemoryMilliGiB: 4_000, wantAmount: catalog.Amount(456_737)},
+			{name: "mongodb-replica-set/pro2-xxs", offering: mongodbReplicaSet, plan: "MGDB-PRO2-XXS", wantVCPUs: 2, wantMemoryMilliGiB: 8_000, wantAmount: catalog.Amount(878_677)},
+			{name: "mongodb-replica-set/pro2-xs", offering: mongodbReplicaSet, plan: "MGDB-PRO2-XS", wantVCPUs: 4, wantMemoryMilliGiB: 16_000, wantAmount: catalog.Amount(1_748_593)},
+			{name: "mongodb-replica-set/pro2-s", offering: mongodbReplicaSet, plan: "MGDB-PRO2-S", wantVCPUs: 8, wantMemoryMilliGiB: 32_000, wantAmount: catalog.Amount(3_363_840)},
+			{name: "mongodb-replica-set/pro2-m", offering: mongodbReplicaSet, plan: "MGDB-PRO2-M", wantVCPUs: 16, wantMemoryMilliGiB: 64_000, wantAmount: catalog.Amount(6_580_220)},
+			{name: "mongodb-replica-set/pro2-l", offering: mongodbReplicaSet, plan: "MGDB-PRO2-L", wantVCPUs: 32, wantMemoryMilliGiB: 128_000, wantAmount: catalog.Amount(12_965_530)},
+			{name: "mongodb-replica-set/pop2-2c-8g", offering: mongodbReplicaSet, plan: "MGDB-POP2-2C-8G", wantVCPUs: 2, wantMemoryMilliGiB: 8_000, wantAmount: catalog.Amount(980_390)},
+			{name: "mongodb-replica-set/pop2-4c-16g", offering: mongodbReplicaSet, plan: "MGDB-POP2-4C-16G", wantVCPUs: 4, wantMemoryMilliGiB: 16_000, wantAmount: catalog.Amount(1_973_433)},
+			{name: "mongodb-replica-set/pop2-8c-32g", offering: mongodbReplicaSet, plan: "MGDB-POP2-8C-32G", wantVCPUs: 8, wantMemoryMilliGiB: 32_000, wantAmount: catalog.Amount(3_789_917)},
+			{name: "mongodb-replica-set/pop2-16c-64g", offering: mongodbReplicaSet, plan: "MGDB-POP2-16C-64G", wantVCPUs: 16, wantMemoryMilliGiB: 64_000, wantAmount: catalog.Amount(7_430_183)},
+			{name: "mongodb-replica-set/pop2-32c-128g", offering: mongodbReplicaSet, plan: "MGDB-POP2-32C-128G", wantVCPUs: 32, wantMemoryMilliGiB: 128_000, wantAmount: catalog.Amount(14_654_750)},
+			{name: "mongodb-replica-set/pop2-64c-256g", offering: mongodbReplicaSet, plan: "MGDB-POP2-64C-256G", wantVCPUs: 64, wantMemoryMilliGiB: 256_000, wantAmount: catalog.Amount(29_152_550)},
+		}
+
+		for _, tc := range tests {
+			t.Run(tc.name, func(t *testing.T) {
+				t.Parallel()
+
+				o := offeringNamed(t, cat, tc.offering)
+				p := planNamed(t, o, tc.plan)
+
+				if p.VCPUs != tc.wantVCPUs {
+					t.Errorf("offering %s plan %s vCPUs = %d, want %d: the page's vCPU column, per node",
+						text.Quote(o.Name), text.Quote(p.Name), p.VCPUs, tc.wantVCPUs)
+				}
+
+				if p.MemoryMilliGiB != tc.wantMemoryMilliGiB {
+					t.Errorf("offering %s plan %s memory = %d thousandths of a GiB, want %d",
+						text.Quote(o.Name), text.Quote(p.Name), p.MemoryMilliGiB, tc.wantMemoryMilliGiB)
+				}
+
+				if p.IncludedStorageGiB != tc.wantIncludedGiB {
+					t.Errorf("offering %s plan %s included storage = %d GiB, want %d: Scaleway includes no storage in these plans",
+						text.Quote(o.Name), text.Quote(p.Name), p.IncludedStorageGiB, tc.wantIncludedGiB)
+				}
+
+				for _, region := range o.Regions {
+					got, ok := o.PlanPrice(tc.plan, region)
+					if !ok {
+						t.Errorf("offering %s lists no price for plan %s in region %s, want %s a month",
+							text.Quote(o.Name), text.Quote(tc.plan), text.Quote(region), tc.wantAmount)
+
+						continue
+					}
+
+					if got != tc.wantAmount {
+						t.Errorf("offering %s plan %s price in region %s = %s, want %s: the page's hourly price per node × 730, as milestone 6's decision 1 records it",
+							text.Quote(o.Name), text.Quote(tc.plan), text.Quote(region), got, tc.wantAmount)
+					}
+				}
+			})
+		}
+	})
+
+	t.Run("plan counts", func(t *testing.T) {
+		t.Parallel()
+
+		// The plans subtest walks the plans the table names, so a plan present in
+		// the snapshot and absent here would go unnoticed: pin each offering's
+		// count too.
+		tests := []struct {
+			offering string
+			want     int
+		}{
+			{offering: redis, want: 7},
+			{offering: redisCluster, want: 7},
+			{offering: mongodb, want: 12},
+			{offering: mongodbReplicaSet, want: 12},
+		}
+
+		for _, tc := range tests {
+			t.Run(tc.offering, func(t *testing.T) {
+				t.Parallel()
+
+				o := offeringNamed(t, cat, tc.offering)
+
+				if len(o.Plans) != tc.want {
+					t.Errorf("offering %s lists %d plans, want %d: %v",
+						text.Quote(o.Name), len(o.Plans), tc.want, planNames(o))
+				}
+			})
+		}
+	})
+
+	t.Run("mongodb storage prices", func(t *testing.T) {
+		t.Parallel()
+
+		tests := []struct {
+			offering string
+			want     catalog.Amount
+		}{
+			{offering: mongodb, want: catalog.Amount(993)},
+			{offering: mongodbReplicaSet, want: catalog.Amount(993)},
+		}
+
+		for _, tc := range tests {
+			t.Run(tc.offering, func(t *testing.T) {
+				t.Parallel()
+
+				o := offeringNamed(t, cat, tc.offering)
+
+				for _, region := range o.Regions {
+					got, ok := o.StoragePrice(region)
+					if !ok {
+						t.Errorf("offering %s lists no storage price in region %s, want %s a GiB a month",
+							text.Quote(o.Name), text.Quote(region), tc.want)
+
+						continue
+					}
+
+					if got != tc.want {
+						t.Errorf("offering %s storage price in region %s = %s, want %s: Block Storage 5K, 0.000136 an hour × 730",
+							text.Quote(o.Name), text.Quote(region), got, tc.want)
+					}
+				}
+			})
+		}
+	})
+
+	t.Run("redis bills no storage", func(t *testing.T) {
+		t.Parallel()
+
+		// The page prices the node's local SSD in no column, so neither Redis
+		// offering may carry a per-GiB price, which an estimate would read as a
+		// price Scaleway publishes (ADR 0024).
+		for _, name := range []string{redis, redisCluster} {
+			t.Run(name, func(t *testing.T) {
+				t.Parallel()
+
+				o := offeringNamed(t, cat, name)
+
+				if len(o.StoragePrices) != 0 {
+					t.Errorf("offering %s lists %d storage prices, want none: Scaleway bills no storage volume for Redis",
+						text.Quote(o.Name), len(o.StoragePrices))
+				}
+			})
+		}
+	})
+
+	t.Run("no plans", func(t *testing.T) {
+		t.Parallel()
+
+		// PRD #552 milestone 6's decision 3 and 6: a load balancer and a registry
+		// are billed by a size an inventory never records, and a topic and a
+		// serverless container by usage, so none of the four is sold by plan.
+		tests := []struct {
+			offering string
+			category taxonomy.Category
+		}{
+			{offering: "Load Balancer", category: taxonomy.NetworkLoadBalancer},
+			{offering: "Topics and Events", category: taxonomy.MessagingTopic},
+			{offering: "Serverless Containers", category: taxonomy.ServerlessContainer},
+			{offering: "Container Registry", category: taxonomy.RegistryContainer},
+		}
+
+		for _, tc := range tests {
+			t.Run(tc.offering, func(t *testing.T) {
+				t.Parallel()
+
+				o := offeringNamed(t, cat, tc.offering)
+
+				if !slices.Contains(o.Categories, tc.category) {
+					t.Errorf("offering %s categories = %v, want them to include %s",
+						text.Quote(o.Name), o.Categories, text.Quote(string(tc.category)))
+				}
+
+				if len(o.Plans) != 0 {
+					t.Errorf("offering %s lists plans %v, want none: the category is priced by usage or not priced at all",
+						text.Quote(o.Name), planNames(o))
+				}
+
+				if len(o.StoragePrices) != 0 {
+					t.Errorf("offering %s lists %d storage prices, want none", text.Quote(o.Name), len(o.StoragePrices))
+				}
+
+				if len(o.FixedFees) != 0 {
+					t.Errorf("offering %s lists fixed fees, want none: Scaleway publishes a control-plane fee for its Kubernetes offerings only",
+						text.Quote(o.Name))
+				}
+			})
+		}
+	})
+}
+
+// planNamed returns o's plan called name, and fails the test if there is none.
+func planNamed(t *testing.T, o catalog.Offering, name string) catalog.Plan {
+	t.Helper()
+
+	for _, p := range o.Plans {
+		if p.Name == name {
+			return p
+		}
+	}
+
+	t.Fatalf("offering %s has no plan called %s: it sells %v", text.Quote(o.Name), text.Quote(name), planNames(o))
+
+	return catalog.Plan{}
+}
+
 // first read 2026-11-13 and re-checked in Milan on 2026-11-19, lists the dedicated
 // Kapsule control plane there, so the offering is available and billed in it-mil as
 // it is in Paris. Its worker-node plans are the mutualized offering's: the POP2
@@ -1129,6 +1451,222 @@ func TestKubernetesKapsuleTiers(t *testing.T) {
 
 			checkMapping(t, mapping.Map(newResource(t, taxonomy.KubernetesManaged, tc.capabilities...), cat), tc.wantFit, tc.want)
 		})
+	}
+}
+
+// TestNewCategoryBestOfferingAndFit pins PRD #552 milestone 6's mapping
+// criterion for the categories the snapshot gains: a resource of each is pointed
+// at the offering that takes it over, with fit direct when the offering lists
+// every capability the resource lists and partial naming each capability it
+// lacks otherwise. Every row goes through mapping.Map on the embedded catalog, so
+// the offerings' capabilities, the tiers the snapshot records and the mapping's
+// ordering (direct before partial, then by offering name) are pinned together.
+//
+// The capabilities are the ones a tier variant exists for, and the ones a
+// source's resource of the category carries. Scaleway serves a sharded Redis
+// cluster; its two-node High Availability topology is a public beta and no
+// tier, and the cluster offering carries sharding alone, so a cache that needs
+// node level high availability is partial on both offerings (milestone 6's
+// decision 1). MongoDB sells a 1-node configuration and a 3-node replica set,
+// and documents encryption at rest on neither. The load balancer forwards IPv6
+// but not UDP, and neither of its high-availability claims meets the strict
+// definition, which is a respawn rather than continuity (decision 3). Topics and
+// Events supports no redrive policy, so it has no dead-letter queue, and
+// Container Registry states no encryption at rest, so every registry resource is
+// partial on it (decision 6).
+func TestNewCategoryBestOfferingAndFit(t *testing.T) {
+	t.Parallel()
+
+	cat := catalogOf(t)
+
+	const (
+		redis                = "Managed Database for Redis"
+		redisCluster         = "Managed Database for Redis Cluster"
+		mongodb              = "Managed MongoDB"
+		mongodbReplicaSet    = "Managed MongoDB Replica Set"
+		loadBalancer         = "Load Balancer"
+		topicsAndEvents      = "Topics and Events"
+		serverlessContainers = "Serverless Containers"
+		containerRegistry    = "Container Registry"
+	)
+
+	tests := []struct {
+		name         string
+		category     taxonomy.Category
+		capabilities []taxonomy.Capability
+		wantFit      mapping.Fit
+		want         []candidateExpectation
+	}{
+		{
+			name:     "cache.redis/no capabilities",
+			category: taxonomy.CacheRedis,
+			wantFit:  mapping.Direct,
+			want: []candidateExpectation{
+				{Name: redis, Fit: mapping.Direct},
+				{Name: redisCluster, Fit: mapping.Direct},
+			},
+		},
+		{
+			name:         "cache.redis/sharding",
+			category:     taxonomy.CacheRedis,
+			capabilities: []taxonomy.Capability{taxonomy.Sharding},
+			wantFit:      mapping.Direct,
+			want: []candidateExpectation{
+				{Name: redisCluster, Fit: mapping.Direct},
+				{Name: redis, Fit: mapping.Partial, Missing: []taxonomy.Capability{taxonomy.Sharding}},
+			},
+		},
+		{
+			name:         "cache.redis/node-high-availability",
+			category:     taxonomy.CacheRedis,
+			capabilities: []taxonomy.Capability{taxonomy.NodeHighAvailability},
+			wantFit:      mapping.Partial,
+			want: []candidateExpectation{
+				{Name: redis, Fit: mapping.Partial, Missing: []taxonomy.Capability{taxonomy.NodeHighAvailability}},
+				{Name: redisCluster, Fit: mapping.Partial, Missing: []taxonomy.Capability{taxonomy.NodeHighAvailability}},
+			},
+		},
+		{
+			name:     "database.mongodb/no capabilities",
+			category: taxonomy.DatabaseMongoDB,
+			wantFit:  mapping.Direct,
+			want: []candidateExpectation{
+				{Name: mongodb, Fit: mapping.Direct},
+				{Name: mongodbReplicaSet, Fit: mapping.Direct},
+			},
+		},
+		{
+			name:         "database.mongodb/node-high-availability",
+			category:     taxonomy.DatabaseMongoDB,
+			capabilities: []taxonomy.Capability{taxonomy.NodeHighAvailability},
+			wantFit:      mapping.Direct,
+			want: []candidateExpectation{
+				{Name: mongodbReplicaSet, Fit: mapping.Direct},
+				{Name: mongodb, Fit: mapping.Partial, Missing: []taxonomy.Capability{taxonomy.NodeHighAvailability}},
+			},
+		},
+		{
+			name:         "database.mongodb/encryption-at-rest",
+			category:     taxonomy.DatabaseMongoDB,
+			capabilities: []taxonomy.Capability{taxonomy.EncryptionAtRest},
+			wantFit:      mapping.Partial,
+			want: []candidateExpectation{
+				{Name: mongodb, Fit: mapping.Partial, Missing: []taxonomy.Capability{taxonomy.EncryptionAtRest}},
+				{Name: mongodbReplicaSet, Fit: mapping.Partial, Missing: []taxonomy.Capability{taxonomy.EncryptionAtRest}},
+			},
+		},
+		{
+			name:     "network.loadbalancer/no capabilities",
+			category: taxonomy.NetworkLoadBalancer,
+			wantFit:  mapping.Direct,
+			want:     []candidateExpectation{{Name: loadBalancer, Fit: mapping.Direct}},
+		},
+		{
+			name:         "network.loadbalancer/udp",
+			category:     taxonomy.NetworkLoadBalancer,
+			capabilities: []taxonomy.Capability{taxonomy.UDP},
+			wantFit:      mapping.Partial,
+			want: []candidateExpectation{
+				{Name: loadBalancer, Fit: mapping.Partial, Missing: []taxonomy.Capability{taxonomy.UDP}},
+			},
+		},
+		{
+			name:     "messaging.topic/no capabilities",
+			category: taxonomy.MessagingTopic,
+			wantFit:  mapping.Direct,
+			want:     []candidateExpectation{{Name: topicsAndEvents, Fit: mapping.Direct}},
+		},
+		{
+			name:         "messaging.topic/dead-letter-queue",
+			category:     taxonomy.MessagingTopic,
+			capabilities: []taxonomy.Capability{taxonomy.DeadLetterQueue},
+			wantFit:      mapping.Partial,
+			want: []candidateExpectation{
+				{Name: topicsAndEvents, Fit: mapping.Partial, Missing: []taxonomy.Capability{taxonomy.DeadLetterQueue}},
+			},
+		},
+		{
+			name:     "serverless.container/no capabilities",
+			category: taxonomy.ServerlessContainer,
+			wantFit:  mapping.Direct,
+			want:     []candidateExpectation{{Name: serverlessContainers, Fit: mapping.Direct}},
+		},
+		{
+			name:     "registry.container/no capabilities",
+			category: taxonomy.RegistryContainer,
+			wantFit:  mapping.Direct,
+			want:     []candidateExpectation{{Name: containerRegistry, Fit: mapping.Direct}},
+		},
+		{
+			name:         "registry.container/encryption-at-rest",
+			category:     taxonomy.RegistryContainer,
+			capabilities: []taxonomy.Capability{taxonomy.EncryptionAtRest},
+			wantFit:      mapping.Partial,
+			want: []candidateExpectation{
+				{Name: containerRegistry, Fit: mapping.Partial, Missing: []taxonomy.Capability{taxonomy.EncryptionAtRest}},
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			checkMapping(t, mapping.Map(newResource(t, tc.category, tc.capabilities...), cat), tc.wantFit, tc.want)
+		})
+	}
+}
+
+// TestNoOfferingForUnservedCategories pins PRD #552 milestone 6's decision 4:
+// Scaleway's File Storage is mounted with virtiofs by Scaleway Instances and
+// Kapsule, not over NFS, and storage.file is a shared file system several
+// machines mount over NFS, so no offering of the snapshot serves it. A file
+// share gets fit none, the target-neutral reason naming Scaleway and the
+// category, and is listed as a blocker.
+func TestNoOfferingForUnservedCategories(t *testing.T) {
+	t.Parallel()
+
+	cat := catalogOf(t)
+
+	// PRD #552 expects no generally available Scaleway offering to serve this. A
+	// later change that adds one updates the PRD with the snapshot, so this test
+	// fails first and the review sees it.
+	const unserved = taxonomy.StorageFile
+
+	for _, o := range cat.Offerings() {
+		if slices.Contains(o.Categories, unserved) {
+			t.Errorf("offering %s serves %s, want no Scaleway offering to serve it: File Storage mounts with virtiofs, not over NFS",
+				text.Quote(o.Name), text.Quote(string(unserved)))
+		}
+	}
+
+	r := newResource(t, unserved)
+
+	got := mapping.Map(r, cat)
+	if got.Fit != mapping.None {
+		t.Errorf("Map() fit = %q, want %q: Scaleway serves no %s",
+			got.Fit, mapping.None, text.Quote(string(unserved)))
+	}
+
+	wantReasons := []mapping.Reason{{Code: mapping.NoOffering, Target: "Scaleway", Category: unserved}}
+	if diff := cmp.Diff(wantReasons, got.Reasons); diff != "" {
+		t.Errorf("Map() reasons mismatch (-want +got):\n%s", diff)
+	}
+
+	wantSentence := "no offering in the Scaleway catalog for " + string(unserved)
+	if reasons := got.Reasons; len(reasons) == 1 && reasons[0].String() != wantSentence {
+		t.Errorf("reason = %q, want %q", reasons[0].String(), wantSentence)
+	}
+
+	inv, err := inventory.New("aws", []inventory.Resource{r})
+	if err != nil {
+		t.Fatalf("inventory.New() returned unexpected error: %v", err)
+	}
+
+	gotBlockers := assessment.Assess(inv, cat).Blockers
+	wantBlockers := []assessment.Blocker{{ResourceID: r.ID, Reason: wantReasons[0]}}
+	if diff := cmp.Diff(wantBlockers, gotBlockers); diff != "" {
+		t.Errorf("Assess() blockers mismatch (-want +got):\n%s", diff)
 	}
 }
 

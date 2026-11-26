@@ -70,8 +70,9 @@ type representative struct {
 //   - storage.object: 100 GiB stored;
 //   - serverless.function: a function of 1 GiB of memory, the only size field
 //     the category takes;
-//   - messaging.queue, network.loadbalancer and registry.container: no size: the
-//     categories take no size field, and they are priced by usage or not at all.
+//   - messaging.queue, messaging.topic, serverless.container,
+//     network.loadbalancer and registry.container: no size: the categories take no
+//     size field, and they are priced by usage or not at all.
 var representatives = map[taxonomy.Category]representative{
 	taxonomy.ComputeVM: {
 		size:  &inventory.Size{VCPUs: number(2), MemoryGiB: number(4), Count: count(1)},
@@ -112,6 +113,8 @@ var representatives = map[taxonomy.Category]representative{
 		size: &inventory.Size{MemoryGiB: number(1)},
 	},
 	taxonomy.MessagingQueue:      {},
+	taxonomy.MessagingTopic:      {},
+	taxonomy.ServerlessContainer: {},
 	taxonomy.NetworkLoadBalancer: {},
 	taxonomy.RegistryContainer:   {},
 }
@@ -141,7 +144,8 @@ func TestEstimatePerTargetAndCategory(t *testing.T) {
 	out.WriteString("bare-metal server is 4 vCPU and 32 GiB, the smallest plan OVHcloud's and Scaleway's bare-metal\n")
 	out.WriteString("offerings cover (UpCloud offers none); Kubernetes counts 3 nodes of the virtual-machine size; a\n")
 	out.WriteString("managed database is 2 vCPU, 4 GiB of memory and 50 GiB of storage; block storage is one 100 GiB\n")
-	out.WriteString("volume and object storage 100 GiB stored; a function is 1 GiB of memory; a queue takes no size.\n")
+	out.WriteString("volume and object storage 100 GiB stored; a function is 1 GiB of memory; a queue, a topic and a\n")
+	out.WriteString("serverless container take no size.\n")
 	out.WriteString("A MongoDB database is 2 vCPU, 8 GiB of memory, 100 GiB of storage and count 3, the nodes of a\n")
 	out.WriteString("replica set; a cache is 6 GiB of memory per node, count 2 and `node-high-availability`, so it is\n")
 	out.WriteString("priced on the multi-node tier a replicated cache is served by, and its capability is shown after\n")
