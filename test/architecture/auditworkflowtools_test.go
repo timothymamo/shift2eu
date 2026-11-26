@@ -176,12 +176,29 @@ func auditGoModGoVariable(lines []string) (string, bool) {
 	return "", false
 }
 
+// auditVariableOperators are the shell's operators a braced expansion applies
+// to the variable's value, and the brace that ends one without an operator:
+// ${name}, ${name##pattern}, ${name%pattern}, ${name:-word}. A read of the
+// variable is a read whatever follows its name, and the workflow's own guard
+// compares ${built##* }, the binary's build word alone (issue #658).
+const auditVariableOperators = "}:#%/^,@-=+?*"
+
 // auditNamesVariable reports whether line reads the shell variable name, in
-// either of the shell's forms: "${name}" and "$name".
+// either the unbraced form, $name, or a braced expansion of it, ${name} and the
+// forms that apply an operator to its value.
 func auditNamesVariable(line, name string) bool {
-	return strings.Contains(line, "${"+name+"}") || strings.Contains(line, "$"+name+" ") ||
-		strings.Contains(line, "$"+name+"\"") || strings.Contains(line, "$"+name+"\t") ||
-		strings.HasSuffix(strings.TrimSpace(line), "$"+name)
+	if strings.Contains(line, "$"+name+" ") || strings.Contains(line, "$"+name+"\"") ||
+		strings.Contains(line, "$"+name+"\t") || strings.HasSuffix(strings.TrimSpace(line), "$"+name) {
+		return true
+	}
+
+	for _, op := range auditVariableOperators {
+		if strings.Contains(line, "${"+name+string(op)) {
+			return true
+		}
+	}
+
+	return false
 }
 
 // auditComparisons are the shell's ways of comparing two words: the [ ] and
@@ -189,11 +206,15 @@ func auditNamesVariable(line, name string) bool {
 // Go, or that assigns it, holds none of them.
 var auditComparisons = []string{"!=", "-ne", "==", "-eq"}
 
-// auditComparesVariable reports whether line compares something with the shell
-// variable name: a comparison operator, and a read of the variable.
-func auditComparesVariable(line, name string) bool {
-	if !auditNamesVariable(line, name) {
-		return false
+// auditComparesVariables reports whether line compares the shell variables names
+// with one another: a comparison operator, and a read of every one of the names.
+// A comparison that reads only go.mod's Go holds the built tool to nothing (issue
+// #658).
+func auditComparesVariables(line string, names ...string) bool {
+	for _, name := range names {
+		if !auditNamesVariable(line, name) {
+			return false
+		}
 	}
 
 	for _, op := range auditComparisons {
@@ -207,11 +228,13 @@ func auditComparesVariable(line, name string) bool {
 
 // auditGovulncheckVersionGuard returns what a step that runs govulncheck
 // -version lacks to hold the tool to go.mod's Go: the step reads the wanted
-// version from go.mod, runs go version on the govulncheck binary itself, compares
-// what that prints with go.mod's Go, and fails the run - exit 1, after an ::error
-// naming govulncheck that the run's log names the cause with - on a mismatch, so
-// a govulncheck built with another Go than go.mod's stops the run instead of
-// scanning with it (issue #658).
+// version from go.mod, runs go version on the govulncheck binary itself, holds
+// what that prints in a variable of its own, compares that variable with
+// go.mod's, and fails the run - exit 1, after an ::error naming govulncheck that
+// the run's log names the cause with - on a mismatch, so a govulncheck built
+// with another Go than go.mod's stops the run instead of scanning with it (issue
+// #658). A comparison that reads go.mod's Go alone holds the built tool to
+// nothing, so the comparison must name both variables.
 //
 // go version on the binary is what catches a tool built with another Go:
 // govulncheck -version's "Go:" line is the go command's own go env GOVERSION,
@@ -256,18 +279,31 @@ func auditGovulncheckVersionGuard(step auditJobStep, want string) []string {
 	if goVersion < 0 {
 		problems = append(problems, fmt.Sprintf("%s runs govulncheck -version but holds no line that runs go version on the govulncheck binary itself (a path ending in /govulncheck): govulncheck -version names the Go the go command reports for it, not the Go that built it, so only go version on the binary shows a tool built with another Go than go.mod's %q, and a govulncheck built with an older Go cannot load the module at all (issue #658)", where, want))
 	} else {
+		// go version's output goes into a variable the comparison names: the
+		// comparison is what holds the built tool to go.mod's Go, and a
+		// comparison that reads go.mod's Go alone passes for it whatever the
+		// binary was built with (issue #658).
+		builtVar := ""
+
+		if m := auditGoModGoAssignment.FindStringSubmatch(strings.TrimSpace(lines[goVersion])); m != nil {
+			builtVar = m[1]
+		}
+
 		compared := false
 
 		for _, line := range lines[goVersion:] {
-			if auditComparesVariable(line, modVar) {
+			if auditComparesVariables(line, modVar, builtVar) {
 				compared = true
 
 				break
 			}
 		}
 
-		if !compared {
-			problems = append(problems, fmt.Sprintf("%s runs %q but no line after it compares what it prints with go.mod's Go (%q, the variable %q the step reads go.mod into): without that comparison the built tool's Go is never held to go.mod's %q, so a govulncheck built with another Go scans anyway (issue #658)", where, builtBy, "go"+want, modVar, want))
+		switch {
+		case builtVar == "":
+			problems = append(problems, fmt.Sprintf("%s runs go version on the govulncheck binary (%q) without holding what it prints in a variable of its own (an assignment such as built=\"$(go version %s)\"): no comparison then reads the built tool's Go, so any line that reads go.mod's %q passes for holding it there (issue #658)", where, strings.TrimSpace(lines[goVersion]), builtBy, want))
+		case !compared:
+			problems = append(problems, fmt.Sprintf("%s runs go version on the govulncheck binary into %q but holds no comparison that names both it and go.mod's Go (%q, the variable %q the step reads go.mod into): the comparison must read both, or a line such as [ \"${%s}\" != \"\" ] reads go.mod's Go alone and holds the built tool to nothing, so a govulncheck built with another Go than go.mod's %q scans anyway (issue #658)", where, builtVar, "go"+want, modVar, modVar, want))
 		}
 
 		// The failure after it: an ::error that names govulncheck, then exit 1.
