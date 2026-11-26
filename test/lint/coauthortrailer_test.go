@@ -18,12 +18,17 @@
 // that section, so a new agent, App or maintainer address is one line in one
 // file.
 //
+// A commit's author and committer count too: a squash merge credits every
+// distinct author of the pull request's commits, so a commit written by an
+// address the project does not own is refused with no trailer at all.
+//
 // The check reads a branch's own commits, the range coAuthorRange picks: the
-// pull request's commits in CI, where a range the run cannot read is an error
-// rather than a skip, so a pull request is never passed by a check that read
-// nothing. TestCoAuthorRange pins that choice without git; the helpers
-// (coAuthorFindings, parseCoAuthorAllowList, coAuthorRange and
-// coAuthorAllowListPath) live in coauthortrailer_rule_test.go, and the case
+// pull request's commits in CI, where a range the run cannot read, or one that
+// reads no commit, is an error rather than a skip, so a pull request is never
+// passed by a check that read nothing. TestCoAuthorRange and
+// TestCoAuthorCommitCount pin that choice without git; the helpers
+// (coAuthorFindings, parseCoAuthorAllowList, coAuthorRange, coAuthorCommitCount
+// and coAuthorAllowListPath) live in coauthortrailer_rule_test.go, and the case
 // that runs git over the branch beside it.
 package lint_test
 
@@ -43,9 +48,17 @@ import (
 // address can never slip through by not looking like one. A trailer with no
 // address at all, the form the go-tdd skill asks for, is fine.
 //
-// The findings come in commit order, then in line order, and name the whole
+// A commit's author and committer are checked against the same list, because a
+// squash merge credits every distinct author of the pull request's commits: a
+// commit written by an address the project does not own is refused even with no
+// trailer at all, and its finding names the address as "author <addr>" or
+// "committer <addr>".
+//
+// The findings come in commit order: the author, then the committer, then the
+// message's trailers in line order. A trailer's finding names the whole
 // offending line as it is written, so a report points at the line to edit. The
-// key must start the trimmed line: prose that mentions Co-Authored-By mid
+// key must start the trimmed line, in any letter case and with white space
+// before the colon, as git accepts it: prose that mentions Co-Authored-By mid
 // sentence is no trailer and no finding.
 func TestCoAuthorFindings(t *testing.T) {
 	t.Parallel()
@@ -216,6 +229,92 @@ func TestCoAuthorFindings(t *testing.T) {
 				SHA:     firstCommit,
 				Trailer: "Co-Authored-By: x <noreply@pi.dev>",
 			}},
+		},
+		{
+			name: "white space before the colon",
+			commits: []commitMessage{{
+				SHA: firstCommit,
+				Message: "feat(lint): a subject\n\n" +
+					"Co-Authored-By : pi <noreply@pi.dev>\n" +
+					"co-authored-by\t: pi <noreply@pi.dev>\n",
+			}},
+			want: []coAuthorFinding{
+				{SHA: firstCommit, Trailer: "Co-Authored-By : pi <noreply@pi.dev>"},
+				{SHA: firstCommit, Trailer: "co-authored-by\t: pi <noreply@pi.dev>"},
+			},
+		},
+		{
+			name: "white space before the colon of a trailer with no address",
+			commits: []commitMessage{{
+				SHA:     firstCommit,
+				Message: "feat(lint): a subject\n\nCo-Authored-By : pi (DeepSeek V4.1 Flash)\n",
+			}},
+			want: nil,
+		},
+		{
+			name: "a key that only starts with the co-author one",
+			commits: []commitMessage{{
+				SHA:     firstCommit,
+				Message: "feat(lint): a subject\n\nCo-Authored-Byline: x <noreply@pi.dev>\n",
+			}},
+			want: nil,
+		},
+		{
+			name: "an author address the project does not own",
+			commits: []commitMessage{{
+				SHA:     firstCommit,
+				Author:  "noreply@pi.dev",
+				Message: "feat(lint): a subject\n\nA body with no trailer.\n",
+			}},
+			want: []coAuthorFinding{{
+				SHA:     firstCommit,
+				Trailer: "author noreply@pi.dev",
+			}},
+		},
+		{
+			name: "a committer address the project does not own",
+			commits: []commitMessage{{
+				SHA:       firstCommit,
+				Committer: "noreply@deepseek.com",
+				Message:   "feat(lint): a subject\n\nA body with no trailer.\n",
+			}},
+			want: []coAuthorFinding{{
+				SHA:     firstCommit,
+				Trailer: "committer noreply@deepseek.com",
+			}},
+		},
+		{
+			name: "an App as author and committer, with a trailer of no address",
+			commits: []commitMessage{{
+				SHA:       firstCommit,
+				Author:    "357791782+shift2eu-agents[bot]@users.noreply.github.com",
+				Committer: "357791782+shift2eu-agents[bot]@users.noreply.github.com",
+				Message:   "feat(lint): a subject\n\nCo-Authored-By: pi (DeepSeek V4.1 Flash)\n",
+			}},
+			want: nil,
+		},
+		{
+			name: "an author address in another letter case",
+			commits: []commitMessage{{
+				SHA:     firstCommit,
+				Author:  "NoReply@Anthropic.com",
+				Message: "feat(lint): a subject\n\nCo-Authored-By: pi (DeepSeek V4.1 Flash)\n",
+			}},
+			want: nil,
+		},
+		{
+			name: "an author, a committer and a trailer the project does not own",
+			commits: []commitMessage{{
+				SHA:       firstCommit,
+				Author:    "noreply@pi.dev",
+				Committer: "noreply@deepseek.com",
+				Message:   "feat(lint): a subject\n\nCo-Authored-By: pi <noreply@earendil-works.com>\n",
+			}},
+			want: []coAuthorFinding{
+				{SHA: firstCommit, Trailer: "author noreply@pi.dev"},
+				{SHA: firstCommit, Trailer: "committer noreply@deepseek.com"},
+				{SHA: firstCommit, Trailer: "Co-Authored-By: pi <noreply@earendil-works.com>"},
+			},
 		},
 		{
 			name: "the words mid-sentence are no trailer",
@@ -394,15 +493,16 @@ func TestParseCoAuthorAllowList(t *testing.T) {
 // failing that, the branch's own commits over origin/main. A range it cannot
 // read is an error rather than a skip whenever SHIFT2EU_COAUTHOR_CHECK asks for
 // one, which CI does: a check that could not read the pull request's commits
-// must never report a pass. Without that demand, and with no origin/main to
-// compare against, the check skips and says why.
+// must never report a pass. That demand holds even when origin/main is there, so
+// no run falls back to origin/main..HEAD in silence. Without that demand, and
+// with no origin/main to compare against, the check skips and says why.
 func TestCoAuthorRange(t *testing.T) {
 	t.Parallel()
 
 	// Two commits a full length SHA names, as CI passes them.
 	const (
-		rangeKey = "SHIFT2EU_COAUTHOR_RANGE"
-		checkKey = "SHIFT2EU_COAUTHOR_CHECK"
+		rangeKey = coAuthorRangeEnv
+		checkKey = coAuthorCheckEnv
 
 		base = "1111111111111111111111111111111111111111"
 		head = "2222222222222222222222222222222222222222"
@@ -464,6 +564,12 @@ func TestCoAuthorRange(t *testing.T) {
 			wantErr: true,
 		},
 		{
+			name:    "one required in CI with origin/main but no range",
+			env:     map[string]string{checkKey: "require"},
+			refs:    []string{originMain},
+			wantErr: true,
+		},
+		{
 			name:     "origin/main in the branch's history",
 			refs:     []string{originMain},
 			wantSpec: originMain + "..HEAD",
@@ -513,6 +619,62 @@ func TestCoAuthorRange(t *testing.T) {
 	}
 }
 
+// TestCoAuthorCommitCount pins the second half of that demand: a range that the
+// run reads and that yields no commit is an error too, because a pull request
+// always has one, so a green job never means the check read nothing. Only the
+// exact word require demands it, so a typo fails no honest run and passes no
+// required one.
+func TestCoAuthorCommitCount(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		env     map[string]string
+		n       int
+		wantErr bool
+	}{
+		{
+			name:    "one required and no commit",
+			env:     map[string]string{coAuthorCheckEnv: "require"},
+			wantErr: true,
+		},
+		{
+			name: "one required and a commit",
+			env:  map[string]string{coAuthorCheckEnv: "require"},
+			n:    1,
+		},
+		{
+			name: "not required and no commit",
+		},
+		{
+			name: "REQUIRE in capitals is not the word",
+			env:  map[string]string{coAuthorCheckEnv: "REQUIRE"},
+		},
+		{
+			name: "yes is not the word",
+			env:  map[string]string{coAuthorCheckEnv: "yes"},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := coAuthorCommitCount(func(key string) string { return tc.env[key] }, tc.n)
+
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("coAuthorCommitCount(%d) = nil, want an error", tc.n)
+				}
+
+				return
+			}
+			if err != nil {
+				t.Fatalf("coAuthorCommitCount(%d): %v", tc.n, err)
+			}
+		})
+	}
+}
+
 // TestCoAuthorAllowListFile reads the one allow list the check reads,
 // .github/co-author-addresses.txt, and pins what it must say: the addresses the
 // project's own agents and Apps commit with, and none of the addresses that
@@ -534,12 +696,15 @@ func TestCoAuthorAllowListFile(t *testing.T) {
 	}
 
 	// The addresses the project uses: the agents' Claude Code commits, the
-	// agents' App, the release App's and Renovate's commits.
+	// agents' App, the release App, the audit App, Renovate's commits and the
+	// maintainer's GitHub noreply address.
 	for _, addr := range []string{
 		"noreply@anthropic.com",
 		"357791782+shift2eu-agents[bot]@users.noreply.github.com",
 		"355849575+shift2eu-release[bot]@users.noreply.github.com",
+		"359886496+shift2eu-audit[bot]@users.noreply.github.com",
 		"29139614+renovate[bot]@users.noreply.github.com",
+		"65859835+timothymamo@users.noreply.github.com",
 	} {
 		if !slices.Contains(got, addr) {
 			t.Errorf("%s does not list %s, an address the project's agents and Apps commit with: %v",
