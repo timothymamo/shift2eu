@@ -33,13 +33,39 @@
 # working for a command the tester runs: the VM's gh (dev/gh-app-token.sh, ADR 0031) reads the App's token
 # from its file under HOME, not from the environment.
 #
-# PATH is copied as it is: the VM's PATH (dev/lima.yaml's profile) has no empty and no `.` entry, so a
-# command found on it is never one from the unit's folder.
+# PATH is checked first, before anything that looks a command up: an empty entry (a leading, middle or
+# trailing `:`) or one that is not absolute (`.`, `bin`) is the working directory or under it, the unit's
+# folder, so a command the wrapper, node or pi then finds could be one from there. Such a PATH exits 1 with a
+# message that names PATH (never its value), and nothing is started. The VM's PATH (dev/lima.yaml's profile)
+# has none, so it passes, and is then copied as it is.
 #
 # No value is ever printed: the messages name files, never a variable's value.
 #
 # Usage: dev/pi-tester.sh <pi arguments...>   (from the directory pi loads the project from)
 set -eu
+
+# refuse_path <why> stops the wrapper on a PATH that could find a command in the working directory.
+refuse_path() {
+  printf 'pi-tester: PATH %s: the tester is not started, because a command found on it could be one from the working directory, the unit folder (issue #662)\n' \
+    "$1" >&2
+  exit 1
+}
+
+case ":${PATH:-}:" in
+*::*) refuse_path "has an empty entry (a leading, doubled or trailing colon)" ;;
+esac
+path_entries=${PATH}
+while [ -n "${path_entries}" ]; do
+  path_entry=${path_entries%%:*}
+  case "${path_entries}" in
+  *:*) path_entries=${path_entries#*:} ;;
+  *) path_entries="" ;;
+  esac
+  case "${path_entry}" in
+  /*) ;;
+  *) refuse_path "has an entry that is not an absolute path" ;;
+  esac
+done
 
 extension=.pi/extensions/deny-env-printing.ts
 list=.pi/deny-env-printing.json

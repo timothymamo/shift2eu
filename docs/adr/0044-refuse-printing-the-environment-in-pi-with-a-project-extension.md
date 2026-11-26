@@ -271,6 +271,20 @@ both now (options 1 and 3 of the issue). The decision above stands; this adds a 
   no other agent's key, no `OTEL_*` (its headers carry a telemetry backend's key), and no name the list does
   not know. `test/devenv/pitester_test.go` pins the list's effect, the marker, the fail-closed start, the
   profile's guard and the wiring.
+- **It checks `PATH` first.** Before anything that looks a command up, the wrapper refuses a `PATH` with an
+  empty entry (a leading, doubled or trailing `:`) or an entry that is not absolute (`.`, `bin`): either is
+  the working directory or under it, the unit's folder, so `jq`, node or pi could be found there. It exits 1
+  with a message naming `PATH` (never its value), and nothing starts. The VM's `PATH` has no such entry.
+- **The refusal covers the App's token folder and the marker.** The extension's file tools refuse
+  `~/.config/shift2eu`, the folder of the agents App's token file `agents-app-token` (ADR 0031), as they
+  refuse the deck's key directory: by resolved path (`~/`, absolute, `file://`) and anything under it, as an
+  ancestor of a `grep` or `find` (`~`, `~/.config`), by its spellings in any field, and a `glob` or
+  `pattern` naming the App's files (`agents-app`). The repository's `dev/agents-app-token.sh`, which mints
+  the token and holds none, stays readable. The list refuses any bash command naming the folder
+  (`\.config[/.]*/shift2eu\b`: the file, a glob, a `cd`, an `ls`) and any command naming the marker
+  `SHIFT2EU_PI_TESTER` (an `unset`, an empty assignment, `env -u`), since clearing it before a `bash -l`
+  would source `daemon.env` again. `test/architecture/pienvdenytoolcall_test.go` runs the extension's
+  `tool_call` handler in node against those calls.
 - **The wrapper is project code.** `dev/pi-tester.sh` is reviewed and audited as such, like `.pi/`: a
   change to it changes what reaches the tester.
 
@@ -291,9 +305,11 @@ Consequences of the amendment:
   variables.
 - It does not separate the tester from the other agents. The tester still runs as the VM's one user, so
   `daemon.env`, the agents App's token file (`~/.config/shift2eu/agents-app-token`) and other processes'
-  `/proc/<pid>/environ` stay readable to it, guarded only by the deny patterns, which also refuse a command
-  naming the App token file; a program the tester writes and runs can bypass them. Separating them needs a
-  separate uid or the egress stage.
+  `/proc/<pid>/environ` stay readable to it, guarded only by the extension: its file tools refuse the
+  App's token folder as they refuse the deck's, and its patterns refuse a command naming that folder or
+  clearing the marker. A program the tester writes and runs can bypass both, and can clear the marker
+  itself, since nothing but those patterns protects it. Separating them needs a separate uid or the egress
+  stage.
 - The tester still reaches GitHub: the VM's `gh` (ADR 0031) reads the agents App's token from its file
   under `HOME`, not from the environment, so `gh` and `git push` keep working for it.
 - A variable the tester's tools turn out to need and the list lacks is absent until the script names it;

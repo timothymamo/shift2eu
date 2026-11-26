@@ -800,8 +800,10 @@ GitHub token of yours enters the VM (PRD #161 milestone 3).
   the pane variables (issue #662,
   [ADR 0044](adr/0044-refuse-printing-the-environment-in-pi-with-a-project-extension.md)). This is not a
   separation: the tester runs as the same user, so `daemon.env`, the App token file and other processes'
-  `/proc/<pid>/environ` stay readable to it, guarded only by the deny patterns, which a program it writes
-  can bypass; only a separate uid or narrowed egress would change that. A new variable the tester needs goes into that script's list with a reason. Scope each credential
+  `/proc/<pid>/environ` stay readable to it, guarded only by pi's refusal (its file tools refuse
+  `~/.config/dot-agent-deck` and the App token folder `~/.config/shift2eu`, its patterns a command naming
+  either or the marker), which a program it writes can bypass, marker included; only a separate uid or
+  narrowed egress would change that. A new variable the tester needs goes into that script's list with a reason. Scope each credential
   narrowly so it is cheap to revoke. The file stays on the VM's disk
   (under `~/.lima` on the Mac) until `make vm-delete`.
 - **Cloud accounts (for integration tests and real analyses, later):** read-only identities only
@@ -3205,6 +3207,9 @@ The deck does not start pi directly: the tester's `command` in `.dot-agent-deck.
 `dev/pi-tester.sh` with pi's arguments, relative to the pane's working directory (the unit's folder), and
 `agent = "pi"` tells the deck which agent runs behind it (issue #662). The script:
 
+- refuses to start anything, exiting 1 with a message naming `PATH`, when `PATH` has an empty entry (a
+  leading, doubled or trailing `:`) or an entry that is not absolute (`.`, `bin`), since either finds
+  commands in the unit's folder; the VM's `PATH` has none;
 - refuses to start pi, exiting 1 with a message naming the file, unless `.pi/extensions/deny-env-printing.ts`
   is a non-empty file and `.pi/deny-env-printing.json` is a JSON object with a non-empty `patterns` array
   (checked with `jq`), and unless node, found on `PATH`, imports the extension with a function as its
@@ -3219,7 +3224,10 @@ The deck does not start pi directly: the tester's `command` in `.dot-agent-deck.
   rebuild). The other agents' keys, the GitHub token variables and the telemetry headers are not in pi's
   environment, so printing it shows only the DeepSeek key and the pane variables. They are not out of the
   tester's reach: it runs as the same user, so `daemon.env`, the App token file and other processes'
-  `/proc/<pid>/environ` stay readable, guarded only by the deny patterns. Its `gh` and `git push` keep
+  `/proc/<pid>/environ` stay readable, guarded only by pi's refusal: its file tools refuse the App token
+  folder `~/.config/shift2eu` (by path, as an ancestor of a `grep` or `find`, and an `agents-app` glob or
+  pattern) as they refuse the deck's, and its patterns refuse a command naming that folder or the marker
+  `SHIFT2EU_PI_TESTER`; a program the tester writes and runs can bypass both. Its `gh` and `git push` keep
   working through the App token file under `HOME` (ADR 0031), not the environment.
 
 A changed tester command needs the maintainer's approval in the deck (`dot-agent-deck trust`) before a

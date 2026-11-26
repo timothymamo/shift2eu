@@ -1,5 +1,5 @@
 {
-  "reason": "Refused: this command prints the environment, or a value of it, which holds the agents' API keys. Never print the environment (env, printenv, set, export -p, declare -p, compgen -v, ps e, make -p, /proc, a $..._KEY or $..._TOKEN expansion, an interpreter's environ) and never read daemon.env, anything under ~/.config/dot-agent-deck or the App token file ~/.config/shift2eu/agents-app-token; CLAUDE.md, rule 3. Your scratch directory is .scratch/ in your worktree; there is nothing you need from the environment. Search files with the grep tool, not a bash grep. Do not look for another way to read it: stop and report through dot-agent-deck work-done if the task cannot go on without it.",
+  "reason": "Refused: this command prints the environment, or a value of it, which holds the agents' API keys. Never print the environment (env, printenv, set, export -p, declare -p, compgen -v, ps e, make -p, /proc, a $..._KEY or $..._TOKEN expansion, an interpreter's environ) and never read daemon.env, anything under ~/.config/dot-agent-deck or anything under ~/.config/shift2eu, the folder of the App token file agents-app-token, and never name or clear the tester's marker SHIFT2EU_PI_TESTER, which keeps the agents' keys out of its login shells; CLAUDE.md, rule 3. Your scratch directory is .scratch/ in your worktree; there is nothing you need from the environment. Search files with the grep tool, not a bash grep. Do not look for another way to read it: stop and report through dot-agent-deck work-done if the task cannot go on without it.",
   "patterns": [
     "(^|[\\n;&|()`{'\"])[ \\t]*(([0-9]*[<>&][<>&|]*[ \\t]*[^\\s;&|()<>`]+|[A-Za-z_][A-Za-z0-9_]*=\\S*|then|do|else|elif|if|while|until|!|(\\S*/)?(sudo|command|builtin|exec|nohup|time|xargs|timeout|nice|ionice|stdbuf|doas|busybox|eval|env|bash|sh|zsh|dash|ksh|setsid|strace|ltrace|watch|script|unbuffer|su|runuser|fish|coproc)([ \\t]+(-\\S*([ \\t]+[^-\\s;&|()<>`]\\S*)?|[0-9][0-9.]*[smhd]?|[A-Za-z_][A-Za-z0-9_]*=\\S*)){0,4}|(\\S*/)?(flock|chroot)([ \\t]+-\\S*){0,4}[ \\t]+[^-\\s;&|()<>`]\\S*)[ \\t]+){0,6}['\"\\\\]?(\\S*/)?env([ \\t]+(-[uC][ \\t]+[^\\s;&|()<>`]+|--(unset|chdir)[ \\t]+[^\\s;&|()<>`]+|-\\S+|[A-Za-z_][A-Za-z0-9_]*=\\S*)){0,8}[ \\t]*($|[0-9]+[<>]|[\\n;&|()<>`}'\"])",
     "(^|[\\n;&|()`{'\"])[ \\t]*(([0-9]*[<>&][<>&|]*[ \\t]*[^\\s;&|()<>`]+|[A-Za-z_][A-Za-z0-9_]*=\\S*|then|do|else|elif|if|while|until|!|(\\S*/)?(sudo|command|builtin|exec|nohup|time|xargs|timeout|nice|ionice|stdbuf|doas|busybox|eval|env|bash|sh|zsh|dash|ksh|setsid|strace|ltrace|watch|script|unbuffer|su|runuser|fish|coproc)([ \\t]+(-\\S*([ \\t]+[^-\\s;&|()<>`]\\S*)?|[0-9][0-9.]*[smhd]?|[A-Za-z_][A-Za-z0-9_]*=\\S*)){0,4}|(\\S*/)?(flock|chroot)([ \\t]+-\\S*){0,4}[ \\t]+[^-\\s;&|()<>`]\\S*)[ \\t]+){0,6}['\"\\\\]?(\\S*/)?printenv($|[\\s;&|()<>`}'\"])",
@@ -13,7 +13,8 @@
     "(^|[\\s'\"=<>:(/])pro[^/\\s]*/+[^/\\s]*/+environ",
     "daemon\\.env",
     "\\.config[/.]*/dot-agent",
-    "\\.config[/.]*/shift2eu/+agents-app-token",
+    "\\.config[/.]*/shift2eu\\b",
+    "SHIFT2EU_PI_TESTER",
     "\\bgh[ \\t]+auth[ \\t]+(token|status[^\\n;&|]*[ \\t](-[A-Za-z]*t\\b|--show-token))",
     "\\bgit\\b[^\\n;&|]*[ \\t]credential[ \\t]+fill\\b|\\bgh[ \\t]+auth[ \\t]+git-credential\\b",
     "\\bjq\\b[^\\n;&|]*[ \\t'\"(]env\\b|\\$ENV\\b",
