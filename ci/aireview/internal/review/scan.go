@@ -532,6 +532,14 @@ func isAzureNamespace(name string) bool {
 // https://microsoft.app/orders, http:/microsoft.corp/x), "\" (a UNC or a
 // mistyped authority, \\Microsoft.corp/share) and "@" (a URL's userinfo,
 // https://svc-user@microsoft.corp/share).
+//
+// The fixture check holds a second, hand-written copy
+// (test/examples/fixtures_check_test.go), since it cannot import this
+// library: the two must accept the same delimiters, the fixture copy also
+// "\n" (issue #630). The shared case list
+// test/examples/testdata/namespace_may_follow_delimiters.txt guards both: a
+// delimiter added to or dropped from one copy must be added to or dropped
+// from that list and the other copy too.
 func namespaceMayFollow(before string) bool {
 	if before == "" {
 		return true
