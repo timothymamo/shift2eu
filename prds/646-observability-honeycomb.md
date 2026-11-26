@@ -247,7 +247,10 @@ layer, and an ingest key can only write data, not read it, so a leak costs junk 
 
 ## Privacy and data minimisation
 
-What each signal may carry, and what happens to it:
+What each signal may carry, and what happens to it. "Dropped in the Collector" means at **every level**
+an attribute can arrive at: the resource (a `resource` processor) and the span, span event, metric data
+point and log record (`transform` statements in each of those contexts; an `attributes` processor alone
+does not reach resource attributes or span events). `test/devenv` checks both levels for each name.
 
 | Item | Where | Kept or dropped | Why |
 |---|---|---|---|
@@ -301,8 +304,9 @@ What each signal may carry, and what happens to it:
   appears in the provisioning, or when the deny rules stop covering the key file in either agent.
 - [ ] Given an agent in a deck pane, when it tries to read the key file or print the Collector's
   configuration or environment, then the deny rules refuse it.
-- [ ] Given the runbook's "turn it off", when the maintainer follows it, then nothing more is sent and the
-  agents start without `OTEL_*` variables.
+- [ ] Given the runbook's "turn it off" (remove the key file and the `telemetry.conf` drop-in, restart the
+  daemon; decision 4), when the maintainer follows it, then the Collector is stopped, nothing leaves the
+  VM, and the agents start without `OTEL_*` variables.
 - [ ] Given a month of data, then Honeycomb's usage page shows events and data points under the daily
   targets, and the trigger of milestone 5 has not fired.
 
@@ -319,7 +323,10 @@ Each ships as one PR, smallest first. Milestones 2 to 4 each add a signal, so ea
      a minute; agents are unaffected.
    - M1.2 With it, the runbook's check finds the deck's spans and logs, Claude Code's events and metrics
      and Pi's records in Honeycomb.
-   - M1.3 The trim holds: no `user.email`, account id, content attribute or real `host.name` arrives.
+   - M1.3 The trim holds: no `user.email`, account id, content attribute or real `host.name` arrives,
+     whether it came as a resource attribute or as a span, span-event, data-point or log-record attribute.
+   - M1.3a `dev/lima.yaml` has a `portForwards` rule ignoring guest port 4318 (decision 9), pinned by
+     `test/devenv`.
    - M1.4 `test/devenv` pins the version, the checksums, the Renovate comments, the `127.0.0.1` listener,
      the trim list and the absence of a key or content switch.
    - M1.5 The deny rules refuse reading `/etc/shift2eu/otelcol.env`, `$HONEYCOMB*` expansions and
@@ -368,9 +375,12 @@ For the maintainer to answer; each has a recommendation.
    GitHub, and no workflow gets a Honeycomb secret.
 4. **Where the non-secret settings go.** A provisioned drop-in `telemetry.conf` (endpoint
    `http://127.0.0.1:4318`, `OTEL_METRICS_INCLUDE_ACCOUNT_UUID=false`, the metric interval), written
-   always, or only once the maintainer turns telemetry on. *Recommended: always*, with the Collector
-   starting only when its key file exists: one state to test, and "off" is removing the key file and
-   restarting.
+   always, or only once the maintainer turns telemetry on. *Recommended: written by provisioning whenever
+   the key file exists, and removed when it does not*, with the Collector starting only when its key file
+   exists: one switch, the key file. "Off" is removing the key file, then `make deck-restart` (or the
+   provisioning step) removing the drop-in and restarting the daemon, so the agents get no `OTEL_*`
+   variables at all; without that, the daemon would keep switching on Claude Code's telemetry with
+   nowhere to send it.
 5. **How the key reaches the VM.** By hand in the VM (a `read -rs` prompt into `sudo install`), or a
    `make vm-telemetry-key` target on the Mac's host clone that reads one variable from the host clone's
    `.envrc` or Keychain and writes it over standard input, like `make vm-env`. *Recommended: the make
@@ -386,9 +396,10 @@ For the maintainer to answer; each has a recommendation.
    run for hours, and it leaves room for the Mac.
 9. **The Mac host.** Leave out, send directly with a second copy of the key, or send through the VM's
    Collector over Lima's default forward of `127.0.0.1:4318`. *Recommended: through the VM's Collector*,
-   so there is one key; or leave out until the VM's figures show a need. If M4 is dropped, add a
-   `portForwards` rule to `dev/lima.yaml` that ignores guest port 4318, so the VM's Collector is not
-   reachable from the Mac.
+   so there is one key; or leave out until the VM's figures show a need. Either way, **M1** adds a
+   `portForwards` rule to `dev/lima.yaml` that ignores guest port 4318, pinned by `test/devenv`, so from
+   the Collector's first day no process on the Mac can write into the Honeycomb environment through the
+   VM's key; only M4, if the maintainer picks this option, lifts it for that port.
 10. **The Collector distribution.** `otelcol-contrib` (every component, larger) or a build of our own with
     the OpenTelemetry Collector Builder holding only `otlp`, `hostmetrics`, `attributes`, `transform`,
     `filter`, `resource`, `batch` and `otlphttp`. *Recommended: `otelcol-contrib`*, pinned and
