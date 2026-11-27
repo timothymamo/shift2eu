@@ -150,7 +150,7 @@ const excludedFixtureKeysPath = "test/examples/testdata/inventory_guide_excluded
 // excludedFixtureKeysRecordTablePath is the table of record documents both
 // readers of that list are given, with the records or the rejection each expects
 // of them (review finding on PR #654). The readers are this package's
-// readExcludedFixtureKeys and test/site's readAWSExcludedFields, in
+// readExcludedFixtureKeys and test/site's readExcludedFields, in
 // test/site/inventory_test.go: neither test package may import the other, so each
 // holds its own copy of the parser, and this table is what holds the two to the
 // same documents. Both run it, each against its own copy of the parser, through
@@ -245,7 +245,7 @@ func (r excludedKeyRecord) spelling() string {
 // checks, and a repeat would hide its first copy.
 //
 // The same parser, kept by hand, is test/site's parseAWSExcludedFields in
-// test/site/inventory_test.go, behind its readAWSExcludedFields (the twin of this
+// test/site/inventory_test.go, behind its readExcludedFields (the twin of this
 // package's readExcludedFixtureKeys). Neither test package may import the other,
 // so excludedFixtureKeysRecordTablePath is what holds the two copies to the same
 // documents, and TestTheTwoExcludedKeyReadersAcceptAndRejectTheSameRecords runs
@@ -307,7 +307,7 @@ func parseExcludedKeys(document string) ([]excludedKeyRecord, error) {
 
 // readExcludedFixtureKeys reads the shared list of the fields every projection
 // and fixture of the guide's search and messaging calls leaves out (PRD #571),
-// and hands it to parseExcludedKeys. Its twin is test/site's readAWSExcludedFields
+// and hands it to parseExcludedKeys. Its twin is test/site's readExcludedFields
 // in test/site/inventory_test.go, which reads the same file for the guide's
 // --query with a copy of that parser (review finding on PR #639), and
 // excludedFixtureKeysRecordTablePath is the table both run so a document either

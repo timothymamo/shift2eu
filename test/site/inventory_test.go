@@ -1293,17 +1293,19 @@ var awsSearchAndMessagingCalls = map[string][]string{
 	},
 }
 
-// awsExcludedKeysPath is the one list of the fields no projection or fixture of
+// excludedKeysPath is the one list of the fields no projection or fixture of
 // the guide's search and messaging calls may name (PRD #571, *Only the fields the
 // program reads*). test/examples' fixture check reads the same file, so the two
 // halves of the promise, the guide's --query and the recorded output, cannot
-// drift apart (review finding on PR #639).
-const awsExcludedKeysPath = "test/examples/testdata/inventory_guide_excluded_keys.txt"
+// drift apart (review finding on PR #639). It is the one list of every source, not
+// an AWS one, so neither it nor its reader is named after a source (review nit on
+// PR #685).
+const excludedKeysPath = "test/examples/testdata/inventory_guide_excluded_keys.txt"
 
 // awsExcludedKeysRecordTablePath is the table of record documents both readers of
 // that list are given, with the records or the rejection each expects of them
 // (review finding on PR #654). The readers are this package's
-// readAWSExcludedFields and test/examples' readExcludedFixtureKeys, in
+// readExcludedFields and test/examples' readExcludedFixtureKeys, in
 // test/examples/inventoryguidekeys_test.go: neither test package may import the
 // other, so each holds its own copy of the parser, and this table is what holds
 // the two to the same documents. Both run it, each against its own copy, through
@@ -1377,7 +1379,7 @@ func (r awsExcludedKeyRecord) spelling() string {
 //
 // The same parser, kept by hand, is test/examples' parseExcludedKeys in
 // test/examples/inventoryguidekeys_test.go, behind its readExcludedFixtureKeys
-// (the twin of this package's readAWSExcludedFields). Neither test package may
+// (the twin of this package's readExcludedFields). Neither test package may
 // import the other, so awsExcludedKeysRecordTablePath is what holds the two copies
 // to the same documents, and
 // TestTheTwoExcludedKeyReadersAcceptAndRejectTheSameRecords runs it against this
@@ -1437,7 +1439,7 @@ func parseAWSExcludedFields(document string) ([]awsExcludedKeyRecord, error) {
 	return records, nil
 }
 
-// readAWSExcludedFields reads the shared list of the fields every projection and
+// readExcludedFields reads the shared list of the fields every projection and
 // fixture of the guide's search and messaging calls leaves out (PRD #571), and
 // hands it to parseAWSExcludedFields. Its twin is test/examples'
 // readExcludedFixtureKeys in test/examples/inventoryguidekeys_test.go, which
@@ -1447,12 +1449,12 @@ func parseAWSExcludedFields(document string) ([]awsExcludedKeyRecord, error) {
 // #630); awsExcludedKeysRecordTablePath is the table both run, so a document
 // either copy accepted or rejected differently from the other fails both (review
 // findings on PRs #639 and #654).
-func readAWSExcludedFields(t *testing.T) awsExcludedFields {
+func readExcludedFields(t *testing.T) awsExcludedFields {
 	t.Helper()
 
-	records, err := parseAWSExcludedFields(string(readRepositoryFile(t, awsExcludedKeysPath)))
+	records, err := parseAWSExcludedFields(string(readRepositoryFile(t, excludedKeysPath)))
 	if err != nil {
-		t.Fatalf("%s: %v", awsExcludedKeysPath, err)
+		t.Fatalf("%s: %v", excludedKeysPath, err)
 	}
 
 	var excluded awsExcludedFields
@@ -1656,7 +1658,7 @@ func TestInventoryGuideSearchAndKafkaCallsKeepOnlyTheFieldsTheyRead(t *testing.T
 
 	guide := string(readRepositoryFile(t, filepath.Join("docs", "guide", "inventory.md")))
 	seen := map[string]bool{}
-	excluded := readAWSExcludedFields(t)
+	excluded := readExcludedFields(t)
 
 	for _, command := range guideCommands(t, guide, guideSources[0]) {
 		for _, call := range awsSearchAndMessagingCallsIn(t, command) {
@@ -2211,14 +2213,15 @@ func azureResourceGraphQueryProblems(query string, hdInsightExcluded []string) [
 // that reads an HDInsight cluster, one sentence per problem and no problem for a
 // branch that keeps only the fields the program reads (PRD #571). The names in
 // hdInsightExcluded are the fields the branch must hold nowhere, read from the
-// shared excluded-key list (awsExcludedKeysPath) rather than from a copy kept
-// here, and the guide's projection check and the fixture check cannot drift apart
-// while they read the one list: PRD #571 excludes osProfile (the cluster's admin
-// user, its SSH key and its domain-join credentials), connectivityEndpoints (the
-// hosts it answers on), scriptActions and virtualNetworkProfile, and the
-// cluster's securityProfile, storageProfile and kafkaRestProperties with them
-// (audit finding and review finding N3 on PRD #571's milestone 4; three
-// properties of a cluster had reached neither).
+// shared excluded-key list (excludedKeysPath, through this package's
+// readExcludedFields) rather than from a copy kept here, so the guide's query
+// check and the fixture check cannot drift apart while they read the one list:
+// PRD #571 excludes osProfile (the cluster's admin user, its SSH key and its
+// domain-join credentials), connectivityEndpoints (the hosts it answers on),
+// scriptActions and virtualNetworkProfile, and the cluster's securityProfile,
+// storageProfile and kafkaRestProperties with them (audit finding and review
+// finding N3 on PRD #571's milestone 4; three properties of a cluster had reached
+// neither).
 func azureHDInsightBranchProblems(branch string, hdInsightExcluded []string) []string {
 	var problems []string
 
@@ -2337,7 +2340,7 @@ func TestInventoryGuideAzureResourceGraphQueryKeepsOnlyTheFieldsTheProgramReads(
 	guide := string(readRepositoryFile(t, filepath.Join("docs", "guide", "inventory.md")))
 	query := azureResourceGraphQuery(t, guide)
 
-	problems := azureResourceGraphQueryProblems(query, readAWSExcludedFields(t).names)
+	problems := azureResourceGraphQueryProblems(query, readExcludedFields(t).names)
 
 	for _, problem := range problems {
 		t.Errorf("%s's Resource Graph query %s\n%s", guidePath, problem, query)
@@ -2385,7 +2388,7 @@ func TestInventoryGuideAzureResourceGraphQueryRulesFlagALeakingQuery(t *testing.
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			problems := azureResourceGraphQueryProblems(tc.query, readAWSExcludedFields(t).names)
+			problems := azureResourceGraphQueryProblems(tc.query, readExcludedFields(t).names)
 
 			for _, phrase := range tc.want {
 				if !slices.ContainsFunc(problems, func(problem string) bool {
@@ -2539,7 +2542,7 @@ func TestInventoryGuideAzureHDInsightBranchRulesFlagALeakingBranch(t *testing.T)
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			problems := azureHDInsightBranchProblems(tc.branch, readAWSExcludedFields(t).names)
+			problems := azureHDInsightBranchProblems(tc.branch, readExcludedFields(t).names)
 
 			for _, phrase := range tc.want {
 				if !slices.ContainsFunc(problems, func(problem string) bool {

@@ -38,7 +38,7 @@ key: connectivityEndpoints
 # An HDInsight cluster's worker role carries the scripts the cluster runs and
 # their parameters (scriptActions) and the subnet it sits in
 # (virtualNetworkProfile), as it carries osProfile: PRD #571 keeps none of the
-# four, and the guide's query packs the worker role field by field.
+# three, and the guide's query packs the worker role field by field.
 key: scriptActions
 key: virtualNetworkProfile
 # The rest of an HDInsight cluster's properties bag: the cluster's securityProfile
@@ -48,7 +48,8 @@ key: virtualNetworkProfile
 # keeps none of them either, and the query packs a cluster's properties field by
 # field. A virtual machine's row keeps a `storageProfile` of its own, which is
 # another field and one the query packs on purpose, so the fixture check applies
-# this list to an HDInsight cluster's row rather than to every row of the export.
+# this list to every row of the export but `storageProfile`, which only an
+# HDInsight cluster's row is held to.
 key: securityProfile
 key: storageProfile
 key: kafkaRestProperties
