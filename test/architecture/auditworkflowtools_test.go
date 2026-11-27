@@ -13,7 +13,11 @@ import (
 // tool to it, and that every trivy subcommand receives only flags the pinned
 // release accepts for it (ADR 0040). Issue #687 reads the Go of the first one
 // from go.mod at run time: the install derives it, so the workflow names no
-// version of its own anywhere.
+// version of its own anywhere. Issue #710 reads it once, into a variable, with
+// GOWORK=off, and fails the run with a clear ::error when the read gives nothing
+// or more than one line, so a failed read cannot end the step with a bare
+// non-zero exit and a two-line read cannot build the tool with a value that is
+// no Go version.
 
 // auditGoDirective matches go.mod's go line: the Go version every build of the
 // module uses, and the one the checks job must build govulncheck with (issue
@@ -712,10 +716,449 @@ func auditGovulncheckToolchainFromGoMod(steps []auditJobStep, want string) []str
 	return []string{fmt.Sprintf("%s installs govulncheck with no GOTOOLCHAIN of its own: go install pkg@version picks the toolchain from the module's own go line, not go.mod's, and a govulncheck built with another Go than go.mod's %q cannot load the module at all. Give the install go.mod's Go as GOTOOLCHAIN=\"go$(go list -m -f '{{.GoVersion}}')\" on the same line (issue #687)", where, want)}
 }
 
+// auditGoModReadAssignment returns the name of the shell variable a step's line
+// fills with go.mod's Go, and whether the line is such an assignment: a line that
+// assigns a command substitution reading the root go.mod's go line, as
+// gomod_go="$(GOWORK=off go list -m -f '{{.GoVersion}}')" does (issue #710).
+func auditGoModReadAssignment(line string) (string, bool) {
+	trimmed := strings.TrimSpace(line)
+	if strings.HasPrefix(trimmed, "#") || !auditReadsGoModsGo(trimmed) {
+		return "", false
+	}
+
+	m := auditGoModGoAssignment.FindStringSubmatch(trimmed)
+	if m == nil {
+		return "", false
+	}
+
+	return m[1], true
+}
+
+// auditOpensIf reports whether a trimmed shell line opens an if block: the word
+// itself, which may stand alone with its condition on the lines after it, or the
+// one-line form that ends in then (issue #710).
+func auditOpensIf(trimmed string) bool {
+	return trimmed == "if" || strings.HasPrefix(trimmed, "if ") || strings.HasPrefix(trimmed, "if\t")
+}
+
+// auditShellIfBlock is one if block of a step's script: the index of the line
+// that opens it and the block's own lines, from that if to the fi that closes it
+// (issue #710).
+type auditShellIfBlock struct {
+	open int
+	body []string
+}
+
+// auditShellIfBlocks returns the if blocks of a step's lines, each from its if to
+// the fi that closes it and nesting included, in the order they open: a check
+// finds the block whose condition it holds, and reads the body it must carry its
+// ::error and its exit 1 in (issue #710).
+func auditShellIfBlocks(lines []string) []auditShellIfBlock {
+	var (
+		blocks []auditShellIfBlock
+		starts []int
+	)
+
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+
+		if auditOpensIf(trimmed) {
+			starts = append(starts, i)
+		}
+
+		if trimmed != "fi" || len(starts) == 0 {
+			continue
+		}
+
+		open := starts[len(starts)-1]
+		starts = starts[:len(starts)-1]
+
+		blocks = append(blocks, auditShellIfBlock{open: open, body: lines[open : i+1]})
+	}
+
+	slices.SortFunc(blocks, func(a, b auditShellIfBlock) int { return a.open - b.open })
+
+	return blocks
+}
+
+// auditIfBlockCondition returns the condition of an if block: its own lines from
+// the if up to and including the one that ends in then (issue #710).
+func auditIfBlockCondition(body []string) string {
+	var condition strings.Builder
+
+	for _, line := range body {
+		condition.WriteString(strings.TrimSpace(line))
+		condition.WriteString("\n")
+
+		if strings.HasSuffix(strings.TrimSpace(line), "then") {
+			break
+		}
+	}
+
+	return condition.String()
+}
+
+// auditChecksEmptyVariable reports whether an if block's condition tests whether
+// name's value is empty: -z on the variable, or the ! -n spelling of the same
+// test (issue #710).
+func auditChecksEmptyVariable(condition, name string) bool {
+	return auditNamesVariable(condition, name) && (strings.Contains(condition, "-z") || strings.Contains(condition, "! -n"))
+}
+
+// auditChecksOneLine reports whether an if block's condition tests that name's
+// value is one line: a line count, as wc -l compared with 1, or the newline a
+// second line puts into the value (issue #710).
+func auditChecksOneLine(condition, name string) bool {
+	return auditNamesVariable(condition, name) && (strings.Contains(condition, "wc -l") || strings.Contains(condition, `\n`))
+}
+
+// auditBlockExitsOne reports whether an if block's own lines hold an exit 1. The
+// step's set -e ends it silently on a failed command, so the block that reports a
+// failed read must carry the exit that stops the install itself (issue #710).
+func auditBlockExitsOne(body []string) bool {
+	for _, line := range body {
+		if strings.HasPrefix(strings.TrimSpace(line), "exit 1") {
+			return true
+		}
+	}
+
+	return false
+}
+
+// auditAssignmentWord returns the one shell word a GOTOOLCHAIN assignment gives:
+// the quotes around it trimmed, and nothing that follows the word itself, which
+// is the rest of the install line (issue #710).
+func auditAssignmentWord(value string) string {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return ""
+	}
+
+	if quote := trimmed[0]; quote == '"' || quote == '\'' {
+		if end := strings.IndexByte(trimmed[1:], quote); end >= 0 {
+			return trimmed[1 : 1+end]
+		}
+
+		return trimmed[1:]
+	}
+
+	if end := strings.IndexAny(trimmed, " \t"); end >= 0 {
+		return trimmed[:end]
+	}
+
+	return trimmed
+}
+
+// auditGovulncheckToolchainReadsTheVariable returns what the install line lacks
+// to take GOTOOLCHAIN as go<the variable the step filled from go.mod>: the version
+// exists once, in that variable, so no second substitution and no copy of it
+// stands on the install line (issue #710).
+func auditGovulncheckToolchainReadsTheVariable(install, name, where string) []string {
+	value, ok := auditToolchainAssignment(install)
+	if !ok {
+		return []string{fmt.Sprintf("%s installs govulncheck with no GOTOOLCHAIN of its own: the tool is built with go.mod's Go, which the step read into %s, so the install names it as GOTOOLCHAIN=\"go${%s}\" (issue #710)", where, name, name)}
+	}
+
+	word := auditAssignmentWord(value)
+
+	loc := auditShellExpansion.FindStringIndex(word)
+	if loc == nil {
+		return []string{fmt.Sprintf("%s gives GOTOOLCHAIN %q, which reads no variable: the install takes the version the step read from go.mod, as GOTOOLCHAIN=\"go${%s}\" (issue #710)", where, word, name)}
+	}
+
+	m := auditSoleVariableRead.FindStringSubmatch(auditShellExpansion.FindString(word))
+
+	prefix, trail := word[:loc[0]], word[loc[1]:]
+
+	if m == nil || m[1] != name || prefix != "go" || trail != "" {
+		return []string{fmt.Sprintf("%s gives GOTOOLCHAIN %q, want \"go${%s}\": the install takes the version the step read from go.mod, so the read fills %s and the install adds the go prefix to it, and no second substitution or copy of the version stands on the install line (issue #710)",
+			where, word, name, name)}
+	}
+
+	return nil
+}
+
+// auditGoModReadCheck is one of the two checks the read of go.mod's Go needs: the
+// condition that identifies its if block, and the block the step holds for it,
+// which is nil until one matches (issue #710).
+type auditGoModReadCheck struct {
+	label string
+	match func(condition string) bool
+	block *auditShellIfBlock
+}
+
+// auditGovulncheckGoModReadChecks returns what the step lacks to fail the run with
+// an ::error when the read of go.mod's Go gives nothing or more than one line: an
+// if block between the read and the install for each, with the block's own
+// ::error and exit 1 (issue #710). The step runs under set -euo pipefail, so a
+// check that only prints, or that exits outside its block, either ends the step
+// with no message or goes on to build govulncheck with a value that is no Go
+// version at all.
+func auditGovulncheckGoModReadChecks(lines []string, readAt, installAt int, name, where string) []string {
+	checks := []*auditGoModReadCheck{
+		{
+			label: "the empty-value check (a read that gave nothing)",
+			match: func(condition string) bool { return auditChecksEmptyVariable(condition, name) },
+		},
+		{
+			label: "the one-line check (a read that gave more than one line)",
+			match: func(condition string) bool { return auditChecksOneLine(condition, name) },
+		},
+	}
+
+	for _, block := range auditShellIfBlocks(lines) {
+		if block.open <= readAt || block.open >= installAt {
+			continue
+		}
+
+		condition := auditIfBlockCondition(block.body)
+
+		for _, check := range checks {
+			if check.block == nil && check.match(condition) {
+				matched := block
+				check.block = &matched
+
+				break
+			}
+		}
+	}
+
+	var problems []string
+
+	for _, check := range checks {
+		if check.block == nil {
+			problems = append(problems, fmt.Sprintf("%s holds no if block between its read of go.mod's Go and the install that checks %s of %s: the step runs under set -euo pipefail, so a read that gives nothing or several versions must fail the run with an ::error and an exit 1 of its own, not build govulncheck with a value that is no Go version (issue #710)", where, check.label, name))
+
+			continue
+		}
+
+		block := check.block
+
+		if !strings.Contains(strings.Join(block.body, "\n"), "::error") {
+			problems = append(problems, fmt.Sprintf("%s's %s holds no ::error: the run must say which read of go.mod's go line failed, in an ::error workflow command on stdout, or it ends with a bare non-zero exit nobody can read (issue #710)", where, check.label))
+		}
+
+		if !auditBlockExitsOne(block.body) {
+			problems = append(problems, fmt.Sprintf("%s's %s holds no exit 1 of its own (the block opens on %q): the exit belongs inside the same if block as its ::error, or the step goes on and installs govulncheck with a value that is no Go version (issue #710)", where, check.label, strings.TrimSpace(lines[block.open])))
+		}
+	}
+
+	return problems
+}
+
+// auditGovulncheckGoModRead returns what the checks job's install step lacks to
+// read go.mod's Go once, into a variable, and to fail the run with a clear
+// ::error when that read gives nothing or more than one line (issue #710). The
+// step runs under set -euo pipefail, so a read inside $(...) that failed would
+// otherwise end the step with no message, and a go list that reads a go.work or
+// another module's go.mod would give another Go than the module's: the read names
+// GOWORK=off, and the install takes the variable the step filled, never a
+// substitution of its own.
+func auditGovulncheckGoModRead(steps []auditJobStep) []string {
+	step, at, install, ok := auditGovulncheckInstall(steps)
+	if !ok {
+		return []string{fmt.Sprintf("%s's checks job holds no go install of %s@: the job builds the tool its govulncheck rows run (issue #658)", auditWorkflow, auditGovulncheckModule)}
+	}
+
+	where := fmt.Sprintf("%s's checks job, step %q", auditWorkflow, step.name)
+
+	readAt, name := -1, ""
+
+	for i := at - 1; i >= 0; i-- {
+		if assigned, ok := auditGoModReadAssignment(step.lines[i]); ok {
+			readAt, name = i, assigned
+
+			break
+		}
+	}
+
+	if readAt < 0 {
+		return []string{fmt.Sprintf("%s reads go.mod's go line on no line of its own above the install: read it once into a variable with GOWORK=off go list -m -f '{{.GoVersion}}', check that value in an if block of its own - an ::error and an exit 1 - for nothing and for more than one line, and build the tool as GOTOOLCHAIN=\"go${<that variable>}\" (issue #710)", where)}
+	}
+
+	var problems []string
+
+	read := strings.TrimSpace(step.lines[readAt])
+
+	if !strings.Contains(read, "go list -m") || !strings.Contains(read, "GoVersion") {
+		problems = append(problems, fmt.Sprintf("%s reads go.mod's Go on %q, which runs no go list -m over the module's GoVersion: the one command that prints go.mod's go line is GOWORK=off go list -m -f '{{.GoVersion}}' (issue #710)", where, read))
+	}
+
+	if !auditReadsWithGOWORKOff(step.lines, readAt) {
+		problems = append(problems, fmt.Sprintf("%s reads go.mod's Go without GOWORK=off (%q): a go.work file in the checkout would then answer for another directory's module, and the install would build govulncheck with a Go go.mod does not name (issue #710)", where, read))
+	}
+
+	problems = append(problems, auditGovulncheckToolchainReadsTheVariable(install, name, where)...)
+	problems = append(problems, auditGovulncheckGoModReadChecks(step.lines, readAt, at, name, where)...)
+
+	return problems
+}
+
+// auditReadsWithGOWORKOff reports whether a step's lines up to and including at
+// set GOWORK=off: on the read itself, in the form GOWORK=off go list -m, or on a
+// line above it that exports it for the whole step (issue #710).
+func auditReadsWithGOWORKOff(lines []string, at int) bool {
+	for i := 0; i <= at && i < len(lines); i++ {
+		if strings.HasPrefix(strings.TrimSpace(lines[i]), "#") {
+			continue
+		}
+
+		if strings.Contains(lines[i], "GOWORK=off") {
+			return true
+		}
+	}
+
+	return false
+}
+
+// auditGoModReadStep is the install step's read of go.mod's Go and the checks that
+// fail the run when it gives nothing or more than one line, as the case's lines
+// give them: the base shape every case of
+// TestAuditGovulncheckGoModReadFailsClearly is written from (issue #710).
+var auditGoModReadStep = []string{
+	`gomod_go="$(GOWORK=off go list -m -f '{{.GoVersion}}')" || gomod_go=""`,
+	`if [ -z "${gomod_go}" ]; then`,
+	`  echo "::error title=Audit checks::go.mod's go line could not be read"`,
+	`  exit 1`,
+	`fi`,
+	`if [ "$(printf '%s\n' "${gomod_go}" | wc -l)" -ne 1 ]; then`,
+	`  echo "::error title=Audit checks::go.mod's go line is not one line"`,
+	`  exit 1`,
+	`fi`,
+}
+
+// auditGoModReadInstall is the install line the base shape feeds: the go prefix
+// added to the version the step read (issue #710).
+const auditGoModReadInstall = `GOTOOLCHAIN="go${gomod_go}" ` + auditGovulncheckInstallWords
+
+// TestAuditGovulncheckGoModReadFailsClearly pins how the checks job reads
+// go.mod's Go (issue #710): once, into a variable, with GOWORK=off so no go.work
+// of the checkout answers instead, and with an if block of its own for a read
+// that gave nothing and one for a read that gave more than one line, each holding
+// the ::error and the exit 1 the step's set -euo pipefail needs to fail the run
+// with a message. The install takes that variable, so no second substitution and
+// no copy of the version stands on its line. Each way the shape loses one of
+// those is a case here, and the behaviour of the fragment against a failing go
+// command is TestAuditGovulncheckGoModReadFailsTheStepClearly's.
+func TestAuditGovulncheckGoModReadFailsClearly(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []auditGovulncheckToolchainCase{
+		{
+			name:    "the step reads go.mod's Go once and checks what it read",
+			derive:  auditGoModReadStep,
+			install: auditGoModReadInstall,
+		},
+		{
+			name: "the read runs without GOWORK=off",
+			derive: slices.Concat(
+				[]string{`gomod_go="$(go list -m -f '{{.GoVersion}}')" || gomod_go=""`},
+				auditGoModReadStep[1:],
+			),
+			install: auditGoModReadInstall,
+			want:    1,
+		},
+		{
+			name:    "the read names no go list -m of the module's GoVersion",
+			derive:  slices.Concat([]string{`gomod_go="$(GOWORK=off go mod edit -json | jq -r .Go)" || gomod_go=""`}, auditGoModReadStep[1:]),
+			install: auditGoModReadInstall,
+			want:    1,
+		},
+		{
+			name:    "the read is not checked for a value at all",
+			derive:  slices.Concat(auditGoModReadStep[:1], auditGoModReadStep[5:]),
+			install: auditGoModReadInstall,
+			want:    1,
+		},
+		{
+			name:    "the read is not checked for more than one line",
+			derive:  auditGoModReadStep[:5],
+			install: auditGoModReadInstall,
+			want:    1,
+		},
+		{
+			name: "the empty-value check prints no ::error",
+			derive: []string{
+				auditGoModReadStep[0],
+				`if [ -z "${gomod_go}" ]; then`,
+				`  exit 1`,
+				`fi`,
+				auditGoModReadStep[5],
+				auditGoModReadStep[6],
+				auditGoModReadStep[7],
+				auditGoModReadStep[8],
+			},
+			install: auditGoModReadInstall,
+			want:    1,
+		},
+		{
+			name: "the empty-value check exits outside its if block",
+			derive: []string{
+				auditGoModReadStep[0],
+				`if [ -z "${gomod_go}" ]; then`,
+				auditGoModReadStep[2],
+				`fi`,
+				`exit 1`,
+				auditGoModReadStep[5],
+				auditGoModReadStep[6],
+				auditGoModReadStep[7],
+				auditGoModReadStep[8],
+			},
+			install: auditGoModReadInstall,
+			want:    1,
+		},
+		{
+			name:    "the one-line check prints no ::error",
+			derive:  slices.Concat(auditGoModReadStep[:6], []string{`  exit 1`, `fi`}),
+			install: auditGoModReadInstall,
+			want:    1,
+		},
+		{
+			name:    "the one-line check's exit 1 stands outside its if block",
+			derive:  slices.Concat(auditGoModReadStep[:7], []string{`fi`, `exit 1`}),
+			install: auditGoModReadInstall,
+			want:    1,
+		},
+		{
+			name:    "the install derives its own copy of go.mod's Go instead of reading the variable",
+			derive:  auditGoModReadStep,
+			install: `GOTOOLCHAIN="go$(GOWORK=off go list -m -f '{{.GoVersion}}')" ` + auditGovulncheckInstallWords,
+			want:    1,
+		},
+		{
+			name:    "the install reads another variable than the read fills",
+			derive:  auditGoModReadStep,
+			install: `GOTOOLCHAIN="go${toolchain}" ` + auditGovulncheckInstallWords,
+			want:    1,
+		},
+		{
+			name:    "the step reads go.mod inline on the install line alone",
+			install: `GOTOOLCHAIN="go$(GOWORK=off go list -m -f '{{.GoVersion}}')" ` + auditGovulncheckInstallWords,
+			want:    1,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			steps := []auditJobStep{auditGovulncheckToolchainStep(tc)}
+
+			problems := auditGovulncheckGoModRead(steps)
+			if len(problems) != tc.want {
+				t.Errorf("auditGovulncheckGoModRead(before %q, install %q) reported %d problem(s), want %d:\n%s",
+					tc.derive, tc.install, len(problems), tc.want, strings.Join(problems, "\n"))
+			}
+		})
+	}
+}
+
 // auditGovulncheckToolchainCase is one case of
-// TestAuditGovulncheckToolchainDerivationReadsGoMod: the lines of the install
-// step above the install, the install line itself, and the count of problems the
-// derivation must then report (issue #687).
+// TestAuditGovulncheckToolchainDerivationReadsGoMod and of
+// TestAuditGovulncheckGoModReadFailsClearly: the lines of the install step above
+// the install, the install line itself, and the count of problems the check must
+// then report (issues #687 and #710).
 type auditGovulncheckToolchainCase struct {
 	name    string
 	derive  []string
@@ -868,6 +1311,42 @@ func TestScheduledSecurityAuditWorkflowBuildsGovulncheckWithGoModsGo(t *testing.
 
 		for _, problem := range auditGovulncheckToolchainFromGoMod(steps, wantGo) {
 			t.Error(problem)
+		}
+	})
+
+	// The read fails the run clearly (issue #710): the step runs under set
+	// -euo pipefail, so a go list inside $(...) that failed would end it with no
+	// message, and a read that gave two lines would build the tool with a value
+	// that is no Go version. The step reads go.mod's Go once, into a variable,
+	// with GOWORK=off, checks it in an if block of its own for nothing and for
+	// more than one line - each with its ::error and its exit 1 - and the
+	// install takes that variable.
+	t.Run("the read of go.mod's Go fails the run clearly", func(t *testing.T) {
+		t.Parallel()
+
+		for _, problem := range auditGovulncheckGoModRead(steps) {
+			t.Error(problem)
+		}
+	})
+
+	// The install step's script is shell the step runs, so nothing in it may be
+	// a ${{ }} expression: Actions expands that before the shell starts, and the
+	// go.mod version this step reads is no value an expression could name
+	// (issue #710).
+	t.Run("the install step's script holds no ${{ }} expression", func(t *testing.T) {
+		t.Parallel()
+
+		step, _, _, ok := auditGovulncheckInstall(steps)
+		if !ok {
+			t.Fatalf("%s's checks job holds no go install of %s@: the step's script is what this case reads (issue #710)",
+				auditWorkflow, auditGovulncheckModule)
+		}
+
+		for _, line := range auditStepScript(t, step) {
+			if strings.Contains(line, "${{") {
+				t.Errorf("%s's checks job, step %q, holds %q: a ${{ }} expression is expanded before the step's shell runs, so what it names is no value the step reads from go.mod (issue #710)",
+					auditWorkflow, step.name, strings.TrimSpace(line))
+			}
 		}
 	})
 
