@@ -170,9 +170,11 @@
 // that environment and print none of it, and only while every literal flag
 // after the subcommand is one of the allow-list e2eToolchainFlags (-trimpath,
 // -o, -deps, and -ldflags for a value of -X stamps alone, each an import path,
-// a symbol, one = and a plain value, with no quote or backslash anywhere in the
-// value: cmd/go splits it with cmd/internal/quoted.Split, where a quote or a
-// backslash can carry a second linker flag inside what reads as one field). A
+// a symbol, one = and a plain value, with no quote, backslash or white space
+// but a space or a tab anywhere in the value: cmd/go splits it with
+// cmd/internal/quoted.Split, where a quote or a backslash can carry a second
+// linker flag inside what reads as one field, and which splits on other white
+// space than strings.Fields does). A
 // run chained to its construction is never exempt, and a spread argument and a Path or Args
 // assigned on the command take the exemption away too. Four gaps are accepted
 // and left to review: the rule

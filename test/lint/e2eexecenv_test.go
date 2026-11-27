@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"unicode"
 
 	"github.com/timothymamo/shift2eu/test/internal/execenv"
 )
@@ -63,21 +64,34 @@ const e2eLinkerFlag = "-ldflags"
 var e2eLinkerStamp = regexp.MustCompile(`^[A-Za-z0-9_./-]+\.[A-Za-z_][A-Za-z0-9_]*=[A-Za-z0-9_.:+-]*$`)
 
 // e2eLinkerStamps reports whether value is a -ldflags value the e2e tier may
-// carry: whitespace-separated pairs of -X and the name=value it stamps, and
-// nothing else, so the linker runs no other program and reads no other file. A
-// value holding a quote (' or ") or a backslash is refused outright: cmd/go
-// splits -ldflags with cmd/internal/quoted.Split, not on whitespace alone, so a
-// quote closes a field mid-word and a backslash escapes the next byte, and a
-// field strings.Fields reads as one stamp can hand the linker a second flag
-// (-extld, which runs a named program with the go command's environment). Each
-// name=value field must match e2eLinkerStamp and may not start with "-", and
-// each field before it must be exactly -X.
+// carry: pairs of -X and the name=value it stamps, separated by ASCII spaces
+// and tabs, and nothing else, so the linker runs no other program and reads no
+// other file. cmd/go splits -ldflags with cmd/internal/quoted.Split, which
+// differs from a plain split on whitespace in two ways, and a value that could
+// tell them apart is refused outright, so this check reads every value it
+// admits exactly as cmd/go does:
+//   - a quote (' or ") closes a field mid-word and a backslash escapes the
+//     next byte, so a field read as one stamp can hand the linker a second
+//     flag (-extld, which runs a named program with the go command's
+//     environment);
+//   - quoted.Split separates fields only on space, tab, \n and \r, where
+//     strings.Fields also splits on \v, \f, U+0085, U+00A0 and the rest of
+//     Unicode's white space. Any white space but a space or a tab is refused,
+//     \n and \r too, which quoted.Split would split on: a stricter choice, as a
+//     stamp set on one line is all the e2e tier writes.
+//
+// Each name=value field must match e2eLinkerStamp and may not start with "-",
+// and each field before it must be exactly -X.
 func e2eLinkerStamps(value string) bool {
 	if strings.ContainsAny(value, `'"\`) {
 		return false
 	}
 
-	fields := strings.Fields(value)
+	if strings.ContainsFunc(value, func(r rune) bool { return unicode.IsSpace(r) && r != ' ' && r != '\t' }) {
+		return false
+	}
+
+	fields := strings.FieldsFunc(value, func(r rune) bool { return r == ' ' || r == '\t' })
 	if len(fields) == 0 || len(fields)%2 != 0 {
 		return false
 	}
