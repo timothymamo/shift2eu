@@ -1099,20 +1099,20 @@ private, and its output names no project, so `jq` adds it to each entry: the pro
 the zone's asset row on the project and the zone's number, its `id`, as the asset row names a zone by
 that number and never by its name (`//dns.googleapis.com/projects/PROJECT_ID/managedZones/ZONE_NUMBER`,
 Google's [resource name format](https://cloud.google.com/asset-inventory/docs/resource-name-format)).
-The `--format` keeps only the zone's number, its name, its
-`visibility` (`public` or `private`; forwarding and peering zones are private) and its
-`dnssecConfig.state` (`off`, `on` or `transfer`), never its DNS name, description or name servers. A
-zone in the asset listing that the list does not hold stays `unclassified`: check that
-`dns-managed-zones.json` holds every zone when the asset listing names some (`roles/dns.reader`). The
-record-set loop runs only for public zones, as a private zone is not classified, reads each zone's
-number and name from one line, separated by a space (a number is digits, and a zone's name only
-lowercase letters, digits and dashes, so neither holds one), and asks for one zone by its name with `--zone="$zone"`. `--filter='routingPolicy:*'` keeps the record sets that carry a
-routing policy (weighted round robin, geolocation or failover, with or without health checks), and
-`--format='value(type)'` writes one record type per such record set, which `jq` reduces to a count:
-the file holds an entry per public zone with its project, its number and `routedRecordSets`, never a
-record's name, values, TTL or routing policy. The record types stay in a shell variable and are never
-written to a file. A call that fails prints its error on stderr and
-leaves its zone out of the file, so that zone gets no `dns-routing`.
+The `--format` keeps only the zone's number, its name, its `visibility` (`public` or `private`;
+forwarding and peering zones are private) and its `dnssecConfig.state` (`off`, `on` or `transfer`),
+never its DNS name, description or name servers. A zone in the asset listing that the list does not
+hold stays `unclassified`: check that `dns-managed-zones.json` holds every zone when the asset listing
+names some (`roles/dns.reader`). The record-set loop runs only for public zones, as a private zone is
+not classified, reads each zone's number and name from one line, separated by a space (a number is
+digits, and a zone's name only lowercase letters, digits and dashes, so neither holds one), and asks
+for one zone by its name with `--zone="$zone"`. `--filter='routingPolicy:*'` keeps the record sets
+that carry a routing policy (weighted round robin, geolocation or failover, with or without health
+checks), and `--format='value(type)'` writes one record type per such record set, which `jq` reduces
+to a count: the file holds an entry per public zone with its project, its number and
+`routedRecordSets`, never a record's name, values, TTL or routing policy. The record types stay in a
+shell variable and are never written to a file. A call that fails prints its error on stderr and leaves
+its zone out of the file, so that zone gets no `dns-routing`.
 
 The load balancer lists read only the HTTP and HTTPS target proxies, the frontends of an Application
 Load Balancer; a TCP, SSL or gRPC proxy is not listed, so a load balancer behind one gets no `ipv6`.
