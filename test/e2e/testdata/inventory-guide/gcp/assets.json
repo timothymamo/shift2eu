@@ -125,6 +125,21 @@
     "location": "global"
   },
   {
+    "name": "//dns.googleapis.com/projects/example-project/managedZones/blog-zone",
+    "assetType": "dns.googleapis.com/ManagedZone",
+    "location": "global"
+  },
+  {
+    "name": "//dns.googleapis.com/projects/example-project/managedZones/internal-zone",
+    "assetType": "dns.googleapis.com/ManagedZone",
+    "location": "global"
+  },
+  {
+    "name": "//dns.googleapis.com/projects/example-project/managedZones/legacy-zone",
+    "assetType": "dns.googleapis.com/ManagedZone",
+    "location": "global"
+  },
+  {
     "name": "//compute.googleapis.com/projects/example-project/zones/europe-west1-b/instanceGroupManagers/gke-shop-gke-default-pool-0a1b2c3d-grp",
     "assetType": "compute.googleapis.com/InstanceGroupManager",
     "location": "europe-west1-b"

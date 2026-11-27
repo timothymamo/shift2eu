@@ -1,0 +1,29 @@
+[
+  {
+    "kind": "dns#managedZone",
+    "name": "shop-zone",
+    "visibility": "public",
+    "dnssecConfig": {
+      "state": "on"
+    },
+    "project": "example-project"
+  },
+  {
+    "kind": "dns#managedZone",
+    "name": "blog-zone",
+    "visibility": "public",
+    "dnssecConfig": {
+      "state": "off"
+    },
+    "project": "example-project"
+  },
+  {
+    "kind": "dns#managedZone",
+    "name": "internal-zone",
+    "visibility": "private",
+    "dnssecConfig": {
+      "state": "off"
+    },
+    "project": "example-project"
+  }
+]
