@@ -28,10 +28,13 @@ import (
 // or ```json sample, in prose, in a heading, in a blockquote, in an indented block,
 // in an HTML block, in a code span over two lines, or in a heredoc body.
 //
-// A line that ends at its last field is continued by the next line's fields, so a
-// command the text wraps — after the CLI's name in a code span, a prose line, a
+// A line that ends at its last field always takes the next line's fields, whether
+// or not the words so far read: the words after a command path are its positional
+// arguments, so prose appended to a read changes nothing, while a denied flag or a
+// second method the text wraps onto that line is read in the sequence it belongs to.
+// A command the text wraps — after the CLI's name in a code span, a prose line, a
 // fence body or a heredoc body, or in the middle of a program's comment table — is
-// read whole. The guard is the line's last character: the guide's JSON writes
+// thus read whole. The guard is the line's last character: the guide's JSON writes
 // `"source": "aws",`, whose comma ends the mention, not the `"resources"` array that
 // follows it, while a name that ends its line does take the next line's fields.
 //
@@ -44,11 +47,19 @@ import (
 // choosing or turns its checks off (`--endpoint-url`, `--no-verify-ssl`,
 // `--ca-bundle`, `--cli-input-json`, `--impersonate-service-account`,
 // `--flags-file`) fails even on a path that reads, and so does the flag's prefix,
-// which the CLIs' parsers complete (`--endpoint`, `--impersonate`). A shell
-// variable the CLIs read in a denied flag's place (`AWS_ENDPOINT_URL`,
-// `AWS_CA_BUNDLE`, `CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT`) fails on any line
-// that names the CLI. `az rest` reads only as one GET of the management endpoint,
-// with no resource, headers or body, and with its method flag spelt out.
+// which the CLIs' parsers complete (`--endpoint`, `--impersonate`). A denied flag
+// and a shell variable the CLIs read in its place (`AWS_ENDPOINT_URL`,
+// `AWS_CA_BUNDLE`, `CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT`, `REQUESTS_CA_BUNDLE`,
+// ...) fail wherever they stand: on the read's own line, on a line of their own
+// (the guide's `export AWS_REGION=...` idiom), or on a line the argument before
+// them wraps onto. The text-wide rule runs once per line, before any field
+// sequence is read, so a line is reported once. `az rest` reads only as one GET of
+// the management endpoint, with no resource, headers or body, and with its method
+// flag spelt out.
+//
+// A single quote is no field separator, so a denied flag or an `az rest` flag that
+// an invocation quotes arrives with the quote on it; reads trims it before it names
+// the flag.
 //
 // A global flag before the command path (`aws --output json ec2 describe-instances`)
 // is no read on purpose: the command path is the words up to the first flag, so the
@@ -70,9 +81,16 @@ import (
 //     (it starts with no scheme or `$`, and holds no `.` or `/`) and is followed by
 //     more words counts as no address given, and the one method, get, is what
 //     decides.
-//   - A flag written after the closing quote of an argument that spans physical
-//     lines without a trailing `\`: the scan reads each logical line, so the flag
-//     belongs to no name's field sequence and a denied one there is not seen.
+//   - A second `az rest --method` written after the closing quote of an argument
+//     that spans physical lines without a trailing `\`: the scan reads each logical
+//     line, so the method belongs to no `az rest` sequence and a write it changes is
+//     not seen. A denied flag or variable there is refused text-wide, and a flag on
+//     the read's own line is refused by the sequence.
+//   - The denied flags and variables are a deny list: the check refuses the flags
+//     and variables cloudCLIs names, which are the ones that point a CLI elsewhere,
+//     feed it input of the caller's choosing or turn its checks off. A flag or
+//     variable the CLIs add, or one this list misses, is refused only once it is
+//     listed.
 //   - A redirect target: `> "$out/x.json"` holds no CLI's name, and a target that
 //     named one is read as a field like any other, not as the file shell writes.
 //   - CommonMark's indentation and info strings, read by the fence label guard: a
@@ -183,8 +201,13 @@ var cloudCLIs = []cloudCLI{{
 	},
 	// `az rest --resource` addresses Microsoft Graph with the visitor's
 	// management token, and --headers and --body carry a request of the caller's
-	// choosing: no read passes any of them.
+	// choosing: no read passes any of them. The two variables make the CLI skip
+	// TLS verification in a flag's place.
 	deniedFlags: []string{"--body", "--headers", "--resource"},
+	deniedEnv: []deniedEnv{
+		{variable: "AZURE_CLI_DISABLE_CONNECTION_VERIFICATION", flag: "--connection-verify"},
+		{variable: "REQUESTS_CA_BUNDLE", flag: "--ca-bundle"},
+	},
 }, {
 	name: "gcloud",
 	// The gcloud reference: every command the guide runs is a `list`, and
@@ -220,10 +243,18 @@ var cloudCLIs = []cloudCLI{{
 	// --impersonate-service-account makes the call as a service account the
 	// visitor may not own a read of, --flags-file reads the flags from a file the
 	// check does not read, --access-token-file takes the token from a file, and
-	// --configuration runs another named configuration's credentials.
+	// --configuration runs another named configuration's credentials. The
+	// variables are what the CLI reads in those flags' place: another active
+	// configuration, another token file, another API endpoint (one override per
+	// service), another CA bundle and TLS verification turned off.
 	deniedFlags: []string{"--access-token-file", "--configuration", "--flags-file", "--impersonate-service-account"},
 	deniedEnv: []deniedEnv{
+		{variable: "CLOUDSDK_ACTIVE_CONFIG_NAME", flag: "--configuration"},
+		{variable: "CLOUDSDK_API_ENDPOINT_OVERRIDES", flag: "--api-endpoint-overrides"},
+		{variable: "CLOUDSDK_AUTH_ACCESS_TOKEN_FILE", flag: "--access-token-file"},
+		{variable: "CLOUDSDK_AUTH_DISABLE_SSL_VALIDATION", flag: "--disable-ssl-validation"},
 		{variable: "CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT", flag: "--impersonate-service-account"},
+		{variable: "CLOUDSDK_CORE_CUSTOM_CA_CERTS_FILE", flag: "--custom-ca-certs-file"},
 	},
 }}
 
@@ -244,7 +275,7 @@ type cloudCLI struct {
 	// flag's prefix is one of them too, since the CLI's parser completes it.
 	deniedFlags []string
 	// deniedEnv are the environment variables the CLI reads in a denied flag's
-	// place: a line that sets one and names the CLI is no read either.
+	// place: a field that sets one, anywhere in the text, is no read either.
 	deniedEnv []deniedEnv
 }
 
@@ -273,17 +304,24 @@ func cloudCLIByName(name string) (cloudCLI, bool) {
 
 // reads returns the command path a field sequence names, as the guide writes it,
 // and whether the sequence is a read: the path must start with one of the CLI's read
-// commands, no word may name a flag the CLI denies, and `az rest`, the one command
-// whose read depends on flags, must be one GET of the management endpoint. The path
-// it returns holds the word that made the sequence no read, so the message says
-// where the check stopped.
+// commands, no word may name a flag the CLI denies (a single quote around a word is
+// trimmed, since the field scan keeps it on the word), and `az rest`, the one
+// command whose read depends on flags, must be one GET of the management endpoint.
+// The path it returns holds the word that made the sequence no read, so the message
+// says where the check stopped.
 func (c cloudCLI) reads(words []string) (string, bool) {
-	commandPath := subcommandPath(words)
+	trimmed := make([]string, len(words))
+	for i, word := range words {
+		trimmed[i] = strings.Trim(word, "'")
+	}
+
+	commandPath := subcommandPath(trimmed)
 	held := strings.Join(commandPath, " ")
 
-	for _, word := range words {
-		if c.denies(flagName(word)) {
-			return strings.TrimSpace(held + " " + flagName(word)), false
+	for _, word := range trimmed {
+		name := flagName(word)
+		if c.denies(name) {
+			return strings.TrimSpace(held + " " + name), false
 		}
 	}
 
@@ -293,7 +331,7 @@ func (c cloudCLI) reads(words []string) (string, bool) {
 	}
 
 	if command == azREST {
-		return azRestReads(words)
+		return azRestReads(trimmed)
 	}
 
 	return held, true
@@ -317,31 +355,46 @@ func (c cloudCLI) denies(flag string) bool {
 	return false
 }
 
-// environmentOverride returns the assignment on a line that sets one of the CLI's
-// denied variables, the flag the variable stands in for, and whether there is one.
-// A variable's per-service spelling (`AWS_ENDPOINT_URL_S3`) sets it too.
-func (c cloudCLI) environmentOverride(line string) (assignment, flag string, found bool) {
-	for _, word := range strings.Fields(line) {
-		name, _, assigned := strings.Cut(strings.TrimLeft(word, "'\"`$()[]{};&|<>\\"), "=")
-		if !assigned {
+// deniedToken returns the problem a line gets for the first field that names a
+// denied flag or a denied variable of any CLI, and whether there is one. A denied
+// flag and a denied variable fail wherever they stand, on a line of their own or on
+// the line an argument before them wraps onto, and no CLI need be named on the line:
+// the CLIs read the variable and take the flag in every invocation. It runs once per
+// logical line, before the field loop, so a line is reported once.
+func deniedToken(file string, line logicalLine) (string, bool) {
+	for _, field := range lineFields(line.text) {
+		word := strings.Trim(field, "'")
+		if word == "" {
 			continue
 		}
 
-		for _, denied := range c.deniedEnv {
-			if name == denied.variable || strings.HasPrefix(name, denied.variable+"_") {
-				return word, denied.flag, true
+		flag := flagName(word)
+		name, _, _ := strings.Cut(word, "=")
+
+		for _, cli := range cloudCLIs {
+			if slices.Contains(cli.deniedFlags, flag) {
+				return deniedFlagRefusal(file, line.number, flag, line.text, cli), true
+			}
+
+			for _, denied := range cli.deniedEnv {
+				if name == denied.variable || strings.HasPrefix(name, denied.variable+"_") {
+					return environmentRefusal(file, line.number, name, denied.flag, line.text, cli), true
+				}
 			}
 		}
 	}
 
-	return "", "", false
+	return "", false
 }
 
 // azRestReads returns what an `az rest` sequence is held to, and whether it reads:
 // exactly one method, get, and, when it gives an address, one on the management
 // endpoint. An invocation that abbreviates the method flag — `-mpost`, `-m=post`,
 // `--meth put` — is refused rather than read, since the check would otherwise take
-// it for one with no method at all and let the write through.
+// it for one with no method at all and let the write through. A single quote around
+// a word is trimmed, since the field scan keeps it on the word. The inline `=`
+// branches are a defence for reads called on unsplit words: the scan splits `=`
+// into a separator, so `--method=post` reaches it as `--method` and `post`.
 func azRestReads(words []string) (string, bool) {
 	var (
 		methods []string
@@ -350,16 +403,17 @@ func azRestReads(words []string) (string, bool) {
 	)
 
 	for i := 0; i < len(words); i++ {
-		name, value, inline := strings.Cut(words[i], "=")
+		word := strings.Trim(words[i], "'")
+		name, value, inline := strings.Cut(word, "=")
 
 		switch {
-		case words[i] == methodFlag || words[i] == "-m":
+		case word == methodFlag || word == "-m":
 			if i+1 < len(words) {
 				i++
 
 				methods = append(methods, words[i])
 			}
-		case strings.HasPrefix(words[i], methodFlag+"="):
+		case strings.HasPrefix(word, methodFlag+"="):
 			methods = append(methods, value)
 		case name == "--url" || name == "--uri" || name == "-u":
 			switch {
@@ -383,8 +437,8 @@ func azRestReads(words []string) (string, bool) {
 				// held to its method alone.
 				address, urlFlag = "", name
 			}
-		case isMethodAbbreviation(words[i]):
-			return azREST + " " + words[i], false
+		case isMethodAbbreviation(word):
+			return azREST + " " + word, false
 		}
 	}
 
@@ -410,7 +464,9 @@ func azRestReads(words []string) (string, bool) {
 
 // looksLikeAddress reports whether a word can be the address `az rest --url` is
 // given: a scheme, a `$` substitution or a path, rather than the prose the guide's
-// sentence puts after a code span that ends at `--url`.
+// sentence puts after a code span that ends at `--url`. The `$` check is a defence
+// for reads called on unsplit words: the scan splits `$` into a separator, so it
+// never passes a word that starts with one.
 func looksLikeAddress(word string) bool {
 	return strings.HasPrefix(word, "http://") || strings.HasPrefix(word, "https://") ||
 		strings.HasPrefix(word, "$") || strings.HasPrefix(word, "/") ||
@@ -421,7 +477,8 @@ func looksLikeAddress(word string) bool {
 // accepts and this check would not read: a short flag with its value run on
 // (`-mpost`, `-m=post`) or a truncation of `--method` (`--meth`), which az's own
 // parser takes for the flag. `-m`, `--method` and `--method=<value>` are no
-// abbreviations.
+// abbreviations. The `-m=` shape is a defence for reads called on unsplit words:
+// the scan splits `=` into a separator, so it reads `-m=post` as `-m` and `post`.
 func isMethodAbbreviation(word string) bool {
 	if word == "" || word == "-m" || strings.HasPrefix(word, methodFlag) {
 		return false
@@ -562,11 +619,12 @@ func totalReads(accepted map[string]int) int {
 // guide is not. Each case plants its command in a shape the text can take — a
 // fence of a shell language, a ```text or ```json sample, an inline code span, a
 // prose line, a blockquote, an indented block, an HTML block, a heredoc body, a
-// line the text wraps after the CLI's name, a variable that names a denied flag —
-// and names the problem the field scan must report for it: the line, and the
-// command it read there. The case of a variable that holds the CLI's name plants
-// what the scan does see of that residual — the assignment's value on the same line
-// — while a variable set on another line stays the escape the header names.
+// line the text wraps after the CLI's name, a flag or variable on a line of its
+// own, a flag next to a single quote, a CRLF line break — and names the problem the
+// field scan must report for it: the line, and the command or denied token it read
+// there. The case of a variable that holds the CLI's name plants what the scan does
+// see of that residual — the assignment's value on the same line — while a denied
+// variable is refused on a line of its own too.
 func TestReadOnlyCheckFlagsPlantedWrites(t *testing.T) {
 	t.Parallel()
 
@@ -769,42 +827,42 @@ func TestReadOnlyCheckFlagsPlantedWrites(t *testing.T) {
 		// flag, but the CLI reads the variable in its place.
 		name:    "a read whose endpoint a variable names",
 		mutated: appended("AWS_ENDPOINT_URL=https://example.com aws ec2 describe-instances"),
-		want:    []string{at(plantedLine, "AWS_ENDPOINT_URL=https://example.com")},
+		want:    []string{at(plantedLine, "AWS_ENDPOINT_URL")},
 	}, {
 		name:    "a read whose certificate bundle a variable names",
 		mutated: appended("AWS_CA_BUNDLE=./ca.pem aws ec2 describe-instances"),
-		want:    []string{at(plantedLine, "AWS_CA_BUNDLE=./ca.pem")},
+		want:    []string{at(plantedLine, "AWS_CA_BUNDLE")},
 	}, {
 		name:    "a read whose impersonation a variable names",
 		mutated: appended("CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT=sa@example-project.iam.gserviceaccount.com gcloud compute instances list"),
-		want:    []string{at(plantedLine, "CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT=sa@example-project.iam.gserviceaccount.com")},
+		want:    []string{at(plantedLine, "CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT")},
 	}, {
 		name:    "a variable after the read it changes",
 		mutated: appended("aws ec2 describe-instances AWS_ENDPOINT_URL=https://example.com"),
-		want:    []string{at(plantedLine, "AWS_ENDPOINT_URL=https://example.com")},
+		want:    []string{at(plantedLine, "AWS_ENDPOINT_URL")},
 	}, {
 		// A denied variable set on a line of its own, the guide's own idiom for
 		// the region: no line of the sequence names the CLI, and the read below it
 		// still reads the variable's endpoint.
 		name:    "an endpoint exported on a line of its own",
 		mutated: appended("export AWS_ENDPOINT_URL=https://example.com", "aws ec2 describe-instances"),
-		want:    []string{at(plantedLine, "AWS_ENDPOINT_URL=https://example.com")},
+		want:    []string{at(plantedLine, "AWS_ENDPOINT_URL")},
 	}, {
 		name:    "a certificate bundle exported on a line of its own",
 		mutated: appended("export AWS_CA_BUNDLE=./corp.pem", "aws ec2 describe-instances"),
-		want:    []string{at(plantedLine, "AWS_CA_BUNDLE=./corp.pem")},
+		want:    []string{at(plantedLine, "AWS_CA_BUNDLE")},
 	}, {
 		name:    "an impersonation exported on a line of its own",
 		mutated: appended("export CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT=sa@example-project.iam.gserviceaccount.com", "gcloud compute instances list"),
-		want:    []string{at(plantedLine, "CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT=sa@example-project.iam.gserviceaccount.com")},
+		want:    []string{at(plantedLine, "CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT")},
 	}, {
 		name:    "an active gcloud configuration exported on a line of its own",
 		mutated: appended("export CLOUDSDK_ACTIVE_CONFIG_NAME=shop", "gcloud compute instances list"),
-		want:    []string{at(plantedLine, "CLOUDSDK_ACTIVE_CONFIG_NAME=shop")},
+		want:    []string{at(plantedLine, "CLOUDSDK_ACTIVE_CONFIG_NAME")},
 	}, {
 		name:    "an az connection verification disabled on a line of its own",
 		mutated: appended("export AZURE_CLI_DISABLE_CONNECTION_VERIFICATION=true", "az vm list-sizes"),
-		want:    []string{at(plantedLine, "AZURE_CLI_DISABLE_CONNECTION_VERIFICATION=true")},
+		want:    []string{at(plantedLine, "AZURE_CLI_DISABLE_CONNECTION_VERIFICATION")},
 	}, {
 		// A denied flag on a line of its own: the argument it follows spans
 		// physical lines without a trailing `\`, so the flag belongs to no CLI
@@ -821,11 +879,11 @@ func TestReadOnlyCheckFlagsPlantedWrites(t *testing.T) {
 		// with must be trimmed before the flag is read.
 		name:    "a denied flag in a bash -c argument that closes its quote",
 		mutated: appended(`sh -c 'aws ec2 describe-instances --no-verify-ssl'`),
-		want:    []string{at(plantedLine, "aws ec2 describe-instances --no-verify-ssl")},
+		want:    []string{at(plantedLine, "--no-verify-ssl")},
 	}, {
 		name:    "a denied flag the invocation quotes",
 		mutated: appended(`aws ec2 describe-instances '--endpoint-url' https://example.com`),
-		want:    []string{at(plantedLine, "aws ec2 describe-instances '--endpoint-url'")},
+		want:    []string{at(plantedLine, "--endpoint-url")},
 	}, {
 		name:    "an az rest whose url flag is quoted",
 		mutated: fence("```bash", "```", "az rest --method get '--url' https://example.com/x"),
@@ -836,7 +894,10 @@ func TestReadOnlyCheckFlagsPlantedWrites(t *testing.T) {
 		// read may be on the line the text wraps onto.
 		name:    "a read whose denying flag a code span wraps",
 		mutated: appended("Point it at LocalStack: `aws ec2 describe-instances", "--endpoint-url http://localhost:4566`."),
-		want:    []string{at(plantedLine, "aws ec2 describe-instances --endpoint-url")},
+		want: []string{
+			at(plantedLine, "aws ec2 describe-instances --endpoint-url"),
+			at(plantedLine+1, "--endpoint-url"),
+		},
 	}, {
 		name:    "an az rest whose second method a code span wraps",
 		mutated: appended("Or `az rest --method get --url https://management.azure.com/x", "--method post`."),
@@ -867,7 +928,7 @@ func TestReadOnlyCheckFlagsPlantedWrites(t *testing.T) {
 	}, {
 		name:    "an az rest that passes a resource",
 		mutated: fence("```bash", "```", "az rest --method get --url https://management.azure.com/x --resource https://graph.microsoft.com"),
-		want:    []string{at(plantedLine+1, "az rest")},
+		want:    []string{at(plantedLine+1, "--resource")},
 	}, {
 		name:    "an az rest whose method is written as a short flag with its value",
 		mutated: fence("```bash", "```", "az rest -mpost --url https://management.azure.com/x"),
@@ -882,7 +943,7 @@ func TestReadOnlyCheckFlagsPlantedWrites(t *testing.T) {
 		// its command path reads — in full or as the prefix the parser completes.
 		name:    "an aws read that names another endpoint",
 		mutated: fence("```bash", "```", "aws ec2 describe-instances --endpoint-url https://example.com"),
-		want:    []string{at(plantedLine+1, "aws ec2 describe-instances --endpoint-url")},
+		want:    []string{at(plantedLine+1, "--endpoint-url")},
 	}, {
 		name:    "an aws read whose endpoint flag is truncated",
 		mutated: fence("```bash", "```", "aws ec2 describe-instances --endpoint https://example.com"),
@@ -890,15 +951,15 @@ func TestReadOnlyCheckFlagsPlantedWrites(t *testing.T) {
 	}, {
 		name:    "an aws read that skips certificate verification",
 		mutated: fence("```bash", "```", "aws ec2 describe-instances --no-verify-ssl"),
-		want:    []string{at(plantedLine+1, "aws ec2 describe-instances --no-verify-ssl")},
+		want:    []string{at(plantedLine+1, "--no-verify-ssl")},
 	}, {
 		name:    "an aws read that trusts another certificate bundle",
 		mutated: fence("```bash", "```", "aws ec2 describe-instances --ca-bundle ./ca.pem"),
-		want:    []string{at(plantedLine+1, "aws ec2 describe-instances --ca-bundle")},
+		want:    []string{at(plantedLine+1, "--ca-bundle")},
 	}, {
 		name:    "a gcloud read that impersonates a service account",
 		mutated: fence("```bash", "```", "gcloud compute instances list --impersonate-service-account sa@example-project.iam.gserviceaccount.com"),
-		want:    []string{at(plantedLine+1, "gcloud compute instances list --impersonate-service-account")},
+		want:    []string{at(plantedLine+1, "--impersonate-service-account")},
 	}, {
 		name:    "a gcloud read whose impersonation flag is truncated",
 		mutated: fence("```bash", "```", "gcloud compute instances list --impersonate sa@example-project.iam.gserviceaccount.com"),
@@ -1072,9 +1133,11 @@ type fieldScan struct {
 
 // scanText runs the read-only check over every line of a text: the guide's, or a
 // program's. It is the check's one mechanism, and it trusts no Markdown and no
-// shell reading: every line is split into fields wherever it sits.
+// shell reading: every line is split into fields wherever it sits. A denied flag or
+// variable is refused on its line before any field sequence is read, so the line is
+// reported once.
 func scanText(file, text string) fieldScan {
-	physical := strings.Split(text, "\n")
+	physical := strings.Split(strings.ReplaceAll(text, "\r", ""), "\n")
 
 	scan := fieldScan{accepted: make(map[string]int)}
 	scan.problems = fenceLabelProblems(file, physical)
@@ -1082,6 +1145,12 @@ func scanText(file, text string) fieldScan {
 	lines := joinContinuations(physical)
 
 	for at, line := range lines {
+		if problem, denied := deniedToken(file, line); denied {
+			scan.problems = append(scan.problems, problem)
+
+			continue
+		}
+
 		fields := lineFields(line.text)
 
 		for i, field := range fields {
@@ -1095,26 +1164,15 @@ func scanText(file, text string) fieldScan {
 				continue
 			}
 
-			if assignment, flag, found := cli.environmentOverride(line.text); found {
-				scan.problems = append(scan.problems, environmentRefusal(file, line.number, assignment, flag, name, cli))
-
-				continue
-			}
-
 			words := fields[i+1:]
 
-			// A line ends at its last field, and a line that does takes the next
-			// line's fields as the sequence's continuation: a comment table, a
-			// prose sentence or a fence body wraps a command there.
+			// A line that ends at its last field takes the next line's fields as
+			// the sequence's continuation, whether or not the words so far read:
+			// the words after a command path are positionals, so prose appended to
+			// a read changes nothing, while a denied flag or a second method the
+			// text wraps onto the line is read where it belongs.
 			if at+1 < len(lines) && endsWithLastField(line.text, fields) {
-				switch {
-				case len(words) == 0:
-					words = continuationFields(lines[at+1].text)
-				default:
-					if _, read := cli.reads(words); !read {
-						words = append(slices.Clone(words), continuationFields(lines[at+1].text)...)
-					}
-				}
+				words = append(slices.Clone(words), continuationFields(lines[at+1].text)...)
 			}
 
 			if len(words) == 0 {
@@ -1152,11 +1210,19 @@ func refusal(file string, number int, name string, fields []string, held string)
 		file, number, strings.TrimSpace(name+" "+strings.Join(fields, " ")), held, cli.name, cli.name, cli.reference)
 }
 
-// environmentRefusal is the problem a line that sets a denied variable gets when it
-// names the CLI whose variable it sets: the variable does what the flag does.
-func environmentRefusal(file string, number int, assignment, flag, name string, cli cloudCLI) string {
-	return fmt.Sprintf("%s:%d: %s sets in the environment what %s denies, on a line that names %s, so the line is no read the guide may name (CLAUDE.md rule 1); cloudCLIs lists the read commands of %s, and their reference, at %s",
-		file, number, assignment, flag, name, cli.name, cli.reference)
+// deniedFlagRefusal is the problem a line that names a denied flag gets: the flag
+// does what it does wherever it stands, whether or not the line names the CLI.
+func deniedFlagRefusal(file string, number int, flag, text string, cli cloudCLI) string {
+	return fmt.Sprintf("%s:%d: %s is a flag %s denies wherever it stands, on a line of its own or on the line an argument before it wraps onto, so the line %q is no read the guide may name (CLAUDE.md rule 1); cloudCLIs lists the read commands of %s, the flags it denies and their reference at %s",
+		file, number, flag, cli.name, text, cli.name, cli.reference)
+}
+
+// environmentRefusal is the problem a line that sets a denied variable gets: the
+// variable does what the flag does, wherever the line stands and whether or not it
+// names the CLI.
+func environmentRefusal(file string, number int, variable, flag, text string, cli cloudCLI) string {
+	return fmt.Sprintf("%s:%d: %s is a variable %s reads in the place of %s, and a denied variable is refused wherever it stands, whether or not its line names the CLI, so the line %q is no read the guide may name (CLAUDE.md rule 1); cloudCLIs lists the read commands of %s, the variables it denies and their reference at %s",
+		file, number, variable, cli.name, flag, text, cli.name, cli.reference)
 }
 
 // subcommandPath returns the words of a sequence that name its command groups and
