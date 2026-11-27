@@ -1,6 +1,7 @@
 # PRD #584: The site's PDF report download
 
-**Status:** Draft
+**Status:** In progress, milestone 1. The maintainer decided all twelve questions under *Decisions* as
+recommended (2026-11-25); the ADR is [0049](../docs/adr/0049-write-the-pdf-report-with-a-standard-library-writer.md).
 **Issue:** #584
 
 ## Problem
@@ -55,7 +56,7 @@ the WebAssembly module and offered through the page script's one existing downlo
 | Source providers | AWS, Azure and GCP, through the inventory documents the CLI and the site already read (schema versions 1 and 2, ADR 0006, ADR 0025). No source changes. | Live source adapters. Any source change. |
 | Target providers | OVHcloud, Scaleway and UpCloud from the embedded catalog snapshots, one target, several, or all of them (`--target all`). Each can be scoped to a region (`--region`). No target changes. | Catalog changes. New targets. |
 | Taxonomy categories | Every taxonomy category the release knows. The PDF renders them; it adds none. | New taxonomy categories. Any mapping, fit, estimate or assessment rule change. |
-| Output | The PDF report: the single-target report and the comparison report, with estimates on (the default) and off (`--no-estimate`), with and without `--region`. `shift2eu assess --format pdf`. The site's one PDF download, which replaces its Markdown and JSON downloads. | Changes to the Markdown, JSON or HTML reports' content. A readiness score (see *Open questions*, 6). Embedded fonts. Tagged (accessible) PDF, PDF/A or PDF/UA in milestones 1 and 2 (*Open questions*, 9). Any server side: the HTTP API stays retired (ADR 0037). The browser's print dialog. |
+| Output | The PDF report: the single-target report and the comparison report, with estimates on (the default) and off (`--no-estimate`), with and without `--region`. `shift2eu assess --format pdf`. The site's one PDF download, which replaces its Markdown and JSON downloads. | Changes to the Markdown, JSON or HTML reports' content. A readiness score (see *Decided, as recommended*, 6). Embedded fonts. Tagged (accessible) PDF, PDF/A or PDF/UA in milestones 1 and 2 (*Decided, as recommended*, 9). Any server side: the HTTP API stays retired (ADR 0037). The browser's print dialog. |
 | Site | The page script's download (one button, one blob), the WebAssembly wiring, the parity and browser smoke tests, the size budget check, and the privacy, verification and inventory guide pages' wording. | Any other page change. New browser APIs. Any CSP relaxation. |
 
 ## The PDF
@@ -178,7 +179,7 @@ table.
 - How values are shown: Courier, and the escapes above.
 
 shift2eu has no readiness score today (PRD #2 left it open; PRDs #89, #190 and #297 keep it out of scope). This
-section says so in one sentence, and explains the fits instead (*Open questions*, 6).
+section says so in one sentence, and explains the fits instead (*Decided, as recommended*, 6).
 
 **About this report.** What a reader needs to check what produced the report:
 
@@ -191,7 +192,7 @@ section says so in one sentence, and explains the fits instead (*Open questions*
   retrieval date as a UTC calendar date, and its default region for estimates;
 - the options the report reflects: the targets, the region per target (chosen with `--region`, or the
   default for estimates), and whether estimates were on;
-- the inventory file name and the source, as in the title block (*Open questions*, 12).
+- the inventory file name and the source, as in the title block (*Decided, as recommended*, 12).
 
 ### Comparison report (several targets)
 
@@ -226,6 +227,9 @@ The comparison ranks no target and recommends none, as today.
   that tall; such a row is then split at a line.
 - A value wraps at the character boundaries of its escaped form. It is never cut short: the domain
   already caps a value's length (`text.Validate`).
+- A wrap point never falls inside an escape (`\uXXXX`, `\UXXXXXXXX`, `\xXX` or `\\`): each escape is
+  one unit that moves whole to the next line, so a reader never sees `\u04` at a line's end and takes it
+  for a complete escape. Only an escape wider than its whole column is split.
 - The worst case is real, not theoretical. A value `text.Validate` accepts, of 2048 bytes
   (`text.MaxLen`) made only of characters the escaper rewrites, grows to between 4,096 and 6,144 shown
   characters:
@@ -278,7 +282,7 @@ people, like the Markdown report. Nobody parses it as a contract. So the PDF has
 A layout change is not a breaking change, and the golden files pin the layout byte for byte.
 `--schema-version` with `--format pdf` is a usage error (exit 2), as it is with Markdown. What the PDF
 does carry is the producing version: the version line in every page footer and in *About this report*.
-The `%PDF-` header's version (*Open questions*, 4) is the file format's version, not the report's.
+The `%PDF-` header's version (*Decided, as recommended*, 4) is the file format's version, not the report's.
 
 ### ADR 0035: the WebAssembly module
 
@@ -299,7 +303,7 @@ The `%PDF-` header's version (*Open questions*, 4) is the file format's version,
   changes in it. `assess`'s doc comment in `cmd/shift2eu-web/main.go`, which names the `markdown` and
   `json` fields, is updated to the `pdf` (bytes) and `html` fields. The PDF is
   also 7-bit ASCII (*Trust*), so the bytes would survive either path. The `Uint8Array` path keeps
-  byte-exactness from depending on that, and keeps a later compression (*Open questions*, 5) from
+  byte-exactness from depending on that, and keeps a later compression (*Decided, as recommended*, 5) from
   needing a glue change.
 - **The module must carry the release's version.** Today `ci/sitebuild` builds the module with
   `-trimpath -buildvcs=false` and no `-X` flags, so inside the module `version.String()` is
@@ -323,9 +327,9 @@ The `%PDF-` header's version (*Open questions*, 4) is the file format's version,
   (`release.yml`: "ci/sitebuild reads no history, so a shallow checkout is enough"), so a short hash
   computed there can differ. And it runs before `goreleaser`, which consumes its bundle (it lists it in
   `checksums.txt` and uploads it), so it cannot take GoReleaser's outputs. How milestone 2 gets one
-  string on all three is *Open questions* 7, the maintainer's choice. Its recommendation, (a), is a fixed
-  cut of the full hash on all three; options (b) and (c) keep `shift2eu version`'s format. The
-  milestone 2 and release criteria below hold for whichever option is chosen.
+  string on all three is *Decided, as recommended*, 7: the maintainer chose (a), a fixed cut of the full
+  hash on all three (options (b) and (c), which keep `shift2eu version`'s format, are kept there as the
+  alternatives weighed). The milestone 2 and release criteria below are written for (a).
 
 ### ADR 0036: the bundle, the CSP and the banned-API scan
 
@@ -340,7 +344,7 @@ What changes in the page script:
 
 - one button, `download-pdf`, labelled "Download PDF", replaces `download-markdown` and `download-json`;
 - one blob, `new Blob([result.pdf], { type: "application/pdf" })`;
-- the constant file name `shift2eu-report.pdf` (*Open questions*, 1).
+- the constant file name `shift2eu-report.pdf` (*Decided, as recommended*, 1).
 
 What it may not use, held by `test/site`'s banned-API scan, which does not change:
 
@@ -368,7 +372,7 @@ some viewers make URL-shaped text clickable, which only a click follows.
   `encoding/json` stays: the inventory reader needs it. Expected net growth: below 200 KiB decoded and
   below 64 KiB gzip-compressed. Today's measurements are 8.51 MiB of 11 MiB decoded (77%) and 2.39 MiB of
   3 MiB gzip-compressed (80%). No font is embedded, and no compression package is linked unless
-  *Open questions* 5 decides otherwise.
+  milestone 3 decides otherwise (*Decided, as recommended*, 5).
 - **How milestone 2 measures it.** The existing budget tests (`TestWebModuleStaysWithinTheSizeBudget`, and
   the live check's 3 MiB and 11 MiB limits) must pass, unchanged. Milestone 2's PR records, before and
   after the switch:
@@ -390,12 +394,15 @@ some viewers make URL-shaped text clickable, which only a click follows.
     of the characters the fonts show, and nothing else, since every other character has already become
     a visible escape. So a carriage return, a line feed or a NUL never appears raw.
   - A value never ends its string, starts an operator, or adds an object.
-  - `/Title` (if any, *Open questions*, 8) is a constant, never a value.
+  - `/Title`, the one entry of `/Info` (*Decided, as recommended*, 8), is a constant, never a value.
 - **The file is printable ASCII plus line feeds.** Every byte of the PDF is 0x0A or in 0x20 to 0x7E.
-  There is no binary comment line and no compressed stream (*Open questions*, 5). So:
+  There is no binary comment line and no compressed stream (*Decided, as recommended*, 5). So:
   - writing it to a terminal cannot send an escape sequence, and `--format pdf` writes to standard
     output or `--output` exactly as the other formats do;
-  - the golden files diff as text.
+  - the golden files diff as text;
+  - each cross-reference entry ends with a space and a line feed (`SP LF`), the one two-byte end of line
+    ISO 32000-1 (7.5.4) allows within this byte set, so every entry is exactly 20 bytes. A bare line
+    feed would give 19-byte entries, which some viewers reject.
 - **No active content.** No `/Annots`, `/URI`, `/Launch`, `/JavaScript`, `/JS`, `/OpenAction`, `/AA`,
   `/AcroForm`, `/EmbeddedFile`, `/RichMedia` or `/XFA` name appears in the file's objects. Every name the
   writer emits is a constant of its own and holds no `#`, so no name can spell another with `#xx`
@@ -406,7 +413,7 @@ some viewers make URL-shaped text clickable, which only a click follows.
   choice is sent anywhere holds unchanged. Milestone 2 updates its wording from "report" downloads in
   general to the PDF, says the PDF holds no link, action, script or form and that some viewers make
   URL-shaped text clickable, which only a click follows, and says the PDF names the inventory's file name
-  (*Open questions*, 12), since it is a document meant to be passed on.
+  (*Decided, as recommended*, 12), since it is a document meant to be passed on.
 - **Reproducible.** The bytes depend only on the assessment, the report metadata and the version line:
   - never the clock, the environment or map iteration;
   - no creation or modification date, no `/ID`, no `/Producer`;
@@ -444,7 +451,8 @@ Test levels:
 
   They are updated with `-update`.
 - [ ] *Unit:* the PDF starts with `%PDF-` and the chosen version, and ends with `%%EOF` and a line feed.
-  Every object listed in the cross-reference table starts at the byte offset the table gives. The
+  Every object listed in the cross-reference table starts at the byte offset the table gives, and every
+  cross-reference entry is exactly 20 bytes, ending in a space and a line feed (`SP LF`). The
   trailer's `/Size` and `/Root` are right. Every stream's `/Length` is its exact byte count. A test-only
   reader in `pdfreport`'s test files parses the writer's subset and checks all of this for every golden.
 - [ ] *Unit:* the text the test-only reader extracts from each page holds, in order:
@@ -480,6 +488,9 @@ Test levels:
 
   The test's expected values are written as ASCII Go string literals, so no editor or tool can turn an
   expected escape into the character it names.
+- [ ] *Unit:* a value whose escape straddles the wrap width (for example `Ж` starting a few
+  characters before a line's end) wraps before the escape, and every wrapped line of every golden starts
+  and ends on an escape boundary. Only an escape wider than its column, built in-test, is split.
 - [ ] *Unit:* the hostile report and hostile comparison goldens take in-test hostile values, as the other
   reporters' hostile goldens do, in every field the PDF shows. The values carry PDF metacharacters and
   syntax: unbalanced `(` and `)`, `\`, `) Tj ET`, `endstream`, `%%EOF`, `/JavaScript`, `<< >>`, `obj`,
@@ -517,13 +528,15 @@ Test levels:
   `examples/gcp`) against each target and `--target all`, with and without `--no-estimate`, and exits 0.
   Each file starts with `%PDF-`, and two runs give the same bytes.
 - [ ] *CLI and e2e:* `--format pdf` runs on every fixture of
-  `.github/security-audit/testdata/hostile-inventories/`. Of today's eighteen, the reader accepts one,
-  `markup-injection.json`: its PDF exits 0 and passes the structural invariants. Every other fixture
-  (the `schema-*` files, `number-overflow`, `numbers`, and `path-like-names`, `terminal-escapes`,
-  `unicode-tricks`, `relations-graph` and `unknown-values`, whose controls, bidi characters, duplicate ID
-  or unknown category the reader refuses) is refused with `--format pdf` exactly as with Markdown: the
-  same message and exit code, and nothing on standard output. The test derives the accepted set from the
-  Markdown run, so a fixture added later is covered without a change.
+  `.github/security-audit/testdata/hostile-inventories/`. The test derives the accepted set from the
+  Markdown run, so a fixture added later is covered without a change: every fixture the Markdown run
+  accepts gives a PDF that exits 0 and passes the structural invariants, and every fixture it refuses is
+  refused with `--format pdf` exactly as with Markdown (the same message and exit code, and nothing on
+  standard output). *For information, at the time of writing:* of the eighteen fixtures, the reader
+  accepts one, `markup-injection.json`, and refuses the rest (the `schema-*` files, `number-overflow`,
+  `numbers`, and `path-like-names`, `terminal-escapes`, `unicode-tricks`, `relations-graph` and
+  `unknown-values`, for their controls, bidi characters, duplicate ID or unknown category). That split
+  is not the criterion; the derived set is.
 - [ ] *Lint and static:* `pdfreport` imports only the allow list of `reporters-stay-offline`.
   `cmd/shift2eu` and `wire` may import it, and the depguard pin holds the changed rules.
   `test/architecture` checks it for every release target and `js/wasm`.
@@ -575,7 +588,7 @@ Test levels:
   pass with the one button.
 - [ ] *Release:* the release builds the module, GoReleaser's binaries and the container image's binary
   with the same three values: the release's version (the tag without `v`), one commit string (in the
-  form *Open questions* 7's chosen option gives) and its commit date. The smoke test on the attested
+  form *Decided, as recommended*, 7's option (a) gives: the first 12 hex digits of the full hash) and its commit date. The smoke test on the attested
   bundle compares its PDF download with the output of the released `linux/amd64` CLI for one example:
   the same bytes, version line included.
 - [ ] *Release:* on every release, `release.yml`'s `verify` job, which already runs the signed image's
@@ -589,8 +602,8 @@ Test levels:
   milestone 2's PR grant the one permission the failure names, with a comment saying why, and amend that
   pin to match. The archive's binary runs in a step of its own
   with no token in its `env`, after the archive is checked against the artifact's `checksums.txt`
-  (`sha256sum -c --ignore-missing`), as the `goreleaser` job checks the site bundle. This holds for every
-  option of *Open questions* 7, and its step is pinned in `test/architecture` with the others.
+  (`sha256sum -c --ignore-missing`), as the `goreleaser` job checks the site bundle. This would hold for every
+  option of *Decided, as recommended*, 7, and its step is pinned in `test/architecture` with the others.
 - [ ] *Static:* `test/architecture`'s pins of every step and template that stamps the version, in
   whichever jobs the chosen option uses (the `site` and `image` jobs' steps, `.goreleaser.yaml`'s commit
   template, and a new job's under option (b)), match the chosen option.
@@ -626,7 +639,7 @@ Test levels:
   with a dated amendment note. ADRs 0018, 0035, 0036 and 0043, and the doc.go files of `jsonreport`,
   `htmlreport` and `internal/web`, are amended where they name the site's Markdown or JSON downloads.
   ADR 0035 records the module's version stamp, ADR 0040 row 13's PDF runs, and, under option (a) or (b)
-  of *Open questions* 7, ADR 0015 the image's new commit stamp.
+  of *Decided, as recommended*, 7 (the maintainer chose (a)), ADR 0015 the image's new commit stamp.
 
 ## Amendments to PRD #297
 
@@ -683,8 +696,8 @@ Milestones 1 and 2 touch the handling of hostile text and the site's trust model
 
 1. [ ] **The PDF writer, `pdfreport`, `--format pdf` and the ADR.**
    - The reporter, standard library only, with:
-     - the deterministic writer: objects, cross-reference table, trailer, content streams, literal
-       string escaping;
+     - the deterministic writer: objects, cross-reference table (20-byte entries ending in `SP LF`),
+       trailer, content streams, literal string escaping;
      - the three core fonts with WinAnsiEncoding and their width tables;
      - text wrapping, tables, repeated header rows and page breaks;
      - the sections of *The PDF* for the single-target and the comparison report, and the
@@ -707,7 +720,7 @@ Milestones 1 and 2 touch the handling of hostile text and the site's trust model
      - no links, JavaScript, forms or embedded files;
      - the string escaping, and the printable-ASCII file;
      - the version line passed by the constructor;
-     - the answers to *Open questions* 2 to 4, 6, 8 and 10 to 12, and the interim answers to 5
+     - the answers to *Decided, as recommended*, 2 to 4, 6, 8 and 10 to 12, and the interim answers to 5
        (compression) and 9 (tagged PDF): not in milestones 1 and 2. Milestone 3 amends the ADR with the
        final decisions on both.
    - The site does not change in this milestone.
@@ -716,8 +729,8 @@ Milestones 1 and 2 touch the handling of hostile text and the site's trust model
      `htmlreport` only.
    - The glue's `Uint8Array` hand-over.
    - The module stamped with the release's version, commit and date by `ci/sitebuild`, from
-     `release.yml`'s `site` job, as *Open questions* 7's chosen option says, with the same commit string
-     in GoReleaser's binaries and the container image. Under the recommended (a): `.goreleaser.yaml`, the
+     `release.yml`'s `site` job, as *Decided, as recommended*, 7's option (a) says, with the same commit
+     string in GoReleaser's binaries and the container image. Under (a), as decided: `.goreleaser.yaml`, the
      `image` job's stamp step and its `test/architecture` pin, and ADR 0015's "Same stamp" bullet.
    - The scheduled audit's row 13 runs `--format pdf` over its hostile corpus too, with its
      `test/architecture` pins, ADR 0040's row 13, the `security-audit-run` skill's reading of a
@@ -729,8 +742,9 @@ Milestones 1 and 2 touch the handling of hostile text and the site's trust model
    - The size budget measurements, before and after.
    - The privacy, verification and inventory guide pages, the README and the guides.
    - PRD #297 amended in place (*Amendments to PRD #297*).
-   - ADRs 0018, 0035, 0036, 0040 and 0043 (and 0015 under option (a) or (b) of *Open questions* 7) and the
-     doc.go files amended. ADR 0036's amendment records the download's file name (*Open questions* 1).
+   - ADRs 0018, 0035, 0036, 0040 and 0043, 0015 (option (a) of *Decided, as recommended*, 7), and the
+     doc.go files amended. ADR 0036's amendment records the download's file name (*Decided, as
+     recommended*, 1).
    - Ships on PRD #297's site track. It does not depend on PRD #297 milestone 4, and the first deploy does
      not wait for it.
 3. [ ] **Polish round on layout and the detail sections.** Planned on PRD #297's site track **after the
@@ -745,7 +759,7 @@ Milestones 1 and 2 touch the handling of hostile text and the site's trust model
      answers.
    - This PRD moves to `prds/done/` (`Closes #584`).
 
-## Decisions and open questions
+## Decisions
 
 ### Decided by the maintainer (2026-11-25)
 
@@ -780,7 +794,7 @@ Milestones 1 and 2 touch the handling of hostile text and the site's trust model
    - *Note:* shift2eu has no readiness score today (PRD #2 left it open; PRDs #89, #190 and #297 keep it
      out of scope). This PRD reads the decision as how the report is worked out: the PDF explains the
      fits, blockers, required changes and estimates, and says in one sentence that there is no readiness
-     score (*Open questions*, 6).
+     score (*Decided, as recommended*, 6).
 6. **Milestones:**
    - (1) the writer, `pdfreport`, `--format pdf`, the ADR;
    - (2) the site's switch;
@@ -805,17 +819,24 @@ Milestones 1 and 2 touch the handling of hostile text and the site's trust model
 - **The module carries the release's version** (milestone 2), so the PDF's version line matches the
   released CLI's, and *About this report* names the build that made it.
 
-### Open questions for the maintainer
+### Decided by the maintainer (2026-11-25), as recommended
 
-1. **The download's file name.** *Recommendation:* `shift2eu-report.pdf`, a constant like today's
+These twelve questions were open when this PRD was written. The maintainer decided all of them as
+recommended on 2026-11-25 (recorded on PR #587): questions 1 to 7 and 9 to 11 first, then 8 and 12,
+which were confirmed after asking. Question 7 is option (a), for milestone 2. Questions 5 and 9 are
+**interim** answers for milestones 1 and 2; milestone 3 decides them finally and amends ADR 0049. Each
+question keeps its reasoning and the alternatives weighed. Other sections refer to them as *Decided, as
+recommended*, followed by the number. ADR 0049 records the answers that shape milestone 1.
+
+1. **The download's file name.** *Decided (2026-11-25), as recommended:* `shift2eu-report.pdf`, a constant like today's
    `shift2eu-report.md`. A name built from the target or a date would carry catalog text into a file
    name and vary between runs. The CLI writes wherever `--output` says.
-2. **Page size.** *Recommendation:* A4 portrait only. The audience is EU-based, and the layout is tested
+2. **Page size.** *Decided (2026-11-25), as recommended:* A4 portrait only. The audience is EU-based, and the layout is tested
    for one size. US Letter could be a later option.
-3. **A title page or not.** *Recommendation:* no title page. Page 1 starts with the title block and the
+3. **A title page or not.** *Decided (2026-11-25), as recommended:* no title page. Page 1 starts with the title block and the
    summary, so a one-page assessment stays one page or close to it. *About this report* closes the
    document.
-4. **The PDF version.** *Recommendation:* `%PDF-1.7` (ISO 32000-1, the freely available ISO standard the
+4. **The PDF version.** *Decided (2026-11-25), as recommended:* `%PDF-1.7` (ISO 32000-1, the freely available ISO standard the
    ADR can cite by section). The writer uses only features every reader has supported since PDF 1.3, so
    the header is a label, not a dependency. PDF 2.0 deprecates the non-embedded core fonts this design
    relies on, so not 2.0. 1.4 would be equally readable; 1.7 is chosen for its ISO reference.
@@ -826,15 +847,16 @@ Milestones 1 and 2 touch the handling of hostile text and the site's trust model
      every golden. CLI and module stay in parity, since one toolchain builds both;
    - it links `compress/flate` into the module, a cost milestone 2 would have to measure.
 
-   *Recommendation:* no compression in milestones 1 and 2. Milestone 3 measures the PDF of a large
+   *Decided (2026-11-25), as recommended, an interim answer for milestones 1 and 2, final in
+   milestone 3:* no compression in milestones 1 and 2. Milestone 3 measures the PDF of a large
    inventory (several hundred resources) and decides. If it compresses, the printable-ASCII criterion is
    replaced by "every byte outside a compressed stream is printable ASCII".
 6. **The readiness score.** The maintainer's decision 5 asks for "how the readiness score is worked out",
    but shift2eu has no readiness score: PRD #2 left it open, and PRDs #89, #190 and #297 keep it out of
-   scope. *Recommendation:* the PDF explains how fits, blockers, required changes and estimates are
+   scope. *Decided (2026-11-25), as recommended:* the PDF explains how fits, blockers, required changes and estimates are
    worked out, and says in one sentence that there is no readiness score. A score is a domain decision
    for its own PRD. When it lands, the PDF's *How this report is worked out* section gains it.
-   *Recommended follow-up:* CLAUDE.md's glossary defines **Assessment** with a "readiness score", and
+   *Follow-up, decided with it:* CLAUDE.md's glossary defines **Assessment** with a "readiness score", and
    `docs/architecture.md` mentions one. A small docs issue could mark it "not yet implemented" in both.
    This PRD does not change either.
 7. **Where the module's version stamp comes from** (milestone 2). GoReleaser's `{{ .ShortCommit }}` is
@@ -886,36 +908,37 @@ Milestones 1 and 2 touch the handling of hostile text and the site's trust model
      smoke test's byte comparison one between the module and the archives, so it would fail the
      release, not ship silently, but a release could fail for it.
 
-   *Recommendation:* (a). It keeps today's job order, needs no new job or job outputs, does not depend on
+   *Decided (2026-11-25), as recommended: (a), for milestone 2.* It keeps today's job order, needs no new job or job outputs, does not depend on
    any clone's depth, and removes the latent risk for all three binaries. For an untagged build, the
    development values stay. Milestone 2's ADR amendments (ADR 0035, and ADR 0015 under (a) or (b))
    record the choice.
-8. **Document metadata.** *Recommendation:* an `/Info` dictionary with one constant `/Title`
-   ("shift2eu migration assessment"), so viewers show a title and not a blob name. No `/Producer`,
-   `/Author`, `/Creator` or dates, and no trailer `/ID`, which ISO 32000-1 requires only for encrypted
-   files. The alternative is no `/Info` at all.
+8. **Document metadata.** *Decided (2026-11-25), as recommended, confirmed after asking:* an `/Info`
+   dictionary with one constant `/Title` ("shift2eu migration assessment"), so viewers show a title and
+   not a blob name. No `/Producer`, `/Author`, `/Creator` or dates, and no trailer `/ID`, which ISO
+   32000-1 requires only for encrypted files. The alternative was no `/Info` at all.
 9. **Accessibility of the PDF.** A tagged PDF (a structure tree, as PDF/UA asks) is substantial work for a
-   standard-library writer. *Recommendation:* not in milestones 1 and 2. The page's HTML report stays the
+   standard-library writer. *Decided (2026-11-25), as recommended, an interim answer for milestones 1
+   and 2, final in milestone 3:* not in milestones 1 and 2. The page's HTML report stays the
    accessible view, which PRD #297's accessibility criteria cover. Milestone 3 weighs tagging, or files it.
-10. **Independent validation.** The test-only reader parses only what the writer writes. *Recommendation:*
-    milestone 1's PR also records a manual check of the bundled examples' PDFs, single and comparison, in
+10. **Independent validation.** The test-only reader parses only what the writer writes. *Decided
+    (2026-11-25), as recommended:* milestone 1's PR also records a manual check of the bundled examples' PDFs, single and comparison, in
     four viewers: Chromium's and Firefox's built-in viewers, macOS Preview and Adobe Acrobat Reader. A
     pinned `qpdf --check` in a container (like the browser smoke test's Chromium) is a follow-up, filed
     only if the maintainer wants it in CI.
-11. **Where *About this report* sits.** *Recommendation:* at the end, with the version line in every page
+11. **Where *About this report* sits.** *Decided (2026-11-25), as recommended:* at the end, with the version line in every page
     footer too, so a printed page always names its build. The alternative is right after the title
     block, which puts the evidence first but pushes the summary down.
 12. **The inventory's file name in the PDF.** The title block and *About this report* name the base name
     of the user's inventory file (`analysis.ReportMeta.InventoryName`), as the Markdown report does. A
     name such as `acme-prod-aws.json` can name a customer, and the PDF is made to be passed on.
-    *Recommendation:* keep it. It ties the report to its input, which a reader checking the report needs,
+    *Decided (2026-11-25), as recommended, confirmed after asking:* keep it. It ties the report to its input, which a reader checking the report needs,
     and the user chose the name. The privacy page says the PDF names the file, so the user can rename it
-    before running. The alternative is a constant ("the inventory") in the PDF only, which breaks its
+    before running. The alternative was a constant ("the inventory") in the PDF only, which breaks its
     agreement with the other reports' header.
 
 ## Out of scope
 
-- Implementing anything in this PR: it adds this PRD only.
+- Anything beyond the three milestones above.
 - Embedding fonts, or any glyph beyond WinAnsiEncoding.
 - Any server side: no rendering service, no upload, no HTTP API (ADR 0037).
 - The browser's print dialog or a print stylesheet as the download.
