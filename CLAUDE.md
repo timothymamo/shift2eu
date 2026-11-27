@@ -196,7 +196,8 @@ the commands `.pi/deny-env-printing.json` lists (ADR 0044). The tester starts th
 `/usr/local/lib/shift2eu/pi-tester/pi-tester.sh`, a root-owned copy of `dev/pi-tester.sh` and of the
 refusal's two files that `dev/lima.yaml` installs (issue #692), which does not use the unit folder's copies
 for its checks or for `--extension` and names them in one line, starts pi with `--no-approve
---no-extensions` so it loads no extension or setting of the project, only the installed refusal and the
+--no-extensions` so it loads no extension and applies no trust-gated setting of the project (it still reads
+`.pi/settings.json` as data before trust), only the installed refusal and the
 deck's extension by `--extension` (and drops an `--approve` or `-a` with one line, issue #702), keeps the other agents' keys out of pi's environment (and, with its marker, out of login shells)
 and refuses to start pi unless node loads the installed extension (issue #662). After a merge that changes
 any of the three files the maintainer runs `make vm-pi-tester` (or rebuilds the VM); agents never do. It
