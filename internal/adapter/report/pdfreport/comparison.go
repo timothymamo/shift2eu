@@ -108,11 +108,16 @@ func writeComparisonSummary(d *document, assessments []assessment.Assessment) {
 		t.header = append(t.header, cell{{value(tableSize, a.Target)}})
 	}
 
-	for row := range fitCounts(assessment.Summary{}) {
-		cells := []cell{{{words(helvetica, tableSize, fitCounts(assessments[0].Summary)[row][0])}}}
+	counts := make([][][2]string, len(assessments))
+	for i, a := range assessments {
+		counts[i] = fitCounts(a.Summary)
+	}
 
-		for _, a := range assessments {
-			cells = append(cells, cell{{words(helvetica, tableSize, fitCounts(a.Summary)[row][1])}})
+	for row, label := range counts[0] {
+		cells := []cell{{{words(helvetica, tableSize, label[0])}}}
+
+		for _, c := range counts {
+			cells = append(cells, cell{{words(helvetica, tableSize, c[row][1])}})
 		}
 
 		t.rows = append(t.rows, cells)
