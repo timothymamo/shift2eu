@@ -561,8 +561,9 @@ provision:
       #    deck's extension the step that writes it (dot-agent-deck orchestrator setup). Everything else -
       #    a GitHub token, another agent's key (ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN), the OpenTelemetry
       #    headers that carry a backend's API key, any name this list does not know - is not in pi's environment,
-      #    so printing it shows only the DeepSeek key and the pane's variables. The marker makes the VM's login profile (/etc/profile.d/shift2eu.sh, dev/lima.yaml) leave
-      #    the agents' keys file unsourced, so a `bash -l` from the tester's bash tool does not put them back.
+      #    so printing it shows only the DeepSeek key and the pane's variables.
+      #    The marker makes the VM's login profile (/etc/profile.d/shift2eu.sh, dev/lima.yaml) leave the agents'
+      #    keys file unsourced, so a `bash -l` from the tester's bash tool does not put them back.
       #
       # What this does not do: the tester still runs as the VM's one user, so the keys file, the agents App's
       # token file and other processes' /proc/<pid>/environ stay readable to it, guarded only by the deny
