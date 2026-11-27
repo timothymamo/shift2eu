@@ -739,9 +739,9 @@ linters:
             - pkg: github.com/timothymamo/shift2eu/internal/web/
               desc: "only cmd/shift2eu-web and its wire package import the web adapter (PRD #297)"
             - pkg: github.com/timothymamo/shift2eu/internal/adapter/report/htmlreport$
-              desc: "only cmd/shift2eu-web/internal/wire constructs the HTML reporter; the CLI writes Markdown and JSON (PRD #297)"
+              desc: "only cmd/shift2eu-web/internal/wire constructs the HTML reporter; the CLI writes Markdown, JSON and PDF (PRD #297, PRD #584)"
             - pkg: github.com/timothymamo/shift2eu/internal/adapter/report/htmlreport/
-              desc: "only cmd/shift2eu-web/internal/wire constructs the HTML reporter; the CLI writes Markdown and JSON (PRD #297)"
+              desc: "only cmd/shift2eu-web/internal/wire constructs the HTML reporter; the CLI writes Markdown, JSON and PDF (PRD #297, PRD #584)"
         # The site's composition root (PRD #297), the sibling of
         # composition-root, held in two parts.
         # cmd/shift2eu-web itself (build constraint js && wasm) is the thin
