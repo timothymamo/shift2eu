@@ -925,3 +925,380 @@ func routedRecordSets(t *testing.T, path string) []routedRecordSet {
 
 	return entries
 }
+
+// The file the guide's Azure DNSSEC loop writes, the call it runs once per
+// public zone, and the resource group the synthetic Resource Graph page records:
+// the test below extracts the loop from the guide by the file it writes, never by
+// a line number.
+const (
+	// azureDNSSECFile is the file the DNSSEC loop writes: one configuration per
+	// public zone that has one, and nothing for a zone Azure does not sign.
+	azureDNSSECFile = "dns-dnssec.json"
+	// azureDNSSECCall is the call the loop runs once per public zone.
+	azureDNSSECCall = "az network dns dnssec-config show"
+	// azureDNSSECResourceGroup is the resource group the page records for every
+	// zone: the DNSSEC call takes the zone by its name and its group.
+	azureDNSSECResourceGroup = "rg-shop"
+	// azureDNSSECSignedZone is the public zone Azure signs. Its DNSSEC
+	// configuration's provisioningState is Succeeded.
+	azureDNSSECSignedZone = "shop.example.com"
+	// azureDNSSECUnsignedZone is a public zone with no DNSSEC configuration: the
+	// call answers (NotFound) for it, which the guide says is expected.
+	azureDNSSECUnsignedZone = "blog.example.com"
+	// azureDNSSECLegacyZone is a public zone whose zoneType the page does not
+	// record: Public is the API's default, so the loop asks about it too.
+	azureDNSSECLegacyZone = "legacy.example.com"
+	// azureDNSSECPrivateLegacyZone is a legacy private zone of the dnszones type:
+	// only public zones are signed, so no call may name it.
+	azureDNSSECPrivateLegacyZone = "old-internal.example.com"
+	// azureDNSSECPrivateZone is a privateDnsZones zone: a zone of another type,
+	// which serves nothing on the internet and is never signed.
+	azureDNSSECPrivateZone = "internal.example.com"
+	// azureDNSSECSignedConfigID is the DNSSEC configuration the fake az prints for
+	// the signed zone: the configuration's own ID, which the program joins to the
+	// zone by its case-insensitive resource ID, not by its casing.
+	azureDNSSECSignedConfigID = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shop/providers/Microsoft.Network/dnszones/shop.example.com/dnssecConfigs/default"
+)
+
+// azureDNSSECGraphPage is the Resource Graph page the loop reads: the public
+// zones, one of them signed, and the private zones no call may ask about. The
+// unsigned public zone comes first and the signed one last, so a loop that stops
+// its pipeline at the first (NotFound) answer is caught by the calls it did not
+// make rather than by the shell's exit status.
+const azureDNSSECGraphPage = `{
+  "count": 5,
+  "data": [
+    {"id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shop/providers/Microsoft.Network/dnsZones/blog.example.com", "name": "blog.example.com", "type": "microsoft.network/dnszones", "kind": "", "location": "global", "zones": null, "properties": {"zoneType": "Public"}},
+    {"id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shop/providers/Microsoft.Network/dnsZones/old-internal.example.com", "name": "old-internal.example.com", "type": "microsoft.network/dnszones", "kind": "", "location": "global", "zones": null, "properties": {"zoneType": "Private"}},
+    {"id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shop/providers/Microsoft.Network/privateDnsZones/internal.example.com", "name": "internal.example.com", "type": "microsoft.network/privatednszones", "kind": "", "location": "global", "zones": null, "properties": null},
+    {"id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shop/providers/Microsoft.Network/dnsZones/legacy.example.com", "name": "legacy.example.com", "type": "microsoft.network/dnszones", "kind": "", "location": "global", "zones": null, "properties": {}},
+    {"id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shop/providers/Microsoft.Network/dnsZones/shop.example.com", "name": "shop.example.com", "type": "microsoft.network/dnszones", "kind": "", "location": "global", "zones": null, "properties": {"zoneType": "Public"}}
+  ],
+  "skip_token": null,
+  "total_records": 5
+}`
+
+// azureDNSSECDocument is what the fake az prints for the signed zone: the
+// `--query` projection the guide asks for, its signed state alone.
+const azureDNSSECDocument = `{"id": "` + azureDNSSECSignedConfigID + `", "type": "Microsoft.Network/dnszones/dnssecConfigs", "provisioningState": "Succeeded"}`
+
+// TestInventoryGuideAzureDNSSECBlock runs the guide's own Azure DNSSEC loop, read
+// out of docs/guide/inventory.md, under the POSIX shells the guide promises: the
+// loop reads each public zone's resource group and name out of the Resource
+// Graph pages the query wrote and asks `az network dns dnssec-config show` for
+// that zone's configuration, keeping its provisioning state alone. An unsigned
+// zone answers (NotFound) on stderr and fails, which the loop has to survive: a
+// public zone without a configuration is not an error (PRD #581, milestone 4).
+// The loop runs against a fake az the test writes into a temporary directory: no
+// network, no real az and no credentials (CLAUDE.md rules 1 and 3).
+func TestInventoryGuideAzureDNSSECBlock(t *testing.T) {
+	t.Parallel()
+
+	block := inventoryGuideAzureDNSSECBlock(t)
+
+	// The loop reads only public zones: a private zone is never signed, so a command
+	// that asked about one would fail on every run.
+	for _, private := range []string{azureDNSSECPrivateLegacyZone, azureDNSSECPrivateZone} {
+		if strings.Contains(commandText(block), private) {
+			t.Errorf("%s names the private zone %q, want the loop to select public zones by their type and their zone type: only a public zone is signed, so a call for a private one fails on every run (PRD #581, milestone 4)\n%s",
+				inventoryGuidePath, private, block)
+		}
+	}
+
+	// The same shells the other blocks of the guide run under (review finding N-a).
+	for _, sh := range guidePOSIXShells {
+		shellName := sh.name
+
+		t.Run("runs under "+sh.name, func(t *testing.T) {
+			t.Parallel()
+
+			if _, err := exec.LookPath(sh.shell); err != nil {
+				t.Skipf("%s is not installed, so this shell cannot be checked here: %v", sh.shell, err)
+			}
+
+			run := runGuideBlock(t, guideBlockOptions{
+				shell:    sh.shell,
+				preamble: sh.preamble,
+				block:    block,
+				fakes:    map[string]func(callLog string) []byte{"az": fakeAZDNSSECProgram},
+				files:    map[string]string{"graph-1.json": azureDNSSECGraphPage},
+			})
+
+			if run.exitStatus != 0 {
+				t.Errorf("the block exited %d under %s, want 0: an unsigned public zone answers (NotFound), which the guide says is expected, so the loop goes on to the zones after it; stderr = %q",
+					run.exitStatus, shellName, run.stderr)
+			}
+
+			// One call per public zone, in the page's order: the unsigned zone, the
+			// zone whose zoneType the page leaves out, and the signed one. The two
+			// private zones are no call at all.
+			wantZones := []string{azureDNSSECUnsignedZone, azureDNSSECLegacyZone, azureDNSSECSignedZone}
+
+			if len(run.calls) != len(wantZones) {
+				t.Fatalf("the block called az %d times under %s, want %d: the page holds one private dnszones zone, which no call may name, and three public ones, which each get one call\n%s",
+					len(run.calls), shellName, len(wantZones), formatFakeCalls(run.calls))
+			}
+
+			for i, wantZone := range wantZones {
+				call := run.calls[i]
+
+				for _, want := range []struct {
+					name  string
+					value string
+					why   string
+				}{
+					{"--zone-name", wantZone, "the public zone of the page, read out of it: a loop that read the line wrong asks about a zone that does not exist, and the zone loses its signed state"},
+					{"--resource-group", azureDNSSECResourceGroup, "the zone's resource group, which the DNSSEC call needs beside the zone's name"},
+					{"--output", "json", "the JSON output the program reads the provisioning state from"},
+				} {
+					if got, ok := passedFlag(call, want.name); !ok || got != want.value {
+						t.Errorf("call %d passes no %s %q under %s (got %q, passed = %t), want %s\n%s",
+							i+1, want.name, want.value, shellName, got, ok, want.why, formatFakeCalls(run.calls))
+					}
+				}
+
+				for _, word := range call {
+					for _, private := range []string{azureDNSSECPrivateLegacyZone, azureDNSSECPrivateZone} {
+						if strings.Contains(word, private) {
+							t.Errorf("call %d names the private zone %q under %s, want no private zone called: only a public zone is signed (PRD #581, milestone 4)\n%s",
+								i+1, private, shellName, formatFakeCalls(run.calls))
+						}
+					}
+				}
+
+				// The projection is what keeps a zone's keys out of the file: az
+				// filters on the client, after it read the whole configuration.
+				query, ok := passedFlag(call, "--query")
+				if !ok {
+					t.Fatalf("call %d passes no --query under %s, want one keeping the configuration's ID, its type and its provisioning state: without it the call writes the zone's signing keys to the file (PRD #581, milestone 4)\n%s",
+						i+1, shellName, formatFakeCalls(run.calls))
+				}
+
+				for _, field := range []string{"id", "type", "provisioningState"} {
+					if !strings.Contains(query, field) {
+						t.Errorf("call %d's --query keeps no %q under %s, want it: the program joins the configuration to its zone by the ID, and reads the provisioning state to decide dnssec\n%s",
+							i+1, field, shellName, formatFakeCalls(run.calls))
+					}
+				}
+
+				for _, field := range []string{"signingKeys", "publicKey", "delegationSignerInfo", "nameServers"} {
+					if strings.Contains(query, field) {
+						t.Errorf("call %d's --query keeps %q under %s, want no field of a zone's keys or its name servers: the configuration's signed state is all the program reads, and the keys are the zone's signing material (PRD #581)\n%s",
+							i+1, field, shellName, formatFakeCalls(run.calls))
+					}
+				}
+			}
+
+			want := []dnssecConfiguration{{
+				ID:                azureDNSSECSignedConfigID,
+				Type:              "Microsoft.Network/dnszones/dnssecConfigs",
+				ProvisioningState: "Succeeded",
+			}}
+
+			if diff := cmp.Diff(want, dnssecConfigurations(t, filepath.Join(run.outDir, azureDNSSECFile))); diff != "" {
+				t.Errorf("%s holds the wrong configurations under %s (-want +got):\n%s\nthe file holds one document per signed zone and nothing for an unsigned one, and no field beyond the three the --query keeps (PRD #581, milestone 4)",
+					azureDNSSECFile, shellName, diff)
+			}
+		})
+	}
+}
+
+// inventoryGuideAzureDNSSECBlock returns the guide's block that reads each public
+// Azure DNS zone's DNSSEC configuration, read from the markdown itself: the test
+// runs the command the guide gives, never a copy that could drift from it. The
+// block starts at the jq filter that selects the public zones out of the Resource
+// Graph pages and ends at the `done` line that writes the file.
+func inventoryGuideAzureDNSSECBlock(t *testing.T) string {
+	t.Helper()
+
+	document, err := os.ReadFile(inventoryGuidePath)
+	if err != nil {
+		t.Fatalf("read %s: %v", inventoryGuidePath, err)
+	}
+
+	lines := strings.Split(string(document), "\n")
+
+	end := -1
+
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+
+		if strings.HasPrefix(trimmed, "done") && strings.Contains(trimmed, azureDNSSECFile) {
+			end = i
+
+			break
+		}
+	}
+
+	if end < 0 {
+		t.Fatalf("%s holds no line that ends the DNSSEC loop and writes %s, so the loop it documents cannot be read: PRD #581's milestone 4 asks for a per-zone loop over the public zones the Resource Graph query wrote",
+			inventoryGuidePath, azureDNSSECFile)
+	}
+
+	start := -1
+
+	for i := end; i >= 0; i-- {
+		if strings.HasPrefix(strings.TrimSpace(lines[i]), "jq ") {
+			start = i
+
+			break
+		}
+	}
+
+	if start < 0 {
+		t.Fatalf("%s lines 1-%d hold no jq filter that opens the block ending with %s, so the loop reads no zone list\n%s",
+			inventoryGuidePath, end+1, azureDNSSECFile, strings.Join(lines[:end+1], "\n"))
+	}
+
+	block := strings.Join(lines[start:end+1], "\n") + "\n"
+
+	// Guard the extraction itself: a block that lost the call, the zone list or the
+	// file it writes would make every check below pass over something that is not
+	// the command the guide documents.
+	for _, want := range []string{
+		azureDNSSECCall,
+		azureDNSSECFile,
+		"graph-",
+		"zoneType",
+		"while",
+		"read -r",
+		`"$rg"`,
+		`"$zone"`,
+		"--resource-group",
+		"--zone-name",
+	} {
+		if !strings.Contains(block, want) {
+			t.Fatalf("%s lines %d-%d hold no %q, so they are not the Azure DNSSEC block this test runs: the loop reads the public zones of the Resource Graph pages, takes each zone's group and name quoted, and writes %s\n%s",
+				inventoryGuidePath, start+1, end+1, want, azureDNSSECFile, block)
+		}
+	}
+
+	return block
+}
+
+// commandText returns a command without its comment lines: a comment may name a
+// private zone in prose without a call asking about it.
+func commandText(command string) string {
+	var code []string
+
+	for _, line := range strings.Split(command, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "#") {
+			continue
+		}
+
+		code = append(code, line)
+	}
+
+	return strings.Join(code, "\n")
+}
+
+// passedFlag returns the value a call passes for a flag, written either as the
+// flag and its value in two words or as one `--flag=value` word, and whether it
+// passes the flag at all.
+func passedFlag(call []string, name string) (string, bool) {
+	for i, word := range call {
+		if word == name && i+1 < len(call) {
+			return call[i+1], true
+		}
+
+		if value, ok := strings.CutPrefix(word, name+"="); ok {
+			return value, true
+		}
+	}
+
+	return "", false
+}
+
+// fakeAZDNSSECProgram returns a shell program that stands where az does for the
+// DNSSEC call: it records the arguments of every call, and answers the public
+// zones of the test's Resource Graph page. The signed zone gets its
+// configuration; the unsigned ones get the (NotFound) error a real call gives for
+// a zone without one, on stderr and with a non-zero status. Any other zone fails
+// with the test's own message, so a loop that reads a zone wrong is visible rather
+// than silently answered.
+func fakeAZDNSSECProgram(callLog string) []byte {
+	var program strings.Builder
+
+	program.WriteString("#!/bin/sh\n")
+	program.WriteString("# A fake az program, written by the e2e test: it records each call's\n")
+	program.WriteString("# arguments and answers the public zones the test's page holds.\n")
+	program.WriteString("{\n")
+	program.WriteString("  printf '%s\\n' " + shellQuote(fakeCallSeparator) + "\n")
+	program.WriteString("  for argument in \"$@\"; do printf '%s\\n' \"$argument\"; done\n")
+	program.WriteString("} >> " + shellQuote(callLog) + "\n")
+	program.WriteString("rg=\n")
+	program.WriteString("zone=\n")
+	program.WriteString("previous=\n")
+	program.WriteString("for argument in \"$@\"; do\n")
+	program.WriteString("  case $previous in\n")
+	program.WriteString("    --resource-group) rg=$argument ;;\n")
+	program.WriteString("    --zone-name) zone=$argument ;;\n")
+	program.WriteString("  esac\n")
+	program.WriteString("  case $argument in\n")
+	program.WriteString("    --resource-group=*) rg=${argument#--resource-group=} ;;\n")
+	program.WriteString("    --zone-name=*) zone=${argument#--zone-name=} ;;\n")
+	program.WriteString("  esac\n")
+	program.WriteString("  previous=$argument\n")
+	program.WriteString("done\n")
+	program.WriteString("case $zone in\n")
+	program.WriteString(shellQuote(azureDNSSECSignedZone) + ")\n")
+	program.WriteString("  printf '%s\\n' " + shellQuote(azureDNSSECDocument) + "\n")
+	program.WriteString("  ;;\n")
+	program.WriteString(shellQuote(azureDNSSECUnsignedZone) + "|" + shellQuote(azureDNSSECLegacyZone) + ")\n")
+	program.WriteString("  printf \"(NotFound) DNSSEC is not enabled for DNS zone '%s'\\n\" \"$zone\" >&2\n")
+	program.WriteString("  exit 1\n")
+	program.WriteString("  ;;\n")
+	program.WriteString("*)\n")
+	fmt.Fprintf(&program, "  printf 'the fake az knows no zone %%s in group %%s: the test records only the public zones of %s\\n' \"$zone\" \"$rg\" >&2\n",
+		azureDNSSECResourceGroup)
+	program.WriteString("  exit 1\n")
+	program.WriteString("  ;;\n")
+	program.WriteString("esac\n")
+
+	return []byte(program.String())
+}
+
+// dnssecConfiguration is one document the DNSSEC loop wrote: the `--query`
+// projection the guide asks for, and nothing else. A field beyond the three is
+// exactly what the milestone keeps out of the file.
+type dnssecConfiguration struct {
+	ID                string `json:"id"`
+	Type              string `json:"type"`
+	ProvisioningState string `json:"provisioningState"`
+}
+
+// dnssecConfigurations returns the documents the DNSSEC loop wrote, failing on any
+// that carries a field beyond the three the guide's `--query` keeps: a zone's
+// signing keys in that file are what the milestone keeps out of it. An empty file
+// is a result, as a run with no signed zone writes one.
+func dnssecConfigurations(t *testing.T, path string) []dnssecConfiguration {
+	t.Helper()
+
+	document, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read the file the DNSSEC loop wrote, %s: %v", path, err)
+	}
+
+	decoder := json.NewDecoder(bytes.NewReader(document))
+	decoder.DisallowUnknownFields()
+
+	var entries []dnssecConfiguration
+
+	for {
+		var entry dnssecConfiguration
+
+		err := decoder.Decode(&entry)
+		if errors.Is(err, io.EOF) {
+			break
+		}
+
+		if err != nil {
+			t.Fatalf("%s is not the list of {id, type, provisioningState} the guide's DNSSEC loop writes: %v; document = %q",
+				path, err, document)
+		}
+
+		entries = append(entries, entry)
+	}
+
+	return entries
+}

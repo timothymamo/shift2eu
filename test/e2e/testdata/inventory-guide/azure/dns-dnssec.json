@@ -1,0 +1,10 @@
+{
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shop/providers/Microsoft.Network/dnszones/shop.example.com/dnssecConfigs/default",
+  "type": "Microsoft.Network/dnszones/dnssecConfigs",
+  "provisioningState": "Succeeded"
+}
+{
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shop/providers/Microsoft.Network/dnszones/legacy.example.com/dnssecConfigs/default",
+  "type": "Microsoft.Network/dnszones/dnssecConfigs",
+  "provisioningState": "Deleting"
+}
