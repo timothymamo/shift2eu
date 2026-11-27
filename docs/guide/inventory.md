@@ -811,16 +811,15 @@ another region gets none of their capabilities.
 | `messaging.kafka` (provisioned or serverless) | `encryption-at-rest` | always: MSK always encrypts data at rest |
 | `messaging.kafka` (serverless) | `node-high-availability`, `zone-high-availability` | always: MSK manages a serverless cluster's partitions itself, and asks for at least two subnets per VPC "to help client applications switch over to another Availability Zone in the event of an outage" |
 | `network.dns` (public hosted zone) | `dnssec` | `get-dnssec`'s `ServeSignature` is `SIGNING` |
-| `network.dns` (public hosted zone) | `dns-routing` | it holds a routed record set: one with a `SetIdentifier` (weighted, latency, failover, geolocation, geoproximity, IP-based, multivalue answer or AZ-affinity routing, all of which need one), a `HealthCheckId`, `MultiValueAnswer`, or a `TrafficPolicyInstanceId` (a record a Route 53 traffic policy created, whose routing lives in the policy) (optional call: see [AWS permissions](#aws-permissions)) |
+| `network.dns` (public hosted zone) | `dns-routing` | it holds a routed record set: one with a `SetIdentifier` (weighted, latency, failover, geolocation, geoproximity, IP-based or multivalue answer routing, all of which need one), a `HealthCheckId`, `MultiValueAnswer`, or a `TrafficPolicyInstanceId` (a record a Route 53 traffic policy created, whose routing lives in the policy) (optional call: see [AWS permissions](#aws-permissions)) |
 
 A hosted zone's ID in the inventory is its name, with the trailing dot (`example.com.`). Its other
 `ServeSignature` states, `DELETING`, `ACTION_NEEDED` and `INTERNAL_FAILURE`, give no `dnssec`: check
 such a zone by hand. A zone whose answers come from a traffic policy is counted: the records the policy
 creates carry its `TrafficPolicyInstanceId`. One record the count does not catch: a simple alias with
 `EvaluateTargetHealth` true, which carries no set identifier and has no other record to answer with.
-An alias record to a
-resource of AWS (a load balancer, a CloudFront distribution) becomes a plain record or a CNAME on any
-target: that is a change the move makes, not a capability.
+An alias record to a resource of AWS (a load balancer, a CloudFront distribution) becomes a plain
+record or a CNAME on any target: that is a change the move makes, not a capability.
 
 A search domain's or a Kafka cluster's high availability holds only for data that is replicated, and
 no read-only call says how indexes or topics are: change it by hand when it is not.

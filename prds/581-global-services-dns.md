@@ -271,7 +271,7 @@ Capabilities the programs derive (only if open questions 3 and 4 add them):
 | Capability | When |
 |---|---|
 | `dnssec` | Route 53 `ServeSignature` `SIGNING`; Cloud DNS `dnssecConfig.state` `on` (or `transfer`); an Azure zone with a DNSSEC configuration that is signed |
-| `dns-routing` | Route 53: a count of routed record sets above 0 (weighted, latency, failover, geolocation, geoproximity, IP-based or multivalue answer, all of which carry a `SetIdentifier`, or a health check); Cloud DNS: a count above 0 of record sets with a `routingPolicy` (weighted round robin, geolocation, failover); Azure DNS: none (routing is Traffic Manager's, a separate resource; an alias record to it is to be checked in milestone 4) |
+| `dns-routing` | Route 53: a count of routed record sets above 0 (weighted, latency, failover, geolocation, geoproximity, IP-based or multivalue answer, all of which carry a `SetIdentifier`, a health check, or a `TrafficPolicyInstanceId`, which a record set a traffic policy created carries); Cloud DNS: a count above 0 of record sets with a `routingPolicy` (weighted round robin, geolocation, failover); Azure DNS: none (routing is Traffic Manager's, a separate resource; an alias record to it is to be checked in milestone 4) |
 
 A simple record set (one name, one type, one set of values) is what every target serves, and an alias
 record to a resource of the same source (Route 53 alias to a load balancer, Azure alias record) becomes,
@@ -591,12 +591,17 @@ also wait on its answer)
   and `plansOfferedIn` (through `AvailableIn`) and `targettest`'s `equalOffering` and `describe` (the
   site builder writes `Catalog.Regions`, unchanged); that no report place names an offering beyond the
   ones *The region model* lists.
-- Milestone 2: the CLI's `get-dnssec` output on a zone that was never signed (`NOT_SIGNING`) and on a private
-  zone (an error the program must tolerate, or the call made only for public zones); that the count's
-  predicate (`SetIdentifier || HealthCheckId || MultiValueAnswer`) catches every non-simple record set,
-  and whether an alias to a resource of another zone with `EvaluateTargetHealth` counts. (Whether AWS
-  Config records a hosted zone with `awsRegion` `global` does not matter: `aws.jq` drops its rows, and
-  the `AWS::Route53::DNSSEC` rows, by `resourceType`, `covered_types`.)
+- Milestone 2 (settled): the per-zone calls take the zone ID with the `/hostedzone/` prefix stripped
+  (the CLI reference gives `--hosted-zone-id` a maximum length of 32,
+  <https://docs.aws.amazon.com/cli/latest/reference/route53/get-dnssec.html> and
+  <https://docs.aws.amazon.com/cli/latest/reference/route53/list-resource-record-sets.html>);
+  `get-dnssec` runs only for public zones, since Route 53 signs only those; `NOT_SIGNING` and every
+  other state but `SIGNING` (`DELETING`, `ACTION_NEEDED`, `INTERNAL_FAILURE`) give no `dnssec`; the
+  count's predicate is `SetIdentifier || HealthCheckId || MultiValueAnswer || TrafficPolicyInstanceId`,
+  so a zone a traffic policy answers for is counted; a simple alias with `EvaluateTargetHealth` true
+  (no set identifier) is not counted. (Whether AWS Config records a hosted zone with `awsRegion`
+  `global` does not matter: `aws.jq` drops its rows, and the `AWS::Route53::DNSSEC` rows, by
+  `resourceType`, `covered_types`.)
 - Milestone 3: that `gcloud dns managed-zones list` returns `visibility` and `dnssecConfig.state` in
   every project, whether its output carries the project (or the guide's `jq` filter adds it), and
   whether forwarding and peering zones are `private`; that `--filter='routingPolicy:*'` with
