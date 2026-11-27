@@ -91,8 +91,14 @@ jobs:
           echo "Audited commit ${GITHUB_SHA}, latest release ${tag}"
       # Row 2. Every tool is pinned by version and SHA-256 (CLAUDE.md rule 7: Renovate bumps a version and
       # its digest in one PR) and checked before it is unpacked. govulncheck is a Go module, verified by
-      # the checksum database, so it has no SHA-256 line; go install pkg@version picks its toolchain from
-      # that module's own go line, not from go.mod's.
+      # the checksum database, so it has no SHA-256 line. go install pkg@version picks its toolchain from
+      # that module's own go line, not from go.mod's, even in the checkout, and the Go that builds
+      # govulncheck decides which standard library it can load: one built with an older Go cannot load
+      # the module at all (issue #658). So its install names go.mod's Go as GOTOOLCHAIN=go<version>,
+      # which Renovate's "Go toolchain" group moves with go.mod's go line, and the next step fails the
+      # run when the built tool's Go is not go.mod's. It stays in this step: after the module download
+      # every Go command runs with GOPROXY=off, and go install pkg@version cannot (it looks up the
+      # module's deprecation through the proxy).
       - name: Download the pinned tools and verify their checksums
         timeout-minutes: 25
         env:
@@ -179,7 +185,9 @@ jobs:
             exit 1
           fi
           tar -C "${bin}" -xzf "${dl}/trivy.tar.gz" trivy
-          GOBIN="${bin}" go install "golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}"
+          # go.mod's go line, for the install below: test/architecture fails when the two differ.
+          # renovate: datasource=golang-version depName=go
+          GOTOOLCHAIN=go1.27.4 GOBIN="${bin}" go install "golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}"
           # trivy's vulnerability database, downloaded now (row 2), so that row 10 scans offline from it.
           # It moves every few hours and has no pin: trivy checks the OCI manifest's digest as it pulls it.
           # A failed download is recorded, and row 10 is then not run.
@@ -199,6 +207,20 @@ jobs:
           want="go$(go list -m -f '{{.GoVersion}}')"
           if [ "$(go env GOVERSION)" != "${want}" ]; then
             echo "::error title=Audit checks::the go command is not go.mod's ${want}: see runbook step 11"
+            exit 1
+          fi
+          # govulncheck is held to go.mod's Go before it scans (issue #658): its -version names the Go
+          # it scans for, and go version names the Go that built it, which decides whether it can load
+          # the module at all. Either one naming another Go fails the run, never a scan with it.
+          rc=0
+          timeout 1m govulncheck -version > "${RUNNER_TEMP}/govulncheck-version.txt" 2>&1 || rc=$?
+          if [ "${rc}" -ne 0 ] || ! grep -qxF "Go: ${want}" "${RUNNER_TEMP}/govulncheck-version.txt"; then
+            echo "::error title=Audit checks::govulncheck -version does not name go.mod's ${want}: see runbook step 11"
+            exit 1
+          fi
+          built="$(go version "${RUNNER_TEMP}/bin/govulncheck")"
+          if [ "${built##* }" != "${want}" ]; then
+            echo "::error title=Audit checks::govulncheck was not built with go.mod's ${want}: see runbook step 11"
             exit 1
           fi
       # Rows 3 to 5. A finding is data for the model, not a failure of the job: each tool's output, its
@@ -691,11 +713,14 @@ jobs:
             echo "finished"
             exit 0
           fi
-          offline=(--cache-dir "${RUNNER_TEMP}/trivy-cache" --skip-db-update --skip-java-db-update --skip-check-update --offline-scan --skip-version-check --disable-telemetry --no-progress --scanners vuln --format json)
+          # The flags both scans take. --skip-check-update is trivy image's alone, for its check bundle:
+          # trivy sbom at the pinned release rejects it and exits before it scans (issue #658), so only
+          # the image scan passes it.
+          offline=(--cache-dir "${RUNNER_TEMP}/trivy-cache" --skip-db-update --skip-java-db-update --offline-scan --skip-version-check --disable-telemetry --no-progress --scanners vuln --format json)
           scanned=0
           if [ -f "${RUNNER_TEMP}/image/image.tar" ]; then
             rc=0
-            timeout 8m trivy image "${offline[@]}" --input "${RUNNER_TEMP}/image/image.tar" --output "${out}/image.json" 2> "${out}/image.stderr" || rc=$?
+            timeout 8m trivy image "${offline[@]}" --skip-check-update --input "${RUNNER_TEMP}/image/image.tar" --output "${out}/image.json" 2> "${out}/image.stderr" || rc=$?
             echo "${rc}" > "${out}/image.exit"
             if [ "${rc}" -eq 124 ]; then
               echo "image-scan timed-out" >> "${results}/not-run.txt"

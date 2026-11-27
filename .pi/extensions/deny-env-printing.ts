@@ -9,9 +9,12 @@
  * - a bash call whose command matches any pattern of ../deny-env-printing.json;
  * - a file-tool call (read, grep, find, ls, edit, write) whose path, normalised as pi normalises it (a
  *   leading `@`, a `file://` URL, Unicode spaces, `~`, `..`) and resolved against the working directory,
- *   is /proc or ~/.config/dot-agent-deck or lies under either, or whose path, glob or pattern names the
- *   deck's file of keys, daemon.env, or its directory;
- * - a grep or find call whose path is an ancestor of either directory (`~`, `/`, and every spelling that
+ *   is /proc, ~/.config/dot-agent-deck or ~/.config/shift2eu (the agents App's token folder, issue #662)
+ *   or lies under one of them, or whose path, glob or pattern names the deck's file of keys, daemon.env,
+ *   or its directory, or whose path or glob names the App's folder, or whose glob names the App's files
+ *   (agents-app-*); a grep or find pattern naming the App's folder or files is allowed, since a pattern is
+ *   text the walk looks for and the walk's path is checked;
+ * - a grep or find call whose path is an ancestor of one of those directories (`~`, `/`, and every spelling that
  *   resolves to one, such as `//`, `/.`, `/..` or enough `../`), which its walk reaches; a call with no
  *   path is checked as the working directory, where pi runs it.
  *
@@ -92,6 +95,22 @@ const deckKeyDirectory = ".config/dot-agent-deck";
 // them in a bash command.
 const deckDirectorySpelling = /\.config[/.]*\/dot-agent/;
 
+// The folder under the home directory that holds the agents App's token file, agents-app-token, and the
+// identity file `make agents-token` writes beside it (ADR 0031, issue #662): the one GitHub credential every
+// agent pushes with. Refused whole, by resolved path, as an ancestor of a grep or find, and by its spellings
+// in a path or glob (a search pattern may name it: it is text to look for, not a place the walk goes).
+const appTokenDirectory = ".config/shift2eu";
+
+// The folder's spellings a path or glob names (`.config//shift2eu`, `.config/./shift2eu/*`), as the list
+// refuses them in a bash command. `~/.local/state/shift2eu` and a checkout named shift2eu are not it.
+const appTokenDirectorySpelling = /\.config[/.]*\/shift2eu\b/;
+
+// The App's file names (agents-app-token, agents-app-identity), refused in a glob, which matches file names
+// wherever the walk goes: `agents-app-t*` names the token as surely as its full name. A path is checked by
+// where it resolves instead, so the repository's dev/agents-app-token.sh, which mints the token and holds
+// none, stays readable, and a search pattern is text to look for, so it may name them.
+const appTokenFileName = "agents-app";
+
 // The Unicode spaces pi maps to a plain space before it reads a path: U+00A0, U+2000 to U+200A, U+202F,
 // U+205F and U+3000. The class is built from their code points so that this file holds only ASCII.
 // The code points are constants, so the top level does nothing that can throw: a load failure fails open
@@ -135,6 +154,8 @@ const procReason =
 	"Refused: /proc holds the environment of every process, which holds the agents' API keys (CLAUDE.md, rule 3).";
 
 const keyFileReason = `Refused: ${deckKeyFile} and ~/${deckKeyDirectory} hold the agents' API keys; never read them (CLAUDE.md, rule 3).`;
+
+const appTokenReason = `Refused: ~/${appTokenDirectory} holds the agents App's token file, agents-app-token, the GitHub credential every agent pushes with; never read it, search under it or name it in a path or glob; a search pattern may name it (CLAUDE.md, rule 3, ADR 0031).`;
 
 const handlerFailureReason =
 	"Refused: the env-printing refusal could not check this call, so it is refused (CLAUDE.md, rule 3). Report this through dot-agent-deck work-done and stop.";
@@ -184,6 +205,7 @@ export default function (pi: ExtensionAPI) {
 			if (fileTools.has(event.toolName)) {
 				const cwd = typeof ctx?.cwd === "string" ? ctx.cwd : process.cwd();
 				const keyDirectory = join(homedir(), deckKeyDirectory);
+				const tokenDirectory = join(homedir(), appTokenDirectory);
 
 				for (const field of ["path", "glob", "pattern"]) {
 					// pi runs a file tool with no path in the working directory, so an absent path is checked as `.`.
@@ -196,11 +218,25 @@ export default function (pi: ExtensionAPI) {
 						return { block: true, reason: keyFileReason };
 					}
 
+					// A grep or find pattern is text the walk looks for, never a file it opens: where the walk goes is
+					// its path, checked below, so a pattern naming the App's folder or files is no refusal (issue #662,
+					// round 3's review, finding S1). A glob selects files wherever the walk goes, so it still is.
+					if (
+						(field !== "pattern" && appTokenDirectorySpelling.test(value)) ||
+						(field === "glob" && value.includes(appTokenFileName))
+					) {
+						return { block: true, reason: appTokenReason };
+					}
+
 					if (field === "path") {
 						const absolute = resolvePath(value, cwd);
 
 						if (under(absolute, keyDirectory)) {
 							return { block: true, reason: keyFileReason };
+						}
+
+						if (under(absolute, tokenDirectory)) {
+							return { block: true, reason: appTokenReason };
 						}
 
 						if (under(absolute, "/proc")) {
@@ -211,6 +247,10 @@ export default function (pi: ExtensionAPI) {
 						if (recursiveTools.has(event.toolName)) {
 							if (under(keyDirectory, absolute)) {
 								return { block: true, reason: keyFileReason };
+							}
+
+							if (under(tokenDirectory, absolute)) {
+								return { block: true, reason: appTokenReason };
 							}
 
 							if (under("/proc", absolute)) {

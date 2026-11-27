@@ -304,7 +304,12 @@
 // (SHIFT2EU_COAUTHOR_RANGE, or origin/main..HEAD, or a skip), and fails on
 // every line that starts with Co-Authored-By: (spaces or tabs allowed before
 // the colon, as git accepts them) and carries an address
-// .github/co-author-addresses.txt does not list, or a malformed one: GitHub
+// .github/co-author-addresses.txt does not list, or a malformed one, the list
+// read with git show from the range's base commit, never from the working tree,
+// so a pull request that changes only the list is checked against the old one
+// (a change to the check itself is for the maintainer's code-owner review to
+// catch), git runs with --no-replace-objects, and a base
+// without a readable list is an error (coAuthorRangeFindings, issue #672): GitHub
 // credits that address's account, and a squash merge copies the trailers onto
 // main. A commit's author and committer address must be on the list too, since
 // a squash merge credits every distinct author, so a commit authored with a
@@ -314,7 +319,10 @@
 // a range that reads no commit (coAuthorCommitCount); every other run on a pull
 // request's shallow checkout skips. TestCoAuthorFindings,
 // TestParseCoAuthorAllowList, TestCoAuthorRange, TestCoAuthorCommitCount and
-// TestCoAuthorAllowListFile pin its helpers and the list.
+// TestCoAuthorAllowListFile pin its helpers and the list;
+// TestCoAuthorRangeFindingsReadTheBaseAllowList and
+// TestCoAuthorRangeFindingsFailClosedOnTheBaseList (coauthortrailer_base_test.go)
+// pin the base commit's list on fixture repositories.
 //
 // TestOpenTofuRequiredVersionRuleStripsTheV (renovateopentofu_test.go, issue
 // #434) reads .github/renovate.json5 as JSON5, with the reader of

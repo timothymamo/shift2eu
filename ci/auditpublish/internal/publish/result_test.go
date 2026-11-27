@@ -520,11 +520,6 @@ func TestParseResultRefuses(t *testing.T) {
 			field: "findings[0].file",
 		},
 		{
-			name:  "a file that starts with a dot",
-			doc:   edited(minimalSpec().withFinding(oneFinding()), `"file":"internal/cli/run.go"`, `"file":".github/workflows/ci.yml"`),
-			field: "findings[0].file",
-		},
-		{
 			name:  "a file with a parent segment",
 			doc:   edited(minimalSpec().withFinding(oneFinding()), `"file":"internal/cli/run.go"`, `"file":"internal/../run.go"`),
 			field: "findings[0].file",
@@ -1225,6 +1220,122 @@ func TestParseResultAccepts(t *testing.T) {
 
 			if diff := cmp.Diff(tc.spec.want(), got); diff != "" {
 				t.Errorf("ParseResult mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+// fileInFinding returns a document whose one finding's file is file.
+func fileInFinding(file string) func(*testing.T) []byte {
+	return func(t *testing.T) []byte {
+		t.Helper()
+
+		spec := minimalSpec().withFinding(oneFinding())
+		spec.Findings[0].File = file
+
+		return spec.json(t)
+	}
+}
+
+// TestParseResultFilePath pins the schema's file rule over a finding's file:
+// 1 to 200 bytes of the allowed set, split at / into segments that are none of
+// empty, `.` and `..`. A segment that starts with a dot is a real path of this
+// repository, `.github/workflows/ci.yml` and `.dot-agent-deck.toml` among them,
+// and the report renders such a finding like any other; a segment that is a dot
+// itself, and the paths that hold one, are refused, as is every character
+// outside the allowed set and every byte the text rule refuses. Only the two
+// segments `.` and `..` traverse, so a segment of dots and more, `...` among
+// them, is a file name like any other and is accepted. Each refusal
+// wraps ErrResultInvalid, names the field and echoes no value.
+func TestParseResultFilePath(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		file string
+		// wantRefused is whether the schema refuses the file.
+		wantRefused bool
+	}{
+		// Accepted: a dot that starts a segment is part of a real path.
+		{name: "the control, a path of the publish core", file: "ci/auditpublish/internal/publish/result.go"},
+		{name: "a workflow of the top directory", file: ".github/workflows/x.yml"},
+		{name: "the deck's configuration at the top", file: ".dot-agent-deck.toml"},
+		{name: "an agent's settings file", file: ".claude/settings.json"},
+		{name: "an extension of the agent that runs this audit", file: ".pi/extensions/x.ts"},
+		{name: "a dot-leading segment in the middle", file: "a/.hidden/b"},
+		{name: "a dot inside a name, never at its start", file: "docs/adr/0040-scheduled-security-audit.md"},
+		{name: "every segment a dotfile", file: ".github/.hidden/.env.example"},
+		{name: "a segment of three dots, a legal file name", file: "..."},
+		{name: "a three-dot directory and a file", file: ".../x"},
+		{name: "a segment of three dots at the end", file: "a/..."},
+		{name: "a segment of dots and a letter", file: ".a..b"},
+		{name: "a dot then a dash", file: ".-x"},
+		{name: "a dot then a plus", file: ".+x"},
+		{name: "a dot then a colon", file: ".:x"},
+		{name: "a dot then an at sign", file: ".@x"},
+		// 200 bytes, the file's cap: the boundary the 201-byte row below sits
+		// on, in a dot-leading name no shorter than the cap.
+		{name: "200 bytes, a dot-leading name at the cap", file: "." + strings.Repeat("f", 199)},
+
+		// Refused: a segment that is a dot, and the paths that hold one.
+		{name: "a lone dot", file: ".", wantRefused: true},
+		{name: "a lone double dot", file: "..", wantRefused: true},
+		{name: "a current segment and a name", file: "./x", wantRefused: true},
+		{name: "a parent segment and a name", file: "../x", wantRefused: true},
+		{name: "a parent segment in the middle", file: "a/../b", wantRefused: true},
+		{name: "a current segment in the middle", file: "a/./b", wantRefused: true},
+		{name: "a parent segment at the end", file: "a/..", wantRefused: true},
+		{name: "a current segment at the end", file: "a/.", wantRefused: true},
+		{name: "a current segment first and a current segment last", file: "./.", wantRefused: true},
+		{name: "a current segment and a parent segment", file: "./..", wantRefused: true},
+		{name: "three dots inside a traverse", file: ".../../x", wantRefused: true},
+		{name: "an absolute path", file: "/x", wantRefused: true},
+		{name: "an empty segment", file: "a//b", wantRefused: true},
+		{name: "a trailing slash", file: "a/", wantRefused: true},
+		{name: "the empty string", file: "", wantRefused: true},
+		{name: "201 bytes", file: strings.Repeat("f", 201), wantRefused: true},
+
+		// Refused: a character outside the allowed set.
+		{name: "a space", file: "a b", wantRefused: true},
+		{name: "a backslash", file: `a\b`, wantRefused: true},
+		{name: "a non-ASCII character", file: "café/x.go", wantRefused: true},
+		{name: "a leading dash", file: "-x", wantRefused: true},
+		{name: "a newline", file: "a\nb", wantRefused: true},
+		{name: "a tab", file: "a\tb", wantRefused: true},
+		{name: "a DEL byte", file: "a\x7fb", wantRefused: true},
+		{name: "a pipe, which the table escapes", file: "a|b", wantRefused: true},
+		{name: "a query mark", file: "a?b", wantRefused: true},
+		{name: "a dot-leading segment and a byte outside the set", file: ".a b", wantRefused: true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			result, err := publish.ParseResult(fileInFinding(tc.file)(t), testCommit)
+
+			if !tc.wantRefused {
+				if err != nil {
+					t.Fatalf("ParseResult refused the file %q: %v, want it accepted: a dot that starts a segment is a real repository path", tc.file, err)
+				}
+
+				if got := result.Findings[0].File; got != tc.file {
+					t.Errorf("ParseResult: the finding's file is %q, want %q", got, tc.file)
+				}
+
+				return
+			}
+
+			if err == nil {
+				t.Fatalf("ParseResult accepted the file %q and returned %+v, want an error wrapping ErrResultInvalid", tc.file, result)
+			}
+
+			if !errors.Is(err, publish.ErrResultInvalid) {
+				t.Errorf("ParseResult over %q: error %v does not wrap ErrResultInvalid", tc.file, err)
+			}
+
+			if !strings.Contains(err.Error(), "findings[0].file") {
+				t.Errorf("ParseResult over %q: error %q does not name the field findings[0].file", tc.file, err.Error())
 			}
 		})
 	}
