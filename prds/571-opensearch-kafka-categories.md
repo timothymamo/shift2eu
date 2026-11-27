@@ -211,9 +211,10 @@ reaches the raw output the guide keeps in its scratch directory (*Privacy*, `doc
   kept);
 - the three ARNs (decided in milestone 2) for the region alone, as every other AWS resource's: the
   program keeps the ARN's region and never the ARN, whose account ID stays in the raw output;
-- HDInsight: `clusterDefinition.kind`, the worker role's `targetInstanceCount` and
-  `hardwareProfile.vmSize`, the zones and, if milestone 4 confirms they give `storageGiB`, the worker
-  role's `dataDisksGroups` (disks per node, disk size);
+- HDInsight: `clusterDefinition.kind`, `clusterState` (decided in milestone 4: a cluster being deleted
+  or that failed is left out), the worker role's `name`, `targetInstanceCount` and
+  `hardwareProfile.vmSize`, the zones and the worker role's first `dataDisksGroups` entry (disks per
+  node, disk size), which give `storageGiB` (confirmed in milestone 4);
 - GCP Managed Kafka: likewise only the fields read (name, capacity, zones and encryption, as milestone 3
   confirms).
 
@@ -243,9 +244,9 @@ Capabilities the programs derive (each milestone pins the exact rule):
 | `search.opensearch` | `zone-high-availability` | AWS: `ClusterConfig.ZoneAwarenessEnabled` true, or `MultiAZWithStandbyEnabled` true; a Serverless collection with standby replicas `ENABLED` (to be checked: AWS says it places them in another zone) |
 | `search.opensearch` | `encryption-at-rest` | AWS: `EncryptionAtRestOptions.Enabled` true; always for a Serverless collection |
 | `search.opensearch` | `snapshots` | AWS: always for a domain (OpenSearch Service takes automated snapshots of every domain; to be checked); always for a Serverless collection (hourly automated snapshots, restorable; decided in milestone 2) |
-| `messaging.kafka` | `node-high-availability` | MSK: `NumberOfBrokerNodes` 2 or more (to be checked: whether a topic's replication factor, 2 or more for a topic to survive the loss of a broker, which no cluster setting gives, must be stated by hand); MSK Serverless: always; GCP Managed Kafka: always (to be checked); HDInsight: 3 or more worker nodes (to be checked: its minimum, and the replication factor, as for MSK) |
+| `messaging.kafka` | `node-high-availability` | MSK: `NumberOfBrokerNodes` 2 or more (to be checked: whether a topic's replication factor, 2 or more for a topic to survive the loss of a broker, which no cluster setting gives, must be stated by hand); MSK Serverless: always; GCP Managed Kafka: always (to be checked); HDInsight: 3 or more worker nodes (checked in milestone 4: Azure asks for 3 or more workers to guarantee availability, and no cluster setting gives a topic's replication factor, which the guide says to check) |
 | `messaging.kafka` | `zone-high-availability` | MSK: brokers in two or more zones (`BrokerNodeGroupInfo.ClientSubnets`, one subnet per zone; to be checked); MSK Serverless: always (to be checked); GCP: to be checked; HDInsight: zones set on the cluster |
-| `messaging.kafka` | `encryption-at-rest` | MSK and MSK Serverless: always (`EncryptionInfo.EncryptionAtRest`); GCP: always (Google default encryption); HDInsight: always (Azure managed disks, encrypted by default; to be checked) |
+| `messaging.kafka` | `encryption-at-rest` | MSK and MSK Serverless: always (`EncryptionInfo.EncryptionAtRest`); GCP: always (Google default encryption); HDInsight: always (Azure managed disks, encrypted at rest by default; checked in milestone 4) |
 
 Not capabilities: shards and partitions (what both categories are, as scaling with requests is what
 `serverless.container` is; `sharding` stays a `cache.redis` capability), UltraWarm and cold storage,
@@ -290,8 +291,9 @@ milestones 2 and 3 check whether a single-zone cluster can exist at all.
   dedicated masters) or `NumberOfBrokerNodes`; `storageGiB` the per-node volume. HDInsight: `count` from
   the worker role's `targetInstanceCount`, `vcpus` and `memoryGiB` from its VM size, which the guide's
   existing VM size lookup gives; `storageGiB` from the worker role's managed disks (`dataDisksGroups`:
-  disks per node × disk size) if Resource Graph projects them and the disk size can be read
-  (milestone 4 checks), and otherwise no `storageGiB`, so storage is not priced. GCP Managed Kafka
+  disks per node × disk size, per worker; milestone 4 confirmed that Resource Graph projects them and
+  that `diskSizeGB` is returned, read-only), and no `storageGiB` where either is missing, so storage
+  is not priced. GCP Managed Kafka
   sizes a cluster in total vCPUs and memory, not brokers; milestone 3 checks whether a broker count can
   be derived, and otherwise writes no size ("not estimated: size unknown"), never a cluster total as
   one node.
@@ -750,6 +752,59 @@ text as the decision)
   `storageGiB` (otherwise no `storageGiB`, storage not priced), that HDInsight managed disks are
   encrypted at rest by default, HDInsight's minimum worker count, and the Event Hubs tiers that expose
   the Kafka endpoint (for the guide's hand rule).
+
+  *Checked in milestone 4 (2026-11-27), on learn.microsoft.com, anonymously, no Azure API called:*
+  - **Cluster fields.** HDInsight's REST "Clusters - Get" (API version 2021-06-01) gives
+    `properties.clusterDefinition.kind` ("The type of cluster", a string written as created: its
+    examples are `hadoop` and `SPARK`, so the program compares it in any casing);
+    `properties.computeProfile.roles[]`, each with `name` (the examples' `headnode`, `workernode`,
+    `zookeepernode`), `targetInstanceCount` ("The instance count of the cluster"),
+    `hardwareProfile.vmSize` and `dataDisksGroups[]` with `disksPerNode` ("The number of disks per
+    node") and `diskSizeGB` ("ReadOnly. The DiskSize in GB. Do not set this value."); the cluster's
+    top-level `zones` ("The availability zones"); and `properties.clusterState` ("The state of the
+    cluster", a string the page does not enumerate; its examples are `Running`). A role also holds
+    `osProfile` (the user name, password and SSH keys), `scriptActions` and `virtualNetworkProfile`,
+    and the cluster `connectivityEndpoints` and `securityProfile`: the query's HDInsight leg packs back
+    only the fields above, field by field. So `storageGiB` is derived: `disksPerNode` × `diskSizeGB`
+    of the worker role's first data disks group, per worker.
+    <https://learn.microsoft.com/en-us/rest/api/hdinsight/clusters/get>
+  - **Cluster states.** The portal's cluster properties name the STATUS values: "Aborted, Accepted,
+    ClusterStorageProvisioned, AzureVMConfiguration, HDInsightConfiguration, Operational, Running,
+    Error, Deleting, Deleted, Timeout, DeleteQueued, DeleteTimeout, DeleteError, PatchQueued,
+    CertRolloverQueued, ResizeQueued, or ClusterCustomization". The program leaves out a cluster whose
+    `clusterState` is `Deleting`, `Error` or `DeletionFailed` (any casing), as `aws.jq` leaves out an
+    MSK cluster `DELETING` or `FAILED`; the page names no `DeletionFailed`, and names `DeleteQueued`,
+    `DeleteTimeout`, `DeleteError` and `Deleted`, which the program keeps.
+    <https://learn.microsoft.com/en-us/azure/hdinsight/hdinsight-administer-use-portal-linux>
+  - **Resource Graph limits.** `union`: "Limit of three `union` legs in a single query", and for
+    `join`: "Limit of three `join` or `union` operations (or a combination of the two) in a single
+    query, counted together"; the guide's query has one `union` and no `join`. `mv-expand`: "*RowLimit*
+    max of 2,000. The default is 128. Limit of 3 `mv-expand` in a single query"; the query has one, over
+    a cluster's roles (head, worker and ZooKeeper nodes, a handful), far below the row limit.
+    <https://learn.microsoft.com/en-us/azure/governance/resource-graph/concepts/query-language>
+  - **Minimum workers.** "To guarantee availability of Apache Kafka on HDInsight, the **number of
+    nodes** entry for **Worker node** must be set to 3 or greater. The default value is 4." The same
+    page creates topics with a replication factor of 3 (4 in a region with two fault domains), and says
+    Kafka "is not aware of Azure fault domains", so no cluster setting gives a topic's replication
+    factor: `node-high-availability` at 3 or more workers, and the guide says to check the topics.
+    <https://learn.microsoft.com/en-us/azure/hdinsight/kafka/apache-kafka-get-started>. HDInsight Kafka
+    "does not support downward scaling".
+    <https://learn.microsoft.com/en-us/azure/hdinsight/kafka/apache-kafka-introduction>
+  - **Disk size.** The Azure CLI's `az hdinsight create` describes `--workernode-data-disk-size` as
+    "The size of the data disk in GB, e.g. 1023", and gives `--workernode-count` a default of 3.
+    <https://learn.microsoft.com/en-us/cli/azure/hdinsight?view=azure-cli-latest>. Kafka on HDInsight
+    uses managed disks, "multiple disks to achieve 16 TB for each node"
+    (<https://learn.microsoft.com/en-us/azure/hdinsight/kafka/apache-kafka-scalability>). No page states
+    1023 GB as the one size; the fixtures' 1023 GB disks follow the CLI's example, and the program reads
+    whatever `diskSizeGB` Azure returns.
+  - **Encryption at rest.** "Azure Storage encryption automatically encrypts your data stored on Azure
+    managed disks (OS and data disks) at rest by default", and "All managed disks, snapshots, images,
+    and data written to existing managed disks are automatically encrypted-at-rest with
+    platform-managed keys." So `encryption-at-rest` always holds for an HDInsight Kafka cluster.
+    <https://learn.microsoft.com/en-us/azure/virtual-machines/disk-encryption>
+  - **Event Hubs tiers.** The Kafka endpoint "is supported only in the standard, premium, and dedicated
+    tiers": a Basic namespace has none. The guide's hand rule says so.
+    <https://learn.microsoft.com/en-us/azure/event-hubs/azure-event-hubs-apache-kafka-overview>
 - Milestone 5: whether the 3-AZ continuity and encryption-at-rest pages cover Kafka under "Public Cloud
   Analytics"; whether the prices page still sells Gen 2 Kafka plans; that the OpenSearch and Kafka
   prices are per node and give vCPUs, memory and storage per node.
