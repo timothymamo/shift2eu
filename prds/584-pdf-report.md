@@ -860,8 +860,8 @@ recommended*, followed by the number. ADR 0049 records the answers that shape mi
    worked out, and says in one sentence that there is no readiness score. A score is a domain decision
    for its own PRD. When it lands, the PDF's *How this report is worked out* section gains it.
    *Follow-up, decided with it:* CLAUDE.md's glossary defines **Assessment** with a "readiness score", and
-   `docs/architecture.md` mentions one. *Decided:* a small docs issue marks it "not yet implemented" in
-   both; it is not filed yet.
+   `docs/architecture.md` mentions one. *Decided (2026-11-27):* the maintainer decided not to implement
+   the readiness score, and no docs issue is filed.
    This PRD does not change either.
 7. **Where the module's version stamp comes from** (milestone 2). GoReleaser's `{{ .ShortCommit }}` is
    git's abbreviated hash, whose length depends on which objects the clone holds. The `image` job
