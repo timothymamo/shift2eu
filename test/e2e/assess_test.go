@@ -1097,7 +1097,7 @@ func TestAssessUsage(t *testing.T) {
 				"--target", scalewayKey, "--format", "yaml",
 			},
 			wantStderr:    []string{"--format"},
-			wantFirstLine: []string{`"yaml"`, jsonFormat, markdownFormat},
+			wantFirstLine: []string{`"yaml"`, jsonFormat, markdownFormat, pdfFormat},
 		},
 		{
 			name: "empty format",
@@ -1106,7 +1106,7 @@ func TestAssessUsage(t *testing.T) {
 				"--target", scalewayKey, "--format=",
 			},
 			wantStderr:    []string{"--format"},
-			wantFirstLine: []string{"unknown format", jsonFormat, markdownFormat},
+			wantFirstLine: []string{"unknown format", jsonFormat, markdownFormat, pdfFormat},
 		},
 	}
 
