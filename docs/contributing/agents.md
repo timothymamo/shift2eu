@@ -30,8 +30,18 @@ whose author or committer address it does not list, since a squash merge credits
 (issue #663). The check reads the list from the pull request's base commit, never from its own checkout
 (issue #672): the base branch's list, main's for every pull request to main. A pull request into another
 branch is checked against that branch's list, and its commits again against main's when that branch is
-merged into main. A pull request that changes only the list is checked against the old one; a change to
-the check itself is for the maintainer's code-owner review to catch. A fork's or a new contributor's pull
+merged into main. A pull request that changes only the list is checked against the old one. The job runs
+the base commit's copy of `test/lint` too, from a detached worktree of the base, built under the base's
+`go.mod` and Go (issue #689), so a pull request that changes `test/lint` is checked by the base's check,
+and its own change takes effect once it is merged. For a pull request into a branch other than main, the
+copy is that branch's check, and main's copy checks the commits again when that branch merges into main.
+The copy covers `test/lint` only: the job's steps come from the pull request's own `ci.yml`, and
+`test/architecture`'s pin of them from the pull request too, so a change to either is for the maintainer's
+code-owner review. A workflow the pull request cannot edit (a ruleset-required workflow, or a
+`pull_request_target` job that runs no code of the pull request) would close that gap; this project does
+not use one. The check's git calls ignore the global and the system git configuration (`GIT_CONFIG_GLOBAL=/dev/null`,
+`GIT_CONFIG_NOSYSTEM=1`), so a developer's global or the machine's system configuration cannot change what
+it reads; the repository's own `.git/config` is not isolated. A fork's or a new contributor's pull
 request therefore fails Lint until their address is on the base branch's
 `.github/co-author-addresses.txt`: the address is added by a separate pull request, merged first.
 
