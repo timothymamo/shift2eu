@@ -951,12 +951,14 @@ func auditGovulncheckGoModReadChecks(lines []string, readAt, installAt int, name
 
 // auditGovulncheckGoModRead returns what the checks job's install step lacks to
 // read go.mod's Go once, into a variable, and to fail the run with a clear
-// ::error when that read gives nothing or more than one line (issue #710). The
-// step runs under set -euo pipefail, so a read inside $(...) that failed would
-// otherwise end the step with no message, and a go list that reads a go.work or
-// another module's go.mod would give another Go than the module's: the read names
-// GOWORK=off, and the install takes the variable the step filled, never a
-// substitution of its own.
+// ::error when that read gives nothing, more than one line, or a line that is no
+// Go version (issue #710). A go list that fails in the install's prefix
+// assignment does not end the step under set -euo pipefail: it leaves the install
+// with GOTOOLCHAIN=go, and the install then fails with a confusing go error
+// instead of a message of its own. The step therefore needs || gomod_go="" on the
+// assignment, and a go list that read a go.work or another module's go.mod would
+// give another Go than the module's: the read names GOWORK=off, and the install
+// takes the variable the step filled, never a substitution of its own.
 func auditGovulncheckGoModRead(steps []auditJobStep) []string {
 	step, at, install, ok := auditGovulncheckInstall(steps)
 	if !ok {
@@ -997,16 +999,23 @@ func auditGovulncheckGoModRead(steps []auditJobStep) []string {
 	return problems
 }
 
-// auditReadsWithGOWORKOff reports whether a step's lines up to and including at
-// set GOWORK=off: on the read itself, in the form GOWORK=off go list -m, or on a
-// line above it that exports it for the whole step (issue #710).
+// auditReadsWithGOWORKOff reports whether the read on line at sets GOWORK=off:
+// on the read itself, in the form GOWORK=off go list -m, or on a line above it
+// that exports it for the whole step (issue #710). A GOWORK=off that some other
+// command of the step carries says nothing about the go list that reads go.mod's
+// Go: that go list still lets a go.work of the checkout answer for another
+// module.
 func auditReadsWithGOWORKOff(lines []string, at int) bool {
-	for i := 0; i <= at && i < len(lines); i++ {
-		if strings.HasPrefix(strings.TrimSpace(lines[i]), "#") {
-			continue
-		}
+	if at < 0 || at >= len(lines) {
+		return false
+	}
 
-		if strings.Contains(lines[i], "GOWORK=off") {
+	if strings.Contains(lines[at], "GOWORK=off") {
+		return true
+	}
+
+	for i := 0; i < at; i++ {
+		if strings.HasPrefix(strings.TrimSpace(lines[i]), "export GOWORK=off") {
 			return true
 		}
 	}
@@ -1060,6 +1069,25 @@ func TestAuditGovulncheckGoModReadFailsClearly(t *testing.T) {
 			),
 			install: auditGoModReadInstall,
 			want:    1,
+		},
+		{
+			name: "another command of the step sets GOWORK=off, the read does not",
+			derive: slices.Concat(
+				[]string{`GOWORK=off go mod tidy`},
+				[]string{`gomod_go="$(go list -m -f '{{.GoVersion}}')" || gomod_go=""`},
+				auditGoModReadStep[1:],
+			),
+			install: auditGoModReadInstall,
+			want:    1,
+		},
+		{
+			name: "the step exports GOWORK=off above the read",
+			derive: slices.Concat(
+				[]string{`export GOWORK=off`},
+				[]string{`gomod_go="$(go list -m -f '{{.GoVersion}}')" || gomod_go=""`},
+				auditGoModReadStep[1:],
+			),
+			install: auditGoModReadInstall,
 		},
 		{
 			name:    "the read names no go list -m of the module's GoVersion",
@@ -1314,13 +1342,15 @@ func TestScheduledSecurityAuditWorkflowBuildsGovulncheckWithGoModsGo(t *testing.
 		}
 	})
 
-	// The read fails the run clearly (issue #710): the step runs under set
-	// -euo pipefail, so a go list inside $(...) that failed would end it with no
-	// message, and a read that gave two lines would build the tool with a value
-	// that is no Go version. The step reads go.mod's Go once, into a variable,
-	// with GOWORK=off, checks it in an if block of its own for nothing and for
-	// more than one line - each with its ::error and its exit 1 - and the
-	// install takes that variable.
+	// The read fails the run clearly (issue #710): a go list that fails in the
+	// install's prefix assignment does not end the step under set -euo pipefail -
+	// it leaves the install with GOTOOLCHAIN=go, and the install fails with a
+	// confusing go error instead of a message of its own - and a read that gave
+	// two lines, or one line that is no Go version, would build the tool with a
+	// value go fetches no toolchain for. The step reads go.mod's Go once, into a
+	// variable, with GOWORK=off, checks it in a block of its own for nothing, for
+	// more than one line and for a value that is no Go version - each with its
+	// ::error and its exit 1 - and the install takes that variable.
 	t.Run("the read of go.mod's Go fails the run clearly", func(t *testing.T) {
 		t.Parallel()
 
