@@ -739,6 +739,69 @@ func readFixtureValues(t *testing.T, path, call string) []any {
 	return values
 }
 
+// TestInventoryGuideAzureResourceGraphPageCountMatchesItsRows pins that every
+// recorded page of the guide's Resource Graph export counts the rows it holds
+// (PRD #571, milestone 4): Resource Graph answers `count` with the number of rows
+// of the page it just wrote, so a page whose `data` grew a row while its `count`
+// stayed behind describes a recording no query makes.
+//
+// The pages are read as the export hands them to azure.jq, every JSON value of
+// every `graph-*.json` file, so a page recorded as a second value is held to the
+// same rule. A hand edit that added a resource row without bumping `count` is
+// what this check has to catch: the fixture is written by hand, and nothing else
+// reads the field (review nit on PR #685).
+func TestInventoryGuideAzureResourceGraphPageCountMatchesItsRows(t *testing.T) {
+	t.Parallel()
+
+	paths, err := filepath.Glob(filepath.Join(repoRoot, filepath.FromSlash(azureResourceGraphFixtures)))
+	if err != nil {
+		t.Fatalf("glob %s: %v", azureResourceGraphFixtures, err)
+	}
+
+	if len(paths) == 0 {
+		t.Fatalf("%s matched no Resource Graph page; the fixtures are missing", azureResourceGraphFixtures)
+	}
+
+	slices.Sort(paths)
+
+	pages := 0
+
+	for _, path := range paths {
+		file, err := filepath.Rel(repoRoot, path)
+		if err != nil {
+			t.Fatalf("relative path of %s: %v", path, err)
+		}
+
+		file = filepath.ToSlash(file)
+
+		for _, value := range readFixtureValues(t, path, "az graph query") {
+			pages++
+
+			document, ok := value.(map[string]any)
+			if !ok {
+				t.Fatalf("%s holds a value that is not a Resource Graph page: %T", file, value)
+			}
+
+			count, ok := document["count"].(float64)
+			if !ok {
+				t.Errorf("%s holds the count %v, want the number of rows the page carries: Resource Graph counts a page's rows, and a page without that number describes no recording of the call",
+					file, document["count"])
+
+				continue
+			}
+
+			if rows := len(asSlice(document["data"])); int(count) != rows {
+				t.Errorf("%s records count %d but holds %d row(s) of data, want the count to be the rows the page carries: Resource Graph answers `count` with the number of rows it just wrote, so a page whose rows were edited without the count describes a page no query returns",
+					file, int(count), rows)
+			}
+		}
+	}
+
+	if pages == 0 {
+		t.Fatalf("%s holds no Resource Graph page, so this check read nothing", azureResourceGraphFixtures)
+	}
+}
+
 // TestInventoryGuideAzureHDInsightFixtureCarriesOnlyTheFieldsTheProgramReads
 // pins the Azure half of PRD #571's *Only the fields the program reads*, the way
 // TestInventoryGuideSearchAndKafkaFixturesCarryOnlyTheFieldsTheProgramReads pins
