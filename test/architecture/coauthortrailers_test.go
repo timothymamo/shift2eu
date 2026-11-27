@@ -304,10 +304,12 @@ func workflowJobNames(path, doc string) ([]coAuthorJobName, error) {
 // coAuthorJobNameOf returns the job id of a workflow with the name: its check
 // run reports, read from the block of the job's keys. It fails closed on every
 // spelling but a block mapping holding `name: <value>`, the value a single-line
-// plain or quoted scalar without a backslash: a job whose body is a flow
-// collection, a quoted name key, a value on another line and a block scalar all
-// report a name to GitHub that a line-wise reader of `name: ` alone never
-// compares (issue #706, the auditor's finding L3).
+// plain or quoted scalar without a backslash or a continuation line: a job whose
+// body is a flow collection, a quoted name key, a value on another line, a value
+// folded from the lines below it, a value with a leading space or a trailing
+// comment and a block scalar all report a name to GitHub that a line-wise reader
+// of `name: ` alone never compares (issue #706, the auditor's findings L1 and
+// L3).
 func coAuthorJobNameOf(id string, block []ciLine) (coAuthorJobName, error) {
 	name := coAuthorJobName{id: id}
 
@@ -317,7 +319,7 @@ func coAuthorJobNameOf(id string, block []ciLine) (coAuthorJobName, error) {
 
 	indent := ciKeyIndent(block)
 
-	for _, l := range block {
+	for i, l := range block {
 		if l.indent != indent {
 			continue
 		}
@@ -347,22 +349,43 @@ func coAuthorJobNameOf(id string, block []ciLine) (coAuthorJobName, error) {
 		value, err := coAuthorNameScalar(l.num, id, strings.TrimPrefix(l.text, "name: "))
 		name.line, name.raw = l.num, value
 
-		return name, err
+		if err != nil {
+			return name, err
+		}
+
+		// A plain scalar continues on the lines below it, and YAML folds them into
+		// one name: `name: Co-author` with `trailers (base)` under it reports
+		// Co-author trailers (base), while a reader of the key's own line compares
+		// Co-author, which no rule refuses (issue #706, the auditor's finding L1).
+		if i+1 < len(block) && block[i+1].indent > l.indent {
+			return name, fmt.Errorf("line %d: the job %s holds a name value that continues on the lines below, the next of them line %d deeper than the key, want a single-line plain or quoted scalar: YAML folds those lines into the name GitHub reports, so this reader compares a name no check reports",
+				l.num, id, block[i+1].num)
+		}
+
+		return name, nil
 	}
 
 	return name, nil
 }
 
 // coAuthorNameScalar returns the name the name: value raw reports, and fails on
-// every value it cannot read as the one name GitHub reports: a block scalar's
-// marker, a flow collection, a YAML indicator, a quoted scalar that does not
-// close on the same line, and any value holding a backslash, whose escape spells
-// the name in characters no literal comparison sees (issue #706, the auditor's
-// finding L3).
+// every value it cannot read as the one name GitHub reports: a value with a
+// leading space or a trailing comment, a block scalar's marker, a flow
+// collection, a YAML indicator, a quoted scalar that does not close on the same
+// line, and any value holding a backslash, whose escape spells the name in
+// characters no literal comparison sees (issue #706, the auditor's finding L3).
 func coAuthorNameScalar(num int, id, raw string) (string, error) {
 	if raw == "" {
 		return "", fmt.Errorf("line %d: the job %s holds an empty name value, want a single-line plain or quoted scalar: GitHub reports no name for it, so every rule compares nothing",
 			num, id)
+	}
+
+	// YAML drops the spaces before a plain scalar: `name:  Co-author trailers` is
+	// the name GitHub reports, while a reader of the key's line compares a value
+	// with the extra space, which no rule sees.
+	if raw[0] == ' ' || raw[0] == '\t' {
+		return "", fmt.Errorf("line %d: the job %s holds a name value with a leading space, %q, want the value to start at the first character after `name: `: YAML reads a single space there as the separator and the rest as the name GitHub reports, so a comparison of this value meets no name a check reports",
+			num, id, raw)
 	}
 
 	switch raw[0] {
@@ -389,6 +412,15 @@ func coAuthorNameScalar(num int, id, raw string) (string, error) {
 		}
 
 		return raw[1 : len(raw)-1], nil
+	}
+
+	// A plain scalar ends where a comment starts, so the comment is no part of the
+	// name GitHub reports; a reader that keeps it compares a name no check
+	// reports. Only a plain value is refused here: a quoted one holding " #" is
+	// read through its quotes above, and refused there if they do not close.
+	if before, comment, ok := strings.Cut(raw, " #"); ok {
+		return "", fmt.Errorf("line %d: the job %s holds the plain name value %q with a trailing comment, %q, want a single-line plain or quoted scalar with none: YAML ends the plain scalar where the comment starts, so GitHub reports %q, a name this reader compares only with the comment kept",
+			num, id, raw, "#"+comment, strings.TrimSpace(before))
 	}
 
 	return raw, nil
@@ -605,6 +637,30 @@ func TestCICoAuthorTrailersNameGuardReadsEverySpelling(t *testing.T) {
 			path:    ciWorkflowPath,
 			doc:     "jobs:\n  build:\n    name:\n      Co-author trailers (base)\n    runs-on: ubuntu-latest\n",
 			wantErr: "on the lines below the key",
+		},
+		{
+			name:    "a plain name that folds with the lines below the key",
+			path:    ciWorkflowPath,
+			doc:     "jobs:\n  build:\n    name: Co-author\n      trailers (base)\n    runs-on: ubuntu-latest\n",
+			wantErr: "continues on the lines below",
+		},
+		{
+			name:    "a plain name whose second word sits on the line below",
+			path:    ciWorkflowPath,
+			doc:     "jobs:\n  build:\n    name: Co-author trailers\n      (base)\n    runs-on: ubuntu-latest\n",
+			wantErr: "continues on the lines below",
+		},
+		{
+			name:    "a name value with a leading space",
+			path:    ciWorkflowPath,
+			doc:     "jobs:\n  build:\n    name:  Co-author trailers (base)\n    runs-on: ubuntu-latest\n",
+			wantErr: "leading space",
+		},
+		{
+			name:    "a plain name value with a trailing comment",
+			path:    ciWorkflowPath,
+			doc:     "jobs:\n  build:\n    name: Co-author trailers (base) # the check\n    runs-on: ubuntu-latest\n",
+			wantErr: "trailing comment",
 		},
 		{
 			name:    "a double-quoted (base) name spelled with escapes",
