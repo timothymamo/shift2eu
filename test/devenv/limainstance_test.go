@@ -150,6 +150,7 @@ var limaInstanceFixtures = map[string]struct {
 	"vm-claude-settings":            {fixture: newLimaMakeFixture},
 	"vm-init":                       {fixture: newLimaMakeFixture},
 	"vm-gh-wrapper":                 {fixture: newLimaMakeFixture},
+	"vm-pi-tester":                  {fixture: newLimaMakeFixture},
 	"deck":                          {fixture: newLimaMakeFixture},
 	"deck-restart":                  {fixture: newLimaMakeFixture},
 	"vm-stop":                       {fixture: newLimaMakeFixture, fromEnv: true},

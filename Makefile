@@ -168,7 +168,7 @@ REPO_ROOT := $(patsubst %/.git,%,$(shell git rev-parse --path-format=absolute --
 # worktree, git-hooks, ...) is the agents', runs in the workspace inside the VM and never reads these.
 HOST_TARGETS := agents-token agents-token-refresh agents-token-refresh-start agents-token-refresh-install \
 	agents-token-refresh-uninstall deck deck-restart gate-check vm-agents-token-ssh vm-agents-token-ssh-uninstall \
-	vm-boot-install vm-boot-uninstall vm-claude-settings vm-create vm-delete vm-env vm-env-check vm-gh-wrapper vm-init vm-shell vm-stop vm-up
+	vm-boot-install vm-boot-uninstall vm-claude-settings vm-create vm-delete vm-env vm-env-check vm-gh-wrapper vm-pi-tester vm-init vm-shell vm-stop vm-up
 HOST_WORKSPACE_REPO := $(abspath $(WORKSPACE_REPO))
 HOST_WORKSPACE      := $(patsubst %/,%,$(dir $(HOST_WORKSPACE_REPO)))
 HOST_REPO_NAME      := $(notdir $(HOST_WORKSPACE_REPO))
@@ -1846,6 +1846,35 @@ vm-gh-wrapper: ## Install the agents App's gh wrapper in a VM created before it 
 	$(VM_OUTPUT); \
 	if ! printf '%s\n' "$$out" | grep -Fqx 'vm-gh-wrapper: done'; then \
 		echo "vm-gh-wrapper: the VM never printed vm-gh-wrapper: done, so the installation may not have finished; run make vm-gh-wrapper again" >&2; \
+		exit 1; \
+	fi
+
+# The update step of the tester's installed launch wrapper (issue #692, ADR 0044): installs the host clone's
+# dev/pi-tester.sh, .pi/extensions/deny-env-printing.ts and .pi/deny-env-printing.json, root-owned, in the VM's
+# /usr/local/lib/shift2eu/pi-tester, where dev/lima.yaml installs them on a new VM and .dot-agent-deck.toml's
+# tester command runs them. The maintainer runs it after a merge that changes any of the three; agents never
+# do. Like vm-gh-wrapper: the script (dev/vm-pi-tester.sh) is generated first and sent over limactl's standard
+# input only when it is whole, as `limactl shell --workdir / <instance> env -u SHIFT2EU_PI_TESTER_ROOT sh -s`
+# (the tests' root hook unset, so the installation lands in /usr/local), the VM's output goes through
+# $(VM_OUTPUT), and make fails unless it holds both the line naming that directory, "vm-pi-tester: installed
+# the tester's wrapper and env-printing refusal in /usr/local/lib/shift2eu/pi-tester", and "vm-pi-tester:
+# done". Safe to run again.
+.PHONY: vm-pi-tester
+vm-pi-tester: ## Install the tester's root-owned launch wrapper and env-printing refusal in the VM (after a merge that changes them)
+	$(LIMA_INSTANCE_CHECK)
+	@script="$$(dev/vm-pi-tester.sh dev/pi-tester.sh .pi/extensions/deny-env-printing.ts .pi/deny-env-printing.json)" || exit 1; \
+	if [ "$$(printf '%s\n' "$$script" | tail -n 1)" != vm_pi_tester ]; then \
+		echo "vm-pi-tester: dev/vm-pi-tester.sh printed no whole script (its last line is not vm_pi_tester); nothing sent to the VM" >&2; \
+		exit 1; \
+	fi; \
+	out="$$(printf '%s\n' "$$script" | $(VM_SHELL_ENV) limactl shell --workdir / "$$LIMA_INSTANCE" env -u SHIFT2EU_PI_TESTER_ROOT sh -s 2>&1)"; status=$$?; \
+	$(VM_OUTPUT); \
+	if ! printf '%s\n' "$$out" | grep -Fqx 'vm-pi-tester: done'; then \
+		echo "vm-pi-tester: the VM never printed vm-pi-tester: done, so the installation may not have finished; run make vm-pi-tester again" >&2; \
+		exit 1; \
+	fi; \
+	if ! printf '%s\n' "$$out" | grep -Fqx "vm-pi-tester: installed the tester's wrapper and env-printing refusal in /usr/local/lib/shift2eu/pi-tester"; then \
+		echo "vm-pi-tester: the VM never said it installed in /usr/local/lib/shift2eu/pi-tester, so the installation went elsewhere or did not finish; run make vm-pi-tester again" >&2; \
 		exit 1; \
 	fi
 
