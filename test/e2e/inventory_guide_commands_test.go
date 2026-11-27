@@ -978,6 +978,54 @@ const azureDNSSECGraphPage = `{
   "total_records": 5
 }`
 
+// azureDNSSECGraphPageUnsignedLast is the same set of zones with the signed one
+// first and an unsigned one last. A shell exits with the status of its loop's
+// last command, so this page is the one that catches a loop whose call is not
+// ended with `|| :`: the last zone's (NotFound) answer would become the shell's
+// exit status, and the guide's own run would stop there even though no zone is
+// wrong.
+const azureDNSSECGraphPageUnsignedLast = `{
+  "count": 5,
+  "data": [
+    {"id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shop/providers/Microsoft.Network/dnsZones/shop.example.com", "name": "shop.example.com", "type": "microsoft.network/dnszones", "kind": "", "location": "global", "zones": null, "properties": {"zoneType": "Public"}},
+    {"id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shop/providers/Microsoft.Network/dnsZones/blog.example.com", "name": "blog.example.com", "type": "microsoft.network/dnszones", "kind": "", "location": "global", "zones": null, "properties": {"zoneType": "Public"}},
+    {"id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shop/providers/Microsoft.Network/dnsZones/old-internal.example.com", "name": "old-internal.example.com", "type": "microsoft.network/dnszones", "kind": "", "location": "global", "zones": null, "properties": {"zoneType": "Private"}},
+    {"id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shop/providers/Microsoft.Network/privateDnsZones/internal.example.com", "name": "internal.example.com", "type": "microsoft.network/privatednszones", "kind": "", "location": "global", "zones": null, "properties": null},
+    {"id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shop/providers/Microsoft.Network/dnsZones/legacy.example.com", "name": "legacy.example.com", "type": "microsoft.network/dnszones", "kind": "", "location": "global", "zones": null, "properties": {}}
+  ],
+  "skip_token": null,
+  "total_records": 5
+}`
+
+// azureDNSSECScenario is one Resource Graph page the guide's DNSSEC loop reads,
+// and the public zones it has to ask az about, in the page's order.
+type azureDNSSECScenario struct {
+	// name is how the subtest names the case.
+	name string
+	// page is the Resource Graph page the run writes into its $out.
+	page string
+	// wantZones are the page's public zones, in its order, and nothing else.
+	wantZones []string
+}
+
+// azureDNSSECScenarios are the pages the DNSSEC loop is run against: the one the
+// test's other blocks use, whose signed zone comes last, and one whose last
+// public zone is unsigned. The order is what a shell exits with, so the second
+// case is the one that catches a loop whose call is not ended with `|| :` (PRD
+// #581, milestone 4).
+var azureDNSSECScenarios = []azureDNSSECScenario{
+	{
+		name:      "the last public zone is signed",
+		page:      azureDNSSECGraphPage,
+		wantZones: []string{azureDNSSECUnsignedZone, azureDNSSECLegacyZone, azureDNSSECSignedZone},
+	},
+	{
+		name:      "the last public zone is unsigned",
+		page:      azureDNSSECGraphPageUnsignedLast,
+		wantZones: []string{azureDNSSECSignedZone, azureDNSSECUnsignedZone, azureDNSSECLegacyZone},
+	},
+}
+
 // azureDNSSECDocument is what the fake az prints for the signed zone: the
 // `--query` projection the guide asks for, its signed state alone.
 const azureDNSSECDocument = `{"id": "` + azureDNSSECSignedConfigID + `", "type": "Microsoft.Network/dnszones/dnssecConfigs", "provisioningState": "Succeeded"}`
@@ -1016,90 +1064,107 @@ func TestInventoryGuideAzureDNSSECBlock(t *testing.T) {
 				t.Skipf("%s is not installed, so this shell cannot be checked here: %v", sh.shell, err)
 			}
 
-			run := runGuideBlock(t, guideBlockOptions{
-				shell:    sh.shell,
-				preamble: sh.preamble,
-				block:    block,
-				fakes:    map[string]func(callLog string) []byte{"az": fakeAZDNSSECProgram},
-				files:    map[string]string{"graph-1.json": azureDNSSECGraphPage},
-			})
+			// One page per run, because the order of the page's zones is what the
+			// shell exits with: see azureDNSSECScenarios.
+			for _, scenario := range azureDNSSECScenarios {
+				t.Run(scenario.name, func(t *testing.T) {
+					t.Parallel()
 
-			if run.exitStatus != 0 {
-				t.Errorf("the block exited %d under %s, want 0: an unsigned public zone answers (NotFound), which the guide says is expected, so the loop goes on to the zones after it; stderr = %q",
-					run.exitStatus, shellName, run.stderr)
-			}
+					run := runGuideBlock(t, guideBlockOptions{
+						shell:    sh.shell,
+						preamble: sh.preamble,
+						block:    block,
+						fakes:    map[string]func(callLog string) []byte{"az": fakeAZDNSSECProgram},
+						files:    map[string]string{"graph-1.json": scenario.page},
+					})
 
-			// One call per public zone, in the page's order: the unsigned zone, the
-			// zone whose zoneType the page leaves out, and the signed one. The two
-			// private zones are no call at all.
-			wantZones := []string{azureDNSSECUnsignedZone, azureDNSSECLegacyZone, azureDNSSECSignedZone}
-
-			if len(run.calls) != len(wantZones) {
-				t.Fatalf("the block called az %d times under %s, want %d: the page holds one private dnszones zone, which no call may name, and three public ones, which each get one call\n%s",
-					len(run.calls), shellName, len(wantZones), formatFakeCalls(run.calls))
-			}
-
-			for i, wantZone := range wantZones {
-				call := run.calls[i]
-
-				for _, want := range []struct {
-					name  string
-					value string
-					why   string
-				}{
-					{"--zone-name", wantZone, "the public zone of the page, read out of it: a loop that read the line wrong asks about a zone that does not exist, and the zone loses its signed state"},
-					{"--resource-group", azureDNSSECResourceGroup, "the zone's resource group, which the DNSSEC call needs beside the zone's name"},
-					{"--output", "json", "the JSON output the program reads the provisioning state from"},
-				} {
-					if got, ok := passedFlag(call, want.name); !ok || got != want.value {
-						t.Errorf("call %d passes no %s %q under %s (got %q, passed = %t), want %s\n%s",
-							i+1, want.name, want.value, shellName, got, ok, want.why, formatFakeCalls(run.calls))
-					}
-				}
-
-				for _, word := range call {
-					for _, private := range []string{azureDNSSECPrivateLegacyZone, azureDNSSECPrivateZone} {
-						if strings.Contains(word, private) {
-							t.Errorf("call %d names the private zone %q under %s, want no private zone called: only a public zone is signed (PRD #581, milestone 4)\n%s",
-								i+1, private, shellName, formatFakeCalls(run.calls))
-						}
-					}
-				}
-
-				// The projection is what keeps a zone's keys out of the file: az
-				// filters on the client, after it read the whole configuration.
-				query, ok := passedFlag(call, "--query")
-				if !ok {
-					t.Fatalf("call %d passes no --query under %s, want one keeping the configuration's ID, its type and its provisioning state: without it the call writes the zone's signing keys to the file (PRD #581, milestone 4)\n%s",
-						i+1, shellName, formatFakeCalls(run.calls))
-				}
-
-				for _, field := range []string{"id", "type", "provisioningState"} {
-					if !strings.Contains(query, field) {
-						t.Errorf("call %d's --query keeps no %q under %s, want it: the program joins the configuration to its zone by the ID, and reads the provisioning state to decide dnssec\n%s",
-							i+1, field, shellName, formatFakeCalls(run.calls))
-					}
-				}
-
-				for _, field := range []string{"signingKeys", "publicKey", "delegationSignerInfo", "nameServers"} {
-					if strings.Contains(query, field) {
-						t.Errorf("call %d's --query keeps %q under %s, want no field of a zone's keys or its name servers: the configuration's signed state is all the program reads, and the keys are the zone's signing material (PRD #581)\n%s",
-							i+1, field, shellName, formatFakeCalls(run.calls))
-					}
-				}
-			}
-
-			want := []dnssecConfiguration{{
-				ID:                azureDNSSECSignedConfigID,
-				Type:              "Microsoft.Network/dnszones/dnssecConfigs",
-				ProvisioningState: "Succeeded",
-			}}
-
-			if diff := cmp.Diff(want, dnssecConfigurations(t, filepath.Join(run.outDir, azureDNSSECFile))); diff != "" {
-				t.Errorf("%s holds the wrong configurations under %s (-want +got):\n%s\nthe file holds one document per signed zone and nothing for an unsigned one, and no field beyond the three the --query keeps (PRD #581, milestone 4)",
-					azureDNSSECFile, shellName, diff)
+					assertAzureDNSSECRun(t, shellName, run, scenario.wantZones)
+				})
 			}
 		})
+	}
+}
+
+// assertAzureDNSSECRun checks one run of the guide's DNSSEC loop: it exited 0
+// whatever its last zone answered, it asked az about each of the page's public
+// zones in the page's order and about no private one, each call kept only the
+// three fields the program reads, and the file holds the signed zone's
+// configuration alone.
+func assertAzureDNSSECRun(t *testing.T, shellName string, run guideBlockRun, wantZones []string) {
+	t.Helper()
+
+	if run.exitStatus != 0 {
+		t.Errorf("the block exited %d under %s, want 0: an unsigned public zone answers (NotFound), which the guide says is expected, so the loop goes on to the zones after it, and the shell exits with the status of the loop's last command, whatever that zone answered; stderr = %q",
+			run.exitStatus, shellName, run.stderr)
+	}
+
+	// One call per public zone, in the page's order, and none for a private one:
+	// the unsigned zone, the zone whose zoneType the page leaves out, and the
+	// signed one, in whatever order the page puts them.
+	if len(run.calls) != len(wantZones) {
+		t.Fatalf("the block called az %d times under %s, want %d: the page holds one private dnszones zone, which no call may name, and three public ones, which each get one call\n%s",
+			len(run.calls), shellName, len(wantZones), formatFakeCalls(run.calls))
+	}
+
+	for i, wantZone := range wantZones {
+		call := run.calls[i]
+
+		for _, want := range []struct {
+			name  string
+			value string
+			why   string
+		}{
+			{"--zone-name", wantZone, "the public zone of the page, read out of it: a loop that read the line wrong asks about a zone that does not exist, and the zone loses its signed state"},
+			{"--resource-group", azureDNSSECResourceGroup, "the zone's resource group, which the DNSSEC call needs beside the zone's name"},
+			{"--output", "json", "the JSON output the program reads the provisioning state from"},
+		} {
+			if got, ok := passedFlag(call, want.name); !ok || got != want.value {
+				t.Errorf("call %d passes no %s %q under %s (got %q, passed = %t), want %s\n%s",
+					i+1, want.name, want.value, shellName, got, ok, want.why, formatFakeCalls(run.calls))
+			}
+		}
+
+		for _, word := range call {
+			for _, private := range []string{azureDNSSECPrivateLegacyZone, azureDNSSECPrivateZone} {
+				if strings.Contains(word, private) {
+					t.Errorf("call %d names the private zone %q under %s, want no private zone called: only a public zone is signed (PRD #581, milestone 4)\n%s",
+						i+1, private, shellName, formatFakeCalls(run.calls))
+				}
+			}
+		}
+
+		// The projection is what keeps a zone's keys out of the file: az
+		// filters on the client, after it read the whole configuration.
+		query, ok := passedFlag(call, "--query")
+		if !ok {
+			t.Fatalf("call %d passes no --query under %s, want one keeping the configuration's ID, its type and its provisioning state: without it the call writes the zone's signing keys to the file (PRD #581, milestone 4)\n%s",
+				i+1, shellName, formatFakeCalls(run.calls))
+		}
+
+		for _, field := range []string{"id", "type", "provisioningState"} {
+			if !strings.Contains(query, field) {
+				t.Errorf("call %d's --query keeps no %q under %s, want it: the program joins the configuration to its zone by the ID, and reads the provisioning state to decide dnssec\n%s",
+					i+1, field, shellName, formatFakeCalls(run.calls))
+			}
+		}
+
+		for _, field := range []string{"signingKeys", "publicKey", "delegationSignerInfo", "nameServers"} {
+			if strings.Contains(query, field) {
+				t.Errorf("call %d's --query keeps %q under %s, want no field of a zone's keys or its name servers: the configuration's signed state is all the program reads, and the keys are the zone's signing material (PRD #581)\n%s",
+					i+1, field, shellName, formatFakeCalls(run.calls))
+			}
+		}
+	}
+
+	want := []dnssecConfiguration{{
+		ID:                azureDNSSECSignedConfigID,
+		Type:              "Microsoft.Network/dnszones/dnssecConfigs",
+		ProvisioningState: "Succeeded",
+	}}
+
+	if diff := cmp.Diff(want, dnssecConfigurations(t, filepath.Join(run.outDir, azureDNSSECFile))); diff != "" {
+		t.Errorf("%s holds the wrong configurations under %s (-want +got):\n%s\nthe file holds one document per signed zone and nothing for an unsigned one, and no field beyond the three the --query keeps (PRD #581, milestone 4)",
+			azureDNSSECFile, shellName, diff)
 	}
 }
 
