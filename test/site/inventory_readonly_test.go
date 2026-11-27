@@ -858,6 +858,77 @@ func TestReadOnlyCheckFlagsPlantedWrites(t *testing.T) {
 		mutated:      fence("```bash", "```", `cli=aws; "$cli" ec2 create-tags --resources i-0123456789abcdef0`),
 		wantProblems: []string{`"$cli"`},
 	}, {
+		// A command the guide wraps after the CLI's name: the name is the line's
+		// last field, and the words that make it a write are on the next line.
+		name:         "a write a code span wraps after the CLI's name",
+		mutated:      appended("Tag it by hand with `aws", "ec2 create-tags --resources i-0123456789abcdef0`."),
+		wantProblems: []string{fmt.Sprintf(":%d: aws ec2 create-tags", plantedLine)},
+	}, {
+		name:         "a write prose wraps after the CLI's name",
+		mutated:      appended("Tag it by hand: aws", "ec2 create-tags --resources i-0123456789abcdef0"),
+		wantProblems: []string{fmt.Sprintf(":%d: aws ec2 create-tags", plantedLine)},
+	}, {
+		name:         "a write a text fence wraps after the CLI's name",
+		mutated:      appended("```text", `aws \`, " ec2 create-tags --resources i-0123456789abcdef0", "```"),
+		wantProblems: []string{fmt.Sprintf(":%d: aws ec2 create-tags", plantedLine+1)},
+	}, {
+		name:         "a write a heredoc wraps after the CLI's name",
+		mutated:      appended("```bash", "cat <<EOF | sh", `aws \`, " ec2 create-tags --resources i-0123456789abcdef0", "EOF", "```"),
+		wantProblems: []string{fmt.Sprintf(":%d: aws ec2 create-tags", plantedLine+2)},
+	}, {
+		// A read and a write on one line: the read's words must not pay for the
+		// write, wherever either stands.
+		name:         "a write before a read on one line",
+		mutated:      appended(`bash -c 'aws ec2 create-tags --resources i-0123456789abcdef0' && aws ec2 describe-instances`),
+		wantProblems: []string{fmt.Sprintf(":%d: aws ec2 create-tags", plantedLine)},
+	}, {
+		name:         "a write in an eval argument",
+		mutated:      appended(`eval "aws ec2 create-tags --resources i-0123456789abcdef0"`),
+		wantProblems: []string{fmt.Sprintf(":%d: aws ec2 create-tags", plantedLine)},
+	}, {
+		name:         "a write an xargs argument runs",
+		mutated:      appended(`xargs -r sh -c 'aws ec2 create-tags --resources i-0123456789abcdef0'`),
+		wantProblems: []string{fmt.Sprintf(":%d: aws ec2 create-tags", plantedLine)},
+	}, {
+		// A shell variable names what a denied flag names: the read passes no such
+		// flag, but the CLI reads the variable in its place.
+		name:         "a read whose endpoint a variable names",
+		mutated:      appended("AWS_ENDPOINT_URL=https://example.com aws ec2 describe-instances"),
+		wantProblems: []string{fmt.Sprintf(":%d: AWS_ENDPOINT_URL=", plantedLine)},
+	}, {
+		name:         "a read whose certificate bundle a variable names",
+		mutated:      appended("AWS_CA_BUNDLE=./ca.pem aws ec2 describe-instances"),
+		wantProblems: []string{fmt.Sprintf(":%d: AWS_CA_BUNDLE=", plantedLine)},
+	}, {
+		name:         "a read whose impersonation a variable names",
+		mutated:      appended("CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT=sa@example-project.iam.gserviceaccount.com gcloud compute instances list"),
+		wantProblems: []string{fmt.Sprintf(":%d: CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT=", plantedLine)},
+	}, {
+		name:         "a variable after the read it changes",
+		mutated:      appended("aws ec2 describe-instances AWS_ENDPOINT_URL=https://example.com"),
+		wantProblems: []string{fmt.Sprintf(":%d: AWS_ENDPOINT_URL=", plantedLine)},
+	}, {
+		// A denied flag spelt as the prefix az's and the CLIs' parsers complete.
+		name:         "an az rest whose resource flag is truncated",
+		mutated:      fence("```bash", "```", "az rest --method get --url https://management.azure.com/x --resou https://graph.microsoft.com"),
+		wantProblems: []string{fmt.Sprintf(":%d: az rest", plantedLine+1), "--resou"},
+	}, {
+		name:         "an az rest whose headers flag is truncated",
+		mutated:      fence("```bash", "```", "az rest --method get --url https://management.azure.com/x --head x=y"),
+		wantProblems: []string{fmt.Sprintf(":%d: az rest", plantedLine+1), "--head"},
+	}, {
+		name:         "an az rest whose body flag is truncated",
+		mutated:      fence("```bash", "```", "az rest --method get --url https://management.azure.com/x --bod {}"),
+		wantProblems: []string{fmt.Sprintf(":%d: az rest", plantedLine+1), "--bod"},
+	}, {
+		name:         "an aws read whose endpoint flag is truncated",
+		mutated:      fence("```bash", "```", "aws ec2 describe-instances --endpoint https://example.com"),
+		wantProblems: []string{fmt.Sprintf(":%d: aws ec2 describe-instances", plantedLine+1), "--endpoint"},
+	}, {
+		name:         "a gcloud read whose impersonation flag is truncated",
+		mutated:      fence("```bash", "```", "gcloud compute instances list --impersonate sa@example-project.iam.gserviceaccount.com"),
+		wantProblems: []string{fmt.Sprintf(":%d: gcloud compute instances list", plantedLine+1), "--impersonate"},
+	}, {
 		name:         "a fence label the check does not know",
 		mutated:      fence("```powershell", "```", "Get-EC2Instance -Region eu-central-1"),
 		wantProblems: []string{`"powershell"`},
@@ -959,6 +1030,21 @@ func TestCloudReadDecisions(t *testing.T) {
 		{cli: "gcloud", words: []string{"compute", "instances", "delete", "list"}, verb: "compute instances delete list"},
 		{cli: "gcloud", words: []string{"compute", "instances", "delete", "shop-web"}, verb: "compute instances delete shop-web"},
 		{cli: "gcloud", words: []string{"compute", "instances", "create", "shop-web"}, verb: "compute instances create shop-web"},
+		// A denied flag spelt as a prefix the CLIs' parsers complete, and the flags
+		// that point a CLI at input of the caller's choosing.
+		{cli: "aws", words: []string{"ec2", "describe-instances", "--endpoint", "https://example.com"}, verb: "ec2 describe-instances --endpoint"},
+		{cli: "aws", words: []string{"ec2", "describe-instances", "--cli-input-json", "./shop.json"}, verb: "ec2 describe-instances --cli-input-json"},
+		{cli: "aws", words: []string{"ec2", "describe-instances", "--cli-input-yaml", "./shop.yaml"}, verb: "ec2 describe-instances --cli-input-yaml"},
+		{cli: "az", words: []string{"rest", "--method", "get", "--url", "https://management.azure.com/x", "--resou", "https://graph.microsoft.com"}, verb: "rest --resou"},
+		{cli: "az", words: []string{"rest", "--method", "get", "--url", "https://management.azure.com/x", "--head", "x=y"}, verb: "rest --head"},
+		{cli: "az", words: []string{"rest", "--method", "get", "--url", "https://management.azure.com/x", "--bod", "{}"}, verb: "rest --bod"},
+		{cli: "gcloud", words: []string{"compute", "instances", "list", "--impersonate", "sa@example-project.iam.gserviceaccount.com"}, verb: "compute instances list --impersonate"},
+		{cli: "gcloud", words: []string{"compute", "instances", "list", "--flags-file", "./flags.yaml"}, verb: "compute instances list --flags-file"},
+		{cli: "gcloud", words: []string{"compute", "instances", "list", "--access-token-file", "./token"}, verb: "compute instances list --access-token-file"},
+		{cli: "gcloud", words: []string{"compute", "instances", "list", "--configuration", "shop"}, verb: "compute instances list --configuration"},
+		// A global flag before the command path is no read on purpose: a parser
+		// that reads the path past a flag could be run past a denied one.
+		{cli: "aws", words: []string{"--output", "json", "ec2", "describe-instances"}, verb: ""},
 	}
 
 	for _, tc := range tests {
