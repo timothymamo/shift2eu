@@ -8,7 +8,11 @@
 // monthly EUR list prices excluding VAT, converted from Scaleway's hourly
 // prices at 730 hours (ADR 0024). The adapter makes no network calls and needs
 // no credentials. SOURCES.md records where each offering, capability, region,
-// plan and price comes from, and the licence of each source.
+// plan and price comes from, and the licence of each source. The load
+// balancer and container registry offerings record no plan or price, and
+// Topics and Events and Serverless Containers are usage-priced (PRD 552);
+// the snapshot serves no storage.file, since Scaleway's File Storage mounts
+// over virtiofs, not NFS.
 //
 // catalog.json is a target catalog snapshot of schema version 2, the format
 // every target with an embedded snapshot shares (ADR 0007, ADR 0024).

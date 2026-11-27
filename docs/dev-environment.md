@@ -3225,7 +3225,7 @@ The deck does not start pi directly: the tester's `command` in `.dot-agent-deck.
   environment, so printing it shows only the DeepSeek key and the pane variables. They are not out of the
   tester's reach: it runs as the same user, so `daemon.env`, the App token file and other processes'
   `/proc/<pid>/environ` stay readable, guarded only by pi's refusal: its file tools refuse the App token
-  folder `~/.config/shift2eu` (by path, as an ancestor of a `grep` or `find`, and an `agents-app` glob) as
+  folder `~/.config/shift2eu` (by path and as an ancestor of a `grep` or `find`; a glob may name it) as
   they refuse the deck's, and its patterns refuse a command naming that folder, the token or identity file
   (`dev/agents-app-token.sh` stays allowed) or the marker `SHIFT2EU_PI_TESTER`, or starting a command with
   a cleared or fresh environment (`env -i`, `env -`, `exec -c`, `sudo -i`, `su -l`, `su -`); a program the
@@ -3244,7 +3244,7 @@ The refusal's limits and costs (ADR 0044, the amendment's consequences):
   `agents-app-identity` (not followed by `.` or a letter), `env -i`, `env -`, `sudo -i`, `su -l`, `su -`
   or `exec -c` is refused even as text (a bash `grep`, a `git commit -m`): use the grep tool and
   `git commit -F`. The grep and find tools may search the repository with a pattern
-  naming `agents-app` or the folder, but not with a glob naming them, nor with a path under or above
+  or glob naming `agents-app` or the folder (issue #691), but not with a path under or above
   `~/.config/shift2eu`.
 
 A changed tester command needs the maintainer's approval in the deck (`dot-agent-deck trust`) before a

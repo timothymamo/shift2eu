@@ -56,8 +56,12 @@ const (
 // deckConfigPath is the deck's configuration, whose tester role names the command the wrapper is for.
 const deckConfigPath = ".dot-agent-deck.toml"
 
-// The deck's tester role, by name.
-const deckTesterRole = "tester"
+// The deck's tester role, by name, and the agent it names: the wrapper's launcher name tells the deck nothing
+// about the agent behind it, so the role's agent line is the only place that says pi (issue #691).
+const (
+	deckTesterRole  = "tester"
+	deckTesterAgent = "pi"
+)
 
 // piTesterKept are the variables the wrapper must hand pi when the parent has them: pi's DeepSeek credential
 // (docs/adr/0003-pi-with-deepseek-for-the-tester-role.md), the non-secret basics, and the three deck variables
@@ -1186,11 +1190,21 @@ func TestLimaLoginProfileSkipsTheKeysOfTheTester(t *testing.T) {
 	}
 }
 
+// deckRoleSettingLine matches a `key = "value"` line of a role block of the deck's configuration, and the value
+// it holds.
+func deckRoleSettingLine(key string) *regexp.Regexp {
+	return regexp.MustCompile(`^` + regexp.QuoteMeta(key) + ` *= *"(.*)"$`)
+}
+
 // deckCommandLine matches the command line of a role block of the deck's configuration, and the command it holds.
-var deckCommandLine = regexp.MustCompile(`^command *= *"(.*)"$`)
+var deckCommandLine = deckRoleSettingLine("command")
+
+// deckAgentLine matches the agent line of a role block of the deck's configuration, and the agent it names.
+var deckAgentLine = deckRoleSettingLine("agent")
 
 // TestPiTesterCommandRunsTheLaunchWrapper pins the wiring: the deck's tester role runs the wrapper, not pi, or the
-// allow-listed environment and the fail-closed start above never happen (issue #662).
+// allow-listed environment and the fail-closed start above never happen (issue #662), and it names the agent the
+// deck cannot see behind that wrapper (issue #691).
 func TestPiTesterCommandRunsTheLaunchWrapper(t *testing.T) {
 	t.Parallel()
 
@@ -1205,11 +1219,31 @@ func TestPiTesterCommandRunsTheLaunchWrapper(t *testing.T) {
 		t.Errorf("%s: the %s role's command is %q, which still starts bare pi: the tester then runs with every credential of the deck's environment, and a failed load of the env-printing refusal leaves it running without one (issue #662, ADR 0044)",
 			deckConfigPath, deckTesterRole, command)
 	}
+
+	if agent := testerRoleAgent(t); agent != deckTesterAgent {
+		t.Errorf("%s: the %s role's agent is %q, want %q: the role starts %s, a launcher, and the deck cannot see the agent behind a launcher, so the agent line is the only place the deck learns the tester runs pi (issue #691, ADR 0044)",
+			deckConfigPath, deckTesterRole, agent, deckTesterAgent, piTesterScript)
+	}
 }
 
-// testerRoleCommand returns the tester role's command from the deck's configuration. The role blocks are split on
-// their table header, and the block named `tester` is the one holder of the command.
+// testerRoleCommand returns the tester role's command from the deck's configuration.
 func testerRoleCommand(t *testing.T) string {
+	t.Helper()
+
+	return testerRoleSetting(t, deckCommandLine)
+}
+
+// testerRoleAgent returns the tester role's agent from the deck's configuration.
+func testerRoleAgent(t *testing.T) string {
+	t.Helper()
+
+	return testerRoleSetting(t, deckAgentLine)
+}
+
+// testerRoleSetting returns one setting of the tester role from the deck's configuration, or the empty string when
+// the role block names it nowhere. The role blocks are split on their table header, and the block named `tester` is
+// the one holder of the setting; a setting it does not hold is reported by the test that asked for it.
+func testerRoleSetting(t *testing.T, line *regexp.Regexp) string {
 	t.Helper()
 
 	const roleHeader = "[[orchestrations.roles]]"
@@ -1221,13 +1255,13 @@ func testerRoleCommand(t *testing.T) string {
 			continue
 		}
 
-		for _, line := range strings.Split(block, "\n") {
-			if match := deckCommandLine.FindStringSubmatch(strings.TrimSpace(line)); match != nil {
+		for _, blockLine := range strings.Split(block, "\n") {
+			if match := line.FindStringSubmatch(strings.TrimSpace(blockLine)); match != nil {
 				return match[1]
 			}
 		}
 
-		t.Fatalf("%s: the %s role holds no command line", deckConfigPath, deckTesterRole)
+		return ""
 	}
 
 	t.Fatalf("%s: no role block is named %q", deckConfigPath, deckTesterRole)

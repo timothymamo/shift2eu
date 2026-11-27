@@ -3,7 +3,7 @@
 <ul role="list">
 <li>source <code>аws</code></li>
 <li><span aria-hidden="true">·</span> <code>unicode-lookalikes.json</code></li>
-<li><span aria-hidden="true">·</span> <a href="https://www.scaleway.com/en/pricing/" target="_blank" rel="noopener noreferrer">catalog retrieved 2026-11-13</a></li>
+<li><span aria-hidden="true">·</span> <a href="https://www.scaleway.com/en/pricing/" target="_blank" rel="noopener noreferrer">catalog retrieved 2026-11-26</a></li>
 <li><span aria-hidden="true">·</span> region <code>fr-par</code></li>
 </ul>
 <section class="part part-summary">
@@ -69,6 +69,6 @@
 <section class="part part-cost">
 <h3>Cost estimate</h3>
 <p><strong class="total">none of 4 resources could be estimated</strong> (size unknown)</p>
-<p>List prices in <code>fr-par</code> on 2026-11-13, excluding VAT and discounts.</p>
+<p>List prices in <code>fr-par</code> on 2026-11-26, excluding VAT and discounts.</p>
 </section>
 </section>

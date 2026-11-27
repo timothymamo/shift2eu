@@ -101,7 +101,7 @@ one. Its start looks like this:
 - Inventory file: `inventory.json`
 - Source: `aws`
 - Catalog: `OVHcloud` snapshot from `https://www.ovhcloud.com/en-ie/public-cloud/prices/`, retrieved 2026-11-25
-- Catalog: `Scaleway` snapshot from `https://www.scaleway.com/en/pricing/`, retrieved 2026-11-13
+- Catalog: `Scaleway` snapshot from `https://www.scaleway.com/en/pricing/`, retrieved 2026-11-26
 - Catalog: `UpCloud` snapshot from `https://upcloud.com/pricing/`, retrieved 2026-11-13
 - Region: `OVHcloud`: `GRA` (the target's default for estimates)
 - Region: `Scaleway`: `fr-par` (the target's default for estimates)

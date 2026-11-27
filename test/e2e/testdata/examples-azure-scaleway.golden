@@ -2,7 +2,7 @@
 
 - Inventory file: `inventory.json`
 - Source: `azure`
-- Catalog: `Scaleway` snapshot from `https://www.scaleway.com/en/pricing/`, retrieved 2026-11-13
+- Catalog: `Scaleway` snapshot from `https://www.scaleway.com/en/pricing/`, retrieved 2026-11-26
 - Region: `fr-par` (the target's default for estimates)
 
 ## Summary
@@ -10,8 +10,8 @@
 | Fit | Resources |
 |---|---|
 | direct | 6 |
-| partial | 3 |
-| none | 4 |
+| partial | 4 |
+| none | 3 |
 | total | 13 |
 
 ## Resources
@@ -24,7 +24,7 @@
 | `dns-shop` | `Microsoft.Network/dnsZones` | `unclassified` | none |  |  | not estimated: no fit |  | not classified |
 | `func-shop-thumbnails` | `Microsoft.Web/sites` | `serverless.function` | direct | `Serverless Functions` |  | not estimated: usage-priced | depends-on `stshopassets` | `Serverless Functions` offers every capability the resource uses |
 | `hdi-shop-events` | `Microsoft.HDInsight/clusters` | `messaging.kafka` | none |  |  | not estimated: no fit |  | no offering in the `Scaleway` catalog for `messaging.kafka` |
-| `lb-shop-web` | `Microsoft.Network/loadBalancers` | `network.loadbalancer` | none |  |  | not estimated: no fit |  | no offering in the `Scaleway` catalog for `network.loadbalancer` |
+| `lb-shop-web` | `Microsoft.Network/loadBalancers` | `network.loadbalancer` | partial | `Load Balancer` |  | not estimated: not priced |  | `Load Balancer` does not offer `udp`; `Load Balancer` does not offer `zone-high-availability` |
 | `mysql-shop-catalog` | `Microsoft.DBforMySQL/flexibleServers` | `database.mysql` | partial | `Managed Database for PostgreSQL and MySQL High Availability` | `DB-PRO2-XXS` (2 vCPU, 8 GiB) | €67.78 (count assumed 1) (730 hours assumed) |  | `Managed Database for PostgreSQL and MySQL High Availability` does not offer `point-in-time-restore` |
 | `psql-shop` | `Microsoft.DBforPostgreSQL/flexibleServers` | `database.postgresql` | partial | `Managed Database for PostgreSQL and MySQL High Availability` | `DB-PRO2-XXS` (2 vCPU, 8 GiB) | €86.85 (count assumed 1) (730 hours assumed) |  | `Managed Database for PostgreSQL and MySQL High Availability` does not offer `point-in-time-restore` |
 | `sb-shop-orders` | `Microsoft.ServiceBus/namespaces/queues` | `messaging.queue` | direct | `Queues` |  | not estimated: usage-priced |  | `Queues` offers every capability the resource uses |
@@ -34,6 +34,7 @@
 
 ## Required changes
 
+- `lb-shop-web`: `udp`, `zone-high-availability` (not offered by `Load Balancer`)
 - `mysql-shop-catalog`: `point-in-time-restore` (not offered by `Managed Database for PostgreSQL and MySQL High Availability`)
 - `psql-shop`: `point-in-time-restore` (not offered by `Managed Database for PostgreSQL and MySQL High Availability`)
 - `vmss-shop-web`: `autoscaling`, `zone-high-availability` (not offered by `Instances`)
@@ -43,32 +44,30 @@
 - `cdn-shop`: not classified
 - `dns-shop`: not classified
 - `hdi-shop-events`: no offering in the `Scaleway` catalog for `messaging.kafka`
-- `lb-shop-web`: no offering in the `Scaleway` catalog for `network.loadbalancer`
 
 ## Workloads
 
 ### `catalog`
 
 - Fit: 0 direct, 1 partial, 0 none
-- Monthly estimate: €67.78 per month for 1 of 1 resource, list prices on 2026-11-13, excluding VAT and discounts
+- Monthly estimate: €67.78 per month for 1 of 1 resource, list prices on 2026-11-26, excluding VAT and discounts
 - Source cost: none in the inventory
 - Blockers: none
 
 ### `shop`
 
-- Fit: 6 direct, 2 partial, 4 none
-- Monthly estimate: €462.49 per month for 6 of 12 resources (storage not included in 3 estimates), list prices on 2026-11-13, excluding VAT and discounts
+- Fit: 6 direct, 3 partial, 3 none
+- Monthly estimate: €462.49 per month for 6 of 12 resources (storage not included in 3 estimates), list prices on 2026-11-26, excluding VAT and discounts
 - Source cost: `EUR` €379.97 for 3 of 12 resources
 - Blockers:
   - `cdn-shop`: not classified
   - `dns-shop`: not classified
   - `hdi-shop-events`: no offering in the `Scaleway` catalog for `messaging.kafka`
-  - `lb-shop-web`: no offering in the `Scaleway` catalog for `network.loadbalancer`
 
 ## Cost estimate
 
 - Total: €530.27 per month for 7 of 13 resources (storage not included in 3 estimates)
-- Estimate: list prices on 2026-11-13, excluding VAT and discounts; a fixed fee is the offering's listed fee
+- Estimate: list prices on 2026-11-26, excluding VAT and discounts; a fixed fee is the offering's listed fee
 - Prices in `fr-par`
 - Hours: plan price × count × hours / 730, 730 hours for a resource that gives none
 - Source cost: `EUR` €379.97 for 3 of 13 resources

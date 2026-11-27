@@ -278,11 +278,18 @@ both now (options 1 and 3 of the issue). The decision above stands; this adds a 
 - **The refusal covers the App's token folder and the marker.** The extension's file tools refuse
   `~/.config/shift2eu`, the folder of the agents App's token file `agents-app-token` (ADR 0031), as they
   refuse the deck's key directory: by resolved path (`~/`, absolute, `file://`) and anything under it, as an
-  ancestor of a `grep` or `find` (`~`, `~/.config`), by its spellings in a `path` or `glob`, and a `glob`
-  naming the App's files (`agents-app`). A `grep` or `find` *pattern* may name the folder or the files: a
-  pattern is text the walk looks for, never a place it goes, and where the walk goes is its `path`, which
-  stays checked (round 3's review, finding S1). The repository's `dev/agents-app-token.sh`, which mints
-  the token and holds none, stays readable. The list refuses any bash command naming the folder
+  ancestor of a `grep` or `find` (`~`, `~/.config`), and by its spellings in a `path`. A `grep` or `find`
+  *pattern* or `glob` may name the folder or the files: a pattern is text the walk looks for and a glob
+  only filters the names the walk reports, neither is a place it goes, and where the walk goes is its
+  `path`, which stays checked, with its ancestors (round 3's review, finding S1). The `glob` is no longer
+  checked for the App's folder or files (issue #691): a lexical glob check added cost and no boundary, since
+  pi's grep and find do not follow symlinks, so a walk whose path is neither the folder, under it nor an
+  ancestor of it never reaches the token, whatever its glob (symlinks aside: a path that is itself a symlink
+  to the folder or an ancestor is a limit documented below, in the amendment's consequences). The deck's
+  key-file checks (`daemon.env`, `.config/dot-agent-deck`) on a `glob` and a `pattern` are kept unchanged:
+  they err strict, and issue #691 covered the App's token alone; a follow-up may relax them the same way.
+  The repository's `dev/agents-app-token.sh`, which mints the token and holds none, stays
+  readable. The list refuses any bash command naming the folder
   (`\.config[/.]*/shift2eu\b`: the file, a glob, a `cd`, an `ls`), naming the token or identity file other
   than as the script (`agents-app-(token|identity)($|[^.a-z])`: `find ~ -name agents-app-token`, a globbed
   or quoted folder spelling, while `sed` or `shellcheck` of `dev/agents-app-token.sh` stays allowed), and
@@ -335,7 +342,7 @@ Consequences of the amendment:
   `agents-app-token` or `agents-app-identity` (not followed by `.` or a letter), `env -i`, `env -`,
   `sudo -i`, `su -l`, `su -` or `exec -c` is refused, even as text: a bash `grep` for it, or a
   `git commit -m` whose message names it; the tester uses the grep tool and `git commit -F` instead. The grep and find tools may search the repository for `agents-app` or the folder,
-  but not with a glob naming them or a path under, or above, the folder. The folder pattern's `\b` also
+  with a pattern or a glob naming them (issue #691), but not with a path under, or above, the folder. The folder pattern's `\b` also
   refuses a name such as `~/.config/shift2eu-other`, which is harmless.
 - The tester still reaches GitHub: the VM's `gh` (ADR 0031) reads the agents App's token from its file
   under `HOME`, not from the environment, so `gh` and `git push` keep working for it.
