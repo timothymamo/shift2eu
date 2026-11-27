@@ -880,6 +880,17 @@ func TestReadOnlyCheckFlagsPlantedWrites(t *testing.T) {
 		mutated: appended(`: "${AWS_ENDPOINT_URL:=https://example.com}"`, "aws ec2 describe-instances"),
 		want:    []string{at(plantedLine, "AWS_ENDPOINT_URL")},
 	}, {
+		// An expansion operator with a word after it: the name the scan reads ends
+		// at the first of `:-+?`, so the word the operator's branch writes is no
+		// part of the name it compares.
+		name:    "an endpoint defaulted through an expansion that gives a fallback",
+		mutated: appended(`: "${AWS_ENDPOINT_URL:-https://example.com}"`, "aws ec2 describe-instances"),
+		want:    []string{at(plantedLine, "AWS_ENDPOINT_URL")},
+	}, {
+		name:    "a certificate bundle expanded only when a word is set",
+		mutated: appended(`echo ${AZURE_CONFIG_DIR+set}`),
+		want:    []string{at(plantedLine, "AZURE_CONFIG_DIR")},
+	}, {
 		name:    "a certificate bundle exported on a line of its own",
 		mutated: appended("export AWS_CA_BUNDLE=./corp.pem", "aws ec2 describe-instances"),
 		want:    []string{at(plantedLine, "AWS_CA_BUNDLE")},
@@ -947,6 +958,14 @@ func TestReadOnlyCheckFlagsPlantedWrites(t *testing.T) {
 	}, {
 		name:    "an az rest whose second method a code span wraps",
 		mutated: appended("Or `az rest --method get --url https://management.azure.com/x", "--method post`."),
+		want:    []string{at(plantedLine, "az rest")},
+	}, {
+		// The next line's own scan keeps a comment marker's `#aws` as one field,
+		// which names no CLI, so the line is no command of its own: the two lines
+		// are one sequence, and the second method the text wraps onto the line is
+		// read where it belongs.
+		name:    "an az rest whose second method a comment marker joins",
+		mutated: appended("Or `az rest --method get --url https://management.azure.com/x", "#aws --method put`."),
 		want:    []string{at(plantedLine, "az rest")},
 	}, {
 		name:    "an az rest whose address a code span wraps",
