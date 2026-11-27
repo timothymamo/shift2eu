@@ -752,6 +752,8 @@ func TestLimaPiTesterStepLeavesAnInstalledCopyAlone(t *testing.T) {
 
 			for _, file := range files {
 				switch file.before {
+				case piTesterStepAbsent:
+					// Nothing to write: the root starts with no copy of this file, as a VM created from the template does.
 				case piTesterStepChanged:
 					// The copy a maintainer's make vm-pi-tester left, which a boot must not replace.
 					writeFileMode(t, file.path, []byte(changed), file.mode)
@@ -788,21 +790,22 @@ func TestLimaPiTesterStepLeavesAnInstalledCopyAlone(t *testing.T) {
 					}
 
 					continue
-				}
+				case piTesterStepTemplate:
+					// The template's own copy, byte for byte and with its mode.
+					info, err := os.Stat(file.path)
+					if err != nil {
+						t.Fatalf("the provisioning step installed no %s at %s although %s: a VM created from the template gets all three files from it (issue #692, round 3): %v\noutput: %s",
+							file.name, file.path, tc.why, err, out)
+					}
 
-				info, err := os.Stat(file.path)
-				if err != nil {
-					t.Fatalf("the provisioning step installed no %s at %s although %s: a VM created from the template gets all three files from it (issue #692, round 3): %v\noutput: %s",
-						file.name, file.path, tc.why, err, out)
-				}
+					if want := readRepoFile(t, file.source); string(got) != want {
+						t.Errorf("the provisioning step left %s as %q, want %s byte for byte, although %s: when the wrapper is absent the step installs all three from the template, the two deny files too, so a destination that holds a deny file and no wrapper gets the template's copy (issue #692, round 3)\noutput: %s",
+							file.name, string(got), file.source, tc.why, out)
+					}
 
-				if want := readRepoFile(t, file.source); string(got) != want {
-					t.Errorf("the provisioning step left %s as %q, want %s byte for byte, although %s: when the wrapper is absent the step installs all three from the template, the two deny files too, so a destination that holds a deny file and no wrapper gets the template's copy (issue #692, round 3)\noutput: %s",
-						file.name, string(got), file.source, tc.why, out)
-				}
-
-				if perm := info.Mode().Perm(); perm != file.mode {
-					t.Errorf("the provisioning step installed %s as mode %04o, want %04o: the tester runs the wrapper, and reads the two refusal files (issue #692)", file.name, perm, file.mode)
+					if perm := info.Mode().Perm(); perm != file.mode {
+						t.Errorf("the provisioning step installed %s as mode %04o, want %04o: the tester runs the wrapper, and reads the two refusal files (issue #692)", file.name, perm, file.mode)
+					}
 				}
 			}
 		})
