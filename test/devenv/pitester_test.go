@@ -138,9 +138,10 @@ const piTesterExecLine = `allowlisted exec "${pi}" --no-approve --no-extensions 
 const piTesterOldExecLine = `allowlisted exec "${pi}" --extension "${extension}" "$@"`
 
 // piTesterDeckDir returns where the deck writes its pi extension, as the wrapper names it: under HOME, never under
-// PI_CODING_AGENT_DIR, which the wrapper's allow list does not hand pi (issue #702).
+// PI_CODING_AGENT_DIR, which the wrapper's allow list does not hand pi (issue #702). It is spelled as HOME is, since
+// the wrapper and its refusal name the path they built, so a HOME carrying a `.` or a `//` shows through.
 func piTesterDeckDir(home string) string {
-	return filepath.Join(home, ".pi", "agent", "extensions", "dot-agent-deck")
+	return home + "/.pi/agent/extensions/dot-agent-deck"
 }
 
 // piTesterAgentDir returns the directory the wrapper refuses when pi's own agent directory could be the unit
@@ -1643,6 +1644,11 @@ func piTesterAgentRefusal(agent, why string) string {
 // extension lies in - before the deck's own path, and a HOME spelled with `/./`, `//` or through a link reaches it
 // as the unit folder's. So the two cases whose HOME is the unit folder or lies below it now stop at that refusal,
 // while every other case here keeps pi's agent directory a real one under a HOME outside the unit folder.
+//
+// One case pins the other half: the deck's own check against the working directory's physical path. pi starts in a
+// link to ${HOME}/.pi/agent/extensions, so the deck's directory lies in the unit folder physically - but the deck's
+// spelling is no prefix of the shell's resolved PWD, whose HOME carries a `.`, and pi's agent directory is that
+// folder's parent, so nothing before the physical check refuses it (issue #702, round 2).
 func TestPiTesterRefusesADeckExtensionItCannotUse(t *testing.T) {
 	t.Parallel()
 
@@ -1667,6 +1673,9 @@ func TestPiTesterRefusesADeckExtensionItCannotUse(t *testing.T) {
 		name string
 		// home returns the HOME the wrapper is handed, after laying the deck's path out as the case leaves it.
 		home func(t *testing.T, root, project string) string
+		// dir, when set, returns the directory pi starts in, when that is not the unit folder the test writes: the
+		// deck's checks compare its path with the working directory's, which a case moves or reaches through a link.
+		dir func(t *testing.T, root, home, project string) string
 		// why is the condition the refusal line names; empty means the case starts pi.
 		why string
 		// agent says the refusal is pi's agent directory's, which the wrapper checks before the deck's extension: the
@@ -1779,6 +1788,27 @@ func TestPiTesterRefusesADeckExtensionItCannotUse(t *testing.T) {
 			agent: true,
 		},
 		{
+			name: "pi's working directory is a link to the folder the deck's directory lies in",
+			// Only the physical in-unit check reaches this one: pi starts in a link to the folder the deck's directory
+			// lies in, and HOME's `.` keeps the deck's spelling off the shell's resolved working directory.
+			home: func(t *testing.T, root, _ string) string {
+				t.Helper()
+
+				home := filepath.Join(root, "home")
+				deckFile(t, home, "index.ts")
+
+				if err := os.Symlink(filepath.Join(piTesterAgentDir(home), "extensions"), filepath.Join(root, "unit-link")); err != nil {
+					t.Fatalf("link %s to %s, the folder the deck's directory lies in: %v", filepath.Join(root, "unit-link"), filepath.Join(piTesterAgentDir(home), "extensions"), err)
+				}
+
+				return filepath.Dir(home) + "/./" + filepath.Base(home)
+			},
+			dir: func(_ *testing.T, root, _, _ string) string {
+				return filepath.Join(root, "unit-link")
+			},
+			why: inUnit,
+		},
+		{
 			name: "the deck holds only index.ts",
 			home: func(t *testing.T, root, _ string) string {
 				t.Helper()
@@ -1859,7 +1889,12 @@ func TestPiTesterRefusesADeckExtensionItCannotUse(t *testing.T) {
 
 			home := tc.home(t, root, project)
 
-			stdout, stderr, err := runPiTester(t, installed.script, project, piTesterArgs, piTesterEnv(binDir, home, piTesterBasePath(t)))
+			dir := project
+			if tc.dir != nil {
+				dir = tc.dir(t, root, home, project)
+			}
+
+			stdout, stderr, err := runPiTester(t, installed.script, dir, piTesterArgs, piTesterEnv(binDir, home, piTesterBasePath(t)))
 
 			if tc.why == "" {
 				if err != nil {
@@ -1901,8 +1936,9 @@ func TestPiTesterRefusesADeckExtensionItCannotUse(t *testing.T) {
 // ${HOME}/.pi/agent holds the settings, the models and the system prompt pi trusts whatever --no-approve and
 // --no-extensions say, so a symlinked ~/.pi or ~/.pi/agent, a missing agent directory, or one that is the unit folder
 // a branch writes must stop the tester. A string comparison against PWD alone misses the last one: a HOME spelled
-// `<unit>/./h` or `<unit>//h`, or a unit folder reached through a link, is physically the unit folder and textually
-// not. The wrapper fails closed with one line and pi never starts.
+// `<parent>/./<unit>/h`, `<parent>//<unit>/h` or `<parent>/beside/../<unit>/h` - the dots in or beside the unit
+// folder's own path, which a string prefix of it passes - or a unit folder reached through a link, is physically the
+// unit folder and textually not. The wrapper fails closed with one line and pi never starts.
 func TestPiTesterRefusesAnAgentDirectoryThatCouldBeTheUnitFolder(t *testing.T) {
 	t.Parallel()
 
@@ -1977,24 +2013,43 @@ func TestPiTesterRefusesAnAgentDirectoryThatCouldBeTheUnitFolder(t *testing.T) {
 			why: missing,
 		},
 		{
-			name: "HOME is spelled with a . under the unit folder",
+			name: "HOME is spelled with a . in the unit folder's own path",
 			layout: func(t *testing.T, _, project string) (string, string) {
 				t.Helper()
 
 				writePiTesterDeck(t, filepath.Join(project, "h"))
 
-				return project, project + "/./h"
+				return project, filepath.Dir(project) + "/./" + filepath.Base(project) + "/h"
 			},
 			why: inUnit,
 		},
 		{
-			name: "HOME is spelled with a // under the unit folder",
+			name: "HOME is spelled with a // in the unit folder's own path",
 			layout: func(t *testing.T, _, project string) (string, string) {
 				t.Helper()
 
 				writePiTesterDeck(t, filepath.Join(project, "h"))
 
-				return project, project + "//h"
+				return project, filepath.Dir(project) + "//" + filepath.Base(project) + "/h"
+			},
+			why: inUnit,
+		},
+		{
+			name: "HOME is spelled with a .. beside the unit folder",
+			layout: func(t *testing.T, _, project string) (string, string) {
+				t.Helper()
+
+				writePiTesterDeck(t, filepath.Join(project, "h"))
+
+				// The step out has to leave from a real directory beside the unit folder, or `cd -P` would fail on the
+				// way and the wrapper would refuse for that reason instead of the physical one. Stepping out and back in
+				// is what a string prefix of the unit folder passes: `<unit>/../<unit>/h` starts with `<unit>/`.
+				beside := filepath.Join(filepath.Dir(project), "beside")
+				if err := os.MkdirAll(beside, 0o700); err != nil {
+					t.Fatalf("create %s, the directory the .. spelling steps out of: %v", beside, err)
+				}
+
+				return project, beside + "/../" + filepath.Base(project) + "/h"
 			},
 			why: inUnit,
 		},
