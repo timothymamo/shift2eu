@@ -13,8 +13,8 @@
   "summary": {
     "direct": 6,
     "partial": 9,
-    "none": 3,
-    "total": 18
+    "none": 4,
+    "total": 19
   },
   "resources": [
     {
@@ -184,6 +184,26 @@
       "requiredChanges": [
         "point-in-time-restore"
       ],
+      "relations": [],
+      "affectedBy": []
+    },
+    {
+      "id": "shop-log-search",
+      "rawType": "AWS::OpenSearchService::Domain",
+      "category": "search.opensearch",
+      "region": "eu-central-1",
+      "fit": "none",
+      "bestOffering": "",
+      "ties": [],
+      "reasons": [
+        {
+          "code": "no-offering",
+          "text": "no offering in the Scaleway catalog for search.opensearch",
+          "target": "Scaleway",
+          "category": "search.opensearch"
+        }
+      ],
+      "requiredChanges": [],
       "relations": [],
       "affectedBy": []
     },
@@ -460,6 +480,15 @@
       }
     },
     {
+      "resourceId": "shop-log-search",
+      "reason": {
+        "code": "no-offering",
+        "text": "no offering in the Scaleway catalog for search.opensearch",
+        "target": "Scaleway",
+        "category": "search.opensearch"
+      }
+    },
+    {
       "resourceId": "shop-product-search",
       "reason": {
         "code": "no-offering",
@@ -500,14 +529,23 @@
     {
       "name": "shop",
       "noWorkload": false,
-      "resources": 14,
+      "resources": 15,
       "summary": {
         "direct": 4,
         "partial": 8,
-        "none": 2,
-        "total": 14
+        "none": 3,
+        "total": 15
       },
       "blockers": [
+        {
+          "resourceId": "shop-log-search",
+          "reason": {
+            "code": "no-offering",
+            "text": "no offering in the Scaleway catalog for search.opensearch",
+            "target": "Scaleway",
+            "category": "search.opensearch"
+          }
+        },
         {
           "resourceId": "shop-product-search",
           "reason": {

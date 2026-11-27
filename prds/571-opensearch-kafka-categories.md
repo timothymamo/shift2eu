@@ -1,6 +1,6 @@
 # PRD #571: OpenSearch and Kafka as taxonomy categories
 
-**Status:** In progress, milestones 1 to 4 done. The maintainer decided all six questions under *Decisions and
+**Status:** In progress, milestones 1 to 5 done. The maintainer decided all six questions under *Decisions and
 decided questions* on 2026-11-25, as recommended. Milestone 1's ADR is
 [0047](../docs/adr/0047-add-search-opensearch-and-messaging-kafka-and-price-their-storage-per-node.md).
 **Issue:** #571
@@ -162,6 +162,11 @@ UpCloud from `upcloud.com/docs/`. The catalog milestones read each page again an
     as options. <https://docs.ovhcloud.com/en/guides/public-cloud/databases/kafka-capabilities>. Whether
     the 3-AZ and encryption pages above, written for Public Cloud Databases, also cover Kafka, now under
     "Public Cloud Analytics", is to be checked (milestone 5).
+  - *Note (milestone 5, 2026-11-27):* OVHcloud now files both products under **Analytics**; the
+    Databases capabilities page above no longer names OpenSearch, and the catalog cites the Analytics
+    family's capabilities, deployment modes and security pages instead
+    (<https://docs.ovhcloud.com/en/guides/public-cloud/data-analytics/analytics/capabilities> and its
+    siblings), which name Kafka and OpenSearch.
   - **Scaleway, general availability not confirmed.** Clusters for Apache Kafka® exists in the
     documentation (posted 2025-09-15, validated 2026-06-19): 1 to 30 nodes, in multiples of 3 except
     one; Single-AZ and Multi-AZ ("replicate three nodes over two Availability Zones"; changelog
@@ -480,7 +485,7 @@ lands, its report shows the new categories as fit `none` with "no offering in th
    Event Hubs namespaces stay `unclassified`, with the hand rule; synthetic sanitised fixtures (all-zero
    GUIDs), the test that they carry no excluded key, golden and the Azure entries of the e2e category
    list. Depends on 1 and PRD #552 milestone 4.
-5. [ ] **OVHcloud catalog.** Offerings for `search.opensearch` (Discovery, Production and Advanced, with
+5. [x] **OVHcloud catalog.** Offerings for `search.opensearch` (Discovery, Production and Advanced, with
    3-AZ variants of Production and Advanced if milestone 5's check confirms them) and `messaging.kafka`
    (Production and Advanced, Gen 3; Gen 2 Business and Enterprise only if the prices page still sells
    them; 3-AZ variants if the zone continuity sentence covers Kafka), with plans and per-node prices,
@@ -492,6 +497,43 @@ lands, its report shows the new categories as fit `none` with "no offering in th
    maintainer into a scratch directory outside the repository, never committed (as milestones 6 and 7
    say). An existing price or plan the re-read page shows changed is updated to its current value.
    Depends on 1.
+   *Done (2026-11-27):* five offerings, *Analytics for OpenSearch* (Discovery and Gen 2 Essential),
+   *Analytics for OpenSearch Multi-node* (Production and Gen 2 Business) and its *3-AZ* form
+   (Production), *Analytics for Kafka* (Production and Gen 2 Business) and its *3-AZ* form (Production);
+   the pages answered an anonymous client, and no existing price or plan changed. **Advanced (and Gen 2
+   Enterprise) get no offering**, on either engine: they add no capability the vocabulary holds (6
+   nodes, longer backup retention, a higher SLA), and the catalog has no node-count or retention field
+   by which a resource could prefer them over the Production plan with the same per-node flavour, so the
+   tier-variant rule (ADR 0011) leaves them out (OVHcloud `SOURCES.md`, *Left out on purpose*).
+   **The Analytics pages are cited:** OVHcloud now files OpenSearch and Kafka under Analytics, and the
+   Databases capabilities page cited under *The target offerings* no longer names OpenSearch; the
+   Analytics capabilities, deployment modes, security, backups and pricing pages are the sources.
+   **A second sample search cluster:** the AWS sample's `shop-product-search` is zone-redundant, so
+   its best OVHcloud offering is the *3-AZ* form, which is not sold in `GRA`, and it gets no estimate
+   there, on purpose. `examples/aws/inventory.json` gains `shop-log-search`, a sized OpenSearch domain of
+   three nodes without `zone-high-availability`, so the sample also shows an OpenSearch estimate in `GRA` (*Analytics for OpenSearch
+   Multi-node*, `Production B3-8`, €503.92 a month); the sample's counts go from 18 to 19 resources.
+   Milestone 5's decisions, which OVHcloud's `SOURCES.md` and the adapter's tests cite as "PRD #571
+   milestone 5, decision D<n>" (they are not the numbered decided questions below):
+   - **D1. Advanced and Enterprise get no offering.** Under the tier-variant rule (ADR 0011): they add
+     only 6 nodes, longer backup retention and a higher SLA, none of which is a capability in the
+     vocabulary, and the catalog has no node-count or retention field, so an Advanced plan could never
+     be chosen over the Production plan with the same per-node flavour.
+   - **D2. Gen 2 flavours are included, and included storage is per node.** Gen 2 (Essential, Business)
+     is priced in `GRA`, `LIM`, `SBG` and `WAW` only. Where the page's "Usable storage" lower bound is
+     the cluster's total, the per-node figure is derived as the lower bound ÷ the nodes, and recorded
+     as derived. At one node (Discovery and Essential) the lower bound is the node's storage either
+     way, so it is recorded as is; the product page's Discovery card says "1 node included … 40 GB
+     storage". Kafka's Gen 3 lower bound is per node (the pricing guide's worked example). The 3-node
+     OpenSearch Gen 3 (Production) plans get no included storage: no OpenSearch page states their
+     range per node.
+   - **D3. The Analytics pages are cited**, not the Databases pages, for capabilities, deployment
+     modes, security, backups and pricing.
+   - **D4. Storage is priced per GiB per node**, the hourly price × 730, multiplied by `count` in the
+     estimate and never by the tier's node count.
+   - **D5. Five offerings**, named tier variant first, then `3-AZ`: *Analytics for OpenSearch*,
+     *Analytics for OpenSearch Multi-node*, *Analytics for OpenSearch Multi-node 3-AZ*, *Analytics
+     for Kafka* and *Analytics for Kafka 3-AZ*.
 6. [ ] **UpCloud catalog.** Offerings for `search.opensearch`: Managed OpenSearch (1 node) and a
    multi-node variant with `node-high-availability`, `encryption-at-rest` and `snapshots` (the backups
    page; to be checked that a restorable backup meets the `snapshots` definition, as for OVHcloud), in
@@ -819,6 +861,16 @@ text as the decision)
 - Milestone 5: whether the 3-AZ continuity and encryption-at-rest pages cover Kafka under "Public Cloud
   Analytics"; whether the prices page still sells Gen 2 Kafka plans; that the OpenSearch and Kafka
   prices are per node and give vCPUs, memory and storage per node.
+  *Checked (2026-11-27):* both pages are covered by their Analytics copies, which name Kafka ("For all
+  the Analytics engines such as Kafka, OpenSearch and so on, at-rest data encryption covers…"; "Multi-node
+  Analytics service is deployed across three independent availability zones, ensuring service
+  continuity even if one zone experiences an outage"), so Kafka lists `encryption-at-rest` and has a
+  *3-AZ* form with `zone-high-availability`. Gen 2 Kafka Business (and Enterprise) is still sold, in
+  `GRA`, `LIM`, `SBG` and `WAW`, and is recorded (Business). Prices, vCPUs and memory are per node
+  ("Price(excl. VAT/hour/node)", "Information per node"). Storage: Kafka Gen 3's "Usable storage" lower
+  bound is per node (the Analytics pricing guide bills "× 3 nodes"); Gen 2's is the cluster's total, so
+  its per-node figure is derived (÷ the tier's nodes); OpenSearch Gen 3's is not stated per node and is
+  not recorded (0 included).
 - Milestone 6: UpCloud's OpenSearch prices per plan, converted per node, and whether a backup restorable
   to a new service meets `snapshots`.
 - Milestone 7: Scaleway's general availability of both products; their regions; their node types'

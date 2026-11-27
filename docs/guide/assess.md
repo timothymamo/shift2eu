@@ -80,7 +80,7 @@ one. Its start looks like this:
 
 - Inventory file: `inventory.json`
 - Source: `aws`
-- Catalog: `OVHcloud` snapshot from `https://www.ovhcloud.com/en-ie/public-cloud/prices/`, retrieved 2026-11-25
+- Catalog: `OVHcloud` snapshot from `https://www.ovhcloud.com/en-ie/public-cloud/prices/`, retrieved 2026-11-27
 - Catalog: `Scaleway` snapshot from `https://www.scaleway.com/en/pricing/`, retrieved 2026-11-26
 - Catalog: `UpCloud` snapshot from `https://upcloud.com/pricing/`, retrieved 2026-11-27
 - Region: `OVHcloud`: `GRA` (the target's default for estimates)
@@ -203,18 +203,18 @@ priced.
   `count` that is not given is taken as 1, and an `hoursPerMonth` that is not given as 730; the cell
   says "(count assumed 1)" or "(730 hours assumed)". Amounts are rounded to the cent only when shown.
 - **Storage not included.** Some plans include no disk: their storage is sold per GiB apart from the
-  plan (OVHcloud Gen 3 Instances and Managed Kubernetes nodes, Scaleway Instances, Kubernetes Kapsule
-  nodes and Managed Databases, UpCloud Cloud Native servers and Managed MySQL and PostgreSQL). For a
-  resource that gives no `storageGiB` on such a plan, the estimate is the plan alone and the cell says
-  so: "(boot volume not included)" for a server or Kubernetes node (`compute.vm`, `compute.baremetal`,
-  `kubernetes.managed`), "(data storage not included)" for a managed database (`database.*`), a search
-  cluster (`search.opensearch`) or a Kafka cluster (`messaging.kafka`). No size is guessed: give
-  `storageGiB` and the storage is priced, and the note goes; `storageGiB: 0` says the resource needs
-  none. A total counts the estimates that carry the note, "€587.58 per month for 8 of 13 resources
-  (storage not included in 4 estimates)". In the JSON report the estimate carries
-  `"storageNotIncluded": "boot-volume"` or `"data-storage"` (accept any other value too), and the
-  total `"storageNotIncluded"` with the count; both are left out when there is nothing to say
-  ([ADR 0032](../adr/0032-say-when-an-estimate-leaves-out-storage-its-plan-does-not-include.md)).
+  plan (OVHcloud Gen 3 Instances, Managed Kubernetes nodes and the 3-node OpenSearch Gen 3 Production
+  plans, Scaleway Instances, Kubernetes Kapsule nodes and Managed Databases, UpCloud Cloud Native
+  servers and Managed MySQL and PostgreSQL). For a resource that gives no `storageGiB` on such a plan,
+  the estimate is the plan alone and the cell says so: "(boot volume not included)" for a server or
+  Kubernetes node (`compute.vm`, `compute.baremetal`, `kubernetes.managed`), "(data storage not
+  included)" for a managed database (`database.*`), a search cluster (`search.opensearch`) or a Kafka
+  cluster (`messaging.kafka`). No size is guessed: give `storageGiB` and the storage is priced, and the
+  note goes; `storageGiB: 0` says the resource needs none. A total counts the estimates that carry the
+  note, "€587.58 per month for 8 of 19 resources (storage not included in 4 estimates)". In the JSON
+  report the estimate carries `"storageNotIncluded": "boot-volume"` or `"data-storage"` (accept any
+  other value too), and the total `"storageNotIncluded"` with the count; both are left out when there
+  is nothing to say ([ADR 0032](../adr/0032-say-when-an-estimate-leaves-out-storage-its-plan-does-not-include.md)).
 - **Hourly prices.** A target that publishes hourly prices has them converted at 730 hours a month in
   its snapshot. UpCloud bills a server at most 672 hours a month, so its plans are priced at no more
   than 672 hours however long they run
@@ -230,7 +230,7 @@ priced.
   lists none), `no plan large enough`, `not offered in <region>` (the offering is not sold in that
   region), or `no price in <region>` / `no storage price in <region>` (the offering is sold there but
   the snapshot has no price for it). It is never priced at €0: totals add only the estimated resources and say how
-  many they cover, "€587.58 per month for 8 of 13 resources". A total that covers none of its
+  many they cover, "€587.58 per month for 8 of 19 resources". A total that covers none of its
   resources gives no amount, only why: "none of 2 resources could be estimated (usage-priced, not
   offered in `GRA`)", each reason once, in the order above.
 

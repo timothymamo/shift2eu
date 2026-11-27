@@ -285,19 +285,20 @@ const (
 	auditModelIf          = "    timeout-minutes: 120\n    if: ${{ " + auditGuard + " }}\n"
 	auditPublishIf        = "    timeout-minutes: 30\n    if: ${{ " + auditGuard + " }}\n"
 	// auditChecksPermissions is the checks job's permissions block, whose comment
-	// no other job shares: the four read scopes rows 6 to 15 read GitHub with
-	// (PR 5c). No packages scope, because the image is pulled anonymously, and
-	// no id-token: scorecard runs as the CLI, not the action.
+	// no other job shares: the five read scopes rows 6 to 15 read GitHub with
+	// (PR 5c, issue #660). No packages scope, because the image is pulled
+	// anonymously, and no id-token: scorecard runs as the CLI, not the action.
 	auditChecksPermissions = "    # GITHUB_TOKEN reads only: contents for the checkout, the release tag and the release download;\n" +
 		"    # attestations for gh attestation verify (row 7); actions for scorecard's reads of the workflows'\n" +
-		"    # runs (row 6); issues for Renovate's Dependency Dashboard (row 15). The image is public, so no\n" +
-		"    # packages scope: it is pulled anonymously (row 8). Nothing here writes, and no read needs admin:\n" +
-		"    # what the token is refused is recorded \"not run\".\n" +
+		"    # runs (row 6); issues for Renovate's Dependency Dashboard and pull-requests for its open pull\n" +
+		"    # requests (row 15). The image is public, so no packages scope: it is pulled anonymously (row 8).\n" +
+		"    # Nothing here writes, and no read needs admin: what the token is refused is recorded \"not run\".\n" +
 		"    permissions:\n" +
 		"      contents: read\n" +
 		"      attestations: read\n" +
 		"      actions: read\n" +
-		"      issues: read\n"
+		"      issues: read\n" +
+		"      pull-requests: read\n"
 	// auditPublishPermissions is the publish job's permissions block, whose
 	// comment no other job shares.
 	auditPublishPermissions = "    # artifacts, attestations for the image check. The audit App's token writes.\n" +
@@ -977,6 +978,58 @@ const (
 		"              fi\n" +
 		"              echo \"binary-vulnerabilities: ${name} was not scanned: its unpack exited ${rc} (141: the 128 MiB cap, 124: the 2-minute timeout)\" >> \"${results}/limits.txt\"\n" +
 		"              continue\n" +
+		"            fi\n"
+)
+
+// Issue #660's anchors: row 15's reading of Renovate's open pull requests
+// through the pulls endpoint, one page of 100 at a time, each page's unfiltered
+// length deciding whether another follows, and the ten-page limit past which
+// the step says in the limits what it did not read. The search endpoint the
+// step read before answered with the Dependency Dashboard issue and no pull
+// request in the first audit run, so it is gone. Each anchor is exactly as the
+// fixture writes it, so a case that mistypes one fails in mutate.
+const (
+	// auditRenovatePullsRead is row 15's read of one page of the repository's
+	// open pull requests: count, the page's unfiltered length, beside
+	// Renovate's own entries alone, each of the named fields, no body of a title
+	// the model would read as an instruction.
+	auditRenovatePullsRead = "            read_api \"renovate-pull-requests-${page}\" \"repos/${GH_REPO}/pulls?state=open&per_page=100&page=${page}\" '{count: length, renovate: [.[] | select(.user.login == \"renovate[bot]\") | {number, title, draft, created_at, updated_at, head: .head.ref, labels: [.labels[].name]}]}'\n"
+	// auditRenovatePullsStop is the condition that ends the pages before any
+	// count is read: a page that left no .exit file (the step's budget skipped
+	// it) and one whose exit is not 0 (the API refused it). It is the stop the
+	// count guard and the under-100 test below cannot cover: without it the loop
+	// reads past a refusal whose answer it cannot count.
+	auditRenovatePullsStop = "            if [ ! -f \"${out}/api/renovate-pull-requests-${page}.exit\" ] || [ \"$(cat \"${out}/api/renovate-pull-requests-${page}.exit\")\" != 0 ]; then\n" +
+		"              break\n" +
+		"            fi\n"
+	// auditRenovatePullsCount is row 15's count guard: the page's unfiltered
+	// length read once into count, and every answer that is no number of items
+	// (a page the read left empty or half written, so jq fails or prints
+	// nothing) said in the limits and the pages ended there. Without it the
+	// under-100 test below compares a word that is no number, which is false,
+	// and the loop reads on and answers a false clean page count.
+	auditRenovatePullsCount = "            count=\"$(jq '.count' \"${out}/api/renovate-pull-requests-${page}.json\" 2> /dev/null || true)\"\n" +
+		"            if [[ ! \"${count}\" =~ ^[0-9]+$ ]]; then\n" +
+		"              echo \"supply-chain: page ${page} of the open pull requests answered no count\" >> \"${results}/limits.txt\"\n" +
+		"              break\n" +
+		"            fi\n"
+	// auditRenovatePullsCountLine is that guard's limits line alone: the one
+	// line that tells a page whose count was no number apart from a page of
+	// fewer than 100 pull requests.
+	auditRenovatePullsCountLine = "              echo \"supply-chain: page ${page} of the open pull requests answered no count\" >> \"${results}/limits.txt\"\n"
+	// auditRenovatePullsUnder is the test that ends the pages on a page of fewer
+	// than 100 pull requests: the last page, so every later page is empty.
+	auditRenovatePullsUnder = "            if [ \"${count}\" -lt 100 ]; then\n" +
+		"              break\n" +
+		"            fi\n"
+	// auditRenovatePullsLimit is the ten-page limit and the limits line it
+	// writes: a repository whose tenth page of 100 was full says so, so that
+	// Renovate's past it, if any, are a limit the report names and never a clean
+	// answer. It comes after the under-100 test, so it speaks only of a page the
+	// loop knows to be full.
+	auditRenovatePullsLimit = "            if [ \"${page}\" -ge 10 ]; then\n" +
+		"              echo \"supply-chain: the tenth page of 100 open pull requests was full: Renovate's past it, if any, were not read\" >> \"${results}/limits.txt\"\n" +
+		"              break\n" +
 		"            fi\n"
 )
 
@@ -1868,6 +1921,27 @@ func TestAuditWorkflow(t *testing.T) {
 			wantIn:   "packages",
 		},
 		{
+			// Issue #660: row 15 lists the repository's open pull requests page by
+			// page through the pulls endpoint, which the checks job's token reads
+			// with pull-requests beside issues.
+			name:     "the checks job without the pull-requests scope",
+			workflow: mutate(t, acceptedWorkflow, auditChecksPermissions, strings.Replace(auditChecksPermissions, "      pull-requests: read\n", "", 1)),
+			wantIn:   "pull-requests",
+		},
+		{
+			name:     "a pull-requests write in the checks job",
+			workflow: mutate(t, acceptedWorkflow, auditChecksPermissions, strings.Replace(auditChecksPermissions, "      pull-requests: read\n", "      pull-requests: write\n", 1)),
+			wantIn:   "pull-requests",
+		},
+		{
+			// The list of the checks job's scopes is closed: a scope its rows do
+			// not read with is refused, so the token reaches no further than they
+			// need.
+			name:     "another extra scope in the checks job beside pull-requests",
+			workflow: mutate(t, acceptedWorkflow, auditChecksPermissions, auditChecksPermissions+"      statuses: read\n"),
+			wantIn:   "statuses",
+		},
+		{
 			name:     "an extra scope in the model job",
 			workflow: mutate(t, acceptedWorkflow, auditModelPermissions, auditModelPermissions+"      issues: read\n"),
 			wantIn:   "issues",
@@ -2586,7 +2660,8 @@ func TestAuditWorkflow(t *testing.T) {
 		// must draw a message that names it.
 		{
 			// PR 5c: row 7 reads the release's attestations, so the checks job holds
-			// the scope - and exactly the four scopes its rows read with.
+			// the scope - and exactly the five scopes its rows read with (issue #660
+			// added pull-requests for row 15's pulls read).
 			name:     "no attestations scope in the checks job",
 			workflow: mutate(t, acceptedWorkflow, auditChecksPermissions, strings.Replace(auditChecksPermissions, "      attestations: read\n", "", 1)),
 			wantIn:   "attestations",
@@ -4345,6 +4420,60 @@ func TestAuditWorkflow(t *testing.T) {
 			name:     "row 15's Dependency Dashboard read that found no issue recorded nowhere",
 			workflow: mutate(t, acceptedWorkflow, auditRenovateDashboardMissing, ""),
 			wantIn:   "no open Renovate Dependency Dashboard issue was found",
+		},
+
+		// Issue #660: the search endpoint answered the first audit run with the
+		// Dependency Dashboard issue and no pull request, so row 15 lists the open
+		// pull requests through the pulls endpoint, keeping the ones Renovate's own,
+		// page by page. A page that was skipped or refused ends the pages before any
+		// count is read, a page whose count is no number is a limits line and also
+		// ends them, a page of fewer than 100 is the last, and the tenth full page
+		// names in the limits what it did not read.
+		{
+			name: "row 15's Renovate pull requests read through the search endpoint again",
+			workflow: mutate(t, acceptedWorkflow, auditRenovatePullsRead,
+				"          read_api renovate-pull-requests \"search/issues?q=repo:${GH_REPO}+is:pr+is:open+author:app/renovate&per_page=100\"\n"),
+			wantIn: "pulls?state=open",
+		},
+		{
+			name:     "row 15's Renovate pull requests read through the search endpoint beside the pulls endpoint",
+			workflow: mutate(t, acceptedWorkflow, auditRenovatePullsRead, auditRenovatePullsRead+"            read_api renovate-pull-requests-search \"search/issues?q=repo:${GH_REPO}+is:pr+is:open+author:app/renovate&per_page=100\"\n"),
+			wantIn:   "search/issues",
+		},
+		{
+			name:     "row 15's Renovate pull requests page keeping every author's pull request",
+			workflow: mutate(t, acceptedWorkflow, auditRenovatePullsRead, strings.Replace(auditRenovatePullsRead, "select(.user.login == \"renovate[bot]\") | ", "", 1)),
+			wantIn:   "select(.user.login == \"renovate[bot]\")",
+		},
+		{
+			name:     "row 15's Renovate pull requests loop reading on past a refused or skipped page",
+			workflow: mutate(t, acceptedWorkflow, auditRenovatePullsStop, ""),
+			wantIn:   "renovate-pull-requests-${page}.exit",
+		},
+		{
+			name:     "row 15's Renovate pull requests loop with no count guard",
+			workflow: mutate(t, acceptedWorkflow, auditRenovatePullsCount, ""),
+			wantIn:   "answered no count",
+		},
+		{
+			name:     "row 15's Renovate pull requests loop's count guard saying nothing in the limits",
+			workflow: mutate(t, acceptedWorkflow, auditRenovatePullsCount, strings.Replace(auditRenovatePullsCount, auditRenovatePullsCountLine, "", 1)),
+			wantIn:   "answered no count",
+		},
+		{
+			name:     "row 15's Renovate pull requests loop reading one page always",
+			workflow: mutate(t, acceptedWorkflow, auditRenovatePullsUnder, ""),
+			wantIn:   "-lt 100",
+		},
+		{
+			name:     "row 15's Renovate pull requests loop with no ten-page limit",
+			workflow: mutate(t, acceptedWorkflow, auditRenovatePullsLimit, ""),
+			wantIn:   "-ge 10",
+		},
+		{
+			name:     "row 15's Renovate pull requests loop's ten-page limit said in no limits line",
+			workflow: mutate(t, acceptedWorkflow, auditRenovatePullsLimit, strings.Replace(auditRenovatePullsLimit, "              echo \"supply-chain: the tenth page of 100 open pull requests was full: Renovate's past it, if any, were not read\" >> \"${results}/limits.txt\"\n", "", 1)),
+			wantIn:   "the tenth page of 100 open pull requests was full",
 		},
 		{
 			name:     "row 9's failed unpack scanning the member it partly wrote",

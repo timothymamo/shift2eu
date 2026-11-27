@@ -2,7 +2,7 @@
 
 - Inventory file: `inventory.json`
 - Source: `aws`
-- Catalog: `OVHcloud` snapshot from `https://www.ovhcloud.com/en-ie/public-cloud/prices/`, retrieved 2026-11-25
+- Catalog: `OVHcloud` snapshot from `https://www.ovhcloud.com/en-ie/public-cloud/prices/`, retrieved 2026-11-27
 - Catalog: `Scaleway` snapshot from `https://www.scaleway.com/en/pricing/`, retrieved 2026-11-26
 - Catalog: `UpCloud` snapshot from `https://upcloud.com/pricing/`, retrieved 2026-11-27
 
@@ -12,10 +12,10 @@
 
 | Fit | `OVHcloud` | `Scaleway` | `UpCloud` |
 |---|---|---|---|
-| direct | 8 | 6 | 6 |
+| direct | 10 | 6 | 6 |
 | partial | 3 | 9 | 3 |
-| none | 7 | 3 | 9 |
-| total | 18 | 18 | 18 |
+| none | 6 | 4 | 10 |
+| total | 19 | 19 | 19 |
 
 ### Resources
 
@@ -28,10 +28,11 @@
 | `shop-eks` | `kubernetes.managed` | direct | `Managed Kubernetes Service` | direct | `Kubernetes Kapsule` | partial | `Managed Kubernetes` |
 | `shop-images` | `registry.container` | partial | `Managed Private Registry` | partial | `Container Registry` | none |  |
 | `shop-legacy-mysql` | `database.mysql` | direct | `Managed MySQL Multi-node` | partial | `Managed Database for PostgreSQL and MySQL High Availability` | direct | `Managed MySQL Multi-node` |
+| `shop-log-search` | `search.opensearch` | direct | `Analytics for OpenSearch Multi-node` | none |  | none |  |
 | `shop-order-events` | `messaging.topic` | none |  | partial | `Topics and Events` | none |  |
 | `shop-orders` | `messaging.queue` | none |  | partial | `Queues` | none |  |
 | `shop-orders-dlq` | `messaging.queue` | none |  | partial | `Queues` | none |  |
-| `shop-product-search` | `search.opensearch` | none |  | none |  | none |  |
+| `shop-product-search` | `search.opensearch` | direct | `Analytics for OpenSearch Multi-node 3-AZ` | none |  | none |  |
 | `shop-sessions` | `cache.redis` | partial | `Databases for Valkey Multi-node` | partial | `Managed Database for Redis Cluster` | partial | `Managed Valkey Multi-node` |
 | `shop-thumbnailer` | `serverless.function` | none |  | direct | `Serverless Functions` | none |  |
 | `shop-web-1` | `compute.vm` | direct | `Instances` | direct | `Instances` | direct | `Cloud Servers` |
@@ -46,10 +47,6 @@
   - `OVHcloud`: not classified
   - `Scaleway`: not classified
   - `UpCloud`: not classified
-- `shop-product-search`
-  - `OVHcloud`: no offering in the `OVHcloud` catalog for `search.opensearch`
-  - `Scaleway`: no offering in the `Scaleway` catalog for `search.opensearch`
-  - `UpCloud`: no offering in the `UpCloud` catalog for `search.opensearch`
 - `shop.example.com`
   - `OVHcloud`: not classified
   - `Scaleway`: not classified
@@ -61,10 +58,10 @@
 
 | Fit | Resources |
 |---|---|
-| direct | 8 |
+| direct | 10 |
 | partial | 3 |
-| none | 7 |
-| total | 18 |
+| none | 6 |
+| total | 19 |
 
 ### Resources
 
@@ -77,10 +74,11 @@
 | `shop-eks` | `AWS::EKS::Cluster` | `kubernetes.managed` | direct | `Managed Kubernetes Service` (tie: `Managed Kubernetes Service 3-AZ`) | depends-on `shop-db` | `Managed Kubernetes Service` offers every capability the resource uses |
 | `shop-images` | `AWS::ECR::Repository` | `registry.container` | partial | `Managed Private Registry` |  | `Managed Private Registry` does not offer `encryption-at-rest` |
 | `shop-legacy-mysql` | `AWS::RDS::DBInstance` | `database.mysql` | direct | `Managed MySQL Multi-node` (tie: `Managed MySQL Multi-node 3-AZ`, `Managed MySQL Multi-node Advanced`, `Managed MySQL Multi-node Advanced 3-AZ`) |  | `Managed MySQL Multi-node` offers every capability the resource uses |
+| `shop-log-search` | `AWS::OpenSearchService::Domain` | `search.opensearch` | direct | `Analytics for OpenSearch Multi-node` (tie: `Analytics for OpenSearch Multi-node 3-AZ`) |  | `Analytics for OpenSearch Multi-node` offers every capability the resource uses |
 | `shop-order-events` | `AWS::SNS::Topic` | `messaging.topic` | none |  | depends-on `shop-orders` | no offering in the `OVHcloud` catalog for `messaging.topic` |
 | `shop-orders` | `AWS::SQS::Queue` | `messaging.queue` | none |  |  | no offering in the `OVHcloud` catalog for `messaging.queue` |
 | `shop-orders-dlq` | `AWS::SQS::Queue` | `messaging.queue` | none |  | dead-letter-queue-of `shop-orders` | no offering in the `OVHcloud` catalog for `messaging.queue` |
-| `shop-product-search` | `AWS::OpenSearchService::Domain` | `search.opensearch` | none |  |  | no offering in the `OVHcloud` catalog for `search.opensearch` |
+| `shop-product-search` | `AWS::OpenSearchService::Domain` | `search.opensearch` | direct | `Analytics for OpenSearch Multi-node 3-AZ` |  | `Analytics for OpenSearch Multi-node 3-AZ` offers every capability the resource uses |
 | `shop-sessions` | `AWS::ElastiCache::ReplicationGroup` | `cache.redis` | partial | `Databases for Valkey Multi-node` (tie: `Databases for Valkey Multi-node 3-AZ`) |  | `Databases for Valkey Multi-node` does not offer `sharding` |
 | `shop-thumbnailer` | `AWS::Lambda::Function` | `serverless.function` | none |  | depends-on `shop-assets` | no offering in the `OVHcloud` catalog for `serverless.function` |
 | `shop-web-1` | `AWS::EC2::Instance` | `compute.vm` | direct | `Instances` | depends-on `shop-orders` | `Instances` offers every capability the resource uses |
@@ -101,7 +99,6 @@
 - `shop-order-events`: no offering in the `OVHcloud` catalog for `messaging.topic`
 - `shop-orders`: no offering in the `OVHcloud` catalog for `messaging.queue`
 - `shop-orders-dlq`: no offering in the `OVHcloud` catalog for `messaging.queue`
-- `shop-product-search`: no offering in the `OVHcloud` catalog for `search.opensearch`
 - `shop-thumbnailer`: no offering in the `OVHcloud` catalog for `serverless.function`
 - `shop.example.com`: not classified
 - `shop-order-events`: affected by a blocker on `shop-orders`
@@ -118,12 +115,11 @@
 
 #### `shop`
 
-- Fit: 6 direct, 3 partial, 5 none
+- Fit: 8 direct, 3 partial, 4 none
 - Blockers:
   - `shop-order-events`: no offering in the `OVHcloud` catalog for `messaging.topic`
   - `shop-orders`: no offering in the `OVHcloud` catalog for `messaging.queue`
   - `shop-orders-dlq`: no offering in the `OVHcloud` catalog for `messaging.queue`
-  - `shop-product-search`: no offering in the `OVHcloud` catalog for `search.opensearch`
   - `shop.example.com`: not classified
 
 #### No workload
@@ -139,8 +135,8 @@
 |---|---|
 | direct | 6 |
 | partial | 9 |
-| none | 3 |
-| total | 18 |
+| none | 4 |
+| total | 19 |
 
 ### Resources
 
@@ -153,6 +149,7 @@
 | `shop-eks` | `AWS::EKS::Cluster` | `kubernetes.managed` | direct | `Kubernetes Kapsule` (tie: `Kubernetes Kapsule Dedicated`) | depends-on `shop-db` | `Kubernetes Kapsule` offers every capability the resource uses |
 | `shop-images` | `AWS::ECR::Repository` | `registry.container` | partial | `Container Registry` |  | `Container Registry` does not offer `encryption-at-rest` |
 | `shop-legacy-mysql` | `AWS::RDS::DBInstance` | `database.mysql` | partial | `Managed Database for PostgreSQL and MySQL High Availability` |  | `Managed Database for PostgreSQL and MySQL High Availability` does not offer `point-in-time-restore` |
+| `shop-log-search` | `AWS::OpenSearchService::Domain` | `search.opensearch` | none |  |  | no offering in the `Scaleway` catalog for `search.opensearch` |
 | `shop-order-events` | `AWS::SNS::Topic` | `messaging.topic` | partial | `Topics and Events` | depends-on `shop-orders` | `Topics and Events` does not offer `encryption-at-rest` |
 | `shop-orders` | `AWS::SQS::Queue` | `messaging.queue` | partial | `Queues` |  | `Queues` does not offer `encryption-at-rest` |
 | `shop-orders-dlq` | `AWS::SQS::Queue` | `messaging.queue` | partial | `Queues` | dead-letter-queue-of `shop-orders` | `Queues` does not offer `encryption-at-rest` |
@@ -180,6 +177,7 @@
 ### Blockers
 
 - `shop-cdn`: not classified
+- `shop-log-search`: no offering in the `Scaleway` catalog for `search.opensearch`
 - `shop-product-search`: no offering in the `Scaleway` catalog for `search.opensearch`
 - `shop.example.com`: not classified
 
@@ -193,8 +191,9 @@
 
 #### `shop`
 
-- Fit: 4 direct, 8 partial, 2 none
+- Fit: 4 direct, 8 partial, 3 none
 - Blockers:
+  - `shop-log-search`: no offering in the `Scaleway` catalog for `search.opensearch`
   - `shop-product-search`: no offering in the `Scaleway` catalog for `search.opensearch`
   - `shop.example.com`: not classified
 
@@ -211,8 +210,8 @@
 |---|---|
 | direct | 6 |
 | partial | 3 |
-| none | 9 |
-| total | 18 |
+| none | 10 |
+| total | 19 |
 
 ### Resources
 
@@ -225,6 +224,7 @@
 | `shop-eks` | `AWS::EKS::Cluster` | `kubernetes.managed` | partial | `Managed Kubernetes` (tie: `Managed Kubernetes Production`) | depends-on `shop-db` | `Managed Kubernetes` does not offer `autoscaling` |
 | `shop-images` | `AWS::ECR::Repository` | `registry.container` | none |  |  | no offering in the `UpCloud` catalog for `registry.container` |
 | `shop-legacy-mysql` | `AWS::RDS::DBInstance` | `database.mysql` | direct | `Managed MySQL Multi-node` |  | `Managed MySQL Multi-node` offers every capability the resource uses |
+| `shop-log-search` | `AWS::OpenSearchService::Domain` | `search.opensearch` | none |  |  | no offering in the `UpCloud` catalog for `search.opensearch` |
 | `shop-order-events` | `AWS::SNS::Topic` | `messaging.topic` | none |  | depends-on `shop-orders` | no offering in the `UpCloud` catalog for `messaging.topic` |
 | `shop-orders` | `AWS::SQS::Queue` | `messaging.queue` | none |  |  | no offering in the `UpCloud` catalog for `messaging.queue` |
 | `shop-orders-dlq` | `AWS::SQS::Queue` | `messaging.queue` | none |  | dead-letter-queue-of `shop-orders` | no offering in the `UpCloud` catalog for `messaging.queue` |
@@ -248,6 +248,7 @@
 - `shop-catalog-docs`: no offering in the `UpCloud` catalog for `database.mongodb`
 - `shop-cdn`: not classified
 - `shop-images`: no offering in the `UpCloud` catalog for `registry.container`
+- `shop-log-search`: no offering in the `UpCloud` catalog for `search.opensearch`
 - `shop-order-events`: no offering in the `UpCloud` catalog for `messaging.topic`
 - `shop-orders`: no offering in the `UpCloud` catalog for `messaging.queue`
 - `shop-orders-dlq`: no offering in the `UpCloud` catalog for `messaging.queue`
@@ -268,10 +269,11 @@
 
 #### `shop`
 
-- Fit: 4 direct, 3 partial, 7 none
+- Fit: 4 direct, 3 partial, 8 none
 - Blockers:
   - `shop-catalog-docs`: no offering in the `UpCloud` catalog for `database.mongodb`
   - `shop-images`: no offering in the `UpCloud` catalog for `registry.container`
+  - `shop-log-search`: no offering in the `UpCloud` catalog for `search.opensearch`
   - `shop-order-events`: no offering in the `UpCloud` catalog for `messaging.topic`
   - `shop-orders`: no offering in the `UpCloud` catalog for `messaging.queue`
   - `shop-orders-dlq`: no offering in the `UpCloud` catalog for `messaging.queue`

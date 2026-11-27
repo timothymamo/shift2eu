@@ -2,7 +2,7 @@
 
 - Inventory file: ``| a | *b* _c_ `d` #e [f](g) ~h~ !.json``
 - Source: `aws`
-- Catalog: `OVHcloud` snapshot from `https://www.ovhcloud.com/en-ie/public-cloud/prices/`, retrieved 2026-11-25
+- Catalog: `OVHcloud` snapshot from `https://www.ovhcloud.com/en-ie/public-cloud/prices/`, retrieved 2026-11-27
 - Catalog: `Scaleway` snapshot from `https://www.scaleway.com/en/pricing/`, retrieved 2026-11-26
 - Catalog: `UpCloud` snapshot from `https://upcloud.com/pricing/`, retrieved 2026-11-27
 - Region: `OVHcloud`: `GRA` (the target's default for estimates)
@@ -63,7 +63,7 @@ None.
 ### Cost estimate
 
 - Total: €41.69 per month for 1 of 1 resource
-- Estimate: list prices on 2026-11-25, excluding VAT and discounts; a fixed fee is the offering's listed fee
+- Estimate: list prices on 2026-11-27, excluding VAT and discounts; a fixed fee is the offering's listed fee
 - Prices in `GRA`
 - Hours: plan price × count × hours / 730, 730 hours for a resource that gives none
 - Source cost: none in the inventory

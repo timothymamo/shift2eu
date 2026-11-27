@@ -46,14 +46,15 @@ jobs:
     environment: security-audit
     # GITHUB_TOKEN reads only: contents for the checkout, the release tag and the release download;
     # attestations for gh attestation verify (row 7); actions for scorecard's reads of the workflows'
-    # runs (row 6); issues for Renovate's Dependency Dashboard (row 15). The image is public, so no
-    # packages scope: it is pulled anonymously (row 8). Nothing here writes, and no read needs admin:
-    # what the token is refused is recorded "not run".
+    # runs (row 6); issues for Renovate's Dependency Dashboard and pull-requests for its open pull
+    # requests (row 15). The image is public, so no packages scope: it is pulled anonymously (row 8).
+    # Nothing here writes, and no read needs admin: what the token is refused is recorded "not run".
     permissions:
       contents: read
       attestations: read
       actions: read
       issues: read
+      pull-requests: read
     steps:
       - name: Check out the audited commit
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -1179,11 +1180,14 @@ jobs:
       # Row 15. Supply-chain reads: the workflows' action pins and permissions from the checkout, as
       # text; the rulesets, the environments and their branch policies, and the secret and variable
       # names, as the release-tag skill's step 2 reads them; Renovate's open Dependency Dashboard issue,
-      # its pull requests filtered out, and the open pull requests, and a limits line when no open
-      # dashboard issue answered; and the dependency files changed since the last report. Reads only, with the job's
-      # token: a read it is refused is recorded in read-refused.txt and the limits, "not run (read
-      # refused)" for that read, and a read the step's budget ran out on in read-skipped.txt and the
-      # limits, so that a permission that is fine is never chased for it.
+      # its pull requests filtered out, and a limits line when no open dashboard issue answered;
+      # Renovate's open pull requests, listed through the pulls endpoint (pulls?state=open) page by
+      # page and kept to renovate[bot]'s with the named fields alone, ten pages of 100 at most, a
+      # limits line for a page that answered no count and one when the tenth page was full; and the
+      # dependency files changed since the last report. Reads only, with the job's token: a read it
+      # is refused is recorded in read-refused.txt and the limits, "not run (read refused)" for that
+      # read, and a read the step's budget ran out on in read-skipped.txt and the limits, so that a
+      # permission that is fine is never chased for it.
       - name: Supply-chain reads
         timeout-minutes: 15
         env:
@@ -1234,7 +1238,26 @@ jobs:
           read_api repository-secret-names "repos/${GH_REPO}/actions/secrets" '[.secrets[].name]'
           read_api repository-variable-names "repos/${GH_REPO}/actions/variables" '[.variables[].name]'
           read_api renovate-dashboard "repos/${GH_REPO}/issues?state=open&creator=renovate%5Bbot%5D&per_page=100" '[.[] | select(.pull_request == null)]'
-          read_api renovate-pull-requests "search/issues?q=repo:${GH_REPO}+is:pr+is:open+author:app/renovate&per_page=100"
+          page=1
+          while :; do
+            read_api "renovate-pull-requests-${page}" "repos/${GH_REPO}/pulls?state=open&per_page=100&page=${page}" '{count: length, renovate: [.[] | select(.user.login == "renovate[bot]") | {number, title, draft, created_at, updated_at, head: .head.ref, labels: [.labels[].name]}]}'
+            if [ ! -f "${out}/api/renovate-pull-requests-${page}.exit" ] || [ "$(cat "${out}/api/renovate-pull-requests-${page}.exit")" != 0 ]; then
+              break
+            fi
+            count="$(jq '.count' "${out}/api/renovate-pull-requests-${page}.json" 2> /dev/null || true)"
+            if [[ ! "${count}" =~ ^[0-9]+$ ]]; then
+              echo "supply-chain: page ${page} of the open pull requests answered no count" >> "${results}/limits.txt"
+              break
+            fi
+            if [ "${count}" -lt 100 ]; then
+              break
+            fi
+            if [ "${page}" -ge 10 ]; then
+              echo "supply-chain: the tenth page of 100 open pull requests was full: Renovate's past it, if any, were not read" >> "${results}/limits.txt"
+              break
+            fi
+            page=$((page + 1))
+          done
           if [ -f "${out}/api/renovate-dashboard.exit" ] && [ "$(cat "${out}/api/renovate-dashboard.exit")" = 0 ] && [ "$(jq 'length' "${out}/api/renovate-dashboard.json")" = 0 ]; then
             echo "supply-chain: no open Renovate Dependency Dashboard issue was found" >> "${results}/limits.txt"
           fi
