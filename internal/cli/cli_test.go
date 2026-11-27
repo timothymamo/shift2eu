@@ -738,20 +738,14 @@ func TestRunAssessFormatUsage(t *testing.T) {
 				t.Errorf("stdout = %q, want empty", stdout)
 			}
 
+			// The alternatives are the supported formats, sorted, so a user who
+			// mistypes one is offered the PDF report next to the others.
 			wantFirstLine := errPrefix + "unknown format " + text.Quote(tc.format) +
 				"; supported formats: " + supportedFormats
 
 			firstLine, _, _ := strings.Cut(stderr, "\n")
 			if firstLine != wantFirstLine {
 				t.Errorf("the first line = %q, want %q", firstLine, wantFirstLine)
-			}
-
-			// The alternatives are the supported formats, sorted, so a user who
-			// mistypes one is offered the PDF report next to the others.
-			for _, want := range []string{jsonFormat, markdownFormat, pdfFormat} {
-				if !strings.Contains(firstLine, want) {
-					t.Errorf("the first line %q, want it to offer %q among the alternatives", firstLine, want)
-				}
 			}
 
 			if !strings.Contains(strings.ToLower(stderr), "usage") {
@@ -799,8 +793,17 @@ func TestRunAssessPDFSchemaVersionUsage(t *testing.T) {
 		t.Errorf("stderr = %q, want the usage text", stderr)
 	}
 
-	if h.pdfReporter.calls != 0 {
-		t.Errorf("the pdf reporter was called %d times, want 0", h.pdfReporter.calls)
+	// No format renders a report, whether or not it is the one that was named.
+	for name, reporter := range h.reporters() {
+		if reporter.calls != 0 {
+			t.Errorf("the %s reporter was called %d times, want 0", name, reporter.calls)
+		}
+	}
+
+	for name, comparison := range h.comparisons() {
+		if comparison.calls != 0 {
+			t.Errorf("the %s comparison reporter was called %d times, want 0", name, comparison.calls)
+		}
 	}
 
 	if len(h.paths) != 0 {
