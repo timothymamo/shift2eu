@@ -1,6 +1,7 @@
 # PRD #584: The site's PDF report download
 
-**Status:** In progress, milestone 1. The maintainer decided all twelve questions under *Decisions* as
+**Status:** In progress: milestone 1 done (the PDF writer `pdfreport` and `--format pdf`), milestone 2
+next. The maintainer decided all twelve questions under *Decisions* as
 recommended (2026-11-25); the ADR is [0049](../docs/adr/0049-write-the-pdf-report-with-a-standard-library-writer.md).
 **Issue:** #584
 
@@ -328,8 +329,8 @@ The `%PDF-` header's version (*Decided, as recommended*, 4) is the file format's
   computed there can differ. And it runs before `goreleaser`, which consumes its bundle (it lists it in
   `checksums.txt` and uploads it), so it cannot take GoReleaser's outputs. How milestone 2 gets one
   string on all three is *Decided, as recommended*, 7: the maintainer chose (a), a fixed cut of the full
-  hash on all three (options (b) and (c), which keep `shift2eu version`'s format, are kept there as the
-  alternatives weighed). The milestone 2 and release criteria below are written for (a).
+  hash, its first 12 hex digits, on all three (options (b) and (c), which keep `shift2eu version`'s
+  format, are kept there as the alternatives weighed). The milestone 2 and release criteria below are written for (a).
 
 ### ADR 0036: the bundle, the CSP and the banned-API scan
 
@@ -439,7 +440,7 @@ Test levels:
 
 ### The PDF reporter (milestone 1)
 
-- [ ] *Unit:* given an assessment and report metadata, `pdfreport` writes a PDF that matches its golden
+- [x] *Unit:* given an assessment and report metadata, `pdfreport` writes a PDF that matches its golden
   file byte for byte. Its goldens include:
   - a single-target report with estimates and one without;
   - one with a region chosen;
@@ -450,12 +451,12 @@ Test levels:
   - a report long enough to break pages inside a table.
 
   They are updated with `-update`.
-- [ ] *Unit:* the PDF starts with `%PDF-` and the chosen version, and ends with `%%EOF` and a line feed.
+- [x] *Unit:* the PDF starts with `%PDF-` and the chosen version, and ends with `%%EOF` and a line feed.
   Every object listed in the cross-reference table starts at the byte offset the table gives, and every
   cross-reference entry is exactly 20 bytes, ending in a space and a line feed (`SP LF`). The
   trailer's `/Size` and `/Root` are right. Every stream's `/Length` is its exact byte count. A test-only
   reader in `pdfreport`'s test files parses the writer's subset and checks all of this for every golden.
-- [ ] *Unit:* the text the test-only reader extracts from each page holds, in order:
+- [x] *Unit:* the text the test-only reader extracts from each page holds, in order:
   - the sections of *The PDF* for that variant;
   - every resource's ID, fit and best offering;
   - for each resource, every candidate offering with its fit and missing capabilities, its blockers, its
@@ -463,18 +464,18 @@ Test levels:
   - *How this report is worked out*;
   - *About this report*, with the version line passed to `New` and every snapshot's source URL and
     retrieval date.
-- [ ] *Unit:* with estimates off, the extracted text holds no plan, no amount, no Cost estimate section and
+- [x] *Unit:* with estimates off, the extracted text holds no plan, no amount, no Cost estimate section and
   no breakdown. With a region chosen, it says "chosen with --region".
-- [ ] *Unit:* every page carries the header and "Page N of M" with the right N and M, and the version
+- [x] *Unit:* every page carries the header and "Page N of M" with the right N and M, and the version
   line. A table continued on a new page repeats its header row.
-- [ ] *Unit:* every byte of every golden is 0x0A or in 0x20 to 0x7E.
-- [ ] *Unit:* the test-only reader's parsed names, after `#xx` decoding and outside strings, hold none of
+- [x] *Unit:* every byte of every golden is 0x0A or in 0x20 to 0x7E.
+- [x] *Unit:* the test-only reader's parsed names, after `#xx` decoding and outside strings, hold none of
   `/Annots`, `/URI`, `/Launch`, `/JavaScript`, `/JS`, `/OpenAction`, `/AA`, `/AcroForm`, `/EmbeddedFile`,
   `/RichMedia`, `/XFA`, `/FontFile`, `/FontFile2`, `/FontFile3`, `/CreationDate`, `/ModDate`, `/ID` or
   `/Producer`, in any golden. No name the writer emits contains `#`. A value that merely spells one of
   these names inside a string is not a finding. Every font object is a standard Type 1 font named
   `Helvetica`, `Helvetica-Bold` or `Courier`, with `/Encoding /WinAnsiEncoding`.
-- [ ] *Unit:* the escaper's table test covers each character class, with the exact escaped form of each:
+- [x] *Unit:* the escaper's table test covers each character class, with the exact escaped form of each:
   - printable ASCII, `"` and `\` included (`"` stays, `\` is `\\`);
   - the 27 WinAnsi characters in 0x80 to 0x9F and the Latin-1 Supplement, kept as they are;
   - U+00A0 and U+00AD, escaped as the ASCII text `\u00a0` and `\u00ad`;
@@ -488,16 +489,16 @@ Test levels:
 
   The test's expected values are written as ASCII Go string literals, so no editor or tool can turn an
   expected escape into the character it names.
-- [ ] *Unit:* a value whose escape straddles the wrap width (for example `Ж` starting a few
+- [x] *Unit:* a value whose escape straddles the wrap width (for example `Ж` starting a few
   characters before a line's end) wraps before the escape, and every wrapped line of every golden starts
   and ends on an escape boundary. Only an escape wider than its column, built in-test, is split.
-- [ ] *Unit:* the hostile report and hostile comparison goldens take in-test hostile values, as the other
+- [x] *Unit:* the hostile report and hostile comparison goldens take in-test hostile values, as the other
   reporters' hostile goldens do, in every field the PDF shows. The values carry PDF metacharacters and
   syntax: unbalanced `(` and `)`, `\`, `) Tj ET`, `endstream`, `%%EOF`, `/JavaScript`, `<< >>`, `obj`,
   plus a 2048-byte value of two-byte runes (*Tables and page breaks*) and the escaper's character classes.
   For each, the structural invariants below hold, and `(`, `)` and `\` inside a value are escaped in the
   content stream.
-- [ ] *Unit:* the structural invariants, checked for every golden and in the fuzz test:
+- [x] *Unit:* the structural invariants, checked for every golden and in the fuzz test:
   - the test-only reader parses the output;
   - the text extracted for a value, joined across its wrapped lines, equals the value's escaped form.
     The writer draws each wrapped line of a value as its own `Tj` at the x of the value's column or
@@ -511,20 +512,20 @@ Test levels:
     no XObject;
   - no object has a type outside the writer's set (catalog, pages, page, font, content stream, info);
   - every byte is 0x0A or in 0x20 to 0x7E.
-- [ ] *Unit:* a native Go fuzz test (standard `testing`, seeds run under `make test`) writes reports in
+- [x] *Unit:* a native Go fuzz test (standard `testing`, seeds run under `make test`) writes reports in
   which one field at a time holds the fuzzed string, and fails when a structural invariant does not hold.
-- [ ] *Unit:* the same input written twice gives the same bytes. A test fails if a non-test file of
+- [x] *Unit:* the same input written twice gives the same bytes. A test fails if a non-test file of
   `pdfreport` imports `math`, declares a floating-point type, holds a floating-point literal, calls
   `strconv.FormatFloat` or `strconv.ParseFloat`, or uses a `%f`, `%F`, `%g`, `%G`, `%e` or `%E` verb.
-- [ ] *Unit:* a comparison with no target, or whose targets assess different resources, is an error, and
+- [x] *Unit:* a comparison with no target, or whose targets assess different resources, is an error, and
   nothing is written, as with the other comparison reporters.
-- [ ] *CLI:* `shift2eu assess --inventory <file> --target <t> --format pdf` exits 0 and writes the PDF to
+- [x] *CLI:* `shift2eu assess --inventory <file> --target <t> --format pdf` exits 0 and writes the PDF to
   standard output, matching a CLI golden file. `--output <path>` writes the same bytes to the file.
   `--target all` writes the comparison.
-- [ ] *CLI:* `--format pdf --schema-version 3` is a usage error, exit 2, naming `--schema-version` and
+- [x] *CLI:* `--format pdf --schema-version 3` is a usage error, exit 2, naming `--schema-version` and
   `--format pdf`, and writes nothing. An unknown `--format` lists `pdf` among the supported formats.
-- [ ] *CLI:* the PDF's version line is the line `shift2eu version` prints, in the same build.
-- [ ] *e2e:* the built binary writes a PDF for each example inventory (`examples/aws`, `examples/azure`,
+- [x] *CLI:* the PDF's version line is the line `shift2eu version` prints, in the same build.
+- [x] *e2e:* the built binary writes a PDF for each example inventory (`examples/aws`, `examples/azure`,
   `examples/gcp`) against each target and `--target all`, with and without `--no-estimate`, and exits 0.
   Each file starts with `%PDF-`, and two runs give the same bytes.
 - [ ] *CLI and e2e:* `--format pdf` runs on every fixture of
@@ -540,7 +541,7 @@ Test levels:
 - [ ] *Lint and static:* `pdfreport` imports only the allow list of `reporters-stay-offline`.
   `cmd/shift2eu` and `wire` may import it, and the depguard pin holds the changed rules.
   `test/architecture` checks it for every release target and `js/wasm`.
-- [ ] *Review:* CLAUDE.md's adapters row names `pdfreport`, its status paragraph names `--format pdf`, and
+- [x] *Review:* CLAUDE.md's adapters row names `pdfreport`, its status paragraph names `--format pdf`, and
   `docs/architecture.md` and the CLI guide (`docs/guide/assess.md`) describe the format. The Markdown,
   JSON and HTML reporters' goldens do not change.
 
@@ -694,7 +695,7 @@ These hold unchanged and are not amended:
 Each milestone ships as one PR, in this order, and each gets the security audit (`security-audit` skill).
 Milestones 1 and 2 touch the handling of hostile text and the site's trust model.
 
-1. [ ] **The PDF writer, `pdfreport`, `--format pdf` and the ADR.**
+1. [x] **The PDF writer, `pdfreport`, `--format pdf` and the ADR.**
    - The reporter, standard library only, with:
      - the deterministic writer: objects, cross-reference table (20-byte entries ending in `SP LF`),
        trailer, content streams, literal string escaping;
@@ -742,7 +743,7 @@ Milestones 1 and 2 touch the handling of hostile text and the site's trust model
    - The size budget measurements, before and after.
    - The privacy, verification and inventory guide pages, the README and the guides.
    - PRD #297 amended in place (*Amendments to PRD #297*).
-   - ADRs 0018, 0035, 0036, 0040 and 0043, 0015 (option (a) of *Decided, as recommended*, 7), and the
+   - ADRs 0015 (option (a) of *Decided, as recommended*, 7), 0018, 0035, 0036, 0040 and 0043, and the
      doc.go files amended. ADR 0036's amendment records the download's file name (*Decided, as
      recommended*, 1).
    - Ships on PRD #297's site track. It does not depend on PRD #297 milestone 4, and the first deploy does
@@ -857,7 +858,8 @@ recommended*, followed by the number. ADR 0049 records the answers that shape mi
    worked out, and says in one sentence that there is no readiness score. A score is a domain decision
    for its own PRD. When it lands, the PDF's *How this report is worked out* section gains it.
    *Follow-up, decided with it:* CLAUDE.md's glossary defines **Assessment** with a "readiness score", and
-   `docs/architecture.md` mentions one. A small docs issue could mark it "not yet implemented" in both.
+   `docs/architecture.md` mentions one. A small docs issue, filed with milestone 1's PR, marks it "not
+   yet implemented" in both.
    This PRD does not change either.
 7. **Where the module's version stamp comes from** (milestone 2). GoReleaser's `{{ .ShortCommit }}` is
    git's abbreviated hash, whose length depends on which objects the clone holds. The `image` job
