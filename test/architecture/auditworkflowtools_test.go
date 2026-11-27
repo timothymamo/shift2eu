@@ -512,22 +512,62 @@ func TestAuditGovulncheckVersionGuardHoldsTheBuiltGoItself(t *testing.T) {
 	}
 }
 
-// auditGoModReadMarkers are the words a line that reads go.mod's go line names:
-// the go commands that print it, and the file itself (issue #687).
+// auditGoModReadMarkers are the words a command that reads go.mod's go line
+// names: the go commands that print it, and the file itself (issue #687).
 var auditGoModReadMarkers = []string{"go mod edit", "go list -m", "go.mod", "GoVersion"}
 
-// auditReadsGoModsGo reports whether line runs a command that reads go.mod's go
-// line: a command substitution, $(...), whose command names one of the markers
-// above. A line that only prints the word go.mod, or that reads a variable such
-// as GOMOD, runs no command and reads nothing (issue #687).
+// auditOtherGoMod matches a command that reads another module's go.mod than the
+// root one: go's own -C flag and the shell's cd run the command in another
+// directory, and a path before go.mod names another file, tools/go.mod above all
+// (issue #687).
+var auditOtherGoMod = regexp.MustCompile(`(?:^|[\s;&|(])(?:-C|cd)[ \t]|[^\s"']*/go\.mod`)
+
+// auditCommandSubstitution returns the text inside a line's first command
+// substitution, $(...), up to its matching ), and whether the line holds one: the
+// command the shell runs, and nothing the line says after the closing ) - a
+// comment such as " # go.mod" above all (issue #687).
+func auditCommandSubstitution(line string) (string, bool) {
+	open := strings.Index(line, "$(")
+	if open < 0 {
+		return "", false
+	}
+
+	depth := 0
+
+	for i := open + 2; i < len(line); i++ {
+		switch line[i] {
+		case '(':
+			depth++
+		case ')':
+			if depth == 0 {
+				return line[open+2 : i], true
+			}
+
+			depth--
+		}
+	}
+
+	return "", false
+}
+
+// auditReadsGoModsGo reports whether line runs a command that reads the root
+// go.mod's go line: a command substitution, $(...), whose own command names one
+// of the markers above, and no command that reads another module's go.mod - -C,
+// cd or a path before go.mod (issue #687). A line that only prints the word
+// go.mod, that mentions it after the substitution's closing ), or that reads a
+// variable such as GOMOD, runs no such command and reads nothing.
 func auditReadsGoModsGo(line string) bool {
-	sub := strings.Index(line, "$(")
-	if sub < 0 {
+	sub, ok := auditCommandSubstitution(line)
+	if !ok {
+		return false
+	}
+
+	if auditOtherGoMod.MatchString(sub) {
 		return false
 	}
 
 	for _, marker := range auditGoModReadMarkers {
-		if strings.Contains(line[sub:], marker) {
+		if strings.Contains(sub, marker) {
 			return true
 		}
 	}
@@ -551,8 +591,8 @@ var auditGoToolchainLiteral = regexp.MustCompile(`go1\.[0-9]+(?:\.[0-9]+)?`)
 
 // auditToolchainAssignment returns the value a line gives GOTOOLCHAIN, from an
 // assignment at a word start to the end of the line, and whether it assigns it
-// at all: the checks job's install line, or the line that writes the toolchain
-// into the round's environment (issue #687).
+// at all: the checks job's install line, the one line that carries the value
+// (issue #687).
 func auditToolchainAssignment(line string) (string, bool) {
 	const name = "GOTOOLCHAIN="
 
@@ -589,12 +629,12 @@ func auditAssignmentValue(line string) string {
 // one of the lines above it. where names the step in every message.
 func auditToolchainDerivation(value string, lines []string, at int, where, want string) []string {
 	if literal := auditGoToolchainLiteral.FindString(value); literal != "" {
-		return []string{fmt.Sprintf("%s gives GOTOOLCHAIN the literal %q: govulncheck is a Go program, so the go command that builds it decides which standard library its findings are about, and go.mod's go line is the one Go the module uses (%q). Derive it at run time instead, as GOTOOLCHAIN=\"go$(go mod edit -json | jq -r .Go)\", so go.mod holds the one version and no copy of it drifts (issue #687)", where, literal, want)}
+		return []string{fmt.Sprintf("%s gives GOTOOLCHAIN the literal %q: govulncheck is a Go program, so the go command that builds it decides which standard library its findings are about, and go.mod's go line is the one Go the module uses (%q). Derive it at run time instead, as GOTOOLCHAIN=\"go$(go list -m -f '{{.GoVersion}}')\", so go.mod holds the one version and no copy of it drifts (issue #687)", where, literal, want)}
 	}
 
 	loc := auditShellExpansion.FindStringIndex(value)
 	if loc == nil {
-		return []string{fmt.Sprintf("%s gives GOTOOLCHAIN the value %q, which runs no command and reads no variable: want go<version> derived from go.mod's go line, such as GOTOOLCHAIN=\"go$(go mod edit -json | jq -r .Go)\", never local or auto, which build the tool with whatever Go the runner has (issue #687)", where, strings.TrimSpace(value))}
+		return []string{fmt.Sprintf("%s gives GOTOOLCHAIN the value %q, which runs no command and reads no variable: want go<version> derived from go.mod's go line, such as GOTOOLCHAIN=\"go$(go list -m -f '{{.GoVersion}}')\", never local or auto, which build the tool with whatever Go the runner has (issue #687)", where, strings.TrimSpace(value))}
 	}
 
 	var (
@@ -605,7 +645,7 @@ func auditToolchainDerivation(value string, lines []string, at int, where, want 
 
 	if strings.HasPrefix(token, "$(") {
 		if !auditReadsGoModsGo(value[loc[0]:]) {
-			problems = append(problems, fmt.Sprintf("%s derives GOTOOLCHAIN's value with %q, which runs no command that reads go.mod's go line (go mod edit, go list -m, go.mod or the module's GoVersion): a toolchain read from anywhere else is a Go the module may not use, and go.mod's go line is where the one version lives (issue #687)", where, strings.TrimSpace(value[loc[0]:])))
+			problems = append(problems, fmt.Sprintf("%s derives GOTOOLCHAIN's value with %q, which runs no command that reads the root go.mod's go line (go mod edit, go list -m, the root go.mod or the module's GoVersion, with no -C, cd or path before go.mod): a toolchain read from anywhere else is a Go the module may not use, and go.mod's go line is where the one version lives (issue #687)", where, strings.TrimSpace(value[loc[0]:])))
 		}
 
 		if prefix != "go" {
@@ -641,9 +681,9 @@ func auditToolchainDerivation(value string, lines []string, at int, where, want 
 
 	switch {
 	case assigned < 0:
-		problems = append(problems, fmt.Sprintf("%s reads GOTOOLCHAIN's value from %s, a variable no earlier line of the step sets: the Go govulncheck is built with must be read from go.mod's go line in this step, as \"go$(go mod edit -json | jq -r .Go)\", and not come from nowhere (issue #687)", where, token))
+		problems = append(problems, fmt.Sprintf("%s reads GOTOOLCHAIN's value from %s, a variable no earlier line of the step sets: the Go govulncheck is built with must be read from go.mod's go line in this step, as GOTOOLCHAIN=\"go$(go list -m -f '{{.GoVersion}}')\", and not come from nowhere (issue #687)", where, token))
 	case !auditReadsGoModsGo(lines[assigned]):
-		problems = append(problems, fmt.Sprintf("%s sets %s on %q, which runs no command that reads go.mod's go line (go mod edit, go list -m, go.mod or the module's GoVersion): the toolchain must be go.mod's own, read at run time (issue #687)", where, name, strings.TrimSpace(lines[assigned])))
+		problems = append(problems, fmt.Sprintf("%s sets %s on %q, which runs no command that reads the root go.mod's go line (go mod edit, go list -m, the root go.mod or the module's GoVersion, with no -C, cd or path before go.mod): the toolchain must be go.mod's own, read at run time (issue #687)", where, name, strings.TrimSpace(lines[assigned])))
 	case prefix != "go" && !strings.HasPrefix(auditAssignmentValue(lines[assigned]), "go"):
 		problems = append(problems, fmt.Sprintf("%s gives GOTOOLCHAIN %q from %q with no go prefix anywhere: go takes the go<version> form, so either the value or the variable must stand as go1.<n>, and a bare version is no toolchain name (issue #687)", where, strings.TrimSpace(value), strings.TrimSpace(lines[assigned])))
 	}
@@ -654,10 +694,8 @@ func auditToolchainDerivation(value string, lines []string, at int, where, want 
 // auditGovulncheckToolchainFromGoMod returns what the checks job's install of
 // govulncheck lacks to build the tool with the Go go.mod's go line names, read at
 // run time (issue #687): the install must name GOTOOLCHAIN as a derivation from
-// go.mod, which is either on its install line or written into the round's
-// environment by a step of its own that the install then runs with. The version
-// exists once, in go.mod, so no literal and no Renovate matchString keeps a copy
-// of it in step.
+// go.mod on its own install line, in the same step. The version exists once, in
+// go.mod, so no literal and no Renovate matchString keeps a copy of it in step.
 func auditGovulncheckToolchainFromGoMod(steps []auditJobStep, want string) []string {
 	step, at, line, ok := auditGovulncheckInstall(steps)
 	if !ok {
@@ -671,34 +709,15 @@ func auditGovulncheckToolchainFromGoMod(steps []auditJobStep, want string) []str
 		return auditToolchainDerivation(value, step.lines, at, where, want)
 	}
 
-	// The job may read go.mod's go line once, in a step of its own, and hand
-	// what it reads to the later steps through the environment.
-	for _, other := range steps {
-		for i, candidate := range other.lines {
-			if strings.HasPrefix(strings.TrimSpace(candidate), "#") {
-				continue
-			}
-
-			derived, ok := auditToolchainAssignment(candidate)
-			if !ok || !strings.Contains(candidate, "GITHUB_ENV") {
-				continue
-			}
-
-			return auditToolchainDerivation(derived, other.lines, i, fmt.Sprintf("%s's checks job, step %q", auditWorkflow, other.name), want)
-		}
-	}
-
-	return []string{fmt.Sprintf("%s installs govulncheck with no GOTOOLCHAIN of its own, and no step of the job writes one into the round's environment: go install pkg@version picks the toolchain from the module's own go line, not go.mod's, and a govulncheck built with another Go than go.mod's %q cannot load the module at all. Give the install go.mod's Go as GOTOOLCHAIN=\"go$(go mod edit -json | jq -r .Go)\", or read it once and write it to the environment the install runs with (issue #687)", where, want)}
+	return []string{fmt.Sprintf("%s installs govulncheck with no GOTOOLCHAIN of its own: go install pkg@version picks the toolchain from the module's own go line, not go.mod's, and a govulncheck built with another Go than go.mod's %q cannot load the module at all. Give the install go.mod's Go as GOTOOLCHAIN=\"go$(go list -m -f '{{.GoVersion}}')\" on the same line (issue #687)", where, want)}
 }
 
 // auditGovulncheckToolchainCase is one case of
-// TestAuditGovulncheckToolchainDerivationReadsGoMod: the lines of a step of its
-// own that hands the job the toolchain, the lines of the install step above the
-// install, the install line itself, and the count of problems the derivation must
-// then report (issue #687).
+// TestAuditGovulncheckToolchainDerivationReadsGoMod: the lines of the install
+// step above the install, the install line itself, and the count of problems the
+// derivation must then report (issue #687).
 type auditGovulncheckToolchainCase struct {
 	name    string
-	envStep string
 	derive  []string
 	install string
 	want    int
@@ -730,26 +749,17 @@ func auditGovulncheckToolchainStep(c auditGovulncheckToolchainCase) auditJobStep
 	return auditJobStep{name: "Download the pinned tools and verify their checksums", lines: lines}
 }
 
-// auditGovulncheckToolchainEnvStep returns the step of its own a case may put
-// before the install: a run block that writes the case's line into the round's
-// environment, which the later steps run with (issue #687).
-func auditGovulncheckToolchainEnvStep(line string) auditJobStep {
-	return auditJobStep{name: "Read go.mod's Go", lines: []string{
-		"      - name: Read go.mod's Go",
-		"        run: |",
-		"          set -euo pipefail",
-		"          " + line,
-	}}
-}
-
 // TestAuditGovulncheckToolchainDerivationReadsGoMod pins how the install's
 // GOTOOLCHAIN value is read (issue #687): the Go govulncheck is built with is
 // go.mod's, derived at run time from go.mod's go line, so the install accepts a
-// command substitution over go.mod, inline or through a variable the step sets,
-// and the go prefix go's own toolchain names need. A literal version, a command
-// that reads another Go than go.mod's, a variable nothing sets from go.mod, and a
-// value without the go prefix are the four ways the derivation stops being
-// go.mod's Go, and each is reported.
+// command substitution over the root go.mod, inline or through a variable the
+// step sets, and the go prefix go's own toolchain names need. A literal version, a
+// command that reads another Go than go.mod's, a variable nothing sets from
+// go.mod, and a value without the go prefix are the four ways the derivation
+// stops being go.mod's Go, and each is reported. The substitution is read on its
+// own, up to its closing ): a go.mod named after it - a trailing comment above
+// all - is no read, and neither is another module's file, tools/go.mod or one a
+// cd or go's -C reaches.
 func TestAuditGovulncheckToolchainDerivationReadsGoMod(t *testing.T) {
 	t.Parallel()
 
@@ -769,19 +779,8 @@ func TestAuditGovulncheckToolchainDerivationReadsGoMod(t *testing.T) {
 			install: `GOTOOLCHAIN="go${version}" ` + auditGovulncheckInstallWords,
 		},
 		{
-			name:    "a step of its own writes the derivation into the round's environment",
-			envStep: `echo "GOTOOLCHAIN=go$(go mod edit -json | jq -r .Go)" >> "${GITHUB_ENV}"`,
-			install: auditGovulncheckInstallWords,
-		},
-		{
 			name:    "the install names go.mod's Go as the literal version",
 			install: `GOTOOLCHAIN=go1.27.4 ` + auditGovulncheckInstallWords,
-			want:    1,
-		},
-		{
-			name:    "a step of its own writes the literal version into the round's environment",
-			envStep: `echo "GOTOOLCHAIN=go1.27.4" >> "${GITHUB_ENV}"`,
-			install: auditGovulncheckInstallWords,
 			want:    1,
 		},
 		{
@@ -797,6 +796,21 @@ func TestAuditGovulncheckToolchainDerivationReadsGoMod(t *testing.T) {
 		{
 			name:    "the derivation reads the go command's own version, not go.mod's",
 			install: `GOTOOLCHAIN="go$(go env GOVERSION)" ` + auditGovulncheckInstallWords,
+			want:    1,
+		},
+		{
+			name:    "a go.mod after the substitution's closing ) is no read of it",
+			install: `GOTOOLCHAIN="go$(go env GOVERSION)" ` + auditGovulncheckInstallWords + ` # go.mod`,
+			want:    1,
+		},
+		{
+			name:    "the derivation reads another module's go.mod",
+			install: `GOTOOLCHAIN="go$(sed -n 's/^go //p' tools/go.mod)" ` + auditGovulncheckInstallWords,
+			want:    1,
+		},
+		{
+			name:    "the derivation runs the go command in another module with cd",
+			install: `GOTOOLCHAIN="go$(cd tools && go list -m -f '{{.GoVersion}}')" ` + auditGovulncheckInstallWords,
 			want:    1,
 		},
 		{
@@ -819,18 +833,12 @@ func TestAuditGovulncheckToolchainDerivationReadsGoMod(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			var steps []auditJobStep
-
-			if tc.envStep != "" {
-				steps = append(steps, auditGovulncheckToolchainEnvStep(tc.envStep))
-			}
-
-			steps = append(steps, auditGovulncheckToolchainStep(tc))
+			steps := []auditJobStep{auditGovulncheckToolchainStep(tc)}
 
 			problems := auditGovulncheckToolchainFromGoMod(steps, "1.25.0")
 			if len(problems) != tc.want {
-				t.Errorf("auditGovulncheckToolchainFromGoMod(env step %q, before %q, install %q) reported %d problem(s), want %d:\n%s",
-					tc.envStep, tc.derive, tc.install, len(problems), tc.want, strings.Join(problems, "\n"))
+				t.Errorf("auditGovulncheckToolchainFromGoMod(before %q, install %q) reported %d problem(s), want %d:\n%s",
+					tc.derive, tc.install, len(problems), tc.want, strings.Join(problems, "\n"))
 			}
 		})
 	}
@@ -865,7 +873,10 @@ func TestScheduledSecurityAuditWorkflowBuildsGovulncheckWithGoModsGo(t *testing.
 
 	// No literal Go version anywhere: a GOTOOLCHAIN=go<version> line, a copy in
 	// a comment or any other go1.<n> is a second version that only a hand keeps
-	// in step with go.mod's go line (issue #687).
+	// in step with go.mod's go line (issue #687). Comments count on purpose: the
+	// workflow's own explanation of the derivation must not grow a version of its
+	// own that a later reader copies into the install, so do not loosen this to
+	// skip comment lines (issue #687).
 	t.Run("the workflow names no Go version of its own", func(t *testing.T) {
 		t.Parallel()
 
@@ -873,7 +884,7 @@ func TestScheduledSecurityAuditWorkflowBuildsGovulncheckWithGoModsGo(t *testing.
 
 		for i, line := range strings.Split(document, "\n") {
 			if literal := auditGoToolchainLiteral.FindString(line); literal != "" {
-				t.Errorf("%s line %d names the Go toolchain %q: the audit's govulncheck is built with the Go go.mod's go line names, read at run time, so go.mod holds the one version and no copy of it can drift away from it. Derive it, as GOTOOLCHAIN=\"go$(go mod edit -json | jq -r .Go)\", rather than writing the version here (issue #687)\n  %s",
+				t.Errorf("%s line %d names the Go toolchain %q: the audit's govulncheck is built with the Go go.mod's go line names, read at run time, so go.mod holds the one version and no copy of it can drift away from it. Derive it, as GOTOOLCHAIN=\"go$(go list -m -f '{{.GoVersion}}')\", rather than writing the version here (issue #687)\n  %s",
 					auditWorkflow, i+1, literal, strings.TrimSpace(line))
 			}
 		}
