@@ -3020,7 +3020,7 @@ release's tag, the release download), `attestations` (`gh attestation verify`, r
 (scorecard's reads of the workflows' runs, row 6), `issues` (Renovate's Dependency Dashboard, row 15)
 and `pull-requests` (row 15's list of Renovate's open pull requests, issue #660). That list reads
 `repos/{owner}/{repo}/pulls?state=open`, and a job token that holds no `pull-requests` scope is refused
-it, which likely also explains why the earlier search found no pull request; the scope is read-only, so
+it; the scope is read-only, so
 the job still writes nothing. Should the token be refused them anyway, the refusal is recorded in
 `read-refused.txt` and the limits, never a silent miss.
 No `packages` scope: the image is public, and rows 7 and 8 read the registry anonymously, with
@@ -3169,7 +3169,9 @@ which the container is killed and removed.
 **To be checked on the first run** (runbook step 8), besides 5b's list: that cosign v3's
 `verify-attestation` reads the attestations `actions/attest` pushed as OCI referrers (`gh attestation
 verify` reads them, as `release.yml`'s `verify` job shows); that scorecard reads with these scopes and
-which row 15 reads are refused; that trivy runs offline with these flags; that `docker commit` keeps the
+which row 15 reads are refused; that row 15's pulls read is answered, not recorded in
+`read-refused.txt`, and whether the earlier search found no Renovate pull request because the token
+lacked the `pull-requests` scope (issue #660); that trivy runs offline with these flags; that `docker commit` keeps the
 release image's user, working directory and entry point; that `go test -fuzz` builds offline from
 the copied module cache without writing to it; and that `gh attestation verify` exits 1 for a refused
 verification and another code for a network failure (round E, below). If it exits 1 for both, a network
