@@ -2,7 +2,7 @@
 
 - Inventory file: `inventory.json`
 - Source: `aws`
-- Catalog: `Scaleway` snapshot from `https://www.scaleway.com/en/pricing/`, retrieved 2026-11-26
+- Catalog: `Scaleway` snapshot from `https://www.scaleway.com/en/pricing/`, retrieved 2026-11-27
 - Region: `fr-par` (the target's default for estimates)
 
 ## Summary
@@ -45,7 +45,7 @@
 ## Cost estimate
 
 - Total: none of 11 resources could be estimated (no fit, usage-priced, size unknown)
-- Estimate: list prices on 2026-11-26, excluding VAT and discounts; a fixed fee is the offering's listed fee
+- Estimate: list prices on 2026-11-27, excluding VAT and discounts; a fixed fee is the offering's listed fee
 - Prices in `fr-par`
 - Hours: plan price × count × hours / 730, 730 hours for a resource that gives none
 - Source cost: none in the inventory

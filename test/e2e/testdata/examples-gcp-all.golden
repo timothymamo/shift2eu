@@ -3,7 +3,7 @@
 - Inventory file: `inventory.json`
 - Source: `gcp`
 - Catalog: `OVHcloud` snapshot from `https://www.ovhcloud.com/en-ie/public-cloud/prices/`, retrieved 2026-11-25
-- Catalog: `Scaleway` snapshot from `https://www.scaleway.com/en/pricing/`, retrieved 2026-11-26
+- Catalog: `Scaleway` snapshot from `https://www.scaleway.com/en/pricing/`, retrieved 2026-11-27
 - Catalog: `UpCloud` snapshot from `https://upcloud.com/pricing/`, retrieved 2026-11-13
 - Region: `OVHcloud`: `GRA` (the target's default for estimates)
 - Region: `Scaleway`: `fr-par` (the target's default for estimates)
@@ -189,14 +189,14 @@ Estimates are list prices on each catalog's retrieval date, excluding VAT and di
 #### `catalog`
 
 - Fit: 1 direct, 1 partial, 0 none
-- Monthly estimate: €237.86 per month for 2 of 2 resources, list prices on 2026-11-26, excluding VAT and discounts
+- Monthly estimate: €237.86 per month for 2 of 2 resources, list prices on 2026-11-27, excluding VAT and discounts
 - Source cost: none in the inventory
 - Blockers: none
 
 #### `shop`
 
 - Fit: 9 direct, 2 partial, 3 none
-- Monthly estimate: €728.90 per month for 7 of 14 resources (storage not included in 3 estimates), list prices on 2026-11-26, excluding VAT and discounts
+- Monthly estimate: €728.90 per month for 7 of 14 resources (storage not included in 3 estimates), list prices on 2026-11-27, excluding VAT and discounts
 - Source cost: `USD` $477.31 for 3 of 14 resources
 - Blockers:
   - `shop-cdn-backend`: not classified
@@ -206,7 +206,7 @@ Estimates are list prices on each catalog's retrieval date, excluding VAT and di
 ### Cost estimate
 
 - Total: €966.76 per month for 9 of 16 resources (storage not included in 3 estimates)
-- Estimate: list prices on 2026-11-26, excluding VAT and discounts; a fixed fee is the offering's listed fee
+- Estimate: list prices on 2026-11-27, excluding VAT and discounts; a fixed fee is the offering's listed fee
 - Prices in `fr-par`
 - Hours: plan price × count × hours / 730, 730 hours for a resource that gives none
 - Source cost: `USD` $477.31 for 3 of 16 resources

@@ -2,15 +2,15 @@
 
 - Inventory file: `inventory.json`
 - Source: `aws`
-- Catalog: `Scaleway` snapshot from `https://www.scaleway.com/en/pricing/`, retrieved 2026-11-26
+- Catalog: `Scaleway` snapshot from `https://www.scaleway.com/en/pricing/`, retrieved 2026-11-27
 
 ## Summary
 
 | Fit | Resources |
 |---|---|
 | direct | 6 |
-| partial | 9 |
-| none | 3 |
+| partial | 10 |
+| none | 2 |
 | total | 18 |
 
 ## Resources
@@ -27,7 +27,7 @@
 | `shop-order-events` | `AWS::SNS::Topic` | `messaging.topic` | partial | `Topics and Events` | depends-on `shop-orders` | `Topics and Events` does not offer `encryption-at-rest` |
 | `shop-orders` | `AWS::SQS::Queue` | `messaging.queue` | partial | `Queues` |  | `Queues` does not offer `encryption-at-rest` |
 | `shop-orders-dlq` | `AWS::SQS::Queue` | `messaging.queue` | partial | `Queues` | dead-letter-queue-of `shop-orders` | `Queues` does not offer `encryption-at-rest` |
-| `shop-product-search` | `AWS::OpenSearchService::Domain` | `search.opensearch` | none |  |  | no offering in the `Scaleway` catalog for `search.opensearch` |
+| `shop-product-search` | `AWS::OpenSearchService::Domain` | `search.opensearch` | partial | `Cloud Essentials for OpenSearch High Availability` |  | `Cloud Essentials for OpenSearch High Availability` does not offer `encryption-at-rest`; `Cloud Essentials for OpenSearch High Availability` does not offer `snapshots`; `Cloud Essentials for OpenSearch High Availability` does not offer `zone-high-availability` |
 | `shop-sessions` | `AWS::ElastiCache::ReplicationGroup` | `cache.redis` | partial | `Managed Database for Redis Cluster` |  | `Managed Database for Redis Cluster` does not offer `encryption-at-rest`; `Managed Database for Redis Cluster` does not offer `node-high-availability` |
 | `shop-thumbnailer` | `AWS::Lambda::Function` | `serverless.function` | direct | `Serverless Functions` | depends-on `shop-assets` | `Serverless Functions` offers every capability the resource uses |
 | `shop-web-1` | `AWS::EC2::Instance` | `compute.vm` | direct | `Instances` | depends-on `shop-orders` | `Instances` offers every capability the resource uses |
@@ -45,13 +45,13 @@
 - `shop-order-events`: `encryption-at-rest` (not offered by `Topics and Events`)
 - `shop-orders`: `encryption-at-rest` (not offered by `Queues`)
 - `shop-orders-dlq`: `encryption-at-rest` (not offered by `Queues`)
+- `shop-product-search`: `encryption-at-rest`, `snapshots`, `zone-high-availability` (not offered by `Cloud Essentials for OpenSearch High Availability`)
 - `shop-sessions`: `encryption-at-rest`, `node-high-availability` (not offered by `Managed Database for Redis Cluster`)
 - `shop-web-asg`: `autoscaling`, `zone-high-availability` (not offered by `Instances`)
 
 ## Blockers
 
 - `shop-cdn`: not classified
-- `shop-product-search`: no offering in the `Scaleway` catalog for `search.opensearch`
 - `shop.example.com`: not classified
 
 ## Workloads
@@ -64,9 +64,8 @@
 
 ### `shop`
 
-- Fit: 4 direct, 8 partial, 2 none
+- Fit: 4 direct, 9 partial, 1 none
 - Blockers:
-  - `shop-product-search`: no offering in the `Scaleway` catalog for `search.opensearch`
   - `shop.example.com`: not classified
 
 ### No workload
