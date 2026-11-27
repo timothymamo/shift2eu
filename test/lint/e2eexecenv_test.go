@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -57,12 +58,25 @@ var e2eToolchainFlags = []string{"-trimpath", "-o", "-deps", "-ldflags"}
 // a child of a test. So only a value e2eLinkerStamps describes keeps it.
 const e2eLinkerFlag = "-ldflags"
 
+// e2eLinkerStamp is the one form the name=value of a -X stamp may take: an
+// import path, a dot, a symbol, exactly one = and a plain value.
+var e2eLinkerStamp = regexp.MustCompile(`^[A-Za-z0-9_./-]+\.[A-Za-z_][A-Za-z0-9_]*=[A-Za-z0-9_.:+-]*$`)
+
 // e2eLinkerStamps reports whether value is a -ldflags value the e2e tier may
 // carry: whitespace-separated pairs of -X and the name=value it stamps, and
 // nothing else, so the linker runs no other program and reads no other file. A
-// name=value of its own is one field, so it holds no space, and it may not start
-// with "-".
+// value holding a quote (' or ") or a backslash is refused outright: cmd/go
+// splits -ldflags with cmd/internal/quoted.Split, not on whitespace alone, so a
+// quote closes a field mid-word and a backslash escapes the next byte, and a
+// field strings.Fields reads as one stamp can hand the linker a second flag
+// (-extld, which runs a named program with the go command's environment). Each
+// name=value field must match e2eLinkerStamp and may not start with "-", and
+// each field before it must be exactly -X.
 func e2eLinkerStamps(value string) bool {
+	if strings.ContainsAny(value, `'"\`) {
+		return false
+	}
+
 	fields := strings.Fields(value)
 	if len(fields) == 0 || len(fields)%2 != 0 {
 		return false
@@ -77,7 +91,7 @@ func e2eLinkerStamps(value string) bool {
 			continue
 		}
 
-		if strings.HasPrefix(field, "-") || !strings.Contains(field, "=") {
+		if strings.HasPrefix(field, "-") || !e2eLinkerStamp.MatchString(field) {
 			return false
 		}
 	}
@@ -97,9 +111,15 @@ func e2eExecExempt(name, sub string, flags []string) bool {
 		flag := flags[i]
 
 		if flag == e2eLinkerFlag {
-			// The next literal the source writes is the value. One the source
-			// builds at run time is no literal, and the check then reads the next
-			// literal after it, which is no stamp set: the exemption is lost.
+			// The next literal the source writes is taken as the value. One the
+			// source builds at run time is no literal and never reaches this
+			// check (the collector drops non-literals), so the next literal
+			// after it is read instead: the exemption is lost when that literal
+			// is no stamp set (`"-ldflags", v, "-o"`), but kept when it is one
+			// (`"-ldflags", v, "-X a.b=c"`). That is the accepted non-literal
+			// gap (test/internal/execenv's doc.go), held by review, and harmless
+			// today: cmd/go then reads "-X a.b=c" as an unknown flag and fails
+			// at flag parsing before it runs any tool.
 			if i+1 >= len(flags) || !e2eLinkerStamps(flags[i+1]) {
 				return false
 			}
@@ -190,8 +210,9 @@ func TestE2EExecExempt(t *testing.T) {
 		},
 		{
 			// A value the source builds at run time is no literal, so the next
-			// literal argument is the one after it, and it is no stamp set.
-			name:  "an -ldflags whose value the source builds at run time takes the exemption away",
+			// literal argument is the one after it; here it is no stamp set. Had
+			// it been one, the exemption would stay: the accepted non-literal gap.
+			name:  "an -ldflags whose run-time value is followed by a literal that is no stamp set takes the exemption away",
 			cmd:   "go",
 			sub:   "build",
 			flags: []string{"-ldflags", "-o"},

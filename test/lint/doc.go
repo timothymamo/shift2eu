@@ -169,8 +169,11 @@
 // name and the subcommand, both literals: `go build` and `go list`, which need
 // that environment and print none of it, and only while every literal flag
 // after the subcommand is one of the allow-list e2eToolchainFlags (-trimpath,
-// -o, -deps, and -ldflags for a value of -X stamps alone). A run chained to
-// its construction is never exempt, and a spread argument and a Path or Args
+// -o, -deps, and -ldflags for a value of -X stamps alone, each an import path,
+// a symbol, one = and a plain value, with no quote or backslash anywhere in the
+// value: cmd/go splits it with cmd/internal/quoted.Split, where a quote or a
+// backslash can carry a second linker flag inside what reads as one field). A
+// run chained to its construction is never exempt, and a spread argument and a Path or Args
 // assigned on the command take the exemption away too. Four gaps are accepted
 // and left to review: the rule
 // follows the source, not the flow (an Env assigned in a branch that never

@@ -67,8 +67,11 @@
 // refused). test/lint admits `go build` and `go list`, which need the
 // environment and print none of it, and only while every literal flag is one
 // of its allow-list, e2eToolchainFlags (-trimpath, -o, -deps, and -ldflags for
-// a value of -X stamps alone), so a flag the go command gains later is refused
-// until review adds it. The checker itself takes the exemption away from a
+// a value of -X stamps alone, each an import path, a symbol, one = and a plain
+// value, with no quote or backslash anywhere in the value, since cmd/go splits
+// it with cmd/internal/quoted.Split, where a quote or a backslash can carry a
+// second linker flag inside what reads as one field), so a flag the go command
+// gains later is refused until review adds it. The checker itself takes the exemption away from a
 // spread argument and on an assignment to Path or Args.
 //
 // Four gaps are accepted, and review holds them:
