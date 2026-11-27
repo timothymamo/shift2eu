@@ -472,11 +472,21 @@ func inventoryGuides() []inventoryGuideCase {
 				// Route 53 public hosted zones are public authoritative DNS zones:
 				// one resource per zone, network.dns, with no region, since Route 53
 				// serves a zone from its own name servers, not from a region the user
-				// picks (PRD #581, milestone 2). The ID is the zone's name, which the
-				// AWS Config row of the same zone gave it before this milestone: the
-				// report's resource keeps its ID when it gains its category.
+				// picks (PRD #581, milestone 2). A zone whose name no other zone of
+				// the account has keeps that name as its ID, which the AWS Config row
+				// of the same zone gave it before this milestone: the report's
+				// resource keeps its ID when it gains its category.
+				//
+				// A public and a private zone of the same name, the usual
+				// split-horizon setup, would collide: Route 53 lets both exist, one
+				// answering the internet and one the VPCs it is attached to. So two
+				// zones of one name get their own zone ID appended, as two resources
+				// of another name get their type and region, and neither keeps the
+				// bare name: shop.example.com. (Z0123456789ABCDEFGHIJ) answers the
+				// internet and shop.example.com. (Z0000000000000000PRIV) the VPCs
+				// (PRD #581, the ID of a zone).
 				{
-					id: "shop.example.com.", rawType: "AWS::Route53::HostedZone", category: "network.dns",
+					id: "shop.example.com. (Z0123456789ABCDEFGHIJ)", rawType: "AWS::Route53::HostedZone", category: "network.dns",
 					noRegion: true, capabilities: []string{},
 				},
 				// A zone Route 53 signs with DNSSEC: ServeSignature is SIGNING. It has
@@ -500,6 +510,13 @@ func inventoryGuides() []inventoryGuideCase {
 				// is dropped with the public zones'.
 				{
 					id: "internal.example.com.", rawType: "AWS::Route53::HostedZone", category: "unclassified",
+					capabilities: []string{},
+				},
+				// The private half of the split-horizon pair above: the same name as a
+				// public zone, told apart by its zone ID, and unclassified as every
+				// private zone is.
+				{
+					id: "shop.example.com. (Z0000000000000000PRIV)", rawType: "AWS::Route53::HostedZone", category: "unclassified",
 					capabilities: []string{},
 				},
 				// A health check and a Resolver endpoint are no zone: the first is what
@@ -549,7 +566,7 @@ func inventoryGuides() []inventoryGuideCase {
 				"shop-events-connect",
 				// network.dns takes no size field: a zone is billed by the zone, not
 				// by a node or a GiB, and no recorded call gives one (PRD #581).
-				"shop.example.com.",
+				"shop.example.com. (Z0123456789ABCDEFGHIJ)",
 				"example.com.",
 				"shop-api.example.com.",
 			},
@@ -1576,6 +1593,18 @@ func TestInventoryGuidePrograms(t *testing.T) {
 				t.Fatalf("the inventory holds no resource; the program classified nothing\n%s", stdout)
 			}
 
+			// A resource's ID comes from what the program reads, not from the order
+			// in which the guide's `"$out"/*.json` glob hands the recorded output
+			// over, which a reader's shell may order differently: both runs have to
+			// write the same inventory (PRD #581, the ID of a zone).
+			reversed := slices.Clone(inputs)
+			slices.Reverse(reversed)
+
+			if again := runJQ(t, jq, tc.source, reversed); !bytes.Equal(again, stdout) {
+				t.Errorf("%s: the program writes another inventory when the recorded CLI output arrives in the reverse order, want the same one: no resource's ID may depend on the order of the input files (PRD #581)\n%s",
+					tc.source, cmp.Diff(doc.Resources, decodeInventory(t, again).Resources))
+			}
+
 			assertCategories(t, tc.source, doc)
 			assertBareMetal(t, tc.source, doc, tc.bareMetal)
 			assertPresent(t, tc.source, doc, tc.present)
@@ -1586,6 +1615,7 @@ func TestInventoryGuidePrograms(t *testing.T) {
 			assertNoRawTypes(t, tc.source, doc, tc.absentRawTypes)
 			assertUnclassifiedKeepsRawType(t, tc.source, doc)
 			assertShortIDs(t, tc.source, doc)
+			assertUniqueIDs(t, tc.source, doc)
 
 			assertAssessAccepts(t, tc, stdout)
 		})
@@ -2284,6 +2314,25 @@ func assertShortIDs(t *testing.T, source string, doc inventoryDoc) {
 					source, resource.ID, marker)
 			}
 		}
+	}
+}
+
+// assertUniqueIDs fails when two resources of the inventory share an ID. A
+// program gives a colliding ID what tells the two resources apart, their type
+// and region or, for two hosted zones of one name, their own zone ID, so every
+// resource is listed once under an ID of its own (PRD #581, the ID of a zone).
+func assertUniqueIDs(t *testing.T, source string, doc inventoryDoc) {
+	t.Helper()
+
+	seen := make(map[string]bool, len(doc.Resources))
+
+	for _, resource := range doc.Resources {
+		if seen[resource.ID] {
+			t.Errorf("%s: the inventory holds %q more than once, want every resource under an ID of its own: a resource whose name another resource has gets what tells them apart appended (PRD #581)",
+				source, resource.ID)
+		}
+
+		seen[resource.ID] = true
 	}
 }
 

@@ -269,7 +269,11 @@ func TestInventoryPickerIsHiddenWithoutScript(t *testing.T) {
 // the `batch-get-collection` loop it feeds, and `kafka list-clusters-v2` (the
 // shape S3's and EKS's list-with-follow-up commands already take). The search and
 // Kafka instance types join the existing "The vCPU and memory of the instance
-// types in use" command, whose jq list reads their calls' output too.
+// types in use" command, whose jq list reads their calls' output too. AWS gained
+// three more with PRD #581's Route 53 classification: `list-hosted-zones`, the
+// `get-dnssec` loop it feeds, and the record-set loop that counts each public
+// zone's routed record sets, which is a command of its own so that a reader whose
+// policy leaves `route53:ListResourceRecordSets` out can skip it.
 func TestInventoryCommandsPerStep(t *testing.T) {
 	t.Parallel()
 
@@ -278,7 +282,7 @@ func TestInventoryCommandsPerStep(t *testing.T) {
 		collect int
 		build   int
 	}{
-		{key: "aws", collect: 18, build: 1},
+		{key: "aws", collect: 21, build: 1},
 		// GCP's collect step gains PRD #571's Managed Service for Apache Kafka
 		// list, one command of its own as its other service lists are.
 		{key: "gcp", collect: 12, build: 1},
@@ -3457,19 +3461,34 @@ func guideAWSPolicyActions(t *testing.T, guide string) []string {
 // signs a zone with.
 var awsRoute53Calls = map[string][]string{
 	"aws route53 list-hosted-zones": {
-		// Config is the parent object of the one field read: Config.PrivateZone.
-		"Id", "Name", "PrivateZone", "Config",
+		// HostedZones is the response's list of zones, the one the projection maps
+		// over, as ResourceRecordSets is for the record-set call; Config is the
+		// parent object of the one field read, Config.PrivateZone.
+		"HostedZones", "Id", "Name", "PrivateZone", "Config",
 	},
 	"aws route53 get-dnssec": {
 		"Status", "ServeSignature",
 	},
 	"aws route53 list-resource-record-sets": {
-		// The predicate counts the record sets that carry a set identifier or answer
-		// on a health check or by multivalue answer: a weighted, latency, failover,
-		// geolocation or multivalue record set. The count is all the program reads.
+		// The predicate counts the record sets that carry a field
+		// awsRoute53RoutingMarkers lists; ResourceRecordSets is the response's list,
+		// the one the predicate filters. The count is all the program reads.
 		"ResourceRecordSets", "SetIdentifier", "HealthCheckId", "MultiValueAnswer",
+		"TrafficPolicyInstanceId",
 	},
 }
+
+// awsRoute53RoutingMarkers are the fields a record set of a hosted zone carries
+// when it routes by client or by health rather than answering the same way for
+// every client: a set identifier (weighted, latency, failover, geolocation,
+// geoproximity, IP-based, multivalue answer and AZ-affinity routing all need one),
+// a health check, a multivalue answer, and a TrafficPolicyInstanceId, which a
+// record set a Route 53 traffic policy created carries because its routing lives
+// in the policy (PRD #581, *The AWS classification*). The guide's --query counts
+// the record sets that carry any one of them, and a marker the projection leaves
+// out makes a zone answer by client or by health without the `dns-routing`
+// capability that says so.
+var awsRoute53RoutingMarkers = []string{"SetIdentifier", "HealthCheckId", "MultiValueAnswer", "TrafficPolicyInstanceId"}
 
 // route53ZoneIDArgument matches the argument a per-zone Route 53 call passes: the
 // zone's ID, quoted, and never its name, which two zones of the same account
@@ -3520,6 +3539,15 @@ func TestInventoryGuideAWSRoute53CallsKeepOnlyTheFieldsTheyRead(t *testing.T) {
 			if call.name != "aws route53 list-hosted-zones" && !route53ZoneIDArgument.MatchString(command) {
 				t.Errorf("%q passes no `--hosted-zone-id \"$id\"`, want the zone's ID quoted: the call asks for one zone by its ID, and the guide's loop reads the ID of each zone the list returned into `$id` (PRD #581, *The per-zone loops*)\n%s",
 					call.name, command)
+			}
+
+			if call.name == "aws route53 list-resource-record-sets" {
+				for _, marker := range awsRoute53RoutingMarkers {
+					if !slices.Contains(keys, marker) {
+						t.Errorf("%q's --query names no %q, want every field that makes a record set one that routes by client or by health (%s): a record set a traffic policy created carries no set identifier and no health check of its own, so a count that leaves its TrafficPolicyInstanceId out counts a zone that answers by policy as one that does not (PRD #581)\n%s",
+							call.name, marker, strings.Join(awsRoute53RoutingMarkers, ", "), command)
+					}
+				}
 			}
 		}
 	}

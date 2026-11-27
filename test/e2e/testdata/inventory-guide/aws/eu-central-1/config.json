@@ -5,6 +5,7 @@
     "{\"resourceId\":\"Z0123456789ABCDEFGHIK\",\"resourceName\":\"example.com.\",\"resourceType\":\"AWS::Route53::HostedZone\",\"awsRegion\":\"global\"}",
     "{\"resourceId\":\"Z0123456789ABCDEFGHIL\",\"resourceName\":\"shop-api.example.com.\",\"resourceType\":\"AWS::Route53::HostedZone\",\"awsRegion\":\"global\"}",
     "{\"resourceId\":\"Z0123456789ABCDEFGHIM\",\"resourceName\":\"internal.example.com.\",\"resourceType\":\"AWS::Route53::HostedZone\",\"awsRegion\":\"global\"}",
+    "{\"resourceId\":\"Z0000000000000000PRIV\",\"resourceName\":\"shop.example.com.\",\"resourceType\":\"AWS::Route53::HostedZone\",\"awsRegion\":\"global\"}",
     "{\"resourceId\":\"Z0123456789ABCDEFGHIK\",\"resourceName\":\"example.com.\",\"resourceType\":\"AWS::Route53::DNSSEC\",\"awsRegion\":\"global\"}",
     "{\"resourceId\":\"00000000-0000-0000-0000-000000000000\",\"resourceName\":\"shop-api-health\",\"resourceType\":\"AWS::Route53::HealthCheck\",\"awsRegion\":\"global\"}",
     "{\"resourceId\":\"arn:aws:route53resolver:eu-central-1:123456789012:resolver-endpoint/rslvr-in-0123456789abcdef0\",\"resourceType\":\"AWS::Route53Resolver::ResolverEndpoint\",\"awsRegion\":\"eu-central-1\"}",

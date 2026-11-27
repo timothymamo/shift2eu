@@ -675,7 +675,12 @@
       ]
     },
     {
-      "id": "shop.example.com.",
+      "id": "shop.example.com. (Z0000000000000000PRIV)",
+      "rawType": "AWS::Route53::HostedZone",
+      "category": "unclassified"
+    },
+    {
+      "id": "shop.example.com. (Z0123456789ABCDEFGHIJ)",
       "rawType": "AWS::Route53::HostedZone",
       "category": "network.dns"
     },
