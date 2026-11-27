@@ -496,9 +496,16 @@ Decision:
   `${HOME}/.pi/agent/extensions/dot-agent-deck`; `skills` the unit's `${PWD}/.claude/skills`, the
   directory `.pi/settings.json` named. Its own flags come before the deck's arguments, so a `--` among
   those cannot turn them into a message.
-- **`--approve` is refused.** An argument `--approve` or `-a` would undo `--no-approve` (pi keeps the
-  last), so the wrapper exits 1 before anything else starts and names `.dot-agent-deck.toml`'s tester
-  command; that command drops `--approve` in the same change.
+- **`--approve` is dropped with a notice.** An argument that is exactly `--approve` or `-a`, wherever it
+  stands (also after a `--`), would undo `--no-approve` (pi keeps the last), so the wrapper removes it
+  before pi starts and prints one line on stderr for each, in argument order:
+  `pi-tester: argument <arg> dropped: the tester's pi never trusts the project, because a trusted
+  .pi/settings.json can run commands the env-printing refusal does not see (shellCommandPrefix, packages,
+  npmCommand) (issue #702)`; pi then starts with the other arguments unchanged. `.dot-agent-deck.toml`'s
+  tester command drops `--approve` in the same change. The wrapper does not refuse the argument because the
+  installed wrapper serves every unit on the VM at once: units cut before this change still pass
+  `--approve` from their own `.dot-agent-deck.toml`, and a refusal would stop their tester from starting
+  until each merged `main`, while dropping it gives them the same protection at once.
 - **The deck's extension is checked, and a missing one fails closed.** The wrapper requires `HOME` to be
   an absolute path, the deck's directory not to lie in the working directory, not to be a symbolic link,
   to be a directory, and to hold a regular `index.ts`, `index.js` or `package.json`; otherwise it exits 1
@@ -522,7 +529,10 @@ Alternatives considered for this amendment:
 - **Pass the deck's `index.ts` file instead of its directory.** It ties the wrapper to the deck's current
   file layout, which an upgrade may change; the directory is what pi's own discovery loaded.
 - **Silently drop `--approve` from the arguments.** It keeps a stale tester command working but hides that
-  the command asks for something the wrapper will not do.
+  the command asks for something the wrapper will not do; the notice line keeps it visible.
+- **Refuse `--approve` and `-a`, exiting 1.** It forces every stale command to be fixed, but it stops the
+  tester of every unit cut before the merge as soon as the maintainer installs the new wrapper, for no
+  protection the drop does not give.
 
 Consequences of this amendment:
 
@@ -541,6 +551,10 @@ Consequences of this amendment:
     runs could change it for its next start; the same-uid limit stated above.
   - `.dot-agent-deck.toml`'s tester command can still add `--extension` or point elsewhere; the deck's trust
     approval is what shows that, as above.
-- A unit whose folder still has the old tester command (with `--approve`) gets the refusal once the
-  maintainer installs the new wrapper; merging `main` into its branch fixes it.
+- A unit whose folder still has the old tester command (with `--approve`) keeps a working tester once the
+  maintainer installs the new wrapper: the argument is dropped with the notice line in its pane, and merging
+  `main` into its branch removes the line. The maintainer approves the changed tester command in the deck
+  (`dot-agent-deck trust approve`) and runs `make vm-pi-tester` after the merge.
+- The tester's processes still run as the VM's one user (the limit stated above): this amendment narrows
+  what pi loads from the unit folder, not what a program the tester runs can reach.
 - `.pi/settings.json` no longer matters to the tester; it stays for a pi run by hand with `--approve`.
