@@ -285,19 +285,20 @@ const (
 	auditModelIf          = "    timeout-minutes: 120\n    if: ${{ " + auditGuard + " }}\n"
 	auditPublishIf        = "    timeout-minutes: 30\n    if: ${{ " + auditGuard + " }}\n"
 	// auditChecksPermissions is the checks job's permissions block, whose comment
-	// no other job shares: the four read scopes rows 6 to 15 read GitHub with
-	// (PR 5c). No packages scope, because the image is pulled anonymously, and
-	// no id-token: scorecard runs as the CLI, not the action.
+	// no other job shares: the five read scopes rows 6 to 15 read GitHub with
+	// (PR 5c, issue #660). No packages scope, because the image is pulled
+	// anonymously, and no id-token: scorecard runs as the CLI, not the action.
 	auditChecksPermissions = "    # GITHUB_TOKEN reads only: contents for the checkout, the release tag and the release download;\n" +
 		"    # attestations for gh attestation verify (row 7); actions for scorecard's reads of the workflows'\n" +
-		"    # runs (row 6); issues for Renovate's Dependency Dashboard (row 15). The image is public, so no\n" +
-		"    # packages scope: it is pulled anonymously (row 8). Nothing here writes, and no read needs admin:\n" +
-		"    # what the token is refused is recorded \"not run\".\n" +
+		"    # runs (row 6); issues for Renovate's Dependency Dashboard and pull-requests for its open pull\n" +
+		"    # requests (row 15). The image is public, so no packages scope: it is pulled anonymously (row 8).\n" +
+		"    # Nothing here writes, and no read needs admin: what the token is refused is recorded \"not run\".\n" +
 		"    permissions:\n" +
 		"      contents: read\n" +
 		"      attestations: read\n" +
 		"      actions: read\n" +
-		"      issues: read\n"
+		"      issues: read\n" +
+		"      pull-requests: read\n"
 	// auditPublishPermissions is the publish job's permissions block, whose
 	// comment no other job shares.
 	auditPublishPermissions = "    # artifacts, attestations for the image check. The audit App's token writes.\n" +
@@ -1920,6 +1921,27 @@ func TestAuditWorkflow(t *testing.T) {
 			wantIn:   "packages",
 		},
 		{
+			// Issue #660: row 15 lists the repository's open pull requests page by
+			// page through the pulls endpoint, which the checks job's token reads
+			// with pull-requests beside issues.
+			name:     "the checks job without the pull-requests scope",
+			workflow: mutate(t, acceptedWorkflow, auditChecksPermissions, strings.Replace(auditChecksPermissions, "      pull-requests: read\n", "", 1)),
+			wantIn:   "pull-requests",
+		},
+		{
+			name:     "a pull-requests write in the checks job",
+			workflow: mutate(t, acceptedWorkflow, auditChecksPermissions, strings.Replace(auditChecksPermissions, "      pull-requests: read\n", "      pull-requests: write\n", 1)),
+			wantIn:   "pull-requests",
+		},
+		{
+			// The list of the checks job's scopes is closed: a scope its rows do
+			// not read with is refused, so the token reaches no further than they
+			// need.
+			name:     "another extra scope in the checks job beside pull-requests",
+			workflow: mutate(t, acceptedWorkflow, auditChecksPermissions, auditChecksPermissions+"      statuses: read\n"),
+			wantIn:   "statuses",
+		},
+		{
 			name:     "an extra scope in the model job",
 			workflow: mutate(t, acceptedWorkflow, auditModelPermissions, auditModelPermissions+"      issues: read\n"),
 			wantIn:   "issues",
@@ -2638,7 +2660,8 @@ func TestAuditWorkflow(t *testing.T) {
 		// must draw a message that names it.
 		{
 			// PR 5c: row 7 reads the release's attestations, so the checks job holds
-			// the scope - and exactly the four scopes its rows read with.
+			// the scope - and exactly the five scopes its rows read with (issue #660
+			// added pull-requests for row 15's pulls read).
 			name:     "no attestations scope in the checks job",
 			workflow: mutate(t, acceptedWorkflow, auditChecksPermissions, strings.Replace(auditChecksPermissions, "      attestations: read\n", "", 1)),
 			wantIn:   "attestations",
