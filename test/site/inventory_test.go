@@ -290,10 +290,10 @@ func TestInventoryCommandsPerStep(t *testing.T) {
 		// a command of its own so that a reader whose policy leaves
 		// `dns.resourceRecordSets.list` out can skip it.
 		{key: "gcp", collect: 14, build: 1},
-		// Azure's collect step gains PRD #581's DNSSEC loop: one command of its
-		// own, running `az network dns dnssec-config show` once per public DNS
-		// zone the Resource Graph pages hold, so that a reader can see which
-		// signed state each zone's file contributed.
+		// Azure's collect step gains PRD #581's DNSSEC loop as its ninth
+		// command: `az network dns dnssec-config show`, run once per public DNS
+		// zone the Resource Graph pages hold, its own command so that a reader
+		// whose policy leaves it out can skip it.
 		{key: "azure", collect: 9, build: 1},
 	}
 
@@ -4508,7 +4508,7 @@ func TestInventoryGuideAzureDNSSECCommandsKeepOnlyTheFieldsTheyRead(t *testing.T
 
 	// A resource group's name may start with `-` (audit finding on PRD #581's
 	// milestone 4). With the flag and its value as two words the CLI parses
-	// `-legacy` as an option, not as the flag's value, so the call fails; the
+	// `-rg-legacy` as an option, not as the flag's value, so the call fails; the
 	// loop's `|| :` hides that, and a signed zone loses dnssec. The attached form
 	// leaves the CLI no word of the value to parse as an option.
 	for _, want := range []string{`--resource-group="$rg"`, `--zone-name="$zone"`} {
