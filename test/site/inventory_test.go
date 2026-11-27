@@ -284,8 +284,12 @@ func TestInventoryCommandsPerStep(t *testing.T) {
 	}{
 		{key: "aws", collect: 21, build: 1},
 		// GCP's collect step gains PRD #571's Managed Service for Apache Kafka
-		// list, one command of its own as its other service lists are.
-		{key: "gcp", collect: 12, build: 1},
+		// list, one command of its own as its other service lists are, and PRD
+		// #581's two Cloud DNS commands: `dns managed-zones list`, and the
+		// record-set loop that counts each public zone's routed record sets,
+		// a command of its own so that a reader whose policy leaves
+		// `dns.resourceRecordSets.list` out can skip it.
+		{key: "gcp", collect: 14, build: 1},
 		{key: "azure", collect: 8, build: 1},
 	}
 
