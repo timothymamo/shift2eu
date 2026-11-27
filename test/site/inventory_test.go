@@ -1869,6 +1869,223 @@ func guideRoleParagraphs(guide string) string {
 	return strings.Join(paragraphs, "\n\n")
 }
 
+// azureResourceGraphQueryMarker marks the command of the guide's Azure section
+// that builds the Resource Graph query: one shell variable the loop below hands
+// to `az graph query`, page after page (PRD #571, milestone 4).
+const azureResourceGraphQueryMarker = `query="Resources`
+
+// azureResourceGraphQueryPrefix is how that command opens the variable: the name,
+// a `="`, and the query's first pipe-less line.
+const azureResourceGraphQueryPrefix = `query="`
+
+// azureHDInsightProjectionFields are the HDInsight properties the guide's
+// Resource Graph projection may name (PRD #571, *Only the fields the program
+// reads*): the cluster's kind, which classifies it as messaging.kafka, and its
+// compute profile, whose worker roles the program counts and sizes. The roles
+// array is named whole because Resource Graph cannot trim inside an array, so
+// the role's name, its targetInstanceCount, its hardwareProfile.vmSize and its
+// dataDisksGroups reach the file with it.
+var azureHDInsightProjectionFields = []string{
+	"properties.clusterDefinition.kind",
+	"properties.computeProfile.roles",
+}
+
+// azurePropertyPath matches one property path of the guide's Resource Graph
+// query: `properties.` and one or more dotted segments.
+var azurePropertyPath = regexp.MustCompile(`properties(?:\.[A-Za-z0-9_]+)+`)
+
+// azureResourceGraphQuery returns the KQL the guide's Azure section builds for
+// its Resource Graph call.
+func azureResourceGraphQuery(t *testing.T, guide string) string {
+	t.Helper()
+
+	azure := guideSourceByKey(t, "azure")
+	commands := guideCommands(t, guide, azure)
+
+	var assignments []string
+
+	for _, command := range commands {
+		if strings.Contains(command, azureResourceGraphQueryMarker) {
+			assignments = append(assignments, command)
+		}
+	}
+
+	if len(assignments) != 1 {
+		t.Fatalf("docs/guide/inventory.md's %s section builds %d Resource Graph quer(y/ies) (`%s`), want exactly one: PRD #571's Azure classification reads an HDInsight cluster's properties from that query, and a second one would leave which query the program's fields come from unclear\n%s",
+			azure.name, len(assignments), azureResourceGraphQueryMarker, describeCommands(commands))
+	}
+
+	command := assignments[0]
+	rest := command[strings.Index(command, azureResourceGraphQueryPrefix)+len(azureResourceGraphQueryPrefix):]
+
+	end := strings.IndexByte(rest, '"')
+	if end < 0 {
+		t.Fatalf("docs/guide/inventory.md's Resource Graph query is not closed by a `\"`, so this check cannot read the query it builds\n%s", command)
+	}
+
+	return rest[:end]
+}
+
+// azureHDInsightBranch returns the case branch of the Resource Graph query that
+// projects an HDInsight cluster's properties: the text from the cluster's type
+// to the next branch, or to the query's closing `dynamic(null)`. It reports
+// false when the query holds no such branch.
+func azureHDInsightBranch(query string) (string, bool) {
+	const marker = "microsoft.hdinsight/clusters"
+
+	at := strings.Index(strings.ToLower(query), marker)
+	if at < 0 {
+		return "", false
+	}
+
+	rest := query[at+len(marker):]
+	end := len(rest)
+
+	for _, terminator := range []string{"type =~", "type in~", "dynamic(null)"} {
+		if i := strings.Index(strings.ToLower(rest), terminator); i >= 0 && i < end {
+			end = i
+		}
+	}
+
+	return rest[:end], true
+}
+
+// TestInventoryGuideAzureResourceGraphQueryKeepsOnlyTheFieldsTheProgramReads
+// pins the Azure half of PRD #571's *Only the fields the program reads* on the
+// guide's own text: the Resource Graph query keeps its columns with an explicit
+// `| project`, and the branch that reads an HDInsight cluster names only the
+// properties the program reads of it, never osProfile or connectivityEndpoints.
+// The recorded fixture cannot pin this on its own, since a fixture written after
+// the fact could leave out the fields a query without the projection writes.
+func TestInventoryGuideAzureResourceGraphQueryKeepsOnlyTheFieldsTheProgramReads(t *testing.T) {
+	t.Parallel()
+
+	const guidePath = "docs/guide/inventory.md"
+
+	guide := string(readRepositoryFile(t, filepath.Join("docs", "guide", "inventory.md")))
+	query := azureResourceGraphQuery(t, guide)
+
+	var columns []string
+
+	for _, line := range strings.Split(query, "\n") {
+		projection, projected := strings.CutPrefix(strings.TrimSpace(line), "| project ")
+		if !projected {
+			continue
+		}
+
+		columns = nil
+
+		for _, column := range strings.Split(projection, ",") {
+			columns = append(columns, strings.TrimSpace(column))
+		}
+	}
+
+	if columns == nil {
+		t.Fatalf("%s's Resource Graph query ends in no `| project`, want one naming the columns the program reads: without it the query writes every column of every resource to the file, and the program's fields cannot be told from the rest\n%s",
+			guidePath, query)
+	}
+
+	for _, column := range []string{"id", "name", "type", "location", "zones", "properties"} {
+		if !slices.Contains(columns, column) {
+			t.Errorf("%s's Resource Graph query projects the columns %v, want `%s` among them: the program writes the resource's short ID, its region and, for an HDInsight cluster, the zones that decide its zone-high-availability out of those\n%s",
+				guidePath, columns, column, query)
+		}
+	}
+
+	branch, ok := azureHDInsightBranch(query)
+	if !ok {
+		t.Errorf("%s's Resource Graph query holds no `microsoft.hdinsight/clusters` branch, want one projecting only %s: an HDInsight cluster of kind KAFKA is messaging.kafka (PRD #571), and the program reads its kind, its worker count and its workers' size from that branch\n%s",
+			guidePath, strings.Join(azureHDInsightProjectionFields, ", "), query)
+
+		return
+	}
+
+	named := azurePropertyPath.FindAllString(branch, -1)
+	slices.Sort(named)
+	named = slices.Compact(named)
+
+	for _, path := range named {
+		if !slices.Contains(azureHDInsightProjectionFields, path) {
+			t.Errorf("%s's Resource Graph query names %q in its HDInsight branch, want only the properties PRD #571 reads of a cluster (%s): a property the program does not read would keep a field the guide's raw output should drop, and osProfile (the admin user, the SSH key, the domain-join credentials) and connectivityEndpoints (the hosts the cluster answers on) are excluded outright\n%s",
+				guidePath, path, strings.Join(azureHDInsightProjectionFields, ", "), branch)
+		}
+	}
+
+	for _, path := range azureHDInsightProjectionFields {
+		if !slices.Contains(named, path) {
+			t.Errorf("%s's Resource Graph query names no %q in its HDInsight branch, want it: the program reads the cluster's kind to classify it and its worker roles to count and size them, and Resource Graph cannot trim inside the roles array, so that array is the field to keep\n%s",
+				guidePath, path, branch)
+		}
+	}
+}
+
+// hdInsightCLICommand is the `az` command the guide must not run (PRD #571, *No
+// data-plane or configuration access*): Azure groups its configuration and
+// credentials calls for an HDInsight cluster under that command, and the guide
+// reads the cluster through the Resource Graph projection alone. The group's name
+// is spelled as the CLI spells it, which misspell reads as a misspelling of an
+// English word.
+//
+//nolint:misspell // the Azure CLI's own group name, not a word
+const hdInsightCLICommand = "az hdinsight"
+
+// TestInventoryGuideReadsNoHDInsightConfiguration pins PRD #571's *No
+// data-plane or configuration access* for Azure: an HDInsight cluster is read
+// through the Resource Graph projection alone, so the guide runs no
+// configuration command for one and names no configurations action, which would
+// ask the cluster for its settings and its credentials instead of their public
+// shape.
+func TestInventoryGuideReadsNoHDInsightConfiguration(t *testing.T) {
+	t.Parallel()
+
+	const guidePath = "docs/guide/inventory.md"
+
+	guide := string(readRepositoryFile(t, filepath.Join("docs", "guide", "inventory.md")))
+
+	for _, source := range guideSources {
+		for _, command := range guideCommands(t, guide, source) {
+			if strings.Contains(command, hdInsightCLICommand) {
+				t.Errorf("%s's %s section runs `%s`, want no such call: PRD #571 reads an HDInsight cluster through the Resource Graph projection alone, and a configuration call reads the cluster's settings and credentials\n%s",
+					guidePath, source.name, hdInsightCLICommand, command)
+			}
+		}
+	}
+
+	const configurationsAction = "Microsoft.HDInsight/clusters/configurations/action"
+
+	if strings.Contains(guide, configurationsAction) {
+		t.Errorf("%s names `%s`, want it nowhere: it is the configuration and credentials read PRD #571 forbids, and the guide's Azure role grants no such action\n%s",
+			guidePath, configurationsAction, guideRoleParagraphs(guide))
+	}
+}
+
+// TestInventoryGuideAzureEventHubsHandRule pins the sentence beside the Azure
+// classification table that PRD #571 asks for: an Event Hubs namespace stays
+// unclassified unless every client of it uses the namespace's Kafka endpoint,
+// in which case the reader sets its category to messaging.kafka by hand. The
+// check reads only the two names the rule cannot leave out, so the wording is
+// the guide's to choose.
+func TestInventoryGuideAzureEventHubsHandRule(t *testing.T) {
+	t.Parallel()
+
+	const guidePath = "docs/guide/inventory.md"
+
+	guide := string(readRepositoryFile(t, filepath.Join("docs", "guide", "inventory.md")))
+
+	var paragraphs []string
+
+	for _, paragraph := range strings.Split(guide, "\n\n") {
+		if strings.Contains(paragraph, "Event Hubs") && strings.Contains(paragraph, "messaging.kafka") {
+			paragraphs = append(paragraphs, paragraph)
+		}
+	}
+
+	if len(paragraphs) == 0 {
+		t.Errorf("%s names no paragraph holding both `Event Hubs` and `messaging.kafka`, want one beside the Azure classification table: an Event Hubs namespace is no Kafka cluster unless every client of it uses the namespace's Kafka endpoint, and PRD #571 has the guide say when to set its category by hand",
+			guidePath)
+	}
+}
+
 // TestInventoryGuidePagesListCollectionsByHand pins the page limit the guide has
 // to work around (review finding B1): `opensearchserverless list-collections`
 // has no AWS CLI paginator, so the CLI answers with one page of at most 100

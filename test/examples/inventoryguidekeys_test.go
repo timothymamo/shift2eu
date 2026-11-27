@@ -100,6 +100,36 @@ var searchAndKafkaFixtures = []guideCallFixture{
 	},
 }
 
+// azureResourceGraphFixtures is the glob of the guide's Resource Graph export,
+// one file per page of the query (PRD #571, milestone 4). azure.jq reads every
+// <source>/*.json file of the export, so the pages are inputs of one program.
+const azureResourceGraphFixtures = "test/e2e/testdata/inventory-guide/azure/graph-*.json"
+
+// azureHDInsightFixtureKeys are the fields the guide's Resource Graph projection
+// keeps of an HDInsight cluster (PRD #571, *Only the fields the program reads*):
+// the columns every row of the export carries, and the properties azure.jq reads
+// to recognise a cluster of kind KAFKA, to count its worker nodes and to size
+// them. The worker role is read out of the computeProfile.roles array, which
+// Resource Graph cannot trim inside, so that array is kept whole: the role's
+// name, its targetInstanceCount, its hardwareProfile.vmSize and its
+// dataDisksGroups are what the program reads of it.
+var azureHDInsightFixtureKeys = []string{
+	"id", "name", "type", "kind", "location", "zones", "sku", "properties",
+	"clusterDefinition",
+	"computeProfile", "roles",
+	"targetInstanceCount", "hardwareProfile", "vmSize",
+	"dataDisksGroups", "disksPerNode", "diskSizeGB",
+}
+
+// hdInsightExcludedFixtureKeys are the two properties of an HDInsight cluster
+// PRD #571 excludes outright (*Only the fields the program reads*, *No
+// data-plane or configuration access*): osProfile holds the cluster's admin user,
+// its SSH key and its domain-join credentials, and connectivityEndpoints the
+// hosts it answers on. The guide reads an HDInsight cluster through Resource
+// Graph alone, never through a configuration call, so neither field reaches the
+// export in any row of it.
+var hdInsightExcludedFixtureKeys = []string{"osProfile", "connectivityEndpoints"}
+
 // excludedFixtureKeysPath is the one list of the fields PRD #571 excludes from
 // every projection and fixture of the guide's search and messaging calls, shared
 // with test/site's projection check so the two cannot drift apart (review finding
@@ -682,6 +712,80 @@ func readFixtureValues(t *testing.T, path, call string) []any {
 	}
 
 	return values
+}
+
+// TestInventoryGuideAzureHDInsightFixtureCarriesOnlyTheFieldsTheProgramReads
+// pins the Azure half of PRD #571's *Only the fields the program reads*, the way
+// TestInventoryGuideSearchAndKafkaFixturesCarryOnlyTheFieldsTheProgramReads pins
+// the AWS and GCP halves: every key of an HDInsight cluster in the guide's
+// Resource Graph export is one azure.jq reads, at any depth, and none of
+// osProfile or connectivityEndpoints appears anywhere in the export. A fixture
+// that grew a key after this test was written would otherwise carry a field the
+// guide's raw output should have dropped.
+func TestInventoryGuideAzureHDInsightFixtureCarriesOnlyTheFieldsTheProgramReads(t *testing.T) {
+	t.Parallel()
+
+	excluded := readExcludedFixtureKeys(t)
+
+	paths, err := filepath.Glob(filepath.Join(repoRoot, filepath.FromSlash(azureResourceGraphFixtures)))
+	if err != nil {
+		t.Fatalf("glob %s: %v", azureResourceGraphFixtures, err)
+	}
+
+	if len(paths) == 0 {
+		t.Fatalf("%s matched no Resource Graph page; the fixtures are missing", azureResourceGraphFixtures)
+	}
+
+	slices.Sort(paths)
+
+	clusters := 0
+
+	for _, path := range paths {
+		file, err := filepath.Rel(repoRoot, path)
+		if err != nil {
+			t.Fatalf("relative path of %s: %v", path, err)
+		}
+
+		file = filepath.ToSlash(file)
+
+		for _, value := range readFixtureValues(t, path, "az graph query") {
+			document, ok := value.(map[string]any)
+			if !ok {
+				t.Fatalf("%s holds a value that is not a Resource Graph page: %T", file, value)
+			}
+
+			for _, entry := range asSlice(document["data"]) {
+				row, ok := entry.(map[string]any)
+				if !ok {
+					t.Fatalf("%s holds a data entry that is no resource: %T", file, entry)
+				}
+
+				if rawType, _ := row["type"].(string); !strings.EqualFold(rawType, "microsoft.hdinsight/clusters") {
+					continue
+				}
+
+				clusters++
+
+				for _, problem := range fixtureKeyProblems(row, azureHDInsightFixtureKeys, excluded) {
+					t.Errorf("%s: %s", file, problem)
+				}
+			}
+		}
+
+		// The exclusion holds of the whole page, not of the HDInsight rows alone:
+		// no row of the export a program reads may hold either field.
+		page := readFile(t, path)
+
+		for _, key := range hdInsightExcludedFixtureKeys {
+			if strings.Contains(page, quotedKey(key)) {
+				t.Errorf("%s holds the key %s, want it nowhere: PRD #571 excludes it from every projection and fixture of the guide's search and messaging calls, and an HDInsight cluster is read through Resource Graph alone", file, quotedKey(key))
+			}
+		}
+	}
+
+	if clusters == 0 {
+		t.Fatalf("%s holds no resource of type microsoft.hdinsight/clusters, so this check read nothing: PRD #571's milestone 4 records an HDInsight Kafka cluster in the export", azureResourceGraphFixtures)
+	}
 }
 
 // TestInventoryGuideSearchAndKafkaFixtureCheckFindsAPlantedKey pins that the

@@ -198,6 +198,12 @@
       }
     },
     {
+      "id": "eh-shop-orders",
+      "rawType": "Microsoft.EventHub/namespaces",
+      "category": "unclassified",
+      "region": "westeurope"
+    },
+    {
       "id": "fs-shop-archive",
       "rawType": "Microsoft.FileShares/fileShares",
       "category": "storage.file",
@@ -226,6 +232,18 @@
       "id": "func-shop-thumbnails",
       "rawType": "Microsoft.Web/sites",
       "category": "serverless.function",
+      "region": "westeurope"
+    },
+    {
+      "id": "kafka-shop-audit",
+      "rawType": "Microsoft.HDInsight/clusters",
+      "category": "unclassified",
+      "region": "westeurope"
+    },
+    {
+      "id": "kafka-shop-streams",
+      "rawType": "Microsoft.HDInsight/clusters",
+      "category": "unclassified",
       "region": "westeurope"
     },
     {
@@ -566,6 +584,18 @@
       "id": "shop.example.com",
       "rawType": "Microsoft.Network/dnsZones",
       "category": "unclassified"
+    },
+    {
+      "id": "spark-shop-batch",
+      "rawType": "Microsoft.HDInsight/clusters",
+      "category": "unclassified",
+      "region": "westeurope"
+    },
+    {
+      "id": "srch-shop-catalog",
+      "rawType": "Microsoft.Search/searchServices",
+      "category": "unclassified",
+      "region": "westeurope"
     },
     {
       "id": "stshopassets",

@@ -1152,6 +1152,41 @@ func inventoryGuides() []inventoryGuideCase {
 				// A scale set member's data disk that outlives the member holds
 				// data and stays: only one its member deletes with it goes.
 				{id: "vmss-shop-web_0abc_DataDisk_1", rawType: "Microsoft.Compute/disks", category: "storage.block"},
+				// An HDInsight cluster of kind KAFKA is Apache Kafka on virtual
+				// machines Azure runs, so it is messaging.kafka (PRD #571). Three worker
+				// nodes keep serving through the loss of a node, the zone the cluster
+				// names through the loss of a zone, and Azure encrypts its managed disks
+				// at rest.
+				{
+					id: "kafka-shop-streams", rawType: "Microsoft.HDInsight/clusters", category: "messaging.kafka",
+					region:       "westeurope",
+					capabilities: []string{"encryption-at-rest", "node-high-availability", "zone-high-availability"},
+				},
+				// A cluster of two worker nodes in no zone keeps serving through the
+				// loss of no node and no zone: only the encryption at rest is left.
+				{
+					id: "kafka-shop-audit", rawType: "Microsoft.HDInsight/clusters", category: "messaging.kafka",
+					capabilities: []string{"encryption-at-rest"},
+				},
+				// An HDInsight cluster of another kind runs no Kafka broker a target
+				// serves, so it stays unclassified under its own type.
+				{
+					id: "spark-shop-batch", rawType: "Microsoft.HDInsight/clusters", category: "unclassified",
+					capabilities: []string{},
+				},
+				// An Event Hubs namespace speaks the Event Hubs protocol, and PRD #571
+				// counts a namespace as messaging.kafka only when every client of it
+				// uses the Kafka endpoint, which is the guide's step to take by hand. So
+				// does an Azure AI Search service, which no target runs: both stay
+				// unclassified under their own type.
+				{
+					id: "eh-shop-orders", rawType: "Microsoft.EventHub/namespaces", category: "unclassified",
+					capabilities: []string{},
+				},
+				{
+					id: "srch-shop-catalog", rawType: "Microsoft.Search/searchServices", category: "unclassified",
+					capabilities: []string{},
+				},
 			},
 			sized: []sizeFact{
 				// A Standard_D2s_v3 is 2 cores and 8192 MB, from az vm list-sizes.
@@ -1196,6 +1231,14 @@ func inventoryGuides() []inventoryGuideCase {
 				{id: "shop-media", storageGiB: 1024},
 				{id: "fs-shop-build", storageGiB: 256},
 				{id: "fs-shop-archive", storageGiB: 512},
+				// An HDInsight cluster is sized by its worker role: its targetInstanceCount
+				// is the count, its hardwareProfile.vmSize a size az vm list-sizes knows
+				// (Standard_D4s_v3 is 4 cores and 16384 MB, Standard_D2s_v3 2 and 8192),
+				// and its dataDisksGroups the GiB of each worker, disksPerNode times
+				// diskSizeGB: two disks of 256 GiB for the three workers, one of 64 GiB
+				// for the two (PRD #571, *Estimates*).
+				{id: "kafka-shop-streams", vcpus: 4, memoryGiB: 16, storageGiB: 512, count: 3},
+				{id: "kafka-shop-audit", vcpus: 2, memoryGiB: 8, storageGiB: 64, count: 2},
 			},
 			// The cluster's node scale set and its load balancer, the OS disk
 			// of a scale set member, and a member's data disk its member deletes
@@ -1290,6 +1333,9 @@ func taxonomyCategories(source string) []string {
 			"messaging.topic",
 			"network.loadbalancer",
 			"registry.container",
+			// PRD #571's Azure classification: HDInsight runs Kafka, and Azure runs
+			// no managed OpenSearch.
+			"messaging.kafka",
 		}
 	default:
 		return nil

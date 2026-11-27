@@ -1,5 +1,5 @@
 {
-  "count": 50,
+  "count": 55,
   "data": [
     {
       "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shop/providers/Microsoft.DBforPostgreSQL/flexibleServers/psql-shop",
@@ -1071,6 +1071,118 @@
       "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shop/providers/Microsoft.DBforMariaDB/servers/mariadb-shop-legacy",
       "name": "mariadb-shop-legacy",
       "type": "microsoft.dbformariadb/servers",
+      "kind": "",
+      "location": "westeurope",
+      "zones": null,
+      "properties": null
+    },
+    {
+      "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shop/providers/Microsoft.HDInsight/clusters/kafka-shop-streams",
+      "name": "kafka-shop-streams",
+      "type": "microsoft.hdinsight/clusters",
+      "kind": "",
+      "location": "westeurope",
+      "zones": [
+        "1"
+      ],
+      "properties": {
+        "clusterDefinition": {
+          "kind": "KAFKA"
+        },
+        "computeProfile": {
+          "roles": [
+            {
+              "name": "workernode",
+              "targetInstanceCount": 3,
+              "hardwareProfile": {
+                "vmSize": "Standard_D4s_v3"
+              },
+              "dataDisksGroups": [
+                {
+                  "disksPerNode": 2,
+                  "diskSizeGB": 256
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shop/providers/Microsoft.HDInsight/clusters/kafka-shop-audit",
+      "name": "kafka-shop-audit",
+      "type": "microsoft.hdinsight/clusters",
+      "kind": "",
+      "location": "westeurope",
+      "zones": null,
+      "properties": {
+        "clusterDefinition": {
+          "kind": "KAFKA"
+        },
+        "computeProfile": {
+          "roles": [
+            {
+              "name": "workernode",
+              "targetInstanceCount": 2,
+              "hardwareProfile": {
+                "vmSize": "Standard_D2s_v3"
+              },
+              "dataDisksGroups": [
+                {
+                  "disksPerNode": 1,
+                  "diskSizeGB": 64
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shop/providers/Microsoft.HDInsight/clusters/spark-shop-batch",
+      "name": "spark-shop-batch",
+      "type": "microsoft.hdinsight/clusters",
+      "kind": "",
+      "location": "westeurope",
+      "zones": [
+        "1"
+      ],
+      "properties": {
+        "clusterDefinition": {
+          "kind": "SPARK"
+        },
+        "computeProfile": {
+          "roles": [
+            {
+              "name": "workernode",
+              "targetInstanceCount": 4,
+              "hardwareProfile": {
+                "vmSize": "Standard_D4s_v3"
+              },
+              "dataDisksGroups": [
+                {
+                  "disksPerNode": 1,
+                  "diskSizeGB": 128
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shop/providers/Microsoft.EventHub/namespaces/eh-shop-orders",
+      "name": "eh-shop-orders",
+      "type": "microsoft.eventhub/namespaces",
+      "kind": "",
+      "location": "westeurope",
+      "zones": null,
+      "properties": null
+    },
+    {
+      "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shop/providers/Microsoft.Search/searchServices/srch-shop-catalog",
+      "name": "srch-shop-catalog",
+      "type": "microsoft.search/searchservices",
       "kind": "",
       "location": "westeurope",
       "zones": null,
