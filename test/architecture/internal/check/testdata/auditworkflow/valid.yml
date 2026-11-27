@@ -1146,7 +1146,18 @@ jobs:
           read_api repository-secret-names "repos/${GH_REPO}/actions/secrets" '[.secrets[].name]'
           read_api repository-variable-names "repos/${GH_REPO}/actions/variables" '[.variables[].name]'
           read_api renovate-dashboard "repos/${GH_REPO}/issues?state=open&creator=renovate%5Bbot%5D&per_page=100" '[.[] | select(.pull_request == null)]'
-          read_api renovate-pull-requests "search/issues?q=repo:${GH_REPO}+is:pr+is:open+author:app/renovate&per_page=100"
+          page=1
+          while :; do
+            read_api "renovate-pull-requests-${page}" "repos/${GH_REPO}/pulls?state=open&per_page=100&page=${page}" '{count: length, renovate: [.[] | select(.user.login == "renovate[bot]") | {number, title, draft, created_at, updated_at, head: .head.ref, labels: [.labels[].name]}]}'
+            if [ ! -f "${out}/api/renovate-pull-requests-${page}.exit" ] || [ "$(cat "${out}/api/renovate-pull-requests-${page}.exit")" != 0 ] || [ "$(jq '.count' "${out}/api/renovate-pull-requests-${page}.json")" -lt 100 ]; then
+              break
+            fi
+            if [ "${page}" -ge 10 ]; then
+              echo "supply-chain: more than 1000 open pull requests: Renovate's past the tenth page were not read" >> "${results}/limits.txt"
+              break
+            fi
+            page=$((page + 1))
+          done
           if [ -f "${out}/api/renovate-dashboard.exit" ] && [ "$(cat "${out}/api/renovate-dashboard.exit")" = 0 ] && [ "$(jq 'length' "${out}/api/renovate-dashboard.json")" = 0 ]; then
             echo "supply-chain: no open Renovate Dependency Dashboard issue was found" >> "${results}/limits.txt"
           fi

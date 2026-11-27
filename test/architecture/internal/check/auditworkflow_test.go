@@ -980,6 +980,35 @@ const (
 		"            fi\n"
 )
 
+// Issue #660's anchors: row 15's reading of Renovate's open pull requests
+// through the pulls endpoint, one page of 100 at a time, each page's unfiltered
+// length deciding whether another follows, and the ten-page limit past which
+// the step says in the limits what it did not read. The search endpoint the
+// step read before answered with the Dependency Dashboard issue and no pull
+// request in the first audit run, so it is gone. Each anchor is exactly as the
+// fixture writes it, so a case that mistypes one fails in mutate.
+const (
+	// auditRenovatePullsRead is row 15's read of one page of the repository's
+	// open pull requests: count, the page's unfiltered length, beside
+	// Renovate's own entries alone, each of the named fields, no body of a title
+	// the model would read as an instruction.
+	auditRenovatePullsRead = "            read_api \"renovate-pull-requests-${page}\" \"repos/${GH_REPO}/pulls?state=open&per_page=100&page=${page}\" '{count: length, renovate: [.[] | select(.user.login == \"renovate[bot]\") | {number, title, draft, created_at, updated_at, head: .head.ref, labels: [.labels[].name]}]}'\n"
+	// auditRenovatePullsStop is the condition that ends the pages: a read that
+	// left no .exit file (the step's budget skipped it), one whose exit is not 0
+	// (the API refused it) and one whose page held fewer than 100 items.
+	auditRenovatePullsStop = "            if [ ! -f \"${out}/api/renovate-pull-requests-${page}.exit\" ] || [ \"$(cat \"${out}/api/renovate-pull-requests-${page}.exit\")\" != 0 ] || [ \"$(jq '.count' \"${out}/api/renovate-pull-requests-${page}.json\")\" -lt 100 ]; then\n" +
+		"              break\n" +
+		"            fi\n"
+	// auditRenovatePullsLimit is the ten-page limit and the limits line it
+	// writes: a repository with more than 1000 open pull requests says so, so
+	// that Renovate's past the tenth page are a limit the report names and never
+	// a clean answer.
+	auditRenovatePullsLimit = "            if [ \"${page}\" -ge 10 ]; then\n" +
+		"              echo \"supply-chain: more than 1000 open pull requests: Renovate's past the tenth page were not read\" >> \"${results}/limits.txt\"\n" +
+		"              break\n" +
+		"            fi\n"
+)
+
 // Round F's anchors (PRD #175, the box's last two causes): rows 3 to 5's tool
 // runs, each of them under a timeout of its own, and the model job's install
 // step's guard around the install script it shares with the AI reviewer. Each
@@ -4345,6 +4374,42 @@ func TestAuditWorkflow(t *testing.T) {
 			name:     "row 15's Dependency Dashboard read that found no issue recorded nowhere",
 			workflow: mutate(t, acceptedWorkflow, auditRenovateDashboardMissing, ""),
 			wantIn:   "no open Renovate Dependency Dashboard issue was found",
+		},
+
+		// Issue #660: the search endpoint answered the first audit run with the
+		// Dependency Dashboard issue and no pull request, so row 15 lists the open
+		// pull requests through the pulls endpoint, keeping the ones Renovate's own,
+		// page by page, and names the ten-page limit in the limits.
+		{
+			name: "row 15's Renovate pull requests read through the search endpoint again",
+			workflow: mutate(t, acceptedWorkflow, auditRenovatePullsRead,
+				"          read_api renovate-pull-requests \"search/issues?q=repo:${GH_REPO}+is:pr+is:open+author:app/renovate&per_page=100\"\n"),
+			wantIn: "pulls?state=open",
+		},
+		{
+			name:     "row 15's Renovate pull requests read through the search endpoint beside the pulls endpoint",
+			workflow: mutate(t, acceptedWorkflow, auditRenovatePullsRead, auditRenovatePullsRead+"            read_api renovate-pull-requests-search \"search/issues?q=repo:${GH_REPO}+is:pr+is:open+author:app/renovate&per_page=100\"\n"),
+			wantIn:   "search/issues",
+		},
+		{
+			name:     "row 15's Renovate pull requests page keeping every author's pull request",
+			workflow: mutate(t, acceptedWorkflow, auditRenovatePullsRead, strings.Replace(auditRenovatePullsRead, "select(.user.login == \"renovate[bot]\") | ", "", 1)),
+			wantIn:   "select(.user.login == \"renovate[bot]\")",
+		},
+		{
+			name:     "row 15's Renovate pull requests loop reading one page always",
+			workflow: mutate(t, acceptedWorkflow, auditRenovatePullsStop, strings.Replace(auditRenovatePullsStop, " || [ \"$(jq '.count' \"${out}/api/renovate-pull-requests-${page}.json\")\" -lt 100 ]", "", 1)),
+			wantIn:   "-lt 100",
+		},
+		{
+			name:     "row 15's Renovate pull requests loop with no ten-page limit",
+			workflow: mutate(t, acceptedWorkflow, auditRenovatePullsLimit, ""),
+			wantIn:   "-ge 10",
+		},
+		{
+			name:     "row 15's Renovate pull requests loop's ten-page limit said in no limits line",
+			workflow: mutate(t, acceptedWorkflow, auditRenovatePullsLimit, strings.Replace(auditRenovatePullsLimit, "              echo \"supply-chain: more than 1000 open pull requests: Renovate's past the tenth page were not read\" >> \"${results}/limits.txt\"\n", "", 1)),
+			wantIn:   "more than 1000 open pull requests",
 		},
 		{
 			name:     "row 9's failed unpack scanning the member it partly wrote",
