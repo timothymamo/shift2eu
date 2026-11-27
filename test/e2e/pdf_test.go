@@ -203,6 +203,11 @@ func TestAssessPDFNamesTheBuildVersion(t *testing.T) {
 // the PDF's framing, and a file it refuses must be refused with --format pdf
 // too, with the same exit code, the same error line and nothing on standard
 // output.
+//
+// The parent classifies every file with the Markdown report, which is also how it
+// counts the corpus's two halves, and the parallel subtests only compare the PDF
+// run with that reference: a count that is all of one half would leave the other
+// half of this test unrun.
 func TestAssessPDFHostileInventoryCorpus(t *testing.T) {
 	t.Parallel()
 
@@ -211,27 +216,43 @@ func TestAssessPDFHostileInventoryCorpus(t *testing.T) {
 		t.Fatalf("read the audit's hostile inventory corpus: %v", err)
 	}
 
-	// The subtests run one after another: they count the corpus's two halves, and
-	// a count that is all of one would leave the other half of this test unrun.
 	accepted, refused := 0, 0
+
+	files := make([]corpusFile, 0, len(entries))
 
 	for _, entry := range entries {
 		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
 			continue
 		}
 
-		t.Run(entry.Name(), func(t *testing.T) {
-			inventory := filepath.Join(hostileCorpusDir, entry.Name())
+		inventory := filepath.Join(hostileCorpusDir, entry.Name())
 
-			markdown := assess(t, scalewayKey, inventory)
-			got := assess(t, scalewayKey, inventory, "--format", pdfFormat)
+		markdown := assess(t, scalewayKey, inventory)
 
-			if markdown.code != 0 {
-				refused++
+		if markdown.code != 0 {
+			refused++
+		} else {
+			accepted++
+		}
 
-				if got.code != markdown.code {
+		files = append(files, corpusFile{name: entry.Name(), inventory: inventory, markdown: markdown})
+	}
+
+	if accepted == 0 || refused == 0 {
+		t.Errorf("the corpus holds %d inventories the Markdown report accepts and %d it refuses, "+
+			"want at least one of each: this test pins both halves of the corpus", accepted, refused)
+	}
+
+	for _, file := range files {
+		t.Run(file.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := assess(t, scalewayKey, file.inventory, "--format", pdfFormat)
+
+			if file.markdown.code != 0 {
+				if got.code != file.markdown.code {
 					t.Fatalf("exit code with --format pdf = %d, want %d, the exit code the Markdown report gives; "+
-						"stderr = %q", got.code, markdown.code, firstLine(got.stderr))
+						"stderr = %q", got.code, file.markdown.code, firstLine(got.stderr))
 				}
 
 				if got.stdout != "" {
@@ -239,15 +260,13 @@ func TestAssessPDFHostileInventoryCorpus(t *testing.T) {
 						"a refusal writes no report", got.stdout)
 				}
 
-				if want := firstLine(markdown.stderr); firstLine(got.stderr) != want {
+				if want := firstLine(file.markdown.stderr); firstLine(got.stderr) != want {
 					t.Errorf("the --format pdf refusal is %q, want the Markdown report's refusal %q",
 						firstLine(got.stderr), want)
 				}
 
 				return
 			}
-
-			accepted++
 
 			if got.code != 0 {
 				t.Fatalf("exit code with --format pdf = %d, want 0, the exit code the Markdown report gives; "+
@@ -261,11 +280,20 @@ func TestAssessPDFHostileInventoryCorpus(t *testing.T) {
 			checkPDF(t, []byte(got.stdout))
 		})
 	}
+}
 
-	if accepted == 0 || refused == 0 {
-		t.Errorf("the corpus holds %d inventories the Markdown report accepts and %d it refuses, "+
-			"want at least one of each: this test pins both halves of the corpus", accepted, refused)
-	}
+// corpusFile is one JSON file of the hostile corpus, as the parent test
+// classified it: the path the binary reads, and the Markdown report's run on it,
+// which accepted or refused it.
+type corpusFile struct {
+	// name is the file's name in the corpus, and the name of its subtest.
+	name string
+	// inventory is the file's path, as the run's --inventory argument.
+	inventory string
+	// markdown is the Markdown report's run on the file: the reference the PDF
+	// run is compared with, for the exit code, the standard output and the error
+	// line.
+	markdown result
 }
 
 // TestExamplesPDFReports pins that every sample inventory gives a PDF against
