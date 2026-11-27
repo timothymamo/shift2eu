@@ -727,6 +727,41 @@ func TestNewCategoryOfferingPrices(t *testing.T) {
 				text.Quote(o.Name), o.FixedFees)
 		}
 	})
+
+	t.Run("capabilities", func(t *testing.T) {
+		t.Parallel()
+
+		// ADR 0011's tier-variant rule read off the new categories: an offering
+		// lists the capabilities every tier of its product provides, and a tier
+		// variant lists those and the one it adds. No page read documents a
+		// capability for UpCloud's load balancer -- its frontend network is IPv4
+		// only and it forwards tcp or http, never udp (decision D4) -- and it has
+		// no tier that could add one, so its list is exactly empty, which is why
+		// a load balancer needing udp or ipv6 is partial on it alone.
+		tests := []struct {
+			offering string
+			want     []taxonomy.Capability
+		}{
+			{offering: loadBalancerName, want: nil},
+			{offering: managedValkeyName, want: []taxonomy.Capability{taxonomy.EncryptionAtRest, taxonomy.Snapshots}},
+			{offering: valkeyMultiNodeName, want: []taxonomy.Capability{taxonomy.EncryptionAtRest, taxonomy.NodeHighAvailability, taxonomy.Snapshots}},
+			{offering: fileStorageName, want: nil},
+			{offering: fileEncryptedName, want: []taxonomy.Capability{taxonomy.EncryptionAtRest}},
+		}
+
+		for _, tc := range tests {
+			t.Run(tc.offering, func(t *testing.T) {
+				t.Parallel()
+
+				o := offeringNamed(t, cat, tc.offering)
+
+				if diff := cmp.Diff(tc.want, o.Capabilities); diff != "" {
+					t.Errorf("offering %s capabilities mismatch, want exactly the product's own and its tier's (-want +got):\n%s",
+						text.Quote(o.Name), diff)
+				}
+			})
+		}
+	})
 }
 
 // planNamed returns o's plan called name, and fails the test if there is none.
@@ -902,6 +937,126 @@ func TestBillingCapEstimateThroughEmbeddedCatalog(t *testing.T) {
 			// The plan is the whole estimate: it includes the resource's 10 GiB of
 			// storage and Cloud Servers charges no fixed monthly fee.
 			if diff := cmp.Diff(estimate.Breakdown{Plan: got.Monthly}, got.Breakdown); diff != "" {
+				t.Errorf("For() Breakdown mismatch, want the plan alone (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+// TestValkeyTierTieUnderEstimateThroughEmbeddedCatalog pins the under-estimate
+// PRD #552 milestone 7 accepted as decision D6 (decided question 10, open until
+// issue #558) and wrote up in SOURCES.md under "The tie under-estimate": a
+// cache.redis resource that needs no capability is direct on both Valkey tiers,
+// and estimate.For prices the cheapest plan of every tied candidate. At 4 GiB
+// the multi-node tier's per-node `2x2xCPU-4GB` costs 86.1806 EUR a month, under
+// the 1-node tier's `1x2xCPU-4GB` at 91.25, so a one-node cache is estimated on
+// the multi-node tier, up to 5.6% low. The choice is deliberate -- dropping the
+// 2-node plans that undercut the 1-node ones would hide real UpCloud prices --
+// so this test pins the under-estimate rather than a fix, and changing it needs
+// the maintainer's decision on issue #558.
+func TestValkeyTierTieUnderEstimateThroughEmbeddedCatalog(t *testing.T) {
+	t.Parallel()
+
+	cat := catalogOf(t)
+	region := cat.Snapshot().DefaultRegion
+
+	// The per-node price of `2x2xCPU-4GB`: the pricing page's EUR 170 a month for
+	// the whole 2-node service / 2 x 730 / 720, rounded once (decision D1).
+	const (
+		multiNodePlan   = "2x2xCPU-4GB"
+		singleNodePlan  = "1x2xCPU-4GB"
+		perNodeAmount   = catalog.Amount(861_806)
+		singleNodePrice = catalog.Amount(912_500)
+	)
+
+	// The tie is broken by price, not by plan name: the 1-node tier's 4 GiB plan,
+	// the tier matching prefers (*Managed Valkey* comes first by name), costs
+	// 91.25 against the multi-node tier's per-node 86.1806. If a refresh flipped
+	// them, the estimate below would move to the 1-node plan and this test would
+	// read as a wrong expectation rather than a changed tie.
+	singleNode := offeringNamed(t, cat, managedValkeyName)
+
+	if got, ok := singleNode.PlanPrice(singleNodePlan, region); !ok || got != singleNodePrice {
+		t.Fatalf("offering %s lists plan %s at %s in zone %s, want %s: the dearer of the two tied 4 GiB candidates (decision D6)",
+			text.Quote(singleNode.Name), text.Quote(singleNodePlan), got, text.Quote(region), singleNodePrice)
+	}
+
+	tests := []struct {
+		name       string
+		count      int
+		wantAmount catalog.Amount
+	}{
+		{
+			// Decision D6's own example: one node priced at the per-node price of
+			// the 2-node service, 5.5% below the 1-node plan.
+			name:       "count 1 takes the multi-node per-node price, not the 1-node plan's 91.25",
+			count:      1,
+			wantAmount: perNodeAmount,
+		},
+		{
+			// ADR 0025's rule: the estimate multiplies the per-node price by the
+			// count, so three nodes cost three times it, low by the 1.92%
+			// SOURCES.md records against the 3-node tier's per-node price.
+			name:       "count 3 is three times that per-node price",
+			count:      3,
+			wantAmount: perNodeAmount * 3,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			// A cache needs no capability, so both tiers are direct candidates and
+			// only the price decides (decision D6).
+			r := inventory.Resource{
+				ID:       "cache-example",
+				RawType:  "AWS::ElastiCache::CacheCluster",
+				Category: taxonomy.CacheRedis,
+				Region:   "eu-west-1",
+				Size: &inventory.Size{
+					MemoryGiB: number(4),
+					Count:     countOf(tc.count),
+				},
+			}
+
+			inv, err := inventory.New("aws", []inventory.Resource{r})
+			if err != nil {
+				t.Fatalf("inventory.New() returned unexpected error: %v", err)
+			}
+
+			got := estimate.For(mapping.Map(inv.Resources()[0], cat), region)
+
+			if !got.Estimated {
+				t.Fatalf("For() Estimated = false, reason %s, want an estimate on a Valkey plan",
+					text.Quote(string(got.Reason)))
+			}
+
+			if got.Offering != valkeyMultiNodeName {
+				t.Errorf("For() Offering = %s, want %s: it holds the cheapest plan of the tied candidates (decision D6)",
+					text.Quote(got.Offering), text.Quote(valkeyMultiNodeName))
+			}
+
+			if got.Plan == nil || got.Plan.Name != multiNodePlan {
+				t.Fatalf("For() Plan = %v, want %s: the cheapest 4 GiB plan of the tied candidates",
+					got.Plan, text.Quote(multiNodePlan))
+			}
+
+			if want := estimate.FromAmount(perNodeAmount); !got.Plan.Price.Equal(want) {
+				t.Errorf("For() Plan.Price = %s, want %s a month: the per-node price of the 2-node service",
+					got.Plan.Price, want)
+			}
+
+			want := estimate.FromAmount(tc.wantAmount)
+
+			if !got.Monthly.Equal(want) {
+				t.Errorf("For() Monthly = %s, want %s: %d node(s) at the multi-node tier's per-node price, not the 1-node plan's",
+					got.Monthly, want, tc.count)
+			}
+
+			// The plan is the whole estimate: a Valkey plan includes no storage
+			// and neither tier charges a fixed monthly fee.
+			if diff := cmp.Diff(estimate.Breakdown{Plan: want}, got.Breakdown); diff != "" {
 				t.Errorf("For() Breakdown mismatch, want the plan alone (-want +got):\n%s", diff)
 			}
 		})
