@@ -240,13 +240,14 @@
       "category": "messaging.kafka",
       "region": "westeurope",
       "capabilities": [
-        "encryption-at-rest"
+        "encryption-at-rest",
+        "node-high-availability"
       ],
       "size": {
         "vcpus": 2,
         "memoryGiB": 8,
-        "count": 2,
-        "storageGiB": 64
+        "count": 3,
+        "storageGiB": 1023
       }
     },
     {
@@ -263,7 +264,7 @@
         "vcpus": 4,
         "memoryGiB": 16,
         "count": 3,
-        "storageGiB": 512
+        "storageGiB": 2046
       }
     },
     {

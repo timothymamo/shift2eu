@@ -1100,7 +1100,7 @@
               "dataDisksGroups": [
                 {
                   "disksPerNode": 2,
-                  "diskSizeGB": 256
+                  "diskSizeGB": 1023
                 }
               ]
             }
@@ -1123,14 +1123,14 @@
           "roles": [
             {
               "name": "workernode",
-              "targetInstanceCount": 2,
+              "targetInstanceCount": 3,
               "hardwareProfile": {
                 "vmSize": "Standard_D2s_v3"
               },
               "dataDisksGroups": [
                 {
                   "disksPerNode": 1,
-                  "diskSizeGB": 64
+                  "diskSizeGB": 1023
                 }
               ]
             }

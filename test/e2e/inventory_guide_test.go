@@ -1162,14 +1162,15 @@ func inventoryGuides() []inventoryGuideCase {
 					region:       "westeurope",
 					capabilities: []string{"encryption-at-rest", "node-high-availability", "zone-high-availability"},
 				},
-				// A cluster of two worker nodes in no zone keeps serving through the
-				// loss of no node and no zone: only the encryption at rest is left. Its
-				// kind is recorded as `Kafka` rather than `KAFKA`, the casing an ARM
-				// template writes and Azure returns as stored, so a program that compared
-				// the kind as it comes would leave this cluster unclassified.
+				// A cluster of three worker nodes in no zone keeps serving through the
+				// loss of a node, and not through the loss of a zone: only the
+				// encryption at rest and the node redundancy are left. Its kind is
+				// recorded as `Kafka` rather than `KAFKA`, the casing an ARM template
+				// writes and Azure returns as stored, so a program that compared the kind
+				// as it comes would leave this cluster unclassified.
 				{
 					id: "kafka-shop-audit", rawType: "Microsoft.HDInsight/clusters", category: "messaging.kafka",
-					capabilities: []string{"encryption-at-rest"},
+					capabilities: []string{"encryption-at-rest", "node-high-availability"},
 				},
 				// An HDInsight cluster of another kind runs no Kafka broker a target
 				// serves, so it stays unclassified under its own type.
@@ -1238,10 +1239,12 @@ func inventoryGuides() []inventoryGuideCase {
 				// is the count, its hardwareProfile.vmSize a size az vm list-sizes knows
 				// (Standard_D4s_v3 is 4 cores and 16384 MB, Standard_D2s_v3 2 and 8192),
 				// and its dataDisksGroups the GiB of each worker, disksPerNode times
-				// diskSizeGB: two disks of 256 GiB for the three workers, one of 64 GiB
-				// for the two (PRD #571, *Estimates*).
-				{id: "kafka-shop-streams", vcpus: 4, memoryGiB: 16, storageGiB: 512, count: 3},
-				{id: "kafka-shop-audit", vcpus: 2, memoryGiB: 8, storageGiB: 64, count: 2},
+				// diskSizeGB. An HDInsight data disk is a fixed-size managed disk of 1023
+				// GiB (diskSizeGB is read-only, the count of disks per node is the one the
+				// user picks), so two of them are 2046 GiB and one is 1023 (PRD #571,
+				// *Estimates*). A Kafka cluster needs at least three worker nodes.
+				{id: "kafka-shop-streams", vcpus: 4, memoryGiB: 16, storageGiB: 2046, count: 3},
+				{id: "kafka-shop-audit", vcpus: 2, memoryGiB: 8, storageGiB: 1023, count: 3},
 			},
 			// The cluster's node scale set and its load balancer, the OS disk
 			// of a scale set member, and a member's data disk its member deletes
