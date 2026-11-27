@@ -37,6 +37,14 @@
 #   {"Results": [...]}             configservice select-resource-config (optional;
 #                                  one value per page if you page by hand)
 #
+# Three inputs are arrays of objects, one object per hosted zone, which the
+# guide's Route 53 commands write:
+#
+#   [{"Id", "Name", "PrivateZone"}]  route53 list-hosted-zones
+#   [{"Id", "ServeSignature"}]       route53 get-dnssec, per public zone
+#   [{"Id", "RoutedRecordSets"}]     route53 list-resource-record-sets, per public
+#                                    zone, reduced to a count (optional)
+#
 # The outputs of opensearch list-domain-names and opensearchserverless
 # list-collections only feed the calls that describe them; the program reads
 # neither.
@@ -81,14 +89,18 @@
 # ElastiCache is not in this list: AWS Config records no AWS::ElastiCache::*
 # type (its developer guide's "Supported Resource Types" reference, checked
 # 2026-11-25), so the elasticache calls are the only source of caches and none
-# is listed twice.
+# is listed twice. A Route 53 hosted zone is covered by route53
+# list-hosted-zones, public and private alike, and a zone's DNSSEC configuration
+# (AWS::Route53::DNSSEC) by get-dnssec, which reads its signed state into the
+# zone's dnssec: a signed zone is listed once.
 def covered_types:
   [
     "AWS::EC2::Instance", "AWS::EC2::Volume", "AWS::AutoScaling::AutoScalingGroup",
     "AWS::S3::Bucket", "AWS::RDS::DBInstance", "AWS::RDS::DBCluster", "AWS::EKS::Cluster",
     "AWS::Lambda::Function", "AWS::SQS::Queue", "AWS::SNS::Topic", "AWS::EFS::FileSystem",
     "AWS::ElasticLoadBalancingV2::LoadBalancer", "AWS::ElasticLoadBalancing::LoadBalancer",
-    "AWS::OpenSearch::Domain", "AWS::Elasticsearch::Domain"
+    "AWS::OpenSearch::Domain", "AWS::Elasticsearch::Domain",
+    "AWS::Route53::HostedZone", "AWS::Route53::DNSSEC"
   ];
 
 # AWS Config records an OpenSearch Service domain as AWS::OpenSearch::Domain, or
@@ -154,6 +166,11 @@ def ec2_twin:
 def is_node:
   any(.Tags[]?.Key // empty; . == "eks:cluster-name" or startswith("kubernetes.io/cluster/"));
 
+# A hosted zone's ID without the /hostedzone/ prefix list-hosted-zones writes,
+# so a zone matches its get-dnssec and record-set entries whichever form they
+# hold: /hostedzone/Z0123456789ABCDEFGHIJ -> Z0123456789ABCDEFGHIJ.
+def zone_id: ltrimstr("/hostedzone/");
+
 # The region of an availability zone: eu-central-1a -> eu-central-1.
 def zone_region: if . == null or . == "" then null else sub("[a-z]$"; "") end;
 
@@ -198,8 +215,21 @@ def inventory($source):
   | sort_by(.id)
   | {schemaVersion: 2, source: $source, resources: .};
 
-[inputs | objects] as $docs
-| ([$docs[] | .Snapshots? // empty | .[] | .VolumeId] | unique) as $snapshotted
+[inputs] as $inputs
+| [$inputs[] | objects] as $docs
+| [$inputs[] | arrays | .[] | objects] as $items
+| ([$items[] | select(has("ServeSignature")) | select(.ServeSignature == "SIGNING")
+    | .Id | strings | zone_id] | unique) as $signed
+| ([$items[] | select(has("RoutedRecordSets")) | select((.RoutedRecordSets // 0) > 0)
+    | .Id | strings | zone_id] | unique) as $routed
+# Hosted zones, one per zone ID: each region's run lists the same zones.
+| ([$items[] | select(has("PrivateZone") and has("Id") and has("Name"))
+    | {zone: (.Id | zone_id), Name, PrivateZone}]
+   | group_by(.zone) | map(.[0])) as $zones
+# The names two or more distinct zones share (a public and a private zone of one
+# name, split-horizon DNS).
+| ([$zones[] | .Name] | group_by(.) | map(select(length > 1) | .[0])) as $sharedzonenames
+|([$docs[] | .Snapshots? // empty | .[] | .VolumeId] | unique) as $snapshotted
 | ([$docs[] | select(.Bucket? and has("Versioning")) | select(.Versioning.Status? == "Enabled") | .Bucket] | unique) as $versioned
 | ([$docs[] | .InstanceTypes? // empty | .[]
     | {key: .InstanceType, value: {vcpus: .VCpuInfo.DefaultVCpus, memoryGiB: (.MemoryInfo.SizeInMiB / 1024)}}]
@@ -598,6 +628,31 @@ def inventory($source):
           capabilities: [
             cap("encryption-at-rest"; (.KmsMasterKeyId // "") != "")
           ]
+        }),
+
+    # Route 53 hosted zones, from list-hosted-zones, each zone once by its zone
+    # ID ($zones). A zone's ID is its name; zones that share a name each get
+    # their zone ID appended, "shop.example.com. (Z0123456789ABCDEFGHIJ)", so
+    # two distinct zones never merge. A public zone is a
+    # public authoritative DNS zone, network.dns, served by Route 53's name
+    # servers from no region the user picks, so it has no region and no size.
+    # It is signed (dnssec) when get-dnssec's ServeSignature is SIGNING, and
+    # routes by client or by health (dns-routing) when it holds a routed record
+    # set: one with a set identifier (weighted, latency, failover, geolocation,
+    # geoproximity, IP-based, multivalue answer or AZ-affinity), a health check,
+    # a multivalue answer or a traffic policy instance. A private zone answers
+    # only inside the VPCs it is attached to: unclassified.
+    ($zones[]
+      | (.PrivateZone == false) as $public
+      | .zone as $zone
+      | {
+          id: (if .Name | IN($sharedzonenames[]) then .Name + " (" + $zone + ")" else .Name end),
+          rawType: "AWS::Route53::HostedZone",
+          category: (if $public then "network.dns" else "unclassified" end),
+          capabilities: (if $public then [
+            cap("dnssec"; $zone | IN($signed[])),
+            cap("dns-routing"; $zone | IN($routed[]))
+          ] else [] end)
         }),
 
     # Everything else AWS Config recorded. App Runner services and ECR
