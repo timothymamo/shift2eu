@@ -1178,6 +1178,15 @@ func inventoryGuides() []inventoryGuideCase {
 					id: "spark-shop-batch", rawType: "Microsoft.HDInsight/clusters", category: "unclassified",
 					capabilities: []string{},
 				},
+				// A cluster the service is resizing (clusterState ResizeQueued) is a
+				// cluster like any other: the queued operation is no reason to leave it
+				// out, so it keeps the category and the size its three worker nodes of
+				// Standard_D2s_v3 give a running cluster in no zone (PRD #571,
+				// milestone 4).
+				{
+					id: "kafka-shop-resizing", rawType: "Microsoft.HDInsight/clusters", category: "messaging.kafka",
+					capabilities: []string{"encryption-at-rest", "node-high-availability"},
+				},
 				// An Event Hubs namespace speaks the Event Hubs protocol, and PRD #571
 				// counts a namespace as messaging.kafka only when every client of it
 				// uses the Kafka endpoint, which is the guide's step to take by hand. So
@@ -1245,6 +1254,9 @@ func inventoryGuides() []inventoryGuideCase {
 				// *Estimates*). A Kafka cluster needs at least three worker nodes.
 				{id: "kafka-shop-streams", vcpus: 4, memoryGiB: 16, storageGiB: 2046, count: 3},
 				{id: "kafka-shop-audit", vcpus: 2, memoryGiB: 8, storageGiB: 1023, count: 3},
+				// A cluster being resized is sized like the same cluster at rest: its
+				// worker role is the one the recorded query packs either way.
+				{id: "kafka-shop-resizing", vcpus: 2, memoryGiB: 8, storageGiB: 1023, count: 3},
 			},
 			// The cluster's node scale set and its load balancer, the OS disk
 			// of a scale set member, and a member's data disk its member deletes
@@ -1252,10 +1264,17 @@ func inventoryGuides() []inventoryGuideCase {
 			// FileStorage account for its shares, and a Redis Enterprise cluster for
 			// its database.
 			//
-			// An HDInsight cluster Azure is deleting is left out, as an MSK cluster
-			// whose state is DELETING or FAILED is (PRD #571, milestone 2's review
-			// finding N2): a cluster on its way out is no resource to move, and one
-			// the service gave up on keeps nothing.
+			// An HDInsight cluster Azure is deleting or has failed on is left out, as
+			// an MSK cluster whose state is DELETING or FAILED is (PRD #571,
+			// milestone 2's review finding N2): a cluster on its way out is no
+			// resource to move, and one the service gave up on keeps nothing. Microsoft
+			// lists the states a cluster passes through
+			// (<https://learn.microsoft.com/en-us/azure/hdinsight/hdinsight-administer-use-portal-linux>),
+			// and every one of its eight that ends or fails the cluster is left out,
+			// in any casing: deleting, deleted, deletequeued, deletetimeout,
+			// deleteerror, error, aborted and timeout. A cluster the service is still
+			// provisioning, patching or resizing stays, its queued operation being no
+			// reason to move it.
 			absent: []string{
 				"aks-system-12345678-vmss",
 				"kubernetes",
@@ -1265,6 +1284,12 @@ func inventoryGuides() []inventoryGuideCase {
 				"default",
 				"amr-shop-session/default",
 				"kafka-shop-old",
+				// DeleteError and Aborted are states the program does not know yet,
+				// and `deletequeued` is DeleteQueued in another casing: a program that
+				// matched the three states milestone 4 first named writes all three.
+				"kafka-shop-delerr",
+				"kafka-shop-aborted",
+				"kafka-shop-queued",
 			},
 		},
 	}
