@@ -1151,7 +1151,10 @@ func bestOf(c mapping.Candidate) bestFit {
 // The rows that list both node-high-availability and zone-high-availability
 // guard the naming convention: a 3-AZ offering records zone level alone, because
 // ADR 0011 makes zone level imply node level, and a resource that lists both is
-// still direct there.
+// still direct there. A capability both a 1-AZ and a 3-AZ offering list, such as
+// Kafka's node level, which every Kafka plan provides, is answered by the 1-AZ
+// one: the mapping orders the two direct candidates by name, and "Analytics for
+// Kafka" comes before "Analytics for Kafka 3-AZ".
 func TestCategoryBestOfferingAndFit(t *testing.T) {
 	t.Parallel()
 
@@ -1294,6 +1297,22 @@ func TestCategoryBestOfferingAndFit(t *testing.T) {
 			name:     "messaging.kafka/no capabilities",
 			category: taxonomy.MessagingKafka,
 			want:     bestFit{Name: "Analytics for Kafka", Fit: mapping.Direct},
+		},
+		{
+			name:         "messaging.kafka/node-high-availability",
+			category:     taxonomy.MessagingKafka,
+			capabilities: []taxonomy.Capability{taxonomy.NodeHighAvailability},
+			want:         bestFit{Name: "Analytics for Kafka", Fit: mapping.Direct},
+		},
+		{
+			name:         "messaging.kafka/snapshots",
+			category:     taxonomy.MessagingKafka,
+			capabilities: []taxonomy.Capability{taxonomy.Snapshots},
+			want: bestFit{
+				Name:    "Analytics for Kafka",
+				Fit:     mapping.Partial,
+				Missing: []taxonomy.Capability{taxonomy.Snapshots},
+			},
 		},
 		{
 			name:         "messaging.kafka/zone-high-availability",
@@ -1525,7 +1544,7 @@ func TestNewCategoryPlansAndPrices(t *testing.T) {
 
 // TestOpenSearchAndKafkaOfferings pins PRD #571 milestone 5's offerings on the
 // embedded snapshot: the five OVHcloud sells for the two categories the snapshot
-// gains (decided question 5), each with the category it serves, the regions it is
+// gains (PRD #571 milestone 5, decision D5), each with the category it serves, the regions it is
 // available in and the capabilities the Analytics pages state. The base offering
 // is the single-node Discovery plan beside its Gen 2 Essential flavours; the
 // multi-node one is Production beside the Gen 2 Business flavours, which survives
@@ -1534,7 +1553,8 @@ func TestNewCategoryPlansAndPrices(t *testing.T) {
 // takes, and Kafka takes none ("We don't backup Kafka data"), so the messaging
 // offerings list it nowhere.
 //
-// The Advanced tiers get no offering of their own (decided question 1): they add
+// The Advanced tiers get no offering of their own (PRD #571 milestone 5, decision
+// D1): they add
 // no capability the vocabulary holds, only two more nodes, a longer backup
 // retention and a higher SLA, so the tier-variant rule (ADR 0011) never prefers
 // them over the Production plan they share every per-node flavour with. The
@@ -1670,17 +1690,22 @@ func TestOpenSearchAndKafkaOfferings(t *testing.T) {
 // plan is checked in each region of its offering, so a price that drifts into a
 // region the page does not quote it in fails here too.
 //
-// The included storage is per node (decided question 2): the "Usable storage"
-// lower bound divided by the tier's nodes for a Gen 2 flavour, which is derived, and
-// the page's own per-node figure for Kafka Gen 3, which the Analytics pricing guide
-// states ("180 GB x 30 days x 24 hours x 3 nodes"). OpenSearch Gen 3 leaves it out
-// and reads 0: the page quotes the same range for the same flavour at 1, 3 and 6
-// nodes but never says it is per node, so the figure rests on an inference, and
-// decided question 2 records no inferred figure. Each plan's vCPUs and memory are
-// the page's columns for one node.
+// The included storage is per node (PRD #571 milestone 5, decision D2): the
+// "Usable storage" lower bound divided by the tier's nodes for a Gen 2 flavour,
+// which is derived; the page's own per-node figure for Kafka Gen 3, which the
+// Analytics pricing guide states ("180 GB x 30 days x 24 hours x 3 nodes"); and
+// the same lower bound for OpenSearch Gen 3's single-node Discovery plans, where
+// one node makes the range's lower bound that node's storage, as the product page
+// states ("Discovery ... 1 node included ... 40 GB storage", Discovery B3-4's
+// lower bound). OpenSearch Gen 3's 3-node Production plans read 0: the page quotes
+// the same range for the same flavour at 1, 3 and 6 nodes but never says it is per
+// node at three, where the lower bound could be the cluster's total, and decision
+// D2 records no inferred figure. Each plan's vCPUs and memory are the page's
+// columns for one node.
 //
 // The storage price is the page's hourly price per GiB per node x 730 and is never
-// multiplied by the tier's node count (decided question 4): 0.292 EUR for the
+// multiplied by the tier's node count (PRD #571 milestone 5, decision D4): 0.292
+// EUR for the
 // Essential/Discovery tier and 0.365 for Business/Production and for Kafka, whose
 // two plans share one storage price.
 func TestOpenSearchAndKafkaPlansAndPrices(t *testing.T) {
@@ -1707,8 +1732,39 @@ func TestOpenSearchAndKafkaPlansAndPrices(t *testing.T) {
 				plan:               "Discovery B3-4",
 				wantVCPUs:          1,
 				wantMemoryMilliGiB: 4_000,
+				wantIncludedGiB:    40,
 				wantPricedRegions:  oneAZRegions(),
 				wantAmount:         catalog.Amount(659_190),
+			},
+			{
+				name:               "opensearch/discovery-b3-8",
+				offering:           "Analytics for OpenSearch",
+				plan:               "Discovery B3-8",
+				wantVCPUs:          2,
+				wantMemoryMilliGiB: 8_000,
+				wantIncludedGiB:    80,
+				wantPricedRegions:  oneAZRegions(),
+				wantAmount:         catalog.Amount(1_252_680),
+			},
+			{
+				name:               "opensearch/discovery-b3-16",
+				offering:           "Analytics for OpenSearch",
+				plan:               "Discovery B3-16",
+				wantVCPUs:          4,
+				wantMemoryMilliGiB: 16_000,
+				wantIncludedGiB:    160,
+				wantPricedRegions:  oneAZRegions(),
+				wantAmount:         catalog.Amount(2_504_630),
+			},
+			{
+				name:               "opensearch/discovery-b3-32",
+				offering:           "Analytics for OpenSearch",
+				plan:               "Discovery B3-32",
+				wantVCPUs:          8,
+				wantMemoryMilliGiB: 32_000,
+				wantIncludedGiB:    320,
+				wantPricedRegions:  oneAZRegions(),
+				wantAmount:         catalog.Amount(5_008_530),
 			},
 			{
 				name:               "opensearch/discovery-b3-64",
@@ -1716,6 +1772,7 @@ func TestOpenSearchAndKafkaPlansAndPrices(t *testing.T) {
 				plan:               "Discovery B3-64",
 				wantVCPUs:          16,
 				wantMemoryMilliGiB: 64_000,
+				wantIncludedGiB:    640,
 				wantPricedRegions:  oneAZRegions(),
 				wantAmount:         catalog.Amount(10_016_330),
 			},
@@ -1845,7 +1902,7 @@ func TestOpenSearchAndKafkaPlansAndPrices(t *testing.T) {
 				}
 
 				if p.IncludedStorageGiB != tc.wantIncludedGiB {
-					t.Errorf("offering %s plan %s included storage = %d GiB, want %d, per node: the page's per-node figure for Kafka Gen 3, the \"Usable storage\" lower bound divided by the tier's nodes for Gen 2, and 0 where only an inference covers it",
+					t.Errorf("offering %s plan %s included storage = %d GiB, want %d, per node: the page's per-node figure for Kafka Gen 3, the \"Usable storage\" lower bound divided by the tier's nodes for Gen 2, that lower bound itself for a single-node OpenSearch Gen 3 plan, and 0 where only an inference covers it",
 						text.Quote(o.Name), text.Quote(p.Name), p.IncludedStorageGiB, tc.wantIncludedGiB)
 				}
 
@@ -1907,7 +1964,7 @@ func TestOpenSearchAndKafkaPlansAndPrices(t *testing.T) {
 					}
 
 					if got != tc.want {
-						t.Errorf("offering %s storage price in region %s = %s, want %s: the page's price per GiB per node per hour x 730, never multiplied by the tier's node count (decided question 4)",
+						t.Errorf("offering %s storage price in region %s = %s, want %s: the page's price per GiB per node per hour x 730, never multiplied by the tier's node count (PRD #571 milestone 5, decision D4)",
 							text.Quote(o.Name), text.Quote(region), got, tc.want)
 					}
 				}
