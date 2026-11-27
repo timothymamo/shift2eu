@@ -34,6 +34,19 @@
 #   {"name": ".../repositories/..", "format"} artifacts repositories list
 #   {"name": ".../functions/..", "serviceConfig"} functions list
 #   {"name": ".../clusters/..", "capacityConfig"} managed-kafka clusters list
+#   {"kind": "dns#managedZone", "project"}    dns managed-zones list, with the
+#                                             project the guide's jq filter adds
+#   {"project", "name", "routedRecordSets"}   dns record-sets list, reduced to a
+#                                             count per zone by the guide
+#
+# A Cloud DNS managed zone is its asset row, joined to the managed-zones list on
+# the project and the zone's name: the list writes no project, so the guide adds
+# it, and an entry without one joins no row. A public zone is network.dns with
+# no region (Google serves it from name servers it picks); a private zone
+# (forwarding and peering zones included) and a zone the list does not hold
+# stay unclassified. A public zone is dnssec when dnssecConfig.state is on or
+# transfer, and dns-routing when the record-set count, the number of its record
+# sets with a routingPolicy, is above 0. No record set is ever read here.
 #
 # Resource IDs are short (the last part of the resource name), never the full name,
 # which carries the project. Anything it cannot classify is "unclassified" with its
@@ -188,6 +201,14 @@ def reaches($proxies):
 | ($all | details(named_in("instances") and has("fileShares"); .name | key)) as $filestore
 | ($all | details(named_in("repositories") and has("format"); .name | key)) as $repositories
 | ($all | details(named_in("clusters") and has("capacityConfig"); .name | key)) as $kafka
+# Cloud DNS: the managed zones and the routed record-set counts, keyed as the
+# zone's asset name is (projects/p/managedZones/z), from the project the guide
+# adds and the zone's name.
+| (def zone_key: "projects/" + .project + "/managedZones/" + .name | key;
+   def joinable: (.project? | type) == "string" and (.name? | type) == "string";
+   ($all | details(.kind? == "dns#managedZone" and joinable; zone_key)) as $dnszones
+   | ($all | details(has("routedRecordSets") and joinable; zone_key)) as $dnsrouted
+   | {zones: $dnszones, routed: $dnsrouted}) as $dns
 # A Filestore instance has snapshots when a snapshot asset is named under it.
 | ([$all[] | select(.assetType? == "file.googleapis.com/Snapshot") | .name | key
     | sub("/snapshots/[^/]+$"; "")] | unique) as $filesnapshotted
@@ -399,6 +420,18 @@ def reaches($proxies):
                 memoryGiB: ($c.memoryBytes | number | if . == null then null else . / 1073741824 / $brokers end),
                 count: $brokers
               }) end)}
+      elif .assetType == "dns.googleapis.com/ManagedZone" then
+        # A public zone is network.dns, with no region; a private one, or one the
+        # managed-zones list does not hold, stays unclassified. The capabilities
+        # are read for a public zone only.
+        $dns.zones[$key] as $d
+        | if $d.visibility? == "public" then
+            ($dns.routed[$key].routedRecordSets? // 0) as $n
+            | $base + {category: "network.dns", region: null, capabilities: [
+                cap("dnssec"; $d.dnssecConfig.state? | IN("on", "transfer")),
+                cap("dns-routing"; ($n | type) == "number" and $n > 0)
+              ]}
+          else $base + {category: "unclassified"} end
       elif .assetType | test("^compute\\.googleapis\\.com/(Region)?(UrlMap|BackendService|TargetPool|TargetInstance|Target[A-Za-z]*Proxy|(Global)?ForwardingRule)$") then
         # A load balancer comes from the compute lists, below; its frontends are
         # left out.
