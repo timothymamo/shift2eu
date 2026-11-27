@@ -8,6 +8,14 @@
       "category": "unclassified"
     },
     {
+      "id": "example.com.",
+      "rawType": "AWS::Route53::HostedZone",
+      "category": "network.dns",
+      "capabilities": [
+        "dnssec"
+      ]
+    },
+    {
       "id": "fs-shop-onezone",
       "rawType": "AWS::EFS::FileSystem",
       "category": "storage.file",
@@ -74,6 +82,17 @@
       }
     },
     {
+      "id": "internal.example.com.",
+      "rawType": "AWS::Route53::HostedZone",
+      "category": "unclassified"
+    },
+    {
+      "id": "rslvr-in-0123456789abcdef0",
+      "rawType": "AWS::Route53Resolver::ResolverEndpoint",
+      "category": "unclassified",
+      "region": "eu-central-1"
+    },
+    {
       "id": "shop-alb",
       "rawType": "AWS::ElasticLoadBalancingV2::LoadBalancer",
       "category": "network.loadbalancer",
@@ -109,6 +128,19 @@
       "rawType": "AWS::AppRunner::Service",
       "category": "serverless.container",
       "region": "eu-central-1"
+    },
+    {
+      "id": "shop-api-health",
+      "rawType": "AWS::Route53::HealthCheck",
+      "category": "unclassified"
+    },
+    {
+      "id": "shop-api.example.com.",
+      "rawType": "AWS::Route53::HostedZone",
+      "category": "network.dns",
+      "capabilities": [
+        "dns-routing"
+      ]
     },
     {
       "id": "shop-archive",
@@ -645,7 +677,7 @@
     {
       "id": "shop.example.com.",
       "rawType": "AWS::Route53::HostedZone",
-      "category": "unclassified"
+      "category": "network.dns"
     },
     {
       "id": "vol-0123456789abcdef0",

@@ -104,6 +104,11 @@ type resourceFact struct {
 	// the sources whose calls disagree pin it here rather than in the golden
 	// file, which a careless -update could accept away.
 	region string
+	// noRegion says the inventory has to give the resource no region at all: a
+	// global resource is served from nowhere the user picks, so a region on it
+	// would claim the move keeps the resource where it is (PRD #581). A golden
+	// file would show the absence too, but an -update could accept one away.
+	noRegion bool
 	// capabilities is the exact capability set the inventory has to give the
 	// resource, sorted or not. A nil slice does not check it; an empty, non-nil
 	// slice says the resource has none, so a capability the program over-claims
@@ -464,6 +469,51 @@ func inventoryGuides() []inventoryGuideCase {
 					id: "shop-events-connect", rawType: "AWS::KafkaConnect::Connector", category: "unclassified",
 					capabilities: []string{},
 				},
+				// Route 53 public hosted zones are public authoritative DNS zones:
+				// one resource per zone, network.dns, with no region, since Route 53
+				// serves a zone from its own name servers, not from a region the user
+				// picks (PRD #581, milestone 2). The ID is the zone's name, which the
+				// AWS Config row of the same zone gave it before this milestone: the
+				// report's resource keeps its ID when it gains its category.
+				{
+					id: "shop.example.com.", rawType: "AWS::Route53::HostedZone", category: "network.dns",
+					noRegion: true, capabilities: []string{},
+				},
+				// A zone Route 53 signs with DNSSEC: ServeSignature is SIGNING. It has
+				// no routed record set, so it carries dnssec alone.
+				{
+					id: "example.com.", rawType: "AWS::Route53::HostedZone", category: "network.dns",
+					noRegion: true, capabilities: []string{"dnssec"},
+				},
+				// A zone whose routed record sets (weighted, failover, geolocation,
+				// multivalue answer or health-checked) number above 0 answers by
+				// client or by health, which is dns-routing. It is not signed, so it
+				// carries dns-routing alone.
+				{
+					id: "shop-api.example.com.", rawType: "AWS::Route53::HostedZone", category: "network.dns",
+					noRegion: true, capabilities: []string{"dns-routing"},
+				},
+				// A private zone answers only inside the VPCs it is attached to and
+				// moves with the network design, so it stays unclassified with its
+				// rawType (PRD #581, *What does not, and why*). It is written from
+				// list-hosted-zones, which lists private zones too, as its Config row
+				// is dropped with the public zones'.
+				{
+					id: "internal.example.com.", rawType: "AWS::Route53::HostedZone", category: "unclassified",
+					capabilities: []string{},
+				},
+				// A health check and a Resolver endpoint are no zone: the first is what
+				// a record set's routing depends on, the second is resolution inside a
+				// network, and no target sells either (PRD #581, *What does not, and
+				// why*). Both stay unclassified, as AWS Config records them.
+				{
+					id: "shop-api-health", rawType: "AWS::Route53::HealthCheck", category: "unclassified",
+					noRegion: true, capabilities: []string{},
+				},
+				{
+					id: "rslvr-in-0123456789abcdef0", rawType: "AWS::Route53Resolver::ResolverEndpoint",
+					category: "unclassified", region: "eu-central-1", capabilities: []string{},
+				},
 			},
 			// The storage of an Aurora instance belongs to its cluster, so
 			// rds describe-db-instances gives every Aurora instance
@@ -497,6 +547,11 @@ func inventoryGuides() []inventoryGuideCase {
 				"shop-events-kafka-serverless",
 				// A Kafka Connect connector is no cluster, so no call sizes it.
 				"shop-events-connect",
+				// network.dns takes no size field: a zone is billed by the zone, not
+				// by a node or a GiB, and no recorded call gives one (PRD #581).
+				"shop.example.com.",
+				"example.com.",
+				"shop-api.example.com.",
 			},
 			sized: []sizeFact{
 				// An m5.large is 2 vCPU and 8 GiB, from ec2 describe-instance-types.
@@ -664,6 +719,12 @@ func inventoryGuides() []inventoryGuideCase {
 				// collection (PRD #571, *Left out on the source side*).
 				"AWS::MSK::Configuration",
 				"AWS::OpenSearchServerless::SecurityPolicy",
+				// AWS Config records a hosted zone's DNSSEC configuration as a type of
+				// its own. get-dnssec already reads a zone's signed state into dnssec,
+				// so the config row is no second resource and is dropped (PRD #581,
+				// milestone 2). The zone itself keeps its Config type: a private zone
+				// stays unclassified with rawType AWS::Route53::HostedZone.
+				"AWS::Route53::DNSSEC",
 			},
 		},
 		{
@@ -1357,6 +1418,9 @@ func taxonomyCategories(source string) []string {
 			// and the Kafka cluster its fixtures record.
 			"search.opensearch",
 			"messaging.kafka",
+			// PRD #581's AWS classification: the public hosted zones its
+			// fixtures record, which Route 53 serves from no region.
+			"network.dns",
 		}
 	case "gcp":
 		return []string{
@@ -1912,6 +1976,11 @@ func assertPresent(t *testing.T, source string, doc inventoryDoc, wants []resour
 		if want.region != "" && resource.Region != want.region {
 			t.Errorf("%s: resource %q has region %q, want %q",
 				source, want.id, resource.Region, want.region)
+		}
+
+		if want.noRegion && resource.Region != "" {
+			t.Errorf("%s: resource %q has region %q, want none: a global resource is served from no region the user picks (PRD #581)",
+				source, want.id, resource.Region)
 		}
 
 		if want.capabilities == nil {

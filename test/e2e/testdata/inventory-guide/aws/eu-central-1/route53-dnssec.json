@@ -1,0 +1,14 @@
+[
+  {
+    "Id": "/hostedzone/Z0123456789ABCDEFGHIK",
+    "ServeSignature": "SIGNING"
+  },
+  {
+    "Id": "/hostedzone/Z0123456789ABCDEFGHIL",
+    "ServeSignature": "NOT_SIGNING"
+  },
+  {
+    "Id": "/hostedzone/Z0123456789ABCDEFGHIJ",
+    "ServeSignature": "NOT_SIGNING"
+  }
+]
