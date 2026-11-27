@@ -63,6 +63,8 @@ crash.*.log
 .dot-agent-deck/
 # The tester's scratch directory, named in its prompt in .dot-agent-deck.toml (issue #540).
 /.scratch/
+# Catalog units keep the vendor pages they fetch in scratch/; they are never committed (issue #688).
+/scratch/
 # Personal Claude Code overrides; the shared .claude/settings.json is committed.
 .claude/settings.local.json
 CLAUDE.local.md
