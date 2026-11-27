@@ -2,7 +2,7 @@
 
 - Inventory file: `inventory.json`
 - Source: `aws`
-- Catalog: `OVHcloud` snapshot from `https://www.ovhcloud.com/en-ie/public-cloud/prices/`, retrieved 2026-11-25
+- Catalog: `OVHcloud` snapshot from `https://www.ovhcloud.com/en-ie/public-cloud/prices/`, retrieved 2026-11-27
 - Catalog: `Scaleway` snapshot from `https://www.scaleway.com/en/pricing/`, retrieved 2026-11-26
 - Catalog: `UpCloud` snapshot from `https://upcloud.com/pricing/`, retrieved 2026-11-13
 - Region: `OVHcloud`: `GRA` (the target's default for estimates)
@@ -15,13 +15,13 @@
 
 | Fit | `OVHcloud` | `Scaleway` | `UpCloud` |
 |---|---|---|---|
-| direct | 8 | 6 | 6 |
+| direct | 10 | 6 | 6 |
 | partial | 3 | 9 | 2 |
-| none | 7 | 3 | 10 |
-| total | 18 | 18 | 18 |
-| `OVHcloud` estimate | €2,004.93 per month for 10 of 18 resources (storage not included in 4 estimates) |  |  |
-| `Scaleway` estimate |  | €1,698.10 per month for 10 of 18 resources (storage not included in 5 estimates) |  |
-| `UpCloud` estimate |  |  | €359.31 per month for 8 of 18 resources |
+| none | 6 | 4 | 11 |
+| total | 19 | 19 | 19 |
+| `OVHcloud` estimate | €2,508.85 per month for 11 of 19 resources (storage not included in 4 estimates) |  |  |
+| `Scaleway` estimate |  | €1,698.10 per month for 10 of 19 resources (storage not included in 5 estimates) |  |
+| `UpCloud` estimate |  |  | €359.31 per month for 8 of 19 resources |
 
 Estimates are list prices on each catalog's retrieval date, excluding VAT and discounts; each target's own section gives its basis.
 
@@ -36,10 +36,11 @@ Estimates are list prices on each catalog's retrieval date, excluding VAT and di
 | `shop-eks` | `kubernetes.managed` | direct | `Managed Kubernetes Service` | €224.04 (730 hours assumed) (boot volume not included) | direct | `Kubernetes Kapsule` | €245.72 (730 hours assumed) (boot volume not included) | partial | `Managed Kubernetes` | €84.00 (730 hours assumed) |
 | `shop-images` | `registry.container` | partial | `Managed Private Registry` | not estimated: not priced | partial | `Container Registry` | not estimated: not priced | none |  | not estimated: no fit |
 | `shop-legacy-mysql` | `database.mysql` | direct | `Managed MySQL Multi-node` | €162.79 (count assumed 1) (730 hours assumed) | partial | `Managed Database for PostgreSQL and MySQL High Availability` | €66.39 (count assumed 1) (730 hours assumed) | direct | `Managed MySQL Multi-node` | €67.93 (count assumed 1) (730 hours assumed) |
+| `shop-log-search` | `search.opensearch` | direct | `Analytics for OpenSearch Multi-node` | €503.92 (730 hours assumed) | none |  | not estimated: no fit | none |  | not estimated: no fit |
 | `shop-order-events` | `messaging.topic` | none |  | not estimated: no fit | partial | `Topics and Events` | not estimated: usage-priced | none |  | not estimated: no fit |
 | `shop-orders` | `messaging.queue` | none |  | not estimated: no fit | partial | `Queues` | not estimated: usage-priced | none |  | not estimated: no fit |
 | `shop-orders-dlq` | `messaging.queue` | none |  | not estimated: no fit | partial | `Queues` | not estimated: usage-priced | none |  | not estimated: no fit |
-| `shop-product-search` | `search.opensearch` | none |  | not estimated: no fit | none |  | not estimated: no fit | none |  | not estimated: no fit |
+| `shop-product-search` | `search.opensearch` | direct | `Analytics for OpenSearch Multi-node 3-AZ` | not estimated: not offered in `GRA` | none |  | not estimated: no fit | none |  | not estimated: no fit |
 | `shop-sessions` | `cache.redis` | partial | `Databases for Valkey Multi-node` | €721.53 (730 hours assumed) | partial | `Managed Database for Redis Cluster` | €585.95 (730 hours assumed) | none |  | not estimated: no fit |
 | `shop-thumbnailer` | `serverless.function` | none |  | not estimated: no fit | direct | `Serverless Functions` | not estimated: usage-priced | none |  | not estimated: no fit |
 | `shop-web-1` | `compute.vm` | direct | `Instances` | €37.38 (count assumed 1) (730 hours assumed) (boot volume not included) | direct | `Instances` | €40.21 (count assumed 1) (730 hours assumed) (boot volume not included) | direct | `Cloud Servers` | €18.00 (count assumed 1) (730 hours assumed) |
@@ -54,10 +55,6 @@ Estimates are list prices on each catalog's retrieval date, excluding VAT and di
   - `OVHcloud`: not classified
   - `Scaleway`: not classified
   - `UpCloud`: not classified
-- `shop-product-search`
-  - `OVHcloud`: no offering in the `OVHcloud` catalog for `search.opensearch`
-  - `Scaleway`: no offering in the `Scaleway` catalog for `search.opensearch`
-  - `UpCloud`: no offering in the `UpCloud` catalog for `search.opensearch`
 - `shop.example.com`
   - `OVHcloud`: not classified
   - `Scaleway`: not classified
@@ -69,10 +66,10 @@ Estimates are list prices on each catalog's retrieval date, excluding VAT and di
 
 | Fit | Resources |
 |---|---|
-| direct | 8 |
+| direct | 10 |
 | partial | 3 |
-| none | 7 |
-| total | 18 |
+| none | 6 |
+| total | 19 |
 
 ### Resources
 
@@ -85,10 +82,11 @@ Estimates are list prices on each catalog's retrieval date, excluding VAT and di
 | `shop-eks` | `AWS::EKS::Cluster` | `kubernetes.managed` | direct | `Managed Kubernetes Service` (tie: `Managed Kubernetes Service 3-AZ`) | `b3-16` (4 vCPU, 16 GiB) | €224.04 (730 hours assumed) (boot volume not included) | depends-on `shop-db` | `Managed Kubernetes Service` offers every capability the resource uses |
 | `shop-images` | `AWS::ECR::Repository` | `registry.container` | partial | `Managed Private Registry` |  | not estimated: not priced |  | `Managed Private Registry` does not offer `encryption-at-rest` |
 | `shop-legacy-mysql` | `AWS::RDS::DBInstance` | `database.mysql` | direct | `Managed MySQL Multi-node` (tie: `Managed MySQL Multi-node 3-AZ`, `Managed MySQL Multi-node Advanced`, `Managed MySQL Multi-node Advanced 3-AZ`) | `Production B3-8` (2 vCPU, 8 GiB) | €162.79 (count assumed 1) (730 hours assumed) |  | `Managed MySQL Multi-node` offers every capability the resource uses |
+| `shop-log-search` | `AWS::OpenSearchService::Domain` | `search.opensearch` | direct | `Analytics for OpenSearch Multi-node` (tie: `Analytics for OpenSearch Multi-node 3-AZ`) | `Production B3-8` (2 vCPU, 8 GiB) | €503.92 (730 hours assumed) |  | `Analytics for OpenSearch Multi-node` offers every capability the resource uses |
 | `shop-order-events` | `AWS::SNS::Topic` | `messaging.topic` | none |  |  | not estimated: no fit | depends-on `shop-orders` | no offering in the `OVHcloud` catalog for `messaging.topic` |
 | `shop-orders` | `AWS::SQS::Queue` | `messaging.queue` | none |  |  | not estimated: no fit |  | no offering in the `OVHcloud` catalog for `messaging.queue` |
 | `shop-orders-dlq` | `AWS::SQS::Queue` | `messaging.queue` | none |  |  | not estimated: no fit | dead-letter-queue-of `shop-orders` | no offering in the `OVHcloud` catalog for `messaging.queue` |
-| `shop-product-search` | `AWS::OpenSearchService::Domain` | `search.opensearch` | none |  |  | not estimated: no fit |  | no offering in the `OVHcloud` catalog for `search.opensearch` |
+| `shop-product-search` | `AWS::OpenSearchService::Domain` | `search.opensearch` | direct | `Analytics for OpenSearch Multi-node 3-AZ` |  | not estimated: not offered in `GRA` |  | `Analytics for OpenSearch Multi-node 3-AZ` offers every capability the resource uses |
 | `shop-sessions` | `AWS::ElastiCache::ReplicationGroup` | `cache.redis` | partial | `Databases for Valkey Multi-node` (tie: `Databases for Valkey Multi-node 3-AZ`) | `Business DB1-15` (4 vCPU, 15 GiB) | €721.53 (730 hours assumed) |  | `Databases for Valkey Multi-node` does not offer `sharding` |
 | `shop-thumbnailer` | `AWS::Lambda::Function` | `serverless.function` | none |  |  | not estimated: no fit | depends-on `shop-assets` | no offering in the `OVHcloud` catalog for `serverless.function` |
 | `shop-web-1` | `AWS::EC2::Instance` | `compute.vm` | direct | `Instances` | `b3-8` (2 vCPU, 8 GiB) | €37.38 (count assumed 1) (730 hours assumed) (boot volume not included) | depends-on `shop-orders` | `Instances` offers every capability the resource uses |
@@ -109,7 +107,6 @@ Estimates are list prices on each catalog's retrieval date, excluding VAT and di
 - `shop-order-events`: no offering in the `OVHcloud` catalog for `messaging.topic`
 - `shop-orders`: no offering in the `OVHcloud` catalog for `messaging.queue`
 - `shop-orders-dlq`: no offering in the `OVHcloud` catalog for `messaging.queue`
-- `shop-product-search`: no offering in the `OVHcloud` catalog for `search.opensearch`
 - `shop-thumbnailer`: no offering in the `OVHcloud` catalog for `serverless.function`
 - `shop.example.com`: not classified
 - `shop-order-events`: affected by a blocker on `shop-orders`
@@ -120,7 +117,7 @@ Estimates are list prices on each catalog's retrieval date, excluding VAT and di
 #### `media`
 
 - Fit: 1 direct, 0 partial, 2 none
-- Monthly estimate: €1.78 per month for 1 of 3 resources, list prices on 2026-11-25, excluding VAT and discounts
+- Monthly estimate: €1.78 per month for 1 of 3 resources, list prices on 2026-11-27, excluding VAT and discounts
 - Source cost: none in the inventory
 - Blockers:
   - `shop-cdn`: not classified
@@ -128,30 +125,29 @@ Estimates are list prices on each catalog's retrieval date, excluding VAT and di
 
 #### `shop`
 
-- Fit: 6 direct, 3 partial, 5 none
-- Monthly estimate: €1,840.37 per month for 8 of 14 resources (storage not included in 4 estimates), list prices on 2026-11-25, excluding VAT and discounts
-- Source cost: `USD` $518.92 for 4 of 14 resources
+- Fit: 8 direct, 3 partial, 4 none
+- Monthly estimate: €2,344.29 per month for 9 of 15 resources (storage not included in 4 estimates), list prices on 2026-11-27, excluding VAT and discounts
+- Source cost: `USD` $518.92 for 4 of 15 resources
 - Blockers:
   - `shop-order-events`: no offering in the `OVHcloud` catalog for `messaging.topic`
   - `shop-orders`: no offering in the `OVHcloud` catalog for `messaging.queue`
   - `shop-orders-dlq`: no offering in the `OVHcloud` catalog for `messaging.queue`
-  - `shop-product-search`: no offering in the `OVHcloud` catalog for `search.opensearch`
   - `shop.example.com`: not classified
 
 #### No workload
 
 - Fit: 1 direct, 0 partial, 0 none
-- Monthly estimate: €162.79 per month for 1 of 1 resource, list prices on 2026-11-25, excluding VAT and discounts
+- Monthly estimate: €162.79 per month for 1 of 1 resource, list prices on 2026-11-27, excluding VAT and discounts
 - Source cost: none in the inventory
 - Blockers: none
 
 ### Cost estimate
 
-- Total: €2,004.93 per month for 10 of 18 resources (storage not included in 4 estimates)
-- Estimate: list prices on 2026-11-25, excluding VAT and discounts; a fixed fee is the offering's listed fee
+- Total: €2,508.85 per month for 11 of 19 resources (storage not included in 4 estimates)
+- Estimate: list prices on 2026-11-27, excluding VAT and discounts; a fixed fee is the offering's listed fee
 - Prices in `GRA`
 - Hours: plan price × count × hours / 730, 730 hours for a resource that gives none
-- Source cost: `USD` $518.92 for 4 of 18 resources
+- Source cost: `USD` $518.92 for 4 of 19 resources
 
 ## `Scaleway`
 
@@ -161,8 +157,8 @@ Estimates are list prices on each catalog's retrieval date, excluding VAT and di
 |---|---|
 | direct | 6 |
 | partial | 9 |
-| none | 3 |
-| total | 18 |
+| none | 4 |
+| total | 19 |
 
 ### Resources
 
@@ -175,6 +171,7 @@ Estimates are list prices on each catalog's retrieval date, excluding VAT and di
 | `shop-eks` | `AWS::EKS::Cluster` | `kubernetes.managed` | direct | `Kubernetes Kapsule` (tie: `Kubernetes Kapsule Dedicated`) | `PRO2-XS` (4 vCPU, 16 GiB) | €245.72 (730 hours assumed) (boot volume not included) | depends-on `shop-db` | `Kubernetes Kapsule` offers every capability the resource uses |
 | `shop-images` | `AWS::ECR::Repository` | `registry.container` | partial | `Container Registry` |  | not estimated: not priced |  | `Container Registry` does not offer `encryption-at-rest` |
 | `shop-legacy-mysql` | `AWS::RDS::DBInstance` | `database.mysql` | partial | `Managed Database for PostgreSQL and MySQL High Availability` | `DB-PRO2-XXS` (2 vCPU, 8 GiB) | €66.39 (count assumed 1) (730 hours assumed) |  | `Managed Database for PostgreSQL and MySQL High Availability` does not offer `point-in-time-restore` |
+| `shop-log-search` | `AWS::OpenSearchService::Domain` | `search.opensearch` | none |  |  | not estimated: no fit |  | no offering in the `Scaleway` catalog for `search.opensearch` |
 | `shop-order-events` | `AWS::SNS::Topic` | `messaging.topic` | partial | `Topics and Events` |  | not estimated: usage-priced | depends-on `shop-orders` | `Topics and Events` does not offer `encryption-at-rest` |
 | `shop-orders` | `AWS::SQS::Queue` | `messaging.queue` | partial | `Queues` |  | not estimated: usage-priced |  | `Queues` does not offer `encryption-at-rest` |
 | `shop-orders-dlq` | `AWS::SQS::Queue` | `messaging.queue` | partial | `Queues` |  | not estimated: usage-priced | dead-letter-queue-of `shop-orders` | `Queues` does not offer `encryption-at-rest` |
@@ -202,6 +199,7 @@ Estimates are list prices on each catalog's retrieval date, excluding VAT and di
 ### Blockers
 
 - `shop-cdn`: not classified
+- `shop-log-search`: no offering in the `Scaleway` catalog for `search.opensearch`
 - `shop-product-search`: no offering in the `Scaleway` catalog for `search.opensearch`
 - `shop.example.com`: not classified
 
@@ -217,10 +215,11 @@ Estimates are list prices on each catalog's retrieval date, excluding VAT and di
 
 #### `shop`
 
-- Fit: 4 direct, 8 partial, 2 none
-- Monthly estimate: €1,627.68 per month for 8 of 14 resources (storage not included in 5 estimates), list prices on 2026-11-26, excluding VAT and discounts
-- Source cost: `USD` $518.92 for 4 of 14 resources
+- Fit: 4 direct, 8 partial, 3 none
+- Monthly estimate: €1,627.68 per month for 8 of 15 resources (storage not included in 5 estimates), list prices on 2026-11-26, excluding VAT and discounts
+- Source cost: `USD` $518.92 for 4 of 15 resources
 - Blockers:
+  - `shop-log-search`: no offering in the `Scaleway` catalog for `search.opensearch`
   - `shop-product-search`: no offering in the `Scaleway` catalog for `search.opensearch`
   - `shop.example.com`: not classified
 
@@ -233,11 +232,11 @@ Estimates are list prices on each catalog's retrieval date, excluding VAT and di
 
 ### Cost estimate
 
-- Total: €1,698.10 per month for 10 of 18 resources (storage not included in 5 estimates)
+- Total: €1,698.10 per month for 10 of 19 resources (storage not included in 5 estimates)
 - Estimate: list prices on 2026-11-26, excluding VAT and discounts; a fixed fee is the offering's listed fee
 - Prices in `fr-par`
 - Hours: plan price × count × hours / 730, 730 hours for a resource that gives none
-- Source cost: `USD` $518.92 for 4 of 18 resources
+- Source cost: `USD` $518.92 for 4 of 19 resources
 
 ## `UpCloud`
 
@@ -247,8 +246,8 @@ Estimates are list prices on each catalog's retrieval date, excluding VAT and di
 |---|---|
 | direct | 6 |
 | partial | 2 |
-| none | 10 |
-| total | 18 |
+| none | 11 |
+| total | 19 |
 
 ### Resources
 
@@ -261,6 +260,7 @@ Estimates are list prices on each catalog's retrieval date, excluding VAT and di
 | `shop-eks` | `AWS::EKS::Cluster` | `kubernetes.managed` | partial | `Managed Kubernetes` (tie: `Managed Kubernetes Production`) | `STARTER-4xCPU-16GB` (4 vCPU, 16 GiB) | €84.00 (730 hours assumed) | depends-on `shop-db` | `Managed Kubernetes` does not offer `autoscaling` |
 | `shop-images` | `AWS::ECR::Repository` | `registry.container` | none |  |  | not estimated: no fit |  | no offering in the `UpCloud` catalog for `registry.container` |
 | `shop-legacy-mysql` | `AWS::RDS::DBInstance` | `database.mysql` | direct | `Managed MySQL Multi-node` | `rdb.standard.2CPU-8GB` (2 vCPU, 8 GiB) | €67.93 (count assumed 1) (730 hours assumed) |  | `Managed MySQL Multi-node` offers every capability the resource uses |
+| `shop-log-search` | `AWS::OpenSearchService::Domain` | `search.opensearch` | none |  |  | not estimated: no fit |  | no offering in the `UpCloud` catalog for `search.opensearch` |
 | `shop-order-events` | `AWS::SNS::Topic` | `messaging.topic` | none |  |  | not estimated: no fit | depends-on `shop-orders` | no offering in the `UpCloud` catalog for `messaging.topic` |
 | `shop-orders` | `AWS::SQS::Queue` | `messaging.queue` | none |  |  | not estimated: no fit |  | no offering in the `UpCloud` catalog for `messaging.queue` |
 | `shop-orders-dlq` | `AWS::SQS::Queue` | `messaging.queue` | none |  |  | not estimated: no fit | dead-letter-queue-of `shop-orders` | no offering in the `UpCloud` catalog for `messaging.queue` |
@@ -283,6 +283,7 @@ Estimates are list prices on each catalog's retrieval date, excluding VAT and di
 - `shop-catalog-docs`: no offering in the `UpCloud` catalog for `database.mongodb`
 - `shop-cdn`: not classified
 - `shop-images`: no offering in the `UpCloud` catalog for `registry.container`
+- `shop-log-search`: no offering in the `UpCloud` catalog for `search.opensearch`
 - `shop-order-events`: no offering in the `UpCloud` catalog for `messaging.topic`
 - `shop-orders`: no offering in the `UpCloud` catalog for `messaging.queue`
 - `shop-orders-dlq`: no offering in the `UpCloud` catalog for `messaging.queue`
@@ -306,12 +307,13 @@ Estimates are list prices on each catalog's retrieval date, excluding VAT and di
 
 #### `shop`
 
-- Fit: 4 direct, 2 partial, 8 none
-- Monthly estimate: €286.30 per month for 6 of 14 resources, list prices on 2026-11-13, excluding VAT and discounts
-- Source cost: `USD` $518.92 for 4 of 14 resources
+- Fit: 4 direct, 2 partial, 9 none
+- Monthly estimate: €286.30 per month for 6 of 15 resources, list prices on 2026-11-13, excluding VAT and discounts
+- Source cost: `USD` $518.92 for 4 of 15 resources
 - Blockers:
   - `shop-catalog-docs`: no offering in the `UpCloud` catalog for `database.mongodb`
   - `shop-images`: no offering in the `UpCloud` catalog for `registry.container`
+  - `shop-log-search`: no offering in the `UpCloud` catalog for `search.opensearch`
   - `shop-order-events`: no offering in the `UpCloud` catalog for `messaging.topic`
   - `shop-orders`: no offering in the `UpCloud` catalog for `messaging.queue`
   - `shop-orders-dlq`: no offering in the `UpCloud` catalog for `messaging.queue`
@@ -328,8 +330,8 @@ Estimates are list prices on each catalog's retrieval date, excluding VAT and di
 
 ### Cost estimate
 
-- Total: €359.31 per month for 8 of 18 resources
+- Total: €359.31 per month for 8 of 19 resources
 - Estimate: list prices on 2026-11-13, excluding VAT and discounts; a fixed fee is the offering's listed fee
 - Prices in `de-fra1`
 - Hours: plan price × count × hours / 730, 730 hours for a resource that gives none; a plan billed for at most 672 hours a month costs plan price × count × min(hours, 672) / 672
-- Source cost: `USD` $518.92 for 4 of 18 resources
+- Source cost: `USD` $518.92 for 4 of 19 resources

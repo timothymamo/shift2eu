@@ -14,13 +14,17 @@ managed database is 2 vCPU, 4 GiB of memory and 50 GiB of storage; block storage
 volume and object storage 100 GiB stored; a function is 1 GiB of memory; a queue, a topic and a
 serverless container take no size.
 A MongoDB database is 2 vCPU, 8 GiB of memory, 100 GiB of storage and count 3, the nodes of a
-replica set; a cache is 6 GiB of memory per node, count 2 and `node-high-availability`, so it is
-priced on the multi-node tier's per-node price, where that tier serves the cache or ties with the
-base offering (Scaleway's Redis Cluster lists no `node-high-availability`: see its SOURCES.md,
+replica set; a search cluster and a Kafka cluster are the same size, 2 vCPU, 8 GiB of memory
+and 100 GiB of storage per node at count 3, on the 1-AZ tier the default region serves; the
+search cluster also lists `node-high-availability`, as a cache does, because three nodes are
+the multi-node tier and OVHcloud's single-node Discovery plan is no 3-node cluster; a cache is
+6 GiB of memory per node, count 2 and `node-high-availability`, so it is priced on the
+multi-node tier's per-node price, where that tier serves the cache or ties with the base
+offering (Scaleway's Redis Cluster lists no `node-high-availability`: see its SOURCES.md,
 *Estimate effect*), and its capability is shown after its size; a load balancer and a container
 registry take no size and are not priced.
 
-- `OVHcloud`: prices retrieved 2026-11-25 from `https://www.ovhcloud.com/en-ie/public-cloud/prices/`, estimated in `GRA` (its default region)
+- `OVHcloud`: prices retrieved 2026-11-27 from `https://www.ovhcloud.com/en-ie/public-cloud/prices/`, estimated in `GRA` (its default region)
 - `Scaleway`: prices retrieved 2026-11-26 from `https://www.scaleway.com/en/pricing/`, estimated in `fr-par` (its default region)
 - `UpCloud`: prices retrieved 2026-11-13 from `https://upcloud.com/pricing/`, estimated in `de-fra1` (its default region)
 
@@ -33,8 +37,10 @@ registry take no size and are not priced.
 | `OVHcloud` | `database.mysql` | 2 vCPU, 4 GiB memory, 50 GiB storage, count 1, 730 h/month | `Managed MySQL` | `Essential DB1-4` | €54.46 |  |
 | `OVHcloud` | `database.postgresql` | 2 vCPU, 4 GiB memory, 50 GiB storage, count 1, 730 h/month | `Managed PostgreSQL` | `Essential DB1-4` | €54.46 |  |
 | `OVHcloud` | `kubernetes.managed` | 2 vCPU, 4 GiB memory, count 3, 730 h/month | `Managed Kubernetes Service` | `c3-4` | €100.08 |  |
+| `OVHcloud` | `messaging.kafka` | 2 vCPU, 8 GiB memory, 100 GiB storage, count 3, 730 h/month | `Analytics for Kafka` | `Production B3-8` | €609.26 |  |
 | `OVHcloud` | `network.loadbalancer` | none | none | none | — | `not-priced` |
 | `OVHcloud` | `registry.container` | none | none | none | — | `not-priced` |
+| `OVHcloud` | `search.opensearch` | 2 vCPU, 8 GiB memory, 100 GiB storage, count 3, 730 h/month, `node-high-availability` | `Analytics for OpenSearch Multi-node` | `Production B3-8` | €503.92 |  |
 | `OVHcloud` | `storage.block` | 100 GiB storage, count 1 | `Block Storage` | none | €4.31 |  |
 | `OVHcloud` | `storage.object` | 100 GiB storage | `Object Storage` | none | €0.71 |  |
 | `Scaleway` | `cache.redis` | 6 GiB memory, count 2, 730 h/month, `node-high-availability` | `Managed Database for Redis Cluster` | `RED1-XS` | €146.49 |  |

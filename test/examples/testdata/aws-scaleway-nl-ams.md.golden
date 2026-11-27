@@ -11,8 +11,8 @@
 |---|---|
 | direct | 6 |
 | partial | 8 |
-| none | 4 |
-| total | 18 |
+| none | 5 |
+| total | 19 |
 
 ## Resources
 
@@ -25,6 +25,7 @@
 | `shop-eks` | `AWS::EKS::Cluster` | `kubernetes.managed` | direct | `Kubernetes Kapsule` (tie: `Kubernetes Kapsule Dedicated`) | `PRO2-XS` (4 vCPU, 16 GiB) | €245.72 (730 hours assumed) (boot volume not included) | depends-on `shop-db` | `Kubernetes Kapsule` offers every capability the resource uses |
 | `shop-images` | `AWS::ECR::Repository` | `registry.container` | partial | `Container Registry` |  | not estimated: not priced |  | `Container Registry` does not offer `encryption-at-rest` |
 | `shop-legacy-mysql` | `AWS::RDS::DBInstance` | `database.mysql` | partial | `Managed Database for PostgreSQL and MySQL High Availability` | `DB-PRO2-XXS` (2 vCPU, 8 GiB) | €66.39 (count assumed 1) (730 hours assumed) |  | `Managed Database for PostgreSQL and MySQL High Availability` does not offer `point-in-time-restore` |
+| `shop-log-search` | `AWS::OpenSearchService::Domain` | `search.opensearch` | none |  |  | not estimated: no fit |  | no offering in the `Scaleway` catalog for `search.opensearch` |
 | `shop-order-events` | `AWS::SNS::Topic` | `messaging.topic` | partial | `Topics and Events` |  | not estimated: usage-priced | depends-on `shop-orders` | `Topics and Events` does not offer `encryption-at-rest` |
 | `shop-orders` | `AWS::SQS::Queue` | `messaging.queue` | partial | `Queues` |  | not estimated: usage-priced |  | `Queues` does not offer `encryption-at-rest` |
 | `shop-orders-dlq` | `AWS::SQS::Queue` | `messaging.queue` | partial | `Queues` |  | not estimated: usage-priced | dead-letter-queue-of `shop-orders` | `Queues` does not offer `encryption-at-rest` |
@@ -52,6 +53,7 @@
 
 - `shop-catalog-docs`: not offered in `nl-ams`
 - `shop-cdn`: not classified
+- `shop-log-search`: no offering in the `Scaleway` catalog for `search.opensearch`
 - `shop-product-search`: no offering in the `Scaleway` catalog for `search.opensearch`
 - `shop.example.com`: not classified
 
@@ -67,11 +69,12 @@
 
 ### `shop`
 
-- Fit: 4 direct, 7 partial, 3 none
-- Monthly estimate: €1,103.11 per month for 7 of 14 resources (storage not included in 4 estimates), list prices on 2026-11-26, excluding VAT and discounts
-- Source cost: `USD` $518.92 for 4 of 14 resources
+- Fit: 4 direct, 7 partial, 4 none
+- Monthly estimate: €1,103.11 per month for 7 of 15 resources (storage not included in 4 estimates), list prices on 2026-11-26, excluding VAT and discounts
+- Source cost: `USD` $518.92 for 4 of 15 resources
 - Blockers:
   - `shop-catalog-docs`: not offered in `nl-ams`
+  - `shop-log-search`: no offering in the `Scaleway` catalog for `search.opensearch`
   - `shop-product-search`: no offering in the `Scaleway` catalog for `search.opensearch`
   - `shop.example.com`: not classified
 
@@ -84,8 +87,8 @@
 
 ## Cost estimate
 
-- Total: €1,173.53 per month for 9 of 18 resources (storage not included in 4 estimates)
+- Total: €1,173.53 per month for 9 of 19 resources (storage not included in 4 estimates)
 - Estimate: list prices on 2026-11-26, excluding VAT and discounts; a fixed fee is the offering's listed fee
 - Prices in `nl-ams`
 - Hours: plan price × count × hours / 730, 730 hours for a resource that gives none
-- Source cost: `USD` $518.92 for 4 of 18 resources
+- Source cost: `USD` $518.92 for 4 of 19 resources

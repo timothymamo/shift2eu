@@ -23,7 +23,10 @@
 // it, such as the Multi-node and Multi-node Advanced database plans (read
 // replicas only on the Advanced one) and Block Storage 3-AZ Regional Classic.
 // The load balancer and private registry offerings record no plan or price,
-// since OVHcloud sells them by a size no inventory records (PRD 552).
+// since OVHcloud sells them by a size no inventory records (PRD 552). The
+// OpenSearch and Kafka offerings (OVHcloud's Analytics family, PRD 571) price
+// a plan per node and storage per GiB per node, never at the tier's node
+// count as the managed databases' storage is (ADR 0047).
 //
 // catalog.json is a target catalog snapshot of schema version 2, the format
 // every target with an embedded snapshot shares (ADR 0007, ADR 0024).

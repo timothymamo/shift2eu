@@ -58,8 +58,8 @@ starts with its inputs, the region its prices are for, and the fits counted:
 |---|---|
 | direct | 6 |
 | partial | 9 |
-| none | 3 |
-| total | 18 |
+| none | 4 |
+| total | 19 |
 ```
 
 [Read the report](#read-the-report) explains the rest. `--output report.md` writes the report to a
@@ -88,13 +88,13 @@ summary counts the fits and gives each target's estimated total:
 
 | Fit | `OVHcloud` | `Scaleway` | `UpCloud` |
 |---|---|---|---|
-| direct | 8 | 6 | 6 |
+| direct | 10 | 6 | 6 |
 | partial | 3 | 9 | 2 |
-| none | 7 | 3 | 10 |
-| total | 18 | 18 | 18 |
-| `OVHcloud` estimate | €2,004.93 per month for 10 of 18 resources (storage not included in 4 estimates) |  |  |
-| `Scaleway` estimate |  | €1,698.10 per month for 10 of 18 resources (storage not included in 5 estimates) |  |
-| `UpCloud` estimate |  |  | €359.31 per month for 8 of 18 resources |
+| none | 6 | 4 | 11 |
+| total | 19 | 19 | 19 |
+| `OVHcloud` estimate | €2,508.85 per month for 11 of 19 resources (storage not included in 4 estimates) |  |  |
+| `Scaleway` estimate |  | €1,698.10 per month for 10 of 19 resources (storage not included in 5 estimates) |  |
+| `UpCloud` estimate |  |  | €359.31 per month for 8 of 19 resources |
 
 Estimates are list prices on each catalog's retrieval date, excluding VAT and discounts; each target's own section gives its basis.
 ```
@@ -137,8 +137,8 @@ Every total in it estimated something, so `--schema-version 2` writes the same d
   "summary": {
     "direct": 6,
     "partial": 9,
-    "none": 3,
-    "total": 18
+    "none": 4,
+    "total": 19
   },
   "estimate": {
     "region": "fr-par",
@@ -153,7 +153,7 @@ Every total in it estimated something, so `--schema-version 2` writes the same d
     "total": {
       "amount": "1698.10",
       "estimated": 10,
-      "resources": 18,
+      "resources": 19,
       "storageNotIncluded": 5
     }
   },
@@ -285,8 +285,9 @@ you would have to replace, rebuild or do without on that target.
 
 **Blockers** lists every resource whose fit is none, with the reason. Blockers are a result, not a
 failure: `assess` still exits 0. Here the CDN and the DNS zone are unclassified; on OVHcloud the queues,
-the function and the topic have no offering at all (OVHcloud does serve the cache, the MongoDB database
-and the container registry, and Scaleway serves all four, the topic included). The web server and the topic `depends-on`
+the function and the topic have no offering at all (OVHcloud does serve the cache, the MongoDB database,
+the container registry and the two search clusters, and Scaleway serves the first three and the topic, but
+no search cluster). The web server and the topic `depends-on`
 the order queue, so the blocker on the queue is listed under them too, as "affected by a blocker"; their
 own fit does not change
 ([`aws-all-estimates.md.golden`](../../test/examples/testdata/aws-all-estimates.md.golden)):
@@ -322,10 +323,11 @@ database belongs to no workload:
 
 ### `shop`
 
-- Fit: 4 direct, 8 partial, 2 none
-- Monthly estimate: €1,627.68 per month for 8 of 14 resources (storage not included in 5 estimates), list prices on 2026-11-26, excluding VAT and discounts
-- Source cost: `USD` $518.92 for 4 of 14 resources
+- Fit: 4 direct, 8 partial, 3 none
+- Monthly estimate: €1,627.68 per month for 8 of 15 resources (storage not included in 5 estimates), list prices on 2026-11-26, excluding VAT and discounts
+- Source cost: `USD` $518.92 for 4 of 15 resources
 - Blockers:
+  - `shop-log-search`: no offering in the `Scaleway` catalog for `search.opensearch`
   - `shop-product-search`: no offering in the `Scaleway` catalog for `search.opensearch`
   - `shop.example.com`: not classified
 
@@ -342,11 +344,11 @@ the source's cost is shown beside it per currency, never converted, with how man
 ```markdown
 ## Cost estimate
 
-- Total: €1,698.10 per month for 10 of 18 resources (storage not included in 5 estimates)
+- Total: €1,698.10 per month for 10 of 19 resources (storage not included in 5 estimates)
 - Estimate: list prices on 2026-11-26, excluding VAT and discounts; a fixed fee is the offering's listed fee
 - Prices in `fr-par`
 - Hours: plan price × count × hours / 730, 730 hours for a resource that gives none
-- Source cost: `USD` $518.92 for 4 of 18 resources
+- Source cost: `USD` $518.92 for 4 of 19 resources
 ```
 
 An estimate is not a quote: it uses list prices on the snapshot's date, without VAT, discounts,
