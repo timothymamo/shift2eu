@@ -607,9 +607,9 @@ func validateFinding(f Finding, path string, ran map[string]bool) error {
 // validFile is the schema's file rule: 1 to 200 bytes of the allowed set,
 // starting with a letter, a digit, _ or a dot, with no empty, . or .. segment.
 // A segment may start with a dot (.github/workflows/ci.yml, .dot-agent-deck.toml
-// are real repository paths); the segment check still refuses empty, . and ..
-// segments, so a leading dot admits no . or .. segment (names like ... are
-// ordinary file names), and a leading / stays refused.
+// are real repository paths), but a segment that is exactly . or .., or
+// empty, is still refused. Longer runs of dots such as ... are ordinary
+// names, and a leading / stays refused.
 func validFile(file string) bool {
 	if len(file) == 0 || len(file) > maxFileBytes || !filePattern.MatchString(file) {
 		return false

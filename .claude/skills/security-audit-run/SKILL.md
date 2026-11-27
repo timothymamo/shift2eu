@@ -133,7 +133,8 @@ it is confirmed; a category; the concrete scenario; the evidence (a PoC from the
 precise trace through the code by `path:line`); and the recommended fix. Hardening with no concrete
 attack is `informational`. A finding's file is its real repository path, relative to the checkout's
 root and with every leading dot kept (`.github/workflows/ci.yml`, `.dot-agent-deck.toml`, never
-`github/workflows/ci.yml`), or the release artifact's name.
+`github/workflows/ci.yml`), the release artifact's name, or, for check `history-secrets`, the commit's
+40 lowercase hex.
 
 **Signal over noise.**
 - A finding is **confirmed** only by a PoC or a precise trace. Anything else is **unconfirmed**, stated
