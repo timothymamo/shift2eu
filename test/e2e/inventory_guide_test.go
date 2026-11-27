@@ -1684,6 +1684,149 @@ func TestInventoryGuideAWSRoute53PrivateZoneKeepsNoCapability(t *testing.T) {
 	})
 }
 
+// TestInventoryGuideAWSRoute53UnprojectedHostedZones pins the promise the AWS
+// program's header makes about every call the guide makes with a --query
+// projection: the full, unprojected output of a call is read the same way
+// (review finding S1). A reader who drops the projection from `route53
+// list-hosted-zones` records the whole response, `{"HostedZones": [...],
+// "IsTruncated": ..., "MaxItems": ...}`, and every zone of it has to reach the
+// inventory as the projected array's zones do, with the zone's Config holding
+// its visibility.
+//
+// The fixtures cannot show it: they record the projected form the guide's
+// command writes, and the program has to go on reading that one. So the inputs
+// are built here, in a directory of their own per form, and the two runs have to
+// write the same zones. The full response also carries a CallerReference and a
+// Config comment of its own, neither of which is part of the zone: the
+// inventory has to hold neither.
+func TestInventoryGuideAWSRoute53UnprojectedHostedZones(t *testing.T) {
+	t.Parallel()
+
+	// The per-zone calls the guide makes are the same beside either form: their
+	// output is what a reader records next to the zone list, and what says a zone
+	// is signed or routes by client or health.
+	dnssec := `[
+  {"Id": "/hostedzone/Z0123456789ABCDEFGHIK", "ServeSignature": "SIGNING"},
+  {"Id": "/hostedzone/Z0123456789ABCDEFGHIL", "ServeSignature": "NOT_SIGNING"}
+]`
+	routed := `[
+  {"Id": "/hostedzone/Z0123456789ABCDEFGHIK", "RoutedRecordSets": 0},
+  {"Id": "/hostedzone/Z0123456789ABCDEFGHIL", "RoutedRecordSets": 3}
+]`
+
+	// The guide's own projection: one array of zones, each with the three fields
+	// the program reads.
+	projected := `[
+  {"Id": "/hostedzone/Z0123456789ABCDEFGHIK", "Name": "example.com.", "PrivateZone": false},
+  {"Id": "/hostedzone/Z0123456789ABCDEFGHIL", "Name": "shop-api.example.com.", "PrivateZone": false},
+  {"Id": "/hostedzone/Z0123456789ABCDEFGHIM", "Name": "internal.example.com.", "PrivateZone": true}
+]`
+
+	// The full response list-hosted-zones writes without the projection: the
+	// zones sit under HostedZones, with their own ID, their name, the caller's
+	// reference, a Config holding the visibility and a comment, and the count of
+	// every record set the zone holds.
+	unprojected := `{
+  "HostedZones": [
+    {
+      "Id": "/hostedzone/Z0123456789ABCDEFGHIK",
+      "Name": "example.com.",
+      "CallerReference": "caller-reference-must-not-reach-the-inventory",
+      "Config": {"PrivateZone": false, "Comment": "comment-must-not-reach-the-inventory"},
+      "ResourceRecordSetCount": 3
+    },
+    {
+      "Id": "/hostedzone/Z0123456789ABCDEFGHIL",
+      "Name": "shop-api.example.com.",
+      "CallerReference": "caller-reference-must-not-reach-the-inventory",
+      "Config": {"PrivateZone": false, "Comment": "comment-must-not-reach-the-inventory"},
+      "ResourceRecordSetCount": 7
+    },
+    {
+      "Id": "/hostedzone/Z0123456789ABCDEFGHIM",
+      "Name": "internal.example.com.",
+      "CallerReference": "caller-reference-must-not-reach-the-inventory",
+      "Config": {"PrivateZone": true, "Comment": "comment-must-not-reach-the-inventory"},
+      "ResourceRecordSetCount": 1
+    }
+  ],
+  "IsTruncated": false,
+  "MaxItems": "100"
+}`
+
+	projectedOutput := runInventoryGuideRoute53(t, projected, dnssec, routed)
+	unprojectedOutput := runInventoryGuideRoute53(t, unprojected, dnssec, routed)
+
+	// The projected form is the control: without it a program that read neither
+	// form would write two empty inventories and pass for the same reason.
+	assertPresent(t, "aws", decodeInventory(t, projectedOutput), []resourceFact{
+		{
+			id: "example.com.", rawType: "AWS::Route53::HostedZone",
+			category: "network.dns", noRegion: true, capabilities: []string{"dnssec"},
+		},
+		{
+			id: "shop-api.example.com.", rawType: "AWS::Route53::HostedZone",
+			category: "network.dns", noRegion: true, capabilities: []string{"dns-routing"},
+		},
+		{
+			id: "internal.example.com.", rawType: "AWS::Route53::HostedZone",
+			category: "unclassified", capabilities: []string{},
+		},
+	})
+
+	// A zone's CallerReference is the caller's own token and its Config comment is
+	// text someone wrote, neither of which describes infrastructure to move.
+	for _, marker := range []string{
+		"caller-reference-must-not-reach-the-inventory",
+		"comment-must-not-reach-the-inventory",
+	} {
+		if bytes.Contains(unprojectedOutput, []byte(marker)) {
+			t.Errorf("the program's output holds %q, want a zone's ID, name, category and capabilities only: a zone's CallerReference and its comment are no infrastructure to move\n%s",
+				marker, unprojectedOutput)
+		}
+	}
+
+	projectedZones := decodeInventory(t, projectedOutput).Resources
+	unprojectedZones := decodeInventory(t, unprojectedOutput).Resources
+
+	if diff := cmp.Diff(projectedZones, unprojectedZones); diff != "" {
+		t.Errorf("the unprojected list-hosted-zones response and the guide's projection write different inventories (-projected +unprojected), want the same zones: the program reads the full output of a call as it reads the projected one (docs/guide/inventory/aws.jq)\n%s",
+			diff)
+	}
+}
+
+// runInventoryGuideRoute53 runs the AWS program on one form of the
+// list-hosted-zones output and the per-zone calls' recorded output, written to a
+// directory of their own, and returns what the program wrote. The files are
+// written here rather than recorded: the guide's fixtures hold the projected
+// form, which a reader's own run must keep matching, and the program's promise
+// about the full form needs an input the fixtures do not hold.
+func runInventoryGuideRoute53(t *testing.T, zones, dnssec, routed string) []byte {
+	t.Helper()
+
+	inputs := map[string]string{
+		"route53-hosted-zones.json":       zones,
+		"route53-dnssec.json":             dnssec,
+		"route53-routed-record-sets.json": routed,
+	}
+
+	dir := t.TempDir()
+
+	var recorded []string
+
+	for _, name := range slices.Sorted(maps.Keys(inputs)) {
+		path := filepath.Join(dir, name)
+
+		if err := os.WriteFile(path, []byte(inputs[name]), 0o600); err != nil {
+			t.Fatalf("write %s: %v", path, err)
+		}
+
+		recorded = append(recorded, path)
+	}
+
+	return runJQ(t, jqPath(t), "aws", recorded)
+}
+
 // TestInventoryGuideDomainNamesListEveryDomainOnRecord pins what the guide's two
 // OpenSearch calls promise about each other (review finding N1): the guide asks
 // opensearch describe-domains for the names list-domain-names returned, so a
