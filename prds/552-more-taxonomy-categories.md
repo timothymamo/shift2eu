@@ -537,8 +537,11 @@ fit `none` with "no offering in the <target> catalog", which is already more pre
    (eight 1-node plans, `encryption-at-rest`, `snapshots`) and *Managed Valkey Multi-node* (the seven
    2-node plans per node, plus `node-high-availability`); one unpriced *Managed Load Balancer* with no
    capability; *File Storage* and *File Storage Encrypted* (`encryption-at-rest`), €0.15 a GiB, not in
-   `es-mad1` or `pl-waw1`. Departures (*To be checked*): no Production variant of the load balancer, since
-   its failover is not confirmed; neither `udp` nor `ipv6` on it; the 3-node Valkey plans stay out, so a
+   `es-mad1` or `pl-waw1`. The first pass left out a Production variant of the load balancer, its
+   failover not being confirmed; on 2026-11-27 the maintainer reversed that for failover, on the saved
+   product page, so a sixth offering, an unpriced *Managed Load Balancer Production*, lists
+   `node-high-availability`, and load balancer pricing stays out (decided question 6). Departures (*To
+   be checked*): neither `udp` nor `ipv6` on the load balancer; the 3-node Valkey plans stay out, so a
    3-node cache is priced at most 1.9% low; and a cache that needs nothing the tiers differ on ties both
    tiers, so the estimate can take the 2-node per-node price, up to 5.6% below the 1-node plan, which
    decided question 10 accepts until issue #558 and `SOURCES.md` records. Every existing price was
@@ -993,10 +996,12 @@ text as the decision)
   (the maintainer's saved copy of <https://upcloud.com/pricing/>, UpCloud's documentation and one page
   of its API reference, <https://developers.upcloud.com/1.3/17-managed-loadbalancer/>; sources in
   UpCloud's `SOURCES.md`):
-  - Load Balancer Production failover: **not confirmed**. The plans page says the Production plan's
-    nodes form "a high availability cluster" that "distributes workloads across all nodes in order to
-    prevent any single node from getting overloaded", and the maintenance page promises "zero downtime"
-    for rolling updates only; no page names a node failure it serves through. No Production variant.
+  - Load Balancer Production failover: **confirmed** (saved page, 2026-11-27). The documentation pages
+    alone did not confirm it, but the saved product page
+    (<https://upcloud.com/products/managed-load-balancer/>) gives the Production plans "2
+    High-availability nodes" or "5", running "concurrent Load Balancer nodes" so the load balancer is
+    not "a single point of failure": the *Managed Load Balancer Production* variant lists
+    `node-high-availability`.
   - UDP on a frontend: **no**. Frontends run in `tcp` (layer 4) or `http` (layer 7) mode only (API
     reference), and no page mentions UDP, so `udp` stays off. The frontend network is IPv4 only
     ("Currently only IPv4 network family is supported"), so `ipv6` stays off too.
