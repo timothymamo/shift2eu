@@ -357,6 +357,8 @@ func TestCoAuthorRangeFindingsIgnoreReplaceRefs(t *testing.T) {
 // GIT_CONFIG_SYSTEM and GIT_CONFIG_NOSYSTEM never reach a child of this harness
 // (module_test.go's passedEnv), and /etc/gitconfig is not a file a test may
 // write, so only a change to the check's own child environment would show it.
+// TestCoAuthorGitEnvSwitchesOffTheSystemConfig pins that half where it is
+// observable: over runGitEnv's extra env.
 func TestCoAuthorRangeFindingsIsolateTheGitConfig(t *testing.T) {
 	// No t.Parallel: this case sets the process's HOME for the git calls the
 	// check makes, and t.Setenv refuses a parallel test.
@@ -403,16 +405,17 @@ func TestCoAuthorRangeFindingsIsolateTheGitConfig(t *testing.T) {
 			"Want the fixture's own findings, so that a planted configuration that changes them is observable", spec, diff)
 	}
 
-	home, planted := coAuthorPlantedGitConfig(t)
+	home, _ := coAuthorPlantedGitConfig(t)
 
 	// A developer's global configuration reaches a git process through its HOME,
-	// which the check's git calls inherit today; the same file reaches one through
-	// GIT_CONFIG_GLOBAL, and the system configuration through GIT_CONFIG_SYSTEM,
-	// which GIT_CONFIG_NOSYSTEM=1 switches off.
+	// which the check's git calls inherit today, so the case plants it in a HOME of
+	// its own. GIT_CONFIG_GLOBAL and GIT_CONFIG_SYSTEM are not set here: this
+	// harness forwards no GIT_* variable to a child (module_test.go's passedEnv), so
+	// a value the case set would be inert, and reading the planted file is what
+	// GIT_CONFIG_GLOBAL=/dev/null, which the check's own git calls pass
+	// (coAuthorGitEnv), must prevent.
 	t.Setenv("HOME", home)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg"))
-	t.Setenv("GIT_CONFIG_GLOBAL", planted)
-	t.Setenv("GIT_CONFIG_SYSTEM", planted)
 
 	// The premise: a git command of the fixture's own, with the identity and the
 	// HOME the case planted and no isolation of its own, reads the planted
@@ -443,6 +446,63 @@ func TestCoAuthorRangeFindingsIsolateTheGitConfig(t *testing.T) {
 			"Want the three git calls of the check to run with GIT_CONFIG_GLOBAL=/dev/null and GIT_CONFIG_NOSYSTEM=1: "+
 			"a developer's global configuration must not decide which commits, and which authors, the check reads "+
 			"(issue #689)", spec, diff)
+	}
+}
+
+// TestCoAuthorGitEnvSwitchesOffTheSystemConfig pins coAuthorGitEnv exactly (issue
+// #689, follow-up to #672): the three git calls of the check run with
+// GIT_CONFIG_GLOBAL=/dev/null and GIT_CONFIG_NOSYSTEM=1, so neither the
+// developer's global git configuration nor the host's system one decides which
+// commits, which allow list and which authors the check reads.
+//
+// The global half is observable end to end
+// (TestCoAuthorRangeFindingsIsolateTheGitConfig): a global configuration reaches
+// a git process through the HOME this harness passes on. The system half is not:
+// passedEnv forwards no GIT_* variable and /etc/gitconfig is no file a test may
+// write, so no system configuration reaches the check's own git calls. The case
+// takes the one door this harness has for one, runGitEnv's extra env: it plants a
+// system configuration and pins that coAuthorGitEnv's GIT_CONFIG_NOSYSTEM=1 wins
+// over it, so a check whose git calls read the host's system configuration does
+// not pass either. The value itself is pinned beside that, exactly: a variable
+// dropped from coAuthorGitEnv is a decision this test asks for.
+func TestCoAuthorGitEnvSwitchesOffTheSystemConfig(t *testing.T) {
+	t.Parallel()
+
+	if diff := cmp.Diff([]string{"GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1"}, coAuthorGitEnv); diff != "" {
+		t.Errorf("coAuthorGitEnv (-want +got):\n%s\nWant the check's git calls to run with no global and no system git "+
+			"configuration (issue #689)", diff)
+	}
+
+	// The planted file the case names as the system configuration.
+	_, planted := coAuthorPlantedGitConfig(t)
+
+	root := t.TempDir()
+
+	// The premise: named as the system configuration, with nothing switching the
+	// system scope off, git reads the planted file, so a reading that did not
+	// switch it off reads it too.
+	withSystem, err := runGitEnv(t.Context(), root,
+		[]string{"GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=" + planted},
+		"config", "--get", "i18n.commitEncoding")
+	if err != nil {
+		t.Fatalf("git config --get i18n.commitEncoding with %s as the system configuration: %v: the fixture plants no "+
+			"system configuration a reading could pick up", planted, err)
+	}
+
+	if got := strings.TrimSpace(string(withSystem)); got != "ISO-8859-1" {
+		t.Fatalf("git config --get i18n.commitEncoding with %s as the system configuration printed %q, want ISO-8859-1: "+
+			"the fixture plants no system configuration a reading could pick up", planted, got)
+	}
+
+	// The check's own environment, with the same file named as the system
+	// configuration: coAuthorGitEnv's GIT_CONFIG_NOSYSTEM=1 must win, so nothing is
+	// read.
+	out, err := runGitEnv(t.Context(), root, append(slices.Clone(coAuthorGitEnv), "GIT_CONFIG_SYSTEM="+planted),
+		"config", "--get", "i18n.commitEncoding")
+	if err == nil {
+		t.Errorf("git config --get i18n.commitEncoding with %s as the system configuration and coAuthorGitEnv read %q, want "+
+			"nothing: GIT_CONFIG_NOSYSTEM=1 switches the system scope off, so the host's system git configuration cannot "+
+			"decide what the co-author check reads (issue #689)", planted, strings.TrimSpace(string(out)))
 	}
 }
 
