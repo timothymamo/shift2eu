@@ -1,0 +1,2054 @@
+%PDF-1.7
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [7 0 R 9 0 R 11 0 R 13 0 R 15 0 R 17 0 R] /Count 6 >>
+endobj
+3 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>
+endobj
+4 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>
+endobj
+5 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Courier /Encoding /WinAnsiEncoding >>
+endobj
+6 0 obj
+<< /Title (shift2eu migration assessment) >>
+endobj
+7 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R /F2 4 0 R /F3 5 0 R >> >> /Contents 8 0 R >>
+endobj
+8 0 obj
+<< /Length 6513 >>
+stream
+q
+0 G
+0 w
+50 644 450 0 re
+S
+50 555 493 0 re
+S
+50 244 200 0 re
+S
+50 155 495 0 re
+S
+50 805 495 0 re
+S
+50 51 495 0 re
+S
+Q
+BT
+/F2 12 Tf
+1 0 0 1 50 776 Tm
+(Migration assessment: ) Tj
+/F3 12 Tf
+1 0 0 1 184 776 Tm
+(OVHcloud) Tj
+/F2 12 Tf
+1 0 0 1 242 776 Tm
+(, ) Tj
+/F3 12 Tf
+1 0 0 1 249 776 Tm
+(Scaleway) Tj
+/F2 12 Tf
+1 0 0 1 307 776 Tm
+(, ) Tj
+/F3 12 Tf
+1 0 0 1 314 776 Tm
+(UpCloud) Tj
+/F1 9 Tf
+1 0 0 1 50 759 Tm
+(Inventory file: ) Tj
+/F3 9 Tf
+1 0 0 1 107 759 Tm
+(inventory.json) Tj
+/F1 9 Tf
+1 0 0 1 50 747 Tm
+(Source: ) Tj
+/F3 9 Tf
+1 0 0 1 84 747 Tm
+(aws) Tj
+/F1 9 Tf
+1 0 0 1 50 735 Tm
+(Catalog: ) Tj
+/F3 9 Tf
+1 0 0 1 87 735 Tm
+(OVHcloud) Tj
+/F1 9 Tf
+1 0 0 1 131 735 Tm
+( snapshot from ) Tj
+/F3 9 Tf
+1 0 0 1 194 735 Tm
+(https://www.ovhcloud.com/en/public-cloud/prices/) Tj
+/F1 9 Tf
+1 0 0 1 454 735 Tm
+(, retrieved 2026-11-08) Tj
+1 0 0 1 50 723 Tm
+(Catalog: ) Tj
+/F3 9 Tf
+1 0 0 1 87 723 Tm
+(Scaleway) Tj
+/F1 9 Tf
+1 0 0 1 131 723 Tm
+( snapshot from ) Tj
+/F3 9 Tf
+1 0 0 1 194 723 Tm
+(https://www.scaleway.com/en/pricing/) Tj
+/F1 9 Tf
+1 0 0 1 389 723 Tm
+(, retrieved 2026-11-01) Tj
+1 0 0 1 50 711 Tm
+(Catalog: ) Tj
+/F3 9 Tf
+1 0 0 1 87 711 Tm
+(UpCloud) Tj
+/F1 9 Tf
+1 0 0 1 125 711 Tm
+( snapshot from ) Tj
+/F3 9 Tf
+1 0 0 1 188 711 Tm
+(https://upcloud.com/pricing/) Tj
+/F1 9 Tf
+1 0 0 1 340 711 Tm
+(, retrieved 2026-10-25) Tj
+/F2 13 Tf
+1 0 0 1 50 685 Tm
+(Comparison) Tj
+/F2 11 Tf
+1 0 0 1 50 660 Tm
+(Summary) Tj
+/F2 8 Tf
+1 0 0 1 53 647 Tm
+(Fit) Tj
+/F3 8 Tf
+1 0 0 1 143 647 Tm
+(OVHcloud) Tj
+1 0 0 1 263 647 Tm
+(Scaleway) Tj
+1 0 0 1 383 647 Tm
+(UpCloud) Tj
+/F1 8 Tf
+1 0 0 1 53 634 Tm
+(direct) Tj
+1 0 0 1 143 634 Tm
+(2) Tj
+1 0 0 1 263 634 Tm
+(2) Tj
+1 0 0 1 383 634 Tm
+(0) Tj
+1 0 0 1 53 621 Tm
+(partial) Tj
+1 0 0 1 143 621 Tm
+(1) Tj
+1 0 0 1 263 621 Tm
+(1) Tj
+1 0 0 1 383 621 Tm
+(2) Tj
+1 0 0 1 53 608 Tm
+(none) Tj
+1 0 0 1 143 608 Tm
+(2) Tj
+1 0 0 1 263 608 Tm
+(2) Tj
+1 0 0 1 383 608 Tm
+(3) Tj
+1 0 0 1 53 595 Tm
+(total) Tj
+1 0 0 1 143 595 Tm
+(5) Tj
+1 0 0 1 263 595 Tm
+(5) Tj
+1 0 0 1 383 595 Tm
+(5) Tj
+/F2 11 Tf
+1 0 0 1 50 571 Tm
+(Resources) Tj
+/F2 8 Tf
+1 0 0 1 53 558 Tm
+(ID) Tj
+1 0 0 1 148 558 Tm
+(Category) Tj
+/F3 8 Tf
+1 0 0 1 243 558 Tm
+(OVHcloud) Tj
+1 0 0 1 344 558 Tm
+(Scaleway) Tj
+1 0 0 1 445 558 Tm
+(UpCloud) Tj
+1 0 0 1 53 545 Tm
+(bucket-example) Tj
+1 0 0 1 148 545 Tm
+(storage.object) Tj
+/F1 8 Tf
+1 0 0 1 243 545 Tm
+(direct) Tj
+1 0 0 1 344 545 Tm
+(direct) Tj
+1 0 0 1 445 545 Tm
+(partial) Tj
+/F3 8 Tf
+1 0 0 1 243 535 Tm
+(Object Storage) Tj
+1 0 0 1 344 535 Tm
+(Object Storage) Tj
+1 0 0 1 445 535 Tm
+(Object Storage) Tj
+1 0 0 1 53 522 Tm
+(db-example) Tj
+1 0 0 1 148 522 Tm
+(database.postgresq) Tj
+/F1 8 Tf
+1 0 0 1 243 522 Tm
+(direct) Tj
+1 0 0 1 344 522 Tm
+(direct) Tj
+1 0 0 1 445 522 Tm
+(none) Tj
+/F3 8 Tf
+1 0 0 1 148 512 Tm
+(l) Tj
+1 0 0 1 243 512 Tm
+(Managed PostgreSQL) Tj
+1 0 0 1 344 512 Tm
+(Managed Database ) Tj
+1 0 0 1 344 502 Tm
+(for PostgreSQL) Tj
+1 0 0 1 53 489 Tm
+(fn-example) Tj
+1 0 0 1 148 489 Tm
+(serverless.functio) Tj
+/F1 8 Tf
+1 0 0 1 243 489 Tm
+(none) Tj
+1 0 0 1 344 489 Tm
+(none) Tj
+1 0 0 1 445 489 Tm
+(none) Tj
+/F3 8 Tf
+1 0 0 1 148 479 Tm
+(n) Tj
+1 0 0 1 53 466 Tm
+(misc-example) Tj
+1 0 0 1 148 466 Tm
+(unclassified) Tj
+/F1 8 Tf
+1 0 0 1 243 466 Tm
+(none) Tj
+1 0 0 1 344 466 Tm
+(none) Tj
+1 0 0 1 445 466 Tm
+(none) Tj
+/F3 8 Tf
+1 0 0 1 53 453 Tm
+(partial-example) Tj
+1 0 0 1 148 453 Tm
+(compute.vm) Tj
+/F1 8 Tf
+1 0 0 1 243 453 Tm
+(partial) Tj
+1 0 0 1 344 453 Tm
+(partial) Tj
+1 0 0 1 445 453 Tm
+(partial) Tj
+/F3 8 Tf
+1 0 0 1 243 443 Tm
+(Public Cloud ) Tj
+1 0 0 1 344 443 Tm
+(Instances) Tj
+1 0 0 1 445 443 Tm
+(Cloud Server) Tj
+1 0 0 1 243 433 Tm
+(Instances) Tj
+/F2 11 Tf
+1 0 0 1 50 409 Tm
+(Blockers on every target) Tj
+/F1 9 Tf
+1 0 0 1 50 395 Tm
+(\225) Tj
+/F3 9 Tf
+1 0 0 1 60 395 Tm
+(fn-example) Tj
+/F1 9 Tf
+1 0 0 1 60 383 Tm
+(\225) Tj
+/F3 9 Tf
+1 0 0 1 70 383 Tm
+(OVHcloud) Tj
+/F1 9 Tf
+1 0 0 1 114 383 Tm
+(: no offering in the ) Tj
+/F3 9 Tf
+1 0 0 1 189 383 Tm
+(OVHcloud) Tj
+/F1 9 Tf
+1 0 0 1 233 383 Tm
+( catalog for ) Tj
+/F3 9 Tf
+1 0 0 1 281 383 Tm
+(serverless.function) Tj
+/F1 9 Tf
+1 0 0 1 60 371 Tm
+(\225) Tj
+/F3 9 Tf
+1 0 0 1 70 371 Tm
+(Scaleway) Tj
+/F1 9 Tf
+1 0 0 1 114 371 Tm
+(: no offering in the ) Tj
+/F3 9 Tf
+1 0 0 1 189 371 Tm
+(Scaleway) Tj
+/F1 9 Tf
+1 0 0 1 233 371 Tm
+( catalog for ) Tj
+/F3 9 Tf
+1 0 0 1 281 371 Tm
+(serverless.function) Tj
+/F1 9 Tf
+1 0 0 1 60 359 Tm
+(\225) Tj
+/F3 9 Tf
+1 0 0 1 70 359 Tm
+(UpCloud) Tj
+/F1 9 Tf
+1 0 0 1 108 359 Tm
+(: no offering in the ) Tj
+/F3 9 Tf
+1 0 0 1 183 359 Tm
+(UpCloud) Tj
+/F1 9 Tf
+1 0 0 1 221 359 Tm
+( catalog for ) Tj
+/F3 9 Tf
+1 0 0 1 269 359 Tm
+(serverless.function) Tj
+/F1 9 Tf
+1 0 0 1 50 347 Tm
+(\225) Tj
+/F3 9 Tf
+1 0 0 1 60 347 Tm
+(misc-example) Tj
+/F1 9 Tf
+1 0 0 1 60 335 Tm
+(\225) Tj
+/F3 9 Tf
+1 0 0 1 70 335 Tm
+(OVHcloud) Tj
+/F1 9 Tf
+1 0 0 1 114 335 Tm
+(: not classified) Tj
+1 0 0 1 60 323 Tm
+(\225) Tj
+/F3 9 Tf
+1 0 0 1 70 323 Tm
+(Scaleway) Tj
+/F1 9 Tf
+1 0 0 1 114 323 Tm
+(: not classified) Tj
+1 0 0 1 60 311 Tm
+(\225) Tj
+/F3 9 Tf
+1 0 0 1 70 311 Tm
+(UpCloud) Tj
+/F1 9 Tf
+1 0 0 1 108 311 Tm
+(: not classified) Tj
+/F3 13 Tf
+1 0 0 1 50 285 Tm
+(OVHcloud) Tj
+/F2 11 Tf
+1 0 0 1 50 260 Tm
+(Summary) Tj
+/F2 8 Tf
+1 0 0 1 53 247 Tm
+(Fit) Tj
+1 0 0 1 173 247 Tm
+(Resources) Tj
+/F1 8 Tf
+1 0 0 1 53 234 Tm
+(direct) Tj
+1 0 0 1 173 234 Tm
+(2) Tj
+1 0 0 1 53 221 Tm
+(partial) Tj
+1 0 0 1 173 221 Tm
+(1) Tj
+1 0 0 1 53 208 Tm
+(none) Tj
+1 0 0 1 173 208 Tm
+(2) Tj
+1 0 0 1 53 195 Tm
+(total) Tj
+1 0 0 1 173 195 Tm
+(5) Tj
+/F2 11 Tf
+1 0 0 1 50 171 Tm
+(Resources) Tj
+/F2 8 Tf
+1 0 0 1 53 158 Tm
+(ID) Tj
+1 0 0 1 193 158 Tm
+(Category) Tj
+1 0 0 1 313 158 Tm
+(Fit) Tj
+1 0 0 1 363 158 Tm
+(Best offering) Tj
+/F3 8 Tf
+1 0 0 1 53 145 Tm
+(bucket-example) Tj
+1 0 0 1 193 145 Tm
+(storage.object) Tj
+/F1 8 Tf
+1 0 0 1 313 145 Tm
+(direct) Tj
+/F3 8 Tf
+1 0 0 1 363 145 Tm
+(Object Storage) Tj
+1 0 0 1 53 132 Tm
+(db-example) Tj
+1 0 0 1 193 132 Tm
+(database.postgresql) Tj
+/F1 8 Tf
+1 0 0 1 313 132 Tm
+(direct) Tj
+/F3 8 Tf
+1 0 0 1 363 132 Tm
+(Managed PostgreSQL) Tj
+1 0 0 1 53 119 Tm
+(fn-example) Tj
+1 0 0 1 193 119 Tm
+(serverless.function) Tj
+/F1 8 Tf
+1 0 0 1 313 119 Tm
+(none) Tj
+/F3 8 Tf
+1 0 0 1 53 106 Tm
+(misc-example) Tj
+1 0 0 1 193 106 Tm
+(unclassified) Tj
+/F1 8 Tf
+1 0 0 1 313 106 Tm
+(none) Tj
+/F3 8 Tf
+1 0 0 1 53 93 Tm
+(partial-example) Tj
+1 0 0 1 193 93 Tm
+(compute.vm) Tj
+/F1 8 Tf
+1 0 0 1 313 93 Tm
+(partial) Tj
+/F3 8 Tf
+1 0 0 1 363 93 Tm
+(Public Cloud Instances) Tj
+/F1 8 Tf
+1 0 0 1 50 810 Tm
+(shift2eu migration assessment: comparison of 3 targets) Tj
+/F3 8 Tf
+1 0 0 1 50 40 Tm
+(shift2eu 0.15.0 \(commit 1a2b3c4d5e6f, built 2026-11-25T00:00:00Z\)) Tj
+/F1 8 Tf
+1 0 0 1 50 30 Tm
+(Page 1 of 6) Tj
+ET
+endstream
+endobj
+9 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R /F2 4 0 R /F3 5 0 R >> >> /Contents 10 0 R >>
+endobj
+10 0 obj
+<< /Length 4905 >>
+stream
+q
+0 G
+0 w
+50 594 495 0 re
+S
+50 449 495 0 re
+S
+50 805 495 0 re
+S
+50 51 495 0 re
+S
+Q
+BT
+/F2 11 Tf
+1 0 0 1 50 777 Tm
+(Required changes) Tj
+/F1 9 Tf
+1 0 0 1 50 763 Tm
+(\225) Tj
+/F3 9 Tf
+1 0 0 1 60 763 Tm
+(partial-example) Tj
+/F1 9 Tf
+1 0 0 1 141 763 Tm
+(: ) Tj
+/F3 9 Tf
+1 0 0 1 147 763 Tm
+(node-high-availability) Tj
+/F1 9 Tf
+1 0 0 1 266 763 Tm
+( \(not offered by ) Tj
+/F3 9 Tf
+1 0 0 1 330 763 Tm
+(Public Cloud Instances) Tj
+/F1 9 Tf
+1 0 0 1 449 763 Tm
+(\)) Tj
+/F2 11 Tf
+1 0 0 1 50 741 Tm
+(Blockers) Tj
+/F1 9 Tf
+1 0 0 1 50 727 Tm
+(\225) Tj
+/F3 9 Tf
+1 0 0 1 60 727 Tm
+(fn-example) Tj
+/F1 9 Tf
+1 0 0 1 114 727 Tm
+(: no offering in the ) Tj
+/F3 9 Tf
+1 0 0 1 189 727 Tm
+(OVHcloud) Tj
+/F1 9 Tf
+1 0 0 1 233 727 Tm
+( catalog for ) Tj
+/F3 9 Tf
+1 0 0 1 281 727 Tm
+(serverless.function) Tj
+/F1 9 Tf
+1 0 0 1 50 715 Tm
+(\225) Tj
+/F3 9 Tf
+1 0 0 1 60 715 Tm
+(misc-example) Tj
+/F1 9 Tf
+1 0 0 1 125 715 Tm
+(: not classified) Tj
+/F2 11 Tf
+1 0 0 1 50 693 Tm
+(Resource details) Tj
+/F3 10 Tf
+1 0 0 1 50 670 Tm
+(bucket-example) Tj
+/F1 9 Tf
+1 0 0 1 50 656 Tm
+(Raw type: ) Tj
+/F3 9 Tf
+1 0 0 1 93 656 Tm
+(AWS::S3::Bucket) Tj
+/F1 9 Tf
+1 0 0 1 50 644 Tm
+(Category: ) Tj
+/F3 9 Tf
+1 0 0 1 92 644 Tm
+(storage.object) Tj
+/F1 9 Tf
+1 0 0 1 50 632 Tm
+(Region: ) Tj
+/F3 9 Tf
+1 0 0 1 84 632 Tm
+(eu-west-1) Tj
+/F1 9 Tf
+1 0 0 1 50 620 Tm
+(Fit: direct) Tj
+1 0 0 1 50 608 Tm
+(Best offering: ) Tj
+/F3 9 Tf
+1 0 0 1 106 608 Tm
+(Object Storage) Tj
+/F2 8 Tf
+1 0 0 1 53 597 Tm
+(Offering) Tj
+1 0 0 1 253 597 Tm
+(Fit) Tj
+1 0 0 1 313 597 Tm
+(Missing capabilities) Tj
+/F3 8 Tf
+1 0 0 1 53 584 Tm
+(Object Storage) Tj
+/F1 8 Tf
+1 0 0 1 253 584 Tm
+(direct) Tj
+1 0 0 1 313 584 Tm
+(none) Tj
+/F1 9 Tf
+1 0 0 1 50 570 Tm
+(Reasons: ) Tj
+/F3 9 Tf
+1 0 0 1 91 570 Tm
+(Object Storage) Tj
+/F1 9 Tf
+1 0 0 1 167 570 Tm
+( offers every capability the resource uses) Tj
+1 0 0 1 50 558 Tm
+(Required changes: none) Tj
+1 0 0 1 50 546 Tm
+(Blockers: none) Tj
+/F3 10 Tf
+1 0 0 1 50 525 Tm
+(db-example) Tj
+/F1 9 Tf
+1 0 0 1 50 511 Tm
+(Raw type: ) Tj
+/F3 9 Tf
+1 0 0 1 93 511 Tm
+(AWS::RDS::DBInstance) Tj
+/F1 9 Tf
+1 0 0 1 50 499 Tm
+(Category: ) Tj
+/F3 9 Tf
+1 0 0 1 92 499 Tm
+(database.postgresql) Tj
+/F1 9 Tf
+1 0 0 1 50 487 Tm
+(Region: ) Tj
+/F3 9 Tf
+1 0 0 1 84 487 Tm
+(eu-west-1) Tj
+/F1 9 Tf
+1 0 0 1 50 475 Tm
+(Fit: direct) Tj
+1 0 0 1 50 463 Tm
+(Best offering: ) Tj
+/F3 9 Tf
+1 0 0 1 106 463 Tm
+(Managed PostgreSQL) Tj
+/F2 8 Tf
+1 0 0 1 53 452 Tm
+(Offering) Tj
+1 0 0 1 253 452 Tm
+(Fit) Tj
+1 0 0 1 313 452 Tm
+(Missing capabilities) Tj
+/F3 8 Tf
+1 0 0 1 53 439 Tm
+(Managed PostgreSQL) Tj
+/F1 8 Tf
+1 0 0 1 253 439 Tm
+(direct) Tj
+1 0 0 1 313 439 Tm
+(none) Tj
+/F1 9 Tf
+1 0 0 1 50 425 Tm
+(Reasons: ) Tj
+/F3 9 Tf
+1 0 0 1 91 425 Tm
+(Managed PostgreSQL) Tj
+/F1 9 Tf
+1 0 0 1 189 425 Tm
+( offers every capability the resource uses) Tj
+1 0 0 1 50 413 Tm
+(Required changes: none) Tj
+1 0 0 1 50 401 Tm
+(Blockers: none) Tj
+/F3 10 Tf
+1 0 0 1 50 380 Tm
+(fn-example) Tj
+/F1 9 Tf
+1 0 0 1 50 366 Tm
+(Raw type: ) Tj
+/F3 9 Tf
+1 0 0 1 93 366 Tm
+(AWS::Lambda::Function) Tj
+/F1 9 Tf
+1 0 0 1 50 354 Tm
+(Category: ) Tj
+/F3 9 Tf
+1 0 0 1 92 354 Tm
+(serverless.function) Tj
+/F1 9 Tf
+1 0 0 1 50 342 Tm
+(Region: ) Tj
+/F3 9 Tf
+1 0 0 1 84 342 Tm
+(eu-west-1) Tj
+/F1 9 Tf
+1 0 0 1 50 330 Tm
+(Fit: none) Tj
+1 0 0 1 50 318 Tm
+(Best offering: none) Tj
+1 0 0 1 50 306 Tm
+(No offering in the catalog serves this category.) Tj
+1 0 0 1 50 294 Tm
+(Reasons: no offering in the ) Tj
+/F3 9 Tf
+1 0 0 1 161 294 Tm
+(OVHcloud) Tj
+/F1 9 Tf
+1 0 0 1 205 294 Tm
+( catalog for ) Tj
+/F3 9 Tf
+1 0 0 1 253 294 Tm
+(serverless.function) Tj
+/F1 9 Tf
+1 0 0 1 50 282 Tm
+(Required changes: none) Tj
+1 0 0 1 50 270 Tm
+(Blockers: no offering in the ) Tj
+/F3 9 Tf
+1 0 0 1 160 270 Tm
+(OVHcloud) Tj
+/F1 9 Tf
+1 0 0 1 204 270 Tm
+( catalog for ) Tj
+/F3 9 Tf
+1 0 0 1 252 270 Tm
+(serverless.function) Tj
+/F3 10 Tf
+1 0 0 1 50 249 Tm
+(misc-example) Tj
+/F1 9 Tf
+1 0 0 1 50 235 Tm
+(Raw type: ) Tj
+/F3 9 Tf
+1 0 0 1 93 235 Tm
+(AWS::CloudFormation::CustomResource) Tj
+/F1 9 Tf
+1 0 0 1 50 223 Tm
+(Category: ) Tj
+/F3 9 Tf
+1 0 0 1 92 223 Tm
+(unclassified) Tj
+/F1 9 Tf
+1 0 0 1 50 211 Tm
+(Region: ) Tj
+/F3 9 Tf
+1 0 0 1 84 211 Tm
+(eu-west-1) Tj
+/F1 9 Tf
+1 0 0 1 50 199 Tm
+(Fit: none) Tj
+1 0 0 1 50 187 Tm
+(Best offering: none) Tj
+1 0 0 1 50 175 Tm
+(No offering in the catalog serves this category.) Tj
+1 0 0 1 50 163 Tm
+(Reasons: not classified) Tj
+1 0 0 1 50 151 Tm
+(Required changes: none) Tj
+1 0 0 1 50 139 Tm
+(Blockers: not classified) Tj
+/F3 10 Tf
+1 0 0 1 50 118 Tm
+(partial-example) Tj
+/F1 9 Tf
+1 0 0 1 50 104 Tm
+(Raw type: ) Tj
+/F3 9 Tf
+1 0 0 1 93 104 Tm
+(AWS::EC2::Instance) Tj
+/F1 9 Tf
+1 0 0 1 50 92 Tm
+(Category: ) Tj
+/F3 9 Tf
+1 0 0 1 92 92 Tm
+(compute.vm) Tj
+/F1 9 Tf
+1 0 0 1 50 80 Tm
+(Region: ) Tj
+/F3 9 Tf
+1 0 0 1 84 80 Tm
+(eu-west-1) Tj
+/F1 8 Tf
+1 0 0 1 50 810 Tm
+(shift2eu migration assessment: comparison of 3 targets) Tj
+/F3 8 Tf
+1 0 0 1 50 40 Tm
+(shift2eu 0.15.0 \(commit 1a2b3c4d5e6f, built 2026-11-25T00:00:00Z\)) Tj
+/F1 8 Tf
+1 0 0 1 50 30 Tm
+(Page 2 of 6) Tj
+ET
+endstream
+endobj
+11 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R /F2 4 0 R /F3 5 0 R >> >> /Contents 12 0 R >>
+endobj
+12 0 obj
+<< /Length 5540 >>
+stream
+q
+0 G
+0 w
+50 753 495 0 re
+S
+50 638 200 0 re
+S
+50 549 495 0 re
+S
+50 260 495 0 re
+S
+50 115 495 0 re
+S
+50 805 495 0 re
+S
+50 51 495 0 re
+S
+Q
+BT
+/F1 9 Tf
+1 0 0 1 50 779 Tm
+(Fit: partial) Tj
+1 0 0 1 50 767 Tm
+(Best offering: ) Tj
+/F3 9 Tf
+1 0 0 1 106 767 Tm
+(Public Cloud Instances) Tj
+/F2 8 Tf
+1 0 0 1 53 756 Tm
+(Offering) Tj
+1 0 0 1 253 756 Tm
+(Fit) Tj
+1 0 0 1 313 756 Tm
+(Missing capabilities) Tj
+/F3 8 Tf
+1 0 0 1 53 743 Tm
+(Public Cloud Instances) Tj
+/F1 8 Tf
+1 0 0 1 253 743 Tm
+(partial) Tj
+/F3 8 Tf
+1 0 0 1 313 743 Tm
+(node-high-availability) Tj
+/F1 9 Tf
+1 0 0 1 50 729 Tm
+(Reasons: ) Tj
+/F3 9 Tf
+1 0 0 1 91 729 Tm
+(Public Cloud Instances) Tj
+/F1 9 Tf
+1 0 0 1 210 729 Tm
+( does not offer ) Tj
+/F3 9 Tf
+1 0 0 1 271 729 Tm
+(node-high-availability) Tj
+/F1 9 Tf
+1 0 0 1 50 717 Tm
+(Required changes: ) Tj
+/F3 9 Tf
+1 0 0 1 129 717 Tm
+(node-high-availability) Tj
+/F1 9 Tf
+1 0 0 1 50 705 Tm
+(Blockers: none) Tj
+/F3 13 Tf
+1 0 0 1 50 679 Tm
+(Scaleway) Tj
+/F2 11 Tf
+1 0 0 1 50 654 Tm
+(Summary) Tj
+/F2 8 Tf
+1 0 0 1 53 641 Tm
+(Fit) Tj
+1 0 0 1 173 641 Tm
+(Resources) Tj
+/F1 8 Tf
+1 0 0 1 53 628 Tm
+(direct) Tj
+1 0 0 1 173 628 Tm
+(2) Tj
+1 0 0 1 53 615 Tm
+(partial) Tj
+1 0 0 1 173 615 Tm
+(1) Tj
+1 0 0 1 53 602 Tm
+(none) Tj
+1 0 0 1 173 602 Tm
+(2) Tj
+1 0 0 1 53 589 Tm
+(total) Tj
+1 0 0 1 173 589 Tm
+(5) Tj
+/F2 11 Tf
+1 0 0 1 50 565 Tm
+(Resources) Tj
+/F2 8 Tf
+1 0 0 1 53 552 Tm
+(ID) Tj
+1 0 0 1 193 552 Tm
+(Category) Tj
+1 0 0 1 313 552 Tm
+(Fit) Tj
+1 0 0 1 363 552 Tm
+(Best offering) Tj
+/F3 8 Tf
+1 0 0 1 53 539 Tm
+(bucket-example) Tj
+1 0 0 1 193 539 Tm
+(storage.object) Tj
+/F1 8 Tf
+1 0 0 1 313 539 Tm
+(direct) Tj
+/F3 8 Tf
+1 0 0 1 363 539 Tm
+(Object Storage) Tj
+1 0 0 1 53 526 Tm
+(db-example) Tj
+1 0 0 1 193 526 Tm
+(database.postgresql) Tj
+/F1 8 Tf
+1 0 0 1 313 526 Tm
+(direct) Tj
+/F3 8 Tf
+1 0 0 1 363 526 Tm
+(Managed Database for PostgreSQL) Tj
+/F1 8 Tf
+1 0 0 1 512 526 Tm
+( \(tie: ) Tj
+/F3 8 Tf
+1 0 0 1 363 516 Tm
+(Managed Database for PostgreSQL and ) Tj
+1 0 0 1 363 506 Tm
+(MySQL) Tj
+/F1 8 Tf
+1 0 0 1 387 506 Tm
+(\)) Tj
+/F3 8 Tf
+1 0 0 1 53 493 Tm
+(fn-example) Tj
+1 0 0 1 193 493 Tm
+(serverless.function) Tj
+/F1 8 Tf
+1 0 0 1 313 493 Tm
+(none) Tj
+/F3 8 Tf
+1 0 0 1 53 480 Tm
+(misc-example) Tj
+1 0 0 1 193 480 Tm
+(unclassified) Tj
+/F1 8 Tf
+1 0 0 1 313 480 Tm
+(none) Tj
+/F3 8 Tf
+1 0 0 1 53 467 Tm
+(partial-example) Tj
+1 0 0 1 193 467 Tm
+(compute.vm) Tj
+/F1 8 Tf
+1 0 0 1 313 467 Tm
+(partial) Tj
+/F3 8 Tf
+1 0 0 1 363 467 Tm
+(Instances) Tj
+/F2 11 Tf
+1 0 0 1 50 443 Tm
+(Required changes) Tj
+/F1 9 Tf
+1 0 0 1 50 429 Tm
+(\225) Tj
+/F3 9 Tf
+1 0 0 1 60 429 Tm
+(partial-example) Tj
+/F1 9 Tf
+1 0 0 1 141 429 Tm
+(: ) Tj
+/F3 9 Tf
+1 0 0 1 147 429 Tm
+(node-high-availability) Tj
+/F1 9 Tf
+1 0 0 1 266 429 Tm
+(, ) Tj
+/F3 9 Tf
+1 0 0 1 272 429 Tm
+(snapshots) Tj
+/F1 9 Tf
+1 0 0 1 321 429 Tm
+( \(not offered by ) Tj
+/F3 9 Tf
+1 0 0 1 385 429 Tm
+(Instances) Tj
+/F1 9 Tf
+1 0 0 1 434 429 Tm
+(\)) Tj
+/F2 11 Tf
+1 0 0 1 50 407 Tm
+(Blockers) Tj
+/F1 9 Tf
+1 0 0 1 50 393 Tm
+(\225) Tj
+/F3 9 Tf
+1 0 0 1 60 393 Tm
+(fn-example) Tj
+/F1 9 Tf
+1 0 0 1 114 393 Tm
+(: no offering in the ) Tj
+/F3 9 Tf
+1 0 0 1 189 393 Tm
+(Scaleway) Tj
+/F1 9 Tf
+1 0 0 1 233 393 Tm
+( catalog for ) Tj
+/F3 9 Tf
+1 0 0 1 281 393 Tm
+(serverless.function) Tj
+/F1 9 Tf
+1 0 0 1 50 381 Tm
+(\225) Tj
+/F3 9 Tf
+1 0 0 1 60 381 Tm
+(misc-example) Tj
+/F1 9 Tf
+1 0 0 1 125 381 Tm
+(: not classified) Tj
+/F2 11 Tf
+1 0 0 1 50 359 Tm
+(Resource details) Tj
+/F3 10 Tf
+1 0 0 1 50 336 Tm
+(bucket-example) Tj
+/F1 9 Tf
+1 0 0 1 50 322 Tm
+(Raw type: ) Tj
+/F3 9 Tf
+1 0 0 1 93 322 Tm
+(AWS::S3::Bucket) Tj
+/F1 9 Tf
+1 0 0 1 50 310 Tm
+(Category: ) Tj
+/F3 9 Tf
+1 0 0 1 92 310 Tm
+(storage.object) Tj
+/F1 9 Tf
+1 0 0 1 50 298 Tm
+(Region: ) Tj
+/F3 9 Tf
+1 0 0 1 84 298 Tm
+(eu-west-1) Tj
+/F1 9 Tf
+1 0 0 1 50 286 Tm
+(Fit: direct) Tj
+1 0 0 1 50 274 Tm
+(Best offering: ) Tj
+/F3 9 Tf
+1 0 0 1 106 274 Tm
+(Object Storage) Tj
+/F2 8 Tf
+1 0 0 1 53 263 Tm
+(Offering) Tj
+1 0 0 1 253 263 Tm
+(Fit) Tj
+1 0 0 1 313 263 Tm
+(Missing capabilities) Tj
+/F3 8 Tf
+1 0 0 1 53 250 Tm
+(Object Storage) Tj
+/F1 8 Tf
+1 0 0 1 253 250 Tm
+(direct) Tj
+1 0 0 1 313 250 Tm
+(none) Tj
+/F1 9 Tf
+1 0 0 1 50 236 Tm
+(Reasons: ) Tj
+/F3 9 Tf
+1 0 0 1 91 236 Tm
+(Object Storage) Tj
+/F1 9 Tf
+1 0 0 1 167 236 Tm
+( offers every capability the resource uses) Tj
+1 0 0 1 50 224 Tm
+(Required changes: none) Tj
+1 0 0 1 50 212 Tm
+(Blockers: none) Tj
+/F3 10 Tf
+1 0 0 1 50 191 Tm
+(db-example) Tj
+/F1 9 Tf
+1 0 0 1 50 177 Tm
+(Raw type: ) Tj
+/F3 9 Tf
+1 0 0 1 93 177 Tm
+(AWS::RDS::DBInstance) Tj
+/F1 9 Tf
+1 0 0 1 50 165 Tm
+(Category: ) Tj
+/F3 9 Tf
+1 0 0 1 92 165 Tm
+(database.postgresql) Tj
+/F1 9 Tf
+1 0 0 1 50 153 Tm
+(Region: ) Tj
+/F3 9 Tf
+1 0 0 1 84 153 Tm
+(eu-west-1) Tj
+/F1 9 Tf
+1 0 0 1 50 141 Tm
+(Fit: direct) Tj
+1 0 0 1 50 129 Tm
+(Best offering: ) Tj
+/F3 9 Tf
+1 0 0 1 106 129 Tm
+(Managed Database for PostgreSQL) Tj
+/F1 9 Tf
+1 0 0 1 274 129 Tm
+( \(tie: ) Tj
+/F3 9 Tf
+1 0 0 1 295 129 Tm
+(Managed Database for PostgreSQL and MySQL) Tj
+/F1 9 Tf
+1 0 0 1 517 129 Tm
+(\)) Tj
+/F2 8 Tf
+1 0 0 1 53 118 Tm
+(Offering) Tj
+1 0 0 1 253 118 Tm
+(Fit) Tj
+1 0 0 1 313 118 Tm
+(Missing capabilities) Tj
+/F3 8 Tf
+1 0 0 1 53 105 Tm
+(Managed Database for PostgreSQL) Tj
+/F1 8 Tf
+1 0 0 1 253 105 Tm
+(direct) Tj
+1 0 0 1 313 105 Tm
+(none) Tj
+/F3 8 Tf
+1 0 0 1 53 92 Tm
+(Managed Database for PostgreSQL and ) Tj
+/F1 8 Tf
+1 0 0 1 253 92 Tm
+(direct) Tj
+1 0 0 1 313 92 Tm
+(none) Tj
+/F3 8 Tf
+1 0 0 1 53 82 Tm
+(MySQL) Tj
+/F1 8 Tf
+1 0 0 1 50 810 Tm
+(shift2eu migration assessment: comparison of 3 targets) Tj
+/F3 8 Tf
+1 0 0 1 50 40 Tm
+(shift2eu 0.15.0 \(commit 1a2b3c4d5e6f, built 2026-11-25T00:00:00Z\)) Tj
+/F1 8 Tf
+1 0 0 1 50 30 Tm
+(Page 3 of 6) Tj
+ET
+endstream
+endobj
+13 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R /F2 4 0 R /F3 5 0 R >> >> /Contents 14 0 R >>
+endobj
+14 0 obj
+<< /Length 4779 >>
+stream
+q
+0 G
+0 w
+50 396 495 0 re
+S
+50 281 200 0 re
+S
+50 192 495 0 re
+S
+50 805 495 0 re
+S
+50 51 495 0 re
+S
+Q
+BT
+/F1 9 Tf
+1 0 0 1 50 779 Tm
+(Reasons: ) Tj
+/F3 9 Tf
+1 0 0 1 91 779 Tm
+(Managed Database for PostgreSQL) Tj
+/F1 9 Tf
+1 0 0 1 259 779 Tm
+( offers every capability the resource uses) Tj
+1 0 0 1 50 767 Tm
+(Required changes: none) Tj
+1 0 0 1 50 755 Tm
+(Blockers: none) Tj
+/F3 10 Tf
+1 0 0 1 50 734 Tm
+(fn-example) Tj
+/F1 9 Tf
+1 0 0 1 50 720 Tm
+(Raw type: ) Tj
+/F3 9 Tf
+1 0 0 1 93 720 Tm
+(AWS::Lambda::Function) Tj
+/F1 9 Tf
+1 0 0 1 50 708 Tm
+(Category: ) Tj
+/F3 9 Tf
+1 0 0 1 92 708 Tm
+(serverless.function) Tj
+/F1 9 Tf
+1 0 0 1 50 696 Tm
+(Region: ) Tj
+/F3 9 Tf
+1 0 0 1 84 696 Tm
+(eu-west-1) Tj
+/F1 9 Tf
+1 0 0 1 50 684 Tm
+(Fit: none) Tj
+1 0 0 1 50 672 Tm
+(Best offering: none) Tj
+1 0 0 1 50 660 Tm
+(No offering in the catalog serves this category.) Tj
+1 0 0 1 50 648 Tm
+(Reasons: no offering in the ) Tj
+/F3 9 Tf
+1 0 0 1 161 648 Tm
+(Scaleway) Tj
+/F1 9 Tf
+1 0 0 1 205 648 Tm
+( catalog for ) Tj
+/F3 9 Tf
+1 0 0 1 253 648 Tm
+(serverless.function) Tj
+/F1 9 Tf
+1 0 0 1 50 636 Tm
+(Required changes: none) Tj
+1 0 0 1 50 624 Tm
+(Blockers: no offering in the ) Tj
+/F3 9 Tf
+1 0 0 1 160 624 Tm
+(Scaleway) Tj
+/F1 9 Tf
+1 0 0 1 204 624 Tm
+( catalog for ) Tj
+/F3 9 Tf
+1 0 0 1 252 624 Tm
+(serverless.function) Tj
+/F3 10 Tf
+1 0 0 1 50 603 Tm
+(misc-example) Tj
+/F1 9 Tf
+1 0 0 1 50 589 Tm
+(Raw type: ) Tj
+/F3 9 Tf
+1 0 0 1 93 589 Tm
+(AWS::CloudFormation::CustomResource) Tj
+/F1 9 Tf
+1 0 0 1 50 577 Tm
+(Category: ) Tj
+/F3 9 Tf
+1 0 0 1 92 577 Tm
+(unclassified) Tj
+/F1 9 Tf
+1 0 0 1 50 565 Tm
+(Region: ) Tj
+/F3 9 Tf
+1 0 0 1 84 565 Tm
+(eu-west-1) Tj
+/F1 9 Tf
+1 0 0 1 50 553 Tm
+(Fit: none) Tj
+1 0 0 1 50 541 Tm
+(Best offering: none) Tj
+1 0 0 1 50 529 Tm
+(No offering in the catalog serves this category.) Tj
+1 0 0 1 50 517 Tm
+(Reasons: not classified) Tj
+1 0 0 1 50 505 Tm
+(Required changes: none) Tj
+1 0 0 1 50 493 Tm
+(Blockers: not classified) Tj
+/F3 10 Tf
+1 0 0 1 50 472 Tm
+(partial-example) Tj
+/F1 9 Tf
+1 0 0 1 50 458 Tm
+(Raw type: ) Tj
+/F3 9 Tf
+1 0 0 1 93 458 Tm
+(AWS::EC2::Instance) Tj
+/F1 9 Tf
+1 0 0 1 50 446 Tm
+(Category: ) Tj
+/F3 9 Tf
+1 0 0 1 92 446 Tm
+(compute.vm) Tj
+/F1 9 Tf
+1 0 0 1 50 434 Tm
+(Region: ) Tj
+/F3 9 Tf
+1 0 0 1 84 434 Tm
+(eu-west-1) Tj
+/F1 9 Tf
+1 0 0 1 50 422 Tm
+(Fit: partial) Tj
+1 0 0 1 50 410 Tm
+(Best offering: ) Tj
+/F3 9 Tf
+1 0 0 1 106 410 Tm
+(Instances) Tj
+/F2 8 Tf
+1 0 0 1 53 399 Tm
+(Offering) Tj
+1 0 0 1 253 399 Tm
+(Fit) Tj
+1 0 0 1 313 399 Tm
+(Missing capabilities) Tj
+/F3 8 Tf
+1 0 0 1 53 386 Tm
+(Instances) Tj
+/F1 8 Tf
+1 0 0 1 253 386 Tm
+(partial) Tj
+/F3 8 Tf
+1 0 0 1 313 386 Tm
+(node-high-availability) Tj
+/F1 8 Tf
+1 0 0 1 419 386 Tm
+(, ) Tj
+/F3 8 Tf
+1 0 0 1 424 386 Tm
+(snapshots) Tj
+/F1 9 Tf
+1 0 0 1 50 372 Tm
+(Reasons: ) Tj
+/F3 9 Tf
+1 0 0 1 91 372 Tm
+(Instances) Tj
+/F1 9 Tf
+1 0 0 1 140 372 Tm
+( does not offer ) Tj
+/F3 9 Tf
+1 0 0 1 201 372 Tm
+(node-high-availability) Tj
+/F1 9 Tf
+1 0 0 1 320 372 Tm
+(; ) Tj
+/F3 9 Tf
+1 0 0 1 326 372 Tm
+(Instances) Tj
+/F1 9 Tf
+1 0 0 1 375 372 Tm
+( does not offer ) Tj
+/F3 9 Tf
+1 0 0 1 436 372 Tm
+(snapshots) Tj
+/F1 9 Tf
+1 0 0 1 50 360 Tm
+(Required changes: ) Tj
+/F3 9 Tf
+1 0 0 1 129 360 Tm
+(node-high-availability) Tj
+/F1 9 Tf
+1 0 0 1 248 360 Tm
+(, ) Tj
+/F3 9 Tf
+1 0 0 1 254 360 Tm
+(snapshots) Tj
+/F1 9 Tf
+1 0 0 1 50 348 Tm
+(Blockers: none) Tj
+/F3 13 Tf
+1 0 0 1 50 322 Tm
+(UpCloud) Tj
+/F2 11 Tf
+1 0 0 1 50 297 Tm
+(Summary) Tj
+/F2 8 Tf
+1 0 0 1 53 284 Tm
+(Fit) Tj
+1 0 0 1 173 284 Tm
+(Resources) Tj
+/F1 8 Tf
+1 0 0 1 53 271 Tm
+(direct) Tj
+1 0 0 1 173 271 Tm
+(0) Tj
+1 0 0 1 53 258 Tm
+(partial) Tj
+1 0 0 1 173 258 Tm
+(2) Tj
+1 0 0 1 53 245 Tm
+(none) Tj
+1 0 0 1 173 245 Tm
+(3) Tj
+1 0 0 1 53 232 Tm
+(total) Tj
+1 0 0 1 173 232 Tm
+(5) Tj
+/F2 11 Tf
+1 0 0 1 50 208 Tm
+(Resources) Tj
+/F2 8 Tf
+1 0 0 1 53 195 Tm
+(ID) Tj
+1 0 0 1 193 195 Tm
+(Category) Tj
+1 0 0 1 313 195 Tm
+(Fit) Tj
+1 0 0 1 363 195 Tm
+(Best offering) Tj
+/F3 8 Tf
+1 0 0 1 53 182 Tm
+(bucket-example) Tj
+1 0 0 1 193 182 Tm
+(storage.object) Tj
+/F1 8 Tf
+1 0 0 1 313 182 Tm
+(partial) Tj
+/F3 8 Tf
+1 0 0 1 363 182 Tm
+(Object Storage) Tj
+1 0 0 1 53 169 Tm
+(db-example) Tj
+1 0 0 1 193 169 Tm
+(database.postgresql) Tj
+/F1 8 Tf
+1 0 0 1 313 169 Tm
+(none) Tj
+/F3 8 Tf
+1 0 0 1 53 156 Tm
+(fn-example) Tj
+1 0 0 1 193 156 Tm
+(serverless.function) Tj
+/F1 8 Tf
+1 0 0 1 313 156 Tm
+(none) Tj
+/F3 8 Tf
+1 0 0 1 53 143 Tm
+(misc-example) Tj
+1 0 0 1 193 143 Tm
+(unclassified) Tj
+/F1 8 Tf
+1 0 0 1 313 143 Tm
+(none) Tj
+/F3 8 Tf
+1 0 0 1 53 130 Tm
+(partial-example) Tj
+1 0 0 1 193 130 Tm
+(compute.vm) Tj
+/F1 8 Tf
+1 0 0 1 313 130 Tm
+(partial) Tj
+/F3 8 Tf
+1 0 0 1 363 130 Tm
+(Cloud Server) Tj
+/F1 8 Tf
+1 0 0 1 50 810 Tm
+(shift2eu migration assessment: comparison of 3 targets) Tj
+/F3 8 Tf
+1 0 0 1 50 40 Tm
+(shift2eu 0.15.0 \(commit 1a2b3c4d5e6f, built 2026-11-25T00:00:00Z\)) Tj
+/F1 8 Tf
+1 0 0 1 50 30 Tm
+(Page 4 of 6) Tj
+ET
+endstream
+endobj
+15 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R /F2 4 0 R /F3 5 0 R >> >> /Contents 16 0 R >>
+endobj
+16 0 obj
+<< /Length 5456 >>
+stream
+q
+0 G
+0 w
+50 570 495 0 re
+S
+50 805 495 0 re
+S
+50 51 495 0 re
+S
+Q
+BT
+/F2 11 Tf
+1 0 0 1 50 777 Tm
+(Required changes) Tj
+/F1 9 Tf
+1 0 0 1 50 763 Tm
+(\225) Tj
+/F3 9 Tf
+1 0 0 1 60 763 Tm
+(bucket-example) Tj
+/F1 9 Tf
+1 0 0 1 136 763 Tm
+(: ) Tj
+/F3 9 Tf
+1 0 0 1 142 763 Tm
+(object-versioning) Tj
+/F1 9 Tf
+1 0 0 1 234 763 Tm
+( \(not offered by ) Tj
+/F3 9 Tf
+1 0 0 1 298 763 Tm
+(Object Storage) Tj
+/F1 9 Tf
+1 0 0 1 374 763 Tm
+(\)) Tj
+1 0 0 1 50 751 Tm
+(\225) Tj
+/F3 9 Tf
+1 0 0 1 60 751 Tm
+(partial-example) Tj
+/F1 9 Tf
+1 0 0 1 141 751 Tm
+(: ) Tj
+/F3 9 Tf
+1 0 0 1 147 751 Tm
+(node-high-availability) Tj
+/F1 9 Tf
+1 0 0 1 266 751 Tm
+( \(not offered by ) Tj
+/F3 9 Tf
+1 0 0 1 330 751 Tm
+(Cloud Server) Tj
+/F1 9 Tf
+1 0 0 1 395 751 Tm
+(\)) Tj
+/F2 11 Tf
+1 0 0 1 50 729 Tm
+(Blockers) Tj
+/F1 9 Tf
+1 0 0 1 50 715 Tm
+(\225) Tj
+/F3 9 Tf
+1 0 0 1 60 715 Tm
+(db-example) Tj
+/F1 9 Tf
+1 0 0 1 114 715 Tm
+(: no offering in the ) Tj
+/F3 9 Tf
+1 0 0 1 189 715 Tm
+(UpCloud) Tj
+/F1 9 Tf
+1 0 0 1 227 715 Tm
+( catalog for ) Tj
+/F3 9 Tf
+1 0 0 1 275 715 Tm
+(database.postgresql) Tj
+/F1 9 Tf
+1 0 0 1 50 703 Tm
+(\225) Tj
+/F3 9 Tf
+1 0 0 1 60 703 Tm
+(fn-example) Tj
+/F1 9 Tf
+1 0 0 1 114 703 Tm
+(: no offering in the ) Tj
+/F3 9 Tf
+1 0 0 1 189 703 Tm
+(UpCloud) Tj
+/F1 9 Tf
+1 0 0 1 227 703 Tm
+( catalog for ) Tj
+/F3 9 Tf
+1 0 0 1 275 703 Tm
+(serverless.function) Tj
+/F1 9 Tf
+1 0 0 1 50 691 Tm
+(\225) Tj
+/F3 9 Tf
+1 0 0 1 60 691 Tm
+(misc-example) Tj
+/F1 9 Tf
+1 0 0 1 125 691 Tm
+(: not classified) Tj
+/F2 11 Tf
+1 0 0 1 50 669 Tm
+(Resource details) Tj
+/F3 10 Tf
+1 0 0 1 50 646 Tm
+(bucket-example) Tj
+/F1 9 Tf
+1 0 0 1 50 632 Tm
+(Raw type: ) Tj
+/F3 9 Tf
+1 0 0 1 93 632 Tm
+(AWS::S3::Bucket) Tj
+/F1 9 Tf
+1 0 0 1 50 620 Tm
+(Category: ) Tj
+/F3 9 Tf
+1 0 0 1 92 620 Tm
+(storage.object) Tj
+/F1 9 Tf
+1 0 0 1 50 608 Tm
+(Region: ) Tj
+/F3 9 Tf
+1 0 0 1 84 608 Tm
+(eu-west-1) Tj
+/F1 9 Tf
+1 0 0 1 50 596 Tm
+(Fit: partial) Tj
+1 0 0 1 50 584 Tm
+(Best offering: ) Tj
+/F3 9 Tf
+1 0 0 1 106 584 Tm
+(Object Storage) Tj
+/F2 8 Tf
+1 0 0 1 53 573 Tm
+(Offering) Tj
+1 0 0 1 253 573 Tm
+(Fit) Tj
+1 0 0 1 313 573 Tm
+(Missing capabilities) Tj
+/F3 8 Tf
+1 0 0 1 53 560 Tm
+(Object Storage) Tj
+/F1 8 Tf
+1 0 0 1 253 560 Tm
+(partial) Tj
+/F3 8 Tf
+1 0 0 1 313 560 Tm
+(object-versioning) Tj
+/F1 9 Tf
+1 0 0 1 50 546 Tm
+(Reasons: ) Tj
+/F3 9 Tf
+1 0 0 1 91 546 Tm
+(Object Storage) Tj
+/F1 9 Tf
+1 0 0 1 167 546 Tm
+( does not offer ) Tj
+/F3 9 Tf
+1 0 0 1 228 546 Tm
+(object-versioning) Tj
+/F1 9 Tf
+1 0 0 1 50 534 Tm
+(Required changes: ) Tj
+/F3 9 Tf
+1 0 0 1 129 534 Tm
+(object-versioning) Tj
+/F1 9 Tf
+1 0 0 1 50 522 Tm
+(Blockers: none) Tj
+/F3 10 Tf
+1 0 0 1 50 501 Tm
+(db-example) Tj
+/F1 9 Tf
+1 0 0 1 50 487 Tm
+(Raw type: ) Tj
+/F3 9 Tf
+1 0 0 1 93 487 Tm
+(AWS::RDS::DBInstance) Tj
+/F1 9 Tf
+1 0 0 1 50 475 Tm
+(Category: ) Tj
+/F3 9 Tf
+1 0 0 1 92 475 Tm
+(database.postgresql) Tj
+/F1 9 Tf
+1 0 0 1 50 463 Tm
+(Region: ) Tj
+/F3 9 Tf
+1 0 0 1 84 463 Tm
+(eu-west-1) Tj
+/F1 9 Tf
+1 0 0 1 50 451 Tm
+(Fit: none) Tj
+1 0 0 1 50 439 Tm
+(Best offering: none) Tj
+1 0 0 1 50 427 Tm
+(No offering in the catalog serves this category.) Tj
+1 0 0 1 50 415 Tm
+(Reasons: no offering in the ) Tj
+/F3 9 Tf
+1 0 0 1 161 415 Tm
+(UpCloud) Tj
+/F1 9 Tf
+1 0 0 1 199 415 Tm
+( catalog for ) Tj
+/F3 9 Tf
+1 0 0 1 247 415 Tm
+(database.postgresql) Tj
+/F1 9 Tf
+1 0 0 1 50 403 Tm
+(Required changes: none) Tj
+1 0 0 1 50 391 Tm
+(Blockers: no offering in the ) Tj
+/F3 9 Tf
+1 0 0 1 160 391 Tm
+(UpCloud) Tj
+/F1 9 Tf
+1 0 0 1 198 391 Tm
+( catalog for ) Tj
+/F3 9 Tf
+1 0 0 1 246 391 Tm
+(database.postgresql) Tj
+/F3 10 Tf
+1 0 0 1 50 370 Tm
+(fn-example) Tj
+/F1 9 Tf
+1 0 0 1 50 356 Tm
+(Raw type: ) Tj
+/F3 9 Tf
+1 0 0 1 93 356 Tm
+(AWS::Lambda::Function) Tj
+/F1 9 Tf
+1 0 0 1 50 344 Tm
+(Category: ) Tj
+/F3 9 Tf
+1 0 0 1 92 344 Tm
+(serverless.function) Tj
+/F1 9 Tf
+1 0 0 1 50 332 Tm
+(Region: ) Tj
+/F3 9 Tf
+1 0 0 1 84 332 Tm
+(eu-west-1) Tj
+/F1 9 Tf
+1 0 0 1 50 320 Tm
+(Fit: none) Tj
+1 0 0 1 50 308 Tm
+(Best offering: none) Tj
+1 0 0 1 50 296 Tm
+(No offering in the catalog serves this category.) Tj
+1 0 0 1 50 284 Tm
+(Reasons: no offering in the ) Tj
+/F3 9 Tf
+1 0 0 1 161 284 Tm
+(UpCloud) Tj
+/F1 9 Tf
+1 0 0 1 199 284 Tm
+( catalog for ) Tj
+/F3 9 Tf
+1 0 0 1 247 284 Tm
+(serverless.function) Tj
+/F1 9 Tf
+1 0 0 1 50 272 Tm
+(Required changes: none) Tj
+1 0 0 1 50 260 Tm
+(Blockers: no offering in the ) Tj
+/F3 9 Tf
+1 0 0 1 160 260 Tm
+(UpCloud) Tj
+/F1 9 Tf
+1 0 0 1 198 260 Tm
+( catalog for ) Tj
+/F3 9 Tf
+1 0 0 1 246 260 Tm
+(serverless.function) Tj
+/F3 10 Tf
+1 0 0 1 50 239 Tm
+(misc-example) Tj
+/F1 9 Tf
+1 0 0 1 50 225 Tm
+(Raw type: ) Tj
+/F3 9 Tf
+1 0 0 1 93 225 Tm
+(AWS::CloudFormation::CustomResource) Tj
+/F1 9 Tf
+1 0 0 1 50 213 Tm
+(Category: ) Tj
+/F3 9 Tf
+1 0 0 1 92 213 Tm
+(unclassified) Tj
+/F1 9 Tf
+1 0 0 1 50 201 Tm
+(Region: ) Tj
+/F3 9 Tf
+1 0 0 1 84 201 Tm
+(eu-west-1) Tj
+/F1 9 Tf
+1 0 0 1 50 189 Tm
+(Fit: none) Tj
+1 0 0 1 50 177 Tm
+(Best offering: none) Tj
+1 0 0 1 50 165 Tm
+(No offering in the catalog serves this category.) Tj
+1 0 0 1 50 153 Tm
+(Reasons: not classified) Tj
+1 0 0 1 50 141 Tm
+(Required changes: none) Tj
+1 0 0 1 50 129 Tm
+(Blockers: not classified) Tj
+/F3 10 Tf
+1 0 0 1 50 108 Tm
+(partial-example) Tj
+/F1 9 Tf
+1 0 0 1 50 94 Tm
+(Raw type: ) Tj
+/F3 9 Tf
+1 0 0 1 93 94 Tm
+(AWS::EC2::Instance) Tj
+/F1 9 Tf
+1 0 0 1 50 82 Tm
+(Category: ) Tj
+/F3 9 Tf
+1 0 0 1 92 82 Tm
+(compute.vm) Tj
+/F1 8 Tf
+1 0 0 1 50 810 Tm
+(shift2eu migration assessment: comparison of 3 targets) Tj
+/F3 8 Tf
+1 0 0 1 50 40 Tm
+(shift2eu 0.15.0 \(commit 1a2b3c4d5e6f, built 2026-11-25T00:00:00Z\)) Tj
+/F1 8 Tf
+1 0 0 1 50 30 Tm
+(Page 5 of 6) Tj
+ET
+endstream
+endobj
+17 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R /F2 4 0 R /F3 5 0 R >> >> /Contents 18 0 R >>
+endobj
+18 0 obj
+<< /Length 5470 >>
+stream
+q
+0 G
+0 w
+50 741 495 0 re
+S
+50 805 495 0 re
+S
+50 51 495 0 re
+S
+Q
+BT
+/F1 9 Tf
+1 0 0 1 50 779 Tm
+(Region: ) Tj
+/F3 9 Tf
+1 0 0 1 84 779 Tm
+(eu-west-1) Tj
+/F1 9 Tf
+1 0 0 1 50 767 Tm
+(Fit: partial) Tj
+1 0 0 1 50 755 Tm
+(Best offering: ) Tj
+/F3 9 Tf
+1 0 0 1 106 755 Tm
+(Cloud Server) Tj
+/F2 8 Tf
+1 0 0 1 53 744 Tm
+(Offering) Tj
+1 0 0 1 253 744 Tm
+(Fit) Tj
+1 0 0 1 313 744 Tm
+(Missing capabilities) Tj
+/F3 8 Tf
+1 0 0 1 53 731 Tm
+(Cloud Server) Tj
+/F1 8 Tf
+1 0 0 1 253 731 Tm
+(partial) Tj
+/F3 8 Tf
+1 0 0 1 313 731 Tm
+(node-high-availability) Tj
+/F1 9 Tf
+1 0 0 1 50 717 Tm
+(Reasons: ) Tj
+/F3 9 Tf
+1 0 0 1 91 717 Tm
+(Cloud Server) Tj
+/F1 9 Tf
+1 0 0 1 156 717 Tm
+( does not offer ) Tj
+/F3 9 Tf
+1 0 0 1 217 717 Tm
+(node-high-availability) Tj
+/F1 9 Tf
+1 0 0 1 50 705 Tm
+(Required changes: ) Tj
+/F3 9 Tf
+1 0 0 1 129 705 Tm
+(node-high-availability) Tj
+/F1 9 Tf
+1 0 0 1 50 693 Tm
+(Blockers: none) Tj
+/F2 13 Tf
+1 0 0 1 50 667 Tm
+(How this report is worked out) Tj
+/F2 9 Tf
+1 0 0 1 50 649 Tm
+(Fits. ) Tj
+/F1 9 Tf
+1 0 0 1 72 649 Tm
+(A resource's fit is direct when an offering of the target serves its taxonomy category and offers every capability the ) Tj
+1 0 0 1 50 637 Tm
+(resource uses, partial when the offering serving the category lacks some of them, and none when no offering serves the ) Tj
+1 0 0 1 50 625 Tm
+(category or the resource is not classified.) Tj
+/F2 9 Tf
+1 0 0 1 50 610 Tm
+(Best offering. ) Tj
+/F1 9 Tf
+1 0 0 1 111 610 Tm
+(Every offering that serves the category is a candidate. Candidates are ordered direct before partial, then by ) Tj
+1 0 0 1 50 598 Tm
+(how few capabilities they lack, then by name; the first is the best offering. A tie names the other candidates with the same fit ) Tj
+1 0 0 1 50 586 Tm
+(and as many missing capabilities, which would serve as well.) Tj
+/F2 9 Tf
+1 0 0 1 50 571 Tm
+(Required changes and blockers. ) Tj
+/F1 9 Tf
+1 0 0 1 192 571 Tm
+(A required change is a capability the resource uses that its best offering does not offer: ) Tj
+1 0 0 1 50 559 Tm
+(the resource moves once it no longer depends on it. A blocker is a resource with fit none: nothing in the catalog serves it. A ) Tj
+1 0 0 1 50 547 Tm
+(resource that depends on or is a replica of a blocked resource is affected by a blocker on it; the note is not transitive.) Tj
+/F2 9 Tf
+1 0 0 1 50 532 Tm
+(Workloads. ) Tj
+/F1 9 Tf
+1 0 0 1 102 532 Tm
+(Resources are grouped by the workload the inventory names, and those that name none form the No workload ) Tj
+1 0 0 1 50 520 Tm
+(group. A workload's counts and blockers are those of its resources.) Tj
+/F2 9 Tf
+1 0 0 1 50 505 Tm
+(Estimates. ) Tj
+/F1 9 Tf
+1 0 0 1 98 505 Tm
+(Estimates were off for this report \(--no-estimate\): it shows no plan and no amount.) Tj
+/F2 9 Tf
+1 0 0 1 50 490 Tm
+(Values. ) Tj
+/F1 9 Tf
+1 0 0 1 85 490 Tm
+(Every value from the inventory or a catalog is shown in Courier, as it is stored. A character the PDF's core fonts ) Tj
+1 0 0 1 50 478 Tm
+(cannot show is written as a visible escape in Go's style: \\u and four hex digits up to U+FFFF \(\\u0416 is the Cyrillic letter ) Tj
+1 0 0 1 50 466 Tm
+(Zhe\), \\U and eight hex digits above it, \\x and two hex digits for a byte that is not valid UTF-8, and \\\\ for a backslash, so an ) Tj
+1 0 0 1 50 454 Tm
+(escape never looks like a value's own text. A no-break space and a soft hyphen are escaped too, so they never pass for a ) Tj
+1 0 0 1 50 442 Tm
+(space or for nothing.) Tj
+/F2 9 Tf
+1 0 0 1 50 427 Tm
+(Readiness score. ) Tj
+/F1 9 Tf
+1 0 0 1 127 427 Tm
+(shift2eu gives no readiness score: the fits, blockers, required changes and estimates above are the ) Tj
+1 0 0 1 50 415 Tm
+(assessment.) Tj
+/F2 13 Tf
+1 0 0 1 50 389 Tm
+(About this report) Tj
+/F1 9 Tf
+1 0 0 1 50 374 Tm
+(Version: ) Tj
+/F3 9 Tf
+1 0 0 1 86 374 Tm
+(shift2eu 0.15.0 \(commit 1a2b3c4d5e6f, built 2026-11-25T00:00:00Z\)) Tj
+/F1 9 Tf
+1 0 0 1 50 362 Tm
+(\225) Tj
+1 0 0 1 60 362 Tm
+(Catalog: ) Tj
+/F3 9 Tf
+1 0 0 1 97 362 Tm
+(OVHcloud) Tj
+/F1 9 Tf
+1 0 0 1 141 362 Tm
+( snapshot from ) Tj
+/F3 9 Tf
+1 0 0 1 204 362 Tm
+(https://www.ovhcloud.com/en/public-cloud/prices/) Tj
+/F1 9 Tf
+1 0 0 1 464 362 Tm
+(, retrieved ) Tj
+1 0 0 1 60 350 Tm
+(2026-11-08, default region for estimates ) Tj
+/F3 9 Tf
+1 0 0 1 223 350 Tm
+(gra) Tj
+/F1 9 Tf
+1 0 0 1 50 338 Tm
+(\225) Tj
+1 0 0 1 60 338 Tm
+(Catalog: ) Tj
+/F3 9 Tf
+1 0 0 1 97 338 Tm
+(Scaleway) Tj
+/F1 9 Tf
+1 0 0 1 141 338 Tm
+( snapshot from ) Tj
+/F3 9 Tf
+1 0 0 1 204 338 Tm
+(https://www.scaleway.com/en/pricing/) Tj
+/F1 9 Tf
+1 0 0 1 399 338 Tm
+(, retrieved 2026-11-01, default ) Tj
+1 0 0 1 60 326 Tm
+(region for estimates ) Tj
+/F3 9 Tf
+1 0 0 1 142 326 Tm
+(fr-par) Tj
+/F1 9 Tf
+1 0 0 1 50 314 Tm
+(\225) Tj
+1 0 0 1 60 314 Tm
+(Catalog: ) Tj
+/F3 9 Tf
+1 0 0 1 97 314 Tm
+(UpCloud) Tj
+/F1 9 Tf
+1 0 0 1 135 314 Tm
+( snapshot from ) Tj
+/F3 9 Tf
+1 0 0 1 198 314 Tm
+(https://upcloud.com/pricing/) Tj
+/F1 9 Tf
+1 0 0 1 350 314 Tm
+(, retrieved 2026-10-25, default region for ) Tj
+1 0 0 1 60 302 Tm
+(estimates ) Tj
+/F3 9 Tf
+1 0 0 1 102 302 Tm
+(de-fra1) Tj
+/F1 9 Tf
+1 0 0 1 50 290 Tm
+(\225) Tj
+1 0 0 1 60 290 Tm
+(Estimates: off) Tj
+1 0 0 1 50 278 Tm
+(\225) Tj
+1 0 0 1 60 278 Tm
+(Inventory file: ) Tj
+/F3 9 Tf
+1 0 0 1 117 278 Tm
+(inventory.json) Tj
+/F1 9 Tf
+1 0 0 1 50 266 Tm
+(\225) Tj
+1 0 0 1 60 266 Tm
+(Source: ) Tj
+/F3 9 Tf
+1 0 0 1 94 266 Tm
+(aws) Tj
+/F1 8 Tf
+1 0 0 1 50 810 Tm
+(shift2eu migration assessment: comparison of 3 targets) Tj
+/F3 8 Tf
+1 0 0 1 50 40 Tm
+(shift2eu 0.15.0 \(commit 1a2b3c4d5e6f, built 2026-11-25T00:00:00Z\)) Tj
+/F1 8 Tf
+1 0 0 1 50 30 Tm
+(Page 6 of 6) Tj
+ET
+endstream
+endobj
+xref
+0 19
+0000000000 65535 f 
+0000000009 00000 n 
+0000000058 00000 n 
+0000000149 00000 n 
+0000000246 00000 n 
+0000000348 00000 n 
+0000000443 00000 n 
+0000000503 00000 n 
+0000000649 00000 n 
+0000007214 00000 n 
+0000007361 00000 n 
+0000012319 00000 n 
+0000012467 00000 n 
+0000018060 00000 n 
+0000018208 00000 n 
+0000023040 00000 n 
+0000023188 00000 n 
+0000028697 00000 n 
+0000028845 00000 n 
+trailer
+<< /Size 19 /Root 1 0 R /Info 6 0 R >>
+startxref
+34368
+%%EOF

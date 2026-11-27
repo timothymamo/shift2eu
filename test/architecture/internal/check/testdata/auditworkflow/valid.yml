@@ -640,11 +640,11 @@ jobs:
             echo "finished"
             exit 0
           fi
-          offline=(--cache-dir "${RUNNER_TEMP}/trivy-cache" --skip-db-update --skip-java-db-update --skip-check-update --offline-scan --skip-version-check --disable-telemetry --no-progress --scanners vuln --format json)
+          offline=(--cache-dir "${RUNNER_TEMP}/trivy-cache" --skip-db-update --skip-java-db-update --offline-scan --skip-version-check --disable-telemetry --no-progress --scanners vuln --format json)
           scanned=0
           if [ -f "${RUNNER_TEMP}/image/image.tar" ]; then
             rc=0
-            timeout 8m trivy image "${offline[@]}" --input "${RUNNER_TEMP}/image/image.tar" --output "${out}/image.json" 2> "${out}/image.stderr" || rc=$?
+            timeout 8m trivy image "${offline[@]}" --skip-check-update --input "${RUNNER_TEMP}/image/image.tar" --output "${out}/image.json" 2> "${out}/image.stderr" || rc=$?
             echo "${rc}" > "${out}/image.exit"
             if [ "${rc}" -eq 124 ]; then
               echo "image-scan timed-out" >> "${results}/not-run.txt"

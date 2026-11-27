@@ -1152,6 +1152,67 @@ func inventoryGuides() []inventoryGuideCase {
 				// A scale set member's data disk that outlives the member holds
 				// data and stays: only one its member deletes with it goes.
 				{id: "vmss-shop-web_0abc_DataDisk_1", rawType: "Microsoft.Compute/disks", category: "storage.block"},
+				// An HDInsight cluster of kind KAFKA is Apache Kafka on virtual
+				// machines Azure runs, so it is messaging.kafka (PRD #571). Three worker
+				// nodes keep serving through the loss of a node, and Azure encrypts its
+				// managed disks at rest. HDInsight's availability-zone support is zonal:
+				// the cluster is pinned to the one zone it names (zones ["1"], which the
+				// fixture records), so it does not survive the loss of that zone and is
+				// no zone-high-availability. The fixture keeps its zones so the test pins
+				// that zones alone do not give the capability.
+				{
+					id: "kafka-shop-streams", rawType: "Microsoft.HDInsight/clusters", category: "messaging.kafka",
+					region:       "westeurope",
+					capabilities: []string{"encryption-at-rest", "node-high-availability"},
+				},
+				// A cluster of three worker nodes in no zone keeps serving through the
+				// loss of a node, and not through the loss of a zone: only the
+				// encryption at rest and the node redundancy are left. Its kind is
+				// recorded as `Kafka` rather than `KAFKA`, the casing an ARM template
+				// writes and Azure returns as stored, so a program that compared the kind
+				// as it comes would leave this cluster unclassified.
+				{
+					id: "kafka-shop-audit", rawType: "Microsoft.HDInsight/clusters", category: "messaging.kafka",
+					capabilities: []string{"encryption-at-rest", "node-high-availability"},
+				},
+				// A hand-edited export: the cluster's targetInstanceCount is the string
+				// "3", which no Azure call returns, and jq compares a string greater than
+				// any number. The count is the number of worker nodes the cluster is sized
+				// and estimated from, so a count no call wrote as a number is no count: the
+				// cluster keeps its category and the encryption at rest of its managed
+				// disks, and no node redundancy and no count (review nit on PR #685).
+				{
+					id: "kafka-shop-handedit", rawType: "Microsoft.HDInsight/clusters", category: "messaging.kafka",
+					capabilities: []string{"encryption-at-rest"},
+				},
+				// An HDInsight cluster of another kind runs no Kafka broker a target
+				// serves, so it stays unclassified under its own type.
+				{
+					id: "spark-shop-batch", rawType: "Microsoft.HDInsight/clusters", category: "unclassified",
+					capabilities: []string{},
+				},
+				// A cluster the service is resizing (clusterState ResizeQueued) is a
+				// cluster like any other: the queued operation is no reason to leave it
+				// out, so it keeps the category and the size its three worker nodes of
+				// Standard_D2s_v3 give a running cluster in no zone (PRD #571,
+				// milestone 4).
+				{
+					id: "kafka-shop-resizing", rawType: "Microsoft.HDInsight/clusters", category: "messaging.kafka",
+					capabilities: []string{"encryption-at-rest", "node-high-availability"},
+				},
+				// An Event Hubs namespace speaks the Event Hubs protocol, and PRD #571
+				// counts a namespace as messaging.kafka only when every client of it
+				// uses the Kafka endpoint, which is the guide's step to take by hand. So
+				// does an Azure AI Search service, which no target runs: both stay
+				// unclassified under their own type.
+				{
+					id: "eh-shop-orders", rawType: "Microsoft.EventHub/namespaces", category: "unclassified",
+					capabilities: []string{},
+				},
+				{
+					id: "srch-shop-catalog", rawType: "Microsoft.Search/searchServices", category: "unclassified",
+					capabilities: []string{},
+				},
 			},
 			sized: []sizeFact{
 				// A Standard_D2s_v3 is 2 cores and 8192 MB, from az vm list-sizes.
@@ -1196,12 +1257,42 @@ func inventoryGuides() []inventoryGuideCase {
 				{id: "shop-media", storageGiB: 1024},
 				{id: "fs-shop-build", storageGiB: 256},
 				{id: "fs-shop-archive", storageGiB: 512},
+				// An HDInsight cluster is sized by its worker role: its targetInstanceCount
+				// is the count, its hardwareProfile.vmSize a size az vm list-sizes knows
+				// (Standard_D4s_v3 is 4 cores and 16384 MB, Standard_D2s_v3 2 and 8192),
+				// and its dataDisksGroups the GiB of each worker, disksPerNode times
+				// diskSizeGB. The 1023 GiB disks the fixtures record follow the Azure
+				// CLI's example size, and no page states one size: the program multiplies
+				// whatever diskSizeGB Azure returns by the disksPerNode it is given, so
+				// two of them are 2046 GiB and one is 1023 (PRD #571, *Estimates*). A
+				// Kafka cluster needs at least three worker nodes.
+				{id: "kafka-shop-streams", vcpus: 4, memoryGiB: 16, storageGiB: 2046, count: 3},
+				{id: "kafka-shop-audit", vcpus: 2, memoryGiB: 8, storageGiB: 1023, count: 3},
+				// The string count of a hand-edited export is no count, and the rest of the
+				// worker role is sized the same: a vCPU and memory number of the VM size, and
+				// the disks of one worker.
+				{id: "kafka-shop-handedit", vcpus: 2, memoryGiB: 8, storageGiB: 1023, noCount: true},
+				// A cluster being resized is sized like the same cluster at rest: its
+				// worker role is the one the recorded query packs either way.
+				{id: "kafka-shop-resizing", vcpus: 2, memoryGiB: 8, storageGiB: 1023, count: 3},
 			},
 			// The cluster's node scale set and its load balancer, the OS disk
 			// of a scale set member, and a member's data disk its member deletes
 			// with it: the member's scale set stands for all of them. So does a
 			// FileStorage account for its shares, and a Redis Enterprise cluster for
 			// its database.
+			//
+			// An HDInsight cluster Azure is deleting or has failed on is left out, as
+			// an MSK cluster whose state is DELETING or FAILED is (PRD #571,
+			// milestone 2's review finding N2): a cluster on its way out is no
+			// resource to move, and one the service gave up on keeps nothing. Microsoft
+			// lists the states a cluster passes through
+			// (<https://learn.microsoft.com/en-us/azure/hdinsight/hdinsight-administer-use-portal-linux>),
+			// and every one of its eight that ends or fails the cluster is left out,
+			// in any casing: deleting, deleted, deletequeued, deletetimeout,
+			// deleteerror, error, aborted and timeout. A cluster the service is still
+			// provisioning, patching or resizing stays, its queued operation being no
+			// reason to move it.
 			absent: []string{
 				"aks-system-12345678-vmss",
 				"kubernetes",
@@ -1210,6 +1301,22 @@ func inventoryGuides() []inventoryGuideCase {
 				"stshopfiles",
 				"default",
 				"amr-shop-session/default",
+				// One cluster per state, in the casing the fixture records it: Deleting,
+				// DeleteError, Aborted, Deleted, DeleteTimeout and Timeout as the portal
+				// names them, and `deletequeued` and ERROR in the case a caller wrote
+				// the state in, which is the casing a program that compared a state as
+				// it comes would miss. Deleted is the state a cluster reaches last,
+				// which the Resource Graph query still lists for a while. A program
+				// that matched one of the eight states less writes the cluster that
+				// carries it.
+				"kafka-shop-old",
+				"kafka-shop-delerr",
+				"kafka-shop-aborted",
+				"kafka-shop-queued",
+				"kafka-shop-deleted",
+				"kafka-shop-deltimeout",
+				"kafka-shop-error",
+				"kafka-shop-timeout",
 			},
 		},
 	}
@@ -1290,6 +1397,9 @@ func taxonomyCategories(source string) []string {
 			"messaging.topic",
 			"network.loadbalancer",
 			"registry.container",
+			// PRD #571's Azure classification: HDInsight runs Kafka, and Azure runs
+			// no managed OpenSearch.
+			"messaging.kafka",
 		}
 	default:
 		return nil

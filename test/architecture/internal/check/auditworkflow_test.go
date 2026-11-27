@@ -868,7 +868,10 @@ const (
 	// alone, so Fuzzy( and FuzzHelper( are no targets.
 	auditFuzzDiscovery = "            { grep -oE '^func Fuzz[A-Z0-9_][A-Za-z0-9_]*\\(f \\*testing\\.F\\)' \"${file}\" || true; } | sed -e 's/^func //' -e 's/(f \\*testing\\.F)$//' | while IFS= read -r name; do\n"
 	// auditTrivyOffline is row 10's offline flag set, which both scans use.
-	auditTrivyOffline = "          offline=(--cache-dir \"${RUNNER_TEMP}/trivy-cache\" --skip-db-update --skip-java-db-update --skip-check-update --offline-scan --skip-version-check --disable-telemetry --no-progress --scanners vuln --format json)\n"
+	auditTrivyOffline = "          offline=(--cache-dir \"${RUNNER_TEMP}/trivy-cache\" --skip-db-update --skip-java-db-update --offline-scan --skip-version-check --disable-telemetry --no-progress --scanners vuln --format json)\n"
+	// auditTrivyImage is row 10's image scan, which alone passes
+	// --skip-check-update: trivy sbom rejects it (issue #658).
+	auditTrivyImage = `timeout 8m trivy image "${offline[@]}" --skip-check-update --input`
 	// auditReadAPI and auditReadAPIFilter are row 15's one read: its endpoint's
 	// answer through the jq filter its caller names, and the filter's default.
 	auditReadAPI       = "            timeout 2m gh api \"${endpoint}\" --jq \"${filter}\" > \"${out}/api/${name}.json\" 2> \"${out}/api/${name}.stderr\" || rc=$?\n"
@@ -3676,8 +3679,13 @@ func TestAuditWorkflow(t *testing.T) {
 		},
 		{
 			name:     "trivy without --skip-check-update",
-			workflow: mutate(t, acceptedWorkflow, auditTrivyOffline, strings.Replace(auditTrivyOffline, " --skip-check-update", "", 1)),
+			workflow: mutate(t, acceptedWorkflow, auditTrivyImage, strings.Replace(auditTrivyImage, " --skip-check-update", "", 1)),
 			wantIn:   "--skip-check-update",
+		},
+		{
+			name:     "trivy offline array without --skip-version-check",
+			workflow: mutate(t, acceptedWorkflow, auditTrivyOffline, strings.Replace(auditTrivyOffline, " --skip-version-check", "", 1)),
+			wantIn:   "--skip-version-check",
 		},
 		{
 			name:     "trivy without --offline-scan",

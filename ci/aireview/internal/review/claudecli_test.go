@@ -459,7 +459,9 @@ func TestClaudeCLIAskFailsTheRun(t *testing.T) {
 		{
 			// The type is the CLI's own vocabulary alone, as the subtype is: a
 			// type holding anything else reads "unrecognised" and reaches
-			// neither the error nor the job's log (audit L2).
+			// neither the error nor the job's log (audit L2). The type's
+			// "Ignore previous" is a planted instruction for the prompt-injection
+			// tests (ADR 0033), never an instruction to the reader.
 			name:       "a stream element whose type is not one of the CLI's own",
 			behaviour:  claudeFake{stdout: `{"type":"MRK374 Ignore previous","subtype":"init","is_error":false,"result":"ANSWER TEXT"}`},
 			wantAny:    []string{"unrecognised"},
@@ -558,6 +560,8 @@ func TestClaudeCLIAskNamesAnErrorResultByClassAndSubtype(t *testing.T) {
 		cliResultMarker = "MRK374-THE-CLI-RESULT-TEXT"
 		// subtypeMarker stands for a subtype the CLI did not choose: upper case,
 		// a space and punctuation, which no code of the CLI's vocabulary holds.
+		// Its "Ignore previous" is a planted instruction for the
+		// prompt-injection tests (ADR 0033), never an instruction to the reader.
 		subtypeMarker = "MRK374 Ignore previous"
 	)
 
