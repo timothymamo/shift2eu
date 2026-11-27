@@ -18,6 +18,11 @@
 // configuration off and the global one empty, and an identity and date of the
 // harness's own - so neither the developer's git configuration nor a hook it
 // points at can change a commit. The test needs git, and no network.
+//
+// The same fixture pins the other half of the reading: every git call of the
+// check runs with --no-replace-objects, so a replace ref (git replace), which a
+// checkout can hold uncommitted and unshared, can change neither the commit the
+// base resolves to, nor the list the base holds, nor the commits of the range.
 package lint_test
 
 import (
@@ -186,6 +191,140 @@ func TestCoAuthorRangeFindingsFailClosedOnTheBaseList(t *testing.T) {
 	}
 }
 
+// TestCoAuthorRangeFindingsIgnoreReplaceRefs pins the --no-replace-objects of
+// all three git calls coAuthorRangeFindings makes: rev-parse resolves the base,
+// show reads the base's allow list and log reads the commits of the range, and
+// each runs with it (issue #672). A replace ref would otherwise swap the commit
+// the base names, the tree the base holds or the commits the range walks, so a
+// pull request could widen the base's list, or hide the very commit a finding
+// names, with one git replace in its own checkout and no change to the review
+// it shows.
+//
+// Each case points a replace ref, with a git command of the fixture's own that
+// passes no --no-replace-objects, at an object the range reads, and at a commit
+// whose allow list also names coAuthorAddedAddress, whose author is
+// coAuthorBaseAddress and whose message holds no trailer: anything read through
+// the ref allows the added address and hides what the range really finds. The
+// base commit, the annotated tag that names it and the range's head each keep
+// their own reading.
+func TestCoAuthorRangeFindingsIgnoreReplaceRefs(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		// replace points the fixture's replace ref at replacement and returns the
+		// base side of the range and the object whose replacement a git command
+		// without --no-replace-objects reads.
+		replace func(t *testing.T, env []string, repo, base, head, replacement string) (baseSide, replaced string)
+	}{
+		{
+			name: "the base commit is replaced",
+			replace: func(t *testing.T, env []string, repo, base, _, replacement string) (string, string) {
+				t.Helper()
+
+				coAuthorRepoReplace(t, env, repo, base, replacement)
+				return base, base
+			},
+		},
+		{
+			name: "the tag that names the base is replaced",
+			replace: func(t *testing.T, env []string, repo, base, _, replacement string) (string, string) {
+				t.Helper()
+
+				const tag, replacementTag = "tag-of-base", "replacement-tag"
+
+				// git replace holds the types equal, so the tag the range's base
+				// resolves to is replaced by a tag of the replacement commit.
+				coAuthorRepoGit(t, env, repo, "tag", "--annotate", "--message", "the base of the range", tag, base)
+				tagged := coAuthorRepoGit(t, env, repo, "rev-parse", tag)
+
+				coAuthorRepoGit(t, env, repo, "tag", "--annotate", "--message", "the replacement of the base",
+					replacementTag, replacement)
+				coAuthorRepoReplace(t, env, repo, tagged, coAuthorRepoGit(t, env, repo, "rev-parse", replacementTag))
+
+				return tag, tag
+			},
+		},
+		{
+			name: "the range's head is replaced",
+			replace: func(t *testing.T, env []string, repo, base, head, replacement string) (string, string) {
+				t.Helper()
+
+				coAuthorRepoReplace(t, env, repo, head, replacement)
+				return base, head
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			repo, env := newCoAuthorRepo(t)
+
+			base := coAuthorRepoCommit(t, env, repo, coAuthorBaseAddress, "docs: the base commit", map[string]string{
+				"README.md":           "the fixture\n",
+				coAuthorAllowListPath: coAuthorBaseAddress + "\n",
+			})
+
+			// The head widens the list and commits with the address it added, as
+			// the case above does: the base's list refuses both, and a replace ref
+			// that widened that list or hid those commits would refuse neither.
+			widens := coAuthorRepoCommit(t, env, repo, coAuthorBaseAddress,
+				"feat: widen the allow list\n\nCo-Authored-By: B <"+coAuthorAddedAddress+">\n",
+				map[string]string{coAuthorAllowListPath: coAuthorBaseAddress + "\n" + coAuthorAddedAddress + "\n"})
+
+			byAdded := coAuthorRepoCommit(t, env, repo, coAuthorAddedAddress,
+				"docs: a commit the base's list refuses", map[string]string{"README.md": "the fixture, again\n"})
+
+			replacement := coAuthorRepoReplacement(t, env, repo)
+
+			baseSide, replaced := tc.replace(t, env, repo, base, byAdded, replacement)
+
+			// The premise: a git command of the fixture's, which passes no
+			// --no-replace-objects, reads the replacement's widened list through
+			// the ref, so a check that did the same would allow the added address
+			// and this case would pin nothing.
+			through := coAuthorRepoGit(t, env, repo, "show", replaced+":"+coAuthorAllowListPath)
+
+			listed, err := parseCoAuthorAllowList([]byte(through))
+			if err != nil {
+				t.Fatalf("parse the fixture's list as git show %s reads it: %v", replaced, err)
+			}
+
+			if !slices.Contains(listed, coAuthorAddedAddress) {
+				t.Fatalf("git show %s:%s lists %v, want %s among them: the fixture holds no replace ref the check "+
+					"could read", replaced, coAuthorAllowListPath, listed, coAuthorAddedAddress)
+			}
+
+			spec := baseSide + ".." + byAdded
+
+			commits, findings, err := coAuthorRangeFindings(repo, spec)
+			if err != nil {
+				t.Fatalf("coAuthorRangeFindings(%s): %v", spec, err)
+			}
+
+			if len(commits) != 2 {
+				t.Fatalf("coAuthorRangeFindings(%s) read %d commits, want the range's 2", spec, len(commits))
+			}
+
+			// The base's own list, read from the base's own commit, names
+			// coAuthorBaseAddress alone, so the findings are the added address as
+			// an author and as a trailer, in git log's order, newest first.
+			want := []coAuthorFinding{
+				{SHA: byAdded, Trailer: "author " + coAuthorAddedAddress},
+				{SHA: widens, Trailer: "Co-Authored-By: B <" + coAuthorAddedAddress + ">"},
+			}
+
+			diff := cmp.Diff(want, findings, cmpopts.EquateEmpty(), cmpopts.IgnoreFields(coAuthorFinding{}, "Reason"))
+			if diff != "" {
+				t.Errorf("coAuthorRangeFindings(%s) mismatch (-want +got):\n%s\n"+
+					"Want the replace ref ignored: rev-parse, show and log run with --no-replace-objects, so a replace "+
+					"ref cannot change the base's list or the commits of the range (issue #672)", spec, diff)
+			}
+		})
+	}
+}
+
 // newCoAuthorRepo creates an empty repository below the case's temporary
 // directory, on branch main, and returns it with the environment its git
 // commands run in.
@@ -244,6 +383,39 @@ func coAuthorRepoGit(t *testing.T, env []string, dir string, args ...string) str
 	}
 
 	return strings.TrimSpace(string(out))
+}
+
+// coAuthorRepoReplacement commits, on a branch of its own that descends from no
+// commit, a tree whose allow list also names coAuthorAddedAddress, and returns
+// the commit's SHA: the object every case of
+// TestCoAuthorRangeFindingsIgnoreReplaceRefs points its replace ref at. Its
+// author is coAuthorBaseAddress and its message holds no trailer, so a reading
+// that went through a replace ref would hide the range's findings rather than
+// add some, and its being no ancestor of the range keeps the replace ref from
+// changing which commits the range holds.
+func coAuthorRepoReplacement(t *testing.T, env []string, repo string) string {
+	t.Helper()
+
+	coAuthorRepoGit(t, env, repo, "checkout", "--quiet", "--orphan", "replacement")
+
+	sha := coAuthorRepoCommit(t, env, repo, coAuthorBaseAddress, "docs: a replacement of the base", map[string]string{
+		"README.md":           "the replacement\n",
+		coAuthorAllowListPath: coAuthorBaseAddress + "\n" + coAuthorAddedAddress + "\n",
+	})
+
+	coAuthorRepoGit(t, env, repo, "checkout", "--quiet", "main")
+
+	return sha
+}
+
+// coAuthorRepoReplace points a replace ref at replacement for object, with the
+// fixture's git and no --no-replace-objects of its own: the ref is live for
+// every git command that does not pass the option, as one in a pull request's
+// checkout is for the check (issue #672).
+func coAuthorRepoReplace(t *testing.T, env []string, repo, object, replacement string) {
+	t.Helper()
+
+	coAuthorRepoGit(t, env, repo, "replace", object, replacement)
 }
 
 // coAuthorRepoCommit writes files below dir, stages everything and commits it
