@@ -19,6 +19,10 @@ import (
 // writes it: a flow mapping on one line, with a quoted cgo value.
 var ciMatrixEntry = regexp.MustCompile(`^- \{ goos: ([a-z0-9]+), goarch: ([a-z0-9]+), cgo: "([^"]*)" \}$`)
 
+// ciShellVar matches the first shell variable a run: script names, in either of
+// its two forms: $NAME or ${NAME}, the name in the first group.
+var ciShellVar = regexp.MustCompile(`\$\{?([A-Za-z_][A-Za-z0-9_]*)`)
+
 // ciLine is one content line of a workflow: neither blank nor only a comment,
 // with the number of spaces before it.
 type ciLine struct {
@@ -505,19 +509,24 @@ func TestCILintMatrixCoversEveryReleaseTarget(t *testing.T) {
 }
 
 // checkCoAuthorTrailersJob pins the coauthor-trailers job the Lint check needs
-// (issue #663), read as a closed schema: it is never skipped or excused, it
-// checks out the whole history with no credentials, and its one test step runs
-// TestBranchCoAuthorTrailers alone with an env: of exactly the pull request's
-// base..head range and SHIFT2EU_COAUTHOR_CHECK=require on a pull request, so a
-// range the run cannot read fails the check rather than skipping it.
+// (issues #663 and #689), read as a closed schema: it is never skipped or
+// excused, it checks out the whole history with no credentials, and it runs the
+// base commit's copy of the check rather than the pull request's own, so a pull
+// request that weakens test/lint is still checked by the copy the base branch
+// holds (issue #689): one step copies the base commit's test/lint into a
+// directory of its own, from the base SHA in its env:, and the test step runs
+// TestBranchCoAuthorTrailers from inside that directory.
 //
-// The base SHA the check reads the allow list at (issue #672) reaches it in the
-// range's env: value alone, where it comes from the pull request's own base
-// commit: that one value names the commits to check and the revision the list is
-// read at, so the two can never disagree, and no expression is ever spliced into
-// a run: line, where a shell would read it as a word of the event's author. The
-// checkout keeps fetch-depth: 0, without which the base commit is no object of
-// the run and the list cannot be read at all.
+// The base SHA the copy is made from reaches the shell through env: alone,
+// where it comes from the pull request's own base commit: no expression is ever
+// spliced into a run: line, where a shell would read it as a word of the event's
+// author (issue #672). The range the check reads comes through env: too: its
+// SHIFT2EU_COAUTHOR_RANGE names the pull request's base SHA, the revision the
+// allow list is read at, and its head SHA, the commits it checks, so the two can
+// never disagree, and SHIFT2EU_COAUTHOR_CHECK=require on a pull request makes a
+// range the run cannot read fail the check rather than skip it. The checkout
+// keeps fetch-depth: 0, without which the base commit is no object of the run
+// and neither the copy nor the list can be read at all.
 func checkCoAuthorTrailersJob(t *testing.T, jobs map[string][]ciLine) {
 	t.Helper()
 
@@ -538,9 +547,14 @@ func checkCoAuthorTrailersJob(t *testing.T, jobs map[string][]ciLine) {
 		t.Fatalf("the coauthor-trailers job's steps: %v", err)
 	}
 
-	var checkout, test bool
+	// copyStep and testStep are the indices, in the job's steps, of the step that
+	// copies the base commit's test/lint and the step that runs the check in it,
+	// and -1 until each is found.
+	var checkout bool
 
-	for _, item := range items {
+	copyStep, testStep := -1, -1
+
+	for i, item := range items {
 		keys, err := ciKeys(item.lines)
 		if err != nil {
 			t.Errorf("the coauthor-trailers job's steps: %v", err)
@@ -587,44 +601,25 @@ func checkCoAuthorTrailersJob(t *testing.T, jobs map[string][]ciLine) {
 				"persist-credentials: false",
 				"fetch-depth: 0",
 			})
+
+			continue
 		}
 
-		if _, run, ok := ciScalar(item.lines, "run"); ok && strings.Contains(run, "TestBranchCoAuthorTrailers") {
-			test = true
+		script, ok := ciRunScript(item.lines)
+		if !ok {
+			continue
+		}
 
-			if want := `go test -count=1 -v -run '^TestBranchCoAuthorTrailers$' ./test/lint/`; run != want {
-				t.Errorf("line %d: the coauthor-trailers step runs %q, want %q", item.num, run, want)
-			}
+		// One step may make the copy and run the check, or two steps may: both
+		// are the base commit's copy, so both are accepted here.
+		if ciCopiesTheBaseCommit(script) {
+			copyStep = i
+			checkCoAuthorBaseCopyStep(t, item, script)
+		}
 
-			env, ok := ciBlock(item.lines, "env")
-			if !ok {
-				t.Errorf("line %d: the coauthor-trailers step holds no env:, so it names no range and requires none", item.num)
-
-				continue
-			}
-
-			// The job names no base of its own: the range's env: value carries the
-			// pull request's base SHA, the revision the check reads the allow list
-			// at, and its head SHA, the commits it checks (issue #672).
-			var rangeSpec string
-
-			for _, l := range env {
-				if spec, ok := strings.CutPrefix(l.text, "SHIFT2EU_COAUTHOR_RANGE: "); ok {
-					rangeSpec = spec
-				}
-			}
-
-			for _, want := range []string{"github.event.pull_request.base.sha", "github.event.pull_request.head.sha"} {
-				if !strings.Contains(rangeSpec, want) {
-					t.Errorf("line %d: the coauthor-trailers env: hands the check the range %q, which names no %s: the check reads .github/co-author-addresses.txt at the pull request's base commit (issue #672)", item.num, rangeSpec, want)
-				}
-			}
-
-			wantExactLines(t, fmt.Sprintf("env: block of the coauthor-trailers step on line %d", item.num), env, []string{
-				"SHIFT2EU_COAUTHOR_RANGE: ${{ github.event_name == 'pull_request' && " +
-					"format('{0}..{1}', github.event.pull_request.base.sha, github.event.pull_request.head.sha) || '' }}",
-				"SHIFT2EU_COAUTHOR_CHECK: ${{ github.event_name == 'pull_request' && 'require' || '' }}",
-			})
+		if strings.Contains(ciScriptText(script), "TestBranchCoAuthorTrailers") {
+			testStep = i
+			checkCoAuthorTestStep(t, item, script)
 		}
 	}
 
@@ -632,9 +627,272 @@ func checkCoAuthorTrailersJob(t *testing.T, jobs map[string][]ciLine) {
 		t.Errorf("no step of the coauthor-trailers job uses actions/checkout@…, so it reads no commit")
 	}
 
-	if !test {
+	if copyStep < 0 {
+		t.Errorf("no step of the coauthor-trailers job copies the base commit's test/lint with git worktree add or git archive, " +
+			"so the job runs the pull request's own check, which the pull request can weaken (issue #689)")
+	}
+
+	if testStep < 0 {
 		t.Errorf("no step of the coauthor-trailers job runs TestBranchCoAuthorTrailers, so CI checks no co-author trailer")
 	}
+
+	if copyStep >= 0 && testStep >= 0 {
+		if copyStep > testStep {
+			t.Errorf("line %d: the coauthor-trailers step that runs TestBranchCoAuthorTrailers comes before the step on line %d that "+
+				"copies the base commit's test/lint, want the copy made first (issue #689)", items[testStep].num, items[copyStep].num)
+		}
+
+		checkCoAuthorTestRunsFromTheCopy(t, items[copyStep], items[testStep])
+	}
+}
+
+// ciCopiesTheBaseCommit reports whether a run: script copies a revision's
+// test/lint into a directory of its own, with git worktree add or git archive:
+// the base commit's copy is checked out or unpacked, either way, never the pull
+// request's own working tree (issue #689).
+func ciCopiesTheBaseCommit(script []ciLine) bool {
+	text := ciScriptText(script)
+
+	return strings.Contains(text, "git worktree add") || strings.Contains(text, "git archive")
+}
+
+// checkCoAuthorBaseCopyStep pins the step that copies the base commit's
+// test/lint into a directory of its own (issue #689): it copies from the base
+// SHA, which reaches it through its env: and never spliced into its run: line,
+// where a shell would read it as a word of the event's author (issue #672).
+func checkCoAuthorBaseCopyStep(t *testing.T, item ciItem, script []ciLine) {
+	t.Helper()
+
+	text := ciScriptText(script)
+
+	// An expression spliced into the run: line is refused for every step of the
+	// job above; this one repeats it for the step that hands a revision to a git
+	// command.
+	if strings.Contains(text, "${{") {
+		t.Errorf("line %d: the step that copies the base commit's test/lint holds a ${{ }} expression in its run:, want the base "+
+			"SHA handed to it in env: (issue #689)", item.num)
+	}
+
+	env, ok := ciBlock(item.lines, "env")
+	if !ok {
+		t.Errorf("line %d: the step that copies the base commit's test/lint holds no env:, so it names no base SHA: map "+
+			"${{ github.event.pull_request.base.sha }} into an env: variable and read that (issue #689)", item.num)
+
+		return
+	}
+
+	// The env: variable whose value holds the base SHA: the copy step's own name
+	// for it, whatever it is called.
+	var names []string
+
+	for _, l := range env {
+		if name, value, ok := strings.Cut(l.text, ": "); ok && strings.Contains(value, "github.event.pull_request.base.sha") {
+			names = append(names, name)
+		}
+	}
+
+	if len(names) == 0 {
+		t.Errorf("line %d: the step that copies the base commit's test/lint holds no env: variable whose value names "+
+			"${{ github.event.pull_request.base.sha }}, want the base SHA handed to it through env:, never spliced into its "+
+			"run: (issue #689)", item.num)
+
+		return
+	}
+
+	if !slices.ContainsFunc(names, func(name string) bool {
+		return strings.Contains(text, "$"+name) || strings.Contains(text, "${"+name+"}")
+	}) {
+		t.Errorf("line %d: the step that copies the base commit's test/lint runs %q, which reads none of its %s env: "+
+			"variables: read the base SHA from the step's env: (issue #689)", item.num, text, strings.Join(names, ", "))
+	}
+}
+
+// checkCoAuthorTestStep pins the step that runs the co-author trailer check
+// (issues #663 and #689): it runs go test with -run naming the co-author range
+// test, and it hands the check the pull request's base..head range and
+// SHIFT2EU_COAUTHOR_CHECK=require on a pull request, so a range the run cannot
+// read fails the check rather than skipping it. Where it runs the check from is
+// checkCoAuthorTestRunsFromTheCopy's business.
+func checkCoAuthorTestStep(t *testing.T, item ciItem, script []ciLine) {
+	t.Helper()
+
+	text := ciScriptText(script)
+
+	if !strings.Contains(text, "-run") || !strings.Contains(text, "go test") {
+		t.Errorf("line %d: the coauthor-trailers step runs %q, want a go test with -run naming TestBranchCoAuthorTrailers",
+			item.num, text)
+	}
+
+	env, ok := ciBlock(item.lines, "env")
+	if !ok {
+		t.Errorf("line %d: the coauthor-trailers step holds no env:, so it names no range and requires none", item.num)
+
+		return
+	}
+
+	// The job names no base of its own: the range's env: value carries the pull
+	// request's base SHA, the revision the check reads the allow list at, and its
+	// head SHA, the commits it checks (issue #672).
+	var rangeSpec string
+
+	envText := make([]string, 0, len(env))
+
+	for _, l := range env {
+		envText = append(envText, l.text)
+
+		if spec, ok := strings.CutPrefix(l.text, "SHIFT2EU_COAUTHOR_RANGE: "); ok {
+			rangeSpec = spec
+		}
+	}
+
+	for _, want := range []string{"github.event.pull_request.base.sha", "github.event.pull_request.head.sha"} {
+		if !strings.Contains(rangeSpec, want) {
+			t.Errorf("line %d: the coauthor-trailers env: hands the check the range %q, which names no %s: the check reads "+
+				".github/co-author-addresses.txt at the pull request's base commit (issue #672)", item.num, rangeSpec, want)
+		}
+	}
+
+	for _, want := range []string{
+		"SHIFT2EU_COAUTHOR_RANGE: ${{ github.event_name == 'pull_request' && " +
+			"format('{0}..{1}', github.event.pull_request.base.sha, github.event.pull_request.head.sha) || '' }}",
+		"SHIFT2EU_COAUTHOR_CHECK: ${{ github.event_name == 'pull_request' && 'require' || '' }}",
+	} {
+		if !slices.Contains(envText, want) {
+			t.Errorf("line %d: the coauthor-trailers env: holds no %q, want the check handed the pull request's range and "+
+				"required to read one (issue #672)", item.num, want)
+		}
+	}
+}
+
+// checkCoAuthorTestRunsFromTheCopy pins that the step running the check changes
+// into the directory the copy step makes (issue #689): a step that runs go test
+// from the checkout root, or changes into a directory the copy step never names,
+// checks the pull request's own test/lint again, so a pull request that weakens
+// the check still passes it.
+func checkCoAuthorTestRunsFromTheCopy(t *testing.T, copy, test ciItem) {
+	t.Helper()
+
+	script, ok := ciRunScript(test.lines)
+	if !ok {
+		return
+	}
+
+	target, ok := ciScriptChangeDir(script)
+	if !ok {
+		t.Errorf("line %d: the coauthor-trailers step runs go test without changing into a directory, so it runs the pull "+
+			"request's own test/lint; want it to run the copy of the base commit's test/lint the step on line %d makes "+
+			"(issue #689)", test.num, copy.num)
+
+		return
+	}
+
+	// The checkout root is no copy of the base commit: a check that runs there
+	// runs the pull request's own test/lint.
+	for _, root := range []string{".", "./", "$GITHUB_WORKSPACE", "${GITHUB_WORKSPACE}", "$PWD", "${PWD}"} {
+		if target == root {
+			t.Errorf("line %d: the coauthor-trailers step changes into %q, the checkout root, so it runs the pull "+
+				"request's own test/lint; want the copy of the base commit's test/lint the step on line %d makes "+
+				"(issue #689)", test.num, target, copy.num)
+
+			return
+		}
+	}
+
+	// The directory is one the copy step's run: or env: names, or a variable of
+	// the test step's own env:, so the copy the copy step makes is the one the
+	// check runs. One step that makes the copy and runs the check names the
+	// directory in its own run:, so there is nothing to compare it with.
+	if copy.num == test.num {
+		return
+	}
+
+	naming := ciStepEnvText(test)
+
+	if copyScript, ok := ciRunScript(copy.lines); ok {
+		naming = ciScriptText(copyScript) + "\n" + ciStepEnvText(copy) + "\n" + naming
+	}
+
+	name := target
+
+	if m := ciShellVar.FindStringSubmatch(target); m != nil {
+		name = m[1]
+	} else if strings.Contains(target, "$") {
+		// A command substitution names no variable and no path a step's env:
+		// holds: there is nothing to compare it with.
+		return
+	}
+
+	if !strings.Contains(naming, name) {
+		t.Errorf("line %d: the coauthor-trailers step runs the check in %q, which the step on line %d that copies the base "+
+			"commit's test/lint never names %q: want the check run in that copy (issue #689)", test.num, target, copy.num, name)
+	}
+}
+
+// ciRunScript returns the lines a step's run: hands the shell: the value of a
+// `run: command` line as its one line, or the lines of a `run: |` block scalar.
+func ciRunScript(step []ciLine) ([]ciLine, bool) {
+	num, value, ok := ciScalar(step, "run")
+	if !ok {
+		return nil, false
+	}
+
+	if value != "|" && value != ">" {
+		return []ciLine{{num: num, indent: 0, text: value}}, true
+	}
+
+	return ciBlock(step, "run")
+}
+
+// ciScriptText joins the text of a run: script's lines, one per line.
+func ciScriptText(script []ciLine) string {
+	text := make([]string, 0, len(script))
+	for _, l := range script {
+		text = append(text, l.text)
+	}
+
+	return strings.Join(text, "\n")
+}
+
+// ciScriptChangeDir returns the directory a run: script changes into before it
+// runs go test: the target of its last cd before that line, without the quotes,
+// and whether it changes into one at all.
+func ciScriptChangeDir(script []ciLine) (string, bool) {
+	end := slices.IndexFunc(script, func(l ciLine) bool { return strings.Contains(l.text, "go test") })
+	if end < 0 {
+		end = len(script)
+	}
+
+	target, ok := "", false
+
+	for _, l := range script[:end] {
+		rest, isChangeDir := strings.CutPrefix(l.text, "cd ")
+		if !isChangeDir {
+			continue
+		}
+
+		if fields := strings.Fields(rest); len(fields) > 0 {
+			target, ok = strings.Trim(fields[0], `"'`), true
+		}
+	}
+
+	return target, ok
+}
+
+// ciStepEnvText joins the lines of a step's env: block, whose key names the
+// variable a run: line reads a directory from, and whose value names the
+// directory itself.
+func ciStepEnvText(item ciItem) string {
+	env, ok := ciBlock(item.lines, "env")
+	if !ok {
+		return ""
+	}
+
+	text := make([]string, 0, len(env))
+	for _, l := range env {
+		text = append(text, l.text)
+	}
+
+	return strings.Join(text, "\n")
 }
 
 // checkLintShellJob pins the lint-shell job the Lint check needs (issue #164):
