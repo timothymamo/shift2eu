@@ -116,6 +116,12 @@ func auditGoModReadFragmentOf(script []string) ([]string, string) {
 
 	fragment := script[read:install]
 
+	// caseDepth counts the case blocks the walk below stands inside: a
+	// branch's pattern, a branch's ;; and the esac that closes the block are
+	// lines of a case block alone, and outside one each of them is a command
+	// line this test would run (issue #710).
+	caseDepth := 0
+
 	for _, line := range fragment {
 		trimmed := strings.TrimSpace(line)
 
@@ -135,6 +141,39 @@ func auditGoModReadFragmentOf(script []string) ([]string, string) {
 
 		if _, ok := auditGoModReadAssignment(line); ok {
 			continue
+		}
+
+		if auditOpensCase(trimmed) {
+			caseDepth++
+
+			continue
+		}
+
+		// Inside a case block: its branch patterns, their ;;, the echoes
+		// and exits of a branch that fails the run, and the esac that
+		// closes the block.
+		if caseDepth > 0 {
+			if trimmed == "esac" {
+				caseDepth--
+
+				continue
+			}
+
+			if auditFragmentLineIsCaseBody(trimmed) || auditFragmentLineIsCheck(trimmed) {
+				continue
+			}
+
+			return nil, fmt.Sprintf(`%s's install step holds %q between its read of go.mod's Go and the install, inside a case block: this test runs that fragment, so a case block may hold its patterns, their ;;, the echoes and exits that fail the run on what the read gave, and nothing else (issue #710)`,
+				auditWorkflow, trimmed)
+		}
+
+		// Outside every case block a branch pattern's closing ), a lone ;; and
+		// an esac are no part of a check: each is the shape of a case block's
+		// own line and nothing else, so a line that looks like one here is the
+		// command line it would run as (issue #710).
+		if auditFragmentLineIsCaseBody(trimmed) {
+			return nil, fmt.Sprintf(`%s's install step holds %q between its read of go.mod's Go and the install, and that line has the shape of a case block's own - a branch pattern that ends in ), a branch's ;; or the esac that closes it - while no case ... in line stands open above it: outside a case block such a line is a command line this test would run, with only the system paths on PATH, so the fragment may hold it only between a case ... in and its esac (issue #710)`,
+				auditWorkflow, trimmed)
 		}
 
 		if auditFragmentLineIsCheck(trimmed) {
@@ -157,15 +196,20 @@ func auditGoModReadFragmentOf(script []string) ([]string, string) {
 
 // auditFragmentDownloads are the words a line of the fragment may not hold: the
 // fragment runs under this test, so no line of it may download, install or
-// build anything (issue #710).
-var auditFragmentDownloads = []string{"curl", "wget", "go install", "go build", "sha256sum", "mkdir", "sudo", "tar ", "install ", "rm ", "cp ", "mv ", "timeout "}
+// build anything - with go's fetching verbs, git and gh beside the file
+// downloads, since this test's PATH holds the system paths and the network is
+// reachable from them (issue #710).
+var auditFragmentDownloads = []string{
+	"curl", "wget", "sha256sum", "mkdir", "sudo", "tar ", "install ", "rm ", "cp ", "mv ", "timeout ",
+	"go install", "go build", "go mod download", "go get", "go run", "git ", "gh ",
+}
 
 // auditFragmentDownload returns the word of a line that would download, install
 // or build something, and the empty string for a line that reads go.mod and
 // checks what it read (issue #710).
 func auditFragmentDownload(line string) string {
 	for _, word := range auditFragmentDownloads {
-		if strings.Contains(line, word) {
+		if auditFragmentNamesWord(line, word) {
 			return word
 		}
 	}
@@ -173,13 +217,72 @@ func auditFragmentDownload(line string) string {
 	return ""
 }
 
-// auditFragmentLineIsCheck reports whether a trimmed shell line is part of a
-// check that fails the run on what the read gave: an if block - the line that
-// opens one, its then, its body of echoes and exits, and the fi, elif or else
-// that closes or continues it - or a case block that tests the value's shape,
-// which the step opens on case ... in, takes apart on its patterns, and closes
-// on esac. The download check of the fragment runs on these lines first, so a
-// case pattern or an esac may say anything but fetch anything (issue #710).
+// auditFragmentNamesWord reports whether line holds word where word stands
+// whole, with no letter, digit or underscore right before the word's first word
+// byte or right after its last one: the read's go list -m names no go verb that
+// fetches, and a word that merely ends in git says nothing about git (issue #710).
+// A word that begins or ends with a space has no boundary to check there, so git
+// names a line that goes on to name a subcommand.
+func auditFragmentNamesWord(line, word string) bool {
+	firstIsWord := auditFragmentIsWordByte(word, 0)
+	lastIsWord := auditFragmentIsWordByte(word, len(word)-1)
+
+	for at := 0; at < len(line); {
+		found := strings.Index(line[at:], word)
+		if found < 0 {
+			return false
+		}
+
+		found += at
+
+		before := !firstIsWord || !auditFragmentIsWordByte(line, found-1)
+		after := !lastIsWord || !auditFragmentIsWordByte(line, found+len(word))
+
+		if before && after {
+			return true
+		}
+
+		at = found + 1
+	}
+
+	return false
+}
+
+// auditFragmentIsWordByte reports whether the byte at at of line is one word
+// characters are made of, and false for the byte before the line and the one
+// past its end (issue #710).
+func auditFragmentIsWordByte(line string, at int) bool {
+	if at < 0 || at >= len(line) {
+		return false
+	}
+
+	c := line[at]
+
+	return c == '_' || c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z'
+}
+
+// auditOpensCase reports whether a trimmed shell line opens a case block: the
+// word itself, or the case ... in form the fragment really takes (issue #710).
+func auditOpensCase(trimmed string) bool {
+	return trimmed == "case" || strings.HasPrefix(trimmed, "case ") || strings.HasPrefix(trimmed, "case\t")
+}
+
+// auditFragmentLineIsCaseBody reports whether a trimmed shell line is one of a
+// case block's own lines, which the walk of the fragment lets through only
+// between the case ... in that opens the block and the esac that closes it: a
+// branch's pattern such as 1.[0-9]*) ends in its ), a branch ends in ;;, and the
+// block ends in esac. Outside a case block each of them is no check but the
+// command line it would run as, so the walk refuses it there (issue #710).
+func auditFragmentLineIsCaseBody(trimmed string) bool {
+	return trimmed == "esac" || trimmed == ";;" || strings.HasSuffix(trimmed, ";;") || strings.HasSuffix(trimmed, ")")
+}
+
+// auditFragmentLineIsCheck reports whether a trimmed shell line, outside every
+// case block, is part of a check that fails the run on what the read gave: an if
+// block - the line that opens one, its then, its body of echoes and exits, and
+// the fi, elif or else that closes or continues it. A case block's own lines are
+// no part of this, and the walk of the fragment lets them through only inside a
+// case block (issue #710).
 func auditFragmentLineIsCheck(trimmed string) bool {
 	if auditOpensIf(trimmed) {
 		return true
@@ -191,16 +294,8 @@ func auditFragmentLineIsCheck(trimmed string) bool {
 		}
 	}
 
-	for _, word := range []string{"elif ", "exit ", "echo ", "printf ", "case "} {
+	for _, word := range []string{"elif ", "exit ", "echo ", "printf "} {
 		if strings.HasPrefix(trimmed, word) {
-			return true
-		}
-	}
-
-	// The case block's own lines: a pattern such as 1.[0-9]*) or *) ends in
-	// its ), a branch ends in ;;, and the block ends in esac.
-	for _, word := range []string{"esac", ";;", ")"} {
-		if strings.HasSuffix(trimmed, word) {
 			return true
 		}
 	}
@@ -227,8 +322,12 @@ const (
 // step's script the read fragment may hold (issue #710): the test runs the whole
 // fragment, so every non-comment line of it is held to no download, install or
 // build - the read line and the lines of the checks included, not only an
-// assignment of the fragment's own - and the lines of the check that tests the
-// value's shape, an if block or a case block, are let through.
+// assignment of the fragment's own - and to the words that fetch on their own
+// rather than inside another one. The lines of the check that tests the value's
+// shape are let through: an if block anywhere in the fragment, and a case block's
+// own lines - its patterns, their ;; and its esac - only between the case ... in
+// that opens the block and the esac that closes it, since outside one such a line
+// is the command line it would run as.
 func TestAuditGoModReadFragmentHoldsNoLineThatWouldDownload(t *testing.T) {
 	t.Parallel()
 
@@ -238,6 +337,7 @@ func TestAuditGoModReadFragmentHoldsNoLineThatWouldDownload(t *testing.T) {
 		name    string
 		script  []string
 		refusal string // the word the refusal must name, for a fragment the test may not run
+		reason  string // the part of the refusal that says why, for a line whose own words hold the word
 	}{
 		{
 			name:   "the read and its checks",
@@ -282,6 +382,70 @@ func TestAuditGoModReadFragmentHoldsNoLineThatWouldDownload(t *testing.T) {
 			}),
 			refusal: "curl",
 		},
+		{
+			name: "the read and the shape check the workflow runs",
+			script: slices.Concat(auditGoModReadStep, []string{
+				`if ! [[ "${gomod_go}" =~ ^1\.[0-9]+(\.[0-9]+)?$ ]]; then`,
+				`  echo "::error title=Audit checks::go.mod's go line read as no Go version: see runbook step 11"`,
+				`  exit 1`,
+				`fi`,
+				install,
+			}),
+		},
+		{
+			name: "a command line that ends in ) outside any case block",
+			script: slices.Concat(auditGoModReadStep[:5], []string{
+				`./script.sh $(true)`,
+			}, auditGoModReadStep[5:], []string{install}),
+			refusal: "./script.sh",
+			reason:  "no case ... in line stands open above it",
+		},
+		{
+			name: "a command line that quotes a substitution, outside any case block",
+			script: slices.Concat(auditGoModReadStep[:5], []string{
+				`./script.sh "$(true)"`,
+			}, auditGoModReadStep[5:], []string{install}),
+			refusal: "./script.sh",
+		},
+		{
+			name:    "a ;; line outside any case block",
+			script:  slices.Concat(auditGoModReadStep, []string{";;", install}),
+			refusal: ";;",
+			reason:  "no case ... in line stands open above it",
+		},
+		{
+			name: "a go mod download in an if condition",
+			script: slices.Concat(auditGoModReadStep, []string{
+				`if go mod download; then`,
+				`  echo "::error title=Audit checks::the modules could not be downloaded"`,
+				`  exit 1`,
+				`fi`,
+				install,
+			}),
+			refusal: "go mod download",
+			reason:  `which names "go mod download"`,
+		},
+		{
+			name: "a go get in an echo's command substitution",
+			script: slices.Concat(auditGoModReadStep, []string{
+				`echo "::error title=Audit checks::$(go get example.com/x@v1)"`,
+				install,
+			}),
+			refusal: "go get",
+			reason:  `which names "go get"`,
+		},
+		{
+			name:    "a git fetch line",
+			script:  slices.Concat(auditGoModReadStep, []string{`git fetch origin`, install}),
+			refusal: "git ",
+			reason:  `which names "git "`,
+		},
+		{
+			name:    "a gh api line",
+			script:  slices.Concat(auditGoModReadStep, []string{`gh api repos/example/repo`, install}),
+			refusal: "gh ",
+			reason:  `which names "gh "`,
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -310,6 +474,81 @@ func TestAuditGoModReadFragmentHoldsNoLineThatWouldDownload(t *testing.T) {
 
 			if !strings.Contains(problem, tc.refusal) {
 				t.Errorf("auditGoModReadFragmentOf(a step whose fragment holds %s) = %q, want a message naming %q: the refusal must say which line would reach the network (issue #710)", tc.refusal, problem, tc.refusal)
+			}
+
+			// A line whose own text holds the refusal word - a git
+			// command, a pattern that ends in ) - is refused by the
+			// message it gets as well, so the reason the case pins
+			// stands in the message and not in the quoted line.
+			if tc.reason != "" && !strings.Contains(problem, tc.reason) {
+				t.Errorf("auditGoModReadFragmentOf(a step whose fragment holds %s) = %q, want a message saying %q: without it the line is refused as a command line the fragment may not hold, not as the line it is (issue #710)", tc.refusal, problem, tc.reason)
+			}
+		})
+	}
+}
+
+// TestAuditFragmentDownloadNamesOnlyTheWordsThatFetch pins the words the
+// fragment's download check refuses (issue #710): the verbs that fetch - go's
+// download, get and run, with git and gh, beside the file downloads - each name a
+// line the test may not run, while the words the read and its checks need, go
+// list -m among them, name none. A word counts only where it stands whole, so a
+// word that merely ends in git or begins with go get names no fetch.
+func TestAuditFragmentDownloadNamesOnlyTheWordsThatFetch(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name string
+		line string
+		want string
+	}{
+		{
+			name: "the read the workflow really runs",
+			line: `gomod_go="$(GOWORK=off go list -m -f '{{.GoVersion}}')" || gomod_go=""`,
+		},
+		{
+			name: "a go mod download",
+			line: `go mod download`,
+			want: "go mod download",
+		},
+		{
+			name: "a go get",
+			line: `go get example.com/x@v1`,
+			want: "go get",
+		},
+		{
+			name: "a go run",
+			line: `go run example.com/x@v1`,
+			want: "go run",
+		},
+		{
+			name: "a git fetch",
+			line: `git fetch origin`,
+			want: "git ",
+		},
+		{
+			name: "a gh api call",
+			line: `gh api repos/example/repo`,
+			want: "gh ",
+		},
+		{
+			name: "a word that ends in git inside another word",
+			line: `echo digit fetch`,
+		},
+		{
+			name: "a word beside gh",
+			line: `echo sorghum tail`,
+		},
+		{
+			name: "a word that begins with go get",
+			line: `go getter`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := auditFragmentDownload(tc.line); got != tc.want {
+				t.Errorf("auditFragmentDownload(%q) = %q, want %q: the fragment runs under this test with the system paths on PATH, so a line that fetches in full is refused for the word it names, and a word the read or its checks hold inside another one names no fetch (issue #710)",
+					tc.line, got, tc.want)
 			}
 		})
 	}
