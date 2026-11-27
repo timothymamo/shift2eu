@@ -3481,7 +3481,7 @@ var awsRoute53Calls = map[string][]string{
 // awsRoute53RoutingMarkers are the fields a record set of a hosted zone carries
 // when it routes by client or by health rather than answering the same way for
 // every client: a set identifier (weighted, latency, failover, geolocation,
-// geoproximity, IP-based, multivalue answer and AZ-affinity routing all need one),
+// geoproximity, IP-based and multivalue answer routing all need one),
 // a health check, a multivalue answer, and a TrafficPolicyInstanceId, which a
 // record set a Route 53 traffic policy created carries because its routing lives
 // in the policy (PRD #581, *The AWS classification*). The guide's --query counts
