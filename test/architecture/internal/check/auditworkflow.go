@@ -566,27 +566,46 @@ var (
 	// pulls endpoint, one page of 100 at a time, and keeps Renovate's own
 	// (renovate[bot]) with the named fields alone; the search endpoint it read
 	// before answered the first audit run with the Dependency Dashboard issue
-	// and no pull request, so it is refused. A page's unfiltered length decides
-	// whether another follows, and past ten pages a limits line says what was
+	// and no pull request, so it is refused. A page skipped or refused ends the
+	// pages before any count is read; a page's unfiltered length, read once and
+	// guarded so a count that is no number is a limits line, decides whether
+	// another follows; and a full tenth page is a limits line saying what was
 	// not read, never a clean answer.
 	renovatePullsRead = command(wholeLine(`read_api "renovate-pull-requests-${page}" "repos/${GH_REPO}/pulls?state=open&per_page=100&page=${page}" '{count: length, renovate: [.[] | select(.user.login == "renovate[bot]") | {number, title, draft, created_at, updated_at, head: .head.ref, labels: [.labels[].name]}]}'`),
 		`read_api "renovate-pull-requests-${page}" "repos/${GH_REPO}/pulls?state=open&per_page=100&page=${page}" '{count: length, renovate: [.[] | select(.user.login == "renovate[bot]") | {number, title, draft, created_at, updated_at, head: .head.ref, labels: [.labels[].name]}]}', on a line of its own: `+
 			`the open pull requests through the pulls endpoint (pulls?state=open), never the search endpoint (search/issues), which answered with the Dependency Dashboard issue alone, each page's unfiltered count beside Renovate's own (select(.user.login == "renovate[bot]")) with the named fields alone (issue #660, ADR 0040)`)
 	renovatePullsStop = command(`(?m)^[ \t]*`+wholeLines(
-		`if [ ! -f "${out}/api/renovate-pull-requests-${page}.exit" ] || [ "$(cat "${out}/api/renovate-pull-requests-${page}.exit")" != 0 ] || [ "$(jq '.count' "${out}/api/renovate-pull-requests-${page}.json")" -lt 100 ]; then`,
+		`if [ ! -f "${out}/api/renovate-pull-requests-${page}.exit" ] || [ "$(cat "${out}/api/renovate-pull-requests-${page}.exit")" != 0 ]; then`,
 		`break`,
 		`fi`)+`$`,
-		`the pages' stop condition, each on a line of its own: `+
-			`if [ ! -f "${out}/api/renovate-pull-requests-${page}.exit" ] || [ "$(cat "${out}/api/renovate-pull-requests-${page}.exit")" != 0 ] || [ "$(jq '.count' "${out}/api/renovate-pull-requests-${page}.json")" -lt 100 ]; then, break and fi: `+
-			`a page the budget skipped, one the API refused and one of fewer than 100 pull requests (-lt 100) end the pages (issue #660, ADR 0040)`)
+		`the pages' stop before any count is read, each on a line of its own: `+
+			`if [ ! -f "${out}/api/renovate-pull-requests-${page}.exit" ] || [ "$(cat "${out}/api/renovate-pull-requests-${page}.exit")" != 0 ]; then, break and fi: `+
+			`a page the budget skipped and one the API refused end the pages (issue #660, ADR 0040)`)
+	renovatePullsCount = command(`(?m)^[ \t]*`+wholeLines(
+		`count="$(jq '.count' "${out}/api/renovate-pull-requests-${page}.json" 2> /dev/null || true)"`,
+		`if [[ ! "${count}" =~ ^[0-9]+$ ]]; then`,
+		`echo "supply-chain: page ${page} of the open pull requests answered no count" >> "${results}/limits.txt"`,
+		`break`,
+		`fi`)+`$`,
+		`the page's count read once and its guard, each on a line of its own: `+
+			`count="$(jq '.count' "${out}/api/renovate-pull-requests-${page}.json" 2> /dev/null || true)", `+
+			`if [[ ! "${count}" =~ ^[0-9]+$ ]]; then, `+
+			`echo "supply-chain: page ${page} of the open pull requests answered no count" >> "${results}/limits.txt", break and fi: `+
+			`a page that answered no count is said in the limits and ends the pages, never compared as a word that is no number (issue #660, ADR 0040)`)
+	renovatePullsUnder = command(`(?m)^[ \t]*`+wholeLines(
+		`if [ "${count}" -lt 100 ]; then`,
+		`break`,
+		`fi`)+`$`,
+		`the last page's test, each on a line of its own: if [ "${count}" -lt 100 ]; then, break and fi: `+
+			`a page of fewer than 100 pull requests (-lt 100) ends the pages (issue #660, ADR 0040)`)
 	renovatePullsLimit = command(`(?m)^[ \t]*`+wholeLines(
 		`if [ "${page}" -ge 10 ]; then`,
-		`echo "supply-chain: more than 1000 open pull requests: Renovate's past the tenth page were not read" >> "${results}/limits.txt"`,
+		`echo "supply-chain: the tenth page of 100 open pull requests was full: Renovate's past it, if any, were not read" >> "${results}/limits.txt"`,
 		`break`,
 		`fi`)+`$`,
 		`the ten-page limit, each on a line of its own: if [ "${page}" -ge 10 ]; then, `+
-			`echo "supply-chain: more than 1000 open pull requests: Renovate's past the tenth page were not read" >> "${results}/limits.txt", break and fi: `+
-			`the pages stop at ten, and a repository with more than 1000 open pull requests is said in the limits, never read as a clean answer (issue #660, ADR 0040)`)
+			`echo "supply-chain: the tenth page of 100 open pull requests was full: Renovate's past it, if any, were not read" >> "${results}/limits.txt", break and fi: `+
+			`the pages stop at ten, and a full tenth page is said in the limits, never read as a clean answer (issue #660, ADR 0040)`)
 	renovateSearchRead = command(`search/issues`,
 		`a read of the search endpoint (search/issues): it answered the first audit run with the Dependency Dashboard issue and no pull request, so row 15 lists Renovate's open pull requests through the pulls endpoint (pulls?state=open) (issue #660, ADR 0040)`)
 
@@ -853,13 +872,14 @@ var auditJobs = []auditJob{
 				name: "Supply-chain reads", githubToken: true,
 				runs: append([]auditCommand{
 					readAPIFilter, readAPIBudget, readAPIJq, rulesetShape, rulesetRead,
-					renovateDashboardRead, renovatePullsRead, renovatePullsStop, renovatePullsLimit,
-					renovateDashboardMissing, readSkippedLimits,
+					renovateDashboardRead, renovatePullsRead, renovatePullsStop, renovatePullsCount,
+					renovatePullsUnder, renovatePullsLimit, renovateDashboardMissing, readSkippedLimits,
 				}, namesReads...),
 				refuses: []auditCommand{renovateSearchRead},
 				order: []auditCommand{
 					readAPIFilter, readAPIBudget, readAPIJq, rulesetShape, rulesetRead, renovateDashboardRead,
-					renovatePullsRead, renovatePullsStop, renovatePullsLimit, renovateDashboardMissing, readSkippedLimits,
+					renovatePullsRead, renovatePullsStop, renovatePullsCount, renovatePullsUnder, renovatePullsLimit,
+					renovateDashboardMissing, readSkippedLimits,
 				},
 			},
 			{

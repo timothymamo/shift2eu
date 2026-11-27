@@ -3073,8 +3073,11 @@ scope above should allow is a finding, and a scope no read used is dropped.
   (`repos/{owner}/{repo}/pulls?state=open&per_page=100&page=N`, issue #660: each page's unfiltered
   `count` beside Renovate's own, `select(.user.login == "renovate[bot]")`, with the named fields alone:
   `number`, `title`, `draft`, `created_at`, `updated_at`, the head ref and the label names; a page the
-  budget skipped, one refused and one of fewer than 100 end the pages, and past ten pages the limits line
-  `supply-chain: more than 1000 open pull requests: Renovate's past the tenth page were not read`); and `git diff` of the
+  budget skipped and one refused end the pages before any count is read; the count is read once, and a
+  page whose count is no number writes the limits line `supply-chain: page ${page} of the open pull
+  requests answered no count` and ends them; a page of fewer than 100 is the last; and a full tenth page
+  writes the limits line `supply-chain: the tenth page of 100 open pull requests was full: Renovate's past
+  it, if any, were not read`); and `git diff` of the
   dependency files (`go.mod`, `go.sum`, `tools/`, `Dockerfile`, the workflows, the Claude Code pin,
   `dev/lima.yaml`, `infra/tofu.yaml`) from the commit of the last report under `docs/security/audits/`.
 
@@ -3543,8 +3546,14 @@ its step, and by a case of its test:
   `search/issues?q=repo:...+is:pr+is:open+author:app/renovate`, which answered the first audit run with
   the Dependency Dashboard issue and no pull request. They are now listed through the pulls endpoint,
   `repos/{owner}/{repo}/pulls?state=open`, one page of 100 at a time, kept to `renovate[bot]`'s with the
-  named fields alone, for ten pages at most and a limits line past them; `check.AuditWorkflow` pins the
-  read, its stop condition and the ten-page limit whole-line, and refuses `search/issues` in the step.
+  named fields alone, for ten pages at most. A page skipped or refused ends the pages before any count is
+  read; a page whose `.count` is no number (so `[ "" -lt 100 ]` would be false and the loop would read
+  on) writes `supply-chain: page ${page} of the open pull requests answered no count` to the limits and
+  ends them; a page of fewer than 100 is the last; and a full tenth page writes `supply-chain: the tenth
+  page of 100 open pull requests was full: Renovate's past it, if any, were not read`, since the loop
+  never knows whether an eleventh holds anything. `check.AuditWorkflow` pins, whole-line and in order, the
+  read, the exit and refusal stop, the count read with its guard and limits line, the under-100 test and
+  the ten-page limit with its limits line, and refuses `search/issues` in the step.
 - **Point 10, row 9's failed unpack.** After a non-zero unpack the loop still counted and scanned the part
   of a member `head -c` had written, and a 124 was recorded as `tool-failed`. The branch now records 124
   as `timed-out` and any other exit as `tool-failed`, writes `binary-vulnerabilities: ${name} was not
