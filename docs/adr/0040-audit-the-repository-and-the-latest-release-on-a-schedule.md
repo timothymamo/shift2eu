@@ -4211,7 +4211,9 @@ scan raised test values on every run.
   names go.mod's Go as `GOTOOLCHAIN=go<version>`. Since issue #687 (2026-11-27) it reads that version
   from go.mod's go line at install in the checkout; since issue #710 the step reads it once,
   `GOWORK=off go list -m -f '{{.GoVersion}}'`, into a variable, fails the run with an `::error` when the
-  read gives nothing or more than one line, and installs with `GOTOOLCHAIN="go${gomod_go}"`, so the workflow names no Go version of its own: no second copy, no `# renovate:` comment and no
+  read gives nothing, more than one line or no Go version (`1.<n>` or `1.<n>.<p>`), and installs with
+  `GOTOOLCHAIN="go${gomod_go}"`, so the workflow names no Go version of its own: no second copy, no
+  `# renovate:` comment and no
   Renovate matchString keep one in step (`test/architecture` refuses a literal `go1.<n>` anywhere in the
   workflow, `test/lint` any customManager that matches a `GOTOOLCHAIN=` line). It stays in row 2's step
   because after the module download every Go command runs with `GOPROXY=off`, and `go install
