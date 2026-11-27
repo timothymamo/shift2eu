@@ -273,8 +273,9 @@ func piTesterSameCopy(file piFile, installed string) bool {
 // pair per project copy that is missing or differs, and none for a copy that matches, so a maintainer is sent to
 // update exactly the files that need it (round 2 of the review and the audit).
 //
-// The wording is pinned against the audit's finding too: pi still discovers the project's .pi/extensions beside
-// the installed extension, so the line may not say the project's copies are ignored.
+// The wording is pinned against the audit's finding too: the line may not say the project's copies are ignored, and
+// since issue #702 it says what the wrapper settles - pi runs no extension and applies no trusted setting of the
+// project - and no more, since pi still reads the project's .pi/settings.json as data before trust.
 func TestPiTesterIgnoresTheProjectsCopies(t *testing.T) {
 	t.Parallel()
 
@@ -447,18 +448,20 @@ func TestPiTesterIgnoresTheProjectsCopies(t *testing.T) {
 				}
 			}
 
-			// The audit's finding: pi still discovers the project's .pi/extensions beside the installed extension
-			// that --approve trusts, so the line may not claim the project's copies are ignored.
+			// The audit's finding: the line may not claim the project's copies are ignored, whatever pi now does with
+			// them, so it says only what the wrapper settles (issue #692, the audit's round 2).
 			if strings.Contains(strings.ToLower(line), "ignoring") {
-				t.Errorf("the wrapper's one line is %q, whose wording says it ignores the project copies: pi still discovers the project's .pi/extensions, so a maintainer must not be told those copies play no part (issue #692, the audit's round 2)", line)
+				t.Errorf("the wrapper's one line is %q, whose wording says it ignores the project copies: a maintainer must not be told those copies play no part (issue #692, the audit's round 2)", line)
 			}
 
-			// Issue #702: pi loads no extension and no setting of the project any more, so the line says so, and the
-			// clause it carried before (pi still loads the project's .pi/extensions) is gone.
-			const noProjectLoad = "the checks and --extension use the installed copies, and pi loads no extension or setting of the project (--no-extensions, --no-approve: ADR 0044, issue #702)"
+			// Issue #702: pi runs no extension and applies no trust-gated setting of the project any more, so the line
+			// says so, and the clause it carried before (pi still loads the project's .pi/extensions) is gone. The
+			// wording names what the wrapper really settles: pi still reads the project's .pi/settings.json as data
+			// before trust (sessionDir, the startup UI, first-time setup), which --no-approve cannot stop.
+			const noProjectLoad = "the checks and --extension use the installed copies, and pi loads no extension and no trusted setting of the project (--no-extensions, --no-approve: ADR 0044, issue #702)"
 
 			if !strings.Contains(line, noProjectLoad) {
-				t.Errorf("the wrapper's one line is %q, which does not say %q: pi loads no extension and no setting of the unit folder since issue #702, so a maintainer must not be told the project's copies still reach pi (ADR 0044)", line, noProjectLoad)
+				t.Errorf("the wrapper's one line is %q, which does not say %q: pi loads no extension and applies no trusted setting of the unit folder since issue #702, so a maintainer must not be told the project's copies still reach pi, nor that pi reads nothing of the project at all (ADR 0044)", line, noProjectLoad)
 			}
 
 			if strings.Contains(line, "pi still loads the .pi/extensions of the project too") {
