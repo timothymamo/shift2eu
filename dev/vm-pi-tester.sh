@@ -18,8 +18,9 @@
 #   1. writes the three files to a temporary directory, and refuses them unless sh -n parses the wrapper and
 #      its last line is the wrapper's exec line;
 #   2. creates /usr/local/lib/shift2eu/pi-tester and its extensions directory, root-owned 0755;
-#   3. installs each file, root-owned (the two refusal files 0644 first, then the wrapper 0755), as a .new file
-#      beside its destination and moves it over the destination, so a tester started meanwhile finds either the
+#   3. installs each file, root-owned (the two refusal files 0644 first, then the wrapper 0755), as a hidden
+#      .<name>.new file beside its destination (dev/lima.yaml's step uses the visible <name>.new instead) and
+#      moves it over the destination with mv -f, so a tester started meanwhile finds either the
 #      old file or the new one, never none or half of one;
 #   4. prints the directory it installed into and "vm-pi-tester: done", which the make recipe requires.
 # Running it again changes nothing. SHIFT2EU_PI_TESTER_ROOT, empty by default, is a prefix for
