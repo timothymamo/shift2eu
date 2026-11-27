@@ -393,7 +393,7 @@ func TestRunAssessToFile(t *testing.T) {
 			t.Fatalf("the report file was not written: %v", err)
 		}
 
-		// A PDF is binary: the file holds the reporter's bytes, never a text
+		// The file holds the pdf reporter's bytes exactly, never a
 		// rendering of them.
 		if !bytes.Equal(got, []byte(pdfReportBody)) {
 			t.Errorf("report file = %q, want the pdf reporter's bytes %q", got, pdfReportBody)

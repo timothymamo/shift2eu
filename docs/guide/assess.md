@@ -78,8 +78,8 @@ number. It is A4, uses the PDF's standard fonts (values from the inventory and t
 and holds no creation date, link, script, form or embedded file, so the same inventory and options give
 the same bytes on every run of the same build. A resource's estimate details say whether its hours were assumed (730 a
 month) or given by the inventory, and any billing cap, but do not print the hours the inventory gives.
-The PDF goes to standard output or, with `--output`, to the file, exactly as the other formats; it is
-binary, so redirect it or use `--output` rather than letting it reach a terminal. With several targets
+The PDF goes to standard output or, with `--output`, to the file, exactly as the other formats; use
+`--output` or a redirect to keep it as a file. With several targets
 (`--target all` or a list) it is the comparison report, followed by each target's own report. The PDF
 has no schema version: `--format pdf --schema-version` is a usage error (exit code 2), and nothing is
 written.

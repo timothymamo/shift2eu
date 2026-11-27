@@ -144,8 +144,8 @@ Flags of assess:
   --format <format>   The report format, one of: %s.
                       The default is %s. json is the versioned JSON
                       report of docs/adr/0018; pdf is the PDF report of
-                      docs/adr/0049, binary bytes: use --output or a
-                      redirect rather than a terminal.
+                      docs/adr/0049: use --output or a redirect to keep
+                      it as a file.
   --output <file>     Write the report to this file, with mode 0600, instead of
                       standard output. An existing regular file, a symbolic
                       link to one or a dangling link is replaced only once the
