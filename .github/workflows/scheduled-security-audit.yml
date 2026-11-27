@@ -1182,10 +1182,11 @@ jobs:
       # its pull requests filtered out, and a limits line when no open dashboard issue answered;
       # Renovate's open pull requests, listed through the pulls endpoint (pulls?state=open) page by
       # page and kept to renovate[bot]'s with the named fields alone, ten pages of 100 at most, a
-      # limits line for a page that answered no count and one when the tenth page was full; and the dependency files changed since the last report. Reads only, with the job's
-      # token: a read it is refused is recorded in read-refused.txt and the limits, "not run (read
-      # refused)" for that read, and a read the step's budget ran out on in read-skipped.txt and the
-      # limits, so that a permission that is fine is never chased for it.
+      # limits line for a page that answered no count and one when the tenth page was full; and the
+      # dependency files changed since the last report. Reads only, with the job's token: a read it
+      # is refused is recorded in read-refused.txt and the limits, "not run (read refused)" for that
+      # read, and a read the step's budget ran out on in read-skipped.txt and the limits, so that a
+      # permission that is fine is never chased for it.
       - name: Supply-chain reads
         timeout-minutes: 15
         env:
