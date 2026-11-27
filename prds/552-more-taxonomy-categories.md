@@ -539,7 +539,7 @@ fit `none` with "no offering in the <target> catalog", which is already more pre
    capability; *File Storage* and *File Storage Encrypted* (`encryption-at-rest`), €0.15 a GiB, not in
    `es-mad1` or `pl-waw1`. Departures (*To be checked*): no Production variant of the load balancer, since
    its failover is not confirmed; neither `udp` nor `ipv6` on it; the 3-node Valkey plans stay out, so a
-   3-node cache is priced at most 1.5% low; and a cache that needs nothing the tiers differ on ties both
+   3-node cache is priced at most 1.9% low; and a cache that needs nothing the tiers differ on ties both
    tiers, so the estimate can take the 2-node per-node price, up to 5.6% below the 1-node plan, which
    decided question 10 accepts until issue #558 and `SOURCES.md` records. Every existing price was
    re-read from the same copy and none changed, so the snapshot's retrieved date moves to 2026-11-27

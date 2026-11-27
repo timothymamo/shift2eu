@@ -654,9 +654,10 @@ can claim (*Left out on purpose*, Production), so there is no variant.
 - No capability. `udp`: "mode tcp / http ... When load balancer operating in tcp mode it acts as a layer
   4 proxy. In http mode it acts as a layer 7 proxy." (API reference, frontend attributes) and "Select
   between HTTP(S) and TCP modes" (getting-started guide); no page names UDP. `ipv6`: "Currently only IPv4
-  network family is supported." (API reference, networks), so a frontend cannot take IPv6 traffic, though
-  backend members accept "IPv4 / IPv6 address". `zone-high-availability`: a load balancer is created in one
-  zone ("Location is the data centre in which the Load Balancer will be created", getting-started guide),
+  network family is supported." (API reference, the load balancer's `networks` attribute), so the
+  service's networks, public and private, are IPv4 only, though backend members accept "IPv4 / IPv6
+  address". `zone-high-availability`: a load balancer is created in one zone ("Location is the data
+  centre in which the Load Balancer will be created", getting-started guide),
   and a floating IP "must be in the same location as the load balancer" (hostnames page). **Needs:**
   nothing.
 - Regions `de-fra1`, `dk-cph1`, `es-mad1`, `fi-hel1`, `fi-hel2`, `nl-ams1`, `pl-waw1`, `se-sto1`: the
@@ -1115,8 +1116,9 @@ nodes. Pages: <https://upcloud.com/docs/products/managed-valkey/high-availabilit
   storage price, 36 hours of backups per plan. There is no 1 GiB 2-node plan.
 - **Fixed node counts** (decided question 10, issue #558): exactly 2 or 3 nodes. The 3-node plans are not
   in the snapshot (decision D1: their plan names would tie the 2-node ones on memory, and matching takes
-  the cheapest). A 3-node cache priced at `count` 3 × the 2-node per-node price is low by at most 1.5%
-  (4 GiB: 3 × 86.1806 = 258.54 against the 3-node per-node 87.8704 × 3 = 263.61). A cache with `count` 1,
+  the cheapest). A 3-node cache priced at `count` 3 × the 2-node per-node price is low by at most 1.9%
+  (4 GiB: 3 × 86.1806 = 258.54 against the 3-node per-node 87.8704 × 3 = 263.61, 1.92% low; 8 GiB 1.43%,
+  14 GiB 1.06%, 56 GiB 0.28%, 2, 28 and 112 GiB 0%). A cache with `count` 1,
   or none, priced here is priced at one node, half of what UpCloud bills.
 - **The tie under-estimate** (decision D6, accepted under decided question 10 until issue #558, as
   Scaleway's milestone 6 records). A cache that needs neither `node-high-availability` nor anything else
