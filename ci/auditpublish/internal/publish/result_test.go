@@ -1243,7 +1243,9 @@ func fileInFinding(file string) func(*testing.T) []byte {
 // repository, .github/workflows/ci.yml and .dot-agent-deck.toml among them, and
 // the report renders such a finding like any other; a segment that is a dot
 // itself, and the paths that hold one, are refused, as is every character
-// outside the allowed set and every byte the text rule refuses. Each refusal
+// outside the allowed set and every byte the text rule refuses. Only the two
+// segments . and .. traverse, so a segment of dots and more, ... among them, is
+// a file name like any other and is accepted. Each refusal
 // wraps ErrResultInvalid, names the field and echoes no value.
 func TestParseResultFilePath(t *testing.T) {
 	t.Parallel()
@@ -1263,6 +1265,14 @@ func TestParseResultFilePath(t *testing.T) {
 		{name: "a dot segment in the middle", file: "a/.hidden/b"},
 		{name: "a dot inside a name, never at its start", file: "docs/adr/0040-scheduled-security-audit.md"},
 		{name: "every segment a dotfile", file: ".github/.hidden/.env.example"},
+		{name: "a segment of three dots, a legal file name", file: "..."},
+		{name: "a three-dot directory and a file", file: ".../x"},
+		{name: "a three-dot segment at the end", file: "a/..."},
+		{name: "a segment of dots and a letter", file: ".a..b"},
+		{name: "a dot then a dash", file: ".-x"},
+		{name: "a dot then a plus", file: ".+x"},
+		{name: "a dot then a colon", file: ".:x"},
+		{name: "a dot then an at sign", file: ".@x"},
 
 		// Refused: a segment that is a dot, and the paths that hold one.
 		{name: "a lone dot", file: ".", wantRefused: true},
@@ -1273,6 +1283,9 @@ func TestParseResultFilePath(t *testing.T) {
 		{name: "a current segment in the middle", file: "a/./b", wantRefused: true},
 		{name: "a parent segment at the end", file: "a/..", wantRefused: true},
 		{name: "a current segment at the end", file: "a/.", wantRefused: true},
+		{name: "a current segment first and a current segment last", file: "./.", wantRefused: true},
+		{name: "a current segment and a parent segment", file: "./..", wantRefused: true},
+		{name: "three dots inside a traverse", file: ".../../x", wantRefused: true},
 		{name: "an absolute path", file: "/x", wantRefused: true},
 		{name: "an empty segment", file: "a//b", wantRefused: true},
 		{name: "a trailing slash", file: "a/", wantRefused: true},
