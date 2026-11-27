@@ -25,10 +25,9 @@ import (
 // filter that keeps the named fields alone.
 //
 // The test takes the read out of the workflow the release runs, checks that it
-// calls the pulls endpoint with that filter, and runs the filter against answers
-// in the shape GitHub gives, synthesized and sanitised here: a pulls page
-// holding a pull request by renovate[bot] and one by another author, and a
-// search answer holding the Dependency Dashboard issue beside a pull request.
+// calls the pulls endpoint with that filter, and runs the filter against an
+// answer in the shape the pulls endpoint gives, synthesized and sanitised here: a
+// pulls page holding a pull request by renovate[bot] and one by another author.
 // It lives in the e2e tier, beside the tests that run the guide's jq programs,
 // because it starts a process and needs the jq the workflow's own step calls,
 // which the default tests never require.
@@ -41,11 +40,6 @@ const (
 	// synthesized here: the repository's open pull requests, Renovate's first and
 	// another author's second, every field the API answers with.
 	auditRenovatePullsAnswer = "testdata/audit-renovate/pulls-page-1.json"
-	// auditRenovateSearchAnswer is an answer in the shape the search endpoint
-	// gives, synthesized here: the Dependency Dashboard issue by renovate[bot]
-	// and one of its pull requests, beside each other in one list of items. It is
-	// the answer the read used to be run against.
-	auditRenovateSearchAnswer = "testdata/audit-renovate/search-issues.json"
 	// auditRenovatePullsEndpoint is the endpoint the read must call: the open pull
 	// requests of the repository, 100 to a page, the page number a variable the
 	// workflow's own loop advances.
@@ -118,50 +112,6 @@ func TestScheduledSecurityAuditReadsRenovatesPullRequests(t *testing.T) {
 			t.Errorf("the read's filter on %s gives (-want +got):\n%s\n"+
 				"want count 2, the page's two pull requests, beside Renovate's one alone, its named fields and its head ref, and no body, and never the other author's pull request",
 				auditRenovatePullsAnswer, diff)
-		}
-	})
-
-	// The search answer illustrates why the old search read was wrong: it holds
-	// an issue beside a pull request, and neither has a head ref. The read the
-	// workflow makes is pinned above; this subtest pins no behaviour of the
-	// workflow and only shows the answer the search endpoint gave.
-	t.Run("the search answer", func(t *testing.T) {
-		t.Parallel()
-
-		answer := readAuditRenovateAnswer(t, auditRenovateSearchAnswer)
-
-		// The search endpoint answers with an object whose items: holds the
-		// issues and the pull requests alike, so the same filter reads .items.
-		got := decodeAuditRenovateAnswer(t, auditJQ(t, jq, ".items | "+auditRenovateFilterOrNothing(filter), answer))
-
-		want := map[string]any{
-			"count": float64(2),
-			"renovate": []any{
-				map[string]any{
-					"number":     float64(1),
-					"title":      "Dependency Dashboard",
-					"draft":      nil,
-					"created_at": "2024-01-01T00:00:00Z",
-					"updated_at": "2024-01-02T00:00:00Z",
-					"head":       nil,
-					"labels":     []any{"dependencies"},
-				},
-				map[string]any{
-					"number":     float64(2),
-					"title":      "Update example dependency to 2.0.0",
-					"draft":      nil,
-					"created_at": "2024-01-03T00:00:00Z",
-					"updated_at": "2024-01-04T00:00:00Z",
-					"head":       nil,
-					"labels":     []any{"dependencies"},
-				},
-			},
-		}
-
-		if diff := cmp.Diff(want, got); diff != "" {
-			t.Errorf("the read's filter on %s gives (-want +got):\n%s\n"+
-				"the search answer keeps the Dependency Dashboard issue beside a pull request and gives neither a head ref, which is why the read asks the pulls endpoint, whose answer holds pull requests alone",
-				auditRenovateSearchAnswer, diff)
 		}
 	})
 }
