@@ -22,9 +22,11 @@
 // pointed at, never a file to open, and `find` with a pattern names the names the walk
 // under its path reports. From the repository, both read the repository's own
 // dev/agents-app-token.sh and nothing under the home directory, so a pattern naming
-// the App's files is allowed there; a `glob` still selects files wherever the walk
-// goes, and a path that is the folder, under it, or an ancestor of it is still
-// refused.
+// the App's files is allowed there. A `glob` is no second way in either (issue #691):
+// it only filters the names of the files the walk reaches, so it opens nothing the
+// walk would not report anyway; where the walk goes is its `path`, and a path that is
+// the folder, under it, or an ancestor of it is still refused, as is a `path` naming
+// the App's file or folder.
 //
 // The extension reads the home directory with node's homedir(), which is the HOME
 // this test hands node: the fake home is an empty directory of this test's own, so
@@ -124,10 +126,11 @@ type piToolCallDecision struct {
 
 // TestPiEnvDenyExtensionRefusesTheAppTokenFolderOfFileTools pins the App's token
 // file against pi's file tools: the file itself, the folder under the home directory
-// that holds it, anything else in that folder, a grep or find pointed at the folder or
-// at an ancestor of it, and a glob that names the folder's files are all refused; a
-// search pattern that names them is not, and neither is the repository's own script of
-// that name, since it mints the token and holds none (issue #662, finding S1).
+// that holds it, anything else in that folder, and a grep or find pointed at the
+// folder, into it or at an ancestor of it are all refused; a search pattern that names
+// them is not, and neither is a glob, which only filters the names the walk reports,
+// nor is the repository's own script of that name, since it mints the token and holds
+// none (issue #662, finding S1; issue #691).
 func TestPiEnvDenyExtensionRefusesTheAppTokenFolderOfFileTools(t *testing.T) {
 	t.Parallel()
 
@@ -183,6 +186,11 @@ func TestPiEnvDenyExtensionRefusesTheAppTokenFolderOfFileTools(t *testing.T) {
 		// grep and find read the contents of the tree they are pointed at, so the
 		// folder, an ancestor of it and a pattern that names it are each a way in.
 		{
+			name:    "grep a file of the folder that holds the App's token",
+			call:    piToolCall{ToolName: "grep", Input: map[string]string{"path": "~/" + shift2euConfigFolder + "/" + shift2euAppFile, "pattern": "token"}},
+			refused: true,
+		},
+		{
 			name:    "grep the folder that holds the App's token",
 			call:    piToolCall{ToolName: "grep", Input: map[string]string{"path": "~/" + shift2euConfigFolder, "pattern": "token"}},
 			refused: true,
@@ -217,8 +225,21 @@ func TestPiEnvDenyExtensionRefusesTheAppTokenFolderOfFileTools(t *testing.T) {
 			call: piToolCall{ToolName: "grep", Input: map[string]string{"path": root, "pattern": appFolderPattern}},
 		},
 		{
-			name:    "grep of the repository with a glob naming the token file",
-			call:    piToolCall{ToolName: "grep", Input: map[string]string{"path": root, "glob": "agents-app-t*"}},
+			// A glob is a name filter over the files the walk reaches, not a place the walk goes
+			// (issue #691): from the repository it selects the script that mints the token and
+			// nothing under the home directory, so refusing it adds cost and no boundary.
+			name: "grep of the repository with a glob naming the token file",
+			call: piToolCall{ToolName: "grep", Input: map[string]string{"path": root, "glob": "agents-app-t*"}},
+		},
+		{
+			name: "grep of the repository with a glob naming the App's folder",
+			call: piToolCall{ToolName: "grep", Input: map[string]string{"path": root, "glob": shift2euConfigFolder + "/*"}},
+		},
+		{
+			// The glob filters names wherever the walk goes, so the home directory's walk still
+			// reaches the folder: the path is what the refusal is for, and it stays refused.
+			name:    "grep of the home directory with a glob naming the token file",
+			call:    piToolCall{ToolName: "grep", Input: map[string]string{"path": "~", "glob": "agents-app-t*"}},
 			refused: true,
 		},
 		// A find's pattern is a name the walk reports, not a file it opens, and a walk of
@@ -293,7 +314,7 @@ func TestPiEnvDenyExtensionRefusesTheAppTokenFolderOfFileTools(t *testing.T) {
 
 			if tc.refused {
 				if !decision.Blocked {
-					t.Errorf("the extension allows %s of %v, which reaches the App's token file %s under the home directory: that one GitHub credential is what every agent pushes with, so a file tool pointed at the token, at the folder that holds it, at an ancestor a walk passes through or at a glob naming it has to be refused as a read of the deck's %s is (issue #662, ADR 0031, CLAUDE.md rule 3)",
+					t.Errorf("the extension allows %s of %v, which reaches the App's token file %s under the home directory: that one GitHub credential is what every agent pushes with, so a file tool pointed at the token, at the folder that holds it, or at an ancestor a walk passes through has to be refused as a read of the deck's %s is (issue #662, ADR 0031, CLAUDE.md rule 3)",
 						tc.call.ToolName, tc.call.Input, "~/.config/shift2eu/agents-app-token", "daemon.env")
 				}
 
@@ -301,7 +322,7 @@ func TestPiEnvDenyExtensionRefusesTheAppTokenFolderOfFileTools(t *testing.T) {
 			}
 
 			if decision.Blocked {
-				t.Errorf("the extension refuses %s of %v, which reads no credential: a walk of the repository finds the script that mints the token and holds none, a pattern names text to look for rather than a file to open, and a refusal here stops the agents' work (issue #662, CLAUDE.md rule 3); it said: %s",
+				t.Errorf("the extension refuses %s of %v, which reads no credential: a walk of the repository finds the script that mints the token and holds none, a pattern names text to look for rather than a file to open, a glob only filters the names the walk reports, and a refusal here stops the agents' work (issue #662, issue #691, CLAUDE.md rule 3); it said: %s",
 					tc.call.ToolName, tc.call.Input, decision.Reason)
 			}
 		})
