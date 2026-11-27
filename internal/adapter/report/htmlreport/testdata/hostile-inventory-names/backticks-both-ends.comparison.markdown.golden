@@ -1,0 +1,135 @@
+# Migration assessment: `OVHcloud`, `Scaleway`, `UpCloud`
+
+- Inventory file: `` `inventory.json` ``
+- Source: `aws`
+- Catalog: `OVHcloud` snapshot from `https://www.ovhcloud.com/en-ie/public-cloud/prices/`, retrieved 2026-11-25
+- Catalog: `Scaleway` snapshot from `https://www.scaleway.com/en/pricing/`, retrieved 2026-11-26
+- Catalog: `UpCloud` snapshot from `https://upcloud.com/pricing/`, retrieved 2026-11-13
+- Region: `OVHcloud`: `GRA` (the target's default for estimates)
+- Region: `Scaleway`: `fr-par` (the target's default for estimates)
+- Region: `UpCloud`: `de-fra1` (the target's default for estimates)
+
+## Comparison
+
+### Summary
+
+| Fit | `OVHcloud` | `Scaleway` | `UpCloud` |
+|---|---|---|---|
+| direct | 1 | 1 | 1 |
+| partial | 0 | 0 | 0 |
+| none | 0 | 0 | 0 |
+| total | 1 | 1 | 1 |
+| `OVHcloud` estimate | €41.69 per month for 1 of 1 resource |  |  |
+| `Scaleway` estimate |  | €49.70 per month for 1 of 1 resource |  |
+| `UpCloud` estimate |  |  | €31.39 per month for 1 of 1 resource |
+
+Estimates are list prices on each catalog's retrieval date, excluding VAT and discounts; each target's own section gives its basis.
+
+### Resources
+
+| ID | Category | `OVHcloud` fit | `OVHcloud` best offering | `OVHcloud` monthly estimate | `Scaleway` fit | `Scaleway` best offering | `Scaleway` monthly estimate | `UpCloud` fit | `UpCloud` best offering | `UpCloud` monthly estimate |
+|---|---|---|---|---|---|---|---|---|---|---|
+| `i-0123456789abcdef0` | `compute.vm` | direct | `Instances` | €41.69 | direct | `Instances` | €49.70 | direct | `Cloud Servers` | €31.39 |
+
+### Blockers on every target
+
+None.
+
+## `OVHcloud`
+
+### Summary
+
+| Fit | Resources |
+|---|---|
+| direct | 1 |
+| partial | 0 |
+| none | 0 |
+| total | 1 |
+
+### Resources
+
+| ID | Raw type | Category | Fit | Best offering | Plan | Monthly estimate | Reasons |
+|---|---|---|---|---|---|---|---|
+| `i-0123456789abcdef0` | `AWS::EC2::Instance` | `compute.vm` | direct | `Instances` | `b3-8` (2 vCPU, 8 GiB) | €41.69 | `Instances` offers every capability the resource uses |
+
+### Required changes
+
+None.
+
+### Blockers
+
+None.
+
+### Cost estimate
+
+- Total: €41.69 per month for 1 of 1 resource
+- Estimate: list prices on 2026-11-25, excluding VAT and discounts; a fixed fee is the offering's listed fee
+- Prices in `GRA`
+- Hours: plan price × count × hours / 730, 730 hours for a resource that gives none
+- Source cost: none in the inventory
+
+## `Scaleway`
+
+### Summary
+
+| Fit | Resources |
+|---|---|
+| direct | 1 |
+| partial | 0 |
+| none | 0 |
+| total | 1 |
+
+### Resources
+
+| ID | Raw type | Category | Fit | Best offering | Plan | Monthly estimate | Reasons |
+|---|---|---|---|---|---|---|---|
+| `i-0123456789abcdef0` | `AWS::EC2::Instance` | `compute.vm` | direct | `Instances` | `PLAY2-MICRO` (4 vCPU, 8 GiB) | €49.70 | `Instances` offers every capability the resource uses |
+
+### Required changes
+
+None.
+
+### Blockers
+
+None.
+
+### Cost estimate
+
+- Total: €49.70 per month for 1 of 1 resource
+- Estimate: list prices on 2026-11-26, excluding VAT and discounts; a fixed fee is the offering's listed fee
+- Prices in `fr-par`
+- Hours: plan price × count × hours / 730, 730 hours for a resource that gives none
+- Source cost: none in the inventory
+
+## `UpCloud`
+
+### Summary
+
+| Fit | Resources |
+|---|---|
+| direct | 1 |
+| partial | 0 |
+| none | 0 |
+| total | 1 |
+
+### Resources
+
+| ID | Raw type | Category | Fit | Best offering | Plan | Monthly estimate | Reasons |
+|---|---|---|---|---|---|---|---|
+| `i-0123456789abcdef0` | `AWS::EC2::Instance` | `compute.vm` | direct | `Cloud Servers` | `STARTER-2xCPU-8GB` (2 vCPU, 8 GiB) | €31.39 | `Cloud Servers` offers every capability the resource uses |
+
+### Required changes
+
+None.
+
+### Blockers
+
+None.
+
+### Cost estimate
+
+- Total: €31.39 per month for 1 of 1 resource
+- Estimate: list prices on 2026-11-13, excluding VAT and discounts; a fixed fee is the offering's listed fee
+- Prices in `de-fra1`
+- Hours: plan price × count × hours / 730, 730 hours for a resource that gives none; a plan billed for at most 672 hours a month costs plan price × count × min(hours, 672) / 672
+- Source cost: none in the inventory

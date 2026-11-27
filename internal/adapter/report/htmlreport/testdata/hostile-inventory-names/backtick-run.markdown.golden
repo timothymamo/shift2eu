@@ -1,0 +1,37 @@
+# Migration assessment: `Scaleway`
+
+- Inventory file: ````inventory```name.json````
+- Source: `aws`
+- Catalog: `Scaleway` snapshot from `https://www.scaleway.com/en/pricing/`, retrieved 2026-11-26
+- Region: `fr-par` (the target's default for estimates)
+
+## Summary
+
+| Fit | Resources |
+|---|---|
+| direct | 1 |
+| partial | 0 |
+| none | 0 |
+| total | 1 |
+
+## Resources
+
+| ID | Raw type | Category | Fit | Best offering | Plan | Monthly estimate | Reasons |
+|---|---|---|---|---|---|---|---|
+| `i-0123456789abcdef0` | `AWS::EC2::Instance` | `compute.vm` | direct | `Instances` | `PLAY2-MICRO` (4 vCPU, 8 GiB) | €49.70 | `Instances` offers every capability the resource uses |
+
+## Required changes
+
+None.
+
+## Blockers
+
+None.
+
+## Cost estimate
+
+- Total: €49.70 per month for 1 of 1 resource
+- Estimate: list prices on 2026-11-26, excluding VAT and discounts; a fixed fee is the offering's listed fee
+- Prices in `fr-par`
+- Hours: plan price × count × hours / 730, 730 hours for a resource that gives none
+- Source cost: none in the inventory

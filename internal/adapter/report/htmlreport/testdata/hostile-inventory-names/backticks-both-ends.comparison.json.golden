@@ -1,0 +1,313 @@
+{
+  "schemaVersion": 3,
+  "kind": "comparison",
+  "inventoryName": "`inventory.json`",
+  "source": "aws",
+  "targets": [
+    {
+      "key": "ovhcloud",
+      "target": {
+        "name": "OVHcloud",
+        "snapshot": {
+          "source": "https://www.ovhcloud.com/en-ie/public-cloud/prices/",
+          "retrieved": "2026-11-25"
+        }
+      },
+      "summary": {
+        "direct": 1,
+        "partial": 0,
+        "none": 0,
+        "total": 1
+      },
+      "resources": [
+        {
+          "id": "i-0123456789abcdef0",
+          "rawType": "AWS::EC2::Instance",
+          "category": "compute.vm",
+          "region": "eu-west-1",
+          "fit": "direct",
+          "bestOffering": "Instances",
+          "ties": [],
+          "reasons": [
+            {
+              "code": "all-capabilities",
+              "text": "Instances offers every capability the resource uses",
+              "offering": "Instances"
+            }
+          ],
+          "requiredChanges": [],
+          "relations": [],
+          "affectedBy": [],
+          "plan": {
+            "name": "b3-8",
+            "vcpus": 2,
+            "memoryGiB": "8",
+            "includedStorageGiB": 0,
+            "price": "37.38"
+          },
+          "estimate": {
+            "estimated": true,
+            "amount": "41.69",
+            "countAssumed": false,
+            "hoursAssumed": false,
+            "breakdown": {
+              "plan": "37.38",
+              "storage": "4.31",
+              "fixedFee": "0.00"
+            }
+          }
+        }
+      ],
+      "blockers": [],
+      "workloads": [
+        {
+          "name": "",
+          "noWorkload": true,
+          "resources": 1,
+          "summary": {
+            "direct": 1,
+            "partial": 0,
+            "none": 0,
+            "total": 1
+          },
+          "blockers": [],
+          "estimate": {
+            "amount": "41.69",
+            "estimated": 1,
+            "resources": 1
+          },
+          "sourceCost": {
+            "covered": 0,
+            "resources": 1,
+            "currencies": []
+          }
+        }
+      ],
+      "estimate": {
+        "region": "GRA",
+        "regionChosen": false,
+        "priceDate": "2026-11-25",
+        "currency": "EUR",
+        "excluded": [
+          "VAT",
+          "discounts"
+        ],
+        "hoursBasis": 730,
+        "total": {
+          "amount": "41.69",
+          "estimated": 1,
+          "resources": 1
+        }
+      },
+      "sourceCost": {
+        "covered": 0,
+        "resources": 1,
+        "currencies": []
+      }
+    },
+    {
+      "key": "scaleway",
+      "target": {
+        "name": "Scaleway",
+        "snapshot": {
+          "source": "https://www.scaleway.com/en/pricing/",
+          "retrieved": "2026-11-26"
+        }
+      },
+      "summary": {
+        "direct": 1,
+        "partial": 0,
+        "none": 0,
+        "total": 1
+      },
+      "resources": [
+        {
+          "id": "i-0123456789abcdef0",
+          "rawType": "AWS::EC2::Instance",
+          "category": "compute.vm",
+          "region": "eu-west-1",
+          "fit": "direct",
+          "bestOffering": "Instances",
+          "ties": [],
+          "reasons": [
+            {
+              "code": "all-capabilities",
+              "text": "Instances offers every capability the resource uses",
+              "offering": "Instances"
+            }
+          ],
+          "requiredChanges": [],
+          "relations": [],
+          "affectedBy": [],
+          "plan": {
+            "name": "PLAY2-MICRO",
+            "vcpus": 4,
+            "memoryGiB": "8",
+            "includedStorageGiB": 0,
+            "price": "40.21"
+          },
+          "estimate": {
+            "estimated": true,
+            "amount": "49.70",
+            "countAssumed": false,
+            "hoursAssumed": false,
+            "breakdown": {
+              "plan": "40.21",
+              "storage": "9.49",
+              "fixedFee": "0.00"
+            }
+          }
+        }
+      ],
+      "blockers": [],
+      "workloads": [
+        {
+          "name": "",
+          "noWorkload": true,
+          "resources": 1,
+          "summary": {
+            "direct": 1,
+            "partial": 0,
+            "none": 0,
+            "total": 1
+          },
+          "blockers": [],
+          "estimate": {
+            "amount": "49.70",
+            "estimated": 1,
+            "resources": 1
+          },
+          "sourceCost": {
+            "covered": 0,
+            "resources": 1,
+            "currencies": []
+          }
+        }
+      ],
+      "estimate": {
+        "region": "fr-par",
+        "regionChosen": false,
+        "priceDate": "2026-11-26",
+        "currency": "EUR",
+        "excluded": [
+          "VAT",
+          "discounts"
+        ],
+        "hoursBasis": 730,
+        "total": {
+          "amount": "49.70",
+          "estimated": 1,
+          "resources": 1
+        }
+      },
+      "sourceCost": {
+        "covered": 0,
+        "resources": 1,
+        "currencies": []
+      }
+    },
+    {
+      "key": "upcloud",
+      "target": {
+        "name": "UpCloud",
+        "snapshot": {
+          "source": "https://upcloud.com/pricing/",
+          "retrieved": "2026-11-13"
+        }
+      },
+      "summary": {
+        "direct": 1,
+        "partial": 0,
+        "none": 0,
+        "total": 1
+      },
+      "resources": [
+        {
+          "id": "i-0123456789abcdef0",
+          "rawType": "AWS::EC2::Instance",
+          "category": "compute.vm",
+          "region": "eu-west-1",
+          "fit": "direct",
+          "bestOffering": "Cloud Servers",
+          "ties": [],
+          "reasons": [
+            {
+              "code": "all-capabilities",
+              "text": "Cloud Servers offers every capability the resource uses",
+              "offering": "Cloud Servers"
+            }
+          ],
+          "requiredChanges": [],
+          "relations": [],
+          "affectedBy": [],
+          "plan": {
+            "name": "STARTER-2xCPU-8GB",
+            "vcpus": 2,
+            "memoryGiB": "8",
+            "includedStorageGiB": 40,
+            "price": "18.00"
+          },
+          "estimate": {
+            "estimated": true,
+            "amount": "31.39",
+            "countAssumed": false,
+            "hoursAssumed": false,
+            "billingCapHours": 672,
+            "breakdown": {
+              "plan": "18.00",
+              "storage": "13.39",
+              "fixedFee": "0.00"
+            }
+          }
+        }
+      ],
+      "blockers": [],
+      "workloads": [
+        {
+          "name": "",
+          "noWorkload": true,
+          "resources": 1,
+          "summary": {
+            "direct": 1,
+            "partial": 0,
+            "none": 0,
+            "total": 1
+          },
+          "blockers": [],
+          "estimate": {
+            "amount": "31.39",
+            "estimated": 1,
+            "resources": 1
+          },
+          "sourceCost": {
+            "covered": 0,
+            "resources": 1,
+            "currencies": []
+          }
+        }
+      ],
+      "estimate": {
+        "region": "de-fra1",
+        "regionChosen": false,
+        "priceDate": "2026-11-13",
+        "currency": "EUR",
+        "excluded": [
+          "VAT",
+          "discounts"
+        ],
+        "hoursBasis": 730,
+        "total": {
+          "amount": "31.39",
+          "estimated": 1,
+          "resources": 1
+        }
+      },
+      "sourceCost": {
+        "covered": 0,
+        "resources": 1,
+        "currencies": []
+      }
+    }
+  ],
+  "sharedBlockers": []
+}

@@ -2,8 +2,8 @@
 
 - Inventory file: `inventory.json`
 - Source: `gcp`
-- Catalog: `OVHcloud` snapshot from `https://www.ovhcloud.com/en-ie/public-cloud/prices/`, retrieved 2026-11-27
-- Catalog: `Scaleway` snapshot from `https://www.scaleway.com/en/pricing/`, retrieved 2026-11-13
+- Catalog: `OVHcloud` snapshot from `https://www.ovhcloud.com/en-ie/public-cloud/prices/`, retrieved 2026-11-25
+- Catalog: `Scaleway` snapshot from `https://www.scaleway.com/en/pricing/`, retrieved 2026-11-26
 - Catalog: `UpCloud` snapshot from `https://upcloud.com/pricing/`, retrieved 2026-11-13
 - Region: `OVHcloud`: `GRA` (the target's default for estimates)
 - Region: `Scaleway`: `fr-par` (the target's default for estimates)
@@ -15,9 +15,9 @@
 
 | Fit | `OVHcloud` | `Scaleway` | `UpCloud` |
 |---|---|---|---|
-| direct | 8 | 9 | 5 |
+| direct | 8 | 10 | 5 |
 | partial | 1 | 3 | 3 |
-| none | 7 | 4 | 8 |
+| none | 7 | 3 | 8 |
 | total | 16 | 16 | 16 |
 | `OVHcloud` estimate | €1,583.46 per month for 8 of 16 resources (storage not included in 3 estimates) |  |  |
 | `Scaleway` estimate |  | €966.76 per month for 9 of 16 resources (storage not included in 3 estimates) |  |
@@ -32,7 +32,7 @@ Estimates are list prices on each catalog's retrieval date, excluding VAT and di
 | `shop-assets` | `storage.object` | direct | `Object Storage` | €3.55 | direct | `Object Storage` | €8.05 | direct | `Managed Object Storage` | €10.15 |
 | `shop-catalog-mysql` | `database.mysql` | direct | `Managed MySQL Multi-node Advanced` | €175.49 (count assumed 1) (730 hours assumed) | partial | `Managed Database for PostgreSQL and MySQL` | €71.36 (count assumed 1) (730 hours assumed) | direct | `Managed MySQL Multi-node` | €78.07 (count assumed 1) (730 hours assumed) |
 | `shop-cdn-backend` | `unclassified` | none |  | not estimated: no fit | none |  | not estimated: no fit | none |  | not estimated: no fit |
-| `shop-checkout` | `serverless.container` | none |  | not estimated: no fit | none |  | not estimated: no fit | none |  | not estimated: no fit |
+| `shop-checkout` | `serverless.container` | none |  | not estimated: no fit | direct | `Serverless Containers` | not estimated: usage-priced | none |  | not estimated: no fit |
 | `shop-db` | `database.postgresql` | direct | `Managed PostgreSQL Multi-node Advanced 3-AZ` | not estimated: not offered in `GRA` | partial | `Managed Database for PostgreSQL and MySQL` | €172.51 (count assumed 1) (730 hours assumed) | partial | `Managed PostgreSQL Multi-node` | €236.25 (count assumed 1) (730 hours assumed) |
 | `shop-db-replica` | `database.postgresql` | direct | `Managed PostgreSQL` | €338.94 (count assumed 1) (730 hours assumed) | direct | `Managed Database for PostgreSQL and MySQL` | €172.51 (count assumed 1) (730 hours assumed) | direct | `Managed PostgreSQL` | €236.25 (count assumed 1) (730 hours assumed) |
 | `shop-gke` | `kubernetes.managed` | direct | `Managed Kubernetes Service` | €224.04 (730 hours assumed) (boot volume not included) | direct | `Kubernetes Kapsule` | €245.72 (730 hours assumed) (boot volume not included) | partial | `Managed Kubernetes` | €84.00 (730 hours assumed) |
@@ -52,10 +52,6 @@ Estimates are list prices on each catalog's retrieval date, excluding VAT and di
   - `OVHcloud`: not classified
   - `Scaleway`: not classified
   - `UpCloud`: not classified
-- `shop-checkout`
-  - `OVHcloud`: no offering in the `OVHcloud` catalog for `serverless.container`
-  - `Scaleway`: no offering in the `Scaleway` catalog for `serverless.container`
-  - `UpCloud`: no offering in the `UpCloud` catalog for `serverless.container`
 - `shop-uploads`
   - `OVHcloud`: no offering in the `OVHcloud` catalog for `storage.file`
   - `Scaleway`: no offering in the `Scaleway` catalog for `storage.file`
@@ -118,14 +114,14 @@ Estimates are list prices on each catalog's retrieval date, excluding VAT and di
 #### `catalog`
 
 - Fit: 2 direct, 0 partial, 0 none
-- Monthly estimate: €900.49 per month for 2 of 2 resources, list prices on 2026-11-27, excluding VAT and discounts
+- Monthly estimate: €900.49 per month for 2 of 2 resources, list prices on 2026-11-25, excluding VAT and discounts
 - Source cost: none in the inventory
 - Blockers: none
 
 #### `shop`
 
 - Fit: 6 direct, 1 partial, 7 none
-- Monthly estimate: €682.96 per month for 6 of 14 resources (storage not included in 3 estimates), list prices on 2026-11-27, excluding VAT and discounts
+- Monthly estimate: €682.96 per month for 6 of 14 resources (storage not included in 3 estimates), list prices on 2026-11-25, excluding VAT and discounts
 - Source cost: `USD` $477.31 for 3 of 14 resources
 - Blockers:
   - `shop-cdn-backend`: not classified
@@ -139,7 +135,7 @@ Estimates are list prices on each catalog's retrieval date, excluding VAT and di
 ### Cost estimate
 
 - Total: €1,583.46 per month for 8 of 16 resources (storage not included in 3 estimates)
-- Estimate: list prices on 2026-11-27, excluding VAT and discounts; a fixed fee is the offering's listed fee
+- Estimate: list prices on 2026-11-25, excluding VAT and discounts; a fixed fee is the offering's listed fee
 - Prices in `GRA`
 - Hours: plan price × count × hours / 730, 730 hours for a resource that gives none
 - Source cost: `USD` $477.31 for 3 of 16 resources
@@ -150,9 +146,9 @@ Estimates are list prices on each catalog's retrieval date, excluding VAT and di
 
 | Fit | Resources |
 |---|---|
-| direct | 9 |
+| direct | 10 |
 | partial | 3 |
-| none | 4 |
+| none | 3 |
 | total | 16 |
 
 ### Resources
@@ -162,7 +158,7 @@ Estimates are list prices on each catalog's retrieval date, excluding VAT and di
 | `shop-assets` | `storage.googleapis.com/Bucket` | `storage.object` | direct | `Object Storage` |  | €8.05 |  | `Object Storage` offers every capability the resource uses |
 | `shop-catalog-mysql` | `sqladmin.googleapis.com/Instance` | `database.mysql` | partial | `Managed Database for PostgreSQL and MySQL` (tie: `Managed Database for PostgreSQL and MySQL High Availability`) | `DB-PRO2-XXS` (2 vCPU, 8 GiB) | €71.36 (count assumed 1) (730 hours assumed) |  | `Managed Database for PostgreSQL and MySQL` does not offer `point-in-time-restore` |
 | `shop-cdn-backend` | `compute.googleapis.com/BackendBucket` | `unclassified` | none |  |  | not estimated: no fit | depends-on `shop-assets` | not classified |
-| `shop-checkout` | `run.googleapis.com/Service` | `serverless.container` | none |  |  | not estimated: no fit | depends-on `shop-orders` | no offering in the `Scaleway` catalog for `serverless.container` |
+| `shop-checkout` | `run.googleapis.com/Service` | `serverless.container` | direct | `Serverless Containers` |  | not estimated: usage-priced | depends-on `shop-orders` | `Serverless Containers` offers every capability the resource uses |
 | `shop-db` | `sqladmin.googleapis.com/Instance` | `database.postgresql` | partial | `Managed Database for PostgreSQL and MySQL` (tie: `Managed Database for PostgreSQL and MySQL High Availability`) | `DB-PRO2-XS` (4 vCPU, 16 GiB) | €172.51 (count assumed 1) (730 hours assumed) |  | `Managed Database for PostgreSQL and MySQL` does not offer `point-in-time-restore`; `Managed Database for PostgreSQL and MySQL` does not offer `zone-high-availability` |
 | `shop-db-replica` | `sqladmin.googleapis.com/Instance` | `database.postgresql` | direct | `Managed Database for PostgreSQL and MySQL` (tie: `Managed Database for PostgreSQL and MySQL High Availability`) | `DB-PRO2-XS` (4 vCPU, 16 GiB) | €172.51 (count assumed 1) (730 hours assumed) | replica-of `shop-db` | `Managed Database for PostgreSQL and MySQL` offers every capability the resource uses |
 | `shop-gke` | `container.googleapis.com/Cluster` | `kubernetes.managed` | direct | `Kubernetes Kapsule` (tie: `Kubernetes Kapsule Dedicated`) | `PRO2-XS` (4 vCPU, 16 GiB) | €245.72 (730 hours assumed) (boot volume not included) | depends-on `shop-catalog-mysql`, depends-on `shop-db` | `Kubernetes Kapsule` offers every capability the resource uses |
@@ -185,7 +181,6 @@ Estimates are list prices on each catalog's retrieval date, excluding VAT and di
 ### Blockers
 
 - `shop-cdn-backend`: not classified
-- `shop-checkout`: no offering in the `Scaleway` catalog for `serverless.container`
 - `shop-uploads`: no offering in the `Scaleway` catalog for `storage.file`
 - `shop-zone`: no offering in the `Scaleway` catalog for `network.dns`
 
@@ -194,25 +189,24 @@ Estimates are list prices on each catalog's retrieval date, excluding VAT and di
 #### `catalog`
 
 - Fit: 1 direct, 1 partial, 0 none
-- Monthly estimate: €237.86 per month for 2 of 2 resources, list prices on 2026-11-13, excluding VAT and discounts
+- Monthly estimate: €237.86 per month for 2 of 2 resources, list prices on 2026-11-26, excluding VAT and discounts
 - Source cost: none in the inventory
 - Blockers: none
 
 #### `shop`
 
-- Fit: 8 direct, 2 partial, 4 none
-- Monthly estimate: €728.90 per month for 7 of 14 resources (storage not included in 3 estimates), list prices on 2026-11-13, excluding VAT and discounts
+- Fit: 9 direct, 2 partial, 3 none
+- Monthly estimate: €728.90 per month for 7 of 14 resources (storage not included in 3 estimates), list prices on 2026-11-26, excluding VAT and discounts
 - Source cost: `USD` $477.31 for 3 of 14 resources
 - Blockers:
   - `shop-cdn-backend`: not classified
-  - `shop-checkout`: no offering in the `Scaleway` catalog for `serverless.container`
   - `shop-uploads`: no offering in the `Scaleway` catalog for `storage.file`
   - `shop-zone`: no offering in the `Scaleway` catalog for `network.dns`
 
 ### Cost estimate
 
 - Total: €966.76 per month for 9 of 16 resources (storage not included in 3 estimates)
-- Estimate: list prices on 2026-11-13, excluding VAT and discounts; a fixed fee is the offering's listed fee
+- Estimate: list prices on 2026-11-26, excluding VAT and discounts; a fixed fee is the offering's listed fee
 - Prices in `fr-par`
 - Hours: plan price × count × hours / 730, 730 hours for a resource that gives none
 - Source cost: `USD` $477.31 for 3 of 16 resources

@@ -1,0 +1,104 @@
+{
+  "schemaVersion": 3,
+  "kind": "assessment",
+  "inventoryName": "| a | *b* _c_ `d` #e [f](g) ~h~ !.json",
+  "source": "aws",
+  "target": {
+    "name": "Scaleway",
+    "snapshot": {
+      "source": "https://www.scaleway.com/en/pricing/",
+      "retrieved": "2026-11-26"
+    }
+  },
+  "summary": {
+    "direct": 1,
+    "partial": 0,
+    "none": 0,
+    "total": 1
+  },
+  "resources": [
+    {
+      "id": "i-0123456789abcdef0",
+      "rawType": "AWS::EC2::Instance",
+      "category": "compute.vm",
+      "region": "eu-west-1",
+      "fit": "direct",
+      "bestOffering": "Instances",
+      "ties": [],
+      "reasons": [
+        {
+          "code": "all-capabilities",
+          "text": "Instances offers every capability the resource uses",
+          "offering": "Instances"
+        }
+      ],
+      "requiredChanges": [],
+      "relations": [],
+      "affectedBy": [],
+      "plan": {
+        "name": "PLAY2-MICRO",
+        "vcpus": 4,
+        "memoryGiB": "8",
+        "includedStorageGiB": 0,
+        "price": "40.21"
+      },
+      "estimate": {
+        "estimated": true,
+        "amount": "49.70",
+        "countAssumed": false,
+        "hoursAssumed": false,
+        "breakdown": {
+          "plan": "40.21",
+          "storage": "9.49",
+          "fixedFee": "0.00"
+        }
+      }
+    }
+  ],
+  "blockers": [],
+  "workloads": [
+    {
+      "name": "",
+      "noWorkload": true,
+      "resources": 1,
+      "summary": {
+        "direct": 1,
+        "partial": 0,
+        "none": 0,
+        "total": 1
+      },
+      "blockers": [],
+      "estimate": {
+        "amount": "49.70",
+        "estimated": 1,
+        "resources": 1
+      },
+      "sourceCost": {
+        "covered": 0,
+        "resources": 1,
+        "currencies": []
+      }
+    }
+  ],
+  "estimate": {
+    "region": "fr-par",
+    "regionChosen": false,
+    "priceDate": "2026-11-26",
+    "currency": "EUR",
+    "excluded": [
+      "VAT",
+      "discounts"
+    ],
+    "hoursBasis": 730,
+    "total": {
+      "amount": "49.70",
+      "estimated": 1,
+      "resources": 1
+    }
+  },
+  "sourceCost": {
+    "covered": 0,
+    "resources": 1,
+    "currencies": []
+  }
+}

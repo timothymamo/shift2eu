@@ -78,8 +78,9 @@ type representative struct {
 //   - storage.object: 100 GiB stored;
 //   - serverless.function: a function of 1 GiB of memory, the only size field
 //     the category takes;
-//   - messaging.queue, network.loadbalancer and registry.container: no size: the
-//     categories take no size field, and they are priced by usage or not at all.
+//   - messaging.queue, messaging.topic, serverless.container,
+//     network.loadbalancer and registry.container: no size: the categories take no
+//     size field, and they are priced by usage or not at all.
 var representatives = map[taxonomy.Category]representative{
 	taxonomy.ComputeVM: {
 		size:  &inventory.Size{VCPUs: number(2), MemoryGiB: number(4), Count: count(1)},
@@ -129,6 +130,8 @@ var representatives = map[taxonomy.Category]representative{
 		size: &inventory.Size{MemoryGiB: number(1)},
 	},
 	taxonomy.MessagingQueue:      {},
+	taxonomy.MessagingTopic:      {},
+	taxonomy.ServerlessContainer: {},
 	taxonomy.NetworkLoadBalancer: {},
 	taxonomy.RegistryContainer:   {},
 }
@@ -158,15 +161,18 @@ func TestEstimatePerTargetAndCategory(t *testing.T) {
 	out.WriteString("bare-metal server is 4 vCPU and 32 GiB, the smallest plan OVHcloud's and Scaleway's bare-metal\n")
 	out.WriteString("offerings cover (UpCloud offers none); Kubernetes counts 3 nodes of the virtual-machine size; a\n")
 	out.WriteString("managed database is 2 vCPU, 4 GiB of memory and 50 GiB of storage; block storage is one 100 GiB\n")
-	out.WriteString("volume and object storage 100 GiB stored; a function is 1 GiB of memory; a queue takes no size.\n")
+	out.WriteString("volume and object storage 100 GiB stored; a function is 1 GiB of memory; a queue, a topic and a\n")
+	out.WriteString("serverless container take no size.\n")
 	out.WriteString("A MongoDB database is 2 vCPU, 8 GiB of memory, 100 GiB of storage and count 3, the nodes of a\n")
 	out.WriteString("replica set; a search cluster and a Kafka cluster are the same size, 2 vCPU, 8 GiB of memory\n")
 	out.WriteString("and 100 GiB of storage per node at count 3, on the 1-AZ tier the default region serves; the\n")
 	out.WriteString("search cluster also lists `node-high-availability`, as a cache does, because three nodes are\n")
 	out.WriteString("the multi-node tier and OVHcloud's single-node Discovery plan is no 3-node cluster; a cache is\n")
 	out.WriteString("6 GiB of memory per node, count 2 and `node-high-availability`, so it is priced on the\n")
-	out.WriteString("multi-node tier a replicated cache is served by, and its capability is shown after its size;\n")
-	out.WriteString("a load balancer and a container registry take no size and are not priced.\n\n")
+	out.WriteString("multi-node tier's per-node price, where that tier serves the cache or ties with the base\n")
+	out.WriteString("offering (Scaleway's Redis Cluster lists no `node-high-availability`: see its SOURCES.md,\n")
+	out.WriteString("*Estimate effect*), and its capability is shown after its size; a load balancer and a container\n")
+	out.WriteString("registry take no size and are not priced.\n\n")
 
 	for _, target := range targets {
 		cat, err := target.catalog().Catalog(t.Context())

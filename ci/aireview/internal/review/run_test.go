@@ -172,6 +172,11 @@ const (
 +// Added is new.
 `
 
+	// injectionDiff's added line is a planted instruction for the
+	// prompt-injection tests (ADR 0033), never an instruction to the reader: the
+	// cases below pin that an instruction in a diff becomes a prompt-injection
+	// finding, never an approval. The model these tests ask is a fake with canned
+	// answers, so the line reaches no real model.
 	injectionDiff = `diff --git a/internal/x/y.go b/internal/x/y.go
 --- a/internal/x/y.go
 +++ b/internal/x/y.go

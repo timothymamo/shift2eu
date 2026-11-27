@@ -592,8 +592,10 @@ provision:
 
       cat > /etc/profile.d/shift2eu.sh <<'PROFILE'
       export PATH="$HOME/.local/bin:$HOME/go/bin:/usr/local/go/bin:/usr/local/node/bin:/usr/local/nerdctl/bin:$PATH"
-      # Agent credentials, copied in from the Mac by `make vm-env` (docs/dev-environment.md).
-      if [ -r "$HOME/.config/dot-agent-deck/daemon.env" ]; then
+      # Agent credentials, copied in from the Mac by `make vm-env` (docs/dev-environment.md). Not for the
+      # tester: dev/pi-tester.sh sets SHIFT2EU_PI_TESTER=1, so a login shell in its pane stays without them
+      # (issue #662, ADR 0044).
+      if [ -z "${SHIFT2EU_PI_TESTER:-}" ] && [ -r "$HOME/.config/dot-agent-deck/daemon.env" ]; then
         set -a
         . "$HOME/.config/dot-agent-deck/daemon.env"
         set +a

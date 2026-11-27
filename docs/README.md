@@ -94,6 +94,7 @@ supersedes it.
 - [0046. Add seven taxonomy categories, match cache plans on memory alone, and keep every format version](adr/0046-add-seven-taxonomy-categories-and-match-cache-plans-on-memory.md)
 - [0047. Add search.opensearch and messaging.kafka, price their storage per node, and keep every format version](adr/0047-add-search-opensearch-and-messaging-kafka-and-price-their-storage-per-node.md)
 - [0048. Record global offerings in target snapshot format version 2, add network.dns, and keep every format version](adr/0048-record-global-offerings-in-target-snapshot-format-v2-and-add-network-dns.md)
+- [0049. Write the PDF report with a standard-library writer, the core fonts and visible escapes](adr/0049-write-the-pdf-report-with-a-standard-library-writer.md)
 
 ## Writing a page
 

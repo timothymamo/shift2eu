@@ -2,8 +2,8 @@
 
 - Inventory file: `inventory.json`
 - Source: `azure`
-- Catalog: `OVHcloud` snapshot from `https://www.ovhcloud.com/en-ie/public-cloud/prices/`, retrieved 2026-11-27
-- Catalog: `Scaleway` snapshot from `https://www.scaleway.com/en/pricing/`, retrieved 2026-11-13
+- Catalog: `OVHcloud` snapshot from `https://www.ovhcloud.com/en-ie/public-cloud/prices/`, retrieved 2026-11-25
+- Catalog: `Scaleway` snapshot from `https://www.scaleway.com/en/pricing/`, retrieved 2026-11-26
 - Catalog: `UpCloud` snapshot from `https://upcloud.com/pricing/`, retrieved 2026-11-13
 - Region: `OVHcloud`: `GRA` (the target's default for estimates)
 - Region: `Scaleway`: `fr-par` (the target's default for estimates)
@@ -15,11 +15,11 @@
 
 | Fit | `OVHcloud` | `Scaleway` | `UpCloud` |
 |---|---|---|---|
-| direct | 8 | 6 | 5 |
-| partial | 1 | 3 | 2 |
-| none | 4 | 4 | 6 |
+| direct | 7 | 6 | 5 |
+| partial | 1 | 4 | 2 |
+| none | 5 | 3 | 6 |
 | total | 13 | 13 | 13 |
-| `OVHcloud` estimate | €2,477.71 per month for 8 of 13 resources (storage not included in 3 estimates) |  |  |
+| `OVHcloud` estimate | €838.50 per month for 7 of 13 resources (storage not included in 3 estimates) |  |  |
 | `Scaleway` estimate |  | €530.27 per month for 7 of 13 resources (storage not included in 3 estimates) |  |
 | `UpCloud` estimate |  |  | €336.82 per month for 7 of 13 resources |
 
@@ -34,8 +34,8 @@ Estimates are list prices on each catalog's retrieval date, excluding VAT and di
 | `disk-shop-web-1-data` | `storage.block` | direct | `Block Storage` | €2.76 (count assumed 1) | direct | `Block Storage` | €6.07 (count assumed 1) | direct | `Block Storage` | €14.28 (count assumed 1) |
 | `dns-shop` | `unclassified` | none |  | not estimated: no fit | none |  | not estimated: no fit | none |  | not estimated: no fit |
 | `func-shop-thumbnails` | `serverless.function` | none |  | not estimated: no fit | direct | `Serverless Functions` | not estimated: usage-priced | none |  | not estimated: no fit |
-| `hdi-shop-events` | `messaging.kafka` | direct | `Analytics for Kafka` | €1,639.22 (730 hours assumed) | none |  | not estimated: no fit | none |  | not estimated: no fit |
-| `lb-shop-web` | `network.loadbalancer` | direct | `Load Balancer 3-AZ` | not estimated: not priced | none |  | not estimated: no fit | none |  | not estimated: no fit |
+| `hdi-shop-events` | `messaging.kafka` | none |  | not estimated: no fit | none |  | not estimated: no fit | none |  | not estimated: no fit |
+| `lb-shop-web` | `network.loadbalancer` | direct | `Load Balancer 3-AZ` | not estimated: not priced | partial | `Load Balancer` | not estimated: not priced | none |  | not estimated: no fit |
 | `mysql-shop-catalog` | `database.mysql` | direct | `Managed MySQL Multi-node Advanced` | €175.49 (count assumed 1) (730 hours assumed) | partial | `Managed Database for PostgreSQL and MySQL High Availability` | €67.78 (count assumed 1) (730 hours assumed) | direct | `Managed MySQL Multi-node` | €70.77 (count assumed 1) (730 hours assumed) |
 | `psql-shop` | `database.postgresql` | direct | `Managed PostgreSQL Multi-node Advanced` | €322.66 (count assumed 1) (730 hours assumed) | partial | `Managed Database for PostgreSQL and MySQL High Availability` | €86.85 (count assumed 1) (730 hours assumed) | direct | `Managed PostgreSQL Multi-node` | €109.71 (count assumed 1) (730 hours assumed) |
 | `sb-shop-orders` | `messaging.queue` | none |  | not estimated: no fit | direct | `Queues` | not estimated: usage-priced | none |  | not estimated: no fit |
@@ -53,6 +53,10 @@ Estimates are list prices on each catalog's retrieval date, excluding VAT and di
   - `OVHcloud`: not classified
   - `Scaleway`: not classified
   - `UpCloud`: not classified
+- `hdi-shop-events`
+  - `OVHcloud`: no offering in the `OVHcloud` catalog for `messaging.kafka`
+  - `Scaleway`: no offering in the `Scaleway` catalog for `messaging.kafka`
+  - `UpCloud`: no offering in the `UpCloud` catalog for `messaging.kafka`
 
 ## `OVHcloud`
 
@@ -60,9 +64,9 @@ Estimates are list prices on each catalog's retrieval date, excluding VAT and di
 
 | Fit | Resources |
 |---|---|
-| direct | 8 |
+| direct | 7 |
 | partial | 1 |
-| none | 4 |
+| none | 5 |
 | total | 13 |
 
 ### Resources
@@ -74,7 +78,7 @@ Estimates are list prices on each catalog's retrieval date, excluding VAT and di
 | `disk-shop-web-1-data` | `Microsoft.Compute/disks` | `storage.block` | direct | `Block Storage` (tie: `Block Storage LUKS`) |  | €2.76 (count assumed 1) | attached-to `vm-shop-web-1` | `Block Storage` offers every capability the resource uses |
 | `dns-shop` | `Microsoft.Network/dnsZones` | `unclassified` | none |  |  | not estimated: no fit |  | not classified |
 | `func-shop-thumbnails` | `Microsoft.Web/sites` | `serverless.function` | none |  |  | not estimated: no fit | depends-on `stshopassets` | no offering in the `OVHcloud` catalog for `serverless.function` |
-| `hdi-shop-events` | `Microsoft.HDInsight/clusters` | `messaging.kafka` | direct | `Analytics for Kafka` (tie: `Analytics for Kafka 3-AZ`) | `Production B3-16` (4 vCPU, 16 GiB) | €1,639.22 (730 hours assumed) |  | `Analytics for Kafka` offers every capability the resource uses |
+| `hdi-shop-events` | `Microsoft.HDInsight/clusters` | `messaging.kafka` | none |  |  | not estimated: no fit |  | no offering in the `OVHcloud` catalog for `messaging.kafka` |
 | `lb-shop-web` | `Microsoft.Network/loadBalancers` | `network.loadbalancer` | direct | `Load Balancer 3-AZ` |  | not estimated: not priced |  | `Load Balancer 3-AZ` offers every capability the resource uses |
 | `mysql-shop-catalog` | `Microsoft.DBforMySQL/flexibleServers` | `database.mysql` | direct | `Managed MySQL Multi-node Advanced` (tie: `Managed MySQL Multi-node Advanced 3-AZ`) | `Advanced B3-8` (2 vCPU, 8 GiB) | €175.49 (count assumed 1) (730 hours assumed) |  | `Managed MySQL Multi-node Advanced` offers every capability the resource uses |
 | `psql-shop` | `Microsoft.DBforPostgreSQL/flexibleServers` | `database.postgresql` | direct | `Managed PostgreSQL Multi-node Advanced` (tie: `Managed PostgreSQL Multi-node Advanced 3-AZ`) | `Advanced B3-8` (2 vCPU, 8 GiB) | €322.66 (count assumed 1) (730 hours assumed) |  | `Managed PostgreSQL Multi-node Advanced` offers every capability the resource uses |
@@ -92,6 +96,7 @@ Estimates are list prices on each catalog's retrieval date, excluding VAT and di
 - `cdn-shop`: not classified
 - `dns-shop`: not classified
 - `func-shop-thumbnails`: no offering in the `OVHcloud` catalog for `serverless.function`
+- `hdi-shop-events`: no offering in the `OVHcloud` catalog for `messaging.kafka`
 - `sb-shop-orders`: no offering in the `OVHcloud` catalog for `messaging.queue`
 - `vm-shop-web-1`: affected by a blocker on `sb-shop-orders`
 
@@ -100,25 +105,26 @@ Estimates are list prices on each catalog's retrieval date, excluding VAT and di
 #### `catalog`
 
 - Fit: 1 direct, 0 partial, 0 none
-- Monthly estimate: €175.49 per month for 1 of 1 resource, list prices on 2026-11-27, excluding VAT and discounts
+- Monthly estimate: €175.49 per month for 1 of 1 resource, list prices on 2026-11-25, excluding VAT and discounts
 - Source cost: none in the inventory
 - Blockers: none
 
 #### `shop`
 
-- Fit: 7 direct, 1 partial, 4 none
-- Monthly estimate: €2,302.22 per month for 7 of 12 resources (storage not included in 3 estimates), list prices on 2026-11-27, excluding VAT and discounts
+- Fit: 6 direct, 1 partial, 5 none
+- Monthly estimate: €663.00 per month for 6 of 12 resources (storage not included in 3 estimates), list prices on 2026-11-25, excluding VAT and discounts
 - Source cost: `EUR` €379.97 for 3 of 12 resources
 - Blockers:
   - `cdn-shop`: not classified
   - `dns-shop`: not classified
   - `func-shop-thumbnails`: no offering in the `OVHcloud` catalog for `serverless.function`
+  - `hdi-shop-events`: no offering in the `OVHcloud` catalog for `messaging.kafka`
   - `sb-shop-orders`: no offering in the `OVHcloud` catalog for `messaging.queue`
 
 ### Cost estimate
 
-- Total: €2,477.71 per month for 8 of 13 resources (storage not included in 3 estimates)
-- Estimate: list prices on 2026-11-27, excluding VAT and discounts; a fixed fee is the offering's listed fee
+- Total: €838.50 per month for 7 of 13 resources (storage not included in 3 estimates)
+- Estimate: list prices on 2026-11-25, excluding VAT and discounts; a fixed fee is the offering's listed fee
 - Prices in `GRA`
 - Hours: plan price × count × hours / 730, 730 hours for a resource that gives none
 - Source cost: `EUR` €379.97 for 3 of 13 resources
@@ -130,8 +136,8 @@ Estimates are list prices on each catalog's retrieval date, excluding VAT and di
 | Fit | Resources |
 |---|---|
 | direct | 6 |
-| partial | 3 |
-| none | 4 |
+| partial | 4 |
+| none | 3 |
 | total | 13 |
 
 ### Resources
@@ -144,7 +150,7 @@ Estimates are list prices on each catalog's retrieval date, excluding VAT and di
 | `dns-shop` | `Microsoft.Network/dnsZones` | `unclassified` | none |  |  | not estimated: no fit |  | not classified |
 | `func-shop-thumbnails` | `Microsoft.Web/sites` | `serverless.function` | direct | `Serverless Functions` |  | not estimated: usage-priced | depends-on `stshopassets` | `Serverless Functions` offers every capability the resource uses |
 | `hdi-shop-events` | `Microsoft.HDInsight/clusters` | `messaging.kafka` | none |  |  | not estimated: no fit |  | no offering in the `Scaleway` catalog for `messaging.kafka` |
-| `lb-shop-web` | `Microsoft.Network/loadBalancers` | `network.loadbalancer` | none |  |  | not estimated: no fit |  | no offering in the `Scaleway` catalog for `network.loadbalancer` |
+| `lb-shop-web` | `Microsoft.Network/loadBalancers` | `network.loadbalancer` | partial | `Load Balancer` |  | not estimated: not priced |  | `Load Balancer` does not offer `udp`; `Load Balancer` does not offer `zone-high-availability` |
 | `mysql-shop-catalog` | `Microsoft.DBforMySQL/flexibleServers` | `database.mysql` | partial | `Managed Database for PostgreSQL and MySQL High Availability` | `DB-PRO2-XXS` (2 vCPU, 8 GiB) | €67.78 (count assumed 1) (730 hours assumed) |  | `Managed Database for PostgreSQL and MySQL High Availability` does not offer `point-in-time-restore` |
 | `psql-shop` | `Microsoft.DBforPostgreSQL/flexibleServers` | `database.postgresql` | partial | `Managed Database for PostgreSQL and MySQL High Availability` | `DB-PRO2-XXS` (2 vCPU, 8 GiB) | €86.85 (count assumed 1) (730 hours assumed) |  | `Managed Database for PostgreSQL and MySQL High Availability` does not offer `point-in-time-restore` |
 | `sb-shop-orders` | `Microsoft.ServiceBus/namespaces/queues` | `messaging.queue` | direct | `Queues` |  | not estimated: usage-priced |  | `Queues` offers every capability the resource uses |
@@ -154,6 +160,7 @@ Estimates are list prices on each catalog's retrieval date, excluding VAT and di
 
 ### Required changes
 
+- `lb-shop-web`: `udp`, `zone-high-availability` (not offered by `Load Balancer`)
 - `mysql-shop-catalog`: `point-in-time-restore` (not offered by `Managed Database for PostgreSQL and MySQL High Availability`)
 - `psql-shop`: `point-in-time-restore` (not offered by `Managed Database for PostgreSQL and MySQL High Availability`)
 - `vmss-shop-web`: `autoscaling`, `zone-high-availability` (not offered by `Instances`)
@@ -163,32 +170,30 @@ Estimates are list prices on each catalog's retrieval date, excluding VAT and di
 - `cdn-shop`: not classified
 - `dns-shop`: not classified
 - `hdi-shop-events`: no offering in the `Scaleway` catalog for `messaging.kafka`
-- `lb-shop-web`: no offering in the `Scaleway` catalog for `network.loadbalancer`
 
 ### Workloads
 
 #### `catalog`
 
 - Fit: 0 direct, 1 partial, 0 none
-- Monthly estimate: €67.78 per month for 1 of 1 resource, list prices on 2026-11-13, excluding VAT and discounts
+- Monthly estimate: €67.78 per month for 1 of 1 resource, list prices on 2026-11-26, excluding VAT and discounts
 - Source cost: none in the inventory
 - Blockers: none
 
 #### `shop`
 
-- Fit: 6 direct, 2 partial, 4 none
-- Monthly estimate: €462.49 per month for 6 of 12 resources (storage not included in 3 estimates), list prices on 2026-11-13, excluding VAT and discounts
+- Fit: 6 direct, 3 partial, 3 none
+- Monthly estimate: €462.49 per month for 6 of 12 resources (storage not included in 3 estimates), list prices on 2026-11-26, excluding VAT and discounts
 - Source cost: `EUR` €379.97 for 3 of 12 resources
 - Blockers:
   - `cdn-shop`: not classified
   - `dns-shop`: not classified
   - `hdi-shop-events`: no offering in the `Scaleway` catalog for `messaging.kafka`
-  - `lb-shop-web`: no offering in the `Scaleway` catalog for `network.loadbalancer`
 
 ### Cost estimate
 
 - Total: €530.27 per month for 7 of 13 resources (storage not included in 3 estimates)
-- Estimate: list prices on 2026-11-13, excluding VAT and discounts; a fixed fee is the offering's listed fee
+- Estimate: list prices on 2026-11-26, excluding VAT and discounts; a fixed fee is the offering's listed fee
 - Prices in `fr-par`
 - Hours: plan price × count × hours / 730, 730 hours for a resource that gives none
 - Source cost: `EUR` €379.97 for 3 of 13 resources
