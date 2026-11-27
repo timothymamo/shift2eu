@@ -26,6 +26,7 @@ func TestCodeSpan(t *testing.T) {
 		{"a backtick run in the text needs one more", "a``b", "``` a``b ```"},
 		{"a text starting with a backtick stays intact", "`x", "`` `x ``"},
 		{"a text ending with a backtick stays intact", "x`", "`` x` ``"},
+		{"a path that starts with a dot is kept", ".github/workflows/ci.yml", "` .github/workflows/ci.yml `"},
 		{"a text of backticks only", "``", "``` `` ```"},
 		{"LF becomes one space", "a\nb", "` a b `"},
 		{"TAB becomes one space", "a\tb", "` a b `"},
@@ -88,6 +89,10 @@ func TestTableCell(t *testing.T) {
 		{"a pipe inside a backtick run", "a`|`b", "`` a`\\|`b ``"},
 		{"no pipe, no change", "a\\b", "` a\\b `"},
 		{"a CR LF is a space, and a pipe escapes", "a\r\nb|c", "` a b\\|c `"},
+		{"a path that starts with a dot is kept", ".github/workflows/ci.yml", "` .github/workflows/ci.yml `"},
+		{"a location in a dot segment is kept", ".github/workflows/ci.yml:12", "` .github/workflows/ci.yml:12 `"},
+		{"a dotfile at the top is kept", ".dot-agent-deck.toml", "` .dot-agent-deck.toml `"},
+		{"a dot segment in the middle is kept", "a/.hidden/b:7", "` a/.hidden/b:7 `"},
 		{"an HTML table is inert and its pipes escaped", "<table><tr><td>a|b</td></tr></table>", "` <table><tr><td>a\\|b</td></tr></table> `"},
 	}
 

@@ -265,6 +265,73 @@ func TestRenderReportFindings(t *testing.T) {
 	}
 }
 
+// TestRenderReportDotSegmentLocations pins a finding whose file lies in a dot
+// segment of the path: .github/workflows/ci.yml and .dot-agent-deck.toml are
+// repository paths, so the report renders them as the location cell an ordinary
+// path gets - the file, a colon and the line, one code span with every character
+// kept - and the scan over the rendered report publishes them.
+func TestRenderReportDotSegmentLocations(t *testing.T) {
+	t.Parallel()
+
+	key := testKey(t)
+
+	workflow := finding("G304", sevLow, true, catHardening)
+	workflow.File = ".github/workflows/ci.yml"
+	workflow.Line = 12
+
+	deck := finding("G305", sevInformational, true, catConfiguration)
+	deck.File = ".dot-agent-deck.toml"
+	deck.Line = 0
+
+	rendered := renderReport(t, publish.ReportInput{
+		Result:  fixtureResult(workflow, deck),
+		Run:     testRun(t, testDate, testRunID),
+		Private: publish.PrivateNone,
+	})
+
+	rows := findingsTableOf(t, rendered.Body)
+
+	tests := []struct {
+		name string
+		// location is the cell the report must render, literally.
+		location string
+		finding  publish.Finding
+	}{
+		{
+			name:     "a workflow file at the top",
+			location: "` .github/workflows/ci.yml:12 `",
+			finding:  workflow,
+		},
+		{
+			name:     "a dotfile at the top, with no line",
+			location: "` .dot-agent-deck.toml `",
+			finding:  deck,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			row := rowHolding(t, rows, 0, fingerprintOf(tc.finding))
+
+			if diff := cmp.Diff(wantFindingRow(tc.finding, "new"), row); diff != "" {
+				t.Errorf("the findings row of %s mismatch (-want +got):\n%s", tc.finding.File, diff)
+			}
+
+			if diff := cmp.Diff(tc.location, row[4]); diff != "" {
+				t.Errorf("the location cell of %s mismatch (-want +got):\n%s", tc.finding.File, diff)
+			}
+
+			if !slices.Contains(rendered.ModelFields, tc.location) {
+				t.Errorf("the renderer's model fields do not list the location %q: %v", tc.location, rendered.ModelFields)
+			}
+		})
+	}
+
+	wantAllowed(t, publish.ScanPublic(rendered.Body, rendered.ModelFields, key))
+}
+
 // TestRenderReportSuspectedFindings pins that an unconfirmed low finding is in
 // the needs-investigation list, with the same columns, and not in the findings
 // table.
