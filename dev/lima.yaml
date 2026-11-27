@@ -491,6 +491,591 @@ provision:
         install -o root -g root -m 0755 "${tmp}" /usr/local/bin/gh
       )
 
+      # The tester's launch wrapper and the env-printing refusal it loads into pi (issue #692, ADR 0044):
+      # .dot-agent-deck.toml's tester command runs /usr/local/lib/shift2eu/pi-tester/pi-tester.sh, which reads
+      # the refusal's two files beside itself and never the unit folder's copies, which an agent can write.
+      # Root-owned and outside the workspace mount, so a branch's edit of dev/pi-tester.sh or .pi/ changes
+      # nothing the tester starts with until the maintainer runs make vm-pi-tester (dev/vm-pi-tester.sh) or
+      # rebuilds the VM; plumbing, not a security boundary, as the VM user has sudo. Copied into the template,
+      # as a VM keeps the template it was created with. Keep the text between the PITESTER, PIDENYEXT and
+      # PIDENYLIST lines identical to dev/pi-tester.sh, .pi/extensions/deny-env-printing.ts and
+      # .pi/deny-env-printing.json, which the tests run.
+      (
+        tmp="$(mktemp -d)"
+        trap 'rm -rf "${tmp}"' EXIT
+        cat >"${tmp}/pi-tester.sh" <<'PITESTER'
+      #!/bin/sh
+      # Starts pi for the tester role (issue #662, issue #692,
+      # docs/adr/0044-refuse-printing-the-environment-in-pi-with-a-project-extension.md): .dot-agent-deck.toml's
+      # tester command runs this script, never pi itself, and runs the copy dev/lima.yaml installs root-owned:
+      #   /usr/local/lib/shift2eu/pi-tester/pi-tester.sh                         this script
+      #   /usr/local/lib/shift2eu/pi-tester/extensions/deny-env-printing.ts      .pi/extensions/deny-env-printing.ts
+      #   /usr/local/lib/shift2eu/pi-tester/deny-env-printing.json               .pi/deny-env-printing.json
+      # The unit's folder, where the deck starts the pane, is writable by the agents, so a branch could weaken its
+      # copies; the installed ones change only on a VM rebuild or make vm-pi-tester, which the maintainer runs.
+      #
+      # 0. Reads the refusal's two files from the directory this script is installed in (the directory of $0,
+      #    which must be an absolute path), never from the working directory. When a copy in the working directory
+      #    (.pi/extensions/deny-env-printing.ts, .pi/deny-env-printing.json, dev/pi-tester.sh) is missing or not
+      #    byte for byte the installed one, it is ignored: one line on stderr names the installed and the project
+      #    paths and make vm-pi-tester, and pi still starts from the installed files.
+      # 1. Fails closed. pi logs an extension that fails to load and runs without it, so the env-printing refusal
+      #    (ADR 0044) would fail open on its own. Before pi starts, the two installed files the refusal is made of
+      #    are checked:
+      #    - extensions/deny-env-printing.ts must be a non-empty regular file, and deny-env-printing.json a JSON
+      #      object whose "patterns" is a non-empty array (checked with jq, which dev/lima.yaml installs);
+      #    - then node (from PATH, the one dev/lima.yaml pins, under the allow-listed environment below) imports
+      #      the extension and requires a function as its default export, which is what pi calls, and compiles
+      #      every pattern of the list with `new RegExp`, as the extension does. The VM's node (22.18 or later)
+      #      strips TypeScript types on import by default, so no flag is needed; the load is the one
+      #      test/architecture/pienvdenyload_test.go's piNodeLoadScript makes.
+      #    Anything else - node missing too - exits 1 with a message that names the file, and pi is not started.
+      #    Only node's exit status is read: its output is discarded, so nothing the load prints reaches the pane.
+      #    pi (1.6.1, the release dev/lima.yaml pins) has no option that makes a failed extension load fatal, so
+      #    these checks are the ones that do it.
+      # 2. Starts pi with an allow-listed environment: `env -i` and only the variables named below, each copied
+      #    when the parent has it set, plus the marker SHIFT2EU_PI_TESTER=1, and the arguments
+      #    `--extension <installed extensions/deny-env-printing.ts>` followed by every argument passed through
+      #    unchanged, so pi always loads the installed refusal (it also discovers the project's .pi/extensions,
+      #    which --approve trusts). Everything else - a GitHub token, another agent's key (ANTHROPIC_API_KEY,
+      #    CLAUDE_CODE_OAUTH_TOKEN), the OpenTelemetry headers that carry a backend's API key, any name this list
+      #    does not know - is not in pi's environment, so printing it shows only the DeepSeek key and the pane's
+      #    variables. The marker makes the VM's login profile (/etc/profile.d/shift2eu.sh, dev/lima.yaml) leave
+      #    the agents' keys file unsourced, so a `bash -l` from the tester's bash tool does not put them back.
+      #
+      # What this does not do: the tester still runs as the VM's one user, so the keys file, the agents App's
+      # token file and other processes' /proc/<pid>/environ stay readable to it, guarded only by the deny
+      # patterns of .pi/deny-env-printing.json, which a program the tester writes and runs can bypass. Keeping
+      # them from it needs a separate uid or the egress stage (ADR 0044, Alternatives). gh and git push keep
+      # working for a command the tester runs: the VM's gh (dev/gh-app-token.sh, ADR 0031) reads the App's token
+      # from its file under HOME, not from the environment.
+      #
+      # PATH is checked first, before anything that looks a command up: an empty entry (a leading, middle or
+      # trailing `:`) or one that is not absolute (`.`, `bin`) is the working directory or under it, the unit's
+      # folder, so a command the wrapper, node or pi then finds could be one from there. Such a PATH exits 1 with a
+      # message that names PATH (never its value), and nothing is started. The VM's PATH (dev/lima.yaml's profile)
+      # has none, so it passes, and is then copied as it is.
+      #
+      # No value is ever printed: the messages name files, never a variable's value.
+      #
+      # Usage: /usr/local/lib/shift2eu/pi-tester/pi-tester.sh <pi arguments...>
+      #        (by its absolute path, from the directory pi loads the project from)
+      set -eu
+
+      # refuse_path <why> stops the wrapper on a PATH that could find a command in the working directory.
+      refuse_path() {
+        printf 'pi-tester: PATH %s: the tester is not started, because a command found on it could be one from the working directory, the unit folder (issue #662)\n' \
+          "$1" >&2
+        exit 1
+      }
+
+      case "${PATH:-}" in
+      '' | :* | *: | *:[:]*) refuse_path "has an empty entry (a leading, doubled or trailing colon)" ;;
+      esac
+      path_entries=${PATH}
+      while [ -n "${path_entries}" ]; do
+        path_entry=${path_entries%%:*}
+        case "${path_entries}" in
+        *:*) path_entries=${path_entries#*:} ;;
+        *) path_entries="" ;;
+        esac
+        case "${path_entry}" in
+        /*) ;;
+        *) refuse_path "has an entry that is not an absolute path" ;;
+        esac
+      done
+
+      # The installed layout, read beside this script's own path, never from the working directory (issue #692).
+      case "$0" in
+      /*/*) ;;
+      *)
+        echo "pi-tester: not started by its absolute path, so it cannot find its installed files: run /usr/local/lib/shift2eu/pi-tester/pi-tester.sh (issue #692)" >&2
+        exit 1
+        ;;
+      esac
+      installed=${0%/*}
+      script=$0
+      extension=${installed}/extensions/deny-env-printing.ts
+      list=${installed}/deny-env-printing.json
+
+      # refuse <file> <why> stops the wrapper before pi starts.
+      refuse() {
+        printf 'pi-tester: %s %s: the tester is not started, because pi would run without the env-printing refusal (issue #662, docs/adr/0044-refuse-printing-the-environment-in-pi-with-a-project-extension.md)\n' \
+          "$1" "$2" >&2
+        exit 1
+      }
+
+      # The allow list, one name a line with its reason. A name is copied only when the parent has it set.
+      allowed="
+      DEEPSEEK_API_KEY
+      HOME
+      PATH
+      USER
+      LOGNAME
+      SHELL
+      TERM
+      COLORTERM
+      LANG
+      LC_ALL
+      LC_CTYPE
+      TMPDIR
+      XDG_RUNTIME_DIR
+      XDG_CONFIG_HOME
+      XDG_STATE_HOME
+      XDG_CACHE_HOME
+      XDG_DATA_HOME
+      DOT_AGENT_DECK_PANE_ID
+      DOT_AGENT_DECK_PANE_CAPABILITY
+      DOT_AGENT_DECK_AGENT_ID
+      DOT_AGENT_DECK_WORK_ID
+      DOT_AGENT_DECK_VIA_DAEMON
+      DOT_AGENT_DECK_LAUNCH_NONCE
+      DOT_AGENT_DECK_RESUME_AGENT
+      DOT_AGENT_DECK_RESUME_SESSION
+      DOT_AGENT_DECK_RESUME_TOKEN
+      DOT_AGENT_DECK_FRESH_AGENT
+      DOT_AGENT_DECK_FRESH_SESSION
+      DOT_AGENT_DECK_FRESH_TOKEN
+      DOT_AGENT_DECK_SOCKET
+      DOT_AGENT_DECK_EXE
+      DOT_AGENT_DECK_BIN
+      DOT_AGENT_DECK_STATE_DIR
+      DOT_AGENT_DECK_USAGE_FILE
+      DOT_AGENT_DECK_INBOX_WATCHER_BACKOFF_MS
+      "
+      # Why each one:
+      #   DEEPSEEK_API_KEY      pi's DeepSeek provider credential, the tester's one key (ADR 0003).
+      #   HOME                  pi's ~/.pi/agent (settings, the deck's extension), git's config, Go's caches, and
+      #                         the agents App token file the VM's gh reads.
+      #   PATH                  finds node, go, make, git, gh, jq and dot-agent-deck (dev/lima.yaml's profile).
+      #   USER, LOGNAME         the account name tools look up without asking the system (git, os/user).
+      #   SHELL                 the shell pi's bash tool and make fall back to.
+      #   TERM, COLORTERM       the deck's terminal (the daemon's terminal.conf drop-in), so pi draws its colours.
+      #   LANG, LC_ALL, LC_CTYPE  the locale, so pi and the tools read and write UTF-8. LANG sets every other
+      #                         LC_* category that is not set itself, so the others are left out.
+      #   TMPDIR                the temporary directory, which the deck's socket falls back to without
+      #                         XDG_RUNTIME_DIR.
+      #   XDG_RUNTIME_DIR       where the deck's socket lives by default, and the rootless containerd's.
+      #   XDG_CONFIG_HOME, XDG_STATE_HOME, XDG_CACHE_HOME, XDG_DATA_HOME
+      #                         where tools keep their files when the system sets them (the deck's state dir).
+      #   DOT_AGENT_DECK_PANE_ID, _PANE_CAPABILITY, _AGENT_ID, _VIA_DAEMON
+      #                         the pane's identity and the token that lets its work-done and status updates be
+      #                         accepted (dot-agent-deck docs configuration, the deck's pi extension); the
+      #                         capability is scoped to this pane and the deck, no other service.
+      #   DOT_AGENT_DECK_WORK_ID, _LAUNCH_NONCE, _RESUME_AGENT, _RESUME_SESSION, _RESUME_TOKEN, _FRESH_AGENT,
+      #   _FRESH_SESSION, _FRESH_TOKEN
+      #                         kept for the deck binary's launch and resume path: the names were found in the
+      #                         binary's strings beside the pane id, and what reads them is unverified, so a later
+      #                         trim can test dropping them one by one. Scoped to the deck.
+      #   DOT_AGENT_DECK_SOCKET the daemon's socket, which the deck passes to the agents it starts.
+      #   DOT_AGENT_DECK_EXE, DOT_AGENT_DECK_BIN
+      #                         the dot-agent-deck executable the deck's pi extension runs.
+      #   DOT_AGENT_DECK_STATE_DIR  the deck's state directory, when it is not the default.
+      #   DOT_AGENT_DECK_USAGE_FILE, DOT_AGENT_DECK_INBOX_WATCHER_BACKOFF_MS
+      #                         read by the deck's pi extension: where it writes pi's usage, and its inbox
+      #                         watcher's backoff.
+      # Set by the wrapper itself, whatever the parent has:
+      #   SHIFT2EU_PI_TESTER=1  the marker the VM's login profile reads to leave the agents' keys file unsourced.
+      # Left out on purpose: GH_TOKEN and every other GitHub token variable; ANTHROPIC_API_KEY,
+      # CLAUDE_CODE_OAUTH_TOKEN and every other agent's key; OTEL_* and DOT_AGENT_DECK_PI_TELEMETRY, because
+      # OTEL_EXPORTER_OTLP_HEADERS carries the telemetry backend's API key (the tester's pane exports no telemetry
+      # of pi's own); and no Go variable, since dev/lima.yaml sets none (Go's defaults under HOME apply).
+
+      # allowlisted <run|exec> <command> [<argument>...] runs the command under `env -i` and the allow list alone.
+      # Inside the function the positional parameters become: the NAME=value assignments, the marker, then the
+      # command and its arguments, each unchanged.
+      allowlisted() {
+        mode=$1
+        shift
+        count=$#
+        isset=""
+        value=""
+        for name in ${allowed}; do
+          eval "isset=\${${name}+x}"
+          if [ -n "${isset}" ]; then
+            eval "value=\${${name}}"
+            set -- "$@" "${name}=${value}"
+          fi
+        done
+        set -- "$@" "SHIFT2EU_PI_TESTER=1"
+        while [ "${count}" -gt 0 ]; do
+          set -- "$@" "$1"
+          shift
+          count=$((count - 1))
+        done
+        if [ "${mode}" = exec ]; then
+          exec env -i "$@"
+        fi
+        env -i "$@"
+      }
+
+      # The extension's load, as pi makes it: an import whose default export must be a function.
+      load_extension='
+      const { pathToFileURL } = await import("node:url");
+      const module = await import(pathToFileURL(process.argv[1]).href);
+      if (typeof module.default !== "function") {
+        process.exit(1);
+      }
+      '
+
+      # The list's patterns, compiled as the extension compiles them: each a string and a regular expression.
+      compile_patterns='
+      const { readFileSync } = await import("node:fs");
+      const doc = JSON.parse(readFileSync(process.argv[1], "utf8"));
+      if (!Array.isArray(doc.patterns) || doc.patterns.length === 0) {
+        process.exit(1);
+      }
+      for (const pattern of doc.patterns) {
+        if (typeof pattern !== "string") {
+          process.exit(1);
+        }
+        new RegExp(pattern);
+      }
+      '
+
+      [ -f "${extension}" ] || refuse "${extension}" "is missing or not a regular file"
+      [ -s "${extension}" ] || refuse "${extension}" "is empty"
+      [ -f "${list}" ] || refuse "${list}" "is missing or not a regular file"
+      command -v jq >/dev/null 2>&1 || refuse "${list}" "cannot be checked: jq is not on PATH"
+      jq -e 'type == "object" and (.patterns | type == "array" and length > 0)' "${list}" >/dev/null 2>&1 ||
+        refuse "${list}" "is not a JSON object with a non-empty patterns array"
+
+      node="$(command -v node)" ||
+        refuse "${extension}" "cannot be loaded: node is not on PATH (re-provision the VM: dev/lima.yaml installs it)"
+      allowlisted run "${node}" --input-type=module -e "${load_extension}" "${extension}" >/dev/null 2>&1 ||
+        refuse "${extension}" "does not load in node with a function as its default export (make test runs TestPiEnvDenyExtensionLoads, which says why)"
+      allowlisted run "${node}" --input-type=module -e "${compile_patterns}" "${list}" >/dev/null 2>&1 ||
+        refuse "${list}" "has a pattern node cannot compile as a regular expression"
+
+      pi="$(command -v pi)" || {
+        echo "pi-tester: pi is not on PATH: re-provision the VM (dev/lima.yaml installs it)" >&2
+        exit 1
+      }
+
+      # The project's copies: each one missing or not byte for byte the installed file is ignored, and named in one
+      # line, with the installed file and the update step. Only paths are printed, never a file's content.
+      differs=""
+      # compare_copy <installed file> <project file> notes the project file when it is not the installed one.
+      compare_copy() {
+        if ! cmp -s "$1" "$2"; then
+          differs="${differs}${differs:+; }$2 (installed: $1)"
+        fi
+      }
+      compare_copy "${script}" "${PWD}/dev/pi-tester.sh"
+      compare_copy "${extension}" "${PWD}/.pi/extensions/deny-env-printing.ts"
+      compare_copy "${list}" "${PWD}/.pi/deny-env-printing.json"
+      if [ -n "${differs}" ]; then
+        printf 'pi-tester: ignoring the project copies that are missing or differ from the installed ones, starting pi from the installed files: %s; to install the project copies after review, the maintainer runs make vm-pi-tester (issue #692)\n' \
+          "${differs}" >&2
+      fi
+
+      allowlisted exec "${pi}" --extension "${extension}" "$@"
+      PITESTER
+        cat >"${tmp}/deny-env-printing.ts" <<'PIDENYEXT'
+      /**
+       * Refuses the commands that print the environment (CLAUDE.md rule 3, issue #540, ADR 0044).
+       *
+       * The tester runs pi with --approve: pi asks for nothing, and the environment holds the agents' API keys.
+       * This project-local extension, which pi loads because --approve trusts the project, hooks `tool_call`,
+       * the event that sees a tool call before it runs, and blocks:
+       *
+       * - a bash call whose command is longer than 32 KB, unread (the patterns are quadratic on one long line);
+       * - a bash call whose command matches any pattern of ../deny-env-printing.json;
+       * - a file-tool call (read, grep, find, ls, edit, write) whose path, normalised as pi normalises it (a
+       *   leading `@`, a `file://` URL, Unicode spaces, `~`, `..`) and resolved against the working directory,
+       *   is /proc, ~/.config/dot-agent-deck or ~/.config/shift2eu (the agents App's token folder, issue #662)
+       *   or lies under one of them, or whose path, glob or pattern names the deck's file of keys, daemon.env,
+       *   or its directory, or whose path names the App's folder; a grep or find pattern or glob naming the App's
+       *   folder or files (agents-app-*) is allowed, since a pattern is text the walk looks for, a glob only
+       *   filters the names the walk reports, and the walk's path is checked (issue #691);
+       * - a grep or find call whose path is an ancestor of one of those directories (`~`, `/`, and every spelling that
+       *   resolves to one, such as `//`, `/.`, `/..` or enough `../`), which its walk reaches; a call with no
+       *   path is checked as the working directory, where pi runs it.
+       *
+       * The patterns are data, pinned by test/architecture/pienvdeny_test.go, and are written to the syntax Go's
+       * RE2 and JavaScript share (no lookaround, no backreference, no inline flag).
+       *
+       * What fails closed and what does not: pi logs an extension that fails to load and carries on without it,
+       * so a load failure fails open. The top level therefore does nothing that can throw, and the factory never
+       * throws: when the list cannot be found, read or parsed, or a pattern does not compile, every bash call is
+       * refused with a reason that says so, and a handler that throws on a call refuses that call. It is a second
+       * layer beside the rule, not a boundary: the Lima VM is the boundary (ADR 0003).
+       *
+       * The extension imports pi's package for types alone (`import type` is erased): the guard must not depend
+       * at run time on the module whose behaviour it guards.
+       */
+
+      import { readFileSync } from "node:fs";
+      import { homedir } from "node:os";
+      import { dirname, join, resolve } from "node:path";
+      import { fileURLToPath } from "node:url";
+      import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+
+      // The deck's file of the agents' keys (CLAUDE.md rule 3), refused by name wherever a file tool is pointed.
+      const deckKeyFile = "daemon.env";
+
+      // The file tools whose path, glob or pattern a call is refused for.
+      const fileTools = new Set(["read", "grep", "find", "ls", "edit", "write"]);
+
+      // The file tools that read the contents of a whole directory tree (pi runs grep as `rg --hidden`): a call
+      // of one is refused also when its resolved path is an ancestor of a refused directory (`~`, `/`, or `..`
+      // up to either), since the walk reaches it; a call with no path walks the working directory, so it is
+      // checked as `.`.
+      const recursiveTools = new Set(["grep", "find"]);
+
+      // The longest bash command matched against the patterns. The prefix patterns cost time quadratic in the
+      // length of one line full of separators (100 KB of minified JSON in an `echo '...'` took 35 s in Node), so
+      // a longer command is refused unread rather than stalling the call.
+      const maxCommandLength = 32 * 1024;
+
+      const longCommandReason = `Refused: bash commands over ${maxCommandLength} characters (32 KB) are refused unread (CLAUDE.md, rule 3, ADR 0044); write the content with the write tool and pass the file to a shorter command.`;
+
+      type DenyList = { reason: string; patterns: RegExp[] };
+
+      type Loaded = { list: DenyList; listPath: string } | { failure: string; listPath: string };
+
+      function loadDenyList(): Loaded {
+      	let listPath = "../deny-env-printing.json";
+
+      	try {
+      		listPath = join(dirname(fileURLToPath(import.meta.url)), "..", "deny-env-printing.json");
+
+      		const doc: unknown = JSON.parse(readFileSync(listPath, "utf8"));
+      		if (typeof doc !== "object" || doc === null) {
+      			return { failure: "the list is no JSON object", listPath };
+      		}
+
+      		const { reason, patterns } = doc as { reason?: unknown; patterns?: unknown };
+      		if (typeof reason !== "string" || reason.trim() === "") {
+      			return { failure: "the list gives no reason", listPath };
+      		}
+
+      		if (!Array.isArray(patterns) || patterns.length === 0 || !patterns.every((p) => typeof p === "string")) {
+      			return { failure: "the list holds no patterns, or one that is no string", listPath };
+      		}
+
+      		return { list: { reason, patterns: patterns.map((p: string) => new RegExp(p)) }, listPath };
+      	} catch (err) {
+      		return { failure: err instanceof Error ? err.message : String(err), listPath };
+      	}
+      }
+
+      // The deck's directory under the home directory, which holds the file of keys and whatever else the deck
+      // keeps there: refused whole, by resolved path and by name in a glob or pattern.
+      const deckKeyDirectory = ".config/dot-agent-deck";
+
+      // The spellings of that directory a path normalises or a glob names (`.config//dot-agent-deck`,
+      // `.config/./dot-agent-deck`, `.config/dot-agent*`), refused in a glob or pattern as the list refuses
+      // them in a bash command.
+      const deckDirectorySpelling = /\.config[/.]*\/dot-agent/;
+
+      // The folder under the home directory that holds the agents App's token file, agents-app-token, and the
+      // identity file `make agents-token` writes beside it (ADR 0031, issue #662): the one GitHub credential every
+      // agent pushes with. Refused whole, by resolved path, as an ancestor of a grep or find, and by its spellings
+      // in a path. A search pattern or glob may name it: a pattern is text to look for and a glob filters the
+      // names the walk reports, neither is a place the walk goes (issue #691).
+      const appTokenDirectory = ".config/shift2eu";
+
+      // The folder's spellings a path names (`.config//shift2eu`, `.config/./shift2eu`), as the list refuses them
+      // in a bash command. `~/.local/state/shift2eu` and a checkout named shift2eu are not it.
+      const appTokenDirectorySpelling = /\.config[/.]*\/shift2eu\b/;
+
+      // The Unicode spaces pi maps to a plain space before it reads a path: U+00A0, U+2000 to U+200A, U+202F,
+      // U+205F and U+3000. The class is built from their code points so that this file holds only ASCII.
+      // The code points are constants, so the top level does nothing that can throw: a load failure fails open
+      // and pi runs without this refusal (ADR 0044), and TestPiEnvDenyExtensionLoads fails if it throws.
+      const unicodeSpaces = new RegExp(
+      	"[" +
+      		String.fromCodePoint(0x00a0, 0x2000) +
+      		"-" +
+      		String.fromCodePoint(0x200a, 0x202f, 0x205f, 0x3000) +
+      		"]",
+      	"g",
+      );
+
+      // resolvePath resolves a file tool's path as pi's resolveToCwd and normalizePath do: one leading `@`
+      // (pi's shorthand for a path) is dropped, a `file://` URL becomes its path, the Unicode spaces become
+      // plain ones, a leading `~` is the home directory, a relative path is under the working directory and
+      // `..` is normalised. A URL that does not convert throws, and the handler refuses the call: a fallback
+      // to the raw value would resolve `file:///proc/...` as a relative path and allow it.
+      function resolvePath(path: string, cwd: string): string {
+      	let expanded = path.startsWith("@") ? path.slice(1) : path;
+      	if (expanded.startsWith("file://")) {
+      		expanded = fileURLToPath(expanded);
+      	}
+
+      	expanded = expanded.replace(unicodeSpaces, " ");
+      	if (expanded === "~" || expanded.startsWith("~/")) {
+      		expanded = homedir() + expanded.slice(1);
+      	}
+
+      	return resolve(cwd, expanded);
+      }
+
+      // under tells whether absolute is directory or below it. A directory that already ends in `/` (the root,
+      // `/`) is its own prefix: appending another `/` would ask for `//`, which no resolved path starts with.
+      function under(absolute: string, directory: string): boolean {
+      	const prefix = directory.endsWith("/") ? directory : `${directory}/`;
+      	return absolute === directory || absolute.startsWith(prefix);
+      }
+
+      const procReason =
+      	"Refused: /proc holds the environment of every process, which holds the agents' API keys (CLAUDE.md, rule 3).";
+
+      const keyFileReason = `Refused: ${deckKeyFile} and ~/${deckKeyDirectory} hold the agents' API keys; never read them (CLAUDE.md, rule 3).`;
+
+      const appTokenReason = `Refused: ~/${appTokenDirectory} holds the agents App's token file, agents-app-token, the GitHub credential every agent pushes with; never read it, search under it or above it, or name it in a path; a search pattern or glob may name it (CLAUDE.md, rule 3, ADR 0031).`;
+
+      const handlerFailureReason =
+      	"Refused: the env-printing refusal could not check this call, so it is refused (CLAUDE.md, rule 3). Report this through dot-agent-deck work-done and stop.";
+
+      export default function (pi: ExtensionAPI) {
+      	const loaded = loadDenyList();
+
+      	pi.on("session_start", async (_event, ctx) => {
+      		try {
+      			if (ctx.hasUI) {
+      				ctx.ui.notify(
+      					"failure" in loaded
+      						? "env-printing refusal: the list could not be loaded, every bash command is refused"
+      						: "env-printing refusal loaded",
+      					"failure" in loaded ? "error" : "info",
+      				);
+      			}
+      		} catch {
+      			// A notice that cannot be shown changes nothing the refusal does.
+      		}
+      	});
+
+      	pi.on("tool_call", async (event, ctx) => {
+      		try {
+      			const input = (event.input ?? {}) as Record<string, unknown>;
+
+      			if (event.toolName === "bash") {
+      				if ("failure" in loaded) {
+      					return {
+      						block: true,
+      						reason: `Refused: the env-printing refusal list ${loaded.listPath} could not be loaded (${loaded.failure}), so every bash command is refused (CLAUDE.md, rule 3). Report this through dot-agent-deck work-done and stop.`,
+      					};
+      				}
+
+      				const command = String(input.command ?? "");
+      				if (command.length > maxCommandLength) {
+      					return { block: true, reason: longCommandReason };
+      				}
+
+      				if (loaded.list.patterns.some((re) => re.test(command))) {
+      					return { block: true, reason: loaded.list.reason };
+      				}
+
+      				return undefined;
+      			}
+
+      			if (fileTools.has(event.toolName)) {
+      				const cwd = typeof ctx?.cwd === "string" ? ctx.cwd : process.cwd();
+      				const keyDirectory = join(homedir(), deckKeyDirectory);
+      				const tokenDirectory = join(homedir(), appTokenDirectory);
+
+      				for (const field of ["path", "glob", "pattern"]) {
+      					// pi runs a file tool with no path in the working directory, so an absent path is checked as `.`.
+      					const value = field === "path" ? (input.path ?? ".") : input[field];
+      					if (typeof value !== "string") {
+      						continue;
+      					}
+
+      					if (value.includes(deckKeyFile) || value.includes(deckKeyDirectory) || deckDirectorySpelling.test(value)) {
+      						return { block: true, reason: keyFileReason };
+      					}
+
+      					// A grep or find pattern is text the walk looks for, never a file it opens, and a glob only filters
+      					// the names the walk reports: where the walk goes is its path, checked here and below (the folder,
+      					// under it and its ancestors), so a pattern or glob naming the App's folder or files is no refusal
+      					// (issue #662, round 3's review, finding S1; issue #691).
+      					if (field === "path" && appTokenDirectorySpelling.test(value)) {
+      						return { block: true, reason: appTokenReason };
+      					}
+
+      					if (field === "path") {
+      						const absolute = resolvePath(value, cwd);
+
+      						if (under(absolute, keyDirectory)) {
+      							return { block: true, reason: keyFileReason };
+      						}
+
+      						if (under(absolute, tokenDirectory)) {
+      							return { block: true, reason: appTokenReason };
+      						}
+
+      						if (under(absolute, "/proc")) {
+      							return { block: true, reason: procReason };
+      						}
+
+      						// A grep or find rooted at an ancestor walks into the refused directory.
+      						if (recursiveTools.has(event.toolName)) {
+      							if (under(keyDirectory, absolute)) {
+      								return { block: true, reason: keyFileReason };
+      							}
+
+      							if (under(tokenDirectory, absolute)) {
+      								return { block: true, reason: appTokenReason };
+      							}
+
+      							if (under("/proc", absolute)) {
+      								return { block: true, reason: procReason };
+      							}
+      						}
+      					} else if (value.includes("/proc")) {
+      						return { block: true, reason: procReason };
+      					}
+      				}
+      			}
+
+      			return undefined;
+      		} catch {
+      			return { block: true, reason: handlerFailureReason };
+      		}
+      	});
+      }
+      PIDENYEXT
+        cat >"${tmp}/deny-env-printing.json" <<'PIDENYLIST'
+      {
+        "reason": "Refused: this command prints the environment, or a value of it, which holds the agents' API keys. Never print the environment (env, printenv, set, export -p, declare -p, compgen -v, ps e, make -p, /proc, a $..._KEY or $..._TOKEN expansion, an interpreter's environ) and never read daemon.env, anything under ~/.config/dot-agent-deck or anything under ~/.config/shift2eu, the folder of the App token file agents-app-token, never name that file or agents-app-identity, never name or clear the tester's marker SHIFT2EU_PI_TESTER, which keeps the agents' keys out of its login shells, and never start a command with a cleared or fresh environment (env -i, env -, exec -c, sudo -i, su -l, su -), which drops the marker; CLAUDE.md, rule 3. A command that names SHIFT2EU_PI_TESTER is refused even as text: search with the grep tool and commit with git commit -F. Your scratch directory is .scratch/ in your worktree; there is nothing you need from the environment. Search files with the grep tool, not a bash grep. Do not look for another way to read it: stop and report through dot-agent-deck work-done if the task cannot go on without it.",
+        "patterns": [
+          "(^|[\\n;&|()`{'\"])[ \\t]*(([0-9]*[<>&][<>&|]*[ \\t]*[^\\s;&|()<>`]+|[A-Za-z_][A-Za-z0-9_]*=\\S*|then|do|else|elif|if|while|until|!|(\\S*/)?(sudo|command|builtin|exec|nohup|time|xargs|timeout|nice|ionice|stdbuf|doas|busybox|eval|env|bash|sh|zsh|dash|ksh|setsid|strace|ltrace|watch|script|unbuffer|su|runuser|fish|coproc)([ \\t]+(-\\S*([ \\t]+[^-\\s;&|()<>`]\\S*)?|[0-9][0-9.]*[smhd]?|[A-Za-z_][A-Za-z0-9_]*=\\S*)){0,4}|(\\S*/)?(flock|chroot)([ \\t]+-\\S*){0,4}[ \\t]+[^-\\s;&|()<>`]\\S*)[ \\t]+){0,6}['\"\\\\]?(\\S*/)?env([ \\t]+(-[uC][ \\t]+[^\\s;&|()<>`]+|--(unset|chdir)[ \\t]+[^\\s;&|()<>`]+|-\\S+|[A-Za-z_][A-Za-z0-9_]*=\\S*)){0,8}[ \\t]*($|[0-9]+[<>]|[\\n;&|()<>`}'\"])",
+          "(^|[\\n;&|()`{'\"])[ \\t]*(([0-9]*[<>&][<>&|]*[ \\t]*[^\\s;&|()<>`]+|[A-Za-z_][A-Za-z0-9_]*=\\S*|then|do|else|elif|if|while|until|!|(\\S*/)?(sudo|command|builtin|exec|nohup|time|xargs|timeout|nice|ionice|stdbuf|doas|busybox|eval|env|bash|sh|zsh|dash|ksh|setsid|strace|ltrace|watch|script|unbuffer|su|runuser|fish|coproc)([ \\t]+(-\\S*([ \\t]+[^-\\s;&|()<>`]\\S*)?|[0-9][0-9.]*[smhd]?|[A-Za-z_][A-Za-z0-9_]*=\\S*)){0,4}|(\\S*/)?(flock|chroot)([ \\t]+-\\S*){0,4}[ \\t]+[^-\\s;&|()<>`]\\S*)[ \\t]+){0,6}['\"\\\\]?(\\S*/)?printenv($|[\\s;&|()<>`}'\"])",
+          "(^|[\\n;&|()`{'\"])[ \\t]*(([0-9]*[<>&][<>&|]*[ \\t]*[^\\s;&|()<>`]+|[A-Za-z_][A-Za-z0-9_]*=\\S*|then|do|else|elif|if|while|until|!|(\\S*/)?(sudo|command|builtin|exec|nohup|time|xargs|timeout|nice|ionice|stdbuf|doas|busybox|eval|env|bash|sh|zsh|dash|ksh|setsid|strace|ltrace|watch|script|unbuffer|su|runuser|fish|coproc)([ \\t]+(-\\S*([ \\t]+[^-\\s;&|()<>`]\\S*)?|[0-9][0-9.]*[smhd]?|[A-Za-z_][A-Za-z0-9_]*=\\S*)){0,4}|(\\S*/)?(flock|chroot)([ \\t]+-\\S*){0,4}[ \\t]+[^-\\s;&|()<>`]\\S*)[ \\t]+){0,6}['\"\\\\]?set[ \\t]*($|[0-9]+[<>]|[\\n;&|()<>`}'\"])",
+          "(^|[\\n;&|()`{'\"])[ \\t]*(([0-9]*[<>&][<>&|]*[ \\t]*[^\\s;&|()<>`]+|[A-Za-z_][A-Za-z0-9_]*=\\S*|then|do|else|elif|if|while|until|!|(\\S*/)?(sudo|command|builtin|exec|nohup|time|xargs|timeout|nice|ionice|stdbuf|doas|busybox|eval|env|bash|sh|zsh|dash|ksh|setsid|strace|ltrace|watch|script|unbuffer|su|runuser|fish|coproc)([ \\t]+(-\\S*([ \\t]+[^-\\s;&|()<>`]\\S*)?|[0-9][0-9.]*[smhd]?|[A-Za-z_][A-Za-z0-9_]*=\\S*)){0,4}|(\\S*/)?(flock|chroot)([ \\t]+-\\S*){0,4}[ \\t]+[^-\\s;&|()<>`]\\S*)[ \\t]+){0,6}['\"\\\\]?export([ \\t]*($|[0-9]+[<>]|[\\n;&|()<>`}'\"])|[ \\t]+-[a-zA-Z]*p)",
+          "(^|[\\n;&|()`{'\"])[ \\t]*(([0-9]*[<>&][<>&|]*[ \\t]*[^\\s;&|()<>`]+|[A-Za-z_][A-Za-z0-9_]*=\\S*|then|do|else|elif|if|while|until|!|(\\S*/)?(sudo|command|builtin|exec|nohup|time|xargs|timeout|nice|ionice|stdbuf|doas|busybox|eval|env|bash|sh|zsh|dash|ksh|setsid|strace|ltrace|watch|script|unbuffer|su|runuser|fish|coproc)([ \\t]+(-\\S*([ \\t]+[^-\\s;&|()<>`]\\S*)?|[0-9][0-9.]*[smhd]?|[A-Za-z_][A-Za-z0-9_]*=\\S*)){0,4}|(\\S*/)?(flock|chroot)([ \\t]+-\\S*){0,4}[ \\t]+[^-\\s;&|()<>`]\\S*)[ \\t]+){0,6}['\"\\\\]?(declare|typeset)([ \\t]*($|[0-9]+[<>]|[\\n;&|()<>`}'\"])|[ \\t]+-[a-zA-Z]*[px])",
+          "(^|[\\n;&|()`{'\"])[ \\t]*(([0-9]*[<>&][<>&|]*[ \\t]*[^\\s;&|()<>`]+|[A-Za-z_][A-Za-z0-9_]*=\\S*|then|do|else|elif|if|while|until|!|(\\S*/)?(sudo|command|builtin|exec|nohup|time|xargs|timeout|nice|ionice|stdbuf|doas|busybox|eval|env|bash|sh|zsh|dash|ksh|setsid|strace|ltrace|watch|script|unbuffer|su|runuser|fish|coproc)([ \\t]+(-\\S*([ \\t]+[^-\\s;&|()<>`]\\S*)?|[0-9][0-9.]*[smhd]?|[A-Za-z_][A-Za-z0-9_]*=\\S*)){0,4}|(\\S*/)?(flock|chroot)([ \\t]+-\\S*){0,4}[ \\t]+[^-\\s;&|()<>`]\\S*)[ \\t]+){0,6}['\"\\\\]?compgen[ \\t]+(-[a-zA-Z]*[veA]|.*[ \\t]-A)",
+          "(^|[\\n;&|()`{'\"])[ \\t]*(([0-9]*[<>&][<>&|]*[ \\t]*[^\\s;&|()<>`]+|[A-Za-z_][A-Za-z0-9_]*=\\S*|then|do|else|elif|if|while|until|!|(\\S*/)?(sudo|command|builtin|exec|nohup|time|xargs|timeout|nice|ionice|stdbuf|doas|busybox|eval|env|bash|sh|zsh|dash|ksh|setsid|strace|ltrace|watch|script|unbuffer|su|runuser|fish|coproc)([ \\t]+(-\\S*([ \\t]+[^-\\s;&|()<>`]\\S*)?|[0-9][0-9.]*[smhd]?|[A-Za-z_][A-Za-z0-9_]*=\\S*)){0,4}|(\\S*/)?(flock|chroot)([ \\t]+-\\S*){0,4}[ \\t]+[^-\\s;&|()<>`]\\S*)[ \\t]+){0,6}['\"\\\\]?(\\S*/)?ps[ \\t]+[A-Za-z]*e[A-Za-z]*($|[\\s;&|()<>`}'\"])",
+          "(^|[\\n;&|()`{'\"])[ \\t]*(([0-9]*[<>&][<>&|]*[ \\t]*[^\\s;&|()<>`]+|[A-Za-z_][A-Za-z0-9_]*=\\S*|then|do|else|elif|if|while|until|!|(\\S*/)?(sudo|command|builtin|exec|nohup|time|xargs|timeout|nice|ionice|stdbuf|doas|busybox|eval|env|bash|sh|zsh|dash|ksh|setsid|strace|ltrace|watch|script|unbuffer|su|runuser|fish|coproc)([ \\t]+(-\\S*([ \\t]+[^-\\s;&|()<>`]\\S*)?|[0-9][0-9.]*[smhd]?|[A-Za-z_][A-Za-z0-9_]*=\\S*)){0,4}|(\\S*/)?(flock|chroot)([ \\t]+-\\S*){0,4}[ \\t]+[^-\\s;&|()<>`]\\S*)[ \\t]+){0,6}['\"\\\\]?(\\S*/)?g?make([ \\t]+[^\\s;&|()<>`]+){0,8}?[ \\t]+(-[A-Za-z0-9]*p|--print-da)",
+          "(^|[\\s'\"=<>:(/.])/proc($|[/\\s;&|)'\"])",
+          "(^|[\\s'\"=<>:(/])pro[^/\\s]*/+[^/\\s]*/+environ",
+          "daemon\\.env",
+          "\\.config[/.]*/dot-agent",
+          "\\.config[/.]*/shift2eu\\b",
+          "SHIFT2EU_PI_TESTER",
+          "\\benv([ \\t]+(-[uCS][ \\t]+[^-\\s]\\S*|[A-Za-z_][A-Za-z0-9_]*=\\S*)){0,4}[ \\t]+(-[A-Za-z]*i|--ignore-environment|-($|[\\s;&|()<>`]))",
+          "(^|[\\n;&|()`{'\"])[ \\t]*(([0-9]*[<>&][<>&|]*[ \\t]*[^\\s;&|()<>`]+|[A-Za-z_][A-Za-z0-9_]*=\\S*|then|do|else|elif|if|while|until|!|(\\S*/)?(sudo|command|builtin|exec|nohup|time|xargs|timeout|nice|ionice|stdbuf|doas|busybox|eval|env|bash|sh|zsh|dash|ksh|setsid|strace|ltrace|watch|script|unbuffer|su|runuser|fish|coproc)([ \\t]+(-\\S*([ \\t]+[^-\\s;&|()<>`]\\S*)?|[0-9][0-9.]*[smhd]?|[A-Za-z_][A-Za-z0-9_]*=\\S*)){0,4}|(\\S*/)?(flock|chroot)([ \\t]+-\\S*){0,4}[ \\t]+[^-\\s;&|()<>`]\\S*)[ \\t]+){0,6}['\"\\\\]?(\\S*/)?exec([ \\t]+-[A-Za-z]+([ \\t]+[^-\\s;&|()<>`]\\S*)?){0,3}[ \\t]+-[A-Za-z]*c",
+          "\\bsudo([ \\t]+-\\S*([ \\t]+[^-\\s]\\S*)?){0,4}[ \\t]+(-[A-Za-z]*i|--login)",
+          "\\bsu([ \\t]+-[A-Za-z]+){0,3}[ \\t]+(-[A-Za-z]*l|--login|-($|[\\s;&|()<>`]))",
+          "agents-app-(token|identity)($|[^.a-z])",
+          "\\bgh[ \\t]+auth[ \\t]+(token|status[^\\n;&|]*[ \\t](-[A-Za-z]*t\\b|--show-token))",
+          "\\bgit\\b[^\\n;&|]*[ \\t]credential[ \\t]+fill\\b|\\bgh[ \\t]+auth[ \\t]+git-credential\\b",
+          "\\bjq\\b[^\\n;&|]*[ \\t'\"(]env\\b|\\$ENV\\b",
+          "\\$\\{?[A-Za-z0-9_]*(KEY|TOKEN|SECRET|PASSWORD)",
+          "\\$\\{!",
+          "\\bENVIRON\\b|os\\.environ|os\\.getenv|process\\.env|\\$ENV\\{|%ENV\\b|getenv\\(|\\bENV\\b|\\benviron\\b"
+        ]
+      }
+      PIDENYLIST
+        install -d -o root -g root -m 0755 /usr/local/lib/shift2eu /usr/local/lib/shift2eu/pi-tester \
+          /usr/local/lib/shift2eu/pi-tester/extensions
+        install -o root -g root -m 0755 "${tmp}/pi-tester.sh" /usr/local/lib/shift2eu/pi-tester/pi-tester.sh
+        install -o root -g root -m 0644 "${tmp}/deny-env-printing.ts" /usr/local/lib/shift2eu/pi-tester/extensions/deny-env-printing.ts
+        install -o root -g root -m 0644 "${tmp}/deny-env-printing.json" /usr/local/lib/shift2eu/pi-tester/deny-env-printing.json
+      )
+
       # The shellcheck release binary, pinned by its SHA-256 above, root-owned in /usr/local/bin like gh. make
       # lint runs it, and dev/actionlint.sh hands actionlint its path, failing without one.
       if ! /usr/local/bin/shellcheck --version 2>/dev/null | grep -qx "version: ${PARAM_shellcheckVersion#v}"; then

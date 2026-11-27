@@ -1,14 +1,23 @@
 #!/bin/sh
-# Starts pi for the tester role (issue #662,
+# Starts pi for the tester role (issue #662, issue #692,
 # docs/adr/0044-refuse-printing-the-environment-in-pi-with-a-project-extension.md): .dot-agent-deck.toml's
-# tester command runs this script, never pi itself.
+# tester command runs this script, never pi itself, and runs the copy dev/lima.yaml installs root-owned:
+#   /usr/local/lib/shift2eu/pi-tester/pi-tester.sh                         this script
+#   /usr/local/lib/shift2eu/pi-tester/extensions/deny-env-printing.ts      .pi/extensions/deny-env-printing.ts
+#   /usr/local/lib/shift2eu/pi-tester/deny-env-printing.json               .pi/deny-env-printing.json
+# The unit's folder, where the deck starts the pane, is writable by the agents, so a branch could weaken its
+# copies; the installed ones change only on a VM rebuild or make vm-pi-tester, which the maintainer runs.
 #
-# 1. Fails closed. pi logs a project extension that fails to load and runs without it, so the env-printing
-#    refusal (ADR 0044) would fail open on its own. Before pi starts, the two files the refusal is made of
-#    are checked, relative to the working directory pi loads the project from (the deck starts the pane in
-#    the unit's folder):
-#    - .pi/extensions/deny-env-printing.ts must be a non-empty regular file, and .pi/deny-env-printing.json
-#      a JSON object whose "patterns" is a non-empty array (checked with jq, which dev/lima.yaml installs);
+# 0. Reads the refusal's two files from the directory this script is installed in (the directory of $0,
+#    which must be an absolute path), never from the working directory. When a copy in the working directory
+#    (.pi/extensions/deny-env-printing.ts, .pi/deny-env-printing.json, dev/pi-tester.sh) is missing or not
+#    byte for byte the installed one, it is ignored: one line on stderr names the installed and the project
+#    paths and make vm-pi-tester, and pi still starts from the installed files.
+# 1. Fails closed. pi logs an extension that fails to load and runs without it, so the env-printing refusal
+#    (ADR 0044) would fail open on its own. Before pi starts, the two installed files the refusal is made of
+#    are checked:
+#    - extensions/deny-env-printing.ts must be a non-empty regular file, and deny-env-printing.json a JSON
+#      object whose "patterns" is a non-empty array (checked with jq, which dev/lima.yaml installs);
 #    - then node (from PATH, the one dev/lima.yaml pins, under the allow-listed environment below) imports
 #      the extension and requires a function as its default export, which is what pi calls, and compiles
 #      every pattern of the list with `new RegExp`, as the extension does. The VM's node (22.18 or later)
@@ -19,8 +28,10 @@
 #    pi (1.6.1, the release dev/lima.yaml pins) has no option that makes a failed extension load fatal, so
 #    these checks are the ones that do it.
 # 2. Starts pi with an allow-listed environment: `env -i` and only the variables named below, each copied
-#    when the parent has it set, plus the marker SHIFT2EU_PI_TESTER=1, every argument passed through
-#    unchanged. Everything else - a GitHub token, another agent's key (ANTHROPIC_API_KEY,
+#    when the parent has it set, plus the marker SHIFT2EU_PI_TESTER=1, and the arguments
+#    `--extension <installed extensions/deny-env-printing.ts>` followed by every argument passed through
+#    unchanged, so pi always loads the installed refusal (it also discovers the project's .pi/extensions,
+#    which --approve trusts). Everything else - a GitHub token, another agent's key (ANTHROPIC_API_KEY,
 #    CLAUDE_CODE_OAUTH_TOKEN), the OpenTelemetry headers that carry a backend's API key, any name this list
 #    does not know - is not in pi's environment, so printing it shows only the DeepSeek key and the pane's
 #    variables. The marker makes the VM's login profile (/etc/profile.d/shift2eu.sh, dev/lima.yaml) leave
@@ -41,7 +52,8 @@
 #
 # No value is ever printed: the messages name files, never a variable's value.
 #
-# Usage: dev/pi-tester.sh <pi arguments...>   (from the directory pi loads the project from)
+# Usage: /usr/local/lib/shift2eu/pi-tester/pi-tester.sh <pi arguments...>
+#        (by its absolute path, from the directory pi loads the project from)
 set -eu
 
 # refuse_path <why> stops the wrapper on a PATH that could find a command in the working directory.
@@ -51,8 +63,8 @@ refuse_path() {
   exit 1
 }
 
-case ":${PATH:-}:" in
-*::*) refuse_path "has an empty entry (a leading, doubled or trailing colon)" ;;
+case "${PATH:-}" in
+'' | :* | *: | *:[:]*) refuse_path "has an empty entry (a leading, doubled or trailing colon)" ;;
 esac
 path_entries=${PATH}
 while [ -n "${path_entries}" ]; do
@@ -67,8 +79,18 @@ while [ -n "${path_entries}" ]; do
   esac
 done
 
-extension=.pi/extensions/deny-env-printing.ts
-list=.pi/deny-env-printing.json
+# The installed layout, read beside this script's own path, never from the working directory (issue #692).
+case "$0" in
+/*/*) ;;
+*)
+  echo "pi-tester: not started by its absolute path, so it cannot find its installed files: run /usr/local/lib/shift2eu/pi-tester/pi-tester.sh (issue #692)" >&2
+  exit 1
+  ;;
+esac
+installed=${0%/*}
+script=$0
+extension=${installed}/extensions/deny-env-printing.ts
+list=${installed}/deny-env-printing.json
 
 # refuse <file> <why> stops the wrapper before pi starts.
 refuse() {
@@ -148,7 +170,7 @@ DOT_AGENT_DECK_INBOX_WATCHER_BACKOFF_MS
 #                         watcher's backoff.
 # Set by the wrapper itself, whatever the parent has:
 #   SHIFT2EU_PI_TESTER=1  the marker the VM's login profile reads to leave the agents' keys file unsourced.
-# Left out on purpose: GH_TOKEN, GITHUB_TOKEN and every other GitHub token; ANTHROPIC_API_KEY,
+# Left out on purpose: GH_TOKEN and every other GitHub token variable; ANTHROPIC_API_KEY,
 # CLAUDE_CODE_OAUTH_TOKEN and every other agent's key; OTEL_* and DOT_AGENT_DECK_PI_TELEMETRY, because
 # OTEL_EXPORTER_OTLP_HEADERS carries the telemetry backend's API key (the tester's pane exports no telemetry
 # of pi's own); and no Go variable, since dev/lima.yaml sets none (Go's defaults under HOME apply).
@@ -205,23 +227,40 @@ for (const pattern of doc.patterns) {
 }
 '
 
-[ -f "${extension}" ] || refuse "${PWD}/${extension}" "is missing or not a regular file"
-[ -s "${extension}" ] || refuse "${PWD}/${extension}" "is empty"
-[ -f "${list}" ] || refuse "${PWD}/${list}" "is missing or not a regular file"
-command -v jq >/dev/null 2>&1 || refuse "${PWD}/${list}" "cannot be checked: jq is not on PATH"
+[ -f "${extension}" ] || refuse "${extension}" "is missing or not a regular file"
+[ -s "${extension}" ] || refuse "${extension}" "is empty"
+[ -f "${list}" ] || refuse "${list}" "is missing or not a regular file"
+command -v jq >/dev/null 2>&1 || refuse "${list}" "cannot be checked: jq is not on PATH"
 jq -e 'type == "object" and (.patterns | type == "array" and length > 0)' "${list}" >/dev/null 2>&1 ||
-  refuse "${PWD}/${list}" "is not a JSON object with a non-empty patterns array"
+  refuse "${list}" "is not a JSON object with a non-empty patterns array"
 
 node="$(command -v node)" ||
-  refuse "${PWD}/${extension}" "cannot be loaded: node is not on PATH (re-provision the VM: dev/lima.yaml installs it)"
-allowlisted run "${node}" --input-type=module -e "${load_extension}" "${PWD}/${extension}" >/dev/null 2>&1 ||
-  refuse "${PWD}/${extension}" "does not load in node with a function as its default export (make test runs TestPiEnvDenyExtensionLoads, which says why)"
-allowlisted run "${node}" --input-type=module -e "${compile_patterns}" "${PWD}/${list}" >/dev/null 2>&1 ||
-  refuse "${PWD}/${list}" "has a pattern node cannot compile as a regular expression"
+  refuse "${extension}" "cannot be loaded: node is not on PATH (re-provision the VM: dev/lima.yaml installs it)"
+allowlisted run "${node}" --input-type=module -e "${load_extension}" "${extension}" >/dev/null 2>&1 ||
+  refuse "${extension}" "does not load in node with a function as its default export (make test runs TestPiEnvDenyExtensionLoads, which says why)"
+allowlisted run "${node}" --input-type=module -e "${compile_patterns}" "${list}" >/dev/null 2>&1 ||
+  refuse "${list}" "has a pattern node cannot compile as a regular expression"
 
 pi="$(command -v pi)" || {
   echo "pi-tester: pi is not on PATH: re-provision the VM (dev/lima.yaml installs it)" >&2
   exit 1
 }
 
-allowlisted exec "${pi}" "$@"
+# The project's copies: each one missing or not byte for byte the installed file is ignored, and named in one
+# line, with the installed file and the update step. Only paths are printed, never a file's content.
+differs=""
+# compare_copy <installed file> <project file> notes the project file when it is not the installed one.
+compare_copy() {
+  if ! cmp -s "$1" "$2"; then
+    differs="${differs}${differs:+; }$2 (installed: $1)"
+  fi
+}
+compare_copy "${script}" "${PWD}/dev/pi-tester.sh"
+compare_copy "${extension}" "${PWD}/.pi/extensions/deny-env-printing.ts"
+compare_copy "${list}" "${PWD}/.pi/deny-env-printing.json"
+if [ -n "${differs}" ]; then
+  printf 'pi-tester: ignoring the project copies that are missing or differ from the installed ones, starting pi from the installed files: %s; to install the project copies after review, the maintainer runs make vm-pi-tester (issue #692)\n' \
+    "${differs}" >&2
+fi
+
+allowlisted exec "${pi}" --extension "${extension}" "$@"
