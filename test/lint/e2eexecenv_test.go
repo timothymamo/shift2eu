@@ -335,6 +335,29 @@ func TestE2EExecExempt(t *testing.T) {
 			sub:   "build",
 			flags: []string{"-ldflags", "-X main.a=b\r-X main.c=d"},
 		},
+		// cmd/go reads a -ldflags value whose first byte is not "-" as
+		// pattern=flags, so a leading space or tab would turn the stamps into a
+		// package pattern, which a split on white space drops unseen. A stamp
+		// set starts with -X and ends with its last value: white space at either
+		// end is refused.
+		{
+			name:  "an -ldflags value with a leading space takes the exemption away",
+			cmd:   "go",
+			sub:   "build",
+			flags: []string{"-ldflags", " -X main.a=b -X main.c=d"},
+		},
+		{
+			name:  "an -ldflags value with a leading tab takes the exemption away",
+			cmd:   "go",
+			sub:   "build",
+			flags: []string{"-ldflags", "\t-X main.a=b -X main.c=d"},
+		},
+		{
+			name:  "an -ldflags value with a trailing space takes the exemption away",
+			cmd:   "go",
+			sub:   "build",
+			flags: []string{"-ldflags", "-X main.a=b -X main.c=d "},
+		},
 		{
 			// A stamp is an import path and a symbol, one = and a plain value: a
 			// second = is no value the linker takes as this pair.
