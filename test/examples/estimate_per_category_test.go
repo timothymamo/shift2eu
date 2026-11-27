@@ -76,6 +76,8 @@ type representative struct {
 //     alone, ADR 0046);
 //   - storage.block: one 100 GiB volume (count 1);
 //   - storage.object: 100 GiB stored;
+//   - storage.file: one 500 GiB share, above UpCloud's 250 GiB minimum billed
+//     size, so the row prices the GiB the inventory names;
 //   - serverless.function: a function of 1 GiB of memory, the only size field
 //     the category takes;
 //   - messaging.queue, messaging.topic, serverless.container,
@@ -126,6 +128,9 @@ var representatives = map[taxonomy.Category]representative{
 	taxonomy.StorageObject: {
 		size: &inventory.Size{StorageGiB: number(100)},
 	},
+	taxonomy.StorageFile: {
+		size: &inventory.Size{StorageGiB: number(500)},
+	},
 	taxonomy.ServerlessFunction: {
 		size: &inventory.Size{MemoryGiB: number(1)},
 	},
@@ -161,8 +166,8 @@ func TestEstimatePerTargetAndCategory(t *testing.T) {
 	out.WriteString("bare-metal server is 4 vCPU and 32 GiB, the smallest plan OVHcloud's and Scaleway's bare-metal\n")
 	out.WriteString("offerings cover (UpCloud offers none); Kubernetes counts 3 nodes of the virtual-machine size; a\n")
 	out.WriteString("managed database is 2 vCPU, 4 GiB of memory and 50 GiB of storage; block storage is one 100 GiB\n")
-	out.WriteString("volume and object storage 100 GiB stored; a function is 1 GiB of memory; a queue, a topic and a\n")
-	out.WriteString("serverless container take no size.\n")
+	out.WriteString("volume, object storage 100 GiB stored and a file share 500 GiB provisioned; a function is 1 GiB of\n")
+	out.WriteString("memory; a queue, a topic and a serverless container take no size.\n")
 	out.WriteString("A MongoDB database is 2 vCPU, 8 GiB of memory, 100 GiB of storage and count 3, the nodes of a\n")
 	out.WriteString("replica set; a search cluster and a Kafka cluster are the same size, 2 vCPU, 8 GiB of memory\n")
 	out.WriteString("and 100 GiB of storage per node at count 3, on the 1-AZ tier the default region serves; the\n")

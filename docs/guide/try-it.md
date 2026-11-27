@@ -89,12 +89,12 @@ summary counts the fits and gives each target's estimated total:
 | Fit | `OVHcloud` | `Scaleway` | `UpCloud` |
 |---|---|---|---|
 | direct | 10 | 6 | 6 |
-| partial | 3 | 9 | 2 |
-| none | 6 | 4 | 11 |
+| partial | 3 | 9 | 3 |
+| none | 6 | 4 | 10 |
 | total | 19 | 19 | 19 |
 | `OVHcloud` estimate | €2,508.85 per month for 11 of 19 resources (storage not included in 4 estimates) |  |  |
 | `Scaleway` estimate |  | €1,698.10 per month for 10 of 19 resources (storage not included in 5 estimates) |  |
-| `UpCloud` estimate |  |  | €359.31 per month for 8 of 19 resources |
+| `UpCloud` estimate |  |  | €987.92 per month for 9 of 19 resources |
 
 Estimates are list prices on each catalog's retrieval date, excluding VAT and discounts; each target's own section gives its basis.
 ```
