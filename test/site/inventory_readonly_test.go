@@ -848,6 +848,12 @@ func TestReadOnlyCheckFlagsPlantedWrites(t *testing.T) {
 		mutated: appended("export AWS_ENDPOINT_URL=https://example.com", "aws ec2 describe-instances"),
 		want:    []string{at(plantedLine, "AWS_ENDPOINT_URL")},
 	}, {
+		// The parameter expansions the scan meets split on `=`, which leaves the
+		// variable's name with the expansion's `:` on it.
+		name:    "an endpoint defaulted through a parameter expansion",
+		mutated: appended(`: "${AWS_ENDPOINT_URL:=https://example.com}"`, "aws ec2 describe-instances"),
+		want:    []string{at(plantedLine, "AWS_ENDPOINT_URL")},
+	}, {
 		name:    "a certificate bundle exported on a line of its own",
 		mutated: appended("export AWS_CA_BUNDLE=./corp.pem", "aws ec2 describe-instances"),
 		want:    []string{at(plantedLine, "AWS_CA_BUNDLE")},
@@ -863,6 +869,20 @@ func TestReadOnlyCheckFlagsPlantedWrites(t *testing.T) {
 		name:    "an az connection verification disabled on a line of its own",
 		mutated: appended("export AZURE_CLI_DISABLE_CONNECTION_VERIFICATION=true", "az vm list-sizes"),
 		want:    []string{at(plantedLine, "AZURE_CLI_DISABLE_CONNECTION_VERIFICATION")},
+	}, {
+		// A config file or a config directory names what a flag names too: the file
+		// holds the endpoint, the endpoint overrides or the CA bundle the CLI reads.
+		name:    "an aws config file exported on a line of its own",
+		mutated: appended("export AWS_CONFIG_FILE=./aws-config", "aws ec2 describe-instances"),
+		want:    []string{at(plantedLine, "AWS_CONFIG_FILE")},
+	}, {
+		name:    "an az config directory exported on a line of its own",
+		mutated: appended("export AZURE_CONFIG_DIR=./az-config", "az vm list-sizes"),
+		want:    []string{at(plantedLine, "AZURE_CONFIG_DIR")},
+	}, {
+		name:    "a gcloud config directory exported on a line of its own",
+		mutated: appended("export CLOUDSDK_CONFIG=./gcloud-config", "gcloud compute instances list"),
+		want:    []string{at(plantedLine, "CLOUDSDK_CONFIG")},
 	}, {
 		// A denied flag on a line of its own: the argument it follows spans
 		// physical lines without a trailing `\`, so the flag belongs to no CLI
@@ -911,6 +931,13 @@ func TestReadOnlyCheckFlagsPlantedWrites(t *testing.T) {
 		// carriage return's next line.
 		name:    "a crlf line break after the cli's name",
 		mutated: appended("Tag it by hand with `aws\r", "ec2 create-tags --resources i-0123456789abcdef0`."),
+		want:    []string{at(plantedLine, "aws ec2 create-tags")},
+	}, {
+		// Any line break ends a line, a lone carriage return among them, as
+		// CommonMark reads it: the fields end at the name, and the write is on the
+		// line the carriage return opens.
+		name:    "a lone carriage return after the cli's name",
+		mutated: appended("Tag it by hand with `aws\rec2 create-tags --resources i-0123456789abcdef0`."),
 		want:    []string{at(plantedLine, "aws ec2 create-tags")},
 	}, {
 		// The field scan splits `=` apart, so the scan refuses an inline method
@@ -1005,6 +1032,78 @@ func TestReadOnlyCheckFlagsPlantedWrites(t *testing.T) {
 				}) {
 					t.Errorf("the scan of the guide with %s reports no problem that holds %q: %v",
 						tc.name, want, scan.problems)
+				}
+			}
+		})
+	}
+}
+
+// TestReadOnlyCheckSeparatesConsecutiveCommands shows the scan reads commands the
+// text gives one line each as the commands they are (issue #716's fifth review). A
+// line that ends at its last field takes the next line's fields, but no sequence
+// starts with another CLI's name: a line whose first continuation field names a CLI
+// is that CLI's own sequence, so two `az rest` reads whose words sit one above the
+// other are two reads, not one invocation with two methods. The wrap cases of
+// TestReadOnlyCheckFlagsPlantedWrites still fail: a sequence continues only while
+// the next line's first continuation field names no CLI.
+func TestReadOnlyCheckSeparatesConsecutiveCommands(t *testing.T) {
+	t.Parallel()
+
+	guide := string(readRepositoryFile(t, inventoryGuidePath))
+
+	tests := []struct {
+		name string
+		// lines are the commands, one per line of the bash fence the case plants.
+		lines []string
+		// want are the reads the case adds, per CLI name: the scan runs over the
+		// guide too, so the counts are the difference the plant makes.
+		want map[string]int
+	}{{
+		name: "two consecutive az rest reads",
+		lines: []string{
+			"az rest --method get --url https://management.azure.com/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/a/aResources",
+			"az rest --method get --url https://management.azure.com/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/b/bResources",
+		},
+		want: map[string]int{"az": 2},
+	}, {
+		name: "three consecutive az rest reads",
+		lines: []string{
+			"az rest --method get --url https://management.azure.com/a",
+			"az rest --method get --url https://management.azure.com/b",
+			"az rest --method get --url https://management.azure.com/c",
+		},
+		want: map[string]int{"az": 3},
+	}, {
+		name: "an az rest read under an aws read",
+		lines: []string{
+			"aws ec2 describe-instances",
+			"az rest --method get --url https://management.azure.com/x",
+		},
+		want: map[string]int{"aws": 1, "az": 1},
+	}, {
+		name: "a gcloud read under an az read",
+		lines: []string{
+			"az vm list-sizes --location westeurope",
+			"gcloud compute instances list",
+		},
+		want: map[string]int{"az": 1, "gcloud": 1},
+	}}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			before := scanText(inventoryGuidePath, guide)
+			after := scanText(inventoryGuidePath, guide+"\n\n```bash\n"+strings.Join(tc.lines, "\n")+"\n```\n")
+
+			for _, problem := range after.problems {
+				t.Errorf("the scan of the guide with %s reports a problem: %s", tc.name, problem)
+			}
+
+			for cli, want := range tc.want {
+				if got := after.accepted[cli] - before.accepted[cli]; got != want {
+					t.Errorf("the guide with %s accepts %d %s reads more than the guide alone, want %d: a command the text gives a line of its own starts a sequence of its own",
+						tc.name, got, cli, want)
 				}
 			}
 		})
