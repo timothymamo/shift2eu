@@ -1302,7 +1302,7 @@ var awsSearchAndMessagingCalls = map[string][]string{
 // PR #685).
 const excludedKeysPath = "test/examples/testdata/inventory_guide_excluded_keys.txt"
 
-// awsExcludedKeysRecordTablePath is the table of record documents both readers of
+// excludedKeysRecordTablePath is the table of record documents both readers of
 // that list are given, with the records or the rejection each expects of them
 // (review finding on PR #654). The readers are this package's
 // readExcludedFields and test/examples' readExcludedFixtureKeys, in
@@ -1310,13 +1310,13 @@ const excludedKeysPath = "test/examples/testdata/inventory_guide_excluded_keys.t
 // other, so each holds its own copy of the parser, and this table is what holds
 // the two to the same documents. Both run it, each against its own copy, through
 // TestTheTwoExcludedKeyReadersAcceptAndRejectTheSameRecords.
-const awsExcludedKeysRecordTablePath = "test/examples/testdata/inventory_guide_excluded_key_records.txt"
+const excludedKeysRecordTablePath = "test/examples/testdata/inventory_guide_excluded_key_records.txt"
 
-// awsExcludedFields are the fields PRD #571 excludes from every projection of
+// excludedFields are the fields PRD #571 excludes from every projection of
 // the search and messaging calls: an access policy carries the account's
 // principals, a security option its settings, an endpoint or a bootstrap address
 // a host with the account's name in it.
-type awsExcludedFields struct {
+type excludedFields struct {
 	// names are the fields a projection may not name.
 	names []string
 	// prefixes are the fields a projection may not name whatever their suffix: a
@@ -1326,12 +1326,12 @@ type awsExcludedFields struct {
 
 // The two kinds a record of the shared excluded-key list may have.
 const (
-	// awsRecordKindKey is the kind of a record naming one field a projection of
+	// recordKindKey is the kind of a record naming one field a projection of
 	// the guide's search and messaging calls may not name.
-	awsRecordKindKey = "key"
-	// awsRecordKindPrefix is the kind of a record naming a prefix no field may
+	recordKindKey = "key"
+	// recordKindPrefix is the kind of a record naming a prefix no field may
 	// start with.
-	awsRecordKindPrefix = "prefix"
+	recordKindPrefix = "prefix"
 )
 
 // The reasons the shared excluded-key list, and the table of its record
@@ -1339,37 +1339,37 @@ const (
 // the reason it expects and both copies of the parser can be held to it (review
 // finding on PR #654).
 var (
-	// errAWSRecordMalformed rejects a record that is neither `key: <field>` nor
+	// errRecordMalformed rejects a record that is neither `key: <field>` nor
 	// `prefix: <prefix>`.
-	errAWSRecordMalformed = errors.New("a record is neither `key: <field>` nor `prefix: <prefix>`")
-	// errAWSRecordKind rejects a record of a kind the list does not know.
-	errAWSRecordKind = errors.New("a record's kind is neither `key` nor `prefix`")
-	// errAWSRecordComment rejects a record line that carries a comment, which
+	errRecordMalformed = errors.New("a record is neither `key: <field>` nor `prefix: <prefix>`")
+	// errRecordKind rejects a record of a kind the list does not know.
+	errRecordKind = errors.New("a record's kind is neither `key` nor `prefix`")
+	// errRecordComment rejects a record line that carries a comment, which
 	// would become part of the field's name.
-	errAWSRecordComment = errors.New("a record line carries a comment")
-	// errAWSRecordRepeat rejects a record an earlier line already wrote, which
+	errRecordComment = errors.New("a record line carries a comment")
+	// errRecordRepeat rejects a record an earlier line already wrote, which
 	// would hide that first copy.
-	errAWSRecordRepeat = errors.New("a record repeats an earlier one")
-	// errAWSRecordEmptyHalf rejects a list that holds no key or no prefix.
-	errAWSRecordEmptyHalf = errors.New("the list holds no key or no prefix")
+	errRecordRepeat = errors.New("a record repeats an earlier one")
+	// errRecordEmptyHalf rejects a list that holds no key or no prefix.
+	errRecordEmptyHalf = errors.New("the list holds no key or no prefix")
 )
 
-// awsExcludedKeyRecord is one record of the shared excluded-key list: a field a
+// excludedKeyRecord is one record of the shared excluded-key list: a field a
 // projection of the guide's search and messaging calls may not name, or a prefix
 // no field may start with (PRD #571).
-type awsExcludedKeyRecord struct {
-	// kind is awsRecordKindKey or awsRecordKindPrefix.
+type excludedKeyRecord struct {
+	// kind is recordKindKey or recordKindPrefix.
 	kind string
 	// name is the field, or the prefix a field may not start with.
 	name string
 }
 
 // spelling renders the record as the shared list writes it.
-func (r awsExcludedKeyRecord) spelling() string {
+func (r excludedKeyRecord) spelling() string {
 	return r.kind + ": " + r.name
 }
 
-// parseAWSExcludedFields reads the records of the shared excluded-key list (PRD
+// parseExcludedFields reads the records of the shared excluded-key list (PRD
 // #571). A record is `key: <field>` or `prefix: <prefix>`; a comment and a blank
 // line are no record. A malformed record, a record line that carries a comment
 // (which would become part of the field's name), a record of an unknown kind or a
@@ -1380,13 +1380,13 @@ func (r awsExcludedKeyRecord) spelling() string {
 // The same parser, kept by hand, is test/examples' parseExcludedKeys in
 // test/examples/inventoryguidekeys_test.go, behind its readExcludedFixtureKeys
 // (the twin of this package's readExcludedFields). Neither test package may
-// import the other, so awsExcludedKeysRecordTablePath is what holds the two copies
+// import the other, so excludedKeysRecordTablePath is what holds the two copies
 // to the same documents, and
 // TestTheTwoExcludedKeyReadersAcceptAndRejectTheSameRecords runs it against this
 // one (review finding on PR #654).
-func parseAWSExcludedFields(document string) ([]awsExcludedKeyRecord, error) {
+func parseExcludedFields(document string) ([]excludedKeyRecord, error) {
 	var (
-		records  []awsExcludedKeyRecord
+		records  []excludedKeyRecord
 		keys     int
 		prefixes int
 		// seen maps a record to the line that wrote it, so a repeat names both
@@ -1402,38 +1402,38 @@ func parseAWSExcludedFields(document string) ([]awsExcludedKeyRecord, error) {
 
 		if strings.Contains(trimmed, "#") {
 			return nil, fmt.Errorf("%w: line %d reads %q, want the comment on a line of its own, or the comment is part of the field's name and no field matches it",
-				errAWSRecordComment, number+1, trimmed)
+				errRecordComment, number+1, trimmed)
 		}
 
 		kind, name, ok := strings.Cut(trimmed, ": ")
 		if !ok || name == "" {
 			return nil, fmt.Errorf("%w: line %d reads %q, want `key: <field>` or `prefix: <prefix>`",
-				errAWSRecordMalformed, number+1, trimmed)
+				errRecordMalformed, number+1, trimmed)
 		}
 
 		if first, repeated := seen[trimmed]; repeated {
 			return nil, fmt.Errorf("%w: line %d repeats line %d's record %q, want one record per field, since a second copy hides the first and leaves unclear which one the two checks read",
-				errAWSRecordRepeat, number+1, first, trimmed)
+				errRecordRepeat, number+1, first, trimmed)
 		}
 
 		seen[trimmed] = number + 1
 
 		switch kind {
-		case awsRecordKindKey:
+		case recordKindKey:
 			keys++
-		case awsRecordKindPrefix:
+		case recordKindPrefix:
 			prefixes++
 		default:
 			return nil, fmt.Errorf("%w: line %d reads %q, a record of kind %q, want `key: <field>` or `prefix: <prefix>`",
-				errAWSRecordKind, number+1, trimmed, kind)
+				errRecordKind, number+1, trimmed, kind)
 		}
 
-		records = append(records, awsExcludedKeyRecord{kind: kind, name: name})
+		records = append(records, excludedKeyRecord{kind: kind, name: name})
 	}
 
 	if keys == 0 || prefixes == 0 {
 		return nil, fmt.Errorf("%w: it holds %d key(s) and %d prefix(es), want both, since the list is the whole of what both checks exclude and an empty half would let a field the PRD excludes through",
-			errAWSRecordEmptyHalf, keys, prefixes)
+			errRecordEmptyHalf, keys, prefixes)
 	}
 
 	return records, nil
@@ -1441,29 +1441,29 @@ func parseAWSExcludedFields(document string) ([]awsExcludedKeyRecord, error) {
 
 // readExcludedFields reads the shared list of the fields every projection and
 // fixture of the guide's search and messaging calls leaves out (PRD #571), and
-// hands it to parseAWSExcludedFields. Its twin is test/examples'
+// hands it to parseExcludedFields. Its twin is test/examples'
 // readExcludedFixtureKeys in test/examples/inventoryguidekeys_test.go, which
 // reads the same file for the recorded fixtures with a copy of that parser. This
 // package cannot import the other's reader, so it has one of its own, as the two
 // readers of test/examples/testdata/namespace_may_follow_delimiters.txt do (issue
-// #630); awsExcludedKeysRecordTablePath is the table both run, so a document
+// #630); excludedKeysRecordTablePath is the table both run, so a document
 // either copy accepted or rejected differently from the other fails both (review
 // findings on PRs #639 and #654).
-func readExcludedFields(t *testing.T) awsExcludedFields {
+func readExcludedFields(t *testing.T) excludedFields {
 	t.Helper()
 
-	records, err := parseAWSExcludedFields(string(readRepositoryFile(t, excludedKeysPath)))
+	records, err := parseExcludedFields(string(readRepositoryFile(t, excludedKeysPath)))
 	if err != nil {
 		t.Fatalf("%s: %v", excludedKeysPath, err)
 	}
 
-	var excluded awsExcludedFields
+	var excluded excludedFields
 
 	for _, record := range records {
 		switch record.kind {
-		case awsRecordKindKey:
+		case recordKindKey:
 			excluded.names = append(excluded.names, record.name)
-		case awsRecordKindPrefix:
+		case recordKindPrefix:
 			excluded.prefixes = append(excluded.prefixes, record.name)
 		}
 	}
@@ -1471,35 +1471,35 @@ func readExcludedFields(t *testing.T) awsExcludedFields {
 	return excluded
 }
 
-// awsExcludedKeyRecordRejections maps a rejection reason the shared table names to
-// the error parseAWSExcludedFields returns for it: a document the table rejects as
+// excludedKeyRecordRejections maps a rejection reason the shared table names to
+// the error parseExcludedFields returns for it: a document the table rejects as
 // "duplicate" is one this parser and test/examples' must both reject as
-// errAWSRecordRepeat, and so on. A table case naming a reason this map does not
+// errRecordRepeat, and so on. A table case naming a reason this map does not
 // hold fails the table's test rather than shrinking what the two parsers are held
 // to.
-var awsExcludedKeyRecordRejections = map[string]error{
-	"malformed":    errAWSRecordMalformed,
-	"unknown kind": errAWSRecordKind,
-	"comment":      errAWSRecordComment,
-	"duplicate":    errAWSRecordRepeat,
-	"empty half":   errAWSRecordEmptyHalf,
+var excludedKeyRecordRejections = map[string]error{
+	"malformed":    errRecordMalformed,
+	"unknown kind": errRecordKind,
+	"comment":      errRecordComment,
+	"duplicate":    errRecordRepeat,
+	"empty half":   errRecordEmptyHalf,
 }
 
-// awsExcludedKeyRecordCase is one case of the shared table of record documents: a
+// excludedKeyRecordCase is one case of the shared table of record documents: a
 // list both copies of the parser are given, and the outcome each expects of it.
-type awsExcludedKeyRecordCase struct {
+type excludedKeyRecordCase struct {
 	// document is the list text both parsers are given.
 	document string
 	// want is the records the document holds, each spelled as the list spells it
 	// and joined by " ; ", or "" for a document both parsers reject.
 	want string
 	// rejection is the reason both parsers reject the document, one of
-	// awsExcludedKeyRecordRejections' keys, or "" for a document both accept.
+	// excludedKeyRecordRejections' keys, or "" for a document both accept.
 	rejection string
 }
 
 // name names the case for a subtest.
-func (tc awsExcludedKeyRecordCase) name() string {
+func (tc excludedKeyRecordCase) name() string {
 	outcome := "accepted as " + tc.want
 	if tc.rejection != "" {
 		outcome = "rejected as " + tc.rejection
@@ -1508,20 +1508,20 @@ func (tc awsExcludedKeyRecordCase) name() string {
 	return outcome + ": " + strings.ReplaceAll(tc.document, "\n", ", ")
 }
 
-// awsExcludedKeyRecordCases returns the shared table of record documents,
-// awsExcludedKeysRecordTablePath: a case per line, `<outcome> | <document>`, with
+// excludedKeyRecordCases returns the shared table of record documents,
+// excludedKeysRecordTablePath: a case per line, `<outcome> | <document>`, with
 // `\n` for a newline in the document and the outcome being the records the
 // document holds or `rejected: <reason>`. It fails when the table holds no case,
 // no accepted document, or no document rejected for one of the reasons above, so
 // that a reason the two parsers agree on cannot lose its pin silently.
-func awsExcludedKeyRecordCases(t *testing.T) []awsExcludedKeyRecordCase {
+func excludedKeyRecordCases(t *testing.T) []excludedKeyRecordCase {
 	t.Helper()
 
-	var cases []awsExcludedKeyRecordCase
+	var cases []excludedKeyRecordCase
 
 	reasons := map[string]bool{}
 
-	for number, line := range strings.Split(string(readRepositoryFile(t, awsExcludedKeysRecordTablePath)), "\n") {
+	for number, line := range strings.Split(string(readRepositoryFile(t, excludedKeysRecordTablePath)), "\n") {
 		trimmed := strings.TrimSpace(line)
 		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
 			continue
@@ -1530,10 +1530,10 @@ func awsExcludedKeyRecordCases(t *testing.T) []awsExcludedKeyRecordCase {
 		outcome, document, ok := strings.Cut(trimmed, " | ")
 		if !ok {
 			t.Fatalf("%s line %d reads %q, want `<outcome> | <document>`",
-				awsExcludedKeysRecordTablePath, number+1, trimmed)
+				excludedKeysRecordTablePath, number+1, trimmed)
 		}
 
-		tc := awsExcludedKeyRecordCase{document: strings.ReplaceAll(document, `\n`, "\n")}
+		tc := excludedKeyRecordCase{document: strings.ReplaceAll(document, `\n`, "\n")}
 
 		if reason, rejected := strings.CutPrefix(outcome, "rejected: "); rejected {
 			tc.rejection = reason
@@ -1547,18 +1547,18 @@ func awsExcludedKeyRecordCases(t *testing.T) []awsExcludedKeyRecordCase {
 
 	if len(cases) == 0 {
 		t.Fatalf("%s holds no case, want one per record document the two parsers are held to",
-			awsExcludedKeysRecordTablePath)
+			excludedKeysRecordTablePath)
 	}
 
-	if !slices.ContainsFunc(cases, func(tc awsExcludedKeyRecordCase) bool { return tc.rejection == "" }) {
+	if !slices.ContainsFunc(cases, func(tc excludedKeyRecordCase) bool { return tc.rejection == "" }) {
 		t.Errorf("%s holds no accepted document, want one: a table of rejected documents alone says nothing about what the two parsers accept",
-			awsExcludedKeysRecordTablePath)
+			excludedKeysRecordTablePath)
 	}
 
-	for reason := range awsExcludedKeyRecordRejections {
+	for reason := range excludedKeyRecordRejections {
 		if !reasons[reason] {
 			t.Errorf("%s holds no document rejected as %q, want one: a reason no case exercises leaves the two parsers' agreement on it unpinned",
-				awsExcludedKeysRecordTablePath, reason)
+				excludedKeysRecordTablePath, reason)
 		}
 	}
 
@@ -1567,32 +1567,32 @@ func awsExcludedKeyRecordCases(t *testing.T) []awsExcludedKeyRecordCase {
 
 // TestTheTwoExcludedKeyReadersAcceptAndRejectTheSameRecords pins that this
 // package's reader of the shared excluded-key list and test/examples' agree
-// (review finding on PR #654). parseAWSExcludedFields and test/examples'
+// (review finding on PR #654). parseExcludedFields and test/examples'
 // parseExcludedKeys, in test/examples/inventoryguidekeys_test.go, are hand-kept
 // copies of one parser, since neither test package may import the other, and one
 // copy that grew to accept a document the other rejects would let one half of PRD
 // #571's promise hold while the other let a field through. Both run
-// awsExcludedKeysRecordTablePath, each against its own copy, and a document the
+// excludedKeysRecordTablePath, each against its own copy, and a document the
 // table holds is accepted as the records it lists, or rejected for the reason it
 // names, in both.
 func TestTheTwoExcludedKeyReadersAcceptAndRejectTheSameRecords(t *testing.T) {
 	t.Parallel()
 
-	for _, tc := range awsExcludedKeyRecordCases(t) {
+	for _, tc := range excludedKeyRecordCases(t) {
 		t.Run(tc.name(), func(t *testing.T) {
 			t.Parallel()
 
-			records, err := parseAWSExcludedFields(tc.document)
+			records, err := parseExcludedFields(tc.document)
 
 			if tc.rejection != "" {
-				reason, known := awsExcludedKeyRecordRejections[tc.rejection]
+				reason, known := excludedKeyRecordRejections[tc.rejection]
 				if !known {
-					t.Fatalf("%s rejects a document as %q, a reason this test does not know: add it to awsExcludedKeyRecordRejections, and to test/examples' copy of that map",
-						awsExcludedKeysRecordTablePath, tc.rejection)
+					t.Fatalf("%s rejects a document as %q, a reason this test does not know: add it to excludedKeyRecordRejections, and to test/examples' copy of that map",
+						excludedKeysRecordTablePath, tc.rejection)
 				}
 
 				if !errors.Is(err, reason) {
-					t.Fatalf("parseAWSExcludedFields reads %q as %v, want it rejected as %q (%v): the shared table's document is one both parsers must reject, and for the same reason",
+					t.Fatalf("parseExcludedFields reads %q as %v, want it rejected as %q (%v): the shared table's document is one both parsers must reject, and for the same reason",
 						tc.document, err, tc.rejection, reason)
 				}
 
@@ -1600,7 +1600,7 @@ func TestTheTwoExcludedKeyReadersAcceptAndRejectTheSameRecords(t *testing.T) {
 			}
 
 			if err != nil {
-				t.Fatalf("parseAWSExcludedFields rejects %q as %v, want the records %q: the shared table's document is one both parsers must accept",
+				t.Fatalf("parseExcludedFields rejects %q as %v, want the records %q: the shared table's document is one both parsers must accept",
 					tc.document, err, tc.want)
 			}
 
@@ -1610,7 +1610,7 @@ func TestTheTwoExcludedKeyReadersAcceptAndRejectTheSameRecords(t *testing.T) {
 			}
 
 			if got := strings.Join(spellings, " ; "); got != tc.want {
-				t.Errorf("parseAWSExcludedFields reads %q as %q, want %q: the records the document holds, in the list's order",
+				t.Errorf("parseExcludedFields reads %q as %q, want %q: the records the document holds, in the list's order",
 					tc.document, got, tc.want)
 			}
 		})
@@ -1985,11 +1985,17 @@ func azureResourceGraphQuery(t *testing.T, guide string) string {
 
 // azureHDInsightBranch returns the part of the Resource Graph query that reads an
 // HDInsight cluster: the text from the filter that opens that branch to the end of
-// it. A branch ends at the next one's type filter, at the `case(...)`'s closing
-// `dynamic(null)`, at the line that closes the `union(...)` the branch sits in, and
-// at the query's last `| project` line, which names the reduced properties column
-// of every type and so is no branch's own text. It reports false when the query
-// opens no branch with a `where type =~ 'microsoft.hdinsight/clusters'` filter.
+// it. A branch ends at the `| union (` that opens the next leg, at the next one's
+// type filter, at the `case(...)`'s closing `dynamic(null)`, at the line that
+// closes the `union(...)` the branch sits in, and at the query's last `| project`
+// line, which names the reduced properties column of every type and so is no
+// branch's own text. It reports false when the query opens no branch with a
+// `where type =~ 'microsoft.hdinsight/clusters'` filter.
+//
+// The `| union (` is what ends the branch when the legs are written in the
+// guide's order: the filter that keeps clusters out of the next leg is no
+// `type =~`, and the leg's `case(...)` arms come after it, so without that
+// terminator the branch ran on into the next leg (review finding on PR #685).
 //
 // The branch is anchored on that filter rather than on the first occurrence of the
 // type's name, so the legs of the union may be written in any order (review finding
@@ -2014,6 +2020,10 @@ func azureHDInsightBranch(query string) (string, bool) {
 		if i := strings.Index(lowered[start:], terminator); i >= 0 {
 			end = min(end, start+i)
 		}
+	}
+
+	if union := azureUnionOpen.FindStringIndex(query[start:]); union != nil {
+		end = min(end, start+union[0])
 	}
 
 	for _, offset := range azureBranchEnds(query) {
@@ -2371,6 +2381,12 @@ func TestInventoryGuideAzureResourceGraphQueryRulesFlagALeakingQuery(t *testing.
 		name:  "a query whose legs are written in the other order",
 		query: azureOtherTypesLeg + "\n| union (Resources" + azureHDInsightLeg + ")\n" + azureResourceGraphProjection,
 	}, {
+		name:  "a query whose other leg names an excluded field after the HDInsight branch",
+		query: "Resources" + azureHDInsightLeg + "\n| union (" + azureOtherTypesLegNamingAnExcludedField + ")\n" + azureResourceGraphProjection,
+		// No want: a field the union's other leg names is no leak of the HDInsight
+		// branch, and a branch that ran on past its `| union (` into that leg
+		// reported it as one (review finding on PR #685).
+	}, {
 		name:  "a query that reads HDInsight clusters through a case(...) arm as well",
 		query: "Resources" + azureHDInsightLeg + "\n| union (" + azureOtherTypesLegWithoutExclusion + "\n    type =~ 'microsoft.hdinsight/clusters', properties,\n    dynamic(null)))\n" + azureResourceGraphProjection,
 		want:  []string{"names microsoft.hdinsight/clusters outside the filter that opens its branch"},
@@ -2441,6 +2457,18 @@ const azureOtherTypesLegWithoutExclusion = `Resources
 | extend properties = case(
     type =~ 'microsoft.compute/virtualmachines', bag_pack(
       'hardwareProfile', bag_pack('vmSize', properties.hardwareProfile.vmSize)),`
+
+// azureOtherTypesLegNamingAnExcludedField is the union's other leg as a hand edit
+// may write it: neither its filter nor its `case(...)` arm compares a `type =~`
+// or a `type in~`, so no type filter ends a branch before it, and the arm names a
+// field PRD #571 keeps out of an HDInsight cluster's branch. A branch that ran on
+// past its `| union (` read the arm as the cluster's own and reported that field
+// (review finding on PR #685).
+const azureOtherTypesLegNamingAnExcludedField = `Resources
+| where isnotempty(location)
+| extend properties = case(
+    isnotempty(properties.osProfile), bag_pack('osProfile', properties.osProfile),
+    bag_pack('hardwareProfile', bag_pack('vmSize', properties.hardwareProfile.vmSize)))`
 
 // azureResourceGraphProjection is the query's final projection, on the line after
 // the one that closes the union.

@@ -244,7 +244,7 @@ func (r excludedKeyRecord) spelling() string {
 // parser skipped or shrank would let a field the PRD excludes through both
 // checks, and a repeat would hide its first copy.
 //
-// The same parser, kept by hand, is test/site's parseAWSExcludedFields in
+// The same parser, kept by hand, is test/site's parseExcludedFields in
 // test/site/inventory_test.go, behind its readExcludedFields (the twin of this
 // package's readExcludedFixtureKeys). Neither test package may import the other,
 // so excludedFixtureKeysRecordTablePath is what holds the two copies to the same
@@ -430,7 +430,7 @@ func excludedKeyRecordCases(t *testing.T) []excludedKeyRecordCase {
 
 // TestTheTwoExcludedKeyReadersAcceptAndRejectTheSameRecords pins that this
 // package's reader of the shared excluded-key list and test/site's agree (review
-// finding on PR #654). parseExcludedKeys and test/site's parseAWSExcludedFields,
+// finding on PR #654). parseExcludedKeys and test/site's parseExcludedFields,
 // in test/site/inventory_test.go, are hand-kept copies of one parser, since
 // neither test package may import the other, and one copy that grew to accept a
 // document the other rejects would let one half of PRD #571's promise hold while
