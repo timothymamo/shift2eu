@@ -1154,13 +1154,16 @@ func inventoryGuides() []inventoryGuideCase {
 				{id: "vmss-shop-web_0abc_DataDisk_1", rawType: "Microsoft.Compute/disks", category: "storage.block"},
 				// An HDInsight cluster of kind KAFKA is Apache Kafka on virtual
 				// machines Azure runs, so it is messaging.kafka (PRD #571). Three worker
-				// nodes keep serving through the loss of a node, the zone the cluster
-				// names through the loss of a zone, and Azure encrypts its managed disks
-				// at rest.
+				// nodes keep serving through the loss of a node, and Azure encrypts its
+				// managed disks at rest. HDInsight's availability-zone support is zonal:
+				// the cluster is pinned to the one zone it names (zones ["1"], which the
+				// fixture records), so it does not survive the loss of that zone and is
+				// no zone-high-availability. The fixture keeps its zones so the test pins
+				// that zones alone do not give the capability.
 				{
 					id: "kafka-shop-streams", rawType: "Microsoft.HDInsight/clusters", category: "messaging.kafka",
 					region:       "westeurope",
-					capabilities: []string{"encryption-at-rest", "node-high-availability", "zone-high-availability"},
+					capabilities: []string{"encryption-at-rest", "node-high-availability"},
 				},
 				// A cluster of three worker nodes in no zone keeps serving through the
 				// loss of a node, and not through the loss of a zone: only the
@@ -1248,10 +1251,11 @@ func inventoryGuides() []inventoryGuideCase {
 				// is the count, its hardwareProfile.vmSize a size az vm list-sizes knows
 				// (Standard_D4s_v3 is 4 cores and 16384 MB, Standard_D2s_v3 2 and 8192),
 				// and its dataDisksGroups the GiB of each worker, disksPerNode times
-				// diskSizeGB. An HDInsight data disk is a fixed-size managed disk of 1023
-				// GiB (diskSizeGB is read-only, the count of disks per node is the one the
-				// user picks), so two of them are 2046 GiB and one is 1023 (PRD #571,
-				// *Estimates*). A Kafka cluster needs at least three worker nodes.
+				// diskSizeGB. The 1023 GiB disks the fixtures record follow the Azure
+				// CLI's example size, and no page states one size: the program multiplies
+				// whatever diskSizeGB Azure returns by the disksPerNode it is given, so
+				// two of them are 2046 GiB and one is 1023 (PRD #571, *Estimates*). A
+				// Kafka cluster needs at least three worker nodes.
 				{id: "kafka-shop-streams", vcpus: 4, memoryGiB: 16, storageGiB: 2046, count: 3},
 				{id: "kafka-shop-audit", vcpus: 2, memoryGiB: 8, storageGiB: 1023, count: 3},
 				// A cluster being resized is sized like the same cluster at rest: its
