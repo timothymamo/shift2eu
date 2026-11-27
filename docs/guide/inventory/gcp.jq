@@ -36,12 +36,16 @@
 #   {"name": ".../clusters/..", "capacityConfig"} managed-kafka clusters list
 #   {"kind": "dns#managedZone", "project"}    dns managed-zones list, with the
 #                                             project the guide's jq filter adds
-#   {"project", "name", "routedRecordSets"}   dns record-sets list, reduced to a
+#   {"project", "id", "routedRecordSets"}     dns record-sets list, reduced to a
 #                                             count per zone by the guide
 #
 # A Cloud DNS managed zone is its asset row, joined to the managed-zones list on
-# the project and the zone's name: the list writes no project, so the guide adds
-# it, and an entry without one joins no row. A public zone is network.dns with
+# the project and the zone's number: the asset row names a zone by the numeric
+# `id` Google assigned it (//dns.googleapis.com/projects/PROJECT_ID/managedZones/
+# ZONE_NUMBER, https://cloud.google.com/asset-inventory/docs/resource-name-format),
+# never by its name. The list writes no project, so the guide adds it, and an
+# entry without one joins no row. A joined zone's ID is its managed zone's name;
+# a zone that joins nothing keeps the asset row's number. A public zone is network.dns with
 # no region (Google serves it from name servers it picks); a private zone
 # (forwarding and peering zones included) and a zone the list does not hold
 # stay unclassified. A public zone is dnssec when dnssecConfig.state is on or
@@ -202,10 +206,11 @@ def reaches($proxies):
 | ($all | details(named_in("repositories") and has("format"); .name | key)) as $repositories
 | ($all | details(named_in("clusters") and has("capacityConfig"); .name | key)) as $kafka
 # Cloud DNS: the managed zones and the routed record-set counts, keyed as the
-# zone's asset name is (projects/p/managedZones/z), from the project the guide
-# adds and the zone's name.
-| (def zone_key: "projects/" + .project + "/managedZones/" + .name | key;
-   def joinable: (.project? | type) == "string" and (.name? | type) == "string";
+# zone's asset name is (projects/p/managedZones/<number>), from the project the
+# guide adds and the zone's number (`id`, a string in the API's JSON; a number
+# is taken too).
+| (def zone_key: "projects/" + .project + "/managedZones/" + (.id | tostring) | key;
+   def joinable: (.project? | type) == "string" and (.id? | type | IN("string", "number"));
    ($all | details(.kind? == "dns#managedZone" and joinable; zone_key)) as $dnszones
    | ($all | details(has("routedRecordSets") and joinable; zone_key)) as $dnsrouted
    | {zones: $dnszones, routed: $dnsrouted}) as $dns
@@ -423,15 +428,19 @@ def reaches($proxies):
       elif .assetType == "dns.googleapis.com/ManagedZone" then
         # A public zone is network.dns, with no region; a private one, or one the
         # managed-zones list does not hold, stays unclassified. The capabilities
-        # are read for a public zone only.
+        # are read for a public zone only. A joined zone's ID is its managed
+        # zone's name, an unjoined one keeps the asset row's number.
         $dns.zones[$key] as $d
+        | ($base + (if ($d.name? | type) == "string" then {id: $d.name} else {} end)) as $zone
         | if $d.visibility? == "public" then
             ($dns.routed[$key].routedRecordSets? // 0) as $n
-            | $base + {category: "network.dns", region: null, capabilities: [
+            # The type check guards a hand-edited file: a count that is no
+            # number gives no dns-routing.
+            | $zone + {category: "network.dns", region: null, capabilities: [
                 cap("dnssec"; $d.dnssecConfig.state? | IN("on", "transfer")),
                 cap("dns-routing"; ($n | type) == "number" and $n > 0)
               ]}
-          else $base + {category: "unclassified"} end
+          else $zone + {category: "unclassified"} end
       elif .assetType | test("^compute\\.googleapis\\.com/(Region)?(UrlMap|BackendService|TargetPool|TargetInstance|Target[A-Za-z]*Proxy|(Global)?ForwardingRule)$") then
         # A load balancer comes from the compute lists, below; its frontends are
         # left out.

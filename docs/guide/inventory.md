@@ -905,8 +905,14 @@ Prefer these roles on the project, each of which reads configuration only:
   that is too much, grant a custom role with only `artifactregistry.repositories.list` and
   `artifactregistry.repositories.get` instead;
 - `roles/dns.reader` (Cloud DNS managed zones: each zone's visibility and whether it is signed). It is
-  read-only, but it also holds `dns.resourceRecordSets.list`, see below; no predefined Cloud DNS role
-  lists zones without it.
+  read-only, but it reads far more than the calls keep: beside `dns.resourceRecordSets.list`, see
+  below, it holds `dns.changes.list` and `dns.changes.get` (each zone's change history: every record
+  ever added or deleted, with its values), `dns.responsePolicies.list` and
+  `dns.responsePolicyRules.list` (the response policy rules, with their local records),
+  `dns.policies.list` (the server policies), `dns.dnsKeys.list` (the zones' DNSSEC keys) and
+  `dns.managedZones.get` (each zone's full configuration)
+  ([Cloud DNS access control](https://cloud.google.com/dns/docs/access-control)); no predefined
+  Cloud DNS role lists zones without them.
 
 `dns.resourceRecordSets.list` is optional, needed only for the `dns-routing` capability, which the
 record-set loop under [Collect from GCP](#collect-from-gcp) counts. It lets its holder read
@@ -914,7 +920,10 @@ every record of every zone (every name and every value): the loop's `--filter` a
 count per zone, but the permission returns every record to whoever holds it. To run without it,
 grant a custom role with only `dns.managedZones.list` instead of `roles/dns.reader`, and skip the
 record-set loop; no zone then gets `dns-routing`, so check by hand which zones hold weighted round
-robin, geolocation or failover records, and add `dns-routing` to them.
+robin, geolocation or failover records, and add `dns-routing` to them. That role also reads no change
+history, response policy rule or server policy. It still returns each zone's whole configuration (its
+DNS name, name servers, attached networks and forwarding targets) to the caller, of which the
+`--format` keeps only the listed fields on disk.
 
 The simpler fallback is `roles/cloudasset.viewer` and the basic role `roles/viewer`, which covers
 every call too but is broad: it reads the configuration of every service in the project, far more
@@ -987,23 +996,22 @@ gcloud compute target-https-proxies list --project="$project" --quiet \
 gcloud compute target-http-proxies list --project="$project" --quiet \
   --format='json(kind,selfLink,urlMap)' > "$out/compute-target-http-proxies.json"
 
-# Cloud DNS managed zones: each zone's name, visibility and whether it is signed.
-# The list writes no project, so jq adds it, for the join with the asset listing.
+# Cloud DNS managed zones: each zone's number, name, visibility and whether it is
+# signed. The list writes no project, so jq adds it, for the join with the asset
+# listing, which names a zone by its number.
 gcloud dns managed-zones list --project="$project" --quiet \
-  --format='json(kind,name,visibility,dnssecConfig.state)' |
+  --format='json(kind,id,name,visibility,dnssecConfig.state)' |
   jq --arg p "$project" '[.[] | .project = $p]' > "$out/dns-managed-zones.json"
 # Optional, for dns-routing only (needs dns.resourceRecordSets.list, see "GCP permissions"):
 # how many record sets of each public zone route by a policy, a count and no record.
-types=$(mktemp)
-jq -r '.[] | select(.visibility == "public") | .name' "$out/dns-managed-zones.json" |
-  while IFS= read -r zone; do
-    if gcloud dns record-sets list --project="$project" --zone="$zone" --quiet \
-        --filter='routingPolicy:*' --format='value(type)' > "$types"; then
-      jq -R -s --arg p "$project" --arg z "$zone" \
-        '{project: $p, name: $z, routedRecordSets: (split("\n") | map(select(. != "")) | length)}' "$types"
+jq -r '.[] | select(.visibility == "public") | [.id, .name] | @tsv' "$out/dns-managed-zones.json" |
+  while IFS=$'\t' read -r id zone; do
+    if routed_types=$(gcloud dns record-sets list --project="$project" --zone="$zone" --quiet \
+        --filter='routingPolicy:*' --format='value(type)'); then
+      printf '%s' "$routed_types" | jq -R -s --arg p "$project" --arg i "$id" \
+        '{project: $p, id: $i, routedRecordSets: (split("\n") | map(select(. != "")) | length)}'
     fi
   done | jq -s . > "$out/dns-routed-record-sets.json"
-rm -f "$types"
 
 # Memorystore, per region: the regions come from the asset listing, and each
 # list runs only in a region that holds its asset type.
@@ -1087,18 +1095,21 @@ reach it.
 
 `dns managed-zones list` lists the project's zones of the global Cloud DNS service, public and
 private, and its output names no project, so `jq` adds it to each entry: the program joins an entry to
-the zone's asset row on the project and the zone's name. The `--format` keeps only the zone's name, its
+the zone's asset row on the project and the zone's number, its `id`, as the asset row names a zone by
+that number and never by its name (`//dns.googleapis.com/projects/PROJECT_ID/managedZones/ZONE_NUMBER`,
+Google's [resource name format](https://cloud.google.com/asset-inventory/docs/resource-name-format)).
+The `--format` keeps only the zone's number, its name, its
 `visibility` (`public` or `private`; forwarding and peering zones are private) and its
 `dnssecConfig.state` (`off`, `on` or `transfer`), never its DNS name, description or name servers. A
 zone in the asset listing that the list does not hold stays `unclassified`: check that
 `dns-managed-zones.json` holds every zone when the asset listing names some (`roles/dns.reader`). The
-record-set loop runs only for public zones, as a private zone is not classified, and asks for one zone
-by its name with `--zone="$zone"`. `--filter='routingPolicy:*'` keeps the record sets that carry a
+record-set loop runs only for public zones, as a private zone is not classified, reads each zone's
+number and name, and asks for one zone by its name with `--zone="$zone"`. `--filter='routingPolicy:*'` keeps the record sets that carry a
 routing policy (weighted round robin, geolocation or failover, with or without health checks), and
 `--format='value(type)'` writes one record type per such record set, which `jq` reduces to a count:
-the file holds an entry per public zone with its project, its name and `routedRecordSets`, never a
-record's name, values, TTL or routing policy. The record types pass through a temporary file outside
-the collected directory, which the command removes. A call that fails prints its error on stderr and
+the file holds an entry per public zone with its project, its number and `routedRecordSets`, never a
+record's name, values, TTL or routing policy. The record types stay in a shell variable and are never
+written to a file. A call that fails prints its error on stderr and
 leaves its zone out of the file, so that zone gets no `dns-routing`.
 
 The load balancer lists read only the HTTP and HTTPS target proxies, the frontends of an Application
@@ -1207,7 +1218,9 @@ Cloud DNS public zones are classified; everything else of Cloud DNS still shows 
 so the report shows what has no place to go: private zones, which answer only inside the VPC networks
 they are attached to and move with the network design, and server and response policies, which
 resolve inside a network rather than host a zone. A zone's ID in the inventory is its managed zone's
-name (`shop-zone`), not its DNS name.
+name (`shop-zone`), not its DNS name, when the asset row joins an entry of `dns-managed-zones.json`; a
+zone that joins none keeps the number the asset row names it by (`4567890123456789012`) and stays
+`unclassified`.
 
 A load balancer is one URL map (an Application Load Balancer), one backend service no URL map names (a
 passthrough Network Load Balancer, or a proxy Network Load Balancer) or one target pool. These come
