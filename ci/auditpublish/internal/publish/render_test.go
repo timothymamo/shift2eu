@@ -265,12 +265,13 @@ func TestRenderReportFindings(t *testing.T) {
 	}
 }
 
-// TestRenderReportDotSegmentLocations pins a finding whose file lies in a dot
-// segment of the path: .github/workflows/ci.yml and .dot-agent-deck.toml are
-// repository paths, so the report renders them as the location cell an ordinary
-// path gets - the file, a colon and the line, one code span with every character
-// kept - and the scan over the rendered report publishes them.
-func TestRenderReportDotSegmentLocations(t *testing.T) {
+// TestRenderReportDotLeadingLocations pins a finding whose file lies in a
+// dot-leading segment of the path: .github/workflows/ci.yml and
+// .dot-agent-deck.toml are repository paths, so the report renders them as the
+// location cell an ordinary path gets - the file, a colon and the line, one code
+// span with every character kept - and the scan over the rendered report
+// publishes them.
+func TestRenderReportDotLeadingLocations(t *testing.T) {
 	t.Parallel()
 
 	key := testKey(t)

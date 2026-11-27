@@ -616,7 +616,7 @@ func TestScanPublicPublishesTheRepositorysPaths(t *testing.T) {
 		{"the deck's own configuration, a dotfile at the top", ".dot-agent-deck.toml"},
 		{"an agent's settings file, a dot directory at the top", ".claude/settings.json"},
 		{"an extension of the agent that runs this audit", ".pi/extensions/x.ts"},
-		{"a dot segment below an ordinary one", "a/.hidden/b"},
+		{"a dot-leading segment below an ordinary one", "a/.hidden/b"},
 		{"a file of the publish core", "ci/auditpublish/internal/publish/result.go"},
 		{"the publish core's test helpers", "ci/auditpublish/internal/publish/helpers_test.go"},
 		{"a source probe's integration test", "test/architecture/internal/check/testdata/sourceprobe/a/source/integration/integration_test.go"},

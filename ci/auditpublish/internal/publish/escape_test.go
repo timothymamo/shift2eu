@@ -90,9 +90,9 @@ func TestTableCell(t *testing.T) {
 		{"no pipe, no change", "a\\b", "` a\\b `"},
 		{"a CR LF is a space, and a pipe escapes", "a\r\nb|c", "` a b\\|c `"},
 		{"a path that starts with a dot is kept", ".github/workflows/ci.yml", "` .github/workflows/ci.yml `"},
-		{"a location in a dot segment is kept", ".github/workflows/ci.yml:12", "` .github/workflows/ci.yml:12 `"},
+		{"a location in a dot-leading segment is kept", ".github/workflows/ci.yml:12", "` .github/workflows/ci.yml:12 `"},
 		{"a dotfile at the top is kept", ".dot-agent-deck.toml", "` .dot-agent-deck.toml `"},
-		{"a dot segment in the middle is kept", "a/.hidden/b:7", "` a/.hidden/b:7 `"},
+		{"a dot-leading segment in the middle is kept", "a/.hidden/b:7", "` a/.hidden/b:7 `"},
 		{"an HTML table is inert and its pipes escaped", "<table><tr><td>a|b</td></tr></table>", "` <table><tr><td>a\\|b</td></tr></table> `"},
 	}
 

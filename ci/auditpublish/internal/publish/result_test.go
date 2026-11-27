@@ -1239,13 +1239,13 @@ func fileInFinding(file string) func(*testing.T) []byte {
 
 // TestParseResultFilePath pins the schema's file rule over a finding's file:
 // 1 to 200 bytes of the allowed set, split at / into segments that are none of
-// empty, . and ... A segment that starts with a dot is a real path of this
-// repository, .github/workflows/ci.yml and .dot-agent-deck.toml among them, and
-// the report renders such a finding like any other; a segment that is a dot
+// empty, `.` and `..`. A segment that starts with a dot is a real path of this
+// repository, `.github/workflows/ci.yml` and `.dot-agent-deck.toml` among them,
+// and the report renders such a finding like any other; a segment that is a dot
 // itself, and the paths that hold one, are refused, as is every character
 // outside the allowed set and every byte the text rule refuses. Only the two
-// segments . and .. traverse, so a segment of dots and more, ... among them, is
-// a file name like any other and is accepted. Each refusal
+// segments `.` and `..` traverse, so a segment of dots and more, `...` among
+// them, is a file name like any other and is accepted. Each refusal
 // wraps ErrResultInvalid, names the field and echoes no value.
 func TestParseResultFilePath(t *testing.T) {
 	t.Parallel()
@@ -1262,12 +1262,12 @@ func TestParseResultFilePath(t *testing.T) {
 		{name: "the deck's configuration at the top", file: ".dot-agent-deck.toml"},
 		{name: "an agent's settings file", file: ".claude/settings.json"},
 		{name: "an extension of the agent that runs this audit", file: ".pi/extensions/x.ts"},
-		{name: "a dot segment in the middle", file: "a/.hidden/b"},
+		{name: "a dot-leading segment in the middle", file: "a/.hidden/b"},
 		{name: "a dot inside a name, never at its start", file: "docs/adr/0040-scheduled-security-audit.md"},
 		{name: "every segment a dotfile", file: ".github/.hidden/.env.example"},
 		{name: "a segment of three dots, a legal file name", file: "..."},
 		{name: "a three-dot directory and a file", file: ".../x"},
-		{name: "a three-dot segment at the end", file: "a/..."},
+		{name: "a segment of three dots at the end", file: "a/..."},
 		{name: "a segment of dots and a letter", file: ".a..b"},
 		{name: "a dot then a dash", file: ".-x"},
 		{name: "a dot then a plus", file: ".+x"},
@@ -1302,7 +1302,7 @@ func TestParseResultFilePath(t *testing.T) {
 		{name: "a DEL byte", file: "a\x7fb", wantRefused: true},
 		{name: "a pipe, which the table escapes", file: "a|b", wantRefused: true},
 		{name: "a query mark", file: "a?b", wantRefused: true},
-		{name: "a dot segment that starts with a dot and a byte outside the set", file: ".a b", wantRefused: true},
+		{name: "a dot-leading segment and a byte outside the set", file: ".a b", wantRefused: true},
 	}
 
 	for _, tc := range tests {
