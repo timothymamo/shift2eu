@@ -6,7 +6,7 @@
 #   jq -n -f docs/guide/inventory/azure.jq inventories/azure/*.json > inventories/azure.inventory.json
 #
 # The Resource Graph listing (az graph query, one file per page) is the list of
-# resources and holds most details; eight calls add what it lacks. Each element of
+# resources and holds most details; nine calls add what it lacks. Each element of
 # each input is recognised by its shape, not by its file name. The guide's queries
 # keep only the fields read here; the full output is read the same way:
 #
@@ -26,6 +26,9 @@
 #                                                (with their snapshots)
 #   {"type": "Microsoft.Cache/redisEnterprise/databases"}
 #                                                az rest --method get .../databases
+#   {"type": "Microsoft.Network/dnszones/dnssecConfigs"}
+#                                                az network dns dnssec-config show
+#                                                (one per signed public zone)
 #   [{"name": ..., "numberOfCores": ...}]        az vm list-sizes
 #
 # Resource IDs are short (the resource's name, a topic subscription's
@@ -123,7 +126,8 @@ def child_types:
   "microsoft.storage/storageaccounts/queueservices/queues",
   "microsoft.storage/storageaccounts/blobservices",
   "microsoft.storage/storageaccounts/fileservices/shares",
-  "microsoft.cache/redisenterprise/databases";
+  "microsoft.cache/redisenterprise/databases",
+  "microsoft.network/dnszones/dnssecconfigs";
 
 # Whether the IP configuration ID names an IPv6 one, looked up in Resource Graph
 # ($byid): a network interface's (.../networkInterfaces/<nic>/ipConfigurations/<name>)
@@ -165,6 +169,12 @@ def zone_count: (.zones // []) | length;
 | ([$shareelements[] | select(.properties.snapshotTime? != null) | .id | lid] | unique) as $snapshottedshares
 | ([$shares[] | .id | lid | sub("/fileservices/.*$"; "")] | unique) as $shareaccounts
 | [$all[] | select(lower_type == "microsoft.cache/redisenterprise/databases")] as $redisdatabases
+# The public DNS zones signed with DNSSEC: their configuration's provisioning
+# state is Succeeded (any casing). Its ID is the zone's with /dnssecConfigs/default
+# appended, in its own casing (dnszones, where Resource Graph writes dnsZones).
+| ([$all[] | select(lower_type == "microsoft.network/dnszones/dnssecconfigs")
+    | select((.provisioningState? // "" | ascii_downcase) == "succeeded")
+    | .id | lid | sub("/dnssecconfigs/default$"; "")] | unique) as $signedzones
 | [$all[] | select(lower_type | IN(child_types) | not)] as $rows
 | ($rows | INDEX(.id | lid)) as $byid
 | ([$rows[] | select(lower_type == "microsoft.compute/snapshots")
@@ -481,6 +491,15 @@ def zone_count: (.zones // []) | length;
                   storageGiB: (if ($disks.disksPerNode | type) == "number" and ($disks.diskSizeGB | type) == "number"
                     then $disks.disksPerNode * $disks.diskSizeGB else null end)})}
           else $base + {category: "unclassified"} end
+        elif $t == "microsoft.network/dnszones" then
+          # An Azure DNS zone, global (no region): public when its zoneType is
+          # Public or missing (the API's default); a legacy private zone stays
+          # unclassified. No record set is read, so never dns-routing.
+          if (.properties.zoneType? // "Public" | ascii_downcase) == "private" then
+            $base + {category: "unclassified"}
+          else $base + {category: "network.dns", capabilities: [
+            cap("dnssec"; $id | IN($signedzones[]))
+          ]} end
         elif $t == "microsoft.compute/snapshots" or $t == "microsoft.insights/autoscalesettings" then
           # Part of a disk's or a scale set's capabilities, not a resource to move.
           empty
