@@ -906,12 +906,13 @@ Prefer these roles on the project, each of which reads configuration only:
   `artifactregistry.repositories.get` instead;
 - `roles/dns.reader` (Cloud DNS managed zones: each zone's visibility and whether it is signed). It is
   read-only, but it reads far more than the calls keep: beside `dns.resourceRecordSets.list`, see
-  below, it holds `dns.changes.list` and `dns.changes.get` (each zone's change history: every record
+  below, it holds, among others, `dns.changes.list` and `dns.changes.get` (each zone's change history: every record
   ever added or deleted, with its values), `dns.responsePolicies.list` and
   `dns.responsePolicyRules.list` (the response policy rules, with their local records),
   `dns.policies.list` (the server policies), `dns.dnsKeys.list` (the zones' DNSSEC keys) and
-  `dns.managedZones.get` (each zone's full configuration)
-  ([Cloud DNS access control](https://cloud.google.com/dns/docs/access-control)); no predefined
+  `dns.managedZones.get` (each zone's full configuration), and it also lists the projects its holder
+  can see (`resourcemanager.projects.list`) and reads networks (`compute.networks.get`) (the role's
+  full list: [Cloud DNS access control](https://cloud.google.com/dns/docs/access-control)); no predefined
   Cloud DNS role lists zones without them.
 
 `dns.resourceRecordSets.list` is optional, needed only for the `dns-routing` capability, which the
@@ -1004,8 +1005,8 @@ gcloud dns managed-zones list --project="$project" --quiet \
   jq --arg p "$project" '[.[] | .project = $p]' > "$out/dns-managed-zones.json"
 # Optional, for dns-routing only (needs dns.resourceRecordSets.list, see "GCP permissions"):
 # how many record sets of each public zone route by a policy, a count and no record.
-jq -r '.[] | select(.visibility == "public") | [.id, .name] | @tsv' "$out/dns-managed-zones.json" |
-  while IFS=$'\t' read -r id zone; do
+jq -r '.[] | select(.visibility == "public") | "\(.id) \(.name)"' "$out/dns-managed-zones.json" |
+  while read -r id zone; do
     if routed_types=$(gcloud dns record-sets list --project="$project" --zone="$zone" --quiet \
         --filter='routingPolicy:*' --format='value(type)'); then
       printf '%s' "$routed_types" | jq -R -s --arg p "$project" --arg i "$id" \
@@ -1104,7 +1105,8 @@ The `--format` keeps only the zone's number, its name, its
 zone in the asset listing that the list does not hold stays `unclassified`: check that
 `dns-managed-zones.json` holds every zone when the asset listing names some (`roles/dns.reader`). The
 record-set loop runs only for public zones, as a private zone is not classified, reads each zone's
-number and name, and asks for one zone by its name with `--zone="$zone"`. `--filter='routingPolicy:*'` keeps the record sets that carry a
+number and name from one line, separated by a space (a number is digits, and a zone's name only
+lowercase letters, digits and dashes, so neither holds one), and asks for one zone by its name with `--zone="$zone"`. `--filter='routingPolicy:*'` keeps the record sets that carry a
 routing policy (weighted round robin, geolocation or failover, with or without health checks), and
 `--format='value(type)'` writes one record type per such record set, which `jq` reduces to a count:
 the file holds an entry per public zone with its project, its number and `routedRecordSets`, never a

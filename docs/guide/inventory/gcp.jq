@@ -207,8 +207,10 @@ def reaches($proxies):
 | ($all | details(named_in("clusters") and has("capacityConfig"); .name | key)) as $kafka
 # Cloud DNS: the managed zones and the routed record-set counts, keyed as the
 # zone's asset name is (projects/p/managedZones/<number>), from the project the
-# guide adds and the zone's number (`id`, a string in the API's JSON; a number
-# is taken too).
+# guide adds and the zone's number (`id`, a string in gcloud's and the API's
+# JSON; a number is taken too, but only jq 1.7 or later keeps a 19-digit number
+# exact: an earlier jq holds it as a double, rounds it and joins nothing, which
+# only a hand-edited file can meet, as gcloud writes a string).
 | (def zone_key: "projects/" + .project + "/managedZones/" + (.id | tostring) | key;
    def joinable: (.project? | type) == "string" and (.id? | type | IN("string", "number"));
    ($all | details(.kind? == "dns#managedZone" and joinable; zone_key)) as $dnszones
