@@ -1720,5 +1720,6 @@ Prices and plans left out (PRD #571 milestone 7, read 2026-11-27):
   Milan is not a region of either Kafka offering (regions rule), so none of these is recorded.
 - **Kafka's three-node Single-AZ cluster priced on Multi-AZ** when it lists `node-high-availability`
   (*Clusters for Apache Kafka*, **Estimate effect**): an over-estimate of about 10 %, though the create
-  page says "For highly‑available clusters enabling data replication: use at least 3 nodes." of the node
-  count in either configuration. The reading awaits the maintainer's accept-or-follow-up.
+  page's node-count step, which applies to either configuration, says "For highly‑available clusters
+  enabling data replication: use at least 3 nodes." The reading awaits the maintainer's
+  accept-or-follow-up.
