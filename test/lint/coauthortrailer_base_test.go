@@ -337,19 +337,22 @@ func TestCoAuthorRangeFindingsIgnoreReplaceRefs(t *testing.T) {
 // the commits of the range, and each runs with GIT_CONFIG_GLOBAL=/dev/null and
 // GIT_CONFIG_NOSYSTEM=1, so neither the developer's global git configuration
 // nor the host's system one decides what the check reads. A developer whose
-// global configuration reads commit messages in another encoding would
-// otherwise change what a pull request's check finds, on their machine alone,
-// while the same run on CI finds something else.
+// global configuration changes the encoding git log writes the messages it
+// prints out in would otherwise change what a pull request's check finds, on
+// their machine alone, while the same run on CI finds something else.
 //
 // The case plants a global configuration that would change the reading if git
-// read it: i18n.commitEncoding = ISO-8859-1, the encoding a git log reads a
-// commit message in when the commit declares none, so the message the check
-// reads holds different bytes than the fixture committed, and the trailer it
-// reports is a different trailer. The planted configuration sits in a HOME of
-// the case's own, which is how a global configuration reaches the check's git
-// calls today, and the case hands the same file to GIT_CONFIG_GLOBAL and
-// GIT_CONFIG_SYSTEM as well, so an environment that forwards either to the git
-// calls reads it too.
+// read it: i18n.commitEncoding = ISO-8859-1. A commit that declares no encoding
+// header, as the fixture's commits declare none, holds a message git assumes to
+// be UTF-8; i18n.logOutputEncoding, which defaults to i18n.commitEncoding, is
+// the encoding git log converts that message to on output. The planted file
+// therefore makes git log write the fixture's UTF-8 message out as ISO-8859-1,
+// so the message the check reads holds different bytes than the fixture
+// committed, and the trailer it reports is a different trailer. The planted
+// configuration sits in a HOME of the case's own, which is how a global
+// configuration reaches the check's git calls today, and the case hands the same
+// file to GIT_CONFIG_GLOBAL and GIT_CONFIG_SYSTEM as well, so an environment
+// that forwards either to the git calls reads it too.
 //
 // GIT_CONFIG_GLOBAL is what the case observes: a global configuration arrives in
 // a git process through its HOME, and this harness passes HOME on. The system
@@ -372,8 +375,8 @@ func TestCoAuthorRangeFindingsIsolateTheGitConfig(t *testing.T) {
 	// The head widens the list with the address it commits with, as the cases
 	// above do: the base's list refuses the added address as an author and as a
 	// trailer, so a reading that changed either leaves a different result. The
-	// trailer's name carries a character outside ASCII, which another message
-	// encoding reads as another byte.
+	// trailer's name carries a character outside ASCII, which git log writes out
+	// as another byte when it converts the message to another encoding.
 	widens := coAuthorRepoCommit(t, env, repo, coAuthorBaseAddress,
 		"feat: widen the allow list\n\nCo-Authored-By: Bøb <"+coAuthorAddedAddress+">\n",
 		map[string]string{coAuthorAllowListPath: coAuthorBaseAddress + "\n" + coAuthorAddedAddress + "\n"})
@@ -419,9 +422,9 @@ func TestCoAuthorRangeFindingsIsolateTheGitConfig(t *testing.T) {
 
 	// The premise: a git command of the fixture's own, with the identity and the
 	// HOME the case planted and no isolation of its own, reads the planted
-	// configuration, which makes it read the commit's message in another
-	// encoding: the message it prints is not the one the fixture stored. A
-	// configuration git ignored would pin nothing.
+	// configuration, which makes it convert the commit's UTF-8 message to
+	// ISO-8859-1 as it prints it: the message it prints is not the bytes the
+	// fixture stored. A configuration git ignored would pin nothing.
 	committed := coAuthorRepoGit(t, env, repo, "log", "-1", "--format=%B", "--end-of-options", widens)
 	plantedLog := coAuthorRepoGit(t, coAuthorRepoGlobalEnv(home), repo, "log", "-1", "--format=%B", "--end-of-options", widens)
 
@@ -508,10 +511,15 @@ func TestCoAuthorGitEnvSwitchesOffTheSystemConfig(t *testing.T) {
 
 // coAuthorPlantedGitConfig plants, below a directory of its own, a global git
 // configuration that would change what coAuthorRangeFindings reads if git read
-// it: i18n.commitEncoding = ISO-8859-1, the encoding a git log reads a commit
-// message in when the commit declares none, so a message whose trailer's name
-// carries ø, which the fixture commits as UTF-8, comes back as another byte. It
-// returns the HOME the configuration sits in and ~/.gitconfig's path.
+// it: i18n.commitEncoding = ISO-8859-1. A commit that declares no encoding
+// header, as the fixture's commits declare none, holds its message as UTF-8,
+// which git assumes in that case; i18n.commitEncoding is what
+// i18n.logOutputEncoding defaults to, the encoding git log converts the messages
+// it prints to. The planted file therefore makes git log write a message whose
+// trailer's name carries ø, which the fixture commits as UTF-8, out as
+// ISO-8859-1, where ø is the single byte 0xf8 rather than the two bytes
+// committed. It returns the HOME the configuration sits in and ~/.gitconfig's
+// path.
 func coAuthorPlantedGitConfig(t *testing.T) (home, global string) {
 	t.Helper()
 
