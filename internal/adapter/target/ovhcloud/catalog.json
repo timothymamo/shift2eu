@@ -2,10 +2,87 @@
   "schemaVersion": 2,
   "target": "OVHcloud",
   "sourceURL": "https://www.ovhcloud.com/en-ie/public-cloud/prices/",
-  "retrievedOn": "2026-11-25",
+  "retrievedOn": "2026-11-27",
   "regions": ["GRA", "LIM", "MIL", "PAR", "RBX", "SBG", "WAW"],
   "defaultRegion": "GRA",
   "offerings": [
+    {
+      "name": "Analytics for Kafka",
+      "categories": ["messaging.kafka"],
+      "capabilities": ["encryption-at-rest", "node-high-availability"],
+      "regions": ["GRA", "LIM", "RBX", "SBG", "WAW"],
+      "plans": [
+        { "name": "Business DB1-4", "vcpus": 2, "memoryGiB": 4, "storageGiB": 160, "prices": [{ "amount": 117.676, "currency": "EUR", "regions": ["GRA", "LIM", "SBG", "WAW"] }] },
+        { "name": "Business DB1-7", "vcpus": 2, "memoryGiB": 7, "storageGiB": 320, "prices": [{ "amount": 233.235, "currency": "EUR", "regions": ["GRA", "LIM", "SBG", "WAW"] }] },
+        { "name": "Business DB1-15", "vcpus": 4, "memoryGiB": 15, "storageGiB": 640, "prices": [{ "amount": 443.329, "currency": "EUR", "regions": ["GRA", "LIM", "SBG", "WAW"] }] },
+        { "name": "Business DB1-30", "vcpus": 8, "memoryGiB": 30, "storageGiB": 1280, "prices": [{ "amount": 857.969, "currency": "EUR", "regions": ["GRA", "LIM", "SBG", "WAW"] }] },
+        { "name": "Business DB1-60", "vcpus": 16, "memoryGiB": 60, "storageGiB": 2560, "prices": [{ "amount": 1717.106, "currency": "EUR", "regions": ["GRA", "LIM", "SBG", "WAW"] }] },
+        { "name": "Production B3-8", "vcpus": 2, "memoryGiB": 8, "storageGiB": 320, "prices": [{ "amount": 203.086, "currency": "EUR", "regions": [] }] },
+        { "name": "Production B3-16", "vcpus": 4, "memoryGiB": 16, "storageGiB": 640, "prices": [{ "amount": 406.245, "currency": "EUR", "regions": [] }] },
+        { "name": "Production B3-32", "vcpus": 8, "memoryGiB": 32, "storageGiB": 1280, "prices": [{ "amount": 812.49, "currency": "EUR", "regions": [] }] }
+      ],
+      "storagePrices": [{ "amount": 0.365, "currency": "EUR", "regions": [] }]
+    },
+    {
+      "name": "Analytics for Kafka 3-AZ",
+      "categories": ["messaging.kafka"],
+      "capabilities": ["encryption-at-rest", "zone-high-availability"],
+      "regions": ["MIL", "PAR"],
+      "plans": [
+        { "name": "Production B3-8", "vcpus": 2, "memoryGiB": 8, "storageGiB": 320, "prices": [{ "amount": 213.306, "currency": "EUR", "regions": [] }] },
+        { "name": "Production B3-16", "vcpus": 4, "memoryGiB": 16, "storageGiB": 640, "prices": [{ "amount": 426.539, "currency": "EUR", "regions": [] }] },
+        { "name": "Production B3-32", "vcpus": 8, "memoryGiB": 32, "storageGiB": 1280, "prices": [{ "amount": 853.078, "currency": "EUR", "regions": [] }] }
+      ],
+      "storagePrices": [{ "amount": 0.365, "currency": "EUR", "regions": [] }]
+    },
+    {
+      "name": "Analytics for OpenSearch",
+      "categories": ["search.opensearch"],
+      "capabilities": ["encryption-at-rest", "snapshots"],
+      "regions": ["GRA", "LIM", "RBX", "SBG", "WAW"],
+      "plans": [
+        { "name": "Essential DB1-4", "vcpus": 2, "memoryGiB": 4, "storageGiB": 40, "prices": [{ "amount": 59.422, "currency": "EUR", "regions": ["GRA", "LIM", "SBG", "WAW"] }] },
+        { "name": "Essential DB1-7", "vcpus": 2, "memoryGiB": 7, "storageGiB": 80, "prices": [{ "amount": 119.866, "currency": "EUR", "regions": ["GRA", "LIM", "SBG", "WAW"] }] },
+        { "name": "Essential DB1-15", "vcpus": 4, "memoryGiB": 15, "storageGiB": 160, "prices": [{ "amount": 240.9, "currency": "EUR", "regions": ["GRA", "LIM", "SBG", "WAW"] }] },
+        { "name": "Discovery B3-4", "vcpus": 1, "memoryGiB": 4, "storageGiB": 0, "prices": [{ "amount": 65.919, "currency": "EUR", "regions": [] }] },
+        { "name": "Discovery B3-8", "vcpus": 2, "memoryGiB": 8, "storageGiB": 0, "prices": [{ "amount": 125.268, "currency": "EUR", "regions": [] }] },
+        { "name": "Discovery B3-16", "vcpus": 4, "memoryGiB": 16, "storageGiB": 0, "prices": [{ "amount": 250.463, "currency": "EUR", "regions": [] }] },
+        { "name": "Discovery B3-32", "vcpus": 8, "memoryGiB": 32, "storageGiB": 0, "prices": [{ "amount": 500.853, "currency": "EUR", "regions": [] }] },
+        { "name": "Discovery B3-64", "vcpus": 16, "memoryGiB": 64, "storageGiB": 0, "prices": [{ "amount": 1001.633, "currency": "EUR", "regions": [] }] }
+      ],
+      "storagePrices": [{ "amount": 0.292, "currency": "EUR", "regions": [] }]
+    },
+    {
+      "name": "Analytics for OpenSearch Multi-node",
+      "categories": ["search.opensearch"],
+      "capabilities": ["encryption-at-rest", "node-high-availability", "snapshots"],
+      "regions": ["GRA", "LIM", "RBX", "SBG", "WAW"],
+      "plans": [
+        { "name": "Business DB1-7", "vcpus": 2, "memoryGiB": 7, "storageGiB": 80, "prices": [{ "amount": 128.699, "currency": "EUR", "regions": ["GRA", "LIM", "SBG", "WAW"] }] },
+        { "name": "Business DB1-15", "vcpus": 4, "memoryGiB": 15, "storageGiB": 160, "prices": [{ "amount": 257.398, "currency": "EUR", "regions": ["GRA", "LIM", "SBG", "WAW"] }] },
+        { "name": "Business DB1-30", "vcpus": 8, "memoryGiB": 30, "storageGiB": 320, "prices": [{ "amount": 519.176, "currency": "EUR", "regions": ["GRA", "LIM", "SBG", "WAW"] }] },
+        { "name": "Business DB1-60", "vcpus": 16, "memoryGiB": 60, "storageGiB": 640, "prices": [{ "amount": 1039.52, "currency": "EUR", "regions": ["GRA", "LIM", "SBG", "WAW"] }] },
+        { "name": "Business DB1-120", "vcpus": 32, "memoryGiB": 120, "storageGiB": 1280, "prices": [{ "amount": 2084.515, "currency": "EUR", "regions": ["GRA", "LIM", "SBG", "WAW"] }] },
+        { "name": "Production B3-8", "vcpus": 2, "memoryGiB": 8, "storageGiB": 0, "prices": [{ "amount": 131.473, "currency": "EUR", "regions": [] }] },
+        { "name": "Production B3-16", "vcpus": 4, "memoryGiB": 16, "storageGiB": 0, "prices": [{ "amount": 263.019, "currency": "EUR", "regions": [] }] },
+        { "name": "Production B3-32", "vcpus": 8, "memoryGiB": 32, "storageGiB": 0, "prices": [{ "amount": 525.965, "currency": "EUR", "regions": [] }] },
+        { "name": "Production B3-64", "vcpus": 16, "memoryGiB": 64, "storageGiB": 0, "prices": [{ "amount": 1052.003, "currency": "EUR", "regions": [] }] }
+      ],
+      "storagePrices": [{ "amount": 0.365, "currency": "EUR", "regions": [] }]
+    },
+    {
+      "name": "Analytics for OpenSearch Multi-node 3-AZ",
+      "categories": ["search.opensearch"],
+      "capabilities": ["encryption-at-rest", "snapshots", "zone-high-availability"],
+      "regions": ["MIL", "PAR"],
+      "plans": [
+        { "name": "Production B3-8", "vcpus": 2, "memoryGiB": 8, "storageGiB": 0, "prices": [{ "amount": 139.211, "currency": "EUR", "regions": [] }] },
+        { "name": "Production B3-16", "vcpus": 4, "memoryGiB": 16, "storageGiB": 0, "prices": [{ "amount": 278.495, "currency": "EUR", "regions": [] }] },
+        { "name": "Production B3-32", "vcpus": 8, "memoryGiB": 32, "storageGiB": 0, "prices": [{ "amount": 556.917, "currency": "EUR", "regions": [] }] },
+        { "name": "Production B3-64", "vcpus": 16, "memoryGiB": 64, "storageGiB": 0, "prices": [{ "amount": 1113.907, "currency": "EUR", "regions": [] }] }
+      ],
+      "storagePrices": [{ "amount": 0.365, "currency": "EUR", "regions": [] }]
+    },
     {
       "name": "Block Storage",
       "categories": ["storage.block"],

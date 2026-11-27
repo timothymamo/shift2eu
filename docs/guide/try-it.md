@@ -58,8 +58,8 @@ starts with its inputs, the region its prices are for, and the fits counted:
 |---|---|
 | direct | 6 |
 | partial | 5 |
-| none | 7 |
-| total | 18 |
+| none | 8 |
+| total | 19 |
 ```
 
 [Read the report](#read-the-report) explains the rest. `--output report.md` writes the report to a
@@ -88,13 +88,13 @@ summary counts the fits and gives each target's estimated total:
 
 | Fit | `OVHcloud` | `Scaleway` | `UpCloud` |
 |---|---|---|---|
-| direct | 8 | 6 | 6 |
+| direct | 10 | 6 | 6 |
 | partial | 3 | 5 | 2 |
-| none | 7 | 7 | 10 |
-| total | 18 | 18 | 18 |
-| `OVHcloud` estimate | €2,004.93 per month for 10 of 18 resources (storage not included in 4 estimates) |  |  |
-| `Scaleway` estimate |  | €587.58 per month for 8 of 18 resources (storage not included in 4 estimates) |  |
-| `UpCloud` estimate |  |  | €359.31 per month for 8 of 18 resources |
+| none | 6 | 8 | 11 |
+| total | 19 | 19 | 19 |
+| `OVHcloud` estimate | €2,508.85 per month for 11 of 19 resources (storage not included in 4 estimates) |  |  |
+| `Scaleway` estimate |  | €587.58 per month for 8 of 19 resources (storage not included in 4 estimates) |  |
+| `UpCloud` estimate |  |  | €359.31 per month for 8 of 19 resources |
 
 Estimates are list prices on each catalog's retrieval date, excluding VAT and discounts; each target's own section gives its basis.
 ```
@@ -137,8 +137,8 @@ Every total in it estimated something, so `--schema-version 2` writes the same d
   "summary": {
     "direct": 6,
     "partial": 5,
-    "none": 7,
-    "total": 18
+    "none": 8,
+    "total": 19
   },
   "estimate": {
     "region": "fr-par",
@@ -153,7 +153,7 @@ Every total in it estimated something, so `--schema-version 2` writes the same d
     "total": {
       "amount": "587.58",
       "estimated": 8,
-      "resources": 18,
+      "resources": 19,
       "storageNotIncluded": 4
     }
   },
@@ -284,8 +284,8 @@ you would have to replace, rebuild or do without on that target.
 
 **Blockers** lists every resource whose fit is none, with the reason. Blockers are a result, not a
 failure: `assess` still exits 0. Here the CDN and the DNS zone are unclassified; on OVHcloud the queues,
-the function and the topic have no offering at all (OVHcloud does serve the cache, the MongoDB database
-and the container registry, which no other target's snapshot does yet). The web server and the topic `depends-on`
+the function and the topic have no offering at all (OVHcloud does serve the cache, the MongoDB database,
+the container registry and the two search clusters, which no other target's snapshot does yet). The web server and the topic `depends-on`
 the order queue, so the blocker on the queue is listed under them too, as "affected by a blocker"; their
 own fit does not change
 ([`aws-all-estimates.md.golden`](../../test/examples/testdata/aws-all-estimates.md.golden)):
@@ -321,12 +321,13 @@ database belongs to no workload:
 
 ### `shop`
 
-- Fit: 4 direct, 4 partial, 6 none
-- Monthly estimate: €517.16 per month for 6 of 14 resources (storage not included in 4 estimates), list prices on 2026-11-13, excluding VAT and discounts
-- Source cost: `USD` $518.92 for 4 of 14 resources
+- Fit: 4 direct, 4 partial, 7 none
+- Monthly estimate: €517.16 per month for 6 of 15 resources (storage not included in 4 estimates), list prices on 2026-11-13, excluding VAT and discounts
+- Source cost: `USD` $518.92 for 4 of 15 resources
 - Blockers:
   - `shop-catalog-docs`: no offering in the `Scaleway` catalog for `database.mongodb`
   - `shop-images`: no offering in the `Scaleway` catalog for `registry.container`
+  - `shop-log-search`: no offering in the `Scaleway` catalog for `search.opensearch`
   - `shop-order-events`: no offering in the `Scaleway` catalog for `messaging.topic`
   - `shop-product-search`: no offering in the `Scaleway` catalog for `search.opensearch`
   - `shop-sessions`: no offering in the `Scaleway` catalog for `cache.redis`
@@ -345,11 +346,11 @@ the source's cost is shown beside it per currency, never converted, with how man
 ```markdown
 ## Cost estimate
 
-- Total: €587.58 per month for 8 of 18 resources (storage not included in 4 estimates)
+- Total: €587.58 per month for 8 of 19 resources (storage not included in 4 estimates)
 - Estimate: list prices on 2026-11-13, excluding VAT and discounts; a fixed fee is the offering's listed fee
 - Prices in `fr-par`
 - Hours: plan price × count × hours / 730, 730 hours for a resource that gives none
-- Source cost: `USD` $518.92 for 4 of 18 resources
+- Source cost: `USD` $518.92 for 4 of 19 resources
 ```
 
 An estimate is not a quote: it uses list prices on the snapshot's date, without VAT, discounts,
