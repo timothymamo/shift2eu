@@ -53,8 +53,12 @@ but runs `exit 0`, then open a second pull request with the same head into `x`, 
 posts a passing check run of that name on the same head SHA, and the pull request into main shows no
 workflow change in its diff. A re-run of an old main run replays that run's older allow list (bounded).
 The maintainer's pre-merge check in `docs/dev-environment.md` looks at every such check run, cancelled
-ones included, at each run's event, workflow file, head SHA and base, and at every pull request with that
-head, through search and through the commit's pulls endpoint; the
+ones included, at each run's event, workflow file and head SHA, at every pull request with that head,
+through search (the only one that finds a closed, unmerged one) and through the commit's pulls endpoint,
+and at the pull request's retargets in its timeline. A run's own record names no base: its
+`pull_requests` lists only the pull requests open with that head when read, so a retarget to `x` and
+back, with `x`'s run re-run to cancel main's, shows only in the timeline, and then needs a new head
+commit; the
 longer-term fixes are an organization required workflow or a ruleset refusing `.github/workflows/**`
 changes on every branch but main. And the job trusts the runner image, the pinned actions and the Go
 toolchain, as every job does. A fork's or a new

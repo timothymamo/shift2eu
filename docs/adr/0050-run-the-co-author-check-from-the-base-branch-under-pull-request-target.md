@@ -215,7 +215,8 @@ The repository side is this pull request and its follow-up. The ruleset is the m
    # FAIL: the check passes, no row, another app id, another event, path, head SHA or base
    ```
 
-   Then close the probe
+   Run these before closing the probe: a run's `pull_requests` lists only the pull requests open with
+   that head at query time, so once the probe is closed the last list is `[]`. Then close the probe
    unmerged. Between the merge and step 3 the check runs but is not required; only the maintainer
    merges, so nothing lands in that window unless the maintainer merges it.
 3. **Require it.** Edit `Protect main` → Require status checks to pass → add **`Co-author trailers
@@ -238,7 +239,7 @@ The repository side is this pull request and its follow-up. The ruleset is the m
    request checked by `main`'s definition alone.
 6. **Before every merge from step 3 on,** check that the passing `Co-author trailers (base)` came from
    `main`'s workflow (the residual risk below: the required check matches the name and the app only).
-   With `<head sha>` the pull request's head commit. The query lists every run of the name
+   With `<head sha>` the pull request's head commit and `<n>` its number. The query lists every run of the name
    (`filter=all`; the default, `latest`, hides earlier ones) on every page (`--paginate`; a page holds
    30). `cancelled` rows are legitimate: `cancel-in-progress` cancels a run when a push or a title edit
    (`edited`) starts the next one.
@@ -253,16 +254,29 @@ The repository side is this pull request and its follow-up. The ruleset is the m
    gh api repos/timothymamo/shift2eu/actions/runs/<run id> \
      --jq '[.event,.path,.head_sha,[.pull_requests[].base.ref]]'
    # PASS: ["pull_request_target",".github/workflows/coauthor-trailers.yml","<head sha>",["main"]]
-   #       for a fork's pull request the last list is [] (GitHub lists only the repository's own
-   #       branches there): the two lists below are then the deciding lines
+   #       the last list is the pull requests open with that head now, not the base the run had: it
+   #       is [] for a fork's pull request, or one that is closed or merged, or whose head branch is
+   #       gone; the lists below are then the deciding lines
    # FAIL: another event, path or head SHA, or any base other than main
    gh pr list --search <head sha> --state all --json number,baseRefName
    gh api --paginate repos/timothymamo/shift2eu/commits/<head sha>/pulls --jq '.[]|[.number,.base.ref]|@tsv'
-   # PASS: every pull request in both lists has base main (the second is not search, which is
-   #       eventually consistent and can miss a new pull request)
+   # PASS: every pull request in both lists has base main. Only the first catches a closed,
+   #       unmerged side pull request into another branch (the pulls endpoint finds open and merged
+   #       ones only); the second is not search, which is eventually consistent and can miss a new
+   #       pull request
    # FAIL: any base other than main in either list, for example a second pull request with that head
    #       into another branch
+   gh api --paginate repos/timothymamo/shift2eu/issues/<n>/timeline --jq '.[]|select(.event=="base_ref_changed")'
+   # PASS: no output (GitHub's own record: the pull request was never retargeted)
+   # FAIL: any row. Then treat every check run on the head as suspect: a new head commit must be
+   #       pushed and this step rerun on it
    ```
+
+   The timeline line catches a retarget that the lines above cannot: retarget pull request `<n>` to a
+   branch `x` whose `coauthor-trailers.yml` runs `exit 0` (its `edited` run posts a success row),
+   retarget it back to `main`, then re-run `x`'s run so that `cancel-in-progress` cancels `main`'s run.
+   The rows are then success and cancelled, every run's `pull_requests` lists `main` (the base now),
+   and no other pull request has the head.
 
 `docs/contributing/agents.md` changes with this pull request: the gap it names is closed, and it names
 the residual risks below. `docs/dev-environment.md` gets the maintainer step, next to the **Claude Code
@@ -329,7 +343,13 @@ Residual risks:
   `github.sha`, so it checks against that commit's older allow list and check (bounded: only a copy
   `main` once held). What bounds it
   today is the maintainer's pre-merge check (Maintainer steps, step 6), which looks at every check run of
-  the name on the head commit, its event and the base of every pull request with that head. The
+  the name on the head commit, its event, the base of every pull request with that head, and the pull
+  request's own retargets. A run's `pull_requests` cannot show the base a run had: it lists only the pull
+  requests open with that head when it is read. So a retarget leaves no trace there: retarget the pull
+  request to `x` (its `edited` run from `x`'s copy posts a success row), retarget it back to `main`, and
+  re-run `x`'s run, which makes `cancel-in-progress` cancel `main`'s run. The rows are then success and
+  cancelled, and every other line of step 6 passes; only the timeline's `base_ref_changed` events,
+  GitHub's own record, show it, and then a new head commit must be pushed and checked again. The
   longer-term fixes are an organization required workflow (alternative 1), or a ruleset that refuses
   changes to `.github/workflows/**` on every branch but `main`.
 - **A pull request into another branch runs that branch's copy** of the workflow, which could differ, or

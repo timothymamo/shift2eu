@@ -46,7 +46,13 @@
 // (base), a ${{ }} name no allow-list entry pins (today only the lint matrix
 // entry's), and the legacy name Co-author trailers or job id coauthor-trailers
 // anywhere but on ci.yml's own legacy job, and it wants exactly that one legacy
-// job until the follow-up removes it.
+// job until the follow-up removes it. The guard reads both .yml and .yaml
+// workflows and refuses a coauthor-trailers.yaml beside the .yml
+// (TestCICoAuthorTrailersReadsBothWorkflowSpellings). It fails closed, with an
+// error, on any job name it cannot read as one plain or quoted line: a block
+// scalar, a value below the key or continued onto the lines below, a backslash
+// escape, a quoted key, a flow-collection job, leading spaces or a trailing
+// comment.
 //
 // TestDepguardRulesArePinned pins every depguard rule of .golangci.yml, strict
 // or not, against the copy pinnedDepguardRules: its list-mode, its files and

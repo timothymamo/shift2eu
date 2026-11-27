@@ -2214,7 +2214,9 @@ check is required. **Maintainer steps, once, for issue #706's pull request and i
    at least one row `15368  completed  failure` whose log names the `example.com` trailer, no `success`
    row, every row's app `15368`, and every run prints
    `["pull_request_target",".github/workflows/coauthor-trailers.yml","<probe head sha>",["main"]]`;
-   FAIL: the check passes, no row, another app id, or another event, path, head SHA or base):
+   FAIL: the check passes, no row, another app id, or another event, path, head SHA or base). Run these
+   before closing the probe: a run's `pull_requests` lists only the pull requests open with that head
+   when it is read, so once the probe is closed the last list is `[]`:
 
    ```bash
    gh api --paginate 'repos/timothymamo/shift2eu/commits/<probe head sha>/check-runs?check_name=Co-author%20trailers%20(base)&filter=all' \
@@ -2244,7 +2246,7 @@ check is required. **Maintainer steps, once, for issue #706's pull request and i
 **Before every merge from step 3 on,** check that the passing **Co-author trailers (base)** came from
 `main`'s workflow: the required check matches only the check run's name and the GitHub Actions app,
 never the workflow file or the base branch (ADR 0050, residual risks). With `<head sha>` the pull
-request's head commit:
+request's head commit and `<n>` its number:
 
 1. The check runs. `filter=all` lists every run of the name (the default, `latest`, hides earlier
    ones), `--paginate` every page (a page holds 30). `cancelled` rows are legitimate:
@@ -2253,14 +2255,22 @@ request's head commit:
    `15368`. FAIL: no `success` row, any other conclusion, a row not yet `completed`, or another app id.
 2. For every row, cancelled ones included, its run, `<run id>` the number after `/runs/` in its
    `details_url`. PASS:
-   `["pull_request_target",".github/workflows/coauthor-trailers.yml","<head sha>",["main"]]`. For a
-   fork's pull request the last list is `[]` (GitHub lists only the repository's own branches there);
-   the pull request lists of item 3 are then the deciding lines. FAIL: another event, path or head SHA,
-   or any base other than `main`.
-3. The pull requests with that head, once through search and once through the commit's pulls endpoint,
-   which is not search (search is eventually consistent and can miss a new pull request). PASS: every
-   pull request in both lists has base `main`. FAIL: any other base in either list, such as a second
-   pull request with that head into another branch.
+   `["pull_request_target",".github/workflows/coauthor-trailers.yml","<head sha>",["main"]]`. The last
+   list is the pull requests open with that head now, never the base the run had: it is `[]` for a
+   fork's pull request, or one that is closed or merged, or whose head branch is gone, and the lists of
+   items 3 and 4 then decide. FAIL: another event, path or head SHA, or any base other than `main`.
+3. The pull requests with that head, once through search and once through the commit's pulls endpoint.
+   Only search (`--state all`) catches a closed, unmerged side pull request into another branch: the
+   pulls endpoint finds open and merged ones only. The pulls endpoint is not search, which is eventually
+   consistent and can miss a new pull request. PASS: every pull request in both lists has base `main`.
+   FAIL: any other base in either list, such as a second pull request with that head into another
+   branch.
+4. The pull request's own retargets, from its timeline (GitHub's record). PASS: no output. FAIL: any
+   row: then treat every check run on the head as suspect, push a new head commit and rerun items 1 to 4
+   on it. This catches what items 1 to 3 cannot: retargeted to a branch `x` whose
+   `coauthor-trailers.yml` runs `exit 0` (a success row), back to `main`, and `x`'s run re-run so that
+   `cancel-in-progress` cancels `main`'s, leaving success and cancelled rows and `main` as the only base
+   anywhere.
 
 ```bash
 gh api --paginate 'repos/timothymamo/shift2eu/commits/<head sha>/check-runs?check_name=Co-author%20trailers%20(base)&filter=all' \
@@ -2269,12 +2279,13 @@ gh api repos/timothymamo/shift2eu/actions/runs/<run id> \
   --jq '[.event,.path,.head_sha,[.pull_requests[].base.ref]]'
 gh pr list --search <head sha> --state all --json number,baseRefName
 gh api --paginate repos/timothymamo/shift2eu/commits/<head sha>/pulls --jq '.[]|[.number,.base.ref]|@tsv'
+gh api --paginate repos/timothymamo/shift2eu/issues/<n>/timeline --jq '.[]|select(.event=="base_ref_changed")'
 ```
 
 The known limits (ADR 0050): a pull request could add a job of the same name to its own `ci.yml`, an
 edit that shows in its diff and its reviews; and someone with push rights could report a passing run of
 the name from another branch's copy of the workflow, through a second pull request with the same head
-into that branch, which the pre-merge check above catches.
+into that branch or a retarget of this one, which the pre-merge check above catches.
 
 **1. Create the reviewer App.** On GitHub, Settings → Developer settings → GitHub Apps → New GitHub App:
 
