@@ -2,6 +2,9 @@
 
 - Status: Accepted
 - Date: 2026-11-24
+- Amended: 2026-11-26, the tester starts through `dev/pi-tester.sh` with only its own credential, and does
+  not start when the refusal's files are not in place (issue #662; see "Amendment: the tester starts with
+  only its model credential, and fails closed")
 
 ## Context
 
@@ -163,7 +166,8 @@ Claude Code rules, which ADR 0003 does not cover.
   is not tested by `make check`; the project extension is, and `--approve` loads it already.
 - **Keep the keys out of the tester's environment** (a key helper or a wrapper that passes the key only to
   pi's provider). Out of scope (issue #540: how the deck passes keys); it would remove the value rather than
-  the command, and stays worth doing.
+  the command, and stays worth doing. Taken on 2026-11-26 for everything but the tester's own key (the
+  amendment below).
 - **Parse the command line in the extension.** A shell parser would tell more forms apart, but it is code
   the Go tests could not run; pattern data both sides read is testable here.
 
@@ -195,7 +199,9 @@ Claude Code rules, which ADR 0003 does not cover.
   checked offline: its rules are prefix rules on the command it parses, and no rule names that form. pi's
   patterns refuse it.
 - A load failure of the extension (a syntax error, a module that cannot be resolved) fails open: pi logs
-  it and runs the tester without the refusal. Only the paths after load fail closed. The `session_start`
+  it and runs the tester without the refusal. Only the paths after load fail closed (since issue #662 the
+  launch wrapper refuses to start pi when the refusal's files are missing, empty or malformed; see the
+  amendment below). The `session_start`
   notice shows a TUI pane whether the refusal loaded. Since issue #548, `TestPiEnvDenyExtensionLoads`
   loads the extension with Node's own type stripping, a stricter stand-in for pi's jiti loader: a top
   level that throws fails both, and the check also fails when the default export is no function. It skips
@@ -231,3 +237,110 @@ Claude Code rules, which ADR 0003 does not cover.
   a branch cut before the merge does not ignore `.scratch/` (its `.gitignore` predates the line).
 - pi now executes project code (`.pi/extensions/`) under `--approve`. A change to `.pi/` is reviewed like
   any other code, and the auditor reads it.
+
+## Amendment: the tester starts with only its model credential, and fails closed
+
+Issue #662 named the two gaps the decision above left: every agent in the VM got every variable of
+`daemon.env`, so a printing form the patterns miss (see Consequences) still shows the tester the other
+agents' keys; and a load failure of the extension fails open. The maintainer decided on 2026-11-26 to close
+both now (options 1 and 3 of the issue). The decision above stands; this adds a layer in front of it.
+
+- **`dev/pi-tester.sh` starts the tester.** `.dot-agent-deck.toml`'s tester `command` is
+  `dev/pi-tester.sh --provider deepseek --model deepseek-flash --thinking high --approve`, with
+  `agent = "pi"` (the deck identifies the agent from the command's start and cannot see behind a launcher).
+  The path is relative to the pane's working directory, the unit's folder, where the deck starts it.
+- **It fails closed.** Before pi starts, the wrapper checks, relative to that directory,
+  `.pi/extensions/deny-env-printing.ts` (a non-empty regular file) and `.pi/deny-env-printing.json` (a JSON
+  object whose `patterns` is a non-empty array, checked with `jq`, which `dev/lima.yaml` installs). Anything
+  else exits 1 with a message naming the file, and pi is not started. Then node (from `PATH`, the one
+  `dev/lima.yaml` pins, which strips TypeScript types on import by default, under the allow list below)
+  makes the load pi makes: it imports the extension and requires a function as its default export, and
+  compiles every pattern of the list with `new RegExp`, as `TestPiEnvDenyExtensionLoads`'s load script
+  does. A load that throws, a pattern that is no regular expression, and a `PATH` without node each refuse
+  the same way. Only node's exit status is read; its output is discarded. pi 1.6.1 has no option that makes
+  a failed extension load fatal, so the wrapper is what does it.
+- **It marks the tester's process tree.** The wrapper sets `SHIFT2EU_PI_TESTER=1` in pi's environment, and
+  the VM's login profile (`/etc/profile.d/shift2eu.sh`, written by `dev/lima.yaml`) leaves `daemon.env`
+  unsourced when that marker is set and non-empty, so a `bash -l` from the tester's bash tool does not put
+  the other agents' keys back into its pane. It takes effect at the maintainer's next VM rebuild.
+- **It hands pi an allow list.** pi runs under `env -i` with only the variables the script names, each
+  copied when set and each with its reason in the script: `DEEPSEEK_API_KEY`, the basics (`HOME`, `PATH`,
+  `USER`, `LOGNAME`, `SHELL`, `TERM`, `COLORTERM`, the locale, `TMPDIR`, the `XDG_*` directories) and the
+  deck's pane variables its pi extension and `work-done` need (`DOT_AGENT_DECK_PANE_ID`,
+  `DOT_AGENT_DECK_PANE_CAPABILITY`, the socket, the deck executable's path and the like). No GitHub token,
+  no other agent's key, no `OTEL_*` (its headers carry a telemetry backend's key), and no name the list does
+  not know. `test/devenv/pitester_test.go` pins the list's effect, the marker, the fail-closed start, the
+  profile's guard and the wiring.
+- **It checks `PATH` first.** Before anything that looks a command up, the wrapper refuses a `PATH` with an
+  empty entry (a leading, doubled or trailing `:`) or an entry that is not absolute (`.`, `bin`): either is
+  the working directory or under it, the unit's folder, so `jq`, node or pi could be found there. It exits 1
+  with a message naming `PATH` (never its value), and nothing starts. The VM's `PATH` has no such entry.
+- **The refusal covers the App's token folder and the marker.** The extension's file tools refuse
+  `~/.config/shift2eu`, the folder of the agents App's token file `agents-app-token` (ADR 0031), as they
+  refuse the deck's key directory: by resolved path (`~/`, absolute, `file://`) and anything under it, as an
+  ancestor of a `grep` or `find` (`~`, `~/.config`), by its spellings in a `path` or `glob`, and a `glob`
+  naming the App's files (`agents-app`). A `grep` or `find` *pattern* may name the folder or the files: a
+  pattern is text the walk looks for, never a place it goes, and where the walk goes is its `path`, which
+  stays checked (round 3's review, finding S1). The repository's `dev/agents-app-token.sh`, which mints
+  the token and holds none, stays readable. The list refuses any bash command naming the folder
+  (`\.config[/.]*/shift2eu\b`: the file, a glob, a `cd`, an `ls`), naming the token or identity file other
+  than as the script (`agents-app-(token|identity)($|[^.a-z])`: `find ~ -name agents-app-token`, a globbed
+  or quoted folder spelling, while `sed` or `shellcheck` of `dev/agents-app-token.sh` stays allowed), and
+  any command naming the marker `SHIFT2EU_PI_TESTER` (an `unset`, an empty assignment, `env -u`), since
+  clearing it before a `bash -l` would source `daemon.env` again. It also refuses starting a command with a
+  cleared or fresh environment, which drops the marker without naming it: `env -i`,
+  `env --ignore-environment`, `env -`, `exec` with an option holding `c`, `sudo -i` (also `-iu`,
+  `--login`) and `su -l`, `su -`, `su --login` (round 3's audit, finding SF-1). `exec -c` is refused
+  behind the same prefix as the printers (a quote, `then`/`do`/`else`/`elif`/`!`, a wrapper such as
+  `command`, `builtin`, `eval` or `time`) and after an option with a value (`exec -a name -c`), while
+  `exec ./bin/shift2eu`, `find -exec` and `docker exec` stay allowed; a bare `-` of `env` or `su` counts
+  before an operator or a newline as before a space (`su -;true`, round 4's review and audit).
+  `test/architecture/pienvdenytoolcall_test.go` runs the extension's `tool_call` handler in node against
+  those calls.
+- **The wrapper is project code.** `dev/pi-tester.sh` is reviewed and audited as such, like `.pi/`: a
+  change to it changes what reaches the tester.
+
+Alternatives considered for the amendment:
+
+- **A deny list** (unset the known keys). It keeps out only the names it knows; a key added to `VM_ENV`
+  later would reach the tester. The allow list keeps out every name it does not know.
+- **Narrowing the VM's egress** (option 2 of the issue: the tester reaches only DeepSeek and the module
+  proxy). Out of scope now by the maintainer's decision of 2026-11-26; it stays a possible later stage,
+  and would make a printed or exfiltrated key harder to use from the VM. It, or running the tester as a
+  separate uid, is also what would keep the files and other processes' environments below from the tester,
+  which the allow list cannot.
+
+Consequences of the amendment:
+
+- The wrapper keeps the other agents' keys out of pi's environment and, with the marker, out of the login
+  shells it starts: printing pi's own environment shows only the DeepSeek key and the deck's pane
+  variables.
+- It does not separate the tester from the other agents. The tester still runs as the VM's one user, so
+  `daemon.env`, the agents App's token file (`~/.config/shift2eu/agents-app-token`) and other processes'
+  `/proc/<pid>/environ` stay readable to it, guarded only by the extension: its file tools refuse the
+  App's token folder as they refuse the deck's, and its patterns refuse a command naming that folder or
+  clearing the marker. A program the tester writes and runs can bypass both, and can clear the marker
+  itself, since nothing but those patterns protects it. Separating them needs a separate uid or the egress
+  stage.
+- The patterns are lexical, and a single bash command can still get past them: by quoting or globbing a
+  folder name the patterns do not foresee (`~/.conf''ig/shi*`), or through a symlink, since the file tools'
+  checks resolve `~`, `..` and the working directory but not symlinks (no `realpath`, round 3's audit,
+  finding N-2; left as is, a second layer). A login shell with a fresh environment drops the marker without
+  naming it (`exec -c bash -l`, `sudo -i`, `su -l`, `ssh localhost`): the common spellings are refused,
+  others are not: `ssh localhost`, `sudo -u <the same user> bash -l`, a GNU long-option abbreviation
+  (`env --ignore`, `su --log`), an option after the operand (`su x -l`) or after an option with a value
+  (`env -P dir -i`, `env --unset=X -i`). The boundary is the separate uid or the egress stage, not these
+  patterns.
+- The refusal costs some work. A bash command whose text holds the marker `SHIFT2EU_PI_TESTER`,
+  `agents-app-token` or `agents-app-identity` (not followed by `.` or a letter), `env -i`, `env -`,
+  `sudo -i`, `su -l`, `su -` or `exec -c` is refused, even as text: a bash `grep` for it, or a
+  `git commit -m` whose message names it; the tester uses the grep tool and `git commit -F` instead. The grep and find tools may search the repository for `agents-app` or the folder,
+  but not with a glob naming them or a path under, or above, the folder. The folder pattern's `\b` also
+  refuses a name such as `~/.config/shift2eu-other`, which is harmless.
+- The tester still reaches GitHub: the VM's `gh` (ADR 0031) reads the agents App's token from its file
+  under `HOME`, not from the environment, so `gh` and `git push` keep working for it.
+- A variable the tester's tools turn out to need and the list lacks is absent until the script names it;
+  the fix is one line and a reason in `dev/pi-tester.sh`. The deck's own telemetry of pi (its
+  `DOT_AGENT_DECK_PI_TELEMETRY` and `OTEL_*`) does not reach the tester's pane.
+- The change reaches only tester panes started from a unit folder that has the script, after the
+  maintainer approved the changed orchestration in the deck (`dot-agent-deck trust`).
