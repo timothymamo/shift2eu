@@ -1911,6 +1911,30 @@ const azureHDInsightRolesPath = "properties.computeProfile.roles"
 // sits in, which the program reads no field of.
 var azureHDInsightExcludedNames = []string{"osProfile", "connectivityEndpoints", "scriptActions", "virtualNetworkProfile"}
 
+// azureHDInsightTypeFilter matches the filter that opens the branch of the
+// Resource Graph query that reads an HDInsight cluster: `where type =~ 'microsoft.hdinsight/clusters'`,
+// in any casing and with any spacing. The branch is found by that filter, not by
+// the first place the query names the type: keyed on the first occurrence, the
+// check read the wrong part of the query as soon as the legs of the union were
+// written in another order (review finding N1).
+var azureHDInsightTypeFilter = regexp.MustCompile(`(?i)\bwhere\s+type\s+=~\s*'microsoft\.hdinsight/clusters'`)
+
+// azureHDInsightTypeExclusion matches the one other place the query may name the
+// type: the filter that keeps HDInsight clusters out of the branch reading every
+// other type, `where type !~ 'microsoft.hdinsight/clusters'`. Any other naming of
+// the type, a `case(...)` arm first among them, would pass a cluster's properties
+// on whole, past the branch that packs only the fields the program reads.
+var azureHDInsightTypeExclusion = regexp.MustCompile(`(?i)\btype\s+!~\s*'microsoft\.hdinsight/clusters'`)
+
+// azureUnionOpen matches the `| union (` whose parenthesised group holds the
+// query's legs (PRD #571, milestone 4).
+var azureUnionOpen = regexp.MustCompile(`(?i)\|\s*union\s*\(`)
+
+// azureResourceGraphColumns are the columns the query's final projection writes,
+// and the only ones it may write: the resource's short ID, its name, type, kind,
+// region, zones and SKU, and the reduced `properties` bag each branch builds.
+var azureResourceGraphColumns = []string{"id", "name", "type", "kind", "location", "zones", "sku", "properties"}
+
 // azureFieldPath matches one field path of the guide's Resource Graph query: the
 // name `properties` or a role, then one or more dotted segments, each optionally
 // indexed, so that properties.clusterDefinition.kind and
@@ -1959,29 +1983,31 @@ func azureResourceGraphQuery(t *testing.T, guide string) string {
 }
 
 // azureHDInsightBranch returns the part of the Resource Graph query that reads an
-// HDInsight cluster: the text from the cluster's type filter to the end of that
-// branch. A branch ends at the next one's type filter, at the `case(...)`'s
-// closing `dynamic(null)`, at the line that closes the `union(...)` the branch
-// sits in, and at the query's last `| project` line, which names the reduced
-// properties column of every type and so is no branch's own text. It reports
-// false when the query holds no such branch.
+// HDInsight cluster: the text from the filter that opens that branch to the end of
+// it. A branch ends at the next one's type filter, at the `case(...)`'s closing
+// `dynamic(null)`, at the line that closes the `union(...)` the branch sits in, and
+// at the query's last `| project` line, which names the reduced properties column
+// of every type and so is no branch's own text. It reports false when the query
+// opens no branch with a `where type =~ 'microsoft.hdinsight/clusters'` filter.
+//
+// The branch is anchored on that filter rather than on the first occurrence of the
+// type's name, so the legs of the union may be written in any order (review finding
+// N1).
 //
 // This reads the query's shape rather than parsing KQL: a branch written in
 // another shape may end elsewhere, and the review of the guide's change has to
 // weigh that. What this cannot decide is left to the review rather than guessed
 // at here.
 func azureHDInsightBranch(query string) (string, bool) {
-	const marker = "microsoft.hdinsight/clusters"
-
-	lowered := strings.ToLower(query)
-
-	at := strings.Index(lowered, marker)
-	if at < 0 {
+	filter := azureHDInsightTypeFilter.FindStringIndex(query)
+	if filter == nil {
 		return "", false
 	}
 
-	start := at + len(marker)
+	start := filter[1]
 	end := len(query)
+
+	lowered := strings.ToLower(query)
 
 	for _, terminator := range []string{"type =~", "type in~", "dynamic(null)"} {
 		if i := strings.Index(lowered[start:], terminator); i >= 0 {
@@ -2004,7 +2030,31 @@ func azureHDInsightBranch(query string) (string, bool) {
 func azureBranchEnds(query string) []int {
 	var ends []int
 
-	lastProject := -1
+	for offset := 0; offset < len(query); {
+		line := query[offset:]
+		if i := strings.IndexByte(line, '\n'); i >= 0 {
+			line = line[:i]
+		}
+
+		if strings.HasPrefix(strings.TrimSpace(line), ")") {
+			ends = append(ends, offset)
+		}
+
+		offset += len(line) + 1
+	}
+
+	if at, _, ok := azureLastProjection(query); ok {
+		ends = append(ends, at)
+	}
+
+	return ends
+}
+
+// azureLastProjection returns the offset of the query's last `| project` line and
+// the columns it names: every branch of the union is fed through that projection,
+// and it is the only place the query chooses what the file holds of a resource.
+func azureLastProjection(query string) (int, []string, bool) {
+	at, columns, found := -1, []string(nil), false
 
 	for offset := 0; offset < len(query); {
 		line := query[offset:]
@@ -2012,27 +2062,161 @@ func azureBranchEnds(query string) []int {
 			line = line[:i]
 		}
 
-		switch trimmed := strings.TrimSpace(line); {
-		case strings.HasPrefix(trimmed, ")"):
-			ends = append(ends, offset)
-		case strings.HasPrefix(trimmed, "| project"):
-			lastProject = offset
+		if projection, ok := strings.CutPrefix(strings.TrimSpace(line), "| project "); ok {
+			at, found, columns = offset, true, nil
+
+			for _, column := range strings.Split(projection, ",") {
+				columns = append(columns, strings.TrimSpace(column))
+			}
 		}
 
 		offset += len(line) + 1
 	}
 
-	if lastProject >= 0 {
-		ends = append(ends, lastProject)
+	return at, columns, found
+}
+
+// azureUnionCloseOffset returns the offset of the character that closes the
+// parenthesised group a `| union (` opens. A parenthesis inside a quoted KQL
+// string is no parenthesis, and a group the query never closes reports false.
+func azureUnionCloseOffset(query string) (int, bool) {
+	open := azureUnionOpen.FindStringIndex(query)
+	if open == nil {
+		return 0, false
 	}
 
-	return ends
+	depth := 1
+	quote := rune(0)
+
+	for offset, r := range query[open[1]:] {
+		switch {
+		case quote != 0:
+			if r == quote {
+				quote = 0
+			}
+		case r == '\'' || r == '"':
+			quote = r
+		case r == '(':
+			depth++
+		case r == ')':
+			depth--
+
+			if depth == 0 {
+				return open[1] + offset, true
+			}
+		}
+	}
+
+	return 0, false
+}
+
+// azureProjectionProblems returns what is wrong with the query's final projection
+// (audit finding L2 + review finding N1): the query's outermost last `| project`
+// has to come after the line that closes the union, and to write exactly the
+// columns the program reads. A projection inside the union leaves each branch
+// writing the columns it happens to carry, which is what the reduced `properties`
+// bag exists to prevent, and a column the program does not read, the `role` the
+// HDInsight branch expands first among them, is a cluster's property the file then
+// holds.
+func azureProjectionProblems(query string) []string {
+	var problems []string
+
+	at, columns, ok := azureLastProjection(query)
+	if !ok {
+		return append(problems, "ends in no `| project`, want one after the union naming exactly "+strings.Join(azureResourceGraphColumns, ", ")+": without it the query writes every column of every resource to the file, and the program's fields cannot be told from the rest")
+	}
+
+	if closeOffset, ok := azureUnionCloseOffset(query); !ok {
+		problems = append(problems, "closes no `| union (...)`, want the resources of every type unioned in one parenthesised group with the final projection after it")
+	} else if at < closeOffset {
+		problems = append(problems, "projects its columns inside the union's parentheses, want the `| project` on a line after the one that closes the group: a projection inside the union leaves each branch writing the columns it happens to carry, and the worker `role` the HDInsight branch expands reaches the file with them")
+	}
+
+	want := slices.Clone(azureResourceGraphColumns)
+	got := slices.Clone(columns)
+
+	slices.Sort(want)
+	slices.Sort(got)
+
+	if !slices.Equal(want, got) {
+		problems = append(problems, fmt.Sprintf("projects the columns %v, want exactly %v: a column the program does not read, the worker `role` the HDInsight branch expands first among them, is a property of the resource the file then holds whole, and a column it reads but the query leaves out is missing from every resource",
+			columns, azureResourceGraphColumns))
+	}
+
+	return problems
+}
+
+// azureHDInsightTypeOccurrenceProblems returns what is wrong with every place the
+// query names `microsoft.hdinsight/clusters` besides the filter that opens its
+// branch (audit finding L1): each has to be a `type !~` exclusion. A `case(...)`
+// arm that named the type would pass a cluster's properties on whole, osProfile
+// and connectivityEndpoints with them, past the branch that packs only the fields
+// the program reads.
+func azureHDInsightTypeOccurrenceProblems(query string) []string {
+	const marker = "microsoft.hdinsight/clusters"
+
+	var problems []string
+
+	lowered := strings.ToLower(query)
+	exclusions := azureHDInsightTypeExclusion.FindAllStringIndex(query, -1)
+	filter := azureHDInsightTypeFilter.FindStringIndex(query)
+
+	for offset := 0; offset < len(query); {
+		found := strings.Index(lowered[offset:], marker)
+		if found < 0 {
+			break
+		}
+
+		at := offset + found
+		offset = at + len(marker)
+
+		if filter != nil && at >= filter[0] && at < filter[1] {
+			continue
+		}
+
+		if slices.ContainsFunc(exclusions, func(exclusion []int) bool { return at >= exclusion[0] && at < exclusion[1] }) {
+			continue
+		}
+
+		problems = append(problems, "names microsoft.hdinsight/clusters outside the filter that opens its branch and outside a `type !~` exclusion, want it in neither: a `case(...)` arm that names the type passes a cluster's properties on whole, osProfile, connectivityEndpoints and its scripts with them, so the branch that packs only the fields the program reads is the one place a cluster may be read")
+	}
+
+	return problems
+}
+
+// azureResourceGraphQueryProblems returns what is wrong with a Resource Graph
+// query of the guide's shape: its final projection, the reduced `properties` bag
+// every branch has to build, the places it names an HDInsight cluster's type, and
+// the fields its HDInsight branch keeps. It returns one sentence per problem and
+// none for the query the guide has to write.
+func azureResourceGraphQueryProblems(query string, hdInsightExcluded []string) []string {
+	problems := azureProjectionProblems(query)
+
+	if !azurePacksProperties(query) {
+		problems = append(problems, "builds no reduced `properties` bag (`properties = bag_pack(...)`, or the `extend properties = case(...)` it has today), want one: without it the query writes every resource's properties whole, an HDInsight cluster's osProfile and connectivityEndpoints included")
+	}
+
+	problems = append(problems, azureHDInsightTypeOccurrenceProblems(query)...)
+
+	branch, ok := azureHDInsightBranch(query)
+	if !ok {
+		return append(problems, "opens no branch with a `where type =~ 'microsoft.hdinsight/clusters'` filter, want one that expands the cluster's worker roles and packs only "+strings.Join(azureHDInsightSourceFields, ", ")+": an HDInsight cluster of kind Kafka is messaging.kafka (PRD #571), and the program reads its kind, its worker count and its workers' size from that branch")
+	}
+
+	for _, problem := range azureHDInsightBranchProblems(branch, hdInsightExcluded) {
+		problems = append(problems, "keeps an HDInsight branch that "+problem)
+	}
+
+	return problems
 }
 
 // azureHDInsightBranchProblems returns what is wrong with the part of the query
 // that reads an HDInsight cluster, one sentence per problem and no problem for a
-// branch that keeps only the fields the program reads (PRD #571).
-func azureHDInsightBranchProblems(branch string) []string {
+// branch that keeps only the fields the program reads (PRD #571). The names in
+// hdInsightExcluded are the fields the branch must hold nowhere, read from the
+// shared excluded-key list rather than from a copy kept here (audit finding on
+// PRD #571's milestone 4: three properties of a cluster had reached neither).
+func azureHDInsightBranchProblems(branch string, hdInsightExcluded []string) []string {
 	var problems []string
 
 	expansions := 0
@@ -2072,10 +2256,10 @@ func azureHDInsightBranchProblems(branch string) []string {
 	}
 
 	if !strings.Contains(strings.ToLower(branch), "workernode") {
-		problems = append(problems, "keeps no worker role, want the branch to filter one by name (`where role.name =~ 'workernode'`): a cluster's worker count and size are its workers' alone, not its head nodes'")
+		problems = append(problems, "names no worker role, want the branch to filter one by name (`where role.name =~ 'workernode'`): a cluster's worker count and size are its workers' alone, not its head nodes'")
 	}
 
-	for _, excluded := range azureHDInsightExcludedNames {
+	for _, excluded := range hdInsightExcluded {
 		if strings.Contains(strings.ToLower(branch), strings.ToLower(excluded)) {
 			problems = append(problems, fmt.Sprintf("names %q, want it nowhere: PRD #571 excludes it from every projection of an HDInsight cluster, and the program reads no field of it", excluded))
 		}
@@ -2137,10 +2321,11 @@ func azurePacksProperties(query string) bool {
 // TestInventoryGuideAzureResourceGraphQueryKeepsOnlyTheFieldsTheProgramReads
 // pins the Azure half of PRD #571's *Only the fields the program reads* on the
 // guide's own text: the Resource Graph query keeps its columns with an explicit
-// `| project`, and the branch that reads an HDInsight cluster names only the
-// properties the program reads of it, never osProfile or connectivityEndpoints.
-// The recorded fixture cannot pin this on its own, since a fixture written after
-// the fact could leave out the fields a query without the projection writes.
+// `| project` after the union and no column but those the program reads, and the
+// branch that reads an HDInsight cluster names only the properties the program
+// reads of it, never osProfile or connectivityEndpoints. The recorded fixture
+// cannot pin this on its own, since a fixture written after the fact could leave
+// out the fields a query without the projection writes.
 func TestInventoryGuideAzureResourceGraphQueryKeepsOnlyTheFieldsTheProgramReads(t *testing.T) {
 	t.Parallel()
 
@@ -2149,57 +2334,124 @@ func TestInventoryGuideAzureResourceGraphQueryKeepsOnlyTheFieldsTheProgramReads(
 	guide := string(readRepositoryFile(t, filepath.Join("docs", "guide", "inventory.md")))
 	query := azureResourceGraphQuery(t, guide)
 
-	var columns []string
+	problems := azureResourceGraphQueryProblems(query, azureHDInsightExcludedNames)
 
-	for _, line := range strings.Split(query, "\n") {
-		projection, projected := strings.CutPrefix(strings.TrimSpace(line), "| project ")
-		if !projected {
-			continue
-		}
-
-		columns = nil
-
-		for _, column := range strings.Split(projection, ",") {
-			columns = append(columns, strings.TrimSpace(column))
-		}
+	for _, problem := range problems {
+		t.Errorf("%s's Resource Graph query %s\n%s", guidePath, problem, query)
 	}
+}
 
-	if columns == nil {
-		t.Fatalf("%s's Resource Graph query ends in no `| project`, want one naming the columns the program reads: without it the query writes every column of every resource to the file, and the program's fields cannot be told from the rest\n%s",
-			guidePath, query)
+// TestInventoryGuideAzureResourceGraphQueryRulesFlagALeakingQuery pins the rules
+// the check above applies, against queries written here: a query that named the
+// HDInsight type in a `case(...)` arm, that added a column the program does not
+// read, or that projected inside the union is reported, and the query the guide
+// has to write is not, whatever the order of its legs (audit findings L1 and L2,
+// review findings N1 and N3). The check above reads the guide's own query; this
+// one holds the rules to queries written here, so a rule that stopped reading a
+// leak cannot pass on a query it never saw.
+func TestInventoryGuideAzureResourceGraphQueryRulesFlagALeakingQuery(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		// query is the Resource Graph query the rules read.
+		query string
+		// want are the phrases each of which a reported problem has to hold.
+		want []string
+	}{{
+		name:  "the query the guide has to write",
+		query: azureResourceGraphQueryOfGuideShape(),
+	}, {
+		name:  "a query whose legs are written in the other order",
+		query: azureOtherTypesLeg + "\n| union (Resources" + azureHDInsightLeg + ")\n" + azureResourceGraphProjection,
+	}, {
+		name:  "a query that reads HDInsight clusters through a case(...) arm as well",
+		query: "Resources" + azureHDInsightLeg + "\n| union (" + azureOtherTypesLegWithoutExclusion + "\n    type =~ 'microsoft.hdinsight/clusters', properties,\n    dynamic(null)))\n" + azureResourceGraphProjection,
+		want:  []string{"names microsoft.hdinsight/clusters outside the filter that opens its branch"},
+	}, {
+		name:  "a query that projects the worker role with the other columns",
+		query: azureResourceGraphQueryOfGuideShape() + ", role",
+		want:  []string{"projects the columns"},
+	}, {
+		name:  "a query that projects inside the union's parentheses",
+		query: "Resources" + azureHDInsightLeg + "\n| union (" + azureOtherTypesLegWithoutExclusion + "\n    dynamic(null)\n" + azureResourceGraphProjection + "))",
+		want:  []string{"projects its columns inside the union's parentheses"},
+	}}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			problems := azureResourceGraphQueryProblems(tc.query, azureHDInsightExcludedNames)
+
+			for _, phrase := range tc.want {
+				if !slices.ContainsFunc(problems, func(problem string) bool {
+					return strings.Contains(problem, phrase)
+				}) {
+					t.Errorf("azureResourceGraphQueryProblems reported no problem holding %q, want one: a query that leaks a field past PRD #571 has to fail the guide's check, not pass it\nreported:\n%s\nquery:%s",
+						phrase, strings.Join(problems, "\n"), tc.query)
+				}
+			}
+
+			if len(tc.want) == 0 && len(problems) != 0 {
+				t.Errorf("azureResourceGraphQueryProblems reported %d problem(s) for a query that keeps only the fields the program reads, want none: this check would fail the query the guide has to write\nreported:\n%s\nquery:%s",
+					len(problems), strings.Join(problems, "\n"), tc.query)
+			}
+		})
 	}
+}
 
-	for _, column := range []string{"id", "name", "type", "location", "zones", "properties"} {
-		if !slices.Contains(columns, column) {
-			t.Errorf("%s's Resource Graph query projects the columns %v, want `%s` among them: the program writes the resource's short ID, its region and, for an HDInsight cluster, the zones that decide its zone-high-availability out of those\n%s",
-				guidePath, columns, column, query)
-		}
-	}
+// azureHDInsightLeg is the leg of the Resource Graph query that reads an HDInsight
+// cluster as the guide has to write it: the cluster's kind, which classifies it,
+// and its worker role's count, size and disks, packed back field by field.
+const azureHDInsightLeg = `
+| where type =~ 'microsoft.hdinsight/clusters'
+| mv-expand role = properties.computeProfile.roles
+| where role.name =~ 'workernode'
+| extend properties = bag_pack(
+    'clusterDefinition', bag_pack('kind', properties.clusterDefinition.kind),
+    'computeProfile', bag_pack('roles', pack_array(bag_pack(
+      'name', role.name,
+      'targetInstanceCount', role.targetInstanceCount,
+      'hardwareProfile', bag_pack('vmSize', role.hardwareProfile.vmSize),
+      'dataDisksGroups', pack_array(bag_pack(
+        'disksPerNode', role.dataDisksGroups[0].disksPerNode,
+        'diskSizeGB', role.dataDisksGroups[0].diskSizeGB))))))`
 
-	if !azurePacksProperties(query) {
-		t.Errorf("%s's Resource Graph query builds no reduced `properties` bag (`properties = bag_pack(...)`, or the `extend properties = case(...)` it has today), want one: without it the query writes every resource's properties whole, an HDInsight cluster's osProfile and connectivityEndpoints included\n%s",
-			guidePath, query)
-	}
+// azureOtherTypesLeg is the union's other leg, which reads every type but an
+// HDInsight cluster and packs the properties the program reads of each of them.
+const azureOtherTypesLeg = `Resources
+| where type !~ 'microsoft.hdinsight/clusters'
+| extend properties = case(
+    type =~ 'microsoft.compute/virtualmachines', bag_pack(
+      'hardwareProfile', bag_pack('vmSize', properties.hardwareProfile.vmSize)),
+    dynamic(null))`
 
-	branch, ok := azureHDInsightBranch(query)
-	if !ok {
-		t.Errorf("%s's Resource Graph query holds no `microsoft.hdinsight/clusters` branch, want one that expands the cluster's worker roles and packs only %s: an HDInsight cluster of kind Kafka is messaging.kafka (PRD #571), and the program reads its kind, its worker count and its workers' size from that branch\n%s",
-			guidePath, strings.Join(azureHDInsightSourceFields, ", "), query)
+// azureOtherTypesLegWithoutExclusion is azureOtherTypesLeg without the filter
+// that keeps HDInsight clusters out of it, so that a query written from it can
+// read a cluster through a `case(...)` arm instead.
+const azureOtherTypesLegWithoutExclusion = `Resources
+| extend properties = case(
+    type =~ 'microsoft.compute/virtualmachines', bag_pack(
+      'hardwareProfile', bag_pack('vmSize', properties.hardwareProfile.vmSize)),`
 
-		return
-	}
+// azureResourceGraphProjection is the query's final projection, on the line after
+// the one that closes the union.
+const azureResourceGraphProjection = `| project id, name, type, kind, location, zones, sku, properties`
 
-	for _, problem := range azureHDInsightBranchProblems(branch) {
-		t.Errorf("%s's Resource Graph query's HDInsight branch %s\n%s", guidePath, problem, branch)
-	}
+// azureResourceGraphQueryOfGuideShape assembles the Resource Graph query the
+// guide has to write out of the parts above: the HDInsight branch first, the
+// other types unioned in behind it, and the final projection after the union.
+func azureResourceGraphQueryOfGuideShape() string {
+	return "Resources" + azureHDInsightLeg + "\n| union (" + azureOtherTypesLeg + ")\n" + azureResourceGraphProjection
 }
 
 // TestInventoryGuideAzureHDInsightBranchRulesFlagALeakingBranch pins the branch
 // rules the check above applies: a branch that passes a field past PRD #571 is
 // reported, and the branch the guide has to write is not. The check above reads
-// the guide's own branch, which does not exist yet; this one holds the rules to
-// branches written here, so a rule that stopped reading a leak cannot pass on a
-// branch it never saw.
+// the guide's own branch and the rules it holds to it; this one holds the same
+// rules to branches written here, so a rule that stopped reading a leak cannot
+// pass on a branch it never saw.
 func TestInventoryGuideAzureHDInsightBranchRulesFlagALeakingBranch(t *testing.T) {
 	t.Parallel()
 
@@ -2269,18 +2521,18 @@ func TestInventoryGuideAzureHDInsightBranchRulesFlagALeakingBranch(t *testing.T)
 | project id, name, type, kind, location, zones, sku, properties`,
 		want: []string{"names `properties` whole"},
 	}, {
-		name: "a branch that keeps no worker role",
+		name: "a branch that names no worker role",
 		branch: `'
 | mv-expand role = properties.computeProfile.roles
 | project id, name, type, kind, location, zones, sku, properties = bag_pack(` + kind + `,` + workerRole + `)`,
-		want: []string{"keeps no worker role"},
+		want: []string{"names no worker role"},
 	}}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			problems := azureHDInsightBranchProblems(tc.branch)
+			problems := azureHDInsightBranchProblems(tc.branch, azureHDInsightExcludedNames)
 
 			for _, phrase := range tc.want {
 				if !slices.ContainsFunc(problems, func(problem string) bool {
