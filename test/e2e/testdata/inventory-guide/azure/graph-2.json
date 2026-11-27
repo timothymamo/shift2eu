@@ -1,5 +1,5 @@
 {
-  "count": 60,
+  "count": 64,
   "data": [
     {
       "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shop/providers/Microsoft.DBforPostgreSQL/flexibleServers/psql-shop",
@@ -1245,6 +1245,130 @@
           "kind": "Kafka"
         },
         "clusterState": "deletequeued",
+        "computeProfile": {
+          "roles": [
+            {
+              "name": "workernode",
+              "targetInstanceCount": 3,
+              "hardwareProfile": {
+                "vmSize": "Standard_D2s_v3"
+              },
+              "dataDisksGroups": [
+                {
+                  "disksPerNode": 1,
+                  "diskSizeGB": 1023
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shop/providers/Microsoft.HDInsight/clusters/kafka-shop-deleted",
+      "name": "kafka-shop-deleted",
+      "type": "microsoft.hdinsight/clusters",
+      "kind": "",
+      "location": "westeurope",
+      "zones": null,
+      "properties": {
+        "clusterDefinition": {
+          "kind": "Kafka"
+        },
+        "clusterState": "Deleted",
+        "computeProfile": {
+          "roles": [
+            {
+              "name": "workernode",
+              "targetInstanceCount": 3,
+              "hardwareProfile": {
+                "vmSize": "Standard_D2s_v3"
+              },
+              "dataDisksGroups": [
+                {
+                  "disksPerNode": 1,
+                  "diskSizeGB": 1023
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shop/providers/Microsoft.HDInsight/clusters/kafka-shop-deltimeout",
+      "name": "kafka-shop-deltimeout",
+      "type": "microsoft.hdinsight/clusters",
+      "kind": "",
+      "location": "westeurope",
+      "zones": null,
+      "properties": {
+        "clusterDefinition": {
+          "kind": "Kafka"
+        },
+        "clusterState": "DeleteTimeout",
+        "computeProfile": {
+          "roles": [
+            {
+              "name": "workernode",
+              "targetInstanceCount": 3,
+              "hardwareProfile": {
+                "vmSize": "Standard_D2s_v3"
+              },
+              "dataDisksGroups": [
+                {
+                  "disksPerNode": 1,
+                  "diskSizeGB": 1023
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shop/providers/Microsoft.HDInsight/clusters/kafka-shop-error",
+      "name": "kafka-shop-error",
+      "type": "microsoft.hdinsight/clusters",
+      "kind": "",
+      "location": "westeurope",
+      "zones": null,
+      "properties": {
+        "clusterDefinition": {
+          "kind": "Kafka"
+        },
+        "clusterState": "ERROR",
+        "computeProfile": {
+          "roles": [
+            {
+              "name": "workernode",
+              "targetInstanceCount": 3,
+              "hardwareProfile": {
+                "vmSize": "Standard_D2s_v3"
+              },
+              "dataDisksGroups": [
+                {
+                  "disksPerNode": 1,
+                  "diskSizeGB": 1023
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shop/providers/Microsoft.HDInsight/clusters/kafka-shop-timeout",
+      "name": "kafka-shop-timeout",
+      "type": "microsoft.hdinsight/clusters",
+      "kind": "",
+      "location": "westeurope",
+      "zones": null,
+      "properties": {
+        "clusterDefinition": {
+          "kind": "Kafka"
+        },
+        "clusterState": "Timeout",
         "computeProfile": {
           "roles": [
             {

@@ -105,6 +105,15 @@ var searchAndKafkaFixtures = []guideCallFixture{
 // <source>/*.json file of the export, so the pages are inputs of one program.
 const azureResourceGraphFixtures = "test/e2e/testdata/inventory-guide/azure/graph-*.json"
 
+// azureStorageProfileKey is the one field of the shared excluded-key list a row
+// of the export other than an HDInsight cluster's may hold: the guide's Resource
+// Graph query packs a virtual machine's storageProfile on purpose, because that
+// is where the VM's OS and data disks are. A cluster's storageProfile is another
+// field of another type, the storage accounts the cluster sits on with their
+// access keys, so the export's rows are held to the shared list without this
+// field and an HDInsight cluster's row to all of it (PRD #571, milestone 4).
+const azureStorageProfileKey = "storageProfile"
+
 // azureHDInsightFixtureKeys are the fields the guide's Resource Graph projection
 // keeps of an HDInsight cluster (PRD #571, *Only the fields the program reads*):
 // the columns every row of the export carries, and the properties azure.jq reads
@@ -165,6 +174,21 @@ type excludedFixtureKeys struct {
 func (e excludedFixtureKeys) excludes(key string) bool {
 	return slices.Contains(e.names, key) ||
 		slices.ContainsFunc(e.prefixes, func(prefix string) bool { return strings.HasPrefix(key, prefix) })
+}
+
+// without returns the same list without the named fields: the fields a guide's
+// query packs for a resource type of its own, which a fixture's other rows may
+// therefore hold.
+func (e excludedFixtureKeys) without(names ...string) excludedFixtureKeys {
+	kept := excludedFixtureKeys{prefixes: e.prefixes}
+
+	for _, name := range e.names {
+		if !slices.Contains(names, name) {
+			kept.names = append(kept.names, name)
+		}
+	}
+
+	return kept
 }
 
 // The two kinds a record of the shared excluded-key list may have.
@@ -725,14 +749,17 @@ func readFixtureValues(t *testing.T, path, call string) []any {
 // written would otherwise carry a field the guide's raw output should have
 // dropped.
 //
-// The exclusion is read from a cluster's row rather than from the whole page: the
-// shared list also names a virtual machine's `storageProfile`, which the query
-// packs for that row on purpose, so only the rows of the type the list is about
-// can be held to all of it.
+// The exclusion holds of the whole page, row by row: every row of the export is
+// checked against the shared list without a virtual machine's `storageProfile`,
+// which the query packs for that row on purpose, and an HDInsight cluster's row
+// against all of it. A row of another type that grew an excluded field after this
+// test was written would otherwise carry a field the guide's raw output should
+// have dropped, reported by nobody.
 func TestInventoryGuideAzureHDInsightFixtureCarriesOnlyTheFieldsTheProgramReads(t *testing.T) {
 	t.Parallel()
 
 	excluded := readExcludedFixtureKeys(t)
+	rowExcluded := excluded.without(azureStorageProfileKey)
 
 	paths, err := filepath.Glob(filepath.Join(repoRoot, filepath.FromSlash(azureResourceGraphFixtures)))
 	if err != nil {
@@ -746,6 +773,7 @@ func TestInventoryGuideAzureHDInsightFixtureCarriesOnlyTheFieldsTheProgramReads(
 	slices.Sort(paths)
 
 	clusters := 0
+	rows := 0
 
 	for _, path := range paths {
 		file, err := filepath.Rel(repoRoot, path)
@@ -767,17 +795,33 @@ func TestInventoryGuideAzureHDInsightFixtureCarriesOnlyTheFieldsTheProgramReads(
 					t.Fatalf("%s holds a data entry that is no resource: %T", file, entry)
 				}
 
-				if rawType, _ := row["type"].(string); !strings.EqualFold(rawType, "microsoft.hdinsight/clusters") {
+				rows++
+
+				if rawType, _ := row["type"].(string); strings.EqualFold(rawType, "microsoft.hdinsight/clusters") {
+					clusters++
+
+					// A cluster's row is held to the whole of the shared list, the
+					// storageProfile it names included.
+					for _, problem := range fixtureKeyProblems(row, azureHDInsightFixtureKeys, excluded) {
+						t.Errorf("%s: %s", file, problem)
+					}
+
 					continue
 				}
 
-				clusters++
-
-				for _, problem := range fixtureKeyProblems(row, azureHDInsightFixtureKeys, excluded) {
+				// Every other row of the export is held to the shared list without
+				// the virtual machine's storageProfile the query packs on purpose: an
+				// osProfile that reached a row of another type would otherwise pass
+				// unread.
+				for _, problem := range fixtureExcludedProblems(row, rowExcluded) {
 					t.Errorf("%s: %s", file, problem)
 				}
 			}
 		}
+	}
+
+	if rows == 0 {
+		t.Fatalf("%s holds no resource row, so this check read nothing", azureResourceGraphFixtures)
 	}
 
 	if clusters == 0 {
@@ -845,26 +889,11 @@ func TestInventoryGuideAzureHDInsightFixtureCheckFindsAPlantedRoleField(t *testi
 	// field added to the shared list and planted in a row cannot pass unread.
 	var plantedExcluded []string
 
-	var walk func(value any)
-
-	walk = func(value any) {
-		switch typed := value.(type) {
-		case map[string]any:
-			for key, child := range typed {
-				if excluded.excludes(key) && !slices.Contains(plantedExcluded, key) {
-					plantedExcluded = append(plantedExcluded, key)
-				}
-
-				walk(child)
-			}
-		case []any:
-			for _, child := range typed {
-				walk(child)
-			}
+	walkFixtureKeys(planted, func(key string) {
+		if excluded.excludes(key) && !slices.Contains(plantedExcluded, key) {
+			plantedExcluded = append(plantedExcluded, key)
 		}
-	}
-
-	walk(planted)
+	})
 
 	slices.Sort(plantedExcluded)
 
@@ -878,6 +907,47 @@ func TestInventoryGuideAzureHDInsightFixtureCheckFindsAPlantedRoleField(t *testi
 		if !slices.Contains(problems, want) {
 			t.Errorf("fixtureKeyProblems reported the keys of a planted HDInsight cluster as %v, want %q among them: an excluded field inside a worker role or in the cluster's own properties has to fail the fixture's check, not pass it", problems, want)
 		}
+	}
+}
+
+// TestInventoryGuideAzureResourceGraphFixtureCheckFindsAPlantedVMRowField pins
+// that the fixture check holds of every row of the export and not of an HDInsight
+// cluster's alone: a virtual machine's row that carries osProfile is reported,
+// while the storageProfile the query packs for that row on purpose is not. A
+// check that read a cluster's rows only would pass a field on the page of another
+// resource type, which is the page the guide's operator deletes.
+func TestInventoryGuideAzureResourceGraphFixtureCheckFindsAPlantedVMRowField(t *testing.T) {
+	t.Parallel()
+
+	planted := map[string]any{
+		"id":       "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shop/providers/Microsoft.Compute/virtualMachines/vm-shop-web-1",
+		"name":     "vm-shop-web-1",
+		"type":     "microsoft.compute/virtualmachines",
+		"location": "westeurope",
+		"properties": map[string]any{
+			"osProfile": map[string]any{
+				"computerName":  "vm-shop-web-1",
+				"adminUsername": "shopadmin",
+			},
+			"storageProfile": map[string]any{
+				"osDisk": map[string]any{"name": "vm-shop-web-1_OsDisk_1"},
+			},
+		},
+	}
+
+	excluded := readExcludedFixtureKeys(t)
+	problems := fixtureExcludedProblems(planted, excluded.without(azureStorageProfileKey))
+
+	want := "the fixture holds the key " + quotedKey("osProfile") + ", which PRD #571 excludes from every projection"
+
+	if !slices.Contains(problems, want) {
+		t.Errorf("fixtureExcludedProblems reported the keys of a planted virtual machine's row as %v, want %q among them: a row of a type the export carries besides an HDInsight cluster's is checked against the shared excluded list too", problems, want)
+	}
+
+	packed := "the fixture holds the key " + quotedKey(azureStorageProfileKey) + ", which PRD #571 excludes from every projection"
+
+	if slices.Contains(problems, packed) {
+		t.Errorf("fixtureExcludedProblems reported the keys of a planted virtual machine's row as %v, want %s among them not: a virtual machine's storageProfile is a field the query packs for that row on purpose, and the export's rows are held to the shared list without it", problems, quotedKey(azureStorageProfileKey))
 	}
 }
 
@@ -921,40 +991,54 @@ func TestInventoryGuideSearchAndKafkaFixtureCheckFindsAPlantedKey(t *testing.T) 
 	}
 }
 
-// fixtureKeyProblems returns, sorted and without duplicates, what is wrong with
-// the keys of a recorded fixture: a key no jq program of the call reads, and a
-// key the shared list excludes, at any depth.
-func fixtureKeyProblems(value any, allowed []string, excluded excludedFixtureKeys) []string {
+// fixtureExcludedProblems returns, sorted and without duplicates, the fields a
+// recorded value holds that the shared excluded list names, at any depth.
+func fixtureExcludedProblems(value any, excluded excludedFixtureKeys) []string {
 	var problems []string
 
-	var walk func(value any)
-
-	walk = func(value any) {
-		switch typed := value.(type) {
-		case map[string]any:
-			for key, child := range typed {
-				if excluded.excludes(key) {
-					problems = append(problems, "the fixture holds the key "+quotedKey(key)+", which PRD #571 excludes from every projection")
-				}
-
-				if !slices.Contains(allowed, key) {
-					problems = append(problems, "the fixture holds the key "+quotedKey(key)+", which no jq program of the call reads")
-				}
-
-				walk(child)
-			}
-		case []any:
-			for _, child := range typed {
-				walk(child)
-			}
+	walkFixtureKeys(value, func(key string) {
+		if excluded.excludes(key) {
+			problems = append(problems, "the fixture holds the key "+quotedKey(key)+", which PRD #571 excludes from every projection")
 		}
-	}
-
-	walk(value)
+	})
 
 	slices.Sort(problems)
 
 	return slices.Compact(problems)
+}
+
+// fixtureKeyProblems returns, sorted and without duplicates, what is wrong with
+// the keys of a recorded fixture: a key no jq program of the call reads, and a
+// key the shared list excludes, at any depth.
+func fixtureKeyProblems(value any, allowed []string, excluded excludedFixtureKeys) []string {
+	problems := fixtureExcludedProblems(value, excluded)
+
+	walkFixtureKeys(value, func(key string) {
+		if !slices.Contains(allowed, key) {
+			problems = append(problems, "the fixture holds the key "+quotedKey(key)+", which no jq program of the call reads")
+		}
+	})
+
+	slices.Sort(problems)
+
+	return slices.Compact(problems)
+}
+
+// walkFixtureKeys calls visit with every key of a decoded JSON value, at any
+// depth.
+func walkFixtureKeys(value any, visit func(key string)) {
+	switch typed := value.(type) {
+	case map[string]any:
+		for key, child := range typed {
+			visit(key)
+
+			walkFixtureKeys(child, visit)
+		}
+	case []any:
+		for _, child := range typed {
+			walkFixtureKeys(child, visit)
+		}
+	}
 }
 
 // quotedKey renders a key for a failure message.

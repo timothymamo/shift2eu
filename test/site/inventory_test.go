@@ -1905,15 +1905,6 @@ var azureHDInsightSourceFields = []string{
 // osProfile, scriptActions and virtualNetworkProfile with it.
 const azureHDInsightRolesPath = "properties.computeProfile.roles"
 
-// The names the part of the query that reads an HDInsight cluster must hold
-// nowhere are the records of the shared excluded-key list (awsExcludedKeysPath),
-// not a copy kept here: PRD #571 excludes osProfile (the cluster's admin user, its
-// SSH key and its domain-join credentials), connectivityEndpoints (the hosts it
-// answers on), scriptActions and virtualNetworkProfile, and the cluster's
-// securityProfile, storageProfile and kafkaRestProperties with them (audit finding
-// and review finding N3 on PRD #571's milestone 4). Read from the one list, the
-// guide's projection check and the fixture check cannot drift apart.
-
 // azureHDInsightType is the Resource Manager type of an HDInsight cluster, in the
 // casing azure.jq compares it in. Written out once, so the filters below quote it
 // rather than spelling it again.
@@ -2220,8 +2211,14 @@ func azureResourceGraphQueryProblems(query string, hdInsightExcluded []string) [
 // that reads an HDInsight cluster, one sentence per problem and no problem for a
 // branch that keeps only the fields the program reads (PRD #571). The names in
 // hdInsightExcluded are the fields the branch must hold nowhere, read from the
-// shared excluded-key list rather than from a copy kept here (audit finding on
-// PRD #571's milestone 4: three properties of a cluster had reached neither).
+// shared excluded-key list (awsExcludedKeysPath) rather than from a copy kept
+// here, and the guide's projection check and the fixture check cannot drift apart
+// while they read the one list: PRD #571 excludes osProfile (the cluster's admin
+// user, its SSH key and its domain-join credentials), connectivityEndpoints (the
+// hosts it answers on), scriptActions and virtualNetworkProfile, and the
+// cluster's securityProfile, storageProfile and kafkaRestProperties with them
+// (audit finding and review finding N3 on PRD #571's milestone 4; three
+// properties of a cluster had reached neither).
 func azureHDInsightBranchProblems(branch string, hdInsightExcluded []string) []string {
 	var problems []string
 

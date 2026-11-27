@@ -1283,13 +1283,22 @@ func inventoryGuides() []inventoryGuideCase {
 				"stshopfiles",
 				"default",
 				"amr-shop-session/default",
+				// One cluster per state, in the casing the fixture records it: Deleting,
+				// DeleteError, Aborted, Deleted, DeleteTimeout and Timeout as the portal
+				// names them, and `deletequeued` and ERROR in the case a caller wrote
+				// the state in, which is the casing a program that compared a state as
+				// it comes would miss. Deleted is the state a cluster reaches last,
+				// which the Resource Graph query still lists for a while. A program
+				// that matched one of the eight states less writes the cluster that
+				// carries it.
 				"kafka-shop-old",
-				// DeleteError and Aborted are states the program does not know yet,
-				// and `deletequeued` is DeleteQueued in another casing: a program that
-				// matched the three states milestone 4 first named writes all three.
 				"kafka-shop-delerr",
 				"kafka-shop-aborted",
 				"kafka-shop-queued",
+				"kafka-shop-deleted",
+				"kafka-shop-deltimeout",
+				"kafka-shop-error",
+				"kafka-shop-timeout",
 			},
 		},
 	}
