@@ -255,6 +255,51 @@ func TestE2EExecExempt(t *testing.T) {
 			sub:   "build",
 			flags: []string{"-ldflags", `-X main.a=b\c`},
 		},
+		// The two splits differ on the other whitespace: cmd/internal/quoted
+		// splits -ldflags on the ASCII space, tab, newline and carriage return
+		// alone, while strings.Fields splits on every Unicode space. A
+		// vertical tab, a form feed, a next line or a no-break space therefore
+		// keeps the value one field for cmd/go while strings.Fields reads two
+		// stamps, so the checker must refuse all of them and read the value as
+		// cmd/go does: a stamp set carries the ASCII space and tab alone
+		// (issue #195).
+		{
+			name:  "an -ldflags value that separates two stamps with a vertical tab takes the exemption away",
+			cmd:   "go",
+			sub:   "build",
+			flags: []string{"-ldflags", "-X main.a=b\v-X main.c=d"},
+		},
+		{
+			name:  "an -ldflags value that separates two stamps with a form feed takes the exemption away",
+			cmd:   "go",
+			sub:   "build",
+			flags: []string{"-ldflags", "-X main.a=b\f-X main.c=d"},
+		},
+		{
+			// U+0085 NEXT LINE (NEL) is whitespace to unicode.IsSpace and
+			// strings.Fields, but no field separator to cmd/internal/quoted.
+			name:  "an -ldflags value that separates two stamps with a next line takes the exemption away",
+			cmd:   "go",
+			sub:   "build",
+			flags: []string{"-ldflags", "-X main.a=b\u0085-X main.c=d"},
+		},
+		{
+			// U+00A0 NO-BREAK SPACE is whitespace to unicode.IsSpace and
+			// strings.Fields, but no field separator to cmd/internal/quoted.
+			name:  "an -ldflags value that separates two stamps with a no-break space takes the exemption away",
+			cmd:   "go",
+			sub:   "build",
+			flags: []string{"-ldflags", "-X main.a=b\u00a0-X main.c=d"},
+		},
+		{
+			// cmd/go and strings.Fields agree on a newline, but a stamp set is
+			// one line of ASCII spaces and tabs; refusing the rest is stricter
+			// and simpler than following each split.
+			name:  "an -ldflags value that separates two stamps with a newline takes the exemption away",
+			cmd:   "go",
+			sub:   "build",
+			flags: []string{"-ldflags", "-X main.a=b\n-X main.c=d"},
+		},
 		{
 			// A stamp is an import path and a symbol, one = and a plain value: a
 			// second = is no value the linker takes as this pair.
