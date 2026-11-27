@@ -224,8 +224,11 @@ func TestBranchCoAuthorTrailers(t *testing.T) {
 
 	root := moduleRoot(t)
 
+	// The existence probe runs with the check's own git environment too, so no
+	// global or system git configuration decides whether the range is read.
 	spec, skip, err := coAuthorRange(os.Getenv, func(ref string) bool {
-		return gitIn(t, root, "rev-parse", "--verify", "--quiet", "--end-of-options", ref+"^{commit}") == nil
+		_, err := coAuthorGit(t.Context(), root, "--no-replace-objects", "rev-parse", "--verify", "--quiet", "--end-of-options", ref+"^{commit}")
+		return err == nil
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -368,44 +371,24 @@ func isCommitSHA(s string) bool {
 	return !strings.ContainsFunc(s, func(c rune) bool { return (c < '0' || c > '9') && (c < 'a' || c > 'f') })
 }
 
-// gitIn runs git with args in root and returns its error, if any.
-func gitIn(t *testing.T, root string, args ...string) error {
-	t.Helper()
-
-	_, err := gitOutput(t, root, args...)
-	return err
-}
-
-// gitOutput runs git with args, an argv and never a shell, in root, in the
-// environment childEnv passes, and returns its standard output, or an error
-// that holds its standard error.
-func gitOutput(t *testing.T, root string, args ...string) ([]byte, error) {
-	t.Helper()
-
-	return runGit(t.Context(), root, args...)
-}
-
-// runGit is gitOutput for a caller with no *testing.T: git with args, an argv
-// and never a shell, in root, in the environment childEnv passes, until ctx
-// ends.
-func runGit(ctx context.Context, root string, args ...string) ([]byte, error) {
-	return runGitEnv(ctx, root, nil, args...)
-}
-
 // coAuthorGitEnv is the environment the co-author check's git calls add to
 // childEnv's (issue #689): no global and no system git configuration, so a
-// developer's configuration (i18n.commitEncoding, say) or the host's cannot
-// change the commit, the list or the messages the check reads.
+// developer's global configuration (i18n.commitEncoding, say) or the machine's
+// system one cannot change the commit, the list or the messages the check
+// reads. The repository's own .git/config is not isolated.
 var coAuthorGitEnv = []string{"GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1"}
 
-// coAuthorGit is runGit for the co-author check's own git calls: git with args
-// in root, with coAuthorGitEnv added to the child's environment.
+// coAuthorGit runs the co-author check's own git calls: git with args in root,
+// with coAuthorGitEnv added to the child's environment. Every git call of the
+// check goes through it.
 func coAuthorGit(ctx context.Context, root string, args ...string) ([]byte, error) {
 	return runGitEnv(ctx, root, coAuthorGitEnv, args...)
 }
 
-// runGitEnv is runGit with extra, KEY=value pairs, added to the environment
-// childEnv passes; extra wins on a repeated key.
+// runGitEnv runs git with args, an argv and never a shell, in root, until ctx
+// ends, with extra, KEY=value pairs, added to the environment childEnv passes
+// (extra wins on a repeated key), and returns its standard output, or an error
+// that holds its standard error.
 func runGitEnv(ctx context.Context, root string, extra []string, args ...string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = root

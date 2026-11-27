@@ -309,16 +309,23 @@
 // so a pull request that changes only the list is checked against the old one,
 // git runs with --no-replace-objects and with GIT_CONFIG_GLOBAL=/dev/null and
 // GIT_CONFIG_NOSYSTEM=1, so no global or system git configuration changes what
-// it reads (issue #689), and a base
+// it reads (issue #689; the repository's own .git/config is not isolated), and a base
 // without a readable list is an error (coAuthorRangeFindings, issue #672): GitHub
 // credits that address's account, and a squash merge copies the trailers onto
 // main. A commit's author and committer address must be on the list too, since
 // a squash merge credits every distinct author, so a commit authored with a
 // third-party address fails with no trailer at all. CI's coauthor-trailers
-// job, part of the Lint check, runs the base commit's copy of this check, a
-// detached git worktree of the base, so a pull request that changes the check
-// is checked by the old one and its change counts once merged (issue #689); it
-// passes the pull request's base..head over a full
+// job, part of the Lint check, runs the base commit's copy of test/lint, a
+// detached git worktree of the base built under the base's go.mod and Go, so a
+// pull request that changes test/lint is checked by the base's check and its
+// own change counts once merged (issue #689); into a branch other than main the
+// copy is that branch's check, and main's copy checks the commits again when
+// that branch merges into main. The copy covers test/lint alone: the job's steps
+// come from the pull request's own ci.yml and test/architecture's pin of them
+// from the pull request too, so a change to those is for the maintainer's
+// code-owner review (a workflow the pull request cannot edit, a ruleset-required
+// one or a pull_request_target job running no code of the pull request, would
+// close that gap; none is used). The job passes the pull request's base..head over a full
 // clone with SHIFT2EU_COAUTHOR_CHECK=require, so it never skips there and fails
 // a range that reads no commit (coAuthorCommitCount); every other run on a pull
 // request's shallow checkout skips. TestCoAuthorFindings,

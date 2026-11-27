@@ -133,9 +133,11 @@ jobs:
   # range's base commit holds it (git show <base>:<path>, issue #672), never the checkout's: the base
   # branch's list, main's for every pull request to main. A pull request into another branch is checked
   # against that branch's list, and its commits again against main's when that branch is merged into main.
-  # A pull request that changes only the list is checked against the old one; the job runs the pull
-  # request's own test/lint and ci.yml, so a change to the check itself is for the maintainer's code-owner
-  # review to catch. The default
+  # A pull request that changes only the list is checked against the old one. The check's code, test/lint,
+  # and the go.mod and Go it builds under come from the base commit's copy (issue #689): a pull request that
+  # changes test/lint is checked by the base's check, and its own change takes effect once merged. ci.yml,
+  # and so this job's steps, and test/architecture's pin of them still come from the pull request, so a
+  # change to those is for the maintainer's code-owner review to catch. The default
   # checkout of a pull request is its merge commit at depth 1, with no base to compare against, so every
   # other run of test/lint skips the check; this job alone fetches the whole history and names the range,
   # base..head, and on a pull request requires one, so a range it cannot read fails rather than skips.
@@ -150,20 +152,24 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 0
-      # cache: false, as lint-target's: the job compiles test/lint alone.
-      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
-        with:
-          go-version-file: go.mod
-          cache: false
-      # The check that runs is the base commit's copy, never the pull request's own (issue #689): a pull
-      # request that changes test/lint is checked by the old check, and its change counts once merged. A
-      # detached worktree of the base shares the checkout's objects, so the copy reads the pull request's
-      # commits too. On a push to main there is no base, and the worktree is of the pushed commit, whose
-      # check skips without a range.
+      # The test/lint that runs is the base commit's copy, never the pull request's own (issue #689): a pull
+      # request that changes test/lint is checked by the base's check, and its change counts once merged.
+      # This step itself, like the rest of the job, comes from the pull request's ci.yml. A detached
+      # worktree of the base shares the checkout's objects, so the copy reads the pull request's commits
+      # too. For a pull request into a branch other than main, the copy is that branch's check, and main's
+      # copy checks the commits again when that branch merges into main. On a push to main there is no
+      # base, and the worktree is of the pushed commit, whose check skips without a range.
       - name: The base commit's copy of the co-author check
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
         run: git worktree add --detach "$RUNNER_TEMP/coauthor-base" "$BASE_SHA"
+      # After the copy and over the copy's go.mod: the base's test/lint builds under the base's Go and
+      # toolchain pin, never the pull request's. cache: false, as lint-target's: the job compiles test/lint
+      # alone.
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: ${{ runner.temp }}/coauthor-base/go.mod
+          cache: false
       - name: The branch's co-author trailers name the project's addresses
         run: |
           cd "$RUNNER_TEMP/coauthor-base"
