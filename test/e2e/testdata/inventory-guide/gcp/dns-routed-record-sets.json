@@ -1,12 +1,12 @@
 [
   {
     "project": "example-project",
-    "name": "shop-zone",
+    "id": "1234567890123456789",
     "routedRecordSets": 3
   },
   {
     "project": "example-project",
-    "name": "blog-zone",
+    "id": "2345678901234567890",
     "routedRecordSets": 0
   }
 ]

@@ -372,8 +372,13 @@ func TestInventoryGuideRecordDataCheckFindsAPlantedRecord(t *testing.T) {
 			want:     `"routingPolicy"`,
 		},
 		{
-			name:     "a Cloud DNS zone's name, visibility and signed state",
-			document: `{"kind": "dns#managedZone", "name": "shop-zone", "visibility": "public", "dnssecConfig": {"state": "on"}, "project": "example-project", "routedRecordSets": 3}`,
+			name:     "a Cloud DNS zone's number, name, visibility and signed state",
+			document: `{"kind": "dns#managedZone", "id": "1234567890123456789", "name": "shop-zone", "visibility": "public", "dnssecConfig": {"state": "on"}, "project": "example-project"}`,
+			want:     "",
+		},
+		{
+			name:     "a Cloud DNS zone's routed record-set count",
+			document: `{"project": "example-project", "id": "1234567890123456789", "routedRecordSets": 3}`,
 			want:     "",
 		},
 	}
