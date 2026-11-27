@@ -128,18 +128,68 @@ jobs:
       - name: actionlint the workflows
         run: dev/actionlint.sh
 
-  # The co-author trailer check is no job of this workflow (issue #706, ADR 0050): it runs from
-  # .github/workflows/coauthor-trailers.yml under pull_request_target, which GitHub reads from the base
-  # branch, and reports its own required check, Co-author trailers (base). Every other run of test/lint
-  # checks out a merge commit at depth 1 with no range, so it skips the check.
+  # The co-author trailer check (issue #663): every Co-Authored-By trailer of the pull request's own
+  # commits that carries an address must carry one .github/co-author-addresses.txt lists, the list as the
+  # range's base commit holds it (git show <base>:<path>, issue #672), never the checkout's: the base
+  # branch's list, main's for every pull request to main. A pull request into another branch is checked
+  # against that branch's list, and its commits again against main's when that branch is merged into main.
+  # A pull request that changes only the list is checked against the old one. The check's code, test/lint,
+  # and the go.mod and Go it builds under come from the base commit's copy (issue #689): a pull request that
+  # changes test/lint is checked by the base's check, and its own change takes effect once merged. ci.yml,
+  # and so this job's steps, and test/architecture's pin of them still come from the pull request, so a
+  # change to those is for the maintainer's code-owner review to catch. The default
+  # checkout of a pull request is its merge commit at depth 1, with no base to compare against, so every
+  # other run of test/lint skips the check; this job alone fetches the whole history and names the range,
+  # base..head, and on a pull request requires one, so a range it cannot read fails rather than skips.
+  # A fork's pull request works too: fetch-depth: 0 fetches the merge ref and both its parents, base and head.
+  # On a push to main both variables are empty and the check reads origin/main..HEAD, no commit. The SHAs
+  # reach the step through env: only, never interpolated into run:.
+  #
+  # The transition (issue #706, ADR 0050, a two-step rollout): coauthor-trailers.yml runs the same check
+  # under pull_request_target from the base branch and reports Co-author trailers (base). This job stays
+  # until the maintainer requires that check; a follow-up pull request then removes it and Lint's need
+  # of it.
+  coauthor-trailers:
+    name: Co-author trailers
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      # The test/lint that runs is the base commit's copy, never the pull request's own (issue #689): a pull
+      # request that changes test/lint is checked by the base's check, and its change counts once merged.
+      # This step itself, like the rest of the job, comes from the pull request's ci.yml. A detached
+      # worktree of the base shares the checkout's objects, so the copy reads the pull request's commits
+      # too. For a pull request into a branch other than main, the copy is that branch's check, and main's
+      # copy checks the commits again when that branch merges into main. On a push to main there is no
+      # base, and the worktree is of the pushed commit, whose check skips without a range.
+      - name: The base commit's copy of the co-author check
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
+        run: git worktree add --detach "$RUNNER_TEMP/coauthor-base" "$BASE_SHA"
+      # After the copy and over the copy's go.mod: the base's test/lint builds under the base's Go and
+      # toolchain pin, never the pull request's. cache: false, as lint-target's: the job compiles test/lint
+      # alone.
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: ${{ runner.temp }}/coauthor-base/go.mod
+          cache: false
+      - name: The branch's co-author trailers name the project's addresses
+        run: |
+          cd "$RUNNER_TEMP/coauthor-base"
+          go test -count=1 -v -run '^TestBranchCoAuthorTrailers$' ./test/lint/
+        env:
+          SHIFT2EU_COAUTHOR_RANGE: ${{ github.event_name == 'pull_request' && format('{0}..{1}', github.event.pull_request.base.sha, github.event.pull_request.head.sha) || '' }}
+          SHIFT2EU_COAUTHOR_CHECK: ${{ github.event_name == 'pull_request' && 'require' || '' }}
 
   # Lint is a required status check, and a matrix reports one check per entry under its own name: this
-  # job reports the whole matrix and lint-shell as the one Lint check, and fails unless every entry and
-  # lint-shell succeeded. It runs after a failed or skipped job too, but not in a run cancelled by a newer
-  # push.
+  # job reports the whole matrix, lint-shell and coauthor-trailers as the one Lint check, and fails unless
+  # every entry and both jobs succeeded. It runs after a failed or skipped job too, but not in a run
+  # cancelled by a newer push.
   lint:
     name: Lint
-    needs: [lint-target, lint-shell]
+    needs: [lint-target, lint-shell, coauthor-trailers]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     steps:
@@ -147,6 +197,7 @@ jobs:
         env:
           RESULT: ${{ needs.lint-target.result }}
           SHELL_RESULT: ${{ needs.lint-shell.result }}
+          COAUTHOR_RESULT: ${{ needs.coauthor-trailers.result }}
         run: |
           if [ "$RESULT" != "success" ]; then
             echo "lint-target finished with result '$RESULT', want 'success'" >&2
@@ -154,6 +205,10 @@ jobs:
           fi
           if [ "$SHELL_RESULT" != "success" ]; then
             echo "lint-shell finished with result '$SHELL_RESULT', want 'success'" >&2
+            exit 1
+          fi
+          if [ "$COAUTHOR_RESULT" != "success" ]; then
+            echo "coauthor-trailers finished with result '$COAUTHOR_RESULT', want 'success'" >&2
             exit 1
           fi
 

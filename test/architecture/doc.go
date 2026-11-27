@@ -24,8 +24,13 @@
 // lint-target matrix and the Lint aggregator of .github/workflows/ci.yml as a
 // closed schema, pins the golangci-lint step to make lint's build settings and
 // the aggregator's script whole, and compares the matrix with .goreleaser.yaml.
-// The aggregator needs lint-target and lint-shell alone: the co-author check
-// is no job of ci.yml (issue #706, ADR 0050).
+// During the two-step rollout of issue #706 (ADR 0050) the aggregator needs
+// lint-target, lint-shell and coauthor-trailers, ci.yml's legacy co-author job,
+// which the test pins step by step as PR #703 left it
+// (checkCoAuthorTrailersJob): the checkout, a detached worktree of the base commit, setup-go over that
+// copy's go.mod and the check run in the copy. The follow-up pull request,
+// merged once Co-author trailers (base) is required, removes the job and these
+// pins with it.
 //
 // TestCICoAuthorTrailersRunsFromTheBaseBranch (coauthortrailers_test.go) pins
 // .github/workflows/coauthor-trailers.yml whole: pull_request_target alone with
@@ -35,8 +40,13 @@
 // request's commits as objects, setup-go over the checkout's go.mod and the
 // check - each with a closed set of keys and its with:, env: and run: line by
 // line, every ${{ expression in an env: block and both action pins ci.yml's.
-// TestCICoAuthorTrailersStaysOutOfCI fails on a coauthor-trailers job in
-// ci.yml and on a job named Co-author trailers (base) in any other workflow.
+// TestCICoAuthorTrailersStaysOutOfCI is the name guard over every other
+// workflow, reading each job's name as its check run reports it (quoted or
+// plain, or the job's id when it holds no name:): it refuses a name holding
+// (base), a ${{ }} name no allow-list entry pins (today only the lint matrix
+// entry's), and the legacy name Co-author trailers or job id coauthor-trailers
+// anywhere but on ci.yml's own legacy job, and it wants exactly that one legacy
+// job until the follow-up removes it.
 //
 // TestDepguardRulesArePinned pins every depguard rule of .golangci.yml, strict
 // or not, against the copy pinnedDepguardRules: its list-mode, its files and

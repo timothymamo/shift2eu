@@ -38,10 +38,24 @@ change takes effect once it is merged. A pull request into another branch runs t
 it is retargeted to main, or that branch merges into main, main's copy checks the commits again. The
 check's git calls ignore the global and the system git configuration (`GIT_CONFIG_GLOBAL=/dev/null`,
 `GIT_CONFIG_NOSYSTEM=1`, issue #689); the repository's own `.git/config` is the one `actions/checkout`
-writes for the base commit. Two risks remain (ADR 0050): the required check pins the GitHub Actions
-integration, not the workflow, so a pull request could add an always-passing job of the same name to its
-own `ci.yml`, an edit its diff and the maintainer's code-owner review show; and the job trusts the
-runner image, the pinned actions and the Go toolchain, as every job does. A fork's or a new
+writes for the base commit. The move is a two-step rollout: issue #706's pull request keeps `ci.yml`'s
+old `coauthor-trailers` job (**Co-author trailers**, inside `Lint`), which runs the base commit's copy of
+`test/lint` (PR #703) but is defined by the pull request, and that job checks issue #706's pull request
+itself; the new workflow first runs on pull requests opened or updated after the merge. A follow-up pull
+request removes the old job, `Lint`'s need of it and the transition parts of the pin. It is merged only
+after **Co-author trailers (base)** is required, and it is the first pull request checked by main's
+definition alone. Risks remain (ADR 0050). The required check matches only the check run's name and the
+GitHub Actions app (15368), never the workflow file or the base branch, so a pull request could add an
+always-passing job of the same name to its own `ci.yml`, an edit its diff and the maintainer's
+code-owner review show. Also (plausible, not verified): someone with push rights (the agents App can
+write contents and workflows) can push a branch `x` whose own `coauthor-trailers.yml` keeps the job name
+but runs `exit 0`, then open a second pull request with the same head into `x`, or retarget one; its run
+posts a passing check run of that name on the same head SHA, and the pull request into main shows no
+workflow change in its diff. A re-run of an old main run replays that run's older allow list (bounded).
+The maintainer's pre-merge check in `docs/dev-environment.md` looks at every such check run; the
+longer-term fixes are an organization required workflow or a ruleset refusing `.github/workflows/**`
+changes on every branch but main. And the job trusts the runner image, the pinned actions and the Go
+toolchain, as every job does. A fork's or a new
 contributor's pull request therefore fails the check until their address is on the base branch's
 `.github/co-author-addresses.txt`: the address is added by a separate pull request, merged first.
 

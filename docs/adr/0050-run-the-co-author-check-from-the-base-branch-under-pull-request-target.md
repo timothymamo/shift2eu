@@ -115,20 +115,31 @@ does every workflow's.
 - **Kept from today:** no `${{ }}` inside `run:` (every event value reaches the shell through `env:`, and
   the pull request number is checked to be a number before it becomes part of a refspec),
   `persist-credentials: false`, the base copy of `test/lint`, the isolated git configuration. In the job,
-  `${{ }}` appears only in `env:`. setup-go reads a plain `go.mod`, so the exception PR #703 made for its
-  `go-version-file` goes away.
+  `${{ }}` appears only in `env:`. setup-go reads a plain `go.mod`, so the new workflow needs no
+  exception for its `go-version-file`; PR #703's exception stays for the old job until the follow-up
+  removes both.
 - **Token and secrets.** Workflow-level `permissions: contents: read`, no job-level `permissions:`, no
   `secrets.` anywhere in the file, no `environment:`. The repository is public, so the fetch needs no
   credential.
 - **No build cache.** `cache: false`: under `pull_request_target` a cache entry is saved in the base
   branch's scope, which every later run would restore (the same reason ADR 0033 gives for the AI
   reviewer).
-- **`ci.yml` loses the job.** `coauthor-trailers` leaves `ci.yml`, and `Lint` needs only `lint-target`
-  and `lint-shell`.
+- **`ci.yml` loses the job, in a second pull request.** The move is a two-step rollout, because
+  `pull_request_target` reads the workflow from `main` and `main` holds no `coauthor-trailers.yml` until
+  this pull request merges. Removing the old job in the same pull request would leave that pull request,
+  and every other one opened before the merge, with no co-author check at all.
+  1. **This pull request** adds `coauthor-trailers.yml` and keeps `ci.yml`'s `coauthor-trailers` job
+     (`Co-author trailers`) and `Lint`'s need of it as they are. It is checked by that old job, which
+     runs the base commit's copy of `test/lint` (PR #703) and is defined by the pull request itself. The
+     new workflow first runs on pull requests opened or updated after the merge.
+  2. **A follow-up pull request** removes the old job, `Lint`'s need of it (`Lint` then needs only
+     `lint-target` and `lint-shell`) and the transition parts of the pin. It is merged only after the
+     maintainer requires `Co-author trailers (base)`, and it is the first pull request checked by
+     `main`'s definition alone.
 
 ### What the pin asserts
 
-`test/architecture` pins the new workflow file exactly, and `ci.yml` without the old job:
+`test/architecture` pins the new workflow file exactly, and, for the transition, the old job in `ci.yml`:
 
 - `on:` holds `pull_request_target` alone, its `types:` exactly `[opened, synchronize, reopened,
   edited]`, and no other key (no `branches:`, `branches-ignore:`, `paths:`, `paths-ignore:`).
@@ -143,8 +154,15 @@ does every workflow's.
 - No `${{` in the job outside a step's `env:`, and the string `secrets.` nowhere in the file.
 - A `run:` is either one plain line or a `|` block. `>`, `|-`, `|+`, `>-` and `>+` are refused (issue
   #706, part 2, through `ciRunScript`).
-- `ci.yml` has no `coauthor-trailers` job, `Lint`'s `needs:` is exactly `[lint-target, lint-shell]`, and
-  no job of any other workflow under `.github/workflows/` is named `Co-author trailers (base)`.
+- During the transition, `ci.yml`'s `coauthor-trailers` job keeps PR #703's pin (its four steps, `Lint`'s
+  `needs:` of `[lint-target, lint-shell, coauthor-trailers]`, its env and its script), and it is the
+  only job anywhere named `Co-author trailers`. The follow-up pull request turns this into: `ci.yml` has
+  no `coauthor-trailers` job and `Lint`'s `needs:` is exactly `[lint-target, lint-shell]`.
+- A name guard over every other workflow under `.github/workflows/`, reading each job's name as a check
+  run reports it (quoted, plain, or the job's id when it holds no `name:`): no name holds `(base)`; no
+  name holds a `${{ }}` expression unless an allow list pins it (today only
+  `Lint ${{ matrix.goos }}/${{ matrix.goarch }} cgo=${{ matrix.cgo }}`); and the legacy name and job id
+  appear only on `ci.yml`'s `coauthor-trailers` job.
 
 This pin still runs from the pull request's own checkout, under the `Test` job of `ci.yml`. It does not
 close the gap: the trigger does. A pull request can loosen the pin, but it cannot change the run that
@@ -153,19 +171,51 @@ is reviewed against a precise description of it.
 
 ### Maintainer steps
 
-The repository side is this pull request. The ruleset is the maintainer's:
+The repository side is this pull request and its follow-up. The ruleset is the maintainer's:
 
-1. **Merge the pull request first.** Before the merge, `main` has no `coauthor-trailers.yml`, so no pull
-   request can report `Co-author trailers (base)`, and requiring it would block every pull request.
-2. **Right after the merge, before merging anything else,** edit `Protect main` → Require status checks
-   to pass → add **`Co-author trailers (base)`** with **GitHub Actions** as its expected source, and
-   save. `Lint` stays required. Between the merge and this step the co-author check runs but is not
-   required. Only the maintainer merges, so nothing can land in that window unless the maintainer merges
-   it.
-3. **Check it:**
+1. **Before merging this pull request,** check its co-author trailers by hand with `main`'s copy of the
+   check, since the only co-author check on it is the old job its own `ci.yml` defines. From a checkout
+   of `main`, with `<n>` this pull request's number:
 
    ```bash
-   gh api repos/timothymamo/shift2eu/rulesets/<Protect main id> \
+   git fetch origin main
+   git fetch origin "pull/<n>/head"
+   SHIFT2EU_COAUTHOR_RANGE=origin/main..FETCH_HEAD SHIFT2EU_COAUTHOR_CHECK=require \
+     go test -count=1 -v -run '^TestBranchCoAuthorTrailers$' ./test/lint/
+   # PASS: ok, and the log line "read <k> commits of origin/main..FETCH_HEAD" names the pull
+   #       request's commit count (gh pr view <n> --json commits --jq '.commits | length')
+   # FAIL: FAIL, or another count
+   ```
+
+   Then **merge it.** Before the merge, `main` has no `coauthor-trailers.yml`, so no pull request can
+   report `Co-author trailers (base)`, and requiring it would block every pull request.
+2. **Probe pull request, right after the merge, closed unmerged (the issue's "done when"):** a branch
+   into `main` with one commit that changes `coauthor-trailers.yml`'s test step to `exit 0` and loosens
+   the pin to match, and one commit whose message carries a `Co-Authored-By:` trailer with an address the
+   allow list does not name (an `example.com` address). The probe comes before step 3 because the check
+   reports whether or not it is required, and its first run makes the name `Co-author trailers (base)`
+   one GitHub offers in the ruleset's check list; requiring a name that has never reported risks a typo
+   that blocks every pull request. With `<probe head sha>` the probe's head commit:
+
+   ```bash
+   gh api repos/timothymamo/shift2eu/commits/<probe head sha>/check-runs \
+     --jq '.check_runs[] | select(.name=="Co-author trailers (base)")
+           | [.name,.app.id,.conclusion] | @tsv'
+   # PASS: Co-author trailers (base)  15368  failure   (and the log names the example.com trailer)
+   gh run view <run id> --json event,headSha
+   # PASS: "event":"pull_request_target" and headSha the probe's head commit
+   # FAIL: the check passes, no row, another app id, or another event
+   ```
+
+   `<run id>` is the number in the check run's `details_url` after `/runs/`. Then close the probe
+   unmerged. Between the merge and step 3 the check runs but is not required; only the maintainer
+   merges, so nothing lands in that window unless the maintainer merges it.
+3. **Require it.** Edit `Protect main` → Require status checks to pass → add **`Co-author trailers
+   (base)`** with **GitHub Actions** as its expected source, and save. `Lint` stays required. Check it:
+
+   ```bash
+   id=$(gh api repos/timothymamo/shift2eu/rulesets --jq '.[] | select(.name=="Protect main") | .id')
+   gh api "repos/timothymamo/shift2eu/rulesets/$id" \
      --jq '.rules[] | select(.type == "required_status_checks") | .parameters.required_status_checks[]
            | select(.context == "Co-author trailers (base)") | tojson'
    # PASS: {"context":"Co-author trailers (base)","integration_id":15368}
@@ -174,14 +224,25 @@ The repository side is this pull request. The ruleset is the maintainer's:
 
 4. **Pull requests open at the merge** have no run of the new workflow and wait on the required check.
    Any new event starts one: a push, **Update branch**, a title edit (`edited`), or a close and reopen.
-   Re-running their old jobs cannot help, because no run exists. Their earlier `Co-author trailers` runs,
-   from their own `ci.yml`, do not count: the new check has a different name.
-5. **Probe pull request, closed unmerged (the issue's "done when"):** a branch into `main` with one
-   commit that changes `coauthor-trailers.yml`'s test step to `exit 0` and loosens the pin to match, and
-   one commit whose message carries a `Co-Authored-By:` trailer with an address the allow list does not
-   name (an `example.com` address). PASS: `Co-author trailers (base)` fails on the head commit and names
-   that trailer, and the run's workflow file is `main`'s (the run page shows the workflow at `main`'s
-   SHA). FAIL: the check passes. Then close the pull request unmerged.
+   Re-running their old jobs cannot help, because no run exists. Their `Co-author trailers` runs, from
+   their own `ci.yml`, do not count: the new check has a different name.
+5. **Merge the follow-up pull request** that removes the old job, only after step 3. It is the first pull
+   request checked by `main`'s definition alone.
+6. **Before every merge from step 3 on,** check that the passing `Co-author trailers (base)` came from
+   `main`'s workflow (the residual risk below: the required check matches the name and the app only).
+   With `<head sha>` the pull request's head commit:
+
+   ```bash
+   gh api repos/timothymamo/shift2eu/commits/<head sha>/check-runs \
+     --jq '.check_runs[] | select(.name=="Co-author trailers (base)")
+           | [.id,.app.id,.conclusion,.completed_at,.details_url] | @tsv'
+   # for each row, <run id> from its details_url (the number after /runs/):
+   gh run view <run id> --json event,headBranch,headSha,workflowName
+   gh pr list --search <head sha> --state all --json number,baseRefName
+   # PASS: every row has app 15368 and conclusion success; every run has event pull_request_target
+   #       and headSha <head sha>; and every pull request with that head has baseRefName main
+   # FAIL: anything else, for example a second pull request with that head into another branch
+   ```
 
 `docs/contributing/agents.md` changes with this pull request: the gap it names is closed, and it names
 the residual risks below. `docs/dev-environment.md` gets the maintainer step, next to the **Claude Code
@@ -213,10 +274,13 @@ pin** step.
 
 - A pull request into `main` that edits `coauthor-trailers.yml`, `ci.yml`, `test/lint` or the pin is
   still checked by `main`'s workflow, `main`'s `test/lint`, `main`'s Go and `main`'s allow list. Its own
-  change counts from the next pull request after the merge, so this pull request is itself checked by
-  the old `ci.yml` job.
-- The co-author check reports as its own required check, `Co-author trailers (base)`, no longer inside
-  `Lint`.
+  change counts from the next pull request after the merge.
+- This pull request is checked only by the old `ci.yml` job that it keeps, whose steps come from the
+  pull request itself (the gap this ADR closes), so the maintainer also runs `main`'s check by hand
+  before merging it (Maintainer steps, step 1). The new workflow first runs on pull requests opened or
+  updated after the merge.
+- The co-author check reports as its own required check, `Co-author trailers (base)`. Until the
+  follow-up merges it also still reports inside `Lint`, through the old job.
 - A re-run of a `pull_request_target` run replays the original event, with the same `github.sha` and
   head, so it only repeats a flaky failure. A run against `main`'s newer tip needs a new event (a push,
   **Update branch**, a title edit, or a close and reopen).
@@ -235,6 +299,19 @@ Residual risks:
   `coauthor-trailers.yml` (a pin the same pull request could loosen, so a review aid rather than a
   barrier); and the AI reviewer reads the diff. Only an organization-ruleset required workflow
   (alternative 1) removes it.
+- **A passing run from another base branch (PLAUSIBLE, not verified).** The required check matches only
+  the check run's name and the GitHub Actions app (15368), never the workflow file or the base ref.
+  Someone with push rights (the agents App has contents and workflows write) can push a branch `x` whose
+  own `coauthor-trailers.yml` keeps the job name `Co-author trailers (base)` but runs `exit 0`, then open
+  a second pull request with the same head and base `x`, or retarget one to `x`. That run, from `x`'s
+  copy, posts a passing check run of the same name on the same head SHA, and the pull request into `main`
+  shows no workflow change in its own diff. Separately, a re-run of an old `main` run replays that run's
+  `github.sha`, so it checks against that commit's older allow list and check (bounded: only a copy
+  `main` once held). What bounds it
+  today is the maintainer's pre-merge check (Maintainer steps, step 6), which looks at every check run of
+  the name on the head commit, its event and the base of every pull request with that head. The
+  longer-term fixes are an organization required workflow (alternative 1), or a ruleset that refuses
+  changes to `.github/workflows/**` on every branch but `main`.
 - **A pull request into another branch runs that branch's copy** of the workflow, which could differ, or
   be missing. The required check matters only on `main`: when the pull request is retargeted to `main`,
   an `edited` run of `main`'s copy decides, and when that branch merges into `main`, the merging pull
