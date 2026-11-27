@@ -1,0 +1,32 @@
+[
+  {
+    "kind": "dns#managedZone",
+    "id": "1234567890123456789",
+    "name": "shop-zone",
+    "visibility": "public",
+    "dnssecConfig": {
+      "state": "on"
+    },
+    "project": "example-project"
+  },
+  {
+    "kind": "dns#managedZone",
+    "id": "2345678901234567890",
+    "name": "blog-zone",
+    "visibility": "public",
+    "dnssecConfig": {
+      "state": "off"
+    },
+    "project": "example-project"
+  },
+  {
+    "kind": "dns#managedZone",
+    "id": "3456789012345678901",
+    "name": "internal-zone",
+    "visibility": "private",
+    "dnssecConfig": {
+      "state": "off"
+    },
+    "project": "example-project"
+  }
+]

@@ -7,8 +7,9 @@
 //
 // The wrapper also fails closed. pi logs an extension that fails to load and carries on without it, so the
 // env-printing refusal (ADR 0044) fails open on its own: before it starts pi, the wrapper checks the two files
-// the refusal is made of, relative to the working directory pi loads the project from, and exits non-zero naming
-// the file when one is missing, empty or not JSON - pi is not started then at all.
+// the refusal is made of in the directory it is installed in (issue #692), never the unit folder's copies, and
+// exits non-zero naming the installed file when one is missing, empty or not JSON - pi is not started then at
+// all.
 //
 // The wrapper also marks its process tree with SHIFT2EU_PI_TESTER=1. The VM's login profile
 // (/etc/profile.d/shift2eu.sh, dev/lima.yaml) sources the agents' keys file with `set -a` into every login
@@ -45,8 +46,9 @@ import (
 	"github.com/google/go-cmp/cmp"
 )
 
-// piTesterScript is the launch wrapper the tester role runs instead of pi, and the two files pi loads for the
-// env-printing refusal (ADR 0044), relative to the directory pi starts in - the tester's working directory.
+// piTesterScript is the launch wrapper the VM installs root-owned, and the two project files the env-printing
+// refusal (ADR 0044) is made of. The installed layout is pinned in pitesterinstalled_test.go; these are the
+// repository's copies, which dev/lima.yaml embeds and the installed copies must equal.
 const (
 	piTesterScript    = "dev/pi-tester.sh"
 	denyExtensionFile = ".pi/extensions/deny-env-printing.ts"
@@ -213,7 +215,7 @@ func readPiRecord(t *testing.T, path string) piRecord {
 // run, and jq, which checks the list, unless the case leaves it out. node is deliberately none of them, so a
 // case whose PATH is a farm sees no node whatever the machine has installed.
 var piTesterFarmTools = []string{
-	"sh", "env", "cat", "cut", "head", "tail", "tr", "sed", "grep", "sort", "mkdir", "mktemp",
+	"sh", "env", "cat", "cksum", "cmp", "cut", "diff", "head", "md5sum", "sha256sum", "shasum", "tail", "tr", "sed", "grep", "sort", "mkdir", "mktemp",
 	"readlink", "dirname", "basename", "wc",
 }
 
@@ -419,42 +421,14 @@ func runPiTester(t *testing.T, script, dir string, args []string, env map[string
 	return stdout.String(), stderr.String(), err
 }
 
-// writePiTesterProject creates the directory pi starts in, writes the two files the env-printing refusal is made
-// of as the case leaves them, and returns the directory.
+// writePiTesterProject creates the directory pi starts in and writes the project's copies of the files the
+// installed layout holds - the wrapper, the extension and the list - as the case leaves the two deny files.
+// The wrapper is always a copy of dev/pi-tester.sh, so a case that does not weaken it gets no line about a copy
+// that differs.
 func writePiTesterProject(t *testing.T, root string, extension, list piFile) string {
 	t.Helper()
 
-	dir := filepath.Join(root, "project")
-
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		t.Fatalf("create %s: %v", dir, err)
-	}
-
-	for _, file := range []struct {
-		path string
-		piFile
-	}{
-		{path: denyExtensionFile, piFile: extension},
-		{path: denyListFile, piFile: list},
-	} {
-		if !file.present {
-			continue
-		}
-
-		path := filepath.Join(dir, file.path)
-
-		if file.directory {
-			if err := os.MkdirAll(path, 0o700); err != nil {
-				t.Fatalf("create %s: %v", path, err)
-			}
-
-			continue
-		}
-
-		writeFileMode(t, path, []byte(file.content), 0o600)
-	}
-
-	return dir
+	return writePiTesterUnit(t, root, extension, list, piFile{present: true, content: readRepoFile(t, piTesterScript)})
 }
 
 // TestPiTesterHandsPiAnAllowListedEnvironment pins the first half of issue #662: every argument reaches pi
@@ -463,7 +437,6 @@ func writePiTesterProject(t *testing.T, root string, extension, list piFile) str
 func TestPiTesterHandsPiAnAllowListedEnvironment(t *testing.T) {
 	t.Parallel()
 
-	script := scriptPath(t, piTesterScript)
 	root := t.TempDir()
 
 	binDir := filepath.Join(root, "bin")
@@ -478,19 +451,23 @@ func TestPiTesterHandsPiAnAllowListedEnvironment(t *testing.T) {
 
 	writePiTesterBin(t, binDir, record)
 
+	installed := writePiTesterInstalled(t, root,
+		piFile{present: true, content: readRepoFile(t, denyExtensionFile)},
+		piFile{present: true, content: readRepoFile(t, denyListFile)})
+
 	project := writePiTesterProject(t, root,
 		piFile{present: true, content: readRepoFile(t, denyExtensionFile)},
 		piFile{present: true, content: readRepoFile(t, denyListFile)})
 
-	stdout, stderr, err := runPiTester(t, script, project, piTesterArgs, piTesterEnv(binDir, homeDir, piTesterBasePath(t)))
+	stdout, stderr, err := runPiTester(t, installed.script, project, piTesterArgs, piTesterEnv(binDir, homeDir, piTesterBasePath(t)))
 	if err != nil {
 		t.Fatalf("the wrapper exited non-zero with the env-printing refusal's two files in place: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
 	}
 
 	got := readPiRecord(t, record)
 
-	if diff := cmp.Diff(piTesterArgs, got.argv); diff != "" {
-		t.Errorf("the wrapper did not pass its arguments to pi unchanged, so the tester runs with another provider, model or mode than the deck's command names (-want +got):\n%s", diff)
+	if diff := cmp.Diff(piTesterWantArgv(installed, piTesterArgs), got.argv); diff != "" {
+		t.Errorf("the wrapper did not start pi with the installed extension and pass its arguments unchanged, so the tester runs with another provider, model or mode than the deck's command names, or without the refusal (-want +got):\n%s", diff)
 	}
 
 	for _, name := range piTesterKept {
@@ -598,7 +575,6 @@ func piTesterAllowedNames(t *testing.T) []string {
 func TestPiTesterHandsNodeAnAllowListedEnvironment(t *testing.T) {
 	t.Parallel()
 
-	script := scriptPath(t, piTesterScript)
 	root := t.TempDir()
 
 	binDir := filepath.Join(root, "bin")
@@ -613,11 +589,15 @@ func TestPiTesterHandsNodeAnAllowListedEnvironment(t *testing.T) {
 
 	writePiTesterBin(t, binDir, record)
 
+	installed := writePiTesterInstalled(t, root,
+		piFile{present: true, content: readRepoFile(t, denyExtensionFile)},
+		piFile{present: true, content: readRepoFile(t, denyListFile)})
+
 	project := writePiTesterProject(t, root,
 		piFile{present: true, content: readRepoFile(t, denyExtensionFile)},
 		piFile{present: true, content: readRepoFile(t, denyListFile)})
 
-	stdout, stderr, err := runPiTester(t, script, project, piTesterArgs, piTesterEnv(binDir, homeDir, piTesterBasePath(t)))
+	stdout, stderr, err := runPiTester(t, installed.script, project, piTesterArgs, piTesterEnv(binDir, homeDir, piTesterBasePath(t)))
 	if err != nil {
 		t.Fatalf("the wrapper exited non-zero with the env-printing refusal's two files in place: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
 	}
@@ -668,8 +648,6 @@ func TestPiTesterHandsNodeAnAllowListedEnvironment(t *testing.T) {
 func TestPiTesterRefusesAPathWithAnEmptyOrRelativeEntry(t *testing.T) {
 	t.Parallel()
 
-	script := scriptPath(t, piTesterScript)
-
 	// path builds the case's PATH from the fake tools' directory and the base the wrapper's other tools come from,
 	// inserting the entry the case is about.
 	cases := []struct {
@@ -703,6 +681,10 @@ func TestPiTesterRefusesAPathWithAnEmptyOrRelativeEntry(t *testing.T) {
 
 			writePiTesterBin(t, binDir, record)
 
+			installed := writePiTesterInstalled(t, root,
+				piFile{present: true, content: readRepoFile(t, denyExtensionFile)},
+				piFile{present: true, content: readRepoFile(t, denyListFile)})
+
 			project := writePiTesterProject(t, root,
 				piFile{present: true, content: readRepoFile(t, denyExtensionFile)},
 				piFile{present: true, content: readRepoFile(t, denyListFile)})
@@ -710,7 +692,7 @@ func TestPiTesterRefusesAPathWithAnEmptyOrRelativeEntry(t *testing.T) {
 			env := piTesterEnv(binDir, homeDir, base)
 			env["PATH"] = tc.path(binDir, base)
 
-			stdout, stderr, err := runPiTester(t, script, project, piTesterArgs, env)
+			stdout, stderr, err := runPiTester(t, installed.script, project, piTesterArgs, env)
 
 			if err == nil {
 				t.Fatalf("the wrapper exited 0 with PATH %q, which holds an entry the shell resolves to the working directory: a command it starts is then one from the unit's folder, so pi must not start and node must not run (issue #662)\nstdout: %s\nstderr: %s", env["PATH"], stdout, stderr)
@@ -740,8 +722,6 @@ func TestPiTesterRefusesAPathWithAnEmptyOrRelativeEntry(t *testing.T) {
 func TestPiTesterPassesAwkwardArgumentsUnchanged(t *testing.T) {
 	t.Parallel()
 
-	script := scriptPath(t, piTesterScript)
-
 	cases := []struct {
 		name string
 		args []string
@@ -769,19 +749,23 @@ func TestPiTesterPassesAwkwardArgumentsUnchanged(t *testing.T) {
 
 			writePiTesterBin(t, binDir, record)
 
+			installed := writePiTesterInstalled(t, root,
+				piFile{present: true, content: readRepoFile(t, denyExtensionFile)},
+				piFile{present: true, content: readRepoFile(t, denyListFile)})
+
 			project := writePiTesterProject(t, root,
 				piFile{present: true, content: readRepoFile(t, denyExtensionFile)},
 				piFile{present: true, content: readRepoFile(t, denyListFile)})
 
-			stdout, stderr, err := runPiTester(t, script, project, tc.args, piTesterEnv(binDir, homeDir, piTesterBasePath(t)))
+			stdout, stderr, err := runPiTester(t, installed.script, project, tc.args, piTesterEnv(binDir, homeDir, piTesterBasePath(t)))
 			if err != nil {
 				t.Fatalf("the wrapper exited non-zero: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
 			}
 
 			got := readPiRecord(t, record)
 
-			if diff := cmp.Diff(tc.args, got.argv); diff != "" {
-				t.Errorf("the arguments did not reach pi unchanged, so the tester runs with words the deck's command did not pass (-want +got):\n%s", diff)
+			if diff := cmp.Diff(piTesterWantArgv(installed, tc.args), got.argv); diff != "" {
+				t.Errorf("the installed extension and the arguments did not reach pi unchanged, so the tester runs with words the deck's command did not pass, or without the refusal (-want +got):\n%s", diff)
 			}
 		})
 	}
@@ -793,8 +777,6 @@ func TestPiTesterPassesAwkwardArgumentsUnchanged(t *testing.T) {
 // extension and a missing or malformed list each exit non-zero, name the file, and never start pi.
 func TestPiTesterRefusesToStartPiWithoutTheDenyExtension(t *testing.T) {
 	t.Parallel()
-
-	script := scriptPath(t, piTesterScript)
 
 	extension := piFile{present: true, content: readRepoFile(t, denyExtensionFile)}
 	list := piFile{present: true, content: readRepoFile(t, denyListFile)}
@@ -844,7 +826,10 @@ func TestPiTesterRefusesToStartPiWithoutTheDenyExtension(t *testing.T) {
 
 			writePiTesterBin(t, binDir, record)
 
-			project := writePiTesterProject(t, root, tc.ext, tc.list)
+			// The bad files go in the installed layout, the one the wrapper checks; the unit folder keeps the
+			// repository's copies, so the case pins what the installed file decides, not what the project has.
+			installed := writePiTesterInstalled(t, root, tc.ext, tc.list)
+			project := writePiTesterProject(t, root, extension, list)
 
 			path := withJq
 			if tc.noJq {
@@ -855,7 +840,7 @@ func TestPiTesterRefusesToStartPiWithoutTheDenyExtension(t *testing.T) {
 
 			env := piTesterEnv(binDir, homeDir, path)
 
-			stdout, stderr, err := runPiTester(t, script, project, piTesterArgs, env)
+			stdout, stderr, err := runPiTester(t, installed.script, project, piTesterArgs, env)
 
 			secrets := piTesterSecrets()
 
@@ -866,8 +851,8 @@ func TestPiTesterRefusesToStartPiWithoutTheDenyExtension(t *testing.T) {
 
 				got := readPiRecord(t, record)
 
-				if diff := cmp.Diff(piTesterArgs, got.argv); diff != "" {
-					t.Errorf("the wrapper did not pass its arguments to pi unchanged (-want +got):\n%s", diff)
+				if diff := cmp.Diff(piTesterWantArgv(installed, piTesterArgs), got.argv); diff != "" {
+					t.Errorf("the wrapper did not start pi with the installed extension and pass its arguments unchanged (-want +got):\n%s", diff)
 				}
 
 				return
@@ -881,8 +866,13 @@ func TestPiTesterRefusesToStartPiWithoutTheDenyExtension(t *testing.T) {
 				t.Fatalf("the wrapper started pi with %s: the check of the refusal's files is meant to stop the tester, and pi logs an extension it cannot load and runs without it (issue #662, ADR 0044)\nstdout: %s\nstderr: %s", tc.name, stdout, stderr)
 			}
 
-			if !strings.Contains(stderr, tc.wantFile) {
-				t.Errorf("the wrapper's stderr does not name %s, the file it could not use: a message that names no file leaves the maintainer to guess which of the two broke (issue #662): %s", tc.wantFile, stderr)
+			wantPath := installed.extension
+			if tc.wantFile == filepath.Base(installed.list) {
+				wantPath = installed.list
+			}
+
+			if !strings.Contains(stderr, wantPath) {
+				t.Errorf("the wrapper's stderr does not name the installed file %s, the one it could not use: a message that names no file leaves the maintainer to guess which of the two broke (issue #662, issue #692): %s", wantPath, stderr)
 			}
 
 			assertNoSecrets(t, "the wrapper's stdout", stdout, secrets)
@@ -921,8 +911,6 @@ func piTesterAssertRefused(t *testing.T, name, record, wantFile, stdout, stderr 
 // These cases run the machine's real node: a stand-in that always exits 0 would pass whatever the files hold.
 func TestPiTesterChecksTheDenyFilesWithNode(t *testing.T) {
 	t.Parallel()
-
-	script := scriptPath(t, piTesterScript)
 
 	extension := piFile{present: true, content: readRepoFile(t, denyExtensionFile)}
 	list := piFile{present: true, content: readRepoFile(t, denyListFile)}
@@ -966,9 +954,12 @@ func TestPiTesterChecksTheDenyFilesWithNode(t *testing.T) {
 			// Only pi stands in the first directory: the node the wrapper runs has to be the real one.
 			writeFakePi(t, binDir, record)
 
-			project := writePiTesterProject(t, root, tc.ext, tc.list)
+			// The bad file goes in the installed layout, the one the wrapper loads; the unit folder keeps the
+			// repository's copies, so the case pins what the installed file decides (issue #692).
+			installed := writePiTesterInstalled(t, root, tc.ext, tc.list)
+			project := writePiTesterProject(t, root, extension, list)
 
-			stdout, stderr, err := runPiTester(t, script, project, piTesterArgs, piTesterEnv(binDir, homeDir, path))
+			stdout, stderr, err := runPiTester(t, installed.script, project, piTesterArgs, piTesterEnv(binDir, homeDir, path))
 
 			if !tc.refuses {
 				if err != nil {
@@ -977,8 +968,8 @@ func TestPiTesterChecksTheDenyFilesWithNode(t *testing.T) {
 
 				got := readPiRecord(t, record)
 
-				if diff := cmp.Diff(piTesterArgs, got.argv); diff != "" {
-					t.Errorf("the wrapper did not pass its arguments to pi unchanged (-want +got):\n%s", diff)
+				if diff := cmp.Diff(piTesterWantArgv(installed, piTesterArgs), got.argv); diff != "" {
+					t.Errorf("the wrapper did not start pi with the installed extension and pass its arguments unchanged (-want +got):\n%s", diff)
 				}
 
 				assertNoSecrets(t, "the wrapper's stdout", stdout, piTesterSecrets())
@@ -987,7 +978,12 @@ func TestPiTesterChecksTheDenyFilesWithNode(t *testing.T) {
 				return
 			}
 
-			piTesterAssertRefused(t, tc.name, record, tc.wantFile, stdout, stderr, err)
+			wantPath := installed.extension
+			if tc.wantFile == filepath.Base(installed.list) {
+				wantPath = installed.list
+			}
+
+			piTesterAssertRefused(t, tc.name, record, wantPath, stdout, stderr, err)
 		})
 	}
 }
@@ -999,8 +995,6 @@ func TestPiTesterChecksTheDenyFilesWithNode(t *testing.T) {
 // machine the tests run on has installed in its own PATH.
 func TestPiTesterRefusesToStartPiWithoutNode(t *testing.T) {
 	t.Parallel()
-
-	script := scriptPath(t, piTesterScript)
 
 	root := t.TempDir()
 
@@ -1016,6 +1010,10 @@ func TestPiTesterRefusesToStartPiWithoutNode(t *testing.T) {
 
 	writeFakePi(t, binDir, record)
 
+	installed := writePiTesterInstalled(t, root,
+		piFile{present: true, content: readRepoFile(t, denyExtensionFile)},
+		piFile{present: true, content: readRepoFile(t, denyListFile)})
+
 	project := writePiTesterProject(t, root,
 		piFile{present: true, content: readRepoFile(t, denyExtensionFile)},
 		piFile{present: true, content: readRepoFile(t, denyListFile)})
@@ -1023,9 +1021,9 @@ func TestPiTesterRefusesToStartPiWithoutNode(t *testing.T) {
 	// The farm holds jq, so the list is checked and the missing node is what stops the wrapper.
 	path := writePiTesterFarm(t, filepath.Join(root, "farm"), piTesterJqPath(t))
 
-	stdout, stderr, err := runPiTester(t, script, project, piTesterArgs, piTesterEnv(binDir, homeDir, path))
+	stdout, stderr, err := runPiTester(t, installed.script, project, piTesterArgs, piTesterEnv(binDir, homeDir, path))
 
-	piTesterAssertRefused(t, "no node on PATH", record, "deny-env-printing.ts", stdout, stderr, err)
+	piTesterAssertRefused(t, "no node on PATH", record, installed.extension, stdout, stderr, err)
 }
 
 // TestPiTesterLaunchWrapperIsExecutable pins that the deck can run the wrapper by its path alone: the deck's
@@ -1202,27 +1200,26 @@ var deckCommandLine = deckRoleSettingLine("command")
 // deckAgentLine matches the agent line of a role block of the deck's configuration, and the agent it names.
 var deckAgentLine = deckRoleSettingLine("agent")
 
-// TestPiTesterCommandRunsTheLaunchWrapper pins the wiring: the deck's tester role runs the wrapper, not pi, or the
-// allow-listed environment and the fail-closed start above never happen (issue #662), and it names the agent the
-// deck cannot see behind that wrapper (issue #691).
+// TestPiTesterCommandRunsTheLaunchWrapper pins the wiring: the deck's tester role runs the installed wrapper by
+// its absolute, root-owned path, never the unit folder's copy, or a branch could weaken what the tester checks
+// before it starts (issue #662, issue #692); the arguments are the ones the deck's command names, and the role
+// names the agent the deck cannot see behind that wrapper (issue #691).
 func TestPiTesterCommandRunsTheLaunchWrapper(t *testing.T) {
 	t.Parallel()
 
 	command := testerRoleCommand(t)
+	words := strings.Fields(command)
 
-	if !strings.HasPrefix(command, piTesterScript) {
-		t.Errorf("%s: the %s role's command is %q, want it to start with %q: the wrapper is what keeps the tester's environment to its own credential and stops it when the env-printing refusal cannot be loaded (issue #662, ADR 0044)",
-			deckConfigPath, deckTesterRole, command, piTesterScript)
-	}
+	want := append([]string{piTesterInstalledScript}, piTesterArgs...)
 
-	if strings.HasPrefix(command, "pi ") {
-		t.Errorf("%s: the %s role's command is %q, which still starts bare pi: the tester then runs with every credential of the deck's environment, and a failed load of the env-printing refusal leaves it running without one (issue #662, ADR 0044)",
-			deckConfigPath, deckTesterRole, command)
+	if diff := cmp.Diff(want, words); diff != "" {
+		t.Errorf("%s: the %s role's command is %q, want it to start with the installed wrapper %s and pass it %v: a command starting anywhere else runs a copy the unit folder can change, and the wrapper is what keeps the tester's environment to its own credential and stops it when the env-printing refusal cannot be loaded (-want +got):\n%s",
+			deckConfigPath, deckTesterRole, command, piTesterInstalledScript, piTesterArgs, diff)
 	}
 
 	if agent := testerRoleAgent(t); agent != deckTesterAgent {
 		t.Errorf("%s: the %s role's agent is %q, want %q: the role starts %s, a launcher, and the deck cannot see the agent behind a launcher, so the agent line is the only place the deck learns the tester runs pi (issue #691, ADR 0044)",
-			deckConfigPath, deckTesterRole, agent, deckTesterAgent, piTesterScript)
+			deckConfigPath, deckTesterRole, agent, deckTesterAgent, piTesterInstalledScript)
 	}
 }
 

@@ -1,7 +1,49 @@
 target: OVHcloud
 sourceURL: https://www.ovhcloud.com/en-ie/public-cloud/prices/
-retrievedOn: 2026-11-25
+retrievedOn: 2026-11-27
 defaultRegion: GRA
+Analytics for Kafka | messaging.kafka | encryption-at-rest, node-high-availability | GRA, LIM, RBX, SBG, WAW
+  plan: Business DB1-15 | 4 vcpu | 15 GiB | 640 GiB storage | 443.329 EUR @ GRA, LIM, SBG, WAW
+  plan: Business DB1-30 | 8 vcpu | 30 GiB | 1280 GiB storage | 857.969 EUR @ GRA, LIM, SBG, WAW
+  plan: Business DB1-4 | 2 vcpu | 4 GiB | 160 GiB storage | 117.676 EUR @ GRA, LIM, SBG, WAW
+  plan: Business DB1-60 | 16 vcpu | 60 GiB | 2560 GiB storage | 1717.106 EUR @ GRA, LIM, SBG, WAW
+  plan: Business DB1-7 | 2 vcpu | 7 GiB | 320 GiB storage | 233.235 EUR @ GRA, LIM, SBG, WAW
+  plan: Production B3-16 | 4 vcpu | 16 GiB | 640 GiB storage | 406.245 EUR @ -
+  plan: Production B3-32 | 8 vcpu | 32 GiB | 1280 GiB storage | 812.49 EUR @ -
+  plan: Production B3-8 | 2 vcpu | 8 GiB | 320 GiB storage | 203.086 EUR @ -
+  storage price: 0.365 EUR @ -
+Analytics for Kafka 3-AZ | messaging.kafka | encryption-at-rest, node-high-availability, zone-high-availability | MIL, PAR
+  plan: Production B3-16 | 4 vcpu | 16 GiB | 640 GiB storage | 426.539 EUR @ -
+  plan: Production B3-32 | 8 vcpu | 32 GiB | 1280 GiB storage | 853.078 EUR @ -
+  plan: Production B3-8 | 2 vcpu | 8 GiB | 320 GiB storage | 213.306 EUR @ -
+  storage price: 0.365 EUR @ -
+Analytics for OpenSearch | search.opensearch | encryption-at-rest, snapshots | GRA, LIM, RBX, SBG, WAW
+  plan: Discovery B3-16 | 4 vcpu | 16 GiB | 160 GiB storage | 250.463 EUR @ -
+  plan: Discovery B3-32 | 8 vcpu | 32 GiB | 320 GiB storage | 500.853 EUR @ -
+  plan: Discovery B3-4 | 1 vcpu | 4 GiB | 40 GiB storage | 65.919 EUR @ -
+  plan: Discovery B3-64 | 16 vcpu | 64 GiB | 640 GiB storage | 1001.633 EUR @ -
+  plan: Discovery B3-8 | 2 vcpu | 8 GiB | 80 GiB storage | 125.268 EUR @ -
+  plan: Essential DB1-15 | 4 vcpu | 15 GiB | 160 GiB storage | 240.90 EUR @ GRA, LIM, SBG, WAW
+  plan: Essential DB1-4 | 2 vcpu | 4 GiB | 40 GiB storage | 59.422 EUR @ GRA, LIM, SBG, WAW
+  plan: Essential DB1-7 | 2 vcpu | 7 GiB | 80 GiB storage | 119.866 EUR @ GRA, LIM, SBG, WAW
+  storage price: 0.292 EUR @ -
+Analytics for OpenSearch Multi-node | search.opensearch | encryption-at-rest, node-high-availability, snapshots | GRA, LIM, RBX, SBG, WAW
+  plan: Business DB1-120 | 32 vcpu | 120 GiB | 1280 GiB storage | 2084.515 EUR @ GRA, LIM, SBG, WAW
+  plan: Business DB1-15 | 4 vcpu | 15 GiB | 160 GiB storage | 257.398 EUR @ GRA, LIM, SBG, WAW
+  plan: Business DB1-30 | 8 vcpu | 30 GiB | 320 GiB storage | 519.176 EUR @ GRA, LIM, SBG, WAW
+  plan: Business DB1-60 | 16 vcpu | 60 GiB | 640 GiB storage | 1039.52 EUR @ GRA, LIM, SBG, WAW
+  plan: Business DB1-7 | 2 vcpu | 7 GiB | 80 GiB storage | 128.699 EUR @ GRA, LIM, SBG, WAW
+  plan: Production B3-16 | 4 vcpu | 16 GiB | 0 GiB storage | 263.019 EUR @ -
+  plan: Production B3-32 | 8 vcpu | 32 GiB | 0 GiB storage | 525.965 EUR @ -
+  plan: Production B3-64 | 16 vcpu | 64 GiB | 0 GiB storage | 1052.003 EUR @ -
+  plan: Production B3-8 | 2 vcpu | 8 GiB | 0 GiB storage | 131.473 EUR @ -
+  storage price: 0.365 EUR @ -
+Analytics for OpenSearch Multi-node 3-AZ | search.opensearch | encryption-at-rest, node-high-availability, snapshots, zone-high-availability | MIL, PAR
+  plan: Production B3-16 | 4 vcpu | 16 GiB | 0 GiB storage | 278.495 EUR @ -
+  plan: Production B3-32 | 8 vcpu | 32 GiB | 0 GiB storage | 556.917 EUR @ -
+  plan: Production B3-64 | 16 vcpu | 64 GiB | 0 GiB storage | 1113.907 EUR @ -
+  plan: Production B3-8 | 2 vcpu | 8 GiB | 0 GiB storage | 139.211 EUR @ -
+  storage price: 0.365 EUR @ -
 Block Storage | storage.block | snapshots | GRA, LIM, RBX, SBG, WAW
   plans: -
   storage price: 0.0431 EUR @ -

@@ -1,6 +1,8 @@
 package lint_test
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -201,4 +203,29 @@ func TestNoTrackedSavedPages(t *testing.T) {
 	for _, problem := range savedPageProblems(trackedFiles(t), allowedSavedPages) {
 		t.Error(problem)
 	}
+}
+
+// catalogScratchDir is the directory of a worktree in which catalog units keep
+// the vendor pages they fetch (add-cloud-provider, the targets' SOURCES.md).
+const catalogScratchDir = "/scratch/"
+
+// TestGitignoreIgnoresTheCatalogScratchDirectory pins the first guard in front
+// of TestNoTrackedSavedPages: .gitignore ignores the worktree's scratch/
+// directory, so a `git add -A` cannot stage a saved vendor page there and the
+// rule above never has to catch one after it was committed (issue #688).
+func TestGitignoreIgnoresTheCatalogScratchDirectory(t *testing.T) {
+	t.Parallel()
+
+	gitignore, err := os.ReadFile(filepath.Join(moduleRoot(t), ".gitignore"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, line := range strings.Split(string(gitignore), "\n") {
+		if strings.TrimSpace(line) == catalogScratchDir {
+			return
+		}
+	}
+
+	t.Errorf(".gitignore: no %q line, so the saved vendor pages catalog units keep in a worktree's scratch/ can be staged by git add -A (issue #688)", catalogScratchDir)
 }

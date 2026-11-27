@@ -224,8 +224,11 @@ func TestBranchCoAuthorTrailers(t *testing.T) {
 
 	root := moduleRoot(t)
 
+	// The existence probe runs with the check's own git environment too, so no
+	// global or system git configuration decides whether the range is read.
 	spec, skip, err := coAuthorRange(os.Getenv, func(ref string) bool {
-		return gitIn(t, root, "rev-parse", "--verify", "--quiet", "--end-of-options", ref+"^{commit}") == nil
+		_, err := coAuthorGit(t.Context(), root, "--no-replace-objects", "rev-parse", "--verify", "--quiet", "--end-of-options", ref+"^{commit}")
+		return err == nil
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -257,14 +260,16 @@ func TestBranchCoAuthorTrailers(t *testing.T) {
 // .github/co-author-addresses.txt as of the range's base revision, read with
 // git show <base>:<path>, never from the working tree (issue #672). A pull
 // request that changes only the list is therefore checked against the old one:
-// a change to the list counts once it is merged. The run is the pull request's
-// own copy of this check, so a change to the check itself is for the
-// maintainer's code-owner review to catch. spec must be a range
+// a change to the list counts once it is merged. CI runs the base commit's copy
+// of this check (issue #689), so a change to the check itself counts once it is
+// merged too. spec must be a range
 // validCoAuthorRange accepts, a..b, whose left side is the base; the base is
 // first resolved to a full commit SHA with git rev-parse --verify
 // --end-of-options, so git show reads exactly that commit and no part of spec
 // can be read as an option. Every git call runs with --no-replace-objects, so a
-// replace ref cannot change the commit, the list or the history it reads. A
+// replace ref cannot change the commit, the list or the history it reads, and
+// with GIT_CONFIG_GLOBAL=/dev/null and GIT_CONFIG_NOSYSTEM=1 (coAuthorGit), so
+// neither a global nor a system git configuration can change them either. A
 // base revision or a list the run cannot read is an error, never an empty
 // list.
 func coAuthorRangeFindings(root, spec string) ([]commitMessage, []coAuthorFinding, error) {
@@ -275,7 +280,7 @@ func coAuthorRangeFindings(root, spec string) ([]commitMessage, []coAuthorFindin
 	}
 	base, _, _ := strings.Cut(spec, "..")
 
-	out, err := runGit(ctx, root, "--no-replace-objects", "rev-parse", "--verify", "--quiet", "--end-of-options", base+"^{commit}")
+	out, err := coAuthorGit(ctx, root, "--no-replace-objects", "rev-parse", "--verify", "--quiet", "--end-of-options", base+"^{commit}")
 	if err != nil {
 		return nil, nil, fmt.Errorf("resolve the base %q of %s: %w", base, spec, err)
 	}
@@ -285,7 +290,7 @@ func coAuthorRangeFindings(root, spec string) ([]commitMessage, []coAuthorFindin
 			base, spec, baseSHA)
 	}
 
-	data, err := runGit(ctx, root, "--no-replace-objects", "show", "--no-textconv", "--end-of-options", baseSHA+":"+coAuthorAllowListPath)
+	data, err := coAuthorGit(ctx, root, "--no-replace-objects", "show", "--no-textconv", "--end-of-options", baseSHA+":"+coAuthorAllowListPath)
 	if err != nil {
 		return nil, nil, fmt.Errorf("read %s at the base %s (%s): %w", coAuthorAllowListPath, base, baseSHA, err)
 	}
@@ -318,7 +323,7 @@ func rangeCommits(ctx context.Context, root, spec string) ([]commitMessage, erro
 	// --no-show-signature and --no-notes keep a developer's log.showSignature
 	// or notes from putting extra text into the -z output; --no-replace-objects
 	// keeps a replace ref from swapping in other commits (issue #672).
-	out, err := runGit(ctx, root, "--no-replace-objects", "log", "-z", "--no-color", "--no-show-signature", "--no-notes", "--format=%H%x00%ae%x00%ce%x00%B", "--end-of-options", spec)
+	out, err := coAuthorGit(ctx, root, "--no-replace-objects", "log", "-z", "--no-color", "--no-show-signature", "--no-notes", "--format=%H%x00%ae%x00%ce%x00%B", "--end-of-options", spec)
 	if err != nil {
 		return nil, fmt.Errorf("git log %s: %w", spec, err)
 	}
@@ -366,30 +371,28 @@ func isCommitSHA(s string) bool {
 	return !strings.ContainsFunc(s, func(c rune) bool { return (c < '0' || c > '9') && (c < 'a' || c > 'f') })
 }
 
-// gitIn runs git with args in root and returns its error, if any.
-func gitIn(t *testing.T, root string, args ...string) error {
-	t.Helper()
+// coAuthorGitEnv is the environment the co-author check's git calls add to
+// childEnv's (issue #689): no global and no system git configuration, so a
+// developer's global configuration (i18n.commitEncoding, say) or the machine's
+// system one cannot change the commit, the list or the messages the check
+// reads. The repository's own .git/config is not isolated.
+var coAuthorGitEnv = []string{"GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1"}
 
-	_, err := gitOutput(t, root, args...)
-	return err
+// coAuthorGit runs the co-author check's own git calls: git with args in root,
+// with coAuthorGitEnv added to the child's environment. Every git call of the
+// check goes through it.
+func coAuthorGit(ctx context.Context, root string, args ...string) ([]byte, error) {
+	return runGitEnv(ctx, root, coAuthorGitEnv, args...)
 }
 
-// gitOutput runs git with args, an argv and never a shell, in root, in the
-// environment childEnv passes, and returns its standard output, or an error
+// runGitEnv runs git with args, an argv and never a shell, in root, until ctx
+// ends, with extra, KEY=value pairs, added to the environment childEnv passes
+// (extra wins on a repeated key), and returns its standard output, or an error
 // that holds its standard error.
-func gitOutput(t *testing.T, root string, args ...string) ([]byte, error) {
-	t.Helper()
-
-	return runGit(t.Context(), root, args...)
-}
-
-// runGit is gitOutput for a caller with no *testing.T: git with args, an argv
-// and never a shell, in root, in the environment childEnv passes, until ctx
-// ends.
-func runGit(ctx context.Context, root string, args ...string) ([]byte, error) {
+func runGitEnv(ctx context.Context, root string, extra []string, args ...string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = root
-	cmd.Env = childEnv()
+	cmd.Env = childEnv(extra...)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()

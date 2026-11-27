@@ -1,0 +1,38 @@
+[
+  {
+    "number": 1,
+    "title": "Update the example action to v2",
+    "draft": false,
+    "state": "open",
+    "user": {
+      "login": "renovate[bot]"
+    },
+    "head": {
+      "ref": "renovate/example-action-2.x"
+    },
+    "labels": [
+      {
+        "name": "dependencies"
+      }
+    ],
+    "created_at": "2024-01-01T00:00:00Z",
+    "updated_at": "2024-01-02T00:00:00Z",
+    "body": "This pull request updates the example action to v2."
+  },
+  {
+    "number": 2,
+    "title": "Fix the guide's wording",
+    "draft": true,
+    "state": "open",
+    "user": {
+      "login": "octocat"
+    },
+    "head": {
+      "ref": "fix/guide-wording"
+    },
+    "labels": [],
+    "created_at": "2024-01-03T00:00:00Z",
+    "updated_at": "2024-01-04T00:00:00Z",
+    "body": "This pull request fixes the guide's wording."
+  }
+]

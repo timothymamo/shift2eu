@@ -505,19 +505,38 @@ func TestCILintMatrixCoversEveryReleaseTarget(t *testing.T) {
 }
 
 // checkCoAuthorTrailersJob pins the coauthor-trailers job the Lint check needs
-// (issue #663), read as a closed schema: it is never skipped or excused, it
-// checks out the whole history with no credentials, and its one test step runs
-// TestBranchCoAuthorTrailers alone with an env: of exactly the pull request's
-// base..head range and SHIFT2EU_COAUTHOR_CHECK=require on a pull request, so a
-// range the run cannot read fails the check rather than skipping it.
+// (issues #663 and #689), read as a closed schema: it is never skipped or
+// excused, and it runs the base commit's copy of the check rather than the pull
+// request's own, so a pull request that weakens test/lint is still checked by
+// the copy the base branch holds (issue #689).
 //
-// The base SHA the check reads the allow list at (issue #672) reaches it in the
-// range's env: value alone, where it comes from the pull request's own base
-// commit: that one value names the commits to check and the revision the list is
-// read at, so the two can never disagree, and no expression is ever spliced into
-// a run: line, where a shell would read it as a word of the event's author. The
-// checkout keeps fetch-depth: 0, without which the base commit is no object of
-// the run and the list cannot be read at all.
+// The job is pinned step by step, in order, and each step's keys are a closed
+// set, its with:, env: and run: line by line: a pin that only asks a step to
+// mention a base copy lets through an echo of the base SHA beside the worktree
+// add, a || true on the go test, a GOFLAGS that skips every test, or a cd back
+// out of the copy, and each of those leaves the pull request's own check
+// running; a step-level shell: or working-directory: beside them leaves those
+// three lines byte-identical and runs something else again. The four steps are:
+//
+//  1. the checkout, whole history and no credentials: without fetch-depth: 0 the
+//     base commit is no object of the run and neither the copy nor the allow
+//     list can be read at all;
+//  2. the copy, a detached worktree of the base SHA, which reaches the shell
+//     through env: alone: no expression is ever spliced into a run: line, where
+//     a shell would read it as a word of the event's author (issue #672). A
+//     detached worktree shares the checkout's objects, so the copy's check reads
+//     the pull request's commits too. On a push to main there is no base, and
+//     the worktree is of the pushed commit, whose check skips without a range;
+//  3. setup-go, after the copy, over the copy's go.mod, so the base commit's
+//     test/lint builds under the base's Go and toolchain pin, never the pull
+//     request's: a pull request that raises go.mod's version would otherwise
+//     never check the base's copy;
+//  4. the check, run in the copy and nowhere else, with -run naming
+//     TestBranchCoAuthorTrailers alone. Its range comes through env: too: its
+//     SHIFT2EU_COAUTHOR_RANGE names the pull request's base SHA, the revision the
+//     allow list is read at, and its head SHA, the commits it checks, so the two
+//     can never disagree, and SHIFT2EU_COAUTHOR_CHECK=require on a pull request
+//     makes a range the run cannot read fail the check rather than skip it.
 func checkCoAuthorTrailersJob(t *testing.T, jobs map[string][]ciLine) {
 	t.Helper()
 
@@ -538,8 +557,6 @@ func checkCoAuthorTrailersJob(t *testing.T, jobs map[string][]ciLine) {
 		t.Fatalf("the coauthor-trailers job's steps: %v", err)
 	}
 
-	var checkout, test bool
-
 	for _, item := range items {
 		keys, err := ciKeys(item.lines)
 		if err != nil {
@@ -554,87 +571,224 @@ func checkCoAuthorTrailersJob(t *testing.T, jobs map[string][]ciLine) {
 			}
 		}
 
-		// Every value a step hands the check reaches it through that step's env:
-		// (issue #672): an expression spliced into a run: line is a shell word of
-		// the event's author. Refusing ${{ anywhere else in the step, if: and
-		// with: included, is deliberate: the job's steps need no expression
-		// there, and a narrower rule would be one more place to get wrong.
-		envLines := map[int]bool{}
+		// Every value a step hands the shell reaches it through that step's env:
+		// (issue #672): an expression anywhere else in the step, a run: line or
+		// otherwise, is spliced into the workflow's own text, where a shell or an
+		// action reads it as a word of the event's author. setup-go's with: names
+		// the copy's go.mod with one, where no shell reads it: the single named
+		// exception.
+		inEnv := make(map[int]bool, len(item.lines))
 
 		if env, ok := ciBlock(item.lines, "env"); ok {
 			for _, l := range env {
-				envLines[l.num] = true
+				inEnv[l.num] = true
 			}
 		}
+
+		_, uses, _ := ciScalar(item.lines, "uses")
 
 		for _, l := range item.lines {
-			if strings.Contains(l.text, "${{") && !envLines[l.num] {
-				t.Errorf("line %d: %q holds a ${{ }} expression outside the step's env:, want every value the step hands the coauthor-trailers check in env: (issue #672)", l.num, l.text)
-			}
-		}
-
-		if _, uses, ok := ciScalar(item.lines, "uses"); ok && strings.HasPrefix(uses, "actions/checkout@") {
-			checkout = true
-
-			with, ok := ciBlock(item.lines, "with")
-			if !ok {
-				t.Errorf("line %d: the coauthor-trailers checkout holds no with:, want the whole history and no credentials", item.num)
-
+			if !strings.Contains(l.text, "${{") || inEnv[l.num] {
 				continue
 			}
 
-			wantExactLines(t, fmt.Sprintf("with: block of the coauthor-trailers checkout on line %d", item.num), with, []string{
-				"persist-credentials: false",
-				"fetch-depth: 0",
-			})
-		}
-
-		if _, run, ok := ciScalar(item.lines, "run"); ok && strings.Contains(run, "TestBranchCoAuthorTrailers") {
-			test = true
-
-			if want := `go test -count=1 -v -run '^TestBranchCoAuthorTrailers$' ./test/lint/`; run != want {
-				t.Errorf("line %d: the coauthor-trailers step runs %q, want %q", item.num, run, want)
-			}
-
-			env, ok := ciBlock(item.lines, "env")
-			if !ok {
-				t.Errorf("line %d: the coauthor-trailers step holds no env:, so it names no range and requires none", item.num)
-
+			if strings.HasPrefix(uses, "actions/setup-go@") &&
+				l.text == "go-version-file: ${{ runner.temp }}/coauthor-base/go.mod" {
 				continue
 			}
 
-			// The job names no base of its own: the range's env: value carries the
-			// pull request's base SHA, the revision the check reads the allow list
-			// at, and its head SHA, the commits it checks (issue #672).
-			var rangeSpec string
-
-			for _, l := range env {
-				if spec, ok := strings.CutPrefix(l.text, "SHIFT2EU_COAUTHOR_RANGE: "); ok {
-					rangeSpec = spec
-				}
-			}
-
-			for _, want := range []string{"github.event.pull_request.base.sha", "github.event.pull_request.head.sha"} {
-				if !strings.Contains(rangeSpec, want) {
-					t.Errorf("line %d: the coauthor-trailers env: hands the check the range %q, which names no %s: the check reads .github/co-author-addresses.txt at the pull request's base commit (issue #672)", item.num, rangeSpec, want)
-				}
-			}
-
-			wantExactLines(t, fmt.Sprintf("env: block of the coauthor-trailers step on line %d", item.num), env, []string{
-				"SHIFT2EU_COAUTHOR_RANGE: ${{ github.event_name == 'pull_request' && " +
-					"format('{0}..{1}', github.event.pull_request.base.sha, github.event.pull_request.head.sha) || '' }}",
-				"SHIFT2EU_COAUTHOR_CHECK: ${{ github.event_name == 'pull_request' && 'require' || '' }}",
-			})
+			t.Errorf("line %d: %q splices a ${{ }} expression outside an env: value, want every value handed to the shell in "+
+				"env:, setup-go's go-version-file excepted (issue #672)", l.num, l.text)
 		}
 	}
 
-	if !checkout {
-		t.Errorf("no step of the coauthor-trailers job uses actions/checkout@…, so it reads no commit")
+	// Four steps, in the only order that checks the base commit with the base
+	// commit's Go: the checkout, the copy of the base commit, setup-go over the
+	// copy's go.mod, and the check run in the copy. A step added, removed or moved
+	// is a decision this test asks for.
+	if len(items) != 4 {
+		t.Fatalf("the coauthor-trailers job holds %d steps, want exactly four: the checkout, the copy of the base commit's "+
+			"test/lint, setup-go over that copy's go.mod and the check run in the copy (issue #689)", len(items))
 	}
 
-	if !test {
-		t.Errorf("no step of the coauthor-trailers job runs TestBranchCoAuthorTrailers, so CI checks no co-author trailer")
+	checkCoAuthorCheckoutStep(t, items[0])
+	checkCoAuthorBaseCopyStep(t, items[1])
+	checkCoAuthorSetupGoStep(t, items[2])
+	checkCoAuthorTestStep(t, items[3])
+}
+
+// checkCoAuthorCheckoutStep pins the coauthor-trailers checkout (issue #689):
+// the whole history, without which the base commit is no object of the run and
+// neither the copy nor the allow list can be read at all, and no credentials
+// left behind in the checkout.
+func checkCoAuthorCheckoutStep(t *testing.T, item ciItem) {
+	t.Helper()
+
+	// A closed schema: a shell: or a working-directory: beside the uses: and the
+	// with: would leave both byte-identical and still check the wrong tree
+	// (issue #689).
+	wantKeys(t, "coauthor-trailers checkout step", item.lines, "uses", "with")
+
+	if _, uses, ok := ciScalar(item.lines, "uses"); !ok || !strings.HasPrefix(uses, "actions/checkout@") {
+		t.Fatalf("line %d: the coauthor-trailers job's first step uses %q, want actions/checkout@…: without the checkout it "+
+			"reads no commit (issue #689)", item.num, uses)
 	}
+
+	with, ok := ciBlock(item.lines, "with")
+	if !ok {
+		t.Fatalf("line %d: the coauthor-trailers checkout holds no with:, want the whole history and no credentials", item.num)
+	}
+
+	wantExactLines(t, fmt.Sprintf("with: block of the coauthor-trailers checkout on line %d", item.num), with, []string{
+		"persist-credentials: false",
+		"fetch-depth: 0",
+	})
+}
+
+// checkCoAuthorBaseCopyStep pins the step that copies the base commit into a
+// detached worktree of its own (issue #689): its env: hands the shell the base
+// SHA, from the pull request's own base commit, and its run: is the one worktree
+// add and nothing else, so no echo of the base SHA and no second command stands
+// in for the copy.
+func checkCoAuthorBaseCopyStep(t *testing.T, item ciItem) {
+	t.Helper()
+
+	// A closed schema: a shell:, a working-directory: or a timeout-minutes: beside
+	// the name:, env: and run: would keep those byte-identical and still run no
+	// worktree add at all (issue #689).
+	wantKeys(t, "coauthor-trailers base-copy step", item.lines, "name", "env", "run")
+
+	script, ok := ciRunScript(item.lines)
+	if !ok {
+		t.Fatalf("line %d: the coauthor-trailers job's second step holds no run:, want the copy of the base commit's "+
+			"test/lint: a job that copies nothing runs the pull request's own check, which the pull request can weaken "+
+			"(issue #689)", item.num)
+	}
+
+	env, ok := ciBlock(item.lines, "env")
+	if !ok {
+		t.Fatalf("line %d: the step that copies the base commit holds no env:, so it names no base SHA: map "+
+			"${{ github.event.pull_request.base.sha || github.sha }} into BASE_SHA and read that (issue #689)", item.num)
+	}
+
+	wantExactLines(t, fmt.Sprintf("env: block of the coauthor-trailers base-copy step on line %d", item.num), env, []string{
+		// A push to main has no pull request base: the pushed commit stands in, and
+		// its copy's check skips without a range.
+		"BASE_SHA: ${{ github.event.pull_request.base.sha || github.sha }}",
+	})
+
+	wantExactScript(t, fmt.Sprintf("run: script of the coauthor-trailers base-copy step on line %d", item.num), script, []string{
+		// Detached, and of the base SHA alone: the pull request's own working tree
+		// is no copy of the base commit, and the copy shares the checkout's
+		// objects, so its check reads the pull request's commits too.
+		`git worktree add --detach "$RUNNER_TEMP/coauthor-base" "$BASE_SHA"`,
+	})
+}
+
+// checkCoAuthorSetupGoStep pins setup-go, after the copy and over the copy's
+// go.mod (issue #689): the base commit's test/lint builds under the base's Go and
+// the toolchain pin it names, never the pull request's. Read over the pull
+// request's go.mod, a pull request that raises go.mod's version would never check
+// the base's copy, and one that lowers it would check it under another Go.
+func checkCoAuthorSetupGoStep(t *testing.T, item ciItem) {
+	t.Helper()
+
+	// A closed schema: setup-go needs its uses: and its with: and nothing else
+	// (issue #689).
+	wantKeys(t, "coauthor-trailers setup-go step", item.lines, "uses", "with")
+
+	if _, uses, ok := ciScalar(item.lines, "uses"); !ok || !strings.HasPrefix(uses, "actions/setup-go@") {
+		t.Fatalf("line %d: the coauthor-trailers job's third step uses %q, want actions/setup-go@… after the copy of the base "+
+			"commit, so the base's own Go and toolchain pin build it (issue #689)", item.num, uses)
+	}
+
+	with, ok := ciBlock(item.lines, "with")
+	if !ok {
+		t.Fatalf("line %d: the coauthor-trailers setup-go holds no with:, so it names no go.mod to read", item.num)
+	}
+
+	wantExactLines(t, fmt.Sprintf("with: block of the coauthor-trailers setup-go on line %d", item.num), with, []string{
+		// The base copy's go.mod, never the pull request's: runner.temp is where the
+		// worktree of the base commit sits.
+		"go-version-file: ${{ runner.temp }}/coauthor-base/go.mod",
+		// cache: false, as lint-target's: the job compiles test/lint alone.
+		"cache: false",
+	})
+}
+
+// wantExactScript asserts that a run: script is exactly want, line by line and
+// in that order: a script runs in order, so a pin that ignored the order would
+// let a second cd, a second command or a || true through.
+func wantExactScript(t *testing.T, what string, script []ciLine, want []string) {
+	t.Helper()
+
+	got := make([]string, 0, len(script))
+	for _, l := range script {
+		got = append(got, l.text)
+	}
+
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Errorf("the %s (-want +got):\n%s", what, diff)
+	}
+}
+
+// checkCoAuthorTestStep pins the step that runs the co-author trailer check
+// (issues #663 and #689): it changes into the copy of the base commit and runs
+// exactly the one go test there, with -run naming TestBranchCoAuthorTrailers
+// alone, so no second cd out of the copy, no GOFLAGS and no || true changes what
+// it reads. Its env: hands the check the pull request's base..head range and
+// SHIFT2EU_COAUTHOR_CHECK=require on a pull request, so a range the run cannot
+// read fails the check rather than skipping it.
+func checkCoAuthorTestStep(t *testing.T, item ciItem) {
+	t.Helper()
+
+	// A closed schema: a shell: (which would run the run: line as an expression or
+	// under another shell), a working-directory: (which would move the check out of
+	// the copy) or a timeout-minutes: beside the name:, run: and env: would leave
+	// those three byte-identical and still pass (issue #689).
+	wantKeys(t, "coauthor-trailers test step", item.lines, "name", "run", "env")
+
+	script, ok := ciRunScript(item.lines)
+	if !ok {
+		t.Fatalf("line %d: the coauthor-trailers step that runs the check holds no run:, so CI checks no co-author trailer",
+			item.num)
+	}
+
+	wantExactScript(t, fmt.Sprintf("run: script of the coauthor-trailers test step on line %d", item.num), script, []string{
+		// The base commit's copy, never the checkout root, which holds the pull
+		// request's own test/lint.
+		`cd "$RUNNER_TEMP/coauthor-base"`,
+		`go test -count=1 -v -run '^TestBranchCoAuthorTrailers$' ./test/lint/`,
+	})
+
+	env, ok := ciBlock(item.lines, "env")
+	if !ok {
+		t.Fatalf("line %d: the coauthor-trailers step holds no env:, so it names no range and requires none", item.num)
+	}
+
+	// The job names no base of its own: the range's env: value carries the pull
+	// request's base SHA, the revision the check reads the allow list at, and its
+	// head SHA, the commits it checks (issue #672).
+	wantExactLines(t, fmt.Sprintf("env: block of the coauthor-trailers test step on line %d", item.num), env, []string{
+		"SHIFT2EU_COAUTHOR_RANGE: ${{ github.event_name == 'pull_request' && " +
+			"format('{0}..{1}', github.event.pull_request.base.sha, github.event.pull_request.head.sha) || '' }}",
+		"SHIFT2EU_COAUTHOR_CHECK: ${{ github.event_name == 'pull_request' && 'require' || '' }}",
+	})
+}
+
+// ciRunScript returns the lines a step's run: hands the shell: the value of a
+// `run: command` line as its one line, or the lines of a `run: |` block scalar.
+func ciRunScript(step []ciLine) ([]ciLine, bool) {
+	num, value, ok := ciScalar(step, "run")
+	if !ok {
+		return nil, false
+	}
+
+	if value != "|" && value != ">" {
+		return []ciLine{{num: num, indent: 0, text: value}}, true
+	}
+
+	return ciBlock(step, "run")
 }
 
 // checkLintShellJob pins the lint-shell job the Lint check needs (issue #164):

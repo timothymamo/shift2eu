@@ -24,6 +24,10 @@
 // lint-target matrix and the Lint aggregator of .github/workflows/ci.yml as a
 // closed schema, pins the golangci-lint step to make lint's build settings and
 // the aggregator's script whole, and compares the matrix with .goreleaser.yaml.
+// It pins the coauthor-trailers job the aggregator needs step by step, in
+// order (issues #663 and #689): each step's keys are a closed set, its with:,
+// env: and run: are pinned line by line, and every ${{ expression stays in an
+// env: block, setup-go's go-version-file excepted.
 //
 // TestDepguardRulesArePinned pins every depguard rule of .golangci.yml, strict
 // or not, against the copy pinnedDepguardRules: its list-mode, its files and
