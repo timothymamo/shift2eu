@@ -9,7 +9,8 @@
   #613 amends the preflight's token-absence call (2026-11-25); issue #615 moves the CLI's working
   directory out of the work area, and issue #614 accepts the CLI's built-in read-only Bash commands
   (2026-11-25); issue #632 mints the publish job's App token with no `permission-*` input (2026-11-26);
-  issue #661 adds row 13's inputs that pass loading and row 14's second fuzz target (2026-11-26)
+  issue #661 adds row 13's inputs that pass loading and row 14's second fuzz target (2026-11-26);
+  issue #658 fixes rows 3 and 10's scans and adds the history scan's ignore file (2026-11-26)
 - Date: 2026-11-21, amended 2026-11-22 to 2026-11-26
 
 ## Context
@@ -151,15 +152,15 @@ subscription usage of a weekly one, and a run by hand covers a release or an adv
 | # | Check | Job, run by | Network |
 |---|---|---|---|
 | 1 | Record the `main` SHA and the latest release tag | checks, workflow step | GitHub reads |
-| 2 | Download pinned tools, verify their checksums; `go mod download` for the module and `tools/`; trivy's database | checks, workflow step | yes |
-| 3 | govulncheck (source) and osv-scanner on the module and `tools/` | checks, workflow step | vulnerability databases |
-| 4 | gitleaks on the full history, `--redact` | checks, workflow step | no |
+| 2 | Download pinned tools, verify their checksums (govulncheck built with go.mod's Go, issue #658); `go mod download` for the module and `tools/`; trivy's database | checks, workflow step | yes |
+| 3 | govulncheck (source) and osv-scanner on the module and `tools/`; govulncheck held to go.mod's Go first (issue #658) | checks, workflow step | vulnerability databases |
+| 4 | gitleaks on the full history, `--redact`, minus the closed false hits of the root `.gitleaksignore`, which only the maintainer's review grows (issue #658) | checks, workflow step | no |
 | 5 | zizmor and actionlint on `.github/workflows` | checks, workflow step | GitHub reads only |
 | 6 | OpenSSF scorecard, read-only (no publishing, no `id-token`) | checks, workflow step | GitHub reads |
 | 7 | The release's `checksums.txt`, `gh attestation verify` on every file, `cosign verify` of the image and its provenance and SBOM attestations; the latest release and the image's `latest` tag agree | checks, workflow step | yes |
 | 8 | Image pulls from GHCR | checks, workflow step | yes |
 | 9 | `govulncheck -mode=binary` on every release binary (read, not run) | checks, workflow step | vulnerability database |
-| 10 | trivy on the image and its SBOM, from the downloaded database | checks, workflow step | no |
+| 10 | trivy on the image and its SBOM, from the downloaded database; each subcommand only the flags the pinned release accepts for it (issue #658) | checks, workflow step | no |
 | 11 | The image runs as non-root, with a read-only root filesystem and no shell where none is expected | checks, containers | no |
 | 12 | Dropped: the server is no longer released (ADR 0037) | none | no |
 | 13 | The CLI on hostile inventory files | checks, container, `--network none` | no |
@@ -3193,7 +3194,9 @@ no longer to be checked: round I read them from its source.
   review round K:* `unexpected-target` is no why id, so the target is now a limits line.
 - **trivy offline.** The check holds row 10's `offline=(...)` flags `--skip-db-update
   --skip-java-db-update --skip-check-update --offline-scan --disable-telemetry`, which both scans use:
-  without them trivy would send the image's package identifiers to third-party services.
+  without them trivy would send the image's package identifiers to third-party services. *Amended for
+  issue #658:* `--skip-check-update` is the image scan's alone (row 10's amendment, below), and the
+  check also holds `--skip-version-check`, so no scan asks for trivy's latest version.
 - **The checksum guards** (round C). Every tool download's checksum check, in all three jobs, is `if !
   echo "${<TOOL>_SHA256}  <file>" | sha256sum --check --strict -; then`, an `::error` naming the tool,
   its job and runbook step 11, and `exit 1`: a failed run names its cause.
@@ -4147,6 +4150,36 @@ Code's real sandbox works under Ubuntu's profile alone (#578, route step 2); whe
 shared install script runs under uutils (route step 1); the GNU 9.5 to 9.7 NEWS and jq 1.8.1 reviews
 (#577); whether Ubuntu's profile set or `gnu-coreutils`' file list changes by the trigger (#577
 re-reads both on the image it moves to, and the route's guards fail closed if either has).
+
+### Rows 3, 4 and 10: two scans that never ran and the history's false hits (issue #658, amended 2026-11-26)
+
+The first published audit (run 45844850567) showed that two scans had never run, and that its history
+scan raised test values on every run.
+
+- **Row 3's source govulncheck.** `go install pkg@version` picks its toolchain from that module's own go
+  line, not from go.mod's, even in the checkout, so govulncheck was built with Go 1.26 and could not load
+  the module (`go 1.27.4`): both source scans exited 1. The install, still in row 2's download step,
+  names go.mod's Go as `GOTOOLCHAIN=go<version>`. A `# renovate: datasource=golang-version depName=go`
+  comment and a matchString of the generic customManager keep it in the "Go toolchain" group, which moves
+  it with go.mod's go line, and `test/architecture` fails when the two differ. It stays in row 2's step
+  because after the module download every Go command runs with `GOPROXY=off`, and `go install
+  pkg@version` cannot: it looks up the module's deprecation through the proxy. Before the scan, the
+  "Download the Go modules" step fails the run with an `::error` when `govulncheck -version` (the Go it
+  scans for, which is the go command's) or `go version` of the binary (the Go that built it) names another
+  Go than go.mod's; only `go version` of the binary catches a tool built with another Go.
+- **Row 10's SBOM scan.** `--skip-check-update` is `trivy image`'s flag alone; `trivy sbom` at v0.76.2
+  rejects it and exits 1 before scanning, and both scans shared it. The image scan alone passes it now.
+  `test/architecture` holds each trivy subcommand's flags to a table read from the pinned release's CLI
+  reference, and refuses a pin of another release until the table is read again.
+- **Row 4's ignore file.** `.gitleaksignore` at the repository root holds the full fingerprints
+  (`<commit>:<path>:<rule>:<line>`) of the history hits the maintainer read and closed as no secret, each
+  with a comment saying why; `test/architecture` holds it to exactly that list, never a path, a rule or a
+  commit alone. The step runs `gitleaks git` on `.` from the checkout's root with no
+  `--gitleaks-ignore-path`, so gitleaks reads the file from the audited checkout. **Adding a line needs
+  the maintainer's review**: an entry nobody read would hide a real leak from every later run. The
+  current lines that still hold those values get no inline allow comment: no tracked file may spell that
+  marker (the publish program's refusal, above), and the history scan passes `--ignore-gitleaks-allow`
+  anyway, so a line re-added later is a new fingerprint and a new hit, read again.
 
 ## Alternatives considered
 

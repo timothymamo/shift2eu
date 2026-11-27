@@ -1,0 +1,35 @@
+# History hits of the scheduled audit's full-history gitleaks scan (ADR 0040, row 4) that the
+# maintainer read and closed as no secret (issue #658). History cannot change, so without these
+# lines every run would raise them again. Each entry is one full fingerprint,
+# <commit>:<path>:<rule>:<line>, never a path, a rule or a commit alone, and each says why it is no
+# secret. Adding a line needs the maintainer's review (test/architecture holds the list).
+
+# The retired HTTP server's test placeholder validToken (tok-0123456789abcdef...), commented as a test
+# value in its test (PR #118; removed in PR #405, ADR 0037); on neither main nor v0.17.0.
+0dcb9c9ca3d96ea3ead65238e9adc2025929b7c6:cmd/eusov-server/token_test.go:generic-api-key:21
+# The retired HTTP server's test placeholder shortToken (tok-0123456789abcdef...), commented as a test
+# value in its test (PR #118; removed in PR #405, ADR 0037); on neither main nor v0.17.0.
+0dcb9c9ca3d96ea3ead65238e9adc2025929b7c6:cmd/eusov-server/token_test.go:generic-api-key:24
+# The retired HTTP server's e2e placeholder testServerToken (e2e-0123456789abcdef...), commented as a
+# test value (PR #118; removed in PR #405, ADR 0037); on neither main nor v0.17.0.
+0dcb9c9ca3d96ea3ead65238e9adc2025929b7c6:test/e2e/server_test.go:generic-api-key:44
+# A comment line of the depguard rules ("... keeps internal/httpapi to its"): prose, no value.
+41243e26fa8c24117adaa2e81e20b29b3fccb377:.golangci.yml:generic-api-key:810
+# The synthetic Azure Resource Graph fixture's skip_token: it base64-decodes to a page cursor
+# ({"$id": "1", "MaxRows": 10}), not a credential.
+2476f0909507c09e40a1340bddf0db0cdca91b27:test/e2e/testdata/inventory-guide/azure/graph-1.json:generic-api-key:216
+# An invented token for the AI reviewer's real-data scan test, beside AWS's documented example key
+# (added in PR #358).
+0fa2a56a949e77a7722cc32ea672f8db02956976:ci/aireview/internal/review/scan_test.go:generic-api-key:82
+# The same invented token for the AI reviewer's real-data scan test, its line re-aligned in PR #405.
+4a4473b1d2c729fd9440e2c2a91765ab37859317:ci/aireview/internal/review/scan_test.go:generic-api-key:82
+# A PEM header line alone (BEGIN RSA PRIVATE KEY), a table case of the audit publish scan's test:
+# no key body.
+301c69819fe553935d97139292997909137ab795:ci/auditpublish/internal/publish/scan_test.go:private-key:70
+# A PEM header line alone (BEGIN PRIVATE KEY), a table case of the audit publish scan's test: no key
+# body.
+301c69819fe553935d97139292997909137ab795:ci/auditpublish/internal/publish/scan_test.go:private-key:73
+# A base64 encoding of invented bytes, commented as such, for the audit publish scan's entropy cases.
+301c69819fe553935d97139292997909137ab795:ci/auditpublish/internal/publish/scan_test.go:generic-api-key:449
+# A second base64 encoding of invented bytes, commented as such, for the same entropy cases.
+301c69819fe553935d97139292997909137ab795:ci/auditpublish/internal/publish/scan_test.go:generic-api-key:454
