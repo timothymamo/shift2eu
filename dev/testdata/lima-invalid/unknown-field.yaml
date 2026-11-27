@@ -1079,10 +1079,16 @@ provision:
         # installs nothing and keeps what make vm-pi-tester installed last (a deny file missing behind it stays
         # missing, and the wrapper then refuses to start the tester visibly: reinstall with make vm-pi-tester);
         # without it the step installs all three from the template, the deny files first, over any already there.
+        # Each file is written to a <dest>.new sibling and then moved into place, as dev/vm-pi-tester.sh does, so
+        # a crash or power loss during the write leaves no partial wrapper that would mark the set complete and
+        # be kept by every later boot: at worst a leftover .new file, which the next boot overwrites.
         if [ ! -e /usr/local/lib/shift2eu/pi-tester/pi-tester.sh ]; then
-          install -o root -g root -m 0644 "${tmp}/deny-env-printing.ts" /usr/local/lib/shift2eu/pi-tester/extensions/deny-env-printing.ts
-          install -o root -g root -m 0644 "${tmp}/deny-env-printing.json" /usr/local/lib/shift2eu/pi-tester/deny-env-printing.json
-          install -o root -g root -m 0755 "${tmp}/pi-tester.sh" /usr/local/lib/shift2eu/pi-tester/pi-tester.sh
+          install -o root -g root -m 0644 "${tmp}/deny-env-printing.ts" /usr/local/lib/shift2eu/pi-tester/extensions/deny-env-printing.ts.new
+          mv -f /usr/local/lib/shift2eu/pi-tester/extensions/deny-env-printing.ts.new /usr/local/lib/shift2eu/pi-tester/extensions/deny-env-printing.ts
+          install -o root -g root -m 0644 "${tmp}/deny-env-printing.json" /usr/local/lib/shift2eu/pi-tester/deny-env-printing.json.new
+          mv -f /usr/local/lib/shift2eu/pi-tester/deny-env-printing.json.new /usr/local/lib/shift2eu/pi-tester/deny-env-printing.json
+          install -o root -g root -m 0755 "${tmp}/pi-tester.sh" /usr/local/lib/shift2eu/pi-tester/pi-tester.sh.new
+          mv -f /usr/local/lib/shift2eu/pi-tester/pi-tester.sh.new /usr/local/lib/shift2eu/pi-tester/pi-tester.sh
         fi
       )
 
