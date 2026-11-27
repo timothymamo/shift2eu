@@ -3,6 +3,16 @@
   "source": "gcp",
   "resources": [
     {
+      "id": "4567890123456789012",
+      "rawType": "dns.googleapis.com/ManagedZone",
+      "category": "unclassified"
+    },
+    {
+      "id": "blog-zone",
+      "rawType": "dns.googleapis.com/ManagedZone",
+      "category": "network.dns"
+    },
+    {
       "id": "cache-alt",
       "rawType": "redis.googleapis.com/Instance",
       "category": "cache.redis",
@@ -54,6 +64,11 @@
       "capabilities": [
         "encryption-at-rest"
       ]
+    },
+    {
+      "id": "internal-zone",
+      "rawType": "dns.googleapis.com/ManagedZone",
+      "category": "unclassified"
     },
     {
       "id": "jars",
@@ -467,7 +482,11 @@
     {
       "id": "shop-zone",
       "rawType": "dns.googleapis.com/ManagedZone",
-      "category": "unclassified"
+      "category": "network.dns",
+      "capabilities": [
+        "dns-routing",
+        "dnssec"
+      ]
     },
     {
       "id": "valkey-1",

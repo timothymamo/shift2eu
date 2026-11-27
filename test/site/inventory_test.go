@@ -284,8 +284,12 @@ func TestInventoryCommandsPerStep(t *testing.T) {
 	}{
 		{key: "aws", collect: 21, build: 1},
 		// GCP's collect step gains PRD #571's Managed Service for Apache Kafka
-		// list, one command of its own as its other service lists are.
-		{key: "gcp", collect: 12, build: 1},
+		// list, one command of its own as its other service lists are, and PRD
+		// #581's two Cloud DNS commands: `dns managed-zones list`, and the
+		// record-set loop that counts each public zone's routed record sets,
+		// a command of its own so that a reader whose policy leaves
+		// `dns.resourceRecordSets.list` out can skip it.
+		{key: "gcp", collect: 14, build: 1},
 		{key: "azure", collect: 8, build: 1},
 	}
 
@@ -3888,4 +3892,433 @@ func fencedBlockAfter(t *testing.T, document, heading, language string) string {
 	t.Fatalf("docs/guide/inventory.md's %q section holds no closed %s block, so this check read nothing", heading, fence)
 
 	return ""
+}
+
+// gcpCloudDNSCalls are the calls PRD #581's GCP classification makes of Cloud
+// DNS: the managed zones of the project, and, per public zone, whether any of
+// its record sets routes by a policy. The zones themselves come from the asset
+// listing the guide already runs; these two calls add the details a zone is
+// classified and given its capabilities from.
+const (
+	gcpManagedZonesCall = "gcloud dns managed-zones list"
+	gcpRecordSetsCall   = "gcloud dns record-sets list"
+)
+
+// gcpManagedZoneFields are the fields the guide's managed-zones call may keep
+// (PRD #581, *How the sources classify*, the GCP row): the zone's number, which
+// is the `id` the asset row names the zone by and one half of the join; the
+// zone's own name, which is the ID the inventory gives a zone the join finds
+// and the other half of it; the visibility that tells a public zone from a
+// private one; and the DNSSEC configuration's signed state. `kind` is the
+// response's own kind. Every field is read by the program; a zone's dnsName, its
+// description or its name servers are not, and would keep the user's domains and
+// Google's servers in the raw output the guide tells the reader to delete.
+var gcpManagedZoneFields = []string{"kind", "id", "name", "visibility", "dnssecConfig", "state"}
+
+// gcpProjectJoin matches the jq filter that adds the project to each entry of the
+// managed-zones list, which writes no project of its own (PRD #581, milestone 3):
+// the program joins the entries to the asset search's dns.googleapis.com/
+// ManagedZone rows on the project and the zone's number, so an entry without a
+// project is no entry the program can place. A jq object holding a `project` key
+// and a `project` assignment both count.
+var gcpProjectJoin = regexp.MustCompile(`(?:\{[^}]*\bproject\s*:|\.project\s*=)`)
+
+// gcpRecordValueFields are the fields a Cloud DNS record set carries when the
+// call reads the record itself: its values and their signatures, and the TTL
+// they live for. The guide's record-set call keeps a count, never one of them.
+var gcpRecordValueFields = []string{"rrdatas", "signatureRrdatas", "ttl"}
+
+// commandCode returns a command without its comment lines: a comment may name a
+// field or a permission in prose without the command reading it.
+func commandCode(command string) string {
+	var code []string
+
+	for _, line := range strings.Split(command, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "#") {
+			continue
+		}
+
+		code = append(code, line)
+	}
+
+	return strings.Join(code, "\n")
+}
+
+// gcpCommandsRunning returns the GCP section's commands that run one of the
+// calls, failing the test when the count is not the one the milestone's calls
+// have: a second call of the same shape leaves which output the program reads
+// unclear.
+func gcpCommandsRunning(t *testing.T, commands []string, call string, want int) []string {
+	t.Helper()
+
+	var calls []string
+
+	for _, command := range commands {
+		if strings.Contains(commandCode(command), call) {
+			calls = append(calls, command)
+		}
+	}
+
+	if len(calls) != want {
+		t.Fatalf("docs/guide/inventory.md's GCP section runs %q in %d command(s), want exactly %d: PRD #581's GCP classification makes that call once, and this check cannot tell which output the program reads otherwise\n%s",
+			call, len(calls), want, describeCommands(commands))
+	}
+
+	return calls
+}
+
+// TestInventoryGuideGCPCloudDNSCallsKeepOnlyTheFieldsTheyRead pins the GCP half
+// of PRD #581's milestone 3 on the guide's command text: `gcloud dns
+// managed-zones list` keeps only each zone's kind, number, name, visibility and
+// signed state, with the project the guide's jq filter adds for the join, the
+// number being the half of it the asset row already holds; and `gcloud
+// dns record-sets list` keeps the record type of each routed record set and
+// nothing else, so the command's output is a count and no record. A --format
+// that named a record's values would leave the user's hosts and their addresses
+// in the raw output the guide tells the reader to delete.
+func TestInventoryGuideGCPCloudDNSCallsKeepOnlyTheFieldsTheyRead(t *testing.T) {
+	t.Parallel()
+
+	const guidePath = "docs/guide/inventory.md"
+
+	guide := string(readRepositoryFile(t, filepath.Join("docs", "guide", "inventory.md")))
+	gcp := guideSourceByKey(t, "gcp")
+	commands := guideCommands(t, guide, gcp)
+
+	managedZones := gcpCommandsRunning(t, commands, gcpManagedZonesCall, 1)[0]
+
+	if !strings.Contains(managedZones, `--project="$project"`) {
+		t.Errorf("%s's `%s` command passes no `--project=\"$project\"`, want the project quoted: the call lists one project's zones, and the guide's loop reads the project into `$project` (PRD #581, *The per-zone loops*)\n%s",
+			guidePath, gcpManagedZonesCall, managedZones)
+	}
+
+	match := gcloudFormatProjection.FindStringSubmatch(managedZones)
+	if match == nil {
+		t.Fatalf("%s's `%s` command passes no `--format='json(...)'` projection, want one naming only %s: without it the call writes each zone's whole configuration to the file, its dnsName, its description and its name servers included\n%s",
+			guidePath, gcpManagedZonesCall, strings.Join(gcpManagedZoneFields, ", "), managedZones)
+	}
+
+	keys := projectionKeys(match[1])
+
+	for _, key := range keys {
+		if !slices.Contains(gcpManagedZoneFields, key) {
+			t.Errorf("%s's `%s` --format names %q, want only the fields PRD #581 reads of a zone (%s): a key the program does not read would keep a field of the user's zone in the guide's raw output\n%s",
+				guidePath, gcpManagedZonesCall, key, strings.Join(gcpManagedZoneFields, ", "), managedZones)
+		}
+	}
+
+	// A projection that named none of the fields the program reads would pass the
+	// check above and keep nothing to classify a zone from, so they are required by
+	// name: the zone's number and its name, the two halves of the join, and the
+	// visibility and signed state that decide its category and capabilities.
+	for _, required := range []struct {
+		key string
+		why string
+	}{
+		{
+			"id",
+			"the asset row names a zone by the number Google assigned it, never by its name, so the list's `id` is the only half of the join the asset side already holds: without it no zone joins and every one stays unclassified (review finding S2)",
+		},
+		{
+			"name",
+			"the program writes a joined zone's resource ID from the zone's name, and the record-set call takes that name",
+		},
+		{
+			"visibility",
+			"it tells a public zone from a private one, which decides whether the zone is network.dns at all",
+		},
+	} {
+		if !slices.Contains(keys, required.key) {
+			t.Errorf("%s's `%s` --format names no %q, want it: %s\n%s",
+				guidePath, gcpManagedZonesCall, required.key, required.why, managedZones)
+		}
+	}
+
+	if !slices.Contains(keys, "dnssecConfig") && !slices.Contains(keys, "state") {
+		t.Errorf("%s's `%s` --format names no `dnssecConfig` and no `state`, want one: dnssecConfig.state is the only field that says whether Google signs the zone, and without it no zone carries dnssec (PRD #581, milestone 3)\n%s",
+			guidePath, gcpManagedZonesCall, managedZones)
+	}
+
+	if !gcpProjectJoin.MatchString(commandCode(managedZones)) {
+		t.Errorf("%s's `%s` command adds no project to each entry, want a jq filter writing a `project` key or assigning `.project`: the list output carries no project, and the program joins its entries to the asset rows on the project and the zone's number (PRD #581, milestone 3)\n%s",
+			guidePath, gcpManagedZonesCall, managedZones)
+	}
+
+	recordSets := gcpCommandsRunning(t, commands, gcpRecordSetsCall, 1)[0]
+	recordSetsCode := commandCode(recordSets)
+
+	for _, argument := range []struct {
+		name  string
+		value string
+		want  string
+	}{
+		{"project", `--project="$project"`, "the project quoted, which the guide reads into `$project`"},
+		{"zone", `--zone="$zone"`, "the zone's name quoted, which the loop reads out of the managed-zones file for each public zone"},
+	} {
+		if !strings.Contains(recordSetsCode, argument.value) {
+			t.Errorf("%s's `%s` command passes no `%s`, want %s (PRD #581, *The per-zone loops*)\n%s",
+				guidePath, gcpRecordSetsCall, argument.value, argument.want, recordSets)
+		}
+	}
+
+	if !strings.Contains(recordSetsCode, `--filter='routingPolicy:*'`) {
+		t.Errorf("%s's `%s` command passes no `--filter='routingPolicy:*'`, want it: only a record set that carries a routing policy routes by client or by health, which is what dns-routing says of the zone (PRD #581, milestone 3)\n%s",
+			guidePath, gcpRecordSetsCall, recordSets)
+	}
+
+	if !strings.Contains(recordSetsCode, `--format='value(type)'`) {
+		t.Errorf("%s's `%s` command passes no `--format='value(type)'`, want it: the call writes one record type per routed record set and nothing else, and the count of those lines is all the program reads (PRD #581, *The guide reads no zone contents*)\n%s",
+			guidePath, gcpRecordSetsCall, recordSets)
+	}
+
+	for _, field := range gcpRecordValueFields {
+		if strings.Contains(recordSetsCode, field) {
+			t.Errorf("%s's `%s` command names %q, want no part of a record's values: the call keeps a count of routed record sets, never a record's contents (PRD #581)\n%s",
+				guidePath, gcpRecordSetsCall, field, recordSets)
+		}
+	}
+}
+
+// gcpZoneLoop matches the loop the guide runs over its managed zones, one line
+// at a time: `while read -r <variable>...` or `while IFS=<separator> read -r
+// <variable>...`. The line holds each zone's number and its name with a space
+// between them; the variables are what the loop body quotes.
+var gcpZoneLoop = regexp.MustCompile(`(?m)while\s+((?:IFS=('[^']*'|"[^"]*"|\S*)\s+)?)read\s+-r\s+([A-Za-z_][A-Za-z0-9_]*(?:\s+[A-Za-z_][A-Za-z0-9_]*)*)`)
+
+// gcpBashDollarQuote matches a `$'...'` word, which is bash's own quoting and no
+// POSIX shell's: the guide says its commands run under sh, dash and zsh too.
+var gcpBashDollarQuote = regexp.MustCompile(`\$'`)
+
+// gcpRoutedEntryID matches the `id` key of the object the record-set loop writes
+// per zone, with its value or with a `--arg` name: the count is joined to the
+// zone's asset row on that number, so an entry keyed by the zone's name alone
+// joins nothing.
+var gcpRoutedEntryID = regexp.MustCompile(`(?:^|[^A-Za-z0-9_])id\s*:`)
+
+// gcpMachineTypesVariable matches the shell variable the guide's machine-type
+// call reads the instance types into, outside a longer name: `types`, `$types`
+// and `types=` are that variable, `routed_types` is another one.
+var gcpMachineTypesVariable = regexp.MustCompile(`[^A-Za-z0-9_]types(?:[^A-Za-z0-9_]|$)`)
+
+// TestInventoryGuideGCPCloudDNSLoopReadsTheZoneList pins the loop PRD #581's
+// milestone 3 runs (PRD #581, *The per-zone loops*): the record-set call runs
+// once per public zone of the project, over the list the managed-zones call
+// wrote, read line by line with `while read -r` or `while IFS=' ' read -r`. A
+// loop read with a bare `read` drops a trailing backslash, and one fed by `for`
+// splits a zone's name on white space, so the call would ask about a zone that
+// does not exist and the zone would lose dns-routing. No command holds an
+// unquoted loop variable, and none holds a `$'...'` word: that is a bashism, and
+// under dash `IFS=$'\t'` is the three characters `$`, `\` and `t`, so a zone
+// named `test-zone` is cut at its own `t` (review finding, round 2).
+//
+// The line the loop reads holds the zone's number and its name: the asset row
+// names a zone by the number, the record-set call takes the name, and the count
+// is written under the number, so a loop that read the name alone or gave the
+// call the number asks about a zone no call knows (review finding S2). The
+// loop's temporary file is not named `types`, which is the machine-type call's
+// variable earlier in the GCP collect step (auditor finding).
+func TestInventoryGuideGCPCloudDNSLoopReadsTheZoneList(t *testing.T) {
+	t.Parallel()
+
+	const guidePath = "docs/guide/inventory.md"
+
+	guide := string(readRepositoryFile(t, filepath.Join("docs", "guide", "inventory.md")))
+	gcp := guideSourceByKey(t, "gcp")
+	commands := guideCommands(t, guide, gcp)
+
+	recordSets := gcpCommandsRunning(t, commands, gcpRecordSetsCall, 1)[0]
+	code := commandCode(recordSets)
+
+	// The guide promises a POSIX shell (sh, dash, bash, zsh), and `$'...'` is
+	// bash's quoting alone: under dash it is the three characters `$`, `\` and
+	// `t`, so a line `1234567890123456789<tab>shop-zone` reads as one field and
+	// an empty one, and Google is asked about a zone named none (review finding,
+	// round 2).
+	if gcpBashDollarQuote.MatchString(code) {
+		t.Errorf("%s's command that runs `%s` holds a `$'...'` word, want none: the guide's commands run under sh and dash too, where `$'` quotes nothing and `$'\\t'` is the three characters `$`, `\\` and `t`, so a loop separated by it reads a zone's number and name wrong and the call asks about a zone that does not exist\n%s",
+			guidePath, gcpRecordSetsCall, recordSets)
+	}
+
+	if loop := gcpZoneLoop.FindStringSubmatch(code); loop == nil {
+		t.Errorf("%s's command that runs `%s` holds no `while read -r ...` and no `while IFS=... read -r ...`, want the zone list read line by line (PRD #581, *The per-zone loops*): a bare `read` drops a trailing backslash, and a `for` loop splits a zone's name on white space\n%s",
+			guidePath, gcpRecordSetsCall, recordSets)
+	} else {
+		// The line the list holds is the zone's number, a space and its name, so
+		// the loop splits on the default IFS, which takes white space, or on the
+		// one space it names itself. Any other separator is a character no line
+		// holds, and the name stays empty or joined to the number.
+		if separator := strings.Trim(loop[2], `'"`); loop[1] != "" && separator != " " {
+			t.Errorf("%s's command that runs `%s` sets IFS to %q, want `IFS=' '` or no IFS at all: the managed-zones file holds each zone's number and its name separated by a space, and a separator the line does not hold leaves the name empty or the number and the name joined (PRD #581, milestone 3)\n%s",
+				guidePath, gcpRecordSetsCall, loop[2], recordSets)
+		}
+
+		fields := strings.Fields(loop[3])
+
+		switch {
+		case len(fields) != 2:
+			t.Errorf("%s's command that runs `%s` reads %d field(s) per line (`read -r %s`), want two: the managed-zones file holds each zone's number and its name, the call takes the name and the count is joined to the asset row on the number, so a loop that read one of them alone asks about a zone no call knows or writes a count nothing joins (PRD #581, milestone 3)\n%s",
+				guidePath, gcpRecordSetsCall, len(fields), loop[3], recordSets)
+		default:
+			number, name := fields[0], fields[1]
+
+			if !strings.Contains(code, `--zone="$`+name+`"`) {
+				t.Errorf("%s's command that runs `%s` passes no `--zone=\"$%s\"`, want the name the loop reads second: the call takes the zone's name, and the number is no zone name\n%s",
+					guidePath, gcpRecordSetsCall, name, recordSets)
+			}
+
+			if !strings.Contains(code, `"$`+number+`"`) {
+				t.Errorf("%s's command that runs `%s` holds no quoted `\"$%s\"`, want the number the loop reads first, written under that name for the join: an unquoted or unused number gives the count to no zone (PRD #581, milestone 3)\n%s",
+					guidePath, gcpRecordSetsCall, number, recordSets)
+			}
+		}
+	}
+
+	// The two fields have to come from the zone list: the loop's selection reads
+	// the number and the name the list wrote, not the name twice.
+	for _, field := range []string{".id", ".name"} {
+		if !strings.Contains(code, field) {
+			t.Errorf("%s's command that runs `%s` reads no %s from the zone list, want each public zone's number and its name: the join needs the number the asset row names the zone by, and the call needs the name\n%s",
+				guidePath, gcpRecordSetsCall, field, recordSets)
+		}
+	}
+
+	if !strings.Contains(code, "routedRecordSets") {
+		t.Errorf("%s's command that runs `%s` writes no routedRecordSets, want the count of each public zone's routed record sets under it: the program reads that key per zone (PRD #581, milestone 3)\n%s",
+			guidePath, gcpRecordSetsCall, recordSets)
+	}
+
+	if !gcpRoutedEntryID.MatchString(code) {
+		t.Errorf("%s's command that runs `%s` keys no entry by `id`, want the zone's number beside `routedRecordSets`: the program joins the count to the zone's asset row on the project and the number, so a count under the zone's name alone joins nothing (PRD #581, milestone 3)\n%s",
+			guidePath, gcpRecordSetsCall, recordSets)
+	}
+
+	if gcpMachineTypesVariable.MatchString(code) {
+		t.Errorf("%s's command that runs `%s` holds the shell variable `types`, want another name: the machine-type call earlier in the GCP collect step reads the instance types in use into `types`, so a second `types` here is another value under the same name (auditor finding)\n%s",
+			guidePath, gcpRecordSetsCall, recordSets)
+	}
+
+	if !strings.Contains(code, "dns-managed-zones.json") {
+		t.Errorf("%s's command that runs `%s` reads no zone list, want the zones `%s` wrote to dns-managed-zones.json (PRD #581, milestone 3): each public zone of that list is one pass of the loop\n%s",
+			guidePath, gcpRecordSetsCall, gcpManagedZonesCall, recordSets)
+	}
+
+	if !strings.Contains(code, "dns-routed-record-sets.json") {
+		t.Errorf("%s's command that runs `%s` writes no dns-routed-record-sets.json, want the count of each public zone's routed record sets there: the fixture the guide's tests read holds one entry per public zone in that file (PRD #581, milestone 3)\n%s",
+			guidePath, gcpRecordSetsCall, recordSets)
+	}
+
+	if !strings.Contains(code, "length") && !strings.Contains(code, "wc -l") {
+		t.Errorf("%s's command that runs `%s` reduces the call to no count, want one number per zone (jq's `length` over the record types the call wrote, or a line count of them): the program reads a count, and a command that wrote the record types through would put the zone's contents in the file (PRD #581)\n%s",
+			guidePath, gcpRecordSetsCall, recordSets)
+	}
+
+	// The page shows each command whole and a visitor copies it, so a variable
+	// outside double quotes is the visitor's own project or zone reaching a
+	// read-only call split in two (PRD #581, *The per-zone loops*).
+	for _, command := range commands {
+		for _, reference := range unquotedLoopVariables(command) {
+			t.Errorf("%s's command holds the unquoted loop variable %s, want it inside double quotes: an unquoted variable splits on white space and expands the glob characters in it, so the call reads another project's or zone's name, or several arguments\n%s",
+				guidePath, reference, command)
+		}
+
+		if holdsEval(command) {
+			t.Errorf("%s's command runs `eval`, want none: the guide runs the calls it writes, and `eval` runs whatever a provider's answer holds\n%s",
+				guidePath, command)
+		}
+	}
+}
+
+// gcpRecordSetPermission is the Cloud DNS permission that returns every record
+// of a zone to its holder, which `roles/dns.reader` includes (PRD #581, *The
+// record-set permissions*). The guide offers a custom role without it for a
+// reader who leaves dns-routing out.
+const gcpRecordSetPermission = "dns.resourceRecordSets.list"
+
+// TestInventoryGuideGCPRolesCoverTheCloudDNSCalls pins the GCP permissions
+// PRD #581's milestone 3 asks for: `roles/dns.reader`, which lists the managed
+// zones and reads their configuration, is in the guide's role list; the guide
+// says in prose that the record-set call is optional, that it needs
+// `dns.resourceRecordSets.list` and that the permission lets its holder read
+// every record, and what else the role reads beside it (each zone's change
+// history and the project's response policy rules, auditor finding 1); and it
+// names a custom role holding `dns.managedZones.list` alone for a reader who
+// does not want dns-routing.
+func TestInventoryGuideGCPRolesCoverTheCloudDNSCalls(t *testing.T) {
+	t.Parallel()
+
+	const guidePath = "docs/guide/inventory.md"
+
+	guide := string(readRepositoryFile(t, filepath.Join("docs", "guide", "inventory.md")))
+	roles := gcpRoleBullets(t, guide)
+
+	if !slices.Contains(roles, "roles/dns.reader") {
+		t.Errorf("%s's GCP permissions list names %v, want `roles/dns.reader` among them: the guide's `%s` and `%s` calls read Cloud DNS configuration with that role, and a reader on the list without it gets no answer from either and loses every zone's capabilities\n%s",
+			guidePath, roles, gcpManagedZonesCall, gcpRecordSetsCall, guideRoleParagraphsOf(guide, "roles/dns.reader"))
+	}
+
+	for _, name := range []string{gcpRecordSetPermission, "dns.managedZones.list"} {
+		if !strings.Contains(guide, name) {
+			t.Errorf("%s names no %q, want it beside the Cloud DNS roles: the record-set step needs %q, which lets its holder read every record, and a reader who leaves dns-routing out needs a custom role with `dns.managedZones.list` alone (PRD #581, *The record-set permissions*)\n%s",
+				guidePath, name, gcpRecordSetPermission, guideRoleParagraphsOf(guide, "roles/dns.reader"))
+		}
+	}
+
+	// The permission has to be called optional beside what it reads, or a reader
+	// adds it without knowing what asking for it costs.
+	var optional []string
+
+	for _, paragraph := range strings.Split(guide, "\n\n") {
+		if !strings.Contains(paragraph, gcpRecordSetPermission) {
+			continue
+		}
+
+		if !strings.Contains(strings.ToLower(paragraph), "optional") {
+			continue
+		}
+
+		if !strings.Contains(strings.ToLower(paragraph), "every record") {
+			continue
+		}
+
+		optional = append(optional, paragraph)
+	}
+
+	if len(optional) == 0 {
+		t.Errorf("%s never calls %q optional beside what it reads, want a paragraph naming it as optional and saying that it lets its holder read every record: the permission returns every record of a zone to the caller, so the reader decides whether the dns-routing capability is worth it (PRD #581, *The record-set permissions*)",
+			guidePath, gcpRecordSetPermission)
+	}
+
+	// roles/dns.reader reads far more of Cloud DNS than the zones' visibility and
+	// signed state (auditor finding 1): beside every record set of every zone, it
+	// also reads each zone's change history (dns.changes.list) and the project's
+	// response policy rules. The guide says so where it names the role, so a reader
+	// who grants it knows what it exposes.
+	reader := strings.ToLower(guideRoleParagraphsOf(guide, "roles/dns.reader"))
+
+	for _, want := range []struct {
+		name string
+		text string
+	}{
+		{"the change history permission `dns.changes.list`", "dns.changes.list"},
+		{"the response policy rules it reads", "response polic"},
+	} {
+		if !strings.Contains(reader, want.text) {
+			t.Errorf("%s names `roles/dns.reader` without %s, want it beside the record-set permission: the role reads every record set of every zone, each zone's change history and the project's response policy rules, and a reader decides whether to grant it knowing what it exposes (PRD #581, *The record-set permissions*, auditor finding 1)\n%s",
+				guidePath, want.name, guideRoleParagraphsOf(guide, "roles/dns.reader"))
+		}
+	}
+}
+
+// guideRoleParagraphsOf returns the paragraphs of the guide that name a string,
+// for a failure message.
+func guideRoleParagraphsOf(guide, name string) string {
+	var paragraphs []string
+
+	for _, paragraph := range strings.Split(guide, "\n\n") {
+		if strings.Contains(paragraph, name) {
+			paragraphs = append(paragraphs, paragraph)
+		}
+	}
+
+	return strings.Join(paragraphs, "\n\n")
 }

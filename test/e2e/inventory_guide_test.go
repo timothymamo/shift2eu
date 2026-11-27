@@ -1002,6 +1002,50 @@ func inventoryGuides() []inventoryGuideCase {
 					id: "shop-events-connect", rawType: "managedkafka.googleapis.com/ConnectCluster", category: "unclassified",
 					capabilities: []string{},
 				},
+				// Cloud DNS public zones are public authoritative DNS zones: one
+				// resource per zone, network.dns, with no region, since Google serves a
+				// zone from name servers it picks, not from a region the user chooses
+				// (PRD #581, milestone 3). The resource is the asset search's
+				// dns.googleapis.com/ManagedZone row, as every GCP resource is, and the
+				// managed-zones list joins it on the project and the zone's number, the
+				// `id` the asset row names the zone by: that list adds the visibility,
+				// the signed state and the zone's name, which is the ID the inventory
+				// gives it, and the record-set count below adds dns-routing.
+				//
+				// A zone Google signs with DNSSEC: dnssecConfig.state is on. It also has
+				// routed record sets (3 above 0), so it carries dns-routing beside
+				// dnssec.
+				{
+					id: "shop-zone", rawType: "dns.googleapis.com/ManagedZone", category: "network.dns",
+					noRegion: true, capabilities: []string{"dns-routing", "dnssec"},
+				},
+				// A public zone whose DNSSEC state is off and whose routed record sets
+				// number 0: network.dns with no capability at all. A program that read
+				// the state as "not off" or the count as "not 0" gives it a capability
+				// the zone does not have.
+				{
+					id: "blog-zone", rawType: "dns.googleapis.com/ManagedZone", category: "network.dns",
+					noRegion: true, capabilities: []string{},
+				},
+				// A private zone answers only inside the VPC networks it is attached to
+				// and moves with the network design, so it stays unclassified with its
+				// rawType (PRD #581, *What does not, and why*). It is written from the
+				// asset row, as every zone is.
+				{
+					id: "internal-zone", rawType: "dns.googleapis.com/ManagedZone", category: "unclassified",
+					capabilities: []string{},
+				},
+				// A zone the asset listing holds and the managed-zones list does not
+				// (a failed list, a missing role, or a project collected from its
+				// assets alone) is a zone all the same: no call gives its visibility
+				// or its signed state, so it stays unclassified rather than
+				// disappearing or being presumed public (PRD #581, milestone 3). Its
+				// ID is the number the asset row names it by, the only name the
+				// calls gave it: a zone the list joins gets its managed zone's name.
+				{
+					id: "4567890123456789012", rawType: "dns.googleapis.com/ManagedZone", category: "unclassified",
+					capabilities: []string{},
+				},
 			},
 			sized: []sizeFact{
 				// An e2-standard-2 is 2 vCPU and 8192 MB, from compute machine-types list.
@@ -1076,7 +1120,12 @@ func inventoryGuides() []inventoryGuideCase {
 			// gives its vCPU or memory, so the program writes no size rather than
 			// one from a default, and the report says "not estimated: size
 			// unknown" for it (PRD #571, *Estimates*).
-			unsized: []string{"shop-reports-sqlserver", "valkey-archive", "shop-legacy-events"},
+			unsized: []string{
+				"shop-reports-sqlserver", "valkey-archive", "shop-legacy-events",
+				// network.dns takes no size field: a zone is billed by the zone, not by
+				// a node or a GiB, and no recorded call gives one (PRD #581).
+				"shop-zone", "blog-zone", "internal-zone", "4567890123456789012",
+			},
 			// A node pool's managed instance group, a node with its disk,
 			// labelled goog-gke-node, and the boot and data disks of the group's
 			// member: the group stands for its instances.
@@ -1463,6 +1512,9 @@ func taxonomyCategories(source string) []string {
 			"messaging.queue",
 			"messaging.topic",
 			"network.loadbalancer",
+			// PRD #581's GCP classification: the public Cloud DNS zones its
+			// fixtures record, which Google serves from no region.
+			"network.dns",
 			"registry.container",
 			"serverless.container",
 			"serverless.function",
@@ -1805,20 +1857,13 @@ func TestInventoryGuideAWSRoute53UnprojectedHostedZones(t *testing.T) {
 	}
 }
 
-// runInventoryGuideRoute53 runs the AWS program on one form of the
-// list-hosted-zones output and the per-zone calls' recorded output, written to a
-// directory of their own, and returns what the program wrote. The files are
-// written here rather than recorded: the guide's fixtures hold the projected
-// form, which a reader's own run must keep matching, and the program's promise
-// about the full form needs an input the fixtures do not hold.
-func runInventoryGuideRoute53(t *testing.T, zones, dnssec, routed string) []byte {
+// runInventoryGuideOnBuiltInputs runs one source's program on inputs a test
+// builds, written into a directory of their own, and returns what the program
+// wrote. The files are written rather than recorded: the guide's fixtures hold
+// the form the guide's own commands write, and a test that pins what the
+// program has to survive needs an input no recorded call produces.
+func runInventoryGuideOnBuiltInputs(t *testing.T, source string, inputs map[string]string) []byte {
 	t.Helper()
-
-	inputs := map[string]string{
-		"route53-hosted-zones.json":       zones,
-		"route53-dnssec.json":             dnssec,
-		"route53-routed-record-sets.json": routed,
-	}
 
 	dir := t.TempDir()
 
@@ -1834,7 +1879,199 @@ func runInventoryGuideRoute53(t *testing.T, zones, dnssec, routed string) []byte
 		recorded = append(recorded, path)
 	}
 
-	return runJQ(t, jqPath(t), "aws", recorded)
+	return runJQ(t, jqPath(t), source, recorded)
+}
+
+// runInventoryGuideRoute53 runs the AWS program on one form of the
+// list-hosted-zones output and the per-zone calls' recorded output, written to a
+// directory of their own, and returns what the program wrote. The files are
+// written here rather than recorded: the guide's fixtures hold the projected
+// form, which a reader's own run must keep matching, and the program's promise
+// about the full form needs an input the fixtures do not hold.
+func runInventoryGuideRoute53(t *testing.T, zones, dnssec, routed string) []byte {
+	t.Helper()
+
+	return runInventoryGuideOnBuiltInputs(t, "aws", map[string]string{
+		"route53-hosted-zones.json":       zones,
+		"route53-dnssec.json":             dnssec,
+		"route53-routed-record-sets.json": routed,
+	})
+}
+
+// TestInventoryGuideGCPCloudDNSClassifiesTheJoinedZone pins what the recorded
+// fixtures cannot about the GCP half of PRD #581's milestone 3, with inputs
+// built here:
+//
+//   - the visibility gate (PRD #581, *What does not, and why*): the guide's
+//     per-zone loop asks about public zones only, so no recorded fixture names a
+//     private zone in the record-set call's output, and a program that dropped
+//     its own gate would give a private zone dnssec or dns-routing while every
+//     fixture-driven assertion still passed;
+//   - dnssecConfig.state `transfer`: a zone whose DNSSEC signing Google is
+//     transferring is signed too, and no recorded zone carries that state;
+//   - both halves of the join, the project and the zone's number, which is the
+//     `id` the asset row names the zone by and the managed-zones list repeats
+//     (review finding S2): an entry under another project, or without one, is no
+//     entry for that row, and the zone stays unclassified under its number;
+//   - an empty managed-zones file, which the guide writes when its list call
+//     fails: the program reads it as no zone at all rather than failing.
+//
+// The inputs stand for a collect run that wrote any of these (a merged or
+// hand-edited file, a loop that lost its filter, a call that failed), which the
+// program has to survive with each zone classified by what it read.
+func TestInventoryGuideGCPCloudDNSClassifiesTheJoinedZone(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a private zone keeps no capability", func(t *testing.T) {
+		t.Parallel()
+
+		// One private and one public zone of one project, both with DNSSEC on and
+		// both holding routed record sets, so the visibility gate is the only thing
+		// that can tell them apart: the public zone gains both capabilities, the
+		// private one neither. The asset search is the list of resources, so both
+		// zones are written from their dns.googleapis.com/ManagedZone row, which
+		// names each of them by its number.
+		doc := decodeInventory(t, runInventoryGuideOnBuiltInputs(t, "gcp", map[string]string{
+			"assets.json": `[
+  {"name": "//dns.googleapis.com/projects/example-project/managedZones/1234567890123456789", "assetType": "dns.googleapis.com/ManagedZone", "location": "global"},
+  {"name": "//dns.googleapis.com/projects/example-project/managedZones/3456789012345678901", "assetType": "dns.googleapis.com/ManagedZone", "location": "global"}
+]`,
+			"dns-managed-zones.json": `[
+  {"kind": "dns#managedZone", "id": "1234567890123456789", "name": "shop-zone", "visibility": "public", "dnssecConfig": {"state": "on"}, "project": "example-project"},
+  {"kind": "dns#managedZone", "id": "3456789012345678901", "name": "internal-zone", "visibility": "private", "dnssecConfig": {"state": "on"}, "project": "example-project"}
+]`,
+			"dns-routed-record-sets.json": `[
+  {"project": "example-project", "id": "1234567890123456789", "routedRecordSets": 3},
+  {"project": "example-project", "id": "3456789012345678901", "routedRecordSets": 3}
+]`,
+		}))
+
+		// The public zone is the control: the capabilities of the inputs are read, so
+		// a private zone that holds none holds none because of the gate and not
+		// because the program read no signed state and no count at all.
+		assertPresent(t, "gcp", doc, []resourceFact{
+			{
+				id: "internal-zone", rawType: "dns.googleapis.com/ManagedZone",
+				category: "unclassified", capabilities: []string{},
+			},
+			{
+				id: "shop-zone", rawType: "dns.googleapis.com/ManagedZone",
+				category: "network.dns", capabilities: []string{"dnssec", "dns-routing"},
+			},
+		})
+	})
+
+	t.Run("a transferred zone is signed", func(t *testing.T) {
+		t.Parallel()
+
+		// DNSSEC signing Google is transferring to another provider is signing all
+		// the same: dnssecConfig.state `transfer` is signed, and a program that read
+		// only `on` loses dnssec. The zone holds no routed record set, so dns-routing
+		// stays off and a program that wrote it from the state fails too.
+		doc := decodeInventory(t, runInventoryGuideOnBuiltInputs(t, "gcp", map[string]string{
+			"assets.json": `[
+  {"name": "//dns.googleapis.com/projects/example-project/managedZones/1234567890123456789", "assetType": "dns.googleapis.com/ManagedZone", "location": "global"}
+]`,
+			"dns-managed-zones.json": `[
+  {"kind": "dns#managedZone", "id": "1234567890123456789", "name": "shop-zone", "visibility": "public", "dnssecConfig": {"state": "transfer"}, "project": "example-project"}
+]`,
+			"dns-routed-record-sets.json": `[]`,
+		}))
+
+		assertPresent(t, "gcp", doc, []resourceFact{
+			{
+				id: "shop-zone", rawType: "dns.googleapis.com/ManagedZone",
+				category: "network.dns", capabilities: []string{"dnssec"},
+			},
+		})
+	})
+
+	t.Run("another project's entry joins nothing", func(t *testing.T) {
+		t.Parallel()
+
+		// The list's entries are one project's zones, and the project is added to
+		// each of them for the join: another project's zone holds a number of its
+		// own, and a number Google happens to assign twice would be another zone.
+		// The other project's entry comes last, where a program that joined on the
+		// number alone would take it and read its private visibility and different
+		// name for this project's zone.
+		doc := decodeInventory(t, runInventoryGuideOnBuiltInputs(t, "gcp", map[string]string{
+			"assets.json": `[
+  {"name": "//dns.googleapis.com/projects/example-project/managedZones/1234567890123456789", "assetType": "dns.googleapis.com/ManagedZone", "location": "global"}
+]`,
+			"dns-managed-zones.json": `[
+  {"kind": "dns#managedZone", "id": "1234567890123456789", "name": "shop-zone", "visibility": "public", "dnssecConfig": {"state": "on"}, "project": "example-project"},
+  {"kind": "dns#managedZone", "id": "1234567890123456789", "name": "other-zone", "visibility": "private", "dnssecConfig": {"state": "off"}, "project": "other-project"}
+]`,
+			"dns-routed-record-sets.json": `[
+  {"project": "example-project", "id": "1234567890123456789", "routedRecordSets": 3}
+]`,
+		}))
+
+		assertPresent(t, "gcp", doc, []resourceFact{
+			{
+				id: "shop-zone", rawType: "dns.googleapis.com/ManagedZone",
+				category: "network.dns", capabilities: []string{"dns-routing", "dnssec"},
+			},
+		})
+		assertAbsent(t, "gcp", doc, []string{"other-zone"})
+	})
+
+	t.Run("an entry without a project joins nothing", func(t *testing.T) {
+		t.Parallel()
+
+		// The list output carries no project of its own; the guide's jq filter adds
+		// it. An entry that lost it names no zone of any project, so it joins no
+		// asset row: the zone keeps the number the asset row names it by and stays
+		// unclassified rather than taking a name and a visibility from a project
+		// nobody read.
+		doc := decodeInventory(t, runInventoryGuideOnBuiltInputs(t, "gcp", map[string]string{
+			"assets.json": `[
+  {"name": "//dns.googleapis.com/projects/example-project/managedZones/1234567890123456789", "assetType": "dns.googleapis.com/ManagedZone", "location": "global"}
+]`,
+			"dns-managed-zones.json": `[
+  {"kind": "dns#managedZone", "id": "1234567890123456789", "name": "shop-zone", "visibility": "public", "dnssecConfig": {"state": "on"}}
+]`,
+			"dns-routed-record-sets.json": `[]`,
+		}))
+
+		assertPresent(t, "gcp", doc, []resourceFact{
+			{
+				id: "1234567890123456789", rawType: "dns.googleapis.com/ManagedZone",
+				category: "unclassified", capabilities: []string{},
+			},
+		})
+		assertAbsent(t, "gcp", doc, []string{"shop-zone"})
+	})
+
+	t.Run("an empty zone list leaves every zone unclassified", func(t *testing.T) {
+		t.Parallel()
+
+		// The guide writes an empty list when its managed-zones call fails, and a
+		// zero-byte file is no JSON value at all: the program has to read it as no
+		// zone rather than fail on it, and every asset row then stays unclassified
+		// under its number, as a zone no call described does.
+		doc := decodeInventory(t, runInventoryGuideOnBuiltInputs(t, "gcp", map[string]string{
+			"assets.json": `[
+  {"name": "//dns.googleapis.com/projects/example-project/managedZones/1234567890123456789", "assetType": "dns.googleapis.com/ManagedZone", "location": "global"},
+  {"name": "//dns.googleapis.com/projects/example-project/managedZones/2345678901234567890", "assetType": "dns.googleapis.com/ManagedZone", "location": "global"}
+]`,
+			"dns-managed-zones.json":      ``,
+			"dns-routed-record-sets.json": `[]`,
+		}))
+
+		assertPresent(t, "gcp", doc, []resourceFact{
+			{
+				id: "1234567890123456789", rawType: "dns.googleapis.com/ManagedZone",
+				category: "unclassified", capabilities: []string{},
+			},
+			{
+				id: "2345678901234567890", rawType: "dns.googleapis.com/ManagedZone",
+				category: "unclassified", capabilities: []string{},
+			},
+		})
+		assertAbsent(t, "gcp", doc, []string{"shop-zone", "blog-zone"})
+	})
 }
 
 // TestInventoryGuideDomainNamesListEveryDomainOnRecord pins what the guide's two
