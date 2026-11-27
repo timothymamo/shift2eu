@@ -2,7 +2,7 @@
   "schemaVersion": 2,
   "target": "UpCloud",
   "sourceURL": "https://upcloud.com/pricing/",
-  "retrievedOn": "2026-11-13",
+  "retrievedOn": "2026-11-27",
   "regions": ["de-fra1", "dk-cph1", "es-mad1", "fi-hel1", "fi-hel2", "nl-ams1", "pl-waw1", "se-sto1"],
   "defaultRegion": "de-fra1",
   "offerings": [
@@ -108,6 +108,22 @@
       "planBillingCapHours": 672
     },
     {
+      "name": "File Storage",
+      "categories": ["storage.file"],
+      "capabilities": [],
+      "regions": ["de-fra1", "dk-cph1", "fi-hel1", "fi-hel2", "nl-ams1", "se-sto1"],
+      "plans": [],
+      "storagePrices": [{ "amount": 0.1521, "currency": "EUR", "regions": [] }]
+    },
+    {
+      "name": "File Storage Encrypted",
+      "categories": ["storage.file"],
+      "capabilities": ["encryption-at-rest"],
+      "regions": ["de-fra1", "dk-cph1", "fi-hel1", "fi-hel2", "nl-ams1", "se-sto1"],
+      "plans": [],
+      "storagePrices": [{ "amount": 0.1521, "currency": "EUR", "regions": [] }]
+    },
+    {
       "name": "Managed Kubernetes",
       "categories": ["kubernetes.managed"],
       "capabilities": [],
@@ -190,6 +206,14 @@
       "storagePrices": [],
       "fixedFees": [{ "amount": 60.8333, "currency": "EUR", "regions": [] }],
       "planBillingCapHours": 672
+    },
+    {
+      "name": "Managed Load Balancer",
+      "categories": ["network.loadbalancer"],
+      "capabilities": [],
+      "regions": ["de-fra1", "dk-cph1", "es-mad1", "fi-hel1", "fi-hel2", "nl-ams1", "pl-waw1", "se-sto1"],
+      "plans": [],
+      "storagePrices": []
     },
     {
       "name": "Managed MySQL",
@@ -310,6 +334,39 @@
         { "name": "rdb.memory.64CPU-512GB", "vcpus": 64, "memoryGiB": 512, "storageGiB": 0, "prices": [{ "amount": 4676.3091, "currency": "EUR", "regions": [] }] }
       ],
       "storagePrices": [{ "amount": 0.2028, "currency": "EUR", "regions": [] }]
+    },
+    {
+      "name": "Managed Valkey",
+      "categories": ["cache.redis"],
+      "capabilities": ["encryption-at-rest", "snapshots"],
+      "regions": ["de-fra1", "dk-cph1", "es-mad1", "fi-hel1", "fi-hel2", "nl-ams1", "pl-waw1", "se-sto1"],
+      "plans": [
+        { "name": "1x1xCPU-1GB", "vcpus": 1, "memoryGiB": 1, "storageGiB": 0, "prices": [{ "amount": 8.1111, "currency": "EUR", "regions": [] }] },
+        { "name": "1x1xCPU-2GB", "vcpus": 1, "memoryGiB": 2, "storageGiB": 0, "prices": [{ "amount": 50.6944, "currency": "EUR", "regions": [] }] },
+        { "name": "1x2xCPU-4GB", "vcpus": 2, "memoryGiB": 4, "storageGiB": 0, "prices": [{ "amount": 91.25, "currency": "EUR", "regions": [] }] },
+        { "name": "1x2xCPU-8GB", "vcpus": 2, "memoryGiB": 8, "storageGiB": 0, "prices": [{ "amount": 121.6667, "currency": "EUR", "regions": [] }] },
+        { "name": "1x2xCPU-14GB", "vcpus": 2, "memoryGiB": 14, "storageGiB": 0, "prices": [{ "amount": 162.2222, "currency": "EUR", "regions": [] }] },
+        { "name": "1x4xCPU-28GB", "vcpus": 4, "memoryGiB": 28, "storageGiB": 0, "prices": [{ "amount": 304.1667, "currency": "EUR", "regions": [] }] },
+        { "name": "1x8xCPU-56GB", "vcpus": 8, "memoryGiB": 56, "storageGiB": 0, "prices": [{ "amount": 598.1944, "currency": "EUR", "regions": [] }] },
+        { "name": "1x16xCPU-112GB", "vcpus": 16, "memoryGiB": 112, "storageGiB": 0, "prices": [{ "amount": 1176.1111, "currency": "EUR", "regions": [] }] }
+      ],
+      "storagePrices": []
+    },
+    {
+      "name": "Managed Valkey Multi-node",
+      "categories": ["cache.redis"],
+      "capabilities": ["encryption-at-rest", "node-high-availability", "snapshots"],
+      "regions": ["de-fra1", "dk-cph1", "es-mad1", "fi-hel1", "fi-hel2", "nl-ams1", "pl-waw1", "se-sto1"],
+      "plans": [
+        { "name": "2x1xCPU-2GB", "vcpus": 1, "memoryGiB": 2, "storageGiB": 0, "prices": [{ "amount": 50.6944, "currency": "EUR", "regions": [] }] },
+        { "name": "2x2xCPU-4GB", "vcpus": 2, "memoryGiB": 4, "storageGiB": 0, "prices": [{ "amount": 86.1806, "currency": "EUR", "regions": [] }] },
+        { "name": "2x2xCPU-8GB", "vcpus": 2, "memoryGiB": 8, "storageGiB": 0, "prices": [{ "amount": 116.5972, "currency": "EUR", "regions": [] }] },
+        { "name": "2x2xCPU-14GB", "vcpus": 2, "memoryGiB": 14, "storageGiB": 0, "prices": [{ "amount": 157.1528, "currency": "EUR", "regions": [] }] },
+        { "name": "2x4xCPU-28GB", "vcpus": 4, "memoryGiB": 28, "storageGiB": 0, "prices": [{ "amount": 304.1667, "currency": "EUR", "regions": [] }] },
+        { "name": "2x8xCPU-56GB", "vcpus": 8, "memoryGiB": 56, "storageGiB": 0, "prices": [{ "amount": 593.125, "currency": "EUR", "regions": [] }] },
+        { "name": "2x16xCPU-112GB", "vcpus": 16, "memoryGiB": 112, "storageGiB": 0, "prices": [{ "amount": 1176.1111, "currency": "EUR", "regions": [] }] }
+      ],
+      "storagePrices": []
     }
   ]
 }

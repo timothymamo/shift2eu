@@ -5,8 +5,10 @@
 // The catalog is an embedded, dated snapshot, catalog.json (//go:embed),
 // compiled by hand from UpCloud's public documentation at
 // https://upcloud.com/docs/ (the locations page, each product's availability
-// page, and the product pages that describe its plans and features) and from
-// its pricing page, https://upcloud.com/pricing/. Its plans and prices are
+// page, and the product pages that describe its plans and features), one page
+// of its API reference at https://developers.upcloud.com/ (the load balancer's
+// frontend modes and networks), and its pricing page,
+// https://upcloud.com/pricing/. Its plans and prices are
 // monthly EUR list prices excluding VAT (ADR 0024): the pricing page's figure
 // for a plan capped at 672 hours a month, recorded as the offering's
 // planBillingCapHours on Cloud Servers and both Managed Kubernetes offerings

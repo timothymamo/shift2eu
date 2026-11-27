@@ -4,7 +4,7 @@
 - Source: `aws`
 - Catalog: `OVHcloud` snapshot from `https://www.ovhcloud.com/en-ie/public-cloud/prices/`, retrieved 2026-11-25
 - Catalog: `Scaleway` snapshot from `https://www.scaleway.com/en/pricing/`, retrieved 2026-11-26
-- Catalog: `UpCloud` snapshot from `https://upcloud.com/pricing/`, retrieved 2026-11-13
+- Catalog: `UpCloud` snapshot from `https://upcloud.com/pricing/`, retrieved 2026-11-27
 
 ## Comparison
 
@@ -13,8 +13,8 @@
 | Fit | `OVHcloud` | `Scaleway` | `UpCloud` |
 |---|---|---|---|
 | direct | 8 | 6 | 6 |
-| partial | 3 | 9 | 2 |
-| none | 7 | 3 | 10 |
+| partial | 3 | 9 | 3 |
+| none | 7 | 3 | 9 |
 | total | 18 | 18 | 18 |
 
 ### Resources
@@ -32,7 +32,7 @@
 | `shop-orders` | `messaging.queue` | none |  | partial | `Queues` | none |  |
 | `shop-orders-dlq` | `messaging.queue` | none |  | partial | `Queues` | none |  |
 | `shop-product-search` | `search.opensearch` | none |  | none |  | none |  |
-| `shop-sessions` | `cache.redis` | partial | `Databases for Valkey Multi-node` | partial | `Managed Database for Redis Cluster` | none |  |
+| `shop-sessions` | `cache.redis` | partial | `Databases for Valkey Multi-node` | partial | `Managed Database for Redis Cluster` | partial | `Managed Valkey Multi-node` |
 | `shop-thumbnailer` | `serverless.function` | none |  | direct | `Serverless Functions` | none |  |
 | `shop-web-1` | `compute.vm` | direct | `Instances` | direct | `Instances` | direct | `Cloud Servers` |
 | `shop-web-1-data` | `storage.block` | direct | `Block Storage` | direct | `Block Storage` | direct | `Block Storage` |
@@ -210,8 +210,8 @@
 | Fit | Resources |
 |---|---|
 | direct | 6 |
-| partial | 2 |
-| none | 10 |
+| partial | 3 |
+| none | 9 |
 | total | 18 |
 
 ### Resources
@@ -229,7 +229,7 @@
 | `shop-orders` | `AWS::SQS::Queue` | `messaging.queue` | none |  |  | no offering in the `UpCloud` catalog for `messaging.queue` |
 | `shop-orders-dlq` | `AWS::SQS::Queue` | `messaging.queue` | none |  | dead-letter-queue-of `shop-orders` | no offering in the `UpCloud` catalog for `messaging.queue` |
 | `shop-product-search` | `AWS::OpenSearchService::Domain` | `search.opensearch` | none |  |  | no offering in the `UpCloud` catalog for `search.opensearch` |
-| `shop-sessions` | `AWS::ElastiCache::ReplicationGroup` | `cache.redis` | none |  |  | no offering in the `UpCloud` catalog for `cache.redis` |
+| `shop-sessions` | `AWS::ElastiCache::ReplicationGroup` | `cache.redis` | partial | `Managed Valkey Multi-node` |  | `Managed Valkey Multi-node` does not offer `sharding` |
 | `shop-thumbnailer` | `AWS::Lambda::Function` | `serverless.function` | none |  | depends-on `shop-assets` | no offering in the `UpCloud` catalog for `serverless.function` |
 | `shop-web-1` | `AWS::EC2::Instance` | `compute.vm` | direct | `Cloud Servers` | depends-on `shop-orders` | `Cloud Servers` offers every capability the resource uses |
 | `shop-web-1-data` | `AWS::EC2::Volume` | `storage.block` | direct | `Block Storage` (tie: `Block Storage Encrypted`) | attached-to `shop-web-1` | `Block Storage` offers every capability the resource uses |
@@ -240,6 +240,7 @@
 ### Required changes
 
 - `shop-eks`: `autoscaling` (not offered by `Managed Kubernetes`)
+- `shop-sessions`: `sharding` (not offered by `Managed Valkey Multi-node`)
 - `shop-web-asg`: `autoscaling`, `zone-high-availability` (not offered by `Cloud Servers`)
 
 ### Blockers
@@ -251,7 +252,6 @@
 - `shop-orders`: no offering in the `UpCloud` catalog for `messaging.queue`
 - `shop-orders-dlq`: no offering in the `UpCloud` catalog for `messaging.queue`
 - `shop-product-search`: no offering in the `UpCloud` catalog for `search.opensearch`
-- `shop-sessions`: no offering in the `UpCloud` catalog for `cache.redis`
 - `shop-thumbnailer`: no offering in the `UpCloud` catalog for `serverless.function`
 - `shop.example.com`: not classified
 - `shop-order-events`: affected by a blocker on `shop-orders`
@@ -268,7 +268,7 @@
 
 #### `shop`
 
-- Fit: 4 direct, 2 partial, 8 none
+- Fit: 4 direct, 3 partial, 7 none
 - Blockers:
   - `shop-catalog-docs`: no offering in the `UpCloud` catalog for `database.mongodb`
   - `shop-images`: no offering in the `UpCloud` catalog for `registry.container`
@@ -276,7 +276,6 @@
   - `shop-orders`: no offering in the `UpCloud` catalog for `messaging.queue`
   - `shop-orders-dlq`: no offering in the `UpCloud` catalog for `messaging.queue`
   - `shop-product-search`: no offering in the `UpCloud` catalog for `search.opensearch`
-  - `shop-sessions`: no offering in the `UpCloud` catalog for `cache.redis`
   - `shop.example.com`: not classified
 
 #### No workload

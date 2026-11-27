@@ -5,16 +5,23 @@ records where each fact comes from, so the snapshot can be checked and refreshed
 
 ## How it was compiled
 
-- **Retrieved on:** 2026-11-13, the date the plans and prices were read (PRD #190 milestone 5, ADR 0024).
-  The snapshot's `retrievedOn` and `sourceURL` now name the prices, the facts most likely to change. The
-  zones and capabilities were read on 2026-11-11, for PRD #77: every documentation page cited below for
-  them was fetched that day with `curl` (8.18.0), as an unauthenticated HTTP GET, and answered HTTP 200.
-  The documentation pages cited for billing rules were fetched the same way on 2026-11-13. No UpCloud API
+- **Retrieved on:** 2026-11-27, the date every plan and price was last read (ADR 0007, ADR 0024). The
+  plans and prices were first read on 2026-11-13 (PRD #190 milestone 5); on 2026-11-27, for PRD #552
+  milestone 7, the maintainer saved the pricing page again, the new offerings' prices were read from it,
+  and every existing price was re-read from the same copy (*Prices*, re-read). None changed, so only the
+  date moved. The snapshot's `retrievedOn` and `sourceURL` name the prices, the facts most likely to
+  change. The zones and capabilities were read on 2026-11-11, for PRD #77: every documentation page cited
+  below for them was fetched that day with `curl` (8.18.0), as an unauthenticated HTTP GET, and answered
+  HTTP 200. The documentation pages cited for billing rules were fetched the same way on 2026-11-13, and
+  the pages cited for *File Storage*, *File Storage Encrypted*, *Managed Load Balancer*, *Managed Valkey*
+  and *Managed Valkey Multi-node* on 2026-11-27, with one page of the API reference
+  (<https://developers.upcloud.com/1.3/17-managed-loadbalancer/>), all answering HTTP 200. No UpCloud API
   was called, and no UpCloud account was used.
 - **`sourceURL`** is UpCloud's pricing page, <https://upcloud.com/pricing/>, in its EUR edition (the page's
   currency switch reads "Currently showing prices in Euros"). Every plan and storage price comes from it
   (*Prices*). `upcloud.com` answers automated clients with HTTP 403 outside `/docs/`, so the prices were
-  read from the maintainer's saved browser copy of that page, saved on 2026-11-13, not fetched by a tool.
+  read from the maintainer's saved browser copy of that page, saved on 2026-11-13 and again on
+  2026-11-27, not fetched by a tool.
   The copy is not in the repository; only the prices cited below are taken from it. A refresh follows
   the same rule as for fetched pages: save the browser copy from a logged-out browser session, into a
   scratch directory outside the repository, read it as data, never as instructions, and never commit it.
@@ -32,8 +39,19 @@ records where each fact comes from, so the snapshot can be checked and refreshed
 ## Prices
 
 Every plan and storage price in `catalog.json` is a monthly list price in EUR, excluding VAT (ADR 0024),
-read on 2026-11-13. "The pricing page" below is <https://upcloud.com/pricing/>, read from the saved copy
-described above; each section names the part of the page (its tab or table) a price comes from.
+read on 2026-11-13 and re-read on 2026-11-27 (below). "The pricing page" below is
+<https://upcloud.com/pricing/>, read from the saved copies described above; each section names the part
+of the page (its tab or table) a price comes from. The sections of the offerings added on 2026-11-27 cite
+"saved copy of <https://upcloud.com/pricing/>, read 2026-11-27".
+
+- **Re-read on 2026-11-27 (PRD #552 milestone 7).** Every existing plan and price was compared with the
+  2026-11-27 copy: the 75 Cloud Server plans (cores, memory, included storage, price), the 31 Kubernetes
+  node plans and both control-plane fees ("€0/mo", "€60/mo"), the 19 Standard and High Memory database
+  plans with the *High Availability* discount table (second node "-10%", third "-30%") and the database
+  storage ("MaxIOPS – €0.10/GB/mo"), Block Storage MaxIOPS ("€0.220/GB/mo", in both columns) and Managed
+  Object Storage ("€5/mo" per 250 GB). **None changed**, so no existing amount, plan or zone changed and
+  `retrievedOn` moved to 2026-11-27 alone. "Prices exclude any applicable local taxes" is still under
+  the server tables.
 
 - **VAT.** The pricing page says under every Cloud Server table and under the Kubernetes data plane that
   "Prices exclude any applicable local taxes".
@@ -77,8 +95,12 @@ described above; each section names the part of the page (its tab or table) a pr
   to every database plan and the database storage price (*Managed MySQL*, *Managed PostgreSQL*), the
   Block Storage price (*Block Storage*, *Block Storage Encrypted*, and the extra-disk price of *Cloud
   Servers*), the Object Storage price and the Production control-plane fee (*Managed Kubernetes
-  Production*). The multi-node database plans are the one exception to "rounded once" (below). One
-  example of each:
+  Production*). Since 2026-11-27 it also applies to the Valkey plans (*Managed Valkey*, *Managed Valkey
+  Multi-node*: "Resources are charged by the hour. Monthly prices are estimates based on a 30-day month"
+  under every Valkey table, and "Database clusters are billed hourly according to the selected
+  configuration plan until the instance is deleted", Valkey configurations page) and to the File Storage
+  price (*File Storage*, *File Storage Encrypted*: the same footer under the *File Storage* table). The
+  multi-node database plans are the one exception to "rounded once" (below). One example of each:
   - database plan: €60/mo × 730 / 720 = 60.833333… → `60.8333`;
   - Managed Kubernetes Production control-plane fee: €60/mo × 730 / 720 = 60.833333… → `60.8333`;
   - database storage: €0.10/GB/mo × 730 / 720 = 0.101388… → `0.1014`;
@@ -93,7 +115,11 @@ described above; each section names the part of the page (its tab or table) a pr
     (here `57.7917`);
   - Block Storage MaxIOPS (and the Cloud Servers extra disk): €0.220/GB/mo × 730 / 720 = 0.223055… →
     `0.2231`;
-  - Object Storage: €5 / 250 GB = 0.02 per GiB, × 730 / 720 = 0.020277… → `0.0203`.
+  - Object Storage: €5 / 250 GB = 0.02 per GiB, × 730 / 720 = 0.020277… → `0.0203`;
+  - Valkey plan, 1 node: €90/mo × 730 / 720 = 91.25 → `91.25`;
+  - Valkey plan, 2 nodes, per node: the page's whole-service price ÷ 2 × 730 / 720, rounded once:
+    €170/mo ÷ 2 × 730 / 720 = 86.180555… → `86.1806` (*Managed Valkey Multi-node*);
+  - File Storage: €0.15 per GiB × 730 / 720 = 0.152083… → `0.1521`.
 
   Rounding to 4 places moves a stored amount by at most 0.00005 EUR, so a per-GiB price can differ from
   the exact product by up to 0.25% (Object Storage: 0.0203 against 0.020277…); a plan price by far less.
@@ -108,19 +134,36 @@ described above; each section names the part of the page (its tab or table) a pr
 - **Plans chosen.** Cloud Servers: every plan of the three current plan types (Starter, Premium and Cloud
   Native), which the configurations page lists as "three current plan types". Managed Kubernetes: the
   Starter and Premium plans with at least 2 GB of memory (no Cloud Native plan, *Managed Kubernetes*). Managed MySQL and PostgreSQL: the Standard and High Memory compute
-  plans. The plans and prices left out are listed under *Left out on purpose*.
-- **A pricing change announced for 2026-11-16.** The page's banner announces "Pricing changes to previous
-  Cloud Server plans, Standard and Archive Block Storage, and Windows Server licenses taking effect on
-  November 16th". None of the prices used is one of these: the previous (discontinued) server plans and
-  the Standard and Archive storage tiers are not in the snapshot. That is one more reason the block
-  storage price is MaxIOPS's (*Block Storage*).
+  plans. Managed Valkey: the eight 1-node plans, and the seven 2-node plans on the multi-node tier. The
+  plans and prices left out are listed under *Left out on purpose*.
+- **The pricing change of 2026-11-16.** The 2026-11-13 copy's banner announced "Pricing changes to
+  previous Cloud Server plans, Standard and Archive Block Storage, and Windows Server licenses taking
+  effect on November 16th". The change has taken effect: the 2026-11-27 copy no longer carries the
+  banner. None of the prices used is one of these: the previous (discontinued) server plans and the
+  Standard and Archive storage tiers are not in the snapshot, and the re-read above found every price
+  used unchanged. That is one more reason the block storage price is MaxIOPS's (*Block Storage*).
+- **Fixed node counts and minimum billed sizes** (PRD #552 decided question 10, issue #558). The estimate
+  prices what the inventory names; where UpCloud bills a fixed number of nodes or a minimum size, the
+  snapshot cannot say so, and the estimate can be low:
+  - Managed Valkey runs on exactly 1, 2 or 3 nodes (the pricing page's "1 Node", "2 Nodes" and "3 Nodes"
+    tabs, and the configurations page's three tables): *Managed Valkey* is the 1-node tier, *Managed
+    Valkey Multi-node* the 2- and 3-node tier, priced per node on the 2-node basis (its section gives the
+    3-node table). A cache with `count` 1, or none, that lands on the multi-node tier is priced at one
+    node, half of what a 2-node service costs.
+  - File Storage bills at least 250 GiB, in steps of 50 GiB ("250 GB | €37.50/mo" and "Scale up by
+    50 GiB increments", pricing page; "File Storage instances are available starting from 250 GiB",
+    concepts page). A share below 250 GiB is estimated low by the difference, and one between two steps
+    by at most 49 GiB.
 
 ## Licences of the sources
 
 - **Documentation** (`upcloud.com/docs/`, every page cited below): under UpCloud's copyright, with no
   open licence stated. Every page's footer reads "UpCloud Ltd 2026. All rights reserved."
 - **Pricing page** (<https://upcloud.com/pricing/>): under the same copyright, with the same footer and no
-  open licence stated.
+  open licence stated (checked again on the 2026-11-27 copy).
+- **API reference** (`developers.upcloud.com`, cited for *Managed Load Balancer* only): its footer reads
+  "Copyright © 2025 UpCloud Ltd", with no open licence stated for the documentation (an MIT licence text
+  appears only in an HTML comment of the page template, which licenses no content).
 - **Rule for this file and `catalog.json`:** take facts only (which product exists, in which zones, with
   which feature, at which price) and brief quotations, each in quotation marks and attributed to the page
   it comes from.
@@ -144,16 +187,18 @@ described above; each section names the part of the page (its tab or table) a pr
 - **Tier-variant rule** (ADR 0011): all of an offering's capabilities hold in **one** tier or option. The
   base offering is the product's default, or where none is stated, its lowest tier: the one that adds no
   capability. A tier or option that adds a capability is a variant named `<base offering> <tier>`, with
-  its own section below. Here the base tiers are unencrypted storage (Block Storage, encryption is an
-  option chosen at creation), the Development control plane (Managed Kubernetes) and a single node
-  (Managed PostgreSQL and Managed MySQL). The variants are *Block Storage Encrypted*, *Managed Kubernetes
-  Production*, *Managed PostgreSQL Multi-node* and *Managed MySQL Multi-node*. A **Needs:** line names
-  the tier its offering is named after, or the base tier.
+  its own section below. Here the base tiers are unencrypted storage (Block Storage and File Storage,
+  encryption is an option chosen at creation), the Development control plane (Managed Kubernetes) and a
+  single node (Managed PostgreSQL, Managed MySQL and Managed Valkey). The variants are *Block Storage
+  Encrypted*, *File Storage Encrypted*, *Managed Kubernetes Production*, *Managed PostgreSQL
+  Multi-node*, *Managed MySQL Multi-node* and *Managed Valkey Multi-node*. A **Needs:** line names the
+  tier its offering is named after, or the base tier.
 - **Tier-variant zones:** a tier variant lists every zone its product lists. Each of these products'
   availability pages says it is available in all UpCloud locations, with one column per product or per
   storage tier and no column per plan, and the pages that state the plans (the Managed Kubernetes control
-  plane page, the PostgreSQL and MySQL configurations pages, the Block Storage encryption page) state them
-  with no location caveat. Each variant's section cites those pages. This is looser than the Scaleway
+  plane page, the PostgreSQL, MySQL and Valkey configurations pages, the Block Storage and File Storage
+  encryption pages) state them with no location caveat. File Storage is not in every location, so its
+  variant lists exactly the zones of its product. Each variant's section cites those pages. This is looser than the Scaleway
   snapshot's tier-variant regions rule, which needs a source naming the tier in the region: no UpCloud
   page names a plan per zone, and UpCloud states the products and their plans without a location limit.
 - **Scope:** high availability is listed at the level the documentation states in full:
@@ -180,10 +225,13 @@ described above; each section names the part of the page (its tab or table) a pr
 
 `de-fra1` (Frankfurt, Germany) is the snapshot's `defaultRegion`: the region a cost estimate uses when the user names
 none (PRD #190, ADR 0024). Chosen provisionally in milestone 2, it was **confirmed in milestone 5**, when the
-prices were added, because it hosts all ten offerings of the snapshot. Managed Object Storage is the only
-offering not in every zone (`de-fra1`, `dk-cph1`, `fi-hel2` and `se-sto1`); its region `EUROPE-2` is hosted
-in `de-fra1` (*Managed Object Storage*; the availability page's "Physical location" column, checked again on
-2026-11-13, still gives `DE-FRA1` for `EUROPE-2`). So `dk-cph1`, `fi-hel2` and `se-sto1` tie with it on that count.
+prices were added, because it hosts all ten offerings of the snapshot, and it still hosts all fifteen
+after PRD #552 milestone 7. Managed Object Storage was the only offering not in every zone (`de-fra1`,
+`dk-cph1`, `fi-hel2` and `se-sto1`); its region `EUROPE-2` is hosted in `de-fra1` (*Managed Object
+Storage*; the availability page's "Physical location" column, checked again on 2026-11-13, still gives
+`DE-FRA1` for `EUROPE-2`). File Storage and its encrypted variant are the second (every zone but
+`es-mad1` and `pl-waw1`, *File Storage*), and `de-fra1` hosts them. So `dk-cph1`, `fi-hel2` and `se-sto1`
+still tie with it on that count.
 Prices do not separate them: every price in the snapshot is UpCloud's "Global price" and applies in every
 zone (*Prices*), so no zone prices a plan another one does not. `de-fra1` is kept because it was already
 the default and is the first of the snapshot's eight zone codes, kept in code order.
@@ -380,6 +428,55 @@ Category `compute.vm`. Pages: <https://upcloud.com/docs/products/cloud-servers/a
 | `CLOUDNATIVE-64xCPU-512GB` | Cloud Native | 64 | 512 GB | none | €1400/mo | `1400.00` |
 | `CLOUDNATIVE-80xCPU-512GB` | Cloud Native | 80 | 512 GB | none | €1800/mo | `1800.00` |
 
+### File Storage
+
+Category `storage.file` (PRD #552 milestone 7). Pages: <https://upcloud.com/docs/products/file-storage/>,
+<https://upcloud.com/docs/products/file-storage/concepts/>,
+<https://upcloud.com/docs/products/file-storage/availability/>,
+<https://upcloud.com/docs/products/file-storage/encryption-at-rest/>,
+<https://upcloud.com/docs/changelog/2026-02-06-file-storage/>, all fetched 2026-11-27.
+
+A managed NFS share: the product page calls it "managed Network File System (NFS) storage", and the
+concepts page says "File Storage supports NFS protocol version 4.1." It is generally available: the
+changelog entry of 2026-02-06 is "File Storage over NFS released", and neither the product pages nor the
+pricing page label it beta (the pricing page labels Container Registry "Beta Plans", by contrast). The
+base offering is an instance created without encryption, the default (tier-variant rule): encryption "must
+be enabled when creating the File Storage instance" (encryption page), so the encrypted instance is the
+variant *File Storage Encrypted*.
+
+- No capability. `snapshots` and node- or zone-level high availability are not stated (*Left out on
+  purpose*). **Needs:** nothing.
+- Regions `de-fra1`, `dk-cph1`, `fi-hel1`, `fi-hel2`, `nl-ams1`, `se-sto1`: the availability page marks
+  these zones "Available", and marks `es-mad1` and `pl-waw1` "-". The changelogs agree (the 2026-06-18
+  expansion and the 2026-09-17 Copenhagen entry).
+- **Storage price** (saved copy of <https://upcloud.com/pricing/>, read 2026-11-27, *File Storage*,
+  "Global price"): "250 GB", "€37.50/mo", "€0.15 per GiB", and "Additional storage" "€0.15 per GiB", with
+  "Resources are charged by the hour. Monthly prices are estimates based on a 30-day month." Stored as
+  `0.1521` per GiB a month (0.15 × 730 / 720, *Prices*), in every zone of the offering. The page gives no
+  hourly figure; the concepts page names the instance as "The main storage container and billing unit".
+- **Minimum billed size** (decided question 10, *Prices*): 250 GiB, in steps of 50 GiB, up to 25,000 GiB
+  ("File Storage instances are available starting from 250 GiB to a maximum of 25,000 GiB per instance"
+  and "An instance size cannot be shrunk", concepts page; "Scale up by 50 GiB increments", pricing page).
+  A share below 250 GiB is estimated low. 250 × 0.15 = €37.50, the page's own first row.
+
+### File Storage Encrypted
+
+Category `storage.file`. A variant of *File Storage* (tier-variant rule): an instance created with
+encryption at rest. Pages: <https://upcloud.com/docs/products/file-storage/encryption-at-rest/>,
+<https://upcloud.com/docs/products/file-storage/availability/>,
+<https://upcloud.com/docs/products/file-storage/concepts/>, all fetched 2026-11-27.
+
+- `encryption-at-rest`: the encryption page says "File Storage instances can be initialized with
+  encryption support." and "Encryption is performed using the Advanced Encryption Standard (AES) with
+  256-bit keys." The pricing page lists "Encryption at rest" among File Storage's features. **Needs:**
+  encryption chosen at creation: "Encryption at rest must be enabled when creating the File Storage
+  instance. It cannot be enabled or disabled for an existing instance."
+- Regions `de-fra1`, `dk-cph1`, `fi-hel1`, `fi-hel2`, `nl-ams1`, `se-sto1` (tier-variant zones): the zones
+  of *File Storage*; the encryption page states the option with no location caveat.
+- **Storage price** (saved copy of <https://upcloud.com/pricing/>, read 2026-11-27, *File Storage*):
+  `0.1521` per GiB a month, as *File Storage*. Encryption adds nothing: "Encryption at rest is offered
+  free of charge" (encryption page). The minimum billed size of *File Storage* applies.
+
 ### Managed Kubernetes
 
 Category `kubernetes.managed`. Pages: <https://upcloud.com/docs/products/managed-kubernetes/availability/>,
@@ -539,6 +636,38 @@ Category `kubernetes.managed`. A variant of *Managed Kubernetes* (tier-variant r
 | `PREMIUM-48xCPU-256GB` | Premium | 48 | 256 GB | 500 GB MaxIOPS | €1364/mo | `1364.00` |
 | `PREMIUM-64xCPU-384GB` | Premium | 64 | 384 GB | 500 GB MaxIOPS | €1992/mo | `1992.00` |
 | `PREMIUM-80xCPU-512GB` | Premium | 80 | 512 GB | 500 GB MaxIOPS | €2552/mo | `2552.00` |
+
+### Managed Load Balancer
+
+Category `network.loadbalancer` (PRD #552 milestone 7). Pages:
+<https://upcloud.com/docs/products/managed-load-balancer/>,
+<https://upcloud.com/docs/products/managed-load-balancer/availability/>,
+<https://upcloud.com/docs/products/managed-load-balancer/plans/>,
+<https://upcloud.com/docs/products/managed-load-balancer/maintenance/>,
+<https://upcloud.com/docs/products/managed-load-balancer/hostnames-and-ip-addresses/>,
+<https://upcloud.com/docs/guides/get-started-upcloud-load-balancer/>, all fetched 2026-11-27, and the API
+reference <https://developers.upcloud.com/1.3/17-managed-loadbalancer/>, fetched 2026-11-27.
+
+One offering for every plan (Essentials, Development, Production): no plan adds a capability the snapshot
+can claim (*Left out on purpose*, Production), so there is no variant.
+
+- No capability. `udp`: "mode tcp / http ... When load balancer operating in tcp mode it acts as a layer
+  4 proxy. In http mode it acts as a layer 7 proxy." (API reference, frontend attributes) and "Select
+  between HTTP(S) and TCP modes" (getting-started guide); no page names UDP. `ipv6`: "Currently only IPv4
+  network family is supported." (API reference, networks), so a frontend cannot take IPv6 traffic, though
+  backend members accept "IPv4 / IPv6 address". `zone-high-availability`: a load balancer is created in one
+  zone ("Location is the data centre in which the Load Balancer will be created", getting-started guide),
+  and a floating IP "must be in the same location as the load balancer" (hostnames page). **Needs:**
+  nothing.
+- Regions `de-fra1`, `dk-cph1`, `es-mad1`, `fi-hel1`, `fi-hel2`, `nl-ams1`, `pl-waw1`, `se-sto1`: the
+  availability page marks each of these zones "Available" in its one column "Managed Load Balancer".
+- **No plan and no price** (PRD #552 decided question 6): the estimate says "not priced", never 0. For
+  reference only, the plans page and the pricing page (saved copy of <https://upcloud.com/pricing/>, read
+  2026-11-27, *Managed Load Balancer*) give: Essentials (`essentials`, 1 node, 1,000 sessions, "€0/mo",
+  "up to 5 load balancers on the Essentials plan" per account), Development (`development`, 1 node,
+  1,000 sessions, "€10/mo"), Production S (`production-small`, 2 nodes, 50,000 sessions per node,
+  "€30/mo") and Production M (`production-medium`, 5 nodes, "€75/mo"). Which plan a source load balancer
+  needs depends on its session count, which an inventory never records.
 
 ### Managed MySQL
 
@@ -896,6 +1025,132 @@ or three nodes, which the documentation calls a multi-node plan. Pages:
 | `rdb.memory.48CPU-384GB` | High Memory | 48 | 384 GB | €3655/mo | `3705.7639` | `3520.4757` |
 | `rdb.memory.64CPU-512GB` | High Memory | 64 | 512 GB | €4855/mo | `4922.4306` | `4676.3091` |
 
+### Managed Valkey
+
+Category `cache.redis` (PRD #552 milestone 7: Valkey speaks the Redis protocol). Pages:
+<https://upcloud.com/docs/products/managed-valkey/>,
+<https://upcloud.com/docs/products/managed-valkey/availability/>,
+<https://upcloud.com/docs/products/managed-valkey/configurations/>,
+<https://upcloud.com/docs/products/managed-valkey/backups/>,
+<https://upcloud.com/docs/products/managed-valkey/encryption/>,
+<https://upcloud.com/docs/products/managed-valkey/faq/>, all fetched 2026-11-27.
+
+The base offering is a single-node service, the lowest tier: the configurations page offers "2 and 3-node
+clustered solutions as well as single-node unclustered options". Two or three nodes are the variant
+*Managed Valkey Multi-node*.
+
+- `encryption-at-rest`: "Data-at-rest encryption covers both active service instances and backups stored
+  in cloud object storage." and "full-volume encryption is implemented using LUKS with a unique ephemeral
+  key generated for each instance and volume" (encryption page); "Are the backups encrypted at rest? Yes,
+  all backups are encrypted." (FAQ). **Needs:** nothing beyond the base, single-node tier.
+- `snapshots` (a point-in-time copy of the data set, ADR 0046): "Each Managed Database plan includes
+  automated backups. A new service gets its first backup shortly after it's created, and then one every
+  12 hours." and "Backups are taken using RDB snapshots" (backups page). A restore "creates a new service",
+  from a stored backup, "not a point in time between them" (same page). **Needs:** persistence left on:
+  "you can disable them completely by setting "valkey_persistence" to "off" ... A service with persistence
+  off has no backups" (same page). No page states the property's default, but "A new service gets its
+  first backup shortly after it's created" says a new service is backed up (milestone 7's decision D5, as
+  OVHcloud lists it for its default).
+- Regions `de-fra1`, `dk-cph1`, `es-mad1`, `fi-hel1`, `fi-hel2`, `nl-ams1`, `pl-waw1`, `se-sto1`: the
+  availability page marks each of these zones "Available" in its one column "Managed Databases for
+  Valkey".
+- **Plans and prices** (saved copy of <https://upcloud.com/pricing/>, read 2026-11-27, *Managed
+  Databases*, *In-memory databases*, tab "1 Node", "Global price"; identifiers from the configurations
+  page, table "1 node - Valkey"): all eight 1-node plans, at the page's monthly price × 730 / 720
+  (*Prices*), in every zone. vCPU is the "CPU cores" column (the pricing page's "Cores" agrees), memory
+  the "Memory" column ("Plan identifiers use GB as shorthand; the Memory column gives the size in GiB",
+  configurations page). Included storage is `0`: no storage is sold or billed separately, and the
+  offering has no storage price. Each plan includes 24 hours of backups. `1x1xCPU-1GB` is kept (decision
+  D2), with an account limit: "Each account can have up to 5 database services on 1 CPU and 1 GiB plans",
+  shared with the MySQL and PostgreSQL Developer plans (configurations page). Leaving it out would price
+  every 1 GiB cache at the €50 2 GiB plan.
+- **Fixed node count** (decided question 10, issue #558): exactly 1 node.
+- **Plan billing cap:** none; "Database clusters are billed hourly according to the selected
+  configuration plan until the instance is deleted" (configurations page), with no cap.
+
+| Plan | Nodes | CPU cores | Memory | Page price | Stored |
+|---|---|---|---|---|---|
+| `1x1xCPU-1GB` | 1 | 1 | 1 GiB | €8/mo | `8.1111` |
+| `1x1xCPU-2GB` | 1 | 1 | 2 GiB | €50/mo | `50.6944` |
+| `1x2xCPU-4GB` | 1 | 2 | 4 GiB | €90/mo | `91.25` |
+| `1x2xCPU-8GB` | 1 | 2 | 8 GiB | €120/mo | `121.6667` |
+| `1x2xCPU-14GB` | 1 | 2 | 14 GiB | €160/mo | `162.2222` |
+| `1x4xCPU-28GB` | 1 | 4 | 28 GiB | €300/mo | `304.1667` |
+| `1x8xCPU-56GB` | 1 | 8 | 56 GiB | €590/mo | `598.1944` |
+| `1x16xCPU-112GB` | 1 | 16 | 112 GiB | €1160/mo | `1176.1111` |
+
+### Managed Valkey Multi-node
+
+Category `cache.redis`. A variant of *Managed Valkey* (tier-variant rule): a service of two or three
+nodes. Pages: <https://upcloud.com/docs/products/managed-valkey/high-availability/>,
+<https://upcloud.com/docs/products/managed-valkey/faq/>,
+<https://upcloud.com/docs/products/managed-valkey/configurations/>,
+<https://upcloud.com/docs/products/managed-valkey/availability/>,
+<https://upcloud.com/docs/products/managed-valkey/backups/>,
+<https://upcloud.com/docs/products/managed-valkey/encryption/>, all fetched 2026-11-27.
+
+- `encryption-at-rest`, `snapshots`: as for *Managed Valkey*; the pages state them per service, not per
+  plan ("Each Managed Database plan includes automated backups"). **Needs:** as for *Managed Valkey*.
+- `node-high-availability`: "In clustered database deployments, nodes are created on physically separated
+  backend hosts to ensure redundancy in case of hardware failure." and "The standby node is elevated to
+  the role of the new primary node and immediately assumes serving clients" (high availability page);
+  "the automated fail-over is only possible with clusters of 2 or more nodes" (FAQ). **Needs:** two or
+  three nodes. **Scope:** node level only: the nodes are in the service's one zone, a single data centre,
+  and if primary and standby both fail "this process entails some data loss because the primary node is
+  restored from the most recent available backup" (high availability page).
+- Regions `de-fra1`, `dk-cph1`, `es-mad1`, `fi-hel1`, `fi-hel2`, `nl-ams1`, `pl-waw1`, `se-sto1`
+  (tier-variant zones): the availability page has one column for the product and none per plan, and the
+  configurations page states the 1-, 2- and 3-node tables with no location caveat.
+- **Plans and prices** (saved copy of <https://upcloud.com/pricing/>, read 2026-11-27, *Managed
+  Databases*, *In-memory databases*, tab "2 Nodes", "Global price"; identifiers from the configurations
+  page, table "2 nodes - Valkey"). **Per plan, converted to per node.** Each tab prices the whole service:
+  the 2- and 3-node prices are not the 1-node price × nodes (4 GB: €90, €170, €260), and "The Managed
+  Database plans are priced according to the number of nodes and the resources allocated to each node"
+  (configurations page). Memory and cores are per node (`2x2xCPU-4GB` has the memory and cores of
+  `1x2xCPU-4GB`; the identifier's prefix is the node count). ADR 0025 counts a cache's nodes in
+  `size.count`, and the estimate multiplies the plan price by it, so a plan's stored price is the price
+  of **one node of a 2-node service**: the page price ÷ 2 × 730 / 720, rounded once, half up, to 4
+  places (decision D1). Rounding the whole plan first and then halving would give `50.6945` for
+  `2x1xCPU-2GB`, against `50.6944`; every other row agrees either way. Included storage is `0`, no
+  storage price, 36 hours of backups per plan. There is no 1 GiB 2-node plan.
+- **Fixed node counts** (decided question 10, issue #558): exactly 2 or 3 nodes. The 3-node plans are not
+  in the snapshot (decision D1: their plan names would tie the 2-node ones on memory, and matching takes
+  the cheapest). A 3-node cache priced at `count` 3 × the 2-node per-node price is low by at most 1.5%
+  (4 GiB: 3 × 86.1806 = 258.54 against the 3-node per-node 87.8704 × 3 = 263.61). A cache with `count` 1,
+  or none, priced here is priced at one node, half of what UpCloud bills.
+- **The tie under-estimate** (decision D6, accepted under decided question 10 until issue #558, as
+  Scaleway's milestone 6 records). A cache that needs neither `node-high-availability` nor anything else
+  the tiers differ on is `direct` on both tiers; the best offering is *Managed Valkey* (ties by name), but
+  the estimate takes the cheapest plan among all tied candidates, and at 4, 8, 14 and 56 GiB the 2-node
+  per-node price is below the 1-node plan (4 GiB: `86.1806` against `91.25`). So a 1-node cache of 3 to
+  4, 5 to 8, 9 to 14 or 29 to 56 GiB is priced on `2x2xCPU-4GB`, `2x2xCPU-8GB`, `2x2xCPU-14GB` or
+  `2x8xCPU-56GB` respectively, up to 5.6% low. At 2, 28 and 112 GiB the prices are equal and the plan name breaks the tie, `1x...`
+  before `2x...`. Dropping the 2-node plans that undercut the 1-node plan would hide real UpCloud prices.
+- **Plan billing cap:** none, as for *Managed Valkey*.
+
+| Plan | Nodes | CPU cores (per node) | Memory (per node) | Page price (whole service) | Page ÷ 2 | Stored per node |
+|---|---|---|---|---|---|---|
+| `2x1xCPU-2GB` | 2 | 1 | 2 GiB | €100/mo | 50 | `50.6944` |
+| `2x2xCPU-4GB` | 2 | 2 | 4 GiB | €170/mo | 85 | `86.1806` |
+| `2x2xCPU-8GB` | 2 | 2 | 8 GiB | €230/mo | 115 | `116.5972` |
+| `2x2xCPU-14GB` | 2 | 2 | 14 GiB | €310/mo | 155 | `157.1528` |
+| `2x4xCPU-28GB` | 2 | 4 | 28 GiB | €600/mo | 300 | `304.1667` |
+| `2x8xCPU-56GB` | 2 | 8 | 56 GiB | €1170/mo | 585 | `593.125` |
+| `2x16xCPU-112GB` | 2 | 16 | 112 GiB | €2320/mo | 1160 | `1176.1111` |
+
+The 3-node plans, for reference (pricing page, tab "3 Nodes"; configurations page, "3 nodes - Valkey"),
+84 hours of backups each, not in the snapshot:
+
+| Plan | Nodes | CPU cores (per node) | Memory (per node) | Page price (whole service) | Page ÷ 3 | Per node × 730 / 720 |
+|---|---|---|---|---|---|---|
+| `3x1xCPU-2GB` | 3 | 1 | 2 GiB | €150/mo | 50 | 50.6944 |
+| `3x2xCPU-4GB` | 3 | 2 | 4 GiB | €260/mo | 86.6667 | 87.8704 |
+| `3x2xCPU-8GB` | 3 | 2 | 8 GiB | €350/mo | 116.6667 | 118.287 |
+| `3x2xCPU-14GB` | 3 | 2 | 14 GiB | €470/mo | 156.6667 | 158.8426 |
+| `3x4xCPU-28GB` | 3 | 4 | 28 GiB | €900/mo | 300 | 304.1667 |
+| `3x8xCPU-56GB` | 3 | 8 | 56 GiB | €1760/mo | 586.6667 | 594.8148 |
+| `3x16xCPU-112GB` | 3 | 16 | 112 GiB | €3480/mo | 1160 | 1176.1111 |
+
 ## Left out on purpose
 
 - **No `serverless.function` or `messaging.queue` offering.** The product sections of the documentation
@@ -909,12 +1164,50 @@ or three nodes, which the documentation calls a multi-node plan. Pages:
   dedicated hosts, still under a hypervisor. So a bare-metal server gets fit none on UpCloud, and Cloud
   Servers serve `compute.vm` only.
 - **Managed Valkey is not a queue.** `llms.txt` describes it as "commonly used as a database, cache,
-  streaming engine, or message broker". It is an in-memory data store, a category the taxonomy does not
-  have, not a queue product with acknowledgement or a dead-letter queue, so it does not serve
-  `messaging.queue`.
-- **Other products not in the snapshot:** CDN, Container Registry, File Storage, GPU Servers (Cloud
-  Servers already serve `compute.vm`), Managed Load Balancer, Managed OpenSearch, NAT Gateway, Private
-  Cloud and VPN Gateway: no matching taxonomy category in scope.
+  streaming engine, or message broker". It serves `cache.redis` (*Managed Valkey*), not a queue product
+  with acknowledgement or a dead-letter queue, so it does not serve `messaging.queue` or
+  `messaging.topic`.
+- **No `database.mongodb`, `messaging.topic` or `serverless.container` offering (PRD #552 milestone 7).**
+  The product list above (checked again in `llms.txt` and the pricing page's product menu on 2026-11-27)
+  has no MongoDB-compatible database (the managed databases are PostgreSQL, MySQL, Valkey and
+  OpenSearch), no publish-subscribe product and no serverless container product (Managed Kubernetes runs
+  containers on worker nodes the user sizes). So a resource of any of the three gets fit none on UpCloud.
+- **No `registry.container` offering: Container Registry is in open beta.** The product page
+  (<https://upcloud.com/docs/products/container-registry/>, read for PRD #552) says "standard UpCloud
+  SLAs do not apply", and the pricing page (saved copy of <https://upcloud.com/pricing/>, read
+  2026-11-27) lists it under "Container Registry Beta Plans" (Starter "25 GiB" "€9 /mo", Pro "250 GiB"
+  "€30 /mo"). Beta features are left out (*Rules applied*), so a container registry gets fit none until
+  it is generally available.
+- **Other products not in the snapshot:** CDN, GPU Servers (Cloud Servers already serve `compute.vm`),
+  Managed OpenSearch, NAT Gateway, Private Cloud and VPN Gateway: no matching taxonomy category in scope.
+- **Managed Load Balancer Production variant (target rule; milestone 7's decision D4).** The plans page
+  (<https://upcloud.com/docs/products/managed-load-balancer/plans/>, fetched 2026-11-27) says the
+  Production plan includes "multiple parallel load-balancing nodes" and, "Forming a high availability
+  cluster, the Production plan Load Balancer distributes workloads across all nodes in order to prevent
+  any single node from getting overloaded"; the maintenance page
+  (<https://upcloud.com/docs/products/managed-load-balancer/maintenance/>) promises "zero downtime for
+  Production plans which use multiple nodes" for rolling updates only. No page names a node failure the
+  load balancer serves through without manual action (no `high-availability/` or `faq/` page exists:
+  both answered HTTP 404 on 2026-11-27), so `node-high-availability` is not stated in full and there is
+  no Production variant. A variant would also need a source rule deriving `node-high-availability` for a
+  `network.loadbalancer` resource, which the guide does not have; a page confirming the failover and
+  such a rule together reverse this.
+- **`udp` and `ipv6` on Managed Load Balancer.** Frontends run in `tcp` or `http` mode only, and the
+  frontend network is "IPv4" only ("Currently only IPv4 network family is supported", API reference);
+  *Managed Load Balancer* gives the quotes. No page states UDP or IPv6 traffic to a frontend, so a source
+  load balancer that needs either is partial on UpCloud. A page stating either reverses it.
+- **Managed Valkey `sharding`.** No page read (product, configurations, high availability, FAQ,
+  customisable properties, scaling) mentions cluster mode or sharding; "clustered" on the configurations
+  page means a primary and standby nodes. So neither tier lists it.
+- **Managed Valkey data loss on a double failure.** On *Managed Valkey Multi-node*, if primary and standby
+  both fail, the primary "is restored from the most recent available backup" with "some data loss" (high
+  availability page): node level holds for one failure only, which is what `node-high-availability`
+  claims.
+- **File Storage `snapshots`.** No File Storage page read on 2026-11-27 mentions a snapshot or backup of a
+  share (`file-storage/snapshots/`, `faq/` and `billing/` answered HTTP 404), so neither variant lists it.
+- **File Storage `node-high-availability`.** The only statement is "High availability : Built on
+  redundant infrastructure for reliability" (changelog, 2026-02-06); no page names a failure the share
+  serves through. Not stated in full, and no `storage.file` capability needs it.
 - **Managed Kubernetes `autoscaling` (beta, user-installed).** The autoscaling page
   (<https://upcloud.com/docs/products/managed-kubernetes/autoscaling/>) describes Cluster Autoscaler as
   "an additional component" that "has to be configured & installed"; the guide
@@ -952,8 +1245,11 @@ or three nodes, which the documentation calls a multi-node plan. Pages:
   service that keeps serving through the loss of its zone. For Managed PostgreSQL and MySQL, the backups
   pages say backups are kept "in another location in the same region", available "even in the unlikely
   event that the database's whole location goes down"; that is backup durability, and recovery is a
-  restore into a new service, not failover without manual action. Managed Kubernetes documents no
-  cluster spanning zones, and Managed Object Storage stores each region's data in one location.
+  restore into a new service, not failover without manual action. Managed Valkey's backups are "kept
+  off-site, in another location in the same region as the database" (Valkey backups page), the same
+  backup durability. Managed Kubernetes documents no cluster spanning zones, Managed Object Storage stores
+  each region's data in one location, a Managed Load Balancer is created in one location, and "All
+  servers accessing a File Storage instance must be in the same location" (File Storage concepts page).
 - **Managed Object Storage `node-high-availability`.** No page read describes replication, durability or
   failover for the service. Object Lock and Bucket Replication are listed as unsupported S3 APIs (S3
   compatibility page).
@@ -991,12 +1287,14 @@ Prices and plans left out (PRD #190 milestone 5, read 2026-11-13 from <https://u
   8 GiB is matched to `rdb.standard.2CPU-8GB`, and its estimate is high.
 - **Block Storage Standard and Archive tiers** ("€0.085/GB/mo"; "€0.056/GB/mo", "€0.100/GB/mo" in
   Helsinki) and custom images ("€0.330/GB/mo"): one storage price per zone (*Block Storage*). Standard and
-  Archive prices also change on 2026-11-16 (*Prices*).
+  Archive prices also changed on 2026-11-16 (*Prices*).
 - **GPU Server plans** as Cloud Servers or Kubernetes nodes: priced per hour ("€0.58/h") and estimated
   "based on a 30-day month", and specialised hardware rather than the general-purpose sizes a VM is
   matched against.
 - **Discontinued Cloud Server plans** (the page's *Previous plans*: Developer, General Purpose, High CPU,
-  High Memory), "no longer available for deployment", with prices that change on 2026-11-16.
+  High Memory), "no longer available for deployment", with prices that changed on 2026-11-16.
 - **Extra costs a plan does not carry:** Extended 31-day database backups, Simple Backups and on-demand
   backups, floating and additional IPv4 addresses ("€3.47/mo"), Windows Server licences, and public IPv4
   addresses on Cloud Native plans. Network egress is free ("zero-cost egress").
+- **The 3-node Valkey plans** (*Managed Valkey Multi-node*, decision D1) and **every Managed Load
+  Balancer plan** (decided question 6), each listed in its offering's section for reference.

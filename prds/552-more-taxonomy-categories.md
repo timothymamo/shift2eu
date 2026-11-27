@@ -333,7 +333,7 @@ All criteria are pinned by tests that run offline under `make test` or `make tes
 - [x] Given a resource that lists `sharding` or `udp`, the inventory is read; an offering that does not
   list it gives fit `partial` naming it as missing (a UDP load balancer on Scaleway is `partial`, missing
   `udp`).
-- [ ] Inventories with only the nine existing categories keep their reports: in milestones 1 to 4 no
+- [x] Inventories with only the nine existing categories keep their reports: in milestones 1 to 4 no
   existing golden file of such an inventory changes (the e2e `assess-*` goldens, the report adapters'
   goldens; the `examples/` goldens change in milestone 1 only because the samples gain resources of the
   new categories); in milestones 5 to 7 such a golden may change only in its catalog line's or `snapshot`
@@ -348,12 +348,12 @@ All criteria are pinned by tests that run offline under `make test` or `make tes
 
 **Mapping and report**
 
-- [ ] Given a resource of a new category and a target with no offering for it, its fit is `none`, the
+- [x] Given a resource of a new category and a target with no offering for it, its fit is `none`, the
   reason is "no offering in the <target> catalog for `<category>`", and it is listed as a blocker. This
   holds for `database.mongodb`, `serverless.container` and `registry.container` on UpCloud, and for
   `messaging.topic` and `serverless.container` on OVHcloud and UpCloud, and for `storage.file` on
   OVHcloud (milestone 5: general availability not confirmed).
-- [ ] Given a resource of each new category and a target that serves it, the report names the best
+- [x] Given a resource of each new category and a target that serves it, the report names the best
   offering, with fit `direct` when the offering lists every capability the resource lists and
   `partial` naming each missing capability otherwise. A test per target pins the best offering for a
   resource with no capability and for one with each capability a tier variant exists for (for example
@@ -374,7 +374,7 @@ All criteria are pinned by tests that run offline under `make test` or `make tes
   usage-priced"; a `network.loadbalancer` or `registry.container` resource with a fit is not estimated
   with reason "not priced" in the Markdown and HTML reports and `not-priced` in the JSON report. None is
   counted as 0 in a total.
-- [ ] The per-category estimate table in `test/examples` has a representative resource for every new
+- [x] The per-category estimate table in `test/examples` has a representative resource for every new
   priced category each snapshot offers, and pins its plan and amount.
 
 **Inventory guide**
@@ -403,17 +403,17 @@ All criteria are pinned by tests that run offline under `make test` or `make tes
 
 **Catalogs**
 
-- [ ] Each target's catalog serves the new categories its column under *The new categories* names, each
+- [x] Each target's catalog serves the new categories its column under *The new categories* names, each
   with at least one offering (`targettest` *category* check), only in declared EU regions (*regions*
   check), and no other new category: `targettest` only asserts that the listed categories are served, so
   the parsed-catalog golden below is what pins the absence of the others.
-- [ ] Every new offering has its own section in its target's `SOURCES.md`, naming the pages it comes
+- [x] Every new offering has its own section in its target's `SOURCES.md`, naming the pages it comes
   from, the fact behind each capability, region and price, and each source's licence (the existing
   per-offering section test). Every capability that holds on some plans only is on a tier variant
   (ADR 0011), and `zone-high-availability` is listed only where a quoted source says the service keeps
   serving through the loss of a zone.
-- [ ] A golden file per target pins the parsed catalog with the new offerings.
-- [ ] Each target's `SOURCES.md` *Left out on purpose* names every new category it does not serve, with
+- [x] A golden file per target pins the parsed catalog with the new offerings.
+- [x] Each target's `SOURCES.md` *Left out on purpose* names every new category it does not serve, with
   the pages checked (for example UpCloud's Container Registry, open beta).
 - [ ] *Review:* no price in a snapshot comes from a page that was neither fetched from public
   documentation nor saved by the maintainer; no saved page is committed (`TestNoTrackedSavedPages`).
@@ -525,7 +525,7 @@ fit `none` with "no offering in the <target> catalog", which is already more pre
    without `sharding` and a MongoDB database without `node-high-availability` tie the base and the
    multi-node tier, so the estimate takes the tier's lower per-node price; decided question 10 accepts
    that under-estimate until issue #558, and `SOURCES.md` records it.
-7. [ ] **UpCloud catalog.** Offerings for `cache.redis` (Managed Valkey: 1 node, and a multi-node
+7. [x] **UpCloud catalog.** Offerings for `cache.redis` (Managed Valkey: 1 node, and a multi-node
    variant with `node-high-availability`), `network.loadbalancer` (Managed Load Balancer, and a
    Production variant if its failover is confirmed; `udp` only if a page states it) and `storage.file` (File Storage),
    with plans and prices for Valkey and File Storage. **Gated on the maintainer saving
@@ -533,6 +533,17 @@ fit `none` with "no offering in the <target> catalog", which is already more pre
    Valkey table and the File Storage table (and the Managed Load Balancer table only if load balancers
    become priced). An existing price or plan the re-read page shows changed is updated to its current
    value (*Acceptance criteria*, goldens). Depends on 1.
+   Done on 2026-11-27 from the maintainer's saved pricing page, with five offerings: *Managed Valkey*
+   (eight 1-node plans, `encryption-at-rest`, `snapshots`) and *Managed Valkey Multi-node* (the seven
+   2-node plans per node, plus `node-high-availability`); one unpriced *Managed Load Balancer* with no
+   capability; *File Storage* and *File Storage Encrypted* (`encryption-at-rest`), €0.15 a GiB, not in
+   `es-mad1` or `pl-waw1`. Departures (*To be checked*): no Production variant of the load balancer, since
+   its failover is not confirmed; neither `udp` nor `ipv6` on it; the 3-node Valkey plans stay out, so a
+   3-node cache is priced at most 1.5% low; and a cache that needs nothing the tiers differ on ties both
+   tiers, so the estimate can take the 2-node per-node price, up to 5.6% below the 1-node plan, which
+   decided question 10 accepts until issue #558 and `SOURCES.md` records. Every existing price was
+   re-read from the same copy and none changed, so the snapshot's retrieved date moves to 2026-11-27
+   (UpCloud's `SOURCES.md`).
 8. [ ] **Comparison, docs and close.** An e2e fixture inventory with a resource of every new category,
    assessed against all three targets, golden for Markdown and JSON, so each target's `direct`,
    `partial` and `none` for the new categories show side by side; the guide's *Everything else on AWS*
@@ -978,4 +989,22 @@ text as the decision)
     plan records `vcpus`.
 - Milestone 7: that Managed Load Balancer Production fails over without manual action, and whether any
   frontend mode forwards UDP; File Storage node-level redundancy; whether UpCloud's multi-node Valkey
-  plans are priced per plan or per node, and that each plan gives a vCPU count.
+  plans are priced per plan or per node, and that each plan gives a vCPU count. Checked on 2026-11-27
+  (the maintainer's saved copy of <https://upcloud.com/pricing/>, UpCloud's documentation and one page
+  of its API reference, <https://developers.upcloud.com/1.3/17-managed-loadbalancer/>; sources in
+  UpCloud's `SOURCES.md`):
+  - Load Balancer Production failover: **not confirmed**. The plans page says the Production plan's
+    nodes form "a high availability cluster" that "distributes workloads across all nodes in order to
+    prevent any single node from getting overloaded", and the maintenance page promises "zero downtime"
+    for rolling updates only; no page names a node failure it serves through. No Production variant.
+  - UDP on a frontend: **no**. Frontends run in `tcp` (layer 4) or `http` (layer 7) mode only (API
+    reference), and no page mentions UDP, so `udp` stays off. The frontend network is IPv4 only
+    ("Currently only IPv4 network family is supported"), so `ipv6` stays off too.
+  - File Storage node-level redundancy: **not confirmed**; only "Built on redundant infrastructure for
+    reliability" (changelog, 2026-02-06), with no failure the share serves through. No `storage.file`
+    capability needs it.
+  - Valkey per plan or per node: **per plan**, the whole service. The pricing page's "1 Node", "2 Nodes"
+    and "3 Nodes" tabs price the whole service, not multiples of the 1-node price (4 GB: €90, €170,
+    €260); the snapshot stores page price ÷ nodes × 730 / 720 per node, on the 2-node plans.
+  - vCPU per Valkey plan: **given** for all 22 plans (the configurations page's "CPU cores" and the
+    pricing page's "Cores" agree), so every Valkey plan records `vcpus`.
