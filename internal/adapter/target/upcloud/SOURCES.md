@@ -198,9 +198,10 @@ of the page (its tab or table) a price comes from. The sections of the offerings
   storage tier and no column per plan, and the pages that state the plans (the Managed Kubernetes control
   plane page, the PostgreSQL, MySQL and Valkey configurations pages, the Block Storage and File Storage
   encryption pages) state them with no location caveat. File Storage is not in every location, so its
-  variant lists exactly the zones of its product. Each variant's section cites those pages. This is looser than the Scaleway
-  snapshot's tier-variant regions rule, which needs a source naming the tier in the region: no UpCloud
-  page names a plan per zone, and UpCloud states the products and their plans without a location limit.
+  variant lists exactly the zones of its product. Each variant's section cites those pages. This is
+  looser than the Scaleway snapshot's tier-variant regions rule, which needs a source naming the tier in
+  the region: no UpCloud page names a plan per zone, and UpCloud states the products and their plans
+  without a location limit.
 - **Scope:** high availability is listed at the level the documentation states in full:
   `node-high-availability` when the offering survives the loss of a node with no manual failover,
   `zone-high-availability` when it keeps serving through the loss of a whole zone. Each UpCloud zone is
