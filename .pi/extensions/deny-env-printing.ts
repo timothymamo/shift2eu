@@ -1,8 +1,9 @@
 /**
  * Refuses the commands that print the environment (CLAUDE.md rule 3, issue #540, ADR 0044).
  *
- * The tester runs pi with --approve: pi asks for nothing, and the environment holds the agents' API keys.
- * This project-local extension, which pi loads because --approve trusts the project, hooks `tool_call`,
+ * The tester's pi asks for nothing, and the environment holds the agents' API keys. This extension, whose
+ * root-owned installed copy the tester's wrapper loads by --extension (pi starts with --no-approve
+ * --no-extensions, so the project's copy is never discovered: dev/pi-tester.sh, issue #702), hooks `tool_call`,
  * the event that sees a tool call before it runs, and blocks:
  *
  * - a bash call whose command is longer than 32 KB, unread (the patterns are quadratic on one long line);
