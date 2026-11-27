@@ -466,7 +466,7 @@ not 40 lowercase hex is the caller's, `ErrConfig`):
 | `findings` | array, at most 100 | objects with the fields below |
 | `findings[].check` | string | a check id whose `ran` is true |
 | `findings[].rule` | string | `^[A-Za-z0-9][A-Za-z0-9._:/-]{0,79}$`: the rule or check that found it (`G304`, `GO-2026-1234`, `gitleaks:generic-api-key`) |
-| `findings[].file` | string | 1 to 200 bytes of `[A-Za-z0-9_.+@:/-]`, starting with a letter, a digit or `_`, with no empty, `.` or `..` path segment: a repository path, a release artifact's name, or for check `history-secrets` the commit's 40 lowercase hex |
+| `findings[].file` | string | 1 to 200 bytes of `[A-Za-z0-9_.+@:/-]`, starting with a letter, a digit, `_` or `.`, with no empty, `.` or `..` path segment: a repository path, the real one with its leading dots (`.github/workflows/ci.yml`, `.dot-agent-deck.toml`, issue #659), a release artifact's name, or for check `history-secrets` the commit's 40 lowercase hex |
 | `findings[].line` | number | an integer from 0 to 9999999, 0 when the location has no line |
 | `findings[].sink` | string | 1 to 120 bytes of `[A-Za-z0-9_.()*/:\[\]-]`: the function, call or property the input reaches |
 | `findings[].severity` | string | at most 16 bytes; any value but the five severities is unknown |
