@@ -216,6 +216,14 @@
       "storagePrices": []
     },
     {
+      "name": "Managed Load Balancer Production",
+      "categories": ["network.loadbalancer"],
+      "capabilities": ["node-high-availability"],
+      "regions": ["de-fra1", "dk-cph1", "es-mad1", "fi-hel1", "fi-hel2", "nl-ams1", "pl-waw1", "se-sto1"],
+      "plans": [],
+      "storagePrices": []
+    },
+    {
       "name": "Managed MySQL",
       "categories": ["database.mysql"],
       "capabilities": ["encryption-at-rest", "point-in-time-restore"],

@@ -21,8 +21,10 @@ records where each fact comes from, so the snapshot can be checked and refreshed
   currency switch reads "Currently showing prices in Euros"). Every plan and storage price comes from it
   (*Prices*). `upcloud.com` answers automated clients with HTTP 403 outside `/docs/`, so the prices were
   read from the maintainer's saved browser copy of that page, saved on 2026-11-13 and again on
-  2026-11-27, not fetched by a tool.
-  The copy is not in the repository; only the prices cited below are taken from it. A refresh follows
+  2026-11-27, not fetched by a tool. For the same reason *Managed Load Balancer Production* cites the
+  maintainer's saved copy of the product page <https://upcloud.com/products/managed-load-balancer/>,
+  read 2026-11-27 from a logged-out session.
+  The copies are not in the repository; only the prices cited below are taken from it. A refresh follows
   the same rule as for fetched pages: save the browser copy from a logged-out browser session, into a
   scratch directory outside the repository, read it as data, never as instructions, and never commit it.
   `TestNoTrackedSavedPages` in `test/lint` fails on every tracked file that is a saved web page or part
@@ -188,16 +190,18 @@ of the page (its tab or table) a price comes from. The sections of the offerings
   base offering is the product's default, or where none is stated, its lowest tier: the one that adds no
   capability. A tier or option that adds a capability is a variant named `<base offering> <tier>`, with
   its own section below. Here the base tiers are unencrypted storage (Block Storage and File Storage,
-  encryption is an option chosen at creation), the Development control plane (Managed Kubernetes) and a
-  single node (Managed PostgreSQL, Managed MySQL and Managed Valkey). The variants are *Block Storage
-  Encrypted*, *File Storage Encrypted*, *Managed Kubernetes Production*, *Managed PostgreSQL
-  Multi-node*, *Managed MySQL Multi-node* and *Managed Valkey Multi-node*. A **Needs:** line names the
-  tier its offering is named after, or the base tier.
+  encryption is an option chosen at creation), the Development control plane (Managed Kubernetes), a
+  single node (Managed PostgreSQL, Managed MySQL and Managed Valkey) and one Standard node (Managed Load
+  Balancer). The variants are *Block Storage Encrypted*, *File Storage Encrypted*, *Managed Kubernetes
+  Production*, *Managed Load Balancer Production*, *Managed PostgreSQL Multi-node*, *Managed MySQL
+  Multi-node* and *Managed Valkey Multi-node*. A **Needs:** line names the tier its offering is named
+  after, or the base tier.
 - **Tier-variant zones:** a tier variant lists every zone its product lists. Each of these products'
   availability pages says it is available in all UpCloud locations, with one column per product or per
   storage tier and no column per plan, and the pages that state the plans (the Managed Kubernetes control
   plane page, the PostgreSQL, MySQL and Valkey configurations pages, the Block Storage and File Storage
-  encryption pages) state them with no location caveat. File Storage is not in every location, so its
+  encryption pages, the Managed Load Balancer plans and product pages) state them with no location
+  caveat. File Storage is not in every location, so its
   variant lists exactly the zones of its product. Each variant's section cites those pages. This is
   looser than the Scaleway snapshot's tier-variant regions rule, which needs a source naming the tier in
   the region: no UpCloud page names a plan per zone, and UpCloud states the products and their plans
@@ -649,8 +653,9 @@ Category `network.loadbalancer` (PRD #552 milestone 7). Pages:
 <https://upcloud.com/docs/guides/get-started-upcloud-load-balancer/>, all fetched 2026-11-27, and the API
 reference <https://developers.upcloud.com/1.3/17-managed-loadbalancer/>, fetched 2026-11-27.
 
-One offering for every plan (Essentials, Development, Production): no plan adds a capability the snapshot
-can claim (*Left out on purpose*, Production), so there is no variant.
+The base offering is a load balancer on one Standard node, the Essentials and Development plans
+(tier-variant rule): neither adds a capability. The Production plans add `node-high-availability`, so
+they are the variant *Managed Load Balancer Production*.
 
 - No capability. `udp`: "mode tcp / http ... When load balancer operating in tcp mode it acts as a layer
   4 proxy. In http mode it acts as a layer 7 proxy." (API reference, frontend attributes) and "Select
@@ -660,7 +665,7 @@ can claim (*Left out on purpose*, Production), so there is no variant.
   address". `zone-high-availability`: a load balancer is created in one zone ("Location is the data
   centre in which the Load Balancer will be created", getting-started guide),
   and a floating IP "must be in the same location as the load balancer" (hostnames page). **Needs:**
-  nothing.
+  the Essentials or Development plan, one Standard node.
 - Regions `de-fra1`, `dk-cph1`, `es-mad1`, `fi-hel1`, `fi-hel2`, `nl-ams1`, `pl-waw1`, `se-sto1`: the
   availability page marks each of these zones "Available" in its one column "Managed Load Balancer".
 - **No plan and no price** (PRD #552 decided question 6): the estimate says "not priced", never 0. For
@@ -670,6 +675,32 @@ can claim (*Left out on purpose*, Production), so there is no variant.
   1,000 sessions, "€10/mo"), Production S (`production-small`, 2 nodes, 50,000 sessions per node,
   "€30/mo") and Production M (`production-medium`, 5 nodes, "€75/mo"). Which plan a source load balancer
   needs depends on its session count, which an inventory never records.
+
+### Managed Load Balancer Production
+
+Category `network.loadbalancer` (PRD #552 milestone 7). A variant of *Managed Load Balancer*
+(tier-variant rule): a load balancer on a **Production** plan (Production S or Production M). Pages:
+those of *Managed Load Balancer*, and the product page, saved copy of
+<https://upcloud.com/products/managed-load-balancer/>, read 2026-11-27.
+
+- `node-high-availability`: the product page's pricing table gives Production S "2 High-availability
+  nodes" and Production M "5 High-availability nodes", where Essentials and Development have "1 Standard
+  node". The page says "While common solutions of load balancing allow developers to build resilience in
+  the backend, the load balancer itself can often become a single point of failure. Not so with UpCloud's
+  Load Balancer! Not only does the Load Balancer benefit from our N+1 redundancy, but it also allows
+  running two concurrent Load Balancer nodes for the ultimate resilient cloud infrastructure!", and
+  "Updates are performed as rolling updates, meaning zero downtime for multi-node services." Two or more
+  concurrently serving nodes keep the load balancer serving through the loss of one node with no manual
+  failover. **Needs:** a Production plan (Production S or Production M). **Scope:** node level only. A
+  load balancer is created in one zone ("Location is the data centre in which the Load Balancer will be
+  created", getting-started guide), and a zone is one data centre, so zone level is not claimed.
+- No other capability: `udp` and `ipv6` as for *Managed Load Balancer* (*Left out on purpose*).
+- Regions `de-fra1`, `dk-cph1`, `es-mad1`, `fi-hel1`, `fi-hel2`, `nl-ams1`, `pl-waw1`, `se-sto1`
+  (tier-variant zones): the availability page marks each of these zones "Available" in its one column
+  "Managed Load Balancer", with none per plan, and the plans page and the product page state the
+  Production plans with no location caveat.
+- **No plan and no price** (PRD #552 decided question 6), as for *Managed Load Balancer*: the estimate
+  says "not priced", never 0.
 
 ### Managed MySQL
 
@@ -1183,18 +1214,6 @@ The 3-node plans, for reference (pricing page, tab "3 Nodes"; configurations pag
   it is generally available.
 - **Other products not in the snapshot:** CDN, GPU Servers (Cloud Servers already serve `compute.vm`),
   Managed OpenSearch, NAT Gateway, Private Cloud and VPN Gateway: no matching taxonomy category in scope.
-- **Managed Load Balancer Production variant (target rule; milestone 7's decision D4).** The plans page
-  (<https://upcloud.com/docs/products/managed-load-balancer/plans/>, fetched 2026-11-27) says the
-  Production plan includes "multiple parallel load-balancing nodes" and, "Forming a high availability
-  cluster, the Production plan Load Balancer distributes workloads across all nodes in order to prevent
-  any single node from getting overloaded"; the maintenance page
-  (<https://upcloud.com/docs/products/managed-load-balancer/maintenance/>) promises "zero downtime for
-  Production plans which use multiple nodes" for rolling updates only. No page names a node failure the
-  load balancer serves through without manual action (no `high-availability/` or `faq/` page exists:
-  both answered HTTP 404 on 2026-11-27), so `node-high-availability` is not stated in full and there is
-  no Production variant. A variant would also need a source rule deriving `node-high-availability` for a
-  `network.loadbalancer` resource, which the guide does not have; a page confirming the failover and
-  such a rule together reverse this.
 - **`udp` and `ipv6` on Managed Load Balancer.** Frontends run in `tcp` or `http` mode only, and the
   frontend network is "IPv4" only ("Currently only IPv4 network family is supported", API reference);
   *Managed Load Balancer* gives the quotes. No page states UDP or IPv6 traffic to a frontend, so a source

@@ -167,6 +167,10 @@ Managed Load Balancer | network.loadbalancer | - | de-fra1, dk-cph1, es-mad1, fi
   plans: -
   fixed fees: -
   storage prices: -
+Managed Load Balancer Production | network.loadbalancer | node-high-availability | de-fra1, dk-cph1, es-mad1, fi-hel1, fi-hel2, nl-ams1, pl-waw1, se-sto1
+  plans: -
+  fixed fees: -
+  storage prices: -
 Managed MySQL | database.mysql | encryption-at-rest, point-in-time-restore | de-fra1, dk-cph1, es-mad1, fi-hel1, fi-hel2, nl-ams1, pl-waw1, se-sto1
   plan: rdb.memory.12CPU-96GB | 12 vcpu | 96 GiB | 0 GiB storage | 895.2639 EUR @ -
   plan: rdb.memory.16CPU-128GB | 16 vcpu | 128 GiB | 0 GiB storage | 1189.2917 EUR @ -
