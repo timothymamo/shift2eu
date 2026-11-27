@@ -137,9 +137,17 @@ type result struct {
 	stderr string
 }
 
-// run runs the binary with env and args and returns what it printed and the
-// exit code it chose. A run the test cannot start at all fails the test.
+// run runs the binary TestMain built with env and args and returns what it
+// printed and the exit code it chose.
 func run(t *testing.T, env []string, args ...string) result {
+	t.Helper()
+
+	return runAt(t, binaryPath, env, args...)
+}
+
+// runAt runs the binary at path with env and args and returns what it printed
+// and the exit code it chose. A run the test cannot start at all fails the test.
+func runAt(t *testing.T, path string, env []string, args ...string) result {
 	t.Helper()
 
 	// exec.Cmd reads a nil Env as "inherit the parent environment", so a nil
@@ -152,7 +160,7 @@ func run(t *testing.T, env []string, args ...string) result {
 
 	var stdout, stderr bytes.Buffer
 
-	cmd := exec.Command(binaryPath, args...)
+	cmd := exec.Command(path, args...)
 	// A copy, so that no caller can change the environment of a run it already
 	// handed over.
 	cmd.Env = append([]string{}, env...)

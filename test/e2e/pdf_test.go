@@ -6,8 +6,10 @@ package e2e_test
 // built binary, run with no environment, turns an inventory into the PDF report
 // the pdfreport adapter renders, for one target and for the comparison of every
 // target, and writes the same bytes into the --output file. It also pins what
-// the audit's hostile corpus (PRD #175, ADR 0040) does to the format, and that
-// every sample inventory gives a PDF against every target.
+// the audit's hostile corpus (PRD #175, ADR 0040) does to the format, that every
+// sample inventory gives a PDF against every target, and that the version line
+// the footer names is the report's own build, a second binary linked with
+// metadata of its own included.
 //
 // The PDF's structural invariants are pdfreport's own tests' business: they live
 // beside the writer, and e2e-is-black-box refuses every package of the module
@@ -22,6 +24,7 @@ import (
 	"bytes"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -193,6 +196,95 @@ func TestAssessPDFNamesTheBuildVersion(t *testing.T) {
 		t.Errorf("the PDF holds no version line: want %q, the line shift2eu version prints of this build, "+
 			"as the writer puts it in the file", want)
 	}
+}
+
+// stampedVersionLine and devVersionLine are the two version lines
+// TestAssessPDFNamesTheStampedBuildVersion tells apart: the one the binary it
+// builds is linked with, and the default one of a binary linked with nothing,
+// which is the line TestMain's binary prints. The first repeats the metadata of
+// buildStamped's -ldflags value, a literal of its own so that test/lint's e2e
+// rule reads it; the test holds the two to each other.
+const (
+	stampedVersionLine = "shift2eu 9.9.9-e2e (commit abc123def456, built 2026-01-01T00:00:00Z)"
+	devVersionLine     = "shift2eu dev (commit none, built unknown)"
+)
+
+// TestAssessPDFNamesTheStampedBuildVersion pins that the PDF's version line is
+// the build's own, never a line the wiring writes down: a binary linked with
+// version metadata of its own prints that line for `shift2eu version` and draws
+// it in its report, and the line of an unstamped build appears in that report
+// nowhere. TestAssessPDFNamesTheBuildVersion pins the same of the binary TestMain
+// builds, whose line is the default one; here a second binary of ./cmd/shift2eu,
+// stamped through the linker, gives the two lines different values, so a wiring
+// that passes a constant instead of the build's own is caught.
+func TestAssessPDFNamesTheStampedBuildVersion(t *testing.T) {
+	t.Parallel()
+
+	stamped := buildStamped(t)
+
+	version := runAt(t, stamped, emptyEnv(), "version")
+
+	if version.code != 0 {
+		t.Fatalf("exit code of version = %d, want 0; stderr = %q", version.code, firstLine(version.stderr))
+	}
+
+	line := strings.TrimSuffix(version.stdout, "\n")
+
+	if line != stampedVersionLine {
+		t.Fatalf("shift2eu version of the stamped build = %q, want %q: the binary does not carry the "+
+			"metadata it was linked with", line, stampedVersionLine)
+	}
+
+	got := runAt(t, stamped, emptyEnv(), "assess", "--inventory", filepath.Join("testdata", "inventory.json"),
+		"--target", scalewayKey, "--format", pdfFormat)
+
+	if got.code != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr = %q", got.code, firstLine(got.stderr))
+	}
+
+	if got.stderr != "" {
+		t.Errorf("stderr = %q, want empty", got.stderr)
+	}
+
+	checkPDF(t, []byte(got.stdout))
+
+	// As in TestAssessPDFNamesTheBuildVersion: the line is a value inside a
+	// content stream's literal string.
+	if want := pdfLiteral(line); !strings.Contains(got.stdout, want) {
+		t.Errorf("the PDF holds no version line of its own build: want %q, the line shift2eu version "+
+			"prints of the stamped binary", want)
+	}
+
+	if unwanted := pdfLiteral(devVersionLine); strings.Contains(got.stdout, unwanted) {
+		t.Errorf("the PDF holds %q, the version line of an unstamped build: the wiring writes the line "+
+			"down instead of taking it from the build", unwanted)
+	}
+}
+
+// buildStamped builds ./cmd/shift2eu into a directory of the test's own, linked
+// with a version of its own, and returns the path of the binary. The linker's -X
+// sets internal/version's three variables, the same flag GoReleaser and the
+// image's build pass; the tier is black box and imports none of the module but
+// internal/testutil, so the package's import path is a literal here. The go
+// command runs, as TestMain's build does, in the test process's environment: it
+// needs it and prints none of it. Only the binary runs without one.
+func buildStamped(t *testing.T) string {
+	t.Helper()
+
+	path := filepath.Join(t.TempDir(), "shift2eu")
+
+	// The -ldflags value is one literal, not a constant: test/lint's e2e scan
+	// reads a go build's flags from the literals the source writes, and admits
+	// -ldflags only with a value of -X stamps (e2eExecExempt).
+	build := exec.Command("go", "build", "-trimpath", "-o", path, "-ldflags",
+		"-X github.com/timothymamo/shift2eu/internal/version.version=9.9.9-e2e -X github.com/timothymamo/shift2eu/internal/version.commit=abc123def456 -X github.com/timothymamo/shift2eu/internal/version.date=2026-01-01T00:00:00Z",
+		filepath.Join("..", "..", "cmd", "shift2eu"))
+
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build the stamped shift2eu: %v\n%s", err, out)
+	}
+
+	return path
 }
 
 // TestAssessPDFHostileInventoryCorpus pins --format pdf on the corpus the

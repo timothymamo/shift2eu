@@ -38,14 +38,52 @@ var e2eToolchainCommands = []string{"go build", "go list"}
 
 // e2eToolchainFlags is the allow-list of flags an exempt command may carry:
 // after the subcommand, every literal argument that starts with "-" must be one
-// of these, or the exemption is lost (issue #195 round 4). The three are the
+// of these, or the exemption is lost (issue #195 round 4). The four are the
 // flags the tier passes today, and each keeps the go command from handing its
 // environment to a program the argument names: -trimpath and -o build a binary,
-// and -deps lists the packages it needs. A flag the go command gains later, or
-// one of the many that run another program with that environment (-ldflags with
-// -extld, -toolexec, -exec, -overlay, -C, -pgo, -compiler, ...), is refused
-// until review adds it here on purpose.
-var e2eToolchainFlags = []string{"-trimpath", "-o", "-deps"}
+// -deps lists the packages it needs, and -ldflags (e2eLinkerFlag) stamps a
+// package's variable at link time, admitted for the one value e2eLinkerStamps
+// describes. A flag the go command gains later, or one of the many that run
+// another program with that environment (-toolexec, -exec, -overlay, -C, -pgo,
+// -compiler, ...), is refused until review adds it here on purpose.
+var e2eToolchainFlags = []string{"-trimpath", "-o", "-deps", "-ldflags"}
+
+// e2eLinkerFlag is the go build flag that stamps a package's variable at link
+// time, which the e2e tier passes for the version of a second binary of
+// ./cmd/shift2eu (issue #584). The flag alone is not enough to admit: its value
+// can name another linker, a wrapper around the toolchain or a file the build
+// reads (-extld, -toolexec, -overlay, ...), which run a program with the go
+// command's environment, and the exemption exists because none of it may reach
+// a child of a test. So only a value e2eLinkerStamps describes keeps it.
+const e2eLinkerFlag = "-ldflags"
+
+// e2eLinkerStamps reports whether value is a -ldflags value the e2e tier may
+// carry: whitespace-separated pairs of -X and the name=value it stamps, and
+// nothing else, so the linker runs no other program and reads no other file. A
+// name=value of its own is one field, so it holds no space, and it may not start
+// with "-".
+func e2eLinkerStamps(value string) bool {
+	fields := strings.Fields(value)
+	if len(fields) == 0 || len(fields)%2 != 0 {
+		return false
+	}
+
+	for i, field := range fields {
+		if i%2 == 0 {
+			if field != "-X" {
+				return false
+			}
+
+			continue
+		}
+
+		if strings.HasPrefix(field, "-") || !strings.Contains(field, "=") {
+			return false
+		}
+	}
+
+	return true
+}
 
 // e2eExecExempt reports whether the e2e tier may start the command named name
 // with its first argument sub, no Env of its own and the literal arguments
@@ -54,7 +92,23 @@ func e2eExecExempt(name, sub string, flags []string) bool {
 	if !slices.Contains(e2eToolchainCommands, name+" "+sub) {
 		return false
 	}
-	for _, flag := range flags {
+
+	for i := 0; i < len(flags); i++ {
+		flag := flags[i]
+
+		if flag == e2eLinkerFlag {
+			// The next literal the source writes is the value. One the source
+			// builds at run time is no literal, and the check then reads the next
+			// literal after it, which is no stamp set: the exemption is lost.
+			if i+1 >= len(flags) || !e2eLinkerStamps(flags[i+1]) {
+				return false
+			}
+
+			i++
+
+			continue
+		}
+
 		if strings.HasPrefix(flag, "-") && !slices.Contains(e2eToolchainFlags, flag) {
 			return false
 		}
@@ -91,6 +145,53 @@ func TestE2EExecExempt(t *testing.T) {
 			sub:   "list",
 			flags: []string{"-deps"},
 			want:  true,
+		},
+		{
+			// The stamp of the e2e tier's second binary (issue #584): pairs of -X
+			// and a name=value run no program and read no file.
+			name: "the -ldflags that stamps a build's version keeps the exemption",
+			cmd:  "go",
+			sub:  "build",
+			flags: []string{
+				"-trimpath", "-o", "-ldflags",
+				"-X example.com/pkg.version=9.9.9-e2e -X example.com/pkg.commit=abc123def456",
+			},
+			want: true,
+		},
+		{
+			// The value can name another linker, a wrapper around the toolchain or
+			// a file the build reads, which is why the flag is admitted for -X
+			// stamps alone.
+			name:  "an -ldflags value that names another flag takes the exemption away",
+			cmd:   "go",
+			sub:   "build",
+			flags: []string{"-ldflags", "-X example.com/pkg.version=9.9.9-e2e -toolexec /bin/sh"},
+		},
+		{
+			name:  "an -ldflags with no value takes the exemption away",
+			cmd:   "go",
+			sub:   "build",
+			flags: []string{"-ldflags"},
+		},
+		{
+			// A value the source builds at run time is no literal, so the next
+			// literal argument is the one after it, and it is no stamp set.
+			name:  "an -ldflags whose value the source builds at run time takes the exemption away",
+			cmd:   "go",
+			sub:   "build",
+			flags: []string{"-ldflags", "-o"},
+		},
+		{
+			name:  "an -ldflags value whose -X names no value takes the exemption away",
+			cmd:   "go",
+			sub:   "build",
+			flags: []string{"-ldflags", "-X example.com/pkg.version"},
+		},
+		{
+			name:  "an -ldflags written with = takes the exemption away",
+			cmd:   "go",
+			sub:   "build",
+			flags: []string{"-ldflags=-X example.com/pkg.version=9.9.9-e2e"},
 		},
 		{
 			name:  "a positional argument the source builds at run time is no flag",
