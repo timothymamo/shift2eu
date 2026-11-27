@@ -2511,6 +2511,11 @@ func TestInventoryGuideAzureHDInsightBranchRulesFlagALeakingBranch(t *testing.T)
 		branch string
 		// want are the phrases each of which a reported problem has to hold.
 		want []string
+		// notWant are the phrases none of the reported problems may hold: a
+		// branch that packs a field the program merely does not read may be
+		// reported as naming an unlisted field, and never as naming an excluded
+		// one.
+		notWant []string
 	}{{
 		name: "a branch that expands the worker role and packs only the fields the program reads",
 		branch: `'
@@ -2534,6 +2539,31 @@ func TestInventoryGuideAzureHDInsightBranchRulesFlagALeakingBranch(t *testing.T)
 | project id, name, type, location, zones, properties = bag_pack(` + kind + `,
     'securityProfile', properties.securityProfile,` + workerRole + `)`,
 		want: []string{`names "properties.securityProfile"`},
+	}, {
+		name: "a branch that names connectivityEndpoints, storageProfile and kafkaRestProperties",
+		branch: `'
+| mv-expand role = properties.computeProfile.roles
+| where role.name =~ 'workernode'
+| project id, name, type, location, zones, properties = bag_pack(` + kind + `,
+    'connectivityEndpoints', properties.connectivityEndpoints,
+    'storageProfile', properties.storageProfile,
+    'kafkaRestProperties', properties.kafkaRestProperties,` + workerRole + `)`,
+		want: []string{`names "connectivityEndpoints"`, `names "storageProfile"`, `names "kafkaRestProperties"`},
+	}, {
+		// The excluded word is a substring of the field's name, not its whole
+		// name: the branch names a field whose name merely starts with an
+		// excluded one, as `'storageProfileless'` starts with `storageProfile`.
+		// That field is one the program does not read, so the branch is reported
+		// for it, and it is no field PRD #571 excludes, so the branch may not be
+		// reported as naming one (review suggestion on PR #685).
+		name: "a branch that packs a field whose name holds an excluded one as a substring",
+		branch: `'
+| mv-expand role = properties.computeProfile.roles
+| where role.name =~ 'workernode'
+| project id, name, type, kind, location, zones, sku, properties = bag_pack(` + kind + `,` + workerRole + `,
+    'storageProfileless', properties.storageProfileless)`,
+		want:    []string{`names "properties.storageProfileless"`},
+		notWant: []string{"want it nowhere"},
 	}, {
 		name: "a branch that names osProfile",
 		branch: `'
@@ -2577,6 +2607,15 @@ func TestInventoryGuideAzureHDInsightBranchRulesFlagALeakingBranch(t *testing.T)
 					return strings.Contains(problem, phrase)
 				}) {
 					t.Errorf("azureHDInsightBranchProblems reported no problem holding %q, want one: a branch that leaks a field past PRD #571 has to fail the guide's check, not pass it\nreported:\n%s\nbranch:%s",
+						phrase, strings.Join(problems, "\n"), tc.branch)
+				}
+			}
+
+			for _, phrase := range tc.notWant {
+				if slices.ContainsFunc(problems, func(problem string) bool {
+					return strings.Contains(problem, phrase)
+				}) {
+					t.Errorf("azureHDInsightBranchProblems reported a problem holding %q, want none: a field whose name merely holds an excluded one inside it is no field PRD #571 excludes, and reporting it as one makes the guide's operator rename a field the list never named\nreported:\n%s\nbranch:%s",
 						phrase, strings.Join(problems, "\n"), tc.branch)
 				}
 			}
