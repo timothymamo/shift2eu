@@ -711,7 +711,9 @@ Milestones 1 and 2 touch the handling of hostile text and the site's trust model
      CLI goldens and e2e tests.
    - The depguard allow list changes and their pin, the reworded `htmlreport` deny desc of
      `web-imported-only-by-the-web-root` ("the CLI writes Markdown, JSON and PDF"), and
-     `test/architecture`.
+     `test/architecture`. The permission for `cmd/shift2eu-web/internal/wire` to import `pdfreport`
+     (`pdfreport$` in `web-composition-root-wire`) is granted early, in milestone 1, so the milestone-1
+     criterion holds as written, and milestone 2 constructs `pdfreport` in `wire`.
    - CLAUDE.md's adapters row and status paragraph, `docs/architecture.md`, and the CLI guide.
    - An ADR that records:
      - PDF as the report's people-facing format, not versioned (ADR 0018);
