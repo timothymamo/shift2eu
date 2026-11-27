@@ -66,6 +66,11 @@ type representative struct {
 //     node-high-availability, since a replicated cache is what the tier is for;
 //     no vCPUs, which the category does not take (a cache is matched on memory
 //     alone, ADR 0046);
+//   - search.opensearch and messaging.kafka: 2 vCPU, 8 GiB of memory and 100 GiB
+//     of storage per node, count 3, 730 hours a month, and
+//     node-high-availability, since three data nodes or brokers replicate their
+//     data across nodes; the categories take the managed databases' size fields
+//     but count their storage per node (ADR 0047);
 //   - storage.block: one 100 GiB volume (count 1);
 //   - storage.object: 100 GiB stored;
 //   - serverless.function: a function of 1 GiB of memory, the only size field
@@ -100,6 +105,16 @@ var representatives = map[taxonomy.Category]representative{
 	},
 	taxonomy.CacheRedis: {
 		size:         &inventory.Size{MemoryGiB: number(6), Count: count(2)},
+		capabilities: []taxonomy.Capability{taxonomy.NodeHighAvailability},
+		usage:        &inventory.Usage{HoursPerMonth: number(730)},
+	},
+	taxonomy.SearchOpenSearch: {
+		size:         &inventory.Size{VCPUs: number(2), MemoryGiB: number(8), StorageGiB: number(100), Count: count(3)},
+		capabilities: []taxonomy.Capability{taxonomy.NodeHighAvailability},
+		usage:        &inventory.Usage{HoursPerMonth: number(730)},
+	},
+	taxonomy.MessagingKafka: {
+		size:         &inventory.Size{VCPUs: number(2), MemoryGiB: number(8), StorageGiB: number(100), Count: count(3)},
 		capabilities: []taxonomy.Capability{taxonomy.NodeHighAvailability},
 		usage:        &inventory.Usage{HoursPerMonth: number(730)},
 	},
@@ -151,7 +166,11 @@ func TestEstimatePerTargetAndCategory(t *testing.T) {
 	out.WriteString("priced on the multi-node tier's per-node price, where that tier serves the cache or ties with the\n")
 	out.WriteString("base offering (Scaleway's Redis Cluster lists no `node-high-availability`: see its SOURCES.md,\n")
 	out.WriteString("*Estimate effect*), and its capability is shown after its size; a load balancer and a container\n")
-	out.WriteString("registry take no size and are not priced.\n\n")
+	out.WriteString("registry take no size and are not priced.\n")
+	out.WriteString("A search cluster and a Kafka cluster are 2 vCPU, 8 GiB of memory and 100 GiB of storage per\n")
+	out.WriteString("node, count 3 and `node-high-availability`, priced on the tier that serves a cluster whose data\n")
+	out.WriteString("is replicated across its nodes, and their storage is the node's, so it is multiplied by the\n")
+	out.WriteString("count (ADR 0047), unlike a managed database's.\n\n")
 
 	for _, target := range targets {
 		cat, err := target.catalog().Catalog(t.Context())
