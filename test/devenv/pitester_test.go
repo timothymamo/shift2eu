@@ -1341,10 +1341,10 @@ func testerRoleSetting(t *testing.T, line *regexp.Regexp) string {
 }
 
 // TestPiTesterLaunchWrapperEndsWithItsExecLine pins the wrapper's last line (ADR 0044's amendment "the tester loads
-// no project extension or setting", issue #702): pi starts with no project trust and no discovered extension, loads
-// the installed refusal and the deck's extension by --extension and the unit folder's skills by --skill, and the
-// wrapper's own flags come before the deck's arguments. dev/vm-pi-tester.sh accepts exactly this line, so the two
-// have to agree.
+// no project extension and applies no trusted project setting", issue #702): pi starts with no project trust and no
+// discovered extension, loads the installed refusal and the deck's extension by --extension and the unit folder's
+// skills by --skill, and the wrapper's own flags come before the deck's arguments. dev/vm-pi-tester.sh accepts
+// exactly this line, so the two have to agree.
 func TestPiTesterLaunchWrapperEndsWithItsExecLine(t *testing.T) {
 	t.Parallel()
 
