@@ -82,7 +82,7 @@ BT
 1 0 0 1 470 735 Tm
 (, retrieved ) Tj
 1 0 0 1 50 723 Tm
-(2026-11-25) Tj
+(2026-11-27) Tj
 1 0 0 1 50 711 Tm
 (Catalog: ) Tj
 /F3 9 Tf
@@ -96,7 +96,7 @@ BT
 (https://www.scaleway.com/en/pricing/) Tj
 /F1 9 Tf
 1 0 0 1 389 711 Tm
-(, retrieved 2026-11-26) Tj
+(, retrieved 2026-11-27) Tj
 1 0 0 1 50 699 Tm
 (Catalog: ) Tj
 /F3 9 Tf
@@ -110,7 +110,7 @@ BT
 (https://upcloud.com/pricing/) Tj
 /F1 9 Tf
 1 0 0 1 340 699 Tm
-(, retrieved 2026-11-13) Tj
+(, retrieved 2026-11-27) Tj
 1 0 0 1 50 687 Tm
 (Region: ) Tj
 /F3 9 Tf
@@ -1217,7 +1217,7 @@ BT
 1 0 0 1 50 308 Tm
 (\225) Tj
 1 0 0 1 60 308 Tm
-(Estimate: list prices on 2026-11-25, excluding VAT and discounts; a fixed fee is the offering's listed fee) Tj
+(Estimate: list prices on 2026-11-27, excluding VAT and discounts; a fixed fee is the offering's listed fee) Tj
 1 0 0 1 50 296 Tm
 (\225) Tj
 1 0 0 1 60 296 Tm
@@ -2680,7 +2680,7 @@ BT
 1 0 0 1 50 271 Tm
 (\225) Tj
 1 0 0 1 60 271 Tm
-(Estimate: list prices on 2026-11-26, excluding VAT and discounts; a fixed fee is the offering's listed fee) Tj
+(Estimate: list prices on 2026-11-27, excluding VAT and discounts; a fixed fee is the offering's listed fee) Tj
 1 0 0 1 50 259 Tm
 (\225) Tj
 1 0 0 1 60 259 Tm
@@ -4006,7 +4006,7 @@ BT
 1 0 0 1 50 551 Tm
 (\225) Tj
 1 0 0 1 60 551 Tm
-(Estimate: list prices on 2026-11-13, excluding VAT and discounts; a fixed fee is the offering's listed fee) Tj
+(Estimate: list prices on 2026-11-27, excluding VAT and discounts; a fixed fee is the offering's listed fee) Tj
 1 0 0 1 50 539 Tm
 (\225) Tj
 1 0 0 1 60 539 Tm
@@ -4941,7 +4941,7 @@ BT
 1 0 0 1 480 459 Tm
 (, retrieved ) Tj
 1 0 0 1 60 447 Tm
-(2026-11-25, default region for estimates ) Tj
+(2026-11-27, default region for estimates ) Tj
 /F3 9 Tf
 1 0 0 1 223 447 Tm
 (GRA) Tj
@@ -4961,7 +4961,7 @@ BT
 (https://www.scaleway.com/en/pricing/) Tj
 /F1 9 Tf
 1 0 0 1 399 435 Tm
-(, retrieved 2026-11-26, default ) Tj
+(, retrieved 2026-11-27, default ) Tj
 1 0 0 1 60 423 Tm
 (region for estimates ) Tj
 /F3 9 Tf
@@ -4983,7 +4983,7 @@ BT
 (https://upcloud.com/pricing/) Tj
 /F1 9 Tf
 1 0 0 1 350 411 Tm
-(, retrieved 2026-11-13, default region for ) Tj
+(, retrieved 2026-11-27, default region for ) Tj
 1 0 0 1 60 399 Tm
 (estimates ) Tj
 /F3 9 Tf

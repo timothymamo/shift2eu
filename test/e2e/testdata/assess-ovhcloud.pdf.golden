@@ -70,7 +70,7 @@ BT
 1 0 0 1 470 735 Tm
 (, retrieved ) Tj
 1 0 0 1 50 723 Tm
-(2026-11-25) Tj
+(2026-11-27) Tj
 1 0 0 1 50 711 Tm
 (Region: ) Tj
 /F3 9 Tf
@@ -554,7 +554,7 @@ BT
 1 0 0 1 50 630 Tm
 (\225) Tj
 1 0 0 1 60 630 Tm
-(Estimate: list prices on 2026-11-25, excluding VAT and discounts; a fixed fee is the offering's listed fee) Tj
+(Estimate: list prices on 2026-11-27, excluding VAT and discounts; a fixed fee is the offering's listed fee) Tj
 1 0 0 1 50 618 Tm
 (\225) Tj
 1 0 0 1 60 618 Tm
@@ -1672,7 +1672,7 @@ BT
 1 0 0 1 480 214 Tm
 (, retrieved ) Tj
 1 0 0 1 60 202 Tm
-(2026-11-25, default region for estimates ) Tj
+(2026-11-27, default region for estimates ) Tj
 /F3 9 Tf
 1 0 0 1 223 202 Tm
 (GRA) Tj
