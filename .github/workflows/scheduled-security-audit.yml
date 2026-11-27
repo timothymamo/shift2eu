@@ -46,14 +46,17 @@ jobs:
     environment: security-audit
     # GITHUB_TOKEN reads only: contents for the checkout, the release tag and the release download;
     # attestations for gh attestation verify (row 7); actions for scorecard's reads of the workflows'
-    # runs (row 6); issues for Renovate's Dependency Dashboard (row 15). The image is public, so no
-    # packages scope: it is pulled anonymously (row 8). Nothing here writes, and no read needs admin:
-    # what the token is refused is recorded "not run".
+    # runs (row 6); issues for Renovate's Dependency Dashboard (row 15); pull-requests for row 15's
+    # list of Renovate's open pull requests (GET repos/{owner}/{repo}/pulls), which the token is refused
+    # without that scope, read-only like the rest. The image is public, so no packages scope: it is
+    # pulled anonymously (row 8). Nothing here writes, and no read needs admin: what the token is
+    # refused is recorded "not run".
     permissions:
       contents: read
       attestations: read
       actions: read
       issues: read
+      pull-requests: read
     steps:
       - name: Check out the audited commit
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

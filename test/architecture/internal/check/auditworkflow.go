@@ -755,12 +755,14 @@ var auditJobs = []auditJob{
 	{
 		key:  "checks",
 		name: "Checks",
-		// The four scopes its rows read with (PR 5c): contents for the
+		// The five scopes its rows read with (PR 5c): contents for the
 		// checkout and the release, attestations for row 7's verification,
 		// actions for scorecard's reads of the workflows' runs, issues for
-		// Renovate's Dependency Dashboard. No packages scope (the image is
-		// pulled anonymously) and no id-token (scorecard runs as the CLI).
-		permissions:      []string{"contents", "attestations", "actions", "issues"},
+		// Renovate's Dependency Dashboard, pull-requests for row 15's list
+		// of Renovate's open pull requests through the pulls endpoint
+		// (issue #660), all read. No packages scope (the image is pulled
+		// anonymously) and no id-token (scorecard runs as the CLI).
+		permissions:      []string{"contents", "attestations", "actions", "issues", "pull-requests"},
 		downloadsModules: "Download the Go modules",
 		stepsWithinJob:   true,
 		boundsTools:      true,

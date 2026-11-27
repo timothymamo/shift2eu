@@ -2614,7 +2614,7 @@ grep -nwE 'schedule|cron' <a scratch file>
 the report, then milestone 3's schedule. On the first run, read the report's Coverage and Limits against
 ADR 0040's two "To be checked on the first run" lists (PRs 5b and 5c): every check but `scorecard-admin`
 should read "run" or "findings", and a read the checks job's token was refused (Limits, "read refused")
-that one of its four read scopes should allow is a finding to fix before the schedule. The checks job
+that one of its five read scopes should allow is a finding to fix before the schedule. The checks job
 names each check that did not run in the Limits, never as clean (ADR 0040, review rounds I, K and L of
 PR 5c): `release-integrity results-missing` (the release download brought no `checksums.txt`, so no file
 was checksummed or attested, and no part of the image's verification ran either: check the release's

@@ -3017,10 +3017,12 @@ datasource, whose Go toolchain group moves it with go.mod's go line.
 **Read scopes**, each `read`, the token only in the step-level `env:` of rows 1, 5 (zizmor), 6, 7 and
 15, and never in a step that runs release code or a container: `contents` (the checkout, the latest
 release's tag, the release download), `attestations` (`gh attestation verify`, row 7), `actions`
-(scorecard's reads of the workflows' runs, row 6) and `issues` (Renovate's Dependency Dashboard, row 15).
-No `pull-requests` scope: row 15's list of the open pull requests (issue #660) reads a public
-repository's pull requests, which GitHub answers without authentication; should the job's token be
-refused them, the refusal is recorded in `read-refused.txt` and the limits, never a silent miss.
+(scorecard's reads of the workflows' runs, row 6), `issues` (Renovate's Dependency Dashboard, row 15)
+and `pull-requests` (row 15's list of Renovate's open pull requests, issue #660). That list reads
+`repos/{owner}/{repo}/pulls?state=open`, and a job token that holds no `pull-requests` scope is refused
+it, which likely also explains why the earlier search found no pull request; the scope is read-only, so
+the job still writes nothing. Should the token be refused them anyway, the refusal is recorded in
+`read-refused.txt` and the limits, never a silent miss.
 No `packages` scope: the image is public, and rows 7 and 8 read the registry anonymously, with
 `DOCKER_CONFIG` an empty directory of the job's own. No read needs admin: scorecard's `Branch-Protection`
 and `Webhooks` checks are left out of its run (`scorecard-admin`, "not run (needs admin read)"), and row
